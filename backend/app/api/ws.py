@@ -42,12 +42,28 @@ class WSManager:
     def __init__(self):
         self._connections: dict[str, list[WebSocket]] = defaultdict(list)
         self._pending_auth: dict[str, int] = defaultdict(int)
+        self._capacity_locks: dict[str, asyncio.Lock] = {}
         self._sequence_by_stream: dict[str, int] = defaultdict(int)
         self._manager_instance_id = uuid.uuid4().hex
 
     def active_count(self, scenario_id: str) -> int:
         """Count registered + pending-auth connections for limit enforcement."""
         return len(self._connections[scenario_id]) + self._pending_auth[scenario_id]
+
+    def _capacity_lock(self, scenario_id: str) -> asyncio.Lock:
+        lock = self._capacity_locks.get(scenario_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._capacity_locks[scenario_id] = lock
+        return lock
+
+    async def reserve_pending_auth(self, scenario_id: str) -> bool:
+        """Atomically count capacity and reserve a pending-auth slot."""
+        async with self._capacity_lock(scenario_id):
+            if self.active_count(scenario_id) >= MAX_WS_PER_SCENARIO:
+                return False
+            self._pending_auth[scenario_id] += 1
+            return True
 
     def _wrap_event(self, stream_id: str, event: dict) -> dict:
         if event.get("type") == "heartbeat":
@@ -233,15 +249,21 @@ async def run_websocket_session(
         )
         return
 
-    if manager.active_count(scenario_id) >= MAX_WS_PER_SCENARIO:
+    if not await manager.reserve_pending_auth(scenario_id):
         logger.warning("WS rejected: scenario=%s (limit=%d reached)",
                        scenario_id, MAX_WS_PER_SCENARIO)
         await websocket.close(code=1013, reason="Too many connections")
         return
 
     # Accept the WebSocket upgrade (before auth — so we can exchange frames)
-    await websocket.accept()
-    manager._pending_auth[scenario_id] += 1
+    try:
+        await websocket.accept()
+    except WebSocketDisconnect:
+        _release_pending_auth(manager, scenario_id)
+        return
+    except Exception:
+        _release_pending_auth(manager, scenario_id)
+        raise
     logger.info("WS accepted (pending): scenario=%s", scenario_id)
 
     # First-frame auth (when SESSION_SECRET is configured)

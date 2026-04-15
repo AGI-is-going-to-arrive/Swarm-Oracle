@@ -168,7 +168,7 @@ export function DebateResultView() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [i18n.language, id, replayLocalId, replayPayload, replayToken]);
+  }, [id, replayLocalId, replayPayload, replayToken]);
 
   useEffect(() => {
     const origin = window.location.origin.replace(/\/$/, '');

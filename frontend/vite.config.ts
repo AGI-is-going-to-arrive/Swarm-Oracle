@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import legacy from '@vitejs/plugin-legacy'
 import tailwindcss from '@tailwindcss/vite'
 import { fileURLToPath, URL } from 'node:url'
 import { resolveManualChunk } from './src/lib/manualChunks'
@@ -13,10 +14,23 @@ const phaserCustomEntry = fileURLToPath(
 const spectorStub = fileURLToPath(
   new URL('./experiments/phaser-custom/phaser3spectorjs-stub.cjs', import.meta.url),
 )
+const legacyTargets = [
+  'chrome >= 79',
+  'edge >= 79',
+  'firefox >= 78',
+  'safari >= 12',
+  'iOS >= 12',
+]
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [tailwindcss(), react()],
+  plugins: [
+    tailwindcss(),
+    react(),
+    legacy({
+      targets: legacyTargets,
+    }),
+  ],
   resolve: {
     alias: [
       {

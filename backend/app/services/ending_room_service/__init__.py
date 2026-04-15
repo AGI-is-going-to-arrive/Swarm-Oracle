@@ -10,6 +10,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import threading
+import time
 from typing import Any
 
 from sqlalchemy import delete as sa_delete
@@ -47,8 +49,10 @@ from app.services.llm_client import (  # noqa: F401 — needed for monkeypatch c
     probe_streaming_support,
 )
 from app.services.runtime_lock import (
+    RuntimeLockLease,
     acquire_runtime_lock,
     ending_room_lock_key,
+    refresh_runtime_lock,
     release_runtime_lock,
 )
 
@@ -173,6 +177,8 @@ from ._utils import (  # noqa: F401 — re-exported
 )
 
 logger = logging.getLogger(__name__)
+_ENDING_ROOM_LOCK_REFRESH_FRACTION = 0.33
+_ENDING_ROOM_LOCK_LOSS_POLL_SECONDS = 0.01
 
 
 # ── Functions that remain in __init__.py ─────────────────────────────
@@ -1319,6 +1325,95 @@ def _mark_room_error(room_id: str) -> None:
         session.commit()
 
 
+def _ending_room_runtime_lock_refresh_interval(
+    lease: RuntimeLockLease | None,
+    *,
+    lease_seconds: float,
+) -> float:
+    remaining_seconds = lease_seconds
+    if lease is not None:
+        remaining_seconds = max(0.01, lease.expires_at - time.time())
+    return max(
+        0.01,
+        min(5.0, min(lease_seconds, remaining_seconds) * _ENDING_ROOM_LOCK_REFRESH_FRACTION),
+    )
+
+
+def _start_ending_room_runtime_lock_heartbeat(
+    lease_holder: list[RuntimeLockLease | None],
+    failure_holder: list[BaseException | None],
+    *,
+    lease_seconds: float,
+    room_id: str,
+) -> tuple[threading.Event, threading.Thread]:
+    stop_event = threading.Event()
+
+    def _heartbeat() -> None:
+        refresh_interval = _ending_room_runtime_lock_refresh_interval(
+            lease_holder[0],
+            lease_seconds=lease_seconds,
+        )
+        while not stop_event.wait(refresh_interval):
+            current_lease = lease_holder[0]
+            try:
+                refreshed = refresh_runtime_lock(current_lease, lease_seconds=lease_seconds)
+            except Exception as exc:  # pragma: no cover - exercised via watcher contract
+                failure_holder[0] = exc
+                lease_holder[0] = None
+                logger.warning(
+                    "Ending room %s runtime lock refresh raised",
+                    room_id,
+                    exc_info=exc,
+                )
+                return
+            if refreshed is None:
+                lease_holder[0] = None
+                logger.warning(
+                    "Ending room %s runtime lock lease could not be refreshed",
+                    room_id,
+                )
+                return
+            lease_holder[0] = refreshed
+            refresh_interval = _ending_room_runtime_lock_refresh_interval(
+                refreshed,
+                lease_seconds=lease_seconds,
+            )
+
+    thread = threading.Thread(
+        target=_heartbeat,
+        name=f"ending-room:{room_id}-runtime-lock-heartbeat",
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
+
+
+def _stop_ending_room_runtime_lock_heartbeat(
+    stop_event: threading.Event | None,
+    thread: threading.Thread | None,
+) -> None:
+    if stop_event is None or thread is None:
+        return
+    stop_event.set()
+    thread.join(timeout=1.0)
+
+
+async def _watch_ending_room_runtime_lock_loss(
+    lease_holder: list[RuntimeLockLease | None],
+    failure_holder: list[BaseException | None],
+) -> None:
+    while True:
+        current_lease = lease_holder[0]
+        if current_lease is None:
+            if failure_holder[0] is not None:
+                raise failure_holder[0]
+            raise RuntimeError("ending room runtime lock was lost during execution")
+        if current_lease.expires_at <= time.time():
+            lease_holder[0] = None
+            raise RuntimeError("ending room runtime lock was lost during execution")
+        await asyncio.sleep(_ENDING_ROOM_LOCK_LOSS_POLL_SECONDS)
+
+
 async def run_ending_room_background(
     room_id: str,
     *,
@@ -1326,15 +1421,13 @@ async def run_ending_room_background(
 ) -> None:
     if not _claim_room(room_id):
         return
-    lock_lease = None
-    try:
-        lock_lease = acquire_runtime_lock(
-            ending_room_lock_key(room_id),
-            lease_seconds=_ENDING_ROOM_RUNTIME_LOCK_LEASE_SECONDS,
-        )
-        if lock_lease is None:
-            return
+    lock_lease: RuntimeLockLease | None = None
+    lock_lease_holder: list[RuntimeLockLease | None] = [None]
+    lock_failure_holder: list[BaseException | None] = [None]
+    heartbeat_stop: threading.Event | None = None
+    heartbeat_thread: threading.Thread | None = None
 
+    async def _run_room_generation() -> None:
         with Session(get_engine()) as session:
             room = session.get(EndingRoom, room_id)
             if room is None:
@@ -1497,6 +1590,44 @@ async def run_ending_room_background(
 
         await _broadcast(room_id, ws_callback, {"type": "ending_room_result_ready", "data": {"result": result}})  # noqa: E501
         await _broadcast(room_id, ws_callback, {"type": "status", "data": {"status": "done"}})
+
+    async def _run_room_generation_with_lock_guard() -> None:
+        generation_task = asyncio.create_task(_run_room_generation())
+        lock_watch_task = asyncio.create_task(
+            _watch_ending_room_runtime_lock_loss(lock_lease_holder, lock_failure_holder)
+        )
+        try:
+            done, _pending = await asyncio.wait(
+                {generation_task, lock_watch_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if lock_watch_task in done:
+                generation_task.cancel()
+                await asyncio.gather(generation_task, return_exceptions=True)
+                lock_watch_task.result()
+            await generation_task
+        finally:
+            lock_watch_task.cancel()
+            await asyncio.gather(lock_watch_task, return_exceptions=True)
+            if not generation_task.done():
+                generation_task.cancel()
+                await asyncio.gather(generation_task, return_exceptions=True)
+
+    try:
+        lock_lease = acquire_runtime_lock(
+            ending_room_lock_key(room_id),
+            lease_seconds=_ENDING_ROOM_RUNTIME_LOCK_LEASE_SECONDS,
+        )
+        if lock_lease is None:
+            return
+        lock_lease_holder[0] = lock_lease
+        heartbeat_stop, heartbeat_thread = _start_ending_room_runtime_lock_heartbeat(
+            lock_lease_holder,
+            lock_failure_holder,
+            lease_seconds=_ENDING_ROOM_RUNTIME_LOCK_LEASE_SECONDS,
+            room_id=room_id,
+        )
+        await _run_room_generation_with_lock_guard()
     except Exception as exc:
         logger.error("Ending room %s failed", room_id, exc_info=exc)
         _mark_room_error(room_id)
@@ -1526,5 +1657,6 @@ async def run_ending_room_background(
         )
         raise
     finally:
+        _stop_ending_room_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
         release_runtime_lock(lock_lease)
         _release_room(room_id)

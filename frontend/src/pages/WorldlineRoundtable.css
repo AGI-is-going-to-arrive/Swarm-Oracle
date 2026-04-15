@@ -1,61 +1,97 @@
 /* Oracle skin tokens: bare selectors removed (dead code — EndingChatModal.css owns the unscoped definitions).
    Roundtable uses scoped overrides below for light-mode editorial palette. */
 .worldline-roundtable-view.oracle-skin {
+  --oracle-accent: #a35e16;
+  --oracle-accent-soft: rgba(163, 94, 22, 0.08);
+  --oracle-aura: rgba(163, 94, 22, 0.04);
   --oracle-accent: oklch(55% 0.12 60);
   --oracle-accent-soft: oklch(55% 0.12 60 / 0.08);
   --oracle-aura: oklch(55% 0.12 60 / 0.04);
 }
 .worldline-roundtable-view.oracle-skin--law {
+  --oracle-accent: #0465af;
+  --oracle-accent-soft: rgba(4, 101, 175, 0.08);
+  --oracle-aura: rgba(4, 101, 175, 0.04);
   --oracle-accent: oklch(50% 0.14 250);
   --oracle-accent-soft: oklch(50% 0.14 250 / 0.08);
   --oracle-aura: oklch(50% 0.14 250 / 0.04);
 }
 .worldline-roundtable-view.oracle-skin--governance {
+  --oracle-accent: #00769c;
+  --oracle-accent-soft: rgba(0, 118, 156, 0.08);
+  --oracle-aura: rgba(0, 118, 156, 0.04);
   --oracle-accent: oklch(52% 0.12 225);
   --oracle-accent-soft: oklch(52% 0.12 225 / 0.08);
   --oracle-aura: oklch(52% 0.12 225 / 0.04);
 }
 .worldline-roundtable-view.oracle-skin--faith {
+  --oracle-accent: #a07100;
+  --oracle-accent-soft: rgba(160, 113, 0, 0.08);
+  --oracle-aura: rgba(160, 113, 0, 0.04);
   --oracle-accent: oklch(58% 0.14 85);
   --oracle-accent-soft: oklch(58% 0.14 85 / 0.08);
   --oracle-aura: oklch(58% 0.14 85 / 0.04);
 }
 .worldline-roundtable-view.oracle-skin--empire {
+  --oracle-accent: #bc4527;
+  --oracle-accent-soft: rgba(188, 69, 39, 0.08);
+  --oracle-aura: rgba(188, 69, 39, 0.04);
   --oracle-accent: oklch(55% 0.16 35);
   --oracle-accent-soft: oklch(55% 0.16 35 / 0.08);
   --oracle-aura: oklch(55% 0.16 35 / 0.04);
 }
 .worldline-roundtable-view.oracle-skin--war {
+  --oracle-accent: #b23641;
+  --oracle-accent-soft: rgba(178, 54, 65, 0.08);
+  --oracle-aura: rgba(178, 54, 65, 0.04);
   --oracle-accent: oklch(52% 0.16 20);
   --oracle-accent-soft: oklch(52% 0.16 20 / 0.08);
   --oracle-aura: oklch(52% 0.16 20 / 0.04);
 }
 .worldline-roundtable-view.oracle-skin--industry {
+  --oracle-accent: #a56d0f;
+  --oracle-accent-soft: rgba(165, 109, 15, 0.08);
+  --oracle-aura: rgba(165, 109, 15, 0.04);
   --oracle-accent: oklch(58% 0.12 72);
   --oracle-accent-soft: oklch(58% 0.12 72 / 0.08);
   --oracle-aura: oklch(58% 0.12 72 / 0.04);
 }
 .worldline-roundtable-view.oracle-skin--trade {
+  --oracle-accent: #007834;
+  --oracle-accent-soft: rgba(0, 120, 52, 0.08);
+  --oracle-aura: rgba(0, 120, 52, 0.04);
   --oracle-accent: oklch(50% 0.14 150);
   --oracle-accent-soft: oklch(50% 0.14 150 / 0.08);
   --oracle-aura: oklch(50% 0.14 150 / 0.04);
 }
 .worldline-roundtable-view.oracle-skin--frontier {
+  --oracle-accent: #007872;
+  --oracle-accent-soft: rgba(0, 120, 114, 0.08);
+  --oracle-aura: rgba(0, 120, 114, 0.04);
   --oracle-accent: oklch(50% 0.12 190);
   --oracle-accent-soft: oklch(50% 0.12 190 / 0.08);
   --oracle-aura: oklch(50% 0.12 190 / 0.04);
 }
 .worldline-roundtable-view.oracle-skin--ecology {
+  --oracle-accent: #157123;
+  --oracle-accent-soft: rgba(21, 113, 35, 0.08);
+  --oracle-aura: rgba(21, 113, 35, 0.04);
   --oracle-accent: oklch(48% 0.14 145);
   --oracle-accent-soft: oklch(48% 0.14 145 / 0.08);
   --oracle-aura: oklch(48% 0.14 145 / 0.04);
 }
 .worldline-roundtable-view.oracle-skin--survival {
+  --oracle-accent: #617209;
+  --oracle-accent-soft: rgba(97, 114, 9, 0.08);
+  --oracle-aura: rgba(97, 114, 9, 0.04);
   --oracle-accent: oklch(52% 0.12 120);
   --oracle-accent-soft: oklch(52% 0.12 120 / 0.08);
   --oracle-aura: oklch(52% 0.12 120 / 0.04);
 }
 .worldline-roundtable-view.oracle-skin--mythic {
+  --oracle-accent: #6360a0;
+  --oracle-accent-soft: rgba(99, 96, 160, 0.08);
+  --oracle-aura: rgba(99, 96, 160, 0.04);
   --oracle-accent: oklch(52% 0.10 285);
   --oracle-accent-soft: oklch(52% 0.10 285 / 0.08);
   --oracle-aura: oklch(52% 0.10 285 / 0.04);
@@ -63,6 +99,11 @@
 
 /* Hotseat + overflow badge tokens */
 .worldline-roundtable-view {
+  --hotseat-border: #d4609d;
+  --hotseat-border-soft: #e78db9;
+  --hotseat-text: #a13170;
+  --badge-overflow-border: rgba(108, 80, 25, 0.3);
+  --badge-overflow-text: #6c5019;
   --hotseat-border: oklch(65% 0.16 350);
   --hotseat-border-soft: oklch(75% 0.12 350);
   --hotseat-text: oklch(50% 0.16 350);
@@ -167,6 +208,8 @@
 }
 
 .worldline-roundtable-view .archive-chip--profile {
+  border-color: var(--oracle-accent);
+  background: #f3ece3;
   border-color: color-mix(in oklab, var(--oracle-accent) 28%, var(--border-default));
   background: color-mix(in oklab, var(--oracle-accent) 10%, var(--bg-surface));
   color: var(--text-primary);
@@ -184,6 +227,8 @@
   align-items: center;
   padding: 7px 11px;
   border-radius: 999px;
+  border: 1px solid var(--oracle-accent);
+  background: #f5efe8;
   border: 1px solid color-mix(in oklab, var(--oracle-accent) 24%, var(--border-default));
   background: color-mix(in oklab, var(--oracle-accent) 8%, var(--bg-surface));
   color: var(--text-secondary);
@@ -215,6 +260,7 @@
   padding: 18px;
   border: 1px solid var(--border-default);
   border-radius: 22px;
+  background: #f9f7f3 !important;
   background: color-mix(in oklab, var(--oracle-accent) 3%, var(--bg-surface)) !important;
   background-image: none !important;
   background-position: center;
@@ -227,6 +273,7 @@
   position: absolute;
   inset: auto 18px 0;
   height: 16px;
+  background: linear-gradient(90deg, transparent, rgba(163, 94, 22, 0.18), transparent);
   background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--oracle-accent) 18%, transparent), transparent);
   opacity: 0.4;
 }
@@ -452,6 +499,7 @@
 .worldline-roundtable-picker__mode-pill.is-active,
 .worldline-roundtable-picker-branch__toggle.is-active {
   border-color: var(--oracle-accent);
+  background: #f3ece3;
   background: color-mix(in oklab, var(--oracle-accent) 10%, var(--bg-surface));
   color: var(--text-primary);
 }
@@ -489,6 +537,10 @@
   margin-bottom: 18px;
   padding: 16px;
   border-radius: 20px;
+  border: 1px solid var(--oracle-accent);
+  background:
+    radial-gradient(circle at top left, rgba(163, 94, 22, 0.10), transparent 36%),
+    var(--bg-surface);
   border: 1px solid color-mix(in oklab, var(--oracle-accent) 18%, var(--border-subtle));
   background:
     radial-gradient(circle at top left, color-mix(in oklab, var(--oracle-accent) 10%, transparent), transparent 36%),
@@ -508,6 +560,7 @@
   padding: 14px;
   border-radius: 18px;
   border: 1px dashed var(--border-default);
+  background: linear-gradient(135deg, #faf7f2, var(--bg-elevated));
   background: linear-gradient(135deg, color-mix(in oklab, var(--oracle-accent) 4%, var(--bg-elevated)), var(--bg-elevated));
   transition: border-color 160ms ease, box-shadow 180ms ease, transform 180ms ease, opacity 180ms ease;
 }
@@ -517,12 +570,16 @@
 }
 
 .worldline-roundtable-seating-slot--over-valid {
+  border-color: #23a136;
+  box-shadow: 0 0 0 1px rgba(35, 161, 54, 0.24), 0 14px 28px rgba(35, 161, 54, 0.12);
   border-color: oklch(62% 0.18 145);
   box-shadow: 0 0 0 1px oklch(62% 0.18 145 / 0.24), 0 14px 28px oklch(62% 0.18 145 / 0.12);
   transform: translateY(-2px);
 }
 
 .worldline-roundtable-seating-slot--over-invalid {
+  border-color: #db4144;
+  box-shadow: 0 0 0 1px rgba(219, 65, 68, 0.18);
   border-color: oklch(60% 0.19 24);
   box-shadow: 0 0 0 1px oklch(60% 0.19 24 / 0.18);
 }
@@ -635,6 +692,8 @@
 
 .worldline-roundtable-picker-card.is-selected {
   border-color: var(--oracle-accent);
+  box-shadow: 0 0 0 1px rgba(163, 94, 22, 0.22);
+  background: #f8f4ee;
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--oracle-accent) 22%, transparent);
   background: color-mix(in oklab, var(--oracle-accent) 5%, var(--bg-elevated));
 }
@@ -656,6 +715,7 @@
 .worldline-roundtable-picker-card__title span {
   padding: 4px 8px;
   border-radius: 999px;
+  background: #e9ddce;
   background: color-mix(in oklab, var(--oracle-accent) 12%, var(--bg-hover));
   color: var(--text-secondary);
   font-size: 0.72rem;
@@ -763,11 +823,13 @@
 
 .worldline-roundtable-seat.is-selected {
   border-color: var(--oracle-accent);
+  box-shadow: 0 0 0 1px rgba(163, 94, 22, 0.22);
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--oracle-accent) 22%, transparent);
 }
 
 .worldline-roundtable-seat.is-current-speaker {
   border-color: var(--oracle-accent);
+  background: #f7f3ec;
   background: color-mix(in oklab, var(--oracle-accent) 6%, var(--bg-surface));
   box-shadow: var(--shadow-card);
   transform: translateY(-1px);
@@ -785,6 +847,7 @@
 }
 
 .worldline-roundtable-seat.is-archivist {
+  background: #f8f6f1;
   background: color-mix(in oklab, var(--oracle-accent) 4%, var(--bg-surface));
 }
 
@@ -795,6 +858,8 @@
   gap: 6px;
   padding: 4px 8px;
   border-radius: 999px;
+  border: 1px solid var(--oracle-accent);
+  background: #f7f3ec;
   border: 1px solid color-mix(in oklab, var(--oracle-accent) 18%, var(--border-default));
   background: color-mix(in oklab, var(--oracle-accent) 6%, var(--bg-surface));
   color: var(--text-secondary);
@@ -1114,6 +1179,7 @@ h3.roundtable-phase-divider {
   padding: 6px 16px;
   font-size: 13px;
   cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
   box-shadow: 0 4px 14px oklch(0% 0 0 / 0.18);
 }
 
@@ -1287,6 +1353,9 @@ h3.roundtable-phase-divider {
   }
 
   .worldline-roundtable-view.is-live-room {
+    height: 100vh;
+    max-height: 100vh;
+    min-height: 100vh;
     height: 100dvh;
     max-height: 100dvh;
     min-height: 100dvh;
@@ -1386,6 +1455,8 @@ h3.roundtable-phase-divider {
     flex-direction: column;
     flex: 1 1 auto;
     gap: 6px;
+    height: calc(100vh - 266px);
+    max-height: calc(100vh - 266px);
     height: calc(100dvh - 266px);
     max-height: calc(100dvh - 266px);
     overflow-y: auto;  /* was hidden — sticky composer needs scrollable parent */

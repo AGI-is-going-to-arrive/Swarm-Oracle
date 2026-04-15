@@ -71,6 +71,9 @@ const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
       type="button"
       aria-label={d.ariaLabel || d.fullLabel || d.label}
       aria-haspopup="dialog"
+      data-graph-node-card="true"
+      data-graph-label={d.label}
+      data-graph-full-label={d.fullLabel}
       style={{
         background: d.bgColor || '#555',
         appearance: 'none',

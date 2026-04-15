@@ -69,6 +69,10 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
   en: {
     'causal.type_event': 'Event',
     'causal.a11y_list': 'Causal events list',
+    'causal.a11y_relations': 'Causal relations list',
+    'causal.edge_caused': 'causes',
+    'causal.edge_temporal': 'precedes',
+    'causal.edge_relation': '{{source}} {{relation}} {{target}}',
     'causal.error.network': 'Unable to load the causal graph. Check your connection and try again.',
     'causal.error.branch_not_found': 'The selected branch is no longer available for this scenario.',
     'causal.error.unauthorized': 'You do not have permission to view this causal graph.',
@@ -80,10 +84,15 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'common.graph_fit_view': 'Fit view',
     'common.graph_toggle_interactivity': 'Toggle interactivity',
     'common.graph_minimap': 'Mini map',
+    'common.graph_mobile_hint': 'Drag to pan. Pinch or use the graph controls to zoom.',
   },
   zh: {
     'causal.type_event': '事件',
     'causal.a11y_list': '因果事件列表',
+    'causal.a11y_relations': '因果关系列表',
+    'causal.edge_caused': '导致',
+    'causal.edge_temporal': '先于',
+    'causal.edge_relation': '{{source}} {{relation}} {{target}}',
     'causal.error.network': '因果图谱加载失败，请检查网络后重试。',
     'causal.error.branch_not_found': '所选分支已不在当前场景中。',
     'causal.error.unauthorized': '你没有权限查看此因果图谱。',
@@ -95,8 +104,22 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'common.graph_fit_view': '适配视图',
     'common.graph_toggle_interactivity': '切换交互状态',
     'common.graph_minimap': '缩略图',
+    'common.graph_mobile_hint': '可拖动画布；双指缩放或使用图谱控件调整视图。',
   },
 };
+
+function interpolate(template: string, values: Record<string, unknown>) {
+  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => String(values[key] ?? ''));
+}
+
+function resolveTranslation(locale: TestLocale, key: string, fallback?: string | Record<string, unknown>) {
+  if (typeof fallback === 'string') return TEST_TRANSLATIONS[locale][key] ?? fallback;
+  if (fallback && typeof fallback === 'object') {
+    const template = TEST_TRANSLATIONS[locale][key] ?? String(fallback.defaultValue ?? key);
+    return interpolate(template, fallback);
+  }
+  return TEST_TRANSLATIONS[locale][key] ?? key;
+}
 
 vi.mock('../hooks/useCapabilityCheck', () => ({
   useCapabilityCheck: () => ({ loading: false, enabled: true, capabilities: null }),
@@ -113,8 +136,7 @@ vi.mock('react-i18next', async () => {
       const t = React.useMemo(() => {
         void localeVersion;
         return (key: string, fallback?: string | Record<string, unknown>) => (
-          TEST_TRANSLATIONS[getCurrentLocale()][key]
-          ?? (typeof fallback === 'string' ? fallback : key)
+          resolveTranslation(getCurrentLocale(), key, fallback)
         );
       }, [localeVersion]);
       return { t, i18n: i18nMock };
@@ -170,6 +192,7 @@ vi.mock('@xyflow/react', async () => {
       );
     },
     Background: () => null,
+    BackgroundVariant: { Dots: 'dots', Lines: 'lines', Cross: 'cross' },
     Controls: () => null,
     MiniMap: ({ style }: { style?: React.CSSProperties }) => (
       <div data-testid="rf-minimap" data-pointer-events={String(style?.pointerEvents ?? '')} />
@@ -189,6 +212,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   fitViewMock.mockReset();
   resetTestI18n();
+  document.body.classList.remove('has-causal-graph');
 });
 
 const renderView = (path = '/sim/test-id/causal-map') =>
@@ -651,11 +675,31 @@ describe('CausalReviewView', () => {
 
     const fitButton = screen.getByRole('button', { name: 'Fit view' });
     expect(fitButton).toBeInTheDocument();
+    expect(screen.getByText('Drag to pan. Pinch or use the graph controls to zoom.')).toBeInTheDocument();
     const initialCalls = fitViewMock.mock.calls.length;
     await user.click(fitButton);
     expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
 
     matchMediaSpy.mockRestore();
+  });
+
+  it('adds and removes the body class that repositions the global language switcher around the causal graph chrome', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-body-class',
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Test Event', round: 1, payload: null }],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n1', type: 'causal', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    const view = renderView();
+
+    await screen.findByTestId('reactflow');
+    expect(document.body).toHaveClass('has-causal-graph');
+
+    view.unmount();
+    expect(document.body).not.toHaveClass('has-causal-graph');
   });
 
   it('reacts to legacy WebKit media query listeners when compact mode changes at runtime', async () => {
@@ -1209,6 +1253,28 @@ describe('CausalReviewView', () => {
     expect(list).toBeInTheDocument();
     expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Event');
     vi.restoreAllMocks();
+  });
+
+  it('includes a screen reader relations list for causal edges', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-relations',
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Alpha trigger', round: 1, payload: null },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Beta response', round: 2, payload: null },
+        ],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    renderView();
+
+    await screen.findByTestId('reactflow');
+    const relationList = screen.getByRole('list', { name: 'Causal relations list' });
+    const items = within(relationList).getAllByRole('listitem');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent('Alpha trigger causes Beta response');
   });
 
   it('uses a single named a11y list when large graphs use the text fallback', async () => {

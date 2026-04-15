@@ -139,6 +139,8 @@ def validate_web_search_base_url(provider: str, url: str | None) -> str | None:
         allowed_hosts = _WEB_SEARCH_URL_ALLOWLIST.get(normalized_provider)
         if not allowed_hosts or hostname not in allowed_hosts:
             return None
+        if scheme != "https":
+            return None
         return url
     except Exception:
         return None

@@ -42,6 +42,7 @@ export function buildDebatePhaseSummary(
     0,
   );
   const { leader, margin: swing } = getDebateScoreLeader(propositionDelta, oppositionDelta);
+  const lastPhaseTurn = phaseTurns[phaseTurns.length - 1];
 
   return {
     phase,
@@ -50,7 +51,7 @@ export function buildDebatePhaseSummary(
     swing,
     leader,
     judgeSeen: phaseTurns.some((turn) => turn.speaker_side === 'judge'),
-    lastSpeakerName: phaseTurns.at(-1)?.speaker_name ?? null,
+    lastSpeakerName: lastPhaseTurn?.speaker_name ?? null,
   };
 }
 

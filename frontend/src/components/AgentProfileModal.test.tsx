@@ -78,6 +78,18 @@ describe('AgentProfileModal', () => {
     });
   });
 
+  it('falls back to the open attribute when showModal is unavailable', async () => {
+    // @ts-expect-error test-only legacy browser fallback
+    HTMLDialogElement.prototype.showModal = undefined;
+
+    const { container } = render(<AgentProfileModal identity={baseIdentity} open={true} onClose={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Oracle Alpha')).toBeInTheDocument();
+    });
+    expect(container.querySelector('dialog')).toHaveAttribute('open');
+  });
+
   it('displays identity info (name, role, kind, persona, domains)', async () => {
     render(<AgentProfileModal identity={baseIdentity} open={true} onClose={vi.fn()} />);
 

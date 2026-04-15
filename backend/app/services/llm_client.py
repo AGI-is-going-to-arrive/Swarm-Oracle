@@ -51,6 +51,10 @@ _LLM_URL_ALLOWLIST: frozenset[str] = frozenset({
 _ALLOWED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https"})
 
 
+def _is_local_base_url_hostname(hostname: str | None) -> bool:
+    return (hostname or "").strip().lower() in _LOCAL_LLM_HOSTS
+
+
 def validate_llm_base_url(url: str | None) -> str | None:
     """Validate that a BYOK llm_base_url is in the allowlist.
 
@@ -71,6 +75,12 @@ def validate_llm_base_url(url: str | None) -> str | None:
         if hostname not in _LLM_URL_ALLOWLIST:
             logger.warning(
                 "BYOK base_url rejected by allowlist: hostname=%s", hostname
+            )
+            return None
+        if scheme != "https" and not _is_local_base_url_hostname(hostname):
+            logger.warning(
+                "BYOK base_url rejected: non-local hostname=%s requires https",
+                hostname,
             )
             return None
         return url

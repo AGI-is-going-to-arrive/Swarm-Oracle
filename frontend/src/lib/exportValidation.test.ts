@@ -24,10 +24,10 @@ async function writeTempFile(filename: string, contents: string): Promise<string
 }
 
 describe('validateSvgDownloadArtifact', () => {
-  it('accepts exported SVG files that contain serialized graph markup', async () => {
+  it('accepts exported SVG files that contain native graph layers and nodes', async () => {
     const filePath = await writeTempFile(
       'graph-export-valid.svg',
-      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div>graph</div></foreignObject></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg"><svg data-export-layer="edges"><path d="M0 0L10 10"/></svg><g data-export-node="true"><rect width="40" height="20"/><text>graph</text></g></svg>',
     );
 
     await expect(
@@ -51,10 +51,10 @@ describe('validateSvgDownloadArtifact', () => {
     ).rejects.toThrow(/empty|malformed|svg/i);
   });
 
-  it('rejects SVG files with an empty foreignObject payload', async () => {
+  it('rejects SVG files that still depend on foreignObject', async () => {
     const filePath = await writeTempFile(
-      'graph-export-empty-foreign-object.svg',
-      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject>   </foreignObject></svg>',
+      'graph-export-foreign-object.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div>graph</div></foreignObject></svg>',
     );
 
     await expect(
@@ -63,13 +63,13 @@ describe('validateSvgDownloadArtifact', () => {
         filename: 'causal-graph_2026-04-14.svg',
         expectedPrefix: 'causal-graph_',
       }),
-    ).rejects.toThrow(/foreignObject|content|malformed/i);
+    ).rejects.toThrow(/foreignObject|portable|malformed/i);
   });
 
-  it('rejects truncated SVG files even when they contain svg and foreignObject markers', async () => {
+  it('rejects truncated SVG files even when they contain native graph markers', async () => {
     const filePath = await writeTempFile(
       'graph-export-truncated.svg',
-      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div>graph</div>',
+      '<svg xmlns="http://www.w3.org/2000/svg"><g data-export-node="true"><text>graph</text>',
     );
 
     await expect(
@@ -78,13 +78,13 @@ describe('validateSvgDownloadArtifact', () => {
         filename: 'causal-graph_2026-04-14.svg',
         expectedPrefix: 'causal-graph_',
       }),
-    ).rejects.toThrow(/foreignObject|svg|malformed/i);
+    ).rejects.toThrow(/svg|malformed/i);
   });
 
   it('rejects SVG files that leak transient node detail UI into the export', async () => {
     const filePath = await writeTempFile(
       'graph-export-leaked-detail-panel.svg',
-      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div data-testid="node-detail-panel">detail</div></foreignObject></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg"><g data-export-node="true"><rect width="40" height="20"/><text>graph</text></g><g data-testid="node-detail-panel">detail</g></svg>',
     );
 
     await expect(
@@ -99,7 +99,7 @@ describe('validateSvgDownloadArtifact', () => {
   it('accepts argument-map SVG filenames that match the expected prefix', async () => {
     const filePath = await writeTempFile(
       'argument-map-export-valid.svg',
-      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div>graph</div></foreignObject></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg"><svg data-export-layer="edges"><path d="M0 0L10 10"/></svg><g data-export-node="true"><rect width="40" height="20"/><text>graph</text></g></svg>',
     );
 
     await expect(

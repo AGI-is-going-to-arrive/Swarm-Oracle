@@ -67,7 +67,8 @@
 - 这些字段的当前口径：
   - 只有 `web_search_enabled=true` 时才会真正参与搜索
   - `web_search_enabled=false` 时，override 字段会被忽略
-  - `web_search_base_url` 目前只接受官方 provider endpoint，以及和服务端 `SEARXNG_URL` 完全一致的 SearXNG 基址
+  - 官方 provider 的 `web_search_base_url` 只接受 `https` endpoint
+  - `searxng` 的 `web_search_base_url` 只接受和服务端 `SEARXNG_URL` 完全一致的基址
   - 如果 custom override 的 provider 和服务端默认 provider 不同，调用方需要显式传该 provider 的 API key；后端不会跨 provider 复用默认 key
 - 搜索成功时，scenario response 会带 `web_search_context`，并持久化到 `Scenario.web_context_json`。
 - `POST /api/scenario` 当前也接受可选 `continuity_overrides`：

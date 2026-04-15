@@ -62,6 +62,13 @@ interface GameplayContract {
 
 const gameplayContract = contractData as GameplayContract;
 
+function toRecord<K extends string, V>(entries: Array<readonly [K, V]>): Record<K, V> {
+  return entries.reduce<Record<K, V>>((accumulator, [key, value]) => {
+    accumulator[key] = value;
+    return accumulator;
+  }, {} as Record<K, V>);
+}
+
 export const GAMEPLAY_CONTRACT = gameplayContract;
 
 export const CONTRACT_GAMEPLAY_CARD_DEFS = gameplayContract.cards.map((card) => ({
@@ -89,7 +96,7 @@ export const CONTRACT_GAMEPLAY_CARD_DEFS = gameplayContract.cards.map((card) => 
   promptLinesEn: card.prompt_lines.en,
 }));
 
-export const CONTRACT_GAMEPLAY_PROFILES = Object.fromEntries(
+export const CONTRACT_GAMEPLAY_PROFILES = toRecord(
   gameplayContract.profiles.map((profile) => [profile.id, {
     id: profile.id,
     labelZh: profile.labels.zh,
@@ -100,10 +107,10 @@ export const CONTRACT_GAMEPLAY_PROFILES = Object.fromEntries(
     signatureHooksEn: profile.signature_hooks.en,
     recommendedCards: profile.recommended_cards,
     defaultDirectives: profile.default_directives,
-  }]),
+  }] as const),
 );
 
-export const CONTRACT_SIGNATURE_ARCS = Object.fromEntries(
+export const CONTRACT_SIGNATURE_ARCS = toRecord(
   gameplayContract.profiles.map((profile) => [profile.id, {
     labelZh: profile.signature_arc.labels.zh,
     labelEn: profile.signature_arc.labels.en,
@@ -112,14 +119,14 @@ export const CONTRACT_SIGNATURE_ARCS = Object.fromEntries(
     riskLabelEn: profile.signature_arc.risk_track_labels.en,
     resourceLabelZh: profile.signature_arc.resource_track_labels.zh,
     resourceLabelEn: profile.signature_arc.resource_track_labels.en,
-  }]),
+  }] as const),
 );
 
 export const CONTRACT_CARD_SYSTEM_EFFECTS = gameplayContract.card_system_effects;
 
-export const CONTRACT_CARD_RULES = Object.fromEntries(
+export const CONTRACT_CARD_RULES = toRecord(
   gameplayContract.cards.map((card) => [card.id, {
     cost: card.cost,
     cooldownRounds: card.cooldown_rounds,
-  }]),
+  }] as const),
 );

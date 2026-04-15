@@ -1,5 +1,12 @@
-if (typeof globalThis.global === 'undefined') {
-  globalThis.global = globalThis;
+const scope =
+  typeof window === 'object' && window
+    ? window
+    : typeof self === 'object' && self
+      ? self
+      : {};
+
+if (typeof scope.global === 'undefined') {
+  scope.global = scope;
 }
 
 function unwrapModule(mod, namedKey) {
@@ -12,13 +19,13 @@ function unwrapModule(mod, namedKey) {
   return mod;
 }
 
-const PhaserModule = await import('phaser/src/phaser-core.js');
-const PhaserMathModule = await import('phaser/src/math/index.js');
-const LoaderEventsModule = await import('phaser/src/loader/events/index.js');
-const ContainerModule = await import('phaser/src/gameobjects/container/Container.js');
-await import('phaser/src/gameobjects/container/ContainerFactory.js');
-const RectangleModule = await import('phaser/src/gameobjects/shape/rectangle/Rectangle.js');
-await import('phaser/src/gameobjects/shape/rectangle/RectangleFactory.js');
+import * as PhaserModule from 'phaser/src/phaser-core.js';
+import * as PhaserMathModule from 'phaser/src/math/index.js';
+import * as LoaderEventsModule from 'phaser/src/loader/events/index.js';
+import * as ContainerModule from 'phaser/src/gameobjects/container/Container.js';
+import 'phaser/src/gameobjects/container/ContainerFactory.js';
+import * as RectangleModule from 'phaser/src/gameobjects/shape/rectangle/Rectangle.js';
+import 'phaser/src/gameobjects/shape/rectangle/RectangleFactory.js';
 
 const Phaser = unwrapModule(PhaserModule);
 const PhaserMath = unwrapModule(PhaserMathModule);

@@ -364,6 +364,32 @@ describe('DebateResultView', () => {
     expect(getMockLanguage()).toBe('en');
   });
 
+  it('does not refetch debate results when only the UI language changes', async () => {
+    setMockLanguage('en');
+    getDebateResultMock.mockResolvedValue(buildPayload());
+
+    const view = (
+      <MemoryRouter initialEntries={['/debate/debate-1/result']}>
+        <Routes>
+          <Route path="/debate/:id/result" element={<DebateResultView />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const { rerender } = render(view);
+
+    expect(await screen.findByText(/debate\.result_title/)).toBeInTheDocument();
+    expect(getDebateResultMock).toHaveBeenCalledTimes(1);
+
+    setMockLanguage('zh');
+    rerender(view);
+
+    await waitFor(() => {
+      expect(screen.getByText(/debate\.result_title/)).toBeInTheDocument();
+    });
+    expect(getDebateResultMock).toHaveBeenCalledTimes(1);
+  });
+
   it('shows an explicit fallback note when long-form result copy mixes Chinese and English', async () => {
     getDebateResultMock.mockResolvedValue({
       ...buildPayload(),

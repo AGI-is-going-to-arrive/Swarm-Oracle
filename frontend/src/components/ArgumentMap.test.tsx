@@ -17,6 +17,10 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'argument.counter': 'Counter',
     'argument.a11y_label': 'Debate argument map',
     'argument.a11y_list': 'Argument units list',
+    'argument.a11y_relations': 'Argument relations list',
+    'argument.edge_supports': 'supports',
+    'argument.edge_rebuts': 'rebuts',
+    'argument.edge_relation': '{{source}} {{relation}} {{target}}',
     'argument.open_details': 'Open details',
     'common.graph_controls': 'Graph controls',
     'common.graph_zoom_in': 'Zoom in',
@@ -24,6 +28,7 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'common.graph_fit_view': 'Fit view',
     'common.graph_toggle_interactivity': 'Toggle interactivity',
     'common.graph_minimap': 'Mini map',
+    'common.graph_mobile_hint': 'Drag to pan. Pinch or use the graph controls to zoom.',
   },
   zh: {
     'argument.claim': '论点',
@@ -32,6 +37,10 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'argument.counter': '反击',
     'argument.a11y_label': '辩论论证图谱',
     'argument.a11y_list': '论证单元列表',
+    'argument.a11y_relations': '论证关系列表',
+    'argument.edge_supports': '支持',
+    'argument.edge_rebuts': '反驳',
+    'argument.edge_relation': '{{source}} {{relation}} {{target}}',
     'argument.open_details': '打开详情',
     'common.graph_controls': '图谱控件',
     'common.graph_zoom_in': '放大',
@@ -39,8 +48,22 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'common.graph_fit_view': '适配视图',
     'common.graph_toggle_interactivity': '切换交互状态',
     'common.graph_minimap': '缩略图',
+    'common.graph_mobile_hint': '可拖动画布；双指缩放或使用图谱控件调整视图。',
   },
 };
+
+function interpolate(template: string, values: Record<string, unknown>) {
+  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => String(values[key] ?? ''));
+}
+
+function resolveTranslation(locale: TestLocale, key: string, fallback?: string | Record<string, unknown>) {
+  if (typeof fallback === 'string') return TEST_TRANSLATIONS[locale][key] ?? fallback;
+  if (fallback && typeof fallback === 'object') {
+    const template = TEST_TRANSLATIONS[locale][key] ?? String(fallback.defaultValue ?? key);
+    return interpolate(template, fallback);
+  }
+  return TEST_TRANSLATIONS[locale][key] ?? key;
+}
 
 function setTestLocale(locale: TestLocale) {
   currentLocale = locale;
@@ -48,7 +71,7 @@ function setTestLocale(locale: TestLocale) {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string) => TEST_TRANSLATIONS[currentLocale][key] ?? fallback ?? key,
+    t: (key: string, fallback?: string | Record<string, unknown>) => resolveTranslation(currentLocale, key, fallback),
     i18n: {
       changeLanguage: vi.fn(async (locale: string) => {
         if (locale === 'en' || locale === 'zh') currentLocale = locale;
@@ -100,6 +123,7 @@ vi.mock('@xyflow/react', async () => {
       );
     },
     Background: () => null,
+    BackgroundVariant: { Dots: 'dots', Lines: 'lines', Cross: 'cross' },
     Controls: () => null,
     MiniMap: ({ style }: { style?: React.CSSProperties }) => (
       <div data-testid="rf-minimap" data-pointer-events={String(style?.pointerEvents ?? '')} />
@@ -115,6 +139,7 @@ afterEach(() => {
   cleanup();
   fitViewMock.mockReset();
   currentLocale = 'en';
+  document.body.classList.remove('has-argument-map');
   vi.restoreAllMocks();
 });
 
@@ -491,10 +516,35 @@ describe('ArgumentMap', () => {
     await screen.findByTestId('reactflow');
     const fitButton = screen.getByRole('button', { name: 'Fit view' });
     expect(fitButton).toBeInTheDocument();
+    expect(screen.getByText('Drag to pan. Pinch or use the graph controls to zoom.')).toBeInTheDocument();
     const initialCalls = fitViewMock.mock.calls.length;
     await user.click(fitButton);
     expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
     matchMediaSpy.mockRestore();
+  });
+
+  it('adds and removes the body class that repositions the global language switcher around the graph chrome', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-body-class',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null },
+        ],
+        edges: [],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' },
+        ],
+      }),
+    } as Response);
+
+    const view = render(<ArgumentMap debateId="d1" visible={true} />);
+
+    await screen.findByTestId('reactflow');
+    expect(document.body).toHaveClass('has-argument-map');
+
+    view.unmount();
+    expect(document.body).not.toHaveClass('has-argument-map');
   });
 
   it('disables animated graph edges when reduced motion is preferred', async () => {
@@ -623,6 +673,34 @@ describe('ArgumentMap', () => {
     expect(items).toHaveLength(1);
     expect(items[0].textContent).toContain('Claim');
     expect(items[0].textContent).toContain('Node only claim');
+  });
+
+  it('includes an explicit screen reader relations list for graph edges', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's-relations',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null },
+          { id: 'n2', key: 'k2', type: 'evidence', label: 'Evidence pack', round: 2, payload: null },
+        ],
+        edges: [
+          { id: 'e1', source: 'n1', target: 'n2', type: 'supports', weight: 1, label: null },
+        ],
+        units: [
+          { id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' },
+          { id: 'u2', type: 'evidence', status: 'accepted', text: 'Evidence pack', turn_id: 't2', node_id: 'n2' },
+        ],
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+    await screen.findByTestId('reactflow');
+
+    const relationList = screen.getByRole('list', { name: 'Argument relations list' });
+    const items = within(relationList).getAllByRole('listitem');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent('Main claim supports Evidence pack');
   });
 
   it('keeps node-only maps keyboard-accessible through the rendered graph node button', async () => {

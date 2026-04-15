@@ -485,6 +485,15 @@ class TestByokValidation:
         assert resp.status_code == 400
         assert resp.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
 
+    def test_scenario_official_http_base_url_rejected(self, client):
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "llm_base_url": "http://api.openai.com/v1",
+            "llm_api_key": "sk-test",
+        })
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
+
     def test_scenario_docker_host_accepted(self, client):
         """host.docker.internal must remain in allowlist."""
         resp = client.post("/api/scenario", json={
@@ -511,6 +520,16 @@ class TestByokValidation:
         })
         assert resp.status_code == 400
         assert resp.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
+
+    def test_scenario_web_search_official_http_base_url_rejected(self, client):
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "web_search_enabled": True,
+            "web_search_provider": "tavily",
+            "web_search_base_url": "http://api.tavily.com/search",
+        })
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "WEB_SEARCH_BASE_URL_NOT_ALLOWED"
 
     def test_predictions_normalize_whitespace_key(self):
         """ScorePredictionsRequest must normalize whitespace-only BYOK fields to None."""

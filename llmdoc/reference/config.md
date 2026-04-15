@@ -40,7 +40,11 @@
 说明：
 
 - 这些覆盖项只作用于当前请求，不会改写服务端默认值。
-- `llm_base_url` 必须通过 hostname allowlist + http(s) scheme 校验；业务入口 (scenario/debate/predictions/social) 要求 `base_url` 必须同时带 `api_key`，否则返回 400 `BYOK_API_KEY_REQUIRED`。`/api/health/test` 是连通性探测，不做此前移拒绝。
+- `llm_base_url` 必须通过 hostname allowlist + scheme 校验：
+  - 官方托管 host 只接受 `https`
+  - 本地开发 host（如 `localhost / 127.0.0.1 / 0.0.0.0 / host.docker.internal / ::1`）才允许 `http`
+  - 业务入口 (scenario/debate/predictions/social) 要求 `base_url` 必须同时带 `api_key`，否则返回 400 `BYOK_API_KEY_REQUIRED`
+  - `/api/health/test` 是连通性探测，不走业务入口这条 `base_url + api_key` 绑定约束
 - `llm_requests_per_minute / llm_tokens_per_minute` 会覆盖服务端默认 RPM/TPM。触发限流后请求会排队等待下一个窗口（最多等 2 个 rate window），不会立即拒绝。
 - `disable_user_quota` 只对本地或 self-hosted provider 生效；它只移除单用户公平队列这一层，不会绕过全局并发、全局 pending、lane 隔离或 RPM/TPM 等待。
 
@@ -197,7 +201,8 @@
 - request-scoped override 当前约束：
   - `web_search_enabled=false` 时，override 字段会被忽略
   - 如果 custom override 的 provider 与服务端默认 provider 不同，留空不会复用服务端默认 key，需要显式填写该 provider 的 key
-  - `web_search_base_url` 目前只接受官方 provider endpoint，以及和 `SEARXNG_URL` 完全一致的 SearXNG 基址
+  - 官方 provider 的 `web_search_base_url` 当前只接受 `https`
+  - `searxng` 的 `web_search_base_url` 只接受和 `SEARXNG_URL` 完全一致的基址
 - 详细设计见 `implement/web_search_augmentation_design.md`。
 
 ## Phase 3 功能开关

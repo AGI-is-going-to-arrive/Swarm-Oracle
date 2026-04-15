@@ -151,10 +151,32 @@ npm test -- --run src/lib/dailyChallenge.test.ts
 ```bash
 cd frontend
 npm test -- --run src/lib/scenarioMeta.test.ts src/lib/scenarioGameplayState.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
+npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.tsx src/lib/replayCodec.test.ts src/lib/debateReplay.test.ts src/components/AgentProfileModal.test.tsx src/lib/legacyCssFallbacks.test.ts
 ```
 
 - Vitest 当前在 `frontend/src/setupTests.ts` 里统一注入内存版 `localStorage / sessionStorage`。
 - 需要预置持久化状态的前端测试，直接在测试体里写 `window.localStorage` 或 `window.sessionStorage`，不要依赖 Node Web Storage 的文件参数。
+- 这组回归当前额外兜住：
+  - `localStorage` 读写失败时的 i18n 初始化 / 切语言
+  - `LanguageSwitcher` 的 `role / aria-label / lang` 契约
+  - replay token 的 `plain.*` portability 与旧 token 兼容解码
+  - `crypto.randomUUID()` 缺失时的本地 replay / director id fallback
+  - `<dialog>.showModal()` 缺失时的 `AgentProfileModal` 降级
+  - 关键 CSS token / 高流量页面表面的 sRGB / rgba fallback
+
+### Backend Auth / Provider Safety 定向回归
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_session_auth.py tests/test_llm_client.py tests/test_web_context.py tests/test_ending_room_service.py tests/test_api.py -q
+```
+
+- 这组回归当前主要看：
+  - scenario WS 的 `pending-auth` 容量预留不会被并发握手冲穿
+  - ending-room 后台生成在 runtime lock 丢失 / 续租异常时会 fail-closed
+  - 官方托管 provider 的 `llm_base_url / web_search_base_url` 只接受 `https`
+  - 本地开发 host 的 BYOK `http` 例外仍保留
 
 ### Graph Viz / Debate Graph 定向回归
 
@@ -196,11 +218,11 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --b
   - `phase3-batch-a full` `35/35`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
   - `phase3-batch-b full` `43/43`，Chromium 的 default / `zh-CN` locale 都通过，desktop / mobile 都绿
   - graph scoped cross-browser desktop rerun 通过：`phase3-batch-a` / `phase3-batch-b` 的 Firefox / WebKit 都通过
-  - backend 全量 `python -m pytest -q` 本轮实测 `2061 passed, 2 skipped`
-  - frontend 全量 `npm test` 本轮实测 `1022 passed`
+  - backend 全量 `python -m pytest -q` 本轮实测 `2078 passed, 2 skipped`
+  - frontend 全量 `npm test` 本轮实测 `1040 passed`
 - 这组回归当前覆盖：
   - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
-  - `perf:budgets:check` 当前也会检查共享 `vendor` chunk，并补上 `capture-gif / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`
+  - `perf:budgets:check` 当前会按 modern / legacy 两套 chunk 名一起检查共享 `vendor`，并补上 `capture-gif / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`
   - replay branch runtime lock 当前已补：
     - `counterfactual / resume` 的 mock 续租异常 fail-closed
     - 真实 SQLite 跨线程 heartbeat 续租异常 fail-closed
@@ -222,6 +244,11 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --b
     - 错误态会按 `network / branch_not_found / unauthorized / server / load_failed` 映射到本地化 copy，不再把原始 `HTTP 404` 或后端 message 直接露给用户
   - `CausalReviewView` / `ArgumentMap` minimap 当前是非交互 overlay（`pointer-events: none`），不会挡住移动端 node click
     图节点可访问名称，以及 React Flow controls / minimap 文案也会跟随 UI 语言实时更新；切语言不会重打图请求。
+  - graph mobile 口径当前不是“只留 `Fit view`”：
+    - compact viewport 继续保留 React Flow controls
+    - 会显示本地化 mobile navigation hint
+    - `MiniMap` 维持桌面限定
+  - graph screen-reader fallback 当前除了 node / unit list，也会补本地化 relation list
   - `ArgumentMap`
     - `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`
     - `verdict` 节点当前也走共享 graph i18n label，不再把可访问名称写死成英文
@@ -231,7 +258,7 @@ SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --b
     - 关闭后会把焦点还给最近一次触发它的节点 / 按钮
     - `Escape` 在 modeless 口径下也能全局关闭详情，不要求焦点留在 panel 里
     - `Copy Reference` 在 clipboard API 被拒时会回退到 `document.execCommand('copy')`；两条都失败时会显示可见错误提示
-  - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分
+  - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分；SVG 导出走 native SVG layer + node rebuild，不再依赖 `foreignObject`
   - `GraphNodeCard`
   - graph locale 资源
   - backend causal graph / debate argument map / contract freeze / async hook / factions 相关链路：
@@ -378,6 +405,7 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
   - replay coverage 现在按 fail-closed 收口：
     - artifact/local readonly
     - import
+  - backend `tests/test_ending_room_service.py` 当前还会兜住 runtime lock 丢失 / 续租异常 -> room `error` 这条 fail-closed 合同
     - reload/restore
     - 任一关键字段缺失都会直接报错，不再 best-effort 保 `summary.json`
   - `hotseat / all_present / epilogue` 当前会额外校验目标 `roomId + threadId + interaction_mode`
@@ -508,6 +536,7 @@ RUN_REAL_LLM_TESTS=1 python -m pytest tests/test_llm_gateway_probe.py -v -s
 补充：
 
 - 这条 probe 现在会把非流式 `500`、空正文、空 `output` 都记成观测结果，不会因为某个本地网关瞬时波动直接把整条 probe 跑挂
+- 官方托管 provider 的 `llm_base_url / web_search_base_url` 当前要求 `https`；只有本地开发 host 才允许 `http`
 
 ### Identity Compaction 集成烟雾测试
 

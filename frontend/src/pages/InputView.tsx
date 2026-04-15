@@ -2,7 +2,7 @@
    SwarmOracle — InputView (Landing Page)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, type FocusEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import gsap from 'gsap';
 import { useTranslation } from 'react-i18next';
@@ -116,6 +116,11 @@ export function InputView() {
   const titleRef = useRef<HTMLHeadingElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
   const typewriterTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleClosedConfigFocusCapture = useCallback((event: FocusEvent<HTMLDivElement>) => {
+    if (isConfigOpen) return;
+    event.preventDefault();
+    (event.target as HTMLElement | null)?.blur?.();
+  }, [isConfigOpen]);
   const {
     showByok,
     setShowByok,
@@ -579,9 +584,10 @@ export function InputView() {
       setPendingLaunch(launch);
       setContinuityMatches(result.matches);
       setContinuityChoices(
-        Object.fromEntries(
-          result.matches.map((match) => [match.continuity_key, 'reuse_existing']),
-        ) as Record<string, ContinuityOverride['action']>,
+        result.matches.reduce<Record<string, ContinuityOverride['action']>>((accumulator, match) => {
+          accumulator[match.continuity_key] = 'reuse_existing';
+          return accumulator;
+        }, {}),
       );
       return true;
     } catch (error) {
@@ -1033,7 +1039,9 @@ export function InputView() {
             {/* Web Search Enhancement: opt-in toggle (compile-time flag + server hint) */}
             {webSearchAvailable && (
               <div className="web-search-section">
-                <label className={`web-search-toggle ${webSearchEnabled ? 'web-search-toggle--active' : ''}`}>
+                <label
+                  className={`web-search-toggle ${webSearchEnabled ? 'web-search-toggle--active' : ''} ${isSubmitting ? 'web-search-toggle--disabled' : ''}`}
+                >
                   <input
                     type="checkbox"
                     checked={webSearchEnabled}
@@ -1399,7 +1407,12 @@ export function InputView() {
               {' '}
               {isConfigOpen ? '▲' : '▼'}
             </button>
-            <div className={`iv-config__body ${isConfigOpen ? 'is-open' : ''}`} inert={!isConfigOpen || undefined}>
+            <div
+              className={`iv-config__body ${isConfigOpen ? 'is-open' : ''}`}
+              aria-hidden={!isConfigOpen}
+              inert={!isConfigOpen || undefined}
+              onFocusCapture={handleClosedConfigFocusCapture}
+            >
               <div className="iv-config__inner">
                 {/* Mode Selector */}
                 <div className="mode-selector-wrap">

@@ -10,28 +10,43 @@
    Names intentionally differ from :root vars to avoid circular references. */
 @theme {
   /* Brand colors — enables bg-primary, text-primary, border-danger, etc. */
+  --color-primary: #c61583;
   --color-primary: oklch(55% 0.22 350);
+  --color-primary-dim: #db589e;
   --color-primary-dim: oklch(65% 0.18 350);
+  --color-danger: #d74745;
   --color-danger: oklch(60% 0.18 25);
+  --color-success: #3aa85b;
   --color-success: oklch(65% 0.15 150);
+  --color-warning: #e2a000;
   --color-warning: oklch(75% 0.16 80);
 
   /* Focus ring (C-2 fix) */
+  --color-ring: #c61583;
   --color-ring: oklch(55% 0.22 350);
 
   /* Surface / Background — enables bg-surface, bg-elevated, bg-base, bg-hover */
+  --color-surface: #fcfcfa;
   --color-surface: oklch(99% 0.002 80);
+  --color-elevated: #ffffff;
   --color-elevated: oklch(100% 0 0);
+  --color-base: #faf8f5;
   --color-base: oklch(98% 0.005 80);
+  --color-hover: #f2eee7;
   --color-hover: oklch(95% 0.01 80);
 
   /* Text — enables text-text-primary, text-text-secondary, text-text-muted */
+  --color-text-primary: #181611;
   --color-text-primary: oklch(20% 0.01 80);
+  --color-text-secondary: #58554f;
   --color-text-secondary: oklch(45% 0.01 80);
+  --color-text-muted: #928f88;
   --color-text-muted: oklch(65% 0.01 80);
 
   /* Borders — enables border-border-subtle, border-border-default */
+  --color-border-subtle: #e1ddd7;
   --color-border-subtle: oklch(90% 0.01 80);
+  --color-border-default: #d1cdc7;
   --color-border-default: oklch(85% 0.01 80);
 
   /* Radii — use explicit values to avoid self-reference */
@@ -41,7 +56,9 @@
   --radius-xl: 12px;
 
   /* Shadows */
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.03);
   --shadow-card: 0 4px 20px oklch(0% 0 0 / 0.03);
+  --shadow-elevated: 0 12px 40px rgba(0, 0, 0, 0.06);
   --shadow-elevated: 0 12px 40px oklch(0% 0 0 / 0.06);
 
   /* Fonts */
@@ -130,41 +147,59 @@
 /* Applying OKLCH fluid scale and strict tinted neutrals */
 :root {
   /* Background (Tinted off-white, warm and sophisticated) */
+  --bg-base: #faf8f5;
   --bg-base: oklch(98% 0.005 80);
+  --bg-surface: #fcfcfa;
   --bg-surface: oklch(99% 0.002 80);
+  --bg-elevated: #ffffff;
   --bg-elevated: oklch(100% 0 0);
+  --bg-hover: #f2eee7;
   --bg-hover: oklch(95% 0.01 80);
 
   /* Primary Accent (Sparing use, high contrast magenta/rose) */
+  --color-primary: #c61583;
   --color-primary: oklch(55% 0.22 350);
+  --color-primary-dim: #db589e;
   --color-primary-dim: oklch(65% 0.18 350);
 
   /* Semantic Alerts */
+  --color-danger: #d74745;
   --color-danger: oklch(60% 0.18 25);
+  --color-success: #3aa85b;
   --color-success: oklch(65% 0.15 150);
+  --color-warning: #e2a000;
   --color-warning: oklch(75% 0.16 80);
 
   /* Text (Tinted Charcoal, avoiding pure black #000) */
+  --text-primary: #181611;
   --text-primary: oklch(20% 0.01 80);
+  --text-secondary: #58554f;
   --text-secondary: oklch(45% 0.01 80);
+  --text-muted: #928f88;
   --text-muted: oklch(65% 0.01 80);
 
   /* Borders (Extremely thin, minimal, no glassmorphism) */
+  --border-subtle: #e1ddd7;
   --border-subtle: oklch(90% 0.01 80);
+  --border-default: #d1cdc7;
   --border-default: oklch(85% 0.01 80);
   --border-active: var(--color-primary);
 
   /* Shadows (Natural, deep, avoiding heavy colored glows) */
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.03);
   --shadow-card: 0 4px 20px oklch(0% 0 0 / 0.03);
+  --shadow-elevated: 0 12px 40px rgba(0, 0, 0, 0.06);
   --shadow-elevated: 0 12px 40px oklch(0% 0 0 / 0.06);
 
   /* Legacy compatibility aliases (mapped from old cyberpunk tokens) */
+  --bg-deep: #f3f1ee;
   --bg-deep: oklch(96% 0.005 80);
   --glass-bg: var(--bg-surface);
   --glass-border: var(--border-default);
   --glow-primary: var(--shadow-elevated);
   --text-bright: var(--text-primary);
   --color-accent: var(--color-primary-dim);
+  --color-primary-glow: rgba(198, 21, 131, 0.1);
   --color-primary-glow: oklch(55% 0.22 350 / 0.1);
 
   /* Radii (Sharp or tightly rounded for elegance) */
@@ -214,29 +249,47 @@
   --z-tooltip: 1200;
 
   /* Status Badge Colors (Semantic, replacing hardcoded hex) */
+  --color-success-bg: #c9f1d0;
   --color-success-bg: oklch(92% 0.06 150);
+  --color-success-text: #004a12;
   --color-success-text: oklch(35% 0.12 150);
+  --color-success-border: #88ca95;
   --color-success-border: oklch(78% 0.10 150);
+  --color-danger-bg: #fedbd7;
   --color-danger-bg: oklch(92% 0.04 25);
+  --color-danger-text: #7c2524;
   --color-danger-text: oklch(40% 0.12 25);
+  --color-danger-border: #e6a49e;
   --color-danger-border: oklch(78% 0.08 25);
+  --color-warning-bg: #fde4bb;
   --color-warning-bg: oklch(93% 0.06 80);
+  --color-warning-text: #753d00;
   --color-warning-text: oklch(42% 0.12 70);
 
   /* Oracle / Theater Dark Overlay Tokens */
+  --oracle-bg-dark: #080503;
   --oracle-bg-dark: oklch(12% 0.01 60);
+  --oracle-bg-panel: rgba(8, 5, 3, 0.82);
   --oracle-bg-panel: oklch(12% 0.01 60 / 0.82);
+  --oracle-bg-bubble: rgba(21, 17, 13, 0.72);
   --oracle-bg-bubble: oklch(18% 0.01 60 / 0.72);
+  --oracle-text-light: #f0eeeb;
   --oracle-text-light: oklch(95% 0.005 80);
+  --oracle-text-dim: #b9b7b4;
   --oracle-text-dim: oklch(78% 0.005 80);
+  --oracle-border-dim: rgba(240, 238, 235, 0.16);
   --oracle-border-dim: oklch(95% 0.005 80 / 0.16);
+  --oracle-glow-speaker: rgba(219, 88, 158, 0.18);
   --oracle-glow-speaker: oklch(65% 0.18 350 / 0.18);
+  --oracle-glow-active: rgba(226, 160, 0, 0.12);
   --oracle-glow-active: oklch(75% 0.16 80 / 0.12);
 
   /* ── Shared Component Tokens (Phase B) ── */
   /* SpotlightTurnCard */
+  --spotlight-bg: #faf3f5;
   --spotlight-bg: color-mix(in oklab, var(--color-primary) 4%, var(--bg-surface));
   --spotlight-border: var(--color-primary);
+  --spotlight-shadow: 0 2px 12px rgba(198, 21, 131, 0.08);
   --spotlight-shadow: 0 2px 12px oklch(55% 0.22 350 / 0.08);
   --spotlight-max-ch: 58ch;
   --spotlight-max-ch-debate: 64ch;
@@ -265,8 +318,11 @@
   --curtain-bg-from: var(--oracle-bg-dark, oklch(12% 0.01 60));
 
   /* ResultView Action Band */
+  --action-band-bg: #faf5f6;
   --action-band-bg: color-mix(in oklab, var(--color-primary) 3%, var(--bg-surface));
+  --card-primary-border: #cfa8b9;
   --card-primary-border: color-mix(in oklab, var(--color-primary) 20%, var(--border-default));
+  --card-primary-shadow: 0 2px 12px rgba(198, 21, 131, 0.06);
   --card-primary-shadow: 0 2px 12px oklch(55% 0.22 350 / 0.06);
 
   /* Director Notebook fold */
@@ -279,10 +335,13 @@
 
   /* Fold / Collapse */
   --fold-line-height: 44px;
+  --fold-bg: rgba(250, 248, 245, 0.72);
   --fold-bg: oklch(98% 0.005 80 / 0.72);
 
   /* New messages pill */
+  --new-message-bg: #b2417f;
   --new-message-bg: oklch(55% 0.16 350);
+  --new-message-text: #ffffff;
   --new-message-text: oklch(100% 0 0);
 
   /* Oracle sidebar */
@@ -423,6 +482,18 @@ a:hover {
   border-color: var(--text-primary);
 }
 
+.causal-review-shell {
+  height: 100vh;
+  min-height: 100vh;
+}
+
+@supports (height: 100dvh) {
+  .causal-review-shell {
+    height: 100dvh;
+    min-height: 100dvh;
+  }
+}
+
 /* ── Language Switch (Pill Toggle) ──────────────────────── */
 /* Global fixed version — always visible bottom-right */
 .lang-switch--global {
@@ -432,16 +503,22 @@ a:hover {
   z-index: 1000;         /* below modals (1050+), above normal content */
 }
 
-body:has(.simulation-view) .lang-switch--global {
+body.has-simulation-view .lang-switch--global {
   bottom: calc(76px + env(safe-area-inset-bottom, 0px));
 }
 
-body:has(.simulation-view--theater) .lang-switch--global {
+body.has-simulation-theater .lang-switch--global {
   bottom: calc(124px + env(safe-area-inset-bottom, 0px));
 }
 
+body.has-causal-graph .lang-switch--global,
+body.has-argument-map .lang-switch--global {
+  top: calc(16px + env(safe-area-inset-top, 0px));
+  bottom: auto;
+}
+
 @media (max-height: 820px) {
-  body:has(.simulation-view--theater) .lang-switch--global {
+  body.has-simulation-theater .lang-switch--global {
     bottom: calc(148px + env(safe-area-inset-bottom, 0px));
   }
 }
@@ -455,13 +532,13 @@ body:has(.simulation-view--theater) .lang-switch--global {
     transform-origin: top right;
   }
 
-  body:has(.simulation-view) .lang-switch--global {
+  body.has-simulation-view .lang-switch--global {
     top: auto;
     bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     transform-origin: bottom right;
   }
 
-  body:has(.worldline-roundtable-view) .lang-switch--global {
+  body.has-worldline-roundtable .lang-switch--global {
     top: calc(8px + env(safe-area-inset-top, 0px));
     bottom: auto;
     right: calc(8px + env(safe-area-inset-right, 0px));
@@ -647,10 +724,12 @@ body:has(.simulation-view--theater) .lang-switch--global {
   text-transform: uppercase;
 }
 .badge-active {
+  background: rgba(198, 21, 131, 0.1);
   background: oklch(55% 0.22 350 / 0.1);
   color: var(--color-primary);
 }
 .badge-pruned {
+  background: rgba(215, 71, 69, 0.1);
   background: oklch(60% 0.18 25 / 0.1);
   color: var(--color-danger);
 }

@@ -116,6 +116,14 @@ export default function WorldlineRoundtableView() {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
 
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.body.classList.add('has-worldline-roundtable');
+    return () => {
+      document.body.classList.remove('has-worldline-roundtable');
+    };
+  }, []);
+
   const replayShareId = searchParams.get('roomShare') ?? searchParams.get('share');
   const replayLocalId = searchParams.get('roomLocal') ?? searchParams.get('local');
   const [scenario, setScenario] = useState<Scenario | null>(null);
@@ -173,6 +181,11 @@ export default function WorldlineRoundtableView() {
   const transcriptListRef = useRef<HTMLDivElement>(null);
   const transcriptScrollSnapshotRef = useRef<TranscriptScrollSnapshot | null>(null);
   const prevTurnCountRef = useRef(0);
+  const isZhRef = useRef(isZh);
+
+  useEffect(() => {
+    isZhRef.current = isZh;
+  }, [isZh]);
 
   const {
     snapshot,
@@ -267,7 +280,11 @@ export default function WorldlineRoundtableView() {
 
     const applyReplay = (nextReplay: OracleReplayPayload) => {
       if (!nextReplay.scenarioReplay) {
-        throw new Error(isZh ? '世界线圆桌回放缺少基础场景快照。' : 'Roundtable replay is missing its base scenario snapshot.');
+        throw new Error(
+          isZhRef.current
+            ? '世界线圆桌回放缺少基础场景快照。'
+            : 'Roundtable replay is missing its base scenario snapshot.',
+        );
       }
       setReplayPayload(nextReplay);
       setScenario(nextReplay.scenarioReplay.scenario);
@@ -293,7 +310,11 @@ export default function WorldlineRoundtableView() {
                 .then((artifact) => normalizeOracleReplayPayload(artifact.payload, 'worldline_roundtable_v1'))
               : await readOracleReplayPayload(searchParams, 'worldline_roundtable_v1');
           if (!rawReplay) {
-            throw new Error(isZh ? '世界线圆桌回放链接无效。' : 'This roundtable replay link is invalid.');
+            throw new Error(
+              isZhRef.current
+                ? '世界线圆桌回放链接无效。'
+                : 'This roundtable replay link is invalid.',
+            );
           }
           if (!cancelled) {
             applyReplay(rawReplay);
@@ -302,7 +323,7 @@ export default function WorldlineRoundtableView() {
         }
 
         if (!id) {
-          throw new Error(isZh ? '缺少可用的场景 ID。' : 'Missing scenario id.');
+          throw new Error(isZhRef.current ? '缺少可用的场景 ID。' : 'Missing scenario id.');
         }
 
         const [nextScenario, nextStory, nextAgents] = await Promise.all([
@@ -321,10 +342,18 @@ export default function WorldlineRoundtableView() {
         setAgents(nextAgents);
 
         if (nextScenario.status !== 'done') {
-          throw new Error(isZh ? '结果尚未完成，暂时不能发起世界线圆桌。' : 'The result is not finished yet, so the roundtable is not available.');
+          throw new Error(
+            isZhRef.current
+              ? '结果尚未完成，暂时不能发起世界线圆桌。'
+              : 'The result is not finished yet, so the roundtable is not available.',
+          );
         }
         if ((nextStoryData.branches?.length ?? 0) < 2) {
-          throw new Error(isZh ? '只有一条结局时不展示世界线圆桌。' : 'The roundtable needs at least two endings.');
+          throw new Error(
+            isZhRef.current
+              ? '只有一条结局时不展示世界线圆桌。'
+              : 'The roundtable needs at least two endings.',
+          );
         }
 
         if (!cancelled) {
@@ -343,7 +372,7 @@ export default function WorldlineRoundtableView() {
       cancelled = true;
       reset();
     };
-  }, [id, isZh, replayLocalId, replayShareId, reset, searchParams]);
+  }, [id, replayLocalId, replayShareId, reset, searchParams]);
 
   const branchesById = useMemo(
     () => new Map((storyData?.branches ?? []).map((branch) => [branch.id, branch])),
@@ -634,6 +663,7 @@ export default function WorldlineRoundtableView() {
       if (replayPayload || !sending || !composerEnabled) {
         return [];
       }
+      const activeThreadTurns = activeThread?.turns;
       const placeholderParticipantId = interactionMode === 'hotseat'
         ? (selectedRepresentativeId ?? undefined)
         : participants.find((participant) => participant.role_slot === 'archivist')?.id
@@ -642,11 +672,14 @@ export default function WorldlineRoundtableView() {
       const placeholderContent = interactionMode === 'hotseat'
         ? (isZh ? '当前代表正在组织回应…' : 'The selected representative is lining up a reply…')
         : (isZh ? '档案官正在把问题分给最合适的代表…' : 'The Archivist is routing the question to the right representative…');
+      const latestActiveTurn = activeThreadTurns && activeThreadTurns.length > 0
+        ? activeThreadTurns[activeThreadTurns.length - 1]
+        : undefined;
       return [
         {
           key: '__local-pending__',
           participantId: placeholderParticipantId,
-          phase: activeThread?.turns.at(-1)?.phase
+          phase: latestActiveTurn?.phase
             ?? effectiveSnapshot?.current_phase
             ?? 'verdict',
           content: placeholderContent,
@@ -668,9 +701,11 @@ export default function WorldlineRoundtableView() {
       visibleDrafts,
     ],
   );
-  const activeSpeakerTurnKey = displayedDrafts.at(-1)?.key ?? currentTurns.at(-1)?.key ?? null;
-  const currentSpeakerParticipantId = displayedDrafts.at(-1)?.participantId
-    ?? currentTurns.at(-1)?.participantId
+  const latestDisplayedDraft = displayedDrafts[displayedDrafts.length - 1];
+  const latestCurrentTurn = currentTurns[currentTurns.length - 1];
+  const activeSpeakerTurnKey = latestDisplayedDraft?.key ?? latestCurrentTurn?.key ?? null;
+  const currentSpeakerParticipantId = latestDisplayedDraft?.participantId
+    ?? latestCurrentTurn?.participantId
     ?? null;
   const automationPendingDrafts = useMemo(
     () => displayedDrafts.map((draft) => ({

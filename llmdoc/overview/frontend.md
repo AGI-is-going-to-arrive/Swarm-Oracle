@@ -8,12 +8,15 @@
 - React 19
 - TypeScript 5.9
 - Vite 7
+- `@vitejs/plugin-legacy` + `terser`
 - Zustand
 - i18next
 - Phaser
 - Playwright-based E2E
 
 当前默认构建/测试路径会把 `phaser` alias 到本地精简入口 `frontend/experiments/phaser-custom/entry.mjs`，用于降低默认包体。
+- production build 当前会额外产出 legacy bundle，目标口径是 Chrome / Edge 79+、Firefox 78+、Safari / iOS 12+。
+- 本地 Phaser 入口当前不再依赖 top-level `await`，不会把 legacy 构建链卡死。
 - `Vite manualChunks` 当前把 React 留在共享 `vendor`，不再单独拆 `react-vendor`；production preview 不再因为 vendor 循环 import 出现首页或图谱页白屏。
 
 ## 页面地图
@@ -65,6 +68,7 @@
   - `oracleReplay.ts`
 - 编解码共享：
   - `replayCodec.ts`
+- 新生成的 replay token 当前统一走 `plain.*`，上限 `4096` 字符；payload 过大时继续回退 artifact / local readonly。旧的 `gz.*` token 仍可解码。
 
 ## 实时链路
 
@@ -135,6 +139,7 @@
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
 | `manualChunks.ts` | `frontend/src/lib/manualChunks.ts` | 前端构建分块单一事实源；当前用于约束 React 保持在共享 `vendor`，避免 preview 白屏 |
+| `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
 | `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
 | `NodeDetailPanel.tsx` | `frontend/src/components/NodeDetailPanel.tsx` | 两个图面的共用节点详情侧栏；显示 type / round / payload / unit details |
@@ -167,6 +172,8 @@
 - `WorldlineRoundtableView` 的 readonly replay 现在会按 `active_thread_id` 恢复对应 thread 的 `interaction_mode` 与 hotseat target，不再把 hotseat replay 误显示成 `archivist_route`。
 - roundtable 的 anchored thread readonly replay / local restore 当前已补过 Firefox / WebKit scoped regression，口径与 Chromium 对齐。
 - Oracle 页面 UI 语言当前跟随用户语言开关；room payload 会显式带 `zh | en`，但页面不再反向用 `scenario.language` 覆盖当前 UI 语言。
+- `src/i18n/config.ts` 当前把 `localStorage` 读写失败视为可恢复错误；隐私模式或受限环境下，语言初始化与切换仍可工作。
+- `LanguageSwitcher` 当前按 `role="group"` + button `aria-label / title / lang` 暴露，不再只是视觉开关。
 - `useFactionOverlay` 当前只会在 `factions` capability 开启时发请求；`FEATURE_FACTIONS=false` 时，ending-room / roundtable 不再反复打 `faction-timeline 404`。
 - `WorldlineRoundtableView` 当前开桌 payload 会跟随最新的 `selectionMode` 与当前 UI 语言，不再复用旧闭包值。
 - `useEndingRoomWS` 当前重连会复用最新的 connect 回调，不再依赖旧的自引用调度。
@@ -274,19 +281,20 @@
   - 仍可打开节点详情
   - 不再把这类图伪装成可交互 DAG
 - `CausalReviewView` 当前会先用 graph payload 渲染，再异步补拉 scenario branch 元数据；分支标题请求变慢时，不会再把整张图一起卡在 loading。
-- `CausalReviewView` 当前在 compact viewport 下会把 dagre 布局切成纵向 `TB`，并补一个显式 `Fit view` 按钮；legend toggle 也补上了 `aria-expanded / aria-controls`。
+- `CausalReviewView` 当前在 compact viewport 下会把 dagre 布局切成纵向 `TB`，并继续保留 React Flow controls 与本地化 mobile navigation hint；`MiniMap` 只在桌面显示。legend toggle 也补上了 `aria-expanded / aria-controls`。
 - `CausalReviewView` / `ArgumentMap` 的 media query hook 当前兼容 legacy WebKit `addListener / removeListener`；旧 Safari / WebKit 下的 compact viewport 和 `prefers-reduced-motion` 切换也会实时更新，不再只吃首帧值。
 - 如果只是 search / filter 把边筛空，`CausalReviewView` 当前仍会保留交互图和导出入口，不会误切 relationless fallback。
 - `CausalReviewView` 当前在非交互 fallback（relationless snapshot / 大图 text fallback）时都会隐藏导出按钮，并且只保留一条具名的 a11y 列表；列表名会跟随当前语言本地化。
 - `CausalReviewView` 的 agent search 输入当前统一使用 `Search Agent... / 搜索 Agent...`；placeholder 和 `aria-label` 走同一条 i18n key。
 - `CausalReviewView` 与 `ArgumentMap` 当前只会在图结构真的变化后重新 `fitView()`；search / status filter / branch 切换仍会重算视口，但选中节点或取消选中不会再把视口强制拉回去
 - `CausalReviewView` / `ArgumentMap` 的图节点可访问名称，以及 React Flow controls / `MiniMap` 文案当前都会跟随 UI 语言实时更新；切语言不会重打图请求。
-- `CausalReviewView` / `ArgumentMap` 的 `MiniMap` 当前是非交互 overlay（`pointer-events: none`），不会挡住节点点击；移动端同口径。
+- `CausalReviewView` / `ArgumentMap` 的 `MiniMap` 当前是非交互 overlay（`pointer-events: none`），只在桌面显示；移动端不再和图操作抢热区。
+- 两个图面当前除了 node/unit 的 sr fallback list，也会额外输出本地化 relation list，让读屏器能直接读到 `causes / precedes / supports / rebuts`。
 - `ArgumentMap` 当前在筛选结果为空时会保留筛选 chips 和 `Clear`，同时显示空态文案，不会把用户困在空态里；但这个空态只在当前图本来就有 `units` 时才会出现，node-only 图不会被状态筛选误筛成空白面板。
 - `ArgumentMap` / `NodeDetailPanel` 当前继续支持显示 `rejected` 状态；前端视觉 token 与后端合法状态口径已重新对齐
 - `ArgumentMap` 当前把 `verdict` 节点也接到共享 graph i18n label；节点可访问名称会跟随当前语言。
 - `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`；状态筛选激活时，摘要也会跟着当前可见 `units` 一起更新，不再继续显示全量分布。
-- `ArgumentMap` 当前在 compact viewport 下也会补显式 `Fit view`；`prefers-reduced-motion` 下会关闭边动画、强度条宽度过渡和节点卡片 dim 过渡。
+- `ArgumentMap` 当前在 compact viewport 下也会保留显式 controls 与本地化 mobile navigation hint；`prefers-reduced-motion` 下会关闭边动画、强度条宽度过渡和节点卡片 dim 过渡。
 - `ArgumentMap` 与 `CausalReviewView` 的节点详情打开文案当前已走 i18n；screen-reader fallback 和 text fallback 不再把 `event / claim / standing` 这类原始 token 直接露给用户。
 - `ArgumentMap` 当前在 node-only 图（有节点、没 units）时，仍会保留 screen-reader fallback list；图节点 button 口径也继续支持键盘打开详情。
 - 两个图面的节点卡当前都按 button 口径渲染：
@@ -300,9 +308,10 @@
   - `Copy Reference` 先走 `clipboard.writeText()`；失败时回退 `execCommand('copy')`
   - 如果两条复制路径都失败，会显示可见错误提示，不再静默成功
   - 详情关闭后仍走 pane click / close button 这条现有口径
-- `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。
+- `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。SVG 导出当前改成 native SVG background / edge / node markup，不再依赖 `foreignObject`；校验脚本也会拒绝 `foreignObject` 回退。
 - `phase3-batch-a full` 当前口径是 `35/35`；除了基础 graph smoke，也会检查 screen-reader fallback list 确实存在且带条目。
 - `phase3-batch-a / batch-b full` 当前在 Chromium 上继续覆盖 desktop / mobile；default / `zh-CN` locale 都通过。
+- graph mobile smoke 当前会额外检查 controls 与 mobile navigation hint；`MiniMap` 继续维持桌面限定。
 - `phase3-batch-a` 当前也会检查：
   - branch selector 真的发出带 `branch_id` 的请求
   - `/api/scenario/:id` 返回的可读 branch title + probability 确实进了 selector
@@ -314,7 +323,11 @@
 - `phase3-batch-b` 当前还会覆盖 argument-map fail-soft：脚本会先走结果页的 `Load map / 加载图谱`，再检查错误态是否显示失败文案和 `Retry`，并确认图和导出同时隐藏。
 - `phase3-batch-a / batch-b` 的 summary 当前会按 step 结果重算 `failedTests`；step 失败时，不会再出现 `failedSteps > 0` 但 `failedTests=[]` 的空诊断。
 - `phase3-batch-a / batch-b` 当前都支持 `--browser chromium|firefox|webkit` scoped 执行；graph 桌面 smoke 已覆盖 Chromium / Firefox / WebKit 三浏览器口径。
-- graph-viz 相关构建回归当前也会检查共享 `vendor` chunk，并补上 `capture-gif / i18n-vendor` 的 perf budget，不再只看 `phaser / capture-html / flow-vendor`。
+- graph-viz 相关构建回归当前也会检查共享 `vendor` chunk，并按 modern / legacy 两套 chunk 名一起核对 `vendor / phaser / capture-html / capture-gif / flow-vendor / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`。
+- 关键页面样式当前已补一层 sRGB / rgba fallback：
+  - 全局 token 在 `index.css` 里先声明 fallback，再用 `oklch()` / `color-mix()` 覆盖
+  - `SimulationView`、`ResultView`、`WorldlineRoundtableView` 的高流量表面已补关键 fallback
+  - 目的是让旧 Safari / Firefox 在不支持现代颜色函数时仍保持可读
 - `ResumePanel` 当前会：
   - 只在用户已选分支且 round 为有效整数时允许提交
   - 成功后锁表单并在 500ms 后跳回 `/sim/:id`

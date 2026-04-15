@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DebateResultPayload } from '../types';
 import {
@@ -57,6 +57,10 @@ describe('debateReplay helpers', () => {
     window.localStorage.clear();
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('round-trips a replay token', () => {
     const token = encodeDebateReplayToken(payload);
     expect(decodeDebateReplayToken(token)).toEqual(payload);
@@ -71,5 +75,14 @@ describe('debateReplay helpers', () => {
     const replayId = saveDebateReplayLocalCopy(payload);
     expect(readDebateReplayLocalCopy(replayId)).toEqual(payload);
     expect(buildDebateReplayLocalUrl('https://example.com/', replayId)).toContain('/debate/replay/result?local=');
+  });
+
+  it('falls back when crypto.randomUUID is unavailable', () => {
+    vi.stubGlobal('crypto', {});
+
+    const replayId = saveDebateReplayLocalCopy(payload);
+
+    expect(replayId).toMatch(/\S+/);
+    expect(readDebateReplayLocalCopy(replayId)).toEqual(payload);
   });
 });

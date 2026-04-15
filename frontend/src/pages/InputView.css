@@ -429,10 +429,12 @@
   transition: var(--notebook-fold-transition);
   overflow: hidden;
   width: 100%;
+  pointer-events: none;
 }
 
 .iv-config__body.is-open {
   grid-template-rows: 1fr;
+  pointer-events: auto;
 }
 
 .iv-config__body > .iv-config__inner {
@@ -799,7 +801,7 @@
   50% { opacity: 0.55; }
 }
 
-.web-search-toggle:has(input:disabled) {
+.web-search-toggle--disabled {
   opacity: 0.55;
   cursor: not-allowed;
   pointer-events: none;

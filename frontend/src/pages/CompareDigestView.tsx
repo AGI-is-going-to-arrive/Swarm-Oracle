@@ -243,7 +243,7 @@ export function CompareDigestView() {
         question: scenarioQuestion,
         status: loading ? 'loading' : error ? 'error' : 'done',
         currentRound: selectedRound ?? 0,
-        totalRounds: availableRounds.at(-1) ?? null,
+        totalRounds: availableRounds[availableRounds.length - 1] ?? null,
         viewMode: 'theater',
         visualizationEnabled: true,
         isSimulationComplete: Boolean(data && hasScenario),

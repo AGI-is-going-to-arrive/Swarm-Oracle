@@ -16949,3 +16949,74 @@ QA Inventory
     - `python -m pytest backend/tests/test_resume.py -q`
     - `python -m pytest backend/tests/test_resume.py -q -W error::RuntimeWarning`
     - 两次都 `16 passed`
+
+## 2026-04-15 graph/accessibility + backend safety + old-browser compatibility 收口
+
+- 这轮实际收的是三类尾巴：
+  - 图谱交互/导出/i18n 可访问性
+  - backend provider / WS / ending-room 的安全边界
+  - 旧版 Safari / Firefox 的构建与运行时兼容层
+- backend：
+  - `backend/app/api/ws.py`
+    - scenario WS 容量限制改成按 `已注册连接 + pending-auth` 一起计算
+    - pending slot 会在 `accept()` 前原子预留，不再被并发握手冲穿 `MAX_WS_PER_SCENARIO`
+  - `backend/app/services/ending_room_service/__init__.py`
+    - ending-room 后台生成新增 runtime-lock heartbeat 和 lock-loss watcher
+    - 续租返回 `None`、续租抛异常，或 lease 过期时会 fail-closed，把 room 落成 `error`
+  - `backend/app/services/llm_client.py`
+  - `backend/app/services/web_context.py`
+    - 官方托管 provider 的 `base_url` 现在要求 `https`
+    - 本地开发 / self-hosted allowlist host 仍允许 `http`
+- frontend：
+  - 图谱：
+    - `CausalReviewView` / `ArgumentMap`
+      - compact viewport 继续保留 React Flow controls，并补本地化 mobile navigation hint
+      - `MiniMap` 维持桌面限定
+      - screen-reader fallback 除了 node/unit list，也新增本地化 relation list
+    - `ExportPanel`
+      - SVG 导出改成 native SVG background / edge / node markup
+      - 不再依赖 `foreignObject`
+      - `exportValidation` 也会拒绝 `foreignObject` 回退
+  - i18n / UI shell：
+    - `src/i18n/config.ts`
+      - `localStorage` 读写失败时，语言初始化与切换仍可工作
+    - `LanguageSwitcher`
+      - 补 `role="group"`、button `aria-label / title / lang`
+      - 图谱页会避开 minimap / controls 热区
+  - 旧浏览器兼容层：
+    - `frontend/vite.config.ts`
+      - 默认构建接入 `@vitejs/plugin-legacy`
+      - 目标口径：Chrome / Edge 79+、Firefox 78+、Safari / iOS 12+
+    - `frontend/experiments/phaser-custom/entry.mjs`
+      - 移除 top-level `await`
+    - `frontend/src/lib/compatUuid.ts`
+      - 本地 replay/director/prediction/scenario meta 改走兼容 UUID helper
+    - `frontend/src/lib/replayCodec.ts`
+      - 新 replay token 统一产出 `plain.*`
+      - URL 预算提升到 `4096` 字符
+      - 旧 `gz.*` token 继续可读
+    - `frontend/src/components/AgentProfileModal.tsx`
+      - `<dialog>.showModal()` 缺失时退回 `open` 口径
+    - 运行时热路径继续清掉 `.at()` / `Object.fromEntries` / `:has()` 依赖
+    - `index.css`、`SimulationView.css`、`ResultView.css`、`WorldlineRoundtable.css`
+      - 全局 token 和高流量页面关键表面补 sRGB / rgba fallback
+  - 新增/更新的兼容性测试：
+    - `src/i18n/config.test.ts`
+    - `src/components/LanguageSwitcher.test.tsx`
+    - `src/lib/replayCodec.test.ts`
+    - `src/lib/debateReplay.test.ts`
+    - `src/components/AgentProfileModal.test.tsx`
+    - `src/lib/legacyCssFallbacks.test.ts`
+- 本轮实测：
+  - `cd backend && source .venv/bin/activate && python -m pytest -q`
+    - `2078 passed, 2 skipped`
+  - `cd frontend && npm test`
+    - `1040 passed`
+  - `cd frontend && npm run lint`
+    - 通过
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过
+  - `cd frontend && npm run perf:budgets:check`
+    - 通过

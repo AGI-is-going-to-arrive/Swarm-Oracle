@@ -41,7 +41,7 @@ export function DebateStageRibbon({
     } else if (event.key === 'Home') {
       nextPhase = enabledPhases[0] ?? null;
     } else if (event.key === 'End') {
-      nextPhase = enabledPhases.at(-1) ?? null;
+      nextPhase = enabledPhases[enabledPhases.length - 1] ?? null;
     }
 
     if (!nextPhase || nextPhase === phase) return;

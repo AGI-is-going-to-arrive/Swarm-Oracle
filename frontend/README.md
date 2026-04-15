@@ -10,11 +10,14 @@ React + TypeScript frontend for SwarmOracle.
 - React 19
 - TypeScript 5.9
 - Vite 7
+- `@vitejs/plugin-legacy` + `terser`
 - Zustand
 - i18next
 - Phaser 3
-  current default build/test path aliases bare `phaser` to `experiments/phaser-custom/entry.cjs`, so shipped builds no longer consume the package's full default ESM entry
+  current default build/test path aliases bare `phaser` to `experiments/phaser-custom/entry.mjs`, and the curated entry no longer relies on top-level `await`
 - Playwright-based E2E scripts
+
+- production builds now also emit a legacy `nomodule` path for Chrome / Edge 79+, Firefox 78+, and Safari / iOS 12+.
 
 ## Routes
 
@@ -36,6 +39,9 @@ React + TypeScript frontend for SwarmOracle.
   replay URL building, token encoding/decoding, import helpers
 - `oracleReplay.ts / replayCodec.ts`
   Oracle replay share now falls back to a local read-only link when artifact storage is unavailable and URL-token sharing is too large to ship
+  new replay tokens are emitted as portable `plain.*` envelopes with a `4096` character budget; older `gz.*` links are still readable
+- `compatUuid.ts`
+  replay/director/prediction/scenario-meta local ids no longer assume `crypto.randomUUID()` is available; fallback order is `randomUUID` -> `getRandomValues` -> timestamp/random
 - `WorldlineRoundtableView.tsx`
   launch payload now follows the latest `selectionMode` and current UI language instead of reusing stale callback state
 - `e2e-ending-room-followup-suite.mjs`
@@ -50,7 +56,8 @@ React + TypeScript frontend for SwarmOracle.
   shared authority merge/reset helper for `SimulationView` and `ResultView`
   keeps page-level fallback order in one place instead of duplicating the merge path in each screen
 - `replayCodec.ts`
-  shared gzip/base64/url replay token codec used by both `scenarioReplay.ts` and `simulationReplay.ts`
+  shared replay token codec used by both `scenarioReplay.ts` and `simulationReplay.ts`
+  current write path emits portable `plain.*` envelopes and keeps legacy gzip links readable
 - `useDebateWS` / `useSimulationWS`
   live event hydration
   store-side phase / branch status now stay monotonic under out-of-order WS events
@@ -69,9 +76,10 @@ React + TypeScript frontend for SwarmOracle.
 cd frontend
 npm install
 npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
+npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.tsx src/lib/replayCodec.test.ts src/lib/debateReplay.test.ts src/components/AgentProfileModal.test.tsx src/lib/legacyCssFallbacks.test.ts
 npx tsc --noEmit -p tsconfig.app.json
+npm run lint
 npm run build
-npm run e2e:resume -- full
 npm run perf:budgets:check
 npm run assets:provenance:check
 ```
@@ -98,17 +106,21 @@ npm run test:spike:phaser-custom
 npm run build:spike:phaser-custom
 ```
 
-- Historical full baseline: `179 passed`.
-- Current targeted frontend set: `112 passed`.
-- Current resume/lint/build verification also passed:
-  - `src/components/ResumePanel.test.tsx + src/pages/ResultView.test.tsx + src/i18n/locales.test.ts`: `50 passed`
-  - `npm run e2e:resume -- full`: `8 / 8 steps passed`
-  - `npm run lint`: `0 errors, warnings remain`
+- Current verification contract is maintained in `llmdoc/guides/development.md`.
+- Latest local rerun in this session:
+  - `npm test`: `1040 passed`
+  - `npm run lint`: pass
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
   - `npm run build`: pass
-- Current custom Phaser runtime subset:
-  - `src/game/PhaserGame.test.ts + src/game/PhaserGameLoader.test.ts + src/game/replaySync.test.ts + src/pages/SimulationView.test.tsx + src/pages/ResultView.test.tsx`: `41 passed`
-  - `npm run test:spike:phaser-custom`: `30 passed`
+  - `npm run perf:budgets:check`: pass
+- The default signoff target remains:
+  - Chromium desktop/mobile
+  - desktop Firefox / WebKit scoped regression
+  - plus frontend `test / lint / typecheck / build / perf` gates
+- Legacy compatibility is broader than the default signoff:
+  - legacy bundle is emitted in production
+  - replay/id/dialog/color fallbacks are covered by targeted unit tests
+  - BrowserStack / Sauce style real old-browser smoke is still optional, not part of the default contract
 - Latest targeted Oracle signoff artifacts:
   - `output/e2e/20260331-oracle-signoff-ending-room/summary.json`
   - `output/e2e/20260331-oracle-signoff-roundtable/summary.json`
@@ -136,7 +148,6 @@ npm run build:spike:phaser-custom
   - `ending-room-followup`
   - `roundtable-full`
   - `debate-full`
-- Safari is optional and not part of the default full signoff.
 - CI now also includes `release-signoff-fixture`, a no-secrets deterministic full-flow signoff lane that runs the main scenario path against an isolated mock LLM on `18318` and forces deterministic Debate adjudication. The real LLM path still follows the configured `LLM_RESPONSES_URL`.
 - Latest clean real full signoff artifact: `output/e2e/2026-04-10T14-07-43-466Z-release-signoff/summary.json`.
 - That artifact currently records commit `7d643772888e88457fc14b678d837b087678e78b`, `passed` status, and a dirty worktree; always read the artifact's embedded git metadata as the source of truth.

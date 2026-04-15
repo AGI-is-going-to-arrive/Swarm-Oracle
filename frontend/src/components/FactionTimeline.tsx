@@ -67,7 +67,10 @@ export function FactionTimeline({ scenarioId, branchId, visible }: Props) {
 
   // Collect unique faction keys for consistent coloring
   const factionKeys = [...new Set(timeline.flatMap(r => r.factions.map(f => f.key)))];
-  const colorMap = Object.fromEntries(factionKeys.map((k, i) => [k, FACTION_COLORS[i % FACTION_COLORS.length]]));
+  const colorMap = factionKeys.reduce<Record<string, string>>((map, key, index) => {
+    map[key] = FACTION_COLORS[index % FACTION_COLORS.length];
+    return map;
+  }, {});
 
   return (
     <div role="list" aria-label={t('factions.a11y_label', 'Faction evolution timeline')}>

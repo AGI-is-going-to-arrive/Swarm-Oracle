@@ -19,6 +19,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   ReactFlow,
   Background,
+  BackgroundVariant,
   Controls,
   MiniMap,
   MarkerType,
@@ -174,6 +175,15 @@ function getCausalNodeActionLabel(
   return `${t('causal.open_details', 'Open details')}: ${typeLabel} - ${label}`;
 }
 
+function getCausalEdgeRelationLabel(
+  edge: GraphEdgeData,
+  t: (key: string, fallback: string) => string,
+): string {
+  if (edge.label && edge.label.trim()) return edge.label.trim();
+  if (edge.type === 'temporal') return t('causal.edge_temporal', 'precedes');
+  return t('causal.edge_caused', 'causes');
+}
+
 function extractAvailableBranches(data: Pick<CausalGraphData, 'nodes' | 'available_branches'>): string[] {
   const explicit = Array.isArray(data.available_branches)
     ? data.available_branches.filter((value): value is string => typeof value === 'string' && value.length > 0)
@@ -237,8 +247,8 @@ function layoutDagre(
         borderColor: '',
         dimmed: false,
         tooltipDisabled,
-        sourcePos: 'right',
-        targetPos: 'left',
+        sourcePos: compactViewport ? 'bottom' : 'right',
+        targetPos: compactViewport ? 'top' : 'left',
       },
     };
   });
@@ -388,7 +398,9 @@ export function CausalReviewView() {
   const hasSourceEdges = (graphData?.edges.length ?? 0) > 0;
   const isRelationlessFallback = nodeCount > 1 && edgeCount === 0 && !hasSourceEdges;
   const isNonInteractiveFallback = isTextFallback || isRelationlessFallback;
+  const hasInteractiveGraph = !loading && !error && !isNonInteractiveFallback && nodeCount > 0;
   const causalListAriaLabel = t('causal.a11y_list', 'Causal events list');
+  const causalRelationsAriaLabel = t('causal.a11y_relations', 'Causal relations list');
 
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
@@ -468,11 +480,38 @@ export function CausalReviewView() {
     reactFlowRef.current.fitView?.();
   }, [flowNodes, flowEdges, flowSignature]);
 
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const className = 'has-causal-graph';
+    if (!hasInteractiveGraph) {
+      document.body.classList.remove(className);
+      return;
+    }
+
+    document.body.classList.add(className);
+    return () => {
+      document.body.classList.remove(className);
+    };
+  }, [hasInteractiveGraph]);
+
   const rawNodeMap = useMemo(() => {
     const m = new Map<string, GraphNodeData>();
     if (filteredData) for (const n of filteredData.nodes) m.set(n.id, n);
     return m;
   }, [filteredData]);
+  const relationLines = useMemo(() => (
+    (filteredData?.edges ?? []).map((edge) => {
+      const source = rawNodeMap.get(edge.source);
+      const target = rawNodeMap.get(edge.target);
+      if (!source || !target) return null;
+      return t('causal.edge_relation', {
+        defaultValue: '{{source}} {{relation}} {{target}}',
+        source: source.label || source.key,
+        relation: getCausalEdgeRelationLabel(edge, t),
+        target: target.label || target.key,
+      });
+    }).filter(Boolean) as string[]
+  ), [filteredData?.edges, rawNodeMap, t]);
 
   const availableBranches = useMemo(() => {
     if (!branchId) return branches;
@@ -566,7 +605,10 @@ export function CausalReviewView() {
 
   return (
     <Tooltip.Provider delayDuration={300}>
-      <div style={{ height: '100dvh', minHeight: '100dvh', display: 'flex', flexDirection: 'column' }}>
+      <div
+        style={{ height: '100vh', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}
+        className="causal-review-shell"
+      >
         <div style={{ padding: isCompactViewport ? '0.75rem' : '1rem', display: 'flex', alignItems: 'center', gap: '1rem', borderBottom: '1px solid #333', flexWrap: 'wrap' }}>
           <Link to={`/result/${id}`} style={{ color: '#8ab4f8', textDecoration: 'none' }}>
             &larr; {t('common.back_to_result', 'Back to Result')}
@@ -614,13 +656,18 @@ export function CausalReviewView() {
             />
           )}
           {nodeCount > 0 && !isNonInteractiveFallback && isCompactViewport && (
-            <button
-              type="button"
-              onClick={resetViewport}
-              style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #555', background: 'transparent', color: '#8ab4f8', cursor: 'pointer', fontSize: '0.75rem' }}
-            >
-              {t('common.graph_fit_view', 'Fit view')}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={resetViewport}
+                style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #555', background: 'transparent', color: '#8ab4f8', cursor: 'pointer', fontSize: '0.75rem' }}
+              >
+                {t('common.graph_fit_view', 'Fit view')}
+              </button>
+              <span style={{ color: '#888', fontSize: '0.72rem' }}>
+                {t('common.graph_mobile_hint', 'Drag to pan. Pinch or use the graph controls to zoom.')}
+              </span>
+            </>
           )}
           {/* B6: Legend toggle */}
           <button
@@ -710,8 +757,8 @@ export function CausalReviewView() {
                 fitView
                 proOptions={{ hideAttribution: true }}
               >
-                <Background />
-                {!isCompactViewport && <Controls className="graph-export-chrome" />}
+                <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
+                <Controls className="graph-export-chrome" />
                 {!isCompactViewport && (
                   <MiniMap
                     className="graph-export-chrome"
@@ -727,13 +774,20 @@ export function CausalReviewView() {
         )}
 
         {!isNonInteractiveFallback && (
-          <div className="sr-only" role="list" aria-label={causalListAriaLabel}>
-            {(filteredData?.nodes ?? graphData?.nodes ?? []).map(n => (
-              <div key={n.id} role="listitem">
-                {`${getCausalTypeLabel(n.type, t)}: ${n.label} (${t('causal.round_label', 'Round')} ${n.round ?? '?'})`}
-              </div>
-            ))}
-          </div>
+          <>
+            <div className="sr-only" role="list" aria-label={causalListAriaLabel}>
+              {(filteredData?.nodes ?? graphData?.nodes ?? []).map(n => (
+                <div key={n.id} role="listitem">
+                  {`${getCausalTypeLabel(n.type, t)}: ${n.label} (${t('causal.round_label', 'Round')} ${n.round ?? '?'})`}
+                </div>
+              ))}
+            </div>
+            <div className="sr-only" role="list" aria-label={causalRelationsAriaLabel}>
+              {relationLines.map((line, index) => (
+                <div key={`${line}-${index}`} role="listitem">{line}</div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </Tooltip.Provider>

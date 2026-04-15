@@ -79,5 +79,5 @@ export function getLatestReplayRound(
   branchId: string | null | undefined,
 ): number | null {
   const rounds = getReplayRounds(messages, branches, branchId);
-  return rounds.at(-1) ?? null;
+  return rounds[rounds.length - 1] ?? null;
 }

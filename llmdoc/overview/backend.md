@@ -144,6 +144,11 @@
 ## 运行时约束
 
 - 主模式与 Debate 的后台任务都通过 `runtime_lock` 做跨 worker 防重入。
+- ending-room 后台生成当前也持有 runtime-lock heartbeat：
+  - 续租返回 `None`
+  - 续租抛异常
+  - 本地 lease 已过期
+  - 以上路径都会 fail-closed，把 room 落成 `error`，不会继续写 turn 或 result
 - Debate live 当前会启动 runtime-lock heartbeat，并在每个长 await 前后校验本地 lease 是否仍有效：
   - 续租返回 `None`、续租抛异常，或本地 lease 已过期时，任务会在下一个 guard 点 fail-closed 并把 debate 标成 `error`
   - 不会再继续落库或广播后续 turn，也不会继续 verdict / finalize；如果锁在单次生成途中丢失，会在下一次 guard 点被拦下
@@ -209,6 +214,7 @@
   - `web_search_enabled=false` 时，这些 override 字段会在路由层被忽略，不影响正常建局
   - custom provider override 不会再复用“另一个 provider”的服务端默认 key
   - `xai` 走 Responses API + `web_search` tool，并使用独立 `XAI_WEB_SEARCH_TIMEOUT_SECONDS`
+  - 官方 provider 的 `web_search_base_url` 当前只接受 `https`
   - `searxng` 自定义 base URL 当前只接受与服务端 `SEARXNG_URL` 完全一致的基址
 - Ending Room 的同步服务函数（`create_ending_room`、`create_ending_room_thread`、`load_ending_room_snapshot` 等）在 async 端点中通过 `asyncio.to_thread()` 调用，不阻塞事件循环。路由层对 `to_thread` 内部的非业务异常有通用 `except Exception` 兜底，不会让裸 DB 异常直接落成未分类 500。
 - Debate argument map 当前走两层抽取：
@@ -233,7 +239,10 @@
 - 常规 prediction 当前允许 `counterplay_variant: null`；只有显式给出非空值时才校验 variant。
 - WebSocket 入站消息有 64KB UTF-8 字节大小限制，超出会以 `1009` 状态码关闭连接。
 - BYOK API key 在内存传递时使用 `_OpaqueStr` 包裹，`repr()` 和 JSON 结构化日志都会输出 `"***"` 而非真实值；但 `str()` 和 f-string 仍返回真实值，确保 httpx header 正常工作。
-- BYOK `llm_base_url` 必须通过 hostname allowlist + http(s) scheme 校验。业务入口 (scenario/debate/predictions/social) 要求 `base_url` 必须同时带 `api_key`，否则返回 400。
+- BYOK `llm_base_url` 必须通过 hostname allowlist + scheme 校验：
+  - 官方托管 host 只接受 `https`
+  - 本地开发 host 才允许 `http`
+  - 业务入口 (scenario/debate/predictions/social) 要求 `base_url` 必须同时带 `api_key`，否则返回 400
 - 当多个 backend worker 共用同一个 SQLite 文件时：
   - pending/quota 共享计数会生效
   - runtime lock 会跨进程共享
@@ -250,6 +259,7 @@
   - WebSocket 继续使用首帧 auth 协议
 - Oracle replay 的自动化状态当前也会显式跟随 active replay thread 的 `interaction_mode`，避免 mobile roundtable readonly 在自动化口径里误报成主桌模式。
 - 当 `SESSION_SECRET` 非空时，WS 采用首帧 auth 协议：服务端先 accept，再等待客户端发送 `{"type":"auth","token":"..."}`（10 秒超时，64KB 上限），验证通过后回复 `{"type":"auth_ok"}`，然后才注册连接并启动 heartbeat。未认证的 socket 不会进入 `_connections` 池，不会收到 broadcast 或 heartbeat。
+- scenario WS 的容量限制当前按“已注册连接 + pending-auth”一起算，pending slot 会在 `accept()` 前原子预留；并发握手不会再把 `MAX_WS_PER_SCENARIO` 冲穿。
 - 开启 auth 后，资源存在性与 owner 检查会延后到首帧 auth 之后：
   - `scenario WS` 当前也会校验 signed principal 与 scenario owner，不再只做 session gate
   - `debate / ending-room` WS 还会继续要求 signed principal；认证通过但资源不存在或不属于该 principal 时会走 `4404`

@@ -10,6 +10,7 @@ import {
   encodeReplayEnvelope,
   normalizeReplayOrigin,
 } from './replayCodec';
+import { createCompatUuid } from './compatUuid';
 
 const ENDING_ROOM_REPLAY_KIND = 'ending_room_result_v1';
 const ROUNDTABLE_REPLAY_KIND = 'worldline_roundtable_result_v1';
@@ -157,7 +158,7 @@ export function buildWorldlineRoundtableShareUrl(
 }
 
 export function saveImportedEndingRoomReplay(payload: EndingRoomReplayPayload): string {
-  const replayId = crypto.randomUUID();
+  const replayId = createCompatUuid();
   const raw = window.localStorage.getItem(ENDING_ROOM_LOCAL_STORAGE_KEY);
   const parsed = raw ? JSON.parse(raw) as Record<string, EndingRoomReplayPayload> : {};
   parsed[replayId] = payload;

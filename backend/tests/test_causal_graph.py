@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
-from sqlmodel import SQLModel, Session, create_engine, select
+from sqlmodel import Session, SQLModel, create_engine, select
 
 from alembic import command as alembic_command
 from app.config import settings

@@ -1099,7 +1099,10 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
 }
 
 export function buildAgentsById(agents: AgentInfo[]): Record<string, AgentInfo> {
-  return Object.fromEntries(agents.map((agent) => [agent.id, agent]));
+  return agents.reduce<Record<string, AgentInfo>>((accumulator, agent) => {
+    accumulator[agent.id] = agent;
+    return accumulator;
+  }, {});
 }
 
 export function getDefaultGameplayTargetBranch(branches: BranchInfo[]): string | null {

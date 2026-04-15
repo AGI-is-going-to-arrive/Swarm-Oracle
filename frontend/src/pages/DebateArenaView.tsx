@@ -188,22 +188,22 @@ export function DebateArenaView() {
     () => debate?.turns.slice(0, revealCount) ?? [],
     [debate?.turns, revealCount],
   );
-  const activeSpeakerSide = visibleTurns.at(-1)?.speaker_side ?? null;
+  const latestVisibleTurn = visibleTurns[visibleTurns.length - 1] ?? null;
+  const activeSpeakerSide = latestVisibleTurn?.speaker_side ?? null;
 
   const unlockedPhases = useMemo(
     () => Array.from(new Set(visibleTurns.map((turn) => turn.phase))),
     [visibleTurns],
   );
 
-  const currentPhase = visibleTurns.at(-1)?.phase ?? debate?.current_phase ?? 'opening';
+  const currentPhase = latestVisibleTurn?.phase ?? debate?.current_phase ?? 'opening';
   const stageTurns = useMemo(() => {
     if (selectedPhase === currentPhase) {
       return visibleTurns;
     }
     return visibleTurns.filter((turn) => turn.phase === selectedPhase);
   }, [currentPhase, selectedPhase, visibleTurns]);
-  const latestVisibleTurn = visibleTurns.at(-1) ?? null;
-  const latestStageTurn = stageTurns.at(-1) ?? null;
+  const latestStageTurn = stageTurns[stageTurns.length - 1] ?? null;
   const phaseUnlockCount = unlockedPhases.length;
   const phaseSummaries = useMemo(
     () => buildDebatePhaseSummaries(visibleTurns, unlockedPhases),

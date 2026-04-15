@@ -42,13 +42,19 @@ function safeReadStore(): DebateCounterplayStore {
     }
     const parsed = JSON.parse(raw) as DebateCounterplayStore;
     const cutoff = Date.now() - COUNTERPLAY_STORAGE_TTL_MS;
-    const records = Object.fromEntries(
-      Object.entries(parsed.records ?? {}).filter(([, record]) => (
-        record != null
-        && typeof record === 'object'
-        && isFreshCounterplayRecord(record as DebateCounterplayRecord, cutoff)
-      )),
-    ) as Record<string, DebateCounterplayRecord>;
+    const records = Object.entries(parsed.records ?? {}).reduce<Record<string, DebateCounterplayRecord>>(
+      (nextRecords, [key, record]) => {
+        if (
+          record != null
+          && typeof record === 'object'
+          && isFreshCounterplayRecord(record as DebateCounterplayRecord, cutoff)
+        ) {
+          nextRecords[key] = record as DebateCounterplayRecord;
+        }
+        return nextRecords;
+      },
+      {},
+    );
     if (Object.keys(records).length !== Object.keys(parsed.records ?? {}).length) {
       safeWriteStore({ version: 1, records });
     }

@@ -2,7 +2,10 @@ export function normalizeReplayOrigin(origin: string): string {
   return origin.replace(/\/$/, '');
 }
 
-export const MAX_REPLAY_TOKEN_CHARS = 1800;
+// Older IE-era URL limits are no longer relevant for our support matrix.
+// A 4KB cap keeps replay links portable across Safari/Firefox while leaving
+// enough headroom after removing gzip-only encoding.
+export const MAX_REPLAY_TOKEN_CHARS = 4096;
 const LIKELY_OVERSIZED_REPLAY_JSON_CHARS = MAX_REPLAY_TOKEN_CHARS * 8;
 
 export class ReplayTokenTooLargeError extends Error {
@@ -50,18 +53,12 @@ function fromBase64Url(value: string): string {
 }
 
 async function compressBytes(bytes: Uint8Array): Promise<{ prefix: 'gz' | 'plain'; bytes: Uint8Array }> {
-  if (typeof CompressionStream === 'undefined') {
-    return { prefix: 'plain', bytes };
-  }
-
-  const stream = new CompressionStream('gzip');
-  const writer = stream.writable.getWriter();
-  const chunk = new Uint8Array(bytes.byteLength);
-  chunk.set(bytes);
-  await writer.write(chunk);
-  await writer.close();
-  const compressed = await new Response(stream.readable).arrayBuffer();
-  return { prefix: 'gz', bytes: new Uint8Array(compressed) };
+  // Keep new replay links universally decodable across older Safari/Firefox.
+  // Gzip encoding here requires DecompressionStream on the reader side, which
+  // creates cross-browser replay failures when a modern browser shares a token
+  // to an older one. Larger payloads are already handled by local-copy/artifact
+  // fallbacks higher in the stack.
+  return { prefix: 'plain', bytes };
 }
 
 async function decompressBytes(prefix: string, bytes: Uint8Array): Promise<Uint8Array> {

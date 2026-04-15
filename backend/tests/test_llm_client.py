@@ -19,6 +19,7 @@ from app.services.llm_client import (
     llm_call_json,
     llm_call_json_with_stream_fallback,
     llm_call_json_stream,
+    validate_llm_base_url,
 )
 
 
@@ -50,6 +51,36 @@ def _llm_returns_content() -> bool:
 
 _LLM_CONTENT_OK = _llm_returns_content()
 _SKIP_REASON = "LLM proxy returns null content (reasoning-only model in non-streaming mode)"
+
+
+class TestValidateLlmBaseUrl:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:8000/v1",
+            "http://127.0.0.1:8000/v1",
+            "http://0.0.0.0:8000/v1",
+            "http://host.docker.internal:8000/v1",
+            "http://[::1]:8000/v1",
+        ],
+    )
+    def test_accepts_http_for_local_development_hosts(self, url):
+        assert validate_llm_base_url(url) == url
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://api.openai.com/v1",
+            "http://api.anthropic.com/v1",
+            "http://api.deepseek.com/v1",
+        ],
+    )
+    def test_rejects_http_for_official_provider_hosts(self, url):
+        assert validate_llm_base_url(url) is None
+
+    def test_accepts_https_for_official_provider_hosts(self):
+        url = "https://api.openai.com/v1"
+        assert validate_llm_base_url(url) == url
 
 
 class TestLLMCall:

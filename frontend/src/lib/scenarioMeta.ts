@@ -8,6 +8,7 @@ import {
   sortBetRecords,
   sortUsageRecords,
 } from './scenarioGameplayDerivations';
+import { createCompatId } from './compatUuid';
 import { CONTRACT_CARD_RULES } from './gameplayContract';
 
 const STORAGE_KEY = 'swarmoracle:scenario-meta:v1';
@@ -129,14 +130,7 @@ interface RootStore {
 }
 
 const SCENARIO_META_OWNER_ID = (() => {
-  try {
-    if (typeof crypto?.randomUUID === 'function') {
-      return crypto.randomUUID();
-    }
-  } catch {
-    // Ignore and fall back to a best-effort owner id below.
-  }
-  return `scenario-meta-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return createCompatId('scenario-meta');
 })();
 
 export const CARD_RULES = CONTRACT_CARD_RULES as Record<GameplayCardId, { cost: number; cooldownRounds: number }>;
@@ -275,7 +269,8 @@ function deriveArchiveUpdatedAt(
     meta.archive.updatedAt ?? null,
   ].filter((value): value is string => typeof value === 'string' && value.length > 0);
 
-  return timestamps.sort().at(-1);
+  const sortedTimestamps = timestamps.sort();
+  return sortedTimestamps[sortedTimestamps.length - 1];
 }
 
 function compactScenarioMetaForStorage(meta: ScenarioMeta): PersistedScenarioMeta {

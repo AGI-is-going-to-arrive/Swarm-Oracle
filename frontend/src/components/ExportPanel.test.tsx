@@ -30,6 +30,34 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function mockElementRect(
+  element: Element,
+  rect: Partial<DOMRect> & Pick<DOMRect, 'width' | 'height'>,
+) {
+  const left = rect.left ?? 0;
+  const top = rect.top ?? 0;
+  const width = rect.width;
+  const height = rect.height;
+  const right = rect.right ?? left + width;
+  const bottom = rect.bottom ?? top + height;
+
+  Object.defineProperty(element, 'getBoundingClientRect', {
+    configurable: true,
+    value: () =>
+      ({
+        x: left,
+        y: top,
+        left,
+        top,
+        width,
+        height,
+        right,
+        bottom,
+        toJSON: () => ({}),
+      }) satisfies DOMRect,
+  });
+}
+
 // Stub anchor.click to suppress jsdom "navigation not implemented" stderr
 let anchorClickStub: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
@@ -152,13 +180,54 @@ describe('ExportPanel', () => {
     document.body.removeChild(container);
   });
 
-  it('SVG button produces SVG blob with foreignObject when container exists', async () => {
+  it('SVG button produces a native SVG export without foreignObject', async () => {
     const container = document.createElement('div');
     container.className = 'svg-test-container';
     container.style.width = '400px';
     container.style.height = '300px';
-    container.innerHTML = '<div class="react-flow__viewport"><span>node</span></div>';
+    container.innerHTML = `
+      <div class="react-flow__viewport" style="transform: translate(10px, 20px) scale(1.25);">
+        <svg class="react-flow__background" viewBox="0 0 400 300">
+          <circle cx="24" cy="24" r="2" fill="#3b3b52"></circle>
+        </svg>
+        <div class="react-flow__edges">
+          <svg viewBox="0 0 400 300">
+            <defs>
+              <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                <path d="M0,0 L8,4 L0,8 z" fill="#7dd3fc"></path>
+              </marker>
+            </defs>
+            <path d="M40 30 L140 120" stroke="#7dd3fc" fill="none" marker-end="url(#arrow)"></path>
+          </svg>
+        </div>
+        <button
+          type="button"
+          data-graph-node-card="true"
+          data-graph-label="Node A"
+          style="background: rgb(31, 41, 55); color: rgb(243, 244, 246); border: 2px solid rgb(125, 211, 252); border-radius: 8px; padding: 10px 12px; font-size: 14px; font-weight: 600;"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M4 12h16"></path>
+          </svg>
+          <span>Node A</span>
+        </button>
+      </div>
+    `;
     document.body.appendChild(container);
+
+    const viewport = container.querySelector('.react-flow__viewport');
+    const button = container.querySelector('[data-graph-node-card="true"]');
+    const icon = button?.querySelector('svg');
+    const label = button?.querySelector('span');
+    expect(viewport).toBeTruthy();
+    expect(button).toBeTruthy();
+    expect(icon).toBeTruthy();
+    expect(label).toBeTruthy();
+
+    mockElementRect(container, { left: 0, top: 0, width: 400, height: 300 });
+    mockElementRect(button!, { left: 72, top: 92, width: 140, height: 44 });
+    mockElementRect(icon!, { left: 84, top: 107, width: 14, height: 14 });
+    mockElementRect(label!, { left: 108, top: 104, width: 72, height: 18 });
 
     const createObjUrl = vi.fn().mockReturnValue('blob:svg-url');
     globalThis.URL.createObjectURL = createObjUrl;
@@ -173,14 +242,19 @@ describe('ExportPanel', () => {
     expect(blobArg).toBeInstanceOf(Blob);
     expect(blobArg.type).toBe('image/svg+xml;charset=utf-8');
 
-    // Verify the SVG content includes foreignObject (style-inlined clone)
+    // Verify the SVG content is native and does not rely on foreignObject.
     const svgText = await new Promise<string>((resolve) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result as string);
       reader.readAsText(blobArg);
     });
-    expect(svgText).toContain('<foreignObject');
-    expect(svgText).toContain('svg-test-container');
+    expect(svgText).toContain('<svg');
+    expect(svgText).not.toContain('<foreignObject');
+    expect(svgText).toContain('data-export-layer="edges"');
+    expect(svgText).toContain('data-export-layer="background"');
+    expect(svgText).toContain('data-export-node="true"');
+    expect(svgText).toContain('Node A');
+    expect(svgText).toContain('marker-end="url(#arrow)"');
 
     document.body.removeChild(container);
   });

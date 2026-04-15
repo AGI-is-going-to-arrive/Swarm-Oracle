@@ -104,9 +104,10 @@ export function useFactionOverlay(
 
         // Stable color assignment across all branches
         const factionKeyArr = [...allFactionKeys];
-        const colorMap = Object.fromEntries(
-          factionKeyArr.map((k, i) => [k, FACTION_COLORS[i % FACTION_COLORS.length]])
-        );
+        const colorMap = factionKeyArr.reduce<Record<string, string>>((accumulator, key, index) => {
+          accumulator[key] = FACTION_COLORS[index % FACTION_COLORS.length];
+          return accumulator;
+        }, {});
 
         // Map each participant through their own branch's faction data
         const result = new Map<string, ParticipantFaction>();

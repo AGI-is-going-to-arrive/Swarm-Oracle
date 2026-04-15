@@ -247,6 +247,17 @@ class TestWebSearchBaseUrlValidation:
         assert validate_web_search_base_url("exa", "https://api.exa.ai/search") == "https://api.exa.ai/search"
         assert validate_web_search_base_url("xai", "https://api.x.ai/v1/responses") == "https://api.x.ai/v1/responses"
 
+    @pytest.mark.parametrize(
+        ("provider", "url"),
+        [
+            ("tavily", "http://api.tavily.com/search"),
+            ("exa", "http://api.exa.ai/search"),
+            ("xai", "http://api.x.ai/v1/responses"),
+        ],
+    )
+    def test_official_providers_reject_http_matching_hosts(self, provider, url):
+        assert validate_web_search_base_url(provider, url) is None
+
 
 class TestExaProvider:
     @pytest.mark.asyncio

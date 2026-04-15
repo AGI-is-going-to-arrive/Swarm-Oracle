@@ -23,6 +23,23 @@ const KIND_LABEL_I18N: Record<string, [string, string]> = {
   custom: ['agent_profile.kind_custom', 'Custom'],
 };
 
+function openDialogElement(dialog: HTMLDialogElement) {
+  if (typeof dialog.showModal === 'function') {
+    if (!dialog.open) dialog.showModal();
+    return;
+  }
+  dialog.setAttribute('open', '');
+}
+
+function closeDialogElement(dialog: HTMLDialogElement) {
+  if (typeof dialog.close === 'function') {
+    if (dialog.open) dialog.close();
+    return;
+  }
+  dialog.removeAttribute('open');
+  dialog.dispatchEvent(new Event('close'));
+}
+
 export function AgentProfileModal({ identity, open, onClose }: Props) {
   const { t } = useTranslation();
   const { loading: capLoading, enabled: identityEnabled } = useCapabilityCheck('agent_identity');
@@ -40,11 +57,23 @@ export function AgentProfileModal({ identity, open, onClose }: Props) {
     if (!dialog) return;
     if (open && identity) {
       triggerRef.current = document.activeElement;
-      dialog.showModal();
+      openDialogElement(dialog);
     } else if (dialog.open) {
-      dialog.close();
+      closeDialogElement(dialog);
     }
   }, [open, identity]);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog || !open || typeof dialog.showModal === 'function') return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onClose();
+    };
+    dialog.addEventListener('keydown', handleKeyDown);
+    return () => dialog.removeEventListener('keydown', handleKeyDown);
+  }, [open, onClose]);
 
   // Return focus on close
   useEffect(() => {

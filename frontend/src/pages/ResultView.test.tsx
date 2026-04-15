@@ -2844,6 +2844,7 @@ describe('ResultView campaign summary', () => {
         </MemoryRouter>,
       );
 
+      await userEvent.click(await screen.findByRole('button', { name: 'result.web_sources_title' }));
       expect(await screen.findByText('AI models now forecast weather.')).toBeInTheDocument();
       expect(screen.getByText('Deep learning improves accuracy.')).toBeInTheDocument();
       const links = screen.getAllByRole('link').filter(
@@ -2888,6 +2889,7 @@ describe('ResultView campaign summary', () => {
         </MemoryRouter>,
       );
 
+      await userEvent.click(await screen.findByRole('button', { name: 'result.web_sources_title' }));
       expect(await screen.findByText('Safe snippet')).toBeInTheDocument();
       const allLinks = screen.getAllByRole('link');
       const jsLinks = allLinks.filter(el => el.getAttribute('href')?.startsWith('javascript'));

@@ -14,6 +14,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   ReactFlow,
   Background,
+  BackgroundVariant,
   Controls,
   MiniMap,
   MarkerType,
@@ -212,6 +213,15 @@ function getArgumentNodeActionLabel(
   t: (key: string, fallback: string) => string,
 ): string {
   return `${t('argument.open_details', 'Open details')}: ${typeLabel} - ${label}`;
+}
+
+function getArgumentEdgeRelationLabel(
+  edge: GraphEdgeRaw,
+  t: (key: string, fallback: string) => string,
+): string {
+  if (edge.label && edge.label.trim()) return edge.label.trim();
+  if (edge.type === 'rebuts') return t('argument.edge_rebuts', 'rebuts');
+  return t('argument.edge_supports', 'supports');
 }
 
 function GraphViewportResetButton({ onReset }: { onReset: () => void }) {
@@ -501,7 +511,6 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const noFilterResults = statusFilter.size > 0 && filteredData
     ? (data?.units.length ?? 0) > 0 && filteredData.units.length === 0
     : false;
-
   // Clear stale selection when filtered node disappears
   useEffect(() => {
     if (!selectedNode || !filteredData) return;
@@ -565,6 +574,25 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     }
     return { rawNodeMap: rnm, unitByNodeId: ubn, unitById: ubi };
   }, [filteredData]);
+  const relationLines = useMemo(() => (
+    (filteredData?.edges ?? []).map((edge) => {
+      const source = rawNodeMap.get(edge.source);
+      const target = rawNodeMap.get(edge.target);
+      if (!source || !target) return null;
+      return t('argument.edge_relation', {
+        defaultValue: '{{source}} {{relation}} {{target}}',
+        source: source.label,
+        relation: getArgumentEdgeRelationLabel(edge, t),
+        target: target.label,
+      });
+    }).filter(Boolean) as string[]
+  ), [filteredData?.edges, rawNodeMap, t]);
+  const hasInteractiveGraph = visible
+    && !loading
+    && !errorTier
+    && !noFilterResults
+    && Boolean(data)
+    && (layoutNodes.length > 0 || layoutEdges.length > 0);
 
   const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     const raw = rawNodeMap.get(node.id);
@@ -605,6 +633,20 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     'controls.interactive.ariaLabel': t('common.graph_toggle_interactivity', 'Toggle interactivity'),
     'minimap.ariaLabel': t('common.graph_minimap', 'Mini map'),
   }), [t]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const className = 'has-argument-map';
+    if (!hasInteractiveGraph) {
+      document.body.classList.remove(className);
+      return;
+    }
+
+    document.body.classList.add(className);
+    return () => {
+      document.body.classList.remove(className);
+    };
+  }, [hasInteractiveGraph]);
 
   if (!visible) return null;
   if (loading) return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('common.loading', 'Loading...')}</p>;
@@ -672,7 +714,12 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
             </button>
           )}
           {isCompactViewport && !noFilterResults && (
-            <GraphViewportResetButton onReset={resetViewport} />
+            <>
+              <GraphViewportResetButton onReset={resetViewport} />
+              <span style={{ fontSize: '0.65rem', color: '#888' }}>
+                {t('common.graph_mobile_hint', 'Drag to pan. Pinch or use the graph controls to zoom.')}
+              </span>
+            </>
           )}
         </div>
 
@@ -721,8 +768,8 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
                   fitView
                   proOptions={{ hideAttribution: true }}
                 >
-                  <Background />
-                  {!isCompactViewport && <Controls className="graph-export-chrome" />}
+                  <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
+                  <Controls className="graph-export-chrome" />
                   {!isCompactViewport && (
                     <MiniMap
                       className="graph-export-chrome"
@@ -767,6 +814,11 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
                   {`${getArgumentTypeLabel(node.type, t)}: ${node.label}`}
                 </div>
               ))}
+        </div>
+        <div className="sr-only" role="list" aria-label={t('argument.a11y_relations', 'Argument relations list')}>
+          {relationLines.map((line, index) => (
+            <div key={`${line}-${index}`} role="listitem">{line}</div>
+          ))}
         </div>
       </div>
     </Tooltip.Provider>

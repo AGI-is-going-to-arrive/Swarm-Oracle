@@ -6,6 +6,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { submitPrediction } from '../api/client';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
+import { createCompatUuid } from '../lib/compatUuid';
 import { getDirectorIdentity, updateDirectorName } from '../lib/directorIdentity';
 import {
   buildStructuredPredictionText,
@@ -188,7 +189,7 @@ export default function PredictionModal({
         updateDirectorName(trimmedName);
       }
       const nextMeta = placeBet(scenarioId, {
-        betId: crypto.randomUUID(),
+        betId: createCompatUuid(),
         kind: effectiveBetKind,
         targetId:
           effectiveBetKind === 'branch_winner'

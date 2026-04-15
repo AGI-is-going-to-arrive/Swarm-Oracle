@@ -69,24 +69,11 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
+python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py tests/test_llm_client.py tests/test_web_context.py tests/test_api.py -q
 ```
 
-- Historical full baseline: `815 passed`.
-- Current signoff backend set: `157 passed`.
-- Current session backend regression pack: `269 passed`.
-- Current ending room service tests: `77 passed` (含 13 个角色化词汇提示测试).
-- Current session backend review-fix pack:
-  - `python -m pytest tests/test_backend_code_review_fixes.py -q`: `4 passed in 0.45s`
-  - `python -m pytest tests/test_vector_store.py tests/test_parser.py tests/test_models.py -q`: `64 passed in 71.56s`
-  - `python -m pytest tests/test_logging_utils.py tests/test_config.py -q`: `13 passed in 0.41s`
-  - `python -m pytest tests/test_api.py -k 'test_root or test_health' -q`: `2 passed, 90 deselected in 2.96s`
-  - 扩大定向回归：`23 passed, 215 deselected in 3.75s`
-  - full backend suite：`998 passed in 223.31s (0:03:43)`
-- Earlier current-session targeted packs:
-  - `tests/test_predictions.py + tests/test_gameplay_contract_sync.py + tests/test_memory.py + tests/test_narrator.py`: `86 passed in 1.85s`
-  - `tests/test_simulator.py -k 'passes_llm_overrides_into_compression or passes_llm_overrides_into_narration'`: `2 passed in 0.31s`
-  - `tests/test_debate_api.py + tests/test_api.py -k 'predict_counterplay_still_succeeds_when_broadcast_fails or social_copy_rejects_provider_overrides_in_get_query'`: `2 passed in 0.41s`
+- Latest local rerun in this session:
+  - `python -m pytest -q`: `2078 passed, 2 skipped`
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
 ## Runtime Notes
@@ -109,7 +96,10 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - `vector_store.py` now treats the shared Chroma write lease as best-effort; if another worker already owns the same scenario lock, the write is skipped instead of busy-waiting in the caller.
 - Agent identity L2 profiles now live in a dedicated `identity_profile_{user_id}` Chroma collection; custom agent create/update/delete 会同步 profile，旧的 shared-collection profile 文档会在后续写入时自动清理。
 - Ending-room WebSocket 现在只走共享的首帧 auth 协议；HTTP `verify_session` 继续只服务 REST，不再误包住 ending-room WS 路由。
+- Scenario WebSocket capacity is now enforced against `registered + pending-auth` connections together, and the pending slot is reserved before `accept()`, so concurrent handshakes can no longer oversell `MAX_WS_PER_SCENARIO`.
+- Ending-room background generation now also holds a runtime-lock heartbeat; a lost lease, a refresh error, or an expired local lease fails closed and marks the room as `error` instead of continuing to write turns/results after the lock is gone.
 - `POST /api/debate/{id}/predict` now treats counterplay WebSocket broadcast as best-effort after persistence; a broadcast failure logs a warning but does not turn a saved prediction into a fake `500`.
+- BYOK `llm_base_url` and official `web_search_base_url` endpoints now require `https`; plain `http` is kept only for local/self-hosted development hosts on the allowlist.
 - `POST /api/scenario` now rejects out-of-range `rounds` at schema level, `import-replay` no longer repeatedly scans agents when it falls back by name, and `GET /api/scenario/{id}/groups` now batch-loads leader/member data.
 - `AgentGroup.scenario_id` now has an index, with both `init_db()` lightweight migration coverage and Alembic revision `011_add_agent_group_scenario_index`.
 

@@ -8,6 +8,7 @@ import {
   normalizeScenarioResultReplayPayload,
   type ScenarioResultReplayPayload,
 } from './scenarioReplay';
+import { createCompatUuid } from './compatUuid';
 
 const ORACLE_REPLAY_LOCAL_STORAGE_KEY = 'swarmoracle:oracle-replay:v1';
 const ORACLE_REPLAY_QUERY_KEY = 'roomReplay';
@@ -30,7 +31,10 @@ export interface OracleReplayPayload {
 
 function getOracleReplayStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
   try {
-    const storage = window.localStorage ?? globalThis.localStorage;
+    if (typeof window === 'undefined') {
+      return null;
+    }
+    const storage = window.localStorage;
     if (!storage || typeof storage.getItem !== 'function' || typeof storage.setItem !== 'function') {
       return null;
     }
@@ -118,7 +122,7 @@ export function normalizeOracleReplayPayload(
 }
 
 export function saveOracleReplayLocalCopy(payload: OracleReplayPayload): string {
-  const id = crypto.randomUUID();
+  const id = createCompatUuid();
   const storage = getOracleReplayStorage();
   if (!storage) {
     oracleReplayMemoryCache[id] = payload;

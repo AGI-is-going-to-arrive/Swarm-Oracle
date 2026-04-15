@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════
    P1-3 — Graph Export Panel
    PNG export via html2canvas (existing infra).
-   SVG export via clone + inline computed styles + foreignObject.
+   SVG export via native SVG layers + reconstructed node cards.
    ═══════════════════════════════════════════════════════════ */
 
 import { useCallback, useState } from 'react';
@@ -44,26 +44,160 @@ function waitForNextTick(): Promise<void> {
   });
 }
 
-/** Deep-clone an element and inline every computed style so it renders standalone. */
-function cloneWithInlinedStyles(source: Element): HTMLElement {
-  const clone = source.cloneNode(true) as HTMLElement;
-  const sourceAll = [source, ...Array.from(source.querySelectorAll('*'))];
-  const cloneAll = [clone, ...Array.from(clone.querySelectorAll('*'))];
-  sourceAll.forEach((srcEl, i) => {
-    const tgtEl = cloneAll[i] as HTMLElement | undefined;
-    if (!tgtEl || typeof tgtEl.style?.setProperty !== 'function') return;
-    const computed = window.getComputedStyle(srcEl);
-    // Use indexed access — CSSStyleDeclaration may not be iterable in all runtimes
-    for (let j = 0; j < computed.length; j++) {
-      const prop = computed[j];
-      const val = computed.getPropertyValue(prop);
-      if (val) tgtEl.style.setProperty(prop, val);
-    }
-  });
-  EXPORT_CHROME_SELECTORS.forEach((selector) => {
-    clone.querySelectorAll(selector).forEach((element) => element.remove());
-  });
-  return clone;
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function round(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(2) : '0.00';
+}
+
+function parsePixelValue(value: string | null | undefined, fallback = 0): number {
+  const parsed = Number.parseFloat(value ?? '');
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function cssTransformToSvgTransform(transform: string | null | undefined): string | null {
+  const trimmed = transform?.trim();
+  if (!trimmed || trimmed === 'none') return null;
+  return trimmed.replace(/px/g, '');
+}
+
+function resolveViewportTransform(container: Element): string | null {
+  const viewport = container.querySelector<HTMLElement>('.react-flow__viewport');
+  if (!viewport) return null;
+  const computedTransform = window.getComputedStyle(viewport).transform;
+  return cssTransformToSvgTransform(computedTransform === 'none' ? viewport.style.transform : computedTransform);
+}
+
+function getSvgLayerElement(layer: Element | null): SVGSVGElement | null {
+  if (!layer) return null;
+  if (layer instanceof SVGSVGElement) return layer;
+  return layer.querySelector('svg');
+}
+
+function serializeSvgLayer(
+  layer: Element | null,
+  role: 'background' | 'edges',
+  width: number,
+  height: number,
+  viewportTransform: string | null,
+): string {
+  const svg = getSvgLayerElement(layer);
+  if (!svg) return '';
+
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute('data-export-layer', role);
+  clone.setAttribute('x', '0');
+  clone.setAttribute('y', '0');
+  clone.setAttribute('width', String(width));
+  clone.setAttribute('height', String(height));
+  clone.setAttribute('overflow', 'visible');
+  clone.setAttribute('preserveAspectRatio', 'none');
+  if (!clone.hasAttribute('viewBox')) {
+    clone.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  }
+  if (viewportTransform) {
+    clone.setAttribute('transform', viewportTransform);
+  }
+
+  return new XMLSerializer().serializeToString(clone);
+}
+
+function serializeNodeIcon(icon: SVGSVGElement | null, cardRect: DOMRect): string {
+  if (!icon) return '';
+
+  const iconRect = icon.getBoundingClientRect();
+  if (iconRect.width <= 0 || iconRect.height <= 0) return '';
+
+  const clone = icon.cloneNode(true) as SVGSVGElement;
+  const computed = window.getComputedStyle(icon);
+  clone.setAttribute('x', round(iconRect.left - cardRect.left));
+  clone.setAttribute('y', round(iconRect.top - cardRect.top));
+  clone.setAttribute('width', round(iconRect.width));
+  clone.setAttribute('height', round(iconRect.height));
+  clone.setAttribute('overflow', 'visible');
+  if (computed.color) {
+    clone.setAttribute('color', computed.color);
+  }
+
+  return new XMLSerializer().serializeToString(clone);
+}
+
+function serializeGraphNodes(container: Element): string {
+  const containerRect = container.getBoundingClientRect();
+  const cards = Array.from(container.querySelectorAll<HTMLElement>('[data-graph-node-card="true"]'));
+
+  return cards
+    .map((card) => {
+      const cardRect = card.getBoundingClientRect();
+      if (cardRect.width <= 0 || cardRect.height <= 0) return '';
+
+      const computed = window.getComputedStyle(card);
+      const labelElement = card.querySelector<HTMLElement>('span');
+      const labelComputed = labelElement ? window.getComputedStyle(labelElement) : computed;
+      const labelRect = labelElement?.getBoundingClientRect();
+      const label =
+        card.getAttribute('data-graph-label')?.trim() ||
+        labelElement?.textContent?.trim() ||
+        card.textContent?.trim() ||
+        '';
+
+      const groupX = cardRect.left - containerRect.left;
+      const groupY = cardRect.top - containerRect.top;
+      const borderRadius = parsePixelValue(computed.borderTopLeftRadius, 8);
+      const borderWidth = parsePixelValue(computed.borderTopWidth, 1);
+      const opacity = parsePixelValue(computed.opacity, 1);
+      const textX = labelRect ? labelRect.left - cardRect.left : parsePixelValue(computed.paddingLeft, 12);
+      const textY = labelRect
+        ? (labelRect.top - cardRect.top) + (labelRect.height / 2)
+        : cardRect.height / 2;
+      const fontSize = parsePixelValue(labelComputed.fontSize, 12);
+      const iconMarkup = serializeNodeIcon(card.querySelector<SVGSVGElement>('svg'), cardRect);
+
+      return [
+        `<g data-export-node="true" transform="translate(${round(groupX)} ${round(groupY)})" opacity="${round(opacity)}">`,
+        `<rect width="${round(cardRect.width)}" height="${round(cardRect.height)}" rx="${round(borderRadius)}" ry="${round(borderRadius)}" fill="${escapeXml(computed.backgroundColor || '#555')}" stroke="${escapeXml(computed.borderTopColor || 'transparent')}" stroke-width="${round(borderWidth)}"/>`,
+        iconMarkup,
+        `<text x="${round(textX)}" y="${round(textY)}" fill="${escapeXml(labelComputed.color || computed.color || '#fff')}" font-family="${escapeXml(labelComputed.fontFamily || computed.fontFamily || 'sans-serif')}" font-size="${round(fontSize)}" font-weight="${escapeXml(labelComputed.fontWeight || computed.fontWeight || '400')}" dominant-baseline="middle">${escapeXml(label)}</text>`,
+        `</g>`,
+      ].join('');
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function buildNativeGraphSvg(container: Element, width: number, height: number): string {
+  const viewportTransform = resolveViewportTransform(container);
+  const backgroundLayer = serializeSvgLayer(
+    container.querySelector('.react-flow__background'),
+    'background',
+    width,
+    height,
+    viewportTransform,
+  );
+  const edgeLayer = serializeSvgLayer(
+    container.querySelector('.react-flow__edges'),
+    'edges',
+    width,
+    height,
+    viewportTransform,
+  );
+  const nodeLayer = serializeGraphNodes(container);
+
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    `<rect width="100%" height="100%" fill="#1a1a2e"/>`,
+    backgroundLayer,
+    edgeLayer,
+    nodeLayer,
+    `</svg>`,
+  ].filter(Boolean).join('\n');
 }
 
 function hideExportChrome(root: Element): () => void {
@@ -142,21 +276,7 @@ export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: Exp
       const rect = container.getBoundingClientRect();
       const width = Math.max(1, Math.ceil(rect.width));
       const height = Math.max(1, Math.ceil(rect.height));
-
-      // Clone the entire container and inline all computed styles
-      // so that ReactFlow's position:absolute / transform layout is preserved.
-      const clone = cloneWithInlinedStyles(container);
-      clone.style.margin = '0';
-      clone.style.position = 'static';
-      clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
-
-      const serialized = new XMLSerializer().serializeToString(clone);
-      const svgString = [
-        `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
-        `<rect width="100%" height="100%" fill="#1a1a2e"/>`,
-        `<foreignObject width="100%" height="100%">${serialized}</foreignObject>`,
-        `</svg>`,
-      ].join('\n');
+      const svgString = buildNativeGraphSvg(container, width, height);
 
       const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
       downloadBlob(blob, `${filenamePrefix}_${timestamp()}.svg`);

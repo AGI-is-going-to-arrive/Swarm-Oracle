@@ -1391,6 +1391,57 @@ class TestPendingAuthLimit:
         ws.accept.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_pending_reservation_is_atomic_under_concurrent_handshakes(self, monkeypatch):
+        """A blocked accept() must not let a second handshake slip past the scenario limit."""
+        monkeypatch.setattr("app.api.ws.settings.SESSION_SECRET", "secret")
+        monkeypatch.setattr("app.api.helpers.settings.SESSION_SECRET", "secret")
+        monkeypatch.setattr("app.api.ws.MAX_WS_PER_SCENARIO", 1)
+        manager = WSManager()
+        release_accept = asyncio.Event()
+        first_accept_started = asyncio.Event()
+
+        ws1 = _make_ws_mock(
+            side_effect=[
+                json.dumps({"type": "auth", "token": "secret"}),
+                WebSocketDisconnect(),
+            ]
+        )
+        ws2 = _make_ws_mock(
+            side_effect=[
+                json.dumps({"type": "auth", "token": "secret"}),
+                WebSocketDisconnect(),
+            ]
+        )
+
+        async def delayed_accept() -> None:
+            first_accept_started.set()
+            await release_accept.wait()
+
+        async def blocked_accept() -> None:
+            await release_accept.wait()
+
+        ws1.accept.side_effect = delayed_accept
+        ws2.accept.side_effect = blocked_accept
+
+        task1 = asyncio.create_task(
+            run_websocket_session(manager, "s1", ws1, exists_check=_always_exists)
+        )
+        await first_accept_started.wait()
+        task2 = asyncio.create_task(
+            run_websocket_session(manager, "s1", ws2, exists_check=_always_exists)
+        )
+
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        release_accept.set()
+        await asyncio.gather(task1, task2)
+
+        ws1.accept.assert_awaited_once()
+        ws2.accept.assert_not_awaited()
+        ws2.close.assert_awaited_once_with(code=1013, reason="Too many connections")
+        assert manager.active_count("s1") == 0
+
+    @pytest.mark.asyncio
     async def test_auth_failure_releases_pending_slot(self, monkeypatch):
         """After auth failure, pending slot is released (counter back to 0)."""
         monkeypatch.setattr("app.api.ws.settings.SESSION_SECRET", "secret")

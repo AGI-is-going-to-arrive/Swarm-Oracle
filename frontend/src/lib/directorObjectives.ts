@@ -1,6 +1,7 @@
 import type { GameplayCardId, GameplayProfileId } from '../components/gameplayCards';
 import { getGameplayCardLabel } from '../components/gameplayCards';
 import type { BranchInfo } from '../types';
+import { createCompatId } from './compatUuid';
 import type { DirectorObjectiveRecord, ScenarioMeta } from './scenarioMeta';
 
 export type EvaluatedDirectorObjectiveStatus = 'pending' | 'active' | 'completed' | 'failed';
@@ -13,7 +14,7 @@ export interface EvaluatedDirectorObjective extends DirectorObjectiveRecord {
 }
 
 function createObjectiveId(kind: DirectorObjectiveRecord['kind']) {
-  return `${kind}-${crypto.randomUUID()}`;
+  return createCompatId(kind);
 }
 
 export function buildDefaultDirectorObjectives(payload: {

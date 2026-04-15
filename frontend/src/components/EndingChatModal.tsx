@@ -577,6 +577,7 @@ export default function EndingChatModal({
       if (readOnly || !sending || !composerEnabled) {
         return [];
       }
+      const activeThreadTurns = activeThread?.turns;
       const placeholderParticipantId = effectiveInteractionMode === 'hotseat'
         ? (selectedHotseatParticipant?.id ?? null)
         : participants.find((participant) => participant.role_slot === 'archivist')?.id
@@ -587,11 +588,14 @@ export default function EndingChatModal({
         : effectiveInteractionMode === 'all_present'
           ? (isZh ? '当前阵容正在接力回应…' : 'The current lineup is responding in sequence…')
           : (isZh ? '档案官正在组织最相关的回应…' : 'The Archivist is routing the most relevant reply…');
+      const latestActiveTurn = activeThreadTurns && activeThreadTurns.length > 0
+        ? activeThreadTurns[activeThreadTurns.length - 1]
+        : undefined;
       return [
         {
           key: '__local-pending__',
           participantId: placeholderParticipantId,
-          phase: activeThread?.turns.at(-1)?.phase
+          phase: latestActiveTurn?.phase
             ?? effectiveSnapshot?.current_phase
             ?? 'verdict',
           content: placeholderContent,
@@ -612,9 +616,11 @@ export default function EndingChatModal({
       visibleDrafts,
     ],
   );
-  const currentSpeakerTurnKey = displayedDrafts.at(-1)?.key ?? currentTurns.at(-1)?.key ?? null;
-  const currentSpeakerParticipantId = displayedDrafts.at(-1)?.participantId
-    ?? currentTurns.at(-1)?.participantId
+  const latestDisplayedDraft = displayedDrafts[displayedDrafts.length - 1];
+  const latestCurrentTurn = currentTurns[currentTurns.length - 1];
+  const currentSpeakerTurnKey = latestDisplayedDraft?.key ?? latestCurrentTurn?.key ?? null;
+  const currentSpeakerParticipantId = latestDisplayedDraft?.participantId
+    ?? latestCurrentTurn?.participantId
     ?? null;
   const handleThreadSelect = (threadId: string) => {
     const thread = effectiveThreadsById[threadId];

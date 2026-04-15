@@ -57,7 +57,8 @@ export function deriveUsageDrivenScenarioState(usages: CardUsageRecord[]) {
   }
 
   const counterplayUsages = sortedUsages.filter((usage) => isCounterplayCard(usage.cardId));
-  const latestUsage = sortedUsages.at(-1) ?? null;
+  const latestUsage = sortedUsages[sortedUsages.length - 1] ?? null;
+  const latestCounterplayUsage = counterplayUsages[counterplayUsages.length - 1] ?? null;
 
   return {
     usages: sortedUsages,
@@ -72,7 +73,7 @@ export function deriveUsageDrivenScenarioState(usages: CardUsageRecord[]) {
       profileId: latestUsage?.profileId ?? undefined,
       updatedAt: latestUsage?.usedAt,
       counterplayCardCount: counterplayUsages.length,
-      lastCounterplayCard: counterplayUsages.at(-1)?.cardId ?? null,
+      lastCounterplayCard: latestCounterplayUsage?.cardId ?? null,
     },
   };
 }

@@ -1,4 +1,5 @@
 import { getSessionPrincipalSubject } from '../api/client';
+import { createCompatId } from './compatUuid';
 
 const STORAGE_KEY = 'swarmoracle:director-identity:v1';
 
@@ -50,7 +51,7 @@ export function getDirectorIdentity(): DirectorIdentity {
   if (existing) return existing;
 
   const identity = {
-    userId: `director-${crypto.randomUUID()}`,
+    userId: createCompatId('director'),
     userName: DEFAULT_NAME,
   };
   writeStoredIdentity(identity);

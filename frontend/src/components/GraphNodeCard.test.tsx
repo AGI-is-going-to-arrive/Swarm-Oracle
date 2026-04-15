@@ -143,6 +143,14 @@ describe('GraphNodeCard', () => {
     expect(button).toHaveAttribute('type', 'button');
   });
 
+  it('exposes stable data attributes for graph export serializers', () => {
+    render(<GraphNodeCard {...makeProps()} />, { wrapper: Wrapper });
+    const button = screen.getByRole('button', { name: 'Short label' });
+    expect(button).toHaveAttribute('data-graph-node-card', 'true');
+    expect(button).toHaveAttribute('data-graph-label', 'Short label');
+    expect(button).toHaveAttribute('data-graph-full-label', 'Short label');
+  });
+
   it('removes card transitions when reduced motion is requested', () => {
     render(<GraphNodeCard {...makeProps({ reduceMotion: true })} />, { wrapper: Wrapper });
     const card = screen.getByRole('button', { name: 'Short label' });

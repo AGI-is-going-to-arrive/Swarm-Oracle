@@ -530,8 +530,8 @@ async function testCausalMap(page, baseUrl, outputDir, viewport) {
     ? await controls.isVisible().catch(() => false)
     : false;
   results.steps.push({
-    name: isCompactViewport ? "controls-hidden-on-compact-viewport" : "controls-visible-on-desktop",
-    passed: isCompactViewport ? controlsCount === 0 || !hasControls : hasControls,
+    name: isCompactViewport ? "controls-visible-on-compact-viewport" : "controls-visible-on-desktop",
+    passed: hasControls,
   });
 
   const minimap = page.locator('.react-flow__minimap').first();
@@ -543,6 +543,11 @@ async function testCausalMap(page, baseUrl, outputDir, viewport) {
     name: isCompactViewport ? "minimap-hidden-on-compact-viewport" : "minimap-visible-on-desktop",
     passed: isCompactViewport ? minimapCount === 0 || !hasMinimap : hasMinimap,
   });
+  if (isCompactViewport) {
+    const mobileHint = page.getByText(/Drag to pan\. Pinch or use the graph controls to zoom\.|可拖动画布；双指缩放或使用图谱控件调整视图。/).first();
+    const hasMobileHint = await mobileHint.isVisible().catch(() => false);
+    results.steps.push({ name: "compact-viewport-hint-visible", passed: hasMobileHint });
+  }
 
   // Check node count label
   const nodeCount = page.getByText(/3 (nodes|节点)/);

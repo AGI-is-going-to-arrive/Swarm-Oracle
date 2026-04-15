@@ -2,7 +2,7 @@
    SwarmOracle — ResultView (Multi-Ending Comparison)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, type FocusEvent } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -142,6 +142,10 @@ export default function ResultView() {
   const [cfBranchId, setCfBranchId] = useState<string | null>(null);
   const [notebookOpen, setNotebookOpen] = useState(true);
   const [webSourcesOpen, setWebSourcesOpen] = useState(false);
+  const blurCollapsedPanelFocus = useCallback((event: FocusEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    (event.target as HTMLElement | null)?.blur?.();
+  }, []);
   const [storyData, setStoryData] = useState<StoryData | null>(null);
   const [scenario, setScenario] = useState<Scenario | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -1785,7 +1789,12 @@ export default function ResultView() {
             <span>{t('result.web_sources_title')}</span>
             <span aria-hidden="true">{webSourcesOpen ? '\u25B2' : '\u25BC'}</span>
           </button>
-          <div className={`result-web-sources__body ${webSourcesOpen ? 'is-open' : ''}`} inert={!webSourcesOpen || undefined}>
+          <div
+            className={`result-web-sources__body ${webSourcesOpen ? 'is-open' : ''}`}
+            aria-hidden={!webSourcesOpen}
+            inert={!webSourcesOpen || undefined}
+            onFocusCapture={webSourcesOpen ? undefined : blurCollapsedPanelFocus}
+          >
             <div className="result-web-sources__inner">
               <div className="result-web-sources__meta">
                 <span>{t('result.web_sources_query')}: {scenario.web_search_context.query}</span>
@@ -1896,7 +1905,12 @@ export default function ResultView() {
           <span>{t('result_ux.director_notebook')}</span>
           <span aria-hidden="true">{notebookOpen ? '\u25B2' : '\u25BC'}</span>
         </button>
-        <div className={`result-director-notebook__body ${notebookOpen ? 'is-open' : ''}`} inert={!notebookOpen || undefined}>
+        <div
+          className={`result-director-notebook__body ${notebookOpen ? 'is-open' : ''}`}
+          aria-hidden={!notebookOpen}
+          inert={!notebookOpen || undefined}
+          onFocusCapture={notebookOpen ? undefined : blurCollapsedPanelFocus}
+        >
           <div className="result-director-notebook__inner">
 
       {scenarioMeta && (

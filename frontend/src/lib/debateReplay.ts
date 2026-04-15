@@ -1,4 +1,5 @@
 import type { DebateResultPayload } from '../types';
+import { createCompatUuid } from './compatUuid';
 
 const REPLAY_QUERY_KEY = 'replay';
 const REPLAY_LOCAL_QUERY_KEY = 'local';
@@ -64,7 +65,7 @@ export function buildDebateReplayUrl(origin: string, payload: DebateResultPayloa
 }
 
 export function saveDebateReplayLocalCopy(payload: DebateResultPayload): string {
-  const replayId = crypto.randomUUID();
+  const replayId = createCompatUuid();
   const raw = window.localStorage.getItem(DEBATE_REPLAY_LOCAL_STORAGE_KEY);
   const parsed = raw ? JSON.parse(raw) as Record<string, DebateResultPayload> : {};
   parsed[replayId] = payload;

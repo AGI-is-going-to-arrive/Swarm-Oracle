@@ -127,6 +127,21 @@ export function SimulationView() {
   );
   const activeRuntimePresetLabel = t(`home.runtime_preset_${activeRuntimePreset}`);
 
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.body.classList.add('has-simulation-view');
+    if (viewMode === 'theater') {
+      document.body.classList.add('has-simulation-theater');
+    } else {
+      document.body.classList.remove('has-simulation-theater');
+    }
+
+    return () => {
+      document.body.classList.remove('has-simulation-view');
+      document.body.classList.remove('has-simulation-theater');
+    };
+  }, [viewMode]);
+
   // Intervention modal state
   const [interventionTarget, setInterventionTarget] = useState<{
     branchId: string;

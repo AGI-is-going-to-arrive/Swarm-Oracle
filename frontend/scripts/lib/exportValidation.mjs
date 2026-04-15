@@ -16,23 +16,17 @@ export async function validateSvgDownloadArtifact({ filePath, filename, expected
   if (!trimmed.includes("<svg")) {
     throw new Error(`Malformed SVG download for ${filename}: missing <svg`);
   }
-  if (!trimmed.includes("<foreignObject")) {
-    throw new Error(`Malformed SVG download for ${filename}: missing <foreignObject`);
-  }
   if (!trimmed.includes("</svg>")) {
     throw new Error(`Malformed SVG download for ${filename}: missing </svg>`);
   }
-  if (!trimmed.includes("</foreignObject>")) {
-    throw new Error(`Malformed SVG download for ${filename}: missing </foreignObject>`);
+  if (trimmed.includes("<foreignObject")) {
+    throw new Error(`Malformed SVG download for ${filename}: foreignObject reduces portability`);
   }
-
-  const foreignObjectMatch = trimmed.match(/<foreignObject\b[^>]*>([\s\S]*?)<\/foreignObject>/i);
-  if (!foreignObjectMatch) {
-    throw new Error(`Malformed SVG download for ${filename}: unreadable foreignObject`);
-  }
-  const foreignObjectContent = foreignObjectMatch[1]?.trim() ?? "";
-  if (!foreignObjectContent) {
-    throw new Error(`Malformed SVG download for ${filename}: empty foreignObject content`);
+  const hasNativeLayer = trimmed.includes('data-export-layer="background"')
+    || trimmed.includes('data-export-layer="edges"');
+  const hasExportNode = trimmed.includes('data-export-node="true"');
+  if (!hasNativeLayer && !hasExportNode) {
+    throw new Error(`Malformed SVG download for ${filename}: missing native graph markup`);
   }
   if (trimmed.includes('data-testid="node-detail-panel"')) {
     throw new Error(`Malformed SVG download for ${filename}: transient graph UI leaked into export`);

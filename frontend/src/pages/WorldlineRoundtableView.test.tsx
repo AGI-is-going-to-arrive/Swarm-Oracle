@@ -644,18 +644,22 @@ describe('WorldlineRoundtableView', () => {
 
     await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
 
-    expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
-      roomType: 'worldline_roundtable',
-      selectedBranchIds: ['branch-a', 'branch-b'],
-      selectionRecipe: 'representative',
-      language: 'en',
-      selectedRepresentatives: [
-        { branchId: 'branch-a', agentId: 'agent-a' },
-        { branchId: 'branch-b', agentId: 'agent-b' },
-      ],
-      selectedWitness: null,
+    await waitFor(() => {
+      expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
+        roomType: 'worldline_roundtable',
+        selectedBranchIds: ['branch-a', 'branch-b'],
+        selectionRecipe: 'representative',
+        language: 'en',
+        selectedRepresentatives: [
+          { branchId: 'branch-a', agentId: 'agent-a' },
+          { branchId: 'branch-b', agentId: 'agent-b' },
+        ],
+        selectedWitness: null,
+      });
     });
-    expect(loadRoomMock).toHaveBeenCalledWith('room-1');
+    await waitFor(() => {
+      expect(loadRoomMock).toHaveBeenCalledWith('room-1');
+    });
   });
 
   it('keeps the current UI language and launches the room in that language even when the scenario language differs', async () => {
@@ -708,6 +712,66 @@ describe('WorldlineRoundtableView', () => {
       language: 'en',
     }));
     expect(changeLanguageMock).not.toHaveBeenCalled();
+  });
+
+  it('does not refetch scenario data or reset the room when only the UI language changes', async () => {
+    setMockLanguage('en');
+    storeState.snapshot = null;
+    storeState.result = null;
+    storeState.threadsById = {};
+    storeState.threadOrder = [];
+    storeState.activeThreadId = null;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What if the empire split?',
+      status: 'done',
+      agents: [],
+      language: 'en',
+      messages: [
+        { id: 'msg-a', branch: 'branch-a', agent: 'Representative A', agent_id: 'agent-a', message: 'A', emotion: 'focused', round: 1 },
+        { id: 'msg-b', branch: 'branch-b', agent: 'Representative B', agent_id: 'agent-b', message: 'B', emotion: 'focused', round: 1 },
+      ],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'What if the empire split?',
+      status: 'done',
+      branches: [
+        { id: 'branch-a', title: 'Archive A', probability: 0.5, status: 'COMPLETED', story: 'Story A', insight: 'Insight A', key_moments: ['A'], parent_branch_id: null, fork_reason: '' },
+        { id: 'branch-b', title: 'Archive B', probability: 0.5, status: 'COMPLETED', story: 'Story B', insight: 'Insight B', key_moments: ['B'], parent_branch_id: null, fork_reason: '' },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([
+      { id: 'agent-a', name: 'Representative A', role: 'Marshal', persona: 'Keeps A steady.', tier: 'CORE', emotion: 'focused' },
+      { id: 'agent-b', name: 'Representative B', role: 'Steward', persona: 'Keeps B supplied.', tier: 'IMPORTANT', emotion: 'focused' },
+    ]);
+
+    const view = (
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const { rerender } = render(view);
+
+    expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
+    expect(getScenarioMock).toHaveBeenCalledTimes(1);
+    expect(getStoryMock).toHaveBeenCalledTimes(1);
+    expect(getAgentsMock).toHaveBeenCalledTimes(1);
+
+    resetMock.mockClear();
+    setMockLanguage('zh');
+    rerender(view);
+
+    await waitFor(() => {
+      expect(screen.getByText('Worldline Roundtable')).toBeInTheDocument();
+    });
+    expect(getScenarioMock).toHaveBeenCalledTimes(1);
+    expect(getStoryMock).toHaveBeenCalledTimes(1);
+    expect(getAgentsMock).toHaveBeenCalledTimes(1);
+    expect(resetMock).not.toHaveBeenCalled();
   });
 
   it('lets manual_shortlist launch only the selected worldlines', async () => {

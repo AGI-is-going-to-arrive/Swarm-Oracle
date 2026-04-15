@@ -105,9 +105,10 @@ export function buildOracleTranscriptLayoutMap(
   kind: OracleTranscriptBubbleKind,
   locale?: string | null,
 ): Record<string, OracleTranscriptBubbleLayout> {
-  return Object.fromEntries(
-    items.map((item) => [item.key, predictOracleTranscriptBubbleLayout(item.content, kind, locale)]),
-  );
+  return items.reduce<Record<string, OracleTranscriptBubbleLayout>>((layouts, item) => {
+    layouts[item.key] = predictOracleTranscriptBubbleLayout(item.content, kind, locale);
+    return layouts;
+  }, {});
 }
 
 export function captureTranscriptScrollSnapshot(

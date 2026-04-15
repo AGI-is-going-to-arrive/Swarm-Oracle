@@ -713,6 +713,7 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   const stepDir = path.join(outputDir, "argument-map");
   ensureDir(stepDir);
   const results = { steps: [], passed: true };
+  const isCompactViewport = (page.viewportSize()?.width ?? 0) <= 768;
 
   // Navigate to debate result and explicitly load the deferred argument map.
   await page.goto(`${baseUrl}/debate/${FIXTURE_DEBATE_ID}/result`, { waitUntil: "domcontentloaded" });
@@ -728,6 +729,22 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   const reactFlowEl = page.locator('.react-flow').first();
   const hasReactFlow = await reactFlowEl.isVisible({ timeout: 5000 }).catch(() => false);
   results.steps.push({ name: "argument-map-reactflow-visible", passed: hasReactFlow });
+
+  const controls = page.locator('.argument-map-container .react-flow__controls').first();
+  const controlsCount = await page.locator('.argument-map-container .react-flow__controls').count().catch(() => 0);
+  const hasControls = controlsCount > 0
+    ? await controls.isVisible().catch(() => false)
+    : false;
+  results.steps.push({
+    name: isCompactViewport ? "argument-map-controls-visible-on-compact-viewport" : "argument-map-controls-visible-on-desktop",
+    passed: hasControls,
+  });
+
+  if (isCompactViewport) {
+    const mobileHint = page.getByText(/Drag to pan\. Pinch or use the graph controls to zoom\.|可拖动画布；双指缩放或使用图谱控件调整视图。/).first();
+    const hasMobileHint = await mobileHint.isVisible().catch(() => false);
+    results.steps.push({ name: "argument-map-compact-hint-visible", passed: hasMobileHint });
+  }
 
   // Check strength distribution summary
   const meter = page.locator('[role="list"][aria-label="Argument strength distribution"], [role="list"][aria-label="论证强度分布"]').first();

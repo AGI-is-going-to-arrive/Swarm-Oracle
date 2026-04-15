@@ -5,14 +5,19 @@ import zh from './locales/zh.json';
 
 export const LANGUAGE_STORAGE_KEY = 'swarmoracle:language:v1';
 
-function normalizeLanguage(value: string | null | undefined): 'en' | 'zh' {
+export function normalizeLanguage(value: string | null | undefined): 'en' | 'zh' {
   return value?.toLowerCase().startsWith('zh') ? 'zh' : 'en';
 }
 
-function resolveInitialLanguage(): 'en' | 'zh' {
+export function resolveInitialLanguage(): 'en' | 'zh' {
   if (typeof window === 'undefined') return 'zh';
 
-  const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+  let stored: string | null = null;
+  try {
+    stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+  } catch {
+    stored = null;
+  }
   if (stored) return normalizeLanguage(stored);
 
   return normalizeLanguage(window.navigator.language);
@@ -44,7 +49,11 @@ syncDocumentLanguage(initialLanguage);
 i18n.on('languageChanged', (language) => {
   const normalized = normalizeLanguage(language);
   if (typeof window !== 'undefined') {
-    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, normalized);
+    try {
+      window.localStorage.setItem(LANGUAGE_STORAGE_KEY, normalized);
+    } catch {
+      // Ignore storage failures in privacy-restricted environments.
+    }
   }
   syncDocumentLanguage(normalized);
 });

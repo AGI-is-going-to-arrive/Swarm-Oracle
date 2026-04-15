@@ -52,6 +52,7 @@ from app.services.ending_room_service import (
     load_ending_room_thread_snapshot,
     run_ending_room_background,
 )
+from app.services.runtime_lock import release_runtime_lock
 
 
 def _seed_branch_world() -> tuple[str, str, str]:
@@ -1211,6 +1212,52 @@ async def _noop_broadcast(_room_id: str, _payload: dict) -> None:
     return None
 
 
+def _stub_runtime_lock_regression_plan(
+    participants: list[EndingRoomParticipant],
+) -> tuple[list[dict], dict]:
+    phases = [
+        EndingRoomPhase.OPENING,
+        EndingRoomPhase.CROSSFIRE,
+        EndingRoomPhase.VERDICT,
+    ]
+    planned_turns = [
+        {
+            "participant_id": participants[min(index, len(participants) - 1)].id,
+            "phase": phase,
+            "content": f"{phase.value}-content-" * 8,
+            "emotion": "steady",
+            "cited_branch_id": None,
+            "cited_refs_json": {"mode": "test"},
+        }
+        for index, phase in enumerate(phases)
+    ]
+    return planned_turns, {
+        "summary": "lock regression summary",
+        "next_move": None,
+        "archivist_note": "lock regression summary",
+        "phase_insights": [],
+        "supporting_turns": [
+            {
+                "turn_id": None,
+                "phase": turn["phase"].value,
+                "participant_id": turn["participant_id"],
+                "label": next(
+                    participant.display_name
+                    for participant in participants
+                    if participant.id == turn["participant_id"]
+                ),
+                "explanation": turn["content"],
+            }
+            for turn in planned_turns
+        ],
+    }
+
+
+async def _slow_runtime_lock_regression_broadcast(_room_id: str, payload: dict) -> None:
+    if payload["type"] == "ending_room_turn_delta":
+        await asyncio.sleep(0.005)
+
+
 async def _run_room(snapshot_id: str, ws_callback: AsyncMock) -> dict:
     await run_ending_room_background(snapshot_id, ws_callback=ws_callback)
     return load_ending_room_result_payload(snapshot_id)
@@ -1968,6 +2015,124 @@ def test_run_ending_room_background_skips_when_runtime_lock_is_busy(monkeypatch)
     unchanged_snapshot = load_ending_room_snapshot(snapshot["id"])
     assert unchanged_snapshot["status"] == "draft"
     assert unchanged_snapshot["turns"] == []
+
+
+def test_run_ending_room_background_fails_closed_when_runtime_lock_is_lost_midflight(monkeypatch):
+    scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_a_id,
+        selected_branch_ids=[branch_a_id],
+        language="zh",
+    )
+    assert created is True
+
+    def _fake_build_room_plan(_session, _room, participants):
+        return _stub_runtime_lock_regression_plan(participants)
+
+    async def _fake_enhance(room, participants, planned_turns, result):
+        return planned_turns, result
+
+    def _fake_refresh_runtime_lock(lease, *, lease_seconds):
+        assert lease_seconds > 0
+        assert lease is not None
+        release_runtime_lock(lease)
+        return None
+
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "_ENDING_ROOM_RUNTIME_LOCK_LEASE_SECONDS",
+        0.03,
+    )
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "_build_room_plan",
+        _fake_build_room_plan,
+    )
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "_enhance_room_plan_with_llm",
+        _fake_enhance,
+    )
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "_delta_chunks",
+        lambda _content: ["delta"] * 20,
+    )
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "refresh_runtime_lock",
+        _fake_refresh_runtime_lock,
+        raising=False,
+    )
+
+    ws_callback = AsyncMock(side_effect=_slow_runtime_lock_regression_broadcast)
+
+    with pytest.raises(RuntimeError, match="runtime lock"):
+        asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=ws_callback))
+
+    errored_snapshot = load_ending_room_snapshot(snapshot["id"])
+    assert errored_snapshot["status"] == "error"
+    assert errored_snapshot["turns"] == []
+
+
+def test_run_ending_room_background_fails_closed_when_runtime_lock_refresh_raises(monkeypatch):
+    scenario_id, branch_a_id, _branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_a_id,
+        selected_branch_ids=[branch_a_id],
+        language="zh",
+    )
+    assert created is True
+
+    def _fake_build_room_plan(_session, _room, participants):
+        return _stub_runtime_lock_regression_plan(participants)
+
+    async def _fake_enhance(room, participants, planned_turns, result):
+        return planned_turns, result
+
+    def _boom_refresh_runtime_lock(_lease, *, lease_seconds):
+        assert lease_seconds > 0
+        raise RuntimeError("refresh boom")
+
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "_ENDING_ROOM_RUNTIME_LOCK_LEASE_SECONDS",
+        0.03,
+    )
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "_build_room_plan",
+        _fake_build_room_plan,
+    )
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "_enhance_room_plan_with_llm",
+        _fake_enhance,
+    )
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "_delta_chunks",
+        lambda _content: ["delta"] * 20,
+    )
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "refresh_runtime_lock",
+        _boom_refresh_runtime_lock,
+        raising=False,
+    )
+
+    ws_callback = AsyncMock(side_effect=_slow_runtime_lock_regression_broadcast)
+
+    with pytest.raises(RuntimeError, match="refresh boom"):
+        asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=ws_callback))
+
+    errored_snapshot = load_ending_room_snapshot(snapshot["id"])
+    assert errored_snapshot["status"] == "error"
+    assert errored_snapshot["turns"] == []
 
 
 def test_participants_include_worldline_echo_key():
