@@ -131,6 +131,7 @@ export default function ResultView() {
   const replayShareId = searchParams.get('share');
   const roomReplayShareId = searchParams.get('roomShare');
   const roomReplayLocalId = searchParams.get('roomLocal');
+  const roomReplayToken = searchParams.get('roomReplay');
   const debugEndingRoomBranch = searchParams.get('debugEndingRoomBranch');
   const debugEndingRoomMode = searchParams.get('debugEndingRoomMode');
   const debugEndingRoomAgents = searchParams.get('debugEndingRoomAgents');
@@ -194,6 +195,7 @@ export default function ResultView() {
   const endingRoomLiveResult = useEndingRoomStore((state) => state.result);
   const endingRoomLiveActiveThreadId = useEndingRoomStore((state) => state.activeThreadId);
   const isReplayMode = Boolean(replayPayload);
+  const activeScenarioId = scenario?.id ?? id ?? replayPayload?.scenario.id ?? null;
   const hasUnscored = predictions.some((p) => p.score == null);
   const fallbackRuntimePreset = useMemo(() => loadScenarioRuntimePreset(), []);
   const scenarioRuntimePreset = useMemo(
@@ -317,7 +319,7 @@ export default function ResultView() {
         setLoading(false);
         return;
       }
-      if (roomReplayShareId || roomReplayLocalId || searchParams.get('roomReplay')) {
+      if (roomReplayShareId || roomReplayLocalId || roomReplayToken) {
         const roomReplay = roomReplayLocalId
           ? loadOracleReplayLocalCopy(roomReplayLocalId, 'ending_room_v1')
           : roomReplayShareId
@@ -609,9 +611,9 @@ export default function ResultView() {
     id,
     replayShareId,
     replayToken,
-    searchParams,
     roomReplayLocalId,
     roomReplayShareId,
+    roomReplayToken,
   ]);
 
   const handleExport = async () => {
@@ -889,6 +891,25 @@ export default function ResultView() {
     () => [...branches].sort((a, b) => b.probability - a.probability)[0] ?? null,
     [branches],
   );
+  const factionTimelineBranch = useMemo(
+    () => branches.find((branch) => branch.id === expandedBranch) ?? dominantBranchFromStory ?? branches[0] ?? null,
+    [branches, dominantBranchFromStory, expandedBranch],
+  );
+  const factionTimelineLead = factionTimelineBranch
+    ? (
+        expandedBranch === factionTimelineBranch.id
+          ? (isZh
+            ? `当前跟随你展开查看的结局分支“${factionTimelineBranch.title}”。`
+            : `Currently following the expanded ending branch "${factionTimelineBranch.title}".`)
+          : branches.length > 1
+            ? (isZh
+              ? `当前默认展示概率最高的分支“${factionTimelineBranch.title}”，不代表全部结局。`
+              : `Currently showing the highest-probability branch "${factionTimelineBranch.title}", not every ending.`)
+            : (isZh
+              ? `当前展示分支“${factionTimelineBranch.title}”的阵营演化。`
+              : `Showing faction evolution for branch "${factionTimelineBranch.title}".`)
+      )
+    : '';
   const hasLocalDirectorState = Boolean(
     scenarioMeta?.director.lastUpdatedAt
     || (scenarioMeta?.director.spentPoints ?? 0) > 0
@@ -1570,8 +1591,8 @@ export default function ResultView() {
                 disabled={importingReplay}
               >
                 {importingReplay
-                  ? (isZh ? '导入中...' : 'Importing...')
-                  : (isZh ? '导入为本地运行' : 'Import as Local Run')}
+                  ? t('sim.replay.importing')
+                  : t('sim.replay.import_local')}
               </button>
             )}
           </div>
@@ -1612,10 +1633,10 @@ export default function ResultView() {
             >
               {t('result.leaderboard_link')}
             </button>
-            {id && !isReplayMode && capabilities?.causal_graph?.enabled && (
+            {activeScenarioId && capabilities?.causal_graph?.enabled && (
               <a
                 className="btn btn-ghost"
-                href={`/sim/${id}/causal-map`}
+                href={`/sim/${activeScenarioId}/causal-map`}
               >
                 {t('result.causal_graph_link', 'View Causal Graph')}
               </a>
@@ -2195,19 +2216,66 @@ export default function ResultView() {
         </section>
       )}
 
-      {/* ── Phase 3 Integration ──────────────────────────── */}
-      {id && !isReplayMode && (
+      {/* ── Phase 3 Replay-Safe Integration ───────────────── */}
+      {activeScenarioId && (capabilities?.causal_graph?.enabled || capabilities?.factions?.enabled) && (
         <section style={{ marginTop: '1.5rem' }}>
           {capabilities?.causal_graph?.enabled && (
             <div style={{ marginBottom: '1rem' }}>
               <a
-                href={`/sim/${id}/causal-map`}
+                href={`/sim/${activeScenarioId}/causal-map`}
                 style={{ color: '#8ab4f8', textDecoration: 'none', fontWeight: 600, fontSize: '0.9rem' }}
               >
                 {t('result.causal_graph_link', 'View Causal Graph →')}
               </a>
             </div>
           )}
+          {capabilities?.factions?.enabled && factionTimelineBranch && (
+            <section
+              aria-labelledby="result-faction-timeline-heading"
+              style={{
+                marginTop: '1rem',
+                padding: '1rem',
+                borderRadius: 14,
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                background: 'linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.72))',
+              }}
+            >
+              <div style={{ marginBottom: '0.85rem' }}>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: '0.72rem',
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: '#8ab4f8',
+                  }}
+                >
+                  {isZh ? '分支分析' : 'Branch analysis'}
+                </p>
+                <h2
+                  id="result-faction-timeline-heading"
+                  style={{ margin: '0.35rem 0 0', fontSize: '1rem', color: '#f8fafc' }}
+                >
+                  {isZh ? '阵营轨迹时间线' : 'Faction timeline analysis'}
+                </h2>
+                <p style={{ margin: '0.45rem 0 0', fontSize: '0.82rem', color: '#9aa4b2' }}>
+                  {factionTimelineLead}
+                </p>
+              </div>
+              <FactionTimeline
+                scenarioId={activeScenarioId}
+                branchId={factionTimelineBranch.id}
+                branchLabel={factionTimelineBranch.title}
+                visible={true}
+              />
+            </section>
+          )}
+        </section>
+      )}
+
+      {/* ── Phase 3 Live-Only Integration ────────────────── */}
+      {id && !isReplayMode && (
+        <section style={{ marginTop: '1.5rem' }}>
           {capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
             <>
               <CounterfactualPanel
@@ -2235,13 +2303,6 @@ export default function ResultView() {
               scenarioId={id}
               branches={branches}
               totalRounds={scenario?.total_rounds ?? 10}
-            />
-          )}
-          {capabilities?.factions?.enabled && branches.length > 0 && (
-            <FactionTimeline
-              scenarioId={id}
-              branchId={branches[0]?.id ?? ''}
-              visible={true}
             />
           )}
         </section>

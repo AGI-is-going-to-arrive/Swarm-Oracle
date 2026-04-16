@@ -26,11 +26,16 @@ const ICON_MAP: Record<string, LucideIcon> = {
 export interface GraphNodeCardData {
   label: string;
   fullLabel: string;
+  meta?: string;
   ariaLabel?: string;
   iconName: string;
   bgColor: string;
   borderColor: string;
   dimmed: boolean;
+  selected?: boolean;
+  connected?: boolean;
+  expanded?: boolean;
+  controlsId?: string;
   tooltipDisabled: boolean;
   reduceMotion?: boolean;
   sourcePos: string;
@@ -71,34 +76,70 @@ const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
       type="button"
       aria-label={d.ariaLabel || d.fullLabel || d.label}
       aria-haspopup="dialog"
+      aria-expanded={d.controlsId ? Boolean(d.expanded) : undefined}
+      aria-controls={d.controlsId}
       data-graph-node-card="true"
       data-graph-label={d.label}
       data-graph-full-label={d.fullLabel}
+      data-graph-meta={d.meta ?? ''}
       style={{
         background: d.bgColor || '#555',
         appearance: 'none',
         color: isBright ? '#111' : '#fff',
         textShadow: isBright ? 'none' : '0 1px 3px rgba(0,0,0,0.8)',
-        borderRadius: 8,
+        borderRadius: 12,
         padding: '10px 12px',
-        minHeight: 44,
+        minHeight: d.meta ? 52 : 46,
         fontSize: '0.78rem',
         border: d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)',
         display: 'flex',
         alignItems: 'center',
         gap: 6,
-        maxWidth: 'min(220px, calc(100vw - 96px))',
-        opacity: d.dimmed ? 0.2 : 1,
-        filter: d.dimmed ? 'grayscale(100%)' : 'none',
-        transition: d.reduceMotion ? 'none' : 'opacity 0.2s ease, filter 0.2s ease',
+        maxWidth: 'min(240px, calc(100vw - 88px))',
+        opacity: d.dimmed ? 0.45 : 1,
+        filter: d.dimmed ? 'saturate(0.72)' : 'none',
+        boxShadow: d.selected
+          ? '0 0 0 3px rgba(255,255,255,0.16), 0 10px 22px rgba(15, 23, 42, 0.32)'
+          : d.connected
+            ? '0 0 0 2px rgba(255,255,255,0.1), 0 6px 14px rgba(15, 23, 42, 0.18)'
+            : '0 3px 10px rgba(15, 23, 42, 0.14)',
+        transform: d.selected ? 'translateY(-1px)' : 'none',
+        transition: d.reduceMotion ? 'none' : 'opacity 0.2s ease, filter 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease',
         cursor: 'pointer',
         textAlign: 'left',
         boxSizing: 'border-box',
       }}
     >
       {Icon && <Icon size={14} style={{ flexShrink: 0 }} />}
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {d.label}
+      <span style={{ display: 'grid', gap: 2, minWidth: 0, overflow: 'hidden' }}>
+        {d.meta ? (
+          <span
+            data-graph-node-meta="true"
+            style={{
+              fontSize: '0.64rem',
+              lineHeight: 1.25,
+              letterSpacing: '0.03em',
+              opacity: 0.86,
+              textTransform: 'uppercase',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {d.meta}
+          </span>
+        ) : null}
+        <span
+          data-graph-node-label="true"
+          style={{
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontWeight: d.selected ? 700 : 600,
+          }}
+        >
+          {d.label}
+        </span>
       </span>
     </button>
   );

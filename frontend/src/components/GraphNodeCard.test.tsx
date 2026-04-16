@@ -85,7 +85,7 @@ describe('GraphNodeCard', () => {
   it('applies dimmed state (opacity + grayscale)', () => {
     render(<GraphNodeCard {...makeProps({ dimmed: true })} />, { wrapper: Wrapper });
     const card = screen.getByRole('button', { name: 'Short label' });
-    expect(card).toHaveStyle({ opacity: '0.2', filter: 'grayscale(100%)' });
+    expect(card).toHaveStyle({ opacity: '0.45', filter: 'saturate(0.72)' });
   });
 
   it('does not dim when dimmed=false', () => {

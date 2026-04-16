@@ -81,8 +81,10 @@ describe('i18n locale resources', () => {
   it('provides localized graph node detail labels and counterfactual labels', () => {
     expect(en.translation.node_detail.agent).toBe('Agent');
     expect(zh.translation.node_detail.agent).toBe('Agent');
-    expect(en.translation.causal.search_agent).toBe('Search Agent...');
-    expect(zh.translation.causal.search_agent).toBe('搜索 Agent...');
+    expect(en.translation.causal.search_agent).toBe('Search nodes or agents...');
+    expect(zh.translation.causal.search_agent).toBe('搜索节点或 Agent...');
+    expect(en.translation.causal.search_summary).toBe('{{matches}} direct matches · {{related}} related nodes kept for context');
+    expect(zh.translation.causal.search_summary).toBe('{{matches}} 个直接命中 · 保留 {{related}} 个相关节点帮助理解上下文');
     expect(en.translation.node_detail.emotion).toBe('Emotion');
     expect(zh.translation.node_detail.emotion).toBe('情绪');
     expect(en.translation.node_detail.stance).toBe('Stance');
@@ -101,11 +103,30 @@ describe('i18n locale resources', () => {
     expect(zh.translation.export.png_failed).toBe('PNG 导出失败，请重试。');
     expect(en.translation.export.svg_failed).toBe('Failed to export SVG. Try again.');
     expect(zh.translation.export.svg_failed).toBe('SVG 导出失败，请重试。');
+    expect(en.translation.common.graph_node_a11y).toBe('Graph node. Press Enter or Space to open details.');
+    expect(zh.translation.common.graph_node_a11y).toBe('图谱节点。按回车或空格可打开详情。');
+    expect(en.translation.common.graph_edge_a11y).toBe('Graph edge. Relation details are available in the text summary below.');
+    expect(zh.translation.common.graph_edge_a11y).toBe('图谱连线。关系详情可在下方文本摘要中查看。');
+    expect(en.translation.common.graph_handle).toBe('Graph handle');
+    expect(zh.translation.common.graph_handle).toBe('图谱连接点');
+    expect(en.translation.argument.filter_status_group).toBe('Filter argument units by status');
+    expect(zh.translation.argument.filter_status_group).toBe('按状态筛选论证单元');
 
     expect(en.translation.counterfactual.title).toBe('What-If Replay');
     expect(zh.translation.counterfactual.title).toBe('假设重演');
     expect(en.translation.counterfactual.submit).toBe('Create What-If');
     expect(zh.translation.counterfactual.submit).toBe('创建假设分支');
+  });
+
+  it('provides localized timeline and replay import labels used by result surfaces', () => {
+    expect(en.translation.factions.current_branch).toBe('Current branch');
+    expect(zh.translation.factions.current_branch).toBe('当前分支');
+    expect(en.translation.factions.branch_scope).toBe('Branch scope');
+    expect(zh.translation.factions.branch_scope).toBe('分支范围');
+    expect(en.translation.debate.import_local_run).toBe('Import as Local Run');
+    expect(zh.translation.debate.import_local_run).toBe('导入为本地运行');
+    expect(en.translation.debate.importing_local_run).toBe('Importing...');
+    expect(zh.translation.debate.importing_local_run).toBe('导入中...');
   });
 
   it('provides shared retry, clear, submitting, and causal round labels used by graph views', () => {

@@ -7,6 +7,8 @@ import { ApiError } from '../api/client';
 import { DebateResultView } from './DebateResultView';
 import { encodeDebateReplayToken, saveDebateReplayLocalCopy } from '../lib/debateReplay';
 import type { DebateResultPayload } from '../types';
+import en from '../i18n/locales/en.json';
+import zh from '../i18n/locales/zh.json';
 
 const {
   changeLanguageMock,
@@ -200,7 +202,14 @@ function createDeferred<T>() {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) => key,
+    t: (
+      key: string,
+      options?: string | { defaultValue?: string },
+    ) => {
+      if (typeof options === 'string') return options;
+      if (options && typeof options.defaultValue === 'string') return options.defaultValue;
+      return key;
+    },
     i18n: {
       get language() {
         return getMockLanguage();
@@ -257,6 +266,17 @@ vi.mock('../lib/debateCounterplay', () => ({
   getDebateCounterplaySummary: vi.fn(() => 'Counterplay used during Crossfire → Opposition at 60%.'),
   resolveDebateCounterplayOutcome: vi.fn(() => 'miss'),
 }));
+
+describe('DebateResultView locale contracts', () => {
+  it('keeps replay import and mixed-language fallback labels in both locale resources', () => {
+    expect(en.translation.debate.import_local_run).toBe('Import as Local Run');
+    expect(en.translation.debate.importing_local_run).toBe('Importing...');
+    expect(en.translation.debate.result_language_fallback_title).toBe('Language fallback');
+    expect(zh.translation.debate.import_local_run).toBe('导入为本地运行');
+    expect(zh.translation.debate.importing_local_run).toBe('导入中...');
+    expect(zh.translation.debate.result_language_fallback_title).toBe('语言兜底');
+  });
+});
 
 describe('DebateResultView', () => {
   beforeEach(() => {
@@ -414,6 +434,7 @@ describe('DebateResultView', () => {
         'Mixed-language long-form result copy detected. Showing the original text instead of silently switching the global UI language.',
       ),
     ).toBeInTheDocument();
+    expect(screen.getByText('Language fallback')).toBeInTheDocument();
     expect(
       screen.getByText(
         'This verdict keeps the English frame, 但关键转折突然改成中文解释，so the long-form copy becomes visibly mixed instead of staying in one language.',
@@ -565,6 +586,7 @@ describe('DebateResultView', () => {
       expect(payload?.page?.controls?.importing_local_run).toBe(true);
       expect(payload?.page?.replay?.importing_local_run).toBe(true);
     });
+    expect(screen.getByRole('button', { name: 'Importing...' })).toBeDisabled();
 
     importDeferred.resolve({ id: 'imported-debate-1' });
 
@@ -674,7 +696,10 @@ describe('DebateResultView', () => {
     expect(argumentMapMock).not.toHaveBeenCalled();
     expect(screen.queryByTestId('argument-map')).not.toBeInTheDocument();
 
-    const toggle = screen.getByRole('button', { name: 'argument.load_map' });
+    const toggle = screen.getByRole('button', { name: 'Load map' });
+    const mapSection = screen.getByTestId('debate-result-argument-map-section');
+    expect(mapSection.closest('.debate-shell__inner')).not.toBeNull();
+    expect(mapSection.closest('.debate-result-grid')).toBeNull();
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(toggle).toHaveAttribute('aria-controls');
 
@@ -682,7 +707,7 @@ describe('DebateResultView', () => {
 
     expect(argumentMapMock).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('argument-map')).toHaveTextContent('debate-1');
-    expect(screen.getByRole('button', { name: 'argument.hide_map' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Hide map' })).toHaveAttribute('aria-expanded', 'true');
   });
 
 });

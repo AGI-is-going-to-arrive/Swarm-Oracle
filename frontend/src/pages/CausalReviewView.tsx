@@ -231,6 +231,7 @@ function layoutDagre(
     const fullLabel = n.label || n.key;
     const label = fullLabel.length > 50 ? fullLabel.slice(0, 50) + '\u2026' : fullLabel;
     const typeLabel = getCausalTypeLabel(n.type, t);
+    const roundLabel = t('causal.round_label', 'Round');
     const ariaLabel = getCausalNodeActionLabel(typeLabel, fullLabel, t);
     return {
       id: n.id,
@@ -241,11 +242,15 @@ function layoutDagre(
       data: {
         label,
         fullLabel,
+        meta: n.round != null ? `${typeLabel} · ${roundLabel} ${n.round}` : typeLabel,
         ariaLabel,
         iconName: NODE_ICONS[n.type] ?? '',
         bgColor: NODE_TYPE_COLORS_HEX[n.type] ?? '#555',
         borderColor: '',
         dimmed: false,
+        selected: false,
+        connected: false,
+        expanded: false,
         tooltipDisabled,
         sourcePos: compactViewport ? 'bottom' : 'right',
         targetPos: compactViewport ? 'top' : 'left',
@@ -293,7 +298,7 @@ export function CausalReviewView() {
   const [agentSearch, setAgentSearch] = useState('');
   const exportRootId = `causal-graph-${useId().replace(/:/g, '-')}`;
   const legendPanelId = `causal-legend-${useId().replace(/:/g, '-')}`;
-  const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
+  const reactFlowRef = useRef<{ fitView?: (options?: { padding?: number; duration?: number }) => void } | null>(null);
   const pendingFitSignatureRef = useRef<string | null>(null);
   const latestRequestIdRef = useRef(0);
   const encodedScenarioId = id ? encodeURIComponent(id) : '';
@@ -382,9 +387,11 @@ export function CausalReviewView() {
     fetchGraph();
   }, [id, fetchGraph, enabled]);
 
-  // C5: Filtered data based on agent search
-  const filteredData = useMemo(() => {
-    if (!graphData || !agentSearch.trim()) return graphData;
+  // C5: Filtered data based on agent or node search, while keeping one-hop context.
+  const searchState = useMemo(() => {
+    if (!graphData) return { data: null, matchCount: 0, relatedCount: 0 };
+    if (!agentSearch.trim()) return { data: graphData, matchCount: 0, relatedCount: 0 };
+
     const search = agentSearch.toLowerCase();
     const matchingNodes = graphData.nodes.filter(n => {
       const p = (typeof n.payload === 'object' && n.payload ? n.payload : {}) as Record<string, unknown>;
@@ -393,10 +400,34 @@ export function CausalReviewView() {
       const label = n.label.toLowerCase();
       return agentId.includes(search) || agentName.includes(search) || label.includes(search);
     });
-    const nodeIds = new Set(matchingNodes.map(n => n.id));
-    const matchingEdges = graphData.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
-    return { ...graphData, nodes: matchingNodes, edges: matchingEdges };
+
+    const matchedIds = new Set(matchingNodes.map((node) => node.id));
+    if (matchedIds.size === 0) {
+      return {
+        data: { ...graphData, nodes: [], edges: [] },
+        matchCount: 0,
+        relatedCount: 0,
+      };
+    }
+
+    const contextualIds = new Set(matchedIds);
+    for (const edge of graphData.edges) {
+      if (matchedIds.has(edge.source) || matchedIds.has(edge.target)) {
+        contextualIds.add(edge.source);
+        contextualIds.add(edge.target);
+      }
+    }
+
+    const contextualNodes = graphData.nodes.filter((node) => contextualIds.has(node.id));
+    const contextualEdges = graphData.edges.filter((edge) => contextualIds.has(edge.source) && contextualIds.has(edge.target));
+
+    return {
+      data: { ...graphData, nodes: contextualNodes, edges: contextualEdges },
+      matchCount: matchingNodes.length,
+      relatedCount: Math.max(0, contextualNodes.length - matchingNodes.length),
+    };
   }, [graphData, agentSearch]);
+  const filteredData = searchState.data;
 
   const nodeCount = filteredData?.nodes.length ?? 0;
   const edgeCount = filteredData?.edges.length ?? 0;
@@ -454,10 +485,14 @@ export function CausalReviewView() {
       ...n,
       data: {
         ...n.data,
+        selected: selectedNode?.id === n.id,
+        connected: Boolean(neighborSet && selectedNode?.id !== n.id && neighborSet.has(n.id)),
+        expanded: selectedNode?.id === n.id,
+        controlsId: 'causal-node-detail-panel',
         dimmed: neighborSet ? !neighborSet.has(n.id) : false,
       },
     })));
-  }, [neighborSet, setFlowNodes]);
+  }, [neighborSet, selectedNode?.id, setFlowNodes]);
 
   // Apply highlight to flow edges
   useEffect(() => {
@@ -467,7 +502,7 @@ export function CausalReviewView() {
         ...e,
         style: {
           ...e.style,
-          opacity: (neighborSet.has(e.source) && neighborSet.has(e.target)) ? 1 : 0.1,
+          opacity: (neighborSet.has(e.source) && neighborSet.has(e.target)) ? 1 : 0.24,
         },
       }));
     });
@@ -475,6 +510,10 @@ export function CausalReviewView() {
 
   const nodes = flowNodes;
   const edges = flowEdges;
+  const viewportFitOptions = useMemo(() => ({
+    padding: isCompactViewport ? 0.2 : 0.24,
+    duration: 0,
+  }), [isCompactViewport]);
 
   useEffect(() => {
     if (!pendingFitSignatureRef.current || pendingFitSignatureRef.current !== flowSignature) return;
@@ -484,8 +523,8 @@ export function CausalReviewView() {
     }
     if (!reactFlowRef.current) return;
     pendingFitSignatureRef.current = null;
-    reactFlowRef.current.fitView?.();
-  }, [flowNodes, flowEdges, flowSignature]);
+    reactFlowRef.current.fitView?.(viewportFitOptions);
+  }, [flowNodes, flowEdges, flowSignature, viewportFitOptions]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -546,12 +585,16 @@ export function CausalReviewView() {
   }, []);
 
   const graphAriaLabelConfig = useMemo(() => ({
+    'node.a11yDescription.default': t('common.graph_node_a11y', 'Graph node. Press Enter or Space to open details.'),
+    'node.a11yDescription.keyboardDisabled': t('common.graph_node_a11y', 'Graph node. Press Enter or Space to open details.'),
+    'edge.a11yDescription.default': t('common.graph_edge_a11y', 'Graph edge. Relation details are available in the text summary below.'),
     'controls.ariaLabel': t('common.graph_controls', 'Graph controls'),
     'controls.zoomIn.ariaLabel': t('common.graph_zoom_in', 'Zoom in'),
     'controls.zoomOut.ariaLabel': t('common.graph_zoom_out', 'Zoom out'),
     'controls.fitView.ariaLabel': t('common.graph_fit_view', 'Fit view'),
     'controls.interactive.ariaLabel': t('common.graph_toggle_interactivity', 'Toggle interactivity'),
     'minimap.ariaLabel': t('common.graph_minimap', 'Mini map'),
+    'handle.ariaLabel': t('common.graph_handle', 'Graph handle'),
   }), [t]);
 
   const openNodeDetail = useCallback((nodeId: string) => {
@@ -573,8 +616,8 @@ export function CausalReviewView() {
   // C3: Background click resets highlight + closes detail panel
   const onPaneClick = useCallback(() => setSelectedNode(null), []);
   const resetViewport = useCallback(() => {
-    reactFlowRef.current?.fitView?.();
-  }, []);
+    reactFlowRef.current?.fitView?.(viewportFitOptions);
+  }, [viewportFitOptions]);
 
   if (capLoading) return <div style={{ padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;
   if (!enabled) return (
@@ -613,79 +656,176 @@ export function CausalReviewView() {
   return (
     <Tooltip.Provider delayDuration={300}>
       <div
-        style={{ height: '100dvh', minHeight: '100dvh', display: 'flex', flexDirection: 'column' }}
+        style={{
+          height: isCompactViewport ? 'auto' : '100dvh',
+          minHeight: '100dvh',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
         className="causal-review-shell"
       >
-        <div style={{ padding: isCompactViewport ? '0.75rem' : '1rem', display: 'flex', alignItems: 'center', gap: '1rem', borderBottom: '1px solid #333', flexWrap: 'wrap' }}>
-          <Link to={`/result/${encodedScenarioId}`} style={{ color: '#8ab4f8', textDecoration: 'none' }}>
-            &larr; {t('common.back_to_result', 'Back to Result')}
-          </Link>
-          <h1 style={{ margin: 0, fontSize: '1.2rem' }}>{t('causal.title', 'Causal Graph')}</h1>
-          <span style={{ color: '#888', fontSize: '0.85rem' }}>
-            {nodeCount} {t('causal.nodes', 'nodes')} &middot; {edgeCount} {t('causal.edges', 'edges')}
-          </span>
-          {/* B6: Branch selector */}
-          {(availableBranches.length > 1 || Boolean(branchId)) && (
-            <select
-              value={branchId ?? ''}
-              onChange={e => {
-                const val = e.target.value;
-                if (val) setSearchParams({ branch_id: val });
-                else setSearchParams({});
-              }}
-              style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #555', background: '#1a1a2e', color: '#fff', fontSize: '0.8rem' }}
-              aria-label={t('causal.branch_select', 'Select branch')}
-            >
-              <option value="">{t('causal.all_branches', 'All branches')}</option>
-              {availableBranchOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {buildBranchOptionLabel(option)}
-                </option>
-              ))}
-            </select>
-          )}
-          {/* C5: Agent search */}
-          <input
-            type="search"
-            value={agentSearch}
-            onChange={e => setAgentSearch(e.target.value)}
-            placeholder={t('causal.search_agent', 'Search Agent...')}
-            aria-label={t('causal.search_agent', 'Search Agent...')}
+        <div
+          style={{
+            padding: isCompactViewport ? '0.75rem' : '1rem',
+            borderBottom: '1px solid #333',
+            display: 'grid',
+            gap: '0.75rem',
+          }}
+        >
+          <div
             style={{
-              padding: '4px 8px', borderRadius: 4, border: '1px solid #555',
-              background: '#1a1a2e', color: '#fff', fontSize: '0.8rem', width: 150,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              gap: '1rem',
+              flexWrap: 'wrap',
             }}
-          />
-          {nodeCount > 0 && !isNonInteractiveFallback && (
-            <ExportPanel
-              containerSelector={`.causal-graph-export-target[data-export-root="${exportRootId}"]`}
-              filenamePrefix="causal-graph"
-            />
-          )}
-          {nodeCount > 0 && !isNonInteractiveFallback && isCompactViewport && (
-            <>
+          >
+            <div style={{ display: 'grid', gap: '0.35rem', minWidth: 0 }}>
+              <Link to={`/result/${encodedScenarioId}`} style={{ color: '#8ab4f8', textDecoration: 'none', fontSize: '0.92rem' }}>
+                &larr; {t('common.back_to_result', 'Back to Result')}
+              </Link>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <h1 style={{ margin: 0, fontSize: isCompactViewport ? '1.08rem' : '1.24rem' }}>{t('causal.title', 'Causal Graph')}</h1>
+                <span style={{ color: '#888', fontSize: '0.9rem' }}>
+                  {nodeCount} {t('causal.nodes', 'nodes')} &middot; {edgeCount} {t('causal.edges', 'edges')}
+                </span>
+              </div>
+            </div>
+            {agentSearch.trim() ? (
+              <div style={{ fontSize: '0.78rem', color: '#9aa5c3', maxWidth: 360 }}>
+                {searchState.matchCount > 0
+                  ? t('causal.search_summary', {
+                      defaultValue: '{{matches}} direct matches · {{related}} related nodes kept for context',
+                      matches: searchState.matchCount,
+                      related: searchState.relatedCount,
+                    })
+                  : t('causal.no_results', 'No nodes match your search.')}
+              </div>
+            ) : null}
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            {(availableBranches.length > 1 || Boolean(branchId)) && (
+              <select
+                value={branchId ?? ''}
+                onChange={e => {
+                  const val = e.target.value;
+                  if (val) setSearchParams({ branch_id: val });
+                  else setSearchParams({});
+                }}
+                style={{
+                  minHeight: isCompactViewport ? 40 : 36,
+                  padding: '6px 10px',
+                  borderRadius: 10,
+                  border: '1px solid #555',
+                  background: '#1a1a2e',
+                  color: '#fff',
+                  fontSize: '0.9rem',
+                }}
+                aria-label={t('causal.branch_select', 'Select branch')}
+              >
+                <option value="">{t('causal.all_branches', 'All branches')}</option>
+                {availableBranchOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {buildBranchOptionLabel(option)}
+                  </option>
+                ))}
+              </select>
+            )}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                minWidth: isCompactViewport ? 'min(100%, 18rem)' : '18rem',
+                flex: isCompactViewport ? '1 1 100%' : '0 1 auto',
+              }}
+            >
+              <input
+                type="search"
+                value={agentSearch}
+                onChange={e => setAgentSearch(e.target.value)}
+                placeholder={t('causal.search_agent', 'Search nodes or agents...')}
+                aria-label={t('causal.search_agent', 'Search nodes or agents...')}
+                style={{
+                  minHeight: isCompactViewport ? 40 : 36,
+                  padding: '6px 10px',
+                  borderRadius: 10,
+                  border: '1px solid #555',
+                  background: '#1a1a2e',
+                  color: '#fff',
+                  fontSize: '0.9rem',
+                  width: '100%',
+                }}
+              />
+              {agentSearch.trim() ? (
+                <button
+                  type="button"
+                  onClick={() => setAgentSearch('')}
+                  style={{
+                    minHeight: isCompactViewport ? 40 : 36,
+                    padding: '6px 12px',
+                    borderRadius: 10,
+                    border: '1px solid #555',
+                    background: 'transparent',
+                    color: '#c9d3e7',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {t('common.clear', 'Clear')}
+                </button>
+              ) : null}
+            </div>
+            {nodeCount > 0 && !isNonInteractiveFallback && (
+              <ExportPanel
+                containerSelector={`.causal-graph-export-target[data-export-root="${exportRootId}"]`}
+                filenamePrefix="causal-graph"
+              />
+            )}
+            {nodeCount > 0 && !isNonInteractiveFallback && isCompactViewport && (
               <button
                 type="button"
                 onClick={resetViewport}
-                style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #555', background: 'transparent', color: '#8ab4f8', cursor: 'pointer', fontSize: '0.75rem' }}
+                style={{
+                  minHeight: 40,
+                  padding: '6px 12px',
+                  borderRadius: 10,
+                  border: '1px solid #555',
+                  background: 'transparent',
+                  color: '#8ab4f8',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                }}
               >
                 {t('common.graph_fit_view', 'Fit view')}
               </button>
-              <span style={{ color: '#888', fontSize: '0.72rem' }}>
-                {t('common.graph_mobile_hint', 'Drag to pan. Pinch or use the graph controls to zoom.')}
-              </span>
-            </>
-          )}
-          {/* B6: Legend toggle */}
-          <button
-            type="button"
-            onClick={() => setLegendOpen(v => !v)}
-            aria-expanded={legendOpen}
-            aria-controls={legendPanelId}
-            style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #555', background: 'transparent', color: '#8ab4f8', cursor: 'pointer', fontSize: '0.75rem' }}
-          >
-            {legendOpen ? t('causal.hide_legend', 'Hide Legend') : t('causal.show_legend', 'Legend')}
-          </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setLegendOpen(v => !v)}
+              aria-expanded={legendOpen}
+              aria-controls={legendPanelId}
+              style={{
+                minHeight: isCompactViewport ? 40 : 36,
+                padding: '6px 12px',
+                borderRadius: 10,
+                border: '1px solid #555',
+                background: 'transparent',
+                color: '#8ab4f8',
+                cursor: 'pointer',
+                fontSize: '0.85rem',
+              }}
+            >
+              {legendOpen ? t('causal.hide_legend', 'Hide Legend') : t('causal.show_legend', 'Legend')}
+            </button>
+          </div>
+          {nodeCount > 0 && !isNonInteractiveFallback && isCompactViewport ? (
+            <span style={{ color: '#888', fontSize: '0.76rem' }}>
+              {t('common.graph_mobile_hint', 'Drag to pan. Pinch or use the graph controls to zoom.')}
+            </span>
+          ) : null}
         </div>
         {/* B6: Collapsible Legend */}
         {legendOpen && (
@@ -717,7 +857,7 @@ export function CausalReviewView() {
                     'No causal edges were generated for this scenario yet. Showing event snapshots instead.',
                   ))}
             </p>
-            <div role="list" aria-label={causalListAriaLabel}>
+            <div data-testid="causal-events-list" role="list" aria-label={causalListAriaLabel}>
               {filteredData?.nodes.map(n => (
                 <div key={n.id} role="listitem" style={{ fontSize: '0.8rem', color: '#ccc', padding: '2px 0' }}>
                   <button
@@ -740,13 +880,22 @@ export function CausalReviewView() {
               ))}
             </div>
             <NodeDetailPanel
+              panelId="causal-node-detail-panel"
               key={selectedNode?.id ?? 'causal-fallback-closed'}
               node={selectedNode}
               onClose={() => setSelectedNode(null)}
             />
           </div>
         ) : (
-          <div style={{ flex: 1, position: 'relative' }} className="causal-graph-container">
+          <div
+            style={{
+              flex: isCompactViewport ? 'none' : 1,
+              position: 'relative',
+              height: isCompactViewport ? 'min(66dvh, 560px)' : undefined,
+              minHeight: isCompactViewport ? 360 : 0,
+            }}
+            className="causal-graph-container"
+          >
             <div
               className="causal-graph-export-target"
               data-testid="causal-graph-export-target"
@@ -766,6 +915,17 @@ export function CausalReviewView() {
                   reactFlowRef.current = instance;
                 }}
                 fitView
+                fitViewOptions={viewportFitOptions}
+                deleteKeyCode={null}
+                selectionKeyCode={null}
+                panActivationKeyCode={null}
+                zoomActivationKeyCode={null}
+                panOnDrag={[0, 1]}
+                nodesDraggable={false}
+                nodesFocusable={false}
+                edgesFocusable={false}
+                elementsSelectable={false}
+                zoomOnDoubleClick={!isCompactViewport}
                 proOptions={{ hideAttribution: true }}
               >
                 <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
@@ -781,6 +941,7 @@ export function CausalReviewView() {
               </ReactFlow>
             </div>
             <NodeDetailPanel
+              panelId="causal-node-detail-panel"
               key={selectedNode?.id ?? 'causal-graph-closed'}
               node={selectedNode}
               onClose={() => setSelectedNode(null)}
@@ -790,7 +951,7 @@ export function CausalReviewView() {
 
         {!isNonInteractiveFallback && (
           <>
-            <div className="sr-only" role="list" aria-label={causalListAriaLabel}>
+            <div data-testid="causal-events-list" className="sr-only" role="list" aria-label={causalListAriaLabel}>
               {(filteredData?.nodes ?? graphData?.nodes ?? []).map(n => (
                 <div key={n.id} role="listitem">
                   {`${getCausalTypeLabel(n.type, t)}: ${n.label} (${t('causal.round_label', 'Round')} ${n.round ?? '?'})`}

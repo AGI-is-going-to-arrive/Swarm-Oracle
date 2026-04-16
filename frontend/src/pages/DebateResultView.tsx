@@ -334,10 +334,19 @@ export function DebateResultView() {
 
     return longformTexts.some((text) => hasMixedLanguageLongText(text));
   }, [judgeRationale, payload, supportingTurns]);
-  const mixedLanguageFallbackTitle = isZh ? '语言兜底' : 'Language fallback';
-  const mixedLanguageFallbackNotice = isZh
-    ? '检测到结果页长文案混用中英文。当前保留原文展示，不再静默切换全局界面语言。'
-    : 'Mixed-language long-form result copy detected. Showing the original text instead of silently switching the global UI language.';
+  const mixedLanguageFallbackTitle = t(
+    'debate.result_language_fallback_title',
+    isZh ? '语言兜底' : 'Language fallback',
+  );
+  const mixedLanguageFallbackNotice = t(
+    'debate.result_language_fallback_notice',
+    isZh
+      ? '检测到结果页长文案混用中英文。当前保留原文展示，不再静默切换全局界面语言。'
+      : 'Mixed-language long-form result copy detected. Showing the original text instead of silently switching the global UI language.',
+  );
+  const importReplayLabel = importingReplay
+    ? t('debate.importing_local_run', isZh ? '导入中...' : 'Importing...')
+    : t('debate.import_local_run', isZh ? '导入为本地运行' : 'Import as Local Run');
 
   const handleImportReplay = async () => {
     if (!isReplayMode || !payload || importingReplay) return;
@@ -504,9 +513,7 @@ export function DebateResultView() {
                 </button>
                 {isReplayMode && (
                   <button type="button" className="btn btn-ghost" onClick={() => void handleImportReplay()} disabled={importingReplay}>
-                    {importingReplay
-                      ? (isZh ? '导入中...' : 'Importing...')
-                      : (isZh ? '导入为本地运行' : 'Import as Local Run')}
+                    {importReplayLabel}
                   </button>
                 )}
                 <button type="button" className="btn btn-primary" onClick={() => setShowShare(true)}>
@@ -817,14 +824,17 @@ export function DebateResultView() {
             </section>
           </div>
         </div>
-      </div>
 
-      {/* Phase 3 F6: Argument Map */}
-      {canShowArgumentMap && (
-        <section style={{ marginTop: '1.5rem', padding: '0 1rem' }}>
-          <div className="debate-panel">
-            <div className="debate-panel__header" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
-              <h2 style={{ fontSize: '1.1rem', margin: 0 }}>{t('argument.section_title', 'Argument Map')}</h2>
+        {/* Phase 3 F6: Argument Map */}
+        {canShowArgumentMap && (
+          <section
+            className="debate-panel debate-panel--argument-map"
+            data-testid="debate-result-argument-map-section"
+          >
+            <div className="debate-panel__header debate-panel__header--wrap">
+              <h2 className="debate-panel__title debate-panel__title--compact">
+                {t('argument.section_title', 'Argument Map')}
+              </h2>
               <button
                 type="button"
                 className="btn btn-ghost"
@@ -852,9 +862,9 @@ export function DebateResultView() {
                 </p>
               </div>
             )}
-          </div>
-        </section>
-      )}
+          </section>
+        )}
+      </div>
 
       {showShare && shareContext && (
         <DebateShareModal

@@ -21,21 +21,22 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `自定义覆盖`：当前局单独指定 `provider / API key / base URL`
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。
 - `SimulationView` 负责 live 推演、Theater、干预、玩法卡、结构化押注与 capture。
-- `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、campaign summary、分享、导出与 replay/import；当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。
-- replay 分支链路当前也已补硬化：`counterfactual` 会在 clone 前校验目标 round 里确实有该 agent 的消息；如果 seed 失败，会清理掉刚创建的脏 branch；`resume` 只有在预占 `simulation lock` 成功后才会返回 started。replay branch runtime lock 当前按 fail-closed 收口：续租返回 `None`、续租抛异常，或本地 lease 已过期时，都不会继续 clone / seed / schedule；heartbeat 会在请求内校验完成后才启动，避免同一请求自己和自己抢 SQLite 锁。若后台续跑期间丢掉预占的 `simulation lock`，任务也会直接 fail-closed 落成 `error`，不会失锁后继续跑；replay branch heartbeat 刷新异常时会释放原 lease，不再把后续请求卡到 TTL 过期。
-- graph viz 当前已收口：`CausalReviewView` 会忽略 stale branch 响应；graph route fetch 里的 `scenarioId / debateId`，以及 `CausalReviewView` 返回结果页的 scenario link，也都会先做 `encodeURIComponent()`，带特殊字符的 id 不会再打坏请求或跳转。URL 里带不存在的 `branch_id` 时会直接报错，不再伪装成空图；分支 selector 会优先显示 scenario branch 的标题和概率，拿不到元数据时才回退 branch id；只有源图本身就没有因果边时，`多节点但 0 edges` 才会切到本地化的 event snapshot fallback；如果只是 search / filter 把边筛空，交互图和导出入口仍会保留。错误态会按 `network / branch_not_found / unauthorized / server / load_failed` 显示本地化文案；图节点可访问名称和 React Flow controls / minimap 文案会跟随当前 UI 语言实时更新。交互图当前除了 node/unit 的 screen-reader list，也会补本地化 relation list，读屏器能直接读到 `causes / precedes`，以及 `ArgumentMap` 里的 `supports / rebuts / accepts / rejects / leaves unaddressed`。branch 切换时会先清空旧图和导出面板，不再闪出上一条分支的图。compact viewport 下会继续保留显式 controls 和移动端导航提示，`MiniMap` 仍只在桌面显示；图页外层统一走 `100dvh`，relationless fallback 里的节点详情也会锚在当前容器里，不再飘到视口右上角。`ArgumentMap` 在 node-only 图时仍保留 screen-reader list 和键盘可达性，状态筛选也不会误把整张 node-only 图筛成空态；强度摘要会跟随当前筛选结果。`NodeDetailPanel` 在切换节点后关闭时会把焦点还给最新 trigger；就算焦点已经离开 panel，`Escape` 也还能直接关闭详情。`Copy Reference` 会先走 clipboard API，失败再回退 `execCommand`；两条都失败时会显示可见错误提示。`ExportPanel` 会区分 PNG / SVG 的忙态文案；SVG 导出改成 native SVG layer + node rebuild，长标题会按节点卡宽度裁剪显示，但 `<title>` 和文本内容仍保留完整节点标题，不再依赖 `foreignObject`。`LanguageSwitcher` 的 accessible name 当前也会带可见 `EN / 中文` 文本，语音控制和读屏口径不再分叉。
+- `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、campaign summary、分享、导出与 replay/import；当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。结果页里的 `FactionTimeline` 当前会优先跟随正在展开查看的分支；未展开时会落到概率最高分支，并改成真实纵向时间线，`stance / confidence` 等指标直接可见，不再只藏在 tooltip badge 里。replay 模式下会继续保留 replay-safe 的 `causal graph` 入口和 `FactionTimeline`，但 `counterfactual / resume` 这类 live-only 面板仍保持隐藏。标题、空态、轮次与事件标签都会跟随 UI 语言。`CompareDigestView` 的非活跃 pane 当前会保留更完整的待机镜像，不再是纯黑占位。
+- replay 分支链路当前也已补硬化：`counterfactual` 会在 clone 前校验目标 round 里确实有该 agent 的消息；如果 seed 失败，会清理掉刚创建的脏 branch；`resume` 只有在预占 `simulation lock` 成功后才会返回 started。replay branch runtime lock 当前按 fail-closed 收口：续租返回 `None`、续租抛异常，或本地 lease 已过期时，都不会继续 clone / seed / schedule；heartbeat 会在请求内校验完成后才启动，避免同一请求自己和自己抢 SQLite 锁。若后台续跑期间丢掉预占的 `simulation lock`，任务也会直接 fail-closed 落成 `error`，不会失锁后继续跑；replay branch heartbeat 刷新异常时会释放原 lease，不再把后续请求卡到 TTL 过期。同分支重放更早轮次时，也会同步剪掉过期的 `AgentStateFrame / stance_shift`，不再把旧状态残留在当前图里。
+- graph viz 当前已收口：`CausalReviewView` 会忽略 stale branch 响应；graph route fetch 里的 `scenarioId / debateId`，以及 `CausalReviewView` 返回结果页的 scenario link，也都会先做 `encodeURIComponent()`，带特殊字符的 id 不会再打坏请求或跳转。URL 里带不存在的 `branch_id` 时会直接报错，不再伪装成空图；分支 selector 会优先显示 scenario branch 的标题和概率，拿不到元数据时才回退 branch id；只有源图本身就没有因果边时，`多节点但 0 edges` 才会切到本地化的 event snapshot fallback；如果只是 search / filter 把边筛空，交互图和导出入口仍会保留，不会把有边的图误判成 relationless fallback。错误态会按 `network / branch_not_found / unauthorized / server / load_failed` 显示本地化文案；图节点可访问名称和 React Flow controls / minimap 文案会跟随当前 UI 语言实时更新。交互图当前除了 node/unit 的 screen-reader list，也会补本地化 relation list，读屏器能直接读到 `causes / precedes`，以及 `ArgumentMap` 里的 `supports / rebuts / accepts / rejects / leaves unaddressed`。branch 切换时会先清空旧图和导出面板，不再闪出上一条分支的图。compact viewport 下会继续保留显式 controls 和移动端导航提示；图页外层统一走 `100dvh`，移动端 header、悬浮 controls 和 relationless fallback 里的节点详情都会锚在当前壳层内并避开 safe-area。`ArgumentMap` 在 node-only 图时仍保留 screen-reader list 和键盘可达性，状态筛选也不会误把整张 node-only 图筛成空态；强度摘要会跟随当前筛选结果。`NodeDetailPanel` 在切换节点后关闭时会把焦点还给最新 trigger；就算焦点已经离开 panel，`Escape` 也还能直接关闭详情。`Copy Reference` 会先走 clipboard API，失败再回退 `execCommand`；两条都失败时会显示可见错误提示。`ExportPanel` 会区分 PNG / SVG 的忙态文案；SVG 导出改成 native SVG layer + node rebuild，长标题会按节点卡宽度裁剪显示，但 `<title>` 和文本内容仍保留完整节点标题，不再依赖 `foreignObject`。`LanguageSwitcher` 的 accessible name 当前也会带可见 `EN / 中文` 文本，语音控制和读屏口径不再分叉。后端 runtime repair 当前以最新 `causal-graph / argument-map` snapshot 为 authority，重复 snapshot 的旧残留会直接删除，不再把 stale 数据合回当前图。
 
 ### Debate Arena
 
 - 独立 debate 域，包含 live/result/replay。
 - 已落地结构化押注、counterplay、judge rationale、supporting turns 与 replay import。import replay 在 turns 落库后会同步抽取 argument map，导入完成后就能直接打开图谱。
 - Debate replay 分享当前优先走内联 `?replay=`；链接过长时会回退为本地只读 `?local=`。结果页在这条回退链路上会明确显示 `Save local read-only copy`，而导入入口继续保留 `Import as Local Run`。
-- result 页里的 argument map 当前改成按需加载；首屏先给 `Load map`，只有用户点开后才真正挂图。
+- result 页里的 argument map 当前改成按需加载，并重新对齐回主页面壳；首屏先给 `Load map`，只有用户点开后才真正挂图。
 - 当前 phase 视图会保留更早 phase 的已出现 turns，并以折叠历史卡形式留在当前 live 视图里，不再直接丢掉。
 - 页面级播报当前仍以 phase cue 为唯一 live region；`SpotlightTurnCard` 的高亮态不再单独挂 `aria-live`，避免同一轮变化被重复播报。
 - quick counterplay 当前只在 live 当前 phase 的 bet window 可提交；锁到历史 phase 时不会再发起 quick hedge。
 - debate argument map 当前保留 rule-based 抽取，并默认追加每个 turn 一次 fire-and-forget LLM enrichment；上游 provider 慢或失败时会自动回退成纯规则结果。
 - debate argument map 的 enrichment apply / rebuild 当前按串行收口；改写 unit type 后会按最新 claim 状态重建 `rebuts / supports` target。当前同一 turn 有多条对手 claim 时，`rebuttal` 会按句子顺序挂到最后一条 claim，而不是按 hash 顺序乱选；`counter` 改写后也会继续保留 `rebuts` 边；verdict 重算也会同步刷新 verdict 节点元数据，不再只改 unit 状态。whitespace-only 的句子变体当前也会按归一化文本去重，不再在同一 turn 里拆出重复单元。
+- judge 的 verdict turn 当前不会再混入常规 `supports / rebuts` 抽取。
 - debate argument map 的 fail-soft 当前会显示明确失败文案和 `Retry`，不会再被误判成普通空态。
 - debate runtime lock 当前会在长运行期间持续续租；续租返回 `None`、续租抛异常，或本地 lease 已过期时，任务会 fail-closed 并把 debate 标成 `error`，不会继续生成后续内容。
 - Debate 页面壳当前继续跟随用户自己的 UI 语言，不会再因为 `debate.language` 或结果 payload 反向切全局语言；结果页的 mixed-language fallback 已覆盖 `phase commentary / replay quote / prediction score reason` 这些长文案来源，命中时会显示明确 fallback note，并保留原文展示。
@@ -130,15 +131,15 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 
 - 主闭环当前维持 `release-candidate` 级别。
 - 当前稳定基线仍保留：
-  - backend 全量 `2078 passed, 2 skipped`
-  - graph smoke / release-signoff 当前都会先跑前端 deep-link preflight；preview 没 ready、SPA fallback 失效，或 entry asset 指纹不一致时会直接 fail-closed，不再把 404 混成图谱回归
-- 本轮追加复验已通过：
-  - backend graph / replay / argument-map 定向回归通过
-  - frontend `typecheck / lint / build / perf budget` 通过
-  - frontend graph-focused vitest `102 passed`
-  - graph script contract 当前补了前端 preflight 与 import-safe 口径；`node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs` 本轮 `24 passed`
-  - Chromium：`phase3-batch-a full`、`phase3-batch-b full` 通过；`zh-CN` mobile `phase3-batch-b` 也通过
-  - graph scoped cross-browser desktop rerun 通过：`phase3-batch-a` / `phase3-batch-b` 的 Firefox / WebKit 都通过
+  - `graph / replay / backend correctness` 修复，以及 UI review findings 对应前端修复，当前都已并入基线
+  - backend `causal-graph / replay` 定向回归 `296 passed`
+  - backend 全量 `pytest` `2095 passed, 2 skipped`
+  - frontend `typecheck / lint / build / perf budget / assets provenance checks` 通过
+  - frontend 全量 vitest `1055 passed`
+  - graph script contract：`node --test scripts/e2e-frontend-preflight.test.mjs` `25 passed`
+  - graph smoke / release-signoff 当前都会先跑前端 deep-link preflight；preview 没 ready、SPA fallback 失效，或 entry module、CSS entry、legacy fallback 资源不一致 / 不可达时会直接 fail-closed，不再把 404 混成图谱回归
+  - `phase3-batch-a full`、`phase3-batch-b full`、`phase3-batch-c full` 当前都已在 Chromium desktop/mobile + Firefox desktop + WebKit desktop 通过
+  - `zh-CN batch-a full`、`zh-CN batch-b full` 通过
 - 当前无产品级 active backlog；剩余架构级限制见 `overview/backlog.md`。
 
 ## 文档入口

@@ -8,12 +8,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright";
+import { chromium, devices, firefox, webkit } from "playwright";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
+const IS_MAIN_MODULE = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
+const RESULT_GRAPH_ROUTE_PATH = "/result/sc-e2e-resume";
+const RESULT_GRAPH_INTEGRATION_STEPS = [
+  "result-causal-graph-link-visible",
+  "result-faction-timeline-visible",
+  "result-faction-timeline-default-branch-requested",
+  "result-faction-timeline-branch-switches",
+];
 
 // ── Utilities ────────────────────────────────────────────
 
@@ -52,6 +62,54 @@ function summarizeResults(tests, fatalError = null) {
     passedSteps,
     allPassed: !fatalError && totalSteps > 0 && passedSteps === totalSteps,
   };
+}
+
+function parseArgs(argv) {
+  const args = {
+    mode: argv[2] || "desktop",
+    baseUrl: DEFAULT_BASE_URL,
+    browser: "chromium",
+    browserExplicitlySet: false,
+    headless: process.env.HEADLESS === "1",
+  };
+
+  for (let i = 3; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+    if (arg === "--url" && next) {
+      args.baseUrl = next;
+      i += 1;
+    } else if (arg === "--browser" && next) {
+      args.browser = next;
+      args.browserExplicitlySet = true;
+      i += 1;
+    } else if (arg === "--headless") {
+      args.headless = true;
+    }
+  }
+
+  if (!["desktop", "mobile", "full"].includes(args.mode)) {
+    throw new Error("Usage: node scripts/e2e-phase3-batch-c.mjs <desktop|mobile|full> [--url URL] [--browser chromium|firefox|webkit] [--headless]");
+  }
+  if (!["chromium", "firefox", "webkit"].includes(args.browser)) {
+    throw new Error(`Unsupported browser: ${args.browser}`);
+  }
+
+  return args;
+}
+
+async function launchBrowser(headless, browserName = "chromium") {
+  if (browserName === "firefox") {
+    return firefox.launch({ headless });
+  }
+  if (browserName === "webkit") {
+    return webkit.launch({ headless });
+  }
+  try {
+    return await chromium.launch({ channel: "chrome", headless });
+  } catch {
+    return chromium.launch({ headless });
+  }
 }
 
 // ── Fixtures ─────────────────────────────────────────────
@@ -141,6 +199,31 @@ const CAMPAIGN_PROFILE_FIXTURE = {
   highest_archive_grade: "B", created_at: "2026-04-10T00:00:00Z", updated_at: "2026-04-10T00:00:00Z",
 };
 
+const FACTION_TIMELINE_FIXTURE = [
+  {
+    round: 1,
+    factions: [
+      {
+        key: "transition-coalition",
+        label: "Transition Coalition",
+        members: ["agent-1"],
+        stance_center: 0.82,
+        confidence: 0.88,
+      },
+      {
+        key: "incumbent-lobby",
+        label: "Incumbent Lobby",
+        members: ["agent-2"],
+        stance_center: -0.63,
+        confidence: 0.74,
+      },
+    ],
+    events: [
+      { type: "alliance", actor_agent_id: "agent-1", faction_key: "transition-coalition" },
+    ],
+  },
+];
+
 // ── Route Interceptor Setup ──────────────────────────────
 
 async function installFixtures(page, overrides = {}) {
@@ -157,7 +240,20 @@ async function installFixtures(page, overrides = {}) {
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
   );
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/faction-timeline*`, (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
+    {
+      if (typeof overrides.onFactionTimelineRequest === "function") {
+        const url = new URL(route.request().url());
+        overrides.onFactionTimelineRequest({
+          url: route.request().url(),
+          branchId: url.searchParams.get("branch_id"),
+        });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(overrides.factionTimelineBody ?? FACTION_TIMELINE_FIXTURE),
+      });
+    },
   );
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/checkpoints*`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
@@ -326,23 +422,80 @@ async function testResume429Error(page, baseUrl, outputDir) {
   return finalizeTestResult(results);
 }
 
+async function testResultGraphIntegrations(page, baseUrl, outputDir) {
+  const stepDir = path.join(outputDir, "result-graphs");
+  ensureDir(stepDir);
+  const results = createTestResult();
+  const timelineBranchRequests = [];
+
+  await page.unroute(`**/api/scenario/${FIXTURE_SCENARIO_ID}/faction-timeline*`).catch(() => {});
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/faction-timeline*`, (route) => {
+    const url = new URL(route.request().url());
+    timelineBranchRequests.push(url.searchParams.get("branch_id"));
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(FACTION_TIMELINE_FIXTURE),
+    });
+  });
+
+  await page.goto(`${baseUrl}${RESULT_GRAPH_ROUTE_PATH}`, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(2000);
+  await saveScreenshot(page, path.join(stepDir, "01-result-loaded.png"));
+
+  const causalGraphLink = page.locator(`a[href="/sim/${FIXTURE_SCENARIO_ID}/causal-map"]`).first();
+  const hasCausalGraphLink = await causalGraphLink.isVisible().catch(() => false);
+  results.steps.push({ name: "result-causal-graph-link-visible", passed: hasCausalGraphLink });
+
+  const timelineHeading = page.getByRole("heading", { name: /Faction timeline analysis|阵营轨迹时间线/i }).first();
+  const timelineList = page.getByRole("list", { name: /Faction evolution timeline|阵营演化时间线/i }).first();
+  const hasTimelineHeading = await timelineHeading.isVisible().catch(() => false);
+  const hasTimelineList = await timelineList.isVisible().catch(() => false);
+  results.steps.push({
+    name: "result-faction-timeline-visible",
+    passed: hasTimelineHeading && hasTimelineList,
+  });
+
+  results.steps.push({
+    name: "result-faction-timeline-default-branch-requested",
+    passed: timelineBranchRequests.includes(FIXTURE_BRANCH_A),
+    details: [...timelineBranchRequests],
+  });
+
+  const secondaryExpandButton = page.locator(".ending-card .expand-btn").nth(1);
+  const hasSecondaryExpandButton = await secondaryExpandButton.isVisible().catch(() => false);
+  if (hasSecondaryExpandButton) {
+    await secondaryExpandButton.click();
+    await page.waitForTimeout(600);
+    await saveScreenshot(page, path.join(stepDir, "02-result-second-branch-expanded.png"));
+  }
+  results.steps.push({
+    name: "result-faction-timeline-branch-switches",
+    passed: hasSecondaryExpandButton && timelineBranchRequests.includes(FIXTURE_BRANCH_B),
+    details: [...timelineBranchRequests],
+  });
+
+  return finalizeTestResult(results);
+}
+
 // ── Surface Runner ───────────────────────────────────────
 
-async function runSurface(mode, viewport) {
-  const baseUrl = DEFAULT_BASE_URL;
-  const outputDir = path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-phase3c-${mode}`);
+async function runSurface(mode, viewport, args) {
+  const baseUrl = args.baseUrl;
+  const outputDir = path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-phase3c-${mode}-${args.browser}`);
   ensureDir(outputDir);
 
-  const browser = await chromium.launch({ headless: process.env.HEADLESS !== "0" });
-  const context = await browser.newContext({ viewport });
+  const browser = await launchBrowser(args.headless, args.browser);
+  const context = await browser.newContext({ ...buildContextOptions(mode, args.browser), locale: "en-US" });
   const page = await context.newPage();
 
   await installFixtures(page);
 
-  const allResults = { mode, viewport, tests: {}, error: null };
+  const allResults = { mode, browser: args.browser, viewport, tests: {}, error: null };
 
   try {
     allResults.tests.resumeVisible = await testResumePanelVisible(page, baseUrl, outputDir);
+    allResults.tests.resultGraphs = await testResultGraphIntegrations(page, baseUrl, outputDir);
     allResults.tests.resumeSubmit = await testResumeSubmitSuccess(page, baseUrl, outputDir);
     allResults.tests.resume429 = await testResume429Error(page, baseUrl, outputDir);
   } catch (err) {
@@ -374,22 +527,91 @@ async function runSurface(mode, viewport) {
 // ── Main ─────────────────────────────────────────────────
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
-const MOBILE_VIEWPORT = { width: 390, height: 844 };
+const {
+  defaultBrowserType: _unusedDefaultBrowserType,
+  ...MOBILE_CONTEXT_DEFAULTS
+} = devices["iPhone 13"];
 
-async function main() {
-  const mode = process.argv[2] || "desktop";
+function buildContextOptions(mode, browserName) {
+  if (mode !== "mobile") {
+    return { viewport: DESKTOP_VIEWPORT };
+  }
 
-  if (mode === "desktop" || mode === "full") {
-    const r = await runSurface("desktop", DESKTOP_VIEWPORT);
-    if (!r.summary.allPassed) process.exitCode = 1;
-  }
-  if (mode === "mobile" || mode === "full") {
-    const r = await runSurface("mobile", MOBILE_VIEWPORT);
-    if (!r.summary.allPassed) process.exitCode = 1;
-  }
+  return {
+    ...MOBILE_CONTEXT_DEFAULTS,
+    isMobile: true,
+    hasTouch: true,
+    userAgent: MOBILE_CONTEXT_DEFAULTS.userAgent,
+    deviceScaleFactor: MOBILE_CONTEXT_DEFAULTS.deviceScaleFactor,
+    ...(browserName === "firefox" ? { screen: MOBILE_CONTEXT_DEFAULTS.screen } : {}),
+  };
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+function buildSurfaceRuns(args) {
+  const buildRun = (mode, browser) => ({
+    mode,
+    browser,
+    context: buildContextOptions(mode, browser),
+  });
+
+  if (args.mode === "desktop") {
+    return [buildRun("desktop", args.browser)];
+  }
+  if (args.mode === "mobile") {
+    return [buildRun("mobile", args.browser)];
+  }
+  if (args.browserExplicitlySet) {
+    return [
+      buildRun("desktop", args.browser),
+      buildRun("mobile", args.browser),
+    ];
+  }
+
+  return [
+    buildRun("desktop", "chromium"),
+    buildRun("mobile", "chromium"),
+    buildRun("desktop", "firefox"),
+    buildRun("desktop", "webkit"),
+  ];
+}
+
+export const __test__ = {
+  buildSurfaceRuns,
+  mobileContextDefaults: MOBILE_CONTEXT_DEFAULTS,
+  resultGraphIntegrationSteps: RESULT_GRAPH_INTEGRATION_STEPS,
+  resultGraphRoutePath: RESULT_GRAPH_ROUTE_PATH,
+};
+
+async function main() {
+  const args = parseArgs(process.argv);
+  const surfaceResults = [];
+
+  for (const surface of buildSurfaceRuns(args)) {
+    const r = await runSurface(surface.mode, surface.context.viewport ?? DESKTOP_VIEWPORT, {
+      ...args,
+      browser: surface.browser,
+    });
+    surfaceResults.push(r);
+    if (!r.summary.allPassed) process.exitCode = 1;
+  }
+
+  console.log(JSON.stringify({
+    overall: {
+      mode: args.mode,
+      browser: args.browser,
+      surfaces: surfaceResults.map((result) => ({
+        mode: result.mode,
+        browser: result.browser,
+        allPassed: result.summary.allPassed,
+      })),
+      allPassed: surfaceResults.length > 0 && surfaceResults.every((result) => result.summary.allPassed),
+    },
+  }));
+}
+
+if (IS_MAIN_MODULE) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}

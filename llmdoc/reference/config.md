@@ -25,6 +25,7 @@
 - 占位 `LLM_API_KEY=sk-12345678` 只允许用于本地网关。
 - 非本地端点配合占位 key 会在启动期直接报错。
 - `LLM_MODEL_NAME` 不能为空。
+- Docker 模板 `.env.docker` 当前指向 `http://host.docker.internal:8317/v1`；如果你本机想改用别的本地兼容网关端口，直接改 `.env.docker` 或 `backend/.env` 即可。
 
 ## Request-scoped BYOK
 
@@ -220,6 +221,7 @@
 说明：
 
 - `FEATURE_COUNTERFACTUAL_REPLAY` 当前默认开启，其余 Phase 3 功能默认关闭，可通过环境变量逐个启用。
+- 仓库根 `.env.docker` 当前已经把 `FEATURE_CAUSAL_GRAPH / FEATURE_FACTIONS / FEATURE_ARGUMENT_MAP` 打开，Docker 评审栈默认就是图谱开启态。
 - `ARGUMENT_MAP_LLM_ENRICHMENT` 只影响 argument map 的 enrich 路径，不改变 `FEATURE_ARGUMENT_MAP` 的开关语义；只有 argument map 功能启用时它才会生效。
 - `FEATURE_*=false` 时：对应后端 API 返回 404；simulator/debate 中的 hook 不执行；前端通过 `GET /api/capabilities` 检测到 `enabled=false` 后隐藏入口且不发请求。
 - 6 个开关互相独立，可单独开启任意功能。

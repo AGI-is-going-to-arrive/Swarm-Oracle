@@ -14,7 +14,20 @@ import {
   ORACLE_TEXT_LAYOUT_CONTRACTS,
   predictTextOverflow,
 } from '../lib/textLayout/textOverflowPredictor';
+import en from '../i18n/locales/en.json';
+import zh from '../i18n/locales/zh.json';
 import ResultView from './ResultView';
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: {
+      get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+    },
+    text: async () => JSON.stringify(body),
+  } as Response;
+}
 
 const {
   createReplayArtifactMock,
@@ -70,6 +83,12 @@ const {
     }
     if (key === 'result.archive_resonance_aligned') {
       return 'Direction aligned';
+    }
+    if (key === 'sim.replay.import_local') {
+      return 'Import as Local Run';
+    }
+    if (key === 'sim.replay.importing') {
+      return 'Importing...';
     }
     return key;
   };
@@ -136,6 +155,15 @@ vi.mock('../hooks/useCapabilityCheck', () => ({
     };
   },
 }));
+
+describe('ResultView locale contracts', () => {
+  it('keeps replay import labels in both locale resources', () => {
+    expect(en.translation.sim.replay.import_local).toBe('Import as Local Run');
+    expect(en.translation.sim.replay.importing).toBe('Importing...');
+    expect(zh.translation.sim.replay.import_local).toBe('导入为本地运行');
+    expect(zh.translation.sim.replay.importing).toBe('导入中...');
+  });
+});
 
 vi.mock('../components/EndingChatModal', () => ({
   default: ({
@@ -815,6 +843,107 @@ describe('ResultView campaign summary', () => {
     expect(await screen.findByText('sim-import-destination')).toBeInTheDocument();
   });
 
+  it('loads ending-room artifact shares on result routes with scenario ids', async () => {
+    getReplayArtifactMock.mockReset();
+    getReplayArtifactMock.mockResolvedValue({
+      id: 'artifact-room-1',
+      kind: 'ending_room_v1',
+      created_at: '2026-03-30T00:00:00Z',
+      payload: {
+        kind: 'ending_room_v1',
+        scenarioReplay: {
+          scenario: {
+            id: 'scenario-1',
+            question: 'What if the archive had to sync?',
+            status: 'done',
+            created_at: '2026-03-17T00:00:00Z',
+            total_rounds: 5,
+            mode: 'blackboard',
+            visualization_enabled: false,
+            scene_theme: 'law_court',
+            agents: [],
+            branches: [],
+            groups: [],
+            hierarchical: false,
+            director_state: null,
+            gameplay_state: null,
+          },
+          storyData: {
+            scenario_id: 'scenario-1',
+            question: 'What if the archive had to sync?',
+            status: 'done',
+            branches: [{
+              id: 'branch-1',
+              title: 'Archive Branch',
+              probability: 1,
+              status: 'COMPLETED',
+              story: 'A complete branch story.',
+              insight: 'A durable insight.',
+              key_moments: ['Moment 1'],
+              parent_branch_id: null,
+              fork_reason: '',
+            }],
+          },
+          agents: [
+            { id: 'agent-1', name: 'Archivist', role: 'Recorder', tier: 'CORE', emotion: 'calm' },
+          ],
+          predictions: [],
+          scenarioMeta: {
+            director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+            cooldowns: {},
+            cards: { usageLog: [] },
+            betting: { bets: [] },
+            commitment: { active: false, branchId: null, branchTitle: null, committedAtRound: null, committedAt: null, outcome: null },
+            objectives: { generatedForQuestion: null, generatedForProfile: null, goals: [] },
+            archive: { keyMoments: ['Moment 1'], branchSnapshots: [] },
+          },
+          campaignScenarioSummary: null,
+          campaignSummary: null,
+          isDailyChallenge: false,
+        },
+        roomSnapshot: {
+          id: 'room-artifact',
+          scenario_id: 'scenario-1',
+          anchor_branch_id: 'branch-1',
+          room_type: 'ending_chamber',
+          title: 'Ending Chamber',
+          language: 'en',
+          status: 'done',
+          current_phase: 'verdict',
+          created_at: '2026-03-29T00:00:00Z',
+          updated_at: '2026-03-29T00:00:01Z',
+          memory_partition_id: 'room-partition',
+          result_ready: true,
+          participants: [],
+          threads: [],
+          turns: [],
+        },
+        roomResult: {
+          summary: 'The chamber wrapped.',
+          archivist_note: 'Keep the scope narrow.',
+          supporting_turns: [],
+          next_move: null,
+          by_phase: [],
+          quotes: [],
+        },
+        branchId: 'branch-1',
+        selectedAgentIds: ['agent-1'],
+        activeThreadId: 'thread-room',
+      },
+    } as never);
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1?roomShare=artifact-room-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('ending-chat-readonly')).toHaveTextContent('readonly');
+    expect(screen.getByRole('button', { name: 'Import as Local Run' })).toBeInTheDocument();
+  });
+
   it('finalizes campaign progress and renders the summary block', async () => {
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
     vi.mocked(apiClient.getCampaignScenarioSummary).mockImplementation(async () => null as never);
@@ -1337,7 +1466,7 @@ describe('ResultView campaign summary', () => {
     expect(await screen.findByText('sim-import-destination')).toBeInTheDocument();
   });
 
-  it('keeps Phase 3 panels hidden in replay mode even when capabilities are enabled', async () => {
+  it('keeps live-only Phase 3 panels hidden in replay mode while exposing replay-safe graph analysis', async () => {
     setMockCapabilities({
       agent_identity: { enabled: true },
       causal_graph: { enabled: true },
@@ -1443,10 +1572,88 @@ describe('ResultView campaign summary', () => {
     );
 
     expect(await screen.findByText('result.title')).toBeInTheDocument();
-    expect(screen.queryByText('result.causal_graph_link')).not.toBeInTheDocument();
+    expect(screen.getAllByText('result.causal_graph_link').length).toBeGreaterThan(0);
     expect(screen.queryByText('counterfactual.title')).not.toBeInTheDocument();
     expect(screen.queryByText('resume.title')).not.toBeInTheDocument();
-    expect(screen.queryByText('factions.title')).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Faction timeline analysis' })).toBeInTheDocument();
+  });
+
+  it('frames faction timeline as branch-scoped analysis and follows the expanded ending branch', async () => {
+    const user = userEvent.setup();
+    setMockCapabilities({
+      agent_identity: { enabled: false },
+      causal_graph: { enabled: false },
+      counterfactual_replay: { enabled: false },
+      factions: { enabled: true },
+    });
+    findChallengeProgressByScenarioIdMock.mockReturnValue(null);
+    finalizeCampaignMock.mockReset();
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 0.82,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'branch-2',
+          title: 'Counter Branch',
+          probability: 0.18,
+          status: 'COMPLETED',
+          story: 'A divergent branch story.',
+          insight: 'A sharper counterpoint.',
+          key_moments: ['Moment 2'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([]));
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Faction timeline analysis' })).toBeInTheDocument();
+    expect(
+      screen.getByText('Currently showing the highest-probability branch "Archive Branch", not every ending.'),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/scenario/scenario-1/faction-timeline?branch_id=branch-1',
+        expect.objectContaining({
+          headers: expect.any(Headers),
+        }),
+      );
+    });
+
+    await user.click(screen.getAllByRole('button', { name: 'result.read_full' })[1]);
+
+    expect(
+      await screen.findByText('Currently following the expanded ending branch "Counter Branch".'),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenNthCalledWith(
+        2,
+        '/api/scenario/scenario-1/faction-timeline?branch_id=branch-2',
+        expect.objectContaining({
+          headers: expect.any(Headers),
+        }),
+      );
+    });
   });
 
   it('shows the resume panel on normal result pages when counterfactual replay is enabled', async () => {

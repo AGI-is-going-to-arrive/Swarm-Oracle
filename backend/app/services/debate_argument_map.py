@@ -151,6 +151,28 @@ def _load_payload(payload_json: str | None) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _load_latest_snapshot(session: Session, debate_id: str) -> GraphSnapshot | None:
+    if session.connection().dialect.name == "sqlite":
+        row = session.connection().exec_driver_sql(
+            """
+            SELECT id
+            FROM graph_snapshot
+            WHERE owner_type = ? AND owner_id = ? AND graph_kind = ?
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT 1
+            """,
+            ("debate", debate_id, "argument_map"),
+        ).fetchone()
+        return session.get(GraphSnapshot, row[0]) if row is not None else None
+
+    stmt = select(GraphSnapshot).where(
+        GraphSnapshot.owner_type == "debate",
+        GraphSnapshot.owner_id == debate_id,
+        GraphSnapshot.graph_kind == "argument_map",
+    ).order_by(GraphSnapshot.created_at.desc(), GraphSnapshot.id.desc())
+    return session.exec(stmt).first()
+
+
 def _build_turn_metadata(
     session: Session,
     turn_ids: set[str],
@@ -171,6 +193,10 @@ def _build_turn_metadata(
             "sentence_positions": sentence_positions,
         }
     return metadata
+
+
+def _is_judge_side(side: str | None) -> bool:
+    return (side or "").strip().lower() == "judge"
 
 
 def _unit_rebuild_sort_key(
@@ -265,6 +291,8 @@ def _rebuild_snapshot_edges_sync(
     for unit, node in unit_rows:
         payload = _load_payload(node.payload_json)
         speaker_side = str(payload.get("side") or "")
+        if _is_judge_side(speaker_side):
+            continue
 
         if unit.turn_id != current_turn_id:
             current_turn_id = unit.turn_id
@@ -463,7 +491,7 @@ def _dedupe_argument_map_snapshots(session: Session) -> None:
                 SELECT id
                 FROM graph_snapshot
                 WHERE owner_type = ? AND owner_id = ? AND graph_kind = ?
-                ORDER BY created_at DESC, id DESC
+                ORDER BY created_at DESC, rowid DESC
                 """,
                 (owner_type, owner_id, graph_kind),
             ).fetchall()
@@ -471,16 +499,40 @@ def _dedupe_argument_map_snapshots(session: Session) -> None:
         if len(snapshot_ids) < 2:
             continue
 
-        canonical_id, duplicate_ids = snapshot_ids[0], snapshot_ids[1:]
+        duplicate_ids = snapshot_ids[1:]
+        duplicate_node_ids = session.exec(
+            select(GraphNode.id).where(GraphNode.snapshot_id.in_(duplicate_ids))
+        ).all()
+
+        if duplicate_node_ids:
+            duplicate_units = session.exec(
+                select(DebateArgumentUnit).where(DebateArgumentUnit.node_id.in_(duplicate_node_ids))
+            ).all()
+            for unit in duplicate_units:
+                session.delete(unit)
+
+            duplicate_edges = session.exec(
+                select(GraphEdge).where(
+                    (GraphEdge.snapshot_id.in_(duplicate_ids))
+                    | (GraphEdge.source_node_id.in_(duplicate_node_ids))
+                    | (GraphEdge.target_node_id.in_(duplicate_node_ids))
+                )
+            ).all()
+        else:
+            duplicate_edges = session.exec(
+                select(GraphEdge).where(GraphEdge.snapshot_id.in_(duplicate_ids))
+            ).all()
+
+        for edge in duplicate_edges:
+            session.delete(edge)
+
+        duplicate_nodes = session.exec(
+            select(GraphNode).where(GraphNode.snapshot_id.in_(duplicate_ids))
+        ).all()
+        for node in duplicate_nodes:
+            session.delete(node)
+
         for duplicate_id in duplicate_ids:
-            session.connection().exec_driver_sql(
-                "UPDATE graph_node SET snapshot_id = ? WHERE snapshot_id = ?",
-                (canonical_id, duplicate_id),
-            )
-            session.connection().exec_driver_sql(
-                "UPDATE graph_edge SET snapshot_id = ? WHERE snapshot_id = ?",
-                (canonical_id, duplicate_id),
-            )
             session.connection().exec_driver_sql(
                 "DELETE FROM graph_snapshot WHERE id = ?",
                 (duplicate_id,),
@@ -531,12 +583,7 @@ def _get_or_create_snapshot(
     session: Session, debate_id: str,
 ) -> GraphSnapshot:
     """Return existing argument_map snapshot or create a new one."""
-    stmt = select(GraphSnapshot).where(
-        GraphSnapshot.owner_type == "debate",
-        GraphSnapshot.owner_id == debate_id,
-        GraphSnapshot.graph_kind == "argument_map",
-    ).order_by(GraphSnapshot.created_at.desc(), GraphSnapshot.id.desc())
-    snapshot = session.exec(stmt).first()
+    snapshot = _load_latest_snapshot(session, debate_id)
     if snapshot is None:
         try:
             with session.begin_nested():
@@ -548,7 +595,7 @@ def _get_or_create_snapshot(
                 session.add(snapshot)
                 session.flush()  # ensure id is populated
         except IntegrityError:
-            snapshot = session.exec(stmt).first()
+            snapshot = _load_latest_snapshot(session, debate_id)
             if snapshot is None:
                 raise
     return snapshot
@@ -640,22 +687,23 @@ def extract_argument_units(
             turn_nodes.append((node.id, unit_type))
 
         # A7: Same-turn intra-edges (evidence→claim, rebuttal→opponent claim)
-        last_claim_id: str | None = None
-        for nid, utype in turn_nodes:
-            if utype == "claim":
-                last_claim_id = nid
-            elif utype == "evidence" and last_claim_id is not None:
-                session.add(GraphEdge(
-                    snapshot_id=snapshot.id, source_node_id=nid,
-                    target_node_id=last_claim_id, edge_type="supports", weight=0.7,
-                ))
-            elif utype in {"rebuttal", "counter"}:
-                opp_claim = _find_opponent_last_claim(session, snapshot.id, speaker_side)
-                if opp_claim:
+        if not _is_judge_side(speaker_side):
+            last_claim_id: str | None = None
+            for nid, utype in turn_nodes:
+                if utype == "claim":
+                    last_claim_id = nid
+                elif utype == "evidence" and last_claim_id is not None:
                     session.add(GraphEdge(
                         snapshot_id=snapshot.id, source_node_id=nid,
-                        target_node_id=opp_claim, edge_type="rebuts", weight=0.8,
+                        target_node_id=last_claim_id, edge_type="supports", weight=0.7,
                     ))
+                elif utype in {"rebuttal", "counter"}:
+                    opp_claim = _find_opponent_last_claim(session, snapshot.id, speaker_side)
+                    if opp_claim:
+                        session.add(GraphEdge(
+                            snapshot_id=snapshot.id, source_node_id=nid,
+                            target_node_id=opp_claim, edge_type="rebuts", weight=0.8,
+                        ))
 
         session.commit()
 
@@ -895,12 +943,7 @@ def get_argument_map(debate_id: str) -> dict:
     engine = get_engine()
     _ensure_argument_map_snapshot_index(engine)
     with Session(engine) as session:
-        stmt = select(GraphSnapshot).where(
-            GraphSnapshot.owner_type == "debate",
-            GraphSnapshot.owner_id == debate_id,
-            GraphSnapshot.graph_kind == "argument_map",
-        ).order_by(GraphSnapshot.created_at.desc(), GraphSnapshot.id.desc())
-        snapshot = session.exec(stmt).first()
+        snapshot = _load_latest_snapshot(session, debate_id)
         if snapshot is None:
             return empty
 

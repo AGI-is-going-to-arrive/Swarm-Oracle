@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -198,6 +198,10 @@ describe('CompareDigestView', () => {
     expect(screen.getByTestId('compare-pane-a')).toHaveClass('is-active');
     expect(screen.getByTestId('compare-pane-b')).toHaveClass('is-inactive');
     expect(screen.getByTestId('compare-phaser-loader')).toHaveTextContent('a:1');
+    const standbyPane = within(screen.getByTestId('compare-pane-b-standby'));
+    expect(standbyPane.getByText('Standby mirror')).toBeInTheDocument();
+    expect(standbyPane.getByText('Round 1')).toBeInTheDocument();
+    expect(standbyPane.getByText('Divergence: 33%')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'R2' }));
     await waitFor(() => {

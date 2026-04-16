@@ -122,6 +122,16 @@ docker compose up --build -d
 - Frontend: `http://localhost:18928`
 - Backend: `http://localhost:18927`
 - Docker 默认读取仓库根目录 `.env.docker`。
+- `.env.docker` 当前默认开启：
+  - `FEATURE_COUNTERFACTUAL_REPLAY`
+  - `FEATURE_CAUSAL_GRAPH`
+  - `FEATURE_FACTIONS`
+  - `FEATURE_ARGUMENT_MAP`
+- 如果你只是想拉一套全新的评审环境，不复用旧 named volume，直接带 project 名起一套隔离栈：
+
+```bash
+docker compose -p upgrade-test-review up --build -d
+```
 
 ### 本地开发
 

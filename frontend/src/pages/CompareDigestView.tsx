@@ -132,6 +132,12 @@ export function CompareDigestView() {
     () => data?.rounds.find((entry) => entry.round === selectedRound) ?? null,
     [data?.rounds, selectedRound],
   );
+  const selectedRoundLabel = selectedRound != null
+    ? formatRoundLabel(selectedRound, isZh)
+    : (isZh ? '最新回合' : 'Latest round');
+  const activeDivergencePct = activeDiff
+    ? Math.round(activeDiff.divergence_score * 100)
+    : null;
 
   const branchPanels = useMemo(() => ({
     a: {
@@ -356,11 +362,39 @@ export function CompareDigestView() {
         </button>
       </div>
 
+      <section
+        className="compare-digest-view__stage-note"
+        aria-label={isZh ? '对照上下文' : 'Comparison context'}
+      >
+        <div className="compare-digest-view__stage-pills">
+          <span className="compare-digest-view__stage-pill">{selectedRoundLabel}</span>
+          {activeDivergencePct != null && (
+            <span className="compare-digest-view__stage-pill">
+              {t('compare.divergence_label', 'Divergence')}: {activeDivergencePct}%
+            </span>
+          )}
+          <span className="compare-digest-view__stage-pill">
+            {isZh ? '双舞台对照' : 'Dual-stage compare'}
+          </span>
+        </div>
+        <p>
+          {isZh
+            ? '当前舞台继续播放实况，另一侧保留同回合镜像线索，方便横向比对。'
+            : 'The active stage keeps playing live while the other pane holds same-round context for side-by-side reading.'}
+        </p>
+      </section>
+
       <section className="compare-theater">
         {(['a', 'b'] as const).map((pane) => {
           const panel = branchPanels[pane];
           const isActive = activePane === pane;
           const divergencePct = Math.round((activeDiff?.divergence_score ?? 0) * 100);
+          const mirrorStateLabel = snapshots[pane]
+            ? (isZh ? '已捕获镜像' : 'Captured mirror')
+            : (isZh ? '待机镜像' : 'Standby mirror');
+          const probabilityLabel = panel.probability != null
+            ? `${Math.round(panel.probability * 100)}% ${isZh ? '路径权重' : 'path weight'}`
+            : (isZh ? '分支概览' : 'Branch overview');
           return (
             <article
               key={pane}
@@ -369,9 +403,15 @@ export function CompareDigestView() {
             >
               <header className="compare-theater-pane__header">
                 <div>
+                  <div className="compare-theater-pane__eyebrow">
+                    <span className={`compare-theater-pane__status ${isActive ? 'is-live' : 'is-passive'}`}>
+                      {isActive ? (isZh ? '实况舞台' : 'Live stage') : mirrorStateLabel}
+                    </span>
+                    <span>{selectedRoundLabel}</span>
+                  </div>
                   <strong>{panel.title}</strong>
                   {panel.probability != null && (
-                    <span>{Math.round(panel.probability * 100)}%</span>
+                    <span>{probabilityLabel}</span>
                   )}
                 </div>
                 <button
@@ -401,17 +441,56 @@ export function CompareDigestView() {
                   <img
                     className="compare-theater-pane__snapshot"
                     src={snapshots[pane] ?? undefined}
-                    alt={panel.title}
+                    alt={`${panel.title} ${mirrorStateLabel}`}
                   />
                 ) : (
-                  <div className="compare-theater-pane__placeholder">
-                    <strong>{isZh ? '等待快照' : 'Snapshot pending'}</strong>
-                    <span>{isZh ? '切换过去后会记录当前舞台。' : 'Switch here once to capture this pane.'}</span>
+                  <div
+                    className="compare-theater-pane__placeholder"
+                    data-testid={`compare-pane-${pane}-standby`}
+                  >
+                    <div className="compare-theater-pane__placeholder-copy">
+                      <span className="compare-theater-pane__placeholder-kicker">
+                        {mirrorStateLabel}
+                      </span>
+                      <strong>
+                        {isZh
+                          ? '先保留这条分支的上下文，切换后再抓取实况画面。'
+                          : 'Keep this branch readable first, then capture a live frame after activation.'}
+                      </strong>
+                      <span>
+                        {isZh
+                          ? '首屏先展示回合、分歧和分支权重，让双舞台对照保持完整。'
+                          : 'Round, divergence, and branch weight stay visible so the two-stage compare feels complete from the first frame.'}
+                      </span>
+                    </div>
+                    <div className="compare-theater-pane__placeholder-grid" aria-hidden="true">
+                      <div className="compare-theater-pane__placeholder-card is-primary">
+                        <span>{selectedRoundLabel}</span>
+                        <strong>
+                          {activeDiff
+                            ? `${t('compare.divergence_label', 'Divergence')}: ${divergencePct}%`
+                            : mirrorStateLabel}
+                        </strong>
+                      </div>
+                      <div className="compare-theater-pane__placeholder-card">
+                        <span>{panel.title}</span>
+                        <strong>{probabilityLabel}</strong>
+                      </div>
+                      <div className="compare-theater-pane__placeholder-card is-wide">
+                        <span>{isZh ? '切换后可用' : 'Available after activation'}</span>
+                        <strong>
+                          {isZh
+                            ? '激活一次后，这里会保留该分支的舞台镜像。'
+                            : 'After one activation, this pane keeps a mirrored stage snapshot for the branch.'}
+                        </strong>
+                      </div>
+                    </div>
                   </div>
                 )}
                 {!isActive && (
                   <div className="compare-theater-pane__veil">
-                    <span>{isZh ? '静态镜像' : 'Static mirror'}</span>
+                    <span>{mirrorStateLabel}</span>
+                    <strong>{selectedRoundLabel}</strong>
                   </div>
                 )}
               </div>

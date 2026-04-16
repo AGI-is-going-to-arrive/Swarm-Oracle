@@ -204,13 +204,14 @@
   - 同一 agent 同 round 就算消息没有 `id`，event 节点也会继续保留为多条；不会再被后一条静默覆盖
   - 已存在的 event / stance_shift 节点会按 `branch + node_key` 复用；同 round 就算 `msg_id` 重复，event 节点也会按 agent 隔离
   - 同一 `scenario / branch / round` 如果 id-less 消息集合变少，旧的 stale `event` 节点和相关边也会一起清掉，不会把上一版快照残留在当前图里
+  - 重放旧轮次时，会先删掉该轮已过期的 `AgentStateFrame`，并清掉不再成立的 stale `stance_shift` 节点和相关边，再按当前消息重建
   - append 路径当前会按 `scenario_id` 串行化；同一 scenario 并发写入不会再撞出重复 event 节点
   - 同一 fork 如果先走 same-round fallback、后面又带显式 `trigger_node_ids` 重放，旧的 `triggered fork` provenance edge 会先被替换；显式 ids 非法时也会回退 same-round provenance
 - `AgentStateFrame` 当前按 `scenario_id + branch_id + round_number + agent_id` 唯一。
   同一个 `(branch / round / agent)` 组合就算出现在不同 scenario，也不会再互相撞库。
   `020` 迁移当前也兼容“runtime repair 先跑、Alembic 后补”的顺序，不会再因为旧约束名已经不存在而卡住升级；runtime repair 在重建唯一约束前也会先按最新一条脏数据去重，不会因为 legacy 重复行直接炸掉。
 - `GraphSnapshot` 当前按 `owner_type + owner_id + graph_kind` 唯一。
-  同一个 causal graph / argument map 在首次并发创建时，会回退到同一份 snapshot，而不是拆成多份；如果 SQLite legacy duplicate snapshot 还残留，runtime repair 会把重复 snapshot 的 node/edge 合并去重到当前 snapshot，不再把 stale duplicate node/edge 带进当前图。
+  同一个 causal graph / argument map 在首次并发创建时，会回退到同一份 snapshot，而不是拆成多份；读取最新 snapshot 时，SQLite 按 `created_at DESC, rowid DESC`，非 SQLite 按 `created_at DESC, id DESC`。如果 SQLite legacy duplicate snapshot 还残留，runtime repair 会直接以最新 snapshot 为 authority，删除其他重复 snapshot 的 `graph_node / graph_edge` 和相关引用边；不会把旧残留合回当前图。
 - `resolve_identity()` 当前已支持复用外层 SQLModel session，避免 scenario parse 路径在同一事务里二次开 session 时撞到 SQLite `database is locked`。
 - request-scoped BYOK / RPM / TPM 当前不仅作用在主 simulation turns，也会继续透传到 fork detection、narration、memory compression 与 identity compaction。
 - 搜索增强当前走 `web_context.py`：
@@ -226,11 +227,12 @@
   - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类；当前分句覆盖 `. ! ?`、`。！？` 和换行
   - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
   - 第二层失败不会中断 debate 主链，也不会覆盖第一层结果
+  - judge turn 也会分句落 unit，但不会参与普通 `supports / rebuts` 抽取；verdict 语义只走 `link_verdict()` 的 `accepted / unaddressed` 连边
   - SQLite lightweight fallback 当前也会尽力把唯一语义修到 `debate_id + turn_id + semantic_hash`；如果 repair 本身失败，会记 warning，但不会把旧的 best-effort index 补齐链路一起打断
   - `DebateArgumentUnit` 的唯一语义当前是 `debate_id + turn_id + semantic_hash`，不再把跨 turn 的同句子误判成重复；`semantic_hash` 会按归一化后的文本计算，纯 whitespace 变体不会再在同一 turn 里拆成两条
   - `021` 迁移当前会移除 legacy 的 `debate_id + semantic_hash` 约束；升级前若已有同 turn 脏重复行，会先按 `created_at DESC, id DESC` 保留最新一条再升级
   - SQLite lightweight fallback 修重复 `debate_argument_unit` 时，也会同步清掉已经失效的 `graph_node / graph_edge`，避免旧图残留 orphan node/edge 混进当前 argument map
-  - legacy SQLite 上如果已经留下重复 snapshot，runtime repair 会先把重复 snapshot 的 node/edge 合并去重到当前 snapshot，不再随机命中旧图
+  - legacy SQLite 上如果已经留下重复 snapshot，读取最新 snapshot 时，SQLite 按 `created_at DESC, rowid DESC`，非 SQLite 按 `created_at DESC, id DESC`；runtime repair 会直接以最新 snapshot 为 authority，删除其他重复 snapshot 的 `graph_node / graph_edge / debate_argument_unit`，不会再把 stale rebuttal 或其他旧 unit 合回当前 argument map
   - 如果 enrichment 改写了 unit type，会在进程锁下按整个 argument-map snapshot 重建 `supports / rebuts` 边，不再只修当前 turn；`counter` 当前也会继续参与 `rebuts` 边重建，不会掉成孤点
   - 读取结果当前只返回属于当前 snapshot 的 `nodes / edges / units`；旧 snapshot 里残留、但 `node_id` 不在当前图里的 unit 不会再混进来
   - `rebuttal` 的 target 当前统一按“最新的对手 claim”选择：先看更新的 round/turn；同一 turn 里再按句子顺序取最后一条，不再按 hash 字典序猜
@@ -251,6 +253,11 @@
 - 当多个 backend worker 共用同一个 SQLite 文件时：
   - pending/quota 共享计数会生效
   - runtime lock 会跨进程共享
+
+## 当前验证基线
+
+- backend `causal-graph / replay` 定向回归：`296 passed`
+- backend 全量 `pytest`：`2095 passed, 2 skipped`
 
 ## WebSocket 口径
 

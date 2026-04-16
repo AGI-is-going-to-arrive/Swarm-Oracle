@@ -48,6 +48,17 @@ import { FactionTimeline } from '../components/FactionTimeline';
 import { FactionBadge } from '../components/FactionBadge';
 import { MemoryTimeline } from '../components/MemoryTimeline';
 
+function jsonResponse(body: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: {
+      get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+    },
+    text: async () => JSON.stringify(body),
+  } as Response;
+}
+
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('X-4: Phase 3 components with missing/empty data', () => {
@@ -103,10 +114,7 @@ describe('X-4: Phase 3 components with missing/empty data', () => {
   // ── FactionTimeline: simulates result view with old scenario ──
   describe('FactionTimeline (pre-Phase3 scenario)', () => {
     it('shows empty state when API returns empty array', async () => {
-      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
-        ok: true,
-        json: async () => [],
-      } as Response);
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([]));
 
       render(
         <FactionTimeline scenarioId="old-scenario" branchId="b1" visible={true} />,
@@ -118,10 +126,7 @@ describe('X-4: Phase 3 components with missing/empty data', () => {
     });
 
     it('shows empty state when API returns 501', async () => {
-      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
-        ok: false,
-        status: 501,
-      } as Response);
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ detail: 'Not enabled' }, 501));
 
       render(
         <FactionTimeline scenarioId="old-scenario" branchId="b1" visible={true} />,

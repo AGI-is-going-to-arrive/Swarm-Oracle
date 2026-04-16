@@ -7,26 +7,27 @@
 
 export const NODE_TYPE_COLORS: Record<string, string> = {
   // Causal graph node types
-  event: 'oklch(0.65 0.15 250)',       // blue
-  intervention: 'oklch(0.7 0.16 55)',  // orange
-  stance_shift: 'oklch(0.55 0.18 310)', // purple
-  fork: 'oklch(0.6 0.2 25)',           // red
-  round: 'oklch(0.72 0.17 155)',       // green
-  verdict: 'oklch(0.82 0.15 90)',      // yellow
+  event: 'oklch(0.65 0.15 250)',        // blue
+  intervention: 'oklch(0.73 0.16 55)',  // amber
+  stance_shift: 'oklch(0.58 0.18 300)', // violet
+  fork: 'oklch(0.62 0.2 25)',           // rose red
+  round: 'oklch(0.74 0.17 155)',        // green
+  verdict: 'oklch(0.84 0.14 92)',       // yellow
   // Argument map unit types
-  claim: 'oklch(0.65 0.15 250)',       // blue (same as event)
-  evidence: 'oklch(0.72 0.17 155)',    // green (same as round)
-  rebuttal: 'oklch(0.6 0.2 25)',       // red (same as fork)
-  counter: 'oklch(0.7 0.16 55)',       // orange (same as intervention)
+  claim: 'oklch(0.67 0.15 250)',        // blue
+  evidence: 'oklch(0.74 0.17 160)',     // green
+  rebuttal: 'oklch(0.72 0.16 55)',      // amber
+  counter: 'oklch(0.61 0.18 18)',       // red
 };
 
 // ── Unit Status Colors (OKLCH) ──────────────────────────────
 
 export const STATUS_COLORS: Record<string, string> = {
-  standing: 'oklch(0.72 0.17 155)',    // green
-  rebutted: 'oklch(0.6 0.2 25)',       // red
-  unaddressed: 'oklch(0.6 0.02 250)', // muted gray
-  accepted: 'oklch(0.65 0.15 250)',    // blue
+  standing: 'oklch(0.58 0.06 255)',     // slate blue
+  rebutted: 'oklch(0.63 0.16 345)',     // magenta rose
+  unaddressed: 'oklch(0.78 0.12 92)',   // warm amber
+  accepted: 'oklch(0.63 0.12 190)',     // teal
+  rejected: 'oklch(0.57 0.16 28)',      // crimson
 };
 
 // ── Edge Styles ─────────────────────────────────────────────
@@ -99,20 +100,39 @@ export const NODE_TYPE_COLORS_HEX: Record<string, string> = {
   verdict: '#f1c40f',
   claim: '#4a90d9',
   evidence: '#2ecc71',
-  rebuttal: '#e74c3c',
-  counter: '#e67e22',
+  rebuttal: '#e6a21f',
+  counter: '#c6514a',
 };
 
 export const STATUS_COLORS_HEX: Record<string, string> = {
-  standing: '#2ecc71',
-  rebutted: '#e74c3c',
-  unaddressed: '#888',
-  accepted: '#4a90d9',
-  rejected: '#e74c3c',
+  standing: '#62748b',
+  rebutted: '#c85d84',
+  unaddressed: '#d6ad3d',
+  accepted: '#1f9d88',
+  rejected: '#b54a45',
 };
 
-const BRIGHT_GRAPH_BACKGROUNDS = new Set(['#f1c40f', '#2ecc71']);
-
 export function isBrightGraphBackground(color: string | undefined): boolean {
-  return typeof color === 'string' && BRIGHT_GRAPH_BACKGROUNDS.has(color);
+  if (typeof color !== 'string') return false;
+  const normalized = color.trim();
+  if (!/^#([\da-f]{6}|[\da-f]{3})$/i.test(normalized)) return false;
+
+  const hex = normalized.length === 4
+    ? normalized
+      .slice(1)
+      .split('')
+      .map((channel) => `${channel}${channel}`)
+      .join('')
+    : normalized.slice(1);
+
+  const channels = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
+  const luminanceChannels = channels.map((channel) => (
+    channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  ));
+  const luminance =
+    0.2126 * luminanceChannels[0] +
+    0.7152 * luminanceChannels[1] +
+    0.0722 * luminanceChannels[2];
+
+  return luminance > 0.56;
 }

@@ -61,6 +61,7 @@ describe('PredictionModal automation callback', () => {
     const latestState = onAutomationStateChange.mock.calls.at(-1)?.[0];
     expect(latestState.bet_kind).toBe('ending_tone');
     expect(latestState.can_submit).toBe(true);
+    expect(screen.getByLabelText('prediction.bet_kind_label')).toHaveValue('ending_tone');
   });
 
   it('supports theme resonance bets as a new lightweight gameplay option', async () => {

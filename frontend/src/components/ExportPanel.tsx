@@ -139,7 +139,9 @@ function serializeGraphNodes(container: Element): string {
       if (cardRect.width <= 0 || cardRect.height <= 0) return '';
 
       const computed = window.getComputedStyle(card);
-      const labelElement = card.querySelector<HTMLElement>('span');
+      const labelElement = card.querySelector<HTMLElement>('[data-graph-node-label="true"]')
+        ?? card.querySelectorAll<HTMLElement>('span')[1]
+        ?? card.querySelector<HTMLElement>('span');
       const labelComputed = labelElement ? window.getComputedStyle(labelElement) : computed;
       const labelRect = labelElement?.getBoundingClientRect();
       const label =
@@ -311,12 +313,13 @@ export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: Exp
           disabled={disabled}
           title={t('export.png', 'Export PNG')}
           style={{
-            padding: '4px 10px',
-            fontSize: '0.8rem',
+            minHeight: 40,
+            padding: '6px 12px',
+            fontSize: '0.85rem',
             background: '#2a2a3e',
             color: '#ccc',
             border: '1px solid #444',
-            borderRadius: 4,
+            borderRadius: 10,
             cursor: disabled ? 'wait' : 'pointer',
             opacity: disabled ? 0.6 : 1,
           }}
@@ -328,12 +331,13 @@ export function ExportPanel({ containerSelector, filenamePrefix = 'graph' }: Exp
           disabled={disabled}
           title={t('export.svg', 'Export SVG')}
           style={{
-            padding: '4px 10px',
-            fontSize: '0.8rem',
+            minHeight: 40,
+            padding: '6px 12px',
+            fontSize: '0.85rem',
             background: '#2a2a3e',
             color: '#ccc',
             border: '1px solid #444',
-            borderRadius: 4,
+            borderRadius: 10,
             cursor: disabled ? 'wait' : 'pointer',
             opacity: disabled ? 0.6 : 1,
           }}

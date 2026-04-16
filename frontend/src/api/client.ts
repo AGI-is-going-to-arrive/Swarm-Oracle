@@ -1019,7 +1019,21 @@ export async function getIdentityGrowthEvents(
 export async function getFactionTimeline(
   scenarioId: string,
   branchId: string,
-): Promise<Array<{ round: number; factions: Array<{ key: string; label: string | null; members: string[] }>; events: unknown[] }>> {
+): Promise<Array<{
+  round: number;
+  factions: Array<{
+    key: string;
+    label: string | null;
+    members: string[];
+    stance_center?: number;
+    confidence?: number;
+  }>;
+  events: Array<{
+    type: string;
+    actor_agent_id: string;
+    faction_key: string;
+  }>;
+}>> {
   return safeGet(
     `/scenario/${encodeURIComponent(scenarioId)}/faction-timeline?branch_id=${encodeURIComponent(branchId)}`,
   );

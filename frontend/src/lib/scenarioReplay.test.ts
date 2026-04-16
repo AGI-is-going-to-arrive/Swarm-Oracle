@@ -292,4 +292,17 @@ describe('scenarioReplay helpers', () => {
       key_moments: ['Moment 1'],
     });
   });
+
+  it('accepts replay payloads whose embedded scenarios store total_rounds as null', () => {
+    const normalized = normalizeScenarioResultReplayPayload({
+      ...replayPayload,
+      scenario: {
+        ...replayPayload.scenario,
+        total_rounds: null,
+      },
+    });
+
+    expect(normalized?.scenario.total_rounds).toBeNull();
+    expect(normalized?.storyData.branches).toHaveLength(1);
+  });
 });

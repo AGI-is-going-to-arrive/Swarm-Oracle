@@ -32,6 +32,7 @@ import {
   NODE_ICONS,
   TYPE_LABEL_I18N as GRAPH_TYPE_LABEL_I18N,
   STATUS_LABEL_I18N as GRAPH_STATUS_LABEL_I18N,
+  isBrightGraphBackground,
 } from '../lib/graphTokens';
 
 // ── Custom node type (stable reference) ────────────────────
@@ -234,13 +235,14 @@ function GraphViewportResetButton({ onReset }: { onReset: () => void }) {
       type="button"
       onClick={onReset}
       style={{
-        padding: '2px 8px',
+        minHeight: 40,
+        padding: '6px 12px',
         borderRadius: 12,
         border: '1px solid #555',
         background: 'transparent',
         color: '#8ab4f8',
         cursor: 'pointer',
-        fontSize: '0.65rem',
+        fontSize: '0.8rem',
         lineHeight: 1.4,
       }}
     >
@@ -266,8 +268,8 @@ export function ArgumentStrengthMeter({ units, compact }: StrengthMeterProps) {
       aria-label={t('argument.strength_label', 'Argument strength distribution')}
       style={{
         display: 'flex',
-        height: compact ? 4 : 8,
-        borderRadius: compact ? 2 : 4,
+        height: compact ? 6 : 10,
+        borderRadius: compact ? 3 : 5,
         overflow: 'hidden',
         background: '#222',
         width: '100%',
@@ -335,6 +337,7 @@ function layoutArgumentDag(
       const label = fullLabel.length > 60 ? fullLabel.slice(0, 60) + '\u2026' : fullLabel;
       const typeLabel = getArgumentTypeLabel(u.type, t);
       const ariaLabel = getArgumentNodeActionLabel(typeLabel, fullLabel, t);
+      const statusLabel = getArgumentStatusLabel(u.status, t);
       flowNodes.push({
         id: u.id,
         type: 'graphCard',
@@ -344,11 +347,15 @@ function layoutArgumentDag(
         data: {
           label,
           fullLabel,
+          meta: `${typeLabel} · ${statusLabel}`,
           ariaLabel,
           iconName: NODE_ICONS[u.type] ?? '',
           bgColor: NODE_TYPE_COLORS_HEX[u.type] ?? '#555',
           borderColor: STATUS_COLORS_HEX[u.status] ?? '',
           dimmed: false,
+          selected: false,
+          connected: false,
+          expanded: false,
           tooltipDisabled: false,
           reduceMotion,
           sourcePos: 'bottom',
@@ -365,7 +372,8 @@ function layoutArgumentDag(
     const typeKey = unit?.type ?? n.type;
     const statusKey = unit?.status ?? '';
     const typeLabel = getArgumentTypeLabel(typeKey, t);
-    const fullLabel = `[${typeLabel}] ${n.label}`;
+    const statusLabel = statusKey ? getArgumentStatusLabel(statusKey, t) : '';
+    const fullLabel = n.label;
     const displayLabel = fullLabel.length > 60 ? fullLabel.slice(0, 60) + '\u2026' : fullLabel;
     const ariaLabel = getArgumentNodeActionLabel(typeLabel, n.label, t);
 
@@ -378,11 +386,15 @@ function layoutArgumentDag(
       data: {
         label: displayLabel,
         fullLabel,
+        meta: statusLabel ? `${typeLabel} · ${statusLabel}` : typeLabel,
         ariaLabel,
         iconName: NODE_ICONS[typeKey] ?? '',
         bgColor: NODE_TYPE_COLORS_HEX[typeKey] ?? '#555',
         borderColor: statusKey ? (STATUS_COLORS_HEX[statusKey] ?? '') : '',
         dimmed: false,
+        selected: false,
+        connected: false,
+        expanded: false,
         tooltipDisabled: false,
         reduceMotion,
         sourcePos: 'bottom',
@@ -428,7 +440,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   // C5: Status filter
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
   const exportRootId = `argument-map-${useId().replace(/:/g, '-')}`;
-  const reactFlowRef = useRef<{ fitView?: () => void } | null>(null);
+  const reactFlowRef = useRef<{ fitView?: (options?: { padding?: number; duration?: number }) => void } | null>(null);
   const latestRequestIdRef = useRef(0);
   const encodedDebateId = encodeURIComponent(debateId);
 
@@ -540,11 +552,15 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
       ...n,
       data: {
         ...n.data,
+        selected: selectedNode?.id === n.id,
+        connected: Boolean(neighborSet && selectedNode?.id !== n.id && neighborSet.has(n.id)),
+        expanded: selectedNode?.id === n.id,
+        controlsId: 'argument-node-detail-panel',
         dimmed: neighborSet ? !neighborSet.has(n.id) : false,
         tooltipDisabled,
       },
     }));
-  }, [layoutNodes, neighborSet]);
+  }, [layoutNodes, neighborSet, selectedNode?.id]);
 
   const edges = useMemo(() => {
     if (!neighborSet) return layoutEdges;
@@ -552,15 +568,19 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
       ...e,
       style: {
         ...e.style,
-        opacity: (neighborSet.has(e.source) && neighborSet.has(e.target)) ? 1 : 0.1,
+        opacity: (neighborSet.has(e.source) && neighborSet.has(e.target)) ? 1 : 0.24,
       },
     }));
   }, [layoutEdges, neighborSet]);
+  const viewportFitOptions = useMemo(() => ({
+    padding: isCompactViewport ? 0.2 : 0.24,
+    duration: 0,
+  }), [isCompactViewport]);
 
   useEffect(() => {
     if (!reactFlowRef.current || noFilterResults || (layoutNodes.length === 0 && layoutEdges.length === 0)) return;
-    reactFlowRef.current.fitView?.();
-  }, [layoutEdges.length, layoutNodes.length, layoutSignature, noFilterResults]);
+    reactFlowRef.current.fitView?.(viewportFitOptions);
+  }, [layoutEdges.length, layoutNodes.length, layoutSignature, noFilterResults, viewportFitOptions]);
 
   const onNodesChange = useCallback(() => {}, []);
   const onEdgesChange = useCallback(() => {}, []);
@@ -616,8 +636,8 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   // C3: Background click resets highlight + closes detail panel
   const onPaneClick = useCallback(() => setSelectedNode(null), []);
   const resetViewport = useCallback(() => {
-    reactFlowRef.current?.fitView?.();
-  }, []);
+    reactFlowRef.current?.fitView?.(viewportFitOptions);
+  }, [viewportFitOptions]);
 
   // C5: Toggle status filter
   const toggleStatus = useCallback((status: string) => {
@@ -630,12 +650,16 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   }, []);
 
   const graphAriaLabelConfig = useMemo(() => ({
+    'node.a11yDescription.default': t('common.graph_node_a11y', 'Graph node. Press Enter or Space to open details.'),
+    'node.a11yDescription.keyboardDisabled': t('common.graph_node_a11y', 'Graph node. Press Enter or Space to open details.'),
+    'edge.a11yDescription.default': t('common.graph_edge_a11y', 'Graph edge. Relation details are available in the text summary below.'),
     'controls.ariaLabel': t('common.graph_controls', 'Graph controls'),
     'controls.zoomIn.ariaLabel': t('common.graph_zoom_in', 'Zoom in'),
     'controls.zoomOut.ariaLabel': t('common.graph_zoom_out', 'Zoom out'),
     'controls.fitView.ariaLabel': t('common.graph_fit_view', 'Fit view'),
     'controls.interactive.ariaLabel': t('common.graph_toggle_interactivity', 'Toggle interactivity'),
     'minimap.ariaLabel': t('common.graph_minimap', 'Mini map'),
+    'handle.ariaLabel': t('common.graph_handle', 'Graph handle'),
   }), [t]);
 
   useEffect(() => {
@@ -681,27 +705,32 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
         <ArgumentStrengthMeter units={filteredData?.units ?? data.units} />
 
         {/* C5: Status filter chips */}
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div
+          role="group"
+          aria-label={t('argument.filter_status_group', 'Filter argument units by status')}
+          style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}
+        >
           <span style={{ fontSize: '0.7rem', color: '#888', marginRight: 4 }}>
             {t('argument.filter_status', 'Filter:')}
           </span>
           {STATUS_ORDER.map(status => {
             const active = statusFilter.has(status);
             const color = STATUS_COLORS_HEX[status] ?? '#888';
-            const chipBright = color === '#2ecc71' || color === '#f1c40f';
+            const chipBright = isBrightGraphBackground(color);
             return (
               <button
                 key={status}
                 onClick={() => toggleStatus(status)}
                 aria-pressed={active}
                 style={{
-                  padding: '2px 8px',
+                  minHeight: 40,
+                  padding: '6px 12px',
                   borderRadius: 12,
                   border: `1px solid ${color}`,
                   background: active ? color : 'transparent',
                   color: active ? (chipBright ? '#111' : '#fff') : color,
                   cursor: 'pointer',
-                  fontSize: '0.65rem',
+                  fontSize: '0.78rem',
                   lineHeight: 1.4,
                 }}
               >
@@ -712,7 +741,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
           {statusFilter.size > 0 && (
             <button
               onClick={() => setStatusFilter(new Set())}
-              style={{ fontSize: '0.65rem', color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+              style={{ minHeight: 36, fontSize: '0.74rem', color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
             >
               {t('common.clear', 'Clear')}
             </button>
@@ -766,12 +795,26 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
                   onEdgesChange={onEdgesChange}
                   onNodeClick={onNodeClick}
                   onPaneClick={onPaneClick}
-                  onInit={(instance) => {
-                    reactFlowRef.current = instance;
-                  }}
-                  fitView
-                  proOptions={{ hideAttribution: true }}
-                >
+                onInit={(instance) => {
+                  reactFlowRef.current = instance;
+                }}
+                fitView
+                fitViewOptions={viewportFitOptions}
+                deleteKeyCode={null}
+                selectionKeyCode={null}
+                panActivationKeyCode={null}
+                zoomActivationKeyCode={null}
+                panOnDrag={[0, 1]}
+                preventScrolling={false}
+                zoomOnScroll={false}
+                panOnScroll={false}
+                zoomOnDoubleClick={false}
+                nodesDraggable={false}
+                nodesFocusable={false}
+                edgesFocusable={false}
+                elementsSelectable={false}
+                proOptions={{ hideAttribution: true }}
+              >
                   <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
                   <Controls className="graph-export-chrome" />
                   {!isCompactViewport && (
@@ -785,6 +828,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
                 </ReactFlow>
               </div>
               <NodeDetailPanel
+                panelId="argument-node-detail-panel"
                 key={selectedNode?.id ?? 'argument-map-closed'}
                 node={selectedNode}
                 onClose={() => setSelectedNode(null)}

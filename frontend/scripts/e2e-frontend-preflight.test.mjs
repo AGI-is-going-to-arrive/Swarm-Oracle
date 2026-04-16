@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { __test__ as batchATest } from "./e2e-phase3-batch-a.mjs";
 import { __test__ as batchBTest } from "./e2e-phase3-batch-b.mjs";
+import { __test__ as batchCTest } from "./e2e-phase3-batch-c.mjs";
 import { __test__ as releaseSignoffTest } from "./release-signoff.mjs";
 import {
   assertFrontendRoutesReady,
@@ -10,8 +11,26 @@ import {
   buildPhase3BatchBPreflightPaths,
 } from "./lib/frontendPreflight.mjs";
 
-function buildHtml(entryPath) {
-  return `<!doctype html><html><head><script type="module" crossorigin src="${entryPath}"></script></head><body><div id="root"></div></body></html>`;
+function buildHtml(entryPath, {
+  cssPath = "/assets/index-a.css",
+  includeCss = true,
+  includeLegacyNomodule = true,
+  legacyPolyfillPath = "/assets/polyfills-legacy.js",
+  legacyEntryPath = "/assets/index-legacy.js",
+  includeViteLegacyIds = true,
+} = {}) {
+  const cssTag = includeCss
+    ? `<link rel="stylesheet" crossorigin href="${cssPath}">`
+    : "";
+  const legacyNomoduleTag = includeLegacyNomodule
+    ? `<script nomodule>window.__legacy_nomodule_fallback__=true;</script>`
+    : "";
+  const legacyPolyfillId = includeViteLegacyIds ? ' id="vite-legacy-polyfill"' : "";
+  const legacyEntryId = includeViteLegacyIds ? ' id="vite-legacy-entry"' : "";
+  const legacyEntryLookup = includeViteLegacyIds
+    ? "document.getElementById('vite-legacy-entry').getAttribute('data-src')"
+    : "document.currentScript?.getAttribute('data-src')";
+  return `<!doctype html><html><head>${cssTag}<script type="module" crossorigin src="${entryPath}"></script></head><body><div id="root"></div>${legacyNomoduleTag}<script nomodule crossorigin${legacyPolyfillId} src="${legacyPolyfillPath}"></script><script nomodule crossorigin${legacyEntryId} data-src="${legacyEntryPath}">System.import(${legacyEntryLookup})</script></body></html>`;
 }
 
 function createResponse(status, body, contentType = "text/html; charset=utf-8") {
@@ -64,6 +83,9 @@ test("assertFrontendRoutesReady accepts consistent HTML routes that share the sa
     ["http://127.0.0.1:18928/", createResponse(200, buildHtml("/assets/index-a.js"))],
     ["http://127.0.0.1:18928/agents/new", createResponse(200, buildHtml("/assets/index-a.js"))],
     ["http://127.0.0.1:18928/assets/index-a.js", createResponse(200, "console.log('ok');", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/index-a.css", createResponse(200, "body{}", "text/css; charset=utf-8")],
+    ["http://127.0.0.1:18928/assets/polyfills-legacy.js", createResponse(200, "System;", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/index-legacy.js", createResponse(200, "System.register([]);", "application/javascript")],
   ]);
 
   const result = await assertFrontendRoutesReady({
@@ -73,10 +95,33 @@ test("assertFrontendRoutesReady accepts consistent HTML routes that share the sa
   });
 
   assert.equal(result.entryAssetPath, "/assets/index-a.js");
+  assert.deepEqual(result.cssEntryAssetPaths, ["/assets/index-a.css"]);
+  assert.equal(result.legacyPolyfillAssetPath, "/assets/polyfills-legacy.js");
+  assert.equal(result.legacyEntryAssetPath, "/assets/index-legacy.js");
   assert.deepEqual(
     result.checkedRoutes.map((route) => route.path),
     ["/", "/agents/new"],
   );
+});
+
+test("assertFrontendRoutesReady accepts generic nomodule legacy scripts without Vite-specific ids", async () => {
+  const responses = new Map([
+    ["http://127.0.0.1:18928/", createResponse(200, buildHtml("/assets/index-a.js", { includeViteLegacyIds: false }))],
+    ["http://127.0.0.1:18928/result/scenario-42", createResponse(200, buildHtml("/assets/index-a.js", { includeViteLegacyIds: false }))],
+    ["http://127.0.0.1:18928/assets/index-a.js", createResponse(200, "console.log('ok');", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/index-a.css", createResponse(200, "body{}", "text/css; charset=utf-8")],
+    ["http://127.0.0.1:18928/assets/polyfills-legacy.js", createResponse(200, "System;", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/index-legacy.js", createResponse(200, "System.register([]);", "application/javascript")],
+  ]);
+
+  const result = await assertFrontendRoutesReady({
+    baseUrl: "http://127.0.0.1:18928",
+    routePaths: ["/", "/result/scenario-42"],
+    fetchImpl: async (url) => responses.get(url) ?? createResponse(404, "missing", "text/plain"),
+  });
+
+  assert.equal(result.legacyPolyfillAssetPath, "/assets/polyfills-legacy.js");
+  assert.equal(result.legacyEntryAssetPath, "/assets/index-legacy.js");
 });
 
 test("assertFrontendRoutesReady fails fast when a deep-link route returns 404", async () => {
@@ -101,6 +146,9 @@ test("assertFrontendRoutesReady rejects mixed entry fingerprints across deep-lin
     ["http://127.0.0.1:18928/agents", createResponse(200, buildHtml("/assets/index-b.js"))],
     ["http://127.0.0.1:18928/assets/index-a.js", createResponse(200, "console.log('a');", "application/javascript")],
     ["http://127.0.0.1:18928/assets/index-b.js", createResponse(200, "console.log('b');", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/index-a.css", createResponse(200, "body{}", "text/css")],
+    ["http://127.0.0.1:18928/assets/polyfills-legacy.js", createResponse(200, "System;", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/index-legacy.js", createResponse(200, "System.register([]);", "application/javascript")],
   ]);
 
   await assert.rejects(
@@ -118,6 +166,9 @@ test("assertFrontendRoutesReady rejects a missing entry asset even when the HTML
     ["http://127.0.0.1:18928/", createResponse(200, buildHtml("/assets/index-a.js"))],
     ["http://127.0.0.1:18928/agents", createResponse(200, buildHtml("/assets/index-a.js"))],
     ["http://127.0.0.1:18928/assets/index-a.js", createResponse(404, "missing", "text/plain")],
+    ["http://127.0.0.1:18928/assets/index-a.css", createResponse(200, "body{}", "text/css")],
+    ["http://127.0.0.1:18928/assets/polyfills-legacy.js", createResponse(200, "System;", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/index-legacy.js", createResponse(200, "System.register([]);", "application/javascript")],
   ]);
 
   await assert.rejects(
@@ -130,11 +181,71 @@ test("assertFrontendRoutesReady rejects a missing entry asset even when the HTML
   );
 });
 
+test("assertFrontendRoutesReady rejects HTML that omits the local CSS entry asset", async () => {
+  const responses = new Map([
+    ["http://127.0.0.1:18928/", createResponse(200, buildHtml("/assets/index-a.js", { includeCss: false }))],
+    ["http://127.0.0.1:18928/assets/index-a.js", createResponse(200, "console.log('ok');", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/polyfills-legacy.js", createResponse(200, "System;", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/index-legacy.js", createResponse(200, "System.register([]);", "application/javascript")],
+  ]);
+
+  await assert.rejects(
+    () => assertFrontendRoutesReady({
+      baseUrl: "http://127.0.0.1:18928",
+      routePaths: ["/"],
+      fetchImpl: async (url) => responses.get(url) ?? createResponse(404, "missing", "text/plain"),
+    }),
+    /local CSS entry stylesheet/i,
+  );
+});
+
+test("assertFrontendRoutesReady rejects HTML that omits the legacy nomodule fallback script", async () => {
+  const responses = new Map([
+    ["http://127.0.0.1:18928/", createResponse(200, buildHtml("/assets/index-a.js", { includeLegacyNomodule: false }))],
+    ["http://127.0.0.1:18928/assets/index-a.js", createResponse(200, "console.log('ok');", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/index-a.css", createResponse(200, "body{}", "text/css")],
+    ["http://127.0.0.1:18928/assets/polyfills-legacy.js", createResponse(200, "System;", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/index-legacy.js", createResponse(200, "System.register([]);", "application/javascript")],
+  ]);
+
+  await assert.rejects(
+    () => assertFrontendRoutesReady({
+      baseUrl: "http://127.0.0.1:18928",
+      routePaths: ["/"],
+      fetchImpl: async (url) => responses.get(url) ?? createResponse(404, "missing", "text/plain"),
+    }),
+    /legacy nomodule fallback script/i,
+  );
+});
+
+test("assertFrontendRoutesReady rejects a missing legacy entry asset", async () => {
+  const responses = new Map([
+    ["http://127.0.0.1:18928/", createResponse(200, buildHtml("/assets/index-a.js"))],
+    ["http://127.0.0.1:18928/assets/index-a.js", createResponse(200, "console.log('ok');", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/index-a.css", createResponse(200, "body{}", "text/css")],
+    ["http://127.0.0.1:18928/assets/polyfills-legacy.js", createResponse(200, "System;", "application/javascript")],
+    ["http://127.0.0.1:18928/assets/index-legacy.js", createResponse(404, "missing", "text/plain")],
+  ]);
+
+  await assert.rejects(
+    () => assertFrontendRoutesReady({
+      baseUrl: "http://127.0.0.1:18928",
+      routePaths: ["/"],
+      fetchImpl: async (url) => responses.get(url) ?? createResponse(404, "missing", "text/plain"),
+    }),
+    /legacy entry asset.*404/i,
+  );
+});
+
 test("batch-a reuses the shared preflight route builder", () => {
   assert.deepEqual(
     batchATest.preflightRoutePaths,
     buildPhase3BatchAPreflightPaths("sc-e2e-causal-001"),
   );
+});
+
+test("batch-a targets the causal graph screen-reader fallback list via stable test id", () => {
+  assert.equal(batchATest.srFallbackListTestId, "causal-events-list");
 });
 
 test("batch-b reuses the shared preflight route builder", () => {
@@ -149,6 +260,98 @@ test("batch-b reuses the shared preflight route builder", () => {
   );
 });
 
+test("batch-a mobile defaults use an explicit touch/mobile context", () => {
+  assert.equal(batchATest.mobileContextDefaults.isMobile, true);
+  assert.equal(batchATest.mobileContextDefaults.hasTouch, true);
+  assert.ok(batchATest.mobileContextDefaults.userAgent);
+  assert.ok(batchATest.mobileContextDefaults.deviceScaleFactor > 1);
+});
+
+test("batch-b mobile defaults use an explicit touch/mobile context", () => {
+  assert.equal(batchBTest.mobileContextDefaults.isMobile, true);
+  assert.equal(batchBTest.mobileContextDefaults.hasTouch, true);
+  assert.ok(batchBTest.mobileContextDefaults.userAgent);
+  assert.ok(batchBTest.mobileContextDefaults.deviceScaleFactor > 1);
+});
+
+test("batch-a full mode expands to a multi-browser surface matrix by default", () => {
+  const runs = batchATest.buildSurfaceRuns({
+    mode: "full",
+    browser: "chromium",
+    browserExplicitlySet: false,
+  });
+  assert.ok(runs.length >= 4);
+  assert.deepEqual(
+    [...new Set(runs.map((run) => run.browser))].sort(),
+    ["chromium", "firefox", "webkit"],
+  );
+  assert.ok(runs.some((run) => run.mode === "mobile" && run.context.isMobile && run.context.hasTouch));
+});
+
+test("batch-b full mode expands to a multi-browser surface matrix by default", () => {
+  const runs = batchBTest.buildSurfaceRuns({
+    mode: "full",
+    browser: "chromium",
+    browserExplicitlySet: false,
+  });
+  assert.ok(runs.length >= 4);
+  assert.deepEqual(
+    [...new Set(runs.map((run) => run.browser))].sort(),
+    ["chromium", "firefox", "webkit"],
+  );
+  assert.ok(runs.some((run) => run.mode === "mobile" && run.context.isMobile && run.context.hasTouch));
+});
+
+test("batch-a graph contract includes pan zoom and fit-view coverage", () => {
+  assert.deepEqual(
+    batchATest.requiredGraphInteractionSteps,
+    [
+      "graph-pan-drag-changes-viewport",
+      "graph-zoom-controls-change-scale",
+      "graph-fit-view-resets-viewport",
+    ],
+  );
+});
+
+test("batch-b graph contract includes pan zoom fit-view and page scroll-through coverage", () => {
+  assert.deepEqual(
+    batchBTest.requiredGraphInteractionSteps,
+    [
+      "argument-map-pan-drag-changes-viewport",
+      "argument-map-zoom-controls-change-scale",
+      "argument-map-fit-view-resets-viewport",
+      "argument-map-page-scroll-through-works",
+    ],
+  );
+});
+
+test("batch-a viewport parser understands translate + scale transforms", () => {
+  assert.deepEqual(
+    batchATest.parseViewportTransform("translate(-164.5px, 72.25px) scale(1.125)"),
+    { scale: 1.125, translateX: -164.5, translateY: 72.25 },
+  );
+});
+
+test("batch-b viewport parser understands translate3d + scale transforms", () => {
+  assert.deepEqual(
+    batchBTest.parseViewportTransform("translate3d(48px, -96px, 0px) scale(0.85)"),
+    { scale: 0.85, translateX: 48, translateY: -96 },
+  );
+});
+
+test("batch-c exports the ResultView graph integration contract", () => {
+  assert.equal(batchCTest.resultGraphRoutePath, "/result/sc-e2e-resume");
+  assert.deepEqual(
+    batchCTest.resultGraphIntegrationSteps,
+    [
+      "result-causal-graph-link-visible",
+      "result-faction-timeline-visible",
+      "result-faction-timeline-default-branch-requested",
+      "result-faction-timeline-branch-switches",
+    ],
+  );
+});
+
 test("release signoff preflights the union of phase3 graph routes before running graph suites", () => {
   assert.deepEqual(
     releaseSignoffTest.buildGraphPreflightPaths(),
@@ -160,6 +363,38 @@ test("release signoff preflights the union of phase3 graph routes before running
         branchA: "branch-a",
         branchB: "branch-b",
       }),
+    ],
+  );
+});
+
+test("release signoff includes batch-c result graph coverage", () => {
+  assert.ok(releaseSignoffTest.graphE2EStepIds.includes("phase3c_result_graphs"));
+});
+
+test("release signoff includes the graph-focused vitest gate", () => {
+  assert.deepEqual(
+    releaseSignoffTest.buildGraphFocusedVitestArgs(),
+    [
+      "test",
+      "--",
+      "--run",
+      ...releaseSignoffTest.graphFocusedVitestTests,
+    ],
+  );
+  assert.deepEqual(
+    releaseSignoffTest.graphFocusedVitestTests,
+    [
+      "src/lib/manualChunks.test.ts",
+      "src/lib/performanceBudgets.test.ts",
+      "src/lib/exportValidation.test.ts",
+      "src/components/ArgumentMap.test.tsx",
+      "src/components/FactionTimeline.test.tsx",
+      "src/components/GraphNodeCard.test.tsx",
+      "src/components/NodeDetailPanel.test.tsx",
+      "src/pages/CausalReviewView.test.tsx",
+      "src/pages/ReplayEmptyState.test.tsx",
+      "src/pages/ResultView.test.tsx",
+      "src/i18n/locales.test.ts",
     ],
   );
 });

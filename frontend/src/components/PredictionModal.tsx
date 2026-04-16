@@ -102,20 +102,32 @@ export default function PredictionModal({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleClose]);
 
+  const hasBranchTargets = branchOptions.length > 0;
+  const effectiveBetKind =
+    !hasBranchTargets && betKind === 'branch_winner'
+      ? 'ending_tone'
+      : betKind;
+
+  useEffect(() => {
+    if (!hasBranchTargets && betKind === 'branch_winner') {
+      setBetKind('ending_tone');
+    }
+  }, [betKind, hasBranchTargets]);
+
   const confidenceLabel =
     confidence <= 0.3
       ? t('prediction.confidence_low')
       : confidence <= 0.7
         ? t('prediction.confidence_mid')
         : t('prediction.confidence_high');
-  const betKindLabel = getStructuredBetKindLabel(betKind, isZh);
+  const betKindLabel = getStructuredBetKindLabel(effectiveBetKind, isZh);
   const betTargetLabel =
-    betKind === 'branch_winner'
+    effectiveBetKind === 'branch_winner'
       ? (
         branchOptions.find((branch) => branch.id === targetBranchId)?.label
         ?? t('prediction.waiting_worldline')
       )
-      : betKind === 'ending_tone'
+      : effectiveBetKind === 'ending_tone'
         ? ENDING_TONE_OPTIONS[endingTone][isZh ? 'zh' : 'en']
         : PROFILE_RESONANCE_OPTIONS[profileResonance][isZh ? 'zh' : 'en'];
   const commitmentLabel =
@@ -123,11 +135,6 @@ export default function PredictionModal({
     ?? t('prediction.commitment_empty');
   const oracleLabel = userName.trim() || t('prediction.name_placeholder');
   const isDisabled = status === 'submitting' || status === 'success';
-  const hasBranchTargets = branchOptions.length > 0;
-  const effectiveBetKind =
-    !hasBranchTargets && betKind === 'branch_winner'
-      ? 'ending_tone'
-      : betKind;
   const effectiveTargetBranchId = (() => {
     if (branchOptions.length === 0) return '';
     if (committedBranchId && branchOptions.some((branch) => branch.id === committedBranchId)) {
@@ -269,7 +276,7 @@ export default function PredictionModal({
                 <strong>{commitmentLabel}</strong>
               </div>
             </div>
-            {betKind === 'branch_winner' && !hasBranchTargets && (
+            {!hasBranchTargets && effectiveBetKind === 'ending_tone' && (
               <p className="prediction-summary__note">
                 {t('prediction.branch_unavailable_note')}
               </p>

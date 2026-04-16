@@ -151,7 +151,7 @@ describe('NodeDetailPanel', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('closes on a global Escape press in modeless mode and restores focus to the trigger', async () => {
+  it('does not hijack Escape when focus has already moved outside the modeless dialog', async () => {
     const user = userEvent.setup();
     const node: NodeDetail = { id: 'n1', label: 'Modeless node', type: 'event' };
 
@@ -182,10 +182,9 @@ describe('NodeDetailPanel', () => {
 
     await user.keyboard('{Escape}');
 
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: 'Modeless node' })).not.toBeInTheDocument();
-      expect(openButton).toHaveFocus();
-    });
+    expect(screen.getByRole('dialog', { name: 'Modeless node' })).toBeInTheDocument();
+    expect(outsideButton).toHaveFocus();
+    expect(openButton).not.toHaveFocus();
   });
 
   it('restores focus to the latest trigger when switching from node A to node B before close', async () => {

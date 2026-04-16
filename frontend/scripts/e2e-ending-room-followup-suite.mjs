@@ -7,6 +7,7 @@ import {
   ENDING_ROOM_COPY_REPLAY_PATTERN,
   ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
   ENDING_ROOM_SAVE_READONLY_COPY_PATTERN,
+  isReplayCoverageUrl,
   isLiveEndingRoomModalState,
   isReadonlyEndingRoomModalState,
   isReadonlyReplayUiReady,
@@ -1151,13 +1152,22 @@ async function waitForReadonlyEndingRoomVisible(page, label, timeout = 40000) {
       if (isReadonlyEndingRoomModalState(modalState)) {
         return current;
       }
+      if (current?.page?.error?.code) {
+        throw new Error(`${label} page error: ${current.page.error.code}`);
+      }
+      const importActionVisible = await locateEndingRoomHeaderAction(
+        page,
+        ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
+      ).isVisible().catch(() => false);
       const uiReady = await page.evaluate(() => {
         const modal = document.querySelector(".ending-chat-modal");
+        const hasComposerSendButton = modal instanceof HTMLElement
+          && modal.querySelector(".ending-chat-send") instanceof HTMLElement;
         if (!(modal instanceof HTMLElement)) {
           return {
             url: window.location.href,
             hasImportAction: false,
-            hasComposerSendButton: false,
+            hasComposerSendButton,
           };
         }
         const text = modal.innerText || "";
@@ -1168,9 +1178,21 @@ async function waitForReadonlyEndingRoomVisible(page, label, timeout = 40000) {
         return {
           url: window.location.href,
           hasImportAction: hasImport,
-          hasComposerSendButton: modal.querySelector(".ending-chat-send") instanceof HTMLElement,
+          hasComposerSendButton,
         };
       });
+      if (isReplayCoverageUrl(uiReady.url) && importActionVisible && uiReady.hasComposerSendButton === false) {
+        return {
+          page: {
+            controls: {
+              modal_state: {
+                read_only: true,
+                can_send: false,
+              },
+            },
+          },
+        };
+      }
       if (!isReadonlyReplayUiReady(uiReady)) return null;
       return {
         page: {

@@ -538,6 +538,13 @@ body.has-argument-map .lang-switch--global {
     transform-origin: bottom right;
   }
 
+  body.has-causal-graph .lang-switch--global,
+  body.has-argument-map .lang-switch--global {
+    top: auto;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    transform-origin: bottom right;
+  }
+
   body.has-worldline-roundtable .lang-switch--global {
     top: calc(8px + env(safe-area-inset-top, 0px));
     bottom: auto;
@@ -775,13 +782,11 @@ body.has-argument-map .lang-switch--global {
 }
 /* React Flow Edges */
 .react-flow__edge-path {
-  stroke: var(--border-default) !important;
-  stroke-width: 1.5 !important;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .react-flow__edge.animated .react-flow__edge-path {
-  stroke: var(--text-secondary) !important;
-  stroke-dasharray: 4 !important;
-  animation: dashdraw 3s linear infinite !important;
+  animation: dashdraw 3s linear infinite;
 }
 @keyframes dashdraw {
   from { stroke-dashoffset: 24; }

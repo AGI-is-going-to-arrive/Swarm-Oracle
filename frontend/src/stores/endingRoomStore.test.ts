@@ -37,6 +37,16 @@ vi.mock('../i18n/config', () => ({
   },
 }));
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function roomThread(id: string, mode: 'room' | 'followup' = 'room'): EndingRoomThreadSnapshot {
   return {
     id,
@@ -133,6 +143,98 @@ describe('endingRoomStore', () => {
     expect(useEndingRoomStore.getState().status).toBe('done');
     expect(useEndingRoomStore.getState().activeThreadId).toBe('thread-room');
     expect(useEndingRoomStore.getState().threadOrder).toEqual(['thread-room']);
+  });
+
+  it('ignores stale openRoom responses after a newer room request wins', async () => {
+    const first = createDeferred<{
+      id: string;
+      scenario_id: string;
+      anchor_branch_id: string;
+      room_type: 'ending_chamber';
+      title: string;
+      language: 'en';
+      status: 'live';
+      current_phase: 'opening';
+      created_at: string;
+      updated_at: string;
+      participants: [];
+      threads: EndingRoomThreadSnapshot[];
+      turns: [];
+      result_ready: false;
+    }>();
+    const second = createDeferred<{
+      id: string;
+      scenario_id: string;
+      anchor_branch_id: string;
+      room_type: 'one_move_only';
+      title: string;
+      language: 'en';
+      status: 'live';
+      current_phase: 'opening';
+      created_at: string;
+      updated_at: string;
+      participants: [];
+      threads: EndingRoomThreadSnapshot[];
+      turns: [];
+      result_ready: false;
+    }>();
+
+    createEndingRoomMock
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+
+    const firstPromise = useEndingRoomStore.getState().openRoom('scenario-1', {
+      roomType: 'ending_chamber',
+      anchorBranchId: 'branch-1',
+      selectedBranchIds: ['branch-1'],
+      language: 'en',
+    });
+    const secondPromise = useEndingRoomStore.getState().openRoom('scenario-1', {
+      roomType: 'one_move_only',
+      anchorBranchId: 'branch-2',
+      selectedBranchIds: ['branch-2'],
+      language: 'en',
+    });
+
+    second.resolve({
+      id: 'room-2',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-2',
+      room_type: 'one_move_only',
+      title: 'One Move',
+      language: 'en',
+      status: 'live',
+      current_phase: 'opening',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      threads: [roomThread('thread-room-2', 'room')],
+      turns: [],
+      result_ready: false,
+    });
+    await secondPromise;
+
+    first.resolve({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'live',
+      current_phase: 'opening',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      threads: [roomThread('thread-room-1', 'room')],
+      turns: [],
+      result_ready: false,
+    });
+    await firstPromise;
+
+    expect(useEndingRoomStore.getState().snapshot?.id).toBe('room-2');
+    expect(useEndingRoomStore.getState().snapshot?.room_type).toBe('one_move_only');
+    expect(useEndingRoomStore.getState().activeThreadId).toBe('thread-room-2');
   });
 
   it('hydrates a follow-up thread and appends follow-up turns into that thread bucket', async () => {

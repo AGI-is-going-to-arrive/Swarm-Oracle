@@ -50,10 +50,7 @@ function buildOracleReplayPath(payload: OracleReplayPayload, queryKey: string, q
   if (payload.kind === 'worldline_roundtable_v1') {
     return `/roundtable/replay?${params.toString()}`;
   }
-  const scenarioId = payload.scenarioId ?? payload.scenarioReplay?.scenario.id ?? payload.roomSnapshot.scenario_id;
-  return scenarioId
-    ? `/result/${scenarioId}?${params.toString()}`
-    : `/result/replay?${params.toString()}`;
+  return `/result/replay?${params.toString()}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

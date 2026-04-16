@@ -372,6 +372,19 @@
   border-bottom: 1px solid rgba(64, 48, 40, 0.08);
 }
 
+.debate-panel__header--wrap {
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.debate-panel__title {
+  margin: 0;
+}
+
+.debate-panel__title--compact {
+  font-size: 1.1rem;
+}
+
 .debate-feed-header-meta {
   display: flex;
   flex-wrap: wrap;
@@ -650,6 +663,10 @@
 .debate-result-stack {
   display: grid;
   gap: 20px;
+}
+
+.debate-panel--argument-map {
+  width: 100%;
 }
 
 .debate-mobile-rail {

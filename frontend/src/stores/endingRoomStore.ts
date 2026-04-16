@@ -122,6 +122,17 @@ const initialState = {
   pendingDrafts: {} as Record<string, EndingRoomDraft>,
 };
 
+let endingRoomRequestEpoch = 0;
+
+function bumpEndingRoomRequestEpoch(): number {
+  endingRoomRequestEpoch += 1;
+  return endingRoomRequestEpoch;
+}
+
+function isCurrentEndingRoomRequest(epoch: number): boolean {
+  return epoch === endingRoomRequestEpoch;
+}
+
 const PHASE_ORDER: EndingRoomPhase[] = [
   'opening',
   'crossfire',
@@ -282,6 +293,7 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
   ...initialState,
 
   openRoom: async (scenarioId, payload) => {
+    const requestEpoch = bumpEndingRoomRequestEpoch();
     set({
       ...initialState,
       status: 'loading',
@@ -289,13 +301,18 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
 
     try {
       const snapshot = await createEndingRoom(scenarioId, payload);
+      if (!isCurrentEndingRoomRequest(requestEpoch)) {
+        return snapshot.id;
+      }
       get().hydrateSnapshot(snapshot);
       if (snapshot.result_ready) {
         await get().loadRoom(snapshot.id);
       }
       return snapshot.id;
     } catch (error) {
-      get().setError(error, translate('ending_room.start_failed'));
+      if (isCurrentEndingRoomRequest(requestEpoch)) {
+        get().setError(error, translate('ending_room.start_failed'));
+      }
       throw error;
     }
   },
@@ -596,5 +613,8 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
     sending: false,
   })),
 
-  reset: () => set(initialState),
+  reset: () => {
+    bumpEndingRoomRequestEpoch();
+    set(initialState);
+  },
 }));

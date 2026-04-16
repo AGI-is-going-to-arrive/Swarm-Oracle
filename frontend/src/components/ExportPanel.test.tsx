@@ -209,7 +209,10 @@ describe('ExportPanel', () => {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <path d="M4 12h16"></path>
           </svg>
-          <span>Node A</span>
+          <span style="display: grid; gap: 2px; min-width: 0; overflow: hidden;">
+            <span data-graph-node-meta="true">event</span>
+            <span data-graph-node-label="true">Node A</span>
+          </span>
         </button>
       </div>
     `;
@@ -218,7 +221,7 @@ describe('ExportPanel', () => {
     const viewport = container.querySelector('.react-flow__viewport');
     const button = container.querySelector('[data-graph-node-card="true"]');
     const icon = button?.querySelector('svg');
-    const label = button?.querySelector('span');
+    const label = button?.querySelector('[data-graph-node-label="true"]');
     expect(viewport).toBeTruthy();
     expect(button).toBeTruthy();
     expect(icon).toBeTruthy();
@@ -273,14 +276,17 @@ describe('ExportPanel', () => {
           data-graph-full-label="This is the complete label"
           style="background: rgb(31, 41, 55); color: rgb(243, 244, 246); border: 1px solid rgb(125, 211, 252); border-radius: 8px; padding: 10px 12px; font-size: 14px; font-weight: 600;"
         >
-          <span>Truncated…</span>
+          <span style="display: grid; gap: 2px; min-width: 0; overflow: hidden;">
+            <span data-graph-node-meta="true">claim</span>
+            <span data-graph-node-label="true">Truncated…</span>
+          </span>
         </div>
       </div>
     `;
     document.body.appendChild(container);
 
     const button = container.querySelector('[data-graph-node-card="true"]');
-    const label = button?.querySelector('span');
+    const label = button?.querySelector('[data-graph-node-label="true"]');
     expect(button).toBeTruthy();
     expect(label).toBeTruthy();
 

@@ -204,6 +204,28 @@ def _get_scenario_lock(scenario_id: str) -> threading.Lock:
         return lock
 
 
+def _load_latest_snapshot(session: Session, scenario_id: str) -> GraphSnapshot | None:
+    if session.connection().dialect.name == "sqlite":
+        row = session.connection().exec_driver_sql(
+            """
+            SELECT id
+            FROM graph_snapshot
+            WHERE owner_type = ? AND owner_id = ? AND graph_kind = ?
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT 1
+            """,
+            ("scenario", scenario_id, "causal_review"),
+        ).fetchone()
+        return session.get(GraphSnapshot, row[0]) if row is not None else None
+
+    stmt = select(GraphSnapshot).where(
+        GraphSnapshot.owner_type == "scenario",
+        GraphSnapshot.owner_id == scenario_id,
+        GraphSnapshot.graph_kind == "causal_review",
+    ).order_by(GraphSnapshot.created_at.desc(), GraphSnapshot.id.desc())
+    return session.exec(stmt).first()
+
+
 def _dedupe_graph_snapshots(session: Session) -> None:
     duplicate_groups = session.connection().exec_driver_sql(
         """
@@ -222,7 +244,7 @@ def _dedupe_graph_snapshots(session: Session) -> None:
                 SELECT id
                 FROM graph_snapshot
                 WHERE owner_type = ? AND owner_id = ? AND graph_kind = ?
-                ORDER BY created_at DESC, id DESC
+                ORDER BY created_at DESC, rowid DESC
                 """,
                 (owner_type, owner_id, graph_kind),
             ).fetchall()
@@ -230,57 +252,30 @@ def _dedupe_graph_snapshots(session: Session) -> None:
         if len(snapshot_ids) < 2:
             continue
 
-        canonical_id, duplicate_ids = snapshot_ids[0], snapshot_ids[1:]
-        nodes = session.exec(
-            select(GraphNode)
-            .where(GraphNode.snapshot_id.in_(snapshot_ids))
-            .order_by(GraphNode.round_number, GraphNode.node_key, GraphNode.id)
+        duplicate_ids = snapshot_ids[1:]
+        duplicate_node_ids = session.exec(
+            select(GraphNode.id).where(GraphNode.snapshot_id.in_(duplicate_ids))
         ).all()
-        nodes_by_snapshot: dict[str, list[GraphNode]] = {}
-        for node in nodes:
-            nodes_by_snapshot.setdefault(node.snapshot_id, []).append(node)
 
-        canonical_node_ids: dict[tuple[str, str], str] = {}
-        rewritten_node_ids: dict[str, str] = {}
-        for snapshot_id in snapshot_ids:
-            for node in nodes_by_snapshot.get(snapshot_id, []):
-                signature = (node.node_key, node.node_type)
-                canonical_node_id = canonical_node_ids.get(signature)
-                if canonical_node_id is None:
-                    canonical_node_ids[signature] = node.id
-                    if snapshot_id != canonical_id:
-                        node.snapshot_id = canonical_id
-                    continue
-                rewritten_node_ids[node.id] = canonical_node_id
-                session.delete(node)
-
-        edges = session.exec(
-            select(GraphEdge)
-            .where(GraphEdge.snapshot_id.in_(snapshot_ids))
-            .order_by(GraphEdge.id)
-        ).all()
-        edges_by_snapshot: dict[str, list[GraphEdge]] = {}
-        for edge in edges:
-            edges_by_snapshot.setdefault(edge.snapshot_id, []).append(edge)
-
-        edge_signatures: set[tuple[str, str, str, str]] = set()
-        for snapshot_id in snapshot_ids:
-            for edge in edges_by_snapshot.get(snapshot_id, []):
-                mapped_source_id = rewritten_node_ids.get(edge.source_node_id, edge.source_node_id)
-                mapped_target_id = rewritten_node_ids.get(edge.target_node_id, edge.target_node_id)
-                signature = _edge_signature(
-                    mapped_source_id,
-                    mapped_target_id,
-                    edge.edge_type,
-                    edge.label,
+        if duplicate_node_ids:
+            duplicate_edges_stmt = select(GraphEdge).where(
+                or_(
+                    GraphEdge.snapshot_id.in_(duplicate_ids),
+                    GraphEdge.source_node_id.in_(duplicate_node_ids),
+                    GraphEdge.target_node_id.in_(duplicate_node_ids),
                 )
-                if signature in edge_signatures:
-                    session.delete(edge)
-                    continue
-                edge_signatures.add(signature)
-                edge.snapshot_id = canonical_id
-                edge.source_node_id = mapped_source_id
-                edge.target_node_id = mapped_target_id
+            )
+        else:
+            duplicate_edges_stmt = select(GraphEdge).where(GraphEdge.snapshot_id.in_(duplicate_ids))
+        duplicate_edges = session.exec(duplicate_edges_stmt).all()
+        for edge in duplicate_edges:
+            session.delete(edge)
+
+        duplicate_nodes = session.exec(
+            select(GraphNode).where(GraphNode.snapshot_id.in_(duplicate_ids))
+        ).all()
+        for node in duplicate_nodes:
+            session.delete(node)
 
         for duplicate_id in duplicate_ids:
             session.connection().exec_driver_sql(
@@ -422,12 +417,7 @@ def _get_or_create_snapshot(
     scenario_id: str,
 ) -> GraphSnapshot:
     """Get or create the causal_review snapshot for a scenario."""
-    stmt = select(GraphSnapshot).where(
-        GraphSnapshot.owner_type == "scenario",
-        GraphSnapshot.owner_id == scenario_id,
-        GraphSnapshot.graph_kind == "causal_review",
-    ).order_by(GraphSnapshot.created_at.desc(), GraphSnapshot.id.desc())
-    snapshot = session.exec(stmt).first()
+    snapshot = _load_latest_snapshot(session, scenario_id)
     if snapshot is None:
         try:
             with session.begin_nested():
@@ -439,7 +429,7 @@ def _get_or_create_snapshot(
                 session.add(snapshot)
                 session.flush()  # ensure id is populated
         except IntegrityError:
-            snapshot = session.exec(stmt).first()
+            snapshot = _load_latest_snapshot(session, scenario_id)
             if snapshot is None:
                 raise
     return snapshot
@@ -552,35 +542,6 @@ def append_round_nodes(
                 round_nodes = [
                     node for node in round_nodes if node.id not in stale_fork_node_ids
                 ]
-            event_nodes_by_key = {
-                (_node_branch_id(node), node.node_key): node
-                for node in round_nodes
-                if node.node_type == "event"
-            }
-            stance_shift_nodes_by_key = {
-                (_node_branch_id(node), node.node_key): node
-                for node in round_nodes
-                if node.node_type == "stance_shift"
-            }
-            fork_nodes_by_key = {
-                node.node_key: node
-                for node in round_nodes
-                if node.node_type == "fork"
-            }
-
-            existing_edges = session.exec(
-                select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id)
-            ).all()
-            existing_edge_signatures = {
-                _edge_signature(
-                    edge.source_node_id,
-                    edge.target_node_id,
-                    edge.edge_type,
-                    edge.label,
-                )
-                for edge in existing_edges
-            }
-
             current_frames_stmt = select(AgentStateFrame).where(
                 AgentStateFrame.scenario_id == scenario_id,
                 AgentStateFrame.branch_id == branch_id,
@@ -589,6 +550,16 @@ def append_round_nodes(
             frames_by_agent = {
                 frame.agent_id: frame
                 for frame in session.exec(current_frames_stmt).all()
+            }
+            event_nodes_by_key = {
+                (_node_branch_id(node), node.node_key): node
+                for node in round_nodes
+                if node.node_type == "event"
+            }
+            fork_nodes_by_key = {
+                node.node_key: node
+                for node in round_nodes
+                if node.node_type == "fork"
             }
 
             message_records: list[dict[str, Any]] = []
@@ -644,6 +615,106 @@ def append_round_nodes(
             latest_record_by_agent: dict[str, dict[str, Any]] = {}
             for record in message_records:
                 latest_record_by_agent[record["agent_id"]] = record
+
+            stale_frame_agent_ids = [
+                agent_id
+                for agent_id in frames_by_agent
+                if agent_id not in latest_record_by_agent
+            ]
+            for agent_id in stale_frame_agent_ids:
+                frame = frames_by_agent.pop(agent_id, None)
+                if frame is not None:
+                    session.delete(frame)
+
+            desired_shift_records: dict[tuple[str, str], dict[str, Any]] = {}
+            prev_frames_by_agent: dict[str, AgentStateFrame] = {}
+            if round_number > 1 and latest_record_by_agent:
+                prev_frames_stmt = select(AgentStateFrame).where(
+                    AgentStateFrame.scenario_id == scenario_id,
+                    AgentStateFrame.branch_id == branch_id,
+                    AgentStateFrame.round_number == round_number - 1,
+                )
+                prev_frames_by_agent = {
+                    frame.agent_id: frame
+                    for frame in session.exec(prev_frames_stmt).all()
+                }
+                for aid, record in latest_record_by_agent.items():
+                    prev_frame = prev_frames_by_agent.get(aid)
+                    if prev_frame is None:
+                        continue
+                    current_stance = record["stance"]
+                    delta = abs(current_stance - prev_frame.stance_score)
+                    if delta < 0.4:
+                        continue
+                    shift_key = f"stance_r{round_number}_{aid}"
+                    desired_shift_records[(branch_id, shift_key)] = {
+                        "record": record,
+                        "label": f"{aid} stance shifted",
+                        "payload_json": json.dumps({
+                            "agent_id": aid,
+                            "branch_id": branch_id,
+                            "prev_score": prev_frame.stance_score,
+                            "new_score": current_stance,
+                            "delta": delta,
+                        }),
+                    }
+
+            stale_shift_nodes = [
+                node
+                for node in round_nodes
+                if (
+                    node.node_type == "stance_shift"
+                    and _node_branch_id(node) == branch_id
+                    and (branch_id, node.node_key) not in desired_shift_records
+                )
+            ]
+            stale_shift_node_ids = {node.id for node in stale_shift_nodes}
+            if stale_shift_node_ids:
+                stale_shift_edges = session.exec(
+                    select(GraphEdge).where(
+                        GraphEdge.snapshot_id == snapshot.id,
+                        or_(
+                            GraphEdge.source_node_id.in_(stale_shift_node_ids),
+                            GraphEdge.target_node_id.in_(stale_shift_node_ids),
+                        ),
+                    )
+                ).all()
+                for edge in stale_shift_edges:
+                    session.delete(edge)
+                for node in stale_shift_nodes:
+                    session.delete(node)
+                round_nodes = [
+                    node for node in round_nodes if node.id not in stale_shift_node_ids
+                ]
+
+            event_nodes_by_key = {
+                (_node_branch_id(node), node.node_key): node
+                for node in round_nodes
+                if node.node_type == "event"
+            }
+            stance_shift_nodes_by_key = {
+                (_node_branch_id(node), node.node_key): node
+                for node in round_nodes
+                if node.node_type == "stance_shift"
+            }
+            fork_nodes_by_key = {
+                node.node_key: node
+                for node in round_nodes
+                if node.node_type == "fork"
+            }
+
+            existing_edges = session.exec(
+                select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id)
+            ).all()
+            existing_edge_signatures = {
+                _edge_signature(
+                    edge.source_node_id,
+                    edge.target_node_id,
+                    edge.edge_type,
+                    edge.label,
+                )
+                for edge in existing_edges
+            }
 
             for agent_id, record in latest_record_by_agent.items():
                 frame = frames_by_agent.get(agent_id)
@@ -731,60 +802,35 @@ def append_round_nodes(
                         weight=0.5,
                     )
 
-            if round_number > 1 and latest_record_by_agent:
-                prev_frames_stmt = select(AgentStateFrame).where(
-                    AgentStateFrame.scenario_id == scenario_id,
-                    AgentStateFrame.branch_id == branch_id,
-                    AgentStateFrame.round_number == round_number - 1,
-                )
-                prev_frames_by_agent = {
-                    frame.agent_id: frame
-                    for frame in session.exec(prev_frames_stmt).all()
-                }
-                for aid, record in latest_record_by_agent.items():
-                    prev_frame = prev_frames_by_agent.get(aid)
-                    if prev_frame is None:
-                        continue
-                    current_stance = record["stance"]
-                    delta = abs(current_stance - prev_frame.stance_score)
-                    if delta < 0.4:
-                        continue
-                    shift_payload_json = json.dumps({
-                        "agent_id": aid,
-                        "branch_id": branch_id,
-                        "prev_score": prev_frame.stance_score,
-                        "new_score": current_stance,
-                        "delta": delta,
-                    })
-                    shift_key = f"stance_r{round_number}_{aid}"
-                    shift_scope = (branch_id, shift_key)
-                    shift_node = stance_shift_nodes_by_key.get(shift_scope)
-                    if shift_node is None:
-                        shift_node = GraphNode(
-                            snapshot_id=snapshot.id,
-                            node_key=shift_key,
-                            node_type="stance_shift",
-                            label=f"{aid} stance shifted",
-                            round_number=round_number,
-                            payload_json=shift_payload_json,
-                        )
-                        session.add(shift_node)
-                        session.flush()
-                        stance_shift_nodes_by_key[shift_scope] = shift_node
-                    else:
-                        shift_node.label = f"{aid} stance shifted"
-                        shift_node.round_number = round_number
-                        shift_node.payload_json = shift_payload_json
-                    _add_edge_if_missing(
-                        session,
-                        existing_edge_signatures,
+            for shift_scope, shift_record in desired_shift_records.items():
+                shift_key = shift_scope[1]
+                shift_node = stance_shift_nodes_by_key.get(shift_scope)
+                if shift_node is None:
+                    shift_node = GraphNode(
                         snapshot_id=snapshot.id,
-                        source_node_id=record["node_id"],
-                        target_node_id=shift_node.id,
-                        edge_type="caused",
-                        weight=0.8,
-                        label="stance shift",
+                        node_key=shift_key,
+                        node_type="stance_shift",
+                        label=shift_record["label"],
+                        round_number=round_number,
+                        payload_json=shift_record["payload_json"],
                     )
+                    session.add(shift_node)
+                    session.flush()
+                    stance_shift_nodes_by_key[shift_scope] = shift_node
+                else:
+                    shift_node.label = shift_record["label"]
+                    shift_node.round_number = round_number
+                    shift_node.payload_json = shift_record["payload_json"]
+                _add_edge_if_missing(
+                    session,
+                    existing_edge_signatures,
+                    snapshot_id=snapshot.id,
+                    source_node_id=shift_record["record"]["node_id"],
+                    target_node_id=shift_node.id,
+                    edge_type="caused",
+                    weight=0.8,
+                    label="stance shift",
+                )
 
             if fork_event is not None:
                 fork_key = f"fork_r{round_number}_{fork_event.get('branch_id', '')}"
@@ -891,12 +937,7 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
     empty = {"id": None, "available_branches": [], "nodes": [], "edges": []}
 
     with Session(get_engine()) as session:
-        stmt = select(GraphSnapshot).where(
-            GraphSnapshot.owner_type == "scenario",
-            GraphSnapshot.owner_id == scenario_id,
-            GraphSnapshot.graph_kind == "causal_review",
-        ).order_by(GraphSnapshot.created_at.desc(), GraphSnapshot.id.desc())
-        snapshot = session.exec(stmt).first()
+        snapshot = _load_latest_snapshot(session, scenario_id)
         if snapshot is None:
             return empty
 

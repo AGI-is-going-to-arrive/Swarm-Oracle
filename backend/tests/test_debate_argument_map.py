@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlmodel import Session, select
+from sqlmodel import Session, create_engine, select
 
 from app.config import settings
 from app.models.checkpoint import DebateArgumentUnit
@@ -150,6 +150,43 @@ def test_extract_empty_content_returns_empty():
         speaker_side="proposition",
     )
     assert ids == []
+
+
+def test_extract_judge_turn_does_not_create_participant_argument_edges():
+    extract_argument_units(
+        debate_id="d-judge-turn",
+        turn_id="t1",
+        content="The proposition will work.",
+        speaker_side="proposition",
+        turn_sequence=1,
+    )
+    extract_argument_units(
+        debate_id="d-judge-turn",
+        turn_id="t2",
+        content="The opposition disagrees.",
+        speaker_side="opposition",
+        turn_sequence=2,
+    )
+    extract_argument_units(
+        debate_id="d-judge-turn",
+        turn_id="t3",
+        content="However the opposition is incomplete because the data is mixed.",
+        speaker_side="judge",
+        turn_sequence=3,
+    )
+
+    result = get_argument_map("d-judge-turn")
+    judge_node_ids = {
+        unit["node_id"]
+        for unit in result["units"]
+        if unit["turn_id"] == "t3" and unit.get("node_id")
+    }
+
+    assert judge_node_ids
+    assert not any(
+        edge["source"] in judge_node_ids and edge["type"] in {"supports", "rebuts"}
+        for edge in result["edges"]
+    )
 
 
 # ── link_verdict ────────────────────────────────────────────
@@ -448,6 +485,155 @@ def test_get_argument_map_reads_nodes_edges_and_units_from_one_snapshot_only():
     assert "Stale claim." not in {unit["text"] for unit in result["units"]}
     assert {unit["node_id"] for unit in result["units"]} <= node_ids
 
+
+def test_get_argument_map_runtime_repair_does_not_revive_stale_rebuttal(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    db_path = tmp_path / "legacy-argument-map-runtime-repair.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE graph_snapshot (
+                id TEXT NOT NULL PRIMARY KEY,
+                owner_type TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                graph_kind TEXT NOT NULL,
+                branch_id TEXT,
+                round_number INTEGER,
+                share_artifact_id TEXT,
+                metadata_json TEXT,
+                created_at DATETIME NOT NULL
+            )
+            """
+        )
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE graph_node (
+                id TEXT NOT NULL PRIMARY KEY,
+                snapshot_id TEXT NOT NULL,
+                node_key TEXT NOT NULL,
+                node_type TEXT NOT NULL,
+                label TEXT NOT NULL,
+                round_number INTEGER,
+                ref_model TEXT,
+                ref_id TEXT,
+                payload_json TEXT
+            )
+            """
+        )
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE graph_edge (
+                id TEXT NOT NULL PRIMARY KEY,
+                snapshot_id TEXT NOT NULL,
+                source_node_id TEXT NOT NULL,
+                target_node_id TEXT NOT NULL,
+                edge_type TEXT NOT NULL,
+                weight FLOAT,
+                label TEXT,
+                payload_json TEXT
+            )
+            """
+        )
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE debate_argument_unit (
+                id TEXT NOT NULL PRIMARY KEY,
+                debate_id TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                unit_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                canonical_text TEXT NOT NULL,
+                semantic_hash TEXT NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+            """
+        )
+
+    monkeypatch.setattr("app.services.debate_argument_map.get_engine", lambda: engine)
+
+    with Session(engine) as session:
+        stale_snapshot = GraphSnapshot(
+            id="zzzz-old-snapshot",
+            owner_type="debate",
+            owner_id="d-runtime-repair-authority",
+            graph_kind="argument_map",
+            created_at=created_at,
+        )
+        current_snapshot = GraphSnapshot(
+            id="aaaa-new-snapshot",
+            owner_type="debate",
+            owner_id="d-runtime-repair-authority",
+            graph_kind="argument_map",
+            created_at=created_at,
+        )
+        session.add(stale_snapshot)
+        session.add(current_snapshot)
+        session.flush()
+
+        current_node = GraphNode(
+            snapshot_id=current_snapshot.id,
+            node_key="current-claim",
+            node_type="claim",
+            label="Current claim",
+            ref_model="debate_turn",
+            ref_id="t-current",
+            payload_json='{"side":"proposition"}',
+        )
+        stale_node = GraphNode(
+            snapshot_id=stale_snapshot.id,
+            node_key="stale-rebuttal",
+            node_type="rebuttal",
+            label="Stale rebuttal",
+            ref_model="debate_turn",
+            ref_id="t-stale",
+            payload_json='{"side":"opposition"}',
+        )
+        session.add(current_node)
+        session.add(stale_node)
+        session.flush()
+
+        session.add(
+            DebateArgumentUnit(
+                debate_id="d-runtime-repair-authority",
+                turn_id="t-current",
+                node_id=current_node.id,
+                unit_type="claim",
+                status="standing",
+                canonical_text="Current claim",
+                semantic_hash="current-claim-hash",
+            )
+        )
+        session.add(
+            DebateArgumentUnit(
+                debate_id="d-runtime-repair-authority",
+                turn_id="t-stale",
+                node_id=stale_node.id,
+                unit_type="rebuttal",
+                status="standing",
+                canonical_text="Stale rebuttal",
+                semantic_hash="stale-rebuttal-hash",
+            )
+        )
+        session.commit()
+
+    result = get_argument_map("d-runtime-repair-authority")
+
+    assert result["snapshot_id"] is not None
+    assert {node["label"] for node in result["nodes"]} == {"Current claim"}
+    assert {unit["text"] for unit in result["units"]} == {"Current claim"}
+    assert len(result["nodes"]) == 1
+    assert len(result["units"]) == 1
+
+    with Session(engine) as session:
+        snapshots = session.exec(
+            select(GraphSnapshot).where(GraphSnapshot.owner_id == "d-runtime-repair-authority")
+        ).all()
+        assert len(snapshots) == 1
 
 @pytest.mark.asyncio
 async def test_enrich_argument_units_for_turn_updates_types_and_payload():
@@ -1262,3 +1448,38 @@ def test_verdict_edges_match_unit_status():
     edge_types = {e["type"] for e in verdict_edges}
     assert "accepted" in edge_types
     assert "unaddressed" in edge_types
+
+
+def test_judge_verdict_turn_does_not_create_standard_supports_or_rebuts_edges():
+    extract_argument_units(
+        debate_id="d-judge-verdict",
+        turn_id="t1",
+        content="Core proposition claim.",
+        speaker_side="proposition",
+        turn_sequence=1,
+    )
+    extract_argument_units(
+        debate_id="d-judge-verdict",
+        turn_id="t2",
+        content=(
+            "The verdict is clear. "
+            "Research evidence favors the proposition. "
+            "However the opposition never recovered."
+        ),
+        speaker_side="judge",
+        turn_sequence=2,
+    )
+
+    result = get_argument_map("d-judge-verdict")
+    judge_node_ids = {
+        unit["node_id"]
+        for unit in result["units"]
+        if unit["turn_id"] == "t2"
+    }
+
+    assert len(judge_node_ids) == 3
+    assert not [
+        edge
+        for edge in result["edges"]
+        if edge["type"] in {"supports", "rebuts"} and edge["source"] in judge_node_ids
+    ]

@@ -139,7 +139,7 @@
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
 | `manualChunks.ts` | `frontend/src/lib/manualChunks.ts` | 前端构建分块单一事实源；当前用于约束 React 保持在共享 `vendor`，避免 preview 白屏 |
-| `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、entry module 和 entry asset 一致性 |
+| `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
 | `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
 | `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
@@ -167,8 +167,10 @@
 - `endingRoomStore` 当前把 `snapshot / result / thread hydrate + commitTurn` 作为 authority；`pendingDrafts` 只是流式草稿缓存。recoverable `turn_error` 只清 draft，不会把整个 room 升成 fatal error。
 - `endingRoomStore.loadRoom` 当前在 result 加载失败时不再把整个 room 标记为 error；room 仍可正常使用，result 会在下次 WS 事件或手动刷新时重试。
 - `endingRoomStore` 当前在 `hydrateThread()` 时也会同步更新 `snapshot.threads`；新建 anchored thread 后，Oracle replay 不会再只序列化旧主桌快照。
-- `CompareDigestView` 当前采用“单活跃 live Theater + 非活跃静态镜像”的 compare 方案，不会同时挂两个 live Phaser runtime；左右 pane 共用 round timeline，切 pane 时会先抓当前活跃 pane 的快照。
+- `endingRoomStore.openRoom()` 当前带 request epoch；用户连续切房间时，旧请求晚到不会再把新 room 状态覆盖回去。
+- `CompareDigestView` 当前采用“单活跃 live Theater + 非活跃镜像预览”的 compare 方案，不会同时挂两个 live Phaser runtime；左右 pane 共用 round timeline。未抓到快照时会先显示待机镜像卡片，保留当前 round / divergence / branch weight，不再落回黑底 `Snapshot pending` 占位。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
+- ending-room artifact/local replay 当前统一落到 `/result/replay?...`；不再要求先拼出 `/result/:scenarioId?...` 才能读出来。artifact payload 里的 `scenario.total_rounds=null` 也会被前端 replay 正常接受，不会再把只读页打成空结果。
 - ending-room replay automation helper 当前识别 `roomReplay / roomShare / roomLocal`；roundtable 页面除 `roomShare / roomLocal` 外也兼容 `share / local` 别名。
 - `WorldlineRoundtableView` 的 readonly replay 现在会按 `active_thread_id` 恢复对应 thread 的 `interaction_mode` 与 hotseat target，不再把 hotseat replay 误显示成 `archivist_route`。
 - roundtable 的 anchored thread readonly replay / local restore 当前已补过 Firefox / WebKit scoped regression，口径与 Chromium 对齐。
@@ -241,17 +243,20 @@
 - `ResultView` 当前在 replay 模式下会：
   - 禁用 `Export Markdown`
   - 隐藏 `score_predictions`
-  - 只保留本地导入、只读分享与 permalink 相关动作
+  - 保留本地导入、只读分享与 permalink 相关动作
+  - 保留 replay-safe 的 `causal graph` 入口
+  - 保留按当前展开分支切换的 `FactionTimeline`
+  - 继续隐藏 live-only 的 `CounterfactualPanel / ResumePanel`
 - `ResultView` 的结局详情当前只在展开时挂载：
   - 收起时不会再把完整 story / key moments 留在 DOM 或可访问性树里
   - 展开按钮也不会再保留指向已卸载详情节点的悬空 `aria-controls`
-- `DebateResultView` 当前把 argument map 改成按需加载：
+- `DebateResultView` 当前把 argument map 改成按需加载，并放回主结果壳内对齐：
   - 首屏只显示 `Load map / Hide map` 按钮和提示文案，不会默认把 React Flow 一起挂上来
   - 只有用户真正点开后才渲染 `ArgumentMap`，主要是为了减少结果页首屏额外开销
 - `DebateResultView` 当前的 replay 分享有两条只读路径：
   - URL 足够短时走内联 `?replay=`
   - URL 过长时，把 payload 落到本地存储后改走 `?local=`
-  - replay 结果页会同时识别这两条只读路径；只有 `?local=` 的分享按钮文案会明确显示 `Save local read-only copy`，普通 `?replay=` 仍保留通用 permalink 文案；导入入口继续保留 `Import as Local Run`
+  - replay 结果页会同时识别这两条只读路径；只有 `?local=` 的分享按钮文案会明确显示 `Save local read-only copy`，普通 `?replay=` 仍保留通用 permalink 文案；导入入口和语言兜底提示当前都走 locale key
   - automation payload 当前会显式区分 `replay_source=api|token|local`，并额外暴露 `replay.is_readonly / controls.can_import_local_run / controls.importing_local_run`
 - `InputView / DebateArenaView / DebateResultView` 当前都不会再因为 debate payload 里的 `language` 改全局 UI 语言：
   - 页面壳继续只跟用户当前语言开关走
@@ -268,6 +273,19 @@
   - `CounterfactualPanel`
   - `ResumePanel`
   - `FactionTimeline`
+- `ResultView` 的阵营分析当前不再固定绑 `branches[0]`：
+  - 用户展开了某个结局时，`FactionTimeline` 跟随当前展开分支
+  - 没有展开分支时，默认跟随概率最高的分支
+- `FactionTimeline` 当前改成真正的纵向时间线：
+  - 头部直接显示 `branch scope / round span / faction count`
+  - faction 卡片直接显示 `members / stance / confidence`
+  - event 卡片直接显示 `actor / faction`，未知事件类型会走显式 fallback
+- `FactionTimeline.test.tsx` 当前通过真实 `en / zh` locale JSON + i18next 验证这条口径，不再 fake `t(key)`；未命中的 `event_labels.*` 会回退为 `event_type` 去下划线后的文本。
+- `en / zh` locale 当前已补齐这批共享 copy：
+  - graph：`search_summary / graph_node_a11y / graph_edge_a11y / graph_handle`
+  - argument-map：`filter_status_group`
+  - factions：`current_branch / branch_scope / round_span / members / stance / confidence / actor / faction / event_type / event_labels.*`
+  - debate replay：`import_local_run / importing_local_run`
 - `CausalReviewView` 与 `ArgumentMap` 当前共用：
   - `GraphNodeCard`
   - `NodeDetailPanel`
@@ -285,13 +303,14 @@
 - `CausalReviewView` 当前会先用 graph payload 渲染，再异步补拉 scenario branch 元数据；分支标题请求变慢时，不会再把整张图一起卡在 loading。
 - `CausalReviewView` 当前在 compact viewport 下会把 dagre 布局切成纵向 `TB`，并继续保留 React Flow controls 与本地化 mobile navigation hint；`MiniMap` 只在桌面显示。legend toggle 也补上了 `aria-expanded / aria-controls`。
 - `CausalReviewView` / `ArgumentMap` 的 media query hook 当前兼容 legacy WebKit `addListener / removeListener`；旧 Safari / WebKit 下的 compact viewport 和 `prefers-reduced-motion` 切换也会实时更新，不再只吃首帧值。
+- `experiments/phaser-custom/entry.mjs` 当前会先加载独立的 `global-shim.mjs` 再进 Phaser；WebKit 下不再因为 `Can't find variable: global` 直接落到错误页。
 - 如果只是 search / filter 把边筛空，`CausalReviewView` 当前仍会保留交互图和导出入口，不会误切 relationless fallback。
 - `CausalReviewView` 当前在非交互 fallback（relationless snapshot / 大图 text fallback）时都会隐藏导出按钮，并且只保留一条具名的 a11y 列表；列表名会跟随当前语言本地化。
-- `CausalReviewView` 的 agent search 输入当前统一使用 `Search Agent... / 搜索 Agent...`；placeholder 和 `aria-label` 走同一条 i18n key。
+- `CausalReviewView` 的 agent search 输入当前统一使用 `Search nodes or agents... / 搜索节点或 Agent...`；placeholder 和 `aria-label` 走同一条 i18n key。
 - `CausalReviewView` 与 `ArgumentMap` 当前只会在图结构真的变化后重新 `fitView()`；search / status filter / branch 切换仍会重算视口，但选中节点或取消选中不会再把视口强制拉回去
-- `CausalReviewView` / `ArgumentMap` 的图节点可访问名称，以及 React Flow controls / `MiniMap` 文案当前都会跟随 UI 语言实时更新；切语言不会重打图请求。
+- `CausalReviewView` / `ArgumentMap` 的图节点、边、handle 可访问文案，以及 React Flow controls / `MiniMap` 文案当前都会跟随 UI 语言实时更新；切语言不会重打图请求。
 - `CausalReviewView` / `ArgumentMap` 的 `MiniMap` 当前是非交互 overlay（`pointer-events: none`），只在桌面显示；移动端不再和图操作抢热区。
-- 两个图面当前除了 node/unit 的 sr fallback list，也会额外输出本地化 relation list；`ArgumentMap` 的 verdict relation 会按 `supports / rebuts / accepts / rejects / leaves unaddressed` 区分，不再把所有关系都读成 `supports`。
+- 两个图面当前除了 node/unit 的 sr fallback list，也会额外输出本地化 relation list；因果图会保留 `causes / precedes`，`ArgumentMap` 会区分 `supports / rebuts / accepts / rejects / leaves unaddressed`，边语义不再只剩颜色和箭头。
 - `ArgumentMap` 当前在筛选结果为空时会保留筛选 chips 和 `Clear`，同时显示空态文案，不会把用户困在空态里；但这个空态只在当前图本来就有 `units` 时才会出现，node-only 图不会被状态筛选误筛成空白面板。
 - `ArgumentMap` / `NodeDetailPanel` 当前继续支持显示 `rejected` 状态；前端视觉 token 与后端合法状态口径已重新对齐
 - `ArgumentMap` 当前把 `verdict` 节点也接到共享 graph i18n label；节点可访问名称会跟随当前语言。
@@ -299,28 +318,36 @@
 - `ArgumentMap` 当前在 compact viewport 下也会保留显式 controls 与本地化 mobile navigation hint；`prefers-reduced-motion` 下会关闭边动画、强度条宽度过渡和节点卡片 dim 过渡。
 - `ArgumentMap` 与 `CausalReviewView` 的节点详情打开文案当前已走 i18n；screen-reader fallback 和 text fallback 不再把 `event / claim / standing` 这类原始 token 直接露给用户。
 - `ArgumentMap` 当前在 node-only 图（有节点、没 units）时，仍会保留 screen-reader fallback list；图节点 button 口径也继续支持键盘打开详情。
+- 两个图面的节点卡当前会直接显示 `type / round` 或 `type / status` 这层 meta；移动端图谱 chrome 也继续保留显式 controls、`Fit view` 和本地化导航提示。
 - 两个图面的节点卡当前都按 button 口径渲染：
   - 可键盘聚焦
   - 保留 pointer click 打开详情
   - React Flow 外层 node wrapper 不再重复暴露 button 语义，避免出现 button 套 button 的可访问性冲突
 - `NodeDetailPanel` 当前按轻量 dialog 语义工作：
   - 打开后焦点会先落到关闭按钮
-  - 就算焦点已经离开 panel，`Escape` 也可直接关闭
+  - 两个图面会显式传入 `panelId`，节点卡的 `aria-controls` 会指向真实详情面板
   - 关闭后会把焦点还回最新一次打开详情的 trigger
+  - 面板内 `Escape` 仍可关闭；焦点已经离开 panel 时，不会再全局劫持 `Escape`
+  - compact viewport 下会改成贴底展开，不再固定挤在右上角
   - `Copy Reference` 先走 `clipboard.writeText()`；失败时回退 `execCommand('copy')`
   - 如果两条复制路径都失败，会显示可见错误提示，不再静默成功
   - 关闭时会顺手清掉旧的复制失败提示；重新打开同一节点时，不会再把上一轮错误提醒残留出来
   - 详情关闭后仍走 pane click / close button 这条现有口径
 - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。SVG 导出当前改成 native SVG background / edge / node markup，不再依赖 `foreignObject`；校验脚本也会拒绝 `foreignObject` 回退。节点卡标题过长时，SVG 文本会按卡片宽度裁剪显示，但 `<title>` 和文本内容仍优先保留完整标题，不再把省略号文本写进 SVG。
 - `CausalReviewView` 当前在 branch 切换时会先收起旧图和导出面板，等新分支数据 ready 后再恢复；图页外层统一走 `100dvh`，relationless snapshot fallback 里的节点详情也会锚在当前容器里，不再飘到视口右上角。
-- frontend graph-focused vitest 本轮 `102 passed`。
-- `phase3-batch-a full` 和 `phase3-batch-b full` 本轮在 Chromium 通过。
-- graph mobile smoke 当前会额外检查 controls 与 mobile navigation hint；`MiniMap` 继续维持桌面限定。
+- frontend full vitest 本轮 `1055 passed`。
+- `node --test scripts/e2e-frontend-preflight.test.mjs` 本轮 `25 passed`。
+- `npm run lint / npm run build / npm run perf:budgets:check / npm run assets:provenance:check` 本轮通过。
+- preview-driven Chromium `phase3-batch-a full / phase3-batch-b full / phase3-batch-c full` 本轮全绿。
+- preview-driven `zh-CN phase3-batch-a full / phase3-batch-b full` 本轮全绿。
+- graph mobile smoke 当前会额外检查 controls 与 mobile navigation hint；viewport 交互从空白画布锚点拖拽开始，并以 `Fit view` 后的 baseline 判断 pan / zoom / reset；`MiniMap` 继续维持桌面限定。
 - `phase3-batch-a` 当前也会检查：
   - branch selector 真的发出带 `branch_id` 的请求
   - `/api/scenario/:id` 返回的可读 branch title + probability 确实进了 selector
+  - sr fallback list 的 accessible name 按 `/^(Causal events list|因果事件列表)$/` 精确匹配；这条 regex 也会以 `srFallbackListLabelPattern` 导出给脚本契约复用
   - default / `zh-CN` locale 走同一条 fixture 口径
 - `phase3-batch-a / batch-b` 的 graph SVG smoke 当前会校验下载文件内容，不只看文件名。
+- `phase3-batch-a / batch-b` 的浏览器问题监控当前会按 URL + resourceType 过滤 Google Fonts 外链噪音；不同 locale / 浏览器 runtime 下的外部字体失败不再被记成图谱回归。
 - `phase3-batch-b` 的 compare digest fixture 当前会补 `agents / messages`；compare theater smoke 会检查 `agent / message / bubble` 计数都大于 0。
 - `phase3-batch-b` 的 `zh-CN` mobile 口径本轮通过。
 - `phase3-batch-b` 当前除了 map 容器 / filter smoke，也会检查 argument-map 的强度摘要在 default / `zh-CN` locale 都能定位，以及 `Export SVG`、本地化 verdict 节点标签、节点点击打开详情、详情文本、accepted 状态与关闭动作。
@@ -330,8 +357,9 @@
 - `phase3-batch-a / batch-b` 当前都会在真正打开浏览器前先跑共享 `frontendPreflight`：
   - deep-link 必须返回同一份 SPA shell
   - 所有目标路由必须引用同一 entry module
-  - entry asset 本身也必须能取到
-  - preview 没 ready、SPA fallback 失效，或 `dist` 快照不一致时会直接 fail-closed，不再把 404 混成图谱页面回归
+  - 本地 CSS entry asset、inline `nomodule` fallback、Vite legacy polyfill / legacy entry 都必须跨路由一致
+  - modern / CSS / legacy 入口资产都必须可达，且 content-type 符合脚本 / 样式预期
+  - preview 没 ready、SPA fallback 失效，或任一入口资产不一致 / 不可达时会直接 fail-closed，不再把 404 混成图谱页面回归
 - graph-viz 相关构建回归当前也会检查共享 `vendor` chunk，并按 modern / legacy 两套 chunk 名一起核对 `vendor / phaser / capture-html / capture-gif / flow-vendor / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`。
 - 关键页面样式当前已补一层 sRGB / rgba fallback：
   - 全局 token 在 `index.css` 里先声明 fallback，再用 `oklch()` / `color-mix()` 覆盖
@@ -373,10 +401,14 @@
   - `turn-commit`
   这些中间态工件，方便直接看 single-ending / multi-ending 的真流式观测。
 - 默认 `release-signoff` 当前会把 `corners` 步骤固定到 `SWARM_E2E_FIXTURE_MODE=1`，避免 capture-modes 因短 live window 冷启动抖动而误报失败。
-- 默认 `release-signoff` 当前还会纳入：
+- 默认 `release-signoff` 当前还会纳入前置 gate：
+  - `lint`
+  - `graph_focused_vitest`
+- 默认 `release-signoff` 当前还会串行执行：
   - `phase3_graph_preflight`
   - `script_contracts`
   - `phase3a / phase3b` 的 default graph smoke
+  - `phase3c` 的 result graph smoke
   - `phase3a / phase3b` 的 `zh-CN` graph smoke
   - `phase3a / phase3b` 的 Firefox / WebKit graph desktop smoke
   - `ending_room_followup / ending_room_followup_en`

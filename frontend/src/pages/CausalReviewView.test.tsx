@@ -159,6 +159,8 @@ vi.mock('@xyflow/react', async () => {
       onInit,
       onNodeClick,
       onPaneClick,
+      panOnDrag,
+      fitViewOptions,
     }: {
       children?: React.ReactNode;
       nodes?: Array<{ id: string; ariaLabel?: string | null; ariaRole?: string | null }>;
@@ -166,6 +168,8 @@ vi.mock('@xyflow/react', async () => {
       onInit?: (instance: { fitView: typeof fitViewMock }) => void;
       onNodeClick?: (event: unknown, node: { id: string }) => void;
       onPaneClick?: () => void;
+      panOnDrag?: boolean | number[];
+      fitViewOptions?: { padding?: number; duration?: number };
     }) => {
       const firstNode = nodes?.[0];
       const onInitRef = React.useRef(onInit);
@@ -178,6 +182,8 @@ vi.mock('@xyflow/react', async () => {
           data-node-aria-label={firstNode?.ariaLabel ?? ''}
           data-node-aria-role={firstNode?.ariaRole ?? ''}
           data-aria-label-config={JSON.stringify(ariaLabelConfig ?? {})}
+          data-pan-on-drag={JSON.stringify(panOnDrag ?? null)}
+          data-fit-view-options={JSON.stringify(fitViewOptions ?? null)}
         >
           {nodes?.map((node) => (
             <button
@@ -373,6 +379,10 @@ describe('CausalReviewView', () => {
     renderView();
     const flow = await screen.findByTestId('reactflow');
     expect(flow).toBeInTheDocument();
+    expect(flow).toHaveAttribute('data-pan-on-drag', '[0,1]');
+    expect(JSON.parse(flow.getAttribute('data-fit-view-options') ?? '{}')).toMatchObject({
+      duration: 0,
+    });
     vi.restoreAllMocks();
   });
 
@@ -436,7 +446,7 @@ describe('CausalReviewView', () => {
     } as Response);
     renderView();
     await screen.findByTestId('reactflow');
-    const searchInput = screen.getByPlaceholderText('Search Agent...');
+    const searchInput = screen.getByPlaceholderText('Search nodes or agents...');
     expect(searchInput).toBeInTheDocument();
     vi.restoreAllMocks();
   });
@@ -597,7 +607,7 @@ describe('CausalReviewView', () => {
     renderView();
     await screen.findByTestId('reactflow');
 
-    await user.type(screen.getByPlaceholderText('Search Agent...'), 'alpha');
+    await user.type(screen.getByPlaceholderText('Search nodes or agents...'), 'alpha');
 
     await waitFor(() => {
       expect(screen.getByTestId('reactflow')).toBeInTheDocument();
@@ -679,6 +689,7 @@ describe('CausalReviewView', () => {
     const initialCalls = fitViewMock.mock.calls.length;
     await user.click(fitButton);
     expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
+    expect(fitViewMock).toHaveBeenLastCalledWith(expect.objectContaining({ duration: 0 }));
 
     matchMediaSpy.mockRestore();
   });
@@ -1134,7 +1145,7 @@ describe('CausalReviewView', () => {
     });
     const initialCalls = fitViewMock.mock.calls.length;
 
-    await user.type(screen.getByPlaceholderText('Search Agent...'), 'beta');
+    await user.type(screen.getByPlaceholderText('Search nodes or agents...'), 'beta');
 
     await waitFor(() => {
       expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);

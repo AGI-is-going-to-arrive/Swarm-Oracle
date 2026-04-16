@@ -14466,6 +14466,58 @@ Original prompt: $develop-web-game  $playwright-interactive  $playwright-interac
   - `cd frontend && npm run perf:budgets:check`
     - 通过
 
+## 2026-04-16 Comprehensive gameplay / graph / cross-browser review
+
+- 已重读当前真值：
+  - `llmdoc/index.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/overview/backlog.md`
+  - `llmdoc/guides/development.md`
+- 已确认运行环境：
+  - backend `uvicorn` on `http://127.0.0.1:18927`
+  - frontend `vite` on `http://127.0.0.1:18928`
+  - `POST /api/health` 返回 `server=ok`
+  - `GET /api/capabilities` 当前返回：
+    - `causal_graph=false`
+    - `argument_map=false`
+    - `factions=false`
+- 本轮自动化结果：
+  - `npx tsc --noEmit -p tsconfig.app.json` 通过
+  - 关键 Vitest：
+    - `WorldlineRoundtableView / EndingChatModal / CausalReviewView / ArgumentMap / ResultView / SimulationView / DebateResultView / locales`
+    - `237 passed`
+  - `node scripts/e2e-worldline-roundtable-suite.mjs full ... --locale zh --headless`
+    - 通过
+  - `node scripts/e2e-ending-room-followup-suite.mjs full ... --locale zh --headless`
+    - 失败：`single-mobile replay coverage` 超时，缺 `artifactReadonly / artifactImportedUrl / replayReadonly / replayReloaded / importedUrl`
+  - `node scripts/e2e-debate-suite.mjs full ... --headless`
+    - 通过
+  - `node scripts/e2e-suite.mjs cross-browser ... --browsers firefox,webkit --headless`
+    - 失败：`webkit simulation director state` 超时；截图显示页面已落到通用错误页
+- 本轮视觉抽样结论：
+  - 首页 desktop/mobile 首屏基本可用，但更偏“文学化产品”，不是强游戏工作台
+  - roundtable mobile/live 首屏可读，但 summary 与 transcript 争抢注意力，工作台感弱
+  - ending-room mobile 截图出现明显空白区，且 replay 链路与视觉状态不稳定
+- 本轮已落地修复：
+  - `endingRoomStore` 增加 open-room request epoch，旧房间请求晚到时不再覆盖最新 modal 状态
+  - `PredictionModal` 在无 branch target 时会主动切到 `ending_tone`，避免 UI 仍显示 worldline bet、实际提交却是 tone bet
+  - `ExportPanel` 改为优先抓 `data-graph-node-label`，不再把 `GraphNodeCard` 外层 span 当作真实标签锚点
+  - 相关回归：
+    - `src/stores/endingRoomStore.test.ts`
+    - `src/components/PredictionModal.test.tsx`
+    - `src/components/ExportPanel.test.tsx`
+    - 再跑一轮关联回归共 `195` 个测试通过
+- 对标 `MiroFish` 的当前判断：
+  - 它更像知识图谱工作台
+  - 当前项目更像可玩的 what-if 推演产品
+  - 可借鉴的是“单画布工作台感”和图常驻，不是产品结构本身
+- 下一轮建议优先级：
+  1. 追 `ending-room single-mobile readonly replay` 失败根因
+  2. 追 `webkit` 错误页根因
+  3. 决定是否要把 `FEATURE_CAUSAL_GRAPH / FEATURE_ARGUMENT_MAP / FEATURE_FACTIONS` 真正开到当前评审环境
+
 - `playwright-interactive` 真实浏览器复看发现一个此前专项脚本没有拦住的移动端 UX 问题：
   - `390x844` 下 live roundtable 顶部操作区会横向挤压，语言切换器还会压到 hero topline。
   - 为此做了两处最小前端修复：
@@ -17020,3 +17072,88 @@ QA Inventory
     - 通过
   - `cd frontend && npm run perf:budgets:check`
     - 通过
+
+## 2026-04-17 Docker review stack + real LLM acceptance
+
+- 本轮目标：
+  - 把 Docker 评审环境真正拉起来并做页面验收
+  - 不复用会炸迁移的旧 named volume
+  - 用真实兼容网关跑至少一条真实推演链路
+- 先确认 Docker 构建失败根因：
+  - 根 `build.context=.` 会把整个仓库打包进上下文
+  - 当时最重的本地目录/文件：
+    - `frontend/output/e2e` 约 `6.2G`
+    - `backend/swarmoracle.db` 约 `1.3G`
+    - `backend/swarmoracle.db.bak-20260325-dup-fix` 约 `858M`
+    - `backend/chroma_data` 约 `835M`
+- 已收紧根 `.dockerignore`：
+  - 排除 `frontend/output`
+  - 排除 `backend/*.db*`
+  - 排除 `backend/chroma_data*`
+  - 排除常见本地缓存、截图和临时目录
+- 收紧后的构建观察：
+  - frontend build context 从 GB 级降到 `208.12MB`
+  - backend build context 从 `2.76GB` 降到 `12.62MB`
+  - `docker compose build frontend` 通过
+  - `docker compose build backend` 通过
+- 默认 `docker compose up -d` 首次尝试未用于验收：
+  - 旧 named volume `upgrade-test_backend-data` 里的 SQLite 处于半迁移态
+  - backend 启动时 Alembic 在 `001_initial` 撞上 `table scenario already exists`
+  - 为避免破坏旧数据，没有删除旧 volume
+- 实际验收使用新的隔离 project：
+  - `docker compose -p upgrade-test-review up -d`
+  - 新卷 `upgrade-test-review_backend-data` 可从空库正常迁移到 head
+- Docker 栈当前状态：
+  - `swarmoracle-backend` healthy，映射 `18927`
+  - `swarmoracle-frontend` up，映射 `18928`
+- Docker 栈接口验收：
+  - `curl -I http://127.0.0.1:18928/`
+    - `200 OK`
+  - `curl -s http://127.0.0.1:18927/api/capabilities`
+    - `causal_graph.enabled = true`
+    - `factions.enabled = true`
+    - `argument_map.enabled = true`
+  - `curl -s -X POST http://127.0.0.1:18927/api/health`
+    - `server=ok`
+    - `llm.status=ok`
+    - `model=gpt-5.4-mini`
+- 浏览器验收：
+  - Chrome DevTools：
+    - 首页可正常打开
+    - 中/英切换正常
+    - 中文首页关键入口、每日挑战、导演生涯区可见
+  - WebKit smoke：
+    - 首页可打开
+    - 真实 simulation 页可打开
+    - 未落入通用错误页
+- 真实 LLM 网关检查：
+  - `http://127.0.0.1:8318/v1/models` 可用
+  - `http://127.0.0.1:8317/v1/models` 可用
+  - `8318` 的 `chat/completions` 实测返回 `OK`
+  - 后续 Docker backend 继续沿用 `.env.docker` 里的 `host.docker.internal:8317/v1`
+  - backend 日志里已实际出现多次：
+    - `POST http://host.docker.internal:8317/v1/chat/completions "HTTP/1.1 200 OK"`
+- Docker 栈真实前端自动化：
+  - `cd frontend && node scripts/e2e-automation.mjs health --url http://127.0.0.1:18928 --output-dir output/e2e/docker-review-health --headless`
+    - 通过
+    - `history.scenario_count = 0`
+    - `leaderboard.entry_count = 0`
+  - `cd frontend && node scripts/e2e-automation.mjs predict --url http://127.0.0.1:18928 --output-dir output/e2e/docker-review-predict --question '如果全球关键海峡被单一贸易联盟永久垄断，会发生什么？' --headless`
+    - 通过
+    - 创建 scenario：`f7c424db-1b37-42bf-b8a1-5227fd068770`
+    - `PredictionModal` 可打开
+    - 预测提交成功，`modal_state.status = success`
+- 真实 scenario 观察：
+  - 当前 scenario 在 Docker 栈里持续推进
+  - 已看到多轮分叉、checkpoint 和 causal graph 节点写入
+  - 某次观测值：
+    - `status = simulating`
+    - `branchCount = 10`
+    - `messageCount = 65`
+    - `activeBranches = 7`
+    - `completedBranches = 3`
+- Docker 栈下的 `ending-room followup` 现成脚本没有直接通过：
+  - fresh DB 没有现成 `done` 的 single/multi-ending scenario
+  - `node scripts/e2e-ending-room-followup-suite.mjs mobile ...`
+    - 失败原因：`Could not find both multi-ending and single-ending done scenarios`
+  - 这不是 replay 页面回归，而是验收前置数据不足

@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium, firefox, webkit } from "playwright";
+import { chromium, devices, firefox, webkit } from "playwright";
 
 import { validateSvgDownloadArtifact } from "./lib/exportValidation.mjs";
 import {
@@ -25,6 +25,12 @@ const E2E_APP_LANGUAGE = E2E_LOCALE.toLowerCase().startsWith("zh") ? "zh" : "en"
 const IS_MAIN_MODULE = process.argv[1]
   ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
   : false;
+const REQUIRED_GRAPH_INTERACTION_STEPS = [
+  "argument-map-pan-drag-changes-viewport",
+  "argument-map-zoom-controls-change-scale",
+  "argument-map-fit-view-resets-viewport",
+  "argument-map-page-scroll-through-works",
+];
 
 // ── Utilities ────────────────────────────────────────────
 
@@ -41,6 +47,7 @@ function parseArgs(argv) {
     mode: argv[2] || "desktop",
     baseUrl: DEFAULT_BASE_URL,
     browser: "chromium",
+    browserExplicitlySet: false,
     headless: process.env.HEADLESS === "1",
   };
 
@@ -52,6 +59,7 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--browser" && next) {
       args.browser = next;
+      args.browserExplicitlySet = true;
       i += 1;
     } else if (arg === "--headless") {
       args.headless = true;
@@ -83,6 +91,214 @@ async function launchBrowser(headless, browserName = "chromium") {
 }
 async function saveScreenshot(page, filePath) {
   await page.screenshot({ path: filePath, fullPage: true }).catch(() => {});
+}
+
+function parseViewportTransform(transform) {
+  if (!transform || transform === "none") {
+    return { scale: 1, translateX: 0, translateY: 0 };
+  }
+
+  const matrix3dMatch = transform.match(/^matrix3d\((.+)\)$/);
+  if (matrix3dMatch) {
+    const values = matrix3dMatch[1].split(",").map((value) => Number.parseFloat(value.trim()));
+    return {
+      scale: Number.isFinite(values[0]) ? values[0] : 1,
+      translateX: Number.isFinite(values[12]) ? values[12] : 0,
+      translateY: Number.isFinite(values[13]) ? values[13] : 0,
+    };
+  }
+
+  const matrixMatch = transform.match(/^matrix\((.+)\)$/);
+  if (matrixMatch) {
+    const values = matrixMatch[1].split(",").map((value) => Number.parseFloat(value.trim()));
+    return {
+      scale: Number.isFinite(values[0]) ? values[0] : 1,
+      translateX: Number.isFinite(values[4]) ? values[4] : 0,
+      translateY: Number.isFinite(values[5]) ? values[5] : 0,
+    };
+  }
+
+  const numberPattern = String.raw`[-+]?\d*\.?\d+(?:e[-+]?\d+)?`;
+  const translate3dMatch = transform.match(new RegExp(String.raw`translate3d\(\s*(${numberPattern})px\s*,\s*(${numberPattern})px\s*,\s*(${numberPattern})px\s*\)`, "i"));
+  const translateMatch = transform.match(new RegExp(String.raw`translate\(\s*(${numberPattern})px(?:\s*,\s*(${numberPattern})px)?\s*\)`, "i"));
+  const scaleMatch = transform.match(new RegExp(String.raw`scale\(\s*(${numberPattern})`, "i"));
+  const translateX = translate3dMatch
+    ? Number.parseFloat(translate3dMatch[1])
+    : translateMatch
+      ? Number.parseFloat(translateMatch[1])
+      : 0;
+  const translateY = translate3dMatch
+    ? Number.parseFloat(translate3dMatch[2])
+    : translateMatch?.[2]
+      ? Number.parseFloat(translateMatch[2])
+      : 0;
+  const scale = scaleMatch ? Number.parseFloat(scaleMatch[1]) : 1;
+
+  if ([scale, translateX, translateY].every((value) => Number.isFinite(value))) {
+    return { scale, translateX, translateY };
+  }
+
+  return { scale: 1, translateX: 0, translateY: 0 };
+}
+
+async function readViewportTransform(page, containerSelector = ".react-flow") {
+  const viewport = page.locator(`${containerSelector} .react-flow__viewport`).first();
+  const transform = await viewport.evaluate((element) => {
+    const computed = window.getComputedStyle(element).transform;
+    return computed && computed !== "none" ? computed : element.getAttribute("transform") ?? element.style.transform ?? "none";
+  }).catch(() => "none");
+  return parseViewportTransform(transform);
+}
+
+async function resolvePanAnchor(page, paneBox) {
+  const candidateOffsets = [
+    [0.14, 0.18],
+    [0.14, 0.82],
+    [0.86, 0.18],
+    [0.86, 0.82],
+    [0.08, 0.5],
+    [0.92, 0.5],
+  ];
+  const candidates = candidateOffsets.map(([xRatio, yRatio]) => ({
+    x: paneBox.x + paneBox.width * xRatio,
+    y: paneBox.y + paneBox.height * yRatio,
+  }));
+
+  return page.evaluate((points) => {
+    for (const point of points) {
+      const el = document.elementFromPoint(point.x, point.y);
+      if (!el) continue;
+      if (el.closest(".react-flow__node, .react-flow__controls, .react-flow__minimap, .nodrag, .nopan, button")) continue;
+      return point;
+    }
+    return points[0];
+  }, candidates);
+}
+
+function didViewportPan(before, after) {
+  if (!before || !after) return false;
+  return Math.abs(after.translateX - before.translateX) > 8 || Math.abs(after.translateY - before.translateY) > 8;
+}
+
+function didViewportScaleChange(before, after) {
+  if (!before || !after) return false;
+  return Math.abs(after.scale - before.scale) > 0.03;
+}
+
+function isNearBaselineTransform(baseline, candidate) {
+  if (!baseline || !candidate) return false;
+  return (
+    Math.abs(candidate.scale - baseline.scale) <= 0.08
+    && Math.abs(candidate.translateX - baseline.translateX) <= 24
+    && Math.abs(candidate.translateY - baseline.translateY) <= 24
+  );
+}
+
+async function runGraphViewportInteractions(page, {
+  containerSelector,
+  paneSelector,
+  prefix,
+}) {
+  const steps = [];
+  const pane = page.locator(paneSelector).first();
+  const controls = page.locator(`${containerSelector} .react-flow__controls`).first();
+  const zoomInButton = controls.getByRole("button", { name: /Zoom in|放大/i }).first();
+  const fitViewButton = controls.getByRole("button", { name: /Fit view|适配视图/i }).first();
+  const hasZoomInButton = await zoomInButton.isVisible().catch(() => false);
+  const hasFitViewButton = await fitViewButton.isVisible().catch(() => false);
+
+  if (hasFitViewButton) {
+    await fitViewButton.click();
+    await page.waitForTimeout(250);
+  }
+  const baseline = await readViewportTransform(page, containerSelector);
+
+  const paneBox = await pane.boundingBox().catch(() => null);
+  if (paneBox) {
+    const anchor = await resolvePanAnchor(page, paneBox);
+    const target = {
+      x: Math.max(paneBox.x + 24, anchor.x - paneBox.width * 0.18),
+      y: Math.min(paneBox.y + paneBox.height - 24, anchor.y + paneBox.height * 0.16),
+    };
+    await page.mouse.move(anchor.x, anchor.y);
+    await page.mouse.down();
+    await page.mouse.move(target.x, target.y, { steps: 12 });
+    await page.mouse.up();
+  }
+  await page.waitForTimeout(150);
+  const afterPan = await readViewportTransform(page, containerSelector);
+  steps.push({
+    name: `${prefix}-pan-drag-changes-viewport`,
+    passed: paneBox != null && didViewportPan(baseline, afterPan),
+  });
+
+  if (hasZoomInButton) {
+    await zoomInButton.click();
+  }
+  await page.waitForTimeout(250);
+  const afterZoom = await readViewportTransform(page, containerSelector);
+  steps.push({
+    name: `${prefix}-zoom-controls-change-scale`,
+    passed: hasZoomInButton && didViewportScaleChange(afterPan, afterZoom),
+  });
+
+  if (hasFitViewButton) {
+    await fitViewButton.click();
+  }
+  await page.waitForTimeout(250);
+  const afterFitView = await readViewportTransform(page, containerSelector);
+  steps.push({
+    name: `${prefix}-fit-view-resets-viewport`,
+    passed: hasFitViewButton && isNearBaselineTransform(baseline, afterFitView),
+  });
+
+  return steps;
+}
+
+async function verifyPageScrollThrough(page, containerSelector) {
+  const container = page.locator(containerSelector).first();
+  const isVisible = await container.isVisible().catch(() => false);
+  if (!isVisible) return false;
+
+  await container.scrollIntoViewIfNeeded().catch(() => {});
+  await page.waitForTimeout(120);
+  const containerBox = await container.boundingBox().catch(() => null);
+  if (!containerBox) return false;
+  const pane = page.locator(`${containerSelector} .react-flow__pane`).first();
+  const paneBox = await pane.boundingBox().catch(() => null);
+  const anchor = paneBox ? await resolvePanAnchor(page, paneBox) : {
+    x: containerBox.x + Math.min(containerBox.width * 0.5, 240),
+    y: containerBox.y + Math.min(containerBox.height * 0.3, 180),
+  };
+
+  const beforeScroll = await page.evaluate((selector) => {
+    const element = document.querySelector(selector);
+    const rect = element?.getBoundingClientRect();
+    return {
+      scrollY: window.scrollY,
+      top: rect?.top ?? 0,
+    };
+  }, containerSelector).catch(() => ({ scrollY: 0, top: containerBox.y }));
+  await page.mouse.move(anchor.x, anchor.y);
+  await page.mouse.wheel(0, 1200);
+  await page.waitForTimeout(220);
+  const readScrollState = async () => page.evaluate((selector) => {
+    const element = document.querySelector(selector);
+    const rect = element?.getBoundingClientRect();
+    return {
+      scrollY: window.scrollY,
+      top: rect?.top ?? 0,
+    };
+  }, containerSelector).catch(() => beforeScroll);
+  const afterDownScroll = await readScrollState();
+  if (afterDownScroll.scrollY > beforeScroll.scrollY + 24 || afterDownScroll.top < beforeScroll.top - 24) {
+    return true;
+  }
+
+  await page.mouse.wheel(0, -1200);
+  await page.waitForTimeout(220);
+  const afterUpScroll = await readScrollState();
+  return afterUpScroll.scrollY < beforeScroll.scrollY - 24 || afterUpScroll.top > beforeScroll.top + 24;
 }
 
 async function triggerArgumentMapLoad(page) {
@@ -178,6 +394,10 @@ const IGNORED_REQUEST_FAILURE_TEXT_PATTERNS = [
   /net::ERR_ABORTED/i,
   /NS_BINDING_ABORTED/i,
 ];
+const IGNORED_CONSOLE_ERROR_TEXT_PATTERNS = [
+  /Cross-Origin Request Blocked: .*fonts\.gstatic\.com/i,
+  /downloadable font: download failed .*fonts\.gstatic\.com/i,
+];
 const ALLOWED_EXTERNAL_RESOURCE_URL_PATTERNS = [
   /^https:\/\/fonts\.googleapis\.com\//i,
   /^https:\/\/fonts\.gstatic\.com\//i,
@@ -190,6 +410,7 @@ function matchesAllowedExternalResource(url) {
 function shouldCaptureConsoleMessage(message) {
   const type = message.type();
   if (type !== "error" && type !== "assert") return false;
+  if (IGNORED_CONSOLE_ERROR_TEXT_PATTERNS.some((pattern) => pattern.test(message.text()))) return false;
   const locationUrl = message.location()?.url ?? "";
   if (locationUrl && matchesAllowedExternalResource(locationUrl)) return false;
   return message.text().trim().length > 0;
@@ -352,7 +573,7 @@ const FACTION_TIMELINE_FIXTURE = [
       { key: "hawks", label: "Trade Hawks", members: ["agent-1"], stance_center: 0.9, confidence: 0.85 },
       { key: "doves", label: "Free Traders", members: ["agent-2", "agent-3", "agent-4"], stance_center: -0.5, confidence: 0.75 },
     ],
-    events: [{ event_type: "betrayal", actor_agent_id: "agent-2", faction_key: "hawks" }],
+    events: [{ type: "betrayal", actor_agent_id: "agent-2", faction_key: "hawks" }],
   },
 ];
 
@@ -808,6 +1029,21 @@ async function testArgumentMap(page, baseUrl, outputDir) {
     results.steps.push({ name: "argument-map-export-svg-download-succeeds", passed: svgDownloadPassed });
   }
 
+  if (hasReactFlow && hasControls) {
+    results.steps.push(
+      ...(await runGraphViewportInteractions(page, {
+        containerSelector: ".argument-map-container .react-flow",
+        paneSelector: ".argument-map-container .react-flow__pane",
+        prefix: "argument-map",
+      })),
+    );
+    results.steps.push({
+      name: "argument-map-page-scroll-through-works",
+      passed: await verifyPageScrollThrough(page, ".argument-map-container"),
+    });
+    await saveScreenshot(page, path.join(stepDir, "02b-argument-map-interactions.png"));
+  }
+
   const firstNode = page.getByRole("button", { name: /Trade deficits are self-correcting/i }).first();
   const hasFirstNode = await firstNode.isVisible().catch(() => false);
   results.steps.push({ name: "argument-map-node-visible", passed: hasFirstNode });
@@ -929,17 +1165,20 @@ async function testFactionTimeline(page, baseUrl, outputDir) {
   await page.waitForTimeout(2000);
   await saveScreenshot(page, path.join(stepDir, "01-result-loaded.png"));
 
-  const title = page.getByText(/Faction Timeline|阵营时间线/).first();
+  const title = page.getByRole("heading", { name: /Faction Timeline|阵营时间线/ }).first();
   results.steps.push({ name: "faction-timeline-title-visible", passed: await title.isVisible().catch(() => false) });
+
+  const timelineList = page.getByRole("list", { name: /Faction evolution timeline|阵营演化时间线/ }).first();
+  results.steps.push({ name: "faction-timeline-list-visible", passed: await timelineList.isVisible().catch(() => false) });
 
   const roundOne = page.getByText(/Round 1|第 ?1 ?轮/).first();
   results.steps.push({ name: "round-1-visible", passed: await roundOne.isVisible().catch(() => false) });
 
-  const hawksChip = page.getByText("Trade Hawks (2)").first();
-  results.steps.push({ name: "trade-hawks-chip-visible", passed: await hawksChip.isVisible().catch(() => false) });
+  const visibleFactionMetrics = page.getByText(/members|名成员|Stance|立场|Confidence|置信度/i);
+  results.steps.push({ name: "faction-badges-visible", passed: (await visibleFactionMetrics.count().catch(() => 0)) >= 4 });
 
-  const betrayalText = page.getByText(/betrayal/i).first();
-  results.steps.push({ name: "betrayal-event-visible", passed: await betrayalText.isVisible().catch(() => false) });
+  const betrayalEvent = page.locator('text=⚔️').first();
+  results.steps.push({ name: "betrayal-event-visible", passed: await betrayalEvent.isVisible().catch(() => false) });
 
   const emptyMsg = page.getByText(/No faction data available|暂无阵营数据/).first();
   results.steps.push({ name: "no-faction-empty-state", passed: !(await emptyMsg.isVisible().catch(() => false)) });
@@ -1019,7 +1258,7 @@ async function runSurface(mode, viewport, args) {
   ensureDir(outputDir);
 
   const browser = await launchBrowser(args.headless, args.browser);
-  const context = await browser.newContext({ viewport, acceptDownloads: true, locale: E2E_LOCALE });
+  const context = await browser.newContext({ ...buildContextOptions(mode, args.browser), acceptDownloads: true, locale: E2E_LOCALE });
   await context.addInitScript(({ storageKey, language }) => {
     window.localStorage.setItem(storageKey, language);
   }, { storageKey: "swarmoracle:language:v1", language: E2E_APP_LANGUAGE });
@@ -1028,7 +1267,7 @@ async function runSurface(mode, viewport, args) {
 
   await installFixtures(page);
 
-  const allResults = { mode, viewport, tests: {} };
+  const allResults = { mode, browser: args.browser, viewport, tests: {} };
 
   try {
     allResults.tests.argumentMap = await runNamedTest(
@@ -1082,20 +1321,69 @@ async function runSurface(mode, viewport, args) {
   return allResults;
 }
 
+const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
+const {
+  defaultBrowserType: _unusedDefaultBrowserType,
+  ...MOBILE_CONTEXT_DEFAULTS
+} = devices["iPhone 13"];
+
+function buildContextOptions(mode, browserName) {
+  if (mode !== "mobile") {
+    return { viewport: DESKTOP_VIEWPORT };
+  }
+
+  return {
+    ...MOBILE_CONTEXT_DEFAULTS,
+    isMobile: true,
+    hasTouch: true,
+    userAgent: MOBILE_CONTEXT_DEFAULTS.userAgent,
+    deviceScaleFactor: MOBILE_CONTEXT_DEFAULTS.deviceScaleFactor,
+    ...(browserName === "firefox" ? { screen: MOBILE_CONTEXT_DEFAULTS.screen } : {}),
+  };
+}
+
+function buildSurfaceRuns(args) {
+  const buildRun = (mode, browser) => ({
+    mode,
+    browser,
+    context: buildContextOptions(mode, browser),
+  });
+
+  if (args.mode === "desktop") {
+    return [buildRun("desktop", args.browser)];
+  }
+  if (args.mode === "mobile") {
+    return [buildRun("mobile", args.browser)];
+  }
+  if (args.browserExplicitlySet) {
+    return [
+      buildRun("desktop", args.browser),
+      buildRun("mobile", args.browser),
+    ];
+  }
+
+  return [
+    buildRun("desktop", "chromium"),
+    buildRun("mobile", "chromium"),
+    buildRun("desktop", "firefox"),
+    buildRun("desktop", "webkit"),
+  ];
+}
+
 export const __test__ = {
+  buildSurfaceRuns,
+  mobileContextDefaults: MOBILE_CONTEXT_DEFAULTS,
   preflightRoutePaths: PREFLIGHT_ROUTE_PATHS,
+  parseViewportTransform,
+  requiredGraphInteractionSteps: REQUIRED_GRAPH_INTERACTION_STEPS,
   runNamedTest,
   summarizeRun,
 };
 
 // ── Main ─────────────────────────────────────────────────
 
-const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
-const MOBILE_VIEWPORT = { width: 390, height: 844 };
-
 async function main() {
   const args = parseArgs(process.argv);
-  const { mode } = args;
   const surfaceResults = [];
 
   await assertFrontendRoutesReady({
@@ -1104,20 +1392,20 @@ async function main() {
     label: "phase3-batch-b preflight",
   });
 
-  if (mode === "desktop" || mode === "full") {
-    const r = await runSurface("desktop", DESKTOP_VIEWPORT, args);
-    surfaceResults.push(r);
-  }
-  if (mode === "mobile" || mode === "full") {
-    const r = await runSurface("mobile", MOBILE_VIEWPORT, args);
+  for (const surface of buildSurfaceRuns(args)) {
+    const r = await runSurface(surface.mode, surface.context.viewport ?? DESKTOP_VIEWPORT, {
+      ...args,
+      browser: surface.browser,
+    });
     surfaceResults.push(r);
   }
 
   const overallSummary = {
-    mode,
+    mode: args.mode,
     browser: args.browser,
     surfaces: surfaceResults.map((result) => ({
       mode: result.mode,
+      browser: result.browser,
       allPassed: result.summary.allPassed,
       failedTests: result.summary.failedTests,
       runError: result.summary.runError,

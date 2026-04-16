@@ -1,13 +1,4 @@
-const scope =
-  typeof window === 'object' && window
-    ? window
-    : typeof self === 'object' && self
-      ? self
-      : {};
-
-if (typeof scope.global === 'undefined') {
-  scope.global = scope;
-}
+import './global-shim.mjs';
 
 function unwrapModule(mod, namedKey) {
   if (namedKey && namedKey in mod) {

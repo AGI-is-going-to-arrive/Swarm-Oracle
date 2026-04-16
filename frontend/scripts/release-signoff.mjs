@@ -18,6 +18,30 @@ const IS_MAIN_MODULE = process.argv[1]
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_BACKEND_URL = process.env.SWARM_BACKEND_URL || "http://127.0.0.1:18927";
 const VALID_DEBATE_ADJUDICATION_MODES = new Set(["deterministic", "llm_hybrid"]);
+const GRAPH_FOCUSED_VITEST_TESTS = [
+  "src/lib/manualChunks.test.ts",
+  "src/lib/performanceBudgets.test.ts",
+  "src/lib/exportValidation.test.ts",
+  "src/components/ArgumentMap.test.tsx",
+  "src/components/FactionTimeline.test.tsx",
+  "src/components/GraphNodeCard.test.tsx",
+  "src/components/NodeDetailPanel.test.tsx",
+  "src/pages/CausalReviewView.test.tsx",
+  "src/pages/ReplayEmptyState.test.tsx",
+  "src/pages/ResultView.test.tsx",
+  "src/i18n/locales.test.ts",
+];
+const GRAPH_E2E_STEP_IDS = [
+  "phase3a_graph_default",
+  "phase3b_graph_default",
+  "phase3c_result_graphs",
+  "phase3a_graph_zh",
+  "phase3b_graph_zh",
+  "phase3a_graph_firefox",
+  "phase3b_graph_firefox",
+  "phase3a_graph_webkit",
+  "phase3b_graph_webkit",
+];
 const BACKEND_SIGNOFF_TESTS = [
   "tests/test_campaign_api.py",
   "tests/test_campaign_service.py",
@@ -356,6 +380,10 @@ function buildGraphPreflightPaths() {
   ];
 }
 
+function buildGraphFocusedVitestArgs() {
+  return ["test", "--", "--run", ...GRAPH_FOCUSED_VITEST_TESTS];
+}
+
 function buildHttpCheckArgs(url, expectedContentType = "", expectedBodyMarker = "") {
   return ["-c", PYTHON_HTTP_CHECK_SCRIPT, url, expectedContentType, expectedBodyMarker];
 }
@@ -371,6 +399,9 @@ function ensureBackendPythonExists(pythonPath) {
 
 export const __test__ = {
   buildGraphPreflightPaths,
+  buildGraphFocusedVitestArgs,
+  graphE2EStepIds: GRAPH_E2E_STEP_IDS,
+  graphFocusedVitestTests: GRAPH_FOCUSED_VITEST_TESTS,
 };
 
 async function main() {
@@ -468,6 +499,8 @@ async function main() {
       );
     }
     runStep(summary, args, "typecheck", npxCommand, ["tsc", "--noEmit", "-p", "tsconfig.app.json"]);
+    runStep(summary, args, "lint", npmCommand, ["run", "lint"]);
+    runStep(summary, args, "graph_focused_vitest", npmCommand, buildGraphFocusedVitestArgs());
     runStep(summary, args, "build", npmCommand, ["run", "build"]);
     runStep(summary, args, "perf_budgets", npmCommand, ["run", "perf:budgets:check"]);
     runStep(
@@ -520,6 +553,21 @@ async function main() {
       nodeCommand,
       [
         "scripts/e2e-phase3-batch-b.mjs",
+        "full",
+      ],
+      {
+        env: {
+          SWARM_URL: args.baseUrl,
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "phase3c_result_graphs",
+      nodeCommand,
+      [
+        "scripts/e2e-phase3-batch-c.mjs",
         "full",
       ],
       {

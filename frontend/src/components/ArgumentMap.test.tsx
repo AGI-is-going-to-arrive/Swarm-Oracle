@@ -118,6 +118,8 @@ vi.mock('@xyflow/react', async () => {
           data-node-aria-label={firstNode?.ariaLabel ?? ''}
           data-node-aria-role={firstNode?.ariaRole ?? ''}
           data-aria-label-config={JSON.stringify(ariaLabelConfig ?? {})}
+          data-pan-on-drag={JSON.stringify(props.panOnDrag ?? null)}
+          data-fit-view-options={JSON.stringify(props.fitViewOptions ?? null)}
         >
           {/* Expose clickable elements per node for testing onNodeClick */}
           {nodes?.map(n => (
@@ -256,6 +258,10 @@ describe('ArgumentMap', () => {
     const flow = await screen.findByTestId('reactflow');
     expect(flow.getAttribute('data-nodes')).toBe('2');
     expect(flow.getAttribute('data-edges')).toBe('1');
+    expect(flow).toHaveAttribute('data-pan-on-drag', '[0,1]');
+    expect(JSON.parse(flow.getAttribute('data-fit-view-options') ?? '{}')).toMatchObject({
+      duration: 0,
+    });
   });
 
   it('uses the localized verdict label in node accessibility text', async () => {
@@ -526,6 +532,7 @@ describe('ArgumentMap', () => {
     const initialCalls = fitViewMock.mock.calls.length;
     await user.click(fitButton);
     expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
+    expect(fitViewMock).toHaveBeenLastCalledWith(expect.objectContaining({ duration: 0 }));
     matchMediaSpy.mockRestore();
   });
 
@@ -1141,13 +1148,13 @@ describe('ArgumentStrengthMeter', () => {
     // Check segments are rendered via title attributes
     const standingSegment = screen.getByTitle(/Standing: 2\/3/);
     expect(standingSegment).toBeInTheDocument();
-    expect(standingSegment).toHaveStyle({ background: '#2ecc71' });
+    expect(standingSegment).toHaveStyle({ background: '#62748b' });
     expect(standingSegment).toHaveAttribute('role', 'listitem');
     expect(standingSegment).toHaveAttribute('aria-label', 'Standing: 2/3');
 
     const rebuttedSegment = screen.getByTitle(/Rebutted: 1\/3/);
     expect(rebuttedSegment).toBeInTheDocument();
-    expect(rebuttedSegment).toHaveStyle({ background: '#e74c3c' });
+    expect(rebuttedSegment).toHaveStyle({ background: '#c85d84' });
     expect(rebuttedSegment).toHaveAttribute('role', 'listitem');
     expect(rebuttedSegment).toHaveAttribute('aria-label', 'Rebutted: 1/3');
   });
@@ -1170,7 +1177,7 @@ describe('ArgumentStrengthMeter', () => {
     ];
     render(<ArgumentStrengthMeter units={units} compact />);
     const meter = screen.getByRole('list', { name: 'Argument strength distribution' });
-    expect(meter).toHaveStyle({ height: '4px' });
+    expect(meter).toHaveStyle({ height: '6px' });
   });
 
   it('subscribes to legacy WebKit media query listeners for reduced motion changes', () => {

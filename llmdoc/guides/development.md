@@ -52,6 +52,21 @@ docker compose up --build -d
 - Frontend: `http://localhost:18928`
 - Backend: `http://localhost:18927`
 - Docker 默认读取仓库根目录 `.env.docker`。
+- `.env.docker` 当前默认开启：
+  - `FEATURE_COUNTERFACTUAL_REPLAY`
+  - `FEATURE_CAUSAL_GRAPH`
+  - `FEATURE_FACTIONS`
+  - `FEATURE_ARGUMENT_MAP`
+- 根目录 `.dockerignore` 当前已经排除了本地 `frontend/output`、SQLite/Chroma 数据和常见缓存；E2E 产物不会再被一起塞进 Docker build context。
+- 如果你要拉一套干净的评审栈，不复用旧 named volume，直接带 project 名启动：
+
+```bash
+docker compose -p upgrade-test-review up --build -d
+docker compose -p upgrade-test-review ps -a
+curl -s -X POST http://127.0.0.1:18927/api/health
+```
+
+- 如果默认 project 下的旧 volume 里留着半迁移态 SQLite，启动时可能会报 `table scenario already exists`。这种情况不要反复重试旧 volume；先备份旧库，再换新 project 名起栈，或者清理旧 volume 后再起。
 
 ## 环境变量
 
@@ -183,146 +198,53 @@ python -m pytest tests/test_session_auth.py tests/test_llm_client.py tests/test_
 ```bash
 cd backend
 source .venv/bin/activate
+# graph / replay 定向
 python -m pytest tests/test_counterfactual.py tests/test_resume.py tests/test_runtime_lock.py tests/test_fallback_migrations.py tests/test_causal_graph.py tests/test_debate_argument_map.py tests/test_contract_freeze.py tests/test_async_io_hooks.py tests/test_factions.py tests/test_debate_api.py -q
-# 更宽一点的 backend smoke，用来兜住相邻 API / service 回归；不是 graph 专项断言
-python -m pytest tests/test_api.py tests/test_debate_service.py -q
-python -m ruff check app/api/graphs.py app/api/helpers.py app/services/runtime_lock.py app/services/causal_graph.py app/services/debate_argument_map.py app/models/checkpoint.py alembic/versions/021_scope_debate_argument_unit_dedup_per_turn.py tests/test_counterfactual.py tests/test_resume.py tests/test_runtime_lock.py tests/test_fallback_migrations.py tests/test_causal_graph.py tests/test_debate_argument_map.py
+# backend 全量
+python -m pytest -q
 
 cd ../frontend
-npm test -- --run src/lib/manualChunks.test.ts src/lib/performanceBudgets.test.ts src/lib/exportValidation.test.ts src/components/ArgumentMap.test.tsx src/components/GraphNodeCard.test.tsx src/components/NodeDetailPanel.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ReplayEmptyState.test.tsx src/i18n/locales.test.ts
-node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
+# graph-focused vitest
+npm test -- --run src/components/FactionTimeline.test.tsx src/pages/ResultView.test.tsx src/pages/DebateResultView.test.tsx src/pages/CompareDigestView.test.tsx src/i18n/locales.test.ts src/pages/CausalReviewView.test.tsx src/components/ArgumentMap.test.tsx src/components/GraphNodeCard.test.tsx src/components/NodeDetailPanel.test.tsx
+# frontend 全量
+npm test
+node --test scripts/e2e-frontend-preflight.test.mjs
 npx tsc --noEmit -p tsconfig.app.json
 npm run lint
 npm run build
-npm run perf:budgets:check
 
-# These two scripts use page.route() fixtures.
-# They do not need a live backend, but they do need a reachable frontend host.
 npm run preview -- --host 127.0.0.1 --port 18930
-SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs full
-SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
-# Optional locale smoke
-SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs full
-SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full
-# Optional desktop cross-browser smoke
-SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs desktop --browser firefox --headless
-SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --browser firefox --headless
-SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs desktop --browser webkit --headless
-SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs desktop --browser webkit --headless
+SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs full --headless
+SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full --headless
+SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-c.mjs full --headless
+SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs full --headless
+SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full --headless
 ```
 
 说明：
 
 - 本轮实测结果：
-  - backend graph / replay 定向 suite：`280 passed in 26.84s`
-  - frontend graph-focused vitest：`102 passed`
+  - backend graph / replay 定向回归：`296 passed`
+  - backend 全量：`2095 passed, 2 skipped`
+  - frontend 全量 vitest：`1055 passed`
+  - `node --test scripts/e2e-frontend-preflight.test.mjs`：`25 passed`
   - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` 通过
-  - `npm run perf:budgets:check` 状态 `ok`
-  - `node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs`：`24 passed`
-  - preview-driven Chromium：`phase3-batch-a full`、`phase3-batch-b full`、`phase3-batch-b zh-CN mobile` 通过
-  - desktop Firefox / WebKit：`phase3-batch-a` / `phase3-batch-b` 都通过
+  - 浏览器 smoke：`phase3-batch-a/b/c full --headless` 与 `zh-CN` 的 `batch-a/b full --headless` 通过
+  - `node scripts/release-signoff.mjs --dry-run --skip-backend-checks --skip-assets-check --output-root output/e2e/dry-run-signoff-docs` 通过
 - 这组回归当前覆盖：
-  - graph 前端这轮额外兜住：
-    - graph 请求 URL 的 `scenarioId / branchId` 编码
-    - `ArgumentMap` relation label 本地化
-    - `ExportPanel` 的 SVG 导出裁切与完整 label 优先级
-    - fail-soft `load_failed` 保持 `Retry` 态并隐藏 graph/export
-  - `manualChunks` production 分块回归（`react` / `react/jsx-runtime` / `react-dom/client` / `scheduler` 保持在共享 `vendor`）
-  - `perf:budgets:check` 当前会按 modern / legacy 两套 chunk 名一起检查共享 `vendor`，并补上 `capture-gif / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`
-  - replay branch runtime lock 当前已补：
-    - `counterfactual / resume` 的 mock 续租异常 fail-closed
-    - 真实 SQLite 跨线程 heartbeat 续租异常 fail-closed
-    - 锁丢失后被并发请求吃满最后一个 branch slot 时回退成 `429 REPLAY_BRANCH_LIMIT_REACHED`
-    - heartbeat 刷新异常后也会释放原 replay lease，不再把后续请求卡到 TTL
-  - debate runtime lock 当前已补：
-    - 长运行续租
-    - 续租返回 `None`
-    - 续租抛异常
-    - 真实 SQLite 跨线程 heartbeat 续租异常
-    - 以上路径都会 fail-closed，把 debate 落成 `error`
-  - `run_sim_background` 当前也会在预占 `simulation lock` 运行中丢失时 fail-closed，直接取消任务并把 scenario 落成 `error`
-  - `CausalReviewView` 分支 selector：
-    - `available_branches` 缺失时，会从 payload 里的 `branch_id + children` 恢复可选分支
-    - 相似前缀的 branch 也会直接显示完整 label，不再挤成同一个短标签
-    - 较旧分支请求的返回不会覆盖较新的分支结果
-    - 非法 `branch_id` 当前会返回 `404 BRANCH_NOT_FOUND`，不再伪装成空图
-    - 非交互 fallback 路径会隐藏 export controls，并只保留一条具名的 a11y list；relationless snapshot fallback 也会走本地化提示
-    - 错误态会按 `network / branch_not_found / unauthorized / server / load_failed` 映射到本地化 copy，不再把原始 `HTTP 404` 或后端 message 直接露给用户
-  - `CausalReviewView` / `ArgumentMap` minimap 当前是非交互 overlay（`pointer-events: none`），不会挡住移动端 node click
-    图节点可访问名称，以及 React Flow controls / minimap 文案也会跟随 UI 语言实时更新；切语言不会重打图请求。
-  - graph mobile 口径当前不是“只留 `Fit view`”：
-    - compact viewport 继续保留 React Flow controls
-    - 会显示本地化 mobile navigation hint
-    - `MiniMap` 维持桌面限定
-  - graph screen-reader fallback 当前除了 node / unit list，也会补本地化 relation list
-  - `ArgumentMap`
-    - `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`
-    - `verdict` 节点当前也走共享 graph i18n label，不再把可访问名称写死成英文
-    - node-only 图当前也会保留 sr-only list，并可通过 graph node button 键盘打开 `NodeDetailPanel`
-    - 只有 unit-backed 图在状态筛选后才会切到 filter empty state；node-only 图不会被误筛空，强度摘要也会跟随当前筛选结果
-  - `NodeDetailPanel`
-    - 关闭后会把焦点还给最近一次触发它的节点 / 按钮
-    - `Escape` 在 modeless 口径下也能全局关闭详情，不要求焦点留在 panel 里
-    - `Copy Reference` 在 clipboard API 被拒时会回退到 `document.execCommand('copy')`；两条都失败时会显示可见错误提示
-  - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分；SVG 导出走 native SVG layer + node rebuild，不再依赖 `foreignObject`
-  - `GraphNodeCard`
-  - graph locale 资源
-  - backend causal graph / debate argument map / contract freeze / async hook / factions 相关链路：
-    - `020` migration 对 runtime schema repair 先跑的路径保持兼容；legacy `agent_state_frame` 脏重复行会先去重再重建唯一约束
-    - causal graph 读取 legacy duplicate snapshot 时优先取最新一份
-    - causal append 幂等；同轮 id-less event 缩量重写时会清理 stale 节点
-    - replay branch runtime lock 当前会续租；慢 clone / seed 不会再因为 lease 过期突破共享上限
-    - `resume` 当前会先预占 simulation lock，不再出现 `201` 已返回但后台实际没启动的假成功
-    - `counterfactual` 当前会在 clone 前先校验目标 agent message；同 agent 同轮多消息时要求显式选定 source message，seed 失败也会清理掉新建 branch；空白 `source_message_content` 会按“未指定”处理
-    - `021` migration 当前会移除 legacy `debate_id + semantic_hash` 约束，并在升级前清理同 turn 的脏重复行
-    - argument map enrichment 当前会按归一化文本去重 whitespace 变体；`counter` 改写后也会继续保留 `rebuts` 边
-    - debate import replay 当前会在 turns 落库后同步生成 argument map，不再先落成空图
-    - same-round sibling branch 节点隔离（含 `id=None`）
-    - same-round 重复 `msg.id` 当前会继续按 branch 与 agent 隔离
-    - 同 agent 同轮多消息
-    - child-branch fork provenance
-    - 非法 `trigger_node_ids` 会回退到 same-round provenance
-    - fork replay 时显式 `trigger_node_ids` 会替换旧的 fallback provenance edge
-    - argument map `? ! ？ ！` punctuation split
-    - enrichment apply / rebuild 当前串行化
-    - `supports / rebuts` 重建后会重挂到最新 claim，不保留 stale target；同一 turn 里按句子顺序取最后一条
-    - `link_verdict()` 不会再把其他 snapshot 的 stale unit 重连回当前图里
-- `npm run build` 当前必须配合 `src/lib/manualChunks.test.ts` 与 preview smoke 一起看；单看构建成功不足以证明 preview 不会白屏
-- `phase3-batch-a` 主要看：
-  - `CausalReviewView` 基础渲染
-  - branch selector 会校验 `scenario title + probability` 的可读 option，同时把 `branch_id` 真正写回 URL，并发出过滤请求
-  - graph export 按钮可见，且 `Export SVG` 会校验下载下来的 SVG 非空、结构可读
-  - graph node 点击后 `NodeDetailPanel` 打开、展示 payload，并可关闭
-  - screen-reader fallback list 确实存在，且至少有 1 条 list item
-  - relationless graph（多节点但 0 边）会切到本地化 snapshot fallback；此时不再挂 ReactFlow，也不会显示 export controls，并且只保留一条 a11y list
-- `phase3-batch-b` 主要看：
-  - `ArgumentMap` 基础渲染
-  - 本地化强度摘要 aria-label（default / `zh-CN` locale 都能定位）
-  - legend 可见
-  - `Export SVG` 会校验下载下来的 SVG 非空、结构可读
-  - 本地化 verdict 节点标签可见
-  - graph node 点击后 `NodeDetailPanel` 打开、展示详情文本 / status，并可关闭
-  - fail-soft 错误态会显示失败文案和 `Retry`，同时隐藏图与导出
-  - status filter 走到空态分支，并可 `Clear` 恢复图谱
-  - compare theater 的 actor / message / bubble 状态都非空
-  - 与结果页图谱接线是否还活着
-  - 脚本 summary 在 step 失败时会把测试名写进 `failedTests`
-- 两条 `phase3` 脚本当前都走 `page.route()` fixtures；fixture 命中的请求会继续按脚本内假数据完成，不需要 live backend
-- 两条 `phase3` 脚本当前都支持 `--browser chromium|firefox|webkit`；这轮 Firefox / WebKit 只做 desktop scoped regression
-- 两条 `phase3` 脚本当前都会先跑共享 `frontendPreflight`：
-  - deep-link 必须返回同一份 SPA shell
-  - 所有目标路由必须引用同一 entry module
-  - entry asset 本身也必须能取到
-  - preview 没 ready、SPA fallback 失效，或 `dist` 快照不一致时会直接 fail-closed，不再把 404 混成图谱页面回归
-- 两条 `phase3` 脚本现在按 fail-closed 收口浏览器侧异常：
-  - 任意 `pageerror`
-  - 任意非导航中止类 `requestfailed`
-  - 任意相关 `console.error / console.assert`
-  - 都会写入 `browser-issues.json`，并让该 surface 失败
-- 当前放行的浏览器噪音只有两类：
-  - 浏览器导航收尾常见的 `ERR_ABORTED / NS_BINDING_ABORTED`
-  - `fonts.googleapis.com / fonts.gstatic.com` 的 `stylesheet / font` 外部字体失败
-- 其他 `ECONNREFUSED`、未拦截 API、脚本报错都会直接反映到 summary 和退出码
+  - frontend graph-focused vitest 当前主要看：
+    - `src/components/FactionTimeline.test.tsx`
+    - `src/pages/ResultView.test.tsx`
+    - `src/pages/DebateResultView.test.tsx`
+    - `src/pages/CompareDigestView.test.tsx`
+    - `src/i18n/locales.test.ts`
+    - `src/pages/CausalReviewView.test.tsx`
+    - `src/components/ArgumentMap.test.tsx`
+    - `src/components/GraphNodeCard.test.tsx`
+    - `src/components/NodeDetailPanel.test.tsx`
+  - `phase3-batch-a`、`phase3-batch-b` 的 `full` 默认覆盖 Chromium desktop/mobile 和 desktop Firefox/WebKit
+  - `phase3-batch-c` 的 `full` 也覆盖同一矩阵
+  - 三条 `phase3` 脚本都走 `page.route()` fixtures；需要可访问的 frontend preview host，不依赖 live backend
 
 ### Resume / P1-9 定向回归
 
@@ -596,6 +518,8 @@ npm run release:signoff -- --headless
   - frontend `http://127.0.0.1:18928`
   - backend `http://127.0.0.1:18927`
 - 默认 `release-signoff` 当前已纳入：
+  - `lint`
+  - `graph_focused_vitest`
   - `phase3_graph_preflight`
   - `script_contracts`
   - graph default / `zh-CN` smoke（`phase3-batch-a`、`phase3-batch-b`）
@@ -608,7 +532,7 @@ npm run release:signoff -- --headless
   - `roundtable_webkit / roundtable_en_webkit`
   - `debate_full / debate_firefox / debate_webkit`
 - 如果本地预览端口不同，显式传 `--url http://127.0.0.1:<port>`。
-- `release-signoff` 当前会在 graph smoke 前先跑 `phase3_graph_preflight`；如果 preview deep-link 还没 ready、SPA fallback 失效，或 entry asset 指纹不一致，会直接在这一步失败。
+- `release-signoff` 当前会在 graph smoke 前先跑 `phase3_graph_preflight`；如果 preview deep-link 还没 ready、SPA fallback 失效，或 entry module、CSS entry、legacy fallback 资源不一致 / 不可达，会直接在这一步失败。
 
 如果需要强制 Debate 使用 `llm_hybrid` 裁决模式：
 

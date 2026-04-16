@@ -407,7 +407,11 @@ function isScenario(value: unknown): value is Scenario {
     && typeof value.status === 'string'
     && SCENARIO_STATUSES.has(value.status as Scenario['status'])
     && typeof value.created_at === 'string'
-    && (value.total_rounds === undefined || isFiniteNumber(value.total_rounds))
+    && (
+      value.total_rounds === undefined
+      || value.total_rounds === null
+      || isFiniteNumber(value.total_rounds)
+    )
     && (
       value.mode === undefined
       || value.mode === null

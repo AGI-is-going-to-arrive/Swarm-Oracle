@@ -22,6 +22,7 @@ export interface NodeDetail {
 }
 
 interface NodeDetailPanelProps {
+  panelId?: string;
   node: NodeDetail | null;
   onClose: () => void;
 }
@@ -29,14 +30,41 @@ interface NodeDetailPanelProps {
 const TYPE_COLORS = NODE_TYPE_COLORS_HEX;
 const STATUS_COLORS = STATUS_COLORS_HEX;
 
-export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
+function useMediaQueryState(query: string) {
+  const [matches, setMatches] = useState(() => (
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(query).matches
+      : false
+  ));
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mediaQueryList = window.matchMedia(query);
+    const handleChange = (event: MediaQueryListEvent | MediaQueryList) => {
+      setMatches(event.matches);
+    };
+
+    if (typeof mediaQueryList.addEventListener === 'function') {
+      mediaQueryList.addEventListener('change', handleChange as EventListener);
+      return () => mediaQueryList.removeEventListener('change', handleChange as EventListener);
+    }
+
+    mediaQueryList.addListener?.(handleChange as (event: MediaQueryListEvent) => void);
+    return () => mediaQueryList.removeListener?.(handleChange as (event: MediaQueryListEvent) => void);
+  }, [query]);
+
+  return matches;
+}
+
+export function NodeDetailPanel({ panelId, node, onClose }: NodeDetailPanelProps) {
   const { t } = useTranslation();
   const titleId = useId();
+  const detailPanelId = panelId ?? `node-detail-${titleId.replace(/:/g, '-')}`;
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
-  const wasOpenRef = useRef(false);
   const [copyError, setCopyError] = useState<{ nodeId: string; message: string } | null>(null);
   const nodeId = node?.id ?? null;
+  const isCompactViewport = useMediaQueryState('(max-width: 640px)');
 
   const restorePreviousFocus = useCallback(() => {
     const previousFocus = previousFocusRef.current;
@@ -46,52 +74,23 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
     previousFocusRef.current = null;
   }, []);
 
-  const handleClose = useCallback(() => {
+  const handleClose = useCallback((options?: { restoreFocus?: boolean }) => {
     setCopyError(null);
+    if (options?.restoreFocus) {
+      restorePreviousFocus();
+    }
     onClose();
-  }, [onClose]);
+  }, [onClose, restorePreviousFocus]);
 
   useEffect(() => {
     if (nodeId === null) {
-      if (wasOpenRef.current) {
-        restorePreviousFocus();
-        wasOpenRef.current = false;
-      }
       return;
     }
 
     previousFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    wasOpenRef.current = true;
     closeButtonRef.current?.focus();
-  }, [nodeId, restorePreviousFocus]);
-
-  useEffect(() => () => {
-    if (wasOpenRef.current) {
-      restorePreviousFocus();
-    }
-  }, [restorePreviousFocus]);
-
-  useEffect(() => {
-    if (nodeId === null) {
-      return;
-    }
-
-    const handleDocumentKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      handleClose();
-    };
-
-    document.addEventListener('keydown', handleDocumentKeyDown, true);
-    return () => {
-      document.removeEventListener('keydown', handleDocumentKeyDown, true);
-    };
-  }, [handleClose, nodeId]);
+  }, [nodeId]);
 
   if (!node) return null;
 
@@ -102,20 +101,30 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
 
   return (
     <div
+      id={detailPanelId}
       data-testid="node-detail-panel"
       role="dialog"
       aria-modal="false"
       aria-labelledby={titleId}
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        event.stopPropagation();
+        handleClose({ restoreFocus: true });
+      }}
       style={{
         position: 'absolute',
-        top: 8,
+        top: isCompactViewport ? 'auto' : 8,
         right: 8,
-        width: 280,
-        maxHeight: 'calc(100% - 16px)',
+        bottom: isCompactViewport ? 8 : 'auto',
+        left: isCompactViewport ? 8 : 'auto',
+        width: isCompactViewport ? 'auto' : 280,
+        maxWidth: isCompactViewport ? 'calc(100% - 16px)' : 320,
+        maxHeight: isCompactViewport ? 'min(46%, 360px)' : 'calc(100% - 16px)',
         overflow: 'auto',
         background: '#1e1e30',
         border: '1px solid #444',
-        borderRadius: 8,
+        borderRadius: isCompactViewport ? 16 : 8,
         padding: '1rem',
         zIndex: 10,
         boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
@@ -128,7 +137,7 @@ export function NodeDetailPanel({ node, onClose }: NodeDetailPanelProps) {
         </h3>
         <button
           ref={closeButtonRef}
-          onClick={handleClose}
+          onClick={() => handleClose({ restoreFocus: true })}
           aria-label={t('common.close', 'Close')}
           style={{
             background: 'none',

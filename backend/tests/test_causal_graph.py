@@ -1,6 +1,7 @@
 """Tests for causal graph service — F2 Phase C1 + v6 graph-viz upgrades."""
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -464,6 +465,68 @@ class TestAppendRoundNodes:
 
         assert [node["label"] for node in result["nodes"]] == ["first draft revised"]
 
+    def test_replaying_round_removes_stale_state_frames_and_stance_shifts(self):
+        append_round_nodes(
+            "sc3i",
+            "br1",
+            1,
+            [
+                MockMessage(emotion="calm", agent_id="a1", id="m_base_1", content="steady"),
+                MockMessage(emotion="calm", agent_id="a2", id="m_base_2", content="steady"),
+            ],
+        )
+        append_round_nodes(
+            "sc3i",
+            "br1",
+            2,
+            [
+                MockMessage(
+                    emotion="aggressive",
+                    agent_id="a1",
+                    id="m_shift_1",
+                    content="hard pivot",
+                ),
+                MockMessage(
+                    emotion="aggressive",
+                    agent_id="a2",
+                    id="m_shift_2",
+                    content="also pivots",
+                ),
+            ],
+        )
+
+        initial = build_snapshot("sc3i", branch_id="br1")
+        assert len([node for node in initial["nodes"] if node["type"] == "stance_shift"]) == 2
+
+        append_round_nodes(
+            "sc3i",
+            "br1",
+            2,
+            [
+                MockMessage(
+                    emotion="neutral",
+                    agent_id="a1",
+                    id="m_replay_1",
+                    content="replayed steady",
+                )
+            ],
+        )
+
+        result = build_snapshot("sc3i", branch_id="br1")
+        assert not [node for node in result["nodes"] if node["type"] == "stance_shift"]
+
+        with Session(get_engine()) as session:
+            frames = session.exec(
+                select(AgentStateFrame).where(
+                    AgentStateFrame.scenario_id == "sc3i",
+                    AgentStateFrame.branch_id == "br1",
+                    AgentStateFrame.round_number == 2,
+                )
+            ).all()
+
+        assert [frame.agent_id for frame in frames] == ["a1"]
+        assert frames[0].summary_excerpt == "replayed steady"
+
 
 # ── build_snapshot ──────────────────────────────────────
 
@@ -879,6 +942,153 @@ class TestBuildSnapshot:
             ).all()
             caused_edges = [edge for edge in edges if edge.edge_type == "caused"]
             assert len(caused_edges) == 1
+
+    def test_runtime_repair_does_not_revive_stale_fork_from_old_snapshot(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        db_path = tmp_path / "legacy-duplicate-latest-authority.db"
+        engine = create_engine(f"sqlite:///{db_path}")
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE graph_snapshot (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    owner_type TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    graph_kind TEXT NOT NULL,
+                    branch_id TEXT,
+                    round_number INTEGER,
+                    share_artifact_id TEXT,
+                    metadata_json TEXT,
+                    created_at DATETIME NOT NULL
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE graph_node (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    snapshot_id TEXT NOT NULL,
+                    node_key TEXT NOT NULL,
+                    node_type TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    round_number INTEGER,
+                    ref_model TEXT,
+                    ref_id TEXT,
+                    payload_json TEXT
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE graph_edge (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    snapshot_id TEXT NOT NULL,
+                    source_node_id TEXT NOT NULL,
+                    target_node_id TEXT NOT NULL,
+                    edge_type TEXT NOT NULL,
+                    weight FLOAT,
+                    label TEXT,
+                    payload_json TEXT
+                )
+                """
+            )
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE agent_state_frame (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    scenario_id TEXT NOT NULL,
+                    branch_id TEXT NOT NULL,
+                    round_number INTEGER NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    stance_score FLOAT NOT NULL DEFAULT 0.0,
+                    stance_label TEXT,
+                    emotion TEXT,
+                    summary_excerpt TEXT,
+                    created_at DATETIME NOT NULL
+                )
+                """
+            )
+
+        monkeypatch.setattr("app.services.causal_graph.get_engine", lambda: engine)
+        created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+        with Session(engine) as session:
+            old_snapshot = GraphSnapshot(
+                id="zzzz-old-snapshot",
+                owner_type="scenario",
+                owner_id="sc-legacy-authority",
+                graph_kind="causal_review",
+                created_at=created_at,
+            )
+            new_snapshot = GraphSnapshot(
+                id="aaaa-new-snapshot",
+                owner_type="scenario",
+                owner_id="sc-legacy-authority",
+                graph_kind="causal_review",
+                created_at=created_at,
+            )
+            session.add(old_snapshot)
+            session.add(new_snapshot)
+            session.flush()
+
+            old_event = GraphNode(
+                snapshot_id=old_snapshot.id,
+                node_key="r1_a1_m1",
+                node_type="event",
+                label="current event",
+                round_number=1,
+                payload_json='{"branch_id":"br1","agent_id":"a1"}',
+            )
+            stale_fork = GraphNode(
+                snapshot_id=old_snapshot.id,
+                node_key="fork_r1_br_old",
+                node_type="fork",
+                label="stale fork",
+                round_number=1,
+                payload_json='{"branch_id":"br-old","source_branch_id":"br1"}',
+            )
+            new_event = GraphNode(
+                snapshot_id=new_snapshot.id,
+                node_key="r1_a1_m1",
+                node_type="event",
+                label="current event",
+                round_number=1,
+                payload_json='{"branch_id":"br1","agent_id":"a1"}',
+            )
+            session.add_all([old_event, stale_fork, new_event])
+            session.flush()
+            session.add(
+                GraphEdge(
+                    snapshot_id=old_snapshot.id,
+                    source_node_id=old_event.id,
+                    target_node_id=stale_fork.id,
+                    edge_type="caused",
+                )
+            )
+            session.commit()
+
+        append_round_nodes(
+            "sc-legacy-authority",
+            "br1",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m2", content="next event")],
+        )
+
+        result = build_snapshot("sc-legacy-authority")
+
+        assert {node["label"] for node in result["nodes"]} == {"current event", "next event"}
+        assert len(result["nodes"]) == 2
+        assert result["available_branches"] == ["br1"]
+        assert all(node["label"] != "stale fork" for node in result["nodes"])
+
+        with Session(engine) as session:
+            snapshots = session.exec(
+                select(GraphSnapshot).where(GraphSnapshot.owner_id == "sc-legacy-authority")
+            ).all()
+            assert len(snapshots) == 1
 
     def test_empty_graph_when_no_data(self):
         result = build_snapshot("nonexistent_scenario")
@@ -1478,3 +1688,64 @@ class TestStanceShift:
         assert "new_score" in p
         assert "delta" in p
         assert p["delta"] >= 0.4
+
+    def test_replaying_round_removes_stale_shift_and_refreshes_prev_frame(self):
+        """Replaying the same round should drop obsolete shift nodes and refresh stored state."""
+        round_one = [MockMessage(emotion="calm", agent_id="a1", id="m_ss7")]  # 0.1
+        round_two_large_shift = [MockMessage(emotion="aggressive", agent_id="a1", id="m_ss8")]  # -0.7
+        round_two_replayed = [MockMessage(emotion="neutral", agent_id="a1", id="m_ss8b")]  # 0.0
+        round_three = [MockMessage(emotion="aggressive", agent_id="a1", id="m_ss9")]  # -0.7
+
+        append_round_nodes("sc_ss4", "br1", 1, round_one)
+        append_round_nodes("sc_ss4", "br1", 2, round_two_large_shift)
+
+        initial_result = build_snapshot("sc_ss4")
+        initial_shifts = [n for n in initial_result["nodes"] if n["type"] == "stance_shift"]
+        assert len(initial_shifts) == 1
+
+        append_round_nodes("sc_ss4", "br1", 2, round_two_replayed)
+
+        replayed_result = build_snapshot("sc_ss4")
+        replayed_shifts = [
+            n for n in replayed_result["nodes"]
+            if n["type"] == "stance_shift" and n["round"] == 2
+        ]
+        assert replayed_shifts == []
+
+        append_round_nodes("sc_ss4", "br1", 3, round_three)
+
+        round_three_shifts = [
+            n for n in build_snapshot("sc_ss4")["nodes"]
+            if n["type"] == "stance_shift" and n["round"] == 3
+        ]
+        assert len(round_three_shifts) == 1
+        assert round_three_shifts[0]["payload"]["prev_score"] == pytest.approx(0.0)
+        assert round_three_shifts[0]["payload"]["new_score"] == pytest.approx(-0.7)
+
+    def test_replaying_round_without_agent_removes_stale_frame(self):
+        """Removing an agent from a replayed round should delete the stale per-round frame."""
+        round_one = [MockMessage(emotion="calm", agent_id="a1", id="m_ss10")]  # 0.1
+        round_two = [MockMessage(emotion="aggressive", agent_id="a1", id="m_ss11")]  # -0.7
+        round_three = [MockMessage(emotion="aggressive", agent_id="a1", id="m_ss12")]  # -0.7
+
+        append_round_nodes("sc_ss5", "br1", 1, round_one)
+        append_round_nodes("sc_ss5", "br1", 2, round_two)
+        append_round_nodes("sc_ss5", "br1", 2, [])
+
+        with Session(get_engine()) as session:
+            stale_round_two_frame = session.exec(
+                select(AgentStateFrame).where(
+                    AgentStateFrame.scenario_id == "sc_ss5",
+                    AgentStateFrame.branch_id == "br1",
+                    AgentStateFrame.round_number == 2,
+                    AgentStateFrame.agent_id == "a1",
+                )
+            ).first()
+            assert stale_round_two_frame is None
+
+        append_round_nodes("sc_ss5", "br1", 3, round_three)
+        round_three_shifts = [
+            n for n in build_snapshot("sc_ss5")["nodes"]
+            if n["type"] == "stance_shift" and n["round"] == 3
+        ]
+        assert round_three_shifts == []
