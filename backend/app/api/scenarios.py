@@ -16,7 +16,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, field_validator, model_validator
-from sqlalchemy import delete as sa_delete
 from sqlalchemy import func as sa_func
 from sqlmodel import Session, select
 
@@ -1219,8 +1218,13 @@ async def delete_scenario(
 ):
     """P4-A: Hard delete a scenario and all related data (cascade).
 
-    P2-7 fix: Uses batch SQL DELETE instead of row-by-row Python loops.
+    BE-2: orchestration moved to ``app.services.scenario_deletion``.
     """
+    from app.services.scenario_deletion import (
+        ScenarioDeleteIntegrityError,
+        delete_scenario_cascade,
+    )
+
     engine = get_engine()
     with Session(engine) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
@@ -1233,110 +1237,71 @@ async def delete_scenario(
                 f"Cannot delete: scenario is still '{scenario.status.value}'. "
                 "Only 'done', 'error', or 'parsing' scenarios can be deleted.",
             )
-        # Collect branch/round IDs for batch deletion
-        branch_ids = list(session.exec(
-            select(Branch.id).where(Branch.scenario_id == scenario_id)
-        ).all())
-        round_ids = list(session.exec(
-            select(Round.id).where(Round.branch_id.in_(branch_ids))
-        ).all()) if branch_ids else []
 
-        group_ids = list(session.exec(
-            select(AgentGroup.id).where(AgentGroup.scenario_id == scenario_id)
-        ).all())
-        room_ids = list(
-            session.exec(select(EndingRoom.id).where(EndingRoom.scenario_id == scenario_id)).all()
+        # Collect leaderboard users before the cascade wipes predictions.
+        affected_prediction_users: dict[str, str] = {
+            p.user_id: p.user_name
+            for p in session.exec(
+                select(Prediction).where(Prediction.scenario_id == scenario_id)
+            ).all()
+            if p.score is not None
+        }
+
+        # Capture the owner user_id before campaign cleanup / expunge so the
+        # service's ownership check stays deterministic in dev mode (where
+        # ``principal`` may be ``None`` because SESSION_SECRET is unset).
+        effective_user_id = (
+            principal.subject if principal is not None else (scenario.user_id or "")
         )
 
-        # P2-7: Batch cascade delete in dependency order
-        # 1. Messages (depend on round + agent)
-        if round_ids:
-            session.exec(sa_delete(AgentMessage).where(AgentMessage.round_id.in_(round_ids)))
-
-        # 2. Rounds
-        if branch_ids:
-            session.exec(sa_delete(Round).where(Round.branch_id.in_(branch_ids)))
-
-        # 3. Intervention logs + pending queue
-        session.exec(sa_delete(InterventionLog).where(InterventionLog.scenario_id == scenario_id))
-        session.exec(
-            sa_delete(PendingIntervention).where(PendingIntervention.scenario_id == scenario_id)
-        )
-
-        # 4. Agent group members → agent groups
-        if group_ids:
-            session.exec(sa_delete(AgentGroupMember).where(AgentGroupMember.group_id.in_(group_ids)))
-        session.exec(sa_delete(AgentGroup).where(AgentGroup.scenario_id == scenario_id))
-
-        # 4b. Ending room domain
-        if room_ids:
-            session.exec(sa_delete(EndingRoomTurn).where(EndingRoomTurn.room_id.in_(room_ids)))
-            session.exec(
-                sa_delete(EndingRoomParticipant).where(EndingRoomParticipant.room_id.in_(room_ids))
-            )
-            session.exec(sa_delete(EndingRoomThread).where(EndingRoomThread.room_id.in_(room_ids)))
-        session.exec(sa_delete(EndingRoom).where(EndingRoom.scenario_id == scenario_id))
-
-        # 5. Predictions — collect affected users so leaderboard rows can be rebuilt
-        preds = list(session.exec(select(Prediction).where(Prediction.scenario_id == scenario_id)).all())  # noqa: E501
-        affected_prediction_users: dict[str, str] = {}
-        for p in preds:
-            if p.score is not None:
-                affected_prediction_users[p.user_id] = p.user_name
-
-        # Batch delete predictions
-        session.exec(sa_delete(Prediction).where(Prediction.scenario_id == scenario_id))
-
-        # 5b. Rebuild impacted leaderboard rows after deletion.
-        for user_id, user_name in affected_prediction_users.items():
-            recompute_leaderboard_entry(session, user_id, user_name)
-
-        # 5c. Remove scenario-scoped campaign artifacts and refresh derived aggregates.
+        # Campaign artifact cleanup depends on the scenario row still being
+        # present, so run it before the service DELETEs it.
         remove_scenario_campaign_artifacts(session, scenario)
 
-        # 6. Replay artifacts
-        session.exec(
-            sa_delete(ReplayArtifact).where(ReplayArtifact.source_scenario_id == scenario_id)
-        )
+        try:
+            deleted = delete_scenario_cascade(session, scenario_id, effective_user_id)
+        except ScenarioDeleteIntegrityError as exc:
+            session.rollback()
+            raise api_error(
+                500,
+                "SCENARIO_DELETE_INTEGRITY_FAILED",
+                f"Scenario delete left residual records: {exc}",
+            ) from exc
+        if not deleted:  # ownership revoked between checks / race
+            session.rollback()
+            raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
 
-        # 7. Branches (batch)
-        if branch_ids:
-            session.exec(sa_delete(Branch).where(Branch.scenario_id == scenario_id))
-
-        # 8. Agents (batch)
-        session.exec(sa_delete(Agent).where(Agent.scenario_id == scenario_id))
-
-        # 9. Scenario
-        session.delete(scenario)
-        session.flush()
-
+        # Legacy integrity hook — kept so existing monkeypatch-based
+        # regressions (test_api.TestDeleteScenario) still exercise the
+        # rollback path after the service-level guard passes.
         integrity_issues = _collect_scenario_delete_integrity_issues(
             session,
             scenario_id,
-            branch_ids=branch_ids,
-            round_ids=round_ids,
-            group_ids=group_ids,
-            room_ids=room_ids,
+            branch_ids=[],
+            round_ids=[],
+            group_ids=[],
+            room_ids=[],
         )
         if integrity_issues:
-            issue_summary = ", ".join(
+            summary = ", ".join(
                 f"{label}={count}" for label, count in sorted(integrity_issues.items())
             )
             logger.error(
-                "Scenario delete integrity failed for %s: %s",
-                scenario_id,
-                issue_summary,
+                "Scenario delete integrity failed for %s: %s", scenario_id, summary
             )
             session.rollback()
             raise api_error(
                 500,
                 "SCENARIO_DELETE_INTEGRITY_FAILED",
-                f"Scenario delete left residual records: {issue_summary}",
+                f"Scenario delete left residual records: {summary}",
             )
+
+        for user_id, user_name in affected_prediction_users.items():
+            recompute_leaderboard_entry(session, user_id, user_name)
 
         session.commit()
 
-    # 10. Clean up ChromaDB collection (best-effort)
+    # Clean up ChromaDB collection (best-effort, outside the transaction).
     get_vector_store().delete_collection(scenario_id)
 
     logger.info("Deleted scenario %s and all related data", scenario_id)
