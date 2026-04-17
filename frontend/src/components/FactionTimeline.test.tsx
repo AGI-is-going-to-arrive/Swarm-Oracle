@@ -2,6 +2,7 @@
  * Phase 3 F5 — FactionTimeline tests
  */
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import i18next, { type i18n as I18nInstance } from 'i18next';
 import { type ComponentProps } from 'react';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
@@ -285,5 +286,54 @@ describe('FactionTimeline', () => {
         headers: expect.any(Headers),
       }),
     );
+  });
+
+  it('opens NodeConversationSheet when an event row is clicked (FE-3-seq wire-up)', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([
+        {
+          round: 1,
+          factions: [
+            { key: 'moderates', label: 'Moderates', members: ['a1'], stance_center: 0.2, confidence: 0.6 },
+          ],
+          events: [
+            { type: 'betrayal', actor_agent_id: 'a1', faction_key: 'moderates' },
+          ],
+        },
+      ]));
+
+      await renderFactionTimeline('en');
+      const row = await screen.findByTestId('faction-event-row-1-0');
+      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
+
+      await user.click(row);
+
+      const sheet = await screen.findByTestId('node-conversation-sheet');
+      expect(sheet).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

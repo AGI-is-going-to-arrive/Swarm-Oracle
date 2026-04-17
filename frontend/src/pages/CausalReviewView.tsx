@@ -14,6 +14,7 @@ import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { ExportPanel } from '../components/ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from '../components/NodeDetailPanel';
 import GraphNodeCard from '../components/GraphNodeCard';
+import { NodeConversationSheet } from '../components/kg/NodeConversationSheet';
 import dagre from 'dagre';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import {
@@ -294,6 +295,18 @@ export function CausalReviewView() {
   const [error, setError] = useState<CausalGraphErrorState | null>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
+  // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
+  const [sheetState, setSheetState] = useState<{
+    open: boolean;
+    scenarioId: string;
+    identityId: string;
+    origin: { nodeId: string; nodeType: string; excerpt?: string };
+  }>({
+    open: false,
+    scenarioId: '',
+    identityId: '',
+    origin: { nodeId: '', nodeType: '' },
+  });
   // C5: Agent search
   const [agentSearch, setAgentSearch] = useState('');
   const exportRootId = `causal-graph-${useId().replace(/:/g, '-')}`;
@@ -607,7 +620,14 @@ export function CausalReviewView() {
       round: raw.round,
       payload: raw.payload,
     });
-  }, [rawNodeMap]);
+    // FE-3-seq: open NodeConversationSheet — append only, existing detail panel preserved.
+    setSheetState({
+      open: true,
+      scenarioId: id ?? '',
+      identityId: raw.id,
+      origin: { nodeId: raw.id, nodeType: raw.type, excerpt: raw.label || raw.key },
+    });
+  }, [rawNodeMap, id]);
 
   const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     openNodeDetail(node.id);
@@ -964,6 +984,17 @@ export function CausalReviewView() {
               ))}
             </div>
           </>
+        )}
+        {/* FE-3-seq: NodeConversationSheet (append-only). */}
+        {sheetState.open && (
+          <NodeConversationSheet
+            open={sheetState.open}
+            onOpenChange={(next) => setSheetState((prev) => ({ ...prev, open: next }))}
+            threadId={null}
+            scenarioId={sheetState.scenarioId}
+            identityId={sheetState.identityId}
+            origin={sheetState.origin}
+          />
         )}
       </div>
     </Tooltip.Provider>

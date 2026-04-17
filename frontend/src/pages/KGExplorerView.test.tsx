@@ -1,13 +1,14 @@
 /**
- * FE-2 — KGExplorerView tests
+ * FE-2 / FE-3-seq — KGExplorerView tests
  *
  * Covers:
  *   - Capability gate: kg_explorer.enabled=false → feature_disabled surface
  *   - Happy path: fetch causal-graph + render root + search + filter pills
- *   - Node click (simulated via CustomEvent dispatcher) fires kg:openNodeSheet
+ *   - Node click opens NodeConversationSheet (FE-3-seq wire-up, replaces
+ *     the legacy kg:openNodeSheet CustomEvent bridge)
  */
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -57,15 +58,41 @@ function renderAt(id = 'abc123') {
 
 const fetchMock = vi.fn();
 
+class NoopWS {
+  static OPEN = 1;
+  readyState = NoopWS.OPEN;
+  onopen: ((ev: unknown) => void) | null = null;
+  onmessage: ((ev: { data: string }) => void) | null = null;
+  onclose: ((ev: { code: number }) => void) | null = null;
+  onerror: ((ev: unknown) => void) | null = null;
+  send = vi.fn();
+  close = vi.fn();
+  constructor() {
+    /* noop */
+  }
+}
+
 beforeEach(() => {
   nodeClickHandlers.length = 0;
   graphDestroySpy.mockClear();
   fetchMock.mockReset();
   (globalThis as unknown as { fetch: typeof fetchMock }).fetch = fetchMock;
+  vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: false,
+    media: q,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+    onchange: null,
+  }));
 });
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 describe('KGExplorerView capability gate', () => {
@@ -132,21 +159,17 @@ describe('KGExplorerView happy path', () => {
     expect(canvas).toHaveAttribute('tabindex', '0');
   });
 
-  it('node click dispatches kg:openNodeSheet CustomEvent', async () => {
+  it('node click opens NodeConversationSheet (FE-3-seq wire-up)', async () => {
     renderAt('scn-42');
     await waitFor(() => expect(nodeClickHandlers.length).toBeGreaterThan(0));
-    const listener = vi.fn();
-    window.addEventListener('kg:openNodeSheet', listener);
+    // Sheet is not mounted prior to interaction.
+    expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
     // Simulate node click via our mock Graph.on callback.
-    nodeClickHandlers[0]({ target: { id: 'node-9', type: 'circle' } });
-    expect(listener).toHaveBeenCalled();
-    const evt = listener.mock.calls[0][0] as CustomEvent;
-    expect(evt.detail).toEqual({
-      scenarioId: 'scn-42',
-      identityId: 'node-9',
-      originContext: { graphNodeType: 'circle' },
+    act(() => {
+      nodeClickHandlers[0]({ target: { id: 'node-9', type: 'circle' } });
     });
-    window.removeEventListener('kg:openNodeSheet', listener);
+    const sheet = await screen.findByTestId('node-conversation-sheet');
+    expect(sheet).toBeInTheDocument();
   });
 
   it('search input updates value (controlled component)', async () => {

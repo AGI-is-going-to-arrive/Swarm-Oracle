@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getFactionTimeline } from '../api/client';
+import { NodeConversationSheet } from './kg/NodeConversationSheet';
 
 interface FactionInfo {
   key: string;
@@ -56,6 +57,18 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
   const isZh = i18n.language.toLowerCase().startsWith('zh');
   const [timeline, setTimeline] = useState<RoundFactionData[]>([]);
   const [loading, setLoading] = useState(false);
+  // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
+  const [sheetState, setSheetState] = useState<{
+    open: boolean;
+    scenarioId: string;
+    identityId: string;
+    origin: { nodeId: string; nodeType: string; excerpt?: string };
+  }>({
+    open: false,
+    scenarioId: '',
+    identityId: '',
+    origin: { nodeId: '', nodeType: '' },
+  });
 
   const branchDisplayName = normalizeText(branchLabel) ?? normalizeText(branchId) ?? t('factions.current_branch', 'Current branch');
   const membersLabel = t('factions.members', isZh ? '名成员' : 'members');
@@ -339,9 +352,33 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
                     const eventFactionName = eventFactionKey
                       ? factionLabelMap[eventFactionKey] ?? eventFactionKey
                       : null;
+                    // FE-3-seq: open NodeConversationSheet on event row click (append-only).
+                    const openSheet = () => {
+                      const identity = actorId ?? eventFactionKey ?? `faction-event-${round.round}-${eventIndex}`;
+                      setSheetState({
+                        open: true,
+                        scenarioId,
+                        identityId: identity,
+                        origin: {
+                          nodeId: identity,
+                          nodeType: `faction_event:${normalizedEventType}`,
+                          excerpt: label,
+                        },
+                      });
+                    };
                     return (
                       <div
                         key={`${round.round}-${eventIndex}-${normalizedEventType}`}
+                        data-testid={`faction-event-row-${round.round}-${eventIndex}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={openSheet}
+                        onKeyDown={(ev) => {
+                          if (ev.key === 'Enter' || ev.key === ' ') {
+                            ev.preventDefault();
+                            openSheet();
+                          }
+                        }}
                         style={{
                           display: 'grid',
                           gridTemplateColumns: 'auto minmax(0, 1fr)',
@@ -351,6 +388,7 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
                           borderRadius: 12,
                           background: 'rgba(255, 255, 255, 0.03)',
                           border: '1px solid rgba(255, 255, 255, 0.06)',
+                          cursor: 'pointer',
                         }}
                       >
                         <span style={{ fontSize: '1rem', lineHeight: 1.2 }}>
@@ -411,6 +449,17 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
           </div>
         </article>
       ))}
+      {/* FE-3-seq: NodeConversationSheet (append-only, triggered by event row click). */}
+      {sheetState.open && (
+        <NodeConversationSheet
+          open={sheetState.open}
+          onOpenChange={(next) => setSheetState((prev) => ({ ...prev, open: next }))}
+          threadId={null}
+          scenarioId={sheetState.scenarioId}
+          identityId={sheetState.identityId}
+          origin={sheetState.origin}
+        />
+      )}
     </div>
   );
 }

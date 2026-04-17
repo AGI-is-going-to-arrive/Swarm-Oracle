@@ -25,6 +25,7 @@ import '@xyflow/react/dist/style.css';
 import { ExportPanel } from './ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from './NodeDetailPanel';
 import GraphNodeCard from './GraphNodeCard';
+import { NodeConversationSheet } from './kg/NodeConversationSheet';
 import {
   NODE_TYPE_COLORS_HEX,
   STATUS_COLORS_HEX,
@@ -429,6 +430,14 @@ interface Props {
   refreshTrigger?: number;
 }
 
+// FE-3-seq: NodeConversationSheet trigger state (append-only, not wired to layout).
+interface ArgumentSheetState {
+  open: boolean;
+  scenarioId: string;
+  identityId: string;
+  origin: { nodeId: string; nodeType: string; excerpt?: string };
+}
+
 export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const { t } = useTranslation();
   const isCompactViewport = useCompactGraphViewport();
@@ -437,6 +446,13 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const [loading, setLoading] = useState(false);
   const [errorTier, setErrorTier] = useState<ErrorTier>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
+  // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
+  const [sheetState, setSheetState] = useState<ArgumentSheetState>({
+    open: false,
+    scenarioId: '',
+    identityId: '',
+    origin: { nodeId: '', nodeType: '' },
+  });
   // C5: Status filter
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
   const exportRootId = `argument-map-${useId().replace(/:/g, '-')}`;
@@ -631,7 +647,16 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
       unitStatus: unit?.status,
       unitTurnId: unit?.turn_id,
     });
-  }, [rawNodeMap, unitByNodeId, unitById]);
+    // FE-3-seq: open NodeConversationSheet — append only, existing behavior preserved.
+    const nodeType = unit?.type ?? raw?.type ?? 'unknown';
+    const excerpt = unit?.text ?? raw?.label;
+    setSheetState({
+      open: true,
+      scenarioId: debateId,
+      identityId: node.id,
+      origin: { nodeId: node.id, nodeType, excerpt },
+    });
+  }, [rawNodeMap, unitByNodeId, unitById, debateId]);
 
   // C3: Background click resets highlight + closes detail panel
   const onPaneClick = useCallback(() => setSelectedNode(null), []);
@@ -872,6 +897,17 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
             <div key={`${line}-${index}`} role="listitem">{line}</div>
           ))}
         </div>
+        {/* FE-3-seq: NodeConversationSheet (append-only, capability-independent). */}
+        {sheetState.open && (
+          <NodeConversationSheet
+            open={sheetState.open}
+            onOpenChange={(next) => setSheetState((prev) => ({ ...prev, open: next }))}
+            threadId={null}
+            scenarioId={sheetState.scenarioId}
+            identityId={sheetState.identityId}
+            origin={sheetState.origin}
+          />
+        )}
       </div>
     </Tooltip.Provider>
   );

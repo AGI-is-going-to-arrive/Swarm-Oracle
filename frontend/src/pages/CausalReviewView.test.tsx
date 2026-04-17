@@ -1,7 +1,7 @@
 /**
  * Phase C1 — CausalReviewView tests
  */
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
@@ -1180,7 +1180,10 @@ describe('CausalReviewView', () => {
     });
     expect(fitViewMock.mock.calls.length).toBe(initialCalls);
 
-    await user.click(screen.getByTestId('rf-pane'));
+    // FE-3-seq: node click also opens NodeConversationSheet (Radix Dialog),
+    // whose overlay disables pointer-events on siblings. Use fireEvent to
+    // synthesize the pane click directly and bypass the css pointer guard.
+    fireEvent.click(screen.getByTestId('rf-pane'));
     await waitFor(() => {
       expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();
     });
@@ -1443,5 +1446,55 @@ describe('CausalReviewView', () => {
     expect(visibleList).toBeInTheDocument();
     expect(screen.getAllByRole('list')).toHaveLength(1);
     expect(within(visibleList).getAllByRole('listitem')[0]).toHaveTextContent('Event');
+  });
+
+  it('opens NodeConversationSheet when a causal node is clicked (FE-3-seq wire-up)', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-sheet',
+          available_branches: ['br1'],
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'Node click target', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+      renderView();
+
+      const nodeButton = await screen.findByTestId('rf-node-n1');
+      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
+
+      await user.click(nodeButton);
+
+      const sheet = await screen.findByTestId('node-conversation-sheet');
+      expect(sheet).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

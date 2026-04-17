@@ -1,7 +1,7 @@
 /**
  * Phase C2 — ArgumentMap tests (upgraded for @xyflow/react DAG)
  */
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -943,7 +943,10 @@ describe('ArgumentMap', () => {
     });
     expect(fitViewMock.mock.calls.length).toBe(initialCalls);
 
-    await user.click(screen.getByTestId('rf-pane'));
+    // FE-3-seq: node click also opens NodeConversationSheet (Radix Dialog),
+    // whose overlay disables pointer-events on siblings. Use fireEvent to
+    // synthesize the pane click directly and bypass the css pointer guard.
+    fireEvent.click(screen.getByTestId('rf-pane'));
     await waitFor(() => {
       expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();
     });
@@ -972,6 +975,57 @@ describe('ArgumentMap', () => {
 
     const detailPanel = await screen.findByTestId('node-detail-panel');
     expect(within(detailPanel).queryByText('Payload')).not.toBeInTheDocument();
+  });
+
+  it('opens NodeConversationSheet when a node is clicked (FE-3-seq wire-up)', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          snapshot_id: 's-sheet',
+          nodes: [
+            { id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null },
+          ],
+          edges: [],
+          units: [
+            { id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' },
+          ],
+        }),
+      } as Response);
+
+      render(<ArgumentMap debateId="d1" visible={true} />);
+      await screen.findByTestId('reactflow');
+      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
+
+      await user.click(screen.getByTestId('rf-node-n1'));
+
+      const sheet = await screen.findByTestId('node-conversation-sheet');
+      expect(sheet).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

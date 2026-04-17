@@ -13,9 +13,9 @@
    - 400% zoom: container uses CSS grid minmax(0,1fr) stack
 
    Node interaction:
-   - Clicking a node dispatches a CustomEvent('kg:openNodeSheet') on
-     `window` with detail `{ scenarioId, identityId, originContext }`.
-     FE-3 wires NodeConversationSheet to this event in Layer 5.5.
+   - Clicking a node opens NodeConversationSheet directly (FE-3-seq
+     Layer 5.5 wire-up). The previous CustomEvent('kg:openNodeSheet')
+     bridge has been removed in favour of component-local state.
 
    Capability gate: useCapabilityCheck('kg_explorer') — disabled → 404.
    ═══════════════════════════════════════════════════════════ */
@@ -29,6 +29,7 @@ import { useG6Graph } from '../hooks/useG6Graph';
 import { comboLayout, shouldDegradeForMobile, degradeNodesForMobile } from '../lib/g6Layouts';
 import { resolveG6Tokens } from '../lib/graphTokens';
 import { buildSessionHeaders } from '../api/client';
+import { NodeConversationSheet } from '../components/kg/NodeConversationSheet';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -120,6 +121,18 @@ export default function KGExplorerView() {
   const [mobilePane, setMobilePane] = useState<MobileActivePane>('graph');
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<Set<string>>(new Set());
+  // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
+  const [sheetState, setSheetState] = useState<{
+    open: boolean;
+    scenarioId: string;
+    identityId: string;
+    origin: { nodeId: string; nodeType: string; excerpt?: string };
+  }>({
+    open: false,
+    scenarioId: '',
+    identityId: '',
+    origin: { nodeId: '', nodeType: '' },
+  });
 
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -183,24 +196,17 @@ export default function KGExplorerView() {
     };
   }, [graphData, tier, searchTerm, typeFilter]);
 
-  // Node click → dispatch CustomEvent (FE-3 subscribes in Layer 5.5).
+  // Node click → open NodeConversationSheet directly (FE-3-seq wire-up).
   const handleNodeClick = useCallback(
     (evt: unknown) => {
-      // FE-3 v4 stub: this callback will be extended by FE-3 Edit mode to
-      // open NodeConversationSheet. For now, we only fire the bridging
-      // CustomEvent so observer tests can assert wiring.
       const target = (evt as { target?: { id?: string; type?: string } } | undefined)?.target;
       const identityId = target?.id ?? '';
-      if (typeof window === 'undefined') return;
-      window.dispatchEvent(
-        new CustomEvent('kg:openNodeSheet', {
-          detail: {
-            scenarioId,
-            identityId,
-            originContext: { graphNodeType: target?.type ?? 'unknown' },
-          },
-        }),
-      );
+      setSheetState({
+        open: true,
+        scenarioId,
+        identityId,
+        origin: { nodeId: identityId, nodeType: target?.type ?? 'unknown' },
+      });
     },
     [scenarioId],
   );
@@ -490,6 +496,18 @@ export default function KGExplorerView() {
         /* Expose wrapper ref (unused here, kept for symmetry with FE-3 contract). */
         ${canvasWrapperRef ? '' : ''}
       `}</style>
+
+      {/* FE-3-seq: NodeConversationSheet (append-only, direct state wire). */}
+      {sheetState.open && (
+        <NodeConversationSheet
+          open={sheetState.open}
+          onOpenChange={(next) => setSheetState((prev) => ({ ...prev, open: next }))}
+          threadId={null}
+          scenarioId={sheetState.scenarioId}
+          identityId={sheetState.identityId}
+          origin={sheetState.origin}
+        />
+      )}
     </main>
   );
 }
