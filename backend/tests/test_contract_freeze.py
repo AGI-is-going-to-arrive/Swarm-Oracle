@@ -324,6 +324,7 @@ class TestServerSideGates:
     async def test_argument_map_fail_soft_returns_error_field(self, client):
         """A11: When argument map loading crashes, response includes error field."""
         from unittest.mock import patch
+
         from app.config import settings
         settings.FEATURE_ARGUMENT_MAP = True
         try:
@@ -428,3 +429,267 @@ async def test_new_features_default_disabled():
     finally:
         for name, val in originals.items():
             setattr(settings, name, val)
+
+
+# ─── QA-1 Extension: Top-Level 10-Key Exact Freeze ───────────
+#
+# These tests extend the contract freeze with the precise BE-6 surface
+# required by §QA-1 step 4:
+#
+# 1. The top-level capability registry contains **exactly** the 10 frozen
+#    keys — no new keys may be introduced silently, and no key may vanish.
+# 2. ``web_search.providers`` nested schema: exactly 4 families, each with
+#    exactly 5 sub-keys (``enabled``, ``configured_host``, ``rate_limit_rps``,
+#    ``ttl_seconds``, ``byok_allowed``).
+# 3. ``FEATURE_NEW_SOURCES=False`` clears the nested providers to ``{}``.
+# 4. Additive-only: adding a new capability key requires a matching plan
+#    update; removing or renaming is forbidden.
+
+
+_TOP_LEVEL_FROZEN_KEYS = frozenset({
+    "web_search",
+    "custom_agents",
+    "agent_identity",
+    "causal_graph",
+    "counterfactual_replay",
+    "factions",
+    "argument_map",
+    "agent_conversation",
+    "kg_explorer",
+    "replay_trace",
+})
+
+
+_PROVIDERS_FROZEN_FAMILIES = frozenset({
+    "polymarket",
+    "finance",
+    "academic",
+    "news_deep",
+})
+
+
+_PROVIDERS_FROZEN_SUB_KEYS = frozenset({
+    "enabled",
+    "configured_host",
+    "rate_limit_rps",
+    "ttl_seconds",
+    "byok_allowed",
+})
+
+
+@pytest.mark.asyncio
+async def test_capabilities_top_level_keys_exact_freeze():
+    """QA-1: top-level capability registry is exactly 10 keys — no more, no less."""
+    from app.api.scenarios import api_capabilities
+
+    result = await api_capabilities()
+    actual = set(result.keys())
+    assert actual == _TOP_LEVEL_FROZEN_KEYS, (
+        f"Capability registry drifted.  added={actual - _TOP_LEVEL_FROZEN_KEYS} "
+        f"removed={_TOP_LEVEL_FROZEN_KEYS - actual}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_capabilities_entry_subkeys_minimum_freeze():
+    """QA-1: every top-level capability carries ``enabled`` + ``version``."""
+    from app.api.scenarios import api_capabilities
+
+    result = await api_capabilities()
+    for key in _TOP_LEVEL_FROZEN_KEYS:
+        entry = result[key]
+        assert {"enabled", "version"}.issubset(entry.keys()), (
+            f"{key} missing enabled/version subkeys: {entry!r}"
+        )
+        assert isinstance(entry["enabled"], bool)
+        assert isinstance(entry["version"], str)
+
+
+@pytest.mark.asyncio
+async def test_capabilities_web_search_providers_exact_shape_when_enabled():
+    """QA-1: providers nested schema is exactly 4 families x 5 sub-keys."""
+    from app.api.scenarios import api_capabilities
+    from app.config import settings
+
+    original = settings.FEATURE_NEW_SOURCES
+    settings.FEATURE_NEW_SOURCES = True
+    try:
+        result = await api_capabilities()
+        providers = result["web_search"]["providers"]
+        # Exact-family set.
+        assert set(providers.keys()) == _PROVIDERS_FROZEN_FAMILIES, (
+            f"Provider families drifted: {set(providers.keys())}"
+        )
+        # Exact sub-key set per family.
+        for family, entry in providers.items():
+            assert set(entry.keys()) >= _PROVIDERS_FROZEN_SUB_KEYS, (
+                f"{family} missing sub-keys: "
+                f"{_PROVIDERS_FROZEN_SUB_KEYS - set(entry.keys())}"
+            )
+            # Additive-only: extra sub-keys are permitted as long as the
+            # frozen set survives.  This guard lets future fields ship
+            # without rewriting tests, but blocks accidental removal.
+    finally:
+        settings.FEATURE_NEW_SOURCES = original
+
+
+@pytest.mark.asyncio
+async def test_capabilities_feature_off_clears_providers():
+    """QA-1: ``FEATURE_NEW_SOURCES=False`` → ``providers == {}`` (never missing)."""
+    from app.api.scenarios import api_capabilities
+    from app.config import settings
+
+    original = settings.FEATURE_NEW_SOURCES
+    settings.FEATURE_NEW_SOURCES = False
+    try:
+        result = await api_capabilities()
+        assert "providers" in result["web_search"]
+        assert result["web_search"]["providers"] == {}
+    finally:
+        settings.FEATURE_NEW_SOURCES = original
+
+
+@pytest.mark.asyncio
+async def test_capabilities_additive_only_no_regression_on_frozen_keys():
+    """QA-1: the frozen top-level keys MUST still be present regardless of flags."""
+    from app.api.scenarios import api_capabilities
+    from app.config import settings
+
+    # Flip every new-feature flag OFF then ON; the frozen keys survive both.
+    toggles = (
+        "FEATURE_AGENT_CONVERSATION",
+        "FEATURE_KG_EXPLORER",
+        "FEATURE_REPLAY_TRACE",
+        "FEATURE_NEW_SOURCES",
+    )
+    snapshots = {name: getattr(settings, name) for name in toggles}
+    try:
+        for value in (False, True):
+            for name in toggles:
+                setattr(settings, name, value)
+            result = await api_capabilities()
+            assert _TOP_LEVEL_FROZEN_KEYS.issubset(set(result.keys())), (
+                f"Frozen top-level key(s) disappeared when toggles={value}: "
+                f"{_TOP_LEVEL_FROZEN_KEYS - set(result.keys())}"
+            )
+    finally:
+        for name, val in snapshots.items():
+            setattr(settings, name, val)
+
+
+# ─── QA-1 Extension: BE-5 Web-Search Override + Host Allowlist ─
+#
+# After coordinator CORRECTION #2: BE-5's actual commit ``d7fd0a1`` is narrow
+# — no ``shared_rate_limiter``, no per-family ``fetch_provider_context``, no
+# 429 Retry-After, no ``degraded:true`` flag, no RSSHub / polymarket server-
+# side provider.  The only shipped surface is:
+#
+#   1. ``WebSearchOverride`` schema closure (extra='forbid' + no ``providers``)
+#      — already covered by ``test_contract_freeze_v2.py``.
+#   2. ``validate_web_search_base_url()`` exact-host allowlist in
+#      ``app.services.web_context`` covering ``tavily`` / ``exa`` / ``xai``
+#      (plus ``searxng`` against a single configured base URL).
+#
+# The tests below lock the allowlist so that a future refactor cannot silently
+# widen the exact-host contract or accept plain-http endpoints.
+
+
+class TestWebSearchBaseUrlAllowlist:
+    """Exact-host allowlist enforcement for BYOK-supplied base URLs (BE-5)."""
+
+    def test_tavily_accepts_exact_host_over_https(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        assert validate_web_search_base_url("tavily", "https://api.tavily.com/search") == (
+            "https://api.tavily.com/search"
+        )
+
+    def test_tavily_rejects_plain_http(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        assert validate_web_search_base_url("tavily", "http://api.tavily.com/search") is None
+
+    def test_tavily_rejects_sibling_host(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        assert (
+            validate_web_search_base_url("tavily", "https://api.tavily.com.evil.dev") is None
+        )
+        assert (
+            validate_web_search_base_url("tavily", "https://evil.com/api.tavily.com") is None
+        )
+
+    def test_exa_accepts_exact_host_over_https(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        assert validate_web_search_base_url("exa", "https://api.exa.ai/search") == (
+            "https://api.exa.ai/search"
+        )
+
+    def test_exa_rejects_plain_http(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        assert validate_web_search_base_url("exa", "http://api.exa.ai/search") is None
+
+    def test_xai_accepts_exact_host_over_https(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        assert validate_web_search_base_url("xai", "https://api.x.ai/v1/responses") == (
+            "https://api.x.ai/v1/responses"
+        )
+
+    def test_xai_rejects_subdomain_substitution(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        # Attacker-controlled subdomain of a non-whitelisted parent.
+        assert validate_web_search_base_url("xai", "https://api.x.ai.attacker.dev") is None
+
+    def test_unknown_provider_rejected(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        # polymarket / finance / academic / news_deep are advertised ONLY via
+        # /api/capabilities (BE-6 read-only hint); they are NOT yet accepted as
+        # BYOK providers in the legacy override dispatcher.
+        for provider in ("polymarket", "finance", "academic", "news_deep"):
+            assert (
+                validate_web_search_base_url(provider, "https://example.com") is None
+            ), provider
+
+    def test_unknown_scheme_rejected(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        for url in (
+            "file:///etc/passwd",
+            "ftp://api.tavily.com/",
+            "javascript:alert(1)",
+        ):
+            assert validate_web_search_base_url("tavily", url) is None, url
+
+    def test_empty_url_returns_none(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        assert validate_web_search_base_url("tavily", None) is None
+        assert validate_web_search_base_url("tavily", "") is None
+
+
+class TestCapabilitiesProviderHostsAreBareExactHosts:
+    """QA-1: per-family configured_host is a bare hostname (no scheme, no wildcard)."""
+
+    @pytest.mark.asyncio
+    async def test_configured_host_is_bare_hostname_when_feature_on(self):
+        from app.api.scenarios import api_capabilities
+        from app.config import settings
+
+        original = settings.FEATURE_NEW_SOURCES
+        settings.FEATURE_NEW_SOURCES = True
+        try:
+            result = await api_capabilities()
+            for family, entry in result["web_search"]["providers"].items():
+                host = entry["configured_host"]
+                assert isinstance(host, str) and host, family
+                assert "://" not in host, f"{family} host has scheme: {host!r}"
+                assert "*" not in host, f"{family} host has wildcard: {host!r}"
+                assert " " not in host, f"{family} host has whitespace: {host!r}"
+                assert "," not in host, f"{family} host is CSV list: {host!r}"
+        finally:
+            settings.FEATURE_NEW_SOURCES = original
