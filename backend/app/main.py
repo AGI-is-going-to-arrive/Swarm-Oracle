@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 # Phase 3: new API routers
 from app.api.agents import router as agents_router
 from app.api.campaign import router as campaign_router
+from app.api.conversation import router as conversation_router
 from app.api.debate import router as debate_router
 from app.api.debate import ws_router as debate_ws_router
 from app.api.ending_rooms import (
@@ -23,11 +24,13 @@ from app.api.ending_rooms import (
 from app.api.graphs import router as graphs_router
 from app.api.interventions import router as interventions_router
 from app.api.predictions import router as predictions_router
+from app.api.replay_trace import router as replay_trace_router
 from app.api.scenarios import router as scenarios_router
 from app.api.social import router as social_router
 from app.api.ws import router as ws_router
 from app.config import settings
 from app.logging_utils import configure_logging
+from app.middleware.observability import ObservabilityMiddleware
 from app.models import init_db
 from app.models.database import dispose_engine
 from app.services.llm_client import close_shared_async_client
@@ -85,6 +88,10 @@ async def internal_error_handler(_request: Request, exc: Exception) -> JSONRespo
     )
 
 
+# Observability middleware (OB-1): request_id contextvar + structured JSON log.
+# Must be registered BEFORE CORS so correlation spans the full request lifecycle.
+app.add_middleware(ObservabilityMiddleware)
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
@@ -108,6 +115,9 @@ app.include_router(ws_router)
 # Phase 3
 app.include_router(agents_router)
 app.include_router(graphs_router)
+# Layer 3: BE-3 conversation + BE-4 replay-trace (OB-1 merge hand-off)
+app.include_router(conversation_router)
+app.include_router(replay_trace_router)
 
 # P3-9: Prometheus metrics (GET /metrics)
 try:
