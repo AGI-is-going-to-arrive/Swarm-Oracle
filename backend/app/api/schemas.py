@@ -398,3 +398,170 @@ class ReplayTraceResponse(BaseModel):
 
     nodes: list[ReplayTraceNode] = []
     next_cursor: str | None = None
+
+
+# ── Agent Conversation (BE-3) ────────────────────────────────────────
+#
+# F7 — user-owned dialogue thread anchored to a branch/round/node, with
+# streaming assistant turns.  HC-31/32/34/36 hard constraints:
+#   * ``owner_user_id`` on the thread is the sole ACL / quota authority
+#     (never ``organization_id`` from request body — v1 deleted per-org
+#     quota entirely).  Creation-time freeze is asserted by the API layer.
+#   * ``model`` payload is strictly a *logical* model name — it must not
+#     contain ``://`` or ``http`` (no base_url composites).
+#   * ``error_message`` on responses is a short user-visible phrase mapped
+#     from a whitelisted ``error_code``; raw traceback stays in server-side
+#     structured logs via ``redact_byok()`` (HC-36).
+
+
+class StartConversationRequest(BaseModel):
+    """Request body for ``POST /api/conversation/start``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_id: str
+    agent_identity_id: str | None = None
+    origin_branch_id: str | None = None
+    origin_round_number: int | None = Field(default=None, ge=0)
+    origin_node_id: str | None = None
+    origin_node_type: str | None = None
+    first_user_content: str
+    # BYOK (HC-24) — optional; when ``base_url`` is present ``api_key`` is required.
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    disable_user_quota: bool | None = None
+
+    @field_validator("first_user_content")
+    @classmethod
+    def _validate_first_user_content(cls, v: str) -> str:
+        normalized = (v or "").strip()
+        if not normalized:
+            raise ValueError("first_user_content cannot be empty")
+        if len(normalized) > 8000:
+            raise ValueError("first_user_content too long (max 8000 chars)")
+        return normalized
+
+    @field_validator("origin_node_type", "origin_branch_id", "origin_node_id")
+    @classmethod
+    def _normalize_optional_text(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = v.strip()
+        if len(normalized) > 128:
+            raise ValueError("origin_* fields must be at most 128 characters")
+        return normalized or None
+
+    @field_validator("llm_api_key", "llm_base_url", "llm_model")
+    @classmethod
+    def _normalize_optional_byok(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        cleaned = v.strip()
+        return cleaned or None
+
+    @field_validator("llm_model")
+    @classmethod
+    def _validate_model_shape(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if "://" in v or "http" in v.lower():
+            raise ValueError("llm_model must be a logical model name, not a URL")
+        if len(v) > 100:
+            raise ValueError("llm_model must be at most 100 characters")
+        return v
+
+
+class ConversationTurnCreate(BaseModel):
+    """Request body for ``POST /api/conversation/{thread_id}/turn``.
+
+    Triggers an assistant streaming reply in response to a new user turn.
+    ``user_content`` is the new user message; the assistant turn id is
+    returned immediately and tokens stream via SSE.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_content: str
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    disable_user_quota: bool | None = None
+
+    @field_validator("user_content")
+    @classmethod
+    def _validate_user_content(cls, v: str) -> str:
+        normalized = (v or "").strip()
+        if not normalized:
+            raise ValueError("user_content cannot be empty")
+        if len(normalized) > 8000:
+            raise ValueError("user_content too long (max 8000 chars)")
+        return normalized
+
+    @field_validator("llm_api_key", "llm_base_url", "llm_model")
+    @classmethod
+    def _normalize_optional_byok(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        cleaned = v.strip()
+        return cleaned or None
+
+    @field_validator("llm_model")
+    @classmethod
+    def _validate_model_shape(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if "://" in v or "http" in v.lower():
+            raise ValueError("llm_model must be a logical model name, not a URL")
+        if len(v) > 100:
+            raise ValueError("llm_model must be at most 100 characters")
+        return v
+
+
+class ConversationTurnResponse(BaseModel):
+    """Single turn view for ``GET /api/conversation/{thread_id}`` playback."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    thread_id: str
+    role: str
+    sequence: int
+    status: str
+    content: str = ""
+    error_code: str | None = None
+    # HC-36: never echo raw provider traceback; short user-visible phrase only.
+    error_message: str | None = None
+    model: str | None = None
+    source_branch_id: str | None = None
+    source_round_number: int | None = None
+    source_node_id: str | None = None
+    source_node_type: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+
+
+class ConversationThreadResponse(BaseModel):
+    """Response for ``POST /api/conversation/start`` and ``GET /api/conversation/{id}``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    thread_id: str
+    scenario_id: str
+    agent_identity_id: str | None = None
+    owner_user_id: str
+    origin_branch_id: str | None = None
+    origin_round_number: int | None = None
+    origin_node_id: str | None = None
+    origin_node_type: str | None = None
+    last_turn_sequence: int
+    latest_status: str
+    active_turn_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    # Populated by start endpoint (both turns) and by GET (full playback).
+    user_turn_id: str | None = None
+    assistant_turn_id: str | None = None
+    sequence_range: list[int] | None = None
+    turns: list[ConversationTurnResponse] = []

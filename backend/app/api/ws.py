@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import uuid
@@ -21,6 +22,14 @@ from app.models.database import get_engine
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# HC-37 (BE-3): WS handler must self-generate a request_id on accept because the
+# ASGI HTTP middleware does not run for the WebSocket lifecycle.  OB-1 will
+# consume the same ContextVar for structured log correlation — BE-3 only ensures
+# that an id exists while the WS session is active.
+_request_id_ctxvar: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "request_id", default=""
+)
 
 # M-4 fix: Maximum WebSocket connections per scenario
 MAX_WS_PER_SCENARIO = 50
@@ -264,6 +273,10 @@ async def run_websocket_session(
     except Exception:
         _release_pending_auth(manager, scenario_id)
         raise
+    # HC-37: bind a request_id for this WS session.  Structured-log consumers
+    # (OB-1) read it from ``_request_id_ctxvar``; downstream broadcasters can
+    # also read it via ``_request_id_ctxvar.get()``.
+    _request_id_ctxvar.set(uuid.uuid4().hex)
     logger.info("WS accepted (pending): scenario=%s", scenario_id)
 
     # First-frame auth (when SESSION_SECRET is configured)

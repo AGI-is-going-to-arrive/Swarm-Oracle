@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     ARGUMENT_MAP_LLM_ENRICHMENT: bool = True
     FEATURE_IDENTITY_COMPACTION: bool = False
     FEATURE_REPLAY_TRACE: bool = Field(default=False)
+    FEATURE_AGENT_CONVERSATION: bool = Field(default=False)
 
     # ── Identity Memory Compaction ───────────────────────
     IDENTITY_COMPACT_THRESHOLD: int = 50   # trigger when raw doc count >= this
