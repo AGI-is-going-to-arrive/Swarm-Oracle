@@ -61,11 +61,12 @@ async def test_capabilities_returns_web_search():
 
 @pytest.mark.asyncio
 async def test_capabilities_registry_structure():
-    """Capabilities must return all 7 Phase 3 keys."""
+    """Capabilities must return all 10 Phase 3 keys (7 original + BE-6 additions)."""
     from app.api.scenarios import api_capabilities
     result = await api_capabilities()
     expected_keys = {"web_search", "custom_agents", "agent_identity",
-                     "causal_graph", "counterfactual_replay", "factions", "argument_map"}
+                     "causal_graph", "counterfactual_replay", "factions", "argument_map",
+                     "agent_conversation", "kg_explorer", "replay_trace"}
     assert expected_keys.issubset(set(result.keys()))
     # Each entry must have enabled/version/server_only/degraded_mode
     for key in expected_keys:
@@ -174,6 +175,9 @@ class TestNamingFreeze:
         "counterfactual_replay",
         "factions",
         "argument_map",
+        "agent_conversation",
+        "kg_explorer",
+        "replay_trace",
     })
 
     def test_model_names_frozen(self):
@@ -192,7 +196,7 @@ class TestNamingFreeze:
         assert len(self.FROZEN_NEW_WS_EVENTS) == 4
 
     def test_capabilities_keys_frozen(self):
-        assert len(self.FROZEN_CAPABILITIES_KEYS) == 7
+        assert len(self.FROZEN_CAPABILITIES_KEYS) == 10
 
     def test_no_profile_id_reuse(self):
         """Explicit guard: agent_identity_id, NOT profile_id."""
@@ -337,3 +341,90 @@ class TestServerSideGates:
             assert data["units"] == []
         finally:
             settings.FEATURE_ARGUMENT_MAP = False
+
+
+# ─── BE-6 web_search.providers Nested Schema Tests ───────────
+
+
+@pytest.mark.asyncio
+async def test_web_search_providers_empty_when_disabled():
+    """FEATURE_NEW_SOURCES=False → web_search.providers is empty dict."""
+    from app.api.scenarios import api_capabilities
+    from app.config import settings
+
+    original = settings.FEATURE_NEW_SOURCES
+    settings.FEATURE_NEW_SOURCES = False
+    try:
+        result = await api_capabilities()
+        assert "providers" in result["web_search"]
+        assert result["web_search"]["providers"] == {}
+    finally:
+        settings.FEATURE_NEW_SOURCES = original
+
+
+@pytest.mark.asyncio
+async def test_web_search_providers_populated_when_enabled():
+    """FEATURE_NEW_SOURCES=True → 4 provider families with 5 sub-keys each."""
+    from app.api.scenarios import api_capabilities
+    from app.config import settings
+
+    original = settings.FEATURE_NEW_SOURCES
+    settings.FEATURE_NEW_SOURCES = True
+    try:
+        result = await api_capabilities()
+        providers = result["web_search"]["providers"]
+        expected_families = {"polymarket", "finance", "academic", "news_deep"}
+        assert expected_families.issubset(set(providers.keys()))
+
+        expected_sub_keys = {
+            "enabled",
+            "configured_host",
+            "rate_limit_rps",
+            "ttl_seconds",
+            "byok_allowed",
+        }
+        for family in expected_families:
+            entry = providers[family]
+            assert expected_sub_keys.issubset(set(entry.keys())), (
+                f"{family} missing sub-keys: {expected_sub_keys - set(entry.keys())}"
+            )
+            assert isinstance(entry["enabled"], bool)
+            assert isinstance(entry["configured_host"], str)
+            assert isinstance(entry["rate_limit_rps"], int)
+            assert isinstance(entry["ttl_seconds"], int)
+            assert isinstance(entry["byok_allowed"], bool)
+    finally:
+        settings.FEATURE_NEW_SOURCES = original
+
+
+@pytest.mark.asyncio
+async def test_new_features_default_disabled():
+    """All Phase 3 / BE-6 FEATURE_* flags default to enabled=False (except REPLAY)."""
+    from app.api.scenarios import api_capabilities
+    from app.config import settings
+
+    # Snapshot + reset relevant flags
+    originals = {
+        "FEATURE_AGENT_CONVERSATION": settings.FEATURE_AGENT_CONVERSATION,
+        "FEATURE_KG_EXPLORER": settings.FEATURE_KG_EXPLORER,
+        "FEATURE_REPLAY_TRACE": settings.FEATURE_REPLAY_TRACE,
+        "FEATURE_ARGUMENT_MAP": settings.FEATURE_ARGUMENT_MAP,
+        "FEATURE_CAUSAL_GRAPH": settings.FEATURE_CAUSAL_GRAPH,
+    }
+    for name in originals:
+        setattr(settings, name, False)
+    try:
+        result = await api_capabilities()
+        for cap_key in (
+            "agent_conversation",
+            "kg_explorer",
+            "replay_trace",
+            "argument_map",
+            "causal_graph",
+        ):
+            assert result[cap_key]["enabled"] is False, (
+                f"{cap_key} should default enabled=False when FEATURE flag off"
+            )
+    finally:
+        for name, val in originals.items():
+            setattr(settings, name, val)

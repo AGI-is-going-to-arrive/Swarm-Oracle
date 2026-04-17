@@ -428,6 +428,40 @@ async def api_capabilities():
     registry where each key has {enabled, version, server_only, degraded_mode}.
     """
     ws_hint = _build_web_search_server_hint()
+    providers_block = (
+        {
+            "polymarket": {
+                "enabled": settings.FEATURE_NEW_SOURCES,
+                "configured_host": "gamma-api.polymarket.com",
+                "rate_limit_rps": 2,
+                "ttl_seconds": 60,
+                "byok_allowed": True,
+            },
+            "finance": {
+                "enabled": settings.FEATURE_NEW_SOURCES,
+                "configured_host": "www.alphavantage.co",
+                "rate_limit_rps": 5,
+                "ttl_seconds": 300,
+                "byok_allowed": True,
+            },
+            "academic": {
+                "enabled": settings.FEATURE_NEW_SOURCES,
+                "configured_host": "export.arxiv.org",
+                "rate_limit_rps": 3,
+                "ttl_seconds": 1800,
+                "byok_allowed": True,
+            },
+            "news_deep": {
+                "enabled": settings.FEATURE_NEW_SOURCES,
+                "configured_host": "api.gdeltproject.org",
+                "rate_limit_rps": 1,
+                "ttl_seconds": 900,
+                "byok_allowed": False,
+            },
+        }
+        if settings.FEATURE_NEW_SOURCES
+        else {}
+    )
     return {
         "web_search": {
             **_capability_entry(
@@ -435,6 +469,7 @@ async def api_capabilities():
                 version="1.0",
             ),
             **ws_hint,
+            "providers": providers_block,
         },
         "custom_agents": _capability_entry(
             enabled=settings.FEATURE_CUSTOM_AGENTS,
@@ -464,6 +499,18 @@ async def api_capabilities():
             enabled=settings.FEATURE_ARGUMENT_MAP,
             version="1.0" if settings.FEATURE_ARGUMENT_MAP else "0.0",
             degraded_mode="rule_based_only",
+        ),
+        "agent_conversation": _capability_entry(
+            enabled=settings.FEATURE_AGENT_CONVERSATION,
+            version="1.0" if settings.FEATURE_AGENT_CONVERSATION else "0.0",
+        ),
+        "kg_explorer": _capability_entry(
+            enabled=settings.FEATURE_KG_EXPLORER,
+            version="1.0" if settings.FEATURE_KG_EXPLORER else "0.0",
+        ),
+        "replay_trace": _capability_entry(
+            enabled=settings.FEATURE_REPLAY_TRACE,
+            version="1.0" if settings.FEATURE_REPLAY_TRACE else "0.0",
         ),
     }
 
