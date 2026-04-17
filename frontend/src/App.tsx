@@ -30,6 +30,13 @@ const AgentLibrary = lazy(() => import('./pages/AgentLibrary'));
 const AgentWorkshopView = lazy(() => import('./pages/AgentWorkshopView'));
 const CausalReviewView = lazy(() => import('./pages/CausalReviewView'));
 const CompareDigestView = lazy(() => import('./pages/CompareDigestView'));
+// Graph playability upgrade (FE-2 / FE-4): G6 pages + replay view
+// - KGExplorerView + TimelineGalaxy share capability 'kg_explorer'
+// - ReplayView will be authored by FE-4; its chunk resolves lazily when
+//   the feature flag 'replay_trace' is enabled server-side
+const KGExplorerView = lazy(() => import('./pages/KGExplorerView'));
+const TimelineGalaxy = lazy(() => import('./pages/TimelineGalaxy'));
+const ReplayView = lazy(() => import('./pages/ReplayView'));
 
 function RouteFallback() {
   const { t } = useTranslation();
@@ -61,6 +68,11 @@ export default function App() {
             <Route path="/roundtable/replay" element={<WorldlineRoundtableView />} />
             <Route path="/history" element={<HistoryView />} />
             <Route path="/leaderboard" element={<LeaderboardView />} />
+            {/* FE-2: KG Explorer + Timeline Galaxy (share kg_explorer capability) */}
+            <Route path="/kg-explorer/:id" element={<KGExplorerView />} />
+            <Route path="/timeline-galaxy/:id" element={<TimelineGalaxy />} />
+            {/* FE-4: Replay View (gated by replay_trace capability server-side) */}
+            <Route path="/replay/:id" element={<ReplayView />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

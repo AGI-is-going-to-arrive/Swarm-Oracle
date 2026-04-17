@@ -112,6 +112,46 @@ export const STATUS_COLORS_HEX: Record<string, string> = {
   rejected: '#b54a45',
 };
 
+// ── G6 Dual Tokens (light / dark HEX pairs) ─────────────────
+// FE-2: G6 Canvas does not support OKLCH directly; we provide HEX pairs
+// for light + dark themes. KGExplorerView reads the active theme from
+// `document.documentElement.dataset.theme` (or falls back to light).
+
+export interface G6DualHexTokens {
+  background: string;
+  nodeFill: string;
+  nodeStroke: string;
+  edgeStroke: string;
+  label: string;
+  selectedStroke: string;
+  hoverStroke: string;
+}
+
+export const G6_TOKENS_LIGHT: G6DualHexTokens = {
+  background: '#ffffff',
+  nodeFill: '#f2f4f7',
+  nodeStroke: '#4a90d9',
+  edgeStroke: '#9aa3af',
+  label: '#1f2937',
+  selectedStroke: '#0ea5e9',
+  hoverStroke: '#2563eb',
+};
+
+export const G6_TOKENS_DARK: G6DualHexTokens = {
+  background: '#0f172a',
+  nodeFill: '#1e293b',
+  nodeStroke: '#60a5fa',
+  edgeStroke: '#64748b',
+  label: '#e2e8f0',
+  selectedStroke: '#38bdf8',
+  hoverStroke: '#93c5fd',
+};
+
+/** Resolve G6 HEX tokens based on a theme flag ("light" | "dark"). */
+export function resolveG6Tokens(theme: 'light' | 'dark' = 'light'): G6DualHexTokens {
+  return theme === 'dark' ? G6_TOKENS_DARK : G6_TOKENS_LIGHT;
+}
+
 export function isBrightGraphBackground(color: string | undefined): boolean {
   if (typeof color !== 'string') return false;
   const normalized = color.trim();
