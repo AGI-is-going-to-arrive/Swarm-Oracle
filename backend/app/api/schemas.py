@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.config import settings
 
@@ -61,7 +61,26 @@ class ContinuityOverrideRequest(BaseModel):
         return self
 
 
+class WebSearchOverride(BaseModel):
+    """Frozen v1 pre-plan shape for web search override.
+
+    BE-5 (R3-C2): schema is locked to single-provider override fields. No
+    ``providers`` aggregate field is allowed — per-family provider selection is
+    exposed read-only via ``GET /api/capabilities`` (see BE-6), never accepted
+    on the request payload.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    provider: str | None = None
+    api_key: str | None = None
+    base_url: str | None = None
+
+
 class CreateScenarioRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     question: str
     user_id: str | None = None
     num_agents: int | None = None  # User-specified agent count, range 3-1500

@@ -437,11 +437,11 @@ class TestScenarioEndpoints:
         resp = client.post("/api/scenario", json={"question": 12345})
         assert resp.status_code == 422
 
-    def test_create_scenario_extra_fields_ignored(self, client):
-        """Extra fields should be silently ignored."""
+    def test_create_scenario_extra_fields_rejected(self, client):
+        """Extra fields MUST be rejected (BE-5 R3-C2: extra='forbid')."""
         resp = client.post("/api/scenario", json={"question": "test?", "extra": "field"})
-        # 200 if LLM reachable, 500 if not — either acceptable
-        assert resp.status_code in (200, 500)
+        # Schema is now locked; unknown keys return 422.
+        assert resp.status_code == 422
 
     # ── num_agents validation ────────────────────────
 
