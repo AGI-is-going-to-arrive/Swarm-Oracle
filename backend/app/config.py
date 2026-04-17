@@ -3,7 +3,7 @@
 from pathlib import Path
 from urllib.parse import urlparse
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     FEATURE_ARGUMENT_MAP: bool = False
     ARGUMENT_MAP_LLM_ENRICHMENT: bool = True
     FEATURE_IDENTITY_COMPACTION: bool = False
+    FEATURE_REPLAY_TRACE: bool = Field(default=False)
 
     # ── Identity Memory Compaction ───────────────────────
     IDENTITY_COMPACT_THRESHOLD: int = 50   # trigger when raw doc count >= this

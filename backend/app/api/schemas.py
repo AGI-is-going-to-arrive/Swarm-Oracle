@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.config import settings
@@ -372,3 +374,27 @@ class StoryBranch(BaseModel):
     key_moments: list[str] = []
     parent_branch_id: str | None = None
     fork_reason: str = ""
+
+
+# ── Replay Trace (BE-4) ──────────────────────────────────────────────
+class ReplayTraceNode(BaseModel):
+    """Single branch node in a replay lineage trace (F4 / BE-4)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    branch_id: str
+    parent_branch_id: str | None = None
+    replay_source_branch_id: str | None = None
+    origin_round: int
+    replay_kind: str
+    status: str
+    created_at: datetime
+
+
+class ReplayTraceResponse(BaseModel):
+    """Cursor-paginated response for ``GET /api/scenario/{id}/replay-trace``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nodes: list[ReplayTraceNode] = []
+    next_cursor: str | None = None
