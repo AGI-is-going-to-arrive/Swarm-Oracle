@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import Index, UniqueConstraint
+from sqlalchemy import Column, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -37,13 +37,33 @@ class AgentConversationThread(SQLModel, table=True):
     )
 
     id: str = Field(default_factory=_uuid, primary_key=True)
-    scenario_id: str = Field(foreign_key="scenario.id", nullable=False)
+    # BE-1 follow-up: declare FK cascade at the ORM layer so the lightweight
+    # SQLModel.metadata.create_all() fallback matches Alembic migration 022.
+    scenario_id: str = Field(
+        sa_column=Column(
+            String,
+            ForeignKey("scenario.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+    )
     agent_identity_id: Optional[str] = Field(
-        default=None, foreign_key="agent_identity.id"
+        default=None,
+        sa_column=Column(
+            String,
+            ForeignKey("agent_identity.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
     )
     owner_user_id: str = Field(nullable=False)
     organization_id: Optional[str] = None
-    origin_branch_id: Optional[str] = Field(default=None, foreign_key="branch.id")
+    origin_branch_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(
+            String,
+            ForeignKey("branch.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+    )
     origin_round_number: Optional[int] = None
     origin_node_id: Optional[str] = None
     origin_node_type: Optional[str] = None
@@ -70,16 +90,33 @@ class AgentConversationTurn(SQLModel, table=True):
 
     id: str = Field(default_factory=_uuid, primary_key=True)
     thread_id: str = Field(
-        foreign_key="agent_conversation_thread.id", nullable=False
+        sa_column=Column(
+            String,
+            ForeignKey("agent_conversation_thread.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
     )
-    scenario_id: str = Field(foreign_key="scenario.id", nullable=False)
+    scenario_id: str = Field(
+        sa_column=Column(
+            String,
+            ForeignKey("scenario.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+    )
     role: str = Field(nullable=False)  # "user" | "assistant" | "system"
-    sequence: int = Field(nullable=False)
+    sequence: int = Field(sa_column=Column(Integer, nullable=False))
     status: str = Field(default="pending", nullable=False)
-    content: str = Field(default="")
+    content: str = Field(default="", sa_column=Column(Text, nullable=False, server_default=""))
     error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    source_branch_id: Optional[str] = Field(default=None, foreign_key="branch.id")
+    error_message: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
+    source_branch_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(
+            String,
+            ForeignKey("branch.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+    )
     source_round_number: Optional[int] = None
     source_node_id: Optional[str] = None
     source_node_type: Optional[str] = None

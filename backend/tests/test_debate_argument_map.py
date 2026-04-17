@@ -14,7 +14,7 @@ from sqlmodel import Session, create_engine, select
 from app.config import settings
 from app.models.checkpoint import DebateArgumentUnit
 from app.models.database import get_engine
-from app.models.debate import DebateTurn
+from app.models.debate import Debate, DebateTurn
 from app.models.graph import GraphNode, GraphSnapshot
 from app.services.debate_argument_map import (
     enrich_argument_units_for_turn,
@@ -1116,6 +1116,15 @@ async def test_enrich_rebuild_preserves_support_edge_with_tied_timestamps():
     )
 
     with Session(get_engine()) as session:
+        # Seed the parent Debate row so DebateTurn.debate_id FK resolves under
+        # PRAGMA foreign_keys=ON (BE-1 follow-up).
+        session.add(
+            Debate(
+                id="d-enrich-stable-order",
+                question="Q?",
+                motion="Does the evidence hold?",
+            )
+        )
         session.add(
             DebateTurn(
                 id="t1",

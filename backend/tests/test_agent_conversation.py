@@ -64,7 +64,11 @@ def _enable_conversation(monkeypatch):
     monkeypatch.setattr(
         "app.api.conversation.settings.FEATURE_AGENT_CONVERSATION", True
     )
+    # BE-3 quota: ensure the in-memory daily counters start clean for each
+    # test so they don't carry over between cases (e.g. 500/day bucket).
+    conversation_service_module.reset_conversation_quota_counters()
     yield
+    conversation_service_module.reset_conversation_quota_counters()
 
 
 @pytest.fixture
@@ -603,10 +607,6 @@ class TestReadThreadStatePostStart:
 
 
 class TestDocumentedQuotas:
-    @pytest.mark.xfail(
-        reason="BLOCKER-track: thread cap 10/scenario not yet enforced by BE-3; see §QA-1.",
-        strict=False,
-    )
     def test_thread_cap_10_per_scenario(self, client):
         engine = get_engine()
         sid = _seed_scenario(engine)
@@ -617,29 +617,16 @@ class TestDocumentedQuotas:
         assert over.status_code == 429
         assert over.json()["detail"]["code"] == "THREAD_LIMIT_REACHED"
 
-    @pytest.mark.xfail(
-        reason="BLOCKER-track: 500 turns/user/day not yet enforced by BE-3; see §QA-1.",
-        strict=False,
-    )
     def test_turns_per_user_per_day_500(self):
-        # Placeholder that activates when BE-3 wires the user-day counter.
         from app.services.conversation_service import settings as svc_settings
 
         assert getattr(svc_settings, "CONVERSATION_TURNS_PER_USER_PER_DAY", 0) == 500
 
-    @pytest.mark.xfail(
-        reason="BLOCKER-track: 5000 turns/org/day not yet enforced by BE-3; see §QA-1.",
-        strict=False,
-    )
     def test_turns_per_org_per_day_5000(self):
         from app.services.conversation_service import settings as svc_settings
 
         assert getattr(svc_settings, "CONVERSATION_TURNS_PER_ORG_PER_DAY", 0) == 5000
 
-    @pytest.mark.xfail(
-        reason="BLOCKER-track: max_turns_per_thread=50 not yet enforced by BE-3; see §QA-1.",
-        strict=False,
-    )
     def test_max_turns_per_thread_50(self):
         from app.services.conversation_service import settings as svc_settings
 

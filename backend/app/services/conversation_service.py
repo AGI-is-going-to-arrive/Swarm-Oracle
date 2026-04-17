@@ -36,10 +36,13 @@ import asyncio
 import json
 import logging
 import re
+import threading
+from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Callable, Literal
 
+from fastapi import HTTPException
 from sqlalchemy import text as sa_text
 from sqlmodel import Session, select
 
@@ -246,6 +249,169 @@ def _verify_identity_owner(
         raise api_error(404, "IDENTITY_NOT_FOUND", "Agent identity not found")
 
 
+# ── Quota authority (HC-31) ─────────────────────────────
+#
+# BE-3 follow-up: in-memory rate-limit store for daily turn caps.  Redis is
+# not available in this codebase; the process-local dict is sufficient for
+# single-worker dev + tests, and the counters decay to zero after 24 h.  All
+# callers serialise on a single lock; the critical sections are O(bucket_len)
+# and bounded by the per-day caps so this is not a hotspot.
+
+_QUOTA_WINDOW = timedelta(hours=24)
+_quota_lock = threading.Lock()
+_user_day_turns: dict[str, deque[datetime]] = {}
+_org_day_turns: dict[str, deque[datetime]] = {}
+
+
+def _prune_bucket(bucket: deque[datetime], now: datetime) -> None:
+    cutoff = now - _QUOTA_WINDOW
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
+
+
+def reset_conversation_quota_counters() -> None:
+    """Test hook: clear the in-memory quota buckets between runs."""
+    with _quota_lock:
+        _user_day_turns.clear()
+        _org_day_turns.clear()
+
+
+def _retry_after_seconds(bucket: deque[datetime], now: datetime) -> int:
+    """Seconds until the oldest hit falls out of the rolling 24h window."""
+    if not bucket:
+        return int(_QUOTA_WINDOW.total_seconds())
+    oldest = bucket[0]
+    remaining = (oldest + _QUOTA_WINDOW) - now
+    return max(1, int(remaining.total_seconds()))
+
+
+def _raise_quota_exceeded(
+    *,
+    scope: str,
+    code: str,
+    retry_after: int | None,
+    reset_at: datetime | None = None,
+) -> None:
+    """Raise an ``HTTPException(429)`` with a ``Retry-After`` header where applicable.
+
+    ``api_error()`` can't carry headers, so we construct the ``HTTPException``
+    directly (matching its ``detail`` shape: ``{"code", "message", ...}``) and
+    attach ``Retry-After`` when the cap is time-based.
+    """
+    headers: dict[str, str] = {}
+    if retry_after is not None:
+        headers["Retry-After"] = str(retry_after)
+    detail: dict[str, Any] = {
+        "code": code,
+        "message": f"Quota exceeded for scope={scope!s}",
+        "scope": scope,
+    }
+    if reset_at is not None:
+        detail["reset_at"] = reset_at.isoformat()
+    raise HTTPException(status_code=429, detail=detail, headers=headers or None)
+
+
+def _count_threads_in_scenario(session: Session, scenario_id: str) -> int:
+    stmt = select(AgentConversationThread).where(
+        AgentConversationThread.scenario_id == scenario_id
+    )
+    return len(list(session.exec(stmt).all()))
+
+
+def _count_turns_in_thread(session: Session, thread_id: str) -> int:
+    stmt = select(AgentConversationTurn).where(
+        AgentConversationTurn.thread_id == thread_id
+    )
+    return len(list(session.exec(stmt).all()))
+
+
+def _enforce_thread_cap_per_scenario(
+    session: Session,
+    *,
+    scenario_id: str,
+) -> None:
+    cap = int(getattr(settings, "CONVERSATION_MAX_THREADS_PER_SCENARIO", 10))
+    if cap <= 0:
+        return
+    current = _count_threads_in_scenario(session, scenario_id)
+    if current >= cap:
+        _raise_quota_exceeded(
+            scope="scenario",
+            code="THREAD_LIMIT_REACHED",
+            retry_after=None,  # per-scenario cap is structural; not time-based.
+        )
+
+
+def _enforce_turn_cap_per_thread(
+    session: Session,
+    *,
+    thread_id: str,
+    pending_additions: int = 2,
+) -> None:
+    """Per-thread turn cap — counts existing turns + the user/assistant pair
+    about to be reserved.  Reject before any sequence is burned.
+    """
+    cap = int(getattr(settings, "CONVERSATION_MAX_TURNS_PER_THREAD", 50))
+    if cap <= 0:
+        return
+    current = _count_turns_in_thread(session, thread_id)
+    if current + pending_additions > cap:
+        _raise_quota_exceeded(
+            scope="thread",
+            code="THREAD_FULL",
+            retry_after=None,
+        )
+
+
+def _enforce_daily_user_org_quota(
+    *,
+    user_id: str | None,
+    organization_id: str | None,
+    additions: int,
+) -> None:
+    """In-memory rolling-24h user + org daily turn counters (HC-31).
+
+    Only the scenario/thread checks ever pass this point; those are bounded
+    by the structural caps above, so the number of ticks added per call is
+    small (1 or 2) and bucket growth is bounded by the daily cap.
+    """
+    user_cap = int(getattr(settings, "CONVERSATION_TURNS_PER_USER_PER_DAY", 500))
+    org_cap = int(getattr(settings, "CONVERSATION_TURNS_PER_ORG_PER_DAY", 5000))
+    now = _now()
+    with _quota_lock:
+        if user_id and user_cap > 0:
+            bucket = _user_day_turns.setdefault(user_id, deque())
+            _prune_bucket(bucket, now)
+            if len(bucket) + additions > user_cap:
+                retry_after = _retry_after_seconds(bucket, now)
+                _raise_quota_exceeded(
+                    scope="user",
+                    code="DAILY_QUOTA_EXCEEDED",
+                    retry_after=retry_after,
+                    reset_at=now + timedelta(seconds=retry_after),
+                )
+
+        if organization_id and org_cap > 0:
+            org_bucket = _org_day_turns.setdefault(organization_id, deque())
+            _prune_bucket(org_bucket, now)
+            if len(org_bucket) + additions > org_cap:
+                retry_after = _retry_after_seconds(org_bucket, now)
+                _raise_quota_exceeded(
+                    scope="org",
+                    code="ORG_DAILY_QUOTA_EXCEEDED",
+                    retry_after=retry_after,
+                    reset_at=now + timedelta(seconds=retry_after),
+                )
+
+        # Commit the tick counts after all checks pass.
+        if user_id and user_cap > 0:
+            for _ in range(additions):
+                _user_day_turns[user_id].append(now)
+        if organization_id and org_cap > 0:
+            for _ in range(additions):
+                _org_day_turns[organization_id].append(now)
+
+
 # ── Sequence reservation ────────────────────────────────
 
 
@@ -310,6 +476,17 @@ def create_thread_with_first_turn(
         # Ownership re-checks inside the same transaction (no TOCTOU).
         _verify_scenario_owner(session, scenario_id, owner_user_id)
         _verify_identity_owner(session, agent_identity_id, owner_user_id)
+
+        # HC-31 quota authority: reject at the gate before any sequence is
+        # burned.  Thread cap is per-scenario (structural); daily caps are
+        # rolling 24 h per-user / per-org.  A ``start`` adds 2 turns (user +
+        # placeholder assistant) to the daily bucket.
+        _enforce_thread_cap_per_scenario(session, scenario_id=scenario_id)
+        _enforce_daily_user_org_quota(
+            user_id=owner_user_id or None,
+            organization_id=None,  # v1: organization_id is not accepted from body.
+            additions=2,
+        )
 
         now = _now()
         thread = AgentConversationThread(
@@ -405,6 +582,15 @@ def append_user_turn_and_reserve_assistant(
             logger.debug("BEGIN IMMEDIATE not supported on this engine; continuing")
 
         thread = load_conversation_thread_for_owner(session, thread_id, owner_user_id)
+
+        # HC-31: per-thread hard cap + rolling daily caps.  A turn-append adds
+        # 2 rows (user + assistant placeholder).
+        _enforce_turn_cap_per_thread(session, thread_id=thread.id, pending_additions=2)
+        _enforce_daily_user_org_quota(
+            user_id=thread.owner_user_id or None,
+            organization_id=thread.organization_id,
+            additions=2,
+        )
 
         user_seq, assistant_seq = _reserve_sequence_pair(session, thread.id)
 
@@ -829,4 +1015,5 @@ __all__ = [
     "redact_byok",
     "resolve_byok_overrides",
     "load_conversation_thread_for_owner",
+    "reset_conversation_quota_counters",
 ]

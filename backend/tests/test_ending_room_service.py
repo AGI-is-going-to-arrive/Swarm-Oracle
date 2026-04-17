@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import text as text_stmt
 from sqlmodel import Session, select
 
 import app.services.ending_room_service as ending_room_service_module
@@ -1040,11 +1041,18 @@ def test_roundtable_scope_context_only_exposes_own_transcript_per_representative
 def test_scope_context_keeps_transcript_when_agent_record_is_missing():
     scenario_id, branch_a_id, branch_b_id = _seed_branch_world()
 
+    # Pause FK enforcement only for the orphaning step — PRAGMA foreign_keys=ON
+    # (BE-1 follow-up) would otherwise block the DELETE because agent_message
+    # rows still reference this agent. The test's intent is to reproduce the
+    # "agent row is missing" reality that legacy/externally-managed databases
+    # can still present to production readers.
     with Session(get_engine()) as session:
         agent = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).first()
         assert agent is not None
+        session.exec(text_stmt("PRAGMA foreign_keys=OFF"))
         session.delete(agent)
         session.commit()
+        session.exec(text_stmt("PRAGMA foreign_keys=ON"))
 
     branch_context = build_branch_scope_context(
         scenario_id,

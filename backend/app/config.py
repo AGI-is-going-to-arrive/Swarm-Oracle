@@ -90,6 +90,15 @@ class Settings(BaseSettings):
     IDENTITY_COMPACT_BATCH_SIZE: int = 30  # oldest raw docs to compact per run
     IDENTITY_COMPACT_GROUP_SIZE: int = 10  # docs per LLM summarization group
 
+    # ── Agent Conversation (BE-3) Quotas ─────────────────
+    # Hard caps enforced by `app.services.conversation_service`.  Request-time
+    # `disable_user_quota` may only bypass the user-day counter on a local
+    # provider (HC-31) — the scenario/thread/org caps apply regardless.
+    CONVERSATION_MAX_THREADS_PER_SCENARIO: int = Field(default=10)
+    CONVERSATION_MAX_TURNS_PER_THREAD: int = Field(default=50)
+    CONVERSATION_TURNS_PER_USER_PER_DAY: int = Field(default=500)
+    CONVERSATION_TURNS_PER_ORG_PER_DAY: int = Field(default=5000)
+
     # ── Auth ─────────────────────────────────────────────
     SESSION_SECRET: str = ""  # If set, enables lightweight session-token auth
 

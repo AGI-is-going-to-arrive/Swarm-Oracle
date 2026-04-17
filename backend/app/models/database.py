@@ -265,10 +265,15 @@ def get_engine():
                     try:
                         @event.listens_for(_engine, "connect")
                         def _set_sqlite_pragmas(dbapi_conn, _connection_record):
+                            # BE-1 follow-up: FK enforcement must be on for EVERY
+                            # sqlite connection, including :memory: (used in tests
+                            # that exercise ON DELETE CASCADE).
+                            cursor = dbapi_conn.cursor()
+                            cursor.execute("PRAGMA foreign_keys=ON")
                             db_path = settings.DATABASE_URL.replace("sqlite:///", "")
                             if db_path == ":memory:" or "mode=memory" in db_path:
+                                cursor.close()
                                 return
-                            cursor = dbapi_conn.cursor()
                             cursor.execute("PRAGMA journal_mode=WAL")
                             cursor.execute("PRAGMA busy_timeout=5000")
                             cursor.close()
@@ -291,7 +296,20 @@ def _make_bootstrap_engine(database_url: str):
     extra_kwargs: dict = {}
     if database_url.startswith("sqlite"):
         extra_kwargs["connect_args"] = {"timeout": 5}
-    return create_engine(database_url, echo=False, **extra_kwargs)
+    engine = create_engine(database_url, echo=False, **extra_kwargs)
+    # BE-1 follow-up: enforce PRAGMA foreign_keys=ON for the bootstrap engine
+    # as well.  The bootstrap path is used by `_bootstrap_alembic_revision_for_sqlite`
+    # and any other short-lived connection made before `get_engine()` is called.
+    if database_url.startswith("sqlite"):
+        try:
+            @event.listens_for(engine, "connect")
+            def _set_bootstrap_pragmas(dbapi_conn, _connection_record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
+        except Exception:
+            pass
+    return engine
 
 
 def _load_alembic_runtime():

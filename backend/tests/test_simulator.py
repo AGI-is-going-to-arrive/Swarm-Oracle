@@ -9,6 +9,7 @@ import json
 import logging
 
 import pytest
+from sqlalchemy import text as text_stmt
 from sqlmodel import Session, select
 
 from app.models import (
@@ -1355,7 +1356,14 @@ class TestGetRecentMessages:
         assert names == {"A1", "A2"}
 
     def test_deleted_agent_shows_unknown(self):
-        """If agent reference is broken, should show 'Unknown'."""
+        """If agent reference is broken, should show 'Unknown'.
+
+        The PRAGMA foreign_keys=ON pragma (BE-1 follow-up) blocks a naive
+        ``DELETE FROM agent`` while dependent agent_message rows are still
+        pointing at it, so the orphaning step runs inside a short FK-off
+        window to reproduce the "broken reference" reality that historical
+        / externally-managed databases can still present to production code.
+        """
         engine = get_engine()
         sid = _make_scenario(engine)
         bid = _create_branch(engine, sid)
@@ -1363,11 +1371,14 @@ class TestGetRecentMessages:
         rid = _create_round(engine, bid, 1)
         _save_message(engine, rid, aid, "orphan msg", "neutral", None)
 
-        # Delete the agent
+        # Delete the agent while FK enforcement is paused so the row can be
+        # deleted without touching the dependent agent_message rows.
         with Session(engine) as session:
+            session.exec(text_stmt("PRAGMA foreign_keys=OFF"))
             a = session.get(Agent, aid)
             session.delete(a)
             session.commit()
+            session.exec(text_stmt("PRAGMA foreign_keys=ON"))
 
         result = _get_recent_messages(engine, bid, max_rounds=1)
         assert len(result) == 1
