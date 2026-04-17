@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
+import { GlobalOfflineBanner } from './components/shared/GlobalOfflineBanner';
 
 const InputView = lazy(() =>
   import('./pages/InputView').then((mod) => ({ default: mod.InputView }))
@@ -46,6 +47,7 @@ function RouteFallback() {
 export default function App() {
   return (
     <AppErrorBoundary>
+      <GlobalOfflineBanner />
       <BrowserRouter>
         <Suspense fallback={<RouteFallback />}>
           <Routes>
