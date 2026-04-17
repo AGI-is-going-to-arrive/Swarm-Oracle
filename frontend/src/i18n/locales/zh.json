@@ -1203,6 +1203,102 @@
       "web_sources_hide": "收起真实世界来源",
       "ending_most_likely": "最可能",
       "section_predictions": "预测评分"
+    },
+    "conversation": {
+      "sheet": {
+        "title": "对话",
+        "close_aria": "关闭对话",
+        "scroll_region_aria": "对话记录"
+      },
+      "empty_state": {
+        "title": "开启对话",
+        "subtitle": "向 Agent 提问，探索这个节点。",
+        "quick_q_1": "为什么会这样？",
+        "quick_q_2": "如果我介入会如何改变？",
+        "quick_q_3": "还有谁受到了影响？"
+      },
+      "streaming": {
+        "aria_updated": "回复已更新",
+        "completed": "回复已完成",
+        "cursor_label": "输入中"
+      },
+      "input": {
+        "placeholder": "继续提问",
+        "send": "发送",
+        "stop": "停止"
+      },
+      "error": {
+        "rate_limit": "请稍后再试 — 发送太频繁了。",
+        "quota_exceeded": "今日对话配额已用完，请明天再试。",
+        "network": "网络错误，请检查连接后重试。",
+        "ws_lost": "实时连接已断开，正在重连…",
+        "byok_invalid": "API Key 无效或被服务商拒绝。",
+        "server_error": "服务器错误，请稍后重试。",
+        "retry_cta": "重试",
+        "discard_cta": "关闭"
+      },
+      "draft": {
+        "restored": "已恢复上次的草稿。",
+        "unavailable_safari": "本会话无法保存草稿（隐私浏览模式）。",
+        "discard": "丢弃草稿"
+      },
+      "cta": {
+        "continue_chatting": "继续对话"
+      }
+    },
+    "source": {
+      "polymarket": {
+        "title": "Polymarket",
+        "subtitle": "预测市场赔率",
+        "empty": "没有匹配此问题的 Polymarket 市场。",
+        "rate_limited": "Polymarket 请求受限，请稍后重试。",
+        "network_error": "无法连接 Polymarket。",
+        "geo_gated_title": "Polymarket 受地域限制",
+        "geo_gated_subtitle": "需要 US 节点 — 当前地区无法获取实时价格。"
+      },
+      "finance": {
+        "title": "金融",
+        "subtitle": "市场与宏观指标",
+        "empty": "没有匹配此问题的金融信号。"
+      },
+      "academic": {
+        "title": "学术",
+        "subtitle": "同行评审研究",
+        "empty": "没有匹配此问题的学术论文。"
+      },
+      "news_deep": {
+        "title": "深度新闻",
+        "subtitle": "长尾新闻信号",
+        "empty": "没有匹配此问题的深度新闻信号。"
+      }
+    },
+    "result_action": {
+      "continue_conversation_cta": "继续对话",
+      "subtitle": "就这个结局与 Agent 对话",
+      "aria": "打开与 Agent 的对话"
+    },
+    "input_source": {
+      "polymarket": {
+        "label": "Polymarket 市场",
+        "tooltip": "引入真实预测市场赔率"
+      },
+      "finance": {
+        "label": "金融指标",
+        "tooltip": "引入金融与宏观市场数据"
+      },
+      "academic": {
+        "label": "学术论文",
+        "tooltip": "引入同行评审的科学文献"
+      },
+      "news_deep": {
+        "label": "深度新闻",
+        "tooltip": "引入长尾调查新闻"
+      }
+    },
+    "offline_banner": {
+      "title": "你目前离线",
+      "subtitle": "部分功能需要实时连接。",
+      "retry_cta": "重试"
     }
   }
 }

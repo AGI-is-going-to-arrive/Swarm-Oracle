@@ -1203,6 +1203,102 @@
       "web_sources_hide": "Hide real-world sources",
       "ending_most_likely": "Most Likely",
       "section_predictions": "Prediction Scores"
+    },
+    "conversation": {
+      "sheet": {
+        "title": "Conversation",
+        "close_aria": "Close conversation",
+        "scroll_region_aria": "Conversation transcript"
+      },
+      "empty_state": {
+        "title": "Start a conversation",
+        "subtitle": "Ask the agent a question to explore this node.",
+        "quick_q_1": "Why did this happen?",
+        "quick_q_2": "What would change if I intervened?",
+        "quick_q_3": "Who else was affected?"
+      },
+      "streaming": {
+        "aria_updated": "Response updated",
+        "completed": "Response completed",
+        "cursor_label": "Typing"
+      },
+      "input": {
+        "placeholder": "Ask a follow-up question",
+        "send": "Send",
+        "stop": "Stop"
+      },
+      "error": {
+        "rate_limit": "Slow down — you're sending messages too quickly.",
+        "quota_exceeded": "Daily conversation quota reached. Try again tomorrow.",
+        "network": "Network error. Check your connection and retry.",
+        "ws_lost": "Lost real-time connection. Reconnecting…",
+        "byok_invalid": "Your API key is invalid or rejected by the provider.",
+        "server_error": "Server error. Please retry in a moment.",
+        "retry_cta": "Retry",
+        "discard_cta": "Dismiss"
+      },
+      "draft": {
+        "restored": "Draft restored from your previous session.",
+        "unavailable_safari": "Drafts won't be saved this session (private browsing).",
+        "discard": "Discard draft"
+      },
+      "cta": {
+        "continue_chatting": "Continue chatting"
+      }
+    },
+    "source": {
+      "polymarket": {
+        "title": "Polymarket",
+        "subtitle": "Prediction-market odds",
+        "empty": "No Polymarket markets matched this question.",
+        "rate_limited": "Polymarket rate limit reached. Retry shortly.",
+        "network_error": "Could not reach Polymarket.",
+        "geo_gated_title": "Polymarket is geo-gated",
+        "geo_gated_subtitle": "US host required — your region cannot access live prices."
+      },
+      "finance": {
+        "title": "Finance",
+        "subtitle": "Market & macro indicators",
+        "empty": "No finance signals matched this question."
+      },
+      "academic": {
+        "title": "Academic",
+        "subtitle": "Peer-reviewed research",
+        "empty": "No academic papers matched this question."
+      },
+      "news_deep": {
+        "title": "Deep News",
+        "subtitle": "Long-tail news signals",
+        "empty": "No deep-news signals matched this question."
+      }
+    },
+    "result_action": {
+      "continue_conversation_cta": "Continue the conversation",
+      "subtitle": "Chat with the agent about this ending",
+      "aria": "Open conversation with agent"
+    },
+    "input_source": {
+      "polymarket": {
+        "label": "Polymarket markets",
+        "tooltip": "Include real-world prediction-market odds"
+      },
+      "finance": {
+        "label": "Finance indicators",
+        "tooltip": "Include financial + macro market data"
+      },
+      "academic": {
+        "label": "Academic papers",
+        "tooltip": "Include peer-reviewed scientific literature"
+      },
+      "news_deep": {
+        "label": "Deep news",
+        "tooltip": "Include long-tail investigative news"
+      }
+    },
+    "offline_banner": {
+      "title": "You're offline",
+      "subtitle": "Some features require a live connection.",
+      "retry_cta": "Retry"
     }
   }
 }
