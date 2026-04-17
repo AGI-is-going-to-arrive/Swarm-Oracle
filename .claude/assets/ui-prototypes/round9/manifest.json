@@ -1,0 +1,52 @@
+{
+  "status": "partial_success",
+  "generated_at": "2026-04-17T13:45:00Z",
+  "stitch": {
+    "endpoint": "stitch.googleapis.com/mcp",
+    "project_id": "7576268024967914156",
+    "project_name": "projects/7576268024967914156",
+    "title": "swarmoracle-round9",
+    "model_requested": "gemini-3.1-pro-preview",
+    "model_used": "GEMINI_3_1_PRO",
+    "device_type_distribution": "DESKTOP: 9, MOBILE: 3"
+  },
+  "summary": {
+    "design_system": "generated",
+    "design_md_file": "../../../frontend/.stitch/DESIGN.md",
+    "screen_generations_submitted": 13,
+    "screen_generations_succeeded": 0,
+    "screen_generations_timed_out": 13,
+    "thumbnail_recovered": 1
+  },
+  "assets": [
+    {
+      "file": "project-thumbnail.png",
+      "size_bytes": 43153,
+      "dimensions": "512x410",
+      "source": "stitch project thumbnailScreenshot",
+      "role": "global style anchor for FE-2/3/4/5 visual alignment",
+      "screen_key": "global-style"
+    }
+  ],
+  "screens_specified": [
+    {"key": "sec-01-dual-stack-graph", "title": "Dual-Stack Graph Comparison", "device": "DESKTOP", "size": "1920x1080", "spec_ref": ".claude/team-plan/graph-playability-upgrade-ui-prompts.md#1", "asset_files": [], "generation_status": "timeout"},
+    {"key": "sec-02-mass-kg", "title": "Mass Knowledge Graph (1000+ nodes)", "device": "DESKTOP", "size": "1920x1080", "spec_ref": ".claude/team-plan/graph-playability-upgrade-ui-prompts.md#2", "asset_files": [], "generation_status": "timeout"},
+    {"key": "sec-03-replay-side-sheet", "title": "Agent Replay Conversation - Side Sheet", "device": "DESKTOP", "size": "1920x1080", "spec_ref": ".claude/team-plan/graph-playability-upgrade-ui-prompts.md#3", "asset_files": [], "generation_status": "timeout"},
+    {"key": "sec-04-empty-state", "title": "Replay Conversation Empty State", "device": "DESKTOP", "size": "480x600", "spec_ref": ".claude/team-plan/graph-playability-upgrade-ui-prompts.md#4", "asset_files": [], "generation_status": "timeout"},
+    {"key": "sec-05-source-dashboard", "title": "Multi-Source Aggregation Dashboard", "device": "DESKTOP", "size": "1920x1080", "spec_ref": ".claude/team-plan/graph-playability-upgrade-ui-prompts.md#5", "asset_files": [], "generation_status": "timeout"},
+    {"key": "sec-06-polymarket-geo-gated", "title": "Polymarket Geo-Gated Placeholder", "device": "DESKTOP", "size": "360x240", "spec_ref": ".claude/team-plan/graph-playability-upgrade-ui-prompts.md#6", "asset_files": [], "generation_status": "timeout"},
+    {"key": "sec-07-source-states", "title": "Source Aggregation 5-states composite", "device": "DESKTOP", "size": "1920x1080", "spec_ref": ".claude/team-plan/graph-playability-upgrade-ui-prompts.md#7", "asset_files": [], "generation_status": "timeout"},
+    {"key": "sec-08-streaming-ws", "title": "Replay Conversation - Streaming WS", "device": "MOBILE", "size": "393x852", "spec_ref": ".claude/team-plan/graph-playability-upgrade-ui-prompts.md#8", "asset_files": [], "generation_status": "timeout"},
+    {"key": "sec-09-result-action-card", "title": "Result Action Card CTA", "device": "DESKTOP", "size": "1920x1080", "spec_ref": ".claude/team-plan/graph-playability-upgrade-ui-prompts.md#9", "asset_files": [], "generation_status": "timeout"},
+    {"key": "sec-10-mobile-source-sheet", "title": "Mobile Bottom Sheet - Source Panel", "device": "MOBILE", "size": "393x852", "spec_ref": ".claude/team-plan/graph-playability-upgrade-ui-prompts.md#10", "asset_files": [], "generation_status": "timeout"},
+    {"key": "sec-11-abort-recovery", "title": "Conversation Abort & Recovery", "device": "DESKTOP", "size": "480x600", "spec_ref": ".claude/team-plan/graph-playability-upgrade-ui-prompts.md#11", "asset_files": [], "generation_status": "timeout"},
+    {"key": "sec-12-draft-restored", "title": "Draft Restored Indicator", "device": "DESKTOP", "size": "480x100", "spec_ref": ".claude/team-plan/graph-playability-upgrade-ui-prompts.md#12", "asset_files": [], "generation_status": "timeout"}
+  ],
+  "fallback_notes": [
+    "All 12 generate_screen_from_text calls returned operation timed out. Tool doc states timeouts do not imply failure, but list_screens remained empty after 13+ minutes of polling.",
+    "Project-level designTheme (Stitch auto-generated from Master Prompt) was successfully returned via get_project and encoded verbatim into frontend/.stitch/DESIGN.md section 2.",
+    "12-screen text spec + ASCII wireframes captured in DESIGN.md section 6 directly from ui-prompts.md sections 1-12.",
+    "FE-2/3/4/5 MUST align to DESIGN.md tokens; when Stitch MCP stabilizes, rerun generation and back-fill asset_files + chosen_variant keys.",
+    "Per user directive: did NOT create frontend/scripts/stitch-tokens-to-graphTokens.mjs or frontend/scripts/stitch-import.mjs."
+  ]
+}
