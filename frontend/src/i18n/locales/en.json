@@ -1299,6 +1299,51 @@
       "title": "You're offline",
       "subtitle": "Some features require a live connection.",
       "retry_cta": "Retry"
+    },
+    "kg_explorer": {
+      "title": "Knowledge Graph Explorer",
+      "feature_disabled_title": "Knowledge Graph is unavailable",
+      "feature_disabled": "Ask an admin to enable the kg_explorer capability to view this graph.",
+      "search_placeholder": "Search nodes by id or label",
+      "search_aria": "Search knowledge graph nodes",
+      "filter_aria": "Filter nodes by type",
+      "g6_aria": "Knowledge graph canvas",
+      "sidebar_aria": "Node details sidebar",
+      "sidebar_title": "Node details",
+      "node_count": "{{count}} nodes",
+      "mobile_switch_aria": "Switch between graph and details on mobile",
+      "tab_graph": "Graph",
+      "tab_details": "Details",
+      "sr_table_aria": "Screen-reader fallback table of graph nodes",
+      "sr_caption": "Graph nodes (screen-reader fallback)",
+      "col_id": "Id",
+      "col_type": "Type",
+      "col_label": "Label",
+      "col_round": "Round"
+    },
+    "timeline_galaxy": {
+      "title": "Timeline Galaxy",
+      "canvas_aria": "Timeline galaxy visualization canvas"
+    },
+    "replay": {
+      "title": "Replay Trace",
+      "scrubber": {
+        "aria_label": "Timeline scrubber"
+      },
+      "agent_queue": {
+        "aria_label": "Agent action queue"
+      },
+      "trace": {
+        "aria_label": "Replay trace",
+        "frame_count_label": "{{count}} frames",
+        "branches_label": "{{count}} branches"
+      },
+      "empty": {
+        "title": "No replay available",
+        "no_data": "This scenario has no replay data yet.",
+        "offline": "You're offline — connect to retry the replay stream.",
+        "retry": "Retry"
+      }
     }
   }
 }

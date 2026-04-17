@@ -1299,6 +1299,51 @@
       "title": "你目前离线",
       "subtitle": "部分功能需要实时连接。",
       "retry_cta": "重试"
+    },
+    "kg_explorer": {
+      "title": "知识图谱浏览器",
+      "feature_disabled_title": "知识图谱不可用",
+      "feature_disabled": "请联系管理员启用 kg_explorer 能力后再查看该图谱。",
+      "search_placeholder": "按 ID 或名称搜索节点",
+      "search_aria": "搜索知识图谱节点",
+      "filter_aria": "按类型筛选节点",
+      "g6_aria": "知识图谱画布",
+      "sidebar_aria": "节点详情侧栏",
+      "sidebar_title": "节点详情",
+      "node_count": "{{count}} 个节点",
+      "mobile_switch_aria": "在图谱与详情之间切换（移动端）",
+      "tab_graph": "图谱",
+      "tab_details": "详情",
+      "sr_table_aria": "图谱节点的无障碍表格",
+      "sr_caption": "图谱节点（无障碍表格）",
+      "col_id": "ID",
+      "col_type": "类型",
+      "col_label": "名称",
+      "col_round": "回合"
+    },
+    "timeline_galaxy": {
+      "title": "时间线星云",
+      "canvas_aria": "时间线星云可视化画布"
+    },
+    "replay": {
+      "title": "回放轨迹",
+      "scrubber": {
+        "aria_label": "时间线滑块"
+      },
+      "agent_queue": {
+        "aria_label": "Agent 动作队列"
+      },
+      "trace": {
+        "aria_label": "回放轨迹",
+        "frame_count_label": "{{count}} 帧",
+        "branches_label": "{{count}} 条分支"
+      },
+      "empty": {
+        "title": "暂无可用回放",
+        "no_data": "该场景尚未生成回放数据。",
+        "offline": "你目前离线 — 连接网络后可重试回放流。",
+        "retry": "重试"
+      }
     }
   }
 }
