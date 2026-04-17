@@ -39,6 +39,7 @@ from .ending_room import (
 )
 from .predictions import Leaderboard, Prediction
 # Phase 3: new model modules
+from .agent_conversation import AgentConversationThread, AgentConversationTurn
 from .agent_identity import AgentGrowthEvent, AgentIdentity, AgentIdentityCampaign, AgentIdentityCampaignMember
 from .checkpoint import AgentRelationEdge, DebateArgumentUnit, FactionEvent, FactionSnapshot, ScenarioCheckpoint
 from .graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
@@ -55,5 +56,7 @@ __all__ = [
     "AgentIdentity", "AgentIdentityCampaign", "AgentIdentityCampaignMember", "AgentGrowthEvent",
     "GraphSnapshot", "GraphNode", "GraphEdge", "AgentStateFrame",
     "ScenarioCheckpoint", "AgentRelationEdge", "FactionSnapshot", "FactionEvent", "DebateArgumentUnit",
+    # Phase 4 / F7
+    "AgentConversationThread", "AgentConversationTurn",
     "init_db",
 ]
