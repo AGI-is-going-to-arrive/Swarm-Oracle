@@ -420,6 +420,11 @@ async function main() {
   const debateOutput = path.join(args.outputRoot, "debate-full");
   const debateFirefoxOutput = path.join(args.outputRoot, "debate-firefox");
   const debateWebkitOutput = path.join(args.outputRoot, "debate-webkit");
+  // QA-2 — Tier 1 live suites for the graph-playability-upgrade delivery.
+  const nodeConversationLiveOutput = path.join(args.outputRoot, "node-conversation-live");
+  const kgExplorerLiveOutput = path.join(args.outputRoot, "kg-explorer-live");
+  const replayViewLiveOutput = path.join(args.outputRoot, "replay-view-live");
+  const newSourceIngestionLiveOutput = path.join(args.outputRoot, "new-source-ingestion-live");
   const phase3aFirefoxOutput = path.join(args.outputRoot, "phase3a-firefox");
   const phase3bFirefoxOutput = path.join(args.outputRoot, "phase3b-firefox");
   const phase3aWebkitOutput = path.join(args.outputRoot, "phase3a-webkit");
@@ -1070,6 +1075,95 @@ async function main() {
       {
         artifactDir: debateWebkitOutput,
         resultFile: path.join(debateWebkitOutput, "result.json"),
+      },
+    );
+    // QA-2 — graph-playability-upgrade Tier 1 live suites (fail → block release).
+    runStep(
+      summary,
+      args,
+      "node_conversation_live",
+      nodeCommand,
+      [
+        "scripts/e2e-node-conversation-live.mjs",
+        "full",
+        "--url",
+        args.baseUrl,
+        "--output-dir",
+        nodeConversationLiveOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: nodeConversationLiveOutput,
+        resultFile: path.join(nodeConversationLiveOutput, "result.json"),
+        env: {
+          SWARM_URL: args.baseUrl,
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "kg_explorer_live",
+      nodeCommand,
+      [
+        "scripts/e2e-kg-explorer-live.mjs",
+        "full",
+        "--url",
+        args.baseUrl,
+        "--output-dir",
+        kgExplorerLiveOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: kgExplorerLiveOutput,
+        resultFile: path.join(kgExplorerLiveOutput, "result.json"),
+        env: {
+          SWARM_URL: args.baseUrl,
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "replay_view_live",
+      nodeCommand,
+      [
+        "scripts/e2e-replay-view-live.mjs",
+        "full",
+        "--url",
+        args.baseUrl,
+        "--output-dir",
+        replayViewLiveOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: replayViewLiveOutput,
+        resultFile: path.join(replayViewLiveOutput, "result.json"),
+        env: {
+          SWARM_URL: args.baseUrl,
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "new_source_ingestion_live",
+      nodeCommand,
+      [
+        "scripts/e2e-new-source-ingestion-live.mjs",
+        "full",
+        "--url",
+        args.baseUrl,
+        "--output-dir",
+        newSourceIngestionLiveOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: newSourceIngestionLiveOutput,
+        resultFile: path.join(newSourceIngestionLiveOutput, "result.json"),
+        env: {
+          SWARM_URL: args.baseUrl,
+        },
       },
     );
 
