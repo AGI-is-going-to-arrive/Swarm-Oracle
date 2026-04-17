@@ -437,15 +437,41 @@ export interface CapabilityEntry {
   degraded_mode: string | null;
 }
 
+/** Phase 3 / FE-1: per-provider nested entry under web_search.providers */
+export interface WebSearchProviderEntry {
+  enabled: boolean;
+  configured_host: string;
+  rate_limit_rps: number;
+  ttl_seconds: number;
+  byok_allowed: boolean;
+}
+
+/** Phase 3 / FE-1: web_search.providers block (only populated when FEATURE_NEW_SOURCES=true) */
+export interface WebSearchProvidersBlock {
+  polymarket?: WebSearchProviderEntry;
+  finance?: WebSearchProviderEntry;
+  academic?: WebSearchProviderEntry;
+  news_deep?: WebSearchProviderEntry;
+}
+
 /** Phase 3: full capabilities registry response */
 export interface CapabilitiesResponse {
-  web_search: CapabilityEntry & { scope: 'server'; server_enabled: boolean; method: string; provider: string | null };
+  web_search: CapabilityEntry & {
+    scope: 'server';
+    server_enabled: boolean;
+    method: string;
+    provider: string | null;
+    providers?: WebSearchProvidersBlock;
+  };
   custom_agents: CapabilityEntry;
   agent_identity: CapabilityEntry;
   causal_graph: CapabilityEntry;
   counterfactual_replay: CapabilityEntry;
   factions: CapabilityEntry;
   argument_map: CapabilityEntry;
+  agent_conversation: CapabilityEntry;
+  kg_explorer: CapabilityEntry;
+  replay_trace: CapabilityEntry;
 }
 
 /** GET /api/capabilities — lightweight server capability hints (no LLM calls) */

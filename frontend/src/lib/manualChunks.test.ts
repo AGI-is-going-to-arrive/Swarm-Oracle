@@ -23,6 +23,13 @@ describe('resolveManualChunk', () => {
     expect(resolveManualChunk('/repo/frontend/node_modules/gif.js/dist/gif.js')).toBe('capture-gif');
   });
 
+  it('routes @antv/g6 into g6-vendor, and the rule fires before @xyflow detection', () => {
+    expect(resolveManualChunk('/repo/frontend/node_modules/@antv/g6/lib/index.js')).toBe('g6-vendor');
+    // Sanity check: a path that contains both markers (unlikely in practice) still
+    // lands in g6-vendor because the g6 rule is evaluated first.
+    expect(resolveManualChunk('/repo/frontend/node_modules/@antv/g6/node_modules/@xyflow-shim/index.js')).toBe('g6-vendor');
+  });
+
   it('defaults unmatched node_modules packages to the shared vendor chunk', () => {
     expect(resolveManualChunk('/repo/frontend/node_modules/lodash-es/chunk.js')).toBe('vendor');
   });
