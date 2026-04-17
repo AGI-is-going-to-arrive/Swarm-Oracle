@@ -119,6 +119,12 @@ import { FactionTimeline } from '../components/FactionTimeline';
 import { ResumePanel } from '../components/ResumePanel';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { ReturningBadge } from '../components/ReturningBadge';
+import { ResultActionCard } from '../components/result/ResultActionCard';
+import { PolymarketCard } from '../components/result/PolymarketCard';
+import { ArxivCard } from '../components/result/ArxivCard';
+import { SemanticScholarCard } from '../components/result/SemanticScholarCard';
+import { NewsApiCard } from '../components/result/NewsApiCard';
+import { MobileSourceSheet } from '../components/result/MobileSourceSheet';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 const EMPTY_GAMEPLAY_PROFILE_HOOKS: string[] = [];
@@ -177,6 +183,8 @@ export default function ResultView() {
   const [endingRoomPermalinkCopied, setEndingRoomPermalinkCopied] = useState(false);
   const [endingRoomLocalCopySaved, setEndingRoomLocalCopySaved] = useState(false);
   const [importingEndingRoomReplay, setImportingEndingRoomReplay] = useState(false);
+  // FE-5: mobile source sheet visibility (R1 FM5)
+  const [mobileSourceSheetOpen, setMobileSourceSheetOpen] = useState(false);
   const [replayUrl, setReplayUrl] = useState<string | null>(null);
   const [replayPayload, setReplayPayload] = useState<ScenarioResultReplayPayload | null>(null);
   const [replayEndingRoomPayload, setReplayEndingRoomPayload] = useState<OracleReplayPayload | null>(null);
@@ -2485,6 +2493,51 @@ export default function ResultView() {
           onAutomationStateChange={setEndingRoomAutomation}
           onModeChange={handleEndingRoomModeChange}
           onClose={handleCloseEndingRoom}
+        />
+      )}
+      {/* FE-5: 4 source category grid (desktop) + mobile Sheet + Action Card */}
+      {capabilities?.web_search?.providers && (
+        <>
+          <div
+            className="result-source-grid hidden gap-3 px-4 py-2 md:grid md:grid-cols-2"
+            data-testid="result-source-grid-desktop"
+          >
+            {capabilities.web_search.providers.polymarket?.enabled && (
+              <PolymarketCard capability={capabilities.web_search.providers.polymarket} />
+            )}
+            {capabilities.web_search.providers.finance?.enabled && (
+              <ArxivCard testIdOverride="result-sources-finance" />
+            )}
+            {capabilities.web_search.providers.academic?.enabled && (
+              <SemanticScholarCard />
+            )}
+            {capabilities.web_search.providers.news_deep?.enabled && (
+              <NewsApiCard />
+            )}
+          </div>
+          <MobileSourceSheet
+            open={mobileSourceSheetOpen}
+            onOpenChange={setMobileSourceSheetOpen}
+          >
+            {capabilities.web_search.providers.polymarket?.enabled && (
+              <PolymarketCard capability={capabilities.web_search.providers.polymarket} />
+            )}
+            {capabilities.web_search.providers.finance?.enabled && (
+              <ArxivCard testIdOverride="result-sources-finance" />
+            )}
+            {capabilities.web_search.providers.academic?.enabled && (
+              <SemanticScholarCard />
+            )}
+            {capabilities.web_search.providers.news_deep?.enabled && (
+              <NewsApiCard />
+            )}
+          </MobileSourceSheet>
+        </>
+      )}
+      {capabilities?.agent_conversation?.enabled && (
+        <ResultActionCard
+          agentIdentityId={agents[0]?.agent_identity_id ?? null}
+          onMobileTriggerClick={() => setMobileSourceSheetOpen(true)}
         />
       )}
     </div>

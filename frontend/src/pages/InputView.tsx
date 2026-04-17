@@ -65,6 +65,103 @@ function parseOptionalRuntimeLimit(value: string): number | undefined {
   return Math.trunc(parsed);
 }
 
+/* ── FE-5: NewSourceToggles (4 source family toggles) ─────── */
+type NewSourceFamily = 'polymarket' | 'finance' | 'academic' | 'news_deep';
+
+interface NewSourceTogglesProps {
+  polymarket: boolean;
+  finance: boolean;
+  academic: boolean;
+  newsDeep: boolean;
+  onChange: Record<NewSourceFamily, (next: boolean) => void>;
+  disabled?: boolean;
+}
+
+function NewSourceToggleItem({
+  family,
+  checked,
+  onChange,
+  disabled,
+}: {
+  family: NewSourceFamily;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  // Per-family capability gate (server may disable any family independently).
+  const { enabled: featureEnabled, loading } = useCapabilityCheck(
+    'web_search',
+    `providers.${family}.enabled`,
+  );
+  const testId = `input-source-toggle-${family}`;
+  const effectiveDisabled = Boolean(disabled) || loading || !featureEnabled;
+  const title = t(`input_source.${family}.label`, {
+    defaultValue: family.replace('_', ' '),
+  });
+  const tooltip = t(`input_source.${family}.tooltip`, {
+    defaultValue: 'External source provider.',
+  });
+  return (
+    <label
+      className={`new-source-toggle ${checked ? 'new-source-toggle--active' : ''} ${effectiveDisabled ? 'new-source-toggle--disabled' : ''}`}
+      data-testid={testId}
+      data-source-family={family}
+      data-feature-enabled={featureEnabled ? 'true' : 'false'}
+      title={featureEnabled ? tooltip : t('input_source.disabled_tooltip', { defaultValue: 'This source is not available on the server.' })}
+    >
+      <input
+        type="checkbox"
+        checked={featureEnabled && checked}
+        onChange={(evt) => onChange(evt.target.checked)}
+        disabled={effectiveDisabled}
+      />
+      <span className="new-source-toggle__copy">
+        <strong>{title}</strong>
+        <span>{tooltip}</span>
+      </span>
+    </label>
+  );
+}
+
+function NewSourceToggles({
+  polymarket,
+  finance,
+  academic,
+  newsDeep,
+  onChange,
+  disabled,
+}: NewSourceTogglesProps) {
+  return (
+    <div className="new-source-toggles" role="group">
+      <NewSourceToggleItem
+        family="polymarket"
+        checked={polymarket}
+        onChange={onChange.polymarket}
+        disabled={disabled}
+      />
+      <NewSourceToggleItem
+        family="finance"
+        checked={finance}
+        onChange={onChange.finance}
+        disabled={disabled}
+      />
+      <NewSourceToggleItem
+        family="academic"
+        checked={academic}
+        onChange={onChange.academic}
+        disabled={disabled}
+      />
+      <NewSourceToggleItem
+        family="news_deep"
+        checked={newsDeep}
+        onChange={onChange.news_deep}
+        disabled={disabled}
+      />
+    </div>
+  );
+}
+
 /* ── Loading Step Component ───────────────────────────────── */
 function LoadingStep({ label, active, done }: { label: string; active: boolean; done: boolean }) {
   return (
@@ -100,6 +197,11 @@ export function InputView() {
   const [continuityChoices, setContinuityChoices] = useState<Record<string, ContinuityOverride['action']>>({});
   const [continuityError, setContinuityError] = useState<string | null>(null);
   const [pendingLaunch, setPendingLaunch] = useState<PendingSimulationLaunch | null>(null);
+  // FE-5: 4 new source toggles (independent state per family)
+  const [newSourceTogglePolymarket, setNewSourceTogglePolymarket] = useState(false);
+  const [newSourceToggleFinance, setNewSourceToggleFinance] = useState(false);
+  const [newSourceToggleAcademic, setNewSourceToggleAcademic] = useState(false);
+  const [newSourceToggleNewsDeep, setNewSourceToggleNewsDeep] = useState(false);
   // V2: Pixel Theater visualization
   const [vizEnabled, setVizEnabled] = useState(false);
   const [isConfigOpen, setIsConfigOpen] = useState(false);
@@ -1177,6 +1279,21 @@ export function InputView() {
                 )}
               </div>
             )}
+
+            {/* FE-5: 4 new source toggles (polymarket/finance/academic/news_deep) */}
+            <NewSourceToggles
+              polymarket={newSourceTogglePolymarket}
+              finance={newSourceToggleFinance}
+              academic={newSourceToggleAcademic}
+              newsDeep={newSourceToggleNewsDeep}
+              onChange={{
+                polymarket: setNewSourceTogglePolymarket,
+                finance: setNewSourceToggleFinance,
+                academic: setNewSourceToggleAcademic,
+                news_deep: setNewSourceToggleNewsDeep,
+              }}
+              disabled={isSubmitting}
+            />
           </div>
 
           {/* ── STAGE 2: Challenges ── */}
