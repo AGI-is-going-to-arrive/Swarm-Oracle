@@ -17,7 +17,7 @@
 当前默认构建/测试路径会把 `phaser` alias 到本地精简入口 `frontend/experiments/phaser-custom/entry.mjs`，用于降低默认包体。
 - production build 当前会额外产出 legacy bundle，目标口径是 Chrome / Edge 79+、Firefox 78+、Safari / iOS 12+。
 - 本地 Phaser 入口当前不再依赖 top-level `await`，不会把 legacy 构建链卡死。
-- `Vite manualChunks` 当前把 React 留在共享 `vendor`，不再单独拆 `react-vendor`；production preview 不再因为 vendor 循环 import 出现首页或图谱页白屏。
+- `Vite manualChunks` 当前不再给 React Flow 栈单独拆 `flow-vendor`；`@xyflow / d3 / dagre / graphlib` 和 React 一起留在共享 `vendor`，避免 production preview 启动阶段因为 chunk 循环 import 出现首页白屏。
 
 ## 页面地图
 
@@ -138,7 +138,7 @@
 | `endingChatHelpers.ts` | `frontend/src/components/endingChatHelpers.ts` | 会客厅纯函数：角色标签、模式标签、prompt 构建、anchor 描述 |
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
-| `manualChunks.ts` | `frontend/src/lib/manualChunks.ts` | 前端构建分块单一事实源；当前用于约束 React 保持在共享 `vendor`，避免 preview 白屏 |
+| `manualChunks.ts` | `frontend/src/lib/manualChunks.ts` | 前端构建分块单一事实源；当前把 React 和 React Flow 栈一起留在共享 `vendor`，避免 production preview 启动白屏 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
 | `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
@@ -253,6 +253,7 @@
 - `DebateResultView` 当前把 argument map 改成按需加载，并放回主结果壳内对齐：
   - 首屏只显示 `Load map / Hide map` 按钮和提示文案，不会默认把 React Flow 一起挂上来
   - 只有用户真正点开后才渲染 `ArgumentMap`，主要是为了减少结果页首屏额外开销
+- `ArgumentMap` 的节点对话当前需要调用方显式提供 `conversationScenarioId` 才会打开 `NodeConversationSheet`；`DebateArenaView` 和 `DebateResultView` 现在都传 `null`，所以 debate argument-map 节点暂时不会直接起对话，等真实 scenario id 接通后再开放。
 - `DebateResultView` 当前的 replay 分享有两条只读路径：
   - URL 足够短时走内联 `?replay=`
   - URL 过长时，把 payload 落到本地存储后改走 `?local=`
@@ -335,9 +336,10 @@
   - 详情关闭后仍走 pane click / close button 这条现有口径
 - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。SVG 导出当前改成 native SVG background / edge / node markup，不再依赖 `foreignObject`；校验脚本也会拒绝 `foreignObject` 回退。节点卡标题过长时，SVG 文本会按卡片宽度裁剪显示，但 `<title>` 和文本内容仍优先保留完整标题，不再把省略号文本写进 SVG。
 - `CausalReviewView` 当前在 branch 切换时会先收起旧图和导出面板，等新分支数据 ready 后再恢复；图页外层统一走 `100dvh`，relationless snapshot fallback 里的节点详情也会锚在当前容器里，不再飘到视口右上角。
-- frontend full vitest 本轮 `1055 passed`。
+- frontend full vitest 当前 `1291 passed`。
 - `node --test scripts/e2e-frontend-preflight.test.mjs` 本轮 `25 passed`。
-- `npm run lint / npm run build / npm run perf:budgets:check / npm run assets:provenance:check` 本轮通过。
+- `pnpm exec tsc --noEmit -p tsconfig.app.json`、`pnpm run lint`、`pnpm run build` 当前通过。
+- `pnpm exec vite preview --host 127.0.0.1 --port 18930` 当前可正常挂起，首页不再白屏。
 - preview-driven Chromium `phase3-batch-a full / phase3-batch-b full / phase3-batch-c full` 本轮全绿。
 - preview-driven `zh-CN phase3-batch-a full / phase3-batch-b full` 本轮全绿。
 - graph mobile smoke 当前会额外检查 controls 与 mobile navigation hint；viewport 交互从空白画布锚点拖拽开始，并以 `Fit view` 后的 baseline 判断 pan / zoom / reset；`MiniMap` 继续维持桌面限定。
@@ -360,7 +362,7 @@
   - 本地 CSS entry asset、inline `nomodule` fallback、Vite legacy polyfill / legacy entry 都必须跨路由一致
   - modern / CSS / legacy 入口资产都必须可达，且 content-type 符合脚本 / 样式预期
   - preview 没 ready、SPA fallback 失效，或任一入口资产不一致 / 不可达时会直接 fail-closed，不再把 404 混成图谱页面回归
-- graph-viz 相关构建回归当前也会检查共享 `vendor` chunk，并按 modern / legacy 两套 chunk 名一起核对 `vendor / phaser / capture-html / capture-gif / flow-vendor / i18n-vendor`，不再只看 `phaser / capture-html / flow-vendor`。
+- graph-viz 相关构建回归当前也会检查共享 `vendor` chunk，并按 modern / legacy 两套 chunk 名一起核对 `vendor / phaser / capture-html / capture-gif / i18n-vendor`，不再额外要求独立的 `flow-vendor`。
 - 关键页面样式当前已补一层 sRGB / rgba fallback：
   - 全局 token 在 `index.css` 里先声明 fallback，再用 `oklch()` / `color-mix()` 覆盖
   - `SimulationView`、`ResultView`、`WorldlineRoundtableView` 的高流量表面已补关键 fallback
