@@ -428,17 +428,18 @@ interface Props {
   debateId: string;
   visible: boolean;
   refreshTrigger?: number;
+  conversationScenarioId?: string | null;
 }
 
 // FE-3-seq: NodeConversationSheet trigger state (append-only, not wired to layout).
 interface ArgumentSheetState {
   open: boolean;
   scenarioId: string;
-  identityId: string;
+  identityId: string | null;
   origin: { nodeId: string; nodeType: string; excerpt?: string };
 }
 
-export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
+export function ArgumentMap({ debateId, visible, refreshTrigger, conversationScenarioId = null }: Props) {
   const { t } = useTranslation();
   const isCompactViewport = useCompactGraphViewport();
   const prefersReducedMotion = useReducedMotionPreference();
@@ -450,7 +451,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
   const [sheetState, setSheetState] = useState<ArgumentSheetState>({
     open: false,
     scenarioId: '',
-    identityId: '',
+    identityId: null,
     origin: { nodeId: '', nodeType: '' },
   });
   // C5: Status filter
@@ -650,13 +651,16 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
     // FE-3-seq: open NodeConversationSheet — append only, existing behavior preserved.
     const nodeType = unit?.type ?? raw?.type ?? 'unknown';
     const excerpt = unit?.text ?? raw?.label;
+    if (!conversationScenarioId) {
+      return;
+    }
     setSheetState({
       open: true,
-      scenarioId: debateId,
-      identityId: node.id,
+      scenarioId: conversationScenarioId,
+      identityId: null,
       origin: { nodeId: node.id, nodeType, excerpt },
     });
-  }, [rawNodeMap, unitByNodeId, unitById, debateId]);
+  }, [conversationScenarioId, rawNodeMap, unitByNodeId, unitById]);
 
   // C3: Background click resets highlight + closes detail panel
   const onPaneClick = useCallback(() => setSelectedNode(null), []);
@@ -897,17 +901,17 @@ export function ArgumentMap({ debateId, visible, refreshTrigger }: Props) {
             <div key={`${line}-${index}`} role="listitem">{line}</div>
           ))}
         </div>
-        {/* FE-3-seq: NodeConversationSheet (append-only, capability-independent). */}
-        {sheetState.open && (
+        {/* FE-3-seq: NodeConversationSheet remains disabled until the caller provides a real scenario id. */}
+        {sheetState.open && conversationScenarioId ? (
           <NodeConversationSheet
             open={sheetState.open}
             onOpenChange={(next) => setSheetState((prev) => ({ ...prev, open: next }))}
-            threadId={null}
+            onClose={() => setSheetState((prev) => ({ ...prev, open: false }))}
             scenarioId={sheetState.scenarioId}
             identityId={sheetState.identityId}
             origin={sheetState.origin}
           />
-        )}
+        ) : null}
       </div>
     </Tooltip.Provider>
   );

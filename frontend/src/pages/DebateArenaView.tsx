@@ -1248,6 +1248,7 @@ export function DebateArenaView() {
                       debateId={id}
                       visible={argMapOpen}
                       refreshTrigger={argMapRefreshKey}
+                      conversationScenarioId={null}
                     />
                   </div>
                 )}

@@ -183,6 +183,24 @@
 - `GET /api/debate/{debate_id}/argument-map` 在功能开启但读取阶段出错时，当前走 fail-soft：
   返回 `200`，并带空的 `nodes / edges / units` 和 `error: "ARGUMENT_MAP_LOAD_FAILED"`。
 
+## Agent Conversation
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/api/conversation/start` | 创建 conversation thread，并写入第一条 user turn + 一条预留 assistant turn |
+| `GET` | `/api/conversation/{thread_id}` | 读取 thread 与已提交 turn 历史 |
+| `POST` | `/api/conversation/{thread_id}/turn` | 通过 SSE 追加/启动 assistant turn |
+| `DELETE` | `/api/conversation/{thread_id}/active` | 中止当前 active assistant turn |
+
+说明：
+
+- `POST /api/conversation/start` 会先验证 request-scoped BYOK override，但这一步本身不调用 LLM。
+- `start` 成功后，返回体会带 `thread_id / user_turn_id / assistant_turn_id`，供前端继续接 `/turn`。
+- 如果首个 `/turn` 和 bootstrap 阶段的 `first_user_content` 相同，后端当前会直接 claim 这条预留 assistant turn，而不是再追加一条重复的 user turn。
+- 同一个 bootstrap placeholder 只会被 claim 一次；并发重复首轮请求不会再同时拿到两条 live stream。
+- `/turn` 的 SSE 正常事件仍是 `turn_started / turn_token_delta / turn_completed`。
+- scenario 删除打断 stream 时，服务端当前会补一条终态 `turn_error`，并带 `code: "SCENARIO_DELETED"`；user abort / 连接断开则收口到 `USER_ABORTED`。
+
 ## Phase 3 — Agents / Graphs
 
 | 方法 | 路径 | 说明 | 开关 |
@@ -237,23 +255,6 @@
   - agent identity / workshop 当前要求 signed principal token
   - 读取 scenario owner 资源的 graph / counterfactual / checkpoints / faction-timeline 也会按 principal 收口
 - 前端通过 `GET /api/capabilities` 检测 `enabled` 字段，disabled 时隐藏入口且不发请求。
-
-## Agent Conversation
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/api/conversation/start` | 创建 thread，并落首条 user turn + 预留 assistant turn |
-| `GET` | `/api/conversation/{thread_id}` | 读取 thread 与 turn 历史 |
-| `POST` | `/api/conversation/{thread_id}/turn` | 追加用户输入，并通过 SSE 返回 assistant 回复 |
-| `DELETE` | `/api/conversation/{thread_id}/active` | 中止当前 streaming turn |
-
-关键约束：
-
-- `POST /api/conversation/start` 当前只负责创建 thread、首条 user turn 和一个 `pending` assistant turn。
-- 新 thread 的第一次 `POST /api/conversation/{thread_id}/turn`，如果 `user_content` 和 `start.first_user_content` 一致，当前会直接 claim 这条预留 assistant turn，不再追加第二条重复 user turn。
-- 这次 claim 走原子更新；同一 thread 上重复发起首轮 stream 时，只有一个请求能拿到预留 turn，其他请求会按 `409 THREAD_BUSY` 失败，不会出现两条首轮流同时跑。
-- 场景在流式过程中被删除时，即使删除事务还没提交，SSE 末帧也会返回 `turn_error`，其中 `code="SCENARIO_DELETED"`、`status="scenario_deleted"`。
-- 主动终止当前流时，后端会把该 turn 收口为 `aborted`，`error_code="USER_ABORTED"`；场景删除和用户主动终止现在按不同取消原因处理。
 
 ## Ending Room / Worldline Roundtable
 

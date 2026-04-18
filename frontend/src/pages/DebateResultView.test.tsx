@@ -30,7 +30,13 @@ const {
 const getDebateResultMock = vi.fn();
 const importReplayDebateMock = vi.fn();
 const captureElementDataUrlMock = vi.fn();
-const argumentMapMock = vi.fn(({ debateId }: { debateId: string }) => (
+const argumentMapMock = vi.fn(({
+  debateId,
+}: {
+  debateId: string;
+  visible?: boolean;
+  conversationScenarioId?: string | null;
+}) => (
   <div data-testid="argument-map">{debateId}</div>
 ));
 
@@ -241,7 +247,9 @@ vi.mock('../hooks/useCapabilityCheck', () => ({
 }));
 
 vi.mock('../components/ArgumentMap', () => ({
-  ArgumentMap: (props: { debateId: string; visible: boolean }) => argumentMapMock(props),
+  ArgumentMap: (
+    props: { debateId: string; visible: boolean; conversationScenarioId?: string | null },
+  ) => argumentMapMock(props),
 }));
 
 vi.mock('../lib/debateCounterplay', () => ({
@@ -362,6 +370,28 @@ describe('DebateResultView', () => {
     expect(screen.getByText('debate.result_phase_map')).toBeInTheDocument();
     expect(screen.getByText('debate.result_prediction_confidence')).toBeInTheDocument();
     expect(screen.getByText('The bet tracked the late momentum correctly.')).toBeInTheDocument();
+  });
+
+  it('passes a null conversationScenarioId to ArgumentMap for debate-only results', async () => {
+    const user = userEvent.setup();
+    getDebateResultMock.mockResolvedValue(buildPayload());
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1/result']}>
+        <Routes>
+          <Route path="/debate/:id/result" element={<DebateResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText(/debate\.result_title/);
+    await user.click(screen.getByRole('button', { name: 'Load map' }));
+
+    await waitFor(() => {
+      expect(argumentMapMock).toHaveBeenCalled();
+    });
+    const latestProps = argumentMapMock.mock.calls.at(-1)?.[0];
+    expect(latestProps?.conversationScenarioId).toBeNull();
   });
 
   it('keeps the current UI language instead of forcing the debate language on the result page', async () => {

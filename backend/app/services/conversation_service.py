@@ -91,6 +91,17 @@ _BYOK_KEY_RE = re.compile(r"\b(?:sk|xai|tvly|gsk|tvs|psk|api)-[A-Za-z0-9_\-]{16,
 
 # SSE media type constant (kept out of router for reuse).
 SSE_MEDIA_TYPE = "text/event-stream"
+_ACTIVE_TURN_CANCEL_EVENTS_LOCK = threading.Lock()
+
+
+@dataclass
+class _ActiveTurnCancelSlot:
+    loop: asyncio.AbstractEventLoop
+    event: asyncio.Event
+    reason: Literal["scenario_deleted", "user_aborted"] | None = None
+
+
+_ACTIVE_TURN_CANCEL_EVENTS: dict[str, _ActiveTurnCancelSlot] = {}
 
 
 # ── Data classes ────────────────────────────────────────
@@ -118,6 +129,57 @@ class StartOutcome:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _begin_immediate_if_supported(session: Session) -> None:
+    conn = session.connection()
+    try:
+        conn.exec_driver_sql("ROLLBACK")
+    except Exception:
+        pass
+    try:
+        conn.exec_driver_sql("BEGIN IMMEDIATE")
+    except Exception:
+        logger.debug("BEGIN IMMEDIATE not supported on this engine; continuing")
+
+
+def _register_turn_cancel_event(turn_id: str, event: asyncio.Event) -> None:
+    slot = _ActiveTurnCancelSlot(
+        loop=asyncio.get_running_loop(),
+        event=event,
+    )
+    with _ACTIVE_TURN_CANCEL_EVENTS_LOCK:
+        _ACTIVE_TURN_CANCEL_EVENTS[turn_id] = slot
+
+
+def _unregister_turn_cancel_event(turn_id: str, event: asyncio.Event) -> None:
+    with _ACTIVE_TURN_CANCEL_EVENTS_LOCK:
+        current = _ACTIVE_TURN_CANCEL_EVENTS.get(turn_id)
+        if current is not None and current.event is event:
+            _ACTIVE_TURN_CANCEL_EVENTS.pop(turn_id, None)
+
+
+def _get_turn_cancel_reason(
+    turn_id: str,
+) -> Literal["scenario_deleted", "user_aborted"] | None:
+    with _ACTIVE_TURN_CANCEL_EVENTS_LOCK:
+        current = _ACTIVE_TURN_CANCEL_EVENTS.get(turn_id)
+        return current.reason if current is not None else None
+
+
+def _signal_turn_cancel_event(
+    turn_id: str,
+    *,
+    reason: Literal["scenario_deleted", "user_aborted"] | None = None,
+) -> bool:
+    with _ACTIVE_TURN_CANCEL_EVENTS_LOCK:
+        current = _ACTIVE_TURN_CANCEL_EVENTS.get(turn_id)
+    if current is None:
+        return False
+    if reason is not None:
+        current.reason = reason
+    current.loop.call_soon_threadsafe(current.event.set)
+    return True
 
 
 def redact_byok(text: str | None) -> str:
@@ -452,26 +514,25 @@ def create_thread_with_first_turn(
     origin_node_id: str | None,
     origin_node_type: str | None,
     first_user_content: str,
+    organization_id: str | None = None,
 ) -> StartOutcome:
     """Atomically create thread + user turn + placeholder assistant turn.
 
     Wraps the whole flow in a ``BEGIN IMMEDIATE`` (SQLite) transaction — on
     file-based SQLite this acquires a reserved lock and serialises concurrent
     ``start`` calls per scenario.  In-memory engines fall back silently.
+
+    ``organization_id`` is an out-of-band routing hint — v1 does **not**
+    accept it via the request body (HC-31 contract freeze, enforced by
+    ``StartConversationRequest.model_config.extra='forbid'``); instead the
+    HTTP router reads it from the ``X-Org-Id`` request header (C3 fix).
+    Once written onto the row it flows through to the append path via
+    ``thread.organization_id``, so subsequent turns are metered against
+    the same daily-org bucket.
     """
     engine = get_engine()
     with Session(engine) as session:
-        conn = session.connection()
-        # Best-effort BEGIN IMMEDIATE; skip silently on non-SQLite (tests use
-        # SQLite exclusively — production too).
-        try:
-            conn.exec_driver_sql("ROLLBACK")
-        except Exception:  # pragma: no cover — no active tx, fine
-            pass
-        try:
-            conn.exec_driver_sql("BEGIN IMMEDIATE")
-        except Exception:  # pragma: no cover — non-SQLite or already-in-tx
-            logger.debug("BEGIN IMMEDIATE not supported on this engine; continuing")
+        _begin_immediate_if_supported(session)
 
         # Ownership re-checks inside the same transaction (no TOCTOU).
         _verify_scenario_owner(session, scenario_id, owner_user_id)
@@ -484,7 +545,7 @@ def create_thread_with_first_turn(
         _enforce_thread_cap_per_scenario(session, scenario_id=scenario_id)
         _enforce_daily_user_org_quota(
             user_id=owner_user_id or None,
-            organization_id=None,  # v1: organization_id is not accepted from body.
+            organization_id=organization_id or None,
             additions=2,
         )
 
@@ -493,6 +554,7 @@ def create_thread_with_first_turn(
             scenario_id=scenario_id,
             agent_identity_id=agent_identity_id,
             owner_user_id=owner_user_id,
+            organization_id=organization_id or None,
             origin_branch_id=origin_branch_id,
             origin_round_number=origin_round_number,
             origin_node_id=origin_node_id,
@@ -571,17 +633,22 @@ def append_user_turn_and_reserve_assistant(
     """
     engine = get_engine()
     with Session(engine) as session:
-        conn = session.connection()
-        try:
-            conn.exec_driver_sql("ROLLBACK")
-        except Exception:
-            pass
-        try:
-            conn.exec_driver_sql("BEGIN IMMEDIATE")
-        except Exception:
-            logger.debug("BEGIN IMMEDIATE not supported on this engine; continuing")
+        _begin_immediate_if_supported(session)
 
         thread = load_conversation_thread_for_owner(session, thread_id, owner_user_id)
+        if thread.active_turn_id:
+            active_turn = session.get(AgentConversationTurn, thread.active_turn_id)
+            if active_turn is not None and active_turn.status not in _ALLOWED_TERMINAL_STATES:
+                raise api_error(
+                    409,
+                    "THREAD_BUSY",
+                    "Conversation thread already has an active turn",
+                )
+            if active_turn is None or active_turn.status in _ALLOWED_TERMINAL_STATES:
+                thread.active_turn_id = None
+                if active_turn is not None:
+                    thread.latest_status = active_turn.status
+                thread.updated_at = _now()
 
         # HC-31: per-thread hard cap + rolling daily caps.  A turn-append adds
         # 2 rows (user + assistant placeholder).
@@ -636,6 +703,93 @@ def append_user_turn_and_reserve_assistant(
         session.refresh(thread)
         session.refresh(user_turn)
         session.refresh(assistant_turn)
+        return thread, user_turn, assistant_turn
+
+
+def claim_bootstrap_start_stream_state(
+    *,
+    thread_id: str,
+    owner_user_id: str | None,
+    user_content: str,
+) -> tuple[AgentConversationThread, AgentConversationTurn, AgentConversationTurn] | None:
+    """Return the reserved ``start`` turns when the caller is bootstrapping the
+    very first assistant stream.
+
+    ``POST /api/conversation/start`` already creates:
+
+    1. a committed first user turn
+    2. a reserved pending assistant turn
+
+    Frontend R8-1 chains ``/start`` followed by ``POST /turn`` with the same
+    user text. We treat that exact shape as "start the reserved assistant
+    stream" instead of appending a duplicate second user turn.
+    """
+    normalized_user_content = (user_content or "").strip()
+    if not normalized_user_content:
+        return None
+
+    engine = get_engine()
+    with Session(engine) as session:
+        _begin_immediate_if_supported(session)
+        thread = load_conversation_thread_for_owner(session, thread_id, owner_user_id)
+        if (
+            not thread.active_turn_id
+            or thread.latest_status != "pending"
+            or thread.last_turn_sequence != 2
+        ):
+            return None
+
+        assistant_turn = session.get(AgentConversationTurn, thread.active_turn_id)
+        if (
+            assistant_turn is None
+            or assistant_turn.thread_id != thread.id
+            or assistant_turn.role != "assistant"
+            or assistant_turn.status != "pending"
+            or assistant_turn.sequence != 2
+        ):
+            return None
+
+        turns = list(
+            session.exec(
+                select(AgentConversationTurn)
+                .where(AgentConversationTurn.thread_id == thread.id)
+                .order_by(AgentConversationTurn.sequence.asc())
+            ).all()
+        )
+        if len(turns) != 2:
+            return None
+
+        user_turn = turns[0]
+        if (
+            user_turn.role != "user"
+            or user_turn.status != "done"
+            or (user_turn.content or "").strip() != normalized_user_content
+        ):
+            return None
+
+        now = _now()
+        claimed = session.exec(
+            sa_text(
+                "UPDATE agent_conversation_turn "
+                "SET status = 'streaming', updated_at = :now "
+                "WHERE id = :turn_id AND status = 'pending' "
+                "RETURNING id"
+            ).bindparams(turn_id=assistant_turn.id, now=now)
+        ).first()
+        if claimed is None:
+            return None
+
+        thread.latest_status = "streaming"
+        thread.updated_at = now
+        session.add(thread)
+        session.commit()
+        session.refresh(thread)
+        session.refresh(user_turn)
+        session.refresh(assistant_turn)
+
+        session.expunge(thread)
+        session.expunge(user_turn)
+        session.expunge(assistant_turn)
         return thread, user_turn, assistant_turn
 
 
@@ -702,8 +856,79 @@ def finalize_turn_cas(
     row = session.exec(sa_text(sql).bindparams(**params)).first()
     if row is None:
         return False
+    session.exec(
+        sa_text(
+            "UPDATE agent_conversation_thread "
+            "SET active_turn_id = CASE "
+            "        WHEN active_turn_id = :turn_id THEN NULL "
+            "        ELSE active_turn_id "
+            "    END, "
+            "    latest_status = :new_status, "
+            "    updated_at = :now "
+            "WHERE id = ("
+            "    SELECT thread_id FROM agent_conversation_turn WHERE id = :turn_id"
+            ")"
+        ).bindparams(turn_id=turn_id, new_status=new_status, now=now)
+    )
     session.commit()
     return True
+
+
+def mark_scenario_conversations_as_deleted(
+    session: Session,
+    scenario_id: str,
+) -> list[str]:
+    """Transition every active turn in ``scenario_id`` to ``scenario_deleted``.
+
+    Invoked by :func:`app.services.scenario_deletion.delete_scenario_cascade`
+    immediately before the cascade DELETE.  This ensures any SSE stream that
+    is still mid-flight sees a terminal ``scenario_deleted`` row *before* the
+    row itself is removed, so it can emit a final ``turn_error`` event with
+    ``code="SCENARIO_DELETED"`` (HC-32 + C2 fix).
+
+    The update is bounded to non-terminal statuses (``pending``, ``streaming``)
+    so rows already finalised via ``done`` / ``error`` / ``aborted`` remain
+    authoritative (a just-in-time winner must not be rewritten).
+
+    Returns the list of turn ids that were transitioned — useful for tests
+    and for caller-side broadcast correlation.
+    """
+    now = _now()
+    rows = session.exec(
+        sa_text(
+            "UPDATE agent_conversation_turn "
+            "SET status = 'scenario_deleted', "
+            "    completed_at = :now, "
+            "    updated_at = :now, "
+            "    error_code = 'SCENARIO_DELETED', "
+            "    error_message = :msg "
+            "WHERE scenario_id = :scenario_id "
+            "  AND status IN ('pending', 'streaming') "
+            "RETURNING id"
+        ).bindparams(
+            now=now,
+            scenario_id=scenario_id,
+            msg=_map_error_message("SCENARIO_DELETED") or "",
+        )
+    ).all()
+    transitioned: list[str] = [r[0] for r in rows]
+    # Clear any active_turn_id pointer on the owning threads so stale
+    # state is not observed after the cascade.
+    session.exec(
+        sa_text(
+            "UPDATE agent_conversation_thread "
+            "SET active_turn_id = NULL, "
+            "    latest_status = 'scenario_deleted', "
+            "    updated_at = :now "
+            "WHERE scenario_id = :scenario_id"
+        ).bindparams(now=now, scenario_id=scenario_id)
+    )
+    # BE-1: keep the helper inside the caller's transaction boundary so
+    # ``scenarios.delete_scenario`` can still rollback the whole cascade.
+    session.flush()
+    for turn_id in transitioned:
+        _signal_turn_cancel_event(turn_id, reason="scenario_deleted")
+    return transitioned
 
 
 # ── Streaming ───────────────────────────────────────────
@@ -746,14 +971,70 @@ def _build_prompt(
     return "\n\n".join(lines)
 
 
+async def _stream_with_cancel_signal(
+    stream: AsyncIterator[str],
+    cancel_event: asyncio.Event | None,
+) -> AsyncIterator[str]:
+    iterator = stream.__aiter__()
+    while True:
+        if cancel_event is None:
+            try:
+                yield await anext(iterator)
+            except StopAsyncIteration:
+                return
+            continue
+
+        if cancel_event.is_set():
+            raise asyncio.CancelledError
+
+        next_chunk_task = asyncio.create_task(anext(iterator))
+        cancel_wait_task = asyncio.create_task(cancel_event.wait())
+        done, _pending = await asyncio.wait(
+            {next_chunk_task, cancel_wait_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if cancel_wait_task in done and next_chunk_task not in done:
+            next_chunk_task.cancel()
+            try:
+                await next_chunk_task
+            except (asyncio.CancelledError, StopAsyncIteration):
+                pass
+            raise asyncio.CancelledError
+
+        cancel_wait_task.cancel()
+        try:
+            await cancel_wait_task
+        except asyncio.CancelledError:
+            pass
+
+        try:
+            yield next_chunk_task.result()
+        except StopAsyncIteration:
+            return
+
+
+def _load_turn_status(session: Session, turn_id: str) -> str | None:
+    row = session.exec(
+        sa_text(
+            "SELECT status FROM agent_conversation_turn "
+            "WHERE id = :tid"
+        ).bindparams(tid=turn_id)
+    ).first()
+    return row[0] if row else None
+
+
 async def stream_assistant_turn(
     *,
     thread_id: str,
     assistant_turn_id: str,
     new_user_content: str,
+    history_exclude_turn_id: str | None = None,
+    assistant_turn_preclaimed: bool = False,
     owner_user_id: str | None,
     overrides: LLMOverrides,
     request_id: str | None = None,
+    cancel_event: asyncio.Event | None = None,
     _llm_stream_factory: Callable[..., AsyncIterator[str]] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Produce an async iterator of SSE event dicts for a streaming assistant turn.
@@ -761,212 +1042,300 @@ async def stream_assistant_turn(
     The returned iterator yields dicts of the form ``{"event": ..., "data": {...}}``
     which the router serialises via ``f"event: ...\\ndata: {...}\\n\\n"``.
 
-    Event types: ``turn_started``, ``turn_delta``, ``turn_done``, ``turn_error``,
+    Event types: ``turn_started``, ``turn_token_delta``, ``turn_completed``, ``turn_error``,
     ``turn_aborted``.
     """
 
     async def _iter() -> AsyncIterator[dict[str, Any]]:
         engine = get_engine()
+        stream_cancel_event = cancel_event or asyncio.Event()
+        _register_turn_cancel_event(assistant_turn_id, stream_cancel_event)
 
-        # Hydrate thread + assistant turn + history in a short-lived session.
-        history: list[AgentConversationTurn] = []
-        quota_owner: str | None = None
-        with Session(engine) as session:
-            thread = load_conversation_thread_for_owner(session, thread_id, owner_user_id)
-            assistant_turn = session.get(AgentConversationTurn, assistant_turn_id)
-            if (
-                assistant_turn is None
-                or assistant_turn.thread_id != thread.id
-                or assistant_turn.role != "assistant"
-            ):
-                raise api_error(404, "TURN_NOT_FOUND", "Assistant turn not found")
-
-            quota_owner = thread.owner_user_id
-
-            # HC-31: quota key authority = thread.owner_user_id (never body).
-            history = list(
-                session.exec(
-                    select(AgentConversationTurn)
-                    .where(
-                        AgentConversationTurn.thread_id == thread.id,
-                        AgentConversationTurn.id != assistant_turn.id,
-                    )
-                    .order_by(AgentConversationTurn.sequence.asc())
-                ).all()
-            )
-
-        prompt = _build_prompt(
-            thread=thread,
-            new_user_content=new_user_content,
-            history=history,
-        )
-
-        # HC-31 audit: when ``disable_user_quota`` is applied to a local
-        # provider, emit a structured log line so abuse is auditable.
-        local_provider = is_local_provider_url(overrides.base_url)
-        if overrides.disable_user_quota and local_provider:
-            _structured_log(
-                "agent_conversation.disable_user_quota",
-                owner_user_id=quota_owner or "",
-                thread_id=thread_id,
-                turn_id=assistant_turn_id,
-                provider=overrides.base_url or "",
-                local_provider=local_provider,
-                source="disable_user_quota",
-                request_id=request_id or "",
-            )
-
-        # Tell the client we're about to start.
-        yield {
-            "event": "turn_started",
-            "data": {
-                "turn_id": assistant_turn_id,
-                "thread_id": thread_id,
-                "model": overrides.model or settings.LLM_MODEL_NAME,
-                "request_id": request_id or "",
-            },
-        }
-
-        # Flip the row to 'streaming' (regular UPDATE — *not* a terminal CAS).
-        now = _now()
-        with Session(engine) as session:
-            session.exec(
-                sa_text(
-                    "UPDATE agent_conversation_turn "
-                    "SET status='streaming', updated_at=:now "
-                    "WHERE id=:turn_id AND status='pending'"
-                ).bindparams(turn_id=assistant_turn_id, now=now)
-            )
-            session.commit()
-
-        # HC-31: quota_key is always from thread.owner_user_id — *not* body.
-        quota_key = (
-            None
-            if (overrides.disable_user_quota and local_provider)
-            else (f"user:{quota_owner}" if quota_owner else None)
-        )
-
-        accumulated: list[str] = []
-        aborted = False
-        error_code: str | None = None
         try:
-            with llm_request_scope(
-                quota_key=quota_key,
-                purpose="agent_conversation",
-            ):
-                # Pluggable for tests — if a factory is given we skip real LLM.
-                if _llm_stream_factory is not None:
-                    stream = _llm_stream_factory(
-                        prompt,
-                        api_key=overrides.api_key,
-                        base_url=overrides.base_url,
-                        model=overrides.model,
-                    )
-                else:
-                    stream = llm_call_stream(
-                        prompt,
-                        api_key=overrides.api_key,
-                        base_url=overrides.base_url,
-                        model=overrides.model,
-                    )
+            # Hydrate thread + assistant turn + history in a short-lived session.
+            history: list[AgentConversationTurn] = []
+            quota_owner: str | None = None
+            with Session(engine) as session:
+                thread = load_conversation_thread_for_owner(session, thread_id, owner_user_id)
+                assistant_turn = session.get(AgentConversationTurn, assistant_turn_id)
+                if (
+                    assistant_turn is None
+                    or assistant_turn.thread_id != thread.id
+                    or assistant_turn.role != "assistant"
+                ):
+                    raise api_error(404, "TURN_NOT_FOUND", "Assistant turn not found")
 
-                async for delta in stream:
-                    if not delta:
-                        continue
-                    accumulated.append(delta)
-                    yield {
-                        "event": "turn_delta",
-                        "data": {
-                            "turn_id": assistant_turn_id,
-                            "sequence": assistant_turn.sequence,
-                            "delta": delta,
-                            "model": overrides.model or settings.LLM_MODEL_NAME,
-                        },
-                    }
-        except asyncio.CancelledError:
-            aborted = True
-            # Surface an aborted event — caller (router) closes the stream.
+                quota_owner = thread.owner_user_id
+
+                # HC-31: quota key authority = thread.owner_user_id (never body).
+                history = list(
+                    session.exec(
+                        select(AgentConversationTurn)
+                        .where(
+                            AgentConversationTurn.thread_id == thread.id,
+                            AgentConversationTurn.id != assistant_turn.id,
+                        )
+                        .order_by(AgentConversationTurn.sequence.asc())
+                    ).all()
+                )
+                if history_exclude_turn_id is not None:
+                    history = [
+                        turn
+                        for turn in history
+                        if turn.id != history_exclude_turn_id
+                    ]
+
+            prompt = _build_prompt(
+                thread=thread,
+                new_user_content=new_user_content,
+                history=history,
+            )
+
+            # HC-31 audit: when ``disable_user_quota`` is applied to a local
+            # provider, emit a structured log line so abuse is auditable.
+            local_provider = is_local_provider_url(overrides.base_url)
+            if overrides.disable_user_quota and local_provider:
+                _structured_log(
+                    "agent_conversation.disable_user_quota",
+                    owner_user_id=quota_owner or "",
+                    thread_id=thread_id,
+                    turn_id=assistant_turn_id,
+                    provider=overrides.base_url or "",
+                    local_provider=local_provider,
+                    source="disable_user_quota",
+                    request_id=request_id or "",
+                )
+
+            if not assistant_turn_preclaimed:
+                now = _now()
+                with Session(engine) as session:
+                    claimed = session.exec(
+                        sa_text(
+                            "UPDATE agent_conversation_turn "
+                            "SET status = 'streaming', updated_at = :now "
+                            "WHERE id = :turn_id AND status = 'pending' "
+                            "RETURNING id"
+                        ).bindparams(turn_id=assistant_turn_id, now=now)
+                    ).first()
+                    if claimed is None:
+                        raise api_error(
+                            409,
+                            "THREAD_BUSY",
+                            "Conversation thread already has an active turn",
+                        )
+                    session.exec(
+                        sa_text(
+                            "UPDATE agent_conversation_thread "
+                            "SET latest_status = 'streaming', updated_at = :now "
+                            "WHERE id = :thread_id"
+                        ).bindparams(thread_id=thread_id, now=now)
+                    )
+                    session.commit()
+
+            # Tell the client we're about to start only after the turn has been
+            # claimed, so a duplicate bootstrap request cannot produce a second
+            # 200 SSE stream against the same placeholder assistant turn.
             yield {
-                "event": "turn_aborted",
-                "data": {"turn_id": assistant_turn_id, "thread_id": thread_id},
+                "event": "turn_started",
+                "data": {
+                    "turn_id": assistant_turn_id,
+                    "thread_id": thread_id,
+                    "sequence": assistant_turn.sequence,
+                    "model": overrides.model or settings.LLM_MODEL_NAME,
+                    "request_id": request_id or "",
+                },
             }
-            raise
-        except LLMError as exc:
-            error_code = "LLM_5XX"
-            _structured_log(
-                "agent_conversation.llm_error",
-                owner_user_id=quota_owner or "",
-                thread_id=thread_id,
-                turn_id=assistant_turn_id,
-                error=str(exc),
-                request_id=request_id or "",
-            )
-        except asyncio.TimeoutError:
-            error_code = "STREAM_TIMEOUT"
-        except Exception as exc:  # noqa: BLE001 — defensive catchall
-            error_code = "LLM_5XX"
-            _structured_log(
-                "agent_conversation.unexpected_error",
-                owner_user_id=quota_owner or "",
-                thread_id=thread_id,
-                turn_id=assistant_turn_id,
-                error=str(exc),
-                request_id=request_id or "",
+
+            # HC-31: quota_key is always from thread.owner_user_id — *not* body.
+            quota_key = (
+                None
+                if (overrides.disable_user_quota and local_provider)
+                else (f"user:{quota_owner}" if quota_owner else None)
             )
 
-        full_text = "".join(accumulated)
+            accumulated: list[str] = []
+            aborted = False
+            error_code: str | None = None
+            try:
+                with llm_request_scope(
+                    quota_key=quota_key,
+                    purpose="agent_conversation",
+                ):
+                    # Pluggable for tests — if a factory is given we skip real LLM.
+                    if _llm_stream_factory is not None:
+                        stream = _llm_stream_factory(
+                            prompt,
+                            api_key=overrides.api_key,
+                            base_url=overrides.base_url,
+                            model=overrides.model,
+                        )
+                    else:
+                        stream = llm_call_stream(
+                            prompt,
+                            api_key=overrides.api_key,
+                            base_url=overrides.base_url,
+                            model=overrides.model,
+                        )
 
-        # Terminal transition: commit or error.  CAS determines whether the
-        # WS commit event is allowed to fire (HC-32).
-        with Session(engine) as session:
-            if aborted:
-                # CancelledError path — router handles abort finalisation.
-                return
-            if error_code is not None:
-                committed = finalize_turn_cas(
-                    session,
+                    async for delta in _stream_with_cancel_signal(stream, stream_cancel_event):
+                        if not delta:
+                            continue
+                        accumulated.append(delta)
+                        yield {
+                            "event": "turn_token_delta",
+                            "data": {
+                                "turn_id": assistant_turn_id,
+                                "sequence": assistant_turn.sequence,
+                                "delta": delta,
+                                "model": overrides.model or settings.LLM_MODEL_NAME,
+                            },
+                        }
+            except asyncio.CancelledError:
+                cancel_reason = _get_turn_cancel_reason(assistant_turn_id)
+                with Session(engine) as session:
+                    terminal_status = _load_turn_status(session, assistant_turn_id)
+                    if (
+                        cancel_reason == "scenario_deleted"
+                        or terminal_status is None
+                        or terminal_status == "scenario_deleted"
+                    ):
+                        yield {
+                            "event": "turn_error",
+                            "data": {
+                                "turn_id": assistant_turn_id,
+                                "thread_id": thread_id,
+                                "sequence": assistant_turn.sequence,
+                                "status": "scenario_deleted",
+                                "model": overrides.model or settings.LLM_MODEL_NAME,
+                                "code": "SCENARIO_DELETED",
+                                "message": _map_error_message("SCENARIO_DELETED"),
+                            },
+                        }
+                        return
+                    finalize_turn_cas(
+                        session,
+                        turn_id=assistant_turn_id,
+                        new_status="aborted",
+                        expected_from=_CAS_EXPECTED_FROM_DEFAULT,
+                        content="".join(accumulated),
+                        error_code="USER_ABORTED",
+                        model=overrides.model,
+                    )
+                aborted = True
+                raise
+            except LLMError as exc:
+                error_code = "LLM_5XX"
+                _structured_log(
+                    "agent_conversation.llm_error",
+                    owner_user_id=quota_owner or "",
+                    thread_id=thread_id,
                     turn_id=assistant_turn_id,
-                    new_status="error",
-                    expected_from=_CAS_EXPECTED_FROM_DEFAULT,
-                    content=full_text,
-                    error_code=error_code,
-                    model=overrides.model,
+                    error=str(exc),
+                    request_id=request_id or "",
                 )
-                if committed:
-                    yield {
-                        "event": "turn_error",
-                        "data": {
-                            "turn_id": assistant_turn_id,
-                            "thread_id": thread_id,
-                            "sequence": assistant_turn.sequence,
-                            "status": "error",
-                            "model": overrides.model or settings.LLM_MODEL_NAME,
-                            "error_code": error_code,
-                        },
-                    }
-                # ``committed == False`` → someone else finalised (abort or
-                # scenario_deleted); stay silent, do not emit WS commit.
-            else:
-                committed = finalize_turn_cas(
-                    session,
+            except asyncio.TimeoutError:
+                error_code = "STREAM_TIMEOUT"
+            except Exception as exc:  # noqa: BLE001 — defensive catchall
+                error_code = "LLM_5XX"
+                _structured_log(
+                    "agent_conversation.unexpected_error",
+                    owner_user_id=quota_owner or "",
+                    thread_id=thread_id,
                     turn_id=assistant_turn_id,
-                    new_status="done",
-                    expected_from=_CAS_EXPECTED_FROM_DEFAULT,
-                    content=full_text,
-                    error_code=None,
-                    model=overrides.model,
+                    error=str(exc),
+                    request_id=request_id or "",
                 )
-                if committed:
-                    yield {
-                        "event": "turn_done",
-                        "data": {
-                            "turn_id": assistant_turn_id,
-                            "thread_id": thread_id,
-                            "sequence": assistant_turn.sequence,
-                            "status": "done",
-                            "model": overrides.model or settings.LLM_MODEL_NAME,
-                        },
-                    }
+
+            full_text = "".join(accumulated)
+
+            # Terminal transition: commit or error.  CAS determines whether the
+            # WS commit event is allowed to fire (HC-32).
+            with Session(engine) as session:
+                if aborted:
+                    # CancelledError path — router handles abort finalisation.
+                    return
+                if error_code is not None:
+                    committed = finalize_turn_cas(
+                        session,
+                        turn_id=assistant_turn_id,
+                        new_status="error",
+                        expected_from=_CAS_EXPECTED_FROM_DEFAULT,
+                        content=full_text,
+                        error_code=error_code,
+                        model=overrides.model,
+                    )
+                    if committed:
+                        yield {
+                            "event": "turn_error",
+                            "data": {
+                                "turn_id": assistant_turn_id,
+                                "thread_id": thread_id,
+                                "sequence": assistant_turn.sequence,
+                                "status": "error",
+                                "model": overrides.model or settings.LLM_MODEL_NAME,
+                                "code": error_code,
+                                "message": _map_error_message(error_code),
+                            },
+                        }
+                    else:
+                        # C2: distinguish scenario_deleted from other terminal
+                        # races (abort).  If the row is gone (cascade-deleted)
+                        # or its final status is ``scenario_deleted`` we owe the
+                        # client a terminal ``turn_error`` so the SSE cursor
+                        # does not hang half-finished.
+                        post_status = _load_turn_status(session, assistant_turn_id)
+                        if post_status is None or post_status == "scenario_deleted":
+                            yield {
+                                "event": "turn_error",
+                                "data": {
+                                    "turn_id": assistant_turn_id,
+                                    "thread_id": thread_id,
+                                    "sequence": assistant_turn.sequence,
+                                    "status": "scenario_deleted",
+                                    "model": overrides.model or settings.LLM_MODEL_NAME,
+                                    "code": "SCENARIO_DELETED",
+                                    "message": _map_error_message("SCENARIO_DELETED"),
+                                },
+                            }
+                else:
+                    committed = finalize_turn_cas(
+                        session,
+                        turn_id=assistant_turn_id,
+                        new_status="done",
+                        expected_from=_CAS_EXPECTED_FROM_DEFAULT,
+                        content=full_text,
+                        error_code=None,
+                        model=overrides.model,
+                    )
+                    if committed:
+                        yield {
+                            "event": "turn_completed",
+                            "data": {
+                                "turn_id": assistant_turn_id,
+                                "thread_id": thread_id,
+                                "sequence": assistant_turn.sequence,
+                                "status": "committed",
+                                "model": overrides.model or settings.LLM_MODEL_NAME,
+                            },
+                        }
+                    else:
+                        # C2: same scenario_deleted detection on the success path.
+                        post_status = _load_turn_status(session, assistant_turn_id)
+                        if post_status is None or post_status == "scenario_deleted":
+                            yield {
+                                "event": "turn_error",
+                                "data": {
+                                    "turn_id": assistant_turn_id,
+                                    "thread_id": thread_id,
+                                    "sequence": assistant_turn.sequence,
+                                    "status": "scenario_deleted",
+                                    "model": overrides.model or settings.LLM_MODEL_NAME,
+                                    "code": "SCENARIO_DELETED",
+                                    "message": _map_error_message("SCENARIO_DELETED"),
+                                },
+                            }
+        finally:
+            _unregister_turn_cancel_event(assistant_turn_id, stream_cancel_event)
 
     return _iter()
 
@@ -989,7 +1358,7 @@ def abort_turn(
         turn = session.get(AgentConversationTurn, turn_id)
         if turn is None or turn.thread_id != thread.id:
             raise api_error(404, "TURN_NOT_FOUND", "Turn not found")
-        return finalize_turn_cas(
+        transitioned = finalize_turn_cas(
             session,
             turn_id=turn_id,
             new_status="aborted",
@@ -998,6 +1367,9 @@ def abort_turn(
             error_code="USER_ABORTED",
             model=turn.model,
         )
+        if transitioned:
+            _signal_turn_cancel_event(turn_id, reason="user_aborted")
+        return transitioned
 
 
 # ── Test helpers / re-exports ───────────────────────────

@@ -25,11 +25,13 @@ thin translation layer over those primitives.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
+from contextlib import suppress
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 
@@ -50,10 +52,13 @@ from app.models.agent_conversation import AgentConversationThread, AgentConversa
 from app.models.database import get_engine
 from app.services.conversation_service import (
     SSE_MEDIA_TYPE,
+    _map_error_message,
     abort_turn,
     append_user_turn_and_reserve_assistant,
+    claim_bootstrap_start_stream_state,
     create_thread_with_first_turn,
     load_conversation_thread_for_owner,
+    redact_byok,
     resolve_byok_overrides,
     stream_assistant_turn,
 )
@@ -85,6 +90,44 @@ def _owner_for(principal: SessionPrincipal | None) -> str | None:
     to ``None`` so local/dev use cases still work.
     """
     return principal.subject if principal is not None else None
+
+
+# C3: allowlisted charset + length cap for ``X-Org-Id``.  The header is a
+# routing hint, not auth material, so a 400 response is a better UX than
+# silently ignoring it — but we refuse to persist anything larger than a
+# sane DB-friendly length, and we require the same ASCII subset that other
+# public identifiers in this codebase use.
+_ORG_ID_MAX_LENGTH = 128
+_ORG_ID_ALLOWED = set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+)
+
+
+def _validate_org_header(value: str | None) -> str | None:
+    """Normalise + validate an ``X-Org-Id`` header value.
+
+    Returns ``None`` when the header is absent or empty.  Returns the
+    trimmed string when it passes validation.  Raises ``400`` otherwise
+    so the caller cannot silently poison the per-org quota bucket map.
+    """
+    if value is None:
+        return None
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    if len(trimmed) > _ORG_ID_MAX_LENGTH:
+        raise api_error(
+            400,
+            "ORG_ID_TOO_LONG",
+            f"X-Org-Id header exceeds {_ORG_ID_MAX_LENGTH} characters",
+        )
+    if any(ch not in _ORG_ID_ALLOWED for ch in trimmed):
+        raise api_error(
+            400,
+            "ORG_ID_INVALID_CHAR",
+            "X-Org-Id must contain only [A-Za-z0-9_-]",
+        )
+    return trimmed.lower()
 
 
 def _turn_to_response(turn: AgentConversationTurn) -> ConversationTurnResponse:
@@ -145,8 +188,16 @@ def _thread_to_response(
 async def start_conversation(
     body: StartConversationRequest,
     principal: SessionPrincipal | None = Depends(require_session_principal),
+    x_org_id: str | None = Header(default=None, alias="X-Org-Id"),
 ) -> ConversationThreadResponse:
-    """Create a new thread with the first user turn + reserved assistant placeholder."""
+    """Create a new thread with the first user turn + reserved assistant placeholder.
+
+    C3: ``organization_id`` is read from the ``X-Org-Id`` request header — it
+    is **not** accepted via the JSON body (HC-31 schema freeze enforced by
+    ``StartConversationRequest.model_config.extra='forbid'``).  The header is
+    validated for length + charset before being passed downstream so a
+    hostile header cannot poison the daily-org bucket map.
+    """
     owner = _owner_for(principal)
     if owner is None and settings.SESSION_SECRET:
         # Safety net — should have been caught by require_session_principal.
@@ -163,6 +214,8 @@ async def start_conversation(
     # them early gives the client a fast-fail UX and matches HC-24 contract.
     _ = overrides
 
+    organization_id = _validate_org_header(x_org_id)
+
     outcome = create_thread_with_first_turn(
         scenario_id=body.scenario_id,
         owner_user_id=owner or "",
@@ -172,6 +225,7 @@ async def start_conversation(
         origin_node_id=body.origin_node_id,
         origin_node_type=body.origin_node_type,
         first_user_content=body.first_user_content,
+        organization_id=organization_id,
     )
     return _thread_to_response(
         outcome.thread,
@@ -207,7 +261,12 @@ async def get_conversation(
 # ── POST /api/conversation/{thread_id}/turn (SSE) ────────
 
 
-async def _sse_event_stream(iterator, request_id: str):
+async def _sse_event_stream(
+    iterator,
+    *,
+    request_id: str,
+    fallback_data: dict[str, object] | None = None,
+):
     """Translate an async iterator of dicts into SSE text frames."""
     try:
         async for event in iterator:
@@ -216,14 +275,36 @@ async def _sse_event_stream(iterator, request_id: str):
             data.setdefault("request_id", request_id)
             yield f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
     except Exception as exc:  # noqa: BLE001 — terminal fallback
-        # Emit a final turn_error frame so the client can close cleanly.
-        err_payload = {"error": "stream_failed", "detail": str(exc)[:200]}
+        logger.warning(
+            "agent_conversation.sse_stream_failed request_id=%s error=%s",
+            request_id,
+            redact_byok(str(exc)),
+        )
+        err_payload = {
+            **(fallback_data or {}),
+            "status": "error",
+            "code": "STREAM_FAILED",
+            "message": _map_error_message("LLM_5XX"),
+            "request_id": request_id,
+        }
         yield f"event: turn_error\ndata: {json.dumps(err_payload)}\n\n"
+
+
+async def _watch_request_disconnect(
+    request: Request,
+    cancel_event: asyncio.Event,
+) -> None:
+    while not cancel_event.is_set():
+        if await request.is_disconnected():
+            cancel_event.set()
+            return
+        await asyncio.sleep(0.05)
 
 
 @router.post("/{thread_id}/turn")
 async def post_conversation_turn(
     thread_id: str,
+    request: Request,
     body: ConversationTurnCreate,
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> StreamingResponse:
@@ -238,28 +319,68 @@ async def post_conversation_turn(
         disable_user_quota=body.disable_user_quota,
     )
 
-    # Thread ownership (HC-34) — surfaces 404 for foreign threads.
-    with Session(get_engine()) as session:
-        load_conversation_thread_for_owner(session, thread_id, owner)
-
-    thread, _user_turn, assistant_turn = append_user_turn_and_reserve_assistant(
+    bootstrap = claim_bootstrap_start_stream_state(
         thread_id=thread_id,
         owner_user_id=owner,
         user_content=body.user_content,
     )
+    if bootstrap is not None:
+        thread, bootstrap_user_turn, assistant_turn = bootstrap
+        stream_user_content = bootstrap_user_turn.content or body.user_content
+        history_exclude_turn_id = bootstrap_user_turn.id
+    else:
+        # Thread ownership (HC-34) — surfaces 404 for foreign threads.
+        with Session(get_engine()) as session:
+            load_conversation_thread_for_owner(session, thread_id, owner)
+
+        thread, _user_turn, assistant_turn = append_user_turn_and_reserve_assistant(
+            thread_id=thread_id,
+            owner_user_id=owner,
+            user_content=body.user_content,
+        )
+        stream_user_content = body.user_content
+        history_exclude_turn_id = None
 
     request_id = uuid.uuid4().hex
+    cancel_event = asyncio.Event()
     stream_iter = await stream_assistant_turn(
         thread_id=thread.id,
         assistant_turn_id=assistant_turn.id,
-        new_user_content=body.user_content,
+        new_user_content=stream_user_content,
+        history_exclude_turn_id=history_exclude_turn_id,
+        assistant_turn_preclaimed=bootstrap is not None,
         owner_user_id=owner,
         overrides=overrides,
         request_id=request_id,
+        cancel_event=cancel_event,
     )
+    fallback_data = {
+        "turn_id": assistant_turn.id,
+        "thread_id": thread.id,
+        "sequence": assistant_turn.sequence,
+        "status": "error",
+        "model": overrides.model or settings.LLM_MODEL_NAME,
+    }
+
+    async def _stream_response():
+        disconnect_task = asyncio.create_task(
+            _watch_request_disconnect(request, cancel_event),
+        )
+        try:
+            async for frame in _sse_event_stream(
+                stream_iter,
+                request_id=request_id,
+                fallback_data=fallback_data,
+            ):
+                yield frame
+        finally:
+            cancel_event.set()
+            disconnect_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await disconnect_task
 
     return StreamingResponse(
-        _sse_event_stream(stream_iter, request_id=request_id),
+        _stream_response(),
         media_type=SSE_MEDIA_TYPE,
         headers={"X-Request-ID": request_id},
     )

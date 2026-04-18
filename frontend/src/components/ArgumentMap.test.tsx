@@ -71,6 +71,25 @@ function resolveTranslation(locale: TestLocale, key: string, fallback?: string |
   return TEST_TRANSLATIONS[locale][key] ?? key;
 }
 
+function makeConversationSseResponse(frames: string[]): Response {
+  const encoder = new TextEncoder();
+  const chunks = frames.map((frame) => encoder.encode(frame));
+  let index = 0;
+  return {
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: vi.fn(async () => {
+          if (index >= chunks.length) return { done: true, value: undefined };
+          const value = chunks[index];
+          index += 1;
+          return { done: false, value };
+        }),
+      }),
+    },
+  } as unknown as Response;
+}
+
 function setTestLocale(locale: TestLocale) {
   currentLocale = locale;
 }
@@ -1015,7 +1034,7 @@ describe('ArgumentMap', () => {
         }),
       } as Response);
 
-      render(<ArgumentMap debateId="d1" visible={true} />);
+      render(<ArgumentMap debateId="d1" conversationScenarioId="scenario-open-sheet" visible={true} />);
       await screen.findByTestId('reactflow');
       expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
 
@@ -1023,6 +1042,112 @@ describe('ArgumentMap', () => {
 
       const sheet = await screen.findByTestId('node-conversation-sheet');
       expect(sheet).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('uses the provided conversationScenarioId and a null identity id when starting a node conversation', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            snapshot_id: 's-sheet',
+            nodes: [
+              { id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null },
+            ],
+            edges: [],
+            units: [
+              { id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' },
+            ],
+          }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ thread_id: 'thread-arg-1' }),
+        } as Response)
+        .mockResolvedValueOnce(
+          makeConversationSseResponse([
+            'event: turn_started\ndata: {"turn_id":"turn-arg-1","thread_id":"thread-arg-1","sequence":2}\n\n',
+            'event: turn_token_delta\ndata: {"turn_id":"turn-arg-1","delta":"ok"}\n\n',
+            'event: turn_completed\ndata: {"turn_id":"turn-arg-1","sequence":2,"status":"committed"}\n\n',
+          ]),
+        );
+
+      render(<ArgumentMap debateId="d1" conversationScenarioId="scenario-arg-1" visible={true} />);
+      await screen.findByTestId('reactflow');
+      await user.click(screen.getByTestId('rf-node-n1'));
+      await user.type(await screen.findByTestId('node-conversation-input'), 'probe this node');
+      await user.click(screen.getByTestId('node-conversation-send'));
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledWith(
+          '/api/conversation/start',
+          expect.objectContaining({ method: 'POST' }),
+        );
+      });
+      const startCall = fetchSpy.mock.calls.find(([url]) => url === '/api/conversation/start');
+      expect(startCall).toBeDefined();
+      const [, startOptions] = startCall as [string, RequestInit];
+      const startBody = JSON.parse(String(startOptions.body));
+      expect(startBody.scenario_id).toBe('scenario-arg-1');
+      expect(startBody.agent_identity_id).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not open NodeConversationSheet when conversationScenarioId is absent', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          snapshot_id: 's-no-sheet',
+          nodes: [{ id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null }],
+          edges: [],
+          units: [{ id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' }],
+        }),
+      } as Response);
+
+      render(<ArgumentMap debateId="d1" visible={true} />);
+      await screen.findByTestId('reactflow');
+      await user.click(screen.getByTestId('rf-node-n1'));
+
+      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }

@@ -12,8 +12,8 @@ Covers the contract matrix from the ``graph-playability-upgrade`` plan
     sequence ranges (BEGIN IMMEDIATE race).
 6.  Concurrent ``POST /turn`` on the same thread never violates the
     ``UniqueConstraint(thread_id, sequence)`` — exactly two rows per append.
-7.  SSE stream ordering: ``turn_started`` → N × ``turn_delta`` → ``turn_done``.
-8.  Mid-stream abort → row status = ``aborted``, no ``turn_done``/commit frame.
+7.  SSE stream ordering: ``turn_started`` → N × ``turn_token_delta`` → ``turn_completed``.
+8.  Mid-stream abort → row status = ``aborted``, no ``turn_completed``/commit frame.
 9.  ``finalize_turn_cas`` rowcount=0 (turn already aborted) → no broadcast.
 10. ``finalize_turn_cas`` rowcount=0 (scenario already deleted) → no broadcast.
 11. HC-31 quota key == ``thread.owner_user_id`` (body ``organization_id``
@@ -26,6 +26,7 @@ Covers the contract matrix from the ``graph-playability-upgrade`` plan
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -43,6 +44,7 @@ from app.models.agent_conversation import AgentConversationThread, AgentConversa
 from app.models.database import Scenario, ScenarioStatus, get_engine
 from app.services import conversation_service
 from app.services.conversation_service import (
+    claim_bootstrap_start_stream_state,
     finalize_turn_cas,
     redact_byok,
 )
@@ -135,6 +137,29 @@ def _install_stub_stream(
             raise raise_exc
 
     monkeypatch.setattr(conversation_service, "llm_call_stream", _stub)
+
+
+def _complete_active_turn(
+    engine,
+    thread_id: str,
+    *,
+    content: str = "initial complete",
+    model: str = "test-model",
+) -> None:
+    with Session(engine) as session:
+        thread = session.get(AgentConversationThread, thread_id)
+        assert thread is not None
+        assert thread.active_turn_id is not None
+        transitioned = finalize_turn_cas(
+            session,
+            turn_id=thread.active_turn_id,
+            new_status="done",
+            expected_from=("pending", "streaming"),
+            content=content,
+            error_code=None,
+            model=model,
+        )
+        assert transitioned is True
 
 
 # ── T1 FEATURE gate ─────────────────────────────────────────
@@ -278,6 +303,21 @@ class TestConcurrentStart:
 
 
 class TestUniqueConstraint:
+    def test_followup_rejected_while_thread_has_nonterminal_active_turn(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start", json=_default_start_body(sid),
+        ).json()
+
+        resp = client.post(
+            f"/api/conversation/{start['thread_id']}/turn",
+            json={"user_content": "should be blocked"},
+        )
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "THREAD_BUSY"
+
     def test_turn_sequences_strictly_monotonic(self, client, monkeypatch):
         _install_stub_stream(monkeypatch, ["ok"])
         engine = get_engine()
@@ -286,6 +326,7 @@ class TestUniqueConstraint:
             "/api/conversation/start", json=_default_start_body(sid),
         ).json()
         thread_id = start["thread_id"]
+        _complete_active_turn(engine, thread_id)
 
         # 3 sequential follow-ups → 6 extra turns → total 8 turns, sequences 1-8
         for idx in range(3):
@@ -314,6 +355,116 @@ class TestUniqueConstraint:
 
 
 class TestSSEStream:
+    def test_first_turn_bootstrap_stream_reuses_reserved_assistant_turn(self, client, monkeypatch):
+        _install_stub_stream(monkeypatch, ["hello", " world"])
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start", json=_default_start_body(sid, content="hello node"),
+        ).json()
+        thread_id = start["thread_id"]
+        assistant_turn_id = start["assistant_turn_id"]
+        user_turn_id = start["user_turn_id"]
+
+        with client.stream(
+            "POST",
+            f"/api/conversation/{thread_id}/turn",
+            json={"user_content": "hello node"},
+        ) as response:
+            raw = "".join(chunk for chunk in response.iter_text())
+
+        assert response.status_code == 200
+        frames = _assert_sse_frames(raw)
+        events = [name for name, _ in frames]
+        assert events[0] == "turn_started"
+        assert events[-1] == "turn_completed"
+        assert any(name == "turn_token_delta" for name, _ in frames)
+
+        with Session(engine) as session:
+            turns = list(
+                session.exec(
+                    select(AgentConversationTurn)
+                    .where(AgentConversationTurn.thread_id == thread_id)
+                    .order_by(AgentConversationTurn.sequence.asc())
+                ).all()
+            )
+
+        assert [turn.id for turn in turns] == [user_turn_id, assistant_turn_id]
+        assert turns[0].content == "hello node"
+        assert turns[1].status == "done"
+        assert turns[1].content == "hello world"
+
+    def test_post_turn_passes_cancel_event_to_service(self, client, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start", json=_default_start_body(sid),
+        ).json()
+        thread_id = start["thread_id"]
+        _complete_active_turn(engine, thread_id)
+
+        captured: dict[str, object] = {}
+
+        async def _fake_stream_assistant_turn(
+            *,
+            thread_id: str,
+            assistant_turn_id: str,
+            new_user_content: str,
+            history_exclude_turn_id: str | None = None,
+            assistant_turn_preclaimed: bool = False,
+            owner_user_id: str | None,
+            overrides,
+            request_id: str | None = None,
+            cancel_event: asyncio.Event | None = None,
+        ):
+            captured["thread_id"] = thread_id
+            captured["assistant_turn_id"] = assistant_turn_id
+            captured["cancel_event"] = cancel_event
+            captured["assistant_turn_preclaimed"] = assistant_turn_preclaimed
+
+            async def _iterator():
+                yield {
+                    "event": "turn_started",
+                    "data": {
+                        "turn_id": assistant_turn_id,
+                        "thread_id": thread_id,
+                        "sequence": 4,
+                        "model": "fake-model",
+                    },
+                }
+                yield {
+                    "event": "turn_completed",
+                    "data": {
+                        "turn_id": assistant_turn_id,
+                        "thread_id": thread_id,
+                        "sequence": 4,
+                        "status": "committed",
+                        "model": "fake-model",
+                    },
+                }
+
+            return _iterator()
+
+        monkeypatch.setattr(
+            conversation_module,
+            "stream_assistant_turn",
+            _fake_stream_assistant_turn,
+        )
+
+        with client.stream(
+            "POST",
+            f"/api/conversation/{thread_id}/turn",
+            json={"user_content": "wire cancel"},
+        ) as response:
+            raw = "".join(chunk for chunk in response.iter_text())
+
+        assert response.status_code == 200
+        assert "turn_started" in raw
+        assert "turn_completed" in raw
+        assert captured["thread_id"] == thread_id
+        assert isinstance(captured["cancel_event"], asyncio.Event)
+        assert captured["assistant_turn_preclaimed"] is False
+
     def test_three_deltas_then_done(self, client, monkeypatch):
         _install_stub_stream(monkeypatch, ["alpha", "beta", "gamma"])
         engine = get_engine()
@@ -321,6 +472,7 @@ class TestSSEStream:
         start = client.post(
             "/api/conversation/start", json=_default_start_body(sid),
         ).json()
+        _complete_active_turn(engine, start["thread_id"])
 
         with client.stream(
             "POST",
@@ -332,15 +484,246 @@ class TestSSEStream:
         frames = _assert_sse_frames(raw)
         events = [name for name, _ in frames]
         assert events[0] == "turn_started"
-        delta_count = sum(1 for n in events if n == "turn_delta")
+        delta_count = sum(1 for n in events if n == "turn_token_delta")
         assert delta_count == 3
-        assert events[-1] == "turn_done"
+        assert events[-1] == "turn_completed"
+
+    @pytest.mark.asyncio
+    async def test_scenario_deleted_mid_stream_emits_terminal_error(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start", json=_default_start_body(sid),
+        ).json()
+        thread_id = start["thread_id"]
+        assistant_turn_id = start["assistant_turn_id"]
+        stall_forever = asyncio.Event()
+
+        async def _two_chunk_stream(*_args, **_kwargs):
+            yield "alpha"
+            await stall_forever.wait()
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=thread_id,
+            assistant_turn_id=assistant_turn_id,
+            new_user_content="watch delete",
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url=None,
+                model="test-model",
+                disable_user_quota=False,
+            ),
+            _llm_stream_factory=_two_chunk_stream,
+        )
+
+        assert (await anext(iterator))["event"] == "turn_started"
+        first_delta = await anext(iterator)
+        assert first_delta["event"] == "turn_token_delta"
+        assert first_delta["data"]["delta"] == "alpha"
+
+        with Session(engine) as session:
+            conversation_service.mark_scenario_conversations_as_deleted(session, sid)
+            session.commit()
+
+        terminal = await anext(iterator)
+        assert terminal["event"] == "turn_error"
+        assert terminal["data"]["code"] == "SCENARIO_DELETED"
+        assert terminal["data"]["message"] == "Scenario was deleted while streaming."
+        assert terminal["data"]["status"] == "scenario_deleted"
+
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+
+    @pytest.mark.asyncio
+    async def test_scenario_deleted_mid_stream_emits_terminal_error_before_delete_commit(
+        self,
+        client,
+    ):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start", json=_default_start_body(sid),
+        ).json()
+        thread_id = start["thread_id"]
+        assistant_turn_id = start["assistant_turn_id"]
+        stall_forever = asyncio.Event()
+
+        async def _two_chunk_stream(*_args, **_kwargs):
+            yield "alpha"
+            await stall_forever.wait()
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=thread_id,
+            assistant_turn_id=assistant_turn_id,
+            new_user_content="watch delete",
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url=None,
+                model="test-model",
+                disable_user_quota=False,
+            ),
+            _llm_stream_factory=_two_chunk_stream,
+        )
+
+        assert (await anext(iterator))["event"] == "turn_started"
+        assert (await anext(iterator))["event"] == "turn_token_delta"
+
+        with Session(engine) as delete_session:
+            conversation_service.mark_scenario_conversations_as_deleted(delete_session, sid)
+            terminal = await anext(iterator)
+            assert terminal["event"] == "turn_error"
+            assert terminal["data"]["code"] == "SCENARIO_DELETED"
+            assert terminal["data"]["status"] == "scenario_deleted"
+            delete_session.rollback()
+
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+
+    @pytest.mark.asyncio
+    async def test_sse_fallback_does_not_leak_exception_detail(self, caplog):
+        async def _boom():
+            raise RuntimeError("https://evil?api_key=xxx")
+            yield  # pragma: no cover
+
+        import logging as _logging
+
+        caplog.set_level(_logging.WARNING, logger="app.api.conversation")
+        chunks: list[str] = []
+        async for frame in conversation_module._sse_event_stream(
+            _boom(),
+            request_id="req-be5",
+            fallback_data={
+                "turn_id": "turn-fallback",
+                "thread_id": "thread-fallback",
+                "sequence": 9,
+                "status": "error",
+                "model": "test-model",
+            },
+        ):
+            chunks.append(frame)
+
+        raw = "".join(chunks)
+        parsed = _assert_sse_frames(raw)
+        assert parsed == [("turn_error", parsed[0][1])]
+        payload = parsed[0][1]
+        assert payload["turn_id"] == "turn-fallback"
+        assert payload["thread_id"] == "thread-fallback"
+        assert payload["sequence"] == 9
+        assert payload["status"] == "error"
+        assert payload["model"] == "test-model"
+        assert payload["code"] == "STREAM_FAILED"
+        assert payload["request_id"] == "req-be5"
+        assert "error" not in payload
+        assert "https://evil" not in raw
+        assert "api_key=xxx" not in raw
+
+        combined = " ".join(rec.getMessage() for rec in caplog.records)
+        assert "https://evil" not in combined
+        assert "api_key=xxx" not in combined
 
 
 # ── T8 abort mid-stream ─────────────────────────────────
 
 
 class TestAbort:
+    @pytest.mark.asyncio
+    async def test_cancel_event_interrupts_stalled_stream(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start", json=_default_start_body(sid),
+        ).json()
+        thread_id = start["thread_id"]
+        assistant_turn_id = start["assistant_turn_id"]
+        cancel_event = asyncio.Event()
+        stall_forever = asyncio.Event()
+
+        async def _stalled_stream(*_args, **_kwargs):
+            yield "partial"
+            await stall_forever.wait()
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=thread_id,
+            assistant_turn_id=assistant_turn_id,
+            new_user_content="cancel while stalled",
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url=None,
+                model="test-model",
+                disable_user_quota=False,
+            ),
+            cancel_event=cancel_event,
+            _llm_stream_factory=_stalled_stream,
+        )
+
+        assert (await anext(iterator))["event"] == "turn_started"
+        first_delta = await anext(iterator)
+        assert first_delta["event"] == "turn_token_delta"
+        assert first_delta["data"]["delta"] == "partial"
+
+        cancel_event.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(anext(iterator), timeout=0.2)
+
+        with Session(engine) as session:
+            row = session.get(AgentConversationTurn, assistant_turn_id)
+            thread = session.get(AgentConversationThread, thread_id)
+            assert row is not None
+            assert row.status == "aborted"
+            assert row.error_code == "USER_ABORTED"
+            assert row.content == "partial"
+            assert thread is not None
+            assert thread.active_turn_id is None
+            assert thread.latest_status == "aborted"
+
+    @pytest.mark.asyncio
+    async def test_stream_cancelled_error_finalizes_turn_and_thread(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start", json=_default_start_body(sid),
+        ).json()
+        thread_id = start["thread_id"]
+        assistant_turn_id = start["assistant_turn_id"]
+
+        async def _cancelled_stream(*_args, **_kwargs):
+            yield "partial"
+            raise asyncio.CancelledError
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=thread_id,
+            assistant_turn_id=assistant_turn_id,
+            new_user_content="cancel me",
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url=None,
+                model="test-model",
+                disable_user_quota=False,
+            ),
+            _llm_stream_factory=_cancelled_stream,
+        )
+
+        seen_events: list[str] = []
+        with pytest.raises(asyncio.CancelledError):
+            async for event in iterator:
+                seen_events.append(event["event"])
+
+        assert seen_events[:2] == ["turn_started", "turn_token_delta"]
+        with Session(engine) as session:
+            row = session.get(AgentConversationTurn, assistant_turn_id)
+            thread = session.get(AgentConversationThread, thread_id)
+            assert row is not None
+            assert row.status == "aborted"
+            assert row.error_code == "USER_ABORTED"
+            assert row.content == "partial"
+            assert thread is not None
+            assert thread.active_turn_id is None
+            assert thread.latest_status == "aborted"
+
     def test_abort_transitions_streaming_to_aborted(self, client, monkeypatch):
         _install_stub_stream(monkeypatch, ["first token"])
         engine = get_engine()
@@ -369,14 +752,81 @@ class TestAbort:
 
         with Session(engine) as session:
             row = session.get(AgentConversationTurn, assistant_turn_id)
+            thread = session.get(AgentConversationThread, thread_id)
             assert row.status == "aborted"
             assert row.error_code == "USER_ABORTED"
+            assert thread is not None
+            assert thread.active_turn_id is None
+            assert thread.latest_status == "aborted"
 
 
 # ── T9/T10 CAS rowcount == 0 cases ──────────────────────
 
 
 class TestCASBroadcastGate:
+    @pytest.mark.parametrize(
+        ("new_status", "error_code"),
+        [
+            ("done", None),
+            ("error", "LLM_5XX"),
+            ("aborted", "USER_ABORTED"),
+            ("scenario_deleted", "SCENARIO_DELETED"),
+        ],
+    )
+    def test_terminal_cas_updates_thread_state(
+        self,
+        new_status: str,
+        error_code: str | None,
+    ):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+
+        with Session(engine) as session:
+            thread = AgentConversationThread(
+                scenario_id=sid,
+                owner_user_id="u1",
+                last_turn_sequence=1,
+                latest_status="pending",
+            )
+            session.add(thread)
+            session.flush()
+            turn = AgentConversationTurn(
+                thread_id=thread.id,
+                scenario_id=sid,
+                role="assistant",
+                sequence=1,
+                status="streaming",
+                content="partial",
+            )
+            session.add(turn)
+            session.flush()
+            thread.active_turn_id = turn.id
+            session.add(thread)
+            session.commit()
+            tid = turn.id
+            thread_id = thread.id
+
+        with Session(engine) as session:
+            transitioned = finalize_turn_cas(
+                session,
+                turn_id=tid,
+                new_status=new_status,
+                expected_from=("pending", "streaming"),
+                content="final" if new_status != "aborted" else "partial",
+                error_code=error_code,
+                model="test-model",
+            )
+            assert transitioned is True
+
+        with Session(engine) as session:
+            turn = session.get(AgentConversationTurn, tid)
+            thread = session.get(AgentConversationThread, thread_id)
+            assert turn is not None
+            assert turn.status == new_status
+            assert thread is not None
+            assert thread.active_turn_id is None
+            assert thread.latest_status == new_status
+
     def test_cas_fails_when_turn_already_aborted(self, client):
         engine = get_engine()
         sid = _seed_scenario(engine)
@@ -455,6 +905,7 @@ class TestDisableQuotaAudit:
         start = client.post(
             "/api/conversation/start", json=_default_start_body(sid),
         ).json()
+        _complete_active_turn(engine, start["thread_id"])
 
         import logging as _logging
         caplog.set_level(_logging.INFO, logger="app.services.conversation_service")
@@ -474,6 +925,38 @@ class TestDisableQuotaAudit:
 
         combined = " ".join(rec.getMessage() for rec in caplog.records)
         assert "agent_conversation.disable_user_quota" in combined
+
+
+class TestBootstrapClaim:
+    def test_concurrent_bootstrap_claims_have_single_winner(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(sid, content="bootstrap claim"),
+        ).json()
+        thread_id = start["thread_id"]
+
+        barrier = threading.Barrier(2)
+        results: list[bool] = []
+
+        def _worker():
+            barrier.wait()
+            claimed = claim_bootstrap_start_stream_state(
+                thread_id=thread_id,
+                owner_user_id=None,
+                user_content="bootstrap claim",
+            )
+            results.append(claimed is not None)
+
+        left = threading.Thread(target=_worker)
+        right = threading.Thread(target=_worker)
+        left.start()
+        right.start()
+        left.join()
+        right.join()
+
+        assert sorted(results) == [False, True]
 
 
 # ── T13 prompt injection wrapper ────────────────────────

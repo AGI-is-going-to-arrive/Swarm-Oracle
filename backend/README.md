@@ -34,6 +34,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 |--------|------|-------------|
 | Scenarios | `app/api/scenarios.py` | Core CRUD, story, export, replay artifact, replay import |
 | Campaign | `app/api/campaign.py` | finalize, profile, mastery, badges, daily-status, weekly-summary, `director-state`, `gameplay-state`, scenario summary |
+| Conversation | `app/api/conversation.py` | Node conversation thread/start/get/turn/abort with SSE assistant streaming |
 | Debate | `app/api/debate.py` | Debate live/result/import-replay/predict + Debate WebSocket |
 | Ending Room | `app/api/ending_rooms.py` | Oracle Chambers / roundtable room、thread、user-turn、result 与 ending-room WebSocket |
 | Predictions | `app/api/predictions.py` | Scenario prediction and leaderboard |
@@ -61,6 +62,8 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | `GET` | `/api/debate/{id}` | Debate live snapshot |
 | `GET` | `/api/debate/{id}/result` | Debate result payload |
 | `POST` | `/api/debate/import-replay` | Import debate replay as local run and preserve imported `phase_insights` / `adjudication_mode` |
+| `POST` | `/api/conversation/start` | Create a node conversation thread with the first user turn plus a reserved assistant turn |
+| `POST` | `/api/conversation/{thread_id}/turn` | Claim or append an assistant turn and stream it back over SSE |
 | `WS` | `/ws/scenario/{scenario_id}` | Scenario events |
 | `WS` | `/ws/debate/{debate_id}` | Debate events |
 
@@ -73,7 +76,7 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 ```
 
 - Latest local rerun in this session:
-  - `python -m pytest -q`: `2078 passed, 2 skipped`
+  - `python -m pytest -q`: `2239 passed, 2 skipped`
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
 ## Runtime Notes

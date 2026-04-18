@@ -73,19 +73,6 @@ export const FILE_BUDGETS = [
     maxGzipBytes: 15 * 1024,
   }),
   buildChunkBudget({
-    label: "flow-vendor chunk",
-    chunkName: "flow-vendor",
-    maxBytes: 220 * 1024,
-    maxGzipBytes: 75 * 1024,
-  }),
-  buildChunkBudget({
-    label: "flow-vendor chunk",
-    chunkName: "flow-vendor",
-    variant: "legacy",
-    maxBytes: 230 * 1024,
-    maxGzipBytes: 75 * 1024,
-  }),
-  buildChunkBudget({
     label: "i18n-vendor chunk",
     chunkName: "i18n-vendor",
     maxBytes: 80 * 1024,

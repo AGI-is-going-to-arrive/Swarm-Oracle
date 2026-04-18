@@ -853,7 +853,7 @@ export function DebateResultView() {
             </div>
             {showArgumentMap ? (
               <div id={argumentMapPanelId} className="debate-panel__body">
-                <ArgumentMap debateId={id!} visible={true} />
+                <ArgumentMap debateId={id!} visible={true} conversationScenarioId={null} />
               </div>
             ) : (
               <div id={argumentMapPanelId} className="debate-panel__body">

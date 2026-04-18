@@ -23,6 +23,7 @@
 | Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、自建 Agent workshop |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
 | Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary |
+| Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
 | Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard |
 | Debate | `backend/app/api/debate.py` | debate live/result/import-replay/predict |
 | Ending Room | `backend/app/api/ending_rooms.py` | ending-room room/result/thread/user-turn 与 WS |
@@ -38,6 +39,7 @@
 | Memory | `backend/app/services/memory.py` | L1 压缩、context 组装 |
 | Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、缓存与上下文格式化 |
 | LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断、JSON stream-first fallback |
+| Conversation Service | `backend/app/services/conversation_service.py` | conversation thread/turn 创建、bootstrap claim、SSE stream 终态与取消原因收口 |
 | Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile（串行化锁保护写入） |
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |

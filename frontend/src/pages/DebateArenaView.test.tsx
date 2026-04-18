@@ -29,6 +29,16 @@ const {
 const predictDebateMock = vi.fn();
 const captureScreenshotMock = vi.fn();
 const captureElementDataUrlMock = vi.fn();
+const argumentMapMock = vi.fn(({
+  debateId,
+}: {
+  debateId: string;
+  visible?: boolean;
+  refreshTrigger?: number;
+  conversationScenarioId?: string | null;
+}) => (
+  <div data-testid="argument-map">{debateId}</div>
+));
 
 const mockDebateStore: {
   debate: DebateSnapshot;
@@ -235,6 +245,21 @@ vi.mock('../lib/directorIdentity', () => ({
   getDirectorIdentity: () => ({ userId: 'director-1', userName: 'Local Director' }),
 }));
 
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({ enabled: true }),
+}));
+
+vi.mock('../components/ArgumentMap', () => ({
+  ArgumentMap: (
+    props: {
+      debateId: string;
+      visible: boolean;
+      refreshTrigger?: number;
+      conversationScenarioId?: string | null;
+    },
+  ) => argumentMapMock(props),
+}));
+
 describe('DebateArenaView', () => {
   beforeEach(() => {
     const store = new Map<string, string>();
@@ -253,6 +278,7 @@ describe('DebateArenaView', () => {
     predictDebateMock.mockReset();
     captureScreenshotMock.mockReset();
     captureElementDataUrlMock.mockReset();
+    argumentMapMock.mockClear();
     captureElementDataUrlMock.mockResolvedValue('data:image/png;base64,fake');
   });
 
@@ -307,6 +333,27 @@ describe('DebateArenaView', () => {
     expect((await screen.findAllByRole('button', { name: 'debate.view_result' })).length).toBeGreaterThan(0);
     expect(changeLanguageMock).not.toHaveBeenCalled();
     expect(getMockLanguage()).toBe('en');
+  });
+
+  it('disables argument-map node conversations until Debate has a real scenario id', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findAllByRole('button', { name: 'debate.view_result' });
+    await user.click(screen.getByRole('button', { name: 'argument.live_expand' }));
+
+    await waitFor(() => {
+      expect(argumentMapMock).toHaveBeenCalled();
+    });
+    const latestProps = argumentMapMock.mock.calls.at(-1)?.[0];
+    expect(latestProps?.conversationScenarioId).toBeNull();
   });
 
   it('does not advance debate turns on sub-interval automation ticks', async () => {

@@ -115,6 +115,19 @@ def delete_scenario_cascade(
     if owner is not None and owner != user_id:
         return False
 
+    # ── C2: terminalise any mid-flight conversation streams BEFORE the
+    # structural DELETE so SSE clients can still observe a
+    # ``scenario_deleted`` row.  The helper is a no-op when no active
+    # conversations exist.  Imported lazily to avoid a circular dependency
+    # at module load time (scenario_deletion is imported from the API
+    # layer, conversation_service transitively imports the same table
+    # metadata).
+    from app.services.conversation_service import (
+        mark_scenario_conversations_as_deleted,
+    )
+
+    mark_scenario_conversations_as_deleted(session, scenario_id)
+
     # ── Collect dependent ID sets once so we can drive bulk DELETEs ──
     branch_ids = list(
         session.exec(select(Branch.id).where(Branch.scenario_id == scenario_id)).all()

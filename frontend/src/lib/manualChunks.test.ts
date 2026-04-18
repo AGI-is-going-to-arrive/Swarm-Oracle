@@ -11,9 +11,11 @@ describe('resolveManualChunk', () => {
     expect(resolveManualChunk('/repo/frontend/node_modules/scheduler/index.js')).toBe('vendor');
   });
 
-  it('preserves explicit graph and i18n vendor chunks', () => {
-    expect(resolveManualChunk('/repo/frontend/node_modules/@xyflow/react/dist/index.js')).toBe('flow-vendor');
-    expect(resolveManualChunk('/repo/frontend/node_modules/dagre/index.js')).toBe('flow-vendor');
+  it('keeps the entire React Flow stack in the shared vendor chunk', () => {
+    expect(resolveManualChunk('/repo/frontend/node_modules/@xyflow/react/dist/index.js')).toBe('vendor');
+    expect(resolveManualChunk('/repo/frontend/node_modules/d3-selection/src/index.js')).toBe('vendor');
+    expect(resolveManualChunk('/repo/frontend/node_modules/dagre/index.js')).toBe('vendor');
+    expect(resolveManualChunk('/repo/frontend/node_modules/graphlib/index.js')).toBe('vendor');
     expect(resolveManualChunk('/repo/frontend/node_modules/react-i18next/dist/index.js')).toBe('i18n-vendor');
   });
 
