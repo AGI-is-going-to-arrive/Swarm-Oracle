@@ -330,6 +330,7 @@ async function runPredictLateBranchesFlow(page, args) {
 
   await page.addInitScript(({ fixtureScenarioId, fixtureChildBranchId, fixtureChildBranchTitle }) => {
     const NativeWebSocket = window.WebSocket;
+    window.__swarmFixtureReleaseLateBranch = null;
 
     class FixtureWebSocket {
       static CONNECTING = 0;
@@ -350,6 +351,7 @@ async function runPredictLateBranchesFlow(page, args) {
         this.onclose = null;
         this._listeners = new Map();
         this._timers = [];
+        this._lateBranchReleased = false;
 
         if (!this.url.endsWith(`/ws/scenario/${fixtureScenarioId}`)) {
           return new NativeWebSocket(url, protocols);
@@ -359,6 +361,54 @@ async function runPredictLateBranchesFlow(page, args) {
           this.readyState = FixtureWebSocket.OPEN;
           this._emit("open", new Event("open"));
         }, 20);
+
+        const emitPayload = (payload, index) => {
+          if (this.readyState !== FixtureWebSocket.OPEN) return;
+          this._emit(
+            "message",
+            new MessageEvent("message", {
+              data: JSON.stringify({
+                ...payload,
+                meta: {
+                  stream_id: fixtureScenarioId,
+                  sequence: index + 1,
+                  event_id: `${fixtureScenarioId}:${index + 1}`,
+                  manager_instance_id: "fixture-predict-late-branches",
+                  emitted_at: new Date().toISOString(),
+                },
+              }),
+            }),
+          );
+        };
+
+        this._releaseLateBranch = () => {
+          if (this._lateBranchReleased || this.readyState !== FixtureWebSocket.OPEN) return;
+          this._lateBranchReleased = true;
+          emitPayload(
+            {
+              type: "branch_fork",
+              data: {
+                parent: "fixture-root-placeholder",
+                reason: "Late branch list for prediction modal validation.",
+                children: [
+                  {
+                    id: fixtureChildBranchId,
+                    title: fixtureChildBranchTitle,
+                    description: "A branch delivered after the modal opened.",
+                    fork_round: 1,
+                    probability: 0.61,
+                  },
+                ],
+              },
+            },
+            2,
+          );
+          this._schedule(() => {
+            emitPayload({ type: "simulation_done" }, 3);
+          }, 300);
+        };
+
+        window.__swarmFixtureReleaseLateBranch = this._releaseLateBranch;
 
         const events = [
           {
@@ -374,48 +424,16 @@ async function runPredictLateBranchesFlow(page, args) {
               round: 1,
             },
           },
-          {
-            type: "branch_fork",
-            data: {
-              parent: "fixture-root-placeholder",
-              reason: "Late branch list for prediction modal validation.",
-              children: [
-                {
-                  id: fixtureChildBranchId,
-                  title: fixtureChildBranchTitle,
-                  description: "A branch delivered after the modal opened.",
-                  fork_round: 1,
-                  probability: 0.61,
-                },
-              ],
-            },
-          },
-          {
-            type: "simulation_done",
-          },
         ];
-        const eventDelays = [60, 180, 800, 1100];
+        const eventDelays = [60, 180];
 
         events.forEach((payload, index) => {
           this._schedule(() => {
-            if (this.readyState !== FixtureWebSocket.OPEN) return;
-            this._emit(
-              "message",
-              new MessageEvent("message", {
-                data: JSON.stringify({
-                  ...payload,
-                  meta: {
-                    stream_id: fixtureScenarioId,
-                    sequence: index + 1,
-                    event_id: `${fixtureScenarioId}:${index + 1}`,
-                    manager_instance_id: "fixture-predict-late-branches",
-                    emitted_at: new Date().toISOString(),
-                  },
-                }),
-              }),
-            );
+            emitPayload(payload, index);
           }, eventDelays[index] ?? (180 * (index + 1)));
         });
+
+        this._schedule(this._releaseLateBranch, 5000);
       }
 
       _schedule(fn, delay) {
@@ -454,6 +472,9 @@ async function runPredictLateBranchesFlow(page, args) {
           window.clearTimeout(timer);
         }
         this._timers = [];
+        if (window.__swarmFixtureReleaseLateBranch === this._releaseLateBranch) {
+          window.__swarmFixtureReleaseLateBranch = null;
+        }
         this.readyState = FixtureWebSocket.CLOSED;
         this._emit("close", new CloseEvent("close", { code, reason, wasClean: true }));
       }
@@ -524,10 +545,14 @@ async function runPredictLateBranchesFlow(page, args) {
       10000,
       "prediction modal before branches arrive",
     );
-    await page.locator("#pred-text").fill("Late branches should still become the default branch winner target.");
-    await page.locator("#pred-name").fill("Late Branch Bot");
     writeJson(path.join(artifactDir, "predict-late-branches-before.json"), before);
     await saveScreenshot(page, path.join(artifactDir, "predict-late-branches-before.png"));
+
+    await page.locator("#pred-text").fill("Late branches should still become the default branch winner target.");
+    await page.locator("#pred-name").fill("Late Branch Bot");
+    await page.evaluate(() => {
+      window.__swarmFixtureReleaseLateBranch?.();
+    });
 
     const after = await waitForAutomation(
       page,

@@ -171,6 +171,7 @@
   - 如果 modal 打开时还没有可押世界线，UI 会先临时回退到 `ending_tone`
   - 只要后续收到可用 `ACTIVE` branch，就会自动切回 `branch_winner`，并选中当前仍有效的默认 branch
   - 如果用户已经手动改选了一个仍然有效的 branch，提交时会继续用用户当前选择；commitment branch 只作为默认兜底，不会把用户已选目标强行改回去
+  - 对应的 `predict-late-branches` fixture 当前会先采 `before` 工件，再放出 late branch 事件；`before` 态应保持 `ending_tone`，`after` 态才切到 `branch_winner`
 - `endingRoomStore` 当前会在 committed turn、room hydrate、thread hydrate 时清掉 stale draft；迟到的 `turn_start / turn_delta` 不再把 ghost bubble 重新挂回当前 transcript。
 - `endingRoomStore` 当前把 `snapshot / result / thread hydrate + commitTurn` 作为 authority；`pendingDrafts` 只是流式草稿缓存。recoverable `turn_error` 只清 draft，不会把整个 room 升成 fatal error。
 - `endingRoomStore.loadRoom` 当前在 result 加载失败时不再把整个 room 标记为 error；room 仍可正常使用，result 会在下次 WS 事件或手动刷新时重试。

@@ -202,6 +202,9 @@ npm run e2e:predict:late-branches -- --url http://127.0.0.1:18930 --headless
   - 当前选中的 branch 失效时会自动回退到仍然有效的默认目标
   - 如果用户已经改选了一个仍然有效的 branch，提交时会继续用用户当前选择
   - 真实浏览器 fixture 会同时校验 automation state、DOM 选中值，以及提交请求里的 structured bet `targetId / targetLabel`
+  - `predict-late-branches-before.{json,png}` 当前会先在 late branch 到达前采样；`before` 应看到 `bet_kind=ending_tone` 且 `target_branch_id=null`
+  - `predict-late-branches-after.{json,png}` 才对应 late branch 到达后的状态；`after` 应看到 `bet_kind=branch_winner`，并选中实际 branch id
+  - 如果 `18930` 被占用，就直接把 preview 实际打印出来的 URL 传给 `--url`
 
 ### Agent Conversation / Node Conversation 定向回归
 
