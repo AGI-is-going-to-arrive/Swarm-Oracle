@@ -230,9 +230,10 @@
   - 紧跟的 `POST /api/conversation/{thread_id}/turn` 如果还是同一条首轮 user 内容，会直接 claim 这条预留 assistant turn 开始流式返回，不再追加重复 user turn
   - 这条 claim 当前按原子 CAS 执行；并发首轮流里只会有一个请求拿到这条预留 turn，其他请求会 fail-closed，不会两路同时 stream 同一 turn
   - bootstrap 预留 turn 在真正发出首个 `turn_started` 前，当前还会再看一次 turn 状态和 cancel flag；如果 started 前已经被 abort，就不会再补 stale `turn_started`；如果场景已经删掉，则直接收成 `SCENARIO_DELETED`
-  - `WS /ws/agent-conversation/{thread_id}` 当前也已上线：复用统一首帧 auth / pending-auth 容量门控；feature 关闭或 thread 不存在时返回 `4404`；owner freeze 按 thread owner 收口；容量仍按 scenario 维度计算，不会因为 thread 数量放大
+- `WS /ws/agent-conversation/{thread_id}` 当前也已上线：复用统一首帧 auth / pending-auth 容量门控；feature 关闭或 thread 不存在时返回 `4404`；owner freeze 按 thread owner 收口；容量仍按 scenario 维度计算，不会因为 thread 数量放大
   - scenario 删除如果发生在流式中途，会先在删除事务内把活跃 turn 标成 `scenario_deleted`，真正唤醒 in-flight SSE 的 cancel signal 改为事务提交后再发；这样 rollback 不会提前把客户端打成终态。当前 delete endpoint 会在 `session.commit()` 后 drain `session.info["scenario_deleted_turn_ids"]` 并统一调用 `signal_scenario_deleted_turns()`；signal 失败只记 warning，不会把已经删成功的请求误报成 500。事务成功提交后，流末尾仍会补 `turn_error(code=SCENARIO_DELETED)`；如果场景刚好在首个 chunk 出来前被删，也会直接收成这条终态，不再误落到 `LLM_5XX`
   - `DELETE /api/conversation/{thread_id}/active` 当前除了唤醒活跃流式协程，也会把还没开始流式的预留 `pending` assistant turn 直接收成 `aborted`；不会再出现 abort 已返回，但同一条预留 turn 还被后续 `/turn` claim 走的假成功
+  - bootstrap 预留 turn 在真正发出首个 `turn_started` 前，当前除了看 cancel event，也会看已登记的 cancel reason；即使 `event.set()` 还没跑到 loop，只要 abort 已登记，也会在首帧前直接收成 `aborted`，不会把 turn/thread 留在 `streaming`
   - `_stream_with_cancel_signal()` 当前在 cancel 和 next chunk 同 tick 完成时会优先走 cancel，不再多漏一条 `turn_token_delta`
   - SSE 通用兜底错误当前统一发 `turn_error(code=LLM_5XX)`，不再回落到模糊的 `STREAM_FAILED`
 - Debate argument map 当前走两层抽取：

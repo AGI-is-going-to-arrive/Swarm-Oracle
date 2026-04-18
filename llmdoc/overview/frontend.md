@@ -167,6 +167,10 @@
   - `thinkingAgentCount`
   - `thinkingAgents`
   - classic live-fork fixture 已能直接观测“谁正在说话前的 thinking 态”
+- `PredictionModal` 当前在 branch list 晚到时会自动把默认目标补齐：
+  - 如果 modal 打开时还没有可押世界线，UI 会先临时回退到 `ending_tone`
+  - 只要后续收到可用 `ACTIVE` branch，就会自动切回 `branch_winner`，并选中当前仍有效的默认 branch
+  - 如果用户已经手动改选了一个仍然有效的 branch，提交时会继续用用户当前选择；commitment branch 只作为默认兜底，不会把用户已选目标强行改回去
 - `endingRoomStore` 当前会在 committed turn、room hydrate、thread hydrate 时清掉 stale draft；迟到的 `turn_start / turn_delta` 不再把 ghost bubble 重新挂回当前 transcript。
 - `endingRoomStore` 当前把 `snapshot / result / thread hydrate + commitTurn` 作为 authority；`pendingDrafts` 只是流式草稿缓存。recoverable `turn_error` 只清 draft，不会把整个 room 升成 fatal error。
 - `endingRoomStore.loadRoom` 当前在 result 加载失败时不再把整个 room 标记为 error；room 仍可正常使用，result 会在下次 WS 事件或手动刷新时重试。
@@ -424,6 +428,7 @@
 - 默认 `release-signoff` 当前还会串行执行：
   - `phase3_graph_preflight`
   - `script_contracts`
+  - `prediction_modal_late_branches`
   - `phase3a / phase3b` 的 default graph smoke
   - `phase3c` 的 result graph smoke
   - `phase3a / phase3b` 的 `zh-CN` graph smoke

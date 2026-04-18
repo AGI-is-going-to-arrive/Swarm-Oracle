@@ -42,6 +42,23 @@ const GRAPH_E2E_STEP_IDS = [
   "phase3a_graph_webkit",
   "phase3b_graph_webkit",
 ];
+const ROUND7_CHECK_STEP_IDS = [
+  "agent_conversation_ws_endpoint",
+  "scenario_deleted_terminal",
+  "x_org_id_header",
+  "cmd_r_suppress_reload",
+  "snap_cycle_70_100_40",
+];
+const ROUND7_GRAPH_LIVE_STEP_IDS = [
+  "phase3a_graph_default",
+  "phase3b_graph_default",
+  "phase3c_result_graphs",
+  "phase3a_graph_zh",
+  "phase3b_graph_zh",
+];
+const PREDICTION_FOCUSED_STEP_IDS = [
+  "prediction_modal_late_branches",
+];
 const BACKEND_SIGNOFF_TESTS = [
   "tests/test_campaign_api.py",
   "tests/test_campaign_service.py",
@@ -331,6 +348,104 @@ function runStep(summary, runArgs, stepId, command, commandArgs, options = {}) {
   }
 }
 
+function buildRound7GraphLiveStepSpecs(baseUrl) {
+  return [
+    {
+      id: "phase3a_graph_default",
+      commandArgs: ["scripts/e2e-phase3-batch-a.mjs", "full"],
+      env: {
+        SWARM_URL: baseUrl,
+        SWARM_E2E_MODE: "live",
+      },
+    },
+    {
+      id: "phase3b_graph_default",
+      commandArgs: ["scripts/e2e-phase3-batch-b.mjs", "full"],
+      env: {
+        SWARM_URL: baseUrl,
+        SWARM_E2E_MODE: "live",
+      },
+    },
+    {
+      id: "phase3c_result_graphs",
+      commandArgs: ["scripts/e2e-phase3-batch-c.mjs", "full"],
+      env: {
+        SWARM_URL: baseUrl,
+        SWARM_E2E_MODE: "live",
+      },
+    },
+    {
+      id: "phase3a_graph_zh",
+      commandArgs: ["scripts/e2e-phase3-batch-a.mjs", "full"],
+      env: {
+        SWARM_URL: baseUrl,
+        SWARM_E2E_MODE: "live",
+        SWARM_E2E_LOCALE: "zh-CN",
+      },
+    },
+    {
+      id: "phase3b_graph_zh",
+      commandArgs: ["scripts/e2e-phase3-batch-b.mjs", "full"],
+      env: {
+        SWARM_URL: baseUrl,
+        SWARM_E2E_MODE: "live",
+        SWARM_E2E_LOCALE: "zh-CN",
+      },
+    },
+  ];
+}
+
+function registerRound7GraphLiveSteps({
+  summary,
+  args,
+  baseUrl,
+  nodeCommand,
+  runStep: runStepImpl = runStep,
+}) {
+  for (const spec of buildRound7GraphLiveStepSpecs(baseUrl)) {
+    runStepImpl(summary, args, spec.id, nodeCommand, spec.commandArgs, {
+      env: spec.env,
+    });
+  }
+}
+
+function buildPredictionFocusedStepSpecs(baseUrl, outputRoot, headless) {
+  const predictLateBranchesOutput = path.join(outputRoot, "predict-late-branches");
+  return [
+    {
+      id: "prediction_modal_late_branches",
+      commandArgs: [
+        "scripts/e2e-automation.mjs",
+        "predict-late-branches",
+        "--url",
+        baseUrl,
+        "--output-dir",
+        predictLateBranchesOutput,
+        ...(headless ? ["--headless"] : []),
+      ],
+      artifactDir: predictLateBranchesOutput,
+      resultFile: path.join(predictLateBranchesOutput, "result.json"),
+    },
+  ];
+}
+
+function registerPredictionFocusedSteps({
+  summary,
+  args,
+  baseUrl,
+  outputRoot,
+  headless,
+  nodeCommand,
+  runStep: runStepImpl = runStep,
+}) {
+  for (const spec of buildPredictionFocusedStepSpecs(baseUrl, outputRoot, headless)) {
+    runStepImpl(summary, args, spec.id, nodeCommand, spec.commandArgs, {
+      artifactDir: spec.artifactDir,
+      resultFile: spec.resultFile,
+    });
+  }
+}
+
 async function runAsyncStep(summary, runArgs, stepId, runner, options = {}) {
   const startedAt = new Date().toISOString();
   const step = {
@@ -400,8 +515,15 @@ function ensureBackendPythonExists(pythonPath) {
 export const __test__ = {
   buildGraphPreflightPaths,
   buildGraphFocusedVitestArgs,
+  buildRound7GraphLiveStepSpecs,
+  buildPredictionFocusedStepSpecs,
+  registerRound7GraphLiveSteps,
+  registerPredictionFocusedSteps,
   graphE2EStepIds: GRAPH_E2E_STEP_IDS,
   graphFocusedVitestTests: GRAPH_FOCUSED_VITEST_TESTS,
+  predictionFocusedStepIds: PREDICTION_FOCUSED_STEP_IDS,
+  round7CheckStepIds: ROUND7_CHECK_STEP_IDS,
+  round7GraphLiveStepIds: ROUND7_GRAPH_LIVE_STEP_IDS,
 };
 
 async function main() {
@@ -520,6 +642,76 @@ async function main() {
         "scripts/e2e-ending-room-followup-suite.test.mjs",
       ],
     );
+    if (args.includeBackendChecks) {
+      runStep(
+        summary,
+        args,
+        "agent_conversation_ws_endpoint",
+        args.backendPython,
+        [
+          "-m",
+          "pytest",
+          "tests/test_team_review_round6_fixes.py::TestC1AgentConversationWsEndpoint::test_capacity_scope_uses_scenario_id_not_thread_id",
+          "-q",
+        ],
+        { cwd: BACKEND_ROOT },
+      );
+      runStep(
+        summary,
+        args,
+        "scenario_deleted_terminal",
+        args.backendPython,
+        [
+          "-m",
+          "pytest",
+          "tests/test_conversation.py::TestSSEStream::test_scenario_deleted_mid_stream_emits_terminal_error",
+          "tests/test_conversation.py::TestAbort::test_stream_cancelled_error_finalizes_turn_and_thread",
+          "-q",
+        ],
+        { cwd: BACKEND_ROOT },
+      );
+      runStep(
+        summary,
+        args,
+        "x_org_id_header",
+        args.backendPython,
+        [
+          "-m",
+          "pytest",
+          "tests/test_team_review_round6_fixes.py::TestC3OrgIdHeaderAndQuota::test_org_header_is_case_folded_before_persistence_and_quota",
+          "-q",
+        ],
+        { cwd: BACKEND_ROOT },
+      );
+    }
+    runStep(
+      summary,
+      args,
+      "cmd_r_suppress_reload",
+      npmCommand,
+      [
+        "test",
+        "--",
+        "--run",
+        "src/components/kg/NodeConversationSheet.test.tsx",
+        "-t",
+        "Cmd+R fires onResend and preventDefault blocks browser refresh",
+      ],
+    );
+    runStep(
+      summary,
+      args,
+      "snap_cycle_70_100_40",
+      npmCommand,
+      [
+        "test",
+        "--",
+        "--run",
+        "src/components/kg/NodeConversationSheet.test.tsx",
+        "-t",
+        "clicking handle cycles 70 → 100 → 40 → 70",
+      ],
+    );
     if (args.includeAssetsCheck) {
       runStep(summary, args, "assets_check", npmCommand, ["run", "assets:provenance:check"]);
     }
@@ -536,83 +728,22 @@ async function main() {
         command: `assertFrontendRoutesReady(${args.baseUrl})`,
       },
     );
-    runStep(
+    registerRound7GraphLiveSteps({
       summary,
       args,
-      "phase3a_graph_default",
+      baseUrl: args.baseUrl,
       nodeCommand,
-      [
-        "scripts/e2e-phase3-batch-a.mjs",
-        "full",
-      ],
-      {
-        env: {
-          SWARM_URL: args.baseUrl,
-        },
-      },
-    );
-    runStep(
+      runStep,
+    });
+    registerPredictionFocusedSteps({
       summary,
       args,
-      "phase3b_graph_default",
+      baseUrl: args.baseUrl,
+      outputRoot: args.outputRoot,
+      headless: args.headless,
       nodeCommand,
-      [
-        "scripts/e2e-phase3-batch-b.mjs",
-        "full",
-      ],
-      {
-        env: {
-          SWARM_URL: args.baseUrl,
-        },
-      },
-    );
-    runStep(
-      summary,
-      args,
-      "phase3c_result_graphs",
-      nodeCommand,
-      [
-        "scripts/e2e-phase3-batch-c.mjs",
-        "full",
-      ],
-      {
-        env: {
-          SWARM_URL: args.baseUrl,
-        },
-      },
-    );
-    runStep(
-      summary,
-      args,
-      "phase3a_graph_zh",
-      nodeCommand,
-      [
-        "scripts/e2e-phase3-batch-a.mjs",
-        "full",
-      ],
-      {
-        env: {
-          SWARM_URL: args.baseUrl,
-          SWARM_E2E_LOCALE: "zh-CN",
-        },
-      },
-    );
-    runStep(
-      summary,
-      args,
-      "phase3b_graph_zh",
-      nodeCommand,
-      [
-        "scripts/e2e-phase3-batch-b.mjs",
-        "full",
-      ],
-      {
-        env: {
-          SWARM_URL: args.baseUrl,
-          SWARM_E2E_LOCALE: "zh-CN",
-        },
-      },
-    );
+      runStep,
+    });
     runStep(
       summary,
       args,

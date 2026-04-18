@@ -53,10 +53,12 @@ export default function PredictionModal({
   const [betKind, setBetKind] = useState<StructuredBetKind>('branch_winner');
   const branchOptions = getStructuredBetOptions(branches);
   const committedBranchId = initialMeta?.commitment.branchId ?? '';
-  const [targetBranchId, setTargetBranchId] = useState(
+  const defaultTargetBranchId =
     branchOptions.some((branch) => branch.id === committedBranchId)
       ? committedBranchId
-      : branchOptions[0]?.id ?? '',
+      : branchOptions[0]?.id ?? '';
+  const [targetBranchId, setTargetBranchId] = useState(
+    defaultTargetBranchId,
   );
   const [endingTone, setEndingTone] = useState<EndingToneId>('order');
   const [profileResonance, setProfileResonance] = useState<ProfileResonanceId>('aligned');
@@ -102,17 +104,26 @@ export default function PredictionModal({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleClose]);
 
+  useEffect(() => {
+    if (!targetBranchId) {
+      if (defaultTargetBranchId && defaultTargetBranchId !== targetBranchId) {
+        setTargetBranchId(defaultTargetBranchId);
+      }
+      return;
+    }
+    if (branchOptions.some((branch) => branch.id === targetBranchId)) {
+      return;
+    }
+    if (defaultTargetBranchId !== targetBranchId) {
+      setTargetBranchId(defaultTargetBranchId);
+    }
+  }, [branchOptions, defaultTargetBranchId, targetBranchId]);
+
   const hasBranchTargets = branchOptions.length > 0;
   const effectiveBetKind =
     !hasBranchTargets && betKind === 'branch_winner'
       ? 'ending_tone'
       : betKind;
-
-  useEffect(() => {
-    if (!hasBranchTargets && betKind === 'branch_winner') {
-      setBetKind('ending_tone');
-    }
-  }, [betKind, hasBranchTargets]);
 
   const confidenceLabel =
     confidence <= 0.3
@@ -135,13 +146,10 @@ export default function PredictionModal({
     ?? t('prediction.commitment_empty');
   const oracleLabel = userName.trim() || t('prediction.name_placeholder');
   const isDisabled = status === 'submitting' || status === 'success';
-  const effectiveTargetBranchId = (() => {
-    if (branchOptions.length === 0) return '';
-    if (committedBranchId && branchOptions.some((branch) => branch.id === committedBranchId)) {
-      return committedBranchId;
-    }
-    return targetBranchId || branchOptions[0].id;
-  })();
+  const effectiveTargetBranchId =
+    branchOptions.some((branch) => branch.id === targetBranchId)
+      ? targetBranchId
+      : defaultTargetBranchId;
   const hasValidBranchTarget = branchOptions.some((branch) => branch.id === effectiveTargetBranchId);
   const canSubmit =
     Boolean(text.trim())
@@ -288,7 +296,7 @@ export default function PredictionModal({
             <select
               id="pred-kind"
               className="pred-input"
-              value={betKind}
+              value={effectiveBetKind}
               onChange={(e) => setBetKind(e.target.value as StructuredBetKind)}
               disabled={isDisabled}
             >
@@ -298,7 +306,7 @@ export default function PredictionModal({
             </select>
           </div>
 
-          {betKind === 'branch_winner' && branchOptions.length > 0 && (
+          {effectiveBetKind === 'branch_winner' && branchOptions.length > 0 && (
             <div className="pred-field">
               <label className="pred-label" htmlFor="pred-branch">{t('prediction.bet_target_label')}</label>
               <select
@@ -315,7 +323,7 @@ export default function PredictionModal({
             </div>
           )}
 
-          {betKind === 'ending_tone' && (
+          {effectiveBetKind === 'ending_tone' && (
             <div className="pred-field">
               <label className="pred-label" htmlFor="pred-tone">{t('prediction.bet_target_label')}</label>
               <select
@@ -332,7 +340,7 @@ export default function PredictionModal({
             </div>
           )}
 
-          {betKind === 'profile_resonance' && (
+          {effectiveBetKind === 'profile_resonance' && (
             <div className="pred-field">
               <label className="pred-label" htmlFor="pred-resonance">{t('prediction.bet_target_label')}</label>
               <select

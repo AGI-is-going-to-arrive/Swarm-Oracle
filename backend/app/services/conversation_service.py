@@ -1202,8 +1202,9 @@ async def stream_assistant_turn(
                 return
             if current_status != "streaming":
                 return
-            if stream_cancel_event.is_set():
-                if _get_turn_cancel_reason(assistant_turn_id) == "scenario_deleted":
+            cancel_reason = _get_turn_cancel_reason(assistant_turn_id)
+            if cancel_reason is not None or stream_cancel_event.is_set():
+                if cancel_reason == "scenario_deleted":
                     yield {
                         "event": "turn_error",
                         "data": {
@@ -1216,6 +1217,17 @@ async def stream_assistant_turn(
                             "message": _map_error_message("SCENARIO_DELETED"),
                         },
                     }
+                else:
+                    with Session(engine) as session:
+                        finalize_turn_cas(
+                            session,
+                            turn_id=assistant_turn_id,
+                            new_status="aborted",
+                            expected_from=_CAS_EXPECTED_FROM_DEFAULT,
+                            content="",
+                            error_code="USER_ABORTED",
+                            model=overrides.model,
+                        )
                 return
 
             # Tell the client we're about to start only after the turn has been

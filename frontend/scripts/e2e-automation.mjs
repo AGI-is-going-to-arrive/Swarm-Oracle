@@ -10,6 +10,7 @@ const DEFAULT_QUESTION = "如果互联网从未被发明？";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
+const STRUCTURED_BET_MARKER = "[SWARM_BET_V2]";
 
 function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
@@ -67,8 +68,8 @@ function parseArgs(argv) {
     }
   }
 
-  if (!["predict", "result", "health"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-automation.mjs <predict|result|health> [--url URL] [--scenario-id ID] [--question TEXT] [--output-dir DIR] [--headless]");
+  if (!["predict", "predict-late-branches", "result", "health"].includes(args.mode)) {
+    throw new Error("Usage: node scripts/e2e-automation.mjs <predict|predict-late-branches|result|health> [--url URL] [--scenario-id ID] [--question TEXT] [--output-dir DIR] [--headless]");
   }
 
   return args;
@@ -233,6 +234,350 @@ async function runPredictFlow(page, args) {
   };
 }
 
+function parseStructuredBetMeta(predictionText) {
+  if (typeof predictionText !== "string" || !predictionText.startsWith(STRUCTURED_BET_MARKER)) {
+    return null;
+  }
+  const firstLineEnd = predictionText.indexOf("\n");
+  if (firstLineEnd === -1) return null;
+  try {
+    return JSON.parse(predictionText.slice(STRUCTURED_BET_MARKER.length, firstLineEnd));
+  } catch {
+    return null;
+  }
+}
+
+async function runPredictLateBranchesFlow(page, args) {
+  const artifactDir = args.outputDir;
+  const scenarioId = "fixture-predict-late-branches";
+  const childBranchId = "fixture-late-branch";
+  const childBranchTitle = "Late Arrival Branch";
+  let capturedPredictionRequest = null;
+
+  const scenarioPayload = {
+    id: scenarioId,
+    question: "What if a review chamber had to publish a branching verdict after the prediction modal was already open?",
+    status: "simulating",
+    created_at: new Date().toISOString(),
+    total_rounds: 2,
+    mode: "blackboard",
+    agents: [
+      { id: "fixture-agent-1", name: "Review Chair", role: "Arbiter", tier: "CORE", emotion: "focused" },
+    ],
+    branches: [],
+    groups: [],
+    hierarchical: false,
+    messages: [],
+    visualization_enabled: false,
+    scene_theme: "law_court_variant",
+    director_state: {
+      revision: 0,
+      objectives: {
+        generated_for_question: null,
+        generated_for_profile: null,
+        goals: [],
+        last_updated_at: null,
+      },
+      commitment: {
+        active: false,
+        branch_id: null,
+        branch_title: null,
+        committed_at_round: null,
+        committed_at: null,
+        outcome: null,
+      },
+    },
+    gameplay_state: {
+      revision: 0,
+      cards: { usage_log: [] },
+      betting: { bets: [] },
+      archive: { key_moments: [], branch_snapshots: [] },
+    },
+    fork_debug: null,
+  };
+
+  const directorStatePayload = {
+    scenario_id: scenarioId,
+    revision: 0,
+    objectives: {
+      generated_for_question: null,
+      generated_for_profile: null,
+      goals: [],
+      last_updated_at: null,
+    },
+    commitment: {
+      active: false,
+      branch_id: null,
+      branch_title: null,
+      committed_at_round: null,
+      committed_at: null,
+      outcome: null,
+    },
+  };
+
+  const gameplayStatePayload = {
+    scenario_id: scenarioId,
+    revision: 0,
+    cards: { usage_log: [] },
+    betting: { bets: [] },
+    archive: { key_moments: [], branch_snapshots: [] },
+  };
+
+  const scenarioRoutePattern = `**/api/scenario/${scenarioId}`;
+  const directorRoutePattern = `**/api/campaign/scenario/${scenarioId}/director-state`;
+  const gameplayRoutePattern = `**/api/campaign/scenario/${scenarioId}/gameplay-state`;
+  const predictRoutePattern = `**/api/scenario/${scenarioId}/predict`;
+
+  await page.addInitScript(({ fixtureScenarioId, fixtureChildBranchId, fixtureChildBranchTitle }) => {
+    const NativeWebSocket = window.WebSocket;
+
+    class FixtureWebSocket {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+
+      constructor(url, protocols) {
+        this.url = String(url);
+        this.protocol = "";
+        this.extensions = "";
+        this.readyState = FixtureWebSocket.CONNECTING;
+        this.bufferedAmount = 0;
+        this.binaryType = "blob";
+        this.onopen = null;
+        this.onmessage = null;
+        this.onerror = null;
+        this.onclose = null;
+        this._listeners = new Map();
+        this._timers = [];
+
+        if (!this.url.endsWith(`/ws/scenario/${fixtureScenarioId}`)) {
+          return new NativeWebSocket(url, protocols);
+        }
+
+        this._schedule(() => {
+          this.readyState = FixtureWebSocket.OPEN;
+          this._emit("open", new Event("open"));
+        }, 20);
+
+        const events = [
+          {
+            type: "status",
+            data: { status: "simulating", hierarchical: false },
+          },
+          {
+            type: "agent_speak_start",
+            data: {
+              agent: "Review Chair",
+              agent_id: "fixture-agent-1",
+              branch: fixtureChildBranchId,
+              round: 1,
+            },
+          },
+          {
+            type: "branch_fork",
+            data: {
+              parent: "fixture-root-placeholder",
+              reason: "Late branch list for prediction modal validation.",
+              children: [
+                {
+                  id: fixtureChildBranchId,
+                  title: fixtureChildBranchTitle,
+                  description: "A branch delivered after the modal opened.",
+                  fork_round: 1,
+                  probability: 0.61,
+                },
+              ],
+            },
+          },
+          {
+            type: "simulation_done",
+          },
+        ];
+        const eventDelays = [60, 180, 800, 1100];
+
+        events.forEach((payload, index) => {
+          this._schedule(() => {
+            if (this.readyState !== FixtureWebSocket.OPEN) return;
+            this._emit(
+              "message",
+              new MessageEvent("message", {
+                data: JSON.stringify({
+                  ...payload,
+                  meta: {
+                    stream_id: fixtureScenarioId,
+                    sequence: index + 1,
+                    event_id: `${fixtureScenarioId}:${index + 1}`,
+                    manager_instance_id: "fixture-predict-late-branches",
+                    emitted_at: new Date().toISOString(),
+                  },
+                }),
+              }),
+            );
+          }, eventDelays[index] ?? (180 * (index + 1)));
+        });
+      }
+
+      _schedule(fn, delay) {
+        const timer = window.setTimeout(fn, delay);
+        this._timers.push(timer);
+      }
+
+      _emit(type, event) {
+        const handler = this[`on${type}`];
+        if (typeof handler === "function") {
+          handler.call(this, event);
+        }
+        const listeners = this._listeners.get(type) || [];
+        for (const listener of listeners) {
+          listener.call(this, event);
+        }
+      }
+
+      addEventListener(type, listener) {
+        const list = this._listeners.get(type) || [];
+        list.push(listener);
+        this._listeners.set(type, list);
+      }
+
+      removeEventListener(type, listener) {
+        const list = this._listeners.get(type) || [];
+        this._listeners.set(type, list.filter((entry) => entry !== listener));
+      }
+
+      send() {}
+
+      close(code = 1000, reason = "fixture closed") {
+        if (this.readyState === FixtureWebSocket.CLOSED) return;
+        this.readyState = FixtureWebSocket.CLOSING;
+        for (const timer of this._timers) {
+          window.clearTimeout(timer);
+        }
+        this._timers = [];
+        this.readyState = FixtureWebSocket.CLOSED;
+        this._emit("close", new CloseEvent("close", { code, reason, wasClean: true }));
+      }
+    }
+
+    window.WebSocket = FixtureWebSocket;
+  }, {
+    fixtureScenarioId: scenarioId,
+    fixtureChildBranchId: childBranchId,
+    fixtureChildBranchTitle: childBranchTitle,
+  });
+
+  await page.route(scenarioRoutePattern, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(scenarioPayload),
+    });
+  });
+  await page.route(directorRoutePattern, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(directorStatePayload),
+    });
+  });
+  await page.route(gameplayRoutePattern, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(gameplayStatePayload),
+    });
+  });
+  await page.route(predictRoutePattern, async (route) => {
+    capturedPredictionRequest = JSON.parse(route.request().postData() ?? "{}");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "fixture-prediction-1",
+        scenario_id: scenarioId,
+        user_name: "Late Branch Bot",
+        prediction_text: capturedPredictionRequest?.prediction_text ?? "",
+        confidence: capturedPredictionRequest?.confidence ?? 0.5,
+        score: null,
+        score_reason: null,
+        created_at: new Date().toISOString(),
+      }),
+    });
+  });
+
+  try {
+    await page.goto(`${args.baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+    await waitForAutomation(
+      page,
+      (payload) => payload.page?.kind === "simulation" && payload.page?.controls?.can_open_prediction,
+      10000,
+      "fixture simulation page",
+    );
+
+    await page.getByRole("button", { name: /预测|predict/i }).click();
+    const before = await waitForAutomation(
+      page,
+      (payload) => (
+        payload.page?.controls?.active_modal === "prediction"
+        && payload.page?.controls?.modal_state?.bet_kind === "ending_tone"
+      ),
+      10000,
+      "prediction modal before branches arrive",
+    );
+    await page.locator("#pred-text").fill("Late branches should still become the default branch winner target.");
+    await page.locator("#pred-name").fill("Late Branch Bot");
+    writeJson(path.join(artifactDir, "predict-late-branches-before.json"), before);
+    await saveScreenshot(page, path.join(artifactDir, "predict-late-branches-before.png"));
+
+    const after = await waitForAutomation(
+      page,
+      (payload) => (
+        payload.page?.controls?.active_modal === "prediction"
+        && payload.page?.controls?.modal_state?.bet_kind === "branch_winner"
+        && payload.page?.controls?.modal_state?.target_branch_id === childBranchId
+        && payload.page?.branches?.some((branch) => branch.id === childBranchId)
+      ),
+      15000,
+      "prediction modal after branches arrive",
+    );
+
+    await page.waitForSelector("#pred-branch", { timeout: 10000 });
+    const selectedBranchValue = await page.locator("#pred-branch").inputValue();
+    writeJson(path.join(artifactDir, "predict-late-branches-after.json"), after);
+    await saveScreenshot(page, path.join(artifactDir, "predict-late-branches-after.png"));
+
+    await page.getByRole("button", { name: /提交预测|submit/i }).click();
+    const submitted = await waitForAutomation(
+      page,
+      (payload) => payload.page?.controls?.active_modal === "prediction" && payload.page?.controls?.modal_state?.status === "success",
+      10000,
+      "prediction success after late branches",
+    );
+    const structuredMeta = parseStructuredBetMeta(capturedPredictionRequest?.prediction_text ?? "");
+    writeJson(path.join(artifactDir, "predict-late-branches-submitted.json"), {
+      submitted,
+      request: capturedPredictionRequest,
+      structuredMeta,
+      selectedBranchValue,
+    });
+    await saveScreenshot(page, path.join(artifactDir, "predict-late-branches-submitted.png"));
+
+    return {
+      mode: "predict-late-branches",
+      scenarioId,
+      beforeModalState: before?.page?.controls?.modal_state ?? null,
+      afterModalState: after?.page?.controls?.modal_state ?? null,
+      selectedBranchValue,
+      requestMeta: structuredMeta,
+    };
+  } finally {
+    await page.unroute(scenarioRoutePattern);
+    await page.unroute(directorRoutePattern);
+    await page.unroute(gameplayRoutePattern);
+    await page.unroute(predictRoutePattern);
+  }
+}
+
 async function runResultFlow(page, args) {
   const artifactDir = args.outputDir;
   const scenarioId = args.scenarioId || await pickDoneScenarioFromHistory(page, args.baseUrl);
@@ -339,6 +684,8 @@ async function main() {
     let result;
     if (args.mode === "predict") {
       result = await runPredictFlow(page, args);
+    } else if (args.mode === "predict-late-branches") {
+      result = await runPredictLateBranchesFlow(page, args);
     } else if (args.mode === "result") {
       result = await runResultFlow(page, args);
     } else {

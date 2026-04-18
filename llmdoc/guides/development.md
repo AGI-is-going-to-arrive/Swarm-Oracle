@@ -179,6 +179,30 @@ npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.t
   - `<dialog>.showModal()` 缺失时的 `AgentProfileModal` 降级
   - 关键 CSS token / 高流量页面表面的 sRGB / rgba fallback
 
+### PredictionModal 动态分支回归
+
+```bash
+cd frontend
+npm test -- --run src/components/PredictionModal.test.tsx src/pages/SimulationView.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+```
+
+如果要补一条真实浏览器 fixture：
+
+```bash
+cd frontend
+npm run preview -- --host 127.0.0.1 --port 18930
+npm run e2e:predict:late-branches -- --url http://127.0.0.1:18930 --headless
+```
+
+说明：
+
+- 这组回归当前主要看：
+  - modal 打开时 `branches=[]`，后续 branch list 晚到后会自动切回 `branch_winner`
+  - 当前选中的 branch 失效时会自动回退到仍然有效的默认目标
+  - 如果用户已经改选了一个仍然有效的 branch，提交时会继续用用户当前选择
+  - 真实浏览器 fixture 会同时校验 automation state、DOM 选中值，以及提交请求里的 structured bet `targetId / targetLabel`
+
 ### Agent Conversation / Node Conversation 定向回归
 
 ```bash
@@ -199,6 +223,7 @@ source .venv/bin/activate
 python -m pytest \
   tests/test_agent_conversation.py::TestDeleteAbortPath::test_abort_active_turn_returns_204_like_payload \
   tests/test_api.py::TestDeleteScenario::test_delete_scenario_swallow_signal_failures_after_commit \
+  tests/test_conversation.py::TestAbort::test_preclaimed_turn_abort_signal_before_first_frame_finalizes_aborted \
   tests/test_conversation.py::TestSSEStream::test_scenario_deleted_before_first_iteration_emits_terminal_error \
   tests/test_conversation.py::TestAbort::test_cancel_and_next_chunk_same_tick_prefers_cancel -q
 ```
@@ -551,6 +576,7 @@ npm run release:signoff -- --url http://127.0.0.1:18930 --headless
   - `perf_budgets`
   - `phase3_graph_preflight`
   - `script_contracts`
+  - `prediction_modal_late_branches`
   - graph default / `zh-CN` smoke（`phase3-batch-a`、`phase3-batch-b`）
   - graph Firefox / WebKit desktop smoke（`phase3-batch-a`、`phase3-batch-b`）
   - `node_conversation_live`

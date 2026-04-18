@@ -785,6 +785,16 @@ class TestAbort:
         with pytest.raises(StopAsyncIteration):
             await anext(iterator)
 
+        with Session(engine) as session:
+            row = session.get(AgentConversationTurn, assistant_turn.id)
+            refreshed_thread = session.get(AgentConversationThread, thread.id)
+            assert row is not None
+            assert row.status == "aborted"
+            assert row.error_code == "USER_ABORTED"
+            assert refreshed_thread is not None
+            assert refreshed_thread.active_turn_id is None
+            assert refreshed_thread.latest_status == "aborted"
+
     @pytest.mark.asyncio
     async def test_preclaimed_turn_with_pre_set_cancel_event_emits_no_sse(self, client):
         engine = get_engine()
@@ -824,6 +834,138 @@ class TestAbort:
             cancel_event=cancel_event,
             _llm_stream_factory=_stub_stream,
         )
+
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+
+        with Session(engine) as session:
+            row = session.get(AgentConversationTurn, assistant_turn.id)
+            refreshed_thread = session.get(AgentConversationThread, thread.id)
+            assert row is not None
+            assert row.status == "aborted"
+            assert row.error_code == "USER_ABORTED"
+            assert refreshed_thread is not None
+            assert refreshed_thread.active_turn_id is None
+            assert refreshed_thread.latest_status == "aborted"
+
+    @pytest.mark.asyncio
+    async def test_preclaimed_turn_abort_signal_before_first_frame_finalizes_aborted(
+        self,
+        client,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(sid, content="bootstrap claim"),
+        ).json()
+
+        bootstrap = claim_bootstrap_start_stream_state(
+            thread_id=start["thread_id"],
+            owner_user_id=None,
+            user_content="bootstrap claim",
+        )
+        assert bootstrap is not None
+        thread, bootstrap_user_turn, assistant_turn = bootstrap
+
+        async def _stub_stream(*_args, **_kwargs):
+            yield "alpha"
+
+        original_load_turn_status = conversation_service._load_turn_status
+        signalled = False
+
+        def _load_turn_status_with_abort(session, turn_id: str):
+            nonlocal signalled
+            if turn_id == assistant_turn.id and not signalled:
+                signalled = True
+                assert conversation_service.abort_turn(
+                    thread_id=thread.id,
+                    turn_id=assistant_turn.id,
+                    owner_user_id=None,
+                ) is True
+            return original_load_turn_status(session, turn_id)
+
+        monkeypatch.setattr(
+            conversation_service,
+            "_load_turn_status",
+            _load_turn_status_with_abort,
+        )
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=thread.id,
+            assistant_turn_id=assistant_turn.id,
+            new_user_content=bootstrap_user_turn.content or "bootstrap claim",
+            history_exclude_turn_id=bootstrap_user_turn.id,
+            assistant_turn_preclaimed=True,
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url=None,
+                model="test-model",
+                disable_user_quota=False,
+            ),
+            _llm_stream_factory=_stub_stream,
+        )
+
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+
+        assert signalled is True
+        with Session(engine) as session:
+            row = session.get(AgentConversationTurn, assistant_turn.id)
+            refreshed_thread = session.get(AgentConversationThread, thread.id)
+            assert row is not None
+            assert row.status == "aborted"
+            assert row.error_code == "USER_ABORTED"
+            assert refreshed_thread is not None
+            assert refreshed_thread.active_turn_id is None
+            assert refreshed_thread.latest_status == "aborted"
+
+    @pytest.mark.asyncio
+    async def test_preclaimed_turn_scenario_deleted_before_first_iteration_emits_terminal_error(
+        self,
+        client,
+    ):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(sid, content="bootstrap claim"),
+        ).json()
+
+        bootstrap = claim_bootstrap_start_stream_state(
+            thread_id=start["thread_id"],
+            owner_user_id=None,
+            user_content="bootstrap claim",
+        )
+        assert bootstrap is not None
+        thread, bootstrap_user_turn, assistant_turn = bootstrap
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=thread.id,
+            assistant_turn_id=assistant_turn.id,
+            new_user_content=bootstrap_user_turn.content or "bootstrap claim",
+            history_exclude_turn_id=bootstrap_user_turn.id,
+            assistant_turn_preclaimed=True,
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url=None,
+                model="test-model",
+                disable_user_quota=False,
+            ),
+        )
+
+        delete_resp = client.delete(f"/api/scenario/{sid}")
+        assert delete_resp.status_code == 200
+
+        terminal = await anext(iterator)
+        assert terminal["event"] == "turn_error"
+        assert terminal["data"]["turn_id"] == assistant_turn.id
+        assert terminal["data"]["thread_id"] == thread.id
+        assert terminal["data"]["code"] == "SCENARIO_DELETED"
+        assert terminal["data"]["status"] == "scenario_deleted"
 
         with pytest.raises(StopAsyncIteration):
             await anext(iterator)
