@@ -77,7 +77,8 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 ```
 
 - Latest local rerun in this session:
-  - `python -m pytest tests/test_team_review_round6_fixes.py tests/test_conversation.py tests/test_api.py -k 'C1 or C2 or scenario_deleted or abort or delete_integrity_guard_does_not_signal_conversation_cancel_before_commit or delete_helpers_are_reexported' -q`: `21 passed`
+  - `python -m pytest tests/test_agent_conversation.py tests/test_conversation.py tests/test_api.py -q`: `215 passed`
+  - `python -m pytest -q`: `2248 passed, 2 skipped`
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
 ## Runtime Notes
@@ -104,6 +105,7 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - `app/api/ws.py` now also exposes `/ws/agent-conversation/{thread_id}`; it reuses the shared first-frame auth / pending-auth budget path, returns `4404` when the feature is off or the thread is missing, and keeps capacity scoped to the owning scenario instead of multiplying by thread count.
 - `scenario_deletion.py` + `conversation_service.py` now mark active node-conversation turns as `scenario_deleted` inside the delete transaction, stage the affected turn ids in `session.info`, and let the delete endpoint drain that list only after commit; rollback no longer leaks a fake terminal delete event to the client.
 - `DELETE /api/conversation/{thread_id}/active` now prefers waking the live stream task before falling back to direct CAS, so already-streamed partial text is not dropped by a route-level race.
+- Bootstrap-preclaimed node conversation turns now re-check the row status and cancel flag before the first `turn_started`; if the turn was already aborted they stay silent, and if the scenario was deleted they emit the final `SCENARIO_DELETED` error directly instead of leaking a stale start event.
 - Conversation SSE terminal fallback now emits `turn_error(code=LLM_5XX)` for generic provider-side failures instead of the older `STREAM_FAILED` bucket.
 - Ending-room background generation now also holds a runtime-lock heartbeat; a lost lease, a refresh error, or an expired local lease fails closed and marks the room as `error` instead of continuing to write turns/results after the lock is gone.
 - `POST /api/debate/{id}/predict` now treats counterplay WebSocket broadcast as best-effort after persistence; a broadcast failure logs a warning but does not turn a saved prediction into a fake `500`.

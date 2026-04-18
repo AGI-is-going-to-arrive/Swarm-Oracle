@@ -178,7 +178,19 @@ def _signal_turn_cancel_event(
         return False
     if reason is not None:
         current.reason = reason
-    current.loop.call_soon_threadsafe(current.event.set)
+    try:
+        current.loop.call_soon_threadsafe(current.event.set)
+    except RuntimeError as exc:
+        with _ACTIVE_TURN_CANCEL_EVENTS_LOCK:
+            latest = _ACTIVE_TURN_CANCEL_EVENTS.get(turn_id)
+            if latest is current:
+                _ACTIVE_TURN_CANCEL_EVENTS.pop(turn_id, None)
+        logger.warning(
+            "agent_conversation.cancel_signal_failed turn_id=%s error=%s",
+            turn_id,
+            redact_byok(str(exc)),
+        )
+        return False
     return True
 
 
@@ -937,7 +949,14 @@ def mark_scenario_conversations_as_deleted(
 def signal_scenario_deleted_turns(turn_ids: list[str]) -> None:
     """Wake in-flight SSE streams after the delete transaction commits."""
     for turn_id in turn_ids:
-        _signal_turn_cancel_event(turn_id, reason="scenario_deleted")
+        try:
+            _signal_turn_cancel_event(turn_id, reason="scenario_deleted")
+        except Exception as exc:  # noqa: BLE001 - post-commit wakeup is best-effort
+            logger.warning(
+                "agent_conversation.scenario_deleted_signal_failed turn_id=%s error=%s",
+                turn_id,
+                redact_byok(str(exc)),
+            )
 
 
 # ── Streaming ───────────────────────────────────────────
@@ -1003,12 +1022,18 @@ async def _stream_with_cancel_signal(
             return_when=asyncio.FIRST_COMPLETED,
         )
 
-        if cancel_wait_task in done and next_chunk_task not in done:
-            next_chunk_task.cancel()
-            try:
-                await next_chunk_task
-            except (asyncio.CancelledError, StopAsyncIteration):
-                pass
+        if cancel_wait_task in done:
+            if next_chunk_task not in done:
+                next_chunk_task.cancel()
+                try:
+                    await next_chunk_task
+                except (asyncio.CancelledError, StopAsyncIteration):
+                    pass
+            else:
+                try:
+                    next_chunk_task.result()
+                except StopAsyncIteration:
+                    pass
             raise asyncio.CancelledError
 
         cancel_wait_task.cancel()
@@ -1064,35 +1089,53 @@ async def stream_assistant_turn(
             # Hydrate thread + assistant turn + history in a short-lived session.
             history: list[AgentConversationTurn] = []
             quota_owner: str | None = None
-            with Session(engine) as session:
-                thread = load_conversation_thread_for_owner(session, thread_id, owner_user_id)
-                assistant_turn = session.get(AgentConversationTurn, assistant_turn_id)
-                if (
-                    assistant_turn is None
-                    or assistant_turn.thread_id != thread.id
-                    or assistant_turn.role != "assistant"
-                ):
-                    raise api_error(404, "TURN_NOT_FOUND", "Assistant turn not found")
+            try:
+                with Session(engine) as session:
+                    thread = load_conversation_thread_for_owner(session, thread_id, owner_user_id)
+                    assistant_turn = session.get(AgentConversationTurn, assistant_turn_id)
+                    if (
+                        assistant_turn is None
+                        or assistant_turn.thread_id != thread.id
+                        or assistant_turn.role != "assistant"
+                    ):
+                        raise api_error(404, "TURN_NOT_FOUND", "Assistant turn not found")
 
-                quota_owner = thread.owner_user_id
+                    quota_owner = thread.owner_user_id
 
-                # HC-31: quota key authority = thread.owner_user_id (never body).
-                history = list(
-                    session.exec(
-                        select(AgentConversationTurn)
-                        .where(
-                            AgentConversationTurn.thread_id == thread.id,
-                            AgentConversationTurn.id != assistant_turn.id,
-                        )
-                        .order_by(AgentConversationTurn.sequence.asc())
-                    ).all()
-                )
-                if history_exclude_turn_id is not None:
-                    history = [
-                        turn
-                        for turn in history
-                        if turn.id != history_exclude_turn_id
-                    ]
+                    # HC-31: quota key authority = thread.owner_user_id (never body).
+                    history = list(
+                        session.exec(
+                            select(AgentConversationTurn)
+                            .where(
+                                AgentConversationTurn.thread_id == thread.id,
+                                AgentConversationTurn.id != assistant_turn.id,
+                            )
+                            .order_by(AgentConversationTurn.sequence.asc())
+                        ).all()
+                    )
+                    if history_exclude_turn_id is not None:
+                        history = [
+                            turn
+                            for turn in history
+                            if turn.id != history_exclude_turn_id
+                        ]
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                code = detail.get("code") if isinstance(detail, dict) else None
+                if code in {"THREAD_NOT_FOUND", "TURN_NOT_FOUND"}:
+                    yield {
+                        "event": "turn_error",
+                        "data": {
+                            "turn_id": assistant_turn_id,
+                            "thread_id": thread_id,
+                            "status": "scenario_deleted",
+                            "model": overrides.model or settings.LLM_MODEL_NAME,
+                            "code": "SCENARIO_DELETED",
+                            "message": _map_error_message("SCENARIO_DELETED"),
+                        },
+                    }
+                    return
+                raise
 
             prompt = _build_prompt(
                 thread=thread,
@@ -1140,6 +1183,40 @@ async def stream_assistant_turn(
                         ).bindparams(thread_id=thread_id, now=now)
                     )
                     session.commit()
+
+            with Session(engine) as session:
+                current_status = _load_turn_status(session, assistant_turn_id)
+            if current_status is None or current_status == "scenario_deleted":
+                yield {
+                    "event": "turn_error",
+                    "data": {
+                        "turn_id": assistant_turn_id,
+                        "thread_id": thread_id,
+                        "sequence": assistant_turn.sequence,
+                        "status": "scenario_deleted",
+                        "model": overrides.model or settings.LLM_MODEL_NAME,
+                        "code": "SCENARIO_DELETED",
+                        "message": _map_error_message("SCENARIO_DELETED"),
+                    },
+                }
+                return
+            if current_status != "streaming":
+                return
+            if stream_cancel_event.is_set():
+                if _get_turn_cancel_reason(assistant_turn_id) == "scenario_deleted":
+                    yield {
+                        "event": "turn_error",
+                        "data": {
+                            "turn_id": assistant_turn_id,
+                            "thread_id": thread_id,
+                            "sequence": assistant_turn.sequence,
+                            "status": "scenario_deleted",
+                            "model": overrides.model or settings.LLM_MODEL_NAME,
+                            "code": "SCENARIO_DELETED",
+                            "message": _map_error_message("SCENARIO_DELETED"),
+                        },
+                    }
+                return
 
             # Tell the client we're about to start only after the turn has been
             # claimed, so a duplicate bootstrap request cannot produce a second
@@ -1376,7 +1453,7 @@ def abort_turn(
             session,
             turn_id=turn_id,
             new_status="aborted",
-            expected_from=("streaming",),
+            expected_from=("streaming", "pending"),
             content=turn.content or "",
             error_code="USER_ABORTED",
             model=turn.model,

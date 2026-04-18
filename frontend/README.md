@@ -76,7 +76,7 @@ React + TypeScript frontend for SwarmOracle.
 - `orgContext.ts / useOrgContext.ts`
   session-scoped `Organization ID` source of truth used by `InputView` and the API client; blank values remove the header instead of sending an empty `X-Org-Id`
 - `NodeConversationSheet.tsx`
-  sheet accessibility now relies on `SheetTitle / SheetDescription` instead of manual aria wiring, so Radix no longer warns about missing description metadata; transport / SSE parsing now sit behind a local hook, unmount abort is explicit, multiline `data:` frames no longer get dropped, and local rerenders no longer re-register the streaming bubble
+  sheet accessibility now relies on `SheetTitle / SheetDescription` instead of manual aria wiring, so Radix no longer warns about missing description metadata; transport / SSE parsing now sit behind a local hook, unmount abort is explicit, multiline `data:` frames no longer get dropped, and local rerenders no longer re-register the streaming bubble. On desktop, when a graph detail panel is open beside the sidecar, detail close / pane click / detail-focused `Escape` now dismiss the detail panel only; the sidecar stays open, and closing detail after switching nodes restores focus to the latest trigger
 - `useNodeConversationTransport.ts`
   local transport hook for `NodeConversationSheet`; owns `/start` + `/turn`, AbortController cleanup, and SSE frame parsing
 - `GlobalOfflineBanner.tsx`
@@ -132,9 +132,11 @@ npm run build:spike:phaser-custom
 
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Latest scoped reruns in this session:
-  - frontend targeted vitest covering `NodeConversationSheet / GlobalOfflineBanner / performance budgets`: `42 passed`
+  - frontend targeted vitest covering `NodeConversationSheet / CausalReviewView` desktop sidecar regressions: `86 passed`
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
+  - `npm run build`: pass
   - fresh local live browser rerun: `node-conversation-live` passed
+  - focused desktop browser spot-check for graph detail + sidecar: pass
 - The default signoff target remains:
   - Chromium desktop/mobile
   - desktop Firefox / WebKit scoped regression

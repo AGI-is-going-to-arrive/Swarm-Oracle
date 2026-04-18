@@ -39,6 +39,7 @@ import {
 // ── Custom node type (stable reference) ────────────────────
 
 const nodeTypes = { graphCard: GraphNodeCard };
+const NODE_DETAIL_SHEET_CLEARANCE_PX = 464;
 
 // ── Data Types ──────────────────────────────────────────────
 
@@ -459,6 +460,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
   const exportRootId = `argument-map-${useId().replace(/:/g, '-')}`;
   const reactFlowRef = useRef<{ fitView?: (options?: { padding?: number; duration?: number }) => void } | null>(null);
   const latestRequestIdRef = useRef(0);
+  const detailRestoreFocusRef = useRef<HTMLElement | null>(null);
   const encodedDebateId = encodeURIComponent(debateId);
 
   const translate = useCallback((key: string, fallback: string) => (
@@ -635,9 +637,14 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     && Boolean(data)
     && (layoutNodes.length > 0 || layoutEdges.length > 0);
 
-  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
+  const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
     const raw = rawNodeMap.get(node.id);
     const unit = unitByNodeId.get(node.id) ?? unitById.get(node.id);
+    const triggerElement = event.target instanceof Element
+      ? event.target.closest<HTMLElement>('[data-graph-node-card="true"]')
+      : null;
+    const fallbackTrigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    detailRestoreFocusRef.current = triggerElement ?? fallbackTrigger;
     setSelectedNode({
       id: node.id,
       label: raw?.label ?? unit?.text ?? node.id,
@@ -858,9 +865,11 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
               </div>
               <NodeDetailPanel
                 panelId="argument-node-detail-panel"
-                key={selectedNode?.id ?? 'argument-map-closed'}
-                node={selectedNode}
-                onClose={() => setSelectedNode(null)}
+              key={selectedNode?.id ?? 'argument-map-closed'}
+              node={selectedNode}
+              onClose={() => setSelectedNode(null)}
+              desktopRightOffset={sheetState.open && !isCompactViewport ? NODE_DETAIL_SHEET_CLEARANCE_PX : 8}
+              restoreFocusTarget={detailRestoreFocusRef.current}
               />
             </div>
           </>

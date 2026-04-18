@@ -127,6 +127,28 @@ describe('NodeConversationSheet — responsive', () => {
     expect(getByTestId('node-conversation-sheet').getAttribute('data-mobile')).toBe('false');
   });
 
+  it('desktop outside interaction does not dismiss the persistent sidecar', () => {
+    const onOpenChange = vi.fn();
+    const { getByTestId } = render(
+      <div>
+        <button type="button" data-testid="outside-action">Outside action</button>
+        <NodeConversationSheet
+          open
+          onOpenChange={onOpenChange}
+          threadId="thread-1"
+          scenarioId="scen-1"
+          identityId="id-1"
+        />
+      </div>,
+    );
+
+    expect(getByTestId('node-conversation-sheet').getAttribute('data-mobile')).toBe('false');
+
+    fireEvent.pointerDown(getByTestId('outside-action'));
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   it('mobile viewport: data-mobile=true', () => {
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: /max-width: 768/.test(q),

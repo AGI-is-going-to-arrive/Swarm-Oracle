@@ -240,6 +240,25 @@ const createDeferredResponse = () => {
   return { promise, resolve, reject };
 };
 
+function makeConversationSseResponse(frames: string[]): Response {
+  const encoder = new TextEncoder();
+  const chunks = frames.map((frame) => encoder.encode(frame));
+  let index = 0;
+  return {
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: vi.fn(async () => {
+          if (index >= chunks.length) return { done: true, value: undefined };
+          const value = chunks[index];
+          index += 1;
+          return { done: false, value };
+        }),
+      }),
+    },
+  } as unknown as Response;
+}
+
 const installLegacyMatchMedia = (initialMatches: boolean) => {
   let matches = initialMatches;
   const listeners = new Set<(event: MediaQueryListEvent) => void>();
@@ -1491,8 +1510,297 @@ describe('CausalReviewView', () => {
 
       await user.click(nodeButton);
 
+      const detailPanel = await screen.findByTestId('node-detail-panel');
       const sheet = await screen.findByTestId('node-conversation-sheet');
+      expect(detailPanel).toHaveStyle({ right: '464px' });
       expect(sheet).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps NodeConversationSheet open when the detail panel close button is pressed', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-sheet',
+          available_branches: ['br1'],
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'Node click target', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+      renderView();
+      await user.click(await screen.findByTestId('rf-node-n1'));
+
+      const detailPanel = await screen.findByTestId('node-detail-panel');
+      const sheet = await screen.findByTestId('node-conversation-sheet');
+      const closeButton = detailPanel.querySelector('button[aria-label="Close"]');
+      expect(closeButton).not.toBeNull();
+
+      await user.click(closeButton as HTMLButtonElement);
+
+      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
+      expect(sheet).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps NodeConversationSheet open when clicking the graph pane', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-sheet',
+          available_branches: ['br1'],
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'Node click target', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+      renderView();
+      await user.click(await screen.findByTestId('rf-node-n1'));
+      const sheet = await screen.findByTestId('node-conversation-sheet');
+
+      await user.click(screen.getByTestId('rf-pane'));
+
+      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
+      expect(sheet).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('pressing Escape inside the detail panel closes detail before the sidecar', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-sheet',
+          available_branches: ['br1'],
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'Node click target', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+      renderView();
+      await user.click(await screen.findByTestId('rf-node-n1'));
+
+      const detailPanel = await screen.findByTestId('node-detail-panel');
+      const sheet = await screen.findByTestId('node-conversation-sheet');
+      const closeButton = detailPanel.querySelector('button[aria-label="Close"]');
+      expect(closeButton).not.toBeNull();
+      (closeButton as HTMLButtonElement).focus();
+
+      await user.keyboard('{Escape}');
+
+      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
+      expect(sheet).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('restores focus to the latest node trigger after switching nodes while the sidecar stays open', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-sheet',
+          available_branches: ['br1'],
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'Node A', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+            { id: 'n2', key: 'e2', type: 'event', label: 'Node B', round: 2, payload: { agent_id: 'beta', branch_id: 'br1' } },
+          ],
+          edges: [
+            { id: 'edge-1', source: 'n1', target: 'n2', type: 'causes' },
+          ],
+        }),
+      } as Response);
+
+      renderView();
+      await user.click(await screen.findByTestId('rf-node-n1'));
+      const nodeB = await screen.findByTestId('rf-node-n2');
+
+      await user.click(nodeB);
+
+      const detailPanel = await screen.findByTestId('node-detail-panel');
+      const closeButton = detailPanel.querySelector('button[aria-label="Close"]');
+      expect(closeButton).not.toBeNull();
+
+      await user.click(closeButton as HTMLButtonElement);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('node-detail-panel')).toBeNull();
+        expect(screen.getByTestId('node-conversation-sheet')).toBeInTheDocument();
+        expect(nodeB).toHaveFocus();
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('starts node conversation with the real scenario id and a null identity id', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            id: 'g-sheet',
+            available_branches: ['br1'],
+            nodes: [
+              { id: 'n1', key: 'e1', type: 'event', label: 'Node click target', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+            ],
+            edges: [],
+          }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ thread_id: 'thread-causal-1' }),
+        } as Response)
+        .mockResolvedValueOnce(
+          makeConversationSseResponse([
+            'event: turn_started\ndata: {"turn_id":"turn-causal-1","thread_id":"thread-causal-1","sequence":2}\n\n',
+            'event: turn_token_delta\ndata: {"turn_id":"turn-causal-1","delta":"hello"}\n\n',
+            'event: turn_completed\ndata: {"turn_id":"turn-causal-1","sequence":2,"status":"committed"}\n\n',
+          ]),
+        );
+
+      renderView();
+      await user.click(await screen.findByTestId('rf-node-n1'));
+      await user.type(await screen.findByTestId('node-conversation-input'), 'why this edge');
+      await user.click(screen.getByTestId('node-conversation-send'));
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledWith(
+          '/api/conversation/start',
+          expect.objectContaining({ method: 'POST' }),
+        );
+      });
+      const startCall = fetchSpy.mock.calls.find(([url]) => url === '/api/conversation/start');
+      expect(startCall).toBeDefined();
+      const [, startOptions] = startCall as [string, RequestInit];
+      const startBody = JSON.parse(String(startOptions.body));
+      expect(startBody.scenario_id).toBe('test-id');
+      expect(startBody.agent_identity_id).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }

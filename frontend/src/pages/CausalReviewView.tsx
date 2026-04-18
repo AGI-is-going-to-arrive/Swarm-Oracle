@@ -41,6 +41,7 @@ import {
 // ── Custom node type (stable reference) ────────────────────
 
 const nodeTypes = { graphCard: GraphNodeCard };
+const NODE_DETAIL_SHEET_CLEARANCE_PX = 464;
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -299,12 +300,12 @@ export function CausalReviewView() {
   const [sheetState, setSheetState] = useState<{
     open: boolean;
     scenarioId: string;
-    identityId: string;
+    identityId: string | null;
     origin: { nodeId: string; nodeType: string; excerpt?: string };
   }>({
     open: false,
     scenarioId: '',
-    identityId: '',
+    identityId: null,
     origin: { nodeId: '', nodeType: '' },
   });
   // C5: Agent search
@@ -314,6 +315,7 @@ export function CausalReviewView() {
   const reactFlowRef = useRef<{ fitView?: (options?: { padding?: number; duration?: number }) => void } | null>(null);
   const pendingFitSignatureRef = useRef<string | null>(null);
   const latestRequestIdRef = useRef(0);
+  const detailRestoreFocusRef = useRef<HTMLElement | null>(null);
   const encodedScenarioId = id ? encodeURIComponent(id) : '';
 
   const translate = useCallback((key: string, fallback: string) => (
@@ -610,9 +612,10 @@ export function CausalReviewView() {
     'handle.ariaLabel': t('common.graph_handle', 'Graph handle'),
   }), [t]);
 
-  const openNodeDetail = useCallback((nodeId: string) => {
+  const openNodeDetail = useCallback((nodeId: string, triggerElement?: HTMLElement | null) => {
     const raw = rawNodeMap.get(nodeId);
     if (!raw) return;
+    detailRestoreFocusRef.current = triggerElement?.isConnected ? triggerElement : null;
     setSelectedNode({
       id: raw.id,
       label: raw.label || raw.key,
@@ -624,13 +627,17 @@ export function CausalReviewView() {
     setSheetState({
       open: true,
       scenarioId: id ?? '',
-      identityId: raw.id,
+      identityId: null,
       origin: { nodeId: raw.id, nodeType: raw.type, excerpt: raw.label || raw.key },
     });
   }, [rawNodeMap, id]);
 
-  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
-    openNodeDetail(node.id);
+  const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
+    const triggerElement = event.target instanceof Element
+      ? event.target.closest<HTMLElement>('[data-graph-node-card="true"]')
+      : null;
+    const fallbackTrigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    openNodeDetail(node.id, triggerElement ?? fallbackTrigger);
   }, [openNodeDetail]);
 
   // C3: Background click resets highlight + closes detail panel
@@ -882,7 +889,7 @@ export function CausalReviewView() {
                 <div key={n.id} role="listitem" style={{ fontSize: '0.8rem', color: '#ccc', padding: '2px 0' }}>
                   <button
                     type="button"
-                    onClick={() => openNodeDetail(n.id)}
+                    onClick={(event) => openNodeDetail(n.id, event.currentTarget)}
                     style={{
                       width: '100%',
                       textAlign: 'left',
@@ -904,6 +911,7 @@ export function CausalReviewView() {
               key={selectedNode?.id ?? 'causal-fallback-closed'}
               node={selectedNode}
               onClose={() => setSelectedNode(null)}
+              restoreFocusTarget={detailRestoreFocusRef.current}
             />
           </div>
         ) : (
@@ -965,6 +973,8 @@ export function CausalReviewView() {
               key={selectedNode?.id ?? 'causal-graph-closed'}
               node={selectedNode}
               onClose={() => setSelectedNode(null)}
+              desktopRightOffset={sheetState.open && !isCompactViewport ? NODE_DETAIL_SHEET_CLEARANCE_PX : 8}
+              restoreFocusTarget={detailRestoreFocusRef.current}
             />
           </div>
         )}
@@ -990,7 +1000,7 @@ export function CausalReviewView() {
           <NodeConversationSheet
             open={sheetState.open}
             onOpenChange={(next) => setSheetState((prev) => ({ ...prev, open: next }))}
-            threadId={null}
+            onClose={() => setSheetState((prev) => ({ ...prev, open: false }))}
             scenarioId={sheetState.scenarioId}
             identityId={sheetState.identityId}
             origin={sheetState.origin}

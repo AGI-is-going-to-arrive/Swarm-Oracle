@@ -184,11 +184,23 @@ npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.t
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_team_review_round6_fixes.py tests/test_conversation.py tests/test_api.py -k 'C1 or C2 or scenario_deleted or abort or delete_integrity_guard_does_not_signal_conversation_cancel_before_commit or delete_helpers_are_reexported' -q
+python -m pytest tests/test_agent_conversation.py tests/test_team_review_round6_fixes.py tests/test_conversation.py tests/test_api.py -q
 
 cd ../frontend
-npm test -- --run src/components/shared/GlobalOfflineBanner.test.tsx src/components/shared/GlobalOfflineBanner.ssr.test.tsx src/components/kg/NodeConversationSheet.test.tsx src/components/kg/NodeConversationSheet.ref-stability.test.tsx
+npm test -- --run src/components/shared/GlobalOfflineBanner.test.tsx src/components/shared/GlobalOfflineBanner.ssr.test.tsx src/components/kg/NodeConversationSheet.test.tsx src/components/kg/NodeConversationSheet.ref-stability.test.tsx src/pages/CausalReviewView.test.tsx src/hooks/useAgentConversation.test.ts src/hooks/useNodeConversationTransport.test.tsx
 npx tsc --noEmit -p tsconfig.app.json
+```
+
+如果只先卡这轮 `delete / abort / cancel` 四个边界：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest \
+  tests/test_agent_conversation.py::TestDeleteAbortPath::test_abort_active_turn_returns_204_like_payload \
+  tests/test_api.py::TestDeleteScenario::test_delete_scenario_swallow_signal_failures_after_commit \
+  tests/test_conversation.py::TestSSEStream::test_scenario_deleted_before_first_iteration_emits_terminal_error \
+  tests/test_conversation.py::TestAbort::test_cancel_and_next_chunk_same_tick_prefers_cancel -q
 ```
 
 如果要补一条 fresh local live：
@@ -203,12 +215,16 @@ node scripts/e2e-node-conversation-live.mjs desktop --url http://127.0.0.1:18931
 
 - backend 这组回归当前主要看：
   - `WS /ws/agent-conversation/{thread_id}` 的 feature gate、owner freeze 和 scenario 级 pending-auth 容量约束
-  - scenario delete 先 `commit()` 再发 signal，公共 HTTP `/turn` SSE 包装层最终会收到 `turn_error(code=SCENARIO_DELETED)`
-  - 公共 `DELETE /api/conversation/{thread_id}/active` 路径的 `<100ms` abort 断言
+  - scenario delete 先 `commit()` 再发 signal；signal 失败只记 warning，公共 HTTP `/turn` SSE 包装层最终仍会收到 `turn_error(code=SCENARIO_DELETED)`
+  - 公共 `DELETE /api/conversation/{thread_id}/active` 路径既会 abort 活跃流，也会把预留 `pending` assistant turn 收成 `aborted`
+  - bootstrap 预留 turn 在 started 前如果已经被 abort / cancel，不会再补 stale `turn_started`；如果场景已经删掉，会直接收成 `SCENARIO_DELETED`
+  - cancel 和 next chunk 同 tick 完成时会优先 cancel，不再多漏一条 delta
 - frontend 这组回归当前主要看：
   - `GlobalOfflineBanner` 的 WS grace timer 行为和 SSR-safe effect fallback
   - `NodeConversationSheet` 的 unmount abort、multiline SSE frame、bubble ref 稳定性
+  - desktop detail + sidecar 同开时，detail close / pane click / detail-focused `Escape` 都只会收 detail；切到新节点后关 detail，焦点会回到最新 trigger
   - `useNodeConversationTransport` 通过组件合同回归继续覆盖 `/start` + `/turn` 链路
+  - `useAgentConversation` 在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，不再把 ghost 文本重新刷回 bubble 或 aria-live
 
 ### Backend Auth / Provider Safety 定向回归
 
@@ -239,14 +255,24 @@ npm run build
 npm run preview -- --host 127.0.0.1 --port 18930
 ```
 
+如果只复核这轮图谱节点详情 / sidecar 回归：
+
+```bash
+cd frontend
+npm test -- --run src/components/ui/portal-primitives.test.tsx src/components/kg/NodeConversationSheet.test.tsx src/components/NodeDetailPanel.test.tsx src/pages/CausalReviewView.test.tsx src/components/ArgumentMap.test.tsx
+npm run build
+npm run preview -- --host 127.0.0.1 --port 18930
+node scripts/e2e-phase3-batch-a.mjs desktop --url http://127.0.0.1:18930 --headless
+node scripts/e2e-phase3-batch-b.mjs desktop --url http://127.0.0.1:18930 --browser webkit --headless
+```
+
 说明：
 
-- 本轮实测结果：
-  - backend `agent-conversation delete / abort / ws` 定向回归：`21 passed`
-  - frontend `NodeConversationSheet / GlobalOfflineBanner / performance budgets` 定向 vitest：`42 passed`
-  - `npx tsc --noEmit -p tsconfig.app.json` 通过
-  - fresh local live：`node-conversation-live` 通过
-- 这轮 agent-conversation / node-conversation 链路只记录上述本轮实测结果；未复跑的旧 smoke / signoff 结论继续以各自 artifact 为准。
+- 如果要先收图谱节点详情 / sidecar 这条回归，优先跑上面的窄集；过了再决定要不要扩大到 full pytest / full vitest。
+- 当前这条窄集之外，focused browser spot-check 也已经补过一轮：
+  - detail `right: 464px`
+  - detail close / pane click / detail-focused `Escape` 不会再把 sidecar 一起关掉
+  - 切到新节点后关 detail，焦点会回到最新 trigger
 
 ### Resume / P1-9 定向回归
 

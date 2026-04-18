@@ -661,6 +661,40 @@ class TestSSEStream:
             await anext(iterator)
 
     @pytest.mark.asyncio
+    async def test_scenario_deleted_before_first_iteration_emits_terminal_error(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start", json=_default_start_body(sid),
+        ).json()
+        thread_id = start["thread_id"]
+        assistant_turn_id = start["assistant_turn_id"]
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=thread_id,
+            assistant_turn_id=assistant_turn_id,
+            new_user_content="watch delete before first tick",
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url=None,
+                model="test-model",
+                disable_user_quota=False,
+            ),
+        )
+
+        delete_resp = client.delete(f"/api/scenario/{sid}")
+        assert delete_resp.status_code == 200
+
+        terminal = await anext(iterator)
+        assert terminal["event"] == "turn_error"
+        assert terminal["data"]["code"] == "SCENARIO_DELETED"
+        assert terminal["data"]["status"] == "scenario_deleted"
+
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+
+    @pytest.mark.asyncio
     async def test_sse_fallback_does_not_leak_exception_detail(self, caplog):
         async def _boom():
             raise RuntimeError("https://evil?api_key=xxx")
@@ -707,6 +741,124 @@ class TestSSEStream:
 
 
 class TestAbort:
+    @pytest.mark.asyncio
+    async def test_preclaimed_turn_aborted_before_first_iteration_emits_no_sse(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(sid, content="bootstrap claim"),
+        ).json()
+
+        bootstrap = claim_bootstrap_start_stream_state(
+            thread_id=start["thread_id"],
+            owner_user_id=None,
+            user_content="bootstrap claim",
+        )
+        assert bootstrap is not None
+        thread, bootstrap_user_turn, assistant_turn = bootstrap
+
+        async def _stub_stream(*_args, **_kwargs):
+            yield "alpha"
+            yield "beta"
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=thread.id,
+            assistant_turn_id=assistant_turn.id,
+            new_user_content=bootstrap_user_turn.content or "bootstrap claim",
+            history_exclude_turn_id=bootstrap_user_turn.id,
+            assistant_turn_preclaimed=True,
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url=None,
+                model="test-model",
+                disable_user_quota=False,
+            ),
+            _llm_stream_factory=_stub_stream,
+        )
+
+        abort_resp = client.delete(f"/api/conversation/{thread.id}/active")
+        assert abort_resp.status_code == 200
+        assert abort_resp.json()["aborted"] is True
+
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+
+    @pytest.mark.asyncio
+    async def test_preclaimed_turn_with_pre_set_cancel_event_emits_no_sse(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(sid, content="bootstrap claim"),
+        ).json()
+
+        bootstrap = claim_bootstrap_start_stream_state(
+            thread_id=start["thread_id"],
+            owner_user_id=None,
+            user_content="bootstrap claim",
+        )
+        assert bootstrap is not None
+        thread, bootstrap_user_turn, assistant_turn = bootstrap
+
+        async def _stub_stream(*_args, **_kwargs):
+            yield "alpha"
+
+        cancel_event = asyncio.Event()
+        cancel_event.set()
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=thread.id,
+            assistant_turn_id=assistant_turn.id,
+            new_user_content=bootstrap_user_turn.content or "bootstrap claim",
+            history_exclude_turn_id=bootstrap_user_turn.id,
+            assistant_turn_preclaimed=True,
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url=None,
+                model="test-model",
+                disable_user_quota=False,
+            ),
+            cancel_event=cancel_event,
+            _llm_stream_factory=_stub_stream,
+        )
+
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+
+    @pytest.mark.asyncio
+    async def test_cancel_and_next_chunk_same_tick_prefers_cancel(self):
+        class OneChunk:
+            def __init__(self, gate: asyncio.Event):
+                self.gate = gate
+                self.sent = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.sent:
+                    raise StopAsyncIteration
+                await self.gate.wait()
+                self.sent = True
+                return "alpha"
+
+        gate = asyncio.Event()
+        cancel_event = asyncio.Event()
+        iterator = conversation_service._stream_with_cancel_signal(
+            OneChunk(gate),
+            cancel_event,
+        )
+
+        loop = asyncio.get_running_loop()
+        loop.call_soon(gate.set)
+        loop.call_soon(cancel_event.set)
+
+        with pytest.raises(asyncio.CancelledError):
+            await anext(iterator)
+
     @pytest.mark.asyncio
     async def test_cancel_event_interrupts_stalled_stream(self, client):
         engine = get_engine()

@@ -195,7 +195,7 @@
   - `后续三回合` 按钮：设置 `interaction_mode=epilogue` 并预填追问内容
   - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 发送
   - mobile sidebar sheet 已补 `SheetTitle / SheetDescription`；第一次 `Escape` 只关闭 sheet，不会误关外层 chamber
-- `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，SSE parser 也已兼容 multiline `data:` frame。bubble ref 注册当前也已经和整个 `conversation` 对象解耦，输入框本地 rerender 不会再反复重挂流式气泡。
+- `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。桌面端现在按 non-modal 右侧 sidecar 挂载，移动端仍是 modal bottom sheet；图上节点详情和对话 sheet 同时打开时，不会再被 overlay 互相挡住。桌面端当前也已补齐 detail + sidecar 同开时的交互边界：点 detail close、点 graph pane，只会收详情，不会顺手把 sidecar 一起关掉；如果焦点在 detail 内，`Escape` 也会先收详情；切到新节点后再关详情，焦点会回到最新 trigger。textarea 里的 `Escape` 仍只关闭 sidecar。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，SSE parser 也已兼容 multiline `data:` frame。公共会话状态机在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，不再把 ghost 文本重新刷回 bubble 或 aria-live。bubble ref 注册当前也已经和整个 `conversation` 对象解耦，输入框本地 rerender 不会再反复重挂流式气泡。
 - `DebateArenaView` 当前只允许在 live 当前 phase 的下注窗口打开/提交 quick counterplay；锁到历史 phase 时不再发起 counterplay。
 - `DebateArenaView` 当前在“当前 live phase”视图下会保留更早 phase 的已出现 turns，并以 `FoldableTurn` 历史卡形式继续展示；切到历史 phase 时仍只显示该 phase 自己的 turns。
 - Debate 的页面级播报当前只保留 phase cue；`SpotlightTurnCard` 的高亮态不再单独暴露 live-region 语义，避免同一轮变化在读屏器里重复播报。
@@ -260,6 +260,7 @@
   - 首屏只显示 `Load map / Hide map` 按钮和提示文案，不会默认把 React Flow 一起挂上来
   - 只有用户真正点开后才渲染 `ArgumentMap`，主要是为了减少结果页首屏额外开销
 - `ArgumentMap` 的节点对话当前需要调用方显式提供 `conversationScenarioId` 才会打开 `NodeConversationSheet`；`DebateArenaView` 和 `DebateResultView` 现在都传 `null`，所以 debate argument-map 节点暂时不会直接起对话，等真实 scenario id 接通后再开放。
+- `CausalReviewView` 的节点点击当前会同时打开详情和节点对话；节点对话固定传真实 `scenarioId`，`identityId` 保持为空，不再走假 id 或占位值。
 - `DebateResultView` 当前的 replay 分享有两条只读路径：
   - URL 足够短时走内联 `?replay=`
   - URL 过长时，把 payload 落到本地存储后改走 `?local=`
@@ -336,18 +337,23 @@
   - 关闭后会把焦点还回最新一次打开详情的 trigger
   - 面板内 `Escape` 仍可关闭；焦点已经离开 panel 时，不会再全局劫持 `Escape`
   - compact viewport 下会改成贴底展开，不再固定挤在右上角
+  - 桌面端如果右侧 `NodeConversationSheet` 已打开，详情面板会自动给 sidecar 让出右边距；detail close、pane click 只会收详情，不会把 sidecar 一起关掉；如果焦点在 detail 内，`Escape` 也会先收详情
   - `Copy Reference` 先走 `clipboard.writeText()`；失败时回退 `execCommand('copy')`
   - 如果两条复制路径都失败，会显示可见错误提示，不再静默成功
   - 关闭时会顺手清掉旧的复制失败提示；重新打开同一节点时，不会再把上一轮错误提醒残留出来
   - 详情关闭后仍走 pane click / close button 这条现有口径
 - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。SVG 导出当前改成 native SVG background / edge / node markup，不再依赖 `foreignObject`；校验脚本也会拒绝 `foreignObject` 回退。节点卡标题过长时，SVG 文本会按卡片宽度裁剪显示，但 `<title>` 和文本内容仍优先保留完整标题，不再把省略号文本写进 SVG。
 - `CausalReviewView` 当前在 branch 切换时会先收起旧图和导出面板，等新分支数据 ready 后再恢复；图页外层统一走 `100dvh`，relationless snapshot fallback 里的节点详情也会锚在当前容器里，不再飘到视口右上角。
-- frontend `NodeConversationSheet / GlobalOfflineBanner / performance budgets` 定向 vitest 当前 `42 passed`。
-- frontend full vitest 当前 `1301 passed`。
+- frontend `NodeConversationSheet / CausalReviewView` 定向 vitest 当前 `86 passed`。
+- frontend full vitest 当前 `1314 passed`。
 - `node --test scripts/e2e-frontend-preflight.test.mjs` 本轮 `25 passed`。
 - `npm run build`（含 `perf:budgets:check`）当前通过。
 - fresh local live 的 `node-conversation-live / kg-explorer-live / replay-view-live` 当前通过。
 - preview-driven Chromium `phase3-batch-a full / phase3-batch-b full / phase3-batch-c full` 本轮全绿。
+- focused browser spot-check 当前也已补过：
+  - detail + sidecar 同开时，detail `right: 464px`
+  - detail close / pane click / detail-focused `Escape` 都不会再把 sidecar 一起关掉
+  - 切到新节点后关 detail，焦点会回到最新 trigger
 - preview-driven `zh-CN phase3-batch-a full / phase3-batch-b full` 本轮全绿。
 - graph mobile smoke 当前会额外检查 controls 与 mobile navigation hint；viewport 交互从空白画布锚点拖拽开始，并以 `Fit view` 后的 baseline 判断 pan / zoom / reset；`MiniMap` 继续维持桌面限定。
 - `phase3-batch-a` 当前也会检查：
@@ -355,11 +361,13 @@
   - `/api/scenario/:id` 返回的可读 branch title + probability 确实进了 selector
   - sr fallback list 的 accessible name 按 `/^(Causal events list|因果事件列表)$/` 精确匹配；这条 regex 也会以 `srFallbackListLabelPattern` 导出给脚本契约复用
   - default / `zh-CN` locale 走同一条 fixture 口径
+  - 桌面端节点详情打开后，脚本会继续确认 close 按钮可点，并真的等到 detail panel hidden 才判关闭成功
 - `phase3-batch-a / batch-b` 的 graph SVG smoke 当前会校验下载文件内容，不只看文件名。
 - `phase3-batch-a / batch-b` 的浏览器问题监控当前会按 URL + resourceType 过滤 Google Fonts 外链噪音；不同 locale / 浏览器 runtime 下的外部字体失败不再被记成图谱回归。
 - `phase3-batch-b` 的 compare digest fixture 当前会补 `agents / messages`；compare theater smoke 会检查 `agent / message / bubble` 计数都大于 0。
 - `phase3-batch-b` 的 `zh-CN` mobile 口径本轮通过。
 - `phase3-batch-b` 当前除了 map 容器 / filter smoke，也会检查 argument-map 的强度摘要在 default / `zh-CN` locale 都能定位，以及 `Export SVG`、本地化 verdict 节点标签、节点点击打开详情、详情文本、accepted 状态与关闭动作。
+- `phase3-batch-b` 当前会先等 `Argument Map / Load map / verdict node` 真正可见再断言；桌面 WebKit 下的 verdict 节点 smoke 不再靠无效 timeout 的 `isVisible()` 碰运气。
 - `phase3-batch-b` 当前还会覆盖 argument-map fail-soft：脚本会在结果页 ready 后走 `Load map / 加载图谱`，再检查错误态是否显示失败文案和 `Retry`，并确认图和导出同时隐藏；mobile 重试口径已稳定。
 - `phase3-batch-a / batch-b` 的 summary 当前会按 step 结果重算 `failedTests`；step 失败时，不会再出现 `failedSteps > 0` 但 `failedTests=[]` 的空诊断。
 - `phase3-batch-a / batch-b` 当前都支持 `--browser chromium|firefox|webkit` scoped 执行；本轮桌面 Firefox / WebKit 的 `batch-a / batch-b` 都通过。

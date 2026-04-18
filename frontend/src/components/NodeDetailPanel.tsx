@@ -25,6 +25,8 @@ interface NodeDetailPanelProps {
   panelId?: string;
   node: NodeDetail | null;
   onClose: () => void;
+  desktopRightOffset?: number;
+  restoreFocusTarget?: HTMLElement | null;
 }
 
 const TYPE_COLORS = NODE_TYPE_COLORS_HEX;
@@ -56,7 +58,13 @@ function useMediaQueryState(query: string) {
   return matches;
 }
 
-export function NodeDetailPanel({ panelId, node, onClose }: NodeDetailPanelProps) {
+export function NodeDetailPanel({
+  panelId,
+  node,
+  onClose,
+  desktopRightOffset = 8,
+  restoreFocusTarget = null,
+}: NodeDetailPanelProps) {
   const { t } = useTranslation();
   const titleId = useId();
   const detailPanelId = panelId ?? `node-detail-${titleId.replace(/:/g, '-')}`;
@@ -88,9 +96,11 @@ export function NodeDetailPanel({ panelId, node, onClose }: NodeDetailPanelProps
     }
 
     previousFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      restoreFocusTarget?.isConnected
+        ? restoreFocusTarget
+        : (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     closeButtonRef.current?.focus();
-  }, [nodeId]);
+  }, [nodeId, restoreFocusTarget]);
 
   if (!node) return null;
 
@@ -106,6 +116,12 @@ export function NodeDetailPanel({ panelId, node, onClose }: NodeDetailPanelProps
       role="dialog"
       aria-modal="false"
       aria-labelledby={titleId}
+      onClick={(event) => {
+        event.stopPropagation();
+      }}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+      }}
       onKeyDown={(event) => {
         if (event.key !== 'Escape') return;
         event.preventDefault();
@@ -115,7 +131,7 @@ export function NodeDetailPanel({ panelId, node, onClose }: NodeDetailPanelProps
       style={{
         position: 'absolute',
         top: isCompactViewport ? 'auto' : 8,
-        right: 8,
+        right: isCompactViewport ? 8 : desktopRightOffset,
         bottom: isCompactViewport ? 8 : 'auto',
         left: isCompactViewport ? 8 : 'auto',
         width: isCompactViewport ? 'auto' : 280,
@@ -137,7 +153,11 @@ export function NodeDetailPanel({ panelId, node, onClose }: NodeDetailPanelProps
         </h3>
         <button
           ref={closeButtonRef}
-          onClick={() => handleClose({ restoreFocus: true })}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            handleClose({ restoreFocus: true });
+          }}
           aria-label={t('common.close', 'Close')}
           style={{
             background: 'none',

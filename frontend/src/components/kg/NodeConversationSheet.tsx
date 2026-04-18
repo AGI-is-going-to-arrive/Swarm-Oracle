@@ -158,6 +158,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
 
   const [inputValue, setInputValue] = useState<string>('');
   const [draftNoticeDismissed, setDraftNoticeDismissed] = useState<boolean>(false);
+  const sheetContentRef = useRef<HTMLDivElement | null>(null);
 
   // Hydrate from restored draft on first time `draft.restored` flips from
   // null → string (one-shot). This is a legitimate external-sync effect:
@@ -353,6 +354,18 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     if (!nextOpen) onClose?.();
     onOpenChange(nextOpen);
   }, [onClose, onOpenChange]);
+  const handleDesktopInteractOutside = useCallback((event: Event) => {
+    if (isMobile) return;
+    event.preventDefault();
+  }, [isMobile]);
+  const handleSheetEscapeKeyDown = useCallback((event: KeyboardEvent) => {
+    if (isMobile) return;
+    const target = event.target;
+    if (target instanceof Node && sheetContentRef.current?.contains(target)) {
+      return;
+    }
+    event.preventDefault();
+  }, [isMobile]);
 
   const showRecovery = convState.turn === 'error' || convState.turn === 'recovering';
   const showEmpty = convState.turn === 'idle' && inputValue.length === 0;
@@ -360,9 +373,13 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   const isDone = convState.turn === 'done';
 
   return (
-    <Sheet open={open} onOpenChange={handleSheetOpenChange}>
+    <Sheet open={open} onOpenChange={handleSheetOpenChange} modal={isMobile}>
       <SheetContent
+        ref={sheetContentRef}
         side={side}
+        hideOverlay={!isMobile}
+        onInteractOutside={handleDesktopInteractOutside}
+        onEscapeKeyDown={handleSheetEscapeKeyDown}
         data-testid="node-conversation-sheet"
         data-mobile={isMobile ? 'true' : 'false'}
         data-snap={isMobile ? snapLevel : undefined}
