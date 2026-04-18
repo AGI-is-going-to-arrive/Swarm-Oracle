@@ -223,6 +223,11 @@
   - 官方 provider 的 `web_search_base_url` 当前只接受 `https`
   - `searxng` 自定义 base URL 当前只接受与服务端 `SEARXNG_URL` 完全一致的基址
 - Ending Room 的同步服务函数（`create_ending_room`、`create_ending_room_thread`、`load_ending_room_snapshot` 等）在 async 端点中通过 `asyncio.to_thread()` 调用，不阻塞事件循环。路由层对 `to_thread` 内部的非业务异常有通用 `except Exception` 兜底，不会让裸 DB 异常直接落成未分类 500。
+- Agent conversation 当前走两步启动：
+  - `POST /api/conversation/start` 先创建 thread、首条 user turn 和一条 `pending` assistant turn
+  - 紧跟的 `POST /api/conversation/{thread_id}/turn` 如果还是同一条首轮 user 内容，会直接 claim 这条预留 assistant turn 开始流式返回，不再追加重复 user turn
+  - 这条 claim 当前按原子 CAS 执行；并发首轮流里只会有一个请求拿到这条预留 turn，其他请求会 fail-closed，不会两路同时 stream 同一 turn
+  - scenario 删除如果发生在流式中途，流末尾仍会补 `turn_error(code=SCENARIO_DELETED)`；这里的取消原因会区分 `scenario_deleted` 和 `user_aborted`，即使删除事务还没 commit，也会先发终态错误
 - Debate argument map 当前走两层抽取：
   - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类；当前分句覆盖 `. ! ?`、`。！？` 和换行
   - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
@@ -257,7 +262,7 @@
 ## 当前验证基线
 
 - backend `causal-graph / replay` 定向回归：`296 passed`
-- backend 全量 `pytest`：`2095 passed, 2 skipped`
+- backend 全量 `pytest`：`2239 passed, 2 skipped`
 
 ## WebSocket 口径
 
