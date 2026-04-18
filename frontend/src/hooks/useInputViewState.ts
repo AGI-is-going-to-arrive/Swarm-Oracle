@@ -255,6 +255,8 @@ export function useInputByokSettings(t: TranslateFn) {
     setDisableUserQuota,
     testStatus: visibleTestStatus,
     testError: visibleTestError,
+    setTestStatus,
+    setTestError,
     probeResult: visibleProbeResult,
     hasFreshProbe: Boolean(visibleProbeResult) && testedConfigKey === currentConfigKey && visibleTestStatus !== 'fail',
     reasoningEffort,

@@ -20,6 +20,18 @@ const EMPTY_POLICY: LlmProviderPolicy = {
   tokensPerMinute: null,
 };
 
+export function validateByok(input: {
+  apiKey?: string | null;
+  baseUrl?: string | null;
+}): { valid: true } | { valid: false; errorCode: 'BYOK_INVALID' } {
+  const apiKey = normalizeText(input.apiKey);
+  const baseUrl = normalizeText(input.baseUrl);
+  if (baseUrl && !apiKey) {
+    return { valid: false, errorCode: 'BYOK_INVALID' };
+  }
+  return { valid: true };
+}
+
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }

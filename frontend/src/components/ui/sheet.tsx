@@ -55,17 +55,19 @@ interface SheetContentProps
   extends React.ComponentPropsWithoutRef<typeof SheetPrimitive.Content>,
     VariantProps<typeof sheetVariants> {
   container?: SheetPortalProps["container"];
+  hideOverlay?: boolean;
+  overlayClassName?: string;
 }
 
 const SheetContent = React.forwardRef<
   React.ComponentRef<typeof SheetPrimitive.Content>,
   SheetContentProps
->(({ side = "right", className, children, container, ...props }, ref) => {
+>(({ side = "right", className, children, container, hideOverlay = false, overlayClassName, ...props }, ref) => {
   const { t } = useTranslation();
 
   return (
     <SheetPortal container={container}>
-      <SheetOverlay />
+      {hideOverlay ? null : <SheetOverlay className={overlayClassName} />}
       <SheetPrimitive.Content
         ref={ref}
         className={cn(sheetVariants({ side }), className)}
