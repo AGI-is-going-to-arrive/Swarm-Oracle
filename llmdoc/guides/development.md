@@ -6,8 +6,8 @@
 ## 环境要求
 
 - Python `>= 3.11`
-- Node.js `>= 18`
-- npm `>= 9`
+- Node.js `>= 20`
+- pnpm `>= 10`
 
 ## 本地开发
 
@@ -31,16 +31,16 @@ uvicorn --app-dir /absolute/path/to/upgrade-test/backend app.main:app --reload -
 
 ```bash
 cd frontend
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 ### 预览构建
 
 ```bash
 cd frontend
-npm run build
-npm run preview -- --host 127.0.0.1 --port 18928
+pnpm run build
+pnpm exec vite preview --host 127.0.0.1 --port 18930
 ```
 
 ## Docker
@@ -90,7 +90,7 @@ source .venv/bin/activate
 python -m pytest -q
 
 cd ../frontend
-npm test
+pnpm test
 ```
 
 ### Backend 定向回归
@@ -109,11 +109,11 @@ source .venv/bin/activate
 python -m pytest tests/test_web_context.py tests/test_web_context_integration.py tests/test_web_search_contract.py tests/test_config.py -q
 
 cd ../frontend
-npm test -- --run src/pages/InputView.test.tsx
-npx tsc --noEmit -p tsconfig.app.json
-npm run lint
-VITE_ENABLE_WEB_SEARCH=true npm run build
-npm run e2e:web-search -- --url http://127.0.0.1:18928 --output-dir output/e2e/review-web-search --provider tavily
+pnpm test -- --run src/pages/InputView.test.tsx
+pnpm exec tsc --noEmit -p tsconfig.app.json
+pnpm run lint
+VITE_ENABLE_WEB_SEARCH=true pnpm run build
+pnpm run e2e:web-search -- --url http://127.0.0.1:18930 --output-dir output/e2e/review-web-search --provider tavily
 ```
 
 说明：
@@ -149,7 +149,7 @@ python -m pytest tests/test_audit_fixes.py tests/test_contract_freeze.py tests/t
 python -m pytest tests/test_corner_cases.py -k 'init_db_reuses_engine_managed_connection_for_sqlite_migrations or init_db_adds_agent_group_scenario_index' -q
 
 cd ../frontend
-npm test -- --run src/lib/dailyChallenge.test.ts
+pnpm test -- --run src/lib/dailyChallenge.test.ts
 ```
 
 说明：
@@ -165,8 +165,8 @@ npm test -- --run src/lib/dailyChallenge.test.ts
 
 ```bash
 cd frontend
-npm test -- --run src/lib/scenarioMeta.test.ts src/lib/scenarioGameplayState.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
-npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.tsx src/lib/replayCodec.test.ts src/lib/debateReplay.test.ts src/components/AgentProfileModal.test.tsx src/lib/legacyCssFallbacks.test.ts
+pnpm test -- --run src/lib/scenarioMeta.test.ts src/lib/scenarioGameplayState.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
+pnpm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.tsx src/lib/replayCodec.test.ts src/lib/debateReplay.test.ts src/components/AgentProfileModal.test.tsx src/lib/legacyCssFallbacks.test.ts
 ```
 
 - Vitest 当前在 `frontend/src/setupTests.ts` 里统一注入内存版 `localStorage / sessionStorage`。
@@ -198,60 +198,31 @@ python -m pytest tests/test_session_auth.py tests/test_llm_client.py tests/test_
 ```bash
 cd backend
 source .venv/bin/activate
-# graph / replay 定向
-python -m pytest tests/test_counterfactual.py tests/test_resume.py tests/test_runtime_lock.py tests/test_fallback_migrations.py tests/test_causal_graph.py tests/test_debate_argument_map.py tests/test_contract_freeze.py tests/test_async_io_hooks.py tests/test_factions.py tests/test_debate_api.py -q
-# backend 全量
 python -m pytest -q
 
 cd ../frontend
-# graph-focused vitest
-npm test -- --run src/components/FactionTimeline.test.tsx src/pages/ResultView.test.tsx src/pages/DebateResultView.test.tsx src/pages/CompareDigestView.test.tsx src/i18n/locales.test.ts src/pages/CausalReviewView.test.tsx src/components/ArgumentMap.test.tsx src/components/GraphNodeCard.test.tsx src/components/NodeDetailPanel.test.tsx
-# frontend 全量
-npm test
-node --test scripts/e2e-frontend-preflight.test.mjs
-npx tsc --noEmit -p tsconfig.app.json
-npm run lint
-npm run build
-
-npm run preview -- --host 127.0.0.1 --port 18930
-SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs full --headless
-SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full --headless
-SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-c.mjs full --headless
-SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-a.mjs full --headless
-SWARM_E2E_LOCALE=zh-CN SWARM_URL=http://127.0.0.1:18930 node scripts/e2e-phase3-batch-b.mjs full --headless
+pnpm test
+pnpm exec tsc --noEmit -p tsconfig.app.json
+pnpm run lint
+pnpm run build
+pnpm exec vite preview --host 127.0.0.1 --port 18930
 ```
 
 说明：
 
 - 本轮实测结果：
-  - backend graph / replay 定向回归：`296 passed`
-  - backend 全量：`2095 passed, 2 skipped`
-  - frontend 全量 vitest：`1055 passed`
-  - `node --test scripts/e2e-frontend-preflight.test.mjs`：`25 passed`
-  - `npx tsc --noEmit -p tsconfig.app.json` / `npm run lint` / `npm run build` 通过
-  - 浏览器 smoke：`phase3-batch-a/b/c full --headless` 与 `zh-CN` 的 `batch-a/b full --headless` 通过
-  - `node scripts/release-signoff.mjs --dry-run --skip-backend-checks --skip-assets-check --output-root output/e2e/dry-run-signoff-docs` 通过
-- 这组回归当前覆盖：
-  - frontend graph-focused vitest 当前主要看：
-    - `src/components/FactionTimeline.test.tsx`
-    - `src/pages/ResultView.test.tsx`
-    - `src/pages/DebateResultView.test.tsx`
-    - `src/pages/CompareDigestView.test.tsx`
-    - `src/i18n/locales.test.ts`
-    - `src/pages/CausalReviewView.test.tsx`
-    - `src/components/ArgumentMap.test.tsx`
-    - `src/components/GraphNodeCard.test.tsx`
-    - `src/components/NodeDetailPanel.test.tsx`
-  - `phase3-batch-a`、`phase3-batch-b` 的 `full` 默认覆盖 Chromium desktop/mobile 和 desktop Firefox/WebKit
-  - `phase3-batch-c` 的 `full` 也覆盖同一矩阵
-  - 三条 `phase3` 脚本都走 `page.route()` fixtures；需要可访问的 frontend preview host，不依赖 live backend
+  - backend 全量：`2239 passed, 2 skipped`
+  - frontend 全量 vitest：`1291 passed`
+  - `pnpm exec tsc --noEmit -p tsconfig.app.json` / `pnpm run lint` / `pnpm run build` 通过
+  - `pnpm exec vite preview --host 127.0.0.1 --port 18930` 可正常挂起
+- 这轮图谱 / 辩论面只记录上述全量回归与 preview 挂起结果，不在本页补写未复跑的 smoke / E2E 结论。
 
 ### Resume / P1-9 定向回归
 
 ```bash
 cd frontend
-npm test -- --run src/components/ResumePanel.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts
-npm run e2e:resume -- full
+pnpm test -- --run src/components/ResumePanel.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts
+pnpm run e2e:resume -- full
 ```
 
 ### P1-10 / P1-11 定向回归
@@ -262,13 +233,13 @@ source .venv/bin/activate
 python -m pytest tests/test_debate_argument_map.py tests/test_debate_service.py tests/test_config.py tests/test_agent_identity.py tests/test_api.py tests/test_p0_wiring.py tests/test_contract_freeze.py -q
 
 cd ../frontend
-npm test -- --run src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/ui/SpotlightTurnCard.test.tsx
+pnpm test -- --run src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/ui/SpotlightTurnCard.test.tsx
 node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
-node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/debate-full --headless
-node scripts/e2e-debate-suite.mjs desktop --browser firefox --url http://127.0.0.1:18928 --output-dir output/e2e/debate-firefox --headless
-node scripts/e2e-debate-suite.mjs desktop --browser webkit --url http://127.0.0.1:18928 --output-dir output/e2e/debate-webkit --headless
-npx tsc --noEmit -p tsconfig.app.json
-npm run build
+node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/debate-full --headless
+node scripts/e2e-debate-suite.mjs desktop --browser firefox --url http://127.0.0.1:18930 --output-dir output/e2e/debate-firefox --headless
+node scripts/e2e-debate-suite.mjs desktop --browser webkit --url http://127.0.0.1:18930 --output-dir output/e2e/debate-webkit --headless
+pnpm exec tsc --noEmit -p tsconfig.app.json
+pnpm run build
 ```
 
 - debate mobile E2E 当前按 rail fail-closed：
@@ -280,7 +251,6 @@ npm run build
   - mixed-language fallback 当前覆盖 `phase commentary / replay quote / prediction score reason`
   - `e2e-debate-suite` 当前会覆盖 `share -> readonly replay -> reload restore -> import`
   - backend import replay 当前接受负数 `confidence_drift.phase_margin / cumulative_margin`，也接受常规 prediction 的 `counterplay_variant: null`
-  - `node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/debate-full --headless` 本轮通过
   - desktop Firefox / WebKit scoped rerun 当前也已通过
 
 ### Oracle Chambers / Roundtable 定向回归
@@ -291,25 +261,25 @@ source .venv/bin/activate
 python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q
 
 cd ../frontend
-npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
+pnpm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
 node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
-npx tsc --noEmit -p tsconfig.app.json
-npm run build
+pnpm exec tsc --noEmit -p tsconfig.app.json
+pnpm run build
 
-node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-full --headless
-node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-followup-full --headless
-node scripts/e2e-ending-room-followup-suite.mjs full --locale en --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-followup-en --headless
-node scripts/e2e-ending-room-followup-suite.mjs mobile --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-followup-mobile --headless
-node scripts/e2e-ending-room-followup-suite.mjs desktop --browser firefox --locale en --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-followup-en-firefox --headless
-node scripts/e2e-ending-room-followup-suite.mjs desktop --browser webkit --locale en --url http://127.0.0.1:18928 --output-dir output/e2e/oracle-ending-room-followup-en-webkit --headless
-node scripts/e2e-worldline-roundtable-suite.mjs desktop --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-desktop --headless
-node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser firefox --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-firefox --headless
-node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser webkit --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-webkit --headless
-node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-full --headless
-node scripts/e2e-worldline-roundtable-suite.mjs full --locale en --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en --headless
-node scripts/e2e-worldline-roundtable-suite.mjs full --browser firefox --locale en --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en-firefox --headless
-node scripts/e2e-worldline-roundtable-suite.mjs full --browser webkit --locale en --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en-webkit --headless
-node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-mobile --headless
+node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/oracle-ending-room-full --headless
+node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/oracle-ending-room-followup-full --headless
+node scripts/e2e-ending-room-followup-suite.mjs full --locale en --url http://127.0.0.1:18930 --output-dir output/e2e/oracle-ending-room-followup-en --headless
+node scripts/e2e-ending-room-followup-suite.mjs mobile --url http://127.0.0.1:18930 --output-dir output/e2e/oracle-ending-room-followup-mobile --headless
+node scripts/e2e-ending-room-followup-suite.mjs desktop --browser firefox --locale en --url http://127.0.0.1:18930 --output-dir output/e2e/oracle-ending-room-followup-en-firefox --headless
+node scripts/e2e-ending-room-followup-suite.mjs desktop --browser webkit --locale en --url http://127.0.0.1:18930 --output-dir output/e2e/oracle-ending-room-followup-en-webkit --headless
+node scripts/e2e-worldline-roundtable-suite.mjs desktop --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-desktop --headless
+node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser firefox --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-firefox --headless
+node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser webkit --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-webkit --headless
+node scripts/e2e-worldline-roundtable-suite.mjs full --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-full --headless
+node scripts/e2e-worldline-roundtable-suite.mjs full --locale en --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en --headless
+node scripts/e2e-worldline-roundtable-suite.mjs full --browser firefox --locale en --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en-firefox --headless
+node scripts/e2e-worldline-roundtable-suite.mjs full --browser webkit --locale en --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en-webkit --headless
+node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-mobile --headless
 ```
 
 当前脚本口径：
@@ -403,11 +373,11 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
 
 ```bash
 cd frontend
-npm run lint
-npx tsc --noEmit -p tsconfig.app.json
-npm run build
-npm run perf:budgets:check
-npm run assets:provenance:check
+pnpm run lint
+pnpm exec tsc --noEmit -p tsconfig.app.json
+pnpm run build
+pnpm run perf:budgets:check
+pnpm run assets:provenance:check
 ```
 
 ### LLM 集成测试
@@ -505,18 +475,19 @@ source .venv/bin/activate
 uvicorn --app-dir /absolute/path/to/upgrade-test/backend app.main:app --host 127.0.0.1 --port 18927
 
 cd frontend
-npm run preview -- --host 127.0.0.1 --port 18928
+pnpm exec vite preview --host 127.0.0.1 --port 18930
 
 cd frontend
-npm run release:signoff -- --headless
+pnpm run release:signoff -- --url http://127.0.0.1:18930 --headless
 ```
 
 说明：
 
 - `release:signoff` 当前不会自己拉起 backend / preview。
-- 默认口径固定读取：
-  - frontend `http://127.0.0.1:18928`
+- 这组示例命令固定使用：
+  - frontend `http://127.0.0.1:18930`
   - backend `http://127.0.0.1:18927`
+- 脚本默认 frontend URL 仍是 `http://127.0.0.1:18928`；如果你像上面一样把 preview 起在 `18930`，就显式传 `--url http://127.0.0.1:18930`。
 - 默认 `release-signoff` 当前已纳入：
   - `lint`
   - `graph_focused_vitest`
@@ -538,7 +509,7 @@ npm run release:signoff -- --headless
 
 ```bash
 cd frontend
-SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --headless
+SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid pnpm run release:signoff -- --url http://127.0.0.1:18930 --headless
 ```
 
 ## 签收口径

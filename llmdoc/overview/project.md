@@ -133,10 +133,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 当前稳定基线仍保留：
   - `graph / replay / backend correctness` 修复，以及 UI review findings 对应前端修复，当前都已并入基线
   - backend `causal-graph / replay` 定向回归 `296 passed`
-  - backend 全量 `pytest` `2095 passed, 2 skipped`
-  - frontend `typecheck / lint / build / perf budget / assets provenance checks` 通过
-  - frontend 全量 vitest `1055 passed`
+  - backend 全量 `pytest` `2239 passed, 2 skipped`
+  - frontend `typecheck / lint / build` 通过
+  - frontend 全量 vitest `1291 passed`
   - graph script contract：`node --test scripts/e2e-frontend-preflight.test.mjs` `25 passed`
+  - production preview 当前可挂到 `127.0.0.1:18930`
   - graph smoke / release-signoff 当前都会先跑前端 deep-link preflight；preview 没 ready、SPA fallback 失效，或 entry module、CSS entry、legacy fallback 资源不一致 / 不可达时会直接 fail-closed，不再把 404 混成图谱回归
   - `phase3-batch-a full`、`phase3-batch-b full`、`phase3-batch-c full` 当前都已在 Chromium desktop/mobile + Firefox desktop + WebKit desktop 通过
   - `zh-CN batch-a full`、`zh-CN batch-b full` 通过
