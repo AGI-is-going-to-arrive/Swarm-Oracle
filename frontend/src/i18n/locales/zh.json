@@ -67,6 +67,8 @@
       "byok_base_url_help": "填写 OpenAI 兼容接口地址，支持直接填到 /v1。",
       "byok_model_label": "模型名称",
       "byok_model_help": "填写实际调用的模型 id，例如 gpt-5.4-mini。",
+      "org_id_label": "组织 ID",
+      "org_id_help": "可选。仅保存在当前标签页会话中，并随 API 请求作为 X-Org-Id 发送。",
       "byok_rpm_label": "RPM 上限",
       "byok_rpm_help": "每分钟最多请求数，影响能同时推进多少轮发言。",
       "byok_tpm_label": "TPM 上限",
@@ -1208,7 +1210,9 @@
       "sheet": {
         "title": "对话",
         "close_aria": "关闭对话",
-        "scroll_region_aria": "对话记录"
+        "scroll_region_aria": "对话记录",
+        "description": "向当前节点对应的 Agent 提问，并在这里查看流式回复。",
+        "snap_handle_aria": "调整底部面板高度，当前 {{snap}}vh，点击循环切换"
       },
       "empty_state": {
         "title": "开启对话",

@@ -613,7 +613,7 @@ class TestSSEStream:
         assert payload["sequence"] == 9
         assert payload["status"] == "error"
         assert payload["model"] == "test-model"
-        assert payload["code"] == "STREAM_FAILED"
+        assert payload["code"] == "LLM_5XX"
         assert payload["request_id"] == "req-be5"
         assert "error" not in payload
         assert "https://evil" not in raw

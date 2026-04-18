@@ -2762,6 +2762,51 @@ class TestDeleteScenario:
             assert session.get(Scenario, sid) is not None
             assert session.exec(select(Branch).where(Branch.scenario_id == sid)).first() is not None
 
+    def test_delete_integrity_guard_does_not_signal_conversation_cancel_before_commit(self, client, monkeypatch):
+        """Rollback path must not emit scenario_deleted cancel signals before commit."""
+        from app.services import conversation_service
+
+        monkeypatch.setattr(
+            "app.api.helpers.settings.FEATURE_AGENT_CONVERSATION",
+            True,
+        )
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        start = client.post(
+            "/api/conversation/start",
+            json={
+                "scenario_id": sid,
+                "first_user_content": "hello",
+            },
+        )
+        assert start.status_code == 200
+
+        def _fake_integrity_issues(*_args, **_kwargs):
+            return {"prediction": 1}
+
+        signaled_turn_ids: list[str] = []
+
+        def _spy_signal(turn_id: str, *, reason=None):
+            signaled_turn_ids.append(f"{turn_id}:{reason}")
+            return True
+
+        monkeypatch.setattr(
+            scenarios_api,
+            "_collect_scenario_delete_integrity_issues",
+            _fake_integrity_issues,
+        )
+        monkeypatch.setattr(
+            conversation_service,
+            "_signal_turn_cancel_event",
+            _spy_signal,
+        )
+
+        resp = client.delete(f"/api/scenario/{sid}")
+
+        assert resp.status_code == 500
+        assert resp.json()["detail"]["code"] == "SCENARIO_DELETE_INTEGRITY_FAILED"
+        assert signaled_turn_ids == []
+
 
 # ── P4-C: Export Scenario ────────────────────────────────
 

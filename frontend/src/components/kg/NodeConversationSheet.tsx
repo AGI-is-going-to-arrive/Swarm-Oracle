@@ -3,7 +3,18 @@
  *
  * Single-component responsive drawer backed by shadcn/Sheet:
  *   - Desktop (≥768px): side="right"
- *   - Mobile (<768px): side="bottom" with 40/70/100 snap (via CSS vh cap)
+ *   - Mobile (<768px): side="bottom" with 40/70/100 snap points
+ *     * User cycles snap via the grab handle (40 → 70 → 100 → 40)
+ *     * Also exposed via Cmd/Ctrl+ArrowUp / Cmd/Ctrl+ArrowDown on the
+ *       textarea (ArrowUp raises snap toward 100vh, ArrowDown lowers it).
+ *     * `data-snap` is reflected on the SheetContent root for e2e.
+ *
+ * Keyboard shortcuts (HC from ui-prompts.md §13 + frontend/CLAUDE.md):
+ *   - ESC closes the Sheet (native Radix behaviour).
+ *   - Cmd/Ctrl+Enter submits the current input (calls `onSubmit`).
+ *   - Cmd/Ctrl+R fires `onResend` (parent re-issues the last turn).
+ *     `preventDefault()` is always called so the browser never triggers a
+ *     page reload when the Sheet is focused.
  *
  * Integration:
  *   - useAgentConversation — state machine + aria-live + streaming bubble registry
@@ -26,10 +37,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet';
+import { buildSessionHeaders } from '../../api/client';
+import { mapBackendErrorCode } from '../../lib/conversationStateMachine';
+import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
+import type { AgentConversationWSEvent } from '../../types';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet';
 import { cn } from '../../lib/utils';
 import { useAgentConversation, type RegisteredStreamBubble } from '../../hooks/useAgentConversation';
-import { useAgentConversationWS } from '../../hooks/useAgentConversationWS';
 import { useDraftAutoSave } from '../../hooks/useDraftAutoSave';
 
 import { ConversationRecoveryBanner } from './ConversationRecoveryBanner';
@@ -67,47 +81,112 @@ export interface NodeConversationSheetProps {
   open: boolean;
   /** Caller-controlled open setter. */
   onOpenChange: (open: boolean) => void;
+  /** Optional close callback for trigger owners. */
+  onClose?: () => void;
   /** Thread id to connect WS + fetch history. */
-  threadId: string | null;
+  threadId?: string | null;
   /** Scenario id (for deep link / display). */
   scenarioId: string;
   /** Agent identity this conversation targets. */
-  identityId: string;
+  identityId?: string | null;
   /** Graph node origin metadata (display + prompt context). */
   origin?: NodeConversationOrigin;
   /** Submit handler (REST POST /conversation/{thread}/turn). */
   onSubmit?: (text: string) => void;
   /** Abort current streaming turn handler. */
   onAbort?: () => void;
+  /** Resend last user turn (Cmd/Ctrl+R shortcut). Parent owns the payload. */
+  onResend?: () => void;
+}
+
+/**
+ * Mobile bottom-sheet snap points. Hardcoded so Tailwind JIT can statically
+ * extract the `max-h-[<N>vh]` class names (dynamic template strings would
+ * be purged). Order matches the cycle 40 → 70 → 100 → 40.
+ */
+export type NodeConversationSnapLevel = '40' | '70' | '100';
+const SNAP_LEVELS: NodeConversationSnapLevel[] = ['40', '70', '100'];
+const SNAP_MAX_H: Record<NodeConversationSnapLevel, string> = {
+  '40': 'data-[state=open]:max-h-[40vh]',
+  '70': 'data-[state=open]:max-h-[70vh]',
+  '100': 'data-[state=open]:max-h-[100vh]',
+};
+function nextSnap(current: NodeConversationSnapLevel): NodeConversationSnapLevel {
+  const idx = SNAP_LEVELS.indexOf(current);
+  return SNAP_LEVELS[(idx + 1) % SNAP_LEVELS.length];
+}
+function raiseSnap(current: NodeConversationSnapLevel): NodeConversationSnapLevel {
+  const idx = SNAP_LEVELS.indexOf(current);
+  return SNAP_LEVELS[Math.min(idx + 1, SNAP_LEVELS.length - 1)];
+}
+function lowerSnap(current: NodeConversationSnapLevel): NodeConversationSnapLevel {
+  const idx = SNAP_LEVELS.indexOf(current);
+  return SNAP_LEVELS[Math.max(idx - 1, 0)];
+}
+
+function parseConversationSseFrame(frame: string): AgentConversationWSEvent | null {
+  let eventName = '';
+  let dataText = '';
+  for (const line of frame.split('\n')) {
+    if (line.startsWith('event: ')) eventName = line.slice('event: '.length).trim();
+    if (line.startsWith('data: ')) dataText = line.slice('data: '.length).trim();
+  }
+  if (!eventName || !dataText) return null;
+  try {
+    return {
+      type: eventName as AgentConversationWSEvent['type'],
+      ...(JSON.parse(dataText) as Record<string, unknown>),
+    } as AgentConversationWSEvent;
+  } catch {
+    return null;
+  }
+}
+
+async function readConversationError(response: Response): Promise<{ code: string; message?: string }> {
+  try {
+    const payload = await response.json() as {
+      detail?: string | { code?: string; message?: string };
+    };
+    if (typeof payload.detail === 'object' && payload.detail !== null) {
+      return {
+        code: typeof payload.detail.code === 'string' ? payload.detail.code : 'SERVER_ERROR',
+        message: typeof payload.detail.message === 'string' ? payload.detail.message : undefined,
+      };
+    }
+    if (typeof payload.detail === 'string' && payload.detail.trim()) {
+      return { code: 'SERVER_ERROR', message: payload.detail.trim() };
+    }
+  } catch {
+    // Ignore and fall through to the generic fallback.
+  }
+  return { code: 'SERVER_ERROR', message: `HTTP ${response.status}` };
 }
 
 export function NodeConversationSheet(props: NodeConversationSheetProps) {
   const {
     open,
     onOpenChange,
-    threadId,
+    onClose,
+    threadId: initialThreadId = null,
     scenarioId,
     identityId,
     origin,
     onSubmit,
     onAbort,
+    onResend,
   } = props;
   const { t } = useTranslation();
   const isMobile = useIsMobile(768);
+  const [threadId, setThreadId] = useState<string | null>(initialThreadId);
+  const activeRequestControllerRef = useRef<AbortController | null>(null);
+  const lastSubmittedMessageRef = useRef<string | null>(null);
 
   const conversation = useAgentConversation({ threadId });
   // Extract plain (non-ref) properties so subsequent render code never
   // reads them through the `conversation` object — `ariaLiveApi` carries
   // refs which triggers the `react-hooks/refs` rule.
   const { state: convState, dispatch: convDispatch, ariaLiveApi } = conversation;
-  const { announceRef: ariaLiveAnnounceRef } = ariaLiveApi;
-
-  // WS transport — stable onEvent callback via ref in the hook.
-  useAgentConversationWS({
-    threadId,
-    ready: open,
-    onEvent: conversation.dispatchWsEvent,
-  });
+  const { announceRef: ariaLiveAnnounceRef, flushNow: flushAriaLiveNow } = ariaLiveApi;
 
   // Draft auto-save (per thread id).
   const draftKey = useMemo(() => `swarmoracle_draft:${threadId ?? 'default'}`, [threadId]);
@@ -124,7 +203,6 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     if (draftHydratedRef.current) return;
     if (draft.restored !== null && inputValue === '') {
       draftHydratedRef.current = true;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setInputValue(draft.restored);
     }
   }, [draft.restored, inputValue]);
@@ -133,6 +211,25 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   useEffect(() => {
     if (inputValue.length > 0) draft.save(inputValue);
   }, [draft, inputValue]);
+
+  useEffect(() => {
+    if (initialThreadId) {
+      setThreadId(initialThreadId);
+    }
+  }, [initialThreadId]);
+
+  useEffect(() => {
+    if (!open) {
+      activeRequestControllerRef.current?.abort();
+      activeRequestControllerRef.current = null;
+      lastSubmittedMessageRef.current = null;
+      setThreadId(initialThreadId);
+    }
+  }, [initialThreadId, open]);
+
+  useEffect(() => {
+    flushAriaLiveNow();
+  }, [flushAriaLiveNow, open]);
 
   // Stable bubble-ref callback; StrictMode idempotent.
   const bubbleRef = useRef<StreamingBubbleApi | null>(null);
@@ -148,25 +245,231 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     [conversation, origin?.nodeId, threadId],
   );
 
-  const handleSubmit = useCallback(() => {
+  const dispatchTransportError = useCallback((code: string, message?: string) => {
+    convDispatch({ type: 'error', code: mapBackendErrorCode(code), message });
+  }, [convDispatch]);
+
+  const streamTurn = useCallback(async (nextThreadId: string, text: string): Promise<boolean> => {
+    activeRequestControllerRef.current?.abort();
+    const controller = new AbortController();
+    activeRequestControllerRef.current = controller;
+    let accepted = false;
+    try {
+      const providerPolicy = loadLlmProviderPolicy();
+      const validation = validateByok({
+        apiKey: providerPolicy.apiKey,
+        baseUrl: providerPolicy.baseUrl,
+      });
+      if (!validation.valid) {
+        dispatchTransportError(validation.errorCode);
+        return false;
+      }
+      const response = await fetch(`/api/conversation/${encodeURIComponent(nextThreadId)}/turn`, {
+        method: 'POST',
+        headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          user_content: text,
+          ...(providerPolicy.apiKey ? { llm_api_key: providerPolicy.apiKey } : {}),
+          ...(providerPolicy.baseUrl ? { llm_base_url: providerPolicy.baseUrl } : {}),
+          ...(providerPolicy.model ? { llm_model: providerPolicy.model } : {}),
+          ...(providerPolicy.disableUserQuota ? { disable_user_quota: true } : {}),
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const error = await readConversationError(response);
+        dispatchTransportError(error.code, error.message);
+        return false;
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        dispatchTransportError('SERVER_ERROR', 'Missing stream body');
+        return false;
+      }
+      accepted = true;
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let frameBoundary = buffer.indexOf('\n\n');
+        while (frameBoundary >= 0) {
+          const frame = buffer.slice(0, frameBoundary);
+          buffer = buffer.slice(frameBoundary + 2);
+          const parsed = parseConversationSseFrame(frame);
+          if (parsed) {
+            conversation.dispatchWsEvent(parsed);
+          }
+          frameBoundary = buffer.indexOf('\n\n');
+        }
+      }
+      const trailing = parseConversationSseFrame((buffer + decoder.decode()).trim());
+      if (trailing) {
+        conversation.dispatchWsEvent(trailing);
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return accepted;
+      const message = error instanceof Error ? error.message : 'Stream failed';
+      dispatchTransportError('SERVER_ERROR', message);
+      return accepted;
+    } finally {
+      if (activeRequestControllerRef.current === controller) {
+        activeRequestControllerRef.current = null;
+      }
+    }
+    return accepted;
+  }, [conversation, dispatchTransportError]);
+
+  const startConversation = useCallback(async (text: string): Promise<boolean> => {
+    try {
+      const providerPolicy = loadLlmProviderPolicy();
+      const validation = validateByok({
+        apiKey: providerPolicy.apiKey,
+        baseUrl: providerPolicy.baseUrl,
+      });
+      if (!validation.valid) {
+        dispatchTransportError(validation.errorCode);
+        return false;
+      }
+      const response = await fetch('/api/conversation/start', {
+        method: 'POST',
+        headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          scenario_id: scenarioId,
+          agent_identity_id: identityId ?? null,
+          origin_node_id: origin?.nodeId ?? null,
+          origin_node_type: origin?.nodeType ?? null,
+          first_user_content: text,
+          ...(providerPolicy.apiKey ? { llm_api_key: providerPolicy.apiKey } : {}),
+          ...(providerPolicy.baseUrl ? { llm_base_url: providerPolicy.baseUrl } : {}),
+          ...(providerPolicy.model ? { llm_model: providerPolicy.model } : {}),
+          ...(providerPolicy.disableUserQuota ? { disable_user_quota: true } : {}),
+        }),
+      });
+      if (!response.ok) {
+        const error = await readConversationError(response);
+        dispatchTransportError(error.code, error.message);
+        return false;
+      }
+      const payload = await response.json() as { thread_id?: string | null };
+      const nextThreadId = typeof payload.thread_id === 'string' && payload.thread_id.trim()
+        ? payload.thread_id
+        : null;
+      if (!nextThreadId) {
+        dispatchTransportError('SERVER_ERROR', 'Missing conversation thread id');
+        return false;
+      }
+      setThreadId(nextThreadId);
+      return await streamTurn(nextThreadId, text);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Start conversation failed';
+      dispatchTransportError('SERVER_ERROR', message);
+      return false;
+    }
+  }, [dispatchTransportError, identityId, origin?.nodeId, origin?.nodeType, scenarioId, streamTurn]);
+
+  const handleSubmit = useCallback(async () => {
     const text = inputValue.trim();
     if (text.length === 0) return;
-    onSubmit?.(text);
-    convDispatch({ type: 'submit' });
+    lastSubmittedMessageRef.current = text;
+    draft.save(text);
+    if (onSubmit) {
+      onSubmit(text);
+      return;
+    }
+    const accepted = !threadId
+      ? await startConversation(text)
+      : await streamTurn(threadId, text);
+    if (!accepted) return;
     draft.discard();
     setInputValue('');
-  }, [convDispatch, draft, inputValue, onSubmit]);
+  }, [draft, inputValue, onSubmit, startConversation, streamTurn, threadId]);
 
-  const handleAbort = useCallback(() => {
-    onAbort?.();
+  const handleAbort = useCallback(async () => {
+    if (onAbort) {
+      onAbort();
+      return;
+    }
+    activeRequestControllerRef.current?.abort();
+    activeRequestControllerRef.current = null;
+    if (threadId) {
+      try {
+        await fetch(`/api/conversation/${encodeURIComponent(threadId)}/active`, {
+          method: 'DELETE',
+          headers: buildSessionHeaders(),
+        });
+      } catch {
+        // Best-effort network cleanup.
+      }
+    }
     convDispatch({ type: 'abort' });
-  }, [convDispatch, onAbort]);
+  }, [convDispatch, onAbort, threadId]);
+
+  const handleResend = useCallback(async () => {
+    if (onResend) {
+      onResend();
+      return;
+    }
+    const lastMessage = lastSubmittedMessageRef.current?.trim();
+    if (!lastMessage || !threadId) return;
+    await streamTurn(threadId, lastMessage);
+  }, [onResend, streamTurn, threadId]);
 
   const handleDiscardDraft = useCallback(() => {
     draft.discard();
     setInputValue('');
     setDraftNoticeDismissed(true);
   }, [draft]);
+
+  // Mobile snap-point state (40/70/100 vh). Starts at 70 (default reading
+  // height). Cycled by the grab handle; raised/lowered by keyboard shortcut.
+  const [snapLevel, setSnapLevel] = useState<NodeConversationSnapLevel>('70');
+  const handleSnapCycle = useCallback(() => {
+    setSnapLevel((lvl) => nextSnap(lvl));
+  }, []);
+
+  /**
+   * Textarea onKeyDown — Cmd/Ctrl+Enter submit, Cmd/Ctrl+R resend,
+   * Cmd/Ctrl+ArrowUp/ArrowDown mobile snap.
+   *
+   * Always preventDefault on modifier+key combos we claim, so the browser
+   * never refreshes the page (Cmd+R) or inserts a newline (Cmd+Enter).
+   */
+  const handleInputKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        handleSubmit();
+        return;
+      }
+      const lower = e.key.toLowerCase();
+      if (lower === 'r') {
+        e.preventDefault();
+        e.stopPropagation();
+        handleResend();
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        setSnapLevel((lvl) => raiseSnap(lvl));
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopPropagation();
+        setSnapLevel((lvl) => lowerSnap(lvl));
+        return;
+      }
+    },
+    [handleSubmit, handleResend],
+  );
 
   // Mobile bottom-sheet drag guard: stop touchstart propagation on the
   // inner scroll region so radix-dialog / any drag-to-close handler on the
@@ -192,6 +495,10 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   );
 
   const side = isMobile ? 'bottom' : 'right';
+  const handleSheetOpenChange = useCallback((nextOpen: boolean) => {
+    if (!nextOpen) onClose?.();
+    onOpenChange(nextOpen);
+  }, [onClose, onOpenChange]);
 
   const showRecovery = convState.turn === 'error' || convState.turn === 'recovering';
   const showEmpty = convState.turn === 'idle' && inputValue.length === 0;
@@ -199,25 +506,46 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   const isDone = convState.turn === 'done';
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={handleSheetOpenChange}>
       <SheetContent
         side={side}
         data-testid="node-conversation-sheet"
         data-mobile={isMobile ? 'true' : 'false'}
-        aria-labelledby="node-conversation-sheet-title"
+        data-snap={isMobile ? snapLevel : undefined}
         className={cn(
           'flex h-full flex-col',
           isMobile
-            ? 'rounded-t-2xl pb-[env(safe-area-inset-bottom)] data-[state=open]:max-h-[70vh]'
+            ? cn(
+                'rounded-t-2xl pb-[env(safe-area-inset-bottom)]',
+                SNAP_MAX_H[snapLevel],
+              )
             : 'w-full sm:max-w-md',
         )}
       >
+        {isMobile ? (
+          <button
+            type="button"
+            data-testid="node-conversation-snap-handle"
+            data-snap={snapLevel}
+            aria-label={t('conversation.sheet.snap_handle_aria', {
+              snap: snapLevel,
+              defaultValue: `Snap bottom sheet (current ${snapLevel}vh)`,
+            })}
+            onClick={handleSnapCycle}
+            className="mx-auto mt-1 h-1.5 w-12 rounded-full bg-border-default hover:bg-text-muted"
+          />
+        ) : null}
         <SheetHeader>
-          <SheetTitle id="node-conversation-sheet-title">
+          <SheetTitle>
             {t('conversation.sheet.title', {
               defaultValue: origin?.nodeType ?? 'Conversation',
             })}
           </SheetTitle>
+          <SheetDescription className="sr-only">
+            {t('conversation.sheet.description', {
+              defaultValue: 'Ask the agent about the selected node and review the streamed reply here.',
+            })}
+          </SheetDescription>
         </SheetHeader>
 
         {/* Draft status */}
@@ -234,13 +562,10 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
           aria-label={t('conversation.sheet.scroll_region_aria')}
           className="flex-1 overflow-y-auto"
         >
-          {showEmpty ? (
-            <EmptyStateQuickQuestions onSelect={setInputValue} />
-          ) : (
-            <div className="px-1 py-2 text-sm leading-relaxed text-text-primary">
-              <StreamingBubbleIsolated onRef={handleBubbleRef} />
-            </div>
-          )}
+          <div className="px-1 py-2 text-sm leading-relaxed text-text-primary">
+            <StreamingBubbleIsolated onRef={handleBubbleRef} />
+          </div>
+          {showEmpty ? <EmptyStateQuickQuestions onSelect={setInputValue} /> : null}
 
           {showRecovery ? (
             <ConversationRecoveryBanner
@@ -271,9 +596,11 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
           <textarea
             data-testid="node-conversation-input"
             aria-label={t('conversation.input.placeholder')}
+            aria-keyshortcuts="Meta+Enter Control+Enter Meta+R Control+R"
             placeholder={t('conversation.input.placeholder')}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleInputKeyDown}
             rows={2}
             className="flex-1 resize-none rounded-md border border-border-default bg-surface p-2 text-sm text-text-primary"
           />
@@ -300,7 +627,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
           <button
             type="button"
             data-testid="node-conversation-close"
-            onClick={() => onOpenChange(false)}
+            onClick={() => handleSheetOpenChange(false)}
             aria-label={t('conversation.sheet.close_aria')}
             className="min-h-[44px] min-w-[44px] rounded-md border border-border-default px-3 text-xs text-text-muted hover:bg-surface-muted"
           >

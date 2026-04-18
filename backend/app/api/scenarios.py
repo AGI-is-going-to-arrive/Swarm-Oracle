@@ -432,7 +432,7 @@ async def api_capabilities():
         {
             "polymarket": {
                 "enabled": settings.FEATURE_NEW_SOURCES,
-                "configured_host": "gamma-api.polymarket.com",
+                "configured_host": "us",
                 "rate_limit_rps": 2,
                 "ttl_seconds": 60,
                 "byok_allowed": True,
@@ -678,6 +678,11 @@ async def create_scenario(
     with Session(engine) as session:
         session.add(scenario)
         session.commit()
+        from app.services.conversation_service import signal_scenario_deleted_turns
+
+        signal_scenario_deleted_turns(
+            session.info.pop("scenario_deleted_turn_ids", []),
+        )
         session.refresh(scenario)
         scenario_id = scenario.id
 

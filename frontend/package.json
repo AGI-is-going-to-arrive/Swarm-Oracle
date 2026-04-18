@@ -3,12 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "packageManager": "npm@11.12.1",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && npm run perf:budgets:check",
     "lint": "eslint .",
     "preview": "vite preview",
     "generate:ui-assets": "node scripts/generate-ui-assets.mjs",

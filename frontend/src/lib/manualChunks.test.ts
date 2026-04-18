@@ -11,11 +11,11 @@ describe('resolveManualChunk', () => {
     expect(resolveManualChunk('/repo/frontend/node_modules/scheduler/index.js')).toBe('vendor');
   });
 
-  it('keeps the entire React Flow stack in the shared vendor chunk', () => {
-    expect(resolveManualChunk('/repo/frontend/node_modules/@xyflow/react/dist/index.js')).toBe('vendor');
-    expect(resolveManualChunk('/repo/frontend/node_modules/d3-selection/src/index.js')).toBe('vendor');
-    expect(resolveManualChunk('/repo/frontend/node_modules/dagre/index.js')).toBe('vendor');
-    expect(resolveManualChunk('/repo/frontend/node_modules/graphlib/index.js')).toBe('vendor');
+  it('lets the React Flow stack use Rollup auto-splitting', () => {
+    expect(resolveManualChunk('/repo/frontend/node_modules/@xyflow/react/dist/index.js')).toBeUndefined();
+    expect(resolveManualChunk('/repo/frontend/node_modules/d3-selection/src/index.js')).toBeUndefined();
+    expect(resolveManualChunk('/repo/frontend/node_modules/dagre/index.js')).toBeUndefined();
+    expect(resolveManualChunk('/repo/frontend/node_modules/graphlib/index.js')).toBeUndefined();
     expect(resolveManualChunk('/repo/frontend/node_modules/react-i18next/dist/index.js')).toBe('i18n-vendor');
   });
 
@@ -25,10 +25,20 @@ describe('resolveManualChunk', () => {
     expect(resolveManualChunk('/repo/frontend/node_modules/gif.js/dist/gif.js')).toBe('capture-gif');
   });
 
-  it('routes @antv/g6 into g6-vendor, and the rule fires before @xyflow detection', () => {
+  it('splits large UI/support libraries out of the shared vendor chunk', () => {
+    expect(resolveManualChunk('/repo/frontend/node_modules/@radix-ui/react-dialog/dist/index.js')).toBe('radix-vendor');
+    expect(resolveManualChunk('/repo/frontend/node_modules/@dnd-kit/core/dist/core.esm.js')).toBe('dnd-vendor');
+    expect(resolveManualChunk('/repo/frontend/node_modules/lucide-react/dist/esm/icons/x.js')).toBe('icon-vendor');
+    expect(resolveManualChunk('/repo/frontend/node_modules/@chenglou/pretext/dist/index.js')).toBe('pretext');
+  });
+
+  it('routes the full G6 ecosystem into g6-vendor before any graph auto-splitting', () => {
     expect(resolveManualChunk('/repo/frontend/node_modules/@antv/g6/lib/index.js')).toBe('g6-vendor');
-    // Sanity check: a path that contains both markers (unlikely in practice) still
-    // lands in g6-vendor because the g6 rule is evaluated first.
+    expect(resolveManualChunk('/repo/frontend/node_modules/@antv/layout/lib/antv-dagre.js')).toBe('g6-vendor');
+    expect(resolveManualChunk('/repo/frontend/node_modules/gl-matrix/esm/index.js')).toBe('g6-vendor');
+    expect(resolveManualChunk('/repo/frontend/node_modules/bubblesets-js/dist/index.js')).toBe('g6-vendor');
+    // Sanity check: a path that contains both markers (unlikely in practice)
+    // still lands in g6-vendor because the graph-runtime rule is evaluated first.
     expect(resolveManualChunk('/repo/frontend/node_modules/@antv/g6/node_modules/@xyflow-shim/index.js')).toBe('g6-vendor');
   });
 

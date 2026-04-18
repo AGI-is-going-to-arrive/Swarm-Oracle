@@ -877,6 +877,8 @@ def finalize_turn_cas(
 def mark_scenario_conversations_as_deleted(
     session: Session,
     scenario_id: str,
+    *,
+    signal_immediately: bool = True,
 ) -> list[str]:
     """Transition every active turn in ``scenario_id`` to ``scenario_deleted``.
 
@@ -926,9 +928,16 @@ def mark_scenario_conversations_as_deleted(
     # BE-1: keep the helper inside the caller's transaction boundary so
     # ``scenarios.delete_scenario`` can still rollback the whole cascade.
     session.flush()
-    for turn_id in transitioned:
-        _signal_turn_cancel_event(turn_id, reason="scenario_deleted")
+    if signal_immediately:
+        for turn_id in transitioned:
+            _signal_turn_cancel_event(turn_id, reason="scenario_deleted")
     return transitioned
+
+
+def signal_scenario_deleted_turns(turn_ids: list[str]) -> None:
+    """Wake in-flight SSE streams after the delete transaction commits."""
+    for turn_id in turn_ids:
+        _signal_turn_cancel_event(turn_id, reason="scenario_deleted")
 
 
 # ── Streaming ───────────────────────────────────────────

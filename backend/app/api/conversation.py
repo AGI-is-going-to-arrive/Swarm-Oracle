@@ -283,7 +283,7 @@ async def _sse_event_stream(
         err_payload = {
             **(fallback_data or {}),
             "status": "error",
-            "code": "STREAM_FAILED",
+            "code": "LLM_5XX",
             "message": _map_error_message("LLM_5XX"),
             "request_id": request_id,
         }

@@ -12,6 +12,7 @@ import type {
   CampaignBadge, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
   ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
 } from '../types';
+import { getOrgId } from '../lib/orgContext';
 
 const BASE = '/api';
 
@@ -81,6 +82,10 @@ export function buildSessionHeaders(headers?: HeadersInit): Headers {
   const sessionToken = getSessionToken();
   if (sessionToken && !merged.has('X-Session-Token')) {
     merged.set('X-Session-Token', sessionToken);
+  }
+  const orgId = getOrgId();
+  if (orgId && !merged.has('X-Org-Id')) {
+    merged.set('X-Org-Id', orgId);
   }
   return merged;
 }

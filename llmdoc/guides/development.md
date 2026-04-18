@@ -7,7 +7,7 @@
 
 - Python `>= 3.11`
 - Node.js `>= 20`
-- pnpm `>= 10`
+- npm `>= 11`
 
 ## 本地开发
 
@@ -31,16 +31,16 @@ uvicorn --app-dir /absolute/path/to/upgrade-test/backend app.main:app --reload -
 
 ```bash
 cd frontend
-pnpm install
-pnpm run dev
+npm install
+npm run dev
 ```
 
 ### 预览构建
 
 ```bash
 cd frontend
-pnpm run build
-pnpm exec vite preview --host 127.0.0.1 --port 18930
+npm run build
+npm run preview -- --host 127.0.0.1 --port 18930
 ```
 
 ## Docker
@@ -90,7 +90,7 @@ source .venv/bin/activate
 python -m pytest -q
 
 cd ../frontend
-pnpm test
+npm test
 ```
 
 ### Backend 定向回归
@@ -109,11 +109,11 @@ source .venv/bin/activate
 python -m pytest tests/test_web_context.py tests/test_web_context_integration.py tests/test_web_search_contract.py tests/test_config.py -q
 
 cd ../frontend
-pnpm test -- --run src/pages/InputView.test.tsx
-pnpm exec tsc --noEmit -p tsconfig.app.json
-pnpm run lint
-VITE_ENABLE_WEB_SEARCH=true pnpm run build
-pnpm run e2e:web-search -- --url http://127.0.0.1:18930 --output-dir output/e2e/review-web-search --provider tavily
+npm test -- --run src/pages/InputView.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+npm run lint
+VITE_ENABLE_WEB_SEARCH=true npm run build
+npm run e2e:web-search -- --url http://127.0.0.1:18930 --output-dir output/e2e/review-web-search --provider tavily
 ```
 
 说明：
@@ -149,7 +149,7 @@ python -m pytest tests/test_audit_fixes.py tests/test_contract_freeze.py tests/t
 python -m pytest tests/test_corner_cases.py -k 'init_db_reuses_engine_managed_connection_for_sqlite_migrations or init_db_adds_agent_group_scenario_index' -q
 
 cd ../frontend
-pnpm test -- --run src/lib/dailyChallenge.test.ts
+npm test -- --run src/lib/dailyChallenge.test.ts
 ```
 
 说明：
@@ -165,8 +165,8 @@ pnpm test -- --run src/lib/dailyChallenge.test.ts
 
 ```bash
 cd frontend
-pnpm test -- --run src/lib/scenarioMeta.test.ts src/lib/scenarioGameplayState.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
-pnpm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.tsx src/lib/replayCodec.test.ts src/lib/debateReplay.test.ts src/components/AgentProfileModal.test.tsx src/lib/legacyCssFallbacks.test.ts
+npm test -- --run src/lib/scenarioMeta.test.ts src/lib/scenarioGameplayState.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
+npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.tsx src/lib/replayCodec.test.ts src/lib/debateReplay.test.ts src/components/AgentProfileModal.test.tsx src/lib/legacyCssFallbacks.test.ts
 ```
 
 - Vitest 当前在 `frontend/src/setupTests.ts` 里统一注入内存版 `localStorage / sessionStorage`。
@@ -201,28 +201,30 @@ source .venv/bin/activate
 python -m pytest -q
 
 cd ../frontend
-pnpm test
-pnpm exec tsc --noEmit -p tsconfig.app.json
-pnpm run lint
-pnpm run build
-pnpm exec vite preview --host 127.0.0.1 --port 18930
+npm test
+npx tsc --noEmit -p tsconfig.app.json
+npm run lint
+npm run build
+npm run preview -- --host 127.0.0.1 --port 18930
 ```
 
 说明：
 
 - 本轮实测结果：
-  - backend 全量：`2239 passed, 2 skipped`
-  - frontend 全量 vitest：`1291 passed`
-  - `pnpm exec tsc --noEmit -p tsconfig.app.json` / `pnpm run lint` / `pnpm run build` 通过
-  - `pnpm exec vite preview --host 127.0.0.1 --port 18930` 可正常挂起
-- 这轮图谱 / 辩论面只记录上述全量回归与 preview 挂起结果，不在本页补写未复跑的 smoke / E2E 结论。
+  - backend conversation 定向回归：`3 passed`
+  - backend 全量：`2240 passed, 2 skipped`
+  - frontend 文档相关定向 vitest：`80 passed`
+  - frontend 全量 vitest：`1296 passed`
+  - `npm run build`（含 `perf:budgets:check`）通过
+  - fresh local live：`node-conversation-live`、`kg-explorer-live`、`replay-view-live` 通过
+- 这轮图谱 / 节点对话链路只记录上述本轮实测结果；未复跑的旧 smoke / signoff 结论继续以各自 artifact 为准。
 
 ### Resume / P1-9 定向回归
 
 ```bash
 cd frontend
-pnpm test -- --run src/components/ResumePanel.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts
-pnpm run e2e:resume -- full
+npm test -- --run src/components/ResumePanel.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts
+npm run e2e:resume -- full
 ```
 
 ### P1-10 / P1-11 定向回归
@@ -233,13 +235,13 @@ source .venv/bin/activate
 python -m pytest tests/test_debate_argument_map.py tests/test_debate_service.py tests/test_config.py tests/test_agent_identity.py tests/test_api.py tests/test_p0_wiring.py tests/test_contract_freeze.py -q
 
 cd ../frontend
-pnpm test -- --run src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/ui/SpotlightTurnCard.test.tsx
+npm test -- --run src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/ui/SpotlightTurnCard.test.tsx
 node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
 node scripts/e2e-debate-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/debate-full --headless
 node scripts/e2e-debate-suite.mjs desktop --browser firefox --url http://127.0.0.1:18930 --output-dir output/e2e/debate-firefox --headless
 node scripts/e2e-debate-suite.mjs desktop --browser webkit --url http://127.0.0.1:18930 --output-dir output/e2e/debate-webkit --headless
-pnpm exec tsc --noEmit -p tsconfig.app.json
-pnpm run build
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
 ```
 
 - debate mobile E2E 当前按 rail fail-closed：
@@ -261,10 +263,10 @@ source .venv/bin/activate
 python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q
 
 cd ../frontend
-pnpm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
+npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
 node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
-pnpm exec tsc --noEmit -p tsconfig.app.json
-pnpm run build
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
 
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/oracle-ending-room-full --headless
 node scripts/e2e-ending-room-followup-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/oracle-ending-room-followup-full --headless
@@ -373,11 +375,11 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
 
 ```bash
 cd frontend
-pnpm run lint
-pnpm exec tsc --noEmit -p tsconfig.app.json
-pnpm run build
-pnpm run perf:budgets:check
-pnpm run assets:provenance:check
+npm run lint
+npx tsc --noEmit -p tsconfig.app.json
+npm run build
+npm run perf:budgets:check
+npm run assets:provenance:check
 ```
 
 ### LLM 集成测试
@@ -475,10 +477,10 @@ source .venv/bin/activate
 uvicorn --app-dir /absolute/path/to/upgrade-test/backend app.main:app --host 127.0.0.1 --port 18927
 
 cd frontend
-pnpm exec vite preview --host 127.0.0.1 --port 18930
+npm run preview -- --host 127.0.0.1 --port 18930
 
 cd frontend
-pnpm run release:signoff -- --url http://127.0.0.1:18930 --headless
+npm run release:signoff -- --url http://127.0.0.1:18930 --headless
 ```
 
 说明：
@@ -491,10 +493,14 @@ pnpm run release:signoff -- --url http://127.0.0.1:18930 --headless
 - 默认 `release-signoff` 当前已纳入：
   - `lint`
   - `graph_focused_vitest`
+  - `perf_budgets`
   - `phase3_graph_preflight`
   - `script_contracts`
   - graph default / `zh-CN` smoke（`phase3-batch-a`、`phase3-batch-b`）
   - graph Firefox / WebKit desktop smoke（`phase3-batch-a`、`phase3-batch-b`）
+  - `node_conversation_live`
+  - `kg_explorer_live`
+  - `replay_view_live`
   - `ending_room_followup / ending_room_followup_en`
   - `ending_room_followup_firefox / ending_room_followup_en_firefox`
   - `ending_room_followup_webkit / ending_room_followup_en_webkit`
@@ -509,7 +515,7 @@ pnpm run release:signoff -- --url http://127.0.0.1:18930 --headless
 
 ```bash
 cd frontend
-SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid pnpm run release:signoff -- --url http://127.0.0.1:18930 --headless
+SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --url http://127.0.0.1:18930 --headless
 ```
 
 ## 签收口径

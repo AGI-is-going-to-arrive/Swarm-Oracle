@@ -19,6 +19,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 搜索增强当前在首页有两档入口：
   - `沿用服务器默认`：直接复用服务端默认 provider
   - `自定义覆盖`：当前局单独指定 `provider / API key / base URL`
+- 首页高级设置当前还支持可选 `Organization ID`；值只在当前浏览器 session 内保存，并随请求头 `X-Org-Id` 透传，留空就不发送。
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。
 - `SimulationView` 负责 live 推演、Theater、干预、玩法卡、结构化押注与 capture。
 - `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、campaign summary、分享、导出与 replay/import；当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。结果页里的 `FactionTimeline` 当前会优先跟随正在展开查看的分支；未展开时会落到概率最高分支，并改成真实纵向时间线，`stance / confidence` 等指标直接可见，不再只藏在 tooltip badge 里。replay 模式下会继续保留 replay-safe 的 `causal graph` 入口和 `FactionTimeline`，但 `counterfactual / resume` 这类 live-only 面板仍保持隐藏。标题、空态、轮次与事件标签都会跟随 UI 语言。`CompareDigestView` 的非活跃 pane 当前会保留更完整的待机镜像，不再是纯黑占位。
@@ -101,7 +102,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - roundtable 的 scoped regression 当前已覆盖 Chromium 桌面/移动，以及桌面 Firefox / WebKit；`reseat / keyboard reseat / anchored thread / hotseat / witness_augmented / readonly replay` 口径与 Chromium 对齐。
 - ending-room 后台生成当前也持有 runtime lock heartbeat；续租返回 `None`、续租抛异常，或 lease 过期时，会直接 fail-closed 把 room 落成 `error`，不会失锁后继续写 turn 或 result。
 - Oracle 页面当前按用户正在使用的 UI 语言渲染界面壳，不再强制跟随 `scenario.language` 覆盖全局语言开关。
-- Oracle fresh live room 的英文 deterministic copy 当前已补去混句兜底，不再把中文 hinge 直接嵌进英文句子。
+- Oracle fresh live room 的英文 deterministic copy 当前已补去混句兜底，不再把中文 hinge 直接嵌进英文句子；fresh live 的节点对话、KG Explorer 与 replay-view 浏览器链路本轮也已复核通过。
 - `EndingChatModal` 的 mobile sidebar sheet 当前已补可访问标题/描述；sheet 打开时第一次 `Escape` 只收 sheet，不会直接关外层 chamber。
 - 结果页 live ending-room 当前把 English 只读保存入口统一为 `Save local read-only copy`；readonly replay 仍保留 `Import as Local Run`。
 
@@ -132,10 +133,14 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 主闭环当前维持 `release-candidate` 级别。
 - 当前稳定基线仍保留：
   - `graph / replay / backend correctness` 修复，以及 UI review findings 对应前端修复，当前都已并入基线
-  - backend `causal-graph / replay` 定向回归 `296 passed`
-  - backend 全量 `pytest` `2239 passed, 2 skipped`
-  - frontend `typecheck / lint / build` 通过
-  - frontend 全量 vitest `1291 passed`
+  - backend `conversation / stream-fallback` 定向回归 `3 passed`
+  - backend 全量 `pytest` `2240 passed, 2 skipped`
+  - frontend `typecheck / lint / build / perf budgets` 通过
+  - frontend 全量 vitest `1296 passed`
+  - 本轮 fresh local live 验证已补：
+    - `node-conversation-live`
+    - `kg-explorer-live`
+    - `replay-view-live`
   - graph script contract：`node --test scripts/e2e-frontend-preflight.test.mjs` `25 passed`
   - production preview 当前可挂到 `127.0.0.1:18930`
   - graph smoke / release-signoff 当前都会先跑前端 deep-link preflight；preview 没 ready、SPA fallback 失效，或 entry module、CSS entry、legacy fallback 资源不一致 / 不可达时会直接 fail-closed，不再把 404 混成图谱回归

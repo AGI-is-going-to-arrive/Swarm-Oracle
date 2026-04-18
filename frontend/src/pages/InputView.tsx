@@ -40,8 +40,10 @@ import {
   useInputCampaignState,
   useSharedChallengePrefill,
 } from '../hooks/useInputViewState';
+import { useOrgContext } from '../hooks/useOrgContext';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
 import { predictTextareaHeight } from '../lib/textLayout/inputPredict';
+import { validateByok } from '../lib/llmProviderPolicy';
 import './InputView.css';
 
 function estimateSimulationMinutes(rounds: number, numAgents: number) {
@@ -240,6 +242,8 @@ export function InputView() {
     setDisableUserQuota,
     testStatus,
     testError,
+    setTestStatus,
+    setTestError,
     probeResult,
     hasFreshProbe,
     reasoningEffort,
@@ -261,6 +265,7 @@ export function InputView() {
     webSearchStatus,
     setWebSearchStatus,
   } = useInputByokSettings(t);
+  const { orgId, setOrgId } = useOrgContext();
   const {
     campaignProfile,
     campaignBadges,
@@ -726,6 +731,12 @@ export function InputView() {
     const trimmed = launch.nextQuestion.trim();
     if (!trimmed || isSubmitting) return;
     if (isSimulationBudgetBlocked) return;
+    const byokValidation = validateByok({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
+    if (!byokValidation.valid) {
+      setTestStatus('fail');
+      setTestError(t('conversation.error.byok_invalid'));
+      return;
+    }
 
     if (llmApiKey.trim() && !hasFreshProbe) {
       const probe = await handleTestConnection();
@@ -749,6 +760,12 @@ export function InputView() {
   }) => {
     const trimmed = nextQuestion.trim();
     if (!trimmed || isSubmitting) return;
+    const byokValidation = validateByok({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
+    if (!byokValidation.valid) {
+      setTestStatus('fail');
+      setTestError(t('conversation.error.byok_invalid'));
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -1694,6 +1711,20 @@ export function InputView() {
                           onChange={(e) => setLlmModel(e.target.value)}
                           placeholder="gpt-4o / claude-3.5-sonnet / ..."
                           disabled={isSubmitting}
+                        />
+                      </div>
+                      <div className="byok-field">
+                        <label className="byok-label" htmlFor="org-id">{t('home.org_id_label')}</label>
+                        <span className="byok-field-help">{t('home.org_id_help')}</span>
+                        <input
+                          id="org-id"
+                          type="text"
+                          className="input byok-input"
+                          value={orgId ?? ''}
+                          onChange={(e) => setOrgId(e.target.value)}
+                          placeholder="team-alpha"
+                          disabled={isSubmitting}
+                          autoComplete="off"
                         />
                       </div>
                       <div className="byok-field">

@@ -4,17 +4,31 @@ export function resolveManualChunk(id: string): string | undefined {
   if (id.includes('/phaser/')) return 'phaser';
   if (id.includes('html2canvas')) return 'capture-html';
   if (id.includes('gif.js')) return 'capture-gif';
-  if (id.includes('@antv/g6')) return 'g6-vendor';
-  // Keep the whole React Flow stack inside the shared vendor chunk. Splitting
-  // @xyflow/d3/dagre/graphlib created a production-only TDZ crash during app
-  // bootstrap because Rollup emitted a vendor <-> flow-vendor cycle.
+  // Keep the whole G6 runtime isolated from the eager app shell. Routing only
+  // @antv/g6 was insufficient because Rollup still left a large set of direct
+  // @antv/* support packages in the shared vendor chunk, which regressed the
+  // homepage preload path.
+  if (
+    id.includes('/@antv/')
+    || id.includes('bubblesets-js')
+    || id.includes('gl-matrix')
+  ) {
+    return 'g6-vendor';
+  }
+  if (id.includes('@radix-ui')) return 'radix-vendor';
+  if (id.includes('@dnd-kit')) return 'dnd-vendor';
+  if (id.includes('lucide-react')) return 'icon-vendor';
+  if (id.includes('@chenglou/pretext')) return 'pretext';
+  // Let Rollup auto-split the React Flow stack. Forcing it into the shared
+  // vendor chunk regressed homepage cold-load size, while forcing a dedicated
+  // named chunk previously created fragile vendor <-> flow cycles.
   if (
     id.includes('@xyflow')
     || id.includes('/d3-')
     || id.includes('/dagre/')
     || id.includes('/graphlib/')
   ) {
-    return 'vendor';
+    return undefined;
   }
   if (id.includes('react-i18next') || id.includes('/i18next/')) return 'i18n-vendor';
 

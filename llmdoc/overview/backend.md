@@ -229,7 +229,8 @@
   - `POST /api/conversation/start` 先创建 thread、首条 user turn 和一条 `pending` assistant turn
   - 紧跟的 `POST /api/conversation/{thread_id}/turn` 如果还是同一条首轮 user 内容，会直接 claim 这条预留 assistant turn 开始流式返回，不再追加重复 user turn
   - 这条 claim 当前按原子 CAS 执行；并发首轮流里只会有一个请求拿到这条预留 turn，其他请求会 fail-closed，不会两路同时 stream 同一 turn
-  - scenario 删除如果发生在流式中途，流末尾仍会补 `turn_error(code=SCENARIO_DELETED)`；这里的取消原因会区分 `scenario_deleted` 和 `user_aborted`，即使删除事务还没 commit，也会先发终态错误
+  - scenario 删除如果发生在流式中途，会先在删除事务内把活跃 turn 标成 `scenario_deleted`，真正唤醒 in-flight SSE 的 cancel signal 改为事务提交后再发；这样 rollback 不会提前把客户端打成终态。事务成功提交后，流末尾仍会补 `turn_error(code=SCENARIO_DELETED)`，并继续区分 `scenario_deleted` 和 `user_aborted`
+  - SSE 通用兜底错误当前统一发 `turn_error(code=LLM_5XX)`，不再回落到模糊的 `STREAM_FAILED`
 - Debate argument map 当前走两层抽取：
   - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类；当前分句覆盖 `. ! ?`、`。！？` 和换行
   - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
@@ -263,8 +264,8 @@
 
 ## 当前验证基线
 
-- backend `causal-graph / replay` 定向回归：`296 passed`
-- backend 全量 `pytest`：`2239 passed, 2 skipped`
+- backend `conversation / stream-fallback` 定向回归：`3 passed`
+- backend 全量 `pytest`：`2240 passed, 2 skipped`
 
 ## WebSocket 口径
 

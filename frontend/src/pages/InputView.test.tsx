@@ -685,6 +685,27 @@ describe('InputView campaign progress', () => {
     expect(screen.getByText('At 5 rounds stay at or below 5 agents; at 5 agents stay at or below 5 rounds')).toBeInTheDocument();
   });
 
+  it('persists an optional org id from advanced settings', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await openAdvancedSettings(user);
+    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
+
+    const orgIdInput = await screen.findByLabelText('home.org_id_label');
+
+    await user.type(orgIdInput, 'tenant-alpha');
+    expect(window.sessionStorage.getItem('swarmoracle_org_id')).toBe('tenant-alpha');
+
+    await user.clear(orgIdInput);
+    expect(window.sessionStorage.getItem('swarmoracle_org_id')).toBeNull();
+  });
+
   it('shows short helper copy for each BYOK field', async () => {
     const user = userEvent.setup();
 
@@ -781,6 +802,64 @@ describe('InputView campaign progress', () => {
         disableUserQuota: true,
       }));
     });
+  });
+
+  it('blocks simulation launch when BYOK baseUrl is set without an apiKey', async () => {
+    const user = userEvent.setup();
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: '',
+      baseUrl: 'https://example.com/v1',
+      model: '',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+      disableUserQuota: false,
+    }));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
+    });
+    await user.type(screen.getAllByRole('textbox')[0], 'Blocked launch');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    expect(testLlmConnectionMock).not.toHaveBeenCalled();
+    expect(await screen.findByText(/conversation\.error\.byok_invalid/)).toBeInTheDocument();
+  });
+
+  it('blocks debate launch when BYOK baseUrl is set without an apiKey', async () => {
+    const user = userEvent.setup();
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: '',
+      baseUrl: 'https://example.com/v1',
+      model: '',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+      disableUserQuota: false,
+    }));
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<InputView />} />
+          <Route path="/debate/:id" element={<div>debate-route</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const questionField = document.querySelector('textarea');
+    expect(questionField).not.toBeNull();
+    await user.type(questionField as HTMLTextAreaElement, 'Blocked debate launch');
+    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+
+    expect(createDebateMock).not.toHaveBeenCalled();
+    expect(await screen.findByText(/conversation\.error\.byok_invalid/)).toBeInTheDocument();
   });
 
   it('shows continuity confirmation before simulation start when preflight finds fuzzy matches', async () => {

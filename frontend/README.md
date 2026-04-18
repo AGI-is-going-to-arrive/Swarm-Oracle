@@ -23,7 +23,7 @@ React + TypeScript frontend for SwarmOracle.
 
 | Route | Component | Description |
 |-------|-----------|-------------|
-| `/` | `InputView` | Scenario input, quick starts, daily challenge, provider policy |
+| `/` | `InputView` | Scenario input, quick starts, daily challenge, provider policy, optional organization id |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, capture |
 | `/result/:id` / `/result/replay` | `ResultView` | Result comparison, archive, campaign summary, share/export, replay import, resume-from-round entry when counterfactual replay is enabled |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
@@ -71,6 +71,12 @@ React + TypeScript frontend for SwarmOracle.
   local curated Phaser entry, isolated spike configs, and repeatable custom-build validation scripts; current default `vite / vitest` also consume this entry, while `phaser3spectorjs-stub.cjs` keeps the build path quiet
 - `scripts/lib/frontendPreflight.mjs`
   shared preview/deep-link preflight for graph E2E and `release-signoff`; it checks the SPA shell, entry-module fingerprint, and entry asset reachability before the browser flow starts
+- `manualChunks.ts / scripts/lib/performanceBudgetConfig.mjs`
+  build chunking keeps React in shared `vendor`, isolates the full G6 runtime in `g6-vendor`, keeps `html2canvas / gif.js` lazy, and leaves the React Flow stack to Rollup auto-splitting so the homepage preload path stays small
+- `orgContext.ts / useOrgContext.ts`
+  session-scoped `Organization ID` source of truth used by `InputView` and the API client; blank values remove the header instead of sending an empty `X-Org-Id`
+- `NodeConversationSheet.tsx`
+  sheet accessibility now relies on `SheetTitle / SheetDescription` instead of manual aria wiring, so Radix no longer warns about missing description metadata
 - `CausalReviewView.tsx`
   graph fetches now encode `scenarioId / branchId` before building request URLs
 - `ArgumentMap.tsx`
@@ -122,14 +128,11 @@ npm run build:spike:phaser-custom
 
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Latest scoped reruns in this session:
-  - `node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-frontend-preflight.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs`: `24 passed`
-  - graph-focused vitest: `102 passed`
-  - `npx tsc --noEmit -p tsconfig.app.json`: pass
-  - `npm run lint`: pass
+  - frontend targeted vitest covering `manualChunks / performance budgets / orgContext / InputView / API headers / NodeConversationSheet`: `80 passed`
+  - frontend full vitest: `1296 passed`
   - `npm run build`: pass
   - `npm run perf:budgets:check`: status `ok`
-  - preview-driven Chromium: `phase3-batch-a full`, `phase3-batch-b full`, and `phase3-batch-b zh-CN mobile` passed
-  - desktop Firefox / WebKit: `phase3-batch-a` and `phase3-batch-b` passed on both browsers
+  - fresh local live browser reruns: `node-conversation-live`, `kg-explorer-live`, and `replay-view-live` all passed
 - The default signoff target remains:
   - Chromium desktop/mobile
   - desktop Firefox / WebKit scoped regression
@@ -166,6 +169,9 @@ npm run build:spike:phaser-custom
   - `cross-browser`
   - phase3 graph default / `zh-CN`
   - phase3 graph desktop Firefox / WebKit
+  - `node-conversation-live`
+  - `kg-explorer-live`
+  - `replay-view-live`
   - `ending-room-followup`
   - `roundtable-full`
   - `debate-full`

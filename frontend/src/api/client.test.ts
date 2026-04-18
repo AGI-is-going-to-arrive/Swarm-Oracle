@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createReplayArtifact, exportScenario, getScenario } from './client';
+import { buildSessionHeaders, createReplayArtifact, exportScenario, getScenario } from './client';
 
 describe('api client request parsing', () => {
   afterEach(() => {
@@ -83,6 +83,22 @@ describe('api client request parsing', () => {
         headers: expect.any(Headers),
       }),
     );
+  });
+
+  it('buildSessionHeaders adds X-Org-Id from sessionStorage when present', () => {
+    sessionStorage.setItem('swarmoracle_org_id', 'tenant-front');
+
+    const headers = buildSessionHeaders();
+
+    expect(headers.get('X-Org-Id')).toBe('tenant-front');
+  });
+
+  it('buildSessionHeaders skips X-Org-Id when sessionStorage value is blank', () => {
+    sessionStorage.setItem('swarmoracle_org_id', '   ');
+
+    const headers = buildSessionHeaders();
+
+    expect(headers.has('X-Org-Id')).toBe(false);
   });
 
   it('retries transient GET failures for safe read endpoints', async () => {

@@ -76,7 +76,8 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 ```
 
 - Latest local rerun in this session:
-  - `python -m pytest -q`: `2239 passed, 2 skipped`
+  - `python -m pytest tests/test_api.py::TestDeleteScenario::test_delete_integrity_guard_does_not_signal_conversation_cancel_before_commit tests/test_conversation.py::TestSSEStream::test_sse_fallback_does_not_leak_exception_detail tests/test_team_review_round6_fixes.py::TestC2ScenarioDeletedTerminalSignal::test_scenario_cascade_invokes_mark_helper -q`: `3 passed`
+  - `python -m pytest -q`: `2240 passed, 2 skipped`
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
 ## Runtime Notes
@@ -100,6 +101,8 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - Agent identity L2 profiles now live in a dedicated `identity_profile_{user_id}` Chroma collection; custom agent create/update/delete 会同步 profile，旧的 shared-collection profile 文档会在后续写入时自动清理。
 - Ending-room WebSocket 现在只走共享的首帧 auth 协议；HTTP `verify_session` 继续只服务 REST，不再误包住 ending-room WS 路由。
 - Scenario WebSocket capacity is now enforced against `registered + pending-auth` connections together, and the pending slot is reserved before `accept()`, so concurrent handshakes can no longer oversell `MAX_WS_PER_SCENARIO`.
+- `scenario_deletion.py` + `conversation_service.py` now mark active node-conversation turns as `scenario_deleted` inside the delete transaction, but only wake in-flight SSE streams after commit; rollback no longer leaks a fake terminal delete event to the client.
+- Conversation SSE terminal fallback now emits `turn_error(code=LLM_5XX)` for generic provider-side failures instead of the older `STREAM_FAILED` bucket.
 - Ending-room background generation now also holds a runtime-lock heartbeat; a lost lease, a refresh error, or an expired local lease fails closed and marks the room as `error` instead of continuing to write turns/results after the lock is gone.
 - `POST /api/debate/{id}/predict` now treats counterplay WebSocket broadcast as best-effort after persistence; a broadcast failure logs a warning but does not turn a saved prediction into a fake `500`.
 - BYOK `llm_base_url` and official `web_search_base_url` endpoints now require `https`; plain `http` is kept only for local/self-hosted development hosts on the allowlist.

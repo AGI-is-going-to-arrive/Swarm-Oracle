@@ -67,6 +67,8 @@
       "byok_base_url_help": "Use an OpenAI-compatible endpoint, including root URLs like .../v1.",
       "byok_model_label": "Model",
       "byok_model_help": "Use the exact provider model id you want to call.",
+      "org_id_label": "Organization ID",
+      "org_id_help": "Optional. Stored in this tab session and sent as X-Org-Id on API requests.",
       "byok_rpm_label": "RPM Limit",
       "byok_rpm_help": "Maximum requests per minute. This caps how many turns can move in parallel.",
       "byok_tpm_label": "TPM Limit",
@@ -1208,7 +1210,9 @@
       "sheet": {
         "title": "Conversation",
         "close_aria": "Close conversation",
-        "scroll_region_aria": "Conversation transcript"
+        "scroll_region_aria": "Conversation transcript",
+        "description": "Ask the agent about the selected node and review the streamed reply here.",
+        "snap_handle_aria": "Resize bottom sheet, current {{snap}}vh, tap to cycle"
       },
       "empty_state": {
         "title": "Start a conversation",

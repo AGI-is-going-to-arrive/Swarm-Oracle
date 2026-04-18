@@ -126,7 +126,13 @@ def delete_scenario_cascade(
         mark_scenario_conversations_as_deleted,
     )
 
-    mark_scenario_conversations_as_deleted(session, scenario_id)
+    transitioned_turn_ids = mark_scenario_conversations_as_deleted(
+        session,
+        scenario_id,
+        signal_immediately=False,
+    )
+    if transitioned_turn_ids:
+        session.info["scenario_deleted_turn_ids"] = transitioned_turn_ids
 
     # ── Collect dependent ID sets once so we can drive bulk DELETEs ──
     branch_ids = list(
