@@ -133,10 +133,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 主闭环当前维持 `release-candidate` 级别。
 - 当前稳定基线仍保留：
   - `graph / replay / backend correctness` 修复，以及 UI review findings 对应前端修复，当前都已并入基线
-  - backend `conversation / stream-fallback` 定向回归 `3 passed`
+  - backend `agent-conversation delete / abort / ws` 定向回归 `21 passed`
   - backend 全量 `pytest` `2240 passed, 2 skipped`
   - frontend `typecheck / lint / build / perf budgets` 通过
-  - frontend 全量 vitest `1296 passed`
+  - frontend `NodeConversationSheet / GlobalOfflineBanner / performance budgets` 定向 vitest `42 passed`
+  - frontend 全量 vitest `1301 passed`
   - 本轮 fresh local live 验证已补：
     - `node-conversation-live`
     - `kg-explorer-live`

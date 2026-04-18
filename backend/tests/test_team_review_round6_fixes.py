@@ -23,6 +23,7 @@ the new code paths introduced by the round-6 patch.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -212,6 +213,13 @@ class TestC1AgentConversationWsEndpoint:
 class TestC2ScenarioDeletedTerminalSignal:
     """C2: mark_scenario_conversations_as_deleted + stream CAS post-check."""
 
+    def test_delete_helpers_are_reexported(self):
+        """Keep the public module surface aligned with the helpers used by
+        scenario deletion and API callers.
+        """
+        assert "mark_scenario_conversations_as_deleted" in conversation_service.__all__
+        assert "signal_scenario_deleted_turns" in conversation_service.__all__
+
     def test_mark_helper_sets_active_turns_to_scenario_deleted(self, client):
         engine = get_engine()
         scenario_id = _seed_scenario(engine)
@@ -309,9 +317,14 @@ class TestC2ScenarioDeletedTerminalSignal:
             assert turn.status == "done"
             assert turn.error_code is None
 
-    def test_scenario_cascade_invokes_mark_helper(self, client, monkeypatch):
-        """Regression: delete_scenario_cascade must call the helper before
-        DROPping the turn rows, otherwise mid-flight SSE clients go dark.
+    @pytest.mark.asyncio
+    async def test_delete_endpoint_signals_after_commit_and_wakes_stream(
+        self,
+        client,
+        monkeypatch,
+    ):
+        """Regression: delete flow must delay the wake-up signal until after
+        the delete transaction commits, then wake the in-flight stream.
         """
         engine = get_engine()
         scenario_id = _seed_scenario(engine, user_id="user-c2")
@@ -319,31 +332,72 @@ class TestC2ScenarioDeletedTerminalSignal:
             "/api/conversation/start", json=_default_start_body(scenario_id),
         ).json()
         assistant_turn_id = r["assistant_turn_id"]
+        stall_forever = asyncio.Event()
+
+        async def _two_chunk_stream(*_args, **_kwargs):
+            yield "alpha"
+            await stall_forever.wait()
 
         called_with: list[tuple[str, bool]] = []
+        signaled_batches: list[list[str]] = []
         real_mark = conversation_service.mark_scenario_conversations_as_deleted
+        real_signal = conversation_service.signal_scenario_deleted_turns
 
         def spy(session, sid, *, signal_immediately=True):
             called_with.append((sid, signal_immediately))
             return real_mark(session, sid, signal_immediately=signal_immediately)
 
-        # The scenario_deletion module imports the helper lazily inside the
-        # function body, so we patch the canonical symbol.
+        def spy_signal(turn_ids: list[str]) -> None:
+            signaled_batches.append(list(turn_ids))
+            real_signal(turn_ids)
+
         monkeypatch.setattr(
             conversation_service,
             "mark_scenario_conversations_as_deleted",
             spy,
         )
+        monkeypatch.setattr(
+            conversation_service,
+            "signal_scenario_deleted_turns",
+            spy_signal,
+        )
 
-        from app.services.scenario_deletion import delete_scenario_cascade
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=r["thread_id"],
+            assistant_turn_id=assistant_turn_id,
+            new_user_content="watch delete",
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url=None,
+                model="test-model",
+                disable_user_quota=False,
+            ),
+            _llm_stream_factory=_two_chunk_stream,
+        )
 
-        with Session(engine) as session:
-            ok = delete_scenario_cascade(session, scenario_id, "user-c2")
-            session.commit()
+        assert (await anext(iterator))["event"] == "turn_started"
+        assert (await anext(iterator))["event"] == "turn_token_delta"
 
-        assert ok is True
+        terminal_task = asyncio.create_task(anext(iterator))
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(terminal_task), timeout=0.05)
+        assert terminal_task.done() is False
+
+        resp = client.delete(f"/api/scenario/{scenario_id}")
+
+        assert resp.status_code == 200
         assert (scenario_id, False) in called_with
-        # And the assistant turn row is gone (cascade succeeded).
+
+        terminal = await asyncio.wait_for(terminal_task, timeout=1.0)
+        assert terminal["event"] == "turn_error"
+        assert terminal["data"]["code"] == "SCENARIO_DELETED"
+        assert terminal["data"]["status"] == "scenario_deleted"
+        assert signaled_batches == [[assistant_turn_id]]
+
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+
         with Session(engine) as session:
             assert session.get(AgentConversationTurn, assistant_turn_id) is None
 

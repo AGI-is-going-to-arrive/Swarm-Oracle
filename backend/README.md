@@ -40,7 +40,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | Predictions | `app/api/predictions.py` | Scenario prediction and leaderboard |
 | Interventions | `app/api/interventions.py` | Standard / retrospective / batch intervention |
 | Social | `app/api/social.py` | Social media copy generation |
-| WebSocket | `app/api/ws.py` | Scenario real-time events |
+| WebSocket | `app/api/ws.py` | Scenario real-time events + thread-scoped agent-conversation WebSocket |
 
 ## Key Endpoints
 
@@ -64,6 +64,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | `POST` | `/api/debate/import-replay` | Import debate replay as local run and preserve imported `phase_insights` / `adjudication_mode` |
 | `POST` | `/api/conversation/start` | Create a node conversation thread with the first user turn plus a reserved assistant turn |
 | `POST` | `/api/conversation/{thread_id}/turn` | Claim or append an assistant turn and stream it back over SSE |
+| `WS` | `/ws/agent-conversation/{thread_id}` | Thread-scoped node conversation events with the shared first-frame auth contract |
 | `WS` | `/ws/scenario/{scenario_id}` | Scenario events |
 | `WS` | `/ws/debate/{debate_id}` | Debate events |
 
@@ -76,8 +77,7 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 ```
 
 - Latest local rerun in this session:
-  - `python -m pytest tests/test_api.py::TestDeleteScenario::test_delete_integrity_guard_does_not_signal_conversation_cancel_before_commit tests/test_conversation.py::TestSSEStream::test_sse_fallback_does_not_leak_exception_detail tests/test_team_review_round6_fixes.py::TestC2ScenarioDeletedTerminalSignal::test_scenario_cascade_invokes_mark_helper -q`: `3 passed`
-  - `python -m pytest -q`: `2240 passed, 2 skipped`
+  - `python -m pytest tests/test_team_review_round6_fixes.py tests/test_conversation.py tests/test_api.py -k 'C1 or C2 or scenario_deleted or abort or delete_integrity_guard_does_not_signal_conversation_cancel_before_commit or delete_helpers_are_reexported' -q`: `21 passed`
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
 ## Runtime Notes
@@ -101,7 +101,9 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - Agent identity L2 profiles now live in a dedicated `identity_profile_{user_id}` Chroma collection; custom agent create/update/delete 会同步 profile，旧的 shared-collection profile 文档会在后续写入时自动清理。
 - Ending-room WebSocket 现在只走共享的首帧 auth 协议；HTTP `verify_session` 继续只服务 REST，不再误包住 ending-room WS 路由。
 - Scenario WebSocket capacity is now enforced against `registered + pending-auth` connections together, and the pending slot is reserved before `accept()`, so concurrent handshakes can no longer oversell `MAX_WS_PER_SCENARIO`.
-- `scenario_deletion.py` + `conversation_service.py` now mark active node-conversation turns as `scenario_deleted` inside the delete transaction, but only wake in-flight SSE streams after commit; rollback no longer leaks a fake terminal delete event to the client.
+- `app/api/ws.py` now also exposes `/ws/agent-conversation/{thread_id}`; it reuses the shared first-frame auth / pending-auth budget path, returns `4404` when the feature is off or the thread is missing, and keeps capacity scoped to the owning scenario instead of multiplying by thread count.
+- `scenario_deletion.py` + `conversation_service.py` now mark active node-conversation turns as `scenario_deleted` inside the delete transaction, stage the affected turn ids in `session.info`, and let the delete endpoint drain that list only after commit; rollback no longer leaks a fake terminal delete event to the client.
+- `DELETE /api/conversation/{thread_id}/active` now prefers waking the live stream task before falling back to direct CAS, so already-streamed partial text is not dropped by a route-level race.
 - Conversation SSE terminal fallback now emits `turn_error(code=LLM_5XX)` for generic provider-side failures instead of the older `STREAM_FAILED` bucket.
 - Ending-room background generation now also holds a runtime-lock heartbeat; a lost lease, a refresh error, or an expired local lease fails closed and marks the room as `error` instead of continuing to write turns/results after the lock is gone.
 - `POST /api/debate/{id}/predict` now treats counterplay WebSocket broadcast as best-effort after persistence; a broadcast failure logs a warning but does not turn a saved prediction into a fake `500`.

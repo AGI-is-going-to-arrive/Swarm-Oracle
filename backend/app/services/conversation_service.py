@@ -1361,6 +1361,11 @@ def abort_turn(
     broadcast ``agent_conversation_turn_abort``); ``False`` when the row had
     already reached a terminal state by a race.
     """
+    # Prefer the live stream task as the terminal writer so any already
+    # emitted partial text is preserved on the aborted row.
+    if _signal_turn_cancel_event(turn_id, reason="user_aborted"):
+        return True
+
     engine = get_engine()
     with Session(engine) as session:
         thread = load_conversation_thread_for_owner(session, thread_id, owner_user_id)
@@ -1376,8 +1381,6 @@ def abort_turn(
             error_code="USER_ABORTED",
             model=turn.model,
         )
-        if transitioned:
-            _signal_turn_cancel_event(turn_id, reason="user_aborted")
         return transitioned
 
 
@@ -1393,6 +1396,8 @@ __all__ = [
     "finalize_turn_cas",
     "stream_assistant_turn",
     "abort_turn",
+    "mark_scenario_conversations_as_deleted",
+    "signal_scenario_deleted_turns",
     "redact_byok",
     "resolve_byok_overrides",
     "load_conversation_thread_for_owner",

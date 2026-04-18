@@ -393,3 +393,103 @@ async def websocket_endpoint(websocket: WebSocket, scenario_id: str):
         missing_resource_name="scenario",
         log_client_messages=True,
     )
+
+
+# ── Thread-scoped WS endpoint for agent conversation (C1 fix) ───────────
+#
+# Reuses ``run_websocket_session`` so first-frame auth, ``auth_ok``,
+# ``pending_auth`` capacity limits, and ``4001 / 4404`` non-retry semantics
+# behave identically to the scenario-scoped endpoint.  ``thread_id`` is
+# passed as the manager scope key so a WS flood against one thread cannot
+# exhaust other threads' budgets.  HC-34 owner freeze is enforced by
+# :func:`_thread_authorized_principal_sync` which requires
+# ``principal.subject == thread.owner_user_id`` (when the thread has an
+# owner; unclaimed threads are admitted).
+
+
+def _thread_exists_sync(thread_id: str) -> bool:
+    # Deferred import avoids a circular dependency between ``ws`` (imported
+    # from ``main``) and ``agent_conversation`` model loading.
+    from app.models.agent_conversation import AgentConversationThread
+
+    engine = get_engine()
+    with Session(engine) as session:
+        return session.get(AgentConversationThread, thread_id) is not None
+
+
+async def _thread_exists(thread_id: str) -> bool:
+    return await asyncio.to_thread(_thread_exists_sync, thread_id)
+
+
+def _thread_scenario_scope_key_sync(thread_id: str) -> str | None:
+    from app.models.agent_conversation import AgentConversationThread
+
+    engine = get_engine()
+    with Session(engine) as session:
+        thread = session.get(AgentConversationThread, thread_id)
+        return thread.scenario_id if thread is not None else None
+
+
+async def _thread_scenario_scope_key(thread_id: str) -> str | None:
+    return await asyncio.to_thread(_thread_scenario_scope_key_sync, thread_id)
+
+
+def _thread_authorized_principal_sync(
+    thread_id: str,
+    principal: SessionPrincipal,
+) -> bool:
+    from app.models.agent_conversation import AgentConversationThread
+
+    engine = get_engine()
+    with Session(engine) as session:
+        thread = session.get(AgentConversationThread, thread_id)
+        if thread is None:
+            return False
+        # HC-34 owner freeze: once a thread is owned, only that subject may
+        # subscribe.  Unclaimed threads (owner_user_id is NULL) are treated as
+        # shared / dev-mode and the session-level auth gate upstream already
+        # rejected unauthenticated requests when ``SESSION_SECRET`` is set.
+        return thread.owner_user_id is None or thread.owner_user_id == principal.subject
+
+
+async def _thread_authorized_principal(
+    thread_id: str,
+    principal: SessionPrincipal,
+) -> bool:
+    return await asyncio.to_thread(
+        _thread_authorized_principal_sync,
+        thread_id,
+        principal,
+    )
+
+
+@router.websocket("/ws/agent-conversation/{thread_id}")
+async def agent_conversation_ws_endpoint(websocket: WebSocket, thread_id: str):
+    """WebSocket endpoint for agent-conversation thread events (C1).
+
+    Gated by :data:`settings.FEATURE_AGENT_CONVERSATION` — when disabled the
+    upgrade is refused with ``4404`` so the client applies the same
+    no-retry policy as for missing resources.
+    """
+    if not settings.FEATURE_AGENT_CONVERSATION:
+        # Starlette requires a prior ``accept`` before a custom close code
+        # can be delivered — otherwise the client sees a generic HTTP 403
+        # with close code 1000.  Accept + close 4404 lets the frontend
+        # reconnect-scheduler apply its no-retry policy on the feature
+        # disabled branch exactly like a missing resource.
+        with suppress(Exception):
+            await websocket.accept()
+            await websocket.close(code=4404, reason="feature disabled")
+        return
+    scenario_scope_key = await _thread_scenario_scope_key(thread_id) or thread_id
+    await run_websocket_session(
+        ws_manager,
+        scenario_scope_key,
+        websocket,
+        exists_check=lambda _scope: _thread_exists(thread_id),
+        authorize_principal=lambda _scope, principal: _thread_authorized_principal(
+            thread_id, principal,
+        ),
+        missing_resource_name="conversation_thread",
+        log_client_messages=False,
+    )

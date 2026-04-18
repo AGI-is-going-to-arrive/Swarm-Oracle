@@ -47,7 +47,7 @@ vi.mock('../../hooks/useStreamingAriaLive', async (importOriginal) => {
   };
 });
 
-// Stub WebSocket so useAgentConversationWS does not spam the console.
+// Stub WebSocket so shared conversation internals do not spam the console.
 class NoopWS {
   static OPEN = 1;
   readyState = NoopWS.OPEN;
@@ -271,6 +271,65 @@ describe('NodeConversationSheet — input + send', () => {
         'event: turn_started\ndata: {"turn_id":"turn-2","thread_id":"thread-1","sequence":4}\n\n',
         'event: turn_token_delta\ndata: {"turn_id":"turn-2","delta":"hello "}\n\n',
         'event: turn_token_delta\ndata: {"turn_id":"turn-2","delta":"world"}\n\n',
+        'event: turn_completed\ndata: {"turn_id":"turn-2","sequence":4,"status":"committed"}\n\n',
+      ]),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { getByTestId } = renderSheet();
+    const ta = getByTestId('node-conversation-input') as HTMLTextAreaElement;
+    act(() => {
+      fireEvent.change(ta, { target: { value: 'follow up' } });
+    });
+    fireEvent.click(getByTestId('node-conversation-send'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/conversation/thread-1/turn',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(getByTestId('node-conversation-streaming').textContent).toBe('hello world');
+      expect(getByTestId('node-conversation-cta-continue')).not.toBeNull();
+    });
+  });
+
+  it('aborts the active follow-up request when the sheet unmounts', async () => {
+    vi.useRealTimers();
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      requestSignal = init?.signal;
+      return new Promise<Response>(() => {});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { getByTestId, unmount } = renderSheet();
+    const ta = getByTestId('node-conversation-input') as HTMLTextAreaElement;
+    act(() => {
+      fireEvent.change(ta, { target: { value: 'follow up' } });
+    });
+    fireEvent.click(getByTestId('node-conversation-send'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/conversation/thread-1/turn',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    expect(requestSignal).toBeDefined();
+    expect(requestSignal?.aborted).toBe(false);
+
+    unmount();
+
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it('follow-up submit parses multiline SSE data frames', async () => {
+    vi.useRealTimers();
+    const fetchMock = vi.fn().mockResolvedValue(
+      makeSseResponse([
+        'event: turn_started\ndata: {"turn_id":"turn-2","thread_id":"thread-1","sequence":4}\n\n',
+        'event: turn_token_delta\ndata: {"turn_id":"turn-2",\ndata: "delta":"hello world"}\n\n',
         'event: turn_completed\ndata: {"turn_id":"turn-2","sequence":4,"status":"committed"}\n\n',
       ]),
     );

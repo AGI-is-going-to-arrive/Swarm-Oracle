@@ -73,6 +73,17 @@ export function useAgentConversation(
   const bubbleRegistryRef = useRef<Map<string, RegisteredStreamBubble>>(new Map());
   const activeTurnIdRef = useRef<string | null>(null);
   const ariaLiveApi = useStreamingAriaLive({ debounceMs: options?.ariaLiveDebounceMs });
+  const {
+    appendToken: appendAriaLiveToken,
+    complete: completeAriaLive,
+    reset: resetAriaLive,
+  } = ariaLiveApi;
+
+  const getRegisteredBubble = useCallback((turnId: string) => {
+    const direct = bubbleRegistryRef.current.get(turnId);
+    if (direct) return direct;
+    return bubbleRegistryRef.current.values().next().value ?? null;
+  }, []);
 
   const registerStreamBubble = useCallback(
     (bubbleId: string, api: RegisteredStreamBubble | null) => {
@@ -92,12 +103,12 @@ export function useAgentConversation(
   const handleTokenDelta = useCallback(
     (turnId: string, delta: string) => {
       // HC-38: write directly to ref. DO NOT setState on token delta.
-      const bubble = bubbleRegistryRef.current.get(turnId);
+      const bubble = getRegisteredBubble(turnId);
       bubble?.appendToken(delta);
       // HC-39: aria-live through the frozen contract.
-      ariaLiveApi.appendToken(delta);
+      appendAriaLiveToken(delta);
     },
-    [ariaLiveApi],
+    [appendAriaLiveToken, getRegisteredBubble],
   );
 
   const dispatchWsEvent = useCallback(
@@ -111,8 +122,8 @@ export function useAgentConversation(
           const turnId = event.turn_id;
           activeTurnIdRef.current = turnId;
           // Reset bubble for this turn.
-          bubbleRegistryRef.current.get(turnId)?.reset();
-          ariaLiveApi.reset();
+          getRegisteredBubble(turnId)?.reset();
+          resetAriaLive();
           setState((prev) => conversationReducer(prev, { type: 'submit' }));
           break;
         }
@@ -132,7 +143,7 @@ export function useAgentConversation(
         case 'turn_completed': {
           const turnId = event.turn_id;
           // Flush aria-live.
-          ariaLiveApi.complete();
+          completeAriaLive();
           // Do NOT write finalize with accumulated buffer here — the
           // bubble's textContent already has the streamed content.
           // Caller may optionally pass the full text via a separate REST
@@ -163,7 +174,7 @@ export function useAgentConversation(
           break;
       }
     },
-    [ariaLiveApi, handleTokenDelta],
+    [completeAriaLive, getRegisteredBubble, handleTokenDelta, resetAriaLive],
   );
 
   // Listen for offline/online browser events.

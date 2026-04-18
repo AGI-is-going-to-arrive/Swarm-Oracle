@@ -27,7 +27,7 @@
 | Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard |
 | Debate | `backend/app/api/debate.py` | debate live/result/import-replay/predict |
 | Ending Room | `backend/app/api/ending_rooms.py` | ending-room room/result/thread/user-turn 与 WS |
-| Scenario WS | `backend/app/api/ws.py` | 主模式 WebSocket |
+| Scenario WS | `backend/app/api/ws.py` | 主模式 WebSocket + thread-scoped agent-conversation WebSocket |
 | Social | `backend/app/api/social.py` | 社交文案与 Markdown 导出 |
 
 ### 服务层
@@ -229,7 +229,9 @@
   - `POST /api/conversation/start` 先创建 thread、首条 user turn 和一条 `pending` assistant turn
   - 紧跟的 `POST /api/conversation/{thread_id}/turn` 如果还是同一条首轮 user 内容，会直接 claim 这条预留 assistant turn 开始流式返回，不再追加重复 user turn
   - 这条 claim 当前按原子 CAS 执行；并发首轮流里只会有一个请求拿到这条预留 turn，其他请求会 fail-closed，不会两路同时 stream 同一 turn
-  - scenario 删除如果发生在流式中途，会先在删除事务内把活跃 turn 标成 `scenario_deleted`，真正唤醒 in-flight SSE 的 cancel signal 改为事务提交后再发；这样 rollback 不会提前把客户端打成终态。事务成功提交后，流末尾仍会补 `turn_error(code=SCENARIO_DELETED)`，并继续区分 `scenario_deleted` 和 `user_aborted`
+  - `WS /ws/agent-conversation/{thread_id}` 当前也已上线：复用统一首帧 auth / pending-auth 容量门控；feature 关闭或 thread 不存在时返回 `4404`；owner freeze 按 thread owner 收口；容量仍按 scenario 维度计算，不会因为 thread 数量放大
+  - scenario 删除如果发生在流式中途，会先在删除事务内把活跃 turn 标成 `scenario_deleted`，真正唤醒 in-flight SSE 的 cancel signal 改为事务提交后再发；这样 rollback 不会提前把客户端打成终态。当前 delete endpoint 会在 `session.commit()` 后 drain `session.info["scenario_deleted_turn_ids"]` 并统一调用 `signal_scenario_deleted_turns()`；误放在 `create_scenario()` 里的旧 drain 已移除。事务成功提交后，流末尾仍会补 `turn_error(code=SCENARIO_DELETED)`，并继续区分 `scenario_deleted` 和 `user_aborted`
+  - `DELETE /api/conversation/{thread_id}/active` 当前会先唤醒活跃流式协程，让它自己写 `aborted` 终态；已经流出的 partial text 不会再因为路由层抢先 CAS 而丢掉。只有没有活跃流式协程可唤醒时，才回退到直接 CAS
   - SSE 通用兜底错误当前统一发 `turn_error(code=LLM_5XX)`，不再回落到模糊的 `STREAM_FAILED`
 - Debate argument map 当前走两层抽取：
   - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类；当前分句覆盖 `. ! ?`、`。！？` 和换行
@@ -264,7 +266,7 @@
 
 ## 当前验证基线
 
-- backend `conversation / stream-fallback` 定向回归：`3 passed`
+- backend `agent-conversation delete / abort / ws` 定向回归：`21 passed`
 - backend 全量 `pytest`：`2240 passed, 2 skipped`
 
 ## WebSocket 口径

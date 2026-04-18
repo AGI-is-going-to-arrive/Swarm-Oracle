@@ -72,11 +72,15 @@ React + TypeScript frontend for SwarmOracle.
 - `scripts/lib/frontendPreflight.mjs`
   shared preview/deep-link preflight for graph E2E and `release-signoff`; it checks the SPA shell, entry-module fingerprint, and entry asset reachability before the browser flow starts
 - `manualChunks.ts / scripts/lib/performanceBudgetConfig.mjs`
-  build chunking keeps React in shared `vendor`, isolates the full G6 runtime in `g6-vendor`, keeps `html2canvas / gif.js` lazy, and leaves the React Flow stack to Rollup auto-splitting so the homepage preload path stays small
+  build chunking keeps React in shared `vendor`, isolates the full G6 runtime in `g6-vendor`, keeps `html2canvas / gif.js` lazy, and leaves the React Flow stack to Rollup auto-splitting so the homepage preload path stays small; the perf budget gate now also covers the generated React Flow runtime / helper chunks instead of only the hand-named bundles
 - `orgContext.ts / useOrgContext.ts`
   session-scoped `Organization ID` source of truth used by `InputView` and the API client; blank values remove the header instead of sending an empty `X-Org-Id`
 - `NodeConversationSheet.tsx`
-  sheet accessibility now relies on `SheetTitle / SheetDescription` instead of manual aria wiring, so Radix no longer warns about missing description metadata
+  sheet accessibility now relies on `SheetTitle / SheetDescription` instead of manual aria wiring, so Radix no longer warns about missing description metadata; transport / SSE parsing now sit behind a local hook, unmount abort is explicit, multiline `data:` frames no longer get dropped, and local rerenders no longer re-register the streaming bubble
+- `useNodeConversationTransport.ts`
+  local transport hook for `NodeConversationSheet`; owns `/start` + `/turn`, AbortController cleanup, and SSE frame parsing
+- `GlobalOfflineBanner.tsx`
+  the WS-disconnect grace timer now uses an SSR-safe layout-effect fallback; current SPA behavior stays the same, and future SSR will not log the layout-effect warning
 - `CausalReviewView.tsx`
   graph fetches now encode `scenarioId / branchId` before building request URLs
 - `ArgumentMap.tsx`
@@ -128,11 +132,9 @@ npm run build:spike:phaser-custom
 
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Latest scoped reruns in this session:
-  - frontend targeted vitest covering `manualChunks / performance budgets / orgContext / InputView / API headers / NodeConversationSheet`: `80 passed`
-  - frontend full vitest: `1296 passed`
-  - `npm run build`: pass
-  - `npm run perf:budgets:check`: status `ok`
-  - fresh local live browser reruns: `node-conversation-live`, `kg-explorer-live`, and `replay-view-live` all passed
+  - frontend targeted vitest covering `NodeConversationSheet / GlobalOfflineBanner / performance budgets`: `42 passed`
+  - `npx tsc --noEmit -p tsconfig.app.json`: pass
+  - fresh local live browser rerun: `node-conversation-live` passed
 - The default signoff target remains:
   - Chromium desktop/mobile
   - desktop Firefox / WebKit scoped regression

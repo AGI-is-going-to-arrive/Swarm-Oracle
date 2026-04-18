@@ -17,7 +17,7 @@
 当前默认构建/测试路径会把 `phaser` alias 到本地精简入口 `frontend/experiments/phaser-custom/entry.mjs`，用于降低默认包体。
 - production build 当前会额外产出 legacy bundle，目标口径是 Chrome / Edge 79+、Firefox 78+、Safari / iOS 12+。
 - 本地 Phaser 入口当前不再依赖 top-level `await`，不会把 legacy 构建链卡死。
-- `Vite manualChunks` 当前显式拆为 `vendor / i18n-vendor / animation-vendor / g6-vendor / radix-vendor / dnd-vendor / icon-vendor / pretext / capture-html / capture-gif`；React 继续留在共享 `vendor`，React Flow 栈改回交给 Rollup 自动分块，不再强行命名 `flow-vendor`，既避开 production preview 启动白屏，也不把 `g6-vendor / capture-html` 拉进首页 preload。
+- `Vite manualChunks` 当前显式拆为 `vendor / i18n-vendor / animation-vendor / g6-vendor / radix-vendor / dnd-vendor / icon-vendor / pretext / capture-html / capture-gif`；React 继续留在共享 `vendor`，React Flow 栈继续交给 Rollup 自动分块，不再强行命名 `flow-vendor`，既避开 production preview 启动白屏，也不把 `g6-vendor / capture-html` 拉进首页 preload。`perf:budgets:check` 当前也已经把 React Flow 自动拆出来的 `style / GraphNodeCard / graphTokens / utils` 这批 chunk 纳入门禁，不再只盯手工命名 chunk。
 
 ## 页面地图
 
@@ -139,7 +139,8 @@
 | `endingChatHelpers.ts` | `frontend/src/components/endingChatHelpers.ts` | 会客厅纯函数：角色标签、模式标签、prompt 构建、anchor 描述 |
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
-| `manualChunks.ts` | `frontend/src/lib/manualChunks.ts` | 前端构建分块单一事实源；React 保留在共享 `vendor`，`@antv/*` 隔离到 `g6-vendor`，`html2canvas / gif.js` 按需拆分，React Flow 栈交给 Rollup 自动分块 |
+| `manualChunks.ts` / `performanceBudgetConfig.mjs` | `frontend/src/lib/manualChunks.ts` / `frontend/scripts/lib/performanceBudgetConfig.mjs` | 前端构建分块与预算门禁单一事实源；React 保留在共享 `vendor`，`@antv/*` 隔离到 `g6-vendor`，`html2canvas / gif.js` 按需拆分，React Flow 栈继续走 Rollup 自动分块并纳入预算检查 |
+| `useNodeConversationTransport.ts` | `frontend/src/hooks/useNodeConversationTransport.ts` | `NodeConversationSheet` 的本地 transport hook；负责 `/start` / `/turn` 请求、AbortController 生命周期和 SSE frame 解析 |
 | `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | 首页 `Organization ID` 的 sessionStorage 单一事实源；InputView 与 API client 共用，避免 header 逻辑散落 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
 | `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
@@ -179,6 +180,7 @@
 - roundtable 的 anchored thread readonly replay / local restore 当前已补过 Firefox / WebKit scoped regression，口径与 Chromium 对齐。
 - Oracle 页面 UI 语言当前跟随用户语言开关；room payload 会显式带 `zh | en`，但页面不再反向用 `scenario.language` 覆盖当前 UI 语言。
 - `src/i18n/config.ts` 当前把 `localStorage` 读写失败视为可恢复错误；隐私模式或受限环境下，语言初始化与切换仍可工作。
+- `GlobalOfflineBanner` 当前把 WS grace timer 改成了 SSR-safe 的 layout effect fallback；当前 SPA 行为不变，未来如果接 SSR 也不会再因为 `useLayoutEffect` 打 warning。
 - `LanguageSwitcher` 当前按 `role="group"` + button `aria-label / title / lang` 暴露，不再只是视觉开关；accessible name 也会带上可见的 `EN / 中文` 文本，避免语音控制和视觉标签口径分叉。
 - `useFactionOverlay` 当前只会在 `factions` capability 开启时发请求；`FEATURE_FACTIONS=false` 时，ending-room / roundtable 不再反复打 `faction-timeline 404`。
 - `WorldlineRoundtableView` 当前开桌 payload 会跟随最新的 `selectionMode` 与当前 UI 语言，不再复用旧闭包值。
@@ -193,7 +195,7 @@
   - `后续三回合` 按钮：设置 `interaction_mode=epilogue` 并预填追问内容
   - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 发送
   - mobile sidebar sheet 已补 `SheetTitle / SheetDescription`；第一次 `Escape` 只关闭 sheet，不会误关外层 chamber
-- `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。
+- `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，SSE parser 也已兼容 multiline `data:` frame。bubble ref 注册当前也已经和整个 `conversation` 对象解耦，输入框本地 rerender 不会再反复重挂流式气泡。
 - `DebateArenaView` 当前只允许在 live 当前 phase 的下注窗口打开/提交 quick counterplay；锁到历史 phase 时不再发起 counterplay。
 - `DebateArenaView` 当前在“当前 live phase”视图下会保留更早 phase 的已出现 turns，并以 `FoldableTurn` 历史卡形式继续展示；切到历史 phase 时仍只显示该 phase 自己的 turns。
 - Debate 的页面级播报当前只保留 phase cue；`SpotlightTurnCard` 的高亮态不再单独暴露 live-region 语义，避免同一轮变化在读屏器里重复播报。
@@ -340,8 +342,8 @@
   - 详情关闭后仍走 pane click / close button 这条现有口径
 - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。SVG 导出当前改成 native SVG background / edge / node markup，不再依赖 `foreignObject`；校验脚本也会拒绝 `foreignObject` 回退。节点卡标题过长时，SVG 文本会按卡片宽度裁剪显示，但 `<title>` 和文本内容仍优先保留完整标题，不再把省略号文本写进 SVG。
 - `CausalReviewView` 当前在 branch 切换时会先收起旧图和导出面板，等新分支数据 ready 后再恢复；图页外层统一走 `100dvh`，relationless snapshot fallback 里的节点详情也会锚在当前容器里，不再飘到视口右上角。
-- frontend 文档相关定向 vitest 当前 `80 passed`。
-- frontend full vitest 当前 `1296 passed`。
+- frontend `NodeConversationSheet / GlobalOfflineBanner / performance budgets` 定向 vitest 当前 `42 passed`。
+- frontend full vitest 当前 `1301 passed`。
 - `node --test scripts/e2e-frontend-preflight.test.mjs` 本轮 `25 passed`。
 - `npm run build`（含 `perf:budgets:check`）当前通过。
 - fresh local live 的 `node-conversation-live / kg-explorer-live / replay-view-live` 当前通过。

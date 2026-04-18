@@ -32,6 +32,7 @@ import hashlib
 import hmac
 import json
 import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -488,6 +489,70 @@ class TestSSEStream:
         assert delta_count == 3
         assert events[-1] == "turn_completed"
 
+    def test_http_turn_stream_emits_terminal_error_after_scenario_delete(self, client, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start", json=_default_start_body(sid, content="watch delete"),
+        ).json()
+        thread_id = start["thread_id"]
+        assistant_turn_id = start["assistant_turn_id"]
+
+        async def _stalled_stream(*_args, **_kwargs):
+            yield "alpha"
+            while True:
+                await asyncio.sleep(3600)
+
+        monkeypatch.setattr(conversation_service, "llm_call_stream", _stalled_stream)
+
+        raw_chunks: list[str] = []
+        stream_status: dict[str, int] = {}
+        stream_error: dict[str, BaseException] = {}
+        stream_done = threading.Event()
+
+        def _consume_stream():
+            try:
+                with TestClient(app) as stream_client:
+                    with stream_client.stream(
+                        "POST",
+                        f"/api/conversation/{thread_id}/turn",
+                        json={"user_content": "watch delete"},
+                    ) as response:
+                        stream_status["status_code"] = response.status_code
+                        for chunk in response.iter_text():
+                            raw_chunks.append(chunk)
+            except BaseException as exc:  # noqa: BLE001 - assert below
+                stream_error["error"] = exc
+            finally:
+                stream_done.set()
+
+        worker = threading.Thread(target=_consume_stream, daemon=True)
+        worker.start()
+
+        deadline = time.perf_counter() + 1.0
+        while time.perf_counter() < deadline:
+            with Session(engine) as session:
+                turn = session.get(AgentConversationTurn, assistant_turn_id)
+                if turn is not None and turn.status == "streaming":
+                    break
+            time.sleep(0.01)
+        else:
+            pytest.fail("conversation stream never entered streaming state")
+
+        delete_resp = client.delete(f"/api/scenario/{sid}")
+        assert delete_resp.status_code == 200
+        assert stream_done.wait(timeout=1.0), "HTTP SSE stream did not terminate after delete"
+        assert "error" not in stream_error
+
+        frames = _assert_sse_frames("".join(raw_chunks))
+        events = [name for name, _payload in frames]
+        assert stream_status["status_code"] == 200
+        assert events[0] == "turn_started"
+        assert "turn_token_delta" in events
+        assert events[-1] == "turn_error"
+        assert frames[-1][1]["code"] == "SCENARIO_DELETED"
+        assert frames[-1][1]["status"] == "scenario_deleted"
+
     @pytest.mark.asyncio
     async def test_scenario_deleted_mid_stream_emits_terminal_error(self, client):
         engine = get_engine()
@@ -571,12 +636,26 @@ class TestSSEStream:
         assert (await anext(iterator))["event"] == "turn_token_delta"
 
         with Session(engine) as delete_session:
-            conversation_service.mark_scenario_conversations_as_deleted(delete_session, sid)
-            terminal = await anext(iterator)
-            assert terminal["event"] == "turn_error"
-            assert terminal["data"]["code"] == "SCENARIO_DELETED"
-            assert terminal["data"]["status"] == "scenario_deleted"
-            delete_session.rollback()
+            transitioned = conversation_service.mark_scenario_conversations_as_deleted(
+                delete_session,
+                sid,
+                signal_immediately=False,
+            )
+            assert assistant_turn_id in transitioned
+
+            terminal_task = asyncio.create_task(anext(iterator))
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(terminal_task), timeout=0.05)
+            assert terminal_task.done() is False
+
+            delete_session.commit()
+
+        conversation_service.signal_scenario_deleted_turns(transitioned)
+
+        terminal = await asyncio.wait_for(terminal_task, timeout=1.0)
+        assert terminal["event"] == "turn_error"
+        assert terminal["data"]["code"] == "SCENARIO_DELETED"
+        assert terminal["data"]["status"] == "scenario_deleted"
 
         with pytest.raises(StopAsyncIteration):
             await anext(iterator)
@@ -665,6 +744,64 @@ class TestAbort:
         assert first_delta["data"]["delta"] == "partial"
 
         cancel_event.set()
+        started_at = time.perf_counter()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(anext(iterator), timeout=0.1)
+        assert time.perf_counter() - started_at < 0.1
+
+        with Session(engine) as session:
+            row = session.get(AgentConversationTurn, assistant_turn_id)
+            thread = session.get(AgentConversationThread, thread_id)
+            assert row is not None
+            assert row.status == "aborted"
+            assert row.error_code == "USER_ABORTED"
+            assert row.content == "partial"
+            assert thread is not None
+            assert thread.active_turn_id is None
+            assert thread.latest_status == "aborted"
+
+    @pytest.mark.asyncio
+    async def test_abort_route_returns_within_100ms_for_stalled_stream(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start", json=_default_start_body(sid),
+        ).json()
+        thread_id = start["thread_id"]
+        assistant_turn_id = start["assistant_turn_id"]
+
+        async def _stalled_stream(*_args, **_kwargs):
+            yield "partial"
+            while True:
+                await asyncio.sleep(3600)
+
+        iterator = await conversation_service.stream_assistant_turn(
+            thread_id=thread_id,
+            assistant_turn_id=assistant_turn_id,
+            new_user_content="cancel through route",
+            owner_user_id=None,
+            overrides=conversation_service.LLMOverrides(
+                api_key=None,
+                base_url=None,
+                model="test-model",
+                disable_user_quota=False,
+            ),
+            _llm_stream_factory=_stalled_stream,
+        )
+
+        assert (await anext(iterator))["event"] == "turn_started"
+        first_delta = await anext(iterator)
+        assert first_delta["event"] == "turn_token_delta"
+        assert first_delta["data"]["delta"] == "partial"
+
+        started_at = time.perf_counter()
+        resp = client.delete(f"/api/conversation/{thread_id}/active")
+        elapsed = time.perf_counter() - started_at
+
+        assert resp.status_code == 200
+        assert resp.json()["aborted"] is True
+        assert elapsed < 0.1
+
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(anext(iterator), timeout=0.2)
 

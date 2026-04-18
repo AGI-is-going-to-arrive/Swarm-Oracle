@@ -6,7 +6,7 @@
    is the orchestrator's responsibility (see plan §FE-5).
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 export interface GlobalOfflineBannerProps {
@@ -24,6 +24,18 @@ export interface GlobalOfflineBannerProps {
 }
 
 const DEFAULT_GRACE_MS = 10_000;
+const useIsomorphicLayoutEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect;
+
+function hasWsGraceElapsed(
+  wsDisconnectedAt: number | null | undefined,
+  wsDisconnectedGraceMs: number,
+): boolean {
+  if (!wsDisconnectedAt) {
+    return false;
+  }
+
+  return Date.now() - wsDisconnectedAt >= wsDisconnectedGraceMs;
+}
 
 export function GlobalOfflineBanner({
   onRetry,
@@ -35,7 +47,9 @@ export function GlobalOfflineBanner({
     if (typeof navigator === 'undefined') return true;
     return typeof navigator.onLine === 'boolean' ? navigator.onLine : true;
   });
-  const [wsGraceElapsed, setWsGraceElapsed] = useState(false);
+  const [wsGraceElapsed, setWsGraceElapsed] = useState(() =>
+    hasWsGraceElapsed(wsDisconnectedAt, wsDisconnectedGraceMs),
+  );
   const timerRef = useRef<number | null>(null);
 
   // Track navigator.onLine transitions.
@@ -52,26 +66,30 @@ export function GlobalOfflineBanner({
   }, []);
 
   // Track WS disconnect timer: only show after grace period elapses.
-  useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     if (timerRef.current != null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
+
     if (!wsDisconnectedAt) {
       setWsGraceElapsed(false);
       return;
     }
+
     const elapsedSoFar = Date.now() - wsDisconnectedAt;
     const remaining = Math.max(0, wsDisconnectedGraceMs - elapsedSoFar);
     if (remaining === 0) {
       setWsGraceElapsed(true);
       return;
     }
+
     setWsGraceElapsed(false);
     timerRef.current = window.setTimeout(() => {
       setWsGraceElapsed(true);
       timerRef.current = null;
     }, remaining);
+
     return () => {
       if (timerRef.current != null) {
         clearTimeout(timerRef.current);

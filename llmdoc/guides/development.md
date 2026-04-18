@@ -179,6 +179,37 @@ npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.t
   - `<dialog>.showModal()` 缺失时的 `AgentProfileModal` 降级
   - 关键 CSS token / 高流量页面表面的 sRGB / rgba fallback
 
+### Agent Conversation / Node Conversation 定向回归
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_team_review_round6_fixes.py tests/test_conversation.py tests/test_api.py -k 'C1 or C2 or scenario_deleted or abort or delete_integrity_guard_does_not_signal_conversation_cancel_before_commit or delete_helpers_are_reexported' -q
+
+cd ../frontend
+npm test -- --run src/components/shared/GlobalOfflineBanner.test.tsx src/components/shared/GlobalOfflineBanner.ssr.test.tsx src/components/kg/NodeConversationSheet.test.tsx src/components/kg/NodeConversationSheet.ref-stability.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+```
+
+如果要补一条 fresh local live：
+
+```bash
+cd frontend
+npm run dev -- --host 127.0.0.1 --port 18931
+node scripts/e2e-node-conversation-live.mjs desktop --url http://127.0.0.1:18931 --output-dir output/e2e/r11-fix-node-conversation-live
+```
+
+说明：
+
+- backend 这组回归当前主要看：
+  - `WS /ws/agent-conversation/{thread_id}` 的 feature gate、owner freeze 和 scenario 级 pending-auth 容量约束
+  - scenario delete 先 `commit()` 再发 signal，公共 HTTP `/turn` SSE 包装层最终会收到 `turn_error(code=SCENARIO_DELETED)`
+  - 公共 `DELETE /api/conversation/{thread_id}/active` 路径的 `<100ms` abort 断言
+- frontend 这组回归当前主要看：
+  - `GlobalOfflineBanner` 的 WS grace timer 行为和 SSR-safe effect fallback
+  - `NodeConversationSheet` 的 unmount abort、multiline SSE frame、bubble ref 稳定性
+  - `useNodeConversationTransport` 通过组件合同回归继续覆盖 `/start` + `/turn` 链路
+
 ### Backend Auth / Provider Safety 定向回归
 
 ```bash
@@ -211,13 +242,11 @@ npm run preview -- --host 127.0.0.1 --port 18930
 说明：
 
 - 本轮实测结果：
-  - backend conversation 定向回归：`3 passed`
-  - backend 全量：`2240 passed, 2 skipped`
-  - frontend 文档相关定向 vitest：`80 passed`
-  - frontend 全量 vitest：`1296 passed`
-  - `npm run build`（含 `perf:budgets:check`）通过
-  - fresh local live：`node-conversation-live`、`kg-explorer-live`、`replay-view-live` 通过
-- 这轮图谱 / 节点对话链路只记录上述本轮实测结果；未复跑的旧 smoke / signoff 结论继续以各自 artifact 为准。
+  - backend `agent-conversation delete / abort / ws` 定向回归：`21 passed`
+  - frontend `NodeConversationSheet / GlobalOfflineBanner / performance budgets` 定向 vitest：`42 passed`
+  - `npx tsc --noEmit -p tsconfig.app.json` 通过
+  - fresh local live：`node-conversation-live` 通过
+- 这轮 agent-conversation / node-conversation 链路只记录上述本轮实测结果；未复跑的旧 smoke / signoff 结论继续以各自 artifact 为准。
 
 ### Resume / P1-9 定向回归
 

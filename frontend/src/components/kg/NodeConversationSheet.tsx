@@ -18,7 +18,7 @@
  *
  * Integration:
  *   - useAgentConversation — state machine + aria-live + streaming bubble registry
- *   - useAgentConversationWS — transport (auth_ok, turn events, 4001/4404)
+ *   - local SSE bridge — fetch `/turn`, parse SSE frames, dispatch turn events
  *   - useDraftAutoSave — sessionStorage draft restoration (HC-29)
  *
  * Focus-stable during streaming: incoming token deltas update bubble
@@ -39,12 +39,11 @@ import { useTranslation } from 'react-i18next';
 
 import { buildSessionHeaders } from '../../api/client';
 import { mapBackendErrorCode } from '../../lib/conversationStateMachine';
-import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
-import type { AgentConversationWSEvent } from '../../types';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet';
 import { cn } from '../../lib/utils';
 import { useAgentConversation, type RegisteredStreamBubble } from '../../hooks/useAgentConversation';
 import { useDraftAutoSave } from '../../hooks/useDraftAutoSave';
+import { useNodeConversationTransport } from '../../hooks/useNodeConversationTransport';
 
 import { ConversationRecoveryBanner } from './ConversationRecoveryBanner';
 import { DraftRestoredBanner } from './DraftRestoredBanner';
@@ -124,44 +123,6 @@ function lowerSnap(current: NodeConversationSnapLevel): NodeConversationSnapLeve
   return SNAP_LEVELS[Math.max(idx - 1, 0)];
 }
 
-function parseConversationSseFrame(frame: string): AgentConversationWSEvent | null {
-  let eventName = '';
-  let dataText = '';
-  for (const line of frame.split('\n')) {
-    if (line.startsWith('event: ')) eventName = line.slice('event: '.length).trim();
-    if (line.startsWith('data: ')) dataText = line.slice('data: '.length).trim();
-  }
-  if (!eventName || !dataText) return null;
-  try {
-    return {
-      type: eventName as AgentConversationWSEvent['type'],
-      ...(JSON.parse(dataText) as Record<string, unknown>),
-    } as AgentConversationWSEvent;
-  } catch {
-    return null;
-  }
-}
-
-async function readConversationError(response: Response): Promise<{ code: string; message?: string }> {
-  try {
-    const payload = await response.json() as {
-      detail?: string | { code?: string; message?: string };
-    };
-    if (typeof payload.detail === 'object' && payload.detail !== null) {
-      return {
-        code: typeof payload.detail.code === 'string' ? payload.detail.code : 'SERVER_ERROR',
-        message: typeof payload.detail.message === 'string' ? payload.detail.message : undefined,
-      };
-    }
-    if (typeof payload.detail === 'string' && payload.detail.trim()) {
-      return { code: 'SERVER_ERROR', message: payload.detail.trim() };
-    }
-  } catch {
-    // Ignore and fall through to the generic fallback.
-  }
-  return { code: 'SERVER_ERROR', message: `HTTP ${response.status}` };
-}
-
 export function NodeConversationSheet(props: NodeConversationSheetProps) {
   const {
     open,
@@ -178,14 +139,17 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   const { t } = useTranslation();
   const isMobile = useIsMobile(768);
   const [threadId, setThreadId] = useState<string | null>(initialThreadId);
-  const activeRequestControllerRef = useRef<AbortController | null>(null);
   const lastSubmittedMessageRef = useRef<string | null>(null);
+  const originNodeId = origin?.nodeId ?? null;
+  const originNodeType = origin?.nodeType ?? null;
 
-  const conversation = useAgentConversation({ threadId });
-  // Extract plain (non-ref) properties so subsequent render code never
-  // reads them through the `conversation` object — `ariaLiveApi` carries
-  // refs which triggers the `react-hooks/refs` rule.
-  const { state: convState, dispatch: convDispatch, ariaLiveApi } = conversation;
+  const {
+    state: convState,
+    dispatch: convDispatch,
+    dispatchWsEvent,
+    registerStreamBubble,
+    ariaLiveApi,
+  } = useAgentConversation({ threadId });
   const { announceRef: ariaLiveAnnounceRef, flushNow: flushAriaLiveNow } = ariaLiveApi;
 
   // Draft auto-save (per thread id).
@@ -212,6 +176,24 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     if (inputValue.length > 0) draft.save(inputValue);
   }, [draft, inputValue]);
 
+  const dispatchTransportError = useCallback((code: string, message?: string) => {
+    convDispatch({ type: 'error', code: mapBackendErrorCode(code), message });
+  }, [convDispatch]);
+
+  const {
+    abortActiveRequest,
+    startConversation,
+    streamTurn,
+  } = useNodeConversationTransport({
+    scenarioId,
+    identityId,
+    originNodeId,
+    originNodeType,
+    setThreadId,
+    onTransportError: dispatchTransportError,
+    onWsEvent: dispatchWsEvent,
+  });
+
   useEffect(() => {
     if (initialThreadId) {
       setThreadId(initialThreadId);
@@ -220,12 +202,11 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
 
   useEffect(() => {
     if (!open) {
-      activeRequestControllerRef.current?.abort();
-      activeRequestControllerRef.current = null;
+      abortActiveRequest();
       lastSubmittedMessageRef.current = null;
       setThreadId(initialThreadId);
     }
-  }, [initialThreadId, open]);
+  }, [abortActiveRequest, initialThreadId, open]);
 
   useEffect(() => {
     flushAriaLiveNow();
@@ -236,140 +217,14 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   const handleBubbleRef = useCallback(
     (api: StreamingBubbleApi | null) => {
       bubbleRef.current = api;
-      const bubbleId = origin?.nodeId ?? threadId ?? 'default';
+      const bubbleId = originNodeId ?? threadId ?? 'default';
       const registered: RegisteredStreamBubble | null = api
         ? { appendToken: api.appendToken, finalize: api.finalize, reset: api.reset }
         : null;
-      conversation.registerStreamBubble(bubbleId, registered);
+      registerStreamBubble(bubbleId, registered);
     },
-    [conversation, origin?.nodeId, threadId],
+    [originNodeId, registerStreamBubble, threadId],
   );
-
-  const dispatchTransportError = useCallback((code: string, message?: string) => {
-    convDispatch({ type: 'error', code: mapBackendErrorCode(code), message });
-  }, [convDispatch]);
-
-  const streamTurn = useCallback(async (nextThreadId: string, text: string): Promise<boolean> => {
-    activeRequestControllerRef.current?.abort();
-    const controller = new AbortController();
-    activeRequestControllerRef.current = controller;
-    let accepted = false;
-    try {
-      const providerPolicy = loadLlmProviderPolicy();
-      const validation = validateByok({
-        apiKey: providerPolicy.apiKey,
-        baseUrl: providerPolicy.baseUrl,
-      });
-      if (!validation.valid) {
-        dispatchTransportError(validation.errorCode);
-        return false;
-      }
-      const response = await fetch(`/api/conversation/${encodeURIComponent(nextThreadId)}/turn`, {
-        method: 'POST',
-        headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({
-          user_content: text,
-          ...(providerPolicy.apiKey ? { llm_api_key: providerPolicy.apiKey } : {}),
-          ...(providerPolicy.baseUrl ? { llm_base_url: providerPolicy.baseUrl } : {}),
-          ...(providerPolicy.model ? { llm_model: providerPolicy.model } : {}),
-          ...(providerPolicy.disableUserQuota ? { disable_user_quota: true } : {}),
-        }),
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const error = await readConversationError(response);
-        dispatchTransportError(error.code, error.message);
-        return false;
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) {
-        dispatchTransportError('SERVER_ERROR', 'Missing stream body');
-        return false;
-      }
-      accepted = true;
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let frameBoundary = buffer.indexOf('\n\n');
-        while (frameBoundary >= 0) {
-          const frame = buffer.slice(0, frameBoundary);
-          buffer = buffer.slice(frameBoundary + 2);
-          const parsed = parseConversationSseFrame(frame);
-          if (parsed) {
-            conversation.dispatchWsEvent(parsed);
-          }
-          frameBoundary = buffer.indexOf('\n\n');
-        }
-      }
-      const trailing = parseConversationSseFrame((buffer + decoder.decode()).trim());
-      if (trailing) {
-        conversation.dispatchWsEvent(trailing);
-      }
-    } catch (error) {
-      if (controller.signal.aborted) return accepted;
-      const message = error instanceof Error ? error.message : 'Stream failed';
-      dispatchTransportError('SERVER_ERROR', message);
-      return accepted;
-    } finally {
-      if (activeRequestControllerRef.current === controller) {
-        activeRequestControllerRef.current = null;
-      }
-    }
-    return accepted;
-  }, [conversation, dispatchTransportError]);
-
-  const startConversation = useCallback(async (text: string): Promise<boolean> => {
-    try {
-      const providerPolicy = loadLlmProviderPolicy();
-      const validation = validateByok({
-        apiKey: providerPolicy.apiKey,
-        baseUrl: providerPolicy.baseUrl,
-      });
-      if (!validation.valid) {
-        dispatchTransportError(validation.errorCode);
-        return false;
-      }
-      const response = await fetch('/api/conversation/start', {
-        method: 'POST',
-        headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({
-          scenario_id: scenarioId,
-          agent_identity_id: identityId ?? null,
-          origin_node_id: origin?.nodeId ?? null,
-          origin_node_type: origin?.nodeType ?? null,
-          first_user_content: text,
-          ...(providerPolicy.apiKey ? { llm_api_key: providerPolicy.apiKey } : {}),
-          ...(providerPolicy.baseUrl ? { llm_base_url: providerPolicy.baseUrl } : {}),
-          ...(providerPolicy.model ? { llm_model: providerPolicy.model } : {}),
-          ...(providerPolicy.disableUserQuota ? { disable_user_quota: true } : {}),
-        }),
-      });
-      if (!response.ok) {
-        const error = await readConversationError(response);
-        dispatchTransportError(error.code, error.message);
-        return false;
-      }
-      const payload = await response.json() as { thread_id?: string | null };
-      const nextThreadId = typeof payload.thread_id === 'string' && payload.thread_id.trim()
-        ? payload.thread_id
-        : null;
-      if (!nextThreadId) {
-        dispatchTransportError('SERVER_ERROR', 'Missing conversation thread id');
-        return false;
-      }
-      setThreadId(nextThreadId);
-      return await streamTurn(nextThreadId, text);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Start conversation failed';
-      dispatchTransportError('SERVER_ERROR', message);
-      return false;
-    }
-  }, [dispatchTransportError, identityId, origin?.nodeId, origin?.nodeType, scenarioId, streamTurn]);
 
   const handleSubmit = useCallback(async () => {
     const text = inputValue.trim();
@@ -393,8 +248,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
       onAbort();
       return;
     }
-    activeRequestControllerRef.current?.abort();
-    activeRequestControllerRef.current = null;
+    abortActiveRequest();
     if (threadId) {
       try {
         await fetch(`/api/conversation/${encodeURIComponent(threadId)}/active`, {
@@ -406,7 +260,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
       }
     }
     convDispatch({ type: 'abort' });
-  }, [convDispatch, onAbort, threadId]);
+  }, [abortActiveRequest, convDispatch, onAbort, threadId]);
 
   const handleResend = useCallback(async () => {
     if (onResend) {

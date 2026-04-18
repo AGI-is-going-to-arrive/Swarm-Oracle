@@ -678,11 +678,6 @@ async def create_scenario(
     with Session(engine) as session:
         session.add(scenario)
         session.commit()
-        from app.services.conversation_service import signal_scenario_deleted_turns
-
-        signal_scenario_deleted_turns(
-            session.info.pop("scenario_deleted_turn_ids", []),
-        )
         session.refresh(scenario)
         scenario_id = scenario.id
 
@@ -1352,6 +1347,11 @@ async def delete_scenario(
             recompute_leaderboard_entry(session, user_id, user_name)
 
         session.commit()
+        from app.services.conversation_service import signal_scenario_deleted_turns
+
+        signal_scenario_deleted_turns(
+            session.info.pop("scenario_deleted_turn_ids", []),
+        )
 
     # Clean up ChromaDB collection (best-effort, outside the transaction).
     get_vector_store().delete_collection(scenario_id)
