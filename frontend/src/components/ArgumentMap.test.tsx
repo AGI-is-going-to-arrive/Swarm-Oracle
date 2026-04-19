@@ -1,7 +1,7 @@
 /**
  * Phase C2 — ArgumentMap tests (upgraded for @xyflow/react DAG)
  */
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -962,10 +962,10 @@ describe('ArgumentMap', () => {
     });
     expect(fitViewMock.mock.calls.length).toBe(initialCalls);
 
-    // FE-3-seq: node click also opens NodeConversationSheet (Radix Dialog),
-    // whose overlay disables pointer-events on siblings. Use fireEvent to
-    // synthesize the pane click directly and bypass the css pointer guard.
-    fireEvent.click(screen.getByTestId('rf-pane'));
+    const detailPanel = screen.getByTestId('node-detail-panel');
+    const closeButton = detailPanel.querySelector('button[aria-label="Close"]');
+    expect(closeButton).not.toBeNull();
+    await user.click(closeButton as HTMLButtonElement);
     await waitFor(() => {
       expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();
     });
@@ -1040,7 +1040,9 @@ describe('ArgumentMap', () => {
 
       await user.click(screen.getByTestId('rf-node-n1'));
 
+      const detailPanel = await screen.findByTestId('node-detail-panel');
       const sheet = await screen.findByTestId('node-conversation-sheet');
+      expect(detailPanel).toHaveStyle({ right: '464px' });
       expect(sheet).toBeInTheDocument();
     } finally {
       vi.unstubAllGlobals();

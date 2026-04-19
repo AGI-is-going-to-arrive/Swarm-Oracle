@@ -37,18 +37,23 @@ import json
 import logging
 import re
 import threading
-from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Callable, Literal
 
 from fastapi import HTTPException
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import func
 from sqlalchemy import text as sa_text
 from sqlmodel import Session, select
 
 from app.api.errors import api_error
 from app.config import settings
-from app.models.agent_conversation import AgentConversationThread, AgentConversationTurn
+from app.models.agent_conversation import (
+    AgentConversationQuotaLedger,
+    AgentConversationThread,
+    AgentConversationTurn,
+)
 from app.models.agent_identity import AgentIdentity
 from app.models.database import Scenario, get_engine
 from app.services.llm_client import (
@@ -325,37 +330,28 @@ def _verify_identity_owner(
 
 # ── Quota authority (HC-31) ─────────────────────────────
 #
-# BE-3 follow-up: in-memory rate-limit store for daily turn caps.  Redis is
-# not available in this codebase; the process-local dict is sufficient for
-# single-worker dev + tests, and the counters decay to zero after 24 h.  All
-# callers serialise on a single lock; the critical sections are O(bucket_len)
-# and bounded by the per-day caps so this is not a hotspot.
+# BE-3 follow-up: use a durable quota ledger so rolling-24h counters survive
+# process restarts, share state across workers, and roll back together with
+# the surrounding thread/turn transaction on failure.
 
 _QUOTA_WINDOW = timedelta(hours=24)
-_quota_lock = threading.Lock()
-_user_day_turns: dict[str, deque[datetime]] = {}
-_org_day_turns: dict[str, deque[datetime]] = {}
-
-
-def _prune_bucket(bucket: deque[datetime], now: datetime) -> None:
-    cutoff = now - _QUOTA_WINDOW
-    while bucket and bucket[0] < cutoff:
-        bucket.popleft()
 
 
 def reset_conversation_quota_counters() -> None:
-    """Test hook: clear the in-memory quota buckets between runs."""
-    with _quota_lock:
-        _user_day_turns.clear()
-        _org_day_turns.clear()
+    """Test hook: clear durable quota usage between runs."""
+    engine = get_engine()
+    with Session(engine) as session:
+        session.exec(sa_delete(AgentConversationQuotaLedger))
+        session.commit()
 
 
-def _retry_after_seconds(bucket: deque[datetime], now: datetime) -> int:
+def _retry_after_seconds(oldest_hit: datetime | None, now: datetime) -> int:
     """Seconds until the oldest hit falls out of the rolling 24h window."""
-    if not bucket:
+    if oldest_hit is None:
         return int(_QUOTA_WINDOW.total_seconds())
-    oldest = bucket[0]
-    remaining = (oldest + _QUOTA_WINDOW) - now
+    if oldest_hit.tzinfo is None:
+        oldest_hit = oldest_hit.replace(tzinfo=timezone.utc)
+    remaining = (oldest_hit + _QUOTA_WINDOW) - now
     return max(1, int(remaining.total_seconds()))
 
 
@@ -438,52 +434,86 @@ def _enforce_turn_cap_per_thread(
 
 
 def _enforce_daily_user_org_quota(
+    session: Session,
     *,
     user_id: str | None,
     organization_id: str | None,
     additions: int,
 ) -> None:
-    """In-memory rolling-24h user + org daily turn counters (HC-31).
+    """Durable rolling-24h user + org daily turn counters (HC-31).
 
     Only the scenario/thread checks ever pass this point; those are bounded
     by the structural caps above, so the number of ticks added per call is
-    small (1 or 2) and bucket growth is bounded by the daily cap.
+    small (1 or 2) and the ledger query stays inside the indexed 24h window.
     """
     user_cap = int(getattr(settings, "CONVERSATION_TURNS_PER_USER_PER_DAY", 500))
     org_cap = int(getattr(settings, "CONVERSATION_TURNS_PER_ORG_PER_DAY", 5000))
     now = _now()
-    with _quota_lock:
-        if user_id and user_cap > 0:
-            bucket = _user_day_turns.setdefault(user_id, deque())
-            _prune_bucket(bucket, now)
-            if len(bucket) + additions > user_cap:
-                retry_after = _retry_after_seconds(bucket, now)
-                _raise_quota_exceeded(
-                    scope="user",
-                    code="DAILY_QUOTA_EXCEEDED",
-                    retry_after=retry_after,
-                    reset_at=now + timedelta(seconds=retry_after),
-                )
+    cutoff = now - _QUOTA_WINDOW
 
-        if organization_id and org_cap > 0:
-            org_bucket = _org_day_turns.setdefault(organization_id, deque())
-            _prune_bucket(org_bucket, now)
-            if len(org_bucket) + additions > org_cap:
-                retry_after = _retry_after_seconds(org_bucket, now)
-                _raise_quota_exceeded(
-                    scope="org",
-                    code="ORG_DAILY_QUOTA_EXCEEDED",
-                    retry_after=retry_after,
-                    reset_at=now + timedelta(seconds=retry_after),
-                )
+    def _load_usage(
+        *,
+        owner_user_id: str | None = None,
+        org_id: str | None = None,
+    ) -> tuple[int, datetime | None]:
+        stmt = select(
+            func.coalesce(func.sum(AgentConversationQuotaLedger.turn_delta), 0),
+            func.min(AgentConversationQuotaLedger.created_at),
+        ).where(AgentConversationQuotaLedger.created_at >= cutoff)
+        if owner_user_id is not None:
+            stmt = stmt.where(AgentConversationQuotaLedger.owner_user_id == owner_user_id)
+        if org_id is not None:
+            stmt = stmt.where(AgentConversationQuotaLedger.organization_id == org_id)
+        total, oldest_hit = session.exec(stmt).one()
+        normalized_oldest = oldest_hit if isinstance(oldest_hit, datetime) else None
+        return int(total or 0), normalized_oldest
 
-        # Commit the tick counts after all checks pass.
-        if user_id and user_cap > 0:
-            for _ in range(additions):
-                _user_day_turns[user_id].append(now)
-        if organization_id and org_cap > 0:
-            for _ in range(additions):
-                _org_day_turns[organization_id].append(now)
+    if user_id and user_cap > 0:
+        used_turns, oldest_hit = _load_usage(owner_user_id=user_id)
+        if used_turns + additions > user_cap:
+            retry_after = _retry_after_seconds(oldest_hit, now)
+            _raise_quota_exceeded(
+                scope="user",
+                code="DAILY_QUOTA_EXCEEDED",
+                retry_after=retry_after,
+                reset_at=now + timedelta(seconds=retry_after),
+            )
+
+    if organization_id and org_cap > 0:
+        used_turns, oldest_hit = _load_usage(org_id=organization_id)
+        if used_turns + additions > org_cap:
+            retry_after = _retry_after_seconds(oldest_hit, now)
+            _raise_quota_exceeded(
+                scope="org",
+                code="ORG_DAILY_QUOTA_EXCEEDED",
+                retry_after=retry_after,
+                reset_at=now + timedelta(seconds=retry_after),
+            )
+
+
+def _record_daily_quota_usage(
+    session: Session,
+    *,
+    user_id: str | None,
+    organization_id: str | None,
+    scenario_id: str,
+    thread_id: str,
+    additions: int,
+) -> None:
+    if additions <= 0:
+        return
+    if not user_id and not organization_id:
+        return
+    session.add(
+        AgentConversationQuotaLedger(
+            owner_user_id=user_id or None,
+            organization_id=organization_id or None,
+            scenario_id=scenario_id,
+            thread_id=thread_id,
+            turn_delta=additions,
+            created_at=_now(),
+        )
+    )
 
 
 # ── Sequence reservation ────────────────────────────────
@@ -556,6 +586,7 @@ def create_thread_with_first_turn(
         # placeholder assistant) to the daily bucket.
         _enforce_thread_cap_per_scenario(session, scenario_id=scenario_id)
         _enforce_daily_user_org_quota(
+            session,
             user_id=owner_user_id or None,
             organization_id=organization_id or None,
             additions=2,
@@ -614,6 +645,14 @@ def create_thread_with_first_turn(
         )
         session.add(user_turn)
         session.add(assistant_turn)
+        _record_daily_quota_usage(
+            session,
+            user_id=owner_user_id or None,
+            organization_id=organization_id or None,
+            scenario_id=scenario_id,
+            thread_id=thread.id,
+            additions=2,
+        )
 
         thread.active_turn_id = assistant_turn.id
         thread.latest_status = "pending"
@@ -666,6 +705,7 @@ def append_user_turn_and_reserve_assistant(
         # 2 rows (user + assistant placeholder).
         _enforce_turn_cap_per_thread(session, thread_id=thread.id, pending_additions=2)
         _enforce_daily_user_org_quota(
+            session,
             user_id=thread.owner_user_id or None,
             organization_id=thread.organization_id,
             additions=2,
@@ -705,6 +745,14 @@ def append_user_turn_and_reserve_assistant(
         )
         session.add(user_turn)
         session.add(assistant_turn)
+        _record_daily_quota_usage(
+            session,
+            user_id=thread.owner_user_id or None,
+            organization_id=thread.organization_id,
+            scenario_id=thread.scenario_id,
+            thread_id=thread.id,
+            additions=2,
+        )
 
         thread.active_turn_id = assistant_turn.id
         thread.latest_status = "pending"

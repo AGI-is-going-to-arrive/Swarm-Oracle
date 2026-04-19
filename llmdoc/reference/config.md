@@ -100,6 +100,10 @@
 说明：
 
 - 多个 backend 进程共用同一个 SQLite 文件时，pending/quota 计数会共享。
+- agent conversation 的 `user / org` daily quota 当前也走 SQLite 持久化 ledger：
+  - backend 重启后不会归零
+  - 多进程会共享同一份 rolling 24h 计数
+  - 删除 scenario / thread 不会把已消耗额度返还
 - `LLM_CONCURRENCY` 当前会叠加全局并发和按用途的 lane 隔离；scenario fan-out 不会再独占 Oracle / Debate / parse / background 的全部 slot。
 - `LLM_CONCURRENCY` 的修改需要重启 backend 才能稳定生效。
 - `LLM_CONCURRENCY / LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 设为 `<= 0` 时表示关闭对应限制，不是字面上的 `0 并发 / 0 pending`。

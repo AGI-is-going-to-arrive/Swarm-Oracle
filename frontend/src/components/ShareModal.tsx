@@ -2,12 +2,12 @@
    ShareModal — Generate social media copy for various platforms
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { generateSocialCopy } from '../api/client';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { getDirectorIdentity } from '../lib/directorIdentity';
-import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
+import { loadLlmProviderPolicy, validateByok } from '../lib/llmProviderPolicy';
 import { type ShareFlavorContext } from '../lib/shareEnvelope';
 import './ShareModal.css';
 
@@ -35,6 +35,7 @@ interface ShareModalProps {
 
 export default function ShareModal({ scenarioId, shareContext, onClose, onAutomationStateChange }: ShareModalProps) {
   const { t } = useTranslation();
+  const titleId = useId();
   const directorIdentity = getDirectorIdentity();
   const [activePlatform, setActivePlatform] = useState<string | null>(null);
   const [copy, setCopy] = useState('');
@@ -51,11 +52,21 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
     setCopy('');
     setError('');
     setCopyError('');
-    setStatus('loading');
-    setLoading(true);
-    setCopied(false);
+    setPlatformName('');
     try {
       const providerPolicy = loadLlmProviderPolicy();
+      const validation = validateByok({
+        apiKey: providerPolicy.apiKey,
+        baseUrl: providerPolicy.baseUrl,
+      });
+      if (!validation.valid) {
+        setError(getLocalizedApiErrorMessage({ code: validation.errorCode }, t, t('share.error')));
+        setStatus('error');
+        return;
+      }
+      setStatus('loading');
+      setLoading(true);
+      setCopied(false);
       const result = await generateSocialCopy(scenarioId, platform, {
         llmApiKey: providerPolicy.apiKey || undefined,
         llmBaseUrl: providerPolicy.baseUrl || undefined,
@@ -64,7 +75,13 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
         llmTokensPerMinute: providerPolicy.tokensPerMinute ?? undefined,
         userId: directorIdentity.userId,
       });
-      setCopy(result.copy.trim());
+      const normalizedCopy = result.copy.trim();
+      if (!normalizedCopy) {
+        setError(t('share.error'));
+        setStatus('error');
+        return;
+      }
+      setCopy(normalizedCopy);
       setPlatformName(result.platform_name);
       setStatus('success');
     } catch (err) {
@@ -115,15 +132,29 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
 
   return (
     <div className="share-overlay" onClick={onClose}>
-      <div className="share-modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="share-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+      >
         <header className="share-modal__header">
-          <h2>{t('share.title')}</h2>
-          <button className="share-modal__close" onClick={onClose}>✕</button>
+          <h2 id={titleId}>{t('share.title')}</h2>
+          <button
+            type="button"
+            className="share-modal__close"
+            onClick={onClose}
+            aria-label={t('common.close')}
+          >
+            ✕
+          </button>
         </header>
 
         <div className="share-modal__platforms">
           {PLATFORMS.map((p) => (
             <button
+              type="button"
               key={p.key}
               className={`share-platform-btn ${activePlatform === p.key ? 'active' : ''}`}
               onClick={() => handleGenerate(p.key)}
@@ -141,7 +172,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
           )}
 
           {loading && (
-            <div className="share-modal__loading">
+            <div className="share-modal__loading" role="status" aria-live="polite">
               <div className="share-spinner" />
               <p>{t('share.generating', { platform: activePlatformLabel ? t(activePlatformLabel.labelKey) : '' })}</p>
               <p className="share-modal__subtle">{t('share.generating_hint')}</p>
@@ -149,9 +180,13 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
           )}
 
           {error && (
-            <div className="share-modal__error">
+            <div className="share-modal__error" role="alert" aria-live="assertive">
               <p>⚠️ {error}</p>
-              <button className="btn btn-ghost" onClick={() => activePlatform && handleGenerate(activePlatform)}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => activePlatform && handleGenerate(activePlatform)}
+              >
                 {t('share.retry')}
               </button>
             </div>
@@ -166,13 +201,18 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
               <div className="share-result-header">
                 <span className="share-result-platform">{t('share.copy_label', { platform: platformName })}</span>
                 <button
+                  type="button"
                   className={`btn share-copy-btn ${copied ? 'copied' : ''}`}
                   onClick={handleCopy}
                 >
                   {copied ? t('share.copied') : t('share.copy_btn')}
                 </button>
               </div>
-              {copyError && <p className="share-modal__error-text">⚠️ {copyError}</p>}
+              {copyError && (
+                <p className="share-modal__error-text" role="alert" aria-live="assertive">
+                  ⚠️ {copyError}
+                </p>
+              )}
               <pre className="share-result-text">{copy}</pre>
             </div>
           )}

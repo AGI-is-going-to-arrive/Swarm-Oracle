@@ -106,6 +106,19 @@ describe('ShareModal automation callback', () => {
     });
   });
 
+  it('exposes dialog semantics and an accessible close control', () => {
+    render(
+      <ShareModal
+        scenarioId="scenario-dialog"
+        onClose={() => {}}
+      />,
+    );
+
+    const dialog = screen.getByRole('dialog', { name: 'share.title' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByRole('button', { name: 'common.close' })).toBeInTheDocument();
+  });
+
   it('shows loading guidance before the generated copy is ready', async () => {
     let resolveRequest!: (value: { copy: string; platform_name: string }) => void;
     generateSocialCopyMock.mockImplementationOnce(
@@ -127,6 +140,8 @@ describe('ShareModal automation callback', () => {
 
     await user.click(screen.getByRole('button', { name: /share\.platform_xiaohongshu/ }));
 
+    const loadingRegion = screen.getByRole('status');
+    expect(loadingRegion).toHaveAttribute('aria-live', 'polite');
     expect(screen.getByText('share.generating_hint')).toBeInTheDocument();
     const loadingState = onAutomationStateChange.mock.calls.at(-1)?.[0];
     expect(loadingState.status).toBe('loading');
@@ -184,7 +199,65 @@ describe('ShareModal automation callback', () => {
     await user.click(screen.getByRole('button', { name: /share\.platform_xiaohongshu/ }));
 
     await waitFor(() => {
-      expect(screen.getAllByText(/common\.api_errors\.llm_unavailable/).length).toBeGreaterThan(0);
+      const alert = screen.getByRole('alert');
+      expect(alert).toHaveAttribute('aria-live', 'assertive');
+      expect(alert).toHaveTextContent(/common\.api_errors\.llm_unavailable/);
     });
+  });
+
+  it('turns blank generated copy into a visible error instead of an empty success state', async () => {
+    generateSocialCopyMock.mockResolvedValueOnce({
+      copy: '   \n\t  ',
+      platform_name: '小红书',
+    });
+
+    const user = userEvent.setup();
+    const onAutomationStateChange = vi.fn();
+
+    render(
+      <ShareModal
+        scenarioId="scenario-blank"
+        onClose={() => {}}
+        onAutomationStateChange={onAutomationStateChange}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /share\.platform_xiaohongshu/ }));
+
+    await waitFor(() => {
+      const alert = screen.getByRole('alert');
+      expect(alert).toHaveTextContent('share.error');
+    });
+
+    const latestState = onAutomationStateChange.mock.calls.at(-1)?.[0];
+    expect(latestState.status).toBe('error');
+    expect(latestState.has_copy).toBe(false);
+    expect(latestState.copy_length).toBe(0);
+    expect(screen.queryByText('share.ready')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'share.copy_btn' })).not.toBeInTheDocument();
+  });
+
+  it('blocks copy generation when BYOK baseUrl is set without an apiKey', async () => {
+    window.sessionStorage.setItem('swarmoracle.llm-provider-policy.v1', JSON.stringify({
+      apiKey: '',
+      baseUrl: 'https://example.com/v1',
+      model: '',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+    }));
+    const user = userEvent.setup();
+
+    render(
+      <ShareModal
+        scenarioId="scenario-invalid"
+        onClose={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /share\.platform_xiaohongshu/ }));
+
+    expect(generateSocialCopyMock).not.toHaveBeenCalled();
+    expect(await screen.findByText(/conversation\.error\.byok_invalid/)).toBeInTheDocument();
   });
 });

@@ -108,10 +108,12 @@ const {
   setMockCapabilities,
 } = vi.hoisted(() => {
   let currentCapabilities = {
+    agent_conversation: { enabled: false },
     agent_identity: { enabled: false },
     causal_graph: { enabled: false },
     counterfactual_replay: { enabled: false },
     factions: { enabled: false },
+    web_search: { providers: {} },
   };
   return {
     getMockCapabilities: () => currentCapabilities,
@@ -447,10 +449,12 @@ beforeEach(() => {
   setMockLanguage('en');
   changeLanguageMock.mockClear();
   setMockCapabilities({
+    agent_conversation: { enabled: false },
     agent_identity: { enabled: false },
     causal_graph: { enabled: false },
     counterfactual_replay: { enabled: false },
     factions: { enabled: false },
+    web_search: { providers: {} },
   });
   endingRoomStoreState.snapshot = null;
   endingRoomStoreState.result = null;
@@ -1271,6 +1275,50 @@ describe('ResultView campaign summary', () => {
     });
   });
 
+  it('blocks scoring when BYOK baseUrl is set without an apiKey', async () => {
+    const user = userEvent.setup();
+    const scorePredictionsMock = vi.mocked(apiClient.scorePredictions);
+    const listPredictionsMock = vi.mocked(apiClient.listPredictions);
+
+    scorePredictionsMock.mockClear();
+
+    window.sessionStorage.setItem('swarmoracle.llm-provider-policy.v1', JSON.stringify({
+      apiKey: '',
+      baseUrl: 'https://example.com/v1',
+      model: '',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+    }));
+
+    listPredictionsMock.mockResolvedValueOnce([
+      {
+        id: 'prediction-1',
+        scenario_id: 'scenario-1',
+        user_name: 'Reader',
+        prediction_text: 'The archive settles in favor of the law branch.',
+        confidence: 0.7,
+        score: null,
+        score_reason: null,
+        created_at: '2026-03-17T00:00:00Z',
+      },
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const scoreButton = await screen.findByRole('button', { name: 'result.score_predictions' });
+    await user.click(scoreButton);
+
+    expect(scorePredictionsMock).not.toHaveBeenCalled();
+    expect(await screen.findByText(/conversation\.error\.byok_invalid/)).toBeInTheDocument();
+  });
+
   it('copies a shareable challenge link for the current scenario', async () => {
     const user = userEvent.setup();
     let copiedUrl = '';
@@ -1468,10 +1516,12 @@ describe('ResultView campaign summary', () => {
 
   it('keeps live-only Phase 3 panels hidden in replay mode while exposing replay-safe graph analysis', async () => {
     setMockCapabilities({
+      agent_conversation: { enabled: false },
       agent_identity: { enabled: true },
       causal_graph: { enabled: true },
       counterfactual_replay: { enabled: true },
       factions: { enabled: true },
+      web_search: { providers: {} },
     });
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
     finalizeCampaignMock.mockReset();
@@ -1581,10 +1631,12 @@ describe('ResultView campaign summary', () => {
   it('frames faction timeline as branch-scoped analysis and follows the expanded ending branch', async () => {
     const user = userEvent.setup();
     setMockCapabilities({
+      agent_conversation: { enabled: false },
       agent_identity: { enabled: false },
       causal_graph: { enabled: false },
       counterfactual_replay: { enabled: false },
       factions: { enabled: true },
+      web_search: { providers: {} },
     });
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
     finalizeCampaignMock.mockReset();
@@ -1658,10 +1710,12 @@ describe('ResultView campaign summary', () => {
 
   it('shows the resume panel on normal result pages when counterfactual replay is enabled', async () => {
     setMockCapabilities({
+      agent_conversation: { enabled: false },
       agent_identity: { enabled: false },
       causal_graph: { enabled: false },
       counterfactual_replay: { enabled: true },
       factions: { enabled: false },
+      web_search: { providers: {} },
     });
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
     finalizeCampaignMock.mockReset();
@@ -3115,6 +3169,81 @@ describe('ResultView campaign summary', () => {
 
       expect(await screen.findByText('result.title')).toBeInTheDocument();
       expect(screen.queryByText('result.web_sources_title')).not.toBeInTheDocument();
+    });
+
+    it('keeps web source metadata visible when snippets are empty', async () => {
+      const user = userEvent.setup();
+      vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+        id: 'scenario-1',
+        question: 'Empty source scenario',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        messages: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+        web_search_context: {
+          query: 'no hits',
+          snippets: [],
+          provider: 'news_deep',
+          timestamp: '2026-04-07T00:00:00Z',
+          cached: true,
+        },
+      } as Scenario);
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      await user.click(await screen.findByRole('button', { name: 'result.web_sources_title' }));
+      expect(screen.getByText((content) => content.includes('result.web_sources_query') && content.includes('no hits'))).toBeInTheDocument();
+      expect(screen.getByText((content) => content.includes('result.web_sources_provider') && content.includes('news_deep'))).toBeInTheDocument();
+      expect(screen.getByText('result.web_sources_cached')).toBeInTheDocument();
+      expect(screen.getByText('result.web_sources_empty')).toBeInTheDocument();
+    });
+
+    it('opens mobile sources from a dedicated trigger even when agent conversation is disabled', async () => {
+      const user = userEvent.setup();
+      setMockCapabilities({
+        agent_conversation: { enabled: false },
+        agent_identity: { enabled: false },
+        causal_graph: { enabled: false },
+        counterfactual_replay: { enabled: false },
+        factions: { enabled: false },
+        web_search: {
+          providers: {
+            polymarket: { enabled: true, degraded: false, configured_host: 'us' },
+            finance: { enabled: true, degraded: false },
+            academic: { enabled: true, degraded: false },
+            news_deep: { enabled: true, degraded: false },
+          },
+        },
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByTestId('result-mobile-sources-trigger')).toBeInTheDocument();
+      expect(screen.queryByTestId('result-action-conversation')).not.toBeInTheDocument();
+
+      await user.click(screen.getByTestId('result-mobile-sources-trigger'));
+
+      const sourceSheet = await screen.findByTestId('mobile-source-sheet');
+      expect(sourceSheet).toBeInTheDocument();
+      expect(within(sourceSheet).getByTestId('result-sources-finance')).toHaveAttribute('data-source-family', 'finance');
     });
   });
 });

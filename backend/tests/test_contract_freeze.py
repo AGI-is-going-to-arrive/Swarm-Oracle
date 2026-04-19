@@ -391,6 +391,8 @@ async def test_web_search_providers_populated_when_enabled():
             )
             assert isinstance(entry["enabled"], bool)
             assert isinstance(entry["configured_host"], str)
+            if family == "polymarket":
+                assert entry["configured_host"] == "us"
             assert isinstance(entry["rate_limit_rps"], int)
             assert isinstance(entry["ttl_seconds"], int)
             assert isinstance(entry["byok_allowed"], bool)
@@ -672,11 +674,11 @@ class TestWebSearchBaseUrlAllowlist:
         assert validate_web_search_base_url("tavily", "") is None
 
 
-class TestCapabilitiesProviderHostsAreBareExactHosts:
-    """QA-1: per-family configured_host is a bare hostname (no scheme, no wildcard)."""
+class TestCapabilitiesProviderConfiguredHostContract:
+    """QA-1: polymarket uses geo keys; the others keep exact bare hosts."""
 
     @pytest.mark.asyncio
-    async def test_configured_host_is_bare_hostname_when_feature_on(self):
+    async def test_configured_host_contract_when_feature_on(self):
         from app.api.scenarios import api_capabilities
         from app.config import settings
 
@@ -687,6 +689,9 @@ class TestCapabilitiesProviderHostsAreBareExactHosts:
             for family, entry in result["web_search"]["providers"].items():
                 host = entry["configured_host"]
                 assert isinstance(host, str) and host, family
+                if family == "polymarket":
+                    assert host == "us", host
+                    continue
                 assert "://" not in host, f"{family} host has scheme: {host!r}"
                 assert "*" not in host, f"{family} host has wildcard: {host!r}"
                 assert " " not in host, f"{family} host has whitespace: {host!r}"

@@ -266,11 +266,16 @@
 - 当多个 backend worker 共用同一个 SQLite 文件时：
   - pending/quota 共享计数会生效
   - runtime lock 会跨进程共享
+- Agent conversation 的 rolling 24h `user / org` daily quota 当前已经改成持久化 ledger：
+  - 额度键仍只看 `thread.owner_user_id` 和 `thread.organization_id`
+  - backend 重启后不会归零
+  - 多进程共用同一 SQLite 文件时会共享这份计数
+  - 删除 scenario / thread 不会把已经消耗的 daily quota 返还回去
 
 ## 当前验证基线
 
-- backend `agent-conversation / SSE / delete-abort` 定向回归：`215 passed`
-- backend 全量 `pytest`：`2248 passed, 2 skipped`
+- backend `agent-conversation / quota / migration` 定向回归当前通过
+- backend 全量 `pytest`：`2252 passed, 2 skipped`
 
 ## WebSocket 口径
 

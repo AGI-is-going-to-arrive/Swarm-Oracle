@@ -114,6 +114,18 @@ npx tsc --noEmit -p tsconfig.app.json
 npm run lint
 VITE_ENABLE_WEB_SEARCH=true npm run build
 npm run e2e:web-search -- --url http://127.0.0.1:18930 --output-dir output/e2e/review-web-search --provider tavily
+
+# source-ingestion: fixture + live
+cd ../backend
+source .venv/bin/activate
+ENABLE_WEB_SEARCH=true FEATURE_NEW_SOURCES=true WEB_SEARCH_PROVIDER=searxng SEARXNG_URL=http://127.0.0.1:8888 \
+  uvicorn --app-dir /absolute/path/to/upgrade-test/backend app.main:app --host 127.0.0.1 --port 18927
+
+cd ../frontend
+VITE_ENABLE_WEB_SEARCH=true npm run build
+SWARM_BACKEND_URL=http://127.0.0.1:18927 npm run preview -- --host 127.0.0.1 --port 18930
+node scripts/e2e-new-source-ingestion-live.mjs full --url http://127.0.0.1:18930 --headless
+SWARM_E2E_MODE=live node scripts/e2e-new-source-ingestion-live.mjs full --url http://127.0.0.1:18930 --headless
 ```
 
 说明：
@@ -128,6 +140,14 @@ npm run e2e:web-search -- --url http://127.0.0.1:18930 --output-dir output/e2e/r
   - `web_search_provider`
   - `web_search_api_key`
   - `web_search_base_url`
+- `vite preview` 当前也会代理 `/api` 和 `/ws`；如果 preview 要接别的 backend，启动前设置 `SWARM_BACKEND_URL`。
+- `e2e-new-source-ingestion-live.mjs` 当前默认走 fixture；`SWARM_E2E_MODE=live` 时才会打真实 backend。
+- live 模式现在会先显式打开首页总开关，再检查 `/api/scenario` 请求体里是否真的带上 `web_search_enabled=true`。
+- 如果服务端默认搜索没 ready，live 脚本当前也支持：
+  - `SWARM_E2E_WEB_SEARCH_PROVIDER`
+  - `SWARM_E2E_WEB_SEARCH_API_KEY`
+  - `SWARM_E2E_WEB_SEARCH_BASE_URL`
+- live 模式当前不再要求固定 snippet 文案；只要求结果页真的出现 web sources 入口，并能展开读到 snippet / link。
 - 如果要单独做真实 provider 烟测，可在 `backend/.venv` 下直接调用 `app.services.web_context.fetch_web_context()`。
 
 ### Backend 安全审计回归
@@ -211,7 +231,7 @@ npm run e2e:predict:late-branches -- --url http://127.0.0.1:18930 --headless
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_agent_conversation.py tests/test_team_review_round6_fixes.py tests/test_conversation.py tests/test_api.py -q
+python -m pytest tests/test_agent_conversation.py tests/test_team_review_round6_fixes.py tests/test_migration_022.py tests/test_conversation.py tests/test_api.py -q
 
 cd ../frontend
 npm test -- --run src/components/shared/GlobalOfflineBanner.test.tsx src/components/shared/GlobalOfflineBanner.ssr.test.tsx src/components/kg/NodeConversationSheet.test.tsx src/components/kg/NodeConversationSheet.ref-stability.test.tsx src/pages/CausalReviewView.test.tsx src/hooks/useAgentConversation.test.ts src/hooks/useNodeConversationTransport.test.tsx
@@ -243,6 +263,7 @@ node scripts/e2e-node-conversation-live.mjs desktop --url http://127.0.0.1:18931
 
 - backend 这组回归当前主要看：
   - `WS /ws/agent-conversation/{thread_id}` 的 feature gate、owner freeze 和 scenario 级 pending-auth 容量约束
+  - `user / org` daily quota 当前走持久化 ledger，不再依赖进程内 dict；相关回归会直接验证 persisted usage 读回来的超限口径
   - scenario delete 先 `commit()` 再发 signal；signal 失败只记 warning，公共 HTTP `/turn` SSE 包装层最终仍会收到 `turn_error(code=SCENARIO_DELETED)`
   - 公共 `DELETE /api/conversation/{thread_id}/active` 路径既会 abort 活跃流，也会把预留 `pending` assistant turn 收成 `aborted`
   - bootstrap 预留 turn 在 started 前如果已经被 abort / cancel，不会再补 stale `turn_started`；如果场景已经删掉，会直接收成 `SCENARIO_DELETED`

@@ -29,7 +29,7 @@ import {
 import { buildSharedChallengeUrl } from '../lib/challengeShare';
 import { copyText } from '../lib/copyText';
 import { buildAutomationErrorState, getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
-import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
+import { loadLlmProviderPolicy, validateByok } from '../lib/llmProviderPolicy';
 import {
   buildOracleReplayLocalUrl,
   buildOracleReplayShareUrl,
@@ -121,10 +121,10 @@ import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { ReturningBadge } from '../components/ReturningBadge';
 import { ResultActionCard } from '../components/result/ResultActionCard';
 import { PolymarketCard } from '../components/result/PolymarketCard';
-import { ArxivCard } from '../components/result/ArxivCard';
 import { SemanticScholarCard } from '../components/result/SemanticScholarCard';
 import { NewsApiCard } from '../components/result/NewsApiCard';
 import { MobileSourceSheet } from '../components/result/MobileSourceSheet';
+import { SourceCategoryCard } from '../components/result/SourceCategoryCard';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 const EMPTY_GAMEPLAY_PROFILE_HOOKS: string[] = [];
@@ -622,6 +622,7 @@ export default function ResultView() {
     roomReplayLocalId,
     roomReplayShareId,
     roomReplayToken,
+    searchParams,
   ]);
 
   const handleExport = async () => {
@@ -649,10 +650,18 @@ export default function ResultView() {
 
   const handleScore = async () => {
     if (!id || scoring || isReplayMode) return;
+    const providerPolicy = loadLlmProviderPolicy();
+    const validation = validateByok({
+      apiKey: providerPolicy.apiKey,
+      baseUrl: providerPolicy.baseUrl,
+    });
+    if (!validation.valid) {
+      setScoreError(getLocalizedApiErrorMessage({ code: validation.errorCode }, t, t('conversation.error.byok_invalid')));
+      return;
+    }
     setScoring(true);
     setScoreError('');
     try {
-      const providerPolicy = loadLlmProviderPolicy();
       await scorePredictions(id, {
         llmApiKey: providerPolicy.apiKey || undefined,
         llmBaseUrl: providerPolicy.baseUrl || undefined,
@@ -1806,8 +1815,7 @@ export default function ResultView() {
       {/* Web Sources Section */}
       {scenario?.web_search_context
         && typeof scenario.web_search_context.query === 'string'
-        && Array.isArray(scenario.web_search_context.snippets)
-        && scenario.web_search_context.snippets.length > 0 && (
+        && Array.isArray(scenario.web_search_context.snippets) && (
         <section className="result-web-sources">
           <button
             type="button"
@@ -1854,6 +1862,13 @@ export default function ResultView() {
                     )}
                   </article>
                 ))}
+                {scenario.web_search_context.snippets.length === 0 && (
+                  <p className="result-web-sources__item-text">
+                    {t('result.web_sources_empty', {
+                      defaultValue: 'No live web sources matched this query.',
+                    })}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -2498,6 +2513,14 @@ export default function ResultView() {
       {/* FE-5: 4 source category grid (desktop) + mobile Sheet + Action Card */}
       {capabilities?.web_search?.providers && (
         <>
+          <button
+            type="button"
+            data-testid="result-mobile-sources-trigger"
+            onClick={() => setMobileSourceSheetOpen(true)}
+            className="fixed bottom-20 right-4 z-40 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-100 shadow-lg md:hidden"
+          >
+            {t('source.mobile_sheet.title', { defaultValue: 'Live sources' })}
+          </button>
           <div
             className="result-source-grid hidden gap-3 px-4 py-2 md:grid md:grid-cols-2"
             data-testid="result-source-grid-desktop"
@@ -2506,7 +2529,13 @@ export default function ResultView() {
               <PolymarketCard capability={capabilities.web_search.providers.polymarket} />
             )}
             {capabilities.web_search.providers.finance?.enabled && (
-              <ArxivCard testIdOverride="result-sources-finance" />
+              <SourceCategoryCard
+                family="finance"
+                title={t('source.finance.title', { defaultValue: 'Finance' })}
+                subtitle={t('source.finance.subtitle', { defaultValue: 'Market & macro indicators' })}
+                state="empty"
+                testIdOverride="result-sources-finance"
+              />
             )}
             {capabilities.web_search.providers.academic?.enabled && (
               <SemanticScholarCard />
@@ -2523,7 +2552,13 @@ export default function ResultView() {
               <PolymarketCard capability={capabilities.web_search.providers.polymarket} />
             )}
             {capabilities.web_search.providers.finance?.enabled && (
-              <ArxivCard testIdOverride="result-sources-finance" />
+              <SourceCategoryCard
+                family="finance"
+                title={t('source.finance.title', { defaultValue: 'Finance' })}
+                subtitle={t('source.finance.subtitle', { defaultValue: 'Market & macro indicators' })}
+                state="empty"
+                testIdOverride="result-sources-finance"
+              />
             )}
             {capabilities.web_search.providers.academic?.enabled && (
               <SemanticScholarCard />
@@ -2537,7 +2572,6 @@ export default function ResultView() {
       {capabilities?.agent_conversation?.enabled && (
         <ResultActionCard
           agentIdentityId={agents[0]?.agent_identity_id ?? null}
-          onMobileTriggerClick={() => setMobileSourceSheetOpen(true)}
         />
       )}
     </div>

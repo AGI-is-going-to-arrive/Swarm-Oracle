@@ -1,7 +1,7 @@
 /**
  * Phase 3 F5 — FactionTimeline tests
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import i18next, { type i18n as I18nInstance } from 'i18next';
 import { type ComponentProps } from 'react';
@@ -14,6 +14,16 @@ import { FactionTimeline } from './FactionTimeline';
 
 type TestLanguage = 'en' | 'zh';
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -23,6 +33,25 @@ function jsonResponse(body: unknown, status = 200): Response {
     },
     text: async () => JSON.stringify(body),
   } as Response;
+}
+
+function makeConversationSseResponse(frames: string[]): Response {
+  const encoder = new TextEncoder();
+  const chunks = frames.map((frame) => encoder.encode(frame));
+  let index = 0;
+  return {
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: vi.fn(async () => {
+          if (index >= chunks.length) return { done: true, value: undefined };
+          const value = chunks[index];
+          index += 1;
+          return { done: false, value };
+        }),
+      }),
+    },
+  } as unknown as Response;
 }
 
 const localeExpectations = {
@@ -288,6 +317,76 @@ describe('FactionTimeline', () => {
     );
   });
 
+  it('ignores stale timeline responses when branch changes before the first request settles', async () => {
+    const firstRequest = deferred<Response>();
+    const secondRequest = deferred<Response>();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockReturnValueOnce(firstRequest.promise)
+      .mockReturnValueOnce(secondRequest.promise);
+    const i18n = await createTestI18n('en');
+    const view = render(
+      <I18nextProvider i18n={i18n}>
+        <FactionTimeline scenarioId="sc1" branchId="b1" branchLabel="Archive Branch" visible={true} />
+      </I18nextProvider>,
+    );
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenNthCalledWith(
+        1,
+        '/api/scenario/sc1/faction-timeline?branch_id=b1',
+        expect.objectContaining({ headers: expect.any(Headers) }),
+      );
+    });
+
+    view.rerender(
+      <I18nextProvider i18n={i18n}>
+        <FactionTimeline scenarioId="sc1" branchId="b2" branchLabel="Late Branch" visible={true} />
+      </I18nextProvider>,
+    );
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenNthCalledWith(
+        2,
+        '/api/scenario/sc1/faction-timeline?branch_id=b2',
+        expect.objectContaining({ headers: expect.any(Headers) }),
+      );
+    });
+
+    await act(async () => {
+      secondRequest.resolve(jsonResponse([
+        {
+          round: 2,
+          factions: [
+            { key: 'late-branch-faction', label: 'Late Branch Faction', members: ['b2-agent'], stance_center: 0.6, confidence: 0.8 },
+          ],
+          events: [],
+        },
+      ]));
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText('Late Branch Faction')).toBeInTheDocument();
+    expect(screen.getAllByText('Branch scope: Late Branch')).toHaveLength(2);
+
+    await act(async () => {
+      firstRequest.resolve(jsonResponse([
+        {
+          round: 1,
+          factions: [
+            { key: 'archive-faction', label: 'Archive Branch Faction', members: ['b1-agent'], stance_center: 0.1, confidence: 0.4 },
+          ],
+          events: [],
+        },
+      ]));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(screen.getByText('Late Branch Faction')).toBeInTheDocument();
+    expect(screen.queryByText('Archive Branch Faction')).toBeNull();
+    expect(screen.getAllByText('Branch scope: Late Branch')).toHaveLength(2);
+  });
+
   it('opens NodeConversationSheet when an event row is clicked (FE-3-seq wire-up)', async () => {
     class NoopWS {
       static OPEN = 1;
@@ -332,6 +431,74 @@ describe('FactionTimeline', () => {
 
       const sheet = await screen.findByTestId('node-conversation-sheet');
       expect(sheet).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('starts node conversation with the timeline scenario id and a null identity id', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(jsonResponse([
+          {
+            round: 1,
+            factions: [
+              { key: 'moderates', label: 'Moderates', members: ['a1'], stance_center: 0.2, confidence: 0.6 },
+            ],
+            events: [
+              { type: 'betrayal', actor_agent_id: 'a1', faction_key: 'moderates' },
+            ],
+          },
+        ]))
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ thread_id: 'thread-faction-1' }),
+        } as Response)
+        .mockResolvedValueOnce(
+          makeConversationSseResponse([
+            'event: turn_started\ndata: {"turn_id":"turn-faction-1","thread_id":"thread-faction-1","sequence":2}\n\n',
+            'event: turn_token_delta\ndata: {"turn_id":"turn-faction-1","delta":"ok"}\n\n',
+            'event: turn_completed\ndata: {"turn_id":"turn-faction-1","sequence":2,"status":"committed"}\n\n',
+          ]),
+        );
+
+      await renderFactionTimeline('en');
+      await user.click(await screen.findByTestId('faction-event-row-1-0'));
+      await user.type(await screen.findByTestId('node-conversation-input'), 'follow this event');
+      await user.click(screen.getByTestId('node-conversation-send'));
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledWith(
+          '/api/conversation/start',
+          expect.objectContaining({ method: 'POST' }),
+        );
+      });
+      const [, startOptions] = fetchSpy.mock.calls[1] as [string, RequestInit];
+      const startBody = JSON.parse(String(startOptions.body));
+      expect(startBody.scenario_id).toBe('sc1');
+      expect(startBody.agent_identity_id).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }

@@ -298,6 +298,17 @@ function BranchNavigationHarness() {
   );
 }
 
+function ScenarioNavigationHarness() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button onClick={() => navigate('/sim/test-id/causal-map')}>Go scenario A</button>
+      <button onClick={() => navigate('/sim/next-id/causal-map')}>Go scenario B</button>
+      <CausalReviewView />
+    </>
+  );
+}
+
 const countCausalGraphRequests = (fetchSpy: { mock: { calls: Array<[unknown, ...unknown[]]> } }) => (
   fetchSpy.mock.calls.filter(([request]) => String(request).includes('/causal-graph')).length
 );
@@ -1616,6 +1627,215 @@ describe('CausalReviewView', () => {
 
       expect(screen.queryByTestId('node-detail-panel')).toBeNull();
       expect(sheet).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not auto-open NodeConversationSheet on compact mobile viewports', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q.includes('max-width'),
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-mobile-sheet',
+          available_branches: ['br1'],
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'Node click target', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+      renderView();
+      await user.click(await screen.findByTestId('rf-node-n1'));
+
+      const detailPanel = await screen.findByTestId('node-detail-panel');
+      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
+
+      const closeButton = detailPanel.querySelector('button[aria-label="Close"]');
+      expect(closeButton).not.toBeNull();
+      await user.click(closeButton as HTMLButtonElement);
+
+      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
+      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('closes NodeConversationSheet after switching branches', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      const branchOneResponse = createDeferredResponse();
+      const branchTwoResponse = createDeferredResponse();
+      vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.includes('branch_id=br1')) return branchOneResponse.promise;
+        if (url.includes('branch_id=br2')) return branchTwoResponse.promise;
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/sim/test-id/causal-map?branch_id=br1']}>
+          <Routes>
+            <Route path="/sim/:id/causal-map" element={<BranchNavigationHarness />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      branchOneResponse.resolve({
+        ok: true,
+        json: async () => ({
+          id: 'g-branch-one',
+          available_branches: ['br1', 'br2'],
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'Branch 1 event', round: 1, payload: { branch_id: 'br1' } },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+      await user.click(await screen.findByTestId('rf-node-n1'));
+      expect(await screen.findByTestId('node-conversation-sheet')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Go br2' }));
+
+      branchTwoResponse.resolve({
+        ok: true,
+        json: async () => ({
+          id: 'g-branch-two',
+          available_branches: ['br1', 'br2'],
+          nodes: [
+            { id: 'n2', key: 'e2', type: 'event', label: 'Branch 2 event', round: 1, payload: { branch_id: 'br2' } },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+      await screen.findByTestId('rf-node-n2');
+      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
+      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('closes NodeConversationSheet after switching scenarios', async () => {
+    class NoopWS {
+      static OPEN = 1;
+      readyState = NoopWS.OPEN;
+      onopen: ((ev: unknown) => void) | null = null;
+      onmessage: ((ev: { data: string }) => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
+      onerror: ((ev: unknown) => void) | null = null;
+      send = vi.fn();
+      close = vi.fn();
+    }
+    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      const scenarioOneResponse = createDeferredResponse();
+      const scenarioTwoResponse = createDeferredResponse();
+      vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+        if (url === '/api/scenario/test-id/causal-graph') return scenarioOneResponse.promise;
+        if (url === '/api/scenario/next-id/causal-graph') return scenarioTwoResponse.promise;
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      render(
+        <MemoryRouter initialEntries={['/sim/test-id/causal-map']}>
+          <Routes>
+            <Route path="/sim/:id/causal-map" element={<ScenarioNavigationHarness />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      scenarioOneResponse.resolve({
+        ok: true,
+        json: async () => ({
+          id: 'g-scenario-one',
+          available_branches: ['br1'],
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'Scenario A event', round: 1, payload: { branch_id: 'br1' } },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+      await user.click(await screen.findByTestId('rf-node-n1'));
+      expect(await screen.findByTestId('node-conversation-sheet')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Go scenario B' }));
+
+      scenarioTwoResponse.resolve({
+        ok: true,
+        json: async () => ({
+          id: 'g-scenario-two',
+          available_branches: ['br9'],
+          nodes: [
+            { id: 'n2', key: 'e2', type: 'event', label: 'Scenario B event', round: 2, payload: { branch_id: 'br9' } },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+      await screen.findByTestId('rf-node-n2');
+      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
+      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }

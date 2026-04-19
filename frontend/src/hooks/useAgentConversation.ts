@@ -96,9 +96,22 @@ export function useAgentConversation(
     [],
   );
 
+  const clearActiveTurn = useCallback(
+    (mode: 'preserve' | 'reset' = 'reset') => {
+      activeTurnIdRef.current = null;
+      if (mode === 'reset') {
+        resetAriaLive();
+      }
+    },
+    [resetAriaLive],
+  );
+
   const dispatch = useCallback<UseAgentConversationApi['dispatch']>((action) => {
+    if (action.type === 'abort' || action.type === 'error' || action.type === 'reset') {
+      clearActiveTurn('reset');
+    }
     setState((prev) => conversationReducer(prev, action));
-  }, []);
+  }, [clearActiveTurn]);
 
   const handleTokenDelta = useCallback(
     (turnId: string, delta: string) => {
@@ -129,6 +142,9 @@ export function useAgentConversation(
         }
 
         case 'turn_token_delta': {
+          if (activeTurnIdRef.current !== event.turn_id) {
+            break;
+          }
           // On first delta, transition pending → streaming (once per turn).
           setState((prev) => {
             if (prev.turn === 'pending') {
@@ -141,32 +157,33 @@ export function useAgentConversation(
         }
 
         case 'turn_completed': {
-          const turnId = event.turn_id;
-          // Flush aria-live.
-          completeAriaLive();
+          if (activeTurnIdRef.current !== event.turn_id) {
+            break;
+          }
           // Do NOT write finalize with accumulated buffer here — the
           // bubble's textContent already has the streamed content.
           // Caller may optionally pass the full text via a separate REST
           // fetch + finalize() if they want deterministic finalization.
           if (event.status === 'committed') {
+            clearActiveTurn('preserve');
+            completeAriaLive();
             setState((prev) => conversationReducer(prev, { type: 'commit' }));
           } else {
+            clearActiveTurn('reset');
             setState((prev) => conversationReducer(prev, { type: 'abort' }));
-          }
-          if (activeTurnIdRef.current === turnId) {
-            activeTurnIdRef.current = null;
           }
           break;
         }
 
         case 'turn_error': {
+          if (activeTurnIdRef.current !== event.turn_id) {
+            break;
+          }
           const code: RecoveryCode = mapBackendErrorCode(event.code);
+          clearActiveTurn('reset');
           setState((prev) =>
             conversationReducer(prev, { type: 'error', code, message: event.message }),
           );
-          if (activeTurnIdRef.current === event.turn_id) {
-            activeTurnIdRef.current = null;
-          }
           break;
         }
 
@@ -174,7 +191,7 @@ export function useAgentConversation(
           break;
       }
     },
-    [completeAriaLive, getRegisteredBubble, handleTokenDelta, resetAriaLive],
+    [clearActiveTurn, completeAriaLive, getRegisteredBubble, handleTokenDelta, resetAriaLive],
   );
 
   // Listen for offline/online browser events.

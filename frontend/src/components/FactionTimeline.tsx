@@ -3,7 +3,7 @@
    Displays faction evolution across rounds as colored rows.
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getFactionTimeline } from '../api/client';
 import { NodeConversationSheet } from './kg/NodeConversationSheet';
@@ -57,16 +57,17 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
   const isZh = i18n.language.toLowerCase().startsWith('zh');
   const [timeline, setTimeline] = useState<RoundFactionData[]>([]);
   const [loading, setLoading] = useState(false);
+  const fetchRequestIdRef = useRef(0);
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
   const [sheetState, setSheetState] = useState<{
     open: boolean;
     scenarioId: string;
-    identityId: string;
+    identityId: string | null;
     origin: { nodeId: string; nodeType: string; excerpt?: string };
   }>({
     open: false,
     scenarioId: '',
-    identityId: '',
+    identityId: null,
     origin: { nodeId: '', nodeType: '' },
   });
 
@@ -100,22 +101,32 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
     };
   }, [i18n, t, unknownEventLabel]);
 
-  const fetchTimeline = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await getFactionTimeline(scenarioId, branchId) as RoundFactionData[];
-      setTimeline(data);
-    } catch {
-      setTimeline([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [scenarioId, branchId]);
-
   useEffect(() => {
-    if (!visible || !scenarioId || !branchId) return;
-    fetchTimeline();
-  }, [scenarioId, branchId, visible, fetchTimeline]);
+    fetchRequestIdRef.current += 1;
+    const requestId = fetchRequestIdRef.current;
+    setSheetState((prev) => (prev.open ? { ...prev, open: false } : prev));
+
+    if (!visible || !scenarioId || !branchId) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    void (async () => {
+      try {
+        const data = await getFactionTimeline(scenarioId, branchId) as RoundFactionData[];
+        if (requestId !== fetchRequestIdRef.current) return;
+        setTimeline(data);
+      } catch {
+        if (requestId !== fetchRequestIdRef.current) return;
+        setTimeline([]);
+      } finally {
+        if (requestId === fetchRequestIdRef.current) {
+          setLoading(false);
+        }
+      }
+    })();
+  }, [scenarioId, branchId, visible]);
 
   const factionKeys = [...new Set(timeline.flatMap(r => r.factions.map(f => f.key)))];
   const colorMap = factionKeys.reduce<Record<string, string>>((map, key, index) => {
@@ -354,13 +365,12 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
                       : null;
                     // FE-3-seq: open NodeConversationSheet on event row click (append-only).
                     const openSheet = () => {
-                      const identity = actorId ?? eventFactionKey ?? `faction-event-${round.round}-${eventIndex}`;
                       setSheetState({
                         open: true,
                         scenarioId,
-                        identityId: identity,
+                        identityId: null,
                         origin: {
-                          nodeId: identity,
+                          nodeId: actorId ?? eventFactionKey ?? `faction-event-${round.round}-${eventIndex}`,
                           nodeType: `faction_event:${normalizedEventType}`,
                           excerpt: label,
                         },
@@ -454,7 +464,7 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
         <NodeConversationSheet
           open={sheetState.open}
           onOpenChange={(next) => setSheetState((prev) => ({ ...prev, open: next }))}
-          threadId={null}
+          onClose={() => setSheetState((prev) => ({ ...prev, open: false }))}
           scenarioId={sheetState.scenarioId}
           identityId={sheetState.identityId}
           origin={sheetState.origin}

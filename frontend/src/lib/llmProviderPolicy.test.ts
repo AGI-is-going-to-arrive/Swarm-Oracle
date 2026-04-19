@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { loadLlmProviderPolicy, saveLlmProviderPolicy } from './llmProviderPolicy';
+import { loadLlmProviderPolicy, saveLlmProviderPolicy, validateByok } from './llmProviderPolicy';
 
 describe('llmProviderPolicy', () => {
   beforeEach(() => {
@@ -154,5 +154,17 @@ describe('llmProviderPolicy', () => {
     });
     expect(window.sessionStorage.getItem('swarmoracle.llm-provider-policy.v1')).toContain('sk-legacy');
     expect(window.localStorage.getItem('swarmoracle.llm-provider-policy.v1')).toBeNull();
+  });
+
+  it('validateByok rejects a baseUrl without an apiKey', () => {
+    expect(validateByok({ apiKey: '', baseUrl: 'https://example.com/v1' })).toEqual({
+      valid: false,
+      errorCode: 'BYOK_INVALID',
+    });
+  });
+
+  it('validateByok accepts empty or paired apiKey/baseUrl input', () => {
+    expect(validateByok({ apiKey: '', baseUrl: '' })).toEqual({ valid: true });
+    expect(validateByok({ apiKey: 'sk-test', baseUrl: 'https://example.com/v1' })).toEqual({ valid: true });
   });
 });

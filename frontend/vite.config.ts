@@ -14,6 +14,16 @@ const phaserCustomEntry = fileURLToPath(
 const spectorStub = fileURLToPath(
   new URL('./experiments/phaser-custom/phaser3spectorjs-stub.cjs', import.meta.url),
 )
+const proxyConfig = {
+  '/api': {
+    target: backendTarget,
+    changeOrigin: true,
+  },
+  '/ws': {
+    target: websocketTarget,
+    ws: true,
+  },
+}
 const legacyTargets = [
   'chrome >= 79',
   'edge >= 79',
@@ -58,15 +68,9 @@ export default defineConfig({
   },
   server: {
     port: 18928,
-    proxy: {
-      '/api': {
-        target: backendTarget,
-        changeOrigin: true,
-      },
-      '/ws': {
-        target: websocketTarget,
-        ws: true,
-      },
-    },
+    proxy: proxyConfig,
+  },
+  preview: {
+    proxy: proxyConfig,
   },
 })

@@ -133,11 +133,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 主闭环当前维持 `release-candidate` 级别。
 - 当前稳定基线仍保留：
   - `graph / replay / backend correctness` 修复，以及 UI review findings 对应前端修复，当前都已并入基线
-  - backend `agent-conversation / SSE / delete-abort` 定向回归 `215 passed`
-  - backend 全量 `pytest` `2248 passed, 2 skipped`
+  - backend `agent-conversation / quota / migration` 定向回归当前通过
+  - backend 全量 `pytest` `2252 passed, 2 skipped`
   - frontend `typecheck / lint / build / perf budgets` 通过
   - frontend `NodeConversationSheet / CausalReviewView` 定向 vitest `86 passed`
-  - frontend 全量 vitest `1314 passed`
+  - frontend 全量 vitest `1332 passed`
   - 本轮 fresh local live 验证已补：
     - `node-conversation-live`
     - `kg-explorer-live`
@@ -146,6 +146,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - production preview 当前可挂到 `127.0.0.1:18930`
   - graph smoke / release-signoff 当前都会先跑前端 deep-link preflight；preview 没 ready、SPA fallback 失效，或 entry module、CSS entry、legacy fallback 资源不一致 / 不可达时会直接 fail-closed，不再把 404 混成图谱回归
   - `phase3-batch-a full`、`phase3-batch-b full`、`phase3-batch-c full` 当前都已在 Chromium desktop/mobile + Firefox desktop + WebKit desktop 通过
+  - `e2e-new-source-ingestion-live` 当前在 `fixture full` 和 `live full` 下都已 fresh 通过
   - `zh-CN batch-a full`、`zh-CN batch-b full` 通过
   - focused browser spot-check 当前也已确认 desktop detail + sidecar 回归收口：
     - detail close / pane click / detail-focused `Escape` 不再把 sidecar 一起关掉

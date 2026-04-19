@@ -41,7 +41,7 @@ function buildCapsWithProviders(overrides?: Partial<CapabilitiesResponse>): Capa
       providers: {
         polymarket: {
           enabled: true,
-          configured_host: 'gamma-api.polymarket.com',
+          configured_host: 'us',
           rate_limit_rps: 2,
           ttl_seconds: 60,
           byok_allowed: true,

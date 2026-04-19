@@ -59,14 +59,16 @@ export function useStreamingAriaLive(
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const flushNow = useCallback(() => {
+    const bufferedText = bufferRef.current;
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
     if (announceRef.current) {
       // Direct DOM textContent write: does not trigger React re-render.
-      announceRef.current.textContent = bufferRef.current;
+      announceRef.current.textContent = bufferedText;
     }
+    bufferRef.current = '';
   }, []);
 
   const appendToken = useCallback(
@@ -98,11 +100,12 @@ export function useStreamingAriaLive(
 
   const complete = useCallback(
     (completionLabel?: string) => {
+      const finalText = bufferRef.current;
       flushNow();
       if (announceRef.current && completionLabel) {
         // Append completion tag at end so screen readers announce the final
         // marker distinctly from the streaming buffer.
-        announceRef.current.textContent = bufferRef.current + ' ' + completionLabel;
+        announceRef.current.textContent = finalText + ' ' + completionLabel;
       }
     },
     [flushNow],

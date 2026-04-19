@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
    PolymarketCard — Prediction market source category.
-   Renders PolymarketGeoGatedPlaceholder if configured_host !== "us".
+   Renders PolymarketGeoGatedPlaceholder when configured_host === "non-us".
    ═══════════════════════════════════════════════════════════ */
 
 import { useTranslation } from 'react-i18next';
@@ -26,8 +26,8 @@ export function PolymarketCard({
 }: PolymarketCardProps) {
   const { t } = useTranslation();
 
-  // Geo gate: render placeholder if configured_host !== "us"
-  if (capability && capability.configured_host !== 'us') {
+  // Geo gate: render placeholder only for the explicit non-us key.
+  if (capability?.configured_host === 'non-us') {
     return <PolymarketGeoGatedPlaceholder />;
   }
 

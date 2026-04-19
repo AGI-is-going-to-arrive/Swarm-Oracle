@@ -76,8 +76,15 @@ export function getLocalizedApiErrorMessage(
     case 'INTERVENTION_BRANCH_NOT_FOUND':
     case 'BATCH_INTERVENTION_BRANCH_NOT_FOUND':
       return t('intervention.error_branch_missing');
+    case 'QUOTA_EXCEEDED':
+    case 'DAILY_QUOTA_EXCEEDED':
+    case 'ORG_DAILY_QUOTA_EXCEEDED':
+      return t('conversation.error.quota_exceeded');
     case 'LLM_TEMPORARILY_UNAVAILABLE':
+    case 'SOCIAL_LLM_TEMPORARILY_UNAVAILABLE':
       return t('common.api_errors.llm_unavailable');
+    case 'BYOK_INVALID':
+      return t('conversation.error.byok_invalid');
     case 'LLM_GENERATION_FAILED':
       return t('common.api_errors.llm_generation_failed');
     case 'SIMULATION_TIMEOUT':

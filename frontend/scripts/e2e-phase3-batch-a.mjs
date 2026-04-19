@@ -797,11 +797,15 @@ async function testCausalMap(page, baseUrl, outputDir, viewport) {
       : false;
     results.steps.push({ name: "node-detail-payload-visible", passed: hasPayloadDetails });
 
-    const closeBtn = detailPanel.getByRole("button", { name: /Close|关闭/i }).first();
+    const closeBtn = detailPanel.getByLabel(/Close|关闭/i).first();
+    if (hasDetailPanel) {
+      await closeBtn.waitFor({ state: "visible", timeout: 3000 }).catch(() => {});
+    }
     const hasCloseBtn = hasDetailPanel ? await closeBtn.isVisible().catch(() => false) : false;
     results.steps.push({ name: "node-detail-close-visible", passed: hasCloseBtn });
     if (hasCloseBtn) {
       await closeBtn.click();
+      await detailPanel.waitFor({ state: "hidden", timeout: 3000 }).catch(() => {});
       const panelClosed = await detailPanel.isHidden().catch(() => false);
       await saveScreenshot(page, path.join(stepDir, "03-causal-map-detail-closed.png"));
       results.steps.push({ name: "node-detail-panel-closes", passed: panelClosed });

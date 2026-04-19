@@ -198,6 +198,11 @@
 - `start` 成功后，返回体会带 `thread_id / user_turn_id / assistant_turn_id`，供前端继续接 `/turn`。
 - 如果首个 `/turn` 和 bootstrap 阶段的 `first_user_content` 相同，后端当前会直接 claim 这条预留 assistant turn，而不是再追加一条重复的 user turn。
 - 同一个 bootstrap placeholder 只会被 claim 一次；并发重复首轮请求不会再同时拿到两条 live stream。
+- `start` 和后续 `/turn` 当前都会消耗 rolling 24h 的 daily quota：
+  - user quota 键取自 `thread.owner_user_id`
+  - org quota 键取自 `X-Org-Id` 落库后的 `thread.organization_id`
+  - 超限时返回 `429`，并带 `Retry-After`
+  - 这层计数已经落到持久化 ledger，backend 重启后不会丢
 - `/turn` 的 SSE 正常事件仍是 `turn_started / turn_token_delta / turn_completed`。
 - 如果 bootstrap 预留 assistant turn 在首个 `turn_started` 前已经被 abort，就不会再补一条 stale `turn_started`。
 - scenario 删除打断 stream 时，服务端当前会补一条终态 `turn_error`，并带 `code: "SCENARIO_DELETED"`；如果删除发生在首个 `turn_started` 前，也会直接收成这条终态。

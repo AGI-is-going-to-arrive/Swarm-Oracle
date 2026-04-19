@@ -21,6 +21,36 @@ afterEach(() => {
 });
 
 describe('useAgentConversation — WS event dispatch', () => {
+  it('keeps imperative handlers stable across rerenders', () => {
+    const { result, rerender } = renderHook(
+      ({ threadId }: { threadId?: string | null }) => useAgentConversation({ threadId }),
+      { initialProps: { threadId: 'thread-1' } },
+    );
+
+    const initialDispatchWsEvent = result.current.dispatchWsEvent;
+    const initialRegisterStreamBubble = result.current.registerStreamBubble;
+    const initialDispatch = result.current.dispatch;
+
+    rerender({ threadId: 'thread-1' });
+
+    expect(result.current.dispatchWsEvent).toBe(initialDispatchWsEvent);
+    expect(result.current.registerStreamBubble).toBe(initialRegisterStreamBubble);
+    expect(result.current.dispatch).toBe(initialDispatch);
+
+    act(() => {
+      result.current.dispatchWsEvent({
+        type: 'turn_started',
+        thread_id: 'thread-1',
+        turn_id: 'turn-1',
+        sequence: 1,
+      });
+    });
+
+    expect(result.current.dispatchWsEvent).toBe(initialDispatchWsEvent);
+    expect(result.current.registerStreamBubble).toBe(initialRegisterStreamBubble);
+    expect(result.current.dispatch).toBe(initialDispatch);
+  });
+
   it('turn_started transitions idle → pending', () => {
     const { result } = renderHook(() => useAgentConversation());
     act(() => {
@@ -214,5 +244,167 @@ describe('useAgentConversation — aria-live integration (R4-N5)', () => {
       });
     });
     expect(node.textContent).toBe('done');
+  });
+
+  it.each([
+    {
+      label: 'turn_completed',
+      finishTurn: (hook: ReturnType<typeof useAgentConversation>) => {
+        hook.dispatchWsEvent({
+          type: 'turn_completed',
+          turn_id: 'turn1',
+          sequence: 1,
+          status: 'committed',
+        });
+      },
+      expectedAnnouncement: 'done',
+    },
+    {
+      label: 'turn_error',
+      finishTurn: (hook: ReturnType<typeof useAgentConversation>) => {
+        hook.dispatchWsEvent({
+          type: 'turn_error',
+          turn_id: 'turn1',
+          code: 'LLM_5XX',
+          message: 'boom',
+        });
+      },
+      expectedAnnouncement: '',
+    },
+    {
+      label: 'abort',
+      finishTurn: (hook: ReturnType<typeof useAgentConversation>) => {
+        hook.dispatch({ type: 'abort' });
+      },
+      expectedAnnouncement: '',
+    },
+    {
+      label: 'error',
+      finishTurn: (hook: ReturnType<typeof useAgentConversation>) => {
+        hook.dispatch({ type: 'error', code: 'server_error', message: 'boom' });
+      },
+      expectedAnnouncement: '',
+    },
+    {
+      label: 'reset',
+      finishTurn: (hook: ReturnType<typeof useAgentConversation>) => {
+        hook.dispatch({ type: 'reset' });
+      },
+      expectedAnnouncement: '',
+    },
+  ])('ignores late token delta after $label clears the active turn', ({ finishTurn, expectedAnnouncement }) => {
+    const { result } = renderHook(() => useAgentConversation({ ariaLiveDebounceMs: 3000 }));
+    const node = document.createElement('div');
+    const appendSpy = vi.fn();
+    result.current.ariaLiveApi.announceRef.current = node;
+
+    act(() => {
+      result.current.registerStreamBubble('turn1', {
+        appendToken: appendSpy,
+        finalize: vi.fn(),
+        reset: vi.fn(),
+      });
+      result.current.dispatchWsEvent({
+        type: 'turn_started',
+        thread_id: 'th1',
+        turn_id: 'turn1',
+        sequence: 1,
+      });
+      result.current.dispatchWsEvent({
+        type: 'turn_token_delta',
+        turn_id: 'turn1',
+        delta: 'done',
+      });
+      finishTurn(result.current);
+      result.current.dispatchWsEvent({
+        type: 'turn_token_delta',
+        turn_id: 'turn1',
+        delta: ' late',
+      });
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(appendSpy).toHaveBeenCalledTimes(1);
+    expect(result.current.ariaLiveApi.bufferRef.current).toBe('');
+    expect(node.textContent).toBe(expectedAnnouncement);
+  });
+
+  it.each([
+    {
+      label: 'turn_completed',
+      dispatchStaleTerminalEvent: (hook: ReturnType<typeof useAgentConversation>) => {
+        hook.dispatchWsEvent({
+          type: 'turn_completed',
+          turn_id: 'turn1',
+          sequence: 1,
+          status: 'committed',
+        });
+      },
+    },
+    {
+      label: 'turn_error',
+      dispatchStaleTerminalEvent: (hook: ReturnType<typeof useAgentConversation>) => {
+        hook.dispatchWsEvent({
+          type: 'turn_error',
+          turn_id: 'turn1',
+          code: 'LLM_5XX',
+          message: 'boom',
+        });
+      },
+    },
+  ])('ignores late $label from a stale turn after a new active turn starts', ({ dispatchStaleTerminalEvent }) => {
+    const { result } = renderHook(() => useAgentConversation({ ariaLiveDebounceMs: 3000 }));
+    const node = document.createElement('div');
+    const staleAppendSpy = vi.fn();
+    const activeAppendSpy = vi.fn();
+    result.current.ariaLiveApi.announceRef.current = node;
+
+    act(() => {
+      result.current.registerStreamBubble('turn1', {
+        appendToken: staleAppendSpy,
+        finalize: vi.fn(),
+        reset: vi.fn(),
+      });
+      result.current.registerStreamBubble('turn2', {
+        appendToken: activeAppendSpy,
+        finalize: vi.fn(),
+        reset: vi.fn(),
+      });
+      result.current.dispatchWsEvent({
+        type: 'turn_started',
+        thread_id: 'th1',
+        turn_id: 'turn1',
+        sequence: 1,
+      });
+      result.current.dispatchWsEvent({
+        type: 'turn_token_delta',
+        turn_id: 'turn1',
+        delta: 'old',
+      });
+      result.current.dispatchWsEvent({
+        type: 'turn_started',
+        thread_id: 'th1',
+        turn_id: 'turn2',
+        sequence: 2,
+      });
+      result.current.dispatchWsEvent({
+        type: 'turn_token_delta',
+        turn_id: 'turn2',
+        delta: 'new',
+      });
+      dispatchStaleTerminalEvent(result.current);
+    });
+
+    expect(result.current.state.turn).toBe('streaming');
+    expect(result.current.ariaLiveApi.bufferRef.current).toBe('new');
+    expect(node.textContent).toBe('');
+    expect(staleAppendSpy).toHaveBeenCalledTimes(1);
+    expect(activeAppendSpy).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(node.textContent).toBe('new');
   });
 });

@@ -57,6 +57,15 @@ interface CausalGraphPayload {
 type ViewportTier = 'mobile' | 'tablet' | 'desktop';
 type MobileActivePane = 'graph' | 'sidebar';
 
+function createClosedSheetState() {
+  return {
+    open: false,
+    scenarioId: '',
+    identityId: null,
+    origin: { nodeId: '', nodeType: '' },
+  };
+}
+
 // ── Hooks ───────────────────────────────────────────────────
 
 function useViewportTier(): ViewportTier {
@@ -125,14 +134,9 @@ export default function KGExplorerView() {
   const [sheetState, setSheetState] = useState<{
     open: boolean;
     scenarioId: string;
-    identityId: string;
+    identityId: string | null;
     origin: { nodeId: string; nodeType: string; excerpt?: string };
-  }>({
-    open: false,
-    scenarioId: '',
-    identityId: '',
-    origin: { nodeId: '', nodeType: '' },
-  });
+  }>(createClosedSheetState);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -167,6 +171,10 @@ export default function KGExplorerView() {
     };
   }, [capEnabled, scenarioId]);
 
+  useEffect(() => {
+    setSheetState(createClosedSheetState());
+  }, [scenarioId]);
+
   // Build G6 node/edge data — memoized so hook doesn't rebuild.
   const g6GraphData = useMemo(() => {
     if (!graphData) return { nodes: [], edges: [] };
@@ -200,12 +208,12 @@ export default function KGExplorerView() {
   const handleNodeClick = useCallback(
     (evt: unknown) => {
       const target = (evt as { target?: { id?: string; type?: string } } | undefined)?.target;
-      const identityId = target?.id ?? '';
+      const nodeId = target?.id ?? '';
       setSheetState({
         open: true,
         scenarioId,
-        identityId,
-        origin: { nodeId: identityId, nodeType: target?.type ?? 'unknown' },
+        identityId: null,
+        origin: { nodeId, nodeType: target?.type ?? 'unknown' },
       });
     },
     [scenarioId],
@@ -501,8 +509,10 @@ export default function KGExplorerView() {
       {sheetState.open && (
         <NodeConversationSheet
           open={sheetState.open}
-          onOpenChange={(next) => setSheetState((prev) => ({ ...prev, open: next }))}
-          threadId={null}
+          onOpenChange={(next) =>
+            setSheetState((prev) => (next ? prev : createClosedSheetState()))
+          }
+          onClose={() => setSheetState(createClosedSheetState())}
           scenarioId={sheetState.scenarioId}
           identityId={sheetState.identityId}
           origin={sheetState.origin}

@@ -2762,7 +2762,9 @@ class TestDeleteScenario:
             assert session.get(Scenario, sid) is not None
             assert session.exec(select(Branch).where(Branch.scenario_id == sid)).first() is not None
 
-    def test_delete_integrity_guard_does_not_signal_conversation_cancel_before_commit(self, client, monkeypatch):
+    def test_delete_integrity_guard_does_not_signal_cancel_before_commit(
+        self, client, monkeypatch,
+    ):
         """Rollback path must not emit scenario_deleted cancel signals before commit."""
         from app.services import conversation_service
 
@@ -2806,6 +2808,65 @@ class TestDeleteScenario:
         assert resp.status_code == 500
         assert resp.json()["detail"]["code"] == "SCENARIO_DELETE_INTEGRITY_FAILED"
         assert signaled_turn_ids == []
+
+    def test_delete_scenario_swallow_signal_failures_after_commit(self, client, monkeypatch):
+        """Post-commit wakeup is best-effort and must not resurrect delete as 500."""
+        from app.services import conversation_service
+
+        monkeypatch.setattr(
+            "app.api.helpers.settings.FEATURE_AGENT_CONVERSATION",
+            True,
+        )
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        start = client.post(
+            "/api/conversation/start",
+            json={
+                "scenario_id": sid,
+                "first_user_content": "hello",
+            },
+        )
+        assert start.status_code == 200
+        assistant_turn_id = start.json()["assistant_turn_id"]
+
+        signaled_batches: list[list[str]] = []
+        scenario_exists_when_signaled: list[bool] = []
+        attempted_turn_signals: list[tuple[str, str | None]] = []
+        real_signal = conversation_service.signal_scenario_deleted_turns
+
+        def _spy_signal(turn_ids: list[str]) -> None:
+            signaled_batches.append(list(turn_ids))
+            with Session(engine) as session:
+                scenario_exists_when_signaled.append(session.get(Scenario, sid) is not None)
+            real_signal(turn_ids)
+
+        def _boom_signal(turn_id: str, *, reason: str | None = None):
+            attempted_turn_signals.append((turn_id, reason))
+            raise RuntimeError("loop already closed")
+
+        monkeypatch.setattr(
+            conversation_service,
+            "signal_scenario_deleted_turns",
+            _spy_signal,
+        )
+        monkeypatch.setattr(
+            conversation_service,
+            "_signal_turn_cancel_event",
+            _boom_signal,
+        )
+
+        resp = client.delete(f"/api/scenario/{sid}")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "deleted"
+        assert signaled_batches == [[assistant_turn_id]]
+        assert scenario_exists_when_signaled == [False]
+        assert attempted_turn_signals == [
+            (assistant_turn_id, "scenario_deleted"),
+        ]
+
+        with Session(engine) as session:
+            assert session.get(Scenario, sid) is None
 
 
 # ── P4-C: Export Scenario ────────────────────────────────

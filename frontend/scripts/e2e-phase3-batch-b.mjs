@@ -303,13 +303,19 @@ async function verifyPageScrollThrough(page, containerSelector) {
 
 async function triggerArgumentMapLoad(page) {
   const sectionHeading = page.getByRole("heading", { name: /Argument Map|论证图谱/i }).first();
-  const sectionReady = await sectionHeading.isVisible({ timeout: 10000 }).catch(() => false);
+  const sectionReady = await sectionHeading
+    .waitFor({ state: "visible", timeout: 10000 })
+    .then(() => true)
+    .catch(() => false);
   if (!sectionReady) {
     return { hasLoadButton: false, sawResponse: false };
   }
 
   const loadButton = page.getByRole("button", { name: /Load map|加载图谱/i }).first();
-  const hasLoadButton = await loadButton.isVisible({ timeout: 10000 }).catch(() => false);
+  const hasLoadButton = await loadButton
+    .waitFor({ state: "visible", timeout: 10000 })
+    .then(() => true)
+    .catch(() => false);
   if (!hasLoadButton) {
     return { hasLoadButton: false, sawResponse: false };
   }
@@ -952,13 +958,13 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   const { hasLoadButton, sawResponse } = await triggerArgumentMapLoad(page);
   results.steps.push({ name: "argument-map-load-button-visible", passed: hasLoadButton });
   results.steps.push({ name: "argument-map-load-request-fired", passed: sawResponse });
+  const reactFlowEl = page.locator('.react-flow').first();
   if (sawResponse) {
-    await page.locator(".react-flow").first().waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+    await reactFlowEl.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
   }
 
   // Check argument map section exists (ReactFlow container)
-  const reactFlowEl = page.locator('.react-flow').first();
-  const hasReactFlow = await reactFlowEl.isVisible({ timeout: 5000 }).catch(() => false);
+  const hasReactFlow = await reactFlowEl.isVisible().catch(() => false);
   results.steps.push({ name: "argument-map-reactflow-visible", passed: hasReactFlow });
 
   const controls = page.locator('.argument-map-container .react-flow__controls').first();
@@ -988,6 +994,9 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   results.steps.push({ name: "legend-visible", passed: hasLegend });
 
   const verdictNode = page.getByRole("button", { name: /Verdict.*order|裁决.*order/i }).first();
+  if (hasReactFlow) {
+    await verdictNode.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+  }
   const hasVerdictNode = await verdictNode.isVisible().catch(() => false);
   results.steps.push({ name: "argument-map-verdict-node-visible", passed: hasVerdictNode });
 
@@ -1064,12 +1073,16 @@ async function testArgumentMap(page, baseUrl, outputDir) {
     results.steps.push({ name: "argument-map-node-detail-status-visible", passed: hasAcceptedStatus });
 
     const closeBtn = hasDetailPanel
-      ? detailPanel.getByRole("button", { name: /Close|关闭/i }).first()
+      ? detailPanel.getByLabel(/Close|关闭/i).first()
       : null;
+    if (closeBtn) {
+      await closeBtn.waitFor({ state: "visible", timeout: 3000 }).catch(() => {});
+    }
     const hasCloseBtn = closeBtn ? await closeBtn.isVisible().catch(() => false) : false;
     results.steps.push({ name: "argument-map-node-detail-close-visible", passed: hasCloseBtn });
     if (closeBtn && hasCloseBtn) {
       await closeBtn.click();
+      await detailPanel.waitFor({ state: "hidden", timeout: 3000 }).catch(() => {});
       const panelClosed = await detailPanel.isHidden().catch(() => false);
       await saveScreenshot(page, path.join(stepDir, "03-argument-map-detail-closed.png"));
       results.steps.push({ name: "argument-map-node-detail-closes", passed: panelClosed });

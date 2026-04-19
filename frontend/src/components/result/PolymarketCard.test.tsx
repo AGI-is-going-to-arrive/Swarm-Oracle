@@ -16,11 +16,11 @@ function renderCard(props: Parameters<typeof PolymarketCard>[0]) {
 }
 
 describe('PolymarketCard', () => {
-  it('renders geo-gated placeholder when configured_host !== "us"', () => {
+  it('renders geo-gated placeholder when configured_host === "non-us"', () => {
     renderCard({
       capability: {
         enabled: true,
-        configured_host: 'eu',
+        configured_host: 'non-us',
         rate_limit_rps: 1,
         ttl_seconds: 60,
         byok_allowed: false,
@@ -49,6 +49,21 @@ describe('PolymarketCard', () => {
     expect(screen.getByTestId('result-sources-polymarket')).toBeInTheDocument();
     expect(screen.getByText('Will X happen?')).toBeInTheDocument();
     expect(screen.getByText('62%')).toBeInTheDocument();
+  });
+
+  it('does not treat unexpected configured_host values as geo-gated', () => {
+    renderCard({
+      capability: {
+        enabled: true,
+        configured_host: 'unexpected',
+        rate_limit_rps: 1,
+        ttl_seconds: 60,
+        byok_allowed: false,
+      },
+      state: 'empty',
+      items: [],
+    });
+    expect(screen.getByTestId('result-sources-polymarket')).toBeInTheDocument();
   });
 
   it('renders empty when capability us but no items', () => {

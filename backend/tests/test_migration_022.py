@@ -1,12 +1,12 @@
-"""Regression tests for migration 022_agent_conversation.
+"""Regression tests for the agent conversation migrations.
 
 Covers:
-  - upgrade creates both tables with the expected columns / indexes
+  - upgrade creates the thread / turn / quota ledger tables with expected indexes
   - UNIQUE (thread_id, sequence) rejects duplicates
   - FK CASCADE on scenario_id -> turn rows purged
   - FK CASCADE on thread_id -> turn rows purged
   - owner_user_id NOT NULL is enforced
-  - 021 -> 022 -> 021 -> 022 downgrade/upgrade roundtrip
+  - 021 -> head -> 021 -> head downgrade/upgrade roundtrip
   - idx_branch_replay_source is present + consulted by EXPLAIN QUERY PLAN
     (only if the column exists; otherwise assertion is skipped with a note)
 """
@@ -18,7 +18,7 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 
 _PREV_REVISION = "021_scope_debate_argument_unit_dedup_per_turn"
-_THIS_REVISION = "022_agent_conversation"
+_HEAD_REVISION = "023_agent_conversation_quota_ledger"
 
 
 def _alembic_runtime_or_skip():
@@ -183,6 +183,7 @@ def test_upgrade_creates_tables(tmp_path):
     table_names = set(inspector.get_table_names())
     assert "agent_conversation_thread" in table_names
     assert "agent_conversation_turn" in table_names
+    assert "agent_conversation_quota_ledger" in table_names
 
     thread_columns = {col["name"] for col in inspector.get_columns("agent_conversation_thread")}
     assert {
@@ -223,12 +224,27 @@ def test_upgrade_creates_tables(tmp_path):
         "completed_at",
     } <= turn_columns
 
+    ledger_columns = {col["name"] for col in inspector.get_columns("agent_conversation_quota_ledger")}
+    assert {
+        "id",
+        "owner_user_id",
+        "organization_id",
+        "scenario_id",
+        "thread_id",
+        "turn_delta",
+        "created_at",
+    } <= ledger_columns
+
     thread_indexes = {idx["name"] for idx in inspector.get_indexes("agent_conversation_thread")}
     assert "ix_thread_scenario" in thread_indexes
     assert "ix_thread_owner" in thread_indexes
 
     turn_indexes = {idx["name"] for idx in inspector.get_indexes("agent_conversation_turn")}
     assert "ix_turn_thread_seq" in turn_indexes
+
+    ledger_indexes = {idx["name"] for idx in inspector.get_indexes("agent_conversation_quota_ledger")}
+    assert "ix_quota_ledger_owner_created" in ledger_indexes
+    assert "ix_quota_ledger_org_created" in ledger_indexes
 
     uniq_table = "agent_conversation_turn"
     unique_names = {uq["name"] for uq in inspector.get_unique_constraints(uniq_table)}
@@ -377,10 +393,11 @@ def test_downgrade_roundtrip(tmp_path):
     _upgrade_to_head(db_url)
 
     engine = _make_engine(db_url)
-    assert _current_revision(engine) == _THIS_REVISION
+    assert _current_revision(engine) == _HEAD_REVISION
     names_after_up_1 = set(inspect(engine).get_table_names())
     assert "agent_conversation_thread" in names_after_up_1
     assert "agent_conversation_turn" in names_after_up_1
+    assert "agent_conversation_quota_ledger" in names_after_up_1
     engine.dispose()
 
     _downgrade_to(db_url, _PREV_REVISION)
@@ -389,14 +406,16 @@ def test_downgrade_roundtrip(tmp_path):
     names_after_down = set(inspect(engine).get_table_names())
     assert "agent_conversation_thread" not in names_after_down
     assert "agent_conversation_turn" not in names_after_down
+    assert "agent_conversation_quota_ledger" not in names_after_down
     engine.dispose()
 
-    _upgrade_to(db_url, _THIS_REVISION)
+    _upgrade_to(db_url, _HEAD_REVISION)
     engine = _make_engine(db_url)
-    assert _current_revision(engine) == _THIS_REVISION
+    assert _current_revision(engine) == _HEAD_REVISION
     names_after_up_2 = set(inspect(engine).get_table_names())
     assert "agent_conversation_thread" in names_after_up_2
     assert "agent_conversation_turn" in names_after_up_2
+    assert "agent_conversation_quota_ledger" in names_after_up_2
     engine.dispose()
 
 

@@ -802,10 +802,10 @@ export type DebateWSEvent =
 
 export type AgentConversationWSEvent =
   | { type: 'auth_ok'; request_id?: string }
-  | { type: 'turn_started'; thread_id: string; turn_id: string; sequence: number }
-  | { type: 'turn_token_delta'; turn_id: string; delta: string }
-  | { type: 'turn_completed'; turn_id: string; sequence: number; status: 'committed' | 'aborted' }
-  | { type: 'turn_error'; turn_id: string; code: string; message: string };
+  | { type: 'turn_started'; thread_id: string; turn_id: string; sequence: number; request_id?: string; model?: string }
+  | { type: 'turn_token_delta'; turn_id: string; delta: string; sequence?: number; model?: string }
+  | { type: 'turn_completed'; turn_id: string; thread_id?: string; sequence: number; status: 'committed' | 'aborted'; model?: string }
+  | { type: 'turn_error'; turn_id: string; thread_id?: string; sequence?: number; code: string; message?: string; status?: string; model?: string; request_id?: string };
 
 export type EndingRoomWSEvent =
   (

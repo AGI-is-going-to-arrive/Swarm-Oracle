@@ -32,6 +32,30 @@ describe('apiErrorMessage helpers', () => {
         'fallback',
       ),
     ).toBe('debate.bet_error_locked');
+
+    expect(
+      getLocalizedApiErrorMessage(
+        { status: 429, code: 'DAILY_QUOTA_EXCEEDED' },
+        t,
+        'fallback',
+      ),
+    ).toBe('conversation.error.quota_exceeded');
+
+    expect(
+      getLocalizedApiErrorMessage(
+        { status: 429, code: 'ORG_DAILY_QUOTA_EXCEEDED' },
+        t,
+        'fallback',
+      ),
+    ).toBe('conversation.error.quota_exceeded');
+
+    expect(
+      getLocalizedApiErrorMessage(
+        { status: 503, code: 'SOCIAL_LLM_TEMPORARILY_UNAVAILABLE' },
+        t,
+        'fallback',
+      ),
+    ).toBe('common.api_errors.llm_unavailable');
   });
 
   it('falls back for unknown errors', () => {

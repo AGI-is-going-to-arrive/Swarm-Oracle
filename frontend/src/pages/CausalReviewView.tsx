@@ -81,6 +81,22 @@ interface CausalGraphErrorState {
   status: number | null;
 }
 
+interface NodeConversationSheetState {
+  open: boolean;
+  scenarioId: string;
+  identityId: string | null;
+  origin: { nodeId: string; nodeType: string; excerpt?: string };
+}
+
+function createClosedSheetState(): NodeConversationSheetState {
+  return {
+    open: false,
+    scenarioId: '',
+    identityId: null,
+    origin: { nodeId: '', nodeType: '' },
+  };
+}
+
 function extractApiErrorState(payload: unknown, status: number): CausalGraphErrorState {
   if (payload && typeof payload === 'object') {
     const record = payload as Record<string, unknown>;
@@ -297,17 +313,7 @@ export function CausalReviewView() {
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
-  const [sheetState, setSheetState] = useState<{
-    open: boolean;
-    scenarioId: string;
-    identityId: string | null;
-    origin: { nodeId: string; nodeType: string; excerpt?: string };
-  }>({
-    open: false,
-    scenarioId: '',
-    identityId: null,
-    origin: { nodeId: '', nodeType: '' },
-  });
+  const [sheetState, setSheetState] = useState<NodeConversationSheetState>(createClosedSheetState);
   // C5: Agent search
   const [agentSearch, setAgentSearch] = useState('');
   const exportRootId = `causal-graph-${useId().replace(/:/g, '-')}`;
@@ -322,6 +328,7 @@ export function CausalReviewView() {
     t(key, fallback)
   ), [t]);
   const currentGraphKey = `${id ?? ''}:${branchId ?? ''}`;
+  const previousGraphKeyRef = useRef(currentGraphKey);
 
   const fetchGraph = useCallback(async () => {
     const requestId = latestRequestIdRef.current + 1;
@@ -401,6 +408,13 @@ export function CausalReviewView() {
     if (!id || !enabled) return;
     fetchGraph();
   }, [id, fetchGraph, enabled]);
+
+  useEffect(() => {
+    if (previousGraphKeyRef.current === currentGraphKey) return;
+    previousGraphKeyRef.current = currentGraphKey;
+    detailRestoreFocusRef.current = null;
+    setSheetState(createClosedSheetState());
+  }, [currentGraphKey]);
 
   // C5: Filtered data based on agent or node search, while keeping one-hop context.
   const searchState = useMemo(() => {
@@ -623,14 +637,18 @@ export function CausalReviewView() {
       round: raw.round,
       payload: raw.payload,
     });
-    // FE-3-seq: open NodeConversationSheet — append only, existing detail panel preserved.
+    if (isCompactViewport) {
+      setSheetState((prev) => (prev.open ? { ...prev, open: false } : prev));
+      return;
+    }
+    // FE-3-seq: desktop keeps detail + sidecar visible together.
     setSheetState({
       open: true,
       scenarioId: id ?? '',
       identityId: null,
       origin: { nodeId: raw.id, nodeType: raw.type, excerpt: raw.label || raw.key },
     });
-  }, [rawNodeMap, id]);
+  }, [rawNodeMap, id, isCompactViewport]);
 
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
     const triggerElement = event.target instanceof Element

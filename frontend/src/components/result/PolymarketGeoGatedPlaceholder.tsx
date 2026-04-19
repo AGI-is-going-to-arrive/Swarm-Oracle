@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
    PolymarketGeoGatedPlaceholder — ui-prompts §6
-   Rendered when capability.web_search.providers.polymarket.configured_host !== "us"
+   Rendered when capability.web_search.providers.polymarket.configured_host === "non-us"
    ═══════════════════════════════════════════════════════════ */
 
 import { useTranslation } from 'react-i18next';

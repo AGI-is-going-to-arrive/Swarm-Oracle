@@ -124,3 +124,21 @@ class AgentConversationTurn(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now, nullable=False)
     updated_at: datetime = Field(default_factory=_now, nullable=False)
     completed_at: Optional[datetime] = None
+
+
+class AgentConversationQuotaLedger(SQLModel, table=True):
+    """Durable rolling-24h quota ledger for agent conversation turns."""
+
+    __tablename__ = "agent_conversation_quota_ledger"
+    __table_args__ = (
+        Index("ix_quota_ledger_owner_created", "owner_user_id", "created_at"),
+        Index("ix_quota_ledger_org_created", "organization_id", "created_at"),
+    )
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    owner_user_id: Optional[str] = None
+    organization_id: Optional[str] = None
+    scenario_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    turn_delta: int = Field(default=0, nullable=False)
+    created_at: datetime = Field(default_factory=_now, nullable=False)

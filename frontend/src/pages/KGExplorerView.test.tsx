@@ -11,7 +11,7 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 
 const nodeClickHandlers: Array<(evt: unknown) => void> = [];
 const graphDestroySpy = vi.fn();
@@ -54,6 +54,52 @@ function renderAt(id = 'abc123') {
       </Routes>
     </MemoryRouter>,
   );
+}
+
+function renderWithNavigator(initialId = 'abc123') {
+  function Harness() {
+    const navigate = useNavigate();
+    return (
+      <>
+        <button
+          type="button"
+          data-testid="kg-explorer-nav-next"
+          onClick={() => navigate('/kg-explorer/scn-b')}
+        >
+          next
+        </button>
+        <Routes>
+          <Route path="/kg-explorer/:id" element={<KGExplorerView />} />
+          <Route path="/" element={<div>home</div>} />
+        </Routes>
+      </>
+    );
+  }
+
+  return render(
+    <MemoryRouter initialEntries={[`/kg-explorer/${initialId}`]}>
+      <Harness />
+    </MemoryRouter>,
+  );
+}
+
+function makeConversationSseResponse(frames: string[]): Response {
+  const encoder = new TextEncoder();
+  const chunks = frames.map((frame) => encoder.encode(frame));
+  let index = 0;
+  return {
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: vi.fn(async () => {
+          if (index >= chunks.length) return { done: true, value: undefined };
+          const value = chunks[index];
+          index += 1;
+          return { done: false, value };
+        }),
+      }),
+    },
+  } as unknown as Response;
 }
 
 const fetchMock = vi.fn();
@@ -170,6 +216,92 @@ describe('KGExplorerView happy path', () => {
     });
     const sheet = await screen.findByTestId('node-conversation-sheet');
     expect(sheet).toBeInTheDocument();
+  });
+
+  it('starts node conversation with the explorer scenario id and a null identity id', async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'graph-1',
+          nodes: [{ id: 'node-9', type: 'circle', label: 'Node 9', round: 1 }],
+          edges: [],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ thread_id: 'thread-kg-1' }),
+      } as Response)
+      .mockResolvedValueOnce(
+        makeConversationSseResponse([
+          'event: turn_started\ndata: {"turn_id":"turn-kg-1","thread_id":"thread-kg-1","sequence":2}\n\n',
+          'event: turn_token_delta\ndata: {"turn_id":"turn-kg-1","delta":"ok"}\n\n',
+          'event: turn_completed\ndata: {"turn_id":"turn-kg-1","sequence":2,"status":"committed"}\n\n',
+        ]),
+      );
+
+    renderAt('scn-42');
+    await waitFor(() => expect(nodeClickHandlers.length).toBeGreaterThan(0));
+    act(() => {
+      nodeClickHandlers[0]({ target: { id: 'node-9', type: 'circle' } });
+    });
+
+    await user.type(await screen.findByTestId('node-conversation-input'), 'inspect node');
+    await user.click(screen.getByTestId('node-conversation-send'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/conversation/start',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    const [, startOptions] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const startBody = JSON.parse(String(startOptions.body));
+    expect(startBody.scenario_id).toBe('scn-42');
+    expect(startBody.agent_identity_id).toBeNull();
+  });
+
+  it('closes the open sheet when the route scenario id changes', async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'graph-a',
+          nodes: [{ id: 'node-a', type: 'circle', label: 'Node A', round: 1 }],
+          edges: [],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'graph-b',
+          nodes: [{ id: 'node-b', type: 'circle', label: 'Node B', round: 2 }],
+          edges: [],
+        }),
+      } as Response);
+
+    renderWithNavigator('scn-a');
+    await waitFor(() => expect(nodeClickHandlers.length).toBeGreaterThan(0));
+
+    act(() => {
+      nodeClickHandlers.at(-1)?.({ target: { id: 'node-a', type: 'circle' } });
+    });
+    expect(await screen.findByTestId('node-conversation-sheet')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('kg-explorer-nav-next'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        '/api/scenario/scn-b/causal-graph',
+        expect.any(Object),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
+    });
   });
 
   it('search input updates value (controlled component)', async () => {

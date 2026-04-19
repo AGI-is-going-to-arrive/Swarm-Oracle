@@ -28,9 +28,9 @@ import base64
 import hashlib
 import hmac
 import json
-from collections import deque
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
@@ -412,13 +412,10 @@ class TestC3OrgIdHeaderAndQuota:
 
     @pytest.fixture(autouse=True)
     def _reset_quota_state(self):
-        """Prevent cross-test bucket bleed — the daily deques are process-global."""
-        # Swap in fresh empty deques for every test in this class.
-        conversation_service._user_day_turns.clear()
-        conversation_service._org_day_turns.clear()
+        """Prevent cross-test quota bleed regardless of the backing store."""
+        conversation_service.reset_conversation_quota_counters()
         yield
-        conversation_service._user_day_turns.clear()
-        conversation_service._org_day_turns.clear()
+        conversation_service.reset_conversation_quota_counters()
 
     def test_body_organization_id_still_forbidden(self, client):
         """v1 schema freeze: body still rejects ``organization_id``."""
@@ -528,8 +525,8 @@ class TestC3OrgIdHeaderAndQuota:
         # Retry-After header should be present for rolling-24h clarity.
         assert "retry-after" in {k.lower() for k in second.headers.keys()}
 
-    def test_org_bucket_is_keyed_per_organization(self, client, monkeypatch):
-        """Two different tenants should not drain each other's budgets."""
+    def test_org_daily_quota_is_keyed_per_organization(self, client, monkeypatch):
+        """Tenant A exhausting its budget must not drain tenant B."""
         monkeypatch.setattr(
             conversation_service.settings,
             "CONVERSATION_TURNS_PER_ORG_PER_DAY",
@@ -545,32 +542,78 @@ class TestC3OrgIdHeaderAndQuota:
         engine = get_engine()
         scenario_id = _seed_scenario(engine)
 
-        tenant_a = client.post(
+        tenant_a_first = client.post(
             "/api/conversation/start",
             json=_default_start_body(scenario_id),
             headers={"X-Org-Id": "tenant-A"},
         )
-        assert tenant_a.status_code == 200
+        assert tenant_a_first.status_code == 200
 
-        tenant_b = client.post(
+        tenant_a_second = client.post(
             "/api/conversation/start",
-            json=_default_start_body(scenario_id),
+            json=_default_start_body(scenario_id, content="overflow-a"),
+            headers={"X-Org-Id": "tenant-A"},
+        )
+        assert tenant_a_second.status_code == 429
+        assert tenant_a_second.json()["detail"]["code"] == "ORG_DAILY_QUOTA_EXCEEDED"
+
+        tenant_b_first = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(scenario_id, content="fresh-b"),
             headers={"X-Org-Id": "tenant-B"},
         )
-        assert tenant_b.status_code == 200
+        assert tenant_b_first.status_code == 200
 
-        # Cross-check the internal buckets directly — easier than scraping
-        # the response.
-        assert isinstance(
-            conversation_service._org_day_turns.get("tenant-a"), deque,
+    def test_org_daily_quota_reads_persisted_usage(self, client, monkeypatch):
+        monkeypatch.setattr(
+            conversation_service.settings,
+            "CONVERSATION_TURNS_PER_ORG_PER_DAY",
+            3,
+            raising=False,
         )
-        assert isinstance(
-            conversation_service._org_day_turns.get("tenant-b"), deque,
+        monkeypatch.setattr(
+            conversation_service.settings,
+            "CONVERSATION_TURNS_PER_USER_PER_DAY",
+            100,
+            raising=False,
         )
-        assert len(conversation_service._org_day_turns["tenant-a"]) == 2
-        assert len(conversation_service._org_day_turns["tenant-b"]) == 2
 
-    def test_org_header_is_case_folded_before_persistence_and_quota(self, client):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine)
+        headers = {"X-Org-Id": "tenant-reload"}
+
+        first = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(scenario_id),
+            headers=headers,
+        )
+        assert first.status_code == 200
+
+        with Session(engine) as session:
+            with pytest.raises(HTTPException) as excinfo:
+                conversation_service._enforce_daily_user_org_quota(
+                    session,
+                    user_id=None,
+                    organization_id="tenant-reload",
+                    additions=2,
+                )
+        assert excinfo.value.status_code == 429
+        assert excinfo.value.detail["code"] == "ORG_DAILY_QUOTA_EXCEEDED"
+        assert "Retry-After" in (excinfo.value.headers or {})
+
+    def test_org_header_is_case_folded_before_persistence_and_quota(self, client, monkeypatch):
+        monkeypatch.setattr(
+            conversation_service.settings,
+            "CONVERSATION_TURNS_PER_ORG_PER_DAY",
+            3,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            conversation_service.settings,
+            "CONVERSATION_TURNS_PER_USER_PER_DAY",
+            100,
+            raising=False,
+        )
         engine = get_engine()
         scenario_id = _seed_scenario(engine)
         resp = client.post(
@@ -585,3 +628,11 @@ class TestC3OrgIdHeaderAndQuota:
             thread = session.get(AgentConversationThread, thread_id)
             assert thread is not None
             assert thread.organization_id == "tenant-mixed_case"
+
+        over = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(scenario_id, content="same-tenant"),
+            headers={"X-Org-Id": "tenant-mixed_case"},
+        )
+        assert over.status_code == 429
+        assert over.json()["detail"]["code"] == "ORG_DAILY_QUOTA_EXCEEDED"

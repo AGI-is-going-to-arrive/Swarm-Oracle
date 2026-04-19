@@ -14,7 +14,7 @@ Covers the acceptance checklist from
 * DELETE abort path
 * scenario delete while streaming → SCENARIO_DELETED terminal state
 * BYOK never written to DB / logs / WS payload
-* 6 whitelisted ``turn_error`` codes
+* 6 whitelisted ``turn_error.code`` values
 * WS reconnect reads active thread state (via GET snapshot)
 
 These tests validate the **actual** behaviour that BE-1/BE-3 ships. Where a
@@ -33,6 +33,7 @@ import threading
 import uuid
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -328,15 +329,21 @@ class TestDeleteAbortPath:
         thread_id = payload["thread_id"]
         active_id = payload["assistant_turn_id"]
 
-        # The placeholder assistant turn is ``pending``; abort should transition
-        # it to ``aborted``.  The conversation service only aborts turns in
-        # ``{"streaming", ...}``; the placeholder starts as ``pending`` so
-        # the CAS no-op returns False but the endpoint still reports 200.
         resp = client.delete(f"/api/conversation/{thread_id}/active")
         assert resp.status_code in (200, 204)
         body = resp.json()
         assert body["turn_id"] == active_id
-        assert "aborted" in body
+        assert body["aborted"] is True
+
+        with Session(engine) as session:
+            row = session.get(AgentConversationTurn, active_id)
+            thread = session.get(AgentConversationThread, thread_id)
+            assert row is not None
+            assert row.status == "aborted"
+            assert row.error_code == "USER_ABORTED"
+            assert thread is not None
+            assert thread.active_turn_id is None
+            assert thread.latest_status == "aborted"
 
     def test_abort_without_active_turn_returns_404(self, client):
         """No active turn (e.g. after finalisation) → 404 NO_ACTIVE_TURN."""
@@ -598,12 +605,9 @@ class TestReadThreadStatePostStart:
 
 
 # ── 9. Documented quota / cap contracts ──────────────────
-# BE-3 today does not enforce the plan's numeric quotas (10 threads/scenario,
-# 500 turns/user/day, 5000/org/day, max_turns_per_thread=50).  These tests
-# exist to lock the contract in the test suite so when enforcement lands the
-# regression net is already in place.  They use ``xfail(strict=False)`` so
-# they do NOT fail the gate today but light up green the moment enforcement
-# ships.
+# These tests lock the shipped quota behavior, including the BE-3 daily-user
+# durability requirement: a process-local service reload must not zero the
+# rolling 24h counters once turns have already been committed to storage.
 
 
 class TestDocumentedQuotas:
@@ -621,6 +625,41 @@ class TestDocumentedQuotas:
         from app.services.conversation_service import settings as svc_settings
 
         assert getattr(svc_settings, "CONVERSATION_TURNS_PER_USER_PER_DAY", 0) == 500
+
+    def test_user_daily_quota_reads_persisted_usage(self, client, monkeypatch):
+        _enable_session_auth(monkeypatch)
+        monkeypatch.setattr(
+            conversation_service_module.settings,
+            "CONVERSATION_TURNS_PER_USER_PER_DAY",
+            3,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            conversation_service_module.settings,
+            "CONVERSATION_TURNS_PER_ORG_PER_DAY",
+            100,
+            raising=False,
+        )
+
+        engine = get_engine()
+        owner_id = "quota-owner"
+        scenario_id = _seed_scenario(engine, user_id=owner_id)
+        token = _make_signed_token("s3cret-qa1", owner_id)
+
+        first = _post_start(client, _start_payload(scenario_id), token=token)
+        assert first.status_code in (200, 201)
+
+        with Session(engine) as session:
+            with pytest.raises(HTTPException) as excinfo:
+                conversation_service_module._enforce_daily_user_org_quota(
+                    session,
+                    user_id=owner_id,
+                    organization_id=None,
+                    additions=2,
+                )
+        assert excinfo.value.status_code == 429
+        assert excinfo.value.detail["code"] == "DAILY_QUOTA_EXCEEDED"
+        assert "Retry-After" in (excinfo.value.headers or {})
 
     def test_turns_per_org_per_day_5000(self):
         from app.services.conversation_service import settings as svc_settings
