@@ -195,6 +195,7 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   hierarchical?: boolean;
   visualizationEnabled?: boolean;
   webSearchEnabled?: boolean;
+  webSearchFamilies?: Array<'polymarket' | 'finance' | 'academic' | 'news_deep'>;
   webSearchProvider?: 'tavily' | 'exa' | 'xai' | 'searxng';
   webSearchApiKey?: string;
   webSearchBaseUrl?: string;
@@ -274,6 +275,7 @@ function buildScenarioRequestBody(options: CreateScenarioOptions): Record<string
     forkDetectorActiveBranchLimit,
     visualizationEnabled,
     webSearchEnabled,
+    webSearchFamilies,
     webSearchProvider,
     webSearchApiKey,
     webSearchBaseUrl,
@@ -301,6 +303,7 @@ function buildScenarioRequestBody(options: CreateScenarioOptions): Record<string
     ...(forkDetectorActiveBranchLimit != null && { fork_detector_active_branch_limit: forkDetectorActiveBranchLimit }),
     ...(visualizationEnabled != null && { visualization_enabled: visualizationEnabled }),
     ...(webSearchEnabled && { web_search_enabled: true }),
+    ...(webSearchEnabled && { web_search_families: webSearchFamilies ?? [] }),
     ...(webSearchEnabled && webSearchProvider && { web_search_provider: webSearchProvider }),
     ...(webSearchEnabled && webSearchApiKey && { web_search_api_key: webSearchApiKey }),
     ...(webSearchEnabled && webSearchBaseUrl && { web_search_base_url: webSearchBaseUrl }),

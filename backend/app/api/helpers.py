@@ -925,9 +925,10 @@ async def parse_and_run_background(
 def _parse_web_context_json(raw: str | None) -> dict | None:
     """Deserialize Scenario.web_context_json into a response-safe dict.
 
-    Validates the payload shape: query/provider must be strings,
-    snippets must be a list of dicts with string text/source_url.
-    Malformed data → None (graceful degradation).
+    Validates the payload shape: query/provider must be strings, snippets must
+    be a list of dicts with string text/source_url, and optional family_context
+    entries are reduced to a strict whitelist. Malformed data → None (graceful
+    degradation).
     """
     if not raw:
         return None
@@ -956,8 +957,64 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
                 "text": text,
                 "source_url": url if isinstance(url, str) else "",
             })
-        # Return strict whitelist object — no extra keys leak through
-        return {
+        safe_family_context: dict[str, dict] = {}
+        raw_family_context = parsed.get("family_context")
+        if isinstance(raw_family_context, dict):
+            for family in ("polymarket", "finance", "academic", "news_deep"):
+                entry = raw_family_context.get(family)
+                if not isinstance(entry, dict):
+                    continue
+                raw_state = entry.get("state")
+                state = raw_state if isinstance(raw_state, str) else "empty"
+                if state not in {"loading", "empty", "rate_limited", "network_error", "ready"}:
+                    state = "empty"
+                raw_items = entry.get("items")
+                safe_items = []
+                if isinstance(raw_items, list):
+                    for item in raw_items:
+                        if not isinstance(item, dict):
+                            continue
+                        safe_item: dict[str, object] = {}
+                        for key in (
+                            "id",
+                            "question",
+                            "title",
+                            "summary",
+                            "source",
+                            "publishedAt",
+                            "description",
+                            "abstract",
+                            "url",
+                        ):
+                            value = item.get(key)
+                            if isinstance(value, str):
+                                safe_item[key] = value
+                        probability = item.get("probability")
+                        if isinstance(probability, (int, float)):
+                            safe_item["probability"] = float(probability)
+                        citation_count = item.get("citationCount")
+                        if isinstance(citation_count, int):
+                            safe_item["citationCount"] = citation_count
+                        authors = item.get("authors")
+                        if isinstance(authors, list):
+                            safe_authors = [author for author in authors if isinstance(author, str)]
+                            if safe_authors:
+                                safe_item["authors"] = safe_authors
+                        if safe_item:
+                            safe_items.append(safe_item)
+                safe_entry: dict[str, object] = {
+                    "state": state,
+                    "items": safe_items,
+                }
+                configured_host = entry.get("configured_host")
+                if isinstance(configured_host, str) and configured_host.strip():
+                    safe_entry["configured_host"] = configured_host
+                if isinstance(entry.get("geo_gated"), bool):
+                    safe_entry["geo_gated"] = entry["geo_gated"]
+                safe_family_context[family] = safe_entry
+
+        # Return strict whitelist object — no extra keys leak through.
+        response = {
             "query": parsed["query"],
             "provider": parsed["provider"],
             "snippets": safe_snippets,
@@ -968,6 +1025,9 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
             ),
             "cached": parsed.get("cached") is True,
         }
+        if safe_family_context:
+            response["family_context"] = safe_family_context
+        return response
     except (json.JSONDecodeError, TypeError):
         return None
 

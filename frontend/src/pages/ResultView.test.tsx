@@ -3071,6 +3071,157 @@ describe('ResultView campaign summary', () => {
   });
 
   describe('web search sources card', () => {
+    it('renders live family cards from web_search_context.family_context', async () => {
+      setMockCapabilities({
+        agent_conversation: { enabled: false },
+        agent_identity: { enabled: false },
+        causal_graph: { enabled: false },
+        counterfactual_replay: { enabled: false },
+        factions: { enabled: false },
+        web_search: {
+          providers: {
+            polymarket: { enabled: true, degraded: false, configured_host: 'us' },
+            finance: { enabled: true, degraded: false },
+            academic: { enabled: true, degraded: false },
+            news_deep: { enabled: true, degraded: false },
+          },
+        },
+      });
+      vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+        id: 'scenario-1',
+        question: 'What if live family context renders directly?',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        messages: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+        web_search_context: {
+          query: 'family context',
+          snippets: [
+            { text: 'Top-level snippet still renders.', source_url: 'https://example.com/snippet' },
+          ],
+          provider: 'tavily',
+          timestamp: '2026-04-07T00:00:00Z',
+          cached: false,
+          family_context: {
+            polymarket: {
+              configured_host: 'us',
+              items: [
+                { id: 'pm-1', question: 'Will rates fall?', probability: 0.61, url: 'https://polymarket.example/1' },
+              ],
+            },
+            finance: {
+              items: [
+                { id: 'fin-1', title: 'Fed futures imply cuts', summary: 'CME futures are pricing a summer move.', url: 'https://finance.example/1' },
+              ],
+            },
+            academic: {
+              items: [
+                { id: 'paper-1', title: 'Forecasting under uncertainty', authors: ['Ada Lovelace'], citationCount: 42, url: 'https://academic.example/1' },
+              ],
+            },
+            news_deep: {
+              items: [
+                { id: 'news-1', title: 'Central banks weigh slowdowns', source: 'Example News', publishedAt: '2026-04-07', url: 'https://news.example/1' },
+              ],
+            },
+          },
+        },
+      } as Scenario);
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      const grid = await screen.findByTestId('result-source-grid-desktop');
+      expect(await within(grid).findByText('Will rates fall?')).toBeInTheDocument();
+      expect(within(grid).getByTestId('result-sources-polymarket')).toHaveAttribute('data-state', 'ready');
+      expect(within(grid).getByText('Fed futures imply cuts')).toBeInTheDocument();
+      expect(within(grid).getByTestId('result-sources-finance')).toHaveAttribute('data-state', 'ready');
+      expect(within(grid).getByText('Forecasting under uncertainty')).toBeInTheDocument();
+      expect(within(grid).getByTestId('result-sources-academic')).toHaveAttribute('data-state', 'ready');
+      expect(within(grid).getByText('Central banks weigh slowdowns')).toBeInTheDocument();
+      expect(within(grid).getByTestId('result-sources-news_deep')).toHaveAttribute('data-state', 'ready');
+    });
+
+    it('keeps unselected families empty when family_context only marks a subset ready', async () => {
+      setMockCapabilities({
+        agent_conversation: { enabled: false },
+        agent_identity: { enabled: false },
+        causal_graph: { enabled: false },
+        counterfactual_replay: { enabled: false },
+        factions: { enabled: false },
+        web_search: {
+          providers: {
+            polymarket: { enabled: true, degraded: false, configured_host: 'us' },
+            finance: { enabled: true, degraded: false },
+            academic: { enabled: true, degraded: false },
+            news_deep: { enabled: true, degraded: false },
+          },
+        },
+      });
+      vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+        id: 'scenario-1',
+        question: 'What if only academic is selected?',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        messages: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+        web_search_context: {
+          query: 'only academic',
+          snippets: [],
+          provider: 'searxng',
+          timestamp: '2026-04-07T00:00:00Z',
+          cached: false,
+          family_context: {
+            polymarket: { configured_host: 'us', items: [] },
+            finance: { items: [] },
+            academic: {
+              items: [
+                {
+                  id: 'paper-1',
+                  title: 'Only academic should be ready',
+                  abstract: 'Other families remain empty.',
+                  url: 'https://academic.example/only',
+                },
+              ],
+            },
+            news_deep: { items: [] },
+          },
+        },
+      } as Scenario);
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      const grid = await screen.findByTestId('result-source-grid-desktop');
+      expect(within(grid).getByTestId('result-sources-polymarket')).toHaveAttribute('data-state', 'empty');
+      expect(within(grid).getByTestId('result-sources-finance')).toHaveAttribute('data-state', 'empty');
+      expect(within(grid).getByTestId('result-sources-news_deep')).toHaveAttribute('data-state', 'empty');
+      expect(within(grid).getByTestId('result-sources-academic')).toHaveAttribute('data-state', 'ready');
+      expect(within(grid).getByText('Only academic should be ready')).toBeInTheDocument();
+    });
+
     it('renders web search snippets when web_search_context is present', async () => {
       vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
         id: 'scenario-1',
@@ -3244,6 +3395,63 @@ describe('ResultView campaign summary', () => {
       const sourceSheet = await screen.findByTestId('mobile-source-sheet');
       expect(sourceSheet).toBeInTheDocument();
       expect(within(sourceSheet).getByTestId('result-sources-finance')).toHaveAttribute('data-source-family', 'finance');
+    });
+
+    it('renders geo-gated polymarket placeholder from family_context host override', async () => {
+      setMockCapabilities({
+        agent_conversation: { enabled: false },
+        agent_identity: { enabled: false },
+        causal_graph: { enabled: false },
+        counterfactual_replay: { enabled: false },
+        factions: { enabled: false },
+        web_search: {
+          providers: {
+            polymarket: { enabled: true, degraded: false, configured_host: 'us' },
+            finance: { enabled: true, degraded: false },
+            academic: { enabled: true, degraded: false },
+            news_deep: { enabled: true, degraded: false },
+          },
+        },
+      });
+      vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+        id: 'scenario-1',
+        question: 'Geo gate family context',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        messages: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+        web_search_context: {
+          query: 'geo gate',
+          snippets: [],
+          provider: 'polymarket',
+          timestamp: '2026-04-07T00:00:00Z',
+          cached: false,
+          family_context: {
+            polymarket: {
+              configured_host: 'non-us',
+              items: [],
+            },
+          },
+        },
+      } as Scenario);
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      const grid = await screen.findByTestId('result-source-grid-desktop');
+      expect(await within(grid).findByTestId('result-source-polymarket-geo-gated')).toBeInTheDocument();
+      expect(within(grid).queryByTestId('result-sources-polymarket')).not.toBeInTheDocument();
     });
   });
 });

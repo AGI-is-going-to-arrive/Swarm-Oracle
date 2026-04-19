@@ -31,6 +31,7 @@ import json
 import logging
 import threading
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -660,6 +661,30 @@ class TestDocumentedQuotas:
         assert excinfo.value.status_code == 429
         assert excinfo.value.detail["code"] == "DAILY_QUOTA_EXCEEDED"
         assert "Retry-After" in (excinfo.value.headers or {})
+
+    def test_user_daily_quota_retry_after_uses_ceiling_seconds(self):
+        fixed_now = datetime(2026, 4, 19, 12, 0, tzinfo=timezone.utc)
+        retry_after = conversation_service_module._retry_after_seconds(
+            fixed_now - timedelta(hours=23, minutes=59, seconds=0.2),
+            fixed_now,
+        )
+        assert retry_after == 60
+
+    def test_user_daily_quota_retry_after_waits_until_enough_turns_expire(self):
+        fixed_now = datetime(2026, 4, 19, 12, 0, tzinfo=timezone.utc)
+        retry_after, reset_at = conversation_service_module._retry_after_for_quota_hits(
+            [
+                (2, fixed_now - timedelta(hours=23, minutes=59, seconds=50)),
+                (2, fixed_now - timedelta(hours=23, minutes=58)),
+            ],
+            additions=1,
+            cap=2,
+            now=fixed_now,
+        )
+        assert retry_after == 120
+        assert reset_at == (
+            fixed_now + timedelta(seconds=120)
+        )
 
     def test_turns_per_org_per_day_5000(self):
         from app.services.conversation_service import settings as svc_settings

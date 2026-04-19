@@ -432,7 +432,7 @@ async def api_capabilities():
         {
             "polymarket": {
                 "enabled": settings.FEATURE_NEW_SOURCES,
-                "configured_host": "us",
+                "configured_host": settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST,
                 "rate_limit_rps": 2,
                 "ttl_seconds": 60,
                 "byok_allowed": True,
@@ -575,6 +575,7 @@ async def create_scenario(
         req.llm_base_url = validated_url
 
     if not req.web_search_enabled:
+        req.web_search_families = None
         req.web_search_provider = None
         req.web_search_api_key = None
         req.web_search_base_url = None
@@ -666,6 +667,13 @@ async def create_scenario(
                 base_url_override=req.web_search_base_url,
             )
             if web_result is not None:
+                if settings.FEATURE_NEW_SOURCES:
+                    from app.services.web_context import build_source_family_context
+
+                    web_result.family_context = build_source_family_context(
+                        web_result,
+                        selected_families=req.web_search_families,
+                    )
                 web_context_json = web_result.to_json()
         except Exception as exc:
             import logging

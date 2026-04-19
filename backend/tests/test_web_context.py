@@ -22,16 +22,17 @@ import httpx
 import pytest
 
 from app.services.web_context import (
-    WebSearchResult,
     WebSearchRequestConfig,
+    WebSearchResult,
     WebSearchSnippet,
     _cache_key,
     _resolve_request_config,
-    _search_exa,
-    _search_xai,
     _sanitize_url,
-    _search_tavily,
+    _search_exa,
     _search_searxng,
+    _search_tavily,
+    _search_xai,
+    build_source_family_context,
     clear_cache,
     fetch_web_context,
     format_context_block,
@@ -79,6 +80,78 @@ class TestWebSearchResultSerialization:
         assert result is not None
         assert result.query == ""
         assert result.snippets == []
+
+
+class TestBuildSourceFamilyContext:
+    def test_builds_explicit_family_envelope_with_runtime_geo_gate(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
+            "us",
+        )
+        result = WebSearchResult(
+            query="AI trends 2026",
+            snippets=[
+                WebSearchSnippet(
+                    text="AI markets reprice overnight.",
+                    source_url="https://example.com/markets",
+                )
+            ],
+            provider="searxng",
+            timestamp="2026-04-19T12:00:00Z",
+            cached=False,
+        )
+
+        family_context = build_source_family_context(
+            result,
+            selected_families=["polymarket", "finance", "academic", "news_deep"],
+        )
+
+        assert set(family_context.keys()) == {
+            "polymarket",
+            "finance",
+            "academic",
+            "news_deep",
+        }
+        assert family_context["polymarket"]["state"] == "ready"
+        assert family_context["polymarket"]["configured_host"] == "us"
+        assert family_context["polymarket"]["geo_gated"] is False
+        assert family_context["polymarket"]["items"]
+        assert family_context["finance"]["state"] == "ready"
+        assert family_context["finance"]["items"]
+        assert family_context["academic"]["state"] == "ready"
+        assert family_context["academic"]["items"]
+        assert family_context["news_deep"]["state"] == "ready"
+        assert family_context["news_deep"]["items"]
+
+    def test_geo_gated_polymarket_stays_explicit_and_empty(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
+            "non-us",
+        )
+        result = WebSearchResult(
+            query="AI trends 2026",
+            snippets=[
+                WebSearchSnippet(
+                    text="AI markets reprice overnight.",
+                    source_url="https://example.com/markets",
+                )
+            ],
+            provider="searxng",
+            timestamp="2026-04-19T12:00:00Z",
+            cached=False,
+        )
+
+        family_context = build_source_family_context(
+            result,
+            selected_families=["polymarket", "finance", "news_deep"],
+        )
+
+        assert family_context["polymarket"]["state"] == "empty"
+        assert family_context["polymarket"]["configured_host"] == "non-us"
+        assert family_context["polymarket"]["geo_gated"] is True
+        assert family_context["polymarket"]["items"] == []
+        assert family_context["finance"]["state"] == "ready"
+        assert family_context["news_deep"]["state"] == "ready"
 
 
 # ── Tavily Provider ─────────────────────────────────────
@@ -190,7 +263,10 @@ class TestSearxngProvider:
 class TestRequestConfig:
     def test_custom_provider_without_custom_key_does_not_reuse_server_key(self, monkeypatch):
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
-        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "server-tavily-key")
+        monkeypatch.setattr(
+            "app.services.web_context.settings.WEB_SEARCH_API_KEY",
+            "server-tavily-key",
+        )
 
         config = _resolve_request_config(
             provider_override="exa",
@@ -204,7 +280,10 @@ class TestRequestConfig:
 
     def test_default_provider_reuses_server_key(self, monkeypatch):
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
-        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "server-tavily-key")
+        monkeypatch.setattr(
+            "app.services.web_context.settings.WEB_SEARCH_API_KEY",
+            "server-tavily-key",
+        )
 
         config = _resolve_request_config()
 
@@ -316,7 +395,10 @@ class TestXaiProvider:
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "xai-test")
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 2)
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
-        monkeypatch.setattr("app.services.web_context.settings.XAI_WEB_SEARCH_MODEL", "grok-4.20-reasoning")
+        monkeypatch.setattr(
+            "app.services.web_context.settings.XAI_WEB_SEARCH_MODEL",
+            "grok-4.20-reasoning",
+        )
 
         mock_response = httpx.Response(
             200,
@@ -376,7 +458,10 @@ class TestXaiProvider:
     async def test_uses_provider_specific_timeout_setting(self, monkeypatch):
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "xai-test")
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 1)
-        monkeypatch.setattr("app.services.web_context.settings.XAI_WEB_SEARCH_TIMEOUT_SECONDS", 45.0)
+        monkeypatch.setattr(
+            "app.services.web_context.settings.XAI_WEB_SEARCH_TIMEOUT_SECONDS",
+            45.0,
+        )
 
         mock_response = httpx.Response(
             200,
@@ -623,7 +708,10 @@ class TestFetchWebContext:
     @pytest.mark.asyncio
     async def test_unknown_provider_returns_none(self, monkeypatch):
         monkeypatch.setattr("app.services.web_context.settings.ENABLE_WEB_SEARCH", True)
-        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "unknown_provider")
+        monkeypatch.setattr(
+            "app.services.web_context.settings.WEB_SEARCH_PROVIDER",
+            "unknown_provider",
+        )
 
         result = await fetch_web_context("What if unknown?")
         assert result is None
@@ -685,33 +773,48 @@ class TestFromJsonMalformed:
     """Regression tests for WebSearchResult.from_json with malformed data."""
 
     def test_text_null_skipped(self):
-        raw = '{"query":"q","snippets":[{"text":null,"source_url":"u"}],"provider":"p","timestamp":"t"}'
+        raw = (
+            '{"query":"q","snippets":[{"text":null,"source_url":"u"}],'
+            '"provider":"p","timestamp":"t"}'
+        )
         result = WebSearchResult.from_json(raw)
         assert result is not None
         assert len(result.snippets) == 0  # null text → skipped
 
     def test_text_number_coerced(self):
-        raw = '{"query":"q","snippets":[{"text":123,"source_url":"u"}],"provider":"p","timestamp":"t"}'
+        raw = (
+            '{"query":"q","snippets":[{"text":123,"source_url":"u"}],'
+            '"provider":"p","timestamp":"t"}'
+        )
         result = WebSearchResult.from_json(raw)
         assert result is not None
         assert len(result.snippets) == 1
         assert result.snippets[0].text == "123"
 
     def test_source_url_null_coerced(self):
-        raw = '{"query":"q","snippets":[{"text":"ok","source_url":null}],"provider":"p","timestamp":"t"}'
+        raw = (
+            '{"query":"q","snippets":[{"text":"ok","source_url":null}],'
+            '"provider":"p","timestamp":"t"}'
+        )
         result = WebSearchResult.from_json(raw)
         assert result is not None
         assert result.snippets[0].source_url == ""
 
     def test_snippet_null_in_list_skipped(self):
-        raw = '{"query":"q","snippets":[null,{"text":"ok","source_url":"u"}],"provider":"p","timestamp":"t"}'
+        raw = (
+            '{"query":"q","snippets":[null,{"text":"ok","source_url":"u"}],'
+            '"provider":"p","timestamp":"t"}'
+        )
         result = WebSearchResult.from_json(raw)
         assert result is not None
         assert len(result.snippets) == 1
 
     def test_format_context_block_with_null_text_no_crash(self):
         """from_json → format_context_block must not TypeError on malformed snippets."""
-        raw = '{"query":"q","snippets":[{"text":null,"source_url":"u"},{"text":"ok","source_url":null}],"provider":"p","timestamp":"t"}'
+        raw = (
+            '{"query":"q","snippets":[{"text":null,"source_url":"u"},'
+            '{"text":"ok","source_url":null}],"provider":"p","timestamp":"t"}'
+        )
         result = WebSearchResult.from_json(raw)
         assert result is not None
         block = format_context_block(result)

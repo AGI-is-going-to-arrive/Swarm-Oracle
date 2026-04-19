@@ -119,12 +119,23 @@ npm run e2e:web-search -- --url http://127.0.0.1:18930 --output-dir output/e2e/r
 cd ../backend
 source .venv/bin/activate
 ENABLE_WEB_SEARCH=true FEATURE_NEW_SOURCES=true WEB_SEARCH_PROVIDER=searxng SEARXNG_URL=http://127.0.0.1:8888 \
+  NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=us \
   uvicorn --app-dir /absolute/path/to/upgrade-test/backend app.main:app --host 127.0.0.1 --port 18927
 
 cd ../frontend
 VITE_ENABLE_WEB_SEARCH=true npm run build
 SWARM_BACKEND_URL=http://127.0.0.1:18927 npm run preview -- --host 127.0.0.1 --port 18930
 node scripts/e2e-new-source-ingestion-live.mjs full --url http://127.0.0.1:18930 --headless
+SWARM_E2E_MODE=live node scripts/e2e-new-source-ingestion-live.mjs full --url http://127.0.0.1:18930 --headless
+
+# source-ingestion: live non-us geo-gate
+cd ../backend
+source .venv/bin/activate
+ENABLE_WEB_SEARCH=true FEATURE_NEW_SOURCES=true WEB_SEARCH_PROVIDER=searxng SEARXNG_URL=http://127.0.0.1:8888 \
+  NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us \
+  uvicorn --app-dir /absolute/path/to/upgrade-test/backend app.main:app --host 127.0.0.1 --port 18927
+
+cd ../frontend
 SWARM_E2E_MODE=live node scripts/e2e-new-source-ingestion-live.mjs full --url http://127.0.0.1:18930 --headless
 ```
 
@@ -140,9 +151,15 @@ SWARM_E2E_MODE=live node scripts/e2e-new-source-ingestion-live.mjs full --url ht
   - `web_search_provider`
   - `web_search_api_key`
   - `web_search_base_url`
+- `e2e-new-source-ingestion-live.mjs` 当前也会校验 `/api/scenario` 请求体里是否真的带上：
+  - `web_search_enabled`
+  - `web_search_families`
 - `vite preview` 当前也会代理 `/api` 和 `/ws`；如果 preview 要接别的 backend，启动前设置 `SWARM_BACKEND_URL`。
 - `e2e-new-source-ingestion-live.mjs` 当前默认走 fixture；`SWARM_E2E_MODE=live` 时才会打真实 backend。
 - live 模式现在会先显式打开首页总开关，再检查 `/api/scenario` 请求体里是否真的带上 `web_search_enabled=true`。
+- live 模式当前还会检查结果页四个 source family card：
+  - `us` 口径下要求四张卡都有非空 live 内容
+  - `non-us` 口径下要求 `Polymarket` 显示 geo-gated placeholder，其余被选 family 仍保持 `ready`
 - 如果服务端默认搜索没 ready，live 脚本当前也支持：
   - `SWARM_E2E_WEB_SEARCH_PROVIDER`
   - `SWARM_E2E_WEB_SEARCH_API_KEY`

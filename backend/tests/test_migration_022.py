@@ -224,7 +224,10 @@ def test_upgrade_creates_tables(tmp_path):
         "completed_at",
     } <= turn_columns
 
-    ledger_columns = {col["name"] for col in inspector.get_columns("agent_conversation_quota_ledger")}
+    ledger_columns = {
+        col["name"]
+        for col in inspector.get_columns("agent_conversation_quota_ledger")
+    }
     assert {
         "id",
         "owner_user_id",
@@ -242,7 +245,10 @@ def test_upgrade_creates_tables(tmp_path):
     turn_indexes = {idx["name"] for idx in inspector.get_indexes("agent_conversation_turn")}
     assert "ix_turn_thread_seq" in turn_indexes
 
-    ledger_indexes = {idx["name"] for idx in inspector.get_indexes("agent_conversation_quota_ledger")}
+    ledger_indexes = {
+        idx["name"]
+        for idx in inspector.get_indexes("agent_conversation_quota_ledger")
+    }
     assert "ix_quota_ledger_owner_created" in ledger_indexes
     assert "ix_quota_ledger_org_created" in ledger_indexes
 

@@ -218,12 +218,17 @@
 - request-scoped BYOK / RPM / TPM 当前不仅作用在主 simulation turns，也会继续透传到 fork detection、narration、memory compression 与 identity compaction。
 - 搜索增强当前走 `web_context.py`：
   - provider 支持 `tavily / exa / xai / searxng`
-  - `POST /api/scenario` 可传 request-scoped `web_search_provider / web_search_api_key / web_search_base_url`
+  - `POST /api/scenario` 可传 request-scoped `web_search_families / web_search_provider / web_search_api_key / web_search_base_url`
   - `web_search_enabled=false` 时，这些 override 字段会在路由层被忽略，不影响正常建局
   - custom provider override 不会再复用“另一个 provider”的服务端默认 key
   - `xai` 走 Responses API + `web_search` tool，并使用独立 `XAI_WEB_SEARCH_TIMEOUT_SECONDS`
   - 官方 provider 的 `web_search_base_url` 当前只接受 `https`
   - `searxng` 自定义 base URL 当前只接受与服务端 `SEARXNG_URL` 完全一致的基址
+  - `FEATURE_NEW_SOURCES=true` 且搜索成功时，backend 会把同一份 live snippets 投影成 `web_search_context.family_context`
+    - 只被选中的 family 会标成 `ready`
+    - 未选中的 family 会保持 `empty`
+    - `polymarket` 当前额外带 `configured_host / geo_gated`
+    - `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` 时，`polymarket` 会显式保持 `empty + geo_gated`
 - Ending Room 的同步服务函数（`create_ending_room`、`create_ending_room_thread`、`load_ending_room_snapshot` 等）在 async 端点中通过 `asyncio.to_thread()` 调用，不阻塞事件循环。路由层对 `to_thread` 内部的非业务异常有通用 `except Exception` 兜底，不会让裸 DB 异常直接落成未分类 500。
 - Agent conversation 当前走两步启动：
   - `POST /api/conversation/start` 先创建 thread、首条 user turn 和一条 `pending` assistant turn
@@ -275,7 +280,7 @@
 ## 当前验证基线
 
 - backend `agent-conversation / quota / migration` 定向回归当前通过
-- backend 全量 `pytest`：`2252 passed, 2 skipped`
+- backend 全量 `pytest`：`2264 passed, 2 skipped`
 
 ## WebSocket 口径
 

@@ -17157,3 +17157,66 @@ QA Inventory
   - `node scripts/e2e-ending-room-followup-suite.mjs mobile ...`
     - 失败原因：`Could not find both multi-ending and single-ending done scenarios`
   - 这不是 replay 页面回归，而是验收前置数据不足
+
+## 2026-04-19 source-ingestion family live contract + geo-gate live rerun
+
+- 本轮先按更严格 merge gate 复核 `source-ingestion`：
+  - 不能只证明首页 toggle 和 `web_search_context` 手风琴
+  - 要求 `/api/scenario` 真收到 family 选择
+  - 要求结果页四个 source family card 有真实 non-empty live 数据
+  - 要求 `Polymarket` 的 `geo-gate` 走真实 `non-us` live 口径
+- 代码当前已补齐：
+  - backend `CreateScenarioRequest` 接受 `web_search_families`
+  - backend 在 `FEATURE_NEW_SOURCES=true` 且搜索成功时，把 live snippets 投影成 `web_search_context.family_context`
+  - projection 当前只会把被选中的 family 标成 `ready`，未选中的保持 `empty`
+  - `polymarket` 当前额外带 `configured_host / geo_gated`
+  - `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` 时，`polymarket` 会显式保持 `empty + geo_gated`
+  - frontend InputView 当前会把四个 source family toggle 透传成 `web_search_families`
+  - frontend ResultView 当前会按 `family_context` 渲染四张 source family card；`polymarket.configured_host=non-us` 时显示地域限制占位
+  - `release-signoff` 的 `new_source_ingestion_live` 步骤现在仍会显式带 `SWARM_E2E_MODE=live`
+- 文档 current truth 已同步：
+  - `llmdoc/reference/api.md`
+  - `llmdoc/reference/config.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/guides/development.md`
+  - `implement/web_search_augmentation_design.md`
+- 本轮定向验证：
+  - `cd backend && source .venv/bin/activate && python -m ruff check backend/app/config.py backend/app/api/schemas.py backend/app/api/helpers.py backend/app/api/scenarios.py backend/app/services/web_context.py backend/tests/test_web_context.py backend/tests/test_web_context_integration.py backend/tests/test_web_search_contract.py backend/tests/test_contract_freeze.py`
+    - 通过
+  - `cd backend && source .venv/bin/activate && python -m pytest -q backend/tests/test_web_context.py backend/tests/test_web_context_integration.py backend/tests/test_web_search_contract.py backend/tests/test_contract_freeze.py`
+    - `146 passed`
+  - `cd frontend && npm test -- --run src/pages/InputView.test.tsx src/pages/ResultView.test.tsx`
+    - `71 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && export VITE_ENABLE_WEB_SEARCH=true && npm run build`
+    - 通过（含 `perf:budgets:check`）
+- 本轮 fresh live 验证：
+  - 先用本地 SearXNG stub 提供真实 HTTP 返回
+  - `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=us`：
+    - `frontend/output/e2e/codex-source-family-live-desktop-us-debug2/result.json`
+    - `frontend/output/e2e/codex-source-family-live-mobile-us-debug2/result.json`
+    - 桌面 / 移动都通过
+  - `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us`：
+    - `frontend/output/e2e/codex-source-family-live-desktop-nonus-debug4/result.json`
+    - `frontend/output/e2e/codex-source-family-live-mobile-nonus-debug4/result.json`
+    - 桌面 / 移动都通过
+  - live 口径当前已真实覆盖：
+    - `web_search_families` 请求体
+    - 四个 source family card 的非空 live 数据
+    - `Polymarket us / non-us` 两条 geo-gate 路径
+- 手工浏览器复核：
+  - 真实 `non-us` backend 下直接打开结果页
+  - 确认 `Polymarket 受地域限制` 占位可见
+  - 同时 `finance / academic / news_deep` 仍然是非空 live card
+- 全量回归：
+  - `cd frontend && npm test`
+    - `142 files, 1336 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest -q`
+    - `2264 passed, 2 skipped`
+- 当前边界保持显式：
+  - 四个 family card 现在证明的是“同一份 live web search 结果已被正确投影、渲染并经过 live/non-us 验证”
+  - 这还不是“四套彼此独立的外部 provider ingestion”
+  - 这个边界本轮没有再被包装成“已经独立证明”

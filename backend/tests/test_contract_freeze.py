@@ -698,3 +698,19 @@ class TestCapabilitiesProviderConfiguredHostContract:
                 assert "," not in host, f"{family} host is CSV list: {host!r}"
         finally:
             settings.FEATURE_NEW_SOURCES = original
+
+    @pytest.mark.asyncio
+    async def test_polymarket_configured_host_can_switch_to_non_us(self):
+        from app.api.scenarios import api_capabilities
+        from app.config import settings
+
+        original_feature = settings.FEATURE_NEW_SOURCES
+        original_host = settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST
+        settings.FEATURE_NEW_SOURCES = True
+        settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST = "non-us"
+        try:
+            result = await api_capabilities()
+            assert result["web_search"]["providers"]["polymarket"]["configured_host"] == "non-us"
+        finally:
+            settings.FEATURE_NEW_SOURCES = original_feature
+            settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST = original_host

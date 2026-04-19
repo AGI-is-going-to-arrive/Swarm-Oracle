@@ -1,8 +1,8 @@
 # Web Search Augmented Simulation — Design Document (Final)
 
-> Status: **Implemented — Phase 1-5 完成，V2 未启动**
-> Date: 2026-04-07 (re-baselined)
-> Scope: Batch 2 已交付 — Tavily/SearXNG providers, TTL cache, prompt injection 三层注入, InputView toggle, ResultView 来源卡片, GET /api/capabilities
+> Status: **Implemented — Phase 1-5 完成；FE-5 source family request/response projection + live/non-us signoff 已补齐；V2 未启动**
+> Date: 2026-04-19 (re-baselined)
+> Scope: Batch 2 已交付 — Tavily/SearXNG providers, TTL cache, prompt injection 三层注入, InputView toggle, ResultView 来源卡片, GET /api/capabilities, `web_search_families`, `web_search_context.family_context`
 
 ---
 
@@ -148,6 +148,26 @@ export interface WebSearchContext {
   provider: string;
   timestamp: string;
   cached: boolean;
+  family_context?: {
+    polymarket?: {
+      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      configured_host?: string;
+      geo_gated?: boolean;
+      items: Array<{ id: string; question: string; probability?: number; url?: string }>;
+    };
+    finance?: {
+      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      items: Array<{ id: string; title: string; summary?: string; source?: string; url?: string }>;
+    };
+    academic?: {
+      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      items: Array<{ id: string; title: string; authors?: string[]; citationCount?: number; abstract?: string; url?: string }>;
+    };
+    news_deep?: {
+      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      items: Array<{ id: string; title: string; source?: string; publishedAt?: string; description?: string; url?: string }>;
+    };
+  } | null;
 }
 
 // 扩展 Scenario 接口
@@ -164,6 +184,7 @@ export interface Scenario {
 {
   // ... existing fields ...
   web_search_enabled?: boolean;   // opt-in, 默认 undefined/false
+  web_search_families?: Array<'polymarket' | 'finance' | 'academic' | 'news_deep'>;
 }
 ```
 
@@ -303,6 +324,12 @@ VITE_ENABLE_WEB_SEARCH=false
 
 `scenario.web_search_context` 非空时显示可折叠"真实世界来源"卡片。
 
+`scenario.web_search_context.family_context` 非空时，ResultView 还会显示四张 source family card：
+
+- 被选中的 family 才会进入 `ready`
+- 未选中的 family 保持 `empty`
+- `polymarket.configured_host=non-us` 时显示 geo-gated placeholder
+
 ---
 
 ## 7. Targeted Test Matrix
@@ -326,6 +353,8 @@ VITE_ENABLE_WEB_SEARCH=false
 | 测试 | 验证点 |
 |------|--------|
 | `test_create_scenario_with_search` | POST `/api/scenario` + `web_search_enabled=true` → `web_context_json` 存储 |
+| `test_create_scenario_selected_families` | `web_search_families` 只让被选中的 family 变成 `ready` |
+| `test_create_scenario_polymarket_geo_gate` | `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` → `polymarket` 保持 `empty + geo_gated` |
 | `test_create_scenario_search_failure` | Mock 超时 → 场景正常创建，无 context |
 | `test_create_scenario_search_disabled` | `web_search_enabled=false` → 不调用搜索 |
 | `test_narrator_includes_context` | narrator prompt 含 `[REAL_WORLD_CONTEXT]` |
@@ -338,7 +367,10 @@ VITE_ENABLE_WEB_SEARCH=false
 | `test_toggle_hidden_flag_off` | `VITE_ENABLE_WEB_SEARCH=false` → 不渲染 |
 | `test_toggle_opt_in_default_off` | toggle 默认关闭状态 |
 | `test_toggle_sends_flag` | 开启 → 请求含 `web_search_enabled: true` |
+| `test_toggle_sends_selected_families` | source family toggle → 请求含 `web_search_families` |
 | `test_result_shows_sources` | `web_search_context` 非空 → 显示来源卡 |
+| `test_result_shows_family_cards` | `family_context` 非空 → family card 渲染正确 |
+| `test_result_polymarket_geo_gate` | `configured_host=non-us` → 显示 geo-gated placeholder |
 
 ### 7.4 回归测试
 

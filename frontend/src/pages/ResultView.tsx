@@ -124,10 +124,26 @@ import { PolymarketCard } from '../components/result/PolymarketCard';
 import { SemanticScholarCard } from '../components/result/SemanticScholarCard';
 import { NewsApiCard } from '../components/result/NewsApiCard';
 import { MobileSourceSheet } from '../components/result/MobileSourceSheet';
-import { SourceCategoryCard } from '../components/result/SourceCategoryCard';
+import { SourceCategoryCard, type SourceCategoryState } from '../components/result/SourceCategoryCard';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 const EMPTY_GAMEPLAY_PROFILE_HOOKS: string[] = [];
+const EMPTY_SOURCE_FAMILY_CONTEXT = {};
+
+type SourceFamilyContext = NonNullable<NonNullable<Scenario['web_search_context']>['family_context']>;
+
+function resolveSourceCategoryState(
+  entry: { state?: SourceCategoryState; items?: unknown[] } | null | undefined,
+): SourceCategoryState {
+  if (!entry) return 'empty';
+  if (!entry.state) {
+    return Array.isArray(entry.items) && entry.items.length > 0 ? 'ready' : 'empty';
+  }
+  if (entry.state === 'ready' && (!Array.isArray(entry.items) || entry.items.length === 0)) {
+    return 'empty';
+  }
+  return entry.state;
+}
 
 export default function ResultView() {
   const { id } = useParams<{ id: string }>();
@@ -1236,6 +1252,21 @@ export default function ResultView() {
   ]);
   const effectiveEndingRoomReplayPayload = activeEndingRoomReplayPayload ?? liveEndingRoomReplayPayload;
   const canImportActiveEndingRoomReplay = Boolean(activeEndingRoomReplayPayload);
+  const sourceFamilyContext = (
+    scenario?.web_search_context?.family_context ?? EMPTY_SOURCE_FAMILY_CONTEXT
+  ) as SourceFamilyContext;
+  const polymarketContext = sourceFamilyContext.polymarket;
+  const financeContext = sourceFamilyContext.finance;
+  const academicContext = sourceFamilyContext.academic;
+  const newsDeepContext = sourceFamilyContext.news_deep;
+  const polymarketCapability = capabilities?.web_search?.providers?.polymarket
+    ? {
+      ...capabilities.web_search.providers.polymarket,
+      configured_host:
+        polymarketContext?.configured_host
+        ?? capabilities.web_search.providers.polymarket.configured_host,
+    }
+    : undefined;
   const handleOpenRoundtable = useCallback(() => {
     if (!scenario?.id || isReplayMode || branches.length < 2) {
       return;
@@ -2526,22 +2557,61 @@ export default function ResultView() {
             data-testid="result-source-grid-desktop"
           >
             {capabilities.web_search.providers.polymarket?.enabled && (
-              <PolymarketCard capability={capabilities.web_search.providers.polymarket} />
+              <PolymarketCard
+                capability={polymarketCapability}
+                state={resolveSourceCategoryState(polymarketContext)}
+                items={polymarketContext?.items ?? []}
+              />
             )}
             {capabilities.web_search.providers.finance?.enabled && (
               <SourceCategoryCard
                 family="finance"
                 title={t('source.finance.title', { defaultValue: 'Finance' })}
                 subtitle={t('source.finance.subtitle', { defaultValue: 'Market & macro indicators' })}
-                state="empty"
+                state={resolveSourceCategoryState(financeContext)}
                 testIdOverride="result-sources-finance"
-              />
+              >
+                {resolveSourceCategoryState(financeContext) === 'ready' && (
+                  <ul className="space-y-2">
+                    {(financeContext?.items ?? []).map((item) => (
+                      <li
+                        key={item.id}
+                        className="rounded-md border border-slate-700/40 bg-slate-900/50 p-2 text-xs"
+                      >
+                        <p className="font-medium text-slate-100">{item.title}</p>
+                        <div className="mt-0.5 flex items-center gap-2 text-slate-400">
+                          {item.source && <span>{item.source}</span>}
+                        </div>
+                        {item.summary && (
+                          <p className="mt-1 line-clamp-3 text-slate-300">{item.summary}</p>
+                        )}
+                        {item.url && /^https?:\/\//i.test(item.url) && (
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-1 block underline hover:text-slate-200"
+                          >
+                            {item.url}
+                          </a>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </SourceCategoryCard>
             )}
             {capabilities.web_search.providers.academic?.enabled && (
-              <SemanticScholarCard />
+              <SemanticScholarCard
+                state={resolveSourceCategoryState(academicContext)}
+                items={academicContext?.items ?? []}
+              />
             )}
             {capabilities.web_search.providers.news_deep?.enabled && (
-              <NewsApiCard />
+              <NewsApiCard
+                state={resolveSourceCategoryState(newsDeepContext)}
+                items={newsDeepContext?.items ?? []}
+              />
             )}
           </div>
           <MobileSourceSheet
@@ -2549,22 +2619,61 @@ export default function ResultView() {
             onOpenChange={setMobileSourceSheetOpen}
           >
             {capabilities.web_search.providers.polymarket?.enabled && (
-              <PolymarketCard capability={capabilities.web_search.providers.polymarket} />
+              <PolymarketCard
+                capability={polymarketCapability}
+                state={resolveSourceCategoryState(polymarketContext)}
+                items={polymarketContext?.items ?? []}
+              />
             )}
             {capabilities.web_search.providers.finance?.enabled && (
               <SourceCategoryCard
                 family="finance"
                 title={t('source.finance.title', { defaultValue: 'Finance' })}
                 subtitle={t('source.finance.subtitle', { defaultValue: 'Market & macro indicators' })}
-                state="empty"
+                state={resolveSourceCategoryState(financeContext)}
                 testIdOverride="result-sources-finance"
-              />
+              >
+                {resolveSourceCategoryState(financeContext) === 'ready' && (
+                  <ul className="space-y-2">
+                    {(financeContext?.items ?? []).map((item) => (
+                      <li
+                        key={item.id}
+                        className="rounded-md border border-slate-700/40 bg-slate-900/50 p-2 text-xs"
+                      >
+                        <p className="font-medium text-slate-100">{item.title}</p>
+                        <div className="mt-0.5 flex items-center gap-2 text-slate-400">
+                          {item.source && <span>{item.source}</span>}
+                        </div>
+                        {item.summary && (
+                          <p className="mt-1 line-clamp-3 text-slate-300">{item.summary}</p>
+                        )}
+                        {item.url && /^https?:\/\//i.test(item.url) && (
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-1 block underline hover:text-slate-200"
+                          >
+                            {item.url}
+                          </a>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </SourceCategoryCard>
             )}
             {capabilities.web_search.providers.academic?.enabled && (
-              <SemanticScholarCard />
+              <SemanticScholarCard
+                state={resolveSourceCategoryState(academicContext)}
+                items={academicContext?.items ?? []}
+              />
             )}
             {capabilities.web_search.providers.news_deep?.enabled && (
-              <NewsApiCard />
+              <NewsApiCard
+                state={resolveSourceCategoryState(newsDeepContext)}
+                items={newsDeepContext?.items ?? []}
+              />
             )}
           </MobileSourceSheet>
         </>

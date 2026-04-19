@@ -9,7 +9,17 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import Column, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlmodel import Field, SQLModel
 
 
@@ -140,5 +150,11 @@ class AgentConversationQuotaLedger(SQLModel, table=True):
     organization_id: Optional[str] = None
     scenario_id: Optional[str] = None
     thread_id: Optional[str] = None
-    turn_delta: int = Field(default=0, nullable=False)
-    created_at: datetime = Field(default_factory=_now, nullable=False)
+    turn_delta: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default="0"),
+    )
+    created_at: datetime = Field(
+        default_factory=_now,
+        sa_column=Column(DateTime(), nullable=False, server_default=func.now()),
+    )

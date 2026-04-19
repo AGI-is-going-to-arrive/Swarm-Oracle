@@ -61,16 +61,21 @@
 - `GET /api/scenario/{scenario_id}` 会在读取前尽量收敛 stale `simulating/narrating` 状态。
 - `POST /api/scenario` 当前也接受搜索增强字段：
   - `web_search_enabled`
+  - `web_search_families`
   - `web_search_provider`
   - `web_search_api_key`
   - `web_search_base_url`
 - 这些字段的当前口径：
   - 只有 `web_search_enabled=true` 时才会真正参与搜索
+  - `web_search_families` 当前只接受 `polymarket / finance / academic / news_deep`；空白会 trim，重复值会去重
   - `web_search_enabled=false` 时，override 字段会被忽略
   - 官方 provider 的 `web_search_base_url` 只接受 `https` endpoint
   - `searxng` 的 `web_search_base_url` 只接受和服务端 `SEARXNG_URL` 完全一致的基址
   - 如果 custom override 的 provider 和服务端默认 provider 不同，调用方需要显式传该 provider 的 API key；后端不会跨 provider 复用默认 key
 - 搜索成功时，scenario response 会带 `web_search_context`，并持久化到 `Scenario.web_context_json`。
+  - `FEATURE_NEW_SOURCES=true` 时，`web_search_context` 里还会带 `family_context`
+  - 后端只会把被选中的 family 标成 `ready`；未选中的 family 保持 `empty`
+  - `polymarket` 当前额外带 `configured_host / geo_gated`
 - `POST /api/scenario` 当前也接受可选 `continuity_overrides`：
   - 前端通常先调用 `POST /api/agents/identities/preflight`
   - `reuse_existing` 需要带 `identity_id`，后端会校验它属于当前 `user_id`

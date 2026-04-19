@@ -52,6 +52,7 @@ class WebSearchResult:
     provider: str = ""
     timestamp: str = ""
     cached: bool = False
+    family_context: dict[str, dict[str, object]] = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
@@ -79,6 +80,11 @@ class WebSearchResult:
                 provider=data.get("provider", ""),
                 timestamp=data.get("timestamp", ""),
                 cached=data.get("cached", False),
+                family_context=(
+                    data.get("family_context", {})
+                    if isinstance(data.get("family_context"), dict)
+                    else {}
+                ),
             )
         except (json.JSONDecodeError, TypeError):
             return None
@@ -93,6 +99,151 @@ _WEB_SEARCH_URL_ALLOWLIST: dict[str, frozenset[str]] = {
     "xai": frozenset({"api.x.ai"}),
 }
 _ALLOWED_WEB_SEARCH_SCHEMES: frozenset[str] = frozenset({"http", "https"})
+def _clip_text(value: str, max_chars: int) -> str:
+    normalized = " ".join(value.split())
+    if len(normalized) <= max_chars:
+        return normalized
+    return f"{normalized[: max_chars - 1].rstrip()}…"
+
+
+def _snippet_title(text: str, fallback: str) -> str:
+    normalized = " ".join(text.split())
+    if not normalized:
+        return fallback
+    match = re.split(r"(?<=[.!?])\s+", normalized, maxsplit=1)
+    candidate = match[0] if match else normalized
+    return _clip_text(candidate or normalized, 96)
+
+
+def _snippet_source_label(url: str) -> str:
+    hostname = (urlparse(url).hostname or "").strip().lower()
+    return hostname or "source"
+
+
+def _stable_family_item_id(family: str, query: str, index: int, url: str, text: str) -> str:
+    digest = hashlib.sha256(
+        f"{family}::{query}::{index}::{url}::{text}".encode("utf-8")
+    ).hexdigest()
+    return f"{family[:3]}-{digest[:10]}"
+
+
+def build_source_family_context(
+    result: WebSearchResult,
+    *,
+    selected_families: list[str] | None = None,
+) -> dict[str, dict[str, object]]:
+    """Project generic live web-search snippets into the four source cards.
+
+    This keeps FE/BE contracts grounded in scenario-backed live data without
+    introducing a second persistence path. The cards remain projections of the
+    same real query result, not independent external provider integrations.
+    """
+    polymarket_geo_gated = settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST != "us"
+    selected = set(selected_families or [])
+    usable_snippets = [
+        snippet
+        for snippet in result.snippets
+        if snippet.text.strip()
+    ]
+    family_context: dict[str, dict[str, object]] = {
+        "polymarket": {
+            "state": "empty",
+            "configured_host": settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST,
+            "geo_gated": polymarket_geo_gated,
+            "items": [],
+        },
+        "finance": {
+            "state": "empty",
+            "items": [],
+        },
+        "academic": {
+            "state": "empty",
+            "items": [],
+        },
+        "news_deep": {
+            "state": "empty",
+            "items": [],
+        },
+    }
+
+    polymarket_items = [
+        {
+            "id": _stable_family_item_id(
+                "polymarket",
+                result.query,
+                index,
+                snippet.source_url,
+                snippet.text,
+            ),
+            "question": _snippet_title(snippet.text, result.query),
+            "url": _sanitize_url(snippet.source_url),
+        }
+        for index, snippet in enumerate(usable_snippets[:2], start=1)
+    ]
+    if "polymarket" in selected and not polymarket_geo_gated and polymarket_items:
+        family_context["polymarket"]["state"] = "ready"
+        family_context["polymarket"]["items"] = polymarket_items
+
+    finance_items = [
+        {
+            "id": _stable_family_item_id(
+                "finance",
+                result.query,
+                index,
+                snippet.source_url,
+                snippet.text,
+            ),
+            "title": _snippet_title(snippet.text, result.query),
+            "summary": _clip_text(snippet.text, 180),
+            "source": _snippet_source_label(snippet.source_url),
+            "url": _sanitize_url(snippet.source_url),
+        }
+        for index, snippet in enumerate(usable_snippets[:2], start=1)
+    ]
+    if "finance" in selected and finance_items:
+        family_context["finance"]["state"] = "ready"
+        family_context["finance"]["items"] = finance_items
+
+    academic_items = [
+        {
+            "id": _stable_family_item_id(
+                "academic",
+                result.query,
+                index,
+                snippet.source_url,
+                snippet.text,
+            ),
+            "title": _snippet_title(snippet.text, result.query),
+            "abstract": _clip_text(snippet.text, 220),
+            "url": _sanitize_url(snippet.source_url),
+        }
+        for index, snippet in enumerate(usable_snippets[:2], start=1)
+    ]
+    if "academic" in selected and academic_items:
+        family_context["academic"]["state"] = "ready"
+        family_context["academic"]["items"] = academic_items
+
+    news_items = [
+        {
+            "id": _stable_family_item_id(
+                "news_deep",
+                result.query,
+                index,
+                snippet.source_url,
+                snippet.text,
+            ),
+            "title": _snippet_title(snippet.text, result.query),
+            "description": _clip_text(snippet.text, 220),
+            "source": _snippet_source_label(snippet.source_url),
+            "url": _sanitize_url(snippet.source_url),
+        }
+        for index, snippet in enumerate(usable_snippets[:2], start=1)
+    ]
+    if "news_deep" in selected and news_items:
+        family_context["news_deep"]["state"] = "ready"
+        family_context["news_deep"]["items"] = news_items
+
+    return family_context
 
 
 def _normalize_base_url(url: str | None) -> str:
@@ -235,9 +386,17 @@ async def _search_tavily(
         logger.warning("Tavily search skipped: WEB_SEARCH_API_KEY not configured")
         return []
 
-    timeout = request_config.timeout_seconds if request_config else settings.WEB_SEARCH_TIMEOUT_SECONDS
+    timeout = (
+        request_config.timeout_seconds
+        if request_config
+        else settings.WEB_SEARCH_TIMEOUT_SECONDS
+    )
     max_results = settings.WEB_SEARCH_MAX_RESULTS
-    endpoint = request_config.base_url if request_config and request_config.base_url else _default_provider_base_url("tavily")
+    endpoint = (
+        request_config.base_url
+        if request_config and request_config.base_url
+        else _default_provider_base_url("tavily")
+    )
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
@@ -280,7 +439,11 @@ async def _search_searxng(
         if request_config and request_config.base_url
         else settings.SEARXNG_URL.rstrip("/")
     )
-    timeout = request_config.timeout_seconds if request_config else settings.WEB_SEARCH_TIMEOUT_SECONDS
+    timeout = (
+        request_config.timeout_seconds
+        if request_config
+        else settings.WEB_SEARCH_TIMEOUT_SECONDS
+    )
     max_results = settings.WEB_SEARCH_MAX_RESULTS
 
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -338,9 +501,17 @@ async def _search_exa(
         logger.warning("Exa search skipped: WEB_SEARCH_API_KEY not configured")
         return []
 
-    timeout = request_config.timeout_seconds if request_config else settings.WEB_SEARCH_TIMEOUT_SECONDS
+    timeout = (
+        request_config.timeout_seconds
+        if request_config
+        else settings.WEB_SEARCH_TIMEOUT_SECONDS
+    )
     max_results = settings.WEB_SEARCH_MAX_RESULTS
-    endpoint = request_config.base_url if request_config and request_config.base_url else _default_provider_base_url("exa")
+    endpoint = (
+        request_config.base_url
+        if request_config and request_config.base_url
+        else _default_provider_base_url("exa")
+    )
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
@@ -417,7 +588,11 @@ def _parse_xai_structured_snippets(raw_text: str, max_results: int) -> list[WebS
     return snippets[:max_results]
 
 
-def _fallback_xai_citation_snippets(raw_text: str, annotations: list[dict], max_results: int) -> list[WebSearchSnippet]:
+def _fallback_xai_citation_snippets(
+    raw_text: str,
+    annotations: list[dict],
+    max_results: int,
+) -> list[WebSearchSnippet]:
     urls: list[str] = []
     for annotation in annotations:
         if not isinstance(annotation, dict) or annotation.get("type") != "url_citation":
@@ -451,14 +626,27 @@ async def _search_xai(
         logger.warning("xAI search skipped: WEB_SEARCH_API_KEY not configured")
         return []
 
-    timeout = request_config.timeout_seconds if request_config else settings.XAI_WEB_SEARCH_TIMEOUT_SECONDS
+    timeout = (
+        request_config.timeout_seconds
+        if request_config
+        else settings.XAI_WEB_SEARCH_TIMEOUT_SECONDS
+    )
     max_results = settings.WEB_SEARCH_MAX_RESULTS
     output_budget = max(300, min(900, 180 * max_results))
-    endpoint = request_config.base_url if request_config and request_config.base_url else _default_provider_base_url("xai")
-    model = request_config.model if request_config and request_config.model else settings.XAI_WEB_SEARCH_MODEL
+    endpoint = (
+        request_config.base_url
+        if request_config and request_config.base_url
+        else _default_provider_base_url("xai")
+    )
+    model = (
+        request_config.model
+        if request_config and request_config.model
+        else settings.XAI_WEB_SEARCH_MODEL
+    )
     prompt = (
         "Use web search.\n"
-        f"Return a strict JSON object with key \"snippets\" containing at most {max_results} items.\n"
+        "Return a strict JSON object with key "
+        f"\"snippets\" containing at most {max_results} items.\n"
         "Each item must be an object with keys \"text\" and \"source_url\".\n"
         "text must be a concise factual snippet under 400 characters grounded in the source.\n"
         "source_url must be the exact source URL.\n"

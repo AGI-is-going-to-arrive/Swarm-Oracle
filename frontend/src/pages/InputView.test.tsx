@@ -1240,6 +1240,53 @@ describe('InputView campaign progress', () => {
     });
   });
 
+  it('forwards selected source families when search is enabled', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      web_search: {
+        scope: 'server',
+        server_enabled: true,
+        method: 'external',
+        provider: 'tavily',
+        providers: {
+          polymarket: { enabled: true, configured_host: 'us', rate_limit_rps: 2, ttl_seconds: 60, byok_allowed: true },
+          finance: { enabled: true, configured_host: 'www.alphavantage.co', rate_limit_rps: 5, ttl_seconds: 300, byok_allowed: true },
+          academic: { enabled: true, configured_host: 'export.arxiv.org', rate_limit_rps: 3, ttl_seconds: 1800, byok_allowed: true },
+          news_deep: { enabled: true, configured_host: 'api.gdeltproject.org', rate_limit_rps: 1, ttl_seconds: 900, byok_allowed: false },
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+
+    const searchCheckbox = screen.getByText('home.web_search_toggle').closest('label')?.querySelector('input[type="checkbox"]');
+    expect(searchCheckbox).toBeInTheDocument();
+    if (searchCheckbox) await user.click(searchCheckbox);
+
+    await user.click(screen.getByTestId('input-source-toggle-polymarket'));
+    await user.click(screen.getByTestId('input-source-toggle-academic'));
+    await user.type(screen.getAllByRole('textbox')[0], 'What if selected source families drive ingestion?');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          question: 'What if selected source families drive ingestion?',
+          webSearchEnabled: true,
+          webSearchFamilies: ['polymarket', 'academic'],
+        }),
+      );
+    });
+  });
+
   it('does not refetch server capability while typing custom override fields', async () => {
     const user = userEvent.setup();
     getCapabilitiesMock.mockResolvedValue({

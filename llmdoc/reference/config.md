@@ -182,6 +182,7 @@
 | `XAI_WEB_SEARCH_MODEL` | `grok-4.20-reasoning` | `xai` provider 使用的模型 |
 | `XAI_WEB_SEARCH_TIMEOUT_SECONDS` | `45` | `xai` provider 独立超时 |
 | `SEARXNG_URL` | `http://localhost:8888` | SearXNG 基址（`WEB_SEARCH_PROVIDER=searxng` 时使用） |
+| `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST` | `us` | `Polymarket` source family 的当前 host hint；只接受 `us / non-us` |
 | `WEB_SEARCH_MAX_RESULTS` | `5` | 每次搜索最大 snippet 数 |
 | `WEB_SEARCH_TIMEOUT_SECONDS` | `8` | `tavily / exa / searxng` 单次搜索超时 |
 | `WEB_SEARCH_CACHE_TTL_SECONDS` | `300` | 搜索结果缓存 TTL（5 分钟） |
@@ -203,11 +204,16 @@
 - 首页搜索增强当前有两档：
   - `沿用服务器默认`：只发送 `web_search_enabled=true`
   - `自定义覆盖`：额外发送 `web_search_provider / web_search_api_key / web_search_base_url`
+- 首页 4 个 source family toggle 当前会跟着 `web_search_enabled=true` 一起透传成 `web_search_families`。
 - request-scoped override 当前约束：
   - `web_search_enabled=false` 时，override 字段会被忽略
   - 如果 custom override 的 provider 与服务端默认 provider 不同，留空不会复用服务端默认 key，需要显式填写该 provider 的 key
   - 官方 provider 的 `web_search_base_url` 当前只接受 `https`
   - `searxng` 的 `web_search_base_url` 只接受和 `SEARXNG_URL` 完全一致的基址
+- `FEATURE_NEW_SOURCES=true` 且搜索成功时，后端会把同一份 live snippets 投影成 `web_search_context.family_context`：
+  - 被选中的 family 才会变成 `ready`
+  - 未选中的 family 会保持 `empty`
+  - `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` 时，`polymarket` 会显式带上 geo-gated 口径
 - 详细设计见 `implement/web_search_augmentation_design.md`。
 
 ## Phase 3 功能开关

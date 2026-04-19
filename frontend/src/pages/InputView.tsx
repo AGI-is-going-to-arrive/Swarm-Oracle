@@ -356,6 +356,19 @@ export function InputView() {
     }
   }, [webSearchProvider]);
   const webSearchUsesCustomOverride = webSearchEnabled && webSearchMode === 'custom_override';
+  const selectedWebSearchFamilies = useMemo<NewSourceFamily[]>(() => {
+    const nextFamilies: NewSourceFamily[] = [];
+    if (newSourceTogglePolymarket) nextFamilies.push('polymarket');
+    if (newSourceToggleFinance) nextFamilies.push('finance');
+    if (newSourceToggleAcademic) nextFamilies.push('academic');
+    if (newSourceToggleNewsDeep) nextFamilies.push('news_deep');
+    return nextFamilies;
+  }, [
+    newSourceToggleAcademic,
+    newSourceToggleFinance,
+    newSourceToggleNewsDeep,
+    newSourceTogglePolymarket,
+  ]);
   const byokBudgetRecommendation = useMemo(() => {
     if (byokRequestsPerMinute == null && byokTokensPerMinute == null) return null;
 
@@ -615,6 +628,7 @@ export function InputView() {
       userId: directorIdentity.userId,
       disableUserQuota,
       webSearchEnabled,
+      webSearchFamilies: selectedWebSearchFamilies,
       webSearchProvider: webSearchUsesCustomOverride ? webSearchProvider : undefined,
       webSearchApiKey: webSearchUsesCustomOverride && webSearchApiKey.trim() ? webSearchApiKey.trim() : undefined,
       webSearchBaseUrl: webSearchUsesCustomOverride && webSearchBaseUrl.trim() ? webSearchBaseUrl.trim() : undefined,
@@ -636,6 +650,7 @@ export function InputView() {
     webSearchApiKey,
     webSearchBaseUrl,
     webSearchEnabled,
+    selectedWebSearchFamilies,
     webSearchProvider,
     webSearchUsesCustomOverride,
   ]);
@@ -875,6 +890,7 @@ export function InputView() {
         byok_disable_user_quota: disableUserQuota,
         web_search: {
           enabled: webSearchEnabled,
+          families: selectedWebSearchFamilies,
           mode: webSearchMode,
           server_enabled: webSearchServerEnabled,
           server_provider: webSearchServerProvider,
@@ -1009,6 +1025,7 @@ export function InputView() {
     webSearchApiKey,
     webSearchBaseUrl,
     webSearchEnabled,
+    selectedWebSearchFamilies,
     webSearchMode,
     webSearchProvider,
     webSearchServerEnabled,

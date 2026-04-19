@@ -51,12 +51,18 @@ class TestCreateScenarioWithWebSearch:
         )
 
         with (
-            patch("app.services.web_context.fetch_web_context", new_callable=AsyncMock, return_value=mock_result),
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=mock_result,
+            ),
             patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
         ):
             resp = client.post("/api/scenario", json={
                 "question": "What if pigs fly?",
                 "web_search_enabled": True,
+                "web_search_families": ["polymarket", "finance", "academic", "news_deep"],
             })
 
         assert resp.status_code == 200
@@ -64,6 +70,13 @@ class TestCreateScenarioWithWebSearch:
         assert data["web_search_context"] is not None
         assert data["web_search_context"]["query"] == "What if pigs fly?"
         assert len(data["web_search_context"]["snippets"]) == 2
+        family_context = data["web_search_context"]["family_context"]
+        assert family_context["polymarket"]["state"] == "ready"
+        assert family_context["polymarket"]["geo_gated"] is False
+        assert family_context["polymarket"]["items"][0]["question"]
+        assert family_context["finance"]["items"][0]["title"]
+        assert family_context["academic"]["items"][0]["title"]
+        assert family_context["news_deep"]["items"][0]["title"]
 
         # Verify DB storage
         engine = get_engine()
@@ -72,6 +85,98 @@ class TestCreateScenarioWithWebSearch:
             assert scenario is not None
             assert scenario.web_context_json is not None
             assert "pigs fly" in scenario.web_context_json
+            assert '"family_context"' in scenario.web_context_json
+
+    def test_web_search_enabled_uses_runtime_polymarket_geo_host(self, client):
+        mock_result = WebSearchResult(
+            query="What if non-us markets?",
+            snippets=[
+                WebSearchSnippet(
+                    text="Regional market access changed overnight.",
+                    source_url="https://example.com/geo",
+                ),
+            ],
+            provider="searxng",
+            timestamp="2026-04-19T12:00:00Z",
+            cached=False,
+        )
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=mock_result,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
+            patch(
+                "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
+                "non-us",
+            ),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "What if non-us markets?",
+                "web_search_enabled": True,
+                "web_search_families": ["polymarket", "finance", "academic", "news_deep"],
+                "web_search_provider": "searxng",
+            })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        polymarket = data["web_search_context"]["family_context"]["polymarket"]
+        assert polymarket["configured_host"] == "non-us"
+        assert polymarket["geo_gated"] is True
+        assert polymarket["state"] == "empty"
+        assert polymarket["items"] == []
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario = session.get(Scenario, data["id"])
+            assert scenario is not None
+            assert scenario.web_context_json is not None
+            assert '"geo_gated": true' in scenario.web_context_json.lower()
+
+    def test_web_search_family_selection_limits_ready_cards(self, client):
+        mock_result = WebSearchResult(
+            query="What if only academic is selected?",
+            snippets=[
+                WebSearchSnippet(
+                    text="Academic evidence should remain while other families stay empty.",
+                    source_url="https://example.com/academic",
+                ),
+            ],
+            provider="searxng",
+            timestamp="2026-04-19T12:30:00Z",
+            cached=False,
+        )
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=mock_result,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "What if only academic is selected?",
+                "web_search_enabled": True,
+                "web_search_families": ["academic"],
+                "web_search_provider": "searxng",
+            })
+
+        assert resp.status_code == 200
+        family_context = resp.json()["web_search_context"]["family_context"]
+        assert family_context["academic"]["state"] == "ready"
+        assert family_context["academic"]["items"]
+        assert family_context["finance"]["state"] == "empty"
+        assert family_context["finance"]["items"] == []
+        assert family_context["news_deep"]["state"] == "empty"
+        assert family_context["news_deep"]["items"] == []
+        assert family_context["polymarket"]["state"] == "empty"
+        assert family_context["polymarket"]["items"] == []
+        assert family_context["polymarket"]["geo_gated"] is False
 
     def test_web_search_custom_provider_overrides_forwarded(self, client):
         mock_result = WebSearchResult(
@@ -83,7 +188,11 @@ class TestCreateScenarioWithWebSearch:
         )
 
         with (
-            patch("app.services.web_context.fetch_web_context", new_callable=AsyncMock, return_value=mock_result) as mock_fetch,
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=mock_result,
+            ) as mock_fetch,
             patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
         ):
             resp = client.post("/api/scenario", json={
@@ -105,7 +214,10 @@ class TestCreateScenarioWithWebSearch:
     def test_web_search_disabled_no_fetch(self, client):
         """web_search_enabled=false → fetch_web_context never called."""
         with (
-            patch("app.services.web_context.fetch_web_context", new_callable=AsyncMock) as mock_fetch,
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+            ) as mock_fetch,
             patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
         ):
             resp = client.post("/api/scenario", json={
@@ -118,7 +230,10 @@ class TestCreateScenarioWithWebSearch:
 
     def test_web_search_disabled_ignores_invalid_override_fields(self, client):
         with (
-            patch("app.services.web_context.fetch_web_context", new_callable=AsyncMock) as mock_fetch,
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+            ) as mock_fetch,
             patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
         ):
             resp = client.post("/api/scenario", json={
@@ -134,7 +249,10 @@ class TestCreateScenarioWithWebSearch:
     def test_web_search_default_off_no_fetch(self, client):
         """No web_search_enabled field → default off, no search."""
         with (
-            patch("app.services.web_context.fetch_web_context", new_callable=AsyncMock) as mock_fetch,
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+            ) as mock_fetch,
             patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
         ):
             resp = client.post("/api/scenario", json={
@@ -147,7 +265,11 @@ class TestCreateScenarioWithWebSearch:
     def test_web_search_failure_does_not_block(self, client):
         """Search exception → scenario still created with web_search_context=None."""
         with (
-            patch("app.services.web_context.fetch_web_context", new_callable=AsyncMock, side_effect=Exception("Search API down")),
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                side_effect=Exception("Search API down"),
+            ),
             patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
         ):
             resp = client.post("/api/scenario", json={
@@ -162,7 +284,11 @@ class TestCreateScenarioWithWebSearch:
     def test_web_search_returns_none_gracefully(self, client):
         """fetch_web_context returns None → scenario created, no context."""
         with (
-            patch("app.services.web_context.fetch_web_context", new_callable=AsyncMock, return_value=None),
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
             patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
         ):
             resp = client.post("/api/scenario", json={

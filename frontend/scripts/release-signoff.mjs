@@ -1294,6 +1294,7 @@ async function main() {
         resultFile: path.join(newSourceIngestionLiveOutput, "result.json"),
         env: {
           SWARM_URL: args.baseUrl,
+          SWARM_E2E_MODE: "live",
         },
       },
     );

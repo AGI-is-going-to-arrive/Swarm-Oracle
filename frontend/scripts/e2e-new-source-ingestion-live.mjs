@@ -129,6 +129,54 @@ const SCENARIO_FIXTURE = {
     provider: "news_deep",
     cached: false,
     snippets: [{ text: WEB_SNIPPET_TEXT, source_url: WEB_SNIPPET_URL }],
+    family_context: {
+      polymarket: {
+        state: "ready",
+        configured_host: "us",
+        items: [
+          {
+            id: "pm-1",
+            question: "Will live source cards render?",
+            url: "https://polymarket.example/contract",
+          },
+        ],
+      },
+      finance: {
+        state: "ready",
+        items: [
+          {
+            id: "fin-1",
+            title: "Macro indicators reprice quickly",
+            summary: "Live finance card content.",
+            source: "finance.example",
+            url: "https://finance.example/card",
+          },
+        ],
+      },
+      academic: {
+        state: "ready",
+        items: [
+          {
+            id: "paper-1",
+            title: "Forecasting under uncertainty",
+            abstract: "Live academic card content.",
+            url: "https://academic.example/paper",
+          },
+        ],
+      },
+      news_deep: {
+        state: "ready",
+        items: [
+          {
+            id: "news-1",
+            title: "Live source family coverage verified",
+            description: WEB_SNIPPET_TEXT,
+            source: "news.example",
+            url: WEB_SNIPPET_URL,
+          },
+        ],
+      },
+    },
   },
 };
 
@@ -161,6 +209,21 @@ const AGENTS_FIXTURE = [
     agent_identity_id: "identity-archivist",
   },
 ];
+
+const NON_US_SCENARIO_FIXTURE = {
+  ...SCENARIO_FIXTURE,
+  web_search_context: {
+    ...SCENARIO_FIXTURE.web_search_context,
+    family_context: {
+      ...SCENARIO_FIXTURE.web_search_context.family_context,
+      polymarket: {
+        ...SCENARIO_FIXTURE.web_search_context.family_context.polymarket,
+        configured_host: "non-us",
+        items: [],
+      },
+    },
+  },
+};
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -222,7 +285,7 @@ async function launchBrowser(headless, browserName = "chromium") {
 }
 
 function createTestResult() {
-  return { steps: [], passed: false };
+  return { steps: [], passed: false, scenarioId: null };
 }
 
 function pushStep(result, name, passed, extra = {}) {
@@ -352,7 +415,7 @@ async function configureLiveWebSearch(page) {
   }
 
   const mainToggle = page.locator(".web-search-toggle input[type=\"checkbox\"]");
-  await mainToggle.waitFor({ state: "visible", timeout: 10_000 });
+  await mainToggle.waitFor({ state: "visible", timeout: 15_000 });
   if (!(await mainToggle.isChecked())) {
     await mainToggle.check();
   }
@@ -360,6 +423,7 @@ async function configureLiveWebSearch(page) {
   if (!needsCustomOverride) {
     return {
       expectedProvider: caps?.web_search?.provider ?? null,
+      polymarketConfiguredHost: caps?.web_search?.providers?.polymarket?.configured_host ?? null,
       usingCustomOverride: false,
     };
   }
@@ -376,11 +440,12 @@ async function configureLiveWebSearch(page) {
   }
   return {
     expectedProvider: LIVE_WEB_SEARCH_PROVIDER || null,
+    polymarketConfiguredHost: caps?.web_search?.providers?.polymarket?.configured_host ?? null,
     usingCustomOverride: true,
   };
 }
 
-async function assertSourceCardsVisible(container, result) {
+async function assertSourceCardsVisible(container, result, expectGeoGatedPolymarket = false) {
   const selectors = [
     '[data-testid="result-sources-polymarket"]',
     '[data-testid="result-sources-finance"]',
@@ -388,8 +453,64 @@ async function assertSourceCardsVisible(container, result) {
     '[data-testid="result-sources-news_deep"]',
   ];
   for (const selector of selectors) {
+    if (selector.includes("result-sources-polymarket") && expectGeoGatedPolymarket) {
+      continue;
+    }
     const locator = container.locator(selector);
     pushStep(result, `visible:${selector}`, await isVisible(locator));
+  }
+  if (expectGeoGatedPolymarket) {
+    pushStep(
+      result,
+      "visible:[data-testid=\"result-source-polymarket-geo-gated\"]",
+      await isVisible(container.getByTestId("result-source-polymarket-geo-gated")),
+    );
+  }
+}
+
+async function assertSourceCardsHaveLiveData(container, result, expectGeoGatedPolymarket = false) {
+  if (expectGeoGatedPolymarket) {
+    const placeholder = container.getByTestId("result-source-polymarket-geo-gated");
+    pushStep(
+      result,
+      "polymarket-geo-gated-placeholder-visible",
+      await isVisible(placeholder),
+    );
+    pushStep(
+      result,
+      "polymarket-card-hidden-when-geo-gated",
+      !(await isVisible(container.getByTestId("result-sources-polymarket"))),
+    );
+  } else {
+    const polymarketCard = container.getByTestId("result-sources-polymarket");
+    pushStep(
+      result,
+      "polymarket-live-state-ready",
+      (await polymarketCard.getAttribute("data-state")) === "ready",
+    );
+    pushStep(
+      result,
+      "polymarket-live-item-visible",
+      await isVisible(polymarketCard.locator("li").first()),
+    );
+  }
+
+  for (const [family, selector] of [
+    ["finance", '[data-testid="result-sources-finance"]'],
+    ["academic", '[data-testid="result-sources-academic"]'],
+    ["news_deep", '[data-testid="result-sources-news_deep"]'],
+  ]) {
+    const card = container.locator(selector);
+    pushStep(
+      result,
+      `${family}-live-state-ready`,
+      (await card.getAttribute("data-state")) === "ready",
+    );
+    pushStep(
+      result,
+      `${family}-live-item-visible`,
+      await isVisible(card.locator("li").first()),
+    );
   }
 }
 
@@ -458,6 +579,25 @@ async function testInputAndResultContracts(page, baseUrl, mode) {
         "scenario-request-web-search-enabled",
         scenarioPayload?.web_search_enabled === true,
       );
+      pushStep(
+        result,
+        "scenario-request-web-search-families-set",
+        JSON.stringify(scenarioPayload?.web_search_families ?? []) === JSON.stringify(SOURCE_FAMILIES),
+      );
+      if (liveWebSearchConfig?.usingCustomOverride && LIVE_WEB_SEARCH_API_KEY) {
+        pushStep(
+          result,
+          "scenario-request-web-search-api-key-set",
+          scenarioPayload?.web_search_api_key === LIVE_WEB_SEARCH_API_KEY,
+        );
+      }
+      if (liveWebSearchConfig?.usingCustomOverride && LIVE_WEB_SEARCH_BASE_URL) {
+        pushStep(
+          result,
+          "scenario-request-web-search-base-url-set",
+          scenarioPayload?.web_search_base_url === LIVE_WEB_SEARCH_BASE_URL,
+        );
+      }
       if (liveWebSearchConfig?.expectedProvider) {
         pushStep(
           result,
@@ -479,6 +619,7 @@ async function testInputAndResultContracts(page, baseUrl, mode) {
     if (!scenarioId) {
       throw new Error(`Could not resolve scenario id from URL: ${page.url()}`);
     }
+    result.scenarioId = scenarioId;
     pushStep(result, "input-submit-navigates-to-simulation", true);
 
     await page.goto(`${baseUrl}/result/${scenarioId}`, {
@@ -495,6 +636,14 @@ async function testInputAndResultContracts(page, baseUrl, mode) {
       pushStep(result, "web-search-snippet-visible", await isVisible(snippet));
       const sourceUrl = page.locator(".result-web-sources__item-url").first();
       pushStep(result, "web-search-url-visible", await isVisible(sourceUrl));
+      const queryMeta = page.locator(".result-web-sources__meta", { hasText: FIXTURE_QUESTION });
+      pushStep(result, "web-search-query-visible", await isVisible(queryMeta));
+      if (liveWebSearchConfig?.expectedProvider) {
+        const providerMeta = page.locator(".result-web-sources__meta", {
+          hasText: liveWebSearchConfig.expectedProvider,
+        });
+        pushStep(result, "web-search-provider-visible", await isVisible(providerMeta));
+      }
     } else {
       const snippet = page.locator(".result-web-sources__item-text", { hasText: WEB_SNIPPET_TEXT });
       pushStep(result, "web-search-snippet-visible", await isVisible(snippet));
@@ -513,12 +662,30 @@ async function testInputAndResultContracts(page, baseUrl, mode) {
       const sheet = page.getByTestId("mobile-source-sheet");
       await sheet.waitFor({ state: "visible", timeout: 10_000 });
       pushStep(result, "mobile-source-sheet-visible", await isVisible(sheet));
-      await assertSourceCardsVisible(sheet, result);
+      await assertSourceCardsVisible(
+        sheet,
+        result,
+        liveWebSearchConfig?.polymarketConfiguredHost === "non-us",
+      );
+      await assertSourceCardsHaveLiveData(
+        sheet,
+        result,
+        liveWebSearchConfig?.polymarketConfiguredHost === "non-us",
+      );
     } else {
       const grid = page.getByTestId("result-source-grid-desktop");
       await grid.waitFor({ state: "visible", timeout: 10_000 });
       pushStep(result, "desktop-source-grid-visible", await isVisible(grid));
-      await assertSourceCardsVisible(grid, result);
+      await assertSourceCardsVisible(
+        grid,
+        result,
+        liveWebSearchConfig?.polymarketConfiguredHost === "non-us",
+      );
+      await assertSourceCardsHaveLiveData(
+        grid,
+        result,
+        liveWebSearchConfig?.polymarketConfiguredHost === "non-us",
+      );
     }
   } catch (err) {
     pushStep(result, "input-and-result-contracts", false, {
@@ -528,34 +695,65 @@ async function testInputAndResultContracts(page, baseUrl, mode) {
   return finalize(result);
 }
 
-async function testGeoGatedContract(context, baseUrl, mode) {
+async function testGeoGatedContract(context, baseUrl, mode, scenarioId = FIXTURE_SCENARIO_ID) {
   const result = createTestResult();
-  if (LIVE_MODE) {
-    pushStep(result, "geo-gated-contract-live-mode-not-deterministic", true);
-    return finalize(result);
-  }
   const page = await context.newPage();
   try {
-    await installFixtures(page, { capabilities: NON_US_CAPABILITIES_FIXTURE });
-    await page.goto(`${baseUrl}/result/${FIXTURE_SCENARIO_ID}`, {
+    if (!LIVE_MODE) {
+      await installFixtures(page, {
+        capabilities: NON_US_CAPABILITIES_FIXTURE,
+        scenario: NON_US_SCENARIO_FIXTURE,
+      });
+    }
+    await page.goto(`${baseUrl}/result/${scenarioId}`, {
       waitUntil: "domcontentloaded",
       timeout: 15_000,
     });
 
-    let placeholder;
+    let expectGeoGated = true;
+    if (LIVE_MODE) {
+      const liveScenario = await page.evaluate(async (activeScenarioId) => {
+        const response = await fetch(`/api/scenario/${activeScenarioId}`, {
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) return null;
+        return response.json();
+      }, scenarioId);
+      const configuredHost = liveScenario?.web_search_context?.family_context?.polymarket?.configured_host ?? null;
+      expectGeoGated = configuredHost === "non-us";
+      pushStep(result, "live-polymarket-configured-host-detected", typeof configuredHost === "string", {
+        configured_host: configuredHost,
+      });
+    }
+
+    let container;
     if (mode === "mobile") {
       const trigger = page.getByTestId("result-mobile-sources-trigger");
       await trigger.waitFor({ state: "visible", timeout: 10_000 });
       await trigger.click();
       const mobileSheet = page.getByTestId("mobile-source-sheet");
       await mobileSheet.waitFor({ state: "visible", timeout: 10_000 });
-      placeholder = mobileSheet.getByTestId("result-source-polymarket-geo-gated");
+      container = mobileSheet;
     } else {
-      placeholder = page.getByTestId("result-source-grid-desktop").getByTestId("result-source-polymarket-geo-gated");
+      container = page.getByTestId("result-source-grid-desktop");
     }
-    await placeholder.waitFor({ state: "visible", timeout: 10_000 });
-    pushStep(result, "polymarket-geo-gated-placeholder-visible", await isVisible(placeholder));
-    pushStep(result, "polymarket-card-hidden-when-geo-gated", !(await isVisible(page.getByTestId("result-sources-polymarket"))));
+    await container.waitFor({ state: "visible", timeout: 10_000 });
+
+    if (expectGeoGated) {
+      const placeholder = container.getByTestId("result-source-polymarket-geo-gated");
+      await placeholder.waitFor({ state: "visible", timeout: 10_000 });
+      pushStep(result, "polymarket-geo-gated-placeholder-visible", await isVisible(placeholder));
+      pushStep(
+        result,
+        "polymarket-card-hidden-when-geo-gated",
+        !(await isVisible(container.getByTestId("result-sources-polymarket"))),
+      );
+    } else {
+      const card = container.getByTestId("result-sources-polymarket");
+      await card.waitFor({ state: "visible", timeout: 10_000 });
+      pushStep(result, "polymarket-card-visible-when-not-geo-gated", await isVisible(card));
+      pushStep(result, "polymarket-live-item-visible-when-not-geo-gated", await isVisible(card.locator("li").first()));
+    }
   } catch (err) {
     pushStep(result, "geo-gated-contract", false, {
       error: err instanceof Error ? err.message : String(err),
@@ -617,11 +815,17 @@ async function runSurface(mode, contextOptions, args) {
     browser: args.browser,
     viewport: contextOptions.viewport ?? null,
     live: LIVE_MODE,
+    baseUrl: args.baseUrl,
     tests: {},
   };
   try {
     allResults.tests.inputAndResultContracts = await testInputAndResultContracts(page, args.baseUrl, mode);
-    allResults.tests.geoGatedContract = await testGeoGatedContract(context, args.baseUrl, mode);
+    allResults.tests.geoGatedContract = await testGeoGatedContract(
+      context,
+      args.baseUrl,
+      mode,
+      allResults.tests.inputAndResultContracts.scenarioId ?? FIXTURE_SCENARIO_ID,
+    );
     allResults.tests.offlineBannerContract = await testOfflineBannerContract(page, args.baseUrl);
   } finally {
     await context.close().catch(() => {});

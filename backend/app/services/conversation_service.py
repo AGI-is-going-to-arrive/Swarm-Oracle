@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 import threading
 from dataclasses import dataclass
@@ -352,7 +353,70 @@ def _retry_after_seconds(oldest_hit: datetime | None, now: datetime) -> int:
     if oldest_hit.tzinfo is None:
         oldest_hit = oldest_hit.replace(tzinfo=timezone.utc)
     remaining = (oldest_hit + _QUOTA_WINDOW) - now
-    return max(1, int(remaining.total_seconds()))
+    return max(1, math.ceil(remaining.total_seconds()))
+
+
+def _seconds_until(reset_at: datetime | None, now: datetime) -> int:
+    if reset_at is None:
+        return int(_QUOTA_WINDOW.total_seconds())
+    if reset_at.tzinfo is None:
+        reset_at = reset_at.replace(tzinfo=timezone.utc)
+    return max(1, math.ceil((reset_at - now).total_seconds()))
+
+
+def _load_quota_hits(
+    session: Session,
+    *,
+    cutoff: datetime,
+    owner_user_id: str | None = None,
+    org_id: str | None = None,
+) -> list[tuple[int, datetime]]:
+    stmt = select(
+        AgentConversationQuotaLedger.turn_delta,
+        AgentConversationQuotaLedger.created_at,
+    ).where(AgentConversationQuotaLedger.created_at >= cutoff)
+    if owner_user_id is not None:
+        stmt = stmt.where(AgentConversationQuotaLedger.owner_user_id == owner_user_id)
+    if org_id is not None:
+        stmt = stmt.where(AgentConversationQuotaLedger.organization_id == org_id)
+    stmt = stmt.order_by(
+        AgentConversationQuotaLedger.created_at.asc(),
+        AgentConversationQuotaLedger.id.asc(),
+    )
+    hits: list[tuple[int, datetime]] = []
+    for turn_delta, created_at in session.exec(stmt):
+        if not isinstance(created_at, datetime):
+            continue
+        normalized_created_at = (
+            created_at
+            if created_at.tzinfo is not None
+            else created_at.replace(tzinfo=timezone.utc)
+        )
+        hits.append((int(turn_delta or 0), normalized_created_at))
+    return hits
+
+
+def _retry_after_for_quota_hits(
+    hits: list[tuple[int, datetime]],
+    *,
+    additions: int,
+    cap: int,
+    now: datetime,
+) -> tuple[int, datetime | None]:
+    if not hits:
+        return int(_QUOTA_WINDOW.total_seconds()), None
+    excess_turns = sum(turn_delta for turn_delta, _ in hits) + additions - cap
+    if excess_turns <= 0:
+        return 0, None
+    recovered_turns = 0
+    reset_at: datetime | None = None
+    for turn_delta, created_at in hits:
+        recovered_turns += max(0, turn_delta)
+        reset_at = created_at + _QUOTA_WINDOW
+        if recovered_turns >= excess_turns:
+            break
+    retry_after = _seconds_until(reset_at, now) if reset_at is not None else 0
+    return retry_after, reset_at
 
 
 def _raise_quota_exceeded(
@@ -471,23 +535,43 @@ def _enforce_daily_user_org_quota(
     if user_id and user_cap > 0:
         used_turns, oldest_hit = _load_usage(owner_user_id=user_id)
         if used_turns + additions > user_cap:
-            retry_after = _retry_after_seconds(oldest_hit, now)
+            quota_hits = _load_quota_hits(
+                session,
+                cutoff=cutoff,
+                owner_user_id=user_id,
+            )
+            retry_after, reset_at = _retry_after_for_quota_hits(
+                quota_hits,
+                additions=additions,
+                cap=user_cap,
+                now=now,
+            )
             _raise_quota_exceeded(
                 scope="user",
                 code="DAILY_QUOTA_EXCEEDED",
                 retry_after=retry_after,
-                reset_at=now + timedelta(seconds=retry_after),
+                reset_at=reset_at or oldest_hit,
             )
 
     if organization_id and org_cap > 0:
         used_turns, oldest_hit = _load_usage(org_id=organization_id)
         if used_turns + additions > org_cap:
-            retry_after = _retry_after_seconds(oldest_hit, now)
+            quota_hits = _load_quota_hits(
+                session,
+                cutoff=cutoff,
+                org_id=organization_id,
+            )
+            retry_after, reset_at = _retry_after_for_quota_hits(
+                quota_hits,
+                additions=additions,
+                cap=org_cap,
+                now=now,
+            )
             _raise_quota_exceeded(
                 scope="org",
                 code="ORG_DAILY_QUOTA_EXCEEDED",
                 retry_after=retry_after,
-                reset_at=now + timedelta(seconds=retry_after),
+                reset_at=reset_at or oldest_hit,
             )
 
 

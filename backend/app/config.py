@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     WEB_SEARCH_TIMEOUT_SECONDS: float = 8.0
     WEB_SEARCH_CACHE_TTL_SECONDS: int = 300
     SEARXNG_URL: str = "http://localhost:8888"
+    NEW_SOURCES_POLYMARKET_CONFIGURED_HOST: str = "us"
 
     # ── Phase 3 Feature Flags ────────────────────────────
     FEATURE_CUSTOM_AGENTS: bool = False
@@ -150,6 +151,14 @@ class Settings(BaseSettings):
             )
         if not normalized:
             raise ValueError("CORS_ORIGINS must contain at least one explicit origin")
+        return normalized
+
+    @field_validator("NEW_SOURCES_POLYMARKET_CONFIGURED_HOST", mode="after")
+    @classmethod
+    def validate_new_sources_polymarket_configured_host(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"us", "non-us"}:
+            raise ValueError("NEW_SOURCES_POLYMARKET_CONFIGURED_HOST must be 'us' or 'non-us'")
         return normalized
 
     @model_validator(mode="after")

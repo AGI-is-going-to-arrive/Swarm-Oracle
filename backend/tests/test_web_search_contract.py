@@ -12,8 +12,8 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, text
-from sqlmodel import Session, SQLModel
+from sqlalchemy import inspect
+from sqlmodel import Session
 
 import app.api.scenarios as scenarios_api
 from app.api.helpers import _parse_web_context_json
@@ -56,6 +56,14 @@ class TestCreateScenarioRequestWebSearch:
         assert req.web_search_api_key == "test-key"
         assert req.web_search_base_url == "https://api.x.ai/v1/responses"
 
+    def test_web_search_families_normalize_and_dedupe(self):
+        req = CreateScenarioRequest(
+            question="What if AI takes over?",
+            web_search_enabled=True,
+            web_search_families=[" polymarket ", "academic", "polymarket"],
+        )
+        assert req.web_search_families == ["polymarket", "academic"]
+
     def test_web_search_enabled_accepted_in_api_payload(self, client):
         """POST /api/scenario should accept web_search_enabled without 422."""
         resp = client.post("/api/scenario", json={
@@ -63,6 +71,14 @@ class TestCreateScenarioRequestWebSearch:
             "web_search_enabled": True,
         })
         # 200 if LLM reachable, 500 if not — either acceptable; NOT 422
+        assert resp.status_code in (200, 500)
+
+    def test_web_search_families_accepted_in_api_payload(self, client):
+        resp = client.post("/api/scenario", json={
+            "question": "What if pigs fly?",
+            "web_search_enabled": True,
+            "web_search_families": ["polymarket", "finance"],
+        })
         assert resp.status_code in (200, 500)
 
     def test_web_search_override_fields_accepted_in_api_payload(self, client):
@@ -81,6 +97,14 @@ class TestCreateScenarioRequestWebSearch:
                 question="What if AI takes over?",
                 web_search_enabled=True,
                 web_search_provider="unknown-provider",
+            )
+
+    def test_web_search_families_reject_unknown_value(self):
+        with pytest.raises(ValueError):
+            CreateScenarioRequest(
+                question="What if AI takes over?",
+                web_search_enabled=True,
+                web_search_families=["unknown-family"],
             )
 
 
@@ -342,6 +366,87 @@ class TestScenarioResponseWebSearchContext:
         assert result["query"] == "AI trends 2026"
         assert len(result["snippets"]) == 1
         assert result["provider"] == "tavily"
+
+    def test_parse_web_context_json_keeps_safe_family_context(self):
+        raw = json.dumps({
+            "query": "AI trends 2026",
+            "snippets": [{"text": "snippet", "source_url": "https://example.com"}],
+            "provider": "tavily",
+            "timestamp": "2026-04-07T00:00:00Z",
+            "cached": False,
+            "family_context": {
+                "polymarket": {
+                    "state": "ready",
+                    "configured_host": "non-us",
+                    "geo_gated": True,
+                    "items": [
+                        {
+                            "id": "pm-1",
+                            "question": "Will AI win?",
+                            "url": "https://example.com/market",
+                            "ignored": "nope",
+                        }
+                    ],
+                },
+                "finance": {
+                    "state": "ready",
+                    "items": [
+                        {
+                            "id": "fin-1",
+                            "title": "Rates pause",
+                            "summary": "macro signal",
+                            "source": "example.com",
+                            "url": "https://example.com/fin",
+                        }
+                    ],
+                },
+            },
+        })
+        result = _parse_web_context_json(raw)
+        assert result is not None
+        family_context = result["family_context"]
+        assert family_context["polymarket"]["configured_host"] == "non-us"
+        assert family_context["polymarket"]["geo_gated"] is True
+        assert family_context["polymarket"]["items"][0]["question"] == "Will AI win?"
+        assert "ignored" not in family_context["polymarket"]["items"][0]
+        assert family_context["finance"]["items"][0]["title"] == "Rates pause"
+
+    def test_parse_web_context_json_keeps_empty_family_envelope(self):
+        raw = json.dumps({
+            "query": "AI trends 2026",
+            "snippets": [],
+            "provider": "searxng",
+            "timestamp": "2026-04-07T00:00:00Z",
+            "cached": False,
+            "family_context": {
+                "polymarket": {
+                    "state": "empty",
+                    "configured_host": "non-us",
+                    "geo_gated": True,
+                    "items": [],
+                },
+                "finance": {
+                    "state": "empty",
+                    "items": [],
+                },
+                "academic": {
+                    "state": "empty",
+                    "items": [],
+                },
+                "news_deep": {
+                    "state": "empty",
+                    "items": [],
+                },
+            },
+        })
+        result = _parse_web_context_json(raw)
+        assert result is not None
+        family_context = result["family_context"]
+        assert family_context["polymarket"]["state"] == "empty"
+        assert family_context["polymarket"]["configured_host"] == "non-us"
+        assert family_context["polymarket"]["geo_gated"] is True
+        assert family_context["polymarket"]["items"] == []
+        assert family_context["finance"]["items"] == []
 
     def test_parse_web_context_json_invalid_json(self):
         assert _parse_web_context_json("not json") is None

@@ -105,6 +105,7 @@ class CreateScenarioRequest(BaseModel):
     visualization_enabled: bool | None = None  # Enable pixel theater mode
     # Web Search Enhancement: opt-in per-scenario
     web_search_enabled: bool = False  # Request web search before simulation (default off)
+    web_search_families: list[str] | None = None
     web_search_provider: str | None = None
     web_search_api_key: str | None = None
     web_search_base_url: str | None = None
@@ -128,6 +129,23 @@ class CreateScenarioRequest(BaseModel):
         if v is not None and len(v) > 50:
             raise ValueError("continuity_overrides must contain at most 50 items")
         return v
+
+    @field_validator("web_search_families")
+    @classmethod
+    def validate_web_search_families(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        allowed = {"polymarket", "finance", "academic", "news_deep"}
+        normalized: list[str] = []
+        for family in v:
+            candidate = family.strip().lower()
+            if candidate not in allowed:
+                raise ValueError(
+                    "web_search_families must contain only polymarket, finance, academic, news_deep"
+                )
+            if candidate not in normalized:
+                normalized.append(candidate)
+        return normalized
 
     @field_validator("question")
     @classmethod

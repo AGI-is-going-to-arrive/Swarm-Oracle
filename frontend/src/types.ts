@@ -8,6 +8,51 @@ export interface WebSearchContext {
   provider: string;
   timestamp: string;
   cached: boolean;
+  family_context?: {
+    polymarket?: {
+      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      configured_host?: string;
+      geo_gated?: boolean;
+      items: Array<{
+        id: string;
+        question: string;
+        probability?: number;
+        url?: string;
+      }>;
+    };
+    finance?: {
+      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      items: Array<{
+        id: string;
+        title: string;
+        summary?: string;
+        source?: string;
+        url?: string;
+      }>;
+    };
+    academic?: {
+      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      items: Array<{
+        id: string;
+        title: string;
+        authors?: string[];
+        citationCount?: number;
+        abstract?: string;
+        url?: string;
+      }>;
+    };
+    news_deep?: {
+      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      items: Array<{
+        id: string;
+        title: string;
+        source?: string;
+        publishedAt?: string;
+        description?: string;
+        url?: string;
+      }>;
+    };
+  } | null;
 }
 
 export interface Scenario {
