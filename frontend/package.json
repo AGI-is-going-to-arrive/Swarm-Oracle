@@ -43,6 +43,8 @@
     "e2e:phase3a:full": "node scripts/e2e-phase3-batch-a.mjs full",
     "e2e:phase3b": "node scripts/e2e-phase3-batch-b.mjs desktop",
     "e2e:phase3b:full": "node scripts/e2e-phase3-batch-b.mjs full",
+    "e2e:capability-matrix": "node scripts/e2e-capability-matrix.mjs",
+    "e2e:ws:contract": "node scripts/e2e-ws-contract-suite.mjs",
     "build:spike:phaser-custom": "vite build --config experiments/phaser-custom/vite.config.ts",
     "preview:spike:phaser-custom": "vite preview --config experiments/phaser-custom/vite.config.ts --host 127.0.0.1 --port 18929",
     "test:spike:phaser-custom": "vitest run --config experiments/phaser-custom/vitest.config.ts --run src/game/PhaserGame.test.ts src/game/PhaserGameLoader.test.ts src/game/replaySync.test.ts src/pages/SimulationView.test.tsx",
