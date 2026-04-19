@@ -17220,3 +17220,52 @@ QA Inventory
   - 四个 family card 现在证明的是“同一份 live web search 结果已被正确投影、渲染并经过 live/non-us 验证”
   - 这还不是“四套彼此独立的外部 provider ingestion”
   - 这个边界本轮没有再被包装成“已经独立证明”
+
+## 2026-04-20 WS / capability graph diagnostics cleanup
+
+- 本轮目标：
+  - 把 `graph-playability` 这一批新增诊断脚本收口到“真实可用、不会自造红测”
+  - 重点盯住 `e2e-ws-contract-suite.mjs` 剩下的 `scenario` 假失败，以及 `useAgentConversationWS` 的真实 WS 路径
+- 先确认的事实：
+  - `18927/18928` 仍是 Docker 栈，不拿它当这轮脚本诊断真值
+  - 本轮 clean-room 继续使用当前 checkout 直接起的：
+    - backend `127.0.0.1:19027`
+    - frontend preview `127.0.0.1:19030`
+  - 当前 live 栈对 `ReplayView` 仍会回到 `/`，所以 capability matrix 里它现在应记成 `skipped`，不该混成 `failed`
+- 本轮实际发现的两个脚本问题：
+  - `frontend/scripts/e2e-ws-contract-suite.mjs`
+    - `case1-first-frame-auth` 之前直接 `page.goto('/sim/...')`
+    - Playwright page 没有 `baseURL` 时，这其实是无效导航，所以 `/sim` 和 `/debate` 会被静默 skip
+  - 同一个脚本里 `raw probe` 之前排在 `preparePageFixtures()` 之后
+    - clean-room 下只要先创建 live fixture，再去打 `scenario` raw timeout / oversize probe，就会稳定拿到假 `1006`
+    - 但同一套 backend 上，纯 raw probe、以及不先创建 fixture 的 probe，都能稳定拿到真实 `4001 / 1009`
+- 本轮代码收口：
+  - `frontend/src/hooks/useAgentConversationWS.ts`
+    - 前端 WS 路径改回真实 `/ws/agent-conversation/{thread_id}`
+  - `frontend/src/hooks/useAgentConversationWS.test.tsx`
+    - 补 URL 断言，锁住这条接线
+  - `frontend/scripts/e2e-ws-contract-suite.mjs`
+    - 保留 direct-execution guard，继续避免 import 时顺手跑 live suite
+    - 新增 `resolvePageUrl()`，`case1` 改成走绝对 URL
+    - `case1` 每个 endpoint 改用独立 Playwright page
+    - 执行顺序改成先跑 `case2-6` raw / contract probe，再创建 live fixture 跑 `case1`
+  - `frontend/scripts/e2e-ws-contract-suite.test.mjs`
+    - 新增 `resolvePageUrl()` 单测
+- 本轮实际验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest -q tests/test_evidence_card_flow.py`
+    - `5 passed`
+  - `cd backend && source .venv/bin/activate && python -m pytest -q tests/test_session_auth.py -k 'auth_timeout_closes_4001 or oversized_auth_frame_closes_1009 or pending_blocks_new_connections'`
+    - `3 passed`
+  - `cd frontend && node --test scripts/e2e-ws-contract-suite.test.mjs`
+    - `18 passed`
+  - `cd frontend && npm test -- --run src/hooks/useAgentConversationWS.test.tsx src/hooks/useCapabilityCheck.test.ts src/pages/AgentLibrary.test.tsx src/pages/CompareDigestView.test.tsx src/pages/KGExplorerView.test.tsx src/pages/ReplayView.test.tsx`
+    - `32 passed`
+  - `cd frontend && HEADLESS=1 node scripts/e2e-ws-contract-suite.mjs --url http://127.0.0.1:19030 --backend-url http://127.0.0.1:19027 --headless --session-token test-secret --session-subject ws-contract-owner`
+    - `20 passed / 1 skipped / 0 failed`
+    - 剩下唯一 skip：`case1-first-frame-auth[endingRoom]`，原因是当前 clean-room 数据里没有可直接打开的 live roundtable route
+  - `cd frontend && HEADLESS=1 npm run e2e:capability-matrix -- --url http://127.0.0.1:19030 --headless`
+    - `25 passed / 5 skipped / 0 failed`
+    - 5 个 skip 都是 `ReplayView`，原因是当前 live 栈仍会把 `/replay/*` 回到 `/`
+  - 额外 spot-check：
+    - `Computer Use` 在 Chrome 上打开 `/agents`，确认 capability disabled 文案继续可见
+    - clean-room `/sim/:id` 页面可正常进入 live simulation 壳层

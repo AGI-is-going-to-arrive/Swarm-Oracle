@@ -77,7 +77,8 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 ```
 
 - Latest local rerun in this session:
-  - `python -m pytest tests/test_agent_conversation.py tests/test_conversation.py tests/test_api.py -q`: `215 passed`
+  - `python -m pytest -q tests/test_evidence_card_flow.py`: `5 passed`
+  - `python -m pytest -q tests/test_session_auth.py -k 'auth_timeout_closes_4001 or oversized_auth_frame_closes_1009 or pending_blocks_new_connections'`: `3 passed`
   - `python -m pytest -q`: `2248 passed, 2 skipped`
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 

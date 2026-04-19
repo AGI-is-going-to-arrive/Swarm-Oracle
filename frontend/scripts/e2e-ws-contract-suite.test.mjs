@@ -11,6 +11,7 @@ import {
   classifyCloseCode,
   describeFirstFrameAssertion,
   parseAuthFrame,
+  resolvePageUrl,
   shouldReconnectOnClose,
   summarizeCaseResults,
 } from "./e2e-ws-contract-suite.mjs";
@@ -100,6 +101,20 @@ test("describeFirstFrameAssertion surfaces frameNumber and payload", () => {
   assert.match(message, /framePayload=/);
   assert.match(message, /expected=/);
   assert.match(message, /actual=/);
+});
+
+test("resolvePageUrl joins relative routes against the configured base URL", () => {
+  assert.equal(
+    resolvePageUrl("http://127.0.0.1:19030", "/sim/scenario-1"),
+    "http://127.0.0.1:19030/sim/scenario-1",
+  );
+});
+
+test("resolvePageUrl preserves absolute routes", () => {
+  assert.equal(
+    resolvePageUrl("http://127.0.0.1:19030", "http://127.0.0.1:19031/debate/abc"),
+    "http://127.0.0.1:19031/debate/abc",
+  );
 });
 
 test("summarizeCaseResults counts pass fail and skip", () => {

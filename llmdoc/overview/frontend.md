@@ -85,6 +85,10 @@
 - `useSimulationWS` 在 `scenarioId` 为空或 `ready` 为 false 时不会发起连接；重连使用 `connectRef` 模式防止闭包过期；初始连接也会调用 `requestScenarioResync` 补拉状态（与 `useEndingRoomWS` 行为对齐）。
 - 三个 WS hooks 均支持首帧 auth：如果 `localStorage` 有 token，`onopen` 时发送 `{"type":"auth","token":"..."}`，收到 `auth_ok` 后才触发 resync；无 token 时直接 resync（兼容 auth 未开启场景）。
 - 三个 WS hooks 对 `4001`（认证失败）和 `4404`（资源不存在）不进行自动重连；`1006`（异常断连）照常重连。
+- `useAgentConversationWS` 当前也已对齐同一套 WS 契约：
+  - 前端实际连接路径是 `/ws/agent-conversation/{thread_id}`
+  - 不再误连旧的 `/api/ws/agent-conversation/{thread_id}`
+  - 首帧 auth、`auth_ok`、`4001 / 4404` 非重连口径与另外三条 WS 保持一致
 - REST API 路径参数统一使用 `encodeURIComponent()` 编码（约 30 处），防止含特殊字符的 ID 破坏 URL 结构。
 - API client 当前会把首页高级设置里的可选 `Organization ID` 以 session-scoped `X-Org-Id` 请求头透传；留空时不发送。
 - API 客户端对服务端错误文本做脱敏处理（`sanitizeErrorText`），超过 200 字符或包含 stack trace / HTML 的响应会被替换为通用错误信息。
@@ -145,6 +149,8 @@
 | `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | 首页 `Organization ID` 的 sessionStorage 单一事实源；InputView 与 API client 共用，避免 header 逻辑散落 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
 | `e2e-new-source-ingestion-live.mjs` | `frontend/scripts/e2e-new-source-ingestion-live.mjs` | source-ingestion 专项脚本；默认走 fixture，`SWARM_E2E_MODE=live` 时走真实 backend。live 模式会先显式打开首页总开关，校验 `/api/scenario` 请求里的 `web_search_families`，再检查结果页四个 source family 的 live/non-empty 卡片；`Polymarket` 的 `non-us` geo-gate 也走同一条 live 口径 |
+| `e2e-capability-matrix.mjs` | `frontend/scripts/e2e-capability-matrix.mjs` | graph/playability capability matrix；当前覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route，并把当前 live 栈里未真正暴露的 `ReplayView` 记成 `skipped`，不混成失败 |
+| `e2e-ws-contract-suite.mjs` | `frontend/scripts/e2e-ws-contract-suite.mjs` | WS 契约诊断脚本；当前覆盖 `scenario / debate / ending-room` 的首帧 auth、`4001 / 4404` 非重连、`1006` 可重连、auth timeout、oversize auth frame 和 pending-auth limit |
 | `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
 | `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
@@ -359,6 +365,11 @@
 - frontend `NodeConversationSheet / CausalReviewView` 定向 vitest 当前 `86 passed`。
 - frontend full vitest 当前 `1336 passed`。
 - `node --test scripts/e2e-frontend-preflight.test.mjs` 本轮 `25 passed`。
+- 这轮 graph/playability 增量回归当前也已补：
+  - `node --test scripts/e2e-ws-contract-suite.test.mjs`：`18 passed`
+  - clean-room `e2e:ws:contract`：`20 passed / 1 skipped / 0 failed`
+  - clean-room `e2e:capability-matrix`：`25 passed / 5 skipped / 0 failed`
+  - `useAgentConversationWS / useCapabilityCheck / AgentLibrary / CompareDigestView / KGExplorerView / ReplayView` 定向 vitest：`32 passed`
 - `npm run build`（含 `perf:budgets:check`）当前通过。
 - fresh local live 的 `node-conversation-live / kg-explorer-live / replay-view-live` 当前通过。
 - preview-driven Chromium `phase3-batch-a full / phase3-batch-b full / phase3-batch-c full` 本轮全绿。
@@ -368,6 +379,7 @@
   - detail + sidecar 同开时，detail `right: 464px`
   - detail close / pane click / detail-focused `Escape` 都不会再把 sidecar 一起关掉
   - 切到新节点后关 detail，焦点会回到最新 trigger
+  - `/agents` 在当前 live 栈里继续稳定显示 capability disabled 文案
 - preview-driven `zh-CN phase3-batch-a full / phase3-batch-b full` 本轮全绿。
 - graph mobile smoke 当前会额外检查 controls 与 mobile navigation hint；viewport 交互从空白画布锚点拖拽开始，并以 `Fit view` 后的 baseline 判断 pan / zoom / reset；`MiniMap` 继续维持桌面限定。
 - `phase3-batch-a` 当前也会检查：

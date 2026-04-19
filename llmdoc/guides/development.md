@@ -306,6 +306,41 @@ python -m pytest tests/test_session_auth.py tests/test_llm_client.py tests/test_
   - 官方托管 provider 的 `llm_base_url / web_search_base_url` 只接受 `https`
   - 本地开发 host 的 BYOK `http` 例外仍保留
 
+### Capability / WS Contract 定向回归
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest -q tests/test_evidence_card_flow.py
+python -m pytest -q tests/test_session_auth.py -k 'auth_timeout_closes_4001 or oversized_auth_frame_closes_1009 or pending_blocks_new_connections'
+
+cd ../frontend
+node --test scripts/e2e-ws-contract-suite.test.mjs
+npx eslint scripts/e2e-capability-matrix.mjs scripts/e2e-ws-contract-suite.mjs scripts/e2e-ws-contract-suite.test.mjs src/hooks/useAgentConversationWS.ts src/hooks/useAgentConversationWS.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+npm test -- --run src/hooks/useAgentConversationWS.test.tsx src/hooks/useCapabilityCheck.test.ts src/pages/AgentLibrary.test.tsx src/pages/CompareDigestView.test.tsx src/pages/KGExplorerView.test.tsx src/pages/ReplayView.test.tsx
+HEADLESS=1 node scripts/e2e-ws-contract-suite.mjs --url http://127.0.0.1:19030 --backend-url http://127.0.0.1:19027 --headless --session-token test-secret --session-subject ws-contract-owner
+HEADLESS=1 npm run e2e:capability-matrix -- --url http://127.0.0.1:19030 --headless
+```
+
+说明：
+
+- backend 这组回归当前主要看：
+  - `evidence_card` 的 `cited_branch_id` 过滤和降级路径不回退
+  - `scenario` WS 的 auth timeout / oversize auth frame / pending-auth limit 仍维持 `4001 / 1009 / 1013-or-1006` 口径
+- frontend 这组回归当前主要看：
+  - `useAgentConversationWS` 实际连接 `/ws/agent-conversation/{thread_id}`，不再误连旧的 `/api/ws/agent-conversation/{thread_id}`
+  - `e2e-ws-contract-suite.mjs` 当前先跑 raw probe，再跑 live page case1，避免 live fixture 活动把 `scenario` raw probe 污染成假失败
+  - `case1` 当前使用绝对 URL 打开 `/sim` 和 `/debate`，不再因为 Playwright page 没有 `baseURL` 把相对路径静默 skip
+  - `e2e-capability-matrix.mjs` 当前覆盖 6 个 gated route；当前 live 栈里 `ReplayView` 仍会回到 `/`，脚本会记成 `skipped`，不再误判成失败
+- 这轮 clean-room 真实结果是：
+  - `tests/test_evidence_card_flow.py`：`5 passed`
+  - `tests/test_session_auth.py -k ...`：`3 passed`
+  - `node --test scripts/e2e-ws-contract-suite.test.mjs`：`18 passed`
+  - 前端定向 vitest：`32 passed`
+  - `e2e:ws:contract`：`20 passed / 1 skipped / 0 failed`
+  - `e2e:capability-matrix`：`25 passed / 5 skipped / 0 failed`
+
 ### Graph Viz / Debate Graph 定向回归
 
 ```bash

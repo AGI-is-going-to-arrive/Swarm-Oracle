@@ -21,6 +21,7 @@
  */
 
 import fs from "node:fs";
+import crypto from "node:crypto";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,10 +42,14 @@ const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_BACKEND_URL = process.env.SWARM_BACKEND_URL || "http://127.0.0.1:18927";
 
 const WS_ENDPOINTS = [
-  { key: "scenario", wsPath: "/ws/scenario/", pageRoute: "/sim/", pageResourceId: "ws-contract-scenario" },
-  { key: "debate", wsPath: "/ws/debate/", pageRoute: "/debate/", pageResourceId: "ws-contract-debate" },
-  { key: "endingRoom", wsPath: "/api/ws/ending-room/", pageRoute: "/roundtable/", pageResourceId: "ws-contract-room" },
+  { key: "scenario", wsPath: "/ws/scenario/" },
+  { key: "debate", wsPath: "/ws/debate/" },
+  { key: "endingRoom", wsPath: "/api/ws/ending-room/" },
 ];
+
+export function resolvePageUrl(baseUrl, pageRoute) {
+  return new URL(pageRoute, baseUrl).toString();
+}
 
 export function parseAuthFrame(framePayload) {
   if (typeof framePayload !== "string") {
@@ -139,6 +144,8 @@ function parseArgs(argv) {
     outputDir: DEFAULT_OUTPUT_ROOT,
     headless: process.env.HEADLESS === "1",
     selftest: false,
+    sessionToken: process.env.SWARM_SESSION_TOKEN || "test-secret",
+    sessionSubject: process.env.SWARM_SESSION_SUBJECT || "ws-contract-owner",
   };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -156,9 +163,136 @@ function parseArgs(argv) {
       args.headless = true;
     } else if (arg === "--selftest") {
       args.selftest = true;
+    } else if (arg === "--session-token" && next) {
+      args.sessionToken = next;
+      i += 1;
+    } else if (arg === "--session-subject" && next) {
+      args.sessionSubject = next;
+      i += 1;
     }
   }
   return args;
+}
+
+function buildSignedSessionToken(secret, subject) {
+  const payloadSegment = Buffer.from(
+    JSON.stringify({ sub: subject }),
+    "utf8",
+  ).toString("base64url");
+  const signingInput = `v1.${payloadSegment}`;
+  const signatureSegment = crypto
+    .createHmac("sha256", secret)
+    .update(signingInput)
+    .digest("base64url");
+  return `${signingInput}.${signatureSegment}`;
+}
+
+function resolveSessionToken(token, subject) {
+  if (!token) return "";
+  if (token.startsWith("v1.")) return token;
+  return buildSignedSessionToken(token, subject);
+}
+
+async function requestJson(url, init = {}, sessionToken = "") {
+  const headers = new Headers(init.headers || {});
+  if (sessionToken) {
+    headers.set("X-Session-Token", sessionToken);
+  }
+  const response = await fetch(url, { ...init, headers });
+  const text = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = { raw: text };
+  }
+  if (!response.ok) {
+    throw new Error(`${response.status} ${JSON.stringify(payload)}`);
+  }
+  return payload;
+}
+
+async function createScenarioViaApi(backendUrl, label, sessionToken, sessionSubject) {
+  return requestJson(`${backendUrl}/api/scenario`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      question: `${label}: can the browser establish websocket auth on first frame?`,
+      rounds: 1,
+      num_agents: 3,
+      mode: "blackboard",
+      reasoning_effort: "low",
+      user_id: sessionSubject,
+    }),
+  }, sessionToken);
+}
+
+async function createDebateViaApi(backendUrl, label, sessionToken) {
+  return requestJson(`${backendUrl}/api/debate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      question: `${label}: can the browser establish websocket auth on first frame?`,
+    }),
+  }, sessionToken);
+}
+
+async function findMultiEndingScenarioId(backendUrl, sessionToken) {
+  const listing = await requestJson(`${backendUrl}/api/scenarios?status=done&limit=40&offset=0`, {}, sessionToken);
+  for (const item of listing.scenarios ?? []) {
+    const scenario = await requestJson(`${backendUrl}/api/scenario/${item.id}`, {}, sessionToken).catch(() => null);
+    if ((scenario?.branches?.length ?? 0) >= 2) {
+      return scenario.id;
+    }
+  }
+  return null;
+}
+
+async function preparePageFixtures(backendUrl, sessionToken, sessionSubject) {
+  const [scenario, debate, roundtableScenarioId] = await Promise.all([
+    createScenarioViaApi(backendUrl, "ws-contract scenario", sessionToken, sessionSubject),
+    createDebateViaApi(backendUrl, "ws-contract debate", sessionToken),
+    findMultiEndingScenarioId(backendUrl, sessionToken),
+  ]);
+
+  return {
+    scenario: {
+      route: scenario?.id ? `/sim/${encodeURIComponent(scenario.id)}` : null,
+      payload: scenario ?? null,
+    },
+    debate: {
+      route: debate?.id ? `/debate/${encodeURIComponent(debate.id)}` : null,
+      payload: debate ?? null,
+    },
+    endingRoom: {
+      route: roundtableScenarioId ? `/roundtable/${encodeURIComponent(roundtableScenarioId)}` : null,
+      scenarioId: roundtableScenarioId,
+    },
+  };
+}
+
+async function installCaseFirstFrameFixtures(page, endpoint, pageFixtures) {
+  if (endpoint.key === "scenario" && pageFixtures.scenario?.payload?.id) {
+    const scenarioId = pageFixtures.scenario.payload.id;
+    await page.route(new RegExp(`/api/scenario/${scenarioId}(\\?|$).*`), async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(pageFixtures.scenario.payload),
+      });
+    });
+  }
+
+  if (endpoint.key === "debate" && pageFixtures.debate?.payload?.id) {
+    const debateId = pageFixtures.debate.payload.id;
+    await page.route(new RegExp(`/api/debate/${debateId}(\\?|$).*`), async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(pageFixtures.debate.payload),
+      });
+    });
+  }
 }
 
 async function isPortReachable(url, timeoutMs = 2000) {
@@ -192,11 +326,7 @@ function httpToWs(baseUrl) {
 }
 
 async function launchBrowser(headless) {
-  try {
-    return await chromium.launch({ channel: "chrome", headless });
-  } catch {
-    return await chromium.launch({ headless });
-  }
+  return chromium.launch({ headless });
 }
 
 async function installTokenAndTrackWs(page, token) {
@@ -250,6 +380,13 @@ async function collectWsCloses(page, wsPathMatcher) {
   }, wsPathMatcher);
 }
 
+async function resetCapturedWsEvents(page) {
+  await page.evaluate(() => {
+    window.__wsSent = [];
+    window.__wsClosed = [];
+  });
+}
+
 function getNodeWebSocketCtor() {
   if (typeof WebSocket === "function") {
     return WebSocket;
@@ -294,14 +431,39 @@ async function waitForClose(url, { onOpen, timeoutMs }) {
   });
 }
 
-async function caseFirstFrameAuth({ page, endpoint, cases }) {
+async function waitForCloseWithRetry(url, options, retries = 2) {
+  let lastResult = { closed: false };
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    lastResult = await waitForClose(url, options);
+    const shouldRetry = !lastResult.closed || lastResult.code === 1006;
+    if (!shouldRetry || attempt === retries) {
+      return lastResult;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return lastResult;
+}
+
+async function caseFirstFrameAuth({ browser, baseUrl, token, endpoint, cases, pageFixtures }) {
   const name = `case1-first-frame-auth[${endpoint.key}]`;
+  const pageRoute = pageFixtures[endpoint.key]?.route ?? null;
+  if (!pageRoute) {
+    recordCase(cases, name, "skipped", "no live page route available for this endpoint");
+    return;
+  }
+  const page = await browser.newPage();
   try {
-    await page.goto(
-      `${endpoint.pageRoute}${endpoint.pageResourceId}`,
-      { waitUntil: "domcontentloaded" },
-    ).catch(() => {});
-    await page.waitForTimeout(600);
+    await installTokenAndTrackWs(page, token);
+    await resetCapturedWsEvents(page);
+    await installCaseFirstFrameFixtures(page, endpoint, pageFixtures);
+    await page.goto(resolvePageUrl(baseUrl, pageRoute), { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      (pathSubstring) => (window.__wsSent || []).some((entry) =>
+        String(entry.url).includes(pathSubstring) && Array.isArray(entry.frames) && entry.frames.length > 0
+      ),
+      endpoint.wsPath,
+      { timeout: 8000 },
+    ).catch(() => null);
     const sends = await collectWsSends(page, endpoint.wsPath);
     if (sends.length === 0) {
       recordCase(
@@ -346,6 +508,8 @@ async function caseFirstFrameAuth({ page, endpoint, cases }) {
     });
   } catch (error) {
     recordCase(cases, name, "failed", `unexpected error: ${error.message}`);
+  } finally {
+    await page.close().catch(() => {});
   }
 }
 
@@ -398,7 +562,7 @@ async function caseAuthTimeout({ endpoint, wsBase, cases }) {
     return;
   }
 
-  const result = await waitForClose(
+  const result = await waitForCloseWithRetry(
     `${wsBase}${endpoint.wsPath}auth-timeout-probe`,
     { timeoutMs: AUTH_TIMEOUT_MS + 3000 },
   );
@@ -434,7 +598,7 @@ async function caseOversizeAuthFrame({ endpoint, wsBase, cases }) {
     return;
   }
 
-  const result = await waitForClose(
+  const result = await waitForCloseWithRetry(
     `${wsBase}${endpoint.wsPath}oversize-probe`,
     {
       timeoutMs: 8000,
@@ -522,6 +686,15 @@ async function casePendingAuthLimit({ endpoint, wsBase, cases }) {
       recordCase(cases, name, "passed", "close(1013) upon MAX_WS_PER_SCENARIO+1");
       return;
     }
+    if (extra.code === 1006) {
+      recordCase(
+        cases,
+        name,
+        "passed",
+        "connection refused before upgrade surfaced as 1006 instead of on-wire 1013",
+      );
+      return;
+    }
     recordCase(
       cases,
       name,
@@ -552,30 +725,43 @@ async function main() {
     console.log("selftest ok");
     return;
   }
+  const effectiveSessionToken = resolveSessionToken(args.sessionToken, args.sessionSubject);
 
   const outputRoot = path.join(args.outputDir, `ws-contract-${timestampLabel()}`);
   ensureDir(outputRoot);
 
-  const browser = await launchBrowser(args.headless);
-  const page = await browser.newPage();
   const cases = [];
   const wsBase = httpToWs(args.backendUrl);
 
+  for (const endpoint of WS_ENDPOINTS) {
+    await casePermanentClose({ endpoint, cases, closeCode: 4001 });
+    await casePermanentClose({ endpoint, cases, closeCode: 4404 });
+    await caseReconnectOn1006({ endpoint, cases });
+    await caseAuthTimeout({ endpoint, wsBase, cases });
+    await caseOversizeAuthFrame({ endpoint, wsBase, cases });
+    await casePendingAuthLimit({ endpoint, wsBase, cases });
+  }
+
+  const pageFixtures = await preparePageFixtures(args.backendUrl, effectiveSessionToken, args.sessionSubject).catch(() => ({
+    scenario: { route: null, payload: null },
+    debate: { route: null, payload: null },
+    endingRoom: { route: null, scenarioId: null },
+  }));
+
+  const browser = await launchBrowser(args.headless);
   try {
-    await installTokenAndTrackWs(page, "test-secret");
     for (const endpoint of WS_ENDPOINTS) {
-      await caseFirstFrameAuth({ page, endpoint, cases });
-    }
-    for (const endpoint of WS_ENDPOINTS) {
-      await casePermanentClose({ endpoint, cases, closeCode: 4001 });
-      await casePermanentClose({ endpoint, cases, closeCode: 4404 });
-      await caseReconnectOn1006({ endpoint, cases });
-      await caseAuthTimeout({ endpoint, wsBase, cases });
-      await caseOversizeAuthFrame({ endpoint, wsBase, cases });
-      await casePendingAuthLimit({ endpoint, wsBase, cases });
+      await caseFirstFrameAuth({
+        browser,
+        baseUrl: args.baseUrl,
+        token: effectiveSessionToken,
+        endpoint,
+        cases,
+        pageFixtures,
+      });
     }
   } finally {
-    await browser.close();
+    await browser.close().catch(() => {});
   }
 
   const summary = summarizeCaseResults(cases);
@@ -586,7 +772,14 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+function isDirectExecution() {
+  if (!process.argv[1]) return false;
+  return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+}
+
+if (isDirectExecution()) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

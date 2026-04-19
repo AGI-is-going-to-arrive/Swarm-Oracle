@@ -309,6 +309,7 @@
 |------|------|------|
 | `WS` | `/ws/scenario/{scenario_id}` | 主模式 live 事件 |
 | `WS` | `/ws/debate/{debate_id}` | Debate live 事件 |
+| `WS` | `/ws/agent-conversation/{thread_id}` | 图谱节点对话 thread 事件 |
 | `WS` | `/ws/ending-room/{room_id}` | Ending room / roundtable 事件 |
 | `WS` | `/api/ws/ending-room/{room_id}` | ending-room WS alias |
 
@@ -317,7 +318,10 @@
 - scenario / debate live 事件都会带 `meta`，前端按 `sequence / event_id` 去重。
 - 空闲期会发送轻量 `heartbeat`。
 - `X-Session-Token` 只用于 REST。
-- 当 `SESSION_SECRET` 非空时，ending-room / scenario / debate 的 WS 都继续走首帧 auth 协议，不依赖 HTTP-style dependency 注入。
+- 当 `SESSION_SECRET` 非空时，`scenario / debate / agent-conversation / ending-room` 这 4 条 WS 都继续走首帧 auth 协议，不依赖 HTTP-style dependency 注入。
+  - 客户端先连上 socket，再发送 `{"type":"auth","token":"..."}`。
+  - 服务端验证通过后返回 `{"type":"auth_ok"}`，然后才注册连接。
+  - `4001 / 4404` 属于非重连关闭码；`1006` 仍按可恢复异常断连处理。
 
 ## 源码入口
 

@@ -85,6 +85,7 @@ describe('useAgentConversationWS — handshake', () => {
       await Promise.resolve();
     });
     expect(mockSockets).toHaveLength(1);
+    expect(mockSockets[0].url).toContain('/ws/agent-conversation/thread-1');
     expect(mockSockets[0].sentFrames).toHaveLength(1);
     const frame = JSON.parse(mockSockets[0].sentFrames[0]);
     expect(frame.type).toBe('auth');

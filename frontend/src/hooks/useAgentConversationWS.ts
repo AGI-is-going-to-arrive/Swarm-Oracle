@@ -91,7 +91,7 @@ export function useAgentConversationWS(opts: UseAgentConversationWSOptions) {
     if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${protocol}//${resolveWsHost()}/api/ws/agent-conversation/${encodeURIComponent(threadId)}`;
+    const url = `${protocol}//${resolveWsHost()}/ws/agent-conversation/${encodeURIComponent(threadId)}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 

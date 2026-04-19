@@ -61,6 +61,9 @@ React + TypeScript frontend for SwarmOracle.
 - `useDebateWS` / `useSimulationWS`
   live event hydration
   store-side phase / branch status now stay monotonic under out-of-order WS events
+- `useAgentConversationWS.ts`
+  thread-scoped node conversation WS now connects to `/ws/agent-conversation/{thread_id}`
+  first-frame auth / `auth_ok` / `4001` / `4404` handling stays aligned with the shared backend contract
 - `PhaserGameLoader` / `useScreenCapture`
   Theater-only loading and split capture runtime
 - `predictionBetting.ts`
@@ -133,6 +136,10 @@ npm run build:spike:phaser-custom
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Latest scoped reruns in this session:
   - frontend targeted vitest covering `NodeConversationSheet / CausalReviewView` desktop sidecar regressions: `86 passed`
+  - frontend targeted vitest covering `useAgentConversationWS / useCapabilityCheck / AgentLibrary / CompareDigestView / KGExplorerView / ReplayView`: `32 passed`
+  - clean-room `node --test scripts/e2e-ws-contract-suite.test.mjs`: `18 passed`
+  - clean-room `e2e:ws:contract`: `20 passed / 1 skipped / 0 failed`
+  - clean-room `e2e:capability-matrix`: `25 passed / 5 skipped / 0 failed`
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
   - `npm run build`: pass
   - fresh local live browser rerun: `node-conversation-live` passed

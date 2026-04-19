@@ -138,6 +138,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - frontend `typecheck / lint / build / perf budgets` 通过
   - frontend `NodeConversationSheet / CausalReviewView` 定向 vitest `86 passed`
   - frontend 全量 vitest `1336 passed`
+  - 这轮 graph/playability 增量回归也已补：
+    - clean-room `e2e:ws:contract` `20 passed / 1 skipped / 0 failed`
+    - clean-room `e2e:capability-matrix` `25 passed / 5 skipped / 0 failed`
+    - `node --test scripts/e2e-ws-contract-suite.test.mjs` `18 passed`
+    - `useAgentConversationWS / useCapabilityCheck / AgentLibrary / CompareDigestView / KGExplorerView / ReplayView` 定向 vitest `32 passed`
   - 本轮 fresh local live 验证已补：
     - `node-conversation-live`
     - `kg-explorer-live`
@@ -152,6 +157,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - focused browser spot-check 当前也已确认 desktop detail + sidecar 回归收口：
     - detail close / pane click / detail-focused `Escape` 不再把 sidecar 一起关掉
     - 切到新节点后关 detail，焦点会回到最新 trigger
+  - focused browser spot-check 当前也已确认 `/agents` 继续按 capability gate 落 disabled 文案，不是假阳性
 - 当前无产品级 active backlog；剩余架构级限制见 `overview/backlog.md`。
 
 ## 文档入口
