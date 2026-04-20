@@ -46,6 +46,122 @@ from ._utils import (
 
 logger = logging.getLogger(__name__)
 
+
+def _roundtable_participant_variant(participant: EndingRoomParticipant | None) -> str:
+    snapshot = participant.persona_snapshot_json if participant is not None else {}
+    role_hint = str((snapshot or {}).get("agent_role") or "").strip()
+    bio_hint = str(
+        (snapshot or {}).get("bio_short") or (snapshot or {}).get("agent_persona") or ""
+    ).strip()
+    return _oracle_role_voice_variant(role_hint, bio_hint)
+
+
+def _roundtable_variant_hook_fallback(
+    *,
+    variant: str,
+    language: str,
+    seed: str,
+) -> str:
+    if language == "zh":
+        fallback_map = {
+            "imperial": ["号令不再只穿过一个中枢", "朝廷再压不回同一条命令链", "体面与军令开始各走各的"],
+            "field": ["前线先被掏空了", "轮换和粮道先脱了节", "防线先被拖成空壳"],
+            "finance": ["清算和信心先一起松了", "流动性先被抽出了缝", "挤兑预期先跑在前面了"],
+            "market": ["客流和现钱周转先乱了", "摊位秩序先被挤坏了", "街面现金链先断了气"],
+            "faith": ["誓约和共同体信任先松了", "祭仪边界先裂开了", "神圣名义先压不住人心了"],
+            "industry": ["调度节拍和备援先脱了钩", "产能链先弯了腰", "维保欠账先浮上来了"],
+            "frontier": ["补给窗口和生命维持先吃紧了", "轨道节拍先滑开了", "护航与补给先对不上拍了"],
+            "survival": ["避难位和口粮余量先不够了", "药品和撤离顺序先扛不住了", "生存缓冲先被挤穿了"],
+            "scholar": ["证词、账册和时序先对不上了", "记录链先漏页了", "案卷先开始彼此打架了"],
+            "civic": ["账册和责任链先对不上了", "程序和签字链先漏了口子", "谁来背责先没人说得清了"],
+            "plain": ["真正先滑开的那一下", "因果链先失了准头", "代价最早开始滚动的地方"],
+        }
+    else:
+        fallback_map = {
+            "imperial": [
+                "the command chain no longer ran through one center",
+                "authority split before the court could force it back into line",
+                "the order stopped traveling through a single throne",
+            ],
+            "field": [
+                "the front line was left hollow",
+                "rotation and supply fell out of step",
+                "the shield line had to hold without depth",
+            ],
+            "finance": [
+                "settlement and confidence loosened together",
+                "the clearing rail slipped before trust could be rebuilt",
+                "liquidity strain outran the public reassurance",
+            ],
+            "market": [
+                "cash rotation and stall order broke first",
+                "foot traffic fell before anyone admitted the damage",
+                "the market floor lost rhythm before the officials found words",
+            ],
+            "faith": [
+                "vows and communal trust lost force first",
+                "ritual authority cracked before the breach could be named",
+                "the covenant frayed before the room admitted it",
+            ],
+            "industry": [
+                "dispatch rhythm and backup capacity slipped first",
+                "throughput bent before the system could rebalance",
+                "maintenance debt surfaced before output could be defended",
+            ],
+            "frontier": [
+                "the supply window and life-support margin tightened first",
+                "orbital timing slipped before the frontier could recover",
+                "the convoy gap opened before anyone could close it",
+            ],
+            "survival": [
+                "shelter, medicine, and ration slack ran thin first",
+                "the evacuation order slipped before relief arrived",
+                "the survival margin collapsed before the speeches caught up",
+            ],
+            "scholar": [
+                "the record, the testimony, and the timeline stopped lining up",
+                "the ledger broke sequence before the verdict was named",
+                "the evidence trail frayed before the room admitted it",
+            ],
+            "civic": [
+                "the ledger and the chain of responsibility stopped lining up",
+                "the explanation chain broke before the paperwork could catch it",
+                "procedure stopped holding the damage inside one accountable line",
+            ],
+            "plain": [
+                "the line of cause and cost slipped out of alignment",
+                "the first real slip came before anyone named the ending",
+                "the hinge gave way before the result could be defended",
+            ],
+        }
+    choices = fallback_map.get(variant) or fallback_map["plain"]
+    return _stable_oracle_choice(seed, choices)
+
+
+def _resolve_roundtable_hook(
+    branch_card: dict[str, Any],
+    *,
+    participant: EndingRoomParticipant | None,
+    language: str,
+) -> str:
+    visible_hook = _roundtable_branch_hook(branch_card, language=language)
+    generic_hook = "当前世界线" if language == "zh" else "the first decisive hinge"
+    if visible_hook != generic_hook:
+        return visible_hook
+    variant = _roundtable_participant_variant(participant)
+    seed = "|".join(
+        [
+            language,
+            variant,
+            str(branch_card.get("title") or ""),
+            str(branch_card.get("insight") or ""),
+            str(branch_card.get("story") or ""),
+            str(participant.display_name if participant is not None else ""),
+        ]
+    )
+    return _roundtable_variant_hook_fallback(variant=variant, language=language, seed=seed)
+
+
 def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> str:
     normalized = f"{role_hint or ''} {bio_hint or ''}".strip().lower()
     if any(
@@ -236,6 +352,32 @@ _ARCHIVIST_VOCABULARY_HINT: dict[str, str] = {
     "en": "Vocabulary: pivot, parties, trade-off, ruling, overview. Judge-first-then-cite structure. Tone: fair but sharp.",  # noqa: E501
 }
 
+
+def _oracle_prompt_text(value: str | None, *, limit: int = 180) -> str | None:
+    text = sanitize_untrusted_text(str(value or ""), max_chars=limit)
+    return text or None
+
+
+def _append_oracle_context_text(
+    lines: list[str],
+    *,
+    key: str,
+    value: str | None,
+    language: str,
+    limit: int = 180,
+) -> None:
+    raw_text = _oracle_prompt_text(value, limit=limit)
+    if not raw_text:
+        return
+    visible_text = _oracle_visible_text(value, language=language, limit=limit)
+    if visible_text:
+        lines.append(f"{key}={visible_text}")
+        if language == "en" and raw_text != visible_text:
+            lines.append(f"{key}_source={raw_text}")
+        return
+    lines.append(f"{key}_source={raw_text}")
+
+
 def _oracle_vocabulary_hints(
     role_slot: "EndingRoomRoleSlot",
     variant: str,
@@ -264,9 +406,11 @@ def _oracle_vocabulary_hints(
     agent_role = str(snapshot.get("agent_role") or "").strip()
     bio_short = str(snapshot.get("bio_short") or snapshot.get("agent_persona") or "").strip()
     impact = snapshot.get("impact_score")
-    tier = snapshot.get("tier")
+    tier = str(snapshot.get("tier") or "").strip().upper()
     turn_count = snapshot.get("turn_count")
     key_moments = snapshot.get("key_moment_hits")
+    branch_pressure = str(snapshot.get("branch_pressure") or "").strip()
+    agent_stance = str(snapshot.get("agent_stance") or "").strip()
 
     if agent_role:
         identity_parts.append(
@@ -281,26 +425,37 @@ def _oracle_vocabulary_hints(
 
     # Weight cues — high-impact agents should speak with more authority
     if isinstance(impact, (int, float)) and impact > 0:
-        if impact >= 7:
+        if impact >= 0.75:
             identity_parts.append(
                 "此人在推演中影响极大，措辞应自信且有分量" if is_zh
                 else "High-impact participant; speak with authority and weight"
             )
-        elif impact <= 3:
+        elif impact <= 0.35:
             identity_parts.append(
                 "此人在推演中影响有限，措辞应谨慎且从自身角度出发" if is_zh
                 else "Low-impact participant; speak cautiously from personal perspective"
             )
 
-    if isinstance(tier, str) and tier:
-        tier_map_zh = {"core": "核心人物", "supporting": "配角", "minor": "边缘人物"}
-        tier_map_en = {"core": "core figure", "supporting": "supporting character", "minor": "minor figure"}  # noqa: E501
+    if tier:
+        tier_map_zh = {"CORE": "核心人物", "IMPORTANT": "重要角色", "CROWD": "边缘角色"}
+        tier_map_en = {"CORE": "core figure", "IMPORTANT": "important figure", "CROWD": "minor figure"}  # noqa: E501
         tier_label = (tier_map_zh if is_zh else tier_map_en).get(tier)
         if tier_label:
             identity_parts.append(
                 f"叙事地位：{tier_label}" if is_zh
                 else f"Narrative weight: {tier_label}"
             )
+
+    if branch_pressure:
+        identity_parts.append(
+            f"这条线当前最受压的是：{branch_pressure[:_BIO_SHORT_MAX_CHARS]}" if is_zh
+            else f"This branch is currently under pressure at: {branch_pressure[:_BIO_SHORT_MAX_CHARS]}"
+        )
+    if agent_stance:
+        identity_parts.append(
+            f"默认立场：{agent_stance[:_BIO_SHORT_MAX_CHARS]}" if is_zh
+            else f"Default stance: {agent_stance[:_BIO_SHORT_MAX_CHARS]}"
+        )
 
     if (isinstance(turn_count, int)
             and turn_count > 0
@@ -326,14 +481,13 @@ def _build_roundtable_opening_content(
     title = _oracle_visible_text(branch_card.get("title"), language=language, limit=40) or (
         "当前世界线" if language == "zh" else "this ending"
     )
-    hook = _roundtable_branch_hook(branch_card, language=language)
-    insight = _oracle_visible_clause(branch_card.get("insight"), language=language, limit=72)
-    snapshot = participant.persona_snapshot_json if participant is not None else {}
-    role_hint = str((snapshot or {}).get("agent_role") or "").strip()
-    bio_hint = str(
-        (snapshot or {}).get("bio_short") or (snapshot or {}).get("agent_persona") or "").strip(
+    hook = _resolve_roundtable_hook(
+        branch_card,
+        participant=participant,
+        language=language,
     )
-    variant = _oracle_role_voice_variant(role_hint, bio_hint)
+    insight = _oracle_visible_clause(branch_card.get("insight"), language=language, limit=72)
+    variant = _roundtable_participant_variant(participant)
     if language == "zh":
         if variant == "imperial":
             return (
@@ -508,7 +662,7 @@ def _build_roundtable_crossfire_content(
             else "I am pulling out the first hinge from the summaries instead of blending every story together."  # noqa: E501
         )
     lead = branch_cards[0]
-    lead_hook = _roundtable_branch_hook(lead, language=language)
+    lead_hook = _resolve_roundtable_hook(lead, participant=None, language=language)
     lead_title = _oracle_visible_text(lead.get("title"), language=language, limit=40) or (
         "当前世界线" if language == "zh" else "this ending"
     )
@@ -516,7 +670,7 @@ def _build_roundtable_crossfire_content(
     if language == "zh":
         if rival is None:
             return f"我先只盯《{lead_title}》里“{lead_hook}”这一手，因为真正的差别就从这里被放大。"
-        rival_hook = _roundtable_branch_hook(rival, language=language)
+        rival_hook = _resolve_roundtable_hook(rival, participant=None, language=language)
         rival_title = _oracle_visible_text(rival.get("title"), language=language, limit=40) or "另一条世界线"  # noqa: E501
         return (
             f"我先把两条线最早失手的地方摆出来：《{lead_title}》先在“{lead_hook}”上偏了，"
@@ -524,7 +678,7 @@ def _build_roundtable_crossfire_content(
         )
     if rival is None:
         return f"I am keeping the focus on the hinge '{lead_hook}' inside {lead_title}, because that is where the difference first starts to widen."  # noqa: E501
-    rival_hook = _roundtable_branch_hook(rival, language=language)
+    rival_hook = _resolve_roundtable_hook(rival, participant=None, language=language)
     rival_title = _oracle_visible_text(rival.get("title"), language=language, limit=40) or "another ending"  # noqa: E501
     return (
         f"I am putting the first slips side by side: {lead_title} starts to drift at '{lead_hook}', "  # noqa: E501
@@ -538,7 +692,11 @@ def _build_roundtable_witness_content(
     branch_rows: list[dict[str, Any]],
     language: str,
 ) -> str:
-    evidence_hook = _roundtable_branch_hook(branch_card, language=language)
+    evidence_hook = _resolve_roundtable_hook(
+        branch_card,
+        participant=witness,
+        language=language,
+    )
     witness_evidence = _build_participant_followup_evidence(
         witness,
         branch_rows=branch_rows,
@@ -1187,12 +1345,95 @@ def _oracle_profile_focus_hint(room: EndingRoom) -> str:
     return str(style.get("judge_focus") or style.get("pressure") or "").strip()
 
 
+def _oracle_persona_digest(
+    participant: EndingRoomParticipant,
+    *,
+    language: str,
+) -> str:
+    snapshot = participant.persona_snapshot_json or {}
+    lines = [
+        f"speaker_name={participant.display_name}",
+        f"role_slot={participant.role_slot.value}",
+    ]
+    _append_oracle_context_text(
+        lines,
+        key="agent_name",
+        value=snapshot.get("agent_name"),
+        language=language,
+        limit=80,
+    )
+    _append_oracle_context_text(
+        lines,
+        key="agent_role",
+        value=snapshot.get("agent_role"),
+        language=language,
+        limit=80,
+    )
+    _append_oracle_context_text(
+        lines,
+        key="persona_hint",
+        value=snapshot.get("bio_short") or snapshot.get("agent_persona"),
+        language=language,
+        limit=180,
+    )
+    _append_oracle_context_text(
+        lines,
+        key="agent_stance",
+        value=snapshot.get("agent_stance"),
+        language=language,
+        limit=120,
+    )
+    _append_oracle_context_text(
+        lines,
+        key="worldline_title",
+        value=snapshot.get("branch_title") or snapshot.get("witness_branch_title"),
+        language=language,
+        limit=60,
+    )
+    _append_oracle_context_text(
+        lines,
+        key="branch_pressure",
+        value=snapshot.get("branch_pressure"),
+        language=language,
+        limit=120,
+    )
+    _append_oracle_context_text(
+        lines,
+        key="branch_insight",
+        value=snapshot.get("branch_insight"),
+        language=language,
+        limit=180,
+    )
+    _append_oracle_context_text(
+        lines,
+        key="source_quote",
+        value=snapshot.get("latest_quote") or snapshot.get("opening_quote"),
+        language=language,
+        limit=180,
+    )
+    tier = str(snapshot.get("tier") or "").strip()
+    if tier:
+        lines.append(f"narrative_weight={tier}")
+    if snapshot.get("impact_score") is not None:
+        lines.append(f"importance_score={snapshot['impact_score']}")
+    if snapshot.get("selection_reason"):
+        lines.append(f"selection_reason={snapshot['selection_reason']}")
+    if snapshot.get("turn_count") is not None:
+        lines.append(f"turn_count={snapshot['turn_count']}")
+    if snapshot.get("key_moment_hits") is not None:
+        lines.append(f"key_moment_hits={snapshot['key_moment_hits']}")
+    if snapshot.get("last_round_spoken") is not None:
+        lines.append(f"last_round_spoken={snapshot['last_round_spoken']}")
+    return "\n".join(lines)
+
+
 
 def _oracle_context_digest(
     room: EndingRoom,
     *,
     participant: EndingRoomParticipant,
     user_content: str | None = None,
+    context_hint: str | None = None,
 ) -> str:
     lines = [
         f"room_type={room.room_type.value}",
@@ -1200,6 +1441,7 @@ def _oracle_context_digest(
         f"language={room.language}",
         _oracle_profile_scene_brief(room),
         f"speaker={_oracle_speaker_brief(participant)}",
+        _oracle_persona_digest(participant, language=room.language),
         f"scope={_oracle_scope_notice(room)}",
     ]
     snapshot = participant.persona_snapshot_json or {}
@@ -1216,6 +1458,14 @@ def _oracle_context_digest(
         lines.append(f"key_moment_hits={snapshot['key_moment_hits']}")
     if user_content:
         lines.append(f"user_question={sanitize_untrusted_text(user_content, max_chars=280)}")
+    if context_hint:
+        lines.append(
+            format_untrusted_text_block(
+                "Turn Context",
+                context_hint,
+                max_chars=2200,
+            )
+        )
     return "\n".join(lines)
 
 
@@ -1404,12 +1654,15 @@ def _build_oracle_rewrite_prompt(
     thread_mode: EndingRoomThreadMode | None = None,
     interaction_mode: EndingRoomInteractionMode | None = None,
     recent_lines: list[str] | None = None,
+    context_hint: str | None = None,
     output_json: bool = True,
 ) -> str:
     task_line = (
-        "Rewrite this SwarmOracle Oracle Chambers line so it feels like a sharp in-world voice instead of a template."  # noqa: E501
+        "Write the actual SwarmOracle Oracle Chambers line that should appear on screen. "
+        "Use the anchor copy only as a semantic fallback rail for scope, stance, and conclusion."
         if user_content is None
-        else "Rewrite this Oracle Chambers follow-up reply so it sounds grounded, direct, and in-character."  # noqa: E501
+        else "Write the actual Oracle Chambers follow-up reply. "
+        "Use the anchor copy only as a semantic fallback rail for scope, stance, and conclusion."
     )
     structural_note = ""
     if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
@@ -1456,24 +1709,29 @@ def _build_oracle_rewrite_prompt(
     vocab_line = f"Persona vocabulary: {vocab_hint}\n" if vocab_hint else ""
     return (
         f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
-        "You are a writing polisher for SwarmOracle Oracle Chambers.\n"
+        "You are generating live Oracle Chambers dialogue for SwarmOracle.\n"
         f"{task_line}\n"
         f"Target voice: {_oracle_voice_brief(room, participant=participant, phase=phase, thread_mode=thread_mode, interaction_mode=interaction_mode)}\n"  # noqa: E501
         f"{vocab_line}"
         "Hard rules:\n"
-        "- Preserve the exact factual scope and conclusion of the anchor copy\n"
+        "- The anchor copy is fallback semantics, not wording to paraphrase line by line\n"
+        "- Preserve the exact factual scope and conclusion direction of the anchor copy\n"
         "- Do not invent facts, branches, quotes, or motives that are not already implied\n"
         "- Sound like the speaker, not like a customer-support assistant or system prompt\n"
+        "- Let the speaker's persona, narrative weight, and story pressure show through what they notice first, what they defend, and which nouns they choose\n"  # noqa: E501
+        "- When role, persona, stance, branch pressure, or source quotes are present in context, treat them as higher-priority voice evidence than the fallback template wording\n"  # noqa: E501
+        "- In roundtables, make different speakers sound distinct from one another instead of sharing one generic cadence\n"  # noqa: E501
+        "- Prefer a fresh, playable line over a polished paraphrase of the fallback template\n"
         "- Prefer concrete, playable phrasing over abstract summaries\n"
         "- Use scene-appropriate nouns and pressure points when natural; do not collapse everything into generic 'situation / outcome / consequence' wording\n"  # noqa: E501
         "- If the target language is English, do not leave untranslated Chinese fragments inside an otherwise English sentence; paraphrase or translate them into English instead\n"  # noqa: E501
-        "- Keep it compact: one short paragraph, no bullets\n"
+        "- Keep it compact: one short paragraph, no bullets, usually 2-4 sentences\n"
         "- Respect the scope notice exactly, but keep it implicit unless the user explicitly asks about boundaries\n"  # noqa: E501
         f"{_oracle_banned_process_phrases(room.language)}"
         f"{structural_note}\n"
         f"{phase_note}\n"
         f"{output_hint}\n\n"
-        f"{format_untrusted_text_block('Context', _oracle_context_digest(room, participant=participant, user_content=user_content), max_chars=1600)}\n\n"  # noqa: E501
+        f"{format_untrusted_text_block('Context', _oracle_context_digest(room, participant=participant, user_content=user_content, context_hint=context_hint), max_chars=2200)}\n\n"  # noqa: E501
         f"{format_untrusted_text_block('Anchor Copy', anchor_copy, max_chars=1200)}\n\n"
         f"{format_untrusted_text_block('Recent Lines To Avoid Mimicking', _oracle_recent_lines_digest(recent_lines), max_chars=1200) if recent_lines else ''}\n"  # noqa: E501
         f"phase={phase.value}\n"
@@ -1492,12 +1750,13 @@ async def _maybe_rewrite_oracle_copy(
     thread_mode: EndingRoomThreadMode | None = None,
     interaction_mode: EndingRoomInteractionMode | None = None,
     recent_lines: list[str] | None = None,
+    context_hint: str | None = None,
     purpose: str,
     streaming_first: bool = False,
 ) -> str:
     if not settings.ORACLE_CHAMBERS_USE_LLM:
         return anchor_copy
-    prompt = _build_oracle_rewrite_prompt(
+    json_prompt = _build_oracle_rewrite_prompt(
         room=room,
         participant=participant,
         phase=phase,
@@ -1506,19 +1765,32 @@ async def _maybe_rewrite_oracle_copy(
         thread_mode=thread_mode,
         interaction_mode=interaction_mode,
         recent_lines=recent_lines,
+        context_hint=context_hint,
         output_json=True,
+    )
+    plain_text_prompt = _build_oracle_rewrite_prompt(
+        room=room,
+        participant=participant,
+        phase=phase,
+        anchor_copy=anchor_copy,
+        user_content=user_content,
+        thread_mode=thread_mode,
+        interaction_mode=interaction_mode,
+        recent_lines=recent_lines,
+        context_hint=context_hint,
+        output_json=False,
     )
     try:
         with llm_request_scope(quota_key=None, purpose=purpose):
             import app.services.ending_room_service as _pkg
-            llm_call = (
+            structured_call = (
                 _pkg.llm_call_json_with_stream_fallback
                 if streaming_first
                 else _pkg.llm_call_json
             )
             result = await asyncio.wait_for(
-                llm_call(
-                    prompt,
+                structured_call(
+                    json_prompt,
                     reasoning_effort="low",
                     temperature=0.55,
                     fallback_mode="agent_message",
@@ -1534,9 +1806,35 @@ async def _maybe_rewrite_oracle_copy(
             fallback=anchor_copy,
         )
         return content or anchor_copy
-    except Exception as exc:
-        logger.warning("Oracle Chambers LLM fallback for %s: %s", purpose, exc)
-        return anchor_copy
+    except Exception as structured_exc:
+        try:
+            with llm_request_scope(quota_key=None, purpose=f"{purpose}:plain_text_retry"):
+                import app.services.ending_room_service as _pkg
+                plain_result = await asyncio.wait_for(
+                    _pkg.llm_call(
+                        plain_text_prompt,
+                        reasoning_effort="low",
+                        temperature=0.55,
+                    ),
+                    timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
+                )
+            polished = _strip_oracle_scope_boilerplate(
+                str(plain_result or ""),
+                language=room.language,
+            )
+            content = _normalize_oracle_generated_content(
+                polished,
+                fallback=anchor_copy,
+            )
+            return content or anchor_copy
+        except Exception as plain_exc:
+            logger.warning(
+                "Oracle Chambers LLM fallback for %s: structured=%s ; plain=%s",
+                purpose,
+                structured_exc,
+                plain_exc,
+            )
+            return anchor_copy
 
 
 async def _oracle_followup_streaming_supported() -> bool:
@@ -1569,6 +1867,7 @@ async def _stream_oracle_copy(
     thread_mode: EndingRoomThreadMode | None = None,
     interaction_mode: EndingRoomInteractionMode | None = None,
     recent_lines: list[str] | None = None,
+    context_hint: str | None = None,
     purpose: str,
     on_delta: Callable[[str], Awaitable[None]] | None = None,
 ) -> str:
@@ -1581,6 +1880,7 @@ async def _stream_oracle_copy(
         thread_mode=thread_mode,
         interaction_mode=interaction_mode,
         recent_lines=recent_lines,
+        context_hint=context_hint,
         output_json=False,
     )
     raw_buffer = ""

@@ -43,6 +43,17 @@ npm run build
 npm run preview -- --host 127.0.0.1 --port 18930
 ```
 
+如果要按这轮本地 `uv + vite preview` 口径复核非默认端口：
+
+```bash
+cd backend
+source .venv/bin/activate
+uv run uvicorn --app-dir /absolute/path/to/upgrade-test/backend app.main:app --host 127.0.0.1 --port 19027
+
+cd ../frontend
+SWARM_BACKEND_URL=http://127.0.0.1:19027 npm exec -- vite preview --host 127.0.0.1 --port 19030
+```
+
 ## Docker
 
 ```bash
@@ -440,6 +451,19 @@ node scripts/e2e-worldline-roundtable-suite.mjs full --browser webkit --locale e
 node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-mobile --headless
 ```
 
+如果只想先复核这轮本地修复过的结果页开房、legacy 索引修复和 roundtable transcript/UI 口径，最小命令是：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_ending_room_api.py -q
+python -m pytest tests/test_fallback_migrations.py -k 'legacy_ending_room_scope_unique_index or legacy_ending_room_schema_before_upgrade' -q
+
+cd ../frontend
+npm exec -- tsc -b --pretty false
+npm test -- --run src/pages/WorldlineRoundtableView.test.tsx src/components/EndingChatModal.test.tsx
+```
+
 当前脚本口径：
 
 - `e2e-ending-room-suite.mjs full`
@@ -463,6 +487,7 @@ node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18
     - 复用旧页面前先 revalidate live chamber
     - `Copy / Save / Import` 只在 `.ending-chat-header__actions` 里找
     - readonly replay 必须同时满足 replay URL、Import 可见、composer 不可发
+  - backend `tests/test_fallback_migrations.py` 当前也会单独兜住 legacy `uq_ending_room_scope` 修复；老 SQLite 本地库升级后，再点结果页 `进入会客厅` 不会因为旧唯一索引直接 `500`
   - replay coverage 现在按 fail-closed 收口：
     - artifact/local readonly
     - import

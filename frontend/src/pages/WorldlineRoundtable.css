@@ -376,6 +376,7 @@
 .worldline-roundtable-view.is-live-room .worldline-roundtable-card--summary {
   position: sticky;
   top: 18px;
+  z-index: 2;
   max-height: calc(100vh - 40px);
   overflow: auto;
   overscroll-behavior: contain;
@@ -414,6 +415,11 @@
   flex-wrap: wrap;
 }
 
+.worldline-roundtable-summary__top > div {
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
 .worldline-roundtable-summary__eyebrow {
   display: inline-flex;
   margin-bottom: 6px;
@@ -434,6 +440,7 @@
   margin: 0 0 10px;
   color: var(--text-primary);
   line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .worldline-roundtable-card--summary p {
@@ -755,6 +762,10 @@
   overflow: hidden;
   isolation: isolate;
   transition: border-color 160ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.worldline-roundtable-insight {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .worldline-roundtable-seat::after {

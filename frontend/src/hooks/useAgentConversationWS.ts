@@ -25,13 +25,9 @@ import {
 } from '../lib/reconnectScheduler';
 import type { AgentConversationWSEvent } from '../types';
 
-const DEV_BACKEND_WS_HOST = '127.0.0.1:18927';
 const MAX_RECONNECTS = 6;
 
 function resolveWsHost(): string {
-  if (/^127\.0\.0\.1:(1892[89]|1893[0-9])$/.test(window.location.host)) {
-    return DEV_BACKEND_WS_HOST;
-  }
   return window.location.host;
 }
 

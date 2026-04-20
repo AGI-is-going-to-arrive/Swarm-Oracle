@@ -18,6 +18,7 @@
 - production build 当前会额外产出 legacy bundle，目标口径是 Chrome / Edge 79+、Firefox 78+、Safari / iOS 12+。
 - 本地 Phaser 入口当前不再依赖 top-level `await`，不会把 legacy 构建链卡死。
 - `vite preview` 当前和 `vite dev` 一样会代理 `/api` 和 `/ws`；如果要让 preview 指到指定 backend，启动前设置 `SWARM_BACKEND_URL` 即可。
+- 本地如果用非默认 backend 端口做 preview/browser 复核，`vite preview` 启动时要显式带 `SWARM_BACKEND_URL`；否则 `/api` 和 `/ws` 仍会走默认端口。
 - `Vite manualChunks` 当前显式拆为 `vendor / i18n-vendor / animation-vendor / g6-vendor / radix-vendor / dnd-vendor / icon-vendor / pretext / capture-html / capture-gif`；React 继续留在共享 `vendor`，React Flow 栈继续交给 Rollup 自动分块，不再强行命名 `flow-vendor`，既避开 production preview 启动白屏，也不把 `g6-vendor / capture-html` 拉进首页 preload。`perf:budgets:check` 当前也已经把 React Flow 自动拆出来的 `style / GraphNodeCard / graphTokens / utils` 这批 chunk 纳入门禁，不再只盯手工命名 chunk。
 
 ## 页面地图
@@ -89,6 +90,7 @@
   - 前端实际连接路径是 `/ws/agent-conversation/{thread_id}`
   - 不再误连旧的 `/api/ws/agent-conversation/{thread_id}`
   - 首帧 auth、`auth_ok`、`4001 / 4404` 非重连口径与另外三条 WS 保持一致
+- `useEndingRoomWS` 与 `useAgentConversationWS` 当前都按同源 `window.location.host` 组装 WS host，不再写死本地 dev backend 端口；`19030 -> 19027` 这类 preview/backend 组合下，ending-room / roundtable live 更新也能正常跟上。
 - REST API 路径参数统一使用 `encodeURIComponent()` 编码（约 30 处），防止含特殊字符的 ID 破坏 URL 结构。
 - API client 当前会把首页高级设置里的可选 `Organization ID` 以 session-scoped `X-Org-Id` 请求头透传；留空时不发送。
 - API 客户端对服务端错误文本做脱敏处理（`sanitizeErrorText`），超过 200 字符或包含 stack trace / HTML 的响应会被替换为通用错误信息。

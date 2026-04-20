@@ -27,6 +27,60 @@ from ._utils import (
 )
 
 
+def _branch_pressure_hint(branch: Branch) -> str | None:
+    return _short_persona(
+        (
+            (_parse_key_moments(branch.key_moments) or [None])[0]
+            or branch.insight
+            or branch.story
+            or branch.summary
+            or branch.fork_reason
+        ),
+        limit=96,
+    )
+
+
+def _speaker_snapshot_payload(
+    *,
+    branch: Branch,
+    speaker: dict[str, Any] | None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {
+        "branch_title": branch.title,
+        "branch_probability": branch.probability,
+        "branch_story": _short_persona(branch.story, limit=140),
+        "branch_insight": _short_persona(branch.insight, limit=120),
+        "branch_pressure": _branch_pressure_hint(branch),
+        "branch_key_moments": _parse_key_moments(branch.key_moments)[:3],
+        "fork_reason": _short_persona(branch.fork_reason, limit=96),
+    }
+    if speaker is not None:
+        snapshot.update(
+            {
+                "agent_name": speaker.get("display_name") or "",
+                "agent_role": speaker.get("agent_role") or "",
+                "agent_persona": speaker.get("agent_persona") or "",
+                "agent_stance": speaker.get("agent_stance") or "",
+                "agent_emotion": speaker.get("agent_emotion") or "",
+                "source_type": speaker.get("source_type") or "",
+                "bio_short": speaker.get("bio_short"),
+                "impact_score": speaker.get("impact_score"),
+                "turn_count": speaker.get("turn_count"),
+                "key_moment_hits": speaker.get("key_moment_hits"),
+                "last_round_spoken": speaker.get("last_round_spoken"),
+                "selection_reason": speaker.get("selection_reason"),
+                "fallback_cast": speaker.get("fallback_cast", False),
+                "tier": speaker.get("tier"),
+                "opening_quote": speaker.get("opening_quote"),
+                "latest_quote": speaker.get("latest_quote"),
+            }
+        )
+    if extra:
+        snapshot.update(extra)
+    return snapshot
+
+
 def _visible_branch_agents(
     session: Session,
     scenario_id: str,
@@ -58,10 +112,17 @@ def _visible_branch_agents(
                 "turn_count": 0,
                 "key_moment_hits": 0,
                 "last_round_spoken": 0,
+                "opening_quote": None,
+                "latest_quote": None,
             },
         )
         stats["turn_count"] += 1
         stats["last_round_spoken"] = max(stats["last_round_spoken"], int(round_number or 0))
+        compact_quote = _short_persona(str(content or "").strip(), limit=120)
+        if compact_quote:
+            if not stats["opening_quote"]:
+                stats["opening_quote"] = compact_quote
+            stats["latest_quote"] = compact_quote
         normalized_content = str(content or "").lower()
         if key_moments and any(moment in normalized_content for moment in key_moments):
             stats["key_moment_hits"] += 1
@@ -85,11 +146,16 @@ def _visible_branch_agents(
                     "display_name": agent.name if agent is not None else unknown_name,
                     "agent_role": agent.role if agent is not None else "",
                     "agent_persona": agent.persona if agent is not None else "",
+                    "agent_stance": agent.stance if agent is not None else "",
+                    "agent_emotion": agent.emotion if agent is not None else "",
+                    "source_type": agent.source_type if agent is not None else "",
                     "bio_short": _short_persona(agent.persona if agent is not None else None),
                     "tier": tier,
                     "turn_count": int(stats["turn_count"]),
                     "key_moment_hits": int(stats["key_moment_hits"]),
                     "last_round_spoken": int(stats["last_round_spoken"]),
+                    "opening_quote": stats.get("opening_quote"),
+                    "latest_quote": stats.get("latest_quote"),
                     "fallback_cast": False,
                     "selection_reason": "top_impact",
                     "_raw_score": raw_score,
@@ -111,11 +177,16 @@ def _visible_branch_agents(
                     "display_name": agent.name,
                     "agent_role": agent.role,
                     "agent_persona": agent.persona,
+                    "agent_stance": agent.stance,
+                    "agent_emotion": agent.emotion,
+                    "source_type": agent.source_type or "",
                     "bio_short": _short_persona(agent.persona),
                     "tier": getattr(agent.tier, "value", agent.tier),
                     "turn_count": 0,
                     "key_moment_hits": 0,
                     "last_round_spoken": 0,
+                    "opening_quote": None,
+                    "latest_quote": None,
                     "fallback_cast": True,
                     "selection_reason": "fallback",
                     "_raw_score": raw_score,
@@ -191,31 +262,12 @@ def _roundtable_representative_def(
         }
     else:
         speaker = branch_agents[0] if branch_agents else None
-    persona_snapshot = {
-        "branch_title": branch.title,
-        "branch_probability": branch.probability,
-    }
-    if speaker is not None:
-        persona_snapshot.update(
-            {
-                "agent_role": speaker.get("agent_role") or "",
-                "agent_persona": speaker.get("agent_persona") or "",
-                "bio_short": speaker.get("bio_short"),
-                "impact_score": speaker.get("impact_score"),
-                "turn_count": speaker.get("turn_count"),
-                "key_moment_hits": speaker.get("key_moment_hits"),
-                "last_round_spoken": speaker.get("last_round_spoken"),
-                "selection_reason": speaker.get("selection_reason"),
-                "fallback_cast": speaker.get("fallback_cast", False),
-                "tier": speaker.get("tier"),
-            }
-        )
     return {
         "role_slot": EndingRoomRoleSlot.REPRESENTATIVE.value,
         "display_name": f"{speaker['display_name']} · {branch.title}" if speaker else branch.title,
         "source_branch_id": branch.id,
         "source_agent_id": speaker["source_agent_id"] if speaker else None,
-        "persona_snapshot_json": persona_snapshot,
+        "persona_snapshot_json": _speaker_snapshot_payload(branch=branch, speaker=speaker),
         "visibility_scope_json": {
             "fulltext_branch_ids": [branch.id],
             "summary_branch_ids": [item for item in selected_branch_ids if item != branch.id],
@@ -263,19 +315,14 @@ def _roundtable_witness_def(
         "display_name": speaker["display_name"],
         "source_branch_id": branch.id,
         "source_agent_id": str(speaker["source_agent_id"]),
-        "persona_snapshot_json": {
-            "agent_role": speaker.get("agent_role") or "",
-            "agent_persona": speaker.get("agent_persona") or "",
-            "bio_short": speaker.get("bio_short"),
-            "impact_score": speaker.get("impact_score"),
-            "turn_count": speaker.get("turn_count"),
-            "key_moment_hits": speaker.get("key_moment_hits"),
-            "last_round_spoken": speaker.get("last_round_spoken"),
-            "selection_reason": selection_reason,
-            "fallback_cast": speaker.get("fallback_cast", False),
-            "tier": speaker.get("tier"),
-            "witness_branch_title": branch.title,
-        },
+        "persona_snapshot_json": _speaker_snapshot_payload(
+            branch=branch,
+            speaker={
+                **speaker,
+                "selection_reason": selection_reason,
+            },
+            extra={"witness_branch_title": branch.title},
+        ),
         "visibility_scope_json": {
             "fulltext_branch_ids": [branch.id],
             "summary_branch_ids": [item for item in selected_branch_ids if item != branch.id],
@@ -393,18 +440,10 @@ def _participant_defs(
                     "display_name": speaker["display_name"],
                     "source_branch_id": anchor_branch_id,
                     "source_agent_id": speaker_id,
-                    "persona_snapshot_json": {
-                        "agent_role": speaker.get("agent_role") or "",
-                        "agent_persona": speaker.get("agent_persona") or "",
-                        "bio_short": speaker.get("bio_short"),
-                        "impact_score": speaker.get("impact_score"),
-                        "turn_count": speaker.get("turn_count"),
-                        "key_moment_hits": speaker.get("key_moment_hits"),
-                        "last_round_spoken": speaker.get("last_round_spoken"),
-                        "selection_reason": speaker.get("selection_reason"),
-                        "fallback_cast": speaker.get("fallback_cast", False),
-                        "tier": speaker.get("tier"),
-                    },
+                    "persona_snapshot_json": _speaker_snapshot_payload(
+                        branch=branch_map[anchor_branch_id],
+                        speaker=speaker,
+                    ),
                     "visibility_scope_json": {
                         "fulltext_branch_ids": [anchor_branch_id],
                         "summary_branch_ids": [],
@@ -459,4 +498,3 @@ def _sort_room_participants(
             participant.id,
         ),
     )
-

@@ -70,6 +70,7 @@
 
 - 短链 replay 通过 `ReplayArtifact` 持久化。
 - SQLite 数据库如果是“由 lightweight bootstrap / `SQLModel.metadata.create_all()` 建出来、但还没有 `alembic_version`”的旧库，`init_db()` 当前会先 `stamp` 到当前 head，再执行 upgrade；不会再重放初始迁移把已有表撞成 `table already exists`。
+- SQLite 本地旧库如果还留着 legacy `uq_ending_room_scope` 唯一索引（`scenario_id + anchor_branch_id + room_type + participant_set_hash`），`init_db()` 当前也会在 lightweight fallback 和 Alembic upgrade 后统一修回 `scope_fingerprint`；generation 升级后再点结果页 `进入会客厅 / 异线旁听席` 不会再因为旧索引直接 `500`。
 - `counterfactual` 与 `resume` 当前共用独立的 replay branch runtime lock；慢 clone / seed 路径也会续租，不再只在短请求里可靠。
 - `resume` 当前会先完成 scenario/source branch/round 校验，再尝试 replay branch lock；这些前置校验失败不会占用 replay branch lock。
 - replay branch runtime lock 当前按 fail-closed 收口：
@@ -107,6 +108,7 @@
 - `ending_room` 是独立域。
 - room、thread、participant、turn 都在独立表中维护。
 - room/thread transcript 与 memory partition 隔离，不与主模式消息链混用。
+- `create_ending_room()` 当前会把 `generation_version` 并入 scope 去重；旧 generation 的 room 不会再被结果页或 roundtable 新入口复用。
 - `ending_room_turn.question_anchor_ids_json`
   当前已用于显式记录 `quote / verdict / key_moment / phase` 等锚点来源。
 - `ending_room_thread.question_anchor_ids_json`
@@ -116,6 +118,8 @@
   - `epilogue`：后续三回合短叙事推演，不重启主 simulation。
   - `evidence_card`：把另一条世界线的摘要卡引入当前讨论，由档案官解释差异。
 - `create_ending_room_thread()` 当前会在创建阶段校验 room type 与 `interaction_mode` 的组合是否合法；例如 `worldline_roundtable` 不会再先落库一个从一开始就不可用的 `all_present` thread。
+- Oracle 的 participant snapshot 当前会带 `agent_name / agent_role / agent_persona / agent_stance / agent_emotion / tier / impact_score / branch_pressure / latest_quote / opening_quote / source_type`，供 ending-room / roundtable 的 LLM 生成直接消费。
+- `ending-room / roundtable` 的主文案生成当前走 `LLM first, template fallback`：先 structured LLM，再 plain-text retry，最后才回 deterministic fallback；模板不再是主路径。
 - Oracle 改写 prompt 当前包含双层角色化词汇提示（`_oracle_vocabulary_hints()`）：
   - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science，共 13 种）提供领域专属术语、句式风格和情绪基调。已知限制：子串匹配可能造成少量误分类（如 warlord→imperial via "lord"）。
   - 身份层：从 `persona_snapshot_json` 中提取 agent 的实际身份（`agent_role`）、简介（`bio_short`）、影响力（`impact_score`）、叙事地位（`tier`）和推演参与度（`turn_count / key_moment_hits`），动态生成 identity 提示。
@@ -199,7 +203,7 @@
   - assistant follow-up turn 在真正落库时重新分配最终 `sequence`
   - 这样并发 follow-up 不会继续复用旧序号窗口
 - 只要 follow-up 已经发出 `ending_room_turn_start`，后续无论是 partial stream 中断，还是后面的 rewrite / commit 失败，都会补 `ending_room_turn_error`；payload 当前带 `message / error / code / recoverable`，前端可据此清理 draft 而不把整 room 升成 fatal error。
-- Oracle auto-recap 的静态改写当前已接到 `stream-first + non-stream fallback` helper；follow-up / thread 仍走独立流式状态机，不和 auto-recap 共用同一条改写调度逻辑。
+- Oracle auto-recap 的静态改写当前已接到 `stream-first + non-stream fallback` helper；structured LLM 失败后会先做 plain-text retry，再退 deterministic fallback。follow-up / thread 仍走独立流式状态机，不和 auto-recap 共用同一条改写调度逻辑。
 - SQLite 当前默认启用 WAL 模式（`journal_mode=WAL`）和 `busy_timeout=5000`，缓解并发写入冲突。内存数据库会跳过 WAL 设置。
 - `causal_graph.append_round_nodes()` 当前对同一 `branch / round` 的重复追加是幂等的：
   - 同一 agent 同 round 多条消息会用最后一条覆盖 `AgentStateFrame`

@@ -8,12 +8,8 @@ import type { EndingRoomWSEvent } from '../types';
 const BASE_RECONNECT_DELAY = 1500;
 const MAX_RECONNECT_DELAY = 12000;
 const MAX_RECONNECTS = 5;
-const DEV_BACKEND_WS_HOST = '127.0.0.1:18927';
 
 function resolveEndingRoomWsHost() {
-  if (/^127\.0\.0\.1:(1892[89]|1893[0-9])$/.test(window.location.host)) {
-    return DEV_BACKEND_WS_HOST;
-  }
   return window.location.host;
 }
 

@@ -330,6 +330,64 @@ def test_init_db_stamps_legacy_ending_room_schema_before_upgrade(tmp_path, monke
     database_module.dispose_engine()
 
 
+def test_init_db_repairs_legacy_ending_room_scope_unique_index(tmp_path, monkeypatch):
+    """Fallback init_db should replace old ending_room unique scope indexes."""
+    from app.config import settings
+    from app.models import database as database_module
+    from app.models.ending_room import (
+        EndingRoom,
+        EndingRoomParticipant,
+        EndingRoomThread,
+        EndingRoomTurn,
+    )
+
+    alembic_runtime = database_module._load_alembic_runtime()
+    if alembic_runtime is None:
+        pytest.skip("Alembic runtime is not available in this interpreter")
+    Config, command, _ScriptDirectory = alembic_runtime
+
+    db_path = tmp_path / "legacy-ending-room-scope-index.db"
+    db_url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+    database_module.dispose_engine()
+
+    _backend_root, alembic_config = _build_alembic_config(database_module, Config, db_url)
+    command.upgrade(alembic_config, "016_checkpoint_faction_argument_tables")
+
+    legacy_engine = create_engine(db_url)
+    for table in (
+        EndingRoom.__table__,
+        EndingRoomParticipant.__table__,
+        EndingRoomThread.__table__,
+        EndingRoomTurn.__table__,
+    ):
+        table.create(legacy_engine, checkfirst=True)
+    with legacy_engine.begin() as conn:
+        conn.execute(text("DROP INDEX IF EXISTS uq_ending_room_scope"))
+        conn.execute(
+            text(
+                """
+                CREATE UNIQUE INDEX uq_ending_room_scope
+                ON ending_room (scenario_id, anchor_branch_id, room_type, participant_set_hash)
+                """
+            )
+        )
+    legacy_engine.dispose()
+
+    database_module.init_db()
+
+    with database_module.get_engine().connect() as conn:
+        index_columns = [
+            row[2]
+            for row in conn.execute(text("PRAGMA index_info('uq_ending_room_scope')")).fetchall()
+        ]
+
+    assert index_columns == ["scope_fingerprint"]
+
+    database_module.dispose_engine()
+
+
 def test_init_db_stamps_lightweight_bootstrap_schema_without_alembic_version(
     tmp_path,
     monkeypatch,

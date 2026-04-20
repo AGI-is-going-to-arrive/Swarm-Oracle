@@ -22,6 +22,7 @@ _ENDING_ROOM_PREVIOUS_REVISION = "016_checkpoint_faction_argument_tables"
 _ENDING_ROOM_REVISION = "017_add_ending_room_tables"
 _DEBATE_ARGUMENT_UNIT_TARGET_UNIQUE_COLUMNS = ("debate_id", "turn_id", "semantic_hash")
 _DEBATE_ARGUMENT_UNIT_LEGACY_UNIQUE_COLUMNS = ("debate_id", "semantic_hash")
+_ENDING_ROOM_SCOPE_UNIQUE_COLUMNS = ("scope_fingerprint",)
 _ENDING_ROOM_SCHEMA_COLUMNS = {
     "ending_room": {
         "scenario_id",
@@ -516,7 +517,7 @@ def _init_db_lightweight() -> None:
                 conn,
                 "ending_room",
                 "uq_ending_room_scope",
-                ["scenario_id", "room_type", "participant_set_hash", "language"],
+                list(_ENDING_ROOM_SCOPE_UNIQUE_COLUMNS),
             )
             _migrate_create_index(
                 conn,
@@ -674,6 +675,17 @@ def init_db():
         )
         command.stamp(config, bootstrap_revision)
     command.upgrade(config, "head")
+    if settings.DATABASE_URL.startswith("sqlite"):
+        try:
+            with get_engine().begin() as conn:
+                _migrate_create_unique_index(
+                    conn,
+                    "ending_room",
+                    "uq_ending_room_scope",
+                    list(_ENDING_ROOM_SCOPE_UNIQUE_COLUMNS),
+                )
+        except Exception as exc:
+            logger.warning("SQLite post-upgrade index repair failed (best-effort): %s", exc)
 
 
 def _sqlite_exec(handle: Any, statement: str):
@@ -919,10 +931,25 @@ def _migrate_create_index(cursor, table: str, index_name: str, columns: list[str
 
 
 def _migrate_create_unique_index(cursor, table: str, index_name: str, columns: list[str]) -> None:
-    """Create a unique index if it doesn't already exist (SQLite only)."""
+    """Create or repair a unique index for SQLite fallback migrations."""
     for identifier in (table, index_name, *columns):
         if not _SAFE_IDENTIFIER.match(identifier):
             raise ValueError(f"Unsafe SQL identifier rejected: {identifier!r}")
+    expected_columns = tuple(columns)
+    index_rows = _sqlite_exec(cursor, f"PRAGMA index_list('{table}')").fetchall()
+    for row in index_rows:
+        existing_name = row[1]
+        is_unique = bool(row[2])
+        if existing_name != index_name:
+            continue
+        existing_columns = tuple(
+            column_row[2]
+            for column_row in _sqlite_exec(cursor, f"PRAGMA index_info('{index_name}')").fetchall()
+        )
+        if is_unique and existing_columns == expected_columns:
+            return
+        _sqlite_exec(cursor, f"DROP INDEX IF EXISTS {index_name}")
+        break
     column_sql = ", ".join(columns)
     _sqlite_exec(
         cursor,

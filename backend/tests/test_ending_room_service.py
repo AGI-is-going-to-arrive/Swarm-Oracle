@@ -20,6 +20,7 @@ from app.models import (
     EndingRoomInteractionMode,
     EndingRoomParticipant,
     EndingRoomPhase,
+    EndingRoomRoleSlot,
     EndingRoomThread,
     EndingRoomTurn,
     EndingRoomTurnSource,
@@ -31,6 +32,7 @@ from app.models import (
 from app.models.database import get_engine
 from app.services.ending_room_service import (
     EndingRoomServiceError,
+    _maybe_rewrite_oracle_copy,
     _build_oracle_rewrite_prompt,
     _build_room_plan,
     _build_roundtable_opening_content,
@@ -591,6 +593,57 @@ def test_worldline_roundtable_reuse_updates_selection_recipe_metadata():
     assert reused_snapshot["selection_recipe"] == "trait_mix"
 
 
+def test_worldline_roundtable_does_not_reuse_legacy_generation_room():
+    scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
+
+    legacy_snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        selected_representatives=[
+            {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+            {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+        ],
+        selection_recipe="representative",
+        language="en",
+    )
+
+    assert created is True
+
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, legacy_snapshot["id"])
+        assert room is not None
+        room.scope_fingerprint = f"legacy-scope-{room.id}"
+        room.config_json = {
+            **(room.config_json or {}),
+            "generation_version": 1,
+        }
+        session.add(room)
+        session.commit()
+
+    regenerated_snapshot, regenerated_created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_b_id, branch_a_id],
+        selected_representatives=[
+            {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+            {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+        ],
+        selection_recipe="representative",
+        language="en",
+    )
+
+    assert regenerated_created is True
+    assert regenerated_snapshot["id"] != legacy_snapshot["id"]
+
+    with Session(get_engine()) as session:
+        regenerated_room = session.get(EndingRoom, regenerated_snapshot["id"])
+        assert regenerated_room is not None
+        assert (regenerated_room.config_json or {}).get("generation_version") == 4
+
+
 def test_worldline_roundtable_trait_mix_marks_selection_reason():
     scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
 
@@ -781,7 +834,175 @@ def test_roundtable_opening_english_falls_back_to_english_hinges_when_source_cop
     assert "调度失误" not in opening
     assert "命令链" not in opening
     assert "this ending" in opening
-    assert "first decisive hinge" in opening
+    assert "first decisive hinge" not in opening
+    assert (
+        "line of cause and cost" in opening
+        or "first real slip" in opening
+        or "hinge gave way" in opening
+    )
+
+
+def test_roundtable_opening_english_field_voice_uses_role_specific_hook_when_branch_copy_is_cjk():
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot="representative",
+        display_name="Stilicho",
+        source_branch_id="branch-1",
+        source_agent_id="agent-1",
+        persona_snapshot_json={"agent_role": "西部最高统帅"},
+    )
+
+    opening = _build_roundtable_opening_content(
+        {
+            "title": "调度失误",
+            "story": "一次调度失误在军权与文书之间撕开裂口。",
+            "insight": "真正关键的是谁先抓住命令链。",
+            "key_moments": ["先封住命令链"],
+        },
+        participant=participant,
+        language="en",
+    )
+
+    assert "调度失误" not in opening
+    assert "命令链" not in opening
+    assert "first decisive hinge" not in opening
+    assert (
+        "front line" in opening
+        or "rotation and supply" in opening
+        or "shield line" in opening
+    )
+
+
+def test_worldline_roundtable_snapshot_carries_branch_pressure_and_source_quote():
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+
+    with Session(get_engine()) as session:
+        agent = session.get(Agent, agent_ids[0])
+        assert agent is not None
+        agent.stance = "先封住命令链，再谈补救"
+        session.add(agent)
+        session.commit()
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_id],
+        selected_representatives=[{"branch_id": branch_id, "agent_id": agent_ids[0]}],
+        language="zh",
+    )
+
+    assert created is True
+    representative = next(
+        participant
+        for participant in snapshot["participants"]
+        if participant["role_slot"] == "representative"
+    )
+    persona_snapshot = representative["persona_snapshot_json"]
+    assert persona_snapshot["branch_pressure"]
+    assert persona_snapshot["latest_quote"]
+    assert persona_snapshot["agent_stance"] == "先封住命令链，再谈补救"
+    assert persona_snapshot["agent_name"] == "狄奥多西一世"
+
+
+def test_oracle_vocabulary_hints_uses_real_tier_and_normalized_impact_scale():
+    hint = _oracle_vocabulary_hints(
+        EndingRoomRoleSlot.REPRESENTATIVE,
+        "field",
+        "en",
+        {
+            "agent_role": "Marshal",
+            "bio_short": "Keeps the line intact under pressure.",
+            "impact_score": 0.92,
+            "tier": "CORE",
+            "branch_pressure": "the shield line had to hold without depth",
+        },
+    )
+
+    assert "High-impact participant" in hint
+    assert "core figure" in hint
+    assert "Low-impact participant" not in hint
+    assert "under pressure" in hint
+
+
+def test_oracle_rewrite_prompt_keeps_raw_identity_context_for_english_roundtable():
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Worldline Roundtable",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name="Stilicho",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={
+            "agent_role": "西部最高统帅",
+            "agent_persona": "优先接管军权，再谈边防补救",
+            "branch_pressure": "先封住命令链",
+            "latest_quote": "先扣住军饷和军旗，别让别人接走这支队伍。",
+            "tier": "CORE",
+            "impact_score": 0.91,
+        },
+    )
+
+    prompt = _build_oracle_rewrite_prompt(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.OPENING,
+        anchor_copy="I speak for this ending: the line collapsed first.",
+        output_json=False,
+    )
+
+    assert "agent_role_source=西部最高统帅" in prompt
+    assert "persona_hint_source=优先接管军权，再谈边防补救" in prompt
+    assert "branch_pressure_source=先封住命令链" in prompt
+    assert "source_quote_source=先扣住军饷和军旗，别让别人接走这支队伍。" in prompt
+
+
+def test_oracle_rewrite_uses_plain_text_retry_before_template_fallback(monkeypatch):
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Worldline Roundtable",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name="Stilicho",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={"agent_role": "Marshal", "bio_short": "Keeps the front intact.", "tier": "CORE", "impact_score": 0.9},
+    )
+
+    async def _broken_json(*args, **kwargs):
+        raise RuntimeError("json failed")
+
+    async def _plain_retry(*args, **kwargs):
+        return "The front line broke before the court found words for the damage."
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "llm_call_json", _broken_json)
+    monkeypatch.setattr(ending_room_service_module, "llm_call", _plain_retry)
+
+    content = asyncio.run(
+        _maybe_rewrite_oracle_copy(
+            room=room,
+            participant=participant,
+            phase=EndingRoomPhase.OPENING,
+            anchor_copy="anchor fallback",
+            purpose="test_plain_text_retry",
+        )
+    )
+
+    assert content == "The front line broke before the court found words for the damage."
 
 
 def test_one_move_only_english_copy_does_not_embed_cjk_hinges_or_persona_lines():
@@ -1108,6 +1329,60 @@ def test_worldline_roundtable_background_keeps_summary_only_crossline_scope():
     assert len(set(opening_turns)) == len(opening_turns)
     assert any("秩序线摘要" in content or "秩序线" in content for content in opening_turns)
     assert any("裂变线摘要" in content or "裂变线" in content for content in opening_turns)
+
+
+def test_worldline_roundtable_background_prefers_llm_for_each_turn_and_keeps_closing_note(monkeypatch):
+    scenario_id, branch_a_id, branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        language="zh",
+    )
+    assert created is True
+
+    prompts: list[str] = []
+
+    async def _fake_llm_call(prompt, *args, **kwargs):
+        prompts.append(prompt)
+        if "phase=opening" in prompt and "worldline_title=秩序线" in prompt:
+            return {"content": "秩序线代表：先松掉的是命令链，不是结局标签。"}
+        if "phase=opening" in prompt and "worldline_title=裂变线" in prompt:
+            return {"content": "裂变线代表：先失守的是财政解释权，后面才会越滚越远。"}
+        if "phase=closing" in prompt:
+            return {"content": "档案官：先把两条线最早失手的地方并排摆清，再决定该追哪一手。"}
+        if "phase=verdict" in prompt:
+            return {"content": "圆桌结论：真正把差距拉开的，是谁先把关键一手放走。"}
+        raise AssertionError(f"unexpected prompt: {prompt}")
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "llm_call_json_with_stream_fallback",
+        _fake_llm_call,
+    )
+
+    payload = asyncio.run(_run_room(snapshot["id"], AsyncMock(side_effect=_noop_broadcast)))
+
+    assert len(payload["turns"]) == 4
+    opening_turns = [
+        turn["content"]
+        for turn in payload["turns"]
+        if turn["phase"] == "opening"
+    ]
+    assert sorted(opening_turns) == sorted([
+        "秩序线代表：先松掉的是命令链，不是结局标签。",
+        "裂变线代表：先失守的是财政解释权，后面才会越滚越远。",
+    ])
+    assert next(turn["content"] for turn in payload["turns"] if turn["phase"] == "closing") == "档案官：先把两条线最早失手的地方并排摆清，再决定该追哪一手。"
+    assert next(turn["content"] for turn in payload["turns"] if turn["phase"] == "verdict") == "圆桌结论：真正把差距拉开的，是谁先把关键一手放走。"
+    assert payload["result"]["summary"] == "圆桌结论：真正把差距拉开的，是谁先把关键一手放走。"
+    assert payload["result"]["archivist_note"] == "档案官：先把两条线最早失手的地方并排摆清，再决定该追哪一手。"
+    assert len(prompts) == 4
+    assert any("worldline_story=" in prompt for prompt in prompts)
+    assert any("importance_score=" in prompt for prompt in prompts)
+    assert any("other_worldlines=" in prompt for prompt in prompts)
 
 
 def test_roundtable_snapshot_keeps_representatives_in_scope_order():
@@ -1517,6 +1792,43 @@ def test_followup_prefers_llm_copy_when_enabled(monkeypatch):
     assert any("先让他把这句掰开讲" in text for text in response_texts)
 
 
+def test_followup_llm_prompt_includes_persona_story_and_evidence_context(monkeypatch):
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=agent_ids[:2],
+        language="zh",
+    )
+    assert created is True
+
+    prompts: list[str] = []
+
+    async def _fake_llm_call_json(prompt, *args, **kwargs):
+        prompts.append(prompt)
+        return {"content": "档案官：我先把这一下钉住，再让他把代价讲透。"}
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "probe_streaming_support", AsyncMock(return_value={"supported": False}))  # noqa: E501
+    monkeypatch.setattr(ending_room_service_module, "llm_call_json", _fake_llm_call_json)
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
+    append_room_user_turn(
+        snapshot["id"],
+        content="为什么这里会转向？",
+        addressed_agent_ids=[agent_ids[0]],
+        interaction_mode=EndingRoomInteractionMode.HOTSEAT,
+    )
+
+    assert prompts
+    assert any("worldline_story=" in prompt for prompt in prompts)
+    assert any("importance_score=" in prompt for prompt in prompts)
+    assert any("evidence_hook=" in prompt for prompt in prompts)
+    assert any("user_question=为什么这里会转向？" in prompt for prompt in prompts)
+
+
 def test_followup_falls_back_when_stream_probe_reports_unsupported(monkeypatch):
     scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
     snapshot, created = create_ending_room(
@@ -1860,12 +2172,17 @@ def test_run_ending_room_background_falls_back_when_llm_rewrite_fails(monkeypatc
         "llm_call_json_with_stream_fallback",
         _boom,
     )
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "llm_call",
+        _boom,
+    )
 
     asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
     payload = load_ending_room_result_payload(snapshot["id"])
 
     assert "别再把这一步说成命运" not in payload["result"]["summary"]
-    assert "档案官结论" in payload["result"]["summary"]
+    assert "档案官" in payload["result"]["summary"]
 
 
 def test_run_ending_room_background_recovers_from_partial_auto_recap_progress():
@@ -2365,11 +2682,11 @@ def test_vocabulary_hints_identity_layer_low_impact_zh():
         ending_room_service_module.EndingRoomRoleSlot.AGENT,
         "market",
         "zh",
-        persona_snapshot={"agent_role": "码头搬运工", "bio_short": "靠日结工资生活", "impact_score": 2, "tier": "minor"},  # noqa: E501
+        persona_snapshot={"agent_role": "码头搬运工", "bio_short": "靠日结工资生活", "impact_score": 0.2, "tier": "CROWD"},  # noqa: E501
     )
     assert "码头搬运工" in hint
     assert "谨慎" in hint
-    assert "边缘人物" in hint
+    assert "边缘角色" in hint
     assert "进货价" in hint  # domain palette still present
 
 

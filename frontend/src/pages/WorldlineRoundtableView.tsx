@@ -109,6 +109,30 @@ function getPreferredScrollBehavior(): ScrollBehavior {
   return 'smooth';
 }
 
+function buildPhaseInsightLabel(
+  insight: { phase: string; commentary?: string; stakes?: string },
+  options: {
+    isZh: boolean;
+    t: (key: string) => string;
+  },
+) {
+  const { isZh, t } = options;
+  const phaseLabel = getEndingRoomPhaseLabel(insight.phase as never, t);
+  const normalizedCommentary = String(insight.commentary ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalizedCommentary) {
+    return phaseLabel;
+  }
+  const firstSentence = normalizedCommentary.split(/[。！？!?]/)[0]?.trim() ?? '';
+  const firstClause = firstSentence.split(/[:：]/)[0]?.trim() ?? '';
+  const rawDetail = (firstClause || firstSentence || String(insight.stakes ?? '').trim()).trim();
+  if (!rawDetail || rawDetail === phaseLabel || rawDetail === insight.stakes) {
+    return phaseLabel;
+  }
+  const maxLength = isZh ? 18 : 30;
+  const clipped = rawDetail.length > maxLength ? `${rawDetail.slice(0, maxLength).trimEnd()}…` : rawDetail;
+  return `${phaseLabel} · ${clipped}`;
+}
+
 export default function WorldlineRoundtableView() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
@@ -851,6 +875,7 @@ export default function WorldlineRoundtableView() {
         (effectiveResult?.phase_insights ?? []).map((insight) => ({
           phase: insight.phase,
           stakes: insight.stakes,
+          commentary: insight.commentary,
         })),
         thread.turns.map((turn) => ({ key: turn.id, content: turn.content })),
         t,
@@ -881,15 +906,20 @@ export default function WorldlineRoundtableView() {
     }),
     [effectiveSnapshot?.id, isZh, verdictPrompt],
   );
+  const hasDistinctArchivistNote = useMemo(() => {
+    const summary = String(effectiveResult?.summary ?? '').trim();
+    const note = String(effectiveResult?.archivist_note ?? '').trim();
+    return Boolean(note) && note !== summary;
+  }, [effectiveResult?.archivist_note, effectiveResult?.summary]);
   const phaseActionPrompts = useMemo(
     () => (effectiveResult?.phase_insights ?? []).map((insight, index) => {
-      const label = getEndingRoomPhaseLabel(insight.phase, t);
+      const label = buildPhaseInsightLabel(insight, { isZh, t });
       return {
         key: `${insight.phase}-${index}`,
         label,
         action: {
           anchorIds: [buildRoundtableAnchorId('phase', effectiveSnapshot?.id ?? 'table', `${insight.phase}-${index}`)],
-          prompt: buildRoundtablePhasePrompt(label, insight.stakes, isZh),
+          prompt: buildRoundtablePhasePrompt(label, insight.commentary || insight.stakes, isZh),
           threadTitle: label,
         } satisfies AnchorAction,
       };
@@ -909,13 +939,13 @@ export default function WorldlineRoundtableView() {
     if (effectiveResult?.summary) {
       lines.push('', isZh ? '## 档案总结' : '## Archivist Verdict', effectiveResult.summary);
     }
-    if (effectiveResult?.archivist_note) {
+    if (hasDistinctArchivistNote && effectiveResult?.archivist_note) {
       lines.push('', isZh ? '## 档案官注记' : '## Archivist Note', effectiveResult.archivist_note);
     }
     if ((effectiveResult?.phase_insights?.length ?? 0) > 0) {
       lines.push('', isZh ? '## 阶段洞察' : '## Phase Insights');
       (effectiveResult?.phase_insights ?? []).slice(0, 3).forEach((insight) => {
-        lines.push(`- ${getEndingRoomPhaseLabel(insight.phase, t)}: ${insight.stakes}`);
+        lines.push(`- ${buildPhaseInsightLabel(insight, { isZh, t })}: ${insight.commentary || insight.stakes}`);
       });
     }
     if (representatives.length > 0) {
@@ -925,7 +955,7 @@ export default function WorldlineRoundtableView() {
       });
     }
     return lines.join('\n');
-  }, [effectiveResult?.archivist_note, effectiveResult?.phase_insights, effectiveResult?.summary, isZh, representatives, storyData?.question, t, transcriptSubtitle]);
+  }, [effectiveResult?.archivist_note, effectiveResult?.phase_insights, effectiveResult?.summary, hasDistinctArchivistNote, isZh, representatives, storyData?.question, t, transcriptSubtitle]);
 
   const handleCopyBrief = useCallback(async () => {
     if (!meetingBrief) return;
@@ -1647,10 +1677,9 @@ export default function WorldlineRoundtableView() {
               <span>{isZh ? '只允许本桌追问' : 'Scope stays inside this table'}</span>
             </div>
             <p className="worldline-roundtable-hero__stage-note">
-              {effectiveResult?.archivist_note
-                ?? (isZh
-                  ? '继续追问时，只允许读取本桌 transcript 与已归档的多线摘要。'
-                  : 'Follow-up turns only read the current table transcript and archived crossline summaries.')}
+              {isZh
+                ? '继续追问时，只允许读取本桌 transcript 与已归档的多线摘要。'
+                : 'Follow-up turns only read the current table transcript and archived crossline summaries.'}
             </p>
           </div>
         </div>
@@ -1713,7 +1742,6 @@ export default function WorldlineRoundtableView() {
                 </div>
                 {renderSummaryActions()}
               </div>
-              {effectiveResult?.archivist_note && <p>{effectiveResult.archivist_note}</p>}
             </section>
 
             <section className="worldline-roundtable-card">
@@ -1844,11 +1872,11 @@ export default function WorldlineRoundtableView() {
                   {effectiveResult.phase_insights.map((insight, index) => (
                     <AccordionItem key={`${insight.phase}-${index}`} value={`${insight.phase}-${index}`}>
                       <AccordionTrigger>
-                        {getEndingRoomPhaseLabel(insight.phase, t)}
+                        {buildPhaseInsightLabel(insight, { isZh, t })}
                       </AccordionTrigger>
                       <AccordionContent>
                         <article className="worldline-roundtable-insight">
-                          <p>{insight.stakes}</p>
+                          <p>{insight.commentary || insight.stakes}</p>
                           {!replayPayload && (
                             <div className="worldline-roundtable-insight__actions">
                               <button
@@ -1886,7 +1914,7 @@ export default function WorldlineRoundtableView() {
                 {effectiveResult.next_move && (
                   <p className="worldline-roundtable-synthesis__next-move">{effectiveResult.next_move}</p>
                 )}
-                {effectiveResult.archivist_note && (
+                {hasDistinctArchivistNote && effectiveResult.archivist_note && (
                   <p className="worldline-roundtable-synthesis__note">{effectiveResult.archivist_note}</p>
                 )}
                 {isLiveRoom && isMobileViewport && renderSummaryActions(

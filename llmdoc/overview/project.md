@@ -100,6 +100,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - roundtable 的 readonly replay 当前会跟随 `active_thread_id` 恢复对应 thread 语义；若落在 `hotseat` follow-up，页面不会再退回成 `archivist_route`。
 - mobile roundtable artifact replay readonly 当前也会跟随 active replay thread 恢复 `interaction_mode`，不再在自动化口径里卡成 `archivist_route`。
 - roundtable 的 scoped regression 当前已覆盖 Chromium 桌面/移动，以及桌面 Firefox / WebKit；`reseat / keyboard reseat / anchored thread / hotseat / witness_augmented / readonly replay` 口径与 Chromium 对齐。
+- `ending-room / roundtable` 的主文案当前已改成 `LLM first, template fallback`：participant snapshot 会直接带 `agent_role / agent_persona / bio_short / impact_score / branch_pressure`，provider 慢或失败时才退 deterministic fallback，不再默认先落模板再改写。
 - ending-room 后台生成当前也持有 runtime lock heartbeat；续租返回 `None`、续租抛异常，或 lease 过期时，会直接 fail-closed 把 room 落成 `error`，不会失锁后继续写 turn 或 result。
 - Oracle 页面当前按用户正在使用的 UI 语言渲染界面壳，不再强制跟随 `scenario.language` 覆盖全局语言开关。
 - Oracle fresh live room 的英文 deterministic copy 当前已补去混句兜底，不再把中文 hinge 直接嵌进英文句子；fresh live 的节点对话、KG Explorer 与 replay-view 浏览器链路本轮也已复核通过。
@@ -149,6 +150,9 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - `replay-view-live`
   - graph script contract：`node --test scripts/e2e-frontend-preflight.test.mjs` `25 passed`
   - production preview 当前可挂到 `127.0.0.1:18930`
+  - 本轮 local `uv + vite preview` 复核也已补：
+    - 结果页 `进入会客厅 / 异线旁听席` 可直接打开
+    - roundtable live completed-state 不再卡在 `正在搭建世界线圆桌...`
   - graph smoke / release-signoff 当前都会先跑前端 deep-link preflight；preview 没 ready、SPA fallback 失效，或 entry module、CSS entry、legacy fallback 资源不一致 / 不可达时会直接 fail-closed，不再把 404 混成图谱回归
   - `phase3-batch-a full`、`phase3-batch-b full`、`phase3-batch-c full` 当前都已在 Chromium desktop/mobile + Firefox desktop + WebKit desktop 通过
   - `e2e-new-source-ingestion-live` 当前在 `fixture full` 和 `live full` 下都已 fresh 通过

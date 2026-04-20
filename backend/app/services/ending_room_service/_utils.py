@@ -84,6 +84,7 @@ class _OracleFollowupPlan:
     cited_refs_json: dict[str, Any]
     user_content: str
     thread_mode: EndingRoomThreadMode
+    context_hint: str | None = None
 
 
 def _room_phase_field() -> str:

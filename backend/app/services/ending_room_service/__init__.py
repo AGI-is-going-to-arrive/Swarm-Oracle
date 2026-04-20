@@ -43,6 +43,7 @@ from app.models import (
 )
 from app.models.database import _uuid, get_engine
 from app.services.llm_client import (  # noqa: F401 — needed for monkeypatch compatibility
+    llm_call,
     llm_call_json,
     llm_call_json_with_stream_fallback,
     llm_call_stream,
@@ -179,6 +180,7 @@ from ._utils import (  # noqa: F401 — re-exported
 logger = logging.getLogger(__name__)
 _ENDING_ROOM_LOCK_REFRESH_FRACTION = 0.33
 _ENDING_ROOM_LOCK_LOSS_POLL_SECONDS = 0.01
+_ENDING_ROOM_GENERATION_VERSION = 4
 
 
 # ── Functions that remain in __init__.py ─────────────────────────────
@@ -239,7 +241,11 @@ def _find_existing_room(
         )
     ).all()
     for room in rooms:
-        if room.language == language:
+        room_config = room.config_json or {}
+        if (
+            room.language == language
+            and int(room_config.get("generation_version") or 0) >= _ENDING_ROOM_GENERATION_VERSION
+        ):
             return room
     return None
 
@@ -401,6 +407,7 @@ def create_ending_room(
                 existing_room.config_json = {
                     **(existing_room.config_json or {}),
                     "selection_recipe": selection_recipe,
+                    "generation_version": _ENDING_ROOM_GENERATION_VERSION,
                 }
                 existing_room.updated_at = _now()
                 session.add(existing_room)
@@ -435,7 +442,8 @@ def create_ending_room(
         scope_fingerprint = hashlib.sha256(
             (
                 f"{scenario_id}:{normalized_anchor_branch_id or '-'}:"
-                f"{normalized_room_type.value}:{participant_hash}:{resolved_language}"
+                f"{normalized_room_type.value}:{participant_hash}:{resolved_language}:"
+                f"v{_ENDING_ROOM_GENERATION_VERSION}"
             ).encode("utf-8")
         ).hexdigest() or participant_hash
 
@@ -452,6 +460,7 @@ def create_ending_room(
             config_json={
                 "selected_branch_ids": normalized_branch_ids,
                 "streaming_enabled": normalized_room_type != EndingRoomType.CROSSLINE_GALLERY,
+                "generation_version": _ENDING_ROOM_GENERATION_VERSION,
             },
             result_json=initial_result,
         )
@@ -466,6 +475,7 @@ def create_ending_room(
                 "selected_representatives": normalized_representatives,
                 "selected_witness": normalized_witness,
                 "selection_recipe": selection_recipe,
+                "generation_version": _ENDING_ROOM_GENERATION_VERSION,
             }
             session.add(room)
             _ensure_default_thread(session, room)
@@ -669,10 +679,22 @@ def _rebuild_room_result(
         EndingRoomType.ONE_MOVE_ONLY: {EndingRoomPhase.OPENING, EndingRoomPhase.VERDICT},
     }.get(room.room_type, {turn["phase"] for turn in planned_turns})
     verdict_text = planned_turns[-1]["content"] if planned_turns else ""
+    archivist_note = verdict_text
+    if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
+        closing_turn = next(
+            (
+                turn["content"]
+                for turn in reversed(planned_turns)
+                if turn["phase"] == EndingRoomPhase.CLOSING
+            ),
+            None,
+        )
+        if closing_turn:
+            archivist_note = closing_turn
     rebuilt = {
         **base_result,
         "summary": verdict_text,
-        "archivist_note": verdict_text,
+        "archivist_note": archivist_note,
         "phase_insights": [
             _phase_insight(room.language, turn["phase"], turn["content"])
             for turn in planned_turns
@@ -707,50 +729,31 @@ async def _enhance_room_plan_with_llm(
     if not settings.ORACLE_CHAMBERS_USE_LLM:
         return planned_turns, result
     participant_by_id = {participant.id: participant for participant in participants}
-    rewrite_indexes: list[int] = []
-    rewrite_tasks = []
+    enhanced_turns: list[dict[str, Any]] = []
     for index, turn in enumerate(planned_turns):
         participant = participant_by_id.get(turn["participant_id"])
         if participant is None:
+            enhanced_turns.append(turn)
             continue
-        should_rewrite = turn["phase"] == EndingRoomPhase.VERDICT
-        if (room.room_type == EndingRoomType.ONE_MOVE_ONLY
-                and turn["phase"] == EndingRoomPhase.OPENING):
-            should_rewrite = True
-        if (room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE
-                and turn["phase"] in {EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE}):
-            should_rewrite = True
-        if not should_rewrite:
-            continue
-        rewrite_indexes.append(index)
-        rewrite_tasks.append(
-            _maybe_rewrite_oracle_copy(
-                room=room,
-                participant=participant,
-                phase=turn["phase"],
-                anchor_copy=turn["content"],
-                recent_lines=[
-                    planned_turns[prev_index]["content"]
-                    for prev_index in range(max(0, index - 2), index)
-                ],
-                purpose=f"oracle_{room.room_type.value}_{turn['phase'].value}",
-                streaming_first=True,
-            )
+        generated_content = await _maybe_rewrite_oracle_copy(
+            room=room,
+            participant=participant,
+            phase=turn["phase"],
+            anchor_copy=turn["content"],
+            recent_lines=[
+                previous_turn["content"]
+                for previous_turn in enhanced_turns[-3:]
+            ],
+            context_hint=str(turn.get("context_hint") or "").strip() or None,
+            purpose=f"oracle_{room.room_type.value}_{turn['phase'].value}_{index}",
+            streaming_first=True,
         )
-    rewritten_by_index: dict[int, str] = {}
-    if rewrite_tasks:
-        rewritten_results = await asyncio.gather(*rewrite_tasks)
-        rewritten_by_index = {
-            index: content
-            for index, content in zip(rewrite_indexes, rewritten_results, strict=True)
-        }
-    enhanced_turns: list[dict[str, Any]] = [
-        {
-            **turn,
-            "content": rewritten_by_index.get(index, turn["content"]),
-        }
-        for index, turn in enumerate(planned_turns)
-    ]
+        enhanced_turns.append(
+            {
+                **turn,
+                "content": generated_content,
+            }
+        )
     return enhanced_turns, _rebuild_room_result(room, participants, enhanced_turns, result)
 
 
@@ -876,6 +879,178 @@ def build_roundtable_scope_context(
         }
 
 
+def _participant_priority_context_hint(
+    participant: EndingRoomParticipant,
+    *,
+    language: str,
+) -> str:
+    snapshot = participant.persona_snapshot_json or {}
+    lines: list[str] = []
+    raw_role_hint = sanitize_untrusted_text(str(snapshot.get("agent_role") or ""), max_chars=80)
+    role_hint = _oracle_visible_text(snapshot.get("agent_role"), language=language, limit=80)
+    if role_hint:
+        lines.append(f"agent_role={role_hint}")
+        if language == "en" and raw_role_hint and raw_role_hint != role_hint:
+            lines.append(f"agent_role_source={raw_role_hint}")
+    elif raw_role_hint:
+        lines.append(f"agent_role_source={raw_role_hint}")
+    raw_persona_hint = sanitize_untrusted_text(
+        str(snapshot.get("bio_short") or snapshot.get("agent_persona") or ""),
+        max_chars=180,
+    )
+    bio_hint = _oracle_visible_text(
+        snapshot.get("bio_short") or snapshot.get("agent_persona"),
+        language=language,
+        limit=180,
+    )
+    if bio_hint:
+        lines.append(f"persona_hint={bio_hint}")
+        if language == "en" and raw_persona_hint and raw_persona_hint != bio_hint:
+            lines.append(f"persona_hint_source={raw_persona_hint}")
+    elif raw_persona_hint:
+        lines.append(f"persona_hint_source={raw_persona_hint}")
+    stance_hint = sanitize_untrusted_text(str(snapshot.get("agent_stance") or ""), max_chars=120)
+    if stance_hint:
+        lines.append(f"agent_stance={stance_hint}")
+    branch_pressure = sanitize_untrusted_text(str(snapshot.get("branch_pressure") or ""), max_chars=120)
+    if branch_pressure:
+        lines.append(f"branch_pressure={branch_pressure}")
+    latest_quote = sanitize_untrusted_text(
+        str(snapshot.get("latest_quote") or snapshot.get("opening_quote") or ""),
+        max_chars=180,
+    )
+    if latest_quote:
+        lines.append(f"source_quote={latest_quote}")
+    if snapshot.get("tier"):
+        lines.append(f"narrative_weight={snapshot['tier']}")
+    if snapshot.get("impact_score") is not None:
+        lines.append(f"importance_score={snapshot['impact_score']}")
+    if snapshot.get("selection_reason"):
+        lines.append(f"selection_reason={snapshot['selection_reason']}")
+    return "\n".join(lines)
+
+
+def _branch_card_context_hint(
+    branch_card: dict[str, Any],
+    *,
+    language: str,
+) -> str:
+    lines: list[str] = []
+    raw_title = sanitize_untrusted_text(str(branch_card.get("title") or ""), max_chars=60)
+    title = _oracle_visible_text(branch_card.get("title"), language=language, limit=60)
+    if title:
+        lines.append(f"worldline_title={title}")
+        if language == "en" and raw_title and raw_title != title:
+            lines.append(f"worldline_title_source={raw_title}")
+    elif raw_title:
+        lines.append(f"worldline_title_source={raw_title}")
+    raw_insight = sanitize_untrusted_text(str(branch_card.get("insight") or ""), max_chars=180)
+    insight = _oracle_visible_text(branch_card.get("insight"), language=language, limit=180)
+    if insight:
+        lines.append(f"worldline_insight={insight}")
+        if language == "en" and raw_insight and raw_insight != insight:
+            lines.append(f"worldline_insight_source={raw_insight}")
+    elif raw_insight:
+        lines.append(f"worldline_insight_source={raw_insight}")
+    raw_story = sanitize_untrusted_text(str(branch_card.get("story") or ""), max_chars=220)
+    story = _oracle_visible_text(branch_card.get("story"), language=language, limit=220)
+    if story:
+        lines.append(f"worldline_story={story}")
+        if language == "en" and raw_story and raw_story != story:
+            lines.append(f"worldline_story_source={raw_story}")
+    elif raw_story:
+        lines.append(f"worldline_story_source={raw_story}")
+    key_moment_sources = [
+        sanitize_untrusted_text(str(item or ""), max_chars=48)
+        for item in (branch_card.get("key_moments") or [])[:3]
+        if str(item or "").strip()
+    ]
+    key_moments = [
+        _oracle_visible_text(item, language=language, limit=48)
+        for item in (branch_card.get("key_moments") or [])[:3]
+    ]
+    key_moments = [item for item in key_moments if item]
+    if key_moments:
+        lines.append(f"worldline_key_moments={' | '.join(key_moments)}")
+        if language == "en" and key_moment_sources and key_moment_sources != key_moments:
+            lines.append(f"worldline_key_moments_source={' | '.join(key_moment_sources)}")
+    elif key_moment_sources:
+        lines.append(f"worldline_key_moments_source={' | '.join(key_moment_sources)}")
+    return "\n".join(lines)
+
+
+def _roundtable_turn_context_hint(
+    participant: EndingRoomParticipant,
+    *,
+    branch_card: dict[str, Any] | None,
+    all_branches: list[dict[str, Any]],
+    language: str,
+) -> str:
+    lines = [
+        _participant_priority_context_hint(participant, language=language),
+    ]
+    if branch_card:
+        lines.append(_branch_card_context_hint(branch_card, language=language))
+    sibling_lines = []
+    for branch in all_branches:
+        if branch_card and branch.get("branch_id") == branch_card.get("branch_id"):
+            continue
+        title = _oracle_visible_text(branch.get("title"), language=language, limit=40)
+        insight = _oracle_visible_text(branch.get("insight"), language=language, limit=88)
+        if title:
+            sibling_lines.append(f"{title}: {insight}" if insight else title)
+    if sibling_lines:
+        lines.append(f"other_worldlines={' || '.join(sibling_lines[:3])}")
+    return "\n".join(line for line in lines if line)
+
+
+def _archivist_roundtable_context_hint(
+    *,
+    branches: list[dict[str, Any]],
+    language: str,
+) -> str:
+    lines = []
+    branch_lines = []
+    for branch in branches:
+        title = _oracle_visible_text(branch.get("title"), language=language, limit=40)
+        insight = _oracle_visible_text(branch.get("insight"), language=language, limit=88)
+        if title:
+            branch_lines.append(f"{title}: {insight}" if insight else title)
+    if branch_lines:
+        lines.append(f"roundtable_branches={' || '.join(branch_lines[:4])}")
+    return "\n".join(lines)
+
+
+def _anchor_room_turn_context_hint(
+    participant: EndingRoomParticipant,
+    *,
+    anchor_branch: dict[str, Any],
+    evidence_hook: str,
+    latest_quote: str | None,
+    latest_round: int,
+    foreign_branch_summaries: list[dict[str, Any]] | None,
+    language: str,
+) -> str:
+    lines = [
+        _participant_priority_context_hint(participant, language=language),
+        _branch_card_context_hint(anchor_branch, language=language),
+        f"evidence_hook={_oracle_visible_text(evidence_hook, language=language, limit=80)}",
+    ]
+    if latest_quote and latest_round > 0:
+        visible_quote = _oracle_visible_text(latest_quote, language=language, limit=120)
+        if visible_quote:
+            lines.append(f"latest_quote=R{latest_round}: {visible_quote}")
+    foreign_lines = []
+    for branch in (foreign_branch_summaries or [])[:3]:
+        title = _oracle_visible_text(branch.get("title"), language=language, limit=40)
+        insight = _oracle_visible_text(branch.get("insight"), language=language, limit=80)
+        if title:
+            foreign_lines.append(f"{title}: {insight}" if insight else title)
+    if foreign_lines:
+        lines.append(f"other_branch_summaries={' || '.join(foreign_lines)}")
+    return "\n".join(line for line in lines if line)
+
+
 def _bind_supporting_turn_id(
     result: dict[str, Any],
     *,
@@ -983,6 +1158,12 @@ def _build_room_plan(
                 "emotion": "focused",
                 "cited_branch_id": participant.source_branch_id,
                 "cited_refs_json": {"mode": "own_fulltext"},
+                "context_hint": _roundtable_turn_context_hint(
+                    participant,
+                    branch_card=branch_cards_by_id.get(participant.source_branch_id or "", {}),
+                    all_branches=context["branches"],
+                    language=room.language,
+                ),
             }
             for participant in participants
             if participant.role_slot == EndingRoomRoleSlot.REPRESENTATIVE
@@ -1001,6 +1182,12 @@ def _build_room_plan(
                   "emotion": "measured",
                   "cited_branch_id": witness.source_branch_id,
                   "cited_refs_json": {"mode": "witness_fulltext"},
+                  "context_hint": _roundtable_turn_context_hint(
+                      witness,
+                      branch_card=branch_cards_by_id.get(witness.source_branch_id, {}),
+                      all_branches=context["branches"],
+                      language=room.language,
+                  ),
               }
           )
         planned_turns.extend(
@@ -1015,6 +1202,10 @@ def _build_room_plan(
                     "emotion": "measured",
                     "cited_branch_id": None,
                     "cited_refs_json": {"mode": "summary_only"},
+                    "context_hint": _archivist_roundtable_context_hint(
+                        branches=context["branches"],
+                        language=room.language,
+                    ),
                 },
                 {
                     "participant_id": archivist.id,
@@ -1027,13 +1218,24 @@ def _build_room_plan(
                     "emotion": "neutral",
                     "cited_branch_id": None,
                     "cited_refs_json": {"mode": "summary_only"},
+                    "context_hint": _archivist_roundtable_context_hint(
+                        branches=context["branches"],
+                        language=room.language,
+                    ),
                 },
             ]
         )
         result = {
             "summary": planned_turns[-1]["content"],
             "next_move": None,
-            "archivist_note": planned_turns[-1]["content"],
+            "archivist_note": next(
+                (
+                    turn["content"]
+                    for turn in planned_turns
+                    if turn["phase"] == EndingRoomPhase.CLOSING
+                ),
+                planned_turns[-1]["content"],
+            ),
             "phase_insights": [
                 _phase_insight(room.language, turn["phase"], turn["content"])
                 for turn in planned_turns
@@ -1103,6 +1305,22 @@ def _build_room_plan(
     persona_hint = str(
         primary_meta.get("bio_short") or primary_meta.get("agent_persona") or "").strip(
     )
+    primary_quote = primary_evidence.get("latest_quote")
+    primary_round = int(primary_evidence.get("latest_round") or 0)
+    primary_quote_display = _oracle_visible_text(
+        primary_quote,
+        language=room.language,
+        limit=120,
+    )
+    primary_context_hint = _anchor_room_turn_context_hint(
+        primary_speaker,
+        anchor_branch=context["anchor_branch"],
+        evidence_hook=evidence_hook_display,
+        latest_quote=str(primary_quote or "").strip() or None,
+        latest_round=primary_round,
+        foreign_branch_summaries=context.get("foreign_branch_summaries"),
+        language=room.language,
+    )
     if room.room_type == EndingRoomType.ONE_MOVE_ONLY:
         safe_role_hint = _oracle_visible_text(role_hint, language=room.language, limit=40)
         safe_persona_hint = _oracle_visible_text(persona_hint, language=room.language, limit=88)
@@ -1116,11 +1334,6 @@ def _build_room_plan(
                 f" Why: that turns a system-wide mistake into a local re-check."
                 f" Risk: the short-term rhythm gets messier and coordination costs rise."
             )
-        )
-        primary_quote = primary_evidence.get("latest_quote")
-        primary_round = int(primary_evidence.get("latest_round") or 0)
-        primary_quote_display = _oracle_visible_text(
-            primary_quote, language=room.language, limit=120
         )
         primary_quote_clause_zh = f"我在 R{primary_round} 当时说过「{primary_quote}」。" if primary_quote and primary_round > 0 else ""  # noqa: E501
         primary_quote_clause_en = f"In R{primary_round} I said '{primary_quote_display}'. " if primary_quote_display and primary_round > 0 else ""  # noqa: E501
@@ -1146,6 +1359,7 @@ def _build_room_plan(
                 "emotion": "reflective",
                 "cited_branch_id": room.anchor_branch_id,
                 "cited_refs_json": {"mode": "own_fulltext"},
+                "context_hint": primary_context_hint,
             },
             {
                 "participant_id": archivist.id,
@@ -1154,6 +1368,15 @@ def _build_room_plan(
                 "emotion": "measured",
                 "cited_branch_id": room.anchor_branch_id,
                 "cited_refs_json": {"mode": "one_move_only"},
+                "context_hint": _anchor_room_turn_context_hint(
+                    archivist,
+                    anchor_branch=context["anchor_branch"],
+                    evidence_hook=evidence_hook_display,
+                    latest_quote=str(primary_quote or "").strip() or None,
+                    latest_round=primary_round,
+                    foreign_branch_summaries=context.get("foreign_branch_summaries"),
+                    language=room.language,
+                ),
             },
         ]
         return planned_turns, {
@@ -1221,6 +1444,7 @@ def _build_room_plan(
             "emotion": "focused",
             "cited_branch_id": room.anchor_branch_id,
             "cited_refs_json": {"mode": "own_fulltext"},
+            "context_hint": primary_context_hint,
         },
     ]
     if secondary_speaker is not None:
@@ -1257,6 +1481,15 @@ def _build_room_plan(
                 "emotion": "measured",
                 "cited_branch_id": room.anchor_branch_id,
                 "cited_refs_json": {"mode": "own_fulltext"},
+                "context_hint": _anchor_room_turn_context_hint(
+                    secondary_speaker,
+                    anchor_branch=context["anchor_branch"],
+                    evidence_hook=evidence_hook_display,
+                    latest_quote=str((secondary_evidence or {}).get("latest_quote") or "").strip() or None,
+                    latest_round=int((secondary_evidence or {}).get("latest_round") or 0),
+                    foreign_branch_summaries=context.get("foreign_branch_summaries"),
+                    language=room.language,
+                ),
             }
         )
     else:
@@ -1272,6 +1505,15 @@ def _build_room_plan(
                 "emotion": "measured",
                 "cited_branch_id": None,
                 "cited_refs_json": {"mode": "summary_only"},
+                "context_hint": _anchor_room_turn_context_hint(
+                    archivist,
+                    anchor_branch=context["anchor_branch"],
+                    evidence_hook=evidence_hook_display,
+                    latest_quote=str(primary_evidence.get("latest_quote") or "").strip() or None,
+                    latest_round=int(primary_evidence.get("latest_round") or 0),
+                    foreign_branch_summaries=context.get("foreign_branch_summaries"),
+                    language=room.language,
+                ),
             }
         )
     planned_turns.append(
@@ -1282,6 +1524,15 @@ def _build_room_plan(
             "emotion": "neutral",
             "cited_branch_id": room.anchor_branch_id,
             "cited_refs_json": {"mode": "archive_summary"},
+            "context_hint": _anchor_room_turn_context_hint(
+                archivist,
+                anchor_branch=context["anchor_branch"],
+                evidence_hook=evidence_hook_display,
+                latest_quote=str(primary_evidence.get("latest_quote") or "").strip() or None,
+                latest_round=int(primary_evidence.get("latest_round") or 0),
+                foreign_branch_summaries=context.get("foreign_branch_summaries"),
+                language=room.language,
+            ),
         }
     )
     return planned_turns, {

@@ -54,6 +54,79 @@ from ._utils import (
 
 logger = logging.getLogger(__name__)
 
+
+def _build_followup_context_hint(
+    session: Session,
+    *,
+    room: EndingRoom,
+    response_participant: EndingRoomParticipant,
+    addressed_participants: list[EndingRoomParticipant],
+    participant_evidence: dict[str, Any],
+    question_anchor_ids: list[str],
+) -> str:
+    snapshot = response_participant.persona_snapshot_json or {}
+    lines: list[str] = []
+    role_hint = _sanitize_oracle_visible_text(str(snapshot.get("agent_role") or "")).strip()
+    if role_hint:
+        lines.append(f"agent_role={role_hint}")
+    persona_hint = _sanitize_oracle_visible_text(
+        str(snapshot.get("bio_short") or snapshot.get("agent_persona") or "")
+    ).strip()
+    if persona_hint:
+        lines.append(f"persona_hint={persona_hint}")
+    stance_hint = _sanitize_oracle_visible_text(str(snapshot.get("agent_stance") or "")).strip()
+    if stance_hint:
+        lines.append(f"agent_stance={stance_hint}")
+    emotion_hint = _sanitize_oracle_visible_text(str(snapshot.get("agent_emotion") or "")).strip()
+    if emotion_hint:
+        lines.append(f"agent_emotion={emotion_hint}")
+    branch_pressure = _sanitize_oracle_visible_text(str(snapshot.get("branch_pressure") or "")).strip()
+    if branch_pressure:
+        lines.append(f"branch_pressure={branch_pressure}")
+    tier = str(snapshot.get("tier") or "").strip()
+    if tier:
+        lines.append(f"narrative_weight={tier}")
+    if snapshot.get("impact_score") is not None:
+        lines.append(f"importance_score={snapshot['impact_score']}")
+    if snapshot.get("selection_reason"):
+        lines.append(f"selection_reason={snapshot['selection_reason']}")
+    if question_anchor_ids:
+        lines.append(f"question_anchor_ids={', '.join(question_anchor_ids)}")
+    if addressed_participants:
+        lines.append(
+            "addressed_targets="
+            + " | ".join(participant.display_name for participant in addressed_participants)
+        )
+    evidence_hook = _sanitize_oracle_visible_text(
+        str(participant_evidence.get("evidence_hook") or "")
+    ).strip()
+    if evidence_hook:
+        lines.append(f"evidence_hook={evidence_hook}")
+    latest_quote = _sanitize_oracle_visible_text(
+        str(participant_evidence.get("latest_quote") or "")
+    ).strip()
+    latest_round = int(participant_evidence.get("latest_round") or 0)
+    if latest_quote and latest_round > 0:
+        lines.append(f"latest_quote=R{latest_round}: {latest_quote}")
+    elif snapshot.get("latest_quote"):
+        source_quote = _sanitize_oracle_visible_text(str(snapshot.get("latest_quote") or "")).strip()
+        if source_quote:
+            lines.append(f"source_quote={source_quote}")
+    branch_id = response_participant.source_branch_id
+    if branch_id:
+        branch = session.get(Branch, branch_id)
+        if branch is not None:
+            branch_title = _sanitize_oracle_visible_text(str(branch.title or "")).strip()
+            if branch_title:
+                lines.append(f"worldline_title={branch_title}")
+            branch_insight = _sanitize_oracle_visible_text(str(branch.insight or "")).strip()
+            if branch_insight:
+                lines.append(f"worldline_insight={branch_insight}")
+            branch_story = _sanitize_oracle_visible_text(str(branch.story or "")).strip()
+            if branch_story:
+                lines.append(f"worldline_story={branch_story[:220]}")
+    return "\n".join(lines)
+
 def _load_room_threads(session: Session, room_id: str) -> list[EndingRoomThread]:
     return session.exec(
         select(EndingRoomThread)
@@ -522,6 +595,14 @@ def _build_followup_turn_plans(
                 cited_refs_json={"kind": "followup_reply", "thread_mode": thread.mode.value},
                 user_content=content,
                 thread_mode=thread.mode,
+                context_hint=_build_followup_context_hint(
+                    session,
+                    room=room,
+                    response_participant=response_participant,
+                    addressed_participants=addressed_participants,
+                    participant_evidence=participant_evidence.get(response_participant.id, {}),
+                    question_anchor_ids=question_anchor_ids,
+                ),
             )
         )
     return user_turn, plans
@@ -797,6 +878,7 @@ async def _append_followup_turns_with_retry(
                         thread_mode=plan.thread_mode,
                         interaction_mode=plan.interaction_mode,
                         recent_lines=recent_lines,
+                        context_hint=plan.context_hint,
                         purpose=f"oracle_followup_stream_{plan.interaction_mode.value}",
                         on_delta=_on_delta,
                     )
@@ -826,6 +908,7 @@ async def _append_followup_turns_with_retry(
                     thread_mode=plan.thread_mode,
                     interaction_mode=plan.interaction_mode,
                     recent_lines=recent_lines,
+                    context_hint=plan.context_hint,
                     purpose=f"oracle_followup_{plan.interaction_mode.value}",
                 )
                 generated_content = _sanitize_oracle_visible_text(generated_content).strip() or plan.anchor_copy
