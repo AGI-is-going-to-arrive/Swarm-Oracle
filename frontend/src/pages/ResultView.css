@@ -1175,6 +1175,107 @@
   line-height: 1.5;
 }
 
+/* ── Explore Deeper Bridge ─────────────────────── */
+
+.result-bridge {
+  border-top: 1px solid var(--border-default);
+  padding: 32px 0 0;
+}
+
+.result-bridge__heading {
+  font-family: var(--font-heading);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+}
+
+.result-bridge__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.result-bridge__card {
+  padding: 20px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.result-bridge__card:hover:not(.result-bridge__card--disabled) {
+  border-color: var(--color-primary);
+  box-shadow: 0 2px 12px color-mix(in oklab, var(--color-primary) 12%, transparent);
+}
+
+.result-bridge__card:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.result-bridge__card--disabled {
+  background: color-mix(in oklab, var(--bg-surface) 82%, var(--border-default));
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--border-default) 58%, var(--bg-surface));
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.result-bridge__card--disabled .result-bridge__card-name {
+  color: var(--text-secondary);
+}
+
+.result-bridge__card--disabled .result-bridge__card-desc {
+  color: var(--text-muted);
+}
+
+.result-bridge__card--disabled .result-bridge__card-status {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.result-bridge__card--disabled .result-bridge__card-icon {
+  opacity: 0.62;
+  filter: grayscale(0.55);
+}
+
+.result-bridge__card-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.result-bridge__card-name {
+  font-family: var(--font-heading);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.result-bridge__card-desc {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  flex: 1;
+}
+
+.result-bridge__card-status {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+@media (max-width: 768px) {
+  .result-bridge__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Web Sources Section ── */
 
 .result-web-sources {

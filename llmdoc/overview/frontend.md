@@ -27,7 +27,7 @@
 |------|------|------|
 | InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、BYOK、quick starts、challenge、主模式档位、搜索增强 toggle、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、identity continuity preflight / confirm dialog |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Theater、干预、玩法卡、押注、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、archive、campaign summary、分享、导出、replay/import、真实世界来源卡片、counterfactual / resume / faction 入口 |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、archive、campaign summary、分享、导出、replay/import、真实世界来源卡片、counterfactual / resume / faction 入口，以及 capability-gated `Explore Deeper` bridge |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live |
 | DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import |
@@ -94,6 +94,12 @@
 - REST API 路径参数统一使用 `encodeURIComponent()` 编码（约 30 处），防止含特殊字符的 ID 破坏 URL 结构。
 - API client 当前会把首页高级设置里的可选 `Organization ID` 以 session-scoped `X-Org-Id` 请求头透传；留空时不发送。
 - API 客户端对服务端错误文本做脱敏处理（`sanitizeErrorText`），超过 200 字符或包含 stack trace / HTML 的响应会被替换为通用错误信息。
+- `ResultView` 当前新增 `Explore Deeper` bridge：
+  - capability ready 后才渲染
+  - `causal / replay / compare` 三张卡共用同一套 bridge 样式
+  - disabled 卡片保留 link 语义，但不再渲染无 `href` 的 `<a>`
+  - disabled 状态改成 dashed border + icon grayscale，文字对比不再靠整卡 opacity 压低
+- `ResultView` 的 faction timeline lead 当前已走 i18n key + `{{title}}` 插值，不再在组件里手写 `isZh` 三元文案。
 - InputView 当前在 `agent_identity` capability 开启时会在主模式启动前先调用 identity continuity preflight：
   - 只要命中 `L2 fuzzy candidate` 才会弹确认框
   - 用户可选 `复用已有身份` 或 `创建新身份`
@@ -350,6 +356,10 @@
 - 如果只是 search / filter 把边筛空，`CausalReviewView` 当前仍会保留交互图和导出入口，不会误切 relationless fallback。
 - `CausalReviewView` 当前在非交互 fallback（relationless snapshot / 大图 text fallback）时都会隐藏导出按钮，并且只保留一条具名的 a11y 列表；列表名会跟随当前语言本地化。
 - `CausalReviewView` 的 agent search 输入当前统一使用 `Search nodes or agents... / 搜索节点或 Agent...`；placeholder 和 `aria-label` 走同一条 i18n key。
+- `CausalReviewView` 当前补了 guide panel 和 explanatory empty-state：
+  - guide 会显示 full-graph 概览、key nodes 和说明文案
+  - close / show 两个按钮都带完整 disclosure `aria-expanded / aria-controls`
+  - guide / empty-state 文案当前集中走组件内 `CAUSAL_COLORS` dark-surface token，不再把正文直接压到低对比颜色
 - `CausalReviewView` 与 `ArgumentMap` 当前只会在图结构真的变化后重新 `fitView()`；search / status filter / branch 切换仍会重算视口，但选中节点或取消选中不会再把视口强制拉回去
 - `CausalReviewView` / `ArgumentMap` 的图节点、边、handle 可访问文案，以及 React Flow controls / `MiniMap` 文案当前都会跟随 UI 语言实时更新；切语言不会重打图请求。
 - `CausalReviewView` / `ArgumentMap` 的 `MiniMap` 当前是非交互 overlay（`pointer-events: none`），只在桌面显示；移动端不再和图操作抢热区。
@@ -379,8 +389,14 @@
   - 详情关闭后仍走 pane click / close button 这条现有口径
 - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。SVG 导出当前改成 native SVG background / edge / node markup，不再依赖 `foreignObject`；校验脚本也会拒绝 `foreignObject` 回退。节点卡标题过长时，SVG 文本会按卡片宽度裁剪显示，但 `<title>` 和文本内容仍优先保留完整标题，不再把省略号文本写进 SVG。
 - `CausalReviewView` 当前在 branch 切换时会先收起旧图和导出面板，等新分支数据 ready 后再恢复；图页外层统一走 `100dvh`，relationless snapshot fallback 里的节点详情也会锚在当前容器里，不再飘到视口右上角。
-- frontend `NodeConversationSheet / CausalReviewView` 定向 vitest 当前 `86 passed`。
-- frontend full vitest 当前 `1349 passed`。
+- frontend bridge / guide 定向 vitest 当前 `124 passed`。
+- frontend full vitest 当前 `1365 passed`。
+- frontend 目标文件 `eslint`、`typecheck`、`build`（含 `perf:budgets:check`）当前通过。
+- fixture-backed local preview 浏览器复核当前已补：
+  - ResultView bridge DOM / disabled 样式
+  - faction timeline i18n 插值
+  - CausalReviewView guide disclosure 语义
+  - console clean
 - `node --test scripts/e2e-frontend-preflight.test.mjs` 本轮 `25 passed`。
 - 这轮 graph/playability 增量回归当前也已补：
   - `node --test scripts/e2e-ws-contract-suite.test.mjs`：`18 passed`

@@ -80,6 +80,39 @@ describe('i18n locale resources', () => {
     expect(zh.translation.result.compare_link).toBeTruthy();
   });
 
+  it('keeps the new bridge and graph-guide locale keys present in both English and Chinese resources', () => {
+    const resultBridgeKeys = [
+      'bridge_title',
+      'bridge_causal_title',
+      'bridge_causal_desc',
+      'bridge_replay_title',
+      'bridge_replay_desc',
+      'bridge_compare_title',
+      'bridge_compare_desc',
+      'bridge_not_enabled',
+      'bridge_replay_unavailable',
+      'bridge_single_branch',
+    ] as const;
+    const causalGuideKeys = [
+      'guide_title',
+      'guide_close',
+      'guide_key_nodes',
+      'guide_hint',
+      'guide_show',
+      'guide_full_graph',
+      'empty_guide',
+    ] as const;
+
+    for (const key of resultBridgeKeys) {
+      expect(en.translation.result[key]).toEqual(expect.any(String));
+      expect(zh.translation.result[key]).toEqual(expect.any(String));
+    }
+    for (const key of causalGuideKeys) {
+      expect(en.translation.causal[key]).toEqual(expect.any(String));
+      expect(zh.translation.causal[key]).toEqual(expect.any(String));
+    }
+  });
+
   it('provides localized graph node detail labels and counterfactual labels', () => {
     expect(en.translation.node_detail.agent).toBe('Agent');
     expect(zh.translation.node_detail.agent).toBe('Agent');
@@ -118,6 +151,29 @@ describe('i18n locale resources', () => {
     expect(zh.translation.counterfactual.title).toBe('假设重演');
     expect(en.translation.counterfactual.submit).toBe('Create What-If');
     expect(zh.translation.counterfactual.submit).toBe('创建假设分支');
+  });
+
+  it('provides localized faction timeline labels on the ResultView branch analysis section', () => {
+    expect(en.translation.result.faction_timeline_branch_analysis_label).toBe('Branch analysis');
+    expect(zh.translation.result.faction_timeline_branch_analysis_label).toBe('分支分析');
+    expect(en.translation.result.faction_timeline_title).toBe('Faction timeline analysis');
+    expect(zh.translation.result.faction_timeline_title).toBe('阵营轨迹时间线');
+    expect(en.translation.result.faction_timeline_lead_expanded).toContain('{{title}}');
+    expect(zh.translation.result.faction_timeline_lead_expanded).toContain('{{title}}');
+    expect(en.translation.result.faction_timeline_lead_expanded).toContain('expanded ending branch');
+    expect(zh.translation.result.faction_timeline_lead_expanded).toContain('当前跟随你展开查看的结局分支');
+    expect(en.translation.result.faction_timeline_lead_dominant).toContain('highest-probability branch');
+    expect(zh.translation.result.faction_timeline_lead_dominant).toContain('概率最高的分支');
+    expect(en.translation.result.faction_timeline_lead_single).toContain('faction evolution for branch');
+    expect(zh.translation.result.faction_timeline_lead_single).toContain('阵营演化');
+    for (const key of [
+      'faction_timeline_lead_expanded',
+      'faction_timeline_lead_dominant',
+      'faction_timeline_lead_single',
+    ] as const) {
+      expect(en.translation.result[key]).toContain('{{title}}');
+      expect(zh.translation.result[key]).toContain('{{title}}');
+    }
   });
 
   it('provides localized timeline and replay import labels used by result surfaces', () => {

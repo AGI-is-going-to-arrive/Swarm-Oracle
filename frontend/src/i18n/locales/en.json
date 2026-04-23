@@ -372,7 +372,22 @@
       "web_sources_query": "Query",
       "web_sources_provider": "Provider",
       "web_sources_cached": "Cached",
-      "web_sources_visit": "Visit source"
+      "web_sources_visit": "Visit source",
+      "bridge_title": "Explore Deeper",
+      "bridge_causal_title": "Causal Graph",
+      "bridge_causal_desc": "Trace how events led to each ending.",
+      "bridge_replay_title": "Replay Trace",
+      "bridge_replay_desc": "Step through the simulation round by round.",
+      "bridge_compare_title": "Compare Branches",
+      "bridge_compare_desc": "See how different branches diverged.",
+      "bridge_not_enabled": "Not enabled on this server.",
+      "bridge_replay_unavailable": "Not available in replay mode.",
+      "bridge_single_branch": "Requires multiple branches.",
+      "faction_timeline_branch_analysis_label": "Branch analysis",
+      "faction_timeline_title": "Faction timeline analysis",
+      "faction_timeline_lead_expanded": "Currently following the expanded ending branch \"{{title}}\".",
+      "faction_timeline_lead_dominant": "Currently showing the highest-probability branch \"{{title}}\", not every ending.",
+      "faction_timeline_lead_single": "Showing faction evolution for branch \"{{title}}\"."
     },
     "share": {
       "title": "📱 Generate Social Copy",
@@ -944,7 +959,14 @@
       "type_stance_shift": "Stance Shift",
       "type_fork": "Fork",
       "type_round": "Round",
-      "type_verdict": "Verdict"
+      "type_verdict": "Verdict",
+      "guide_title": "Graph Overview",
+      "guide_close": "Close guide",
+      "guide_key_nodes": "Key nodes",
+      "guide_hint": "Click any node to see details. Use the search bar to filter by agent.",
+      "guide_show": "Show graph overview",
+      "empty_guide": "Causal graphs are generated during simulation when agents form cause-and-effect relationships across rounds. Try running a longer or deeper scenario.",
+      "guide_full_graph": "full graph"
     },
     "compare": {
       "title": "Counterfactual Compare",

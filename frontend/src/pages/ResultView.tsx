@@ -161,7 +161,7 @@ export default function ResultView() {
   const isZh = i18n.language.startsWith('zh');
   const directorIdentity = getDirectorIdentity();
 
-  const { capabilities } = useCapabilityCheck('causal_graph');
+  const { capabilities, loading: capLoading } = useCapabilityCheck('causal_graph');
   const [cfBranchId, setCfBranchId] = useState<string | null>(null);
   const [notebookOpen, setNotebookOpen] = useState(true);
   const [webSourcesOpen, setWebSourcesOpen] = useState(false);
@@ -935,16 +935,19 @@ export default function ResultView() {
   const factionTimelineLead = factionTimelineBranch
     ? (
         expandedBranch === factionTimelineBranch.id
-          ? (isZh
-            ? `当前跟随你展开查看的结局分支“${factionTimelineBranch.title}”。`
-            : `Currently following the expanded ending branch "${factionTimelineBranch.title}".`)
+          ? t('result.faction_timeline_lead_expanded', {
+              defaultValue: 'Currently following the expanded ending branch "{{title}}".',
+              title: factionTimelineBranch.title,
+            })
           : branches.length > 1
-            ? (isZh
-              ? `当前默认展示概率最高的分支“${factionTimelineBranch.title}”，不代表全部结局。`
-              : `Currently showing the highest-probability branch "${factionTimelineBranch.title}", not every ending.`)
-            : (isZh
-              ? `当前展示分支“${factionTimelineBranch.title}”的阵营演化。`
-              : `Showing faction evolution for branch "${factionTimelineBranch.title}".`)
+            ? t('result.faction_timeline_lead_dominant', {
+                defaultValue: 'Currently showing the highest-probability branch "{{title}}", not every ending.',
+                title: factionTimelineBranch.title,
+              })
+            : t('result.faction_timeline_lead_single', {
+                defaultValue: 'Showing faction evolution for branch "{{title}}".',
+                title: factionTimelineBranch.title,
+              })
       )
     : '';
   const hasLocalDirectorState = Boolean(
@@ -1688,7 +1691,7 @@ export default function ResultView() {
             {activeScenarioId && capabilities?.causal_graph?.enabled && (
               <a
                 className="btn btn-ghost"
-                href={`/sim/${activeScenarioId}/causal-map`}
+                href={`/sim/${encodeURIComponent(activeScenarioId)}/causal-map`}
               >
                 {t('result.causal_graph_link', 'View Causal Graph')}
               </a>
@@ -1696,7 +1699,7 @@ export default function ResultView() {
             {id && !isReplayMode && cfBranchId && (
               <a
                 className="btn btn-ghost"
-                href={`/result/${id}/compare?branch_a=${branches[0]?.id ?? ''}&branch_b=${cfBranchId}`}
+                href={`/result/${encodeURIComponent(id)}/compare?branch_a=${encodeURIComponent(branches[0]?.id ?? '')}&branch_b=${encodeURIComponent(cfBranchId)}`}
               >
                 {t('result.compare_link', 'Compare branches')}
               </a>
@@ -1845,6 +1848,110 @@ export default function ResultView() {
             );
           })}
         </div>
+      )}
+
+      {/* Explore Deeper Bridge */}
+      {branches.length > 0 && !loading && !capLoading && activeScenarioId && (
+        <section className="result-bridge">
+          <h2 className="result-bridge__heading">{t('result.bridge_title', 'Explore Deeper')}</h2>
+          <div className="result-bridge__grid">
+            {(() => {
+              const analysisBranch = factionTimelineBranch;
+              const causalEnabled = capabilities?.causal_graph?.enabled ?? false;
+              const replayEnabled = capabilities?.replay_trace?.enabled ?? false;
+              const compareEnabled = (capabilities?.counterfactual_replay?.enabled ?? false) && branches.length > 1;
+              const scenarioId = encodeURIComponent(activeScenarioId);
+
+              const entries: Array<{
+                key: string;
+                icon: string;
+                titleKey: string;
+                titleDefault: string;
+                descKey: string;
+                descDefault: string;
+                enabled: boolean;
+                href: string;
+                disabledKey: string;
+                disabledDefault: string;
+              }> = [
+                {
+                  key: 'causal',
+                  icon: '\u{1F578}️',
+                  titleKey: 'result.bridge_causal_title',
+                  titleDefault: 'Causal Graph',
+                  descKey: 'result.bridge_causal_desc',
+                  descDefault: 'Trace how events led to each ending.',
+                  enabled: causalEnabled,
+                  href: `/sim/${scenarioId}/causal-map${analysisBranch ? `?branch_id=${encodeURIComponent(analysisBranch.id)}` : ''}`,
+                  disabledKey: 'result.bridge_not_enabled',
+                  disabledDefault: 'Not enabled on this server.',
+
+
+                },
+                {
+                  key: 'replay',
+                  icon: '\u{1F3AC}',
+                  titleKey: 'result.bridge_replay_title',
+                  titleDefault: 'Replay Trace',
+                  descKey: 'result.bridge_replay_desc',
+                  descDefault: 'Step through the simulation round by round.',
+                  enabled: replayEnabled && !isReplayMode,
+                  href: `/replay/${scenarioId}`,
+                  disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
+                  disabledDefault: isReplayMode ? 'Not available in replay mode.' : 'Not enabled on this server.',
+
+
+                },
+                {
+                  key: 'compare',
+                  icon: '\u{1F500}',
+                  titleKey: 'result.bridge_compare_title',
+                  titleDefault: 'Compare Branches',
+                  descKey: 'result.bridge_compare_desc',
+                  descDefault: 'See how different branches diverged.',
+                  enabled: compareEnabled && !isReplayMode,
+                  href: analysisBranch && branches.length > 1
+                    ? `/result/${scenarioId}/compare?branch_a=${encodeURIComponent(analysisBranch.id)}&branch_b=${encodeURIComponent((branches.find(b => b.id !== analysisBranch.id) ?? branches[0]).id)}`
+                    : '#',
+                  disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : (branches.length <= 1 ? 'result.bridge_single_branch' : 'result.bridge_not_enabled'),
+                  disabledDefault: isReplayMode ? 'Not available in replay mode.' : (branches.length <= 1 ? 'Only one branch — nothing to compare.' : 'Not enabled on this server.'),
+
+
+                },
+              ];
+
+              return entries.map((entry) => {
+                const isDisabled = !entry.enabled;
+                const statusId = `result-bridge-${entry.key}-status`;
+                return isDisabled ? (
+                  <div
+                    key={entry.key}
+                    className="result-bridge__card result-bridge__card--disabled"
+                    aria-disabled="true"
+                    tabIndex={-1}
+                    role="link"
+                    aria-describedby={statusId}
+                  >
+                    <span className="result-bridge__card-icon" aria-hidden="true">{entry.icon}</span>
+                    <span className="result-bridge__card-name">{t(entry.titleKey, entry.titleDefault)}</span>
+                    <span className="result-bridge__card-desc">{t(entry.descKey, entry.descDefault)}</span>
+                    <span id={statusId} className="result-bridge__card-status">{t(entry.disabledKey, entry.disabledDefault)}</span>
+                  </div>
+                ) : (
+                  <a
+                    key={entry.key}
+                    className="result-bridge__card"
+                    href={entry.href}
+                  >
+                    <span className="result-bridge__card-icon" aria-hidden="true">{entry.icon}</span>
+                    <span className="result-bridge__card-name">{t(entry.titleKey, entry.titleDefault)}</span>
+                    <span className="result-bridge__card-desc">{t(entry.descKey, entry.descDefault)}</span>
+                  </a>
+                );
+              });
+            })()}
+          </div>
+        </section>
       )}
 
       {/* Web Sources Section */}
@@ -2280,7 +2387,7 @@ export default function ResultView() {
           {capabilities?.causal_graph?.enabled && (
             <div style={{ marginBottom: '1rem' }}>
               <a
-                href={`/sim/${activeScenarioId}/causal-map`}
+                href={`/sim/${encodeURIComponent(activeScenarioId)}/causal-map`}
                 style={{ color: '#8ab4f8', textDecoration: 'none', fontWeight: 600, fontSize: '0.9rem' }}
               >
                 {t('result.causal_graph_link', 'View Causal Graph →')}
@@ -2308,13 +2415,13 @@ export default function ResultView() {
                     color: '#8ab4f8',
                   }}
                 >
-                  {isZh ? '分支分析' : 'Branch analysis'}
+                  {t('result.faction_timeline_branch_analysis_label', 'Branch analysis')}
                 </p>
                 <h2
                   id="result-faction-timeline-heading"
                   style={{ margin: '0.35rem 0 0', fontSize: '1rem', color: '#f8fafc' }}
                 >
-                  {isZh ? '阵营轨迹时间线' : 'Faction timeline analysis'}
+                  {t('result.faction_timeline_title', 'Faction timeline analysis')}
                 </h2>
                 <p style={{ margin: '0.45rem 0 0', fontSize: '0.82rem', color: '#9aa4b2' }}>
                   {factionTimelineLead}
@@ -2347,7 +2454,7 @@ export default function ResultView() {
               {cfBranchId && (
                 <div style={{ marginTop: '0.5rem' }}>
                   <a
-                    href={`/result/${id}/compare?branch_a=${branches[0]?.id ?? ''}&branch_b=${cfBranchId}`}
+                    href={`/result/${encodeURIComponent(id)}/compare?branch_a=${encodeURIComponent(branches[0]?.id ?? '')}&branch_b=${encodeURIComponent(cfBranchId)}`}
                     style={{ color: '#8ab4f8', fontSize: '0.85rem' }}
                   >
                     {t('result.compare_link', 'Compare branches →')}

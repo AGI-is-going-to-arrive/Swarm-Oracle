@@ -372,7 +372,22 @@
       "web_sources_query": "搜索词",
       "web_sources_provider": "来源",
       "web_sources_cached": "缓存",
-      "web_sources_visit": "访问来源"
+      "web_sources_visit": "访问来源",
+      "bridge_title": "深入探索",
+      "bridge_causal_title": "因果图谱",
+      "bridge_causal_desc": "追溯事件如何引向每个结局。",
+      "bridge_replay_title": "回放轨迹",
+      "bridge_replay_desc": "逐轮回放模拟过程。",
+      "bridge_compare_title": "对比分析",
+      "bridge_compare_desc": "查看不同分支的分化差异。",
+      "bridge_not_enabled": "服务器未开启此功能。",
+      "bridge_replay_unavailable": "回放模式下不可用。",
+      "bridge_single_branch": "需要多个分支。",
+      "faction_timeline_branch_analysis_label": "分支分析",
+      "faction_timeline_title": "阵营轨迹时间线",
+      "faction_timeline_lead_expanded": "当前跟随你展开查看的结局分支“{{title}}”。",
+      "faction_timeline_lead_dominant": "当前默认展示概率最高的分支“{{title}}”，不代表全部结局。",
+      "faction_timeline_lead_single": "当前展示分支“{{title}}”的阵营演化。"
     },
     "share": {
       "title": "📱 一键生成文案",
@@ -944,7 +959,14 @@
       "type_stance_shift": "立场转变",
       "type_fork": "分支",
       "type_round": "回合",
-      "type_verdict": "裁决"
+      "type_verdict": "裁决",
+      "guide_title": "图谱概览",
+      "guide_close": "关闭导读",
+      "guide_key_nodes": "关键节点",
+      "guide_hint": "点击任意节点查看详情，也可通过搜索栏查找指定角色。",
+      "guide_show": "显示图谱概览",
+      "empty_guide": "因果图谱在模拟运行中当代理形成跨轮次因果关系时生成。尝试运行更长或更深入的场景。",
+      "guide_full_graph": "全图"
     },
     "compare": {
       "title": "反事实对比",

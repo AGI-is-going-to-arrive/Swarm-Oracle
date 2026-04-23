@@ -397,6 +397,18 @@ describe('CausalReviewView', () => {
     vi.restoreAllMocks();
   });
 
+  it('shows the explanatory empty-state guide when the graph has no nodes', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: 'g-empty-guide', nodes: [], edges: [] }),
+    } as Response);
+
+    renderView();
+
+    expect(await screen.findByText('No causal graph data available for this scenario.')).toBeInTheDocument();
+    expect(screen.getByText('Causal graphs are generated during simulation when agents form cause-and-effect relationships across rounds. Try running a longer or deeper scenario.')).toBeInTheDocument();
+  });
+
   it('renders ReactFlow when graph has nodes', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -414,6 +426,95 @@ describe('CausalReviewView', () => {
       duration: 0,
     });
     vi.restoreAllMocks();
+  });
+
+  it('shows the guide panel when the graph has nodes', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-guide-visible',
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Alpha node', round: 1, payload: null },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Beta node', round: 2, payload: null },
+        ],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    renderView();
+
+    expect(await screen.findByText('Graph Overview')).toBeInTheDocument();
+    const closeButton = screen.getByRole('button', { name: 'Close guide' });
+    expect(closeButton).toHaveAttribute('aria-expanded', 'true');
+    expect(closeButton).toHaveAttribute('aria-controls', 'causal-guide-panel');
+    expect(screen.getByText('Click any node to see details. Use the search bar to filter by agent.')).toBeInTheDocument();
+  });
+
+  it('keeps guide counts tied to graphData even when search filters the visible graph', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-guide-counts',
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Alpha node', round: 1, payload: { agent_id: 'alpha' } },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Beta node', round: 2, payload: { agent_id: 'beta' } },
+          { id: 'n3', key: 'e3', type: 'event', label: 'Gamma node', round: 3, payload: { agent_id: 'gamma' } },
+        ],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    renderView();
+
+    await screen.findByText('Graph Overview');
+    await user.type(screen.getByPlaceholderText('Search nodes or agents...'), 'Alpha');
+
+    expect(screen.getByText('3 nodes · 1 edges')).toBeInTheDocument();
+  });
+
+  it('only lists key nodes whose degree is greater than zero', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-guide-key-nodes',
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Connected Alpha', round: 1, payload: null },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Connected Beta', round: 2, payload: null },
+          { id: 'n3', key: 'e3', type: 'event', label: 'Isolated Gamma', round: 3, payload: null },
+        ],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    renderView();
+
+    const keyNodesRow = (await screen.findByText('Key nodes:')).parentElement;
+    expect(keyNodesRow).not.toBeNull();
+    expect(keyNodesRow).toHaveTextContent('Connected Alpha (1)');
+    expect(keyNodesRow).toHaveTextContent('Connected Beta (1)');
+    expect(keyNodesRow).not.toHaveTextContent('Isolated Gamma (0)');
+  });
+
+  it('hides the guide panel after closing it and exposes the show-overview button', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-guide-close',
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Alpha node', round: 1, payload: null }],
+        edges: [],
+      }),
+    } as Response);
+
+    renderView();
+
+    await user.click(await screen.findByRole('button', { name: 'Close guide' }));
+
+    expect(screen.queryByText('Graph Overview')).not.toBeInTheDocument();
+    const showButton = screen.getByRole('button', { name: 'Show graph overview' });
+    expect(showButton).toHaveAttribute('aria-expanded', 'false');
+    expect(showButton).toHaveAttribute('aria-controls', 'causal-guide-panel');
   });
 
   it('shows a snapshot fallback instead of ReactFlow when the graph has multiple nodes but no edges', async () => {
@@ -479,6 +580,31 @@ describe('CausalReviewView', () => {
     const searchInput = screen.getByPlaceholderText('Search nodes or agents...');
     expect(searchInput).toBeInTheDocument();
     vi.restoreAllMocks();
+  });
+
+  it('shows the full-graph label in the guide when search is active', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-guide-full-graph',
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Alpha node', round: 1, payload: { agent_id: 'alpha' } },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Beta node', round: 2, payload: { agent_id: 'beta' } },
+        ],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    renderView();
+
+    const guideHeading = (await screen.findByText('Graph Overview')).closest('strong');
+    expect(guideHeading).not.toBeNull();
+    expect(guideHeading).not.toHaveTextContent('(full graph)');
+
+    await user.type(screen.getByPlaceholderText('Search nodes or agents...'), 'Alpha');
+
+    expect(guideHeading).toHaveTextContent('(full graph)');
   });
 
   it('recomputes graph node accessibility labels when the UI language changes at runtime', async () => {

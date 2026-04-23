@@ -25,7 +25,7 @@ React + TypeScript frontend for SwarmOracle.
 |-------|-----------|-------------|
 | `/` | `InputView` | Scenario input, quick starts, daily challenge, provider policy, optional organization id |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, capture |
-| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, archive, campaign summary, share/export, replay import, resume-from-round entry when counterfactual replay is enabled |
+| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, archive, campaign summary, share/export, replay import, resume-from-round entry when counterfactual replay is enabled, plus the capability-gated `Explore Deeper` bridge |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
 | `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate result, supporting turns, replay digest, share/import |
 | `/history` | `HistoryView` | Scenario history, filtering, deletion |
@@ -84,8 +84,10 @@ React + TypeScript frontend for SwarmOracle.
   local transport hook for `NodeConversationSheet`; owns `/start` + `/turn`, AbortController cleanup, and SSE frame parsing
 - `GlobalOfflineBanner.tsx`
   the WS-disconnect grace timer now uses an SSR-safe layout-effect fallback; current SPA behavior stays the same, and future SSR will not log the layout-effect warning
+- `ResultView.tsx`
+  the result surface now includes the capability-gated `Explore Deeper` bridge, keeps disabled cards semantic without rendering bare anchors, encodes the existing causal / compare CTAs consistently, and routes faction-timeline lead copy through locale keys with `{{title}}` interpolation
 - `CausalReviewView.tsx`
-  graph fetches now encode `scenarioId / branchId` before building request URLs
+  graph fetches now encode `scenarioId / branchId` before building request URLs; the guide / empty-state copy is now backed by the local `CAUSAL_COLORS` dark-surface palette, and the close/show controls expose a complete disclosure pattern
 - `ArgumentMap.tsx`
   relation labels stay localized for `supports / rebuts / accepted / rejected / unaddressed`
   fail-soft `load_failed` responses stay on the Retry state and keep graph/export hidden
@@ -135,15 +137,12 @@ npm run build:spike:phaser-custom
 
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Latest scoped reruns in this session:
-  - frontend targeted vitest covering `NodeConversationSheet / CausalReviewView` desktop sidecar regressions: `86 passed`
-  - frontend targeted vitest covering `useAgentConversationWS / useCapabilityCheck / AgentLibrary / CompareDigestView / KGExplorerView / ReplayView`: `32 passed`
-  - clean-room `node --test scripts/e2e-ws-contract-suite.test.mjs`: `18 passed`
-  - clean-room `e2e:ws:contract`: `20 passed / 1 skipped / 0 failed`
-  - clean-room `e2e:capability-matrix`: `25 passed / 5 skipped / 0 failed`
-  - `npx tsc --noEmit -p tsconfig.app.json`: pass
+  - targeted vitest covering `ResultView / CausalReviewView / locales`: `124 passed`
+  - frontend full vitest: `1365 passed`
+  - `npm exec -- eslint src/pages/ResultView.tsx src/pages/ResultView.test.tsx src/pages/CausalReviewView.tsx src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts`: pass
+  - `npm exec -- tsc --noEmit -p tsconfig.app.json`: pass
   - `npm run build`: pass
-  - fresh local live browser rerun: `node-conversation-live` passed
-  - focused desktop browser spot-check for graph detail + sidecar: pass
+  - fixture-backed Playwright browser recheck for `ResultView` bridge + `CausalReviewView` guide: pass
 - The default signoff target remains:
   - Chromium desktop/mobile
   - desktop Firefox / WebKit scoped regression

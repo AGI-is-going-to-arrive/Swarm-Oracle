@@ -43,6 +43,32 @@ import {
 const nodeTypes = { graphCard: GraphNodeCard };
 const NODE_DETAIL_SHEET_CLEARANCE_PX = 464;
 
+// ── Dark-surface color tokens ───────────────────────────────
+// Every text entry here is verified ≥4.5:1 on `surfaceField` (#1a1a2e) and
+// `surfacePanel` (#17172a) so body / button / hint copy stays WCAG AA-compliant
+// even at 11-12px sizes that appear in legend + guide panels.
+// `decorativeLegendFallback` is *never* applied to text – it only paints the
+// 8px swatches in the legend/guide type rows, so the low ratio is intentional.
+const CAUSAL_COLORS = {
+  textPrimary: '#f1f4fb',      // ~15:1 on #1a1a2e
+  textStrong: '#e4e8f1',       // ~12:1 on #1a1a2e (guide strong labels)
+  textSecondary: '#c9d3e7',    // ~10.2:1 on #1a1a2e
+  textBody: '#b8c1d1',         // ~8:1 on #1a1a2e — list bodies / guide body
+  textMuted: '#9aa4b2',        // ~6.8:1 on #1a1a2e — meta, hints, counts
+  textLink: '#8ab4f8',         // ~7.2:1 on #1a1a2e — CTAs + links
+  textError: '#ff7a70',        // ~6.4:1 on #1a1a2e (replaces #e74c3c, which fails AA on dark)
+  surfacePanel: '#17172a',
+  surfaceField: '#1a1a2e',
+  borderDefault: '#555',
+  borderSubtle: '#333',
+  borderHairline: '#222',
+  inputText: '#ffffff',            // <input>/<select> value text on surfaceField, ~18:1.
+  // Decorative only — never used for text / focusable controls.
+  decorativeLegendFallback: '#666',
+  decorativeNodeFallback: '#555',  // ReactFlow MiniMap + node bg fallback.
+  decorativeEdgeFallback: '#888',  // SVG edge stroke fallback, not text.
+} as const;
+
 // ── Types ───────────────────────────────────────────────────
 
 interface GraphNodeData {
@@ -263,7 +289,7 @@ function layoutDagre(
         meta: n.round != null ? `${typeLabel} · ${roundLabel} ${n.round}` : typeLabel,
         ariaLabel,
         iconName: NODE_ICONS[n.type] ?? '',
-        bgColor: NODE_TYPE_COLORS_HEX[n.type] ?? '#555',
+        bgColor: NODE_TYPE_COLORS_HEX[n.type] ?? CAUSAL_COLORS.decorativeNodeFallback,
         borderColor: '',
         dimmed: false,
         selected: false,
@@ -279,7 +305,7 @@ function layoutDagre(
   // C2: Edge styling from EDGE_STYLES
   const flowEdges: Edge[] = edges.map(e => {
     const style = EDGE_STYLES[e.type];
-    const stroke = style?.stroke ?? '#888';
+    const stroke = style?.stroke ?? CAUSAL_COLORS.decorativeEdgeFallback;
     return {
       id: e.id,
       source: e.source,
@@ -312,6 +338,7 @@ export function CausalReviewView() {
   const [error, setError] = useState<CausalGraphErrorState | null>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(true);
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
   const [sheetState, setSheetState] = useState<NodeConversationSheetState>(createClosedSheetState);
   // C5: Agent search
@@ -468,6 +495,30 @@ export function CausalReviewView() {
   const hasInteractiveGraph = !loading && !error && !isNonInteractiveFallback && nodeCount > 0;
   const causalListAriaLabel = t('causal.a11y_list', 'Causal events list');
   const causalRelationsAriaLabel = t('causal.a11y_relations', 'Causal relations list');
+
+  const guideStats = useMemo(() => {
+    if (!graphData || graphData.nodes.length === 0) return null;
+    const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
+    const degreeMap = new Map<string, number>();
+    for (const node of graphData.nodes) degreeMap.set(node.id, 0);
+    for (const edge of graphData.edges) {
+      degreeMap.set(edge.source, (degreeMap.get(edge.source) ?? 0) + 1);
+      degreeMap.set(edge.target, (degreeMap.get(edge.target) ?? 0) + 1);
+    }
+    const godNodes = [...degreeMap.entries()]
+      .filter(([, deg]) => deg > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([nid, deg]) => {
+        const node = nodeById.get(nid);
+        return { id: nid, label: node?.label ?? nid, degree: deg, type: node?.type ?? 'event' };
+      });
+    const typeCounts: Record<string, number> = {};
+    for (const node of graphData.nodes) {
+      typeCounts[node.type] = (typeCounts[node.type] ?? 0) + 1;
+    }
+    return { godNodes, typeCounts, totalNodes: graphData.nodes.length, totalEdges: graphData.edges.length };
+  }, [graphData]);
 
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
@@ -667,8 +718,8 @@ export function CausalReviewView() {
   if (capLoading) return <div style={{ padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;
   if (!enabled) return (
     <div style={{ maxWidth: 800, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>
-      <p style={{ color: '#888' }}>{t('causal.feature_disabled', 'Causal graph feature is not enabled.')}</p>
-      <Link to={id ? `/result/${encodedScenarioId}` : '/'} style={{ color: '#8ab4f8' }}>{t('common.back_to_result', 'Back to Result')}</Link>
+      <p style={{ color: CAUSAL_COLORS.textMuted }}>{t('causal.feature_disabled', 'Causal graph feature is not enabled.')}</p>
+      <Link to={id ? `/result/${encodedScenarioId}` : '/'} style={{ color: CAUSAL_COLORS.textLink }}>{t('common.back_to_result', 'Back to Result')}</Link>
     </div>
   );
 
@@ -684,14 +735,14 @@ export function CausalReviewView() {
     return (
       <div style={{ maxWidth: 800, margin: '0 auto', padding: '3rem 1rem', textAlign: 'center' }}>
         <h1>{t('causal.title', 'Causal Graph')}</h1>
-        <p role="alert" style={{ color: '#e74c3c' }}>{getCausalErrorMessage(error, t)}</p>
+        <p role="alert" style={{ color: CAUSAL_COLORS.textError }}>{getCausalErrorMessage(error, t)}</p>
         <button
           onClick={() => void fetchGraph()}
-          style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid #555', background: 'transparent', color: '#8ab4f8', cursor: 'pointer', marginRight: '0.75rem' }}
+          style={{ padding: '4px 10px', borderRadius: 4, border: `1px solid ${CAUSAL_COLORS.borderDefault}`, background: 'transparent', color: CAUSAL_COLORS.textLink, cursor: 'pointer', marginRight: '0.75rem' }}
         >
           {t('common.retry', 'Retry')}
         </button>
-        <Link to={`/result/${encodedScenarioId}`} style={{ color: '#8ab4f8' }}>
+        <Link to={`/result/${encodedScenarioId}`} style={{ color: CAUSAL_COLORS.textLink }}>
           {t('common.back_to_result', 'Back to Result')}
         </Link>
       </div>
@@ -712,7 +763,7 @@ export function CausalReviewView() {
         <div
           style={{
             padding: isCompactViewport ? '0.75rem' : '1rem',
-            borderBottom: '1px solid #333',
+            borderBottom: `1px solid ${CAUSAL_COLORS.borderSubtle}`,
             display: 'grid',
             gap: '0.75rem',
           }}
@@ -727,18 +778,18 @@ export function CausalReviewView() {
             }}
           >
             <div style={{ display: 'grid', gap: '0.35rem', minWidth: 0 }}>
-              <Link to={`/result/${encodedScenarioId}`} style={{ color: '#8ab4f8', textDecoration: 'none', fontSize: '0.92rem' }}>
+              <Link to={`/result/${encodedScenarioId}`} style={{ color: CAUSAL_COLORS.textLink, textDecoration: 'none', fontSize: '0.92rem' }}>
                 &larr; {t('common.back_to_result', 'Back to Result')}
               </Link>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem', flexWrap: 'wrap' }}>
                 <h1 style={{ margin: 0, fontSize: isCompactViewport ? '1.08rem' : '1.24rem' }}>{t('causal.title', 'Causal Graph')}</h1>
-                <span style={{ color: '#888', fontSize: '0.9rem' }}>
+                <span style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.9rem' }}>
                   {nodeCount} {t('causal.nodes', 'nodes')} &middot; {edgeCount} {t('causal.edges', 'edges')}
                 </span>
               </div>
             </div>
             {agentSearch.trim() ? (
-              <div style={{ fontSize: '0.78rem', color: '#9aa5c3', maxWidth: 360 }}>
+              <div style={{ fontSize: '0.78rem', color: CAUSAL_COLORS.textMuted, maxWidth: 360 }}>
                 {searchState.matchCount > 0
                   ? t('causal.search_summary', {
                       defaultValue: '{{matches}} direct matches · {{related}} related nodes kept for context',
@@ -762,9 +813,9 @@ export function CausalReviewView() {
                   minHeight: isCompactViewport ? 40 : 36,
                   padding: '6px 10px',
                   borderRadius: 10,
-                  border: '1px solid #555',
-                  background: '#1a1a2e',
-                  color: '#fff',
+                  border: `1px solid ${CAUSAL_COLORS.borderDefault}`,
+                  background: CAUSAL_COLORS.surfaceField,
+                  color: CAUSAL_COLORS.inputText,
                   fontSize: '0.9rem',
                 }}
                 aria-label={t('causal.branch_select', 'Select branch')}
@@ -796,9 +847,9 @@ export function CausalReviewView() {
                   minHeight: isCompactViewport ? 40 : 36,
                   padding: '6px 10px',
                   borderRadius: 10,
-                  border: '1px solid #555',
-                  background: '#1a1a2e',
-                  color: '#fff',
+                  border: `1px solid ${CAUSAL_COLORS.borderDefault}`,
+                  background: CAUSAL_COLORS.surfaceField,
+                  color: CAUSAL_COLORS.inputText,
                   fontSize: '0.9rem',
                   width: '100%',
                 }}
@@ -811,9 +862,9 @@ export function CausalReviewView() {
                     minHeight: isCompactViewport ? 40 : 36,
                     padding: '6px 12px',
                     borderRadius: 10,
-                    border: '1px solid #555',
+                    border: `1px solid ${CAUSAL_COLORS.borderDefault}`,
                     background: 'transparent',
-                    color: '#c9d3e7',
+                    color: CAUSAL_COLORS.textSecondary,
                     cursor: 'pointer',
                     fontSize: '0.85rem',
                     whiteSpace: 'nowrap',
@@ -837,9 +888,9 @@ export function CausalReviewView() {
                   minHeight: 40,
                   padding: '6px 12px',
                   borderRadius: 10,
-                  border: '1px solid #555',
+                  border: `1px solid ${CAUSAL_COLORS.borderDefault}`,
                   background: 'transparent',
-                  color: '#8ab4f8',
+                  color: CAUSAL_COLORS.textLink,
                   cursor: 'pointer',
                   fontSize: '0.85rem',
                 }}
@@ -856,9 +907,9 @@ export function CausalReviewView() {
                 minHeight: isCompactViewport ? 40 : 36,
                 padding: '6px 12px',
                 borderRadius: 10,
-                border: '1px solid #555',
+                border: `1px solid ${CAUSAL_COLORS.borderDefault}`,
                 background: 'transparent',
-                color: '#8ab4f8',
+                color: CAUSAL_COLORS.textLink,
                 cursor: 'pointer',
                 fontSize: '0.85rem',
               }}
@@ -867,14 +918,14 @@ export function CausalReviewView() {
             </button>
           </div>
           {nodeCount > 0 && !isNonInteractiveFallback && isCompactViewport ? (
-            <span style={{ color: '#888', fontSize: '0.76rem' }}>
+            <span style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.76rem' }}>
               {t('common.graph_mobile_hint', 'Drag to pan. Pinch or use the graph controls to zoom.')}
             </span>
           ) : null}
         </div>
         {/* B6: Collapsible Legend */}
         {legendOpen && (
-          <div id={legendPanelId} style={{ padding: '0.5rem 1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.7rem', color: '#888', borderBottom: '1px solid #333' }}>
+          <div id={legendPanelId} style={{ padding: '0.5rem 1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.7rem', color: CAUSAL_COLORS.textMuted, borderBottom: `1px solid ${CAUSAL_COLORS.borderSubtle}` }}>
             {Object.entries(NODE_TYPE_COLORS_HEX).filter(([k]) => ['event', 'intervention', 'stance_shift', 'fork', 'verdict'].includes(k)).map(([type, color]) => (
               <span key={type} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: color, display: 'inline-block' }} />
@@ -884,17 +935,79 @@ export function CausalReviewView() {
           </div>
         )}
 
+        {/* Guide panel — collapsed by default after first dismiss, only when graph has data */}
+        {guideStats && guideOpen && (
+          <div id="causal-guide-panel" style={{ padding: '0.75rem 1rem', borderBottom: `1px solid ${CAUSAL_COLORS.borderSubtle}`, background: CAUSAL_COLORS.surfacePanel, fontSize: '0.78rem', color: CAUSAL_COLORS.textBody }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <strong style={{ color: CAUSAL_COLORS.textStrong, fontSize: '0.82rem' }}>
+                {t('causal.guide_title', 'Graph Overview')}
+                {agentSearch ? <span style={{ color: CAUSAL_COLORS.textMuted, fontWeight: 'normal', fontSize: '0.7rem' }}>{' '}({t('causal.guide_full_graph', 'full graph')})</span> : null}
+              </strong>
+              <button
+                type="button"
+                onClick={() => setGuideOpen(false)}
+                style={{ background: 'none', border: 'none', color: CAUSAL_COLORS.textMuted, cursor: 'pointer', fontSize: '0.7rem', padding: '2px 6px' }}
+                aria-label={t('causal.guide_close', 'Close guide')}
+                aria-expanded={true}
+                aria-controls="causal-guide-panel"
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginBottom: 8 }}>
+              <span>{guideStats.totalNodes} {t('causal.nodes', 'nodes')} · {guideStats.totalEdges} {t('causal.edges', 'edges')}</span>
+              {Object.entries(guideStats.typeCounts).map(([type, count]) => (
+                <span key={type} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: NODE_TYPE_COLORS_HEX[type as keyof typeof NODE_TYPE_COLORS_HEX] ?? CAUSAL_COLORS.decorativeLegendFallback, display: 'inline-block' }} />
+                  {t(`causal.type_${type}`, type.replace('_', ' '))}: {count as number}
+                </span>
+              ))}
+            </div>
+            {guideStats.godNodes.length > 0 && (
+              <div style={{ marginBottom: 6 }}>
+                <span style={{ color: CAUSAL_COLORS.textMuted }}>{t('causal.guide_key_nodes', 'Key nodes')}: </span>
+                {guideStats.godNodes.map((gn, i) => (
+                  <span key={gn.id} aria-label={`${gn.label} (${gn.degree})`}>
+                    {i > 0 && ' · '}
+                    <span style={{ color: CAUSAL_COLORS.textStrong }}>{gn.label} ({gn.degree})</span>
+                  </span>
+                ))}
+              </div>
+            )}
+            <p style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.7rem', margin: 0 }}>
+              {t('causal.guide_hint', 'Click any node to see details. Use the search bar to filter by agent.')}
+            </p>
+          </div>
+        )}
+        {guideStats && !guideOpen && (
+          <button
+            type="button"
+            onClick={() => setGuideOpen(true)}
+            aria-expanded={false}
+            aria-controls="causal-guide-panel"
+            style={{ display: 'block', width: '100%', padding: '4px 1rem', background: 'none', border: 'none', borderBottom: `1px solid ${CAUSAL_COLORS.borderHairline}`, color: CAUSAL_COLORS.textMuted, fontSize: '0.68rem', cursor: 'pointer', textAlign: 'left' }}
+          >
+            <span aria-hidden="true">{'▶'} </span>{t('causal.guide_show', 'Show graph overview')}
+          </button>
+        )}
+
         {nodeCount === 0 && !agentSearch ? (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <p style={{ color: '#888' }}>{t('causal.empty', 'No causal graph data available for this scenario.')}</p>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
+            <div style={{ textAlign: 'center', maxWidth: 360 }}>
+              <span style={{ fontSize: '2rem', display: 'block', marginBottom: 12 }} aria-hidden="true">{'\u{1F578}️'}</span>
+              <p style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.9rem', marginBottom: 8 }}>{t('causal.empty', 'No causal graph data available for this scenario.')}</p>
+              <p style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.78rem', lineHeight: 1.5 }}>
+                {t('causal.empty_guide', 'Causal graphs are generated during simulation when agents form cause-and-effect relationships across rounds. Try running a longer or deeper scenario.')}
+              </p>
+            </div>
           </div>
         ) : nodeCount === 0 && agentSearch ? (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <p style={{ color: '#888' }}>{t('causal.no_results', 'No nodes match your search.')}</p>
+            <p style={{ color: CAUSAL_COLORS.textMuted }}>{t('causal.no_results', 'No nodes match your search.')}</p>
           </div>
         ) : isNonInteractiveFallback ? (
           <div style={{ flex: 1, overflow: 'auto', padding: '1rem', position: 'relative' }} className="causal-graph-container">
-            <p style={{ color: '#888', marginBottom: '0.5rem' }}>
+            <p style={{ color: CAUSAL_COLORS.textMuted, marginBottom: '0.5rem' }}>
               {isTextFallback
                 ? t('causal.text_fallback', 'Graph too large for interactive view. Showing text list.')
                 : (t(
@@ -904,17 +1017,17 @@ export function CausalReviewView() {
             </p>
             <div data-testid="causal-events-list" role="list" aria-label={causalListAriaLabel}>
               {filteredData?.nodes.map(n => (
-                <div key={n.id} role="listitem" style={{ fontSize: '0.8rem', color: '#ccc', padding: '2px 0' }}>
+                <div key={n.id} role="listitem" style={{ fontSize: '0.8rem', color: CAUSAL_COLORS.textBody, padding: '2px 0' }}>
                   <button
                     type="button"
                     onClick={(event) => openNodeDetail(n.id, event.currentTarget)}
                     style={{
                       width: '100%',
                       textAlign: 'left',
-                      border: '1px solid #333',
+                      border: `1px solid ${CAUSAL_COLORS.borderSubtle}`,
                       borderRadius: 6,
-                      background: '#17172a',
-                      color: '#ddd',
+                      background: CAUSAL_COLORS.surfacePanel,
+                      color: CAUSAL_COLORS.textStrong,
                       padding: '0.55rem 0.7rem',
                       cursor: 'pointer',
                     }}
@@ -979,9 +1092,9 @@ export function CausalReviewView() {
                 {!isCompactViewport && (
                   <MiniMap
                     className="graph-export-chrome"
-                    nodeColor={(n) => (n.data?.bgColor as string) || '#555'}
+                    nodeColor={(n) => (n.data?.bgColor as string) || CAUSAL_COLORS.decorativeNodeFallback}
                     nodeStrokeWidth={3}
-                    style={{ background: '#1a1a2e', pointerEvents: 'none' }}
+                    style={{ background: CAUSAL_COLORS.surfaceField, pointerEvents: 'none' }}
                   />
                 )}
               </ReactFlow>

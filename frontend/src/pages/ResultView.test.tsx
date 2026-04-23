@@ -71,7 +71,19 @@ const {
     currentLanguage = language;
   };
   const getMockLanguage = () => currentLanguage;
-  const stableTranslator = (key: string, options?: Record<string, unknown>) => {
+  const interpolate = (template: string, vars: Record<string, unknown>) =>
+    template.replace(/\{\{\s*([^}\s]+)\s*\}\}/g, (match, name) => {
+      const value = vars[name];
+      return value === undefined || value === null ? match : String(value);
+    });
+  const stableTranslator = (
+    key: string,
+    defaultOrOptions?: string | Record<string, unknown>,
+    maybeOptions?: Record<string, unknown>,
+  ) => {
+    const options = typeof defaultOrOptions === 'object'
+      ? (defaultOrOptions as Record<string, unknown>)
+      : maybeOptions;
     if (key === 'home.campaign_mastery_level') {
       return `Lv.${options?.level}`;
     }
@@ -90,6 +102,25 @@ const {
     if (key === 'sim.replay.importing') {
       return 'Importing...';
     }
+    // Faction timeline section uses `t(key, { defaultValue, title })`. Mirror
+    // i18next's defaultValue + {{title}} interpolation so tests can assert the
+    // rendered English fallback without loading real resources.
+    if (
+      key === 'result.faction_timeline_branch_analysis_label'
+      || key === 'result.faction_timeline_title'
+      || key === 'result.faction_timeline_lead_expanded'
+      || key === 'result.faction_timeline_lead_dominant'
+      || key === 'result.faction_timeline_lead_single'
+    ) {
+      let template: string | undefined;
+      if (typeof defaultOrOptions === 'string') {
+        template = defaultOrOptions;
+      } else if (options && typeof options.defaultValue === 'string') {
+        template = options.defaultValue as string;
+      }
+      if (!template) return key;
+      return options ? interpolate(template, options) : template;
+    }
     return key;
   };
   const changeLanguageMock = vi.fn(async (language: string) => {
@@ -105,20 +136,31 @@ const {
 
 const {
   getMockCapabilities,
+  getMockCapabilityLoading,
   setMockCapabilities,
+  setMockCapabilityLoading,
 } = vi.hoisted(() => {
   let currentCapabilities = {
     agent_conversation: { enabled: false },
     agent_identity: { enabled: false },
     causal_graph: { enabled: false },
+    replay_trace: { enabled: false },
     counterfactual_replay: { enabled: false },
     factions: { enabled: false },
     web_search: { providers: {} },
   };
+  let currentCapabilityLoading = false;
   return {
     getMockCapabilities: () => currentCapabilities,
-    setMockCapabilities: (nextCapabilities: typeof currentCapabilities) => {
-      currentCapabilities = nextCapabilities;
+    getMockCapabilityLoading: () => currentCapabilityLoading,
+    setMockCapabilities: (nextCapabilities: Partial<typeof currentCapabilities>) => {
+      currentCapabilities = {
+        ...currentCapabilities,
+        ...nextCapabilities,
+      };
+    },
+    setMockCapabilityLoading: (loading: boolean) => {
+      currentCapabilityLoading = loading;
     },
   };
 });
@@ -151,7 +193,7 @@ vi.mock('../hooks/useCapabilityCheck', () => ({
   useCapabilityCheck: () => {
     const capabilities = getMockCapabilities();
     return {
-      loading: false,
+      loading: getMockCapabilityLoading(),
       enabled: capabilities.causal_graph.enabled,
       capabilities,
     };
@@ -452,10 +494,12 @@ beforeEach(() => {
     agent_conversation: { enabled: false },
     agent_identity: { enabled: false },
     causal_graph: { enabled: false },
+    replay_trace: { enabled: false },
     counterfactual_replay: { enabled: false },
     factions: { enabled: false },
     web_search: { providers: {} },
   });
+  setMockCapabilityLoading(false);
   endingRoomStoreState.snapshot = null;
   endingRoomStoreState.result = null;
   endingRoomStoreState.activeThreadId = null;
@@ -3453,6 +3497,376 @@ describe('ResultView campaign summary', () => {
       expect(await within(grid).findByTestId('result-source-polymarket-geo-gated')).toBeInTheDocument();
       expect(within(grid).queryByTestId('result-sources-polymarket')).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('ResultView explore deeper bridge', () => {
+  it('renders three bridge entries when branches exist and bridge capabilities are loaded', async () => {
+    setMockCapabilities({
+      causal_graph: { enabled: true },
+      replay_trace: { enabled: true },
+      counterfactual_replay: { enabled: true },
+    });
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 0.6,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'branch-2',
+          title: 'Rival Branch',
+          probability: 0.4,
+          status: 'COMPLETED',
+          story: 'An alternate branch story.',
+          insight: 'A forked insight.',
+          key_moments: ['Moment 2'],
+          parent_branch_id: 'branch-1',
+          fork_reason: 'Pressure spike',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const bridgeHeading = await screen.findByRole('heading', { name: 'result.bridge_title' });
+    const bridgeSection = bridgeHeading.closest('section');
+    expect(bridgeSection).not.toBeNull();
+    expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(3);
+  });
+
+  it('does not render the bridge card when the story has no branches', async () => {
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('result.title')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'result.bridge_title' })).not.toBeInTheDocument();
+  });
+
+  it('does not render the bridge while capability state is still loading', async () => {
+    setMockCapabilityLoading(true);
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('result.title')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'result.bridge_title' })).not.toBeInTheDocument();
+  });
+
+  it('builds the causal entry href from the active scenario id and encoded branch id', async () => {
+    const scenarioId = 'scenario A&B';
+    const branchId = 'branch 1&2';
+    setMockCapabilities({
+      causal_graph: { enabled: true },
+    });
+    vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+      id: scenarioId,
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      scene_theme: 'law_court',
+      agents: [],
+      branches: [],
+      messages: [],
+      groups: [],
+      hierarchical: false,
+      director_state: null,
+      gameplay_state: null,
+    } as Scenario);
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: scenarioId,
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: branchId,
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/result/${encodeURIComponent(scenarioId)}`]}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const causalEntry = await screen.findByRole('link', { name: /result.bridge_causal_title/ });
+    expect(causalEntry).toHaveAttribute(
+      'href',
+      `/sim/${encodeURIComponent(scenarioId)}/causal-map?branch_id=${encodeURIComponent(branchId)}`,
+    );
+  });
+
+  it('encodes the existing causal CTA href for scenario ids with URL syntax characters', async () => {
+    const scenarioId = 'scenario A&B';
+    setMockCapabilities({
+      causal_graph: { enabled: true },
+    });
+    vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+      id: scenarioId,
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      scene_theme: 'law_court',
+      agents: [],
+      branches: [],
+      messages: [],
+      groups: [],
+      hierarchical: false,
+      director_state: null,
+      gameplay_state: null,
+    } as Scenario);
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: scenarioId,
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/result/${encodeURIComponent(scenarioId)}`]}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const causalLinks = await screen.findAllByRole('link', { name: 'result.causal_graph_link' });
+    expect(causalLinks).toHaveLength(2);
+    for (const link of causalLinks) {
+      expect(link).toHaveAttribute('href', `/sim/${encodeURIComponent(scenarioId)}/causal-map`);
+    }
+  });
+
+  it('disables the replay bridge entry in replay mode', async () => {
+    setMockCapabilities({
+      causal_graph: { enabled: true },
+      replay_trace: { enabled: true },
+      counterfactual_replay: { enabled: true },
+    });
+
+    const replayUrl = await buildScenarioReplayUrl('https://example.com', {
+      scenario: {
+        id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        total_rounds: 5,
+        mode: 'blackboard',
+        visualization_enabled: false,
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+      },
+      storyData: {
+        scenario_id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        branches: [
+          {
+            id: 'branch-1',
+            title: 'Archive Branch',
+            probability: 0.6,
+            status: 'COMPLETED',
+            story: 'A complete branch story.',
+            insight: 'A durable insight.',
+            key_moments: ['Moment 1'],
+            parent_branch_id: null,
+            fork_reason: '',
+          },
+          {
+            id: 'branch-2',
+            title: 'Rival Branch',
+            probability: 0.4,
+            status: 'COMPLETED',
+            story: 'An alternate branch story.',
+            insight: 'A forked insight.',
+            key_moments: ['Moment 2'],
+            parent_branch_id: 'branch-1',
+            fork_reason: 'Pressure spike',
+          },
+        ],
+      },
+      agents: [
+        { id: 'agent-1', name: 'Archivist', role: 'Recorder', tier: 'CORE', emotion: 'calm' },
+      ],
+      predictions: [],
+      scenarioMeta: {
+        director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+        cooldowns: {},
+        cards: { usageLog: [] },
+        betting: { bets: [] },
+        commitment: {
+          active: false,
+          branchId: null,
+          branchTitle: null,
+          committedAtRound: null,
+          committedAt: null,
+          outcome: null,
+        },
+        objectives: {
+          generatedForQuestion: null,
+          generatedForProfile: null,
+          goals: [],
+        },
+        archive: {
+          branchSnapshots: [],
+          keyMoments: ['Moment 1', 'Moment 2'],
+          profileId: 'law',
+          dominantBranchTitle: 'Archive Branch',
+          dominantTone: 'order',
+          mostUsedCard: null,
+          bettingHit: null,
+          archiveGrade: 'A',
+          directorStyleTag: 'quiet_observer',
+          profileResonance: 'aligned',
+        },
+      },
+      campaignScenarioSummary: null,
+      campaignSummary: null,
+      isDailyChallenge: false,
+    });
+
+    const url = new URL(replayUrl);
+
+    render(
+      <MemoryRouter initialEntries={[`${url.pathname}${url.search}`]}>
+        <Routes>
+          <Route path="/result/replay" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const replayEntry = await screen.findByRole('link', { name: /result.bridge_replay_title/ });
+    expect(replayEntry).toHaveAttribute('aria-disabled', 'true');
+    expect(replayEntry).toHaveTextContent('result.bridge_replay_unavailable');
+  });
+
+  it('disables the compare bridge entry when there is only one branch', async () => {
+    setMockCapabilities({
+      counterfactual_replay: { enabled: true },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const compareEntry = await screen.findByRole('link', { name: /result.bridge_compare_title/ });
+    expect(compareEntry).toHaveAttribute('aria-disabled', 'true');
+    expect(compareEntry).toHaveTextContent('result.bridge_single_branch');
+  });
+
+  it('marks every disabled bridge entry with aria-disabled=true', async () => {
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 0.6,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'branch-2',
+          title: 'Rival Branch',
+          probability: 0.4,
+          status: 'COMPLETED',
+          story: 'An alternate branch story.',
+          insight: 'A forked insight.',
+          key_moments: ['Moment 2'],
+          parent_branch_id: 'branch-1',
+          fork_reason: 'Pressure spike',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const bridgeHeading = await screen.findByRole('heading', { name: 'result.bridge_title' });
+    const bridgeSection = bridgeHeading.closest('section');
+    expect(bridgeSection).not.toBeNull();
+    const entries = within(bridgeSection as HTMLElement).getAllByRole('link');
+    expect(entries).toHaveLength(3);
+    for (const entry of entries) {
+      expect(entry).toHaveAttribute('aria-disabled', 'true');
+      expect(entry.tagName).toBe('DIV');
+    }
   });
 });
 
