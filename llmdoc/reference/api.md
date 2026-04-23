@@ -155,7 +155,7 @@
 | `GET` | `/api/scenario/{scenario_id}/export` | 导出 Markdown |
 | `POST` | `/api/health` | 后端健康检查 |
 | `POST` | `/api/health/test` | provider 探测与预算预检；返回服务端默认搜索 hint |
-| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 7-key capability registry (web_search + 6 Phase 3 功能开关) |
+| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 10-key capability registry (`web_search` + 9 个功能开关) |
 | `GET` | `/` | 根信息 |
 | `GET` | `/metrics` | Prometheus 文本指标 |
 
@@ -192,10 +192,10 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/api/conversation/start` | 创建 conversation thread，并写入第一条 user turn + 一条预留 assistant turn |
-| `GET` | `/api/conversation/{thread_id}` | 读取 thread 与已提交 turn 历史 |
-| `POST` | `/api/conversation/{thread_id}/turn` | 通过 SSE 追加/启动 assistant turn |
-| `DELETE` | `/api/conversation/{thread_id}/active` | 中止当前 active assistant turn |
+| `POST` | `/api/conversation/start` | 创建 conversation thread，并写入第一条 user turn + 一条预留 assistant turn；受 `FEATURE_AGENT_CONVERSATION` gate |
+| `GET` | `/api/conversation/{thread_id}` | 读取 thread 与已提交 turn 历史；受 `FEATURE_AGENT_CONVERSATION` gate |
+| `POST` | `/api/conversation/{thread_id}/turn` | 通过 SSE 追加/启动 assistant turn；受 `FEATURE_AGENT_CONVERSATION` gate |
+| `DELETE` | `/api/conversation/{thread_id}/active` | 中止当前 active assistant turn；受 `FEATURE_AGENT_CONVERSATION` gate |
 
 说明：
 
@@ -229,11 +229,13 @@
 | `POST` | `/api/scenario/{id}/resume` | 从指定 round 续跑新分支 | `FEATURE_COUNTERFACTUAL_REPLAY` |
 | `GET` | `/api/scenario/{id}/compare` | 分支对比 | `FEATURE_COUNTERFACTUAL_REPLAY` |
 | `GET` | `/api/scenario/{id}/checkpoints` | 检查点列表 | `FEATURE_COUNTERFACTUAL_REPLAY` |
+| `GET` | `/api/scenario/{id}/replay-trace` | replay branch lineage | `FEATURE_REPLAY_TRACE` |
 | `GET` | `/api/scenario/{id}/faction-timeline` | 阵营时间线 | `FEATURE_FACTIONS` |
 
 说明：
 
 - 所有 Phase 3 endpoint 在对应 `FEATURE_*=false` 时返回 404，不执行任何业务逻辑。
+- `FEATURE_KG_EXPLORER` 只控制 KG Explorer / Timeline Galaxy 的前端 capability gate；当前页面数据仍读取 `GET /api/scenario/{id}/causal-graph`，因此也需要 `FEATURE_CAUSAL_GRAPH=true`。
 - `POST /api/agents/identities/preflight` 当前只返回需要 L3 确认的 `L2 fuzzy candidate`；`L1 exact` 和全新 identity 不会阻断前端启动。
 - `GET /api/agents/identities/{id}/growth-events` 当前要求 `user_id`；缺失时返回 400，identity 不存在或 owner 不匹配时返回 404。
 - `GET /api/scenario/{id}/causal-graph` 当前会先 `trim` `branch_id`：

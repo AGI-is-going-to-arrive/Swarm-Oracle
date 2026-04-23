@@ -68,6 +68,7 @@ docker compose up --build -d
   - `FEATURE_CAUSAL_GRAPH`
   - `FEATURE_FACTIONS`
   - `FEATURE_ARGUMENT_MAP`
+- `KG Explorer`、`Replay Trace` 和图谱节点对话默认不随 Docker 评审栈开启；需要时显式设置 `FEATURE_KG_EXPLORER=true`、`FEATURE_REPLAY_TRACE=true`、`FEATURE_AGENT_CONVERSATION=true`，然后重启 backend。
 - 根目录 `.dockerignore` 当前已经排除了本地 `frontend/output`、SQLite/Chroma 数据和常见缓存；E2E 产物不会再被一起塞进 Docker build context。
 - 如果你要拉一套干净的评审栈，不复用旧 named volume，直接带 project 名启动：
 
@@ -83,6 +84,7 @@ curl -s -X POST http://127.0.0.1:18927/api/health
 
 - 本地直接启动 backend 时，读取 `backend/.env`。
 - 仓库根 `.env.example` 用于初始化本地模板。
+- 修改 `FEATURE_*` 开关后需要重启 backend；前端会通过 `/api/capabilities` 重新读取能力状态。
 - 详细配置项见 `llmdoc/reference/config.md`。
 
 常见初始化：

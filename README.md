@@ -130,6 +130,7 @@ docker compose up --build -d
   - `FEATURE_CAUSAL_GRAPH`
   - `FEATURE_FACTIONS`
   - `FEATURE_ARGUMENT_MAP`
+- `KG Explorer`、`Replay Trace` 和图谱节点对话默认不随 Docker 评审栈开启；需要时显式设置 `FEATURE_KG_EXPLORER=true`、`FEATURE_REPLAY_TRACE=true`、`FEATURE_AGENT_CONVERSATION=true`，然后重启 backend。
 - 如果你只是想拉一套全新的评审环境，不复用旧 named volume，直接带 project 名起一套隔离栈：
 
 ```bash
