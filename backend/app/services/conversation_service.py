@@ -56,7 +56,8 @@ from app.models.agent_conversation import (
     AgentConversationTurn,
 )
 from app.models.agent_identity import AgentIdentity
-from app.models.database import Scenario, get_engine
+from app.models.database import Branch, Scenario, get_engine
+from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
 from app.services.llm_client import (
     LLMError,
     format_untrusted_text_block,
@@ -94,6 +95,13 @@ _ERROR_MESSAGE_MAP: dict[str, str] = {
 # ``sk-<40 chars>`` openai-style api keys before a log line is emitted.
 _BYOK_URL_RE = re.compile(r"https?://[^\s\"']+", re.IGNORECASE)
 _BYOK_KEY_RE = re.compile(r"\b(?:sk|xai|tvly|gsk|tvs|psk|api)-[A-Za-z0-9_\-]{16,}", re.IGNORECASE)
+_PROMPT_SCENARIO_LIMIT = 500
+_PROMPT_BRANCH_LIMIT = 800
+_PROMPT_NODE_LIMIT = 900
+_PROMPT_RELATION_LIMIT = 180
+_PROMPT_RELATION_COUNT = 6
+_PROMPT_HISTORY_TURN_LIMIT = 12
+_PROMPT_HISTORY_CHAR_LIMIT = 1200
 
 # SSE media type constant (kept out of router for reuse).
 SSE_MEDIA_TYPE = "text/event-stream"
@@ -121,6 +129,14 @@ class LLMOverrides:
     base_url: str | None
     model: str | None
     disable_user_quota: bool
+
+
+@dataclass(frozen=True)
+class _PromptContext:
+    scenario_question: str | None = None
+    branch_summary: str | None = None
+    node_summary: str | None = None
+    relation_summaries: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1094,11 +1110,189 @@ def signal_scenario_deleted_turns(turn_ids: list[str]) -> None:
 # ── Streaming ───────────────────────────────────────────
 
 
+def _truncate_prompt_text(value: Any, limit: int) -> str:
+    text = "" if value is None else str(value).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 1, 0)].rstrip() + "…"
+
+
+def _load_json_object(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        loaded = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _compact_json_for_prompt(value: Any, limit: int) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        text = str(value)
+    return _truncate_prompt_text(text, limit)
+
+
+def _latest_causal_snapshot(session: Session, scenario_id: str) -> GraphSnapshot | None:
+    return session.exec(
+        select(GraphSnapshot)
+        .where(
+            GraphSnapshot.owner_type == "scenario",
+            GraphSnapshot.owner_id == scenario_id,
+            GraphSnapshot.graph_kind == "causal_review",
+        )
+        .order_by(GraphSnapshot.created_at.desc())
+    ).first()
+
+
+def _load_origin_graph_node(
+    session: Session,
+    *,
+    snapshot_id: str,
+    origin_node_id: str | None,
+) -> GraphNode | None:
+    if not origin_node_id:
+        return None
+    return session.exec(
+        select(GraphNode)
+        .where(
+            GraphNode.snapshot_id == snapshot_id,
+            (GraphNode.id == origin_node_id) | (GraphNode.node_key == origin_node_id),
+        )
+    ).first()
+
+
+def _summarize_branch(branch: Branch | None) -> str | None:
+    if branch is None:
+        return None
+    parts = [
+        f"title={_truncate_prompt_text(branch.title, 120)}",
+        f"id={branch.id}",
+    ]
+    if branch.fork_round:
+        parts.append(f"fork_round={branch.fork_round}")
+    if branch.fork_reason:
+        parts.append(f"fork_reason={_truncate_prompt_text(branch.fork_reason, 240)}")
+    summary_bits = " ".join(
+        bit for bit in [branch.summary, branch.insight, branch.description] if bit
+    )
+    if summary_bits:
+        parts.append(f"summary={_truncate_prompt_text(summary_bits, _PROMPT_BRANCH_LIMIT)}")
+    return "\n".join(parts)
+
+
+def _summarize_graph_node(node: GraphNode | None, fallback_type: str | None) -> str | None:
+    if node is None:
+        if not fallback_type:
+            return None
+        return f"type={_truncate_prompt_text(fallback_type, 80)}"
+    payload = _load_json_object(node.payload_json)
+    parts = [
+        f"id={node.id}",
+        f"type={node.node_type}",
+        f"label={_truncate_prompt_text(node.label, 240)}",
+    ]
+    if node.round_number is not None:
+        parts.append(f"round={node.round_number}")
+    if payload:
+        allowed_payload = {
+            key: payload[key]
+            for key in (
+                "agent_id",
+                "agent_name",
+                "branch_id",
+                "source_branch_id",
+                "emotion",
+                "stance_label",
+                "summary_excerpt",
+                "children",
+            )
+            if key in payload
+        }
+        if allowed_payload:
+            parts.append(f"payload={_compact_json_for_prompt(allowed_payload, 800)}")
+    return _truncate_prompt_text("\n".join(parts), _PROMPT_NODE_LIMIT)
+
+
+def _summarize_adjacent_relations(
+    session: Session,
+    *,
+    snapshot_id: str,
+    node: GraphNode | None,
+) -> tuple[str, ...]:
+    if node is None:
+        return ()
+    edges = list(
+        session.exec(
+            select(GraphEdge)
+            .where(
+                GraphEdge.snapshot_id == snapshot_id,
+                (GraphEdge.source_node_id == node.id) | (GraphEdge.target_node_id == node.id),
+            )
+            .limit(_PROMPT_RELATION_COUNT)
+        ).all()
+    )
+    if not edges:
+        return ()
+    neighbor_ids = {
+        edge.target_node_id if edge.source_node_id == node.id else edge.source_node_id
+        for edge in edges
+    }
+    neighbors = {
+        neighbor.id: neighbor
+        for neighbor in session.exec(
+            select(GraphNode).where(GraphNode.id.in_(neighbor_ids))
+        ).all()
+    }
+    summaries: list[str] = []
+    for edge in edges:
+        outgoing = edge.source_node_id == node.id
+        neighbor = neighbors.get(edge.target_node_id if outgoing else edge.source_node_id)
+        direction = "outgoing" if outgoing else "incoming"
+        relation = edge.label or edge.edge_type
+        neighbor_label = neighbor.label if neighbor else "unknown"
+        text = f"{direction} {relation} {neighbor_label}"
+        summaries.append(_truncate_prompt_text(text, _PROMPT_RELATION_LIMIT))
+    return tuple(summaries)
+
+
+def _load_prompt_context(session: Session, thread: AgentConversationThread) -> _PromptContext:
+    scenario = session.get(Scenario, thread.scenario_id)
+    scenario_question = _truncate_prompt_text(scenario.question, _PROMPT_SCENARIO_LIMIT) if scenario else None
+    snapshot = _latest_causal_snapshot(session, thread.scenario_id)
+    node = _load_origin_graph_node(
+        session,
+        snapshot_id=snapshot.id,
+        origin_node_id=thread.origin_node_id,
+    ) if snapshot else None
+    node_payload = _load_json_object(node.payload_json if node else None)
+    branch_id = (
+        thread.origin_branch_id
+        or (node_payload.get("branch_id") if isinstance(node_payload.get("branch_id"), str) else None)
+    )
+    branch = session.get(Branch, branch_id) if branch_id else None
+    if branch is not None and branch.scenario_id != thread.scenario_id:
+        branch = None
+    return _PromptContext(
+        scenario_question=scenario_question,
+        branch_summary=_summarize_branch(branch),
+        node_summary=_summarize_graph_node(node, thread.origin_node_type),
+        relation_summaries=_summarize_adjacent_relations(
+            session,
+            snapshot_id=snapshot.id,
+            node=node,
+        ) if snapshot else (),
+    )
+
+
 def _build_prompt(
     *,
     thread: AgentConversationThread,
     new_user_content: str,
     history: list[AgentConversationTurn],
+    prompt_context: _PromptContext | None = None,
 ) -> str:
     """Assemble an LLM prompt from thread history + new user turn.
 
@@ -1117,14 +1311,39 @@ def _build_prompt(
         lines.append(
             f"[Origin node type: {thread.origin_node_type}]"
         )
+    if thread.origin_branch_id:
+        lines.append(f"[Origin branch: {thread.origin_branch_id}]")
+    if thread.origin_round_number is not None:
+        lines.append(f"[Origin round: {thread.origin_round_number}]")
+    if prompt_context:
+        context_lines: list[str] = []
+        if prompt_context.scenario_question:
+            context_lines.append(f"Scenario question: {prompt_context.scenario_question}")
+        if prompt_context.branch_summary:
+            context_lines.append(f"Branch context:\n{prompt_context.branch_summary}")
+        if prompt_context.node_summary:
+            context_lines.append(f"Origin node context:\n{prompt_context.node_summary}")
+        if prompt_context.relation_summaries:
+            context_lines.append(
+                "Adjacent graph relations:\n"
+                + "\n".join(f"- {item}" for item in prompt_context.relation_summaries)
+            )
+        if context_lines:
+            lines.append(
+                format_untrusted_text_block(
+                    "worldline graph context",
+                    _truncate_prompt_text("\n\n".join(context_lines), 3500),
+                )
+            )
 
     # Each historical user turn is inert data; assistant turns we render as
     # plain character dialogue (they were produced by this model already).
-    for turn in history:
+    for turn in history[-_PROMPT_HISTORY_TURN_LIMIT:]:
+        content = _truncate_prompt_text(turn.content, _PROMPT_HISTORY_CHAR_LIMIT)
         if turn.role == "user":
-            lines.append(format_untrusted_text_block("user turn", turn.content))
+            lines.append(format_untrusted_text_block("user turn", content))
         elif turn.role == "assistant":
-            lines.append(f"Agent: {turn.content}")
+            lines.append(f"Agent: {content}")
 
     lines.append(format_untrusted_text_block("user turn", new_user_content))
     lines.append("Agent:")
@@ -1220,6 +1439,7 @@ async def stream_assistant_turn(
         try:
             # Hydrate thread + assistant turn + history in a short-lived session.
             history: list[AgentConversationTurn] = []
+            prompt_context: _PromptContext | None = None
             quota_owner: str | None = None
             try:
                 with Session(engine) as session:
@@ -1251,6 +1471,7 @@ async def stream_assistant_turn(
                             for turn in history
                             if turn.id != history_exclude_turn_id
                         ]
+                    prompt_context = _load_prompt_context(session, thread)
             except HTTPException as exc:
                 detail = exc.detail if isinstance(exc.detail, dict) else {}
                 code = detail.get("code") if isinstance(detail, dict) else None
@@ -1273,6 +1494,7 @@ async def stream_assistant_turn(
                 thread=thread,
                 new_user_content=new_user_content,
                 history=history,
+                prompt_context=prompt_context,
             )
 
             # HC-31 audit: when ``disable_user_quota`` is applied to a local

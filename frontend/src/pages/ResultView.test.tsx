@@ -25,6 +25,7 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: {
       get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
     },
+    json: async () => body,
     text: async () => JSON.stringify(body),
   } as Response;
 }
@@ -1678,7 +1679,7 @@ describe('ResultView campaign summary', () => {
       agent_conversation: { enabled: false },
       agent_identity: { enabled: false },
       causal_graph: { enabled: false },
-      counterfactual_replay: { enabled: false },
+      counterfactual_replay: { enabled: true },
       factions: { enabled: true },
       web_search: { providers: {} },
     });
@@ -1713,7 +1714,13 @@ describe('ResultView campaign summary', () => {
         },
       ],
     });
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([]));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/counterfactual')) {
+        return jsonResponse({ branch_id: 'cf-branch-2' });
+      }
+      return jsonResponse([]);
+    });
 
     render(
       <MemoryRouter initialEntries={['/result/scenario-1']}>
@@ -1750,6 +1757,29 @@ describe('ResultView campaign summary', () => {
         }),
       );
     });
+
+    const compareEntry = await screen.findByRole('link', { name: /result.bridge_compare_title/ });
+    expect(compareEntry).toHaveAttribute(
+      'href',
+      '/result/scenario-1/compare?branch_a=branch-2&branch_b=branch-1',
+    );
+
+    await user.selectOptions(screen.getByLabelText('counterfactual.agent'), 'agent-1');
+    await user.type(screen.getByLabelText('counterfactual.replacement'), 'Try the divergent path.');
+    await user.click(screen.getByRole('button', { name: 'counterfactual.submit' }));
+
+    await waitFor(() => {
+      const counterfactualCall = fetchSpy.mock.calls.find(([url]) => String(url).includes('/counterfactual'));
+      expect(counterfactualCall).toBeTruthy();
+      const body = JSON.parse(String((counterfactualCall?.[1] as RequestInit).body));
+      expect(body.source_branch_id).toBe('branch-2');
+    });
+    expect(await screen.findByText('counterfactual.created')).toBeInTheDocument();
+    expect(
+      screen
+        .getAllByRole('link', { name: 'result.compare_link' })
+        .some((link) => link.getAttribute('href') === '/result/scenario-1/compare?branch_a=branch-2&branch_b=cf-branch-2'),
+    ).toBe(true);
   });
 
   it('shows the resume panel on normal result pages when counterfactual replay is enabled', async () => {

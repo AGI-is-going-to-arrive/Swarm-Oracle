@@ -38,6 +38,7 @@ export interface GraphNodeCardData {
   controlsId?: string;
   tooltipDisabled: boolean;
   reduceMotion?: boolean;
+  disableNodeDrag?: boolean;
   sourcePos: string;
   targetPos: string;
   [key: string]: unknown;
@@ -72,7 +73,7 @@ const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
 
   const card = (
     <button
-      className="nodrag nopan"
+      className={d.disableNodeDrag === false ? 'nopan' : 'nodrag nopan'}
       type="button"
       aria-label={d.ariaLabel || d.fullLabel || d.label}
       aria-haspopup="dialog"

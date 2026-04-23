@@ -1373,8 +1373,8 @@
       },
       "trace": {
         "aria_label": "回放轨迹",
-        "frame_count_label": "{{count}} 帧",
-        "branches_label": "{{count}} 条分支"
+        "frame_count_label": "帧",
+        "branches_label": "分支"
       },
       "empty": {
         "title": "暂无可用回放",

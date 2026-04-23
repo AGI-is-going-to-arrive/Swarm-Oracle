@@ -196,6 +196,14 @@ describe('i18n locale resources', () => {
     expect(zh.translation.replay.feature_disabled_title).toBe('回放轨迹不可用');
     expect(en.translation.replay.feature_unavailable_title).toBe('Replay availability could not be checked');
     expect(zh.translation.replay.feature_unavailable_title).toBe('暂时无法确认回放能力');
+    expect(en.translation.replay.trace.frame_count_label).toBe('Frame');
+    expect(zh.translation.replay.trace.frame_count_label).toBe('帧');
+    expect(en.translation.replay.trace.branches_label).toBe('Branches');
+    expect(zh.translation.replay.trace.branches_label).toBe('分支');
+    expect(en.translation.replay.trace.frame_count_label).not.toContain('{{count}}');
+    expect(en.translation.replay.trace.branches_label).not.toContain('{{count}}');
+    expect(zh.translation.replay.trace.frame_count_label).not.toContain('{{count}}');
+    expect(zh.translation.replay.trace.branches_label).not.toContain('{{count}}');
     expect(en.translation.kg_explorer.error_fetch).toBe('Unable to load the knowledge graph right now. Please retry.');
     expect(zh.translation.kg_explorer.error_fetch).toBe('当前无法加载知识图谱，请稍后重试。');
   });

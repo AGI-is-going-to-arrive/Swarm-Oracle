@@ -111,7 +111,13 @@ interface NodeConversationSheetState {
   open: boolean;
   scenarioId: string;
   identityId: string | null;
-  origin: { nodeId: string; nodeType: string; excerpt?: string };
+  origin: {
+    nodeId: string;
+    nodeType: string;
+    excerpt?: string;
+    branchId?: string | null;
+    roundNumber?: number | null;
+  };
 }
 
 function createClosedSheetState(): NodeConversationSheetState {
@@ -295,6 +301,7 @@ function layoutDagre(
         selected: false,
         connected: false,
         expanded: false,
+        disableNodeDrag: false,
         tooltipDisabled,
         sourcePos: compactViewport ? 'bottom' : 'right',
         targetPos: compactViewport ? 'top' : 'left',
@@ -323,7 +330,7 @@ function layoutDagre(
 // ── Component ───────────────────────────────────────────────
 
 export function CausalReviewView() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const isCompactViewport = useCompactGraphViewport();
   const { loading: capLoading, enabled } = useCapabilityCheck('causal_graph');
   const { id } = useParams<{ id: string }>();
@@ -528,6 +535,9 @@ export function CausalReviewView() {
   const layoutSignature = useMemo(() => (
     `${layoutResult.nodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutResult.edges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
   ), [layoutResult]);
+  const layoutResetSignature = useMemo(() => (
+    `${layoutSignature}::search=${agentSearch.trim().toLowerCase()}::branch=${branchId ?? ''}::lang=${i18n.language}::compact=${String(isCompactViewport)}`
+  ), [agentSearch, branchId, i18n.language, isCompactViewport, layoutSignature]);
 
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState(layoutResult.nodes);
   const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState(layoutResult.edges);
@@ -540,7 +550,10 @@ export function CausalReviewView() {
     pendingFitSignatureRef.current = layoutSignature;
     setFlowNodes(layoutResult.nodes);
     setFlowEdges(layoutResult.edges);
-  }, [layoutResult, layoutSignature, setFlowNodes, setFlowEdges]);
+    // layoutResult can be re-created during node drag renders; the signature is
+    // the structural reset boundary, so user-dragged positions are preserved.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutResetSignature, setFlowNodes, setFlowEdges]);
 
   // Clear stale selection when filtered node disappears
   useEffect(() => {
@@ -692,12 +705,21 @@ export function CausalReviewView() {
       setSheetState((prev) => (prev.open ? { ...prev, open: false } : prev));
       return;
     }
+    const rawPayload = typeof raw.payload === 'object' && raw.payload !== null && !Array.isArray(raw.payload)
+      ? raw.payload as Record<string, unknown>
+      : {};
     // FE-3-seq: desktop keeps detail + sidecar visible together.
     setSheetState({
       open: true,
       scenarioId: id ?? '',
       identityId: null,
-      origin: { nodeId: raw.id, nodeType: raw.type, excerpt: raw.label || raw.key },
+      origin: {
+        nodeId: raw.id,
+        nodeType: raw.type,
+        excerpt: raw.label || raw.key,
+        branchId: typeof rawPayload.branch_id === 'string' ? rawPayload.branch_id : null,
+        roundNumber: raw.round,
+      },
     });
   }, [rawNodeMap, id, isCompactViewport]);
 
@@ -1080,10 +1102,10 @@ export function CausalReviewView() {
                 panActivationKeyCode={null}
                 zoomActivationKeyCode={null}
                 panOnDrag={[0, 1]}
-                nodesDraggable={false}
+                nodesDraggable
                 nodesFocusable={false}
                 edgesFocusable={false}
-                elementsSelectable={false}
+                elementsSelectable
                 zoomOnDoubleClick={!isCompactViewport}
                 proOptions={{ hideAttribution: true }}
               >

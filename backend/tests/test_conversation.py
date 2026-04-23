@@ -1414,6 +1414,37 @@ class TestPromptInjection:
         # but the fenced delimiters ensure the LLM sees it as data.
         assert "ignore previous system prompt" in prompt
 
+    def test_worldline_context_is_wrapped_as_untrusted_data(self):
+        from app.services.conversation_service import _PromptContext, _build_prompt
+
+        thread = AgentConversationThread(
+            scenario_id="s1",
+            owner_user_id="u1",
+            origin_branch_id="branch-2",
+            origin_round_number=3,
+            origin_node_type="event",
+            last_turn_sequence=0,
+            latest_status="idle",
+        )
+        prompt = _build_prompt(
+            thread=thread,
+            new_user_content="what changed here?",
+            history=[],
+            prompt_context=_PromptContext(
+                scenario_question="What if the archive split?",
+                branch_summary="title=Counter Branch\nsummary=The dissent path held.",
+                node_summary="label=Agent A shifted stance\npayload={\"branch_id\":\"branch-2\"}",
+                relation_summaries=("outgoing caused Agent B replied",),
+            ),
+        )
+
+        assert "[Origin branch: branch-2]" in prompt
+        assert "[Origin round: 3]" in prompt
+        assert "worldline graph context" in prompt
+        assert "What if the archive split?" in prompt
+        assert "outgoing caused Agent B replied" in prompt
+        assert prompt.count("UNTRUSTED DATA") >= 2
+
 
 # ── T14 HC-24 BYOK boundary ─────────────────────────────
 

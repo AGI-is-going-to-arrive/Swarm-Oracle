@@ -38,4 +38,5 @@
 |------|------|
 | auth/ownership 仍非最终方案 | 当前已有 signed principal token 与局部 owner 收口；本轮又补了 `scenario WS` owner 校验、compare branch 归属校验与 scenario 删除时的 artifact 清理，但还不是完整 JWT/OAuth2 + per-resource authorization 方案 |
 | Oracle / Roundtable 严格 replay 自动化观测仍有退化 | replay coverage 现在按 fail-closed 收口；readonly replay / reload restore / import 关键字段缺失会直接失败，不再 best-effort 保 `summary.json`。`ending-room-followup-suite` 的 desktop/mobile fresh rerun 已通过，`roundtable-suite full` 也已 fresh 通过；但慢 provider 下，ending-room follow-up 仍可能拿不到完整 lifecycle 工件，只能回到目标线程级 snapshot / settled 验真 |
+| GraphEdge evidence contract 尚未落库 | `GraphEdge` 还没有稳定的 `confidence_tier / source_ref / source_round_number / evidence` 字段；Graphify 证据层如果进入实现，需要先确认迁移、API response 和前端消费口径，不能把 `payload_json` 当稳定 contract |
 | test_p0_wiring.py 覆盖定位 | 定向回归保护，非全链路端到端入口验证 |

@@ -383,6 +383,26 @@ node scripts/e2e-phase3-batch-b.mjs desktop --url http://127.0.0.1:18930 --brows
 说明：
 
 - 如果要先收图谱节点详情 / sidecar 这条回归，优先跑上面的窄集；过了再决定要不要扩大到 full pytest / full vitest。
+- 如果要先收 P1 前置图谱修复，最小窄集是：
+
+```bash
+cd frontend
+npm test -- --run src/hooks/useG6Graph.test.ts src/pages/KGExplorerView.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ReplayView.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts src/hooks/useNodeConversationTransport.test.tsx
+npx tsc --noEmit -p tsconfig.app.json
+node --test scripts/e2e-frontend-preflight.test.mjs
+npm run build
+
+cd ../backend
+source .venv/bin/activate
+python -m pytest tests/test_conversation.py tests/test_agent_conversation.py -q
+```
+
+- 这组 P1 前置窄集当前主要看：
+  - KGExplorer 主图 / minimap / search filter / 业务 `kgType`
+  - CausalReview 节点拖拽与选择
+  - ReplayView 计数标签不泄漏 `{{count}}`
+  - ResultView compare / counterfactual 跟随 `analysisBranch`
+  - conversation prompt 带轻量 scenario / branch / node / graph 语境
 - 当前这条窄集之外，focused browser spot-check 也已经补过一轮：
   - detail `right: 464px`
   - detail close / pane click / detail-focused `Escape` 不会再把 sidecar 一起关掉

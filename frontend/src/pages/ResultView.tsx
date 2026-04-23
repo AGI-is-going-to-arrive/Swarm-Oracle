@@ -932,6 +932,7 @@ export default function ResultView() {
     () => branches.find((branch) => branch.id === expandedBranch) ?? dominantBranchFromStory ?? branches[0] ?? null,
     [branches, dominantBranchFromStory, expandedBranch],
   );
+  const analysisBranch = factionTimelineBranch;
   const factionTimelineLead = factionTimelineBranch
     ? (
         expandedBranch === factionTimelineBranch.id
@@ -1696,10 +1697,10 @@ export default function ResultView() {
                 {t('result.causal_graph_link', 'View Causal Graph')}
               </a>
             )}
-            {id && !isReplayMode && cfBranchId && (
+            {activeScenarioId && analysisBranch && !isReplayMode && cfBranchId && (
               <a
                 className="btn btn-ghost"
-                href={`/result/${encodeURIComponent(id)}/compare?branch_a=${encodeURIComponent(branches[0]?.id ?? '')}&branch_b=${encodeURIComponent(cfBranchId)}`}
+                href={`/result/${encodeURIComponent(activeScenarioId)}/compare?branch_a=${encodeURIComponent(analysisBranch.id)}&branch_b=${encodeURIComponent(cfBranchId)}`}
               >
                 {t('result.compare_link', 'Compare branches')}
               </a>
@@ -1856,7 +1857,6 @@ export default function ResultView() {
           <h2 className="result-bridge__heading">{t('result.bridge_title', 'Explore Deeper')}</h2>
           <div className="result-bridge__grid">
             {(() => {
-              const analysisBranch = factionTimelineBranch;
               const causalEnabled = capabilities?.causal_graph?.enabled ?? false;
               const replayEnabled = capabilities?.replay_trace?.enabled ?? false;
               const compareEnabled = (capabilities?.counterfactual_replay?.enabled ?? false) && branches.length > 1;
@@ -2445,7 +2445,7 @@ export default function ResultView() {
             <>
               <CounterfactualPanel
                 scenarioId={id}
-                branchId={branches[0]?.id ?? ''}
+                branchId={analysisBranch?.id ?? ''}
                 agents={agents}
                 messages={scenario?.messages ?? []}
                 totalRounds={scenario?.total_rounds ?? 10}
@@ -2454,7 +2454,7 @@ export default function ResultView() {
               {cfBranchId && (
                 <div style={{ marginTop: '0.5rem' }}>
                   <a
-                    href={`/result/${encodeURIComponent(id)}/compare?branch_a=${encodeURIComponent(branches[0]?.id ?? '')}&branch_b=${encodeURIComponent(cfBranchId)}`}
+                    href={`/result/${encodeURIComponent(id)}/compare?branch_a=${encodeURIComponent(analysisBranch?.id ?? '')}&branch_b=${encodeURIComponent(cfBranchId)}`}
                     style={{ color: '#8ab4f8', fontSize: '0.85rem' }}
                   >
                     {t('result.compare_link', 'Compare branches →')}

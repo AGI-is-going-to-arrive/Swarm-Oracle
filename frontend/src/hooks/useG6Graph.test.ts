@@ -18,13 +18,21 @@ const destroySpy = vi.fn();
 const onSpy = vi.fn();
 const offSpy = vi.fn();
 const renderSpy = vi.fn(() => Promise.resolve());
+const setOptionsSpy = vi.fn();
+const setSizeSpy = vi.fn();
+const constructOptions: unknown[] = [];
 
 vi.mock('@antv/g6', () => {
   class MockGraph {
+    constructor(options: unknown) {
+      constructOptions.push(options);
+    }
     destroy = destroySpy;
     on = onSpy;
     off = offSpy;
     render = renderSpy;
+    setOptions = setOptionsSpy;
+    setSize = setSizeSpy;
   }
   return { Graph: MockGraph };
 });
@@ -34,6 +42,9 @@ afterEach(() => {
   onSpy.mockClear();
   offSpy.mockClear();
   renderSpy.mockClear();
+  setOptionsSpy.mockClear();
+  setSizeSpy.mockClear();
+  constructOptions.length = 0;
 });
 
 describe('resolvePixelRatio', () => {
@@ -56,7 +67,7 @@ describe('resolvePixelRatio', () => {
   });
 });
 
-function TestHost() {
+function TestHost({ label = 'initial' }: { label?: string } = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Provide a detached div so hook proceeds.
   if (containerRef.current === null) {
@@ -64,7 +75,20 @@ function TestHost() {
   }
   const result = useG6Graph({
     containerRef,
-    options: { width: 100, height: 100 },
+    options: { width: 100, height: 100, data: { nodes: [{ id: label }], edges: [] } },
+    onNodeClick: () => {},
+  });
+  return { ...result, containerRef };
+}
+
+function DeferredContainerHost({ attached }: { attached: boolean }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  if (attached && containerRef.current === null) {
+    containerRef.current = document.createElement('div');
+  }
+  const result = useG6Graph({
+    containerRef,
+    options: { width: 100, height: 100, data: { nodes: [{ id: 'late' }], edges: [] } },
     onNodeClick: () => {},
   });
   return { ...result, containerRef };
@@ -75,18 +99,55 @@ describe('useG6Graph lifecycle', () => {
     const { unmount } = renderHook(() => TestHost());
     expect(renderSpy).toHaveBeenCalledTimes(1);
     expect(onSpy).toHaveBeenCalledWith('node:click', expect.any(Function));
+    expect(constructOptions[0]).toMatchObject({
+      devicePixelRatio: expect.any(Number),
+    });
+    expect(constructOptions[0]).not.toHaveProperty('renderer');
     expect(destroySpy).not.toHaveBeenCalled();
     unmount();
     expect(destroySpy).toHaveBeenCalledTimes(1);
   });
 
+  it('updates G6 options and re-renders when caller data changes', () => {
+    const { rerender, unmount } = renderHook(({ label }) => TestHost({ label }), {
+      initialProps: { label: 'initial' },
+    });
+    expect(setOptionsSpy).not.toHaveBeenCalled();
+
+    rerender({ label: 'updated' });
+
+    expect(setOptionsSpy).toHaveBeenCalledWith(expect.objectContaining({
+      data: { nodes: [{ id: 'updated' }], edges: [] },
+    }));
+    expect(renderSpy).toHaveBeenCalledTimes(2);
+    unmount();
+  });
+
+  it('constructs after a previously-null ref receives the graph container', () => {
+    const { rerender, unmount } = renderHook(({ attached }) => DeferredContainerHost({ attached }), {
+      initialProps: { attached: false },
+    });
+    expect(renderSpy).not.toHaveBeenCalled();
+
+    rerender({ attached: true });
+
+    expect(renderSpy).toHaveBeenCalledTimes(1);
+    expect(constructOptions[0]).toMatchObject({
+      data: { nodes: [{ id: 'late' }], edges: [] },
+    });
+    unmount();
+    expect(destroySpy).toHaveBeenCalledTimes(1);
+  });
+
   it('mount/unmount 100 times does not leak Graph instances (shape-level)', () => {
+    const renderStart = renderSpy.mock.calls.length;
+    const destroyStart = destroySpy.mock.calls.length;
     for (let i = 0; i < 100; i++) {
       const { unmount } = renderHook(() => TestHost());
       unmount();
     }
     // Each cycle = exactly 1 render + 1 destroy.
-    expect(renderSpy).toHaveBeenCalledTimes(100);
-    expect(destroySpy).toHaveBeenCalledTimes(100);
+    expect(renderSpy.mock.calls.length - renderStart).toBe(100);
+    expect(destroySpy.mock.calls.length - destroyStart).toBe(100);
   });
 });

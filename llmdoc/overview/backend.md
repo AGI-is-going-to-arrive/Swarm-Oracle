@@ -102,6 +102,7 @@
 - `GET /api/scenario/{id}/causal-graph` 当前会先校验 `branch_id` 属于当前 scenario：
   - 空白 `branch_id` 仍归一化为“全部分支”
   - 不存在的 branch 会返回 `404 BRANCH_NOT_FOUND`，不再伪装成 `200 + 空图`
+- `GraphEdge` 当前还没有稳定的 Graphify 证据字段契约；`confidence_tier / source_ref / source_round_number / evidence` 仍不能当作已落库 API 字段使用。要补这层 contract，需要单独做 migration、API response 与前端消费口径。
 
 ### Ending Room
 
@@ -239,6 +240,14 @@
   - 紧跟的 `POST /api/conversation/{thread_id}/turn` 如果还是同一条首轮 user 内容，会直接 claim 这条预留 assistant turn 开始流式返回，不再追加重复 user turn
   - 这条 claim 当前按原子 CAS 执行；并发首轮流里只会有一个请求拿到这条预留 turn，其他请求会 fail-closed，不会两路同时 stream 同一 turn
   - bootstrap 预留 turn 在真正发出首个 `turn_started` 前，当前还会再看一次 turn 状态和 cancel flag；如果 started 前已经被 abort，就不会再补 stale `turn_started`；如果场景已经删掉，则直接收成 `SCENARIO_DELETED`
+- Agent conversation prompt 当前会带轻量 worldline-local 语境：
+  - scenario question
+  - origin branch id / round
+  - branch title / fork reason / summary
+  - origin graph node label / type / round / 白名单 payload 摘要
+  - 最多 6 条相邻边/邻居摘要
+  - 历史 turn 只取最近 12 条，并按单 turn 长度截断
+  - 这些图谱/场景文本统一通过 `format_untrusted_text_block()` 注入，不把节点 payload 当系统指令
 - `WS /ws/agent-conversation/{thread_id}` 当前也已上线：复用统一首帧 auth / pending-auth 容量门控；feature 关闭或 thread 不存在时返回 `4404`；owner freeze 按 thread owner 收口；容量仍按 scenario 维度计算，不会因为 thread 数量放大
   - scenario 删除如果发生在流式中途，会先在删除事务内把活跃 turn 标成 `scenario_deleted`，真正唤醒 in-flight SSE 的 cancel signal 改为事务提交后再发；这样 rollback 不会提前把客户端打成终态。当前 delete endpoint 会在 `session.commit()` 后 drain `session.info["scenario_deleted_turn_ids"]` 并统一调用 `signal_scenario_deleted_turns()`；signal 失败只记 warning，不会把已经删成功的请求误报成 500。事务成功提交后，流末尾仍会补 `turn_error(code=SCENARIO_DELETED)`；如果场景刚好在首个 chunk 出来前被删，也会直接收成这条终态，不再误落到 `LLM_5XX`
   - `DELETE /api/conversation/{thread_id}/active` 当前除了唤醒活跃流式协程，也会把还没开始流式的预留 `pending` assistant turn 直接收成 `aborted`；不会再出现 abort 已返回，但同一条预留 turn 还被后续 `/turn` claim 走的假成功

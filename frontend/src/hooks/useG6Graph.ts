@@ -45,7 +45,7 @@ export interface UseG6GraphOptions {
    * Full G6 GraphOptions excluding `container` + `renderer` + `pixelRatio`
    * (those are enforced by this hook).
    */
-  options: Omit<GraphOptions, 'container' | 'renderer' | 'pixelRatio'>;
+  options: Omit<GraphOptions, 'container' | 'renderer' | 'devicePixelRatio'>;
   /**
    * Called once the Graph instance has been constructed and rendered.
    * Use this to register extra event listeners etc.
@@ -78,6 +78,15 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
   const mountedRef = useRef(false);
   const canvasWrapperRef = containerRef as RefObject<HTMLDivElement | null>;
   const graphRef = useRef<Graph | null>(null);
+  const lastOptionsRef = useRef<UseG6GraphOptions['options'] | null>(null);
+  const latestOptionsRef = useRef(options);
+  const onBeforeDestroyRef = useRef(onBeforeDestroy);
+
+  latestOptionsRef.current = options;
+
+  useEffect(() => {
+    onBeforeDestroyRef.current = onBeforeDestroy;
+  }, [onBeforeDestroy]);
 
   useEffect(() => {
     if (mountedRef.current) return;
@@ -98,21 +107,23 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
 
     let graph: Graph | null = null;
     try {
-      // G6 v5 GraphOptions.renderer accepts either a string enum or a factory
-      // function. We pass the string form; cast through `unknown` because
-      // the TypeScript definition narrows to the factory signature.
+      const rect = container.getBoundingClientRect();
+      const measuredWidth = Math.floor(rect.width || container.clientWidth);
+      const measuredHeight = Math.floor(rect.height || container.clientHeight);
+      const dimensionFallback = {
+        ...(measuredWidth > 0 ? { width: measuredWidth } : {}),
+        ...(measuredHeight > 0 ? { height: measuredHeight } : {}),
+      };
+      const currentOptions = latestOptionsRef.current;
       const graphOptions = {
         container,
-        renderer: 'canvas',
-        pixelRatio,
-        ...options,
+        devicePixelRatio: pixelRatio,
+        ...dimensionFallback,
+        ...currentOptions,
       } as unknown as GraphOptions;
       graph = new G6Graph(graphOptions);
       graphRef.current = graph;
-
-      if (onNodeClick) {
-        graph.on('node:click', onNodeClick);
-      }
+      lastOptionsRef.current = currentOptions;
 
       // render() returns a promise; swallow errors (callers may also handle).
       const renderResult = graph.render();
@@ -126,28 +137,84 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
     } catch {
       // Canvas/WebGL unavailable in jsdom — swallow; tests should mock G6.
       graphRef.current = null;
+      lastOptionsRef.current = null;
+      mountedRef.current = false;
     }
+    // Re-check on every options change until the ref-backed container is
+    // actually rendered; after construction, mountedRef keeps this cheap.
+  }, [containerRef, onReady, options]);
 
+  useEffect(() => {
     return () => {
       const current = graphRef.current;
       if (current) {
         try {
-          onBeforeDestroy?.(current);
-          if (onNodeClick) {
-            current.off?.('node:click', onNodeClick);
-          }
+          onBeforeDestroyRef.current?.(current);
           current.destroy();
         } catch {
           /* noop */
         }
       }
       graphRef.current = null;
+      lastOptionsRef.current = null;
       mountedRef.current = false;
     };
-    // Intentionally depend only on containerRef identity — options/handlers
-    // should be memoized by callers. Re-running on every option change
-    // would rebuild the graph and defeat the purpose of the hook.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || !onNodeClick) return;
+    graph.on('node:click', onNodeClick);
+    return () => {
+      try {
+        graph.off?.('node:click', onNodeClick);
+      } catch {
+        /* noop */
+      }
+    };
+  }, [onNodeClick]);
+
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || latestOptionsRef.current !== options || lastOptionsRef.current === options) return;
+    lastOptionsRef.current = options;
+    try {
+      graph.setOptions(options as unknown as GraphOptions);
+      const renderResult = graph.render();
+      if (renderResult && typeof (renderResult as Promise<unknown>).then === 'function') {
+        (renderResult as Promise<unknown>).catch(() => {
+          /* noop */
+        });
+      }
+    } catch {
+      /* noop */
+    }
+  }, [options]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver((entries) => {
+      const graph = graphRef.current;
+      if (!graph) return;
+      const entry = entries[0];
+      const width = Math.floor(entry.contentRect.width);
+      const height = Math.floor(entry.contentRect.height);
+      if (width <= 0 || height <= 0) return;
+      try {
+        graph.setSize(width, height);
+        const renderResult = graph.render();
+        if (renderResult && typeof (renderResult as Promise<unknown>).then === 'function') {
+          (renderResult as Promise<unknown>).catch(() => {
+            /* noop */
+          });
+        }
+      } catch {
+        /* noop */
+      }
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
   }, [containerRef]);
 
   return { canvasWrapperRef, graphRef };

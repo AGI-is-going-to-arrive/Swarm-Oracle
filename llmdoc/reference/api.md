@@ -200,9 +200,16 @@
 说明：
 
 - `POST /api/conversation/start` 会先验证 request-scoped BYOK override，但这一步本身不调用 LLM。
+- `POST /api/conversation/start` 的 origin 字段当前包括：
+  - `origin_branch_id`
+  - `origin_round_number`
+  - `origin_node_id`
+  - `origin_node_type`
+  这些字段会回显到 thread response，并写入后续 turn 的 `source_*` 字段。
 - `start` 成功后，返回体会带 `thread_id / user_turn_id / assistant_turn_id`，供前端继续接 `/turn`。
 - 如果首个 `/turn` 和 bootstrap 阶段的 `first_user_content` 相同，后端当前会直接 claim 这条预留 assistant turn，而不是再追加一条重复的 user turn。
 - 同一个 bootstrap placeholder 只会被 claim 一次；并发重复首轮请求不会再同时拿到两条 live stream。
+- 流式 prompt 会按 thread origin 尝试补 scenario question、branch summary、origin graph node 和相邻关系摘要；这层只读取同 scenario 的最新 causal snapshot，且会截断文本。
 - `start` 和后续 `/turn` 当前都会消耗 rolling 24h 的 daily quota：
   - user quota 键取自 `thread.owner_user_id`
   - org quota 键取自 `X-Org-Id` 落库后的 `thread.organization_id`

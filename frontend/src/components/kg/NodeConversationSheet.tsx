@@ -73,6 +73,10 @@ export interface NodeConversationOrigin {
   nodeType: string;
   /** Optional excerpt for prompt context. */
   excerpt?: string;
+  /** Optional worldline scope for prompt context. */
+  branchId?: string | null;
+  /** Optional round scope for prompt context. */
+  roundNumber?: number | null;
 }
 
 export interface NodeConversationSheetProps {
@@ -142,6 +146,8 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   const lastSubmittedMessageRef = useRef<string | null>(null);
   const originNodeId = origin?.nodeId ?? null;
   const originNodeType = origin?.nodeType ?? null;
+  const originBranchId = origin?.branchId ?? null;
+  const originRoundNumber = origin?.roundNumber ?? null;
 
   const {
     state: convState,
@@ -190,6 +196,8 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     identityId,
     originNodeId,
     originNodeType,
+    originBranchId,
+    originRoundNumber,
     setThreadId,
     onTransportError: dispatchTransportError,
     onWsEvent: dispatchWsEvent,

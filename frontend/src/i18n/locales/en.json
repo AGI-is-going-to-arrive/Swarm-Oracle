@@ -1373,8 +1373,8 @@
       },
       "trace": {
         "aria_label": "Replay trace",
-        "frame_count_label": "{{count}} frames",
-        "branches_label": "{{count}} branches"
+        "frame_count_label": "Frame",
+        "branches_label": "Branches"
       },
       "empty": {
         "title": "No replay available",

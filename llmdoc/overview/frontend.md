@@ -153,7 +153,8 @@
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
 | `manualChunks.ts` / `performanceBudgetConfig.mjs` | `frontend/src/lib/manualChunks.ts` / `frontend/scripts/lib/performanceBudgetConfig.mjs` | 前端构建分块与预算门禁单一事实源；React 保留在共享 `vendor`，`@antv/*` 隔离到 `g6-vendor`，`html2canvas / gif.js` 按需拆分，React Flow 栈继续走 Rollup 自动分块并纳入预算检查 |
-| `useNodeConversationTransport.ts` | `frontend/src/hooks/useNodeConversationTransport.ts` | `NodeConversationSheet` 的本地 transport hook；负责 `/start` / `/turn` 请求、AbortController 生命周期和 SSE frame 解析 |
+| `useG6Graph.ts` | `frontend/src/hooks/useG6Graph.ts` | G6 图谱 hook；等 ref-backed container 真正挂载后再建图，支持 options 更新、ResizeObserver resize、node click 订阅清理 |
+| `useNodeConversationTransport.ts` | `frontend/src/hooks/useNodeConversationTransport.ts` | `NodeConversationSheet` 的本地 transport hook；负责 `/start` / `/turn` 请求、origin branch/round/node 透传、AbortController 生命周期和 SSE frame 解析 |
 | `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | 首页 `Organization ID` 的 sessionStorage 单一事实源；InputView 与 API client 共用，避免 header 逻辑散落 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
 | `e2e-new-source-ingestion-live.mjs` | `frontend/scripts/e2e-new-source-ingestion-live.mjs` | source-ingestion 专项脚本；默认走 fixture，`SWARM_E2E_MODE=live` 时走真实 backend。live 模式会先显式打开首页总开关，校验 `/api/scenario` 请求里的 `web_search_families`，再检查结果页四个 source family 的 live/non-empty 卡片；`Polymarket` 的 `non-us` geo-gate 也走同一条 live 口径 |
@@ -209,8 +210,8 @@
   - compare `404` 走 `no data`
   - compare fetch / scenario fetch 失败走可重试的加载失败态
   - `branch_a / branch_b` 请求参数都会先做 `encodeURIComponent()`
-- `ReplayView` 当前在 `replay_trace` capability 关闭时会显示显式 unavailable surface，不再 silent redirect 到首页；如果 capability 探针自己失败，也会给出单独的 retry surface。
-- `KGExplorerView` 当前会把 capability 失败、feature disabled、graph fetch 失败分开显示；graph fetch 失败时会清掉旧图，再给出本地化错误和 retry。
+- `ReplayView` 当前在 `replay_trace` capability 关闭时会显示显式 unavailable surface，不再 silent redirect 到首页；如果 capability 探针自己失败，也会给出单独的 retry surface。trace 计数标签当前用静态本地化 copy（`Frame / Branches`、`帧 / 分支`），不会再把 `{{count}}` 模板串露到页面上。
+- `KGExplorerView` 当前会把 capability 失败、feature disabled、graph fetch 失败分开显示；graph fetch 失败时会清掉旧图，再给出本地化错误和 retry。主图用真实 G6 canvas 渲染，minimap 是 G6 minimap plugin，不是占位卡片；search / type filter 会更新图数据本身。点击节点时，`NodeConversationSheet` 收到的是业务 `kgType`、节点 label、branch 与 round，不再使用 G6 shape type。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - ending-room artifact/local replay 当前统一落到 `/result/replay?...`；不再要求先拼出 `/result/:scenarioId?...` 才能读出来。artifact payload 里的 `scenario.total_rounds=null` 也会被前端 replay 正常接受，不会再把只读页打成空结果。
 - ending-room replay automation helper 当前识别 `roomReplay / roomShare / roomLocal`；roundtable 页面除 `roomShare / roomLocal` 外也兼容 `share / local` 别名。
@@ -233,7 +234,7 @@
   - `后续三回合` 按钮：设置 `interaction_mode=epilogue` 并预填追问内容
   - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 发送
   - mobile sidebar sheet 已补 `SheetTitle / SheetDescription`；第一次 `Escape` 只关闭 sheet，不会误关外层 chamber
-- `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。桌面端现在按 non-modal 右侧 sidecar 挂载，移动端仍是 modal bottom sheet；图上节点详情和对话 sheet 同时打开时，不会再被 overlay 互相挡住。桌面端当前也已补齐 detail + sidecar 同开时的交互边界：点 detail close、点 graph pane，只会收详情，不会顺手把 sidecar 一起关掉；如果焦点在 detail 内，`Escape` 也会先收详情；切到新节点后再关详情，焦点会回到最新 trigger。textarea 里的 `Escape` 仍只关闭 sidecar。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，SSE parser 也已兼容 multiline `data:` frame。公共会话状态机在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，不再把 ghost 文本重新刷回 bubble 或 aria-live。bubble ref 注册当前也已经和整个 `conversation` 对象解耦，输入框本地 rerender 不会再反复重挂流式气泡。
+- `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。桌面端现在按 non-modal 右侧 sidecar 挂载，移动端仍是 modal bottom sheet；图上节点详情和对话 sheet 同时打开时，不会再被 overlay 互相挡住。桌面端当前也已补齐 detail + sidecar 同开时的交互边界：点 detail close、点 graph pane，只会收详情，不会顺手把 sidecar 一起关掉；如果焦点在 detail 内，`Escape` 也会先收详情；切到新节点后再关详情，焦点会回到最新 trigger。textarea 里的 `Escape` 仍只关闭 sidecar。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，`/start` 会透传 origin branch / round / node，SSE parser 也已兼容 multiline `data:` frame。公共会话状态机在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，不再把 ghost 文本重新刷回 bubble 或 aria-live。bubble ref 注册当前也已经和整个 `conversation` 对象解耦，输入框本地 rerender 不会再反复重挂流式气泡。
 - `DebateArenaView` 当前只允许在 live 当前 phase 的下注窗口打开/提交 quick counterplay；锁到历史 phase 时不再发起 counterplay。
 - `DebateArenaView` 当前在“当前 live phase”视图下会保留更早 phase 的已出现 turns，并以 `FoldableTurn` 历史卡形式继续展示；切到历史 phase 时仍只显示该 phase 自己的 turns。
 - Debate 的页面级播报当前只保留 phase cue；`SpotlightTurnCard` 的高亮态不再单独暴露 live-region 语义，避免同一轮变化在读屏器里重复播报。
@@ -322,6 +323,7 @@
 - `ResultView` 的阵营分析当前不再固定绑 `branches[0]`：
   - 用户展开了某个结局时，`FactionTimeline` 跟随当前展开分支
   - 没有展开分支时，默认跟随概率最高的分支
+  - `CounterfactualPanel` 和 compare link 也复用这条 `analysisBranch`，不会再把旧 `branches[0]` 当默认分析分支
 - `FactionTimeline` 当前改成真正的纵向时间线：
   - 头部直接显示 `branch scope / round span / faction count`
   - faction 卡片直接显示 `members / stance / confidence`
@@ -349,7 +351,7 @@
   - 显示本地化提示和 event snapshot 列表
   - 仍可打开节点详情
   - 不再把这类图伪装成可交互 DAG
-- `CausalReviewView` 当前会先用 graph payload 渲染，再异步补拉 scenario branch 元数据；分支标题请求变慢时，不会再把整张图一起卡在 loading。
+- `CausalReviewView` 当前会先用 graph payload 渲染，再异步补拉 scenario branch 元数据；分支标题请求变慢时，不会再把整张图一起卡在 loading。节点当前可拖拽、可选择；用户拖拽后的位置会保留到下一次结构性重置，不会被普通 rerender 抢回 dagre 布局。
 - `CausalReviewView` 当前在 compact viewport 下会把 dagre 布局切成纵向 `TB`，并继续保留 React Flow controls 与本地化 mobile navigation hint；`MiniMap` 只在桌面显示。legend toggle 也补上了 `aria-expanded / aria-controls`。
 - `CausalReviewView` / `ArgumentMap` 的 media query hook 当前兼容 legacy WebKit `addListener / removeListener`；旧 Safari / WebKit 下的 compact viewport 和 `prefers-reduced-motion` 切换也会实时更新，不再只吃首帧值。
 - `experiments/phaser-custom/entry.mjs` 当前会先加载独立的 `global-shim.mjs` 再进 Phaser；WebKit 下不再因为 `Can't find variable: global` 直接落到错误页。
@@ -398,6 +400,12 @@
   - CausalReviewView guide disclosure 语义
   - console clean
 - `node --test scripts/e2e-frontend-preflight.test.mjs` 本轮 `25 passed`。
+- P1 前置图谱/回放/结果页浏览器复核当前已覆盖：
+  - `/kg-explorer/dbac37a3-3578-42b2-99c0-06185caad147`
+  - `/sim/dbac37a3-3578-42b2-99c0-06185caad147/causal-map`
+  - `/replay/32728bd6-282c-42f1-a7da-493892fce32a`
+  - `/result/dbac37a3-3578-42b2-99c0-06185caad147`
+  - 截图位于 `frontend/output/e2e/20260424-p1-preflight-fixes/`
 - 这轮 graph/playability 增量回归当前也已补：
   - `node --test scripts/e2e-ws-contract-suite.test.mjs`：`18 passed`
   - clean-room `e2e:ws:contract`：`20 passed / 1 skipped / 0 failed`

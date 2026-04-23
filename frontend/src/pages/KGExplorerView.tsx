@@ -161,12 +161,19 @@ export default function KGExplorerView() {
   const [mobilePane, setMobilePane] = useState<MobileActivePane>('graph');
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<Set<string>>(new Set());
+  const [minimapContainer, setMinimapContainer] = useState<HTMLDivElement | null>(null);
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
   const [sheetState, setSheetState] = useState<{
     open: boolean;
     scenarioId: string;
     identityId: string | null;
-    origin: { nodeId: string; nodeType: string; excerpt?: string };
+    origin: {
+      nodeId: string;
+      nodeType: string;
+      excerpt?: string;
+      branchId?: string | null;
+      roundNumber?: number | null;
+    };
   }>(createClosedSheetState);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -247,20 +254,45 @@ export default function KGExplorerView() {
         .map((e) => ({ id: e.id, source: e.source, target: e.target })),
     };
   }, [graphData, tier, searchTerm, typeFilter]);
+  const graphNodeById = useMemo(
+    () => new Map((graphData?.nodes ?? []).map((node) => [node.id, node])),
+    [graphData],
+  );
 
   // Node click → open NodeConversationSheet directly (FE-3-seq wire-up).
   const handleNodeClick = useCallback(
     (evt: unknown) => {
-      const target = (evt as { target?: { id?: string; type?: string } } | undefined)?.target;
-      const nodeId = target?.id ?? '';
+      const target = (evt as {
+        target?: {
+          id?: string;
+          type?: string;
+          data?: { kgType?: unknown };
+          get?: (key: string) => unknown;
+        };
+      } | undefined)?.target;
+      const nodeId = String(target?.id ?? target?.get?.('id') ?? '');
+      const graphNode = graphNodeById.get(nodeId);
+      const targetKgType = target?.data?.kgType;
+      const nodeType = graphNode?.type
+        ?? (typeof targetKgType === 'string' ? targetKgType : null)
+        ?? 'unknown';
+      const payload = typeof graphNode?.payload === 'object' && graphNode.payload !== null && !Array.isArray(graphNode.payload)
+        ? graphNode.payload as Record<string, unknown>
+        : {};
       setSheetState({
         open: true,
         scenarioId,
         identityId: null,
-        origin: { nodeId, nodeType: target?.type ?? 'unknown' },
+        origin: {
+          nodeId,
+          nodeType,
+          excerpt: graphNode?.label,
+          branchId: typeof payload.branch_id === 'string' ? payload.branch_id : null,
+          roundNumber: graphNode?.round ?? null,
+        },
       });
     },
-    [scenarioId],
+    [graphNodeById, scenarioId],
   );
 
   const tokens = useMemo(() => resolveG6Tokens(theme), [theme]);
@@ -269,6 +301,7 @@ export default function KGExplorerView() {
     () => ({
       data: g6GraphData,
       autoFit: 'view' as const,
+      autoResize: true,
       layout: comboLayout(),
       node: {
         style: {
@@ -281,8 +314,25 @@ export default function KGExplorerView() {
       edge: { style: { stroke: tokens.edgeStroke } },
       background: tokens.background,
       behaviors: ['zoom-canvas', 'drag-canvas', 'hover-activate'],
+      plugins: minimapContainer
+        ? [{
+            type: 'minimap',
+            key: 'kg-minimap',
+            container: minimapContainer,
+            size: [180, 96] as [number, number],
+            padding: 8,
+            maskStyle: { fill: 'rgba(255,255,255,0.16)', stroke: tokens.nodeStroke },
+            containerStyle: {
+              width: '100%',
+              height: '96px',
+              background: tokens.background,
+              borderRadius: '4px',
+              overflow: 'hidden',
+            },
+          }]
+        : [],
     }),
-    [g6GraphData, tokens],
+    [g6GraphData, minimapContainer, tokens],
   );
 
   const { canvasWrapperRef } = useG6Graph({
@@ -484,20 +534,22 @@ export default function KGExplorerView() {
           <h2 style={{ fontSize: '0.95rem', fontWeight: 600, marginTop: 0 }}>
             {t('kg_explorer.sidebar_title', 'Identity Overview')}
           </h2>
-          <div data-testid="kg-explorer-minimap" aria-hidden="true" style={{ marginBottom: 8 }}>
-            {/* Minimap placeholder rectangle. G6 Minimap plugin can be
-                wired via g6Options.plugins in later passes; FE-2 scope
-                only needs the testid present for QA-2 E2E selectors. */}
-            <div
-              style={{
-                width: '100%',
-                height: 64,
-                background: tokens.edgeStroke,
-                opacity: 0.3,
-                borderRadius: 4,
-              }}
-            />
-          </div>
+          <div
+            ref={setMinimapContainer}
+            data-testid="kg-explorer-minimap"
+            aria-label={t('kg_explorer.minimap_aria', 'Graph minimap')}
+            role="img"
+            style={{
+              width: '100%',
+              height: 96,
+              marginBottom: 8,
+              background: tokens.background,
+              border: `1px solid ${tokens.edgeStroke}`,
+              borderRadius: 4,
+              overflow: 'hidden',
+              position: 'relative',
+            }}
+          />
           <p style={{ fontSize: '0.8rem' }}>
             {graphData
               ? t('kg_explorer.node_count', {

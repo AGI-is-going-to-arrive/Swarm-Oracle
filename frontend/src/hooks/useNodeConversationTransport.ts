@@ -9,6 +9,8 @@ interface UseNodeConversationTransportOptions {
   identityId?: string | null;
   originNodeId?: string | null;
   originNodeType?: string | null;
+  originBranchId?: string | null;
+  originRoundNumber?: number | null;
   setThreadId: (threadId: string | null) => void;
   onTransportError: (code: string, message?: string) => void;
   onWsEvent: (event: AgentConversationWSEvent) => void;
@@ -65,6 +67,8 @@ export function useNodeConversationTransport({
   identityId,
   originNodeId,
   originNodeType,
+  originBranchId,
+  originRoundNumber,
   setThreadId,
   onTransportError,
   onWsEvent,
@@ -178,6 +182,8 @@ export function useNodeConversationTransport({
         body: JSON.stringify({
           scenario_id: scenarioId,
           agent_identity_id: identityId ?? null,
+          origin_branch_id: originBranchId ?? null,
+          origin_round_number: originRoundNumber ?? null,
           origin_node_id: originNodeId ?? null,
           origin_node_type: originNodeType ?? null,
           first_user_content: text,
@@ -207,7 +213,7 @@ export function useNodeConversationTransport({
       onTransportErrorRef.current('SERVER_ERROR', message);
       return false;
     }
-  }, [identityId, originNodeId, originNodeType, scenarioId, streamTurn]);
+  }, [identityId, originBranchId, originNodeId, originNodeType, originRoundNumber, scenarioId, streamTurn]);
 
   return {
     abortActiveRequest,

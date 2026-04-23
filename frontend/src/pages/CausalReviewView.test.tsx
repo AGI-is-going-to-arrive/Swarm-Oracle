@@ -160,6 +160,8 @@ vi.mock('@xyflow/react', async () => {
       onNodeClick,
       onPaneClick,
       panOnDrag,
+      nodesDraggable,
+      elementsSelectable,
       fitViewOptions,
     }: {
       children?: React.ReactNode;
@@ -169,6 +171,8 @@ vi.mock('@xyflow/react', async () => {
       onNodeClick?: (event: unknown, node: { id: string }) => void;
       onPaneClick?: () => void;
       panOnDrag?: boolean | number[];
+      nodesDraggable?: boolean;
+      elementsSelectable?: boolean;
       fitViewOptions?: { padding?: number; duration?: number };
     }) => {
       const firstNode = nodes?.[0];
@@ -183,6 +187,8 @@ vi.mock('@xyflow/react', async () => {
           data-node-aria-role={firstNode?.ariaRole ?? ''}
           data-aria-label-config={JSON.stringify(ariaLabelConfig ?? {})}
           data-pan-on-drag={JSON.stringify(panOnDrag ?? null)}
+          data-nodes-draggable={String(nodesDraggable ?? false)}
+          data-elements-selectable={String(elementsSelectable ?? false)}
           data-fit-view-options={JSON.stringify(fitViewOptions ?? null)}
         >
           {nodes?.map((node) => (
@@ -422,6 +428,8 @@ describe('CausalReviewView', () => {
     const flow = await screen.findByTestId('reactflow');
     expect(flow).toBeInTheDocument();
     expect(flow).toHaveAttribute('data-pan-on-drag', '[0,1]');
+    expect(flow).toHaveAttribute('data-nodes-draggable', 'true');
+    expect(flow).toHaveAttribute('data-elements-selectable', 'true');
     expect(JSON.parse(flow.getAttribute('data-fit-view-options') ?? '{}')).toMatchObject({
       duration: 0,
     });
