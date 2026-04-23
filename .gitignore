@@ -65,3 +65,4 @@ frontend/output/e2e/*
 /FIX_REPORT_*.md
 /backend/CODE_REVIEW_REPORT.md
 /frontend/CODE_REVIEW_REPORT.md
+graphify-out/
