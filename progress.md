@@ -17269,3 +17269,70 @@ QA Inventory
   - 额外 spot-check：
     - `Computer Use` 在 Chrome 上打开 `/agents`，确认 capability disabled 文案继续可见
     - clean-room `/sim/:id` 页面可正常进入 live simulation 壳层
+
+## 2026-04-23 Full manual playthrough report
+
+- 已按真实浏览器跑完主链路：
+  - Home -> Simulation -> Result -> CausalReviewView -> Oracle Chamber / One Move Only -> Worldline Roundtable -> Debate Arena
+- 主模式本轮场景：
+  - `scenario_id = dbac37a3-3578-42b2-99c0-06185caad147`
+  - 题目：`如果秦始皇没有统一六国会怎样`
+  - UI 真实约束：首页 `推演轮数` 最小值是 `3`，不是 `2`
+- Debate 本轮场景：
+  - `debate_id = c1de4152-2af4-4a66-b034-60bc80ad8268`
+- 本轮高价值结论：
+  - 主模式首页、SimulationView、ResultView、CausalReviewView、Debate Arena、Debate ArgumentMap 都可用
+  - 首页 `search enhancement` 四个 source-family checkbox 全部 disabled，且无解释文案
+  - `FactionTimeline` 壳层存在，但本轮 multi-ending run 仍落空态 `暂无阵营数据`
+  - `进入会客厅` 和 `只改一步` 都能创建 room，但前端一直卡在 `准备中/正在发言`，transcript 不 hydrate，所有 follow-up 动作 disabled
+  - 直接抓 `/api/ending-room/f0764552-ae95-4d9c-9502-4c1d07465350` 时，backend 已返回 `status=done`, `result_ready=true`, `turnsCount=3`，说明问题更像前端 hydrate / state wiring
+  - Roundtable 代表改选页正常，`先看最大分歧` 等 recipe 可切换；但 `按当前代表开桌` 后页面卡在 `正在搭建世界线圆桌...`
+- 产出：
+  - 已写报告到 `PLAYTHROUGH_REPORT.md`
+
+## 2026-04-23 Oracle regression repair after full playthrough
+
+- 本轮目标：
+  - 只修 playthrough 里确认过的两条 Oracle 回归：
+    - `ending-room followup full` 的 `epilogue` target-thread 假失败
+    - `worldline roundtable full` 的 `roundtable ready` 超时
+- 先确认的事实：
+  - `epilogue` 这条不是后端没写进目标 thread；默认 room thread 里已经有 user turn + assistant follow-up
+  - 真问题在 `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - 可见性 helper 会过早接受 stale `modal_state`
+    - 最后再按 `roomId + threadId + interaction_mode + turn_count` 复核时失败
+  - `roundtable` 这条也不是 room 永远起不来
+    - backend 会完成
+    - 旧脚本首开和后续 reopen 分支都只给 `45s`
+    - 当前慢 provider 下不够
+  - dev 下 ending-room live WS 当前更稳的真实前端路径是 `/ws/ending-room/{room_id}`，不是旧的 `/api/ws/ending-room/{room_id}`
+- 本轮代码收口：
+  - `frontend/src/hooks/useEndingRoomWS.ts`
+    - 改回前端真实 WS 路径 `/ws/ending-room/{room_id}`
+  - `frontend/src/hooks/useEndingRoomWS.test.tsx`
+    - 同步 URL 断言
+  - `frontend/scripts/e2e-ending-room-followup-suite.mjs`
+    - `waitForApiDrivenFollowupVisible()` 不再因为看见 assistant 文本就直接接受旧 live state
+    - live `modal_state` 没追平时，继续回到 API snapshot 合成可验证状态
+  - `frontend/scripts/e2e-worldline-roundtable-suite.mjs`
+    - `result -> roundtable` 入口等待预算提高到 `90s`
+    - `reseat / drag-to-seat / keyboard reseat / expert witness / selection mode reopen` 也统一改成同一条 `90s` ready budget
+    - `roundtable-entry-stall.json` 额外落 backend snapshot，方便直接看是脚本卡住还是 backend 还没完成
+- 本轮实际验证：
+  - `cd frontend && npm exec vitest run src/hooks/useEndingRoomWS.test.tsx`
+    - `11 passed`
+  - `cd frontend && npm exec -- tsc --noEmit`
+    - 通过
+  - `cd frontend && HEADLESS=1 node scripts/e2e-ending-room-followup-suite.mjs full --url http://localhost:18928 --output-dir output/e2e/20260423-oracle-regression-followup-rerun --browser chromium`
+    - 通过；旧的 `Unable to verify epilogue follow-up against the target thread` 未再出现
+  - `cd frontend && HEADLESS=1 node scripts/e2e-worldline-roundtable-suite.mjs full --url http://localhost:18928 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/20260423-oracle-regression-roundtable-rerun-v2 --browser chromium --locale zh`
+    - 通过；旧的 `Timed out waiting for roundtable ready` 未再出现
+    - desktop `drag-to-seat / keyboard reseat / manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented`
+    - live `archivist / hotseat / anchored thread`
+    - readonly replay / reload restore / import
+- 本轮产物：
+  - `frontend/output/e2e/20260423-oracle-regression-followup-rerun/summary.json`
+  - `frontend/output/e2e/20260423-oracle-regression-roundtable-rerun-v2/summary.json`
+- 当前边界：
+  - 这轮修掉的是 false negative / timeout gate，不是 backend 慢路径本身
+  - roundtable 真正的 provider 耗时仍可能偏长，但现在脚本和 live room 的收口已经和真实完成窗口对齐

@@ -108,7 +108,7 @@ describe('useEndingRoomWS', () => {
       vi.runOnlyPendingTimers();
     });
 
-    expect(MockWebSocket.instances[0]?.url).toContain('/api/ws/ending-room/room-1');
+    expect(MockWebSocket.instances[0]?.url).toContain('/ws/ending-room/room-1');
 
     act(() => {
       MockWebSocket.instances[0]?.onmessage?.({

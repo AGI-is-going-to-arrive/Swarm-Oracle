@@ -128,6 +128,10 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - ending-room follow-up 的慢流式链路仍可能只落到 fallback 观测，不一定每次都能拿到完整 `turn_start / turn_delta / turn_commit`
   - 但 `full / mobile` 当前已改成目标 `roomId + threadId + interaction_mode` 验真；single-ending anchored fallback 也会补校验 `questionAnchorIds` 与 assistant reply，不再接受旧线程空态或只有 user turn 的假阳性
   - roundtable `full` 当前已补 result -> roundtable 入口重试；如果入口仍卡住，会直接落 `roundtable-entry-stall.json` 并失败
+  - roundtable 首开与后续 `reseat / expert_witness / selection mode reopen` 当前都按同一条 `90s` ready budget 收口，不再只给 `45s`
+- 本轮 2026-04-23 fresh rerun 已再次通过：
+  - `frontend/output/e2e/20260423-oracle-regression-followup-rerun/summary.json`
+  - `frontend/output/e2e/20260423-oracle-regression-roundtable-rerun-v2/summary.json`
 
 ## 当前状态
 

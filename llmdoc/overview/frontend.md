@@ -90,7 +90,7 @@
   - 前端实际连接路径是 `/ws/agent-conversation/{thread_id}`
   - 不再误连旧的 `/api/ws/agent-conversation/{thread_id}`
   - 首帧 auth、`auth_ok`、`4001 / 4404` 非重连口径与另外三条 WS 保持一致
-- `useEndingRoomWS` 与 `useAgentConversationWS` 当前都按同源 `window.location.host` 组装 WS host，不再写死本地 dev backend 端口；`19030 -> 19027` 这类 preview/backend 组合下，ending-room / roundtable live 更新也能正常跟上。
+- `useEndingRoomWS` 与 `useAgentConversationWS` 当前都按同源 `window.location.host` 组装 WS host，不再写死本地 dev backend 端口；ending-room live room 当前实际连接 `/ws/ending-room/{room_id}`，不再从前端走旧的 `/api/ws/...` 路径；`19030 -> 19027` 这类 preview/backend 组合下，ending-room / roundtable live 更新也能正常跟上。
 - REST API 路径参数统一使用 `encodeURIComponent()` 编码（约 30 处），防止含特殊字符的 ID 破坏 URL 结构。
 - API client 当前会把首页高级设置里的可选 `Organization ID` 以 session-scoped `X-Org-Id` 请求头透传；留空时不发送。
 - API 客户端对服务端错误文本做脱敏处理（`sanitizeErrorText`），超过 200 字符或包含 stack trace / HTML 的响应会被替换为通用错误信息。
@@ -435,6 +435,7 @@
 - `e2e-ending-room-followup-suite.mjs` 当前对 `hotseat / all_present / epilogue` 额外做了目标线程验真：
   - 以 `roomId + threadId + interaction_mode` 为准
   - fallback 会优先回到 API-driven / snapshot 校验，而不是只看当前可见线程的局部 `modal_state`
+  - live `modal_state` 比 API snapshot 慢一拍时，`epilogue` 不会再因为旧 `turn_count` 被误判成 target-thread 失败
 - `e2e-ending-room-followup-suite.mjs full / mobile` 当前更适合专项 follow-up 回归：
   - fixture 选择当前会优先取最新、且 branches 全部 `COMPLETED` 的 `single / multi done scenario`，不再命中陈旧脏数据
   - 当前 fresh rerun 已通过 desktop / mobile
@@ -479,6 +480,7 @@
   - live room page 复用前会先做 revalidate；readonly replay 也会校验 replay URL 契约
   - artifact/local readonly replay 都会额外校验 reload restore；缺字段直接失败
   - result -> roundtable 入口当前也会重试；如果还停在结果页，会落 `roundtable-entry-stall.json` 并直接失败
+  - 首开、`reseat / drag-to-seat / keyboard reseat / expert witness / selection mode reopen` 当前统一按 `90s` ready budget 等待最终 `has_result=true`
 - roundtable anchored follow-up 的 desktop rerun 当前已能稳定落：
   - hotseat `turn_start / turn_delta / turn_commit`
   - anchored thread `turn_start / turn_delta / turn_commit`
@@ -488,6 +490,9 @@
 - roundtable `full` 当前 fresh rerun 已通过 desktop + mobile：
   - 如果入口链路再退化，会直接落 `roundtable-entry-stall.json`
   - transcript 布局专项签收时，desktop / mobile 分端 summary 仍然更快读
+- 本轮 2026-04-23 Oracle 回归复验工件：
+  - `frontend/output/e2e/20260423-oracle-regression-followup-rerun/summary.json`
+  - `frontend/output/e2e/20260423-oracle-regression-roundtable-rerun-v2/summary.json`
 - roundtable desktop live room 当前已补一轮轻量可读性收口：
   - 左栏更窄
   - summary card sticky

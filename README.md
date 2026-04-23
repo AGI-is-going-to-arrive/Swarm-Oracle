@@ -47,6 +47,9 @@
 - 最近一轮 Oracle ending-room follow-up deterministic API-driven 工件位于：
   - `frontend/output/e2e/20260407-codex-ending-room-mobile-api-driven5/summary.json`
   - `frontend/output/e2e/20260407-codex-ending-room-full-api-driven5/summary.json`
+- 最近一轮 Oracle 回归复验工件位于：
+  - `frontend/output/e2e/20260423-oracle-regression-followup-rerun/summary.json`
+  - `frontend/output/e2e/20260423-oracle-regression-roundtable-rerun-v2/summary.json`
 - 单结局结果页当前只保留：
   - `进入会客厅`
   - `只改一步`

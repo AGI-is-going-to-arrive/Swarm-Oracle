@@ -1022,6 +1022,14 @@ async function waitForApiDrivenFollowupVisible(page, {
       async () => {
         const current = await getAutomationState(page);
         const modalState = current?.page?.controls?.modal_state;
+        const currentStateSatisfied = isFollowupModalStateSatisfied(modalState, {
+          roomId,
+          expectedThreadId,
+          expectedInteractionMode,
+          expectedTurnCount,
+          expectedThreadCount,
+          expectedQuestionAnchorIds,
+        });
         const visibleAssistantCopy = visibilityNeedles.length > 0
           ? await page.evaluate((needles) => {
             const modal = document.querySelector(".ending-chat-modal");
@@ -1052,19 +1060,11 @@ async function waitForApiDrivenFollowupVisible(page, {
             )
           )
           : false;
-        if (hasTurnProgress || visibleAssistantCopy) {
-          return current ?? {
-            page: {
-              controls: {
-                modal_state: {
-                  room_id: roomId,
-                  active_thread_id: expectedThreadId,
-                  interaction_mode: expectedInteractionMode,
-                  pending_draft_count: 0,
-                },
-              },
-            },
-          };
+        if (currentStateSatisfied) {
+          return current;
+        }
+        if (!frontendUrl && (hasTurnProgress || visibleAssistantCopy)) {
+          return null;
         }
         if (!frontendUrl) return null;
 
@@ -1111,14 +1111,13 @@ async function waitForApiDrivenFollowupVisible(page, {
             },
           },
         };
-        return isFollowupModalStateSatisfied(current?.page?.controls?.modal_state, {
-          roomId,
-          expectedThreadId,
-          expectedInteractionMode,
-          expectedTurnCount,
-          expectedThreadCount,
-          expectedQuestionAnchorIds,
-        }) ? current : synthesized;
+        if (currentStateSatisfied) {
+          return current;
+        }
+        if (hasTurnProgress || visibleAssistantCopy) {
+          return synthesized;
+        }
+        return synthesized;
       },
       label,
       timeout,

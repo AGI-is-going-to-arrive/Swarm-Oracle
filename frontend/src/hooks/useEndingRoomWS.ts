@@ -76,7 +76,7 @@ export function useEndingRoomWS(roomId: string | undefined, ready = true) {
     connectTimerRef.current = null;
     cleanedUp.current = false;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${resolveEndingRoomWsHost()}/api/ws/ending-room/${roomId}`);
+    const ws = new WebSocket(`${protocol}//${resolveEndingRoomWsHost()}/ws/ending-room/${roomId}`);
     wsRef.current = ws;
 
     ws.onopen = () => {

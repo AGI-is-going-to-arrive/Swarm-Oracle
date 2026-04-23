@@ -23,6 +23,7 @@ const DEFAULT_BACKEND_URL = process.env.SWARM_BACKEND_URL || "http://127.0.0.1:1
 const VALID_BROWSERS = new Set(["chromium", "firefox", "webkit"]);
 const VALID_LOCALES = new Set(["zh", "en"]);
 const LANGUAGE_STORAGE_KEY = "swarmoracle:language:v1";
+const ROUNDTABLE_READY_TIMEOUT_MS = 90000;
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -522,7 +523,7 @@ async function captureStreamLifecycle(page, {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-async function openRoundtable(page, baseUrl, scenarioId, outputDir, locale) {
+async function openRoundtable(page, baseUrl, backendUrl, scenarioId, outputDir, locale) {
   const resultUrl = `${baseUrl}/result/${scenarioId}`;
   const resultRoutePattern = new RegExp(`/result/${scenarioId}(?:[?#].*)?$`);
   const roundtableRoutePattern = new RegExp(`/roundtable/${scenarioId}(?:[/?#].*)?$`);
@@ -538,7 +539,7 @@ async function openRoundtable(page, baseUrl, scenarioId, outputDir, locale) {
       : /Open with selected representatives|Open this lineup|以当前代表开桌|按当前代表开桌|按这套代表开桌/i,
   }).first();
   const start = Date.now();
-  while (Date.now() - start < 45000) {
+  while (Date.now() - start < ROUNDTABLE_READY_TIMEOUT_MS) {
     const automation = await readAutomation(page);
     if (automation?.page?.kind === "worldline_roundtable" && automation?.page?.controls?.has_result === true) {
       return automation;
@@ -554,9 +555,15 @@ async function openRoundtable(page, baseUrl, scenarioId, outputDir, locale) {
     }
     await page.waitForTimeout(500);
   }
+  const stalledAutomation = await readAutomation(page);
+  const stalledRoomId = stalledAutomation?.scene?.room_id ?? null;
+  const backendSnapshot = stalledRoomId
+    ? await fetchJson(`${backendUrl}/api/ending-room/${stalledRoomId}`).catch(() => null)
+    : null;
   writeJson(path.join(outputDir, "roundtable-entry-stall.json"), {
     url: page.url(),
-    automation: await readAutomation(page),
+    automation: stalledAutomation,
+    backend_snapshot: backendSnapshot,
   });
   throw new Error("Timed out waiting for roundtable ready");
 }
@@ -906,7 +913,7 @@ async function reseatRoundtable(page) {
 
   const start = Date.now();
   let reseated = null;
-  while (Date.now() - start < 45000) {
+  while (Date.now() - start < ROUNDTABLE_READY_TIMEOUT_MS) {
     if (await rebuildButton.isVisible().catch(() => false)) {
       await rebuildButton.click().catch(() => {});
     }
@@ -992,7 +999,7 @@ async function dragReseatRoundtable(page) {
   }).first();
   const start = Date.now();
   let reseated = null;
-  while (Date.now() - start < 45000) {
+  while (Date.now() - start < ROUNDTABLE_READY_TIMEOUT_MS) {
     if (await reopenButton.isVisible().catch(() => false)) {
       await reopenButton.click().catch(() => {});
     }
@@ -1061,7 +1068,7 @@ async function clickReseatRoundtable(page) {
 
   const start = Date.now();
   let reseated = null;
-  while (Date.now() - start < 45000) {
+  while (Date.now() - start < ROUNDTABLE_READY_TIMEOUT_MS) {
     if (await reopenButton.isVisible().catch(() => false)) {
       await reopenButton.click().catch(() => {});
     }
@@ -1148,7 +1155,7 @@ async function keyboardReseatRoundtable(page) {
   }).first();
   const start = Date.now();
   let reseated = null;
-  while (Date.now() - start < 45000) {
+  while (Date.now() - start < ROUNDTABLE_READY_TIMEOUT_MS) {
     if (await reopenButton.isVisible().catch(() => false)) {
       await reopenButton.click().catch(() => {});
     }
@@ -1216,7 +1223,7 @@ async function addExpertWitness(page) {
 
   const start = Date.now();
   let witnessState = null;
-  while (Date.now() - start < 45000) {
+  while (Date.now() - start < ROUNDTABLE_READY_TIMEOUT_MS) {
     if (await reopenButton.isVisible().catch(() => false)) {
       await reopenButton.click().catch(() => {});
     }
@@ -1270,7 +1277,7 @@ async function reopenWithSelectionMode(page, {
 
   const start = Date.now();
   let state = null;
-  while (Date.now() - start < 45000) {
+  while (Date.now() - start < ROUNDTABLE_READY_TIMEOUT_MS) {
     if (await reopenButton.isVisible().catch(() => false)) {
       await reopenButton.click().catch(() => {});
     }
@@ -1311,7 +1318,7 @@ async function reopenWithSelectionMode(page, {
 
 async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, locale) {
   const page = await context.newPage();
-  const ready = await openRoundtable(page, baseUrl, scenarioId, outputDir, locale);
+  const ready = await openRoundtable(page, baseUrl, backendUrl, scenarioId, outputDir, locale);
   const uiLocale = await assertUiLocale(page, locale, "roundtable desktop ui");
   const roomLanguage = await assertRoomLanguage(backendUrl, ready?.scene?.room_id, locale, "roundtable desktop room");
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-ready.png"));
@@ -1560,7 +1567,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
   const context = await browser.newContext(contextOptions);
   await configureLocaleContext(context, locale);
   const page = await context.newPage();
-  const ready = await openRoundtable(page, baseUrl, scenarioId, outputDir, locale);
+  const ready = await openRoundtable(page, baseUrl, backendUrl, scenarioId, outputDir, locale);
   const uiLocale = await assertUiLocale(page, locale, "roundtable mobile ui");
   const roomLanguage = await assertRoomLanguage(backendUrl, ready?.scene?.room_id, locale, "roundtable mobile room");
   const fit = await captureMobileFit(page);

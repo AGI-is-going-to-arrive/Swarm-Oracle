@@ -497,6 +497,7 @@ npm test -- --run src/pages/WorldlineRoundtableView.test.tsx src/components/Endi
   - `hotseat / all_present / epilogue` 当前会额外校验目标 `roomId + threadId + interaction_mode`
     - 不再只看当前可见线程的局部 `modal_state`
     - fallback 优先走 API-driven / snapshot / settled 验真
+    - `epilogue` 遇到 live `modal_state` 还停在旧 `turn_count` 时，会继续回到 room snapshot 合成状态，不再把已提交 follow-up 误报成 target-thread 失败
   - current summary 会落出：
     - `question_anchor_ids / thread_question_anchor_ids_json / anchor_kind`
     - `current_speaker_turn_key / current_speaker_participant_id`
@@ -545,6 +546,7 @@ npm test -- --run src/pages/WorldlineRoundtableView.test.tsx src/components/Endi
   - 当前也覆盖 `quote-anchor thread -> artifact/local readonly -> reload restore -> import`
   - current summary 会落出 `transcript_layout`
   - result -> roundtable 入口当前会重试；如果还停在结果页，会落 `roundtable-entry-stall.json` 并直接失败
+  - 首开与后续 `reseat / drag-to-seat / keyboard reseat / expert witness / selection mode reopen` 当前统一按 `90s` ready budget 等待最终 `has_result=true`
   - 当前 fresh full rerun 已通过 desktop + mobile
   - `full --locale en` 本轮也已通过
 - `e2e-worldline-roundtable-suite.mjs mobile`
@@ -746,6 +748,11 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --u
 - `frontend/output/e2e/2026-04-15-roundtable-en-webkit-r1/summary.json`
 - `frontend/output/e2e/recheck-debate-firefox/result.json`
 - `frontend/output/e2e/recheck-debate-webkit-r2/result.json`
+
+最近一轮 Oracle 回归复验工件：
+
+- `frontend/output/e2e/20260423-oracle-regression-followup-rerun/summary.json`
+- `frontend/output/e2e/20260423-oracle-regression-roundtable-rerun-v2/summary.json`
 
 最近一轮经典模式流式 hardening 工件：
 
