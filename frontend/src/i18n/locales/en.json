@@ -950,6 +950,7 @@
       "title": "Counterfactual Compare",
       "missing_params": "Missing branch parameters",
       "no_data": "No comparison data available.",
+      "error_fetch": "Unable to load comparison data right now. Please retry.",
       "round": "Round {{round}}",
       "divergence_label": "Divergence",
       "branch_a_label": "Branch A (Original)",
@@ -1124,7 +1125,9 @@
     },
     "factions": {
       "title": "Faction Timeline",
-      "empty": "No faction data available.",
+      "empty": "Factions need a longer run to form alliances and splits. Try a deeper simulation to reveal their evolution.",
+      "error_fetch": "Unable to load the faction timeline right now. Please retry.",
+      "error_forbidden": "You do not have permission to view this faction timeline.",
       "a11y_label": "Faction evolution timeline",
       "round_label": "Round {{round}}",
       "current_branch": "Current branch",
@@ -1297,7 +1300,8 @@
       "news_deep": {
         "label": "Deep news",
         "tooltip": "Include long-tail investigative news"
-      }
+      },
+      "disabled_tooltip": "This data source is not enabled on the server."
     },
     "offline_banner": {
       "title": "You're offline",
@@ -1308,6 +1312,10 @@
       "title": "Knowledge Graph Explorer",
       "feature_disabled_title": "Knowledge Graph is unavailable",
       "feature_disabled": "Ask an admin to enable the kg_explorer capability to view this graph.",
+      "error_title": "Knowledge Graph is unavailable",
+      "error_fetch": "Unable to load the knowledge graph right now. Please retry.",
+      "error_missing": "Knowledge graph data is not available for this scenario.",
+      "error_forbidden": "You do not have permission to view this knowledge graph.",
       "search_placeholder": "Search nodes by id or label",
       "search_aria": "Search knowledge graph nodes",
       "filter_aria": "Filter nodes by type",
@@ -1331,6 +1339,10 @@
     },
     "replay": {
       "title": "Replay Trace",
+      "feature_disabled_title": "Replay trace is unavailable",
+      "feature_disabled_description": "This server has replay trace disabled for this environment.",
+      "feature_unavailable_title": "Replay availability could not be checked",
+      "feature_unavailable_description": "Unable to confirm whether replay trace is available right now. Please retry.",
       "scrubber": {
         "aria_label": "Timeline scrubber"
       },

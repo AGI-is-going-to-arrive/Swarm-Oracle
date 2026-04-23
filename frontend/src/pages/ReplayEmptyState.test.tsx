@@ -121,11 +121,11 @@ describe('X-4: Phase 3 components with missing/empty data', () => {
       );
 
       expect(
-        await screen.findByText('No faction data available.'),
+        await screen.findByText('Factions need a longer run to form alliances and splits. Try a deeper simulation to reveal their evolution.'),
       ).toBeInTheDocument();
     });
 
-    it('shows empty state when API returns 501', async () => {
+    it('shows a retryable error state when API returns 501', async () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ detail: 'Not enabled' }, 501));
 
       render(
@@ -133,8 +133,9 @@ describe('X-4: Phase 3 components with missing/empty data', () => {
       );
 
       expect(
-        await screen.findByText('No faction data available.'),
+        await screen.findByText('Unable to load the faction timeline right now. Please retry.'),
       ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     });
   });
 

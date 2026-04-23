@@ -12,7 +12,7 @@ import { cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CapabilitiesResponse } from '../api/client';
-import { useCapabilityCheck } from './useCapabilityCheck';
+import { __resetCapabilityCacheForTests, useCapabilityCheck } from './useCapabilityCheck';
 
 vi.mock('../api/client', () => ({
   getCapabilities: vi.fn(),
@@ -70,6 +70,7 @@ function buildCapsWithProviders(overrides?: Partial<CapabilitiesResponse>): Capa
 
 beforeEach(() => {
   mockGetCapabilities.mockReset();
+  __resetCapabilityCacheForTests();
 });
 
 afterEach(() => {
@@ -84,6 +85,31 @@ describe('useCapabilityCheck — flat behavior (1-arg, backward compatible)', ()
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.enabled).toBe(true);
     expect(result.current.capabilities).not.toBeNull();
+  });
+
+  it('exposes an explicit error when capability loading fails', async () => {
+    mockGetCapabilities.mockRejectedValueOnce(new Error('capabilities failed'));
+    const { result } = renderHook(() => useCapabilityCheck('factions'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.enabled).toBe(false);
+    expect(result.current.error?.message).toBe('capabilities failed');
+  });
+
+  it('dedupes concurrent requests across multiple hook consumers', async () => {
+    const caps = buildCapsWithProviders();
+    const pending = new Promise<CapabilitiesResponse>((resolve) => {
+      setTimeout(() => resolve(caps), 0);
+    });
+    mockGetCapabilities.mockReturnValueOnce(pending);
+
+    const first = renderHook(() => useCapabilityCheck('factions'));
+    const second = renderHook(() => useCapabilityCheck('replay_trace'));
+
+    await waitFor(() => expect(first.result.current.loading).toBe(false));
+    await waitFor(() => expect(second.result.current.loading).toBe(false));
+    expect(mockGetCapabilities).toHaveBeenCalledTimes(1);
+    first.unmount();
+    second.unmount();
   });
 });
 

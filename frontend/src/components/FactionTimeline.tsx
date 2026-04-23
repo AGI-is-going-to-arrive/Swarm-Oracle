@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getFactionTimeline } from '../api/client';
+import { getFactionTimeline, isApiError } from '../api/client';
 import { NodeConversationSheet } from './kg/NodeConversationSheet';
 
 interface FactionInfo {
@@ -57,6 +57,7 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
   const isZh = i18n.language.toLowerCase().startsWith('zh');
   const [timeline, setTimeline] = useState<RoundFactionData[]>([]);
   const [loading, setLoading] = useState(false);
+  const [errorStatus, setErrorStatus] = useState<number | 'unknown' | null>(null);
   const fetchRequestIdRef = useRef(0);
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
   const [sheetState, setSheetState] = useState<{
@@ -83,6 +84,18 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
   const eventTypeLabel = t('factions.event_type', isZh ? '类型' : 'Type');
   const roundEventsLabel = t('factions.round_events', isZh ? '本轮事件' : 'Round events');
   const unknownEventLabel = t('factions.event_labels.unknown', isZh ? '未知事件' : 'Unknown event');
+  const errorMessage = useMemo(() => {
+    if (errorStatus === 401 || errorStatus === 403) {
+      return t(
+        'factions.error_forbidden',
+        isZh ? '你没有权限查看这条阵营时间线。' : 'You do not have permission to view this faction timeline.',
+      );
+    }
+    return t(
+      'factions.error_fetch',
+      isZh ? '阵营时间线暂时无法加载，请稍后重试。' : 'Unable to load the faction timeline right now. Please retry.',
+    );
+  }, [errorStatus, isZh, t]);
 
   const describeEventType = useCallback((eventType?: string | null) => {
     const normalizedEventType = eventType?.trim() || 'unknown';
@@ -101,32 +114,38 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
     };
   }, [i18n, t, unknownEventLabel]);
 
-  useEffect(() => {
+  const loadTimeline = useCallback(async () => {
     fetchRequestIdRef.current += 1;
     const requestId = fetchRequestIdRef.current;
     setSheetState((prev) => (prev.open ? { ...prev, open: false } : prev));
 
     if (!visible || !scenarioId || !branchId) {
       setLoading(false);
+      setErrorStatus(null);
       return;
     }
 
     setLoading(true);
-    void (async () => {
-      try {
-        const data = await getFactionTimeline(scenarioId, branchId) as RoundFactionData[];
-        if (requestId !== fetchRequestIdRef.current) return;
-        setTimeline(data);
-      } catch {
-        if (requestId !== fetchRequestIdRef.current) return;
-        setTimeline([]);
-      } finally {
-        if (requestId === fetchRequestIdRef.current) {
-          setLoading(false);
-        }
+    setErrorStatus(null);
+    try {
+      const data = await getFactionTimeline(scenarioId, branchId) as RoundFactionData[];
+      if (requestId !== fetchRequestIdRef.current) return;
+      setTimeline(data);
+      setErrorStatus(null);
+    } catch (error) {
+      if (requestId !== fetchRequestIdRef.current) return;
+      setTimeline([]);
+      setErrorStatus(isApiError(error) ? error.status : 'unknown');
+    } finally {
+      if (requestId === fetchRequestIdRef.current) {
+        setLoading(false);
       }
-    })();
-  }, [scenarioId, branchId, visible]);
+    }
+  }, [branchId, scenarioId, visible]);
+
+  useEffect(() => {
+    void loadTimeline();
+  }, [loadTimeline]);
 
   const factionKeys = [...new Set(timeline.flatMap(r => r.factions.map(f => f.key)))];
   const colorMap = factionKeys.reduce<Record<string, string>>((map, key, index) => {
@@ -153,8 +172,27 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
 
   if (!visible) return null;
   if (loading) return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('common.loading', 'Loading...')}</p>;
+  if (errorStatus !== null) {
+    return (
+      <div role="alert" style={{ display: 'grid', gap: '0.5rem' }}>
+        <p style={{ fontSize: '0.85rem', color: '#888', margin: 0 }}>{errorMessage}</p>
+        <div>
+          <button type="button" onClick={() => void loadTimeline()}>
+            {t('common.retry', 'Retry')}
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (timeline.length === 0) {
-    return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('factions.empty', 'No faction data available.')}</p>;
+    return (
+      <p style={{ fontSize: '0.85rem', color: '#888' }}>
+        {t(
+          'factions.empty',
+          'Factions need a longer run to form alliances and splits. Try a deeper simulation to reveal their evolution.',
+        )}
+      </p>
+    );
   }
 
   return (

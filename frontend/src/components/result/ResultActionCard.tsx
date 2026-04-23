@@ -76,6 +76,14 @@ export function ResultActionCard({
     window.dispatchEvent(new HashChangeEvent('hashchange'));
   }, [agentIdentityId]);
 
+  const handleMobileClick = useCallback(() => {
+    if (onMobileTriggerClick) {
+      onMobileTriggerClick();
+      return;
+    }
+    handleDesktopClick();
+  }, [handleDesktopClick, onMobileTriggerClick]);
+
   const gradientClasses =
     'bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/30 hover:from-purple-400 hover:to-pink-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pink-300';
 
@@ -86,7 +94,7 @@ export function ResultActionCard({
         data-testid="result-action-conversation"
         data-variant="mobile-trigger"
         aria-label={aria}
-        onClick={onMobileTriggerClick}
+        onClick={handleMobileClick}
         className={cn(
           'fixed bottom-4 right-4 z-40 rounded-full px-5 py-3 text-sm font-semibold',
           gradientClasses,

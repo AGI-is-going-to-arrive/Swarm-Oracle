@@ -54,6 +54,10 @@ interface CausalGraphPayload {
   edges: KGEdge[];
 }
 
+type KGExplorerErrorState = {
+  status: number | null;
+};
+
 type ViewportTier = 'mobile' | 'tablet' | 'desktop';
 type MobileActivePane = 'graph' | 'sidebar';
 
@@ -115,17 +119,44 @@ function readTheme(): 'light' | 'dark' {
   return 'light';
 }
 
+function getKgExplorerErrorMessage(
+  error: KGExplorerErrorState,
+  t: ReturnType<typeof useTranslation>['t'],
+): string {
+  if (error.status === 404) {
+    return t(
+      'kg_explorer.error_missing',
+      'Knowledge graph data is not available for this scenario.',
+    );
+  }
+  if (error.status === 401 || error.status === 403) {
+    return t(
+      'kg_explorer.error_forbidden',
+      'You do not have permission to view this knowledge graph.',
+    );
+  }
+  return t(
+    'kg_explorer.error_fetch',
+    'Unable to load the knowledge graph right now. Please retry.',
+  );
+}
+
 // ── Component ───────────────────────────────────────────────
 
 export default function KGExplorerView() {
   const { id: scenarioId = '' } = useParams<{ id: string }>();
   const { t } = useTranslation();
-  const { loading: capLoading, enabled: capEnabled } = useCapabilityCheck('kg_explorer');
+  const {
+    loading: capLoading,
+    enabled: capEnabled,
+    error: capabilityError,
+    reload: reloadCapability,
+  } = useCapabilityCheck('kg_explorer');
   const tier = useViewportTier();
   const theme = useTheme();
 
   const [graphData, setGraphData] = useState<CausalGraphPayload | null>(null);
-  const [dataError, setDataError] = useState<string | null>(null);
+  const [dataError, setDataError] = useState<KGExplorerErrorState | null>(null);
   const [dataLoading, setDataLoading] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobileActivePane>('graph');
   const [searchTerm, setSearchTerm] = useState('');
@@ -139,37 +170,50 @@ export default function KGExplorerView() {
   }>(createClosedSheetState);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const loadRequestIdRef = useRef(0);
 
-  // Fetch causal-graph data (capability-gated).
-  useEffect(() => {
-    if (!capEnabled || !scenarioId) return;
-    let cancelled = false;
+  const loadGraph = useCallback(async () => {
+    if (!scenarioId) return;
+    const requestId = loadRequestIdRef.current + 1;
+    loadRequestIdRef.current = requestId;
     const apiBase = (typeof window !== 'undefined'
       ? (window as unknown as { __API_BASE__?: string }).__API_BASE__
       : undefined) ?? '/api';
-    (async () => {
-      setDataLoading(true);
-      try {
-        const res = await fetch(
-          `${apiBase}/scenario/${encodeURIComponent(scenarioId)}/causal-graph`,
-          { headers: buildSessionHeaders() },
-        );
-        if (!res.ok) throw new Error(`http_${res.status}`);
-        const payload = (await res.json()) as CausalGraphPayload;
-        if (!cancelled) setGraphData(payload);
-      } catch (err) {
-        if (!cancelled) {
-          const msg = err instanceof Error ? err.message : 'unknown_error';
-          setDataError(msg);
-        }
-      } finally {
-        if (!cancelled) setDataLoading(false);
+    setDataLoading(true);
+    setDataError(null);
+    setGraphData(null);
+    try {
+      const res = await fetch(
+        `${apiBase}/scenario/${encodeURIComponent(scenarioId)}/causal-graph`,
+        { headers: buildSessionHeaders() },
+      );
+      if (requestId !== loadRequestIdRef.current) return;
+      if (!res.ok) {
+        setDataError({ status: res.status });
+        return;
       }
-    })();
+      const payload = (await res.json()) as CausalGraphPayload;
+      if (requestId !== loadRequestIdRef.current) return;
+      setGraphData(payload);
+      setDataError(null);
+    } catch {
+      if (requestId !== loadRequestIdRef.current) return;
+      setDataError({ status: null });
+    } finally {
+      if (requestId === loadRequestIdRef.current) {
+        setDataLoading(false);
+      }
+    }
+  }, [scenarioId]);
+
+  // Fetch causal-graph data (capability-gated).
+  useEffect(() => {
+    if (!capEnabled || capabilityError || !scenarioId) return;
+    void loadGraph();
     return () => {
-      cancelled = true;
+      loadRequestIdRef.current += 1;
     };
-  }, [capEnabled, scenarioId]);
+  }, [capEnabled, capabilityError, loadGraph, scenarioId]);
 
   useEffect(() => {
     setSheetState(createClosedSheetState());
@@ -255,6 +299,24 @@ export default function KGExplorerView() {
       </div>
     );
   }
+  if (capabilityError) {
+    return (
+      <div
+        data-testid="kg-explorer-root"
+        className="p-6 text-sm"
+        role="alert"
+        aria-live="polite"
+      >
+        <h1 className="text-lg font-semibold mb-2">
+          {t('kg_explorer.error_title', 'Knowledge Graph is unavailable')}
+        </h1>
+        <p>{t('kg_explorer.error_fetch', 'Unable to load the knowledge graph right now. Please retry.')}</p>
+        <button type="button" className="underline" onClick={() => void reloadCapability?.()}>
+          {t('common.retry', 'Retry')}
+        </button>
+      </div>
+    );
+  }
   if (!capEnabled) {
     return (
       <div
@@ -270,6 +332,29 @@ export default function KGExplorerView() {
         <Link to="/" className="underline">
           {t('common.back_home', 'Back to home')}
         </Link>
+      </div>
+    );
+  }
+  if (dataError && !graphData && !dataLoading) {
+    return (
+      <div
+        data-testid="kg-explorer-root"
+        className="p-6 text-sm"
+        role="alert"
+        aria-live="polite"
+      >
+        <h1 className="text-lg font-semibold mb-2">
+          {t('kg_explorer.error_title', 'Knowledge Graph is unavailable')}
+        </h1>
+        <p>{getKgExplorerErrorMessage(dataError, t)}</p>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <button type="button" className="underline" onClick={() => void loadGraph()}>
+            {t('common.retry', 'Retry')}
+          </button>
+          <Link to="/" className="underline">
+            {t('common.back_home', 'Back to home')}
+          </Link>
+        </div>
       </div>
     );
   }
@@ -377,11 +462,6 @@ export default function KGExplorerView() {
           {dataLoading && (
             <p role="status" style={{ fontSize: '0.75rem', padding: '0.25rem' }}>
               {t('common.loading', 'Loading…')}
-            </p>
-          )}
-          {dataError && (
-            <p role="alert" style={{ fontSize: '0.75rem', padding: '0.25rem', color: 'red' }}>
-              {dataError}
             </p>
           )}
         </section>

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { __resetCapabilityCacheForTests } from '../hooks/useCapabilityCheck';
 import { InputView } from './InputView';
 
 const {
@@ -300,6 +301,7 @@ describe('InputView campaign progress', () => {
 
   beforeEach(() => {
     window.sessionStorage.clear();
+    __resetCapabilityCacheForTests();
     setMockLanguage('en');
     changeLanguageMock.mockClear();
     createDebateMock.mockReset();

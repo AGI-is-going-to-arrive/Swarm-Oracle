@@ -51,7 +51,7 @@ graph TD
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
 | backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 67 文件 / 1801 tests |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~130+ | 85 文件 / 794 tests |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~130+ | 142 文件 / 1349 tests |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -137,7 +137,7 @@ cd backend && alembic upgrade head
 - `debate.py` 新增论证抽取 hook (每 turn 后) + verdict linking (finalize 后)，受 `FEATURE_ARGUMENT_MAP` 控制
 - `helpers.py` parse 后自动调 `resolve_identity()` 回填 `agent_identity_id`，自建 Agent 替换 CROWD 槽位并同步 `parsed_context`；自建 Agent 注入需通过 ownership 校验（`user_id is not None` + `identity.user_id == user_id`）
 - 7 个 `FEATURE_*` 环境变量 (`config.py`)：`FEATURE_CUSTOM_AGENTS`/`FEATURE_AGENT_IDENTITY`/`FEATURE_CAUSAL_GRAPH`/`FEATURE_COUNTERFACTUAL_REPLAY`/`FEATURE_FACTIONS`/`FEATURE_ARGUMENT_MAP`/`FEATURE_IDENTITY_COMPACTION`，默认全 `false`，控制后端 API 404 gate + simulator/debate hook 开关 + 记忆压缩
-- 前端 4 个新页面均通过 `useCapabilityCheck` hook 做 capability gate，disabled 时不发 API 请求
+- 前端 4 个新页面均通过 `useCapabilityCheck` hook 做 capability gate；当前会复用 `/api/capabilities` 结果，并把 `loading / enabled / error` 暴露给 consumer。capability probe 失败时，前端不再默认伪装成 disabled
 - `InputView` 集成 `AgentAttachPanel`，`ResultView` 集成因果图谱链接 + `CounterfactualPanel` + `FactionTimeline`，`DebateResultView` 集成 `ArgumentMap`，均受 capabilities 控制
 - ChromaDB 双层 memory：scenario-scoped (不变) + identity-scoped (`identity_{user_id}` collection，200 条 FIFO，写入经 `identity:{user_id}` 粒度串行化锁保护)
 - Agent continuity key：SHA-256(role+persona[:30])[:16]，跨场景身份匹配
@@ -155,6 +155,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-23 | 前端 gated route 状态面收口 | `useCapabilityCheck` 当前会复用 `/api/capabilities` 请求，并把 probe 失败显式暴露给页面；`ReplayView` capability disabled 不再 silent redirect，改成显式 unavailable surface；`KGExplorerView / CompareDigestView / FactionTimeline` 当前把 `disabled / load failed / empty` 分开显示，不再直接泄漏原始错误，也不再把所有异常压成空态；首页 4 个 source family disabled tooltip 已补齐中英 locale。真实验证：frontend focused regression `64 passed`、frontend full vitest `1349 passed`、`npx tsc --noEmit -p tsconfig.app.json` 通过、`npm run build` 通过，local preview 也已确认 Replay unavailable surface、中文 source tooltip 和结果页新的 FactionTimeline 空态文案 |
 | 2026-04-20 | WS / capability graph contract 诊断收口 | `useAgentConversationWS` 改回真实 `/ws/agent-conversation/{thread_id}`；`e2e-ws-contract-suite.mjs` 去掉 import 副作用后，这轮又补了两处真实收口：`case1` 改走绝对 URL + 独立 page，不再把 `/sim` `/debate` 静默 skip；raw probe 先于 live fixture 执行，避免 clean-room 下 `scenario` 被 live fixture 污染成假 `1006`。同时恢复并保留 `e2e:capability-matrix / e2e:ws:contract` 两条诊断 npm script。真实验证为 backend `tests/test_evidence_card_flow.py` `5 passed`、`tests/test_session_auth.py -k 'auth_timeout_closes_4001 or oversized_auth_frame_closes_1009 or pending_blocks_new_connections'` `3 passed`；frontend `node --test scripts/e2e-ws-contract-suite.test.mjs` `18 passed`、定向 vitest `32 passed`、clean-room `e2e:ws:contract` `20 passed / 1 skipped / 0 failed`、clean-room `e2e:capability-matrix` `25 passed / 5 skipped / 0 failed` |
 | 2026-04-19 | source-family live contract + merge gate 收口 | quota ledger `Retry-After` 改成真实 rolling 24h 语义；`release-signoff` 的 `new_source_ingestion_live` 步骤现在会显式带 `SWARM_E2E_MODE=live`；`POST /api/scenario` 新增 `web_search_families`，backend 会把 live snippets 投影成 `web_search_context.family_context`，`NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` 时 `Polymarket` 显式走 geo-gated 口径；ResultView 改成按 `family_context` 渲染四张 source family card；fresh 验证为 backend `2264 passed, 2 skipped`、frontend `1336 passed`、typecheck/build/perf 通过、source-ingestion live `us/non-us` 桌面/移动全通过；llmdoc / implement / progress 已同步 |
 | 2026-04-18 | graph-playability-upgrade 6-layer delivery | Layer 1 (BE-1/FE-1) migration 022 `agent_conversation` + @antv/g6 依赖+chunk+capability hook `nestedPath`；Layer 2 (BE-2) scenario delete 服务化 + 级联 Phase 3 表；Layer 3 (BE-3/4/5) POST `/conversation` (sequence reservation + CAS finalize + ownership quota + SSE) / GET `/replay-trace` (cursor 分页 + feature gate) / `/web-context` 4-family providers façade (news_deep/wikidata/polymarket/rsshub + shared token bucket + Retry-After)；Layer 4 (BE-6) capabilities 扩展 `agent_conversation`/`kg_explorer`/`replay_trace` + `web_search.providers` 嵌套 schema；Layer 5 (FE-2/3/4/5/3-seq) `KGExplorerView`+`TimelineGalaxy`+3 lazy 路由 (G6 Canvas hook + 100+ 节点 FPS budget)、`NodeConversationSheet` 流式隔离 + aria-live debounce + WS 重连 + 4 trigger sources (ArgumentMap/CausalReviewView/FactionTimeline/KGExplorerView)、`ReplayView` scrubber + agent queue + URL hash + 键盘快捷键、`ResultActionCard` + 4 source 卡片 + MobileSourceSheet + GlobalOfflineBanner + InputView 4 source toggles；Layer 6 (QA) QA-2 4 脚本 Tier 1 live + release-signoff 注册 (node-conversation/kg-explorer/replay-view/new-source-ingestion) + 4 npm scripts；QA-3 i18n 31 新 keys (19 kg_explorer + 2 timeline_galaxy + 10 replay) 全 en/zh parity；QA-4 根+backend+frontend CLAUDE.md + MEMORY.md 同步 |

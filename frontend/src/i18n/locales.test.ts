@@ -67,6 +67,8 @@ describe('i18n locale resources', () => {
     expect(zh.translation.causal.title).toBe('因果图谱');
     expect(en.translation.compare.title).toBe('Counterfactual Compare');
     expect(zh.translation.compare.title).toBe('反事实对比');
+    expect(en.translation.compare.error_fetch).toBe('Unable to load comparison data right now. Please retry.');
+    expect(zh.translation.compare.error_fetch).toBe('当前无法加载对比数据，请稍后重试。');
     expect(en.translation.compare.round).toBe('Round {{round}}');
     expect(zh.translation.compare.round).toBe('第 {{round}} 轮');
   });
@@ -123,10 +125,23 @@ describe('i18n locale resources', () => {
     expect(zh.translation.factions.current_branch).toBe('当前分支');
     expect(en.translation.factions.branch_scope).toBe('Branch scope');
     expect(zh.translation.factions.branch_scope).toBe('分支范围');
+    expect(en.translation.factions.error_fetch).toBe('Unable to load the faction timeline right now. Please retry.');
+    expect(zh.translation.factions.error_fetch).toBe('阵营时间线暂时无法加载，请稍后重试。');
     expect(en.translation.debate.import_local_run).toBe('Import as Local Run');
     expect(zh.translation.debate.import_local_run).toBe('导入为本地运行');
     expect(en.translation.debate.importing_local_run).toBe('Importing...');
     expect(zh.translation.debate.importing_local_run).toBe('导入中...');
+  });
+
+  it('provides localized replay, source tooltip, and knowledge-graph error labels', () => {
+    expect(en.translation.input_source.disabled_tooltip).toBe('This data source is not enabled on the server.');
+    expect(zh.translation.input_source.disabled_tooltip).toBe('此数据源未在服务器上启用。');
+    expect(en.translation.replay.feature_disabled_title).toBe('Replay trace is unavailable');
+    expect(zh.translation.replay.feature_disabled_title).toBe('回放轨迹不可用');
+    expect(en.translation.replay.feature_unavailable_title).toBe('Replay availability could not be checked');
+    expect(zh.translation.replay.feature_unavailable_title).toBe('暂时无法确认回放能力');
+    expect(en.translation.kg_explorer.error_fetch).toBe('Unable to load the knowledge graph right now. Please retry.');
+    expect(zh.translation.kg_explorer.error_fetch).toBe('当前无法加载知识图谱，请稍后重试。');
   });
 
   it('provides shared retry, clear, submitting, and causal round labels used by graph views', () => {

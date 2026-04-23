@@ -950,6 +950,7 @@
       "title": "反事实对比",
       "missing_params": "缺少分支参数",
       "no_data": "当前没有可用的对比数据。",
+      "error_fetch": "当前无法加载对比数据，请稍后重试。",
       "round": "第 {{round}} 轮",
       "divergence_label": "分歧度",
       "branch_a_label": "分支 A（原始）",
@@ -1124,7 +1125,9 @@
     },
     "factions": {
       "title": "阵营时间线",
-      "empty": "暂无阵营数据。",
+      "empty": "阵营需要更长的推演才会形成结盟与分裂。尝试运行更深入的模拟来观察它们的演化。",
+      "error_fetch": "阵营时间线暂时无法加载，请稍后重试。",
+      "error_forbidden": "你没有权限查看这条阵营时间线。",
       "a11y_label": "阵营演化时间线",
       "round_label": "第 {{round}} 轮",
       "current_branch": "当前分支",
@@ -1297,7 +1300,8 @@
       "news_deep": {
         "label": "深度新闻",
         "tooltip": "引入长尾调查新闻"
-      }
+      },
+      "disabled_tooltip": "此数据源未在服务器上启用。"
     },
     "offline_banner": {
       "title": "你目前离线",
@@ -1308,6 +1312,10 @@
       "title": "知识图谱浏览器",
       "feature_disabled_title": "知识图谱不可用",
       "feature_disabled": "请联系管理员启用 kg_explorer 能力后再查看该图谱。",
+      "error_title": "知识图谱不可用",
+      "error_fetch": "当前无法加载知识图谱，请稍后重试。",
+      "error_missing": "当前场景没有可用的知识图谱数据。",
+      "error_forbidden": "你没有权限查看这个知识图谱。",
       "search_placeholder": "按 ID 或名称搜索节点",
       "search_aria": "搜索知识图谱节点",
       "filter_aria": "按类型筛选节点",
@@ -1331,6 +1339,10 @@
     },
     "replay": {
       "title": "回放轨迹",
+      "feature_disabled_title": "回放轨迹不可用",
+      "feature_disabled_description": "当前环境未启用回放轨迹功能。",
+      "feature_unavailable_title": "暂时无法确认回放能力",
+      "feature_unavailable_description": "当前无法确认回放轨迹是否可用，请稍后重试。",
       "scrubber": {
         "aria_label": "时间线滑块"
       },

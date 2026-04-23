@@ -55,7 +55,6 @@ function renderAt(pathWithHash: string) {
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/replay/:id" element={<ReplayView />} />
-        <Route path="/" element={<div data-testid="redirected-home" />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -72,12 +71,13 @@ afterEach(() => {
 });
 
 describe('ReplayView — capability gate', () => {
-  it('redirects to / when capability replay_trace is disabled', async () => {
+  it('shows an explicit disabled surface when capability replay_trace is disabled', async () => {
     mockedCap.mockReturnValue({ loading: false, enabled: false, capabilities: null });
     renderAt('/replay/sc123');
     await waitFor(() => {
-      expect(screen.getByTestId('redirected-home')).toBeInTheDocument();
+      expect(screen.getByText('Replay trace is unavailable')).toBeInTheDocument();
     });
+    expect(screen.queryByTestId('redirected-home')).not.toBeInTheDocument();
   });
 
   it('shows loading state while capability is loading', () => {
@@ -85,6 +85,23 @@ describe('ReplayView — capability gate', () => {
     renderAt('/replay/sc123');
     expect(screen.getByTestId('replay-view-root')).toBeInTheDocument();
     expect(screen.getByText(/Loading/i)).toBeInTheDocument();
+  });
+
+  it('shows a retryable capability error surface when availability check fails', async () => {
+    const reload = vi.fn();
+    mockedCap.mockReturnValue({
+      loading: false,
+      enabled: false,
+      capabilities: null,
+      error: new Error('capabilities failed'),
+      reload,
+    });
+    renderAt('/replay/sc123');
+
+    expect(await screen.findByText('Replay availability could not be checked')).toBeInTheDocument();
+    await screen.findByRole('button', { name: 'Retry' });
+    screen.getByRole('button', { name: 'Retry' }).click();
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -3,13 +3,43 @@
    Fetches /api/capabilities on mount and checks a specific key.
    ═══════════════════════════════════════════════════════════ */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCapabilities, type CapabilitiesResponse } from '../api/client';
 
 interface CapabilityCheckResult {
   loading: boolean;
   enabled: boolean;
   capabilities: CapabilitiesResponse | null;
+  error?: Error | null;
+  reload?: () => Promise<void>;
+}
+
+let cachedCapabilities: CapabilitiesResponse | null = null;
+let capabilitiesPromise: Promise<CapabilitiesResponse> | null = null;
+
+async function loadCapabilities(force = false): Promise<CapabilitiesResponse> {
+  if (!force && cachedCapabilities) {
+    return cachedCapabilities;
+  }
+  if (!force && capabilitiesPromise) {
+    return capabilitiesPromise;
+  }
+
+  capabilitiesPromise = getCapabilities()
+    .then((caps) => {
+      cachedCapabilities = caps;
+      return caps;
+    })
+    .finally(() => {
+      capabilitiesPromise = null;
+    });
+
+  return capabilitiesPromise;
+}
+
+export function __resetCapabilityCacheForTests(): void {
+  cachedCapabilities = null;
+  capabilitiesPromise = null;
 }
 
 /**
@@ -44,29 +74,51 @@ export function useCapabilityCheck(
   const [loading, setLoading] = useState(true);
   const [enabled, setEnabled] = useState(false);
   const [capabilities, setCapabilities] = useState<CapabilitiesResponse | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  const requestIdRef = useRef(0);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const caps = await getCapabilities();
-        if (!cancelled) {
-          setCapabilities(caps);
-          const root = caps[key];
-          if (nestedPath && nestedPath.length > 0) {
-            const value = traversePath(root, nestedPath);
-            setEnabled(value === true);
-          } else {
-            setEnabled(root?.enabled ?? false);
-          }
-        }
-      } catch {
-        if (!cancelled) setEnabled(false);
-      }
-      if (!cancelled) setLoading(false);
-    })();
-    return () => { cancelled = true; };
+  const resolveEnabled = useCallback((caps: CapabilitiesResponse): boolean => {
+    const root = caps[key];
+    if (nestedPath && nestedPath.length > 0) {
+      const value = traversePath(root, nestedPath);
+      return value === true;
+    }
+    return root?.enabled ?? false;
   }, [key, nestedPath]);
 
-  return { loading, enabled, capabilities };
+  const evaluateCapabilities = useCallback(async (force = false) => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    setLoading(true);
+    setError(null);
+
+    try {
+      const caps = await loadCapabilities(force);
+      if (requestId !== requestIdRef.current) return;
+      setCapabilities(caps);
+      setEnabled(resolveEnabled(caps));
+    } catch (nextError) {
+      if (requestId !== requestIdRef.current) return;
+      setCapabilities(null);
+      setEnabled(false);
+      setError(nextError instanceof Error ? nextError : new Error('Failed to load capabilities'));
+    } finally {
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [resolveEnabled]);
+
+  useEffect(() => {
+    void evaluateCapabilities(false);
+    return () => {
+      requestIdRef.current += 1;
+    };
+  }, [evaluateCapabilities]);
+
+  const reload = useCallback(async () => {
+    await evaluateCapabilities(true);
+  }, [evaluateCapabilities]);
+
+  return { loading, enabled, capabilities, error, reload };
 }

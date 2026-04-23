@@ -9,7 +9,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, Navigate, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { buildSessionHeaders } from '../api/client';
@@ -126,7 +126,12 @@ function pickActiveAgent(
 export function ReplayView() {
   const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
-  const { loading: capLoading, enabled } = useCapabilityCheck('replay_trace');
+  const {
+    loading: capLoading,
+    enabled,
+    error: capabilityError,
+    reload: reloadCapability,
+  } = useCapabilityCheck('replay_trace');
 
   const [trace, setTrace] = useState<ReplayTraceResponse | null>(null);
   const [graph, setGraph] = useState<CausalGraphResponse | null>(null);
@@ -140,6 +145,8 @@ export function ReplayView() {
     if (!encodedId) return;
     setLoadingData(true);
     setError(null);
+    setTrace(null);
+    setGraph(null);
     try {
       const [traceRes, graphRes] = await Promise.all([
         fetch(`/api/scenario/${encodedId}/replay-trace`, { headers: buildSessionHeaders() }),
@@ -168,9 +175,9 @@ export function ReplayView() {
   }, [encodedId]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || capabilityError) return;
     fetchAll();
-  }, [enabled, fetchAll]);
+  }, [capabilityError, enabled, fetchAll]);
 
   const { count: totalFrames, nodeByFrame } = useMemo(
     () => buildFrames(trace, graph),
@@ -207,12 +214,7 @@ export function ReplayView() {
     [frameIndex, nodeByFrame],
   );
 
-  // Capability gate (server says replay_trace=false → 404-equivalent).
-  if (!capLoading && !enabled) {
-    return <Navigate to="/" replace />;
-  }
-
-  if (capLoading || loadingData) {
+  if (capLoading || (!capabilityError && enabled && loadingData)) {
     return (
       <div
         ref={rootRef}
@@ -222,6 +224,64 @@ export function ReplayView() {
         style={{ maxWidth: 960, margin: '0 auto', padding: '3rem 1rem', textAlign: 'center' }}
       >
         <p>{t('common.loading', 'Loading...')}</p>
+      </div>
+    );
+  }
+
+  if (capabilityError) {
+    return (
+      <div
+        ref={rootRef}
+        data-testid="replay-view-root"
+        className="replay-view-root"
+        tabIndex={-1}
+        style={{ maxWidth: 960, margin: '0 auto', padding: '3rem 1rem', textAlign: 'center' }}
+      >
+        <h1 style={{ margin: '0 0 1rem', fontSize: '1.4rem' }}>
+          {t('replay.title', 'Replay')}
+        </h1>
+        <ReplayEmptyState
+          title={t('replay.feature_unavailable_title', 'Replay availability could not be checked')}
+          message={t(
+            'replay.feature_unavailable_description',
+            'Unable to confirm whether replay trace is available right now. Please retry.',
+          )}
+          onRetry={() => void reloadCapability?.()}
+          retryLabel={t('common.retry', 'Retry')}
+        />
+        <div style={{ marginTop: '1rem' }}>
+          <Link to="/" style={{ color: '#8ab4f8' }}>
+            {t('common.back_home', 'Back to Home')}
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (!enabled) {
+    return (
+      <div
+        ref={rootRef}
+        data-testid="replay-view-root"
+        className="replay-view-root"
+        tabIndex={-1}
+        style={{ maxWidth: 960, margin: '0 auto', padding: '3rem 1rem', textAlign: 'center' }}
+      >
+        <h1 style={{ margin: '0 0 1rem', fontSize: '1.4rem' }}>
+          {t('replay.title', 'Replay')}
+        </h1>
+        <ReplayEmptyState
+          title={t('replay.feature_disabled_title', 'Replay trace is unavailable')}
+          message={t(
+            'replay.feature_disabled_description',
+            'This server has replay trace disabled for this environment.',
+          )}
+        />
+        <div style={{ marginTop: '1rem' }}>
+          <Link to="/" style={{ color: '#8ab4f8' }}>
+            {t('common.back_home', 'Back to Home')}
+          </Link>
+        </div>
       </div>
     );
   }

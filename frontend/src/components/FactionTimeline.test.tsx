@@ -57,7 +57,7 @@ function makeConversationSseResponse(frames: string[]): Response {
 const localeExpectations = {
   en: {
     title: 'Faction Timeline',
-    empty: 'No faction data available.',
+    empty: 'Factions need a longer run to form alliances and splits. Try a deeper simulation to reveal their evolution.',
     a11yLabel: 'Faction evolution timeline',
     roundLabel: 'Round 1',
     branchScope: 'Branch scope: Archive Branch',
@@ -75,7 +75,7 @@ const localeExpectations = {
   },
   zh: {
     title: '阵营时间线',
-    empty: '暂无阵营数据。',
+    empty: '阵营需要更长的推演才会形成结盟与分裂。尝试运行更深入的模拟来观察它们的演化。',
     a11yLabel: '阵营演化时间线',
     roundLabel: '第 1 轮',
     branchScope: '分支范围: Archive Branch',
@@ -178,6 +178,19 @@ describe('FactionTimeline', () => {
     await renderFactionTimeline(language);
 
     expect(await screen.findByText(expectedEmpty)).toBeInTheDocument();
+  });
+
+  it('shows a retryable error state when fetching the timeline fails', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch')
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(jsonResponse([]));
+
+    await renderFactionTimeline('en');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load the faction timeline right now. Please retry.');
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(localeExpectations.en.empty)).toBeInTheDocument();
   });
 
   it.each([

@@ -22,7 +22,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 首页高级设置当前还支持可选 `Organization ID`；值只在当前浏览器 session 内保存，并随请求头 `X-Org-Id` 透传，留空就不发送。
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。
 - `SimulationView` 负责 live 推演、Theater、干预、玩法卡、结构化押注与 capture。
-- `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、campaign summary、分享、导出与 replay/import；当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。`FEATURE_NEW_SOURCES=true` 且有 `family_context` 时，结果页当前还会渲染 `Polymarket / Finance / Academic / News` 四张 source family card；`polymarket.configured_host=non-us` 时会显示地域限制占位。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。结果页里的 `FactionTimeline` 当前会优先跟随正在展开查看的分支；未展开时会落到概率最高分支，并改成真实纵向时间线，`stance / confidence` 等指标直接可见，不再只藏在 tooltip badge 里。replay 模式下会继续保留 replay-safe 的 `causal graph` 入口和 `FactionTimeline`，但 `counterfactual / resume` 这类 live-only 面板仍保持隐藏。标题、空态、轮次与事件标签都会跟随 UI 语言。`CompareDigestView` 的非活跃 pane 当前会保留更完整的待机镜像，不再是纯黑占位。
+- `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、campaign summary、分享、导出与 replay/import；当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。`FEATURE_NEW_SOURCES=true` 且有 `family_context` 时，结果页当前还会渲染 `Polymarket / Finance / Academic / News` 四张 source family card；`polymarket.configured_host=non-us` 时会显示地域限制占位。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。结果页里的 `FactionTimeline` 当前会优先跟随正在展开查看的分支；未展开时会落到概率最高分支，并改成真实纵向时间线，`stance / confidence` 等指标直接可见，不再只藏在 tooltip badge 里。replay 模式下会继续保留 replay-safe 的 `causal graph` 入口和 `FactionTimeline`，但 `counterfactual / resume` 这类 live-only 面板仍保持隐藏。标题、空态、轮次与事件标签都会跟随 UI 语言。`CompareDigestView` 的非活跃 pane 当前会保留更完整的待机镜像，不再是纯黑占位。前端 gated route 当前也把 `feature disabled` 和 `capability probe 失败` 分开显示：`ReplayView` 不再 silent redirect，`KGExplorerView / CompareDigestView / FactionTimeline` 也不再直接把原始错误字符串或所有异常压成空态。
 - replay 分支链路当前也已补硬化：`counterfactual` 会在 clone 前校验目标 round 里确实有该 agent 的消息；如果 seed 失败，会清理掉刚创建的脏 branch；`resume` 只有在预占 `simulation lock` 成功后才会返回 started。replay branch runtime lock 当前按 fail-closed 收口：续租返回 `None`、续租抛异常，或本地 lease 已过期时，都不会继续 clone / seed / schedule；heartbeat 会在请求内校验完成后才启动，避免同一请求自己和自己抢 SQLite 锁。若后台续跑期间丢掉预占的 `simulation lock`，任务也会直接 fail-closed 落成 `error`，不会失锁后继续跑；replay branch heartbeat 刷新异常时会释放原 lease，不再把后续请求卡到 TTL 过期。同分支重放更早轮次时，也会同步剪掉过期的 `AgentStateFrame / stance_shift`，不再把旧状态残留在当前图里。
 - graph viz 当前已收口：`CausalReviewView` 会忽略 stale branch 响应；graph route fetch 里的 `scenarioId / debateId`，以及 `CausalReviewView` 返回结果页的 scenario link，也都会先做 `encodeURIComponent()`，带特殊字符的 id 不会再打坏请求或跳转。URL 里带不存在的 `branch_id` 时会直接报错，不再伪装成空图；分支 selector 会优先显示 scenario branch 的标题和概率，拿不到元数据时才回退 branch id；只有源图本身就没有因果边时，`多节点但 0 edges` 才会切到本地化的 event snapshot fallback；如果只是 search / filter 把边筛空，交互图和导出入口仍会保留，不会把有边的图误判成 relationless fallback。错误态会按 `network / branch_not_found / unauthorized / server / load_failed` 显示本地化文案；图节点可访问名称和 React Flow controls / minimap 文案会跟随当前 UI 语言实时更新。交互图当前除了 node/unit 的 screen-reader list，也会补本地化 relation list，读屏器能直接读到 `causes / precedes`，以及 `ArgumentMap` 里的 `supports / rebuts / accepts / rejects / leaves unaddressed`。branch 切换时会先清空旧图和导出面板，不再闪出上一条分支的图。compact viewport 下会继续保留显式 controls 和移动端导航提示；图页外层统一走 `100dvh`，移动端 header、悬浮 controls 和 relationless fallback 里的节点详情都会锚在当前壳层内并避开 safe-area。`ArgumentMap` 在 node-only 图时仍保留 screen-reader list 和键盘可达性，状态筛选也不会误把整张 node-only 图筛成空态；强度摘要会跟随当前筛选结果。桌面端如果节点点击同时打开 `NodeConversationSheet`，详情侧栏会自动给右侧对话 sidecar 让位；detail close、pane click 只会收详情，不会把 sidecar 一起关掉；如果焦点在详情内，`Escape` 也会先收详情；切到新节点后再关详情，焦点会回到最新 trigger。textarea 里的 `Escape` 仍只关闭 sidecar。`Copy Reference` 会先走 clipboard API，失败再回退 `execCommand`；两条都失败时会显示可见错误提示。`ExportPanel` 会区分 PNG / SVG 的忙态文案；SVG 导出改成 native SVG layer + node rebuild，长标题会按节点卡宽度裁剪显示，但 `<title>` 和文本内容仍保留完整节点标题，不再依赖 `foreignObject`。`LanguageSwitcher` 的 accessible name 当前也会带可见 `EN / 中文` 文本，语音控制和读屏口径不再分叉。后端 runtime repair 当前以最新 `causal-graph / argument-map` snapshot 为 authority，重复 snapshot 的旧残留会直接删除，不再把 stale 数据合回当前图。
 
@@ -142,12 +142,12 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - backend 全量 `pytest` `2264 passed, 2 skipped`
   - frontend `typecheck / lint / build / perf budgets` 通过
   - frontend `NodeConversationSheet / CausalReviewView` 定向 vitest `86 passed`
-  - frontend 全量 vitest `1336 passed`
+  - frontend 全量 vitest `1349 passed`
   - 这轮 graph/playability 增量回归也已补：
     - clean-room `e2e:ws:contract` `20 passed / 1 skipped / 0 failed`
     - clean-room `e2e:capability-matrix` `25 passed / 5 skipped / 0 failed`
     - `node --test scripts/e2e-ws-contract-suite.test.mjs` `18 passed`
-    - `useAgentConversationWS / useCapabilityCheck / AgentLibrary / CompareDigestView / KGExplorerView / ReplayView` 定向 vitest `32 passed`
+    - capability / replay / compare / kg / faction / i18n 定向 vitest `64 passed`
   - 本轮 fresh local live 验证已补：
     - `node-conversation-live`
     - `kg-explorer-live`
@@ -166,6 +166,10 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - detail close / pane click / detail-focused `Escape` 不再把 sidecar 一起关掉
     - 切到新节点后关 detail，焦点会回到最新 trigger
   - focused browser spot-check 当前也已确认 `/agents` 继续按 capability gate 落 disabled 文案，不是假阳性
+  - 这轮 local preview 复核也已补：
+    - 首页 source family disabled tooltip 已跟随当前 UI 语言
+    - `ReplayView` capability disabled 不再回首页
+    - 结果页 `FactionTimeline` 空态已改成解释性提示
 - 当前无产品级 active backlog；剩余架构级限制见 `overview/backlog.md`。
 
 ## 文档入口

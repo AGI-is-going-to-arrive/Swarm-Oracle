@@ -164,6 +164,22 @@ describe('KGExplorerView capability gate', () => {
     renderAt();
     expect(screen.getByTestId('kg-explorer-root')).toBeInTheDocument();
   });
+
+  it('shows a retryable error surface when capability loading fails', async () => {
+    const reload = vi.fn();
+    mockUseCapabilityCheck.mockReturnValue({
+      loading: false,
+      enabled: false,
+      capabilities: null,
+      error: new Error('capabilities failed'),
+      reload,
+    });
+    renderAt();
+
+    expect(await screen.findByText('Knowledge Graph is unavailable')).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Retry' }));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('KGExplorerView happy path', () => {
@@ -311,5 +327,29 @@ describe('KGExplorerView happy path', () => {
     const search = screen.getByTestId('kg-explorer-search') as HTMLInputElement;
     await user.type(search, 'alpha');
     expect(search.value).toBe('alpha');
+  });
+
+  it('renders a friendly fetch error and retries the graph request', async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-2',
+          nodes: [{ id: 'n3', type: 'event', label: 'Recovered node', round: 3 }],
+          edges: [],
+        }),
+      } as Response);
+
+    renderAt();
+
+    expect(await screen.findByText('Knowledge graph data is not available for this scenario.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByTestId('kg-explorer-g6-canvas')).toBeInTheDocument();
   });
 });

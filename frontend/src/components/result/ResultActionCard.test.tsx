@@ -108,5 +108,19 @@ describe('ResultActionCard', () => {
       });
       expect(handler).toHaveBeenCalledOnce();
     });
+
+    it('falls back to the hash deep-link when no mobile handler is provided', () => {
+      render(
+        <I18nextProvider i18n={i18n}>
+          <ResultActionCard agentIdentityId="mobile-id" />
+        </I18nextProvider>,
+      );
+      const btn = screen.getByTestId('result-action-conversation');
+      act(() => {
+        fireEvent.click(btn);
+      });
+      expect(window.location.hash).toMatch(/agent_profile=mobile-id/);
+      expect(window.location.hash).toMatch(/tab=memory/);
+    });
   });
 });

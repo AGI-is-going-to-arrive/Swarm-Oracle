@@ -227,6 +227,10 @@ export default function ResultView() {
     [scenario?.fork_debug?.round_checks],
   );
   const activeRuntimePreset = scenarioRuntimePreset ?? fallbackRuntimePreset;
+  const primaryAgentIdentityId = useMemo(
+    () => agents.find((agent) => typeof agent.agent_identity_id === 'string' && agent.agent_identity_id.trim().length > 0)?.agent_identity_id ?? null,
+    [agents],
+  );
   const activeRuntimePresetConfig = useMemo(
     () => getScenarioRuntimePresetConfig(activeRuntimePreset),
     [activeRuntimePreset],
@@ -2678,9 +2682,9 @@ export default function ResultView() {
           </MobileSourceSheet>
         </>
       )}
-      {capabilities?.agent_conversation?.enabled && (
+      {capabilities?.agent_conversation?.enabled && primaryAgentIdentityId && (
         <ResultActionCard
-          agentIdentityId={agents[0]?.agent_identity_id ?? null}
+          agentIdentityId={primaryAgentIdentityId}
         />
       )}
     </div>

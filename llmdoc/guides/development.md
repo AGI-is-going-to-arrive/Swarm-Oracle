@@ -343,7 +343,7 @@ HEADLESS=1 npm run e2e:capability-matrix -- --url http://127.0.0.1:19030 --headl
   - `useAgentConversationWS` 实际连接 `/ws/agent-conversation/{thread_id}`，不再误连旧的 `/api/ws/agent-conversation/{thread_id}`
   - `e2e-ws-contract-suite.mjs` 当前先跑 raw probe，再跑 live page case1，避免 live fixture 活动把 `scenario` raw probe 污染成假失败
   - `case1` 当前使用绝对 URL 打开 `/sim` 和 `/debate`，不再因为 Playwright page 没有 `baseURL` 把相对路径静默 skip
-  - `e2e-capability-matrix.mjs` 当前覆盖 6 个 gated route；当前 live 栈里 `ReplayView` 仍会回到 `/`，脚本会记成 `skipped`，不再误判成失败
+  - `e2e-capability-matrix.mjs` 当前覆盖 6 个 gated route；`ReplayView` 的 disabled 路径现在会落显式 unavailable surface，不再回到 `/`。如果脚本还按旧 redirect 口径断言，先同步脚本再跑。
 - 这轮 clean-room 真实结果是：
   - `tests/test_evidence_card_flow.py`：`5 passed`
   - `tests/test_session_auth.py -k ...`：`3 passed`

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { buildSessionHeaders, getScenario } from '../api/client';
+import { buildSessionHeaders, getScenario, isApiError } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useSimulationStore } from '../stores/simulationStore';
 import { PhaserGameLoader } from '../game';
@@ -27,6 +27,11 @@ interface CompareData {
 
 type ComparePane = 'a' | 'b';
 
+type CompareErrorState =
+  | { kind: 'missing_params' }
+  | { kind: 'no_data'; status: number | null }
+  | { kind: 'load_failed'; source: 'compare' | 'scenario' | 'capability'; status: number | null };
+
 function formatRoundLabel(round: number, isZh: boolean) {
   return isZh ? `第 ${round} 轮` : `Round ${round}`;
 }
@@ -34,12 +39,19 @@ function formatRoundLabel(round: number, isZh: boolean) {
 export function CompareDigestView() {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
-  const { loading: capLoading, enabled } = useCapabilityCheck('counterfactual_replay');
+  const {
+    loading: capLoading,
+    enabled,
+    error: capabilityError,
+    reload: reloadCapability,
+  } = useCapabilityCheck('counterfactual_replay');
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const branchA = searchParams.get('branch_a') ?? '';
   const branchB = searchParams.get('branch_b') ?? '';
-  const missingParamsLabel = isZh ? '缺少分支参数' : 'Missing branch parameters';
+  const missingParamsLabel = t('compare.missing_params', 'Missing branch parameters');
+  const encodedScenarioId = id ? encodeURIComponent(id) : '';
+  const resultHref = encodedScenarioId ? `/result/${encodedScenarioId}` : '/';
 
   const setScenario = useSimulationStore((state) => state.setScenario);
   const resetSimulation = useSimulationStore((state) => state.reset);
@@ -50,7 +62,7 @@ export function CompareDigestView() {
 
   const [data, setData] = useState<CompareData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<CompareErrorState | null>(null);
   const [activePane, setActivePane] = useState<ComparePane>('a');
   const [selectedRound, setSelectedRound] = useState<number | null>(null);
   const [playbackMode, setPlaybackMode] = useState<'replay' | 'skip'>('skip');
@@ -61,6 +73,7 @@ export function CompareDigestView() {
     b: null,
   });
   const rootRef = useRef<HTMLDivElement>(null);
+  const loadRequestIdRef = useRef(0);
 
   const availableRounds = useMemo(
     () => data?.rounds.map((entry) => entry.round) ?? [],
@@ -68,52 +81,73 @@ export function CompareDigestView() {
   );
   const scenarioQuestion = storeScenario?.question ?? null;
   const hasScenario = Boolean(storeScenario);
+  const errorLabel = useMemo(() => {
+    if (!error) return null;
+    if (error.kind === 'missing_params') {
+      return missingParamsLabel;
+    }
+    if (error.kind === 'no_data') {
+      return t('compare.no_data', 'No comparison data available.');
+    }
+    return t('compare.error_fetch', 'Unable to load comparison data right now. Please retry.');
+  }, [error, missingParamsLabel, t]);
 
-  useEffect(() => {
-    if (!enabled) return;
+  const loadCompare = useCallback(async () => {
+    const requestId = loadRequestIdRef.current + 1;
+    loadRequestIdRef.current = requestId;
     if (!id || !branchA || !branchB) {
       setLoading(false);
-      setError(missingParamsLabel);
+      setData(null);
+      setError({ kind: 'missing_params' });
       return;
     }
 
-    let cancelled = false;
-    const load = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const [scenarioPayload, comparePayload] = await Promise.all([
-          getScenario(id),
-          fetch(`/api/scenario/${id}/compare?branch_a=${branchA}&branch_b=${branchB}`, {
-            headers: buildSessionHeaders(),
-          }).then(async (response) => {
-            if (!response.ok) {
-              throw new Error(`HTTP ${response.status}`);
-            }
-            return response.json() as Promise<CompareData>;
-          }),
-        ]);
-
-        if (cancelled) return;
-        setScenario(scenarioPayload);
-        setData(comparePayload);
-        setSelectedRound(comparePayload.rounds[0]?.round ?? 1);
-      } catch (nextError) {
-        if (cancelled) return;
-        setError(nextError instanceof Error ? nextError.message : String(nextError));
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+    setLoading(true);
+    setError(null);
+    setData(null);
+    try {
+      const compareResponse = await fetch(
+        `/api/scenario/${encodeURIComponent(id)}/compare?branch_a=${encodeURIComponent(branchA)}&branch_b=${encodeURIComponent(branchB)}`,
+        { headers: buildSessionHeaders() },
+      );
+      if (!compareResponse.ok) {
+        if (requestId !== loadRequestIdRef.current) return;
+        setError(
+          compareResponse.status === 404
+            ? { kind: 'no_data', status: compareResponse.status }
+            : { kind: 'load_failed', source: 'compare', status: compareResponse.status },
+        );
+        return;
       }
-    };
 
-    void load();
+      const comparePayload = (await compareResponse.json()) as CompareData;
+      const scenarioPayload = await getScenario(id);
+      if (requestId !== loadRequestIdRef.current) return;
+      setScenario(scenarioPayload);
+      setData(comparePayload);
+      setSelectedRound(comparePayload.rounds[0]?.round ?? 1);
+    } catch (nextError) {
+      if (requestId !== loadRequestIdRef.current) return;
+      setError({
+        kind: 'load_failed',
+        source: 'scenario',
+        status: isApiError(nextError) ? nextError.status : null,
+      });
+    } finally {
+      if (requestId === loadRequestIdRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [branchA, branchB, id, setScenario]);
+
+  useEffect(() => {
+    if (!enabled || capabilityError) return;
+    void loadCompare();
     return () => {
-      cancelled = true;
+      loadRequestIdRef.current += 1;
       resetSimulation();
     };
-  }, [branchA, branchB, enabled, id, missingParamsLabel, resetSimulation, setScenario]);
+  }, [capabilityError, enabled, loadCompare, resetSimulation]);
 
   useEffect(() => {
     if (availableRounds.length === 0) return;
@@ -262,7 +296,7 @@ export function CompareDigestView() {
         route: window.location.pathname,
         kind: 'compare',
         loading,
-        error: buildAutomationErrorState(null, error),
+        error: buildAutomationErrorState(null, errorLabel),
         controls: {
           compare_mode: true,
           active_compare_pane: activePane,
@@ -293,17 +327,32 @@ export function CompareDigestView() {
       if (win.render_game_to_text) delete win.render_game_to_text;
       if (win.capture_game_screenshot === capture) delete win.capture_game_screenshot;
     };
-  }, [activeBranchId, activeDiff?.divergence_score, activePane, agents.length, availableRounds, branchA, branchB, data, error, hasScenario, loading, messages.length, playbackMode, replaySpeed, scenarioQuestion, selectedRound, snapshots.a, snapshots.b]);
+  }, [activeBranchId, activeDiff?.divergence_score, activePane, agents.length, availableRounds, branchA, branchB, data, errorLabel, hasScenario, loading, messages.length, playbackMode, replaySpeed, scenarioQuestion, selectedRound, snapshots.a, snapshots.b]);
 
   if (capLoading) {
     return <div className="compare-digest-view compare-digest-view--empty">{t('common.loading', 'Loading...')}</div>;
+  }
+
+  if (capabilityError) {
+    return (
+      <div className="compare-digest-view compare-digest-view--empty">
+        <h1>{t('compare.title', 'Counterfactual Compare')}</h1>
+        <p role="alert">{t('compare.error_fetch', 'Unable to load comparison data right now. Please retry.')}</p>
+        <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+          <button type="button" className="btn btn-ghost" onClick={() => void reloadCapability?.()}>
+            {t('common.retry', 'Retry')}
+          </button>
+          <Link to={resultHref}>{t('common.back_to_result', 'Back to Result')}</Link>
+        </div>
+      </div>
+    );
   }
 
   if (!enabled) {
     return (
       <div className="compare-digest-view compare-digest-view--empty">
         <p>{t('compare.feature_disabled', 'Counterfactual replay feature is not enabled.')}</p>
-        <Link to={id ? `/result/${id}` : '/'}>{t('common.back_to_result', 'Back to Result')}</Link>
+        <Link to={resultHref}>{t('common.back_to_result', 'Back to Result')}</Link>
       </div>
     );
   }
@@ -316,8 +365,15 @@ export function CompareDigestView() {
     return (
       <div className="compare-digest-view compare-digest-view--empty">
         <h1>{t('compare.title', 'Counterfactual Compare')}</h1>
-        <p role="alert" className="compare-digest-view__error">{error}</p>
-        <Link to={`/result/${id}`}>{t('common.back_to_result', 'Back to Result')}</Link>
+        <p role="alert" className="compare-digest-view__error">{errorLabel}</p>
+        <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+          {error.kind === 'load_failed' ? (
+            <button type="button" className="btn btn-ghost" onClick={() => void loadCompare()}>
+              {t('common.retry', 'Retry')}
+            </button>
+          ) : null}
+          <Link to={resultHref}>{t('common.back_to_result', 'Back to Result')}</Link>
+        </div>
       </div>
     );
   }
@@ -326,7 +382,7 @@ export function CompareDigestView() {
     <div ref={rootRef} className="compare-digest-view">
       <header className="compare-digest-view__header">
         <div>
-          <Link to={`/result/${id}`} className="compare-digest-view__back">
+          <Link to={resultHref} className="compare-digest-view__back">
             ← {t('common.back_to_result', 'Back to Result')}
           </Link>
           <h1>{t('compare.title', 'Counterfactual Compare')}</h1>

@@ -151,7 +151,7 @@
 | `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | 首页 `Organization ID` 的 sessionStorage 单一事实源；InputView 与 API client 共用，避免 header 逻辑散落 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
 | `e2e-new-source-ingestion-live.mjs` | `frontend/scripts/e2e-new-source-ingestion-live.mjs` | source-ingestion 专项脚本；默认走 fixture，`SWARM_E2E_MODE=live` 时走真实 backend。live 模式会先显式打开首页总开关，校验 `/api/scenario` 请求里的 `web_search_families`，再检查结果页四个 source family 的 live/non-empty 卡片；`Polymarket` 的 `non-us` geo-gate 也走同一条 live 口径 |
-| `e2e-capability-matrix.mjs` | `frontend/scripts/e2e-capability-matrix.mjs` | graph/playability capability matrix；当前覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route，并把当前 live 栈里未真正暴露的 `ReplayView` 记成 `skipped`，不混成失败 |
+| `e2e-capability-matrix.mjs` | `frontend/scripts/e2e-capability-matrix.mjs` | graph/playability capability matrix；当前覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route。`ReplayView` 的 disabled 路径现在会落显式 unavailable surface，不再回首页；如果脚本还按旧 redirect 口径断言，先同步脚本再跑 |
 | `e2e-ws-contract-suite.mjs` | `frontend/scripts/e2e-ws-contract-suite.mjs` | WS 契约诊断脚本；当前覆盖 `scenario / debate / ending-room` 的首帧 auth、`4001 / 4404` 非重连、`1006` 可重连、auth timeout、oversize auth frame 和 pending-auth limit |
 | `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
@@ -173,7 +173,12 @@
   - `沿用服务器默认` 模式只发送 `webSearchEnabled=true`
   - `自定义覆盖` 模式才发送 `webSearchProvider / webSearchApiKey / webSearchBaseUrl`
   - 4 个 source family toggle 当前会把勾选结果透传成 `webSearchFamilies -> web_search_families`
+  - disabled 的 source family 当前会保留可见项，并显示跟随当前 UI 语言的 tooltip，不再回落成英文硬编码
   - 输入搜索 API key / base URL 时不再反复重打 capability 探针
+- `useCapabilityCheck` 当前会复用同一份 `/api/capabilities` 结果：
+  - 多个组件同时 mount 时不会再各自重打一遍同样的请求
+  - consumer 现在能区分 `loading / enabled / error`
+  - capability 请求失败时不再直接伪装成 `enabled=false`
 - ResultView 当前除了折叠的 `真实世界来源` 入口，也会按 `web_search_context.family_context` 渲染四张 source family card：
   - 被选中的 family 才会变成 `ready`
   - 未选中的 family 会保持 `empty`
@@ -193,6 +198,13 @@
 - `endingRoomStore` 当前在 `hydrateThread()` 时也会同步更新 `snapshot.threads`；新建 anchored thread 后，Oracle replay 不会再只序列化旧主桌快照。
 - `endingRoomStore.openRoom()` 当前带 request epoch；用户连续切房间时，旧请求晚到不会再把新 room 状态覆盖回去。
 - `CompareDigestView` 当前采用“单活跃 live Theater + 非活跃镜像预览”的 compare 方案，不会同时挂两个 live Phaser runtime；左右 pane 共用 round timeline。未抓到快照时会先显示待机镜像卡片，保留当前 round / divergence / branch weight，不再落回黑底 `Snapshot pending` 占位。
+- `CompareDigestView` 当前已把三类状态分开：
+  - 缺 `branch_a / branch_b` 时走缺参态
+  - compare `404` 走 `no data`
+  - compare fetch / scenario fetch 失败走可重试的加载失败态
+  - `branch_a / branch_b` 请求参数都会先做 `encodeURIComponent()`
+- `ReplayView` 当前在 `replay_trace` capability 关闭时会显示显式 unavailable surface，不再 silent redirect 到首页；如果 capability 探针自己失败，也会给出单独的 retry surface。
+- `KGExplorerView` 当前会把 capability 失败、feature disabled、graph fetch 失败分开显示；graph fetch 失败时会清掉旧图，再给出本地化错误和 retry。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - ending-room artifact/local replay 当前统一落到 `/result/replay?...`；不再要求先拼出 `/result/:scenarioId?...` 才能读出来。artifact payload 里的 `scenario.total_rounds=null` 也会被前端 replay 正常接受，不会再把只读页打成空结果。
 - ending-room replay automation helper 当前识别 `roomReplay / roomShare / roomLocal`；roundtable 页面除 `roomShare / roomLocal` 外也兼容 `share / local` 别名。
@@ -308,6 +320,9 @@
   - 头部直接显示 `branch scope / round span / faction count`
   - faction 卡片直接显示 `members / stance / confidence`
   - event 卡片直接显示 `actor / faction`，未知事件类型会走显式 fallback
+- `FactionTimeline` 当前也把“空数据”和“加载失败”拆开了：
+  - 真的没有阵营数据时，会提示这局推演还不够长
+  - fetch 失败时走可重试的错误态，不再把所有异常都压成 `empty`
 - `FactionTimeline.test.tsx` 当前通过真实 `en / zh` locale JSON + i18next 验证这条口径，不再 fake `t(key)`；未命中的 `event_labels.*` 会回退为 `event_type` 去下划线后的文本。
 - `en / zh` locale 当前已补齐这批共享 copy：
   - graph：`search_summary / graph_node_a11y / graph_edge_a11y / graph_handle`
@@ -365,15 +380,19 @@
 - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。SVG 导出当前改成 native SVG background / edge / node markup，不再依赖 `foreignObject`；校验脚本也会拒绝 `foreignObject` 回退。节点卡标题过长时，SVG 文本会按卡片宽度裁剪显示，但 `<title>` 和文本内容仍优先保留完整标题，不再把省略号文本写进 SVG。
 - `CausalReviewView` 当前在 branch 切换时会先收起旧图和导出面板，等新分支数据 ready 后再恢复；图页外层统一走 `100dvh`，relationless snapshot fallback 里的节点详情也会锚在当前容器里，不再飘到视口右上角。
 - frontend `NodeConversationSheet / CausalReviewView` 定向 vitest 当前 `86 passed`。
-- frontend full vitest 当前 `1336 passed`。
+- frontend full vitest 当前 `1349 passed`。
 - `node --test scripts/e2e-frontend-preflight.test.mjs` 本轮 `25 passed`。
 - 这轮 graph/playability 增量回归当前也已补：
   - `node --test scripts/e2e-ws-contract-suite.test.mjs`：`18 passed`
   - clean-room `e2e:ws:contract`：`20 passed / 1 skipped / 0 failed`
   - clean-room `e2e:capability-matrix`：`25 passed / 5 skipped / 0 failed`
-  - `useAgentConversationWS / useCapabilityCheck / AgentLibrary / CompareDigestView / KGExplorerView / ReplayView` 定向 vitest：`32 passed`
+  - capability / replay / compare / kg / faction / i18n 定向 vitest：`64 passed`
 - `npm run build`（含 `perf:budgets:check`）当前通过。
 - fresh local live 的 `node-conversation-live / kg-explorer-live / replay-view-live` 当前通过。
+- 本轮 local preview 复核也已补：
+  - 首页 source family disabled tooltip 已按当前 UI 语言显示，不再回落成英文硬编码
+  - `ReplayView` capability disabled 不再回首页，而是显式 unavailable surface
+  - 结果页 `FactionTimeline` 空态文案已改成解释性提示
 - preview-driven Chromium `phase3-batch-a full / phase3-batch-b full / phase3-batch-c full` 本轮全绿。
 - `e2e-new-source-ingestion-live` 当前在 `fixture full` 和 `live full` 两条口径下都已通过。
   - live 口径当前已覆盖 `web_search_families` 请求体、四个 source family 非空卡片，以及 `Polymarket us / non-us` 两条 geo-gate 路径

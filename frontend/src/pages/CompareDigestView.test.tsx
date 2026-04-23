@@ -12,10 +12,12 @@ const {
   setScenarioMock,
   resetStoreMock,
   translateMock,
+  useCapabilityCheckMock,
 } = vi.hoisted(() => ({
   getScenarioMock: vi.fn(),
   captureElementDataUrlMock: vi.fn(async () => 'data:image/png;base64,compare'),
   captureCompositeElementDataUrlMock: vi.fn(async () => 'data:image/png;base64,compare-composite'),
+  useCapabilityCheckMock: vi.fn(() => ({ loading: false, enabled: true, capabilities: null, error: null })),
   translateMock: (key: string, fallback?: string) => ({
     'compare.title': 'Counterfactual Compare',
     'compare.missing_params': 'Missing branch parameters',
@@ -23,9 +25,11 @@ const {
     'compare.branch_a_label': 'Branch A (Original)',
     'compare.branch_b_label': 'Branch B (Counterfactual)',
     'compare.no_data': 'No comparison data available.',
+    'compare.error_fetch': 'Unable to load comparison data right now. Please retry.',
     'compare.feature_disabled': 'Counterfactual replay feature is not enabled.',
     'common.loading': 'Loading...',
     'common.back_to_result': 'Back to Result',
+    'common.retry': 'Retry',
     'game.replay_btn': 'Replay',
     'game.skip_btn': 'Skip',
   }[key] ?? fallback ?? key),
@@ -78,7 +82,7 @@ vi.mock('../stores/simulationStore', () => ({
 }));
 
 vi.mock('../hooks/useCapabilityCheck', () => ({
-  useCapabilityCheck: () => ({ loading: false, enabled: true, capabilities: null }),
+  useCapabilityCheck: useCapabilityCheckMock,
 }));
 
 vi.mock('../hooks/useScreenCapture', () => ({
@@ -140,6 +144,8 @@ beforeEach(() => {
   setScenarioMock.mockClear();
   resetStoreMock.mockClear();
   resetStoreMock();
+  useCapabilityCheckMock.mockReset();
+  useCapabilityCheckMock.mockReturnValue({ loading: false, enabled: true, capabilities: null, error: null });
   vi.spyOn(globalThis, 'fetch').mockReset();
 });
 
@@ -154,6 +160,54 @@ describe('CompareDigestView', () => {
     renderView('/result/test-id/compare');
     expect(await screen.findByRole('alert')).toHaveTextContent('Missing branch parameters');
     expect(screen.getByRole('link', { name: 'Back to Result' })).toBeInTheDocument();
+  });
+
+  it('renders a friendly fetch error with retry when compare loading fails', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          scenario_id: 'test-id',
+          branch_a: 'a',
+          branch_b: 'b',
+          rounds: [{ round: 1, branch_a_summary: 'A', branch_b_summary: 'B', divergence_score: 0.12 }],
+        }),
+      } as Response);
+    getScenarioMock.mockResolvedValue({
+      id: 'test-id',
+      question: 'Recovered compare',
+      status: 'done',
+      total_rounds: 1,
+      agents: [],
+      branches: [
+        { id: 'a', title: 'Archive A', probability: 0.62, status: 'COMPLETED', story: '', insight: '', key_moments: [], parent_branch_id: null, fork_reason: '' },
+        { id: 'b', title: 'Archive B', probability: 0.38, status: 'COMPLETED', story: '', insight: '', key_moments: [], parent_branch_id: null, fork_reason: '' },
+      ],
+      messages: [],
+    });
+
+    renderView('/result/test-id/compare?branch_a=a&branch_b=b');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load comparison data right now. Please retry.');
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Recovered compare')).toBeInTheDocument();
+  });
+
+  it('renders no-data copy instead of raw HTTP 404 text', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+    } as Response);
+
+    renderView('/result/test-id/compare?branch_a=a&branch_b=b');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('No comparison data available.');
+    expect(screen.queryByText(/HTTP 404/i)).not.toBeInTheDocument();
   });
 
   it('renders split compare theater and updates active pane automation state', async () => {
