@@ -295,6 +295,10 @@
 ## 当前验证基线
 
 - backend `agent-conversation / quota / migration` 定向回归当前通过
+- P1 post-review follow-up 窄集当前也已补：
+  - `tests/test_causal_graph.py -q`：`68 passed`
+  - `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q`：`125 passed`
+  - `ruff check app/services/causal_graph.py tests/test_causal_graph.py`：通过
 - backend 全量 `pytest`：`2264 passed, 2 skipped`
 
 ## WebSocket 口径

@@ -316,15 +316,27 @@
 
 ---
 
-## 6. Commit 建议
+## 6. 提交状态
 
-纳入 commit：
+- 本报告对应的 P1 post-review follow-up 代码提交为
+  `2dabed9 Address P1 post-review follow-ups`，已推送到 `master`。
+- 提交包含后端 lock pool、前端小切口清理、测试和当时同步的 llmdoc /
+  report 更新。
+- 根目录 `package.json` / `package-lock.json` 仍按工具噪音处理，没有纳入提交。
 
-- `backend/`
-- `.claude/team-plan/p1-review-report.md`
-- `llmdoc/` 中和当前真值相关的文档更新
+后续如果只改文档，应单独提交，不把未跟踪的根目录 package 文件带进去。
 
-排除：
+---
 
-- 根目录 `package.json`
-- 根目录 `package-lock.json`
+## 7. P2 进入判断
+
+可以进入 P2，但建议按分项开小 session，不要一次性开大重构。
+
+- P2-1 三视图布局切换：P1-A stepper 已完成，前置满足；开始前先定
+  `graph / split / workbench` 三种状态和回退逻辑。
+- P2-2 FactionTimeline 升级：需要带真实 faction 数据的样本验收，不能只靠空态。
+- P2-3 工具调用链展示：可开始；新增 ResultView UI 必须继续抽组件。
+- P2-4 ArgumentMap 拖拽 + 图内搜索：可开始；不要破坏现有 relation list、
+  keyboard 和筛选空态。
+- P2-5 Tier C 定向检索：只适合先做评估。当前没有可信 `detail` 来源，不能承诺
+  detail 级检索或解释。

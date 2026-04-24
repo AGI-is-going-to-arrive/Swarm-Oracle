@@ -100,6 +100,8 @@
   - disabled 卡片保留 link 语义，但不再渲染无 `href` 的 `<a>`
   - disabled 状态改成 dashed border + icon grayscale，文字对比不再靠整卡 opacity 压低
 - `ResultView` 的 faction timeline lead 当前已走 i18n key + `{{title}}` 插值，不再在组件里手写 `isZh` 三元文案。
+- `ResultView` 的 replay/import 错误、ending-room replay action、archive summary label 和 ending-room picker copy 当前也已走 locale key；剩下的 `isZh` 用在玩法/候选人/弹窗语言选择这类领域语义上。
+- `ResultView` 当前仍是大文件；source family 里重复的 finance card 已抽成 `FinanceSourceCard`，后续新增 UI 仍应优先抽组件。
 - InputView 当前在 `agent_identity` capability 开启时会在主模式启动前先调用 identity continuity preflight：
   - 只要命中 `L2 fuzzy candidate` 才会弹确认框
   - 用户可选 `复用已有身份` 或 `创建新身份`
@@ -400,6 +402,10 @@
   - ResultView replay conversation fixture：replay 模式不暴露 live conversation，不发 `/api/conversation/start`
   - CausalReview graph-analysis fixture：server analysis 渲染，中文 evidence tier 不泄漏原始枚举
   - capability matrix E2E：`30 passed / 0 skipped / 30 total`
+- P1 post-review follow-up 的前端窄集当前也已补：
+  - `CausalReviewView.test.tsx / ResultView.test.tsx / locales.test.ts`：`126 passed`
+  - 目标文件 eslint：通过
+  - TypeScript noEmit：通过
 - frontend bridge / guide 定向 vitest 当前 `124 passed`。
 - frontend full vitest 最近一次记录为 `1365 passed`（本轮未复跑全量）。
 - frontend 目标文件 `eslint`、`typecheck`、`build`（含 `perf:budgets:check`）当前通过。

@@ -146,6 +146,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - `node --check scripts/e2e-capability-matrix.mjs`：通过
     - fixture-backed Playwright：ResultView replay 不暴露 live conversation；CausalReview server analysis 和 evidence tier 本地化通过
     - capability matrix E2E：`30 passed / 0 skipped / 30 total`
+  - P1 post-review follow-up 当前也已补窄集复验：
+    - backend causal graph：`68 passed`
+    - backend graph/evidence 定向：`125 passed`
+    - frontend ResultView / CausalReviewView / locale 定向：`126 passed`
+    - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
   - backend 全量 `pytest` 最近一次记录为 `2264 passed, 2 skipped`（本轮未复跑全量）
   - frontend `typecheck / lint / build / perf budgets` 通过
