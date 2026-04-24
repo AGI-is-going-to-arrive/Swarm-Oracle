@@ -18,6 +18,7 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 
 _PREV_REVISION = "021_scope_debate_argument_unit_dedup_per_turn"
+_GRAPH_EDGE_EVIDENCE_DOWN_REVISION = "023_agent_conversation_quota_ledger"
 _HEAD_REVISION = "024_graph_edge_evidence_contract"
 
 
@@ -422,6 +423,92 @@ def test_downgrade_roundtrip(tmp_path):
     assert "agent_conversation_thread" in names_after_up_2
     assert "agent_conversation_turn" in names_after_up_2
     assert "agent_conversation_quota_ledger" in names_after_up_2
+    engine.dispose()
+
+
+def test_024_graph_edge_evidence_columns_downgrade_roundtrip_preserves_edges(tmp_path):
+    db_url = f"sqlite:///{tmp_path/'024_graph_edge_roundtrip.db'}"
+    _upgrade_to_head(db_url)
+
+    engine = _make_engine(db_url)
+    assert _current_revision(engine) == _HEAD_REVISION
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_snapshot (
+                    id, owner_type, owner_id, graph_kind, branch_id, round_number,
+                    share_artifact_id, metadata_json, created_at
+                )
+                VALUES (
+                    'snapshot-024', 'scenario', 'scenario-024', 'causal_review',
+                    NULL, NULL, NULL, NULL, '2026-04-24 00:00:00'
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_node (
+                    id, snapshot_id, node_key, node_type, label, round_number,
+                    ref_model, ref_id, payload_json
+                )
+                VALUES
+                    ('node-source-024', 'snapshot-024', 'source', 'event', 'source',
+                     1, NULL, NULL, '{"branch_id":"br1"}'),
+                    ('node-target-024', 'snapshot-024', 'target', 'event', 'target',
+                     2, NULL, NULL, '{"branch_id":"br1"}')
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_edge (
+                    id, snapshot_id, source_node_id, target_node_id, edge_type,
+                    weight, label, payload_json, confidence_tier, source_ref,
+                    source_round_number, evidence_json
+                )
+                VALUES (
+                    'edge-024', 'snapshot-024', 'node-source-024', 'node-target-024',
+                    'caused', 0.9, 'evidence edge', NULL, 'high', 'migration-test',
+                    2, '{"detail":"kept before downgrade"}'
+                )
+                """
+            )
+        )
+    engine.dispose()
+
+    _downgrade_to(db_url, _GRAPH_EDGE_EVIDENCE_DOWN_REVISION)
+    engine = _make_engine(db_url)
+    assert _current_revision(engine) == _GRAPH_EDGE_EVIDENCE_DOWN_REVISION
+    graph_edge_columns = {column["name"] for column in inspect(engine).get_columns("graph_edge")}
+    assert "confidence_tier" not in graph_edge_columns
+    assert "source_ref" not in graph_edge_columns
+    assert "source_round_number" not in graph_edge_columns
+    assert "evidence_json" not in graph_edge_columns
+    with engine.connect() as conn:
+        edge_count = conn.execute(
+            text("SELECT COUNT(*) FROM graph_edge WHERE id='edge-024'")
+        ).scalar_one()
+        assert edge_count == 1
+        assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []
+    engine.dispose()
+
+    _upgrade_to(db_url, _HEAD_REVISION)
+    engine = _make_engine(db_url)
+    assert _current_revision(engine) == _HEAD_REVISION
+    graph_edge_columns = {column["name"] for column in inspect(engine).get_columns("graph_edge")}
+    assert {"confidence_tier", "source_ref", "source_round_number", "evidence_json"}.issubset(
+        graph_edge_columns
+    )
+    with engine.connect() as conn:
+        edge_count = conn.execute(
+            text("SELECT COUNT(*) FROM graph_edge WHERE id='edge-024'")
+        ).scalar_one()
+        assert edge_count == 1
+        assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []
     engine.dispose()
 
 

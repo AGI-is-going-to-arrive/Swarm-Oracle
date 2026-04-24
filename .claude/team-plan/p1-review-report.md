@@ -207,6 +207,18 @@
 - 保留旧迁移版本库缺 evidence 列时的基础列查询兼容
 - 补 legacy temporal edge backfill 回归测试
 
+### Fix 17: Migration 024 SQLite downgrade 缺少专项回归 [Info -> Fixed]
+
+**文件**: `backend/tests/test_migration_022.py`
+
+**问题**: `024` 的 SQLite downgrade 依赖 Alembic `batch_alter_table` 删除列，原测试只覆盖
+022/023 roundtrip，没有持久化覆盖 `graph_edge` evidence 列的 downgrade/upgrade 行为。
+
+**修复**:
+- 新增 `024 -> 023 -> 024` roundtrip 测试
+- downgrade 后断言四个 evidence 列已删除、edge 行仍保留、`PRAGMA foreign_key_check` 为空
+- re-upgrade 后断言四个 evidence 列恢复、edge 行仍保留、FK 检查仍为空
+
 ---
 
 ## 3. 仍未修复 / 未展开项
@@ -216,7 +228,6 @@
 | # | 文件 | 当前状态 | 风险 |
 |---|------|----------|------|
 | W4 | `graph.py` | `evidence_json` 已落库但当前仍没有真实填充值；causal graph API 会把它作为 `detail` 透出 | Low |
-| W5 | `024_graph_edge_evidence_contract.py` | SQLite downgrade 仍依赖 Alembic `batch_alter_table`；只读探针验证 roundtrip 正常，但未补持久化专项测试 | Low |
 | W7 | `causal_graph.py` | `_scenario_locks` 仍无界；这是 P1 前已有的长期运行维护项 | Low |
 
 ### 3.2 前端
@@ -242,7 +253,7 @@
 |----|------|------|
 | “020 duplicate snapshot 只是预存问题无需处理” | 已不再沿用这个判断 | 当前迁移已改为删除旧 snapshot，不再合并 stale node/edge |
 | “024 no-version SQLite 不需要额外修” | 不是误报 | 已补 lightweight additive repair 和回归测试 |
-| W5 SQLite downgrade 立即需要代码修 | 暂不成立 | 只读临时 SQLite 探针显示 `024 -> 023 -> 024` 后列删除/恢复、edge 行保留、FK 检查正常；本轮未改迁移代码 |
+| W5 SQLite downgrade 需要迁移代码修 | 暂不成立 | 持久化 regression 覆盖了 `024 -> 023 -> 024`，列删除/恢复、edge 行保留、FK 检查均正常；本轮未改迁移代码 |
 
 ---
 
@@ -254,6 +265,8 @@
 |----------|------|
 | Backend graph/evidence 定向 pytest | `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q` -> `124 passed` |
 | Backend ruff check | `ruff check app/services/debate_argument_map.py app/services/graph_analysis.py app/services/causal_graph.py tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py` -> Passed |
+| Migration 024 downgrade roundtrip pytest | `tests/test_migration_022.py::test_024_graph_edge_evidence_columns_downgrade_roundtrip_preserves_edges -q` -> `1 passed` |
+| Migration test ruff check | `ruff check tests/test_migration_022.py` -> Passed |
 | Frontend ArgumentMap vitest | `npm test -- --run src/components/ArgumentMap.test.tsx` -> `50 passed` |
 | TypeScript noEmit | `npx tsc --noEmit -p tsconfig.app.json` -> Passed |
 
