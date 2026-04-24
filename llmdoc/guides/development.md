@@ -394,14 +394,14 @@ npm run build
 
 cd ../backend
 source .venv/bin/activate
-python -m pytest tests/test_conversation.py tests/test_agent_conversation.py tests/test_graph_analysis.py tests/test_causal_graph.py tests/test_debate_argument_map.py tests/test_contract_freeze.py tests/test_fallback_migrations.py::test_init_db_repairs_no_version_bootstrap_schema_missing_graph_edge_evidence_columns tests/test_fallback_migrations.py::test_020_upgrade_deletes_duplicate_snapshot_graph_rows tests/test_fallback_migrations.py::test_020_sqlite_duplicate_snapshot_tiebreaker_matches_runtime_rowid -q
+python -m pytest tests/test_conversation.py tests/test_agent_conversation.py tests/test_graph_analysis.py tests/test_causal_graph.py tests/test_debate_argument_map.py tests/test_contract_freeze.py tests/test_fallback_migrations.py::test_init_db_repairs_no_version_bootstrap_schema_missing_graph_edge_evidence_columns tests/test_fallback_migrations.py::test_020_upgrade_deletes_duplicate_snapshot_graph_rows tests/test_fallback_migrations.py::test_020_sqlite_duplicate_snapshot_tiebreaker_matches_runtime_rowid tests/test_migration_022.py::test_024_graph_edge_evidence_columns_downgrade_roundtrip_preserves_edges -q
 ```
 
 - 这组 P1 前置窄集当前主要看：
   - KGExplorer 主图 / minimap / search filter / 业务 `kgType`
   - CausalReview 节点拖拽与选择
-  - CausalReview server analysis stale clear、graph-analysis 双 gate 和大图截断
-  - GraphEdge evidence 字段落库、causal graph 返回 evidence、edge tier 本地化
+  - CausalReview server analysis stale clear、graph-analysis 双 gate、大图截断和 branch-aware 预检
+  - GraphEdge evidence 字段落库、causal graph 返回 evidence、旧边缺失 evidence 回填、024 downgrade roundtrip、debate argument-map `edges[].evidence` 和 edge tier 本地化
   - ReplayView 计数标签不泄漏 `{{count}}`
   - ResultView compare / counterfactual 跟随 `analysisBranch`
   - ResultView replay 模式不暴露 live conversation
