@@ -219,6 +219,51 @@
 - downgrade 后断言四个 evidence 列已删除、edge 行仍保留、`PRAGMA foreign_key_check` 为空
 - re-upgrade 后断言四个 evidence 列恢复、edge 行仍保留、FK 检查仍为空
 
+### Fix 18: `_scenario_locks` 无界增长 [Low -> Fixed]
+
+**文件**: `backend/app/services/causal_graph.py`, `backend/tests/test_causal_graph.py`
+
+**问题**: causal graph append 使用按 `scenario_id` 增长的进程内 lock dict，长期进程会随历史 scenario 数量增长。
+
+**修复**:
+- 改成固定 256 条带的 scenario lock pool
+- 同一 scenario 仍稳定映射到同一把进程内锁，保留并发 append 串行语义
+- 不做释放后 `pop`，避免等待线程还在旧 lock 上时创建第二把同 scenario lock
+- 补大量 scenario 获取锁时 pool 不扩容的测试，并保留同 scenario 并发 append 幂等回归
+
+### Fix 19: CausalReviewView `NoopWS` 测试桩重复 [None -> Fixed]
+
+**文件**: `frontend/src/test-utils/noopWebSocket.ts`, `frontend/src/pages/CausalReviewView.test.tsx`
+
+**问题**: `CausalReviewView.test.tsx` 多个不关心 WebSocket 行为的测试重复定义同形 `NoopWS`。
+
+**修复**:
+- 新增测试专用 `stubNoopWebSocket()`
+- 只替换 CausalReviewView 里的轻量 no-op WebSocket 桩
+- 未改 `use*WS` 协议专项测试中的状态型 mock
+
+### Fix 20: ResultView 历史 `isZh` UI 文案 [Low -> Fixed]
+
+**文件**: `frontend/src/pages/ResultView.tsx`, `frontend/src/i18n/locales/en.json`, `frontend/src/i18n/locales/zh.json`, `frontend/src/i18n/locales.test.ts`
+
+**问题**: ResultView 里仍有少量纯 UI copy 直接用 `isZh ? ... : ...`。
+
+**修复**:
+- replay/import 错误、ending-room replay action、archive commitment label、ending-room picker copy 改为 locale key
+- locale parity 测试补对应 key
+- 保留玩法卡 label、候选人构建、`EndingChatModal language` 这类非纯 UI copy 的 `isZh` 选择
+
+### Fix 21: ResultView source card 小切口拆分 [None -> Fixed]
+
+**文件**: `frontend/src/components/result/FinanceSourceCard.tsx`, `frontend/src/pages/ResultView.tsx`
+
+**问题**: ResultView 内桌面和移动 source sheet 重复渲染 finance source card。
+
+**修复**:
+- 抽出 `FinanceSourceCard`
+- 桌面 grid 和 mobile sheet 共用同一个 finance card 组件
+- 未改 source family 状态、URL 过滤或测试 id
+
 ---
 
 ## 3. 仍未修复 / 未展开项
@@ -227,16 +272,13 @@
 
 | # | 文件 | 当前状态 | 风险 |
 |---|------|----------|------|
-| W4 | `graph.py` | `evidence_json` 已落库但当前仍没有真实填充值；当 edge evidence 对象存在时会作为 `detail` 透出 | Low |
-| W7 | `causal_graph.py` | `_scenario_locks` 仍无界；这是 P1 前已有的长期运行维护项 | Low |
+| W4 | `graph.py` | 再次确认仍没有可信真实 detail 来源；`detail` 只是 `GraphEdge.evidence_json` 的预留透传字段，本轮不伪造语义 | Low |
 
 ### 3.2 前端
 
 | # | 文件 | 当前状态 | 风险 |
 |---|------|----------|------|
-| W6 | `ResultView.tsx` | 仍有少量历史 `isZh ?` 三元文案，不是本次 P1 新增主路径 | Low |
-| W9 | `CausalReviewView.test.tsx` | `NoopWS` 测试桩仍重复；维护性问题，不影响运行时 | None |
-| W10 | `ResultView.tsx` | 文件仍很大，拆分需要单独专项 | None |
+| W10 | `ResultView.tsx` | 本轮只做 `FinanceSourceCard` 小切口拆分；文件仍然很大，但不做大规模重构 | None |
 
 ### 3.3 工具文件
 
@@ -263,14 +305,14 @@
 
 | 验证步骤 | 结果 |
 |----------|------|
-| Backend graph/evidence 定向 pytest | `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q` -> `124 passed` |
-| Backend ruff check | `ruff check app/services/debate_argument_map.py app/services/graph_analysis.py app/services/causal_graph.py tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py` -> Passed |
-| Migration 024 downgrade roundtrip pytest | `tests/test_migration_022.py::test_024_graph_edge_evidence_columns_downgrade_roundtrip_preserves_edges -q` -> `1 passed` |
-| Migration test ruff check | `ruff check tests/test_migration_022.py` -> Passed |
-| Frontend ArgumentMap vitest | `npm test -- --run src/components/ArgumentMap.test.tsx` -> `50 passed` |
-| TypeScript noEmit | `npx tsc --noEmit -p tsconfig.app.json` -> Passed |
+| Backend causal graph pytest | `tests/test_causal_graph.py -q` -> `68 passed` |
+| Backend graph/evidence 定向 pytest | `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q` -> `125 passed` |
+| Backend ruff check | `ruff check app/services/causal_graph.py tests/test_causal_graph.py` -> Passed |
+| Frontend targeted vitest | `npm test -- --run src/pages/CausalReviewView.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts` -> `126 passed` |
+| Frontend changed-file eslint | `npm exec -- eslint src/pages/ResultView.tsx src/pages/ResultView.test.tsx src/pages/CausalReviewView.test.tsx src/components/result/FinanceSourceCard.tsx src/test-utils/noopWebSocket.ts src/i18n/locales.test.ts` -> Passed |
+| TypeScript noEmit | `npm exec -- tsc --noEmit -p tsconfig.app.json` -> Passed |
 
-未在本 session 复跑全量 backend pytest / 全量 frontend vitest；旧基线不能当作这轮 fresh 结果写入。
+未在本 session 复跑全量 backend pytest / 全量 frontend vitest；旧基线不能当作这轮 fresh 结果写入。`ResultView.test.tsx` export-flow 仍会打印 jsdom navigation warning，但命令退出 0。
 
 ---
 

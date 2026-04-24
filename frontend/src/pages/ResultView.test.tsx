@@ -103,6 +103,36 @@ const {
     if (key === 'sim.replay.importing') {
       return 'Importing...';
     }
+    const resultCopy: Record<string, string> = {
+      'result.replay_invalid': 'This replay link is invalid or incomplete.',
+      'result.load_result_failed': 'Failed to load results',
+      'result.import_replay_failed': 'Failed to import replay',
+      'result.import_chamber_replay_failed': 'Failed to import chamber replay',
+      'result.replay_copied': 'Replay copied',
+      'result.copy_replay': 'Copy replay',
+      'result.saved_local_readonly_copy': 'Saved local read-only copy',
+      'result.save_local_readonly_copy': 'Save local read-only copy',
+      'result.importing_local_run': 'Importing…',
+      'result.import_local_run': 'Import local run',
+      'result.archive_commitment_hit': 'Commitment hit',
+      'result.archive_commitment_missed': 'Commitment missed',
+      'result.archive_commitment_pending': 'Commitment pending',
+      'result.archive_no_commitment': 'No commitment',
+      'result.archive_director_goals_label': 'Director Goals',
+      'result.archive_worldline_commitment_label': 'Worldline Commitment',
+      'result.archive_signature_arc_label': 'Signature Arc',
+      'result.archive_system_tracks_label': 'System Tracks',
+      'result.ending_room_picker_title': 'Pick visible participants for this worldline',
+      'result.ending_room_picker_limit': 'Select up to {{count}}',
+      'result.ending_room_picker_empty': 'No visible worldline roster is available here yet. The chamber will fall back to the default room selection.',
+      'result.ending_room_picker_impact': 'Impact {{impact}} · {{turns}} turns · {{hinges}} hinge hits · latest R{{round}}',
+      'result.ending_room_picker_fallback_roster': 'No branch transcript roster yet, using the visible fallback cast',
+      'result.ending_room_picker_fallback_lineup': 'Fallback lineup',
+      'result.ending_room_picker_enter': 'Enter chamber',
+    };
+    if (resultCopy[key]) {
+      return options ? interpolate(resultCopy[key], options) : resultCopy[key];
+    }
     // Faction timeline section uses `t(key, { defaultValue, title })`. Mirror
     // i18next's defaultValue + {{title}} interpolation so tests can assert the
     // rendered English fallback without loading real resources.

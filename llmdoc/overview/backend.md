@@ -104,7 +104,7 @@
   - 空白 `branch_id` 仍归一化为“全部分支”
   - 不存在的 branch 会返回 `404 BRANCH_NOT_FOUND`，不再伪装成 `200 + 空图`
 - `GET /api/scenario/{id}/graph-analysis` 当前同时要求 `FEATURE_GRAPH_ANALYSIS=true` 和 `FEATURE_CAUSAL_GRAPH=true`；返回 god nodes、degree distribution、cross-branch edges 和 summary。分析前会先按最新 snapshot 的 node/edge 数做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`；带 `branch_id` 时，预检会按该 branch 的可见节点/边计数，避免大 scenario 下的小 branch 查询被保守截断。
-- `GraphEdge` 当前已有 `confidence_tier / source_ref / source_round_number / evidence_json` nullable 字段。causal graph 新边会写入 evidence，并在 API response 里返回；重放轮次遇到旧 edge 时，会只补齐缺失的 evidence 字段，不覆盖已有非空值。debate argument map 也会在 `GET /api/debate/{id}/argument-map` 的 `edges[].evidence` 返回 `confidence_tier / source_ref / source_round_number / detail`。`evidence_json` 目前主要是预留列，没有真实 detail 填充来源。
+- `GraphEdge` 当前已有 `confidence_tier / source_ref / source_round_number / evidence_json` nullable 字段。causal graph 新边会写入 coarse evidence，并在 API response 里返回；重放轮次遇到旧 edge 时，会只补齐缺失的 evidence 字段，不覆盖已有非空值。debate argument map 也会在 `GET /api/debate/{id}/argument-map` 的 `edges[].evidence` 返回 `confidence_tier / source_ref / source_round_number / detail`。`detail` 只是 `evidence_json` 的透传，当前生产写图没有可信 detail 填充来源。
 
 ### Ending Room
 
@@ -214,7 +214,7 @@
   - 已存在的 event / stance_shift 节点会按 `branch + node_key` 复用；同 round 就算 `msg_id` 重复，event 节点也会按 agent 隔离
   - 同一 `scenario / branch / round` 如果 id-less 消息集合变少，旧的 stale `event` 节点和相关边也会一起清掉，不会把上一版快照残留在当前图里
   - 重放旧轮次时，会先删掉该轮已过期的 `AgentStateFrame`，并清掉不再成立的 stale `stance_shift` 节点和相关边，再按当前消息重建
-  - append 路径当前会按 `scenario_id` 串行化；同一 scenario 并发写入不会再撞出重复 event 节点
+  - append 路径当前通过固定大小的 scenario lock pool 串行化同一 scenario；同一 scenario 并发写入不会再撞出重复 event 节点，长期进程也不会按 scenario 数量无限增长锁对象
   - 同一 fork 如果先走 same-round fallback、后面又带显式 `trigger_node_ids` 重放，旧的 `triggered fork` provenance edge 会先被替换；显式 ids 非法时也会回退 same-round provenance
 - `AgentStateFrame` 当前按 `scenario_id + branch_id + round_number + agent_id` 唯一。
   同一个 `(branch / round / agent)` 组合就算出现在不同 scenario，也不会再互相撞库。

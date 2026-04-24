@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
 import dagre from 'dagre';
+import { stubNoopWebSocket } from '../test-utils/noopWebSocket';
 
 type TestLocale = 'en' | 'zh';
 const {
@@ -1793,17 +1794,7 @@ describe('CausalReviewView', () => {
   });
 
   it('opens NodeConversationSheet when a causal node is clicked (FE-3-seq wire-up)', async () => {
-    class NoopWS {
-      static OPEN = 1;
-      readyState = NoopWS.OPEN;
-      onopen: ((ev: unknown) => void) | null = null;
-      onmessage: ((ev: { data: string }) => void) | null = null;
-      onclose: ((ev: { code: number }) => void) | null = null;
-      onerror: ((ev: unknown) => void) | null = null;
-      send = vi.fn();
-      close = vi.fn();
-    }
-    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
       media: q,
@@ -1845,17 +1836,7 @@ describe('CausalReviewView', () => {
   });
 
   it('keeps NodeConversationSheet open when the detail panel close button is pressed', async () => {
-    class NoopWS {
-      static OPEN = 1;
-      readyState = NoopWS.OPEN;
-      onopen: ((ev: unknown) => void) | null = null;
-      onmessage: ((ev: { data: string }) => void) | null = null;
-      onclose: ((ev: { code: number }) => void) | null = null;
-      onerror: ((ev: unknown) => void) | null = null;
-      send = vi.fn();
-      close = vi.fn();
-    }
-    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
       media: q,
@@ -1898,17 +1879,7 @@ describe('CausalReviewView', () => {
   });
 
   it('keeps NodeConversationSheet open when clicking the graph pane', async () => {
-    class NoopWS {
-      static OPEN = 1;
-      readyState = NoopWS.OPEN;
-      onopen: ((ev: unknown) => void) | null = null;
-      onmessage: ((ev: { data: string }) => void) | null = null;
-      onclose: ((ev: { code: number }) => void) | null = null;
-      onerror: ((ev: unknown) => void) | null = null;
-      send = vi.fn();
-      close = vi.fn();
-    }
-    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
       media: q,
@@ -1947,17 +1918,7 @@ describe('CausalReviewView', () => {
   });
 
   it('does not auto-open NodeConversationSheet on compact mobile viewports', async () => {
-    class NoopWS {
-      static OPEN = 1;
-      readyState = NoopWS.OPEN;
-      onopen: ((ev: unknown) => void) | null = null;
-      onmessage: ((ev: { data: string }) => void) | null = null;
-      onclose: ((ev: { code: number }) => void) | null = null;
-      onerror: ((ev: unknown) => void) | null = null;
-      send = vi.fn();
-      close = vi.fn();
-    }
-    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: q.includes('max-width'),
       media: q,
@@ -2000,17 +1961,7 @@ describe('CausalReviewView', () => {
   });
 
   it('closes NodeConversationSheet after switching branches', async () => {
-    class NoopWS {
-      static OPEN = 1;
-      readyState = NoopWS.OPEN;
-      onopen: ((ev: unknown) => void) | null = null;
-      onmessage: ((ev: { data: string }) => void) | null = null;
-      onclose: ((ev: { code: number }) => void) | null = null;
-      onerror: ((ev: unknown) => void) | null = null;
-      send = vi.fn();
-      close = vi.fn();
-    }
-    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
       media: q,
@@ -2078,17 +2029,7 @@ describe('CausalReviewView', () => {
   });
 
   it('closes NodeConversationSheet after switching scenarios', async () => {
-    class NoopWS {
-      static OPEN = 1;
-      readyState = NoopWS.OPEN;
-      onopen: ((ev: unknown) => void) | null = null;
-      onmessage: ((ev: { data: string }) => void) | null = null;
-      onclose: ((ev: { code: number }) => void) | null = null;
-      onerror: ((ev: unknown) => void) | null = null;
-      send = vi.fn();
-      close = vi.fn();
-    }
-    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
       media: q,
@@ -2156,17 +2097,7 @@ describe('CausalReviewView', () => {
   });
 
   it('pressing Escape inside the detail panel closes detail before the sidecar', async () => {
-    class NoopWS {
-      static OPEN = 1;
-      readyState = NoopWS.OPEN;
-      onopen: ((ev: unknown) => void) | null = null;
-      onmessage: ((ev: { data: string }) => void) | null = null;
-      onclose: ((ev: { code: number }) => void) | null = null;
-      onerror: ((ev: unknown) => void) | null = null;
-      send = vi.fn();
-      close = vi.fn();
-    }
-    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
       media: q,
@@ -2210,17 +2141,7 @@ describe('CausalReviewView', () => {
   });
 
   it('restores focus to the latest node trigger after switching nodes while the sidecar stays open', async () => {
-    class NoopWS {
-      static OPEN = 1;
-      readyState = NoopWS.OPEN;
-      onopen: ((ev: unknown) => void) | null = null;
-      onmessage: ((ev: { data: string }) => void) | null = null;
-      onclose: ((ev: { code: number }) => void) | null = null;
-      onerror: ((ev: unknown) => void) | null = null;
-      send = vi.fn();
-      close = vi.fn();
-    }
-    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
       media: q,
@@ -2271,17 +2192,7 @@ describe('CausalReviewView', () => {
   });
 
   it('starts node conversation with the real scenario id and a null identity id', async () => {
-    class NoopWS {
-      static OPEN = 1;
-      readyState = NoopWS.OPEN;
-      onopen: ((ev: unknown) => void) | null = null;
-      onmessage: ((ev: { data: string }) => void) | null = null;
-      onclose: ((ev: { code: number }) => void) | null = null;
-      onerror: ((ev: unknown) => void) | null = null;
-      send = vi.fn();
-      close = vi.fn();
-    }
-    vi.stubGlobal('WebSocket', NoopWS as unknown as typeof WebSocket);
+    stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
       media: q,

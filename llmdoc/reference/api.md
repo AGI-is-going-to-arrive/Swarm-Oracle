@@ -187,7 +187,7 @@
 - 常规 prediction 当前允许 `counterplay_variant: null`；只有显式给出非空值时才校验它是否属于合法 variant。
 - `GET /api/debate/{debate_id}/argument-map` 的 `edges[]` 使用 `source / target / type` 字段，并在有证据元数据时返回：
   `evidence: { confidence_tier, source_ref, source_round_number, detail }`。
-  旧边或无证据边的 `evidence` 可以为 `null`。
+  旧边或无证据边的 `evidence` 可以为 `null`。`detail` 同样是 `GraphEdge.evidence_json` 的预留透传字段；当前 argument-map 写边只填 coarse provenance，不填真实 detail。
 - `GET /api/debate/{debate_id}/argument-map` 在功能开启但读取阶段出错时，当前走 fail-soft：
   返回 `200`，并带空的 `nodes / edges / units` 和 `error: "ARGUMENT_MAP_LOAD_FAILED"`。
 
@@ -255,7 +255,7 @@
   - 旧 SQLite 如果还留有重复 `graph_snapshot`，运行时 repair 会保留最新 snapshot，并删除旧 snapshot 的 node/edge；返回体不再混入 stale duplicate node/edge
   - 成功返回体仍会带 `available_branches`
 - `GET /api/scenario/{id}/causal-graph` 的 `edges[]` 使用 `source / target / type / weight / label` 字段；有证据元数据时会返回
-  `evidence: { confidence_tier, source_ref, source_round_number, detail }`。旧边或无证据边的 `evidence` 可以为 `null`。重放轮次只会补齐旧边缺失的 evidence 字段，不覆盖已有非空值。
+  `evidence: { confidence_tier, source_ref, source_round_number, detail }`。旧边或无证据边的 `evidence` 可以为 `null`。重放轮次只会补齐旧边缺失的 evidence 字段，不覆盖已有非空值。`detail` 是 `GraphEdge.evidence_json` 的预留透传字段；当前生产 causal graph 写入没有真实 detail 来源，客户端不能把它当成权威解释文本。
 - `GET /api/scenario/{id}/graph-analysis` 返回 `god_nodes / degree_distribution / cross_branch_edges / summary`。大图会按最新 snapshot size 做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`。带 `branch_id` 时，预检按该 branch 的可见节点/边计数；未带 `branch_id` 时仍按全图计数。
 - `POST /api/scenario/{id}/counterfactual` 当前约束：
   - scenario 状态必须是 `done`；否则返回 `409 COUNTERFACTUAL_SCENARIO_STATUS_INVALID`

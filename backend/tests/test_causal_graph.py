@@ -13,7 +13,10 @@ from app.config import settings
 from app.models.database import dispose_engine, get_engine
 from app.models.graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
 from app.services.causal_graph import (
+    _SCENARIO_LOCK_STRIPE_COUNT,
+    _get_scenario_lock,
     _safe_parse_payload,
+    _scenario_locks,
     append_round_nodes,
     build_snapshot,
     derive_stance_score,
@@ -436,6 +439,15 @@ class TestAppendRoundNodes:
         result = build_snapshot("sc3g", branch_id="br1")
 
         assert [node["label"] for node in result["nodes"]] == ["concurrent same id"]
+
+    def test_scenario_lock_pool_stays_bounded_for_many_scenarios(self):
+        locks = {
+            id(_get_scenario_lock(f"sc-lock-{idx}"))
+            for idx in range(_SCENARIO_LOCK_STRIPE_COUNT * 3)
+        }
+
+        assert len(_scenario_locks) == _SCENARIO_LOCK_STRIPE_COUNT
+        assert len(locks) <= _SCENARIO_LOCK_STRIPE_COUNT
 
     def test_repeated_round_append_removes_stale_idless_event_nodes(self):
         append_round_nodes(

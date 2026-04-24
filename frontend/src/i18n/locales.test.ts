@@ -93,6 +93,32 @@ describe('i18n locale resources', () => {
       'bridge_replay_unavailable',
       'bridge_single_branch',
     ] as const;
+    const resultFollowupKeys = [
+      'load_result_failed',
+      'import_replay_failed',
+      'import_chamber_replay_failed',
+      'replay_copied',
+      'copy_replay',
+      'saved_local_readonly_copy',
+      'save_local_readonly_copy',
+      'importing_local_run',
+      'import_local_run',
+      'archive_commitment_hit',
+      'archive_commitment_missed',
+      'archive_commitment_pending',
+      'archive_no_commitment',
+      'archive_director_goals_label',
+      'archive_worldline_commitment_label',
+      'archive_signature_arc_label',
+      'archive_system_tracks_label',
+      'ending_room_picker_title',
+      'ending_room_picker_limit',
+      'ending_room_picker_empty',
+      'ending_room_picker_impact',
+      'ending_room_picker_fallback_roster',
+      'ending_room_picker_fallback_lineup',
+      'ending_room_picker_enter',
+    ] as const;
     const causalGuideKeys = [
       'guide_title',
       'guide_close',
@@ -104,6 +130,10 @@ describe('i18n locale resources', () => {
     ] as const;
 
     for (const key of resultBridgeKeys) {
+      expect(en.translation.result[key]).toEqual(expect.any(String));
+      expect(zh.translation.result[key]).toEqual(expect.any(String));
+    }
+    for (const key of resultFollowupKeys) {
       expect(en.translation.result[key]).toEqual(expect.any(String));
       expect(zh.translation.result[key]).toEqual(expect.any(String));
     }

@@ -23,8 +23,10 @@ _schema_lock = threading.Lock()
 _repaired_agent_state_frame_urls: set[str] = set()
 _snapshot_index_lock = threading.Lock()
 _snapshot_index_urls: set[str] = set()
-_scenario_lock_guard = threading.Lock()
-_scenario_locks: dict[str, threading.Lock] = {}
+_SCENARIO_LOCK_STRIPE_COUNT = 256
+_scenario_locks: tuple[threading.Lock, ...] = tuple(
+    threading.Lock() for _ in range(_SCENARIO_LOCK_STRIPE_COUNT)
+)
 _GRAPH_EDGE_EVIDENCE_COLUMNS = {
     "confidence_tier",
     "source_ref",
@@ -202,12 +204,7 @@ def _ensure_agent_state_frame_schema(engine) -> None:
 
 
 def _get_scenario_lock(scenario_id: str) -> threading.Lock:
-    with _scenario_lock_guard:
-        lock = _scenario_locks.get(scenario_id)
-        if lock is None:
-            lock = threading.Lock()
-            _scenario_locks[scenario_id] = lock
-        return lock
+    return _scenario_locks[hash(scenario_id) % _SCENARIO_LOCK_STRIPE_COUNT]
 
 
 def _load_latest_snapshot(session: Session, scenario_id: str) -> GraphSnapshot | None:

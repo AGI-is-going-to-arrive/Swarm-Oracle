@@ -125,7 +125,8 @@ import { PolymarketCard } from '../components/result/PolymarketCard';
 import { SemanticScholarCard } from '../components/result/SemanticScholarCard';
 import { NewsApiCard } from '../components/result/NewsApiCard';
 import { MobileSourceSheet } from '../components/result/MobileSourceSheet';
-import { SourceCategoryCard, type SourceCategoryState } from '../components/result/SourceCategoryCard';
+import { FinanceSourceCard } from '../components/result/FinanceSourceCard';
+import { type SourceCategoryState } from '../components/result/SourceCategoryCard';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 const EMPTY_GAMEPLAY_PROFILE_HOOKS: string[] = [];
@@ -238,12 +239,8 @@ export default function ResultView() {
   );
   const activeRuntimePresetLabel = t(`home.runtime_preset_${activeRuntimePreset}`);
   const challengeMatch = id ? findChallengeProgressByScenarioId(id) : null;
-  const replayInvalidMessage = isZh
-    ? '这个回放链接无效或内容不完整。'
-    : 'This replay link is invalid or incomplete.';
-  const loadResultErrorMessage = isZh
-    ? '加载结果失败'
-    : 'Failed to load results';
+  const replayInvalidMessage = t('result.replay_invalid');
+  const loadResultErrorMessage = t('result.load_result_failed');
   const replayInvalidMessageRef = useRef(replayInvalidMessage);
   const loadResultErrorMessageRef = useRef(loadResultErrorMessage);
   const isZhRef = useRef(isZh);
@@ -609,7 +606,7 @@ export default function ResultView() {
       } catch (err) {
         if (cancelled) return;
         setErrorCode(getApiErrorCode(err) ?? 'RESULT_LOAD_FAILED');
-        setError(getLocalizedApiErrorMessage(err, translationRef.current, 'Failed to load results'));
+        setError(getLocalizedApiErrorMessage(err, translationRef.current, loadResultErrorMessageRef.current));
       } finally {
         if (!cancelled && retryTimer == null) {
           setLoading(false);
@@ -736,7 +733,7 @@ export default function ResultView() {
         getLocalizedApiErrorMessage(
           nextError,
           t,
-          isZh ? '导入回放失败' : 'Failed to import replay',
+          t('result.import_replay_failed'),
         ),
       );
     } finally {
@@ -1092,11 +1089,11 @@ export default function ResultView() {
     : null;
   const commitmentOutcomeLabel = displayArchive?.commitmentOutcome
     ? displayArchive.commitmentOutcome === 'hit'
-      ? (isZh ? '承诺命中' : 'Commitment hit')
+      ? t('result.archive_commitment_hit')
       : displayArchive.commitmentOutcome === 'miss'
-        ? (isZh ? '承诺落空' : 'Commitment missed')
-        : (isZh ? '承诺进行中' : 'Commitment pending')
-    : (isZh ? '未承诺' : 'No commitment');
+        ? t('result.archive_commitment_missed')
+        : t('result.archive_commitment_pending')
+    : t('result.archive_no_commitment');
   const lastCounterplayCardLabel = displayArchive?.lastCounterplayCard
     ? (
       isZh
@@ -1346,13 +1343,13 @@ export default function ResultView() {
         getLocalizedApiErrorMessage(
           nextError,
           t,
-          isZh ? '导入会客厅回放失败' : 'Failed to import chamber replay',
+          t('result.import_chamber_replay_failed'),
         ),
       );
     } finally {
       setImportingEndingRoomReplay(false);
     }
-  }, [effectiveEndingRoomReplayPayload?.scenarioReplay, importingEndingRoomReplay, isZh, navigate, t]);
+  }, [effectiveEndingRoomReplayPayload?.scenarioReplay, importingEndingRoomReplay, navigate, t]);
   const pendingEndingRoomBranch = useMemo<StoryData['branches'][number] | null>(
     () => branches.find((branch) => branch.id === pendingEndingRoomPicker?.branchId) ?? null,
     [branches, pendingEndingRoomPicker?.branchId],
@@ -1382,8 +1379,8 @@ export default function ResultView() {
           onClick={() => void handleCopyEndingRoomReplayLink()}
         >
           {endingRoomPermalinkCopied
-            ? (isZh ? '回放已复制' : 'Replay copied')
-            : (isZh ? '复制回放' : 'Copy replay')}
+            ? t('result.replay_copied')
+            : t('result.copy_replay')}
         </button>
         <button
           type="button"
@@ -1391,8 +1388,8 @@ export default function ResultView() {
           onClick={handleSaveEndingRoomReadonlyCopy}
         >
           {endingRoomLocalCopySaved
-            ? (isZh ? '已保存本地只读副本' : 'Saved local read-only copy')
-            : (isZh ? '保存只读副本' : 'Save local read-only copy')}
+            ? t('result.saved_local_readonly_copy')
+            : t('result.save_local_readonly_copy')}
         </button>
         {canImportActiveEndingRoomReplay && (
           <button
@@ -1402,8 +1399,8 @@ export default function ResultView() {
             disabled={importingEndingRoomReplay}
           >
             {importingEndingRoomReplay
-              ? (isZh ? '导入中…' : 'Importing…')
-              : (isZh ? '导入本地运行' : 'Import local run')}
+              ? t('result.importing_local_run')
+              : t('result.import_local_run')}
           </button>
         )}
       </>
@@ -1417,7 +1414,7 @@ export default function ResultView() {
     handleImportEndingRoomReplay,
     handleSaveEndingRoomReadonlyCopy,
     importingEndingRoomReplay,
-    isZh,
+    t,
   ]);
   const betOutcomeContext = useMemo(() => ({
     dominantBranchId: dominantBranchFromStory?.id ?? null,
@@ -2198,7 +2195,7 @@ export default function ResultView() {
               <strong>{profileResonanceLabel}</strong>
             </div>
             <div className="archive-summary-card">
-              <span className="archive-summary-card__label">{isZh ? '导演目标' : 'Director Goals'}</span>
+              <span className="archive-summary-card__label">{t('result.archive_director_goals_label')}</span>
               <strong>{completedObjectiveCount}/{evaluatedObjectives.length || 0}</strong>
               {evaluatedObjectives.length > 0 && (
                 <small>
@@ -2209,7 +2206,7 @@ export default function ResultView() {
               )}
             </div>
             <div className="archive-summary-card">
-              <span className="archive-summary-card__label">{isZh ? '世界线承诺' : 'Worldline Commitment'}</span>
+              <span className="archive-summary-card__label">{t('result.archive_worldline_commitment_label')}</span>
               <strong>{commitmentOutcomeLabel}</strong>
               {scenarioMeta.commitment.active && scenarioMeta.commitment.branchTitle && (
                 <small>{scenarioMeta.commitment.branchTitle}</small>
@@ -2217,7 +2214,7 @@ export default function ResultView() {
             </div>
             {signatureArcState && (
               <div className="archive-summary-card">
-                <span className="archive-summary-card__label">{isZh ? '题材连锁' : 'Signature Arc'}</span>
+                <span className="archive-summary-card__label">{t('result.archive_signature_arc_label')}</span>
                 <strong>{signatureArcState.label}</strong>
                 <small>
                   {signatureArcState.sequenceLabels.join(' → ')}
@@ -2228,7 +2225,7 @@ export default function ResultView() {
             )}
             {systemTracks && (
               <div className="archive-summary-card">
-                <span className="archive-summary-card__label">{isZh ? '情势轨道' : 'System Tracks'}</span>
+                <span className="archive-summary-card__label">{t('result.archive_system_tracks_label')}</span>
                 <strong>{systemTracks.riskLabel} {systemTracks.riskValue}/6</strong>
                 <small>{systemTracks.resourceLabel} {systemTracks.resourceValue}/6 · {systemTracks.pressure}</small>
               </div>
@@ -2500,14 +2497,12 @@ export default function ResultView() {
                     : t('ending_room.entry_cta')}
                 </p>
                 <h3 id="ending-room-picker-title">
-                  {isZh ? '选择进入会客厅的当前世界线参与者' : 'Pick visible participants for this worldline'}
+                  {t('result.ending_room_picker_title')}
                 </h3>
                 <p>
                   {pendingEndingRoomBranch.title}
                   {' · '}
-                  {isZh
-                    ? `最多选择 ${pendingEndingRoomPicker.maxSelectable} 位`
-                    : `Select up to ${pendingEndingRoomPicker.maxSelectable}`}
+                  {t('result.ending_room_picker_limit', { count: pendingEndingRoomPicker.maxSelectable })}
                 </p>
               </div>
               <button
@@ -2523,9 +2518,7 @@ export default function ResultView() {
             <div className="ending-room-picker__body">
               {pendingEndingRoomCandidates.length === 0 ? (
                 <p className="ending-room-picker__empty">
-                  {isZh
-                    ? '当前结果页没有可用于手动选人的世界线发言记录，将按默认房间规则继续。'
-                    : 'No visible worldline roster is available here yet. The chamber will fall back to the default room selection.'}
+                  {t('result.ending_room_picker_empty')}
                 </p>
               ) : (
                 pendingEndingRoomCandidates.map((candidate) => {
@@ -2572,20 +2565,17 @@ export default function ResultView() {
                         {candidate.persona && <small>{candidate.persona}</small>}
                         <em>
                           {candidate.contributionCount > 0
-                            ? (
-                              isZh
-                                ? `影响 ${Math.round(candidate.impactScore * 100)} · 发言 ${candidate.contributionCount} 次 · 转折命中 ${candidate.keyMomentHits} · 最近 R${candidate.lastRound}`
-                                : `Impact ${Math.round(candidate.impactScore * 100)} · ${candidate.contributionCount} turns · ${candidate.keyMomentHits} hinge hits · latest R${candidate.lastRound}`
-                            )
-                            : (
-                              isZh
-                                ? '当前世界线缺少逐条发言记录，按当前可见 roster 兜底'
-                                : 'No branch transcript roster yet, using the visible fallback cast'
-                            )}
+                            ? t('result.ending_room_picker_impact', {
+                                impact: Math.round(candidate.impactScore * 100),
+                                turns: candidate.contributionCount,
+                                hinges: candidate.keyMomentHits,
+                                round: candidate.lastRound,
+                              })
+                            : t('result.ending_room_picker_fallback_roster')}
                         </em>
                         {candidate.fallbackCast && (
                           <em className="ending-room-picker__fallback">
-                            {isZh ? '兜底阵容' : 'Fallback lineup'}
+                            {t('result.ending_room_picker_fallback_lineup')}
                           </em>
                         )}
                       </div>
@@ -2616,7 +2606,7 @@ export default function ResultView() {
                   && pendingEndingRoomPicker.selectedAgentIds.length === 0
                 }
               >
-                {isZh ? '进入会客厅' : 'Enter chamber'}
+                {t('result.ending_room_picker_enter')}
               </button>
             </footer>
           </div>
@@ -2676,42 +2666,10 @@ export default function ResultView() {
               />
             )}
             {capabilities.web_search.providers.finance?.enabled && (
-              <SourceCategoryCard
-                family="finance"
-                title={t('source.finance.title', { defaultValue: 'Finance' })}
-                subtitle={t('source.finance.subtitle', { defaultValue: 'Market & macro indicators' })}
+              <FinanceSourceCard
                 state={resolveSourceCategoryState(financeContext)}
-                testIdOverride="result-sources-finance"
-              >
-                {resolveSourceCategoryState(financeContext) === 'ready' && (
-                  <ul className="space-y-2">
-                    {(financeContext?.items ?? []).map((item) => (
-                      <li
-                        key={item.id}
-                        className="rounded-md border border-slate-700/40 bg-slate-900/50 p-2 text-xs"
-                      >
-                        <p className="font-medium text-slate-100">{item.title}</p>
-                        <div className="mt-0.5 flex items-center gap-2 text-slate-400">
-                          {item.source && <span>{item.source}</span>}
-                        </div>
-                        {item.summary && (
-                          <p className="mt-1 line-clamp-3 text-slate-300">{item.summary}</p>
-                        )}
-                        {item.url && /^https?:\/\//i.test(item.url) && (
-                          <a
-                            href={item.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-1 block underline hover:text-slate-200"
-                          >
-                            {item.url}
-                          </a>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </SourceCategoryCard>
+                items={financeContext?.items ?? []}
+              />
             )}
             {capabilities.web_search.providers.academic?.enabled && (
               <SemanticScholarCard
@@ -2738,42 +2696,10 @@ export default function ResultView() {
               />
             )}
             {capabilities.web_search.providers.finance?.enabled && (
-              <SourceCategoryCard
-                family="finance"
-                title={t('source.finance.title', { defaultValue: 'Finance' })}
-                subtitle={t('source.finance.subtitle', { defaultValue: 'Market & macro indicators' })}
+              <FinanceSourceCard
                 state={resolveSourceCategoryState(financeContext)}
-                testIdOverride="result-sources-finance"
-              >
-                {resolveSourceCategoryState(financeContext) === 'ready' && (
-                  <ul className="space-y-2">
-                    {(financeContext?.items ?? []).map((item) => (
-                      <li
-                        key={item.id}
-                        className="rounded-md border border-slate-700/40 bg-slate-900/50 p-2 text-xs"
-                      >
-                        <p className="font-medium text-slate-100">{item.title}</p>
-                        <div className="mt-0.5 flex items-center gap-2 text-slate-400">
-                          {item.source && <span>{item.source}</span>}
-                        </div>
-                        {item.summary && (
-                          <p className="mt-1 line-clamp-3 text-slate-300">{item.summary}</p>
-                        )}
-                        {item.url && /^https?:\/\//i.test(item.url) && (
-                          <a
-                            href={item.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-1 block underline hover:text-slate-200"
-                          >
-                            {item.url}
-                          </a>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </SourceCategoryCard>
+                items={financeContext?.items ?? []}
+              />
             )}
             {capabilities.web_search.providers.academic?.enabled && (
               <SemanticScholarCard
