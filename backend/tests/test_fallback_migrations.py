@@ -1259,6 +1259,7 @@ def test_021_upgrade_removes_orphan_argument_graph_rows_for_deleted_duplicates(
             "type": "accepted",
             "weight": 1.0,
             "label": None,
+            "evidence": None,
         }
     ]
     assert result["units"] == [
@@ -1523,6 +1524,7 @@ def test_init_db_lightweight_fallback_removes_orphan_argument_graph_rows_for_del
             "type": "accepted",
             "weight": 1.0,
             "label": None,
+            "evidence": None,
         }
     ]
     assert result["units"] == [
