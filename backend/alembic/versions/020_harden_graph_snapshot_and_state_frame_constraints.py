@@ -34,6 +34,7 @@ def _has_unique_index_columns(table_name: str, expected_columns: tuple[str, ...]
 
 def _dedupe_graph_snapshots() -> None:
     bind = op.get_bind()
+    latest_tiebreaker = "rowid DESC" if bind.dialect.name == "sqlite" else "id DESC"
     duplicate_groups = bind.execute(
         sa.text(
             """
@@ -50,13 +51,13 @@ def _dedupe_graph_snapshots() -> None:
             row[0]
             for row in bind.execute(
                 sa.text(
-                    """
+                    f"""
                     SELECT id
                     FROM graph_snapshot
                     WHERE owner_type = :owner_type
                       AND owner_id = :owner_id
                       AND graph_kind = :graph_kind
-                    ORDER BY created_at DESC, id DESC
+                    ORDER BY created_at DESC, {latest_tiebreaker}
                     """
                 ),
                 {
@@ -69,34 +70,58 @@ def _dedupe_graph_snapshots() -> None:
         if len(snapshot_ids) < 2:
             continue
 
-        canonical_id, duplicate_ids = snapshot_ids[0], snapshot_ids[1:]
+        duplicate_ids = snapshot_ids[1:]
+        duplicate_node_ids = [
+            row[0]
+            for row in bind.execute(
+                sa.text(
+                    """
+                    SELECT id
+                    FROM graph_node
+                    WHERE snapshot_id IN :duplicate_ids
+                    """
+                ).bindparams(sa.bindparam("duplicate_ids", expanding=True)),
+                {"duplicate_ids": duplicate_ids},
+            ).fetchall()
+        ]
+        if duplicate_node_ids:
+            bind.execute(
+                sa.text(
+                    """
+                    DELETE FROM graph_edge
+                    WHERE snapshot_id IN :duplicate_ids
+                       OR source_node_id IN :duplicate_node_ids
+                       OR target_node_id IN :duplicate_node_ids
+                    """
+                ).bindparams(
+                    sa.bindparam("duplicate_ids", expanding=True),
+                    sa.bindparam("duplicate_node_ids", expanding=True),
+                ),
+                {
+                    "duplicate_ids": duplicate_ids,
+                    "duplicate_node_ids": duplicate_node_ids,
+                },
+            )
+        else:
+            bind.execute(
+                sa.text(
+                    """
+                    DELETE FROM graph_edge
+                    WHERE snapshot_id IN :duplicate_ids
+                    """
+                ).bindparams(sa.bindparam("duplicate_ids", expanding=True)),
+                {"duplicate_ids": duplicate_ids},
+            )
+        bind.execute(
+            sa.text(
+                """
+                DELETE FROM graph_node
+                WHERE snapshot_id IN :duplicate_ids
+                """
+            ).bindparams(sa.bindparam("duplicate_ids", expanding=True)),
+            {"duplicate_ids": duplicate_ids},
+        )
         for duplicate_id in duplicate_ids:
-            bind.execute(
-                sa.text(
-                    """
-                    UPDATE graph_node
-                    SET snapshot_id = :canonical_id
-                    WHERE snapshot_id = :duplicate_id
-                    """
-                ),
-                {
-                    "canonical_id": canonical_id,
-                    "duplicate_id": duplicate_id,
-                },
-            )
-            bind.execute(
-                sa.text(
-                    """
-                    UPDATE graph_edge
-                    SET snapshot_id = :canonical_id
-                    WHERE snapshot_id = :duplicate_id
-                    """
-                ),
-                {
-                    "canonical_id": canonical_id,
-                    "duplicate_id": duplicate_id,
-                },
-            )
             bind.execute(
                 sa.text("DELETE FROM graph_snapshot WHERE id = :duplicate_id"),
                 {"duplicate_id": duplicate_id},
@@ -147,11 +172,23 @@ def _dedupe_agent_state_frames_for_legacy_constraint() -> None:
 def upgrade() -> None:
     _dedupe_graph_snapshots()
 
-    with op.batch_alter_table("graph_snapshot", recreate="always") as batch_op:
-        batch_op.create_unique_constraint(
-            "uq_graph_snapshot_owner_kind",
-            ["owner_type", "owner_id", "graph_kind"],
-        )
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        if not _has_unique_index_columns(
+            "graph_snapshot", ("owner_type", "owner_id", "graph_kind")
+        ):
+            op.execute(
+                sa.text(
+                    "CREATE UNIQUE INDEX uq_graph_snapshot_owner_kind "
+                    "ON graph_snapshot (owner_type, owner_id, graph_kind)"
+                )
+            )
+    else:
+        with op.batch_alter_table("graph_snapshot", recreate="always") as batch_op:
+            batch_op.create_unique_constraint(
+                "uq_graph_snapshot_owner_kind",
+                ["owner_type", "owner_id", "graph_kind"],
+            )
 
     target_columns = ("scenario_id", "branch_id", "round_number", "agent_id")
     legacy_columns = ("branch_id", "round_number", "agent_id")
@@ -175,5 +212,9 @@ def downgrade() -> None:
             ["branch_id", "round_number", "agent_id"],
         )
 
-    with op.batch_alter_table("graph_snapshot", recreate="always") as batch_op:
-        batch_op.drop_constraint("uq_graph_snapshot_owner_kind", type_="unique")
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        op.execute(sa.text("DROP INDEX IF EXISTS uq_graph_snapshot_owner_kind"))
+    else:
+        with op.batch_alter_table("graph_snapshot", recreate="always") as batch_op:
+            batch_op.drop_constraint("uq_graph_snapshot_owner_kind", type_="unique")

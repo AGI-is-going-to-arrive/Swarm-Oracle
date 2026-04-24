@@ -29,6 +29,7 @@ from app.models.checkpoint import ScenarioCheckpoint
 from app.models.database import AgentMessage, Branch, Round, Scenario, ScenarioStatus, get_engine
 from app.services.causal_graph import build_snapshot
 from app.services.factions import get_faction_timeline
+from app.services.graph_analysis import analyze_graph
 from app.services.replay import (
     _normalize_source_message_content,
     clone_until_round,
@@ -304,6 +305,36 @@ async def get_causal_graph(
                 )
     graph = await asyncio.to_thread(build_snapshot, scenario_id, branch_id=normalized_branch_id)
     return graph
+
+
+@router.get("/scenario/{scenario_id}/graph-analysis")
+async def get_graph_analysis(
+    scenario_id: str,
+    branch_id: Optional[str] = Query(default=None),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Return analysis metrics for a scenario's causal graph."""
+    if not settings.FEATURE_GRAPH_ANALYSIS:
+        raise _feature_disabled("graph_analysis")
+    if not settings.FEATURE_CAUSAL_GRAPH:
+        raise _feature_disabled("causal_graph")
+    normalized_branch_id = branch_id.strip() or None if branch_id is not None else None
+    with Session(get_engine()) as session:
+        require_owned_scenario(session, scenario_id, principal)
+        if normalized_branch_id is not None:
+            branch_exists = session.exec(
+                select(Branch.id).where(
+                    Branch.id == normalized_branch_id,
+                    Branch.scenario_id == scenario_id,
+                )
+            ).first()
+            if branch_exists is None:
+                raise api_error(
+                    404,
+                    "BRANCH_NOT_FOUND",
+                    f"Branch {normalized_branch_id} not found in scenario",
+                )
+    return await asyncio.to_thread(analyze_graph, scenario_id, branch_id=normalized_branch_id)
 
 
 @router.post("/scenario/{scenario_id}/counterfactual")

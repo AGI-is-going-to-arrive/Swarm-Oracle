@@ -84,8 +84,8 @@ const PAGES = [
     gateKey: "replay_trace",
     enabledSurfaceSelector: '[data-testid="replay-view-root"]',
     enabledGatedUrlPatterns: [/\/api\/scenario\/[^/]+\/replay-trace(\?|$)/],
-    disabledCopy: null,
-    disabledRedirectPath: "/",
+    disabledCopy: "Replay trace is unavailable",
+    disabledSurfaceSelector: '[data-testid="replay-view-root"]',
     allowRouteFallbackSkip: true,
   },
 ];
@@ -193,6 +193,9 @@ function buildCapabilityPayload(enabledKeys) {
     counterfactual_replay: base("counterfactual_replay"),
     factions: base("factions"),
     argument_map: base("argument_map"),
+    agent_conversation: base("agent_conversation"),
+    kg_explorer: base("kg_explorer"),
+    replay_trace: base("replay_trace"),
   };
 }
 

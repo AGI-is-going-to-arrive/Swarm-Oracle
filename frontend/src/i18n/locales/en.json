@@ -964,9 +964,15 @@
       "guide_close": "Close guide",
       "guide_key_nodes": "Key nodes",
       "guide_hint": "Click any node to see details. Use the search bar to filter by agent.",
+      "density": "density",
+      "components": "components",
       "guide_show": "Show graph overview",
       "empty_guide": "Causal graphs are generated during simulation when agents form cause-and-effect relationships across rounds. Try running a longer or deeper scenario.",
-      "guide_full_graph": "full graph"
+      "guide_full_graph": "full graph",
+      "evidence_high": "High",
+      "evidence_medium": "Medium",
+      "evidence_low": "Low",
+      "evidence_round": "Source: Round {{round}}"
     },
     "compare": {
       "title": "Counterfactual Compare",
@@ -1012,6 +1018,7 @@
       "load_map_hint": "Load the interactive map only when you need it.",
       "open_details": "Open details",
       "filter_status": "Filter:",
+      "evidence_source": "Source: {{source}}",
       "error": {
         "unauthorized": "No permission to view this map",
         "disabled": "Feature not enabled",
@@ -1073,6 +1080,17 @@
       "side": "Side",
       "copy_ref": "Copy Reference",
       "copy_ref_failed": "Failed to copy reference"
+    },
+    "pipeline": {
+      "parsing": "Parsing…",
+      "simulating": "Simulating…",
+      "narrating": "Narrating…",
+      "done": "Done",
+      "aria_label": "Simulation pipeline progress"
+    },
+    "result_conversation": {
+      "ask_oracle": "Ask the Oracle about this result",
+      "deepen_hint": "Great conversation! You can continue or come back anytime."
     },
     "counterfactual": {
       "title": "What-If Replay",
@@ -1234,9 +1252,11 @@
     "conversation": {
       "sheet": {
         "title": "Conversation",
+        "result_title": "Result conversation",
         "close_aria": "Close conversation",
         "scroll_region_aria": "Conversation transcript",
         "description": "Ask the agent about the selected node and review the streamed reply here.",
+        "result_description": "Ask about this result and review the streamed reply here.",
         "snap_handle_aria": "Resize bottom sheet, current {{snap}}vh, tap to cycle"
       },
       "empty_state": {
@@ -1244,7 +1264,12 @@
         "subtitle": "Ask the agent a question to explore this node.",
         "quick_q_1": "Why did this happen?",
         "quick_q_2": "What would change if I intervened?",
-        "quick_q_3": "Who else was affected?"
+        "quick_q_3": "Who else was affected?",
+        "result_title": "Ask about this result",
+        "result_subtitle": "Explore why this ending landed and what could change next.",
+        "result_quick_q_1": "What drove this ending?",
+        "result_quick_q_2": "Which branch was most fragile?",
+        "result_quick_q_3": "What should I inspect next?"
       },
       "streaming": {
         "aria_updated": "Response updated",

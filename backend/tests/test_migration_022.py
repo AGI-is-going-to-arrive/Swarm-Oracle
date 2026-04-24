@@ -18,7 +18,7 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 
 _PREV_REVISION = "021_scope_debate_argument_unit_dedup_per_turn"
-_HEAD_REVISION = "023_agent_conversation_quota_ledger"
+_HEAD_REVISION = "024_graph_edge_evidence_contract"
 
 
 def _alembic_runtime_or_skip():

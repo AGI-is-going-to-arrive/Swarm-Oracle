@@ -120,6 +120,7 @@ import { ResumePanel } from '../components/ResumePanel';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { ReturningBadge } from '../components/ReturningBadge';
 import { ResultActionCard } from '../components/result/ResultActionCard';
+import { ResultConversationWidget } from '../components/ResultConversationWidget';
 import { PolymarketCard } from '../components/result/PolymarketCard';
 import { SemanticScholarCard } from '../components/result/SemanticScholarCard';
 import { NewsApiCard } from '../components/result/NewsApiCard';
@@ -2789,9 +2790,15 @@ export default function ResultView() {
           </MobileSourceSheet>
         </>
       )}
-      {capabilities?.agent_conversation?.enabled && primaryAgentIdentityId && (
+      {!isReplayMode && capabilities?.agent_conversation?.enabled && primaryAgentIdentityId && (
         <ResultActionCard
           agentIdentityId={primaryAgentIdentityId}
+        />
+      )}
+      {!isReplayMode && activeScenarioId && (
+        <ResultConversationWidget
+          scenarioId={activeScenarioId}
+          primaryAgentIdentityId={primaryAgentIdentityId}
         />
       )}
     </div>

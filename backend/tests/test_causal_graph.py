@@ -726,7 +726,11 @@ class TestBuildSnapshot:
                     edge_type TEXT NOT NULL,
                     weight FLOAT,
                     label TEXT,
-                    payload_json TEXT
+                    payload_json TEXT,
+                    confidence_tier TEXT,
+                    source_ref TEXT,
+                    source_round_number INTEGER,
+                    evidence_json TEXT
                 )
                 """
             )
@@ -821,7 +825,11 @@ class TestBuildSnapshot:
                     edge_type TEXT NOT NULL,
                     weight FLOAT,
                     label TEXT,
-                    payload_json TEXT
+                    payload_json TEXT,
+                    confidence_tier TEXT,
+                    source_ref TEXT,
+                    source_round_number INTEGER,
+                    evidence_json TEXT
                 )
                 """
             )
@@ -991,7 +999,11 @@ class TestBuildSnapshot:
                     edge_type TEXT NOT NULL,
                     weight FLOAT,
                     label TEXT,
-                    payload_json TEXT
+                    payload_json TEXT,
+                    confidence_tier TEXT,
+                    source_ref TEXT,
+                    source_round_number INTEGER,
+                    evidence_json TEXT
                 )
                 """
             )

@@ -483,6 +483,10 @@ async def api_capabilities():
             enabled=settings.FEATURE_CAUSAL_GRAPH,
             version="1.0" if settings.FEATURE_CAUSAL_GRAPH else "0.0",
         ),
+        "graph_analysis": _capability_entry(
+            enabled=settings.FEATURE_GRAPH_ANALYSIS and settings.FEATURE_CAUSAL_GRAPH,
+            version="1.0" if (settings.FEATURE_GRAPH_ANALYSIS and settings.FEATURE_CAUSAL_GRAPH) else "0.0",
+        ),
         "counterfactual_replay": _capability_entry(
             enabled=settings.FEATURE_COUNTERFACTUAL_REPLAY,
             version=(

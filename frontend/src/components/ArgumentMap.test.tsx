@@ -25,6 +25,9 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'argument.edge_unaddressed': 'leaves unaddressed',
     'argument.edge_relation': '{{source}} {{relation}} {{target}}',
     'argument.open_details': 'Open details',
+    'causal.evidence_high': 'High',
+    'causal.evidence_medium': 'Medium',
+    'causal.evidence_low': 'Low',
     'common.graph_controls': 'Graph controls',
     'common.graph_zoom_in': 'Zoom in',
     'common.graph_zoom_out': 'Zoom out',
@@ -48,6 +51,9 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'argument.edge_unaddressed': '未回应',
     'argument.edge_relation': '{{source}} {{relation}} {{target}}',
     'argument.open_details': '打开详情',
+    'causal.evidence_high': '高',
+    'causal.evidence_medium': '中',
+    'causal.evidence_low': '低',
     'common.graph_controls': '图谱控件',
     'common.graph_zoom_in': '放大',
     'common.graph_zoom_out': '缩小',
@@ -133,6 +139,7 @@ vi.mock('@xyflow/react', async () => {
           data-edge-dash={String((firstEdge?.style as Record<string, unknown> | undefined)?.strokeDasharray ?? '')}
           data-edge-animated={String(firstEdge?.animated ?? false)}
           data-edge-marker={JSON.stringify(firstEdge?.markerEnd ?? null)}
+          data-edge-label={String(firstEdge?.label ?? '')}
           data-node-focusable={String(firstNode?.focusable ?? '')}
           data-node-aria-label={firstNode?.ariaLabel ?? ''}
           data-node-aria-role={firstNode?.ariaRole ?? ''}
@@ -1305,6 +1312,41 @@ describe('ArgumentMap edge styling (C2)', () => {
     const flow = await screen.findByTestId('reactflow');
     expect(flow.getAttribute('data-edge-dash')).toBe('4 4');
     expect(flow.getAttribute('data-edge-marker')).toBe('null');
+  });
+
+  it('localizes evidence tier badges in edge labels', async () => {
+    setTestLocale('zh');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        snapshot_id: 's4',
+        nodes: [
+          { id: 'n1', key: 'k1', type: 'claim', label: 'A', round: 1, payload: null },
+          { id: 'n2', key: 'k2', type: 'evidence', label: 'B', round: 2, payload: null },
+        ],
+        edges: [{
+          id: 'e1',
+          source: 'n1',
+          target: 'n2',
+          type: 'supports',
+          weight: 1,
+          label: null,
+          evidence: {
+            confidence_tier: 'medium',
+            source_ref: null,
+            source_round_number: 2,
+            detail: null,
+          },
+        }],
+        units: [],
+      }),
+    } as Response);
+
+    render(<ArgumentMap debateId="d1" visible={true} />);
+
+    const flow = await screen.findByTestId('reactflow');
+    expect(flow).toHaveAttribute('data-edge-label', 'R2 [中]');
+    expect(flow).not.toHaveAttribute('data-edge-label', 'R2 [medium]');
   });
 });
 

@@ -672,6 +672,9 @@ export function InputView() {
     const wantsSearch = webSearchEnabled;
     if (wantsSearch) setWebSearchStatus('searching');
     else setWebSearchStatus('skipped');
+    // Pipeline stepper integration: add body class so the stepper spacer
+    // can apply bottom padding during the brief launching window.
+    document.body.classList.add('has-pipeline-launching');
     try {
       const id = await startSimulation(buildSimulationOptions(launch, continuityOverrides));
       if (launch.challengeId) {
@@ -684,6 +687,8 @@ export function InputView() {
     } catch {
       setWebSearchStatus('idle');
       setIsSubmitting(false);
+    } finally {
+      document.body.classList.remove('has-pipeline-launching');
     }
   }, [
     buildSimulationOptions,

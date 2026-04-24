@@ -4,6 +4,7 @@ Verify existing API contracts are preserved and new Phase 3 naming
 doesn't conflict with existing entities. These tests codify the
 naming freeze from `.claude/plan/phase3-six-features.md` §3.
 """
+
 import typing
 
 import pytest
@@ -13,14 +14,30 @@ from app.models.database import Agent, AgentMessage, Branch, Scenario
 
 # ─── ScenarioResponse Backward Compatibility ─────────────────
 
-SCENARIO_RESPONSE_FROZEN_FIELDS = frozenset({
-    "id", "question", "status", "created_at",
-    "agents", "branches", "groups", "messages",
-    "total_rounds", "estimated_tokens_per_round", "estimated_total_tokens",
-    "context_safety", "mode", "hierarchical",
-    "visualization_enabled", "scene_theme",
-    "web_search_context", "director_state", "gameplay_state", "fork_debug",
-})
+SCENARIO_RESPONSE_FROZEN_FIELDS = frozenset(
+    {
+        "id",
+        "question",
+        "status",
+        "created_at",
+        "agents",
+        "branches",
+        "groups",
+        "messages",
+        "total_rounds",
+        "estimated_tokens_per_round",
+        "estimated_total_tokens",
+        "context_safety",
+        "mode",
+        "hierarchical",
+        "visualization_enabled",
+        "scene_theme",
+        "web_search_context",
+        "director_state",
+        "gameplay_state",
+        "fork_debug",
+    }
+)
 
 
 def test_scenario_response_has_all_frozen_fields():
@@ -37,6 +54,7 @@ def test_scenario_response_field_count_baseline():
 
 # ─── Naming Collision Guard ──────────────────────────────────
 
+
 def test_agent_model_no_profile_id_field():
     """Agent.profile_id must NOT exist — conflicts with Campaign profile_id."""
     assert "profile_id" not in Agent.model_fields, (
@@ -51,22 +69,35 @@ def test_agent_model_has_agent_identity_id():
 
 # ─── Capabilities Endpoint Contract ──────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_capabilities_returns_web_search():
     """GET /api/capabilities must return web_search key."""
     from app.api.scenarios import api_capabilities
+
     result = await api_capabilities()
     assert "web_search" in result
 
 
 @pytest.mark.asyncio
 async def test_capabilities_registry_structure():
-    """Capabilities must return all 10 Phase 3 keys (7 original + BE-6 additions)."""
+    """Capabilities must return all Phase 3 keys (7 original + BE-6 additions)."""
     from app.api.scenarios import api_capabilities
+
     result = await api_capabilities()
-    expected_keys = {"web_search", "custom_agents", "agent_identity",
-                     "causal_graph", "counterfactual_replay", "factions", "argument_map",
-                     "agent_conversation", "kg_explorer", "replay_trace"}
+    expected_keys = {
+        "web_search",
+        "custom_agents",
+        "agent_identity",
+        "causal_graph",
+        "graph_analysis",
+        "counterfactual_replay",
+        "factions",
+        "argument_map",
+        "agent_conversation",
+        "kg_explorer",
+        "replay_trace",
+    }
     assert expected_keys.issubset(set(result.keys()))
     # Each entry must have enabled/version/server_only/degraded_mode
     for key in expected_keys:
@@ -76,6 +107,7 @@ async def test_capabilities_registry_structure():
 
 
 # ─── Existing Model Integrity ────────────────────────────────
+
 
 def test_agent_model_has_expected_fields():
     """Agent model must have scenario-scoped fields."""
@@ -87,8 +119,16 @@ def test_agent_model_has_expected_fields():
 def test_branch_model_has_expected_fields():
     """Branch model must retain all existing fields."""
     fields = set(Branch.model_fields.keys())
-    expected = {"id", "scenario_id", "parent_branch_id", "fork_round", "fork_reason",
-                "title", "probability", "status"}
+    expected = {
+        "id",
+        "scenario_id",
+        "parent_branch_id",
+        "fork_round",
+        "fork_reason",
+        "title",
+        "probability",
+        "status",
+    }
     assert expected.issubset(fields), f"Missing: {expected - fields}"
 
 
@@ -110,75 +150,89 @@ def test_scenario_model_has_web_context_json():
 # These tests document the naming decisions. They don't test
 # implementation — that comes in each phase's own tests.
 
+
 class TestNamingFreeze:
     """Codify Phase 3 naming decisions as executable documentation."""
 
-    FROZEN_NEW_MODELS = frozenset({
-        "AgentIdentity",
-        "AgentIdentityCampaign",
-        "AgentIdentityCampaignMember",
-        "AgentGrowthEvent",
-        "GraphSnapshot",
-        "GraphNode",
-        "GraphEdge",
-        "AgentStateFrame",
-        "ScenarioCheckpoint",
-        "AgentRelationEdge",
-        "FactionSnapshot",
-        "FactionEvent",
-        "DebateArgumentUnit",
-    })
+    FROZEN_NEW_MODELS = frozenset(
+        {
+            "AgentIdentity",
+            "AgentIdentityCampaign",
+            "AgentIdentityCampaignMember",
+            "AgentGrowthEvent",
+            "GraphSnapshot",
+            "GraphNode",
+            "GraphEdge",
+            "AgentStateFrame",
+            "ScenarioCheckpoint",
+            "AgentRelationEdge",
+            "FactionSnapshot",
+            "FactionEvent",
+            "DebateArgumentUnit",
+        }
+    )
 
-    FROZEN_NEW_COLUMNS = frozenset({
-        "agent.agent_identity_id",
-        "agent.source_type",
-        "branch.replay_kind",
-        "branch.replay_source_branch_id",
-        "branch.replay_source_round",
-        "branch.replay_source_agent_id",
-    })
+    FROZEN_NEW_COLUMNS = frozenset(
+        {
+            "agent.agent_identity_id",
+            "agent.source_type",
+            "branch.replay_kind",
+            "branch.replay_source_branch_id",
+            "branch.replay_source_round",
+            "branch.replay_source_agent_id",
+        }
+    )
 
-    FROZEN_NEW_API_ROUTES = frozenset({
-        "GET /api/agents/identities",
-        "GET /api/agents/identities/{id}/memory",
-        "POST /api/agents/identities/preflight",
-        "POST /api/agents/workshop",
-        "PUT /api/agents/workshop/{id}",
-        "DELETE /api/agents/workshop/{id}",
-        "POST /api/agent-campaigns",
-        "GET /api/agent-campaigns/{id}/timeline",
-        "GET /api/scenario/{id}/causal-graph",
-        "POST /api/scenario/{id}/counterfactual",
-        "GET /api/scenario/{id}/compare",
-        "GET /api/scenario/{id}/checkpoints",
-    })
+    FROZEN_NEW_API_ROUTES = frozenset(
+        {
+            "GET /api/agents/identities",
+            "GET /api/agents/identities/{id}/memory",
+            "POST /api/agents/identities/preflight",
+            "POST /api/agents/workshop",
+            "PUT /api/agents/workshop/{id}",
+            "DELETE /api/agents/workshop/{id}",
+            "POST /api/agent-campaigns",
+            "GET /api/agent-campaigns/{id}/timeline",
+            "GET /api/scenario/{id}/causal-graph",
+            "POST /api/scenario/{id}/counterfactual",
+            "GET /api/scenario/{id}/compare",
+            "GET /api/scenario/{id}/checkpoints",
+        }
+    )
 
-    FROZEN_NEW_FRONTEND_ROUTES = frozenset({
-        "/agents",
-        "/agents/new",
-        "/sim/:id/causal-map",
-        "/result/:id/compare",
-    })
+    FROZEN_NEW_FRONTEND_ROUTES = frozenset(
+        {
+            "/agents",
+            "/agents/new",
+            "/sim/:id/causal-map",
+            "/result/:id/compare",
+        }
+    )
 
-    FROZEN_NEW_WS_EVENTS = frozenset({
-        "viz:faction_cluster",
-        "viz:faction_event",
-        "argument_proposed",
-        "argument_attacked",
-    })
+    FROZEN_NEW_WS_EVENTS = frozenset(
+        {
+            "viz:faction_cluster",
+            "viz:faction_event",
+            "argument_proposed",
+            "argument_attacked",
+        }
+    )
 
-    FROZEN_CAPABILITIES_KEYS = frozenset({
-        "web_search",
-        "custom_agents",
-        "agent_identity",
-        "causal_graph",
-        "counterfactual_replay",
-        "factions",
-        "argument_map",
-        "agent_conversation",
-        "kg_explorer",
-        "replay_trace",
-    })
+    FROZEN_CAPABILITIES_KEYS = frozenset(
+        {
+            "web_search",
+            "custom_agents",
+            "agent_identity",
+            "causal_graph",
+            "graph_analysis",
+            "counterfactual_replay",
+            "factions",
+            "argument_map",
+            "agent_conversation",
+            "kg_explorer",
+            "replay_trace",
+        }
+    )
 
     def test_model_names_frozen(self):
         assert len(self.FROZEN_NEW_MODELS) == 13
@@ -196,7 +250,7 @@ class TestNamingFreeze:
         assert len(self.FROZEN_NEW_WS_EVENTS) == 4
 
     def test_capabilities_keys_frozen(self):
-        assert len(self.FROZEN_CAPABILITIES_KEYS) == 10
+        assert len(self.FROZEN_CAPABILITIES_KEYS) == 11
 
     def test_no_profile_id_reuse(self):
         """Explicit guard: agent_identity_id, NOT profile_id."""
@@ -224,6 +278,7 @@ class TestServerSideGates:
         settings.FEATURE_COUNTERFACTUAL_REPLAY = False
         settings.FEATURE_FACTIONS = False
         settings.FEATURE_ARGUMENT_MAP = False
+        settings.FEATURE_GRAPH_ANALYSIS = False
 
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -234,6 +289,7 @@ class TestServerSideGates:
         # Reset
         settings.FEATURE_CUSTOM_AGENTS = False
         settings.FEATURE_AGENT_IDENTITY = False
+        settings.FEATURE_GRAPH_ANALYSIS = False
 
     async def test_causal_graph_returns_404_when_disabled(self, client):
         resp = await client.get("/api/scenario/fake-id/causal-graph")
@@ -242,10 +298,15 @@ class TestServerSideGates:
         assert data["detail"]["code"] == "FEATURE_DISABLED"
 
     async def test_counterfactual_returns_404_when_disabled(self, client):
-        resp = await client.post("/api/scenario/fake-id/counterfactual", json={
-            "source_branch_id": "b1", "round_number": 1,
-            "agent_id": "a1", "replacement_content": "test",
-        })
+        resp = await client.post(
+            "/api/scenario/fake-id/counterfactual",
+            json={
+                "source_branch_id": "b1",
+                "round_number": 1,
+                "agent_id": "a1",
+                "replacement_content": "test",
+            },
+        )
         assert resp.status_code == 404
         data = resp.json()
         assert data["detail"]["code"] == "FEATURE_DISABLED"
@@ -266,9 +327,14 @@ class TestServerSideGates:
         assert data["detail"]["code"] == "FEATURE_DISABLED"
 
     async def test_agent_workshop_returns_404_when_disabled(self, client):
-        resp = await client.post("/api/agents/workshop", json={
-            "user_id": "u1", "display_name": "Test", "role": "Tester",
-        })
+        resp = await client.post(
+            "/api/agents/workshop",
+            json={
+                "user_id": "u1",
+                "display_name": "Test",
+                "role": "Tester",
+            },
+        )
         assert resp.status_code == 404
         data = resp.json()
         assert data["detail"]["code"] == "FEATURE_DISABLED"
@@ -286,10 +352,13 @@ class TestServerSideGates:
         assert data["detail"]["code"] == "FEATURE_DISABLED"
 
     async def test_identity_preflight_returns_404_when_disabled(self, client):
-        resp = await client.post("/api/agents/identities/preflight", json={
-            "question": "test",
-            "user_id": "u1",
-        })
+        resp = await client.post(
+            "/api/agents/identities/preflight",
+            json={
+                "question": "test",
+                "user_id": "u1",
+            },
+        )
         assert resp.status_code == 404
         data = resp.json()
         assert data["detail"]["code"] == "FEATURE_DISABLED"
@@ -326,6 +395,7 @@ class TestServerSideGates:
         from unittest.mock import patch
 
         from app.config import settings
+
         settings.FEATURE_ARGUMENT_MAP = True
         try:
             with patch(
@@ -413,6 +483,7 @@ async def test_new_features_default_disabled():
         "FEATURE_REPLAY_TRACE": settings.FEATURE_REPLAY_TRACE,
         "FEATURE_ARGUMENT_MAP": settings.FEATURE_ARGUMENT_MAP,
         "FEATURE_CAUSAL_GRAPH": settings.FEATURE_CAUSAL_GRAPH,
+        "FEATURE_GRAPH_ANALYSIS": settings.FEATURE_GRAPH_ANALYSIS,
     }
     for name in originals:
         setattr(settings, name, False)
@@ -424,6 +495,7 @@ async def test_new_features_default_disabled():
             "replay_trace",
             "argument_map",
             "causal_graph",
+            "graph_analysis",
         ):
             assert result[cap_key]["enabled"] is False, (
                 f"{cap_key} should default enabled=False when FEATURE flag off"
@@ -433,12 +505,12 @@ async def test_new_features_default_disabled():
             setattr(settings, name, val)
 
 
-# ─── QA-1 Extension: Top-Level 10-Key Exact Freeze ───────────
+# ─── QA-1 Extension: Top-Level 11-Key Exact Freeze ───────────
 #
 # These tests extend the contract freeze with the precise BE-6 surface
 # required by §QA-1 step 4:
 #
-# 1. The top-level capability registry contains **exactly** the 10 frozen
+# 1. The top-level capability registry contains **exactly** the 11 frozen
 #    keys — no new keys may be introduced silently, and no key may vanish.
 # 2. ``web_search.providers`` nested schema: exactly 4 families, each with
 #    exactly 5 sub-keys (``enabled``, ``configured_host``, ``rate_limit_rps``,
@@ -448,40 +520,47 @@ async def test_new_features_default_disabled():
 #    update; removing or renaming is forbidden.
 
 
-_TOP_LEVEL_FROZEN_KEYS = frozenset({
-    "web_search",
-    "custom_agents",
-    "agent_identity",
-    "causal_graph",
-    "counterfactual_replay",
-    "factions",
-    "argument_map",
-    "agent_conversation",
-    "kg_explorer",
-    "replay_trace",
-})
+_TOP_LEVEL_FROZEN_KEYS = frozenset(
+    {
+        "web_search",
+        "custom_agents",
+        "agent_identity",
+        "causal_graph",
+        "graph_analysis",
+        "counterfactual_replay",
+        "factions",
+        "argument_map",
+        "agent_conversation",
+        "kg_explorer",
+        "replay_trace",
+    }
+)
 
 
-_PROVIDERS_FROZEN_FAMILIES = frozenset({
-    "polymarket",
-    "finance",
-    "academic",
-    "news_deep",
-})
+_PROVIDERS_FROZEN_FAMILIES = frozenset(
+    {
+        "polymarket",
+        "finance",
+        "academic",
+        "news_deep",
+    }
+)
 
 
-_PROVIDERS_FROZEN_SUB_KEYS = frozenset({
-    "enabled",
-    "configured_host",
-    "rate_limit_rps",
-    "ttl_seconds",
-    "byok_allowed",
-})
+_PROVIDERS_FROZEN_SUB_KEYS = frozenset(
+    {
+        "enabled",
+        "configured_host",
+        "rate_limit_rps",
+        "ttl_seconds",
+        "byok_allowed",
+    }
+)
 
 
 @pytest.mark.asyncio
 async def test_capabilities_top_level_keys_exact_freeze():
-    """QA-1: top-level capability registry is exactly 10 keys — no more, no less."""
+    """QA-1: top-level capability registry is exactly 11 keys — no more, no less."""
     from app.api.scenarios import api_capabilities
 
     result = await api_capabilities()
@@ -525,8 +604,7 @@ async def test_capabilities_web_search_providers_exact_shape_when_enabled():
         # Exact sub-key set per family.
         for family, entry in providers.items():
             assert set(entry.keys()) >= _PROVIDERS_FROZEN_SUB_KEYS, (
-                f"{family} missing sub-keys: "
-                f"{_PROVIDERS_FROZEN_SUB_KEYS - set(entry.keys())}"
+                f"{family} missing sub-keys: {_PROVIDERS_FROZEN_SUB_KEYS - set(entry.keys())}"
             )
             # Additive-only: extra sub-keys are permitted as long as the
             # frozen set survives.  This guard lets future fields ship
@@ -552,6 +630,40 @@ async def test_capabilities_feature_off_clears_providers():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("graph_analysis_enabled", "causal_graph_enabled", "expected_enabled"),
+    [
+        (False, False, False),
+        (False, True, False),
+        (True, False, False),
+        (True, True, True),
+    ],
+)
+async def test_graph_analysis_capability_requires_both_feature_flags(
+    graph_analysis_enabled,
+    causal_graph_enabled,
+    expected_enabled,
+):
+    """Graph analysis is only advertised when its dependency graph is enabled."""
+    from app.api.scenarios import api_capabilities
+    from app.config import settings
+
+    originals = {
+        "FEATURE_GRAPH_ANALYSIS": settings.FEATURE_GRAPH_ANALYSIS,
+        "FEATURE_CAUSAL_GRAPH": settings.FEATURE_CAUSAL_GRAPH,
+    }
+    settings.FEATURE_GRAPH_ANALYSIS = graph_analysis_enabled
+    settings.FEATURE_CAUSAL_GRAPH = causal_graph_enabled
+    try:
+        result = await api_capabilities()
+        assert result["graph_analysis"]["enabled"] is expected_enabled
+        assert result["graph_analysis"]["version"] == ("1.0" if expected_enabled else "0.0")
+    finally:
+        for name, val in originals.items():
+            setattr(settings, name, val)
+
+
+@pytest.mark.asyncio
 async def test_capabilities_additive_only_no_regression_on_frozen_keys():
     """QA-1: the frozen top-level keys MUST still be present regardless of flags."""
     from app.api.scenarios import api_capabilities
@@ -563,6 +675,7 @@ async def test_capabilities_additive_only_no_regression_on_frozen_keys():
         "FEATURE_KG_EXPLORER",
         "FEATURE_REPLAY_TRACE",
         "FEATURE_NEW_SOURCES",
+        "FEATURE_GRAPH_ANALYSIS",
     )
     snapshots = {name: getattr(settings, name) for name in toggles}
     try:
@@ -614,12 +727,8 @@ class TestWebSearchBaseUrlAllowlist:
     def test_tavily_rejects_sibling_host(self):
         from app.services.web_context import validate_web_search_base_url
 
-        assert (
-            validate_web_search_base_url("tavily", "https://api.tavily.com.evil.dev") is None
-        )
-        assert (
-            validate_web_search_base_url("tavily", "https://evil.com/api.tavily.com") is None
-        )
+        assert validate_web_search_base_url("tavily", "https://api.tavily.com.evil.dev") is None
+        assert validate_web_search_base_url("tavily", "https://evil.com/api.tavily.com") is None
 
     def test_exa_accepts_exact_host_over_https(self):
         from app.services.web_context import validate_web_search_base_url
@@ -653,9 +762,7 @@ class TestWebSearchBaseUrlAllowlist:
         # /api/capabilities (BE-6 read-only hint); they are NOT yet accepted as
         # BYOK providers in the legacy override dispatcher.
         for provider in ("polymarket", "finance", "academic", "news_deep"):
-            assert (
-                validate_web_search_base_url(provider, "https://example.com") is None
-            ), provider
+            assert validate_web_search_base_url(provider, "https://example.com") is None, provider
 
     def test_unknown_scheme_rejected(self):
         from app.services.web_context import validate_web_search_base_url

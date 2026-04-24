@@ -321,6 +321,8 @@ def _rebuild_snapshot_edges_sync(
                 target_node_id=target_id,
                 edge_type="supports",
                 weight=0.7,
+                confidence_tier="medium",
+                source_ref="rule_extraction",
             ))
         elif unit.unit_type in {"rebuttal", "counter"}:
             opp_claim = _select_opponent_claim_id(processed_claims, speaker_side)
@@ -331,6 +333,8 @@ def _rebuild_snapshot_edges_sync(
                     target_node_id=opp_claim,
                     edge_type="rebuts",
                     weight=0.8,
+                    confidence_tier="medium",
+                    source_ref="rule_extraction",
                 ))
 
 
@@ -696,6 +700,7 @@ def extract_argument_units(
                     session.add(GraphEdge(
                         snapshot_id=snapshot.id, source_node_id=nid,
                         target_node_id=last_claim_id, edge_type="supports", weight=0.7,
+                        confidence_tier="medium", source_ref="rule_extraction",
                     ))
                 elif utype in {"rebuttal", "counter"}:
                     opp_claim = _find_opponent_last_claim(session, snapshot.id, speaker_side)
@@ -703,6 +708,7 @@ def extract_argument_units(
                         session.add(GraphEdge(
                             snapshot_id=snapshot.id, source_node_id=nid,
                             target_node_id=opp_claim, edge_type="rebuts", weight=0.8,
+                            confidence_tier="medium", source_ref="rule_extraction",
                         ))
 
         session.commit()
@@ -922,6 +928,8 @@ def link_verdict(debate_id: str, verdict_data: dict) -> None:
                 source_node_id=verdict_node.id,
                 target_node_id=unit.node_id,
                 edge_type=edge_type, weight=1.0,
+                confidence_tier="high",
+                source_ref="verdict_linking",
             ))
 
         session.commit()

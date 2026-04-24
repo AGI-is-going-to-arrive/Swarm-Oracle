@@ -28,7 +28,7 @@ docker compose up backend
 | 路由前缀 | 文件 | 功能 |
 |----------|------|------|
 | `/api/scenario` | `api/scenarios.py` | 场景 CRUD、模拟启动、导入/导出 Replay、Web 搜索增强 |
-| `/api/capabilities` | `api/scenarios.py` | 7-key 通用 capability registry（无 LLM 调用） |
+| `/api/capabilities` | `api/scenarios.py` | 11-key 通用 capability registry（无 LLM 调用） |
 | `/api/debate` | `api/debate.py` | 辩论竞技场创建、快照、结果、预测投注 |
 | `/api/scenario/{id}/ending-room` | `api/ending_rooms.py` | 神谕密室 / 世界线圆桌创建、follow-up threads |
 | `/api/ending-room/{id}` | `api/ending_rooms.py` | 密室快照、结果、用户回合追加 |
@@ -80,9 +80,13 @@ docker compose up backend
 | `FEATURE_CUSTOM_AGENTS` | `false` | 启用自建 Agent CRUD + workshop API |
 | `FEATURE_AGENT_IDENTITY` | `false` | 启用跨场景身份解析 + 记忆 API |
 | `FEATURE_CAUSAL_GRAPH` | `false` | 启用因果图谱 API + simulator hook |
-| `FEATURE_COUNTERFACTUAL_REPLAY` | `false` | 启用反事实回溯 + 比较 + 检查点 API |
+| `FEATURE_GRAPH_ANALYSIS` | `false` | 启用图谱摘要分析 API；对外 enabled 还要求 `FEATURE_CAUSAL_GRAPH=true` |
+| `FEATURE_COUNTERFACTUAL_REPLAY` | `true` | 启用反事实回溯 + 比较 + 检查点 API |
 | `FEATURE_FACTIONS` | `false` | 启用阵营检测 API + simulator hook |
 | `FEATURE_ARGUMENT_MAP` | `false` | 启用辩论论证图谱 API + debate hook |
+| `FEATURE_REPLAY_TRACE` | `false` | 启用 replay branch lineage API |
+| `FEATURE_AGENT_CONVERSATION` | `false` | 启用图谱节点/结果追问 REST + SSE |
+| `FEATURE_KG_EXPLORER` | `false` | 启用 KG Explorer / Timeline Galaxy 前端 capability gate |
 | `FEATURE_IDENTITY_COMPACTION` | `false` | 启用 identity memory LLM 摘要压缩 |
 | `IDENTITY_COMPACT_THRESHOLD` | `50` | 压缩触发阈值（未压缩文档数） |
 | `IDENTITY_COMPACT_BATCH_SIZE` | `30` | 每次压缩最老 N 条 |
@@ -270,7 +274,7 @@ backend/
 | 2026-04-10 | P1-9 resume + P1-12 compaction | P1-12: `FEATURE_IDENTITY_COMPACTION` + 3 调参变量 (config.py 含 model_validator 校验)；vector_store.py 新增 `CompactionGroup`/`check`/`prepare`/`execute`/`build_compaction_prompt` (format_untrusted_text_block 防注入)；FIFO eviction raw-first 优先级；agent_identity.py `get_identity_memories` 过滤 compacted (全量取→Python 过滤→DESC 排序→截取)；simulator.py compaction worklist 返回 + asyncio.create_task fire-and-forget + cancelled() guard (15 tests)。P1-9: blackboard.py `export_snapshot()`/`from_snapshot()` (8 字段完整持久化)；simulator.py checkpoint bug fix (`get_global_summary()` → `export_snapshot()`) + resume-scoped agent/bb restore with fallback；replay.py `clone_until_round` +replay_kind/title + `load_checkpoint_agent_states`/`load_checkpoint_blackboard`；graphs.py `POST /scenario/{id}/resume` + runtime lock guard + scenario SIMULATING 状态 + 共享 3 条分支上限；schemas.py `ResumeRequest`；Branch.replay_kind 契约扩展含 `"resume"` (16 tests) |
 | 2026-04-09 | P0 接线 + 安全修复 | X-5 ownership 校验 (`user_id is not None` + match)；`Scenario.user_id` 创建时持久化 + `parsed_context` 兜底；simulator identity lifecycle hook (`asyncio.to_thread` + per-agent 异常隔离)；simulator faction WS 事件发射 (`viz:faction_cluster`/`viz:faction_event`)；`store_identity_memory` 加 Chroma 串行化锁 (`identity:{user_id}` 粒度)；16 新测试 (`test_p0_wiring.py`：ownership 校验 6 + lifecycle 5 + faction WS 5) |
 | 2026-04-09 | Phase 3 接线补全 | 11 个 API endpoint 加 FEATURE_* server-side 404 gate (11 条回归测试)；simulator 补 factions+checkpoint hook；debate 补 argument map 抽取+verdict linking；helpers.py 身份解析+自建 Agent 合并+parsed_context 无损同步；argument-map + faction-timeline 2 个新 endpoint |
-| 2026-04-09 | Phase 3 六大功能 | 13 新模型 (3 模型文件)、6 新服务、2 新 API router、3 迁移 (014-016)、simulator.py 因果图谱 hook、capabilities 7-key registry、ChromaDB 双层 memory、125+ 新测试 |
+| 2026-04-09 | Phase 3 六大功能 | 13 新模型 (3 模型文件)、6 新服务、2 新 API router、3 迁移 (014-016)、simulator.py 因果图谱 hook、capabilities registry、ChromaDB 双层 memory、125+ 新测试 |
 | 2026-04-09 | 遗留项收口 | auth_ok 发送异常区分 WebSocketDisconnect/其他 + 日志 + close(1011)；pending_auth 归零清理 key；campaign/ending-room session gate 提升 router 级 dependencies；llm_client content=null `or ""` 防御；pyproject.toml 显式声明 sqlalchemy/pydantic 直依赖；test_llm_client 5 条 probe skip |
 | 2026-04-08 | WS pending_auth + Track B2 | pending_auth 计入 MAX_WS_PER_SCENARIO + auth_ok 发送失败释放 (25 测试)；voice variant 10→13 (diplomat/advisor/science) + 关键词扩充 + scholar/civic overlap 修复 (154 测试 + live LLM 验证) |
 | 2026-04-08 | WS 首帧 auth + session gate 测试 | `run_websocket_session` accept/register 分离 + 首帧 auth 协议 (10s timeout, 64KB limit)，`test_session_auth.py` 初始新增 16 条测试 (4 REST + 12 WS)，后经 pending_auth 扩展至 25 条 |

@@ -100,6 +100,12 @@ export interface NodeConversationSheetProps {
   onAbort?: () => void;
   /** Resend last user turn (Cmd/Ctrl+R shortcut). Parent owns the payload. */
   onResend?: () => void;
+  /**
+   * When true, display a soft hint banner after 3 completed turns
+   * suggesting the user can come back later. Used by ResultConversationWidget.
+   * Default: false.
+   */
+  showResultDeepenHint?: boolean;
 }
 
 /**
@@ -139,6 +145,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     onSubmit,
     onAbort,
     onResend,
+    showResultDeepenHint = false,
   } = props;
   const { t } = useTranslation();
   const isMobile = useIsMobile(768);
@@ -148,6 +155,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   const originNodeType = origin?.nodeType ?? null;
   const originBranchId = origin?.branchId ?? null;
   const originRoundNumber = origin?.roundNumber ?? null;
+  const isResultContext = showResultDeepenHint && origin == null;
 
   const {
     state: convState,
@@ -375,6 +383,16 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     event.preventDefault();
   }, [isMobile]);
 
+  // Track completed turns for the result-deepen hint.
+  const completedTurnCountRef = useRef(0);
+  const prevTurnRef = useRef(convState.turn);
+  if (prevTurnRef.current !== 'done' && convState.turn === 'done') {
+    completedTurnCountRef.current += 1;
+  }
+  prevTurnRef.current = convState.turn;
+
+  const showResultHint = showResultDeepenHint && completedTurnCountRef.current >= 3;
+
   const showRecovery = convState.turn === 'error' || convState.turn === 'recovering';
   const showEmpty = convState.turn === 'idle' && inputValue.length === 0;
   const isStreaming = convState.turn === 'streaming';
@@ -416,14 +434,20 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
         ) : null}
         <SheetHeader>
           <SheetTitle>
-            {t('conversation.sheet.title', {
-              defaultValue: origin?.nodeType ?? 'Conversation',
-            })}
+            {isResultContext
+              ? t('conversation.sheet.result_title', { defaultValue: 'Result conversation' })
+              : t('conversation.sheet.title', {
+                  defaultValue: origin?.nodeType ?? 'Conversation',
+                })}
           </SheetTitle>
           <SheetDescription className="sr-only">
-            {t('conversation.sheet.description', {
-              defaultValue: 'Ask the agent about the selected node and review the streamed reply here.',
-            })}
+            {isResultContext
+              ? t('conversation.sheet.result_description', {
+                  defaultValue: 'Ask about this result and review the streamed reply here.',
+                })
+              : t('conversation.sheet.description', {
+                  defaultValue: 'Ask the agent about the selected node and review the streamed reply here.',
+                })}
           </SheetDescription>
         </SheetHeader>
 
@@ -444,7 +468,12 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
           <div className="px-1 py-2 text-sm leading-relaxed text-text-primary">
             <StreamingBubbleIsolated onRef={handleBubbleRef} />
           </div>
-          {showEmpty ? <EmptyStateQuickQuestions onSelect={setInputValue} /> : null}
+          {showEmpty ? (
+            <EmptyStateQuickQuestions
+              onSelect={setInputValue}
+              variant={isResultContext ? 'result' : 'node'}
+            />
+          ) : null}
 
           {showRecovery ? (
             <ConversationRecoveryBanner
@@ -513,6 +542,19 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
             {t('common.close', { defaultValue: 'Close' })}
           </button>
         </div>
+
+        {/* Soft result-deepen hint after 3 completed turns */}
+        {showResultHint ? (
+          <div
+            data-testid="result-deepen-hint"
+            role="status"
+            className="mt-2 rounded-md border border-purple-400/30 bg-purple-500/10 px-3 py-2 text-xs text-purple-200"
+          >
+            {t('result_conversation.deepen_hint', {
+              defaultValue: 'Great conversation! You can continue or come back anytime.',
+            })}
+          </div>
+        ) : null}
 
         {/* Continue-chatting CTA shown post-done */}
         {isDone ? (

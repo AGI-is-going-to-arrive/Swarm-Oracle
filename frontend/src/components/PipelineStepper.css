@@ -1,0 +1,153 @@
+/* ═══════════════════════════════════════════════════════════
+   PipelineStepper — Fixed-bottom pipeline progress bar
+   Shows simulation stages: parsing → simulating → narrating → done
+   ═══════════════════════════════════════════════════════════ */
+
+.pipeline-stepper {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 900; /* below lang-switch (1000), below modals (1050+) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 8px 16px;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  background: oklch(0.18 0.01 260 / 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-top: 1px solid oklch(0.35 0.02 260 / 0.4);
+  box-shadow: 0 -2px 12px oklch(0.1 0.01 260 / 0.3);
+  transition: opacity 0.4s ease-out, transform 0.3s ease-out;
+}
+
+.pipeline-stepper--hidden {
+  opacity: 0;
+  transform: translateY(100%);
+  pointer-events: none;
+}
+
+.pipeline-stepper--error {
+  border-top-color: oklch(0.55 0.2 25 / 0.6);
+}
+
+/* ── Step item ── */
+.pipeline-stepper__step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: oklch(0.55 0.01 260);
+  white-space: nowrap;
+  transition: color 0.3s ease;
+}
+
+.pipeline-stepper__step--active {
+  color: oklch(0.85 0.12 200);
+  font-weight: 600;
+}
+
+.pipeline-stepper__step--completed {
+  color: oklch(0.72 0.14 155);
+}
+
+.pipeline-stepper__step--error {
+  color: oklch(0.7 0.2 25);
+  font-weight: 600;
+}
+
+/* ── Step indicator dot ── */
+.pipeline-stepper__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: oklch(0.4 0.01 260);
+  flex-shrink: 0;
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+
+.pipeline-stepper__step--active .pipeline-stepper__dot {
+  background: oklch(0.75 0.14 200);
+  box-shadow: 0 0 6px oklch(0.75 0.14 200 / 0.5);
+  animation: pipeline-pulse 1.5s ease-in-out infinite;
+}
+
+.pipeline-stepper__step--completed .pipeline-stepper__dot {
+  background: oklch(0.65 0.16 155);
+}
+
+.pipeline-stepper__step--error .pipeline-stepper__dot {
+  background: oklch(0.6 0.22 25);
+  box-shadow: 0 0 6px oklch(0.6 0.22 25 / 0.5);
+}
+
+/* ── Connector line between steps ── */
+.pipeline-stepper__connector {
+  width: 24px;
+  height: 2px;
+  background: oklch(0.35 0.01 260);
+  flex-shrink: 0;
+  transition: background 0.3s ease;
+}
+
+.pipeline-stepper__connector--completed {
+  background: oklch(0.55 0.12 155);
+}
+
+/* ── Pulse animation ── */
+@keyframes pipeline-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ── Responsive: mobile ── */
+@media (max-width: 480px) {
+  .pipeline-stepper {
+    padding: 6px 10px;
+    padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+    gap: 0;
+  }
+
+  .pipeline-stepper__step {
+    padding: 3px 6px;
+    font-size: 0.68rem;
+  }
+
+  .pipeline-stepper__connector {
+    width: 14px;
+  }
+
+  .pipeline-stepper__dot {
+    width: 6px;
+    height: 6px;
+  }
+}
+
+/* ── Reduced motion ── */
+@media (prefers-reduced-motion: reduce) {
+  .pipeline-stepper {
+    transition: none;
+  }
+
+  .pipeline-stepper__step {
+    transition: none;
+  }
+
+  .pipeline-stepper__dot {
+    transition: none;
+    animation: none;
+  }
+
+  .pipeline-stepper__connector {
+    transition: none;
+  }
+}
+
+/* ── Spacing utility for pages that need bottom clearance ── */
+.pipeline-stepper-spacer {
+  padding-bottom: 48px;
+}

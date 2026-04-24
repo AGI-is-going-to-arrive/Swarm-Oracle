@@ -75,10 +75,7 @@ def _recreate_debate_argument_unit_with_unique_constraint(
     )
     conn.execute(text("DROP TABLE debate_argument_unit_old"))
     conn.execute(
-        text(
-            "CREATE INDEX ix_debate_argument_unit_debate_id "
-            "ON debate_argument_unit (debate_id)"
-        )
+        text("CREATE INDEX ix_debate_argument_unit_debate_id ON debate_argument_unit (debate_id)")
     )
     conn.execute(
         text(
@@ -140,10 +137,7 @@ def _recreate_debate_argument_unit_without_unique_constraint(conn) -> None:
     )
     conn.execute(text("DROP TABLE debate_argument_unit_old"))
     conn.execute(
-        text(
-            "CREATE INDEX ix_debate_argument_unit_debate_id "
-            "ON debate_argument_unit (debate_id)"
-        )
+        text("CREATE INDEX ix_debate_argument_unit_debate_id ON debate_argument_unit (debate_id)")
     )
     conn.execute(
         text(
@@ -438,6 +432,56 @@ def test_init_db_stamps_lightweight_bootstrap_schema_without_alembic_version(
     database_module.dispose_engine()
 
 
+def test_init_db_repairs_no_version_bootstrap_schema_missing_graph_edge_evidence_columns(
+    tmp_path,
+    monkeypatch,
+):
+    """Old no-version SQLite DBs should be stamped, not replay base migrations."""
+    from app.config import settings
+    from app.models import database as database_module
+
+    alembic_runtime = database_module._load_alembic_runtime()
+    if alembic_runtime is None:
+        pytest.skip("Alembic runtime is not available in this interpreter")
+    Config, command, ScriptDirectory = alembic_runtime
+
+    db_path = tmp_path / "bootstrap-missing-024-columns.db"
+    db_url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+    database_module.dispose_engine()
+
+    _backend_root, alembic_config = _build_alembic_config(database_module, Config, db_url)
+    command.upgrade(alembic_config, "023_agent_conversation_quota_ledger")
+
+    legacy_engine = create_engine(db_url)
+    with legacy_engine.begin() as conn:
+        conn.execute(text("DROP TABLE alembic_version"))
+        before_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(graph_edge)"))}
+        assert "confidence_tier" not in before_columns
+        assert "evidence_json" not in before_columns
+    legacy_engine.dispose()
+
+    database_module.init_db()
+
+    inspector = inspect(database_module.get_engine())
+    graph_edge_columns = {col["name"] for col in inspector.get_columns("graph_edge")}
+    assert {
+        "confidence_tier",
+        "source_ref",
+        "source_round_number",
+        "evidence_json",
+    } <= graph_edge_columns
+    with database_module.get_engine().connect() as conn:
+        revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+
+    _backend_root, alembic_config = _build_alembic_config(database_module, Config, db_url)
+    expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
+    assert revision == expected_head
+
+    database_module.dispose_engine()
+
+
 def test_init_db_replaces_legacy_debate_argument_unit_unique_constraint(tmp_path, monkeypatch):
     """Legacy debate_id+semantic_hash uniqueness should not survive upgrade to head."""
     from app.config import settings
@@ -551,6 +595,176 @@ def test_init_db_replaces_legacy_debate_argument_unit_unique_constraint(tmp_path
 
     legacy_engine.dispose()
     database_module.dispose_engine()
+
+
+def test_020_upgrade_deletes_duplicate_snapshot_graph_rows(tmp_path, monkeypatch):
+    """Duplicate graph snapshots should not merge stale nodes into the authority graph."""
+    from app.config import settings
+    from app.models import database as database_module
+
+    alembic_runtime = database_module._load_alembic_runtime()
+    if alembic_runtime is None:
+        pytest.skip("Alembic runtime is not available in this interpreter")
+    Config, command, _ScriptDirectory = alembic_runtime
+
+    db_path = tmp_path / "duplicate-snapshot-020.db"
+    db_url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+    database_module.dispose_engine()
+
+    _backend_root, alembic_config = _build_alembic_config(database_module, Config, db_url)
+    command.upgrade(alembic_config, "019_add_debate_user_owner")
+
+    legacy_engine = create_engine(db_url)
+    with legacy_engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_snapshot (
+                    id, owner_type, owner_id, graph_kind, created_at
+                ) VALUES
+                    (
+                        'old-snap', 'scenario', 'scenario-dup',
+                        'causal_review', '2026-04-14T20:20:00'
+                    ),
+                    (
+                        'new-snap', 'scenario', 'scenario-dup',
+                        'causal_review', '2026-04-14T20:21:00'
+                    )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_node (
+                    id, snapshot_id, node_key, node_type, label, round_number,
+                    ref_model, ref_id, payload_json
+                ) VALUES
+                    (
+                        'old-a', 'old-snap', 'same-a', 'event',
+                        'Old A', 1, NULL, NULL, '{"branch_id":"br"}'
+                    ),
+                    (
+                        'old-b', 'old-snap', 'same-b', 'event',
+                        'Old B', 1, NULL, NULL, '{"branch_id":"br"}'
+                    ),
+                    (
+                        'new-a', 'new-snap', 'same-a', 'event',
+                        'New A', 1, NULL, NULL, '{"branch_id":"br"}'
+                    ),
+                    (
+                        'new-b', 'new-snap', 'same-b', 'event',
+                        'New B', 1, NULL, NULL, '{"branch_id":"br"}'
+                    )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_edge (
+                    id, snapshot_id, source_node_id, target_node_id,
+                    edge_type, weight, label, payload_json
+                ) VALUES
+                    (
+                        'old-edge', 'old-snap', 'old-a', 'old-b',
+                        'caused', 1.0, 'same-edge', NULL
+                    ),
+                    (
+                        'new-edge', 'new-snap', 'new-a', 'new-b',
+                        'caused', 1.0, 'same-edge', NULL
+                    )
+                """
+            )
+        )
+    legacy_engine.dispose()
+
+    command.upgrade(alembic_config, "020_harden_graph_snapshot_and_state_frame_constraints")
+
+    engine = create_engine(db_url)
+    with engine.connect() as conn:
+        snapshots = conn.execute(text("SELECT id FROM graph_snapshot")).scalars().all()
+        nodes = conn.execute(text("SELECT id, node_key FROM graph_node ORDER BY id")).fetchall()
+        edges = conn.execute(
+            text("SELECT id, source_node_id, target_node_id FROM graph_edge")
+        ).fetchall()
+    engine.dispose()
+
+    assert snapshots == ["new-snap"]
+    assert nodes == [("new-a", "same-a"), ("new-b", "same-b")]
+    assert edges == [("new-edge", "new-a", "new-b")]
+
+
+def test_020_sqlite_duplicate_snapshot_tiebreaker_matches_runtime_rowid(tmp_path, monkeypatch):
+    """SQLite duplicate snapshot cleanup should keep the latest inserted row on ties."""
+    from app.config import settings
+    from app.models import database as database_module
+
+    alembic_runtime = database_module._load_alembic_runtime()
+    if alembic_runtime is None:
+        pytest.skip("Alembic runtime is not available in this interpreter")
+    Config, command, _ScriptDirectory = alembic_runtime
+
+    db_path = tmp_path / "duplicate-snapshot-rowid-020.db"
+    db_url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+    database_module.dispose_engine()
+
+    _backend_root, alembic_config = _build_alembic_config(database_module, Config, db_url)
+    command.upgrade(alembic_config, "019_add_debate_user_owner")
+
+    legacy_engine = create_engine(db_url)
+    with legacy_engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_snapshot (
+                    id, owner_type, owner_id, graph_kind, created_at
+                ) VALUES
+                    (
+                        'zzzz-old-snap', 'scenario', 'scenario-rowid',
+                        'causal_review', '2026-04-14T20:20:00'
+                    ),
+                    (
+                        'aaaa-new-snap', 'scenario', 'scenario-rowid',
+                        'causal_review', '2026-04-14T20:20:00'
+                    )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO graph_node (
+                    id, snapshot_id, node_key, node_type, label, round_number,
+                    ref_model, ref_id, payload_json
+                ) VALUES
+                    (
+                        'old-node', 'zzzz-old-snap', 'same-node', 'event',
+                        'Old Node', 1, NULL, NULL, '{"branch_id":"br"}'
+                    ),
+                    (
+                        'new-node', 'aaaa-new-snap', 'same-node', 'event',
+                        'New Node', 1, NULL, NULL, '{"branch_id":"br"}'
+                    )
+                """
+            )
+        )
+    legacy_engine.dispose()
+
+    command.upgrade(alembic_config, "020_harden_graph_snapshot_and_state_frame_constraints")
+
+    engine = create_engine(db_url)
+    with engine.connect() as conn:
+        snapshots = conn.execute(text("SELECT id FROM graph_snapshot")).scalars().all()
+        nodes = conn.execute(text("SELECT id, snapshot_id FROM graph_node")).fetchall()
+    engine.dispose()
+
+    assert snapshots == ["aaaa-new-snap"]
+    assert nodes == [("new-node", "aaaa-new-snap")]
 
 
 def test_init_db_lightweight_fallback_replaces_legacy_debate_argument_unit_unique_constraint(

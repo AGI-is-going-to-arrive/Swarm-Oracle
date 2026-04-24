@@ -480,6 +480,7 @@ export interface CapabilitiesResponse {
   agent_conversation: CapabilityEntry;
   kg_explorer: CapabilityEntry;
   replay_trace: CapabilityEntry;
+  graph_analysis: CapabilityEntry;
 }
 
 /** GET /api/capabilities — lightweight server capability hints (no LLM calls) */
@@ -778,6 +779,19 @@ export async function interveneBatch(
 /** GET /api/scenario/:id/groups — get hierarchical groups (P3-A) */
 export async function getGroups(scenarioId: string): Promise<AgentGroupDetail[]> {
   return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/groups`);
+}
+
+/** GET /api/scenario/{id}/graph-analysis — server-side graph metrics */
+export interface GraphAnalysisResponse {
+  god_nodes: { node_id: string; label: string; type: string; in_degree: number; out_degree: number; total_degree: number; centrality_rank: number }[];
+  degree_distribution: Record<string, number>;
+  cross_branch_edges: { source_branch: string; target_branch: string; edge_count: number; primary_type: string }[];
+  summary: { total_nodes: number; total_edges: number; avg_degree: number; max_degree: number; connected_components: number; density: number };
+}
+
+export async function getGraphAnalysis(scenarioId: string, branchId?: string): Promise<GraphAnalysisResponse> {
+  const params = branchId ? `?branch_id=${encodeURIComponent(branchId)}` : '';
+  return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/graph-analysis${params}`);
 }
 
 // ── P5 API Wrappers ──────────────────────────────────────

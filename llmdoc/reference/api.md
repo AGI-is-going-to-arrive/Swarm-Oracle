@@ -155,7 +155,7 @@
 | `GET` | `/api/scenario/{scenario_id}/export` | 导出 Markdown |
 | `POST` | `/api/health` | 后端健康检查 |
 | `POST` | `/api/health/test` | provider 探测与预算预检；返回服务端默认搜索 hint |
-| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 10-key capability registry (`web_search` + 9 个功能开关) |
+| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 11-key capability registry (`web_search` + 10 个功能开关) |
 | `GET` | `/` | 根信息 |
 | `GET` | `/metrics` | Prometheus 文本指标 |
 
@@ -232,6 +232,7 @@
 | `PUT` | `/api/agents/workshop/{id}` | 更新自建 Agent | `FEATURE_CUSTOM_AGENTS` |
 | `DELETE` | `/api/agents/workshop/{id}` | 删除自建 Agent | `FEATURE_CUSTOM_AGENTS` |
 | `GET` | `/api/scenario/{id}/causal-graph` | 因果图谱 | `FEATURE_CAUSAL_GRAPH` |
+| `GET` | `/api/scenario/{id}/graph-analysis` | 因果图谱摘要分析 | `FEATURE_GRAPH_ANALYSIS` + `FEATURE_CAUSAL_GRAPH` |
 | `POST` | `/api/scenario/{id}/counterfactual` | 创建反事实分支 | `FEATURE_COUNTERFACTUAL_REPLAY` |
 | `POST` | `/api/scenario/{id}/resume` | 从指定 round 续跑新分支 | `FEATURE_COUNTERFACTUAL_REPLAY` |
 | `GET` | `/api/scenario/{id}/compare` | 分支对比 | `FEATURE_COUNTERFACTUAL_REPLAY` |
@@ -248,8 +249,9 @@
 - `GET /api/scenario/{id}/causal-graph` 当前会先 `trim` `branch_id`：
   - 空白值按未过滤处理
   - 不属于当前 `scenario` 的 `branch_id` 返回 `404 BRANCH_NOT_FOUND`
-  - 旧 SQLite 如果还留有重复 `graph_snapshot`，运行时会把重复 snapshot 的 node/edge 合并去重到当前 snapshot；返回体不再混入 stale duplicate node/edge
+  - 旧 SQLite 如果还留有重复 `graph_snapshot`，运行时 repair 会保留最新 snapshot，并删除旧 snapshot 的 node/edge；返回体不再混入 stale duplicate node/edge
   - 成功返回体仍会带 `available_branches`
+- `GET /api/scenario/{id}/graph-analysis` 返回 `god_nodes / degree_distribution / cross_branch_edges / summary`。大图会按最新 snapshot 全量 size 做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`。这条预检不按 `branch_id` 精确裁剪，所以 branch 小图也可能在大 scenario 下被保守截断。
 - `POST /api/scenario/{id}/counterfactual` 当前约束：
   - scenario 状态必须是 `done`；否则返回 `409 COUNTERFACTUAL_SCENARIO_STATUS_INVALID`
   - source branch 不存在时返回 `404 COUNTERFACTUAL_BRANCH_NOT_FOUND`

@@ -158,9 +158,11 @@
 | `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | 首页 `Organization ID` 的 sessionStorage 单一事实源；InputView 与 API client 共用，避免 header 逻辑散落 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
 | `e2e-new-source-ingestion-live.mjs` | `frontend/scripts/e2e-new-source-ingestion-live.mjs` | source-ingestion 专项脚本；默认走 fixture，`SWARM_E2E_MODE=live` 时走真实 backend。live 模式会先显式打开首页总开关，校验 `/api/scenario` 请求里的 `web_search_families`，再检查结果页四个 source family 的 live/non-empty 卡片；`Polymarket` 的 `non-us` geo-gate 也走同一条 live 口径 |
-| `e2e-capability-matrix.mjs` | `frontend/scripts/e2e-capability-matrix.mjs` | graph/playability capability matrix；当前覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route。`ReplayView` 的 disabled 路径现在会落显式 unavailable surface，不再回首页；如果脚本还按旧 redirect 口径断言，先同步脚本再跑 |
+| `e2e-capability-matrix.mjs` | `frontend/scripts/e2e-capability-matrix.mjs` | graph/playability capability matrix；当前覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route，fixture payload 也包含 `agent_conversation / kg_explorer / replay_trace`。`ReplayView` 的 disabled 路径现在会落显式 unavailable surface，不再回首页；如果脚本还按旧 redirect 口径断言，先同步脚本再跑 |
 | `e2e-ws-contract-suite.mjs` | `frontend/scripts/e2e-ws-contract-suite.mjs` | WS 契约诊断脚本；当前覆盖 `scenario / debate / ending-room` 的首帧 auth、`4001 / 4404` 非重连、`1006` 可重连、auth timeout、oversize auth frame 和 pending-auth limit |
 | `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
+| `PipelineStepper.tsx` | `frontend/src/components/PipelineStepper.tsx` | `/sim/:id` 与 `/result/:id` 的 fixed-bottom pipeline progressbar；error 状态下 `aria-valuenow` 会钳到有效范围 |
+| `ResultConversationWidget.tsx` | `frontend/src/components/ResultConversationWidget.tsx` | 结果页轻量追问入口，复用 `NodeConversationSheet`；replay 结果页不渲染这条 live-only 入口 |
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
 | `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
 | `NodeDetailPanel.tsx` | `frontend/src/components/NodeDetailPanel.tsx` | 两个图面的共用节点详情侧栏；显示 type / round / payload / unit details |
@@ -234,7 +236,7 @@
   - `后续三回合` 按钮：设置 `interaction_mode=epilogue` 并预填追问内容
   - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 发送
   - mobile sidebar sheet 已补 `SheetTitle / SheetDescription`；第一次 `Escape` 只关闭 sheet，不会误关外层 chamber
-- `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。桌面端现在按 non-modal 右侧 sidecar 挂载，移动端仍是 modal bottom sheet；图上节点详情和对话 sheet 同时打开时，不会再被 overlay 互相挡住。桌面端当前也已补齐 detail + sidecar 同开时的交互边界：点 detail close、点 graph pane，只会收详情，不会顺手把 sidecar 一起关掉；如果焦点在 detail 内，`Escape` 也会先收详情；切到新节点后再关详情，焦点会回到最新 trigger。textarea 里的 `Escape` 仍只关闭 sidecar。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，`/start` 会透传 origin branch / round / node，SSE parser 也已兼容 multiline `data:` frame。公共会话状态机在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，不再把 ghost 文本重新刷回 bubble 或 aria-live。bubble ref 注册当前也已经和整个 `conversation` 对象解耦，输入框本地 rerender 不会再反复重挂流式气泡。
+- `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。桌面端现在按 non-modal 右侧 sidecar 挂载，移动端仍是 modal bottom sheet；图上节点详情和对话 sheet 同时打开时，不会再被 overlay 互相挡住。桌面端当前也已补齐 detail + sidecar 同开时的交互边界：点 detail close、点 graph pane，只会收详情，不会顺手把 sidecar 一起关掉；如果焦点在 detail 内，`Escape` 也会先收详情；切到新节点后再关详情，焦点会回到最新 trigger。textarea 里的 `Escape` 仍只关闭 sidecar。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，`/start` 会透传 origin branch / round / node，SSE parser 也已兼容 multiline `data:` frame。公共会话状态机在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，不再把 ghost 文本重新刷回 bubble 或 aria-live。bubble ref 注册当前也已经和整个 `conversation` 对象解耦，输入框本地 rerender 不会再反复重挂流式气泡。结果页追问会使用 result context 的标题、说明和空态问题，不再套用“选择图节点”的文案。
 - `DebateArenaView` 当前只允许在 live 当前 phase 的下注窗口打开/提交 quick counterplay；锁到历史 phase 时不再发起 counterplay。
 - `DebateArenaView` 当前在“当前 live phase”视图下会保留更早 phase 的已出现 turns，并以 `FoldableTurn` 历史卡形式继续展示；切到历史 phase 时仍只显示该 phase 自己的 turns。
 - Debate 的页面级播报当前只保留 phase cue；`SpotlightTurnCard` 的高亮态不再单独暴露 live-region 语义，避免同一轮变化在读屏器里重复播报。
@@ -288,6 +290,7 @@
 - `ResultView` 当前在 replay 模式下会：
   - 禁用 `Export Markdown`
   - 隐藏 `score_predictions`
+  - 隐藏 `ResultConversationWidget` 和结果追问 action card
   - 保留本地导入、只读分享与 permalink 相关动作
   - 保留 replay-safe 的 `causal graph` 入口
   - 保留按当前展开分支切换的 `FactionTimeline`
@@ -365,7 +368,7 @@
 - `CausalReviewView` 与 `ArgumentMap` 当前只会在图结构真的变化后重新 `fitView()`；search / status filter / branch 切换仍会重算视口，但选中节点或取消选中不会再把视口强制拉回去
 - `CausalReviewView` / `ArgumentMap` 的图节点、边、handle 可访问文案，以及 React Flow controls / `MiniMap` 文案当前都会跟随 UI 语言实时更新；切语言不会重打图请求。
 - `CausalReviewView` / `ArgumentMap` 的 `MiniMap` 当前是非交互 overlay（`pointer-events: none`），只在桌面显示；移动端不再和图操作抢热区。
-- 两个图面当前除了 node/unit 的 sr fallback list，也会额外输出本地化 relation list；因果图会保留 `causes / precedes`，`ArgumentMap` 会区分 `supports / rebuts / accepts / rejects / leaves unaddressed`，边语义不再只剩颜色和箭头。
+- 两个图面当前除了 node/unit 的 sr fallback list，也会额外输出本地化 relation list；因果图会保留 `causes / precedes`，`ArgumentMap` 会区分 `supports / rebuts / accepts / rejects / leaves unaddressed`，边语义不再只剩颜色和箭头。edge evidence 的 `low / medium / high` 也会走本地化文案，不再把 `[medium]` 这类原始值直接露出来。
 - `ArgumentMap` 当前在筛选结果为空时会保留筛选 chips 和 `Clear`，同时显示空态文案，不会把用户困在空态里；但这个空态只在当前图本来就有 `units` 时才会出现，node-only 图不会被状态筛选误筛成空白面板。
 - `ArgumentMap` / `NodeDetailPanel` 当前继续支持显示 `rejected` 状态；前端视觉 token 与后端合法状态口径已重新对齐
 - `ArgumentMap` 当前把 `verdict` 节点也接到共享 graph i18n label；节点可访问名称会跟随当前语言。
@@ -391,8 +394,14 @@
   - 详情关闭后仍走 pane click / close button 这条现有口径
 - `ExportPanel` 当前在 PNG / SVG 导出失败时会显示可见失败提示，不再只打 `console.error`；忙态文案也会按格式区分成 `Exporting PNG... / Exporting SVG...`。SVG 导出当前改成 native SVG background / edge / node markup，不再依赖 `foreignObject`；校验脚本也会拒绝 `foreignObject` 回退。节点卡标题过长时，SVG 文本会按卡片宽度裁剪显示，但 `<title>` 和文本内容仍优先保留完整标题，不再把省略号文本写进 SVG。
 - `CausalReviewView` 当前在 branch 切换时会先收起旧图和导出面板，等新分支数据 ready 后再恢复；图页外层统一走 `100dvh`，relationless snapshot fallback 里的节点详情也会锚在当前容器里，不再飘到视口右上角。
+- P1 post-review hardening 的前端 fresh 验证当前已补：
+  - targeted vitest：`237 tests passed`
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - ResultView replay conversation fixture：replay 模式不暴露 live conversation，不发 `/api/conversation/start`
+  - CausalReview graph-analysis fixture：server analysis 渲染，中文 evidence tier 不泄漏原始枚举
+  - capability matrix E2E：`30 passed / 0 skipped / 30 total`
 - frontend bridge / guide 定向 vitest 当前 `124 passed`。
-- frontend full vitest 当前 `1365 passed`。
+- frontend full vitest 最近一次记录为 `1365 passed`（本轮未复跑全量）。
 - frontend 目标文件 `eslint`、`typecheck`、`build`（含 `perf:budgets:check`）当前通过。
 - fixture-backed local preview 浏览器复核当前已补：
   - ResultView bridge DOM / disabled 样式
@@ -409,7 +418,7 @@
 - 这轮 graph/playability 增量回归当前也已补：
   - `node --test scripts/e2e-ws-contract-suite.test.mjs`：`18 passed`
   - clean-room `e2e:ws:contract`：`20 passed / 1 skipped / 0 failed`
-  - clean-room `e2e:capability-matrix`：`25 passed / 5 skipped / 0 failed`
+  - clean-room `e2e:capability-matrix`：`30 passed / 0 skipped / 0 failed`
   - capability / replay / compare / kg / faction / i18n 定向 vitest：`64 passed`
 - `npm run build`（含 `perf:budgets:check`）当前通过。
 - fresh local live 的 `node-conversation-live / kg-explorer-live / replay-view-live` 当前通过。

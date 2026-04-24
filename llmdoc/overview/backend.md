@@ -43,6 +43,7 @@
 | Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile（串行化锁保护写入） |
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
+| Graph Analysis | `backend/app/services/graph_analysis.py` | 对最新 causal graph snapshot 做度数分布、god nodes、跨分支边摘要；大图会返回 `truncated: true` |
 | Runtime Lock | `backend/app/services/runtime_lock.py` | SQLite shared lease + lease refresh，防重入 |
 | Gameplay Contract | `backend/app/services/gameplay_contract.py` | 读取共享玩法契约 |
 
@@ -69,7 +70,7 @@
 ### Replay
 
 - 短链 replay 通过 `ReplayArtifact` 持久化。
-- SQLite 数据库如果是“由 lightweight bootstrap / `SQLModel.metadata.create_all()` 建出来、但还没有 `alembic_version`”的旧库，`init_db()` 当前会先 `stamp` 到当前 head，再执行 upgrade；不会再重放初始迁移把已有表撞成 `table already exists`。
+- SQLite 数据库如果是“由 lightweight bootstrap / `SQLModel.metadata.create_all()` 建出来、但还没有 `alembic_version`”的旧库，`init_db()` 当前会先补齐轻量 additive columns（包括 `graph_edge` 的 evidence 字段），再 `stamp` 到当前 head 并执行 upgrade；不会再重放初始迁移把已有表撞成 `table already exists`。
 - SQLite 本地旧库如果还留着 legacy `uq_ending_room_scope` 唯一索引（`scenario_id + anchor_branch_id + room_type + participant_set_hash`），`init_db()` 当前也会在 lightweight fallback 和 Alembic upgrade 后统一修回 `scope_fingerprint`；generation 升级后再点结果页 `进入会客厅 / 异线旁听席` 不会再因为旧索引直接 `500`。
 - `counterfactual` 与 `resume` 当前共用独立的 replay branch runtime lock；慢 clone / seed 路径也会续租，不再只在短请求里可靠。
 - `resume` 当前会先完成 scenario/source branch/round 校验，再尝试 replay branch lock；这些前置校验失败不会占用 replay branch lock。
@@ -102,7 +103,8 @@
 - `GET /api/scenario/{id}/causal-graph` 当前会先校验 `branch_id` 属于当前 scenario：
   - 空白 `branch_id` 仍归一化为“全部分支”
   - 不存在的 branch 会返回 `404 BRANCH_NOT_FOUND`，不再伪装成 `200 + 空图`
-- `GraphEdge` 当前还没有稳定的 Graphify 证据字段契约；`confidence_tier / source_ref / source_round_number / evidence` 仍不能当作已落库 API 字段使用。要补这层 contract，需要单独做 migration、API response 与前端消费口径。
+- `GET /api/scenario/{id}/graph-analysis` 当前同时要求 `FEATURE_GRAPH_ANALYSIS=true` 和 `FEATURE_CAUSAL_GRAPH=true`；返回 god nodes、degree distribution、cross-branch edges 和 summary。分析前会先按最新 snapshot 的全量 node/edge 数做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`。这层预检不按 `branch_id` 精确裁剪，所以大 scenario 下的小 branch 查询也可能被保守截断。
+- `GraphEdge` 当前已有 `confidence_tier / source_ref / source_round_number / evidence_json` nullable 字段。causal graph 新边会写入 evidence，并在 API response 里返回；旧边不会自动回填。debate argument map 已在部分边上写 `confidence_tier / source_ref`，但 `GET /api/debate/{id}/argument-map` 仍未返回 `evidence` 字段。`evidence_json` 目前主要是预留列。
 
 ### Ending Room
 

@@ -76,6 +76,10 @@ class GraphEdge(SQLModel, table=True):
     weight: Optional[float] = None
     label: Optional[str] = None
     payload_json: Optional[str] = None  # JSON string
+    confidence_tier: Optional[str] = None  # low | medium | high
+    source_ref: Optional[str] = None
+    source_round_number: Optional[int] = None
+    evidence_json: Optional[str] = None  # JSON string
 
 
 class AgentStateFrame(SQLModel, table=True):

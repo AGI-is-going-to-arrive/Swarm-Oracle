@@ -55,6 +55,47 @@ _ENDING_ROOM_SCHEMA_COLUMNS = {
         "cited_branch_id",
     },
 }
+_LIGHTWEIGHT_ADDITIVE_COLUMNS = (
+    ("branch", "key_moments", "TEXT"),
+    ("branch", "replay_kind", "TEXT"),
+    ("branch", "replay_source_branch_id", "TEXT"),
+    ("branch", "replay_source_round", "INTEGER"),
+    ("branch", "replay_source_agent_id", "TEXT"),
+    ("agent", "group_id", "TEXT"),
+    ("agent", "agent_identity_id", "TEXT"),
+    ("agent", "source_type", "TEXT"),
+    ("scenario", "visualization_enabled", "INTEGER DEFAULT 0"),
+    ("scenario", "scene_theme", "TEXT"),
+    ("scenario", "web_context_json", "TEXT"),
+    ("scenario", "director_state_json", "TEXT"),
+    ("scenario", "gameplay_state_json", "TEXT"),
+    ("ending_room", "scope_fingerprint", "TEXT"),
+    ("ending_room", "current_phase", "TEXT DEFAULT 'OPENING'"),
+    ("ending_room", "memory_partition_version", "INTEGER DEFAULT 2"),
+    ("ending_room_participant", "worldline_echo_key", "TEXT"),
+    ("ending_room_thread", "interaction_mode", "TEXT DEFAULT 'archivist_route'"),
+    ("ending_room_thread", "addressed_agent_ids_json", "TEXT"),
+    ("ending_room_thread", "question_anchor_ids_json", "TEXT"),
+    ("ending_room_turn", "thread_id", "TEXT"),
+    ("ending_room_turn", "source", "TEXT DEFAULT 'auto_recap'"),
+    ("ending_room_turn", "interaction_mode", "TEXT DEFAULT 'auto_recap'"),
+    ("ending_room_turn", "memory_partition_id", "TEXT"),
+    ("ending_room_turn", "addressed_agent_ids_json", "TEXT"),
+    ("ending_room_turn", "question_anchor_ids_json", "TEXT"),
+    ("scenario_campaign_log", "objective_completed_count", "INTEGER DEFAULT 0"),
+    ("scenario_campaign_log", "objective_total_count", "INTEGER DEFAULT 0"),
+    ("scenario_campaign_log", "commitment_outcome", "TEXT"),
+    ("debate_prediction", "is_counterplay", "INTEGER DEFAULT 0"),
+    ("debate_prediction", "counterplay_phase", "TEXT"),
+    ("debate_prediction", "counterplay_variant", "TEXT"),
+    ("replay_artifact", "owner_user_id", "TEXT"),
+    ("replay_artifact", "source_scenario_id", "TEXT"),
+    ("debate", "user_id", "TEXT DEFAULT 'anonymous'"),
+    ("graph_edge", "confidence_tier", "TEXT"),
+    ("graph_edge", "source_ref", "TEXT"),
+    ("graph_edge", "source_round_number", "INTEGER"),
+    ("graph_edge", "evidence_json", "TEXT"),
+)
 
 
 # ── Enums ────────────────────────────────────────────────
@@ -256,6 +297,7 @@ def get_engine():
     global _engine
     if _engine is None:
         from app.config import settings
+
         with _engine_lock:
             if _engine is None:
                 extra_kwargs: dict = {}
@@ -264,6 +306,7 @@ def get_engine():
                 _engine = create_engine(settings.DATABASE_URL, echo=False, **extra_kwargs)
                 if settings.DATABASE_URL.startswith("sqlite"):
                     try:
+
                         @event.listens_for(_engine, "connect")
                         def _set_sqlite_pragmas(dbapi_conn, _connection_record):
                             # BE-1 follow-up: FK enforcement must be on for EVERY
@@ -303,6 +346,7 @@ def _make_bootstrap_engine(database_url: str):
     # and any other short-lived connection made before `get_engine()` is called.
     if database_url.startswith("sqlite"):
         try:
+
             @event.listens_for(engine, "connect")
             def _set_bootstrap_pragmas(dbapi_conn, _connection_record):
                 cursor = dbapi_conn.cursor()
@@ -341,9 +385,7 @@ def _load_alembic_runtime():
 
 def _current_alembic_revision(connection) -> str | None:
     table_names = set(
-        connection.exec_driver_sql(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).scalars()
+        connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars()
     )
     if "alembic_version" not in table_names:
         return None
@@ -366,13 +408,15 @@ def _has_legacy_ending_room_schema(connection) -> bool:
 
 def _has_bootstrap_sqlmodel_schema(connection) -> bool:
     table_names = set(
-        connection.exec_driver_sql(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).scalars()
+        connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars()
     )
     expected_tables = set(SQLModel.metadata.tables)
     if not expected_tables <= table_names:
         return False
+
+    for table_name, column_name, column_type in _LIGHTWEIGHT_ADDITIVE_COLUMNS:
+        if table_name in table_names:
+            _migrate_add_column(connection, table_name, column_name, column_type)
 
     for table_name, table in SQLModel.metadata.tables.items():
         expected_columns = {column.name for column in table.columns}
@@ -427,66 +471,8 @@ def _init_db_lightweight() -> None:
         )
 
         with engine.begin() as conn:
-            _migrate_add_column(conn, "branch", "key_moments", "TEXT")
-            _migrate_add_column(conn, "branch", "replay_kind", "TEXT")
-            _migrate_add_column(conn, "branch", "replay_source_branch_id", "TEXT")
-            _migrate_add_column(conn, "branch", "replay_source_round", "INTEGER")
-            _migrate_add_column(conn, "branch", "replay_source_agent_id", "TEXT")
-            _migrate_add_column(conn, "agent", "group_id", "TEXT")
-            _migrate_add_column(conn, "agent", "agent_identity_id", "TEXT")
-            _migrate_add_column(conn, "agent", "source_type", "TEXT")
-            _migrate_add_column(conn, "scenario", "visualization_enabled", "INTEGER DEFAULT 0")
-            _migrate_add_column(conn, "scenario", "scene_theme", "TEXT")
-            _migrate_add_column(conn, "scenario", "web_context_json", "TEXT")
-            _migrate_add_column(conn, "scenario", "director_state_json", "TEXT")
-            _migrate_add_column(conn, "scenario", "gameplay_state_json", "TEXT")
-            _migrate_add_column(conn, "ending_room", "scope_fingerprint", "TEXT")
-            _migrate_add_column(conn, "ending_room", "current_phase", "TEXT DEFAULT 'OPENING'")
-            _migrate_add_column(
-                conn,
-                "ending_room",
-                "memory_partition_version",
-                "INTEGER DEFAULT 2",
-            )
-            _migrate_add_column(conn, "ending_room_participant", "worldline_echo_key", "TEXT")
-            _migrate_add_column(
-                conn,
-                "ending_room_thread",
-                "interaction_mode",
-                "TEXT DEFAULT 'archivist_route'",
-            )
-            _migrate_add_column(conn, "ending_room_thread", "addressed_agent_ids_json", "TEXT")
-            _migrate_add_column(conn, "ending_room_thread", "question_anchor_ids_json", "TEXT")
-            _migrate_add_column(conn, "ending_room_turn", "thread_id", "TEXT")
-            _migrate_add_column(conn, "ending_room_turn", "source", "TEXT DEFAULT 'auto_recap'")
-            _migrate_add_column(
-                conn,
-                "ending_room_turn",
-                "interaction_mode",
-                "TEXT DEFAULT 'auto_recap'",
-            )
-            _migrate_add_column(conn, "ending_room_turn", "memory_partition_id", "TEXT")
-            _migrate_add_column(conn, "ending_room_turn", "addressed_agent_ids_json", "TEXT")
-            _migrate_add_column(conn, "ending_room_turn", "question_anchor_ids_json", "TEXT")
-            _migrate_add_column(
-                conn,
-                "scenario_campaign_log",
-                "objective_completed_count",
-                "INTEGER DEFAULT 0",
-            )
-            _migrate_add_column(
-                conn,
-                "scenario_campaign_log",
-                "objective_total_count",
-                "INTEGER DEFAULT 0",
-            )
-            _migrate_add_column(conn, "scenario_campaign_log", "commitment_outcome", "TEXT")
-            _migrate_add_column(conn, "debate_prediction", "is_counterplay", "INTEGER DEFAULT 0")
-            _migrate_add_column(conn, "debate_prediction", "counterplay_phase", "TEXT")
-            _migrate_add_column(conn, "debate_prediction", "counterplay_variant", "TEXT")
-            _migrate_add_column(conn, "replay_artifact", "owner_user_id", "TEXT")
-            _migrate_add_column(conn, "replay_artifact", "source_scenario_id", "TEXT")
-            _migrate_add_column(conn, "debate", "user_id", "TEXT DEFAULT 'anonymous'")
+            for table_name, column_name, column_type in _LIGHTWEIGHT_ADDITIVE_COLUMNS:
+                _migrate_add_column(conn, table_name, column_name, column_type)
             try:
                 _migrate_repair_debate_argument_unit_unique_constraint(conn)
             except Exception as exc:
@@ -714,10 +700,7 @@ def _migrate_add_column(cursor, table: str, column: str, col_type: str):
             not _SAFE_IDENTIFIER.match(token)
             and not token.isdigit()
             and not (
-                len(token) >= 2
-                and token[0] == "'"
-                and token[-1] == "'"
-                and "'" not in token[1:-1]
+                len(token) >= 2 and token[0] == "'" and token[-1] == "'" and "'" not in token[1:-1]
             )
         ):
             raise ValueError(f"Unsafe SQL type token rejected: {token!r}")
@@ -823,12 +806,8 @@ def _migrate_repair_debate_argument_unit_unique_constraint(cursor) -> None:
         return
 
     unique_sets = _migrate_list_unique_index_columns(cursor, "debate_argument_unit")
-    has_target_constraint = (
-        _DEBATE_ARGUMENT_UNIT_TARGET_UNIQUE_COLUMNS in unique_sets
-    )
-    has_legacy_constraint = (
-        _DEBATE_ARGUMENT_UNIT_LEGACY_UNIQUE_COLUMNS in unique_sets
-    )
+    has_target_constraint = _DEBATE_ARGUMENT_UNIT_TARGET_UNIQUE_COLUMNS in unique_sets
+    has_legacy_constraint = _DEBATE_ARGUMENT_UNIT_LEGACY_UNIQUE_COLUMNS in unique_sets
     if has_target_constraint and not has_legacy_constraint:
         return
 
@@ -905,9 +884,7 @@ def _migrate_normalize_enum_values(cursor, table: str, column: str, enum_cls: ty
             raise ValueError(f"Unsafe SQL identifier rejected: {identifier!r}")
 
     value_to_name = {
-        str(member.value): member.name
-        for member in enum_cls
-        if str(member.value) != member.name
+        str(member.value): member.name for member in enum_cls if str(member.value) != member.name
     }
     for raw_value, canonical_name in value_to_name.items():
         if not _SAFE_IDENTIFIER.match(raw_value) or not _SAFE_IDENTIFIER.match(canonical_name):

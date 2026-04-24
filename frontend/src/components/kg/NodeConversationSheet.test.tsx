@@ -425,6 +425,18 @@ describe('NodeConversationSheet — a11y', () => {
     );
   });
 
+  it('uses result-context copy when opened from the result conversation widget', () => {
+    const { getByTestId, getByText } = renderSheet({ showResultDeepenHint: true });
+    const sheet = getByTestId('node-conversation-sheet');
+
+    expect(sheet).toHaveAccessibleName('Result conversation');
+    expect(sheet).toHaveAccessibleDescription(
+      'Ask about this result and review the streamed reply here.',
+    );
+    expect(getByText('Ask about this result')).toBeInTheDocument();
+    expect(getByText('What drove this ending?')).toBeInTheDocument();
+  });
+
   it('does not emit Radix dialog title/description accessibility warnings on render', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 

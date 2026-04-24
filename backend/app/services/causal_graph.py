@@ -367,6 +367,9 @@ def _add_edge_if_missing(
     edge_type: str,
     weight: float | None,
     label: str | None = None,
+    confidence_tier: str | None = None,
+    source_ref: str | None = None,
+    source_round_number: int | None = None,
 ) -> None:
     signature = _edge_signature(source_node_id, target_node_id, edge_type, label)
     if signature in existing_edge_signatures:
@@ -378,6 +381,9 @@ def _add_edge_if_missing(
         edge_type=edge_type,
         weight=weight,
         label=label,
+        confidence_tier=confidence_tier,
+        source_ref=source_ref,
+        source_round_number=source_round_number,
     ))
     existing_edge_signatures.add(signature)
 
@@ -703,17 +709,21 @@ def append_round_nodes(
                 if node.node_type == "fork"
             }
 
-            existing_edges = session.exec(
-                select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id)
-            ).all()
+            existing_edges_stmt = select(
+                GraphEdge.source_node_id,
+                GraphEdge.target_node_id,
+                GraphEdge.edge_type,
+                GraphEdge.label,
+            ).where(GraphEdge.snapshot_id == snapshot.id)
+            existing_edge_rows = session.exec(existing_edges_stmt).all()
             existing_edge_signatures = {
                 _edge_signature(
-                    edge.source_node_id,
-                    edge.target_node_id,
-                    edge.edge_type,
-                    edge.label,
+                    row[0],
+                    row[1],
+                    row[2],
+                    row[3],
                 )
-                for edge in existing_edges
+                for row in existing_edge_rows
             }
 
             for agent_id, record in latest_record_by_agent.items():
@@ -773,6 +783,7 @@ def append_round_nodes(
                             target_node_id=record["node_id"],
                             edge_type="temporal",
                             weight=0.5,
+                            source_round_number=round_number,
                         )
 
             if latest_record_by_agent:
@@ -800,6 +811,7 @@ def append_round_nodes(
                         target_node_id=next_node_id,
                         edge_type="temporal",
                         weight=0.5,
+                        source_round_number=round_number,
                     )
 
             for shift_scope, shift_record in desired_shift_records.items():
@@ -830,6 +842,8 @@ def append_round_nodes(
                     edge_type="caused",
                     weight=0.8,
                     label="stance shift",
+                    confidence_tier="medium",
+                    source_round_number=round_number,
                 )
 
             if fork_event is not None:
@@ -918,6 +932,8 @@ def append_round_nodes(
                         edge_type="caused",
                         weight=1.0,
                         label="triggered fork",
+                        confidence_tier="high",
+                        source_round_number=round_number,
                     )
 
             session.commit()
@@ -1007,6 +1023,12 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
                     "type": e.edge_type,
                     "weight": e.weight,
                     "label": e.label,
+                    "evidence": {
+                        "confidence_tier": e.confidence_tier,
+                        "source_ref": e.source_ref,
+                        "source_round_number": e.source_round_number,
+                        "detail": e.evidence_json,
+                    } if e.confidence_tier or e.source_ref or e.source_round_number else None,
                 }
                 for e in edges
             ],

@@ -130,13 +130,13 @@ cd backend && alembic upgrade head
 - Phase 3 六大功能增强 (F1-F6)：Agent 身份+跨场景记忆、世界线因果图谱、用户自建 Agent、蝴蝶效应回溯、涌现阵营系统、辩论论证图谱
 - 13 个新 ORM 模型分布在 `agent_identity.py`、`graph.py`、`checkpoint.py`，3 个 Alembic 迁移 (014-016)
 - 6 个新后端服务：`persona_workshop`、`agent_identity`、`causal_graph`、`replay`、`factions`、`debate_argument_map`
-- 2 个新 API router：`/api/agents/*`、`/api/graphs/*`；`/api/capabilities` 升级为 7-key 通用 capability registry
+- 2 个新 API router：`/api/agents/*`、`/api/graphs/*`；`/api/capabilities` 当前是 11-key 通用 capability registry（`web_search` + 10 个功能开关）
 - 4 个新前端页面：`AgentWorkshopView`、`AgentLibrary`、`CausalReviewView`、`CompareDigestView`
 - 5 个新前端组件：`AgentAttachPanel`、`ArgumentMap`（已 i18n 化）、`CounterfactualPanel`、`FactionTimeline`、`ReturningBadge`（已集成到 ResultView + capability gate）
 - `simulator.py` 新增 4 个非阻塞 hook：因果图谱、阵营检测+WS 事件发射、检查点写入、身份生命周期（场景结束时写入 growth_event + identity_memory，`asyncio.to_thread` 包装），均受 `FEATURE_*` 环境变量控制
 - `debate.py` 新增论证抽取 hook (每 turn 后) + verdict linking (finalize 后)，受 `FEATURE_ARGUMENT_MAP` 控制
 - `helpers.py` parse 后自动调 `resolve_identity()` 回填 `agent_identity_id`，自建 Agent 替换 CROWD 槽位并同步 `parsed_context`；自建 Agent 注入需通过 ownership 校验（`user_id is not None` + `identity.user_id == user_id`）
-- 7 个 `FEATURE_*` 环境变量 (`config.py`)：`FEATURE_CUSTOM_AGENTS`/`FEATURE_AGENT_IDENTITY`/`FEATURE_CAUSAL_GRAPH`/`FEATURE_COUNTERFACTUAL_REPLAY`/`FEATURE_FACTIONS`/`FEATURE_ARGUMENT_MAP`/`FEATURE_IDENTITY_COMPACTION`，默认全 `false`，控制后端 API 404 gate + simulator/debate hook 开关 + 记忆压缩
+- 当前 Phase 3 / graph-playability 相关 `FEATURE_*` 以 `config.py` 为准：常用项包括 `FEATURE_CUSTOM_AGENTS`、`FEATURE_AGENT_IDENTITY`、`FEATURE_CAUSAL_GRAPH`、`FEATURE_GRAPH_ANALYSIS`、`FEATURE_COUNTERFACTUAL_REPLAY`、`FEATURE_FACTIONS`、`FEATURE_ARGUMENT_MAP`、`FEATURE_REPLAY_TRACE`、`FEATURE_AGENT_CONVERSATION`、`FEATURE_KG_EXPLORER`、`FEATURE_IDENTITY_COMPACTION`。多数默认 `false`，`FEATURE_COUNTERFACTUAL_REPLAY` 默认 `true`；`graph_analysis` capability 还要求 `FEATURE_CAUSAL_GRAPH=true`
 - 前端 4 个新页面均通过 `useCapabilityCheck` hook 做 capability gate；当前会复用 `/api/capabilities` 结果，并把 `loading / enabled / error` 暴露给 consumer。capability probe 失败时，前端不再默认伪装成 disabled
 - `InputView` 集成 `AgentAttachPanel`，`ResultView` 集成因果图谱链接 + `CounterfactualPanel` + `FactionTimeline`，`DebateResultView` 集成 `ArgumentMap`，均受 capabilities 控制
 - ChromaDB 双层 memory：scenario-scoped (不变) + identity-scoped (`identity_{user_id}` collection，200 条 FIFO，写入经 `identity:{user_id}` 粒度串行化锁保护)
@@ -149,7 +149,7 @@ cd backend && alembic upgrade head
 - P1-4 Graph 节点点击：`NodeDetailPanel` 组件（type/round/payload/unit details），`onNodeClick` 绑定到两个 ReactFlow 实例，selectedNode 在 re-fetch 时自动清空
 - P1-12 Identity memory compaction：`FEATURE_IDENTITY_COMPACTION` 控制，阈值超过 50 条未压缩文档时异步 LLM 摘要（fire-and-forget），压缩文档带 `source_ids_hash` 幂等指纹，FIFO eviction raw 优先于 compacted，`get_identity_memories` 过滤压缩文档（只参与语义检索不进 timeline），prompt 经 `format_untrusted_text_block` 防注入
 - P1-9 resume_from_round：`POST /api/scenario/{id}/resume` 从指定轮次续跑（clone+restore+`run_sim_background`），`Blackboard.export_snapshot()`/`from_snapshot()` 完整状态持久化，checkpoint bug fix（`get_global_summary()` → `export_snapshot()`），agent stance/emotion 仅内存恢复不改 DB，`Branch.replay_kind` 新增 `"resume"` 值，与 counterfactual 共享 3 条分支上限，resume 前先预占 runtime lock，后台任务续租 lease 到结束，避免丢锁和 orphan branch
-- 7 个 `FEATURE_*` 环境变量 (`config.py`)：原 6 个 + `FEATURE_IDENTITY_COMPACTION`，compaction 另有 3 个调参变量 (`IDENTITY_COMPACT_THRESHOLD`/`BATCH_SIZE`/`GROUP_SIZE`)
+- Identity compaction 由 `FEATURE_IDENTITY_COMPACTION` 控制，另有 3 个调参变量 (`IDENTITY_COMPACT_THRESHOLD`/`BATCH_SIZE`/`GROUP_SIZE`)
 
 ## 变更记录 (Changelog)
 

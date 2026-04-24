@@ -1561,7 +1561,7 @@ describe('ResultView campaign summary', () => {
 
   it('keeps live-only Phase 3 panels hidden in replay mode while exposing replay-safe graph analysis', async () => {
     setMockCapabilities({
-      agent_conversation: { enabled: false },
+      agent_conversation: { enabled: true },
       agent_identity: { enabled: true },
       causal_graph: { enabled: true },
       counterfactual_replay: { enabled: true },
@@ -1668,6 +1668,8 @@ describe('ResultView campaign summary', () => {
 
     expect(await screen.findByText('result.title')).toBeInTheDocument();
     expect(screen.getAllByText('result.causal_graph_link').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('result-conversation-cta')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('result-action-conversation')).not.toBeInTheDocument();
     expect(screen.queryByText('counterfactual.title')).not.toBeInTheDocument();
     expect(screen.queryByText('resume.title')).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Faction timeline analysis' })).toBeInTheDocument();

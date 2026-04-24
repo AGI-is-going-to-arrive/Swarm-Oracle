@@ -534,7 +534,11 @@ def test_get_argument_map_runtime_repair_does_not_revive_stale_rebuttal(
                 edge_type TEXT NOT NULL,
                 weight FLOAT,
                 label TEXT,
-                payload_json TEXT
+                payload_json TEXT,
+                confidence_tier TEXT,
+                source_ref TEXT,
+                source_round_number INTEGER,
+                evidence_json TEXT
             )
             """
         )

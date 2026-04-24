@@ -352,7 +352,7 @@ HEADLESS=1 npm run e2e:capability-matrix -- --url http://127.0.0.1:19030 --headl
   - `node --test scripts/e2e-ws-contract-suite.test.mjs`：`18 passed`
   - 前端定向 vitest：`32 passed`
   - `e2e:ws:contract`：`20 passed / 1 skipped / 0 failed`
-  - `e2e:capability-matrix`：`25 passed / 5 skipped / 0 failed`
+  - `e2e:capability-matrix`：`30 passed / 0 skipped / 0 failed`
 
 ### Graph Viz / Debate Graph 定向回归
 
@@ -387,21 +387,25 @@ node scripts/e2e-phase3-batch-b.mjs desktop --url http://127.0.0.1:18930 --brows
 
 ```bash
 cd frontend
-npm test -- --run src/hooks/useG6Graph.test.ts src/pages/KGExplorerView.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ReplayView.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts src/hooks/useNodeConversationTransport.test.tsx
+npm test -- --run src/hooks/useG6Graph.test.ts src/pages/KGExplorerView.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ReplayView.test.tsx src/pages/ResultView.test.tsx src/components/ArgumentMap.test.tsx src/components/PipelineStepper.test.tsx src/components/ResultConversationWidget.test.tsx src/components/kg/NodeConversationSheet.test.tsx src/i18n/locales.test.ts src/hooks/useNodeConversationTransport.test.tsx
 npx tsc --noEmit -p tsconfig.app.json
 node --test scripts/e2e-frontend-preflight.test.mjs
 npm run build
 
 cd ../backend
 source .venv/bin/activate
-python -m pytest tests/test_conversation.py tests/test_agent_conversation.py -q
+python -m pytest tests/test_conversation.py tests/test_agent_conversation.py tests/test_graph_analysis.py tests/test_causal_graph.py tests/test_debate_argument_map.py tests/test_contract_freeze.py tests/test_fallback_migrations.py::test_init_db_repairs_no_version_bootstrap_schema_missing_graph_edge_evidence_columns tests/test_fallback_migrations.py::test_020_upgrade_deletes_duplicate_snapshot_graph_rows tests/test_fallback_migrations.py::test_020_sqlite_duplicate_snapshot_tiebreaker_matches_runtime_rowid -q
 ```
 
 - 这组 P1 前置窄集当前主要看：
   - KGExplorer 主图 / minimap / search filter / 业务 `kgType`
   - CausalReview 节点拖拽与选择
+  - CausalReview server analysis stale clear、graph-analysis 双 gate 和大图截断
+  - GraphEdge evidence 字段落库、causal graph 返回 evidence、edge tier 本地化
   - ReplayView 计数标签不泄漏 `{{count}}`
   - ResultView compare / counterfactual 跟随 `analysisBranch`
+  - ResultView replay 模式不暴露 live conversation
+  - PipelineStepper error 状态 progressbar ARIA 值仍在合法范围内
   - conversation prompt 带轻量 scenario / branch / node / graph 语境
 - 当前这条窄集之外，focused browser spot-check 也已经补过一轮：
   - detail `right: 464px`

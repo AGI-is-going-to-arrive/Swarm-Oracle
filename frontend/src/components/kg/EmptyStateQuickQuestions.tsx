@@ -13,16 +13,37 @@ import { cn } from '../../lib/utils';
 export interface EmptyStateQuickQuestionsProps {
   onSelect: (text: string) => void;
   className?: string;
+  variant?: 'node' | 'result';
 }
 
 export function EmptyStateQuickQuestions(props: EmptyStateQuickQuestionsProps) {
-  const { onSelect, className } = props;
+  const { onSelect, className, variant = 'node' } = props;
   const { t } = useTranslation();
+  const keyFor = (suffix: string) => (
+    variant === 'result'
+      ? `conversation.empty_state.result_${suffix}`
+      : `conversation.empty_state.${suffix}`
+  );
+  const fallback = variant === 'result'
+    ? {
+        title: 'Ask about this result',
+        subtitle: 'Explore why this ending landed and what could change next.',
+        quick_q_1: 'What drove this ending?',
+        quick_q_2: 'Which branch was most fragile?',
+        quick_q_3: 'What should I inspect next?',
+      }
+    : {
+        title: 'Start a conversation',
+        subtitle: 'Ask the agent a question to explore this node.',
+        quick_q_1: 'Why did this happen?',
+        quick_q_2: 'What would change if I intervened?',
+        quick_q_3: 'Who else was affected?',
+      };
 
   const pills = [
-    t('conversation.empty_state.quick_q_1'),
-    t('conversation.empty_state.quick_q_2'),
-    t('conversation.empty_state.quick_q_3'),
+    t(keyFor('quick_q_1'), { defaultValue: fallback.quick_q_1 }),
+    t(keyFor('quick_q_2'), { defaultValue: fallback.quick_q_2 }),
+    t(keyFor('quick_q_3'), { defaultValue: fallback.quick_q_3 }),
   ];
 
   return (
@@ -31,9 +52,11 @@ export function EmptyStateQuickQuestions(props: EmptyStateQuickQuestionsProps) {
       data-testid="conversation-empty-state"
     >
       <h2 className="text-base font-semibold text-text-primary">
-        {t('conversation.empty_state.title')}
+        {t(keyFor('title'), { defaultValue: fallback.title })}
       </h2>
-      <p className="text-sm text-text-muted">{t('conversation.empty_state.subtitle')}</p>
+      <p className="text-sm text-text-muted">
+        {t(keyFor('subtitle'), { defaultValue: fallback.subtitle })}
+      </p>
       <div className="flex flex-wrap gap-2 pt-1">
         {pills.map((text, i) => (
           <button

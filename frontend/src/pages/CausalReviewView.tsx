@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { buildSessionHeaders } from '../api/client';
+import { buildSessionHeaders, getGraphAnalysis, type GraphAnalysisResponse } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { ExportPanel } from '../components/ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from '../components/NodeDetailPanel';
@@ -80,6 +80,13 @@ interface GraphNodeData {
   payload: unknown;
 }
 
+interface EdgeEvidence {
+  confidence_tier: 'low' | 'medium' | 'high' | null;
+  source_ref: string | null;
+  source_round_number: number | null;
+  detail: string | null;
+}
+
 interface GraphEdgeData {
   id: string;
   source: string;
@@ -87,6 +94,7 @@ interface GraphEdgeData {
   type: string;
   weight: number | null;
   label: string | null;
+  evidence?: EdgeEvidence | null;
 }
 
 interface CausalGraphData {
@@ -229,10 +237,29 @@ function getCausalEdgeRelationLabel(
   edge: GraphEdgeData,
   t: (key: string, fallback: string) => string,
 ): string {
-  if (edge.label && edge.label.trim()) return edge.label.trim();
-  if (edge.type === 'temporal') return t('causal.edge_temporal', 'precedes');
-  return t('causal.edge_caused', 'causes');
+  let base: string;
+  if (edge.label && edge.label.trim()) base = edge.label.trim();
+  else if (edge.type === 'temporal') base = t('causal.edge_temporal', 'precedes');
+  else base = t('causal.edge_caused', 'causes');
+  const roundNum = edge.evidence?.source_round_number;
+  if (roundNum != null) {
+    return `${base} (R${roundNum})`;
+  }
+  return base;
 }
+
+function getEvidenceTierLabel(
+  tier: 'low' | 'medium' | 'high',
+  t: (key: string, fallback: string) => string,
+): string {
+  return t(`causal.evidence_${tier}`, tier);
+}
+
+const EVIDENCE_TIER_COLORS: Record<string, string> = {
+  high: '#4caf50',
+  medium: '#ffb300',
+  low: '#9e9e9e',
+};
 
 function extractAvailableBranches(data: Pick<CausalGraphData, 'nodes' | 'available_branches'>): string[] {
   const explicit = Array.isArray(data.available_branches)
@@ -309,17 +336,27 @@ function layoutDagre(
     };
   });
 
-  // C2: Edge styling from EDGE_STYLES
+  // C2: Edge styling from EDGE_STYLES + evidence badge
   const flowEdges: Edge[] = edges.map(e => {
     const style = EDGE_STYLES[e.type];
     const stroke = style?.stroke ?? CAUSAL_COLORS.decorativeEdgeFallback;
+    const tier = e.evidence?.confidence_tier;
+    const tierColor = tier ? EVIDENCE_TIER_COLORS[tier] ?? undefined : undefined;
+    const roundNum = e.evidence?.source_round_number;
+    const baseLabel = e.label ?? undefined;
+    const labelParts: string[] = [];
+    if (baseLabel) labelParts.push(baseLabel);
+    if (roundNum != null) labelParts.push(`R${roundNum}`);
+    if (tier) labelParts.push(`[${getEvidenceTierLabel(tier, t)}]`);
+    const edgeLabel = labelParts.length > 0 ? labelParts.join(' ') : undefined;
     return {
       id: e.id,
       source: e.source,
       target: e.target,
-      label: e.label ?? undefined,
+      label: edgeLabel,
       animated: !disableAnim && (style?.animated ?? false),
       style: { stroke, strokeDasharray: style?.strokeDasharray },
+      labelStyle: tierColor ? { fill: tierColor, fontSize: 10, fontWeight: 600 } : undefined,
       markerEnd: NO_ARROW_TYPES.has(e.type) ? undefined : { type: MarkerType.ArrowClosed, color: stroke },
     };
   });
@@ -346,6 +383,8 @@ export function CausalReviewView() {
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(true);
+  const { enabled: graphAnalysisEnabled } = useCapabilityCheck('graph_analysis');
+  const [serverAnalysis, setServerAnalysis] = useState<GraphAnalysisResponse | null>(null);
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
   const [sheetState, setSheetState] = useState<NodeConversationSheetState>(createClosedSheetState);
   // C5: Agent search
@@ -444,6 +483,18 @@ export function CausalReviewView() {
   }, [id, fetchGraph, enabled]);
 
   useEffect(() => {
+    setServerAnalysis(null);
+    if (!id || !graphAnalysisEnabled) return;
+    let cancelled = false;
+    getGraphAnalysis(id, branchId).then((data) => {
+      if (!cancelled) setServerAnalysis(data);
+    }).catch(() => {
+      if (!cancelled) setServerAnalysis(null);
+    });
+    return () => { cancelled = true; };
+  }, [id, branchId, graphAnalysisEnabled]);
+
+  useEffect(() => {
     if (previousGraphKeyRef.current === currentGraphKey) return;
     previousGraphKeyRef.current = currentGraphKey;
     detailRestoreFocusRef.current = null;
@@ -504,8 +555,27 @@ export function CausalReviewView() {
   const causalRelationsAriaLabel = t('causal.a11y_relations', 'Causal relations list');
 
   const guideStats = useMemo(() => {
+    if (serverAnalysis) {
+      const godNodes = serverAnalysis.god_nodes.slice(0, 5).map((gn) => ({
+        id: gn.node_id, label: gn.label, degree: gn.total_degree, type: gn.type,
+      }));
+      const typeCounts: Record<string, number> = {};
+      if (graphData) {
+        for (const node of graphData.nodes) {
+          typeCounts[node.type] = (typeCounts[node.type] ?? 0) + 1;
+        }
+      }
+      return {
+        godNodes,
+        typeCounts,
+        totalNodes: serverAnalysis.summary.total_nodes,
+        totalEdges: serverAnalysis.summary.total_edges,
+        connectedComponents: serverAnalysis.summary.connected_components,
+        density: serverAnalysis.summary.density,
+        avgDegree: serverAnalysis.summary.avg_degree,
+      };
+    }
     if (!graphData || graphData.nodes.length === 0) return null;
-    const nodeById = new Map(graphData.nodes.map((node) => [node.id, node]));
     const degreeMap = new Map<string, number>();
     for (const node of graphData.nodes) degreeMap.set(node.id, 0);
     for (const edge of graphData.edges) {
@@ -517,7 +587,7 @@ export function CausalReviewView() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
       .map(([nid, deg]) => {
-        const node = nodeById.get(nid);
+        const node = graphData.nodes.find((n) => n.id === nid);
         return { id: nid, label: node?.label ?? nid, degree: deg, type: node?.type ?? 'event' };
       });
     const typeCounts: Record<string, number> = {};
@@ -525,7 +595,7 @@ export function CausalReviewView() {
       typeCounts[node.type] = (typeCounts[node.type] ?? 0) + 1;
     }
     return { godNodes, typeCounts, totalNodes: graphData.nodes.length, totalEdges: graphData.edges.length };
-  }, [graphData]);
+  }, [graphData, serverAnalysis]);
 
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
@@ -643,12 +713,16 @@ export function CausalReviewView() {
       const source = rawNodeMap.get(edge.source);
       const target = rawNodeMap.get(edge.target);
       if (!source || !target) return null;
-      return t('causal.edge_relation', {
+      let line = t('causal.edge_relation', {
         defaultValue: '{{source}} {{relation}} {{target}}',
         source: source.label || source.key,
         relation: getCausalEdgeRelationLabel(edge, t),
         target: target.label || target.key,
       });
+      if (edge.evidence?.confidence_tier) {
+        line += ` [${t(`causal.evidence_${edge.evidence.confidence_tier}`, edge.evidence.confidence_tier)}]`;
+      }
+      return line;
     }).filter(Boolean) as string[]
   ), [filteredData?.edges, rawNodeMap, t]);
 
@@ -977,7 +1051,15 @@ export function CausalReviewView() {
               </button>
             </div>
             <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginBottom: 8 }}>
-              <span>{guideStats.totalNodes} {t('causal.nodes', 'nodes')} · {guideStats.totalEdges} {t('causal.edges', 'edges')}</span>
+              <span>{guideStats.totalNodes} {t('causal.nodes', 'nodes')} · {guideStats.totalEdges} {t('causal.edges', 'edges')}{
+                'density' in guideStats && guideStats.density != null
+                  ? ` · ${t('causal.density', 'density')}: ${(guideStats.density as number).toFixed(3)}`
+                  : ''
+              }{
+                'connectedComponents' in guideStats && guideStats.connectedComponents != null
+                  ? ` · ${t('causal.components', 'components')}: ${guideStats.connectedComponents as number}`
+                  : ''
+              }</span>
               {Object.entries(guideStats.typeCounts).map(([type, count]) => (
                 <span key={type} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <span style={{ width: 8, height: 8, borderRadius: 2, background: NODE_TYPE_COLORS_HEX[type as keyof typeof NODE_TYPE_COLORS_HEX] ?? CAUSAL_COLORS.decorativeLegendFallback, display: 'inline-block' }} />

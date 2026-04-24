@@ -964,9 +964,15 @@
       "guide_close": "关闭导读",
       "guide_key_nodes": "关键节点",
       "guide_hint": "点击任意节点查看详情，也可通过搜索栏查找指定角色。",
+      "density": "密度",
+      "components": "连通分量",
       "guide_show": "显示图谱概览",
       "empty_guide": "因果图谱在模拟运行中当代理形成跨轮次因果关系时生成。尝试运行更长或更深入的场景。",
-      "guide_full_graph": "全图"
+      "guide_full_graph": "全图",
+      "evidence_high": "高",
+      "evidence_medium": "中",
+      "evidence_low": "低",
+      "evidence_round": "来源: 第 {{round}} 轮"
     },
     "compare": {
       "title": "反事实对比",
@@ -1012,6 +1018,7 @@
       "load_map_hint": "需要时再加载交互图谱，避免首屏额外开销。",
       "open_details": "打开详情",
       "filter_status": "筛选：",
+      "evidence_source": "来源: {{source}}",
       "error": {
         "unauthorized": "无权限查看此图谱",
         "disabled": "功能未启用",
@@ -1073,6 +1080,17 @@
       "side": "立场方",
       "copy_ref": "复制引用",
       "copy_ref_failed": "复制引用失败"
+    },
+    "pipeline": {
+      "parsing": "解析中…",
+      "simulating": "推演中…",
+      "narrating": "叙述中…",
+      "done": "完成",
+      "aria_label": "模拟进度"
+    },
+    "result_conversation": {
+      "ask_oracle": "向神谕询问此结果",
+      "deepen_hint": "对话进行得不错！你可以继续聊或随时回来。"
     },
     "counterfactual": {
       "title": "假设重演",
@@ -1234,9 +1252,11 @@
     "conversation": {
       "sheet": {
         "title": "对话",
+        "result_title": "结果对话",
         "close_aria": "关闭对话",
         "scroll_region_aria": "对话记录",
         "description": "向当前节点对应的 Agent 提问，并在这里查看流式回复。",
+        "result_description": "围绕这个结果继续提问，并在这里查看流式回复。",
         "snap_handle_aria": "调整底部面板高度，当前 {{snap}}vh，点击循环切换"
       },
       "empty_state": {
@@ -1244,7 +1264,12 @@
         "subtitle": "向 Agent 提问，探索这个节点。",
         "quick_q_1": "为什么会这样？",
         "quick_q_2": "如果我介入会如何改变？",
-        "quick_q_3": "还有谁受到了影响？"
+        "quick_q_3": "还有谁受到了影响？",
+        "result_title": "围绕这个结果提问",
+        "result_subtitle": "追问这个结局为何发生，以及接下来可能如何改变。",
+        "result_quick_q_1": "是什么推动了这个结局？",
+        "result_quick_q_2": "哪个分支最脆弱？",
+        "result_quick_q_3": "接下来应检查什么？"
       },
       "streaming": {
         "aria_updated": "回复已更新",

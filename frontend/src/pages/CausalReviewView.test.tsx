@@ -73,6 +73,9 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.edge_caused': 'causes',
     'causal.edge_temporal': 'precedes',
     'causal.edge_relation': '{{source}} {{relation}} {{target}}',
+    'causal.evidence_high': 'High',
+    'causal.evidence_medium': 'Medium',
+    'causal.evidence_low': 'Low',
     'causal.error.network': 'Unable to load the causal graph. Check your connection and try again.',
     'causal.error.branch_not_found': 'The selected branch is no longer available for this scenario.',
     'causal.error.unauthorized': 'You do not have permission to view this causal graph.',
@@ -93,6 +96,9 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.edge_caused': '导致',
     'causal.edge_temporal': '先于',
     'causal.edge_relation': '{{source}} {{relation}} {{target}}',
+    'causal.evidence_high': '高',
+    'causal.evidence_medium': '中',
+    'causal.evidence_low': '低',
     'causal.error.network': '因果图谱加载失败，请检查网络后重试。',
     'causal.error.branch_not_found': '所选分支已不在当前场景中。',
     'causal.error.unauthorized': '你没有权限查看此因果图谱。',
@@ -121,8 +127,39 @@ function resolveTranslation(locale: TestLocale, key: string, fallback?: string |
   return TEST_TRANSLATIONS[locale][key] ?? key;
 }
 
+const {
+  getMockCapabilityEnabled,
+  resetMockCapabilities,
+  setMockCapabilityEnabled,
+} = vi.hoisted(() => {
+  const capabilityOverrides = new Map<string, boolean>();
+  return {
+    getMockCapabilityEnabled: (name: string) => (
+      capabilityOverrides.has(name) ? capabilityOverrides.get(name)! : name !== 'graph_analysis'
+    ),
+    resetMockCapabilities: () => capabilityOverrides.clear(),
+    setMockCapabilityEnabled: (name: string, enabled: boolean) => {
+      capabilityOverrides.set(name, enabled);
+    },
+  };
+});
+
+const graphAnalysisApiMock = vi.hoisted(() => ({
+  buildSessionHeaders: vi.fn(() => new Headers()),
+  getGraphAnalysis: vi.fn(),
+}));
+
 vi.mock('../hooks/useCapabilityCheck', () => ({
-  useCapabilityCheck: () => ({ loading: false, enabled: true, capabilities: null }),
+  useCapabilityCheck: (name: string) => ({
+    loading: false,
+    enabled: getMockCapabilityEnabled(name),
+    capabilities: null,
+  }),
+}));
+
+vi.mock('../api/client', () => ({
+  buildSessionHeaders: graphAnalysisApiMock.buildSessionHeaders,
+  getGraphAnalysis: graphAnalysisApiMock.getGraphAnalysis,
 }));
 
 vi.mock('react-i18next', async () => {
@@ -163,9 +200,11 @@ vi.mock('@xyflow/react', async () => {
       nodesDraggable,
       elementsSelectable,
       fitViewOptions,
+      edges,
     }: {
       children?: React.ReactNode;
       nodes?: Array<{ id: string; ariaLabel?: string | null; ariaRole?: string | null }>;
+      edges?: Array<{ label?: string | null }>;
       ariaLabelConfig?: Record<string, string>;
       onInit?: (instance: { fitView: typeof fitViewMock }) => void;
       onNodeClick?: (event: unknown, node: { id: string }) => void;
@@ -176,6 +215,7 @@ vi.mock('@xyflow/react', async () => {
       fitViewOptions?: { padding?: number; duration?: number };
     }) => {
       const firstNode = nodes?.[0];
+      const firstEdge = edges?.[0];
       const onInitRef = React.useRef(onInit);
       React.useEffect(() => {
         onInitRef.current?.({ fitView: fitViewMock });
@@ -190,6 +230,7 @@ vi.mock('@xyflow/react', async () => {
           data-nodes-draggable={String(nodesDraggable ?? false)}
           data-elements-selectable={String(elementsSelectable ?? false)}
           data-fit-view-options={JSON.stringify(fitViewOptions ?? null)}
+          data-edge-label={String(firstEdge?.label ?? '')}
         >
           {nodes?.map((node) => (
             <button
@@ -223,6 +264,9 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   fitViewMock.mockReset();
+  graphAnalysisApiMock.getGraphAnalysis.mockReset();
+  graphAnalysisApiMock.buildSessionHeaders.mockClear();
+  resetMockCapabilities();
   resetTestI18n();
   document.body.classList.remove('has-causal-graph');
 });
@@ -244,6 +288,14 @@ const createDeferredResponse = () => {
     reject = rej;
   });
   return { promise, resolve, reject };
+};
+
+const createDeferredGraphAnalysis = () => {
+  let resolve!: (value: unknown) => void;
+  const promise = new Promise<unknown>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 };
 
 function makeConversationSseResponse(frames: string[]): Response {
@@ -456,6 +508,42 @@ describe('CausalReviewView', () => {
     expect(closeButton).toHaveAttribute('aria-expanded', 'true');
     expect(closeButton).toHaveAttribute('aria-controls', 'causal-guide-panel');
     expect(screen.getByText('Click any node to see details. Use the search bar to filter by agent.')).toBeInTheDocument();
+  });
+
+  it('localizes evidence tier labels in rendered edge badges', async () => {
+    applyTestLocale('zh');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-evidence-tier',
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Alpha', round: 1, payload: null },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Beta', round: 2, payload: null },
+        ],
+        edges: [{
+          id: 'edge-1',
+          source: 'n1',
+          target: 'n2',
+          type: 'caused',
+          weight: 1,
+          label: null,
+          evidence: {
+            confidence_tier: 'medium',
+            source_ref: null,
+            source_round_number: 2,
+            detail: null,
+          },
+        }],
+      }),
+    } as Response);
+
+    renderView();
+
+    const flow = await screen.findByTestId('reactflow');
+    await waitFor(() => {
+      expect(flow).toHaveAttribute('data-edge-label', 'R2 [中]');
+    });
+    expect(flow).not.toHaveAttribute('data-edge-label', 'R2 [medium]');
   });
 
   it('keeps guide counts tied to graphData even when search filters the visible graph', async () => {
@@ -1253,6 +1341,98 @@ describe('CausalReviewView', () => {
     } as Response);
 
     await screen.findByTestId('reactflow');
+  });
+
+  it('clears server-side graph analysis immediately when branch selection changes', async () => {
+    const user = userEvent.setup();
+    setMockCapabilityEnabled('graph_analysis', true);
+    const branchOneResponse = createDeferredResponse();
+    const branchTwoResponse = createDeferredResponse();
+    const analysisOne = createDeferredGraphAnalysis();
+    const analysisTwo = createDeferredGraphAnalysis();
+
+    graphAnalysisApiMock.getGraphAnalysis.mockImplementation(
+      (_scenarioId: string, selectedBranchId?: string) => (
+        selectedBranchId === 'br2' ? analysisTwo.promise : analysisOne.promise
+      ),
+    );
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes('branch_id=br1')) return branchOneResponse.promise;
+      if (url.includes('branch_id=br2')) return branchTwoResponse.promise;
+      if (url === '/api/scenario/test-id') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ branches: [{ id: 'br1', title: 'Branch 1' }, { id: 'br2', title: 'Branch 2' }] }),
+        } as Response);
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/sim/test-id/causal-map?branch_id=br1']}>
+        <Routes>
+          <Route path="/sim/:id/causal-map" element={<BranchNavigationHarness />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    branchOneResponse.resolve({
+      ok: true,
+      json: async () => ({
+        id: 'g-old',
+        available_branches: ['br1', 'br2'],
+        nodes: [{ id: 'n1', key: 'e1', type: 'event', label: 'Old branch node', round: 1, payload: { branch_id: 'br1' } }],
+        edges: [],
+      }),
+    } as Response);
+    analysisOne.resolve({
+      god_nodes: [{ node_id: 'n1', label: 'Old analysis node', type: 'event', total_degree: 9 }],
+      degree_distribution: { 0: 0, 1: 0, 2: 0, 3: 0, '4+': 1 },
+      cross_branch_edges: [],
+      summary: {
+        total_nodes: 42,
+        total_edges: 3,
+        avg_degree: 0.14,
+        max_degree: 9,
+        connected_components: 2,
+        density: 0.002,
+      },
+    });
+
+    expect(await screen.findByText('Old analysis node (9)')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Go br2' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Old analysis node (9)')).not.toBeInTheDocument();
+    });
+
+    branchTwoResponse.resolve({
+      ok: true,
+      json: async () => ({
+        id: 'g-new',
+        available_branches: ['br1', 'br2'],
+        nodes: [{ id: 'n2', key: 'e2', type: 'event', label: 'New branch node', round: 1, payload: { branch_id: 'br2' } }],
+        edges: [],
+      }),
+    } as Response);
+    analysisTwo.resolve({
+      god_nodes: [{ node_id: 'n2', label: 'New analysis node', type: 'event', total_degree: 5 }],
+      degree_distribution: { 0: 0, 1: 0, 2: 0, 3: 0, '4+': 1 },
+      cross_branch_edges: [],
+      summary: {
+        total_nodes: 7,
+        total_edges: 2,
+        avg_degree: 0.28,
+        max_degree: 5,
+        connected_components: 1,
+        density: 0.048,
+      },
+    });
+
+    expect(await screen.findByText('New analysis node (5)')).toBeInTheDocument();
   });
 
   it('treats blank branch_id query params as no filter', async () => {

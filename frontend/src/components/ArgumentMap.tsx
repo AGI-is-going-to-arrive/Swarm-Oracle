@@ -61,6 +61,13 @@ interface GraphNodeRaw {
   payload: unknown;
 }
 
+interface EdgeEvidence {
+  confidence_tier: 'low' | 'medium' | 'high' | null;
+  source_ref: string | null;
+  source_round_number: number | null;
+  detail: string | null;
+}
+
 interface GraphEdgeRaw {
   id: string;
   source: string;
@@ -68,6 +75,7 @@ interface GraphEdgeRaw {
   type: string;
   weight: number | null;
   label: string | null;
+  evidence?: EdgeEvidence | null;
 }
 
 interface ArgumentMapData {
@@ -102,6 +110,20 @@ function mapBackendNode(raw: Record<string, unknown>): GraphNodeRaw {
 }
 
 function mapBackendEdge(raw: Record<string, unknown>): GraphEdgeRaw {
+  let evidence: EdgeEvidence | null = null;
+  if (raw.evidence && typeof raw.evidence === 'object' && !Array.isArray(raw.evidence)) {
+    const ev = raw.evidence as Record<string, unknown>;
+    evidence = {
+      confidence_tier: (ev.confidence_tier === 'low' || ev.confidence_tier === 'medium' || ev.confidence_tier === 'high')
+        ? ev.confidence_tier : null,
+      source_ref: typeof ev.source_ref === 'string' ? ev.source_ref : null,
+      source_round_number: typeof ev.source_round_number === 'number' ? ev.source_round_number : null,
+      detail: typeof ev.detail === 'string' ? ev.detail : null,
+    };
+    if (!evidence.confidence_tier && !evidence.source_ref && evidence.source_round_number == null) {
+      evidence = null;
+    }
+  }
   return {
     id: String(raw.id ?? ''),
     source: String(raw.source ?? raw.source_node_id ?? ''),
@@ -109,8 +131,15 @@ function mapBackendEdge(raw: Record<string, unknown>): GraphEdgeRaw {
     type: String(raw.type ?? raw.edge_type ?? ''),
     weight: typeof raw.weight === 'number' ? raw.weight : null,
     label: typeof raw.label === 'string' ? raw.label : null,
+    evidence,
   };
 }
+
+const EVIDENCE_TIER_COLORS: Record<string, string> = {
+  high: '#4caf50',
+  medium: '#ffb300',
+  low: '#9e9e9e',
+};
 
 function mapBackendUnit(raw: Record<string, unknown>): ArgumentUnit {
   return {
@@ -222,12 +251,25 @@ function getArgumentEdgeRelationLabel(
   edge: GraphEdgeRaw,
   t: (key: string, fallback: string) => string,
 ): string {
-  if (edge.label && edge.label.trim()) return edge.label.trim();
-  if (edge.type === 'rebuts') return t('argument.edge_rebuts', 'rebuts');
-  if (edge.type === 'accepted') return t('argument.edge_accepted', 'accepts');
-  if (edge.type === 'rejected') return t('argument.edge_rejected', 'rejects');
-  if (edge.type === 'unaddressed') return t('argument.edge_unaddressed', 'leaves unaddressed');
-  return t('argument.edge_supports', 'supports');
+  let base: string;
+  if (edge.label && edge.label.trim()) base = edge.label.trim();
+  else if (edge.type === 'rebuts') base = t('argument.edge_rebuts', 'rebuts');
+  else if (edge.type === 'accepted') base = t('argument.edge_accepted', 'accepts');
+  else if (edge.type === 'rejected') base = t('argument.edge_rejected', 'rejects');
+  else if (edge.type === 'unaddressed') base = t('argument.edge_unaddressed', 'leaves unaddressed');
+  else base = t('argument.edge_supports', 'supports');
+  const roundNum = edge.evidence?.source_round_number;
+  if (roundNum != null) {
+    return `${base} (R${roundNum})`;
+  }
+  return base;
+}
+
+function getEvidenceTierLabel(
+  tier: 'low' | 'medium' | 'high',
+  t: (key: string, fallback: string) => string,
+): string {
+  return t(`causal.evidence_${tier}`, tier);
 }
 
 function GraphViewportResetButton({ onReset }: { onReset: () => void }) {
@@ -405,17 +447,29 @@ function layoutArgumentDag(
     });
   }
 
-  // C2: Edge styling from EDGE_STYLES
+  // C2: Edge styling from EDGE_STYLES + evidence badge
   const flowEdges: Edge[] = rawEdges.map(e => {
     const style = EDGE_STYLES[e.type];
     const stroke = style?.stroke ?? '#888';
+    const tier = e.evidence?.confidence_tier;
+    const tierColor = tier ? EVIDENCE_TIER_COLORS[tier] ?? undefined : undefined;
+    const roundNum = e.evidence?.source_round_number;
+    const sourceRef = e.evidence?.source_ref;
+    const baseLabel = e.label ?? undefined;
+    const labelParts: string[] = [];
+    if (baseLabel) labelParts.push(baseLabel);
+    if (roundNum != null) labelParts.push(`R${roundNum}`);
+    if (tier) labelParts.push(`[${getEvidenceTierLabel(tier, t)}]`);
+    if (sourceRef) labelParts.push(`(${sourceRef})`);
+    const edgeLabel = labelParts.length > 0 ? labelParts.join(' ') : undefined;
     return {
       id: e.id,
       source: e.source,
       target: e.target,
-      label: e.label ?? undefined,
+      label: edgeLabel,
       animated: !reduceMotion && (style?.animated ?? false),
       style: { stroke, strokeDasharray: style?.strokeDasharray },
+      labelStyle: tierColor ? { fill: tierColor, fontSize: 10, fontWeight: 600 } : undefined,
       markerEnd: NO_ARROW_TYPES.has(e.type) ? undefined : { type: MarkerType.ArrowClosed, color: stroke },
     };
   });
@@ -622,12 +676,19 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
       const source = rawNodeMap.get(edge.source);
       const target = rawNodeMap.get(edge.target);
       if (!source || !target) return null;
-      return t('argument.edge_relation', {
+      let line = t('argument.edge_relation', {
         defaultValue: '{{source}} {{relation}} {{target}}',
         source: source.label,
         relation: getArgumentEdgeRelationLabel(edge, t),
         target: target.label,
       });
+      if (edge.evidence?.confidence_tier) {
+        line += ` [${t(`causal.evidence_${edge.evidence.confidence_tier}`, edge.evidence.confidence_tier)}]`;
+      }
+      if (edge.evidence?.source_ref) {
+        line += ` (${t('argument.evidence_source', { defaultValue: 'Source: {{source}}', source: edge.evidence.source_ref })})`;
+      }
+      return line;
     }).filter(Boolean) as string[]
   ), [filteredData?.edges, rawNodeMap, t]);
   const hasInteractiveGraph = visible

@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
+import { PipelineStepper } from './components/PipelineStepper';
 import { GlobalOfflineBanner } from './components/shared/GlobalOfflineBanner';
 
 const InputView = lazy(() =>
@@ -79,6 +80,7 @@ export default function App() {
           </Routes>
         </Suspense>
         <LanguageSwitcher />
+        <PipelineStepper />
       </BrowserRouter>
     </AppErrorBoundary>
   );
