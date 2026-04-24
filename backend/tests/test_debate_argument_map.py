@@ -1271,6 +1271,12 @@ def test_get_argument_map_edges_use_new_field_names():
     assert "source_node_id" not in edge
     assert "target_node_id" not in edge
     assert "edge_type" not in edge
+    assert edge["evidence"] == {
+        "confidence_tier": "medium",
+        "source_ref": "rule_extraction",
+        "source_round_number": None,
+        "detail": None,
+    }
 
 
 def test_get_argument_map_units_have_node_id():

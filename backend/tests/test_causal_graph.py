@@ -1393,6 +1393,36 @@ class TestTemporalEdges:
         temporal = [e for e in result["edges"] if e["type"] == "temporal"]
         assert len(temporal) == 1
 
+    def test_existing_temporal_edge_backfills_missing_evidence(self):
+        """Replaying a round should enrich legacy edges without duplicating them."""
+        round_one = [MockMessage(emotion="calm", agent_id="a1", id="m_backfill_1")]
+        round_two = [MockMessage(emotion="angry", agent_id="a1", id="m_backfill_2")]
+        append_round_nodes("sc_te_backfill", "br1", 1, round_one)
+        append_round_nodes("sc_te_backfill", "br1", 2, round_two)
+
+        with Session(get_engine()) as session:
+            edge = session.exec(
+                select(GraphEdge).where(
+                    GraphEdge.edge_type == "temporal",
+                    GraphEdge.source_round_number == 2,
+                )
+            ).one()
+            edge.source_round_number = None
+            session.add(edge)
+            session.commit()
+
+        append_round_nodes("sc_te_backfill", "br1", 2, round_two)
+
+        result = build_snapshot("sc_te_backfill")
+        temporal = [e for e in result["edges"] if e["type"] == "temporal"]
+        assert len(temporal) == 1
+        assert temporal[0]["evidence"] == {
+            "confidence_tier": None,
+            "source_ref": None,
+            "source_round_number": 2,
+            "detail": None,
+        }
+
     def test_first_round_no_temporal(self):
         """Round 1 should not create temporal edges."""
         m1 = [MockMessage(emotion="calm", agent_id="a1", id="m_fr1")]
@@ -1704,7 +1734,9 @@ class TestStanceShift:
     def test_replaying_round_removes_stale_shift_and_refreshes_prev_frame(self):
         """Replaying the same round should drop obsolete shift nodes and refresh stored state."""
         round_one = [MockMessage(emotion="calm", agent_id="a1", id="m_ss7")]  # 0.1
-        round_two_large_shift = [MockMessage(emotion="aggressive", agent_id="a1", id="m_ss8")]  # -0.7
+        round_two_large_shift = [
+            MockMessage(emotion="aggressive", agent_id="a1", id="m_ss8")
+        ]  # -0.7
         round_two_replayed = [MockMessage(emotion="neutral", agent_id="a1", id="m_ss8b")]  # 0.0
         round_three = [MockMessage(emotion="aggressive", agent_id="a1", id="m_ss9")]  # -0.7
 

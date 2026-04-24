@@ -1000,6 +1000,17 @@ def get_argument_map(debate_id: str) -> dict:
                     "type": e.edge_type,
                     "weight": e.weight,
                     "label": e.label,
+                    "evidence": {
+                        "confidence_tier": e.confidence_tier,
+                        "source_ref": e.source_ref,
+                        "source_round_number": e.source_round_number,
+                        "detail": e.evidence_json,
+                    } if (
+                        e.confidence_tier
+                        or e.source_ref
+                        or e.source_round_number is not None
+                        or e.evidence_json
+                    ) else None,
                 }
                 for e in edges
             ],

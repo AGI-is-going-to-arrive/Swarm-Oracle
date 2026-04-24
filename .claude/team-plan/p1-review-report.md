@@ -17,8 +17,8 @@
 |-------|------|------|
 | A: PipelineStepper | 前端全局 pipeline 进度条 | 已实现，并补 error 状态 `aria-valuenow` 回归 |
 | B: ResultConversationWidget | 结果页对话入口 | 已实现；replay 模式下不再暴露 live conversation |
-| C: Graph Analysis Service | 后端图分析服务 + API | 已实现；补双 gate、top-N 硬上限和大图截断 |
-| D: GraphEdge Evidence Contract | 边证据数据契约 | 已落库；causal graph API 已返回 evidence，debate argument-map API 仍未返回 |
+| C: Graph Analysis Service | 后端图分析服务 + API | 已实现；补双 gate、top-N 硬上限、大图截断和 branch-aware 预检 |
+| D: GraphEdge Evidence Contract | 边证据数据契约 | 已落库；causal graph 与 debate argument-map API 都会返回 evidence |
 
 ---
 
@@ -171,6 +171,42 @@
 - `ALL_GATED_KEYS` 和 fixture payload 补齐三项
 - Replay disabled 断言保持显式 unavailable surface 口径
 
+### Fix 14: Debate argument-map API 未返回 edge evidence [Warning -> Fixed]
+
+**文件**: `backend/app/services/debate_argument_map.py`, `backend/tests/test_debate_argument_map.py`
+
+**问题**: debate argument-map 边已经写入 `confidence_tier / source_ref`，但
+`get_argument_map()` 只返回 `source / target / type / weight / label`，前端拿不到证据元数据。
+
+**修复**:
+- `edges[]` 增加可选 `evidence: { confidence_tier, source_ref, source_round_number, detail }`
+- 无证据边仍返回 `evidence: null`
+- 补 `get_argument_map()` 序列化回归测试
+
+### Fix 15: graph-analysis 大场景小分支被保守截断 [Warning -> Fixed]
+
+**文件**: `backend/app/services/graph_analysis.py`, `backend/tests/test_graph_analysis.py`
+
+**问题**: 大图 SQL 预检只按 scenario 最新 snapshot 全量计数，带 `branch_id` 的小分支查询也可能提前返回 `truncated: true`。
+
+**修复**:
+- `_latest_snapshot_size()` 增加 `branch_id` 参数
+- `branch_id` 查询按 `build_snapshot()` 的 branch 可见语义计算节点/边数
+- 未带 `branch_id` 时仍按全图预检
+- 补“大 scenario、小 branch 不截断”的回归测试
+
+### Fix 16: Causal graph 旧 edge 不回填 evidence [Warning -> Fixed]
+
+**文件**: `backend/app/services/causal_graph.py`, `backend/tests/test_causal_graph.py`
+
+**问题**: `_add_edge_if_missing()` 命中旧 edge 后直接返回，重放轮次时不会把新 evidence 元数据补到旧边上。
+
+**修复**:
+- 旧 edge 命中时只补当前为 `None` 的 evidence 字段
+- 不覆盖已有非空 `confidence_tier / source_ref / source_round_number / evidence_json`
+- 保留旧迁移版本库缺 evidence 列时的基础列查询兼容
+- 补 legacy temporal edge backfill 回归测试
+
 ---
 
 ## 3. 仍未修复 / 未展开项
@@ -179,12 +215,9 @@
 
 | # | 文件 | 当前状态 | 风险 |
 |---|------|----------|------|
-| W2 | `causal_graph.py` | `_add_edge_if_missing()` 仍不会回填旧 edge 的 evidence 字段；新边会写入 evidence | Low |
-| W3 | `debate_argument_map.py` | debate 边已写 `confidence_tier / source_ref`，但 `get_argument_map()` API 仍未返回 `evidence` | Medium |
 | W4 | `graph.py` | `evidence_json` 已落库但当前仍没有真实填充值；causal graph API 会把它作为 `detail` 透出 | Low |
-| W5 | `024_graph_edge_evidence_contract.py` | SQLite downgrade 仍依赖 Alembic `batch_alter_table`；未展开 downgrade 专项压测 | Low |
+| W5 | `024_graph_edge_evidence_contract.py` | SQLite downgrade 仍依赖 Alembic `batch_alter_table`；只读探针验证 roundtrip 正常，但未补持久化专项测试 | Low |
 | W7 | `causal_graph.py` | `_scenario_locks` 仍无界；这是 P1 前已有的长期运行维护项 | Low |
-| W11 | `graph_analysis.py` | 大图 SQL 预检按 scenario 最新 snapshot 全量计数，不按 `branch_id` 精确计数；大 scenario 下小 branch 查询也可能被保守截断 | Low |
 
 ### 3.2 前端
 
@@ -209,7 +242,7 @@
 |----|------|------|
 | “020 duplicate snapshot 只是预存问题无需处理” | 已不再沿用这个判断 | 当前迁移已改为删除旧 snapshot，不再合并 stale node/edge |
 | “024 no-version SQLite 不需要额外修” | 不是误报 | 已补 lightweight additive repair 和回归测试 |
-| “CausalReviewView stale serverAnalysis 只需代码修，不需测” | 已补测试 | 生产修复和回归测试都已落地 |
+| W5 SQLite downgrade 立即需要代码修 | 暂不成立 | 只读临时 SQLite 探针显示 `024 -> 023 -> 024` 后列删除/恢复、edge 行保留、FK 检查正常；本轮未改迁移代码 |
 
 ---
 
@@ -219,14 +252,10 @@
 
 | 验证步骤 | 结果 |
 |----------|------|
-| Backend P1/迁移/契约窄集 pytest | `186 passed` |
-| Backend ruff format/check | Passed |
-| Frontend targeted vitest | `7 files passed / 237 tests passed` |
-| TypeScript noEmit | Passed |
-| `node --check scripts/e2e-capability-matrix.mjs` | Passed |
-| Playwright fixture: ResultView replay conversation | Passed；replay 页未渲染 live conversation 入口，未打 conversation start 请求 |
-| Playwright fixture: CausalReview graph analysis + localized evidence tier | Passed；server analysis 出现，中文 evidence tier 未泄漏 `[medium]` |
-| Capability matrix E2E | `30 passed / 0 skipped / 30 total` |
+| Backend graph/evidence 定向 pytest | `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q` -> `124 passed` |
+| Backend ruff check | `ruff check app/services/debate_argument_map.py app/services/graph_analysis.py app/services/causal_graph.py tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py` -> Passed |
+| Frontend ArgumentMap vitest | `npm test -- --run src/components/ArgumentMap.test.tsx` -> `50 passed` |
+| TypeScript noEmit | `npx tsc --noEmit -p tsconfig.app.json` -> Passed |
 
 未在本 session 复跑全量 backend pytest / 全量 frontend vitest；旧基线不能当作这轮 fresh 结果写入。
 
@@ -237,7 +266,6 @@
 纳入 commit：
 
 - `backend/`
-- `frontend/`
 - `.claude/team-plan/p1-review-report.md`
 - `llmdoc/` 中和当前真值相关的文档更新
 

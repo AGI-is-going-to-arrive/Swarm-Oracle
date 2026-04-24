@@ -143,7 +143,7 @@ def test_analyze_graph_caps_requested_god_nodes():
 def test_analyze_graph_short_circuits_before_serializing_oversized_snapshot(monkeypatch):
     monkeypatch.setattr(
         "app.services.graph_analysis._latest_snapshot_size",
-        lambda scenario_id: (_MAX_ANALYZABLE_NODES + 1, 0),
+        lambda scenario_id, branch_id=None: (_MAX_ANALYZABLE_NODES + 1, 0),
     )
 
     def fail_build_snapshot(*_args: object, **_kwargs: object) -> dict:
@@ -162,7 +162,7 @@ def test_analyze_graph_short_circuits_before_serializing_oversized_snapshot(monk
 def test_analyze_graph_short_circuits_on_edge_count_before_serializing(monkeypatch):
     monkeypatch.setattr(
         "app.services.graph_analysis._latest_snapshot_size",
-        lambda scenario_id: (1, _MAX_ANALYZABLE_EDGES + 1),
+        lambda scenario_id, branch_id=None: (1, _MAX_ANALYZABLE_EDGES + 1),
     )
 
     def fail_build_snapshot(*_args: object, **_kwargs: object) -> dict:
@@ -177,10 +177,35 @@ def test_analyze_graph_short_circuits_on_edge_count_before_serializing(monkeypat
     assert result["summary"]["total_edges"] == _MAX_ANALYZABLE_EDGES + 1
 
 
+def test_analyze_graph_branch_precheck_does_not_truncate_for_small_branch():
+    nodes = [
+        {"id": "small-1", "label": "Small branch root", "branch_id": "br_a"},
+        {"id": "small-2", "label": "Small branch leaf", "branch_id": "br_a"},
+    ]
+    nodes.extend(
+        {"id": f"large-{index}", "label": f"Large branch node {index}", "branch_id": "br_b"}
+        for index in range(_MAX_ANALYZABLE_NODES + 1)
+    )
+    _seed_graph(
+        "scenario-branch-precheck",
+        nodes=nodes,
+        edges=[("small-1", "small-2", "caused")],
+    )
+
+    full_result = analyze_graph("scenario-branch-precheck")
+    branch_result = analyze_graph("scenario-branch-precheck", branch_id="br_a")
+
+    assert full_result["truncated"] is True
+    assert branch_result.get("truncated") is not True
+    assert branch_result["summary"]["total_nodes"] == 2
+    assert branch_result["summary"]["total_edges"] == 1
+    assert [node["node_id"] for node in branch_result["god_nodes"]] == ["small-1", "small-2"]
+
+
 def test_analyze_graph_truncates_if_snapshot_grows_after_precheck(monkeypatch):
     monkeypatch.setattr(
         "app.services.graph_analysis._latest_snapshot_size",
-        lambda scenario_id: (1, 0),
+        lambda scenario_id, branch_id=None: (1, 0),
     )
     monkeypatch.setattr(
         "app.services.graph_analysis.build_snapshot",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter, defaultdict, deque
 from typing import Any
 
@@ -79,11 +80,76 @@ _MAX_ANALYZABLE_NODES = 5000
 _MAX_ANALYZABLE_EDGES = 20000
 
 
-def _latest_snapshot_size(scenario_id: str) -> tuple[int, int] | None:
+def _safe_parse_payload(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _branch_snapshot_size(
+    session: Session,
+    snapshot_id: str,
+    branch_id: str,
+) -> tuple[int, int]:
+    node_rows = session.exec(
+        select(GraphNode.id, GraphNode.node_type, GraphNode.payload_json).where(
+            GraphNode.snapshot_id == snapshot_id,
+        )
+    ).all()
+    node_ids: set[str] = set()
+    child_branch_fork_ids: set[str] = set()
+
+    for node_id, node_type, payload_json in node_rows:
+        payload = _safe_parse_payload(payload_json)
+        if node_type == "fork":
+            fork_branch = payload.get("branch_id")
+            children = payload.get("children")
+            child_branches = {
+                child for child in children if isinstance(child, str) and child
+            } if isinstance(children, list) else set()
+            if fork_branch == branch_id or branch_id in child_branches:
+                node_ids.add(node_id)
+                if branch_id in child_branches:
+                    child_branch_fork_ids.add(node_id)
+        elif payload.get("branch_id") == branch_id:
+            node_ids.add(node_id)
+
+    if child_branch_fork_ids:
+        provenance_source_ids = session.exec(
+            select(GraphEdge.source_node_id).where(
+                GraphEdge.snapshot_id == snapshot_id,
+                GraphEdge.target_node_id.in_(child_branch_fork_ids),
+            )
+        ).all()
+        node_ids.update(provenance_source_ids)
+
+    if not node_ids:
+        return 0, 0
+
+    edge_count = int(
+        session.exec(
+            select(func.count(GraphEdge.id)).where(
+                GraphEdge.snapshot_id == snapshot_id,
+                GraphEdge.source_node_id.in_(node_ids),
+                GraphEdge.target_node_id.in_(node_ids),
+            )
+        ).one()
+        or 0
+    )
+    return len(node_ids), edge_count
+
+
+def _latest_snapshot_size(scenario_id: str, branch_id: str | None = None) -> tuple[int, int] | None:
     with Session(get_engine()) as session:
         snapshot = _load_latest_snapshot(session, scenario_id)
         if snapshot is None:
             return None
+        if branch_id is not None:
+            return _branch_snapshot_size(session, snapshot.id, branch_id)
         node_count = int(
             session.exec(
                 select(func.count(GraphNode.id)).where(GraphNode.snapshot_id == snapshot.id)
@@ -121,7 +187,7 @@ def analyze_graph(
     top_n: int = _GOD_NODES_MAX,
 ) -> dict:
     """Analyze a causal graph snapshot in O(nodes + edges)."""
-    snapshot_size = _latest_snapshot_size(scenario_id)
+    snapshot_size = _latest_snapshot_size(scenario_id, branch_id=branch_id)
     if snapshot_size is None:
         return _empty_result()
     node_count, edge_count = snapshot_size

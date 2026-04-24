@@ -11,7 +11,7 @@ import logging
 import threading
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import inspect, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -25,6 +25,12 @@ _snapshot_index_lock = threading.Lock()
 _snapshot_index_urls: set[str] = set()
 _scenario_lock_guard = threading.Lock()
 _scenario_locks: dict[str, threading.Lock] = {}
+_GRAPH_EDGE_EVIDENCE_COLUMNS = {
+    "confidence_tier",
+    "source_ref",
+    "source_round_number",
+    "evidence_json",
+}
 
 
 # ── Heuristics ──────────────────────────────────────────
@@ -357,9 +363,21 @@ def _edge_signature(
     return (source_node_id, target_node_id, edge_type, label or "")
 
 
+def _graph_edge_supports_evidence_columns(session: Session) -> bool:
+    try:
+        columns = {
+            column["name"]
+            for column in inspect(session.get_bind()).get_columns("graph_edge")
+        }
+    except Exception:
+        logger.debug("Could not inspect graph_edge columns; assuming evidence columns exist")
+        return True
+    return _GRAPH_EDGE_EVIDENCE_COLUMNS.issubset(columns)
+
+
 def _add_edge_if_missing(
     session: Session,
-    existing_edge_signatures: set[tuple[str, str, str, str]],
+    existing_edge_signatures: dict[tuple[str, str, str, str], GraphEdge | None],
     *,
     snapshot_id: str,
     source_node_id: str,
@@ -370,11 +388,22 @@ def _add_edge_if_missing(
     confidence_tier: str | None = None,
     source_ref: str | None = None,
     source_round_number: int | None = None,
+    evidence_json: str | None = None,
 ) -> None:
     signature = _edge_signature(source_node_id, target_node_id, edge_type, label)
     if signature in existing_edge_signatures:
+        existing_edge = existing_edge_signatures[signature]
+        if existing_edge is not None:
+            if existing_edge.confidence_tier is None and confidence_tier is not None:
+                existing_edge.confidence_tier = confidence_tier
+            if existing_edge.source_ref is None and source_ref is not None:
+                existing_edge.source_ref = source_ref
+            if existing_edge.source_round_number is None and source_round_number is not None:
+                existing_edge.source_round_number = source_round_number
+            if existing_edge.evidence_json is None and evidence_json is not None:
+                existing_edge.evidence_json = evidence_json
         return
-    session.add(GraphEdge(
+    edge = GraphEdge(
         snapshot_id=snapshot_id,
         source_node_id=source_node_id,
         target_node_id=target_node_id,
@@ -384,8 +413,10 @@ def _add_edge_if_missing(
         confidence_tier=confidence_tier,
         source_ref=source_ref,
         source_round_number=source_round_number,
-    ))
-    existing_edge_signatures.add(signature)
+        evidence_json=evidence_json,
+    )
+    session.add(edge)
+    existing_edge_signatures[signature] = edge
 
 
 def derive_stance_score(message) -> float:
@@ -709,22 +740,30 @@ def append_round_nodes(
                 if node.node_type == "fork"
             }
 
-            existing_edges_stmt = select(
-                GraphEdge.source_node_id,
-                GraphEdge.target_node_id,
-                GraphEdge.edge_type,
-                GraphEdge.label,
-            ).where(GraphEdge.snapshot_id == snapshot.id)
-            existing_edge_rows = session.exec(existing_edges_stmt).all()
-            existing_edge_signatures = {
-                _edge_signature(
-                    row[0],
-                    row[1],
-                    row[2],
-                    row[3],
-                )
-                for row in existing_edge_rows
-            }
+            if _graph_edge_supports_evidence_columns(session):
+                existing_edges_stmt = select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id)
+                existing_edge_rows = session.exec(existing_edges_stmt).all()
+                existing_edge_signatures = {
+                    _edge_signature(
+                        edge.source_node_id,
+                        edge.target_node_id,
+                        edge.edge_type,
+                        edge.label,
+                    ): edge
+                    for edge in existing_edge_rows
+                }
+            else:
+                existing_edges_stmt = select(
+                    GraphEdge.source_node_id,
+                    GraphEdge.target_node_id,
+                    GraphEdge.edge_type,
+                    GraphEdge.label,
+                ).where(GraphEdge.snapshot_id == snapshot.id)
+                existing_edge_rows = session.exec(existing_edges_stmt).all()
+                existing_edge_signatures = {
+                    _edge_signature(row[0], row[1], row[2], row[3]): None
+                    for row in existing_edge_rows
+                }
 
             for agent_id, record in latest_record_by_agent.items():
                 frame = frames_by_agent.get(agent_id)
@@ -888,7 +927,7 @@ def append_round_nodes(
                         edge.edge_type,
                         edge.label,
                     )
-                    existing_edge_signatures.discard(signature)
+                    existing_edge_signatures.pop(signature, None)
                     session.delete(edge)
 
                 trigger_ids = list(fork_event.get("trigger_node_ids") or [])
