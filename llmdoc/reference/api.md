@@ -254,6 +254,8 @@
   - 不属于当前 `scenario` 的 `branch_id` 返回 `404 BRANCH_NOT_FOUND`
   - 旧 SQLite 如果还留有重复 `graph_snapshot`，运行时 repair 会保留最新 snapshot，并删除旧 snapshot 的 node/edge；返回体不再混入 stale duplicate node/edge
   - 成功返回体仍会带 `available_branches`
+- `GET /api/scenario/{id}/causal-graph` 的 `edges[]` 使用 `source / target / type / weight / label` 字段；有证据元数据时会返回
+  `evidence: { confidence_tier, source_ref, source_round_number, detail }`。旧边或无证据边的 `evidence` 可以为 `null`。重放轮次只会补齐旧边缺失的 evidence 字段，不覆盖已有非空值。
 - `GET /api/scenario/{id}/graph-analysis` 返回 `god_nodes / degree_distribution / cross_branch_edges / summary`。大图会按最新 snapshot size 做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`。带 `branch_id` 时，预检按该 branch 的可见节点/边计数；未带 `branch_id` 时仍按全图计数。
 - `POST /api/scenario/{id}/counterfactual` 当前约束：
   - scenario 状态必须是 `done`；否则返回 `409 COUNTERFACTUAL_SCENARIO_STATUS_INVALID`

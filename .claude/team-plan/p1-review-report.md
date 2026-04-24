@@ -227,7 +227,7 @@
 
 | # | 文件 | 当前状态 | 风险 |
 |---|------|----------|------|
-| W4 | `graph.py` | `evidence_json` 已落库但当前仍没有真实填充值；causal graph API 会把它作为 `detail` 透出 | Low |
+| W4 | `graph.py` | `evidence_json` 已落库但当前仍没有真实填充值；当 edge evidence 对象存在时会作为 `detail` 透出 | Low |
 | W7 | `causal_graph.py` | `_scenario_locks` 仍无界；这是 P1 前已有的长期运行维护项 | Low |
 
 ### 3.2 前端
