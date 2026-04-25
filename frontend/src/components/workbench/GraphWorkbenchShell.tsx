@@ -1,5 +1,6 @@
 import { Suspense, lazy } from 'react';
 import { useTranslation } from 'react-i18next';
+import * as Tooltip from '@radix-ui/react-tooltip';
 import type { LayoutMode } from './LayoutSwitcher';
 
 const CausalGraphBoard = lazy(() => import('./CausalGraphBoard'));
@@ -38,6 +39,7 @@ export default function GraphWorkbenchShell({
   const gridColumns = mode === 'split' ? '1fr 1fr' : '1fr';
 
   return (
+    <Tooltip.Provider delayDuration={300}>
     <div
       data-testid="graph-workbench-shell"
       style={{
@@ -108,5 +110,6 @@ export default function GraphWorkbenchShell({
         </section>
       )}
     </div>
+    </Tooltip.Provider>
   );
 }

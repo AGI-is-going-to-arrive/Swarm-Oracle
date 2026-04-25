@@ -1174,6 +1174,8 @@ export function CausalReviewView() {
                 onEdgesChange={onEdgesChange}
                 onNodeClick={onNodeClick}
                 onPaneClick={onPaneClick}
+                minZoom={0.1}
+                maxZoom={4}
                 onInit={(instance) => {
                   reactFlowRef.current = instance;
                 }}

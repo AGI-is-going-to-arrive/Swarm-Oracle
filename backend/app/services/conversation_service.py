@@ -790,11 +790,24 @@ def append_user_turn_and_reserve_assistant(
         if thread.active_turn_id:
             active_turn = session.get(AgentConversationTurn, thread.active_turn_id)
             if active_turn is not None and active_turn.status not in _ALLOWED_TERMINAL_STATES:
-                raise api_error(
-                    409,
-                    "THREAD_BUSY",
-                    "Conversation thread already has an active turn",
-                )
+                stale_cutoff = _now() - timedelta(minutes=5)
+                turn_ts = active_turn.updated_at or active_turn.created_at
+                if turn_ts.tzinfo is None:
+                    turn_ts = turn_ts.replace(tzinfo=timezone.utc)
+                if turn_ts < stale_cutoff:
+                    active_turn.status = "aborted"
+                    active_turn.error_code = "STALE_TURN_REAPED"
+                    active_turn.updated_at = _now()
+                    thread.active_turn_id = None
+                    thread.latest_status = "aborted"
+                    thread.updated_at = _now()
+                    session.commit()
+                else:
+                    raise api_error(
+                        409,
+                        "THREAD_BUSY",
+                        "Conversation thread already has an active turn",
+                    )
             if active_turn is None or active_turn.status in _ALLOWED_TERMINAL_STATES:
                 thread.active_turn_id = None
                 if active_turn is not None:
