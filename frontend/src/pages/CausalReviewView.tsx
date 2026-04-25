@@ -11,6 +11,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders, getGraphAnalysis, type GraphAnalysisResponse } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import useReducedMotion from '../hooks/useReducedMotion';
 import { ExportPanel } from '../components/ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from '../components/NodeDetailPanel';
 import GraphNodeCard from '../components/GraphNodeCard';
@@ -286,11 +287,33 @@ function extractAvailableBranches(data: Pick<CausalGraphData, 'nodes' | 'availab
 
 // ── Layout ──────────────────────────────────────────────────
 
+function buildParallelEdgeIndex(edges: GraphEdgeData[]): Map<string, number> {
+  const groupCount = new Map<string, number>();
+  const indexMap = new Map<string, number>();
+  for (const e of edges) {
+    const pairKey = [e.source, e.target].sort().join('::');
+    const count = groupCount.get(pairKey) ?? 0;
+    indexMap.set(e.id, count);
+    groupCount.set(pairKey, count + 1);
+  }
+  const result = new Map<string, number>();
+  for (const e of edges) {
+    const pairKey = [e.source, e.target].sort().join('::');
+    const total = groupCount.get(pairKey) ?? 1;
+    if (total <= 1) continue;
+    const idx = indexMap.get(e.id) ?? 0;
+    const offset = (idx - (total - 1) / 2) * 20;
+    result.set(e.id, offset);
+  }
+  return result;
+}
+
 function layoutDagre(
   nodes: GraphNodeData[],
   edges: GraphEdgeData[],
   t: (key: string, fallback: string) => string,
   compactViewport: boolean,
+  reducedMotion: boolean,
 ): { nodes: Node[]; edges: Edge[] } {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
@@ -300,7 +323,7 @@ function layoutDagre(
   for (const e of edges) g.setEdge(e.source, e.target);
   dagre.layout(g);
 
-  const disableAnim = nodes.length > PERF_ANIMATION_LIMIT;
+  const animationsDisabled = reducedMotion || nodes.length > PERF_ANIMATION_LIMIT || edges.length > PERF_ANIMATION_LIMIT;
   const tooltipDisabled = nodes.length > PERF_TOOLTIP_LIMIT;
 
   const flowNodes: Node[] = nodes.map(n => {
@@ -336,28 +359,41 @@ function layoutDagre(
     };
   });
 
-  // C2: Edge styling from EDGE_STYLES + evidence badge
+  // C2: Edge styling from EDGE_STYLES + evidence badge + parallel offset
+  const parallelOffsets = buildParallelEdgeIndex(edges);
   const flowEdges: Edge[] = edges.map(e => {
     const style = EDGE_STYLES[e.type];
     const stroke = style?.stroke ?? CAUSAL_COLORS.decorativeEdgeFallback;
-    const tier = e.evidence?.confidence_tier;
+    const hasEvidence = e.evidence != null && (
+      e.evidence.confidence_tier != null ||
+      e.evidence.source_ref != null ||
+      e.evidence.source_round_number != null ||
+      e.evidence.detail != null
+    );
+    const tier = hasEvidence ? e.evidence!.confidence_tier : null;
     const tierColor = tier ? EVIDENCE_TIER_COLORS[tier] ?? undefined : undefined;
-    const roundNum = e.evidence?.source_round_number;
+    const roundNum = hasEvidence ? e.evidence!.source_round_number : null;
     const baseLabel = e.label ?? undefined;
     const labelParts: string[] = [];
     if (baseLabel) labelParts.push(baseLabel);
     if (roundNum != null) labelParts.push(`R${roundNum}`);
     if (tier) labelParts.push(`[${getEvidenceTierLabel(tier, t)}]`);
     const edgeLabel = labelParts.length > 0 ? labelParts.join(' ') : undefined;
+    const parallelOffset = parallelOffsets.get(e.id);
     return {
       id: e.id,
       source: e.source,
       target: e.target,
       label: edgeLabel,
-      animated: !disableAnim && (style?.animated ?? false),
+      animated: animationsDisabled ? false : (style?.animated ?? false),
       style: { stroke, strokeDasharray: style?.strokeDasharray },
       labelStyle: tierColor ? { fill: tierColor, fontSize: 10, fontWeight: 600 } : undefined,
       markerEnd: NO_ARROW_TYPES.has(e.type) ? undefined : { type: MarkerType.ArrowClosed, color: stroke },
+      ...(parallelOffset != null ? {
+        data: { parallelOffset },
+        className: `causal-edge-offset-${parallelOffset > 0 ? 'pos' : parallelOffset < 0 ? 'neg' : 'zero'}`,
+        pathOptions: { offset: parallelOffset },
+      } : {}),
     };
   });
 
@@ -369,6 +405,7 @@ function layoutDagre(
 export function CausalReviewView() {
   const { t, i18n } = useTranslation();
   const isCompactViewport = useCompactGraphViewport();
+  const reducedMotion = useReducedMotion();
   const { loading: capLoading, enabled } = useCapabilityCheck('causal_graph');
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -599,8 +636,8 @@ export function CausalReviewView() {
 
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
-    return layoutDagre(filteredData.nodes, filteredData.edges, translate, isCompactViewport);
-  }, [filteredData, isCompactViewport, isNonInteractiveFallback, translate]);
+    return layoutDagre(filteredData.nodes, filteredData.edges, translate, isCompactViewport, reducedMotion);
+  }, [filteredData, isCompactViewport, isNonInteractiveFallback, translate, reducedMotion]);
 
   const layoutSignature = useMemo(() => (
     `${layoutResult.nodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutResult.edges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
@@ -768,12 +805,22 @@ export function CausalReviewView() {
     const raw = rawNodeMap.get(nodeId);
     if (!raw) return;
     detailRestoreFocusRef.current = triggerElement?.isConnected ? triggerElement : null;
+    const adjacentEvidence = (filteredData?.edges ?? [])
+      .filter(e => e.source === nodeId || e.target === nodeId)
+      .filter(e => e.evidence != null && (
+        e.evidence.confidence_tier != null ||
+        e.evidence.source_ref != null ||
+        e.evidence.source_round_number != null ||
+        e.evidence.detail != null
+      ))
+      .map(e => e.evidence!);
     setSelectedNode({
       id: raw.id,
       label: raw.label || raw.key,
       type: raw.type,
       round: raw.round,
       payload: raw.payload,
+      ...(adjacentEvidence.length > 0 ? { evidenceList: adjacentEvidence } : {}),
     });
     if (isCompactViewport) {
       setSheetState((prev) => (prev.open ? { ...prev, open: false } : prev));
@@ -795,7 +842,7 @@ export function CausalReviewView() {
         roundNumber: raw.round,
       },
     });
-  }, [rawNodeMap, id, isCompactViewport]);
+  }, [rawNodeMap, filteredData, id, isCompactViewport]);
 
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
     const triggerElement = event.target instanceof Element
@@ -847,6 +894,17 @@ export function CausalReviewView() {
 
   return (
     <Tooltip.Provider delayDuration={300}>
+      <style>{`
+        @media (prefers-reduced-motion: reduce) {
+          .causal-review-shell .react-flow__node,
+          .causal-review-shell .react-flow__edge {
+            transition: none !important;
+          }
+          .causal-review-shell .react-flow__edge path {
+            transition: none !important;
+          }
+        }
+      `}</style>
       <div
         style={{
           height: isCompactViewport ? 'auto' : '100dvh',

@@ -96,7 +96,8 @@ npm run test:watch # vitest (watch mode)
 | `result/HookSummaryPanel.tsx` | 生成物快览卡片 (5 hook 状态汇总: causal/factions/checkpoints/identity/argument_map, branchId 透传) |
 | `ReturningBadge.tsx` | 跨场景回归标记 (已集成到 ResultView + capability gate, Phase 3 F1) |
 | `ExportPanel.tsx` | Graph 导出面板 (PNG html2canvas + SVG foreignObject clone, P1-3) |
-| `NodeDetailPanel.tsx` | Graph 节点详情侧面板 (type/round/payload/unit, P1-4) |
+| `NodeDetailPanel.tsx` | Graph 节点详情侧面板 (type/round/payload/unit, P1-4)；新增边级 evidence 渲染 (confidence_tier 徽章 + source_ref + source_round_number + detail，detail 按码点 `Array.from` 截断 200，支持 evidence 单条 / evidenceList 多条) |
+| `workbench/KGGraphBoard.tsx` | KG 工作台主体 (搜索 / 类型 chips 过滤 / 缩放控件 / 小地图 / SR fallback table / 移动 200 节点 aria-live 截断提示) |
 
 ### `src/game/` -- Phaser 游戏引擎
 
@@ -142,6 +143,8 @@ npm run test:watch # vitest (watch mode)
 | `useCapabilityCheck.ts` | Phase 3 capability gate hook；复用 `/api/capabilities` 结果，consumer 可区分 `loading / enabled / error`，disabled 页面不再把 probe 失败伪装成关功能 |
 | `useScenarioGraph.ts` | 共享图谱数据 fetch (requestId 防竞态, inflightRequests Map 去重, 按 scenarioId+branchId 缓存) |
 | `useHookSummary.ts` | 聚合 hook 状态 fetch (5 key: causal_graph/factions/checkpoints/identity/argument_map, branchId 参数用于 faction-timeline) |
+| `useG6Graph.ts` | G6 Graph 生命周期封装；除 onNodeClick / onBeforeDestroy 外新增 onNodeHover / onNodeLeave / onEdgeClick / onEdgeHover / onEdgeLeave 五个事件 handler，自动 on/off 注册与清理 |
+| `useReducedMotion.ts` | `prefers-reduced-motion: reduce` 媒体查询订阅；ArgumentMap、CausalReviewView 等共享同一份实现 |
 
 ### `src/lib/` -- 工具函数库
 
@@ -154,6 +157,7 @@ npm run test:watch # vitest (watch mode)
 | 分享 | `shareEnvelope.ts`, `challengeShare.ts`, `copyText.ts`, `permalink.ts` |
 | 排版 | `textLayout/pretext.ts`, `textLayout/textOverflowPredictor.ts`, `textLayout/oracleTranscriptLayout.ts`, `textLayout/inputPredict.ts`, `textLayout/canvasTextPredict.ts` |
 | 其他 | `apiErrorMessage.ts`, `dailyChallenge.ts`, `directorIdentity.ts`, `directorObjectives.ts`, `gameplayContract.ts`, `gameplayProfileCatalog.ts`, `llmProviderPolicy.ts`, `predictionBetting.ts`, `replayCodec.ts`, `roundtableSelection.ts`, `runtimePreset.ts`, `wsDebug.ts` |
+| 图谱 | `g6Layouts.ts`, `graphTokens.ts`, `kgGraphConfig.ts` (KG G6 配置工厂: `buildKgG6Options` + `toKgG6Data` + `computeNodeSize` + `getKGNodeStyle/getKGEdgeStyle`，KGGraphBoard 与 KGExplorerView 共用；`toKgG6Data` mobile + 节点 > 200 时截断并通过 `truncatedFromCount` 把原始数量回传给上层) |
 
 ### `src/i18n/` -- 国际化
 
@@ -370,6 +374,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-25 | KG 工作台收口 + 边级 evidence + 共享 hook 抽离 | 新增 `lib/kgGraphConfig.ts` (`buildKgG6Options` / `toKgG6Data` / `computeNodeSize` / `getKGNodeStyle/getKGEdgeStyle` + 常量)，KGGraphBoard 与 KGExplorerView 共用同一份配置工厂；`KGGraphBoard.tsx` 补完整搜索 / 类型 chips / 缩放控件 / 小地图 / SR fallback table / 移动 200 节点 aria-live 截断提示 (`kg_graph_board.mobile_truncate_notice`)；`useG6Graph` 新增 5 个事件 handler (onNodeHover / onNodeLeave / onEdgeClick / onEdgeHover / onEdgeLeave)，每个独立 useEffect 安全 on/off；抽 `useReducedMotion` 共享 hook，ArgumentMap 与 CausalReviewView 复用；`NodeDetailPanel` 新增边级 evidence 渲染（confidence_tier 徽章 + source_ref + source_round_number + detail，detail 按 `Array.from` 码点截断 200 防 surrogate pair 劈开，支持 evidence 单条 + evidenceList 多条）；`CausalReviewView` 加 `buildParallelEdgeIndex` 平行边偏移 + `reducedMotion` 控制动画 + nodes / edges > `PERF_ANIMATION_LIMIT` 强制关动画 + 节点点击聚合相邻边 evidence 列表传给 NodeDetailPanel；`KGExplorerView` 重构复用 `buildKgG6Options`，去掉内联 G6 options；`ArgumentMap` 切换到共享 `useReducedMotion`；i18n 新增 18 keys (`kg_graph_board.*` 10 + `node_detail.evidence_*` 8)，en/zh parity `1308 = 1308`；新测试文件 `lib/kgGraphConfig.test.ts` (39) / `hooks/useG6Graph.test.ts` (22) / `hooks/useReducedMotion.test.ts` (6) / `components/workbench/KGGraphBoard.test.tsx` (13)，并扩展 `NodeDetailPanel.test.tsx` (24) / `ArgumentMap.test.tsx` (63) / `CausalReviewView.test.tsx` (68) / `i18n/locales.test.ts` (15)；fresh frontend 全量 `152 files, 1577 tests, 0 failed`；`tsc -b` + `vite build` 通过 |
 | 2026-04-25 | P2 深度审查 + 修复 | P2-1 WorkbenchView (Causal/Split/KG 三 tab + compact 降级)；P2-2 FactionForceGraph (G6 力导向图 + sr-only 回退)；P2-3 HookSummaryPanel (5 hook 状态卡片 + branchId 透传)；P2-4 ArgumentMap 搜索/过滤/拖拽控件；useScenarioGraph + useHookSummary 两个新 hook；审查修复 8 P1：getFactionRelations URL 路径修正、useHookSummary branchId 参数透传解决 faction-timeline 422、WorkbenchView KG 模式加 causal_graph 依赖、LayoutSwitcher prefers-reduced-motion guard、FactionForceGraph sr-only 屏幕阅读器回退、HookSummaryPanel retry aria-label、slider scrub 测试补全、FactionTimeline mock prop 完整性修复；i18n 新增 12 keys (retry_for + 5 sr-only + 6 workbench/force-graph)；fresh baseline: `149 files, 1491 tests, 0 failed`；tsc + build + i18n parity 全通过；Playwright 实测 ResultView/WorkbenchView/HookSummaryPanel/i18n/mobile 全通过 |
 | 2026-04-23 | capability gate / replay / compare / kg / faction 状态面收口 | `useCapabilityCheck` 当前会复用 `/api/capabilities` 请求，并把 `loading / enabled / error / reload` 暴露给 consumer；`ReplayView` capability disabled 不再 silent redirect，改成显式 unavailable surface，capability probe 失败也会给 retry；`KGExplorerView / CompareDigestView / FactionTimeline` 当前把 `disabled / load failed / empty` 分开显示，不再泄漏原始 HTTP 字符串，也不再把所有异常压成空态；首页 4 个 source family disabled tooltip 已补齐中英 locale；`ResultActionCard` 移动端没有 sheet handler 时会回退到同一条 deep-link 路径，结果页当前也只在真的拿到 `agent_identity_id` 时才渲染。真实验证：定向 vitest `64 passed`、frontend full vitest `1349 passed`、`npx tsc --noEmit -p tsconfig.app.json` 通过、`npm run build` 通过；local preview spot-check 也已确认中文 tooltip、Replay unavailable surface 和结果页新的 FactionTimeline 空态文案 |
 | 2026-04-20 | WS / capability graph 诊断收口 | `useAgentConversationWS` 改回真实 `/ws/agent-conversation/{thread_id}`，并补了 URL 断言；`e2e-ws-contract-suite.mjs` 这轮继续收口两处假失败：`case1` 改走绝对 URL + 独立 page，不再把 `/sim` `/debate` 静默 skip；raw probe 先于 live fixture 执行，避免 clean-room 下 `scenario` 被 fixture 活动污染成假 `1006`。`e2e-capability-matrix.mjs` 当前继续覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route，并把当前 live 栈未真正暴露的 `ReplayView` 记成 `skipped`。真实验证为 `node --test scripts/e2e-ws-contract-suite.test.mjs` `18 passed`、定向 vitest `32 passed`、clean-room `e2e:ws:contract` `20 passed / 1 skipped / 0 failed`、clean-room `e2e:capability-matrix` `25 passed / 5 skipped / 0 failed` |

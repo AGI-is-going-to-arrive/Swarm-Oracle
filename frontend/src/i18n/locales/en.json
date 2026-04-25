@@ -1090,6 +1090,18 @@
       "error": "Failed to load workbench",
       "unavailable": "Workbench feature is not enabled"
     },
+    "kg_graph_board": {
+      "mobile_truncate_notice": "Showing first {{cap}} of {{total}} nodes. Refine search or filter to narrow results.",
+      "search_placeholder": "Search nodes...",
+      "search_aria": "Search knowledge graph nodes",
+      "filter_aria": "Filter nodes by type",
+      "zoom_in": "Zoom in",
+      "zoom_out": "Zoom out",
+      "fit_view": "Fit view",
+      "minimap_aria": "Mini map",
+      "sr_table_aria": "Screen-reader fallback table of graph nodes",
+      "sr_caption": "Graph nodes (screen-reader fallback)"
+    },
     "agent_profile": {
       "dialog_label": "Agent Profile",
       "kind_generated": "Generated",
@@ -1140,7 +1152,15 @@
       "stance": "Stance",
       "side": "Side",
       "copy_ref": "Copy Reference",
-      "copy_ref_failed": "Failed to copy reference"
+      "copy_ref_failed": "Failed to copy reference",
+      "evidence": "Evidence",
+      "evidence_confidence": "Confidence",
+      "evidence_detail": "Detail",
+      "evidence_source_ref": "Source",
+      "evidence_source_round": "Round",
+      "evidence_tier_high": "High",
+      "evidence_tier_medium": "Medium",
+      "evidence_tier_low": "Low"
     },
     "pipeline": {
       "parsing": "Parsing…",

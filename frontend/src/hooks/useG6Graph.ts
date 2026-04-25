@@ -57,6 +57,11 @@ export interface UseG6GraphOptions {
    * emit their own CustomEvent or update local state.
    */
   onNodeClick?: (evt: unknown) => void;
+  onNodeHover?: (evt: unknown) => void;
+  onNodeLeave?: (evt: unknown) => void;
+  onEdgeClick?: (evt: unknown) => void;
+  onEdgeHover?: (evt: unknown) => void;
+  onEdgeLeave?: (evt: unknown) => void;
   /**
    * Called *before* graph.destroy() during cleanup. Use to unsubscribe
    * custom listeners registered in onReady.
@@ -72,7 +77,10 @@ export function resolvePixelRatio(userAgent: string, devicePixelRatio: number): 
 }
 
 export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
-  const { containerRef, options, onReady, onNodeClick, onBeforeDestroy } = config;
+  const {
+    containerRef, options, onReady, onNodeClick, onBeforeDestroy,
+    onNodeHover, onNodeLeave, onEdgeClick, onEdgeHover, onEdgeLeave,
+  } = config;
 
   // Strict Mode double-mount guard. First dev run aborts before mutation.
   const mountedRef = useRef(false);
@@ -173,6 +181,71 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
       }
     };
   }, [onNodeClick]);
+
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || !onNodeHover) return;
+    graph.on('node:mouseenter', onNodeHover);
+    return () => {
+      try {
+        graph.off?.('node:mouseenter', onNodeHover);
+      } catch {
+        /* noop */
+      }
+    };
+  }, [onNodeHover]);
+
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || !onNodeLeave) return;
+    graph.on('node:mouseleave', onNodeLeave);
+    return () => {
+      try {
+        graph.off?.('node:mouseleave', onNodeLeave);
+      } catch {
+        /* noop */
+      }
+    };
+  }, [onNodeLeave]);
+
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || !onEdgeClick) return;
+    graph.on('edge:click', onEdgeClick);
+    return () => {
+      try {
+        graph.off?.('edge:click', onEdgeClick);
+      } catch {
+        /* noop */
+      }
+    };
+  }, [onEdgeClick]);
+
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || !onEdgeHover) return;
+    graph.on('edge:mouseenter', onEdgeHover);
+    return () => {
+      try {
+        graph.off?.('edge:mouseenter', onEdgeHover);
+      } catch {
+        /* noop */
+      }
+    };
+  }, [onEdgeHover]);
+
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || !onEdgeLeave) return;
+    graph.on('edge:mouseleave', onEdgeLeave);
+    return () => {
+      try {
+        graph.off?.('edge:mouseleave', onEdgeLeave);
+      } catch {
+        /* noop */
+      }
+    };
+  }, [onEdgeLeave]);
 
   useEffect(() => {
     const graph = graphRef.current;

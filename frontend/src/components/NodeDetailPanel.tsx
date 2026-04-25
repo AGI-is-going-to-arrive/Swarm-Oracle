@@ -9,6 +9,13 @@ import { useTranslation } from 'react-i18next';
 import { copyText } from '../lib/copyText';
 import { NODE_TYPE_COLORS_HEX, STATUS_COLORS_HEX, isBrightGraphBackground } from '../lib/graphTokens';
 
+export interface NodeDetailEvidence {
+  confidence_tier?: string | null;
+  source_ref?: string | null;
+  source_round_number?: number | null;
+  detail?: unknown | null;
+}
+
 export interface NodeDetail {
   id: string;
   label: string;
@@ -19,6 +26,9 @@ export interface NodeDetail {
   unitText?: string;
   unitStatus?: string;
   unitTurnId?: string;
+  /** Edge-level evidence (from causal graph edges) */
+  evidence?: NodeDetailEvidence | null;
+  evidenceList?: NodeDetailEvidence[];
 }
 
 interface NodeDetailPanelProps {
@@ -232,6 +242,79 @@ export function NodeDetailPanel({
           {t('node_detail.turn', 'Turn')}: {node.unitTurnId}
         </div>
       )}
+
+      {/* Evidence (edge-level, from causal graph) */}
+      {(() => {
+        const allEvidence = node.evidenceList && node.evidenceList.length > 0
+          ? node.evidenceList
+          : node.evidence ? [node.evidence] : [];
+        const nonEmpty = allEvidence.filter(
+          ev => ev.confidence_tier != null || ev.source_ref != null || ev.source_round_number != null || ev.detail != null,
+        );
+        if (nonEmpty.length === 0) return null;
+        return (
+          <div style={{ marginBottom: '0.5rem' }}>
+            <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: 4 }}>
+              {t('node_detail.evidence', 'Evidence')}
+            </div>
+            {nonEmpty.map((ev, idx) => (
+              <div
+                key={idx}
+                style={{
+                  fontSize: '0.8rem',
+                  color: '#ccc',
+                  background: '#252540',
+                  padding: '8px',
+                  borderRadius: 4,
+                  marginBottom: idx < nonEmpty.length - 1 ? 4 : 0,
+                  lineHeight: 1.5,
+                }}
+              >
+                {ev.confidence_tier != null && (
+                  <div>
+                    <span style={{ color: '#aaa' }}>{t('node_detail.evidence_confidence', 'Confidence')}: </span>
+                    <span style={{
+                      display: 'inline-block',
+                      padding: '1px 6px',
+                      borderRadius: 3,
+                      fontSize: '0.7rem',
+                      fontWeight: 600,
+                      background: ev.confidence_tier === 'high' ? '#4caf50'
+                        : ev.confidence_tier === 'medium' ? '#ffb300'
+                        : '#9e9e9e',
+                      color: ev.confidence_tier === 'medium' ? '#111' : '#fff',
+                    }}>
+                      {t(`node_detail.evidence_tier_${ev.confidence_tier}`, String(ev.confidence_tier))}
+                    </span>
+                  </div>
+                )}
+                {ev.source_ref != null && (
+                  <div>
+                    <span style={{ color: '#aaa' }}>{t('node_detail.evidence_source_ref', 'Source')}: </span>
+                    {String(ev.source_ref)}
+                  </div>
+                )}
+                {ev.source_round_number != null && (
+                  <div>
+                    <span style={{ color: '#aaa' }}>{t('node_detail.evidence_source_round', 'Round')}: </span>
+                    {ev.source_round_number}
+                  </div>
+                )}
+                {ev.detail != null && (
+                  <div>
+                    <span style={{ color: '#aaa' }}>{t('node_detail.evidence_detail', 'Detail')}: </span>
+                    {(() => {
+                      const raw = typeof ev.detail === 'string' ? ev.detail : JSON.stringify(ev.detail);
+                      const cps = Array.from(raw);
+                      return cps.length > 200 ? cps.slice(0, 200).join('') + '…' : raw;
+                    })()}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Payload — semantic fields first, raw fallback */}
       {hasPayload && (() => {

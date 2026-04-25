@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders } from '../api/client';
+import useReducedMotion from '../hooks/useReducedMotion';
 import dagre from 'dagre';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import {
@@ -181,7 +182,6 @@ const TYPE_LABEL_I18N: Record<string, [string, string]> = {
 const PERF_TOOLTIP_LIMIT = 150;
 const NO_ARROW_TYPES = new Set(['temporal']);
 const GRAPH_COMPACT_MEDIA_QUERY = '(max-width: 768px)';
-const GRAPH_REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 
 // ── Strength Meter (P1-7) ───────────────────────────────────
 
@@ -225,10 +225,6 @@ function useMediaQueryState(query: string) {
 
 function useCompactGraphViewport() {
   return useMediaQueryState(GRAPH_COMPACT_MEDIA_QUERY);
-}
-
-function useReducedMotionPreference() {
-  return useMediaQueryState(GRAPH_REDUCED_MOTION_QUERY);
 }
 
 function getArgumentTypeLabel(type: string, t: (key: string, fallback: string) => string): string {
@@ -299,7 +295,7 @@ function GraphViewportResetButton({ onReset }: { onReset: () => void }) {
 
 export function ArgumentStrengthMeter({ units, compact }: StrengthMeterProps) {
   const { t } = useTranslation();
-  const prefersReducedMotion = useReducedMotionPreference();
+  const prefersReducedMotion = useReducedMotion();
   const total = units.length;
   if (total === 0) return null;
 
@@ -499,7 +495,7 @@ interface ArgumentSheetState {
 export function ArgumentMap({ debateId, visible, refreshTrigger, conversationScenarioId = null }: Props) {
   const { t, i18n } = useTranslation();
   const isCompactViewport = useCompactGraphViewport();
-  const prefersReducedMotion = useReducedMotionPreference();
+  const prefersReducedMotion = useReducedMotion();
   const [data, setData] = useState<ArgumentMapData | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorTier, setErrorTier] = useState<ErrorTier>(null);

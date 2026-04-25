@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 67+ 文件 / 2320 tests |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 149 文件 / 1491 tests |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 67+ 文件 / 2328 tests |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 152 文件 / 1577 tests |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -156,11 +156,18 @@ cd backend && alembic upgrade head
 - `getFactionRelations` 在 `client.ts` 中路径为 `/scenario/{id}/faction-relations`（与其他 graphs router 端点一致，无 `/graphs/` 前缀）
 - `FactionForceGraph` 和 `LayoutSwitcher` 均有 `prefers-reduced-motion` guard；`FactionForceGraph` 另有 sr-only 列表回退供屏幕阅读器使用
 - `factions.py` 新增 `faction-relations` 端点，查询参数 `branch_id`(必填) / `round_max` / `threshold` / `top_k` 均在 router 层校验
+- `graphs.py` faction-timeline 端点会先校验 `branch_id` 是否存在 + 是否属于当前 scenario，缺失或跨 scenario 返回 404 `BRANCH_NOT_FOUND`
+- KG 工作台 G6 配置抽到 `frontend/src/lib/kgGraphConfig.ts`（`buildKgG6Options` + `toKgG6Data`），`KGGraphBoard` 和 `KGExplorerView` 都复用同一份工厂；`toKgG6Data` 在 mobile + 节点数 > `KG_DEGRADE_THRESHOLDS.mobileNodes`(200) 时截断并通过 `truncatedFromCount` 把原始数量回传给上层渲染 aria-live 提示
+- `useReducedMotion` 抽到 `frontend/src/hooks/useReducedMotion.ts`，`ArgumentMap` 和 `CausalReviewView` 共享同一份实现
+- `CausalReviewView` 在 `layoutDagre` 内会按 source/target 配对计算平行边偏移（`buildParallelEdgeIndex`），`reducedMotion` 或 `nodes/edges > PERF_ANIMATION_LIMIT` 时禁用动画；节点点击会聚合相邻边的非空 evidence，作为 `evidenceList` 传给 `NodeDetailPanel`
+- `NodeDetailPanel` 现在能渲染边级 evidence（`confidence_tier` 徽章、`source_ref`、`source_round_number`、`detail`），detail 文本按码点（`Array.from`）截断 200，避免劈开 surrogate pair
+- `causal_graph.py` SQLModel 列属性访问统一用 `from sqlmodel import col` 包装（`col(Column).in_(...)` / `.desc()`），pyright SQLModel 类型告警全部清零
 
 ## 变更记录 (Changelog)
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-25 | KG 工作台收口 + 边级 evidence + 类型告警清零 | KGGraphBoard 抽 `frontend/src/lib/kgGraphConfig.ts` 工厂（`buildKgG6Options` + `toKgG6Data` + `computeNodeSize` + `getKGNodeStyle/getKGEdgeStyle`），UI 补完整搜索/类型 chips/缩放控件/小地图/SR fallback 表/移动 200 节点 aria-live 截断提示；KGExplorerView 重构复用同一工厂；`useG6Graph` 新增 5 个事件 handler（onNodeHover/onNodeLeave/onEdgeClick/onEdgeHover/onEdgeLeave）；抽 `useReducedMotion` 共享 hook（ArgumentMap + CausalReviewView 复用）；NodeDetailPanel 新增边级 evidence 渲染（confidence_tier 徽章 + source_ref + source_round_number + detail，detail 按码点截断 200，支持 evidence 单条 / evidenceList 多条）；CausalReviewView 加平行边 offset + reducedMotion 控制 + 节点点击聚合相邻边 evidence；后端 faction-timeline 端点加 branch 存在 + cross-scenario 校验（404 `BRANCH_NOT_FOUND`，+4 测试）；causal_graph.py SQLModel 类型告警全清零（`col()` 包装 10 处 desc/in_ + dict 不变性显式标注 4 处 + Sequence 1 处 + Optional member access assert 3 处），test_causal_graph.py 加 `source_round_number=0` 回归测试 + MockMessage 6 处 None 默认值类型注解；i18n 新增 18 keys（`kg_graph_board.*` 10 + `node_detail.evidence_*` 8），en/zh parity `1308 = 1308`；fresh baseline: backend `2328 passed, 2 skipped` / frontend `152 files, 1577 tests, 0 failed`；tsc + build + ruff + pyright（14 errors → 0）全部通过 |
 | 2026-04-25 | P2 深度审查 + 修复 | P2-1 WorkbenchView (Causal/Split/KG 三 tab + compact 降级)、P2-2 FactionForceGraph (G6 力导向图)、P2-3 HookSummaryPanel (5 hook 状态卡片)、P2-4 ArgumentMap 搜索/过滤/拖拽控件、useScenarioGraph + useHookSummary 两个新 hook；4-Gate 并行审查修复 8 P1：getFactionRelations URL 404 修复、useHookSummary branchId 透传、WorkbenchView KG gate 加 causal 依赖、LayoutSwitcher prefers-reduced-motion、FactionForceGraph sr-only 回退、HookSummaryPanel retry aria-label、2 个测试质量修复；后端新增 faction-relations 端点 + 306 行测试；fresh baseline: backend `2320 passed, 0 failed, 2 skipped` / frontend `149 files, 1491 tests, 0 failed`；tsc + build + i18n parity 全部通过；Playwright 浏览器实测 ResultView/WorkbenchView/HookSummaryPanel/i18n/mobile 全通过 |
 | 2026-04-25 | P0/P1 完成度评估 + 测试修复 | P0 7/7 全部通过 (Playwright 浏览器实测)；P1 全部完成 (21 fixes + 4 功能增强)；修复 `test_fallback_migrations.py` 2 处断言缺少 P1 evidence 字段；fresh baseline: backend `2304 passed, 0 failed, 2 skipped` / frontend `144 files, 1399 tests, 0 failed`；Graphify 核心图谱能力已全面吸收 (Tier B)；MiroFish 流程可见性+探索连续性已超越，工作台感属 P2-1；P2 readiness: 通过 |
 | 2026-04-23 | 前端 gated route 状态面收口 | `useCapabilityCheck` 当前会复用 `/api/capabilities` 请求，并把 probe 失败显式暴露给页面；`ReplayView` capability disabled 不再 silent redirect，改成显式 unavailable surface；`KGExplorerView / CompareDigestView / FactionTimeline` 当前把 `disabled / load failed / empty` 分开显示，不再直接泄漏原始错误，也不再把所有异常压成空态；首页 4 个 source family disabled tooltip 已补齐中英 locale。真实验证：frontend focused regression `64 passed`、frontend full vitest `1349 passed`、`npx tsc --noEmit -p tsconfig.app.json` 通过、`npm run build` 通过，local preview 也已确认 Replay unavailable surface、中文 source tooltip 和结果页新的 FactionTimeline 空态文案 |

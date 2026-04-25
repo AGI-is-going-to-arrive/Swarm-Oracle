@@ -238,6 +238,61 @@ describe('i18n locale resources', () => {
     expect(zh.translation.kg_explorer.error_fetch).toBe('当前无法加载知识图谱，请稍后重试。');
   });
 
+  it('keeps en.json and zh.json key sets in perfect parity', () => {
+    function flatKeys(obj: Record<string, unknown>, prefix = ''): string[] {
+      const keys: string[] = [];
+      for (const [k, v] of Object.entries(obj)) {
+        const path = prefix ? `${prefix}.${k}` : k;
+        if (typeof v === 'object' && v !== null) {
+          keys.push(...flatKeys(v as Record<string, unknown>, path));
+        } else {
+          keys.push(path);
+        }
+      }
+      return keys;
+    }
+    const enKeys = new Set(flatKeys(en));
+    const zhKeys = new Set(flatKeys(zh));
+    const onlyEn = [...enKeys].filter(k => !zhKeys.has(k));
+    const onlyZh = [...zhKeys].filter(k => !enKeys.has(k));
+    expect(onlyEn).toEqual([]);
+    expect(onlyZh).toEqual([]);
+  });
+
+  it('provides KGGraphBoard locale keys for workbench knowledge-graph panel', () => {
+    expect(en.translation.kg_graph_board.search_placeholder).toBe('Search nodes...');
+    expect(zh.translation.kg_graph_board.search_placeholder).toBe('搜索节点...');
+    expect(en.translation.kg_graph_board.search_aria).toBe('Search knowledge graph nodes');
+    expect(zh.translation.kg_graph_board.search_aria).toBe('搜索知识图谱节点');
+    expect(en.translation.kg_graph_board.filter_aria).toBe('Filter nodes by type');
+    expect(zh.translation.kg_graph_board.filter_aria).toBe('按类型筛选节点');
+    expect(en.translation.kg_graph_board.zoom_in).toBe('Zoom in');
+    expect(zh.translation.kg_graph_board.zoom_in).toBe('放大');
+    expect(en.translation.kg_graph_board.zoom_out).toBe('Zoom out');
+    expect(zh.translation.kg_graph_board.zoom_out).toBe('缩小');
+    expect(en.translation.kg_graph_board.fit_view).toBe('Fit view');
+    expect(zh.translation.kg_graph_board.fit_view).toBe('适配视图');
+    expect(en.translation.kg_graph_board.minimap_aria).toBe('Mini map');
+    expect(zh.translation.kg_graph_board.minimap_aria).toBe('缩略图');
+    expect(en.translation.kg_graph_board.sr_table_aria).toBe('Screen-reader fallback table of graph nodes');
+    expect(zh.translation.kg_graph_board.sr_table_aria).toBe('图谱节点的无障碍表格');
+    expect(en.translation.kg_graph_board.sr_caption).toBe('Graph nodes (screen-reader fallback)');
+    expect(zh.translation.kg_graph_board.sr_caption).toBe('图谱节点（无障碍表格）');
+  });
+
+  it('provides NodeDetailPanel evidence locale keys for graph node detail panel', () => {
+    expect(en.translation.node_detail.evidence).toBe('Evidence');
+    expect(zh.translation.node_detail.evidence).toBe('证据');
+    expect(en.translation.node_detail.evidence_confidence).toBe('Confidence');
+    expect(zh.translation.node_detail.evidence_confidence).toBe('置信度');
+    expect(en.translation.node_detail.evidence_detail).toBe('Detail');
+    expect(zh.translation.node_detail.evidence_detail).toBe('详情');
+    expect(en.translation.node_detail.evidence_source_ref).toBe('Source');
+    expect(zh.translation.node_detail.evidence_source_ref).toBe('来源');
+    expect(en.translation.node_detail.evidence_source_round).toBe('Round');
+    expect(zh.translation.node_detail.evidence_source_round).toBe('回合');
+  });
+
   it('provides shared retry, clear, submitting, and causal round labels used by graph views', () => {
     expect(en.translation.common.retry).toBe('Retry');
     expect(zh.translation.common.retry).toBe('重试');

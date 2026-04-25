@@ -151,3 +151,132 @@ describe('useG6Graph lifecycle', () => {
     expect(destroySpy.mock.calls.length - destroyStart).toBe(100);
   });
 });
+
+// ── FE-10: New event listener tests ────────────────────────
+
+function ListenerHost(props: {
+  onNodeHover?: (evt: unknown) => void;
+  onNodeLeave?: (evt: unknown) => void;
+  onEdgeClick?: (evt: unknown) => void;
+  onEdgeHover?: (evt: unknown) => void;
+  onEdgeLeave?: (evt: unknown) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  if (containerRef.current === null) {
+    containerRef.current = document.createElement('div');
+  }
+  const result = useG6Graph({
+    containerRef,
+    options: { width: 100, height: 100, data: { nodes: [{ id: 'x' }], edges: [] } },
+    onNodeClick: () => {},
+    ...props,
+  });
+  return { ...result, containerRef };
+}
+
+describe('useG6Graph event listeners', () => {
+  it('registers node:mouseenter when onNodeHover is provided', () => {
+    const handler = vi.fn();
+    renderHook(() => ListenerHost({ onNodeHover: handler }));
+    expect(onSpy).toHaveBeenCalledWith('node:mouseenter', handler);
+  });
+
+  it('unregisters node:mouseenter on unmount', () => {
+    const handler = vi.fn();
+    const { unmount } = renderHook(() => ListenerHost({ onNodeHover: handler }));
+    unmount();
+    expect(offSpy).toHaveBeenCalledWith('node:mouseenter', handler);
+  });
+
+  it('registers node:mouseleave when onNodeLeave is provided', () => {
+    const handler = vi.fn();
+    renderHook(() => ListenerHost({ onNodeLeave: handler }));
+    expect(onSpy).toHaveBeenCalledWith('node:mouseleave', handler);
+  });
+
+  it('unregisters node:mouseleave on unmount', () => {
+    const handler = vi.fn();
+    const { unmount } = renderHook(() => ListenerHost({ onNodeLeave: handler }));
+    unmount();
+    expect(offSpy).toHaveBeenCalledWith('node:mouseleave', handler);
+  });
+
+  it('registers edge:click when onEdgeClick is provided', () => {
+    const handler = vi.fn();
+    renderHook(() => ListenerHost({ onEdgeClick: handler }));
+    expect(onSpy).toHaveBeenCalledWith('edge:click', handler);
+  });
+
+  it('unregisters edge:click on unmount', () => {
+    const handler = vi.fn();
+    const { unmount } = renderHook(() => ListenerHost({ onEdgeClick: handler }));
+    unmount();
+    expect(offSpy).toHaveBeenCalledWith('edge:click', handler);
+  });
+
+  it('registers edge:mouseenter when onEdgeHover is provided', () => {
+    const handler = vi.fn();
+    renderHook(() => ListenerHost({ onEdgeHover: handler }));
+    expect(onSpy).toHaveBeenCalledWith('edge:mouseenter', handler);
+  });
+
+  it('unregisters edge:mouseenter on unmount', () => {
+    const handler = vi.fn();
+    const { unmount } = renderHook(() => ListenerHost({ onEdgeHover: handler }));
+    unmount();
+    expect(offSpy).toHaveBeenCalledWith('edge:mouseenter', handler);
+  });
+
+  it('registers edge:mouseleave when onEdgeLeave is provided', () => {
+    const handler = vi.fn();
+    renderHook(() => ListenerHost({ onEdgeLeave: handler }));
+    expect(onSpy).toHaveBeenCalledWith('edge:mouseleave', handler);
+  });
+
+  it('unregisters edge:mouseleave on unmount', () => {
+    const handler = vi.fn();
+    const { unmount } = renderHook(() => ListenerHost({ onEdgeLeave: handler }));
+    unmount();
+    expect(offSpy).toHaveBeenCalledWith('edge:mouseleave', handler);
+  });
+
+  it('does not register node:mouseenter when onNodeHover is not provided', () => {
+    renderHook(() => ListenerHost({}));
+    const mouseenterCalls = onSpy.mock.calls.filter(
+      (call: unknown[]) => call[0] === 'node:mouseenter',
+    );
+    expect(mouseenterCalls).toHaveLength(0);
+  });
+
+  it('does not register node:mouseleave when onNodeLeave is not provided', () => {
+    renderHook(() => ListenerHost({}));
+    const calls = onSpy.mock.calls.filter(
+      (call: unknown[]) => call[0] === 'node:mouseleave',
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it('does not register edge:click when onEdgeClick is not provided', () => {
+    renderHook(() => ListenerHost({}));
+    const calls = onSpy.mock.calls.filter(
+      (call: unknown[]) => call[0] === 'edge:click',
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it('does not register edge:mouseenter when onEdgeHover is not provided', () => {
+    renderHook(() => ListenerHost({}));
+    const calls = onSpy.mock.calls.filter(
+      (call: unknown[]) => call[0] === 'edge:mouseenter',
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it('does not register edge:mouseleave when onEdgeLeave is not provided', () => {
+    renderHook(() => ListenerHost({}));
+    const calls = onSpy.mock.calls.filter(
+      (call: unknown[]) => call[0] === 'edge:mouseleave',
+    );
+    expect(calls).toHaveLength(0);
+  });
+});

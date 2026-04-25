@@ -370,6 +370,63 @@ class TestGetFactionTimeline:
         assert len(tl_b2) == 1
 
 
+class TestFactionTimelineEndpoint:
+    @pytest.fixture(autouse=True)
+    def _isolate_session_and_feature(self, monkeypatch):
+        monkeypatch.setattr(settings, "SESSION_SECRET", "")
+        yield
+
+    def test_nonexistent_branch_returns_404(self, monkeypatch):
+        monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+        scenario_id, _branch_id = _seed_scenario_with_branch()
+
+        response = TestClient(app).get(
+            f"/api/scenario/{scenario_id}/faction-timeline",
+            params={"branch_id": "missing-branch"},
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "BRANCH_NOT_FOUND"
+
+    def test_cross_scenario_branch_returns_404(self, monkeypatch):
+        monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+        scenario_id, _branch_id = _seed_scenario_with_branch()
+        other_scenario_id, other_branch_id = _seed_scenario_with_branch(
+            branch_id="timeline-other-branch"
+        )
+
+        response = TestClient(app).get(
+            f"/api/scenario/{scenario_id}/faction-timeline",
+            params={"branch_id": other_branch_id},
+        )
+
+        assert other_scenario_id != scenario_id
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "BRANCH_NOT_FOUND"
+
+    def test_missing_branch_query_returns_422(self, monkeypatch):
+        monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+        scenario_id, _branch_id = _seed_scenario_with_branch()
+
+        response = TestClient(app).get(
+            f"/api/scenario/{scenario_id}/faction-timeline"
+        )
+
+        assert response.status_code == 422
+
+    def test_valid_branch_without_faction_data_returns_empty_list(self, monkeypatch):
+        monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+        scenario_id, branch_id = _seed_scenario_with_branch()
+
+        response = TestClient(app).get(
+            f"/api/scenario/{scenario_id}/faction-timeline",
+            params={"branch_id": branch_id},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == []
+
+
 # ── get_faction_relations / endpoint ─────────────────────
 
 

@@ -2251,3 +2251,133 @@ describe('CausalReviewView', () => {
     }
   });
 });
+
+// ── FE-10: Reduced motion + evidence guard tests ────────────
+
+describe('CausalReviewView animation & evidence guards', () => {
+  it('disables edge animation when useReducedMotion returns true', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(prefers-reduced-motion: reduce)',
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+    try {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-rm',
+          available_branches: ['br1'],
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'A', round: 1, payload: null },
+            { id: 'n2', key: 'e2', type: 'event', label: 'B', round: 2, payload: null },
+          ],
+          edges: [{ id: 'edge-1', source: 'n1', target: 'n2', type: 'attacks', weight: 1, label: null }],
+        }),
+      } as Response);
+
+      renderView();
+      const flowEl = await screen.findByTestId('reactflow');
+      await waitFor(() => {
+        expect(flowEl).toBeInTheDocument();
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('disables animation when node count exceeds PERF_ANIMATION_LIMIT (150)', async () => {
+    const manyNodes = Array.from({ length: 160 }, (_, i) => ({
+      id: `n${i}`,
+      key: `e${i}`,
+      type: 'event',
+      label: `Node ${i}`,
+      round: i,
+      payload: null,
+    }));
+    const manyEdges = Array.from({ length: 160 }, (_, i) => ({
+      id: `edge-${i}`,
+      source: `n${i}`,
+      target: `n${(i + 1) % 160}`,
+      type: 'caused',
+      weight: 1,
+      label: null,
+    }));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-perf',
+        available_branches: ['br1'],
+        nodes: manyNodes,
+        edges: manyEdges,
+      }),
+    } as Response);
+
+    renderView();
+    const flowEl = await screen.findByTestId('reactflow');
+    expect(flowEl).toBeInTheDocument();
+  });
+
+  it('does not render evidence badge when all edge evidence fields are null', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-no-ev',
+        available_branches: ['br1'],
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'X', round: 1, payload: null },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Y', round: 2, payload: null },
+        ],
+        edges: [{
+          id: 'edge-1',
+          source: 'n1',
+          target: 'n2',
+          type: 'caused',
+          weight: 1,
+          label: null,
+          evidence: { confidence_tier: null, source_ref: null, source_round_number: null, detail: null },
+        }],
+      }),
+    } as Response);
+
+    renderView();
+    const flowEl = await screen.findByTestId('reactflow');
+    const edgeLabel = flowEl.getAttribute('data-edge-label') ?? '';
+    expect(edgeLabel).not.toContain('[');
+    expect(edgeLabel).not.toContain('High');
+    expect(edgeLabel).not.toContain('Medium');
+    expect(edgeLabel).not.toContain('Low');
+  });
+
+  it('renders graph with evidence edges without crashing', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-ev',
+        available_branches: ['br1'],
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'A', round: 1, payload: null },
+          { id: 'n2', key: 'e2', type: 'event', label: 'B', round: 2, payload: null },
+        ],
+        edges: [{
+          id: 'edge-1',
+          source: 'n1',
+          target: 'n2',
+          type: 'caused',
+          weight: 1,
+          label: null,
+          evidence: { confidence_tier: 'high', source_ref: null, source_round_number: 3, detail: null },
+        }],
+      }),
+    } as Response);
+
+    renderView();
+    const flowEl = await screen.findByTestId('reactflow');
+    expect(flowEl).toBeInTheDocument();
+  });
+});

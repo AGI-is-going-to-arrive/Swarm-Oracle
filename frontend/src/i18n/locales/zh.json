@@ -1090,6 +1090,18 @@
       "error": "加载工作台失败",
       "unavailable": "工作台功能未启用"
     },
+    "kg_graph_board": {
+      "mobile_truncate_notice": "已显示前 {{cap}} 个节点（共 {{total}} 个）。请使用搜索或筛选缩小范围。",
+      "search_placeholder": "搜索节点...",
+      "search_aria": "搜索知识图谱节点",
+      "filter_aria": "按类型筛选节点",
+      "zoom_in": "放大",
+      "zoom_out": "缩小",
+      "fit_view": "适配视图",
+      "minimap_aria": "缩略图",
+      "sr_table_aria": "图谱节点的无障碍表格",
+      "sr_caption": "图谱节点（无障碍表格）"
+    },
     "agent_profile": {
       "dialog_label": "Agent 档案",
       "kind_generated": "自动生成",
@@ -1140,7 +1152,15 @@
       "stance": "立场",
       "side": "立场方",
       "copy_ref": "复制引用",
-      "copy_ref_failed": "复制引用失败"
+      "copy_ref_failed": "复制引用失败",
+      "evidence": "证据",
+      "evidence_confidence": "置信度",
+      "evidence_detail": "详情",
+      "evidence_source_ref": "来源",
+      "evidence_source_round": "回合",
+      "evidence_tier_high": "高",
+      "evidence_tier_medium": "中",
+      "evidence_tier_low": "低"
     },
     "pipeline": {
       "parsing": "解析中…",

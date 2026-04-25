@@ -28,17 +28,68 @@ from app.services.causal_graph import (
 class MockMessage:
     def __init__(
         self,
-        emotion="neutral",
-        diverge=None,
-        content="test",
-        agent_id="a1",
-        id="m1",
-    ):
+        emotion: str | None = "neutral",
+        diverge: str | None = None,
+        content: str = "test",
+        agent_id: str = "a1",
+        id: str | None = "m1",
+    ) -> None:
         self.emotion = emotion
         self.diverge = diverge
         self.content = content
         self.agent_id = agent_id
         self.id = id
+
+
+def _seed_snapshot_edge(
+    scenario_id: str,
+    *,
+    confidence_tier: str | None = None,
+    source_ref: str | None = None,
+    source_round_number: int | None = None,
+    evidence_json: str | None = None,
+) -> None:
+    with Session(get_engine()) as session:
+        snapshot = GraphSnapshot(
+            owner_type="scenario",
+            owner_id=scenario_id,
+            graph_kind="causal_review",
+        )
+        session.add(snapshot)
+        session.flush()
+
+        source = GraphNode(
+            snapshot_id=snapshot.id,
+            node_key=f"{scenario_id}_source",
+            node_type="event",
+            label="source",
+            round_number=1,
+            payload_json='{"branch_id":"br1","agent_id":"a1"}',
+        )
+        target = GraphNode(
+            snapshot_id=snapshot.id,
+            node_key=f"{scenario_id}_target",
+            node_type="event",
+            label="target",
+            round_number=2,
+            payload_json='{"branch_id":"br1","agent_id":"a1"}',
+        )
+        session.add_all([source, target])
+        session.flush()
+
+        session.add(
+            GraphEdge(
+                snapshot_id=snapshot.id,
+                source_node_id=source.id,
+                target_node_id=target.id,
+                edge_type="caused",
+                confidence_tier=confidence_tier,
+                source_ref=source_ref,
+                source_round_number=source_round_number,
+                evidence_json=evidence_json,
+            )
+        )
+        session.commit()
 
 
 # ── derive_stance_score ─────────────────────────────────
@@ -1155,6 +1206,63 @@ class TestBuildSnapshot:
         assert len(result["edges"]) == 1
         assert result["edges"][0]["type"] == "caused"
 
+    def test_evidence_detail_serialized_when_only_evidence_json_is_set(self):
+        _seed_snapshot_edge(
+            "sc_evidence_detail_only",
+            evidence_json='{"quote":"round evidence"}',
+        )
+
+        result = build_snapshot("sc_evidence_detail_only")
+
+        assert result["edges"][0]["evidence"] == {
+            "confidence_tier": None,
+            "source_ref": None,
+            "source_round_number": None,
+            "detail": '{"quote":"round evidence"}',
+        }
+
+    def test_evidence_omitted_when_all_evidence_fields_are_empty(self):
+        _seed_snapshot_edge("sc_evidence_empty")
+
+        result = build_snapshot("sc_evidence_empty")
+
+        assert result["edges"][0]["evidence"] is None
+
+    def test_evidence_serializes_all_fields_with_detail_passthrough(self):
+        _seed_snapshot_edge(
+            "sc_evidence_full",
+            confidence_tier="high",
+            source_ref="message:m1",
+            source_round_number=3,
+            evidence_json='{"detail":"manual evidence"}',
+        )
+
+        result = build_snapshot("sc_evidence_full")
+
+        assert result["edges"][0]["evidence"] == {
+            "confidence_tier": "high",
+            "source_ref": "message:m1",
+            "source_round_number": 3,
+            "detail": '{"detail":"manual evidence"}',
+        }
+
+    def test_evidence_serializes_when_only_source_round_number_is_zero(self):
+        # Regression: round number 0 must not be falsy-dropped by the
+        # evidence presence check (BE-1 hardening uses ``is not None``).
+        _seed_snapshot_edge(
+            "sc_evidence_round_zero",
+            source_round_number=0,
+        )
+
+        result = build_snapshot("sc_evidence_round_zero")
+
+        assert result["edges"][0]["evidence"] == {
+            "confidence_tier": None,
+            "source_ref": None,
+            "source_round_number": 0,
+            "detail": None,
+        }
+
     def test_branch_filter(self):
         m1 = [MockMessage(emotion="calm", agent_id="a1", id="m1")]
         m2 = [MockMessage(emotion="angry", agent_id="a2", id="m2")]
@@ -1344,6 +1452,7 @@ class TestBuildSnapshotSafeParse:
             snapshot = session.exec(
                 select(GraphSnapshot).where(GraphSnapshot.owner_id == "sc_sp1")
             ).first()
+            assert snapshot is not None
             fork = GraphNode(
                 snapshot_id=snapshot.id,
                 node_key="fork_corrupt",
@@ -1368,9 +1477,11 @@ class TestBuildSnapshotSafeParse:
             snapshot = session.exec(
                 select(GraphSnapshot).where(GraphSnapshot.owner_id == "sc_sp2")
             ).first()
+            assert snapshot is not None
             node = session.exec(
                 select(GraphNode).where(GraphNode.snapshot_id == snapshot.id)
             ).first()
+            assert node is not None
             node.payload_json = "CORRUPT"
             session.add(node)
             session.commit()

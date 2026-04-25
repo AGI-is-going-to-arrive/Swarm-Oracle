@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import inspect, or_
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.models.database import get_engine
 from app.models.graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
@@ -56,7 +57,7 @@ def _safe_parse_payload(s: str | None) -> dict[str, Any]:
         return {}
 
 
-def _collect_available_branches(nodes: list[GraphNode]) -> list[str]:
+def _collect_available_branches(nodes: Sequence[GraphNode]) -> list[str]:
     branch_ids: set[str] = set()
     for node in nodes:
         payload = _safe_parse_payload(node.payload_json)
@@ -225,7 +226,7 @@ def _load_latest_snapshot(session: Session, scenario_id: str) -> GraphSnapshot |
         GraphSnapshot.owner_type == "scenario",
         GraphSnapshot.owner_id == scenario_id,
         GraphSnapshot.graph_kind == "causal_review",
-    ).order_by(GraphSnapshot.created_at.desc(), GraphSnapshot.id.desc())
+    ).order_by(col(GraphSnapshot.created_at).desc(), col(GraphSnapshot.id).desc())
     return session.exec(stmt).first()
 
 
@@ -257,25 +258,27 @@ def _dedupe_graph_snapshots(session: Session) -> None:
 
         duplicate_ids = snapshot_ids[1:]
         duplicate_node_ids = session.exec(
-            select(GraphNode.id).where(GraphNode.snapshot_id.in_(duplicate_ids))
+            select(GraphNode.id).where(col(GraphNode.snapshot_id).in_(duplicate_ids))
         ).all()
 
         if duplicate_node_ids:
             duplicate_edges_stmt = select(GraphEdge).where(
                 or_(
-                    GraphEdge.snapshot_id.in_(duplicate_ids),
-                    GraphEdge.source_node_id.in_(duplicate_node_ids),
-                    GraphEdge.target_node_id.in_(duplicate_node_ids),
+                    col(GraphEdge.snapshot_id).in_(duplicate_ids),
+                    col(GraphEdge.source_node_id).in_(duplicate_node_ids),
+                    col(GraphEdge.target_node_id).in_(duplicate_node_ids),
                 )
             )
         else:
-            duplicate_edges_stmt = select(GraphEdge).where(GraphEdge.snapshot_id.in_(duplicate_ids))
+            duplicate_edges_stmt = select(GraphEdge).where(
+                col(GraphEdge.snapshot_id).in_(duplicate_ids)
+            )
         duplicate_edges = session.exec(duplicate_edges_stmt).all()
         for edge in duplicate_edges:
             session.delete(edge)
 
         duplicate_nodes = session.exec(
-            select(GraphNode).where(GraphNode.snapshot_id.in_(duplicate_ids))
+            select(GraphNode).where(col(GraphNode.snapshot_id).in_(duplicate_ids))
         ).all()
         for node in duplicate_nodes:
             session.delete(node)
@@ -534,8 +537,8 @@ def append_round_nodes(
                     select(GraphEdge).where(
                         GraphEdge.snapshot_id == snapshot.id,
                         or_(
-                            GraphEdge.source_node_id.in_(stale_event_node_ids),
-                            GraphEdge.target_node_id.in_(stale_event_node_ids),
+                            col(GraphEdge.source_node_id).in_(stale_event_node_ids),
+                            col(GraphEdge.target_node_id).in_(stale_event_node_ids),
                         ),
                     )
                 ).all()
@@ -564,8 +567,8 @@ def append_round_nodes(
                     select(GraphEdge).where(
                         GraphEdge.snapshot_id == snapshot.id,
                         or_(
-                            GraphEdge.source_node_id.in_(stale_fork_node_ids),
-                            GraphEdge.target_node_id.in_(stale_fork_node_ids),
+                            col(GraphEdge.source_node_id).in_(stale_fork_node_ids),
+                            col(GraphEdge.target_node_id).in_(stale_fork_node_ids),
                         ),
                     )
                 ).all()
@@ -708,8 +711,8 @@ def append_round_nodes(
                     select(GraphEdge).where(
                         GraphEdge.snapshot_id == snapshot.id,
                         or_(
-                            GraphEdge.source_node_id.in_(stale_shift_node_ids),
-                            GraphEdge.target_node_id.in_(stale_shift_node_ids),
+                            col(GraphEdge.source_node_id).in_(stale_shift_node_ids),
+                            col(GraphEdge.target_node_id).in_(stale_shift_node_ids),
                         ),
                     )
                 ).all()
@@ -737,6 +740,7 @@ def append_round_nodes(
                 if node.node_type == "fork"
             }
 
+            existing_edge_signatures: dict[tuple[str, str, str, str], GraphEdge | None]
             if _graph_edge_supports_evidence_columns(session):
                 existing_edges_stmt = select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id)
                 existing_edge_rows = session.exec(existing_edges_stmt).all()
@@ -932,7 +936,7 @@ def append_round_nodes(
                     valid_trigger_nodes = session.exec(
                         select(GraphNode).where(
                             GraphNode.snapshot_id == snapshot.id,
-                            GraphNode.id.in_(trigger_ids),
+                            col(GraphNode.id).in_(trigger_ids),
                         )
                     ).all()
                     valid_trigger_id_set = {
@@ -1064,7 +1068,12 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
                         "source_ref": e.source_ref,
                         "source_round_number": e.source_round_number,
                         "detail": e.evidence_json,
-                    } if e.confidence_tier or e.source_ref or e.source_round_number else None,
+                    } if (
+                        e.confidence_tier is not None
+                        or e.source_ref is not None
+                        or e.source_round_number is not None
+                        or e.evidence_json is not None
+                    ) else None,
                 }
                 for e in edges
             ],

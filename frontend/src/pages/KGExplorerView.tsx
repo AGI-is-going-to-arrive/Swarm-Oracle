@@ -23,11 +23,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import type { GraphOptions } from '@antv/g6';
 
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useG6Graph } from '../hooks/useG6Graph';
 import { comboLayout, shouldDegradeForMobile, degradeNodesForMobile } from '../lib/g6Layouts';
 import { resolveG6Tokens } from '../lib/graphTokens';
+import { buildKgG6Options } from '../lib/kgGraphConfig';
 import { buildSessionHeaders } from '../api/client';
 import { NodeConversationSheet } from '../components/kg/NodeConversationSheet';
 
@@ -245,7 +247,7 @@ export default function KGExplorerView() {
     return {
       nodes: filtered.map((n) => ({
         id: n.id,
-        type: 'circle',
+        type: 'circle' as const,
         style: { labelText: n.label, labelPlacement: 'bottom' as const },
         data: { kgType: n.type, kgRound: n.round },
       })),
@@ -296,44 +298,21 @@ export default function KGExplorerView() {
   );
 
   const tokens = useMemo(() => resolveG6Tokens(theme), [theme]);
-
-  const g6Options = useMemo(
-    () => ({
-      data: g6GraphData,
-      autoFit: 'view' as const,
-      autoResize: true,
-      layout: comboLayout(),
-      node: {
-        style: {
-          fill: tokens.nodeFill,
-          stroke: tokens.nodeStroke,
-          labelFill: tokens.label,
-          labelFontSize: 11,
-        },
-      },
-      edge: { style: { stroke: tokens.edgeStroke } },
-      background: tokens.background,
-      behaviors: ['zoom-canvas', 'drag-canvas', 'hover-activate'],
-      plugins: minimapContainer
-        ? [{
-            type: 'minimap',
-            key: 'kg-minimap',
-            container: minimapContainer,
-            size: [180, 96] as [number, number],
-            padding: 8,
-            maskStyle: { fill: 'rgba(255,255,255,0.16)', stroke: tokens.nodeStroke },
-            containerStyle: {
-              width: '100%',
-              height: '96px',
-              background: tokens.background,
-              borderRadius: '4px',
-              overflow: 'hidden',
-            },
-          }]
-        : [],
-    }),
-    [g6GraphData, minimapContainer, tokens],
+  const reducedMotion = useMemo(
+    () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
+    [],
   );
+
+  const g6Options = useMemo(() => {
+    const base = buildKgG6Options({
+      data: g6GraphData,
+      theme,
+      reducedMotion,
+      minimapContainer,
+      enableHover: true,
+    });
+    return { ...base, layout: comboLayout() } as unknown as Omit<GraphOptions, 'container' | 'renderer' | 'devicePixelRatio'>;
+  }, [g6GraphData, theme, reducedMotion, minimapContainer]);
 
   const { canvasWrapperRef } = useG6Graph({
     containerRef,

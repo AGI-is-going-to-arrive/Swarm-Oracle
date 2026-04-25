@@ -347,6 +347,90 @@ describe('NodeDetailPanel', () => {
   });
 });
 
+describe('NodeDetailPanel evidence rendering', () => {
+  it('does not render evidence section when evidence is null and evidenceList is empty', () => {
+    const node: NodeDetail = {
+      id: 'ev-null',
+      label: 'No Evidence',
+      type: 'event',
+      evidence: null,
+      evidenceList: [],
+    };
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+    expect(screen.queryByText('Evidence')).not.toBeInTheDocument();
+  });
+
+  it('does not render evidence section when all evidence fields are null', () => {
+    const node: NodeDetail = {
+      id: 'ev-empty',
+      label: 'Empty Evidence',
+      type: 'event',
+      evidence: { confidence_tier: null, source_ref: null, source_round_number: null, detail: null },
+    };
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+    expect(screen.queryByText('Evidence')).not.toBeInTheDocument();
+  });
+
+  it('renders evidence section when evidence has non-null fields', () => {
+    const node: NodeDetail = {
+      id: 'ev-has',
+      label: 'Has Evidence',
+      type: 'event',
+      evidence: { confidence_tier: 'high', source_ref: 'agent-42', source_round_number: 3, detail: null },
+    };
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+    expect(screen.getByText('Evidence')).toBeInTheDocument();
+    expect(screen.getByText('agent-42')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+  });
+
+  it('renders correct number of evidence items from evidenceList with mixed null entries', () => {
+    const node: NodeDetail = {
+      id: 'ev-list',
+      label: 'Evidence List',
+      type: 'event',
+      evidenceList: [
+        { confidence_tier: 'high', source_ref: null, source_round_number: null, detail: null },
+        { confidence_tier: null, source_ref: null, source_round_number: null, detail: null },
+        { confidence_tier: null, source_ref: 'ref-2', source_round_number: null, detail: null },
+      ],
+    };
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+    expect(screen.getByText('Evidence')).toBeInTheDocument();
+    expect(screen.getByText('ref-2')).toBeInTheDocument();
+  });
+
+  it('truncates string detail to 200 characters with ellipsis', () => {
+    const longDetail = 'A'.repeat(250);
+    const node: NodeDetail = {
+      id: 'ev-long',
+      label: 'Long Detail',
+      type: 'event',
+      evidence: { confidence_tier: null, source_ref: null, source_round_number: null, detail: longDetail },
+    };
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+    expect(screen.getByText('Evidence')).toBeInTheDocument();
+    const detailText = screen.getByText(/A{10,}/);
+    expect(detailText.textContent).toContain('…');
+    expect(detailText.textContent!.length).toBeLessThan(longDetail.length + 20);
+  });
+
+  it('JSON.stringifies object detail and truncates to 200 chars', () => {
+    const objDetail: Record<string, string> = {};
+    for (let i = 0; i < 30; i++) objDetail[`key_${i}`] = `value_${i}_padding`;
+    const node: NodeDetail = {
+      id: 'ev-obj',
+      label: 'Object Detail',
+      type: 'event',
+      evidence: { confidence_tier: null, source_ref: null, source_round_number: null, detail: objDetail },
+    };
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+    expect(screen.getByText('Evidence')).toBeInTheDocument();
+    const detailEl = screen.getByText(/key_0/);
+    expect(detailEl.textContent).toContain('…');
+  });
+});
+
 describe('copyText', () => {
   it('rejects when clipboard write and execCommand fallback both fail', async () => {
     const writeText = vi.fn().mockRejectedValueOnce(new Error('clipboard denied'));

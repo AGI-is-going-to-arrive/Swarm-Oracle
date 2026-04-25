@@ -488,6 +488,18 @@ async def get_faction_timeline_endpoint(
         raise _feature_disabled("factions")
     with Session(get_engine()) as session:
         require_owned_scenario(session, scenario_id, principal)
+        branch_exists = session.exec(
+            select(Branch.id).where(
+                Branch.id == branch_id,
+                Branch.scenario_id == scenario_id,
+            )
+        ).first()
+        if branch_exists is None:
+            raise api_error(
+                404,
+                "BRANCH_NOT_FOUND",
+                f"Branch {branch_id} not found in scenario",
+            )
     timeline = get_faction_timeline(scenario_id, branch_id)
     return timeline
 
