@@ -6,6 +6,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getFactionTimeline, isApiError } from '../api/client';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { FactionForceGraph } from './FactionForceGraph';
 import { NodeConversationSheet } from './kg/NodeConversationSheet';
 
 interface FactionInfo {
@@ -41,6 +43,7 @@ interface Props {
   branchId: string;
   branchLabel?: string | null;
   visible: boolean;
+  agentNames?: Record<string, string>;
 }
 
 function normalizeText(value?: string | null): string | null {
@@ -52,13 +55,14 @@ function formatMetric(value?: number | null): string {
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : '—';
 }
 
-export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: Props) {
+export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, agentNames }: Props) {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.toLowerCase().startsWith('zh');
   const [timeline, setTimeline] = useState<RoundFactionData[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorStatus, setErrorStatus] = useState<number | 'unknown' | null>(null);
   const fetchRequestIdRef = useRef(0);
+  const { enabled: factionsEnabled } = useCapabilityCheck('factions');
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
   const [sheetState, setSheetState] = useState<{
     open: boolean;
@@ -243,6 +247,20 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible }: 
           </span>
         </div>
       </div>
+
+      {factionsEnabled && timeline.length > 0 && (
+        <FactionForceGraph
+          scenarioId={scenarioId}
+          branchId={branchId}
+          factions={timeline[timeline.length - 1].factions.map((f) => ({
+            key: f.key,
+            members: f.members,
+            label: f.label ?? undefined,
+          }))}
+          totalRounds={timeline[timeline.length - 1].round}
+          agentNames={agentNames}
+        />
+      )}
 
       {timeline.map((round, index) => (
         <article

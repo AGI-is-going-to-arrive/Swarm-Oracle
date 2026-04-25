@@ -21,10 +21,24 @@ vi.mock('@xyflow/react', () => ({
     <div data-testid="reactflow" data-nodes={String((props.nodes as unknown[])?.length ?? 0)} />
   ),
   Background: () => null,
+  BackgroundVariant: { Dots: 'dots', Lines: 'lines', Cross: 'cross' },
   Controls: () => null,
   MiniMap: () => null,
   Position: { Left: 'left', Right: 'right', Top: 'top', Bottom: 'bottom' },
   MarkerType: { ArrowClosed: 'arrowclosed' },
+  useNodesState: <T,>(initial: T) => [initial, () => {}, () => {}] as const,
+  useEdgesState: <T,>(initial: T) => [initial, () => {}, () => {}] as const,
+}));
+
+// Task 5 P2-2-FE: FactionTimeline now uses useCapabilityCheck + FactionForceGraph.
+// Stub capability (disabled) so the integrated force graph does not kick off a
+// second fetch that would consume the mockResolvedValueOnce and push timeline
+// into the error path.
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({ enabled: false, loading: false, error: null, reload: () => {} }),
+}));
+vi.mock('../components/FactionForceGraph', () => ({
+  FactionForceGraph: () => null,
 }));
 
 vi.mock('dagre', () => {

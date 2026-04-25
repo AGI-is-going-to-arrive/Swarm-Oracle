@@ -18,6 +18,8 @@ import {
   Controls,
   MiniMap,
   MarkerType,
+  useNodesState,
+  useEdgesState,
   type Node,
   type Edge,
 } from '@xyflow/react';
@@ -495,7 +497,7 @@ interface ArgumentSheetState {
 }
 
 export function ArgumentMap({ debateId, visible, refreshTrigger, conversationScenarioId = null }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const isCompactViewport = useCompactGraphViewport();
   const prefersReducedMotion = useReducedMotionPreference();
   const [data, setData] = useState<ArgumentMapData | null>(null);
@@ -619,32 +621,110 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     return set;
   }, [selectedNode, filteredData]);
 
-  const nodes = useMemo(() => {
-    const tooltipDisabled = layoutNodes.length > PERF_TOOLTIP_LIMIT;
-    return layoutNodes.map(n => ({
-      ...n,
-      data: {
-        ...n.data,
-        selected: selectedNode?.id === n.id,
-        connected: Boolean(neighborSet && selectedNode?.id !== n.id && neighborSet.has(n.id)),
-        expanded: selectedNode?.id === n.id,
-        controlsId: 'argument-node-detail-panel',
-        dimmed: neighborSet ? !neighborSet.has(n.id) : false,
-        tooltipDisabled,
-      },
-    }));
-  }, [layoutNodes, neighborSet, selectedNode?.id]);
+  const [argSearch, setArgSearch] = useState<string>('');
+  const [resetKey, setResetKey] = useState<number>(0);
 
-  const edges = useMemo(() => {
-    if (!neighborSet) return layoutEdges;
-    return layoutEdges.map(e => ({
-      ...e,
-      style: {
-        ...e.style,
-        opacity: (neighborSet.has(e.source) && neighborSet.has(e.target)) ? 1 : 0.24,
-      },
-    }));
-  }, [layoutEdges, neighborSet]);
+  const searchState = useMemo(() => {
+    const trimmed = argSearch.trim().toLowerCase();
+    if (!trimmed || !filteredData) {
+      return { matchIds: null as Set<string> | null, relatedIds: new Set<string>(), matchCount: 0, relatedCount: 0 };
+    }
+    const matchIds = new Set<string>();
+    filteredData.nodes.forEach((n) => {
+      const label = String(n.label ?? '').toLowerCase();
+      const type = String(n.type ?? '').toLowerCase();
+      if (label.includes(trimmed) || type.includes(trimmed)) matchIds.add(n.id);
+    });
+    filteredData.units.forEach((u) => {
+      const text = String(u.text ?? '').toLowerCase();
+      const type = String(u.type ?? '').toLowerCase();
+      if (text.includes(trimmed) || type.includes(trimmed)) {
+        if (u.node_id) matchIds.add(u.node_id);
+      }
+    });
+    const relatedIds = new Set<string>();
+    filteredData.edges.forEach((e) => {
+      if (matchIds.has(e.source)) relatedIds.add(e.target);
+      if (matchIds.has(e.target)) relatedIds.add(e.source);
+    });
+    matchIds.forEach((id) => relatedIds.delete(id));
+    return { matchIds, relatedIds, matchCount: matchIds.size, relatedCount: relatedIds.size };
+  }, [argSearch, filteredData]);
+
+  const baseNodes = useMemo(() => {
+    const tooltipDisabled = layoutNodes.length > PERF_TOOLTIP_LIMIT;
+    return layoutNodes.map((n) => {
+      const isSearchActive = searchState.matchIds !== null;
+      const isMatch = isSearchActive && searchState.matchIds!.has(n.id);
+      const isRelated = isSearchActive && !isMatch && searchState.relatedIds.has(n.id);
+      const searchDim = isSearchActive && !isMatch && !isRelated;
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          selected: selectedNode?.id === n.id,
+          connected: Boolean(neighborSet && selectedNode?.id !== n.id && neighborSet.has(n.id)),
+          expanded: selectedNode?.id === n.id,
+          controlsId: 'argument-node-detail-panel',
+          dimmed: searchDim ? true : (neighborSet ? !neighborSet.has(n.id) : false),
+          searchMatch: isMatch,
+          searchRelated: isRelated,
+          tooltipDisabled,
+        },
+      };
+    });
+  }, [layoutNodes, neighborSet, selectedNode?.id, searchState]);
+
+  const baseEdges = useMemo(() => {
+    const isSearchActive = searchState.matchIds !== null;
+    return layoutEdges.map((e) => {
+      let opacity = 1;
+      if (isSearchActive) {
+        const sm = searchState.matchIds!.has(e.source);
+        const tm = searchState.matchIds!.has(e.target);
+        const sr = searchState.relatedIds.has(e.source);
+        const tr = searchState.relatedIds.has(e.target);
+        if (!sm && !tm && !sr && !tr) opacity = 0.08;
+        else if (sm && tm) opacity = 1;
+        else opacity = 0.4;
+      } else if (neighborSet) {
+        opacity = (neighborSet.has(e.source) && neighborSet.has(e.target)) ? 1 : 0.24;
+      }
+      return { ...e, style: { ...e.style, opacity } };
+    });
+  }, [layoutEdges, neighborSet, searchState]);
+
+  const [flowNodes, setFlowNodes, onNodesChange] = useNodesState(baseNodes);
+  const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState(baseEdges);
+
+  const layoutResetSignature = useMemo(
+    () => `${layoutSignature}::reset=${resetKey}::lang=${i18n?.language ?? ''}`,
+    [layoutSignature, resetKey, i18n?.language],
+  );
+
+  useEffect(() => {
+    setFlowNodes(baseNodes);
+    setFlowEdges(baseEdges);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutResetSignature]);
+
+  useEffect(() => {
+    setFlowNodes((prev) => {
+      const baseMap = new Map(baseNodes.map((b) => [b.id, b]));
+      return prev.map((n) => {
+        const base = baseMap.get(n.id);
+        return base ? { ...n, data: base.data } : n;
+      });
+    });
+    setFlowEdges((prev) => {
+      const baseMap = new Map(baseEdges.map((b) => [b.id, b]));
+      return prev.map((e) => {
+        const base = baseMap.get(e.id);
+        return base ? { ...e, style: base.style } : e;
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchState, selectedNode?.id, neighborSet]);
   const viewportFitOptions = useMemo(() => ({
     padding: isCompactViewport ? 0.2 : 0.24,
     duration: 0,
@@ -655,8 +735,6 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     reactFlowRef.current.fitView?.(viewportFitOptions);
   }, [layoutEdges.length, layoutNodes.length, layoutSignature, noFilterResults, viewportFitOptions]);
 
-  const onNodesChange = useCallback(() => {}, []);
-  const onEdgesChange = useCallback(() => {}, []);
 
   const { rawNodeMap, unitByNodeId, unitById } = useMemo(() => {
     const rnm = new Map<string, GraphNodeRaw>();
@@ -853,6 +931,41 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
           )}
         </div>
 
+        {/* P2-4: Search + reset layout */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label htmlFor={`${exportRootId}-search`} className="sr-only">
+            {t('argument.search_label', 'Search argument map')}
+          </label>
+          <input
+            id={`${exportRootId}-search`}
+            type="search"
+            value={argSearch}
+            onChange={(e) => setArgSearch(e.target.value)}
+            placeholder={t('argument.search_placeholder', 'Search label, text, type…')}
+            aria-label={t('argument.search_label', 'Search argument map')}
+            style={{
+              flex: isCompactViewport ? '1 1 100%' : '0 1 260px',
+              minHeight: 44, padding: '6px 10px', fontSize: '0.82rem',
+              borderRadius: 8, border: '1px solid #333', background: '#111', color: '#eee',
+            }}
+          />
+          {searchState.matchIds !== null && (
+            <span aria-live="polite" style={{ fontSize: '0.72rem', color: '#8ab4f8' }}>
+              {searchState.matchCount > 0
+                ? t('argument.search_match_count', { defaultValue: '{{matches}} matches, {{related}} related', matches: searchState.matchCount, related: searchState.relatedCount })
+                : t('argument.search_no_match', 'No matches')}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => setResetKey((k) => k + 1)}
+            style={{ minHeight: 36, padding: '4px 10px', fontSize: '0.76rem', borderRadius: 6, border: '1px solid #555', background: 'transparent', color: '#8ab4f8', cursor: 'pointer' }}
+            aria-label={t('argument.reset_layout', 'Reset layout')}
+          >
+            {t('argument.reset_layout', 'Reset layout')}
+          </button>
+        </div>
+
         {noFilterResults ? (
           <p style={{ fontSize: '0.85rem', color: '#888' }}>
             {t('argument.no_results', 'No argument units match the selected filters.')}
@@ -884,8 +997,8 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
                 style={{ position: 'absolute', inset: 0 }}
               >
                 <ReactFlow
-                  nodes={nodes}
-                  edges={edges}
+                  nodes={flowNodes}
+                  edges={flowEdges}
                   ariaLabelConfig={graphAriaLabelConfig}
                   nodeTypes={nodeTypes}
                   onNodesChange={onNodesChange}
@@ -906,7 +1019,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
                 zoomOnScroll={false}
                 panOnScroll={false}
                 zoomOnDoubleClick={false}
-                nodesDraggable={false}
+                nodesDraggable={true}
                 nodesFocusable={false}
                 edgesFocusable={false}
                 elementsSelectable={false}

@@ -268,6 +268,94 @@ def get_faction_timeline(scenario_id: str, branch_id: str) -> list[dict]:
         return sorted(rounds.values(), key=lambda r: r["round"])
 
 
+def get_faction_relations(
+    scenario_id: str,
+    branch_id: str,
+    *,
+    round_max: int | None = None,
+    threshold: float = 0.65,
+    top_k: int = 120,
+) -> dict:
+    """Return bounded agent relation edges for a scenario branch."""
+    threshold = min(max(float(threshold), 0.0), 1.0)
+    top_k = max(int(top_k), 1)
+
+    from sqlalchemy import func as sa_func
+    from sqlalchemy import or_ as sa_or
+
+    with Session(get_engine()) as session:
+        base_where = [
+            AgentRelationEdge.scenario_id == scenario_id,
+            AgentRelationEdge.branch_id == branch_id,
+        ]
+        if round_max is not None:
+            base_where.append(AgentRelationEdge.round_number <= round_max)
+
+        total_before_filter = session.exec(
+            select(sa_func.count(AgentRelationEdge.id)).where(*base_where)
+        ).one()
+
+        stmt = (
+            select(AgentRelationEdge)
+            .where(
+                *base_where,
+                sa_or(
+                    AgentRelationEdge.trust_score >= threshold,
+                    AgentRelationEdge.opposition_score >= threshold,
+                ),
+            )
+            .order_by(AgentRelationEdge.round_number, AgentRelationEdge.id)
+        )
+        relation_edges = session.exec(stmt).all()
+
+    by_round: dict[int, list[tuple[AgentRelationEdge, float]]] = {}
+    for edge in relation_edges:
+        trust_score = min(max(float(edge.trust_score), 0.0), 1.0)
+        opposition_score = min(max(float(edge.opposition_score), 0.0), 1.0)
+        weight = max(trust_score, opposition_score)
+        by_round.setdefault(edge.round_number, []).append((edge, weight))
+
+    response_edges: list[dict] = []
+    truncated = False
+    for round_number in sorted(by_round):
+        round_edges = sorted(
+            by_round[round_number],
+            key=lambda item: (
+                item[1],
+                item[0].trust_score,
+                item[0].opposition_score,
+                item[0].id,
+            ),
+            reverse=True,
+        )
+        if len(round_edges) > top_k:
+            truncated = True
+        for edge, weight in round_edges[:top_k]:
+            trust_score = min(max(float(edge.trust_score), 0.0), 1.0)
+            opposition_score = min(max(float(edge.opposition_score), 0.0), 1.0)
+            response_edges.append({
+                "id": edge.id,
+                "round": edge.round_number,
+                "source_agent_id": edge.source_agent_id,
+                "target_agent_id": edge.target_agent_id,
+                "relation_type": (
+                    "trust" if trust_score > opposition_score else "opposition"
+                ),
+                "weight": weight,
+                "trust_score": trust_score,
+                "opposition_score": opposition_score,
+                "evidence_summary": edge.evidence_summary,
+            })
+
+    return {
+        "edges": response_edges,
+        "truncated": truncated,
+        "threshold": threshold,
+        "top_k": top_k,
+        "total_before_filter": total_before_filter,
+    }
+
+
 # ── Helpers ────────────────────────────────────────────────
 
 

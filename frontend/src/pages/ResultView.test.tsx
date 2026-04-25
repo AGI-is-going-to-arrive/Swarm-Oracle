@@ -175,6 +175,7 @@ const {
     agent_conversation: { enabled: false },
     agent_identity: { enabled: false },
     causal_graph: { enabled: false },
+    kg_explorer: { enabled: false },
     replay_trace: { enabled: false },
     counterfactual_replay: { enabled: false },
     factions: { enabled: false },
@@ -229,6 +230,16 @@ vi.mock('../hooks/useCapabilityCheck', () => ({
       capabilities,
     };
   },
+}));
+
+vi.mock('../hooks/useHookSummary', () => ({
+  useHookSummary: () => ({
+    items: [
+      { key: 'causal_graph', enabled: true, loading: false, error: null, data: { count: 5 } },
+    ],
+    loading: false,
+    refetch: vi.fn(),
+  }),
 }));
 
 describe('ResultView locale contracts', () => {
@@ -3610,7 +3621,7 @@ describe('ResultView explore deeper bridge', () => {
     const bridgeHeading = await screen.findByRole('heading', { name: 'result.bridge_title' });
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
-    expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(3);
+    expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(4);
   });
 
   it('does not render the bridge card when the story has no branches', async () => {
@@ -3924,7 +3935,7 @@ describe('ResultView explore deeper bridge', () => {
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
     const entries = within(bridgeSection as HTMLElement).getAllByRole('link');
-    expect(entries).toHaveLength(3);
+    expect(entries).toHaveLength(4);
     for (const entry of entries) {
       expect(entry).toHaveAttribute('aria-disabled', 'true');
       expect(entry.tagName).toBe('DIV');
@@ -3976,5 +3987,182 @@ describe('ResultView text layout contracts', () => {
 
     expect(titlePrediction.overflow).toBe(true);
     expect(sharePrediction.overflow).toBe(false);
+  });
+});
+
+describe('ResultView workbench bridge gate', () => {
+  it('workbench bridge enabled when kgEnabled=true and causalEnabled=false, href contains ?view=kg', async () => {
+    setMockCapabilities({
+      causal_graph: { enabled: false },
+      kg_explorer: { enabled: true },
+    });
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const workbenchLink = await screen.findByRole('link', { name: /result.bridge_workbench_title/ });
+    expect(workbenchLink).toBeTruthy();
+    expect(workbenchLink).toHaveAttribute('href', expect.stringContaining('?view=kg'));
+  });
+
+  it('workbench bridge disabled when both causal and kg are disabled', async () => {
+    setMockCapabilities({
+      causal_graph: { enabled: false },
+      kg_explorer: { enabled: false },
+    });
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const bridgeHeading = await screen.findByRole('heading', { name: 'result.bridge_title' });
+    const bridgeSection = bridgeHeading.closest('section');
+    expect(bridgeSection).not.toBeNull();
+    const workbenchEntry = within(bridgeSection as HTMLElement).getByText('result.bridge_workbench_title').closest('[role="link"]');
+    expect(workbenchEntry).toBeTruthy();
+    expect(workbenchEntry).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('workbench bridge href encodes scenario id with URL syntax characters', async () => {
+    const scenarioId = 'scenario A&B';
+    setMockCapabilities({
+      causal_graph: { enabled: true },
+      kg_explorer: { enabled: true },
+    });
+    vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+      id: scenarioId,
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      scene_theme: 'law_court',
+      agents: [],
+      branches: [],
+      messages: [],
+      groups: [],
+      hierarchical: false,
+      director_state: null,
+      gameplay_state: null,
+    } as Scenario);
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: scenarioId,
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/result/${encodeURIComponent(scenarioId)}`]}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const workbenchLink = await screen.findByRole('link', { name: /result.bridge_workbench_title/ });
+    expect(workbenchLink).toHaveAttribute('href', `/workbench/${encodeURIComponent(scenarioId)}?view=graph`);
+  });
+});
+
+describe('ResultView HookSummaryPanel integration', () => {
+  it('renders HookSummaryPanel before bridge section', async () => {
+    setMockCapabilities({
+      causal_graph: { enabled: true },
+    });
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A story.',
+          insight: 'An insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const hookPanel = await screen.findByRole('region', { name: /result\.hooks\.title/ });
+    expect(hookPanel).toBeTruthy();
+
+    const bridgeHeading = screen.getByRole('heading', { name: 'result.bridge_title' });
+    const bridgeSection = bridgeHeading.closest('section');
+    expect(bridgeSection).not.toBeNull();
+
+    const parent = hookPanel.parentElement!;
+    const children = Array.from(parent.children);
+    const hookIdx = children.indexOf(hookPanel);
+    const bridgeIdx = children.indexOf(bridgeSection!);
+    expect(hookIdx).toBeLessThan(bridgeIdx);
   });
 });

@@ -28,7 +28,7 @@ from app.config import settings
 from app.models.checkpoint import ScenarioCheckpoint
 from app.models.database import AgentMessage, Branch, Round, Scenario, ScenarioStatus, get_engine
 from app.services.causal_graph import build_snapshot
-from app.services.factions import get_faction_timeline
+from app.services.factions import get_faction_relations, get_faction_timeline
 from app.services.graph_analysis import analyze_graph
 from app.services.replay import (
     _normalize_source_message_content,
@@ -490,6 +490,42 @@ async def get_faction_timeline_endpoint(
         require_owned_scenario(session, scenario_id, principal)
     timeline = get_faction_timeline(scenario_id, branch_id)
     return timeline
+
+
+@router.get("/scenario/{scenario_id}/faction-relations")
+async def get_faction_relations_endpoint(
+    scenario_id: str,
+    branch_id: str = Query(...),
+    round_max: int | None = Query(None, ge=1),
+    threshold: float = Query(0.65, ge=0.0, le=1.0),
+    top_k: int = Query(120, ge=1, le=500),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Return bounded pairwise faction relation edges for a scenario branch."""
+    if not settings.FEATURE_FACTIONS:
+        raise _feature_disabled("factions")
+    with Session(get_engine()) as session:
+        require_owned_scenario(session, scenario_id, principal)
+        branch_exists = session.exec(
+            select(Branch.id).where(
+                Branch.id == branch_id,
+                Branch.scenario_id == scenario_id,
+            )
+        ).first()
+        if branch_exists is None:
+            raise api_error(
+                404,
+                "BRANCH_NOT_FOUND",
+                f"Branch {branch_id} not found in scenario",
+            )
+    return await asyncio.to_thread(
+        get_faction_relations,
+        scenario_id,
+        branch_id,
+        round_max=round_max,
+        threshold=threshold,
+        top_k=top_k,
+    )
 
 
 @router.get("/scenario/{scenario_id}/checkpoints")

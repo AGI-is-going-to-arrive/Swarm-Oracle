@@ -383,11 +383,30 @@
       "bridge_not_enabled": "服务器未开启此功能。",
       "bridge_replay_unavailable": "回放模式下不可用。",
       "bridge_single_branch": "需要多个分支。",
+      "bridge_workbench_title": "打开图谱工作台",
+      "bridge_workbench_desc": "并排对比因果和知识图谱",
       "faction_timeline_branch_analysis_label": "分支分析",
       "faction_timeline_title": "阵营轨迹时间线",
       "faction_timeline_lead_expanded": "当前跟随你展开查看的结局分支“{{title}}”。",
       "faction_timeline_lead_dominant": "当前默认展示概率最高的分支“{{title}}”，不代表全部结局。",
-      "faction_timeline_lead_single": "当前展示分支“{{title}}”的阵营演化。",
+      "faction_timeline_lead_single": "当前展示分支”{{title}}”的阵营演化。",
+      "hooks": {
+        "title": "生成物快览",
+        "causal_graph": "因果图谱",
+        "factions": "阵营",
+        "checkpoints": "检查点",
+        "identity": "Agent 身份",
+        "argument_map": "论证图谱",
+        "count": "{{total}} 条记录",
+        "latest_round": "最新: 第 {{round}} 轮",
+        "events": "{{total}} 个事件",
+        "loading": "加载中…",
+        "error": "加载失败",
+        "retry": "重试",
+        "retry_for": "重试 {{hook}}",
+        "disabled": "未启用",
+        "no_data": "暂无数据"
+      },
       "load_result_failed": "加载结果失败",
       "import_replay_failed": "导入回放失败",
       "import_chamber_replay_failed": "导入会客厅回放失败",
@@ -1043,6 +1062,11 @@
       "open_details": "打开详情",
       "filter_status": "筛选：",
       "evidence_source": "来源: {{source}}",
+      "reset_layout": "重置布局",
+      "search_label": "搜索论证图",
+      "search_match_count": "{{matches}} 条匹配，{{related}} 条相关",
+      "search_no_match": "未匹配到任何节点",
+      "search_placeholder": "搜索标签、文本、类型…",
       "error": {
         "unauthorized": "无权限查看此图谱",
         "disabled": "功能未启用",
@@ -1052,6 +1076,19 @@
         "too_large": "节点过多，无法显示",
         "load_failed": "论证图谱加载失败"
       }
+    },
+    "workbench": {
+      "title": "图谱工作台",
+      "layout_graph": "因果",
+      "layout_split": "分屏",
+      "layout_kg": "知识图谱",
+      "layout_tablist_label": "选择视图布局",
+      "mobile_single_only": "分屏仅在桌面端可用。",
+      "causal_panel": "因果图谱",
+      "kg_panel": "知识图谱",
+      "loading": "加载工作台...",
+      "error": "加载工作台失败",
+      "unavailable": "工作台功能未启用"
     },
     "agent_profile": {
       "dialog_label": "Agent 档案",
@@ -1214,7 +1251,21 @@
         "alliance_formed": "结盟",
         "faction_split": "阵营分裂",
         "unknown": "未知事件"
-      }
+      },
+      "force_graph_title": "阵营力导向图",
+      "force_graph_slider_label": "轮次",
+      "force_graph_slider_round": "第 {{round}} 轮",
+      "force_graph_empty_few_agents": "力导向图至少需要 4 个代理才能显示有意义的阵营关系。",
+      "force_graph_empty_no_data": "该场景没有可用的阵营数据。",
+      "force_graph_truncated_warning": "部分较弱的关系因显示上限而被隐藏。",
+      "force_graph_relation_trust": "信任",
+      "force_graph_relation_opposition": "对抗",
+      "force_graph_a11y_label": "阵营力导向图画布",
+      "force_graph_a11y_nodes": "阵营代理节点",
+      "force_graph_a11y_edges": "阵营关系边",
+      "force_graph_a11y_node": "{{name}}，阵营 {{faction}}",
+      "force_graph_a11y_edge_trust": "信任：{{source}} → {{target}}",
+      "force_graph_a11y_edge_opposition": "对抗：{{source}} → {{target}}"
     },
     "shared": {
       "spotlight": {

@@ -383,11 +383,30 @@
       "bridge_not_enabled": "Not enabled on this server.",
       "bridge_replay_unavailable": "Not available in replay mode.",
       "bridge_single_branch": "Requires multiple branches.",
+      "bridge_workbench_title": "Open Graph Workbench",
+      "bridge_workbench_desc": "Compare causal and knowledge graphs side by side",
       "faction_timeline_branch_analysis_label": "Branch analysis",
       "faction_timeline_title": "Faction timeline analysis",
       "faction_timeline_lead_expanded": "Currently following the expanded ending branch \"{{title}}\".",
       "faction_timeline_lead_dominant": "Currently showing the highest-probability branch \"{{title}}\", not every ending.",
       "faction_timeline_lead_single": "Showing faction evolution for branch \"{{title}}\".",
+      "hooks": {
+        "title": "Generated artifacts",
+        "causal_graph": "Causal Graph",
+        "factions": "Factions",
+        "checkpoints": "Checkpoints",
+        "identity": "Agent Identity",
+        "argument_map": "Argument Map",
+        "count": "{{total}} items",
+        "latest_round": "Latest: round {{round}}",
+        "events": "{{total}} events",
+        "loading": "Loading...",
+        "error": "Failed to load",
+        "retry": "Retry",
+        "retry_for": "Retry {{hook}}",
+        "disabled": "Not enabled",
+        "no_data": "No data"
+      },
       "load_result_failed": "Failed to load results",
       "import_replay_failed": "Failed to import replay",
       "import_chamber_replay_failed": "Failed to import chamber replay",
@@ -1043,6 +1062,11 @@
       "open_details": "Open details",
       "filter_status": "Filter:",
       "evidence_source": "Source: {{source}}",
+      "reset_layout": "Reset layout",
+      "search_label": "Search argument map",
+      "search_match_count": "{{matches}} matches, {{related}} related",
+      "search_no_match": "No matches",
+      "search_placeholder": "Search label, text, type…",
       "error": {
         "unauthorized": "No permission to view this map",
         "disabled": "Feature not enabled",
@@ -1052,6 +1076,19 @@
         "too_large": "Too many nodes to display",
         "load_failed": "Failed to load argument map"
       }
+    },
+    "workbench": {
+      "title": "Graph Workbench",
+      "layout_graph": "Causal",
+      "layout_split": "Split",
+      "layout_kg": "Knowledge Graph",
+      "layout_tablist_label": "Select view layout",
+      "mobile_single_only": "Split view is only available on desktop.",
+      "causal_panel": "Causal Graph",
+      "kg_panel": "Knowledge Graph",
+      "loading": "Loading workbench...",
+      "error": "Failed to load workbench",
+      "unavailable": "Workbench feature is not enabled"
     },
     "agent_profile": {
       "dialog_label": "Agent Profile",
@@ -1214,7 +1251,21 @@
         "alliance_formed": "alliance formed",
         "faction_split": "faction split",
         "unknown": "Unknown event"
-      }
+      },
+      "force_graph_title": "Faction Force Graph",
+      "force_graph_slider_label": "Round",
+      "force_graph_slider_round": "Round {{round}}",
+      "force_graph_empty_few_agents": "The force graph requires at least 4 agents to display meaningful faction relationships.",
+      "force_graph_empty_no_data": "No faction data available for this scenario.",
+      "force_graph_truncated_warning": "Some weaker relations are hidden due to the display limit.",
+      "force_graph_relation_trust": "Trust",
+      "force_graph_relation_opposition": "Opposition",
+      "force_graph_a11y_label": "Faction force graph canvas",
+      "force_graph_a11y_nodes": "Faction agent nodes",
+      "force_graph_a11y_edges": "Faction relation edges",
+      "force_graph_a11y_node": "{{name}}, faction {{faction}}",
+      "force_graph_a11y_edge_trust": "Trust: {{source}} → {{target}}",
+      "force_graph_a11y_edge_opposition": "Opposition: {{source}} → {{target}}"
     },
     "shared": {
       "spotlight": {

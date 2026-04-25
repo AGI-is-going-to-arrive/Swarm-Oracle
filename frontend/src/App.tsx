@@ -36,6 +36,7 @@ const CompareDigestView = lazy(() => import('./pages/CompareDigestView'));
 // - KGExplorerView + TimelineGalaxy share capability 'kg_explorer'
 // - ReplayView will be authored by FE-4; its chunk resolves lazily when
 //   the feature flag 'replay_trace' is enabled server-side
+const WorkbenchView = lazy(() => import('./pages/WorkbenchView'));
 const KGExplorerView = lazy(() => import('./pages/KGExplorerView'));
 const TimelineGalaxy = lazy(() => import('./pages/TimelineGalaxy'));
 const ReplayView = lazy(() => import('./pages/ReplayView'));
@@ -71,6 +72,8 @@ export default function App() {
             <Route path="/roundtable/replay" element={<WorldlineRoundtableView />} />
             <Route path="/history" element={<HistoryView />} />
             <Route path="/leaderboard" element={<LeaderboardView />} />
+            {/* P2-1: Graph Workbench (split causal + KG view) */}
+            <Route path="/workbench/:id" element={<WorkbenchView />} />
             {/* FE-2: KG Explorer + Timeline Galaxy (share kg_explorer capability) */}
             <Route path="/kg-explorer/:id" element={<KGExplorerView />} />
             <Route path="/timeline-galaxy/:id" element={<TimelineGalaxy />} />

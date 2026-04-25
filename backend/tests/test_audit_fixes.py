@@ -44,6 +44,12 @@ def _reloaded_main_module(monkeypatch, *, expose_api_docs: str = "false", log_le
     import app.config as config_module
     import app.main as main_module
 
+    # Preserve identity of the original `settings` instance so that any test
+    # module that did ``from app.config import settings`` at import time
+    # continues to share the same object the rest of the app references after
+    # this contextmanager exits.
+    original_settings = config_module.settings
+
     monkeypatch.setenv("LOG_LEVEL", log_level)
     monkeypatch.setenv("EXPOSE_API_DOCS", expose_api_docs)
     importlib.reload(config_module)
@@ -53,14 +59,20 @@ def _reloaded_main_module(monkeypatch, *, expose_api_docs: str = "false", log_le
     finally:
         monkeypatch.delenv("EXPOSE_API_DOCS", raising=False)
         monkeypatch.delenv("LOG_LEVEL", raising=False)
-        importlib.reload(config_module)
+        # Restore the original Settings instance identity so attributes set
+        # via ``monkeypatch.setattr(settings, ...)`` in unrelated test modules
+        # continue to take effect against the same instance the API endpoints
+        # read from. Reloading config_module again would create yet another
+        # fresh instance and silently desynchronize callers that captured the
+        # original via ``from app.config import settings``.
+        config_module.settings = original_settings
         importlib.reload(main_module)
         # Re-bind settings in all modules that cache it via
         # ``from app.config import settings`` at import time.
-        import app.api.helpers as _hlp
         import app.api.agents as _agt
         import app.api.debate as _api_deb
         import app.api.graphs as _grf
+        import app.api.helpers as _hlp
         import app.api.scenarios as _scn
         import app.api.schemas as _sch
         import app.api.ws as _api_ws
@@ -82,11 +94,23 @@ def _reloaded_main_module(monkeypatch, *, expose_api_docs: str = "false", log_le
             _ers, _ers_c, _ers_t,
             _db, _scn, _sch, _hlp,
         ):
-            _mod.settings = config_module.settings
+            _mod.settings = original_settings
 
 
 async def _always_exists(_scenario_id: str) -> bool:
     return True
+
+
+@pytest.fixture(autouse=True)
+def _use_isolated_test_db(setup_test_db):
+    """Reuse conftest's per-test temp DB isolation for DB-writing audit tests.
+
+    This module writes rows via helpers such as _seed_scenario(), but
+    backend/tests/conftest.py creates a fresh SQLite database for each test and
+    disposes the engine afterward, so a transaction rollback wrapper would be
+    redundant here.
+    """
+    yield
 
 
 class TestOpaqueStrRegression:
@@ -260,6 +284,26 @@ class TestOpenAPIDocsVisibility:
             with TestClient(main_module.app) as client:
                 assert client.get("/docs").status_code == 404
                 assert client.get("/openapi.json").status_code == 404
+
+    def test_settings_identity_stable_after_contextmanager_exit(self, monkeypatch):
+        """Regression: ``_reloaded_main_module`` must preserve the original
+        ``settings`` instance identity. Reloading config_module twice would
+        leak a fresh Settings instance and silently desynchronize unrelated
+        test modules that captured the original via
+        ``from app.config import settings`` at import time.
+        """
+        import app.api.graphs as graphs_module
+        import app.config as config_module
+
+        original = config_module.settings
+        original_graphs_settings = graphs_module.settings
+        with _reloaded_main_module(monkeypatch, expose_api_docs="false"):
+            pass
+        assert config_module.settings is original
+        assert graphs_module.settings is original
+        # Sanity: the cross-module identity that endpoint code relies on must
+        # also match the binding test modules see.
+        assert graphs_module.settings is original_graphs_settings
 
 
 class TestSqliteWalMode:

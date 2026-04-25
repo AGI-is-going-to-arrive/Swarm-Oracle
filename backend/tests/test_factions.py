@@ -3,13 +3,15 @@
 import json
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+from app.config import settings
+from app.main import app
 from app.models.checkpoint import AgentRelationEdge, FactionEvent, FactionSnapshot
-from app.models.graph import AgentStateFrame
+from app.models.database import Branch, Scenario, ScenarioStatus, get_engine
 from app.services.causal_graph import append_round_nodes
-from app.services.factions import get_faction_timeline, process_round
-
+from app.services.factions import get_faction_relations, get_faction_timeline, process_round
 
 # ── Mock message ────────────────────────────────────────
 
@@ -28,6 +30,46 @@ class MockMessage:
         self.content = content
         self.agent_id = agent_id
         self.id = id
+
+
+def _seed_scenario_with_branch(*, branch_id: str | None = None) -> tuple[str, str]:
+    with Session(get_engine()) as session:
+        scenario = Scenario(question="faction relation test", status=ScenarioStatus.DONE)
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        branch = Branch(id=branch_id or "branch-main", scenario_id=scenario.id, title="main")
+        session.add(branch)
+        session.commit()
+        session.refresh(branch)
+        return scenario.id, branch.id
+
+
+def _insert_relation(
+    scenario_id: str,
+    branch_id: str,
+    *,
+    round_number: int,
+    source_agent_id: str,
+    target_agent_id: str,
+    trust_score: float,
+    opposition_score: float,
+    evidence_summary: str | None = None,
+) -> None:
+    with Session(get_engine()) as session:
+        session.add(
+            AgentRelationEdge(
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+                round_number=round_number,
+                source_agent_id=source_agent_id,
+                target_agent_id=target_agent_id,
+                trust_score=trust_score,
+                opposition_score=opposition_score,
+                evidence_summary=evidence_summary,
+            )
+        )
+        session.commit()
 
 
 # ── process_round ───────────────────────────────────────
@@ -326,3 +368,261 @@ class TestGetFactionTimeline:
 
         assert len(tl_b1) == 1
         assert len(tl_b2) == 1
+
+
+# ── get_faction_relations / endpoint ─────────────────────
+
+
+class TestGetFactionRelations:
+    def test_filters_weak_relations_by_threshold(self):
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        _insert_relation(
+            scenario_id,
+            branch_id,
+            round_number=1,
+            source_agent_id="a1",
+            target_agent_id="a2",
+            trust_score=0.64,
+            opposition_score=0.2,
+        )
+        _insert_relation(
+            scenario_id,
+            branch_id,
+            round_number=1,
+            source_agent_id="a1",
+            target_agent_id="a3",
+            trust_score=0.8,
+            opposition_score=0.1,
+        )
+
+        result = get_faction_relations(scenario_id, branch_id, threshold=0.65)
+
+        assert result["total_before_filter"] == 2
+        assert [edge["target_agent_id"] for edge in result["edges"]] == ["a3"]
+        assert result["truncated"] is False
+
+    def test_applies_topk_per_round(self):
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        for idx, trust in enumerate([0.9, 0.8, 0.7], start=1):
+            _insert_relation(
+                scenario_id,
+                branch_id,
+                round_number=1,
+                source_agent_id="a1",
+                target_agent_id=f"a{idx + 1}",
+                trust_score=trust,
+                opposition_score=0.1,
+            )
+        _insert_relation(
+            scenario_id,
+            branch_id,
+            round_number=2,
+            source_agent_id="a1",
+            target_agent_id="a5",
+            trust_score=0.95,
+            opposition_score=0.1,
+        )
+
+        result = get_faction_relations(scenario_id, branch_id, threshold=0.0, top_k=2)
+
+        assert result["truncated"] is True
+        assert [edge["round"] for edge in result["edges"]] == [1, 1, 2]
+        assert [edge["target_agent_id"] for edge in result["edges"][:2]] == ["a2", "a3"]
+
+    def test_applies_round_max(self):
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        _insert_relation(
+            scenario_id,
+            branch_id,
+            round_number=1,
+            source_agent_id="a1",
+            target_agent_id="a2",
+            trust_score=0.8,
+            opposition_score=0.1,
+        )
+        _insert_relation(
+            scenario_id,
+            branch_id,
+            round_number=3,
+            source_agent_id="a1",
+            target_agent_id="a3",
+            trust_score=0.9,
+            opposition_score=0.1,
+        )
+
+        result = get_faction_relations(scenario_id, branch_id, round_max=2, threshold=0.0)
+
+        assert [edge["round"] for edge in result["edges"]] == [1]
+        assert result["total_before_filter"] == 1
+
+    def test_response_shape_derives_relation_type_and_clamps_scores(self):
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        _insert_relation(
+            scenario_id,
+            branch_id,
+            round_number=1,
+            source_agent_id="a1",
+            target_agent_id="a2",
+            trust_score=1.2,
+            opposition_score=0.3,
+            evidence_summary="stance diff=0.30",
+        )
+
+        result = get_faction_relations(scenario_id, branch_id, threshold=0.0)
+        edge = result["edges"][0]
+
+        assert set(edge) == {
+            "id",
+            "round",
+            "source_agent_id",
+            "target_agent_id",
+            "relation_type",
+            "weight",
+            "trust_score",
+            "opposition_score",
+            "evidence_summary",
+        }
+        assert edge["relation_type"] == "trust"
+        assert edge["weight"] == 1.0
+        assert edge["trust_score"] == 1.0
+        assert edge["evidence_summary"] == "stance diff=0.30"
+
+
+class TestFactionRelationsEndpoint:
+    @pytest.fixture(autouse=True)
+    def _isolate_session_and_feature(self, monkeypatch):
+        # Prior tests in the full suite may have populated SESSION_SECRET
+        # which forces require_owned_scenario into 401/404 early-exit paths.
+        # Clearing it here keeps ownership check permissive for the anonymous
+        # TestClient used in these endpoint tests.
+        monkeypatch.setattr(settings, "SESSION_SECRET", "")
+        yield
+
+    def test_feature_disabled_returns_404(self, monkeypatch):
+        monkeypatch.setattr(settings, "FEATURE_FACTIONS", False)
+
+        response = TestClient(app).get(
+            "/api/scenario/fake-id/faction-relations",
+            params={"branch_id": "b1"},
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "FEATURE_DISABLED"
+
+    def test_missing_branch_query_returns_422(self, monkeypatch):
+        monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+
+        response = TestClient(app).get("/api/scenario/fake-id/faction-relations")
+
+        assert response.status_code == 422
+
+    @pytest.mark.parametrize(
+        ("query_param", "invalid_value"),
+        [
+            ("round_max", "0"),
+            ("round_max", "abc"),
+            ("threshold", "-1"),
+            ("threshold", "1.1"),
+            ("top_k", "0"),
+            ("top_k", "501"),
+        ],
+    )
+    def test_invalid_query_params_return_422(
+        self,
+        monkeypatch,
+        query_param,
+        invalid_value,
+    ):
+        monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+        scenario_id, branch_id = _seed_scenario_with_branch()
+
+        response = TestClient(app).get(
+            f"/api/scenario/{scenario_id}/faction-relations",
+            params={"branch_id": branch_id, query_param: invalid_value},
+        )
+
+        assert response.status_code == 422
+        assert any(
+            error["loc"] == ["query", query_param]
+            for error in response.json()["detail"]
+        )
+
+    def test_cross_scenario_branch_returns_404(self, monkeypatch):
+        monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+        scenario_id, _branch_id = _seed_scenario_with_branch()
+        other_scenario_id, other_branch_id = _seed_scenario_with_branch(branch_id="other-branch")
+
+        response = TestClient(app).get(
+            f"/api/scenario/{scenario_id}/faction-relations",
+            params={"branch_id": other_branch_id},
+        )
+
+        assert other_scenario_id != scenario_id
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "BRANCH_NOT_FOUND"
+
+    def test_empty_scenario_returns_empty_edges(self, monkeypatch):
+        monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+        scenario_id, branch_id = _seed_scenario_with_branch()
+
+        response = TestClient(app).get(
+            f"/api/scenario/{scenario_id}/faction-relations",
+            params={"branch_id": branch_id},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "edges": [],
+            "truncated": False,
+            "threshold": 0.65,
+            "top_k": 120,
+            "total_before_filter": 0,
+        }
+
+    def test_endpoint_returns_filtered_shape(self, monkeypatch):
+        monkeypatch.setattr(settings, "FEATURE_FACTIONS", True)
+        scenario_id, branch_id = _seed_scenario_with_branch()
+        _insert_relation(
+            scenario_id,
+            branch_id,
+            round_number=1,
+            source_agent_id="a1",
+            target_agent_id="a2",
+            trust_score=0.2,
+            opposition_score=0.85,
+            evidence_summary="stance diff=0.85",
+        )
+
+        response = TestClient(app).get(
+            f"/api/scenario/{scenario_id}/faction-relations",
+            params={"branch_id": branch_id, "threshold": "0.8", "top_k": "1"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["threshold"] == 0.8
+        assert body["top_k"] == 1
+        assert body["total_before_filter"] == 1
+        edge = body["edges"][0]
+        assert {
+            key: edge[key]
+            for key in (
+                "round",
+                "source_agent_id",
+                "target_agent_id",
+                "relation_type",
+                "weight",
+                "trust_score",
+                "opposition_score",
+                "evidence_summary",
+            )
+        } == {
+            "round": 1,
+            "source_agent_id": "a1",
+            "target_agent_id": "a2",
+            "relation_type": "opposition",
+            "weight": 0.85,
+            "trust_score": 0.2,
+            "opposition_score": 0.85,
+            "evidence_summary": "stance diff=0.85",
+        }

@@ -12,6 +12,38 @@ import en from '../i18n/locales/en.json';
 import zh from '../i18n/locales/zh.json';
 import { FactionTimeline } from './FactionTimeline';
 
+type FactionForceGraphMockProps = {
+  scenarioId: string;
+  branchId: string;
+  factions: Array<{ key: string; members: string[]; label?: string }>;
+  totalRounds: number;
+  agentNames?: Record<string, string>;
+};
+
+const mockFactionForceGraphProps = vi.hoisted(() => [] as FactionForceGraphMockProps[]);
+
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: vi.fn(() => ({ loading: false, enabled: true, capabilities: null, error: null })),
+}));
+
+vi.mock('./FactionForceGraph', () => ({
+  FactionForceGraph: (props: FactionForceGraphMockProps) => {
+    mockFactionForceGraphProps.push(props);
+    return (
+      <div
+        data-testid="faction-force-graph-mock"
+        data-scenario-id={props.scenarioId}
+        data-branch-id={props.branchId}
+        data-total-rounds={props.totalRounds}
+      />
+    );
+  },
+}));
+
+const mockUseCapabilityCheck = vi.mocked(
+  (await import('../hooks/useCapabilityCheck')).useCapabilityCheck,
+);
+
 type TestLanguage = 'en' | 'zh';
 
 function deferred<T>() {
@@ -136,6 +168,7 @@ async function renderFactionTimeline(language: TestLanguage, props?: Partial<Com
 }
 
 afterEach(() => {
+  mockFactionForceGraphProps.length = 0;
   cleanup();
   vi.restoreAllMocks();
 });
@@ -515,5 +548,83 @@ describe('FactionTimeline', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('renders FactionForceGraph when capability is enabled and timeline has data', async () => {
+    mockUseCapabilityCheck.mockReturnValue({ loading: false, enabled: true, capabilities: null, error: null });
+    const agentNames = {
+      a1: 'Alice',
+      a2: 'Bob',
+      a3: 'Cleo',
+      a4: 'Dane',
+    };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse([
+        {
+          round: 1,
+          factions: [
+            { key: 'faction_0', label: 'Early Hawks', members: ['a1'], stance_center: 0.5, confidence: 0.5 },
+          ],
+          events: [],
+        },
+        {
+          round: 2,
+          factions: [
+            { key: 'faction_0', label: 'Hawks', members: ['a1', 'a2'], stance_center: 0.5, confidence: 0.5 },
+            { key: 'faction_1', label: null, members: ['a3', 'a4'], stance_center: -0.5, confidence: 0.5 },
+          ],
+          events: [],
+        },
+      ]),
+    );
+    await renderFactionTimeline('en', { branchId: 'final-branch', agentNames });
+    await waitFor(() => {
+      expect(screen.getByTestId('faction-force-graph-mock')).toBeInTheDocument();
+    });
+    const graph = screen.getByTestId('faction-force-graph-mock');
+    expect(graph).toHaveAttribute('data-scenario-id', 'sc1');
+    expect(graph).toHaveAttribute('data-branch-id', 'final-branch');
+    expect(graph).toHaveAttribute('data-total-rounds', '2');
+    expect(mockFactionForceGraphProps.at(-1)).toEqual({
+      scenarioId: 'sc1',
+      branchId: 'final-branch',
+      totalRounds: 2,
+      factions: [
+        { key: 'faction_0', members: ['a1', 'a2'], label: 'Hawks' },
+        { key: 'faction_1', members: ['a3', 'a4'], label: undefined },
+      ],
+      agentNames,
+    });
+  });
+
+  it('does not render FactionForceGraph when capability is disabled', async () => {
+    mockUseCapabilityCheck.mockReturnValue({ loading: false, enabled: false, capabilities: null, error: null });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      jsonResponse([
+        {
+          round: 1,
+          factions: [
+            { key: 'faction_0', label: 'Hawks', members: ['a1', 'a2'], stance_center: 0.5, confidence: 0.5 },
+          ],
+          events: [],
+        },
+      ]),
+    );
+    await renderFactionTimeline('en');
+    await waitFor(() => {
+      expect(screen.getByText(en.translation.factions.title)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('faction-force-graph-mock')).not.toBeInTheDocument();
+  });
+
+  it('defines the force graph locale keys in both resource files', () => {
+    expect(en.translation.factions.force_graph_title).toBe('Faction Force Graph');
+    expect(zh.translation.factions.force_graph_title).toBe('阵营力导向图');
+    expect(en.translation.factions.force_graph_slider_label).toBe('Round');
+    expect(zh.translation.factions.force_graph_slider_label).toBe('轮次');
+    expect(en.translation.factions.force_graph_relation_trust).toBe('Trust');
+    expect(zh.translation.factions.force_graph_relation_trust).toBe('信任');
+    expect(en.translation.factions.force_graph_relation_opposition).toBe('Opposition');
+    expect(zh.translation.factions.force_graph_relation_opposition).toBe('对抗');
   });
 });

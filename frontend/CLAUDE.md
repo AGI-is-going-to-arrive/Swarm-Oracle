@@ -47,6 +47,7 @@ npm run test:watch # vitest (watch mode)
 | `/agents/new` | `AgentWorkshopView` | 自建 Agent 工坊 (Phase 3 F3) |
 | `/sim/:id/causal-map` | `CausalReviewView` | 因果图谱 DAG (Phase 3 F2) |
 | `/result/:id/compare` | `CompareDigestView` | 反事实分支对比 (Phase 3 F4) |
+| `/workbench/:id` | `WorkbenchView` | 图谱工作台 (Causal/Split/KG 三 tab，compact 降级) |
 
 ## 目录结构
 
@@ -71,6 +72,7 @@ npm run test:watch # vitest (watch mode)
 | `AgentLibrary.tsx` | Agent 身份网格 + 删除 (Phase 3 F1) |
 | `CausalReviewView.tsx` | @xyflow/react DAG + dagre 布局 (Phase 3 F2) |
 | `CompareDigestView.tsx` | 逐轮分支对比 + 发散度条 (Phase 3 F4) |
+| `WorkbenchView.tsx` | 图谱工作台 (Causal/Split/KG 三 tab，KG 依赖 causal_graph，compact 自动降级) |
 
 ### `src/components/` -- 共享组件
 
@@ -90,6 +92,8 @@ npm run test:watch # vitest (watch mode)
 | `ArgumentMap.tsx` | 辩论论证树 (role="tree", i18n 化 TYPE_LABELS, Phase 3 F6) |
 | `CounterfactualPanel.tsx` | 反事实种子选择器 (Phase 3 F4) |
 | `FactionTimeline.tsx` | 阵营时间线 (逐轮色条, Phase 3 F5) |
+| `FactionForceGraph.tsx` | 阵营力导向图 (G6 渲染, round slider + debounce, sr-only 回退, prefers-reduced-motion) |
+| `result/HookSummaryPanel.tsx` | 生成物快览卡片 (5 hook 状态汇总: causal/factions/checkpoints/identity/argument_map, branchId 透传) |
 | `ReturningBadge.tsx` | 跨场景回归标记 (已集成到 ResultView + capability gate, Phase 3 F1) |
 | `ExportPanel.tsx` | Graph 导出面板 (PNG html2canvas + SVG foreignObject clone, P1-3) |
 | `NodeDetailPanel.tsx` | Graph 节点详情侧面板 (type/round/payload/unit, P1-4) |
@@ -136,6 +140,8 @@ npm run test:watch # vitest (watch mode)
 | `useSimulationViewState.ts` | 模拟页状态 |
 | `useTranscriptScroll.test.ts` | 对话滚动 (密室/圆桌共享) |
 | `useCapabilityCheck.ts` | Phase 3 capability gate hook；复用 `/api/capabilities` 结果，consumer 可区分 `loading / enabled / error`，disabled 页面不再把 probe 失败伪装成关功能 |
+| `useScenarioGraph.ts` | 共享图谱数据 fetch (requestId 防竞态, inflightRequests Map 去重, 按 scenarioId+branchId 缓存) |
+| `useHookSummary.ts` | 聚合 hook 状态 fetch (5 key: causal_graph/factions/checkpoints/identity/argument_map, branchId 参数用于 faction-timeline) |
 
 ### `src/lib/` -- 工具函数库
 
@@ -174,7 +180,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- **142 个测试文件** (`.test.ts` / `.test.tsx`) / **1349 tests**
+- **149 个测试文件** (`.test.ts` / `.test.tsx`) / **1491 tests**
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -364,6 +370,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-25 | P2 深度审查 + 修复 | P2-1 WorkbenchView (Causal/Split/KG 三 tab + compact 降级)；P2-2 FactionForceGraph (G6 力导向图 + sr-only 回退)；P2-3 HookSummaryPanel (5 hook 状态卡片 + branchId 透传)；P2-4 ArgumentMap 搜索/过滤/拖拽控件；useScenarioGraph + useHookSummary 两个新 hook；审查修复 8 P1：getFactionRelations URL 路径修正、useHookSummary branchId 参数透传解决 faction-timeline 422、WorkbenchView KG 模式加 causal_graph 依赖、LayoutSwitcher prefers-reduced-motion guard、FactionForceGraph sr-only 屏幕阅读器回退、HookSummaryPanel retry aria-label、slider scrub 测试补全、FactionTimeline mock prop 完整性修复；i18n 新增 12 keys (retry_for + 5 sr-only + 6 workbench/force-graph)；fresh baseline: `149 files, 1491 tests, 0 failed`；tsc + build + i18n parity 全通过；Playwright 实测 ResultView/WorkbenchView/HookSummaryPanel/i18n/mobile 全通过 |
 | 2026-04-23 | capability gate / replay / compare / kg / faction 状态面收口 | `useCapabilityCheck` 当前会复用 `/api/capabilities` 请求，并把 `loading / enabled / error / reload` 暴露给 consumer；`ReplayView` capability disabled 不再 silent redirect，改成显式 unavailable surface，capability probe 失败也会给 retry；`KGExplorerView / CompareDigestView / FactionTimeline` 当前把 `disabled / load failed / empty` 分开显示，不再泄漏原始 HTTP 字符串，也不再把所有异常压成空态；首页 4 个 source family disabled tooltip 已补齐中英 locale；`ResultActionCard` 移动端没有 sheet handler 时会回退到同一条 deep-link 路径，结果页当前也只在真的拿到 `agent_identity_id` 时才渲染。真实验证：定向 vitest `64 passed`、frontend full vitest `1349 passed`、`npx tsc --noEmit -p tsconfig.app.json` 通过、`npm run build` 通过；local preview spot-check 也已确认中文 tooltip、Replay unavailable surface 和结果页新的 FactionTimeline 空态文案 |
 | 2026-04-20 | WS / capability graph 诊断收口 | `useAgentConversationWS` 改回真实 `/ws/agent-conversation/{thread_id}`，并补了 URL 断言；`e2e-ws-contract-suite.mjs` 这轮继续收口两处假失败：`case1` 改走绝对 URL + 独立 page，不再把 `/sim` `/debate` 静默 skip；raw probe 先于 live fixture 执行，避免 clean-room 下 `scenario` 被 fixture 活动污染成假 `1006`。`e2e-capability-matrix.mjs` 当前继续覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route，并把当前 live 栈未真正暴露的 `ReplayView` 记成 `skipped`。真实验证为 `node --test scripts/e2e-ws-contract-suite.test.mjs` `18 passed`、定向 vitest `32 passed`、clean-room `e2e:ws:contract` `20 passed / 1 skipped / 0 failed`、clean-room `e2e:capability-matrix` `25 passed / 5 skipped / 0 failed` |
 | 2026-04-19 | source-ingestion live contract 收口 | `client.ts` / `InputView` 现在会把四个 source family toggle 真实透传成 `web_search_families`；`ResultView` 改成按 `web_search_context.family_context` 渲染四张 family card，`polymarket.configured_host=non-us` 时显示地域限制占位；`e2e-new-source-ingestion-live.mjs` live 模式新增请求体校验、四张卡非空断言和 `us/non-us` geo-gate 覆盖；`release-signoff.mjs` 的 `new_source_ingestion_live` 当前会显式注入 `SWARM_E2E_MODE=live`；fresh frontend 全量 `1336 passed`，`tsc/build/perf` 和 source-ingestion live `us/non-us` 桌面/移动都通过 |

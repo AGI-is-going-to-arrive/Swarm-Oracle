@@ -127,6 +127,7 @@ import { NewsApiCard } from '../components/result/NewsApiCard';
 import { MobileSourceSheet } from '../components/result/MobileSourceSheet';
 import { FinanceSourceCard } from '../components/result/FinanceSourceCard';
 import { type SourceCategoryState } from '../components/result/SourceCategoryCard';
+import { HookSummaryPanel } from '../components/result/HookSummaryPanel';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 const EMPTY_GAMEPLAY_PROFILE_HOOKS: string[] = [];
@@ -1849,6 +1850,15 @@ export default function ResultView() {
         </div>
       )}
 
+      {/* Hook Summary Panel */}
+      {activeScenarioId && !loading && !capLoading && (
+        <HookSummaryPanel
+          scenarioId={activeScenarioId}
+          branchId={branches[0]?.id}
+          identityId={primaryAgentIdentityId ?? undefined}
+        />
+      )}
+
       {/* Explore Deeper Bridge */}
       {branches.length > 0 && !loading && !capLoading && activeScenarioId && (
         <section className="result-bridge">
@@ -1856,6 +1866,7 @@ export default function ResultView() {
           <div className="result-bridge__grid">
             {(() => {
               const causalEnabled = capabilities?.causal_graph?.enabled ?? false;
+              const kgEnabled = capabilities?.kg_explorer?.enabled ?? false;
               const replayEnabled = capabilities?.replay_trace?.enabled ?? false;
               const compareEnabled = (capabilities?.counterfactual_replay?.enabled ?? false) && branches.length > 1;
               const scenarioId = encodeURIComponent(activeScenarioId);
@@ -1915,6 +1926,18 @@ export default function ResultView() {
                   disabledDefault: isReplayMode ? 'Not available in replay mode.' : (branches.length <= 1 ? 'Only one branch — nothing to compare.' : 'Not enabled on this server.'),
 
 
+                },
+                {
+                  key: 'workbench',
+                  icon: '\u{1F6E0}️',
+                  titleKey: 'result.bridge_workbench_title',
+                  titleDefault: 'Open Graph Workbench',
+                  descKey: 'result.bridge_workbench_desc',
+                  descDefault: 'Compare causal and knowledge graphs side by side',
+                  enabled: (causalEnabled || kgEnabled) && !isReplayMode,
+                  href: `/workbench/${scenarioId}?view=${!causalEnabled && kgEnabled ? 'kg' : 'graph'}`,
+                  disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
+                  disabledDefault: isReplayMode ? 'Not available in replay mode.' : 'Not enabled on this server.',
                 },
               ];
 
@@ -2430,6 +2453,7 @@ export default function ResultView() {
                 branchId={factionTimelineBranch.id}
                 branchLabel={factionTimelineBranch.title}
                 visible={true}
+                agentNames={Object.fromEntries(agents.map((a) => [a.id, a.name]))}
               />
             </section>
           )}

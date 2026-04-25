@@ -1097,3 +1097,39 @@ export async function resumeFromRound(
     body: JSON.stringify(body),
   });
 }
+
+// ── P2-2: Faction Relations (force graph) ──
+
+export interface FactionRelationEdge {
+  id: string;
+  round: number;
+  source_agent_id: string;
+  target_agent_id: string;
+  relation_type: 'trust' | 'opposition';
+  weight: number;
+  trust_score: number;
+  opposition_score: number;
+  evidence_summary: string | null;
+}
+
+export interface FactionRelationsResponse {
+  edges: FactionRelationEdge[];
+  truncated: boolean;
+  threshold: number;
+  top_k: number;
+  total_before_filter: number;
+}
+
+/** GET /api/graphs/scenario/:id/faction-relations — P2-2 force graph edges */
+export async function getFactionRelations(
+  scenarioId: string,
+  branchId: string,
+  opts?: { roundMax?: number; threshold?: number; topK?: number },
+): Promise<FactionRelationsResponse> {
+  const params = new URLSearchParams();
+  params.set('branch_id', branchId);
+  if (opts?.roundMax != null) params.set('round_max', String(opts.roundMax));
+  if (opts?.threshold != null) params.set('threshold', String(opts.threshold));
+  if (opts?.topK != null) params.set('top_k', String(opts.topK));
+  return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/faction-relations?${params}`);
+}

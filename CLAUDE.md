@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 67 文件 / 1801 tests |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~130+ | 142 文件 / 1349 tests |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 67+ 文件 / 2320 tests |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 149 文件 / 1491 tests |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -131,8 +131,9 @@ cd backend && alembic upgrade head
 - 13 个新 ORM 模型分布在 `agent_identity.py`、`graph.py`、`checkpoint.py`，3 个 Alembic 迁移 (014-016)
 - 6 个新后端服务：`persona_workshop`、`agent_identity`、`causal_graph`、`replay`、`factions`、`debate_argument_map`
 - 2 个新 API router：`/api/agents/*`、`/api/graphs/*`；`/api/capabilities` 当前是 11-key 通用 capability registry（`web_search` + 10 个功能开关）
-- 4 个新前端页面：`AgentWorkshopView`、`AgentLibrary`、`CausalReviewView`、`CompareDigestView`
-- 5 个新前端组件：`AgentAttachPanel`、`ArgumentMap`（已 i18n 化）、`CounterfactualPanel`、`FactionTimeline`、`ReturningBadge`（已集成到 ResultView + capability gate）
+- 5 个新前端页面：`AgentWorkshopView`、`AgentLibrary`、`CausalReviewView`、`CompareDigestView`、`WorkbenchView`（图谱工作台，Causal/Split/KG 三种布局，compact 自动降级）
+- 9 个新前端组件：`AgentAttachPanel`、`ArgumentMap`（已 i18n 化，P2 新增搜索/过滤/拖拽控件）、`CounterfactualPanel`、`FactionTimeline`、`ReturningBadge`（已集成到 ResultView + capability gate）、`FactionForceGraph`（G6 力导向图 + sr-only 回退）、`HookSummaryPanel`（5 hook 状态卡片）、`GraphWorkbenchShell`（工作台分屏容器）、`LayoutSwitcher`（tab 切换栏）
+- 2 个新前端 hook：`useScenarioGraph`（共享图谱 fetch + requestId 防竞态）、`useHookSummary`（聚合 hook 状态，需 branchId）
 - `simulator.py` 新增 4 个非阻塞 hook：因果图谱、阵营检测+WS 事件发射、检查点写入、身份生命周期（场景结束时写入 growth_event + identity_memory，`asyncio.to_thread` 包装），均受 `FEATURE_*` 环境变量控制
 - `debate.py` 新增论证抽取 hook (每 turn 后) + verdict linking (finalize 后)，受 `FEATURE_ARGUMENT_MAP` 控制
 - `helpers.py` parse 后自动调 `resolve_identity()` 回填 `agent_identity_id`，自建 Agent 替换 CROWD 槽位并同步 `parsed_context`；自建 Agent 注入需通过 ownership 校验（`user_id is not None` + `identity.user_id == user_id`）
@@ -150,11 +151,17 @@ cd backend && alembic upgrade head
 - P1-12 Identity memory compaction：`FEATURE_IDENTITY_COMPACTION` 控制，阈值超过 50 条未压缩文档时异步 LLM 摘要（fire-and-forget），压缩文档带 `source_ids_hash` 幂等指纹，FIFO eviction raw 优先于 compacted，`get_identity_memories` 过滤压缩文档（只参与语义检索不进 timeline），prompt 经 `format_untrusted_text_block` 防注入
 - P1-9 resume_from_round：`POST /api/scenario/{id}/resume` 从指定轮次续跑（clone+restore+`run_sim_background`），`Blackboard.export_snapshot()`/`from_snapshot()` 完整状态持久化，checkpoint bug fix（`get_global_summary()` → `export_snapshot()`），agent stance/emotion 仅内存恢复不改 DB，`Branch.replay_kind` 新增 `"resume"` 值，与 counterfactual 共享 3 条分支上限，resume 前先预占 runtime lock，后台任务续租 lease 到结束，避免丢锁和 orphan branch
 - Identity compaction 由 `FEATURE_IDENTITY_COMPACTION` 控制，另有 3 个调参变量 (`IDENTITY_COMPACT_THRESHOLD`/`BATCH_SIZE`/`GROUP_SIZE`)
+- P2 WorkbenchView KG 模式要求同时启用 `FEATURE_KG_EXPLORER` + `FEATURE_CAUSAL_GRAPH`（`KGGraphBoard` 内部调用 causal-graph 端点）
+- `useHookSummary` hook 接受 `branchId` 参数，faction-timeline 端点必须携带 `branch_id` 查询参数
+- `getFactionRelations` 在 `client.ts` 中路径为 `/scenario/{id}/faction-relations`（与其他 graphs router 端点一致，无 `/graphs/` 前缀）
+- `FactionForceGraph` 和 `LayoutSwitcher` 均有 `prefers-reduced-motion` guard；`FactionForceGraph` 另有 sr-only 列表回退供屏幕阅读器使用
+- `factions.py` 新增 `faction-relations` 端点，查询参数 `branch_id`(必填) / `round_max` / `threshold` / `top_k` 均在 router 层校验
 
 ## 变更记录 (Changelog)
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-25 | P2 深度审查 + 修复 | P2-1 WorkbenchView (Causal/Split/KG 三 tab + compact 降级)、P2-2 FactionForceGraph (G6 力导向图)、P2-3 HookSummaryPanel (5 hook 状态卡片)、P2-4 ArgumentMap 搜索/过滤/拖拽控件、useScenarioGraph + useHookSummary 两个新 hook；4-Gate 并行审查修复 8 P1：getFactionRelations URL 404 修复、useHookSummary branchId 透传、WorkbenchView KG gate 加 causal 依赖、LayoutSwitcher prefers-reduced-motion、FactionForceGraph sr-only 回退、HookSummaryPanel retry aria-label、2 个测试质量修复；后端新增 faction-relations 端点 + 306 行测试；fresh baseline: backend `2320 passed, 0 failed, 2 skipped` / frontend `149 files, 1491 tests, 0 failed`；tsc + build + i18n parity 全部通过；Playwright 浏览器实测 ResultView/WorkbenchView/HookSummaryPanel/i18n/mobile 全通过 |
 | 2026-04-25 | P0/P1 完成度评估 + 测试修复 | P0 7/7 全部通过 (Playwright 浏览器实测)；P1 全部完成 (21 fixes + 4 功能增强)；修复 `test_fallback_migrations.py` 2 处断言缺少 P1 evidence 字段；fresh baseline: backend `2304 passed, 0 failed, 2 skipped` / frontend `144 files, 1399 tests, 0 failed`；Graphify 核心图谱能力已全面吸收 (Tier B)；MiroFish 流程可见性+探索连续性已超越，工作台感属 P2-1；P2 readiness: 通过 |
 | 2026-04-23 | 前端 gated route 状态面收口 | `useCapabilityCheck` 当前会复用 `/api/capabilities` 请求，并把 probe 失败显式暴露给页面；`ReplayView` capability disabled 不再 silent redirect，改成显式 unavailable surface；`KGExplorerView / CompareDigestView / FactionTimeline` 当前把 `disabled / load failed / empty` 分开显示，不再直接泄漏原始错误，也不再把所有异常压成空态；首页 4 个 source family disabled tooltip 已补齐中英 locale。真实验证：frontend focused regression `64 passed`、frontend full vitest `1349 passed`、`npx tsc --noEmit -p tsconfig.app.json` 通过、`npm run build` 通过，local preview 也已确认 Replay unavailable surface、中文 source tooltip 和结果页新的 FactionTimeline 空态文案 |
 | 2026-04-20 | WS / capability graph contract 诊断收口 | `useAgentConversationWS` 改回真实 `/ws/agent-conversation/{thread_id}`；`e2e-ws-contract-suite.mjs` 去掉 import 副作用后，这轮又补了两处真实收口：`case1` 改走绝对 URL + 独立 page，不再把 `/sim` `/debate` 静默 skip；raw probe 先于 live fixture 执行，避免 clean-room 下 `scenario` 被 live fixture 污染成假 `1006`。同时恢复并保留 `e2e:capability-matrix / e2e:ws:contract` 两条诊断 npm script。真实验证为 backend `tests/test_evidence_card_flow.py` `5 passed`、`tests/test_session_auth.py -k 'auth_timeout_closes_4001 or oversized_auth_frame_closes_1009 or pending_blocks_new_connections'` `3 passed`；frontend `node --test scripts/e2e-ws-contract-suite.test.mjs` `18 passed`、定向 vitest `32 passed`、clean-room `e2e:ws:contract` `20 passed / 1 skipped / 0 failed`、clean-room `e2e:capability-matrix` `25 passed / 5 skipped / 0 failed` |
