@@ -792,3 +792,385 @@ body.has-argument-map .lang-switch--global {
   from { stroke-dashoffset: 24; }
   to { stroke-dashoffset: 0; }
 }
+
+/* ── KG Workbench (Editorial cream + magenta) ────────────── */
+/* Scoped to KGGraphBoard / NodeQuickCard. All colour-bearing rules below
+   resolve through `--color-primary` / `--color-warning` design tokens
+   (with KG-scoped `--kg-*` derivatives for press/focus/warning tints
+   computed via color-mix). The chip-dot 1px white halo is the lone
+   intentional literal — it is a fixed contrast outline regardless of
+   theme, not a token. Animations gated by prefers-reduced-motion. */
+
+:root {
+  /* Static rgba fallbacks for legacy targets (safari < 16.2, chrome < 111,
+     firefox < 113) which don't parse color-mix(). Modern browsers ignore
+     these and use the color-mix() values declared right after. Both layers
+     resolve from the same magenta `#c61583` / warning `#e2a000` design
+     tokens — fallbacks just inline the alpha math. */
+  --kg-focus-ring: rgba(198, 21, 131, 0.18);
+  --kg-press-tint: rgba(198, 21, 131, 0.08);
+  --kg-warning-bg: rgba(226, 160, 0, 0.08);
+  --kg-warning-edge: rgba(226, 160, 0, 0.24);
+  --kg-focus-ring: color-mix(in srgb, var(--color-primary) 18%, transparent);
+  --kg-press-tint: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  --kg-warning-bg: color-mix(in srgb, var(--color-warning) 8%, transparent);
+  --kg-warning-edge: color-mix(in srgb, var(--color-warning) 24%, transparent);
+}
+
+.kg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  flex-wrap: wrap;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+.kg-toolbar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.kg-toolbar-spacer { margin-left: auto; }
+
+.kg-toolbar-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.kg-toolbar-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.kg-toolbar-count strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.kg-search {
+  width: 180px;
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+.kg-search::placeholder { color: var(--text-muted); }
+.kg-search:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--kg-focus-ring);
+}
+
+.kg-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.kg-icon-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+.kg-icon-btn:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--kg-focus-ring);
+}
+.kg-icon-btn[aria-pressed="true"] {
+  background: var(--kg-press-tint);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.kg-icon-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.kg-chip-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 0 var(--space-3) var(--space-1);
+}
+.kg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 9px 1px 7px;
+  height: 22px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.kg-chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+.kg-chip[aria-pressed="true"] {
+  background: var(--kg-press-tint);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.kg-chip-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 7px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
+}
+
+.kg-canvas-shell {
+  flex: 1;
+  min-height: 280px;
+  position: relative;
+  outline: none;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.kg-canvas-shell:focus-visible {
+  box-shadow: 0 0 0 2px var(--color-primary);
+}
+.kg-canvas-cursor :is(canvas, .g6-canvas) { cursor: grab; }
+.kg-canvas-cursor :is(canvas, .g6-canvas):active { cursor: grabbing; }
+
+.kg-minimap {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  width: 180px;
+  height: 96px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-card);
+  background: var(--bg-surface);
+  pointer-events: none;
+}
+
+.kg-truncate-notice {
+  padding: 4px var(--space-3);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  background: var(--kg-warning-bg);
+  border-top: 1px solid var(--kg-warning-edge);
+  border-bottom: 1px solid var(--kg-warning-edge);
+}
+
+.kg-status-text {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.kg-status-error {
+  color: var(--color-danger);
+  font-size: 0.85rem;
+}
+.kg-status-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 220px;
+  padding: var(--space-3);
+}
+
+.kg-loading-skeleton {
+  flex: 1;
+  margin: var(--space-3);
+  min-height: 220px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(
+    90deg,
+    var(--bg-base) 0%,
+    var(--bg-hover) 50%,
+    var(--bg-base) 100%
+  );
+  background-size: 200% 100%;
+  animation: kg-skeleton-shimmer 1.6s ease-in-out infinite;
+}
+@keyframes kg-skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+@keyframes kg-quickcard-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.kg-quickcard {
+  position: absolute;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-elevated);
+  padding: 10px 12px;
+  min-width: 200px;
+  max-width: 240px;
+  z-index: 20;
+  animation: kg-quickcard-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.kg-quickcard-type {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.kg-quickcard-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 0 2px;
+  line-height: 1;
+  transition: color var(--transition-fast);
+}
+.kg-quickcard-close:hover { color: var(--text-secondary); }
+.kg-quickcard-detail-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+.kg-quickcard-detail-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--color-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kg-loading-skeleton { animation: none; }
+  .kg-quickcard { animation: none; }
+}
+
+/* ── DAG Editorial (P6 Phase 3) ─────────────────────────── */
+
+@keyframes dag-node-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.dag-node-enter {
+  animation: dag-node-in 250ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes dag-tooltip-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-4px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.dag-empty-ghost {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3, 12px);
+  min-height: 280px;
+  padding: var(--space-4, 16px);
+}
+.dag-empty-skeleton {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  opacity: 0.35;
+}
+.dag-empty-node {
+  width: 80px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--bg-hover, #f1f5f9);
+  border: 2px dashed var(--border-default, #e2e8f0);
+}
+.dag-empty-edge {
+  width: 40px;
+  height: 2px;
+  background: var(--border-default, #e2e8f0);
+  position: relative;
+}
+.dag-empty-edge::after {
+  content: '';
+  position: absolute;
+  right: -4px;
+  top: -3px;
+  border: 4px solid transparent;
+  border-left-color: var(--border-default, #e2e8f0);
+}
+.dag-empty-shimmer {
+  animation: kg-skeleton-shimmer 1.6s ease-in-out infinite;
+  background: linear-gradient(90deg, transparent 0%, var(--bg-hover, #f1f5f9) 50%, transparent 100%);
+  background-size: 200% 100%;
+}
+.dag-empty-text {
+  font-size: 0.85rem;
+  color: var(--text-muted, #94a3b8);
+  text-align: center;
+  max-width: 300px;
+}
+.dag-empty-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border-default, #e2e8f0);
+  background: var(--bg-surface, #fff);
+  color: var(--text-secondary, #64748b);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background var(--transition-fast, 150ms), border-color var(--transition-fast, 150ms);
+}
+.dag-empty-cta:hover {
+  background: var(--bg-hover, #f1f5f9);
+  border-color: var(--color-primary, #c61583);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dag-node-enter { animation: none; }
+  .dag-empty-shimmer { animation: none; }
+  .dag-edge-tooltip-card { animation: none; }
+}

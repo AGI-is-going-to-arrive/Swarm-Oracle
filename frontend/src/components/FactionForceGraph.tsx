@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getFactionRelations, isApiError, type FactionRelationEdge, type FactionRelationsResponse } from '../api/client';
 import { useG6Graph } from '../hooks/useG6Graph';
+import useReducedMotion from '../hooks/useReducedMotion';
 import { forceTimelineLayout } from '../lib/g6Layouts';
 import { Slider } from './ui/slider';
 
@@ -118,25 +119,6 @@ export function transformToG6Data(
   return { nodes, edges: g6Edges, combos };
 }
 
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  });
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-    const mql = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const handler = (e: MediaQueryListEvent | MediaQueryList) => setReduced(e.matches);
-    if (typeof mql.addEventListener === 'function') {
-      mql.addEventListener('change', handler);
-      return () => mql.removeEventListener?.('change', handler);
-    }
-    mql.addListener?.(handler);
-    return () => mql.removeListener?.(handler);
-  }, []);
-  return reduced;
-}
-
 export function FactionForceGraph({
   scenarioId,
   branchId,
@@ -146,7 +128,7 @@ export function FactionForceGraph({
 }: FactionForceGraphProps) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
-  const prefersReducedMotion = usePrefersReducedMotion();
+  const prefersReducedMotion = useReducedMotion();
 
   const [currentRound, setCurrentRound] = useState(totalRounds);
   const [debouncedRound, setDebouncedRound] = useState(totalRounds);

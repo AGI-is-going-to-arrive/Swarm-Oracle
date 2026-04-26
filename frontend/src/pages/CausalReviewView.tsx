@@ -15,6 +15,7 @@ import useReducedMotion from '../hooks/useReducedMotion';
 import { ExportPanel } from '../components/ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from '../components/NodeDetailPanel';
 import GraphNodeCard from '../components/GraphNodeCard';
+import AnimatedEdge from '../components/AnimatedEdge';
 import { NodeConversationSheet } from '../components/kg/NodeConversationSheet';
 import dagre from 'dagre';
 import * as Tooltip from '@radix-ui/react-tooltip';
@@ -183,8 +184,8 @@ function getCausalErrorMessage(
 
 // ── Constants ───────────────────────────────────────────────
 
-const NODE_W = 200;
-const NODE_H = 50;
+const NODE_W = 280;
+const NODE_H = 120;
 const PERF_ANIMATION_LIMIT = 150;
 const PERF_TOOLTIP_LIMIT = 150;
 const PERF_TEXT_FALLBACK_LIMIT = 500;
@@ -317,7 +318,7 @@ function layoutDagre(
 ): { nodes: Node[]; edges: Edge[] } {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: compactViewport ? 'TB' : 'LR', ranksep: 80, nodesep: 40 });
+  g.setGraph({ rankdir: compactViewport ? 'TB' : 'LR', ranksep: 120, nodesep: 100 });
 
   for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
   for (const e of edges) g.setEdge(e.source, e.target);
@@ -389,8 +390,12 @@ function layoutDagre(
       style: { stroke, strokeDasharray: style?.strokeDasharray },
       labelStyle: tierColor ? { fill: tierColor, fontSize: 10, fontWeight: 600 } : undefined,
       markerEnd: NO_ARROW_TYPES.has(e.type) ? undefined : { type: MarkerType.ArrowClosed, color: stroke },
+      data: {
+        ...(edgeLabel ? { label: edgeLabel } : {}),
+        ...(e.evidence?.detail ? { detail: e.evidence.detail } : {}),
+        ...(parallelOffset != null ? { parallelOffset } : {}),
+      },
       ...(parallelOffset != null ? {
-        data: { parallelOffset },
         className: `causal-edge-offset-${parallelOffset > 0 ? 'pos' : parallelOffset < 0 ? 'neg' : 'zero'}`,
         pathOptions: { offset: parallelOffset },
       } : {}),
@@ -398,6 +403,44 @@ function layoutDagre(
   });
 
   return { nodes: flowNodes, edges: flowEdges };
+}
+
+// ── Path tracing ───────────────────────────────────────────
+
+function traceAncestorsAndDescendants(
+  nodeId: string,
+  edges: Edge[],
+): Set<string> {
+  const connected = new Set<string>([nodeId]);
+  // Trace ancestors (edges where target === nodeId, recursively)
+  const queue = [nodeId];
+  const visited = new Set<string>([nodeId]);
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const e of edges) {
+      if (e.target === current && !visited.has(e.source)) {
+        visited.add(e.source);
+        connected.add(e.source);
+        connected.add(e.id);
+        queue.push(e.source);
+      }
+    }
+  }
+  // Trace descendants
+  const queue2 = [nodeId];
+  const visited2 = new Set<string>([nodeId]);
+  while (queue2.length > 0) {
+    const current = queue2.shift()!;
+    for (const e of edges) {
+      if (e.source === current && !visited2.has(e.target)) {
+        visited2.add(e.target);
+        connected.add(e.target);
+        connected.add(e.id);
+        queue2.push(e.target);
+      }
+    }
+  }
+  return connected;
 }
 
 // ── Component ───────────────────────────────────────────────
@@ -424,6 +467,11 @@ export function CausalReviewView() {
   const [serverAnalysis, setServerAnalysis] = useState<GraphAnalysisResponse | null>(null);
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
   const [sheetState, setSheetState] = useState<NodeConversationSheetState>(createClosedSheetState);
+  // P6 Phase 2: path highlighting
+  const [highlightedPath, setHighlightedPath] = useState<Set<string> | null>(null);
+  const edgeTypes = useMemo(() => ({ animated: AnimatedEdge }), []);
+  // P6 Phase 3: track initial layout for entrance animation
+  const layoutAppliedRef = useRef(false);
   // C5: Agent search
   const [agentSearch, setAgentSearch] = useState('');
   const exportRootId = `causal-graph-${useId().replace(/:/g, '-')}`;
@@ -636,7 +684,23 @@ export function CausalReviewView() {
 
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
-    return layoutDagre(filteredData.nodes, filteredData.edges, translate, isCompactViewport, reducedMotion);
+    const result = layoutDagre(filteredData.nodes, filteredData.edges, translate, isCompactViewport, reducedMotion);
+    // P6 Phase 3: add entrance animation class on first layout only
+    if (!layoutAppliedRef.current && result.nodes.length > 0 && !reducedMotion) {
+      layoutAppliedRef.current = true;
+      return {
+        ...result,
+        nodes: result.nodes.map((n, i) => ({
+          ...n,
+          className: 'dag-node-enter',
+          style: { ...n.style, animationDelay: `${Math.min(i * 30, 300)}ms` },
+        })),
+      };
+    }
+    if (!layoutAppliedRef.current && result.nodes.length > 0) {
+      layoutAppliedRef.current = true;
+    }
+    return result;
   }, [filteredData, isCompactViewport, isNonInteractiveFallback, translate, reducedMotion]);
 
   const layoutSignature = useMemo(() => (
@@ -668,45 +732,52 @@ export function CausalReviewView() {
     if (!filteredData.nodes.some(n => n.id === selectedNode.id)) setSelectedNode(null);
   }, [selectedNode, filteredData]);
 
-  // C3: Neighbor highlight based on selected node
-  const neighborSet = useMemo(() => {
-    if (!selectedNode || !filteredData) return null;
-    const set = new Set<string>([selectedNode.id]);
-    for (const e of filteredData.edges) {
-      if (e.source === selectedNode.id) set.add(e.target);
-      if (e.target === selectedNode.id) set.add(e.source);
+  // P6 Phase 2: Full recursive path tracing (replaces 1-hop neighborSet)
+  useEffect(() => {
+    if (!selectedNode || !flowEdges.length) {
+      setHighlightedPath(null);
+      return;
     }
-    return set;
-  }, [selectedNode, filteredData]);
+    const pathSet = traceAncestorsAndDescendants(selectedNode.id, flowEdges);
+    setHighlightedPath(pathSet);
+  }, [selectedNode, flowEdges.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const totalElements = (filteredData?.nodes.length ?? 0) + (filteredData?.edges.length ?? 0);
+  const skipAnimations = reducedMotion || totalElements > PERF_ANIMATION_LIMIT;
 
   // Apply highlight to flow nodes
   useEffect(() => {
     setFlowNodes(prev => prev.map(n => ({
       ...n,
+      style: {
+        ...n.style,
+        opacity: highlightedPath ? (highlightedPath.has(n.id) ? 1 : 0.2) : 1,
+        transition: skipAnimations ? 'none' : 'opacity 150ms ease',
+      },
       data: {
         ...n.data,
         selected: selectedNode?.id === n.id,
-        connected: Boolean(neighborSet && selectedNode?.id !== n.id && neighborSet.has(n.id)),
+        connected: Boolean(highlightedPath && selectedNode?.id !== n.id && highlightedPath.has(n.id)),
         expanded: selectedNode?.id === n.id,
         controlsId: 'causal-node-detail-panel',
-        dimmed: neighborSet ? !neighborSet.has(n.id) : false,
+        dimmed: highlightedPath ? !highlightedPath.has(n.id) : false,
       },
     })));
-  }, [neighborSet, selectedNode?.id, setFlowNodes]);
+  }, [highlightedPath, selectedNode?.id, setFlowNodes, skipAnimations]);
 
   // Apply highlight to flow edges
   useEffect(() => {
-    setFlowEdges(prev => {
-      if (!neighborSet) return prev.map(e => ({ ...e, style: { ...e.style, opacity: 1 } }));
-      return prev.map(e => ({
-        ...e,
-        style: {
-          ...e.style,
-          opacity: (neighborSet.has(e.source) && neighborSet.has(e.target)) ? 1 : 0.24,
-        },
-      }));
-    });
-  }, [neighborSet, setFlowEdges]);
+    setFlowEdges(prev => prev.map(e => ({
+      ...e,
+      type: (highlightedPath?.has(e.id) && !skipAnimations) ? 'animated' : undefined,
+      selected: highlightedPath?.has(e.id) ?? false,
+      style: {
+        ...e.style,
+        opacity: highlightedPath ? (highlightedPath.has(e.id) ? 1 : 0.2) : 1,
+        transition: skipAnimations ? 'none' : 'opacity 150ms ease',
+      },
+    })));
+  }, [highlightedPath, setFlowEdges, skipAnimations]);
 
   const nodes = flowNodes;
   const edges = flowEdges;
@@ -853,7 +924,10 @@ export function CausalReviewView() {
   }, [openNodeDetail]);
 
   // C3: Background click resets highlight + closes detail panel
-  const onPaneClick = useCallback(() => setSelectedNode(null), []);
+  const onPaneClick = useCallback(() => {
+    setSelectedNode(null);
+    setHighlightedPath(null);
+  }, []);
   const resetViewport = useCallback(() => {
     reactFlowRef.current?.fitView?.(viewportFitOptions);
   }, [viewportFitOptions]);
@@ -1155,12 +1229,21 @@ export function CausalReviewView() {
 
         {nodeCount === 0 && !agentSearch ? (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
-            <div style={{ textAlign: 'center', maxWidth: 360 }}>
-              <span style={{ fontSize: '2rem', display: 'block', marginBottom: 12 }} aria-hidden="true">{'\u{1F578}️'}</span>
-              <p style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.9rem', marginBottom: 8 }}>{t('causal.empty', 'No causal graph data available for this scenario.')}</p>
-              <p style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.78rem', lineHeight: 1.5 }}>
-                {t('causal.empty_guide', 'Causal graphs are generated during simulation when agents form cause-and-effect relationships across rounds. Try running a longer or deeper scenario.')}
+            <div className="dag-empty-ghost" data-testid="dag-empty-state">
+              <div className="dag-empty-skeleton dag-empty-shimmer">
+                <div className="dag-empty-node" />
+                <div className="dag-empty-edge" />
+                <div className="dag-empty-node" />
+                <div className="dag-empty-edge" />
+                <div className="dag-empty-node" />
+              </div>
+              <p className="dag-empty-text">{t('dag.empty_state_title', 'No graph data yet')}</p>
+              <p className="dag-empty-text" style={{ fontSize: '0.78rem' }}>
+                {t('dag.empty_state_body', 'Run a simulation to generate causal relationships')}
               </p>
+              <Link to="/" className="dag-empty-cta">
+                {t('dag.empty_state_cta', 'Back to input')}
+              </Link>
             </div>
           </div>
         ) : nodeCount === 0 && agentSearch ? (
@@ -1228,6 +1311,7 @@ export function CausalReviewView() {
                 edges={edges}
                 ariaLabelConfig={graphAriaLabelConfig}
                 nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onNodeClick={onNodeClick}

@@ -5,20 +5,27 @@ import {
   KG_DEGRADE_THRESHOLDS,
   KG_DIM_OPACITY,
   KG_GRAPH_BEHAVIORS,
+  KG_DRAG_FORCE_BEHAVIOR,
+  KG_DRAG_STATIC_BEHAVIOR,
+  DEFAULT_KG_LAYOUT,
+  NODE_HALO_STROKE,
+  EDGE_TYPE_LABEL_I18N,
   buildKgG6Options,
   computeNodeSize,
   getKGEdgeStyle,
   getKGNodeStyle,
+  getKGNodeHoverStyle,
   toKgG6Data,
 } from './kgGraphConfig';
+import { KG_G6_TOKENS_LIGHT, KG_G6_TOKENS_DARK, resolveKGG6Tokens } from './graphTokens';
 import type { GraphPayload } from '../hooks/useScenarioGraph';
 
 // ── Constants ──────────────────────────────────────────────
 
 describe('kgGraphConfig constants', () => {
-  it('KG_DEGREE_SCALE has min=30 and max=60', () => {
-    expect(KG_DEGREE_SCALE.min).toBe(30);
-    expect(KG_DEGREE_SCALE.max).toBe(60);
+  it('KG_DEGREE_SCALE has min=14 and max=28 (mirofish-aligned compact node sizes)', () => {
+    expect(KG_DEGREE_SCALE.min).toBe(14);
+    expect(KG_DEGREE_SCALE.max).toBe(28);
   });
 
   it('KG_DEGRADE_THRESHOLDS has mobileNodes=200 and animationLimit=300', () => {
@@ -30,40 +37,40 @@ describe('kgGraphConfig constants', () => {
     expect(KG_DIM_OPACITY).toBe(0.2);
   });
 
-  it('KG_GRAPH_BEHAVIORS contains exactly drag-canvas, zoom-canvas, click-select', () => {
-    expect([...KG_GRAPH_BEHAVIORS]).toEqual(['drag-canvas', 'zoom-canvas', 'click-select']);
+  it('KG_GRAPH_BEHAVIORS contains only canvas navigation defaults', () => {
+    expect([...KG_GRAPH_BEHAVIORS]).toEqual(['drag-canvas', 'zoom-canvas']);
   });
 });
 
 // ── computeNodeSize ────────────────────────────────────────
 
 describe('computeNodeSize', () => {
-  it('returns min (30) for degree 0', () => {
-    expect(computeNodeSize(0)).toBe(30);
+  it('returns min (14) for degree 0', () => {
+    expect(computeNodeSize(0)).toBe(14);
   });
 
-  it('returns min (30) for negative degree', () => {
-    expect(computeNodeSize(-5)).toBe(30);
+  it('returns min (14) for negative degree', () => {
+    expect(computeNodeSize(-5)).toBe(14);
   });
 
-  it('returns min (30) for NaN', () => {
-    expect(computeNodeSize(NaN)).toBe(30);
+  it('returns min (14) for NaN', () => {
+    expect(computeNodeSize(NaN)).toBe(14);
   });
 
-  it('returns min (30) for Infinity', () => {
-    expect(computeNodeSize(Infinity)).toBe(30);
+  it('returns min (14) for Infinity', () => {
+    expect(computeNodeSize(Infinity)).toBe(14);
   });
 
-  it('returns max (60) for very large degree', () => {
-    expect(computeNodeSize(1000)).toBe(60);
+  it('returns max (28) for very large degree', () => {
+    expect(computeNodeSize(1000)).toBe(28);
   });
 
   it('returns degree + min when within range', () => {
-    expect(computeNodeSize(10)).toBe(40);
+    expect(computeNodeSize(10)).toBe(24);
   });
 
   it('clamps at max for degree that exceeds max - min', () => {
-    expect(computeNodeSize(31)).toBe(60);
+    expect(computeNodeSize(31)).toBe(28);
   });
 
   it('is monotonically non-decreasing', () => {
@@ -88,7 +95,7 @@ describe('getKGNodeStyle', () => {
   it('falls back to default color for unknown nodeType', () => {
     const style = getKGNodeStyle('unknown_type_xyz', 'dark');
     expect(style.fill).toBe('#888888');
-    expect(style.lineWidth).toBe(1.5);
+    expect(style.lineWidth).toBe(2.5);
   });
 
   it('uses NODE_TYPE_COLORS_HEX for known types', () => {
@@ -262,12 +269,21 @@ describe('buildKgG6Options', () => {
 
   it('includes hover-activate behavior when enableHover is true', () => {
     const opts = buildKgG6Options({ data: baseData, theme: 'dark', reducedMotion: false, enableHover: true });
-    expect(opts.behaviors).toContain('hover-activate');
+    expect(opts.behaviors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'hover-activate',
+        degree: 1,
+        direction: 'both',
+        state: 'active',
+        inactiveState: 'inactive',
+        animation: false,
+      }),
+    ]));
   });
 
   it('does not include hover-activate when enableHover is false', () => {
     const opts = buildKgG6Options({ data: baseData, theme: 'dark', reducedMotion: false, enableHover: false });
-    expect(opts.behaviors).not.toContain('hover-activate');
+    expect(opts.behaviors.some((b) => typeof b === 'object' && b !== null && b.type === 'hover-activate')).toBe(false);
   });
 
   it('uses different background for dark vs light', () => {
@@ -278,7 +294,376 @@ describe('buildKgG6Options', () => {
 
   it('always includes autoFit and autoResize', () => {
     const opts = buildKgG6Options({ data: baseData, theme: 'dark', reducedMotion: false });
-    expect(opts.autoFit).toBe('view');
+    expect(['view', 'center']).toContain(opts.autoFit);
     expect(opts.autoResize).toBe(true);
+  });
+
+  it('falls back to d3-force layout with capped simulation when no layout is provided', () => {
+    const opts = buildKgG6Options({ data: baseData, theme: 'dark', reducedMotion: false });
+    expect(opts.layout).toMatchObject({
+      type: 'd3-force',
+      preventOverlap: true,
+      nodeSize: KG_DEGREE_SCALE.max,
+    });
+    expect(opts.layout).toHaveProperty('linkDistance');
+    expect(opts.layout).toHaveProperty('alphaDecay');
+    expect(opts.layout).toHaveProperty('alphaMin');
+  });
+
+  it('uses caller-supplied layout when provided', () => {
+    const opts = buildKgG6Options({
+      data: baseData,
+      theme: 'dark',
+      reducedMotion: false,
+      layout: { type: 'combo-combined', preventOverlap: true, nodeSize: 24, spacing: 8 },
+    });
+    expect(opts.layout).toEqual({
+      type: 'combo-combined',
+      preventOverlap: true,
+      nodeSize: 24,
+      spacing: 8,
+    });
+  });
+
+  it('sets global edge.type to cubic and endArrow to true', () => {
+    const opts = buildKgG6Options({ data: baseData, theme: 'dark', reducedMotion: false });
+    expect(opts.edge.type).toBe('cubic');
+    expect(opts.edge.style.endArrow).toBe(true);
+  });
+});
+
+// ── F1: NODE_HALO_STROKE + hover style ────────────────────
+
+describe('getKGNodeStyle halo stroke', () => {
+  it('returns NODE_HALO_STROKE[dark] (#f8fafc) for dark theme with lineWidth 2.5', () => {
+    const style = getKGNodeStyle('event', 'dark');
+    expect(style.stroke).toBe(NODE_HALO_STROKE.dark);
+    expect(style.stroke).toBe('#f8fafc');
+    expect(style.lineWidth).toBe(2.5);
+  });
+
+  it('returns NODE_HALO_STROKE[light] (#0f172a) for light theme with lineWidth 2.5', () => {
+    const style = getKGNodeStyle('event', 'light');
+    expect(style.stroke).toBe(NODE_HALO_STROKE.light);
+    expect(style.stroke).toBe('#0f172a');
+    expect(style.lineWidth).toBe(2.5);
+  });
+});
+
+describe('getKGNodeHoverStyle', () => {
+  it('returns lineWidth 3.5 and hover stroke from KG editorial tokens', () => {
+    const hoverDark = getKGNodeHoverStyle('event', 'dark');
+    expect(hoverDark.lineWidth).toBe(3.5);
+    expect(hoverDark.stroke).toBe(KG_G6_TOKENS_DARK.hoverStroke);
+    expect(hoverDark.stroke).toBe('#c61583');
+
+    const hoverLight = getKGNodeHoverStyle('event', 'light');
+    expect(hoverLight.lineWidth).toBe(3.5);
+    expect(hoverLight.stroke).toBe(KG_G6_TOKENS_LIGHT.hoverStroke);
+    expect(hoverLight.stroke).toBe('#db589e');
+  });
+});
+
+// ── Fix-W1: layout constants ──────────────────────────────
+
+describe('DEFAULT_KG_LAYOUT d3-force parameters', () => {
+  it('uses d3-force type with repulsive nodeStrength and link distance', () => {
+    expect(DEFAULT_KG_LAYOUT.type).toBe('d3-force');
+    expect(DEFAULT_KG_LAYOUT.preventOverlap).toBe(true);
+    expect(DEFAULT_KG_LAYOUT.linkDistance).toBeGreaterThanOrEqual(40);
+    expect(DEFAULT_KG_LAYOUT.nodeStrength).toBeLessThanOrEqual(-100);
+    expect(DEFAULT_KG_LAYOUT.collideStrength).toBeGreaterThan(0.5);
+    expect(DEFAULT_KG_LAYOUT.centerStrength).toBeGreaterThan(0);
+  });
+});
+
+// ── Fix-W2: edgeLabelLimit ────────────────────────────────
+
+describe('KG_DEGRADE_THRESHOLDS edgeLabelLimit', () => {
+  it('has edgeLabelLimit=200 and nodeLabelLimit=24', () => {
+    expect(KG_DEGRADE_THRESHOLDS.edgeLabelLimit).toBe(200);
+    expect(KG_DEGRADE_THRESHOLDS.nodeLabelLimit).toBe(24);
+  });
+});
+
+// ── Add-S1: EDGE_TYPE_LABEL_I18N ──────────────────────────
+
+describe('EDGE_TYPE_LABEL_I18N', () => {
+  it('contains exactly 7 edge type keys', () => {
+    const keys = Object.keys(EDGE_TYPE_LABEL_I18N);
+    expect(keys).toHaveLength(7);
+    expect(keys).toEqual(expect.arrayContaining([
+      'caused', 'supports', 'temporal', 'rebuts', 'attacks', 'accepted', 'unaddressed',
+    ]));
+  });
+
+  it('each entry is a [i18nKey, fallback] tuple', () => {
+    for (const [type, tuple] of Object.entries(EDGE_TYPE_LABEL_I18N)) {
+      expect(tuple).toHaveLength(2);
+      expect(tuple[0]).toContain('causal.edge_');
+      expect(tuple[1]).toBe(type);
+    }
+  });
+});
+
+// ── toKgG6Data edge label injection ───────────────────────
+
+describe('toKgG6Data edge labels', () => {
+  it('injects labelText, labelBackground=true, labelBackgroundRadius=3 on each edge', () => {
+    const graph = makeGraph(3);
+    const result = toKgG6Data(graph);
+    expect(result.edges).toHaveLength(1);
+    const edgeStyle = result.edges[0].style!;
+    expect(edgeStyle.labelText).toBe('caused');
+    expect(edgeStyle.labelBackground).toBe(true);
+    expect(edgeStyle.labelBackgroundRadius).toBe(3);
+  });
+
+  it('uses t() function for labelText when provided', () => {
+    const graph = makeGraph(3);
+    const mockT = (key: string, fallback: string) => key === 'causal.edge_caused' ? '导致' : fallback;
+    const result = toKgG6Data(graph, { t: mockT });
+    expect(result.edges[0].style!.labelText).toBe('导致');
+  });
+
+  it('uses fallback for unknown edge types without t()', () => {
+    const graph: GraphPayload = {
+      id: 'g1',
+      nodes: [
+        { id: 'a', key: 'a', type: 'event', label: 'A', round: 0, payload: null },
+        { id: 'b', key: 'b', type: 'event', label: 'B', round: 1, payload: null },
+      ],
+      edges: [{ id: 'e1', source: 'a', target: 'b', type: 'unknown_edge_type', weight: null, label: null }],
+    };
+    const result = toKgG6Data(graph);
+    expect(result.edges[0].style!.labelText).toBe('unknown_edge_type');
+  });
+
+  it('applies light theme edge label colors from KG editorial tokens', () => {
+    const graph = makeGraph(3);
+    const result = toKgG6Data(graph, { theme: 'light' });
+    const edgeStyle = result.edges[0].style!;
+    expect(edgeStyle.labelBackgroundFill).toBe(KG_G6_TOKENS_LIGHT.edgeLabelBg);
+    expect(edgeStyle.labelBackgroundFill).toBe('rgba(252,252,250,0.95)');
+    expect(edgeStyle.labelFill).toBe(KG_G6_TOKENS_LIGHT.edgeLabelFg);
+    expect(edgeStyle.labelFill).toBe('#58554f');
+  });
+
+  it('applies dark theme edge label colors by default', () => {
+    const graph = makeGraph(3);
+    const result = toKgG6Data(graph);
+    const edgeStyle = result.edges[0].style!;
+    expect(edgeStyle.labelBackgroundFill).toBe(KG_G6_TOKENS_DARK.edgeLabelBg);
+    expect(edgeStyle.labelBackgroundFill).toBe('rgba(24,22,17,0.85)');
+    expect(edgeStyle.labelFill).toBe(KG_G6_TOKENS_DARK.edgeLabelFg);
+    expect(edgeStyle.labelFill).toBe('#928f88');
+  });
+});
+
+// ── KG Editorial Token Resolution ─────────────────────────
+
+describe('resolveKGG6Tokens', () => {
+  it('resolves light theme to cream surface + magenta brand', () => {
+    const tokens = resolveKGG6Tokens('light');
+    expect(tokens.background).toBe('#fcfcfa');         // project --bg-surface
+    expect(tokens.nodeStroke).toBe('#c61583');         // project --color-primary
+    expect(tokens.brandRing).toBe('#c61583');
+    expect(tokens.label).toBe('#181611');              // project --text-primary
+  });
+
+  it('resolves dark theme to dark editorial mirror', () => {
+    const tokens = resolveKGG6Tokens('dark');
+    expect(tokens.background).toBe('#181611');
+    expect(tokens.nodeStroke).toBe('#db589e');         // primary-dim
+    expect(tokens.label).toBe('#f0eee9');
+  });
+
+  it('exposes edgeStrokeSubtle and dragGhost translucent tokens', () => {
+    const lightTokens = resolveKGG6Tokens('light');
+    expect(lightTokens.edgeStrokeSubtle).toMatch(/rgba\(/);
+    expect(lightTokens.dragGhost).toMatch(/rgba\(198,\s*21,\s*131/);
+  });
+});
+
+// ── Drag-Element-Force Behavior (Mirofish) ────────────────
+
+describe('KG_DRAG_FORCE_BEHAVIOR', () => {
+  it('uses drag-element-force with fixed=false for elastic snap-back', () => {
+    expect(KG_DRAG_FORCE_BEHAVIOR.type).toBe('drag-element-force');
+    expect(KG_DRAG_FORCE_BEHAVIOR.fixed).toBe(false);
+  });
+
+  it('configures grab/grabbing cursors during drag', () => {
+    expect(KG_DRAG_FORCE_BEHAVIOR.cursor.grab).toBe('grab');
+    expect(KG_DRAG_FORCE_BEHAVIOR.cursor.grabbing).toBe('grabbing');
+  });
+});
+
+describe('KG_DRAG_STATIC_BEHAVIOR (non-force layout fallback)', () => {
+  it('uses plain drag-element for combo / non-force layouts', () => {
+    expect(KG_DRAG_STATIC_BEHAVIOR.type).toBe('drag-element');
+  });
+
+  it('still configures grab/grabbing cursors', () => {
+    expect(KG_DRAG_STATIC_BEHAVIOR.cursor.grab).toBe('grab');
+    expect(KG_DRAG_STATIC_BEHAVIOR.cursor.grabbing).toBe('grabbing');
+  });
+});
+
+describe('buildKgG6Options drag behavior injection', () => {
+  const baseDragData = { nodes: [], edges: [] };
+
+  function findBehaviorByType(
+    behaviors: ReadonlyArray<unknown>,
+    type: string,
+  ): Record<string, unknown> | undefined {
+    return behaviors.find(
+      (b): b is Record<string, unknown> =>
+        typeof b === 'object' && b !== null && (b as { type?: unknown }).type === type,
+    ) as Record<string, unknown> | undefined;
+  }
+
+  it('injects drag-element-force behavior when layout is d3-force (default)', () => {
+    const opts = buildKgG6Options({ data: baseDragData, theme: 'light', reducedMotion: false });
+    const dragEntry = findBehaviorByType(opts.behaviors, 'drag-element-force');
+    expect(dragEntry).toBeDefined();
+    expect(dragEntry!.fixed).toBe(false);
+    expect(dragEntry!.cursor).toEqual({ grab: 'grab', grabbing: 'grabbing' });
+  });
+
+  it('downgrades to plain drag-element when layout is non-force (e.g. comboLayout)', () => {
+    const opts = buildKgG6Options({
+      data: baseDragData,
+      theme: 'light',
+      reducedMotion: false,
+      layout: { type: 'combo-combined', preventOverlap: true, nodeSize: 24, spacing: 8 },
+    });
+    const forceEntry = findBehaviorByType(opts.behaviors, 'drag-element-force');
+    const staticEntry = findBehaviorByType(opts.behaviors, 'drag-element');
+    expect(forceEntry).toBeUndefined();
+    expect(staticEntry).toBeDefined();
+    const staticCursor = staticEntry!.cursor as { grab: string };
+    expect(staticCursor.grab).toBe('grab');
+  });
+
+  it('also injects drag-element-force when layout is d3-force-3d (G6 v5 supports both force variants)', () => {
+    const opts = buildKgG6Options({
+      data: baseDragData,
+      theme: 'light',
+      reducedMotion: false,
+      layout: { type: 'd3-force-3d', preventOverlap: true, nodeSize: 24, linkDistance: 50 },
+    });
+    const dragEntry = findBehaviorByType(opts.behaviors, 'drag-element-force');
+    const staticEntry = findBehaviorByType(opts.behaviors, 'drag-element');
+    expect(dragEntry).toBeDefined();
+    expect(dragEntry!.fixed).toBe(false);
+    // Static drag-element MUST NOT also be present when d3-force-3d gets the elastic variant
+    expect(staticEntry).toBeUndefined();
+  });
+
+  it('preserves base canvas behaviors before drag-element* without click-select state locking', () => {
+    const opts = buildKgG6Options({ data: baseDragData, theme: 'light', reducedMotion: false });
+    expect(opts.behaviors).toContain('drag-canvas');
+    expect(opts.behaviors).toContain('zoom-canvas');
+    expect(opts.behaviors).not.toContain('click-select');
+  });
+
+  it('still appends hover-activate after drag behavior when enableHover is true', () => {
+    const opts = buildKgG6Options({
+      data: baseDragData,
+      theme: 'light',
+      reducedMotion: false,
+      enableHover: true,
+    });
+    expect(opts.behaviors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'hover-activate', animation: false }),
+    ]));
+    // Order matters: drag before hover so click+drag don't compete on the same target
+    const indexOfDrag = opts.behaviors.findIndex(
+      (b) => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'drag-element-force',
+    );
+    const indexOfHover = opts.behaviors.findIndex(
+      (b) => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'hover-activate',
+    );
+    expect(indexOfDrag).toBeGreaterThanOrEqual(0);
+    expect(indexOfHover).toBeGreaterThan(indexOfDrag);
+  });
+});
+
+describe('buildKgG6Options minimap mask uses subtle KG token', () => {
+  it('renders minimap mask stroke with edgeStrokeSubtle (not magenta brand)', () => {
+    const container = document.createElement('div');
+    const opts = buildKgG6Options({
+      data: { nodes: [], edges: [] },
+      theme: 'light',
+      reducedMotion: false,
+      minimapContainer: container,
+    });
+    const minimap = opts.plugins[0] as { maskStyle: { stroke: string; fill: string } };
+    expect(minimap.maskStyle.stroke).toBe(KG_G6_TOKENS_LIGHT.edgeStrokeSubtle);
+    expect(minimap.maskStyle.stroke).not.toBe(KG_G6_TOKENS_LIGHT.brandRing);
+    // Mask fill should be theme-tinted, not pure white
+    expect(minimap.maskStyle.fill).not.toBe('rgba(255,255,255,0.16)');
+  });
+});
+
+// ── P6: New state styles + animation ─────────────────────
+
+describe('P6 node selected state', () => {
+  it('node state config includes selected with halo properties', () => {
+    const opts = buildKgG6Options({ data: { nodes: [], edges: [] }, theme: 'dark', reducedMotion: false });
+    const selectedState = opts.node.state.selected;
+    expect(selectedState).toBeDefined();
+    expect(selectedState.style).toMatchObject({
+      halo: true,
+      haloLineWidth: 18,
+      haloStrokeOpacity: 0.34,
+      lineWidth: 4,
+    });
+  });
+});
+
+describe('P6 edge streaming state', () => {
+  it('edge state config includes streaming with lineDash', () => {
+    const opts = buildKgG6Options({ data: { nodes: [], edges: [] }, theme: 'light', reducedMotion: false });
+    const streamingState = opts.edge.state.streaming;
+    expect(streamingState).toBeDefined();
+    expect(streamingState.style).toMatchObject({
+      lineDash: [7, 5],
+      lineWidth: 2,
+      opacity: 0.86,
+    });
+  });
+});
+
+describe('P6 node entrance animation', () => {
+  it('node animation is { enter: "fade" } when reducedMotion=false', () => {
+    const opts = buildKgG6Options({ data: { nodes: [], edges: [] }, theme: 'dark', reducedMotion: false });
+    expect(opts.node.animation).toEqual({ enter: 'fade' });
+  });
+
+  it('node animation is false when reducedMotion=true', () => {
+    const opts = buildKgG6Options({ data: { nodes: [], edges: [] }, theme: 'dark', reducedMotion: true });
+    expect(opts.node.animation).toBe(false);
+  });
+});
+
+describe('P6 hover-activate regression guard', () => {
+  it('hover-activate preserves animation:false (P6 regression guard)', () => {
+    const opts = buildKgG6Options({
+      data: { nodes: [], edges: [] },
+      theme: 'dark',
+      reducedMotion: false,
+      enableHover: true,
+    });
+    const hoverBehavior = opts.behaviors.find(
+      (b) => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'hover-activate',
+    ) as Record<string, unknown> | undefined;
+    expect(hoverBehavior).toBeDefined();
+    expect(hoverBehavior!.animation).toBe(false);
+    expect(hoverBehavior!.degree).toBe(1);
+    expect(hoverBehavior!.direction).toBe('both');
+    expect(hoverBehavior!.state).toBe('active');
+    expect(hoverBehavior!.inactiveState).toBe('inactive');
   });
 });

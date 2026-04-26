@@ -28,6 +28,7 @@ import '@xyflow/react/dist/style.css';
 import { ExportPanel } from './ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from './NodeDetailPanel';
 import GraphNodeCard from './GraphNodeCard';
+import AnimatedEdge from './AnimatedEdge';
 import { NodeConversationSheet } from './kg/NodeConversationSheet';
 import {
   NODE_TYPE_COLORS_HEX,
@@ -180,6 +181,7 @@ const TYPE_LABEL_I18N: Record<string, [string, string]> = {
 };
 
 const PERF_TOOLTIP_LIMIT = 150;
+const PERF_ANIMATION_LIMIT = 150;
 const NO_ARROW_TYPES = new Set(['temporal']);
 const GRAPH_COMPACT_MEDIA_QUERY = '(max-width: 768px)';
 
@@ -354,12 +356,12 @@ function layoutArgumentDag(
   }
 
   const hasGraphNodes = rawNodes.length > 0;
-  const nodeWidth = 220;
-  const nodeHeight = 60;
+  const nodeWidth = 280;
+  const nodeHeight = 120;
 
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: 'TB', ranksep: 60, nodesep: 30 });
+  g.setGraph({ rankdir: 'TB', ranksep: 100, nodesep: 80 });
 
   if (!hasGraphNodes) {
     for (const u of units) g.setNode(u.id, { width: nodeWidth, height: nodeHeight });
@@ -469,10 +471,52 @@ function layoutArgumentDag(
       style: { stroke, strokeDasharray: style?.strokeDasharray },
       labelStyle: tierColor ? { fill: tierColor, fontSize: 10, fontWeight: 600 } : undefined,
       markerEnd: NO_ARROW_TYPES.has(e.type) ? undefined : { type: MarkerType.ArrowClosed, color: stroke },
+      data: {
+        ...(edgeLabel ? { label: edgeLabel } : {}),
+        ...(e.evidence?.detail ? { detail: e.evidence.detail } : {}),
+      },
     };
   });
 
   return { nodes: flowNodes, edges: flowEdges };
+}
+
+// ── Path tracing ───────────────────────────────────────────
+
+function traceArgumentPath(
+  nodeId: string,
+  edges: Edge[],
+): Set<string> {
+  const connected = new Set<string>([nodeId]);
+  // Trace ancestors
+  const queue = [nodeId];
+  const visited = new Set<string>([nodeId]);
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const e of edges) {
+      if (e.target === current && !visited.has(e.source)) {
+        visited.add(e.source);
+        connected.add(e.source);
+        connected.add(e.id);
+        queue.push(e.source);
+      }
+    }
+  }
+  // Trace descendants
+  const queue2 = [nodeId];
+  const visited2 = new Set<string>([nodeId]);
+  while (queue2.length > 0) {
+    const current = queue2.shift()!;
+    for (const e of edges) {
+      if (e.source === current && !visited2.has(e.target)) {
+        visited2.add(e.target);
+        connected.add(e.target);
+        connected.add(e.id);
+        queue2.push(e.target);
+      }
+    }
+  }
+  return connected;
 }
 
 // ── Main Component ──────────────────────────────────────────
@@ -496,6 +540,8 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
   const { t, i18n } = useTranslation();
   const isCompactViewport = useCompactGraphViewport();
   const prefersReducedMotion = useReducedMotion();
+  // P6 Phase 3: track initial layout for entrance animation
+  const layoutAppliedRef = useRef(false);
   const [data, setData] = useState<ArgumentMapData | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorTier, setErrorTier] = useState<ErrorTier>(null);
@@ -507,6 +553,9 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     identityId: null,
     origin: { nodeId: '', nodeType: '' },
   });
+  // P6 Phase 2: path highlighting
+  const [highlightedPath, setHighlightedPath] = useState<Set<string> | null>(null);
+  const edgeTypes = useMemo(() => ({ animated: AnimatedEdge }), []);
   // C5: Status filter
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
   const exportRootId = `argument-map-${useId().replace(/:/g, '-')}`;
@@ -583,13 +632,29 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
 
   const { nodes: layoutNodes, edges: layoutEdges } = useMemo(() => {
     if (!filteredData) return { nodes: [], edges: [] };
-    return layoutArgumentDag(
+    const result = layoutArgumentDag(
       filteredData.nodes,
       filteredData.edges,
       filteredData.units,
       translate,
       prefersReducedMotion,
     );
+    // P6 Phase 3: add entrance animation class on first layout only
+    if (!layoutAppliedRef.current && result.nodes.length > 0 && !prefersReducedMotion) {
+      layoutAppliedRef.current = true;
+      return {
+        ...result,
+        nodes: result.nodes.map((n, i) => ({
+          ...n,
+          className: 'dag-node-enter',
+          style: { ...n.style, animationDelay: `${Math.min(i * 30, 300)}ms` },
+        })),
+      };
+    }
+    if (!layoutAppliedRef.current && result.nodes.length > 0) {
+      layoutAppliedRef.current = true;
+    }
+    return result;
   }, [filteredData, prefersReducedMotion, translate]);
   const layoutSignature = useMemo(() => (
     `${layoutNodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutEdges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
@@ -606,16 +671,24 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     if (!stillVisible) setSelectedNode(null);
   }, [selectedNode, filteredData]);
 
-  // C3: Neighbor highlight based on selected node
-  const neighborSet = useMemo(() => {
-    if (!selectedNode || !filteredData) return null;
-    const set = new Set<string>([selectedNode.id]);
-    for (const e of filteredData.edges) {
-      if (e.source === selectedNode.id) set.add(e.target);
-      if (e.target === selectedNode.id) set.add(e.source);
+  // P6 Phase 2: Full recursive path tracing (replaces 1-hop neighborSet)
+  const totalElements = layoutNodes.length + layoutEdges.length;
+  const skipAnimations = prefersReducedMotion || totalElements > PERF_ANIMATION_LIMIT;
+
+  // Compute full path highlight set when a node is selected
+  useEffect(() => {
+    if (!selectedNode || layoutEdges.length === 0) {
+      setHighlightedPath(null);
+      return;
     }
-    return set;
-  }, [selectedNode, filteredData]);
+    const pathSet = traceArgumentPath(selectedNode.id, layoutEdges);
+    setHighlightedPath(pathSet);
+  }, [selectedNode, layoutEdges]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep backward-compat neighborSet for node data (connected/dimmed flags)
+  const neighborSet = useMemo(() => {
+    return highlightedPath;
+  }, [highlightedPath]);
 
   const [argSearch, setArgSearch] = useState<string>('');
   const [resetKey, setResetKey] = useState<number>(0);
@@ -654,22 +727,28 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
       const isMatch = isSearchActive && searchState.matchIds!.has(n.id);
       const isRelated = isSearchActive && !isMatch && searchState.relatedIds.has(n.id);
       const searchDim = isSearchActive && !isMatch && !isRelated;
+      const pathDim = highlightedPath ? !highlightedPath.has(n.id) : false;
       return {
         ...n,
+        style: {
+          ...n.style,
+          opacity: highlightedPath ? (highlightedPath.has(n.id) ? 1 : 0.2) : 1,
+          transition: skipAnimations ? 'none' : 'opacity 150ms ease',
+        },
         data: {
           ...n.data,
           selected: selectedNode?.id === n.id,
           connected: Boolean(neighborSet && selectedNode?.id !== n.id && neighborSet.has(n.id)),
           expanded: selectedNode?.id === n.id,
           controlsId: 'argument-node-detail-panel',
-          dimmed: searchDim ? true : (neighborSet ? !neighborSet.has(n.id) : false),
+          dimmed: searchDim ? true : pathDim,
           searchMatch: isMatch,
           searchRelated: isRelated,
           tooltipDisabled,
         },
       };
     });
-  }, [layoutNodes, neighborSet, selectedNode?.id, searchState]);
+  }, [layoutNodes, neighborSet, highlightedPath, selectedNode?.id, searchState, skipAnimations]);
 
   const baseEdges = useMemo(() => {
     const isSearchActive = searchState.matchIds !== null;
@@ -683,12 +762,22 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
         if (!sm && !tm && !sr && !tr) opacity = 0.08;
         else if (sm && tm) opacity = 1;
         else opacity = 0.4;
-      } else if (neighborSet) {
-        opacity = (neighborSet.has(e.source) && neighborSet.has(e.target)) ? 1 : 0.24;
+      } else if (highlightedPath) {
+        opacity = highlightedPath.has(e.id) ? 1 : 0.2;
       }
-      return { ...e, style: { ...e.style, opacity } };
+      const isOnPath = highlightedPath?.has(e.id) ?? false;
+      return {
+        ...e,
+        type: (isOnPath && !skipAnimations) ? 'animated' : undefined,
+        selected: isOnPath,
+        style: {
+          ...e.style,
+          opacity,
+          transition: skipAnimations ? 'none' : 'opacity 150ms ease',
+        },
+      };
     });
-  }, [layoutEdges, neighborSet, searchState]);
+  }, [layoutEdges, highlightedPath, searchState, skipAnimations]);
 
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState(baseNodes);
   const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState(baseEdges);
@@ -805,7 +894,10 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
   }, [conversationScenarioId, rawNodeMap, unitByNodeId, unitById]);
 
   // C3: Background click resets highlight + closes detail panel
-  const onPaneClick = useCallback(() => setSelectedNode(null), []);
+  const onPaneClick = useCallback(() => {
+    setSelectedNode(null);
+    setHighlightedPath(null);
+  }, []);
   const resetViewport = useCallback(() => {
     reactFlowRef.current?.fitView?.(viewportFitOptions);
   }, [viewportFitOptions]);
@@ -863,7 +955,22 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     );
   }
   if (!data || (data.units.length === 0 && data.nodes.length === 0)) {
-    return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('argument.empty', 'No argument map available.')}</p>;
+    return (
+      <div className="dag-empty-ghost" data-testid="dag-empty-state">
+        <div className="dag-empty-skeleton dag-empty-shimmer">
+          <div className="dag-empty-node" />
+          <div className="dag-empty-edge" />
+          <div className="dag-empty-node" />
+        </div>
+        <p className="dag-empty-text">{t('dag.empty_state_title', 'No graph data yet')}</p>
+        <p className="dag-empty-text" style={{ fontSize: '0.78rem' }}>
+          {t('argument.empty', 'No argument map available.')}
+        </p>
+        <button className="dag-empty-cta" onClick={() => window.history.back()}>
+          {t('dag.empty_state_cta', 'Back to input')}
+        </button>
+      </div>
+    );
   }
 
   return (
@@ -997,6 +1104,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
                   edges={flowEdges}
                   ariaLabelConfig={graphAriaLabelConfig}
                   nodeTypes={nodeTypes}
+                  edgeTypes={edgeTypes}
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
                   onNodeClick={onNodeClick}
@@ -1097,5 +1205,5 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
-export { STATUS_COLORS_HEX as STATUS_COLORS, TYPE_LABEL_I18N, safeParsePayload, mapBackendNode, mapBackendEdge, mapBackendUnit };
+export { STATUS_COLORS_HEX as STATUS_COLORS, TYPE_LABEL_I18N, safeParsePayload, mapBackendNode, mapBackendEdge, mapBackendUnit, traceArgumentPath, PERF_ANIMATION_LIMIT };
 export type { ArgumentUnit, ArgumentMapData, ErrorTier };

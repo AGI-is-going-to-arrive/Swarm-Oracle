@@ -1015,7 +1015,12 @@
       "evidence_high": "High",
       "evidence_medium": "Medium",
       "evidence_low": "Low",
-      "evidence_round": "Source: Round {{round}}"
+      "evidence_round": "Source: Round {{round}}",
+      "edge_supports": "supports",
+      "edge_rebuts": "rebuts",
+      "edge_attacks": "attacks",
+      "edge_accepted": "accepted",
+      "edge_unaddressed": "unaddressed"
     },
     "compare": {
       "title": "Counterfactual Compare",
@@ -1100,7 +1105,15 @@
       "fit_view": "Fit view",
       "minimap_aria": "Mini map",
       "sr_table_aria": "Screen-reader fallback table of graph nodes",
-      "sr_caption": "Graph nodes (screen-reader fallback)"
+      "sr_caption": "Graph nodes (screen-reader fallback)",
+      "toggle_edge_labels": "Toggle edge labels",
+      "show_labels": "Show edge labels",
+      "hide_labels": "Hide edge labels",
+      "quick_card_open_detail": "View details",
+      "quick_card_close": "Close",
+      "toolbar_aria": "Knowledge graph toolbar",
+      "drag_hint": "Drag any node to rearrange",
+      "nodes_count_label": "{{count}} nodes"
     },
     "agent_profile": {
       "dialog_label": "Agent Profile",
@@ -1502,6 +1515,18 @@
         "offline": "You're offline — connect to retry the replay stream.",
         "retry": "Retry"
       }
+    },
+    "dag": {
+      "empty_state_title": "No graph data yet",
+      "empty_state_body": "Run a simulation to generate causal relationships",
+      "empty_state_cta": "Back to input",
+      "edge_tooltip_hover": "Hover for details",
+      "edge_tooltip_escape": "Press Escape to dismiss",
+      "node_entrance_label": "Node appeared",
+      "path_highlight_active": "Path highlighted",
+      "path_highlight_clear": "Click background to clear",
+      "confidence_high": "High confidence",
+      "confidence_low": "Low confidence"
     }
   }
 }

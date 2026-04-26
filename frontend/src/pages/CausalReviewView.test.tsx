@@ -451,8 +451,9 @@ describe('CausalReviewView', () => {
       json: async () => ({ id: 'g1', nodes: [], edges: [] }),
     } as Response);
     renderView();
-    const empty = await screen.findByText(/No causal graph data/);
+    const empty = await screen.findByTestId('dag-empty-state');
     expect(empty).toBeInTheDocument();
+    expect(screen.getByText(/No graph data yet/)).toBeInTheDocument();
     vi.restoreAllMocks();
   });
 
@@ -464,8 +465,9 @@ describe('CausalReviewView', () => {
 
     renderView();
 
-    expect(await screen.findByText('No causal graph data available for this scenario.')).toBeInTheDocument();
-    expect(screen.getByText('Causal graphs are generated during simulation when agents form cause-and-effect relationships across rounds. Try running a longer or deeper scenario.')).toBeInTheDocument();
+    expect(await screen.findByTestId('dag-empty-state')).toBeInTheDocument();
+    expect(screen.getByText(/No graph data yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Run a simulation/)).toBeInTheDocument();
   });
 
   it('renders ReactFlow when graph has nodes', async () => {
@@ -658,7 +660,7 @@ describe('CausalReviewView', () => {
       json: async () => ({ id: 'g1', nodes: [], edges: [] }),
     } as Response);
     renderView();
-    await screen.findByText(/No causal graph data/);
+    await screen.findByTestId('dag-empty-state');
     expect(screen.queryByTestId('export-panel')).not.toBeInTheDocument();
     vi.restoreAllMocks();
   });

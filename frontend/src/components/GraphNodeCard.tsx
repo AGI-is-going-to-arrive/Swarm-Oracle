@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { isBrightGraphBackground } from '../lib/graphTokens';
+import { DAG_CONFIDENCE_TIERS, DAG_CARD_STYLES } from '../lib/dagEditorialTokens';
 
 // ── Icon resolution ────────────────────────────────────────
 
@@ -41,6 +42,12 @@ export interface GraphNodeCardData {
   disableNodeDrag?: boolean;
   sourcePos: string;
   targetPos: string;
+  // P6 Phase 2: editorial card enhancements (all optional for backward compat)
+  round?: number | null;
+  confidence?: string | null;  // 'high' | 'medium' | 'low'
+  sourceCount?: number;
+  summary?: string;
+  accentColor?: string;  // 4px left border color
   [key: string]: unknown;
 }
 
@@ -70,10 +77,14 @@ const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
   const sourcePos = resolvePos(d.sourcePos, Position.Bottom);
 
   const isBright = isBrightGraphBackground(d.bgColor);
+  const hasAccent = Boolean(d.accentColor);
+  const confidenceTier = d.confidence && (d.confidence === 'high' || d.confidence === 'medium' || d.confidence === 'low')
+    ? DAG_CONFIDENCE_TIERS[d.confidence as keyof typeof DAG_CONFIDENCE_TIERS]
+    : null;
 
   const card = (
     <button
-      className={d.disableNodeDrag === false ? 'nopan' : 'nodrag nopan'}
+      className={`dag-card-node ${d.disableNodeDrag === false ? 'nopan' : 'nodrag nopan'}`}
       type="button"
       aria-label={d.ariaLabel || d.fullLabel || d.label}
       aria-haspopup="dialog"
@@ -88,15 +99,29 @@ const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
         appearance: 'none',
         color: isBright ? '#111' : '#fff',
         textShadow: isBright ? 'none' : '0 1px 3px rgba(0,0,0,0.8)',
-        borderRadius: 12,
+        borderRadius: DAG_CARD_STYLES.borderRadius,
         padding: '10px 12px',
         minHeight: d.meta ? 52 : 46,
         fontSize: '0.78rem',
-        border: d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)',
+        borderLeft: hasAccent
+          ? `${DAG_CARD_STYLES.accentWidth}px solid ${d.accentColor}`
+          : undefined,
+        border: !hasAccent
+          ? (d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)')
+          : undefined,
+        borderTop: hasAccent
+          ? (d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)')
+          : undefined,
+        borderRight: hasAccent
+          ? (d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)')
+          : undefined,
+        borderBottom: hasAccent
+          ? (d.borderColor ? `2px solid ${d.borderColor}` : '1px solid rgba(255,255,255,0.1)')
+          : undefined,
         display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        maxWidth: 'min(240px, calc(100vw - 88px))',
+        flexDirection: 'column',
+        gap: 4,
+        maxWidth: 'min(280px, calc(100vw - 88px))',
         opacity: d.dimmed ? 0.45 : 1,
         filter: d.dimmed ? 'saturate(0.72)' : 'none',
         boxShadow: d.selected
@@ -111,37 +136,102 @@ const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
         boxSizing: 'border-box',
       }}
     >
-      {Icon && <Icon size={14} style={{ flexShrink: 0 }} />}
-      <span style={{ display: 'grid', gap: 2, minWidth: 0, overflow: 'hidden' }}>
-        {d.meta ? (
+      {/* Header row: icon + meta/label + round badge */}
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+        {Icon && <Icon size={14} style={{ flexShrink: 0 }} />}
+        <span style={{ display: 'grid', gap: 2, minWidth: 0, overflow: 'hidden', flex: 1 }}>
+          {d.meta ? (
+            <span
+              data-graph-node-meta="true"
+              style={{
+                fontSize: '0.64rem',
+                lineHeight: 1.25,
+                letterSpacing: '0.03em',
+                opacity: 0.86,
+                textTransform: 'uppercase',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {d.meta}
+            </span>
+          ) : null}
           <span
-            data-graph-node-meta="true"
+            data-graph-node-label="true"
             style={{
-              fontSize: '0.64rem',
-              lineHeight: 1.25,
-              letterSpacing: '0.03em',
-              opacity: 0.86,
-              textTransform: 'uppercase',
-              whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontWeight: d.selected ? 700 : 600,
             }}
           >
-            {d.meta}
+            {d.label}
           </span>
-        ) : null}
+        </span>
+        {d.round != null && (
+          <span
+            data-graph-node-round="true"
+            style={{
+              flexShrink: 0,
+              fontSize: '0.6rem',
+              fontWeight: 600,
+              background: 'rgba(255,255,255,0.15)',
+              borderRadius: 9999,
+              padding: '1px 6px',
+              lineHeight: 1.4,
+            }}
+          >
+            R{d.round}
+          </span>
+        )}
+      </span>
+      {/* Summary body (2-line clamped) */}
+      {d.summary ? (
         <span
-          data-graph-node-label="true"
+          data-graph-node-summary="true"
           style={{
+            fontSize: '0.7rem',
+            lineHeight: 1.35,
+            opacity: 0.82,
+            display: '-webkit-box',
+            WebkitLineClamp: DAG_CARD_STYLES.maxSummaryLines,
+            WebkitBoxOrient: 'vertical',
             overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            fontWeight: d.selected ? 700 : 600,
           }}
         >
-          {d.label}
+          {d.summary}
         </span>
-      </span>
+      ) : null}
+      {/* Footer: confidence bar + source count */}
+      {(confidenceTier || d.sourceCount) ? (
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+          {confidenceTier && (
+            <span
+              data-graph-node-confidence="true"
+              style={{
+                fontSize: '0.6rem',
+                fontWeight: 600,
+                color: confidenceTier.color,
+              }}
+            >
+              {confidenceTier.label}
+            </span>
+          )}
+          {d.sourceCount != null && d.sourceCount > 0 && (
+            <span
+              data-graph-node-source-count="true"
+              style={{
+                fontSize: '0.6rem',
+                opacity: 0.7,
+                marginLeft: 'auto',
+              }}
+            >
+              {d.sourceCount} src
+            </span>
+          )}
+        </span>
+      ) : null}
     </button>
   );
 

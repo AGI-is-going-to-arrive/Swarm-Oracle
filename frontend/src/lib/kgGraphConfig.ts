@@ -1,15 +1,66 @@
 import type { GraphPayload } from '../hooks/useScenarioGraph';
-import { NODE_TYPE_COLORS_HEX, resolveG6Tokens } from './graphTokens';
+import { NODE_TYPE_COLORS_HEX, resolveKGG6Tokens } from './graphTokens';
+import type { LayoutOptionsShape } from './g6Layouts';
 
 // ── Constants ──────────────────────────────────────────────
 
-export const KG_DEGREE_SCALE = { min: 30, max: 60 } as const;
+export const KG_DEGREE_SCALE = { min: 14, max: 28 } as const;
 
-export const KG_DEGRADE_THRESHOLDS = { mobileNodes: 200, animationLimit: 300 } as const;
+export const KG_DEGRADE_THRESHOLDS = {
+  mobileNodes: 200,
+  animationLimit: 300,
+  edgeLabelLimit: 200,
+  nodeLabelLimit: 24,
+} as const;
 
 export const KG_DIM_OPACITY = 0.2;
 
-export const KG_GRAPH_BEHAVIORS = ['drag-canvas', 'zoom-canvas', 'click-select'] as const;
+export const KG_GRAPH_BEHAVIORS = ['drag-canvas', 'zoom-canvas'] as const;
+
+/**
+ * Mirofish-style node drag behavior. Real-time force re-simulation
+ * is supported by G6 v5's `drag-element-force` against `d3-force`
+ * and `d3-force-3d` layouts. For non-force layouts (e.g. comboLayout
+ * used by KGExplorerView) we downgrade to plain `drag-element` which
+ * still allows freeform drag without the elastic snap-back.
+ */
+export const KG_DRAG_FORCE_BEHAVIOR = {
+  type: 'drag-element-force',
+  fixed: false,
+  cursor: { grab: 'grab', grabbing: 'grabbing' },
+} as const satisfies G6BehaviorEntry;
+
+export const KG_DRAG_STATIC_BEHAVIOR = {
+  type: 'drag-element',
+  cursor: { grab: 'grab', grabbing: 'grabbing' },
+} as const satisfies G6BehaviorEntry;
+
+export const DEFAULT_KG_LAYOUT: LayoutOptionsShape = {
+  type: 'd3-force',
+  preventOverlap: true,
+  nodeSize: KG_DEGREE_SCALE.max,
+  linkDistance: 50,
+  nodeStrength: -120,
+  edgeStrength: 0.6,
+  collideStrength: 1,
+  centerStrength: 1,
+  x: { strength: 0.08 },
+  y: { strength: 0.08 },
+  alphaDecay: 0.028,
+  alphaMin: 0.01,
+};
+
+export const NODE_HALO_STROKE = { dark: '#f8fafc', light: '#0f172a' } as const;
+
+export const EDGE_TYPE_LABEL_I18N: Record<string, [string, string]> = {
+  caused: ['causal.edge_caused', 'caused'],
+  supports: ['causal.edge_supports', 'supports'],
+  temporal: ['causal.edge_temporal', 'temporal'],
+  rebuts: ['causal.edge_rebuts', 'rebuts'],
+  attacks: ['causal.edge_attacks', 'attacks'],
+  accepted: ['causal.edge_accepted', 'accepted'],
+  unaddressed: ['causal.edge_unaddressed', 'unaddressed'],
+};
 
 const DEFAULT_NODE_COLOR = '#888888';
 
@@ -21,24 +72,46 @@ export function computeNodeSize(degree: number): number {
   return Math.min(Math.max(degree + min, min), max);
 }
 
+/**
+ * KG editorial design intent (codex review W-3):
+ * - Surface tokens (background, border, hover halo, drag ghost, edge stroke)
+ *   come from `KG_G6_TOKENS_LIGHT/DARK` (cream + magenta editorial palette).
+ * - Node *fill* deliberately keeps the per-type semantic palette
+ *   (`NODE_TYPE_COLORS_HEX`) so users can identify event / intervention /
+ *   verdict / claim / evidence / rebuttal / counter at a glance — the same
+ *   convention used by CausalReviewView, ArgumentMap and NodeDetailPanel.
+ *   KG editorial tokens control the surface; type color controls the
+ *   semantics. Both layers intentionally coexist.
+ */
 export function getKGNodeStyle(
   nodeType: string,
   theme: 'dark' | 'light',
 ): { fill: string; stroke: string; lineWidth: number; textColor: string } {
-  const tokens = resolveG6Tokens(theme);
+  const tokens = resolveKGG6Tokens(theme);
   const fill = NODE_TYPE_COLORS_HEX[nodeType] ?? DEFAULT_NODE_COLOR;
   return {
     fill,
-    stroke: tokens.nodeStroke,
-    lineWidth: 1.5,
+    stroke: NODE_HALO_STROKE[theme],
+    lineWidth: 2.5,
     textColor: tokens.label,
+  };
+}
+
+export function getKGNodeHoverStyle(
+  _nodeType: string,
+  theme: 'dark' | 'light',
+): { stroke: string; lineWidth: number } {
+  const tokens = resolveKGG6Tokens(theme);
+  return {
+    stroke: tokens.hoverStroke,
+    lineWidth: 3.5,
   };
 }
 
 export function getKGEdgeStyle(
   theme: 'dark' | 'light',
 ): { stroke: string; lineWidth: number; opacity: number } {
-  const tokens = resolveG6Tokens(theme);
+  const tokens = resolveKGG6Tokens(theme);
   return {
     stroke: tokens.edgeStroke,
     lineWidth: 1,
@@ -50,13 +123,15 @@ export interface KgG6DataOptions {
   searchTerm?: string;
   typeFilter?: string[];
   isMobile?: boolean;
+  theme?: 'dark' | 'light';
+  t?: (key: string, fallback: string) => string;
 }
 
 export function toKgG6Data(
   graph: GraphPayload,
   opts?: KgG6DataOptions,
 ): { nodes: KgG6Node[]; edges: KgG6Edge[]; truncatedFromCount: number | null } {
-  const { searchTerm, typeFilter, isMobile } = opts ?? {};
+  const { searchTerm, typeFilter, isMobile, theme, t } = opts ?? {};
 
   let nodes = graph.nodes;
 
@@ -90,11 +165,27 @@ export function toKgG6Data(
     })),
     edges: graph.edges
       .filter((e) => keptIds.has(e.source) && keptIds.has(e.target))
-      .map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-      })),
+      .map((e) => {
+        const i18nEntry = EDGE_TYPE_LABEL_I18N[e.type];
+        const labelText = i18nEntry
+          ? (t ? t(i18nEntry[0], i18nEntry[1]) : i18nEntry[1])
+          : e.type;
+        const resolvedTheme = theme ?? 'dark';
+        const tokens = resolveKGG6Tokens(resolvedTheme);
+        return {
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          style: {
+            labelText,
+            labelBackground: true,
+            labelBackgroundFill: tokens.edgeLabelBg,
+            labelBackgroundRadius: 3,
+            labelFontSize: 9,
+            labelFill: tokens.edgeLabelFg,
+          },
+        };
+      }),
     truncatedFromCount,
   };
 }
@@ -102,7 +193,7 @@ export function toKgG6Data(
 export interface KgG6Node {
   id: string;
   type: 'circle';
-  style: { labelText: string; labelPlacement: 'bottom' };
+  style: { labelText?: string; labelPlacement: 'bottom' };
   data: { kgType: string; kgRound: number | null };
 }
 
@@ -110,6 +201,15 @@ export interface KgG6Edge {
   id: string;
   source: string;
   target: string;
+  style?: {
+    labelText?: string;
+    labelBackground?: boolean;
+    labelBackgroundFill?: string;
+    labelBackgroundRadius?: number;
+    labelFontSize?: number;
+    labelFill?: string;
+    opacity?: number;
+  };
 }
 
 export interface BuildKgG6OptionsParams {
@@ -118,38 +218,86 @@ export interface BuildKgG6OptionsParams {
   reducedMotion: boolean;
   minimapContainer?: HTMLDivElement | null;
   enableHover?: boolean;
+  /**
+   * Layout override. When omitted, falls back to {@link DEFAULT_KG_LAYOUT}
+   * (force-directed, safe for KG payloads without combo grouping).
+   * KGExplorerView passes `comboLayout()` to keep its existing combo
+   * containment behavior.
+   */
+  layout?: LayoutOptionsShape;
+}
+
+/**
+ * Behavior entry: either a bare G6 behavior name or an options object
+ * (e.g. drag-element-force with `fixed: false`).
+ */
+export type G6BehaviorEntry = string | { type: string; [key: string]: unknown };
+
+export interface G6ElementStateStyle {
+  style: Record<string, unknown>;
 }
 
 export interface G6GraphOptions {
   data: { nodes: KgG6Node[]; edges: KgG6Edge[] };
-  autoFit: 'view';
+  autoFit: 'view' | 'center';
   autoResize: boolean;
   animation: boolean;
-  node: { style: { fill: string; stroke: string; lineWidth: number; labelFill: string; labelFontSize: number } };
-  edge: { style: { stroke: string; lineWidth: number; opacity: number } };
+  layout: LayoutOptionsShape;
+  node: {
+    style: { fill: string; stroke: string; lineWidth: number; labelFill: string; labelFontSize: number };
+    state: Record<'active' | 'inactive' | 'selected', G6ElementStateStyle>;
+    animation: false | { enter: string };
+  };
+  edge: {
+    type: string;
+    style: { stroke: string; lineWidth: number; opacity: number; endArrow: boolean };
+    state: Record<'active' | 'inactive' | 'streaming', G6ElementStateStyle>;
+  };
   background: string;
-  behaviors: string[];
+  behaviors: G6BehaviorEntry[];
   plugins: unknown[];
 }
 
 export function buildKgG6Options(opts: BuildKgG6OptionsParams): G6GraphOptions {
-  const tokens = resolveG6Tokens(opts.theme);
+  const tokens = resolveKGG6Tokens(opts.theme);
   const edgeStyle = getKGEdgeStyle(opts.theme);
+  const effectiveLayout: LayoutOptionsShape = opts.layout ?? DEFAULT_KG_LAYOUT;
 
-  const behaviors: string[] = [...KG_GRAPH_BEHAVIORS];
+  const behaviors: G6BehaviorEntry[] = [...KG_GRAPH_BEHAVIORS];
+
+  // Mirofish-style node drag: real-time force re-simulation requires
+  // a force-based layout (G6 v5 supports both `d3-force` and `d3-force-3d`).
+  // Other layouts (e.g. comboLayout in KGExplorerView) fall back to plain
+  // drag-element which still allows freeform drag.
+  const supportsForceDrag =
+    effectiveLayout.type === 'd3-force' || effectiveLayout.type === 'd3-force-3d';
+  if (supportsForceDrag) {
+    behaviors.push({ ...KG_DRAG_FORCE_BEHAVIOR });
+  } else {
+    behaviors.push({ ...KG_DRAG_STATIC_BEHAVIOR });
+  }
+
   if (opts.enableHover) {
-    behaviors.push('hover-activate');
+    behaviors.push({
+      type: 'hover-activate',
+      degree: 1,
+      direction: 'both',
+      state: 'active',
+      inactiveState: 'inactive',
+      animation: false,
+    });
   }
 
   const plugins: unknown[] = [];
   if (opts.minimapContainer) {
+    const maskFill = opts.theme === 'dark' ? 'rgba(40,36,30,0.32)' : 'rgba(241,237,229,0.42)';
     plugins.push({
       type: 'minimap',
       key: 'kg-minimap',
       container: opts.minimapContainer,
       size: [180, 96] as [number, number],
       padding: 8,
-      maskStyle: { fill: 'rgba(255,255,255,0.16)', stroke: tokens.nodeStroke },
+      maskStyle: { fill: maskFill, stroke: tokens.edgeStrokeSubtle },
       containerStyle: {
         width: '100%',
         height: '96px',
@@ -165,6 +313,7 @@ export function buildKgG6Options(opts: BuildKgG6OptionsParams): G6GraphOptions {
     autoFit: 'view',
     autoResize: true,
     animation: !opts.reducedMotion,
+    layout: opts.layout ?? DEFAULT_KG_LAYOUT,
     node: {
       style: {
         fill: tokens.nodeFill,
@@ -173,12 +322,25 @@ export function buildKgG6Options(opts: BuildKgG6OptionsParams): G6GraphOptions {
         labelFill: tokens.label,
         labelFontSize: 11,
       },
+      state: {
+        active: { style: { stroke: tokens.hoverStroke, lineWidth: 3.5, opacity: 1 } },
+        inactive: { style: { opacity: KG_DIM_OPACITY } },
+        selected: { style: { halo: true, haloLineWidth: 18, haloStrokeOpacity: 0.34, lineWidth: 4 } },
+      },
+      animation: opts.reducedMotion ? false : { enter: 'fade' },
     },
     edge: {
+      type: 'cubic',
       style: {
         stroke: edgeStyle.stroke,
         lineWidth: edgeStyle.lineWidth,
         opacity: edgeStyle.opacity,
+        endArrow: true,
+      },
+      state: {
+        active: { style: { opacity: 1, lineWidth: Math.max(edgeStyle.lineWidth, 1.5) } },
+        inactive: { style: { opacity: KG_DIM_OPACITY } },
+        streaming: { style: { lineDash: [7, 5], lineWidth: 2, opacity: 0.86 } },
       },
     },
     background: tokens.background,

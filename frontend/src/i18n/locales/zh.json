@@ -1015,7 +1015,12 @@
       "evidence_high": "高",
       "evidence_medium": "中",
       "evidence_low": "低",
-      "evidence_round": "来源: 第 {{round}} 轮"
+      "evidence_round": "来源: 第 {{round}} 轮",
+      "edge_supports": "支持",
+      "edge_rebuts": "反驳",
+      "edge_attacks": "攻击",
+      "edge_accepted": "采纳",
+      "edge_unaddressed": "未回应"
     },
     "compare": {
       "title": "反事实对比",
@@ -1100,7 +1105,15 @@
       "fit_view": "适配视图",
       "minimap_aria": "缩略图",
       "sr_table_aria": "图谱节点的无障碍表格",
-      "sr_caption": "图谱节点（无障碍表格）"
+      "sr_caption": "图谱节点（无障碍表格）",
+      "toggle_edge_labels": "切换关系标签",
+      "show_labels": "显示关系",
+      "hide_labels": "隐藏关系",
+      "quick_card_open_detail": "查看详情",
+      "quick_card_close": "关闭",
+      "toolbar_aria": "知识图谱工具栏",
+      "drag_hint": "拖动任意节点重新排布",
+      "nodes_count_label": "{{count}} 个节点"
     },
     "agent_profile": {
       "dialog_label": "Agent 档案",
@@ -1502,6 +1515,18 @@
         "offline": "你目前离线 — 连接网络后可重试回放流。",
         "retry": "重试"
       }
+    },
+    "dag": {
+      "empty_state_title": "暂无图谱数据",
+      "empty_state_body": "运行模拟以生成因果关系图",
+      "empty_state_cta": "返回输入",
+      "edge_tooltip_hover": "悬停查看详情",
+      "edge_tooltip_escape": "按 Escape 关闭",
+      "node_entrance_label": "节点出现",
+      "path_highlight_active": "路径已高亮",
+      "path_highlight_clear": "点击空白处清除",
+      "confidence_high": "高置信度",
+      "confidence_low": "低置信度"
     }
   }
 }
