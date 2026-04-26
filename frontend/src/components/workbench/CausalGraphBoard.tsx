@@ -237,7 +237,6 @@ function layoutDagre(
 
 export default function CausalGraphBoard({
   scenarioId,
-  branchId,
   onNodeClick: externalOnNodeClick,
   className,
   hideExport = false,
@@ -250,7 +249,7 @@ export default function CausalGraphBoard({
     loading,
     error,
     refetch: fetchGraph,
-  } = useScenarioGraph(scenarioId || null, branchId);
+  } = useScenarioGraph(scenarioId || null);
 
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   const [agentSearch, setAgentSearch] = useState('');
