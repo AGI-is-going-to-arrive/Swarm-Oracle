@@ -85,7 +85,7 @@ export default function KGGraphBoard({
     loading,
     error: graphError,
     refetch: loadGraph,
-  } = useScenarioGraph(scenarioId || null, branchId);
+  } = useScenarioGraph(scenarioId || null);
 
   const errorMessage = graphError
     ? t('kg_explorer.error_fetch', 'Unable to load the knowledge graph right now. Please retry.')
