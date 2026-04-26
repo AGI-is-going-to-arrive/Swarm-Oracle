@@ -28,7 +28,7 @@ function AnimatedEdgeComponent({
     <>
       <BaseEdge id={id} path={edgePath} style={style} markerEnd={markerEnd} />
       {showAnimation && (
-        <circle r="3" fill="currentColor" opacity="0.7" data-testid="animated-edge-circle">
+        <circle r="3" fill="currentColor" opacity="0.7" aria-hidden="true" data-testid="animated-edge-circle">
           <animateMotion dur="2s" repeatCount="indefinite" path={edgePath} />
         </circle>
       )}

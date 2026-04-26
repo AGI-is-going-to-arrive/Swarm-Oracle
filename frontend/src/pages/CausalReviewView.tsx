@@ -38,7 +38,9 @@ import {
   EDGE_STYLES,
   NODE_ICONS,
   TYPE_LABEL_I18N as GRAPH_TYPE_LABEL_I18N,
+  EVIDENCE_TIER_COLORS,
 } from '../lib/graphTokens';
+import { traceConnectedPath } from '../lib/graphTraversal';
 
 // ── Custom node type (stable reference) ────────────────────
 
@@ -257,11 +259,6 @@ function getEvidenceTierLabel(
   return t(`causal.evidence_${tier}`, tier);
 }
 
-const EVIDENCE_TIER_COLORS: Record<string, string> = {
-  high: '#4caf50',
-  medium: '#ffb300',
-  low: '#9e9e9e',
-};
 
 function extractAvailableBranches(data: Pick<CausalGraphData, 'nodes' | 'available_branches'>): string[] {
   const explicit = Array.isArray(data.available_branches)
@@ -405,43 +402,6 @@ function layoutDagre(
   return { nodes: flowNodes, edges: flowEdges };
 }
 
-// ── Path tracing ───────────────────────────────────────────
-
-function traceAncestorsAndDescendants(
-  nodeId: string,
-  edges: Edge[],
-): Set<string> {
-  const connected = new Set<string>([nodeId]);
-  // Trace ancestors (edges where target === nodeId, recursively)
-  const queue = [nodeId];
-  const visited = new Set<string>([nodeId]);
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    for (const e of edges) {
-      if (e.target === current && !visited.has(e.source)) {
-        visited.add(e.source);
-        connected.add(e.source);
-        connected.add(e.id);
-        queue.push(e.source);
-      }
-    }
-  }
-  // Trace descendants
-  const queue2 = [nodeId];
-  const visited2 = new Set<string>([nodeId]);
-  while (queue2.length > 0) {
-    const current = queue2.shift()!;
-    for (const e of edges) {
-      if (e.source === current && !visited2.has(e.target)) {
-        visited2.add(e.target);
-        connected.add(e.target);
-        connected.add(e.id);
-        queue2.push(e.target);
-      }
-    }
-  }
-  return connected;
-}
 
 // ── Component ───────────────────────────────────────────────
 
@@ -472,6 +432,7 @@ export function CausalReviewView() {
   const edgeTypes = useMemo(() => ({ animated: AnimatedEdge }), []);
   // P6 Phase 3: track initial layout for entrance animation
   const layoutAppliedRef = useRef(false);
+  const prevFilteredDataRef = useRef<unknown>(null);
   // C5: Agent search
   const [agentSearch, setAgentSearch] = useState('');
   const exportRootId = `causal-graph-${useId().replace(/:/g, '-')}`;
@@ -682,10 +643,14 @@ export function CausalReviewView() {
     return { godNodes, typeCounts, totalNodes: graphData.nodes.length, totalEdges: graphData.edges.length };
   }, [graphData, serverAnalysis]);
 
+  if (filteredData !== prevFilteredDataRef.current) {
+    prevFilteredDataRef.current = filteredData;
+    layoutAppliedRef.current = false;
+  }
+
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
     const result = layoutDagre(filteredData.nodes, filteredData.edges, translate, isCompactViewport, reducedMotion);
-    // P6 Phase 3: add entrance animation class on first layout only
     if (!layoutAppliedRef.current && result.nodes.length > 0 && !reducedMotion) {
       layoutAppliedRef.current = true;
       return {
@@ -738,7 +703,7 @@ export function CausalReviewView() {
       setHighlightedPath(null);
       return;
     }
-    const pathSet = traceAncestorsAndDescendants(selectedNode.id, flowEdges);
+    const pathSet = traceConnectedPath(selectedNode.id, flowEdges);
     setHighlightedPath(pathSet);
   }, [selectedNode, flowEdges.length]); // eslint-disable-line react-hooks/exhaustive-deps
 

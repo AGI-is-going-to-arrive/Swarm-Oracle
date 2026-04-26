@@ -15,7 +15,7 @@ export const DAG_NODE_TYPE_COLORS: Record<string, { bg: string; border: string; 
 
 export const DAG_CONFIDENCE_TIERS = {
   high: { color: '#16a34a', label: 'High' },
-  medium: { color: '#eab308', label: 'Medium' },
+  medium: { color: '#a16207', label: 'Medium' },
   low: { color: '#ef4444', label: 'Low' },
 } as const;
 

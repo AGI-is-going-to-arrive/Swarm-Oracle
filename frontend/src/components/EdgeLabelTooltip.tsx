@@ -40,13 +40,16 @@ function EdgeLabelTooltipComponent({ labelX, labelY, label, detail, edgeId, visi
     return () => document.removeEventListener('keydown', handleEscape);
   }, [showDetail]);
 
+  useEffect(() => {
+    return () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); };
+  }, []);
+
   if (!visible) return null;
 
   return (
     <EdgeLabelRenderer>
       <div
         className="nodrag nopan"
-        role="tooltip"
         id={tooltipId}
         style={{
           position: 'absolute',
@@ -56,10 +59,10 @@ function EdgeLabelTooltipComponent({ labelX, labelY, label, detail, edgeId, visi
         }}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
-        aria-describedby={showDetail && detail ? `${tooltipId}-detail` : undefined}
       >
         <span
           data-testid="edge-label-pill"
+          aria-describedby={showDetail && detail ? `${tooltipId}-detail` : undefined}
           style={{
             display: 'inline-block',
             padding: '2px 8px',
@@ -79,6 +82,7 @@ function EdgeLabelTooltipComponent({ labelX, labelY, label, detail, edgeId, visi
         {showDetail && detail && (
           <div
             id={`${tooltipId}-detail`}
+            role="tooltip"
             data-testid="edge-tooltip-detail"
             className="dag-edge-tooltip-card"
             style={{

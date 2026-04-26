@@ -38,7 +38,9 @@ import {
   TYPE_LABEL_I18N as GRAPH_TYPE_LABEL_I18N,
   STATUS_LABEL_I18N as GRAPH_STATUS_LABEL_I18N,
   isBrightGraphBackground,
+  EVIDENCE_TIER_COLORS,
 } from '../lib/graphTokens';
+import { traceConnectedPath } from '../lib/graphTraversal';
 
 // ── Custom node type (stable reference) ────────────────────
 
@@ -139,11 +141,6 @@ function mapBackendEdge(raw: Record<string, unknown>): GraphEdgeRaw {
   };
 }
 
-const EVIDENCE_TIER_COLORS: Record<string, string> = {
-  high: '#4caf50',
-  medium: '#ffb300',
-  low: '#9e9e9e',
-};
 
 function mapBackendUnit(raw: Record<string, unknown>): ArgumentUnit {
   return {
@@ -481,43 +478,6 @@ function layoutArgumentDag(
   return { nodes: flowNodes, edges: flowEdges };
 }
 
-// ── Path tracing ───────────────────────────────────────────
-
-function traceArgumentPath(
-  nodeId: string,
-  edges: Edge[],
-): Set<string> {
-  const connected = new Set<string>([nodeId]);
-  // Trace ancestors
-  const queue = [nodeId];
-  const visited = new Set<string>([nodeId]);
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    for (const e of edges) {
-      if (e.target === current && !visited.has(e.source)) {
-        visited.add(e.source);
-        connected.add(e.source);
-        connected.add(e.id);
-        queue.push(e.source);
-      }
-    }
-  }
-  // Trace descendants
-  const queue2 = [nodeId];
-  const visited2 = new Set<string>([nodeId]);
-  while (queue2.length > 0) {
-    const current = queue2.shift()!;
-    for (const e of edges) {
-      if (e.source === current && !visited2.has(e.target)) {
-        visited2.add(e.target);
-        connected.add(e.target);
-        connected.add(e.id);
-        queue2.push(e.target);
-      }
-    }
-  }
-  return connected;
-}
 
 // ── Main Component ──────────────────────────────────────────
 
@@ -542,6 +502,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
   const prefersReducedMotion = useReducedMotion();
   // P6 Phase 3: track initial layout for entrance animation
   const layoutAppliedRef = useRef(false);
+  const prevFilteredDataRef = useRef<unknown>(null);
   const [data, setData] = useState<ArgumentMapData | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorTier, setErrorTier] = useState<ErrorTier>(null);
@@ -630,6 +591,11 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     return { ...data, nodes: filteredNodes, edges: filteredEdges, units: filteredUnits };
   }, [data, statusFilter]);
 
+  if (filteredData !== prevFilteredDataRef.current) {
+    prevFilteredDataRef.current = filteredData;
+    layoutAppliedRef.current = false;
+  }
+
   const { nodes: layoutNodes, edges: layoutEdges } = useMemo(() => {
     if (!filteredData) return { nodes: [], edges: [] };
     const result = layoutArgumentDag(
@@ -681,7 +647,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
       setHighlightedPath(null);
       return;
     }
-    const pathSet = traceArgumentPath(selectedNode.id, layoutEdges);
+    const pathSet = traceConnectedPath(selectedNode.id, layoutEdges);
     setHighlightedPath(pathSet);
   }, [selectedNode, layoutEdges]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1205,5 +1171,5 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
-export { STATUS_COLORS_HEX as STATUS_COLORS, TYPE_LABEL_I18N, safeParsePayload, mapBackendNode, mapBackendEdge, mapBackendUnit, traceArgumentPath, PERF_ANIMATION_LIMIT };
+export { STATUS_COLORS_HEX as STATUS_COLORS, TYPE_LABEL_I18N, safeParsePayload, mapBackendNode, mapBackendEdge, mapBackendUnit, traceConnectedPath, PERF_ANIMATION_LIMIT };
 export type { ArgumentUnit, ArgumentMapData, ErrorTier };

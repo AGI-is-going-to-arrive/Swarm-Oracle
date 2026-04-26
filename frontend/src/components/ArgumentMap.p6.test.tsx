@@ -3,7 +3,7 @@
  * Pure function tests to avoid OOM from full-component rendering.
  */
 import { describe, expect, it } from 'vitest';
-import { traceArgumentPath, PERF_ANIMATION_LIMIT } from './ArgumentMap';
+import { traceConnectedPath, PERF_ANIMATION_LIMIT } from './ArgumentMap';
 import type { Edge } from '@xyflow/react';
 
 describe('P6 Phase 2 DAG editorial (unit)', () => {
@@ -16,8 +16,8 @@ describe('P6 Phase 2 DAG editorial (unit)', () => {
     expect(PERF_ANIMATION_LIMIT).toBe(150);
   });
 
-  it('traceArgumentPath traces ancestors and descendants recursively', () => {
-    const result = traceArgumentPath('n2', edges);
+  it('traceConnectedPath traces ancestors and descendants recursively', () => {
+    const result = traceConnectedPath('n2', edges);
     expect(result.has('n1')).toBe(true);
     expect(result.has('n2')).toBe(true);
     expect(result.has('n3')).toBe(true);
@@ -25,13 +25,13 @@ describe('P6 Phase 2 DAG editorial (unit)', () => {
     expect(result.has('e2')).toBe(true);
   });
 
-  it('traceArgumentPath does not include isolated nodes', () => {
-    const result = traceArgumentPath('n2', edges);
+  it('traceConnectedPath does not include isolated nodes', () => {
+    const result = traceConnectedPath('n2', edges);
     expect(result.has('n4')).toBe(false);
   });
 
-  it('traceArgumentPath handles leaf node (only ancestors)', () => {
-    const result = traceArgumentPath('n3', edges);
+  it('traceConnectedPath handles leaf node (only ancestors)', () => {
+    const result = traceConnectedPath('n3', edges);
     expect(result.has('n1')).toBe(true);
     expect(result.has('n2')).toBe(true);
     expect(result.has('n3')).toBe(true);
@@ -39,15 +39,15 @@ describe('P6 Phase 2 DAG editorial (unit)', () => {
     expect(result.has('e2')).toBe(true);
   });
 
-  it('traceArgumentPath handles root node (only descendants)', () => {
-    const result = traceArgumentPath('n1', edges);
+  it('traceConnectedPath handles root node (only descendants)', () => {
+    const result = traceConnectedPath('n1', edges);
     expect(result.has('n1')).toBe(true);
     expect(result.has('n2')).toBe(true);
     expect(result.has('n3')).toBe(true);
   });
 
-  it('traceArgumentPath returns only self for disconnected node', () => {
-    const result = traceArgumentPath('isolated', edges);
+  it('traceConnectedPath returns only self for disconnected node', () => {
+    const result = traceConnectedPath('isolated', edges);
     expect(result.has('isolated')).toBe(true);
     expect(result.size).toBe(1);
   });

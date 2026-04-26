@@ -64,6 +64,14 @@ export const NODE_ICONS: Record<string, string> = {
   counter: 'Swords',
 };
 
+// ── Evidence Tier Colors ───────────────────────────────────
+
+export const EVIDENCE_TIER_COLORS: Record<string, string> = {
+  high: '#4caf50',
+  medium: '#ffb300',
+  low: '#9e9e9e',
+};
+
 // ── i18n Label Keys ─────────────────────────────────────────
 
 export const TYPE_LABEL_I18N: Record<string, [string, string]> = {
@@ -175,4 +183,63 @@ export function isBrightGraphBackground(color: string | undefined): boolean {
     0.0722 * luminanceChannels[2];
 
   return luminance > 0.56;
+}
+
+// ── KG-Specific Editorial Tokens (cream + magenta) ─────────
+// KG views use the project's "Impeccable Premium Editorial" palette
+// rather than the generic cobalt-graph tokens shared with DAG views.
+// Imported only by kgGraphConfig.ts; DAG views (CausalReviewView,
+// ArgumentMap, FactionForceGraph, NodeDetailPanel) keep resolveG6Tokens.
+
+export interface KgG6Tokens extends G6DualHexTokens {
+  /** Soft, cream-aligned edge stroke at ~55% alpha for non-active edges. */
+  edgeStrokeSubtle: string;
+  /** Project brand color used for selected/locked node ring. */
+  brandRing: string;
+  /**
+   * Translucent ghost color for node drag state. Reserved as a design token
+   * for future G6 drag-state styling (drag-element-force ghost layer);
+   * currently retained as part of the KG editorial token contract so themes
+   * stay in sync once G6 exposes drag-ghost styling.
+   */
+  dragGhost: string;
+  /** Background fill for edge label chip on this theme. */
+  edgeLabelBg: string;
+  /** Foreground fill for edge label text on this theme. */
+  edgeLabelFg: string;
+}
+
+export const KG_G6_TOKENS_LIGHT: KgG6Tokens = {
+  background: '#fcfcfa',                    // project --bg-surface (cream)
+  nodeFill: '#f2eee7',                      // project --bg-hover (subtle node fill)
+  nodeStroke: '#c61583',                    // project --color-primary (magenta brand)
+  edgeStroke: '#c5beb1',                    // muted cream-aligned edge
+  edgeStrokeSubtle: 'rgba(197,190,177,0.55)',
+  label: '#181611',                         // project --text-primary
+  selectedStroke: '#c61583',                // brand magenta
+  hoverStroke: '#db589e',                   // project --color-primary-dim
+  brandRing: '#c61583',
+  dragGhost: 'rgba(198,21,131,0.18)',
+  edgeLabelBg: 'rgba(252,252,250,0.95)',    // cream-tinted chip bg
+  edgeLabelFg: '#58554f',                   // project --text-secondary
+};
+
+export const KG_G6_TOKENS_DARK: KgG6Tokens = {
+  background: '#181611',                    // dark editorial mirror of cream
+  nodeFill: '#28241e',
+  nodeStroke: '#db589e',                    // primary-dim adapts to dark
+  edgeStroke: '#5a544c',
+  edgeStrokeSubtle: 'rgba(90,84,76,0.55)',
+  label: '#f0eee9',                         // warm-tinted dark text
+  selectedStroke: '#db589e',
+  hoverStroke: '#c61583',
+  brandRing: '#db589e',
+  dragGhost: 'rgba(219,88,158,0.22)',
+  edgeLabelBg: 'rgba(24,22,17,0.85)',
+  edgeLabelFg: '#928f88',                   // project --text-muted
+};
+
+/** Resolve KG-specific editorial tokens (cream + magenta). */
+export function resolveKGG6Tokens(theme: 'light' | 'dark' = 'light'): KgG6Tokens {
+  return theme === 'dark' ? KG_G6_TOKENS_DARK : KG_G6_TOKENS_LIGHT;
 }

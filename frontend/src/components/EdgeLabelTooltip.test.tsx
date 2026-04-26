@@ -147,20 +147,33 @@ describe('EdgeLabelTooltip', () => {
     vi.useRealTimers();
   });
 
-  it('has role="tooltip" attribute', () => {
+  it('detail card has role="tooltip" attribute', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
     render(
       <EdgeLabelTooltip
         labelX={100}
         labelY={50}
         label="causes"
+        detail="Some detail"
         edgeId="e1"
         visible={true}
       />,
     );
-    expect(screen.getByRole('tooltip')).toBeInTheDocument();
+
+    const pill = screen.getByTestId('edge-label-pill');
+    await user.hover(pill.parentElement!);
+    act(() => { vi.advanceTimersByTime(350); });
+
+    await waitFor(() => {
+      expect(screen.getByRole('tooltip')).toBeInTheDocument();
+    });
+
+    vi.useRealTimers();
   });
 
-  it('has aria-describedby when detail is shown', async () => {
+  it('pill has aria-describedby when detail is shown', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
@@ -175,14 +188,14 @@ describe('EdgeLabelTooltip', () => {
       />,
     );
 
-    const tooltip = screen.getByRole('tooltip');
-    expect(tooltip.getAttribute('aria-describedby')).toBeNull();
+    const pill = screen.getByTestId('edge-label-pill');
+    expect(pill.getAttribute('aria-describedby')).toBeNull();
 
-    await user.hover(tooltip);
+    await user.hover(pill.parentElement!);
     act(() => { vi.advanceTimersByTime(350); });
 
     await waitFor(() => {
-      expect(tooltip.getAttribute('aria-describedby')).toBe('edge-tooltip-e1-detail');
+      expect(pill.getAttribute('aria-describedby')).toBe('edge-tooltip-e1-detail');
     });
 
     vi.useRealTimers();
