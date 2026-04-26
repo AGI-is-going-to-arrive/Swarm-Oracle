@@ -10,6 +10,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders } from '../api/client';
 import useReducedMotion from '../hooks/useReducedMotion';
+import useMediaQueryState from '../hooks/useMediaQueryState';
 import dagre from 'dagre';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import {
@@ -40,7 +41,7 @@ import {
   isBrightGraphBackground,
   EVIDENCE_TIER_COLORS,
 } from '../lib/graphTokens';
-import { traceConnectedPath } from '../lib/graphTraversal';
+import { traceConnectedPath, PERF_ANIMATION_LIMIT } from '../lib/graphTraversal';
 
 // ── Custom node type (stable reference) ────────────────────
 
@@ -178,7 +179,6 @@ const TYPE_LABEL_I18N: Record<string, [string, string]> = {
 };
 
 const PERF_TOOLTIP_LIMIT = 150;
-const PERF_ANIMATION_LIMIT = 150;
 const NO_ARROW_TYPES = new Set(['temporal']);
 const GRAPH_COMPACT_MEDIA_QUERY = '(max-width: 768px)';
 
@@ -197,30 +197,6 @@ const STATUS_LABEL_I18N: Record<string, [string, string]> = {
   accepted: GRAPH_STATUS_LABEL_I18N.accepted,
   rejected: GRAPH_STATUS_LABEL_I18N.rejected,
 };
-
-function useMediaQueryState(query: string) {
-  const [matches, setMatches] = useState(() => (
-    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia(query).matches
-      : false
-  ));
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-    const mediaQueryList = window.matchMedia(query);
-    const handleChange = (event: MediaQueryListEvent | MediaQueryList) => setMatches(event.matches);
-
-    if (typeof mediaQueryList.addEventListener === 'function') {
-      mediaQueryList.addEventListener('change', handleChange);
-      return () => mediaQueryList.removeEventListener?.('change', handleChange);
-    }
-
-    mediaQueryList.addListener?.(handleChange);
-    return () => mediaQueryList.removeListener?.(handleChange);
-  }, [query]);
-
-  return matches;
-}
 
 function useCompactGraphViewport() {
   return useMediaQueryState(GRAPH_COMPACT_MEDIA_QUERY);
@@ -591,10 +567,10 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     return { ...data, nodes: filteredNodes, edges: filteredEdges, units: filteredUnits };
   }, [data, statusFilter]);
 
-  if (filteredData !== prevFilteredDataRef.current) {
+  useEffect(() => {
     prevFilteredDataRef.current = filteredData;
     layoutAppliedRef.current = false;
-  }
+  }, [filteredData]);
 
   const { nodes: layoutNodes, edges: layoutEdges } = useMemo(() => {
     if (!filteredData) return { nodes: [], edges: [] };
@@ -649,7 +625,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     }
     const pathSet = traceConnectedPath(selectedNode.id, layoutEdges);
     setHighlightedPath(pathSet);
-  }, [selectedNode, layoutEdges]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedNode, layoutEdges]);
 
   // Keep backward-compat neighborSet for node data (connected/dimmed flags)
   const neighborSet = useMemo(() => {
@@ -771,7 +747,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
       const baseMap = new Map(baseEdges.map((b) => [b.id, b]));
       return prev.map((e) => {
         const base = baseMap.get(e.id);
-        return base ? { ...e, style: base.style } : e;
+        return base ? { ...e, style: base.style, type: base.type, selected: base.selected, data: base.data } : e;
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders, getGraphAnalysis, type GraphAnalysisResponse } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import useReducedMotion from '../hooks/useReducedMotion';
+import useMediaQueryState from '../hooks/useMediaQueryState';
 import { ExportPanel } from '../components/ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from '../components/NodeDetailPanel';
 import GraphNodeCard from '../components/GraphNodeCard';
@@ -40,7 +41,7 @@ import {
   TYPE_LABEL_I18N as GRAPH_TYPE_LABEL_I18N,
   EVIDENCE_TIER_COLORS,
 } from '../lib/graphTokens';
-import { traceConnectedPath } from '../lib/graphTraversal';
+import { traceConnectedPath, PERF_ANIMATION_LIMIT } from '../lib/graphTraversal';
 
 // ── Custom node type (stable reference) ────────────────────
 
@@ -188,37 +189,10 @@ function getCausalErrorMessage(
 
 const NODE_W = 280;
 const NODE_H = 120;
-const PERF_ANIMATION_LIMIT = 150;
 const PERF_TOOLTIP_LIMIT = 150;
 const PERF_TEXT_FALLBACK_LIMIT = 500;
 const NO_ARROW_TYPES = new Set(['temporal']);
 const GRAPH_COMPACT_MEDIA_QUERY = '(max-width: 768px)';
-
-function useMediaQueryState(query: string) {
-  const [matches, setMatches] = useState(() => (
-    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia(query).matches
-      : false
-  ));
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-    const mediaQueryList = window.matchMedia(query);
-    const handleChange = (event: MediaQueryListEvent | MediaQueryList) => {
-      setMatches(event.matches);
-    };
-
-    if (typeof mediaQueryList.addEventListener === 'function') {
-      mediaQueryList.addEventListener('change', handleChange as EventListener);
-      return () => mediaQueryList.removeEventListener('change', handleChange as EventListener);
-    }
-
-    mediaQueryList.addListener?.(handleChange as (event: MediaQueryListEvent) => void);
-    return () => mediaQueryList.removeListener?.(handleChange as (event: MediaQueryListEvent) => void);
-  }, [query]);
-
-  return matches;
-}
 
 function useCompactGraphViewport() {
   return useMediaQueryState(GRAPH_COMPACT_MEDIA_QUERY);
@@ -643,10 +617,10 @@ export function CausalReviewView() {
     return { godNodes, typeCounts, totalNodes: graphData.nodes.length, totalEdges: graphData.edges.length };
   }, [graphData, serverAnalysis]);
 
-  if (filteredData !== prevFilteredDataRef.current) {
+  useEffect(() => {
     prevFilteredDataRef.current = filteredData;
     layoutAppliedRef.current = false;
-  }
+  }, [filteredData]);
 
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
@@ -697,7 +671,11 @@ export function CausalReviewView() {
     if (!filteredData.nodes.some(n => n.id === selectedNode.id)) setSelectedNode(null);
   }, [selectedNode, filteredData]);
 
-  // P6 Phase 2: Full recursive path tracing (replaces 1-hop neighborSet)
+  const edgeStructureKey = useMemo(
+    () => flowEdges.map(e => `${e.id}:${e.source}:${e.target}`).join('|'),
+    [flowEdges],
+  );
+
   useEffect(() => {
     if (!selectedNode || !flowEdges.length) {
       setHighlightedPath(null);
@@ -705,7 +683,8 @@ export function CausalReviewView() {
     }
     const pathSet = traceConnectedPath(selectedNode.id, flowEdges);
     setHighlightedPath(pathSet);
-  }, [selectedNode, flowEdges.length]); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNode, edgeStructureKey]);
 
   const totalElements = (filteredData?.nodes.length ?? 0) + (filteredData?.edges.length ?? 0);
   const skipAnimations = reducedMotion || totalElements > PERF_ANIMATION_LIMIT;

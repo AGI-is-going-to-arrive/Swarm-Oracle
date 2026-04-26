@@ -2,13 +2,15 @@ import { useEffect, useState } from 'react';
 
 const QUERY = '(prefers-reduced-motion: reduce)';
 
+function getSnapshot(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false;
+  }
+  return window.matchMedia(QUERY).matches;
+}
+
 export default function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      return false;
-    }
-    return window.matchMedia(QUERY).matches;
-  });
+  const [reduced, setReduced] = useState(getSnapshot);
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -16,16 +18,17 @@ export default function useReducedMotion(): boolean {
     }
 
     const mq = window.matchMedia(QUERY);
-    setReduced(mq.matches);
 
-    const handler = (e: MediaQueryListEvent) => setReduced(e.matches);
+    const handler = (event: MediaQueryListEvent | MediaQueryList) => {
+      setReduced(event.matches);
+    };
 
     if (typeof mq.addEventListener === 'function') {
       mq.addEventListener('change', handler);
       return () => mq.removeEventListener('change', handler);
     }
 
-    // Legacy WebKit fallback
+    // Legacy WebKit fallback.
     mq.addListener(handler);
     return () => mq.removeListener(handler);
   }, []);

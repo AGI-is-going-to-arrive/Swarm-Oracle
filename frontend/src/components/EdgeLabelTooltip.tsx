@@ -8,6 +8,8 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { EdgeLabelRenderer } from '@xyflow/react';
 import useReducedMotion from '../hooks/useReducedMotion';
 
+const HOVER_DELAY_MS = 300;
+
 interface EdgeLabelTooltipProps {
   labelX: number;
   labelY: number;
@@ -24,7 +26,7 @@ function EdgeLabelTooltipComponent({ labelX, labelY, label, detail, edgeId, visi
   const tooltipId = `edge-tooltip-${edgeId}`;
 
   const handleMouseEnter = useCallback(() => {
-    timeoutRef.current = setTimeout(() => setShowDetail(true), 300);
+    timeoutRef.current = setTimeout(() => setShowDetail(true), HOVER_DELAY_MS);
   }, []);
 
   const handleMouseLeave = useCallback(() => {

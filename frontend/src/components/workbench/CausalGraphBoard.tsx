@@ -4,6 +4,7 @@ import { ExportPanel } from '../ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from '../NodeDetailPanel';
 import GraphNodeCard from '../GraphNodeCard';
 import { useScenarioGraph, type GraphErrorState } from '../../hooks/useScenarioGraph';
+import { PERF_ANIMATION_LIMIT } from '../../lib/graphTraversal';
 import dagre from 'dagre';
 import {
   ReactFlow,
@@ -85,7 +86,6 @@ const COLORS = {
 
 const NODE_W = 200;
 const NODE_H = 50;
-const PERF_ANIMATION_LIMIT = 150;
 const PERF_TOOLTIP_LIMIT = 150;
 const PERF_TEXT_FALLBACK_LIMIT = 500;
 const NO_ARROW_TYPES = new Set(['temporal']);

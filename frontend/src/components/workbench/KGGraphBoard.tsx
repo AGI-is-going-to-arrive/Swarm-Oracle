@@ -337,6 +337,8 @@ export default function KGGraphBoard({
     const graph = graphRef.current;
     if (!graph) return;
     const data = graph.getData();
+    const nodeIds = new Set((data.nodes ?? []).map((n) => String(n.id ?? '')));
+    if (!nodeIds.has(nodeId)) return;
     const allIds = [
       ...(data.nodes ?? []).map((n) => String(n.id ?? '')),
       ...(data.edges ?? []).map((e) => String(e.id ?? '')),
