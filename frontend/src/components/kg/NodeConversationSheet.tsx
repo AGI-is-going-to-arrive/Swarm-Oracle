@@ -48,6 +48,7 @@ import { useNodeConversationTransport } from '../../hooks/useNodeConversationTra
 import { ConversationRecoveryBanner } from './ConversationRecoveryBanner';
 import { DraftRestoredBanner } from './DraftRestoredBanner';
 import { EmptyStateQuickQuestions } from './EmptyStateQuickQuestions';
+import { NodeContextBanner } from './NodeContextBanner';
 import { StreamingBubbleIsolated, type StreamingBubbleApi } from './StreamingBubbleIsolated';
 
 function useIsMobile(maxWidth = 768): boolean {
@@ -60,8 +61,12 @@ function useIsMobile(maxWidth = 768): boolean {
     if (typeof window === 'undefined' || !window.matchMedia) return;
     const mq = window.matchMedia(`(max-width: ${maxWidth}px)`);
     const onChange = (ev: MediaQueryListEvent) => setIsMobile(ev.matches);
-    mq.addEventListener?.('change', onChange);
-    return () => mq.removeEventListener?.('change', onChange);
+    if (mq.addEventListener) {
+      mq.addEventListener('change', onChange);
+      return () => mq.removeEventListener('change', onChange);
+    }
+    mq.addListener(onChange);
+    return () => mq.removeListener(onChange);
   }, [maxWidth]);
   return isMobile;
 }
@@ -77,6 +82,16 @@ export interface NodeConversationOrigin {
   branchId?: string | null;
   /** Optional round scope for prompt context. */
   roundNumber?: number | null;
+  /** UI-only: agent display name (not sent to backend). */
+  agentName?: string;
+  /** UI-only: agent emotion (not sent to backend). */
+  emotion?: string;
+  /** UI-only: agent stance (not sent to backend). */
+  stance?: string | number;
+  /** UI-only: human-readable node label (not sent to backend). */
+  nodeLabel?: string;
+  /** UI-only: override color for type strip (not sent to backend). */
+  typeColor?: string;
 }
 
 export interface NodeConversationSheetProps {
@@ -149,12 +164,22 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   } = props;
   const { t } = useTranslation();
   const isMobile = useIsMobile(768);
-  const [threadId, setThreadId] = useState<string | null>(initialThreadId);
+  const [threadState, setThreadState] = useState<{
+    initialThreadId: string | null;
+    threadId: string | null;
+  }>({ initialThreadId, threadId: initialThreadId });
+  const threadId = threadState.initialThreadId === initialThreadId
+    ? threadState.threadId
+    : initialThreadId;
+  const setThreadId = useCallback((nextThreadId: string | null) => {
+    setThreadState({ initialThreadId, threadId: nextThreadId });
+  }, [initialThreadId]);
   const lastSubmittedMessageRef = useRef<string | null>(null);
   const originNodeId = origin?.nodeId ?? null;
   const originNodeType = origin?.nodeType ?? null;
   const originBranchId = origin?.branchId ?? null;
   const originRoundNumber = origin?.roundNumber ?? null;
+  const originExcerpt = origin?.excerpt?.trim() || null;
   const isResultContext = showResultDeepenHint && origin == null;
 
   const {
@@ -166,25 +191,27 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   } = useAgentConversation({ threadId });
   const { announceRef: ariaLiveAnnounceRef, flushNow: flushAriaLiveNow } = ariaLiveApi;
 
-  // Draft auto-save (per thread id).
-  const draftKey = useMemo(() => `swarmoracle_draft:${threadId ?? 'default'}`, [threadId]);
+  // Draft auto-save (per thread id, falling back to origin-scoped key).
+  const originDraftScope = useMemo(() => {
+    if (origin) {
+      return `${scenarioId}:${origin.nodeId}:${origin.branchId ?? ''}:${origin.roundNumber ?? ''}`;
+    }
+    return 'result';
+  }, [origin, scenarioId]);
+  const draftKey = useMemo(() => `swarmoracle_draft:${threadId ?? originDraftScope}`, [threadId, originDraftScope]);
   const draft = useDraftAutoSave(draftKey);
 
-  const [inputValue, setInputValue] = useState<string>('');
+  const [inputState, setInputState] = useState<{ draftKey: string; value: string | null }>({
+    draftKey,
+    value: null,
+  });
+  const inputOverride = inputState.draftKey === draftKey ? inputState.value : null;
+  const inputValue = inputOverride ?? draft.restored ?? '';
+  const setInputValue = useCallback((nextValue: string) => {
+    setInputState({ draftKey, value: nextValue });
+  }, [draftKey]);
   const [draftNoticeDismissed, setDraftNoticeDismissed] = useState<boolean>(false);
   const sheetContentRef = useRef<HTMLDivElement | null>(null);
-
-  // Hydrate from restored draft on first time `draft.restored` flips from
-  // null → string (one-shot). This is a legitimate external-sync effect:
-  // sessionStorage is outside React state so we must read-then-project.
-  const draftHydratedRef = useRef<boolean>(false);
-  useEffect(() => {
-    if (draftHydratedRef.current) return;
-    if (draft.restored !== null && inputValue === '') {
-      draftHydratedRef.current = true;
-      setInputValue(draft.restored);
-    }
-  }, [draft.restored, inputValue]);
 
   // Persist input value to sessionStorage (debounced inside hook).
   useEffect(() => {
@@ -194,6 +221,8 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   const dispatchTransportError = useCallback((code: string, message?: string) => {
     convDispatch({ type: 'error', code: mapBackendErrorCode(code), message });
   }, [convDispatch]);
+
+  const [bootstrapPending, setBootstrapPending] = useState(false);
 
   const {
     abortActiveRequest,
@@ -206,24 +235,18 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     originNodeType,
     originBranchId,
     originRoundNumber,
+    originExcerpt,
     setThreadId,
     onTransportError: dispatchTransportError,
     onWsEvent: dispatchWsEvent,
   });
 
   useEffect(() => {
-    if (initialThreadId) {
-      setThreadId(initialThreadId);
-    }
-  }, [initialThreadId]);
-
-  useEffect(() => {
     if (!open) {
       abortActiveRequest();
       lastSubmittedMessageRef.current = null;
-      setThreadId(initialThreadId);
     }
-  }, [abortActiveRequest, initialThreadId, open]);
+  }, [abortActiveRequest, open]);
 
   useEffect(() => {
     flushAriaLiveNow();
@@ -244,6 +267,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   );
 
   const handleSubmit = useCallback(async () => {
+    if (bootstrapPending) return;
     const text = inputValue.trim();
     if (text.length === 0) return;
     lastSubmittedMessageRef.current = text;
@@ -252,13 +276,21 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
       onSubmit(text);
       return;
     }
-    const accepted = !threadId
-      ? await startConversation(text)
-      : await streamTurn(threadId, text);
+    let accepted: boolean;
+    if (!threadId) {
+      setBootstrapPending(true);
+      try {
+        accepted = await startConversation(text);
+      } finally {
+        setBootstrapPending(false);
+      }
+    } else {
+      accepted = await streamTurn(threadId, text);
+    }
     if (!accepted) return;
     draft.discard();
     setInputValue('');
-  }, [draft, inputValue, onSubmit, startConversation, streamTurn, threadId]);
+  }, [bootstrapPending, draft, inputValue, onSubmit, setInputValue, startConversation, streamTurn, threadId]);
 
   const handleAbort = useCallback(async () => {
     if (onAbort) {
@@ -293,7 +325,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     draft.discard();
     setInputValue('');
     setDraftNoticeDismissed(true);
-  }, [draft]);
+  }, [draft, setInputValue]);
 
   // Mobile snap-point state (40/70/100 vh). Starts at 70 (default reading
   // height). Cycled by the grab handle; raised/lowered by keyboard shortcut.
@@ -367,9 +399,12 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
 
   const side = isMobile ? 'bottom' : 'right';
   const handleSheetOpenChange = useCallback((nextOpen: boolean) => {
-    if (!nextOpen) onClose?.();
+    if (!nextOpen) {
+      setThreadId(initialThreadId);
+      onClose?.();
+    }
     onOpenChange(nextOpen);
-  }, [onClose, onOpenChange]);
+  }, [initialThreadId, onClose, onOpenChange, setThreadId]);
   const handleDesktopInteractOutside = useCallback((event: Event) => {
     if (isMobile) return;
     event.preventDefault();
@@ -383,15 +418,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     event.preventDefault();
   }, [isMobile]);
 
-  // Track completed turns for the result-deepen hint.
-  const completedTurnCountRef = useRef(0);
-  const prevTurnRef = useRef(convState.turn);
-  if (prevTurnRef.current !== 'done' && convState.turn === 'done') {
-    completedTurnCountRef.current += 1;
-  }
-  prevTurnRef.current = convState.turn;
-
-  const showResultHint = showResultDeepenHint && completedTurnCountRef.current >= 3;
+  const showResultHint = showResultDeepenHint && convState.completedTurnCount >= 3;
 
   const showRecovery = convState.turn === 'error' || convState.turn === 'recovering';
   const showEmpty = convState.turn === 'idle' && inputValue.length === 0;
@@ -410,7 +437,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
         data-mobile={isMobile ? 'true' : 'false'}
         data-snap={isMobile ? snapLevel : undefined}
         className={cn(
-          'flex h-full flex-col',
+          'conv-sheet flex h-full flex-col',
           isMobile
             ? cn(
                 'rounded-t-2xl pb-[env(safe-area-inset-bottom)]',
@@ -429,11 +456,13 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
               defaultValue: `Snap bottom sheet (current ${snapLevel}vh)`,
             })}
             onClick={handleSnapCycle}
-            className="mx-auto mt-1 h-1.5 w-12 rounded-full bg-border-default hover:bg-text-muted"
-          />
+            className="mx-auto flex min-h-[44px] w-12 items-center justify-center"
+          >
+            <span className="h-1.5 w-full rounded-full bg-border-default group-hover:bg-text-muted" aria-hidden="true" />
+          </button>
         ) : null}
-        <SheetHeader>
-          <SheetTitle>
+        <SheetHeader className="px-5 pb-3 pt-2">
+          <SheetTitle className="font-heading text-center text-lg font-semibold tracking-tight text-[#292524]">
             {isResultContext
               ? t('conversation.sheet.result_title', { defaultValue: 'Result conversation' })
               : t('conversation.sheet.title', {
@@ -451,6 +480,9 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
           </SheetDescription>
         </SheetHeader>
 
+        {/* Node context banner (origin metadata — floating card) */}
+        {origin ? <NodeContextBanner origin={origin} className="mx-4 mt-1 mb-2" /> : null}
+
         {/* Draft status */}
         {!draftNoticeDismissed && draft.restored !== null ? (
           <DraftRestoredBanner variant="restored" onDiscard={handleDiscardDraft} />
@@ -463,15 +495,16 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
           data-testid="node-conversation-scroll-region"
           data-no-drag="true"
           aria-label={t('conversation.sheet.scroll_region_aria')}
-          className="flex-1 overflow-y-auto"
+          className="flex-1 overflow-y-auto px-4 py-3"
         >
-          <div className="px-1 py-2 text-sm leading-relaxed text-text-primary">
+          <div className={cn('conv-bubble conv-bubble--assistant', showEmpty && 'conv-bubble--hidden')}>
             <StreamingBubbleIsolated onRef={handleBubbleRef} />
           </div>
           {showEmpty ? (
             <EmptyStateQuickQuestions
               onSelect={setInputValue}
               variant={isResultContext ? 'result' : 'node'}
+              agentName={origin?.agentName}
             />
           ) : null}
 
@@ -499,7 +532,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
         <div
           ref={inputRegionRef}
           data-no-drag="true"
-          className="flex gap-2 border-t border-border-default pt-3"
+          className="conv-input-bar conversation-input-glow"
         >
           <textarea
             data-testid="node-conversation-input"
@@ -510,37 +543,30 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleInputKeyDown}
             rows={2}
-            className="flex-1 resize-none rounded-md border border-border-default bg-surface p-2 text-sm text-text-primary"
+            className="conv-input-textarea"
           />
-          {isStreaming ? (
-            <button
-              type="button"
-              data-testid="node-conversation-stop"
-              onClick={handleAbort}
-              className="min-h-[44px] min-w-[44px] rounded-md border border-amber-400/60 px-3 text-xs text-amber-100 hover:bg-amber-500/20"
-            >
-              {t('conversation.input.stop')}
-            </button>
-          ) : (
-            <button
-              type="button"
-              data-testid="node-conversation-send"
-              onClick={handleSubmit}
-              disabled={inputValue.trim().length === 0}
-              className="min-h-[44px] min-w-[44px] rounded-md bg-primary px-3 text-xs text-white hover:bg-primary/80 disabled:opacity-40"
-            >
-              {t('conversation.input.send')}
-            </button>
-          )}
-          <button
-            type="button"
-            data-testid="node-conversation-close"
-            onClick={() => handleSheetOpenChange(false)}
-            aria-label={t('conversation.sheet.close_aria')}
-            className="min-h-[44px] min-w-[44px] rounded-md border border-border-default px-3 text-xs text-text-muted hover:bg-surface-muted"
-          >
-            {t('common.close', { defaultValue: 'Close' })}
-          </button>
+          <div className="flex gap-1.5">
+            {isStreaming ? (
+              <button
+                type="button"
+                data-testid="node-conversation-stop"
+                onClick={handleAbort}
+                className="conv-btn conv-btn--stop"
+              >
+                {t('conversation.input.stop')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                data-testid="node-conversation-send"
+                onClick={handleSubmit}
+                disabled={inputValue.trim().length === 0 || bootstrapPending || isStreaming}
+                className="conv-btn conv-btn--send"
+              >
+                {t('conversation.input.send')}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Soft result-deepen hint after 3 completed turns */}
@@ -548,7 +574,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
           <div
             data-testid="result-deepen-hint"
             role="status"
-            className="mt-2 rounded-md border border-purple-400/30 bg-purple-500/10 px-3 py-2 text-xs text-purple-200"
+            className="mx-4 mt-2 rounded border border-purple-200/40 bg-purple-50 px-4 py-2.5 text-xs text-purple-700"
           >
             {t('result_conversation.deepen_hint', {
               defaultValue: 'Great conversation! You can continue or come back anytime.',
@@ -562,7 +588,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
             type="button"
             data-testid="node-conversation-cta-continue"
             onClick={() => convDispatch({ type: 'reset' })}
-            className="mt-2 min-h-[44px] rounded-md border border-border-default px-3 py-2 text-xs text-text-primary hover:bg-surface-muted"
+            className="conv-btn conv-btn--cta"
           >
             {t('conversation.cta.continue_chatting')}
           </button>

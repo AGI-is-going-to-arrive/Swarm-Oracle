@@ -182,6 +182,7 @@ export default function ResultView() {
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState('');
+  const exportResetTimerRef = useRef<number | null>(null);
   const [showShare, setShowShare] = useState(false);
   const [activeEndingRoomBranchId, setActiveEndingRoomBranchId] = useState<string | null>(null);
   const [activeEndingRoomMode, setActiveEndingRoomMode] = useState<'ending_chamber' | 'one_move_only' | 'crossline_gallery'>('ending_chamber');
@@ -246,6 +247,13 @@ export default function ResultView() {
   const loadResultErrorMessageRef = useRef(loadResultErrorMessage);
   const isZhRef = useRef(isZh);
   const translationRef = useRef(t);
+
+  useEffect(() => () => {
+    if (exportResetTimerRef.current) {
+      clearTimeout(exportResetTimerRef.current);
+      exportResetTimerRef.current = null;
+    }
+  }, []);
   const isDailyChallenge = Boolean(
     challengeMatch
     || campaignScenarioSummary?.completed_daily_challenge
@@ -663,7 +671,13 @@ export default function ResultView() {
     } catch (err) {
       setExportError(err instanceof Error ? err.message : 'Export failed');
     } finally {
-      window.setTimeout(() => setExporting(false), 250);
+      if (exportResetTimerRef.current) {
+        clearTimeout(exportResetTimerRef.current);
+      }
+      exportResetTimerRef.current = window.setTimeout(() => {
+        exportResetTimerRef.current = null;
+        setExporting(false);
+      }, 250);
     }
   };
 
@@ -1870,6 +1884,10 @@ export default function ResultView() {
               const replayEnabled = capabilities?.replay_trace?.enabled ?? false;
               const compareEnabled = (capabilities?.counterfactual_replay?.enabled ?? false) && branches.length > 1;
               const scenarioId = encodeURIComponent(activeScenarioId);
+              const workbenchView = !causalEnabled && kgEnabled ? 'kg' : 'graph';
+              const workbenchBranchQuery = analysisBranch
+                ? `&branch=${encodeURIComponent(analysisBranch.id)}`
+                : '';
 
               const entries: Array<{
                 key: string;
@@ -1935,7 +1953,7 @@ export default function ResultView() {
                   descKey: 'result.bridge_workbench_desc',
                   descDefault: 'Compare causal and knowledge graphs side by side',
                   enabled: (causalEnabled || kgEnabled) && !isReplayMode,
-                  href: `/workbench/${scenarioId}?view=${!causalEnabled && kgEnabled ? 'kg' : 'graph'}`,
+                  href: `/workbench/${scenarioId}?view=${workbenchView}${workbenchBranchQuery}`,
                   disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
                   disabledDefault: isReplayMode ? 'Not available in replay mode.' : 'Not enabled on this server.',
                 },

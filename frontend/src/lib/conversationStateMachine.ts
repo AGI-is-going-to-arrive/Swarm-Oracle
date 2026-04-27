@@ -38,6 +38,7 @@ export type RecoveryCode =
 export interface ConversationState {
   ui: UIState;
   turn: TurnState;
+  completedTurnCount: number;
   code?: RecoveryCode;
   /** Most-recent error message text (already-i18n-resolved). */
   message?: string;
@@ -55,7 +56,14 @@ export type ConversationAction =
   | { type: 'online' } // offline → default
   | { type: 'reset' }; // → idle/default
 
-export const INITIAL_STATE: ConversationState = { ui: 'default', turn: 'idle' };
+export const INITIAL_STATE: ConversationState = { ui: 'default', turn: 'idle', completedTurnCount: 0 };
+
+function keepCount(
+  state: ConversationState,
+  next: Omit<ConversationState, 'completedTurnCount'>,
+): ConversationState {
+  return { ...next, completedTurnCount: state.completedTurnCount };
+}
 
 /**
  * Pure reducer. Invalid transitions are no-ops (return input state).
@@ -69,40 +77,40 @@ export function conversationReducer(
       if (state.turn !== 'idle' && state.turn !== 'done' && state.turn !== 'aborted' && state.turn !== 'error') {
         return state;
       }
-      return { ui: 'loading', turn: 'pending' };
+      return keepCount(state, { ui: 'loading', turn: 'pending' });
 
     case 'first_token':
       if (state.turn !== 'pending') return state;
-      return { ui: 'default', turn: 'streaming' };
+      return keepCount(state, { ui: 'default', turn: 'streaming' });
 
     case 'commit':
       if (state.turn !== 'streaming' && state.turn !== 'pending') return state;
-      return { ui: 'default', turn: 'done' };
+      return { ui: 'default', turn: 'done', completedTurnCount: state.completedTurnCount + 1 };
 
     case 'abort':
       if (state.turn === 'idle' || state.turn === 'done' || state.turn === 'aborted') return state;
-      return { ui: 'default', turn: 'aborted' };
+      return keepCount(state, { ui: 'default', turn: 'aborted' });
 
     case 'error':
-      return { ui: 'error', turn: 'error', code: action.code, message: action.message };
+      return keepCount(state, { ui: 'error', turn: 'error', code: action.code, message: action.message });
 
     case 'ws_disconnected':
       if (state.turn === 'streaming' || state.turn === 'pending') {
-        return { ui: 'error', turn: 'recovering', code: 'ws_lost', message: state.message };
+        return keepCount(state, { ui: 'error', turn: 'recovering', code: 'ws_lost', message: state.message });
       }
       return state;
 
     case 'ws_reconnected':
       if (state.turn === 'recovering') {
-        return { ui: 'default', turn: 'streaming' };
+        return keepCount(state, { ui: 'default', turn: 'streaming' });
       }
       return state;
 
     case 'offline':
-      return { ui: 'offline', turn: state.turn, message: state.message };
+      return keepCount(state, { ui: 'offline', turn: state.turn, message: state.message });
 
     case 'online':
-      if (state.ui === 'offline') return { ui: 'default', turn: state.turn };
+      if (state.ui === 'offline') return keepCount(state, { ui: 'default', turn: state.turn });
       return state;
 
     case 'reset':

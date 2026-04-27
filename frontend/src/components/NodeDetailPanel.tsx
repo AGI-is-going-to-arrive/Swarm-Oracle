@@ -319,7 +319,7 @@ export function NodeDetailPanel({
       {/* Payload — semantic fields first, raw fallback */}
       {hasPayload && (() => {
         const p = typeof node.payload === 'object' && node.payload ? node.payload as Record<string, unknown> : null;
-        const agentName = p?.agent_id ?? p?.agent_name;
+        const agentName = p?.agent_name ?? p?.agent_id;
         const emotion = p?.emotion;
         const stance = p?.stance_score ?? p?.stance;
         const side = p?.side;

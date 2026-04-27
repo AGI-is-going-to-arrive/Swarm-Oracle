@@ -44,20 +44,22 @@ export function PipelineStepper() {
   const { t } = useTranslation();
   const location = useLocation();
   const status = useSimulationStore((s) => s.status);
-  const [fadedOut, setFadedOut] = useState(false);
+  const [fadedOutPath, setFadedOutPath] = useState<string | null>(null);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const routeKind = isWhitelistedRoute(location.pathname);
   const isError = status === 'error';
   const currentIndex = getStageIndex(status);
   const safeCurrentIndex = Math.max(0, currentIndex);
+  const fadedOut = routeKind === 'result' && status === 'done' && fadedOutPath === location.pathname;
   const shouldShow = routeKind !== null && status !== 'idle' && !fadedOut;
 
   // Auto-fade on result page after done
   useEffect(() => {
     if (routeKind === 'result' && status === 'done') {
+      const pathAtSchedule = location.pathname;
       fadeTimerRef.current = setTimeout(() => {
-        setFadedOut(true);
+        setFadedOutPath(pathAtSchedule);
       }, RESULT_DONE_FADE_MS);
     }
     return () => {
@@ -66,14 +68,7 @@ export function PipelineStepper() {
         fadeTimerRef.current = null;
       }
     };
-  }, [routeKind, status]);
-
-  // Reset fade state when leaving result route
-  useEffect(() => {
-    if (routeKind !== 'result') {
-      setFadedOut(false);
-    }
-  }, [routeKind]);
+  }, [location.pathname, routeKind, status]);
 
   if (routeKind === null) return null;
 

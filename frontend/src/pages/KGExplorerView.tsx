@@ -303,16 +303,18 @@ export default function KGExplorerView() {
     [],
   );
 
-  const g6Options = useMemo(() => {
-    const base = buildKgG6Options({
-      data: g6GraphData,
-      theme,
-      reducedMotion,
-      minimapContainer,
-      enableHover: true,
-    });
-    return { ...base, layout: comboLayout() } as unknown as Omit<GraphOptions, 'container' | 'renderer' | 'devicePixelRatio'>;
-  }, [g6GraphData, theme, reducedMotion, minimapContainer]);
+  const g6Options = useMemo(
+    () =>
+      buildKgG6Options({
+        data: g6GraphData,
+        theme,
+        reducedMotion,
+        minimapContainer,
+        enableHover: true,
+        layout: comboLayout(),
+      }) as unknown as Omit<GraphOptions, 'container' | 'renderer' | 'devicePixelRatio'>,
+    [g6GraphData, theme, reducedMotion, minimapContainer],
+  );
 
   const { canvasWrapperRef } = useG6Graph({
     containerRef,

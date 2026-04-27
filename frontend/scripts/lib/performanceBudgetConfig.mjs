@@ -112,14 +112,14 @@ export const FILE_BUDGETS = [
     maxGzipBytes: 80 * 1024,
   }),
   buildChunkBudget({
-    label: "React Flow graph card chunk",
-    chunkName: "GraphNodeCard",
+    label: "React Flow graph traversal/card chunk",
+    chunkName: "graphTraversal",
     maxBytes: 24 * 1024,
     maxGzipBytes: 8 * 1024,
   }),
   buildChunkBudget({
-    label: "React Flow graph card chunk",
-    chunkName: "GraphNodeCard",
+    label: "React Flow graph traversal/card chunk",
+    chunkName: "graphTraversal",
     variant: "legacy",
     maxBytes: 24 * 1024,
     maxGzipBytes: 8 * 1024,

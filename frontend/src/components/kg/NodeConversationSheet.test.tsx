@@ -271,7 +271,7 @@ describe('NodeConversationSheet — input + send', () => {
       fireEvent.change(ta, { target: { value: 'retry me' } });
     });
     await waitFor(() => {
-      expect(window.sessionStorage.getItem('swarmoracle_draft:default')).toBe('retry me');
+      expect(window.sessionStorage.getItem('swarmoracle_draft:result')).toBe('retry me');
     });
     fireEvent.click(getByTestId('node-conversation-send'));
 
@@ -283,7 +283,7 @@ describe('NodeConversationSheet — input + send', () => {
     });
 
     expect(ta.value).toBe('retry me');
-    expect(window.sessionStorage.getItem('swarmoracle_draft:default')).toBe('retry me');
+    expect(window.sessionStorage.getItem('swarmoracle_draft:result')).toBe('retry me');
   });
 
   it('follow-up submit streams /turn SSE events into the bubble', async () => {
@@ -757,5 +757,258 @@ describe('NodeConversationSheet — mobile snap (40/70/100)', () => {
     expect(queryByTestId('node-conversation-snap-handle')).toBeNull();
     const sheet = getByTestId('node-conversation-sheet');
     expect(sheet.hasAttribute('data-snap')).toBe(false);
+  });
+
+  it('mobile snap handle has >= 44px hit target', () => {
+    const { getByTestId } = renderSheet();
+    const handle = getByTestId('node-conversation-snap-handle') as HTMLButtonElement;
+    expect(handle.className).toContain('min-h-[44px]');
+  });
+});
+
+describe('NodeConversationSheet — T0 bootstrap abort', () => {
+  it('unmount aborts a pending bootstrap /start request', async () => {
+    vi.useRealTimers();
+    let startSignal: AbortSignal | null = null;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (typeof url === 'string' && url.includes('/start')) {
+        startSignal = init?.signal ?? null;
+        return new Promise<Response>(() => {});
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { getByTestId, unmount } = renderSheet({ threadId: null });
+    const ta = getByTestId('node-conversation-input') as HTMLTextAreaElement;
+    act(() => {
+      fireEvent.change(ta, { target: { value: 'bootstrap abort test' } });
+    });
+    fireEvent.click(getByTestId('node-conversation-send'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/conversation/start',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    expect(startSignal).not.toBeNull();
+    expect(startSignal!.aborted).toBe(false);
+
+    unmount();
+
+    expect(startSignal!.aborted).toBe(true);
+  });
+
+  it('stale /start resolve after close does not set the active thread', async () => {
+    vi.useRealTimers();
+    let resolveStart: ((v: Response) => void) | null = null;
+    const fetchMock = vi.fn((url: string) => {
+      if (typeof url === 'string' && url.includes('/start')) {
+        return new Promise<Response>((resolve) => {
+          resolveStart = resolve;
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const onOpenChange = vi.fn();
+    const { getByTestId, rerender } = render(
+      <NodeConversationSheet
+        open
+        onOpenChange={onOpenChange}
+        threadId={null}
+        scenarioId="scen-1"
+        identityId="id-1"
+      />,
+    );
+    const ta = getByTestId('node-conversation-input') as HTMLTextAreaElement;
+
+    act(() => { fireEvent.change(ta, { target: { value: 'pending submit' } }); });
+    fireEvent.click(getByTestId('node-conversation-send'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/conversation/start',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    expect(getByTestId('node-conversation-meta').textContent).toContain('thread=');
+    expect(getByTestId('node-conversation-meta').textContent).not.toContain('thread=thread-stale');
+
+    rerender(
+      <NodeConversationSheet
+        open={false}
+        onOpenChange={onOpenChange}
+        threadId={null}
+        scenarioId="scen-1"
+        identityId="id-1"
+      />,
+    );
+
+    await act(async () => {
+      resolveStart!({
+        ok: true,
+        json: () => Promise.resolve({ thread_id: 'thread-stale' }),
+      } as unknown as Response);
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    rerender(
+      <NodeConversationSheet
+        open
+        onOpenChange={onOpenChange}
+        threadId={null}
+        scenarioId="scen-1"
+        identityId="id-1"
+      />,
+    );
+
+    expect(getByTestId('node-conversation-meta').textContent).not.toContain('thread-stale');
+  });
+
+  it('send button is disabled during bootstrap pending', async () => {
+    vi.useRealTimers();
+    const fetchMock = vi.fn(() => {
+      return new Promise<Response>(() => {});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { getByTestId } = renderSheet({ threadId: null });
+    const ta = getByTestId('node-conversation-input') as HTMLTextAreaElement;
+    act(() => {
+      fireEvent.change(ta, { target: { value: 'bootstrap pending' } });
+    });
+    const sendBefore = getByTestId('node-conversation-send') as HTMLButtonElement;
+    expect(sendBefore.disabled).toBe(false);
+
+    fireEvent.click(sendBefore);
+
+    await waitFor(() => {
+      const sendDuring = getByTestId('node-conversation-send') as HTMLButtonElement;
+      expect(sendDuring.disabled).toBe(true);
+    });
+  });
+});
+
+describe('NodeConversationSheet — T0 draft key isolation', () => {
+  it('different origins produce different draft keys in sessionStorage', async () => {
+    vi.useRealTimers();
+
+    const originA = { nodeId: 'node-a', nodeType: 'causal', branchId: 'b1', roundNumber: 2 };
+    const originB = { nodeId: 'node-b', nodeType: 'argument', branchId: 'b2', roundNumber: 5 };
+
+    const { getByTestId, unmount } = renderSheet({ threadId: null, origin: originA });
+    const ta = getByTestId('node-conversation-input') as HTMLTextAreaElement;
+    act(() => {
+      fireEvent.change(ta, { target: { value: 'draft for A' } });
+    });
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem('swarmoracle_draft:scen-1:node-a:b1:2')).toBe('draft for A');
+    });
+    unmount();
+
+    const { getByTestId: getByTestId2 } = renderSheet({ threadId: null, origin: originB });
+    const ta2 = getByTestId2('node-conversation-input') as HTMLTextAreaElement;
+    expect(ta2.value).toBe('');
+
+    act(() => {
+      fireEvent.change(ta2, { target: { value: 'draft for B' } });
+    });
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem('swarmoracle_draft:scen-1:node-b:b2:5')).toBe('draft for B');
+    });
+
+    expect(window.sessionStorage.getItem('swarmoracle_draft:scen-1:node-a:b1:2')).toBe('draft for A');
+  });
+
+  it('no-origin sheets use result scope draft key', async () => {
+    vi.useRealTimers();
+    const { getByTestId } = renderSheet({ threadId: null });
+    const ta = getByTestId('node-conversation-input') as HTMLTextAreaElement;
+    act(() => {
+      fireEvent.change(ta, { target: { value: 'result draft' } });
+    });
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem('swarmoracle_draft:result')).toBe('result draft');
+    });
+  });
+});
+
+describe('NodeConversationSheet — T1 banner integration', () => {
+  it('renders NodeContextBanner when origin has display content', () => {
+    const origin = {
+      nodeId: 'n1',
+      nodeType: 'event',
+      agentName: 'Agent A',
+      roundNumber: 2,
+    };
+    const { queryByTestId } = renderSheet({ origin });
+    expect(queryByTestId('node-context-banner')).not.toBeNull();
+  });
+
+  it('does not render banner when origin has no UI fields', () => {
+    const origin = { nodeId: 'n1', nodeType: 'event' };
+    const { queryByTestId } = renderSheet({ origin });
+    expect(queryByTestId('node-context-banner')).toBeNull();
+  });
+
+  it('does not render banner when origin is undefined', () => {
+    const { queryByTestId } = renderSheet({ origin: undefined });
+    expect(queryByTestId('node-context-banner')).toBeNull();
+  });
+
+  it('/start body excludes UI-only origin fields (agentName, emotion, stance, nodeLabel, typeColor)', async () => {
+    vi.useRealTimers();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ thread_id: 'thread-t1' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const origin = {
+      nodeId: 'n1',
+      nodeType: 'event',
+      branchId: 'b1',
+      roundNumber: 3,
+      excerpt: 'Prompt-visible node excerpt',
+      agentName: 'Agent UI',
+      emotion: 'calm',
+      stance: 0.7,
+      nodeLabel: 'UI Label',
+      typeColor: '#ff0000',
+    };
+    const { getByTestId } = renderSheet({ threadId: null, origin });
+    const ta = getByTestId('node-conversation-input') as HTMLTextAreaElement;
+    act(() => {
+      fireEvent.change(ta, { target: { value: 'hello' } });
+    });
+    fireEvent.click(getByTestId('node-conversation-send'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/conversation/start',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    const startCall = fetchMock.mock.calls.find(
+      (args) => typeof args[0] === 'string' && args[0].includes('/start'),
+    );
+    expect(startCall).toBeTruthy();
+    const body = JSON.parse(startCall![1].body as string);
+    expect(body).not.toHaveProperty('agentName');
+    expect(body).not.toHaveProperty('emotion');
+    expect(body).not.toHaveProperty('stance');
+    expect(body).not.toHaveProperty('nodeLabel');
+    expect(body).not.toHaveProperty('typeColor');
+    expect(body.origin_node_id).toBe('n1');
+    expect(body.origin_node_type).toBe('event');
+    expect(body.origin_branch_id).toBe('b1');
+    expect(body.origin_round_number).toBe(3);
+    expect(body.origin_excerpt).toBe('Prompt-visible node excerpt');
   });
 });

@@ -187,11 +187,13 @@ describe('WorkbenchView', () => {
     expect(screen.getByText('Workbench feature is not enabled')).toBeTruthy();
   });
 
-  it('kg_explorer enabled and causal_graph disabled → ?view=kg shows disabled (KG depends on causal)', async () => {
+  it('kg_explorer enabled and causal_graph disabled → ?view=kg renders shell', async () => {
     mockCapResults.causal_graph.enabled = false;
     mockCapResults.kg_explorer.enabled = true;
     renderWorkbench('/workbench/abc?view=kg');
-    expect(screen.getByText('Workbench feature is not enabled')).toBeTruthy();
+    expect(await screen.findByTestId('graph-workbench-shell')).toBeTruthy();
+    expect(await screen.findByTestId('kg-board')).toBeTruthy();
+    expect(screen.queryByTestId('causal-board')).toBeNull();
   });
 
   it('kg_explorer and causal_graph both enabled → ?view=kg renders shell', async () => {

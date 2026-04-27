@@ -33,7 +33,7 @@ class TestNarrateBranch:
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_empty_llm_response(self, mock_llm):
-        """Should handle LLM returning empty/partial response."""
+        """Empty LLM payload still yields non-empty insight so reconcile won't stall."""
         mock_llm.return_value = {}
 
         result = await narrate_branch(
@@ -44,8 +44,30 @@ class TestNarrateBranch:
         )
 
         assert result["story"] == ""
-        assert result["insight"] == ""
+        # Contract: insight must be non-empty so reconcile_scenario_done_if_complete
+        # can mark the scenario as DONE.
+        assert result["insight"] != ""
         assert result["key_moments"] == []
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
+    async def test_insight_falls_back_to_story_excerpt(self, mock_llm):
+        """When LLM returns story but omits insight, derive an excerpt from story."""
+        mock_llm.return_value = {
+            "story": "某分支故事 " * 30,
+            "insight": "",
+            "key_moments": [],
+        }
+
+        result = await narrate_branch(
+            branch_title="b",
+            probability=0.5,
+            agents_summary="",
+            raw_rounds="",
+        )
+
+        assert result["insight"], "insight must never be empty"
+        assert "某分支故事" in result["insight"]
 
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)

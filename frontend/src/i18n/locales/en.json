@@ -1527,6 +1527,10 @@
       "path_highlight_clear": "Click background to clear",
       "confidence_high": "High confidence",
       "confidence_low": "Low confidence"
+    },
+    "node_context_banner": {
+      "aria_label": "Node context",
+      "round": "R{{round}}"
     }
   }
 }

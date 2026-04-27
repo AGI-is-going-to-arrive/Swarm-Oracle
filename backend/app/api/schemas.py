@@ -443,6 +443,7 @@ class StartConversationRequest(BaseModel):
     origin_round_number: int | None = Field(default=None, ge=0)
     origin_node_id: str | None = None
     origin_node_type: str | None = None
+    origin_excerpt: str | None = None
     first_user_content: str
     # BYOK (HC-24) — optional; when ``base_url`` is present ``api_key`` is required.
     llm_api_key: str | None = None
@@ -468,6 +469,16 @@ class StartConversationRequest(BaseModel):
         normalized = v.strip()
         if len(normalized) > 128:
             raise ValueError("origin_* fields must be at most 128 characters")
+        return normalized or None
+
+    @field_validator("origin_excerpt")
+    @classmethod
+    def _normalize_origin_excerpt(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = v.strip()
+        if len(normalized) > 1000:
+            raise ValueError("origin_excerpt must be at most 1000 characters")
         return normalized or None
 
     @field_validator("llm_api_key", "llm_base_url", "llm_model")
@@ -501,6 +512,7 @@ class ConversationTurnCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     user_content: str
+    origin_excerpt: str | None = None
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
@@ -515,6 +527,16 @@ class ConversationTurnCreate(BaseModel):
         if len(normalized) > 8000:
             raise ValueError("user_content too long (max 8000 chars)")
         return normalized
+
+    @field_validator("origin_excerpt")
+    @classmethod
+    def _normalize_origin_excerpt(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = v.strip()
+        if len(normalized) > 1000:
+            raise ValueError("origin_excerpt must be at most 1000 characters")
+        return normalized or None
 
     @field_validator("llm_api_key", "llm_base_url", "llm_model")
     @classmethod

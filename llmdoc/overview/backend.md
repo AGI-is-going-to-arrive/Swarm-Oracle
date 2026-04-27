@@ -100,11 +100,15 @@
 - causal graph snapshot 当前会返回 `available_branches`（包含 fork payload 里的 `children`），供前端 branch selector 在过滤态下继续保留全量可切分支。
 - causal graph snapshot 当前在 child branch 过滤时，也会保留该 fork 的直接 provenance 节点，不再返回只有 fork 自己的孤儿图。
 - causal graph append 当前在“先重放早轮、后面轮次已存在”时，会把同 branch 的下一轮 temporal edge 一起补回；同一 round 如果不再产生 fork，也会清掉旧 fork 节点和 `available_branches` 里的残留 child branch，不再把过期分支信息留在快照里。
+- causal graph append 当前也会在同一 `branch / round` 的 event 节点之间补 inter-agent 边：
+  - `responds_to`：消息正文提到另一位 agent 的可信 display name；不会拿短 id 兜底匹配
+  - `supports_stance / opposes_stance`：只按本轮派生 stance score 的固定阈值判断，不调用 LLM
+  - 重放同一轮时，只清理当前 branch 当前轮 event 节点之间的旧 inter-agent 边，不会误删其它 branch 的同轮边
 - `GET /api/scenario/{id}/causal-graph` 当前会先校验 `branch_id` 属于当前 scenario：
   - 空白 `branch_id` 仍归一化为“全部分支”
   - 不存在的 branch 会返回 `404 BRANCH_NOT_FOUND`，不再伪装成 `200 + 空图`
 - `GET /api/scenario/{id}/graph-analysis` 当前同时要求 `FEATURE_GRAPH_ANALYSIS=true` 和 `FEATURE_CAUSAL_GRAPH=true`；返回 god nodes、degree distribution、cross-branch edges 和 summary。分析前会先按最新 snapshot 的 node/edge 数做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`；带 `branch_id` 时，预检会按该 branch 的可见节点/边计数，避免大 scenario 下的小 branch 查询被保守截断。
-- `GraphEdge` 当前已有 `confidence_tier / source_ref / source_round_number / evidence_json` nullable 字段。causal graph 新边会写入 coarse evidence，并在 API response 里返回；重放轮次遇到旧 edge 时，会只补齐缺失的 evidence 字段，不覆盖已有非空值。debate argument map 也会在 `GET /api/debate/{id}/argument-map` 的 `edges[].evidence` 返回 `confidence_tier / source_ref / source_round_number / detail`。`detail` 只是 `evidence_json` 的透传，当前生产写图没有可信 detail 填充来源。
+- `GraphEdge` 当前已有 `confidence_tier / source_ref / source_round_number / evidence_json` nullable 字段。causal graph 新边会写入 coarse evidence，并在 API response 里返回；重放轮次遇到旧 edge 时，会只补齐缺失的 evidence 字段，不覆盖已有非空值。inter-agent 边会把确定性 rule / reason 写进 `evidence_json`；其它 causal graph 写图路径仍可能只有 coarse provenance。debate argument map 也会在 `GET /api/debate/{id}/argument-map` 的 `edges[].evidence` 返回 `confidence_tier / source_ref / source_round_number / detail`。`detail` 只是 `evidence_json` 的透传，不是 LLM 解释文本。
 
 ### Ending Room
 
@@ -195,6 +199,7 @@
   - `chat/completions` 的 `choices[0].message.content` 为空会直接报错
   - `responses` 会先尝试 `content[].text`、`content[].output_text`、top-level `output_text`；还拿不到正文就报错
   - 这样上层不会再把空正文拖到 `json.loads("")` 才暴露
+- `narrate_branch()` 当前会保证 completed branch 的 `insight` 非空；如果 LLM 只返回 story 或空 payload，会从 story 截一段，或者退到当前语言的简短 fallback，避免 reconcile 因空 insight 卡住。
 - 本地兼容网关的 live probe 当前有独立测试：
   - `backend/tests/test_llm_gateway_probe.py`
   - 用来确认本地 OpenAI-compatible 端点的非流式正文和流式 JSON 路径是否可用。
@@ -213,6 +218,7 @@
   - 同一 agent 同 round 就算消息没有 `id`，event 节点也会继续保留为多条；不会再被后一条静默覆盖
   - 已存在的 event / stance_shift 节点会按 `branch + node_key` 复用；同 round 就算 `msg_id` 重复，event 节点也会按 agent 隔离
   - 同一 `scenario / branch / round` 如果 id-less 消息集合变少，旧的 stale `event` 节点和相关边也会一起清掉，不会把上一版快照残留在当前图里
+  - 同一 `branch / round` 的 `responds_to / supports_stance / opposes_stance` 边会用 `_add_edge_if_missing()` 保持幂等；重放时先按当前 branch 的同轮 event 节点清掉旧 inter-agent 边，再按当前消息重建
   - 重放旧轮次时，会先删掉该轮已过期的 `AgentStateFrame`，并清掉不再成立的 stale `stance_shift` 节点和相关边，再按当前消息重建
   - append 路径当前通过固定大小的 scenario lock pool 串行化同一 scenario；同一 scenario 并发写入不会再撞出重复 event 节点，长期进程也不会按 scenario 数量无限增长锁对象
   - 同一 fork 如果先走 same-round fallback、后面又带显式 `trigger_node_ids` 重放，旧的 `triggered fork` provenance edge 会先被替换；显式 ids 非法时也会回退 same-round provenance
@@ -244,10 +250,12 @@
   - bootstrap 预留 turn 在真正发出首个 `turn_started` 前，当前还会再看一次 turn 状态和 cancel flag；如果 started 前已经被 abort，就不会再补 stale `turn_started`；如果场景已经删掉，则直接收成 `SCENARIO_DELETED`
 - Agent conversation prompt 当前会带轻量 worldline-local 语境：
   - scenario question
+  - 前端传入的 `origin_excerpt`
   - origin branch id / round
   - branch title / fork reason / summary
-  - origin graph node label / type / round / 白名单 payload 摘要
-  - 最多 6 条相邻边/邻居摘要
+  - origin graph node label / type / round / 截断后的 payload 摘要
+  - 最多 6 条相邻边/邻居摘要；有 edge evidence 时会带截断后的 `evidence_json / detail`
+  - origin branch 最近几轮 transcript 摘要
   - 历史 turn 只取最近 12 条，并按单 turn 长度截断
   - 这些图谱/场景文本统一通过 `format_untrusted_text_block()` 注入，不把节点 payload 当系统指令
 - `WS /ws/agent-conversation/{thread_id}` 当前也已上线：复用统一首帧 auth / pending-auth 容量门控；feature 关闭或 thread 不存在时返回 `4404`；owner freeze 按 thread owner 收口；容量仍按 scenario 维度计算，不会因为 thread 数量放大

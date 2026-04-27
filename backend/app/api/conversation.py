@@ -347,6 +347,7 @@ async def post_conversation_turn(
         thread_id=thread.id,
         assistant_turn_id=assistant_turn.id,
         new_user_content=stream_user_content,
+        origin_excerpt=body.origin_excerpt,
         history_exclude_turn_id=history_exclude_turn_id,
         assistant_turn_preclaimed=bootstrap is not None,
         owner_user_id=owner,

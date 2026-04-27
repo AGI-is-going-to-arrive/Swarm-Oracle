@@ -1,11 +1,4 @@
-/**
- * FE-3 — Empty state quick-questions (ui-prompts §4).
- *
- * Three pill-shaped quick questions the user can click to seed the
- * conversation input. Caller provides `onSelect(text)` to hydrate the
- * textarea.
- */
-
+import { ArrowRight, Sparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '../../lib/utils';
@@ -14,6 +7,7 @@ export interface EmptyStateQuickQuestionsProps {
   onSelect: (text: string) => void;
   className?: string;
   variant?: 'node' | 'result';
+  agentName?: string;
 }
 
 export function EmptyStateQuickQuestions(props: EmptyStateQuickQuestionsProps) {
@@ -40,7 +34,7 @@ export function EmptyStateQuickQuestions(props: EmptyStateQuickQuestionsProps) {
         quick_q_3: 'Who else was affected?',
       };
 
-  const pills = [
+  const questions = [
     t(keyFor('quick_q_1'), { defaultValue: fallback.quick_q_1 }),
     t(keyFor('quick_q_2'), { defaultValue: fallback.quick_q_2 }),
     t(keyFor('quick_q_3'), { defaultValue: fallback.quick_q_3 }),
@@ -48,25 +42,29 @@ export function EmptyStateQuickQuestions(props: EmptyStateQuickQuestionsProps) {
 
   return (
     <div
-      className={cn('flex flex-col items-start gap-3 text-left', className)}
+      className={cn('conv-empty-state', className)}
       data-testid="conversation-empty-state"
     >
-      <h2 className="text-base font-semibold text-text-primary">
-        {t(keyFor('title'), { defaultValue: fallback.title })}
-      </h2>
-      <p className="text-sm text-text-muted">
+      <div className="conv-empty-state__header">
+        <Sparkles className="conv-empty-state__sparkle" size={18} aria-hidden="true" />
+        <h2 className="conv-empty-state__title">
+          {t(keyFor('title'), { defaultValue: fallback.title })}
+        </h2>
+      </div>
+      <p className="conv-empty-state__subtitle">
         {t(keyFor('subtitle'), { defaultValue: fallback.subtitle })}
       </p>
-      <div className="flex flex-wrap gap-2 pt-1">
-        {pills.map((text, i) => (
+      <div className="conv-empty-state__questions">
+        {questions.map((text, i) => (
           <button
             key={i}
             type="button"
             data-testid={`conversation-quick-q-${i + 1}`}
             onClick={() => onSelect(text)}
-            className="min-h-[44px] rounded-full border border-border-default px-4 py-2 text-xs text-text-primary hover:bg-surface-muted"
+            className="quick-question-card conv-quick-q"
           >
-            {text}
+            <span>{text}</span>
+            <ArrowRight className="conv-quick-q__arrow" size={16} aria-hidden="true" />
           </button>
         ))}
       </div>

@@ -10,7 +10,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from alembic import command as alembic_command
 from app.config import settings
-from app.models.database import dispose_engine, get_engine
+from app.models.database import Agent, Scenario, dispose_engine, get_engine
 from app.models.graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
 from app.services.causal_graph import (
     _SCENARIO_LOCK_STRIPE_COUNT,
@@ -589,6 +589,389 @@ class TestAppendRoundNodes:
 
         assert [frame.agent_id for frame in frames] == ["a1"]
         assert frames[0].summary_excerpt == "replayed steady"
+
+
+# ── Inter-agent edges (P7 Stage 1) ─────────────────────────
+
+
+def _edges_of_type(result: dict, edge_type: str) -> list[dict]:
+    return [edge for edge in result["edges"] if edge["type"] == edge_type]
+
+
+class TestInterAgentEdges:
+    def test_responds_to_edge_created_when_agent_mentions_another(self):
+        append_round_nodes(
+            "sc_ia_responds",
+            "br1",
+            1,
+            [
+                {
+                    "agent_id": "a1",
+                    "agent_name": "Alice",
+                    "content": "Bob has the decisive point.",
+                    "emotion": "neutral",
+                    "id": "m1",
+                },
+                {
+                    "agent_id": "a2",
+                    "agent_name": "Bob",
+                    "content": "I will answer after the prompt.",
+                    "emotion": "neutral",
+                    "id": "m2",
+                },
+            ],
+        )
+
+        result = build_snapshot("sc_ia_responds")
+        nodes_by_id = {node["id"]: node for node in result["nodes"]}
+        responds = _edges_of_type(result, "responds_to")
+
+        assert len(responds) == 1
+        assert nodes_by_id[responds[0]["source"]]["payload"]["agent_id"] == "a1"
+        assert nodes_by_id[responds[0]["target"]]["payload"]["agent_id"] == "a2"
+        assert responds[0]["evidence"]["confidence_tier"] == "low"
+        assert responds[0]["evidence"]["source_round_number"] == 1
+        assert '"rule": "responds_to"' in responds[0]["evidence"]["detail"]
+
+    def test_supports_stance_edge_for_aligned_agents(self):
+        append_round_nodes(
+            "sc_ia_supports",
+            "br1",
+            1,
+            [
+                MockMessage(emotion="confident", agent_id="a1", id="m1"),
+                MockMessage(emotion="cooperative", agent_id="a2", id="m2"),
+            ],
+        )
+
+        result = build_snapshot("sc_ia_supports")
+        supports = _edges_of_type(result, "supports_stance")
+
+        assert len(supports) == 1
+        assert supports[0]["evidence"] == {
+            "confidence_tier": "medium",
+            "source_ref": None,
+            "source_round_number": 1,
+            "detail": supports[0]["evidence"]["detail"],
+        }
+        assert '"rule": "supports_stance"' in supports[0]["evidence"]["detail"]
+
+    def test_opposes_stance_edge_for_opposing_agents(self):
+        append_round_nodes(
+            "sc_ia_opposes",
+            "br1",
+            1,
+            [
+                MockMessage(emotion="confident", agent_id="a1", id="m1"),
+                MockMessage(emotion="aggressive", agent_id="a2", id="m2"),
+            ],
+        )
+
+        result = build_snapshot("sc_ia_opposes")
+        opposes = _edges_of_type(result, "opposes_stance")
+
+        assert len(opposes) == 1
+        assert opposes[0]["evidence"]["confidence_tier"] == "medium"
+        assert opposes[0]["evidence"]["source_round_number"] == 1
+        assert '"rule": "opposes_stance"' in opposes[0]["evidence"]["detail"]
+
+    def test_no_self_edges_created(self):
+        append_round_nodes(
+            "sc_ia_no_self",
+            "br1",
+            1,
+            [
+                {
+                    "agent_id": "a1",
+                    "agent_name": "Alice",
+                    "content": "Alice repeats Alice's own point.",
+                    "emotion": "confident",
+                    "id": "m1",
+                }
+            ],
+        )
+
+        result = build_snapshot("sc_ia_no_self")
+
+        assert result["edges"] == []
+
+    def test_inter_agent_edges_deduplicated(self):
+        messages = [
+            MockMessage(emotion="confident", agent_id="a1", id="m1"),
+            MockMessage(emotion="cooperative", agent_id="a2", id="m2"),
+        ]
+
+        append_round_nodes("sc_ia_dedup", "br1", 1, messages)
+        append_round_nodes("sc_ia_dedup", "br1", 1, messages)
+
+        result = build_snapshot("sc_ia_dedup")
+
+        assert len(_edges_of_type(result, "supports_stance")) == 1
+        assert len(result["edges"]) == 1
+
+    def test_missing_agent_names_tolerated_without_short_id_mentions(self):
+        append_round_nodes(
+            "sc_ia_missing_names",
+            "br1",
+            1,
+            [
+                {
+                    "agent_id": "a1",
+                    "content": "a2 should answer.",
+                    "emotion": "neutral",
+                    "id": "m1",
+                },
+                {
+                    "agent_id": "a2",
+                    "content": "No display name here.",
+                    "emotion": "neutral",
+                    "id": "m2",
+                },
+            ],
+        )
+
+        result = build_snapshot("sc_ia_missing_names")
+
+        assert len(result["nodes"]) == 2
+        assert _edges_of_type(result, "responds_to") == []
+
+    def test_existing_temporal_caused_edges_unchanged(self):
+        append_round_nodes(
+            "sc_ia_existing_edges",
+            "br1",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id="m1", content="first")],
+        )
+        append_round_nodes(
+            "sc_ia_existing_edges",
+            "br1",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m2", content="second")],
+            fork_event={"branch_id": "br_child", "reason": "fork remains"},
+        )
+
+        result = build_snapshot("sc_ia_existing_edges")
+
+        assert len(_edges_of_type(result, "temporal")) == 1
+        caused = _edges_of_type(result, "caused")
+        assert len(caused) == 1
+        assert caused[0]["label"] == "triggered fork"
+
+    def test_cjk_short_name_not_matched(self):
+        append_round_nodes(
+            "sc_ia_cjk_short",
+            "br1",
+            1,
+            [
+                {
+                    "agent_id": "a1",
+                    "agent_name": "张飞",
+                    "content": "我回应刘备的判断。",
+                    "emotion": "neutral",
+                    "id": "m1",
+                },
+                {
+                    "agent_id": "a2",
+                    "agent_name": "刘",
+                    "content": "单字名不应被用于匹配。",
+                    "emotion": "neutral",
+                    "id": "m2",
+                },
+            ],
+        )
+
+        result = build_snapshot("sc_ia_cjk_short")
+
+        assert _edges_of_type(result, "responds_to") == []
+
+    def test_latin_word_boundary(self):
+        append_round_nodes(
+            "sc_ia_latin_boundary",
+            "br1",
+            1,
+            [
+                {
+                    "agent_id": "a1",
+                    "agent_name": "Chris",
+                    "content": "The annual review is not a direct reply.",
+                    "emotion": "neutral",
+                    "id": "m1",
+                },
+                {
+                    "agent_id": "a2",
+                    "agent_name": "Ann",
+                    "content": "Boundary checks matter.",
+                    "emotion": "neutral",
+                    "id": "m2",
+                },
+            ],
+        )
+
+        result = build_snapshot("sc_ia_latin_boundary")
+
+        assert _edges_of_type(result, "responds_to") == []
+
+    def test_replay_cleans_stale_inter_agent_edges(self):
+        initial_messages = [
+            {
+                "agent_id": "a1",
+                "agent_name": "Alice",
+                "content": "Bob should answer this.",
+                "emotion": "neutral",
+                "id": "m1",
+            },
+            {
+                "agent_id": "a2",
+                "agent_name": "Bob",
+                "content": "Initial answer.",
+                "emotion": "neutral",
+                "id": "m2",
+            },
+        ]
+        replayed_messages = [
+            {**initial_messages[0], "content": "No named reply now."},
+            initial_messages[1],
+        ]
+
+        append_round_nodes("sc_ia_replay_cleanup", "br1", 1, initial_messages)
+        assert len(_edges_of_type(build_snapshot("sc_ia_replay_cleanup"), "responds_to")) == 1
+
+        append_round_nodes("sc_ia_replay_cleanup", "br1", 1, replayed_messages)
+
+        result = build_snapshot("sc_ia_replay_cleanup")
+        assert _edges_of_type(result, "responds_to") == []
+
+    def test_same_agent_multiple_messages_per_round(self):
+        append_round_nodes(
+            "sc_ia_multi_message",
+            "br1",
+            1,
+            [
+                {
+                    "agent_id": "a1",
+                    "agent_name": "Alice",
+                    "content": "Bob should answer first.",
+                    "emotion": "neutral",
+                    "id": "m1",
+                },
+                {
+                    "agent_id": "a1",
+                    "agent_name": "Alice",
+                    "content": "Bob should also answer this follow-up.",
+                    "emotion": "neutral",
+                    "id": "m2",
+                },
+                {
+                    "agent_id": "a2",
+                    "agent_name": "Bob",
+                    "content": "Answering.",
+                    "emotion": "neutral",
+                    "id": "m3",
+                },
+            ],
+        )
+
+        result = build_snapshot("sc_ia_multi_message")
+        nodes_by_id = {node["id"]: node for node in result["nodes"]}
+        responds = _edges_of_type(result, "responds_to")
+
+        assert len(responds) == 2
+        assert {
+            nodes_by_id[edge["source"]]["payload"]["agent_id"]
+            for edge in responds
+        } == {"a1"}
+        assert {
+            nodes_by_id[edge["target"]]["payload"]["agent_id"]
+            for edge in responds
+        } == {"a2"}
+
+    def test_replay_cleanup_preserves_same_round_other_branch_edges(self):
+        branch_one_initial = [
+            {
+                "agent_id": "a1",
+                "agent_name": "Alice",
+                "content": "Bob should answer this.",
+                "emotion": "neutral",
+                "id": "m1",
+            },
+            {
+                "agent_id": "a2",
+                "agent_name": "Bob",
+                "content": "Branch one answer.",
+                "emotion": "neutral",
+                "id": "m2",
+            },
+        ]
+        branch_two_messages = [
+            {
+                "agent_id": "a3",
+                "agent_name": "Carol",
+                "content": "Dave should answer this.",
+                "emotion": "neutral",
+                "id": "m3",
+            },
+            {
+                "agent_id": "a4",
+                "agent_name": "Dave",
+                "content": "Branch two answer.",
+                "emotion": "neutral",
+                "id": "m4",
+            },
+        ]
+
+        append_round_nodes("sc_ia_branch_cleanup", "br1", 1, branch_one_initial)
+        append_round_nodes("sc_ia_branch_cleanup", "br2", 1, branch_two_messages)
+        assert len(_edges_of_type(build_snapshot("sc_ia_branch_cleanup"), "responds_to")) == 2
+
+        append_round_nodes(
+            "sc_ia_branch_cleanup",
+            "br1",
+            1,
+            [{**branch_one_initial[0], "content": "No named reply now."}, branch_one_initial[1]],
+        )
+
+        all_edges = _edges_of_type(build_snapshot("sc_ia_branch_cleanup"), "responds_to")
+        branch_one_edges = _edges_of_type(
+            build_snapshot("sc_ia_branch_cleanup", branch_id="br1"),
+            "responds_to",
+        )
+        branch_two_edges = _edges_of_type(
+            build_snapshot("sc_ia_branch_cleanup", branch_id="br2"),
+            "responds_to",
+        )
+
+        assert len(all_edges) == 1
+        assert branch_one_edges == []
+        assert len(branch_two_edges) == 1
+
+    def test_agent_table_name_fallback_used_for_mentions(self):
+        with Session(get_engine()) as session:
+            scenario = Scenario(id="sc_ia_agent_table", question="Who responds?")
+            session.add(scenario)
+            session.add_all([
+                Agent(id="a1", scenario_id=scenario.id, name="Alice"),
+                Agent(id="a2", scenario_id=scenario.id, name="Bob"),
+            ])
+            session.commit()
+
+        append_round_nodes(
+            "sc_ia_agent_table",
+            "br1",
+            1,
+            [
+                {
+                    "agent_id": "a1",
+                    "content": "Bob should answer.",
+                    "emotion": "neutral",
+                    "id": "m1",
+                },
+                {"agent_id": "a2", "content": "Answering.", "emotion": "neutral", "id": "m2"},
+            ],
+        )
+
+        result = build_snapshot("sc_ia_agent_table")
+
+        assert len(_edges_of_type(result, "responds_to")) == 1
 
 
 # ── build_snapshot ──────────────────────────────────────
@@ -1185,7 +1568,7 @@ class TestBuildSnapshot:
 
         assert result["id"] is not None
         assert len(result["nodes"]) == 2
-        assert len(result["edges"]) == 0
+        assert [edge["type"] for edge in result["edges"]] == ["opposes_stance"]
 
         node_types = {n["type"] for n in result["nodes"]}
         assert node_types == {"event"}

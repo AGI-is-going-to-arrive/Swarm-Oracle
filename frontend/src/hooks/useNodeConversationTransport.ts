@@ -11,6 +11,7 @@ interface UseNodeConversationTransportOptions {
   originNodeType?: string | null;
   originBranchId?: string | null;
   originRoundNumber?: number | null;
+  originExcerpt?: string | null;
   setThreadId: (threadId: string | null) => void;
   onTransportError: (code: string, message?: string) => void;
   onWsEvent: (event: AgentConversationWSEvent) => void;
@@ -69,11 +70,13 @@ export function useNodeConversationTransport({
   originNodeType,
   originBranchId,
   originRoundNumber,
+  originExcerpt,
   setThreadId,
   onTransportError,
   onWsEvent,
 }: UseNodeConversationTransportOptions) {
   const activeRequestControllerRef = useRef<AbortController | null>(null);
+  const bootstrapEpochRef = useRef(0);
   const setThreadIdRef = useRef(setThreadId);
   const onTransportErrorRef = useRef(onTransportError);
   const onWsEventRef = useRef(onWsEvent);
@@ -83,6 +86,7 @@ export function useNodeConversationTransport({
   onWsEventRef.current = onWsEvent;
 
   const abortActiveRequest = useCallback(() => {
+    bootstrapEpochRef.current += 1;
     activeRequestControllerRef.current?.abort();
     activeRequestControllerRef.current = null;
   }, []);
@@ -111,6 +115,7 @@ export function useNodeConversationTransport({
         headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           user_content: text,
+          ...(originExcerpt ? { origin_excerpt: originExcerpt } : {}),
           ...(providerPolicy.apiKey ? { llm_api_key: providerPolicy.apiKey } : {}),
           ...(providerPolicy.baseUrl ? { llm_base_url: providerPolicy.baseUrl } : {}),
           ...(providerPolicy.model ? { llm_model: providerPolicy.model } : {}),
@@ -163,9 +168,13 @@ export function useNodeConversationTransport({
       }
     }
     return accepted;
-  }, [abortActiveRequest, onTransportError, onWsEvent]);
+  }, [abortActiveRequest, originExcerpt]);
 
   const startConversation = useCallback(async (text: string): Promise<boolean> => {
+    abortActiveRequest();
+    const epoch = ++bootstrapEpochRef.current;
+    const controller = new AbortController();
+    activeRequestControllerRef.current = controller;
     try {
       const providerPolicy = loadLlmProviderPolicy();
       const validation = validateByok({
@@ -186,19 +195,23 @@ export function useNodeConversationTransport({
           origin_round_number: originRoundNumber ?? null,
           origin_node_id: originNodeId ?? null,
           origin_node_type: originNodeType ?? null,
+          ...(originExcerpt ? { origin_excerpt: originExcerpt } : {}),
           first_user_content: text,
           ...(providerPolicy.apiKey ? { llm_api_key: providerPolicy.apiKey } : {}),
           ...(providerPolicy.baseUrl ? { llm_base_url: providerPolicy.baseUrl } : {}),
           ...(providerPolicy.model ? { llm_model: providerPolicy.model } : {}),
           ...(providerPolicy.disableUserQuota ? { disable_user_quota: true } : {}),
         }),
+        signal: controller.signal,
       });
+      if (bootstrapEpochRef.current !== epoch) return false;
       if (!response.ok) {
         const error = await readConversationError(response);
         onTransportErrorRef.current(error.code, error.message);
         return false;
       }
       const payload = await response.json() as { thread_id?: string | null };
+      if (bootstrapEpochRef.current !== epoch) return false;
       const nextThreadId = typeof payload.thread_id === 'string' && payload.thread_id.trim()
         ? payload.thread_id
         : null;
@@ -209,11 +222,16 @@ export function useNodeConversationTransport({
       setThreadIdRef.current(nextThreadId);
       return await streamTurn(nextThreadId, text);
     } catch (error) {
+      if (controller.signal.aborted) return false;
       const message = error instanceof Error ? error.message : 'Start conversation failed';
       onTransportErrorRef.current('SERVER_ERROR', message);
       return false;
+    } finally {
+      if (activeRequestControllerRef.current === controller) {
+        activeRequestControllerRef.current = null;
+      }
     }
-  }, [identityId, originBranchId, originNodeId, originNodeType, originRoundNumber, scenarioId, streamTurn]);
+  }, [abortActiveRequest, identityId, originBranchId, originExcerpt, originNodeId, originNodeType, originRoundNumber, scenarioId, streamTurn]);
 
   return {
     abortActiveRequest,

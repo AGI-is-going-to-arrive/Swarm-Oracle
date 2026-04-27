@@ -57,9 +57,7 @@ export default function PredictionModal({
     branchOptions.some((branch) => branch.id === committedBranchId)
       ? committedBranchId
       : branchOptions[0]?.id ?? '';
-  const [targetBranchId, setTargetBranchId] = useState(
-    defaultTargetBranchId,
-  );
+  const [targetBranchIdOverride, setTargetBranchIdOverride] = useState<string | null>(null);
   const [endingTone, setEndingTone] = useState<EndingToneId>('order');
   const [profileResonance, setProfileResonance] = useState<ProfileResonanceId>('aligned');
   const [confidence, setConfidence] = useState(0.5);
@@ -104,22 +102,11 @@ export default function PredictionModal({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleClose]);
 
-  useEffect(() => {
-    if (!targetBranchId) {
-      if (defaultTargetBranchId && defaultTargetBranchId !== targetBranchId) {
-        setTargetBranchId(defaultTargetBranchId);
-      }
-      return;
-    }
-    if (branchOptions.some((branch) => branch.id === targetBranchId)) {
-      return;
-    }
-    if (defaultTargetBranchId !== targetBranchId) {
-      setTargetBranchId(defaultTargetBranchId);
-    }
-  }, [branchOptions, defaultTargetBranchId, targetBranchId]);
-
   const hasBranchTargets = branchOptions.length > 0;
+  const targetBranchId =
+    targetBranchIdOverride && branchOptions.some((branch) => branch.id === targetBranchIdOverride)
+      ? targetBranchIdOverride
+      : defaultTargetBranchId;
   const effectiveBetKind =
     !hasBranchTargets && betKind === 'branch_winner'
       ? 'ending_tone'
@@ -313,7 +300,7 @@ export default function PredictionModal({
                 id="pred-branch"
                 className="pred-input"
                 value={targetBranchId}
-                onChange={(e) => setTargetBranchId(e.target.value)}
+                onChange={(e) => setTargetBranchIdOverride(e.target.value)}
                 disabled={isDisabled}
               >
                 {branchOptions.map((branch) => (

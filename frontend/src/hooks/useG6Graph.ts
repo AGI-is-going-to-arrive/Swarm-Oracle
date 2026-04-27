@@ -87,10 +87,7 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
   const canvasWrapperRef = containerRef as RefObject<HTMLDivElement | null>;
   const graphRef = useRef<Graph | null>(null);
   const lastOptionsRef = useRef<UseG6GraphOptions['options'] | null>(null);
-  const latestOptionsRef = useRef(options);
   const onBeforeDestroyRef = useRef(onBeforeDestroy);
-
-  latestOptionsRef.current = options;
 
   useEffect(() => {
     onBeforeDestroyRef.current = onBeforeDestroy;
@@ -122,16 +119,15 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
         ...(measuredWidth > 0 ? { width: measuredWidth } : {}),
         ...(measuredHeight > 0 ? { height: measuredHeight } : {}),
       };
-      const currentOptions = latestOptionsRef.current;
       const graphOptions = {
         container,
         devicePixelRatio: pixelRatio,
         ...dimensionFallback,
-        ...currentOptions,
+        ...options,
       } as unknown as GraphOptions;
       graph = new G6Graph(graphOptions);
       graphRef.current = graph;
-      lastOptionsRef.current = currentOptions;
+      lastOptionsRef.current = options;
 
       // render() returns a promise; swallow errors (callers may also handle).
       const renderResult = graph.render();
@@ -249,7 +245,7 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
 
   useEffect(() => {
     const graph = graphRef.current;
-    if (!graph || latestOptionsRef.current !== options || lastOptionsRef.current === options) return;
+    if (!graph || lastOptionsRef.current === options) return;
     lastOptionsRef.current = options;
     try {
       graph.setOptions(options as unknown as GraphOptions);

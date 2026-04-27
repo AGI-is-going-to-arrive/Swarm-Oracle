@@ -201,10 +201,11 @@ vi.mock('@xyflow/react', async () => {
       nodesDraggable,
       elementsSelectable,
       fitViewOptions,
+      minZoom,
       edges,
     }: {
       children?: React.ReactNode;
-      nodes?: Array<{ id: string; ariaLabel?: string | null; ariaRole?: string | null }>;
+      nodes?: Array<{ id: string; ariaLabel?: string | null; ariaRole?: string | null; className?: string | null }>;
       edges?: Array<{ label?: string | null }>;
       ariaLabelConfig?: Record<string, string>;
       onInit?: (instance: { fitView: typeof fitViewMock }) => void;
@@ -213,7 +214,8 @@ vi.mock('@xyflow/react', async () => {
       panOnDrag?: boolean | number[];
       nodesDraggable?: boolean;
       elementsSelectable?: boolean;
-      fitViewOptions?: { padding?: number; duration?: number };
+      fitViewOptions?: { padding?: number; duration?: number; minZoom?: number; maxZoom?: number };
+      minZoom?: number;
     }) => {
       const firstNode = nodes?.[0];
       const firstEdge = edges?.[0];
@@ -231,7 +233,9 @@ vi.mock('@xyflow/react', async () => {
           data-nodes-draggable={String(nodesDraggable ?? false)}
           data-elements-selectable={String(elementsSelectable ?? false)}
           data-fit-view-options={JSON.stringify(fitViewOptions ?? null)}
+          data-min-zoom={String(minZoom ?? '')}
           data-edge-label={String(firstEdge?.label ?? '')}
+          data-first-node-class-name={firstNode?.className ?? ''}
         >
           {nodes?.map((node) => (
             <button
@@ -489,6 +493,43 @@ describe('CausalReviewView', () => {
       duration: 0,
     });
     vi.restoreAllMocks();
+  });
+
+  it('keeps a 66-node sparse causal map in readable fit mode', async () => {
+    const nodes = Array.from({ length: 66 }, (_value, index) => ({
+      id: `n${index}`,
+      key: `event-${index}`,
+      type: 'event',
+      label: `Event ${index}`,
+      round: index + 1,
+      payload: { agent_id: `agent-${index % 4}` },
+    }));
+    const edges = Array.from({ length: 16 }, (_value, index) => ({
+      id: `edge-${index}`,
+      source: `n${index}`,
+      target: `n${index + 1}`,
+      type: 'caused',
+      weight: 1,
+      label: null,
+    }));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-readable-medium',
+        nodes,
+        edges,
+      }),
+    } as Response);
+
+    renderView();
+
+    const flow = await screen.findByTestId('reactflow');
+    expect(JSON.parse(flow.getAttribute('data-fit-view-options') ?? '{}')).toMatchObject({
+      duration: 0,
+      minZoom: 0.35,
+    });
+    expect(flow).toHaveAttribute('data-min-zoom', '0.02');
+    expect(flow).toHaveAttribute('data-first-node-class-name', '');
   });
 
   it('shows the guide panel when the graph has nodes', async () => {
@@ -1523,11 +1564,11 @@ describe('CausalReviewView', () => {
 
     await user.click(await screen.findByTestId('rf-node-n1'));
     await waitFor(() => {
-      expect(screen.getByTestId('node-detail-panel')).toBeInTheDocument();
+      expect(screen.getByTestId('node-conversation-sheet')).toBeInTheDocument();
     });
     expect(fitViewMock.mock.calls.length).toBe(initialCalls);
 
-    // FE-3-seq: node click also opens NodeConversationSheet (Radix Dialog),
+    // Node click opens NodeConversationSheet (Radix Dialog),
     // whose overlay disables pointer-events on siblings. Use fireEvent to
     // synthesize the pane click directly and bypass the css pointer guard.
     fireEvent.click(screen.getByTestId('rf-pane'));
@@ -1538,28 +1579,44 @@ describe('CausalReviewView', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps the node detail panel outside the export target so transient UI is not exported', async () => {
-    const user = userEvent.setup();
-    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        id: 'g-export-scope',
-        available_branches: ['br1'],
-        nodes: [
-          { id: 'n1', key: 'e1', type: 'event', label: 'Agent Alpha speaks', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
-        ],
-        edges: [],
-      }),
-    } as Response);
+  it('keeps the conversation sheet outside the export target so transient UI is not exported', async () => {
+    stubNoopWebSocket();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-export-scope',
+          available_branches: ['br1'],
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'Agent Alpha speaks', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+          ],
+          edges: [],
+        }),
+      } as Response);
 
-    const { container } = renderView();
-    const nodeButton = await screen.findByTestId('rf-node-n1');
-    await user.click(nodeButton);
+      const { container } = renderView();
+      const nodeButton = await screen.findByTestId('rf-node-n1');
+      await user.click(nodeButton);
 
-    const detailPanel = await screen.findByTestId('node-detail-panel');
-    const exportRoot = await screen.findByTestId('causal-graph-export-target');
-    expect(container.contains(exportRoot)).toBe(true);
-    expect(exportRoot?.contains(detailPanel)).toBe(false);
+      const sheet = await screen.findByTestId('node-conversation-sheet');
+      const exportRoot = await screen.findByTestId('causal-graph-export-target');
+      expect(container.contains(exportRoot)).toBe(true);
+      expect(exportRoot?.contains(sheet)).toBe(false);
+      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('recovers after retrying a failed fetch', async () => {
@@ -1662,27 +1719,42 @@ describe('CausalReviewView', () => {
     expect(shell).toHaveStyle({ height: '100dvh', minHeight: '100dvh' });
   });
 
-  it('anchors fallback node details inside the fallback container', async () => {
-    const user = userEvent.setup();
-    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        id: 'g-relationless-detail',
-        nodes: [
-          { id: 'n1', key: 'e1', type: 'event', label: 'Alpha', round: 1, payload: null },
-          { id: 'n2', key: 'e2', type: 'event', label: 'Beta', round: 2, payload: null },
-        ],
-        edges: [],
-      }),
-    } as Response);
+  it('opens conversation sheet when clicking a fallback node in the text list', async () => {
+    stubNoopWebSocket();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-relationless-detail',
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: 'Alpha', round: 1, payload: null },
+            { id: 'n2', key: 'e2', type: 'event', label: 'Beta', round: 2, payload: null },
+          ],
+          edges: [],
+        }),
+      } as Response);
 
-    const { container } = renderView();
-    await screen.findByText('No causal edges were generated for this scenario yet. Showing event snapshots instead.');
-    await user.click(screen.getByRole('button', { name: /Round 1/i }));
+      renderView();
+      await screen.findByText('No causal edges were generated for this scenario yet. Showing event snapshots instead.');
+      await user.click(screen.getByRole('button', { name: /Round 1/i }));
 
-    const fallbackContainer = container.querySelector('.causal-graph-container');
-    expect(fallbackContainer).toHaveStyle({ position: 'relative' });
-    expect(screen.getByTestId('node-detail-panel')).toBeInTheDocument();
+      const sheet = await screen.findByTestId('node-conversation-sheet');
+      expect(sheet).toBeInTheDocument();
+      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('hides export controls when large graphs fall back to the text list', async () => {
@@ -1795,7 +1867,7 @@ describe('CausalReviewView', () => {
     expect(within(visibleList).getAllByRole('listitem')[0]).toHaveTextContent('Event');
   });
 
-  it('opens NodeConversationSheet when a causal node is clicked (FE-3-seq wire-up)', async () => {
+  it('opens NodeConversationSheet with Banner when a causal node is clicked', async () => {
     stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
@@ -1828,16 +1900,16 @@ describe('CausalReviewView', () => {
 
       await user.click(nodeButton);
 
-      const detailPanel = await screen.findByTestId('node-detail-panel');
       const sheet = await screen.findByTestId('node-conversation-sheet');
-      expect(detailPanel).toHaveStyle({ right: '464px' });
       expect(sheet).toBeInTheDocument();
+      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
+      expect(screen.getByTestId('node-context-banner')).toBeInTheDocument();
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('keeps NodeConversationSheet open when the detail panel close button is pressed', async () => {
+  it('pane click clears highlight but keeps NodeConversationSheet open', async () => {
     stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
@@ -1866,21 +1938,18 @@ describe('CausalReviewView', () => {
       renderView();
       await user.click(await screen.findByTestId('rf-node-n1'));
 
-      const detailPanel = await screen.findByTestId('node-detail-panel');
       const sheet = await screen.findByTestId('node-conversation-sheet');
-      const closeButton = detailPanel.querySelector('button[aria-label="Close"]');
-      expect(closeButton).not.toBeNull();
+      expect(sheet).toBeInTheDocument();
 
-      await user.click(closeButton as HTMLButtonElement);
+      fireEvent.click(screen.getByTestId('rf-pane'));
 
-      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
       expect(sheet).toBeInTheDocument();
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('keeps NodeConversationSheet open when clicking the graph pane', async () => {
+  it('selectedNode still drives path highlight after click', async () => {
     stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
@@ -1897,29 +1966,28 @@ describe('CausalReviewView', () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          id: 'g-sheet',
+          id: 'g-highlight',
           available_branches: ['br1'],
           nodes: [
-            { id: 'n1', key: 'e1', type: 'event', label: 'Node click target', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+            { id: 'n1', key: 'e1', type: 'event', label: 'Node A', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+            { id: 'n2', key: 'e2', type: 'event', label: 'Node B', round: 2, payload: { agent_id: 'beta', branch_id: 'br1' } },
           ],
-          edges: [],
+          edges: [{ id: 'edge-1', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null }],
         }),
       } as Response);
 
       renderView();
       await user.click(await screen.findByTestId('rf-node-n1'));
+
       const sheet = await screen.findByTestId('node-conversation-sheet');
-
-      await user.click(screen.getByTestId('rf-pane'));
-
-      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
       expect(sheet).toBeInTheDocument();
+      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('does not auto-open NodeConversationSheet on compact mobile viewports', async () => {
+  it('opens bottom Sheet with Banner on compact mobile viewport (375px)', async () => {
     stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: q.includes('max-width'),
@@ -1948,15 +2016,10 @@ describe('CausalReviewView', () => {
       renderView();
       await user.click(await screen.findByTestId('rf-node-n1'));
 
-      const detailPanel = await screen.findByTestId('node-detail-panel');
-      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
-
-      const closeButton = detailPanel.querySelector('button[aria-label="Close"]');
-      expect(closeButton).not.toBeNull();
-      await user.click(closeButton as HTMLButtonElement);
-
+      const sheet = await screen.findByTestId('node-conversation-sheet');
+      expect(sheet).toBeInTheDocument();
+      expect(screen.getByTestId('node-context-banner')).toBeInTheDocument();
       expect(screen.queryByTestId('node-detail-panel')).toBeNull();
-      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -2024,7 +2087,6 @@ describe('CausalReviewView', () => {
 
       await screen.findByTestId('rf-node-n2');
       expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
-      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -2092,13 +2154,12 @@ describe('CausalReviewView', () => {
 
       await screen.findByTestId('rf-node-n2');
       expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
-      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('pressing Escape inside the detail panel closes detail before the sidecar', async () => {
+  it('Escape closes the Sheet directly', async () => {
     stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
@@ -2127,22 +2188,20 @@ describe('CausalReviewView', () => {
       renderView();
       await user.click(await screen.findByTestId('rf-node-n1'));
 
-      const detailPanel = await screen.findByTestId('node-detail-panel');
       const sheet = await screen.findByTestId('node-conversation-sheet');
-      const closeButton = detailPanel.querySelector('button[aria-label="Close"]');
-      expect(closeButton).not.toBeNull();
-      (closeButton as HTMLButtonElement).focus();
+      expect(sheet).toBeInTheDocument();
 
       await user.keyboard('{Escape}');
 
-      expect(screen.queryByTestId('node-detail-panel')).toBeNull();
-      expect(sheet).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
+      });
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('restores focus to the latest node trigger after switching nodes while the sidecar stays open', async () => {
+  it('switching nodes remounts Sheet and updates Banner', async () => {
     stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
       matches: false,
@@ -2173,20 +2232,18 @@ describe('CausalReviewView', () => {
 
       renderView();
       await user.click(await screen.findByTestId('rf-node-n1'));
-      const nodeB = await screen.findByTestId('rf-node-n2');
 
-      await user.click(nodeB);
+      const sheetA = await screen.findByTestId('node-conversation-sheet');
+      expect(sheetA).toBeInTheDocument();
 
-      const detailPanel = await screen.findByTestId('node-detail-panel');
-      const closeButton = detailPanel.querySelector('button[aria-label="Close"]');
-      expect(closeButton).not.toBeNull();
+      const bannerBeforeSwitch = screen.getByTestId('node-context-banner');
+      expect(bannerBeforeSwitch).toBeInTheDocument();
 
-      await user.click(closeButton as HTMLButtonElement);
+      await user.click(await screen.findByTestId('rf-node-n2'));
 
       await waitFor(() => {
-        expect(screen.queryByTestId('node-detail-panel')).toBeNull();
         expect(screen.getByTestId('node-conversation-sheet')).toBeInTheDocument();
-        expect(nodeB).toHaveFocus();
+        expect(screen.getByTestId('node-context-banner')).toBeInTheDocument();
       });
     } finally {
       vi.unstubAllGlobals();
@@ -2248,6 +2305,51 @@ describe('CausalReviewView', () => {
       const startBody = JSON.parse(String(startOptions.body));
       expect(startBody.scenario_id).toBe('test-id');
       expect(startBody.agent_identity_id).toBeNull();
+      expect(startBody).not.toHaveProperty('agentName');
+      expect(startBody).not.toHaveProperty('nodeLabel');
+      expect(startBody).not.toHaveProperty('typeColor');
+      expect(startBody).not.toHaveProperty('emotion');
+      expect(startBody).not.toHaveProperty('stance');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('origin contains agentName, nodeLabel, typeColor, branchId, roundNumber from real data', async () => {
+    stubNoopWebSocket();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            id: 'g-origin',
+            available_branches: ['br1'],
+            nodes: [
+              { id: 'n1', key: 'e1', type: 'event', label: 'Node click target', round: 3, payload: { agent_id: 'alpha', agent_name: 'Agent Alpha', branch_id: 'br1' } },
+            ],
+            edges: [],
+          }),
+        } as Response);
+
+      renderView();
+      await user.click(await screen.findByTestId('rf-node-n1'));
+
+      const banner = await screen.findByTestId('node-context-banner');
+      expect(banner).toBeInTheDocument();
+      expect(screen.getByTestId('node-context-banner-agent')).toHaveTextContent('Agent Alpha');
+      expect(screen.getByTestId('node-context-banner-round')).toBeInTheDocument();
+      expect(screen.getByTestId('node-context-banner-strip')).toBeInTheDocument();
     } finally {
       vi.unstubAllGlobals();
     }

@@ -411,6 +411,7 @@ class TestSSEStream:
             thread_id: str,
             assistant_turn_id: str,
             new_user_content: str,
+            origin_excerpt: str | None = None,
             history_exclude_turn_id: str | None = None,
             assistant_turn_preclaimed: bool = False,
             owner_user_id: str | None,
@@ -1415,7 +1416,7 @@ class TestPromptInjection:
         assert "ignore previous system prompt" in prompt
 
     def test_worldline_context_is_wrapped_as_untrusted_data(self):
-        from app.services.conversation_service import _PromptContext, _build_prompt
+        from app.services.conversation_service import _build_prompt, _PromptContext
 
         thread = AgentConversationThread(
             scenario_id="s1",

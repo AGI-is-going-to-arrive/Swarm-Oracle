@@ -224,8 +224,25 @@ async def narrate_branch(
     else:
         key_moments = []
 
+    story = str(result.get("story", "") or "").strip()
+    insight = str(result.get("insight", "") or "").strip()
+    if not insight:
+        # reconcile_scenario_done_if_complete requires non-empty insight on every
+        # COMPLETED branch — without this guard a single LLM response that omits
+        # `insight` (or returns an empty string) leaves the scenario stuck in
+        # NARRATING forever.
+        if story:
+            excerpt = " ".join(story.split())
+            insight = (excerpt[:120] + "…") if len(excerpt) > 120 else excerpt
+        else:
+            insight = (
+                "叙事简略，详见原始交互记录。"
+                if _is_chinese(language)
+                else "Narration was sparse; see raw transcripts for details."
+            )
+
     return {
-        "story": str(result.get("story", "") or ""),
-        "insight": str(result.get("insight", "") or ""),
+        "story": story,
+        "insight": insight,
         "key_moments": key_moments,
     }

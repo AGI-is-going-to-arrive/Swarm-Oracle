@@ -261,10 +261,10 @@ npm run e2e:predict:late-branches -- --url http://127.0.0.1:18930 --headless
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_agent_conversation.py tests/test_team_review_round6_fixes.py tests/test_migration_022.py tests/test_conversation.py tests/test_api.py -q
+python -m pytest tests/test_agent_conversation.py tests/test_team_review_round6_fixes.py tests/test_migration_022.py tests/test_conversation.py tests/test_conversation_service.py tests/test_api.py -q
 
 cd ../frontend
-npm test -- --run src/components/shared/GlobalOfflineBanner.test.tsx src/components/shared/GlobalOfflineBanner.ssr.test.tsx src/components/kg/NodeConversationSheet.test.tsx src/components/kg/NodeConversationSheet.ref-stability.test.tsx src/pages/CausalReviewView.test.tsx src/hooks/useAgentConversation.test.ts src/hooks/useNodeConversationTransport.test.tsx
+npm test -- --run src/components/shared/GlobalOfflineBanner.test.tsx src/components/shared/GlobalOfflineBanner.ssr.test.tsx src/components/kg/EmptyStateQuickQuestions.test.tsx src/components/kg/NodeContextBanner.test.tsx src/components/kg/NodeConversationSheet.test.tsx src/components/kg/NodeConversationSheet.ref-stability.test.tsx src/components/workbench/NodeQuickCard.test.tsx src/components/workbench/WorkbenchView.test.tsx src/pages/CausalReviewView.test.tsx src/pages/ResultView.test.tsx src/hooks/useAgentConversation.test.ts src/hooks/useNodeConversationTransport.test.tsx src/lib/conversationStateMachine.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 ```
 
@@ -300,8 +300,9 @@ node scripts/e2e-node-conversation-live.mjs desktop --url http://127.0.0.1:18931
   - cancel 和 next chunk 同 tick 完成时会优先 cancel，不再多漏一条 delta
 - frontend 这组回归当前主要看：
   - `GlobalOfflineBanner` 的 WS grace timer 行为和 SSR-safe effect fallback
-  - `NodeConversationSheet` 的 unmount abort、multiline SSE frame、bubble ref 稳定性
-  - desktop detail + sidecar 同开时，detail close / pane click / detail-focused `Escape` 都只会收 detail；切到新节点后关 detail，焦点会回到最新 trigger
+  - `NodeConversationSheet` 的 unmount abort、multiline SSE frame、bubble ref 稳定性、origin excerpt 透传和 bootstrap start 迟到响应防护
+  - `NodeContextBanner` 的来源摘要展示与长 excerpt 展开/折叠
+  - `NodeQuickCard` 的视口钳位、关闭和打开详情交互
   - `useNodeConversationTransport` 通过组件合同回归继续覆盖 `/start` + `/turn` 链路
   - `useAgentConversation` 在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，不再把 ghost 文本重新刷回 bubble 或 aria-live
 
@@ -369,11 +370,11 @@ npm run build
 npm run preview -- --host 127.0.0.1 --port 18930
 ```
 
-如果只复核这轮图谱节点详情 / sidecar 回归：
+如果只复核图谱节点对话 / 节点详情回归：
 
 ```bash
 cd frontend
-npm test -- --run src/components/ui/portal-primitives.test.tsx src/components/kg/NodeConversationSheet.test.tsx src/components/NodeDetailPanel.test.tsx src/pages/CausalReviewView.test.tsx src/components/ArgumentMap.test.tsx
+npm test -- --run src/components/ui/portal-primitives.test.tsx src/components/kg/NodeContextBanner.test.tsx src/components/kg/NodeConversationSheet.test.tsx src/components/NodeDetailPanel.test.tsx src/components/workbench/NodeQuickCard.test.tsx src/components/workbench/WorkbenchView.test.tsx src/pages/CausalReviewView.test.tsx src/components/ArgumentMap.test.tsx
 npm run build
 npm run preview -- --host 127.0.0.1 --port 18930
 node scripts/e2e-phase3-batch-a.mjs desktop --url http://127.0.0.1:18930 --headless
@@ -382,7 +383,7 @@ node scripts/e2e-phase3-batch-b.mjs desktop --url http://127.0.0.1:18930 --brows
 
 说明：
 
-- 如果要先收图谱节点详情 / sidecar 这条回归，优先跑上面的窄集；过了再决定要不要扩大到 full pytest / full vitest。
+- 如果要先收图谱节点对话 / 节点详情这条回归，优先跑上面的窄集；过了再决定要不要扩大到 full pytest / full vitest。
 - 如果要先收 P1 前置图谱修复，最小窄集是：
 
 ```bash
@@ -407,10 +408,10 @@ python -m pytest tests/test_conversation.py tests/test_agent_conversation.py tes
   - ResultView replay 模式不暴露 live conversation
   - PipelineStepper error 状态 progressbar ARIA 值仍在合法范围内
   - conversation prompt 带轻量 scenario / branch / node / graph 语境
-- 当前这条窄集之外，focused browser spot-check 也已经补过一轮：
-  - detail `right: 464px`
-  - detail close / pane click / detail-focused `Escape` 不会再把 sidecar 一起关掉
-  - 切到新节点后关 detail，焦点会回到最新 trigger
+- 当前这条窄集之外，focused browser spot-check 建议覆盖：
+  - CausalReview 节点点击后打开 `NodeConversationSheet`，并带上当前节点摘录
+  - KG 工作台桌面节点点击后先出现 `NodeQuickCard`，靠近视口边缘时不会溢出屏幕
+  - 需要详情面板的图面仍能正常打开、关闭并恢复焦点
 
 ### Resume / P1-9 定向回归
 

@@ -37,6 +37,7 @@ export default function GraphWorkbenchShell({
   const containerRef = useRef<HTMLDivElement>(null);
   const [leftPct, setLeftPct] = useState(50);
   const dragging = useRef(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   const showNotice = isCompact && mode === 'split';
   const showCausal = mode !== 'kg';
@@ -46,6 +47,7 @@ export default function GraphWorkbenchShell({
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     dragging.current = true;
+    setIsDragging(true);
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   }, []);
 
@@ -59,6 +61,7 @@ export default function GraphWorkbenchShell({
 
   const onPointerUp = useCallback(() => {
     dragging.current = false;
+    setIsDragging(false);
   }, []);
 
   const onDoubleClick = useCallback(() => {
@@ -74,12 +77,14 @@ export default function GraphWorkbenchShell({
       data-testid="graph-workbench-shell"
       onPointerMove={isSplit ? onPointerMove : undefined}
       onPointerUp={isSplit ? onPointerUp : undefined}
+      onPointerCancel={isSplit ? onPointerUp : undefined}
+      onLostPointerCapture={isSplit ? onPointerUp : undefined}
       style={{
         display: 'flex',
         height: '100%',
         minHeight: 0,
         contain: 'layout style paint',
-        userSelect: dragging.current ? 'none' : undefined,
+        userSelect: isDragging ? 'none' : undefined,
       }}
     >
       {showNotice && (

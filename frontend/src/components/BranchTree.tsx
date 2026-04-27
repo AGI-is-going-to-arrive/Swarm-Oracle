@@ -199,14 +199,23 @@ export function BranchTree({ onIntervene, onDetail }: { onIntervene?: (branchId:
     setEdges(structuralEdges);
   }, [setEdges, structuralEdges]);
 
-  // Only refit when the graph structure changes, not when branch activity updates.
+  // Only refit when the graph topology changes (new node added or new edge),
+  // not when branch content updates (status / probability / story / activity).
+  // Without this guard, every WS round update re-creates structuralNodes/Edges
+  // references and overrides the user's pinch-zoom / pan within 500ms.
+  const topologySignature = useMemo(() => {
+    const nodeIds = structuralNodes.map((n) => n.id).sort().join('|');
+    const edgeIds = structuralEdges.map((e) => `${e.source}->${e.target}`).sort().join('|');
+    return `${nodeIds}::${edgeIds}`;
+  }, [structuralNodes, structuralEdges]);
+
   useEffect(() => {
     // Delay fitView to let all fork-related nodes settle
     const timer = setTimeout(() => {
       fitView({ padding: 0.4, duration: 400, includeHiddenNodes: true });
     }, 500);
     return () => clearTimeout(timer);
-  }, [fitView, structuralEdges, structuralNodes]);
+  }, [fitView, topologySignature]);
 
   const onInit = useCallback(() => {
     fitView({ padding: 0.3, duration: 800 });

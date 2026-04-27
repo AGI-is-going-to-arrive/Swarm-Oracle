@@ -14,10 +14,10 @@ import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import useReducedMotion from '../hooks/useReducedMotion';
 import useMediaQueryState from '../hooks/useMediaQueryState';
 import { ExportPanel } from '../components/ExportPanel';
-import { NodeDetailPanel, type NodeDetail } from '../components/NodeDetailPanel';
+import type { NodeDetail } from '../components/NodeDetailPanel';
 import GraphNodeCard from '../components/GraphNodeCard';
 import AnimatedEdge from '../components/AnimatedEdge';
-import { NodeConversationSheet } from '../components/kg/NodeConversationSheet';
+import { NodeConversationSheet, type NodeConversationOrigin } from '../components/kg/NodeConversationSheet';
 import dagre from 'dagre';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import {
@@ -31,6 +31,7 @@ import {
   useEdgesState,
   type Node,
   type Edge,
+  type FitViewOptions,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useSearchParams } from 'react-router-dom';
@@ -46,7 +47,6 @@ import { traceConnectedPath, PERF_ANIMATION_LIMIT } from '../lib/graphTraversal'
 // ── Custom node type (stable reference) ────────────────────
 
 const nodeTypes = { graphCard: GraphNodeCard };
-const NODE_DETAIL_SHEET_CLEARANCE_PX = 464;
 
 // ── Dark-surface color tokens ───────────────────────────────
 // Every text entry here is verified ≥4.5:1 on `surfaceField` (#1a1a2e) and
@@ -124,13 +124,7 @@ interface NodeConversationSheetState {
   open: boolean;
   scenarioId: string;
   identityId: string | null;
-  origin: {
-    nodeId: string;
-    nodeType: string;
-    excerpt?: string;
-    branchId?: string | null;
-    roundNumber?: number | null;
-  };
+  origin: NodeConversationOrigin;
 }
 
 function createClosedSheetState(): NodeConversationSheetState {
@@ -189,10 +183,17 @@ function getCausalErrorMessage(
 
 const NODE_W = 280;
 const NODE_H = 120;
+const LARGE_GRAPH_NODE_W = NODE_W;
+const LARGE_GRAPH_NODE_H = 58;
+const LARGE_GRAPH_NODESEP = 16;
+const LARGE_GRAPH_RANKSEP = 60;
+const LARGE_GRAPH_THRESHOLD = 50;
+const LARGE_GRAPH_FIT_MIN_ZOOM = 0.35;
 const PERF_TOOLTIP_LIMIT = 150;
 const PERF_TEXT_FALLBACK_LIMIT = 500;
 const NO_ARROW_TYPES = new Set(['temporal']);
 const GRAPH_COMPACT_MEDIA_QUERY = '(max-width: 768px)';
+type CausalFitViewOptions = FitViewOptions<Node>;
 
 function useCompactGraphViewport() {
   return useMediaQueryState(GRAPH_COMPACT_MEDIA_QUERY);
@@ -287,11 +288,20 @@ function layoutDagre(
   compactViewport: boolean,
   reducedMotion: boolean,
 ): { nodes: Node[]; edges: Edge[] } {
+  const isLargeGraph = nodes.length > LARGE_GRAPH_THRESHOLD;
+  const nodeW = isLargeGraph ? LARGE_GRAPH_NODE_W : NODE_W;
+  const nodeH = isLargeGraph ? LARGE_GRAPH_NODE_H : NODE_H;
+  const useTB = compactViewport;
+
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: compactViewport ? 'TB' : 'LR', ranksep: 120, nodesep: 100 });
+  g.setGraph({
+    rankdir: useTB ? 'TB' : 'LR',
+    ranksep: isLargeGraph ? LARGE_GRAPH_RANKSEP : 120,
+    nodesep: isLargeGraph ? LARGE_GRAPH_NODESEP : 100,
+  });
 
-  for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
+  for (const n of nodes) g.setNode(n.id, { width: nodeW, height: nodeH });
   for (const e of edges) g.setEdge(e.source, e.target);
   dagre.layout(g);
 
@@ -308,7 +318,7 @@ function layoutDagre(
     return {
       id: n.id,
       type: 'graphCard',
-      position: { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 },
+      position: { x: pos.x - nodeW / 2, y: pos.y - nodeH / 2 },
       focusable: false,
       ariaLabel,
       data: {
@@ -399,6 +409,7 @@ export function CausalReviewView() {
   const [guideOpen, setGuideOpen] = useState(true);
   const { enabled: graphAnalysisEnabled } = useCapabilityCheck('graph_analysis');
   const [serverAnalysis, setServerAnalysis] = useState<GraphAnalysisResponse | null>(null);
+  const [agentNameMap, setAgentNameMap] = useState<Map<string, string>>(new Map());
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
   const [sheetState, setSheetState] = useState<NodeConversationSheetState>(createClosedSheetState);
   // P6 Phase 2: path highlighting
@@ -411,7 +422,7 @@ export function CausalReviewView() {
   const [agentSearch, setAgentSearch] = useState('');
   const exportRootId = `causal-graph-${useId().replace(/:/g, '-')}`;
   const legendPanelId = `causal-legend-${useId().replace(/:/g, '-')}`;
-  const reactFlowRef = useRef<{ fitView?: (options?: { padding?: number; duration?: number }) => void } | null>(null);
+  const reactFlowRef = useRef<{ fitView?: (options?: CausalFitViewOptions) => void } | null>(null);
   const pendingFitSignatureRef = useRef<string | null>(null);
   const latestRequestIdRef = useRef(0);
   const detailRestoreFocusRef = useRef<HTMLElement | null>(null);
@@ -472,6 +483,17 @@ export function CausalReviewView() {
                   : branch.id as string,
                 probability: typeof branch.probability === 'number' ? branch.probability : null,
               }));
+            const agents: unknown[] = Array.isArray(scenarioPayload?.agents) ? scenarioPayload.agents : [];
+            const nameMap = new Map<string, string>();
+            for (const a of agents) {
+              if (a && typeof a === 'object') {
+                const rec = a as Record<string, unknown>;
+                if (typeof rec.id === 'string' && typeof rec.name === 'string') {
+                  nameMap.set(rec.id, rec.name);
+                }
+              }
+            }
+            if (nameMap.size > 0) setAgentNameMap(nameMap);
           }
         } catch {
           scenarioBranchOptions = [];
@@ -625,7 +647,7 @@ export function CausalReviewView() {
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
     const result = layoutDagre(filteredData.nodes, filteredData.edges, translate, isCompactViewport, reducedMotion);
-    if (!layoutAppliedRef.current && result.nodes.length > 0 && !reducedMotion) {
+    if (!layoutAppliedRef.current && result.nodes.length > 0 && !reducedMotion && result.nodes.length <= LARGE_GRAPH_THRESHOLD) {
       layoutAppliedRef.current = true;
       return {
         ...result,
@@ -725,13 +747,15 @@ export function CausalReviewView() {
 
   const nodes = flowNodes;
   const edges = flowEdges;
-  const viewportFitOptions = useMemo(() => ({
+  const isLargeNodeCount = nodeCount > LARGE_GRAPH_THRESHOLD;
+  const viewportFitOptions = useMemo<CausalFitViewOptions>(() => ({
     padding: isCompactViewport ? 0.2 : 0.24,
     duration: 0,
-  }), [isCompactViewport]);
+    ...(isLargeNodeCount ? { minZoom: LARGE_GRAPH_FIT_MIN_ZOOM } : {}),
+  }), [isCompactViewport, isLargeNodeCount]);
 
-  useEffect(() => {
-    if (!pendingFitSignatureRef.current || pendingFitSignatureRef.current !== flowSignature) return;
+  const fitPendingViewport = useCallback((expectedSignature: string) => {
+    if (!pendingFitSignatureRef.current || pendingFitSignatureRef.current !== expectedSignature) return;
     if (flowNodes.length === 0 || flowNodes.length > PERF_TEXT_FALLBACK_LIMIT) {
       pendingFitSignatureRef.current = null;
       return;
@@ -739,7 +763,11 @@ export function CausalReviewView() {
     if (!reactFlowRef.current) return;
     pendingFitSignatureRef.current = null;
     reactFlowRef.current.fitView?.(viewportFitOptions);
-  }, [flowNodes, flowEdges, flowSignature, viewportFitOptions]);
+  }, [flowNodes.length, viewportFitOptions]);
+
+  useEffect(() => {
+    fitPendingViewport(flowSignature);
+  }, [fitPendingViewport, flowSignature, layoutResetSignature]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -829,22 +857,30 @@ export function CausalReviewView() {
         e.evidence.detail != null
       ))
       .map(e => e.evidence!);
+    let enrichedPayload = raw.payload;
+    if (raw.payload && typeof raw.payload === 'object' && !Array.isArray(raw.payload)) {
+      const p = raw.payload as Record<string, unknown>;
+      if (typeof p.agent_id === 'string' && agentNameMap.has(p.agent_id)) {
+        enrichedPayload = { ...p, agent_name: agentNameMap.get(p.agent_id) };
+      }
+    }
     setSelectedNode({
       id: raw.id,
       label: raw.label || raw.key,
       type: raw.type,
       round: raw.round,
-      payload: raw.payload,
+      payload: enrichedPayload,
       ...(adjacentEvidence.length > 0 ? { evidenceList: adjacentEvidence } : {}),
     });
-    if (isCompactViewport) {
-      setSheetState((prev) => (prev.open ? { ...prev, open: false } : prev));
-      return;
-    }
     const rawPayload = typeof raw.payload === 'object' && raw.payload !== null && !Array.isArray(raw.payload)
       ? raw.payload as Record<string, unknown>
       : {};
-    // FE-3-seq: desktop keeps detail + sidecar visible together.
+    const agentId = typeof rawPayload.agent_id === 'string' ? rawPayload.agent_id : undefined;
+    const agentName = agentId ? agentNameMap.get(agentId) : undefined;
+    const enrichedAgentName = typeof rawPayload.agent_name === 'string'
+      ? rawPayload.agent_name
+      : agentName;
+    const fullContent = typeof rawPayload.content === 'string' ? rawPayload.content : '';
     setSheetState({
       open: true,
       scenarioId: id ?? '',
@@ -852,12 +888,15 @@ export function CausalReviewView() {
       origin: {
         nodeId: raw.id,
         nodeType: raw.type,
-        excerpt: raw.label || raw.key,
-        branchId: typeof rawPayload.branch_id === 'string' ? rawPayload.branch_id : null,
+        excerpt: fullContent || raw.label || raw.key,
+        branchId: typeof rawPayload.branch_id === 'string' ? rawPayload.branch_id : (branchId ?? null),
         roundNumber: raw.round,
+        agentName: enrichedAgentName,
+        nodeLabel: raw.label || raw.key,
+        typeColor: NODE_TYPE_COLORS_HEX[raw.type] ?? NODE_TYPE_COLORS_HEX.event,
       },
     });
-  }, [rawNodeMap, filteredData, id, isCompactViewport]);
+  }, [rawNodeMap, filteredData, id, agentNameMap, branchId]);
 
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
     const triggerElement = event.target instanceof Element
@@ -913,6 +952,14 @@ export function CausalReviewView() {
   return (
     <Tooltip.Provider delayDuration={300}>
       <style>{`
+        @keyframes causal-node-fade-in {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        /* React Flow uses transform for node coordinates, so CausalReview keeps entrance animation opacity-only. */
+        .causal-review-shell .dag-node-enter {
+          animation-name: causal-node-fade-in;
+        }
         @media (prefers-reduced-motion: reduce) {
           .causal-review-shell .react-flow__node,
           .causal-review-shell .react-flow__edge {
@@ -1226,13 +1273,6 @@ export function CausalReviewView() {
                 </div>
               ))}
             </div>
-            <NodeDetailPanel
-              panelId="causal-node-detail-panel"
-              key={selectedNode?.id ?? 'causal-fallback-closed'}
-              node={selectedNode}
-              onClose={() => setSelectedNode(null)}
-              restoreFocusTarget={detailRestoreFocusRef.current}
-            />
           </div>
         ) : (
           <div
@@ -1260,10 +1300,19 @@ export function CausalReviewView() {
                 onEdgesChange={onEdgesChange}
                 onNodeClick={onNodeClick}
                 onPaneClick={onPaneClick}
-                minZoom={0.1}
+                minZoom={0.02}
                 maxZoom={4}
                 onInit={(instance) => {
                   reactFlowRef.current = instance;
+                  const fitAfterInit = () => {
+                    if (reactFlowRef.current !== instance) return;
+                    fitPendingViewport(flowSignature);
+                  };
+                  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+                    window.requestAnimationFrame(fitAfterInit);
+                  } else {
+                    fitAfterInit();
+                  }
                 }}
                 fitView
                 fitViewOptions={viewportFitOptions}
@@ -1291,14 +1340,6 @@ export function CausalReviewView() {
                 )}
               </ReactFlow>
             </div>
-            <NodeDetailPanel
-              panelId="causal-node-detail-panel"
-              key={selectedNode?.id ?? 'causal-graph-closed'}
-              node={selectedNode}
-              onClose={() => setSelectedNode(null)}
-              desktopRightOffset={sheetState.open && !isCompactViewport ? NODE_DETAIL_SHEET_CLEARANCE_PX : 8}
-              restoreFocusTarget={detailRestoreFocusRef.current}
-            />
           </div>
         )}
 
@@ -1318,9 +1359,9 @@ export function CausalReviewView() {
             </div>
           </>
         )}
-        {/* FE-3-seq: NodeConversationSheet (append-only). */}
         {sheetState.open && (
           <NodeConversationSheet
+            key={`${sheetState.scenarioId}:${sheetState.origin.nodeId}:${sheetState.origin.branchId ?? ''}:${sheetState.origin.roundNumber ?? ''}`}
             open={sheetState.open}
             onOpenChange={(next) => setSheetState((prev) => ({ ...prev, open: next }))}
             onClose={() => setSheetState((prev) => ({ ...prev, open: false }))}

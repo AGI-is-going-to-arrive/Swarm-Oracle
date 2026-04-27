@@ -1527,6 +1527,10 @@
       "path_highlight_clear": "点击空白处清除",
       "confidence_high": "高置信度",
       "confidence_low": "低置信度"
+    },
+    "node_context_banner": {
+      "aria_label": "节点上下文",
+      "round": "R{{round}}"
     }
   }
 }

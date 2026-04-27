@@ -19,7 +19,7 @@
 - 本地 Phaser 入口当前不再依赖 top-level `await`，不会把 legacy 构建链卡死。
 - `vite preview` 当前和 `vite dev` 一样会代理 `/api` 和 `/ws`；如果要让 preview 指到指定 backend，启动前设置 `SWARM_BACKEND_URL` 即可。
 - 本地如果用非默认 backend 端口做 preview/browser 复核，`vite preview` 启动时要显式带 `SWARM_BACKEND_URL`；否则 `/api` 和 `/ws` 仍会走默认端口。
-- `Vite manualChunks` 当前显式拆为 `vendor / i18n-vendor / animation-vendor / g6-vendor / radix-vendor / dnd-vendor / icon-vendor / pretext / capture-html / capture-gif`；React 继续留在共享 `vendor`，React Flow 栈继续交给 Rollup 自动分块，不再强行命名 `flow-vendor`，既避开 production preview 启动白屏，也不把 `g6-vendor / capture-html` 拉进首页 preload。`perf:budgets:check` 当前也已经把 React Flow 自动拆出来的 `style / GraphNodeCard / graphTokens / utils` 这批 chunk 纳入门禁，不再只盯手工命名 chunk。
+- `Vite manualChunks` 当前显式拆为 `vendor / i18n-vendor / animation-vendor / g6-vendor / radix-vendor / dnd-vendor / icon-vendor / pretext / capture-html / capture-gif`；React 继续留在共享 `vendor`，React Flow 栈继续交给 Rollup 自动分块，不再强行命名 `flow-vendor`，既避开 production preview 启动白屏，也不把 `g6-vendor / capture-html` 拉进首页 preload。`perf:budgets:check` 当前也已经把 React Flow 自动拆出来的 `style / graphTraversal / graphTokens / utils` 这批 chunk 纳入门禁，不再只盯手工命名 chunk。
 
 ## 页面地图
 
@@ -156,7 +156,7 @@
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
 | `manualChunks.ts` / `performanceBudgetConfig.mjs` | `frontend/src/lib/manualChunks.ts` / `frontend/scripts/lib/performanceBudgetConfig.mjs` | 前端构建分块与预算门禁单一事实源；React 保留在共享 `vendor`，`@antv/*` 隔离到 `g6-vendor`，`html2canvas / gif.js` 按需拆分，React Flow 栈继续走 Rollup 自动分块并纳入预算检查 |
 | `useG6Graph.ts` | `frontend/src/hooks/useG6Graph.ts` | G6 图谱 hook；等 ref-backed container 真正挂载后再建图，支持 options 更新、ResizeObserver resize、node click 订阅清理 |
-| `useNodeConversationTransport.ts` | `frontend/src/hooks/useNodeConversationTransport.ts` | `NodeConversationSheet` 的本地 transport hook；负责 `/start` / `/turn` 请求、origin branch/round/node 透传、AbortController 生命周期和 SSE frame 解析 |
+| `useNodeConversationTransport.ts` | `frontend/src/hooks/useNodeConversationTransport.ts` | `NodeConversationSheet` 的本地 transport hook；负责 `/start` / `/turn` 请求、origin branch/round/node/excerpt 透传、AbortController 生命周期和 SSE frame 解析 |
 | `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | 首页 `Organization ID` 的 sessionStorage 单一事实源；InputView 与 API client 共用，避免 header 逻辑散落 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
 | `e2e-new-source-ingestion-live.mjs` | `frontend/scripts/e2e-new-source-ingestion-live.mjs` | source-ingestion 专项脚本；默认走 fixture，`SWARM_E2E_MODE=live` 时走真实 backend。live 模式会先显式打开首页总开关，校验 `/api/scenario` 请求里的 `web_search_families`，再检查结果页四个 source family 的 live/non-empty 卡片；`Polymarket` 的 `non-us` geo-gate 也走同一条 live 口径 |
@@ -168,6 +168,8 @@
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
 | `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
 | `NodeDetailPanel.tsx` | `frontend/src/components/NodeDetailPanel.tsx` | 两个图面的共用节点详情侧栏；显示 type / round / payload / unit details |
+| `NodeContextBanner.tsx` | `frontend/src/components/kg/NodeContextBanner.tsx` | `NodeConversationSheet` 的来源摘要卡；显示 node type、round、agent、label 和截断 excerpt |
+| `NodeQuickCard.tsx` | `frontend/src/components/workbench/NodeQuickCard.tsx` | KG 工作台桌面节点快览卡；按视口钳位位置，避免靠边节点把卡片挤出屏幕 |
 | `e2e-web-search-suite.mjs` | `frontend/scripts/e2e-web-search-suite.mjs` | 首页搜索增强专项 E2E：custom override、provider/key/base URL、scenario 请求体校验 |
 | `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择；桌面端 `@dnd-kit/core` 入席交互，移动端保留 click-to-seat） |
 | `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作 + phase 分隔线 + speaker 左侧色标） |
@@ -216,6 +218,7 @@
   - `branch_a / branch_b` 请求参数都会先做 `encodeURIComponent()`
 - `ReplayView` 当前在 `replay_trace` capability 关闭时会显示显式 unavailable surface，不再 silent redirect 到首页；如果 capability 探针自己失败，也会给出单独的 retry surface。trace 计数标签当前用静态本地化 copy（`Frame / Branches`、`帧 / 分支`），不会再把 `{{count}}` 模板串露到页面上。
 - `KGExplorerView` 当前会把 capability 失败、feature disabled、graph fetch 失败分开显示；graph fetch 失败时会清掉旧图，再给出本地化错误和 retry。主图用真实 G6 canvas 渲染，minimap 是 G6 minimap plugin，不是占位卡片；search / type filter 会更新图数据本身。点击节点时，`NodeConversationSheet` 收到的是业务 `kgType`、节点 label、branch 与 round，不再使用 G6 shape type。
+- `WorkbenchView` 当前三种 tab 的能力门槛分开判断：`graph` 只要求 causal graph，`kg` 只要求 KG capability，`split` 才要求两者都可用。结果页的 workbench bridge 会把当前 analysis branch 写进 query，进入工作台后仍可保留同一条分析分支语义。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - ending-room artifact/local replay 当前统一落到 `/result/replay?...`；不再要求先拼出 `/result/:scenarioId?...` 才能读出来。artifact payload 里的 `scenario.total_rounds=null` 也会被前端 replay 正常接受，不会再把只读页打成空结果。
 - ending-room replay automation helper 当前识别 `roomReplay / roomShare / roomLocal`；roundtable 页面除 `roomShare / roomLocal` 外也兼容 `share / local` 别名。
@@ -238,7 +241,7 @@
   - `后续三回合` 按钮：设置 `interaction_mode=epilogue` 并预填追问内容
   - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 发送
   - mobile sidebar sheet 已补 `SheetTitle / SheetDescription`；第一次 `Escape` 只关闭 sheet，不会误关外层 chamber
-- `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。桌面端现在按 non-modal 右侧 sidecar 挂载，移动端仍是 modal bottom sheet；图上节点详情和对话 sheet 同时打开时，不会再被 overlay 互相挡住。桌面端当前也已补齐 detail + sidecar 同开时的交互边界：点 detail close、点 graph pane，只会收详情，不会顺手把 sidecar 一起关掉；如果焦点在 detail 内，`Escape` 也会先收详情；切到新节点后再关详情，焦点会回到最新 trigger。textarea 里的 `Escape` 仍只关闭 sidecar。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，`/start` 会透传 origin branch / round / node，SSE parser 也已兼容 multiline `data:` frame。公共会话状态机在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，不再把 ghost 文本重新刷回 bubble 或 aria-live。bubble ref 注册当前也已经和整个 `conversation` 对象解耦，输入框本地 rerender 不会再反复重挂流式气泡。结果页追问会使用 result context 的标题、说明和空态问题，不再套用“选择图节点”的文案。
+- `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。桌面端现在按 non-modal 右侧 sidecar 挂载，移动端仍是 modal bottom sheet；有 origin 时会显示 `NodeContextBanner`，让用户看到当前追问来自哪个节点、哪一轮和哪段摘录。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，`/start` 和 `/turn` 会透传 origin branch / round / node / excerpt，SSE parser 也已兼容 multiline `data:` frame。bootstrap start 当前带 epoch guard；关闭或切换节点后的迟到 start response 不会再把旧 thread 写回当前 sheet。公共会话状态机在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，并用 committed turn 计数驱动结果页 deepen hint；不会再把 ghost 文本重新刷回 bubble 或 aria-live。结果页追问会使用 result context 的标题、说明和空态问题，不再套用“选择图节点”的文案。
 - `DebateArenaView` 当前只允许在 live 当前 phase 的下注窗口打开/提交 quick counterplay；锁到历史 phase 时不再发起 counterplay。
 - `DebateArenaView` 当前在“当前 live phase”视图下会保留更早 phase 的已出现 turns，并以 `FoldableTurn` 历史卡形式继续展示；切到历史 phase 时仍只显示该 phase 自己的 turns。
 - Debate 的页面级播报当前只保留 phase cue；`SpotlightTurnCard` 的高亮态不再单独暴露 live-region 语义，避免同一轮变化在读屏器里重复播报。
@@ -383,13 +386,12 @@
   - 可键盘聚焦
   - 保留 pointer click 打开详情
   - React Flow 外层 node wrapper 不再重复暴露 button 语义，避免出现 button 套 button 的可访问性冲突
-- `NodeDetailPanel` 当前按轻量 dialog 语义工作：
+- `NodeDetailPanel` 当前按轻量 dialog 语义工作，仍由需要详情面板的图面复用：
   - 打开后焦点会先落到关闭按钮
-  - 两个图面会显式传入 `panelId`，节点卡的 `aria-controls` 会指向真实详情面板
+  - 调用方会显式传入 `panelId`，节点卡的 `aria-controls` 会指向真实详情面板
   - 关闭后会把焦点还回最新一次打开详情的 trigger
   - 面板内 `Escape` 仍可关闭；焦点已经离开 panel 时，不会再全局劫持 `Escape`
   - compact viewport 下会改成贴底展开，不再固定挤在右上角
-  - 桌面端如果右侧 `NodeConversationSheet` 已打开，详情面板会自动给 sidecar 让出右边距；detail close、pane click 只会收详情，不会把 sidecar 一起关掉；如果焦点在 detail 内，`Escape` 也会先收详情
   - `Copy Reference` 先走 `clipboard.writeText()`；失败时回退 `execCommand('copy')`
   - 如果两条复制路径都失败，会显示可见错误提示，不再静默成功
   - 关闭时会顺手清掉旧的复制失败提示；重新打开同一节点时，不会再把上一轮错误提醒残留出来
@@ -435,10 +437,10 @@
 - preview-driven Chromium `phase3-batch-a full / phase3-batch-b full / phase3-batch-c full` 本轮全绿。
 - `e2e-new-source-ingestion-live` 当前在 `fixture full` 和 `live full` 两条口径下都已通过。
   - live 口径当前已覆盖 `web_search_families` 请求体、四个 source family 非空卡片，以及 `Polymarket us / non-us` 两条 geo-gate 路径
-- focused browser spot-check 当前也已补过：
-  - detail + sidecar 同开时，detail `right: 464px`
-  - detail close / pane click / detail-focused `Escape` 都不会再把 sidecar 一起关掉
-  - 切到新节点后关 detail，焦点会回到最新 trigger
+- focused browser spot-check 当前建议覆盖：
+  - CausalReview 节点点击后打开 `NodeConversationSheet`，并带上当前节点摘录
+  - KG 工作台桌面节点点击后先出现 `NodeQuickCard`，靠近视口边缘时不会溢出屏幕
+  - 需要详情面板的图面仍能正常打开、关闭并恢复焦点
   - `/agents` 在当前 live 栈里继续稳定显示 capability disabled 文案
 - preview-driven `zh-CN phase3-batch-a full / phase3-batch-b full` 本轮全绿。
 - graph mobile smoke 当前会额外检查 controls 与 mobile navigation hint；viewport 交互从空白画布锚点拖拽开始，并以 `Fit view` 后的 baseline 判断 pan / zoom / reset；`MiniMap` 继续维持桌面限定。

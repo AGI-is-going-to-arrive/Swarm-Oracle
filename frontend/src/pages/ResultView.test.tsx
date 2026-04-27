@@ -3574,7 +3574,7 @@ describe('ResultView campaign summary', () => {
 });
 
 describe('ResultView explore deeper bridge', () => {
-  it('renders three bridge entries when branches exist and bridge capabilities are loaded', async () => {
+  it('renders four bridge entries when branches exist and bridge capabilities are loaded', async () => {
     setMockCapabilities({
       causal_graph: { enabled: true },
       replay_trace: { enabled: true },
@@ -4026,6 +4026,7 @@ describe('ResultView workbench bridge gate', () => {
     const workbenchLink = await screen.findByRole('link', { name: /result.bridge_workbench_title/ });
     expect(workbenchLink).toBeTruthy();
     expect(workbenchLink).toHaveAttribute('href', expect.stringContaining('?view=kg'));
+    expect(workbenchLink).toHaveAttribute('href', expect.stringContaining('&branch=branch-1'));
   });
 
   it('workbench bridge disabled when both causal and kg are disabled', async () => {
@@ -4116,7 +4117,7 @@ describe('ResultView workbench bridge gate', () => {
     );
 
     const workbenchLink = await screen.findByRole('link', { name: /result.bridge_workbench_title/ });
-    expect(workbenchLink).toHaveAttribute('href', `/workbench/${encodeURIComponent(scenarioId)}?view=graph`);
+    expect(workbenchLink).toHaveAttribute('href', `/workbench/${encodeURIComponent(scenarioId)}?view=graph&branch=branch-1`);
   });
 });
 

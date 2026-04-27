@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from collections.abc import Sequence
 from typing import Any
@@ -16,7 +17,7 @@ from sqlalchemy import inspect, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from app.models.database import get_engine
+from app.models.database import Agent, get_engine
 from app.models.graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,9 @@ _GRAPH_EDGE_EVIDENCE_COLUMNS = {
     "source_round_number",
     "evidence_json",
 }
+INTER_AGENT_EDGE_TYPES = ("responds_to", "supports_stance", "opposes_stance")
+_LATIN_NAME_RE = re.compile(r"[A-Za-z]")
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 
 # ── Heuristics ──────────────────────────────────────────
@@ -363,6 +367,179 @@ def _edge_signature(
     return (source_node_id, target_node_id, edge_type, label or "")
 
 
+def _is_trusted_agent_display_name(name: Any) -> bool:
+    if not isinstance(name, str):
+        return False
+    stripped = name.strip()
+    if not stripped:
+        return False
+    if _CJK_RE.search(stripped):
+        return len(stripped) >= 2
+    if _LATIN_NAME_RE.search(stripped):
+        return len(stripped) >= 3
+    return len(stripped) >= 3
+
+
+def _content_mentions_agent_name(content: str, agent_name: str) -> bool:
+    if not content or not _is_trusted_agent_display_name(agent_name):
+        return False
+    stripped = agent_name.strip()
+    if _CJK_RE.search(stripped):
+        return stripped in content
+    return re.search(
+        rf"(?<![A-Za-z0-9_]){re.escape(stripped)}(?![A-Za-z0-9_])",
+        content,
+        flags=re.IGNORECASE,
+    ) is not None
+
+
+def _build_agent_name_map(
+    session: Session,
+    message_records: list[dict[str, Any]],
+) -> dict[str, str]:
+    agent_ids = {
+        str(record.get("agent_id", "")).strip()
+        for record in message_records
+        if str(record.get("agent_id", "")).strip()
+    }
+    if not agent_ids:
+        return {}
+
+    names_by_agent_id: dict[str, str] = {}
+    for record in message_records:
+        agent_id = str(record.get("agent_id", "")).strip()
+        agent_name = record.get("agent_name")
+        if agent_id and _is_trusted_agent_display_name(agent_name):
+            names_by_agent_id[agent_id] = str(agent_name).strip()
+
+    missing_ids = agent_ids - set(names_by_agent_id)
+    if missing_ids and _table_exists(session, "agent"):
+        agents = session.exec(select(Agent).where(col(Agent.id).in_(missing_ids))).all()
+        for agent in agents:
+            if _is_trusted_agent_display_name(agent.name):
+                names_by_agent_id[agent.id] = agent.name.strip()
+
+    return names_by_agent_id
+
+
+def _inter_agent_edge_evidence(rule: str, reason: str) -> str:
+    return json.dumps({"rule": rule, "reason": reason})
+
+
+def _add_inter_agent_edge(
+    session: Session,
+    existing_edge_signatures: dict[tuple[str, str, str, str], GraphEdge | None],
+    *,
+    snapshot_id: str,
+    source_node_id: str,
+    target_node_id: str,
+    edge_type: str,
+    round_number: int,
+    confidence_tier: str,
+    reason: str,
+) -> None:
+    if source_node_id == target_node_id:
+        return
+    _add_edge_if_missing(
+        session,
+        existing_edge_signatures,
+        snapshot_id=snapshot_id,
+        source_node_id=source_node_id,
+        target_node_id=target_node_id,
+        edge_type=edge_type,
+        weight=0.4,
+        confidence_tier=confidence_tier,
+        source_round_number=round_number,
+        evidence_json=_inter_agent_edge_evidence(edge_type, reason),
+    )
+
+
+def _extract_inter_agent_edges(
+    session: Session,
+    existing_edge_signatures: dict[tuple[str, str, str, str], GraphEdge | None],
+    *,
+    snapshot_id: str,
+    branch_id: str,
+    round_number: int,
+    message_records: list[dict[str, Any]],
+    agent_name_map: dict[str, str],
+) -> None:
+    latest_record_by_agent: dict[str, dict[str, Any]] = {}
+    for record in message_records:
+        agent_id = str(record.get("agent_id", "")).strip()
+        node_id = str(record.get("node_id", "")).strip()
+        if agent_id and node_id:
+            latest_record_by_agent[agent_id] = record
+
+    for record in message_records:
+        source_agent_id = str(record.get("agent_id", "")).strip()
+        source_node_id = str(record.get("node_id", "")).strip()
+        content = str(record.get("content", "") or "")
+        if not source_agent_id or not source_node_id or not content:
+            continue
+        for target_agent_id, target_name in agent_name_map.items():
+            if target_agent_id == source_agent_id:
+                continue
+            target_record = latest_record_by_agent.get(target_agent_id)
+            if target_record is None:
+                continue
+            if not _content_mentions_agent_name(content, target_name):
+                continue
+            _add_inter_agent_edge(
+                session,
+                existing_edge_signatures,
+                snapshot_id=snapshot_id,
+                source_node_id=source_node_id,
+                target_node_id=target_record["node_id"],
+                edge_type="responds_to",
+                round_number=round_number,
+                confidence_tier="low",
+                reason=(
+                    f"message mentions display name for agent {target_agent_id} "
+                    f"on branch {branch_id}"
+                ),
+            )
+
+    sorted_agent_ids = sorted(latest_record_by_agent)
+    for left_index, left_agent_id in enumerate(sorted_agent_ids):
+        left_record = latest_record_by_agent[left_agent_id]
+        left_stance = float(left_record.get("stance", 0.0) or 0.0)
+        if abs(left_stance) <= 0.15:
+            continue
+        for right_agent_id in sorted_agent_ids[left_index + 1:]:
+            right_record = latest_record_by_agent[right_agent_id]
+            right_stance = float(right_record.get("stance", 0.0) or 0.0)
+            if abs(right_stance) <= 0.15:
+                continue
+            same_sign = (left_stance > 0 and right_stance > 0) or (
+                left_stance < 0 and right_stance < 0
+            )
+            delta = abs(left_stance - right_stance)
+            if same_sign and delta <= 0.3:
+                edge_type = "supports_stance"
+                confidence_tier = "medium"
+            elif not same_sign and delta >= 0.6:
+                edge_type = "opposes_stance"
+                confidence_tier = "medium"
+            else:
+                continue
+            _add_inter_agent_edge(
+                session,
+                existing_edge_signatures,
+                snapshot_id=snapshot_id,
+                source_node_id=left_record["node_id"],
+                target_node_id=right_record["node_id"],
+                edge_type=edge_type,
+                round_number=round_number,
+                confidence_tier=confidence_tier,
+                reason=(
+                    f"deterministic stance comparison on branch {branch_id}: "
+                    f"{left_agent_id}={left_stance:.2f}, "
+                    f"{right_agent_id}={right_stance:.2f}"
+                ),
+            )
+
+
 def _graph_edge_supports_evidence_columns(session: Session) -> bool:
     try:
         columns = {
@@ -373,6 +550,14 @@ def _graph_edge_supports_evidence_columns(session: Session) -> bool:
         logger.debug("Could not inspect graph_edge columns; assuming evidence columns exist")
         return True
     return _GRAPH_EDGE_EVIDENCE_COLUMNS.issubset(columns)
+
+
+def _table_exists(session: Session, table_name: str) -> bool:
+    try:
+        return inspect(session.get_bind()).has_table(table_name)
+    except Exception:
+        logger.debug("Could not inspect table existence for %s", table_name)
+        return False
 
 
 def _add_edge_if_missing(
@@ -611,6 +796,7 @@ def append_round_nodes(
                     "emotion": emotion,
                     "stance_score": stance,
                     "branch_id": branch_id,
+                    "content": content,
                 })
                 node_key = _message_node_key(
                     round_number,
@@ -643,6 +829,7 @@ def append_round_nodes(
 
                 message_records.append({
                     "agent_id": agent_id,
+                    "agent_name": _getfield(msg, "agent_name", None),
                     "stance": stance,
                     "emotion": emotion,
                     "content": content,
@@ -739,9 +926,27 @@ def append_round_nodes(
                 for node in round_nodes
                 if node.node_type == "fork"
             }
+            graph_edge_supports_evidence = _graph_edge_supports_evidence_columns(session)
+            current_round_event_ids = {
+                str(record["node_id"])
+                for record in message_records
+                if str(record.get("node_id", "")).strip()
+            }
+            if graph_edge_supports_evidence and current_round_event_ids:
+                stale_inter_agent_edges = session.exec(
+                    select(GraphEdge).where(
+                        GraphEdge.snapshot_id == snapshot.id,
+                        col(GraphEdge.edge_type).in_(INTER_AGENT_EDGE_TYPES),
+                        GraphEdge.source_round_number == round_number,
+                        col(GraphEdge.source_node_id).in_(current_round_event_ids),
+                        col(GraphEdge.target_node_id).in_(current_round_event_ids),
+                    )
+                ).all()
+                for edge in stale_inter_agent_edges:
+                    session.delete(edge)
 
             existing_edge_signatures: dict[tuple[str, str, str, str], GraphEdge | None]
-            if _graph_edge_supports_evidence_columns(session):
+            if graph_edge_supports_evidence:
                 existing_edges_stmt = select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id)
                 existing_edge_rows = session.exec(existing_edges_stmt).all()
                 existing_edge_signatures = {
@@ -825,6 +1030,18 @@ def append_round_nodes(
                             weight=0.5,
                             source_round_number=round_number,
                         )
+
+            if graph_edge_supports_evidence:
+                agent_name_map = _build_agent_name_map(session, message_records)
+                _extract_inter_agent_edges(
+                    session,
+                    existing_edge_signatures,
+                    snapshot_id=snapshot.id,
+                    branch_id=branch_id,
+                    round_number=round_number,
+                    message_records=message_records,
+                    agent_name_map=agent_name_map,
+                )
 
             if latest_record_by_agent:
                 next_stmt = select(GraphNode).where(

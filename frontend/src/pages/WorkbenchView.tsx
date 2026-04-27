@@ -71,7 +71,7 @@ export default function WorkbenchView() {
 
   const modeAllowed =
     effectiveMode === 'graph' ? causalEnabled :
-    effectiveMode === 'kg' ? (kgEnabled && causalEnabled) :
+    effectiveMode === 'kg' ? kgEnabled :
     causalEnabled && kgEnabled;
 
   const handleModeChange = (next: LayoutMode) => {
