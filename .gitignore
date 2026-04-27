@@ -66,3 +66,14 @@ frontend/output/e2e/*
 /backend/CODE_REVIEW_REPORT.md
 /frontend/CODE_REVIEW_REPORT.md
 graphify-out/
+
+# Local session reports / snapshots
+/P2_*.json
+/P2_*.md
+/p2-*.md
+/frontend/P6-*.md
+/frontend/kg-force-layout-research.md
+/frontend/p2-*.md
+/screenshots/
+/package.json
+/package-lock.json
