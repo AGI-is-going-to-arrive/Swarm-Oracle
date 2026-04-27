@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next';
 import { ExportPanel } from '../ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from '../NodeDetailPanel';
+import { NodeConversationSheet, type NodeConversationOrigin } from '../kg/NodeConversationSheet';
 import GraphNodeCard from '../GraphNodeCard';
 import { useScenarioGraph, type GraphErrorState } from '../../hooks/useScenarioGraph';
 import { traceConnectedPath, buildParallelEdgeIndex, PERF_ANIMATION_LIMIT } from '../../lib/graphTraversal';
@@ -60,6 +61,20 @@ interface GraphEdgeData {
 }
 
 type CausalGraphErrorState = GraphErrorState;
+
+interface ConvSheetState {
+  open: boolean;
+  scenarioId: string;
+  identityId: string | null;
+  origin: NodeConversationOrigin;
+}
+
+const CLOSED_SHEET: ConvSheetState = {
+  open: false,
+  scenarioId: '',
+  identityId: null,
+  origin: { nodeId: '', nodeType: '' },
+};
 
 export interface CausalGraphBoardProps {
   scenarioId: string;
@@ -257,6 +272,7 @@ export default function CausalGraphBoard({
   } = useScenarioGraph(scenarioId || null);
 
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
+  const [sheetState, setSheetState] = useState<ConvSheetState>(CLOSED_SHEET);
   const [agentSearch, setAgentSearch] = useState('');
 
   const exportRootId = `causal-board-${useId().replace(/:/g, '-')}`;
@@ -400,7 +416,28 @@ export default function CausalGraphBoard({
     detailRestoreFocusRef.current = triggerElement?.isConnected ? triggerElement : null;
     setSelectedNode({ id: raw.id, label: raw.label || raw.key, type: raw.type, round: raw.round, payload: raw.payload });
     externalOnNodeClick?.(raw);
-  }, [rawNodeMap, externalOnNodeClick]);
+
+    const rawPayload = typeof raw.payload === 'object' && raw.payload !== null && !Array.isArray(raw.payload)
+      ? raw.payload as Record<string, unknown>
+      : {};
+    const agentName = typeof rawPayload.agent_name === 'string' ? rawPayload.agent_name : undefined;
+    const fullContent = typeof rawPayload.content === 'string' ? rawPayload.content : '';
+    setSheetState({
+      open: true,
+      scenarioId,
+      identityId: null,
+      origin: {
+        nodeId: raw.id,
+        nodeType: raw.type,
+        excerpt: fullContent || raw.label || raw.key,
+        branchId: typeof rawPayload.branch_id === 'string' ? rawPayload.branch_id : undefined,
+        roundNumber: raw.round,
+        agentName,
+        nodeLabel: raw.label || raw.key,
+        typeColor: NODE_TYPE_COLORS_HEX[raw.type] ?? NODE_TYPE_COLORS_HEX.event,
+      },
+    });
+  }, [rawNodeMap, externalOnNodeClick, scenarioId]);
 
   const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     const trigger = _event.target instanceof Element
@@ -409,7 +446,10 @@ export default function CausalGraphBoard({
     openNodeDetail(node.id, trigger ?? (_event.currentTarget instanceof HTMLElement ? _event.currentTarget : null));
   }, [openNodeDetail]);
 
-  const onPaneClick = useCallback(() => setSelectedNode(null), []);
+  const onPaneClick = useCallback(() => {
+    setSelectedNode(null);
+    setSheetState(prev => prev.open ? { ...prev, open: false } : prev);
+  }, []);
 
   if (loading) {
     return (
@@ -524,6 +564,18 @@ export default function CausalGraphBoard({
         <div className="sr-only" role="list" aria-label={t('causal.a11y_relations', 'Causal relations list')}>
           {relationLines.map((line, i) => <div key={`${line}-${i}`} role="listitem">{line}</div>)}
         </div>
+      )}
+
+      {sheetState.open && (
+        <NodeConversationSheet
+          key={`${sheetState.scenarioId}:${sheetState.origin.nodeId}`}
+          open={sheetState.open}
+          onOpenChange={(next) => setSheetState(prev => ({ ...prev, open: next }))}
+          onClose={() => setSheetState(prev => ({ ...prev, open: false }))}
+          scenarioId={sheetState.scenarioId}
+          identityId={sheetState.identityId}
+          origin={sheetState.origin}
+        />
       )}
     </div>
   );

@@ -53,6 +53,10 @@ vi.mock('../../hooks/useScenarioGraph', () => ({
   useScenarioGraph: () => hoisted.mockScenarioGraphReturn,
 }));
 
+vi.mock('../kg/NodeConversationSheet', () => ({
+  NodeConversationSheet: () => null,
+}));
+
 vi.mock('@antv/g6', () => {
   class GraphMock {
     destroy() { return hoisted.destroySpy(); }
@@ -359,7 +363,8 @@ describe('KGGraphBoard', () => {
       render(<KGGraphBoard scenarioId="s1" />);
       act(() => simulateNodeClick({ x: 100, y: 200 }));
       expect(screen.getByTestId('node-quick-card')).toBeInTheDocument();
-      const closeBtn = screen.getByLabelText('Close');
+      const quickCard = screen.getByTestId('node-quick-card');
+      const closeBtn = within(quickCard).getByLabelText('Close');
       await user.click(closeBtn);
       expect(screen.queryByTestId('node-quick-card')).not.toBeInTheDocument();
       expect(screen.queryByTestId('node-detail-panel')).not.toBeInTheDocument();

@@ -1,13 +1,3 @@
-/* ═══════════════════════════════════════════════════════════
-   FE-4 — ReplayView (`/replay/:id`)
-   Independent replay path (HC-11): NO import of `replayCodec`.
-   Fetches `/api/scenario/:id/replay-trace` + `/api/scenario/:id/
-   causal-graph` in parallel. Wraps everything in
-   `<div className="replay-view-root">` so the keyboard scope
-   guard in useReplayTimeline can discriminate focus ownership
-   against Phaser canvases / sibling inputs.
-   ═══════════════════════════════════════════════════════════ */
-
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -23,7 +13,7 @@ import { ReplayEmptyState } from '../components/replay/ReplayEmptyState';
 import { ReplayPlaybackControl } from '../components/replay/ReplayPlaybackControl';
 import { ReplayTimelineScrubber } from '../components/replay/ReplayTimelineScrubber';
 
-// ── Types mirroring BE-4 / existing CausalReview ──────────────
+// ── Types ─────────────────────────────────────────────────────
 
 interface ReplayTraceNode {
   branch_id: string;
@@ -55,18 +45,21 @@ interface CausalGraphResponse {
   edges: unknown[];
 }
 
-// ── Helpers ────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────
+
+function readPayload(node: CausalGraphNode): Record<string, unknown> {
+  return (typeof node.payload === 'object' && node.payload !== null && !Array.isArray(node.payload))
+    ? node.payload as Record<string, unknown>
+    : {};
+}
 
 function extractAgentsFromGraph(graph: CausalGraphResponse | null): ReplayAgentInfo[] {
   if (!graph) return [];
   const agentMap = new Map<string, ReplayAgentInfo>();
   for (const node of graph.nodes ?? []) {
-    const payload = (typeof node.payload === 'object' && node.payload !== null && !Array.isArray(node.payload))
-      ? node.payload as Record<string, unknown>
-      : {};
+    const payload = readPayload(node);
     const agentId = typeof payload.agent_id === 'string' ? payload.agent_id : null;
-    if (!agentId) continue;
-    if (agentMap.has(agentId)) continue;
+    if (!agentId || agentMap.has(agentId)) continue;
     const agentName = typeof payload.agent_name === 'string' && payload.agent_name.trim()
       ? payload.agent_name.trim()
       : agentId;
@@ -127,12 +120,22 @@ function pickActiveAgent(
 ): string | null {
   const node = nodeByFrame.get(frame);
   if (!node) return null;
-  const payload = (typeof node.payload === 'object' && node.payload !== null && !Array.isArray(node.payload))
-    ? node.payload as Record<string, unknown>
-    : {};
-  const agentId = typeof payload.agent_id === 'string' ? payload.agent_id : null;
-  return agentId;
+  const payload = readPayload(node);
+  return typeof payload.agent_id === 'string' ? payload.agent_id : null;
 }
+
+function hashToHue(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i += 1) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+const EMOTION_ICONS: Record<string, string> = {
+  aggressive: '\u{1F525}', angry: '\u{1F4A2}', anxious: '\u{1F630}',
+  fearful: '\u{1F628}', cautious: '\u{1F914}', calm: '\u{1F343}',
+  hopeful: '\u{2728}', cooperative: '\u{1F91D}', confident: '\u{1F4AA}',
+  neutral: '\u{2014}', focused: '\u{1F3AF}',
+};
 
 // ── Component ─────────────────────────────────────────────────
 
@@ -169,12 +172,10 @@ export function ReplayView() {
         setError(traceRes.status);
         setTrace(null);
       } else {
-        const payload = (await traceRes.json()) as ReplayTraceResponse;
-        setTrace(payload);
+        setTrace((await traceRes.json()) as ReplayTraceResponse);
       }
       if (graphRes.ok) {
-        const graphPayload = (await graphRes.json()) as CausalGraphResponse;
-        setGraph(graphPayload);
+        setGraph((await graphRes.json()) as CausalGraphResponse);
       } else {
         setGraph(null);
       }
@@ -210,15 +211,11 @@ export function ReplayView() {
     setSpeed,
   } = useReplayTimeline({ totalFrames });
 
-  // Auto-focus root on mount so keyboard shortcuts work immediately (they
-  // rely on activeElement being inside `.replay-view-root`).
   useEffect(() => {
     if (rootRef.current && typeof rootRef.current.focus === 'function') {
       try {
         rootRef.current.focus({ preventScroll: true });
-      } catch {
-        // jsdom may not support focus options — safe to ignore.
-      }
+      } catch { /* jsdom */ }
     }
   }, []);
 
@@ -227,73 +224,37 @@ export function ReplayView() {
     [frameIndex, nodeByFrame],
   );
 
+  // Loading state
   if (capLoading || (!capabilityError && enabled && loadingData)) {
     return (
-      <div
-        ref={rootRef}
-        data-testid="replay-view-root"
-        className="replay-view-root"
-        tabIndex={-1}
-        style={{ maxWidth: 960, margin: '0 auto', padding: '3rem 1rem', textAlign: 'center' }}
-      >
-        <p>{t('common.loading', 'Loading...')}</p>
-      </div>
-    );
-  }
-
-  if (capabilityError) {
-    return (
-      <div
-        ref={rootRef}
-        data-testid="replay-view-root"
-        className="replay-view-root"
-        tabIndex={-1}
-        style={{ maxWidth: 960, margin: '0 auto', padding: '3rem 1rem', textAlign: 'center' }}
-      >
-        <h1 style={{ margin: '0 0 1rem', fontSize: '1.4rem' }}>
-          {t('replay.title', 'Replay')}
-        </h1>
-        <ReplayEmptyState
-          title={t('replay.feature_unavailable_title', 'Replay availability could not be checked')}
-          message={t(
-            'replay.feature_unavailable_description',
-            'Unable to confirm whether replay trace is available right now. Please retry.',
-          )}
-          onRetry={() => void reloadCapability?.()}
-          retryLabel={t('common.retry', 'Retry')}
-        />
-        <div style={{ marginTop: '1rem' }}>
-          <Link to="/" style={{ color: '#8ab4f8' }}>
-            {t('common.back_home', 'Back to Home')}
-          </Link>
+      <div ref={rootRef} data-testid="replay-view-root" className="replay-view-root replay-shell" tabIndex={-1}>
+        <div className="replay-loading">
+          <div className="replay-loading__spinner" />
+          <p className="replay-loading__text">{t('common.loading', 'Loading...')}</p>
         </div>
       </div>
     );
   }
 
-  if (!enabled) {
+  // Capability error / disabled
+  if (capabilityError || !enabled) {
     return (
-      <div
-        ref={rootRef}
-        data-testid="replay-view-root"
-        className="replay-view-root"
-        tabIndex={-1}
-        style={{ maxWidth: 960, margin: '0 auto', padding: '3rem 1rem', textAlign: 'center' }}
-      >
-        <h1 style={{ margin: '0 0 1rem', fontSize: '1.4rem' }}>
-          {t('replay.title', 'Replay')}
-        </h1>
+      <div ref={rootRef} data-testid="replay-view-root" className="replay-view-root replay-shell" tabIndex={-1}>
+        <header className="replay-header">
+          <h1 className="replay-header__title">{t('replay.title', 'Replay')}</h1>
+        </header>
         <ReplayEmptyState
-          title={t('replay.feature_disabled_title', 'Replay trace is unavailable')}
-          message={t(
-            'replay.feature_disabled_description',
-            'This server has replay trace disabled for this environment.',
-          )}
+          title={capabilityError
+            ? t('replay.feature_unavailable_title', 'Replay availability could not be checked')
+            : t('replay.feature_disabled_title', 'Replay trace is unavailable')}
+          message={capabilityError
+            ? t('replay.feature_unavailable_description', 'Unable to confirm whether replay trace is available right now. Please retry.')
+            : t('replay.feature_disabled_description', 'This server has replay trace disabled for this environment.')}
+          onRetry={capabilityError ? () => void reloadCapability?.() : undefined}
+          retryLabel={t('common.retry', 'Retry')}
         />
-        <div style={{ marginTop: '1rem' }}>
-          <Link to="/" style={{ color: '#8ab4f8' }}>
-            {t('common.back_home', 'Back to Home')}
-          </Link>
+        <div className="replay-header__back-row">
+          <Link to="/" className="replay-header__link">{t('common.back_home', 'Back to Home')}</Link>
         </div>
       </div>
     );
@@ -302,23 +263,37 @@ export function ReplayView() {
   const hasTrace = (trace?.nodes?.length ?? 0) > 0;
   const hasFrames = totalFrames > 0;
   const showEmpty = !!error || !hasTrace || !hasFrames;
+  const currentRound = frameToRound[frameIndex];
 
   return (
-    <div
-      ref={rootRef}
-      data-testid="replay-view-root"
-      className="replay-view-root"
-      tabIndex={-1}
-      style={{ maxWidth: 960, margin: '0 auto', padding: '1.5rem 1rem' }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h1 style={{ margin: 0, fontSize: '1.4rem' }}>
-          {t('replay.title', 'Replay')}
-        </h1>
-        <Link to="/" style={{ color: '#8ab4f8' }}>
-          {t('common.back_home', 'Back to Home')}
-        </Link>
-      </div>
+    <div ref={rootRef} data-testid="replay-view-root" className="replay-view-root replay-shell" tabIndex={-1}>
+      {/* ── Header ── */}
+      <header className="replay-header">
+        <div className="replay-header__left">
+          <Link to="/" className="replay-header__back" aria-label={t('common.back_home', 'Back to Home')}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M10 12L6 8L10 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </Link>
+          <h1 className="replay-header__title">{t('replay.title', 'Replay')}</h1>
+          {!showEmpty && currentRound != null && (
+            <span className="replay-header__badge">
+              R{currentRound}
+            </span>
+          )}
+        </div>
+        <div className="replay-header__right">
+          {!showEmpty && id && (
+            <Link to={`/sim/${encodeURIComponent(id)}`} className="replay-header__theater-btn">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <rect x="1.5" y="3" width="13" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+                <path d="M6.5 6.5L10.5 8.5L6.5 10.5V6.5Z" fill="currentColor" />
+              </svg>
+              {t('replay.open_pixel_theater', 'Open Pixel Theater')}
+            </Link>
+          )}
+        </div>
+      </header>
 
       {showEmpty ? (
         <ReplayEmptyState
@@ -331,16 +306,8 @@ export function ReplayView() {
         />
       ) : (
         <>
-          <div style={{ marginBottom: '1rem' }}>
-            <ReplayTimelineScrubber
-              frameIndex={frameIndex}
-              totalFrames={totalFrames}
-              onFrameChange={setFrame}
-              ariaLabel={t('replay.scrubber.aria_label', 'Replay timeline')}
-            />
-          </div>
-
-          <div style={{ marginBottom: '1rem' }}>
+          {/* ── Transport bar ── */}
+          <div className="replay-transport">
             <ReplayPlaybackControl
               playing={playing}
               speed={speed}
@@ -353,52 +320,92 @@ export function ReplayView() {
               onSkipToEnd={skipToEnd}
               onSpeedChange={(s: PlaybackSpeed) => setSpeed(s)}
             />
+            <ReplayTimelineScrubber
+              frameIndex={frameIndex}
+              totalFrames={totalFrames}
+              onFrameChange={setFrame}
+              ariaLabel={t('replay.scrubber.aria_label', 'Replay timeline')}
+            />
           </div>
 
-          <section aria-label={t('replay.agent_queue.aria_label', 'Replay agent queue')}>
-            <ReplayAgentQueue
-              agents={agents}
-              activeAgentId={activeAgentId}
-            />
+          {/* ── Agents ── */}
+          <section aria-label={t('replay.agent_queue.aria_label', 'Replay agent queue')} className="replay-agents-section">
+            <ReplayAgentQueue agents={agents} activeAgentId={activeAgentId} />
           </section>
 
-          <section
-            aria-label={t('replay.trace.aria_label', 'Replay trace')}
-            style={{ marginTop: '1rem' }}
-          >
-            <p style={{ margin: '0 0 0.75rem', fontSize: 13, color: 'var(--color-muted, #888)' }}>
-              {t('replay.trace.frame_count_label', 'Frame')}: {frameIndex + 1} / {totalFrames}
-              {frameToRound[frameIndex] != null && ` · Round ${frameToRound[frameIndex]}`}
-              {` · `}
+          {/* ── Frame metadata ── */}
+          <div className="replay-meta">
+            <span className="replay-meta__frame">
+              {t('replay.trace.frame_count_label', 'Frame')} {frameIndex + 1} / {totalFrames}
+            </span>
+            {currentRound != null && (
+              <span className="replay-meta__round">Round {currentRound}</span>
+            )}
+            <span className="replay-meta__branches">
               {t('replay.trace.branches_label', 'Branches')}: {trace?.nodes.length ?? 0}
-            </p>
-            <div role="log" aria-live="polite" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            </span>
+          </div>
+
+          {/* ── Trace cards ── */}
+          <section aria-label={t('replay.trace.aria_label', 'Replay trace')} className="replay-trace">
+            <div role="log" aria-live="polite" className="replay-trace__list">
               {(nodesByFrame.get(frameIndex) ?? []).map(node => {
-                const p = (typeof node.payload === 'object' && node.payload !== null && !Array.isArray(node.payload))
-                  ? node.payload as Record<string, unknown>
-                  : {};
-                const agentName = typeof p.agent_name === 'string' && p.agent_name.trim() ? p.agent_name.trim() : (typeof p.agent_id === 'string' ? p.agent_id.slice(0, 8) : '?');
+                const p = readPayload(node);
+                const agentId = typeof p.agent_id === 'string' ? p.agent_id : null;
+                const agentName = typeof p.agent_name === 'string' && p.agent_name.trim()
+                  ? p.agent_name.trim()
+                  : (agentId ? agentId.slice(0, 8) : null);
                 const content = typeof p.content === 'string' ? p.content : (node.label || '');
                 const emotion = typeof p.emotion === 'string' ? p.emotion : null;
-                return (
-                  <div key={node.id} style={{
-                    padding: '0.75rem 1rem',
-                    border: '1px solid var(--color-border, #e2e8f0)',
-                    borderRadius: 8,
-                    borderLeft: '3px solid var(--color-primary, #8b5cf6)',
-                    background: 'var(--color-surface, #fff)',
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
-                      <strong style={{ fontSize: 14, color: 'var(--color-text, #1e293b)' }}>{agentName}</strong>
-                      {emotion && <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, background: 'var(--color-muted-bg, #f1f5f9)', color: 'var(--color-muted, #64748b)' }}>{emotion}</span>}
-                      <span style={{ fontSize: 11, color: 'var(--color-muted, #94a3b8)', marginLeft: 'auto' }}>R{node.round ?? '?'}</span>
+                const isFork = node.type === 'fork';
+                const hue = agentId ? hashToHue(agentId) : 260;
+                const accentColor = `oklch(65% 0.18 ${hue})`;
+
+                if (isFork && !agentName) {
+                  return (
+                    <div key={node.id} className="replay-card replay-card--fork">
+                      <div className="replay-card__fork-icon" aria-hidden="true">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                          <path d="M8 2V6M8 6L4 10M8 6L12 10M4 10V14M12 10V14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </div>
+                      <div className="replay-card__fork-body">
+                        <span className="replay-card__fork-label">
+                          {t('replay.trace.branch_fork', 'Branch fork')}
+                        </span>
+                        <span className="replay-card__round">R{node.round ?? '?'}</span>
+                      </div>
+                      {content && <p className="replay-card__fork-detail">{content}</p>}
                     </div>
-                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--color-text-secondary, #475569)' }}>{content}</p>
+                  );
+                }
+
+                return (
+                  <div
+                    key={node.id}
+                    className="replay-card"
+                    style={{ '--card-accent': accentColor } as React.CSSProperties}
+                  >
+                    <div className="replay-card__header">
+                      <span className="replay-card__avatar" aria-hidden="true" style={{ background: accentColor }}>
+                        {agentName ? agentName.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() : '?'}
+                      </span>
+                      <div className="replay-card__meta">
+                        <strong className="replay-card__name">{agentName ?? t('replay.trace.unknown_agent', 'System')}</strong>
+                        {emotion && (
+                          <span className="replay-card__emotion">
+                            {EMOTION_ICONS[emotion] ?? ''} {emotion}
+                          </span>
+                        )}
+                      </div>
+                      <span className="replay-card__round">R{node.round ?? '?'}</span>
+                    </div>
+                    <p className="replay-card__content">{content}</p>
                   </div>
                 );
               })}
               {(nodesByFrame.get(frameIndex) ?? []).length === 0 && (
-                <p style={{ fontSize: 13, color: 'var(--color-muted, #94a3b8)', fontStyle: 'italic' }}>
+                <p className="replay-trace__empty">
                   {t('replay.trace.no_events_frame', 'No events for this frame.')}
                 </p>
               )}

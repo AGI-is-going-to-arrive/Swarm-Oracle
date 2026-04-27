@@ -67,8 +67,8 @@ export default function LayoutSwitcher({ mode, onChange, isCompact = false }: La
         gap: 2,
         padding: 2,
         borderRadius: 10,
-        background: 'var(--segmented-bg, rgba(255,255,255,0.06))',
-        border: '1px solid var(--segmented-border, rgba(255,255,255,0.1))',
+        background: 'var(--bg-hover, #f2eee7)',
+        border: '1px solid var(--border-subtle, #e1ddd7)',
       }}
     >
       {modes.map((m) => {
@@ -89,20 +89,21 @@ export default function LayoutSwitcher({ mode, onChange, isCompact = false }: La
             onClick={() => onChange(m)}
             onKeyDown={handleKeyDown}
             style={{
-              padding: '10px 14px',
-              minHeight: 44,
+              padding: '6px 14px',
+              minHeight: 36,
               borderRadius: 8,
               border: 'none',
               background: selected
-                ? 'var(--segmented-active-bg, rgba(255,255,255,0.12))'
+                ? 'var(--bg-elevated, #fff)'
                 : 'transparent',
               color: selected
-                ? 'var(--segmented-active-text, #f1f4fb)'
-                : 'var(--segmented-text, #9aa4b2)',
+                ? 'var(--text-primary, #181611)'
+                : 'var(--text-muted, #928f88)',
               cursor: 'pointer',
               fontSize: '0.82rem',
               fontWeight: selected ? 600 : 400,
-              transition: prefersReducedMotion ? 'none' : 'background 150ms, color 150ms',
+              boxShadow: selected ? '0 1px 3px rgba(0,0,0,0.06)' : 'none',
+              transition: prefersReducedMotion ? 'none' : 'background 150ms, color 150ms, box-shadow 150ms',
             }}
           >
             {t(key, fallback)}

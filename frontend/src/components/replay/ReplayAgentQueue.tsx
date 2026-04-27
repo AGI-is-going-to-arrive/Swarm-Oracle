@@ -1,18 +1,9 @@
-/* ═══════════════════════════════════════════════════════════
-   FE-4 — ReplayAgentQueue
-   Horizontal scrollable avatar strip. Marks `activeAgentId`
-   with a highlighted ring (Motion-compatible via CSS variable
-   transition; prefers-reduced-motion is respected at CSS level).
-   ═══════════════════════════════════════════════════════════ */
-
 import type { CSSProperties } from 'react';
 
 export interface ReplayAgentInfo {
   id: string;
   name: string;
-  /** Optional persona hint used for initials fallback. */
   role?: string;
-  /** Optional color hint (hex or CSS var); falls back to derived hue. */
   color?: string;
 }
 
@@ -47,24 +38,18 @@ export function ReplayAgentQueue({
     <div
       role="list"
       aria-label={ariaLabel ?? 'Replay agent queue'}
-      className="flex items-center gap-2 overflow-x-auto py-2 px-1"
-      style={{ scrollbarWidth: 'thin' }}
+      className="replay-agents"
     >
       {agents.map((agent) => {
         const isActive = agent.id === activeAgentId;
         const tid = `replay-agent-queue-${agent.id}`;
-        const color = agent.color || `hsl(${hashToHue(agent.id)} 65% 55%)`;
+        const hue = hashToHue(agent.id);
+        const color = agent.color || `oklch(65% 0.18 ${hue})`;
+        const ringColor = agent.color || `oklch(75% 0.14 ${hue})`;
         const bubbleStyle: CSSProperties = {
-          backgroundColor: color,
-          boxShadow: isActive
-            ? '0 0 0 2px var(--color-primary, #8ab4f8), 0 0 12px 2px color-mix(in oklch, var(--color-primary, #8ab4f8) 60%, transparent)'
-            : 'none',
-          transform: isActive ? 'scale(1.08)' : 'scale(1)',
-          transition: 'transform 180ms cubic-bezier(.16,1,.3,1), box-shadow 200ms ease-out',
-        };
-        const handleClick = () => {
-          if (onSelect) onSelect(agent.id);
-        };
+          '--agent-color': color,
+          '--agent-ring': ringColor,
+        } as CSSProperties;
         return (
           <button
             key={agent.id}
@@ -74,27 +59,21 @@ export function ReplayAgentQueue({
             data-active={isActive ? 'true' : 'false'}
             aria-current={isActive ? 'true' : undefined}
             aria-label={agent.name}
-            onClick={handleClick}
-            className="flex flex-col items-center gap-1 shrink-0 focus:outline-none focus:ring-2 focus:ring-primary/60 rounded-full"
+            onClick={() => onSelect?.(agent.id)}
+            className={`replay-agents__item ${isActive ? 'replay-agents__item--active' : ''}`}
+            style={bubbleStyle}
           >
-            <span
-              aria-hidden="true"
-              style={bubbleStyle}
-              className="flex items-center justify-center w-10 h-10 rounded-full font-semibold text-white text-xs"
-            >
+            <span className="replay-agents__avatar" aria-hidden="true">
               {getInitials(agent.name)}
             </span>
-            <span
-              className="text-[10px] max-w-[60px] truncate text-muted-foreground"
-              title={agent.name}
-            >
+            <span className="replay-agents__name" title={agent.name}>
               {agent.name}
             </span>
           </button>
         );
       })}
       {agents.length === 0 && (
-        <span className="text-xs text-muted-foreground italic px-2">
+        <span className="replay-agents__empty">
           No agents recorded
         </span>
       )}

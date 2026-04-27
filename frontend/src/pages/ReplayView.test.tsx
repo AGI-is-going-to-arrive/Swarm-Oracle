@@ -217,8 +217,8 @@ describe('ReplayView — data path', () => {
     await waitFor(() => {
       expect(screen.getByTestId('replay-timeline-scrubber')).toBeInTheDocument();
     });
-    // The scrubber label reflects the initial frame.
-    expect(screen.getByText('turn_3')).toBeInTheDocument();
+    // The scrubber displays the 1-based frame number (frame 3 → display "4").
+    expect(screen.getByText('4')).toBeInTheDocument();
   });
 });
 

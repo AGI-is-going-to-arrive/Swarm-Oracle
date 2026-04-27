@@ -299,8 +299,8 @@ class TestAppendRoundNodes:
         event_nodes = [node for node in result["nodes"] if node["type"] == "event"]
         assert len(event_nodes) == 2
         assert [node["label"] for node in event_nodes] == [
-            "first idless point",
-            "second idless point",
+            "Agent A: first idless point",
+            "Agent A: second idless point",
         ]
 
         with Session(get_engine()) as session:

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, Maximize2, Minus, Plus, RotateCcw, Search } from 'lucide-react';
+import { Eye, EyeOff, Info, Maximize2, Minus, Plus, RotateCcw, Search, X } from 'lucide-react';
 import { useG6Graph } from '../../hooks/useG6Graph';
 import useReducedMotion from '../../hooks/useReducedMotion';
 import { useScenarioGraph } from '../../hooks/useScenarioGraph';
-import { NODE_TYPE_COLORS_HEX } from '../../lib/graphTokens';
+import { NODE_TYPE_COLORS_HEX, KG_NODE_TYPE_FILLS, TYPE_LABEL_I18N } from '../../lib/graphTokens';
 import {
   KG_DEGRADE_THRESHOLDS,
   KG_AGENT_PALETTE,
@@ -15,6 +15,7 @@ import {
   hashStringToIndex,
 } from '../../lib/kgGraphConfig';
 import { NodeDetailPanel, type NodeDetail } from '../NodeDetailPanel';
+import { NodeConversationSheet, type NodeConversationOrigin } from '../kg/NodeConversationSheet';
 import NodeQuickCard from './NodeQuickCard';
 
 export interface KGGraphBoardProps {
@@ -105,6 +106,13 @@ export default function KGGraphBoard({
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<Set<string>>(new Set());
   const [edgeLabelOverride, setEdgeLabelOverride] = useState<boolean | null>(null);
+  const [showLegend, setShowLegend] = useState(true);
+  const [sheetState, setSheetState] = useState<{
+    open: boolean;
+    scenarioId: string;
+    identityId: string | null;
+    origin: NodeConversationOrigin;
+  }>({ open: false, scenarioId: '', identityId: null, origin: { nodeId: '', nodeType: '' } });
   const [quickCardState, setQuickCardState] = useState<{
     key: string;
     node: { id: string; label: string; type: string; round: number | null };
@@ -256,6 +264,29 @@ export default function KGGraphBoard({
     [styledG6Data, theme, shouldDisableAnimation, minimapContainer, isMobile],
   );
 
+  const openConversationSheet = useCallback((nodeId: string, nodeType: string, label: string, round: number | null, payload: unknown) => {
+    const rawPayload = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : {};
+    const agentName = typeof rawPayload.agent_name === 'string' ? rawPayload.agent_name : undefined;
+    const content = typeof rawPayload.content === 'string' ? rawPayload.content : '';
+    setSheetState({
+      open: true,
+      scenarioId,
+      identityId: null,
+      origin: {
+        nodeId,
+        nodeType,
+        excerpt: content || label,
+        branchId: typeof rawPayload.branch_id === 'string' ? rawPayload.branch_id : undefined,
+        roundNumber: round,
+        agentName,
+        nodeLabel: label,
+        typeColor: NODE_TYPE_COLORS_HEX[nodeType] ?? NODE_TYPE_COLORS_HEX.event,
+      },
+    });
+  }, [scenarioId]);
+
   const handleNodeClick = useCallback(
     (evt: unknown) => {
       const target = (evt as {
@@ -293,25 +324,34 @@ export default function KGGraphBoard({
           round: graphNode.round,
           payload: graphNode.payload,
         });
+        openConversationSheet(graphNode.id, graphNode.type, graphNode.label, graphNode.round, graphNode.payload);
       }
 
       onNodeClick?.(tgt);
     },
-    [graphNodeById, onNodeClick, isMobile, setSelectedNode, setLockedNodeId, resetKey],
+    [graphNodeById, onNodeClick, isMobile, setSelectedNode, setLockedNodeId, resetKey, openConversationSheet],
   );
 
   const handleOpenDetail = useCallback(() => {
     if (!effectiveQuickCardState) return;
     const fullNode = graphNodeById.get(effectiveQuickCardState.node.id);
+    const payload = fullNode?.payload ?? null;
     setQuickCardState(null);
     setSelectedNode({
       id: effectiveQuickCardState.node.id,
       label: effectiveQuickCardState.node.label,
       type: effectiveQuickCardState.node.type,
       round: effectiveQuickCardState.node.round,
-      payload: fullNode?.payload ?? null,
+      payload,
     });
-  }, [effectiveQuickCardState, graphNodeById, setSelectedNode]);
+    openConversationSheet(
+      effectiveQuickCardState.node.id,
+      effectiveQuickCardState.node.type,
+      effectiveQuickCardState.node.label,
+      effectiveQuickCardState.node.round,
+      payload,
+    );
+  }, [effectiveQuickCardState, graphNodeById, setSelectedNode, openConversationSheet]);
 
   const closeQuickCard = useCallback(() => setQuickCardState(null), []);
 
@@ -583,6 +623,19 @@ export default function KGGraphBoard({
             : <EyeOff aria-hidden="true" />}
         </button>
 
+        {/* Legend toggle */}
+        <button
+          type="button"
+          className="kg-icon-btn"
+          onClick={() => setShowLegend((v) => !v)}
+          aria-pressed={showLegend}
+          aria-label={t('kg_graph_board.legend_toggle', 'Toggle node type legend')}
+          title={t('kg_graph_board.legend_toggle', 'Toggle node type legend')}
+          data-testid="kg-graph-board-legend-toggle"
+        >
+          <Info aria-hidden="true" />
+        </button>
+
         {/* Zoom controls */}
         <div className="kg-toolbar-group">
           <button
@@ -625,7 +678,7 @@ export default function KGGraphBoard({
         >
           {availableTypes.map((type) => {
             const active = typeFilter.has(type);
-            const dotColor = NODE_TYPE_COLORS_HEX[type] ?? '#888';
+            const dotColor = KG_NODE_TYPE_FILLS[type] ?? '#888';
             return (
               <button
                 key={type}
@@ -647,10 +700,68 @@ export default function KGGraphBoard({
                   aria-hidden="true"
                   style={{ background: dotColor }}
                 />
-                {type}
+                {TYPE_LABEL_I18N[type]
+                  ? t(TYPE_LABEL_I18N[type][0], TYPE_LABEL_I18N[type][1])
+                  : type}
               </button>
             );
           })}
+        </div>
+      )}
+
+      {/* Legend panel */}
+      {showLegend && (
+        <div
+          data-testid="kg-graph-board-legend"
+          className="kg-legend-panel"
+          role="region"
+          aria-label={t('kg_graph_board.legend_aria', 'Node type legend')}
+        >
+          <div className="kg-legend-header">
+            <span className="kg-legend-title">
+              {t('kg_graph_board.legend_title', 'Reading this graph')}
+            </span>
+            <button
+              type="button"
+              className="kg-icon-btn kg-legend-close"
+              onClick={() => setShowLegend(false)}
+              aria-label={t('common.close', 'Close')}
+              data-testid="kg-graph-board-legend-close"
+            >
+              <X aria-hidden="true" style={{ width: 14, height: 14 }} />
+            </button>
+          </div>
+          <p className="kg-legend-subtitle">
+            {t('kg_graph_board.legend_subtitle', 'Each circle is an event in the simulation. Colors show what happened.')}
+          </p>
+          <ul className="kg-legend-list">
+            {(['event', 'fork', 'stance_shift', 'intervention', 'round', 'verdict'] as const).map(
+              (nodeType) => {
+                const dotColor = KG_NODE_TYPE_FILLS[nodeType] ?? '#888';
+                const i18nEntry = TYPE_LABEL_I18N[nodeType];
+                const label = i18nEntry ? t(i18nEntry[0], i18nEntry[1]) : nodeType;
+                return (
+                  <li key={nodeType} className="kg-legend-item">
+                    <span
+                      className="kg-legend-dot"
+                      aria-hidden="true"
+                      style={{ background: dotColor }}
+                    />
+                    <span className="kg-legend-label">{label}</span>
+                    <span className="kg-legend-desc">
+                      {t(
+                        `kg_graph_board.legend_desc_${nodeType}`,
+                        nodeType,
+                      )}
+                    </span>
+                  </li>
+                );
+              },
+            )}
+          </ul>
+          <p className="kg-legend-hint">
+            {t('kg_graph_board.legend_interaction_hint', 'Click any node to see full details and start a conversation.')}
+          </p>
         </div>
       )}
 
@@ -747,6 +858,18 @@ export default function KGGraphBoard({
           ))}
         </tbody>
       </table>
+
+      {sheetState.open && (
+        <NodeConversationSheet
+          key={`${sheetState.scenarioId}:${sheetState.origin.nodeId}`}
+          open={sheetState.open}
+          onOpenChange={(next) => setSheetState(prev => ({ ...prev, open: next }))}
+          onClose={() => setSheetState(prev => ({ ...prev, open: false }))}
+          scenarioId={sheetState.scenarioId}
+          identityId={sheetState.identityId}
+          origin={sheetState.origin}
+        />
+      )}
     </div>
   );
 }

@@ -115,6 +115,15 @@ export const NODE_TYPE_COLORS_HEX: Record<string, string> = {
   counter: '#c6514a',
 };
 
+export const KG_NODE_TYPE_FILLS: Record<string, string> = {
+  event: '#9a8e85',
+  intervention: '#b09050',
+  stance_shift: '#7a8e7a',
+  fork: '#a87060',
+  round: '#6a8a8a',
+  verdict: '#b0943a',
+};
+
 export const STATUS_COLORS_HEX: Record<string, string> = {
   standing: '#62748b',
   rebutted: '#c85d84',

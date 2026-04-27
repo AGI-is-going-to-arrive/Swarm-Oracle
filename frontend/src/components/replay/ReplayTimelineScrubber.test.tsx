@@ -20,7 +20,7 @@ describe('ReplayTimelineScrubber', () => {
     expect(screen.getByTestId('replay-timeline-scrubber')).toBeInTheDocument();
   });
 
-  it('displays current frame as turn_N', () => {
+  it('displays current frame number and total', () => {
     render(
       <ReplayTimelineScrubber
         frameIndex={4}
@@ -28,7 +28,8 @@ describe('ReplayTimelineScrubber', () => {
         onFrameChange={() => {}}
       />,
     );
-    expect(screen.getByText('turn_4')).toBeInTheDocument();
+    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.getByText('10')).toBeInTheDocument();
   });
 
   it('emits onFrameChange via Radix slider keyboard navigation', () => {

@@ -806,6 +806,11 @@ def append_round_nodes(
                     agent_id,
                     ordinal=idx,
                 )
+                event_label = (
+                    f"{agent_name}: {content[:60]}"
+                    if agent_name
+                    else content[:80]
+                )
                 node_scope = (branch_id, node_key)
                 node = event_nodes_by_key.get(node_scope)
                 if node is None:
@@ -813,7 +818,7 @@ def append_round_nodes(
                         snapshot_id=snapshot.id,
                         node_key=node_key,
                         node_type="event",
-                        label=content[:80],
+                        label=event_label,
                         round_number=round_number,
                         ref_model="agent_message",
                         ref_id=msg_id,
@@ -823,7 +828,7 @@ def append_round_nodes(
                     session.flush()
                     event_nodes_by_key[node_scope] = node
                 else:
-                    node.label = content[:80]
+                    node.label = event_label
                     node.round_number = round_number
                     node.ref_model = "agent_message"
                     node.ref_id = msg_id
@@ -873,11 +878,13 @@ def append_round_nodes(
                     if delta < 0.4:
                         continue
                     shift_key = f"stance_r{round_number}_{aid}"
+                    shift_agent_name = record.get("agent_name") or aid[:8]
                     desired_shift_records[(branch_id, shift_key)] = {
                         "record": record,
-                        "label": f"{aid} stance shifted",
+                        "label": f"{shift_agent_name} stance shifted",
                         "payload_json": json.dumps({
                             "agent_id": aid,
+                            "agent_name": shift_agent_name,
                             "branch_id": branch_id,
                             "prev_score": prev_frame.stance_score,
                             "new_score": current_stance,

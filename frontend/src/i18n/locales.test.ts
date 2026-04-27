@@ -260,17 +260,17 @@ describe('i18n locale resources', () => {
   });
 
   it('provides KGGraphBoard locale keys for workbench knowledge-graph panel', () => {
-    expect(en.translation.kg_graph_board.search_placeholder).toBe('Search nodes...');
-    expect(zh.translation.kg_graph_board.search_placeholder).toBe('搜索节点...');
+    expect(en.translation.kg_graph_board.search_placeholder).toBe('Search by agent name or content...');
+    expect(zh.translation.kg_graph_board.search_placeholder).toBe('搜索 Agent 名称或内容...');
     expect(en.translation.kg_graph_board.search_aria).toBe('Search knowledge graph nodes');
     expect(zh.translation.kg_graph_board.search_aria).toBe('搜索知识图谱节点');
-    expect(en.translation.kg_graph_board.filter_aria).toBe('Filter nodes by type');
-    expect(zh.translation.kg_graph_board.filter_aria).toBe('按类型筛选节点');
+    expect(en.translation.kg_graph_board.filter_aria).toBe('Show only selected types');
+    expect(zh.translation.kg_graph_board.filter_aria).toBe('只显示选中的类型');
     expect(en.translation.kg_graph_board.zoom_in).toBe('Zoom in');
     expect(zh.translation.kg_graph_board.zoom_in).toBe('放大');
     expect(en.translation.kg_graph_board.zoom_out).toBe('Zoom out');
     expect(zh.translation.kg_graph_board.zoom_out).toBe('缩小');
-    expect(en.translation.kg_graph_board.fit_view).toBe('Fit view');
+    expect(en.translation.kg_graph_board.fit_view).toBe('Fit to view');
     expect(zh.translation.kg_graph_board.fit_view).toBe('适配视图');
     expect(en.translation.kg_graph_board.minimap_aria).toBe('Mini map');
     expect(zh.translation.kg_graph_board.minimap_aria).toBe('缩略图');

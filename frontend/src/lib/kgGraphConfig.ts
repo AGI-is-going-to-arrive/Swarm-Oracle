@@ -1,5 +1,5 @@
 import type { GraphPayload } from '../hooks/useScenarioGraph';
-import { NODE_TYPE_COLORS_HEX, resolveKGG6Tokens } from './graphTokens';
+import { KG_NODE_TYPE_FILLS, resolveKGG6Tokens } from './graphTokens';
 import type { LayoutOptionsShape } from './g6Layouts';
 
 // ── Constants ──────────────────────────────────────────────
@@ -66,15 +66,40 @@ export const EDGE_TYPE_LABEL_I18N: Record<string, [string, string]> = {
 };
 
 export const KG_AGENT_PALETTE = [
-  '#FF6B35', '#004E89', '#7B2D8E', '#1A936F', '#C5283D',
-  '#E9724C', '#3498db', '#9b59b6', '#27ae60', '#f39c12',
-  '#e74c3c', '#1abc9c', '#e67e22', '#2c3e50', '#16a085',
+  '#b85c4a', '#2d6b6b', '#8b5e83', '#c49a3c', '#5b7b6f',
+  '#a65d78', '#3d6e8e', '#7a6b4e', '#6b4e7a', '#c47250',
+  '#4e7a6b', '#9b6b4e', '#6e5b8e', '#8e6e3d', '#4e6b8e',
 ] as const;
 
 export function readAgentId(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null;
   const raw = (payload as { agent_id?: unknown }).agent_id;
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+export function readAgentName(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const raw = (payload as { agent_name?: unknown }).agent_name;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+/**
+ * Build a short, scannable label for a KG node.
+ * - If payload has agent_name: "AgentName · R{round}"
+ * - Otherwise: truncate raw label to 24 chars
+ */
+export function buildKgNodeLabel(
+  rawLabel: string,
+  round: number | null,
+  payload: unknown,
+): string {
+  const agentName = readAgentName(payload);
+  if (agentName) {
+    const roundSuffix = round != null ? ` · R${round}` : '';
+    return `${agentName}${roundSuffix}`;
+  }
+  if (rawLabel.length > 24) return `${rawLabel.slice(0, 24)}…`;
+  return rawLabel;
 }
 
 export function hashStringToIndex(str: string, mod: number): number {
@@ -112,7 +137,7 @@ export function getKGNodeStyle(
   theme: 'dark' | 'light',
 ): { fill: string; stroke: string; lineWidth: number; textColor: string } {
   const tokens = resolveKGG6Tokens(theme);
-  const fill = NODE_TYPE_COLORS_HEX[nodeType] ?? DEFAULT_NODE_COLOR;
+  const fill = KG_NODE_TYPE_FILLS[nodeType] ?? DEFAULT_NODE_COLOR;
   return {
     fill,
     stroke: NODE_HALO_STROKE[theme],
@@ -178,15 +203,24 @@ export function toKgG6Data(
   const keptIds = new Set(nodes.map((n) => n.id));
 
   return {
-    nodes: nodes.map((n) => ({
-      id: n.id,
-      type: 'circle' as const,
-      style: {
-        labelText: n.label,
-        labelPlacement: 'bottom' as const,
-      },
-      data: { kgType: n.type, kgRound: n.round, agentId: readAgentId(n.payload) },
-    })),
+    nodes: nodes.map((n) => {
+      const agentId = readAgentId(n.payload);
+      const typeFill = KG_NODE_TYPE_FILLS[n.type] ?? KG_NODE_TYPE_FILLS.event ?? '#9a8e85';
+      const agentHue = agentId ? hashStringToIndex(agentId, KG_AGENT_PALETTE.length) : 0;
+      const agentStroke = agentId ? KG_AGENT_PALETTE[agentHue] : typeFill;
+      return {
+        id: n.id,
+        type: 'circle' as const,
+        style: {
+          fill: typeFill,
+          stroke: agentStroke,
+          lineWidth: 2.5,
+          labelText: buildKgNodeLabel(n.label, n.round, n.payload),
+          labelPlacement: 'bottom' as const,
+        },
+        data: { kgType: n.type, kgRound: n.round, agentId },
+      };
+    }),
     edges: graph.edges
       .filter((e) => keptIds.has(e.source) && keptIds.has(e.target))
       .map((e) => {
@@ -217,7 +251,7 @@ export function toKgG6Data(
 export interface KgG6Node {
   id: string;
   type: 'circle';
-  style: { labelText?: string; labelPlacement: 'bottom' };
+  style: { fill: string; stroke: string; lineWidth: number; labelText?: string; labelPlacement: 'bottom' };
   data: { kgType: string; kgRound: number | null; agentId: string | null };
 }
 
@@ -268,7 +302,7 @@ export interface G6GraphOptions {
   animation: boolean;
   layout: LayoutOptionsShape;
   node: {
-    style: { fill: string; stroke: string; lineWidth: number; labelFill: string; labelFontSize: number };
+    style: { labelFill: string; labelFontSize: number };
     state: Record<'active' | 'inactive' | 'selected', G6ElementStateStyle>;
     animation: false | { enter: string };
   };
@@ -340,9 +374,6 @@ export function buildKgG6Options(opts: BuildKgG6OptionsParams): G6GraphOptions {
     layout: opts.layout ?? DEFAULT_KG_LAYOUT,
     node: {
       style: {
-        fill: tokens.nodeFill,
-        stroke: tokens.nodeStroke,
-        lineWidth: 1.5,
         labelFill: tokens.label,
         labelFontSize: 11,
       },

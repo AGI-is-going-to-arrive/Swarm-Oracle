@@ -1099,10 +1099,10 @@
       "unavailable": "工作台功能未启用"
     },
     "kg_graph_board": {
-      "mobile_truncate_notice": "已显示前 {{cap}} 个节点（共 {{total}} 个）。请使用搜索或筛选缩小范围。",
-      "search_placeholder": "搜索节点...",
+      "mobile_truncate_notice": "正在显示 {{cap}} / {{total}} 个节点，可搜索或筛选聚焦。",
+      "search_placeholder": "搜索 Agent 名称或内容...",
       "search_aria": "搜索知识图谱节点",
-      "filter_aria": "按类型筛选节点",
+      "filter_aria": "只显示选中的类型",
       "zoom_in": "放大",
       "zoom_out": "缩小",
       "fit_view": "适配视图",
@@ -1110,13 +1110,25 @@
       "sr_table_aria": "图谱节点的无障碍表格",
       "sr_caption": "图谱节点（无障碍表格）",
       "toggle_edge_labels": "切换关系标签",
-      "show_labels": "显示关系",
-      "hide_labels": "隐藏关系",
+      "show_labels": "在连线上显示关系名称",
+      "hide_labels": "隐藏关系标签",
       "quick_card_open_detail": "查看详情",
       "quick_card_close": "关闭",
       "toolbar_aria": "知识图谱工具栏",
-      "drag_hint": "拖动任意节点重新排布",
-      "nodes_count_label": "{{count}} 个节点"
+      "drag_hint": "点击节点查看详情 · 拖动可重新排列",
+      "nodes_count_label": "{{count}} 个节点",
+      "legend_toggle": "这些颜色代表什么？",
+      "legend_aria": "指南：节点类型与颜色",
+      "legend_title": "如何阅读这张图",
+      "legend_subtitle": "每个圆点是模拟中发生的一件事，颜色代表事件的类型。",
+      "legend_desc_event": "Agent 说了什么或做了什么",
+      "legend_desc_fork": "故事走向分成了不同路线",
+      "legend_desc_stance_shift": "Agent 改变了自己的立场",
+      "legend_desc_intervention": "你介入并改变了走向",
+      "legend_desc_round": "模拟回合的标记",
+      "legend_desc_verdict": "最终的结论或决策",
+      "legend_interaction_hint": "点击任意节点查看完整内容，还可以和 Agent 对话。",
+      "filter_all_hidden": "所有节点被筛选隐藏了。点击上方的类型标签来显示。"
     },
     "agent_profile": {
       "dialog_label": "Agent 档案",
@@ -1497,6 +1509,7 @@
     },
     "replay": {
       "title": "回放轨迹",
+      "open_pixel_theater": "打开像素剧场",
       "feature_disabled_title": "回放轨迹不可用",
       "feature_disabled_description": "当前环境未启用回放轨迹功能。",
       "feature_unavailable_title": "暂时无法确认回放能力",
@@ -1510,7 +1523,10 @@
       "trace": {
         "aria_label": "回放轨迹",
         "frame_count_label": "帧",
-        "branches_label": "分支"
+        "branches_label": "分支",
+        "branch_fork": "分支分叉",
+        "unknown_agent": "系统",
+        "no_events_frame": "当前帧无事件。"
       },
       "empty": {
         "title": "暂无可用回放",

@@ -28,8 +28,8 @@ import type { GraphOptions } from '@antv/g6';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useG6Graph } from '../hooks/useG6Graph';
 import { comboLayout, shouldDegradeForMobile, degradeNodesForMobile } from '../lib/g6Layouts';
-import { resolveG6Tokens } from '../lib/graphTokens';
-import { buildKgG6Options } from '../lib/kgGraphConfig';
+import { resolveG6Tokens, KG_NODE_TYPE_FILLS } from '../lib/graphTokens';
+import { buildKgG6Options, readAgentId, buildKgNodeLabel, hashStringToIndex, KG_AGENT_PALETTE } from '../lib/kgGraphConfig';
 import { buildSessionHeaders } from '../api/client';
 import { NodeConversationSheet } from '../components/kg/NodeConversationSheet';
 
@@ -245,12 +245,24 @@ export default function KGExplorerView() {
     });
     const keptIds = new Set(filtered.map((n) => n.id));
     return {
-      nodes: filtered.map((n) => ({
-        id: n.id,
-        type: 'circle' as const,
-        style: { labelText: n.label, labelPlacement: 'bottom' as const },
-        data: { kgType: n.type, kgRound: n.round, agentId: null },
-      })),
+      nodes: filtered.map((n) => {
+        const agentId = readAgentId(n.payload);
+        const typeFill = KG_NODE_TYPE_FILLS[n.type] ?? KG_NODE_TYPE_FILLS.event ?? '#9a8e85';
+        const agentHue = agentId ? hashStringToIndex(agentId, KG_AGENT_PALETTE.length) : 0;
+        const agentStroke = agentId ? KG_AGENT_PALETTE[agentHue] : typeFill;
+        return {
+          id: n.id,
+          type: 'circle' as const,
+          style: {
+            fill: typeFill,
+            stroke: agentStroke,
+            lineWidth: 2.5,
+            labelText: buildKgNodeLabel(n.label, n.round, n.payload),
+            labelPlacement: 'bottom' as const,
+          },
+          data: { kgType: n.type, kgRound: n.round, agentId },
+        };
+      }),
       edges: graphData.edges
         .filter((e) => keptIds.has(e.source) && keptIds.has(e.target))
         .map((e) => ({ id: e.id, source: e.source, target: e.target })),

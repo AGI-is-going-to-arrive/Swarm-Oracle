@@ -1099,24 +1099,36 @@
       "unavailable": "Workbench feature is not enabled"
     },
     "kg_graph_board": {
-      "mobile_truncate_notice": "Showing first {{cap}} of {{total}} nodes. Refine search or filter to narrow results.",
-      "search_placeholder": "Search nodes...",
+      "mobile_truncate_notice": "Showing {{cap}} of {{total}} nodes. Use search or type filters to focus.",
+      "search_placeholder": "Search by agent name or content...",
       "search_aria": "Search knowledge graph nodes",
-      "filter_aria": "Filter nodes by type",
+      "filter_aria": "Show only selected types",
       "zoom_in": "Zoom in",
       "zoom_out": "Zoom out",
-      "fit_view": "Fit view",
+      "fit_view": "Fit to view",
       "minimap_aria": "Mini map",
       "sr_table_aria": "Screen-reader fallback table of graph nodes",
       "sr_caption": "Graph nodes (screen-reader fallback)",
-      "toggle_edge_labels": "Toggle edge labels",
-      "show_labels": "Show edge labels",
-      "hide_labels": "Hide edge labels",
+      "toggle_edge_labels": "Toggle relationship labels",
+      "show_labels": "Show relationship labels on edges",
+      "hide_labels": "Hide relationship labels",
       "quick_card_open_detail": "View details",
       "quick_card_close": "Close",
       "toolbar_aria": "Knowledge graph toolbar",
-      "drag_hint": "Drag any node to rearrange",
-      "nodes_count_label": "{{count}} nodes"
+      "drag_hint": "Click a node to explore · drag to rearrange",
+      "nodes_count_label": "{{count}} nodes",
+      "legend_toggle": "What do these colors mean?",
+      "legend_aria": "Guide: node types and colors",
+      "legend_title": "Reading this graph",
+      "legend_subtitle": "Each circle is an event in the simulation. Colors show what happened.",
+      "legend_desc_event": "What an agent said or did",
+      "legend_desc_fork": "The story branched into different paths",
+      "legend_desc_stance_shift": "An agent changed their position",
+      "legend_desc_intervention": "You stepped in and changed something",
+      "legend_desc_round": "A simulation turn marker",
+      "legend_desc_verdict": "The final outcome or decision",
+      "legend_interaction_hint": "Click any node to see full details and start a conversation.",
+      "filter_all_hidden": "All nodes are filtered out. Click a type chip above to show them."
     },
     "agent_profile": {
       "dialog_label": "Agent Profile",
@@ -1497,6 +1509,7 @@
     },
     "replay": {
       "title": "Replay Trace",
+      "open_pixel_theater": "Open Pixel Theater",
       "feature_disabled_title": "Replay trace is unavailable",
       "feature_disabled_description": "This server has replay trace disabled for this environment.",
       "feature_unavailable_title": "Replay availability could not be checked",
@@ -1510,7 +1523,10 @@
       "trace": {
         "aria_label": "Replay trace",
         "frame_count_label": "Frame",
-        "branches_label": "Branches"
+        "branches_label": "Branches",
+        "branch_fork": "Branch fork",
+        "unknown_agent": "System",
+        "no_events_frame": "No events for this frame."
       },
       "empty": {
         "title": "No replay available",

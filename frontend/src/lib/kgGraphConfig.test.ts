@@ -100,7 +100,7 @@ describe('getKGNodeStyle', () => {
 
   it('uses NODE_TYPE_COLORS_HEX for known types', () => {
     const style = getKGNodeStyle('event', 'light');
-    expect(style.fill).toBe('#4a90d9');
+    expect(style.fill).toBe('#9a8e85'); // KG_NODE_TYPE_FILLS.event
   });
 });
 
