@@ -73,6 +73,9 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.a11y_relations': 'Causal relations list',
     'causal.edge_caused': 'causes',
     'causal.edge_temporal': 'precedes',
+    'causal.edge_responds_to': 'responds to',
+    'causal.edge_supports_stance': 'aligns with',
+    'causal.edge_opposes_stance': 'opposes',
     'causal.edge_relation': '{{source}} {{relation}} {{target}}',
     'causal.evidence_high': 'High',
     'causal.evidence_medium': 'Medium',
@@ -96,6 +99,9 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.a11y_relations': '因果关系列表',
     'causal.edge_caused': '导致',
     'causal.edge_temporal': '先于',
+    'causal.edge_responds_to': '回应',
+    'causal.edge_supports_stance': '立场一致',
+    'causal.edge_opposes_stance': '立场对立',
     'causal.edge_relation': '{{source}} {{relation}} {{target}}',
     'causal.evidence_high': '高',
     'causal.evidence_medium': '中',
@@ -1840,6 +1846,38 @@ describe('CausalReviewView', () => {
     const items = within(relationList).getAllByRole('listitem');
     expect(items).toHaveLength(1);
     expect(items[0]).toHaveTextContent('Alpha trigger causes Beta response');
+  });
+
+  it('localizes inter-agent causal edge relation labels', async () => {
+    applyTestLocale('zh');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-inter-agent-relations',
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: '甲方', round: 1, payload: null },
+          { id: 'n2', key: 'e2', type: 'event', label: '乙方', round: 1, payload: null },
+          { id: 'n3', key: 'e3', type: 'event', label: '丙方', round: 1, payload: null },
+          { id: 'n4', key: 'e4', type: 'event', label: '丁方', round: 1, payload: null },
+        ],
+        edges: [
+          { id: 'edge-1', source: 'n1', target: 'n2', type: 'responds_to', weight: 1, label: null },
+          { id: 'edge-2', source: 'n2', target: 'n3', type: 'supports_stance', weight: 1, label: null },
+          { id: 'edge-3', source: 'n3', target: 'n4', type: 'opposes_stance', weight: 1, label: null },
+        ],
+      }),
+    } as Response);
+
+    renderView();
+
+    await screen.findByTestId('reactflow');
+    const relationList = screen.getByRole('list', { name: '因果关系列表' });
+    const items = within(relationList).getAllByRole('listitem');
+    expect(items.map((item) => item.textContent)).toEqual([
+      '甲方 回应 乙方',
+      '乙方 立场一致 丙方',
+      '丙方 立场对立 丁方',
+    ]);
   });
 
   it('uses a single named a11y list when large graphs use the text fallback', async () => {

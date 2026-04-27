@@ -78,7 +78,7 @@ function extractAgentsFromGraph(graph: CausalGraphResponse | null): ReplayAgentI
 function buildFrames(
   trace: ReplayTraceResponse | null,
   graph: CausalGraphResponse | null,
-): { count: number; nodeByFrame: Map<number, CausalGraphNode | null>; turnIds: string[] } {
+): { count: number; nodeByFrame: Map<number, CausalGraphNode | null>; nodesByFrame: Map<number, CausalGraphNode[]>; turnIds: string[]; frameToRound: number[] } {
   const rounds = new Set<number>();
   if (trace?.nodes) {
     for (const n of trace.nodes) {
@@ -90,22 +90,35 @@ function buildFrames(
       if (typeof n.round === 'number' && n.round >= 0) rounds.add(n.round);
     }
   }
-  const sorted = [...rounds].sort((a, b) => a - b);
-  const count = sorted.length > 0 ? sorted[sorted.length - 1] + 1 : 0;
 
-  const nodeByFrame = new Map<number, CausalGraphNode | null>();
+  const nodesByRound = new Map<number, CausalGraphNode[]>();
+  const nodeByRound = new Map<number, CausalGraphNode | null>();
   if (graph?.nodes) {
     for (const node of graph.nodes) {
       if (typeof node.round === 'number' && node.round >= 0) {
-        if (!nodeByFrame.has(node.round)) nodeByFrame.set(node.round, node);
+        if (!nodeByRound.has(node.round)) nodeByRound.set(node.round, node);
+        const list = nodesByRound.get(node.round) ?? [];
+        list.push(node);
+        nodesByRound.set(node.round, list);
       }
     }
   }
-  const turnIds: string[] = [];
-  for (let i = 0; i < count; i += 1) {
-    turnIds.push(`turn_${i}`);
+
+  const sortedRounds = [...rounds].sort((a, b) => a - b);
+  const populatedRounds = sortedRounds.filter(r => (nodesByRound.get(r)?.length ?? 0) > 0);
+  const frameToRound = populatedRounds.length > 0 ? populatedRounds : sortedRounds;
+  const count = frameToRound.length;
+
+  const nodeByFrame = new Map<number, CausalGraphNode | null>();
+  const nodesByFrame = new Map<number, CausalGraphNode[]>();
+  for (let i = 0; i < count; i++) {
+    const round = frameToRound[i];
+    nodeByFrame.set(i, nodeByRound.get(round) ?? null);
+    nodesByFrame.set(i, nodesByRound.get(round) ?? []);
   }
-  return { count, nodeByFrame, turnIds };
+
+  const turnIds = frameToRound.map(r => `turn_${r}`);
+  return { count, nodeByFrame, nodesByFrame, turnIds, frameToRound };
 }
 
 function pickActiveAgent(
@@ -179,7 +192,7 @@ export function ReplayView() {
     fetchAll();
   }, [capabilityError, enabled, fetchAll]);
 
-  const { count: totalFrames, nodeByFrame } = useMemo(
+  const { count: totalFrames, nodeByFrame, nodesByFrame, frameToRound } = useMemo(
     () => buildFrames(trace, graph),
     [trace, graph],
   );
@@ -351,17 +364,45 @@ export function ReplayView() {
 
           <section
             aria-label={t('replay.trace.aria_label', 'Replay trace')}
-            style={{
-              marginTop: '1rem', padding: '0.75rem 1rem',
-              border: '1px solid var(--color-border, #333)',
-              borderRadius: 8,
-            }}
+            style={{ marginTop: '1rem' }}
           >
-            <p style={{ margin: 0, fontSize: 13, color: 'var(--color-muted, #888)' }}>
+            <p style={{ margin: '0 0 0.75rem', fontSize: 13, color: 'var(--color-muted, #888)' }}>
               {t('replay.trace.frame_count_label', 'Frame')}: {frameIndex + 1} / {totalFrames}
+              {frameToRound[frameIndex] != null && ` · Round ${frameToRound[frameIndex]}`}
               {` · `}
               {t('replay.trace.branches_label', 'Branches')}: {trace?.nodes.length ?? 0}
             </p>
+            <div role="log" aria-live="polite" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {(nodesByFrame.get(frameIndex) ?? []).map(node => {
+                const p = (typeof node.payload === 'object' && node.payload !== null && !Array.isArray(node.payload))
+                  ? node.payload as Record<string, unknown>
+                  : {};
+                const agentName = typeof p.agent_name === 'string' && p.agent_name.trim() ? p.agent_name.trim() : (typeof p.agent_id === 'string' ? p.agent_id.slice(0, 8) : '?');
+                const content = typeof p.content === 'string' ? p.content : (node.label || '');
+                const emotion = typeof p.emotion === 'string' ? p.emotion : null;
+                return (
+                  <div key={node.id} style={{
+                    padding: '0.75rem 1rem',
+                    border: '1px solid var(--color-border, #e2e8f0)',
+                    borderRadius: 8,
+                    borderLeft: '3px solid var(--color-primary, #8b5cf6)',
+                    background: 'var(--color-surface, #fff)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                      <strong style={{ fontSize: 14, color: 'var(--color-text, #1e293b)' }}>{agentName}</strong>
+                      {emotion && <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, background: 'var(--color-muted-bg, #f1f5f9)', color: 'var(--color-muted, #64748b)' }}>{emotion}</span>}
+                      <span style={{ fontSize: 11, color: 'var(--color-muted, #94a3b8)', marginLeft: 'auto' }}>R{node.round ?? '?'}</span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--color-text-secondary, #475569)' }}>{content}</p>
+                  </div>
+                );
+              })}
+              {(nodesByFrame.get(frameIndex) ?? []).length === 0 && (
+                <p style={{ fontSize: 13, color: 'var(--color-muted, #94a3b8)', fontStyle: 'italic' }}>
+                  {t('replay.trace.no_events_frame', 'No events for this frame.')}
+                </p>
+              )}
+            </div>
           </section>
         </>
       )}

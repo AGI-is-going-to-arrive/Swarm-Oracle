@@ -42,7 +42,8 @@ import {
   TYPE_LABEL_I18N as GRAPH_TYPE_LABEL_I18N,
   EVIDENCE_TIER_COLORS,
 } from '../lib/graphTokens';
-import { traceConnectedPath, PERF_ANIMATION_LIMIT } from '../lib/graphTraversal';
+import { traceConnectedPath, buildParallelEdgeIndex, PERF_ANIMATION_LIMIT } from '../lib/graphTraversal';
+import { resolveCausalNodeColors } from '../lib/dagEditorialTokens';
 
 // ── Custom node type (stable reference) ────────────────────
 
@@ -219,6 +220,9 @@ function getCausalEdgeRelationLabel(
   let base: string;
   if (edge.label && edge.label.trim()) base = edge.label.trim();
   else if (edge.type === 'temporal') base = t('causal.edge_temporal', 'precedes');
+  else if (edge.type === 'responds_to') base = t('causal.edge_responds_to', 'responds to');
+  else if (edge.type === 'supports_stance') base = t('causal.edge_supports_stance', 'aligns with');
+  else if (edge.type === 'opposes_stance') base = t('causal.edge_opposes_stance', 'opposes');
   else base = t('causal.edge_caused', 'causes');
   const roundNum = edge.evidence?.source_round_number;
   if (roundNum != null) {
@@ -259,27 +263,6 @@ function extractAvailableBranches(data: Pick<CausalGraphData, 'nodes' | 'availab
 }
 
 // ── Layout ──────────────────────────────────────────────────
-
-function buildParallelEdgeIndex(edges: GraphEdgeData[]): Map<string, number> {
-  const groupCount = new Map<string, number>();
-  const indexMap = new Map<string, number>();
-  for (const e of edges) {
-    const pairKey = [e.source, e.target].sort().join('::');
-    const count = groupCount.get(pairKey) ?? 0;
-    indexMap.set(e.id, count);
-    groupCount.set(pairKey, count + 1);
-  }
-  const result = new Map<string, number>();
-  for (const e of edges) {
-    const pairKey = [e.source, e.target].sort().join('::');
-    const total = groupCount.get(pairKey) ?? 1;
-    if (total <= 1) continue;
-    const idx = indexMap.get(e.id) ?? 0;
-    const offset = (idx - (total - 1) / 2) * 20;
-    result.set(e.id, offset);
-  }
-  return result;
-}
 
 function layoutDagre(
   nodes: GraphNodeData[],
@@ -329,6 +312,8 @@ function layoutDagre(
         iconName: NODE_ICONS[n.type] ?? '',
         bgColor: NODE_TYPE_COLORS_HEX[n.type] ?? CAUSAL_COLORS.decorativeNodeFallback,
         borderColor: '',
+        accentColor: resolveCausalNodeColors(n.type, 'dark').accent,
+        round: n.round ?? undefined,
         dimmed: false,
         selected: false,
         connected: false,

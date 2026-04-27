@@ -20,7 +20,7 @@ export const THEATER_TIME_LABELS: Record<string, string> = {
   night: 'sim.theater_time.night',
 };
 
-export const WARMUP_RECOVERY_INTERVAL_MS = 1500;
+export const WARMUP_RECOVERY_INTERVAL_MS = 800;
 export const WARMUP_RECOVERY_MAX_ATTEMPTS = 10;
 export const TAIL_STATUS_SYNC_INTERVAL_MS = 600;
 

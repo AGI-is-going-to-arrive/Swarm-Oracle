@@ -1020,7 +1020,10 @@
       "edge_rebuts": "反驳",
       "edge_attacks": "攻击",
       "edge_accepted": "采纳",
-      "edge_unaddressed": "未回应"
+      "edge_unaddressed": "未回应",
+      "edge_responds_to": "回应",
+      "edge_supports_stance": "立场一致",
+      "edge_opposes_stance": "立场对立"
     },
     "compare": {
       "title": "反事实对比",

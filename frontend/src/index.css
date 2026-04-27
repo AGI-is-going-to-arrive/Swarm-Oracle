@@ -963,6 +963,19 @@ body.has-argument-map .lang-switch--global {
   border-radius: var(--radius-md);
   overflow: hidden;
 }
+.kg-canvas-shell::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(circle, var(--kg-dot-color, rgba(148,163,184,0.12)) 1px, transparent 1px);
+  background-size: 24px 24px;
+  z-index: 0;
+}
 .kg-canvas-shell:focus-visible {
   box-shadow: 0 0 0 2px var(--color-primary);
 }
@@ -1087,6 +1100,7 @@ body.has-argument-map .lang-switch--global {
 @media (prefers-reduced-motion: reduce) {
   .kg-loading-skeleton { animation: none; }
   .kg-quickcard { animation: none; }
+  .kg-canvas-shell::after { display: none; }
 }
 
 /* ── DAG Editorial (P6 Phase 3) ─────────────────────────── */

@@ -249,7 +249,7 @@ export default function KGExplorerView() {
         id: n.id,
         type: 'circle' as const,
         style: { labelText: n.label, labelPlacement: 'bottom' as const },
-        data: { kgType: n.type, kgRound: n.round },
+        data: { kgType: n.type, kgRound: n.round, agentId: null },
       })),
       edges: graphData.edges
         .filter((e) => keptIds.has(e.source) && keptIds.has(e.target))

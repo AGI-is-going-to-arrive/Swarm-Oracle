@@ -47,6 +47,9 @@ export const EDGE_STYLES: Record<string, EdgeStyleDef> = {
   attacks: { stroke: '#e74c3c', animated: true },
   accepted: { stroke: '#4a90d9', animated: false },
   unaddressed: { stroke: '#888', strokeDasharray: '2 4', animated: false },
+  responds_to: { stroke: '#3498db', animated: false },
+  supports_stance: { stroke: '#27ae60', animated: false },
+  opposes_stance: { stroke: '#e74c3c', strokeDasharray: '6 3', animated: false },
 };
 
 // ── Lucide Icon Names (by node type) ────────────────────────

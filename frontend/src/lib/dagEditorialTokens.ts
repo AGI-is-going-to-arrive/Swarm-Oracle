@@ -30,3 +30,17 @@ export function resolveDAGNodeColors(nodeType: string, theme: 'light' | 'dark') 
   const colors = DAG_NODE_TYPE_COLORS[nodeType] ?? DAG_NODE_TYPE_COLORS.default;
   return theme === 'dark' ? colors.dark : colors;
 }
+
+export const CAUSAL_NODE_TYPE_COLORS: Record<string, string> = {
+  event: 'default',
+  intervention: 'evidence',
+  stance_shift: 'rebuttal',
+  fork: 'claim',
+  round: 'default',
+  verdict: 'verdict',
+};
+
+export function resolveCausalNodeColors(nodeType: string, theme: 'light' | 'dark') {
+  const dagType = CAUSAL_NODE_TYPE_COLORS[nodeType] ?? 'default';
+  return resolveDAGNodeColors(dagType, theme);
+}

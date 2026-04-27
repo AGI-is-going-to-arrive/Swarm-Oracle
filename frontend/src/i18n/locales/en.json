@@ -1020,7 +1020,10 @@
       "edge_rebuts": "rebuts",
       "edge_attacks": "attacks",
       "edge_accepted": "accepted",
-      "edge_unaddressed": "unaddressed"
+      "edge_unaddressed": "unaddressed",
+      "edge_responds_to": "responds to",
+      "edge_supports_stance": "aligns with",
+      "edge_opposes_stance": "opposes"
     },
     "compare": {
       "title": "Counterfactual Compare",

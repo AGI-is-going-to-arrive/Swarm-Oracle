@@ -113,11 +113,11 @@ describe('getKGEdgeStyle', () => {
     expect(dark.stroke).not.toBe(light.stroke);
   });
 
-  it('always returns lineWidth 1 and opacity 0.6', () => {
-    expect(getKGEdgeStyle('dark').lineWidth).toBe(1);
-    expect(getKGEdgeStyle('dark').opacity).toBe(0.6);
-    expect(getKGEdgeStyle('light').lineWidth).toBe(1);
-    expect(getKGEdgeStyle('light').opacity).toBe(0.6);
+  it('always returns lineWidth 1.6 and opacity 0.82', () => {
+    expect(getKGEdgeStyle('dark').lineWidth).toBe(1.6);
+    expect(getKGEdgeStyle('dark').opacity).toBe(0.82);
+    expect(getKGEdgeStyle('light').lineWidth).toBe(1.6);
+    expect(getKGEdgeStyle('light').opacity).toBe(0.82);
   });
 });
 
@@ -389,19 +389,20 @@ describe('KG_DEGRADE_THRESHOLDS edgeLabelLimit', () => {
 // ── Add-S1: EDGE_TYPE_LABEL_I18N ──────────────────────────
 
 describe('EDGE_TYPE_LABEL_I18N', () => {
-  it('contains exactly 7 edge type keys', () => {
+  it('contains exactly 10 edge type keys', () => {
     const keys = Object.keys(EDGE_TYPE_LABEL_I18N);
-    expect(keys).toHaveLength(7);
+    expect(keys).toHaveLength(10);
     expect(keys).toEqual(expect.arrayContaining([
       'caused', 'supports', 'temporal', 'rebuts', 'attacks', 'accepted', 'unaddressed',
+      'responds_to', 'supports_stance', 'opposes_stance',
     ]));
   });
 
   it('each entry is a [i18nKey, fallback] tuple', () => {
-    for (const [type, tuple] of Object.entries(EDGE_TYPE_LABEL_I18N)) {
+    for (const [, tuple] of Object.entries(EDGE_TYPE_LABEL_I18N)) {
       expect(tuple).toHaveLength(2);
       expect(tuple[0]).toContain('causal.edge_');
-      expect(tuple[1]).toBe(type);
+      expect(typeof tuple[1]).toBe('string');
     }
   });
 });
@@ -665,5 +666,92 @@ describe('P6 hover-activate regression guard', () => {
     expect(hoverBehavior!.direction).toBe('both');
     expect(hoverBehavior!.state).toBe('active');
     expect(hoverBehavior!.inactiveState).toBe('inactive');
+  });
+});
+
+// ── P7 Stage 4: Agent Palette + readAgentId ──��──────────
+
+import { KG_AGENT_PALETTE, readAgentId, hashStringToIndex } from './kgGraphConfig';
+
+describe('readAgentId', () => {
+  it('extracts agent_id from a valid payload', () => {
+    expect(readAgentId({ agent_id: 'agent-abc' })).toBe('agent-abc');
+  });
+
+  it('returns null for null/undefined payload', () => {
+    expect(readAgentId(null)).toBeNull();
+    expect(readAgentId(undefined)).toBeNull();
+  });
+
+  it('returns null for non-object payload', () => {
+    expect(readAgentId('string')).toBeNull();
+    expect(readAgentId(42)).toBeNull();
+  });
+
+  it('returns null for empty or whitespace-only agent_id', () => {
+    expect(readAgentId({ agent_id: '' })).toBeNull();
+    expect(readAgentId({ agent_id: '   ' })).toBeNull();
+  });
+
+  it('returns null when agent_id is not a string', () => {
+    expect(readAgentId({ agent_id: 123 })).toBeNull();
+    expect(readAgentId({ agent_id: null })).toBeNull();
+  });
+
+  it('trims whitespace from agent_id', () => {
+    expect(readAgentId({ agent_id: '  agent-x  ' })).toBe('agent-x');
+  });
+});
+
+describe('hashStringToIndex', () => {
+  it('returns a value within [0, mod)', () => {
+    for (const str of ['abc', 'def', '你好', '']) {
+      const idx = hashStringToIndex(str, 15);
+      expect(idx).toBeGreaterThanOrEqual(0);
+      expect(idx).toBeLessThan(15);
+    }
+  });
+
+  it('returns deterministic results', () => {
+    expect(hashStringToIndex('agent-1', 15)).toBe(hashStringToIndex('agent-1', 15));
+  });
+
+  it('returns 0 when mod is zero or negative', () => {
+    expect(hashStringToIndex('test', 0)).toBe(0);
+    expect(hashStringToIndex('test', -1)).toBe(0);
+  });
+});
+
+describe('KG_AGENT_PALETTE', () => {
+  it('has 15 colors', () => {
+    expect(KG_AGENT_PALETTE).toHaveLength(15);
+  });
+
+  it('all entries are hex color strings', () => {
+    for (const color of KG_AGENT_PALETTE) {
+      expect(color).toMatch(/^#[0-9a-fA-F]{6}$/);
+    }
+  });
+});
+
+describe('toKgG6Data agentId passthrough', () => {
+  it('sets agentId from payload.agent_id', () => {
+    const graph: GraphPayload = {
+      id: 'g1',
+      nodes: [{ id: 'n1', key: 'k1', type: 'event', label: 'A', round: 1, payload: { agent_id: 'agent-x' } }],
+      edges: [],
+    };
+    const result = toKgG6Data(graph);
+    expect(result.nodes[0].data.agentId).toBe('agent-x');
+  });
+
+  it('sets agentId to null for nodes without payload', () => {
+    const graph: GraphPayload = {
+      id: 'g1',
+      nodes: [{ id: 'n1', key: 'k1', type: 'fork', label: 'F', round: 2, payload: null }],
+      edges: [],
+    };
+    const result = toKgG6Data(graph);
+    expect(result.nodes[0].data.agentId).toBeNull();
   });
 });

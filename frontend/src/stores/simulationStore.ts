@@ -324,8 +324,10 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         // Ignored — we no longer use token-level streaming
         break;
 
-      case 'agent_speak':
+      case 'agent_speak': {
         // Final message — add to messages (with dedup + cap), remove from thinking
+        const preState = useSimulationStore.getState();
+        const agentsEmpty = preState.agents.length === 0;
         set((state) => {
           const d = event.data;
           const dedupKey = messageDedupKey(d, state.scenario?.id);
@@ -354,7 +356,11 @@ export const useSimulationStore = create<SimulationState>((set) => ({
             ),
           };
         });
+        if (agentsEmpty && preState.scenario?.id) {
+          void useSimulationStore.getState().loadScenario(preState.scenario.id);
+        }
         break;
+      }
 
       case 'round_summary':
         set((state) => {

@@ -39,15 +39,15 @@ export const DEFAULT_KG_LAYOUT: LayoutOptionsShape = {
   type: 'd3-force',
   preventOverlap: true,
   nodeSize: KG_DEGREE_SCALE.max,
-  linkDistance: 50,
-  nodeStrength: -120,
-  edgeStrength: 0.6,
-  collideStrength: 1,
-  centerStrength: 1,
-  x: { strength: 0.08 },
-  y: { strength: 0.08 },
-  alphaDecay: 0.028,
-  alphaMin: 0.01,
+  linkDistance: 95,
+  nodeStrength: -230,
+  edgeStrength: 0.5,
+  collideStrength: 0.9,
+  centerStrength: 0.6,
+  x: { strength: 0.05 },
+  y: { strength: 0.05 },
+  alphaDecay: 0.025,
+  alphaMin: 0.008,
 };
 
 export const NODE_HALO_STROKE = { dark: '#f8fafc', light: '#0f172a' } as const;
@@ -60,7 +60,31 @@ export const EDGE_TYPE_LABEL_I18N: Record<string, [string, string]> = {
   attacks: ['causal.edge_attacks', 'attacks'],
   accepted: ['causal.edge_accepted', 'accepted'],
   unaddressed: ['causal.edge_unaddressed', 'unaddressed'],
+  responds_to: ['causal.edge_responds_to', 'responds to'],
+  supports_stance: ['causal.edge_supports_stance', 'aligns with'],
+  opposes_stance: ['causal.edge_opposes_stance', 'opposes'],
 };
+
+export const KG_AGENT_PALETTE = [
+  '#FF6B35', '#004E89', '#7B2D8E', '#1A936F', '#C5283D',
+  '#E9724C', '#3498db', '#9b59b6', '#27ae60', '#f39c12',
+  '#e74c3c', '#1abc9c', '#e67e22', '#2c3e50', '#16a085',
+] as const;
+
+export function readAgentId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const raw = (payload as { agent_id?: unknown }).agent_id;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+export function hashStringToIndex(str: string, mod: number): number {
+  if (mod <= 0) return 0;
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  }
+  return ((hash % mod) + mod) % mod;
+}
 
 const DEFAULT_NODE_COLOR = '#888888';
 
@@ -114,8 +138,8 @@ export function getKGEdgeStyle(
   const tokens = resolveKGG6Tokens(theme);
   return {
     stroke: tokens.edgeStroke,
-    lineWidth: 1,
-    opacity: 0.6,
+    lineWidth: 1.6,
+    opacity: 0.82,
   };
 }
 
@@ -161,7 +185,7 @@ export function toKgG6Data(
         labelText: n.label,
         labelPlacement: 'bottom' as const,
       },
-      data: { kgType: n.type, kgRound: n.round },
+      data: { kgType: n.type, kgRound: n.round, agentId: readAgentId(n.payload) },
     })),
     edges: graph.edges
       .filter((e) => keptIds.has(e.source) && keptIds.has(e.target))
@@ -181,7 +205,7 @@ export function toKgG6Data(
             labelBackground: true,
             labelBackgroundFill: tokens.edgeLabelBg,
             labelBackgroundRadius: 3,
-            labelFontSize: 9,
+            labelFontSize: 10,
             labelFill: tokens.edgeLabelFg,
           },
         };
@@ -194,7 +218,7 @@ export interface KgG6Node {
   id: string;
   type: 'circle';
   style: { labelText?: string; labelPlacement: 'bottom' };
-  data: { kgType: string; kgRound: number | null };
+  data: { kgType: string; kgRound: number | null; agentId: string | null };
 }
 
 export interface KgG6Edge {

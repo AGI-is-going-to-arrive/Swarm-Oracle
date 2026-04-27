@@ -791,8 +791,10 @@ def append_round_nodes(
                 emotion = _getfield(msg, "emotion", None)
                 content = _getfield(msg, "content", "") or ""
                 msg_id = _getfield(msg, "id", None)
+                agent_name = _getfield(msg, "agent_name", None)
                 payload_json = json.dumps({
                     "agent_id": agent_id,
+                    "agent_name": agent_name,
                     "emotion": emotion,
                     "stance_score": stance,
                     "branch_id": branch_id,

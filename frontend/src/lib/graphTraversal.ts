@@ -2,6 +2,29 @@ import type { Edge } from '@xyflow/react';
 
 export const PERF_ANIMATION_LIMIT = 150;
 
+export function buildParallelEdgeIndex(
+  edges: readonly { id: string; source: string; target: string }[],
+): Map<string, number> {
+  const groupCount = new Map<string, number>();
+  const indexMap = new Map<string, number>();
+  for (const e of edges) {
+    const pairKey = [e.source, e.target].sort().join('::');
+    const count = groupCount.get(pairKey) ?? 0;
+    indexMap.set(e.id, count);
+    groupCount.set(pairKey, count + 1);
+  }
+  const result = new Map<string, number>();
+  for (const e of edges) {
+    const pairKey = [e.source, e.target].sort().join('::');
+    const total = groupCount.get(pairKey) ?? 1;
+    if (total <= 1) continue;
+    const idx = indexMap.get(e.id) ?? 0;
+    const offset = (idx - (total - 1) / 2) * 20;
+    result.set(e.id, offset);
+  }
+  return result;
+}
+
 export function traceConnectedPath(
   nodeId: string,
   edges: Edge[],

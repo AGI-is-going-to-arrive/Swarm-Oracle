@@ -4,7 +4,11 @@ import { ExportPanel } from '../ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from '../NodeDetailPanel';
 import GraphNodeCard from '../GraphNodeCard';
 import { useScenarioGraph, type GraphErrorState } from '../../hooks/useScenarioGraph';
-import { PERF_ANIMATION_LIMIT } from '../../lib/graphTraversal';
+import { traceConnectedPath, buildParallelEdgeIndex, PERF_ANIMATION_LIMIT } from '../../lib/graphTraversal';
+import { resolveCausalNodeColors } from '../../lib/dagEditorialTokens';
+import useMediaQueryState from '../../hooks/useMediaQueryState';
+import useReducedMotion from '../../hooks/useReducedMotion';
+import AnimatedEdge from '../AnimatedEdge';
 import dagre from 'dagre';
 import {
   ReactFlow,
@@ -23,6 +27,7 @@ import {
   NODE_TYPE_COLORS_HEX,
   EDGE_STYLES,
   NODE_ICONS,
+  EVIDENCE_TIER_COLORS,
   TYPE_LABEL_I18N as GRAPH_TYPE_LABEL_I18N,
 } from '../../lib/graphTokens';
 
@@ -67,6 +72,7 @@ export interface CausalGraphBoardProps {
 // ── Constants ───────────────────────────────────────────────
 
 const nodeTypes = { graphCard: GraphNodeCard };
+const edgeTypes = { animated: AnimatedEdge };
 
 const COLORS = {
   textMuted: '#9aa4b2',
@@ -84,40 +90,17 @@ const COLORS = {
   decorativeLegendFallback: '#666',
 } as const;
 
-const NODE_W = 200;
-const NODE_H = 50;
+const NODE_W = 280;
+const NODE_H = 120;
+const LARGE_GRAPH_THRESHOLD = 50;
+const LARGE_GRAPH_NODE_W = 280;
+const LARGE_GRAPH_NODE_H = 58;
 const PERF_TOOLTIP_LIMIT = 150;
 const PERF_TEXT_FALLBACK_LIMIT = 500;
 const NO_ARROW_TYPES = new Set(['temporal']);
 const GRAPH_COMPACT_MEDIA_QUERY = '(max-width: 768px)';
 
-const EVIDENCE_TIER_COLORS: Record<string, string> = {
-  high: '#4caf50',
-  medium: '#ffb300',
-  low: '#9e9e9e',
-};
-
 // ── Helpers ─────────────────────────────────────────────────
-
-function useMediaQueryState(query: string) {
-  const [matches, setMatches] = useState(() => (
-    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia(query).matches
-      : false
-  ));
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-    const mql = window.matchMedia(query);
-    const handle = (e: MediaQueryListEvent | MediaQueryList) => setMatches(e.matches);
-    if (typeof mql.addEventListener === 'function') {
-      mql.addEventListener('change', handle as EventListener);
-      return () => mql.removeEventListener('change', handle as EventListener);
-    }
-    mql.addListener?.(handle as (e: MediaQueryListEvent) => void);
-    return () => mql.removeListener?.(handle as (e: MediaQueryListEvent) => void);
-  }, [query]);
-  return matches;
-}
 
 function getCausalTypeLabel(type: string, t: (k: string, f: string) => string): string {
   const pair = GRAPH_TYPE_LABEL_I18N[type];
@@ -132,6 +115,9 @@ function getCausalEdgeRelationLabel(edge: GraphEdgeData, t: (k: string, f: strin
   let base: string;
   if (edge.label?.trim()) base = edge.label.trim();
   else if (edge.type === 'temporal') base = t('causal.edge_temporal', 'precedes');
+  else if (edge.type === 'responds_to') base = t('causal.edge_responds_to', 'responds to');
+  else if (edge.type === 'supports_stance') base = t('causal.edge_supports_stance', 'aligns with');
+  else if (edge.type === 'opposes_stance') base = t('causal.edge_opposes_stance', 'opposes');
   else base = t('causal.edge_caused', 'causes');
   const roundNum = edge.evidence?.source_round_number;
   if (roundNum != null) return `${base} (R${roundNum})`;
@@ -162,15 +148,24 @@ function layoutDagre(
   edges: GraphEdgeData[],
   t: (k: string, f: string) => string,
   compactViewport: boolean,
+  reducedMotion: boolean,
 ): { nodes: Node[]; edges: Edge[] } {
+  const isLargeGraph = nodes.length > LARGE_GRAPH_THRESHOLD;
+  const nodeW = isLargeGraph ? LARGE_GRAPH_NODE_W : NODE_W;
+  const nodeH = isLargeGraph ? LARGE_GRAPH_NODE_H : NODE_H;
+
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: compactViewport ? 'TB' : 'LR', ranksep: 80, nodesep: 40 });
-  for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
+  g.setGraph({
+    rankdir: compactViewport ? 'TB' : 'LR',
+    ranksep: isLargeGraph ? 60 : 120,
+    nodesep: isLargeGraph ? 16 : 100,
+  });
+  for (const n of nodes) g.setNode(n.id, { width: nodeW, height: nodeH });
   for (const e of edges) g.setEdge(e.source, e.target);
   dagre.layout(g);
 
-  const disableAnim = nodes.length > PERF_ANIMATION_LIMIT;
+  const disableAnim = reducedMotion || nodes.length > PERF_ANIMATION_LIMIT;
   const tooltipDisabled = nodes.length > PERF_TOOLTIP_LIMIT;
 
   const flowNodes: Node[] = nodes.map(n => {
@@ -183,7 +178,7 @@ function layoutDagre(
     return {
       id: n.id,
       type: 'graphCard',
-      position: { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 },
+      position: { x: pos.x - nodeW / 2, y: pos.y - nodeH / 2 },
       focusable: false,
       ariaLabel,
       data: {
@@ -194,6 +189,8 @@ function layoutDagre(
         iconName: NODE_ICONS[n.type] ?? '',
         bgColor: NODE_TYPE_COLORS_HEX[n.type] ?? COLORS.decorativeNodeFallback,
         borderColor: '',
+        accentColor: resolveCausalNodeColors(n.type, 'dark').accent,
+        round: n.round ?? undefined,
         dimmed: false,
         selected: false,
         connected: false,
@@ -206,27 +203,34 @@ function layoutDagre(
     };
   });
 
+  const parallelOffsets = buildParallelEdgeIndex(edges);
+
   const flowEdges: Edge[] = edges.map(e => {
     const style = EDGE_STYLES[e.type];
     const stroke = style?.stroke ?? COLORS.decorativeEdgeFallback;
     const tier = e.evidence?.confidence_tier;
     const tierColor = tier ? EVIDENCE_TIER_COLORS[tier] ?? undefined : undefined;
     const roundNum = e.evidence?.source_round_number;
-    const baseLabel = e.label ?? undefined;
+    const baseLabel = getCausalEdgeRelationLabel(e, t);
     const labelParts: string[] = [];
     if (baseLabel) labelParts.push(baseLabel);
-    if (roundNum != null) labelParts.push(`R${roundNum}`);
+    if (roundNum != null && !baseLabel.includes(`R${roundNum}`)) labelParts.push(`R${roundNum}`);
     if (tier) labelParts.push(`[${getEvidenceTierLabel(tier, t)}]`);
     const edgeLabel = labelParts.length > 0 ? labelParts.join(' ') : undefined;
+    const offset = parallelOffsets.get(e.id) ?? 0;
     return {
       id: e.id,
       source: e.source,
       target: e.target,
+      type: 'animated',
       label: edgeLabel,
       animated: !disableAnim && (style?.animated ?? false),
+      selected: false,
       style: { stroke, strokeDasharray: style?.strokeDasharray },
       labelStyle: tierColor ? { fill: tierColor, fontSize: 10, fontWeight: 600 } : undefined,
       markerEnd: NO_ARROW_TYPES.has(e.type) ? undefined : { type: MarkerType.ArrowClosed, color: stroke },
+      data: { parallelOffset: offset, reducedMotion },
+      ...(offset !== 0 ? { pathOptions: { offset } } : {}),
     };
   });
 
@@ -243,6 +247,7 @@ export default function CausalGraphBoard({
 }: CausalGraphBoardProps) {
   const { t } = useTranslation();
   const isCompactViewport = useMediaQueryState(GRAPH_COMPACT_MEDIA_QUERY);
+  const reducedMotion = useReducedMotion();
 
   const {
     data: graphData,
@@ -299,8 +304,8 @@ export default function CausalGraphBoard({
 
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
-    return layoutDagre(filteredData.nodes, filteredData.edges, translate, isCompactViewport);
-  }, [filteredData, isCompactViewport, isNonInteractiveFallback, translate]);
+    return layoutDagre(filteredData.nodes, filteredData.edges, translate, isCompactViewport, reducedMotion);
+  }, [filteredData, isCompactViewport, isNonInteractiveFallback, translate, reducedMotion]);
 
   const layoutSignature = useMemo(() => (
     `${layoutResult.nodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutResult.edges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
@@ -324,15 +329,10 @@ export default function CausalGraphBoard({
     if (!filteredData.nodes.some(n => n.id === selectedNode.id)) setSelectedNode(null);
   }, [selectedNode, filteredData]);
 
-  const neighborSet = useMemo(() => {
-    if (!selectedNode || !filteredData) return null;
-    const set = new Set<string>([selectedNode.id]);
-    for (const e of filteredData.edges) {
-      if (e.source === selectedNode.id) set.add(e.target);
-      if (e.target === selectedNode.id) set.add(e.source);
-    }
-    return set;
-  }, [selectedNode, filteredData]);
+  const highlightedPath = useMemo(() => {
+    if (!selectedNode || layoutResult.edges.length === 0) return null;
+    return traceConnectedPath(selectedNode.id, layoutResult.edges);
+  }, [selectedNode, layoutResult.edges]);
 
   useEffect(() => {
     setFlowNodes(prev => prev.map(n => ({
@@ -340,22 +340,26 @@ export default function CausalGraphBoard({
       data: {
         ...n.data,
         selected: selectedNode?.id === n.id,
-        connected: Boolean(neighborSet && selectedNode?.id !== n.id && neighborSet.has(n.id)),
+        connected: Boolean(highlightedPath && selectedNode?.id !== n.id && highlightedPath.has(n.id)),
         expanded: selectedNode?.id === n.id,
-        dimmed: neighborSet ? !neighborSet.has(n.id) : false,
+        dimmed: highlightedPath ? !highlightedPath.has(n.id) : false,
       },
     })));
-  }, [neighborSet, selectedNode?.id, setFlowNodes]);
+  }, [highlightedPath, selectedNode?.id, setFlowNodes]);
 
   useEffect(() => {
     setFlowEdges(prev => {
-      if (!neighborSet) return prev.map(e => ({ ...e, style: { ...e.style, opacity: 1 } }));
-      return prev.map(e => ({
-        ...e,
-        style: { ...e.style, opacity: (neighborSet.has(e.source) && neighborSet.has(e.target)) ? 1 : 0.24 },
-      }));
+      if (!highlightedPath) return prev.map(e => ({ ...e, selected: false, style: { ...e.style, opacity: 1 } }));
+      return prev.map(e => {
+        const onPath = highlightedPath.has(e.source) && highlightedPath.has(e.target);
+        return {
+          ...e,
+          selected: onPath,
+          style: { ...e.style, opacity: onPath ? 1 : 0.15 },
+        };
+      });
     });
-  }, [neighborSet, setFlowEdges]);
+  }, [highlightedPath, setFlowEdges]);
 
   const viewportFitOptions = useMemo(() => ({
     padding: isCompactViewport ? 0.2 : 0.24,
@@ -485,6 +489,7 @@ export default function CausalGraphBoard({
               nodes={flowNodes}
               edges={flowEdges}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onNodeClick={handleNodeClick}

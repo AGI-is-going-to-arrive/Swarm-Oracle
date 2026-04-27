@@ -7,10 +7,12 @@ import { useScenarioGraph } from '../../hooks/useScenarioGraph';
 import { NODE_TYPE_COLORS_HEX } from '../../lib/graphTokens';
 import {
   KG_DEGRADE_THRESHOLDS,
+  KG_AGENT_PALETTE,
   buildKgG6Options,
   computeNodeSize,
   getKGNodeStyle,
   toKgG6Data,
+  hashStringToIndex,
 } from '../../lib/kgGraphConfig';
 import { NodeDetailPanel, type NodeDetail } from '../NodeDetailPanel';
 import NodeQuickCard from './NodeQuickCard';
@@ -209,6 +211,8 @@ export default function KGGraphBoard({
         const size = computeNodeSize(degree);
         const nodeStyle = getKGNodeStyle(n.data.kgType, theme);
         const showNodeLabel = showAllNodeLabels;
+        const agentId = n.data.agentId;
+        const isEventWithAgent = n.data.kgType === 'event' && agentId;
         return {
           ...n,
           style: {
@@ -216,8 +220,10 @@ export default function KGGraphBoard({
             labelText: showNodeLabel ? n.style.labelText : undefined,
             size,
             fill: nodeStyle.fill,
-            stroke: nodeStyle.stroke,
-            lineWidth: nodeStyle.lineWidth,
+            stroke: isEventWithAgent
+              ? KG_AGENT_PALETTE[hashStringToIndex(agentId, KG_AGENT_PALETTE.length)]
+              : nodeStyle.stroke,
+            lineWidth: isEventWithAgent ? 3 : nodeStyle.lineWidth,
             labelFill: nodeStyle.textColor,
             labelFontSize: 11,
           },
