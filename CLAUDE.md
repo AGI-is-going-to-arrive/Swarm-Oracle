@@ -116,7 +116,7 @@ cd backend && alembic upgrade head
 
 - 后端核心服务 `ending_room_service` 已拆分为子模块包 (`_utils`, `_participants`, `_threads`, `_content`)，修改时注意 re-export 兼容性
 - `frontend/src/stores/worldlineRoundtableStore.ts` 是 `endingRoomStore` 的 re-export，不是 stub
-- 大文件注意：`EndingChatModal.tsx` (~1509 行)，`WorldlineRoundtableView.tsx` (~1848 行)
+- 大文件注意：`EndingChatModal.tsx` (~1509 行)，`WorldlineRoundtableView.tsx` (~2223 行)
 - LLM 客户端支持 BYOK (Bring Your Own Key)，前端通过 `LlmProviderRequestOptions` 传递
 - WebSocket 用于实时模拟推送，每个场景最多 50 个连接
 - Web 搜索增强：用户可在 InputView 开启搜索增强，推演前自动搜索真实世界背景注入 Agent 提示词（CORE/IMPORTANT/CROWD 三层），结果在 ResultView 展示来源卡片
@@ -129,15 +129,15 @@ cd backend && alembic upgrade head
 - campaign / ending-room REST 路由的 session gate 以 router 级 `dependencies` 统一注入，不再逐端点声明
 - Phase 3 六大功能增强 (F1-F6)：Agent 身份+跨场景记忆、世界线因果图谱、用户自建 Agent、蝴蝶效应回溯、涌现阵营系统、辩论论证图谱
 - 13 个新 ORM 模型分布在 `agent_identity.py`、`graph.py`、`checkpoint.py`，3 个 Alembic 迁移 (014-016)
-- 6 个新后端服务：`persona_workshop`、`agent_identity`、`causal_graph`、`replay`、`factions`、`debate_argument_map`
-- 2 个新 API router：`/api/agents/*`、`/api/graphs/*`；`/api/capabilities` 当前是 11-key 通用 capability registry（`web_search` + 10 个功能开关）
+- 8 个新后端服务：`persona_workshop`、`agent_identity`、`causal_graph`、`replay`、`factions`、`debate_argument_map`、`roundtable_survey`（圆桌问卷 SSE）、`roundtable_analyst`（ReACT 分析师 SSE）
+- 2 个新 API router：`/api/agents/*`、`/api/graphs/*`；`/api/capabilities` 当前是 13-key 通用 capability registry（`web_search` + 12 个功能开关）
 - 5 个新前端页面：`AgentWorkshopView`、`AgentLibrary`、`CausalReviewView`、`CompareDigestView`、`WorkbenchView`（图谱工作台，Causal/Split/KG 三种布局，compact 自动降级）
 - 9 个新前端组件：`AgentAttachPanel`、`ArgumentMap`（已 i18n 化，P2 新增搜索/过滤/拖拽控件）、`CounterfactualPanel`、`FactionTimeline`、`ReturningBadge`（已集成到 ResultView + capability gate）、`FactionForceGraph`（G6 力导向图 + sr-only 回退）、`HookSummaryPanel`（5 hook 状态卡片）、`GraphWorkbenchShell`（工作台分屏容器）、`LayoutSwitcher`（tab 切换栏）
 - 2 个新前端 hook：`useScenarioGraph`（共享图谱 fetch + requestId 防竞态）、`useHookSummary`（聚合 hook 状态，需 branchId）
 - `simulator.py` 新增 4 个非阻塞 hook：因果图谱、阵营检测+WS 事件发射、检查点写入、身份生命周期（场景结束时写入 growth_event + identity_memory，`asyncio.to_thread` 包装），均受 `FEATURE_*` 环境变量控制
 - `debate.py` 新增论证抽取 hook (每 turn 后) + verdict linking (finalize 后)，受 `FEATURE_ARGUMENT_MAP` 控制
 - `helpers.py` parse 后自动调 `resolve_identity()` 回填 `agent_identity_id`，自建 Agent 替换 CROWD 槽位并同步 `parsed_context`；自建 Agent 注入需通过 ownership 校验（`user_id is not None` + `identity.user_id == user_id`）
-- 当前 Phase 3 / graph-playability 相关 `FEATURE_*` 以 `config.py` 为准：常用项包括 `FEATURE_CUSTOM_AGENTS`、`FEATURE_AGENT_IDENTITY`、`FEATURE_CAUSAL_GRAPH`、`FEATURE_GRAPH_ANALYSIS`、`FEATURE_COUNTERFACTUAL_REPLAY`、`FEATURE_FACTIONS`、`FEATURE_ARGUMENT_MAP`、`FEATURE_REPLAY_TRACE`、`FEATURE_AGENT_CONVERSATION`、`FEATURE_KG_EXPLORER`、`FEATURE_IDENTITY_COMPACTION`。多数默认 `false`，`FEATURE_COUNTERFACTUAL_REPLAY` 默认 `true`；`graph_analysis` capability 还要求 `FEATURE_CAUSAL_GRAPH=true`
+- 当前 Phase 3 / graph-playability 相关 `FEATURE_*` 以 `config.py` 为准：常用项包括 `FEATURE_CUSTOM_AGENTS`、`FEATURE_AGENT_IDENTITY`、`FEATURE_CAUSAL_GRAPH`、`FEATURE_GRAPH_ANALYSIS`、`FEATURE_COUNTERFACTUAL_REPLAY`、`FEATURE_FACTIONS`、`FEATURE_ARGUMENT_MAP`、`FEATURE_REPLAY_TRACE`、`FEATURE_AGENT_CONVERSATION`、`FEATURE_KG_EXPLORER`、`FEATURE_IDENTITY_COMPACTION`、`FEATURE_ROUNDTABLE_SURVEY`、`FEATURE_ROUNDTABLE_ANALYST`。多数默认 `false`，`FEATURE_COUNTERFACTUAL_REPLAY` 默认 `true`；`graph_analysis` capability 还要求 `FEATURE_CAUSAL_GRAPH=true`
 - 前端 4 个新页面均通过 `useCapabilityCheck` hook 做 capability gate；当前会复用 `/api/capabilities` 结果，并把 `loading / enabled / error` 暴露给 consumer。capability probe 失败时，前端不再默认伪装成 disabled
 - `InputView` 集成 `AgentAttachPanel`，`ResultView` 集成因果图谱链接 + `CounterfactualPanel` + `FactionTimeline`，`DebateResultView` 集成 `ArgumentMap`，均受 capabilities 控制
 - ChromaDB 双层 memory：scenario-scoped (不变) + identity-scoped (`identity_{user_id}` collection，200 条 FIFO，写入经 `identity:{user_id}` 粒度串行化锁保护)
@@ -178,11 +178,20 @@ cd backend && alembic upgrade head
 - `FactionForceGraph.tsx` 内联 `usePrefersReducedMotion` 已替换为共享 `useReducedMotion` hook
 - `index.css` 新增 `dag-node-in`（250ms bounce-ease 入场）+ `dag-tooltip-in` + 7 个 `dag-empty-*` 空态骨架类 + `@media (prefers-reduced-motion: reduce)` guard
 - `ArgumentMap.test.tsx` 拆分为 3 个文件（core 18 + search 13 + integration 32 = 63）解决单文件 OOM，另有 `ArgumentMap.p6.test.tsx` 6 个纯函数测试
+- 圆桌优化（做减法+三模式融合）：Hero 区域操作按钮折叠为 "..." 下拉菜单（`HeroActionMenu`），隐藏 theme strip 和 stage note，Archive chips 从 6 减到 2（status + profile）；Phase Nav 新增 "深入探索" pill，点击展开 `PostVerdictPanel` 三 tab 面板（Agent 对话 / 分析师 / 问卷），仅在 verdict 完成后可用
+- `PostVerdictPanel.tsx`：三 tab 面板（agent_chat/analyst/survey），`role="tablist"` a11y 完整，受 `useCapabilityCheck('agent_conversation')` gate
+- `RoundtableAgentChat.tsx`：参与者选择器 + `NodeConversationSheet` 集成，通过 `nodeType: 'roundtable_participant'` 发起 per-agent 对话
+- `roundtable_survey.py`：圆桌问卷服务，SSE 流式返回各参与者回答，`asyncio.Semaphore(3)` 限制并发 LLM 调用，注入 identity memory + 场景上下文
+- `roundtable_analyst.py`：ReACT 分析师服务，3 个工具（query_causal_graph / search_identity_memories / search_web_context），最多 5 轮迭代，SSE 流式返回推理过程
+- `POST /api/scenario/{id}/survey` 和 `POST /api/scenario/{id}/analyst`：两个新 SSE 端点，在 `ending_rooms.py` 中实现，受 `FEATURE_ROUNDTABLE_SURVEY` / `FEATURE_ROUNDTABLE_ANALYST` gate
+- 圆桌硬编码文本已全面替换为 i18n key（`roundtable.*`），涉及阶段名、按钮标签、导出文本等
+- `TimelineBar` 推演中闪烁修复：`glowPulse` 动画周期从 2s 改为 3s，最低 opacity 从 0.4 提到 0.7，移除 `thinkingAgents.length` 高频依赖防止 `displayStatus` 快速振荡
 
 ## 变更记录 (Changelog)
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-28 | 圆桌优化：做减法 + 三模式融合 + 闪烁修复 | Hero 做减法（操作按钮折叠为 "..." 菜单，隐藏 theme strip + stage note，chips 6→2）；PostVerdictPanel 三 tab 探索面板（Agent 对话 / 分析师 / 问卷），Phase Nav "深入探索" pill 入口，仅 verdict 后可用；RoundtableAgentChat 参与者选择 + NodeConversationSheet 集成；后端 2 个新 SSE 服务（roundtable_survey Semaphore 并发 + roundtable_analyst ReACT 3 工具），2 个新端点 + 2 个 feature flag + capabilities 11→13 key；圆桌硬编码文本全面 i18n 化；TimelineBar 推演闪烁修复（glowPulse 2s→3s + opacity 0.4→0.7 + 移除 thinkingAgents 高频依赖）；i18n parity `1416=1416`；fresh baseline: frontend `163 files / 1735 tests / 0 failed`，tsc 0 errors |
 | 2026-04-28 | P7 图谱 mirofish 视觉升级 + Replay UI 重构 | ReplayView 全面重构（BEM CSS class 替代内联样式，Agent 头像色环 + 情绪 emoji + fork 卡片图标 + Pixel Theater 入口）；ReplayPlaybackControl SVG 图标按钮重写；ReplayTimelineScrubber 简洁数字计数；KG/DAG 色系双层分离（`NODE_TYPE_COLORS_HEX` 鲜明色给 DAG，新增 `KG_NODE_TYPE_FILLS` 暖灰色给 KG）；KG 节点双层编码（类型 fill + Agent stroke 色环，`KG_AGENT_PALETTE` 15 色暖色调）；KG 节点 label 优先显示 AgentName · R{round}；KG 图例默认展开 + 类型说明 + 交互提示；CausalGraphBoard + KGGraphBoard 集成 NodeConversationSheet（点击节点可发起 Agent 对话）；LayoutSwitcher tab 按钮改用暖色 CSS 变量（修复深色背景不可见）；后端 causal_graph.py event/stance_shift 节点 label 含 agent_name + Alembic 025 回填旧数据；i18n +25 keys，en/zh parity `1555=1555`；index.css +300 行 `.replay-*` CSS；fresh baseline: frontend `163 files / 1735 tests / 0 failed`，tsc 0 errors |
 | 2026-04-27 | P6 全量审查 + 10 项代码质量修复 | Codex+Claude 双模型交叉审查，Codex 验证 7 Warning 全部 TRUE + 发现 1 个功能 Bug；10 项修复：`graphTraversal.ts` BFS 重写为邻接表 O(V+E)（原 O(V*E)）+ 导出 `PERF_ANIMATION_LIMIT` 共享常量、`ArgumentMap.tsx` edge sync 补充 `type`/`selected`/`data` 修复 AnimatedEdge 不激活 Bug、`CausalReviewView.tsx` path-trace 依赖改为稳定 edge 结构签名（修复 `flowEdges.length` 隐藏的过时高亮）、`CausalReviewView` + `ArgumentMap` render-phase ref 副作用移入 useEffect（concurrent mode 兼容）、`useReducedMotion.ts` 删除无效 `queueMicrotask`（每次 mount 少一次 re-render）、新建 `hooks/useMediaQueryState.ts` 共享 hook（CausalReviewView + ArgumentMap 各删 ~25 行重复代码）、`KGGraphBoard.tsx` lockHighlight 加 staleness guard（防止节点已删除时 setElementState 报错）、`EdgeLabelTooltip.tsx` 提取 `HOVER_DELAY_MS` 命名常量、`CausalReviewView` + `ArgumentMap` + `CausalGraphBoard` 统一从 `graphTraversal.ts` 导入 `PERF_ANIMATION_LIMIT`；Playwright 浏览器实测 16/20 PASS（4 SKIP 因 LLM 依赖），mobile 375px 无溢出，Console 零 JS 错误；fresh baseline: frontend `159 files, 1677 tests, 0 failed`；tsc 0 errors + lint 0 errors(3 warnings) + build 0 violations |
 | 2026-04-27 | P6 Review 修复 + 重复代码消除 | 3 个 a11y Critical 修复：`AnimatedEdge.tsx` SVG circle 加 `aria-hidden`、`EdgeLabelTooltip.tsx` ARIA 结构重构（`role="tooltip"` 移到 detail card、`aria-describedby` 移到 pill span）+ timer 卸载清理、`dagEditorialTokens.ts` medium 色 `#eab308` → `#a16207`（WCAG AA 5.3:1）；4 项代码质量改进：BFS 路径追踪提取到 `lib/graphTraversal.ts`（`traceConnectedPath`，CausalReviewView + ArgumentMap 共用）、`EVIDENCE_TIER_COLORS` 提取到 `graphTokens.ts` 共用、CausalReviewView + ArgumentMap 入场动画 `layoutAppliedRef` 在数据切换时自动重置；Codex 验证 7 个 Warning 真实性（3 TRUE + 1 partial + 3 FALSE），仅修复经验证的真实问题；fresh baseline: frontend `159 files, 1677 tests, 0 failed`；tsc + lint(0 errors) + build(0 violations) 全通过 |

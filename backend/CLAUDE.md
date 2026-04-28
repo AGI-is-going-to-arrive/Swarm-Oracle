@@ -28,10 +28,12 @@ docker compose up backend
 | 路由前缀 | 文件 | 功能 |
 |----------|------|------|
 | `/api/scenario` | `api/scenarios.py` | 场景 CRUD、模拟启动、导入/导出 Replay、Web 搜索增强 |
-| `/api/capabilities` | `api/scenarios.py` | 11-key 通用 capability registry（无 LLM 调用） |
+| `/api/capabilities` | `api/scenarios.py` | 13-key 通用 capability registry（无 LLM 调用） |
 | `/api/debate` | `api/debate.py` | 辩论竞技场创建、快照、结果、预测投注 |
 | `/api/scenario/{id}/ending-room` | `api/ending_rooms.py` | 神谕密室 / 世界线圆桌创建、follow-up threads |
 | `/api/ending-room/{id}` | `api/ending_rooms.py` | 密室快照、结果、用户回合追加 |
+| `/api/scenario/{id}/survey` | `api/ending_rooms.py` | 圆桌问卷 SSE 端点，受 `FEATURE_ROUNDTABLE_SURVEY` gate |
+| `/api/scenario/{id}/analyst` | `api/ending_rooms.py` | 圆桌分析师 SSE 端点，受 `FEATURE_ROUNDTABLE_ANALYST` gate |
 | `/api/campaign` | `api/campaign.py` | Campaign 档案、徽章、精通度、每日挑战 |
 | `/api/scenario/{id}/predict` | `api/predictions.py` | 预测提交、评分、排行榜 |
 | `/api/scenario/{id}/intervene` | `api/interventions.py` | 蝴蝶效应干预（单次/回溯/批量） |
@@ -86,6 +88,8 @@ docker compose up backend
 | `FEATURE_ARGUMENT_MAP` | `false` | 启用辩论论证图谱 API + debate hook |
 | `FEATURE_REPLAY_TRACE` | `false` | 启用 replay branch lineage API |
 | `FEATURE_AGENT_CONVERSATION` | `false` | 启用图谱节点/结果追问 REST + SSE |
+| `FEATURE_ROUNDTABLE_SURVEY` | `false` | 启用圆桌问卷 SSE 端点 |
+| `FEATURE_ROUNDTABLE_ANALYST` | `false` | 启用圆桌 ReACT 分析师 SSE 端点 |
 | `FEATURE_KG_EXPLORER` | `false` | 启用 KG Explorer / Timeline Galaxy 前端 capability gate |
 | `FEATURE_IDENTITY_COMPACTION` | `false` | 启用 identity memory LLM 摘要压缩 |
 | `IDENTITY_COMPACT_THRESHOLD` | `50` | 压缩触发阈值（未压缩文档数） |
@@ -135,6 +139,8 @@ docker compose up backend
 | replay | `replay.py` | 反事实检查点/克隆/种子/比较 (Phase 3 F4) |
 | factions | `factions.py` | 阵营检测 + 聚类 + 背叛事件 (Phase 3 F5) |
 | debate_argument_map | `debate_argument_map.py` | 规则抽取 + 判决关联 (Phase 3 F6) |
+| roundtable_survey | `roundtable_survey.py` | 圆桌问卷 SSE 流式服务，Semaphore(3) 并发限制，注入 identity memory |
+| roundtable_analyst | `roundtable_analyst.py` | 圆桌 ReACT 分析师 SSE，3 工具 (query_causal_graph / search_identity_memories / search_web_context)，最多 5 轮 |
 | runtime_lock | `runtime_lock.py` | 运行时互斥锁 |
 | parser | `parser.py` | LLM 输出解析 |
 | lang_detect | `lang_detect.py` | 语言检测 |
@@ -168,7 +174,7 @@ backend/
     logging_utils.py     # 日志配置
     api/                 # REST/WS 路由 (10 个路由模块)
     models/              # ORM 模型 (8 个模型模块)
-    services/            # 业务逻辑 (21 个服务)
+    services/            # 业务逻辑 (23 个服务)
     visualization/       # 可视化映射 (5 个文件)
   alembic/               # 数据库迁移 (16 个版本)
   tests/                 # 测试 (67 个文件)

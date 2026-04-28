@@ -60,11 +60,13 @@ npm run test:watch # vitest (watch mode)
 | `ResultView.tsx` | 结果展示 (Summary-First 布局，含真实世界来源卡片，畸形数据防御) |
 | `DebateArenaView.tsx` | 辩论竞技场 |
 | `DebateResultView.tsx` | 辩论结果 |
-| `WorldlineRoundtableView.tsx` | 世界线圆桌 (~1848 行) |
+| `WorldlineRoundtableView.tsx` | 世界线圆桌 (~2223 行) |
 | `HistoryView.tsx` | 历史记录 |
 | `LeaderboardView.tsx` | 排行榜 |
 | `RoundtablePickerPanel.tsx` | 圆桌选择面板 (子组件) |
 | `RoundtableTranscriptList.tsx` | 圆桌对话列表 (子组件) |
+| `PostVerdictPanel.tsx` | 圆桌三模式探索面板 (agent_chat / analyst / survey 三 tab，verdict 后可用) |
+| `RoundtableAgentChat.tsx` | 圆桌参与者对话 (头像选择器 + NodeConversationSheet 集成) |
 | `roundtableHelpers.ts` | 圆桌辅助函数 |
 | `resultHelpers.ts` | 结果辅助函数 |
 | `simulationHelpers.ts` | 模拟辅助函数 |
@@ -201,7 +203,7 @@ npm run test:watch # vitest (watch mode)
 A: 它是 `endingRoomStore` 的 re-export，不是 stub。圆桌和密室共享同一个 store。
 
 **Q: 为什么 EndingChatModal 和 WorldlineRoundtableView 这么大?**
-A: 已通过提取 helper 函数和子组件进行拆分 (endingChatHelpers, roundtableHelpers, RoundtablePickerPanel, RoundtableTranscriptList 等)，但核心组件仍较大。
+A: 已通过提取 helper 函数和子组件进行拆分 (endingChatHelpers, roundtableHelpers, RoundtablePickerPanel, RoundtableTranscriptList, PostVerdictPanel, RoundtableAgentChat 等)，但核心组件仍较大。
 
 **Q: Phaser 和 React 如何通信?**
 A: 通过 `EventBridge` (自定义事件总线) 和 `PhaserGameLoader` (React 桥接组件)。
