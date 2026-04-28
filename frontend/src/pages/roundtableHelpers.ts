@@ -54,7 +54,7 @@ export function getParticipantSprite(participant: EndingRoomParticipant) {
 
 export function getThreadLabel(thread: EndingRoomThreadSnapshot, isZh: boolean) {
   return thread.mode === 'room'
-    ? (isZh ? '主桌记录' : 'Main table')
+    ? (isZh ? '主桌讨论' : 'Main table')
     : thread.title;
 }
 
@@ -65,25 +65,25 @@ export function getParticipantImpactScore(participant: EndingRoomParticipant) {
 export function getSelectionReasonLabel(reason: string, isZh: boolean) {
   switch (reason) {
     case 'user_selected':
-      return isZh ? '你点的' : 'Your pick';
+      return isZh ? '你选的' : 'Your pick';
     case 'fallback':
     case 'fallback_cast':
-      return isZh ? '兜底阵容' : 'Fallback lineup';
+      return isZh ? '自动补位' : 'Auto-filled';
     case 'top_impact':
-      return isZh ? '高影响代表' : 'High impact';
+      return isZh ? '高影响力' : 'High impact';
     default:
       return reason
-        ? (isZh ? `原因：${reason}` : reason)
+        ? (isZh ? reason : reason)
         : '';
   }
 }
 
 export function getArchivistModeLabel(isZh: boolean): string {
-  return isZh ? '档案官主持' : 'Archivist lead';
+  return isZh ? '主持人引导' : 'Host-guided';
 }
 
 export function getRepresentativeHotseatLabel(isZh: boolean): string {
-  return isZh ? '点名代表' : 'Question one representative';
+  return isZh ? '单独追问' : 'Question one rep';
 }
 
 export function getRoundtableModeNote(
@@ -94,44 +94,44 @@ export function getRoundtableModeNote(
   if (mode === 'hotseat') {
     return selectedName
       ? (isZh
-        ? `只追问 ${selectedName}，适合看这条线如何为自己辩解。`
-        : `Push only ${selectedName} when you want this worldline to defend itself.`)
+        ? `只对 ${selectedName} 提问，让这条世界线解释清楚自己的立场。`
+        : `Focus on ${selectedName} — let this worldline explain its position.`)
       : (isZh
-        ? '只追问一个代表，适合把这条线的解释问透。'
-        : 'Question one representative when you want a single worldline to answer cleanly.');
+        ? '选一位代表单独提问，把这条世界线的逻辑问清楚。'
+        : 'Pick one rep to question — get a clear answer from one worldline.');
   }
   if (mode === 'thread_followup') {
     return isZh
-      ? '把一个具体分歧留在单独线程里继续追，不让主桌记录变成杂音堆叠。'
-      : 'Keep one concrete disagreement in its own follow-up thread so the main table stays legible.';
+      ? '把某个具体分歧单独拎出来聊，主桌讨论保持清晰。'
+      : 'Split off one disagreement into its own thread so the main discussion stays clean.';
   }
   return isZh
-    ? '先让档案官收束争点，再把问题抛回最相关的代表。'
-    : 'Let the Archivist collapse the disagreement first, then hand it to the most relevant rep.';
+    ? '主持人先梳理分歧，再把问题交给最合适的代表回答。'
+    : 'The host sorts out the disagreement first, then passes it to the right rep.';
 }
 
 export function buildRoundtableVerdictPrompt(summary: string, isZh: boolean): string {
   const trimmed = summary.trim();
   if (!trimmed) {
     return isZh
-      ? '沿着当前圆桌继续追问：这桌最后为什么会收敛成这个结论？'
-      : 'Continue from this table: why did the roundtable settle on this verdict?';
+      ? '为什么圆桌最后得出了这个结论？'
+      : 'Why did the roundtable reach this conclusion?';
   }
   return isZh
-    ? `沿着当前圆桌继续追问：为什么"${trimmed}"会成为这桌结论？`
-    : `Continue from this table: why did "${trimmed}" become the table verdict?`;
+    ? `为什么"${trimmed}"成了最终结论？`
+    : `Why did "${trimmed}" become the verdict?`;
 }
 
 export function buildRoundtablePhasePrompt(label: string, stakes: string, isZh: boolean): string {
   const trimmed = stakes.trim();
   if (!trimmed) {
     return isZh
-      ? `围绕"${label}"这一阶段继续追问：这一轮真正的分歧是什么？`
-      : `Push on "${label}": what was the real disagreement in this phase?`;
+      ? `"${label}"阶段真正的分歧是什么？`
+      : `What was the real disagreement in "${label}"?`;
   }
   return isZh
-    ? `围绕"${label}"这一阶段继续追问：${trimmed}`
-    : `Push on "${label}": ${trimmed}`;
+    ? `关于"${label}"：${trimmed}`
+    : `About "${label}": ${trimmed}`;
 }
 
 export function buildRoundtableAnchorId(kind: 'verdict' | 'phase' | 'quote', scope: string, extra?: string | number): string {
@@ -149,8 +149,8 @@ export function trimQuoteSnippet(content: string, maxLength = 120): string {
 export function buildRoundtableQuotePrompt(speaker: string, content: string, isZh: boolean): string {
   const snippet = trimQuoteSnippet(content);
   return isZh
-    ? `沿着这句继续追问：${speaker} 提到"${snippet}"。这句真正卡住了本桌哪条分歧？`
-    : `Follow this quote: ${speaker} said "${snippet}". Which disagreement on this table does that line actually lock in?`;
+    ? `${speaker} 说"${snippet}"——这句话到底卡在哪个分歧上？`
+    : `${speaker} said "${snippet}" — which disagreement does this get at?`;
 }
 
 export function branchListChanged(current: string[], next: string[]) {
@@ -169,13 +169,13 @@ export function sameWitnessSelection(
 export function getRoundtableAnchorKindLabel(kind: string, isZh: boolean): string {
   switch (kind) {
     case 'verdict':
-      return isZh ? '档案总结' : 'Archive verdict';
+      return isZh ? '最终结论' : 'Verdict';
     case 'phase':
-      return isZh ? '阶段洞察' : 'Phase';
+      return isZh ? '阶段要点' : 'Phase';
     case 'quote':
-      return isZh ? '引用句' : 'Quote';
+      return isZh ? '引用' : 'Quote';
     default:
-      return isZh ? '锚点' : 'Anchor';
+      return isZh ? '参考点' : 'Anchor';
   }
 }
 

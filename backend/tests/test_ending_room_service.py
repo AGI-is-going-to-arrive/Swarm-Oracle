@@ -1054,7 +1054,7 @@ def test_oracle_rewrite_prompt_explicitly_forbids_untranslated_chinese_fragments
         output_json=False,
     )
 
-    assert "do not leave untranslated Chinese fragments" in prompt
+    assert "translate any Chinese fragments" in prompt
 
 
 def test_strip_oracle_reasoning_prefix_hides_partial_and_closed_think_blocks():
@@ -1321,7 +1321,7 @@ def test_worldline_roundtable_background_keeps_summary_only_crossline_scope():
     opening_turns = [turn["content"] for turn in result_payload["turns"] if turn["phase"] == "opening"]  # noqa: E501
 
     assert result_payload["status"] == "done"
-    assert "各自的结局里看" in result_payload["result"]["summary"]
+    assert "裁决" in result_payload["result"]["summary"] or "关键转折" in result_payload["result"]["summary"]
     assert "全文记忆池" not in result_payload["result"]["summary"]
     assert "秩序线全文：只允许会客厅读到这里。" not in turns_text
     assert "裂变线全文：不该泄露给另一条线。" not in turns_text

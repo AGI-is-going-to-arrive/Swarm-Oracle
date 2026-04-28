@@ -685,6 +685,47 @@ def _build_roundtable_crossfire_content(
         f"while {rival_title} first loosens at '{rival_hook}'."
     )
 
+def _build_roundtable_verdict_content(
+    branch_cards: list[dict[str, Any]],
+    *,
+    language: str,
+) -> str:
+    """Build a verdict anchor copy that instructs the LLM to produce an evaluative
+    synthesis rather than a bland placeholder.  When the LLM is enabled this text
+    serves as the semantic safety-net; when disabled it is shown verbatim."""
+    titles = [
+        _oracle_visible_text(card.get("title"), language=language, limit=40)
+        or (f"世界线{i + 1}" if language == "zh" else f"worldline {i + 1}")
+        for i, card in enumerate(branch_cards)
+    ]
+    hinges = [
+        _resolve_roundtable_hook(card, participant=None, language=language)
+        for card in branch_cards
+    ]
+    branch_bullets = "\n".join(
+        f"- {title}: {hinge}" for title, hinge in zip(titles, hinges)
+    )
+    if language == "zh":
+        return (
+            f"各条世界线的关键转折参考：\n{branch_bullets}\n\n"
+            "你刚主持完一场激烈的圆桌讨论。现在用你自己的话做个总结——"
+            "像一个资深主持人在节目尾声的即兴点评，不是在写报告。"
+            "别复述每条世界线，直接说你觉得这场讨论最意外的发现是什么。"
+            "哪边的论证更站得住脚？谁的逻辑链有硬伤？"
+            "用具体的人名和他们说过的话来佐证你的判断。"
+            "语气要像在跟朋友聊天，但观点要锐利。"
+        )
+    return (
+        f"Key hinge references per worldline:\n{branch_bullets}\n\n"
+        "You just finished hosting a heated roundtable. Now give your honest take — "
+        "like a seasoned moderator's off-the-cuff closing remarks, not a written report. "
+        "Don't recap each worldline. Cut straight to what surprised you most in this discussion. "
+        "Whose argument actually holds up? Where did someone's logic fall apart? "
+        "Use specific names and things they actually said to back your judgment. "
+        "Sound like you're talking to a friend, but keep your opinions sharp."
+    )
+
+
 def _build_roundtable_witness_content(
     branch_card: dict[str, Any],
     *,
@@ -1595,6 +1636,8 @@ def _oracle_banned_process_phrases(language: str) -> str:
             "- Do not literally restate scope or room permissions unless the user explicitly asks about scope\n"  # noqa: E501
             "- Do not use the room title as if it were the actual hinge when a more concrete hinge already exists\n"  # noqa: E501
             "- Avoid stock openings like “先失手的，不是终局… / 你点到的就是这一下… / 这轮热座先听…” unless the anchor copy truly requires them\n"  # noqa: E501
+            "- Avoid filler/process phrases like “总的来说 / 综上所述 / 值得注意的是 / 让我们来看看 / 不得不说 / 需要强调的是 / 从某种角度来说”\n"  # noqa: E501
+            "- Avoid mechanical sequencing like “首先...其次...最后” or standalone “首先 / 其次 / 最后” when speaking live\n"  # noqa: E501
             "- Avoid repeating the same sentence rhythm or first clause used by the immediately previous speaker\n"  # noqa: E501
         )
     return (
@@ -1602,6 +1645,8 @@ def _oracle_banned_process_phrases(language: str) -> str:
         "- Do not literally restate scope or permissions unless the user explicitly asks about them\n"  # noqa: E501
         "- Do not treat the room title as the hinge when a more concrete hinge already exists\n"
         "- Avoid stock openings like 'the first miss was not the ending...' or 'you pointed to the exact hinge...' unless the anchor copy truly requires them\n"  # noqa: E501
+        "- Avoid filler/process phrases like 'It's worth noting', 'Let's take a look', 'In conclusion', or 'It must be emphasized'\n"  # noqa: E501
+        "- Avoid mechanical sequencing like 'First... Second... Finally'\n"
         "- Avoid repeating the same sentence rhythm or first clause used by the immediately previous speaker\n"  # noqa: E501
     )
 
@@ -1658,11 +1703,13 @@ def _build_oracle_rewrite_prompt(
     output_json: bool = True,
 ) -> str:
     task_line = (
-        "Write the actual SwarmOracle Oracle Chambers line that should appear on screen. "
-        "Use the anchor copy only as a semantic fallback rail for scope, stance, and conclusion."
+        "Generate a fresh, natural spoken line for this Oracle Chambers character. "
+        "The anchor copy below is only a semantic safety net — use it for factual scope and conclusion direction, "  # noqa: E501
+        "but write your own words as if you ARE this character speaking live at the table."
         if user_content is None
-        else "Write the actual Oracle Chambers follow-up reply. "
-        "Use the anchor copy only as a semantic fallback rail for scope, stance, and conclusion."
+        else "Generate a fresh follow-up reply as this character. "
+        "The anchor copy is only a semantic safety net for scope and conclusion direction. "
+        "Write your own words responding directly to the user's question."
     )
     structural_note = ""
     if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
@@ -1714,19 +1761,25 @@ def _build_oracle_rewrite_prompt(
         f"Target voice: {_oracle_voice_brief(room, participant=participant, phase=phase, thread_mode=thread_mode, interaction_mode=interaction_mode)}\n"  # noqa: E501
         f"{vocab_line}"
         "Hard rules:\n"
-        "- The anchor copy is fallback semantics, not wording to paraphrase line by line\n"
-        "- Preserve the exact factual scope and conclusion direction of the anchor copy\n"
-        "- Do not invent facts, branches, quotes, or motives that are not already implied\n"
-        "- Sound like the speaker, not like a customer-support assistant or system prompt\n"
-        "- Let the speaker's persona, narrative weight, and story pressure show through what they notice first, what they defend, and which nouns they choose\n"  # noqa: E501
-        "- When role, persona, stance, branch pressure, or source quotes are present in context, treat them as higher-priority voice evidence than the fallback template wording\n"  # noqa: E501
-        "- In roundtables, make different speakers sound distinct from one another instead of sharing one generic cadence\n"  # noqa: E501
-        "- Prefer a fresh, playable line over a polished paraphrase of the fallback template\n"
-        "- Prefer concrete, playable phrasing over abstract summaries\n"
-        "- Use scene-appropriate nouns and pressure points when natural; do not collapse everything into generic 'situation / outcome / consequence' wording\n"  # noqa: E501
-        "- If the target language is English, do not leave untranslated Chinese fragments inside an otherwise English sentence; paraphrase or translate them into English instead\n"  # noqa: E501
+        "- The anchor copy is a semantic safety net only — do NOT paraphrase it line by line\n"
+        "- Preserve the factual scope and conclusion direction, but use completely fresh wording\n"
+        "- Do not invent facts, branches, quotes, or motives not already in context\n"
+        "- Sound like a real person talking at a table, not like an AI writing a report\n"
+        "- Write as if you are genuinely thinking about this specific situation, not filling in a template\n"
+        "- Use specific names, events, numbers, and turning points — never vague abstractions like 'the situation' or 'the outcome'\n"  # noqa: E501
+        "- Use concrete names, numbers, and events from the anchor copy — never use generic placeholders\n"  # noqa: E501
+        "- No rhetorical questions, no parallel sentence structures, no listicle patterns\n"
+        "- Vary sentence structure — mix short decisive statements with longer explanations. Never use parallel structures like X是...Y是...Z是...\n"  # noqa: E501
+        "- Let persona, stance, and story pressure drive word choice and what gets emphasized first\n"  # noqa: E501
+        "- When role, persona, stance, or source quotes exist in context, prioritize them over the anchor template\n"  # noqa: E501
+        "- In roundtables, each speaker must sound noticeably different — vary sentence length, opening style, and emotional register\n"  # noqa: E501
+        "- Sound like a person having a real conversation at a table, not writing a report\n"
+        "- Reference what other participants said by name — react to their specific points\n"
+        "- Write as if speaking aloud: contractions OK, sentence fragments OK, mid-thought pivots OK\n"  # noqa: E501
+        "- Use scene-appropriate nouns and pressure points; avoid collapsing into generic 'situation / outcome / consequence'\n"  # noqa: E501
+        "- If target language is English, translate any Chinese fragments instead of leaving them inline\n"  # noqa: E501
         "- Keep it compact: one short paragraph, no bullets, usually 2-4 sentences\n"
-        "- Respect the scope notice exactly, but keep it implicit unless the user explicitly asks about boundaries\n"  # noqa: E501
+        "- Keep scope implicit unless the user explicitly asks about it\n"
         f"{_oracle_banned_process_phrases(room.language)}"
         f"{structural_note}\n"
         f"{phase_note}\n"
@@ -1791,8 +1844,8 @@ async def _maybe_rewrite_oracle_copy(
             result = await asyncio.wait_for(
                 structured_call(
                     json_prompt,
-                    reasoning_effort="low",
-                    temperature=0.55,
+                    reasoning_effort="medium",
+                    temperature=0.78,
                     fallback_mode="agent_message",
                 ),
                 timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
@@ -1814,7 +1867,7 @@ async def _maybe_rewrite_oracle_copy(
                     _pkg.llm_call(
                         plain_text_prompt,
                         reasoning_effort="low",
-                        temperature=0.55,
+                        temperature=0.65,
                     ),
                     timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
                 )
@@ -1828,12 +1881,46 @@ async def _maybe_rewrite_oracle_copy(
             )
             return content or anchor_copy
         except Exception as plain_exc:
-            logger.warning(
-                "Oracle Chambers LLM fallback for %s: structured=%s ; plain=%s",
-                purpose,
-                structured_exc,
-                plain_exc,
+            _effort_err_str = str(plain_exc).lower()
+            _is_effort_unsupported = (
+                "reasoning_effort" in _effort_err_str
+                or ("reasoning" in _effort_err_str and "400" in str(plain_exc))
+                or "unsupported parameter" in _effort_err_str
             )
+            if _is_effort_unsupported:
+                try:
+                    with llm_request_scope(quota_key=None, purpose=f"{purpose}:no_effort_retry"):
+                        import app.services.ending_room_service as _pkg_retry
+                        no_effort_result = await asyncio.wait_for(
+                            _pkg_retry.llm_call(
+                                plain_text_prompt,
+                                reasoning_effort=None,
+                                temperature=0.65,
+                            ),
+                            timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
+                        )
+                    polished = _strip_oracle_scope_boilerplate(
+                        str(no_effort_result or ""),
+                        language=room.language,
+                    )
+                    content = _normalize_oracle_generated_content(
+                        polished,
+                        fallback=anchor_copy,
+                    )
+                    return content or anchor_copy
+                except Exception as no_effort_exc:
+                    logger.warning(
+                        "Oracle LLM no-effort fallback for %s: %s",
+                        purpose,
+                        no_effort_exc,
+                    )
+            else:
+                logger.warning(
+                    "Oracle Chambers LLM fallback for %s: structured=%s ; plain=%s",
+                    purpose,
+                    structured_exc,
+                    plain_exc,
+                )
             return anchor_copy
 
 

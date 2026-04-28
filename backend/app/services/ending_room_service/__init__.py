@@ -64,6 +64,7 @@ from ._content import (  # noqa: F401 — re-exported
     _build_oracle_rewrite_prompt,
     _build_roundtable_crossfire_content,
     _build_roundtable_opening_content,
+    _build_roundtable_verdict_content,
     _build_roundtable_witness_content,
     _followup_angle_label,
     _maybe_rewrite_oracle_copy,
@@ -1021,6 +1022,40 @@ def _archivist_roundtable_context_hint(
     return "\n".join(lines)
 
 
+def _archivist_roundtable_verdict_context_hint(
+    *,
+    branches: list[dict[str, Any]],
+    planned_turns: list[dict[str, Any]],
+    language: str,
+) -> str:
+    lines = []
+    branch_lines = []
+    for branch in branches:
+        title = _oracle_visible_text(branch.get("title"), language=language, limit=40)
+        insight = _oracle_visible_text(branch.get("insight"), language=language, limit=88)
+        if title:
+            branch_lines.append(f"{title}: {insight}" if insight else title)
+    if branch_lines:
+        lines.append(f"roundtable_branches={' || '.join(branch_lines[:4])}")
+    prior_content = []
+    for turn in planned_turns:
+        content = str(turn.get("content") or "").strip()
+        if content:
+            phase_label = turn.get("phase", "")
+            if hasattr(phase_label, "value"):
+                phase_label = phase_label.value
+            snippet = content[:200]
+            prior_content.append(f"[{phase_label}] {snippet}")
+    if prior_content:
+        lines.append("prior_discussion=\n" + "\n".join(prior_content[-6:]))
+    lines.append(
+        "verdict_instruction=Deliver an evaluative verdict based on the actual discussion above. "
+        "Identify the core disagreement, assess which arguments have evidence, "
+        "and give a clear judgment. Do NOT use a generic placeholder."
+    )
+    return "\n".join(lines)
+
+
 def _anchor_room_turn_context_hint(
     participant: EndingRoomParticipant,
     *,
@@ -1210,16 +1245,16 @@ def _build_room_plan(
                 {
                     "participant_id": archivist.id,
                     "phase": EndingRoomPhase.VERDICT,
-                    "content": (
-                        "圆桌结论：这些世界线可以并排比较，但每条答案仍然得回到各自的结局里看。"
-                        if room.language == "zh"
-                        else "Roundtable verdict: these endings can stand side by side, but each answer still belongs to its own ending."  # noqa: E501
+                    "content": _build_roundtable_verdict_content(
+                        context["branches"],
+                        language=room.language,
                     ),
                     "emotion": "neutral",
                     "cited_branch_id": None,
                     "cited_refs_json": {"mode": "summary_only"},
-                    "context_hint": _archivist_roundtable_context_hint(
+                    "context_hint": _archivist_roundtable_verdict_context_hint(
                         branches=context["branches"],
+                        planned_turns=planned_turns,
                         language=room.language,
                     ),
                 },

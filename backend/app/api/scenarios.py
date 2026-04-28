@@ -508,6 +508,14 @@ async def api_capabilities():
             enabled=settings.FEATURE_AGENT_CONVERSATION,
             version="1.0" if settings.FEATURE_AGENT_CONVERSATION else "0.0",
         ),
+        "roundtable_survey": _capability_entry(
+            enabled=settings.FEATURE_ROUNDTABLE_SURVEY,
+            version="1.0" if settings.FEATURE_ROUNDTABLE_SURVEY else "0.0",
+        ),
+        "roundtable_analyst": _capability_entry(
+            enabled=settings.FEATURE_ROUNDTABLE_ANALYST,
+            version="1.0" if settings.FEATURE_ROUNDTABLE_ANALYST else "0.0",
+        ),
         "kg_explorer": _capability_entry(
             enabled=settings.FEATURE_KG_EXPLORER,
             version="1.0" if settings.FEATURE_KG_EXPLORER else "0.0",

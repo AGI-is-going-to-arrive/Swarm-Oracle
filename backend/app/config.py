@@ -84,6 +84,8 @@ class Settings(BaseSettings):
     FEATURE_IDENTITY_COMPACTION: bool = False
     FEATURE_REPLAY_TRACE: bool = Field(default=False)
     FEATURE_AGENT_CONVERSATION: bool = Field(default=False)
+    FEATURE_ROUNDTABLE_SURVEY: bool = Field(default=False)
+    FEATURE_ROUNDTABLE_ANALYST: bool = Field(default=False)
     FEATURE_KG_EXPLORER: bool = Field(default=False)
     FEATURE_NEW_SOURCES: bool = Field(default=False)
 

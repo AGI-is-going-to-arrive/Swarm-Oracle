@@ -481,6 +481,8 @@ export interface CapabilitiesResponse {
   kg_explorer: CapabilityEntry;
   replay_trace: CapabilityEntry;
   graph_analysis: CapabilityEntry;
+  roundtable_survey: CapabilityEntry;
+  roundtable_analyst: CapabilityEntry;
 }
 
 /** GET /api/capabilities — lightweight server capability hints (no LLM calls) */

@@ -879,6 +879,26 @@ export type EndingRoomWSEvent =
     | { type: 'ending_room_scope_notice'; data: { thread_id: string; memory_partition_id: string } }
   ) & { meta?: WsEventMeta };
 
+// ── Roundtable SSE Events ────────────────────────────────
+
+export type AnalystSSEEvent =
+  | { type: 'analyst_thinking'; action: string; params: Record<string, unknown>; iteration: number }
+  | { type: 'analyst_tool_result'; action: string; summary: string; iteration: number; elapsed_ms: number }
+  | { type: 'analyst_response'; answer: string; iterations: number; stopped_reason?: string; error?: string };
+
+export type SurveySSEEvent = {
+  type: 'survey_response';
+  participant_id: string;
+  display_name: string;
+  role: string;
+  source_agent_id: string | null;
+  source_branch_id: string | null;
+  agent_identity_id: string | null;
+  answer: string;
+  elapsed_ms: number;
+  error?: string;
+};
+
 // ── WebSocket Events ─────────────────────────────────────
 
 export type WSEvent =

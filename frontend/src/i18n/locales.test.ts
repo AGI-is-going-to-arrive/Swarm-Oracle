@@ -18,8 +18,8 @@ describe('i18n locale resources', () => {
     expect(zh.translation.ending_room.sidebar_mobile_label).toBe('密室侧栏');
     expect(en.translation.ending_room.sidebar_mobile_description).toBe('Quick actions and participant details for this chamber.');
     expect(zh.translation.ending_room.sidebar_mobile_description).toBe('查看此密室的快捷操作与参与者详情。');
-    expect(en.translation.roundtable.phase_insights_label).toBe('Phase insights');
-    expect(zh.translation.roundtable.phase_insights_label).toBe('阶段洞察');
+    expect(en.translation.roundtable.phase_insights_label).toBe('Key takeaways');
+    expect(zh.translation.roundtable.phase_insights_label).toBe('各阶段要点');
     expect(en.translation.common.more_count).toBe('+{{count}} more');
     expect(zh.translation.common.more_count).toBe('+{{count}} 更多');
   });

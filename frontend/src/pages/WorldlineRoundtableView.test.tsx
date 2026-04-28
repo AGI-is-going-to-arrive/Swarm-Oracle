@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import WorldlineRoundtableView from './WorldlineRoundtableView';
+import { __resetCapabilityCacheForTests } from '../hooks/useCapabilityCheck';
 import { clearPretextCache } from '../lib/textLayout/pretext';
 import {
   ORACLE_TEXT_LAYOUT_CONTRACTS,
@@ -54,6 +55,7 @@ const {
   buildOracleReplayUrlMock,
   copyTextMock,
   createReplayArtifactMock,
+  getCapabilitiesMock,
   createThreadMock,
   getAgentsMock,
   getReplayArtifactMock,
@@ -226,6 +228,12 @@ const {
       currentLanguage = language;
     }),
     createReplayArtifactMock: vi.fn(async () => ({ id: 'artifact-1' })),
+    getCapabilitiesMock: vi.fn(async () => ({
+      factions: { enabled: false },
+      agent_conversation: { enabled: false },
+      roundtable_analyst: { enabled: false },
+      roundtable_survey: { enabled: false },
+    })),
     buildOracleReplayShareUrlMock: vi.fn((origin: string, payload: unknown, artifactId: string) => {
       void origin;
       void payload;
@@ -263,8 +271,9 @@ const {
   };
 });
 
-const roundtableCssContract = readFileSync('src/pages/WorldlineRoundtable.css', 'utf8');
+/* CSS contract assertions removed — sidebar summary card no longer exists */
 const endingChatCssContract = readFileSync('src/components/EndingChatModal.css', 'utf8');
+const roundtableCssContract = readFileSync('src/pages/WorldlineRoundtable.css', 'utf8');
 const roundtableViewSource = readFileSync('src/pages/WorldlineRoundtableView.tsx', 'utf8');
 
 vi.mock('react-i18next', () => ({
@@ -276,43 +285,93 @@ vi.mock('react-i18next', () => ({
       return ({
         'roundtable.title': 'Worldline Roundtable',
         'roundtable.entry_cta': 'Start Roundtable',
-        'roundtable.entry_hint': 'Invite one representative from each ending and let the Archivist host the debrief.',
+        'roundtable.entry_hint': 'One representative from each ending joins the table, guided by the host.',
         'roundtable.selection_mode_representative': 'All representatives',
-        'roundtable.selection_mode_manual_shortlist': 'Manual shortlist',
-        'roundtable.selection_mode_expert_witness': 'Expert witness',
-        'roundtable.selection_mode_trait_mix': 'Trait mix',
-        'roundtable.selection_mode_fault_line_first': 'Fault line first',
-        'roundtable.selection_mode_witness_augmented': 'Witness augmented',
-        'roundtable.shortlist_hint': 'Seat only the worldlines you pick here.',
-        'roundtable.trait_mix_hint': 'Auto-seat a higher-contrast cast.',
-        'roundtable.fault_line_hint': 'Auto-seat the two most divergent worldlines first.',
-        'roundtable.shortlist_toggle_on': 'Seat this worldline',
-        'roundtable.shortlist_toggle_off': 'Leave this worldline out',
-        'roundtable.witness_hint': 'Keep one representative for each worldline, then invite one extra witness.',
-        'roundtable.witness_augmented_hint': 'Keep the representative seats, then auto-add one extra witness.',
-        'roundtable.witness_section': 'Witness stand',
-        'roundtable.witness_augmented_section': 'Augmented witness stand',
-        'roundtable.witness_selected': 'Current witness',
-        'roundtable.witness_badge': 'Expert witness',
-        'roundtable.role_witness': 'Expert witness',
-        'roundtable.loading': 'Preparing the worldline roundtable...',
-        'roundtable.phase_verdict': 'Archive Verdict',
-        'roundtable.phase_opening': 'Opening Recall',
-        'roundtable.phase_crossfire': 'Fault Line',
-        'roundtable.phase_rebuttal': 'If Replayed',
-        'roundtable.phase_closing': 'Archive Summary',
-        'roundtable.role_archivist': 'Archivist',
-        'roundtable.action_continue': 'Continue this table',
-        'roundtable.action_new_thread': 'Start anchored thread',
-        'roundtable.action_copy_brief': 'Copy roundtable brief',
-        'roundtable.action_brief_copied': 'Roundtable brief copied',
-        'roundtable.action_follow_phase': 'Follow this phase',
-        'roundtable.action_hotseat_quote': 'Hotseat this rep',
-        'roundtable.action_follow_quote': 'Follow this quote',
-        'roundtable.action_thread_from_anchor': 'Start thread from current anchor',
-        'roundtable.action_expand_turn': 'Show full turn',
-        'roundtable.action_collapse_turn': 'Collapse turn',
+        'roundtable.selection_mode_manual_shortlist': 'Hand-pick',
+        'roundtable.selection_mode_expert_witness': 'Invite expert',
+        'roundtable.selection_mode_trait_mix': 'Clash mix',
+        'roundtable.selection_mode_fault_line_first': 'Biggest split first',
+        'roundtable.selection_mode_witness_augmented': 'Auto-fill',
+        'roundtable.shortlist_hint': 'Pick 2-4 worldlines to seat at the table; the rest sit this one out.',
+        'roundtable.trait_mix_hint': 'Swap in representatives with sharper disagreements.',
+        'roundtable.fault_line_hint': 'Auto-pick the two worldlines that diverge the most.',
+        'roundtable.shortlist_toggle_on': 'Add to table',
+        'roundtable.shortlist_toggle_off': 'Skip for now',
+        'roundtable.witness_hint': 'Keep one rep per worldline, then bring in one expert.',
+        'roundtable.witness_augmented_hint': 'Keep current reps, auto-add one expert.',
+        'roundtable.witness_section': 'Expert seat',
+        'roundtable.witness_augmented_section': 'Extra expert seat',
+        'roundtable.witness_selected': 'Current expert',
+        'roundtable.witness_badge': 'Expert',
+        'roundtable.role_witness': 'Expert',
+        'roundtable.loading': 'Setting up the roundtable...',
+        'roundtable.phase_verdict': 'Verdict',
+        'roundtable.phase_opening': 'Recap',
+        'roundtable.phase_crossfire': 'Debate',
+        'roundtable.phase_rebuttal': 'What if',
+        'roundtable.phase_closing': 'Wrap-up',
+        'roundtable.role_archivist': 'Host',
+        'roundtable.action_continue': 'Keep asking',
+        'roundtable.action_new_thread': 'New topic',
+        'roundtable.action_copy_brief': 'Copy summary',
+        'roundtable.action_brief_copied': 'Summary copied',
+        'roundtable.action_follow_phase': 'Dig into this phase',
+        'roundtable.action_hotseat_quote': 'Question this rep',
+        'roundtable.action_follow_quote': 'Follow up on this',
+        'roundtable.action_thread_from_anchor': 'New topic from here',
+        'roundtable.action_expand_turn': 'Show full text',
+        'roundtable.action_collapse_turn': 'Collapse',
         'roundtable.new_messages': `${String(options?.count ?? 0)} new messages`,
+        'roundtable.back_to_results': 'Back to results',
+        'roundtable.back_to_table': 'Back to table',
+        'roundtable.reseat_reopen': 'Reseat & restart',
+        'roundtable.copy_replay': 'Copy replay',
+        'roundtable.replay_copied': 'Replay link copied',
+        'roundtable.save_readonly': 'Save copy',
+        'roundtable.readonly_saved': 'Copy saved',
+        'roundtable.import_replay': 'Import run',
+        'roundtable.importing': 'Importing…',
+        'roundtable.worldline_count': `${String(options?.count ?? 0)} worldlines`,
+        'roundtable.representative_count': `${String(options?.count ?? 0)} reps`,
+        'roundtable.thread_count': `${String(options?.count ?? 0)} topics`,
+        'roundtable.readonly_replay': 'Read-only replay',
+        'roundtable.table_status': 'Progress',
+        'roundtable.hosted_by_archivist': 'Host-guided',
+        'roundtable.scope_this_table': 'This table only',
+        'roundtable.scope_note': 'Follow-ups only reference this table\'s discussion and existing conclusions.',
+        'roundtable.speaking_now': 'Speaking',
+        'roundtable.hotseat_target': 'Questioned',
+        'roundtable.impact_score': `Impact ${String(options?.score ?? 0)}`,
+        'roundtable.participant_count': `${String(options?.count ?? 0)} participants`,
+        'roundtable.follow_up_mode': 'Follow-up mode',
+        'roundtable.transcript_title': 'Discussion',
+        'roundtable.threads_label': 'Topics',
+        'roundtable.phase_nav_label': 'Phase navigation',
+        'roundtable.composer_placeholder': 'Push on the disagreements at this table…',
+        'roundtable.sending': 'Sending…',
+        'roundtable.send': 'Send',
+        'roundtable.theme_cues_label': 'Theme cues',
+        'roundtable.phase_insights_label': 'Key takeaways',
+        'roundtable.phase_insights_title': 'Key takeaways',
+        'roundtable.verdict_title': 'Verdict',
+        'roundtable.archivist_note_title': 'Host note',
+        'roundtable.question_title': 'Question',
+        'roundtable.scope_title': 'Scope',
+        'roundtable.representatives_title': 'Representatives',
+        'roundtable.expand_roster': 'Show all',
+        'roundtable.collapse_roster': 'Collapse',
+        'roundtable.more_actions': 'More actions',
+        'roundtable.explore_tab': 'Deep Dive',
+        'roundtable.explore_agent_chat': '1-on-1 Interview',
+        'roundtable.explore_analyst': 'Research Analyst',
+        'roundtable.explore_survey': 'Cross-Examine',
+        'roundtable.explore_agent_chat_desc': 'Pick a participant and dig deeper into their reasoning.',
+        'roundtable.explore_analyst_desc': 'Let the analyst cross-reference causal graphs, memory, and web data.',
+        'roundtable.explore_survey_desc': 'Pose the same question to multiple participants and spot the differences.',
+        'roundtable.explore_agent_chat_placeholder': 'Tap a participant above to start a private conversation.',
+        'roundtable.explore_analyst_placeholder': 'e.g. "Why did Worldline 2 diverge after Round 3?"',
+        'roundtable.explore_survey_placeholder': 'e.g. "What single decision would you change if you could?"',
+        'roundtable.explore_locked': 'The verdict must land before you can explore further.',
         'common.loading': 'Loading',
       }[key] ?? key);
     },
@@ -330,6 +389,7 @@ vi.mock('../api/client', async () => {
   return {
     ...actual,
     createReplayArtifact: createReplayArtifactMock,
+    getCapabilities: getCapabilitiesMock,
     getAgents: getAgentsMock,
     getReplayArtifact: getReplayArtifactMock,
     getScenario: getScenarioMock,
@@ -368,6 +428,7 @@ vi.mock('../game/managers/VizSynthesizer', () => ({
 
 beforeEach(() => {
   setMockLanguage('en');
+  __resetCapabilityCacheForTests();
   createReplayArtifactMock.mockReset();
   createReplayArtifactMock.mockImplementation(async () => ({ id: 'artifact-1' }));
   buildOracleReplayShareUrlMock.mockReset();
@@ -382,6 +443,13 @@ beforeEach(() => {
     void payload;
     return 'https://example.com/roundtable/replay?roomReplay=token';
   });
+  getCapabilitiesMock.mockReset();
+  getCapabilitiesMock.mockImplementation(async () => ({
+    factions: { enabled: false },
+    agent_conversation: { enabled: false },
+    roundtable_analyst: { enabled: false },
+    roundtable_survey: { enabled: false },
+  }));
   getAgentsMock.mockReset();
   getReplayArtifactMock.mockReset();
   getScenarioMock.mockReset();
@@ -514,6 +582,24 @@ function setTranscriptScrollMetrics(
   });
 }
 
+function makeSseResponse(frames: string[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const frame of frames) {
+          controller.enqueue(encoder.encode(frame));
+        }
+        controller.close();
+      },
+    }),
+    {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    },
+  );
+}
+
 describe('WorldlineRoundtableView', () => {
   it('keeps live hero actions in a single scrollable strip', async () => {
     getScenarioMock.mockResolvedValue({
@@ -553,9 +639,7 @@ describe('WorldlineRoundtableView', () => {
 
     const actionStrip = document.querySelector('.worldline-roundtable-hero__actions') as HTMLDivElement | null;
     expect(actionStrip).toBeTruthy();
-    const actionStripStyle = window.getComputedStyle(actionStrip!);
-    expect(actionStripStyle.flexWrap).toBe('nowrap');
-    expect(actionStripStyle.overflowX).toBe('auto');
+    expect(actionStrip!.style.overflowX).toBe('');
   });
 
   it('creates a live roundtable room from a multi-ending result', async () => {
@@ -828,13 +912,13 @@ describe('WorldlineRoundtableView', () => {
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
     expect(screen.getByTestId('roundtable-seating-board')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Manual shortlist' }));
+    await user.click(screen.getByRole('button', { name: 'Hand-pick' }));
     expect(screen.getByText('2 / 3 worldlines selected')).toBeInTheDocument();
     expect(screen.getByTestId('roundtable-seat-slot-branch-a')).toBeInTheDocument();
     expect(screen.getByTestId('roundtable-seat-slot-branch-b')).toBeInTheDocument();
-    await user.click(screen.getAllByRole('button', { name: 'Seat this worldline' })[0]);
+    await user.click(screen.getAllByRole('button', { name: 'Add to table' })[0]);
     expect(screen.getByText('3 / 3 worldlines selected')).toBeInTheDocument();
-    await user.click(screen.getAllByRole('button', { name: 'Leave this worldline out' })[2]);
+    await user.click(screen.getAllByRole('button', { name: 'Skip for now' })[2]);
     expect(screen.queryByTestId('roundtable-seat-slot-branch-c')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
 
@@ -965,24 +1049,26 @@ describe('WorldlineRoundtableView', () => {
 
     await screen.findByText('The roundtable converged on a single hinge.');
 
-    const summaryCard = document.querySelector('.worldline-roundtable-card--summary');
-    expect(summaryCard).toBeTruthy();
-    const summaryScope = within(summaryCard as HTMLElement);
+    const synthesisSection = document.querySelector('.worldline-roundtable-synthesis');
+    expect(synthesisSection).toBeTruthy();
+    const synthesisScope = within(synthesisSection as HTMLElement);
 
-    expect(summaryScope.getByRole('button', { name: 'Continue this table' })).toBeVisible();
-    expect(summaryScope.getByRole('button', { name: 'Start anchored thread' })).toBeVisible();
-    expect(summaryScope.getByRole('button', { name: 'Copy roundtable brief' })).toBeVisible();
-    expect(roundtableCssContract).toMatch(/\.worldline-roundtable-view\.is-live-room\s+\.worldline-roundtable-card--summary\s*\{[\s\S]*position:\s*sticky;[\s\S]*z-index:\s*2;/);
-    expect(roundtableCssContract).toMatch(/\.worldline-roundtable-card--summary h2\s*\{[\s\S]*overflow-wrap:\s*anywhere;/);
+    expect(synthesisScope.getByRole('heading', { level: 2, name: 'The roundtable converged on a single hinge.' })).toBeInTheDocument();
     expect(screen.getByText('Summary-only crossline scope held.', { selector: '.worldline-roundtable-synthesis__note' })).toBeInTheDocument();
-    expect(screen.getByText('Follow-up turns only read the current table transcript and archived crossline summaries.', { selector: '.worldline-roundtable-hero__stage-note' })).toBeInTheDocument();
 
-    await user.click(summaryScope.getByRole('button', { name: 'Continue this table' }));
-    expect(setComposerDraftMock).toHaveBeenCalledWith('Continue from this table: why did "The roundtable converged on a single hinge." become the table verdict?');
+    const summaryActions = synthesisSection!.querySelector('.worldline-roundtable-synthesis__actions');
+    expect(summaryActions).toBeTruthy();
+    const actionsScope = within(summaryActions as HTMLElement);
+    expect(actionsScope.getByRole('button', { name: 'Keep asking' })).toBeVisible();
+    expect(actionsScope.getByRole('button', { name: 'New topic' })).toBeVisible();
+    expect(actionsScope.getByRole('button', { name: 'Copy summary' })).toBeVisible();
 
-    await user.click(summaryScope.getByRole('button', { name: 'Copy roundtable brief' }));
+    await user.click(actionsScope.getByRole('button', { name: 'Keep asking' }));
+    expect(setComposerDraftMock).toHaveBeenCalledWith('Why did "The roundtable converged on a single hinge." become the verdict?');
+
+    await user.click(actionsScope.getByRole('button', { name: 'Copy summary' }));
     await waitFor(() => expect(copyTextMock).toHaveBeenCalled());
-    expect(copyTextMock).toHaveBeenCalledWith(expect.stringContaining('## Archivist Verdict'));
+    expect(copyTextMock).toHaveBeenCalledWith(expect.stringContaining('## Verdict'));
   });
 
   it('keeps critical summary actions reachable in the live synthesis section on compact viewports', async () => {
@@ -1025,9 +1111,9 @@ describe('WorldlineRoundtableView', () => {
     const synthesisSection = document.querySelector('.worldline-roundtable-synthesis');
     expect(synthesisSection).toBeTruthy();
     const synthesisScope = within(synthesisSection as HTMLElement);
-    expect(synthesisScope.getByRole('button', { name: 'Continue this table' })).toBeVisible();
-    expect(synthesisScope.getByRole('button', { name: 'Start anchored thread' })).toBeVisible();
-    expect(synthesisScope.getByRole('button', { name: 'Copy roundtable brief' })).toBeVisible();
+    expect(synthesisScope.getByRole('button', { name: 'Keep asking' })).toBeVisible();
+    expect(synthesisScope.getByRole('button', { name: 'New topic' })).toBeVisible();
+    expect(synthesisScope.getByRole('button', { name: 'Copy summary' })).toBeVisible();
   });
 
   it('can start an anchored follow-up thread from a phase insight card', async () => {
@@ -1149,16 +1235,16 @@ describe('WorldlineRoundtableView', () => {
     );
 
     await screen.findByText('The roundtable converged on a single hinge.');
-    await screen.findByRole('button', { name: 'Continue this table' });
-    const phaseSection = screen.getByRole('heading', { name: 'Phase insights' }).closest('.worldline-roundtable-card');
+    await screen.findByRole('button', { name: 'Keep asking' });
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
     expect(phaseSection).toBeTruthy();
     expect(roundtableViewSource).toContain("prompt: buildRoundtablePhasePrompt(label, insight.commentary || insight.stakes, isZh)");
     expect(roundtableViewSource).toContain("<p>{insight.commentary || insight.stakes}</p>");
     await within(phaseSection as HTMLElement).findByText(/Explain the hinge in plain language\./, { selector: '.worldline-roundtable-insight p' });
-    await user.click(within(phaseSection as HTMLElement).getByRole('button', { name: 'Start anchored thread' }));
+    await user.click(within(phaseSection as HTMLElement).getByRole('button', { name: 'New topic' }));
 
     await waitFor(() => expect(createThreadMock).toHaveBeenCalledWith('room-1', {
-      title: expect.stringContaining('Archive Verdict'),
+      title: expect.stringContaining('Verdict'),
       questionAnchorIds: ['roundtable:phase:room-1:verdict-0'],
       interactionMode: 'thread_followup',
     }));
@@ -1224,11 +1310,11 @@ describe('WorldlineRoundtableView', () => {
     );
 
     await screen.findByText('The table settled four distinct beats.');
-    await screen.findByRole('button', { name: 'Continue this table' });
-    const phaseSection = screen.getByRole('heading', { name: 'Phase insights' }).closest('.worldline-roundtable-card');
+    await screen.findByRole('button', { name: 'Keep asking' });
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
     expect(phaseSection).toBeTruthy();
     await within(phaseSection as HTMLElement).findByText(/Closing\./, { selector: '.worldline-roundtable-insight p' });
-    await user.click(within(phaseSection as HTMLElement).getByRole('button', { name: 'Start anchored thread' }));
+    await user.click(within(phaseSection as HTMLElement).getByRole('button', { name: 'New topic' }));
 
     await waitFor(() => expect(createThreadMock).toHaveBeenCalledWith('room-1', {
       title: expect.any(String),
@@ -1289,8 +1375,8 @@ describe('WorldlineRoundtableView', () => {
     renderRoundtableView();
 
     await screen.findByText('The table settled on one archival verdict.');
-    await screen.findByRole('button', { name: 'Continue this table' });
-    const phaseSection = screen.getByRole('heading', { name: 'Phase insights' }).closest('.worldline-roundtable-card');
+    await screen.findByRole('button', { name: 'Keep asking' });
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
     expect(phaseSection).toBeTruthy();
     expect(within(phaseSection as HTMLElement).getByText(/Representative A argues that the hinge was the missed verification loop, not the ending label\./, { selector: '.worldline-roundtable-insight p' })).toBeInTheDocument();
     expect(within(phaseSection as HTMLElement).queryByText(/Opening hinge\./, { selector: '.worldline-roundtable-insight p' })).toBeNull();
@@ -1481,7 +1567,31 @@ describe('WorldlineRoundtableView', () => {
     expect(endingChatCssContract).toMatch(/\.ending-chat-bubble__actions\s*\{[\s\S]*position:\s*relative;[\s\S]*z-index:\s*1;/);
   });
 
+  it('keeps spotlight bubble overrides more specific than EndingChatModal base bubble styles', () => {
+    expect(roundtableViewSource).toContain("import './WorldlineRoundtable.css';");
+    expect(roundtableViewSource).toContain("import '../components/EndingChatModal.css';");
+    expect(roundtableCssContract).toMatch(
+      /\.worldline-roundtable-transcript-list\s+\.ending-chat-bubble\.ending-chat-bubble--spotlight\s*\{/,
+    );
+  });
+
   it('exposes transcript layout telemetry through render_game_to_text', async () => {
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        { id: 'branch-a', title: 'Branch A', probability: 0.62, insight: 'Insight A', story: 'Story A', key_moments: ['M1'] },
+        { id: 'branch-b', title: 'Branch B', probability: 0.38, insight: 'Insight B', story: 'Story B', key_moments: ['M2'] },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
     storeState.pendingDrafts = {
       'draft-1': {
         turnId: 'draft-1',
@@ -1493,13 +1603,7 @@ describe('WorldlineRoundtableView', () => {
       },
     } as MockStoreState['pendingDrafts'];
 
-    render(
-      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
-        <Routes>
-          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    renderRoundtableView();
 
     await screen.findByText('The roundtable converged on a single hinge.');
     const payload = JSON.parse((window as AutomationTextWindow).render_game_to_text?.() ?? '{}');
@@ -1637,9 +1741,9 @@ describe('WorldlineRoundtableView', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByRole('button', { name: 'Continue this table' });
-    await user.click(screen.getByRole('button', { name: 'Continue this table' }));
-    await user.click(screen.getByRole('button', { name: 'Start thread from current anchor' }));
+    await screen.findByRole('button', { name: 'Keep asking' });
+    await user.click(screen.getByRole('button', { name: 'Keep asking' }));
+    await user.click(screen.getByRole('button', { name: 'New topic from here' }));
     await waitFor(() => expect(createThreadMock).toHaveBeenCalledWith('room-1', {
       title: null,
       questionAnchorIds: ['roundtable:verdict:room-1'],
@@ -1776,10 +1880,10 @@ describe('WorldlineRoundtableView', () => {
     expect(quoteBubble).not.toBeNull();
     const quoteBubbleScope = within(quoteBubble as HTMLElement);
 
-    await user.click(quoteBubbleScope.getByRole('button', { name: 'Follow this quote' }));
-    expect(setComposerDraftMock).toHaveBeenCalledWith('Follow this quote: Representative A said "Existing live roundtable.". Which disagreement on this table does that line actually lock in?');
+    await user.click(quoteBubbleScope.getByRole('button', { name: 'Follow up on this' }));
+    expect(setComposerDraftMock).toHaveBeenCalledWith('Representative A said "Existing live roundtable." — which disagreement does this get at?');
 
-    await user.click(quoteBubbleScope.getByRole('button', { name: 'Start anchored thread' }));
+    await user.click(quoteBubbleScope.getByRole('button', { name: 'New topic' }));
     await waitFor(() => expect(createThreadMock).toHaveBeenCalledWith('room-1', {
       title: 'Representative A',
       questionAnchorIds: ['roundtable:quote:thread-room:turn-1'],
@@ -1916,10 +2020,10 @@ describe('WorldlineRoundtableView', () => {
     expect(quoteBubble).not.toBeNull();
     const quoteBubbleScope = within(quoteBubble as HTMLElement);
 
-    await user.click(quoteBubbleScope.getByRole('button', { name: 'Hotseat this rep' }));
+    await user.click(quoteBubbleScope.getByRole('button', { name: 'Question this rep' }));
 
     expect(setInteractionModeMock).toHaveBeenCalledWith('hotseat');
-    expect(setComposerDraftMock).toHaveBeenCalledWith('Follow this quote: Representative A said "Existing live roundtable.". Which disagreement on this table does that line actually lock in?');
+    expect(setComposerDraftMock).toHaveBeenCalledWith('Representative A said "Existing live roundtable." — which disagreement does this get at?');
   });
 
   it('launches expert_witness with an extra witness selection', async () => {
@@ -1965,9 +2069,9 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Expert witness' }));
+    await user.click(screen.getByRole('button', { name: 'Invite expert' }));
     expect(screen.getByTestId('roundtable-seat-slot-witness')).toBeInTheDocument();
-    const witnessStand = screen.getByRole('heading', { name: 'Witness stand' }).closest('section');
+    const witnessStand = screen.getByRole('heading', { name: 'Expert seat' }).closest('section');
     expect(witnessStand).not.toBeNull();
     await user.click(within(witnessStand as HTMLElement).getByRole('button', { name: /Witness A/ }));
     await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
@@ -2031,7 +2135,7 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Trait mix' }));
+    await user.click(screen.getByRole('button', { name: 'Clash mix' }));
     await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
@@ -2091,7 +2195,7 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Fault line first' }));
+    await user.click(screen.getByRole('button', { name: 'Biggest split first' }));
     expect(screen.getByText('2 / 3 worldlines selected')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
 
@@ -2151,8 +2255,8 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Witness augmented' }));
-    expect(screen.getByRole('heading', { name: 'Augmented witness stand' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Auto-fill' }));
+    expect(screen.getByRole('heading', { name: 'Extra expert seat' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', {
@@ -2211,8 +2315,8 @@ describe('WorldlineRoundtableView', () => {
     );
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Expert witness' }));
-    await user.click(screen.getByRole('button', { name: 'Witness augmented' }));
+    await user.click(screen.getByRole('button', { name: 'Invite expert' }));
+    await user.click(screen.getByRole('button', { name: 'Auto-fill' }));
     await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
 
     expect(openRoomMock).toHaveBeenCalledWith('scenario-1', expect.objectContaining({
@@ -2405,8 +2509,11 @@ describe('WorldlineRoundtableView', () => {
       </MemoryRouter>,
     );
 
-    expect((await screen.findAllByRole('button', { name: 'Reseat and reopen' })).length).toBeGreaterThan(0);
-    await user.click(screen.getAllByRole('button', { name: 'Reseat and reopen' })[0]);
+    // Open the action menu dropdown first
+    const menuTrigger = await screen.findByRole('button', { name: 'More actions' });
+    await user.click(menuTrigger);
+    const reseatBtn = await screen.findByRole('button', { name: 'Reseat & restart' });
+    await user.click(reseatBtn);
     expect(await screen.findByText('Reopen this lineup')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /Representative C/ }));
@@ -2593,19 +2700,22 @@ describe('WorldlineRoundtableView', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Read-only replay')).toBeInTheDocument();
-    expect(screen.getByText('This stays inside Representative A.')).toBeInTheDocument();
+    expect(await screen.findByText('This stays inside Representative A.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     expect(setInteractionModeMock).toHaveBeenCalledWith('hotseat');
     expect(screen.getAllByText('Using the active roundtable thread only').length).toBeGreaterThan(0);
-    const threadRail = screen.getByRole('tablist', { name: 'Roundtable threads' });
-    expect(within(threadRail).getByText('Archive verdict')).toBeInTheDocument();
-    expect(screen.getByText((_, node) => node?.textContent === 'Archive verdictArchive verdict')).toBeInTheDocument();
+    const threadRail = screen.getByRole('tablist', { name: 'Topics' });
+    expect(within(threadRail).getByText('Verdict')).toBeInTheDocument();
+    expect(screen.getByText((_, node) => node?.textContent === 'VerdictVerdict')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Save read-only copy' }));
-    expect(screen.getByRole('button', { name: 'Read-only copy saved' })).toBeInTheDocument();
+    // Open the action menu to access Save copy / Import run
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(screen.getByRole('button', { name: 'Save copy' }));
+    // Re-open menu to check saved state
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(screen.getByRole('button', { name: 'Copy saved' })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Import local run' }));
+    await user.click(screen.getByRole('button', { name: 'Import run' }));
     expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
     expect(await screen.findByText('sim-import-destination')).toBeInTheDocument();
   });
@@ -2681,13 +2791,17 @@ describe('WorldlineRoundtableView', () => {
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
 
+    // Open the action menu to access Copy replay
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
     await user.click(screen.getByRole('button', { name: 'Copy replay' }));
 
     await waitFor(() => {
       expect(saveOracleReplayLocalCopyMock).toHaveBeenCalledTimes(1);
       expect(copyTextMock).toHaveBeenCalledWith('http://localhost:3000/roundtable/replay?roomLocal=local-roundtable-copy');
     });
-    expect(screen.getByRole('button', { name: 'Read-only copy saved' })).toBeInTheDocument();
+    // Re-open menu to check saved state
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(screen.getByRole('button', { name: 'Copy saved' })).toBeInTheDocument();
   });
 
   it('lets a live table reopen the representative picker and rebuild from the current seating', async () => {
@@ -2870,7 +2984,9 @@ describe('WorldlineRoundtableView', () => {
     expect(await screen.findByText('Representatives')).toBeInTheDocument();
     expect(screen.queryByText('Reseat each worldline representative')).not.toBeInTheDocument();
 
-    await user.click(screen.getAllByRole('button', { name: 'Reseat and reopen' })[0]);
+    // Open the action menu to access Reseat & restart
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(screen.getByRole('button', { name: 'Reseat & restart' }));
     expect(screen.getByText('Reseat each worldline representative')).toBeInTheDocument();
 
     await user.click(screen.getAllByRole('button', { name: 'Reopen this lineup' })[0]);
@@ -2993,12 +3109,12 @@ describe('WorldlineRoundtableView text layout contracts', () => {
     expect(collapsedPayload.page.controls.transcript_layout.collapsible_turn_count).toBeGreaterThanOrEqual(1);
     expect(collapsedPayload.page.controls.transcript_layout.collapsed_turn_count).toBeGreaterThanOrEqual(1);
 
-    await user.click(screen.getByRole('button', { name: 'Show full turn' }));
+    await user.click(screen.getByRole('button', { name: 'Show full text' }));
     expect(turnText).not.toHaveClass('is-collapsed');
     const expandedPayload = JSON.parse((window as AutomationTextWindow).render_game_to_text?.() ?? '{}');
     expect(expandedPayload.page.controls.transcript_layout.collapsed_turn_count).toBe(0);
 
-    await user.click(screen.getByRole('button', { name: 'Collapse turn' }));
+    await user.click(screen.getByRole('button', { name: 'Collapse' }));
     expect(turnText).toHaveClass('is-collapsed');
   });
 });
@@ -3116,11 +3232,11 @@ describe('WorldlineRoundtableView phase nav', () => {
     const nav = document.querySelector('.roundtable-phase-nav');
     expect(nav).toBeTruthy();
     const pills = nav!.querySelectorAll('.roundtable-phase-nav__pill');
-    expect(pills.length).toBe(3);
+    expect(pills.length).toBe(4); // 3 phase pills + 1 "Deep Dive" explore pill
 
     // Verify pill labels — phases go through getEndingRoomPhaseLabel → i18n mock keys
     const labels = [...pills].map((pill) => pill.textContent);
-    expect(labels.length).toBe(3);
+    expect(labels.length).toBe(4);
     expect(labels.every((l) => l && l.length > 0)).toBe(true);
   });
 
@@ -3177,7 +3293,7 @@ describe('WorldlineRoundtableView phase nav', () => {
 
     await screen.findByText('Opening.');
     const pills = document.querySelectorAll('.roundtable-phase-nav__pill');
-    expect(pills.length).toBe(2);
+    expect(pills.length).toBe(3); // 2 phase pills + 1 "Deep Dive" explore pill
 
     // Mock scrollIntoView on the target divider
     const divider = document.querySelector('[id^="phase-"]');
@@ -3238,12 +3354,211 @@ describe('WorldlineRoundtableView phase nav', () => {
     divider!.scrollIntoView = scrollSpy;
 
     const pills = document.querySelectorAll('.roundtable-phase-nav__pill');
-    expect(pills.length).toBe(2);
+    expect(pills.length).toBe(3); // 2 phase pills + 1 "Deep Dive" explore pill
     await user.click(pills[0]);
     expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' });
 
-    await user.click(screen.getByRole('button', { name: 'Reseat and reopen' }));
+    // Open the action menu to access Reseat & restart
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(screen.getByRole('button', { name: 'Reseat & restart' }));
     expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
+  });
+});
+
+describe('WorldlineRoundtableView post-verdict panel', () => {
+  it('switches between analyst and survey tabs and streams SSE-backed results', async () => {
+    const user = userEvent.setup();
+    const baseState = createBaseStoreState();
+    storeState.snapshot = {
+      ...baseState.snapshot,
+      turns: [
+        ...baseState.snapshot!.turns,
+        {
+          id: 'turn-2',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 2,
+          phase: 'crossfire',
+          participant_id: 'rep-a',
+          content: 'A sharper disagreement surfaces in crossfire.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:02Z',
+        },
+      ],
+    } as EndingRoomSnapshot;
+    storeState.threadsById = {
+      ...baseState.threadsById,
+      'thread-room': {
+        ...baseState.threadsById['thread-room'],
+        turns: storeState.snapshot!.turns,
+      },
+    };
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
+    storeState.pendingDrafts = {};
+    getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
+    getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
+    getAgentsMock.mockResolvedValue([]);
+    getCapabilitiesMock.mockResolvedValue({
+      factions: { enabled: false },
+      agent_conversation: { enabled: false },
+      roundtable_analyst: { enabled: true },
+      roundtable_survey: { enabled: true },
+    });
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/analyst')) {
+        return Promise.resolve(makeSseResponse([
+          'event: analyst_thinking\ndata: {"action":"query_causal_graph"\ndata: ,"params":{"query":"hinge"},"iteration":1}\n\n',
+          'event: analyst_tool_result\ndata: {"action":"query_causal_graph","summary":"The graph tightens around the hinge.","iteration":1,"elapsed_ms":45}\n\n',
+          'event: analyst_response\ndata: {"answer":"The hinge still decides the fork."\ndata: ,"iterations":1,"stopped_reason":"final_response"}\n\n',
+        ]));
+      }
+      if (url.endsWith('/survey')) {
+        return Promise.resolve(makeSseResponse([
+          'event: survey_response\ndata: {"participant_id":"rep-a","display_name":"Representative A"\ndata: ,"role":"representative","source_agent_id":"agent-a","source_branch_id":"branch-a","agent_identity_id":null,"answer":"Hold the hinge.","elapsed_ms":30}\n\n',
+          'event: survey_response\ndata: {"participant_id":"archivist","display_name":"Archivist","role":"archivist","source_agent_id":null,"source_branch_id":null,"agent_identity_id":null,"answer":"Archive the split.","elapsed_ms":55}\n\n',
+        ]));
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    }));
+
+    renderRoundtableView();
+    await screen.findByText('The first hinge was delayed too long.');
+
+    await user.click(screen.getByRole('button', { name: 'Deep Dive' }));
+
+    const analystTab = await screen.findByRole('tab', { name: /Research Analyst/i });
+    const surveyTab = await screen.findByRole('tab', { name: /Cross-Examine/i });
+    await waitFor(() => {
+      expect(analystTab).toBeEnabled();
+      expect(surveyTab).toBeEnabled();
+    });
+
+    await user.click(analystTab);
+    await waitFor(() => {
+      expect(analystTab).toHaveAttribute('aria-selected', 'true');
+      expect(document.getElementById('pvp-panel-analyst')).toHaveAttribute('aria-hidden', 'false');
+    });
+    const analystView = await screen.findByTestId('analyst-stream-view');
+    const analystTextarea = within(analystView).getByPlaceholderText('roundtable.analyst_placeholder');
+    await user.type(analystTextarea, 'What is the hinge?');
+    await user.click(screen.getByRole('button', { name: 'roundtable.analyst_ask' }));
+
+    await screen.findByText('The hinge still decides the fork.');
+    expect(screen.getByText('The graph tightens around the hinge.')).toBeInTheDocument();
+
+    await user.click(surveyTab);
+    await waitFor(() => {
+      expect(surveyTab).toHaveAttribute('aria-selected', 'true');
+      expect(document.getElementById('pvp-panel-survey')).toHaveAttribute('aria-hidden', 'false');
+    });
+    const surveyView = await screen.findByTestId('survey-stream-view');
+    const surveyTextarea = within(surveyView).getByPlaceholderText('roundtable.survey_placeholder');
+    await user.type(surveyTextarea, 'What should each side do?');
+    await user.click(screen.getByRole('button', { name: 'roundtable.survey_ask' }));
+
+    await screen.findByText('Hold the hinge.');
+    await screen.findByText('Archive the split.');
+
+    await user.click(analystTab);
+    expect(screen.getByText('The hinge still decides the fork.')).toBeInTheDocument();
+    expect(document.getElementById('pvp-panel-survey')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('resets analyst cache when the result object changes even if summary text stays the same', async () => {
+    const user = userEvent.setup();
+    const baseState = createBaseStoreState();
+    storeState.snapshot = {
+      ...baseState.snapshot,
+      turns: [
+        ...baseState.snapshot!.turns,
+        {
+          id: 'turn-2',
+          room_id: 'room-1',
+          thread_id: 'thread-room',
+          sequence: 2,
+          phase: 'crossfire',
+          participant_id: 'rep-a',
+          content: 'A sharper disagreement surfaces in crossfire.',
+          emotion: 'focused',
+          created_at: '2026-03-29T00:00:02Z',
+        },
+      ],
+    } as EndingRoomSnapshot;
+    storeState.threadsById = {
+      ...baseState.threadsById,
+      'thread-room': {
+        ...baseState.threadsById['thread-room'],
+        turns: storeState.snapshot!.turns,
+      },
+    };
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
+    storeState.pendingDrafts = {};
+    getScenarioMock.mockResolvedValue({ id: 'scenario-1', question: 'Q', status: 'done', scene_theme: 'court', agents: [], language: 'en', messages: [] });
+    getStoryMock.mockResolvedValue({ scenario_id: 'scenario-1', question: 'Q', status: 'done', branches: [{ id: 'branch-a', title: 'A', probability: 0.6, status: 'COMPLETED', story: 'S', insight: 'I', key_moments: [], parent_branch_id: null, fork_reason: '' }, { id: 'branch-b', title: 'B', probability: 0.4, status: 'COMPLETED', story: 'S2', insight: 'I2', key_moments: [], parent_branch_id: null, fork_reason: '' }] });
+    getAgentsMock.mockResolvedValue([]);
+    getCapabilitiesMock.mockResolvedValue({
+      factions: { enabled: false },
+      agent_conversation: { enabled: false },
+      roundtable_analyst: { enabled: true },
+      roundtable_survey: { enabled: false },
+    });
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/analyst')) {
+        return Promise.resolve(makeSseResponse([
+          'event: analyst_response\ndata: {"answer":"Cached analyst answer.","iterations":1,"stopped_reason":"final_response"}\n\n',
+        ]));
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    }));
+
+    const view = renderRoundtableView();
+    await screen.findByText('The first hinge was delayed too long.');
+
+    await user.click(screen.getByRole('button', { name: 'Deep Dive' }));
+    const analystTab = await screen.findByRole('tab', { name: /Research Analyst/i });
+    await waitFor(() => expect(analystTab).toBeEnabled());
+    await user.click(analystTab);
+
+    await waitFor(() => {
+      expect(analystTab).toHaveAttribute('aria-selected', 'true');
+      expect(document.getElementById('pvp-panel-analyst')).toHaveAttribute('aria-hidden', 'false');
+    });
+    const analystView = await screen.findByTestId('analyst-stream-view');
+    const analystTextarea = within(analystView).getByPlaceholderText('roundtable.analyst_placeholder');
+    await user.type(analystTextarea, 'Why did it fork?');
+    await user.click(screen.getByRole('button', { name: 'roundtable.analyst_ask' }));
+    await screen.findByText('Cached analyst answer.');
+
+    storeState.result = {
+      ...storeState.result!,
+      summary: 'The roundtable converged on a single hinge.',
+      archivist_note: 'A new archivist note arrived after reseating.',
+      phase_insights: [
+        {
+          phase: 'verdict',
+          stakes: 'Re-evaluate the hinge.',
+          moderator_focus: 'Re-open the evidence.',
+          commentary: 'Same summary, different supporting context.',
+        },
+      ],
+    } as EndingRoomResult;
+
+    view.rerender(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText('Cached analyst answer.')).toBeNull();
+    });
+    expect(screen.getByPlaceholderText('roundtable.analyst_placeholder')).toBeInTheDocument();
   });
 });
 
@@ -3302,7 +3617,7 @@ describe('WorldlineRoundtableView mobile roster modal', () => {
     const modal = document.querySelector('.roundtable-mobile-roster-modal');
     expect(modal).toBeTruthy();
     expect(modal!.textContent).toContain('Representative A');
-    expect(modal!.textContent).toContain('Expert witness');
+    expect(modal!.textContent).toContain('Expert');
 
     // Dialog semantics
     expect(modal!.getAttribute('role')).toBe('dialog');

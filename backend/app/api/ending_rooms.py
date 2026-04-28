@@ -26,6 +26,7 @@ from app.models import (
     Scenario,
 )
 from app.models.database import get_engine
+from app.services.llm_client import validate_llm_base_url
 from app.services.ending_room_service import (
     EndingRoomServiceError,
     append_room_user_turn_async,
@@ -491,3 +492,197 @@ async def ending_room_websocket_endpoint(websocket: WebSocket, room_id: str) -> 
 @ws_router.websocket("/ws/ending-room/{room_id}")
 async def ending_room_websocket_alias_endpoint(websocket: WebSocket, room_id: str) -> None:
     await _run_ending_room_websocket_session(websocket, room_id)
+
+
+class SurveyRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+    participant_ids: list[str] = Field(..., min_length=1, max_length=6)
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("question must not be empty")
+        return cleaned
+
+    @field_validator("participant_ids")
+    @classmethod
+    def validate_participant_ids(cls, value: list[str]) -> list[str]:
+        normalized = [item.strip() for item in value if item and item.strip()]
+        if not normalized:
+            raise ValueError("participant_ids must not be empty")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("participant_ids must be unique")
+        return normalized
+
+
+class AnalystRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("question must not be empty")
+        return cleaned
+
+
+def _require_roundtable_feature(flag_name: str, feature_label: str) -> None:
+    from app.config import settings
+
+    if not getattr(settings, flag_name):
+        raise api_error(404, "FEATURE_DISABLED", f"Feature '{feature_label}' is not enabled")
+
+
+def _validate_roundtable_llm_overrides(
+    api_key: str | None,
+    base_url: str | None,
+) -> tuple[str | None, str | None]:
+    api_key = api_key.strip() if isinstance(api_key, str) else None
+    api_key = api_key or None
+    base_url = base_url.strip() if isinstance(base_url, str) else None
+    base_url = base_url or None
+    if base_url:
+        validated = validate_llm_base_url(base_url)
+        if validated is None:
+            raise api_error(
+                400, "LLM_BASE_URL_NOT_ALLOWED",
+                "Provided llm_base_url is not in the allowed provider list",
+            )
+        if not api_key:
+            raise api_error(
+                400, "BYOK_API_KEY_REQUIRED",
+                "An API key is required when using a custom LLM base URL",
+            )
+        return api_key, validated
+    return api_key, base_url
+
+
+def _raise_roundtable_service_error(exc: Exception) -> None:
+    status_code = getattr(exc, "status_code", 500)
+    code = getattr(exc, "code", "ROUNDTABLE_INTERNAL_ERROR")
+    message = getattr(exc, "message", "Failed to run roundtable service")
+    raise api_error(status_code, code, message) from exc
+
+
+def _encode_sse_frame(event_name: str, payload: dict) -> str:
+    import json
+
+    return f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _stream_roundtable_events(
+    iterator,
+    *,
+    fallback_event: str,
+    fallback_payload: dict,
+):
+    try:
+        async for event in iterator:
+            event_name = event.get("event", "message")
+            payload = event.get("data", {})
+            yield _encode_sse_frame(event_name, payload)
+    except Exception:
+        logger.exception("Roundtable SSE stream failed for event %s", fallback_event)
+        yield _encode_sse_frame(fallback_event, fallback_payload)
+
+
+@router.post("/scenario/{scenario_id}/survey")
+async def create_roundtable_survey_endpoint(
+    scenario_id: str,
+    req: SurveyRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    from fastapi.responses import StreamingResponse
+
+    from app.services.roundtable_survey import (
+        RoundtableSurveyServiceError,
+        build_roundtable_survey_stream,
+    )
+
+    _require_roundtable_feature("FEATURE_ROUNDTABLE_SURVEY", "roundtable_survey")
+    validated_key, validated_url = _validate_roundtable_llm_overrides(
+        req.llm_api_key, req.llm_base_url,
+    )
+    await asyncio.to_thread(_ensure_owned_room_creation_sync, scenario_id, principal)
+    try:
+        stream = await build_roundtable_survey_stream(
+            scenario_id,
+            req.question,
+            req.participant_ids,
+            api_key=validated_key,
+            base_url=validated_url,
+            model=req.llm_model,
+        )
+    except RoundtableSurveyServiceError as exc:
+        _raise_roundtable_service_error(exc)
+    return StreamingResponse(
+        _stream_roundtable_events(
+            stream,
+            fallback_event="survey_response",
+            fallback_payload={
+                "participant_id": "",
+                "display_name": "",
+                "role": "",
+                "source_agent_id": None,
+                "source_branch_id": None,
+                "agent_identity_id": None,
+                "answer": "",
+                "elapsed_ms": 0,
+                "error": "Roundtable survey stream failed",
+            },
+        ),
+        media_type="text/event-stream",
+    )
+
+
+@router.post("/scenario/{scenario_id}/analyst")
+async def create_roundtable_analyst_endpoint(
+    scenario_id: str,
+    req: AnalystRequest,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    from fastapi.responses import StreamingResponse
+
+    from app.services.roundtable_analyst import (
+        RoundtableAnalystServiceError,
+        build_roundtable_analyst_stream,
+    )
+
+    _require_roundtable_feature("FEATURE_ROUNDTABLE_ANALYST", "roundtable_analyst")
+    validated_key, validated_url = _validate_roundtable_llm_overrides(
+        req.llm_api_key, req.llm_base_url,
+    )
+    await asyncio.to_thread(_ensure_owned_room_creation_sync, scenario_id, principal)
+    try:
+        stream = await build_roundtable_analyst_stream(
+            scenario_id,
+            req.question,
+            api_key=validated_key,
+            base_url=validated_url,
+            model=req.llm_model,
+        )
+    except RoundtableAnalystServiceError as exc:
+        _raise_roundtable_service_error(exc)
+    return StreamingResponse(
+        _stream_roundtable_events(
+            stream,
+            fallback_event="analyst_response",
+            fallback_payload={
+                "answer": "",
+                "error": "Roundtable analyst stream failed",
+                "iterations": 0,
+                "stopped_reason": "stream_failure",
+            },
+        ),
+        media_type="text/event-stream",
+    )
+

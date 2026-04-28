@@ -32,7 +32,7 @@ describe('roundtableHelpers', () => {
 
   describe('getThreadLabel', () => {
     it('returns main table label for room thread in zh', () => {
-      expect(getThreadLabel({ mode: 'room', title: 'Table 1' } as never, true)).toBe('主桌记录');
+      expect(getThreadLabel({ mode: 'room', title: 'Table 1' } as never, true)).toBe('主桌讨论');
     });
     it('returns thread title for non-room thread', () => {
       expect(getThreadLabel({ mode: 'followup', title: 'Thread A' } as never, false)).toBe('Thread A');
@@ -50,7 +50,7 @@ describe('roundtableHelpers', () => {
 
   describe('getSelectionReasonLabel', () => {
     it('returns localized label for user_selected', () => {
-      expect(getSelectionReasonLabel('user_selected', true)).toBe('你点的');
+      expect(getSelectionReasonLabel('user_selected', true)).toBe('你选的');
       expect(getSelectionReasonLabel('user_selected', false)).toBe('Your pick');
     });
     it('returns localized label for top_impact', () => {
@@ -66,12 +66,12 @@ describe('roundtableHelpers', () => {
 
   describe('getArchivistModeLabel / getRepresentativeHotseatLabel', () => {
     it('returns zh labels', () => {
-      expect(getArchivistModeLabel(true)).toBe('档案官主持');
-      expect(getRepresentativeHotseatLabel(true)).toBe('点名代表');
+      expect(getArchivistModeLabel(true)).toBe('主持人引导');
+      expect(getRepresentativeHotseatLabel(true)).toBe('单独追问');
     });
     it('returns en labels', () => {
-      expect(getArchivistModeLabel(false)).toBe('Archivist lead');
-      expect(getRepresentativeHotseatLabel(false)).toBe('Question one representative');
+      expect(getArchivistModeLabel(false)).toBe('Host-guided');
+      expect(getRepresentativeHotseatLabel(false)).toBe('Question one rep');
     });
   });
 
@@ -82,11 +82,11 @@ describe('roundtableHelpers', () => {
     });
     it('returns archivist_route default note', () => {
       const note = getRoundtableModeNote('archivist_route', false);
-      expect(note).toContain('Archivist');
+      expect(note).toContain('host');
     });
     it('returns thread_followup note', () => {
       const note = getRoundtableModeNote('thread_followup', false);
-      expect(note).toContain('follow-up thread');
+      expect(note).toContain('thread');
     });
   });
 
@@ -95,7 +95,7 @@ describe('roundtableHelpers', () => {
       expect(buildRoundtableVerdictPrompt('和平收束', true)).toContain('和平收束');
     });
     it('builds fallback prompt for empty summary', () => {
-      expect(buildRoundtableVerdictPrompt('', false)).toContain('roundtable settle');
+      expect(buildRoundtableVerdictPrompt('', false)).toContain('roundtable reach');
     });
   });
 
@@ -219,7 +219,7 @@ describe('roundtableHelpers', () => {
     it('parses verdict anchor', () => {
       const result = describeRoundtableAnchor(['roundtable:verdict:room1'], false, [], [], t);
       expect(result?.kind).toBe('verdict');
-      expect(result?.kindLabel).toBe('Archive verdict');
+      expect(result?.kindLabel).toBe('Verdict');
     });
     it('parses phase anchor with insight', () => {
       const result = describeRoundtableAnchor(

@@ -1,4 +1,4 @@
-import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -91,6 +91,9 @@ import type {
 } from '../types';
 import RoundtablePickerPanel from './RoundtablePickerPanel';
 import RoundtableTranscriptList from './RoundtableTranscriptList';
+import PostVerdictPanel, { type PostVerdictTab } from './PostVerdictPanel';
+import { INITIAL_ANALYST_CACHE, type AnalystCacheState } from './AnalystStreamView';
+import { INITIAL_SURVEY_CACHE, type SurveyCacheState } from './SurveyStreamView';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useFactionOverlay } from '../hooks/useFactionOverlay';
 import { AvatarRing } from '../components/ui/AvatarRing';
@@ -128,9 +131,25 @@ function buildPhaseInsightLabel(
   if (!rawDetail || rawDetail === phaseLabel || rawDetail === insight.stakes) {
     return phaseLabel;
   }
-  const maxLength = isZh ? 18 : 30;
+  const maxLength = isZh ? 32 : 50;
   const clipped = rawDetail.length > maxLength ? `${rawDetail.slice(0, maxLength).trimEnd()}…` : rawDetail;
-  return `${phaseLabel} · ${clipped}`;
+  return `${phaseLabel}·${clipped}`;
+}
+
+function buildPhaseInsightTitle(
+  insight: { phase: string; commentary?: string; stakes?: string },
+  options: { isZh: boolean },
+) {
+  const normalizedCommentary = String(insight.commentary ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalizedCommentary) {
+    return String(insight.stakes ?? '').trim() || '';
+  }
+  const firstSentence = normalizedCommentary.split(/[。！？!?]/)[0]?.trim() ?? '';
+  const firstClause = firstSentence.split(/[:：]/)[0]?.trim() ?? '';
+  const rawDetail = (firstClause || firstSentence).trim();
+  if (!rawDetail) return normalizedCommentary.slice(0, 40);
+  const maxLength = options.isZh ? 40 : 60;
+  return rawDetail.length > maxLength ? `${rawDetail.slice(0, maxLength).trimEnd()}…` : rawDetail;
 }
 
 export default function WorldlineRoundtableView() {
@@ -198,8 +217,17 @@ export default function WorldlineRoundtableView() {
   const [importingReplay, setImportingReplay] = useState(false);
   const [importError, setImportError] = useState('');
   const [briefCopied, setBriefCopied] = useState(false);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [showPostVerdict, setShowPostVerdict] = useState(false);
+  const [postVerdictTab, setPostVerdictTab] = useState<PostVerdictTab>('agent_chat');
+  const analystCacheRef = useRef<AnalystCacheState>({ ...INITIAL_ANALYST_CACHE });
+  const surveyCacheRef = useRef<SurveyCacheState>({ ...INITIAL_SURVEY_CACHE, responses: new Map() });
+  const [analystVersion, bumpAnalyst] = useReducer((x: number) => x + 1, 0);
+  const [surveyVersion, bumpSurvey] = useReducer((x: number) => x + 1, 0);
   const [pendingQuestionAnchorIds, setPendingQuestionAnchorIds] = useState<string[]>([]);
   const [expandedTurnKeys, setExpandedTurnKeys] = useState<Record<string, boolean>>({});
+  const actionMenuRef = useRef<HTMLDivElement>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const transcriptAutoStickRef = useRef(false);
   const transcriptHydratedRef = useRef(false);
   const transcriptListRef = useRef<HTMLDivElement>(null);
@@ -210,6 +238,17 @@ export default function WorldlineRoundtableView() {
   useEffect(() => {
     isZhRef.current = isZh;
   }, [isZh]);
+
+  useEffect(() => {
+    if (!actionMenuOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (actionMenuRef.current && !actionMenuRef.current.contains(e.target as Node)) {
+        setActionMenuOpen(false);
+      }
+    };
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, [actionMenuOpen]);
 
   const {
     snapshot,
@@ -241,13 +280,23 @@ export default function WorldlineRoundtableView() {
   );
   const effectiveSnapshot = replaySnapshot ?? snapshot;
   const effectiveResult = replayPayload?.roomResult ?? result;
+  const prevEffectiveResultRef = useRef(effectiveResult);
+  useEffect(() => {
+    if (prevEffectiveResultRef.current !== effectiveResult) {
+      prevEffectiveResultRef.current = effectiveResult;
+      analystCacheRef.current = { ...INITIAL_ANALYST_CACHE };
+      surveyCacheRef.current = { ...INITIAL_SURVEY_CACHE, responses: new Map() };
+      bumpAnalyst();
+      bumpSurvey();
+    }
+  }, [effectiveResult]);
+
   const effectiveThreadsById = replaySnapshot ? replayThreadsById : threadsById;
   const effectiveThreadOrder = replaySnapshot
     ? replaySnapshot.threads.map((thread) => thread.id)
     : threadOrder;
   const isLiveRoom = Boolean(effectiveSnapshot && !replayPayload);
   const isTabletViewport = viewportWidth <= 980;
-  const isMobileViewport = viewportWidth <= 640;
   const uiLanguage: 'zh' | 'en' = isZh ? 'zh' : 'en';
   const oracleProfile = useMemo(
     () => inferGameplayProfile(
@@ -357,7 +406,7 @@ export default function WorldlineRoundtableView() {
         ]);
         const nextStoryData = {
           ...nextStory,
-          question: nextStory.question || nextScenario.question,
+          question: nextStory?.question || nextScenario?.question,
         };
 
         if (cancelled) return;
@@ -902,7 +951,7 @@ export default function WorldlineRoundtableView() {
     () => ({
       anchorIds: [buildRoundtableAnchorId('verdict', effectiveSnapshot?.id ?? 'table')],
       prompt: verdictPrompt,
-      threadTitle: isZh ? '档案总结' : 'Archive Verdict',
+      threadTitle: t('roundtable.phase_verdict'),
     }),
     [effectiveSnapshot?.id, isZh, verdictPrompt],
   );
@@ -930,26 +979,26 @@ export default function WorldlineRoundtableView() {
     const lines = [
       `# ${t('roundtable.title')}`,
       '',
-      isZh ? '## 当前问题' : '## Current Question',
+      `## ${t('roundtable.question_title')}`,
       storyData?.question ?? '—',
       '',
-      isZh ? '## 当前范围' : '## Scope',
+      `## ${t('roundtable.scope_title')}`,
       transcriptSubtitle,
     ];
     if (effectiveResult?.summary) {
-      lines.push('', isZh ? '## 档案总结' : '## Archivist Verdict', effectiveResult.summary);
+      lines.push('', `## ${t('roundtable.verdict_title')}`, effectiveResult.summary);
     }
     if (hasDistinctArchivistNote && effectiveResult?.archivist_note) {
-      lines.push('', isZh ? '## 档案官注记' : '## Archivist Note', effectiveResult.archivist_note);
+      lines.push('', `## ${t('roundtable.archivist_note_title')}`, effectiveResult.archivist_note);
     }
     if ((effectiveResult?.phase_insights?.length ?? 0) > 0) {
-      lines.push('', isZh ? '## 阶段洞察' : '## Phase Insights');
+      lines.push('', `## ${t('roundtable.phase_insights_title')}`);
       (effectiveResult?.phase_insights ?? []).slice(0, 3).forEach((insight) => {
         lines.push(`- ${buildPhaseInsightLabel(insight, { isZh, t })}: ${insight.commentary || insight.stakes}`);
       });
     }
     if (representatives.length > 0) {
-      lines.push('', isZh ? '## 当前代表席' : '## Current Representatives');
+      lines.push('', `## ${t('roundtable.representatives_title')}`);
       representatives.forEach((participant) => {
         lines.push(`- ${participant.display_name}`);
       });
@@ -1013,6 +1062,14 @@ export default function WorldlineRoundtableView() {
   const activateAnchor = useCallback((action: AnchorAction) => {
     setComposerDraft(action.prompt);
     setPendingQuestionAnchorIds(action.anchorIds);
+    requestAnimationFrame(() => {
+      const el = composerTextareaRef.current;
+      if (el) {
+        el.style.height = 'auto';
+        el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+        el.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+      }
+    });
   }, [setComposerDraft]);
 
   const handleStartAnchoredThread = useCallback(async (action: AnchorAction) => {
@@ -1567,61 +1624,74 @@ export default function WorldlineRoundtableView() {
       <header className="worldline-roundtable-hero">
         <div className="worldline-roundtable-hero__topline">
           <button type="button" className="btn btn-ghost" onClick={handleBack}>
-            {isZh ? '返回结果页' : 'Back to results'}
+            {t('roundtable.back_to_results')}
           </button>
           <div
             className="worldline-roundtable-hero__actions"
-            style={isLiveRoom ? { flexWrap: 'nowrap', overflowX: 'auto' } : undefined}
           >
-            {!replayPayload && effectiveSnapshot && (
+            <div className="roundtable-hero-action-menu" ref={actionMenuRef}>
+              {(effectiveSnapshot || replayPayload) && (
               <button
                 type="button"
-                className="btn btn-ghost"
-                onClick={() => {
-                  if (editingRepresentatives) {
-                    setEditingRepresentatives(false);
-                    return;
-                  }
-                  handleEditRepresentatives();
-                }}
+                className="roundtable-hero-action-menu__trigger"
+                onClick={() => setActionMenuOpen((prev) => !prev)}
+                aria-expanded={actionMenuOpen}
+                aria-label={t('roundtable.more_actions')}
               >
-                {editingRepresentatives
-                  ? (isZh ? '返回当前圆桌' : 'Back to current table')
-                  : (isZh ? '改选代表并重开' : 'Reseat and reopen')}
+                ···
               </button>
-            )}
-            <button
-              type="button"
-              className="btn"
-              onClick={() => void handleCopyPermalink()}
-              disabled={!effectiveReplayPayload}
-            >
-              {permalinkCopied
-                ? (isZh ? '回放链接已复制' : 'Replay link copied')
-                : (isZh ? '复制回放' : 'Copy replay')}
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={handleSaveLocalCopy}
-              disabled={!effectiveReplayPayload}
-            >
-              {localCopySaved
-                ? (isZh ? '只读副本已保存' : 'Read-only copy saved')
-                : (isZh ? '保存只读副本' : 'Save read-only copy')}
-            </button>
-            {replayPayload?.scenarioReplay && (
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => void handleImportReplay()}
-                disabled={importingReplay}
-              >
-                {importingReplay
-                  ? (isZh ? '导入中…' : 'Importing…')
-                  : (isZh ? '导入本地运行' : 'Import local run')}
-              </button>
-            )}
+              )}
+              {actionMenuOpen && (
+                <div className="roundtable-hero-action-menu__dropdown">
+                  {!replayPayload && effectiveSnapshot && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        if (editingRepresentatives) {
+                          setEditingRepresentatives(false);
+                          return;
+                        }
+                        handleEditRepresentatives();
+                      }}
+                    >
+                      {editingRepresentatives
+                        ? t('roundtable.back_to_table')
+                        : t('roundtable.reseat_reopen')}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => { setActionMenuOpen(false); void handleCopyPermalink(); }}
+                    disabled={!effectiveReplayPayload}
+                  >
+                    {permalinkCopied
+                      ? t('roundtable.replay_copied')
+                      : t('roundtable.copy_replay')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setActionMenuOpen(false); handleSaveLocalCopy(); }}
+                    disabled={!effectiveReplayPayload}
+                  >
+                    {localCopySaved
+                      ? t('roundtable.readonly_saved')
+                      : t('roundtable.save_readonly')}
+                  </button>
+                  {replayPayload?.scenarioReplay && (
+                    <button
+                      type="button"
+                      onClick={() => { setActionMenuOpen(false); void handleImportReplay(); }}
+                      disabled={importingReplay}
+                    >
+                      {importingReplay
+                        ? t('roundtable.importing')
+                        : t('roundtable.import_replay')}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
         <div className="worldline-roundtable-hero__body">
@@ -1633,30 +1703,15 @@ export default function WorldlineRoundtableView() {
               <span className="archive-chip archive-chip--primary">
                 {getEndingRoomStatusLabel(loading ? 'loading' : (effectiveSnapshot?.status ?? 'draft'), t)}
               </span>
-              <span className="archive-chip">
-                {(storyData?.branches.length ?? 0)} {isZh ? '条世界线' : 'worldlines'}
-              </span>
-              <span className="archive-chip">
-                {representatives.length} {isZh ? '位代表' : 'representatives'}
-              </span>
-              <span className="archive-chip">
-                {threadList.length} {isZh ? '条线程' : 'threads'}
-              </span>
-              {replayPayload && (
-                <span className="archive-chip">{isZh ? '只读回放' : 'Read-only replay'}</span>
-              )}
               <span className="archive-chip archive-chip--profile">{oracleProfileLabel}</span>
             </div>
-            <div className="worldline-roundtable-theme-strip" aria-label={isZh ? '题材提示' : 'Theme cues'}>
+            <div className="worldline-roundtable-theme-strip" aria-label={t('roundtable.theme_cues_label')}>
               {oracleProfileHooks.slice(0, 3).map((hook) => (
                 <span key={hook} className="worldline-roundtable-theme-chip">{hook}</span>
               ))}
             </div>
           </div>
-          <div
-            className="worldline-roundtable-hero__stage"
-            style={{ backgroundImage: `url(${ORACLE_UI_ASSETS.roundtablePanel})` }}
-          >
+          <div className="worldline-roundtable-hero__stage">
             <div className="worldline-roundtable-hero__stage-head">
               <img
                 className="worldline-roundtable-hero__stage-badge"
@@ -1666,21 +1721,16 @@ export default function WorldlineRoundtableView() {
               />
               <div>
                 <p className="worldline-roundtable-hero__stage-kicker">
-                  {isZh ? '本桌状态' : 'Table status'}
+                  {t('roundtable.table_status')}
                 </p>
-                <strong>{effectiveResult?.summary ?? t('roundtable.entry_hint')}</strong>
+                <strong>{loading ? t('common.loading') : getEndingRoomStatusLabel(effectiveSnapshot?.status ?? 'draft', t)}</strong>
               </div>
             </div>
             <div className="worldline-roundtable-hero__stage-metrics">
-              <span>{isZh ? '档案官主持' : 'Archivist hosted'}</span>
-              <span>{loading ? t('common.loading') : getEndingRoomStatusLabel(effectiveSnapshot?.status ?? 'draft', t)}</span>
-              <span>{isZh ? '只允许本桌追问' : 'Scope stays inside this table'}</span>
+              <span>{t('roundtable.hosted_by_archivist')}</span>
+              <span>{`${representatives.length} ${t('roundtable.representatives_title')}`}</span>
+              <span>{t('roundtable.scope_this_table')}</span>
             </div>
-            <p className="worldline-roundtable-hero__stage-note">
-              {isZh
-                ? '继续追问时，只允许读取本桌 transcript 与已归档的多线摘要。'
-                : 'Follow-up turns only read the current table transcript and archived crossline summaries.'}
-            </p>
           </div>
         </div>
       </header>
@@ -1725,28 +1775,11 @@ export default function WorldlineRoundtableView() {
               <summary className="worldline-roundtable-sidebar__summary">
                 <span>{isZh ? `${representatives.length} 位代表 · 展开详情` : `${representatives.length} reps · Expand details`}</span>
               </summary>
-            <section
-              className="worldline-roundtable-card worldline-roundtable-card--summary"
-              style={{ backgroundImage: `url(${ORACLE_UI_ASSETS.roundtablePanel})` }}
-            >
-              <img
-                className="worldline-roundtable-card__banner"
-                src={ORACLE_UI_ASSETS.roundtableBanner}
-                alt=""
-                aria-hidden="true"
-              />
-              <div className="worldline-roundtable-summary__top">
-                <div>
-                  <span className="worldline-roundtable-summary__eyebrow">{t('roundtable.phase_verdict')}</span>
-                  <h2>{effectiveResult?.summary ?? t('roundtable.loading')}</h2>
-                </div>
-                {renderSummaryActions()}
-              </div>
-            </section>
+            {/* Verdict card removed — single verdict display lives in synthesis block */}
 
             <section className="worldline-roundtable-card">
               <div className="worldline-roundtable-card__heading">
-                <h3>{isZh ? '代表席' : 'Representatives'}</h3>
+                <h3>{t('roundtable.representatives_title')}</h3>
                 <div className="worldline-roundtable-card__heading-actions">
                   <span>{representatives.length}</span>
                 </div>
@@ -1820,12 +1853,12 @@ export default function WorldlineRoundtableView() {
                           <strong>{participant.display_name}</strong>
                           {isCurrentSpeaker && (
                             <span className="worldline-roundtable-seat__status">
-                              {isZh ? '当前发言' : 'Speaking'}
+                              {t('roundtable.speaking_now')}
                             </span>
                           )}
                           {!isCurrentSpeaker && isHotseatFocus && (
                             <span className="worldline-roundtable-seat__status worldline-roundtable-seat__status--hotseat">
-                              {isZh ? '热座目标' : 'Hotseat'}
+                              {t('roundtable.hotseat_target')}
                             </span>
                           )}
                         </div>
@@ -1845,7 +1878,7 @@ export default function WorldlineRoundtableView() {
                         )}
                         <div className="worldline-roundtable-seat__metrics">
                           {impactScore > 0 && (
-                            <span>{isZh ? `影响 ${Math.round(impactScore * 100)}` : `Impact ${Math.round(impactScore * 100)}`}</span>
+                            <span>{t('roundtable.impact_score', { score: Math.round(impactScore * 100) })}</span>
                           )}
                           {selectionReason && <span>{selectionReason}</span>}
                         </div>
@@ -1859,7 +1892,7 @@ export default function WorldlineRoundtableView() {
             {effectiveResult?.phase_insights?.length ? (
               <section className="worldline-roundtable-card">
                 <div className="worldline-roundtable-card__heading">
-                  <h3>{isZh ? '阶段洞察' : 'Phase insights'}</h3>
+                  <h3>{t('roundtable.phase_insights_title')}</h3>
                 </div>
                 <Accordion
                   type="single"
@@ -1870,9 +1903,21 @@ export default function WorldlineRoundtableView() {
                   aria-label={t('roundtable.phase_insights_label')}
                 >
                   {effectiveResult.phase_insights.map((insight, index) => (
-                    <AccordionItem key={`${insight.phase}-${index}`} value={`${insight.phase}-${index}`}>
-                      <AccordionTrigger>
-                        {buildPhaseInsightLabel(insight, { isZh, t })}
+                    <AccordionItem key={`${insight.phase}-${index}`} value={`${insight.phase}-${index}`} className="roundtable-phase-card border border-border-default rounded-2xl mb-2.5 last:mb-0 overflow-hidden">
+                      <AccordionTrigger className="editorial-chapter-trigger">
+                        <span className="editorial-chapter-header">
+                          <span className="editorial-chapter-number" aria-hidden="true">
+                            {String(index + 1).padStart(2, '0')}
+                          </span>
+                          <span className="editorial-chapter-content">
+                            <span className="editorial-chapter-title">{buildPhaseInsightTitle(insight, { isZh }) || buildPhaseInsightLabel(insight, { isZh, t })}</span>
+                            {insight.commentary && (
+                              <span className="editorial-chapter-preview">
+                                {insight.commentary.slice(0, 80)}{insight.commentary.length > 80 ? '…' : ''}
+                              </span>
+                            )}
+                          </span>
+                        </span>
                       </AccordionTrigger>
                       <AccordionContent>
                         <article className="worldline-roundtable-insight">
@@ -1910,21 +1955,42 @@ export default function WorldlineRoundtableView() {
           <section className="worldline-roundtable-main">
             {effectiveResult?.summary && (
               <section className="worldline-roundtable-synthesis">
-                <h2 className="worldline-roundtable-synthesis__title">{effectiveResult.summary}</h2>
+                <span className="worldline-roundtable-synthesis__eyebrow">{t('roundtable.phase_verdict')}</span>
+                <div className="editorial-report-chapter">
+                  <span className="editorial-report-number" aria-hidden="true">01</span>
+                  <div>
+                    <span className="editorial-report-label">{t('roundtable.report_verdict')}</span>
+                    <h2 className="worldline-roundtable-synthesis__title">{effectiveResult.summary}</h2>
+                  </div>
+                </div>
                 {effectiveResult.next_move && (
-                  <p className="worldline-roundtable-synthesis__next-move">{effectiveResult.next_move}</p>
+                  <div className="editorial-report-chapter">
+                    <span className="editorial-report-number" aria-hidden="true">02</span>
+                    <div>
+                      <span className="editorial-report-label">{t('roundtable.report_next_steps')}</span>
+                      <p className="worldline-roundtable-synthesis__next-move">{effectiveResult.next_move}</p>
+                    </div>
+                  </div>
                 )}
                 {hasDistinctArchivistNote && effectiveResult.archivist_note && (
-                  <p className="worldline-roundtable-synthesis__note">{effectiveResult.archivist_note}</p>
+                  <div className="editorial-report-chapter">
+                    <span className="editorial-report-number" aria-hidden="true">03</span>
+                    <div>
+                      <span className="editorial-report-label">{t('roundtable.report_archivist')}</span>
+                      <p className="worldline-roundtable-synthesis__note">{effectiveResult.archivist_note}</p>
+                    </div>
+                  </div>
                 )}
-                {isLiveRoom && isMobileViewport && renderSummaryActions(
-                  'worldline-roundtable-summary__actions worldline-roundtable-summary__actions--synthesis',
+                {isLiveRoom && !replayPayload && (
+                  <div className="worldline-roundtable-synthesis__actions">
+                    {renderSummaryActions()}
+                  </div>
                 )}
               </section>
             )}
             <div className="ending-chat-transcript-header worldline-roundtable-transcript-header">
               <div>
-                <h3>{isZh ? '圆桌记录' : 'Roundtable transcript'}</h3>
+                <h3>{t('roundtable.transcript_title')}</h3>
                 <p>{transcriptSubtitle}</p>
               </div>
               <div className="ending-chat-transcript-header__meta">
@@ -1941,7 +2007,7 @@ export default function WorldlineRoundtableView() {
             </div>
 
             {phaseList.length > 1 && (
-              <nav className="roundtable-phase-nav" aria-label={isZh ? '阶段导航' : 'Phase navigation'}>
+              <nav className="roundtable-phase-nav" aria-label={t('roundtable.phase_nav_label')}>
                 {phaseList.map((phase) => (
                   <button
                     key={phase}
@@ -1956,11 +2022,23 @@ export default function WorldlineRoundtableView() {
                     {phase}
                   </button>
                 ))}
+                {effectiveResult && (
+                  <>
+                    <span className="roundtable-phase-nav__divider" aria-hidden="true" />
+                    <button
+                      type="button"
+                      className={`roundtable-phase-nav__pill is-explore ${showPostVerdict ? 'is-active' : ''}`}
+                      onClick={() => setShowPostVerdict((prev) => !prev)}
+                    >
+                      {t('roundtable.explore_tab')}
+                    </button>
+                  </>
+                )}
               </nav>
             )}
 
             {threadList.length > 0 && (
-              <div className="ending-chat-thread-rail" role="tablist" aria-label={isZh ? '圆桌线程' : 'Roundtable threads'}>
+              <div className="ending-chat-thread-rail" role="tablist" aria-label={t('roundtable.threads_label')}>
                 {threadList.map((thread) => (
                   <button
                     key={thread.id}
@@ -2026,6 +2104,23 @@ export default function WorldlineRoundtableView() {
                 )}
               </div>
 
+            {showPostVerdict && effectiveResult && (
+              <PostVerdictPanel
+                scenarioId={id ?? ''}
+                participants={participants}
+                effectiveResult={effectiveResult}
+                isZh={isZh}
+                activeTab={postVerdictTab}
+                onTabChange={setPostVerdictTab}
+                analystCacheRef={analystCacheRef}
+                analystVersion={analystVersion}
+                bumpAnalyst={bumpAnalyst}
+                surveyCacheRef={surveyCacheRef}
+                surveyVersion={surveyVersion}
+                bumpSurvey={bumpSurvey}
+              />
+            )}
+
             <button
               ref={mobileRosterTriggerRef}
               type="button"
@@ -2034,12 +2129,12 @@ export default function WorldlineRoundtableView() {
               aria-controls="mobile-roster-dialog"
               onClick={() => setShowMobileRoster(true)}
             >
-              {isZh ? `${participants.length} 位参与者` : `${participants.length} participants`}
+              {t('roundtable.participant_count', { count: participants.length })}
             </button>
 
             <div className="ending-chat-composer worldline-roundtable-composer">
               <div className="ending-chat-composer__row">
-                <div className="ending-chat-mode-switch" role="group" aria-label={isZh ? '圆桌追问模式' : 'Roundtable follow-up mode'}>
+                <div className="ending-chat-mode-switch" role="group" aria-label={t('roundtable.follow_up_mode')}>
                   <button
                     type="button"
                     className={`ending-chat-mode-pill ${interactionMode === 'archivist_route' ? 'is-active' : ''}`}
@@ -2062,26 +2157,37 @@ export default function WorldlineRoundtableView() {
               <span className="ending-chat-mode-note">{interactionModeNote}</span>
 
               {phaseActionPrompts.length > 0 && (
-                <div className="ending-chat-anchor-row">
+                <div className="roundtable-anchor-strip">
                   <button
                     type="button"
-                    className="ending-chat-anchor-chip"
+                    className="roundtable-anchor-strip__chip"
                     onClick={() => activateAnchor(verdictAnchorAction)}
                     disabled={!composerEnabled}
                   >
+                    <span className="roundtable-anchor-strip__icon" aria-hidden="true">⊕</span>
                     <span>{t('roundtable.phase_verdict')}</span>
                   </button>
-                  {phaseActionPrompts.map((prompt) => (
-                    <button
-                      key={prompt.key}
-                      type="button"
-                      className="ending-chat-anchor-chip"
-                      onClick={() => activateAnchor(prompt.action)}
-                      disabled={!composerEnabled}
-                    >
-                      <span>{prompt.label}</span>
-                    </button>
-                  ))}
+                  {phaseActionPrompts.map((prompt, idx) => {
+                    const insight = (effectiveResult?.phase_insights ?? [])[idx];
+                    const fullTitle = buildPhaseInsightTitle(
+                      insight ?? { phase: 'opening' },
+                      { isZh },
+                    ) || prompt.label;
+                    const fullText = insight?.commentary || fullTitle;
+                    return (
+                      <button
+                        key={prompt.key}
+                        type="button"
+                        className="roundtable-anchor-strip__chip"
+                        onClick={() => activateAnchor(prompt.action)}
+                        disabled={!composerEnabled}
+                        title={fullText}
+                      >
+                        <span className="roundtable-anchor-strip__num" aria-hidden="true">{String(idx + 1).padStart(2, '0')}</span>
+                        <span className="roundtable-anchor-strip__text">{fullTitle}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
 
@@ -2120,14 +2226,16 @@ export default function WorldlineRoundtableView() {
 
               <div className="ending-chat-composer__row">
                 <textarea
+                  ref={composerTextareaRef}
                   className="ending-chat-composer__input"
                   value={composerDraft}
-                  placeholder={
-                    isZh
-                      ? '继续追问这桌代表的分歧，答案仍然只会落在本桌范围内。'
-                      : 'Keep pressing this table’s disagreement; the answer will stay inside this table.'
-                  }
-                  onChange={(event) => setComposerDraft(event.target.value)}
+                  placeholder={t('roundtable.composer_placeholder')}
+                  onChange={(event) => {
+                    setComposerDraft(event.target.value);
+                    const el = event.target;
+                    el.style.height = 'auto';
+                    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+                  }}
                   disabled={!composerEnabled || sending}
                   rows={2}
                 />
@@ -2137,7 +2245,7 @@ export default function WorldlineRoundtableView() {
                   onClick={() => void handleSend()}
                   disabled={!composerEnabled || sending || composerDraft.trim().length === 0}
                 >
-                  {sending ? (isZh ? '发送中…' : 'Sending…') : (isZh ? '发送追问' : 'Send')}
+                  {sending ? t('roundtable.sending') : t('roundtable.send')}
                 </button>
               </div>
             </div>
