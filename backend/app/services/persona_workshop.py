@@ -6,7 +6,6 @@ persist across scenarios via the AgentIdentity model (kind="custom").
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 
@@ -14,6 +13,7 @@ from sqlmodel import Session, select
 
 from app.models.agent_identity import AgentIdentity
 from app.models.database import get_engine
+from app.services.agent_identity import build_continuity_key as _make_continuity_key
 from app.services.llm_client import format_untrusted_text_block
 from app.services.vector_store import delete_identity_profile, store_identity_profile
 
@@ -24,12 +24,6 @@ ALLOWED_KNOWLEDGE_DOMAINS = [
     "culture", "environment", "health", "education", "law",
     "philosophy", "history", "psychology", "sociology", "religion",
 ]
-
-
-def _make_continuity_key(role: str, persona: str | None) -> str:
-    """Generate a deterministic continuity key from role + persona prefix."""
-    raw = f"{role}:{(persona or '')[:30]}"
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def _validate_knowledge_domains(domains: list[str] | None) -> list[str] | None:

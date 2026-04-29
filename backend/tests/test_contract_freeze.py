@@ -484,6 +484,8 @@ async def test_new_features_default_disabled():
         "FEATURE_ARGUMENT_MAP": settings.FEATURE_ARGUMENT_MAP,
         "FEATURE_CAUSAL_GRAPH": settings.FEATURE_CAUSAL_GRAPH,
         "FEATURE_GRAPH_ANALYSIS": settings.FEATURE_GRAPH_ANALYSIS,
+        "FEATURE_ROUNDTABLE_SURVEY": settings.FEATURE_ROUNDTABLE_SURVEY,
+        "FEATURE_ROUNDTABLE_ANALYST": settings.FEATURE_ROUNDTABLE_ANALYST,
     }
     for name in originals:
         setattr(settings, name, False)
@@ -496,6 +498,8 @@ async def test_new_features_default_disabled():
             "argument_map",
             "causal_graph",
             "graph_analysis",
+            "roundtable_survey",
+            "roundtable_analyst",
         ):
             assert result[cap_key]["enabled"] is False, (
                 f"{cap_key} should default enabled=False when FEATURE flag off"

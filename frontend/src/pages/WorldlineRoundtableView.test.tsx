@@ -3261,7 +3261,10 @@ describe('WorldlineRoundtableView phase nav', () => {
     );
 
     await screen.findByText('The first hinge was delayed too long.');
-    expect(document.querySelector('.roundtable-phase-nav')).toBeNull();
+    // Phase nav renders when verdict exists (for Deep Dive), but no phase pills when only 1 phase
+    const nav = document.querySelector('.roundtable-phase-nav');
+    const phasePills = nav?.querySelectorAll('.roundtable-phase-nav__pill:not(.is-explore)') ?? [];
+    expect(phasePills.length).toBe(0);
   });
 
   it('calls scrollIntoView on the target phase divider when a pill is clicked', async () => {
@@ -3466,6 +3469,84 @@ describe('WorldlineRoundtableView post-verdict panel', () => {
     expect(document.getElementById('pvp-panel-survey')).toHaveAttribute('aria-hidden', 'true');
   });
 
+  it('parses a trailing analyst response frame without a terminal blank line', async () => {
+    const user = userEvent.setup();
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot as EndingRoomSnapshot;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
+    storeState.pendingDrafts = {};
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'Q',
+      status: 'done',
+      scene_theme: 'court',
+      agents: [],
+      language: 'en',
+      messages: [],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'Q',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'A',
+          probability: 0.6,
+          status: 'COMPLETED',
+          story: 'S',
+          insight: 'I',
+          key_moments: [],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'branch-b',
+          title: 'B',
+          probability: 0.4,
+          status: 'COMPLETED',
+          story: 'S2',
+          insight: 'I2',
+          key_moments: [],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+    getCapabilitiesMock.mockResolvedValue({
+      factions: { enabled: false },
+      agent_conversation: { enabled: false },
+      roundtable_analyst: { enabled: true },
+      roundtable_survey: { enabled: false },
+    });
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/analyst')) {
+        return Promise.resolve(makeSseResponse([
+          'event: analyst_response\ndata: {"answer":"Trailing frame answer.","iterations":1,"stopped_reason":"final_response"}',
+        ]));
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    }));
+
+    renderRoundtableView();
+    await screen.findByText('The first hinge was delayed too long.');
+    await user.click(screen.getByRole('button', { name: 'Deep Dive' }));
+
+    const analystTab = await screen.findByRole('tab', { name: /Research Analyst/i });
+    await user.click(analystTab);
+
+    const analystView = await screen.findByTestId('analyst-stream-view');
+    const analystTextarea = within(analystView).getByPlaceholderText('roundtable.analyst_placeholder');
+    await user.type(analystTextarea, 'Need the trailing frame');
+    await user.click(screen.getByRole('button', { name: 'roundtable.analyst_ask' }));
+
+    await screen.findByText('Trailing frame answer.');
+  });
+
   it('resets analyst cache when the result object changes even if summary text stays the same', async () => {
     const user = userEvent.setup();
     const baseState = createBaseStoreState();
@@ -3559,6 +3640,117 @@ describe('WorldlineRoundtableView post-verdict panel', () => {
       expect(screen.queryByText('Cached analyst answer.')).toBeNull();
     });
     expect(screen.getByPlaceholderText('roundtable.analyst_placeholder')).toBeInTheDocument();
+  });
+
+  it('aborts an in-flight analyst stream when the result context changes', async () => {
+    const user = userEvent.setup();
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot as EndingRoomSnapshot;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
+    storeState.pendingDrafts = {};
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'Q',
+      status: 'done',
+      scene_theme: 'court',
+      agents: [],
+      language: 'en',
+      messages: [],
+    });
+    getStoryMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      question: 'Q',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'A',
+          probability: 0.6,
+          status: 'COMPLETED',
+          story: 'S',
+          insight: 'I',
+          key_moments: [],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'branch-b',
+          title: 'B',
+          probability: 0.4,
+          status: 'COMPLETED',
+          story: 'S2',
+          insight: 'I2',
+          key_moments: [],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+    getCapabilitiesMock.mockResolvedValue({
+      factions: { enabled: false },
+      agent_conversation: { enabled: false },
+      roundtable_analyst: { enabled: true },
+      roundtable_survey: { enabled: false },
+    });
+
+    let analystSignal: AbortSignal | undefined;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/analyst')) {
+        analystSignal = init?.signal ?? undefined;
+        return Promise.resolve(new Response(
+          new ReadableStream<Uint8Array>({
+            start() {
+              init?.signal?.addEventListener('abort', () => {
+                /* keep the stream pending until abort */
+              });
+            },
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          },
+        ));
+      }
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`));
+    }));
+
+    const view = renderRoundtableView();
+    await screen.findByText('The first hinge was delayed too long.');
+    await user.click(screen.getByRole('button', { name: 'Deep Dive' }));
+
+    const analystTab = await screen.findByRole('tab', { name: /Research Analyst/i });
+    await user.click(analystTab);
+
+    const analystView = await screen.findByTestId('analyst-stream-view');
+    const analystTextarea = within(analystView).getByPlaceholderText('roundtable.analyst_placeholder');
+    await user.type(analystTextarea, 'Keep streaming');
+    await user.click(screen.getByRole('button', { name: 'roundtable.analyst_ask' }));
+
+    await waitFor(() => {
+      expect(analystSignal).toBeDefined();
+      expect(screen.getByRole('button', { name: 'roundtable.analyst_stop' })).toBeInTheDocument();
+    });
+
+    storeState.result = {
+      ...storeState.result!,
+      archivist_note: 'Changed context while analyst stream was active.',
+    } as EndingRoomResult;
+
+    view.rerender(
+      <MemoryRouter initialEntries={['/roundtable/scenario-1']}>
+        <Routes>
+          <Route path="/roundtable/:id" element={<WorldlineRoundtableView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(analystSignal?.aborted).toBe(true);
+    });
   });
 });
 

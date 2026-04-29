@@ -431,6 +431,8 @@ def _build_crowd_context(
     intervention_text: str = "",
     language: str = "Chinese",
     web_context_block: str = "",
+    include_json_format: bool = True,
+    cross_scenario_hint: str = "",
 ) -> str:
     """Build a slim context for CROWD tier agents.
 
@@ -462,9 +464,24 @@ def _build_crowd_context(
 
     web_block = f"\n{web_context_block}\n" if web_context_block else ""
 
+    persona_text = agent.get("persona", "")
+    persona_block = (
+        format_untrusted_text_block("persona", persona_text, max_chars=300)
+        if persona_text else ""
+    )
+
+    # Phase 4C: Slim cross-scenario hint for CROWD (max 200 chars)
+    crowd_cross_block = ""
+    if cross_scenario_hint and cross_scenario_hint.strip():
+        _crowd_hint = format_untrusted_text_block(
+            'Cross-Scenario Memory', cross_scenario_hint, max_chars=200,
+        )
+        crowd_cross_block = f"\n{_crowd_hint}"
+
     return f"""{copy["roleplay_intro"].format(name=agent['name'])}
 
 {copy["identity"]}{agent.get('role', '')}
+{persona_block}
 {copy["emotion"]}{agent.get('emotion', 'neutral')}
 {web_block}{copy["background_brief"]}{bg_brief}
 
@@ -472,12 +489,12 @@ def _build_crowd_context(
 {topic_block}{intervention_block}
 
 {conversation_label}
-{conversation_block}
+{conversation_block}{crowd_cross_block}
 
 {copy["crowd_instruction_title"]}
 {copy["crowd_instructions"].format(intervention_instruction=intervention_instruction)}
 
-{copy["json_format"]}
+{copy["json_format"] if include_json_format else ''}
 
 {UNTRUSTED_INPUT_GUARDRAIL}
 {lang_directive}"""
@@ -537,6 +554,7 @@ def build_agent_context(
     language: str = "Chinese",
     web_context_block: str = "",
     cross_scenario_hint: str = "",
+    include_json_format: bool = True,
 ) -> str:
     """Build the L0 context window for an agent's turn.
 
@@ -545,6 +563,9 @@ def build_agent_context(
     the recent_messages + retrieved_memories sections.
     CROWD agents receive a slim context (~800 tokens).
     CORE/IMPORTANT agents receive the full context (~2,300 tokens).
+
+    When include_json_format is False (dual-pass mode), the JSON format
+    instruction is omitted so the LLM generates natural language first.
     """
     # Determine conversation section: prefer Blackboard briefing over raw messages
     copy = _memory_copy(language)
@@ -561,6 +582,8 @@ def build_agent_context(
             intervention_text=intervention_text,
             language=language,
             web_context_block=web_context_block,
+            include_json_format=include_json_format,
+            cross_scenario_hint=cross_scenario_hint,
         )
 
     lang_directive = get_language_directive(language)
@@ -588,9 +611,10 @@ def build_agent_context(
 
     cross_scenario_block = ""
     if cross_scenario_hint and cross_scenario_hint.strip():
-        cross_scenario_block = (
-            f"\n\n--- Cross-Scenario Memory ---\n{cross_scenario_hint}"
+        _hint_block = format_untrusted_text_block(
+            'Cross-Scenario Memory', cross_scenario_hint, max_chars=500,
         )
+        cross_scenario_block = f"\n\n{_hint_block}"
 
     return f"""{copy["roleplay_intro"].format(name=agent['name'])}
 
@@ -610,7 +634,7 @@ def build_agent_context(
 {copy["full_instruction_title"]}
 {copy["full_instructions"].format(intervention_instruction=intervention_instruction)}
 
-{copy["json_format"]}
+{copy["json_format"] if include_json_format else ''}
 
 {UNTRUSTED_INPUT_GUARDRAIL}
 {lang_directive}"""

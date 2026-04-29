@@ -46,7 +46,11 @@ export function useRoundtableSseStream<T extends { type: string }>({
     const controller = new AbortController();
     controllerRef.current = controller;
 
-    const localTimeout = setTimeout(() => controller.abort(), SSE_TIMEOUT_MS);
+    let timedOut = false;
+    const localTimeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, SSE_TIMEOUT_MS);
     timeoutRef.current = localTimeout;
 
     try {
@@ -84,12 +88,37 @@ export function useRoundtableSseStream<T extends { type: string }>({
       const decoder = new TextDecoder();
       let buffer = '';
       let receivedCompletion = false;
+      const dispatchFrame = (frame: string) => {
+        const event = parseSseFrame<T>(frame);
+        if (!event) {
+          return;
+        }
+        onEventRef.current(event);
+        if (event.type === 'analyst_response' && 'stopped_reason' in event) {
+          receivedCompletion = true;
+        }
+      };
+      const flushBuffer = (allowTrailingFrame: boolean) => {
+        const frames = buffer.split(/\r?\n\r?\n/);
+        buffer = frames.pop() ?? '';
+
+        for (const frame of frames) {
+          dispatchFrame(frame);
+        }
+
+        if (allowTrailingFrame && buffer.trim()) {
+          dispatchFrame(buffer);
+          buffer = '';
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (epochRef.current !== epoch) return;
 
         if (done) {
+          buffer += decoder.decode();
+          flushBuffer(true);
           if (endpoint === 'analyst' && !receivedCompletion) {
             onErrorRef.current('STREAM_INTERRUPTED', 'Analyst stream ended without response event');
           }
@@ -97,23 +126,18 @@ export function useRoundtableSseStream<T extends { type: string }>({
         }
 
         buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split('\n\n');
-        buffer = frames.pop() ?? '';
-
-        for (const frame of frames) {
-          const event = parseSseFrame<T>(frame);
-          if (event) {
-            onEventRef.current(event);
-            if (event.type === 'analyst_response' && 'stopped_reason' in event) {
-              receivedCompletion = true;
-            }
-          }
-        }
+        flushBuffer(false);
       }
       onCompleteRef.current();
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
-        if (epochRef.current === epoch) onCompleteRef.current();
+        if (epochRef.current === epoch) {
+          if (timedOut) {
+            onErrorRef.current('STREAM_TIMEOUT', 'Stream timed out');
+          } else {
+            onCompleteRef.current();
+          }
+        }
         return;
       }
       if (epochRef.current !== epoch) return;

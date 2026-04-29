@@ -92,8 +92,12 @@ import type {
 import RoundtablePickerPanel from './RoundtablePickerPanel';
 import RoundtableTranscriptList from './RoundtableTranscriptList';
 import PostVerdictPanel, { type PostVerdictTab } from './PostVerdictPanel';
-import { INITIAL_ANALYST_CACHE, type AnalystCacheState } from './AnalystStreamView';
-import { INITIAL_SURVEY_CACHE, type SurveyCacheState } from './SurveyStreamView';
+import {
+  createInitialAnalystCache,
+  createInitialSurveyCache,
+  type AnalystCacheState,
+  type SurveyCacheState,
+} from './postVerdictCaches';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useFactionOverlay } from '../hooks/useFactionOverlay';
 import { AvatarRing } from '../components/ui/AvatarRing';
@@ -220,10 +224,12 @@ export default function WorldlineRoundtableView() {
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [showPostVerdict, setShowPostVerdict] = useState(false);
   const [postVerdictTab, setPostVerdictTab] = useState<PostVerdictTab>('agent_chat');
-  const analystCacheRef = useRef<AnalystCacheState>({ ...INITIAL_ANALYST_CACHE });
-  const surveyCacheRef = useRef<SurveyCacheState>({ ...INITIAL_SURVEY_CACHE, responses: new Map() });
-  const [analystVersion, bumpAnalyst] = useReducer((x: number) => x + 1, 0);
-  const [surveyVersion, bumpSurvey] = useReducer((x: number) => x + 1, 0);
+  const [analystCache, setAnalystCache] = useState<AnalystCacheState>(() => createInitialAnalystCache());
+  const [surveyCache, setSurveyCache] = useState<SurveyCacheState>(() => createInitialSurveyCache());
+  const [postVerdictContextVersion, bumpPostVerdictContextVersion] = useReducer(
+    (x: number) => x + 1,
+    0,
+  );
   const [pendingQuestionAnchorIds, setPendingQuestionAnchorIds] = useState<string[]>([]);
   const [expandedTurnKeys, setExpandedTurnKeys] = useState<Record<string, boolean>>({});
   const actionMenuRef = useRef<HTMLDivElement>(null);
@@ -284,10 +290,9 @@ export default function WorldlineRoundtableView() {
   useEffect(() => {
     if (prevEffectiveResultRef.current !== effectiveResult) {
       prevEffectiveResultRef.current = effectiveResult;
-      analystCacheRef.current = { ...INITIAL_ANALYST_CACHE };
-      surveyCacheRef.current = { ...INITIAL_SURVEY_CACHE, responses: new Map() };
-      bumpAnalyst();
-      bumpSurvey();
+      setAnalystCache(createInitialAnalystCache());
+      setSurveyCache(createInitialSurveyCache());
+      bumpPostVerdictContextVersion();
     }
   }, [effectiveResult]);
 
@@ -710,6 +715,7 @@ export default function WorldlineRoundtableView() {
   );
 
   const composerEnabled = !replayPayload && Boolean(effectiveResult) && Boolean(snapshot?.id);
+  const postVerdictEnabled = !replayPayload && Boolean(effectiveResult);
   const selectedRepresentative = representatives.find(
     (participant) => participant.id === selectedRepresentativeId,
   ) ?? null;
@@ -953,7 +959,7 @@ export default function WorldlineRoundtableView() {
       prompt: verdictPrompt,
       threadTitle: t('roundtable.phase_verdict'),
     }),
-    [effectiveSnapshot?.id, isZh, verdictPrompt],
+    [effectiveSnapshot?.id, t, verdictPrompt],
   );
   const hasDistinctArchivistNote = useMemo(() => {
     const summary = String(effectiveResult?.summary ?? '').trim();
@@ -2006,9 +2012,9 @@ export default function WorldlineRoundtableView() {
               </div>
             </div>
 
-            {phaseList.length > 1 && (
+            {(phaseList.length > 1 || postVerdictEnabled) && (
               <nav className="roundtable-phase-nav" aria-label={t('roundtable.phase_nav_label')}>
-                {phaseList.map((phase) => (
+                {phaseList.length > 1 && phaseList.map((phase) => (
                   <button
                     key={phase}
                     type="button"
@@ -2022,9 +2028,9 @@ export default function WorldlineRoundtableView() {
                     {phase}
                   </button>
                 ))}
-                {effectiveResult && (
+                {postVerdictEnabled && (
                   <>
-                    <span className="roundtable-phase-nav__divider" aria-hidden="true" />
+                    {phaseList.length > 1 && <span className="roundtable-phase-nav__divider" aria-hidden="true" />}
                     <button
                       type="button"
                       className={`roundtable-phase-nav__pill is-explore ${showPostVerdict ? 'is-active' : ''}`}
@@ -2104,20 +2110,21 @@ export default function WorldlineRoundtableView() {
                 )}
               </div>
 
-            {showPostVerdict && effectiveResult && (
+            {showPostVerdict && postVerdictEnabled && effectiveResult && (
               <PostVerdictPanel
+                key={`post-verdict:${postVerdictContextVersion}`}
                 scenarioId={id ?? ''}
+                roomId={effectiveSnapshot?.id ?? null}
                 participants={participants}
                 effectiveResult={effectiveResult}
                 isZh={isZh}
                 activeTab={postVerdictTab}
                 onTabChange={setPostVerdictTab}
-                analystCacheRef={analystCacheRef}
-                analystVersion={analystVersion}
-                bumpAnalyst={bumpAnalyst}
-                surveyCacheRef={surveyCacheRef}
-                surveyVersion={surveyVersion}
-                bumpSurvey={bumpSurvey}
+                analystCache={analystCache}
+                setAnalystCache={setAnalystCache}
+                surveyCache={surveyCache}
+                setSurveyCache={setSurveyCache}
+                contextVersion={postVerdictContextVersion}
               />
             )}
 

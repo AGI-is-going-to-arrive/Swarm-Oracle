@@ -26,7 +26,7 @@
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
 | Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard |
 | Debate | `backend/app/api/debate.py` | debate live/result/import-replay/predict |
-| Ending Room | `backend/app/api/ending_rooms.py` | ending-room room/result/thread/user-turn 与 WS |
+| Ending Room | `backend/app/api/ending_rooms.py` | ending-room room/result/thread/user-turn、roundtable survey/analyst SSE 与 WS |
 | Scenario WS | `backend/app/api/ws.py` | 主模式 WebSocket + thread-scoped agent-conversation WebSocket |
 | Social | `backend/app/api/social.py` | 社交文案与 Markdown 导出 |
 
@@ -40,6 +40,8 @@
 | Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、缓存与上下文格式化 |
 | LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断、JSON stream-first fallback |
 | Conversation Service | `backend/app/services/conversation_service.py` | conversation thread/turn 创建、bootstrap claim、SSE stream 终态与取消原因收口 |
+| Roundtable Survey | `backend/app/services/roundtable_survey.py` | 世界线圆桌问卷 SSE；按 room 绑定 participant、补 identity memory、并发发问后逐条回传 |
+| Roundtable Analyst | `backend/app/services/roundtable_analyst.py` | 世界线圆桌 analyst SSE；有界 ReACT 工具循环，串 causal graph / identity memory / web evidence |
 | Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile（串行化锁保护写入） |
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
@@ -307,7 +309,8 @@
   - `tests/test_causal_graph.py -q`：`68 passed`
   - `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q`：`125 passed`
   - `ruff check app/services/causal_graph.py tests/test_causal_graph.py`：通过
-- backend 全量 `pytest`：`2264 passed, 2 skipped`
+- backend 全量 `pytest`：`2357 passed, 2 skipped`
+- `ruff check app/services/`：通过
 
 ## WebSocket 口径
 

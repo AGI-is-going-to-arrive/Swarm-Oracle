@@ -27,6 +27,7 @@ from app.services.blackboard import Blackboard
 from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
     get_runtime_parallelism_limit,
+    llm_call,
     llm_call_json,
     llm_call_json_with_stream_fallback,
     llm_request_scope,
@@ -974,6 +975,11 @@ async def run_simulation(
         db_agents = list(session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all())
         agents = [_agent_to_dict(a) for a in db_agents]
 
+        # Phase 4C: Extract user_id for cross-scenario identity memory retrieval
+        scenario_user_id: str = (
+            scenario.user_id or ctx.get("user_id") or ""
+        )
+
     # P3-A: Detect hierarchical mode from parsed groups
     groups_data = ctx.get("groups", [])
     hierarchical = bool(groups_data) and ctx.get("hierarchical", False)
@@ -1217,6 +1223,7 @@ async def run_simulation(
                     viz_mapper=viz_mapper,
                     agent_prev_emotions=agent_prev_emotions,
                     web_context_block=web_context_block,
+                    scenario_user_id=scenario_user_id,
                 )
             else:
                 messages = await _gather_agent_messages(
@@ -1229,6 +1236,7 @@ async def run_simulation(
                     viz_mapper=viz_mapper,
                     agent_prev_emotions=agent_prev_emotions,
                     web_context_block=web_context_block,
+                    scenario_user_id=scenario_user_id,
                 )
 
             # 2) Round summary
@@ -1504,6 +1512,7 @@ async def run_simulation(
                 language=detected_language,
                 llm_overrides=llm_overrides,
                 web_context_block=web_context_block,
+                question=scenario.question or "",
             )
             _save_narration(engine, b["id"], narration)
             await push({
@@ -1700,6 +1709,7 @@ async def _gather_agent_messages(
     viz_mapper=None,
     agent_prev_emotions: dict[str, str] | None = None,
     web_context_block: str = "",
+    scenario_user_id: str = "",
 ) -> list[dict]:
     """Gather messages from all agents for this round.
 
@@ -1746,6 +1756,36 @@ async def _gather_agent_messages(
                     branch_id=branch_id,
                 )
 
+            # Phase 4C: Cross-scenario hint from identity memories
+            cross_hint = ""
+            if (
+                settings.FEATURE_AGENT_IDENTITY
+                and agent.get("agent_identity_id")
+                and agent_tier in ("CORE", "IMPORTANT", "CROWD")
+                and scenario_user_id
+            ):
+                try:
+                    from app.services.vector_store import retrieve_identity_memories
+                    cross_memories = await asyncio.to_thread(
+                        retrieve_identity_memories,
+                        user_id=scenario_user_id,
+                        identity_id=agent["agent_identity_id"],
+                        query_text=topic,
+                        n_results=3,
+                    )
+                    if cross_memories:
+                        cross_hint = "\n".join(
+                            f"- {m.get('summary', '')}"
+                            for m in cross_memories
+                            if m.get("summary")
+                        )
+                except Exception:
+                    logger.debug(
+                        "cross-scenario hint retrieval failed for agent %s (non-fatal)",
+                        agent.get("name", "?"),
+                        exc_info=True,
+                    )
+
             # Build context: Blackboard shared briefing + DB fallback
             if shared_text and shared_text != "(尚无共享信息)":
                 agent_briefing = shared_text
@@ -1760,6 +1800,8 @@ async def _gather_agent_messages(
                     intervention_text=intervention_text or "",
                     language=language,
                     web_context_block=web_context_block,
+                    include_json_format=False,
+                    cross_scenario_hint=cross_hint,
                 )
             else:
                 # Fallback: format DB messages per-tier (first round or no blackboard)
@@ -1775,10 +1817,12 @@ async def _gather_agent_messages(
                     intervention_text=intervention_text or "",
                     language=language,
                     web_context_block=web_context_block,
+                    include_json_format=False,
+                    cross_scenario_hint=cross_hint,
                 )
 
             # Choose reasoning effort based on tier
-            effort = "medium" if agent.get("tier") == "CORE" else "low"
+            effort = "low" if agent.get("tier") == "CROWD" else "medium"
 
             # Notify frontend: agent starts thinking
             await push_event({
@@ -1793,16 +1837,46 @@ async def _gather_agent_messages(
 
             try:
                 _overrides = llm_overrides or {}
+
+                # Pass-1: natural language generation (no JSON constraint)
                 with llm_request_scope(purpose="scenario_turn_generation"):
-                    result = await llm_call_json(
+                    raw_text = await llm_call(
                         ctx, reasoning_effort=effort,
                         model=_overrides.get("model"),
                         api_key=_overrides.get("api_key"),
                         base_url=_overrides.get("base_url"),
-                        temperature=_overrides.get("temperature"),
+                        temperature=(
+                            _overrides.get("temperature")
+                            if _overrides.get("temperature") is not None
+                            else 0.8
+                        ),
+                    )
+
+                # Pass-2: lightweight metadata extraction
+                from app.services.llm_client import format_untrusted_text_block
+                raw_text_block = format_untrusted_text_block(
+                    "原文", raw_text, max_chars=3000,
+                )
+                extract_prompt = (
+                    f"从以下角色发言中提取结构化信息。\n\n"
+                    f"{raw_text_block}\n\n"
+                    f"输出严格 JSON：\n"
+                    f'{{"content": "原文内容（保留原文，不要改写）", '
+                    f'"emotion": "此刻情绪(如: 激动/忧虑/冷静/愤怒/期待/释然)", '
+                    f'"diverge": "如有明确分歧立场则描述，否则null"}}'
+                )
+                with llm_request_scope(purpose="scenario_turn_generation"):
+                    result = await llm_call_json(
+                        extract_prompt,
+                        reasoning_effort="low",
+                        model=_overrides.get("model"),
+                        api_key=_overrides.get("api_key"),
+                        base_url=_overrides.get("base_url"),
+                        temperature=0.2,
                         fallback_mode="agent_message",
                     )
-                content = result.get("content", "")
+
+                content = result.get("content", "") or raw_text
                 emotion = result.get("emotion", "neutral")
                 diverge = result.get("diverge")
                 if diverge and diverge.lower() in ("null", "none", ""):
@@ -1924,6 +1998,7 @@ async def _gather_hierarchical_messages(
     viz_mapper=None,
     agent_prev_emotions: dict[str, str] | None = None,
     web_context_block: str = "",
+    scenario_user_id: str = "",
 ) -> list[dict]:
     """P3-A: Hierarchical message gathering.
 
@@ -1943,6 +2018,7 @@ async def _gather_hierarchical_messages(
         viz_mapper=viz_mapper,
         agent_prev_emotions=agent_prev_emotions,
         web_context_block=web_context_block,
+        scenario_user_id=scenario_user_id,
     )
 
     # Build leader name → message lookup
@@ -2202,6 +2278,7 @@ async def _narrate_branch_data(
     language: str = "Chinese",
     llm_overrides: dict | None = None,
     web_context_block: str = "",
+    question: str = "",
 ) -> dict:
     """Collect branch data and narrate it."""
     branch_info = _get_branch(engine, branch_id)
@@ -2220,6 +2297,7 @@ async def _narrate_branch_data(
         temperature=(llm_overrides or {}).get("temperature"),
         model=(llm_overrides or {}).get("model"),
         web_context_block=web_context_block,
+        question=question,
     )
     result["title"] = branch_info.get("title", "未命名")
     return result

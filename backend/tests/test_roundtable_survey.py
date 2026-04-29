@@ -130,6 +130,61 @@ def _seed_roundtable_scenario(*, participant_count: int = 2, identity_ids: bool 
     }
 
 
+def _add_roundtable_participant(
+    scenario_id: str,
+    *,
+    room_id: str | None = None,
+    display_name: str = "Cross-room witness",
+) -> dict[str, str]:
+    created_room_id = room_id or _unique("room")
+    agent_id = _unique("agent")
+    participant_id = _unique("participant")
+
+    with Session(get_engine()) as session:
+        if room_id is None:
+            session.add(
+                EndingRoom(
+                    id=created_room_id,
+                    scenario_id=scenario_id,
+                    anchor_branch_id=None,
+                    room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+                    participant_set_hash=_unique("psh"),
+                    scope_fingerprint=_unique("scope"),
+                    title="Second Roundtable",
+                    status=EndingRoomStatus.DONE,
+                    config_json={"selected_branch_ids": []},
+                )
+            )
+            session.flush()
+        session.add(
+            Agent(
+                id=agent_id,
+                scenario_id=scenario_id,
+                name=display_name,
+                role="Witness",
+                persona="cross-room persona",
+            )
+        )
+        session.flush()
+        session.add(
+            EndingRoomParticipant(
+                id=participant_id,
+                room_id=created_room_id,
+                source_branch_id=None,
+                source_agent_id=agent_id,
+                role_slot=EndingRoomRoleSlot.REPRESENTATIVE,
+                display_name=display_name,
+                persona_snapshot_json={
+                    "agent_role": "Witness",
+                    "agent_persona": "cross-room persona",
+                },
+            )
+        )
+        session.commit()
+
+    return {"room_id": created_room_id, "participant_id": participant_id}
+
+
 def _parse_sse_payload(raw: str) -> list[tuple[str, dict]]:
     frames: list[tuple[str, dict]] = []
     for chunk in raw.split("\n\n"):
@@ -354,3 +409,19 @@ def test_survey_surfaces_llm_errors_inside_response_event(client, monkeypatch):
     assert response.status_code == 200
     assert frames[0][0] == "survey_response"
     assert frames[0][1]["error"] == "provider unavailable"
+
+
+def test_survey_rejects_cross_room_participant_mix(client):
+    fixture = _seed_roundtable_scenario(participant_count=1)
+    other = _add_roundtable_participant(fixture["scenario_id"])
+
+    response = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/survey",
+        json={
+            "question": "Which witness broke formation?",
+            "participant_ids": [fixture["participant_ids"][0], other["participant_id"]],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ROUNDTABLE_ROOM_AMBIGUOUS"

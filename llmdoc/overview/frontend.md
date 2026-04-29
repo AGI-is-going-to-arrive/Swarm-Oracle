@@ -154,6 +154,10 @@
 | `endingChatHelpers.ts` | `frontend/src/components/endingChatHelpers.ts` | 会客厅纯函数：角色标签、模式标签、prompt 构建、anchor 描述 |
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
+| `PostVerdictPanel.tsx` | `frontend/src/pages/PostVerdictPanel.tsx` | completed live roundtable 的 `Deep Dive` 面板；聚合 participant-scoped `1-on-1 Interview`、`Research Analyst` 与 `Cross-Examine` |
+| `RoundtableAgentChat.tsx` | `frontend/src/pages/RoundtableAgentChat.tsx` | 圆桌 post-verdict 的 `1-on-1 Interview`；按 participant 维护独立 conversation thread |
+| `AnalystStreamView.tsx` / `SurveyStreamView.tsx` / `postVerdictCaches.ts` | `frontend/src/pages/` | post-verdict analyst / survey 的独立流式 UI、缓存与 context reset |
+| `useRoundtableSseStream.ts` | `frontend/src/hooks/useRoundtableSseStream.ts` | roundtable analyst / survey 共享 SSE hook；负责 POST stream、frame 解析、timeout 与 abort |
 | `manualChunks.ts` / `performanceBudgetConfig.mjs` | `frontend/src/lib/manualChunks.ts` / `frontend/scripts/lib/performanceBudgetConfig.mjs` | 前端构建分块与预算门禁单一事实源；React 保留在共享 `vendor`，`@antv/*` 隔离到 `g6-vendor`，`html2canvas / gif.js` 按需拆分，React Flow 栈继续走 Rollup 自动分块并纳入预算检查 |
 | `useG6Graph.ts` | `frontend/src/hooks/useG6Graph.ts` | G6 图谱 hook；等 ref-backed container 真正挂载后再建图，支持 options 更新、ResizeObserver resize、node click 订阅清理 |
 | `useNodeConversationTransport.ts` | `frontend/src/hooks/useNodeConversationTransport.ts` | `NodeConversationSheet` 的本地 transport hook；负责 `/start` / `/turn` 请求、origin branch/round/node/excerpt 透传、AbortController 生命周期和 SSE frame 解析 |
@@ -281,6 +285,12 @@
   - `trait_mix`
   - `fault_line_first`
   - `witness_augmented`
+- completed live roundtable 当前在 verdict 后会开放 `Deep Dive`：
+  - `1-on-1 Interview`：按 participant 作用域开启代表私聊，复用 conversation `/start` + `/turn`
+  - `Research Analyst`：走 roundtable analyst SSE，展示 tool iteration 与最终回答
+  - `Cross-Examine`：对选中的 participants 发同一问题，按 participant 返回 survey response
+- `Deep Dive` 只在 live completed room 打开。roundtable replay 继续保持只读，只恢复 transcript / thread / share / import，不重新开放 chat、analyst 或 survey 这类 live 工具。
+- post-verdict 工具当前有独立于 room composer 的流状态与缓存：`PostVerdictPanel` 持有 tab / analyst / survey state，result context 变化时会 reset cache 并 abort in-flight stream；`AnalystStreamView` 与 `SurveyStreamView` 共享 `useRoundtableSseStream` 处理 SSE。
 - roundtable mobile 当前以 `live room` 为优先目标：
   - `live room` 已收口到首屏无页面级纵向滚动
   - `picker / reseat` 仍允许滚动，不与 live-room 口径混用
@@ -409,7 +419,7 @@
   - 目标文件 eslint：通过
   - TypeScript noEmit：通过
 - frontend bridge / guide 定向 vitest 当前 `124 passed`。
-- frontend full vitest 最近一次记录为 `1365 passed`（本轮未复跑全量）。
+- frontend full vitest 本 session fresh rerun：`1742 passed`。
 - frontend 目标文件 `eslint`、`typecheck`、`build`（含 `perf:budgets:check`）当前通过。
 - fixture-backed local preview 浏览器复核当前已补：
   - ResultView bridge DOM / disabled 样式

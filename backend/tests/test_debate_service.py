@@ -680,9 +680,9 @@ async def test_run_debate_background_uses_llm_turn_generation_when_enabled(monke
 
     counter = {"turns": 0}
 
-    async def _fake_turn_llm(prompt, *args, **kwargs):
+    async def _fake_turn_llm_call(prompt, *args, **kwargs):
         counter["turns"] += 1
-        return {"content": f"LLM turn #{counter['turns']}"}
+        return f"LLM turn #{counter['turns']}"
 
     async def _fake_judge_llm(prompt, *args, **kwargs):
         return {
@@ -710,7 +710,7 @@ async def test_run_debate_background_uses_llm_turn_generation_when_enabled(monke
             },
         }
 
-    monkeypatch.setattr(debate_module, "llm_call_json", _fake_turn_llm)
+    monkeypatch.setattr(debate_module, "llm_call", _fake_turn_llm_call)
     monkeypatch.setattr(debate_module, "llm_call_json_with_stream_fallback", _fake_judge_llm)
 
     debate = create_debate_record("Should a permanent audit chamber review every emergency budget?")

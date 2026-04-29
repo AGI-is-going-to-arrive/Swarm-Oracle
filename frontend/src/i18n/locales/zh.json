@@ -1006,6 +1006,9 @@
       "survey_select_participants": "选择受访者",
       "survey_empty_hint": "先勾选参与者，再输入问题即可开始。",
       "stream_loading": "连接中…",
+      "chat_error_no_body": "错误：未收到响应正文。",
+      "chat_error_generic": "错误：{{detail}}",
+      "survey_stream_failed": "问卷流中断——请重试。",
       "report_verdict": "最终裁定",
       "report_next_steps": "后续建议",
       "report_archivist": "档案师笔记"

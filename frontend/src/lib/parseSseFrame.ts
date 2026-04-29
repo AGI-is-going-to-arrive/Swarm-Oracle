@@ -13,7 +13,7 @@ export function parseSseFrame<T extends { type: string }>(frame: string): T | nu
   const dataText = dataLines.join('\n');
   if (!eventName || !dataText) return null;
   try {
-    return { type: eventName, ...(JSON.parse(dataText) as Record<string, unknown>) } as T;
+    return { ...(JSON.parse(dataText) as Record<string, unknown>), type: eventName } as T;
   } catch {
     return null;
   }

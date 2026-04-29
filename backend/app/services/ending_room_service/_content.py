@@ -64,14 +64,26 @@ def _roundtable_variant_hook_fallback(
 ) -> str:
     if language == "zh":
         fallback_map = {
-            "imperial": ["号令不再只穿过一个中枢", "朝廷再压不回同一条命令链", "体面与军令开始各走各的"],
+            "imperial": [
+                "号令不再只穿过一个中枢",
+                "朝廷再压不回同一条命令链",
+                "体面与军令开始各走各的",
+            ],
             "field": ["前线先被掏空了", "轮换和粮道先脱了节", "防线先被拖成空壳"],
             "finance": ["清算和信心先一起松了", "流动性先被抽出了缝", "挤兑预期先跑在前面了"],
             "market": ["客流和现钱周转先乱了", "摊位秩序先被挤坏了", "街面现金链先断了气"],
             "faith": ["誓约和共同体信任先松了", "祭仪边界先裂开了", "神圣名义先压不住人心了"],
             "industry": ["调度节拍和备援先脱了钩", "产能链先弯了腰", "维保欠账先浮上来了"],
-            "frontier": ["补给窗口和生命维持先吃紧了", "轨道节拍先滑开了", "护航与补给先对不上拍了"],
-            "survival": ["避难位和口粮余量先不够了", "药品和撤离顺序先扛不住了", "生存缓冲先被挤穿了"],
+            "frontier": [
+                "补给窗口和生命维持先吃紧了",
+                "轨道节拍先滑开了",
+                "护航与补给先对不上拍了",
+            ],
+            "survival": [
+                "避难位和口粮余量先不够了",
+                "药品和撤离顺序先扛不住了",
+                "生存缓冲先被挤穿了",
+            ],
             "scholar": ["证词、账册和时序先对不上了", "记录链先漏页了", "案卷先开始彼此打架了"],
             "civic": ["账册和责任链先对不上了", "程序和签字链先漏了口子", "谁来背责先没人说得清了"],
             "plain": ["真正先滑开的那一下", "因果链先失了准头", "代价最早开始滚动的地方"],
@@ -448,8 +460,12 @@ def _oracle_vocabulary_hints(
 
     if branch_pressure:
         identity_parts.append(
-            f"这条线当前最受压的是：{branch_pressure[:_BIO_SHORT_MAX_CHARS]}" if is_zh
-            else f"This branch is currently under pressure at: {branch_pressure[:_BIO_SHORT_MAX_CHARS]}"
+            f"这条线当前最受压的是：{branch_pressure[:_BIO_SHORT_MAX_CHARS]}"
+            if is_zh
+            else (
+                "This branch is currently under pressure at: "
+                f"{branch_pressure[:_BIO_SHORT_MAX_CHARS]}"
+            )
         )
     if agent_stance:
         identity_parts.append(
@@ -1610,6 +1626,17 @@ def _oracle_voice_brief(
             "Answer like one speaker in a tight relay. "
             "Only contribute your angle; do not summarize for the whole room or echo the previous speaker's opener."  # noqa: E501
         )
+    if interaction_mode == EndingRoomInteractionMode.EVIDENCE_CARD:
+        return (
+            "Speak like someone presenting a piece of cross-branch evidence. "
+            "Lead with the key difference this parallel worldline reveals, then explain "
+            "what it means for the current discussion. Stay concrete and comparative."
+        )
+    if interaction_mode == EndingRoomInteractionMode.EPILOGUE and not is_archivist:
+        return (
+            "Speak like someone living through the aftermath. "
+            "Focus on consequences unfolding after the main ending, not on re-narrating it."
+        )
     if is_archivist and thread_mode == EndingRoomThreadMode.FOLLOWUP:
         return (
             "Speak like a moderator pinning the question to one hinge and one consequence. "
@@ -1727,6 +1754,18 @@ def _build_oracle_rewrite_prompt(
             "For archivist-route follow-up, the Archivist should frame the hinge and route cleanly; "  # noqa: E501
             "other speakers should answer the hinge directly instead of restating the workflow."
         )
+    elif interaction_mode == EndingRoomInteractionMode.EVIDENCE_CARD:
+        structural_note = (
+            "You are presenting evidence from a parallel worldline. "
+            "Open with the key difference this evidence reveals, not a summary of the original branch. "  # noqa: E501
+            "Explain what the cited evidence means for the current discussion — "
+            "why does this alternate outcome matter here? Keep it grounded in specifics from the evidence."  # noqa: E501
+        )
+    elif interaction_mode == EndingRoomInteractionMode.EPILOGUE:
+        structural_note = (
+            "For epilogue follow-up, extend the story naturally from where the main narrative ended. "  # noqa: E501
+            "Focus on consequences, aftershocks, or unresolved threads — do not re-summarize the ending."  # noqa: E501
+        )
     phase_note = ""
     if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE and phase == EndingRoomPhase.OPENING:
         phase_note = (
@@ -1765,7 +1804,8 @@ def _build_oracle_rewrite_prompt(
         "- Preserve the factual scope and conclusion direction, but use completely fresh wording\n"
         "- Do not invent facts, branches, quotes, or motives not already in context\n"
         "- Sound like a real person talking at a table, not like an AI writing a report\n"
-        "- Write as if you are genuinely thinking about this specific situation, not filling in a template\n"
+        "- Write as if you are genuinely thinking about this specific situation, "
+        "not filling in a template\n"
         "- Use specific names, events, numbers, and turning points — never vague abstractions like 'the situation' or 'the outcome'\n"  # noqa: E501
         "- Use concrete names, numbers, and events from the anchor copy — never use generic placeholders\n"  # noqa: E501
         "- No rhetorical questions, no parallel sentence structures, no listicle patterns\n"
@@ -1785,8 +1825,16 @@ def _build_oracle_rewrite_prompt(
         f"{phase_note}\n"
         f"{output_hint}\n\n"
         f"{format_untrusted_text_block('Context', _oracle_context_digest(room, participant=participant, user_content=user_content, context_hint=context_hint), max_chars=2200)}\n\n"  # noqa: E501
-        f"{format_untrusted_text_block('Anchor Copy', anchor_copy, max_chars=1200)}\n\n"
-        f"{format_untrusted_text_block('Recent Lines To Avoid Mimicking', _oracle_recent_lines_digest(recent_lines), max_chars=1200) if recent_lines else ''}\n"  # noqa: E501
+        "NOTE: The fallback reference below is NOT your script — it is only a safety net for factual scope. "  # noqa: E501
+        "Write your own words first; consult the reference only to verify facts and direction.\n"
+        + "{}\n\n".format(
+            format_untrusted_text_block(
+                "Fallback Reference (anchor copy)",
+                anchor_copy,
+                max_chars=1200,
+            )
+        )
+        + f"{format_untrusted_text_block('Recent Lines To Avoid Mimicking', _oracle_recent_lines_digest(recent_lines), max_chars=1200) if recent_lines else ''}\n"  # noqa: E501
         f"phase={phase.value}\n"
         f"thread_mode={(thread_mode.value if thread_mode is not None else 'room')}\n"
         f"scope_notice={_oracle_scope_notice(room, thread_mode=thread_mode)}\n"

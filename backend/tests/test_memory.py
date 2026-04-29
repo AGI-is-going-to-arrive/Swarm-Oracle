@@ -577,7 +577,7 @@ class TestBuildAgentContextTier:
         assert self._LONG_BG in ctx  # full background
 
     def test_crowd_gets_slim_context(self):
-        """CROWD agent should get slim context without memories or persona."""
+        """CROWD agent should get slim context without memories (persona is included)."""
         ctx = build_agent_context(
             agent=_SAMPLE_AGENT_CROWD,
             setting_background=self._LONG_BG,
@@ -589,8 +589,19 @@ class TestBuildAgentContextTier:
         assert "路人甲" in ctx
         assert "你的记忆碎片" not in ctx
         assert "上次的讨论很激烈" not in ctx
-        assert "你的性格" not in ctx
         assert "背景概要" in ctx  # abbreviated section
+
+    def test_crowd_persona_injected(self):
+        """CROWD agent should have persona injected via untrusted text block."""
+        ctx = build_agent_context(
+            agent=_SAMPLE_AGENT_CROWD,
+            setting_background="bg",
+            current_topic="topic",
+            recent_messages="msgs",
+            tier="CROWD",
+        )
+        assert "普通人" in ctx
+        assert "UNTRUSTED DATA" in ctx
 
     def test_crowd_truncates_background(self):
         """CROWD context should truncate background to ~80 chars."""
@@ -649,8 +660,8 @@ class TestBuildAgentContextTier:
             retrieved_memories="R" * 300,
             tier="CROWD",
         )
-        # CROWD should be at least 25% smaller
-        assert len(crowd_ctx) < len(core_ctx) * 0.75
+        # CROWD should be meaningfully smaller (no L2 memories, truncated background)
+        assert len(crowd_ctx) < len(core_ctx) * 0.85
 
     def test_backward_compat_no_tier(self):
         """No tier param should produce full context (backward compat)."""

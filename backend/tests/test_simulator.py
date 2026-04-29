@@ -60,6 +60,13 @@ from app.services.simulator import (
 )
 from app.visualization.mapper import VisualizationMapper
 
+# ── Module-level fake for the new Pass-1 natural-text call ────
+
+
+async def _fake_llm_call(*_args, **_kwargs):
+    return "This is a simulated agent response for testing."
+
+
 # ── Fixtures / Helpers ────────────────────────────────────────
 
 
@@ -331,6 +338,7 @@ class TestRunSimulation:
             "app.services.simulator.llm_call_json",
             _fake_llm_call_json,
         )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
@@ -372,7 +380,7 @@ class TestRunSimulation:
             session.commit()
 
         async def _fake_llm_call_json(prompt, *_args, **_kwargs):
-            if isinstance(prompt, str) and "输出严格 JSON" in prompt:
+            if isinstance(prompt, str) and "should_fork" in prompt:
                 return {
                     "should_fork": False,
                     "reason": "分歧仍可在同一制度路径内消化",
@@ -400,6 +408,7 @@ class TestRunSimulation:
             "app.services.simulator.llm_call_json",
             _fake_llm_call_json,
         )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
@@ -453,7 +462,7 @@ class TestRunSimulation:
             pushed_events.append(event)
 
         async def _fake_llm_call_json(prompt, *_args, **_kwargs):
-            if isinstance(prompt, str) and "输出严格 JSON" in prompt:
+            if isinstance(prompt, str) and "should_fork" in prompt:
                 return {
                     "should_fork": True,
                     "reason": "是否让外部评审团掌握最终裁决权会导向互斥制度未来",
@@ -492,6 +501,7 @@ class TestRunSimulation:
             "app.services.simulator.llm_call_json",
             _fake_llm_call_json,
         )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
@@ -550,7 +560,7 @@ class TestRunSimulation:
 
         async def _fake_llm_call_json(prompt, *_args, **_kwargs):
             nonlocal detector_calls
-            if isinstance(prompt, str) and "输出严格 JSON" in prompt:
+            if isinstance(prompt, str) and "should_fork" in prompt:
                 detector_calls += 1
                 if detector_calls == 1:
                     return {
@@ -596,6 +606,7 @@ class TestRunSimulation:
             "app.services.simulator.llm_call_json",
             _fake_llm_call_json,
         )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
@@ -650,7 +661,7 @@ class TestRunSimulation:
 
         async def _fake_llm_call_json(prompt, *_args, **_kwargs):
             nonlocal detector_calls
-            if isinstance(prompt, str) and "输出严格 JSON" in prompt:
+            if isinstance(prompt, str) and "should_fork" in prompt:
                 detector_calls += 1
                 if detector_calls == 1:
                     return {
@@ -696,6 +707,7 @@ class TestRunSimulation:
             "app.services.simulator.llm_call_json",
             _fake_llm_call_json,
         )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
@@ -817,6 +829,7 @@ class TestRunSimulation:
             "app.services.simulator.llm_call_json",
             _fake_llm_call_json,
         )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
 
         await run_simulation(scenario_id, branch_id=target_branch_id)
@@ -955,6 +968,7 @@ class TestGatherAgentMessages:
             "app.services.simulator.llm_call_json",
             _fake_llm_call_json,
         )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
         monkeypatch.setattr(
             "app.services.simulator._get_recent_messages",
             _raise_on_recent_messages,
@@ -1016,6 +1030,7 @@ class TestGatherAgentMessages:
             "app.services.simulator.llm_call_json",
             _fake_llm_call_json,
         )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
 
@@ -1067,12 +1082,15 @@ class TestGatherAgentMessages:
         current_calls = 0
         max_calls = 0
 
-        async def _fake_llm_call_json(*args, **kwargs):
+        async def _tracking_llm_call(*args, **kwargs):
             nonlocal current_calls, max_calls
             current_calls += 1
             max_calls = max(max_calls, current_calls)
             await asyncio.sleep(0.01)
             current_calls -= 1
+            return "正常发言"
+
+        async def _fake_llm_call_json(*args, **kwargs):
             return {"content": "正常发言", "emotion": "calm", "diverge": None}
 
         monkeypatch.setattr(
@@ -1083,6 +1101,7 @@ class TestGatherAgentMessages:
             "app.services.simulator.llm_call_json",
             _fake_llm_call_json,
         )
+        monkeypatch.setattr("app.services.simulator.llm_call", _tracking_llm_call)
 
         with llm_request_scope(quota_key="user:director-test", purpose="scenario_runtime"):
             results = await _gather_agent_messages(
@@ -1767,6 +1786,7 @@ class TestNarrateBranchData:
             temperature=None,
             model=None,
             web_context_block="",
+            question="",
         ):
             captured["api_key"] = api_key
             captured["base_url"] = base_url
@@ -2070,6 +2090,7 @@ class TestIdentityCompactionTaskRegistration:
             return asyncio.create_task(asyncio.sleep(0))
 
         monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
         monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
         monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)

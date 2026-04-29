@@ -80,7 +80,9 @@ def _build_followup_context_hint(
     emotion_hint = _sanitize_oracle_visible_text(str(snapshot.get("agent_emotion") or "")).strip()
     if emotion_hint:
         lines.append(f"agent_emotion={emotion_hint}")
-    branch_pressure = _sanitize_oracle_visible_text(str(snapshot.get("branch_pressure") or "")).strip()
+    branch_pressure = _sanitize_oracle_visible_text(
+        str(snapshot.get("branch_pressure") or "")
+    ).strip()
     if branch_pressure:
         lines.append(f"branch_pressure={branch_pressure}")
     tier = str(snapshot.get("tier") or "").strip()
@@ -109,7 +111,9 @@ def _build_followup_context_hint(
     if latest_quote and latest_round > 0:
         lines.append(f"latest_quote=R{latest_round}: {latest_quote}")
     elif snapshot.get("latest_quote"):
-        source_quote = _sanitize_oracle_visible_text(str(snapshot.get("latest_quote") or "")).strip()
+        source_quote = _sanitize_oracle_visible_text(
+            str(snapshot.get("latest_quote") or "")
+        ).strip()
         if source_quote:
             lines.append(f"source_quote={source_quote}")
     branch_id = response_participant.source_branch_id
@@ -911,7 +915,10 @@ async def _append_followup_turns_with_retry(
                     context_hint=plan.context_hint,
                     purpose=f"oracle_followup_{plan.interaction_mode.value}",
                 )
-                generated_content = _sanitize_oracle_visible_text(generated_content).strip() or plan.anchor_copy
+                generated_content = (
+                    _sanitize_oracle_visible_text(generated_content).strip()
+                    or plan.anchor_copy
+                )
                 chunk_index = 0
                 for chunk_index, delta in enumerate(_delta_chunks(generated_content), start=1):
                     await _broadcast(

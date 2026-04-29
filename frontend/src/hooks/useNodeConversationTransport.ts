@@ -123,15 +123,13 @@ export function useNodeConversationTransport({
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        let frameBoundary = buffer.indexOf('\n\n');
-        while (frameBoundary >= 0) {
-          const frame = buffer.slice(0, frameBoundary);
-          buffer = buffer.slice(frameBoundary + 2);
+        const frames = buffer.split(/\r?\n\r?\n/);
+        buffer = frames.pop() ?? '';
+        for (const frame of frames) {
           const parsed = parseConversationSseFrame(frame);
           if (parsed) {
             onWsEventRef.current(parsed);
           }
-          frameBoundary = buffer.indexOf('\n\n');
         }
       }
       const trailing = parseConversationSseFrame((buffer + decoder.decode()).trim());

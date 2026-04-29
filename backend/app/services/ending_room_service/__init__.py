@@ -913,7 +913,10 @@ def _participant_priority_context_hint(
     stance_hint = sanitize_untrusted_text(str(snapshot.get("agent_stance") or ""), max_chars=120)
     if stance_hint:
         lines.append(f"agent_stance={stance_hint}")
-    branch_pressure = sanitize_untrusted_text(str(snapshot.get("branch_pressure") or ""), max_chars=120)
+    branch_pressure = sanitize_untrusted_text(
+        str(snapshot.get("branch_pressure") or ""),
+        max_chars=120,
+    )
     if branch_pressure:
         lines.append(f"branch_pressure={branch_pressure}")
     latest_quote = sanitize_untrusted_text(
@@ -1520,7 +1523,10 @@ def _build_room_plan(
                     secondary_speaker,
                     anchor_branch=context["anchor_branch"],
                     evidence_hook=evidence_hook_display,
-                    latest_quote=str((secondary_evidence or {}).get("latest_quote") or "").strip() or None,
+                    latest_quote=(
+                        str((secondary_evidence or {}).get("latest_quote") or "").strip()
+                        or None
+                    ),
                     latest_round=int((secondary_evidence or {}).get("latest_round") or 0),
                     foreign_branch_summaries=context.get("foreign_branch_summaries"),
                     language=room.language,

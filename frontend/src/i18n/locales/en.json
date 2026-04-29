@@ -1006,6 +1006,9 @@
       "survey_select_participants": "Choose respondents",
       "survey_empty_hint": "Select participants above and type a question to begin.",
       "stream_loading": "Connecting…",
+      "chat_error_no_body": "Error: no response body received.",
+      "chat_error_generic": "Error: {{detail}}",
+      "survey_stream_failed": "Survey stream failed — please retry.",
       "report_verdict": "Final Verdict",
       "report_next_steps": "Next Steps",
       "report_archivist": "Archivist Note"

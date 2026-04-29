@@ -1,9 +1,10 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { EndingRoomParticipant } from '../types';
+import type { AgentConversationWSEvent, EndingRoomParticipant } from '../types';
 import { buildSessionHeaders } from '../api/client';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
+import { parseSseFrame } from '../lib/parseSseFrame';
 
 function participantInitial(name: string): string {
   return Array.from(name)[0]?.toUpperCase() ?? '?';
@@ -12,6 +13,39 @@ function participantInitial(name: string): string {
 interface ChatMessage {
   role: 'user' | 'agent';
   content: string;
+}
+
+interface ActiveStreamState {
+  controller: AbortController;
+  participantId: string;
+  threadId: string | null;
+}
+
+function parseConversationSseFrame(frame: string): AgentConversationWSEvent | null {
+  return parseSseFrame<AgentConversationWSEvent>(frame);
+}
+
+async function readConversationError(response: Response): Promise<string> {
+  try {
+    const payload = await response.json() as {
+      detail?: string | { code?: string; message?: string };
+      message?: string;
+    };
+    if (typeof payload.detail === 'object' && payload.detail !== null) {
+      return typeof payload.detail.message === 'string'
+        ? payload.detail.message
+        : (payload.detail.code ?? `HTTP ${response.status}`);
+    }
+    if (typeof payload.detail === 'string' && payload.detail.trim()) {
+      return payload.detail.trim();
+    }
+    if (typeof payload.message === 'string' && payload.message.trim()) {
+      return payload.message.trim();
+    }
+  } catch {
+    // Fall through to generic HTTP fallback.
+  }
+  return `HTTP ${response.status}`;
 }
 
 export interface RoundtableAgentChatProps {
@@ -27,10 +61,11 @@ export default function RoundtableAgentChat({
   const { t } = useTranslation();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Map<string, ChatMessage[]>>(new Map());
+  const [threadIds, setThreadIds] = useState<Map<string, string>>(new Map());
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const inputRef = useRef('');
-  const abortRef = useRef<AbortController | null>(null);
+  const activeStreamRef = useRef<ActiveStreamState | null>(null);
   const [, forceRender] = useState(0);
 
   const selectedParticipant = useMemo(
@@ -41,8 +76,9 @@ export default function RoundtableAgentChat({
   const currentMessages = selectedId ? (messages.get(selectedId) ?? []) : [];
 
   const handleSelect = useCallback((id: string) => {
+    if (streaming) return;
     setSelectedId(id);
-  }, []);
+  }, [streaming]);
 
   const appendAgentMessage = useCallback((pid: string, content: string) => {
     setMessages((prev) => {
@@ -54,15 +90,28 @@ export default function RoundtableAgentChat({
     });
   }, []);
 
+  useEffect(() => () => {
+    activeStreamRef.current?.controller.abort();
+  }, []);
+
   const handleSend = useCallback(async () => {
     const question = inputRef.current.trim();
     if (!question || !selectedId || !selectedParticipant || streaming) return;
+    const participantId = selectedId;
+    const originExcerpt = selectedParticipant.persona_snapshot_json
+      ? JSON.stringify(selectedParticipant.persona_snapshot_json).slice(0, 200)
+      : '';
+    const originBranchId = selectedParticipant.source_branch_id?.trim() || null;
+    const policy = loadLlmProviderPolicy();
+    const controller = new AbortController();
+    let nextThreadId = threadIds.get(participantId) ?? null;
+    activeStreamRef.current = { controller, participantId, threadId: nextThreadId };
 
     setMessages((prev) => {
       const next = new Map(prev);
-      const list = [...(next.get(selectedId) ?? [])];
+      const list = [...(next.get(participantId) ?? [])];
       list.push({ role: 'user', content: question });
-      next.set(selectedId, list);
+      next.set(participantId, list);
       return next;
     });
     setStreaming(true);
@@ -70,86 +119,144 @@ export default function RoundtableAgentChat({
     inputRef.current = '';
     forceRender((n) => n + 1);
 
-    const controller = new AbortController();
-    abortRef.current = controller;
-    const policy = loadLlmProviderPolicy();
-    const persona = selectedParticipant.persona_snapshot_json
-      ? JSON.stringify(selectedParticipant.persona_snapshot_json).slice(0, 200)
-      : '';
-
     try {
-      const response = await fetch(`/api/scenario/${encodeURIComponent(scenarioId)}/conversation`, {
+      if (!nextThreadId) {
+        const startResponse = await fetch('/api/conversation/start', {
+          method: 'POST',
+          headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            scenario_id: scenarioId,
+            agent_identity_id: null,
+            origin_branch_id: originBranchId,
+            origin_node_id: participantId,
+            origin_node_type: 'roundtable_participant',
+            ...(originExcerpt ? { origin_excerpt: originExcerpt } : {}),
+            first_user_content: question,
+            ...(policy.apiKey ? { llm_api_key: policy.apiKey } : {}),
+            ...(policy.baseUrl ? { llm_base_url: policy.baseUrl } : {}),
+            ...(policy.model ? { llm_model: policy.model } : {}),
+            ...(policy.disableUserQuota ? { disable_user_quota: true } : {}),
+          }),
+          signal: controller.signal,
+        });
+        if (!startResponse.ok) {
+          appendAgentMessage(
+            participantId,
+            t('roundtable.chat_error_generic', {
+              detail: await readConversationError(startResponse),
+            }),
+          );
+          return;
+        }
+        const startPayload = await startResponse.json() as { thread_id?: string | null };
+        nextThreadId = typeof startPayload.thread_id === 'string' && startPayload.thread_id.trim()
+          ? startPayload.thread_id
+          : null;
+        if (!nextThreadId) {
+          appendAgentMessage(participantId, t('roundtable.chat_error_no_body'));
+          return;
+        }
+        setThreadIds((prev) => {
+          const next = new Map(prev);
+          next.set(participantId, nextThreadId as string);
+          return next;
+        });
+        if (activeStreamRef.current?.controller === controller) {
+          activeStreamRef.current = { controller, participantId, threadId: nextThreadId };
+        }
+      }
+
+      const response = await fetch(`/api/conversation/${encodeURIComponent(nextThreadId)}/turn`, {
         method: 'POST',
         headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
-          question,
-          origin_node_id: selectedId,
-          origin_node_type: 'roundtable_participant',
-          origin_excerpt: persona || undefined,
+          user_content: question,
+          ...(originExcerpt ? { origin_excerpt: originExcerpt } : {}),
           ...(policy.apiKey ? { llm_api_key: policy.apiKey } : {}),
           ...(policy.baseUrl ? { llm_base_url: policy.baseUrl } : {}),
           ...(policy.model ? { llm_model: policy.model } : {}),
+          ...(policy.disableUserQuota ? { disable_user_quota: true } : {}),
         }),
         signal: controller.signal,
       });
       if (!response.ok) {
-        const err = await response.json().catch(() => ({})) as Record<string, unknown>;
-        const detail = typeof err.detail === 'object' && err.detail !== null
-          ? err.detail as Record<string, unknown>
-          : null;
-        const msg = detail?.message ?? err.message ?? `HTTP ${response.status}`;
-        appendAgentMessage(selectedId, `Error: ${String(msg)}`);
-        setStreaming(false);
+        appendAgentMessage(
+          participantId,
+          t('roundtable.chat_error_generic', {
+            detail: await readConversationError(response),
+          }),
+        );
         return;
       }
 
       const reader = response.body?.getReader();
       if (!reader) {
-        appendAgentMessage(selectedId, 'Error: No response body');
-        setStreaming(false);
+        appendAgentMessage(participantId, t('roundtable.chat_error_no_body'));
         return;
       }
 
       const decoder = new TextDecoder();
       let buffer = '';
       let fullText = '';
+      let streamError: string | null = null;
+      const applyStreamFrame = (frame: string) => {
+        const event = parseConversationSseFrame(frame);
+        if (!event) return;
+        if (event.type === 'turn_token_delta') {
+          fullText += event.delta;
+          setStreamingText(fullText);
+          return;
+        }
+        if (event.type === 'turn_error') {
+          streamError = event.message ?? event.code;
+        }
+      };
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split('\n\n');
+        const frames = buffer.split(/\r?\n\r?\n/);
         buffer = frames.pop() ?? '';
         for (const frame of frames) {
-          for (const line of frame.split(/\r?\n/)) {
-            if (!line.startsWith('data:')) continue;
-            const payload = line.slice(line.indexOf(':') + 1).trimStart();
-            try {
-              const data = JSON.parse(payload) as Record<string, unknown>;
-              if (typeof data.delta === 'string') {
-                fullText += data.delta;
-                setStreamingText(fullText);
-              } else if (typeof data.content === 'string' && data.content) {
-                fullText += data.content;
-                setStreamingText(fullText);
-              }
-            } catch { /* skip malformed SSE data */ }
-          }
+          applyStreamFrame(frame);
         }
       }
-      appendAgentMessage(selectedId, fullText || t('roundtable.chat_no_response'));
+      const trailingFrame = (buffer + decoder.decode()).trim();
+      if (trailingFrame) applyStreamFrame(trailingFrame);
+
+      appendAgentMessage(
+        participantId,
+        streamError
+          ? t('roundtable.chat_error_generic', { detail: streamError })
+          : (fullText || t('roundtable.chat_no_response')),
+      );
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
-        appendAgentMessage(selectedId, `Error: ${(err as Error).message}`);
+        appendAgentMessage(
+          participantId,
+          t('roundtable.chat_error_generic', { detail: (err as Error).message }),
+        );
       }
     } finally {
       setStreaming(false);
       setStreamingText('');
-      abortRef.current = null;
+      if (activeStreamRef.current?.controller === controller) {
+        activeStreamRef.current = null;
+      }
     }
-  }, [selectedId, selectedParticipant, scenarioId, streaming, appendAgentMessage, t]);
+  }, [appendAgentMessage, scenarioId, selectedId, selectedParticipant, streaming, t, threadIds]);
 
   const handleAbort = useCallback(() => {
-    abortRef.current?.abort();
+    const active = activeStreamRef.current;
+    active?.controller.abort();
+    if (active?.threadId) {
+      void fetch(`/api/conversation/${encodeURIComponent(active.threadId)}/active`, {
+        method: 'DELETE',
+        headers: buildSessionHeaders(),
+      }).catch(() => {
+        // Best-effort network cleanup.
+      });
+    }
   }, []);
 
   return (
@@ -165,7 +272,8 @@ export default function RoundtableAgentChat({
             type="button"
             role="option"
             aria-selected={selectedId === p.id}
-            className={`roundtable-agent-chat__avatar${selectedId === p.id ? ' is-selected' : ''}`}
+            className={`roundtable-agent-chat__avatar${selectedId === p.id ? ' is-selected' : ''}${streaming ? ' is-locked' : ''}`}
+            disabled={streaming}
             onClick={() => handleSelect(p.id)}
           >
             <span className="roundtable-agent-chat__initial" aria-hidden="true">
@@ -186,7 +294,11 @@ export default function RoundtableAgentChat({
           </div>
 
           {(currentMessages.length > 0 || streaming) && (
-            <div className="roundtable-agent-chat__messages">
+            <div
+              className="roundtable-agent-chat__messages"
+              role="log"
+              aria-live="polite"
+            >
               {currentMessages.map((msg, i) => (
                 <div key={i} className={`roundtable-agent-chat__msg roundtable-agent-chat__msg--${msg.role}`}>
                   {msg.role === 'agent' && (

@@ -1,89 +1,91 @@
-import { useCallback, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { AnalystSSEEvent } from '../types';
 import { useRoundtableSseStream } from '../hooks/useRoundtableSseStream';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
-
-interface AnalystIteration {
-  iteration: number;
-  action: string;
-  params?: Record<string, unknown>;
-  summary?: string;
-  elapsed_ms?: number;
-}
-
-type AnalystStoppedReason = 'final_response' | 'llm_error' | 'unexpected_action' | 'max_iterations' | 'stream_failure';
-
-export interface AnalystCacheState {
-  iterations: AnalystIteration[];
-  finalAnswer: string | null;
-  stoppedReason: AnalystStoppedReason | null;
-  streaming: boolean;
-  error: string | null;
-}
-
-export const INITIAL_ANALYST_CACHE: AnalystCacheState = {
-  iterations: [],
-  finalAnswer: null,
-  stoppedReason: null,
-  streaming: false,
-  error: null,
-};
+import {
+  createInitialAnalystCache,
+  type AnalystCacheState,
+  type AnalystStoppedReason,
+} from './postVerdictCaches';
 
 interface AnalystStreamViewProps {
   scenarioId: string;
-  cacheRef: React.RefObject<AnalystCacheState>;
-  version: number;
-  bumpVersion: () => void;
+  roomId?: string | null;
+  cache: AnalystCacheState;
+  setCache: Dispatch<SetStateAction<AnalystCacheState>>;
+  contextVersion: number;
 }
 
 export default function AnalystStreamView({
   scenarioId,
-  cacheRef,
-  bumpVersion,
+  roomId,
+  cache,
+  setCache,
+  contextVersion,
 }: AnalystStreamViewProps) {
   const { t } = useTranslation();
-  const [, forceRender] = useReducer((x: number) => x + 1, 0);
-  const questionRef = useRef('');
-
-  const cache = cacheRef.current;
+  const [question, setQuestion] = useState('');
 
   const onEvent = useCallback((event: AnalystSSEEvent) => {
-    const c = cacheRef.current;
-    if (event.type === 'analyst_thinking') {
-      const existing = c.iterations.find((it) => it.iteration === event.iteration);
-      if (existing) {
-        existing.action = event.action;
-        existing.params = event.params;
-      } else {
-        c.iterations.push({ iteration: event.iteration, action: event.action, params: event.params });
+    setCache((current) => {
+      if (event.type === 'analyst_thinking') {
+        const iterations = current.iterations.map((iteration) => ({ ...iteration }));
+        const existing = iterations.find((iteration) => iteration.iteration === event.iteration);
+        if (existing) {
+          existing.action = event.action;
+          existing.params = event.params;
+        } else {
+          iterations.push({
+            iteration: event.iteration,
+            action: event.action,
+            params: event.params,
+          });
+        }
+        return { ...current, iterations };
       }
-    } else if (event.type === 'analyst_tool_result') {
-      const existing = c.iterations.find((it) => it.iteration === event.iteration);
-      if (existing) {
-        existing.summary = event.summary;
-        existing.elapsed_ms = event.elapsed_ms;
+
+      if (event.type === 'analyst_tool_result') {
+        return {
+          ...current,
+          iterations: current.iterations.map((iteration) => (
+            iteration.iteration === event.iteration
+              ? {
+                ...iteration,
+                summary: event.summary,
+                elapsed_ms: event.elapsed_ms,
+              }
+              : iteration
+          )),
+        };
       }
-    } else if (event.type === 'analyst_response') {
-      c.finalAnswer = event.answer;
-      c.stoppedReason = (event.stopped_reason as AnalystStoppedReason) ?? 'final_response';
-      c.streaming = false;
-      if (event.error) c.error = event.error;
-    }
-    bumpVersion();
-  }, [cacheRef, bumpVersion]);
+
+      if (event.type === 'analyst_response') {
+        return {
+          ...current,
+          finalAnswer: event.answer,
+          stoppedReason: (event.stopped_reason as AnalystStoppedReason) ?? 'final_response',
+          streaming: false,
+          error: event.error ?? current.error,
+        };
+      }
+
+      return current;
+    });
+  }, [setCache]);
 
   const onError = useCallback((code: string, message: string) => {
-    cacheRef.current.error = `${code}: ${message}`;
-    cacheRef.current.streaming = false;
-    bumpVersion();
-  }, [cacheRef, bumpVersion]);
+    setCache((current) => ({
+      ...current,
+      error: `${code}: ${message}`,
+      streaming: false,
+    }));
+  }, [setCache]);
 
   const onComplete = useCallback(() => {
-    cacheRef.current.streaming = false;
-    bumpVersion();
-  }, [cacheRef, bumpVersion]);
+    setCache((current) => ({ ...current, streaming: false }));
+  }, [setCache]);
 
   const { start, abort } = useRoundtableSseStream<AnalystSSEEvent>({
     scenarioId,
@@ -93,25 +95,27 @@ export default function AnalystStreamView({
     onComplete,
   });
 
+  useEffect(() => {
+    abort();
+  }, [abort, contextVersion]);
+
   const handleSubmit = useCallback(() => {
-    const question = questionRef.current.trim();
-    if (!question) return;
-    const c = cacheRef.current;
-    c.iterations = [];
-    c.finalAnswer = null;
-    c.stoppedReason = null;
-    c.error = null;
-    c.streaming = true;
-    bumpVersion();
+    const normalizedQuestion = question.trim();
+    if (!normalizedQuestion) return;
+    setCache({
+      ...createInitialAnalystCache(),
+      streaming: true,
+    });
 
     const policy = loadLlmProviderPolicy();
     void start({
-      question,
+      question: normalizedQuestion,
+      ...(roomId ? { room_id: roomId } : {}),
       ...(policy.apiKey ? { llm_api_key: policy.apiKey } : {}),
       ...(policy.baseUrl ? { llm_base_url: policy.baseUrl } : {}),
       ...(policy.model ? { llm_model: policy.model } : {}),
     });
-  }, [cacheRef, bumpVersion, start]);
+  }, [question, roomId, setCache, start]);
 
   const handleRetry = useCallback(() => {
     handleSubmit();
@@ -143,7 +147,8 @@ export default function AnalystStreamView({
         <textarea
           className="analyst-stream__textarea"
           placeholder={t('roundtable.analyst_placeholder')}
-          onChange={(e) => { questionRef.current = e.target.value; forceRender(); }}
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
           disabled={cache.streaming}
           rows={2}
         />
@@ -151,7 +156,7 @@ export default function AnalystStreamView({
           type="button"
           className={`analyst-stream__submit btn btn--sm${cache.streaming ? ' is-streaming' : ''}`}
           onClick={cache.streaming ? abort : handleSubmit}
-          disabled={!cache.streaming && !questionRef.current.trim()}
+          disabled={!cache.streaming && !question.trim()}
         >
           {cache.streaming ? t('roundtable.analyst_stop') : t('roundtable.analyst_ask')}
         </button>
@@ -162,17 +167,19 @@ export default function AnalystStreamView({
       )}
 
       {cache.iterations.length > 0 && (
-        <div className="analyst-stream__iterations">
-          {cache.iterations.map((it) => (
-            <div key={it.iteration} className="analyst-stream__iteration">
-              <span className="analyst-stream__iteration-badge">{it.iteration}</span>
+        <div className="analyst-stream__iterations" aria-live="polite">
+          {cache.iterations.map((iteration) => (
+            <div key={iteration.iteration} className="analyst-stream__iteration">
+              <span className="analyst-stream__iteration-badge">{iteration.iteration}</span>
               <div className="analyst-stream__iteration-body">
-                <span className="analyst-stream__tool-name">{toolLabel(it.action)}</span>
-                {it.summary && (
-                  <p className="analyst-stream__tool-summary">{it.summary}</p>
+                <span className="analyst-stream__tool-name">{toolLabel(iteration.action)}</span>
+                {iteration.summary && (
+                  <p className="analyst-stream__tool-summary">{iteration.summary}</p>
                 )}
-                {it.elapsed_ms != null && (
-                  <span className="analyst-stream__elapsed">{(it.elapsed_ms / 1000).toFixed(1)}s</span>
+                {iteration.elapsed_ms != null && (
+                  <span className="analyst-stream__elapsed">
+                    {(iteration.elapsed_ms / 1000).toFixed(1)}s
+                  </span>
                 )}
               </div>
             </div>
@@ -186,7 +193,7 @@ export default function AnalystStreamView({
       )}
 
       {cache.finalAnswer && (
-        <div className="analyst-stream__answer">
+        <div className="analyst-stream__answer" aria-live="polite">
           <p className="analyst-stream__answer-text">{cache.finalAnswer}</p>
         </div>
       )}

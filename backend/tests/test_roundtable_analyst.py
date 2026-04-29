@@ -118,6 +118,54 @@ def _seed_analyst_scenario(
     }
 
 
+def _add_secondary_roundtable_room(scenario_id: str) -> str:
+    room_id = _unique("room")
+    agent_id = _unique("agent")
+    participant_id = _unique("participant")
+
+    with Session(get_engine()) as session:
+        session.add(
+            EndingRoom(
+                id=room_id,
+                scenario_id=scenario_id,
+                anchor_branch_id=None,
+                room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+                participant_set_hash=_unique("psh"),
+                scope_fingerprint=_unique("scope"),
+                title="Analyst Room 2",
+                status=EndingRoomStatus.DONE,
+            )
+        )
+        session.flush()
+        session.add(
+            Agent(
+                id=agent_id,
+                scenario_id=scenario_id,
+                name="Counter-witness",
+                role="Witness",
+                persona="Tracks the collateral trail.",
+            )
+        )
+        session.flush()
+        session.add(
+            EndingRoomParticipant(
+                id=participant_id,
+                room_id=room_id,
+                source_branch_id=None,
+                source_agent_id=agent_id,
+                role_slot=EndingRoomRoleSlot.REPRESENTATIVE,
+                display_name="Counter-witness",
+                persona_snapshot_json={
+                    "agent_role": "Witness",
+                    "agent_persona": "Tracks the collateral trail.",
+                },
+            )
+        )
+        session.commit()
+
+    return room_id
+
+
 def _parse_sse_payload(raw: str) -> list[tuple[str, dict]]:
     frames: list[tuple[str, dict]] = []
     for chunk in raw.split("\n\n"):
@@ -420,6 +468,52 @@ def test_analyst_unexpected_action_falls_back_to_terminal_response(client, monke
                 "answer": "Stop here.",
                 "iterations": 1,
                 "stopped_reason": "unexpected_action",
+            },
+        )
+    ]
+
+
+def test_analyst_requires_room_id_when_multiple_roundtables_exist(client):
+    fixture = _seed_analyst_scenario()
+    _add_secondary_roundtable_room(fixture["scenario_id"])
+
+    response = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/analyst",
+        json={"question": "Trace the hinge."},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ROUNDTABLE_ROOM_AMBIGUOUS"
+
+
+def test_analyst_handles_non_object_decision_payload(client, monkeypatch):
+    fixture = _seed_analyst_scenario()
+
+    async def _fake_llm_call_json(_prompt: str, **_kwargs):
+        return ["not", "a", "mapping"]
+
+    monkeypatch.setattr(
+        "app.services.roundtable_analyst.llm_call_json",
+        _fake_llm_call_json,
+    )
+
+    with client.stream(
+        "POST",
+        f"/api/scenario/{fixture['scenario_id']}/analyst",
+        json={"question": "What happened?"},
+    ) as response:
+        raw = "".join(response.iter_text())
+
+    frames = _parse_sse_payload(raw)
+    assert response.status_code == 200
+    assert frames == [
+        (
+            "analyst_response",
+            {
+                "answer": "",
+                "error": "Analyst decision payload must be a JSON object.",
+                "iterations": 1,
+                "stopped_reason": "llm_error",
             },
         )
     ]

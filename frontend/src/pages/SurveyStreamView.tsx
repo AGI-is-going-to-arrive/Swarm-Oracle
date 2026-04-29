@@ -1,48 +1,45 @@
-import { useCallback, useMemo, useReducer, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { EndingRoomParticipant, SurveySSEEvent } from '../types';
 import { useRoundtableSseStream } from '../hooks/useRoundtableSseStream';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
-
-export interface SurveyCacheState {
-  responses: Map<string, SurveySSEEvent>;
-  streaming: boolean;
-  error: string | null;
-  participantOrder: string[];
-}
-
-export const INITIAL_SURVEY_CACHE: SurveyCacheState = {
-  responses: new Map(),
-  streaming: false,
-  error: null,
-  participantOrder: [],
-};
+import {
+  createInitialSurveyCache,
+  type SurveyCacheState,
+} from './postVerdictCaches';
 
 interface SurveyStreamViewProps {
   scenarioId: string;
+  roomId?: string | null;
   participants: EndingRoomParticipant[];
-  cacheRef: React.RefObject<SurveyCacheState>;
-  version: number;
-  bumpVersion: () => void;
+  cache: SurveyCacheState;
+  setCache: Dispatch<SetStateAction<SurveyCacheState>>;
+  contextVersion: number;
 }
 
 const MAX_SURVEY_PARTICIPANTS = 6;
 
 export default function SurveyStreamView({
   scenarioId,
+  roomId,
   participants,
-  cacheRef,
-  bumpVersion,
+  cache,
+  setCache,
+  contextVersion,
 }: SurveyStreamViewProps) {
   const { t } = useTranslation();
-  const [, forceRender] = useReducer((x: number) => x + 1, 0);
-  const questionRef = useRef('');
+  const [question, setQuestion] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(
     () => new Set(participants.slice(0, MAX_SURVEY_PARTICIPANTS).map((p) => p.id)),
   );
-
-  const cache = cacheRef.current;
 
   const toggleParticipant = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -57,38 +54,59 @@ export default function SurveyStreamView({
   }, []);
 
   const orderedParticipantIds = useMemo(
-    () => participants.filter((p) => selectedIds.has(p.id)).map((p) => p.id),
+    () => participants.filter((participant) => selectedIds.has(participant.id)).map((participant) => participant.id),
     [participants, selectedIds],
   );
 
   const participantMap = useMemo(
-    () => new Map(participants.map((p) => [p.id, p])),
+    () => new Map(participants.map((participant) => [participant.id, participant])),
     [participants],
   );
 
   const onEvent = useCallback((event: SurveySSEEvent) => {
-    if (event.type === 'survey_response') {
-      if (!event.participant_id) {
-        cacheRef.current.error = event.error || 'Roundtable survey stream failed';
-        cacheRef.current.streaming = false;
-        bumpVersion();
-        return;
-      }
-      cacheRef.current.responses.set(event.participant_id, event);
-      bumpVersion();
+    if (event.type !== 'survey_response') {
+      return;
     }
-  }, [cacheRef, bumpVersion]);
+
+    setCache((current) => {
+      if (!event.participant_id) {
+        return {
+          ...current,
+          error: event.error || t('roundtable.survey_stream_failed'),
+          streaming: false,
+        };
+      }
+      const responses = new Map(current.responses);
+      responses.set(event.participant_id, event);
+      return { ...current, responses };
+    });
+  }, [setCache, t]);
 
   const onError = useCallback((code: string, message: string) => {
-    cacheRef.current.error = `${code}: ${message}`;
-    cacheRef.current.streaming = false;
-    bumpVersion();
-  }, [cacheRef, bumpVersion]);
+    setCache((current) => ({
+      ...current,
+      error: `${code}: ${message}`,
+      streaming: false,
+    }));
+  }, [setCache]);
 
   const onComplete = useCallback(() => {
-    cacheRef.current.streaming = false;
-    bumpVersion();
-  }, [cacheRef, bumpVersion]);
+    setCache((current) => {
+      const expectedCount = current.participantOrder.length;
+      if (
+        expectedCount > 0
+        && current.responses.size < expectedCount
+        && !current.error
+      ) {
+        return {
+          ...current,
+          error: t('roundtable.survey_stream_failed'),
+          streaming: false,
+        };
+      }
+      return { ...current, streaming: false };
+    });
+  }, [setCache, t]);
 
   const { start, abort } = useRoundtableSseStream<SurveySSEEvent>({
     scenarioId,
@@ -98,40 +116,50 @@ export default function SurveyStreamView({
     onComplete,
   });
 
+  useEffect(() => {
+    abort();
+  }, [abort, contextVersion]);
+
   const handleSubmit = useCallback(() => {
-    const question = questionRef.current.trim();
-    if (!question || orderedParticipantIds.length === 0) return;
-    const c = cacheRef.current;
-    c.responses = new Map();
-    c.error = null;
-    c.streaming = true;
-    c.participantOrder = orderedParticipantIds;
-    bumpVersion();
+    const normalizedQuestion = question.trim();
+    if (!normalizedQuestion || orderedParticipantIds.length === 0) return;
+    setCache({
+      ...createInitialSurveyCache(),
+      streaming: true,
+      participantOrder: orderedParticipantIds,
+    });
 
     const policy = loadLlmProviderPolicy();
     void start({
-      question,
+      question: normalizedQuestion,
       participant_ids: orderedParticipantIds,
+      ...(roomId ? { room_id: roomId } : {}),
       ...(policy.apiKey ? { llm_api_key: policy.apiKey } : {}),
       ...(policy.baseUrl ? { llm_base_url: policy.baseUrl } : {}),
       ...(policy.model ? { llm_model: policy.model } : {}),
     });
-  }, [cacheRef, bumpVersion, orderedParticipantIds, start]);
+  }, [orderedParticipantIds, question, roomId, setCache, start]);
 
   const displayOrder = cache.participantOrder.length > 0 ? cache.participantOrder : orderedParticipantIds;
 
   return (
     <div className="survey-stream" data-testid="survey-stream-view">
       <div className="survey-stream__picker" role="group" aria-label={t('roundtable.survey_select_participants')}>
-        {participants.map((p) => (
-          <label key={p.id} className={`survey-stream__checkbox ${selectedIds.has(p.id) ? 'is-selected' : ''}`}>
+        {participants.map((participant) => (
+          <label
+            key={participant.id}
+            className={`survey-stream__checkbox ${selectedIds.has(participant.id) ? 'is-selected' : ''}`}
+          >
             <input
               type="checkbox"
-              checked={selectedIds.has(p.id)}
-              onChange={() => toggleParticipant(p.id)}
-              disabled={cache.streaming || (!selectedIds.has(p.id) && selectedIds.size >= MAX_SURVEY_PARTICIPANTS)}
+              checked={selectedIds.has(participant.id)}
+              onChange={() => toggleParticipant(participant.id)}
+              disabled={
+                cache.streaming
+                || (!selectedIds.has(participant.id) && selectedIds.size >= MAX_SURVEY_PARTICIPANTS)
+              }
             />
-            <span>{p.display_name}</span>
+            <span>{participant.display_name}</span>
           </label>
         ))}
       </div>
@@ -140,7 +168,8 @@ export default function SurveyStreamView({
         <textarea
           className="survey-stream__textarea"
           placeholder={t('roundtable.survey_placeholder')}
-          onChange={(e) => { questionRef.current = e.target.value; forceRender(); }}
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
           disabled={cache.streaming}
           rows={2}
         />
@@ -148,25 +177,25 @@ export default function SurveyStreamView({
           type="button"
           className="survey-stream__submit btn btn--sm"
           onClick={cache.streaming ? abort : handleSubmit}
-          disabled={!cache.streaming && (!questionRef.current.trim() || selectedIds.size === 0)}
+          disabled={!cache.streaming && (!question.trim() || selectedIds.size === 0)}
         >
           {cache.streaming ? t('roundtable.survey_stop') : t('roundtable.survey_ask')}
         </button>
       </div>
 
       {(cache.streaming || cache.responses.size > 0) && (
-        <div className="survey-stream__grid">
-          {displayOrder.map((pid) => {
-            const response = cache.responses.get(pid);
-            const participant = participantMap.get(pid);
+        <div className="survey-stream__grid" aria-live="polite">
+          {displayOrder.map((participantId) => {
+            const response = cache.responses.get(participantId);
+            const participant = participantMap.get(participantId);
             const hasError = response?.error;
             return (
               <div
-                key={pid}
+                key={participantId}
                 className={`survey-stream__card ${response ? 'is-filled' : ''} ${hasError ? 'is-error' : ''}`}
               >
                 <div className="survey-stream__card-header">
-                  <strong>{response?.display_name ?? participant?.display_name ?? pid}</strong>
+                  <strong>{response?.display_name ?? participant?.display_name ?? participantId}</strong>
                   <span>{response?.role ?? participant?.role_slot ?? ''}</span>
                 </div>
                 {response ? (

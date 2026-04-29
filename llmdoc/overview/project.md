@@ -58,6 +58,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `只改一步`
   - 不会展示 `发起圆桌` / `异线旁听席`
 - `WorldlineRoundtableView` 已支持 live roundtable、改选重开、只读 replay，以及 `manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented`。
+- live completed room 当前在裁决落地后开放 `Deep Dive` 工作台，包含 participant-scoped `1-on-1 Interview`、`Research Analyst` 与 `Cross-Examine`；readonly replay 不开放这组 live-only 工作台入口。
 - 代表改选当前支持桌面 `drag-to-seat / keyboard reseat`；移动端保留 `click-to-seat`。
 - single-ending 当前已补：
   - `继续追问`
@@ -156,10 +157,13 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - frontend ResultView / CausalReviewView / locale 定向：`126 passed`
     - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
-  - backend 全量 `pytest` 最近一次记录为 `2264 passed, 2 skipped`（本轮未复跑全量）
+  - backend 全量 `pytest` 最近一次记录为 `2357 passed, 2 skipped`
   - frontend `typecheck / lint / build / perf budgets` 通过
   - frontend bridge / guide 定向 vitest `124 passed`
-  - frontend 全量 vitest 最近一次记录为 `1365 passed`（本轮未复跑全量）
+  - frontend 全量 vitest 最近一次记录为 `1742 passed`
+  - 本轮真实验证还包括：
+    - `cd backend && source .venv/bin/activate && ruff check app/services/`：通过
+    - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
   - frontend 目标文件 `eslint`、`typecheck`、`build / perf budgets` 通过
   - fixture-backed local preview 浏览器复核：
     - ResultView bridge DOM / disabled 样式通过

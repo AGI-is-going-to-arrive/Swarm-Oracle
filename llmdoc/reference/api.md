@@ -155,7 +155,7 @@
 | `GET` | `/api/scenario/{scenario_id}/export` | 导出 Markdown |
 | `POST` | `/api/health` | 后端健康检查 |
 | `POST` | `/api/health/test` | provider 探测与预算预检；返回服务端默认搜索 hint |
-| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 11-key capability registry (`web_search` + 10 个功能开关) |
+| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 13-key capability registry (`web_search` + 12 个功能开关) |
 | `GET` | `/` | 根信息 |
 | `GET` | `/metrics` | Prometheus 文本指标 |
 
@@ -165,6 +165,9 @@
 - `export` 通过附件下载返回 Markdown 文件。
 - `/api/health`、`/api/health/test`、`/api/capabilities` 当前都属于业务 REST 门禁范围；`/` 和 `/metrics` 仍是显式例外。
 - `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认配置是否 ready（`scope: "server"`），不是 per-provider 探测结果。
+- `GET /api/capabilities` 当前顶层 key 固定为：
+  `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst`。
+  除 `web_search` 外，其余 12 个都是功能开关 registry entry，至少带 `enabled / version`。
 
 ## Debate
 
@@ -299,6 +302,8 @@
 | `GET` | `/api/ending-room/thread/{thread_id}` | 读取 thread snapshot |
 | `POST` | `/api/ending-room/{room_id}/user-turn` | room 级追问 |
 | `POST` | `/api/ending-room/thread/{thread_id}/user-turn` | thread 级追问 |
+| `POST` | `/api/scenario/{scenario_id}/survey` | 通过 SSE 向同一 roundtable room 的代表发起短问询 |
+| `POST` | `/api/scenario/{scenario_id}/analyst` | 通过 SSE 启动 roundtable analyst 追问与工具式分析 |
 
 关键约束：
 
@@ -322,6 +327,21 @@
   当前都会回显：
   - `question_anchor_ids_json`
   - 便于 replay/read-only 恢复与自动化验证锚点语义。
+- `POST /api/scenario/{scenario_id}/survey`
+  受 `FEATURE_ROUNDTABLE_SURVEY` gate；请求体包含 `question`、`participant_ids`，并可选 `room_id / llm_api_key / llm_base_url / llm_model`。
+  - `participant_ids` 必须去重后仍非空，当前最多 6 个。
+  - `room_id` 用于限定目标 `worldline_roundtable` room；如果指定但不属于当前 scenario，返回 `404 ROUNDTABLE_ROOM_NOT_FOUND`。
+  - 同一请求里不允许混用不同 roundtable room 的 participant；这类歧义返回 `409 ROUNDTABLE_ROOM_AMBIGUOUS`。
+  - SSE 正常事件为 `survey_response`；单个代表的 LLM 错误会收口在对应 `survey_response.error`，不把整个流升级成 fatal error。
+- `POST /api/scenario/{scenario_id}/analyst`
+  受 `FEATURE_ROUNDTABLE_ANALYST` gate；请求体包含 `question`，并可选 `room_id / llm_api_key / llm_base_url / llm_model`。
+  - 同一 scenario 里只有一个 roundtable room 时，`room_id` 可以省略；存在多个 roundtable room 时必须显式传 `room_id`。
+  - 缺少必要 `room_id` 造成的多房间歧义返回 `409 ROUNDTABLE_ROOM_AMBIGUOUS`；指定的 `room_id` 不属于当前 scenario 时返回 `404 ROUNDTABLE_ROOM_NOT_FOUND`。
+  - SSE 事件为 `analyst_thinking / analyst_tool_result / analyst_response`；`analyst_response` 是终态响应，也承载 LLM 错误或迭代上限结果。
+- `survey` 与 `analyst` 的 request-scoped LLM override 口径一致：
+  - `llm_api_key / llm_base_url / llm_model` 只影响当前请求，不改服务端默认配置。
+  - 传 `llm_base_url` 时会走允许列表校验；自定义 base URL 必须同时带 `llm_api_key`。
+  - `llm_model` 只接受逻辑模型名，不能传 URL。
 
 ## WebSocket
 

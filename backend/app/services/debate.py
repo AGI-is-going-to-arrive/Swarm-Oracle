@@ -42,7 +42,7 @@ from app.services.debate_scoring import (
 )
 from app.services.llm_client import (
     format_untrusted_text_block,
-    llm_call_json,
+    llm_call,
     llm_call_json_with_stream_fallback,
     llm_request_scope,
 )
@@ -1332,22 +1332,27 @@ async def _generate_turn_content(
     )
 
     try:
+        # Pass-1: natural language debate line
         with llm_request_scope(
             quota_key=f"user:{quota_key}" if quota_key else None,
             purpose=f"debate_turn_{phase.value}",
             requests_per_minute=overrides.get("requests_per_minute"),
             tokens_per_minute=overrides.get("tokens_per_minute"),
         ):
-            result = await llm_call_json(
+            raw_text = await llm_call(
                 prompt,
-                reasoning_effort=overrides.get("reasoning_effort") or "low",
+                reasoning_effort=overrides.get("reasoning_effort") or "medium",
                 model=overrides.get("model"),
                 api_key=overrides.get("api_key"),
                 base_url=overrides.get("base_url"),
-                fallback_mode="agent_message",
+                temperature=(
+                    overrides.get("temperature")
+                    if overrides.get("temperature") is not None
+                    else 0.8
+                ),
             )
         content = _polish_generated_turn(
-            str(result.get("content", "") or ""),
+            raw_text or "",
             language=debate.language,
             phase=phase,
         )
@@ -1821,7 +1826,9 @@ async def run_debate_background(
     finally:
         if lock_heartbeat_stop is not None and lock_heartbeat_thread is not None:
             _stop_runtime_lock_heartbeat(lock_heartbeat_stop, lock_heartbeat_thread)
-        release_runtime_lock(lock_lease_holder[0] if lock_lease_holder[0] is not None else lock_lease)
+        release_runtime_lock(
+            lock_lease_holder[0] if lock_lease_holder[0] is not None else lock_lease
+        )
         _clear_running_debate(debate_id)
 
 

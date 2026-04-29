@@ -59,7 +59,10 @@ def _normalize_question(question: str) -> str:
     return cleaned
 
 
-def _load_scenario_context(scenario_id: str) -> AnalystScenarioContext:
+def _load_scenario_context(
+    scenario_id: str,
+    room_id: str | None = None,
+) -> AnalystScenarioContext:
     with Session(get_engine()) as session:
         scenario = session.get(Scenario, scenario_id)
         if scenario is None:
@@ -69,6 +72,32 @@ def _load_scenario_context(scenario_id: str) -> AnalystScenarioContext:
                 "Scenario not found",
             )
 
+        available_room_ids = list(
+            session.exec(
+                select(EndingRoom.id).where(
+                    EndingRoom.scenario_id == scenario_id,
+                    EndingRoom.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE,
+                )
+            ).all()
+        )
+        if room_id:
+            if room_id not in available_room_ids:
+                raise RoundtableAnalystServiceError(
+                    404,
+                    "ROUNDTABLE_ROOM_NOT_FOUND",
+                    "Roundtable room not found in scenario",
+                )
+            resolved_room_id = room_id
+        else:
+            distinct_room_ids = list(dict.fromkeys(available_room_ids))
+            if len(distinct_room_ids) > 1:
+                raise RoundtableAnalystServiceError(
+                    409,
+                    "ROUNDTABLE_ROOM_AMBIGUOUS",
+                    "Roundtable room_id is required when multiple roundtable rooms exist",
+                )
+            resolved_room_id = distinct_room_ids[0] if distinct_room_ids else None
+
         participant_rows = list(
             session.exec(
                 select(EndingRoomParticipant, EndingRoom)
@@ -76,6 +105,7 @@ def _load_scenario_context(scenario_id: str) -> AnalystScenarioContext:
                 .where(
                     EndingRoom.scenario_id == scenario_id,
                     EndingRoom.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE,
+                    EndingRoom.id == resolved_room_id if resolved_room_id else True,
                 )
             ).all()
         )
@@ -181,6 +211,11 @@ def _build_analyst_prompt(
             "to answer questions about a completed roundtable discussion.",
             "Operate as a bounded ReACT agent. Choose exactly one action per turn. "
             "Gather evidence first, then synthesize a conclusion.",
+            "Voice and length guidance:\n"
+            "- Write in a professional but accessible analytical voice.\n"
+            "- Keep each reasoning step (thought / observation) to 2-3 sentences.\n"
+            "- Cite specific graph nodes, memory entries, or source URLs when making claims.\n"
+            "- Respond in the same language as the analyst question.",
             "Allowed actions:",
             '- {"action":"query_causal_graph","params":{"query":"...",'
             ' "branch_id":"optional","node_type":"optional","max_items":8}}',
@@ -356,6 +391,7 @@ async def build_roundtable_analyst_stream(
     scenario_id: str,
     question: str,
     *,
+    room_id: str | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
     model: str | None = None,
@@ -363,7 +399,7 @@ async def build_roundtable_analyst_stream(
     """Prepare and return the analyst SSE event stream."""
 
     normalized_question = _normalize_question(question)
-    context = await asyncio.to_thread(_load_scenario_context, scenario_id)
+    context = await asyncio.to_thread(_load_scenario_context, scenario_id, room_id)
 
     async def _iter() -> AsyncIterator[dict[str, Any]]:
         history_blocks: list[str] = []
@@ -376,6 +412,8 @@ async def build_roundtable_analyst_stream(
                         api_key=api_key,
                         base_url=base_url,
                         model=model,
+                        reasoning_effort="medium",
+                        temperature=0.7,
                     )
                 except LLMError as exc:
                     yield {
@@ -383,6 +421,18 @@ async def build_roundtable_analyst_stream(
                         "data": {
                             "answer": "",
                             "error": str(exc),
+                            "iterations": iteration,
+                            "stopped_reason": "llm_error",
+                        },
+                    }
+                    return
+
+                if not isinstance(decision, dict):
+                    yield {
+                        "event": "analyst_response",
+                        "data": {
+                            "answer": "",
+                            "error": "Analyst decision payload must be a JSON object.",
                             "iterations": iteration,
                             "stopped_reason": "llm_error",
                         },

@@ -9,6 +9,7 @@ from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
+    llm_call,
     llm_call_json_with_stream_fallback,
     llm_request_scope,
 )
@@ -28,14 +29,17 @@ def _build_narration_prompt(
     raw_rounds_block: str,
     language: str,
     web_context_block: str = "",
+    question_block: str = "",
 ) -> str:
     web_block = f"\n{web_context_block}\n" if web_context_block else ""
+    question_section = f"\n【场景问题】\n{question_block}\n" if question_block else ""
+    question_section_en = f"\n[Scenario Question]\n{question_block}\n" if question_block else ""
     if _is_chinese(language):
         return f"""你是一位出色的故事讲述者。\
 请把以下群体推演的原始交互记录改写成一段引人入胜的叙事。
 
 {UNTRUSTED_INPUT_GUARDRAIL}
-{web_block}
+{web_block}{question_section}
 
 【分支标题】
 {branch_title_block}
@@ -50,11 +54,10 @@ def _build_narration_prompt(
 1. 用生动的第三人称讲述，像一部精彩的历史纪录片
 2. 重点刻画人物的具体言行和内心挣扎，而不是堆砌抽象概念
 3. 找出 2-3 个真正改变走向的「转折点」，在叙事中制造张力
-4. 结尾用一两句话给出这条结局的深刻启示
+4. 结尾回扣用户的原始 what-if 问题，给出深刻启示
 5. 总字数控制在 300-500 字
 
-输出严格 JSON:
-{{"story": "叙事正文", "insight": "一句话启示", "key_moments": ["转折点1的简述", "转折点2的简述"]}}
+直接输出叙事文本，不要包裹在 JSON 里。
 
 {get_language_directive(language)}
 """
@@ -63,7 +66,7 @@ def _build_narration_prompt(
 following raw simulation transcript into an engaging story.
 
 {UNTRUSTED_INPUT_GUARDRAIL}
-{web_block}
+{web_block}{question_section_en}
 
 [Branch Title]
 {branch_title_block}
@@ -78,12 +81,10 @@ Writing requirements:
 1. Use vivid third-person narration, like a strong documentary sequence
 2. Focus on concrete actions, lines, and internal tension instead of abstract summary
 3. Identify 2-3 real turning points that changed the outcome and build narrative tension around them
-4. End with one or two sentences that distill the deeper takeaway of this branch
+4. End by connecting back to the original what-if question with a deeper takeaway
 5. Keep the total length around 300-500 words
 
-Output strict JSON:
-{{"story": "narrative body", "insight": "one-sentence takeaway", \
-"key_moments": ["turning point 1", "turning point 2"]}}
+Output the narrative text directly, do not wrap it in JSON.
 
 {get_language_directive(language)}
 """
@@ -166,12 +167,21 @@ async def narrate_branch(
     temperature: float | None = None,
     model: str | None = None,
     web_context_block: str = "",
+    question: str = "",
 ) -> dict:
     """Generate a narrative story for a completed branch.
 
     Returns:
         dict with keys: story, insight, key_moments
     """
+    question_block = (
+        format_untrusted_text_block(
+            "场景问题" if _is_chinese(language) else "Scenario Question",
+            question,
+            max_chars=500,
+        )
+        if question else ""
+    )
     prompt = _build_narration_prompt(
         branch_title_block=format_untrusted_text_block(
             "分支标题" if _is_chinese(language) else "Branch Title",
@@ -191,23 +201,66 @@ async def narrate_branch(
         ),
         language=language,
         web_context_block=web_context_block,
+        question_block=question_block,
     )
 
     logger.info("Narrating branch: %s (p=%.2f)", branch_title, probability)
     try:
+        # Pass-1: natural narrative text
+        with llm_request_scope(purpose="scenario_narration"):
+            raw_story = await asyncio.wait_for(
+                llm_call(
+                    prompt,
+                    reasoning_effort="medium",
+                    api_key=api_key,
+                    base_url=base_url,
+                    temperature=temperature if temperature is not None else 0.8,
+                    model=model,
+                ),
+                timeout=_NARRATION_TIMEOUT_SECONDS,
+            )
+
+        # Pass-2: extract structured fields
+        extract_lang = "zh" if _is_chinese(language) else "en"
+        if extract_lang == "zh":
+            raw_block = format_untrusted_text_block(
+                "原文", raw_story, max_chars=5000,
+            )
+            extract_prompt = (
+                f"从以下叙事文本中提取结构化信息。\n\n"
+                f"{raw_block}\n\n"
+                f"输出严格 JSON：\n"
+                f'{{"story": "完整叙事正文（保留原文）", '
+                f'"insight": "一句话启示", '
+                f'"key_moments": ["转折点1", "转折点2"]}}'
+            )
+        else:
+            raw_block = format_untrusted_text_block(
+                "Text", raw_story, max_chars=5000,
+            )
+            extract_prompt = (
+                f"Extract structured fields from the narrative below.\n\n"
+                f"{raw_block}\n\n"
+                f"Output strict JSON:\n"
+                f'{{"story": "full narrative (preserve original)", '
+                f'"insight": "one-sentence takeaway", '
+                f'"key_moments": ["turning point 1", "turning point 2"]}}'
+            )
         with llm_request_scope(purpose="scenario_narration"):
             raw_result = await asyncio.wait_for(
                 llm_call_json_with_stream_fallback(
-                    prompt,
+                    extract_prompt,
                     reasoning_effort="low",
                     api_key=api_key,
                     base_url=base_url,
-                    temperature=temperature,
+                    temperature=0.2,
                     model=model,
                 ),
                 timeout=_NARRATION_TIMEOUT_SECONDS,
             )
         result = _normalize_narration_result(raw_result)
+        if not result.get("story"):
+            result["story"] = raw_story
     except Exception as exc:
         logger.warning("Narration fallback for %s: %s", branch_title, exc)
         result = _build_fallback_narration(

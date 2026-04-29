@@ -497,6 +497,7 @@ async def ending_room_websocket_alias_endpoint(websocket: WebSocket, room_id: st
 class SurveyRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     participant_ids: list[str] = Field(..., min_length=1, max_length=6)
+    room_id: str | None = None
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
@@ -519,9 +520,38 @@ class SurveyRequest(BaseModel):
             raise ValueError("participant_ids must be unique")
         return normalized
 
+    @field_validator("room_id", "llm_api_key", "llm_base_url", "llm_model")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("room_id")
+    @classmethod
+    def validate_room_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if len(value) > 128:
+            raise ValueError("room_id must be at most 128 characters")
+        return value
+
+    @field_validator("llm_model")
+    @classmethod
+    def validate_llm_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if "://" in value or "http" in value.lower():
+            raise ValueError("llm_model must be a logical model name, not a URL")
+        if len(value) > 100:
+            raise ValueError("llm_model must be at most 100 characters")
+        return value
+
 
 class AnalystRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
+    room_id: str | None = None
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
@@ -533,6 +563,34 @@ class AnalystRequest(BaseModel):
         if not cleaned:
             raise ValueError("question must not be empty")
         return cleaned
+
+    @field_validator("room_id", "llm_api_key", "llm_base_url", "llm_model")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("room_id")
+    @classmethod
+    def validate_room_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if len(value) > 128:
+            raise ValueError("room_id must be at most 128 characters")
+        return value
+
+    @field_validator("llm_model")
+    @classmethod
+    def validate_llm_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if "://" in value or "http" in value.lower():
+            raise ValueError("llm_model must be a logical model name, not a URL")
+        if len(value) > 100:
+            raise ValueError("llm_model must be at most 100 characters")
+        return value
 
 
 def _require_roundtable_feature(flag_name: str, feature_label: str) -> None:
@@ -618,6 +676,7 @@ async def create_roundtable_survey_endpoint(
             scenario_id,
             req.question,
             req.participant_ids,
+            room_id=req.room_id,
             api_key=validated_key,
             base_url=validated_url,
             model=req.llm_model,
@@ -666,6 +725,7 @@ async def create_roundtable_analyst_endpoint(
         stream = await build_roundtable_analyst_stream(
             scenario_id,
             req.question,
+            room_id=req.room_id,
             api_key=validated_key,
             base_url=validated_url,
             model=req.llm_model,
@@ -685,4 +745,3 @@ async def create_roundtable_analyst_endpoint(
         ),
         media_type="text/event-stream",
     )
-

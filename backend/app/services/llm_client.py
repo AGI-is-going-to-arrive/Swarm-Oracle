@@ -46,7 +46,8 @@ _LLM_URL_ALLOWLIST: frozenset[str] = frozenset({
     "api.cohere.com",
     "openrouter.ai",
     "api.perplexity.ai",
-}) | _LOCAL_LLM_HOSTS  # include all local hosts (localhost, 127.0.0.1, 0.0.0.0, ::1, host.docker.internal)
+# Include local host aliases used by dev and Docker setups.
+}) | _LOCAL_LLM_HOSTS
 
 _ALLOWED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https"})
 

@@ -50,6 +50,8 @@
    - committed transcript 长段当前可折叠 / 展开
    - mobile live 首屏已压到“可直接追问”的程度
    - live-room 当前已收口到无页面级纵向滚动；picker / reseat 仍允许滚动
+   - completed live roundtable 当前已有 verdict 后 `Deep Dive` 工作台：包含 participant-scoped `1-on-1 Interview`、`Research Analyst`、`Cross-Examine`
+   - 只读 replay 继续保持只读，不重新开放这些 live-only 的 `Deep Dive` / chat / analyst / survey 工具
 4. `crossline_gallery`
    - 结果页入口、摘要只读展示、local readonly copy / import 基线已完成
 5. Oracle follow-up 流式链路

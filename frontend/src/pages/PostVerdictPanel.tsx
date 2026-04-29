@@ -1,10 +1,9 @@
-import { lazy, Suspense, useCallback, useState } from 'react';
+import { lazy, Suspense, useCallback, useState, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { EndingRoomParticipant, EndingRoomResult } from '../types';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import RoundtableAgentChat from './RoundtableAgentChat';
-import type { AnalystCacheState } from './AnalystStreamView';
-import type { SurveyCacheState } from './SurveyStreamView';
+import type { AnalystCacheState, SurveyCacheState } from './postVerdictCaches';
 
 const AnalystStreamView = lazy(() => import('./AnalystStreamView'));
 const SurveyStreamView = lazy(() => import('./SurveyStreamView'));
@@ -13,34 +12,32 @@ export type PostVerdictTab = 'agent_chat' | 'analyst' | 'survey';
 
 interface PostVerdictPanelProps {
   scenarioId: string;
+  roomId?: string | null;
   participants: EndingRoomParticipant[];
   effectiveResult: EndingRoomResult | null;
   isZh: boolean;
   activeTab: PostVerdictTab;
   onTabChange: (tab: PostVerdictTab) => void;
-  analystCacheRef: React.RefObject<AnalystCacheState>;
-  analystVersion: number;
-  bumpAnalyst: () => void;
-  surveyCacheRef: React.RefObject<SurveyCacheState>;
-  surveyVersion: number;
-  bumpSurvey: () => void;
-  onSheetClose?: () => void;
+  analystCache: AnalystCacheState;
+  setAnalystCache: Dispatch<SetStateAction<AnalystCacheState>>;
+  surveyCache: SurveyCacheState;
+  setSurveyCache: Dispatch<SetStateAction<SurveyCacheState>>;
+  contextVersion: number;
 }
 
 export default function PostVerdictPanel({
   scenarioId,
+  roomId,
   participants,
   effectiveResult,
   isZh,
   activeTab,
   onTabChange,
-  analystCacheRef,
-  analystVersion,
-  bumpAnalyst,
-  surveyCacheRef,
-  surveyVersion,
-  bumpSurvey,
-  onSheetClose: _onSheetClose,
+  analystCache,
+  setAnalystCache,
+  surveyCache,
+  setSurveyCache,
+  contextVersion,
 }: PostVerdictPanelProps) {
   const { t } = useTranslation();
   const { enabled: conversationEnabled, loading: conversationLoading } =
@@ -135,9 +132,10 @@ export default function PostVerdictPanel({
           <Suspense fallback={streamSkeleton}>
             <AnalystStreamView
               scenarioId={scenarioId}
-              cacheRef={analystCacheRef}
-              version={analystVersion}
-              bumpVersion={bumpAnalyst}
+              roomId={roomId}
+              cache={analystCache}
+              setCache={setAnalystCache}
+              contextVersion={contextVersion}
             />
           </Suspense>
         </div>
@@ -154,10 +152,11 @@ export default function PostVerdictPanel({
           <Suspense fallback={streamSkeleton}>
             <SurveyStreamView
               scenarioId={scenarioId}
+              roomId={roomId}
               participants={participants}
-              cacheRef={surveyCacheRef}
-              version={surveyVersion}
-              bumpVersion={bumpSurvey}
+              cache={surveyCache}
+              setCache={setSurveyCache}
+              contextVersion={contextVersion}
             />
           </Suspense>
         </div>

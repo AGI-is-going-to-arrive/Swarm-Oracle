@@ -149,6 +149,9 @@ class _PromptContext:
     node_summary: str | None = None
     relation_summaries: tuple[str, ...] = ()
     round_transcripts: tuple[str, ...] = ()
+    agent_name: str | None = None
+    agent_role: str | None = None
+    agent_persona: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1395,6 +1398,18 @@ def _load_prompt_context(
     if branch is not None and branch.scenario_id != thread.scenario_id:
         branch = None
 
+    agent_name, agent_role, agent_persona = None, None, None
+    if scenario:
+        parsed = scenario.parsed_context or {}
+        agents = parsed.get("agents") or []
+        node_agent = (node_payload.get("agent_name") or "") if node_payload else ""
+        for ag in agents:
+            if ag.get("name") == node_agent:
+                agent_name = ag.get("name")
+                agent_role = ag.get("role")
+                agent_persona = ag.get("persona")
+                break
+
     return _PromptContext(
         scenario_question=scenario_question,
         origin_excerpt=_truncate_prompt_text(origin_excerpt, 500) if origin_excerpt else None,
@@ -1410,6 +1425,9 @@ def _load_prompt_context(
             branch_id=branch.id if branch is not None else branch_id,
             origin_round_number=thread.origin_round_number,
         ),
+        agent_name=agent_name,
+        agent_role=agent_role,
+        agent_persona=agent_persona,
     )
 
 
@@ -1433,6 +1451,26 @@ def _build_prompt(
     lines.append(
         "Stay in character.  Respond in the same language the user writes in."
     )
+    if prompt_context and prompt_context.agent_name:
+        lines.append(
+            format_untrusted_text_block(
+                "Agent name", prompt_context.agent_name, max_chars=100,
+            )
+        )
+    if prompt_context and prompt_context.agent_role:
+        lines.append(
+            format_untrusted_text_block(
+                "Agent role", prompt_context.agent_role, max_chars=200,
+            )
+        )
+    if prompt_context and prompt_context.agent_persona:
+        lines.append(
+            format_untrusted_text_block(
+                "Agent persona",
+                prompt_context.agent_persona,
+                max_chars=600,
+            )
+        )
     if thread.origin_node_type:
         lines.append(
             f"[Origin node type: {thread.origin_node_type}]"
@@ -1793,6 +1831,8 @@ async def stream_assistant_turn(
                             api_key=overrides.api_key,
                             base_url=overrides.base_url,
                             model=overrides.model,
+                            reasoning_effort="medium",
+                            temperature=0.7,
                         )
 
                     async for delta in _stream_with_cancel_signal(stream, stream_cancel_event):

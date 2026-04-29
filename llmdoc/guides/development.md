@@ -491,6 +491,21 @@ npm exec -- tsc -b --pretty false
 npm test -- --run src/pages/WorldlineRoundtableView.test.tsx src/components/EndingChatModal.test.tsx
 ```
 
+如果改的是 completed-state roundtable 的 `Deep Dive` / analyst / survey / participant-scoped chat，先跑这组最小命令：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_roundtable_survey.py tests/test_roundtable_analyst.py tests/test_contract_freeze.py -q
+ruff check app/services/
+
+cd ../frontend
+npx vitest run src/pages/RoundtableAgentChat.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/components/kg/NodeConversationSheet.test.tsx --reporter=verbose
+npx tsc --noEmit -p tsconfig.app.json
+```
+
+这组只看 completed-state roundtable 的 survey / analyst 后端合同，以及 Deep Dive 到 participant-scoped chat 的前端链路；如果改了开房、replay、移动端或跨浏览器口径，继续跑上面的完整 Oracle / Roundtable 回归。
+
 当前脚本口径：
 
 - `e2e-ending-room-suite.mjs full`

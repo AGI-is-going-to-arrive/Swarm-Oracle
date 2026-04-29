@@ -27,8 +27,20 @@ _IDENTITY_MEMORY_MAX = 200
 
 def _continuity_key(role: str, persona: str | None) -> str:
     """Generate a continuity key from role + persona prefix."""
-    raw = role.lower().strip() + (persona or "")[:30].lower().strip()
+    raw = f"{role.lower().strip()}:{(persona or '')[:30].lower().strip()}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _legacy_continuity_keys(role: str, persona: str | None) -> list[str]:
+    """Return continuity keys computed by old formulas for backward compat."""
+    keys: list[str] = []
+    # Pre-colon formula (agent_identity.py before unification)
+    raw_v1 = role.lower().strip() + (persona or "")[:30].lower().strip()
+    keys.append(hashlib.sha256(raw_v1.encode()).hexdigest()[:16])
+    # Workshop formula (no lower, with colon)
+    raw_v2 = f"{role}:{(persona or '')[:30]}"
+    keys.append(hashlib.sha256(raw_v2.encode()).hexdigest()[:16])
+    return keys
 
 
 def build_continuity_key(role: str, persona: str | None) -> str:
@@ -81,6 +93,28 @@ def preview_identity_match(
                 "needs_confirmation": False,
                 "candidate_identity": _serialize_identity(existing, similarity=1.0),
             }
+
+        for legacy_key in _legacy_continuity_keys(role, persona):
+            if legacy_key == key:
+                continue
+            legacy_match = session.exec(
+                select(AgentIdentity).where(
+                    AgentIdentity.user_id == user_id,
+                    AgentIdentity.continuity_key == legacy_key,
+                )
+            ).first()
+            if legacy_match is not None:
+                return {
+                    "name": name,
+                    "role": role,
+                    "persona": persona,
+                    "continuity_key": key,
+                    "match_kind": "l1_legacy",
+                    "needs_confirmation": False,
+                    "candidate_identity": _serialize_identity(
+                        legacy_match, similarity=1.0,
+                    ),
+                }
 
         candidates = search_identity_candidates(user_id, role, persona)
         for candidate in candidates:
@@ -144,6 +178,29 @@ def resolve_identity(
                 existing.id, user_id, key,
             )
             return existing.id
+
+        # ── L1b: legacy key fallback (pre-unification formulas) ──
+        for legacy_key in _legacy_continuity_keys(role, persona):
+            if legacy_key == key:
+                continue
+            legacy_match = session_obj.exec(
+                select(AgentIdentity).where(
+                    AgentIdentity.user_id == user_id,
+                    AgentIdentity.continuity_key == legacy_key,
+                )
+            ).first()
+            if legacy_match is not None:
+                legacy_match.continuity_key = key
+                if own_session:
+                    session_obj.commit()
+                else:
+                    session_obj.flush()
+                store_identity_profile(user_id, legacy_match.id, role, persona)
+                logger.info(
+                    "L1b legacy-migrated identity %s key %s→%s",
+                    legacy_match.id, legacy_key, key,
+                )
+                return legacy_match.id
 
         # ── L2: cosine similarity fallback ──
         if allow_l2:

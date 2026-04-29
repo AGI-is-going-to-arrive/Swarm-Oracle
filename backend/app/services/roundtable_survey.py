@@ -185,6 +185,7 @@ def _load_identity_memories(identity_id: str | None) -> list[dict[str, Any]]:
 def _load_participant_contexts(
     scenario_id: str,
     participant_ids: list[str],
+    room_id: str | None = None,
 ) -> list[SurveyParticipantContext]:
     normalized_ids = _normalize_participant_ids(participant_ids)
 
@@ -197,6 +198,21 @@ def _load_participant_contexts(
                 "Scenario not found",
             )
 
+        available_room_ids = list(
+            session.exec(
+                select(EndingRoom.id).where(
+                    EndingRoom.scenario_id == scenario_id,
+                    EndingRoom.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE,
+                )
+            ).all()
+        )
+        if room_id and room_id not in available_room_ids:
+            raise RoundtableSurveyServiceError(
+                404,
+                "ROUNDTABLE_ROOM_NOT_FOUND",
+                "Roundtable room not found in scenario",
+            )
+
         participant_rows = list(
             session.exec(
                 select(EndingRoomParticipant, EndingRoom)
@@ -205,9 +221,17 @@ def _load_participant_contexts(
                     EndingRoom.scenario_id == scenario_id,
                     EndingRoom.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE,
                     EndingRoomParticipant.id.in_(normalized_ids),
+                    EndingRoom.id == room_id if room_id else True,
                 )
             ).all()
         )
+        distinct_room_ids = {room.id for _participant, room in participant_rows}
+        if len(distinct_room_ids) > 1:
+            raise RoundtableSurveyServiceError(
+                409,
+                "ROUNDTABLE_ROOM_AMBIGUOUS",
+                "All selected participants must belong to the same roundtable room",
+            )
         participant_by_id = {
             participant.id: participant
             for participant, _room in participant_rows
@@ -302,10 +326,21 @@ def _build_survey_prompt(
         "representatives from divergent worldlines compare outcomes and defend their positions.",
         "Stay fully in character. Your opinions, reasoning, and emotional tone must reflect "
         "your assigned identity and the worldline you represent.",
-        f"Participant name: {participant.display_name}",
-        f"Participant role: {participant.role}",
+        format_untrusted_text_block(
+            "Participant name", participant.display_name, max_chars=100,
+        ),
+        format_untrusted_text_block(
+            "Participant role", participant.role, max_chars=200,
+        ),
         persona_block,
     ]
+    prompt_parts.append(
+        "Voice guidance:\n"
+        "- Speak in first person as this character; never break the fourth wall.\n"
+        "- Mirror the character's speaking style, vocabulary, and catchphrases from the persona.\n"
+        "- When relevant, reference your past experiences and cross-scenario memories.\n"
+        "- Keep every claim grounded in the scenario context — do not invent facts."
+    )
     if memory_block:
         prompt_parts.append(memory_block)
     prompt_parts.extend(
@@ -313,7 +348,8 @@ def _build_survey_prompt(
             question_block,
             "Rules:\n"
             "- Answer in first person, in the same language as the question.\n"
-            "- Be concrete: cite specific events, turning points, or evidence from your worldline.\n"
+            "- Be concrete: cite specific events, turning points, "
+            "or evidence from your worldline.\n"
             "- Be comparative: contrast your worldline's outcome with others when relevant.\n"
             "- Be honest about costs: acknowledge trade-offs or downsides of your position.\n"
             "- Keep under 220 words.",
@@ -341,6 +377,8 @@ async def _run_single_survey_call(
                     api_key=api_key,
                     base_url=base_url,
                     model=model,
+                    reasoning_effort="medium",
+                    temperature=0.7,
                     timeout=60.0,
                 )
                 error_message: str | None = None
@@ -373,6 +411,7 @@ async def build_roundtable_survey_stream(
     question: str,
     participant_ids: list[str],
     *,
+    room_id: str | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
     model: str | None = None,
@@ -384,6 +423,7 @@ async def build_roundtable_survey_stream(
         _load_participant_contexts,
         scenario_id,
         participant_ids,
+        room_id,
     )
 
     async def _iter() -> AsyncIterator[dict[str, Any]]:

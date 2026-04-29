@@ -460,7 +460,7 @@ def build_turn_generation_prompt(
             "- 避免每句都很长；单句尽量不要堆超过三个并列分句\n"
             "- 不要引入与题目无关的新设定\n"
             "- 如果是 verdict，必须明确给出胜方与判词语气\n"
-            "- 只输出严格 JSON：{\"content\": \"...\"}\n"
+            "- 直接输出辩论台词文本，不要包裹在 JSON 里\n"
         )
 
     return (
@@ -489,7 +489,7 @@ def build_turn_generation_prompt(
         "- Do not let every sentence run long; avoid piling up more than three parallel clauses in one line\n"  # noqa: E501
         "- Do not invent unrelated world details\n"
         "- If this is the verdict, explicitly state winner and tone\n"
-        "- Output strict JSON only: {\"content\": \"...\"}\n"
+        "- Output the debate line as plain text, do not wrap it in JSON\n"
     )
 
 

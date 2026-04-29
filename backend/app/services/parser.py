@@ -34,7 +34,7 @@ PARSE_PROMPT = """你是 SwarmOracle 的场景解析器。\
     {{
       "name": "角色名（使用有辨识度的真实姓名）",
       "role": "角色身份/职位",
-      "persona": "写出鲜明的性格特点、说话风格和核心动机，像在介绍一个真实的人（50字以内）",
+      "persona": "150-300字角色小传（见下方规则）",
       "stance": "对核心变量的立场 (支持/反对/中立/观望)",
       "tier": "CORE 或 IMPORTANT 或 CROWD"
     }}
@@ -54,9 +54,14 @@ PARSE_PROMPT = """你是 SwarmOracle 的场景解析器。\
 - branch_sensitivity: 0-1, 越高越容易产生分支 (建议 0.5-0.8)
 - {language_directive}
 - {untrusted_input_guardrail}
-- 角色的 persona 要具体生动，避免"性格开朗"这类空泛描述
-  好的例子: "雷厉风行的军人作风，说话简短有力，讨厌拐弯抹角"
-  坏的例子: "性格沉稳，做事认真"
+- persona 写作要求（150-300字，必须覆盖以下六点）:
+  1. 性格特征和行为习惯
+  2. 说话风格和口头禅
+  3. 核心动机（他为什么在这里）
+  4. 影响决策的关键经历
+  5. 面对压力时的典型反应
+  6. 一个让人记住这个人的细节
+  坏的例子: "性格沉稳，做事认真"（太空泛）
 """
 
 # P3-A: extended prompt for hierarchical mode (groups field)
@@ -87,7 +92,7 @@ PARSE_PROMPT_HIERARCHICAL = """你是 SwarmOracle 的场景解析器。\
     {{
       "name": "角色名（使用有辨识度的真实姓名）",
       "role": "角色身份/职位",
-      "persona": "写出鲜明的性格特点、说话风格和核心动机（50字以内）",
+      "persona": "150-300字角色小传（见下方规则）",
       "stance": "对核心变量的立场 (支持/反对/中立/观望)",
       "tier": "CORE 或 IMPORTANT 或 CROWD",
       "group": "所属阵营名称（必须与 groups 中的 name 对应）"
@@ -111,7 +116,13 @@ PARSE_PROMPT_HIERARCHICAL = """你是 SwarmOracle 的场景解析器。\
 - branch_sensitivity: 0-1, 越高越容易产生分支 (建议 0.5-0.8)
 - {language_directive}
 - {untrusted_input_guardrail}
-- 角色的 persona 要具体生动
+- persona 写作要求（150-300字，必须覆盖以下六点）:
+  1. 性格特征和行为习惯
+  2. 说话风格和口头禅
+  3. 核心动机（他为什么在这里）
+  4. 影响决策的关键经历
+  5. 面对压力时的典型反应
+  6. 一个让人记住这个人的细节
 """
 
 PARSE_RETRY_PROMPT = """你上一次只返回了 {current_agents} 个角色，\
@@ -131,54 +142,86 @@ PARSE_RETRY_PROMPT = """你上一次只返回了 {current_agents} 个角色，\
 """
 
 _FALLBACK_AGENT_TEMPLATES_ZH = [
-    ("边境联络官", "负责把前线变化翻译给不同派系，谨慎但不失行动力。"),
-    ("资源调度员", "天天盯着补给与产能，说话务实，讨厌空话。"),
-    ("民生观察员", "更在意普通人的日常感受，擅长从细节判断风险。"),
-    ("安全协调员", "习惯先看系统性漏洞，再决定是否支持激进方案。"),
-    ("现场记录员", "沉默寡言但记忆极强，善于指出被忽略的代价。"),
+    (
+        "边境联络官",
+        "负责把前线变化翻译给不同派系。说话时习惯先停顿两秒再开口，"
+        "口头禅是'让我把消息理一理'。在边境哨所轮换了六年，"
+        "学会了用最少的词传递最危急的情报。面对冲突时绝不当面激化，"
+        "但会在事后写一封措辞精准的备忘录。"
+        "对谎言极其敏感，因为他见过太多因信息失真而送命的人。",
+    ),
+    (
+        "资源调度员",
+        "天天盯着补给与产能，说话从不绕弯子，口头禅是'数字不会骗人'。"
+        "做过十年后勤军需官，养成了把所有东西都折算成粮食当量的习惯。"
+        "讨厌空话和画大饼，遇到不靠谱的承诺会直接翻白眼。"
+        "压力大时反而更冷静，因为他知道恐慌会让物资分配彻底失控。"
+        "私下里却是个会给部下偷藏口粮的人。",
+    ),
+    (
+        "民生观察员",
+        "比起宏大叙事更在意普通人的柴米油盐。"
+        "走路时习惯看地面——地上有没有丢弃的食物残渣能说明很多问题。"
+        "说话温和但固执，一旦认定某个政策会伤害底层就会反复追问直到得到答案。"
+        "年轻时在难民营做过三年志愿者，从此再也无法对人间疾苦视而不见。",
+    ),
+    (
+        "安全协调员",
+        "习惯先找到系统里最脆弱的环节，再决定是否支持任何方案。"
+        "口头禅是'如果这个环节断了会怎样'。"
+        "曾经在一次基础设施崩溃中差点丧命，从此对所有看似稳固的系统都保持怀疑。"
+        "说话条理分明但语速偏慢，因为每句话都在脑子里过了三遍风险评估。",
+    ),
+    (
+        "现场记录员",
+        "沉默寡言但记忆力惊人，能准确复述三个月前某次会议的第七句发言。"
+        "从不主动说话，但一开口就是别人忽略的关键细节。"
+        "随身带着一个破旧的笔记本，上面密密麻麻记满了日期和数字。"
+        "面对争论时只会安静地翻笔记，然后轻声说出一个让所有人沉默的事实。",
+    ),
 ]
 
 _FALLBACK_AGENT_TEMPLATES_EN = [
-    ("Frontier Liaison", "Translates fast-changing frontline conditions across factions and acts with careful urgency."),  # noqa: E501
-    ("Resource Dispatcher", "Obsesses over supply and throughput, speaks bluntly, and distrusts vague promises."),  # noqa: E501
-    ("Civic Observer", "Tracks everyday consequences for ordinary people and spots risks in small details."),  # noqa: E501
-    ("Safety Coordinator", "Looks for system-wide failure modes before supporting any radical turn."),  # noqa: E501
-    ("Field Recorder", "Quiet, precise, and unusually good at surfacing costs everyone else is ignoring."),  # noqa: E501
+    ("Frontier Liaison", "Translates fast-changing frontline conditions across factions. Always pauses for two seconds before speaking — a habit from six years rotating through border posts where bad intel got people killed. Catchphrase: 'Let me sort the signals first.' Never escalates conflict face-to-face but writes devastatingly precise memos afterward. Has an almost physical allergy to lies because he has buried friends over distorted reports."),  # noqa: E501
+    ("Resource Dispatcher", "Lives and breathes supply numbers. Catchphrase: 'Numbers don't lie.' Spent a decade in military logistics and now converts everything — morale included — into grain equivalents. Rolls his eyes at vague promises and grandstanding. Gets calmer under pressure because he has seen what panic does to distribution chains. Secretly stashes extra rations for his people."),  # noqa: E501
+    ("Civic Observer", "Cares more about rice prices than grand strategy. Walks with eyes on the ground — discarded food scraps tell a story. Speaks softly but will interrogate a bad policy until she gets a real answer. Volunteered in a refugee camp for three years in her twenties and has never been able to look away from suffering since."),  # noqa: E501
+    ("Safety Coordinator", "Maps every system's weakest link before endorsing any plan. Catchphrase: 'What happens when this part breaks?' Nearly died in an infrastructure collapse and has questioned every seemingly solid system since. Speaks slowly and methodically because every sentence passes through three mental risk assessments first."),  # noqa: E501
+    ("Field Recorder", "Barely speaks, but can quote the seventh sentence from a meeting three months ago. Carries a battered notebook dense with dates and figures. During arguments, silently flips pages, then says one quiet fact that makes the entire room go still. Never volunteers opinions — only evidence."),  # noqa: E501
 ]
 
 _FALLBACK_AGENT_SEEDS_ZH = [
     {
         "name": "顾闻",
         "role": "边境联络官",
-        "persona": "负责把前线变化翻译给不同派系，谨慎但不失行动力。",
+        "persona": "负责把前线变化翻译给不同派系。说话时习惯先停顿两秒再开口，口头禅是'让我把消息理一理'。在边境哨所轮换了六年，学会了用最少的词传递最危急的情报。面对冲突时绝不当面激化，但会在事后写一封措辞精准的备忘录。对谎言极其敏感，因为他见过太多因信息失真而送命的人。",  # noqa: E501
         "stance": "支持",
         "tier": "CORE",
     },
     {
         "name": "林铎",
         "role": "资源调度员",
-        "persona": "天天盯着补给与产能，说话务实，讨厌空话。",
+        "persona": "天天盯着补给与产能，说话从不绕弯子，口头禅是'数字不会骗人'。做过十年后勤军需官，养成了把所有东西都折算成粮食当量的习惯。讨厌空话和画大饼，遇到不靠谱的承诺会直接翻白眼。压力大时反而更冷静，因为他知道恐慌会让物资分配彻底失控。私下里却是个会给部下偷藏口粮的人。",  # noqa: E501
         "stance": "观望",
         "tier": "CORE",
     },
     {
         "name": "周汐",
         "role": "民生观察员",
-        "persona": "更在意普通人的日常感受，擅长从细节判断风险。",
+        "persona": "比起宏大叙事更在意普通人的柴米油盐。走路时习惯看地面——地上有没有丢弃的食物残渣能说明很多问题。说话温和但固执，一旦认定某个政策会伤害底层就会反复追问直到得到答案。年轻时在难民营做过三年志愿者，从此再也无法对人间疾苦视而不见。",  # noqa: E501
         "stance": "反对",
         "tier": "CORE",
     },
     {
         "name": "韩策",
         "role": "安全协调员",
-        "persona": "习惯先看系统性漏洞，再决定是否支持激进方案。",
+        "persona": "习惯先找到系统里最脆弱的环节，再决定是否支持任何方案。口头禅是'如果这个环节断了会怎样'。曾经在一次基础设施崩溃中差点丧命，从此对所有看似稳固的系统都保持怀疑。说话条理分明但语速偏慢，因为每句话都在脑子里过了三遍风险评估。",  # noqa: E501
         "stance": "观望",
         "tier": "IMPORTANT",
     },
     {
         "name": "沈砚",
         "role": "现场记录员",
-        "persona": "沉默寡言但记忆极强，善于指出被忽略的代价。",
+        "persona": "沉默寡言但记忆力惊人，能准确复述三个月前某次会议的第七句发言。从不主动说话，但一开口就是别人忽略的关键细节。随身带着一个破旧的笔记本，上面密密麻麻记满了日期和数字。面对争论时只会安静地翻笔记，然后轻声说出一个让所有人沉默的事实。",  # noqa: E501
         "stance": "中立",
         "tier": "IMPORTANT",
     },
@@ -188,41 +231,35 @@ _FALLBACK_AGENT_SEEDS_EN = [
     {
         "name": "Mara Quinn",
         "role": "Frontier Liaison",
-        "persona": "Translates fast-changing frontline conditions across factions and acts with careful urgency.",  # noqa: E501
+        "persona": "Translates fast-changing frontline conditions across factions. Always pauses for two seconds before speaking — a habit from six years rotating through border posts where bad intel got people killed. Catchphrase: 'Let me sort the signals first.' Never escalates conflict face-to-face but writes devastatingly precise memos afterward. Has an almost physical allergy to lies because he has buried friends over distorted reports.",  # noqa: E501
         "stance": "support",
         "tier": "CORE",
     },
     {
         "name": "Jonah Pike",
         "role": "Resource Dispatcher",
-        "persona": (
-            "Obsesses over supply and throughput, speaks bluntly, and distrusts vague promises."
-        ),
+        "persona": "Lives and breathes supply numbers. Catchphrase: 'Numbers don't lie.' Spent a decade in military logistics and now converts everything — morale included — into grain equivalents. Rolls his eyes at vague promises and grandstanding. Gets calmer under pressure because he has seen what panic does to distribution chains. Secretly stashes extra rations for his people.",  # noqa: E501
         "stance": "neutral",
         "tier": "CORE",
     },
     {
         "name": "Elise Ward",
         "role": "Civic Observer",
-        "persona": (
-            "Tracks everyday consequences for ordinary people and spots risks in small details."
-        ),
+        "persona": "Cares more about rice prices than grand strategy. Walks with eyes on the ground — discarded food scraps tell a story. Speaks softly but will interrogate a bad policy until she gets a real answer. Volunteered in a refugee camp for three years in her twenties and has never been able to look away from suffering since.",  # noqa: E501
         "stance": "oppose",
         "tier": "CORE",
     },
     {
         "name": "Rhea Cole",
         "role": "Safety Coordinator",
-        "persona": "Looks for system-wide failure modes before supporting any radical turn.",
+        "persona": "Maps every system's weakest link before endorsing any plan. Catchphrase: 'What happens when this part breaks?' Nearly died in an infrastructure collapse and has questioned every seemingly solid system since. Speaks slowly and methodically because every sentence passes through three mental risk assessments first.",  # noqa: E501
         "stance": "neutral",
         "tier": "IMPORTANT",
     },
     {
         "name": "Milan Cross",
         "role": "Field Recorder",
-        "persona": (
-            "Quiet, precise, and unusually good at surfacing costs everyone else is ignoring."
-        ),
+        "persona": "Barely speaks, but can quote the seventh sentence from a meeting three months ago. Carries a battered notebook dense with dates and figures. During arguments, silently flips pages, then says one quiet fact that makes the entire room go still. Never volunteers opinions — only evidence.",  # noqa: E501
         "stance": "neutral",
         "tier": "IMPORTANT",
     },
