@@ -347,7 +347,6 @@ describe('DebateArenaView', () => {
     );
 
     await screen.findAllByRole('button', { name: 'debate.view_result' });
-    await user.click(screen.getByRole('button', { name: 'argument.live_expand' }));
 
     await waitFor(() => {
       expect(argumentMapMock).toHaveBeenCalled();

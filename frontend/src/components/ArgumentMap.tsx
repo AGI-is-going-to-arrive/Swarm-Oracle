@@ -1026,10 +1026,10 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
             {/* DAG container */}
             <div
               style={{
-                height: isCompactViewport ? 'min(62vh, 540px)' : 'min(50vh, 480px)',
-                minHeight: isCompactViewport ? 320 : 280,
-                border: '1px solid #333',
-                borderRadius: 6,
+                height: isCompactViewport ? 'min(70vh, 600px)' : 'min(75vh, 800px)',
+                minHeight: isCompactViewport ? 360 : 480,
+                border: '1px solid rgba(64, 48, 40, 0.15)',
+                borderRadius: 14,
                 overflow: 'hidden',
                 position: 'relative',
               }}

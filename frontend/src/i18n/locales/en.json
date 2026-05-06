@@ -6,6 +6,8 @@
       "placeholder_2": "What if we landed on Mars in 2000?",
       "placeholder_3": "What if the internet was never invented?",
       "submit": "Start Simulation",
+      "confirm_launch_title": "Confirm Simulation Launch",
+      "confirm_launch_settings": "{{rounds}} rounds · {{agents}} agents · {{mode}}",
       "simulation_eta_hint": "At {{agents}} agents × {{rounds}} rounds, the main simulation is expected to take about {{minutes}} min.",
       "quick_starts": "Quick Starts",
       "history": "📜 History",

@@ -784,6 +784,69 @@ def _build_phase_counterplay_note(
     return f"A live counterplay hedge is hanging on {target} in {phase_label}, so the judge is reading this fault line with extra sensitivity."  # noqa: E501
 
 
+async def _enhance_insights_with_llm(
+    debate: Debate,
+    insights: list[dict[str, Any]],
+    turns: list[DebateTurn],
+) -> list[dict[str, Any]]:
+    """Replace template commentary with LLM-generated analysis for phases that have turns."""
+    if not settings.DEBATE_USE_LLM:
+        return insights
+
+    motion = debate.question or ""
+    lang_instruction = (
+        "请用中文回答。" if debate.language == "zh"
+        else "Respond in English."
+    )
+
+    for insight in insights:
+        phase_name = insight["phase"]
+        if insight["turn_count"] == 0:
+            continue
+
+        phase_turns = [t for t in turns if t.phase.value == phase_name]
+        recent = phase_turns[-2:] if len(phase_turns) >= 2 else phase_turns
+        turn_excerpts = "\n".join(
+            f"[{t.speaker_name} / {t.speaker_side.value}]: {t.content[:200]}"
+            for t in recent
+        )
+        pressure = insight["pressure_side"]
+        margin = insight["pressure_margin"]
+        cumulative = insight["confidence_drift"]["cumulative_margin"]
+
+        prompt = (
+            f"{lang_instruction}\n"
+            f"You are a debate analyst. Motion: \"{motion}\"\n"
+            f"Phase: {phase_name}. Pressure: {pressure} "
+            f"(margin {margin}, cumulative {abs(cumulative)}).\n"
+            f"Recent exchanges:\n{turn_excerpts}\n\n"
+            f"Write a concise 1-2 sentence analytical insight "
+            f"about this phase's dynamics. "
+            f"Focus on strategic implications, not just score. "
+            f"Be specific to the arguments made."
+        )
+        try:
+            result = await llm_call(
+                system_prompt=(
+                    "You are a sharp debate analyst "
+                    "writing concise phase commentary."
+                ),
+                user_prompt=prompt,
+                temperature=0.7,
+                max_tokens=200,
+            )
+            text = (result or "").strip()
+            if text and len(text) > 20:
+                insight["commentary"] = text
+        except Exception:
+            logger.debug(
+                "LLM insight failed for %s/%s",
+                debate.id, phase_name,
+            )
+
+    return insights
+
+
 def _build_phase_insights(
     *,
     debate: Debate,
@@ -1790,6 +1853,35 @@ async def run_debate_background(
             adjudication_mode=adjudication_mode,
         )
         _require_debate_runtime_lock_alive(lock_lease_holder)
+
+        # LLM-enhance phase insights before broadcasting verdict
+        try:
+            engine = get_engine()
+            with Session(engine) as _enh_session:
+                _enh_debate = _enh_session.get(Debate, debate_id)
+                if _enh_debate:
+                    _enh_turns = list(
+                        _enh_session.exec(
+                            select(DebateTurn)
+                            .where(DebateTurn.debate_id == debate_id)
+                            .order_by(DebateTurn.sequence)
+                        ).all()
+                    )
+                    raw_insights = finalized.get("phase_insights", [])
+                    enhanced = await _enhance_insights_with_llm(
+                        _enh_debate, raw_insights, _enh_turns,
+                    )
+                    finalized["phase_insights"] = enhanced
+                    # Persist enhanced insights back to breakdown_json
+                    if _enh_debate.breakdown_json and isinstance(_enh_debate.breakdown_json, dict):
+                        meta = _enh_debate.breakdown_json.get("metadata", {})
+                        meta["phase_insights"] = enhanced
+                        _enh_debate.breakdown_json["metadata"] = meta
+                        _enh_session.add(_enh_debate)
+                        _enh_session.commit()
+        except Exception:
+            logger.debug("LLM phase insight enhancement skipped for %s", debate_id, exc_info=True)
+
         result_payload = await asyncio.to_thread(load_debate_result_payload, debate_id)
         await ws_callback(
             debate_id,

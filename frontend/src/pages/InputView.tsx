@@ -223,6 +223,8 @@ export function InputView() {
   const submitError = useSimulationStore((s) => s.error);
   const submitErrorCode = useSimulationStore((s) => s.errorCode);
   const reset = useSimulationStore((s) => s.reset);
+  const [confirmDialogData, setConfirmDialogData] = useState<{ question: string } | null>(null);
+  const isComposingRef = useRef(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
   const typewriterTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -871,10 +873,35 @@ export function InputView() {
     });
   };
 
+  const requestLaunch = (q: string) => {
+    const trimmed = q.trim();
+    if (!trimmed || isSubmitting) return;
+    setConfirmDialogData({ question: trimmed });
+  };
+
+  const confirmLaunch = () => {
+    if (!confirmDialogData) return;
+    const q = confirmDialogData.question;
+    setConfirmDialogData(null);
+    handleSubmit(q);
+  };
+
+  const cancelLaunch = () => {
+    setConfirmDialogData(null);
+    questionRef.current?.focus();
+  };
+
+  const onConfirmDialogKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') { e.preventDefault(); cancelLaunch(); }
+  };
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
+      if (isComposingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) {
+        return;
+      }
       e.preventDefault();
-      handleSubmit(question);
+      requestLaunch(question);
     }
   };
 
@@ -1123,6 +1150,8 @@ export function InputView() {
                   value={question}
                   onChange={(e) => setQuestion(e.target.value)}
                   onKeyDown={onKeyDown}
+                  onCompositionStart={() => { isComposingRef.current = true; }}
+                  onCompositionEnd={() => { isComposingRef.current = false; }}
                   placeholder={placeholder}
                   disabled={isSubmitting}
                   autoFocus
@@ -1140,7 +1169,7 @@ export function InputView() {
                 )}
                 <button
                   className="btn btn-primary btn--submit"
-                  onClick={() => handleSubmit(question)}
+                  onClick={() => requestLaunch(question)}
                   disabled={!question.trim() || isSubmitting || isSimulationBudgetBlocked}
                 >
                   {isSubmitting ? <span className="spinner spinner--sm" /> : null}
@@ -1908,6 +1937,54 @@ export function InputView() {
           )}
           {continuityError && !isSubmitting && (
             <span className="byok-test-error" role="alert">{continuityError}</span>
+          )}
+
+          {confirmDialogData && (
+            <div
+              className="confirm-launch-backdrop"
+              role="presentation"
+              onClick={cancelLaunch}
+            >
+              <div
+                className="confirm-launch"
+                role="dialog"
+                aria-modal="true"
+                aria-label={t('home.confirm_launch_title')}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={onConfirmDialogKeyDown}
+              >
+                <div className="confirm-launch__header">
+                  <h3>{t('home.confirm_launch_title')}</h3>
+                </div>
+                <div className="confirm-launch__body">
+                  <p className="confirm-launch__question">{confirmDialogData.question}</p>
+                  <p className="confirm-launch__settings">
+                    {t('home.confirm_launch_settings', {
+                      rounds,
+                      agents: numAgents,
+                      mode: t(mode === 'blackboard' ? 'home.mode_blackboard' : 'home.mode_raw'),
+                    })}
+                  </p>
+                </div>
+                <div className="confirm-launch__footer">
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={cancelLaunch}
+                  >
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={confirmLaunch}
+                    autoFocus
+                  >
+                    {t('home.submit')}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
 
           {pendingLaunch && continuityMatches.length > 0 && (

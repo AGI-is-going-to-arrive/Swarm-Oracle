@@ -96,7 +96,7 @@ export function DebateArenaView() {
   const loadDebate = useDebateStore((state) => state.loadDebate);
 
   const { enabled: argMapEnabled } = useCapabilityCheck('argument_map');
-  const [argMapOpen, setArgMapOpen] = useState(false);
+  const [argMapOpen, setArgMapOpen] = useState(true);
   const [argMapRefreshKey, setArgMapRefreshKey] = useState(0);
   const liveArgumentMapPanelId = `debate-live-argument-map-${useId().replace(/:/g, '-')}`;
 
@@ -971,7 +971,7 @@ export function DebateArenaView() {
                       return (
                         <article
                           key={turn.id}
-                          className={`debate-turn-card ${turn.id === latestStageTurn?.id ? 'debate-turn-card--latest' : ''} ${turn.id === latestVisibleTurn?.id && selectedPhase === currentPhase ? 'debate-turn-card--hot' : ''}`}
+                          className={`debate-turn-card debate-turn-card--${turn.speaker_side} ${turn.id === latestStageTurn?.id ? 'debate-turn-card--latest' : ''} ${turn.id === latestVisibleTurn?.id && selectedPhase === currentPhase ? 'debate-turn-card--hot' : ''}`}
                         >
                           <div className="debate-turn-card__meta">
                             <strong>{turn.speaker_name}</strong>
@@ -1060,7 +1060,7 @@ export function DebateArenaView() {
                   {roomInsights.map((insight) => (
                     <article
                       key={insight.side}
-                      className={`debate-room-card ${insight.active ? 'debate-room-card--active' : ''}`}
+                      className={`debate-room-card debate-room-card--${insight.side} ${insight.active ? 'debate-room-card--active' : ''}`}
                     >
                       <div className="debate-room-card__meta">
                         <strong>{getDebateSideLabel(t, insight.side)}</strong>
@@ -1221,41 +1221,38 @@ export function DebateArenaView() {
                 </div>
               </div>
             </section>
-            {/* P1-5: Live Argument Map */}
-            {argMapEnabled && id && (
-              <section className="debate-panel">
-                <div className="debate-panel__header">
-                  <h3>{t('argument.live_title', 'Argument Map')}</h3>
-                  <button
-                    type="button"
-                    aria-expanded={argMapOpen}
-                    aria-controls={liveArgumentMapPanelId}
-                    onClick={() => setArgMapOpen(o => !o)}
-                    style={{
-                      background: 'none', border: '1px solid #555',
-                      borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
-                      fontSize: '0.7rem', color: '#8ab4f8',
-                    }}
-                  >
-                    {argMapOpen
-                      ? t('argument.live_collapse', 'Collapse')
-                      : t('argument.live_expand', 'Expand')}
-                  </button>
-                </div>
-                {argMapOpen && (
-                  <div id={liveArgumentMapPanelId} className="debate-panel__body">
-                    <ArgumentMap
-                      debateId={id}
-                      visible={argMapOpen}
-                      refreshTrigger={argMapRefreshKey}
-                      conversationScenarioId={null}
-                    />
-                  </div>
-                )}
-              </section>
-            )}
           </aside>
         </div>
+
+        {/* P1-5: Live Argument Map — full-width below layout */}
+        {argMapEnabled && id && (
+          <section className="debate-panel debate-panel--argument-map-full">
+            <div className="debate-panel__header">
+              <h3>{t('argument.live_title', 'Argument Map')}</h3>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                aria-expanded={argMapOpen}
+                aria-controls={liveArgumentMapPanelId}
+                onClick={() => setArgMapOpen(o => !o)}
+              >
+                {argMapOpen
+                  ? t('argument.live_collapse', 'Collapse')
+                  : t('argument.live_expand', 'Expand')}
+              </button>
+            </div>
+            {argMapOpen && (
+              <div id={liveArgumentMapPanelId} className="debate-panel__body">
+                <ArgumentMap
+                  debateId={id}
+                  visible={argMapOpen}
+                  refreshTrigger={argMapRefreshKey}
+                  conversationScenarioId={null}
+                />
+              </div>
+            )}
+          </section>
+        )}
       </div>
 
       {showBetModal && (

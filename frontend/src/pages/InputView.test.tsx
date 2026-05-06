@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -246,6 +246,12 @@ async function openAdvancedSettings(user: ReturnType<typeof userEvent.setup>) {
   if (trigger.getAttribute('aria-expanded') !== 'true') {
     await user.click(trigger);
   }
+}
+
+async function confirmLaunchDialog(user: ReturnType<typeof userEvent.setup>) {
+  const dialog = await screen.findByRole('dialog');
+  const confirmBtn = within(dialog).getByRole('button', { name: 'home.submit' });
+  await user.click(confirmBtn);
 }
 
 describe('InputView campaign progress', () => {
@@ -556,6 +562,7 @@ describe('InputView campaign progress', () => {
     expect(screen.getByText('home.shared_challenge_prefilled')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
     await waitFor(() => {
       expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
         question: 'Shared Motion',
@@ -792,6 +799,7 @@ describe('InputView campaign progress', () => {
     });
     await user.type(screen.getAllByRole('textbox')[0], 'Launch with BYOK');
     await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
 
     await waitFor(() => {
       expect(testLlmConnectionMock).toHaveBeenCalledTimes(1);
@@ -829,6 +837,7 @@ describe('InputView campaign progress', () => {
     });
     await user.type(screen.getAllByRole('textbox')[0], 'Blocked launch');
     await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
 
     expect(startSimulationMock).not.toHaveBeenCalled();
     expect(testLlmConnectionMock).not.toHaveBeenCalled();
@@ -907,6 +916,7 @@ describe('InputView campaign progress', () => {
 
     await user.type(screen.getAllByRole('textbox')[0], 'What if Sun Tzu returns?');
     await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
 
     await waitFor(() => {
       expect(identityPreflightMock).toHaveBeenCalledTimes(1);
@@ -948,6 +958,7 @@ describe('InputView campaign progress', () => {
 
     await user.type(screen.getAllByRole('textbox')[0], 'What if continuity breaks?');
     await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
 
     await waitFor(() => {
       expect(identityPreflightMock).toHaveBeenCalledTimes(1);
@@ -1120,6 +1131,7 @@ describe('InputView campaign progress', () => {
     // Submit
     await user.type(screen.getAllByRole('textbox')[0], 'What if with search?');
     await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
 
     await waitFor(() => {
       expect(startSimulationMock).toHaveBeenCalledWith(
@@ -1228,6 +1240,7 @@ describe('InputView campaign progress', () => {
     await user.type(screen.getByLabelText('home.web_search_base_url_label'), 'https://api.x.ai/v1/responses');
     await user.type(screen.getAllByRole('textbox')[0], 'What if custom search?');
     await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
 
     await waitFor(() => {
       expect(startSimulationMock).toHaveBeenCalledWith(
@@ -1277,6 +1290,7 @@ describe('InputView campaign progress', () => {
     await user.click(screen.getByTestId('input-source-toggle-academic'));
     await user.type(screen.getAllByRole('textbox')[0], 'What if selected source families drive ingestion?');
     await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
 
     await waitFor(() => {
       expect(startSimulationMock).toHaveBeenCalledWith(
@@ -1388,6 +1402,7 @@ describe('InputView campaign progress', () => {
     // Submit without checking toggle
     await user.type(screen.getAllByRole('textbox')[0], 'What if no search?');
     await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
 
     await waitFor(() => {
       expect(startSimulationMock).toHaveBeenCalledWith(
@@ -1397,5 +1412,443 @@ describe('InputView campaign progress', () => {
         }),
       );
     });
+  });
+});
+
+describe('InputView IME composition guard and confirm launch dialog', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    __resetCapabilityCacheForTests();
+    setMockLanguage('en');
+    changeLanguageMock.mockClear();
+    createDebateMock.mockReset();
+    startSimulationMock.mockClear();
+    identityPreflightMock.mockReset();
+    testLlmConnectionMock.mockReset();
+    getCapabilitiesMock.mockReset();
+    getCapabilitiesMock.mockResolvedValue({});
+    identityPreflightMock.mockResolvedValue({
+      needs_confirmation: false,
+      matches: [],
+      summary: {
+        agent_count: 0,
+        exact_match_count: 0,
+        candidate_count: 0,
+        new_identity_count: 0,
+      },
+    });
+    import.meta.env.VITE_ENABLE_WEB_SEARCH = 'true';
+    getCampaignProfileMock.mockResolvedValue({
+      id: 'profile-2',
+      user_id: 'director-1',
+      user_name: 'Local Director',
+      total_runs: 0,
+      completed_challenges: 0,
+      total_bets: 0,
+      hit_bets: 0,
+      highest_archive_grade: null,
+      created_at: '2026-03-17T00:00:00Z',
+      updated_at: '2026-03-17T00:00:00Z',
+      last_daily_challenge_completed_at: null,
+      last_daily_challenge_profile_id: null,
+      last_daily_challenge_scenario_id: null,
+    });
+    getCampaignMasteryMock.mockResolvedValue([]);
+    getCampaignBadgesMock.mockResolvedValue([]);
+    getCampaignChallengeRotationMock.mockResolvedValue({
+      local_date: '2026-03-17',
+      week_key: '2026-03-16',
+      today_challenge: {
+        id: 'challenge-ime-1',
+        question: 'What if AI ruled every city?',
+        question_en: 'What if AI ruled every city?',
+        subtitle_zh: '治理博弈',
+        subtitle_en: 'Governance Conflict',
+        profile_id: 'governance',
+        rounds: 3,
+        num_agents: 3,
+        mode: 'blackboard',
+        visualization_enabled: true,
+      },
+      weekly_challenges: [],
+    });
+    getCampaignDailyChallengeStatusMock.mockResolvedValue(null);
+    getCampaignWeeklySummaryMock.mockResolvedValue(null);
+    getChallengeProgressMock.mockReturnValue(null);
+  });
+
+  // ── IME Composition Guard ──────────────────
+
+  it('does not submit when Enter pressed during IME composition (isComposing=true)', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    expect(textarea).not.toBeNull();
+    await user.type(textarea, 'What if AI rules?');
+
+    fireEvent.compositionStart(textarea);
+    fireEvent.keyDown(textarea, { key: 'Enter', isComposing: true });
+
+    // No confirm dialog should appear because composition is active
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  it('does not submit when Enter pressed with keyCode 229 (legacy IME signal)', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if IME triggers 229?');
+
+    fireEvent.keyDown(textarea, { key: 'Enter', keyCode: 229 });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  it('shows confirm dialog when Enter is pressed after composition ends', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if composition ends?');
+
+    fireEvent.compositionStart(textarea);
+    fireEvent.compositionEnd(textarea);
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  it('does not submit when Shift+Enter is pressed during composition', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if shift enter?');
+
+    fireEvent.compositionStart(textarea);
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true, isComposing: true });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  it('shows confirm dialog on plain Enter when no composition is in progress', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if a normal Enter?');
+
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  it('treats Enter as composition-guarded between compositionStart and compositionEnd, then allows submit', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if start then end?');
+
+    // compositionStart sets the ref → Enter should be blocked
+    fireEvent.compositionStart(textarea);
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // compositionEnd clears the ref → Enter should now open the dialog
+    fireEvent.compositionEnd(textarea);
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('does not show confirm dialog when Enter pressed on empty question', async () => {
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  // ── Confirm Launch Dialog ──────────────────
+
+  it('opens the confirm dialog with the typed question text', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if launch confirmation works?');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText('What if launch confirmation works?')).toBeInTheDocument();
+  });
+
+  it('renders the confirm dialog settings line with rounds, agents, and mode', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if settings line renders?');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    // The settings copy uses i18n key home.confirm_launch_settings; in this test
+    // env stableTranslator returns the key itself when it is not stubbed, so the
+    // key must appear inside the dialog body.
+    expect(screen.getByText('home.confirm_launch_settings')).toBeInTheDocument();
+  });
+
+  it('clicking the confirm button submits the simulation', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if confirm runs the sim?');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    const dialog = await screen.findByRole('dialog');
+    const confirmBtn = within(dialog).getByRole('button', { name: 'home.submit' });
+    await user.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          question: 'What if confirm runs the sim?',
+        }),
+      );
+    });
+  });
+
+  it('clicking the cancel button dismisses the dialog and refocuses the textarea', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if cancel dismisses?');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    const dialog = await screen.findByRole('dialog');
+    const cancelBtn = within(dialog).getByRole('button', { name: 'common.cancel' });
+    await user.click(cancelBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  it('pressing Escape inside the dialog dismisses it', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if escape dismisses?');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  it('clicking the autoFocused confirm button confirms the launch', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if enter confirms in dialog?');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    const dialog = await screen.findByRole('dialog');
+    const confirmBtn = within(dialog).getByRole('button', { name: 'home.submit' });
+    await user.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          question: 'What if enter confirms in dialog?',
+        }),
+      );
+    });
+  });
+
+  it('pressing Escape inside the dialog dismisses it without confirming', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if dialog Enter blocked by IME?');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(startSimulationMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('clicking the backdrop dismisses the dialog', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if backdrop click dismisses?');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    const dialog = await screen.findByRole('dialog');
+    const backdrop = dialog.parentElement as HTMLElement;
+    expect(backdrop).not.toBeNull();
+    expect(backdrop.classList.contains('confirm-launch-backdrop')).toBe(true);
+
+    await user.click(backdrop);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  it('clicking inside the dialog body does not dismiss it', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if inside click is safe?');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    const dialog = await screen.findByRole('dialog');
+    await user.click(dialog);
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  it('confirm dialog has correct ARIA attributes', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if aria attrs are right?');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.getAttribute('role')).toBe('dialog');
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(dialog.getAttribute('aria-label')).toBe('home.confirm_launch_title');
+  });
+
+  it('does not open confirm dialog when only whitespace is typed', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, '   ');
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+  });
+
+  it('clicking submit button also opens the confirm dialog', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if clicking submit opens dialog?');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
   });
 });

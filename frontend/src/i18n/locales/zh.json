@@ -6,6 +6,8 @@
       "placeholder_2": "如果人类在2000年登陆火星？",
       "placeholder_3": "如果互联网从未被发明？",
       "submit": "⚡ 开始推演",
+      "confirm_launch_title": "确认开始推演",
+      "confirm_launch_settings": "{{rounds}} 轮 · {{agents}} 个 Agent · {{mode}}",
       "simulation_eta_hint": "按当前 {{agents}} 个 Agent × {{rounds}} 轮，主模式预计约 {{minutes}} 分钟。",
       "quick_starts": "快速开始",
       "history": "📜 历史记录",

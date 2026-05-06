@@ -93,7 +93,13 @@ const FoldableTurn = React.forwardRef<HTMLElement, FoldableTurnProps>(
           aria-labelledby={speakerId}
           aria-hidden={isCollapsed}
         >
-          <p className="mt-1 text-sm leading-relaxed text-text-secondary">
+          <p
+            className={cn(
+              "mt-1 text-sm leading-relaxed text-text-secondary",
+              isCollapsed && "overflow-hidden text-ellipsis whitespace-nowrap",
+              !isCollapsed && "whitespace-pre-wrap break-words",
+            )}
+          >
             {content}
           </p>
         </div>
