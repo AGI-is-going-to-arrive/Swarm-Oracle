@@ -63,7 +63,7 @@ const FoldableTurn = React.forwardRef<HTMLElement, FoldableTurnProps>(
         )}
         style={{
           maxHeight: isCollapsed
-            ? "var(--foldable-collapsed-height)"
+            ? "var(--foldable-collapsed-height, 100px)"
             : "var(--foldable-expanded-max)",
           overflow: "hidden",
           transition: "var(--foldable-transition)",
@@ -96,7 +96,7 @@ const FoldableTurn = React.forwardRef<HTMLElement, FoldableTurnProps>(
           <p
             className={cn(
               "mt-1 text-sm leading-relaxed text-text-secondary",
-              isCollapsed && "overflow-hidden text-ellipsis whitespace-nowrap",
+              isCollapsed && "line-clamp-2",
               !isCollapsed && "whitespace-pre-wrap break-words",
             )}
           >

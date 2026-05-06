@@ -43,6 +43,7 @@ import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import './DebateArena.css';
 
 const REVEAL_INTERVAL_MS = 1400;
+const SPOTLIGHT_TRUNCATE_LEN = 120;
 
 interface DebateRoomInsight {
   side: 'proposition' | 'opposition' | 'judge';
@@ -125,6 +126,7 @@ export function DebateArenaView() {
   } | null>(null);
   const [counterplayRecord, setCounterplayRecord] = useState<DebateCounterplayRecord | null>(null);
   const [expandedPastTurnIds, setExpandedPastTurnIds] = useState<Set<string>>(new Set());
+  const [spotlightExpanded, setSpotlightExpanded] = useState(false);
   const [strategyOpenItems, setStrategyOpenItems] = useState<string[]>(['clash']);
   const revealRef = useRef(0);
   const previousPhaseRef = useRef<string | null>(null);
@@ -190,6 +192,10 @@ export function DebateArenaView() {
   );
   const latestVisibleTurn = visibleTurns[visibleTurns.length - 1] ?? null;
   const activeSpeakerSide = latestVisibleTurn?.speaker_side ?? null;
+
+  useEffect(() => {
+    setSpotlightExpanded(false);
+  }, [latestVisibleTurn?.id]);
 
   const unlockedPhases = useMemo(
     () => Array.from(new Set(visibleTurns.map((turn) => turn.phase))),
@@ -910,19 +916,38 @@ export function DebateArenaView() {
               </div>
               {/* D-2: SpotlightCard for latest visible turn */}
               {latestVisibleTurn && selectedPhase === currentPhase && (
-                <SpotlightTurnCard
+                <article
                   data-testid="debate-live-turn"
-                  variant="debate"
-                  speaker={latestVisibleTurn.speaker_name}
-                  content={latestVisibleTurn.content.length > 120 ? latestVisibleTurn.content.slice(0, 120) + '...' : latestVisibleTurn.content}
-                  isHighlighted
-                  badge={
-                    <span className="debate-phase-chip">
-                      {getDebateSideLabel(t, latestVisibleTurn.speaker_side)}
+                  className={`debate-turn-card debate-turn-card--${latestVisibleTurn.speaker_side} debate-turn-card--hot mb-4`}
+                >
+                  <div className="debate-turn-card__meta">
+                    <span className={`debate-speaker-initial debate-speaker-initial--${latestVisibleTurn.speaker_side}`} aria-hidden="true">
+                      {latestVisibleTurn.speaker_name.charAt(0)}
                     </span>
-                  }
-                  className="mb-4"
-                />
+                    <strong>{latestVisibleTurn.speaker_name}</strong>
+                    <div className="debate-turn-card__tags">
+                      <span className={`debate-phase-chip${latestVisibleTurn.speaker_side === 'opposition' ? ' debate-phase-chip--con' : latestVisibleTurn.speaker_side === 'judge' ? ' debate-phase-chip--judge' : ''}`}>
+                        {getDebateSideLabel(t, latestVisibleTurn.speaker_side)}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="debate-turn-card__content">
+                    {spotlightExpanded || latestVisibleTurn.content.length <= SPOTLIGHT_TRUNCATE_LEN
+                      ? latestVisibleTurn.content
+                      : latestVisibleTurn.content.slice(0, SPOTLIGHT_TRUNCATE_LEN) + '…'}
+                  </p>
+                  {latestVisibleTurn.content.length > SPOTLIGHT_TRUNCATE_LEN && (
+                    <button
+                      type="button"
+                      className="debate-spotlight-expand"
+                      onClick={() => setSpotlightExpanded((p) => !p)}
+                      aria-expanded={spotlightExpanded}
+                    >
+                      {spotlightExpanded ? t('shared.foldable.collapse') : t('shared.foldable.show_full')}
+                      {' '}{spotlightExpanded ? '▲' : '▼'}
+                    </button>
+                  )}
+                </article>
               )}
               <div className="debate-panel__body">
                 {feedFocusLabel && (
@@ -945,9 +970,12 @@ export function DebateArenaView() {
                         return (
                           <FoldableTurn
                             key={turn.id}
+                            data-testid={`debate-fold-${turn.id}`}
                             speaker={turn.speaker_name}
                             content={turn.content}
                             isCollapsed={!isExpanded}
+                            speakerIndex={turn.speaker_side === 'proposition' ? 0 : turn.speaker_side === 'opposition' ? 1 : 2}
+                            className={`debate-fold--${turn.speaker_side}`}
                             onToggle={() => {
                               setExpandedPastTurnIds((prev) => {
                                 const next = new Set(prev);
@@ -960,9 +988,14 @@ export function DebateArenaView() {
                               });
                             }}
                             badge={
-                              <span className="debate-phase-chip">
-                                {getDebateSideLabel(t, turn.speaker_side)}
-                              </span>
+                              <>
+                                <span className={`debate-speaker-initial debate-speaker-initial--${turn.speaker_side}`} aria-hidden="true">
+                                  {turn.speaker_name.charAt(0)}
+                                </span>
+                                <span className={`debate-phase-chip${turn.speaker_side === 'opposition' ? ' debate-phase-chip--con' : turn.speaker_side === 'judge' ? ' debate-phase-chip--judge' : ''}`}>
+                                  {getDebateSideLabel(t, turn.speaker_side)}
+                                </span>
+                              </>
                             }
                           />
                         );
@@ -974,9 +1007,12 @@ export function DebateArenaView() {
                           className={`debate-turn-card debate-turn-card--${turn.speaker_side} ${turn.id === latestStageTurn?.id ? 'debate-turn-card--latest' : ''} ${turn.id === latestVisibleTurn?.id && selectedPhase === currentPhase ? 'debate-turn-card--hot' : ''}`}
                         >
                           <div className="debate-turn-card__meta">
+                            <span className={`debate-speaker-initial debate-speaker-initial--${turn.speaker_side}`} aria-hidden="true">
+                              {turn.speaker_name.charAt(0)}
+                            </span>
                             <strong>{turn.speaker_name}</strong>
                             <div className="debate-turn-card__tags">
-                              <span>{getDebateSideLabel(t, turn.speaker_side)}</span>
+                              <span className={`debate-phase-chip${turn.speaker_side === 'opposition' ? ' debate-phase-chip--con' : turn.speaker_side === 'judge' ? ' debate-phase-chip--judge' : ''}`}>{getDebateSideLabel(t, turn.speaker_side)}</span>
                               {turn.score_delta && (
                                 <span className="debate-phase-chip">
                                   {(turn.score_delta.proposition ?? 0) === (turn.score_delta.opposition ?? 0)
