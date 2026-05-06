@@ -62,7 +62,7 @@ class Settings(BaseSettings):
 
     # ── Web Search Enhancement ────────────────────────────
     ENABLE_WEB_SEARCH: bool = False
-    WEB_SEARCH_PROVIDER: str = "tavily"  # tavily | exa | xai | searxng | brave | native
+    WEB_SEARCH_PROVIDER: str = "tavily"  # tavily | exa | xai | searxng
     WEB_SEARCH_API_KEY: str = ""
     XAI_WEB_SEARCH_MODEL: str = "grok-4.20-reasoning"
     XAI_WEB_SEARCH_TIMEOUT_SECONDS: float = 45.0
@@ -154,6 +154,16 @@ class Settings(BaseSettings):
             )
         if not normalized:
             raise ValueError("CORS_ORIGINS must contain at least one explicit origin")
+        return normalized
+
+    @field_validator("WEB_SEARCH_PROVIDER", mode="after")
+    @classmethod
+    def validate_web_search_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"tavily", "exa", "xai", "searxng", "native"}:
+            raise ValueError(
+                "WEB_SEARCH_PROVIDER must be one of 'tavily', 'exa', 'xai', 'searxng', 'native'"
+            )
         return normalized
 
     @field_validator("NEW_SOURCES_POLYMARKET_CONFIGURED_HOST", mode="after")

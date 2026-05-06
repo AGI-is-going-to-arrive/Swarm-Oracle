@@ -253,7 +253,7 @@ class TestHealthTestWebSearchServerHint:
         assert ws["provider"] == "searxng"
 
     def test_server_enabled_native_not_yet_implemented(self, client, monkeypatch):
-        """Native provider is V2 — server_enabled must be False."""
+        """Native provider is a no-op — server_enabled must be False, method=none."""
         self._patch_llm(monkeypatch)
         from app.config import settings
         monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
@@ -263,7 +263,7 @@ class TestHealthTestWebSearchServerHint:
         ws = data["web_search"]
         assert ws["scope"] == "server"
         assert ws["server_enabled"] is False
-        assert ws["method"] == "native"
+        assert ws["method"] == "none"
         assert ws["provider"] == "native"
 
     def test_server_enabled_exa_with_key(self, client, monkeypatch):

@@ -2686,78 +2686,64 @@ export default function ResultView() {
         />
       )}
       {/* FE-5: 4 source category grid (desktop) + mobile Sheet + Action Card */}
-      {capabilities?.web_search?.providers && (
-        <>
-          <button
-            type="button"
-            data-testid="result-mobile-sources-trigger"
-            onClick={() => setMobileSourceSheetOpen(true)}
-            className="fixed bottom-20 right-4 z-40 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-100 shadow-lg md:hidden"
-          >
-            {t('source.mobile_sheet.title', { defaultValue: 'Live sources' })}
-          </button>
-          <div
-            className="result-source-grid hidden gap-3 px-4 py-2 md:grid md:grid-cols-2"
-            data-testid="result-source-grid-desktop"
-          >
-            {capabilities.web_search.providers.polymarket?.enabled && (
+      {capabilities?.web_search?.providers && (() => {
+        const providers = capabilities.web_search.providers;
+        const sourceCards = (
+          <>
+            {providers.polymarket?.enabled && (
               <PolymarketCard
                 capability={polymarketCapability}
                 state={resolveSourceCategoryState(polymarketContext)}
                 items={polymarketContext?.items ?? []}
               />
             )}
-            {capabilities.web_search.providers.finance?.enabled && (
+            {providers.finance?.enabled && (
               <FinanceSourceCard
                 state={resolveSourceCategoryState(financeContext)}
                 items={financeContext?.items ?? []}
               />
             )}
-            {capabilities.web_search.providers.academic?.enabled && (
+            {providers.academic?.enabled && (
               <SemanticScholarCard
                 state={resolveSourceCategoryState(academicContext)}
                 items={academicContext?.items ?? []}
               />
             )}
-            {capabilities.web_search.providers.news_deep?.enabled && (
+            {providers.news_deep?.enabled && (
               <NewsApiCard
                 state={resolveSourceCategoryState(newsDeepContext)}
                 items={newsDeepContext?.items ?? []}
               />
             )}
-          </div>
-          <MobileSourceSheet
-            open={mobileSourceSheetOpen}
-            onOpenChange={setMobileSourceSheetOpen}
-          >
-            {capabilities.web_search.providers.polymarket?.enabled && (
-              <PolymarketCard
-                capability={polymarketCapability}
-                state={resolveSourceCategoryState(polymarketContext)}
-                items={polymarketContext?.items ?? []}
-              />
-            )}
-            {capabilities.web_search.providers.finance?.enabled && (
-              <FinanceSourceCard
-                state={resolveSourceCategoryState(financeContext)}
-                items={financeContext?.items ?? []}
-              />
-            )}
-            {capabilities.web_search.providers.academic?.enabled && (
-              <SemanticScholarCard
-                state={resolveSourceCategoryState(academicContext)}
-                items={academicContext?.items ?? []}
-              />
-            )}
-            {capabilities.web_search.providers.news_deep?.enabled && (
-              <NewsApiCard
-                state={resolveSourceCategoryState(newsDeepContext)}
-                items={newsDeepContext?.items ?? []}
-              />
-            )}
-          </MobileSourceSheet>
-        </>
-      )}
+          </>
+        );
+        return (
+          <>
+            <button
+              type="button"
+              data-testid="result-mobile-sources-trigger"
+              onClick={() => setMobileSourceSheetOpen(true)}
+              aria-expanded={mobileSourceSheetOpen}
+              aria-controls={mobileSourceSheetOpen ? "mobile-source-sheet" : undefined}
+              className="fixed bottom-20 right-4 z-40 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-100 shadow-lg md:hidden"
+            >
+              {t('source.mobile_sheet.title', { defaultValue: 'Live sources' })}
+            </button>
+            <div
+              className="result-source-grid hidden gap-3 px-4 py-2 md:grid md:grid-cols-2"
+              data-testid="result-source-grid-desktop"
+            >
+              {sourceCards}
+            </div>
+            <MobileSourceSheet
+              open={mobileSourceSheetOpen}
+              onOpenChange={setMobileSourceSheetOpen}
+            >
+              {sourceCards}
+            </MobileSourceSheet>
+          </>
+        );
+      })()}
       {!isReplayMode && capabilities?.agent_conversation?.enabled && primaryAgentIdentityId && (
         <ResultActionCard
           agentIdentityId={primaryAgentIdentityId}

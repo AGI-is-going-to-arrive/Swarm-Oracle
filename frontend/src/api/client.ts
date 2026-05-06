@@ -11,6 +11,7 @@ import type {
   AppendEndingRoomUserTurnRequest, CreateEndingRoomRequest, CreateEndingRoomThreadRequest, EndingRoomResultPayload, EndingRoomSnapshot, EndingRoomThreadSnapshot,
   CampaignBadge, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
   ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
+  WebSearchFamily,
 } from '../types';
 import { getOrgId } from '../lib/orgContext';
 
@@ -195,7 +196,7 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   hierarchical?: boolean;
   visualizationEnabled?: boolean;
   webSearchEnabled?: boolean;
-  webSearchFamilies?: Array<'polymarket' | 'finance' | 'academic' | 'news_deep'>;
+  webSearchFamilies?: WebSearchFamily[];
   webSearchProvider?: 'tavily' | 'exa' | 'xai' | 'searxng';
   webSearchApiKey?: string;
   webSearchBaseUrl?: string;
@@ -256,7 +257,10 @@ export interface LlmProbeResponse {
   failure?: string | null;
 }
 
-function buildScenarioRequestBody(options: CreateScenarioOptions): Record<string, unknown> {
+function buildScenarioRequestBody(
+  options: CreateScenarioOptions,
+  opts?: { preflightMode?: boolean },
+): Record<string, unknown> {
   const {
     question,
     rounds,
@@ -285,6 +289,8 @@ function buildScenarioRequestBody(options: CreateScenarioOptions): Record<string
     continuityOverrides,
   } = options;
 
+  const preflightMode = opts?.preflightMode === true;
+
   return {
     question,
     ...(rounds != null && { rounds }),
@@ -304,9 +310,9 @@ function buildScenarioRequestBody(options: CreateScenarioOptions): Record<string
     ...(visualizationEnabled != null && { visualization_enabled: visualizationEnabled }),
     ...(webSearchEnabled && { web_search_enabled: true }),
     ...(webSearchEnabled && { web_search_families: webSearchFamilies ?? [] }),
-    ...(webSearchEnabled && webSearchProvider && { web_search_provider: webSearchProvider }),
-    ...(webSearchEnabled && webSearchApiKey && { web_search_api_key: webSearchApiKey }),
-    ...(webSearchEnabled && webSearchBaseUrl && { web_search_base_url: webSearchBaseUrl }),
+    ...(webSearchEnabled && !preflightMode && webSearchProvider && { web_search_provider: webSearchProvider }),
+    ...(webSearchEnabled && !preflightMode && webSearchApiKey && { web_search_api_key: webSearchApiKey }),
+    ...(webSearchEnabled && !preflightMode && webSearchBaseUrl && { web_search_base_url: webSearchBaseUrl }),
     ...(userId && { user_id: userId }),
     ...(disableUserQuota != null && { disable_user_quota: disableUserQuota }),
     ...(customAgentIdentityIds?.length && { custom_agent_identity_ids: customAgentIdentityIds }),
@@ -536,7 +542,7 @@ export async function identityContinuityPreflight(
 ): Promise<IdentityContinuityPreflightResponse> {
   return request('/agents/identities/preflight', {
     method: 'POST',
-    body: JSON.stringify(buildScenarioRequestBody(options)),
+    body: JSON.stringify(buildScenarioRequestBody(options, { preflightMode: true })),
   });
 }
 

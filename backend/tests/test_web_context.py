@@ -15,12 +15,14 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
+import app.services.web_context as wc
 from app.services.web_context import (
     WebSearchRequestConfig,
     WebSearchResult,
@@ -225,6 +227,182 @@ class TestTavilyProvider:
             snippets = await _search_tavily("test")
 
         assert len(snippets) == 1
+
+
+# ── Provider type-guard regression ──────────────────────
+
+
+class TestProviderTypeGuards:
+    """All providers must skip non-string content/url defensively (no crash)."""
+
+    @pytest.mark.asyncio
+    async def test_tavily_skips_non_string_content(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "tvly-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 5)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        mock_response = httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"url": "https://a.com", "content": 123},  # int content
+                    {"url": ["bad"], "content": "ok"},  # list url
+                    {"url": None, "content": None},  # both None
+                    {"url": "https://good.com", "content": "good"},
+                ]
+            },
+            request=httpx.Request("POST", "https://api.tavily.com/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_tavily("test")
+
+        # Only the well-formed string entry survives
+        assert len(snippets) == 1
+        assert snippets[0].text == "good"
+        assert snippets[0].source_url == "https://good.com"
+
+    @pytest.mark.asyncio
+    async def test_searxng_skips_non_string_content(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.SEARXNG_URL", "http://localhost:8888")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 5)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        mock_response = httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"url": 42, "content": "ok"},  # int url
+                    {"url": "https://x.com", "content": ["arr"]},  # list content
+                    {"url": "https://ok.com", "content": "fine"},
+                ]
+            },
+            request=httpx.Request("GET", "http://localhost:8888/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.get.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_searxng("test")
+
+        assert len(snippets) == 1
+        assert snippets[0].source_url == "https://ok.com"
+
+    @pytest.mark.asyncio
+    async def test_exa_skips_non_string_url(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "exa-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 5)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        mock_response = httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"url": 999, "text": "stringtext"},  # int url
+                    {"url": "https://ok.exa", "text": "yes"},
+                ]
+            },
+            request=httpx.Request("POST", "https://api.exa.ai/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_exa("test")
+
+        assert len(snippets) == 1
+        assert snippets[0].source_url == "https://ok.exa"
+
+    @pytest.mark.asyncio
+    async def test_xai_structured_skips_non_string(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "xai-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 5)
+        monkeypatch.setattr(
+            "app.services.web_context.settings.XAI_WEB_SEARCH_MODEL",
+            "grok-4.20-reasoning",
+        )
+
+        mock_response = httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(
+                                    {
+                                        "snippets": [
+                                            {"text": 123, "source_url": "https://x.ai/a"},
+                                            {"text": "ok", "source_url": ["arr"]},
+                                            {"text": "valid", "source_url": "https://x.ai/b"},
+                                        ]
+                                    }
+                                ),
+                                "annotations": [],
+                            }
+                        ],
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://api.x.ai/v1/responses"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_xai("test")
+
+        assert len(snippets) == 1
+        assert snippets[0].text == "valid"
+        assert snippets[0].source_url == "https://x.ai/b"
+
+    @pytest.mark.asyncio
+    async def test_tavily_clips_long_text_to_800(self, monkeypatch):
+        """_clip_text(800) ceiling enforced at provider boundary."""
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "tvly-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 1)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        long_text = "A" * 2000
+        mock_response = httpx.Response(
+            200,
+            json={"results": [{"url": "https://a.com", "content": long_text}]},
+            request=httpx.Request("POST", "https://api.tavily.com/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_tavily("test")
+
+        assert len(snippets) == 1
+        assert len(snippets[0].text) == 800
+        assert snippets[0].text.startswith("A" * 100)
+        assert snippets[0].text.endswith("…")
 
 
 # ── SearXNG Provider ────────────────────────────────────
@@ -615,11 +793,10 @@ class TestFetchWebContext:
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "tvly-key")
 
-        async def _timeout_search(query):
+        async def _timeout_search(query, request_config=None):
             raise httpx.TimeoutException("timeout")
 
         # Patch the dict entry so _search_with_provider uses our mock
-        import app.services.web_context as wc
         monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", _timeout_search)
 
         result = await fetch_web_context("What if timeout?")
@@ -632,11 +809,10 @@ class TestFetchWebContext:
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "tvly-key")
 
-        async def _error_search(query):
+        async def _error_search(query, request_config=None):
             mock_resp = httpx.Response(500, request=httpx.Request("POST", "https://api.tavily.com/search"))
             raise httpx.HTTPStatusError("500", request=mock_resp.request, response=mock_resp)
 
-        import app.services.web_context as wc
         monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", _error_search)
 
         result = await fetch_web_context("What if error?")
@@ -650,10 +826,9 @@ class TestFetchWebContext:
 
         mock_snippets = [WebSearchSnippet(text="AI advances", source_url="https://ai.com")]
 
-        async def _ok_search(query):
+        async def _ok_search(query, request_config=None):
             return mock_snippets
 
-        import app.services.web_context as wc
         monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", _ok_search)
 
         result = await fetch_web_context("What if AI?")
@@ -674,12 +849,11 @@ class TestFetchWebContext:
         mock_snippets = [WebSearchSnippet(text="cached", source_url="https://c.com")]
         call_count = 0
 
-        async def counting_search(query):
+        async def counting_search(query, request_config=None):
             nonlocal call_count
             call_count += 1
             return mock_snippets
 
-        import app.services.web_context as wc
         monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", counting_search)
 
         result1 = await fetch_web_context("cache test?")
@@ -696,10 +870,9 @@ class TestFetchWebContext:
         monkeypatch.setattr("app.services.web_context.settings.ENABLE_WEB_SEARCH", True)
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
 
-        async def _empty_search(query):
+        async def _empty_search(query, request_config=None):
             return []
 
-        import app.services.web_context as wc
         monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", _empty_search)
 
         result = await fetch_web_context("empty results?")
@@ -821,3 +994,176 @@ class TestFromJsonMalformed:
         # Should render the one valid snippet without crashing
         assert "UNTRUSTED DATA" in block
         assert "ok" in block
+
+
+# ── Cache Hardening ─────────────────────────────────────
+
+
+class TestCacheHardening:
+    """Regression coverage for TTL expiry, eviction, stampede dedup, URL sanitiser."""
+
+    @pytest.mark.asyncio
+    async def test_cache_ttl_expiration(self, monkeypatch):
+        """Expired TTL triggers a fresh provider call."""
+        monkeypatch.setattr("app.services.web_context.settings.ENABLE_WEB_SEARCH", True)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
+        monkeypatch.setattr(
+            "app.services.web_context.settings.WEB_SEARCH_CACHE_TTL_SECONDS", 60
+        )
+
+        call_count = 0
+
+        async def counting_search(query, request_config=None):
+            nonlocal call_count
+            call_count += 1
+            return [WebSearchSnippet(text=f"result-{call_count}", source_url="https://a.com")]
+
+        monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", counting_search)
+
+        clock = {"now": 1000.0}
+
+        def fake_monotonic():
+            return clock["now"]
+
+        monkeypatch.setattr("app.services.web_context.time.monotonic", fake_monotonic)
+
+        first = await fetch_web_context("ttl probe?")
+        assert first is not None and first.cached is False
+        assert call_count == 1
+
+        # Advance past TTL — entry should be evicted on next read.
+        clock["now"] += 120.0
+
+        second = await fetch_web_context("ttl probe?")
+        assert second is not None
+        assert second.cached is False  # provider re-invoked, not a cached hit
+        assert call_count == 2
+        assert second.snippets[0].text == "result-2"
+
+    @pytest.mark.asyncio
+    async def test_cache_eviction_at_max_size(self, monkeypatch):
+        """When cache exceeds _MAX_CACHE_SIZE, the oldest expiry is evicted."""
+        monkeypatch.setattr("app.services.web_context.settings.ENABLE_WEB_SEARCH", True)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
+        monkeypatch.setattr(
+            "app.services.web_context.settings.WEB_SEARCH_CACHE_TTL_SECONDS", 3600
+        )
+
+        # Shrink the cap so the test stays cheap; we then insert cap + 1 entries.
+        monkeypatch.setattr("app.services.web_context._MAX_CACHE_SIZE", 5)
+
+        async def echo_search(query, request_config=None):
+            return [WebSearchSnippet(text=query, source_url="https://x.test")]
+
+        monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", echo_search)
+
+        # Static clock — test code explicitly advances it so each cache entry
+        # has a known, monotonically-increasing expiry timestamp.
+        clock = {"now": 100.0}
+
+        def fake_monotonic():
+            return clock["now"]
+
+        monkeypatch.setattr("app.services.web_context.time.monotonic", fake_monotonic)
+
+        # Fill cache to capacity (5) — record the first key for eviction assertion.
+        first_config = wc._resolve_request_config()
+        keys_in_order: list[str] = []
+        for i in range(5):
+            clock["now"] += 1.0
+            query = f"query-{i}"
+            keys_in_order.append(wc._cache_key(query, first_config))
+            await fetch_web_context(query)
+        first_key = keys_in_order[0]
+        assert len(wc._cache) == 5
+        assert first_key in wc._cache
+        # All five entries should have strictly distinct expiries.
+        expiries = sorted(wc._cache[k][0] for k in keys_in_order)
+        assert len(set(expiries)) == 5
+
+        # 6th distinct query should trigger eviction of the oldest (smallest expiry).
+        clock["now"] += 1.0
+        await fetch_web_context("query-overflow")
+        assert len(wc._cache) <= 5
+        assert first_key not in wc._cache, "Oldest entry should have been evicted"
+        # All other earlier entries must still be present (only the oldest was evicted).
+        for surviving_key in keys_in_order[1:]:
+            assert surviving_key in wc._cache
+
+    @pytest.mark.asyncio
+    async def test_cache_stampede_dedup(self, monkeypatch):
+        """Concurrent identical queries collapse to a single provider call."""
+        monkeypatch.setattr("app.services.web_context.settings.ENABLE_WEB_SEARCH", True)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
+        monkeypatch.setattr(
+            "app.services.web_context.settings.WEB_SEARCH_CACHE_TTL_SECONDS", 300
+        )
+
+        call_count = 0
+        gate = asyncio.Event()
+
+        async def gated_search(query, request_config=None):
+            nonlocal call_count
+            call_count += 1
+            # Block until the test releases the gate, ensuring all stampede
+            # tasks reach the inflight lock before the provider returns.
+            await gate.wait()
+            return [WebSearchSnippet(text="dedup-payload", source_url="https://s.test")]
+
+        monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", gated_search)
+
+        tasks = [
+            asyncio.create_task(fetch_web_context("stampede?")) for _ in range(5)
+        ]
+        # Yield repeatedly so all tasks are queued behind the inflight lock /
+        # gate before we release the provider. This avoids time-based races
+        # where some tasks haven't been scheduled yet.
+        for _ in range(10):
+            await asyncio.sleep(0)
+        gate.set()
+        results = await asyncio.gather(*tasks)
+
+        assert call_count == 1, "Expected provider to run exactly once under stampede"
+        assert all(r is not None for r in results)
+        # First-through wins; the rest should be served from cache.
+        cached_flags = [bool(r and r.cached) for r in results]
+        assert cached_flags.count(False) == 1
+        assert cached_flags.count(True) == 4
+        for r in results:
+            assert r is not None
+            assert r.snippets[0].text == "dedup-payload"
+
+    @pytest.mark.asyncio
+    async def test_inflight_lock_released_after_fetch(self, monkeypatch):
+        """After fetch completes, the inflight lock entry must be popped.
+
+        This regression-guards C-1: the lock dict should not retain entries
+        after the corresponding fetch finishes; it should only contain
+        currently-in-flight keys (plus the pathological-burst safety cap).
+        """
+        monkeypatch.setattr("app.services.web_context.settings.ENABLE_WEB_SEARCH", True)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
+        monkeypatch.setattr(
+            "app.services.web_context.settings.WEB_SEARCH_CACHE_TTL_SECONDS", 300
+        )
+
+        async def fast_search(query, request_config=None):
+            return [WebSearchSnippet(text=query, source_url="https://x.test")]
+
+        monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", fast_search)
+
+        await fetch_web_context("inflight probe?")
+        # After completion, the inflight dict should have 0 entries for this key.
+        assert wc._inflight_locks == {}, (
+            "inflight lock entry should be popped after fetch completes"
+        )
+
+        # Cache hit path must not re-create the lock entry.
+        await fetch_web_context("inflight probe?")
+        assert wc._inflight_locks == {}, (
+            "inflight lock entry should remain empty on cache-hit path"
+        )
+
+    def test_sanitize_url_javascript_scheme(self):
+        """javascript: scheme must be rejected by _sanitize_url."""
+        assert _sanitize_url("javascript:alert(1)") == ""

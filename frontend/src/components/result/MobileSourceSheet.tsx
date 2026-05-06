@@ -31,6 +31,7 @@ export function MobileSourceSheet({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
+        id="mobile-source-sheet"
         side="bottom"
         data-testid="mobile-source-sheet"
         className="max-h-[85vh] overflow-y-auto rounded-t-2xl"

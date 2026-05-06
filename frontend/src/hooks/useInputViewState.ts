@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
-  getCapabilities,
   getCampaignBadges,
   getCampaignChallengeRotation,
   getCampaignDailyChallengeStatus,
@@ -33,8 +32,6 @@ import type {
 } from '../types';
 
 type TranslateFn = (key: string, options?: Record<string, unknown>) => string;
-type WebSearchProviderOption = 'tavily' | 'exa' | 'xai' | 'searxng';
-type WebSearchMode = 'server_default' | 'custom_override';
 
 export interface NormalizedChallengeDefinition {
   id: string;
@@ -79,7 +76,25 @@ function parseOptionalIntegerInput(value: string): number | null {
   return normalized < 0 ? null : normalized;
 }
 
-export function useInputByokSettings(t: TranslateFn) {
+export interface UseInputByokSettingsOptions {
+  /**
+   * Callback fired with the server-level web_search.server_enabled hint
+   * after a successful LLM probe. Allows web-search state to live in a
+   * sibling hook while still receiving server hints from the BYOK probe.
+   */
+  onWebSearchServerHint?: (serverEnabled: boolean) => void;
+}
+
+export function useInputByokSettings(
+  t: TranslateFn,
+  options: UseInputByokSettingsOptions = {},
+) {
+  const { onWebSearchServerHint } = options;
+  const onWebSearchServerHintRef = useRef(onWebSearchServerHint);
+  useEffect(() => {
+    onWebSearchServerHintRef.current = onWebSearchServerHint;
+  }, [onWebSearchServerHint]);
+
   const [initialProviderPolicy] = useState(() => loadLlmProviderPolicy());
   const [showByok, setShowByok] = useState(() => Boolean(
     initialProviderPolicy.apiKey
@@ -105,62 +120,6 @@ export function useInputByokSettings(t: TranslateFn) {
   const [testedConfigKey, setTestedConfigKey] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState(() => initialProviderPolicy.reasoningEffort);
   const providerPolicyHydrated = useRef(true);
-
-  // Web Search Enhancement: opt-in toggle
-  // Visibility = compile-time flag (VITE_ENABLE_WEB_SEARCH) + server hint
-  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
-  const [webSearchServerEnabled, setWebSearchServerEnabled] = useState(false);
-  const [webSearchServerProvider, setWebSearchServerProvider] = useState<string | null>(null);
-  const [webSearchModePreference, setWebSearchModePreference] = useState<WebSearchMode>('server_default');
-  const [webSearchProvider, setWebSearchProvider] = useState<WebSearchProviderOption>('tavily');
-  const [webSearchApiKey, setWebSearchApiKey] = useState('');
-  const [webSearchBaseUrl, setWebSearchBaseUrl] = useState('');
-  const webSearchApiKeyRef = useRef(webSearchApiKey);
-  const webSearchBaseUrlRef = useRef(webSearchBaseUrl);
-  const [webSearchStatus, setWebSearchStatus] = useState<
-    'idle' | 'searching' | 'success' | 'skipped' | 'error'
-  >('idle');
-  const viteFlagEnabled = (import.meta.env?.VITE_ENABLE_WEB_SEARCH as string | undefined) === 'true';
-
-  useEffect(() => {
-    webSearchApiKeyRef.current = webSearchApiKey;
-    webSearchBaseUrlRef.current = webSearchBaseUrl;
-  }, [webSearchApiKey, webSearchBaseUrl]);
-
-  // On mount: check server web search capability via lightweight GET /api/capabilities
-  // (no LLM call — pure config check). Retries once after 3s on failure.
-  useEffect(() => {
-    if (!viteFlagEnabled) return;
-    let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    const fetchHint = () =>
-      getCapabilities()
-        .then((res) => {
-          if (cancelled) return;
-          setWebSearchServerEnabled(res.web_search?.server_enabled === true);
-          const serverProvider = res.web_search?.provider;
-          setWebSearchServerProvider(typeof serverProvider === 'string' ? serverProvider : null);
-          if (
-            (serverProvider === 'tavily' || serverProvider === 'exa' || serverProvider === 'xai' || serverProvider === 'searxng')
-            && !webSearchApiKeyRef.current.trim()
-            && !webSearchBaseUrlRef.current.trim()
-          ) {
-            setWebSearchProvider(serverProvider);
-          }
-        });
-    fetchHint().catch(() => {
-      retryTimer = setTimeout(() => {
-        if (!cancelled) fetchHint().catch(() => {});
-      }, 3000);
-    });
-    return () => {
-      cancelled = true;
-      if (retryTimer !== null) clearTimeout(retryTimer);
-    };
-  }, [viteFlagEnabled]);
-  const webSearchMode = webSearchEnabled && !webSearchServerEnabled
-    ? 'custom_override'
-    : webSearchModePreference;
 
   const currentConfigKey = useMemo(
     () => JSON.stringify({
@@ -209,7 +168,7 @@ export function useInputByokSettings(t: TranslateFn) {
         parseOptionalIntegerInput(llmTokensPerMinute) ?? undefined,
       );
       // Capture server-level web search hint (scope: server, NOT per-provider)
-      setWebSearchServerEnabled(res.web_search?.server_enabled === true);
+      onWebSearchServerHintRef.current?.(res.web_search?.server_enabled === true);
 
       if (res.llm.status === 'ok') {
         setTestStatus('ok');
@@ -262,21 +221,6 @@ export function useInputByokSettings(t: TranslateFn) {
     reasoningEffort,
     setReasoningEffort,
     handleTestConnection,
-    webSearchEnabled,
-    setWebSearchEnabled,
-    webSearchServerEnabled,
-    webSearchServerProvider,
-    webSearchMode,
-    setWebSearchMode: setWebSearchModePreference,
-    webSearchProvider,
-    setWebSearchProvider,
-    webSearchApiKey,
-    setWebSearchApiKey,
-    webSearchBaseUrl,
-    setWebSearchBaseUrl,
-    webSearchStatus,
-    setWebSearchStatus,
-    webSearchAvailable: viteFlagEnabled,
   };
 }
 

@@ -11,6 +11,7 @@ Search failure NEVER blocks simulation (graceful degradation).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -92,7 +93,10 @@ class WebSearchResult:
 
 # ── In-Memory TTL Cache ─────────────────────────────────
 
+_MAX_CACHE_SIZE = 200
+_MAX_INFLIGHT_LOCKS = 1000
 _cache: dict[str, tuple[float, WebSearchResult]] = {}
+_inflight_locks: dict[str, asyncio.Lock] = {}
 _WEB_SEARCH_URL_ALLOWLIST: dict[str, frozenset[str]] = {
     "tavily": frozenset({"api.tavily.com"}),
     "exa": frozenset({"api.exa.ai"}),
@@ -104,6 +108,17 @@ def _clip_text(value: str, max_chars: int) -> str:
     if len(normalized) <= max_chars:
         return normalized
     return f"{normalized[: max_chars - 1].rstrip()}…"
+
+
+def _truncate_snippet(value: str, max_chars: int = 800) -> str:
+    """Length-cap a snippet body without collapsing whitespace.
+
+    Provider boundaries call this so multi-line content (e.g. Exa highlights
+    joined by ``\\n\\n``) survives, while still bounding prompt budget.
+    """
+    if len(value) <= max_chars:
+        return value
+    return f"{value[: max_chars - 1].rstrip()}…"
 
 
 def _snippet_title(text: str, fallback: str) -> str:
@@ -358,14 +373,31 @@ def _cache_put(query: str, request_config: WebSearchRequestConfig, result: WebSe
     ttl = settings.WEB_SEARCH_CACHE_TTL_SECONDS
     _cache[key] = (time.monotonic() + ttl, result)
     # Evict oldest entries if cache grows too large
-    if len(_cache) > 200:
+    if len(_cache) > _MAX_CACHE_SIZE:
         oldest_key = min(_cache, key=lambda k: _cache[k][0])
         _cache.pop(oldest_key, None)
+
+
+def _get_inflight_lock(cache_key: str) -> asyncio.Lock:
+    """Return a per-key lock to dedup concurrent fetches (cache stampede).
+
+    Locks are popped after `fetch_web_context` finishes, so this dict normally
+    only contains in-flight keys. The cap is a pathological-case safety net for
+    bursts where many distinct keys arrive faster than they finish.
+    """
+    if len(_inflight_locks) >= _MAX_INFLIGHT_LOCKS and cache_key not in _inflight_locks:
+        # Pathological burst: distinct in-flight keys exceeded cap. Clear is
+        # last-resort; concurrent waiters in their own critical section keep
+        # their lock reference (the next setdefault may create a new one for
+        # a duplicate key, sacrificing dedup for that key but never safety).
+        _inflight_locks.clear()
+    return _inflight_locks.setdefault(cache_key, asyncio.Lock())
 
 
 def clear_cache() -> None:
     """Clear the in-memory search cache (for testing)."""
     _cache.clear()
+    _inflight_locks.clear()
 
 
 # ── Tavily Provider ─────────────────────────────────────
@@ -414,8 +446,12 @@ async def _search_tavily(
     for item in data.get("results", []):
         if not isinstance(item, dict):
             continue
-        text = item.get("content", "").strip()
-        url = item.get("url", "").strip()
+        raw_text = item.get("content", "")
+        raw_url = item.get("url", "")
+        if not isinstance(raw_text, str) or not isinstance(raw_url, str):
+            continue
+        text = _truncate_snippet(raw_text.strip())
+        url = _sanitize_url(raw_url.strip())
         if text and url:
             snippets.append(WebSearchSnippet(text=text, source_url=url))
 
@@ -458,8 +494,12 @@ async def _search_searxng(
     for item in data.get("results", []):
         if not isinstance(item, dict):
             continue
-        text = item.get("content", "").strip()
-        url = item.get("url", "").strip()
+        raw_text = item.get("content", "")
+        raw_url = item.get("url", "")
+        if not isinstance(raw_text, str) or not isinstance(raw_url, str):
+            continue
+        text = _truncate_snippet(raw_text.strip())
+        url = _sanitize_url(raw_url.strip())
         if text and url:
             snippets.append(WebSearchSnippet(text=text, source_url=url))
 
@@ -534,8 +574,12 @@ async def _search_exa(
     for item in data.get("results", []):
         if not isinstance(item, dict):
             continue
-        text = _coerce_snippet_text(item)
-        url = str(item.get("url", "")).strip()
+        raw_text = _coerce_snippet_text(item)
+        raw_url = item.get("url", "")
+        if not isinstance(raw_text, str) or not isinstance(raw_url, str):
+            continue
+        text = _truncate_snippet(raw_text.strip())
+        url = _sanitize_url(raw_url.strip())
         if text and url:
             snippets.append(WebSearchSnippet(text=text, source_url=url))
 
@@ -581,8 +625,12 @@ def _parse_xai_structured_snippets(raw_text: str, max_results: int) -> list[WebS
     for item in payload.get("snippets", []):
         if not isinstance(item, dict):
             continue
-        text = str(item.get("text", "")).strip()
-        url = str(item.get("source_url", "")).strip()
+        snippet_text = item.get("text", "")
+        snippet_url = item.get("source_url", "")
+        if not isinstance(snippet_text, str) or not isinstance(snippet_url, str):
+            continue
+        text = _truncate_snippet(snippet_text.strip())
+        url = _sanitize_url(snippet_url.strip())
         if text and url:
             snippets.append(WebSearchSnippet(text=text, source_url=url))
     return snippets[:max_results]
@@ -699,10 +747,7 @@ async def _search_with_provider(
         logger.warning("Unknown web search provider: %s", provider)
         return []
     try:
-        try:
-            return await search_fn(query, request_config)
-        except TypeError:
-            return await search_fn(query)
+        return await search_fn(query, request_config)
     except httpx.TimeoutException:
         logger.warning("Web search timeout (%s): query=%r", provider, query[:80])
         return []
@@ -754,24 +799,45 @@ async def fetch_web_context(
 
     provider = request_config.provider
     if provider == "native":
-        # Native provider detection is V2 scope
+        # Deprecated: `native` is rejected by config validator; this branch only
+        # protects against legacy/monkeypatched runtime overrides (V2 scope).
         logger.info("Native web search provider is V2 — skipping")
         return None
 
-    snippets = await _search_with_provider(provider, query, request_config)
-    if not snippets:
-        logger.info("Web search returned no results for query: %s", query[:60])
-        return None
+    # In-flight de-duplication: if multiple coroutines miss cache concurrently,
+    # only one performs the provider call; the rest wait and reuse the result.
+    cache_key = _cache_key(query, request_config)
+    lock = _get_inflight_lock(cache_key)
+    try:
+        async with lock:
+            # Double-check after acquiring lock — another coroutine may have filled it.
+            cached = _cache_get(query, request_config)
+            if cached is not None:
+                logger.info("Web search cache hit (post-lock) for query: %s", query[:60])
+                return cached
 
-    result = WebSearchResult(
-        query=query,
-        snippets=snippets,
-        provider=provider,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        cached=False,
-    )
+            snippets = await _search_with_provider(provider, query, request_config)
+            if not snippets:
+                logger.info("Web search returned no results for query: %s", query[:60])
+                return None
 
-    _cache_put(query, request_config, result)
+            result = WebSearchResult(
+                query=query,
+                snippets=snippets,
+                provider=provider,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                cached=False,
+            )
+
+            _cache_put(query, request_config, result)
+    finally:
+        # Pop after release so subsequent callers either hit cache (fast path)
+        # or create a fresh lock (next miss). Identity check guards against the
+        # pathological-burst clear in `_get_inflight_lock` having replaced this
+        # entry with a different lock object.
+        if _inflight_locks.get(cache_key) is lock:
+            _inflight_locks.pop(cache_key, None)
+
     logger.info(
         "Web search success: provider=%s, snippets=%d, query=%s",
         provider, len(snippets), query[:60],
@@ -788,7 +854,7 @@ def _sanitize_url(url: str | None, max_chars: int = 300) -> str:
     """
     if not url:
         return ""
-    cleaned = "".join(ch for ch in url if ch >= " " or ch == "\t")
+    cleaned = "".join(ch for ch in url if ch >= " " and ch != "\x7f")
     cleaned = cleaned[:max_chars]
     # Only allow http/https schemes
     if not cleaned.lower().startswith(("http://", "https://")):

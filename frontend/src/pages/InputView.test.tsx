@@ -1318,6 +1318,57 @@ describe('InputView campaign progress', () => {
     expect(getCapabilitiesMock.mock.calls.length).toBe(initialCalls);
   });
 
+  it('strips web search secrets from identity continuity preflight while preserving them in scenario creation', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url;
+      const body = init?.body ? JSON.parse(init.body as string) as Record<string, unknown> : {};
+      if (url.includes('/agents/identities/preflight')) {
+        // Preflight: secrets must NOT be present (data minimization)
+        expect(body).not.toHaveProperty('web_search_api_key');
+        expect(body).not.toHaveProperty('web_search_base_url');
+        expect(body).not.toHaveProperty('web_search_provider');
+        // Non-secret fields are still allowed
+        expect(body.web_search_enabled).toBe(true);
+        return new Response(
+          JSON.stringify({
+            needs_confirmation: false,
+            matches: [],
+            summary: { agent_count: 0, exact_match_count: 0, candidate_count: 0, new_identity_count: 0 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (url.endsWith('/api/scenario')) {
+        // Scenario creation: secrets MUST still be present
+        expect(body.web_search_enabled).toBe(true);
+        expect(body.web_search_api_key).toBe('secret-key');
+        expect(body.web_search_base_url).toBe('https://api.tavily.com/search');
+        expect(body.web_search_provider).toBe('tavily');
+        return new Response(
+          JSON.stringify({ id: 'scenario-1', status: 'pending' }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+
+    // Bypass module-level vi.mock by importing real module via importActual
+    const realClient = await vi.importActual<typeof import('../api/client')>('../api/client');
+    const opts = {
+      question: 'preflight secrets test',
+      webSearchEnabled: true,
+      webSearchProvider: 'tavily' as const,
+      webSearchApiKey: 'secret-key',
+      webSearchBaseUrl: 'https://api.tavily.com/search',
+    };
+
+    await realClient.identityContinuityPreflight(opts);
+    await realClient.createScenario(opts);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    fetchSpy.mockRestore();
+  });
+
   it('sends webSearchEnabled=false when toggle is unchecked', async () => {
     const user = userEvent.setup();
     getCapabilitiesMock.mockResolvedValue({

@@ -2,6 +2,8 @@
    SwarmOracle — TypeScript Interfaces
    ═══════════════════════════════════════════════════════════ */
 
+export type WebSearchFamily = 'polymarket' | 'finance' | 'academic' | 'news_deep';
+
 export interface WebSearchContext {
   query: string;
   snippets: Array<{ text: string; source_url: string }>;

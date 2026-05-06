@@ -14,6 +14,7 @@ import {
   type CreateScenarioOptions,
   type IdentityContinuityMatch,
 } from '../api/client';
+import type { WebSearchFamily } from '../types';
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import { useAgentStore } from '../stores/agentStore';
 import { AgentAttachPanel } from '../components/AgentAttachPanel';
@@ -40,6 +41,7 @@ import {
   useInputCampaignState,
   useSharedChallengePrefill,
 } from '../hooks/useInputViewState';
+import { useWebSearchConfig } from '../hooks/useWebSearchConfig';
 import { useOrgContext } from '../hooks/useOrgContext';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
 import { predictTextareaHeight } from '../lib/textLayout/inputPredict';
@@ -68,14 +70,12 @@ function parseOptionalRuntimeLimit(value: string): number | undefined {
 }
 
 /* ── FE-5: NewSourceToggles (4 source family toggles) ─────── */
-type NewSourceFamily = 'polymarket' | 'finance' | 'academic' | 'news_deep';
-
 interface NewSourceTogglesProps {
   polymarket: boolean;
   finance: boolean;
   academic: boolean;
   newsDeep: boolean;
-  onChange: Record<NewSourceFamily, (next: boolean) => void>;
+  onChange: Record<WebSearchFamily, (next: boolean) => void>;
   disabled?: boolean;
 }
 
@@ -85,7 +85,7 @@ function NewSourceToggleItem({
   onChange,
   disabled,
 }: {
-  family: NewSourceFamily;
+  family: WebSearchFamily;
   checked: boolean;
   onChange: (next: boolean) => void;
   disabled?: boolean;
@@ -198,6 +198,7 @@ export function InputView() {
   const [continuityMatches, setContinuityMatches] = useState<IdentityContinuityMatch[]>([]);
   const [continuityChoices, setContinuityChoices] = useState<Record<string, ContinuityOverride['action']>>({});
   const [continuityError, setContinuityError] = useState<string | null>(null);
+  const [webSearchUrlError, setWebSearchUrlError] = useState<string>('');
   const [pendingLaunch, setPendingLaunch] = useState<PendingSimulationLaunch | null>(null);
   // FE-5: 4 new source toggles (independent state per family)
   const [newSourceTogglePolymarket, setNewSourceTogglePolymarket] = useState(false);
@@ -226,6 +227,24 @@ export function InputView() {
     (event.target as HTMLElement | null)?.blur?.();
   }, [isConfigOpen]);
   const {
+    webSearchEnabled,
+    setWebSearchEnabled,
+    webSearchServerEnabled,
+    setWebSearchServerEnabled,
+    webSearchServerProvider,
+    webSearchMode,
+    setWebSearchMode,
+    webSearchProvider,
+    setWebSearchProvider,
+    webSearchApiKey,
+    setWebSearchApiKey,
+    webSearchBaseUrl,
+    setWebSearchBaseUrl,
+    webSearchAvailable,
+    webSearchStatus,
+    setWebSearchStatus,
+  } = useWebSearchConfig();
+  const {
     showByok,
     setShowByok,
     llmApiKey,
@@ -249,22 +268,9 @@ export function InputView() {
     reasoningEffort,
     setReasoningEffort,
     handleTestConnection,
-    webSearchEnabled,
-    setWebSearchEnabled,
-    webSearchServerEnabled,
-    webSearchServerProvider,
-    webSearchMode,
-    setWebSearchMode,
-    webSearchProvider,
-    setWebSearchProvider,
-    webSearchApiKey,
-    setWebSearchApiKey,
-    webSearchBaseUrl,
-    setWebSearchBaseUrl,
-    webSearchAvailable,
-    webSearchStatus,
-    setWebSearchStatus,
-  } = useInputByokSettings(t);
+  } = useInputByokSettings(t, {
+    onWebSearchServerHint: setWebSearchServerEnabled,
+  });
   const { orgId, setOrgId } = useOrgContext();
   const {
     campaignProfile,
@@ -356,8 +362,8 @@ export function InputView() {
     }
   }, [webSearchProvider]);
   const webSearchUsesCustomOverride = webSearchEnabled && webSearchMode === 'custom_override';
-  const selectedWebSearchFamilies = useMemo<NewSourceFamily[]>(() => {
-    const nextFamilies: NewSourceFamily[] = [];
+  const selectedWebSearchFamilies = useMemo<WebSearchFamily[]>(() => {
+    const nextFamilies: WebSearchFamily[] = [];
     if (newSourceTogglePolymarket) nextFamilies.push('polymarket');
     if (newSourceToggleFinance) nextFamilies.push('finance');
     if (newSourceToggleAcademic) nextFamilies.push('academic');
@@ -751,11 +757,26 @@ export function InputView() {
     const trimmed = launch.nextQuestion.trim();
     if (!trimmed || isSubmitting) return;
     if (isSimulationBudgetBlocked) return;
+    setWebSearchUrlError('');
     const byokValidation = validateByok({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
     if (!byokValidation.valid) {
       setTestStatus('fail');
       setTestError(t('conversation.error.byok_invalid'));
       return;
+    }
+    if (webSearchUsesCustomOverride) {
+      const trimmedBase = webSearchBaseUrl.trim();
+      if (trimmedBase) {
+        try {
+          const parsed = new URL(trimmedBase);
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            throw new Error('invalid scheme');
+          }
+        } catch {
+          setWebSearchUrlError(t('home.web_search_base_url_invalid'));
+          return;
+        }
+      }
     }
 
     if (llmApiKey.trim() && !hasFreshProbe) {
@@ -1194,10 +1215,11 @@ export function InputView() {
                       }
                     }}
                     disabled={isSubmitting}
+                    aria-describedby="ws-hint"
                   />
                   <span className="web-search-toggle__copy">
                     <strong>{t('home.web_search_toggle')}</strong>
-                    <span>{t('home.web_search_hint')}</span>
+                    <span id="ws-hint">{t('home.web_search_hint')}</span>
                   </span>
                 </label>
                 {webSearchStatus !== 'idle' && (
@@ -1308,8 +1330,19 @@ export function InputView() {
                               onChange={(e) => setWebSearchBaseUrl(e.target.value)}
                               placeholder={webSearchBaseUrlPlaceholder}
                               disabled={isSubmitting}
+                              aria-invalid={!!webSearchUrlError}
+                              aria-describedby={webSearchUrlError ? 'web-search-base-url-error' : undefined}
                             />
                             <span className="web-search-field-help">{t('home.web_search_base_url_hint')}</span>
+                            {webSearchUrlError && (
+                              <span
+                                id="web-search-base-url-error"
+                                className="text-xs text-red-500 mt-1"
+                                role="alert"
+                              >
+                                {webSearchUrlError}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>

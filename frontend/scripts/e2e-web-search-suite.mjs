@@ -31,6 +31,36 @@ function writeJson(filePath, data) {
   fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
+const SENSITIVE_KEY_FIELDS = new Set([
+  "web_search_api_key",
+  "api_key",
+  "apiKey",
+  "llm_api_key",
+  "llmApiKey",
+]);
+
+function redactSensitiveValue(value) {
+  if (typeof value !== "string" || value.length === 0) return "[REDACTED]";
+  if (value.length <= 4) return "[REDACTED]";
+  return `***${value.slice(-4)}`;
+}
+
+function redactScenarioRequest(payload) {
+  if (payload === null || typeof payload !== "object") return payload;
+  if (Array.isArray(payload)) return payload.map((item) => redactScenarioRequest(item));
+  const out = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (SENSITIVE_KEY_FIELDS.has(key)) {
+      out[key] = redactSensitiveValue(value);
+    } else if (value && typeof value === "object") {
+      out[key] = redactScenarioRequest(value);
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
@@ -183,7 +213,7 @@ async function runWebSearchFlow(args) {
       question: args.question,
       finalUrl: page.url(),
       simulationStatus: simulationPayload?.scenario?.status ?? simulationPayload?.scenario?.phase ?? "unknown",
-      capturedScenarioRequest,
+      capturedScenarioRequest: redactScenarioRequest(capturedScenarioRequest),
       outputDir,
     };
     writeJson(path.join(outputDir, "summary.json"), summary);

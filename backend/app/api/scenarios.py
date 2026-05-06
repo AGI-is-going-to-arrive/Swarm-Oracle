@@ -392,7 +392,7 @@ def _build_web_search_server_hint() -> dict:
         return info
     provider = _cfg.WEB_SEARCH_PROVIDER
     if provider == "native":
-        return {**info, "method": "native", "provider": "native"}
+        return {**info, "provider": "native"}
     if provider in _PROVIDER_MAP:
         has_key = provider in ("searxng",) or bool(_cfg.WEB_SEARCH_API_KEY)
         return {

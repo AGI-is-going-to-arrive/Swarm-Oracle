@@ -122,14 +122,14 @@ docker compose up backend
 
 | 服务 | 文件 | 职责 |
 |------|------|------|
-| ending_room_service | `ending_room_service/` (包) | 密室/圆桌编排核心，拆分为 _utils/_participants/_threads/_content |
+| ending_room_service | `ending_room_service/` (包) | 密室/圆桌编排核心，拆分为 _utils/_participants/_threads/_content；Oracle 文案采用 generation-first 3-tier fallback（纯生成→rewrite→静态模板），四种房间类型均注入 scenario_question + transcript_quotes + factual_guardrail |
 | simulator | `simulator.py` | 多代理模拟引擎，含 4 个 Phase 3 hook：causal/factions(+WS 事件发射)/checkpoint/identity lifecycle (均受 `FEATURE_*` gate；identity hook 通过 `asyncio.to_thread` 非阻塞执行) |
 | debate | `debate.py` | 辩论引擎，含 argument map 抽取+verdict linking hook (受 `FEATURE_ARGUMENT_MAP` gate) |
 | llm_client | `llm_client.py` | LLM 调用封装 (JSON/流式/探测)，BYOK URL allowlist + scheme 校验，不可信文本 guardrail，content=null 防御 |
 | campaign | `campaign.py` | Campaign 计算 |
 | memory | `memory.py` | Agent 记忆管理与压缩 |
 | blackboard | `blackboard.py` | 黑板模式通信 |
-| web_context | `web_context.py` | Web 搜索增强 (Tavily/SearXNG 提供商, TTL 缓存, 上下文格式化) |
+| web_context | `web_context.py` | Web 搜索增强 (Tavily/SearXNG/Exa/xAI 提供商, TTL 缓存 + stampede 去重, snippet 规范化 `_truncate_snippet`/`_sanitize_url`/isinstance 防护, 上下文格式化) |
 | narrator | `narrator.py` | 叙事生成 |
 | scoring | `scoring.py` | 预测评分 |
 | vector_store | `vector_store.py` | ChromaDB 向量检索 (含 identity memory 双层存储，identity memory 写入经 `identity:{user_id}` 粒度串行化锁保护) |
@@ -275,6 +275,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-04-30 | Oracle 文案去模板化 | `_content.py` 新增 3-tier fallback 架构：Tier 1 纯生成（`_build_oracle_generation_prompt`，temp=0.82，不含 anchor copy）→ Tier 2 rewrite（`_build_oracle_rewrite_prompt`，temp=0.78）→ Tier 3 静态模板；新增 `_build_character_identity_block`（角色名/职位/人设/情绪/立场/分支，全部经 `sanitize_untrusted_text` 防注入）+ `_build_factual_guardrail`（从 branch_card 提取 worldline_title/key_hinge/outcome_insight/key_moments 轻量事实）；`__init__.py` 新增 `_load_scenario_question` + `_load_branch_transcript_excerpts`（每分支最近 5 条消息，`.select_from(Round)` 避免 SQLite 列名歧义），四种房间类型（WORLDLINE_ROUNDTABLE/ENDING_CHAMBER/ONE_MOVE_ONLY/CROSSLINE_GALLERY）全部接入 factual_guardrail；`_threads.py` follow-up 路径同步加载 scenario_question + transcript_quotes；`_stream_oracle_copy` 改用生成 prompt（温度 0.55→0.75，reasoning_effort low→medium）；`_normalize_oracle_generated_content` 字符上限 520→800；`memory.py` CROWD persona 双层包装加 `startswith("【")` 哨兵防止二次包裹 + CORE/IMPORTANT 层 role/persona 同步 `format_untrusted_text_block`；`simulator.py` raw_text 初始化前移 + 异常保留 Pass-1 输出；`test_ending_room_service.py` 补 `llm_call_json` mock（3-tier 架构 Tier 2 新增依赖）；89 ending room tests passed，ruff 0 errors |
 | 2026-04-25 | faction-timeline branch 校验 + causal_graph 类型告警清零 | `graphs.py` faction-timeline 端点加 branch 存在 + cross-scenario 校验，缺失或跨 scenario 返回 404 `BRANCH_NOT_FOUND`；`test_factions.py` 新增 4 条边界测试（不存在 branch / 跨 scenario / 缺 query 422 / 空数据 200）；`causal_graph.py` SQLModel 类型告警全清零（`from sqlmodel import col` 包装 10 处 desc/in_ 列属性访问 + dict 不变性显式标注 4 处 + `_collect_available_branches` 形参改 `Sequence[GraphNode]` + 3 处 Optional member access 加 `assert ... is not None`），edge evidence presence check 由 `or` 链改 `is not None` 链，避免 `source_round_number=0` 被 falsy 漏掉；`test_causal_graph.py` 加 `source_round_number=0` 回归测试 + MockMessage 6 处 None 默认值类型注解（132/387/393/509/510/521）；fresh backend 全量 `2328 passed, 2 skipped`；ruff + pyright（14 errors → 0）通过 |
 | 2026-04-19 | quota + source-family contract 收口 | `conversation_service.py` 修正 quota ledger `Retry-After` 向下取整和多命中过早返回；`CreateScenarioRequest` 新增 `web_search_families` 校验/去重；`web_context.py` 当前会把同一份 live snippets 投影成四个 family envelope，并在 `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` 时让 `polymarket` 显式保持 `empty + geo_gated`；`helpers.py` 白名单保留 `family_context`；新增/扩展 `test_agent_conversation.py`、`test_web_context*.py`、`test_web_search_contract.py`、`test_contract_freeze.py`；fresh backend 全量 `2264 passed, 2 skipped` |
 | 2026-04-18 | graph-playability-upgrade BE 交付 (Layer 1-4) | BE-1 migration 022 (knowledge-graph nodes/edges + extended node type enum)；BE-2 `DELETE /api/scenario/{id}` (级联清理 branches/rounds/messages/interventions/replay_artifacts + ownership check)；BE-3 `POST /api/conversation` 节点对话 SSE 流式端点 (turn_error 6 种 code 规范 + Draft 降级 fallback)；BE-4 `GET /api/scenario/{id}/replay-trace` 回放帧序列 (agent queue + timeline markers)；BE-5 `/api/scenario/{id}/web-context` 扩展至 4-family providers (news_deep/wikidata/polymarket/rsshub，region 字段 + 429 Retry-After)；BE-6 `/api/capabilities` 新增 knowledge-graph/timeline-galaxy/replay-trace/agent-conversation/new-source-ingestion keys + providers 子级结构；新增 `conversation_service.py`/`replay.py` 扩展/`web_context.py` provider 抽象；QA-2 backend 侧 evidence_card flow 回归测试；新 tests: test_knowledge_graph_endpoints.py / test_conversation_service.py / test_replay_trace_endpoint.py / test_web_context_providers.py / test_evidence_card_flow.py |
