@@ -1537,20 +1537,20 @@
     },
     "input_source": {
       "polymarket": {
-        "label": "Polymarket markets",
-        "tooltip": "Include real-world prediction-market odds"
+        "label": "Prediction markets",
+        "tooltip": "Search Polymarket, Metaculus & other prediction markets"
       },
       "finance": {
-        "label": "Finance indicators",
-        "tooltip": "Include financial + macro market data"
+        "label": "Finance",
+        "tooltip": "Search Bloomberg, Reuters, CNBC & financial sites"
       },
       "academic": {
-        "label": "Academic papers",
-        "tooltip": "Include peer-reviewed scientific literature"
+        "label": "Academic",
+        "tooltip": "Search arXiv, Google Scholar, PubMed & academic platforms"
       },
       "news_deep": {
-        "label": "Deep news",
-        "tooltip": "Include long-tail investigative news"
+        "label": "Investigative",
+        "tooltip": "Search AP, BBC, NYT, ProPublica & investigative sources"
       },
       "disabled_tooltip": "This data source is not enabled on the server."
     },

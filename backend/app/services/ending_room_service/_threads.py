@@ -819,6 +819,14 @@ async def _append_followup_turns_with_retry(
 
     assert prepared_user_turn is not None
     assert prepared_room is not None
+
+    from app.services.ending_room_service import (
+        _load_branch_transcript_excerpts,
+        _load_scenario_question,
+    )
+    _followup_scenario_question = _load_scenario_question(prepared_room.scenario_id)
+    _followup_transcripts = _load_branch_transcript_excerpts(prepared_room.scenario_id)
+
     await _broadcast(prepared_user_turn["room_id"], ws_callback, {
         "type": "ending_room_turn_commit",
         "data": prepared_user_turn,
@@ -885,6 +893,10 @@ async def _append_followup_turns_with_retry(
                         context_hint=plan.context_hint,
                         purpose=f"oracle_followup_stream_{plan.interaction_mode.value}",
                         on_delta=_on_delta,
+                        scenario_question=_followup_scenario_question,
+                        transcript_quotes=_followup_transcripts.get(
+                            plan.participant.source_branch_id or "", []
+                        ),
                     )
                     if chunk_index > 0:
                         await asyncio.sleep(_ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS)
@@ -914,6 +926,10 @@ async def _append_followup_turns_with_retry(
                     recent_lines=recent_lines,
                     context_hint=plan.context_hint,
                     purpose=f"oracle_followup_{plan.interaction_mode.value}",
+                    scenario_question=_followup_scenario_question,
+                    transcript_quotes=_followup_transcripts.get(
+                        plan.participant.source_branch_id or "", []
+                    ),
                 )
                 generated_content = (
                     _sanitize_oracle_visible_text(generated_content).strip()

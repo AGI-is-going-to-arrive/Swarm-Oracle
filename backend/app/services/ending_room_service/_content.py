@@ -1491,6 +1491,8 @@ def _oracle_context_digest(
     participant: EndingRoomParticipant,
     user_content: str | None = None,
     context_hint: str | None = None,
+    scenario_question: str | None = None,
+    transcript_quotes: list[str] | None = None,
 ) -> str:
     lines = [
         f"room_type={room.room_type.value}",
@@ -1502,6 +1504,11 @@ def _oracle_context_digest(
         f"scope={_oracle_scope_notice(room)}",
     ]
     snapshot = participant.persona_snapshot_json or {}
+    agent_emotion = sanitize_untrusted_text(
+        str(snapshot.get("agent_emotion") or ""), max_chars=40
+    )
+    if agent_emotion:
+        lines.append(f"agent_emotion={agent_emotion}")
     branch_title = _oracle_visible_text(snapshot.get("branch_title"), language=room.language, limit=40)  # noqa: E501
     if branch_title:
         lines.append(f"branch_title={branch_title}")
@@ -1513,8 +1520,23 @@ def _oracle_context_digest(
         lines.append(f"last_round_spoken={snapshot['last_round_spoken']}")
     if snapshot.get("key_moment_hits") is not None:
         lines.append(f"key_moment_hits={snapshot['key_moment_hits']}")
+    if scenario_question:
+        lines.append(
+            f"scenario_question={sanitize_untrusted_text(scenario_question, max_chars=300)}"
+        )
     if user_content:
         lines.append(f"user_question={sanitize_untrusted_text(user_content, max_chars=280)}")
+    if transcript_quotes:
+        quotes_text = "\n".join(
+            sanitize_untrusted_text(q, max_chars=200) for q in transcript_quotes[:5]
+        )
+        lines.append(
+            format_untrusted_text_block(
+                "Simulation Transcript Excerpts",
+                quotes_text,
+                max_chars=1200,
+            )
+        )
     if context_hint:
         lines.append(
             format_untrusted_text_block(
@@ -1686,7 +1708,7 @@ def _strip_oracle_reasoning_prefix(text: str) -> str:
     return cleaned
 
 
-def _normalize_oracle_generated_content(text: str, *, fallback: str, max_chars: int = 520) -> str:
+def _normalize_oracle_generated_content(text: str, *, fallback: str, max_chars: int = 800) -> str:
     normalized = sanitize_untrusted_text(
         _strip_oracle_reasoning_prefix(text),
         max_chars=max_chars,
@@ -1714,6 +1736,192 @@ def _strip_oracle_scope_boilerplate(text: str, *, language: str) -> str:
         cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned
+
+
+def _build_oracle_generation_prompt(
+    *,
+    room: EndingRoom,
+    participant: EndingRoomParticipant,
+    phase: EndingRoomPhase,
+    scenario_question: str | None = None,
+    transcript_quotes: list[str] | None = None,
+    user_content: str | None = None,
+    thread_mode: EndingRoomThreadMode | None = None,
+    interaction_mode: EndingRoomInteractionMode | None = None,
+    recent_lines: list[str] | None = None,
+    context_hint: str | None = None,
+    factual_guardrail: str | None = None,
+    output_json: bool = True,
+) -> str:
+    """Build a generation-first prompt that leads with character identity and scenario context.
+
+    Unlike the rewrite prompt, this does NOT include anchor copy as a central reference.
+    Instead, character persona + scenario question + simulation transcript drive the output.
+    A lightweight factual guardrail (key facts only) replaces the full template.
+    """
+    snapshot = participant.persona_snapshot_json or {}
+
+    task_line = (
+        "Generate an original spoken line for this character at this Oracle Chambers session. "
+        "You ARE this character — speak from their lived experience, drawing on their history, "
+        "emotions, and specific knowledge of what happened in the simulation."
+        if user_content is None
+        else "Generate an original follow-up reply as this character. "
+        "Respond directly to the user's question, drawing on your character's unique perspective "
+        "and specific knowledge of what happened."
+    )
+    structural_note = ""
+    if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
+        structural_note = (
+            "Answer the user's question in the first sentence. "
+            "Then pin one hinge and one cost. Do not spend the first sentence on self-introduction."
+        )
+    elif interaction_mode == EndingRoomInteractionMode.ALL_PRESENT:
+        structural_note = (
+            "Add only one distinct angle. "
+            "Do not summarize the room or echo the previous speaker's cadence."
+        )
+    elif interaction_mode == EndingRoomInteractionMode.ARCHIVIST_ROUTE:
+        structural_note = (
+            "The Archivist should frame the hinge and route cleanly; "
+            "other speakers should answer the hinge directly."
+        )
+    elif interaction_mode == EndingRoomInteractionMode.EVIDENCE_CARD:
+        structural_note = (
+            "Present evidence from a parallel worldline. "
+            "Open with the key difference this evidence reveals. "
+            "Explain what the cited evidence means for the current discussion."
+        )
+    elif interaction_mode == EndingRoomInteractionMode.EPILOGUE:
+        structural_note = (
+            "Extend the story naturally from where the main narrative ended. "
+            "Focus on consequences, aftershocks, or unresolved threads."
+        )
+    phase_note = ""
+    if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE and phase == EndingRoomPhase.OPENING:
+        phase_note = (
+            "For a roundtable opening, start with the hinge or the cost immediately. "
+            "Avoid stock openers like '我代表《...》发言' / 'I speak for...'. "
+        )
+    elif room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE and phase == EndingRoomPhase.VERDICT:
+        phase_note = (
+            "Deliver an evaluative verdict: identify the core disagreement, "
+            "assess which arguments have evidence, and give a clear judgment."
+        )
+    output_hint = (
+        "Keep the same language as the context. Output strict JSON only: {\"content\":\"...\"}"
+        if output_json
+        else "Keep the same language as the context. Output plain text only with no JSON, bullets, or labels."  # noqa: E501
+    )
+    variant = _oracle_role_voice_variant(
+        str(snapshot.get("agent_role") or ""),
+        str(snapshot.get("bio_short") or snapshot.get("agent_persona") or ""),
+    )
+    vocab_hint = _oracle_vocabulary_hints(
+        participant.role_slot, variant, room.language, snapshot
+    )
+    vocab_line = f"Persona vocabulary: {vocab_hint}\n" if vocab_hint else ""
+
+    character_block = _build_character_identity_block(participant)
+
+    guardrail_section = ""
+    if factual_guardrail:
+        guardrail_section = (
+            "\nFactual guardrail (key facts only — do NOT paraphrase this, "
+            "just ensure your original speech is consistent with these facts):\n"
+            f"{format_untrusted_text_block('Key Facts', factual_guardrail, max_chars=600)}\n"
+        )
+
+    return (
+        f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
+        "You are generating live Oracle Chambers dialogue for SwarmOracle.\n"
+        f"{task_line}\n\n"
+        f"{character_block}\n\n"
+        f"Target voice: {_oracle_voice_brief(room, participant=participant, phase=phase, thread_mode=thread_mode, interaction_mode=interaction_mode)}\n"  # noqa: E501
+        f"{vocab_line}"
+        "Hard rules:\n"
+        "- You ARE this character — draw on their role, persona, emotional state, and stance\n"
+        "- Reference the original scenario question and how this branch's events connect to it\n"
+        "- Use specific names, events, numbers, and turning points from the simulation\n"
+        "- Sound like a real person talking at a table, not an AI writing a report\n"
+        "- Vary sentence structure — mix short decisive statements with longer explanations\n"
+        "- No rhetorical questions, no parallel sentence structures, no listicle patterns\n"
+        "- In roundtables, each speaker must sound noticeably different\n"
+        "- Reference what other participants said by name — react to their specific points\n"
+        "- Write as if speaking aloud: contractions OK, sentence fragments OK, mid-thought pivots OK\n"  # noqa: E501
+        "- Keep it compact: one short paragraph, usually 2-4 sentences\n"
+        f"{_oracle_banned_process_phrases(room.language)}"
+        f"{structural_note}\n"
+        f"{phase_note}\n"
+        f"{output_hint}\n\n"
+        f"{format_untrusted_text_block('Context', _oracle_context_digest(room, participant=participant, user_content=user_content, context_hint=context_hint, scenario_question=scenario_question, transcript_quotes=transcript_quotes), max_chars=3000)}\n"  # noqa: E501
+        f"{guardrail_section}"
+        f"{format_untrusted_text_block('Recent Lines To Avoid Mimicking', _oracle_recent_lines_digest(recent_lines), max_chars=1200) if recent_lines else ''}\n"  # noqa: E501
+        f"phase={phase.value}\n"
+        f"thread_mode={(thread_mode.value if thread_mode is not None else 'room')}\n"
+        f"scope_notice={_oracle_scope_notice(room, thread_mode=thread_mode)}\n"
+    )
+
+
+def _build_character_identity_block(
+    participant: EndingRoomParticipant,
+) -> str:
+    snapshot = participant.persona_snapshot_json or {}
+    lines = [f"Character: {sanitize_untrusted_text(participant.display_name, max_chars=80)}"]
+    role = sanitize_untrusted_text(str(snapshot.get("agent_role") or ""), max_chars=80)
+    if role:
+        lines.append(f"Role: {role}")
+    persona = sanitize_untrusted_text(
+        str(snapshot.get("bio_short") or snapshot.get("agent_persona") or ""),
+        max_chars=180,
+    )
+    if persona:
+        lines.append(f"Persona: {persona}")
+    emotion = sanitize_untrusted_text(
+        str(snapshot.get("agent_emotion") or ""), max_chars=40
+    )
+    if emotion:
+        lines.append(f"Current emotion: {emotion}")
+    stance = sanitize_untrusted_text(
+        str(snapshot.get("agent_stance") or ""), max_chars=120
+    )
+    if stance:
+        lines.append(f"Stance: {stance}")
+    branch_title = sanitize_untrusted_text(
+        str(snapshot.get("branch_title") or ""), max_chars=60
+    )
+    if branch_title:
+        lines.append(f"Representing worldline: {branch_title}")
+    return "\n".join(lines)
+
+
+def _build_factual_guardrail(
+    branch_card: dict[str, Any],
+    *,
+    participant: EndingRoomParticipant | None = None,
+    language: str,
+) -> str:
+    """Extract lightweight factual elements for generation guardrail."""
+    title = _oracle_visible_text(
+        branch_card.get("title"), language=language, limit=40
+    ) or ("当前世界线" if language == "zh" else "this ending")
+    hook = _resolve_roundtable_hook(
+        branch_card, participant=participant, language=language
+    )
+    insight = _oracle_visible_clause(
+        branch_card.get("insight"), language=language, limit=72
+    )
+    key_moments = branch_card.get("key_moments") or []
+    lines = [f"worldline_title={title}", f"key_hinge={hook}"]
+    if insight:
+        lines.append(f"outcome_insight={insight}")
+    for i, moment in enumerate(key_moments[:3]):
+        if isinstance(moment, str) and moment.strip():
+            lines.append(
+                f"key_moment_{i + 1}="
+                f"{sanitize_untrusted_text(moment, max_chars=100)}"
+            )
+    return "\n".join(lines)
 
 
 def _build_oracle_rewrite_prompt(
@@ -1854,10 +2062,63 @@ async def _maybe_rewrite_oracle_copy(
     context_hint: str | None = None,
     purpose: str,
     streaming_first: bool = False,
+    scenario_question: str | None = None,
+    transcript_quotes: list[str] | None = None,
+    factual_guardrail: str | None = None,
 ) -> str:
     if not settings.ORACLE_CHAMBERS_USE_LLM:
         return anchor_copy
-    json_prompt = _build_oracle_rewrite_prompt(
+
+    # --- Tier 1: generation-first (no anchor copy in prompt) ---
+    gen_prompt = _build_oracle_generation_prompt(
+        room=room,
+        participant=participant,
+        phase=phase,
+        scenario_question=scenario_question,
+        transcript_quotes=transcript_quotes,
+        user_content=user_content,
+        thread_mode=thread_mode,
+        interaction_mode=interaction_mode,
+        recent_lines=recent_lines,
+        context_hint=context_hint,
+        factual_guardrail=factual_guardrail,
+        output_json=True,
+    )
+    try:
+        with llm_request_scope(quota_key=None, purpose=purpose):
+            import app.services.ending_room_service as _pkg
+            structured_call = (
+                _pkg.llm_call_json_with_stream_fallback
+                if streaming_first
+                else _pkg.llm_call_json
+            )
+            result = await asyncio.wait_for(
+                structured_call(
+                    gen_prompt,
+                    reasoning_effort="medium",
+                    temperature=0.82,
+                    fallback_mode="agent_message",
+                ),
+                timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
+            )
+        polished = _strip_oracle_scope_boilerplate(
+            str(result.get("content") or ""),
+            language=room.language,
+        )
+        content = _normalize_oracle_generated_content(
+            polished, fallback="",
+        )
+        if content:
+            return content
+    except Exception as gen_exc:
+        logger.info(
+            "Oracle generation-first failed for %s, falling back to rewrite: %s",
+            purpose,
+            gen_exc,
+        )
+
+    # --- Tier 2: rewrite fallback (anchor copy as reference) ---
+    rewrite_prompt = _build_oracle_rewrite_prompt(
         room=room,
         participant=participant,
         phase=phase,
@@ -1869,7 +2130,7 @@ async def _maybe_rewrite_oracle_copy(
         context_hint=context_hint,
         output_json=True,
     )
-    plain_text_prompt = _build_oracle_rewrite_prompt(
+    plain_rewrite_prompt = _build_oracle_rewrite_prompt(
         room=room,
         participant=participant,
         phase=phase,
@@ -1882,16 +2143,11 @@ async def _maybe_rewrite_oracle_copy(
         output_json=False,
     )
     try:
-        with llm_request_scope(quota_key=None, purpose=purpose):
+        with llm_request_scope(quota_key=None, purpose=f"{purpose}:rewrite"):
             import app.services.ending_room_service as _pkg
-            structured_call = (
-                _pkg.llm_call_json_with_stream_fallback
-                if streaming_first
-                else _pkg.llm_call_json
-            )
             result = await asyncio.wait_for(
-                structured_call(
-                    json_prompt,
+                _pkg.llm_call_json(
+                    rewrite_prompt,
                     reasoning_effort="medium",
                     temperature=0.78,
                     fallback_mode="agent_message",
@@ -1903,17 +2159,18 @@ async def _maybe_rewrite_oracle_copy(
             language=room.language,
         )
         content = _normalize_oracle_generated_content(
-            polished,
-            fallback=anchor_copy,
+            polished, fallback=anchor_copy,
         )
         return content or anchor_copy
-    except Exception as structured_exc:
+    except Exception as rewrite_exc:
         try:
-            with llm_request_scope(quota_key=None, purpose=f"{purpose}:plain_text_retry"):
+            with llm_request_scope(
+                quota_key=None, purpose=f"{purpose}:plain_text_retry"
+            ):
                 import app.services.ending_room_service as _pkg
                 plain_result = await asyncio.wait_for(
                     _pkg.llm_call(
-                        plain_text_prompt,
+                        plain_rewrite_prompt,
                         reasoning_effort="low",
                         temperature=0.65,
                     ),
@@ -1924,24 +2181,25 @@ async def _maybe_rewrite_oracle_copy(
                 language=room.language,
             )
             content = _normalize_oracle_generated_content(
-                polished,
-                fallback=anchor_copy,
+                polished, fallback=anchor_copy,
             )
             return content or anchor_copy
         except Exception as plain_exc:
-            _effort_err_str = str(plain_exc).lower()
+            _effort_err = str(plain_exc).lower()
             _is_effort_unsupported = (
-                "reasoning_effort" in _effort_err_str
-                or ("reasoning" in _effort_err_str and "400" in str(plain_exc))
-                or "unsupported parameter" in _effort_err_str
+                "reasoning_effort" in _effort_err
+                or ("reasoning" in _effort_err and "400" in str(plain_exc))
+                or "unsupported parameter" in _effort_err
             )
             if _is_effort_unsupported:
                 try:
-                    with llm_request_scope(quota_key=None, purpose=f"{purpose}:no_effort_retry"):
-                        import app.services.ending_room_service as _pkg_retry
+                    with llm_request_scope(
+                        quota_key=None, purpose=f"{purpose}:no_effort_retry"
+                    ):
+                        import app.services.ending_room_service as _pkg_r
                         no_effort_result = await asyncio.wait_for(
-                            _pkg_retry.llm_call(
-                                plain_text_prompt,
+                            _pkg_r.llm_call(
+                                plain_rewrite_prompt,
                                 reasoning_effort=None,
                                 temperature=0.65,
                             ),
@@ -1952,8 +2210,7 @@ async def _maybe_rewrite_oracle_copy(
                         language=room.language,
                     )
                     content = _normalize_oracle_generated_content(
-                        polished,
-                        fallback=anchor_copy,
+                        polished, fallback=anchor_copy,
                     )
                     return content or anchor_copy
                 except Exception as no_effort_exc:
@@ -1964,9 +2221,9 @@ async def _maybe_rewrite_oracle_copy(
                     )
             else:
                 logger.warning(
-                    "Oracle Chambers LLM fallback for %s: structured=%s ; plain=%s",
+                    "Oracle Chambers LLM all tiers failed for %s: rewrite=%s ; plain=%s",
                     purpose,
-                    structured_exc,
+                    rewrite_exc,
                     plain_exc,
                 )
             return anchor_copy
@@ -2005,12 +2262,15 @@ async def _stream_oracle_copy(
     context_hint: str | None = None,
     purpose: str,
     on_delta: Callable[[str], Awaitable[None]] | None = None,
+    scenario_question: str | None = None,
+    transcript_quotes: list[str] | None = None,
 ) -> str:
-    prompt = _build_oracle_rewrite_prompt(
+    prompt = _build_oracle_generation_prompt(
         room=room,
         participant=participant,
         phase=phase,
-        anchor_copy=anchor_copy,
+        scenario_question=scenario_question,
+        transcript_quotes=transcript_quotes,
         user_content=user_content,
         thread_mode=thread_mode,
         interaction_mode=interaction_mode,
@@ -2027,8 +2287,8 @@ async def _stream_oracle_copy(
             import app.services.ending_room_service as _pkg
             stream_iter = _pkg.llm_call_stream(
                 prompt,
-                reasoning_effort="low",
-                temperature=0.55,
+                reasoning_effort="medium",
+                temperature=0.75,
                 timeout=_ORACLE_FOLLOWUP_STREAM_TIMEOUT_SECONDS,
             ).__aiter__()
             while True:

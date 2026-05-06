@@ -142,24 +142,95 @@ def _stable_family_item_id(family: str, query: str, index: int, url: str, text: 
     return f"{family[:3]}-{digest[:10]}"
 
 
-def build_source_family_context(
-    result: WebSearchResult,
-    *,
-    selected_families: list[str] | None = None,
-) -> dict[str, dict[str, object]]:
-    """Project generic live web-search snippets into the four source cards.
+FAMILY_DOMAIN_FILTERS: dict[str, list[str]] = {
+    "polymarket": [
+        "polymarket.com",
+        "metaculus.com",
+        "predictit.org",
+        "manifold.markets",
+    ],
+    "finance": [
+        "bloomberg.com",
+        "reuters.com",
+        "ft.com",
+        "wsj.com",
+        "cnbc.com",
+        "finance.yahoo.com",
+        "seekingalpha.com",
+    ],
+    "academic": [
+        "arxiv.org",
+        "scholar.google.com",
+        "semanticscholar.org",
+        "pubmed.ncbi.nlm.nih.gov",
+        "nature.com",
+        "science.org",
+        "ieee.org",
+    ],
+    "news_deep": [
+        "apnews.com",
+        "bbc.com",
+        "nytimes.com",
+        "theguardian.com",
+        "propublica.org",
+        "theintercept.com",
+        "bellingcat.com",
+    ],
+}
 
-    This keeps FE/BE contracts grounded in scenario-backed live data without
-    introducing a second persistence path. The cards remain projections of the
-    same real query result, not independent external provider integrations.
-    """
+
+def _snippets_to_family_items(
+    family: str,
+    query: str,
+    snippets: list[WebSearchSnippet],
+    max_items: int = 5,
+) -> list[dict[str, object]]:
+    usable = [s for s in snippets if s.text.strip()][:max_items]
+    items: list[dict[str, object]] = []
+    for index, snippet in enumerate(usable, start=1):
+        item_id = _stable_family_item_id(family, query, index, snippet.source_url, snippet.text)
+        url = _sanitize_url(snippet.source_url)
+        if family == "polymarket":
+            items.append({
+                "id": item_id,
+                "question": _snippet_title(snippet.text, query),
+                "url": url,
+            })
+        elif family == "finance":
+            items.append({
+                "id": item_id,
+                "title": _snippet_title(snippet.text, query),
+                "summary": _clip_text(snippet.text, 180),
+                "source": _snippet_source_label(snippet.source_url),
+                "url": url,
+            })
+        elif family == "academic":
+            items.append({
+                "id": item_id,
+                "title": _snippet_title(snippet.text, query),
+                "abstract": _clip_text(snippet.text, 220),
+                "url": url,
+            })
+        elif family == "news_deep":
+            items.append({
+                "id": item_id,
+                "title": _snippet_title(snippet.text, query),
+                "description": _clip_text(snippet.text, 220),
+                "source": _snippet_source_label(snippet.source_url),
+                "url": url,
+            })
+    return items
+
+
+async def fetch_family_context(
+    query: str,
+    selected_families: list[str],
+    request_config: WebSearchRequestConfig | None = None,
+) -> dict[str, dict[str, object]]:
+    """Run per-family domain-filtered searches and return structured results."""
     polymarket_geo_gated = settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST != "us"
-    selected = set(selected_families or [])
-    usable_snippets = [
-        snippet
-        for snippet in result.snippets
-        if snippet.text.strip()
-    ]
+    provider = request_config.provider if request_config else settings.WEB_SEARCH_PROVIDER
+
     family_context: dict[str, dict[str, object]] = {
         "polymarket": {
             "state": "empty",
@@ -167,96 +238,71 @@ def build_source_family_context(
             "geo_gated": polymarket_geo_gated,
             "items": [],
         },
-        "finance": {
-            "state": "empty",
-            "items": [],
-        },
-        "academic": {
-            "state": "empty",
-            "items": [],
-        },
-        "news_deep": {
-            "state": "empty",
-            "items": [],
-        },
+        "finance": {"state": "empty", "items": []},
+        "academic": {"state": "empty", "items": []},
+        "news_deep": {"state": "empty", "items": []},
     }
 
-    polymarket_items = [
-        {
-            "id": _stable_family_item_id(
-                "polymarket",
-                result.query,
-                index,
-                snippet.source_url,
-                snippet.text,
-            ),
-            "question": _snippet_title(snippet.text, result.query),
-            "url": _sanitize_url(snippet.source_url),
-        }
-        for index, snippet in enumerate(usable_snippets[:2], start=1)
+    families_to_search = [
+        f for f in selected_families
+        if f in FAMILY_DOMAIN_FILTERS
+        and not (f == "polymarket" and polymarket_geo_gated)
     ]
-    if "polymarket" in selected and not polymarket_geo_gated and polymarket_items:
-        family_context["polymarket"]["state"] = "ready"
-        family_context["polymarket"]["items"] = polymarket_items
+    if not families_to_search:
+        return family_context
 
-    finance_items = [
-        {
-            "id": _stable_family_item_id(
-                "finance",
-                result.query,
-                index,
-                snippet.source_url,
-                snippet.text,
-            ),
-            "title": _snippet_title(snippet.text, result.query),
-            "summary": _clip_text(snippet.text, 180),
-            "source": _snippet_source_label(snippet.source_url),
-            "url": _sanitize_url(snippet.source_url),
-        }
-        for index, snippet in enumerate(usable_snippets[:2], start=1)
-    ]
-    if "finance" in selected and finance_items:
-        family_context["finance"]["state"] = "ready"
-        family_context["finance"]["items"] = finance_items
+    async def _search_family(family: str) -> tuple[str, list[WebSearchSnippet]]:
+        domains = FAMILY_DOMAIN_FILTERS[family]
+        try:
+            snippets = await _search_with_provider(
+                provider, query, request_config, include_domains=domains,
+            )
+            return family, snippets
+        except Exception:
+            logger.warning("Family search failed: family=%s", family, exc_info=True)
+            return family, []
 
-    academic_items = [
-        {
-            "id": _stable_family_item_id(
-                "academic",
-                result.query,
-                index,
-                snippet.source_url,
-                snippet.text,
-            ),
-            "title": _snippet_title(snippet.text, result.query),
-            "abstract": _clip_text(snippet.text, 220),
-            "url": _sanitize_url(snippet.source_url),
-        }
-        for index, snippet in enumerate(usable_snippets[:2], start=1)
-    ]
-    if "academic" in selected and academic_items:
-        family_context["academic"]["state"] = "ready"
-        family_context["academic"]["items"] = academic_items
+    results = await asyncio.gather(*[_search_family(f) for f in families_to_search])
 
-    news_items = [
-        {
-            "id": _stable_family_item_id(
-                "news_deep",
-                result.query,
-                index,
-                snippet.source_url,
-                snippet.text,
-            ),
-            "title": _snippet_title(snippet.text, result.query),
-            "description": _clip_text(snippet.text, 220),
-            "source": _snippet_source_label(snippet.source_url),
-            "url": _sanitize_url(snippet.source_url),
-        }
-        for index, snippet in enumerate(usable_snippets[:2], start=1)
-    ]
-    if "news_deep" in selected and news_items:
-        family_context["news_deep"]["state"] = "ready"
-        family_context["news_deep"]["items"] = news_items
+    for family, snippets in results:
+        items = _snippets_to_family_items(family, query, snippets)
+        if items:
+            family_context[family]["state"] = "ready"
+            family_context[family]["items"] = items
+
+    return family_context
+
+
+def build_source_family_context(
+    result: WebSearchResult,
+    *,
+    selected_families: list[str] | None = None,
+) -> dict[str, dict[str, object]]:
+    """Legacy sync projection — kept for backward compatibility with tests."""
+    polymarket_geo_gated = settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST != "us"
+    selected = set(selected_families or [])
+
+    family_context: dict[str, dict[str, object]] = {
+        "polymarket": {
+            "state": "empty",
+            "configured_host": settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST,
+            "geo_gated": polymarket_geo_gated,
+            "items": [],
+        },
+        "finance": {"state": "empty", "items": []},
+        "academic": {"state": "empty", "items": []},
+        "news_deep": {"state": "empty", "items": []},
+    }
+
+    for family in ["polymarket", "finance", "academic", "news_deep"]:
+        if family not in selected:
+            continue
+        if family == "polymarket" and polymarket_geo_gated:
+            continue
+        items = _snippets_to_family_items(family, result.query, result.snippets)
+        if items:
+            family_context[family]["state"] = "ready"
+            family_context[family]["items"] = items
 
     return family_context
 
@@ -406,11 +452,13 @@ def clear_cache() -> None:
 async def _search_tavily(
     query: str,
     request_config: WebSearchRequestConfig | None = None,
+    *,
+    include_domains: list[str] | None = None,
 ) -> list[WebSearchSnippet]:
     """Call Tavily Search API and return snippets.
 
     Tavily API: POST https://api.tavily.com/search
-    Body: { "query": "...", "max_results": N, "api_key": "..." }
+    Body: { "query": "...", "max_results": N, "api_key": "...", "include_domains": [...] }
     Response: { "results": [{ "title": "...", "url": "...", "content": "..." }] }
     """
     api_key = request_config.api_key if request_config else settings.WEB_SEARCH_API_KEY
@@ -430,15 +478,16 @@ async def _search_tavily(
         else _default_provider_base_url("tavily")
     )
 
+    body: dict[str, object] = {
+        "query": query,
+        "max_results": max_results,
+        "api_key": api_key,
+    }
+    if include_domains:
+        body["include_domains"] = include_domains
+
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(
-            endpoint,
-            json={
-                "query": query,
-                "max_results": max_results,
-                "api_key": api_key,
-            },
-        )
+        resp = await client.post(endpoint, json=body)
         resp.raise_for_status()
         data = resp.json()
 
@@ -464,6 +513,8 @@ async def _search_tavily(
 async def _search_searxng(
     query: str,
     request_config: WebSearchRequestConfig | None = None,
+    *,
+    include_domains: list[str] | None = None,
 ) -> list[WebSearchSnippet]:
     """Call SearXNG instance and return snippets.
 
@@ -482,10 +533,15 @@ async def _search_searxng(
     )
     max_results = settings.WEB_SEARCH_MAX_RESULTS
 
+    effective_query = query
+    if include_domains:
+        site_filter = " OR ".join(f"site:{d}" for d in include_domains)
+        effective_query = f"({query}) ({site_filter})"
+
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.get(
             f"{base_url}/search",
-            params={"q": query, "format": "json"},
+            params={"q": effective_query, "format": "json"},
         )
         resp.raise_for_status()
         data = resp.json()
@@ -534,6 +590,8 @@ def _coerce_snippet_text(item: dict) -> str:
 async def _search_exa(
     query: str,
     request_config: WebSearchRequestConfig | None = None,
+    *,
+    include_domains: list[str] | None = None,
 ) -> list[WebSearchSnippet]:
     """Call Exa Search API and normalize results into snippets."""
     api_key = request_config.api_key if request_config else settings.WEB_SEARCH_API_KEY
@@ -553,19 +611,23 @@ async def _search_exa(
         else _default_provider_base_url("exa")
     )
 
+    body: dict[str, object] = {
+        "query": query,
+        "numResults": max_results,
+        "contents": {
+            "highlights": {
+                "maxCharacters": 400,
+            }
+        },
+    }
+    if include_domains:
+        body["includeDomains"] = include_domains
+
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             endpoint,
             headers={"x-api-key": api_key},
-            json={
-                "query": query,
-                "numResults": max_results,
-                "contents": {
-                    "highlights": {
-                        "maxCharacters": 400,
-                    }
-                },
-            },
+            json=body,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -667,6 +729,8 @@ def _fallback_xai_citation_snippets(
 async def _search_xai(
     query: str,
     request_config: WebSearchRequestConfig | None = None,
+    *,
+    include_domains: list[str] | None = None,
 ) -> list[WebSearchSnippet]:
     """Call xAI Responses API with the web_search tool and request structured snippets."""
     api_key = request_config.api_key if request_config else settings.WEB_SEARCH_API_KEY
@@ -691,6 +755,13 @@ async def _search_xai(
         if request_config and request_config.model
         else settings.XAI_WEB_SEARCH_MODEL
     )
+    domain_instruction = ""
+    if include_domains:
+        domains_str = ", ".join(include_domains)
+        domain_instruction = (
+            f"\nOnly return results from these domains: {domains_str}.\n"
+            "Ignore results from other domains.\n"
+        )
     prompt = (
         "Use web search.\n"
         "Return a strict JSON object with key "
@@ -698,6 +769,7 @@ async def _search_xai(
         "Each item must be an object with keys \"text\" and \"source_url\".\n"
         "text must be a concise factual snippet under 400 characters grounded in the source.\n"
         "source_url must be the exact source URL.\n"
+        f"{domain_instruction}"
         "No markdown. No extra prose outside JSON."
     )
 
@@ -740,6 +812,8 @@ async def _search_with_provider(
     provider: str,
     query: str,
     request_config: WebSearchRequestConfig | None = None,
+    *,
+    include_domains: list[str] | None = None,
 ) -> list[WebSearchSnippet]:
     """Dispatch to the configured provider. Returns [] on any failure."""
     search_fn = _PROVIDER_MAP.get(provider)
@@ -747,7 +821,7 @@ async def _search_with_provider(
         logger.warning("Unknown web search provider: %s", provider)
         return []
     try:
-        return await search_fn(query, request_config)
+        return await search_fn(query, request_config, include_domains=include_domains)
     except httpx.TimeoutException:
         logger.warning("Web search timeout (%s): query=%r", provider, query[:80])
         return []

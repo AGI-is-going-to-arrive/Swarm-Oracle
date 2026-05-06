@@ -679,12 +679,21 @@ async def create_scenario(
                 base_url_override=req.web_search_base_url,
             )
             if web_result is not None:
-                if settings.FEATURE_NEW_SOURCES:
-                    from app.services.web_context import build_source_family_context
+                if settings.FEATURE_NEW_SOURCES and req.web_search_families:
+                    from app.services.web_context import (
+                        _resolve_request_config,
+                        fetch_family_context,
+                    )
 
-                    web_result.family_context = build_source_family_context(
-                        web_result,
-                        selected_families=req.web_search_families,
+                    family_config = _resolve_request_config(
+                        provider_override=req.web_search_provider,
+                        api_key_override=req.web_search_api_key,
+                        base_url_override=req.web_search_base_url,
+                    )
+                    web_result.family_context = await fetch_family_context(
+                        question,
+                        req.web_search_families,
+                        request_config=family_config,
                     )
                 web_context_json = web_result.to_json()
         except Exception as exc:

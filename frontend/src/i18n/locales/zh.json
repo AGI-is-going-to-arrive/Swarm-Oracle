@@ -1537,20 +1537,20 @@
     },
     "input_source": {
       "polymarket": {
-        "label": "Polymarket 市场",
-        "tooltip": "引入真实预测市场赔率"
+        "label": "预测市场",
+        "tooltip": "搜索 Polymarket、Metaculus 等预测市场网站"
       },
       "finance": {
-        "label": "金融指标",
-        "tooltip": "引入金融与宏观市场数据"
+        "label": "财经资讯",
+        "tooltip": "搜索 Bloomberg、Reuters、CNBC 等财经网站"
       },
       "academic": {
-        "label": "学术论文",
-        "tooltip": "引入同行评审的科学文献"
+        "label": "学术文献",
+        "tooltip": "搜索 arXiv、Google Scholar、PubMed 等学术平台"
       },
       "news_deep": {
-        "label": "深度新闻",
-        "tooltip": "引入长尾调查新闻"
+        "label": "深度报道",
+        "tooltip": "搜索 AP、BBC、NYT、ProPublica 等深度报道来源"
       },
       "disabled_tooltip": "此数据源未在服务器上启用。"
     },

@@ -1835,6 +1835,7 @@ async def _gather_agent_messages(
                 },
             })
 
+            raw_text = ""
             try:
                 _overrides = llm_overrides or {}
 
@@ -1883,7 +1884,9 @@ async def _gather_agent_messages(
                     diverge = None
             except Exception as exc:
                 logger.warning("Agent %s failed: %s", agent["name"], exc)
-                content = f"({agent['name']}沉默了)"
+                content = raw_text if raw_text else (
+                    f"({agent['name']}沉默了)"
+                )
                 emotion = "neutral"
                 diverge = None
 

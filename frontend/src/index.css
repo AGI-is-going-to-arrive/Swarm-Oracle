@@ -2117,3 +2117,60 @@ body.has-argument-map .lang-switch--global {
   .replay-controls__btn { transition: none !important; }
   .replay-card { transition: none !important; }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Phase 5A: Markdown in finalized turns
+   ═══════════════════════════════════════════════════════════ */
+.ending-chat-markdown p { margin: 0; }
+.ending-chat-markdown p + p { margin-top: 0.5em; }
+.ending-chat-markdown ul, .ending-chat-markdown ol { margin: 0.25em 0; padding-left: 1.5em; }
+.ending-chat-markdown code { background: var(--bg-elevated, rgba(0,0,0,0.05)); padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.9em; }
+.ending-chat-markdown pre { margin: 0.5em 0; padding: 0.5em; background: var(--bg-elevated, rgba(0,0,0,0.05)); border-radius: 6px; overflow-x: auto; }
+.ending-chat-markdown blockquote { margin: 0.25em 0; padding-left: 0.75em; border-left: 3px solid var(--border-muted, #d1d5db); }
+
+.node-conversation-markdown p { margin: 0; }
+.node-conversation-markdown p + p { margin-top: 0.5em; }
+.node-conversation-markdown ul, .node-conversation-markdown ol { margin: 0.25em 0; padding-left: 1.5em; }
+.node-conversation-markdown code { background: var(--bg-elevated, rgba(0,0,0,0.05)); padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.9em; }
+.node-conversation-markdown pre { margin: 0.5em 0; padding: 0.5em; background: var(--bg-elevated, rgba(0,0,0,0.05)); border-radius: 6px; overflow-x: auto; }
+.node-conversation-markdown blockquote { margin: 0.25em 0; padding-left: 0.75em; border-left: 3px solid var(--border-muted, #d1d5db); }
+
+/* ═══════════════════════════════════════════════════════════
+   Phase 5B: Typing indicator
+   ═══════════════════════════════════════════════════════════ */
+.typing-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+}
+.typing-indicator .typing-indicator-name {
+  font-size: 0.85em;
+  opacity: 0.7;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.typing-indicator .typing-indicator-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.typing-indicator .typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.4;
+  text-transform: none;
+  letter-spacing: normal;
+  animation: typingBounce 1.4s ease-in-out infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-dot { animation: none; opacity: 0.6; }
+}

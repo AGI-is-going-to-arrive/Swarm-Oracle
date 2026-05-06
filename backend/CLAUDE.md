@@ -91,6 +91,7 @@ docker compose up backend
 | `FEATURE_ROUNDTABLE_SURVEY` | `false` | 启用圆桌问卷 SSE 端点 |
 | `FEATURE_ROUNDTABLE_ANALYST` | `false` | 启用圆桌 ReACT 分析师 SSE 端点 |
 | `FEATURE_KG_EXPLORER` | `false` | 启用 KG Explorer / Timeline Galaxy 前端 capability gate |
+| `FEATURE_NEW_SOURCES` | `false` | 启用 source family 分类搜索（预测市场/财经/学术/深度新闻），前端展示 4 个领域 checkbox + `/api/capabilities` 返回 `web_search.providers` 块 |
 | `FEATURE_IDENTITY_COMPACTION` | `false` | 启用 identity memory LLM 摘要压缩 |
 | `IDENTITY_COMPACT_THRESHOLD` | `50` | 压缩触发阈值（未压缩文档数） |
 | `IDENTITY_COMPACT_BATCH_SIZE` | `30` | 每次压缩最老 N 条 |
@@ -129,7 +130,7 @@ docker compose up backend
 | campaign | `campaign.py` | Campaign 计算 |
 | memory | `memory.py` | Agent 记忆管理与压缩 |
 | blackboard | `blackboard.py` | 黑板模式通信 |
-| web_context | `web_context.py` | Web 搜索增强 (Tavily/SearXNG/Exa/xAI 提供商, TTL 缓存 + stampede 去重, snippet 规范化 `_truncate_snippet`/`_sanitize_url`/isinstance 防护, 上下文格式化) |
+| web_context | `web_context.py` | Web 搜索增强 (Tavily/SearXNG/Exa/xAI 提供商, TTL 缓存 + stampede 去重, snippet 规范化, 上下文格式化)；`FEATURE_NEW_SOURCES` 开启后支持 source family 分类搜索（`fetch_family_context` 异步并发，每个 family 通过 `include_domains` 在对应领域网站独立搜索） |
 | narrator | `narrator.py` | 叙事生成 |
 | scoring | `scoring.py` | 预测评分 |
 | vector_store | `vector_store.py` | ChromaDB 向量检索 (含 identity memory 双层存储，identity memory 写入经 `identity:{user_id}` 粒度串行化锁保护) |
@@ -275,6 +276,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-06 | source family 分类搜索 | `web_context.py`：新增 `FAMILY_DOMAIN_FILTERS` 常量（4 个 family 各自的域名白名单，如 polymarket→Polymarket/Metaculus/PredictIt/Manifold，finance→Bloomberg/Reuters/FT/WSJ/CNBC 等）；新增 `fetch_family_context()` 异步函数，对每个选中 family 并发发起独立域名过滤搜索（`asyncio.gather`）；`_snippets_to_family_items()` 统一 4 类 item 构建逻辑；4 个 provider 函数（`_search_tavily`/`_search_exa`/`_search_searxng`/`_search_xai`）均新增 `include_domains` keyword-only 参数（Tavily/Exa 透传原生 API 参数，SearXNG 拼接 `site:` query 语法，xAI 注入 prompt 域名限制指令）；`_search_with_provider` 透传 `include_domains`；旧 `build_source_family_context` 保留为 legacy 同步投影供测试兼容。`scenarios.py`：`create_scenario` 当 `FEATURE_NEW_SOURCES=true` 且 `web_search_families` 非空时调用 `fetch_family_context()` 替代旧同步投影。`.env`：新增 `FEATURE_NEW_SOURCES=true` |
 | 2026-04-30 | Oracle 文案去模板化 | `_content.py` 新增 3-tier fallback 架构：Tier 1 纯生成（`_build_oracle_generation_prompt`，temp=0.82，不含 anchor copy）→ Tier 2 rewrite（`_build_oracle_rewrite_prompt`，temp=0.78）→ Tier 3 静态模板；新增 `_build_character_identity_block`（角色名/职位/人设/情绪/立场/分支，全部经 `sanitize_untrusted_text` 防注入）+ `_build_factual_guardrail`（从 branch_card 提取 worldline_title/key_hinge/outcome_insight/key_moments 轻量事实）；`__init__.py` 新增 `_load_scenario_question` + `_load_branch_transcript_excerpts`（每分支最近 5 条消息，`.select_from(Round)` 避免 SQLite 列名歧义），四种房间类型（WORLDLINE_ROUNDTABLE/ENDING_CHAMBER/ONE_MOVE_ONLY/CROSSLINE_GALLERY）全部接入 factual_guardrail；`_threads.py` follow-up 路径同步加载 scenario_question + transcript_quotes；`_stream_oracle_copy` 改用生成 prompt（温度 0.55→0.75，reasoning_effort low→medium）；`_normalize_oracle_generated_content` 字符上限 520→800；`memory.py` CROWD persona 双层包装加 `startswith("【")` 哨兵防止二次包裹 + CORE/IMPORTANT 层 role/persona 同步 `format_untrusted_text_block`；`simulator.py` raw_text 初始化前移 + 异常保留 Pass-1 输出；`test_ending_room_service.py` 补 `llm_call_json` mock（3-tier 架构 Tier 2 新增依赖）；89 ending room tests passed，ruff 0 errors |
 | 2026-04-25 | faction-timeline branch 校验 + causal_graph 类型告警清零 | `graphs.py` faction-timeline 端点加 branch 存在 + cross-scenario 校验，缺失或跨 scenario 返回 404 `BRANCH_NOT_FOUND`；`test_factions.py` 新增 4 条边界测试（不存在 branch / 跨 scenario / 缺 query 422 / 空数据 200）；`causal_graph.py` SQLModel 类型告警全清零（`from sqlmodel import col` 包装 10 处 desc/in_ 列属性访问 + dict 不变性显式标注 4 处 + `_collect_available_branches` 形参改 `Sequence[GraphNode]` + 3 处 Optional member access 加 `assert ... is not None`），edge evidence presence check 由 `or` 链改 `is not None` 链，避免 `source_round_number=0` 被 falsy 漏掉；`test_causal_graph.py` 加 `source_round_number=0` 回归测试 + MockMessage 6 处 None 默认值类型注解（132/387/393/509/510/521）；fresh backend 全量 `2328 passed, 2 skipped`；ruff + pyright（14 errors → 0）通过 |
 | 2026-04-19 | quota + source-family contract 收口 | `conversation_service.py` 修正 quota ledger `Retry-After` 向下取整和多命中过早返回；`CreateScenarioRequest` 新增 `web_search_families` 校验/去重；`web_context.py` 当前会把同一份 live snippets 投影成四个 family envelope，并在 `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` 时让 `polymarket` 显式保持 `empty + geo_gated`；`helpers.py` 白名单保留 `family_context`；新增/扩展 `test_agent_conversation.py`、`test_web_context*.py`、`test_web_search_contract.py`、`test_contract_freeze.py`；fresh backend 全量 `2264 passed, 2 skipped` |

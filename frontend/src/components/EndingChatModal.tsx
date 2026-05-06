@@ -1,6 +1,7 @@
 import { type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type UIEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { TypingIndicator } from './TypingIndicator';
 import { copyText } from '../lib/copyText';
 import { getEndingRoomModeLabel, getEndingRoomPhaseLabel, getEndingRoomStatusLabel } from '../lib/endingRoomLabels';
 import {
@@ -48,6 +49,7 @@ import type {
 } from '../types';
 
 import { FactionBadge } from './FactionBadge';
+import { SafeMarkdown } from './SafeMarkdown';
 import { useFactionOverlay } from '../hooks/useFactionOverlay';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from './ui/sheet';
 import './EndingChatModal.css';
@@ -1571,7 +1573,10 @@ export default function EndingChatModal({
                     {message.participantId && <FactionBadge faction={factionMap?.get(message.participantId)} />}
                     <span>{message.phase}</span>
                   </header>
-                  <p>{message.content}</p>
+                  {message.roleSlot === 'user'
+                    ? <p>{message.content}</p>
+                    : <SafeMarkdown className="ending-chat-markdown">{message.content}</SafeMarkdown>
+                  }
                   {composerEnabled && message.roleSlot !== 'user' && (
                     <div
                       className={`ending-chat-bubble__actions${alwaysShowBubbleActions ? ' ending-chat-bubble__actions--always-visible' : ''}`}
@@ -1609,7 +1614,16 @@ export default function EndingChatModal({
                     <span>{getEndingRoomPhaseLabel(draft.phase, t)}</span>
                     <em className="ending-chat-draft-badge">{t('ending_room.draft_badge')}</em>
                   </header>
-                  <p>{draft.content}</p>
+                  {draft.variant === 'placeholder' ? (
+                    <p>
+                      <TypingIndicator
+                        ariaLabel={draft.content}
+                      />
+                      {' '}{draft.content}
+                    </p>
+                  ) : (
+                    <p>{draft.content}</p>
+                  )}
                 </article>
               ))}
             </div>

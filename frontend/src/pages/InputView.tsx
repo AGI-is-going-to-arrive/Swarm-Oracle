@@ -134,6 +134,11 @@ function NewSourceToggles({
   onChange,
   disabled,
 }: NewSourceTogglesProps) {
+  const { enabled: pmEnabled } = useCapabilityCheck('web_search', 'providers.polymarket.enabled');
+  const { enabled: finEnabled } = useCapabilityCheck('web_search', 'providers.finance.enabled');
+  const { enabled: acadEnabled } = useCapabilityCheck('web_search', 'providers.academic.enabled');
+  const { enabled: ndEnabled } = useCapabilityCheck('web_search', 'providers.news_deep.enabled');
+  if (!pmEnabled && !finEnabled && !acadEnabled && !ndEnabled) return null;
   return (
     <div className="new-source-toggles" role="group">
       <NewSourceToggleItem
@@ -240,13 +245,11 @@ export function InputView() {
     setWebSearchApiKey,
     webSearchBaseUrl,
     setWebSearchBaseUrl,
-    webSearchAvailable,
     webSearchStatus,
     setWebSearchStatus,
   } = useWebSearchConfig();
   const {
     showByok,
-    setShowByok,
     llmApiKey,
     setLlmApiKey,
     llmBaseUrl,
@@ -1198,8 +1201,7 @@ export function InputView() {
               </span>
             </div>
 
-            {/* Web Search Enhancement: opt-in toggle (compile-time flag + server hint) */}
-            {webSearchAvailable && (
+            {/* Web Search Enhancement: always visible */}
               <div className="web-search-section">
                 <label
                   className={`web-search-toggle ${webSearchEnabled ? 'web-search-toggle--active' : ''} ${isSubmitting ? 'web-search-toggle--disabled' : ''}`}
@@ -1350,7 +1352,6 @@ export function InputView() {
                   </div>
                 )}
               </div>
-            )}
 
             {/* FE-5: 4 new source toggles (polymarket/finance/academic/news_deep) */}
             <NewSourceToggles
@@ -1366,6 +1367,122 @@ export function InputView() {
               }}
               disabled={isSubmitting}
             />
+
+            {/* ── Mode Selectors (inline with input area) ── */}
+            <div className="iv-mode-selectors">
+                {/* Mode Selector */}
+                <div className="mode-selector-wrap">
+                  <div className="mode-selector">
+                    <span className="mode-label">{t('home.mode_label')}</span>
+                    <div className="mode-options">
+                      <button
+                        type="button"
+                        className={`mode-btn ${mode === 'blackboard' ? 'mode-btn--active' : ''}`}
+                        onClick={() => setMode('blackboard')}
+                        disabled={isSubmitting}
+                        title={t('home.mode_blackboard_title')}
+                      >
+                        📋 {t('home.mode_blackboard')}
+                      </button>
+                      <button
+                        type="button"
+                        className={`mode-btn ${mode === 'raw' ? 'mode-btn--active' : ''}`}
+                        onClick={() => setMode('raw')}
+                        disabled={isSubmitting}
+                        title={t('home.mode_raw_title')}
+                      >
+                        📜 {t('home.mode_raw')}
+                      </button>
+                    </div>
+                  </div>
+                  <span className="mode-desc">
+                    {mode === 'blackboard' ? t('home.mode_blackboard_desc') : t('home.mode_raw_desc')}
+                  </span>
+                </div>
+
+                {/* V2: Visualization Mode Toggle */}
+                <div className="mode-selector-wrap">
+                  <div className="mode-selector">
+                    <span className="mode-label">{t('home.viz_label')}</span>
+                    <div className="mode-options">
+                      <button
+                        type="button"
+                        className={`mode-btn ${!vizEnabled ? 'mode-btn--active' : ''}`}
+                        onClick={() => setVizEnabled(false)}
+                        disabled={isSubmitting}
+                      >
+                        📊 {t('home.viz_classic')}
+                      </button>
+                      <button
+                        type="button"
+                        className={`mode-btn ${vizEnabled ? 'mode-btn--active' : ''}`}
+                        onClick={() => setVizEnabled(true)}
+                        disabled={isSubmitting}
+                      >
+                        🎮 {t('home.viz_theater')}
+                      </button>
+                    </div>
+                  </div>
+                  {vizEnabled && (
+                    <span className="mode-desc">{t('home.viz_theater_desc')}</span>
+                  )}
+                </div>
+
+                {/* Reasoning Effort Selector */}
+                <div className="mode-selector-wrap">
+                  <div className="mode-selector">
+                    <span className="mode-label">{t('home.reasoning_label')}</span>
+                    <div className="mode-options">
+                      {[
+                        { value: '', label: t('home.reasoning_off') },
+                        { value: 'low', label: t('home.reasoning_low') },
+                        { value: 'medium', label: t('home.reasoning_medium') },
+                        { value: 'high', label: t('home.reasoning_high') },
+                      ].map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          className={`mode-btn ${reasoningEffort === opt.value ? 'mode-btn--active' : ''}`}
+                          onClick={() => setReasoningEffort(opt.value)}
+                          disabled={isSubmitting}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {reasoningEffort && (
+                    <span className="mode-desc">{t('home.reasoning_hint')}</span>
+                  )}
+                </div>
+
+                <div className="mode-selector-wrap">
+                  <div className="mode-selector">
+                    <span className="mode-label">{t('home.runtime_preset_label')}</span>
+                    <div className="mode-options">
+                      {(['conservative', 'balanced', 'aggressive'] as ScenarioRuntimePresetId[]).map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          className={`mode-btn ${runtimePreset === preset ? 'mode-btn--active' : ''}`}
+                          onClick={() => setRuntimePreset(preset)}
+                          disabled={isSubmitting}
+                          title={t(`home.runtime_preset_${preset}_desc`)}
+                        >
+                          {t(`home.runtime_preset_${preset}`)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <span className="mode-desc">{runtimePresetDescription}</span>
+                  <span className="mode-desc">{t('home.runtime_preset_scope_main_only')}</span>
+                </div>
+
+                {/* Phase 3 F3: Custom Agent Attach Panel */}
+                {caps?.custom_agents?.enabled && (
+                  <AgentAttachPanel userId={directorIdentity.userId} visible={true} />
+                )}
+            </div>
           </div>
 
           {/* ── STAGE 2: Challenges ── */}
@@ -1584,7 +1701,7 @@ export function InputView() {
             </section>
           </div>
 
-          {/* ── STAGE 3: Collapsible Config ── */}
+          {/* ── Collapsible BYOK ── */}
           <div className="iv-config">
             <button
               type="button"
@@ -1592,7 +1709,7 @@ export function InputView() {
               onClick={() => setIsConfigOpen((prev) => !prev)}
               aria-expanded={isConfigOpen}
             >
-              {isConfigOpen ? t('home.advanced_settings_expanded') : t('home.advanced_settings')}
+              {t('home.byok_toggle')}
               {' '}
               {isConfigOpen ? '▲' : '▼'}
             </button>
@@ -1603,130 +1720,8 @@ export function InputView() {
               onFocusCapture={handleClosedConfigFocusCapture}
             >
               <div className="iv-config__inner">
-                {/* Mode Selector */}
-                <div className="mode-selector-wrap">
-                  <div className="mode-selector">
-                    <span className="mode-label">{t('home.mode_label')}</span>
-                    <div className="mode-options">
-                      <button
-                        type="button"
-                        className={`mode-btn ${mode === 'blackboard' ? 'mode-btn--active' : ''}`}
-                        onClick={() => setMode('blackboard')}
-                        disabled={isSubmitting}
-                        title={t('home.mode_blackboard_title')}
-                      >
-                        📋 {t('home.mode_blackboard')}
-                      </button>
-                      <button
-                        type="button"
-                        className={`mode-btn ${mode === 'raw' ? 'mode-btn--active' : ''}`}
-                        onClick={() => setMode('raw')}
-                        disabled={isSubmitting}
-                        title={t('home.mode_raw_title')}
-                      >
-                        📜 {t('home.mode_raw')}
-                      </button>
-                    </div>
-                  </div>
-                  <span className="mode-desc">
-                    {mode === 'blackboard' ? t('home.mode_blackboard_desc') : t('home.mode_raw_desc')}
-                  </span>
-                </div>
-
-                {/* V2: Visualization Mode Toggle */}
-                <div className="mode-selector-wrap">
-                  <div className="mode-selector">
-                    <span className="mode-label">{t('home.viz_label')}</span>
-                    <div className="mode-options">
-                      <button
-                        type="button"
-                        className={`mode-btn ${!vizEnabled ? 'mode-btn--active' : ''}`}
-                        onClick={() => setVizEnabled(false)}
-                        disabled={isSubmitting}
-                      >
-                        📊 {t('home.viz_classic')}
-                      </button>
-                      <button
-                        type="button"
-                        className={`mode-btn ${vizEnabled ? 'mode-btn--active' : ''}`}
-                        onClick={() => setVizEnabled(true)}
-                        disabled={isSubmitting}
-                      >
-                        🎮 {t('home.viz_theater')}
-                      </button>
-                    </div>
-                  </div>
-                  {vizEnabled && (
-                    <span className="mode-desc">{t('home.viz_theater_desc')}</span>
-                  )}
-                </div>
-
-                {/* Reasoning Effort Selector */}
-                <div className="mode-selector-wrap">
-                  <div className="mode-selector">
-                    <span className="mode-label">{t('home.reasoning_label')}</span>
-                    <div className="mode-options">
-                      {[
-                        { value: '', label: t('home.reasoning_off') },
-                        { value: 'low', label: t('home.reasoning_low') },
-                        { value: 'medium', label: t('home.reasoning_medium') },
-                        { value: 'high', label: t('home.reasoning_high') },
-                      ].map((opt) => (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          className={`mode-btn ${reasoningEffort === opt.value ? 'mode-btn--active' : ''}`}
-                          onClick={() => setReasoningEffort(opt.value)}
-                          disabled={isSubmitting}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {reasoningEffort && (
-                    <span className="mode-desc">{t('home.reasoning_hint')}</span>
-                  )}
-                </div>
-
-                <div className="mode-selector-wrap">
-                  <div className="mode-selector">
-                    <span className="mode-label">{t('home.runtime_preset_label')}</span>
-                    <div className="mode-options">
-                      {(['conservative', 'balanced', 'aggressive'] as ScenarioRuntimePresetId[]).map((preset) => (
-                        <button
-                          key={preset}
-                          type="button"
-                          className={`mode-btn ${runtimePreset === preset ? 'mode-btn--active' : ''}`}
-                          onClick={() => setRuntimePreset(preset)}
-                          disabled={isSubmitting}
-                          title={t(`home.runtime_preset_${preset}_desc`)}
-                        >
-                          {t(`home.runtime_preset_${preset}`)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <span className="mode-desc">{runtimePresetDescription}</span>
-                  <span className="mode-desc">{t('home.runtime_preset_scope_main_only')}</span>
-                </div>
-
-                {/* Phase 3 F3: Custom Agent Attach Panel */}
-                {caps?.custom_agents?.enabled && (
-                  <AgentAttachPanel userId={directorIdentity.userId} visible={true} />
-                )}
-
                 {/* P4-E: BYOK — Bring Your Own Key */}
                 <div className="byok-section">
-                  <button
-                    type="button"
-                    className="byok-toggle"
-                    onClick={() => setShowByok(!showByok)}
-                    disabled={isSubmitting}
-                  >
-                    {t('home.byok_toggle')} {showByok ? '▲' : '▼'}
-                  </button>
-                  {showByok && (
                     <div className="byok-fields">
                       <div className="byok-field">
                         <label className="byok-label" htmlFor="byok-key">{t('home.byok_api_key_label')}</label>
@@ -1899,7 +1894,6 @@ export function InputView() {
                       )}
                       <p className="byok-hint">{t('home.byok_storage_notice')}</p>
                     </div>
-                  )}
                 </div>
               </div>
             </div>

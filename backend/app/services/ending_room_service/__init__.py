@@ -60,7 +60,9 @@ from app.services.runtime_lock import (
 from ._content import (  # noqa: F401 — re-exported
     _ARCHIVIST_VOCABULARY_HINT,
     _VOCABULARY_HINTS,
+    _build_factual_guardrail,
     _build_followup_reply_content,
+    _build_oracle_generation_prompt,
     _build_oracle_rewrite_prompt,
     _build_roundtable_crossfire_content,
     _build_roundtable_opening_content,
@@ -729,6 +731,10 @@ async def _enhance_room_plan_with_llm(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not settings.ORACLE_CHAMBERS_USE_LLM:
         return planned_turns, result
+
+    scenario_question = _load_scenario_question(room.scenario_id)
+    transcript_by_branch = _load_branch_transcript_excerpts(room.scenario_id)
+
     participant_by_id = {participant.id: participant for participant in participants}
     enhanced_turns: list[dict[str, Any]] = []
     for index, turn in enumerate(planned_turns):
@@ -736,6 +742,8 @@ async def _enhance_room_plan_with_llm(
         if participant is None:
             enhanced_turns.append(turn)
             continue
+        branch_id = participant.source_branch_id or ""
+        quotes = transcript_by_branch.get(branch_id, [])
         generated_content = await _maybe_rewrite_oracle_copy(
             room=room,
             participant=participant,
@@ -748,6 +756,9 @@ async def _enhance_room_plan_with_llm(
             context_hint=str(turn.get("context_hint") or "").strip() or None,
             purpose=f"oracle_{room.room_type.value}_{turn['phase'].value}_{index}",
             streaming_first=True,
+            scenario_question=scenario_question,
+            transcript_quotes=quotes,
+            factual_guardrail=str(turn.get("factual_guardrail") or "").strip() or None,
         )
         enhanced_turns.append(
             {
@@ -756,6 +767,41 @@ async def _enhance_room_plan_with_llm(
             }
         )
     return enhanced_turns, _rebuild_room_result(room, participants, enhanced_turns, result)
+
+
+def _load_scenario_question(scenario_id: str) -> str | None:
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        return scenario.question if scenario else None
+
+
+def _load_branch_transcript_excerpts(
+    scenario_id: str,
+    *,
+    max_quotes_per_branch: int = 5,
+) -> dict[str, list[str]]:
+    """Load recent transcript excerpts per branch for LLM generation context."""
+    result: dict[str, list[str]] = {}
+    with Session(get_engine()) as session:
+        branches = session.exec(
+            select(Branch).where(Branch.scenario_id == scenario_id)
+        ).all()
+        for branch in branches:
+            rows = session.exec(
+                select(Agent.name, AgentMessage.content)
+                .select_from(Round)
+                .join(AgentMessage, AgentMessage.round_id == Round.id)
+                .join(Agent, Agent.id == AgentMessage.agent_id, isouter=True)
+                .where(Round.branch_id == branch.id)
+                .order_by(Round.round_number.desc(), AgentMessage.id.desc())  # type: ignore[union-attr]
+                .limit(max_quotes_per_branch)
+            ).all()
+            if rows:
+                result[branch.id] = [
+                    f"{name or '?'}: {content}"
+                    for name, content in reversed(rows)
+                ]
+    return result
 
 
 def build_branch_scope_context(
@@ -1202,6 +1248,11 @@ def _build_room_plan(
                     all_branches=context["branches"],
                     language=room.language,
                 ),
+                "factual_guardrail": _build_factual_guardrail(
+                    branch_cards_by_id.get(participant.source_branch_id or "", {}),
+                    participant=participant,
+                    language=room.language,
+                ),
             }
             for participant in participants
             if participant.role_slot == EndingRoomRoleSlot.REPRESENTATIVE
@@ -1224,6 +1275,11 @@ def _build_room_plan(
                       witness,
                       branch_card=branch_cards_by_id.get(witness.source_branch_id, {}),
                       all_branches=context["branches"],
+                      language=room.language,
+                  ),
+                  "factual_guardrail": _build_factual_guardrail(
+                      branch_cards_by_id.get(witness.source_branch_id, {}),
+                      participant=witness,
                       language=room.language,
                   ),
               }
@@ -1375,6 +1431,11 @@ def _build_room_plan(
         )
         primary_quote_clause_zh = f"我在 R{primary_round} 当时说过「{primary_quote}」。" if primary_quote and primary_round > 0 else ""  # noqa: E501
         primary_quote_clause_en = f"In R{primary_round} I said '{primary_quote_display}'. " if primary_quote_display and primary_round > 0 else ""  # noqa: E501
+        _omo_guardrail = _build_factual_guardrail(
+            context["anchor_branch"],
+            participant=primary_speaker,
+            language=room.language,
+        )
         planned_turns = [
             {
                 "participant_id": primary_speaker.id,
@@ -1398,6 +1459,7 @@ def _build_room_plan(
                 "cited_branch_id": room.anchor_branch_id,
                 "cited_refs_json": {"mode": "own_fulltext"},
                 "context_hint": primary_context_hint,
+                "factual_guardrail": _omo_guardrail,
             },
             {
                 "participant_id": archivist.id,
@@ -1415,6 +1477,7 @@ def _build_room_plan(
                     foreign_branch_summaries=context.get("foreign_branch_summaries"),
                     language=room.language,
                 ),
+                "factual_guardrail": _omo_guardrail,
             },
         ]
         return planned_turns, {
@@ -1464,6 +1527,11 @@ def _build_room_plan(
         if primary_quote_display and primary_evidence.get("latest_round")
         else ""
     )
+    _chamber_guardrail = _build_factual_guardrail(
+        context["anchor_branch"],
+        participant=primary_speaker,
+        language=room.language,
+    )
     planned_turns = [
         {
             "participant_id": primary_speaker.id,
@@ -1483,6 +1551,7 @@ def _build_room_plan(
             "cited_branch_id": room.anchor_branch_id,
             "cited_refs_json": {"mode": "own_fulltext"},
             "context_hint": primary_context_hint,
+            "factual_guardrail": _chamber_guardrail,
         },
     ]
     if secondary_speaker is not None:
@@ -1531,6 +1600,7 @@ def _build_room_plan(
                     foreign_branch_summaries=context.get("foreign_branch_summaries"),
                     language=room.language,
                 ),
+                "factual_guardrail": _chamber_guardrail,
             }
         )
     else:
@@ -1555,6 +1625,7 @@ def _build_room_plan(
                     foreign_branch_summaries=context.get("foreign_branch_summaries"),
                     language=room.language,
                 ),
+                "factual_guardrail": _chamber_guardrail,
             }
         )
     planned_turns.append(
@@ -1574,6 +1645,7 @@ def _build_room_plan(
                 foreign_branch_summaries=context.get("foreign_branch_summaries"),
                 language=room.language,
             ),
+            "factual_guardrail": _chamber_guardrail,
         }
     )
     return planned_turns, {

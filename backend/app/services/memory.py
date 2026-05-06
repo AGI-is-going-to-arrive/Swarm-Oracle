@@ -465,10 +465,11 @@ def _build_crowd_context(
     web_block = f"\n{web_context_block}\n" if web_context_block else ""
 
     persona_text = agent.get("persona", "")
+    _already_wrapped = persona_text.startswith("【")
     persona_block = (
-        format_untrusted_text_block("persona", persona_text, max_chars=300)
-        if persona_text else ""
-    )
+        persona_text if _already_wrapped
+        else format_untrusted_text_block("persona", persona_text, max_chars=300)
+    ) if persona_text else ""
 
     # Phase 4C: Slim cross-scenario hint for CROWD (max 200 chars)
     crowd_cross_block = ""
@@ -616,10 +617,21 @@ def build_agent_context(
         )
         cross_scenario_block = f"\n\n{_hint_block}"
 
+    _role_text = agent.get('role', '')
+    _safe_role = (
+        _role_text if _role_text.startswith("【")
+        else format_untrusted_text_block("role", _role_text, max_chars=200)
+    )
+    _persona_text = agent.get('persona', '')
+    _safe_persona = (
+        _persona_text if _persona_text.startswith("【")
+        else format_untrusted_text_block("persona", _persona_text, max_chars=500)
+    )
+
     return f"""{copy["roleplay_intro"].format(name=agent['name'])}
 
-{copy["identity"]}{agent.get('role', '')}
-{copy["persona"]}{agent.get('persona', '')}
+{copy["identity"]}{_safe_role}
+{copy["persona"]}{_safe_persona}
 {copy["emotion"]}{agent.get('emotion', 'neutral')}
 {web_block}
 {copy["world_background"]}

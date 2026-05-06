@@ -2174,6 +2174,11 @@ def test_run_ending_room_background_falls_back_when_llm_rewrite_fails(monkeypatc
     )
     monkeypatch.setattr(
         ending_room_service_module,
+        "llm_call_json",
+        _boom,
+    )
+    monkeypatch.setattr(
+        ending_room_service_module,
         "llm_call",
         _boom,
     )

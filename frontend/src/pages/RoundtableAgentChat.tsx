@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { AgentConversationWSEvent, EndingRoomParticipant } from '../types';
+import { SafeMarkdown } from '../components/SafeMarkdown';
+import { TypingIndicator } from '../components/TypingIndicator';
 import { buildSessionHeaders } from '../api/client';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
 import { parseSseFrame } from '../lib/parseSseFrame';
@@ -304,7 +306,10 @@ export default function RoundtableAgentChat({
                   {msg.role === 'agent' && (
                     <span className="roundtable-agent-chat__msg-name">{selectedParticipant.display_name}</span>
                   )}
-                  <p>{msg.content}</p>
+                  {msg.role === 'agent'
+                    ? <SafeMarkdown className="ending-chat-markdown">{msg.content}</SafeMarkdown>
+                    : <p>{msg.content}</p>
+                  }
                 </div>
               ))}
               {streaming && streamingText && (
@@ -315,7 +320,10 @@ export default function RoundtableAgentChat({
               )}
               {streaming && !streamingText && (
                 <div className="roundtable-agent-chat__msg roundtable-agent-chat__msg--agent">
-                  <span className="editorial-streaming-cursor">{t('roundtable.stream_loading')}</span>
+                  <TypingIndicator
+                    agentName={selectedParticipant.display_name}
+                    ariaLabel={t('roundtable.typing_aria', { name: selectedParticipant.display_name })}
+                  />
                 </div>
               )}
             </div>
