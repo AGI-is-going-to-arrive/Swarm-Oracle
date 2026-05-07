@@ -112,6 +112,70 @@ function createPage({
   };
 }
 
+async function withMobileRailDom(callback) {
+  const previousDocument = globalThis.document;
+  const previousWindow = globalThis.window;
+  const previousHTMLButtonElement = globalThis.HTMLButtonElement;
+  const hadDocument = Object.hasOwn(globalThis, "document");
+  const hadWindow = Object.hasOwn(globalThis, "window");
+  const hadHTMLButtonElement = Object.hasOwn(globalThis, "HTMLButtonElement");
+  const clickedLabels = [];
+  const querySelectors = [];
+
+  class FakeButton {
+    constructor(label) {
+      this.label = label;
+      this.disabled = false;
+    }
+
+    getBoundingClientRect() {
+      return { width: 120, height: 52 };
+    }
+
+    click() {
+      clickedLabels.push(this.label);
+    }
+  }
+
+  const primaryButton = new FakeButton("primary");
+
+  globalThis.HTMLButtonElement = FakeButton;
+  globalThis.document = {
+    querySelector(selector) {
+      querySelectors.push(selector);
+      if (selector !== ".debate-mobile-rail .debate-primary-cta--rail") {
+        throw new Error(`Unexpected mobile rail selector: ${selector}`);
+      }
+      return primaryButton;
+    },
+  };
+  globalThis.window = {
+    getComputedStyle() {
+      return { display: "inline-flex", visibility: "visible" };
+    },
+  };
+
+  try {
+    await callback({ clickedLabels, querySelectors });
+  } finally {
+    if (hadDocument) {
+      globalThis.document = previousDocument;
+    } else {
+      Reflect.deleteProperty(globalThis, "document");
+    }
+    if (hadWindow) {
+      globalThis.window = previousWindow;
+    } else {
+      Reflect.deleteProperty(globalThis, "window");
+    }
+    if (hadHTMLButtonElement) {
+      globalThis.HTMLButtonElement = previousHTMLButtonElement;
+    } else {
+      Reflect.deleteProperty(globalThis, "HTMLButtonElement");
+    }
+  }
+}
+
 test("openBet mobile fails instead of falling back to hidden hero CTA when the rail button is unavailable", async () => {
   const page = createPage({
     evaluateResults: [false, true],
@@ -125,6 +189,25 @@ test("openBet mobile fails instead of falling back to hidden hero CTA when the r
     /mobile debate rail bet button/i,
   );
   assert.equal(page.evaluateCallCount, 1);
+});
+
+test("openBet mobile clicks the rail primary CTA instead of the first rail button", async () => {
+  await withMobileRailDom(async ({ clickedLabels, querySelectors }) => {
+    const page = {
+      async evaluate(callback) {
+        return callback();
+      },
+      async waitForTimeout() {},
+    };
+    const openBet = loadAsyncFunction("openBet", {
+      hasSelector: async (_page, selector) => selector === ".debate-modal",
+    });
+
+    await openBet(page, "mobile", "zh");
+
+    assert.deepEqual(querySelectors, [".debate-mobile-rail .debate-primary-cta--rail"]);
+    assert.deepEqual(clickedLabels, ["primary"]);
+  });
 });
 
 test("readReplayPermalink reuses the share modal permalink_url from automation state", () => {

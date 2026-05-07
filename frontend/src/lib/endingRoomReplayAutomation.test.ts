@@ -13,15 +13,19 @@ describe('endingRoomReplayAutomation', () => {
   it('matches both legacy and current save-readonly button copy', () => {
     expect(ENDING_ROOM_SAVE_READONLY_COPY_PATTERN.test('Save local read-only copy')).toBe(true);
     expect(ENDING_ROOM_SAVE_READONLY_COPY_PATTERN.test('Save read-only copy')).toBe(true);
+    expect(ENDING_ROOM_SAVE_READONLY_COPY_PATTERN.test('Save copy')).toBe(true);
     expect(ENDING_ROOM_SAVE_READONLY_COPY_PATTERN.test('保存本地只读副本')).toBe(true);
     expect(ENDING_ROOM_SAVE_READONLY_COPY_PATTERN.test('保存只读副本')).toBe(true);
+    expect(ENDING_ROOM_SAVE_READONLY_COPY_PATTERN.test('保存副本')).toBe(true);
   });
 
   it('recognizes import-local-run action copy variants', () => {
     expect(ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN.test('Import as Local Run')).toBe(true);
     expect(ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN.test('Import local run')).toBe(true);
+    expect(ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN.test('Import run')).toBe(true);
     expect(ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN.test('导入为本地运行')).toBe(true);
     expect(ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN.test('导入本地运行')).toBe(true);
+    expect(ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN.test('导入运行')).toBe(true);
   });
 
   it('accepts only matching live ending-room modal state', () => {

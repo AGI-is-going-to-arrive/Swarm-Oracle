@@ -45,7 +45,7 @@ React + TypeScript frontend for SwarmOracle.
 - `WorldlineRoundtableView.tsx`
   launch payload now follows the latest `selectionMode` and current UI language instead of reusing stale callback state
 - `e2e-ending-room-followup-suite.mjs`
-  current API-driven followup flow now tolerates page/context reopen, keeps replay/import coverage as best-effort artifacts, and no longer blocks the full signoff contract on a single replay-control timeout
+  current followup flow uses API setup for hotseat / all-present / epilogue, submits evidence-card through the real UI drawer, and treats replay/import coverage as fail-closed rather than best-effort
 - `useEndingRoomWS.ts`
   Oracle WS reconnect now reuses the latest connect callback instead of holding a stale self-reference
 - `scenarioMeta`
@@ -156,7 +156,7 @@ npm run build:spike:phaser-custom
   - `output/e2e/20260331-oracle-signoff-ending-room/summary.json`
   - `output/e2e/20260331-oracle-signoff-roundtable/summary.json`
 - Current Oracle mobile targeted coverage now includes:
-  - ending-room `hotseat / all_present / epilogue / crossline gallery / evidence_card / artifact readonly / local readonly / local reload restore / import`
+  - ending-room `hotseat / all_present / epilogue / crossline gallery / evidence_card` through the UI drawer, plus `artifact readonly / local readonly / local reload restore / import`
   - roundtable `trait_mix / fault_line_first / witness_augmented / hotseat thread switch / artifact/local readonly / reload restore / import`
 - Current Oracle targeted QA also rechecked a true single-ending result page in a real browser:
   - no `Start Roundtable`

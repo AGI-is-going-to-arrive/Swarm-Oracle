@@ -443,7 +443,7 @@ npm run build
 ```
 
 - debate mobile E2E 当前按 rail fail-closed：
-  - 只认 `.debate-mobile-rail .btn`
+  - 只认 `.debate-mobile-rail .debate-primary-cta--rail`
   - rail 按钮不可用，或点击后没打开 modal / 没跳到结果页，脚本会直接失败
   - 不再 fallback 去点隐藏 hero CTA
 - 这组定向回归当前还会看：
@@ -461,7 +461,7 @@ source .venv/bin/activate
 python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q
 
 cd ../frontend
-npm test -- --run src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
+npm test -- --run src/api/client.test.ts src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
 node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
@@ -513,7 +513,8 @@ python -m pytest \
 
 ```bash
 cd frontend
-npm test -- --run src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/i18n/locales.test.ts
+npm test -- --run src/api/client.test.ts src/stores/endingRoomStore.test.ts src/components/EndingChatModal.test.tsx src/pages/ResultView.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/lib/endingRoomReplayAutomation.test.ts src/pages/roundtableHelpers.test.ts src/i18n/locales.test.ts
+node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
 npm exec -- tsc --noEmit -p tsconfig.app.json
 ```
 
@@ -547,10 +548,11 @@ npx tsc --noEmit -p tsconfig.app.json
 - `e2e-ending-room-followup-suite.mjs full`
   - 覆盖桌面 multi-ending，以及 mobile `single-ending verdict-anchor thread / multi-ending` 两条链路
   - 桌面/移动端均覆盖 `epilogue`（后续三回合）和 `evidence_card`（证据投牌）交互模式
-  - ending-room follow-up 当前走 deterministic API-driven 口径：
+  - ending-room follow-up 当前走 deterministic 口径：
     - 先 API 预热 `ending_chamber`
     - 再通过 `ResultView` 的 `debugEndingRoomBranch / debugEndingRoomMode / debugEndingRoomAgents` 直开 live chamber
-  - `hotseat / all_present / epilogue / evidence_card` 由 API 发起，UI 只负责观测已提交状态和 readonly replay
+  - `hotseat / all_present / epilogue` 由 API 发起，UI 负责观测已提交状态和 readonly replay
+  - `evidence_card` 走真实 UI 抽屉提交，会落 `*-evidence-card-ui.json / ui_submission`，不再使用 direct API append 产物当主证据
   - replay coverage 当前额外做了三层收口：
     - 复用旧页面前先 revalidate live chamber
     - `Copy / Save / Import` 只在 `.ending-chat-header__actions` 里找
@@ -596,7 +598,7 @@ npx tsc --noEmit -p tsconfig.app.json
   - Chromium / Firefox / WebKit 当前都可通过 `--browser` 单独执行
   - desktop 链路当前覆盖 pointer drag、`KeyboardSensor` 键盘拖拽、expert witness、selection mode 切换、hotseat、anchored thread、artifact/local readonly replay
   - replay 覆盖当前和 ending-room followup 保持同一口径：
-    - hero/header action scoped locator
+    - hero/header action scoped locator；如果动作收进 `More actions / 更多操作` 菜单，也会从菜单里点
     - live room 复用前先 revalidate
     - readonly replay 先校验 replay URL 契约
     - artifact share readonly restore 与 local readonly restore 都会校验，coverage 缺口直接失败
@@ -615,6 +617,7 @@ npx tsc --noEmit -p tsconfig.app.json
   - current summary 会落出 `transcript_layout`
   - result -> roundtable 入口当前会重试；如果还停在结果页，会落 `roundtable-entry-stall.json` 并直接失败
   - 首开与后续 `reseat / drag-to-seat / keyboard reseat / expert witness / selection mode reopen` 当前统一按 `90s` ready budget 等待最终 `has_result=true`
+  - composer user-turn settle 当前按 `120s` 预算等待，避免和开桌 ready budget 混在一起判读
   - 当前 fresh full rerun 已通过 desktop + mobile
   - `full --locale en` 本轮也已通过
 - `e2e-worldline-roundtable-suite.mjs mobile`
@@ -805,6 +808,9 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --u
 
 最近一轮 Debate / ending-room follow-up 工件：
 
+- `frontend/output/e2e/20260508-fix-debate-mobile-zh/result.json`
+- `frontend/output/e2e/20260508-fix-ending-room-basic/summary.json`
+- `frontend/output/e2e/20260508-fix-ending-followup-mobile-multi-zh/summary.json`
 - `frontend/output/e2e/2026-04-14-debate-full-rerun/result.json`
 - `frontend/output/e2e/2026-04-14-ending-room-followup-full-r3/summary.json`
 - `frontend/output/e2e/2026-04-15-debate-replay-full-r9/result.json`
@@ -819,6 +825,8 @@ SWARM_REQUIRE_DEBATE_ADJUDICATION_MODE=llm_hybrid npm run release:signoff -- --u
 
 最近一轮 Oracle 回归复验工件：
 
+- `frontend/output/e2e/20260508-fix-roundtable-desktop-zh-final4/summary.json`
+- `frontend/output/e2e/20260508-fix-roundtable-mobile-zh-final2/summary.json`
 - `frontend/output/e2e/20260423-oracle-regression-followup-rerun/summary.json`
 - `frontend/output/e2e/20260423-oracle-regression-roundtable-rerun-v2/summary.json`
 

@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildSessionHeaders, createReplayArtifact, exportScenario, getScenario } from './client';
+import { appendEndingRoomUserTurn, buildSessionHeaders, createReplayArtifact, exportScenario, getScenario } from './client';
 
 describe('api client request parsing', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it('rejects a 200 response when the payload is not JSON', async () => {
@@ -149,5 +150,31 @@ describe('api client request parsing', () => {
       createReplayArtifact('scenario_result_v1', { example: true }),
     ).rejects.toThrow('API 503 LLM_TEMPORARILY_UNAVAILABLE: Provider unavailable');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a longer timeout budget for slow ending-room follow-up turns', async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      requestSignal = init?.signal as AbortSignal | undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener('abort', () => {
+          reject(new DOMException('Aborted', 'AbortError'));
+        });
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = appendEndingRoomUserTurn('room-1', {
+      content: 'Follow the anchored quote.',
+    }).catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(requestSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(60000);
+    const error = await result;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('API request timed out after 90000ms: /ending-room/room-1/user-turn');
   });
 });

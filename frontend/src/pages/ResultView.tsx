@@ -1273,6 +1273,7 @@ export default function ResultView() {
   ]);
   const effectiveEndingRoomReplayPayload = activeEndingRoomReplayPayload ?? liveEndingRoomReplayPayload;
   const canImportActiveEndingRoomReplay = Boolean(activeEndingRoomReplayPayload);
+  const showResultReplayImportAction = isReplayMode && !activeEndingRoomBranch;
   const sourceFamilyContext = (
     scenario?.web_search_context?.family_context ?? EMPTY_SOURCE_FAMILY_CONTEXT
   ) as SourceFamilyContext;
@@ -1414,8 +1415,8 @@ export default function ResultView() {
             disabled={importingEndingRoomReplay}
           >
             {importingEndingRoomReplay
-              ? t('result.importing_local_run')
-              : t('result.import_local_run')}
+              ? t('sim.replay.importing')
+              : t('sim.replay.import_local')}
           </button>
         )}
       </>
@@ -1653,7 +1654,7 @@ export default function ResultView() {
                 {t('roundtable.entry_cta')}
               </button>
             )}
-            {isReplayMode && (
+            {showResultReplayImportAction && (
               <button
                 className="btn btn-primary"
                 onClick={() => void handleImportReplay()}

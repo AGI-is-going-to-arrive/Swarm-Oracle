@@ -607,7 +607,7 @@ async function clickVisibleEnabledButton(page, pattern, {
 async function openBet(page, mode, locale) {
   if (mode === "mobile") {
     const railClicked = await page.evaluate(() => {
-      const button = document.querySelector(".debate-mobile-rail .btn");
+      const button = document.querySelector(".debate-mobile-rail .debate-primary-cta--rail");
       if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
       const rect = button.getBoundingClientRect();
       const style = window.getComputedStyle(button);
@@ -666,7 +666,7 @@ async function openResult(page, mode, locale) {
 
   if (mode === "mobile") {
     const railClicked = await page.evaluate(() => {
-      const button = document.querySelector(".debate-mobile-rail .btn");
+      const button = document.querySelector(".debate-mobile-rail .debate-primary-cta--rail");
       if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
       const rect = button.getBoundingClientRect();
       const style = window.getComputedStyle(button);

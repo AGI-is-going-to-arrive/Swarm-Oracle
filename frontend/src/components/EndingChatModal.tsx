@@ -943,6 +943,28 @@ export default function EndingChatModal({
   const galleryCards = galleryBranches
     .filter((candidate) => candidate.id !== branch.id)
     .sort((left, right) => right.probability - left.probability);
+  const evidenceDrawerTitle = t('ending_room.evidence_card_drawer_title');
+  const evidenceDrawerHint = t('ending_room.evidence_card_drawer_hint');
+  const evidenceSummaryBadge = t('ending_room.evidence_card_summary_badge');
+  const evidenceCardLabel = t('ending_room.evidence_card_label');
+  const evidenceSubmitLabel = t('ending_room.action_evidence_card');
+  const evidenceSubmitHint = t('ending_room.evidence_card_submit_hint');
+  const handleEvidenceCardSubmit = (galleryBranch: StoryData['branches'][number]) => {
+    const evidenceSummary = galleryBranch.insight || galleryBranch.story || galleryBranch.title;
+    setInteractionMode('evidence_card');
+    void appendUserTurn({
+      content: `[${evidenceCardLabel}] ${galleryBranch.title}: ${evidenceSummary}`,
+      interactionMode: 'evidence_card',
+      citedBranchId: galleryBranch.id,
+      citedRefsJson: {
+        kind: 'evidence_card',
+        evidence_card_kind: 'summary',
+        source_branch_title: galleryBranch.title,
+        source_summary: galleryBranch.story || '',
+        source_insight: galleryBranch.insight || '',
+      },
+    });
+  };
   const transcriptTitle = isCrosslineGallery ? t('roundtable.gallery_title') : t('ending_room.transcript_title');
   const transcriptHeaderCopy = isCrosslineGallery ? t('roundtable.gallery_hint') : transcriptSubtitle;
   const transcriptHeaderNote = isCrosslineGallery
@@ -1449,6 +1471,41 @@ export default function EndingChatModal({
               </div>
             )}
 
+            {!isCrosslineGallery && composerEnabled && galleryCards.length > 0 && (
+              <details className="ending-chat-evidence-drawer" data-testid="ending-chat-evidence-drawer">
+                <summary>
+                  <span className="ending-chat-evidence-drawer__summary">
+                    <strong>{evidenceDrawerTitle}</strong>
+                    <span>{evidenceDrawerHint}</span>
+                  </span>
+                </summary>
+                <div className="ending-chat-gallery-list">
+                  {galleryCards.map((galleryBranch) => (
+                    <article key={galleryBranch.id} className="ending-chat-gallery-card ending-chat-evidence-card">
+                      <header className="ending-chat-gallery-card__header">
+                        <div>
+                          <strong>{galleryBranch.title}</strong>
+                          <span>{evidenceSummaryBadge}</span>
+                        </div>
+                        <em>{`${(galleryBranch.probability * 100).toFixed(1)}%`}</em>
+                      </header>
+                      <p>{galleryBranch.insight || galleryBranch.story || '—'}</p>
+                      <button
+                        type="button"
+                        className="ending-chat-inline-button ending-chat-evidence-btn"
+                        onClick={() => handleEvidenceCardSubmit(galleryBranch)}
+                        disabled={sending}
+                        title={evidenceSubmitHint}
+                        aria-label={`${evidenceSubmitLabel}: ${galleryBranch.title}`}
+                      >
+                        {evidenceSubmitLabel}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </details>
+            )}
+
             <div
               ref={transcriptListRef}
               className="ending-chat-transcript-list"
@@ -1507,47 +1564,6 @@ export default function EndingChatModal({
                     ))
                   )}
                 </div>
-              )}
-              {!isCrosslineGallery && composerEnabled && galleryCards.length > 0 && (
-                <details className="ending-chat-evidence-drawer">
-                  <summary>{t('ending_room.evidence_card_drop_hint')}</summary>
-                  <div className="ending-chat-gallery-list">
-                    {galleryCards.map((galleryBranch) => (
-                      <article key={galleryBranch.id} className="ending-chat-gallery-card ending-chat-evidence-card">
-                        <header className="ending-chat-gallery-card__header">
-                          <div>
-                            <strong>{galleryBranch.title}</strong>
-                            <span>{t('ending_room.foreign_summary_badge')}</span>
-                          </div>
-                          <em>{`${(galleryBranch.probability * 100).toFixed(1)}%`}</em>
-                        </header>
-                        <p>{galleryBranch.insight || galleryBranch.story || '—'}</p>
-                        <button
-                          type="button"
-                          className="ending-chat-inline-button ending-chat-evidence-btn"
-                          onClick={() => {
-                            const evidenceSummary = galleryBranch.insight || galleryBranch.story || galleryBranch.title;
-                            void appendUserTurn({
-                              content: `[${t('ending_room.evidence_card_label')}] ${galleryBranch.title}: ${evidenceSummary}`,
-                              interactionMode: 'evidence_card',
-                              citedBranchId: galleryBranch.id,
-                              citedRefsJson: {
-                                kind: 'evidence_card',
-                                evidence_card_kind: 'summary',
-                                source_branch_title: galleryBranch.title,
-                                source_summary: galleryBranch.story || '',
-                                source_insight: galleryBranch.insight || '',
-                              },
-                            });
-                          }}
-                          title={t('ending_room.evidence_card_hint')}
-                        >
-                          {t('ending_room.action_evidence_card')}
-                        </button>
-                      </article>
-                    ))}
-                  </div>
-                </details>
               )}
               {!isCrosslineGallery && !readOnly && currentTurns.length === 0 && displayedDrafts.length === 0 && status === 'loading' && (
                 <div className="ending-chat-empty-state">{t('ending_room.loading')}</div>

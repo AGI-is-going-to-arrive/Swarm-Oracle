@@ -99,6 +99,7 @@ function sanitizeErrorText(text: string): string {
 
 const DEFAULT_TIMEOUT = 30000; // M-5 fix: 30s default request timeout
 const SOCIAL_COPY_TIMEOUT = 90000;
+const ENDING_ROOM_USER_TURN_TIMEOUT = 90000;
 
 export interface RequestOptions {
   signal?: AbortSignal;
@@ -658,7 +659,7 @@ export async function appendEndingRoomUserTurn(
       ...(payload.citedBranchId ? { cited_branch_id: payload.citedBranchId } : {}),
       ...(payload.citedRefsJson ? { cited_refs_json: payload.citedRefsJson } : {}),
     }),
-  });
+  }, ENDING_ROOM_USER_TURN_TIMEOUT);
 }
 
 /** POST /api/ending-room/thread/:id/user-turn — append a follow-up turn inside a thread */
@@ -676,7 +677,7 @@ export async function appendEndingRoomThreadUserTurn(
       ...(payload.citedBranchId ? { cited_branch_id: payload.citedBranchId } : {}),
       ...(payload.citedRefsJson ? { cited_refs_json: payload.citedRefsJson } : {}),
     }),
-  });
+  }, ENDING_ROOM_USER_TURN_TIMEOUT);
 }
 
 /** POST /api/debate/import-replay — persist a replay snapshot as a local debate run */

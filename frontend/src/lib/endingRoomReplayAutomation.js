@@ -1,8 +1,8 @@
 export const ENDING_ROOM_COPY_REPLAY_PATTERN = /Copy replay|复制回放/i;
 
-export const ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN = /Import(?: as)? Local Run|导入为本地运行|导入本地运行/i;
+export const ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN = /Import(?: as)? Local Run|Import run|导入为本地运行|导入本地运行|导入运行/i;
 
-export const ENDING_ROOM_SAVE_READONLY_COPY_PATTERN = /Save(?: local)? read-only copy|保存本地只读副本|保存只读副本/i;
+export const ENDING_ROOM_SAVE_READONLY_COPY_PATTERN = /Save(?: local)? read-only copy|Save copy|保存本地只读副本|保存只读副本|保存副本/i;
 
 export function isReplayCoverageUrl(url) {
   return typeof url === 'string'

@@ -1488,13 +1488,17 @@ export default function WorldlineRoundtableView() {
         }
       }
     }
-    await appendUserTurn({
-      content,
-      addressedAgentIds,
-      questionAnchorIds: pendingQuestionAnchorIds,
-      interactionMode,
-    });
-    setPendingQuestionAnchorIds([]);
+    try {
+      await appendUserTurn({
+        content,
+        addressedAgentIds,
+        questionAnchorIds: pendingQuestionAnchorIds,
+        interactionMode,
+      });
+      setPendingQuestionAnchorIds([]);
+    } catch {
+      // The store keeps the live room usable and reloads after slow follow-up failures.
+    }
   }, [
     activeThread,
     addressedAgentIds,

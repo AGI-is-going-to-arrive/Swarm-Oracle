@@ -647,6 +647,111 @@ describe('endingRoomStore', () => {
     expect(useEndingRoomStore.getState().composerDraft).toBe('');
   });
 
+  it('reloads and clears the active thread draft when an appended follow-up turn times out without poisoning the room', async () => {
+    useEndingRoomStore.getState().hydrateSnapshot({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:01Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [],
+      result_ready: true,
+    });
+    useEndingRoomStore.getState().hydrateThread({
+      ...roomThread('thread-followup', 'followup'),
+      title: 'Follow-up Thread',
+    });
+    useEndingRoomStore.getState().setActiveThread('thread-followup');
+    useEndingRoomStore.getState().startDraft({
+      room_id: 'room-1',
+      thread_id: 'thread-followup',
+      turn_id: 'turn-timeout',
+      participant_id: 'p-1',
+      phase: 'verdict',
+      sequence: 6,
+    });
+    useEndingRoomStore.getState().appendDraft({
+      room_id: 'room-1',
+      thread_id: 'thread-followup',
+      turn_id: 'turn-timeout',
+      participant_id: 'p-1',
+      delta: 'Visible partial answer.',
+      chunk_index: 1,
+    });
+    appendEndingRoomThreadUserTurnMock.mockRejectedValue(
+      new Error('API request timed out after 30000ms: /ending-room/thread/thread-followup/user-turn'),
+    );
+    getEndingRoomMock.mockResolvedValue({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:04Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room'), roomThread('thread-followup', 'followup')],
+      turns: [],
+      result_ready: true,
+    });
+    getEndingRoomResultMock.mockResolvedValue({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'ending_chamber',
+      title: 'Ending Chamber',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:04Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room'), roomThread('thread-followup', 'followup')],
+      turns: [],
+      result_ready: true,
+      result: {
+        summary: 'Summary',
+      },
+    });
+    getEndingRoomThreadMock.mockResolvedValue({
+      ...roomThread('thread-followup', 'followup'),
+      title: 'Follow-up Thread',
+      turns: [],
+    });
+
+    await expect(useEndingRoomStore.getState().appendUserTurn({
+      content: 'Stay inside this thread.',
+      questionAnchorIds: ['ending:quote:branch-1:turn-1'],
+      interactionMode: 'thread_followup',
+    })).rejects.toThrow('timed out');
+
+    expect(getEndingRoomMock).toHaveBeenCalledWith('room-1');
+    expect(getEndingRoomThreadMock).toHaveBeenCalledWith('thread-followup');
+    expect(useEndingRoomStore.getState().pendingDrafts).toEqual({});
+    expect(useEndingRoomStore.getState().status).not.toBe('error');
+    expect(useEndingRoomStore.getState().snapshot?.status).toBe('done');
+
+    useEndingRoomStore.getState().appendDraft({
+      room_id: 'room-1',
+      thread_id: 'thread-followup',
+      turn_id: 'turn-timeout',
+      participant_id: 'p-1',
+      delta: 'late delta',
+      chunk_index: 2,
+    });
+    expect(useEndingRoomStore.getState().pendingDrafts).toEqual({});
+  });
+
   it('reloads the room after appending turns so late-created user participants hydrate into the snapshot', async () => {
     useEndingRoomStore.getState().hydrateSnapshot({
       id: 'room-1',

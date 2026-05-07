@@ -133,6 +133,13 @@ vi.mock('react-i18next', () => ({
         'ending_room.action_new_thread': 'Start anchored thread',
         'ending_room.action_copy_brief': 'Copy chamber brief',
         'ending_room.action_brief_copied': 'Chamber brief copied',
+        'ending_room.action_evidence_card': 'Submit evidence card',
+        'ending_room.evidence_card_label': 'Evidence from another worldline',
+        'ending_room.evidence_card_hint': 'Compare another worldline summary.',
+        'ending_room.evidence_card_drawer_title': 'Evidence card drawer',
+        'ending_room.evidence_card_drawer_hint': 'Choose a summary card from another worldline.',
+        'ending_room.evidence_card_summary_badge': 'Other worldline summary',
+        'ending_room.evidence_card_submit_hint': 'Submit this summary card to the current chamber',
         'ending_room.action_follow_insight': 'Follow this insight',
         'ending_room.action_follow_quote': 'Follow this quote',
         'ending_room.action_thread_from_anchor': 'Start thread from current anchor',
@@ -808,6 +815,58 @@ describe('EndingChatModal', () => {
     expect(screen.getByText('Another line bent differently.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
     expect(screen.getAllByText('This view exposes summaries and key quotes from other worldlines, not the full transcript.').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('ending-chat-evidence-drawer')).not.toBeInTheDocument();
+  });
+
+  it('lets users expand the evidence drawer and submit another worldline card', async () => {
+    buildLiveSnapshot();
+    const user = userEvent.setup();
+    const otherBranch = {
+      ...branch,
+      id: 'branch-2',
+      title: 'Second Branch',
+      probability: 0.36,
+      story: 'A second branch story.',
+      insight: 'Another line bent differently.',
+      summary: 'A distant branch summary.',
+      key_moments: ['Moment 2'],
+    };
+
+    render(
+      <EndingChatModal
+        open
+        scenarioId="scenario-1"
+        branch={branch}
+        roomType="ending_chamber"
+        galleryBranches={[branch, otherBranch]}
+        language="en"
+        readOnly={false}
+        onClose={() => {}}
+        onModeChange={vi.fn()}
+      />,
+    );
+
+    const drawer = screen.getByTestId('ending-chat-evidence-drawer');
+    expect(drawer).not.toHaveAttribute('open');
+
+    await user.click(screen.getByText('Evidence card drawer'));
+    expect(drawer).toHaveAttribute('open');
+
+    await user.click(screen.getByRole('button', { name: 'Submit evidence card: Second Branch' }));
+
+    expect(storeState.setInteractionMode).toHaveBeenCalledWith('evidence_card');
+    await waitFor(() => expect(storeState.appendUserTurn).toHaveBeenCalledWith({
+      content: '[Evidence from another worldline] Second Branch: Another line bent differently.',
+      interactionMode: 'evidence_card',
+      citedBranchId: 'branch-2',
+      citedRefsJson: {
+        kind: 'evidence_card',
+        evidence_card_kind: 'summary',
+        source_branch_title: 'Second Branch',
+        source_summary: 'A second branch story.',
+        source_insight: 'Another line bent differently.',
+      },
+    }));
   });
 
   it('offers anchored verdict actions without breaking chamber scope', async () => {

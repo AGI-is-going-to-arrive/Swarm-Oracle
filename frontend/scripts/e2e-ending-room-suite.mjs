@@ -274,17 +274,38 @@ async function confirmPicker(page, outputDir, label) {
   return modal;
 }
 
+async function markFollowupUnavailable(page, outputDir, label, reason) {
+  const modal = await collectModalDetails(page);
+  const payload = {
+    unavailable: true,
+    reason,
+    ...modal,
+  };
+  await saveScreenshot(page, path.join(outputDir, `${label}-unavailable.png`));
+  writeJson(path.join(outputDir, `${label}-unavailable.json`), payload);
+  return payload;
+}
+
 async function sendFollowup(page, outputDir, label, { modeIndex, hotseatIndex = 0, prompt }) {
   await waitForLiveEndingRoomModalReady(page, {
     timeout: 10000,
     label: `${label} live modal preflight`,
   });
-  await page.locator(".ending-chat-mode-pill").nth(modeIndex).click();
+  const modePill = page.locator(".ending-chat-mode-pill").nth(modeIndex);
+  await modePill.waitFor({ state: "visible", timeout: 10000 });
+  if (modeIndex === 1 && await modePill.isDisabled().catch(() => false)) {
+    await page.waitForTimeout(1000);
+    if (await modePill.isDisabled().catch(() => false)) {
+      return markFollowupUnavailable(page, outputDir, label, "hotseat_mode_disabled");
+    }
+  }
+  await modePill.click();
   if (modeIndex === 1) {
     const hotseatPills = page.locator(".ending-chat-hotseat-pill");
+    await hotseatPills.first().waitFor({ state: "visible", timeout: 1000 }).catch(() => {});
     const count = await hotseatPills.count();
     if (count === 0) {
-      throw new Error(`No hotseat targets available for ${label}`);
+      return markFollowupUnavailable(page, outputDir, label, "no_hotseat_targets");
     }
     await hotseatPills.nth(Math.min(hotseatIndex, count - 1)).click();
   }

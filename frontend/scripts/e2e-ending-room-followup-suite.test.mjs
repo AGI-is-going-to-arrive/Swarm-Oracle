@@ -282,6 +282,8 @@ test("waitForApiDrivenFollowupVisible does not treat unchanged same-thread threa
         },
       },
     }),
+    isFollowupModalStateSatisfied: () => false,
+    anchorIdsEqual: () => true,
     waitForExpectedFollowupSettled: async () => {
       throw new Error("Unexpected settled fallback");
     },

@@ -123,6 +123,8 @@ const initialState = {
 };
 
 let endingRoomRequestEpoch = 0;
+const dismissedDraftIds = new Set<string>();
+const MAX_DISMISSED_DRAFT_IDS = 200;
 
 function bumpEndingRoomRequestEpoch(): number {
   endingRoomRequestEpoch += 1;
@@ -262,6 +264,46 @@ function prunePendingDrafts(
       return;
     }
     next[turnId] = draft;
+  });
+  return changed ? next : pendingDrafts;
+}
+
+function collectPendingDraftIdsForThread(
+  pendingDrafts: Record<string, EndingRoomDraft>,
+  threadId: string | null,
+): string[] {
+  return Object.values(pendingDrafts)
+    .filter((draft) => threadId === null || draft.threadId === threadId)
+    .map((draft) => draft.turnId);
+}
+
+function rememberDismissedDraftIds(turnIds: string[]): void {
+  for (const turnId of turnIds) {
+    dismissedDraftIds.delete(turnId);
+    dismissedDraftIds.add(turnId);
+  }
+  while (dismissedDraftIds.size > MAX_DISMISSED_DRAFT_IDS) {
+    const oldestTurnId = dismissedDraftIds.values().next().value;
+    if (!oldestTurnId) break;
+    dismissedDraftIds.delete(oldestTurnId);
+  }
+}
+
+function removePendingDraftsForThread(
+  pendingDrafts: Record<string, EndingRoomDraft>,
+  threadId: string | null,
+): Record<string, EndingRoomDraft> {
+  if (Object.keys(pendingDrafts).length === 0) {
+    return pendingDrafts;
+  }
+  let changed = false;
+  const next: Record<string, EndingRoomDraft> = {};
+  Object.values(pendingDrafts).forEach((draft) => {
+    if (threadId === null || draft.threadId === threadId) {
+      changed = true;
+      return;
+    }
+    next[draft.turnId] = draft;
   });
   return changed ? next : pendingDrafts;
 }
@@ -464,7 +506,10 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
   }),
 
   startDraft: (payload) => set((state) => {
-    if (collectCommittedTurnIds(state.snapshot, state.threadsById).has(payload.turn_id)) {
+    if (
+      dismissedDraftIds.has(payload.turn_id)
+      || collectCommittedTurnIds(state.snapshot, state.threadsById).has(payload.turn_id)
+    ) {
       return state;
     }
     return {
@@ -483,7 +528,10 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
   }),
 
   appendDraft: (payload) => set((state) => {
-    if (collectCommittedTurnIds(state.snapshot, state.threadsById).has(payload.turn_id)) {
+    if (
+      dismissedDraftIds.has(payload.turn_id)
+      || collectCommittedTurnIds(state.snapshot, state.threadsById).has(payload.turn_id)
+    ) {
       return state;
     }
     const current = state.pendingDrafts[payload.turn_id];
@@ -506,6 +554,7 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
     if (!payload.turn_id) {
       return state;
     }
+    dismissedDraftIds.delete(payload.turn_id);
     if (!(payload.turn_id in state.pendingDrafts)) {
       return state;
     }
@@ -517,6 +566,7 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
   }),
 
   commitTurn: (turn) => set((state) => {
+    dismissedDraftIds.delete(turn.id);
     if (!state.snapshot) return state;
     const pendingDrafts = { ...state.pendingDrafts };
     delete pendingDrafts[turn.id];
@@ -578,21 +628,56 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
     if (!roomId) return;
     const threadId = state.activeThreadId;
     const thread = threadId ? state.threadsById[threadId] : undefined;
+    const followupThread = thread?.mode === 'followup' ? thread : null;
+    const targetThreadId = followupThread
+      ? followupThread.id
+      : resolveDefaultThreadId(state.snapshot);
     set(() => ({ sending: true, error: null, errorCode: null }));
     try {
-      const response = thread && thread.mode === 'followup'
-        ? await appendEndingRoomThreadUserTurn(thread.id, payload)
+      const response = followupThread
+        ? await appendEndingRoomThreadUserTurn(followupThread.id, payload)
         : await appendEndingRoomUserTurn(roomId, payload);
       response.turns.forEach((turn) => get().commitTurn(turn));
       set(() => ({ composerDraft: '' }));
       // Follow-up APIs only return new turns. Re-read the room so derived thread state
       // and late-created participants (for example the local user turn) stay in sync.
       await get().loadRoom(roomId);
-      if (thread && thread.mode === 'followup') {
-        await get().loadThread(thread.id);
+      if (followupThread) {
+        await get().loadThread(followupThread.id);
       }
     } catch (error) {
-      get().setError(error, translate('ending_room.load_failed'));
+      const clearTargetDrafts = () => {
+        rememberDismissedDraftIds(collectPendingDraftIdsForThread(get().pendingDrafts, targetThreadId));
+        set((current) => ({
+          errorCode: getApiErrorCode(error),
+          error: getLocalizedApiErrorMessage(error, translate, translate('ending_room.load_failed')),
+          pendingDrafts: removePendingDraftsForThread(current.pendingDrafts, targetThreadId),
+        }));
+      };
+      clearTargetDrafts();
+      try {
+        const snapshot = await getEndingRoom(roomId);
+        get().hydrateSnapshot(snapshot);
+        if (snapshot.result_ready) {
+          try {
+            const resultPayload = await getEndingRoomResult(roomId);
+            get().hydrateResult(resultPayload);
+          } catch {
+            // Keep the room usable; the next WS/resync can retry result hydration.
+          }
+        }
+      } catch {
+        // A recovery poll should not turn a send timeout into a fatal room state.
+      }
+      if (followupThread) {
+        try {
+          const threadPayload = await getEndingRoomThread(followupThread.id);
+          get().hydrateThread(threadPayload);
+        } catch {
+          // Thread recovery is best-effort; draft cleanup below still prevents ghosts.
+        }
+      }
+      clearTargetDrafts();
       throw error;
     } finally {
       set(() => ({ sending: false }));
@@ -615,6 +700,7 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
 
   reset: () => {
     bumpEndingRoomRequestEpoch();
+    dismissedDraftIds.clear();
     set(initialState);
   },
 }));

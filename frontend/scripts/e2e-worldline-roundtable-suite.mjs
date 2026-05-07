@@ -24,6 +24,17 @@ const VALID_BROWSERS = new Set(["chromium", "firefox", "webkit"]);
 const VALID_LOCALES = new Set(["zh", "en"]);
 const LANGUAGE_STORAGE_KEY = "swarmoracle:language:v1";
 const ROUNDTABLE_READY_TIMEOUT_MS = 90000;
+const ROUNDTABLE_USER_TURN_SETTLE_TIMEOUT_MS = 120000;
+const RESEAT_REOPEN_BUTTON_PATTERN = /Reseat & restart|Reseat and reopen|换人重开|改选代表并重开/i;
+const MORE_ACTIONS_BUTTON_PATTERN = /More actions|更多操作/i;
+const MODE_MANUAL_SHORTLIST_PATTERN = /Hand-pick|Manual shortlist|手动挑选|手动短名单/i;
+const MODE_EXPERT_WITNESS_PATTERN = /Invite expert|Expert witness|请专家|专家证人/i;
+const MODE_TRAIT_MIX_PATTERN = /Clash mix|Trait mix|观点对冲|冲突人设混编/i;
+const MODE_FAULT_LINE_FIRST_PATTERN = /Biggest split first|Fault line first|分歧优先|先看最大分歧/i;
+const MODE_WITNESS_AUGMENTED_PATTERN = /Auto-fill|Witness augmented|自动补人|自动增补证人/i;
+const HOTSEAT_MODE_PATTERN = /Question one rep|Representative hotseat|单独追问|点名代表|代表热座/i;
+const NEW_THREAD_BUTTON_PATTERN = /Start anchored thread|New topic|另开线程|新开话题/i;
+const CURRENT_ANCHOR_THREAD_BUTTON_PATTERN = /Start thread from current anchor|New topic from here|从当前锚点开始线程|从当前锚点发起线程|按当前锚点另开线程|就这个点新开话题/i;
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -73,6 +84,23 @@ async function readLocaleState(page) {
     document_language: document.documentElement.lang,
     stored_language: window.localStorage.getItem(storageKey),
   }), LANGUAGE_STORAGE_KEY);
+}
+
+async function openReseatEditor(page) {
+  const directButton = page.getByRole("button", { name: RESEAT_REOPEN_BUTTON_PATTERN }).first();
+  if (await directButton.isVisible().catch(() => false)) {
+    await directButton.click();
+    return;
+  }
+
+  const menuTrigger = page.getByRole("button", { name: MORE_ACTIONS_BUTTON_PATTERN }).first();
+  if (await menuTrigger.isVisible().catch(() => false)) {
+    await menuTrigger.click();
+  } else {
+    await page.locator(".roundtable-hero-action-menu__trigger").first().click();
+  }
+
+  await page.getByRole("button", { name: RESEAT_REOPEN_BUTTON_PATTERN }).first().click();
 }
 
 function assertUiLocaleState(localeState, locale, label) {
@@ -324,7 +352,7 @@ async function tapLocator(page, locator, label) {
 
 function locateRoundtableHeaderAction(page, namePattern) {
   return page
-    .locator(".worldline-roundtable-hero__actions .btn")
+    .locator(".worldline-roundtable-hero__actions button")
     .filter({ hasText: namePattern })
     .last();
 }
@@ -334,7 +362,14 @@ async function waitForRoundtableHeaderAction(page, {
   namePattern,
   timeout = 30000,
 } = {}) {
-  const action = locateRoundtableHeaderAction(page, namePattern);
+  let action = locateRoundtableHeaderAction(page, namePattern);
+  if (!(await action.isVisible({ timeout: 500 }).catch(() => false))) {
+    const menuTrigger = page.getByRole("button", { name: MORE_ACTIONS_BUTTON_PATTERN }).first();
+    if (await menuTrigger.isVisible().catch(() => false)) {
+      await menuTrigger.click();
+    }
+    action = locateRoundtableHeaderAction(page, namePattern);
+  }
   await action.waitFor({ state: "visible", timeout });
   return action;
 }
@@ -529,7 +564,7 @@ async function openRoundtable(page, baseUrl, backendUrl, scenarioId, outputDir, 
   const roundtableRoutePattern = new RegExp(`/roundtable/${scenarioId}(?:[/?#].*)?$`);
   await gotoWithRetry(page, resultUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
   const entryButton = page.getByRole("button", {
-    name: normalizeLocale(locale) === "en" ? /Start Roundtable/i : /Start Roundtable|发起圆桌/i,
+    name: normalizeLocale(locale) === "en" ? /Start Roundtable/i : /Start Roundtable|开始圆桌|发起圆桌/i,
   }).first();
   await entryButton.waitFor({ state: "visible", timeout: 30000 });
   await clickActionable(entryButton, "roundtable entry CTA");
@@ -667,7 +702,7 @@ async function sendComposer(page, prompt, modeText, options = {}) {
         isBaseSatisfied(payload?.page?.controls, payload)
         && (payload?.page?.controls?.pending_drafts?.length ?? 0) === 0
       ),
-      30000,
+      ROUNDTABLE_USER_TURN_SETTLE_TIMEOUT_MS,
       `composer send ${modeText} settled fallback`,
     );
     return {
@@ -686,7 +721,8 @@ async function sendComposer(page, prompt, modeText, options = {}) {
 async function waitForDraftBubblesToSettle(page, label) {
   await page.waitForFunction(
     () => document.querySelectorAll(".ending-chat-bubble--draft").length === 0,
-    { timeout: 60000 },
+    undefined,
+    { timeout: ROUNDTABLE_USER_TURN_SETTLE_TIMEOUT_MS },
   ).catch(() => {
     throw new Error(`Timed out waiting for ${label}`);
   });
@@ -695,6 +731,7 @@ async function waitForDraftBubblesToSettle(page, label) {
 async function waitForTranscriptActionsReady(page, label, timeout = 60000) {
   await page.waitForFunction(
     () => document.querySelectorAll(".ending-chat-bubble__actions button").length > 0,
+    undefined,
     { timeout },
   ).catch(() => {
     throw new Error(`Timed out waiting for ${label}`);
@@ -709,7 +746,7 @@ async function createVerdictAnchoredThread(page, label) {
     name: /Follow this quote|沿这句追问/i,
   });
   const quoteThreadButton = firstBubbleActions.getByRole("button", {
-    name: /Start anchored thread|另开线程/i,
+    name: NEW_THREAD_BUTTON_PATTERN,
   });
   if (await quoteFollowButton.isVisible().catch(() => false)) {
     await quoteFollowButton.scrollIntoViewIfNeeded().catch(() => {});
@@ -724,16 +761,16 @@ async function createVerdictAnchoredThread(page, label) {
   } else if (await quoteThreadButton.isVisible().catch(() => false)) {
     await clickActionable(quoteThreadButton, `${label} quote thread button`);
   } else {
-    const globalQuoteThreadButton = page.getByRole("button", { name: /Start anchored thread|另开线程/i }).last();
+    const globalQuoteThreadButton = page.getByRole("button", { name: NEW_THREAD_BUTTON_PATTERN }).last();
     if (await globalQuoteThreadButton.isVisible().catch(() => false)) {
       await clickActionable(globalQuoteThreadButton, `${label} global quote thread button`);
     } else {
       await clickActionable(
-        page.getByRole("button", { name: /Archive Verdict|档案总结|档案结论/i }).first(),
+        page.getByRole("button", { name: /Archive Verdict|Final Verdict|Verdict|档案总结|档案结论|最终结论|最终裁定|裁决/i }).first(),
         `${label} archive verdict button`,
       );
       await clickActionable(
-        page.getByRole("button", { name: /Start thread from current anchor|从当前锚点开始线程|从当前锚点发起线程/i }),
+        page.getByRole("button", { name: CURRENT_ANCHOR_THREAD_BUTTON_PATTERN }),
         `${label} current anchor thread button`,
       );
     }
@@ -759,13 +796,13 @@ async function sendAnchoredFollowup(page, label, options = {}) {
   await page.waitForFunction(() => {
     const input = document.querySelector(".ending-chat-composer__input");
     return input instanceof HTMLTextAreaElement && input.value.trim().length > 0;
-  }, { timeout: 10000 });
+  }, undefined, { timeout: 10000 });
   await page.waitForFunction(() => {
     const raw = window.render_game_to_text?.();
     if (!raw) return false;
     const payload = JSON.parse(raw);
     return payload.page?.controls?.can_send === true;
-  }, { timeout: 10000 });
+  }, undefined, { timeout: 10000 });
   await clickActionable(page.locator(".ending-chat-send"), `${label} anchored send button`);
   await waitForAutomation(
     page,
@@ -889,10 +926,10 @@ async function focusHotseatThread(page, expectedThreadId) {
 async function reseatRoundtable(page) {
   const before = await readAutomation(page);
   const previousRoomId = before?.scene?.room_id ?? null;
-  await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
+  await openReseatEditor(page);
   await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
 
-  const manualShortlistButton = page.getByRole("button", { name: /Manual shortlist|手动短名单/i }).first();
+  const manualShortlistButton = page.getByRole("button", { name: MODE_MANUAL_SHORTLIST_PATTERN }).first();
   if (await manualShortlistButton.isVisible().catch(() => false)) {
     await manualShortlistButton.click();
   }
@@ -951,7 +988,7 @@ async function reseatRoundtable(page) {
 async function dragReseatRoundtable(page) {
   const before = await readAutomation(page);
   const previousRoomId = before?.scene?.room_id ?? null;
-  await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
+  await openReseatEditor(page);
   await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
 
   const sourceCard = page
@@ -1037,7 +1074,7 @@ async function dragReseatRoundtable(page) {
 async function clickReseatRoundtable(page) {
   const before = await readAutomation(page);
   const previousRoomId = before?.scene?.room_id ?? null;
-  await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
+  await openReseatEditor(page);
   await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
 
   let nextRepresentative = null;
@@ -1106,7 +1143,7 @@ async function clickReseatRoundtable(page) {
 async function keyboardReseatRoundtable(page) {
   const before = await readAutomation(page);
   const previousRoomId = before?.scene?.room_id ?? null;
-  await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
+  await openReseatEditor(page);
   await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
 
   const sourceCard = page
@@ -1193,10 +1230,10 @@ async function keyboardReseatRoundtable(page) {
 async function addExpertWitness(page) {
   const before = await readAutomation(page);
   const previousRoomId = before?.scene?.room_id ?? null;
-  await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
+  await openReseatEditor(page);
   await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
 
-  const expertWitnessButton = page.getByRole("button", { name: /Expert witness|专家证人/i }).first();
+  const expertWitnessButton = page.getByRole("button", { name: MODE_EXPERT_WITNESS_PATTERN }).first();
   if (await expertWitnessButton.isVisible().catch(() => false)) {
     await expertWitnessButton.click();
   }
@@ -1268,7 +1305,7 @@ async function reopenWithSelectionMode(page, {
 }) {
   const before = await readAutomation(page);
   const previousRoomId = before?.scene?.room_id ?? null;
-  await page.getByRole("button", { name: /Reseat and reopen|改选代表并重开/i }).first().click();
+  await openReseatEditor(page);
   await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
   await page.getByRole("button", { name: modeButton }).first().click();
   const reopenButton = page.getByRole("button", {
@@ -1341,7 +1378,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
   writeJson(path.join(outputDir, "desktop-roundtable-expert-witness.json"), expertWitness);
 
   const traitMix = await reopenWithSelectionMode(page, {
-    modeButton: /Trait mix|冲突人设混编/i,
+    modeButton: MODE_TRAIT_MIX_PATTERN,
     expectedMode: "trait_mix",
     label: "trait mix roundtable",
   });
@@ -1349,7 +1386,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
   writeJson(path.join(outputDir, "desktop-roundtable-trait-mix.json"), traitMix);
 
   const faultLineFirst = await reopenWithSelectionMode(page, {
-    modeButton: /Fault line first|先看最大分歧/i,
+    modeButton: MODE_FAULT_LINE_FIRST_PATTERN,
     expectedMode: "fault_line_first",
     label: "fault line first roundtable",
   });
@@ -1357,7 +1394,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
   writeJson(path.join(outputDir, "desktop-roundtable-fault-line-first.json"), faultLineFirst);
 
   const witnessAugmented = await reopenWithSelectionMode(page, {
-    modeButton: /Witness augmented|自动增补证人/i,
+    modeButton: MODE_WITNESS_AUGMENTED_PATTERN,
     expectedMode: "witness_augmented",
     label: "witness augmented roundtable",
   });
@@ -1368,12 +1405,13 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
     page,
     getRoundtableArchivistPrompt(locale),
     /Archivist lead|Archivist-guided|Archivist route|档案官主持|档案官引导|档案官路由/i,
+    { skipModeClick: true },
   );
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-archivist.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-archivist.json"), archivist);
   await waitForDraftBubblesToSettle(page, "desktop archivist draft settle");
 
-  await page.getByRole("button", { name: /Question one rep|Representative hotseat|点名代表|代表热座/i }).click();
+  await page.getByRole("button", { name: HOTSEAT_MODE_PATTERN }).click();
   const hotseatTargets = await page.locator(".ending-chat-hotseat-pill").count();
   if (hotseatTargets > 0) {
     await page.locator(".ending-chat-hotseat-pill").first().click();
@@ -1381,7 +1419,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
   const hotseat = await sendComposer(
     page,
     getRoundtableHotseatPrompt(locale),
-    /Question one rep|Representative hotseat|点名代表|代表热座/i,
+    HOTSEAT_MODE_PATTERN,
     {
       expectThreadSwitch: true,
       expectedInteractionMode: "hotseat",
@@ -1425,11 +1463,11 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
     label: "desktop roundtable replay preflight",
   });
   await armClipboardCapture(page);
-  await (await waitForRoundtableHeaderAction(page, {
+  await clickActionable(await waitForRoundtableHeaderAction(page, {
     label: "desktop roundtable copy replay",
     namePattern: ENDING_ROOM_COPY_REPLAY_PATTERN,
     timeout: 30000,
-  })).click();
+  }), "desktop roundtable copy replay");
   const shareReplayUrl = await waitForCapturedClipboardUrl(page, "roundtable copied share permalink");
   const sharePage = await context.newPage();
   await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
@@ -1460,11 +1498,11 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
   await assertUiLocale(sharePage, locale, "roundtable desktop artifact replay restore ui");
   await saveScreenshot(sharePage, path.join(outputDir, "desktop-roundtable-replay-artifact-reloaded.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-replay-artifact-reloaded.json"), artifactReloaded);
-  await (await waitForRoundtableHeaderAction(sharePage, {
+  await clickActionable(await waitForRoundtableHeaderAction(sharePage, {
     label: "desktop roundtable artifact import",
     namePattern: ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
     timeout: 30000,
-  })).click();
+  }), "desktop roundtable artifact import");
   await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
   const artifactImportedUrl = sharePage.url();
 
@@ -1477,11 +1515,11 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
     timeout: 15000,
     label: "desktop roundtable readonly save preflight",
   });
-  await (await waitForRoundtableHeaderAction(page, {
+  await clickActionable(await waitForRoundtableHeaderAction(page, {
     label: "desktop roundtable save readonly copy",
     namePattern: ENDING_ROOM_SAVE_READONLY_COPY_PATTERN,
     timeout: 30000,
-  })).click();
+  }), "desktop roundtable save readonly copy");
   await page.waitForURL(/\/roundtable\/replay\?roomLocal=/, { timeout: 15000 });
   const replayReadonly = await waitForReadonlyRoundtableReplayVisible(page, {
     replayKind: "local",
@@ -1579,7 +1617,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
   writeJson(path.join(outputDir, "mobile-roundtable-click-reseated.json"), clickReseated);
 
   const traitMix = await reopenWithSelectionMode(page, {
-    modeButton: /Trait mix|冲突人设混编/i,
+    modeButton: MODE_TRAIT_MIX_PATTERN,
     expectedMode: "trait_mix",
     label: "mobile trait mix roundtable",
   });
@@ -1587,7 +1625,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
   writeJson(path.join(outputDir, "mobile-roundtable-trait-mix.json"), traitMix);
 
   const faultLineFirst = await reopenWithSelectionMode(page, {
-    modeButton: /Fault line first|先看最大分歧/i,
+    modeButton: MODE_FAULT_LINE_FIRST_PATTERN,
     expectedMode: "fault_line_first",
     label: "mobile fault line first roundtable",
   });
@@ -1595,14 +1633,14 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
   writeJson(path.join(outputDir, "mobile-roundtable-fault-line-first.json"), faultLineFirst);
 
   const witnessAugmented = await reopenWithSelectionMode(page, {
-    modeButton: /Witness augmented|自动增补证人/i,
+    modeButton: MODE_WITNESS_AUGMENTED_PATTERN,
     expectedMode: "witness_augmented",
     label: "mobile witness augmented roundtable",
   });
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-witness-augmented.png"));
   writeJson(path.join(outputDir, "mobile-roundtable-witness-augmented.json"), witnessAugmented);
 
-  await page.getByRole("button", { name: /Question one rep|Representative hotseat|点名代表|代表热座/i }).click();
+  await page.getByRole("button", { name: HOTSEAT_MODE_PATTERN }).click();
   const hotseatTargets = await page.locator(".ending-chat-hotseat-pill").count();
   if (hotseatTargets > 0) {
     await page.locator(".ending-chat-hotseat-pill").first().click();
@@ -1610,7 +1648,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
   const hotseat = await sendComposer(
     page,
     getRoundtableHotseatPrompt(locale),
-    /Question one rep|Representative hotseat|点名代表|代表热座/i,
+    HOTSEAT_MODE_PATTERN,
     {
       expectThreadSwitch: true,
       expectedInteractionMode: "hotseat",
@@ -1662,11 +1700,11 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
   let replayReloaded = null;
   let replayCoverageError = null;
   try {
-    await (await waitForRoundtableHeaderAction(page, {
+    await clickActionable(await waitForRoundtableHeaderAction(page, {
       label: "mobile roundtable copy replay",
       namePattern: ENDING_ROOM_COPY_REPLAY_PATTERN,
       timeout: 30000,
-    })).click();
+    }), "mobile roundtable copy replay");
     const shareReplayUrl = await waitForCapturedClipboardUrl(page, "mobile roundtable copied share permalink");
     const sharePage = await context.newPage();
     await sharePage.goto(shareReplayUrl, { waitUntil: "domcontentloaded" });
@@ -1695,11 +1733,11 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
     await assertUiLocale(sharePage, locale, "roundtable mobile artifact replay restore ui");
     await saveScreenshot(sharePage, path.join(outputDir, "mobile-roundtable-replay-artifact-reloaded.png"));
     writeJson(path.join(outputDir, "mobile-roundtable-replay-artifact-reloaded.json"), artifactReloaded);
-    await (await waitForRoundtableHeaderAction(sharePage, {
+    await clickActionable(await waitForRoundtableHeaderAction(sharePage, {
       label: "mobile roundtable artifact import",
       namePattern: ENDING_ROOM_IMPORT_LOCAL_RUN_PATTERN,
       timeout: 30000,
-    })).click();
+    }), "mobile roundtable artifact import");
     await sharePage.waitForURL(/\/sim\//, { timeout: 15000 });
     artifactImportedUrl = sharePage.url();
 
@@ -1712,11 +1750,11 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
       timeout: 15000,
       label: "mobile roundtable readonly save preflight",
     });
-    await (await waitForRoundtableHeaderAction(page, {
+    await clickActionable(await waitForRoundtableHeaderAction(page, {
       label: "mobile roundtable save readonly copy",
       namePattern: ENDING_ROOM_SAVE_READONLY_COPY_PATTERN,
       timeout: 30000,
-    })).click();
+    }), "mobile roundtable save readonly copy");
     await page.waitForURL(/\/roundtable\/replay\?roomLocal=/, { timeout: 15000 });
     replayReadonly = await waitForReadonlyRoundtableReplayVisible(page, {
       replayKind: "local",

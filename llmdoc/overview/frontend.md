@@ -149,7 +149,7 @@
 | `predictionBetting.ts` | `frontend/src/lib/predictionBetting.ts` | 结构化押注 helper |
 | `gameplayContract.ts` | `frontend/src/lib/gameplayContract.ts` | 共享玩法契约消费层 |
 | `roundtableSelection.ts` | `frontend/src/lib/roundtableSelection.ts` | `trait_mix / fault_line_first / witness_augmented` 选择辅助与测试入口 |
-| `endingRoomReplayAutomation.js` | `frontend/src/lib/endingRoomReplayAutomation.js` | ending-room replay URL 判定 helper；当前识别 `roomReplay / roomShare / roomLocal`，并复用 live modal / readonly UI 判定 |
+| `endingRoomReplayAutomation.js` | `frontend/src/lib/endingRoomReplayAutomation.js` | ending-room replay URL 判定 helper；当前识别 `roomReplay / roomShare / roomLocal`，并复用 live modal / readonly UI 判定；replay action 文案兼容 `Save copy / 保存副本` 与 `Import run / 导入运行` |
 | `roundtableReplayAutomation.js` | `frontend/src/lib/roundtableReplayAutomation.js` | roundtable live / readonly replay automation payload 判定 helper |
 | `endingRoomPickerAutomation.js` | `frontend/src/lib/endingRoomPickerAutomation.js` | 结果页 ending-room picker 的 DOM-first 打开 helper 与 UI-ready 判定 |
 | `endingRoomStore.ts` / `worldlineRoundtableStore.ts` | `frontend/src/stores/` | ending-room / roundtable 状态；`worldlineRoundtableStore` 是 `endingRoomStore` 的 re-export |
@@ -234,6 +234,7 @@
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - ending-room artifact/local replay 当前统一落到 `/result/replay?...`；不再要求先拼出 `/result/:scenarioId?...` 才能读出来。artifact payload 里的 `scenario.total_rounds=null` 也会被前端 replay 正常接受，不会再把只读页打成空结果。
 - ending-room replay automation helper 当前识别 `roomReplay / roomShare / roomLocal`；roundtable 页面除 `roomShare / roomLocal` 外也兼容 `share / local` 别名。
+- ResultView 在 ending-room modal 已打开时，会把 replay/import action 收到 modal header；外层结果页不再重复显示同一个 import 入口，关闭 modal 后外层入口仍可用。
 - `WorldlineRoundtableView` 的 readonly replay 现在会按 `active_thread_id` 恢复对应 thread 的 `interaction_mode` 与 hotseat target，不再把 hotseat replay 误显示成 `archivist_route`。
 - roundtable 的 anchored thread readonly replay / local restore 当前已补过 Firefox / WebKit scoped regression，口径与 Chromium 对齐。
 - Oracle 页面 UI 语言当前跟随用户语言开关；room payload 会显式带 `zh | en`，但页面不再反向用 `scenario.language` 覆盖当前 UI 语言。
@@ -244,6 +245,7 @@
 - `useFactionOverlay` 当前只会在 `factions` capability 开启时发请求；`FEATURE_FACTIONS=false` 时，ending-room / roundtable 不再反复打 `faction-timeline 404`。
 - `WorldlineRoundtableView` 当前开桌 payload 会跟随最新的 `selectionMode` 与当前 UI 语言，不再复用旧闭包值。
 - `useEndingRoomWS` 当前重连会复用最新的 connect 回调，不再依赖旧的自引用调度。
+- ending-room room/thread user-turn 请求当前走 `90s` 前端 timeout；发送失败或超时后，store 会清掉目标 thread 的 `pending_drafts`，忽略迟到 draft delta，并 best-effort 重拉 room / result / thread，不把整个 room 直接打成 fatal error。
 - `ShareModal / GameplayCardsModal / InputView / DebateArenaView / DebateResultView / SimulationView / ResultView / EndingChatModal / WorldlineRoundtableView` 当前已清完 `react-hooks/exhaustive-deps` warning；本轮只补 hook 依赖与派生值稳定化，没有改业务口径。
 - 单结局结果页当前不展示 `worldline_roundtable / crossline_gallery` 入口，只保留 `ending_chamber / one_move_only`。
 - Oracle fresh live room 的 English deterministic anchor copy 当前已补去混句兜底；single-ending / roundtable 在 fresh room 下不会再把中文 hinge 直接嵌进英文句子。
@@ -252,7 +254,7 @@
   - transcript `quote` 级 `沿这句追问 / 另开线程`
   - transcript `quote` 动作栏在触控设备上默认可见，不再要求 hover
   - `后续三回合` 按钮：设置 `interaction_mode=epilogue` 并预填追问内容
-  - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 发送
+  - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 和对应 `cited_branch_id / cited_refs_json` 发送
   - mobile sidebar sheet 已补 `SheetTitle / SheetDescription`；第一次 `Escape` 只关闭 sheet，不会误关外层 chamber
 - `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。桌面端现在按 non-modal 右侧 sidecar 挂载，移动端仍是 modal bottom sheet；有 origin 时会显示 `NodeContextBanner`，让用户看到当前追问来自哪个节点、哪一轮和哪段摘录。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，`/start` 和 `/turn` 会透传 origin branch / round / node / excerpt，SSE parser 也已兼容 multiline `data:` frame。bootstrap start 当前带 epoch guard；关闭或切换节点后的迟到 start response 不会再把旧 thread 写回当前 sheet。公共会话状态机在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，并用 committed turn 计数驱动结果页 deepen hint；不会再把 ghost 文本重新刷回 bubble 或 aria-live。结果页追问会使用 result context 的标题、说明和空态问题，不再套用“选择图节点”的文案。
 - `DebateArenaView` 当前只允许在 live 当前 phase 的下注窗口打开/提交 quick counterplay；锁到历史 phase 时不再发起 counterplay。
@@ -499,13 +501,13 @@
 - `ResumePanel` 当前有独立 smoke 入口：
   - `frontend/scripts/e2e-phase3-batch-c.mjs`
   - `cd frontend && npm run e2e:resume -- full`
-- `e2e-worldline-roundtable-suite` 当前会在 verdict anchored thread 前等待 draft settle；`e2e-ending-room-followup-suite` 当前已把 ending-room follow-up 主链改成 API-driven 口径，不再靠 mobile `all_present` 的 mode-arm / settled wait 硬等。
+- `e2e-worldline-roundtable-suite` 当前会在 verdict anchored thread 前等待 draft settle；`e2e-ending-room-followup-suite` 当前让 `hotseat / all_present / epilogue` 走 API-driven 口径，`evidence_card` 走真实 UI 抽屉提交，不再靠 mobile `all_present` 的 mode-arm / settled wait 硬等。
 - `e2e-ending-room-suite.mjs` 当前已重新回到可用的基础 smoke 口径：
   - picker confirm 先等 `.ending-chat-modal` 挂载，再等 room 进入 usable 状态
   - 如果 `modal_state` 因 room bootstrap / effect cleanup 短暂回到 `null`，脚本会退回 modal UI-ready 判定，不再把它误判成 chamber 没打开
 - `e2e-ending-room-followup-suite.mjs` 当前也会在 multi-ending 桌面/移动端链路下额外覆盖：
   - 先 API 预热 `ending_chamber`，再通过 ResultView 调试参数直开 live chamber
-  - `hotseat / all_present / epilogue / evidence_card` 统一改成 API 发起，UI 只负责模式切换、stream 观测、截图和 readonly 验证
+  - `hotseat / all_present / epilogue` 由 API 发起；`evidence_card` 由 UI 抽屉点击 `提交证据卡` 发起，并落 `*-evidence-card-ui.json / ui_submission`
   - 两种模式均有截图 + JSON artifact 留档
 - `e2e-ending-room-followup-suite.mjs` 当前对 replay coverage 额外做了三层收口：
   - live room page 复用前先 revalidate
@@ -558,11 +560,12 @@
   - mobile 当前保留真实 touch `tap-to-seat`
   - `--browser chromium|firefox|webkit` scoped 执行
   - 优先复用最近成功的稳定 fixture
-  - replay `Copy / Save / Import` 统一走 hero/header action scoped locator
+  - replay `Copy / Save / Import` 优先走 hero/header action scoped locator，也兼容 `More actions / 更多操作` 菜单
   - live room page 复用前会先做 revalidate；readonly replay 也会校验 replay URL 契约
   - artifact/local readonly replay 都会额外校验 reload restore；缺字段直接失败
   - result -> roundtable 入口当前也会重试；如果还停在结果页，会落 `roundtable-entry-stall.json` 并直接失败
   - 首开、`reseat / drag-to-seat / keyboard reseat / expert witness / selection mode reopen` 当前统一按 `90s` ready budget 等待最终 `has_result=true`
+  - hotseat / anchored composer user-turn settle 当前按 `120s` 预算等待，和开桌 ready budget 分开
 - roundtable anchored follow-up 的 desktop rerun 当前已能稳定落：
   - hotseat `turn_start / turn_delta / turn_commit`
   - anchored thread `turn_start / turn_delta / turn_commit`
@@ -596,6 +599,7 @@
   - `share -> readonly replay -> reload restore -> import` 主链通过
   - desktop Firefox / WebKit scoped regression 通过
   - `?local=` fallback 当前会把分享入口明确显示成 `Save local read-only copy`
+  - mobile E2E 打开下注和结果页时只定位 `.debate-primary-cta--rail` 主 CTA，不再误点 rail 内其他按钮
 - `pretext` 当前已接到 Oracle transcript 运行时布局内核：
   - `EndingChatModal / WorldlineRoundtableView` 的 bubble `min-height` 预测
   - transcript scroll bottom anchor 稳定化

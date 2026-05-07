@@ -258,6 +258,7 @@ vi.mock('../components/EndingChatModal', () => ({
     selectedAgentIds,
     readOnly,
     headerActions,
+    onClose,
     onModeChange,
   }: {
     branch: { title: string };
@@ -265,13 +266,17 @@ vi.mock('../components/EndingChatModal', () => ({
     selectedAgentIds?: string[];
     readOnly: boolean;
     headerActions?: ReactNode;
+    onClose: () => void;
     onModeChange: (mode: 'ending_chamber' | 'one_move_only') => void;
   }) => (
     <div data-testid="ending-chat-modal">
       <span>{`${branch.title}:${roomType}`}</span>
       <span data-testid="ending-chat-selected-agent-count">{selectedAgentIds?.length ?? 0}</span>
       <span data-testid="ending-chat-readonly">{readOnly ? 'readonly' : 'live'}</span>
-      {headerActions}
+      <div data-testid="ending-chat-header-actions">{headerActions}</div>
+      <button type="button" onClick={onClose}>
+        close-ending-chat
+      </button>
       <button type="button" onClick={() => onModeChange('ending_chamber')}>
         switch-ending-chamber
       </button>
@@ -542,6 +547,11 @@ beforeEach(() => {
     web_search: { providers: {} },
   });
   setMockCapabilityLoading(false);
+  importReplayScenarioMock.mockReset();
+  importReplayScenarioMock.mockImplementation(async (scenario: { id: string }) => ({
+    ...scenario,
+    id: 'imported-result-1',
+  }));
   endingRoomStoreState.snapshot = null;
   endingRoomStoreState.result = null;
   endingRoomStoreState.activeThreadId = null;
@@ -810,6 +820,7 @@ describe('ResultView campaign summary', () => {
         <Routes>
           <Route path="/result/:id" element={<ResultView />} />
           <Route path="/result/replay" element={<ResultView />} />
+          <Route path="/sim/:id" element={<div>sim-import-destination</div>} />
         </Routes>
       </MemoryRouter>,
     );
@@ -823,7 +834,22 @@ describe('ResultView campaign summary', () => {
     await waitFor(() => {
       expect(screen.getByTestId('ending-chat-readonly')).toHaveTextContent('readonly');
     });
-    expect(screen.getByRole('button', { name: 'Import as Local Run' })).toBeInTheDocument();
+    const modalHeaderActions = screen.getByTestId('ending-chat-header-actions');
+    expect(within(modalHeaderActions).getByRole('button', { name: 'Import as Local Run' })).toBeInTheDocument();
+
+    const resultHeader = document.querySelector('.result-header');
+    expect(resultHeader).not.toBeNull();
+    expect(within(resultHeader as HTMLElement).queryByRole('button', { name: 'Import as Local Run' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'close-ending-chat' }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('ending-chat-modal')).not.toBeInTheDocument();
+    });
+    await user.click(within(resultHeader as HTMLElement).getByRole('button', { name: 'Import as Local Run' }));
+
+    expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('sim-import-destination')).toBeInTheDocument();
   });
 
   it('loads ending-room artifact shares as read-only replay and still allows local import', async () => {
