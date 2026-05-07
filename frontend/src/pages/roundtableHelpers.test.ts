@@ -139,6 +139,18 @@ describe('roundtableHelpers', () => {
       expect(prompt).toContain('Opening');
       expect(prompt).toContain('Resource allocation');
     });
+    it('compacts long phase context before using it as a prompt draft', () => {
+      const prompt = buildRoundtablePhasePrompt(
+        '开场',
+        '真正的分歧是汉中粮道是否还能撑住。后面这整段如果原样进入输入框，就会像把 transcript 又复读一遍，显得非常机械。',
+        true,
+      );
+
+      expect(prompt).toContain('开场');
+      expect(prompt).toContain('汉中粮道');
+      expect(prompt).not.toContain('transcript 又复读一遍');
+      expect(prompt.length).toBeLessThan(90);
+    });
     it('uses translator for phase prompt', () => {
       const t = ((key: string, options?: { label?: string; stakes?: string }) => (
         `${key}:${options?.label ?? ''}:${options?.stakes ?? ''}`

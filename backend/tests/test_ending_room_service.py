@@ -22,6 +22,7 @@ from app.models import (
     EndingRoomPhase,
     EndingRoomRoleSlot,
     EndingRoomThread,
+    EndingRoomThreadMode,
     EndingRoomTurn,
     EndingRoomTurnSource,
     EndingRoomType,
@@ -32,13 +33,16 @@ from app.models import (
 from app.models.database import get_engine
 from app.services.ending_room_service import (
     EndingRoomServiceError,
+    _build_followup_reply_content,
     _build_oracle_generation_prompt,
     _build_oracle_rewrite_prompt,
     _build_room_plan,
     _build_roundtable_opening_content,
+    _build_roundtable_verdict_content,
     _maybe_rewrite_oracle_copy,
     _normalize_oracle_generated_content,
     _oracle_vocabulary_hints,
+    _phase_insight,
     _room_memory_partition,
     _strip_oracle_reasoning_prefix,
     append_room_user_turn,
@@ -1322,6 +1326,141 @@ def test_oracle_rewrite_prompt_explicitly_forbids_untranslated_chinese_fragments
     assert "translate any Chinese fragments" in prompt
 
 
+def test_roundtable_verdict_fallback_is_display_ready_not_prompt_instructions():
+    content = _build_roundtable_verdict_content(
+        [
+            {
+                "title": "秩序线",
+                "insight": "成都和汉中先稳住，北伐窗口被推迟打开。",
+                "story": "秩序线让后方粮道保住了十年。",
+            },
+            {
+                "title": "裂变线",
+                "insight": "地方割据提前成型，朝廷只能追认现实。",
+                "story": "裂变线在第三轮后失去统一调度。",
+            },
+        ],
+        language="zh",
+    )
+
+    assert "你刚主持完" not in content
+    assert "用你自己的话" not in content
+    assert "语气要像" not in content
+    assert "秩序线" in content
+    assert "裂变线" in content
+    assert "我的裁决" in content
+
+
+def test_phase_insight_compacts_turn_text_instead_of_repeating_transcript():
+    raw_commentary = (
+        "诸葛亮多活十年这件事，真正先改变的是成都和汉中的防线节奏。"
+        "如果把这整段原样塞进阶段侧栏，用户会在 transcript 和侧栏里读到同一段话，"
+        "结果就像模板复读而不是主持人提炼。"
+    )
+
+    insight = _phase_insight("zh", EndingRoomPhase.OPENING, raw_commentary)
+
+    assert insight["commentary"] != raw_commentary
+    assert len(insight["commentary"]) < len(raw_commentary)
+    assert "transcript 和侧栏" not in insight["commentary"]
+    assert insight["stakes"] == "世界线切口"
+
+
+def test_thread_followup_prompts_keep_reply_on_active_anchor():
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Worldline Roundtable",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name="Representative A",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={"agent_role": "Marshal", "bio_short": "Keeps the line intact."},
+    )
+
+    generation_prompt = _build_oracle_generation_prompt(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.VERDICT,
+        user_content="Why did this hinge hold?",
+        thread_mode=EndingRoomThreadMode.FOLLOWUP,
+        interaction_mode=EndingRoomInteractionMode.THREAD_FOLLOWUP,
+        output_json=False,
+    )
+    rewrite_prompt = _build_oracle_rewrite_prompt(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.VERDICT,
+        anchor_copy="The hinge stayed local.",
+        user_content="Why did this hinge hold?",
+        thread_mode=EndingRoomThreadMode.FOLLOWUP,
+        interaction_mode=EndingRoomInteractionMode.THREAD_FOLLOWUP,
+        output_json=False,
+    )
+
+    assert "Do not restart the verdict" in generation_prompt
+    assert "Do not explain thread mechanics" in generation_prompt
+    assert "Do not restart the verdict" in rewrite_prompt
+    assert "Do not explain thread mechanics" in rewrite_prompt
+
+
+def test_thread_followup_fallback_reads_like_a_direct_reply():
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="世界线圆桌",
+        language="zh",
+    )
+    thread = EndingRoomThread(
+        room_id="room-1",
+        title="汉中粮道追问",
+        mode=EndingRoomThreadMode.FOLLOWUP,
+        interaction_mode=EndingRoomInteractionMode.THREAD_FOLLOWUP,
+        participant_set_hash="hash",
+        memory_partition_id="partition-thread",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name="诸葛亮",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={"agent_role": "丞相", "bio_short": "守住汉中粮道的人。"},
+    )
+
+    content = _build_followup_reply_content(
+        room,
+        thread=thread,
+        response_participant=participant,
+        user_content="为什么汉中没有先断？",
+        addressed_participants=[],
+        interaction_mode=EndingRoomInteractionMode.THREAD_FOLLOWUP,
+        response_index=0,
+        response_count=1,
+        participant_evidence={
+            "role_hint": "丞相",
+            "bio_hint": "守住汉中粮道的人。",
+            "latest_quote": "粮道不断，北边才有下一步。",
+            "latest_round": 2,
+            "evidence_hook": "汉中粮道没有断",
+        },
+    )
+
+    assert "核心转折" not in content
+    assert "用户追问" not in content
+    assert "你问" in content
+    assert "汉中粮道没有断" in content
+    assert "R2" in content
+
+
 def test_strip_oracle_reasoning_prefix_hides_partial_and_closed_think_blocks():
     assert _strip_oracle_reasoning_prefix("<think>internal chain") == ""
     assert _strip_oracle_reasoning_prefix("<think>internal chain</think>Visible answer") == "Visible answer"  # noqa: E501
@@ -1778,6 +1917,31 @@ def test_roundtable_followup_uses_branch_specific_hinges_instead_of_room_title()
     assert all("世界线圆桌" not in text for text in response_texts)
     assert any("秩序线" in text or "秩序线摘要" in text for text in response_texts)
     assert any("裂变线" in text or "裂变线摘要" in text for text in response_texts)
+
+
+def test_roundtable_evidence_card_preserves_user_cited_branch_on_assistant_turns():
+    scenario_id, branch_a_id, branch_b_id = _seed_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        language="zh",
+    )
+    assert created is True
+
+    asyncio.run(run_ending_room_background(snapshot["id"], ws_callback=AsyncMock(side_effect=_noop_broadcast)))  # noqa: E501
+    followup = append_room_user_turn(
+        snapshot["id"],
+        content="把裂变线作为证据卡拿出来看。",
+        cited_branch_id=branch_b_id,
+        cited_refs_json={"anchor_ids": ["roundtable:phase:room-1:crossfire"]},
+    )
+
+    assistant_turns = followup["turns"][1:]
+    assert assistant_turns
+    assert all(turn["cited_branch_id"] == branch_b_id for turn in assistant_turns)
+    assert all(turn["cited_refs_json"]["kind"] == "followup_reply" for turn in assistant_turns)
 
 
 async def _noop_broadcast(_room_id: str, _payload: dict) -> None:

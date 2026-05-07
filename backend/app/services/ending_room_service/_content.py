@@ -614,9 +614,11 @@ def _build_roundtable_verdict_content(
     *,
     language: str,
 ) -> str:
-    """Build a verdict anchor copy that instructs the LLM to produce an evaluative
-    synthesis rather than a bland placeholder.  When the LLM is enabled this text
-    serves as the semantic safety-net; when disabled it is shown verbatim."""
+    """Build display-ready verdict anchor copy.
+
+    LLM generation uses this as a semantic safety net, so it must never contain
+    prompt instructions that could leak verbatim when LLM generation is disabled.
+    """
     titles = [
         _oracle_visible_text(card.get("title"), language=language, limit=40)
         or (f"世界线{i + 1}" if language == "zh" else f"worldline {i + 1}")
@@ -626,27 +628,38 @@ def _build_roundtable_verdict_content(
         _resolve_roundtable_hook(card, participant=None, language=language)
         for card in branch_cards
     ]
-    branch_bullets = "\n".join(
-        f"- {title}: {hinge}" for title, hinge in zip(titles, hinges)
-    )
+    lead_title = titles[0] if titles else ("这条线" if language == "zh" else "this line")
+    lead_hinge = hinges[0] if hinges else ("关键转折" if language == "zh" else "the hinge")
+    rival_title = titles[1] if len(titles) > 1 else None
+    rival_hinge = hinges[1] if len(hinges) > 1 else None
     if language == "zh":
+        if rival_title and rival_hinge:
+            return (
+                f"我把这桌的分歧压到一句话："
+                f"《{lead_title}》的证据更扎实，因为「{lead_hinge}」先改变了局面；"
+                f"《{rival_title}》提醒我们「{rival_hinge}」这笔代价不能抹掉，"
+                "但它还没推翻前一个转折。"
+                f"我的裁决是：先承认《{lead_title}》解释力更强，"
+                f"再沿着《{rival_title}》留下的代价继续追问。"
+            )
         return (
-            f"各条世界线的关键转折参考：\n{branch_bullets}\n\n"
-            "你刚主持完一场激烈的圆桌讨论。现在用你自己的话做个总结——"
-            "像一个资深主持人在节目尾声的即兴点评，不是在写报告。"
-            "别复述每条世界线，直接说你觉得这场讨论最意外的发现是什么。"
-            "哪边的论证更站得住脚？谁的逻辑链有硬伤？"
-            "用具体的人名和他们说过的话来佐证你的判断。"
-            "语气要像在跟朋友聊天，但观点要锐利。"
+            f"这桌最后落在《{lead_title}》这条线：真正撑起判断的是「{lead_hinge}」。"
+            "我的裁决是：先看这个转折带来的实际后果，再决定后续追问要往哪边打。"
+        )
+    if rival_title and rival_hinge:
+        return (
+            "I would reduce this table to one disagreement: "
+            f"{lead_title} has the stronger evidence because "
+            f"'{lead_hinge}' changed the situation first; "
+            f"{rival_title} still matters because '{rival_hinge}' names a real cost, "
+            "but it does not overturn the first hinge. "
+            f"My verdict: treat {lead_title} as the stronger explanation, "
+            f"then keep pressing the cost left by {rival_title}."
         )
     return (
-        f"Key hinge references per worldline:\n{branch_bullets}\n\n"
-        "You just finished hosting a heated roundtable. Now give your honest take — "
-        "like a seasoned moderator's off-the-cuff closing remarks, not a written report. "
-        "Don't recap each worldline. Cut straight to what surprised you most in this discussion. "
-        "Whose argument actually holds up? Where did someone's logic fall apart? "
-        "Use specific names and things they actually said to back your judgment. "
-        "Sound like you're talking to a friend, but keep your opinions sharp."
+        f"This table lands on {lead_title}: the judgment rests on '{lead_hinge}'. "
+        "My verdict is to follow that concrete hinge first, "
+        "then ask what cost still needs pressure."
     )
 
 
@@ -719,23 +732,12 @@ def _build_followup_reply_content(
     response_count: int,
     participant_evidence: dict[str, Any],
 ) -> str:
-    """Minimal factual anchor for a follow-up reply.
+    """Build display-ready follow-up fallback copy.
 
-    Drops all `_stable_oracle_choice` template phrasing and pre-canned
-    speaking patterns. Only carries:
-        * speaker label
-        * mode tag (ALL_PRESENT / HOTSEAT / ARCHIVIST_ROUTE / EVIDENCE_CARD / EPILOGUE)
-        * role / bio hint
-        * latest in-branch quote (if any)
-        * key hinge (`evidence_hook`)
-
-    Voice tone, transitions, and stance differentiation are produced
-    by the LLM generation layer (`_oracle_voice_brief` +
-    `_VOCABULARY_HINTS`). When the LLM is disabled, this anchor is
-    shown verbatim — that is intentional: a clean fact list is
-    preferable to canned sentences that leak through rewrites.
+    This is shown verbatim when LLM generation is disabled or exhausted, so it
+    must read like a direct reply instead of a mode-tagged fact list.
     """
-    del response_count, thread  # unused in this minimal anchor
+    del response_count, thread
     target_label = response_participant.display_name
     addressed_label = " / ".join(
         participant.display_name for participant in addressed_participants
@@ -751,61 +753,114 @@ def _build_followup_reply_content(
 
     is_zh = room.language == "zh"
 
-    # Per-mode tag — strictly factual labels only
-    mode_tag = ""
-    if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
-        if is_zh:
-            mode_tag = (
-                f"（追问 {addressed_label}）" if addressed_label else "（追问）"
-            )
-        else:
-            mode_tag = (
-                f"(hotseat: {addressed_label})" if addressed_label else "(hotseat)"
-            )
-    elif interaction_mode == EndingRoomInteractionMode.ALL_PRESENT:
-        mode_tag = "（接力回应）" if is_zh else "(relay response)"
-    elif interaction_mode == EndingRoomInteractionMode.ARCHIVIST_ROUTE:
-        mode_tag = "（档案官路由）" if is_zh else "(archivist route)"
-    elif interaction_mode == EndingRoomInteractionMode.EVIDENCE_CARD:
-        mode_tag = "（跨线证据）" if is_zh else "(crossline evidence)"
-    elif interaction_mode == EndingRoomInteractionMode.EPILOGUE:
-        mode_tag = "（后续推演）" if is_zh else "(epilogue)"
+    def _clean_sentence(value: str) -> str:
+        return str(value or "").strip().strip("。.!?！？")
 
-    parts: list[str] = []
+    def _zh_join(*parts: str) -> str:
+        cleaned = [_clean_sentence(part) for part in parts if _clean_sentence(part)]
+        return "。".join(cleaned) + ("。" if cleaned else "")
+
+    def _en_join(*parts: str) -> str:
+        cleaned = [_clean_sentence(part) for part in parts if _clean_sentence(part)]
+        return ". ".join(cleaned) + ("." if cleaned else "")
+
+    role_suffix = (
+        f"（{role_hint}）"
+        if role_hint and is_zh
+        else (f" ({role_hint})" if role_hint else "")
+    )
+    quote_zh = (
+        f"R{latest_round} 原话是「{latest_quote}」"
+        if latest_quote and latest_round > 0
+        else ""
+    )
+    quote_en = (
+        f"In R{latest_round}, I said '{latest_quote}'"
+        if latest_quote and latest_round > 0
+        else ""
+    )
+
     if is_zh:
-        head = f"{target_label}{mode_tag}" if mode_tag else target_label
-        parts.append(head)
+        speaker = f"{target_label}{role_suffix}"
+        if interaction_mode == EndingRoomInteractionMode.THREAD_FOLLOWUP:
+            return _zh_join(
+                f"{speaker}：你问「{user_question}」，我会把答案落在「{evidence_hint}」",
+                quote_zh,
+                "这不是旁枝，是这条线还能不能继续推进的门槛",
+            )
+        if interaction_mode == EndingRoomInteractionMode.EVIDENCE_CARD:
+            return _zh_join(
+                f"{speaker}：这张证据卡真正补上的，是「{evidence_hint}」",
+                quote_zh,
+                "它改变的不是气氛，而是这场争论里哪条因果链更硬",
+            )
+        if interaction_mode == EndingRoomInteractionMode.EPILOGUE:
+            return _zh_join(
+                f"{speaker}：往后三步看，先回来的还是「{evidence_hint}」这笔账",
+                quote_zh,
+                "它会继续压着人做选择，而不是在结局页就消失",
+            )
         if is_archivist:
-            parts.append("档案官")
-        if role_hint:
-            parts.append(role_hint)
-        if bio_hint:
-            parts.append(bio_hint)
-        if latest_quote and latest_round > 0:
-            parts.append(f"R{latest_round} 原话：「{latest_quote}」")
-        parts.append(f"核心转折：「{evidence_hint}」")
-        if profile_focus_hint:
-            parts.append(f"房间焦点：{profile_focus_hint}")
-        if user_question:
-            parts.append(f"用户追问：「{user_question}」")
-        return "。".join(parts) + "。"
+            target_clause = f"这句是追着{addressed_label}来的" if addressed_label else ""
+            return _zh_join(
+                f"{target_label}：我先把这句追问钉住",
+                target_clause,
+                f"桌面上真正能判的核心转折，是「{evidence_hint}」",
+                f"接下来要问的是它怎样改变{profile_focus_hint or '后果'}",
+            )
+        if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
+            target = addressed_label or target_label
+            return _zh_join(
+                f"{speaker}：{target}被问到的其实就是「{evidence_hint}」",
+                quote_zh,
+                "我的回答是，这里撑不住，后面的判断也就站不稳",
+            )
+        return _zh_join(
+            f"{speaker}：我只补一个角度，关键仍是「{evidence_hint}」",
+            quote_zh or bio_hint,
+            f"这会直接影响{profile_focus_hint or '后续代价'}",
+        )
 
-    head = f"{target_label} {mode_tag}".strip() if mode_tag else target_label
-    parts.append(head)
+    speaker = f"{target_label}{role_suffix}"
+    if interaction_mode == EndingRoomInteractionMode.THREAD_FOLLOWUP:
+        return _en_join(
+            f"{speaker}: You asked '{user_question}', "
+            f"and I would anchor the answer on '{evidence_hint}'",
+            quote_en,
+            "That is not side detail; it is the threshold this line has to survive",
+        )
+    if interaction_mode == EndingRoomInteractionMode.EVIDENCE_CARD:
+        return _en_join(
+            f"{speaker}: This evidence card adds one thing that matters: '{evidence_hint}'",
+            quote_en,
+            "It changes which causal chain in the table can actually carry the verdict",
+        )
+    if interaction_mode == EndingRoomInteractionMode.EPILOGUE:
+        return _en_join(
+            f"{speaker}: Three moves later, the bill still comes due at '{evidence_hint}'",
+            quote_en,
+            "That pressure keeps forcing choices after the ending page",
+        )
     if is_archivist:
-        parts.append("archivist")
-    if role_hint:
-        parts.append(role_hint)
-    if bio_hint:
-        parts.append(bio_hint)
-    if latest_quote and latest_round > 0:
-        parts.append(f"R{latest_round} note: '{latest_quote}'")
-    parts.append(f"Key hinge: '{evidence_hint}'")
-    if profile_focus_hint:
-        parts.append(f"Room focus: {profile_focus_hint}")
-    if user_question:
-        parts.append(f"User question: '{user_question}'")
-    return ". ".join(parts) + "."
+        target_clause = f"This follows {addressed_label}'s answer" if addressed_label else ""
+        return _en_join(
+            f"{target_label}: I would pin this follow-up to one hinge",
+            target_clause,
+            f"The table can actually judge the core hinge: '{evidence_hint}'",
+            f"The next question is how it changes {profile_focus_hint or 'the consequences'}",
+        )
+    if interaction_mode == EndingRoomInteractionMode.HOTSEAT:
+        target = addressed_label or target_label
+        return _en_join(
+            f"{speaker}: {target} is really being asked about '{evidence_hint}'",
+            quote_en,
+            "If that fails, the later judgment does not stand either",
+        )
+    return _en_join(
+        f"{speaker}: I will add one angle; the hinge is still '{evidence_hint}'",
+        quote_en or bio_hint,
+        f"That directly changes {profile_focus_hint or 'the next cost'}",
+    )
 
 
 def _oracle_scope_notice(
@@ -1302,6 +1357,12 @@ def _build_oracle_generation_prompt(
             "Add only one distinct angle. "
             "Do not summarize the room or echo the previous speaker's cadence."
         )
+    elif interaction_mode == EndingRoomInteractionMode.THREAD_FOLLOWUP:
+        structural_note = (
+            "Answer inside the active thread and the user's exact anchor. "
+            "Do not restart the verdict, recap the room, or broaden into a new topic. "
+            "Do not explain thread mechanics or permissions."
+        )
     elif interaction_mode == EndingRoomInteractionMode.ARCHIVIST_ROUTE:
         structural_note = (
             "The Archivist should frame the hinge and route cleanly; "
@@ -1482,6 +1543,12 @@ def _build_oracle_rewrite_prompt(
         structural_note = (
             "For all-present follow-up, this speaker should add only one distinct angle. "
             "Do not summarize the room or echo the previous speaker's cadence."
+        )
+    elif interaction_mode == EndingRoomInteractionMode.THREAD_FOLLOWUP:
+        structural_note = (
+            "For thread follow-up, answer inside the active thread and the user's exact anchor. "
+            "Do not restart the verdict, recap the room, or broaden into a new topic. "
+            "Do not explain thread mechanics or permissions."
         )
     elif interaction_mode == EndingRoomInteractionMode.ARCHIVIST_ROUTE:
         structural_note = (

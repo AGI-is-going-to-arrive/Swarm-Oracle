@@ -63,6 +63,8 @@ def _build_followup_context_hint(
     addressed_participants: list[EndingRoomParticipant],
     participant_evidence: dict[str, Any],
     question_anchor_ids: list[str],
+    cited_branch_id: str | None = None,
+    cited_refs_json: dict[str, Any] | None = None,
 ) -> str:
     snapshot = response_participant.persona_snapshot_json or {}
     lines: list[str] = []
@@ -129,6 +131,33 @@ def _build_followup_context_hint(
             branch_story = _sanitize_oracle_visible_text(str(branch.story or "")).strip()
             if branch_story:
                 lines.append(f"worldline_story={branch_story[:220]}")
+    if cited_branch_id:
+        cited_branch = session.get(Branch, cited_branch_id)
+        if cited_branch is not None:
+            cited_title = _sanitize_oracle_visible_text(str(cited_branch.title or "")).strip()
+            if cited_title:
+                lines.append(f"cited_worldline_title={cited_title}")
+            cited_hinge = _sanitize_oracle_visible_text(
+                _branch_evidence_hook(
+                    cited_branch,
+                    fallback=cited_title or "cited worldline",
+                )
+            ).strip()
+            if cited_hinge:
+                lines.append(f"cited_worldline_hinge={cited_hinge}")
+            cited_insight = _sanitize_oracle_visible_text(str(cited_branch.insight or "")).strip()
+            if cited_insight:
+                lines.append(f"cited_worldline_insight={cited_insight}")
+    if cited_refs_json:
+        anchor_ids = cited_refs_json.get("anchor_ids")
+        if isinstance(anchor_ids, list):
+            cleaned_anchor_ids = [
+                _sanitize_oracle_visible_text(str(anchor_id)).strip()
+                for anchor_id in anchor_ids
+                if str(anchor_id or "").strip()
+            ]
+            if cleaned_anchor_ids:
+                lines.append(f"cited_anchor_ids={', '.join(cleaned_anchor_ids[:4])}")
     return "\n".join(lines)
 
 def _load_room_threads(session: Session, room_id: str) -> list[EndingRoomThread]:
@@ -582,6 +611,13 @@ def _build_followup_turn_plans(
     session.refresh(user_turn)
     plans: list[_OracleFollowupPlan] = []
     for index, response_participant in enumerate(response_participants, start=1):
+        plan_cited_branch_id = cited_branch_id or response_participant.source_branch_id
+        plan_cited_refs_json = {
+            "kind": "followup_reply",
+            "thread_mode": thread.mode.value,
+        }
+        if cited_refs_json:
+            plan_cited_refs_json["source"] = cited_refs_json
         plans.append(
             _OracleFollowupPlan(
                 turn_id=_uuid(),
@@ -595,8 +631,8 @@ def _build_followup_turn_plans(
                 interaction_mode=interaction_mode,
                 addressed_refs=normalized_addressed_refs,
                 question_anchor_ids=question_anchor_ids or None,
-                cited_branch_id=response_participant.source_branch_id,
-                cited_refs_json={"kind": "followup_reply", "thread_mode": thread.mode.value},
+                cited_branch_id=plan_cited_branch_id,
+                cited_refs_json=plan_cited_refs_json,
                 user_content=content,
                 thread_mode=thread.mode,
                 context_hint=_build_followup_context_hint(
@@ -606,6 +642,8 @@ def _build_followup_turn_plans(
                     addressed_participants=addressed_participants,
                     participant_evidence=participant_evidence.get(response_participant.id, {}),
                     question_anchor_ids=question_anchor_ids,
+                    cited_branch_id=cited_branch_id,
+                    cited_refs_json=cited_refs_json,
                 ),
             )
         )

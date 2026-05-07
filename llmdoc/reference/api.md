@@ -318,6 +318,7 @@
   当前还接受可选字段 `cited_branch_id`（引用另一条世界线）和 `cited_refs_json`（引用元数据，上限 4 KB）。
   当 `cited_branch_id` 存在时，后端会验证它属于同一 scenario，验证失败则静默忽略。
   当 `interaction_mode` 未指定但 `cited_branch_id` 存在时，自动使用 `evidence_card` 模式。
+  接受后的 assistant follow-up turn 会继续回显该 `cited_branch_id`；assistant 的 `cited_refs_json` 会带 `kind / thread_mode`，并把用户提交的引用元数据保存在 `source` 字段下。
 - `EndingRoomInteractionMode` 当前支持：
   `auto_recap / archivist_route / hotseat / all_present / thread_followup / epilogue / evidence_card`。
   - `epilogue`：后续三回合短叙事推演。

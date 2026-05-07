@@ -174,6 +174,28 @@ function buildPhaseInsightTitle(
   return rawDetail.length > maxLength ? `${rawDetail.slice(0, maxLength).trimEnd()}…` : rawDetail;
 }
 
+function firstSentenceWithPunctuation(value: string): string {
+  return value.match(/^[^。！？.!?]+[。！？.!?]?/)?.[0]?.trim() || value;
+}
+
+function buildPhaseInsightCommentary(
+  insight: { commentary?: string; stakes?: string },
+  options: { isZh: boolean },
+) {
+  const normalizedCommentary = String(insight.commentary ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalizedCommentary) {
+    return String(insight.stakes ?? '').trim();
+  }
+  const maxLength = options.isZh ? 96 : 140;
+  if (normalizedCommentary.length <= maxLength) {
+    return normalizedCommentary;
+  }
+  const firstSentence = firstSentenceWithPunctuation(normalizedCommentary);
+  return firstSentence.length > maxLength
+    ? `${firstSentence.slice(0, maxLength - 1).trimEnd()}…`
+    : firstSentence;
+}
+
 export default function WorldlineRoundtableView() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
@@ -1920,50 +1942,66 @@ export default function WorldlineRoundtableView() {
                     : undefined}
                   aria-label={t('roundtable.phase_insights_label')}
                 >
-                  {effectiveResult.phase_insights.map((insight, index) => (
-                    <AccordionItem key={`${insight.phase}-${index}`} value={`${insight.phase}-${index}`} className="roundtable-phase-card border border-border-default rounded-2xl mb-2.5 last:mb-0 overflow-hidden">
-                      <AccordionTrigger className="editorial-chapter-trigger">
-                        <span className="editorial-chapter-header">
-                          <span className="editorial-chapter-number" aria-hidden="true">
-                            {String(index + 1).padStart(2, '0')}
+                  {effectiveResult.phase_insights.map((insight, index) => {
+                    const phaseTitle = buildPhaseInsightTitle(insight, { isZh })
+                      || buildPhaseInsightLabel(insight, { isZh, t });
+                    const phaseCommentary = buildPhaseInsightCommentary(insight, { isZh });
+                    const comparableTitle = phaseTitle.replace(/…$/, '').trim();
+                    const comparableCommentary = phaseCommentary
+                      .replace(/[。！？.!?]+$/, '')
+                      .trim();
+                    const preview = (
+                      phaseCommentary
+                      && phaseCommentary !== phaseTitle
+                      && !comparableCommentary.startsWith(comparableTitle)
+                    )
+                      ? `${phaseCommentary.slice(0, 80)}${phaseCommentary.length > 80 ? '…' : ''}`
+                      : '';
+                    return (
+                      <AccordionItem key={`${insight.phase}-${index}`} value={`${insight.phase}-${index}`} className="roundtable-phase-card border border-border-default rounded-2xl mb-2.5 last:mb-0 overflow-hidden">
+                        <AccordionTrigger className="editorial-chapter-trigger">
+                          <span className="editorial-chapter-header">
+                            <span className="editorial-chapter-number" aria-hidden="true">
+                              {String(index + 1).padStart(2, '0')}
+                            </span>
+                            <span className="editorial-chapter-content">
+                              <span className="editorial-chapter-title">{phaseTitle}</span>
+                              {preview && (
+                                <span className="editorial-chapter-preview">
+                                  {preview}
+                                </span>
+                              )}
+                            </span>
                           </span>
-                          <span className="editorial-chapter-content">
-                            <span className="editorial-chapter-title">{buildPhaseInsightTitle(insight, { isZh }) || buildPhaseInsightLabel(insight, { isZh, t })}</span>
-                            {insight.commentary && (
-                              <span className="editorial-chapter-preview">
-                                {insight.commentary.slice(0, 80)}{insight.commentary.length > 80 ? '…' : ''}
-                              </span>
+                        </AccordionTrigger>
+                        <AccordionContent>
+                          <article className="worldline-roundtable-insight">
+                            <p>{phaseCommentary}</p>
+                            {!replayPayload && (
+                              <div className="worldline-roundtable-insight__actions">
+                                <button
+                                  type="button"
+                                  className="ending-chat-inline-button"
+                                  onClick={() => activateAnchor(phaseActionPrompts[index].action)}
+                                  disabled={!composerEnabled}
+                                >
+                                  {t('roundtable.action_follow_phase')}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="ending-chat-inline-button"
+                                  onClick={() => void handleStartAnchoredThread(phaseActionPrompts[index].action)}
+                                  disabled={!composerEnabled}
+                                >
+                                  {t('roundtable.action_new_thread')}
+                                </button>
+                              </div>
                             )}
-                          </span>
-                        </span>
-                      </AccordionTrigger>
-                      <AccordionContent>
-                        <article className="worldline-roundtable-insight">
-                          <p>{insight.commentary || insight.stakes}</p>
-                          {!replayPayload && (
-                            <div className="worldline-roundtable-insight__actions">
-                              <button
-                                type="button"
-                                className="ending-chat-inline-button"
-                                onClick={() => activateAnchor(phaseActionPrompts[index].action)}
-                                disabled={!composerEnabled}
-                              >
-                                {t('roundtable.action_follow_phase')}
-                              </button>
-                              <button
-                                type="button"
-                                className="ending-chat-inline-button"
-                                onClick={() => void handleStartAnchoredThread(phaseActionPrompts[index].action)}
-                                disabled={!composerEnabled}
-                              >
-                                {t('roundtable.action_new_thread')}
-                              </button>
-                            </div>
-                          )}
-                        </article>
-                      </AccordionContent>
-                    </AccordionItem>
-                  ))}
+                          </article>
+                        </AccordionContent>
+                      </AccordionItem>
+                    );
+                  })}
                 </Accordion>
               </section>
             ) : null}

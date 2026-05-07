@@ -504,9 +504,33 @@ def _phase_insight(language: str, phase: EndingRoomPhase, commentary: str) -> di
             EndingRoomPhase.VERDICT: ("Archivist summary", "Collapse the room into archive language"),  # noqa: E501
         }
     stakes, focus = labels[phase]
-    return (
-        {"phase": phase.value, "stakes": stakes, "moderator_focus": focus, "commentary": commentary}
-    )
+    normalized = re.sub(r"\s+", " ", str(commentary or "")).strip()
+    first_clause = re.split(r"[。！？.!?]\s*", normalized, maxsplit=1)[0].strip()
+    compacted = _compact_clause(first_clause or normalized, limit=64) or focus
+    if language == "zh":
+        phase_prefixes = {
+            EndingRoomPhase.OPENING: "这轮先钉住",
+            EndingRoomPhase.CROSSFIRE: "分歧集中在",
+            EndingRoomPhase.REBUTTAL: "可回退的一步是",
+            EndingRoomPhase.CLOSING: "导演建议落在",
+            EndingRoomPhase.VERDICT: "裁定落在",
+        }
+        commentary_text = f"{phase_prefixes[phase]}：{compacted}"
+    else:
+        phase_prefixes = {
+            EndingRoomPhase.OPENING: "This round pins down",
+            EndingRoomPhase.CROSSFIRE: "The split concentrates on",
+            EndingRoomPhase.REBUTTAL: "The one move back is",
+            EndingRoomPhase.CLOSING: "The director note lands on",
+            EndingRoomPhase.VERDICT: "The verdict lands on",
+        }
+        commentary_text = f"{phase_prefixes[phase]}: {compacted}"
+    return {
+        "phase": phase.value,
+        "stakes": stakes,
+        "moderator_focus": focus,
+        "commentary": commentary_text,
+    }
 
 
 def _delta_chunks(content: str) -> list[str]:

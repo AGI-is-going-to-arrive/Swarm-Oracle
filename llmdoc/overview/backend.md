@@ -126,9 +126,12 @@
   `auto_recap / archivist_route / hotseat / all_present / thread_followup / epilogue / evidence_card`。
   - `epilogue`：后续三回合短叙事推演，不重启主 simulation。
   - `evidence_card`：把另一条世界线的摘要卡引入当前讨论，由档案官解释差异。
+- `thread_followup` 的 generation/rewrite prompt 当前会明确要求回答 active thread 与当前 anchor；不能重开 verdict、复述整间房、扩到新话题，或解释线程机制。
 - `create_ending_room_thread()` 当前会在创建阶段校验 room type 与 `interaction_mode` 的组合是否合法；例如 `worldline_roundtable` 不会再先落库一个从一开始就不可用的 `all_present` thread。
 - Oracle 的 participant snapshot 当前会带 `agent_name / agent_role / agent_persona / agent_stance / agent_emotion / tier / impact_score / branch_pressure / latest_quote / opening_quote / source_type`，供 ending-room / roundtable 的 LLM 生成直接消费。
 - `ending-room / roundtable` 的主文案生成当前走 `LLM first, template fallback`：先 structured LLM，再 plain-text retry，最后才回 deterministic fallback；模板不再是主路径。
+- roundtable verdict 和 follow-up 的 deterministic fallback 当前必须是 display-ready copy：不能包含 prompt 指令、模式标签或事实清单式占位，因为 LLM 关闭或耗尽时它会直接展示给用户。
+- `_phase_insight()` 当前会把长 turn commentary 压成 phase-specific 的一句主持人提炼；后端 result 不再默认把整段 transcript 复制进 phase insight。
 - Oracle 主文案的 LLM 路径当前先走 generation-first prompt，这一步不会把 anchor copy 当中心参考；只有生成为空或失败时，才进入带 anchor reference 的 rewrite fallback，最后才退 deterministic fallback。
 - Oracle prompt 当前包含双层角色化词汇提示：
   - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science，共 13 种）提供领域专属术语、句式风格和情绪基调。已知限制：子串匹配可能造成少量误分类（如 warlord→imperial via "lord"）。
@@ -141,6 +144,8 @@
 - `ending_room_turn` 的 `cited_branch_id` 与 `cited_refs_json` 当前已从 API 层开放写入。
   - `cited_branch_id` 会做 scenario 级验证，不允许跨场景引用。
   - `cited_refs_json` 有 4 KB 大小限制。
+  - assistant follow-up turn 会保留已接受的用户 `cited_branch_id`；`cited_refs_json` 会带 `kind / thread_mode`，并把用户原始引用放进 `source`。
+  - follow-up context hint 当前会把引用世界线的标题、hinge、insight 与最多 4 个 anchor id 一起交给生成层。
 - Agent identity L2 profile 当前使用独立 `identity_profile_{user_id}` collection：
   - generated/custom identity 都会同步 profile
   - custom agent create/update/delete 会同步写入或清理 profile

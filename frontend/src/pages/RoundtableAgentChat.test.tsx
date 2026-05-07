@@ -24,6 +24,9 @@ const participants: EndingRoomParticipant[] = [
     persona_snapshot_json: {
       agent_role: 'Marshal',
       bio_short: 'Holds the hinge with discipline.',
+      branch_title: 'Northern Supply Line',
+      agent_stance: 'The line only holds if Han River supply stays intact.',
+      latest_quote: 'No northern push survives a broken granary road.',
     },
   },
   {
@@ -36,6 +39,7 @@ const participants: EndingRoomParticipant[] = [
     persona_snapshot_json: {
       agent_role: 'Auditor',
       bio_short: 'Wants evidence before commitment.',
+      branch_title: 'Treasury Line',
     },
   },
 ];
@@ -172,7 +176,8 @@ describe('RoundtableAgentChat', () => {
       origin_node_type: 'roundtable_participant',
       first_user_content: 'First question',
     });
-    expect(firstStartBody.origin_excerpt).toContain('Marshal');
+    expect(firstStartBody.origin_excerpt).toContain('Role: Marshal');
+    expect(firstStartBody.origin_excerpt).toContain('Worldline: Northern Supply Line');
 
     const [, firstTurnOptions] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect(JSON.parse(String(firstTurnOptions.body))).toMatchObject({
@@ -189,6 +194,37 @@ describe('RoundtableAgentChat', () => {
       origin_node_type: 'roundtable_participant',
       first_user_content: 'Question for B',
     });
+  });
+
+  it('shows participant context before starting the interview', () => {
+    renderChat();
+
+    fireEvent.click(screen.getByRole('option', { name: /Representative A/i }));
+
+    expect(screen.getByText(/Marshal/)).toBeInTheDocument();
+    expect(screen.getByText(/Northern Supply Line/)).toBeInTheDocument();
+    expect(screen.getByText(/Han River supply stays intact/)).toBeInTheDocument();
+    expect(screen.getByText(/broken granary road/)).toBeInTheDocument();
+  });
+
+  it('does not render network failures as participant speech', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      json: vi.fn().mockResolvedValue({ detail: { message: 'provider unavailable' } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { container } = renderChat();
+
+    fireEvent.click(screen.getByRole('option', { name: /Representative A/i }));
+    await sendQuestion('Can you answer this?');
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('roundtable.chat_error_generic');
+    });
+    const agentMessages = Array.from(container.querySelectorAll('.roundtable-agent-chat__msg--agent'));
+    expect(agentMessages.some((node) => node.textContent?.includes('roundtable.chat_error_generic'))).toBe(false);
   });
 
   it('locks participant switching while a turn is streaming', async () => {

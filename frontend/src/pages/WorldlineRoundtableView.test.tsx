@@ -1478,6 +1478,67 @@ describe('WorldlineRoundtableView', () => {
     expect(within(phaseSection as HTMLElement).queryByText(/Opening hinge\./, { selector: '.worldline-roundtable-insight p' })).toBeNull();
   });
 
+  it('compacts persisted long phase insight transcript copies in the sidebar', async () => {
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot;
+    storeState.result = {
+      summary: 'The table settled on one archival verdict.',
+      archivist_note: 'Keep the table scoped.',
+      phase_insights: [
+        {
+          phase: 'opening',
+          stakes: 'Opening hinge.',
+          moderator_focus: 'Focus the frame.',
+          commentary: 'Representative A pins the supply road as the hinge. The rest of this persisted transcript copy repeats the full table turn and should not be shown again in the sidebar body.',
+        },
+      ],
+    } as EndingRoomResult;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Branch A',
+          probability: 0.62,
+          insight: 'Branch A insight',
+          story: 'Story A',
+          key_moments: ['Moment A'],
+        },
+        {
+          id: 'branch-b',
+          title: 'Branch B',
+          probability: 0.38,
+          insight: 'Branch B insight',
+          story: 'Story B',
+          key_moments: ['Moment B'],
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    renderRoundtableView();
+
+    await screen.findByText('The table settled on one archival verdict.');
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
+    expect(phaseSection).toBeTruthy();
+    expect(within(phaseSection as HTMLElement).getByText(
+      'Representative A pins the supply road as the hinge.',
+      { selector: '.worldline-roundtable-insight p' },
+    )).toBeInTheDocument();
+    expect(within(phaseSection as HTMLElement).queryByText(/persisted transcript copy repeats/)).toBeNull();
+  });
+
   it('does not duplicate the archivist note when it matches the summary verbatim', async () => {
     const baseState = createBaseStoreState();
     storeState.snapshot = baseState.snapshot;

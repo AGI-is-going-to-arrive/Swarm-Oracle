@@ -17380,3 +17380,70 @@ QA Inventory
 - 当前边界：
   - 本轮没有重跑 backend 全量 pytest、frontend 全量 vitest 或浏览器 E2E；文档里没有把旧 full-suite 数字包装成这次证据
   - `GameplayCardsModal` 本轮改的是移动端 autofocus 行为，不是新增 gameplay-state conflict 逻辑
+
+## 2026-05-08 Oracle roundtable follow-up readability pass
+
+- 本轮目标：
+  - 继续压 `WorldlineRoundtableView` / post-verdict `Deep Dive` 里的“像系统提示”的地方
+  - 保持 Oracle 的 summary-first、多结局和 worldline-local 边界，不把它改成通用聊天或 graph-first 工作流
+
+- 本轮后端收口：
+  - `backend/app/services/ending_room_service/_content.py`
+    - roundtable verdict fallback 改成可直接展示的裁决文案，不再包含“你刚主持完 / 用你自己的话”这类 prompt 指令
+    - follow-up fallback 改成按 `thread_followup / evidence_card / epilogue / hotseat / archivist` 分流的人话回复，不再输出模式标签 + 事实清单
+    - `thread_followup` 的 generation/rewrite prompt 会钉在 active thread 和当前 anchor，不重开 verdict、不复述整间房、不解释线程机制
+  - `backend/app/services/ending_room_service/_threads.py`
+    - evidence-card 追问被接受后，assistant follow-up turn 会继续保留用户引用的 `cited_branch_id`
+    - assistant `cited_refs_json` 会保留 `kind / thread_mode`，并把用户原始引用放进 `source`
+    - follow-up context hint 会带引用世界线的 title / hinge / insight / anchor ids
+  - `backend/app/services/ending_room_service/_utils.py`
+    - `_phase_insight()` 会把长 commentary 压成 phase-specific 的一句主持人提炼，避免把 transcript 又复制进侧栏
+
+- 本轮前端收口：
+  - `frontend/src/pages/RoundtableAgentChat.tsx`
+    - `1-on-1 Interview` 目标卡会显示角色、世界线、立场、最近原话和人物简介
+    - conversation `origin_excerpt` 改成同一份可读摘要，不再把 raw JSON 直接塞进 prompt context
+    - 网络失败、空响应和 stream error 显示为独立 `role=alert`，不再追加成代表自己的气泡
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - 旧 payload 里过长的 phase insight commentary 只展示第一句
+    - 如果标题和 preview 已经表达同一句，preview 不再重复显示
+  - `frontend/src/pages/roundtableHelpers.ts`
+    - phase insight 预填 prompt 前先压缩长上下文，避免输入框里像复读 transcript
+  - `frontend/src/i18n/locales/en.json`
+  - `frontend/src/i18n/locales/zh.json`
+    - 补齐 `Worldline / Stance / Recent quote / Persona` 与中文对应词条
+
+- 本轮文档同步：
+  - `README.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/reference/api.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+
+- 本轮实际验证：
+  - `source .venv/bin/activate && pytest backend/tests/test_ending_room_service.py`
+    - `102 passed in 56.33s`
+  - `source .venv/bin/activate && ruff check backend/app/services/ending_room_service/_content.py backend/app/services/ending_room_service/_threads.py backend/app/services/ending_room_service/_utils.py backend/tests/test_ending_room_service.py`
+    - 通过
+  - `cd frontend && npm run test -- src/pages/RoundtableAgentChat.test.tsx src/pages/roundtableHelpers.test.ts`
+    - `57 passed`
+  - `cd frontend && npm run test -- src/pages/WorldlineRoundtableView.test.tsx`
+    - `45 passed`
+    - 其中 `token too large` stderr 来自 local replay fallback 用例，测试本身通过
+  - `cd frontend && npm exec tsc -- --noEmit`
+    - 通过
+  - `cd frontend && npm exec eslint -- src/pages/WorldlineRoundtableView.tsx src/pages/RoundtableAgentChat.tsx src/pages/roundtableHelpers.ts`
+    - 通过
+  - `cd frontend && npm run test -- src/i18n/locales.test.ts`
+    - `15 passed`
+  - `git diff --check`
+    - 通过
+
+- 真实浏览器 spot-check：
+  - 打开本地 roundtable 页面后，phase card 只显示压缩后的标题/一句 preview，没有继续把整段 persisted commentary 复读出来
+  - `1-on-1 Interview` 选中代表后，目标卡可见角色、世界线、立场、最近原话和人物简介
+
+- 当前边界：
+  - 本轮没有重跑 backend 全量 pytest、frontend 全量 vitest 或完整 Oracle E2E；只记录上面这些实际跑过的定向验证
+  - `1-on-1 Interview` 仍复用 existing conversation `/start` + `/turn`，这轮没有改 conversation API 合同

@@ -152,8 +152,15 @@ export function buildRoundtableVerdictPrompt(summary: string, isZh: boolean, t?:
     : `Why did "${trimmed}" become the verdict?`;
 }
 
+function compactPromptContext(value: string, maxLength = 56): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  const firstSentence = normalized.match(/^[^。！？.!?]+[。！？.!?]?/)?.[0]?.trim() || normalized;
+  return trimQuoteSnippet(firstSentence, maxLength);
+}
+
 export function buildRoundtablePhasePrompt(label: string, stakes: string, isZh: boolean, t?: TFunction): string {
-  const trimmed = stakes.trim();
+  const trimmed = compactPromptContext(stakes);
   if (!trimmed) {
     if (t) return t('roundtable.phase_prompt_default', { label });
     return isZh

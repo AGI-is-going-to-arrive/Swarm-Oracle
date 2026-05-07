@@ -263,6 +263,7 @@
 - `WorldlineRoundtableView` 当前已补：
   - `Continue this table / Start anchored thread / Copy roundtable brief`
   - `phase insight` 级追问 / 开线程（当前会覆盖返回的全部 `phase_insights`，不再只限前 3 条）
+  - phase insight 展示和 phase prompt 预填会先压成长段 commentary 的第一句；如果标题已经包含同一句，preview 不再重复显示。
   - transcript `quote` 级 `Follow this quote / Start anchored thread`
   - transcript `quote` 级 `Hotseat this rep / 点名这位代表`
   - committed transcript 长段折叠 / 展开
@@ -299,10 +300,11 @@
   - `fault_line_first`
   - `witness_augmented`
 - completed live roundtable 当前在 verdict 后会开放 `Deep Dive`：
-  - `1-on-1 Interview`：按 participant 作用域开启代表私聊，复用 conversation `/start` + `/turn`
+  - `1-on-1 Interview`：按 participant 作用域开启代表私聊，复用 conversation `/start` + `/turn`；目标卡会显示角色、世界线、立场、最近原话和人物简介，传给后端的 `origin_excerpt` 也是同一份可读摘要，不再把 raw JSON 直接塞进 prompt context
   - `Research Analyst`：走 roundtable analyst SSE，展示 tool iteration 与最终回答
   - `Cross-Examine`：对选中的 participants 发同一问题，按 participant 返回 survey response
 - `Deep Dive` 只在 live completed room 打开。roundtable replay 继续保持只读，只恢复 transcript / thread / share / import，不重新开放 chat、analyst 或 survey 这类 live 工具。
+- `1-on-1 Interview` 的请求失败、空响应或 stream error 当前显示为独立 `role=alert` 错误提示，不再追加成代表自己的气泡。
 - post-verdict 工具当前有独立于 room composer 的流状态与缓存：`PostVerdictPanel` 持有 tab / analyst / survey state，result context 变化时会 reset cache 并 abort in-flight stream；`AnalystStreamView` 与 `SurveyStreamView` 共享 `useRoundtableSseStream` 处理 SSE。
 - roundtable mobile 当前以 `live room` 为优先目标：
   - `live room` 已收口到首屏无页面级纵向滚动

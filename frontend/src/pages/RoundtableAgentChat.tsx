@@ -50,6 +50,62 @@ async function readConversationError(response: Response): Promise<string> {
   return `HTTP ${response.status}`;
 }
 
+interface ParticipantProfileRow {
+  key: string;
+  labelKey: string;
+  value: string;
+}
+
+function snapshotValue(snapshot: Record<string, unknown>, keys: string[], maxLength = 180): string {
+  for (const key of keys) {
+    const raw = snapshot[key];
+    if (typeof raw === 'string' && raw.trim()) {
+      const normalized = raw.replace(/\s+/g, ' ').trim();
+      return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1).trimEnd()}…` : normalized;
+    }
+  }
+  return '';
+}
+
+function buildParticipantProfileRows(participant: EndingRoomParticipant): ParticipantProfileRow[] {
+  const snapshot = participant.persona_snapshot_json ?? {};
+  const rows: ParticipantProfileRow[] = [];
+  const role = snapshotValue(snapshot, ['agent_role', 'role'], 80) || participant.role_slot;
+  const worldline = snapshotValue(snapshot, ['branch_title', 'witness_branch_title'], 90);
+  const stance = snapshotValue(snapshot, ['agent_stance', 'branch_pressure'], 160);
+  const quote = snapshotValue(snapshot, ['latest_quote', 'opening_quote'], 160);
+  const bio = snapshotValue(snapshot, ['bio_short', 'agent_persona'], 160);
+  if (role) rows.push({ key: 'role', labelKey: 'roundtable.chat_role_label', value: role });
+  if (worldline) rows.push({ key: 'worldline', labelKey: 'roundtable.chat_branch_label', value: worldline });
+  if (stance) rows.push({ key: 'stance', labelKey: 'roundtable.chat_stance_label', value: stance });
+  if (quote) rows.push({ key: 'quote', labelKey: 'roundtable.chat_latest_quote_label', value: quote });
+  if (bio) rows.push({ key: 'bio', labelKey: 'roundtable.chat_bio_label', value: bio });
+  return rows;
+}
+
+function buildOriginExcerpt(participant: EndingRoomParticipant, isZh: boolean): string {
+  const rows = buildParticipantProfileRows(participant);
+  const labels: Record<string, string> = isZh
+    ? {
+      role: '角色',
+      worldline: '世界线',
+      stance: '立场',
+      quote: '最近原话',
+      bio: '人物',
+    }
+    : {
+      role: 'Role',
+      worldline: 'Worldline',
+      stance: 'Stance',
+      quote: 'Recent quote',
+      bio: 'Persona',
+    };
+  return rows
+    .map((row) => `${labels[row.key] ?? row.key}: ${row.value}`)
+    .join('\n')
+    .slice(0, 600);
+}
+
 export interface RoundtableAgentChatProps {
   scenarioId: string;
   participants: EndingRoomParticipant[];
@@ -57,12 +113,14 @@ export interface RoundtableAgentChatProps {
 }
 
 export default function RoundtableAgentChat({
+  isZh,
   scenarioId,
   participants,
 }: RoundtableAgentChatProps) {
   const { t } = useTranslation();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Map<string, ChatMessage[]>>(new Map());
+  const [errors, setErrors] = useState<Map<string, string>>(new Map());
   const [threadIds, setThreadIds] = useState<Map<string, string>>(new Map());
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
@@ -76,6 +134,11 @@ export default function RoundtableAgentChat({
   );
 
   const currentMessages = selectedId ? (messages.get(selectedId) ?? []) : [];
+  const currentError = selectedId ? (errors.get(selectedId) ?? '') : '';
+  const selectedProfileRows = useMemo(
+    () => (selectedParticipant ? buildParticipantProfileRows(selectedParticipant) : []),
+    [selectedParticipant],
+  );
 
   const handleSelect = useCallback((id: string) => {
     if (streaming) return;
@@ -92,6 +155,15 @@ export default function RoundtableAgentChat({
     });
   }, []);
 
+  const setParticipantError = useCallback((pid: string, content: string | null) => {
+    setErrors((prev) => {
+      const next = new Map(prev);
+      if (content) next.set(pid, content);
+      else next.delete(pid);
+      return next;
+    });
+  }, []);
+
   useEffect(() => () => {
     activeStreamRef.current?.controller.abort();
   }, []);
@@ -100,9 +172,7 @@ export default function RoundtableAgentChat({
     const question = inputRef.current.trim();
     if (!question || !selectedId || !selectedParticipant || streaming) return;
     const participantId = selectedId;
-    const originExcerpt = selectedParticipant.persona_snapshot_json
-      ? JSON.stringify(selectedParticipant.persona_snapshot_json).slice(0, 200)
-      : '';
+    const originExcerpt = buildOriginExcerpt(selectedParticipant, isZh);
     const originBranchId = selectedParticipant.source_branch_id?.trim() || null;
     const policy = loadLlmProviderPolicy();
     const controller = new AbortController();
@@ -116,6 +186,7 @@ export default function RoundtableAgentChat({
       next.set(participantId, list);
       return next;
     });
+    setParticipantError(participantId, null);
     setStreaming(true);
     setStreamingText('');
     inputRef.current = '';
@@ -142,7 +213,7 @@ export default function RoundtableAgentChat({
           signal: controller.signal,
         });
         if (!startResponse.ok) {
-          appendAgentMessage(
+          setParticipantError(
             participantId,
             t('roundtable.chat_error_generic', {
               detail: await readConversationError(startResponse),
@@ -155,7 +226,7 @@ export default function RoundtableAgentChat({
           ? startPayload.thread_id
           : null;
         if (!nextThreadId) {
-          appendAgentMessage(participantId, t('roundtable.chat_error_no_body'));
+          setParticipantError(participantId, t('roundtable.chat_error_no_body'));
           return;
         }
         setThreadIds((prev) => {
@@ -182,7 +253,7 @@ export default function RoundtableAgentChat({
         signal: controller.signal,
       });
       if (!response.ok) {
-        appendAgentMessage(
+        setParticipantError(
           participantId,
           t('roundtable.chat_error_generic', {
             detail: await readConversationError(response),
@@ -193,7 +264,7 @@ export default function RoundtableAgentChat({
 
       const reader = response.body?.getReader();
       if (!reader) {
-        appendAgentMessage(participantId, t('roundtable.chat_error_no_body'));
+        setParticipantError(participantId, t('roundtable.chat_error_no_body'));
         return;
       }
 
@@ -226,15 +297,16 @@ export default function RoundtableAgentChat({
       const trailingFrame = (buffer + decoder.decode()).trim();
       if (trailingFrame) applyStreamFrame(trailingFrame);
 
-      appendAgentMessage(
-        participantId,
-        streamError
-          ? t('roundtable.chat_error_generic', { detail: streamError })
-          : (fullText || t('roundtable.chat_no_response')),
-      );
+      if (streamError) {
+        setParticipantError(participantId, t('roundtable.chat_error_generic', { detail: streamError }));
+      } else if (fullText) {
+        appendAgentMessage(participantId, fullText);
+      } else {
+        setParticipantError(participantId, t('roundtable.chat_no_response'));
+      }
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
-        appendAgentMessage(
+        setParticipantError(
           participantId,
           t('roundtable.chat_error_generic', { detail: (err as Error).message }),
         );
@@ -246,7 +318,17 @@ export default function RoundtableAgentChat({
         activeStreamRef.current = null;
       }
     }
-  }, [appendAgentMessage, scenarioId, selectedId, selectedParticipant, streaming, t, threadIds]);
+  }, [
+    appendAgentMessage,
+    isZh,
+    scenarioId,
+    selectedId,
+    selectedParticipant,
+    setParticipantError,
+    streaming,
+    t,
+    threadIds,
+  ]);
 
   const handleAbort = useCallback(() => {
     const active = activeStreamRef.current;
@@ -291,8 +373,19 @@ export default function RoundtableAgentChat({
       {selectedParticipant ? (
         <>
           <div className="roundtable-agent-chat__target">
-            <strong>{t('roundtable.chat_speaking_with')} {selectedParticipant.display_name}</strong>
-            <span>{t('roundtable.chat_role_label')}: {selectedParticipant.role_slot}</span>
+            <div className="roundtable-agent-chat__target-head">
+              <strong>{t('roundtable.chat_speaking_with')} {selectedParticipant.display_name}</strong>
+            </div>
+            {selectedProfileRows.length > 0 && (
+              <dl className="roundtable-agent-chat__profile">
+                {selectedProfileRows.map((row) => (
+                  <div key={row.key} className="roundtable-agent-chat__profile-row">
+                    <dt>{t(row.labelKey)}</dt>
+                    <dd>{row.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
           </div>
 
           {(currentMessages.length > 0 || streaming) && (
@@ -327,6 +420,12 @@ export default function RoundtableAgentChat({
                 </div>
               )}
             </div>
+          )}
+
+          {currentError && (
+            <p className="roundtable-agent-chat__error" role="alert">
+              {currentError}
+            </p>
           )}
 
           <div className="roundtable-agent-chat__input">
