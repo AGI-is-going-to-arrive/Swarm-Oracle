@@ -824,8 +824,15 @@ async def _append_followup_turns_with_retry(
         _load_branch_transcript_excerpts,
         _load_scenario_question,
     )
-    _followup_scenario_question = _load_scenario_question(prepared_room.scenario_id)
-    _followup_transcripts = _load_branch_transcript_excerpts(prepared_room.scenario_id)
+    followup_scenario_question = _load_scenario_question(prepared_room.scenario_id)
+    followup_transcripts = _load_branch_transcript_excerpts(
+        prepared_room.scenario_id,
+        branch_ids={
+            plan.participant.source_branch_id
+            for plan in prepared_plans
+            if plan.participant.source_branch_id
+        },
+    )
 
     await _broadcast(prepared_user_turn["room_id"], ws_callback, {
         "type": "ending_room_turn_commit",
@@ -893,8 +900,8 @@ async def _append_followup_turns_with_retry(
                         context_hint=plan.context_hint,
                         purpose=f"oracle_followup_stream_{plan.interaction_mode.value}",
                         on_delta=_on_delta,
-                        scenario_question=_followup_scenario_question,
-                        transcript_quotes=_followup_transcripts.get(
+                        scenario_question=followup_scenario_question,
+                        transcript_quotes=followup_transcripts.get(
                             plan.participant.source_branch_id or "", []
                         ),
                     )
@@ -926,8 +933,8 @@ async def _append_followup_turns_with_retry(
                     recent_lines=recent_lines,
                     context_hint=plan.context_hint,
                     purpose=f"oracle_followup_{plan.interaction_mode.value}",
-                    scenario_question=_followup_scenario_question,
-                    transcript_quotes=_followup_transcripts.get(
+                    scenario_question=followup_scenario_question,
+                    transcript_quotes=followup_transcripts.get(
                         plan.participant.source_branch_id or "", []
                     ),
                 )

@@ -79,46 +79,132 @@ vi.mock('react-i18next', () => ({
     init: () => {},
   },
   useTranslation: () => ({
-    t: (key: string) => ({
-      'common.close': 'Close',
-      'ending_room.title': 'Ending Chamber',
-      'ending_room.status_done': 'Debrief complete',
-      'ending_room.status_live': 'Speaking',
-      'ending_room.status_draft': 'Preparing',
-      'ending_room.current_branch_badge': 'Current worldline',
-      'ending_room.mode_debrief': 'Debrief',
-      'ending_room.mode_one_move_only': 'One Move Only',
-      'ending_room.replay_readonly': 'Replay mode is read-only for ending chambers.',
-      'ending_room.loading': 'Preparing the current ending chamber...',
-      'ending_room.empty': 'No chamber record is available for this ending yet.',
-      'ending_room.participant_unknown': 'Unknown participant',
-      'ending_room.transcript_title': 'Chamber Transcript',
-      'ending_room.draft_badge': 'Speaking',
-      'ending_room.action_continue': 'Continue from verdict',
-      'ending_room.action_new_thread': 'Start anchored thread',
-      'ending_room.action_copy_brief': 'Copy chamber brief',
-      'ending_room.action_brief_copied': 'Chamber brief copied',
-      'ending_room.action_follow_insight': 'Follow this insight',
-      'ending_room.action_follow_quote': 'Follow this quote',
-      'ending_room.action_thread_from_anchor': 'Start thread from current anchor',
-      'ending_room.action_epilogue': 'Three-turn epilogue',
-      'ending_room.collapse_details': 'Collapse details',
-      'ending_room.expand_details': 'Expand details',
-      'ending_room.epilogue_hint': 'Continue three more turns inside this chamber.',
-      'ending_room.epilogue_prompt': 'Continue three more turns from this ending.',
-      'ending_room.sidebar_mobile_description': 'Quick actions and participant details for this chamber.',
-      'ending_room.sidebar_mobile_label': 'Chamber sidebar',
-      'result.story': 'Story',
-      'result.insight': 'Insight',
-      'roundtable.phase_verdict': 'Archive Verdict',
-      'roundtable.phase_opening': 'Ending Recall',
-      'roundtable.phase_crossfire': 'Fault Line',
-      'roundtable.phase_rebuttal': 'If Replayed',
-      'roundtable.gallery_title': 'Crossline Gallery',
-      'roundtable.gallery_hint': 'This view exposes summaries and key quotes from other worldlines, not the full transcript.',
-      'common.loading': 'Loading',
-      'ending_room.foreign_summary_badge': 'Crossline summary',
-    }[key] ?? key),
+    t: (key: string, options?: Record<string, unknown>) => {
+      if (key === 'ending_room.thread_label') {
+        return ` · Thread ${String(options?.count ?? '')}`;
+      }
+      if (key === 'ending_room.thread_main_chamber') {
+        return `${String(options?.title ?? '')} · Main Chamber`;
+      }
+      if (key === 'ending_room.metric_impact') {
+        return `Impact ${String(options?.count ?? 0)}`;
+      }
+      if (key === 'ending_room.metric_turns') {
+        return `${String(options?.count ?? 0)} turns`;
+      }
+      if (key === 'ending_room.metric_hinges') {
+        return `${String(options?.count ?? 0)} hinge hits`;
+      }
+      if (key === 'ending_room.anchor_key_moment_prompt') {
+        return `Why did the worldline turn here: ${String(options?.moment ?? '')}`;
+      }
+      if (key === 'ending_room.verdict_prompt') {
+        return `Continue from this ending: why did "${String(options?.summary ?? '')}" hold?`;
+      }
+      if (key === 'ending_room.insight_prompt') {
+        return `Push on this insight: ${String(options?.insight ?? '')}`;
+      }
+      if (key === 'ending_room.quote_prompt') {
+        return `Follow this quote: ${String(options?.speaker ?? '')} said "${String(options?.snippet ?? '')}". Which hinge was this line really pointing at?`;
+      }
+      if (key === 'ending_room.mode_note_hotseat_named') {
+        return `Push only ${String(options?.name ?? '')}, so the hinge can be explained clearly.`;
+      }
+      return ({
+        'common.close': 'Close',
+        'common.collapse': 'Collapse',
+        'common.expand': 'Expand',
+        'common.you': 'You',
+        'common.unknown_speaker': 'Unknown',
+        'ending_room.title': 'Ending Chamber',
+        'ending_room.status_done': 'Debrief complete',
+        'ending_room.status_live': 'Speaking',
+        'ending_room.status_draft': 'Preparing',
+        'ending_room.current_branch_badge': 'Current worldline',
+        'ending_room.mode_debrief': 'Debrief',
+        'ending_room.mode_one_move_only': 'One Move Only',
+        'ending_room.replay_readonly': 'Replay mode is read-only for ending chambers.',
+        'ending_room.loading': 'Preparing the current ending chamber...',
+        'ending_room.empty': 'No chamber record is available for this ending yet.',
+        'ending_room.participant_unknown': 'Unknown participant',
+        'ending_room.transcript_title': 'Chamber Transcript',
+        'ending_room.draft_badge': 'Speaking',
+        'ending_room.action_continue': 'Continue from verdict',
+        'ending_room.action_new_thread': 'Start anchored thread',
+        'ending_room.action_copy_brief': 'Copy chamber brief',
+        'ending_room.action_brief_copied': 'Chamber brief copied',
+        'ending_room.action_follow_insight': 'Follow this insight',
+        'ending_room.action_follow_quote': 'Follow this quote',
+        'ending_room.action_thread_from_anchor': 'Start thread from current anchor',
+        'ending_room.action_epilogue': 'Three-turn epilogue',
+        'ending_room.collapse_details': 'Collapse details',
+        'ending_room.expand_details': 'Expand details',
+        'ending_room.epilogue_hint': 'Continue three more turns inside this chamber.',
+        'ending_room.epilogue_prompt': 'Continue three more turns from this ending.',
+        'ending_room.sidebar_mobile_description': 'Quick actions and participant details for this chamber.',
+        'ending_room.sidebar_mobile_label': 'Chamber sidebar',
+        'ending_room.speaker_you': 'You',
+        'ending_room.placeholder_hotseat': 'The targeted role is lining up a reply…',
+        'ending_room.placeholder_all_present': 'The current lineup is responding in sequence…',
+        'ending_room.placeholder_archivist': 'The Archivist is routing the most relevant reply…',
+        'ending_room.scope_current_worldline': 'Only using the current worldline and room desk',
+        'ending_room.anchor_key_moment': 'Key moment',
+        'ending_room.anchor_archivist_verdict': 'Archivist verdict',
+        'ending_room.brief_scope': '## Scope',
+        'ending_room.brief_archivist_verdict': '## Archivist Verdict',
+        'ending_room.brief_one_move_only': '## One Move Only',
+        'ending_room.brief_current_insight': '## Current Insight',
+        'ending_room.brief_key_moments': '## Key Moments',
+        'ending_room.theme_cues': 'Theme cues',
+        'ending_room.current_participants': 'Current participants',
+        'ending_room.new_thread': 'New thread',
+        'ending_room.empty_roster_fallback': 'No stable worldline roster is available yet, so the chamber falls back to an Archivist-only debrief.',
+        'ending_room.speaking': 'Speaking',
+        'ending_room.current_target': 'Current target',
+        'ending_room.fallback_lineup': 'Fallback lineup',
+        'ending_room.followup_threads': 'Follow-up threads',
+        'ending_room.followup_mode': 'Follow-up mode',
+        'ending_room.input_placeholder': 'Keep probing why this ending held, or question one participant from the current worldline.',
+        'ending_room.sending': 'Sending…',
+        'ending_room.send': 'Send',
+        'ending_room.role_archivist': 'Archivist',
+        'ending_room.role_user': 'You',
+        'ending_room.role_representative': 'Representative',
+        'ending_room.role_critic': 'Critic',
+        'ending_room.role_observer': 'Observer',
+        'ending_room.role_default': 'Current worldline',
+        'ending_room.scope_followup_thread': 'Following this follow-up thread only',
+        'ending_room.scope_chamber_only': 'Staying inside this chamber only',
+        'ending_room.scope_active_followup': 'Using the active follow-up thread only',
+        'ending_room.scope_default_chamber': 'Using this worldline and chamber only',
+        'ending_room.mode_archivist_label': 'Archivist lead',
+        'ending_room.mode_hotseat_label': 'Question one role',
+        'ending_room.mode_all_present_label': 'Current lineup responds',
+        'ending_room.mode_note_hotseat': 'Question one role only when you want the exact hinge explained.',
+        'ending_room.mode_note_all_present': 'Let the current lineup each answer once to expose roles and disagreements.',
+        'ending_room.mode_note_thread_followup': 'Keep one concrete question in its own follow-up thread so the verdict stays legible.',
+        'ending_room.mode_note_epilogue': 'The worldline continues for 3 turns to preview what comes next.',
+        'ending_room.mode_note_evidence_card': 'Introducing evidence from another worldline; the Archivist will explain the differences.',
+        'ending_room.mode_note_default': 'Let the Archivist frame the question first, then route it to the most relevant voice.',
+        'ending_room.verdict_prompt_default': 'Continue from this ending: why did this verdict hold?',
+        'ending_room.insight_prompt_default': 'Push on this insight: which move was the true hinge?',
+        'ending_room.anchor_kind_verdict': 'Verdict',
+        'ending_room.anchor_kind_insight': 'Insight',
+        'ending_room.anchor_kind_key_moment': 'Key moment',
+        'ending_room.anchor_kind_quote': 'Quote',
+        'ending_room.anchor_kind_default': 'Anchor',
+        'result.story': 'Story',
+        'result.insight': 'Insight',
+        'roundtable.phase_verdict': 'Archive Verdict',
+        'roundtable.phase_opening': 'Ending Recall',
+        'roundtable.phase_crossfire': 'Fault Line',
+        'roundtable.phase_rebuttal': 'If Replayed',
+        'roundtable.gallery_title': 'Crossline Gallery',
+        'roundtable.gallery_hint': 'This view exposes summaries and key quotes from other worldlines, not the full transcript.',
+        'common.loading': 'Loading',
+        'ending_room.foreign_summary_badge': 'Crossline summary',
+      }[key] ?? key);
+    },
     i18n: {
       language: 'en',
     },

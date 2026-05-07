@@ -1,4 +1,6 @@
+import type { TFunction } from 'i18next';
 import type {
+  EndingRoomPhase,
   EndingRoomParticipant,
   EndingRoomThreadSnapshot,
   RoundtableSelectionRecipe,
@@ -19,6 +21,13 @@ export type RoundtableSelectionMode = RoundtableSelectionRecipe;
 export const MANUAL_SHORTLIST_MIN = 2;
 export const MANUAL_SHORTLIST_MAX = 4;
 export const ROUNDTABLE_COLLAPSED_TURN_MAX_LINES = 6;
+const ENDING_ROOM_PHASES: ReadonlySet<string> = new Set<EndingRoomPhase>([
+  'opening',
+  'crossfire',
+  'rebuttal',
+  'closing',
+  'verdict',
+]);
 
 export interface WitnessCandidate {
   branchId: string;
@@ -47,29 +56,38 @@ export function isRoundtableParticipant(participant: EndingRoomParticipant) {
   return participant.role_slot === 'representative';
 }
 
+export function isEndingRoomPhase(value: string): value is EndingRoomPhase {
+  return ENDING_ROOM_PHASES.has(value);
+}
+
 export function getParticipantSprite(participant: EndingRoomParticipant) {
   const agentRole = String(participant.persona_snapshot_json?.agent_role ?? '');
   return `/assets/characters/${mapRoleToSpriteId(agentRole, participant.display_name)}.png`;
 }
 
-export function getThreadLabel(thread: EndingRoomThreadSnapshot, isZh: boolean) {
-  return thread.mode === 'room'
-    ? (isZh ? '主桌讨论' : 'Main table')
-    : thread.title;
+export function getThreadLabel(thread: EndingRoomThreadSnapshot, isZh: boolean, t?: TFunction) {
+  if (thread.mode === 'room') {
+    if (t) return t('roundtable.thread_main_table');
+    return isZh ? '主桌讨论' : 'Main table';
+  }
+  return thread.title;
 }
 
 export function getParticipantImpactScore(participant: EndingRoomParticipant) {
   return Number(participant.persona_snapshot_json?.impact_score ?? 0);
 }
 
-export function getSelectionReasonLabel(reason: string, isZh: boolean) {
+export function getSelectionReasonLabel(reason: string, isZh: boolean, t?: TFunction) {
   switch (reason) {
     case 'user_selected':
+      if (t) return t('roundtable.selection_reason_user_selected');
       return isZh ? '你选的' : 'Your pick';
     case 'fallback':
     case 'fallback_cast':
+      if (t) return t('roundtable.selection_reason_fallback');
       return isZh ? '自动补位' : 'Auto-filled';
     case 'top_impact':
+      if (t) return t('roundtable.selection_reason_top_impact');
       return isZh ? '高影响力' : 'High impact';
     default:
       return reason
@@ -78,11 +96,13 @@ export function getSelectionReasonLabel(reason: string, isZh: boolean) {
   }
 }
 
-export function getArchivistModeLabel(isZh: boolean): string {
+export function getArchivistModeLabel(isZh: boolean, t?: TFunction): string {
+  if (t) return t('roundtable.host_guided_label');
   return isZh ? '主持人引导' : 'Host-guided';
 }
 
-export function getRepresentativeHotseatLabel(isZh: boolean): string {
+export function getRepresentativeHotseatLabel(isZh: boolean, t?: TFunction): string {
+  if (t) return t('roundtable.hotseat_question_one');
   return isZh ? '单独追问' : 'Question one rep';
 }
 
@@ -90,8 +110,14 @@ export function getRoundtableModeNote(
   mode: EndingRoomThreadSnapshot['interaction_mode'],
   isZh: boolean,
   selectedName?: string | null,
+  t?: TFunction,
 ): string {
   if (mode === 'hotseat') {
+    if (t) {
+      return selectedName
+        ? t('roundtable.mode_note_hotseat_named', { name: selectedName })
+        : t('roundtable.mode_note_hotseat');
+    }
     return selectedName
       ? (isZh
         ? `只对 ${selectedName} 提问，让这条世界线解释清楚自己的立场。`
@@ -101,34 +127,40 @@ export function getRoundtableModeNote(
         : 'Pick one rep to question — get a clear answer from one worldline.');
   }
   if (mode === 'thread_followup') {
+    if (t) return t('roundtable.mode_note_thread_followup');
     return isZh
       ? '把某个具体分歧单独拎出来聊，主桌讨论保持清晰。'
       : 'Split off one disagreement into its own thread so the main discussion stays clean.';
   }
+  if (t) return t('roundtable.mode_note_default');
   return isZh
     ? '主持人先梳理分歧，再把问题交给最合适的代表回答。'
     : 'The host sorts out the disagreement first, then passes it to the right rep.';
 }
 
-export function buildRoundtableVerdictPrompt(summary: string, isZh: boolean): string {
+export function buildRoundtableVerdictPrompt(summary: string, isZh: boolean, t?: TFunction): string {
   const trimmed = summary.trim();
   if (!trimmed) {
+    if (t) return t('roundtable.verdict_prompt_default');
     return isZh
       ? '为什么圆桌最后得出了这个结论？'
       : 'Why did the roundtable reach this conclusion?';
   }
+  if (t) return t('roundtable.verdict_prompt', { summary: trimmed });
   return isZh
     ? `为什么"${trimmed}"成了最终结论？`
     : `Why did "${trimmed}" become the verdict?`;
 }
 
-export function buildRoundtablePhasePrompt(label: string, stakes: string, isZh: boolean): string {
+export function buildRoundtablePhasePrompt(label: string, stakes: string, isZh: boolean, t?: TFunction): string {
   const trimmed = stakes.trim();
   if (!trimmed) {
+    if (t) return t('roundtable.phase_prompt_default', { label });
     return isZh
       ? `"${label}"阶段真正的分歧是什么？`
       : `What was the real disagreement in "${label}"?`;
   }
+  if (t) return t('roundtable.phase_prompt', { label, stakes: trimmed });
   return isZh
     ? `关于"${label}"：${trimmed}`
     : `About "${label}": ${trimmed}`;
@@ -146,8 +178,9 @@ export function trimQuoteSnippet(content: string, maxLength = 120): string {
   return `${normalized.slice(0, maxLength).trimEnd()}…`;
 }
 
-export function buildRoundtableQuotePrompt(speaker: string, content: string, isZh: boolean): string {
+export function buildRoundtableQuotePrompt(speaker: string, content: string, isZh: boolean, t?: TFunction): string {
   const snippet = trimQuoteSnippet(content);
+  if (t) return t('roundtable.quote_prompt', { speaker, snippet });
   return isZh
     ? `${speaker} 说"${snippet}"——这句话到底卡在哪个分歧上？`
     : `${speaker} said "${snippet}" — which disagreement does this get at?`;
@@ -166,7 +199,19 @@ export function sameWitnessSelection(
   return current.branchId === next.branchId && current.agentId === next.agentId;
 }
 
-export function getRoundtableAnchorKindLabel(kind: string, isZh: boolean): string {
+export function getRoundtableAnchorKindLabel(kind: string, isZh: boolean, t?: TFunction): string {
+  if (t) {
+    switch (kind) {
+      case 'verdict':
+        return t('roundtable.anchor_kind_verdict');
+      case 'phase':
+        return t('roundtable.anchor_kind_phase');
+      case 'quote':
+        return t('roundtable.anchor_kind_quote');
+      default:
+        return t('roundtable.anchor_kind_default');
+    }
+  }
   switch (kind) {
     case 'verdict':
       return isZh ? '最终结论' : 'Verdict';
@@ -184,14 +229,14 @@ export function describeRoundtableAnchor(
   isZh: boolean,
   phaseInsights: Array<{ phase: string; stakes: string }>,
   turns: Array<{ key: string; content: string }>,
-  t: (key: string) => string,
+  t?: TFunction,
 ): AnchorSummary | null {
   if (!anchorIds || anchorIds.length === 0) {
     return null;
   }
   const [domain, rawKind, , ...extraParts] = anchorIds[0].split(':');
   const kind = rawKind ?? 'unknown';
-  const kindLabel = getRoundtableAnchorKindLabel(kind, isZh);
+  const kindLabel = getRoundtableAnchorKindLabel(kind, isZh, t);
   const extra = extraParts.join(':');
   if (domain !== 'roundtable') {
     return {
@@ -204,7 +249,9 @@ export function describeRoundtableAnchor(
   if (kind === 'phase') {
     const [phaseName, phaseIndexRaw = '0'] = extra.split(/-(?=[^-]+$)/);
     const phaseIndex = Number(phaseIndexRaw);
-    const phaseLabel = getEndingRoomPhaseLabel(phaseName as never, t);
+    const phaseLabel = t && isEndingRoomPhase(phaseName)
+      ? getEndingRoomPhaseLabel(phaseName, t)
+      : phaseName;
     const phaseInsight = Number.isFinite(phaseIndex) ? phaseInsights[phaseIndex] : undefined;
     const label = phaseInsight?.stakes
       ? `${phaseLabel} · ${trimQuoteSnippet(phaseInsight.stakes, 48)}`

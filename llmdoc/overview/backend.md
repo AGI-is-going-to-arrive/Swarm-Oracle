@@ -130,12 +130,14 @@
 - Oracle 的 participant snapshot 当前会带 `agent_name / agent_role / agent_persona / agent_stance / agent_emotion / tier / impact_score / branch_pressure / latest_quote / opening_quote / source_type`，供 ending-room / roundtable 的 LLM 生成直接消费。
 - `ending-room / roundtable` 的主文案生成当前走 `LLM first, template fallback`：先 structured LLM，再 plain-text retry，最后才回 deterministic fallback；模板不再是主路径。
 - Oracle 主文案的 LLM 路径当前先走 generation-first prompt，这一步不会把 anchor copy 当中心参考；只有生成为空或失败时，才进入带 anchor reference 的 rewrite fallback，最后才退 deterministic fallback。
-- Oracle 改写 prompt 当前包含双层角色化词汇提示（`_oracle_vocabulary_hints()`）：
+- Oracle prompt 当前包含双层角色化词汇提示：
   - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science，共 13 种）提供领域专属术语、句式风格和情绪基调。已知限制：子串匹配可能造成少量误分类（如 warlord→imperial via "lord"）。
   - 身份层：从 `persona_snapshot_json` 中提取 agent 的实际身份（`agent_role`）、简介（`bio_short`）、影响力（`impact_score`）、叙事地位（`tier`）和推演参与度（`turn_count / key_moment_hits`），动态生成 identity 提示。
-  - 高影响力 agent（impact_score ≥ 7）措辞更自信有分量；低影响力 agent（≤ 3）措辞更谨慎。
+  - prompt 里只有静态领域词汇会进入可信 `Persona vocabulary` 行；身份层会通过 `Persona Vocabulary Identity / UNTRUSTED DATA` fenced block 注入，三反引号和 prompt-injection 标记由统一 helper 处理。
+  - 高影响力 agent（impact_score ≥ 0.75）措辞更自信有分量；低影响力 agent（≤ 0.35）措辞更谨慎。
   - 档案官有独立的词汇提示，不受 variant 影响。
-  - plain variant 没有领域词汇，但仍会输出 identity 层（只要 snapshot 有数据）。
+  - plain variant 没有领域词汇，但仍可输出身份层（只要 snapshot 有数据），并同样按不可信文本处理。
+- `_load_branch_transcript_excerpts()` 当前用窗口函数一次取每条分支最近 top-N 消息；调用方可传 `branch_ids` 限定范围。room plan 只查当前 participants 所在分支，follow-up 只查本次 responder 所在分支，不再为每次追问 rank 整个 scenario 的所有分支 transcript。
 - `ending_room_turn` 的 `cited_branch_id` 与 `cited_refs_json` 当前已从 API 层开放写入。
   - `cited_branch_id` 会做 scenario 级验证，不允许跨场景引用。
   - `cited_refs_json` 有 4 KB 大小限制。
@@ -209,6 +211,7 @@
 - Oracle follow-up 的 stream support probe 当前复用 `llm_call_stream()`；`estimated_tokens` 预估已补回，不再因为 probe 自身变量缺失而误触发 fallback。
 - Oracle follow-up 流式链路当前会给“首个可见 delta”一个短预算；如果 provider 长时间不出可见 token，会尽快回退到非流式改写，而不是把 anchored follow-up 长时间挂住。
 - Oracle follow-up 当前会在 WebSocket delta 广播和最终 turn 落库前先剥掉 provider reasoning block；`<think>` 不会再泄漏进 transcript。
+- Oracle follow-up 如果 stream 正常结束但没有任何可见内容（空 chunk 或仅 reasoning block），也会回到非流式改写；不会把 deterministic anchor copy 当成成功的流式输出。
 - Oracle follow-up append 当前不是整房间 all-or-nothing：
   - user turn 先提交
   - assistant follow-up turn 在真正落库时重新分配最终 `sequence`
@@ -310,8 +313,8 @@
   - `tests/test_causal_graph.py -q`：`68 passed`
   - `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q`：`125 passed`
   - `ruff check app/services/causal_graph.py tests/test_causal_graph.py`：通过
-- backend 全量 `pytest`：`2357 passed, 2 skipped`
-- `ruff check app/services/`：通过
+- backend 全量 `pytest`：`2399 passed, 2 skipped`
+- `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 
 ## WebSocket 口径
 

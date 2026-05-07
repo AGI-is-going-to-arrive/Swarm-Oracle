@@ -237,6 +237,7 @@
 - `WorldlineRoundtableView` 的 readonly replay 现在会按 `active_thread_id` 恢复对应 thread 的 `interaction_mode` 与 hotseat target，不再把 hotseat replay 误显示成 `archivist_route`。
 - roundtable 的 anchored thread readonly replay / local restore 当前已补过 Firefox / WebKit scoped regression，口径与 Chromium 对齐。
 - Oracle 页面 UI 语言当前跟随用户语言开关；room payload 会显式带 `zh | en`，但页面不再反向用 `scenario.language` 覆盖当前 UI 语言。
+- Oracle / roundtable 的本轮界面文案迁移已覆盖 `EndingChatModal`、`WorldlineRoundtableView`、`RoundtablePickerPanel`、`RoundtableTranscriptList` 和相关 helper；en/zh key 与 placeholder 当前保持一致。`RoundtablePickerPanel` 的取消拖拽播报会带 `{{name}}`，中英文口径一致。
 - `src/i18n/config.ts` 当前把 `localStorage` 读写失败视为可恢复错误；隐私模式或受限环境下，语言初始化与切换仍可工作。
 - `GlobalOfflineBanner` 当前把 WS grace timer 改成了 SSR-safe 的 layout effect fallback；当前 SPA 行为不变，未来如果接 SSR 也不会再因为 `useLayoutEffect` 打 warning。
 - `LanguageSwitcher` 当前按 `role="group"` + button `aria-label / title / lang` 暴露，不再只是视觉开关；accessible name 也会带上可见的 `EN / 中文` 文本，避免语音控制和视觉标签口径分叉。
@@ -266,6 +267,8 @@
   - `后续三回合` 按钮
   - mobile roster modal 当前会区分 `archivist / witness / representative`，不再把 witness 回落成普通代表标签
   - `Reseat and reopen` 与阶段导航当前会跟随 `prefers-reduced-motion` 切到 `auto` scroll，不再强制 smooth scroll
+  - replay share artifact payload 当前用显式字段对象构造，不再用 `as unknown as Record` 穿透类型
+  - `describeRoundtableAnchor()` 当前会先判断 phase 是否属于 `EndingRoomPhase`；未知 phase 会回退原始 label，不会强行拼不存在的 locale key
 - Oracle 当前锚点规则：
   - `EndingChatModal`
     - `verdict / insight / key_moment / quote`
@@ -427,7 +430,8 @@
   - 目标文件 eslint：通过
   - TypeScript noEmit：通过
 - frontend bridge / guide 定向 vitest 当前 `124 passed`。
-- frontend full vitest 本 session fresh rerun：`1742 passed`。
+- frontend full vitest 本 session fresh rerun：`165 files / 1782 passed`。
+- frontend i18n key + placeholder parity：`1587 = 1587`，通过。
 - frontend 目标文件 `eslint`、`typecheck`、`build`（含 `perf:budgets:check`）当前通过。
 - fixture-backed local preview 浏览器复核当前已补：
   - ResultView bridge DOM / disabled 样式

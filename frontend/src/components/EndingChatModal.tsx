@@ -394,7 +394,7 @@ export default function EndingChatModal({
   );
 
   function participantMetrics(participant: EndingRoomParticipant) {
-    const role = String(participant.persona_snapshot_json?.agent_role ?? roleLabel(participant, isZh));
+    const role = String(participant.persona_snapshot_json?.agent_role ?? roleLabel(participant, isZh, t));
     const persona = participant.persona_snapshot_json?.bio_short
       ? String(participant.persona_snapshot_json.bio_short)
       : participant.persona_snapshot_json?.agent_persona
@@ -486,7 +486,7 @@ export default function EndingChatModal({
         return {
           key: turn.id,
           speaker: participant?.display_name
-            ?? (turn.source === 'user_turn' ? (isZh ? '你' : 'You') : t('ending_room.participant_unknown')),
+            ?? (turn.source === 'user_turn' ? t('ending_room.speaker_you') : t('ending_room.participant_unknown')),
           phase: getEndingRoomPhaseLabel(turn.phase, t),
           content: turn.source === 'user_turn' ? turn.content : stripOracleReasoningText(turn.content),
           participantId: turn.participant_id,
@@ -524,7 +524,7 @@ export default function EndingChatModal({
       return {
         key: turn.id,
         speaker: participant?.display_name
-          ?? (turn.source === 'user_turn' ? (isZh ? '你' : 'You') : t('ending_room.participant_unknown')),
+          ?? (turn.source === 'user_turn' ? t('ending_room.speaker_you') : t('ending_room.participant_unknown')),
         phase: getEndingRoomPhaseLabel(turn.phase, t),
         content: turn.source === 'user_turn' ? turn.content : stripOracleReasoningText(turn.content),
         participantId: turn.participant_id,
@@ -567,10 +567,10 @@ export default function EndingChatModal({
               ? sanitizedContent
               : (
                 effectiveInteractionMode === 'hotseat'
-                  ? (isZh ? '当前点名角色正在组织回应…' : 'The targeted role is lining up a reply…')
+                  ? t('ending_room.placeholder_hotseat')
                   : effectiveInteractionMode === 'all_present'
-                    ? (isZh ? '当前阵容正在接力回应…' : 'The current lineup is responding in sequence…')
-                    : (isZh ? '档案官正在组织最相关的回应…' : 'The Archivist is routing the most relevant reply…')
+                    ? t('ending_room.placeholder_all_present')
+                    : t('ending_room.placeholder_archivist')
               ),
             variant: sanitizedContent.trim() ? 'stream' : 'placeholder',
           };
@@ -586,10 +586,10 @@ export default function EndingChatModal({
           ?? participants[0]?.id
           ?? null;
       const placeholderContent = effectiveInteractionMode === 'hotseat'
-        ? (isZh ? '当前点名角色正在组织回应…' : 'The targeted role is lining up a reply…')
+        ? t('ending_room.placeholder_hotseat')
         : effectiveInteractionMode === 'all_present'
-          ? (isZh ? '当前阵容正在接力回应…' : 'The current lineup is responding in sequence…')
-          : (isZh ? '档案官正在组织最相关的回应…' : 'The Archivist is routing the most relevant reply…');
+          ? t('ending_room.placeholder_all_present')
+          : t('ending_room.placeholder_archivist');
       const latestActiveTurn = activeThreadTurns && activeThreadTurns.length > 0
         ? activeThreadTurns[activeThreadTurns.length - 1]
         : undefined;
@@ -610,11 +610,11 @@ export default function EndingChatModal({
       composerEnabled,
       effectiveInteractionMode,
       effectiveSnapshot?.current_phase,
-      isZh,
       participants,
       readOnly,
       selectedHotseatParticipant?.id,
       sending,
+      t,
       visibleDrafts,
     ],
   );
@@ -710,15 +710,15 @@ export default function EndingChatModal({
     const seen = new Map<string, number>();
     const labels: Record<string, string> = {};
     for (const thread of threads) {
-      const base = threadLabel(thread, isZh);
+      const base = threadLabel(thread, isZh, t);
       const count = (seen.get(base) ?? 0) + 1;
       seen.set(base, count);
       labels[thread.id] = count === 1
         ? base
-        : `${base}${isZh ? ` · 线程 ${count}` : ` · Thread ${count}`}`;
+        : `${base}${t('ending_room.thread_label', { count })}`;
     }
     return labels;
-  }, [isZh, threads]);
+  }, [isZh, t, threads]);
   const threadAnchorSummaries = useMemo(
     () => threads.reduce<Record<string, AnchorSummary>>((acc, thread) => {
       const summary = describeEndingAnchor(
@@ -726,13 +726,14 @@ export default function EndingChatModal({
         isZh,
         branch?.key_moments ?? [],
         thread.turns.map((turn) => ({ key: turn.id, content: turn.content })),
+        t,
       );
       if (summary) {
         acc[thread.id] = summary;
       }
       return acc;
     }, {}),
-    [branch?.key_moments, isZh, threads],
+    [branch?.key_moments, isZh, t, threads],
   );
   const activeThreadAnchorSummary = useMemo(
     () => (activeThread ? threadAnchorSummaries[activeThread.id] ?? null : null),
@@ -867,11 +868,11 @@ export default function EndingChatModal({
     transcriptDraftLayouts,
   ]);
   const transcriptSubtitle = activeThread
-    ? scopeText(activeThread, scopeNotice, isZh)
-    : (isZh ? '只基于当前世界线与当前桌面' : 'Only using the current worldline and room desk');
+    ? scopeText(activeThread, scopeNotice, isZh, t)
+    : t('ending_room.scope_current_worldline');
 
-  const verdictPrompt = buildEndingVerdictPrompt(effectiveResult?.summary ?? '', isZh);
-  const insightPrompt = branchInsight ? buildEndingInsightPrompt(branchInsight, isZh) : '';
+  const verdictPrompt = buildEndingVerdictPrompt(effectiveResult?.summary ?? '', isZh, t);
+  const insightPrompt = branchInsight ? buildEndingInsightPrompt(branchInsight, isZh, t) : '';
   const verdictAnchorAction: AnchorAction = {
     anchorIds: [buildEndingAnchorId('verdict', branchId)],
     prompt: verdictPrompt,
@@ -886,16 +887,16 @@ export default function EndingChatModal({
     : null;
   const keyMomentAnchorActions: AnchorAction[] = branchKeyMoments.slice(0, 3).map((moment, index) => ({
     anchorIds: [buildEndingAnchorId('key_moment', branchId, index)],
-    prompt: isZh ? `为什么这里会转向：${moment}` : `Why did the worldline turn here: ${moment}`,
-    threadTitle: isZh ? '关键转折' : 'Key moment',
+    prompt: t('ending_room.anchor_key_moment_prompt', { moment }),
+    threadTitle: t('ending_room.anchor_key_moment'),
   }));
   const anchorSuggestions = [
     ...keyMomentAnchorActions.map((action) => ({
-      label: isZh ? '关键转折' : 'Key moment',
+      label: t('ending_room.anchor_key_moment'),
       action,
     })),
     {
-      label: isZh ? '档案结论' : 'Archivist verdict',
+      label: t('ending_room.anchor_archivist_verdict'),
       action: verdictAnchorAction,
     },
   ];
@@ -903,20 +904,20 @@ export default function EndingChatModal({
     const lines = [
       `# ${branch.title}`,
       '',
-      isZh ? '## 当前范围' : '## Scope',
+      t('ending_room.brief_scope'),
       transcriptSubtitle,
     ];
     if (effectiveResult?.summary) {
-      lines.push('', isZh ? '## 档案结论' : '## Archivist Verdict', effectiveResult.summary);
+      lines.push('', t('ending_room.brief_archivist_verdict'), effectiveResult.summary);
     }
     if (effectiveResult?.next_move && effectiveResult.next_move !== effectiveResult.summary) {
-      lines.push('', isZh ? '## 只改一步' : '## One Move Only', effectiveResult.next_move);
+      lines.push('', t('ending_room.brief_one_move_only'), effectiveResult.next_move);
     }
     if (branch.insight) {
-      lines.push('', isZh ? '## 当前洞察' : '## Current Insight', branch.insight);
+      lines.push('', t('ending_room.brief_current_insight'), branch.insight);
     }
     if ((branch.key_moments?.length ?? 0) > 0) {
-      lines.push('', isZh ? '## 关键转折' : '## Key Moments');
+      lines.push('', t('ending_room.brief_key_moments'));
       (branch.key_moments ?? []).slice(0, 3).forEach((moment) => {
         lines.push(`- ${moment}`);
       });
@@ -946,10 +947,10 @@ export default function EndingChatModal({
   const transcriptHeaderCopy = isCrosslineGallery ? t('roundtable.gallery_hint') : transcriptSubtitle;
   const transcriptHeaderNote = isCrosslineGallery
     ? t('ending_room.foreign_summary_badge')
-    : (activeThread ? (threadDisplayLabels[activeThread.id] ?? threadLabel(activeThread, isZh)) : t('ending_room.loading'));
+    : (activeThread ? (threadDisplayLabels[activeThread.id] ?? threadLabel(activeThread, isZh, t)) : t('ending_room.loading'));
   const interactionModeNote = readOnly
     ? t('ending_room.replay_readonly')
-    : getInteractionModeNote(effectiveInteractionMode, isZh, selectedHotseatParticipant?.display_name ?? null);
+    : getInteractionModeNote(effectiveInteractionMode, isZh, selectedHotseatParticipant?.display_name ?? null, t);
 
   const handleCopyBrief = async () => {
     if (!meetingBrief) return;
@@ -979,7 +980,7 @@ export default function EndingChatModal({
   const handleFollowQuote = (anchorId: string, speaker: string, content: string) => {
     activateAnchor({
       anchorIds: [anchorId],
-      prompt: buildEndingQuotePrompt(speaker, content, isZh),
+      prompt: buildEndingQuotePrompt(speaker, content, isZh, t),
       threadTitle: speaker,
     });
   };
@@ -987,7 +988,7 @@ export default function EndingChatModal({
   const handleQuoteThread = async (anchorId: string, speaker: string, content: string) => {
     await handleStartAnchoredThread({
       anchorIds: [anchorId],
-      prompt: buildEndingQuotePrompt(speaker, content, isZh),
+      prompt: buildEndingQuotePrompt(speaker, content, isZh, t),
       threadTitle: speaker,
     });
   };
@@ -1098,7 +1099,7 @@ export default function EndingChatModal({
               )}
             </div>
             {profileHooks.length > 0 && (
-              <div className="ending-chat-theme-strip" aria-label={isZh ? '题材提示' : 'Theme cues'}>
+              <div className="ending-chat-theme-strip" aria-label={t('ending_room.theme_cues')}>
                 {profileHooks.slice(0, 2).map((hook) => (
                   <span key={hook} className="ending-chat-theme-chip">{hook}</span>
                 ))}
@@ -1216,7 +1217,7 @@ export default function EndingChatModal({
 
                     <section className="ending-chat-panel">
                       <div className="ending-chat-panel__heading">
-                        <h3>{isZh ? '当前参与者' : 'Current participants'}</h3>
+                        <h3>{t('ending_room.current_participants')}</h3>
                         {!readOnly && effectiveSnapshot?.id && (
                           <div className="ending-chat-panel__actions">
                             <button
@@ -1224,7 +1225,7 @@ export default function EndingChatModal({
                               className="ending-chat-inline-button"
                               onClick={() => void handleCreateThread()}
                             >
-                              {isZh ? '新建追问线程' : 'New thread'}
+                              {t('ending_room.new_thread')}
                             </button>
                           </div>
                         )}
@@ -1235,9 +1236,7 @@ export default function EndingChatModal({
                       >
                         {participants.length === 0 && (
                           <div className="ending-chat-participant-empty">
-                            {isZh
-                              ? '当前世界线没有稳定的参与者 roster，已退回档案官独立复盘。'
-                              : 'No stable worldline roster is available yet, so the chamber falls back to an Archivist-only debrief.'}
+                            {t('ending_room.empty_roster_fallback')}
                           </div>
                         )}
                         {participants.map((participant) => {
@@ -1268,27 +1267,27 @@ export default function EndingChatModal({
                                   {participant.display_name}
                                   {isCurrentSpeaker && (
                                     <span className="ending-chat-participant-flag ending-chat-participant-flag--speaker">
-                                      {isZh ? '正在发言' : 'Speaking'}
+                                      {t('ending_room.speaking')}
                                     </span>
                                   )}
                                   {!isCurrentSpeaker && isHotseatFocus && (
                                     <span className="ending-chat-participant-flag ending-chat-participant-flag--hotseat">
-                                      {isZh ? '当前追问对象' : 'Current target'}
+                                      {t('ending_room.current_target')}
                                     </span>
                                   )}
                                 </strong>
-                                <span>{metrics.role || roleLabel(participant, isZh)}</span>
+                                <span>{metrics.role || roleLabel(participant, isZh, t)}</span>
                                 {metrics.persona && <small>{metrics.persona}</small>}
                               </div>
                               <div className="ending-chat-participant-metrics">
-                                <em>{isZh ? `影响 ${Math.round(metrics.impactScore * 100)}` : `Impact ${Math.round(metrics.impactScore * 100)}`}</em>
-                                <em>{isZh ? `发言 ${metrics.turnCount}` : `${metrics.turnCount} turns`}</em>
-                                <em>{isZh ? `转折 ${metrics.keyMomentHits}` : `${metrics.keyMomentHits} hinge hits`}</em>
+                                <em>{t('ending_room.metric_impact', { count: Math.round(metrics.impactScore * 100) })}</em>
+                                <em>{t('ending_room.metric_turns', { count: metrics.turnCount })}</em>
+                                <em>{t('ending_room.metric_hinges', { count: metrics.keyMomentHits })}</em>
                                 {metrics.lastRoundSpoken > 0 && <em>{`R${metrics.lastRoundSpoken}`}</em>}
                               </div>
                               {metrics.fallbackCast && (
                                 <span className="ending-chat-participant-flag">
-                                  {isZh ? '兜底阵容' : 'Fallback lineup'}
+                                  {t('ending_room.fallback_lineup')}
                                 </span>
                               )}
                             </button>
@@ -1319,7 +1318,7 @@ export default function EndingChatModal({
                         className="ending-chat-inline-button"
                         onClick={() => setStoryExpanded((current) => !current)}
                       >
-                        {storyExpanded ? (isZh ? '收起' : 'Collapse') : (isZh ? '展开' : 'Expand')}
+                        {storyExpanded ? t('common.collapse') : t('common.expand')}
                       </button>
                     )}
                   </div>
@@ -1418,7 +1417,7 @@ export default function EndingChatModal({
               </div>
 
             {!isCrosslineGallery && threads.length > 0 && (
-              <div className="ending-chat-thread-rail" role="tablist" aria-label={isZh ? '追问线程' : 'Follow-up threads'}>
+              <div className="ending-chat-thread-rail" role="tablist" aria-label={t('ending_room.followup_threads')}>
                 {threads.map((thread, index) => {
                   const isActive = activeThreadSelectionId === thread.id;
                   return (
@@ -1438,7 +1437,7 @@ export default function EndingChatModal({
                     onKeyDown={(event) => handleThreadRailKeyDown(event, index)}
                   >
                     {thread.mode === 'room' && <span className="ending-chat-thread-chip__icon ending-chat-thread-chip__icon--archivist" aria-hidden="true" />}
-                    <span className="ending-chat-thread-chip__label">{threadDisplayLabels[thread.id] ?? threadLabel(thread, isZh)}</span>
+                    <span className="ending-chat-thread-chip__label">{threadDisplayLabels[thread.id] ?? threadLabel(thread, isZh, t)}</span>
                     {threadAnchorSummaries[thread.id] && (
                       <span className="ending-chat-thread-chip__anchor" title={threadAnchorSummaries[thread.id].label}>
                         {threadAnchorSummaries[thread.id].kindLabel}
@@ -1635,14 +1634,14 @@ export default function EndingChatModal({
             ) : (
               <div className="ending-chat-composer">
               <div className="ending-chat-composer__row">
-                <div className="ending-chat-mode-switch" role="group" aria-label={isZh ? '追问模式' : 'Follow-up mode'}>
+                <div className="ending-chat-mode-switch" role="group" aria-label={t('ending_room.followup_mode')}>
                   <button
                     type="button"
                     className={`ending-chat-mode-pill ${interactionMode === 'archivist_route' ? 'is-active' : ''}`}
                     onClick={() => setInteractionMode('archivist_route')}
                     disabled={!composerEnabled}
                   >
-                    {getArchivistModeLabel(isZh)}
+                    {getArchivistModeLabel(isZh, t)}
                   </button>
                   <button
                     type="button"
@@ -1650,7 +1649,7 @@ export default function EndingChatModal({
                     onClick={() => setInteractionMode('hotseat')}
                     disabled={!composerEnabled}
                   >
-                    {getHotseatModeLabel(isZh)}
+                    {getHotseatModeLabel(isZh, t)}
                   </button>
                   <button
                     type="button"
@@ -1658,7 +1657,7 @@ export default function EndingChatModal({
                     onClick={() => setInteractionMode('all_present')}
                     disabled={!composerEnabled || targetableParticipants.length === 0}
                   >
-                    {getAllPresentModeLabel(isZh)}
+                    {getAllPresentModeLabel(isZh, t)}
                   </button>
                 </div>
                 <span className="ending-chat-scope-notice">{transcriptSubtitle}</span>
@@ -1729,7 +1728,7 @@ export default function EndingChatModal({
                 <textarea
                   className="ending-chat-composer__input"
                   value={composerDraft}
-                  placeholder={isZh ? '继续追问这个结局为什么成立，或追问某位当前世界线参与者。' : 'Keep probing why this ending held, or question one participant from the current worldline.'}
+                  placeholder={t('ending_room.input_placeholder')}
                   onChange={(event) => setComposerDraft(event.target.value)}
                   disabled={!composerEnabled || sending}
                   rows={2}
@@ -1740,7 +1739,7 @@ export default function EndingChatModal({
                   onClick={() => void handleSend()}
                   disabled={!composerEnabled || sending || composerDraft.trim().length === 0}
                 >
-                  {sending ? (isZh ? '发送中…' : 'Sending…') : (isZh ? '发送追问' : 'Send')}
+                  {sending ? t('ending_room.sending') : t('ending_room.send')}
                 </button>
               </div>
             </div>

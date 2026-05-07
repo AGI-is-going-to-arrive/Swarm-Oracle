@@ -297,33 +297,29 @@ export default function RoundtablePickerPanel({
         ? t('roundtable.fault_line_hint')
         : selectionMode === 'witness_augmented'
           ? t('roundtable.witness_augmented_hint')
-    : (isZh
-      ? (effectiveSnapshot
-        ? '当前桌面会保留到你重新开桌为止。改完代表后，再用新的阵容重建这桌圆桌。'
-        : '每条结局只派一位代表入席。系统会优先按影响度预选，并尽量错开代表，让这桌更有比较价值。')
-      : (effectiveSnapshot
-        ? 'The current table stays available until you reopen it. Swap representatives here, then rebuild the roundtable with the new lineup.'
-        : 'Seat one representative for each ending. The table starts with high-impact picks while trying to avoid the same voice on every worldline.'));
+    : (effectiveSnapshot
+      ? t('roundtable.picker_default_hint_existing')
+      : t('roundtable.picker_default_hint_new'));
 
   const launchDisabled = launchingRoom
     || selectedBranchIdsForLaunch.length === 0
     || selectedBranchIdsForLaunch.some((branchId) => !selectedRepresentatives[branchId]);
 
   const launchLabel = launchingRoom
-    ? (isZh ? '正在开桌…' : 'Launching…')
+    ? t('roundtable.picker_launch_loading')
     : (effectiveSnapshot
-      ? (isZh ? '按当前阵容重开' : 'Reopen this lineup')
-      : (isZh ? '按当前代表开桌' : 'Open this lineup'));
+      ? t('roundtable.picker_launch_reopen')
+      : t('roundtable.picker_launch_open'));
 
   const showWitnessSection = selectionMode === 'expert_witness' || selectionMode === 'witness_augmented';
-  const selectedLabel = isZh ? '已选' : 'Selected';
-  const seatingHeading = isZh ? '圆桌席位' : 'Seating board';
+  const selectedLabel = t('roundtable.picker_selected_label');
+  const seatingHeading = t('roundtable.picker_seating_heading');
   const seatingHint = dragEnabled
-    ? (isZh ? '拖动候选人入席。移动端保留点击上桌。' : 'Drag candidates into seats. Mobile keeps tap-to-seat.')
-    : (isZh ? '当前设备保留点击上桌。' : 'Tap-to-seat is active on this device.');
-  const emptyRepresentativeLabel = isZh ? '拖到这里入席' : 'Drop here to seat';
-  const emptyWitnessLabel = isZh ? '拖到这里上证人席' : 'Drop here to seat a witness';
-  const occupiedLabel = isZh ? '当前入席' : 'Currently seated';
+    ? t('roundtable.picker_seating_hint_drag')
+    : t('roundtable.picker_seating_hint_tap');
+  const emptyRepresentativeLabel = t('roundtable.picker_empty_representative');
+  const emptyWitnessLabel = t('roundtable.picker_empty_witness');
+  const occupiedLabel = t('roundtable.picker_occupied_label');
 
   const selectedWitnessPayload = useMemo(() => {
     if (!selectedWitness) return null;
@@ -368,41 +364,35 @@ export default function RoundtablePickerPanel({
       const payload = getActiveDragPayload(active);
       if (!payload) return undefined;
       return isZh
-        ? `已拿起 ${payload.name}，使用方向键寻找空位。`
-        : `Picked up ${payload.name}.`;
+        ? t('roundtable.picker_drag_announce_start', { name: payload.name })
+        : t('roundtable.picker_drag_announce_start_en', { name: payload.name });
     },
     onDragOver({ active, over }: { active: Active; over: Over | null }) {
       const payload = getActiveDragPayload(active);
       if (!payload || !over) {
-        return isZh ? '当前不在任何有效席位上。' : 'Not over a valid seat.';
+        return t('roundtable.picker_drag_announce_no_seat');
       }
       const slotPayload = over.data.current as SlotPayload | undefined;
       if (!slotPayload || !isValidSlotForDrag(slotPayload, payload)) {
-        return isZh ? '当前不在任何有效席位上。' : 'Not over a valid seat.';
+        return t('roundtable.picker_drag_announce_no_seat');
       }
-      return isZh
-        ? `移动到了 ${slotPayload.title} 的席位上。`
-        : `Moved over ${slotPayload.title} seat.`;
+      return t('roundtable.picker_drag_announce_over', { title: slotPayload.title });
     },
     onDragEnd({ active, over }: { active: Active; over: Over | null }) {
       const payload = getActiveDragPayload(active);
       if (!payload || !over) {
-        return isZh ? '取消放置。' : 'Drop cancelled.';
+        return t('roundtable.picker_drag_announce_cancel');
       }
       const slotPayload = over.data.current as SlotPayload | undefined;
       if (!slotPayload || !isValidSlotForDrag(slotPayload, payload)) {
-        return isZh
-          ? `取消放置，${payload.name} 已退回备选池。`
-          : 'Drop cancelled.';
+        return t('roundtable.picker_drag_announce_cancel_with_name', { name: payload.name });
       }
-      return isZh
-        ? `${payload.name} 已成功入席。`
-        : `${payload.name} seated successfully.`;
+      return t('roundtable.picker_drag_announce_seated', { name: payload.name });
     },
     onDragCancel() {
-      return isZh ? '取消放置。' : 'Drop cancelled.';
+      return t('roundtable.picker_drag_announce_cancel');
     },
-  }), [isZh]);
+  }), [isZh, t]);
 
   const handleDragStart = ({ active }: DragStartEvent) => {
     setActiveDrag(getActiveDragPayload(active));
@@ -440,9 +430,9 @@ export default function RoundtablePickerPanel({
       <section className="worldline-roundtable-card worldline-roundtable-card--picker">
         <div className="worldline-roundtable-card__heading worldline-roundtable-card__heading--stacked">
         <div>
-          <h3>{isZh ? '改选每条世界线的代表' : 'Reseat each worldline representative'}</h3>
+          <h3>{t('roundtable.picker_reseat_heading')}</h3>
           <p className="worldline-roundtable-picker__hint">{hintText}</p>
-          <div className="worldline-roundtable-picker__mode-switch" role="group" aria-label={isZh ? '圆桌桌型' : 'Roundtable seating mode'}>
+          <div className="worldline-roundtable-picker__mode-switch" role="group" aria-label={t('roundtable.picker_seating_mode_label')}>
             {(['representative', 'manual_shortlist', 'expert_witness', 'trait_mix', 'fault_line_first', 'witness_augmented'] as const).map((mode) => (
               <button
                 key={mode}
@@ -476,7 +466,7 @@ export default function RoundtablePickerPanel({
               onClick={onCancelEditing}
               disabled={launchingRoom}
             >
-              {isZh ? '返回当前圆桌' : 'Back to current table'}
+              {t('roundtable.picker_back_to_table')}
             </button>
           )}
           <button
@@ -584,9 +574,12 @@ export default function RoundtablePickerPanel({
                       id={buildRepresentativeDragId(branch.id, candidate.id)}
                       payload={{
                         ...payload,
-                        branchTitle: isZh
-                          ? `影响 ${Math.round(candidate.impactScore * 100)} · 发言 ${candidate.contributionCount} 次 · 转折命中 ${candidate.keyMomentHits} · 最近 R${candidate.lastRound}`
-                          : `Impact ${Math.round(candidate.impactScore * 100)} · ${candidate.contributionCount} turns · ${candidate.keyMomentHits} hinge hits · latest R${candidate.lastRound}`,
+                        branchTitle: t('roundtable.picker_branch_impact_summary', {
+                          impact: Math.round(candidate.impactScore * 100),
+                          turns: candidate.contributionCount,
+                          hinges: candidate.keyMomentHits,
+                          round: candidate.lastRound,
+                        }),
                       }}
                       selected={selected}
                       disabled={!branchSelected || selected}
@@ -633,7 +626,9 @@ export default function RoundtablePickerPanel({
                   id={buildWitnessDragId(candidate.branchId, candidate.agentId)}
                   payload={{
                     ...payload,
-                    branchTitle: isZh ? `影响 ${Math.round(candidate.impactScore * 100)}` : `Impact ${Math.round(candidate.impactScore * 100)}`,
+                    branchTitle: t('roundtable.picker_witness_impact_summary', {
+                      impact: Math.round(candidate.impactScore * 100),
+                    }),
                   }}
                   selected={selected}
                   disabled={selected}

@@ -34,6 +34,13 @@ describe('roundtableHelpers', () => {
     it('returns main table label for room thread in zh', () => {
       expect(getThreadLabel({ mode: 'room', title: 'Table 1' } as never, true)).toBe('主桌讨论');
     });
+    it('uses translator for main table label', () => {
+      expect(getThreadLabel(
+        { mode: 'room', title: 'Table 1' } as never,
+        false,
+        ((key: string) => `t:${key}`) as never,
+      )).toBe('t:roundtable.thread_main_table');
+    });
     it('returns thread title for non-room thread', () => {
       expect(getThreadLabel({ mode: 'followup', title: 'Thread A' } as never, false)).toBe('Thread A');
     });
@@ -56,6 +63,13 @@ describe('roundtableHelpers', () => {
     it('returns localized label for top_impact', () => {
       expect(getSelectionReasonLabel('top_impact', false)).toBe('High impact');
     });
+    it('uses translator for known selection reasons', () => {
+      expect(getSelectionReasonLabel(
+        'fallback',
+        false,
+        ((key: string) => `t:${key}`) as never,
+      )).toBe('t:roundtable.selection_reason_fallback');
+    });
     it('returns empty string for empty reason', () => {
       expect(getSelectionReasonLabel('', true)).toBe('');
     });
@@ -73,6 +87,11 @@ describe('roundtableHelpers', () => {
       expect(getArchivistModeLabel(false)).toBe('Host-guided');
       expect(getRepresentativeHotseatLabel(false)).toBe('Question one rep');
     });
+    it('uses translator labels', () => {
+      const t = ((key: string) => `t:${key}`) as never;
+      expect(getArchivistModeLabel(false, t)).toBe('t:roundtable.host_guided_label');
+      expect(getRepresentativeHotseatLabel(false, t)).toBe('t:roundtable.hotseat_question_one');
+    });
   });
 
   describe('getRoundtableModeNote', () => {
@@ -88,6 +107,15 @@ describe('roundtableHelpers', () => {
       const note = getRoundtableModeNote('thread_followup', false);
       expect(note).toContain('thread');
     });
+    it('uses translator for mode notes', () => {
+      const t = ((key: string, options?: { name?: string }) => `${key}:${options?.name ?? ''}`) as never;
+      expect(getRoundtableModeNote('hotseat', false, 'Alice', t)).toBe(
+        'roundtable.mode_note_hotseat_named:Alice',
+      );
+      expect(getRoundtableModeNote('thread_followup', false, null, t)).toBe(
+        'roundtable.mode_note_thread_followup:',
+      );
+    });
   });
 
   describe('buildRoundtableVerdictPrompt', () => {
@@ -97,6 +125,12 @@ describe('roundtableHelpers', () => {
     it('builds fallback prompt for empty summary', () => {
       expect(buildRoundtableVerdictPrompt('', false)).toContain('roundtable reach');
     });
+    it('uses translator for verdict prompt', () => {
+      const t = ((key: string, options?: { summary?: string }) => `${key}:${options?.summary ?? ''}`) as never;
+      expect(buildRoundtableVerdictPrompt('Final split', false, t)).toBe(
+        'roundtable.verdict_prompt:Final split',
+      );
+    });
   });
 
   describe('buildRoundtablePhasePrompt', () => {
@@ -104,6 +138,14 @@ describe('roundtableHelpers', () => {
       const prompt = buildRoundtablePhasePrompt('Opening', 'Resource allocation', false);
       expect(prompt).toContain('Opening');
       expect(prompt).toContain('Resource allocation');
+    });
+    it('uses translator for phase prompt', () => {
+      const t = ((key: string, options?: { label?: string; stakes?: string }) => (
+        `${key}:${options?.label ?? ''}:${options?.stakes ?? ''}`
+      )) as never;
+      expect(buildRoundtablePhasePrompt('Opening', 'Resource allocation', false, t)).toBe(
+        'roundtable.phase_prompt:Opening:Resource allocation',
+      );
     });
   });
 
@@ -136,6 +178,14 @@ describe('roundtableHelpers', () => {
       const prompt = buildRoundtableQuotePrompt('Alice', 'This is a test', false);
       expect(prompt).toContain('Alice');
       expect(prompt).toContain('This is a test');
+    });
+    it('uses translator for quote prompt', () => {
+      const t = ((key: string, options?: { speaker?: string; snippet?: string }) => (
+        `${key}:${options?.speaker ?? ''}:${options?.snippet ?? ''}`
+      )) as never;
+      expect(buildRoundtableQuotePrompt('Alice', 'This is a test', false, t)).toBe(
+        'roundtable.quote_prompt:Alice:This is a test',
+      );
     });
   });
 
@@ -209,7 +259,15 @@ describe('roundtableHelpers', () => {
   });
 
   describe('describeRoundtableAnchor', () => {
-    const t = (key: string) => key;
+    const t = ((key: string) => {
+      const dict: Record<string, string> = {
+        'roundtable.anchor_kind_verdict': 'Verdict',
+        'roundtable.anchor_kind_phase': 'Phase',
+        'roundtable.anchor_kind_quote': 'Quote',
+        'roundtable.anchor_kind_default': 'Anchor',
+      };
+      return dict[key] ?? key;
+    }) as unknown as import('i18next').TFunction;
     it('returns null for empty anchorIds', () => {
       expect(describeRoundtableAnchor([], false, [], [], t)).toBeNull();
     });
@@ -232,9 +290,38 @@ describe('roundtableHelpers', () => {
       expect(result?.kind).toBe('phase');
       expect(result?.label).toContain('Resource fight');
     });
+    it('falls back to raw phase label for unknown phase anchors', () => {
+      const calls: string[] = [];
+      const trackingT = ((key: string) => {
+        calls.push(key);
+        return key === 'roundtable.anchor_kind_phase' ? 'Phase' : key;
+      }) as unknown as import('i18next').TFunction;
+      const result = describeRoundtableAnchor(
+        ['roundtable:phase:room1:not-a-phase-0'],
+        false,
+        [],
+        [],
+        trackingT,
+      );
+      expect(result?.kind).toBe('phase');
+      expect(result?.label).toBe('not-a-phase');
+      expect(calls).toContain('roundtable.anchor_kind_phase');
+      expect(calls).not.toContain('roundtable.phase_not-a-phase');
+    });
     it('handles non-roundtable domain', () => {
       const result = describeRoundtableAnchor(['other:verdict:x'], false, [], [], t);
       expect(result?.kind).toBe('unknown');
+    });
+    it('falls back to raw phaseName when t is undefined', () => {
+      const result = describeRoundtableAnchor(
+        ['roundtable:phase:room1:opening-0'],
+        false,
+        [{ phase: 'opening', stakes: 'Resource fight' }],
+        [],
+        undefined,
+      );
+      expect(result?.kind).toBe('phase');
+      expect(result?.kindLabel).toBe('Phase');
     });
   });
 });

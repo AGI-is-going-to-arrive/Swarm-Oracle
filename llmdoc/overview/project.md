@@ -105,7 +105,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - roundtable 的 readonly replay 当前会跟随 `active_thread_id` 恢复对应 thread 语义；若落在 `hotseat` follow-up，页面不会再退回成 `archivist_route`。
 - mobile roundtable artifact replay readonly 当前也会跟随 active replay thread 恢复 `interaction_mode`，不再在自动化口径里卡成 `archivist_route`。
 - roundtable 的 scoped regression 当前已覆盖 Chromium 桌面/移动，以及桌面 Firefox / WebKit；`reseat / keyboard reseat / anchored thread / hotseat / witness_augmented / readonly replay` 口径与 Chromium 对齐。
-- `ending-room / roundtable` 的主文案当前已改成 `LLM first, template fallback`：participant snapshot 会直接带 `agent_role / agent_persona / bio_short / impact_score / branch_pressure`，provider 慢或失败时才退 deterministic fallback，不再默认先落模板再改写。
+- `ending-room / roundtable` 的主文案当前已改成 factual anchor + `LLM first, template fallback`：participant snapshot 会带 `agent_role / agent_persona / bio_short / impact_score / branch_pressure`，但角色身份块和动态词汇身份提示都会按 `UNTRUSTED DATA` 注入；provider 慢、失败、空流式或仅 reasoning 输出时，会退到非流式改写或 deterministic fallback，不再默认先落模板再改写。
 - ending-room 后台生成当前也持有 runtime lock heartbeat；续租返回 `None`、续租抛异常，或 lease 过期时，会直接 fail-closed 把 room 落成 `error`，不会失锁后继续写 turn 或 result。
 - Oracle 页面当前按用户正在使用的 UI 语言渲染界面壳，不再强制跟随 `scenario.language` 覆盖全局语言开关。
 - Oracle fresh live room 的英文 deterministic copy 当前已补去混句兜底，不再把中文 hinge 直接嵌进英文句子；fresh live 的节点对话、KG Explorer 与 replay-view 浏览器链路本轮也已复核通过。
@@ -130,7 +130,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - replayCoverageError 或 readonly replay / reload restore / import 关键字段缺失会直接失败
   - 不再以 best-effort `summary.json` 保底通过
 - 严格慢路径自动化当前仍在继续收口：
-  - ending-room follow-up 的慢流式链路仍可能只落到 fallback 观测，不一定每次都能拿到完整 `turn_start / turn_delta / turn_commit`
+  - ending-room follow-up 的慢流式链路仍可能只落到 fallback 观测，不一定每次都能拿到完整 `turn_start / turn_delta / turn_commit`；空流式或仅 reasoning 输出当前会直接退回非流式改写，不会把 anchor copy 当成成功 stream
   - 但 `full / mobile` 当前已改成目标 `roomId + threadId + interaction_mode` 验真；single-ending anchored fallback 也会补校验 `questionAnchorIds` 与 assistant reply，不再接受旧线程空态或只有 user turn 的假阳性
   - roundtable `full` 当前已补 result -> roundtable 入口重试；如果入口仍卡住，会直接落 `roundtable-entry-stall.json` 并失败
   - roundtable 首开与后续 `reseat / expert_witness / selection mode reopen` 当前都按同一条 `90s` ready budget 收口，不再只给 `45s`
@@ -157,13 +157,14 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - frontend ResultView / CausalReviewView / locale 定向：`126 passed`
     - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
-  - backend 全量 `pytest` 最近一次记录为 `2357 passed, 2 skipped`
+  - backend 全量 `pytest` 最近一次记录为 `2399 passed, 2 skipped`
   - frontend `typecheck / lint / build / perf budgets` 通过
   - frontend bridge / guide 定向 vitest `124 passed`
-  - frontend 全量 vitest 最近一次记录为 `1742 passed`
+  - frontend 全量 vitest 最近一次记录为 `1782 passed`
   - 本轮真实验证还包括：
-    - `cd backend && source .venv/bin/activate && ruff check app/services/`：通过
-    - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`：通过
+    - `cd backend && source .venv/bin/activate && ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
+    - `cd frontend && npm exec -- tsc --noEmit -p tsconfig.app.json`：通过
+    - frontend i18n 深层 key + placeholder parity：`1587 = 1587`，通过
   - frontend 目标文件 `eslint`、`typecheck`、`build / perf budgets` 通过
   - fixture-backed local preview 浏览器复核：
     - ResultView bridge DOM / disabled 样式通过

@@ -12,9 +12,11 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import delete as sa_delete
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -68,7 +70,6 @@ from ._content import (  # noqa: F401 — re-exported
     _build_roundtable_opening_content,
     _build_roundtable_verdict_content,
     _build_roundtable_witness_content,
-    _followup_angle_label,
     _maybe_rewrite_oracle_copy,
     _normalize_oracle_generated_content,
     _oracle_banned_process_phrases,
@@ -78,7 +79,6 @@ from ._content import (  # noqa: F401 — re-exported
     _oracle_profile_id,
     _oracle_profile_scene_brief,
     _oracle_recent_lines_digest,
-    _oracle_role_pressure_clause,
     _oracle_role_voice_variant,
     _oracle_scope_notice,
     _oracle_speaker_brief,
@@ -733,7 +733,14 @@ async def _enhance_room_plan_with_llm(
         return planned_turns, result
 
     scenario_question = _load_scenario_question(room.scenario_id)
-    transcript_by_branch = _load_branch_transcript_excerpts(room.scenario_id)
+    transcript_by_branch = _load_branch_transcript_excerpts(
+        room.scenario_id,
+        branch_ids={
+            participant.source_branch_id
+            for participant in participants
+            if participant.source_branch_id
+        },
+    )
 
     participant_by_id = {participant.id: participant for participant in participants}
     enhanced_turns: list[dict[str, Any]] = []
@@ -778,29 +785,44 @@ def _load_scenario_question(scenario_id: str) -> str | None:
 def _load_branch_transcript_excerpts(
     scenario_id: str,
     *,
+    branch_ids: Iterable[str] | None = None,
     max_quotes_per_branch: int = 5,
 ) -> dict[str, list[str]]:
     """Load recent transcript excerpts per branch for LLM generation context."""
     result: dict[str, list[str]] = {}
+    selected_branch_ids = [branch_id for branch_id in dict.fromkeys(branch_ids or []) if branch_id]
     with Session(get_engine()) as session:
-        branches = session.exec(
-            select(Branch).where(Branch.scenario_id == scenario_id)
-        ).all()
-        for branch in branches:
-            rows = session.exec(
-                select(Agent.name, AgentMessage.content)
-                .select_from(Round)
-                .join(AgentMessage, AgentMessage.round_id == Round.id)
-                .join(Agent, Agent.id == AgentMessage.agent_id, isouter=True)
-                .where(Round.branch_id == branch.id)
-                .order_by(Round.round_number.desc(), AgentMessage.id.desc())  # type: ignore[union-attr]
-                .limit(max_quotes_per_branch)
+        if branch_ids is None:
+            selected_branch_ids = session.exec(
+                select(Branch.id).where(Branch.scenario_id == scenario_id)
             ).all()
-            if rows:
-                result[branch.id] = [
-                    f"{name or '?'}: {content}"
-                    for name, content in reversed(rows)
-                ]
+        if not selected_branch_ids:
+            return result
+
+        row_rank = func.row_number().over(
+            partition_by=Round.branch_id,
+            order_by=(Round.round_number.desc(), AgentMessage.id.desc()),
+        ).label("row_rank")
+        ranked = (
+            select(
+                Round.branch_id.label("branch_id"),
+                Agent.name.label("agent_name"),
+                AgentMessage.content.label("content"),
+                row_rank,
+            )
+            .select_from(Round)
+            .join(AgentMessage, AgentMessage.round_id == Round.id)
+            .join(Agent, Agent.id == AgentMessage.agent_id, isouter=True)
+            .where(Round.branch_id.in_(selected_branch_ids))
+            .subquery()
+        )
+        rows = session.exec(
+            select(ranked.c.branch_id, ranked.c.agent_name, ranked.c.content)
+            .where(ranked.c.row_rank <= max_quotes_per_branch)
+            .order_by(ranked.c.branch_id, ranked.c.row_rank.desc())
+        ).all()
+        for branch_id, name, content in rows:
+            result.setdefault(branch_id, []).append(f"{name or '?'}: {content}")
     return result
 
 
@@ -1419,14 +1441,11 @@ def _build_room_plan(
         safe_role_hint = _oracle_visible_text(role_hint, language=room.language, limit=40)
         safe_persona_hint = _oracle_visible_text(persona_hint, language=room.language, limit=88)
         move_text = (
-            f"动作：在「{evidence_hook_display}」发生前先插入一轮复核。"
-            f" 理由：这样能把误判从全局扩散，改成局部复核。"
-            f" 代价：短期节奏会更乱，且会暴露更多协调成本。"
+            f"关键转折：「{evidence_hook_display}」。如果只改一步，改这里。"
             if room.language == "zh"
             else (
-                f"Move: insert one verification pass right before '{evidence_hook_display}'."
-                f" Why: that turns a system-wide mistake into a local re-check."
-                f" Risk: the short-term rhythm gets messier and coordination costs rise."
+                f"Key hinge: '{evidence_hook_display}'. "
+                f"If only one correction is allowed, target this."
             )
         )
         primary_quote_clause_zh = f"我在 R{primary_round} 当时说过「{primary_quote}」。" if primary_quote and primary_round > 0 else ""  # noqa: E501
@@ -1441,18 +1460,18 @@ def _build_room_plan(
                 "participant_id": primary_speaker.id,
                 "phase": EndingRoomPhase.OPENING,
                 "content": (
-                    f"{primary_speaker.display_name}："
+                    f"{primary_speaker.display_name}。"
                     f"{primary_quote_clause_zh}"
-                    f"那一步也把世界线推到了《{anchor_branch_title}》。"
-                    f"{role_hint + '，' if role_hint else ''}{persona_hint or '我当时更在意先稳住局面。'}"  # noqa: E501
-                    f"如果只让我改一手，我会先把「{evidence_hook_display}」前的判断慢半拍，再让复核真正跟上。"
+                    f"世界线：《{anchor_branch_title}》。"
+                    f"{role_hint + '。' if role_hint else ''}{persona_hint + '。' if persona_hint else ''}"  # noqa: E501
+                    f"核心转折：「{evidence_hook_display}」。"
                     if room.language == "zh"
                     else (
-                        f"{primary_speaker.display_name}: "
+                        f"{primary_speaker.display_name}. "
                         f"{primary_quote_clause_en}"
-                        f"That also pushed the branch toward {anchor_branch_title}. "
-                        f"{(safe_role_hint + '. ') if safe_role_hint else ''}{safe_persona_hint or 'I was optimizing for immediate stability.'} "  # noqa: E501
-                        f"If I only get one correction, I slow down the judgment right before '{evidence_hook_display}' and make the verification loop catch up."  # noqa: E501
+                        f"Worldline: {anchor_branch_title}. "
+                        f"{(safe_role_hint + '. ') if safe_role_hint else ''}{(safe_persona_hint + '. ') if safe_persona_hint else ''}"  # noqa: E501
+                        f"Key hinge: '{evidence_hook_display}'."
                     )
                 ),
                 "emotion": "reflective",
@@ -1502,14 +1521,11 @@ def _build_room_plan(
         }
 
     verdict_text = (
-        f"档案官结论：这条线之所以成立，不是因为命运自己滑过去了，"
-        f"而是「{evidence_hook_display}」这处转折没人及时踩刹车。权限守在当前分支，复盘才盯得住真实因果。"
+        f"档案官记录：《{anchor_branch_title}》的核心转折在「{evidence_hook_display}」。"
         if room.language == "zh"
         else (
-            f"Archivist note: this branch held not because fate drifted there on its own, "
-            f"but because '{evidence_hook_display}' was never cut off in time. "
-            f"Keep permissions inside the current branch "
-            f"and the debrief stays causal instead of turning into collage."
+            f"Archivist record: the core hinge of {anchor_branch_title} was "
+            f"'{evidence_hook_display}'."
         )
     )
     primary_quote_display = _oracle_visible_text(
@@ -1537,14 +1553,14 @@ def _build_room_plan(
             "participant_id": primary_speaker.id,
             "phase": EndingRoomPhase.OPENING,
             "content": (
-                f"{primary_speaker.display_name}：先把焦点放回《{anchor_branch_title}》。"
+                f"{primary_speaker.display_name}。《{anchor_branch_title}》。"
                 f"{primary_debrief_quote_zh}"
-                f"真正的支点是「{evidence_hook_display}」，它一旦没人拦住，后面的结果就顺着这条线滚下来了。"
+                f"核心转折：「{evidence_hook_display}」。"
                 if room.language == "zh"
                 else (
-                    f"{primary_speaker.display_name}: let me put the focus back on {anchor_branch_title}. "  # noqa: E501
+                    f"{primary_speaker.display_name}. {anchor_branch_title}. "
                     f"{primary_debrief_quote_en}"
-                    f"The hinge was '{evidence_hook_display}', and once nobody interrupted it, the rest of the ending rolled downhill from there."  # noqa: E501
+                    f"Key hinge: '{evidence_hook_display}'."
                 )
             ),
             "emotion": "focused",
@@ -1575,14 +1591,14 @@ def _build_room_plan(
                 "participant_id": secondary_speaker.id,
                 "phase": EndingRoomPhase.CROSSFIRE,
                 "content": (
-                    f"{secondary_speaker.display_name}：我看的断点更直接。"
+                    f"{secondary_speaker.display_name}。"
                     f"{secondary_quote_clause_zh}"
-                    "所以我会把责任落在谁先让命令、账册或执行链失去闭环，而不是把它说成一场抽象事故。"
+                    f"核心转折:「{evidence_hook_display}」。"
                     if room.language == "zh"
                     else (
-                        f"{secondary_speaker.display_name}: my cut of the hinge is more concrete. "
+                        f"{secondary_speaker.display_name}. "
                         f"{secondary_quote_clause_en}"
-                        "I would pin the failure on the moment the order, ledger, or execution chain stopped closing, not on abstract accident."  # noqa: E501
+                        f"Key hinge: '{evidence_hook_display}'."
                     )
                 ),
                 "emotion": "measured",
@@ -1609,9 +1625,12 @@ def _build_room_plan(
                 "participant_id": archivist.id,
                 "phase": EndingRoomPhase.CROSSFIRE,
                 "content": (
-                    "我把别线只留作背景。这里先看当前世界线里是谁推了一把，又是谁没能踩住刹车。"
+                    f"焦点：当前世界线。核心转折:「{evidence_hook_display}」。"
                     if room.language == "zh"
-                    else "Other branches stay in the background here. This chamber is about who pushed and who failed to brake inside the current worldline."  # noqa: E501
+                    else (
+                        f"Focus: current worldline. "
+                        f"Key hinge: '{evidence_hook_display}'."
+                    )
                 ),
                 "emotion": "measured",
                 "cited_branch_id": None,

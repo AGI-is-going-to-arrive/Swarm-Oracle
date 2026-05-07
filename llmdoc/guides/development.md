@@ -503,7 +503,18 @@ source .venv/bin/activate
 python -m pytest \
   tests/test_ending_room_service.py::test_oracle_generation_first_uses_llm_before_anchor_template \
   tests/test_ending_room_service.py::test_oracle_empty_generation_then_rewrite_uses_anchor_reference \
+  tests/test_ending_room_service.py::test_oracle_prompts_wrap_vocabulary_identity_as_untrusted_data \
+  tests/test_ending_room_service.py::test_followup_falls_back_when_stream_ends_without_visible_delta \
+  tests/test_ending_room_service.py::test_load_branch_transcript_excerpts_keeps_recent_order_per_branch \
   -q
+```
+
+如果同一轮还改了 roundtable / ending-room 前端文案、anchor helper 或 replay share payload，补这组前端窄集：
+
+```bash
+cd frontend
+npm test -- --run src/components/EndingChatModal.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/i18n/locales.test.ts
+npm exec -- tsc --noEmit -p tsconfig.app.json
 ```
 
 如果改的是 completed-state roundtable 的 `Deep Dive` / analyst / survey / participant-scoped chat，先跑这组最小命令：

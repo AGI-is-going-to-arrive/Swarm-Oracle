@@ -701,7 +701,8 @@ class TestMemoryBuildContextEdgeCases:
     def test_crowd_tier_truncates_long_background(self):
         from app.services.memory import build_agent_context
         agent = {"name": "Alice", "role": "analyst", "persona": "smart", "stance": "neutral", "tier": "CROWD"}  # noqa: E501
-        bg = "x" * 200
+        # Background longer than the CROWD truncation limit (250 chars)
+        bg = "x" * 600
         ctx = build_agent_context(
             agent=agent,
             setting_background=bg,
@@ -709,8 +710,10 @@ class TestMemoryBuildContextEdgeCases:
             recent_messages="msg",
             tier="CROWD",
         )
-        # CROWD context should be shorter
-        assert len(ctx) < len(bg) + 500
+        # CROWD truncates background to 250 chars, so the full 600-char bg
+        # must NOT appear; only the 250-char head + ellipsis should be present.
+        assert bg not in ctx
+        assert "x" * 250 + "…" in ctx
 
 
 class TestSimulatorHelperEdgeCases:

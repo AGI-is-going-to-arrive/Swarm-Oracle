@@ -52,7 +52,8 @@ interface Props {
 export default function RoundtableTranscriptList({
   listRef,
   onScroll,
-  isZh,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  isZh: _isZh,
   currentTurns,
   transcriptBubbleLayouts,
   activeThreadId,
@@ -90,7 +91,7 @@ export default function RoundtableTranscriptList({
     <div
       ref={listRef}
       role="log"
-      aria-label={isZh ? '圆桌讨论记录' : 'Roundtable discussion log'}
+      aria-label={t('roundtable.discussion_log')}
       className="ending-chat-transcript-list worldline-roundtable-transcript-list"
       onScroll={onScroll}
     >
@@ -124,17 +125,17 @@ export default function RoundtableTranscriptList({
               <FactionBadge faction={factionMap?.get(turn.participantId)} />
               {turn.key === activeSpeakerTurnKey && (
                 <span className="worldline-roundtable-transcript-badge">
-                  {isZh ? '当前发言' : 'Speaking'}
+                  {t('roundtable.speaking_now')}
                 </span>
               )}
               {turn.participantId === hotseatParticipantId && (
                 <span className="worldline-roundtable-transcript-badge worldline-roundtable-transcript-badge--hotseat">
-                  {isZh ? '热座' : 'Hotseat'}
+                  {t('roundtable.hotseat_target')}
                 </span>
               )}
               {showCollapsedTurn && (
                 <span className="worldline-roundtable-transcript-badge worldline-roundtable-transcript-badge--overflow">
-                  {isZh ? '长段' : 'Long turn'}
+                  {t('roundtable.long_turn')}
                 </span>
               )}
               <span>{turn.phase}</span>
@@ -198,7 +199,7 @@ export default function RoundtableTranscriptList({
           data-layout-overflow={transcriptDraftLayouts[draft.key]?.overflow ? 'true' : 'false'}
         >
           <header>
-            <strong>{participantsById.get(draft.participantId ?? '')?.display_name ?? (isZh ? '未知角色' : 'Unknown')}</strong>
+            <strong>{participantsById.get(draft.participantId ?? '')?.display_name ?? t('ending_room.participant_unknown')}</strong>
             <span>{getEndingRoomPhaseLabel(draft.phase, t)}</span>
           </header>
           <p>{draft.content}</p>

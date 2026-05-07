@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy import text as text_stmt
 from sqlmodel import Session, select
 
+import app.services.simulator as simulator_module
 from app.models import (
     Agent,
     AgentMessage,
@@ -880,6 +881,115 @@ class TestResolveHierarchicalAgentSets:
         assert [agent["name"] for agent in worker_agents] == ["Worker Beta"]
         assert "Missing Leader" in caplog.text
         assert "Worker Alpha" in caplog.text
+
+
+class TestWorkerSynthesisHelpers:
+    def test_stable_pick_is_deterministic_and_handles_edge_cases(self):
+        assert simulator_module._stable_pick("seed", []) == ""
+        assert simulator_module._stable_pick("seed", ["only-option"]) == "only-option"
+
+        options = ["甲线", "βeta", "route-c"]
+        first = simulator_module._stable_pick("世界线:3", options)
+
+        assert first in options
+        assert simulator_module._stable_pick("世界线:3", options) == first
+
+    def test_extract_meaningful_fragment_prefers_sentence_boundaries_and_unicode(self):
+        assert simulator_module._extract_meaningful_fragment("") == ""
+        assert simulator_module._extract_meaningful_fragment(
+            "先守住粮道。后面再谈。",
+            max_chars=60,
+        ) == "先守住粮道。"
+        assert simulator_module._extract_meaningful_fragment(
+            "Hold the bridge. Then move.",
+            max_chars=60,
+        ) == "Hold the bridge."
+        assert simulator_module._extract_meaningful_fragment(
+            "Wait? No! Move later.",
+            max_chars=60,
+        ) == "Wait?"
+        assert simulator_module._extract_meaningful_fragment(
+            "先等等？不要急！后面再谈。",
+            max_chars=60,
+        ) == "先等等？"
+
+    def test_extract_meaningful_fragment_uses_soft_boundary_before_hard_cut(self):
+        assert simulator_module._extract_meaningful_fragment(
+            "alpha beta gamma, delta epsilon zeta",
+            max_chars=26,
+        ) == "alpha beta gamma…"
+        assert simulator_module._extract_meaningful_fragment(
+            "abcdefghijklmnop",
+            max_chars=8,
+        ) == "abcdefgh…"
+
+    def test_synthesize_worker_response_uses_fragment_helper_and_stable_pick(self, monkeypatch):
+        calls: dict[str, object] = {}
+
+        def fake_extract(text: str, max_chars: int = 60) -> str:
+            calls["extract"] = (text, max_chars)
+            return "needle-fragment"
+
+        def fake_pick(seed: str, options: list[str]) -> str:
+            calls["pick"] = (seed, options)
+            assert any("needle-fragment" in option for option in options)
+            return "chosen worker line"
+
+        monkeypatch.setattr(simulator_module, "_extract_meaningful_fragment", fake_extract)
+        monkeypatch.setattr(simulator_module, "_stable_pick", fake_pick)
+
+        result = simulator_module._synthesize_worker_response(
+            worker={"name": "Worker Beta", "role": "Analyst", "stance": "risk"},
+            leader_name="Leader Alpha",
+            leader_content="raw leader text",
+            language="English",
+            round_number=7,
+        )
+
+        assert result == "chosen worker line"
+        assert calls["extract"] == ("raw leader text", 60)
+        seed, options = calls["pick"]
+        assert seed == "Worker Beta:7"
+        assert len(options) == 4
+
+    def test_synthesize_worker_response_switches_language_and_empty_fallback(self):
+        worker = {"name": "Worker Beta", "role": "Analyst", "stance": "risk"}
+
+        assert simulator_module._synthesize_worker_response(
+            worker=worker,
+            leader_name="Leader Alpha",
+            leader_content="",
+            language="zh",
+            round_number=1,
+        ) == "(Worker Beta保持沉默)"
+        assert simulator_module._synthesize_worker_response(
+            worker=worker,
+            leader_name="Leader Alpha",
+            leader_content="",
+            language="English",
+            round_number=1,
+        ) == "(Worker Beta stays silent)"
+
+        zh_response = simulator_module._synthesize_worker_response(
+            worker=worker,
+            leader_name="Leader Alpha",
+            leader_content="先守住粮道。后面再谈。",
+            language="中文",
+            round_number=2,
+        )
+        en_response = simulator_module._synthesize_worker_response(
+            worker=worker,
+            leader_name="Leader Alpha",
+            leader_content="Hold the bridge. Then move.",
+            language="English",
+            round_number=2,
+        )
+
+        assert "Worker Beta" in zh_response
+        assert "Worker Beta" in en_response
+        assert ("先守住粮道。" in zh_response) or ("risk" in zh_response)
+        assert ("Hold the bridge." in en_response) or ("risk" in en_response)
+        assert zh_response != en_response
 
 
 class TestGatherHierarchicalMessages:

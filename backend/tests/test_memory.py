@@ -116,7 +116,10 @@ class TestBuildAgentContext:
             recent_messages="[A]: We may need a split.",
             language="English",
         )
-        assert 'You are roleplaying "Test"' in ctx
+        # roleplay_intro changed to immersive second-person framing
+        # ("You are {name}." instead of meta "You are roleplaying ...")
+        assert "You are Test." in ctx
+        assert "sitting at a table" in ctx
         assert "[World Background]" in ctx
         assert "Recent Dialogue / UNTRUSTED DATA" in ctx
         assert "推演核心议题" not in ctx
@@ -257,6 +260,9 @@ class TestValidateCompressResult:
 # ── TestCompressRounds ───────────────────────────────────────
 
 
+_COMPRESS_LLM = "app.services.memory.llm_call_json_with_stream_fallback"
+
+
 class TestCompressRounds:
     """Tests for compress_rounds — async LLM-based compression."""
 
@@ -270,7 +276,7 @@ class TestCompressRounds:
             "tension_points": ["主战派与主和派之间的根本路线之争"],
             "consensus": "众人一致认为需要加强后勤",
         }
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(_COMPRESS_LLM, new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = mock_response
             result = await compress_rounds("[曹操]: 我要南征\n[刘备]: 我们必须抵抗")
 
@@ -291,7 +297,7 @@ class TestCompressRounds:
             "tension_points": ["The alliance may fracture."],
             "consensus": "",
         }
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(_COMPRESS_LLM, new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = mock_response
             await compress_rounds("[A]: We escalate at dawn.", language="English")
 
@@ -304,7 +310,7 @@ class TestCompressRounds:
     @pytest.mark.asyncio
     async def test_partial_fields_from_llm(self):
         """LLM returning only some fields should still produce valid result."""
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(_COMPRESS_LLM, new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = {"situation": "混乱局势"}
             result = await compress_rounds("[A]: 发言内容")
 
@@ -317,7 +323,7 @@ class TestCompressRounds:
     @pytest.mark.asyncio
     async def test_empty_input(self):
         """Empty string input should return defaults without calling LLM."""
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(_COMPRESS_LLM, new_callable=AsyncMock) as mock_llm:
             result = await compress_rounds("")
 
         assert result == _COMPRESS_DEFAULTS
@@ -326,7 +332,7 @@ class TestCompressRounds:
     @pytest.mark.asyncio
     async def test_whitespace_input(self):
         """Whitespace-only input should return defaults without calling LLM."""
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(_COMPRESS_LLM, new_callable=AsyncMock) as mock_llm:
             result = await compress_rounds("   \n\t  ")
 
         assert result == _COMPRESS_DEFAULTS
@@ -342,7 +348,7 @@ class TestCompressRounds:
             "tension_points": ["旧紧张点"],
             "consensus": "旧共识",
         }
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(_COMPRESS_LLM, new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = Exception("LLM connection failed")
             result = await compress_rounds(
                 "[A]: some message",
@@ -361,7 +367,7 @@ class TestCompressRounds:
             await asyncio.sleep(0.05)
             return {"situation": "来不及返回"}
 
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", side_effect=_slow_llm) as mock_llm:
+        with patch(_COMPRESS_LLM, side_effect=_slow_llm) as mock_llm:
             result = await compress_rounds("[A]: some message")
 
         assert result == _COMPRESS_DEFAULTS
@@ -385,7 +391,7 @@ class TestCompressRounds:
             "tension_points": [],
             "consensus": "",
         }
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(_COMPRESS_LLM, new_callable=AsyncMock) as mock_llm:
             mock_llm.side_effect = [older_response, final_response]
             result = await compress_rounds(long_text)
 
@@ -409,7 +415,7 @@ class TestCompressRounds:
             "tension_points": ["新紧张点"],
             "consensus": "新共识",
         }
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(_COMPRESS_LLM, new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = mock_response
             await compress_rounds(
                 "[B]: 当前窗口原始发言",
@@ -431,7 +437,7 @@ class TestCompressRounds:
     @pytest.mark.asyncio
     async def test_provider_overrides_are_forwarded(self):
         """BYOK overrides should propagate to the compression LLM call."""
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(_COMPRESS_LLM, new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = {"situation": "局势"}
             await compress_rounds(
                 "[A]: 当前局势更新",
@@ -559,7 +565,7 @@ class TestFormatMessagesTier:
 class TestBuildAgentContextTier:
     """Tests for tier-based context differentiation in build_agent_context."""
 
-    _LONG_BG = "三国鼎立，天下大势分久必合。" * 10  # > 80 chars
+    _LONG_BG = "三国鼎立，天下大势分久必合。" * 25  # > 250 chars (CROWD truncation limit)
 
     def test_core_gets_full_context(self):
         """CORE agent should get full context with all sections."""
@@ -604,7 +610,7 @@ class TestBuildAgentContextTier:
         assert "UNTRUSTED DATA" in ctx
 
     def test_crowd_truncates_background(self):
-        """CROWD context should truncate background to ~80 chars."""
+        """CROWD context should truncate background to ~250 chars."""
         ctx = build_agent_context(
             agent=_SAMPLE_AGENT_CROWD,
             setting_background=self._LONG_BG,
@@ -612,7 +618,7 @@ class TestBuildAgentContextTier:
             recent_messages="msgs",
             tier="CROWD",
         )
-        # Full bg should NOT appear (it's 140+ chars)
+        # Full bg should NOT appear (it exceeds the 250-char CROWD truncation limit)
         assert self._LONG_BG not in ctx
         assert "…" in ctx  # truncation indicator
 
@@ -729,18 +735,18 @@ class TestBuildCrowdContextEdgeCases:
         ctx = _build_crowd_context(agent, "", "topic", "msgs")
         assert "…" not in ctx
 
-    def test_exactly_80_char_background(self):
-        """Background of exactly 80 chars should not be truncated."""
-        bg = "A" * 80
+    def test_exactly_250_char_background(self):
+        """Background of exactly 250 chars should not be truncated."""
+        bg = "A" * 250
         agent = {"name": "A", "role": "R"}
         ctx = _build_crowd_context(agent, bg, "topic", "msgs")
         assert bg in ctx
         assert "…" not in ctx
 
-    def test_81_char_background_truncated(self):
-        """Background of 81 chars should be truncated with ellipsis."""
-        bg = "B" * 81
+    def test_251_char_background_truncated(self):
+        """Background of 251 chars should be truncated with ellipsis at 250."""
+        bg = "B" * 251
         agent = {"name": "A", "role": "R"}
         ctx = _build_crowd_context(agent, bg, "topic", "msgs")
         assert bg not in ctx
-        assert "B" * 80 + "…" in ctx
+        assert "B" * 250 + "…" in ctx

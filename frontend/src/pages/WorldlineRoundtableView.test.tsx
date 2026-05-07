@@ -282,6 +282,45 @@ vi.mock('react-i18next', () => ({
       if (key === 'roundtable.shortlist_count') {
         return `${String(options?.count ?? '')} / ${String(options?.max ?? '')} worldlines selected`;
       }
+      if (key === 'roundtable.thread_label') {
+        return ` · Thread ${String(options?.count ?? '')}`;
+      }
+      if (key === 'roundtable.reps_summary') {
+        return `${String(options?.count ?? '')} reps · Expand details`;
+      }
+      if (key === 'roundtable.mode_note_hotseat_named') {
+        return `Focus on ${String(options?.name ?? '')} — let this worldline explain its position.`;
+      }
+      if (key === 'roundtable.verdict_prompt') {
+        return `Why did "${String(options?.summary ?? '')}" become the verdict?`;
+      }
+      if (key === 'roundtable.phase_prompt_default') {
+        return `What was the real disagreement in "${String(options?.label ?? '')}"?`;
+      }
+      if (key === 'roundtable.phase_prompt') {
+        return `About "${String(options?.label ?? '')}": ${String(options?.stakes ?? '')}`;
+      }
+      if (key === 'roundtable.quote_prompt') {
+        return `${String(options?.speaker ?? '')} said "${String(options?.snippet ?? '')}" — which disagreement does this get at?`;
+      }
+      if (key === 'roundtable.picker_branch_impact_summary') {
+        return `Impact ${String(options?.impact ?? 0)} · ${String(options?.turns ?? 0)} turns · ${String(options?.hinges ?? 0)} hinge hits · latest R${String(options?.round ?? 0)}`;
+      }
+      if (key === 'roundtable.picker_witness_impact_summary') {
+        return `Impact ${String(options?.impact ?? 0)}`;
+      }
+      if (key === 'roundtable.picker_drag_announce_start' || key === 'roundtable.picker_drag_announce_start_en') {
+        return `Picked up ${String(options?.name ?? '')}.`;
+      }
+      if (key === 'roundtable.picker_drag_announce_over') {
+        return `Moved over ${String(options?.title ?? '')} seat.`;
+      }
+      if (key === 'roundtable.picker_drag_announce_seated') {
+        return `${String(options?.name ?? '')} seated successfully.`;
+      }
+      if (key === 'roundtable.picker_drag_announce_cancel_with_name') {
+        return `Drop cancelled, ${String(options?.name ?? '')} returned to the candidate pool.`;
+      }
       return ({
         'roundtable.title': 'Worldline Roundtable',
         'roundtable.entry_cta': 'Start Roundtable',
@@ -372,7 +411,63 @@ vi.mock('react-i18next', () => ({
         'roundtable.explore_analyst_placeholder': 'e.g. "Why did Worldline 2 diverge after Round 3?"',
         'roundtable.explore_survey_placeholder': 'e.g. "What single decision would you change if you could?"',
         'roundtable.explore_locked': 'The verdict must land before you can explore further.',
+        'roundtable.error_missing_scenario': 'Roundtable replay is missing its base scenario snapshot.',
+        'roundtable.error_invalid_replay': 'This roundtable replay link is invalid.',
+        'roundtable.error_missing_id': 'Missing scenario id.',
+        'roundtable.error_not_done': 'The result is not finished yet, so the roundtable is not available.',
+        'roundtable.error_too_few_branches': 'The roundtable needs at least two endings.',
+        'roundtable.speaker_you': 'You',
+        'roundtable.speaker_unknown': 'Unknown',
+        'roundtable.placeholder_hotseat': 'The selected representative is lining up a reply…',
+        'roundtable.placeholder_archivist': 'The Archivist is routing the question to the right representative…',
+        'roundtable.scope_followup_active': 'Following this roundtable thread only',
+        'roundtable.scope_table_active': 'Using this table and crossline summaries only',
+        'roundtable.scope_followup_default': 'Using the active roundtable thread only',
+        'roundtable.scope_table_default': 'Using this table and crossline summaries',
+        'roundtable.replay_readonly': 'Replay mode is read-only for this table.',
+        'roundtable.import_error': 'Failed to import roundtable replay',
+        'roundtable.participant_details': 'Participant details',
+        'roundtable.participants': 'Participants',
+        'roundtable.thread_main_table': 'Main table',
+        'roundtable.discussion_log': 'Roundtable discussion log',
+        'roundtable.long_turn': 'Long turn',
+        'roundtable.selection_reason_user_selected': 'Your pick',
+        'roundtable.selection_reason_fallback': 'Auto-filled',
+        'roundtable.selection_reason_top_impact': 'High impact',
+        'roundtable.host_guided_label': 'Host-guided',
+        'roundtable.hotseat_question_one': 'Question one rep',
+        'roundtable.mode_note_hotseat': 'Pick one rep to question — get a clear answer from one worldline.',
+        'roundtable.mode_note_thread_followup': 'Split off one disagreement into its own thread so the main discussion stays clean.',
+        'roundtable.mode_note_default': 'The host sorts out the disagreement first, then passes it to the right rep.',
+        'roundtable.verdict_prompt_default': 'Why did the roundtable reach this conclusion?',
+        'roundtable.anchor_kind_verdict': 'Verdict',
+        'roundtable.anchor_kind_phase': 'Phase',
+        'roundtable.anchor_kind_quote': 'Quote',
+        'roundtable.anchor_kind_default': 'Anchor',
+        'roundtable.picker_default_hint_existing': 'The current table stays available until you reopen it. Swap representatives here, then rebuild the roundtable with the new lineup.',
+        'roundtable.picker_default_hint_new': 'Seat one representative for each ending. The table starts with high-impact picks while trying to avoid the same voice on every worldline.',
+        'roundtable.picker_launch_loading': 'Launching…',
+        'roundtable.picker_launch_reopen': 'Reopen this lineup',
+        'roundtable.picker_launch_open': 'Open this lineup',
+        'roundtable.picker_selected_label': 'Selected',
+        'roundtable.picker_seating_heading': 'Seating board',
+        'roundtable.picker_seating_hint_drag': 'Drag candidates into seats. Mobile keeps tap-to-seat.',
+        'roundtable.picker_seating_hint_tap': 'Tap-to-seat is active on this device.',
+        'roundtable.picker_empty_representative': 'Drop here to seat',
+        'roundtable.picker_empty_witness': 'Drop here to seat a witness',
+        'roundtable.picker_occupied_label': 'Currently seated',
+        'roundtable.picker_drag_announce_no_seat': 'Not over a valid seat.',
+        'roundtable.picker_drag_announce_cancel': 'Drop cancelled.',
+        'roundtable.picker_reseat_heading': 'Reseat each worldline representative',
+        'roundtable.picker_seating_mode_label': 'Roundtable seating mode',
+        'roundtable.picker_back_to_table': 'Back to current table',
         'common.loading': 'Loading',
+        'common.close': 'Close',
+        'common.collapse': 'Collapse',
+        'common.expand': 'Expand',
+        'common.you': 'You',
+        'common.unknown_speaker': 'Unknown',
+        'ending_room.participant_unknown': 'Unknown',
       }[key] ?? key);
     },
     i18n: {
@@ -1238,8 +1333,6 @@ describe('WorldlineRoundtableView', () => {
     await screen.findByRole('button', { name: 'Keep asking' });
     const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
     expect(phaseSection).toBeTruthy();
-    expect(roundtableViewSource).toContain("prompt: buildRoundtablePhasePrompt(label, insight.commentary || insight.stakes, isZh)");
-    expect(roundtableViewSource).toContain("<p>{insight.commentary || insight.stakes}</p>");
     await within(phaseSection as HTMLElement).findByText(/Explain the hinge in plain language\./, { selector: '.worldline-roundtable-insight p' });
     await user.click(within(phaseSection as HTMLElement).getByRole('button', { name: 'New topic' }));
 
@@ -1248,6 +1341,9 @@ describe('WorldlineRoundtableView', () => {
       questionAnchorIds: ['roundtable:phase:room-1:verdict-0'],
       interactionMode: 'thread_followup',
     }));
+    await waitFor(() => expect(setComposerDraftMock).toHaveBeenCalledWith(
+      'About "Verdict·Explain the hinge in plain language.": Explain the hinge in plain language.',
+    ));
     expect(setInteractionModeMock).toHaveBeenCalledWith('thread_followup');
   });
 
@@ -1380,9 +1476,6 @@ describe('WorldlineRoundtableView', () => {
     expect(phaseSection).toBeTruthy();
     expect(within(phaseSection as HTMLElement).getByText(/Representative A argues that the hinge was the missed verification loop, not the ending label\./, { selector: '.worldline-roundtable-insight p' })).toBeInTheDocument();
     expect(within(phaseSection as HTMLElement).queryByText(/Opening hinge\./, { selector: '.worldline-roundtable-insight p' })).toBeNull();
-    expect(roundtableViewSource).toContain('buildPhaseInsightLabel(insight, { isZh, t })');
-    expect(roundtableViewSource).toContain('<p>{insight.commentary || insight.stakes}</p>');
-    expect(roundtableViewSource).toContain('commentary: insight.commentary');
   });
 
   it('does not duplicate the archivist note when it matches the summary verbatim', async () => {

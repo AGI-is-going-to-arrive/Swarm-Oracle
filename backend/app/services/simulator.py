@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from typing import Any
@@ -1853,19 +1854,38 @@ async def _gather_agent_messages(
                         ),
                     )
 
-                # Pass-2: lightweight metadata extraction
+                # Pass-2: lightweight metadata extraction (bilingual + rich emotion vocabulary)
                 from app.services.llm_client import format_untrusted_text_block
+                _is_chinese = _is_chinese_language(language)
                 raw_text_block = format_untrusted_text_block(
-                    "原文", raw_text, max_chars=3000,
+                    "原文" if _is_chinese else "Original text",
+                    raw_text,
+                    max_chars=3000,
                 )
-                extract_prompt = (
-                    f"从以下角色发言中提取结构化信息。\n\n"
-                    f"{raw_text_block}\n\n"
-                    f"输出严格 JSON：\n"
-                    f'{{"content": "原文内容（保留原文，不要改写）", '
-                    f'"emotion": "此刻情绪(如: 激动/忧虑/冷静/愤怒/期待/释然)", '
-                    f'"diverge": "如有明确分歧立场则描述，否则null"}}'
-                )
+                if _is_chinese:
+                    extract_prompt = (
+                        f"从以下角色发言中提取结构化信息。\n\n"
+                        f"{raw_text_block}\n\n"
+                        f"输出严格 JSON：\n"
+                        f'{{"content": "原文内容（保留原文，不要改写）", '
+                        f'"emotion": "此刻情绪（例如：激动/忧虑/冷静/愤怒/期待/释然/讽刺/无奈/'
+                        f"坚定/犹豫/警觉/心寒/振奋/焦躁/沉痛/嘲弄/恳切/疲倦/隐忍/得意/不屑）"
+                        f'", '
+                        f'"diverge": "如有明确分歧立场则描述，否则null"}}'
+                    )
+                else:
+                    extract_prompt = (
+                        f"Extract structured information from the following character speech.\n\n"
+                        f"{raw_text_block}\n\n"
+                        f"Output strict JSON:\n"
+                        f'{{"content": "original text (preserve as-is, do not rewrite)", '
+                        f'"emotion": "current emotion (for example: excited / worried / calm / '
+                        f"angry / hopeful / relieved / sardonic / resigned / resolute / hesitant / "
+                        f"alert / chilled / energized / restless / grieving / mocking / earnest / "
+                        f'weary / restraining / smug / dismissive)", '
+                        f'"diverge": "if there is a clear divergence stance, describe it; '
+                        f'otherwise null"}}'
+                    )
                 with llm_request_scope(purpose="scenario_turn_generation"):
                     result = await llm_call_json(
                         extract_prompt,
@@ -1989,6 +2009,101 @@ async def _gather_agent_messages(
     return list(results)
 
 
+def _stable_pick(seed: str, options: list[str]) -> str:
+    """Deterministically pick one option using sha256(seed) modulo len."""
+    if not options:
+        return ""
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    return options[int(digest, 16) % len(options)]
+
+
+def _is_chinese_language(language: str) -> bool:
+    normalized = (language or "").strip().lower()
+    return normalized.startswith("chinese") or normalized in {"zh", "zh-cn", "中文"}
+
+
+def _extract_meaningful_fragment(text: str, max_chars: int = 60) -> str:
+    """Pick a sentence-aware snippet from leader content, avoiding mid-word cuts.
+
+    Prefers the first sentence; falls back to the first ``max_chars`` characters
+    trimmed at the closest punctuation boundary.
+    """
+    if not text:
+        return ""
+    cleaned = text.strip()
+    # Try the earliest sentence boundary first (CJK + ASCII punctuation).
+    sentence_boundary = None
+    for sep in ("。", "！", "？", "!", "?", "."):
+        idx = cleaned.find(sep)
+        if 1 <= idx <= max_chars:
+            sentence_boundary = idx if sentence_boundary is None else min(sentence_boundary, idx)
+    if sentence_boundary is not None:
+        return cleaned[: sentence_boundary + 1]
+    if len(cleaned) <= max_chars:
+        return cleaned
+    # Trim at nearest soft boundary (comma / space) within budget.
+    snippet = cleaned[:max_chars]
+    for sep in ("，", ",", "、", " "):
+        idx = snippet.rfind(sep)
+        if idx >= max_chars // 2:
+            return snippet[:idx].rstrip("，,、 ") + "…"
+    return snippet.rstrip() + "…"
+
+
+def _synthesize_worker_response(
+    *,
+    worker: dict,
+    leader_name: str,
+    leader_content: str,
+    language: str,
+    round_number: int,
+) -> str:
+    """Build a more varied, persona-aware worker response from leader output.
+
+    Uses deterministic template selection so that re-running the same round
+    produces stable text, but different rounds rotate through variants.
+    """
+    fragment = _extract_meaningful_fragment(leader_content, max_chars=60)
+    worker_name = worker.get("name", "?")
+    is_chinese = _is_chinese_language(language)
+    if not fragment:
+        return (
+            f"({worker_name}保持沉默)"
+            if is_chinese
+            else f"({worker_name} stays silent)"
+        )
+    worker_role = worker.get("role", "成员" if is_chinese else "member")
+    stance_hint = (worker.get("stance") or "").strip()
+    seed = f"{worker_name}:{round_number}"
+
+    if is_chinese:
+        # Stance-aware tail clause; falls back to neutral framing when missing.
+        stance_tail = (
+            f"自己更想从「{stance_hint}」的角度补一刀。"
+            if stance_hint
+            else "想再追问一句细节。"
+        )
+        templates = [
+            f"{worker_name}附和了{leader_name}的观点，补充道：{fragment}",
+            f"{worker_name}点了点头：{leader_name}说的「{fragment}」确实是重点。",
+            f"{worker_name}（{worker_role}）认为{leader_name}的判断基本靠谱，但{stance_tail}",
+            f"{worker_name}低声跟上：{fragment}——这一点不能丢。",
+        ]
+    else:
+        stance_tail = (
+            f"wants to push back from a '{stance_hint}' angle."
+            if stance_hint
+            else "wants to press for one more detail."
+        )
+        templates = [
+            f"{worker_name} echoed {leader_name}, adding: {fragment}",
+            f"{worker_name} nodded along: '{fragment}' — exactly the point.",
+            f"{worker_name} ({worker_role}) backed {leader_name}'s read, but {stance_tail}",
+            f"{worker_name} muttered in support: {fragment} — we can't lose this thread.",
+        ]
+    return _stable_pick(seed, templates)
+
+
 async def _gather_hierarchical_messages(
     engine, scenario_id, branch_id, round_id, round_num,
     leader_agents, worker_agents, agent_to_group, group_leaders,
@@ -2043,26 +2158,21 @@ async def _gather_hierarchical_messages(
         leader_msg = leader_msg_map.get(leader_name)
 
         if leader_msg:
-            # Synthesize: Worker echoes a condensed version of Leader's stance
+            # Synthesize: persona-aware, sentence-aware, deterministic-but-varied
             leader_content = leader_msg.get("content", "")
-            worker_stance = worker.get("stance", "")
-            # Create a short synthesized response reflecting the worker's persona
-            synth_content = (
-                (
-                    f"({worker['name']}作为{worker.get('role', '成员')}，"
-                    f"响应{leader_name}的立场) "
-                )
-                if language == "Chinese"
-                else (
-                    f"({worker['name']} acting as {worker.get('role', 'member')}, "
-                    f"responding to {leader_name}'s position) "
-                )
-            ) + f"{leader_content[:80]}…"
+            synth_content = _synthesize_worker_response(
+                worker=worker,
+                leader_name=leader_name,
+                leader_content=leader_content,
+                language=language,
+                round_number=round_num,
+            )
             emotion = leader_msg.get("emotion", "neutral")
         else:
+            is_chinese = _is_chinese_language(language)
             synth_content = (
                 f"({worker['name']}保持沉默)"
-                if language == "Chinese"
+                if is_chinese
                 else f"({worker['name']} stays silent)"
             )
             emotion = "neutral"

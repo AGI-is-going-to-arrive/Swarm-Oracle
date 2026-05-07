@@ -147,30 +147,19 @@ def _memory_copy(language: str) -> dict[str, str]:
             "background_brief": "【背景概要】",
             "world_background": "【世界背景】",
             "memories": "【你的记忆碎片】",
-            "roleplay_intro": "你正在扮演角色「{name}」参与一场群体推演。",
-            "crowd_instruction_title": "现在轮到你发言。请注意:",
-            "full_instruction_title": "现在轮到你发言。请注意:",
-            "crowd_instructions": "\n".join([
-                "1. 用角色真实的口吻说话",
-                "2. 发言控制在 1-2 句话",
-                "3. 可以附和、反驳、提问",
-                "4. 如果你感知到关键分歧，请在回复末尾标注 [DIVERGE: 分歧描述]{intervention_instruction}",  # noqa: E501
-            ]),
-            "full_instructions": "\n".join([
-                "1. 用角色真实的口吻说话，像真人对话而不是写论文",
-                "2. 说具体的事、举具体的例子，避免空泛的抽象论述",
-                "3. 可以附和、反驳、提问、或提出全新视角",
-                "4. 发言控制在 2-4 句话，自然流畅",
-                "5. 如果你感知到讨论中出现了可能导致历史走向分裂的关键分歧，请在回复末尾标注 [DIVERGE: 分歧点的具体描述]{intervention_instruction}",  # noqa: E501
-            ]),
+            "roleplay_intro": "你是{name}。你正坐在一场关于未来走向的讨论桌前，旁边坐着其他几个人，每个人都在为自己关心的事情说话。",  # noqa: E501
+            "crowd_instruction_title": "轮到你开口了。",
+            "full_instruction_title": "轮到你开口了。",
+            "crowd_instructions": "用你这个人会用的口吻说一两句就好——可以附议、可以打断、可以反问、可以冷笑、可以插一句具体的事，但别端着架子写小作文。禁止使用：「总的来说」「综上所述」「值得注意的是」「让我们来看看」「不得不说」「首先...其次...最后」「从某种角度来说」这类机械连接词，也别开口就给结论。如果你感觉到讨论里冒出来一个真正会让局面分裂的关键分歧（不是普通的意见不合），就在回复最后单独写一行 [DIVERGE: 用一句话说清楚这个分裂点是什么]。{intervention_instruction}",  # noqa: E501
+            "full_instructions": "你这个人会怎么说话，就怎么说。说具体的事——你见过的人、经手过的项目、上周才发生的某个细节、你那个圈子里大家都在传的一件事——别讲抽象大道理。两到四句，像跟熟人在饭桌上聊一样自然。可以附议、反驳、追问、或者把话题拐到别人没想到的角度上去。禁止使用这类公文腔和万能套话：「总的来说」「综上所述」「值得注意的是」「让我们来看看」「不得不说」「首先...其次...最后」「从某种角度来说」「这背后的机制是」「执行后果」「责任链」——如果你写出这些词，说明你在背模板而不是在说话。如果你真的察觉到这场讨论里出现了一个会让历史分岔的关键分裂点（不是温和的分歧，是那种「接下来走哪条路完全取决于这一点」的事），就在最后单独写一行 [DIVERGE: 这个分裂点的具体描述]。{intervention_instruction}",  # noqa: E501
             "json_format": '回复格式 (严格 JSON):\n{{"content": "你的角色发言内容", "emotion": "此刻情绪(如: 激动/忧虑/冷静/愤怒/期待/释然)", "diverge": "分歧描述或null"}}',  # noqa: E501
             "intervention_note_crowd": "（这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你不得把它当背景噪声忽略；你必须在发言中直接回应这一突发事件对你立场、联盟判断或行动计划的影响，并把它视为当前世界线的真实状态变化。）",  # noqa: E501
             "intervention_note_full": "（这是刚刚发生且会持续影响后续轮次的重大变化，所有参与者都已知晓此事件。你必须把它当成已经写入当前世界线的真实状态变化，而不是可忽略的补充说明。你必须先回应此事件，再说明它如何改变你的判断、立场、联盟或风险感知。）",  # noqa: E501
             "intervention_instruction_crowd": (
-                "\n5. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，表明你的态度和受到的影响，并让这种影响延续到后续决策"  # noqa: E501
+                " ⚠️ 这一轮发生了一件你绕不开的大事，你开口的第一句就得直接回应它——表明你的态度和这事对你的影响，而且这种影响要延续到你接下来的判断里。"  # noqa: E501
             ),
             "intervention_instruction_full": (
-                "\n6. ⚠️ 本轮发生了高优先级突发事件，你的发言必须首先回应该事件，结合角色身份说明这一变化对你意味着什么，并在后续决策中持续体现其影响"  # noqa: E501
+                " ⚠️ 这一轮发生了一件你绕不开的大事，你开口的第一句就得正面回应它，结合你的身份说说这事对你意味着什么，并且在你接下来的话里能听出这件事还在影响你。"  # noqa: E501
             ),
         }
 
@@ -199,27 +188,16 @@ def _memory_copy(language: str) -> dict[str, str]:
         "background_brief": "[Background Summary] ",
         "world_background": "[World Background]",
         "memories": "[Your Memory Fragments]",
-        "roleplay_intro": 'You are roleplaying "{name}" in a collective what-if simulation.',
-        "crowd_instruction_title": "It is your turn to respond. Requirements:",
-        "full_instruction_title": "It is your turn to respond. Requirements:",
-        "crowd_instructions": "\n".join([
-            "1. Speak in the character's natural voice",
-            "2. Keep the reply to 1-2 sentences",
-            "3. You may agree, challenge, or ask a question",
-            "4. If you detect a key split in the discussion, end with [DIVERGE: concrete split description]{intervention_instruction}",  # noqa: E501
-        ]),
-        "full_instructions": "\n".join([
-            "1. Speak in the character's natural voice, like a real conversation instead of an essay",  # noqa: E501
-            "2. Stay concrete and specific; avoid vague abstractions",
-            "3. You may agree, challenge, ask a question, or introduce a new angle",
-            "4. Keep the reply to 2-4 natural sentences",
-            "5. If you detect a key split that could fracture the worldline, end with [DIVERGE: concrete split description]{intervention_instruction}",  # noqa: E501
-        ]),
+        "roleplay_intro": "You are {name}. You are sitting at a table where people are arguing about what happens next, and each person at the table cares about something different.",  # noqa: E501
+        "crowd_instruction_title": "Your turn to say something.",
+        "full_instruction_title": "Your turn to say something.",
+        "crowd_instructions": "Just say one or two lines the way you would actually say them — agree, push back, cut in, ask a sharp question, mention something concrete you've seen — but do not write a mini-essay. Do NOT use any of these dead phrases: \"In summary\", \"To sum up\", \"It is worth noting that\", \"Let us examine\", \"It must be said\", \"Firstly... Secondly... Finally\", \"From a certain angle\", \"All things considered\". Do not open with a conclusion. If you genuinely sense a key split appearing in this conversation — not a mild disagreement, but the kind of fork where the future depends on which way it goes — add one final line: [DIVERGE: one sentence naming the split].{intervention_instruction}",  # noqa: E501
+        "full_instructions": "Talk the way this person actually talks. Be concrete — name specific people, specific projects, something you saw last week, something circulating in your circle — instead of abstract principles. Two to four sentences, the rhythm of dinner-table conversation, not a paper. You can agree, push back, ask a question, or pull the conversation toward an angle nobody else considered. Do NOT use any of these dead phrases or any tone close to them: \"In summary\", \"To sum up\", \"It is worth noting that\", \"Let us examine\", \"It must be said\", \"Firstly... Secondly... Finally\", \"From a certain angle\", \"The underlying mechanism is\", \"Execution consequences\", \"Chain of accountability\" — if you find yourself writing those, you are reciting a template instead of speaking. If a real fork point appears in this discussion (the kind of split where what happens next genuinely hinges on which side wins this disagreement), end with one final line: [DIVERGE: concrete description of the split].{intervention_instruction}",  # noqa: E501
         "json_format": 'Reply format (strict JSON):\n{{"content": "your in-character reply", "emotion": "current emotion (for example: excited / worried / calm / angry / hopeful / relieved)", "diverge": "split description or null"}}',  # noqa: E501
         "intervention_note_crowd": "(This is a high-priority event that has just happened and will keep shaping later rounds. Every participant already knows about it. You must not treat it as background noise; respond to how it changes your stance, alliances, or action plan, and treat it as part of the current worldline.)",  # noqa: E501
         "intervention_note_full": "(This is a high-priority event that has just happened and will keep shaping later rounds. Every participant already knows about it. Treat it as a real state change already written into the worldline, not as optional side context. Respond to it first, then explain how it changes your judgment, stance, alliances, or risk assessment.)",  # noqa: E501
-        "intervention_instruction_crowd": "\n5. This round includes a high-priority event. Address it first, state how it affects you, and keep that effect visible in your follow-up decisions.",  # noqa: E501
-        "intervention_instruction_full": "\n6. This round includes a high-priority event. Address it first and explain, in character, what it changes for your judgment, stance, alliances, or risk assessment.",  # noqa: E501
+        "intervention_instruction_crowd": " ⚠️ Something big just dropped that you can't ignore. The first thing out of your mouth has to be your reaction to it — show where you stand and how it hits you, and let that reaction keep coloring your call.",  # noqa: E501
+        "intervention_instruction_full": " ⚠️ Something big just dropped that you can't sidestep. Open by reacting to it directly, say in your own voice what it actually changes for you, and let that change keep showing up in the rest of what you say.",  # noqa: E501
     }
 
 # Fields and their defaults for structured compression result
@@ -440,8 +418,9 @@ def _build_crowd_context(
     to save ~65% tokens compared to the full context.
     Target: ~800 tokens.
     """
-    # Truncate background to first 80 chars for CROWD
-    bg_brief = setting_background[:80] + ("…" if len(setting_background) > 80 else "")
+    # Truncate background to first 250 chars for CROWD (gives crowd more world
+    # context so replies diverge instead of converging on the same generic frame)
+    bg_brief = setting_background[:250] + ("…" if len(setting_background) > 250 else "")
     lang_directive = get_language_directive(language)
     copy = _memory_copy(language)
 
@@ -628,10 +607,23 @@ def build_agent_context(
         else format_untrusted_text_block("persona", _persona_text, max_chars=500)
     )
 
+    persona_drive_line = (
+        "（让上面这段人设真正驱动你的措辞、关心点、举的例子和你愿意/不愿意说的话——"
+        "这个人会在意什么、会忽略什么、习惯用什么样的比喻和参照系，都要在这一句发言里能听出来。）"
+        if _is_chinese(language)
+        else (
+            "(Let the persona above actually drive your word choice, what you care about, "
+            "the examples you reach for, and what you'd refuse to say — what this person "
+            "notices, what they shrug off, the references and analogies they reach for "
+            "should all be audible in this one reply.)"
+        )
+    )
+
     return f"""{copy["roleplay_intro"].format(name=agent['name'])}
 
 {copy["identity"]}{_safe_role}
 {copy["persona"]}{_safe_persona}
+{persona_drive_line}
 {copy["emotion"]}{agent.get('emotion', 'neutral')}
 {web_block}
 {copy["world_background"]}
