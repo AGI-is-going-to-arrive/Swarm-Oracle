@@ -240,7 +240,7 @@ vi.mock('../components/QuickStartCards', () => ({
 
 async function openAdvancedSettings(user: ReturnType<typeof userEvent.setup>) {
   const trigger = screen.getByRole('button', {
-    name: /home\.advanced_settings|home\.advanced_settings_expanded/i,
+    name: /home\.byok_toggle/i,
   });
 
   if (trigger.getAttribute('aria-expanded') !== 'true') {
@@ -586,6 +586,7 @@ describe('InputView campaign progress', () => {
     await openAdvancedSettings(user);
     await user.click(screen.getByRole('button', { name: 'home.runtime_preset_aggressive' }));
     await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
 
     await waitFor(() => {
       expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -686,7 +687,6 @@ describe('InputView campaign progress', () => {
     );
 
     await openAdvancedSettings(user);
-    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
     await user.type(screen.getByLabelText('home.byok_rpm_label'), '10');
     await user.type(screen.getByLabelText('home.byok_tpm_label'), '100000');
 
@@ -704,7 +704,6 @@ describe('InputView campaign progress', () => {
     );
 
     await openAdvancedSettings(user);
-    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
 
     const orgIdInput = await screen.findByLabelText('home.org_id_label');
 
@@ -725,7 +724,6 @@ describe('InputView campaign progress', () => {
     );
 
     await openAdvancedSettings(user);
-    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
 
     expect(screen.getByText('Paste your provider API key. It stays only in this tab session.')).toBeInTheDocument();
     expect(screen.getByText('Use an OpenAI-compatible endpoint, including root URLs like .../v1.')).toBeInTheDocument();
@@ -744,7 +742,6 @@ describe('InputView campaign progress', () => {
     );
 
     await openAdvancedSettings(user);
-    await user.click(screen.getByRole('button', { name: /home\.byok_toggle/i }));
     await user.type(screen.getByLabelText('home.byok_rpm_label'), '10');
     await user.type(screen.getByLabelText('home.byok_tpm_label'), '100000');
     fireEvent.change(screen.getByRole('slider', { name: 'home.agents_label' }), {
@@ -1088,7 +1085,7 @@ describe('InputView campaign progress', () => {
     expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
   });
 
-  it('hides web search toggle when VITE flag is disabled', async () => {
+  it('shows web search toggle regardless of VITE flag', async () => {
     import.meta.env.VITE_ENABLE_WEB_SEARCH = 'false';
     getCapabilitiesMock.mockResolvedValue({
       web_search: { scope: 'server', server_enabled: true, method: 'external', provider: 'tavily' },
@@ -1101,9 +1098,7 @@ describe('InputView campaign progress', () => {
     );
 
     await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-    expect(screen.queryByText('home.web_search_toggle')).not.toBeInTheDocument();
-    // Note: getCapabilities is now also called by useCapabilityCheck for Phase 3,
-    // so we only verify the web search toggle is hidden, not the call count.
+    expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
   });
 
   it('sends webSearchEnabled=true when toggle is checked', async () => {

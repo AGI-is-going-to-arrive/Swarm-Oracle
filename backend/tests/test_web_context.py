@@ -793,7 +793,7 @@ class TestFetchWebContext:
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "tvly-key")
 
-        async def _timeout_search(query, request_config=None):
+        async def _timeout_search(query, request_config=None, **kwargs):
             raise httpx.TimeoutException("timeout")
 
         # Patch the dict entry so _search_with_provider uses our mock
@@ -809,7 +809,7 @@ class TestFetchWebContext:
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "tvly-key")
 
-        async def _error_search(query, request_config=None):
+        async def _error_search(query, request_config=None, **kwargs):
             mock_resp = httpx.Response(500, request=httpx.Request("POST", "https://api.tavily.com/search"))
             raise httpx.HTTPStatusError("500", request=mock_resp.request, response=mock_resp)
 
@@ -826,7 +826,7 @@ class TestFetchWebContext:
 
         mock_snippets = [WebSearchSnippet(text="AI advances", source_url="https://ai.com")]
 
-        async def _ok_search(query, request_config=None):
+        async def _ok_search(query, request_config=None, **kwargs):
             return mock_snippets
 
         monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", _ok_search)
@@ -849,7 +849,7 @@ class TestFetchWebContext:
         mock_snippets = [WebSearchSnippet(text="cached", source_url="https://c.com")]
         call_count = 0
 
-        async def counting_search(query, request_config=None):
+        async def counting_search(query, request_config=None, **kwargs):
             nonlocal call_count
             call_count += 1
             return mock_snippets
@@ -870,7 +870,7 @@ class TestFetchWebContext:
         monkeypatch.setattr("app.services.web_context.settings.ENABLE_WEB_SEARCH", True)
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
 
-        async def _empty_search(query, request_config=None):
+        async def _empty_search(query, request_config=None, **kwargs):
             return []
 
         monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", _empty_search)
@@ -1013,7 +1013,7 @@ class TestCacheHardening:
 
         call_count = 0
 
-        async def counting_search(query, request_config=None):
+        async def counting_search(query, request_config=None, **kwargs):
             nonlocal call_count
             call_count += 1
             return [WebSearchSnippet(text=f"result-{call_count}", source_url="https://a.com")]
@@ -1052,7 +1052,7 @@ class TestCacheHardening:
         # Shrink the cap so the test stays cheap; we then insert cap + 1 entries.
         monkeypatch.setattr("app.services.web_context._MAX_CACHE_SIZE", 5)
 
-        async def echo_search(query, request_config=None):
+        async def echo_search(query, request_config=None, **kwargs):
             return [WebSearchSnippet(text=query, source_url="https://x.test")]
 
         monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", echo_search)
@@ -1102,7 +1102,7 @@ class TestCacheHardening:
         call_count = 0
         gate = asyncio.Event()
 
-        async def gated_search(query, request_config=None):
+        async def gated_search(query, request_config=None, **kwargs):
             nonlocal call_count
             call_count += 1
             # Block until the test releases the gate, ensuring all stampede
@@ -1147,7 +1147,7 @@ class TestCacheHardening:
             "app.services.web_context.settings.WEB_SEARCH_CACHE_TTL_SECONDS", 300
         )
 
-        async def fast_search(query, request_config=None):
+        async def fast_search(query, request_config=None, **kwargs):
             return [WebSearchSnippet(text=query, source_url="https://x.test")]
 
         monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", fast_search)
