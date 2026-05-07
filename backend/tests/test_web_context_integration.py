@@ -26,11 +26,56 @@ def client():
     return TestClient(app)
 
 
-def _noop_background(**kwargs):
+def _noop_background(*args, **kwargs):
     """Replacement for parse_and_run_background that does nothing."""
     async def _noop(*a, **kw):
         pass
     return _noop(*(), **{})
+
+
+def _mock_family_context(*ready_families: str) -> dict[str, dict[str, object]]:
+    context: dict[str, dict[str, object]] = {
+        "polymarket": {
+            "state": "empty",
+            "configured_host": "us",
+            "geo_gated": False,
+            "items": [],
+        },
+        "finance": {"state": "empty", "items": []},
+        "academic": {"state": "empty", "items": []},
+        "news_deep": {"state": "empty", "items": []},
+    }
+    ready_items: dict[str, list[dict[str, object]]] = {
+        "polymarket": [{
+            "id": "polymarket-1",
+            "question": "Will pigs fly?",
+            "url": "https://polymarket.com/event/pigs-fly",
+        }],
+        "finance": [{
+            "id": "finance-1",
+            "title": "Market impact of flight experiments",
+            "summary": "Aviation investment context.",
+            "source": "Finance Wire",
+            "url": "https://finance.example.com/pigs-fly",
+        }],
+        "academic": [{
+            "id": "academic-1",
+            "title": "Aerodynamics of impossible animals",
+            "abstract": "Academic evidence context.",
+            "url": "https://academic.example.com/pigs-fly",
+        }],
+        "news_deep": [{
+            "id": "news-1",
+            "title": "Scientists discuss speculative flight",
+            "description": "News context.",
+            "source": "News Deep",
+            "url": "https://news.example.com/pigs-fly",
+        }],
+    }
+    for family in ready_families:
+        context[family]["state"] = "ready"
+        context[family]["items"] = ready_items[family]
+    return context
 
 
 class TestCreateScenarioWithWebSearch:
@@ -55,6 +100,13 @@ class TestCreateScenarioWithWebSearch:
                 "app.services.web_context.fetch_web_context",
                 new_callable=AsyncMock,
                 return_value=mock_result,
+            ),
+            patch(
+                "app.services.web_context.fetch_family_context",
+                new_callable=AsyncMock,
+                return_value=_mock_family_context(
+                    "polymarket", "finance", "academic", "news_deep",
+                ),
             ),
             patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
             patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
@@ -155,6 +207,11 @@ class TestCreateScenarioWithWebSearch:
                 "app.services.web_context.fetch_web_context",
                 new_callable=AsyncMock,
                 return_value=mock_result,
+            ),
+            patch(
+                "app.services.web_context.fetch_family_context",
+                new_callable=AsyncMock,
+                return_value=_mock_family_context("academic"),
             ),
             patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
             patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
