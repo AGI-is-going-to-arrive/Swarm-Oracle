@@ -158,7 +158,7 @@ docker compose up backend
 
 ## 测试与质量
 
-- **67 个测试文件 / 1801 tests**，位于 `tests/`
+- **67 个测试文件 / 2386 tests**，位于 `tests/`
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`

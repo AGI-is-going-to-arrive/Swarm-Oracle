@@ -192,7 +192,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- **163 个测试文件** (`.test.ts` / `.test.tsx`) / **1735 tests**
+- **165 个测试文件** (`.test.ts` / `.test.tsx`) / **1769 tests**
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
