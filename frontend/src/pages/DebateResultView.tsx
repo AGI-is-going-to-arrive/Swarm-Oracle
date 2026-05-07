@@ -508,7 +508,7 @@ export function DebateResultView() {
                 </div>
               </div>
               <div className="debate-controls">
-                <button type="button" className="btn btn-ghost" onClick={() => navigate(id ? `/debate/${id}` : '/')}>
+                <button type="button" className="btn debate-btn-back" onClick={() => navigate(id ? `/debate/${id}` : '/')}>
                   {t('sim.status.back')}
                 </button>
                 {isReplayMode && (
@@ -558,6 +558,7 @@ export function DebateResultView() {
                       key={participant.side}
                       sideLabel={getDebateSideLabel(t, participant.side)}
                       role={participant.role}
+                      persona={participant.persona}
                       badgeSrc={
                         participant.side === 'proposition'
                           ? DEBATE_UI_ASSETS.badgeProposition

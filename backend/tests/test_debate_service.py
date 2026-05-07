@@ -734,3 +734,94 @@ async def test_run_debate_background_uses_llm_turn_generation_when_enabled(monke
     assert result["result"]["winner"] == "opposition"
     assert result["result"]["verdict_tone"] == "rupture"
     assert result["result"]["adjudication_mode"] == "llm_hybrid"
+
+
+# ---------------------------------------------------------------------------
+# Persona persistence & backward compatibility regression tests
+# ---------------------------------------------------------------------------
+
+def test_extract_persisted_personas_meta_none_breakdown():
+    """_extract_persisted_personas_meta must not crash on None."""
+    from app.services.debate import _extract_persisted_personas_meta
+
+    assert _extract_persisted_personas_meta(None) == {}
+
+
+def test_extract_persisted_personas_meta_empty_dict():
+    """Empty breakdown dict must return empty."""
+    from app.services.debate import _extract_persisted_personas_meta
+
+    assert _extract_persisted_personas_meta({}) == {}
+
+
+def test_extract_persisted_personas_meta_no_personas_key():
+    """Metadata present but no personas key must return empty."""
+    from app.services.debate import _extract_persisted_personas_meta
+
+    assert _extract_persisted_personas_meta({"metadata": {"adjudication_mode": "x"}}) == {}
+
+
+def test_extract_persisted_personas_meta_invalid_type():
+    """Non-dict personas value must be ignored."""
+    from app.services.debate import _extract_persisted_personas_meta
+
+    assert _extract_persisted_personas_meta({"metadata": {"personas": "not-a-dict"}}) == {}
+
+
+def test_extract_persisted_personas_meta_valid():
+    """Valid personas dict must be returned."""
+    from app.services.debate import _extract_persisted_personas_meta
+
+    personas = {
+        "proposition": {"role": "Policy Architect", "persona": "A seasoned reformer"},
+        "opposition": {"role": "Skeptic", "persona": "A veteran auditor"},
+    }
+    result = _extract_persisted_personas_meta({"metadata": {"personas": personas}})
+    assert result == {"personas": personas}
+
+
+def test_serialize_debate_old_debate_without_personas():
+    """Old debates (no metadata.personas) must still return template personas."""
+    from app.services.debate import _serialize_debate
+
+    debate = create_debate_record(question="Should we reform the tax code?")
+    with Session(get_engine()) as session:
+        db_debate = session.get(debate_module.Debate, debate.id)
+        db_debate.breakdown_json = None
+        session.add(db_debate)
+        session.commit()
+
+    with Session(get_engine()) as session:
+        db_debate = session.get(debate_module.Debate, debate.id)
+        result = _serialize_debate(db_debate, [])
+
+    for p in result["participants"]:
+        assert p["persona"], f"{p['side']} should have a fallback persona"
+
+
+def test_serialize_debate_with_persisted_personas():
+    """LLM personas persisted in breakdown_json should be surfaced."""
+    from app.services.debate import _serialize_debate
+    from sqlalchemy.orm.attributes import flag_modified
+
+    debate = create_debate_record(question="Should AI be regulated?")
+    llm_personas = {
+        "proposition": {"role": "Tech Optimist", "persona": "A venture capitalist who built three AI startups"},
+        "opposition": {"role": "Ethics Professor", "persona": "A philosophy chair who testified before Congress"},
+        "judge": {"role": "Neutral Observer", "persona": "A retired constitutional law scholar"},
+    }
+    with Session(get_engine()) as session:
+        db_debate = session.get(debate_module.Debate, debate.id)
+        db_debate.breakdown_json = {"metadata": {"personas": llm_personas}}
+        flag_modified(db_debate, "breakdown_json")
+        session.add(db_debate)
+        session.commit()
+
+    with Session(get_engine()) as session:
+        db_debate = session.get(debate_module.Debate, debate.id)
+        result = _serialize_debate(db_debate, [])
+
+    for p in result["participants"]:
+        side = p["side"]
+        expected = llm_personas[side]["persona"]
+        assert p["persona"] == expected, f"{side} persona mismatch"

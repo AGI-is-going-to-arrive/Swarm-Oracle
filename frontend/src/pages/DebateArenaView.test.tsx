@@ -336,7 +336,7 @@ describe('DebateArenaView', () => {
   });
 
   it('disables argument-map node conversations until Debate has a real scenario id', async () => {
-    const user = userEvent.setup();
+    userEvent.setup();
 
     render(
       <MemoryRouter initialEntries={['/debate/debate-1']}>

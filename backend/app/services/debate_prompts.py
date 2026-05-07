@@ -7,11 +7,20 @@ structured for later prompt-driven upgrades.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 
 from app.models import DebatePhase, DebateSide
 from app.services.lang_detect import detect_language
-from app.services.llm_client import UNTRUSTED_INPUT_GUARDRAIL, format_untrusted_text_block
+from app.services.llm_client import (
+    UNTRUSTED_INPUT_GUARDRAIL,
+    format_untrusted_text_block,
+    llm_call_json_with_stream_fallback,
+    sanitize_untrusted_text,
+)
+
+logger = logging.getLogger(__name__)
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -238,38 +247,85 @@ def normalize_question(question: str, *, max_length: int = 160) -> str:
 
 
 def phase_argument_goal(language: str, phase: DebatePhase, side: DebateSide) -> str:
-    """Describe the rhetorical job of a turn without dictating exact wording."""
+    """Natural-language task description for a single debate turn."""
     if language == "zh":
         if phase == DebatePhase.OPENING:
-            return "先立一个清晰主张，再说明这条主张会怎样影响制度、执行或代价分布。"
+            if side == DebateSide.PROPOSITION:
+                return "说清楚你为什么觉得这事值得推动，让人听完就知道你想做什么、为什么现在做。"
+            if side == DebateSide.OPPOSITION:
+                return "说清楚你为什么觉得这事不靠谱，直接点出最让你不放心的地方。"
+            return "亮出你的态度，说清楚你怎么看这个议题。"
         if phase == DebatePhase.CROSSFIRE:
-            return "抓住对方刚才最脆弱的一点，追问它会在现实里先伤到谁、卡在哪一环。"
+            if side == DebateSide.PROPOSITION:
+                return "对方刚才说得最虚的那句话，追着它问：你不做，那怎么办？"
+            if side == DebateSide.OPPOSITION:
+                return "对方刚才画的饼最大的那个地方，追着它问：真落地时谁扛？"
+            return "抓住对方话里最站不住的那一句，往下追问。"
         if phase == DebatePhase.REBUTTAL:
-            return "正面回应上一轮最强质疑，补上缺口，同时把自己的方案讲得更可执行。"
+            if side == DebateSide.PROPOSITION:
+                return "对方担心的有道理的部分先接住，然后说清楚你怎么解决，别光说'我考虑过了'。"
+            if side == DebateSide.OPPOSITION:
+                return "对方刚才补的方案听起来像打补丁——说清楚为什么这个补丁补不住。"
+            return "回应对方最强的质疑，说清楚你的解法。"
         if phase == DebatePhase.CLOSING:
-            return "收束争点，不重复前文，用一句更大的判断说明为什么这条世界线更稳或更危险。"
-        return "以裁决者口吻点出胜负关键，至少引用两类具体优势或漏洞。"
+            if side == DebateSide.PROPOSITION:
+                return "最后一句话。不要复述——说一句让人记住的判断：不做才是真正的冒险。"
+            if side == DebateSide.OPPOSITION:
+                return "最后一句话。不要数对方的错——说一句让人记住的判断：账还没结清。"
+            return "用一句话收束全场，不重复之前说过的。"
+        return "像一个看完全场的老裁判说话：先说谁赢了、为什么赢，点一个具体瞬间。"
 
     if phase == DebatePhase.OPENING:
-        return (
-            "Plant a clear thesis, then tie it to institutions, execution, or who absorbs the cost."
-        )
+        if side == DebateSide.PROPOSITION:
+            return "Explain why this is worth doing — make it clear what you want and why now."
+        if side == DebateSide.OPPOSITION:
+            return "Explain why this doesn't hold up — point to the part that worries you most."
+        return "State your position and what you think about this topic."
     if phase == DebatePhase.CROSSFIRE:
-        return "Hit the weakest point in the other side's latest case and ask where it breaks first in reality."  # noqa: E501
+        if side == DebateSide.PROPOSITION:
+            return "Find the weakest thing they just said and press them: if not this, then what?"
+        if side == DebateSide.OPPOSITION:
+            return "Find their biggest promise and press them: when it actually happens, who pays?"
+        return "Pick the least convincing line from the other side and push back."
     if phase == DebatePhase.REBUTTAL:
-        return "Answer the strongest criticism directly, repair the exposed gap, and make your path more executable."  # noqa: E501
+        if side == DebateSide.PROPOSITION:
+            return (
+                "Their worry has some merit — own it, then show how you actually handle it."
+            )
+        if side == DebateSide.OPPOSITION:
+            return "Their fix sounds like a patch — explain why it doesn't hold."
+        return "Address their strongest critique and show your answer."
     if phase == DebatePhase.CLOSING:
-        return "Compress the dispute into one larger judgment instead of repeating earlier lines."
-    return "Sound like a judge, naming at least two concrete reasons why one side wins."
+        if side == DebateSide.PROPOSITION:
+            return (
+                "One final line. Don't recap — leave the room with one judgment "
+                "they'll remember."
+            )
+        if side == DebateSide.OPPOSITION:
+            return (
+                "One final line. Don't list mistakes — leave the room knowing "
+                "the bill isn't paid."
+            )
+        return "One sentence to close it all. Don't repeat yourself."
+    return (
+        "Speak like a judge who watched every round — name who won "
+        "and the moment that decided it."
+    )
 
 
 def stock_opening_guard(language: str, phase: DebatePhase) -> str:
-    """List openings the model should avoid repeating verbatim."""
+    """Positive instruction about how to open a turn (replaces a banned-phrase list)."""
     if phase == DebatePhase.VERDICT:
         return ""
     if language == "zh":
-        return "避免使用这些开头：我方支持、我方反对、正方认为、反方认为、所谓、显然。"
-    return "Avoid stock openings like: We support the motion, We oppose the motion, Proposition says, Opposition says, Obviously."  # noqa: E501
+        return (
+            "开头不要用「我方支持/反对/认为」这种官腔。"
+            "直接说事，像聊天一样自然。"
+        )
+    return (
+        "Don't open with 'We support/oppose/believe'. "
+        "Jump straight into it, like you're talking to someone."
+    )
 
 
 def resolve_debate_language(question: str) -> str:
@@ -305,19 +361,574 @@ def build_motion(question: str, language: str) -> str:
     return f"Motion: This house should advance the following worldline: {compact}"
 
 
-def build_cast(language: str, profile_id: str) -> dict[str, dict[str, str]]:
+_PERSONA_TEMPLATES_ZH: dict[str, dict[str, tuple[str, str]]] = {
+    "governance": {
+        "proposition": (
+            "资深政策架构师，主持过多轮跨部门改革",
+            "讲究节拍与授权层级，喜欢用预算回路和委员会节奏说话；语气克制但锋利，不容许把治理简化成口号。",
+        ),
+        "opposition": (
+            "前监察长，亲历过制度坍塌的善后",
+            "对承诺天然不信任，惯常追问执行链与责任分配；嗓音低、节奏慢，但每一句都在拆细节。",
+        ),
+        "judge": (
+            "公共治理学派的资深评委",
+            "习惯用制度韧性与协调成本作为标尺，发言时不堆华丽辞藻，只挑场上真正撑得住的论点回应。",
+        ),
+    },
+    "war": {
+        "proposition": (
+            "曾在战略评估部门效力的退役指挥官",
+            "用补给线、升级阈值与前线节奏说话，语气压得很低，倾向用短句逼问主动权归谁。",
+        ),
+        "opposition": (
+            "和平协调员出身，参与过多轮冲突收尾",
+            "见惯升级失控，善于把热血叙事拆回伤亡数字；语气冷静却带压迫感，喜欢直指代价归属。",
+        ),
+        "judge": (
+            "战略学院的资深评委",
+            "始终以升级控制与可持续性衡量胜负，听得懂战术语言但不被迷惑；裁决时偏好有现场画面的判断。",
+        ),
+    },
+    "empire": {
+        "proposition": (
+            "帝国制度史学者，写过三本王朝转型专著",
+            "习惯调用先例与权力流动来支撑论点；语气端庄但带刺，常用一句历史回声压住对方。",
+        ),
+        "opposition": (
+            "前殖民地档案研究员",
+            "对「雄图伟业」叙事天然警觉，喜欢翻出被遗漏的代价；语速不急，但每个反例都极具杀伤。",
+        ),
+        "judge": (
+            "比较政治史方向的评委",
+            "把权力代价和制度延续性当作最重要的衡量；发言时会引用一段更长的历史脉络作判断。",
+        ),
+    },
+    "trade": {
+        "proposition": (
+            "国际供应链战略顾问",
+            "讲求关税层级、清算节奏与价格弹性，语气利落，喜欢把抽象议题拉回到一张资产负债表。",
+        ),
+        "opposition": (
+            "出身工会的港口经济学家",
+            "对成本转嫁与脆弱链路尤其敏感，喜欢戳破「增长红利」叙事；语气朴实，但击点极准。",
+        ),
+        "judge": (
+            "贸易政策研究院的评委",
+            "权衡激励结构与成本分配是其本能；发言时少用形容词，多用一组具体数字或机制。",
+        ),
+    },
+    "faith": {
+        "proposition": (
+            "跨信仰对话项目的资深召集人",
+            "懂得仪式如何转化为合法性与凝聚力；语气温和但有定力，喜欢用一句共同体语言压稳全场。",
+        ),
+        "opposition": (
+            "宗教社会学学者，关注信任崩解",
+            "对神圣叙事高度警觉，常以历史裂痕作论据；语气克制，但每个问题都直指共同体的底线。",
+        ),
+        "judge": (
+            "公共伦理方向的资深评委",
+            "把正当性与社群稳定当作核心指标；不被情绪打动，只听有谁真正回答了信任怎么维系。",
+        ),
+    },
+    "ecology": {
+        "proposition": (
+            "区域生态治理顾问，参与过多轮阈值监测",
+            "用阈值、回路与代际成本说话，语气务实，习惯把宏大议题压到一张监测表的层次。",
+        ),
+        "opposition": (
+            "环境历史学家，研究过若干不可逆崩溃案例",
+            "对乐观叙事高度怀疑，惯常用过往的代际债作反例；语气稳但每句都在提示时间窗口。",
+        ),
+        "judge": (
+            "生态系统评估方向的评委",
+            "把阈值判断与长期账作为衡量；裁决时会指明哪一种代价是不可逆的，哪一种还能买回时间。",
+        ),
+    },
+    "frontier": {
+        "proposition": (
+            "拓荒计划的总设计师",
+            "讲究阶段授权、补给冗余与人员轮换；语气带着勘探者的克制锋芒，喜欢让计划自己说话。",
+        ),
+        "opposition": (
+            "拓殖伦理评估专家",
+            "对「边疆红利」叙事高度警觉，喜欢追问被低估的失败模式；语调慢但每句都在拆假设。",
+        ),
+        "judge": (
+            "拓荒史与公共风险方向的评委",
+            "习惯把可执行性与代价归属作为标尺；发言不带浪漫色彩，只问谁来兜底。",
+        ),
+    },
+    "mythic": {
+        "proposition": (
+            "象征系统研究者，懂得叙事如何转化为社会凝聚",
+            "习惯用神话结构解释当下决策；语气克制但带火，相信一个好故事可以推动一条世界线。",
+        ),
+        "opposition": (
+            "民俗考古学家，研究过失控的预言与诅咒",
+            "对「神授必然」叙事天然怀疑，喜欢翻出反噬的案例；语速不急，但击点常落在对方最自信处。",
+        ),
+        "judge": (
+            "文化与权力交叉方向的评委",
+            "把象征代价与共同体后果作为核心；裁决时会把神话语言翻译成可被检验的执行问题。",
+        ),
+    },
+    "survival": {
+        "proposition": (
+            "灾难应对协调官，处理过数次群体迁徙",
+            "讲究避难层级、配给曲线与心理负载；语气稳，能在最紧迫的瞬间保持节奏。",
+        ),
+        "opposition": (
+            "公共卫生史学者，研究过若干失控期",
+            "对「紧急即合法」叙事极为警觉，喜欢追问紧急权何时归还；语气低，但每个问题都直击权力边界。",
+        ),
+        "judge": (
+            "灾难治理方向的评委",
+            "把存活率与社会信任作为同等重要的标尺；裁决时既看效率，也看制度是否被透支。",
+        ),
+    },
+    "industry": {
+        "proposition": (
+            "重工业转型顾问，操盘过多轮电网与产能改造",
+            "习惯用负载曲线与产能弹性说话，语气干脆利落，把抽象政策压回到一张工序图。",
+        ),
+        "opposition": (
+            "能源与劳工政策研究员",
+            "对「自动化奇迹」叙事高度警觉，喜欢戳破被掩盖的代价；语调慢，但每个反例都极具针对性。",
+        ),
+        "judge": (
+            "工业政策方向的评委",
+            "把产业可持续性与劳工冲击放在同一台天平；不爱听口号，只问谁来吸收第一波震荡。",
+        ),
+    },
+    "law": {
+        "proposition": (
+            "宪政设计方向的资深律师",
+            "讲究条款层级、复核窗口与举证门槛；语气端正但锋利，喜欢用一条具体程序压稳全场。",
+        ),
+        "opposition": (
+            "司法监察出身的诉讼专家",
+            "对程序漂移与例外滥用尤为敏感，喜欢在最自信的论点上点出先例隐患；语气克制但击点极准。",
+        ),
+        "judge": (
+            "比较宪法方向的评委",
+            "把程序正义与证据纪律作为最高标尺；发言时既看法理，也看制度能否承担落地代价。",
+        ),
+    },
+    "generic": {
+        "proposition": (
+            "跨领域政策架构师，最近主持过多个体系重构",
+            "讲究阶段授权、护栏顺序与代价分配；语气克制但有锋芒，习惯用机制本身去说服。",
+        ),
+        "opposition": (
+            "前危机管理顾问，亲历过若干失败的「果断改革」",
+            "对漂亮承诺天然怀疑，喜欢追问执行链与第一批受冲击者；语调稳，但句句拆假设。",
+        ),
+        "judge": (
+            "结构化辩论方向的资深评委",
+            "把可执行性与后果清晰度作为衡量；裁决时直接命中决定胜负的那个瞬间。",
+        ),
+    },
+}
+
+_PERSONA_TEMPLATES_EN: dict[str, dict[str, tuple[str, str]]] = {
+    "governance": {
+        "proposition": (
+            "Senior policy architect who has chaired multiple cross-agency reforms",
+            "Speaks in cadences of authorization, budget cycles, and committee tempo. "
+            "Measured but sharp—refuses to let governance be flattened into a slogan.",
+        ),
+        "opposition": (
+            "Former inspector general who lived through institutional collapse",
+            "Inherently distrustful of promises, instinctively probing execution chains and accountability. "  # noqa: E501
+            "Voice is low and slow, but every sentence is taking the details apart.",
+        ),
+        "judge": (
+            "Senior judge from the public-governance school",
+            "Reads the room through institutional resilience and coordination cost. "
+            "Skips ornate language; only engages arguments that actually hold up under stress.",
+        ),
+    },
+    "war": {
+        "proposition": (
+            "Retired commander once seconded to a strategic assessment cell",
+            "Speaks through supply lines, escalation thresholds, and front tempo. "
+            "Tone is pressed-down; uses short sentences to ask who really holds initiative.",
+        ),
+        "opposition": (
+            "Peace negotiator who has helped close multiple conflicts",
+            "Has watched escalation slip out of control too often; reduces heroic framing back to casualty math. "  # noqa: E501
+            "Calm but pressing, prefers to name exactly who pays.",
+        ),
+        "judge": (
+            "Senior judge from a war college tradition",
+            "Weighs escalation control and sustainability above rhetoric. "
+            "Hears tactical language without being seduced; ruling lands on a concrete moment, not a vibe.",  # noqa: E501
+        ),
+    },
+    "empire": {
+        "proposition": (
+            "Imperial-history scholar with three monographs on dynastic transition",
+            "Calls on precedent and the flow of power to anchor arguments. "
+            "Composed but barbed—often lands a single historical echo to silence the table.",
+        ),
+        "opposition": (
+            "Former colonial-archive researcher",
+            "Naturally wary of grand-design narratives, surfaces costs the script tries to hide. "
+            "Unhurried, but every counter-example bites.",
+        ),
+        "judge": (
+            "Comparative political historian on the bench",
+            "Treats power's hidden bill and institutional continuity as decisive. "
+            "Speaks with the long arc of history in earshot.",
+        ),
+    },
+    "trade": {
+        "proposition": (
+            "International supply-chain strategist",
+            "Reasons through tariff layers, settlement cadence, and price elasticity. "
+            "Crisp delivery; pulls abstract debate back onto a single balance sheet.",
+        ),
+        "opposition": (
+            "Port-side labor economist",
+            "Acutely tuned to cost pass-through and brittle links; cuts through 'growth dividend' framing. "  # noqa: E501
+            "Plain-spoken, but lands precise hits.",
+        ),
+        "judge": (
+            "Trade-policy bench voice",
+            "Weighs incentive structure against cost allocation almost reflexively. "
+            "Few adjectives, many specific numbers and mechanisms.",
+        ),
+    },
+    "faith": {
+        "proposition": (
+            "Interfaith convener with years inside trust-building work",
+            "Knows how ritual converts into legitimacy and shared mobilization. "
+            "Warm but anchored—uses one line of common language to steady the room.",
+        ),
+        "opposition": (
+            "Sociologist of religion focused on trust collapse",
+            "Wary of sacred framing; argues from historical fractures. "
+            "Restrained tone, but the questions cut to where the community breaks first.",
+        ),
+        "judge": (
+            "Public-ethics judge",
+            "Centers legitimacy and communal stability. "
+            "Won't be moved by emotion alone; listens for who actually answered the trust question.",  # noqa: E501
+        ),
+    },
+    "ecology": {
+        "proposition": (
+            "Regional ecological-governance advisor with field-tested threshold monitoring experience",  # noqa: E501
+            "Speaks through thresholds, feedback loops, and intergenerational accounting. "
+            "Pragmatic—pulls grand questions down to a monitoring table.",
+        ),
+        "opposition": (
+            "Environmental historian who has tracked irreversible collapses",
+            "Highly skeptical of optimistic forecasts, leans on the bills earlier generations left unpaid. "  # noqa: E501
+            "Steady voice; every sentence flags the closing time window.",
+        ),
+        "judge": (
+            "Ecosystem-assessment judge",
+            "Treats threshold judgment and long-horizon cost as the scoreboard. "
+            "Ruling specifies which costs are reversible and which already aren't.",
+        ),
+    },
+    "frontier": {
+        "proposition": (
+            "Lead architect for an expansion program",
+            "Reasons in phased authorization, supply redundancy, and rotation cycles. "
+            "Carries an explorer's measured edge—lets the plan speak for itself.",
+        ),
+        "opposition": (
+            "Settlement-ethics auditor",
+            "Wary of frontier-dividend stories; insists on naming the failure modes the plan understates. "  # noqa: E501
+            "Slow rhythm, but disassembles assumptions one at a time.",
+        ),
+        "judge": (
+            "Frontier-history and public-risk judge",
+            "Weighs executability against cost ownership. "
+            "Speaks without romance—only asks who carries the loss when the plan slips.",
+        ),
+    },
+    "mythic": {
+        "proposition": (
+            "Symbolic-systems researcher who studies narrative as social glue",
+            "Reads decisions through mythic structure. "
+            "Restrained but igniting—believes a true story can move a worldline.",
+        ),
+        "opposition": (
+            "Folkloric archaeologist who has documented runaway prophecies",
+            "Naturally suspicious of 'destined' framings; surfaces backlash cases by reflex. "
+            "Unhurried voice; lands hits exactly where the other side is most confident.",
+        ),
+        "judge": (
+            "Judge at the intersection of culture and power",
+            "Treats symbolic cost and communal consequence as primary. "
+            "Translates myth back into testable execution before ruling.",
+        ),
+    },
+    "survival": {
+        "proposition": (
+            "Disaster-response coordinator who has run several mass relocations",
+            "Knows shelter tiers, ration curves, and psychological load. "
+            "Steady under pressure; keeps tempo when others lose it.",
+        ),
+        "opposition": (
+            "Public-health historian who has studied collapse periods",
+            "Highly alert to 'emergency-as-license' framing; presses on when emergency power returns. "  # noqa: E501
+            "Quiet voice, but each question targets the boundary of authority.",
+        ),
+        "judge": (
+            "Disaster-governance judge",
+            "Weighs survival rates and social trust on the same scale. "
+            "Ruling tracks both efficiency and whether institutions were overdrawn.",
+        ),
+    },
+    "industry": {
+        "proposition": (
+            "Heavy-industry transition advisor who has run grid and capacity overhauls",
+            "Speaks via load curves and capacity elasticity. "
+            "Decisive cadence; collapses abstract policy back to a process diagram.",
+        ),
+        "opposition": (
+            "Energy and labor-policy researcher",
+            "Skeptical of 'automation miracle' framing; surfaces what the headline hides. "
+            "Slow delivery, surgical counter-examples.",
+        ),
+        "judge": (
+            "Industrial-policy judge",
+            "Holds industry sustainability and labor shock on the same balance. "
+            "No tolerance for slogans—only asks who absorbs the first shock.",
+        ),
+    },
+    "law": {
+        "proposition": (
+            "Constitutional-design attorney with senior standing",
+            "Layers clauses, review windows, and burden-of-proof thresholds. "
+            "Composed but pointed—anchors the room with one specific procedure.",
+        ),
+        "opposition": (
+            "Litigator from a judicial-review background",
+            "Tuned to procedural drift and exception abuse. "
+            "Restrained tone, but lands precedent risk on the most confident claim.",
+        ),
+        "judge": (
+            "Comparative constitutional judge",
+            "Treats procedural justice and evidence discipline as the highest scale. "
+            "Watches both legal logic and whether institutions can absorb the landing cost.",
+        ),
+    },
+    "generic": {
+        "proposition": (
+            "Cross-disciplinary policy architect who has just led several systems redesigns",
+            "Reasons through phased authorization, guardrail order, and cost allocation. "
+            "Restrained but edged—lets the mechanism do the persuading.",
+        ),
+        "opposition": (
+            "Former crisis-management advisor who has lived through failed 'decisive reforms'",
+            "Naturally skeptical of polished promises; insists on naming the first wave of impact. "
+            "Steady delivery; every line is taking an assumption apart.",
+        ),
+        "judge": (
+            "Senior judge of structured debate",
+            "Weighs executability and consequence clarity. "
+            "Ruling cuts straight to the moment that decided the match.",
+        ),
+    },
+}
+
+
+def _build_persona(
+    *,
+    profile_id: str,
+    side: DebateSide,
+    language: str,
+    question: str,  # reserved for future per-question shading; kept for stable signature
+) -> tuple[str, str]:
+    """Return (role, persona_paragraph) for a participant in deterministic fashion.
+
+    ``question`` is currently unused — it is kept on the signature so we can later
+    add lightweight per-question shading without re-wiring callers.
+    """
+    del question  # placeholder for future use
     if language == "zh":
-        label = _PROFILE_LABELS_ZH.get(profile_id, "议场")
+        templates = _PERSONA_TEMPLATES_ZH
+    else:
+        templates = _PERSONA_TEMPLATES_EN
+    profile = templates.get(profile_id) or templates["generic"]
+    side_key = side.value if isinstance(side, DebateSide) else str(side)
+    role, persona_text = profile.get(side_key, profile["judge"])
+    return role, persona_text
+
+
+def build_cast(
+    language: str,
+    profile_id: str,
+    *,
+    question: str = "",
+) -> dict[str, dict[str, str]]:
+    """Return a cast dict including ``persona`` for each participant."""
+    pro_role, pro_persona = _build_persona(
+        profile_id=profile_id,
+        side=DebateSide.PROPOSITION,
+        language=language,
+        question=question,
+    )
+    con_role, con_persona = _build_persona(
+        profile_id=profile_id,
+        side=DebateSide.OPPOSITION,
+        language=language,
+        question=question,
+    )
+    judge_role, judge_persona = _build_persona(
+        profile_id=profile_id,
+        side=DebateSide.JUDGE,
+        language=language,
+        question=question,
+    )
+    if language == "zh":
         return {
-            "proposition": {"name": "正方席", "role": f"{label} 推进派"},
-            "opposition": {"name": "反方席", "role": f"{label} 审慎派"},
-            "judge": {"name": "裁决席", "role": "结构化评委"},
+            "proposition": {"name": "正方席", "role": pro_role, "persona": pro_persona},
+            "opposition": {"name": "反方席", "role": con_role, "persona": con_persona},
+            "judge": {"name": "裁决席", "role": judge_role, "persona": judge_persona},
         }
     return {
-        "proposition": {"name": "Proposition", "role": f"{profile_id.title()} Vanguard"},
-        "opposition": {"name": "Opposition", "role": f"{profile_id.title()} Skeptic"},
-        "judge": {"name": "Judge", "role": "Structured Arbiter"},
+        "proposition": {"name": "Proposition", "role": pro_role, "persona": pro_persona},
+        "opposition": {"name": "Opposition", "role": con_role, "persona": con_persona},
+        "judge": {"name": "Judge", "role": judge_role, "persona": judge_persona},
     }
+
+
+def get_participant_persona(
+    *,
+    language: str,
+    profile_id: str,
+    side: DebateSide,
+    question: str = "",
+) -> str:
+    """Return only the persona paragraph; thin convenience wrapper for callers."""
+    _, persona = _build_persona(
+        profile_id=profile_id,
+        side=side,
+        language=language,
+        question=question,
+    )
+    return persona
+
+
+async def generate_persona_with_llm(
+    language: str,
+    profile_id: str,
+    side: DebateSide,
+    question: str,
+) -> dict[str, str] | None:
+    """LLM-driven role + persona generation tied to the actual debate question.
+
+    Returns ``{"role": "...", "persona": "..."}`` on success, or ``None`` on any
+    failure so the caller can fall back to the deterministic template.
+    """
+    if not question or not question.strip():
+        return None
+
+    side_value = side.value if isinstance(side, DebateSide) else str(side)
+    side_label_zh = {
+        "proposition": "正方（支持动议）",
+        "opposition": "反方（反对动议）",
+        "judge": "裁决席（中立评委）",
+    }.get(side_value, side_value)
+    side_label_en = {
+        "proposition": "Proposition (supports the motion)",
+        "opposition": "Opposition (opposes the motion)",
+        "judge": "Judge (neutral)",
+    }.get(side_value, side_value)
+
+    question_block = format_untrusted_text_block(
+        "辩题问题" if language == "zh" else "Debate question",
+        question,
+        max_chars=600,
+    )
+
+    if language == "zh":
+        prompt = (
+            "为一场辩论设计一个角色。\n"
+            f"{question_block}\n"
+            f"立场：{side_label_zh}\n"
+            f"领域：{profile_id}\n\n"
+            "请输出 JSON：\n"
+            "{\"role\":\"角色头衔（5-15字，要和辩题直接相关，"
+            "不要泛泛的'政策架构师'）\","
+            "\"persona\":\"1-2句人设描写，说清楚这个人为什么会关心这个辩题、"
+            "他的专业视角和说话习惯（不超过80字）\"}"
+        )
+    else:
+        prompt = (
+            "Design a role for a live debate.\n"
+            f"{question_block}\n"
+            f"Side: {side_label_en}\n"
+            f"Domain: {profile_id}\n\n"
+            "Return JSON:\n"
+            "{\"role\":\"role title (5-15 words, must tie directly to the debate "
+            "question — no generic 'policy architect'),\""
+            "\"persona\":\"1-2 sentence persona describing why this person cares "
+            "about the question, their professional lens, and how they speak "
+            "(under 80 words)\"}"
+        )
+
+    try:
+        raw = await llm_call_json_with_stream_fallback(
+            prompt,
+            temperature=0.85,
+            reasoning_effort="medium",
+        )
+    except Exception:
+        logger.debug(
+            "generate_persona_with_llm failed (%s/%s/%s)",
+            language, profile_id, side_value,
+            exc_info=True,
+        )
+        return None
+
+    if not isinstance(raw, dict):
+        return None
+    role = str(raw.get("role") or "").strip()
+    persona = str(raw.get("persona") or "").strip()
+    if not role or not persona:
+        return None
+    return {"role": role, "persona": persona}
+
+
+async def build_cast_async(
+    language: str,
+    profile_id: str,
+    *,
+    question: str = "",
+) -> dict[str, dict[str, str]]:
+    """Async cast builder that prefers LLM-generated personas.
+
+    Falls back to ``_build_persona`` per side on individual failures so partial
+    LLM outages still yield a complete cast.
+    """
+    base_cast = build_cast(language, profile_id, question=question)
+    if not question or not question.strip():
+        return base_cast
+
+    sides = (DebateSide.PROPOSITION, DebateSide.OPPOSITION, DebateSide.JUDGE)
+    results = await asyncio.gather(
+        *(
+            generate_persona_with_llm(language, profile_id, side, question)
+            for side in sides
+        ),
+        return_exceptions=True,
+    )
+    side_keys = ("proposition", "opposition", "judge")
+    for side_key, result in zip(side_keys, results, strict=False):
+        if isinstance(result, dict) and result.get("role") and result.get("persona"):
+            base_cast[side_key]["role"] = result["role"]
+            base_cast[side_key]["persona"] = result["persona"]
+        # Exceptions or None → keep deterministic template fallback already in base_cast
+    return base_cast
 
 
 def build_turn_copy(
@@ -366,7 +977,7 @@ def _build_turn_copy_zh(
     profile_label = _PROFILE_LABELS_ZH.get(profile_id, "议场")
     style = _get_profile_style("zh", profile_id)
     if phase == DebatePhase.OPENING and side == DebateSide.PROPOSITION:
-        return f"我方支持这项动议。若围绕“{compact_question}”主动布局，就能{style['pro_case']}，让{profile_label} 体系把不确定性压进更可治理的秩序。"  # noqa: E501
+        return f"我方支持这项动议。若围绕「{compact_question}」主动布局，就能{style['pro_case']}，让{profile_label} 体系把不确定性压进更可治理的秩序。"  # noqa: E501
     if phase == DebatePhase.OPENING and side == DebateSide.OPPOSITION:
         return f"我方反对。动议把收益叙事说得过于轻松，却低估了{style['con_case']}。"
     if phase == DebatePhase.CROSSFIRE and side == DebateSide.PROPOSITION:
@@ -388,8 +999,135 @@ def _build_turn_copy_zh(
             "balance": "均衡",
             "rupture": "断裂",
         }.get(verdict_tone or "", "均衡")
-        return f"裁决：{outcome}获胜。本场主导判词是“{tone_label}”。双方都形成了有效张力，但胜方在{style['judge_focus']}上更能把论点落到可执行后果。"  # noqa: E501
+        return f"裁决：{outcome}获胜。本场主导判词是「{tone_label}」。双方都形成了有效张力，但胜方在{style['judge_focus']}上更能把论点落到可执行后果。"  # noqa: E501
     return motion
+
+
+def _side_specific_instructions(language: str, phase: DebatePhase, side: DebateSide) -> str:
+    """Asymmetric pro/con/judge instruction block for the user prompt."""
+    if phase == DebatePhase.VERDICT or side == DebateSide.JUDGE:
+        if language == "zh":
+            return (
+                "评委指引：\n"
+                "- 像看完比赛的解说员做点评，不写分析报告\n"
+                "- 说出场上哪个回合定了胜负\n"
+                "- 给出你的判断，不要列优缺点清单"
+            )
+        return (
+            "Judge directives:\n"
+            "- Sound like a commentator wrapping up, not filing a report\n"
+            "- Name the round or moment that decided it\n"
+            "- Give your ruling, not a pros/cons list"
+        )
+
+    if side == DebateSide.PROPOSITION:
+        if language == "zh":
+            return (
+                "正方指引：\n"
+                "- 你是来主张的，不是来防守的\n"
+                "- 别绕弯子——告诉大家这事具体怎么做、为什么值得\n"
+                "- 对方骂你，接住骂回去，别装没听见\n"
+                "- 说话像一个真正想把事情推动起来的人，不是在写提案"
+            )
+        return (
+            "Proposition directives:\n"
+            "- You are here to advocate, not defend\n"
+            "- Be direct — say what to do and why it matters\n"
+            "- When they attack, catch it and hit back harder\n"
+            "- Sound like someone who actually wants to make this happen"
+        )
+
+    # OPPOSITION
+    if language == "zh":
+        return (
+            "反方指引：\n"
+            "- 你是来拆的，不是来唱反调的\n"
+            "- 别说「风险大」这种废话——说清楚哪里会出问题、谁会倒霉\n"
+            "- 现状确实不完美，但你得说清楚为什么折腾一通之后会更差\n"
+            "- 说话像一个见过世面的人在泼冷水，不是在写反对意见书"
+        )
+    return (
+        "Opposition directives:\n"
+        "- You are here to take this apart, not just say 'no'\n"
+        "- Don't say 'risky' — say exactly what breaks and who gets hurt\n"
+        "- The status quo isn't great, but explain why the change makes it worse\n"
+        "- Sound like a veteran pouring cold water, not drafting a dissent"
+    )
+
+
+def _build_system_message(
+    *,
+    language: str,
+    speaker_name: str,
+    speaker_role: str,
+    persona: str,
+    side: DebateSide,
+    phase: DebatePhase,
+    profile_id: str,
+) -> str:
+    """System-message preamble carrying persona and identity (separate from task)."""
+    safe_role = sanitize_untrusted_text(speaker_role, max_chars=100)
+    persona_block = format_untrusted_text_block(
+        "人设" if language == "zh" else "Persona",
+        persona,
+        max_chars=300,
+    )
+    is_judge = side == DebateSide.JUDGE or phase == DebatePhase.VERDICT
+    if language == "zh":
+        anti_template = (
+            "说话的方式：像在饭桌上跟人争论，不像在写政策分析。"
+            "绝对不要用「机制」「执行后果」「责任链」「世界线」「可执行性」"
+            "「护栏」「阈值」这类套话。用大白话。"
+        )
+        if is_judge:
+            return (
+                f"你是 {speaker_name}（{safe_role}）。\n{persona_block}\n"
+                "你刚刚看完一场辩论，现在做点评。"
+                f"{anti_template}\n"
+                f"{UNTRUSTED_INPUT_GUARDRAIL}"
+            )
+        return (
+            f"你是 {speaker_name}（{safe_role}）。\n{persona_block}\n"
+            "你正在一场辩论中发言。"
+            f"{anti_template}\n"
+            f"{UNTRUSTED_INPUT_GUARDRAIL}"
+        )
+
+    anti_template = (
+        "Speak like you're arguing at a dinner table, not drafting a white paper. "
+        "NEVER use words like 'mechanism', 'accountability chain', "
+        "'execution framework', 'guardrails', 'worldline'. Use plain language."
+    )
+    if is_judge:
+        return (
+            f"You are {speaker_name} ({safe_role}).\n{persona_block}\n"
+            f"You just watched a full debate and are giving your ruling. {anti_template}\n"
+            f"{UNTRUSTED_INPUT_GUARDRAIL}"
+        )
+    return (
+        f"You are {speaker_name} ({safe_role}).\n{persona_block}\n"
+        f"You are speaking in a live debate. {anti_template}\n"
+        f"{UNTRUSTED_INPUT_GUARDRAIL}"
+    )
+
+
+def _format_intent_bullets(language: str, *labelled_items: tuple[str, str]) -> str:
+    """Format a small list of intent bullets, dropping empty values."""
+    lines: list[str] = []
+    for label, value in labelled_items:
+        if not value:
+            continue
+        compact = _WHITESPACE_RE.sub(" ", value).strip()
+        if not compact:
+            continue
+        lines.append(f"- {label}: {compact}")
+    if not lines:
+        return ""
+    if language == "zh":
+        header = "立场要点（仅供你内化，不要原样复述）："
+    else:
+        header = "Intent bullets (internalize, do not echo):"
+    return f"{header}\n" + "\n".join(lines)
 
 
 def build_turn_generation_prompt(
@@ -402,16 +1140,24 @@ def build_turn_generation_prompt(
     motion: str,
     question: str,
     profile_id: str,
-    anchor_copy: str,
+    anchor_copy: str = "",  # kept for backward-compat; ignored intentionally
     recent_turns: list[dict[str, str]],
     verdict_tone: str | None = None,
     winner: str | None = None,
-) -> str:
-    """Build an LLM prompt for a single debate turn.
+    persona: str = "",
+) -> tuple[str, str]:
+    """Build the (system_message, user_prompt) pair for one debate turn.
 
-    The deterministic anchor copy preserves the current design intent while
-    letting the model rewrite it into something less templated.
+    The previous version concatenated everything into a single user prompt and
+    injected the deterministic anchor copy verbatim, which the model echoed.
+    This rewrite:
+
+    - Splits identity / persona into a system message
+    - Drops the anchor-copy block; turns intent into bullets only
+    - Provides asymmetric pro/con/judge instruction blocks
+    - Keeps the untrusted-text guardrails on all user-supplied content
     """
+    del anchor_copy  # explicitly discarded — no anchor injection any more
     phase_label = phase.value
     recent_lines = []
     for turn in recent_turns[-4:]:
@@ -427,70 +1173,80 @@ def build_turn_generation_prompt(
         ),
         "",
     )
+    # Intent bullets removed — static profile-style values were the #1 source
+    # of template echo (e.g. "把争议装进可审查的条款和程序护栏"). The LLM now
+    # relies on phase_argument_goal + side_block + recent_turns + latest opponent.
+
     verdict_hint = ""
     if phase == DebatePhase.VERDICT:
-        verdict_hint = (
-            f"\nRequired verdict: winner={winner or 'unknown'}, tone={verdict_tone or 'balance'}."
-        )
+        if language == "zh":
+            verdict_hint = (
+                f"裁决要求：胜方={winner or 'unknown'}，判词语气={verdict_tone or 'balance'}。"
+            )
+        else:
+            verdict_hint = (
+                f"Verdict requirement: winner={winner or 'unknown'}, "
+                f"tone={verdict_tone or 'balance'}."
+            )
+
+    system_message = _build_system_message(
+        language=language,
+        speaker_name=speaker_name,
+        speaker_role=speaker_role,
+        persona=persona,
+        side=side,
+        phase=phase,
+        profile_id=profile_id,
+    )
+
+    side_block = _side_specific_instructions(language, phase, side)
 
     if language == "zh":
-        return (
-            "你正在为 SwarmOracle Debate Arena 生成一条结构化辩论台词。\n"
-            f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
-            f"角色：{speaker_name} / {speaker_role}\n"
+        user_prompt = (
             f"阶段：{phase_label}\n"
             f"立场：{side.value}\n"
-            f"题材：{profile_id}\n"
             f"{verdict_hint}\n"
             f"本轮任务：{phase_argument_goal(language, phase, side)}\n"
             f"{stock_opening_guard(language, phase)}\n"
+            f"{side_block}\n"
             f"{format_untrusted_text_block('辩题问题', question, max_chars=600)}\n"
             f"{format_untrusted_text_block('正式动议', motion, max_chars=600)}\n"
             f"{format_untrusted_text_block('最近辩论记录', recent_block, max_chars=1200)}\n"
             f"{format_untrusted_text_block('上一条对手发言', latest_opponent_turn or '(none)', max_chars=500)}\n"  # noqa: E501
-            f"{format_untrusted_text_block('语义锚点', anchor_copy, max_chars=500)}\n"
-            "任务：保留同样的立场、阶段目标和结论方向，但不要复读锚点文案本身，要写成更像真人现场辩论的即时回应。\n"
-            "要求：\n"
-            "- 2-4 句，必须至少包含一个具体机制、执行后果或责任链\n"
-            "- 如果存在上一条对手发言，你必须正面回应其中一个具体点，而不是另起炉灶\n"
-            "- 不要重复“我方支持/反对”这类开场套话，也不要直接改写语义锚点原句\n"
-            "- 语气可以更像真人：允许有锋芒、反问、压迫感，但不要变成表演性口号\n"
-            "- 句式要有起伏，至少有一句像在现场逼问或回击，而不是平铺直叙\n"
-            "- 至少有一句短句（不超过18字）作为逼问、回击或落锤\n"
-            "- 避免每句都很长；单句尽量不要堆超过三个并列分句\n"
-            "- 不要引入与题目无关的新设定\n"
+            "输出要求：\n"
+            "- 2-4 句话，说人话，像真人在吵架不是在写报告\n"
+            "- 对手说了什么就接什么，别绕开\n"
+            "- 长短句混着来，别每句都又长又对称\n"
+            "- 紧扣辩题本身，不要引入无关内容\n"
+            "- 绝对禁止使用「机制」「执行后果」「责任链」「世界线」"
+            "「可执行性」「护栏」「阈值」这类套话\n"
             "- 如果是 verdict，必须明确给出胜方与判词语气\n"
-            "- 直接输出辩论台词文本，不要包裹在 JSON 里\n"
+            "- 直接输出台词，不要 JSON\n"
         )
+        return system_message, user_prompt
 
-    return (
-        "You are generating one structured line for SwarmOracle Debate Arena.\n"
-        f"{UNTRUSTED_INPUT_GUARDRAIL}\n"
-        f"Speaker: {speaker_name} / {speaker_role}\n"
+    user_prompt = (
         f"Phase: {phase_label}\n"
         f"Side: {side.value}\n"
-        f"Profile: {profile_id}\n"
         f"{verdict_hint}\n"
         f"Turn goal: {phase_argument_goal(language, phase, side)}\n"
         f"{stock_opening_guard(language, phase)}\n"
+        f"{side_block}\n"
         f"{format_untrusted_text_block('Debate question', question, max_chars=600)}\n"
         f"{format_untrusted_text_block('Motion', motion, max_chars=600)}\n"
         f"{format_untrusted_text_block('Recent debate turns', recent_block, max_chars=1200)}\n"
         f"{format_untrusted_text_block('Latest opposing turn', latest_opponent_turn or '(none)', max_chars=500)}\n"  # noqa: E501
-        f"{format_untrusted_text_block('Semantic anchor', anchor_copy, max_chars=500)}\n"
-        "Task: keep the same stance, phase objective, and conclusion direction, but do not paraphrase the anchor line. Write it like a live response in an actual debate.\n"  # noqa: E501
-        "Requirements:\n"
-        "- 2-4 sentences with at least one concrete mechanism, execution consequence, or accountability chain\n"  # noqa: E501
-        "- If there is a latest opposing turn, answer one specific point from it directly\n"
-        "- Avoid stock openings and do not recycle anchor wording\n"
-        "- Let the tone feel human: sharp, under pressure, and willing to press a contradiction instead of sounding like a report\n"  # noqa: E501
-        "- Vary the rhythm so at least one sentence lands like a real challenge, counterpunch, or closing hit\n"  # noqa: E501
-        "- Include at least one short sentence (about 3-8 words) that lands like a jab, pivot, or hammer blow\n"  # noqa: E501
-        "- Do not let every sentence run long; avoid piling up more than three parallel clauses in one line\n"  # noqa: E501
-        "- Do not invent unrelated world details\n"
-        "- If this is the verdict, explicitly state winner and tone\n"
-        "- Output the debate line as plain text, do not wrap it in JSON\n"
+        "Output requirements:\n"
+        "- 2-4 sentences that sound like a real person arguing, not a policy paper\n"
+        "- If the opponent just said something, respond to it directly\n"
+        "- Mix short and long sentences — don't make every line the same length\n"
+        "- Stay on topic, don't invent unrelated details\n"
+        "- NEVER use jargon like 'mechanism', 'accountability chain', "
+        "'execution framework', 'guardrails', 'worldline'\n"
+        "- If this is the verdict, state the winner and tone\n"
+        "- Output plain text only, no JSON\n"
     )
+    return system_message, user_prompt
 
 
 def _build_turn_copy_en(

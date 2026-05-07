@@ -496,6 +496,7 @@ export interface DebateParticipant {
   side: DebateSide;
   name: string;
   role: string;
+  persona?: string;
 }
 
 export interface DebateScore {
@@ -537,6 +538,12 @@ export interface DebatePhaseInsight {
   stakes: string;
   judge_focus: string;
   commentary: string;
+  /**
+   * LLM-generated description of the core strategic clash this phase
+   * (what each side is trying to do and why). Empty string when the
+   * LLM enhancement step did not run or did not return a usable value.
+   */
+  strategy?: string;
   pressure_side: 'balanced' | 'proposition' | 'opposition';
   pressure_margin: number;
   turn_count: number;

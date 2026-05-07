@@ -6,10 +6,11 @@ import asyncio
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
+from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import Session, select
 
 from app.config import settings
@@ -26,10 +27,12 @@ from app.models import (
 from app.models.database import get_engine
 from app.services.debate_prompts import (
     build_cast,
+    build_cast_async,
     build_motion,
     build_turn_copy,
     build_turn_generation_prompt,
     get_debate_profile_style,
+    get_participant_persona,
     infer_debate_profile,
     resolve_debate_language,
     select_debate_scene,
@@ -109,7 +112,7 @@ _DEBATE_RUNTIME_LOCK_REFRESH_FRACTION = 0.33
 _DEBATE_RUNTIME_LOCK_LOST_MESSAGE = "Debate runtime lock was lost during execution"
 
 
-@dataclass(frozen=True)
+@dataclass
 class DebateRuntimeSnapshot:
     id: str
     question: str
@@ -125,6 +128,10 @@ class DebateRuntimeSnapshot:
     opposition_role: str
     judge_name: str
     judge_role: str
+    # LLM-generated personas keyed by side ("proposition"/"opposition"/"judge").
+    # Empty when LLM upgrade hasn't run or failed — callers must fall back to
+    # ``get_participant_persona`` for the deterministic template.
+    personas: dict[str, str] = field(default_factory=dict)
 
 
 def get_debate_prediction_options() -> dict[str, list[str]]:
@@ -399,6 +406,7 @@ def _normalize_phase_insight_entry(raw: Any) -> dict[str, Any] | None:
         "stakes": str(raw.get("stakes", "")).strip(),
         "judge_focus": str(raw.get("judge_focus", "")).strip(),
         "commentary": str(raw.get("commentary", "")).strip(),
+        "strategy": str(raw.get("strategy", "")).strip(),
         "pressure_side": _normalize_phase_insight_direction(raw.get("pressure_side")),
         "pressure_margin": max(0, pressure_margin),
         "turn_count": max(0, turn_count),
@@ -408,6 +416,52 @@ def _normalize_phase_insight_entry(raw: Any) -> dict[str, Any] | None:
             "cumulative_margin": cumulative_margin,
         },
     }
+
+
+def _extract_persisted_supporting_turns(
+    raw_breakdown: dict[str, Any] | None,
+) -> list[dict[str, Any]] | None:
+    """Read LLM-enhanced supporting turns persisted in breakdown metadata.
+
+    Returns ``None`` when no persisted entry exists, so callers can decide to
+    fall back to the deterministic template path.
+    """
+    metadata = _extract_breakdown_metadata(raw_breakdown)
+    if "supporting_turns" not in metadata:
+        return None
+    raw = metadata.get("supporting_turns")
+    if not isinstance(raw, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        turn_id = str(entry.get("id") or "").strip()
+        quote = str(entry.get("quote") or "").strip()
+        if not turn_id or not quote:
+            continue
+        normalized.append(
+            {
+                "id": turn_id,
+                "phase": str(entry.get("phase") or "").strip(),
+                "speaker_side": str(entry.get("speaker_side") or "").strip(),
+                "speaker_name": str(entry.get("speaker_name") or "").strip(),
+                "quote": quote,
+                "why_it_matters": str(entry.get("why_it_matters") or "").strip(),
+            }
+        )
+    return normalized
+
+
+def _extract_persisted_personas_meta(
+    raw_breakdown: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Return ``{"personas": ...}`` if previously persisted, else empty dict."""
+    metadata = _extract_breakdown_metadata(raw_breakdown)
+    personas = metadata.get("personas")
+    if isinstance(personas, dict):
+        return {"personas": personas}
+    return {}
 
 
 def _extract_persisted_phase_insights(
@@ -602,35 +656,17 @@ def _polish_generated_turn(
     language: str,
     phase: DebatePhase,
 ) -> str:
-    """Trim the most obvious template lead-ins from generated debate copy."""
+    """Normalize whitespace and enforce a hard length cap on generated debate copy.
+
+    The previous implementation also stripped common stock-opening prefixes
+    (e.g. "我方支持这项动议。", "We support the motion."). With the new prompt
+    architecture (system-message persona + asymmetric pro/con instructions +
+    no anchor-copy injection) the model no longer leans on those leads, so we
+    drop the post-hoc prefix stripping. ``language`` and ``phase`` are kept
+    on the signature so call sites do not need to change.
+    """
+    del language, phase  # placeholders, see docstring
     cleaned = " ".join(str(content or "").split()).strip()
-    if not cleaned:
-        return ""
-
-    if phase != DebatePhase.VERDICT:
-        if language == "zh":
-            prefixes = (
-                "我方支持这项动议。",
-                "我方支持。",
-                "我方反对这项动议。",
-                "我方反对。",
-                "正方认为，",
-                "反方认为，",
-                "所谓",
-            )
-        else:
-            prefixes = (
-                "We support the motion.",
-                "We oppose the motion.",
-                "Proposition says ",
-                "Opposition says ",
-                "Obviously, ",
-            )
-        for prefix in prefixes:
-            if cleaned.startswith(prefix):
-                cleaned = cleaned[len(prefix):].lstrip(" ，。,:;")
-                break
-
     return cleaned[:800]
 
 
@@ -668,24 +704,11 @@ def _build_phase_stakes(
     phase: DebatePhase,
     style: dict[str, str],
 ) -> str:
+    """Minimal neutral fallback shown only when LLM enhancement fails."""
+    del phase, style  # kept on signature for back-compat
     if debate.language == "zh":
-        mapping = {
-            DebatePhase.OPENING: f"这一阶段决定哪一边先把“{style['pro_case']}”与“{style['con_case']}”讲成更可信的世界线。",  # noqa: E501
-            DebatePhase.CROSSFIRE: f"这里真正的 stakes 是：{style['challenge']}",
-            DebatePhase.REBUTTAL: f"本轮比的是谁能把补丁补进方案里，而不是只把对手打成漏洞清单。优先看 {style['plan']} 是否站得住。",  # noqa: E501
-            DebatePhase.CLOSING: f"结辩阶段不再拼铺陈，而是拼谁能把 {style['judge_focus']} 压成一句更能落地的判断。",  # noqa: E501
-            DebatePhase.VERDICT: "裁决阶段要回答的不是谁更会说，而是谁真正把代价、执行权与责任链说清楚了。",  # noqa: E501
-        }
-        return mapping[phase]
-
-    mapping = {
-        DebatePhase.OPENING: f"This phase decides who frames '{style['pro_case']}' versus '{style['con_case']}' as the more credible worldline first.",  # noqa: E501
-        DebatePhase.CROSSFIRE: f"The stakes here are simple: {style['challenge']}",
-        DebatePhase.REBUTTAL: f"Rebuttal is about whether a side can actually repair the exposed gap. Watch whether {style['plan']} sounds executable instead of decorative.",  # noqa: E501
-        DebatePhase.CLOSING: f"Closing is no longer about volume. It is about compressing {style['judge_focus']} into the cleaner final judgment.",  # noqa: E501
-        DebatePhase.VERDICT: "Verdict answers who made consequence, execution, and accountability feel more real than rhetoric.",  # noqa: E501
-    }
-    return mapping[phase]
+        return "本阶段正在进行中。"
+    return "This phase is underway."
 
 
 def _build_phase_judge_focus(
@@ -694,24 +717,11 @@ def _build_phase_judge_focus(
     phase: DebatePhase,
     style: dict[str, str],
 ) -> str:
+    """Minimal neutral fallback shown only when LLM enhancement fails."""
+    del phase, style  # kept on signature for back-compat
     if debate.language == "zh":
-        mapping = {
-            DebatePhase.OPENING: f"评委先看谁把题面收进 {style['judge_focus']}，而不是只停在立场口号。",  # noqa: E501
-            DebatePhase.CROSSFIRE: f"评委此刻最盯的是：{style['challenge']}",
-            DebatePhase.REBUTTAL: f"评委在看谁能把 {style['pressure']} 真正转回到可执行方案，而不是继续空转。",  # noqa: E501
-            DebatePhase.CLOSING: f"评委关注的是谁把 {style['judge_focus']} 收束成了更稳的终局语气。",  # noqa: E501
-            DebatePhase.VERDICT: "评委此刻只保留最后的 consequence chain，不再奖励新的表演性发言。",
-        }
-        return mapping[phase]
-
-    mapping = {
-        DebatePhase.OPENING: f"The judge is checking who grounds the motion in {style['judge_focus']} rather than slogan density.",  # noqa: E501
-        DebatePhase.CROSSFIRE: f"The judge is now watching one thing: {style['challenge']}",
-        DebatePhase.REBUTTAL: f"The judge wants to see who can turn {style['pressure']} back into a workable answer rather than more theatre.",  # noqa: E501
-        DebatePhase.CLOSING: f"The judge is looking for who compresses {style['judge_focus']} into the steadier final frame.",  # noqa: E501
-        DebatePhase.VERDICT: "At verdict the judge only keeps the final consequence chain and stops rewarding fresh performance.",  # noqa: E501
-    }
-    return mapping[phase]
+        return "评委关注双方论点的可执行性。"
+    return "The judge is watching for executability."
 
 
 def _build_phase_commentary(
@@ -724,38 +734,22 @@ def _build_phase_commentary(
     turn_count: int,
     style: dict[str, str],
 ) -> str:
-    leader_label = (
-        "拉锯"
-        if pressure_side == "balanced" and debate.language == "zh"
-        else "balanced"
-        if pressure_side == "balanced"
-        else _display_value(debate.language, DebatePredictionKind.WINNER, pressure_side)
-    )
-
+    """Minimal neutral fallback shown only when LLM enhancement fails."""
+    del cumulative_margin, turn_count, style  # kept on signature for back-compat
     if debate.language == "zh":
-        if turn_count == 0:
-            return f"这一阶段还没真正展开，但评委已经会按“{style['judge_focus']}”这条轴来预判后面会不会锁盘。"  # noqa: E501
         if pressure_side == "balanced":
-            return (
-                f"{_display_phase(debate.language, phase)}目前还是拉锯，没有哪一边把分差彻底压开。"
-                f"真正的变化取决于后续谁能先把 {style['challenge']} 讲成无法回避的现实代价。"
-            )
-        return (
-            f"{leader_label}在{_display_phase(debate.language, phase)}这一段先拿到了 {phase_margin} 分优势，"  # noqa: E501
-            f"累计漂移来到 {abs(cumulative_margin)} 分级别。评委会自然把注意力往“{style['judge_focus']}”更清楚的一边倾斜。"  # noqa: E501
+            return "本阶段均势未破。"
+        leader_label = _display_value(
+            debate.language, DebatePredictionKind.WINNER, pressure_side
         )
+        return f"{leader_label}暂时领先{phase_margin}分。"
 
-    if turn_count == 0:
-        return f"This phase has not opened yet, but the judge is already primed to read it through {style['judge_focus']}."  # noqa: E501
     if pressure_side == "balanced":
-        return (
-            f"{_display_phase(debate.language, phase)} is still trading evenly. "
-            f"The next real shift will come from whoever makes {style['challenge']} feel less abstract and more unavoidable."  # noqa: E501
-        )
-    return (
-        f"{leader_label} took a {phase_margin}-point edge in {_display_phase(debate.language, phase)}, "  # noqa: E501
-        f"pushing the cumulative drift to {abs(cumulative_margin)}. That naturally tilts the judge toward the side making {style['judge_focus']} easier to execute."  # noqa: E501
+        return "Even score in this phase."
+    leader_label = _display_value(
+        debate.language, DebatePredictionKind.WINNER, pressure_side
     )
+    return f"{leader_label} leads by {phase_margin}."
 
 
 def _build_phase_counterplay_note(
@@ -789,15 +783,11 @@ async def _enhance_insights_with_llm(
     insights: list[dict[str, Any]],
     turns: list[DebateTurn],
 ) -> list[dict[str, Any]]:
-    """Replace template commentary with LLM-generated analysis for phases that have turns."""
+    """Replace template stakes/judge_focus/commentary with LLM-generated analysis."""
     if not settings.DEBATE_USE_LLM:
         return insights
 
-    motion = debate.question or ""
-    lang_instruction = (
-        "请用中文回答。" if debate.language == "zh"
-        else "Respond in English."
-    )
+    motion_block = format_untrusted_text_block("辩题", debate.question or "", max_chars=600)
 
     for insight in insights:
         phase_name = insight["phase"]
@@ -806,41 +796,61 @@ async def _enhance_insights_with_llm(
 
         phase_turns = [t for t in turns if t.phase.value == phase_name]
         recent = phase_turns[-2:] if len(phase_turns) >= 2 else phase_turns
-        turn_excerpts = "\n".join(
+        excerpts_raw = "\n".join(
             f"[{t.speaker_name} / {t.speaker_side.value}]: {t.content[:200]}"
             for t in recent
         )
+        turn_block = format_untrusted_text_block("最近发言", excerpts_raw, max_chars=1200)
         pressure = insight["pressure_side"]
         margin = insight["pressure_margin"]
         cumulative = insight["confidence_drift"]["cumulative_margin"]
 
-        prompt = (
-            f"{lang_instruction}\n"
-            f"You are a debate analyst. Motion: \"{motion}\"\n"
-            f"Phase: {phase_name}. Pressure: {pressure} "
-            f"(margin {margin}, cumulative {abs(cumulative)}).\n"
-            f"Recent exchanges:\n{turn_excerpts}\n\n"
-            f"Write a concise 1-2 sentence analytical insight "
-            f"about this phase's dynamics. "
-            f"Focus on strategic implications, not just score. "
-            f"Be specific to the arguments made."
-        )
-        try:
-            result = await llm_call(
-                system_prompt=(
-                    "You are a sharp debate analyst "
-                    "writing concise phase commentary."
-                ),
-                user_prompt=prompt,
-                temperature=0.7,
-                max_tokens=200,
+        if debate.language == "zh":
+            prompt = (
+                "你是一位犀利的辩论分析师，正在为观众撰写本阶段的实时解读。\n"
+                f"{motion_block}\n"
+                f"阶段：{phase_name}。场上态势：{pressure}（阶段分差 {margin}，累计漂移 {abs(cumulative)}）。\n"  # noqa: E501
+                f"{turn_block}\n\n"
+                "请用 JSON 返回四个字段，每个字段 1-2 句话，要求紧扣刚才的具体论点，像体育解说员一样有画面感，"  # noqa: E501
+                "不要用「执行权」「责任链」「世界线」这类抽象套话：\n"
+                '{"stakes":"本阶段的核心赌注是什么（具体到双方刚才争的那个点）",'
+                '"judge_focus":"评委现在最关注什么（具体到某个论点或漏洞）",'
+                '"commentary":"本阶段局势简评（像解说员一样点评刚才发生了什么）",'
+                '"strategy":"本阶段双方的核心策略冲突（正反方各自想做什么、为什么这样安排）"}'
             )
-            text = (result or "").strip()
-            if text and len(text) > 20:
-                insight["commentary"] = text
+        else:
+            motion_block_en = format_untrusted_text_block(
+                "Motion", debate.question or "", max_chars=600,
+            )
+            prompt = (
+                "You are a sharp debate analyst writing live commentary for the audience.\n"
+                f"{motion_block_en}\n"
+                f"Phase: {phase_name}. Pressure: {pressure} "
+                f"(margin {margin}, cumulative {abs(cumulative)}).\n"
+                f"{turn_block}\n\n"
+                "Return a JSON with four fields, each 1-2 sentences. "
+                "Be specific to the actual arguments just made — like a sports commentator "
+                "who watched every point. No abstract jargon like 'accountability chain' "
+                "or 'execution framework':\n"
+                '{"stakes":"What is at stake in this phase (specific to the actual clash)",'
+                '"judge_focus":"What the judge is watching right now (name the specific argument or gap)",'  # noqa: E501
+                '"commentary":"Phase commentary (describe what just happened like a commentator)",'
+                '"strategy":"The core strategic clash this phase (what each side is trying to do and why)"}'  # noqa: E501
+            )
+        try:
+            raw = await llm_call_json_with_stream_fallback(
+                prompt,
+                temperature=0.75,
+                reasoning_effort="medium",
+            )
+            if isinstance(raw, dict):
+                for key in ("stakes", "judge_focus", "commentary", "strategy"):
+                    val = str(raw.get(key) or "").strip()
+                    if val and len(val) > 15:
+                        insight[key] = val
         except Exception:
             logger.debug(
-                "LLM insight failed for %s/%s",
+                "LLM insight enhancement failed for %s/%s",
                 debate.id, phase_name,
             )
 
@@ -984,20 +994,20 @@ def _build_dimension_rationales_fallback(
         if debate.language == "zh":
             if winner_score >= loser_score:
                 rationales[dimension] = (
-                    f"{winner_label}在{label}上领先 {lead} 格，关键在于它把论点推进成了更具体的机制和执行后果。"  # noqa: E501
+                    f"{winner_label}在{label}维度领先{lead}分。"
                 )
             else:
                 rationales[dimension] = (
-                    f"{loser_label}在{label}上有过亮点，但这项优势没有延续成最终判词。"
+                    f"{loser_label}在{label}维度有过亮眼表现。"
                 )
         else:
             if winner_score >= loser_score:
                 rationales[dimension] = (
-                    f"{winner_label} held the edge on {label} by {lead}, mainly by turning claims into a clearer mechanism and consequence chain."  # noqa: E501
+                    f"{winner_label} led on {label} by {lead}."
                 )
             else:
                 rationales[dimension] = (
-                    f"{loser_label} showed flashes on {label}, but never converted that edge into the final verdict."  # noqa: E501
+                    f"{loser_label} showed strength on {label}."
                 )
     return rationales
 
@@ -1018,16 +1028,6 @@ def _build_judge_analysis_fallback(
     )
     margin = abs(plan.score["proposition"] - plan.score["opposition"])
     dimension_rationales = _build_dimension_rationales_fallback(debate=debate, plan=plan)
-    ranked_dimensions = sorted(
-        DEBATE_DIMENSIONS,
-        key=lambda dimension: (
-            plan.breakdown.get(dimension, {}).get(plan.winner, 0)
-            - plan.breakdown.get(dimension, {}).get(loser_side, 0)
-        ),
-        reverse=True,
-    )
-    decisive_dimension = ranked_dimensions[0]
-    decisive_label = _dimension_label(debate.language, decisive_dimension)
     counterplay_explanation = None
     if counterplay_context:
         counterplay_explanation = _build_counterplay_explanation(
@@ -1039,45 +1039,28 @@ def _build_judge_analysis_fallback(
             phase_score=counterplay_context.get("phase_score", {"proposition": 0, "opposition": 0}),
         )
 
+    # Trim best_argument/best_rebuttal so they can be quoted directly without
+    # wrapping or padding.
+    best_argument_snippet = (best_argument or "").strip()[:60]
+    best_rebuttal_snippet = (best_rebuttal or "").strip()[:60]
     if debate.language == "zh":
         winner_reason = (
-            f"{winner_label}真正赢在{decisive_label}：它把“{best_argument}”这条线推进成了谁承担代价、谁掌握执行权的现实后果。"
+            f"{winner_label}胜出。关键论点：「{best_argument_snippet}」。"
         )
         loser_gap = (
-            f"{loser_label}并非没有打出压力，但“{best_rebuttal}”这一下没能继续展开成足以改写结论的责任链或执行缺口。"
+            f"{loser_label}的反驳「{best_rebuttal_snippet}」未能扭转局面。"
         )
-        if counterplay_context:
-            swing_factor = (
-                f"关键转折出现在{_display_phase(debate.language, counterplay_context['phase'])}之后。"  # noqa: E501
-                f"局面虽然出现过对冲想象，但最后还是收束到“{tone_label}”这条判词。"
-            )
-        else:
-            swing_factor = (
-                f"真正决定胜负的不是单句气势，而是谁在{decisive_label}上持续把分差拉开，并稳住了 {margin} 分级别的终局。"  # noqa: E501
-            )
-        closing_note = (
-            f"评委最后选的不是更会喊口号的一边，而是更能把“{tone_label}”落成可执行结果的一边。"
-        )
+        swing_factor = f"最终分差 {margin} 分。"
+        closing_note = f"判词基调：{tone_label}。"
     else:
         winner_reason = (
-            f"{winner_label} won on {decisive_label}: it turned '{best_argument}' into a concrete chain of consequence, ownership, and execution."  # noqa: E501
+            f"{winner_label} won. Key argument: \"{best_argument_snippet}\"."
         )
         loser_gap = (
-            f"{loser_label} created pressure, but '{best_rebuttal}' never expanded into the kind of accountability or execution gap that could rewrite the verdict."  # noqa: E501
+            f"{loser_label}'s rebuttal \"{best_rebuttal_snippet}\" did not turn the room."  # noqa: E501
         )
-        if counterplay_context:
-            swing_factor = (
-                f"The decisive turn came after { _display_phase(debate.language, counterplay_context['phase']) }. "  # noqa: E501
-                f"The room hinted at a hedge, but the debate still closed in a {tone_label} direction."  # noqa: E501
-            )
-        else:
-            swing_factor = (
-                f"The result turned on sustained edge in {decisive_label}, not one loud exchange, and that edge held through a {margin}-point finish."  # noqa: E501
-            )
-        closing_note = (
-            f"The judge ultimately backed the side that made the {tone_label} outcome feel more executable rather than more theatrical."  # noqa: E501
-        )
-
+        swing_factor = f"Final margin: {margin} points."
+        closing_note = f"Verdict tone: {tone_label}."
     return {
         "summary": _build_judge_summary_fallback(
             debate=debate,
@@ -1204,9 +1187,14 @@ async def _generate_judge_analysis(
             counterplay_block = (
                 f"{format_untrusted_text_block('反制押注', _render_counterplay_context(debate, counterplay_context), max_chars=500)}\n"  # noqa: E501
             )
+        system_preamble = (
+            "你是一位资深辩论评委，以裁决干净、命中具体而著称。"
+            "你刚刚看完整场辩论，每一回合都看在眼里。"
+            "你的判词读起来像真正的口头宣判，不是八股分析。"
+        )
         prompt = (
-            "你是 SwarmOracle Debate Arena 的终局评委与解说员。\n"
-            "请输出一份既有判断力、又保留现场感的裁决理由 JSON。\n"
+            f"{system_preamble}\n"
+            "现在，请输出一份既有判断力、又保留现场感的裁决理由 JSON。\n"
             f"{format_untrusted_text_block('辩题问题', debate.question, max_chars=600)}\n"
             f"{format_untrusted_text_block('正式动议', debate.motion, max_chars=600)}\n"
             f"{format_untrusted_text_block('最佳论点', best_argument, max_chars=500)}\n"
@@ -1217,7 +1205,7 @@ async def _generate_judge_analysis(
             f"胜方：{winner_label}\n"
             f"判词语气：{tone_label}\n"
             "要求：\n"
-            "- 语言要像一个真正看完整场辩论的评委，不要写模板腔\n"
+            "- summary 写得像现场口头宣判：直接面向全场，不是填表，必须命中辩论里某些具体瞬间（一句反驳、一个机制、一处承认）\n"  # noqa: E501
             "- summary 用 3-4 句写整场裁决，必须明确胜方为什么赢\n"
             "- winner_reason / loser_gap / swing_factor / closing_note 各写 1-2 句\n"
             "- dimension_rationales 必须覆盖 coherence / evidence / adaptability / impact 四项\n"
@@ -1225,7 +1213,7 @@ async def _generate_judge_analysis(
             "- adjudication.verdict_tone 必须是 order / balance / rupture 之一\n"
             "- adjudication.dimensions 必须覆盖四个维度，每边都给 1-5 的整数分\n"
             "- 如果没有反制押注，counterplay_explanation 输出空字符串\n"
-            "- 不要泛泛说“双方都很精彩”，要点到机制、执行后果或责任链\n"
+            "- 不要泛泛说'双方都很精彩'，要点到具体的论点、漏洞或转折\n"
             "- 只输出严格 JSON："
             "{\"summary\":\"...\",\"winner_reason\":\"...\",\"loser_gap\":\"...\",\"swing_factor\":\"...\","
             "\"closing_note\":\"...\",\"dimension_rationales\":{\"coherence\":\"...\",\"evidence\":\"...\","
@@ -1242,8 +1230,13 @@ async def _generate_judge_analysis(
             counterplay_block = (
                 f"{format_untrusted_text_block('Counterplay hedge', _render_counterplay_context(debate, counterplay_context), max_chars=500)}\n"  # noqa: E501
             )
+        system_preamble = (
+            "You are a senior debate judge known for sharp, specific rulings. "
+            "You watched every turn. Your verdicts read like actual judicial reasoning, "
+            "not boilerplate analysis."
+        )
         prompt = (
-            "You are the final judge and color commentator for SwarmOracle Debate Arena.\n"
+            f"{system_preamble}\n"
             "Return a JSON verdict package that sounds like a human judge who actually watched the debate unfold.\n"  # noqa: E501
             f"{format_untrusted_text_block('Debate question', debate.question, max_chars=600)}\n"
             f"{format_untrusted_text_block('Motion', debate.motion, max_chars=600)}\n"
@@ -1255,7 +1248,7 @@ async def _generate_judge_analysis(
             f"Winner: {winner_label}\n"
             f"Verdict tone: {tone_label}\n"
             "Requirements:\n"
-            "- The language should sound like a sharp human judge, not a boilerplate analyst\n"
+            "- Write `summary` as if you're delivering an oral ruling — address the room, not a form. Name specific moments from the debate.\n"  # noqa: E501
             "- summary must be 3-4 sentences and explain why the winner actually won\n"
             "- winner_reason / loser_gap / swing_factor / closing_note should each be 1-2 sentences\n"  # noqa: E501
             "- dimension_rationales must cover coherence / evidence / adaptability / impact\n"
@@ -1263,7 +1256,7 @@ async def _generate_judge_analysis(
             "- adjudication.verdict_tone must be one of order / balance / rupture\n"
             "- adjudication.dimensions must cover all four dimensions with integer scores from 1-5 for both sides\n"  # noqa: E501
             "- If no counterplay hedge exists, set counterplay_explanation to an empty string\n"
-            "- Avoid generic praise and point to mechanisms, consequences, or accountability chains\n"  # noqa: E501
+            "- Avoid generic praise — name the specific arguments, gaps, or turning points\n"
             "- Output strict JSON only: "
             "{\"summary\":\"...\",\"winner_reason\":\"...\",\"loser_gap\":\"...\",\"swing_factor\":\"...\","
             "\"closing_note\":\"...\",\"dimension_rationales\":{\"coherence\":\"...\",\"evidence\":\"...\","
@@ -1285,7 +1278,7 @@ async def _generate_judge_analysis(
         ):
             result = await llm_call_json_with_stream_fallback(
                 prompt,
-                reasoning_effort=overrides.get("reasoning_effort") or "low",
+                reasoning_effort=overrides.get("reasoning_effort") or "medium",
                 model=overrides.get("model"),
                 api_key=overrides.get("api_key"),
                 base_url=overrides.get("base_url"),
@@ -1364,6 +1357,8 @@ async def _generate_turn_content(
     llm_overrides: dict[str, Any] | None = None,
     quota_key: str | None = None,
 ) -> str:
+    # Anchor copy is kept only as a deterministic fallback when the LLM is
+    # disabled or the call fails; it is *not* injected into the prompt anymore.
     anchor_copy = build_turn_copy(
         language=debate.language,
         phase=phase,
@@ -1379,7 +1374,20 @@ async def _generate_turn_content(
         return anchor_copy
 
     overrides = llm_overrides or {}
-    prompt = build_turn_generation_prompt(
+    # Prefer LLM-generated persona stored on the runtime snapshot
+    # (populated by build_cast_async in run_debate_background). Fall back to
+    # the deterministic template if not present.
+    persona = (debate.personas or {}).get(side.value, "")
+    if not persona:
+        persona = get_participant_persona(
+            language=debate.language,
+            profile_id=debate.profile_id,
+            side=side,
+            question=debate.question,
+        )
+    # The prompt builder now returns (system_msg, user_prompt). We concatenate
+    # them with a blank line so a single-prompt LLM client still surfaces both.
+    system_msg, user_prompt = build_turn_generation_prompt(
         language=debate.language,
         phase=phase,
         side=side,
@@ -1388,11 +1396,12 @@ async def _generate_turn_content(
         motion=debate.motion,
         question=debate.question,
         profile_id=debate.profile_id,
-        anchor_copy=anchor_copy,
         recent_turns=recent_turns,
         verdict_tone=plan.verdict_tone,
         winner=plan.winner,
+        persona=persona,
     )
+    combined_prompt = f"{system_msg}\n\n{user_prompt}"
 
     try:
         # Pass-1: natural language debate line
@@ -1403,7 +1412,7 @@ async def _generate_turn_content(
             tokens_per_minute=overrides.get("tokens_per_minute"),
         ):
             raw_text = await llm_call(
-                prompt,
+                combined_prompt,
                 reasoning_effort=overrides.get("reasoning_effort") or "medium",
                 model=overrides.get("model"),
                 api_key=overrides.get("api_key"),
@@ -1423,7 +1432,39 @@ async def _generate_turn_content(
             return content
     except Exception as exc:
         logger.warning(
-            "Debate turn generation fallback for %s/%s: %s",
+            "Debate turn generation pass-1 failed for %s/%s: %s",
+            phase.value,
+            side.value,
+            exc,
+        )
+
+    # Pass-2 (retry): lower temperature + lower reasoning to reduce template
+    # echo risk before falling back to the deterministic anchor copy.
+    try:
+        with llm_request_scope(
+            quota_key=f"user:{quota_key}" if quota_key else None,
+            purpose=f"debate_turn_{phase.value}_retry",
+            requests_per_minute=overrides.get("requests_per_minute"),
+            tokens_per_minute=overrides.get("tokens_per_minute"),
+        ):
+            raw_text = await llm_call(
+                combined_prompt,
+                reasoning_effort="low",
+                model=overrides.get("model"),
+                api_key=overrides.get("api_key"),
+                base_url=overrides.get("base_url"),
+                temperature=0.6,
+            )
+        content = _polish_generated_turn(
+            raw_text or "",
+            language=debate.language,
+            phase=phase,
+        )
+        if content:
+            return content
+    except Exception as exc:
+        logger.warning(
+            "Debate turn generation retry failed for %s/%s: %s",
             phase.value,
             side.value,
             exc,
@@ -1441,7 +1482,7 @@ def create_debate_record(
     language = resolve_debate_language(question)
     profile_id = profile_hint or infer_debate_profile(question)
     scene_theme = select_debate_scene(profile_id)
-    cast = build_cast(language, profile_id)
+    cast = build_cast(language, profile_id, question=question)
     debate = Debate(
         question=question,
         motion=build_motion(question, language),
@@ -1574,11 +1615,21 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
         )
         judge_rationale = _extract_judge_rationale(debate.breakdown_json)
         if judge_rationale is not None:
-            judge_rationale["supporting_turns"] = _build_supporting_turns(
-                turns=turns,
-                debate=debate,
-                plan=plan,
+            persisted_supporting_turns = _extract_persisted_supporting_turns(
+                debate.breakdown_json
             )
+            if persisted_supporting_turns is not None:
+                judge_rationale["supporting_turns"] = persisted_supporting_turns
+            else:
+                # No LLM-enhanced version persisted — fall back to deterministic
+                # template text. ``_build_supporting_turns`` is async (LLM-driven)
+                # and called from the async finalize path; here we use the sync
+                # template-only fallback so this loader can stay sync.
+                judge_rationale["supporting_turns"] = _build_supporting_turns_sync(
+                    turns=turns,
+                    debate=debate,
+                    plan=plan,
+                )
         adjudication_mode = str(
             _extract_breakdown_metadata(debate.breakdown_json).get("adjudication_mode") or "deterministic"  # noqa: E501
         )
@@ -1644,6 +1695,63 @@ async def run_debate_background(
                 return
             debate = _snapshot_debate_runtime(stored_debate)
             plan = build_debate_plan(debate.question)
+
+        # Upgrade hardcoded template personas to LLM-generated ones tied to the
+        # specific debate question. Failure is silent — keep template fallback
+        # (build_cast_async already handles per-side fallback internally).
+        if settings.DEBATE_USE_LLM:
+            try:
+                cast = await build_cast_async(
+                    debate.language,
+                    debate.profile_id,
+                    question=debate.question,
+                )
+                with Session(engine) as _persona_session:
+                    persona_debate = _persona_session.get(Debate, debate_id)
+                    if persona_debate is not None:
+                        persona_debate.proposition_role = cast["proposition"]["role"]
+                        persona_debate.opposition_role = cast["opposition"]["role"]
+                        persona_debate.judge_role = cast["judge"]["role"]
+                        breakdown = persona_debate.breakdown_json
+                        if not isinstance(breakdown, dict):
+                            breakdown = {}
+                        meta = breakdown.get("metadata")
+                        if not isinstance(meta, dict):
+                            meta = {}
+                        meta["personas"] = {
+                            "proposition": {
+                                "role": cast["proposition"]["role"],
+                                "persona": cast["proposition"]["persona"],
+                            },
+                            "opposition": {
+                                "role": cast["opposition"]["role"],
+                                "persona": cast["opposition"]["persona"],
+                            },
+                            "judge": {
+                                "role": cast["judge"]["role"],
+                                "persona": cast["judge"]["persona"],
+                            },
+                        }
+                        breakdown["metadata"] = meta
+                        persona_debate.breakdown_json = breakdown
+                        flag_modified(persona_debate, "breakdown_json")
+                        _persona_session.add(persona_debate)
+                        _persona_session.commit()
+                        # Sync runtime snapshot so subsequent prompts use the
+                        # LLM-generated roles + personas.
+                        debate.proposition_role = cast["proposition"]["role"]
+                        debate.opposition_role = cast["opposition"]["role"]
+                        debate.judge_role = cast["judge"]["role"]
+                        debate.personas = {
+                            "proposition": cast["proposition"]["persona"],
+                            "opposition": cast["opposition"]["persona"],
+                            "judge": cast["judge"]["persona"],
+                        }
+            except Exception:
+                logger.debug(
+                    "LLM persona upgrade failed for debate %s; keeping template",
+                    debate_id, exc_info=True,
+                )
 
         running_score = {"proposition": 0, "opposition": 0}
         current_phase: DebatePhase | None = None
@@ -1854,7 +1962,9 @@ async def run_debate_background(
         )
         _require_debate_runtime_lock_alive(lock_lease_holder)
 
-        # LLM-enhance phase insights before broadcasting verdict
+        # LLM-enhance phase insights + supporting turns before broadcasting verdict.
+        # Both run in the same session so we only commit once and the result loader
+        # reads the LLM-enhanced versions from breakdown_json metadata.
         try:
             engine = get_engine()
             with Session(engine) as _enh_session:
@@ -1872,11 +1982,32 @@ async def run_debate_background(
                         _enh_debate, raw_insights, _enh_turns,
                     )
                     finalized["phase_insights"] = enhanced
-                    # Persist enhanced insights back to breakdown_json
-                    if _enh_debate.breakdown_json and isinstance(_enh_debate.breakdown_json, dict):
+
+                    enhanced_supporting: list[dict[str, Any]] = []
+                    try:
+                        enhanced_supporting = await _build_supporting_turns(
+                            turns=_enh_turns,
+                            debate=_enh_debate,
+                            plan=final_plan,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "LLM supporting turn enhancement failed for %s",
+                            debate_id, exc_info=True,
+                        )
+
+                    if (
+                        _enh_debate.breakdown_json
+                        and isinstance(_enh_debate.breakdown_json, dict)
+                    ):
                         meta = _enh_debate.breakdown_json.get("metadata", {})
+                        if not isinstance(meta, dict):
+                            meta = {}
                         meta["phase_insights"] = enhanced
+                        if enhanced_supporting:
+                            meta["supporting_turns"] = enhanced_supporting
                         _enh_debate.breakdown_json["metadata"] = meta
+                        flag_modified(_enh_debate, "breakdown_json")
                         _enh_session.add(_enh_debate)
                         _enh_session.commit()
         except Exception:
@@ -2162,6 +2293,7 @@ def _finalize_debate(
             metadata={
                 "adjudication_mode": adjudication_mode,
                 "phase_insights": persisted_phase_insights,
+                **_extract_persisted_personas_meta(debate.breakdown_json),
             },
         )
         debate.judge_summary = (
@@ -2220,6 +2352,26 @@ def _serialize_debate(
     phase_insights: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     effective_plan = plan or build_debate_plan(debate.question)
+    persisted_personas = _extract_persisted_personas_meta(
+        debate.breakdown_json,
+    ).get("personas", {})
+
+    def _persona_for(side: DebateSide) -> str:
+        side_key = side.value
+        llm_persona = (
+            persisted_personas.get(side_key, {}).get("persona", "")
+            if isinstance(persisted_personas.get(side_key), dict)
+            else ""
+        )
+        if llm_persona:
+            return llm_persona
+        return get_participant_persona(
+            language=debate.language,
+            profile_id=debate.profile_id,
+            side=side,
+            question=debate.question,
+        )
+
     return {
         "id": debate.id,
         "question": debate.question,
@@ -2236,16 +2388,19 @@ def _serialize_debate(
                 "side": DebateSide.PROPOSITION.value,
                 "name": debate.proposition_name,
                 "role": debate.proposition_role,
+                "persona": _persona_for(DebateSide.PROPOSITION),
             },
             {
                 "side": DebateSide.OPPOSITION.value,
                 "name": debate.opposition_name,
                 "role": debate.opposition_role,
+                "persona": _persona_for(DebateSide.OPPOSITION),
             },
             {
                 "side": DebateSide.JUDGE.value,
                 "name": debate.judge_name,
                 "role": debate.judge_role,
+                "persona": _persona_for(DebateSide.JUDGE),
             },
         ],
         "score": {
@@ -2553,12 +2708,180 @@ def _supporting_turn_reason(language: str, kind: str, phase: DebatePhase) -> str
     return mapping.get(kind, "This is one of the turns that matters most when replaying the verdict logic.")  # noqa: E501
 
 
-def _build_supporting_turns(
+async def _generate_supporting_turn_reason(
+    *,
+    language: str,
+    kind: str,
+    phase: DebatePhase,
+    motion: str,
+    quote: str,
+    speaker_name: str,
+    speaker_side: str,
+) -> str:
+    """LLM-generate a 1-2 sentence "why it matters" for a single supporting turn.
+
+    Falls back to the deterministic template ``_supporting_turn_reason`` when the
+    LLM is disabled or the call fails.
+    """
+    fallback = _supporting_turn_reason(language, kind, phase)
+    if not settings.DEBATE_USE_LLM:
+        return fallback
+
+    phase_label = _display_phase(language, phase)
+    kind_brief_zh = {
+        "winner": "胜方最能扳回的一击",
+        "pressure": "败方最有威胁的一次施压",
+        "swing": "锁住整场走向的转折",
+        "verdict": "评委盖棺定论的那句",
+    }.get(kind, "复盘时最值得回看的一段")
+    kind_brief_en = {
+        "winner": "the winning side's clearest blow",
+        "pressure": "the losing side's sharpest pressure",
+        "swing": "the exchange that locked the direction of the debate",
+        "verdict": "the judge's closing pronouncement",
+    }.get(kind, "one of the most replay-worthy turns")
+
+    motion_block = format_untrusted_text_block("辩题", motion, max_chars=600)
+
+    if language == "zh":
+        prompt = (
+            "你是辩论分析师，正在为观众解释「为什么这一段值得回看」。\n"
+            f"{motion_block}\n"
+            f"阶段：{phase_label}。这段被归类为：{kind_brief_zh}。\n"
+            f"发言人：{speaker_name}（{speaker_side}）\n"
+            f"{format_untrusted_text_block('原文摘录', quote, max_chars=600)}\n\n"
+            "请用 1-2 句中文写出「这段为什么重要」，必须紧扣上面摘录里的具体论点或措辞，"
+            "像解说员复盘那样有画面感，不要用「执行权」「责任链」「世界线」这类抽象套话。"
+            "只返回一段纯文本，不要 JSON、不要引号包裹整段。"
+        )
+    else:
+        prompt = (
+            "You are a debate analyst explaining 'why this particular turn matters'.\n"
+            f"{format_untrusted_text_block('Motion', motion, max_chars=600)}\n"
+            f"Phase: {phase_label}. This turn is flagged as: {kind_brief_en}.\n"
+            f"Speaker: {speaker_name} ({speaker_side})\n"
+            f"{format_untrusted_text_block('Quote', quote, max_chars=600)}\n\n"
+            "Write 1-2 sentences in English explaining why this specific turn matters, "
+            "referencing the actual argument or phrasing from the quote above. "
+            "Be concrete, like a commentator on replay — no jargon like 'accountability "
+            "chain' or 'execution framework'. Return plain text only, no JSON, no wrapping quotes."  # noqa: E501
+        )
+
+    try:
+        raw = await llm_call(
+            prompt,
+            temperature=0.75,
+            reasoning_effort="medium",
+        )
+    except Exception:
+        logger.debug(
+            "LLM supporting turn reason failed for kind=%s phase=%s",
+            kind, phase.value, exc_info=True,
+        )
+        return fallback
+
+    if not isinstance(raw, str):
+        return fallback
+    text = raw.strip().strip('"').strip("'").strip()
+    if len(text) < 15:
+        return fallback
+    # Cap to sane length to avoid runaway LLM output flooding the result card.
+    if len(text) > 320:
+        text = text[:320].rstrip() + ("…" if language == "zh" else "...")
+    return text
+
+
+async def _build_supporting_turns(
     *,
     turns: list[DebateTurn],
     debate: Debate,
     plan: DebatePlan,
 ) -> list[dict[str, Any]]:
+    if not turns:
+        return []
+
+    loser_side = "opposition" if plan.winner == "proposition" else "proposition"
+    winner_turn = _pick_best_turn_record(turns, side=plan.winner)
+    pressure_turn = _pick_best_turn_record(
+        turns,
+        side=loser_side,
+        phases={DebatePhase.CROSSFIRE, DebatePhase.REBUTTAL, DebatePhase.CLOSING},
+    )
+    swing_phase = max(
+        PHASES_WITH_SPEAKERS,
+        key=lambda phase: abs(
+            plan.phase_deltas.get(phase, {}).get("proposition", {}).get("proposition", 0)
+            - plan.phase_deltas.get(phase, {}).get("opposition", {}).get("opposition", 0)
+        ),
+    )
+    swing_turn = _pick_best_turn_record(turns, side=plan.winner, phases={swing_phase})
+    verdict_turn = next(
+        (turn for turn in reversed(turns) if turn.phase == DebatePhase.VERDICT), None
+    )
+
+    selected: list[tuple[str, DebateTurn | None]] = [
+        ("winner", winner_turn),
+        ("pressure", pressure_turn),
+        ("swing", swing_turn),
+        ("verdict", verdict_turn),
+    ]
+
+    # Pick first 3 unique turns up front so we can issue LLM calls in parallel.
+    chosen: list[tuple[str, DebateTurn]] = []
+    seen_ids: set[str] = set()
+    for kind, turn in selected:
+        if turn is None or turn.id in seen_ids:
+            continue
+        seen_ids.add(turn.id)
+        chosen.append((kind, turn))
+        if len(chosen) >= 3:
+            break
+
+    motion = debate.question or debate.motion or ""
+    reason_tasks = [
+        _generate_supporting_turn_reason(
+            language=debate.language,
+            kind=kind,
+            phase=turn.phase,
+            motion=motion,
+            quote=turn.content,
+            speaker_name=turn.speaker_name,
+            speaker_side=turn.speaker_side.value,
+        )
+        for kind, turn in chosen
+    ]
+    reasons = await asyncio.gather(*reason_tasks, return_exceptions=True)
+
+    supporting_turns: list[dict[str, Any]] = []
+    for (kind, turn), reason in zip(chosen, reasons):
+        if isinstance(reason, BaseException) or not isinstance(reason, str) or not reason.strip():
+            why_it_matters = _supporting_turn_reason(debate.language, kind, turn.phase)
+        else:
+            why_it_matters = reason
+        supporting_turns.append(
+            {
+                "id": turn.id,
+                "phase": turn.phase.value,
+                "speaker_side": turn.speaker_side.value,
+                "speaker_name": turn.speaker_name,
+                "quote": turn.content,
+                "why_it_matters": why_it_matters,
+            }
+        )
+    return supporting_turns
+
+
+def _build_supporting_turns_sync(
+    *,
+    turns: list[DebateTurn],
+    debate: Debate,
+    plan: DebatePlan,
+) -> list[dict[str, Any]]:
+    """Sync fallback: deterministic template-only supporting turns.
+
+    Used by ``load_debate_result_payload`` when no persisted LLM-enhanced version
+    exists in ``breakdown_json.metadata.supporting_turns``.
+    """
     if not turns:
         return []
 

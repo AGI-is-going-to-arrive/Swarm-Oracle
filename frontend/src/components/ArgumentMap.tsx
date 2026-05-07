@@ -198,6 +198,33 @@ const STATUS_LABEL_I18N: Record<string, [string, string]> = {
   rejected: GRAPH_STATUS_LABEL_I18N.rejected,
 };
 
+// Tooltip descriptions for each status (hover/title attribute)
+const STATUS_TIP_I18N: Record<string, [string, string]> = {
+  accepted: ['argument.status_accepted_tip', 'Accepted by opponent or judge'],
+  standing: ['argument.status_standing_tip', 'Still standing, not rebutted'],
+  unaddressed: ['argument.status_unaddressed_tip', 'Not yet addressed'],
+  rebutted: ['argument.status_rebutted_tip', 'Has been rebutted'],
+  rejected: ['argument.status_rejected_tip', 'Rejected by judge'],
+};
+
+// Edge types shown in the legend (compact: supports / rebuts / attacks)
+const EDGE_LEGEND_KEYS = ['supports', 'rebuts', 'attacks'] as const;
+const EDGE_LEGEND_LABEL_I18N: Record<string, [string, string]> = {
+  supports: ['argument.legend_edge_supports', 'Supports'],
+  rebuts: ['argument.legend_edge_rebuts', 'Rebuts'],
+  attacks: ['argument.legend_edge_attacks', 'Attacks'],
+};
+
+// Confidence tier labels for legend
+const CONFIDENCE_LEGEND_LABEL_I18N: Record<'high' | 'medium' | 'low', [string, string]> = {
+  high: ['argument.legend_confidence_high', 'High confidence'],
+  medium: ['argument.legend_confidence_medium', 'Medium confidence'],
+  low: ['argument.legend_confidence_low', 'Low confidence'],
+};
+
+// localStorage key — track whether user has dismissed the guide
+const ARGUMENT_GUIDE_STORAGE_KEY = 'swarm.argumentMap.guideOpen';
+
 function useCompactGraphViewport() {
   return useMediaQueryState(GRAPH_COMPACT_MEDIA_QUERY);
 }
@@ -427,13 +454,13 @@ function layoutArgumentDag(
     const tier = e.evidence?.confidence_tier;
     const tierColor = tier ? EVIDENCE_TIER_COLORS[tier] ?? undefined : undefined;
     const roundNum = e.evidence?.source_round_number;
-    const sourceRef = e.evidence?.source_ref;
     const baseLabel = e.label ?? undefined;
     const labelParts: string[] = [];
     if (baseLabel) labelParts.push(baseLabel);
     if (roundNum != null) labelParts.push(`R${roundNum}`);
     if (tier) labelParts.push(`[${getEvidenceTierLabel(tier, t)}]`);
-    if (sourceRef) labelParts.push(`(${sourceRef})`);
+    // source_ref is internal pipeline metadata (rule_extraction/verdict_linking) —
+    // not shown in visible labels; still available in NodeDetailPanel via edge data.
     const edgeLabel = labelParts.length > 0 ? labelParts.join(' ') : undefined;
     return {
       id: e.id,
@@ -495,6 +522,24 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
   const edgeTypes = useMemo(() => ({ animated: AnimatedEdge }), []);
   // C5: Status filter
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
+  // Guide panel open state (default: open on first visit, persisted)
+  const [guideOpen, setGuideOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const stored = window.localStorage?.getItem(ARGUMENT_GUIDE_STORAGE_KEY);
+      return stored === null || stored === '1';
+    } catch {
+      return true;
+    }
+  });
+  const handleGuideToggle = useCallback((next: boolean) => {
+    setGuideOpen(next);
+    try {
+      window.localStorage?.setItem(ARGUMENT_GUIDE_STORAGE_KEY, next ? '1' : '0');
+    } catch {
+      /* localStorage unavailable — ignore */
+    }
+  }, []);
   const exportRootId = `argument-map-${useId().replace(/:/g, '-')}`;
   const reactFlowRef = useRef<{ fitView?: (options?: { padding?: number; duration?: number }) => void } | null>(null);
   const latestRequestIdRef = useRef(0);
@@ -790,9 +835,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
       if (edge.evidence?.confidence_tier) {
         line += ` [${t(`causal.evidence_${edge.evidence.confidence_tier}`, edge.evidence.confidence_tier)}]`;
       }
-      if (edge.evidence?.source_ref) {
-        line += ` (${t('argument.evidence_source', { defaultValue: 'Source: {{source}}', source: edge.evidence.source_ref })})`;
-      }
+      // source_ref omitted from SR text — internal pipeline metadata
       return line;
     }).filter(Boolean) as string[]
   ), [filteredData?.edges, rawNodeMap, t]);
@@ -908,6 +951,12 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
         <p className="dag-empty-text" style={{ fontSize: '0.78rem' }}>
           {t('argument.empty', 'No argument map available.')}
         </p>
+        <p className="dag-empty-text" style={{ fontSize: '0.74rem', maxWidth: 480, margin: '0.25rem auto 0', color: '#888' }}>
+          {t(
+            'argument.empty_guide',
+            'The argument map is automatically generated during the debate as AI extracts claims, evidence, and rebuttals. No analyzable argument units have been produced yet.',
+          )}
+        </p>
         <button className="dag-empty-cta" onClick={() => window.history.back()}>
           {t('dag.empty_state_cta', 'Back to input')}
         </button>
@@ -924,6 +973,80 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
         {/* P1-7: Strength meter summary */}
         <ArgumentStrengthMeter units={filteredData?.units ?? data.units} />
 
+        {/* Guide panel — collapsible overview, default open on first visit */}
+        {guideOpen ? (
+          <div
+            id="argument-guide-panel"
+            style={{
+              padding: '0.75rem 1rem',
+              borderRadius: 12,
+              border: '1px solid rgba(140, 140, 140, 0.18)',
+              background: 'rgba(255, 255, 255, 0.02)',
+              fontSize: '0.78rem',
+              color: '#bbb',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <strong style={{ color: '#eee', fontSize: '0.82rem' }}>
+                {t('argument.guide_title', 'Map Guide')}
+              </strong>
+              <button
+                type="button"
+                onClick={() => handleGuideToggle(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#888',
+                  cursor: 'pointer',
+                  fontSize: '0.7rem',
+                  padding: '2px 6px',
+                  lineHeight: 1,
+                }}
+                aria-label={t('argument.guide_close', 'Hide guide')}
+                aria-expanded={true}
+                aria-controls="argument-guide-panel"
+              >
+                {'✕'}
+              </button>
+            </div>
+            <p style={{ margin: '0 0 6px 0', color: '#bbb' }}>
+              {t(
+                'argument.guide_description',
+                'The argument map visualizes claims, evidence, and rebuttal relationships from the debate. Nodes represent argument units, edges show their relationships.',
+              )}
+            </p>
+            <div style={{ marginBottom: 6, color: '#888', fontSize: '0.72rem' }}>
+              {t('argument.guide_nodes_units', {
+                defaultValue: '{{nodes}} nodes · {{units}} argument items',
+                nodes: (filteredData?.nodes.length ?? data.nodes.length),
+                units: (filteredData?.units.length ?? data.units.length),
+              })}
+            </div>
+            <p style={{ margin: 0, color: '#888', fontSize: '0.7rem' }}>
+              {t('argument.guide_hint', 'Click any node for details. Use filters to narrow by status.')}
+            </p>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => handleGuideToggle(true)}
+            aria-expanded={false}
+            style={{
+              alignSelf: 'flex-start',
+              padding: '4px 10px',
+              background: 'none',
+              border: '1px solid rgba(140, 140, 140, 0.25)',
+              borderRadius: 8,
+              color: '#888',
+              fontSize: '0.7rem',
+              cursor: 'pointer',
+            }}
+          >
+            <span aria-hidden="true">{'▶'} </span>
+            {t('argument.guide_show', 'Show guide')}
+          </button>
+        )}
+
         {/* C5: Status filter chips */}
         <div
           role="group"
@@ -937,11 +1060,14 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
             const active = statusFilter.has(status);
             const color = STATUS_COLORS_HEX[status] ?? '#888';
             const chipBright = isBrightGraphBackground(color);
+            const tipPair = STATUS_TIP_I18N[status];
+            const tipText = tipPair ? t(tipPair[0], tipPair[1]) : undefined;
             return (
               <button
                 key={status}
                 onClick={() => toggleStatus(status)}
                 aria-pressed={active}
+                title={tipText}
                 style={{
                   minHeight: 40,
                   padding: '6px 12px',
@@ -1095,20 +1221,130 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
           </>
         )}
 
-        {/* Legend */}
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.7rem', color: '#888' }}>
-          {(['claim', 'evidence', 'rebuttal', 'counter'] as const).map(type => {
-            const pair = TYPE_LABEL_I18N[type];
-            return (
-              <span key={type} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ width: 10, height: 10, borderRadius: 2, background: NODE_TYPE_COLORS_HEX[type], display: 'inline-block' }} />
-                {t(pair[0], pair[1])}
-              </span>
-            );
-          })}
-          <span style={{ marginLeft: 'auto' }}>
-            {filteredData?.units.length ?? 0} {t('argument.total_units', 'units')}
-          </span>
+        {/* Legend — node types + statuses + edges + confidence tiers */}
+        <div
+          aria-label={t('argument.guide_title', 'Map Guide')}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            padding: '0.5rem 0.75rem',
+            borderTop: '1px solid rgba(140, 140, 140, 0.15)',
+            fontSize: '0.7rem',
+            color: '#888',
+          }}
+        >
+          {/* Row 1: Node types */}
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ color: '#aaa', fontWeight: 600, minWidth: 64 }}>
+              {t('argument.legend_types', 'Node types')}
+            </span>
+            {(['claim', 'evidence', 'rebuttal', 'counter'] as const).map(type => {
+              const pair = TYPE_LABEL_I18N[type];
+              return (
+                <span key={type} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: 2,
+                      background: NODE_TYPE_COLORS_HEX[type],
+                      display: 'inline-block',
+                    }}
+                  />
+                  {t(pair[0], pair[1])}
+                </span>
+              );
+            })}
+          </div>
+
+          {/* Row 2: Statuses */}
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ color: '#aaa', fontWeight: 600, minWidth: 64 }}>
+              {t('argument.legend_statuses', 'Statuses')}
+            </span>
+            {STATUS_ORDER.map(status => {
+              const labelPair = STATUS_LABEL_I18N[status];
+              const tipPair = STATUS_TIP_I18N[status];
+              return (
+                <span
+                  key={status}
+                  title={tipPair ? t(tipPair[0], tipPair[1]) : undefined}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: '50%',
+                      background: STATUS_COLORS_HEX[status] ?? '#888',
+                      display: 'inline-block',
+                    }}
+                  />
+                  {t(labelPair[0], labelPair[1])}
+                </span>
+              );
+            })}
+          </div>
+
+          {/* Row 3: Edges */}
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ color: '#aaa', fontWeight: 600, minWidth: 64 }}>
+              {t('argument.legend_edges', 'Relations')}
+            </span>
+            {EDGE_LEGEND_KEYS.map(edgeKey => {
+              const style = EDGE_STYLES[edgeKey];
+              const stroke = style?.stroke ?? '#888';
+              const dashed = Boolean(style?.strokeDasharray);
+              const labelPair = EDGE_LEGEND_LABEL_I18N[edgeKey];
+              return (
+                <span key={edgeKey} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <svg aria-hidden="true" width="22" height="6" viewBox="0 0 22 6" style={{ display: 'inline-block' }}>
+                    <line
+                      x1="0"
+                      y1="3"
+                      x2="22"
+                      y2="3"
+                      stroke={stroke}
+                      strokeWidth="2"
+                      strokeDasharray={dashed ? (style?.strokeDasharray ?? '') : undefined}
+                    />
+                  </svg>
+                  {t(labelPair[0], labelPair[1])}
+                </span>
+              );
+            })}
+          </div>
+
+          {/* Row 4: Confidence tiers + total units */}
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ color: '#aaa', fontWeight: 600, minWidth: 64 }}>
+              {t('argument.legend_confidence', 'Confidence')}
+            </span>
+            {(['high', 'medium', 'low'] as const).map(tier => {
+              const labelPair = CONFIDENCE_LEGEND_LABEL_I18N[tier];
+              return (
+                <span key={tier} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: 2,
+                      background: EVIDENCE_TIER_COLORS[tier] ?? '#888',
+                      display: 'inline-block',
+                    }}
+                  />
+                  {t(labelPair[0], labelPair[1])}
+                </span>
+              );
+            })}
+            <span style={{ marginLeft: 'auto' }}>
+              {filteredData?.units.length ?? 0} {t('argument.total_units', 'units')}
+            </span>
+          </div>
         </div>
 
         {/* a11y: screen reader fallback list */}

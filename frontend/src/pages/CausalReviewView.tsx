@@ -937,14 +937,6 @@ export function CausalReviewView() {
   return (
     <Tooltip.Provider delayDuration={300}>
       <style>{`
-        @keyframes causal-node-fade-in {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-        /* React Flow uses transform for node coordinates, so CausalReview keeps entrance animation opacity-only. */
-        .causal-review-shell .dag-node-enter {
-          animation-name: causal-node-fade-in;
-        }
         @media (prefers-reduced-motion: reduce) {
           .causal-review-shell .react-flow__node,
           .causal-review-shell .react-flow__edge {

@@ -8,7 +8,6 @@ import { DebateBetModal } from '../components/DebateBetModal';
 import { DebateMomentumBar } from '../components/DebateMomentumBar';
 import { DebateScoreCard } from '../components/DebateScoreCard';
 import { DebateStageRibbon } from '../components/DebateStageRibbon';
-import { SpotlightTurnCard } from '../components/ui/SpotlightTurnCard';
 import { FoldableTurn } from '../components/ui/FoldableTurn';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../components/ui/accordion';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
@@ -48,6 +47,7 @@ const SPOTLIGHT_TRUNCATE_LEN = 120;
 interface DebateRoomInsight {
   side: 'proposition' | 'opposition' | 'judge';
   role: string;
+  persona: string | null;
   statusLabel: string;
   note: string;
   sourceLabel: string | null;
@@ -298,7 +298,13 @@ export function DebateArenaView() {
     }
   }, [selectedPhase]);
 
-  const clashCopy = useMemo(() => t(`debate.clash_${selectedPhase}`), [selectedPhase, t]);
+  const clashCopy = useMemo(() => {
+    const serverStrategy = selectedServerInsight?.strategy?.trim();
+    if (serverStrategy) {
+      return serverStrategy;
+    }
+    return t(`debate.clash_${selectedPhase}`);
+  }, [selectedPhase, selectedServerInsight?.strategy, t]);
   const phaseLeaderLabel = useMemo(() => {
     if (phaseScoreDelta.proposition === phaseScoreDelta.opposition) {
       return t('debate.phase_balance');
@@ -454,6 +460,8 @@ export function DebateArenaView() {
         ?? [...visibleTurns].reverse().find((turn) => turn.speaker_side === participant.side)
         ?? null;
 
+      const personaTrimmed = participant.persona?.trim();
+
       let statusLabel = t('debate.room_state_waiting');
       let note = participant.side === 'judge'
         ? t('debate.room_quote_judge')
@@ -461,6 +469,9 @@ export function DebateArenaView() {
 
       if (participant.side === 'judge' && debate?.result_ready) {
         statusLabel = t('debate.room_state_verdict_ready');
+        if (latestTurn) {
+          note = latestTurn.content;
+        }
       } else if (latestTurn) {
         statusLabel = latestTurn.id === latestVisibleTurn?.id
           ? t('debate.room_state_floor')
@@ -473,6 +484,7 @@ export function DebateArenaView() {
       return {
         side: participant.side,
         role: participant.role,
+        persona: personaTrimmed && personaTrimmed.length > 0 ? personaTrimmed : null,
         statusLabel,
         note,
         sourceLabel: latestTurn ? getDebatePhaseLabel(t, latestTurn.phase) : null,
@@ -799,7 +811,7 @@ export function DebateArenaView() {
                 frameSrc={DEBATE_UI_ASSETS.scoreMeter}
               />
               <div className="debate-controls">
-                <button type="button" className="btn btn-ghost" onClick={() => navigate('/')}>
+                <button type="button" className="btn debate-btn-back" onClick={() => navigate('/')}>
                   {t('debate.back_home')}
                 </button>
                 {!debate?.result_ready && (
@@ -848,6 +860,13 @@ export function DebateArenaView() {
           </section>
         )}
         <div className="debate-mobile-rail" aria-label={t('debate.mobile_primary_actions')}>
+          <button
+            type="button"
+            className="btn debate-btn-back"
+            onClick={() => navigate('/')}
+          >
+            {t('debate.back_home')}
+          </button>
           {!debate?.result_ready ? (
             <button
               type="button"
@@ -1069,6 +1088,7 @@ export function DebateArenaView() {
                       key={participant.side}
                       sideLabel={getDebateSideLabel(t, participant.side)}
                       role={participant.role}
+                      persona={participant.persona}
                       badgeSrc={
                         participant.side === 'proposition'
                           ? DEBATE_UI_ASSETS.badgeProposition
@@ -1103,6 +1123,11 @@ export function DebateArenaView() {
                         <span className="debate-phase-chip">{insight.statusLabel}</span>
                       </div>
                       <p className="debate-room-card__role">{insight.role}</p>
+                      {insight.persona ? (
+                        <p className="debate-room-card__persona" title={insight.persona}>
+                          {insight.persona}
+                        </p>
+                      ) : null}
                       <p className="debate-room-card__note">{insight.note}</p>
                       {insight.sourceLabel && (
                         <span className="debate-room-card__source">{insight.sourceLabel}</span>
