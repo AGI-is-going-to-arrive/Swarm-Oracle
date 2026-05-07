@@ -102,8 +102,12 @@ export function useSimulationReplayState(params: {
 
   useEffect(() => {
     if (!isSimulationComplete) {
-      setSelectedReplayBranchId(null);
-      setSelectedReplayRound(null);
+      if (selectedReplayBranchId !== null) {
+        setSelectedReplayBranchId(null);
+      }
+      if (selectedReplayRound !== null) {
+        setSelectedReplayRound(null);
+      }
       return;
     }
 

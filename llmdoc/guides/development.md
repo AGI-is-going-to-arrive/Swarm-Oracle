@@ -229,12 +229,13 @@ npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.t
   - `<dialog>.showModal()` 缺失时的 `AgentProfileModal` 降级
   - 关键 CSS token / 高流量页面表面的 sRGB / rgba fallback
 
-### PredictionModal 动态分支回归
+### SimulationView / PredictionModal / Gameplay Cards 回归
 
 ```bash
 cd frontend
-npm test -- --run src/components/PredictionModal.test.tsx src/pages/SimulationView.test.tsx
-npx tsc --noEmit -p tsconfig.app.json
+npm test -- --run src/pages/SimulationView.test.tsx --reporter=verbose
+npm test -- --run src/components/PredictionModal.test.tsx src/components/GameplayCardsModal.test.tsx src/i18n/locales.test.ts --reporter=verbose
+npm exec -- tsc -b --noEmit
 ```
 
 如果要补一条真实浏览器 fixture：
@@ -247,10 +248,13 @@ npm run e2e:predict:late-branches -- --url http://127.0.0.1:18930 --headless
 
 说明：
 
+- `SimulationView.test.tsx` 要按全文件跑；polling、default objectives backfill、replay selection 和 authority conflict retry 这几块容易只在组合运行时暴露问题。
 - 这组回归当前主要看：
   - modal 打开时 `branches=[]`，后续 branch list 晚到后会自动切回 `branch_winner`
   - 当前选中的 branch 失效时会自动回退到仍然有效的默认目标
   - 如果用户已经改选了一个仍然有效的 branch，提交时会继续用用户当前选择
+  - structured prediction text 的最终 payload 不超过 500 字符，textarea 长度会扣掉下注元数据
+  - `GameplayCardsModal` 在手机或粗指针设备上不会自动聚焦 directive textarea
   - 真实浏览器 fixture 会同时校验 automation state、DOM 选中值，以及提交请求里的 structured bet `targetId / targetLabel`
   - `predict-late-branches-before.{json,png}` 当前会先在 late branch 到达前采样；`before` 应看到 `bet_kind=ending_tone` 且 `target_branch_id=null`
   - `predict-late-branches-after.{json,png}` 才对应 late branch 到达后的状态；`after` 应看到 `bet_kind=branch_winner`，并选中实际 branch id
@@ -489,6 +493,17 @@ python -m pytest tests/test_fallback_migrations.py -k 'legacy_ending_room_scope_
 cd ../frontend
 npm exec -- tsc -b --pretty false
 npm test -- --run src/pages/WorldlineRoundtableView.test.tsx src/components/EndingChatModal.test.tsx
+```
+
+如果只改 Oracle 主文案的 LLM generation / rewrite fallback 路径，先跑这两条最小回归：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest \
+  tests/test_ending_room_service.py::test_oracle_generation_first_uses_llm_before_anchor_template \
+  tests/test_ending_room_service.py::test_oracle_empty_generation_then_rewrite_uses_anchor_reference \
+  -q
 ```
 
 如果改的是 completed-state roundtable 的 `Deep Dive` / analyst / survey / participant-scoped chat，先跑这组最小命令：

@@ -167,6 +167,7 @@ export function SimulationView() {
   const commitmentFeedbackTimer = useRef<number | null>(null);
   const recoveryLogEmitted = useRef(false);
   const warmupRecoveryAttempts = useRef(0);
+  const defaultObjectivesSeedKey = useRef<string | null>(null);
   const activeBranches = useMemo(
     () => branches.filter((branch) => branch.status === 'ACTIVE'),
     [branches],
@@ -416,13 +417,22 @@ export function SimulationView() {
     if (!id || !scenario || !gameplayProfile || !scenarioMeta || !signatureArcState) return;
     if (scenario.director_state?.objectives?.goals?.length) return;
     if (scenarioMeta.objectives.goals.length > 0) return;
+    const signatureCardId = signatureArcState.nextCardId ?? signatureArcState.sequence[0] ?? null;
+    const seedKey = [
+      id,
+      scenario.question,
+      gameplayProfile.id,
+      signatureCardId ?? '',
+    ].join('\u0000');
+    if (defaultObjectivesSeedKey.current === seedKey) return;
+    defaultObjectivesSeedKey.current = seedKey;
 
     const nextMeta = ensureScenarioObjectives(id, {
       question: scenario.question,
       profileId: gameplayProfile.id,
       goals: buildDefaultDirectorObjectives({
         profileId: gameplayProfile.id,
-        signatureCardId: signatureArcState.nextCardId ?? signatureArcState.sequence[0] ?? null,
+        signatureCardId,
       }),
     });
     refreshLocalMeta();

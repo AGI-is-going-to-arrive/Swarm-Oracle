@@ -45,6 +45,10 @@
 - `gameplay_state` 当前按分区看 authority：
   - 只要后端显式返回该分区字段，即使值是空数组，也视为后端已接管该分区
   - 前端不会再把本地 `scenarioMeta` 里的 stale `bets / key_moments / branch_snapshots / usage_log` 反向补回去
+- `director_state / gameplay_state` 写回当前由 `useSimulationViewState` 串行化；如果后端返回 revision conflict，前端会先回读最新 authority，再把本次本地增量合进去重试：
+  - director 侧保留远端 objectives，除非本地这次真的改了 objectives；commitment 只合并本次用户操作
+  - gameplay 侧按 key 合并 `usage_log / bets / key_moments / branch_snapshots`
+  - 重试仍失败时，页面提示冲突并停止用旧本地缓存继续覆盖 authority
 - 前端 authority 合流主要通过：
   - `frontend/src/lib/scenarioAuthority.ts`
   - `frontend/src/lib/scenarioDirectorState.ts`
@@ -71,6 +75,7 @@
 - 编解码共享：
   - `replayCodec.ts`
 - 新生成的 replay token 当前统一走 `plain.*`，上限 `4096` 字符；payload 过大时继续回退 artifact / local readonly。旧的 `gz.*` token 仍可解码。
+- Simulation replay 的 branch / round selection 只在 simulation complete 后保留；live 或 incomplete 状态会清掉旧 selection，完成态下缺失或失效 selection 会回到默认 branch 和最新 round。
 
 ## 实时链路
 
@@ -204,11 +209,14 @@
   - `thinkingAgentCount`
   - `thinkingAgents`
   - classic live-fork fixture 已能直接观测“谁正在说话前的 thinking 态”
+- `SimulationView` 的默认 director objectives 只在后端和本地 meta 都没有 objectives 时补一次；seed key 按 `scenario / question / gameplay profile / signature card` 计算，避免同一局反复 backfill。
 - `PredictionModal` 当前在 branch list 晚到时会自动把默认目标补齐：
   - 如果 modal 打开时还没有可押世界线，UI 会先临时回退到 `ending_tone`
   - 只要后续收到可用 `ACTIVE` branch，就会自动切回 `branch_winner`，并选中当前仍有效的默认 branch
   - 如果用户已经手动改选了一个仍然有效的 branch，提交时会继续用用户当前选择；commitment branch 只作为默认兜底，不会把用户已选目标强行改回去
+  - 提交给 backend 的 structured prediction text 仍按 500 字符预算；textarea 会先扣掉下注元数据占用的长度，超限时显示本地化错误
   - 对应的 `predict-late-branches` fixture 当前会先采 `before` 工件，再放出 late branch 事件；`before` 态应保持 `ending_tone`，`after` 态才切到 `branch_winner`
+- `GameplayCardsModal` 的 directive textarea 只在桌面 fine pointer 环境自动聚焦；手机和粗指针设备不会自动弹出键盘。
 - `endingRoomStore` 当前会在 committed turn、room hydrate、thread hydrate 时清掉 stale draft；迟到的 `turn_start / turn_delta` 不再把 ghost bubble 重新挂回当前 transcript。
 - `endingRoomStore` 当前把 `snapshot / result / thread hydrate + commitTurn` 作为 authority；`pendingDrafts` 只是流式草稿缓存。recoverable `turn_error` 只清 draft，不会把整个 room 升成 fatal error。
 - `endingRoomStore.loadRoom` 当前在 result 加载失败时不再把整个 room 标记为 error；room 仍可正常使用，result 会在下次 WS 事件或手动刷新时重试。

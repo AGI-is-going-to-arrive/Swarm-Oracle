@@ -17336,3 +17336,47 @@ QA Inventory
 - 当前边界：
   - 这轮修掉的是 false negative / timeout gate，不是 backend 慢路径本身
   - roundtable 真正的 provider 耗时仍可能偏长，但现在脚本和 live room 的收口已经和真实完成窗口对齐
+
+## 2026-05-07 SimulationView polling / authority conflict repair
+
+- 本轮目标：
+  - 修复 `SimulationView.test.tsx` 全文件运行时在既有 polling 用例附近卡住的问题
+  - 同步收口主模式 `director_state / gameplay_state` 写回遇到 stale revision conflict 时的前端合并重试
+  - 补上 PredictionModal payload 长度预算、GameplayCardsModal 移动端 autofocus，以及 Oracle 主文案 generation-first fallback 的回归覆盖
+- 先确认的事实：
+  - `SimulationView.test.tsx` 单个 polling 用例能过，但和 `publishes replay_state / classic streaming` 这类用例组合运行时会卡住
+  - 真正触发循环的是同一局 default director objectives backfill 可被重复 seed；这会和全文件测试里的轮询/cleanup 叠加成 hang
+  - backend Oracle 主文案实现本身已经是 generation-first，但缺少测试锁住“第一轮不带 anchor copy、空生成后才进入 rewrite reference”这条口径
+- 本轮代码收口：
+  - `frontend/src/pages/SimulationView.tsx`
+    - 默认 director objectives seed 增加 `scenario / question / profile / signature card` 幂等 key，同一局不再重复 backfill
+  - `frontend/src/hooks/useSimulationReplayState.ts`
+    - live / incomplete 状态下只在 selection 非空时清空 replay branch / round，减少无意义状态更新
+  - `frontend/src/hooks/useSimulationViewState.ts`
+    - `director_state / gameplay_state` 写回改成串行链
+    - 遇到 `409` 后先拉最新 revision，再合并本次本地增量重试
+    - director 保留远端 objectives，合并本次 commitment；gameplay 按 key 合并 usage log、bets、key moments 和 branch snapshots
+  - `frontend/src/components/PredictionModal.tsx`
+    - structured prediction text 继续按 backend 500 字符限制提交，textarea 会动态扣掉 bet metadata 占用
+    - 超限时显示中英文 locale 错误
+  - `frontend/src/components/GameplayCardsModal.tsx`
+    - 手机或 coarse pointer 设备不再自动聚焦 directive textarea
+  - `backend/tests/test_ending_room_service.py`
+    - 补 Oracle generation-first / rewrite fallback 两条测试，不改 production 代码
+- 本轮文档同步：
+  - `README.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/guides/development.md`
+- 本轮实际验证：
+  - `cd frontend && npm test -- --run src/pages/SimulationView.test.tsx --reporter=verbose`
+    - `27 passed`
+  - `cd frontend && npm test -- --run src/components/PredictionModal.test.tsx src/components/GameplayCardsModal.test.tsx src/i18n/locales.test.ts --reporter=verbose`
+    - `26 passed`
+  - `cd frontend && npm exec -- tsc -b --noEmit`
+    - 通过
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_ending_room_service.py::test_oracle_generation_first_uses_llm_before_anchor_template tests/test_ending_room_service.py::test_oracle_empty_generation_then_rewrite_uses_anchor_reference -q`
+    - `2 passed`
+- 当前边界：
+  - 本轮没有重跑 backend 全量 pytest、frontend 全量 vitest 或浏览器 E2E；文档里没有把旧 full-suite 数字包装成这次证据
+  - `GameplayCardsModal` 本轮改的是移动端 autofocus 行为，不是新增 gameplay-state conflict 逻辑

@@ -533,6 +533,7 @@
       "error": "提交失败",
       "error_closed": "当前场景的预测窗口已经关闭。",
       "error_duplicate": "同一名下注者在这个场景里只能提交一次预测。",
+      "error_too_long": "加入下注元数据后预测内容过长，请缩短判断依据。",
       "error_branch_pending": "当前还没有可下注的活跃世界线，请稍候再试。",
       "branch_unavailable_note": "当前只开放了主世界线，先押结局倾向或题材回响会更稳。",
       "confidence_low": "猜测",

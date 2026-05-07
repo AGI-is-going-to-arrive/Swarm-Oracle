@@ -136,6 +136,14 @@ export default function GameplayCardsModal({
   const [queueNotice, setQueueNotice] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shouldAutoFocusDirective = (() => {
+    if (typeof window === 'undefined') return false;
+    if (window.innerWidth <= 720) return false;
+    if (typeof window.matchMedia === 'function' && !window.matchMedia('(pointer: fine)').matches) {
+      return false;
+    }
+    return true;
+  })();
   const normalizedCurrentRound = Math.max(1, currentRound);
 
   const agentsById = useMemo(() => buildAgentsById(agents), [agents]);
@@ -269,8 +277,9 @@ export default function GameplayCardsModal({
   }, [autoDirective]);
 
   useEffect(() => {
+    if (!shouldAutoFocusDirective) return;
     inputRef.current?.focus();
-  }, []);
+  }, [shouldAutoFocusDirective]);
 
   useEffect(() => {
     return () => {

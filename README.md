@@ -111,6 +111,7 @@ backend/   FastAPI + SQLModel + SQLite + ChromaDB
 
 - `Scenario.director_state_json` 与 `gameplay_state_json` 是主模式 authority。
 - `scenarioMeta` 仍存在，但只承担缓存、兼容和 replay 输入职责，不再是跨设备真值。
+- 前端写回 `director_state / gameplay_state` 时会带 `revision` 串行写入；如果遇到 stale conflict，会先回拉最新 authority，再只合并这次本地增量重试。
 - `ending_room` 是独立域，room/thread transcript 与 memory partition 隔离。
 - replay 分享优先走后端 `ReplayArtifact`，失败且 URL token 也不可用时，会回退为本地只读副本链接；Debate 当前会把这条入口明确标成 `Save local read-only copy`。
 

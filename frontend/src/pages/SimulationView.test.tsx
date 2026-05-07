@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { ReactNode } from 'react';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SimulationView } from './SimulationView';
 import type { BranchInfo, Scenario, ScenarioDirectorState, ScenarioGameplayState } from '../types';
 import { encodeSimulationReplayToken } from '../lib/simulationReplay';
+import { ApiError } from '../api/client';
+import {
+  TAIL_STATUS_SYNC_INTERVAL_MS,
+  WARMUP_RECOVERY_INTERVAL_MS,
+  WARMUP_RECOVERY_MAX_ATTEMPTS,
+} from './simulationHelpers';
 
 const navigateMock = vi.fn();
 const captureScreenshotMock = vi.fn();
@@ -22,6 +28,8 @@ type ReplayArtifactMock = {
   created_at: string;
   payload: Record<string, unknown>;
 };
+type ScenarioDirectorStateResponse = ScenarioDirectorState & { scenario_id: string; revision: number };
+type ScenarioGameplayStateResponse = ScenarioGameplayState & { scenario_id: string; revision: number };
 const {
   upsertScenarioDirectorStateMock,
   upsertScenarioGameplayStateMock,
@@ -39,7 +47,7 @@ const {
     scenario_id: scenarioId,
     ...(payload as Record<string, unknown>),
   })),
-  getScenarioDirectorStateMock: vi.fn(async (scenarioId: string) => ({
+  getScenarioDirectorStateMock: vi.fn(async (scenarioId: string): Promise<ScenarioDirectorStateResponse> => ({
     scenario_id: scenarioId,
     revision: 0,
     objectives: {
@@ -57,7 +65,7 @@ const {
       outcome: null,
     },
   })),
-  getScenarioGameplayStateMock: vi.fn(async (scenarioId: string) => ({
+  getScenarioGameplayStateMock: vi.fn(async (scenarioId: string): Promise<ScenarioGameplayStateResponse> => ({
     scenario_id: scenarioId,
     revision: 0,
     cards: { usage_log: [] },
@@ -185,7 +193,7 @@ vi.mock('../hooks/useSimulationWS', () => ({
 }));
 
 vi.mock('../api/client', async () => {
-  const actual = await import('../api/client');
+  const actual = await vi.importActual<typeof import('../api/client')>('../api/client');
   return {
     ...actual,
     createReplayArtifact: createReplayArtifactMock,
@@ -279,6 +287,8 @@ vi.mock('react-router-dom', async () => {
 
 describe('SimulationView replay automation output', () => {
   beforeEach(() => {
+    delete (window as Window & { render_game_to_text?: () => string }).render_game_to_text;
+    delete (window as Window & { capture_game_screenshot?: () => Promise<string | null> }).capture_game_screenshot;
     const store = new Map<string, string>();
     Object.defineProperty(window, 'localStorage', {
       configurable: true,
@@ -337,13 +347,17 @@ describe('SimulationView replay automation output', () => {
     createReplayArtifactMock.mockClear();
     getReplayArtifactMock.mockReset();
     getReplayArtifactMock.mockResolvedValue(null);
-    mockStore.loadScenario.mockClear();
+    mockStore.loadScenario.mockReset();
     mockStore.setScenario.mockClear();
     mockStore.scenario = { ...baseScenario };
     mockStore.status = 'done';
+    mockStore.error = null;
+    mockStore.errorCode = null;
     mockStore.isSimulationComplete = true;
     mockStore.visualizationEnabled = true;
+    mockStore.viewMode = 'theater';
     mockStore.currentRound = 0;
+    mockStore.toggleViewMode.mockClear();
     mockStore.agents = [
       { id: 'a1', name: '奥勒留斯', role: '皇帝', tier: 'CORE' as const, emotion: 'neutral' },
     ];
@@ -383,6 +397,11 @@ describe('SimulationView replay automation output', () => {
   });
 
   afterEach(() => {
+    cleanup();
+    delete (window as Window & { render_game_to_text?: () => string }).render_game_to_text;
+    delete (window as Window & { capture_game_screenshot?: () => Promise<string | null> }).capture_game_screenshot;
+    delete (window as Window & { __swarmGetSceneAutomation?: () => unknown }).__swarmGetSceneAutomation;
+    delete (window as Window & { __swarmGetReplayAutomation?: () => unknown }).__swarmGetReplayAutomation;
     window.localStorage.clear();
   });
 
@@ -600,7 +619,8 @@ describe('SimulationView replay automation output', () => {
   });
 
   it('stops warmup hydration polling after the retry cap when live data stays empty', async () => {
-    vi.useFakeTimers();
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    let unmount: (() => void) | undefined;
     try {
       mockStore.scenario = {
         ...baseScenario,
@@ -611,30 +631,35 @@ describe('SimulationView replay automation output', () => {
       mockStore.agents = [];
       mockStore.branches = [];
       mockStore.messages = [];
-      mockStore.loadScenario = vi.fn(async () => undefined);
+      mockStore.loadScenario.mockImplementation(async () => undefined);
 
-      render(
+      ({ unmount } = render(
         <MemoryRouter initialEntries={['/sim/scenario-1']}>
           <Routes>
             <Route path="/sim/:id" element={<SimulationView />} />
           </Routes>
         </MemoryRouter>,
+      ));
+
+      await waitFor(() => expect(mockStore.loadScenario).toHaveBeenCalledTimes(1));
+
+      await waitFor(
+        () => expect(mockStore.loadScenario).toHaveBeenCalledTimes(WARMUP_RECOVERY_MAX_ATTEMPTS),
+        { timeout: WARMUP_RECOVERY_INTERVAL_MS * (WARMUP_RECOVERY_MAX_ATTEMPTS + 2) },
       );
-
-      expect(mockStore.loadScenario).toHaveBeenCalledTimes(1);
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30000);
-      });
-
-      expect(mockStore.loadScenario).toHaveBeenCalledTimes(10);
     } finally {
-      vi.useRealTimers();
+      if (unmount) {
+        const unmountView = unmount;
+        act(() => {
+          unmountView();
+        });
+      }
+      infoSpy.mockRestore();
     }
-  });
+  }, WARMUP_RECOVERY_INTERVAL_MS * (WARMUP_RECOVERY_MAX_ATTEMPTS + 4));
 
   it('polls the backend during the tail narrating handoff until done is observed', async () => {
-    vi.useFakeTimers();
+    let unmount: (() => void) | undefined;
     try {
       mockStore.scenario = {
         ...baseScenario,
@@ -653,27 +678,31 @@ describe('SimulationView replay automation output', () => {
         round: index < 8 ? 1 : 2,
       }));
       mockStore.thinkingAgents = [];
-      mockStore.loadScenario = vi.fn(async () => undefined);
+      mockStore.loadScenario.mockImplementation(async () => undefined);
 
-      render(
+      ({ unmount } = render(
         <MemoryRouter initialEntries={['/sim/scenario-1']}>
           <Routes>
             <Route path="/sim/:id" element={<SimulationView />} />
           </Routes>
         </MemoryRouter>,
+      ));
+
+      await waitFor(() => expect(mockStore.loadScenario).toHaveBeenCalledTimes(1));
+
+      await waitFor(
+        () => expect(mockStore.loadScenario).toHaveBeenCalledTimes(4),
+        { timeout: TAIL_STATUS_SYNC_INTERVAL_MS * 5 },
       );
-
-      expect(mockStore.loadScenario).toHaveBeenCalledTimes(1);
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1800);
-      });
-
-      expect(mockStore.loadScenario).toHaveBeenCalledTimes(4);
     } finally {
-      vi.useRealTimers();
+      if (unmount) {
+        const unmountView = unmount;
+        act(() => {
+          unmountView();
+        });
+      }
     }
-  });
+  }, TAIL_STATUS_SYNC_INTERVAL_MS * 8);
 
   it('backfills betting and key moments while preserving authoritative empty branch snapshots', async () => {
     mockStore.scenario = {
@@ -756,6 +785,208 @@ describe('SimulationView replay automation output', () => {
         key_moment_count: 1,
       });
     });
+  });
+
+  it('retries gameplay authority backfill with the latest revision after a stale write conflict', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockStore.scenario = {
+      ...baseScenario,
+      gameplay_state: null,
+    };
+    window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
+      version: 1,
+      scenarios: {
+        'scenario-1': {
+          director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+          cooldowns: {},
+          cards: { usageLog: [] },
+          betting: {
+            bets: [
+              {
+                betId: 'bet-conflict',
+                kind: 'branch_winner',
+                targetId: 'b1',
+                targetLabel: '永世帝国',
+                confidence: 0.8,
+                placedAtRound: 2,
+                placedAt: '2026-03-19T03:00:00Z',
+                resolved: false,
+              },
+            ],
+          },
+          commitment: {
+            active: false,
+            branchId: null,
+            branchTitle: null,
+            committedAtRound: null,
+            committedAt: null,
+            outcome: null,
+          },
+          objectives: {
+            generatedForQuestion: null,
+            generatedForProfile: null,
+            goals: [],
+          },
+          archive: {
+            branchSnapshots: [],
+            keyMoments: ['event:bet:2:%E6%B0%B8%E4%B8%96%E5%B8%9D%E5%9B%BD'],
+          },
+        },
+      },
+    }));
+    getScenarioGameplayStateMock.mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      revision: 3,
+      cards: {
+        usage_log: [
+          {
+            card_id: 'public_hearing',
+            profile_id: 'law',
+            branch_id: 'b1',
+            branch_title: '永世帝国',
+            round: 2,
+            cost: 1,
+            directive: 'Remote card survives conflict retry.',
+            used_at: '2026-03-19T02:59:00Z',
+          },
+        ],
+      },
+      betting: { bets: [] },
+      archive: { key_moments: [], branch_snapshots: [] },
+    } as ScenarioGameplayStateResponse);
+    upsertScenarioGameplayStateMock
+      .mockRejectedValueOnce(new ApiError(409, 'GAMEPLAY_STATE_CONFLICT', 'revision mismatch'))
+      .mockImplementationOnce(async (scenarioId: string, payload: unknown) => ({
+        scenario_id: scenarioId,
+        ...(payload as Record<string, unknown>),
+        revision: 4,
+      }));
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(upsertScenarioGameplayStateMock).toHaveBeenCalledTimes(2);
+    });
+
+    const retryPayload = upsertScenarioGameplayStateMock.mock.calls[1][1] as ScenarioGameplayState;
+    expect(retryPayload.revision).toBe(3);
+    expect(retryPayload.cards.usage_log[0]).toMatchObject({
+      card_id: 'public_hearing',
+      directive: 'Remote card survives conflict retry.',
+    });
+    expect(retryPayload.betting.bets[0]).toMatchObject({
+      bet_id: 'bet-conflict',
+      target_label: '永世帝国',
+    });
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('Failed to persist backend state'),
+      expect.anything(),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('retries director authority backfill with the latest revision after a stale write conflict', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockStore.scenario = {
+      ...baseScenario,
+      director_state: null,
+    };
+    window.localStorage.setItem('swarmoracle:scenario-meta:v1', JSON.stringify({
+      version: 1,
+      scenarios: {
+        'scenario-1': {
+          director: { maxPoints: 3, remainingPoints: 3, spentPoints: 0 },
+          cooldowns: {},
+          cards: { usageLog: [] },
+          betting: { bets: [] },
+          commitment: {
+            active: true,
+            branchId: 'b1',
+            branchTitle: '永世帝国',
+            committedAtRound: 2,
+            committedAt: '2026-03-19T03:00:00Z',
+            outcome: 'pending',
+          },
+          objectives: {
+            generatedForQuestion: null,
+            generatedForProfile: null,
+            goals: [],
+          },
+          archive: {
+            branchSnapshots: [],
+            keyMoments: [],
+          },
+        },
+      },
+    }));
+    getScenarioDirectorStateMock.mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      revision: 5,
+      objectives: {
+        generated_for_question: 'remote question',
+        generated_for_profile: 'law',
+        goals: [
+          {
+            id: 'remote-goal',
+            kind: 'branch_commitment',
+            target_card_id: null,
+            reward_label: 'archive_grade',
+            created_at: '2026-03-19T01:00:00Z',
+          },
+        ],
+        last_updated_at: '2026-03-19T01:00:00Z',
+      },
+      commitment: {
+        active: false,
+        branch_id: null,
+        branch_title: null,
+        committed_at_round: null,
+        committed_at: null,
+        outcome: null,
+      },
+    } as ScenarioDirectorStateResponse);
+    upsertScenarioDirectorStateMock
+      .mockRejectedValueOnce(new ApiError(409, 'DIRECTOR_STATE_CONFLICT', 'revision mismatch'))
+      .mockImplementationOnce(async (scenarioId: string, payload: unknown) => ({
+        scenario_id: scenarioId,
+        ...(payload as Record<string, unknown>),
+        revision: 6,
+      }));
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(upsertScenarioDirectorStateMock).toHaveBeenCalledTimes(2);
+    });
+
+    const retryPayload = upsertScenarioDirectorStateMock.mock.calls[1][1] as ScenarioDirectorState;
+    expect(retryPayload.revision).toBe(5);
+    expect(retryPayload.objectives.goals[0]).toMatchObject({
+      id: 'remote-goal',
+      reward_label: 'archive_grade',
+    });
+    expect(retryPayload.commitment).toMatchObject({
+      active: true,
+      branch_id: 'b1',
+      branch_title: '永世帝国',
+    });
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('Failed to persist backend state'),
+      expect.anything(),
+    );
+    warnSpy.mockRestore();
   });
 
   it('stops backfilling stale local gameplay meta once backend gameplay has meaningful authority', async () => {

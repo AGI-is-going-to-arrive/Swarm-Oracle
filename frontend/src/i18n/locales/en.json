@@ -533,6 +533,7 @@
       "error": "Failed to submit",
       "error_closed": "Predictions are closed for this scenario.",
       "error_duplicate": "This bettor already submitted a prediction for the scenario.",
+      "error_too_long": "This prediction is too long after bet metadata is added. Shorten the rationale.",
       "error_branch_pending": "No active worldline is ready for branch betting yet. Try again in a moment.",
       "branch_unavailable_note": "Only the root worldline is available for now. Ending-tone or resonance bets are the safer fallback.",
       "confidence_low": "Guess",

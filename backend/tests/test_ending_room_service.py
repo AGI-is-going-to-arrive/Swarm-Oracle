@@ -1005,6 +1005,96 @@ def test_oracle_rewrite_uses_plain_text_retry_before_template_fallback(monkeypat
     assert content == "The front line broke before the court found words for the damage."
 
 
+def test_oracle_generation_first_uses_llm_before_anchor_template(monkeypatch):
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Worldline Roundtable",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name="Stilicho",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={"agent_role": "Marshal", "bio_short": "Keeps the front intact."},
+    )
+    anchor_copy = "ANCHOR_TEMPLATE_SHOULD_NOT_APPEAR"
+    prompts: list[str] = []
+
+    async def _generation_first(prompt, *args, **kwargs):
+        prompts.append(prompt)
+        assert "Fallback Reference (anchor copy)" not in prompt
+        assert anchor_copy not in prompt
+        return {"content": "LLM_SENTINEL_GENERATION_FIRST"}
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "llm_call_json", _generation_first)
+
+    content = asyncio.run(
+        _maybe_rewrite_oracle_copy(
+            room=room,
+            participant=participant,
+            phase=EndingRoomPhase.OPENING,
+            anchor_copy=anchor_copy,
+            purpose="test_generation_first_sentinel",
+        )
+    )
+
+    assert content == "LLM_SENTINEL_GENERATION_FIRST"
+    assert len(prompts) == 1
+
+
+def test_oracle_empty_generation_then_rewrite_uses_anchor_reference(monkeypatch):
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Worldline Roundtable",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.ARCHIVIST,
+        display_name="Archivist",
+        source_branch_id=None,
+        source_agent_id=None,
+        persona_snapshot_json={"agent_role": "Archivist", "bio_short": "Keeps branches comparable."},
+    )
+    anchor_copy = "ANCHOR_REFERENCE_ONLY_AFTER_EMPTY_GENERATION"
+    prompts: list[str] = []
+
+    async def _empty_then_rewrite(prompt, *args, **kwargs):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            assert "Fallback Reference (anchor copy)" not in prompt
+            assert anchor_copy not in prompt
+            return {"content": ""}
+        assert "Fallback Reference (anchor copy)" in prompt
+        assert anchor_copy in prompt
+        return {"content": "LLM_SENTINEL_REWRITE"}
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "llm_call_json", _empty_then_rewrite)
+
+    content = asyncio.run(
+        _maybe_rewrite_oracle_copy(
+            room=room,
+            participant=participant,
+            phase=EndingRoomPhase.VERDICT,
+            anchor_copy=anchor_copy,
+            purpose="test_generation_empty_then_rewrite",
+        )
+    )
+
+    assert content == "LLM_SENTINEL_REWRITE"
+    assert len(prompts) == 2
+
+
 def test_one_move_only_english_copy_does_not_embed_cjk_hinges_or_persona_lines():
     scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world(
         question="What if a coastal city banned cash in two weeks?",

@@ -2,7 +2,7 @@
    SwarmOracle — PredictionModal (P5-B)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { submitPrediction } from '../api/client';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
@@ -22,6 +22,8 @@ import {
 import { placeBet, type ScenarioMeta } from '../lib/scenarioMeta';
 import type { BranchInfo } from '../types';
 import './PredictionModal.css';
+
+const PREDICTION_TEXT_LIMIT = 500;
 
 interface Props {
   scenarioId: string;
@@ -138,10 +140,71 @@ export default function PredictionModal({
       ? targetBranchId
       : defaultTargetBranchId;
   const hasValidBranchTarget = branchOptions.some((branch) => branch.id === effectiveTargetBranchId);
+  const structuredTargetId =
+    effectiveBetKind === 'branch_winner'
+      ? effectiveTargetBranchId
+      : effectiveBetKind === 'ending_tone'
+        ? endingTone
+        : profileResonance;
+  const structuredTargetLabel =
+    effectiveBetKind === 'branch_winner'
+      ? branchOptions.find((branch) => branch.id === effectiveTargetBranchId)?.label ?? effectiveTargetBranchId
+      : effectiveBetKind === 'ending_tone'
+        ? getEndingToneLabel(endingTone, isZh)
+        : PROFILE_RESONANCE_OPTIONS[profileResonance][isZh ? 'zh' : 'en'];
+  const predictionPayloadLength = useMemo(
+    () => buildStructuredPredictionText({
+      kind: effectiveBetKind,
+      targetId: structuredTargetId,
+      targetLabel: structuredTargetLabel,
+      rationale: text,
+      confidence,
+      userName,
+      placedAtRound: currentRound,
+      sceneTheme,
+      question,
+    }).length,
+    [
+      confidence,
+      currentRound,
+      effectiveBetKind,
+      question,
+      sceneTheme,
+      structuredTargetId,
+      structuredTargetLabel,
+      text,
+      userName,
+    ],
+  );
+  const predictionRationaleLimit = useMemo(() => {
+    const payloadWithoutRationale = buildStructuredPredictionText({
+      kind: effectiveBetKind,
+      targetId: structuredTargetId,
+      targetLabel: structuredTargetLabel,
+      rationale: '',
+      confidence,
+      userName,
+      placedAtRound: currentRound,
+      sceneTheme,
+      question,
+    });
+    return Math.max(0, PREDICTION_TEXT_LIMIT - payloadWithoutRationale.length - 1);
+  }, [
+    confidence,
+    currentRound,
+    effectiveBetKind,
+    question,
+    sceneTheme,
+    structuredTargetId,
+    structuredTargetLabel,
+    userName,
+  ]);
+  const isPredictionTooLong = predictionPayloadLength > PREDICTION_TEXT_LIMIT;
   const canSubmit =
     Boolean(text.trim())
     && !isDisabled
-    && (effectiveBetKind !== 'branch_winner' || hasValidBranchTarget);
+    && (effectiveBetKind !== 'branch_winner' || hasValidBranchTarget)
+    && !isPredictionTooLong;
 
   const handleSubmit = async () => {
     const trimmed = text.trim();
@@ -155,21 +218,10 @@ export default function PredictionModal({
     setStatus('submitting');
     setErrorMsg('');
 
-    const targetLabel =
-      effectiveBetKind === 'branch_winner'
-        ? branchOptions.find((branch) => branch.id === effectiveTargetBranchId)?.label ?? effectiveTargetBranchId
-        : effectiveBetKind === 'ending_tone'
-          ? getEndingToneLabel(endingTone, isZh)
-          : PROFILE_RESONANCE_OPTIONS[profileResonance][isZh ? 'zh' : 'en'];
     const predictionText = buildStructuredPredictionText({
       kind: effectiveBetKind,
-      targetId:
-        effectiveBetKind === 'branch_winner'
-          ? effectiveTargetBranchId
-          : effectiveBetKind === 'ending_tone'
-            ? endingTone
-            : profileResonance,
-      targetLabel,
+      targetId: structuredTargetId,
+      targetLabel: structuredTargetLabel,
       rationale: trimmed,
       confidence,
       userName,
@@ -177,6 +229,11 @@ export default function PredictionModal({
       sceneTheme,
       question,
     });
+    if (predictionText.length > PREDICTION_TEXT_LIMIT) {
+      setStatus('error');
+      setErrorMsg(t('prediction.error_too_long'));
+      return;
+    }
 
     try {
       const trimmedName = userName.trim();
@@ -193,13 +250,8 @@ export default function PredictionModal({
       const nextMeta = placeBet(scenarioId, {
         betId: createCompatUuid(),
         kind: effectiveBetKind,
-        targetId:
-          effectiveBetKind === 'branch_winner'
-            ? effectiveTargetBranchId
-            : effectiveBetKind === 'ending_tone'
-              ? endingTone
-              : profileResonance,
-        targetLabel,
+        targetId: structuredTargetId,
+        targetLabel: structuredTargetLabel,
         confidence,
         userName: userName.trim() || undefined,
         placedAtRound: currentRound,
@@ -225,6 +277,10 @@ export default function PredictionModal({
       text_length: text.length,
       confidence,
       confidence_label: confidenceLabel,
+      prediction_text_length: predictionPayloadLength,
+      prediction_text_limit: PREDICTION_TEXT_LIMIT,
+      rationale_limit: predictionRationaleLimit,
+      too_long: isPredictionTooLong,
       user_name_length: userName.length,
       status,
       error: errorMsg || null,
@@ -235,7 +291,7 @@ export default function PredictionModal({
     return () => {
       onAutomationStateChange?.(null);
     };
-  }, [canSubmit, confidence, confidenceLabel, effectiveBetKind, effectiveTargetBranchId, endingTone, errorMsg, onAutomationStateChange, profileResonance, status, text, userName.length]);
+  }, [canSubmit, confidence, confidenceLabel, effectiveBetKind, effectiveTargetBranchId, endingTone, errorMsg, isPredictionTooLong, onAutomationStateChange, predictionPayloadLength, predictionRationaleLimit, profileResonance, status, text, userName.length]);
 
   return (
     <div className="modal-overlay prediction-modal-overlay" onClick={(e) => e.target === e.currentTarget && handleClose()}>
@@ -356,10 +412,10 @@ export default function PredictionModal({
               onChange={(e) => setText(e.target.value)}
               disabled={isDisabled}
               rows={4}
-              maxLength={500}
+              maxLength={predictionRationaleLimit}
             />
             <div className="prediction-modal__helper-row">
-              <span className="pred-char-count">{text.length}/500</span>
+              <span className="pred-char-count">{text.length}/{predictionRationaleLimit}</span>
               <span className="pred-char-count pred-char-count--hint">
                 {t('prediction.bet_preview_prefix')}
                 {' '}

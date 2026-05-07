@@ -200,6 +200,44 @@ describe('PredictionModal automation callback', () => {
     expect(onPlacedBet.mock.calls[0][0].betting.bets[0].targetLabel).toBeTruthy();
   });
 
+  it('budgets rationale length against the final backend prediction payload', async () => {
+    const user = userEvent.setup();
+    const { submitPrediction } = await import('../api/client');
+    vi.mocked(submitPrediction).mockResolvedValue({
+      id: 'prediction-budgeted',
+      scenario_id: 'scenario-1',
+      user_name: 'Test Director',
+      prediction_text: 'Structured bet',
+      confidence: 0.7,
+      score: null,
+      score_reason: null,
+      created_at: '2026-03-19T00:00:00Z',
+    });
+
+    render(
+      <PredictionModal
+        scenarioId="scenario-1"
+        branches={[makeBranch({ id: 'branch-1', title: 'Long metadata worldline', probability: 0.6 })]}
+        question={'What if a civic budget review chamber must publish structured wagers? '.repeat(4)}
+        onClose={() => {}}
+      />,
+    );
+
+    const predictionInput = screen.getByLabelText('prediction.text_label') as HTMLTextAreaElement;
+    const maxLength = Number(predictionInput.getAttribute('maxlength'));
+    expect(maxLength).toBeGreaterThan(0);
+    expect(maxLength).toBeLessThan(500);
+
+    await user.type(predictionInput, 'x'.repeat(500));
+    expect(predictionInput.value).toHaveLength(maxLength);
+
+    await user.click(screen.getByRole('button', { name: 'prediction.submit' }));
+
+    expect(submitPrediction).toHaveBeenCalledTimes(1);
+    const submittedPredictionText = vi.mocked(submitPrediction).mock.calls[0][1];
+    expect(submittedPredictionText.length).toBeLessThanOrEqual(500);
+  });
+
   it('submits the branch currently selected by the user even when a commitment branch exists', async () => {
     const user = userEvent.setup();
     const onPlacedBet = vi.fn();
