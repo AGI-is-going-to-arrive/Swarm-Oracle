@@ -92,6 +92,8 @@ describe('i18n locale resources', () => {
       'bridge_not_enabled',
       'bridge_replay_unavailable',
       'bridge_single_branch',
+      'bridge_workbench_title',
+      'bridge_workbench_desc',
     ] as const;
     const resultFollowupKeys = [
       'load_result_failed',

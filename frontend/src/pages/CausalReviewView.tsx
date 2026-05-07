@@ -75,6 +75,28 @@ const CAUSAL_COLORS = {
   decorativeEdgeFallback: '#888',  // SVG edge stroke fallback, not text.
 } as const;
 
+const GUIDE_KEY_NODE_LABEL_MAX_WIDTH = 72;
+const GUIDE_KEY_NODE_LABEL_SUFFIX_WIDTH = 3;
+
+function formatGuideKeyNodeLabel(label: string): string {
+  const compactLabel = label.replace(/\s+/g, ' ').trim();
+  let displayWidth = 0;
+  let endIndex = compactLabel.length;
+
+  for (let index = 0; index < compactLabel.length; index += 1) {
+    const charWidth = compactLabel.charCodeAt(index) <= 0x7f ? 1 : 2;
+    const nextWidth = displayWidth + charWidth;
+    if (nextWidth > GUIDE_KEY_NODE_LABEL_MAX_WIDTH - GUIDE_KEY_NODE_LABEL_SUFFIX_WIDTH) {
+      endIndex = index;
+      break;
+    }
+    displayWidth = nextWidth;
+  }
+
+  if (endIndex === compactLabel.length) return compactLabel;
+  return `${compactLabel.slice(0, endIndex).trimEnd()}...`;
+}
+
 // ── Types ───────────────────────────────────────────────────
 
 interface GraphNodeData {
@@ -1168,14 +1190,18 @@ export function CausalReviewView() {
               ))}
             </div>
             {guideStats.godNodes.length > 0 && (
-              <div style={{ marginBottom: 6 }}>
+              <div style={{ marginBottom: 6, lineHeight: 1.45 }}>
                 <span style={{ color: CAUSAL_COLORS.textMuted }}>{t('causal.guide_key_nodes', 'Key nodes')}: </span>
-                {guideStats.godNodes.map((gn, i) => (
-                  <span key={gn.id} aria-label={`${gn.label} (${gn.degree})`}>
-                    {i > 0 && ' · '}
-                    <span style={{ color: CAUSAL_COLORS.textStrong }}>{gn.label} ({gn.degree})</span>
-                  </span>
-                ))}
+                {guideStats.godNodes.map((gn, i) => {
+                  const fullLabel = `${gn.label} (${gn.degree})`;
+                  const displayLabel = `${formatGuideKeyNodeLabel(gn.label)} (${gn.degree})`;
+                  return (
+                    <span key={gn.id} aria-label={fullLabel} title={fullLabel}>
+                      {i > 0 && ' · '}
+                      <span style={{ color: CAUSAL_COLORS.textStrong }}>{displayLabel}</span>
+                    </span>
+                  );
+                })}
               </div>
             )}
             <p style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.7rem', margin: 0 }}>

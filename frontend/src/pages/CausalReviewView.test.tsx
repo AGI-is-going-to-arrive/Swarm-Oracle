@@ -642,6 +642,30 @@ describe('CausalReviewView', () => {
     expect(keyNodesRow).not.toHaveTextContent('Isolated Gamma (0)');
   });
 
+  it('keeps verbose guide key node labels compact while preserving the full label', async () => {
+    const longLabel = '诸葛亮昨夜翻检汉中粮册时发现秋雨让褒斜道慢了两日，木牛流马坏损又牵动成都后勤与北伐节奏';
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-guide-long-key-node',
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: longLabel, round: 1, payload: null },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Anchor node', round: 2, payload: null },
+        ],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    renderView();
+
+    const keyNodesRow = (await screen.findByText('Key nodes:')).parentElement;
+    expect(keyNodesRow).not.toBeNull();
+    expect(keyNodesRow).toHaveTextContent('...');
+    expect(keyNodesRow).not.toHaveTextContent(`${longLabel} (1)`);
+    const fullLabelNode = screen.getByLabelText(`${longLabel} (1)`);
+    expect(fullLabelNode).toHaveAttribute('title', `${longLabel} (1)`);
+  });
+
   it('hides the guide panel after closing it and exposes the show-overview button', async () => {
     const user = userEvent.setup();
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({

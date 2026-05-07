@@ -85,9 +85,9 @@ React + TypeScript frontend for SwarmOracle.
 - `GlobalOfflineBanner.tsx`
   the WS-disconnect grace timer now uses an SSR-safe layout-effect fallback; current SPA behavior stays the same, and future SSR will not log the layout-effect warning
 - `ResultView.tsx`
-  the result surface now includes the capability-gated `Explore Deeper` bridge, keeps disabled cards semantic without rendering bare anchors, encodes the existing causal / compare CTAs consistently, and routes faction-timeline lead copy through locale keys with `{{title}}` interpolation
+  the result surface now includes the capability-gated `Explore Deeper` bridge with locale-backed causal / replay / compare / workbench copy, keeps disabled cards semantic without rendering bare anchors, encodes the existing causal / compare CTAs consistently, and routes faction-timeline lead copy through locale keys with `{{title}}` interpolation
 - `CausalReviewView.tsx`
-  graph fetches now encode `scenarioId / branchId` before building request URLs; the guide / empty-state copy is now backed by the local `CAUSAL_COLORS` dark-surface palette, and the close/show controls expose a complete disclosure pattern
+  graph fetches now encode `scenarioId / branchId` before building request URLs; the guide / empty-state copy is now backed by the local `CAUSAL_COLORS` dark-surface palette, close/show controls expose a complete disclosure pattern, and long guide key-node labels stay visually compact while preserving the full label in `aria-label` / `title`
 - `ArgumentMap.tsx`
   relation labels stay localized for `supports / rebuts / accepted / rejected / unaddressed`
   fail-soft `load_failed` responses stay on the Retry state and keep graph/export hidden
@@ -136,13 +136,15 @@ npm run build:spike:phaser-custom
 ```
 
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
-- Latest scoped reruns in this session:
-  - targeted vitest covering `ResultView / CausalReviewView / locales`: `124 passed`
+- Latest scoped reruns for the bridge / guide copy update:
+  - `npm run test -- --run src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts --reporter=verbose`: `87 passed`
+  - `npx tsc --noEmit`: pass
+  - fixture-backed Playwright browser recheck for `ResultView` bridge copy + `CausalReviewView` compact guide labels: pass
+- Broader recent frontend baseline remains:
   - frontend full vitest: `1365 passed`
   - `npm exec -- eslint src/pages/ResultView.tsx src/pages/ResultView.test.tsx src/pages/CausalReviewView.tsx src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts`: pass
   - `npm exec -- tsc --noEmit -p tsconfig.app.json`: pass
   - `npm run build`: pass
-  - fixture-backed Playwright browser recheck for `ResultView` bridge + `CausalReviewView` guide: pass
 - The default signoff target remains:
   - Chromium desktop/mobile
   - desktop Firefox / WebKit scoped regression
