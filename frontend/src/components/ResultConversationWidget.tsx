@@ -36,16 +36,18 @@ export function ResultConversationWidget({
 
   return (
     <>
-      <button
-        type="button"
-        data-testid="result-conversation-cta"
-        onClick={handleOpen}
-        className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-purple-400/40 bg-purple-500/10 px-5 py-3 text-sm font-medium text-purple-200 transition-colors hover:bg-purple-500/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-300"
-      >
-        {t('result_conversation.ask_oracle', {
-          defaultValue: 'Ask the Oracle about this result',
-        })}
-      </button>
+      <div className="result-oracle-cta">
+        <button
+          type="button"
+          data-testid="result-conversation-cta"
+          onClick={handleOpen}
+          className="result-oracle-cta__button"
+        >
+          {t('result_conversation.ask_oracle', {
+            defaultValue: 'Ask the Oracle about this result',
+          })}
+        </button>
+      </div>
 
       <NodeConversationSheet
         open={sheetOpen}

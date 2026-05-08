@@ -49,20 +49,20 @@ export function SourceCategoryCard({
       stateTestId = 'result-source-skeleton';
       stateBody = (
         <div
-          className="space-y-2"
+          className="result-source-card__skeleton-group"
           aria-busy="true"
           data-testid={`${baseTestId}-skeleton`}
         >
-          <div className="h-3 w-4/5 animate-pulse rounded bg-slate-700/40" />
-          <div className="h-3 w-3/5 animate-pulse rounded bg-slate-700/40" />
-          <div className="h-3 w-2/5 animate-pulse rounded bg-slate-700/40" />
+          <div className="result-source-card__skeleton result-source-card__skeleton--wide" />
+          <div className="result-source-card__skeleton result-source-card__skeleton--medium" />
+          <div className="result-source-card__skeleton result-source-card__skeleton--narrow" />
         </div>
       );
       break;
     case 'empty':
       stateTestId = 'result-sources-empty';
       stateBody = (
-        <p className="text-sm text-slate-400">
+        <p className="result-source-card__empty">
           {t(`source.${family}.empty`, { defaultValue: 'No results.' })}
         </p>
       );
@@ -70,7 +70,7 @@ export function SourceCategoryCard({
     case 'rate_limited':
       stateTestId = 'result-source-rate-limited';
       stateBody = (
-        <p className="text-sm text-amber-400">
+        <p className="result-source-card__rate-limited">
           {t(`source.${family}.rate_limited`, {
             defaultValue: 'Rate limit reached. Please retry later.',
           })}
@@ -80,7 +80,7 @@ export function SourceCategoryCard({
     case 'network_error':
       stateTestId = 'result-source-network-error';
       stateBody = (
-        <p className="text-sm text-rose-400">
+        <p className="result-source-card__error">
           {t(`source.${family}.network_error`, {
             defaultValue: 'Network error while fetching sources.',
           })}
@@ -97,23 +97,20 @@ export function SourceCategoryCard({
       data-testid={baseTestId}
       data-state={state}
       data-source-family={family}
-      className={cn(
-        'rounded-xl border border-slate-700/60 bg-slate-900/40 p-4 shadow-sm',
-        className,
-      )}
+      className={cn('result-source-card', className)}
       aria-labelledby={`${baseTestId}-title`}
     >
-      <header className="mb-3 flex flex-col gap-0.5">
+      <header className="result-source-card__header">
         <h3
           id={`${baseTestId}-title`}
-          className="text-sm font-semibold text-slate-100"
+          className="result-source-card__title"
         >
           {title}
         </h3>
-        {subtitle && <p className="text-xs text-slate-400">{subtitle}</p>}
+        {subtitle && <p className="result-source-card__subtitle">{subtitle}</p>}
       </header>
       <div
-        className="source-category-card__body"
+        className="source-category-card__body result-source-card__body"
         data-testid={stateTestId}
       >
         {stateBody}

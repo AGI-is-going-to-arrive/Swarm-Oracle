@@ -42,6 +42,8 @@ router = APIRouter(
     dependencies=[Depends(verify_session)],
 )
 
+ALLOWED_CUSTOM_AGENT_TIERS = {"CROWD", "IMPORTANT"}
+
 
 # ── Request schemas ─────────────────────────────────────
 
@@ -53,6 +55,7 @@ class CreateAgentRequest(BaseModel):
     persona: str | None = None
     decision_bias: dict | None = None
     knowledge_domains: list[str] | None = None
+    preferred_tier: str = "IMPORTANT"
 
     @field_validator("user_id")
     @classmethod
@@ -107,6 +110,17 @@ class CreateAgentRequest(BaseModel):
             )
         return v
 
+    @field_validator("preferred_tier")
+    @classmethod
+    def validate_preferred_tier(cls, v: str) -> str:
+        tier = v.strip().upper()
+        if tier not in ALLOWED_CUSTOM_AGENT_TIERS:
+            raise ValueError(
+                "preferred_tier must be one of: "
+                f"{sorted(ALLOWED_CUSTOM_AGENT_TIERS)}"
+            )
+        return tier
+
 
 class UpdateAgentRequest(BaseModel):
     display_name: str | None = None
@@ -114,6 +128,7 @@ class UpdateAgentRequest(BaseModel):
     persona: str | None = None
     decision_bias: dict | None = None
     knowledge_domains: list[str] | None = None
+    preferred_tier: str | None = None
 
     @field_validator("display_name")
     @classmethod
@@ -161,6 +176,19 @@ class UpdateAgentRequest(BaseModel):
                 f"Allowed: {ALLOWED_KNOWLEDGE_DOMAINS}"
             )
         return v
+
+    @field_validator("preferred_tier")
+    @classmethod
+    def validate_preferred_tier(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        tier = v.strip().upper()
+        if tier not in ALLOWED_CUSTOM_AGENT_TIERS:
+            raise ValueError(
+                "preferred_tier must be one of: "
+                f"{sorted(ALLOWED_CUSTOM_AGENT_TIERS)}"
+            )
+        return tier
 
 
 # ── Endpoints ───────────────────────────────────────────
@@ -390,6 +418,7 @@ async def create_workshop_agent(
             persona=body.persona,
             decision_bias=body.decision_bias,
             knowledge_domains=body.knowledge_domains,
+            preferred_tier=body.preferred_tier,
         )
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"detail": str(exc)})

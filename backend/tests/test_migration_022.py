@@ -19,7 +19,8 @@ from sqlalchemy import create_engine, inspect, text
 
 _PREV_REVISION = "021_scope_debate_argument_unit_dedup_per_turn"
 _GRAPH_EDGE_EVIDENCE_DOWN_REVISION = "023_agent_conversation_quota_ledger"
-_HEAD_REVISION = "025_backfill_graph_node_agent_name"
+_AGENT_IDENTITY_PREFERRED_TIER_DOWN_REVISION = "025_backfill_graph_node_agent_name"
+_HEAD_REVISION = "026_agent_identity_preferred_tier"
 
 
 def _alembic_runtime_or_skip():
@@ -508,6 +509,83 @@ def test_024_graph_edge_evidence_columns_downgrade_roundtrip_preserves_edges(tmp
             text("SELECT COUNT(*) FROM graph_edge WHERE id='edge-024'")
         ).scalar_one()
         assert edge_count == 1
+        assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []
+    engine.dispose()
+
+
+def test_026_agent_identity_preferred_tier_sqlite_roundtrip(tmp_path):
+    db_url = f"sqlite:///{tmp_path/'026_agent_identity_preferred_tier.db'}"
+    _upgrade_to(db_url, _AGENT_IDENTITY_PREFERRED_TIER_DOWN_REVISION)
+
+    engine = _make_engine(db_url)
+    assert _current_revision(engine) == _AGENT_IDENTITY_PREFERRED_TIER_DOWN_REVISION
+    identity_columns = {col["name"] for col in inspect(engine).get_columns("agent_identity")}
+    assert "preferred_tier" not in identity_columns
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO agent_identity (
+                    id, user_id, kind, display_name, role, continuity_key,
+                    created_at, updated_at
+                )
+                VALUES (
+                    'identity-026-a', 'owner-026', 'custom', 'Agent A',
+                    'analyst', 'identity-026-a-key',
+                    '2026-05-08 00:00:00', '2026-05-08 00:00:00'
+                )
+                """
+            )
+        )
+    engine.dispose()
+
+    _upgrade_to(db_url, _HEAD_REVISION)
+    engine = _make_engine(db_url)
+    assert _current_revision(engine) == _HEAD_REVISION
+    identity_columns = {col["name"] for col in inspect(engine).get_columns("agent_identity")}
+    assert "preferred_tier" in identity_columns
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("SELECT preferred_tier FROM agent_identity WHERE id='identity-026-a'")
+        ).scalar_one()
+        assert row == "IMPORTANT"
+        conn.execute(
+            text(
+                """
+                INSERT INTO agent_identity (
+                    id, user_id, kind, display_name, role, continuity_key,
+                    preferred_tier, created_at, updated_at
+                )
+                VALUES (
+                    'identity-026-b', 'owner-026', 'custom', 'Agent B',
+                    'observer', 'identity-026-b-key', 'CROWD',
+                    '2026-05-08 00:00:00', '2026-05-08 00:00:00'
+                )
+                """
+            )
+        )
+    engine.dispose()
+
+    _downgrade_to(db_url, _AGENT_IDENTITY_PREFERRED_TIER_DOWN_REVISION)
+    engine = _make_engine(db_url)
+    assert _current_revision(engine) == _AGENT_IDENTITY_PREFERRED_TIER_DOWN_REVISION
+    identity_columns = {col["name"] for col in inspect(engine).get_columns("agent_identity")}
+    assert "preferred_tier" not in identity_columns
+    with engine.connect() as conn:
+        assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []
+    engine.dispose()
+
+    _upgrade_to(db_url, _HEAD_REVISION)
+    engine = _make_engine(db_url)
+    assert _current_revision(engine) == _HEAD_REVISION
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT id, preferred_tier FROM agent_identity ORDER BY id")
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("identity-026-a", "IMPORTANT"),
+            ("identity-026-b", "IMPORTANT"),
+        ]
         assert conn.execute(text("PRAGMA foreign_key_check")).fetchall() == []
     engine.dispose()
 

@@ -57,6 +57,7 @@ export default function App() {
             {/* Phase 3: agent routes */}
             <Route path="/agents" element={<AgentLibrary />} />
             <Route path="/agents/new" element={<AgentWorkshopView />} />
+            <Route path="/agents/edit/:id" element={<AgentWorkshopView />} />
             <Route path="/sim/replay" element={<SimulationView />} />
             {/* Phase 3: causal-map BEFORE :id catch-all (Gemini review) */}
             <Route path="/sim/:id/causal-map" element={<CausalReviewView />} />

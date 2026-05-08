@@ -27,6 +27,12 @@ from ._utils import (
 )
 
 
+def _source_multiplier(agent) -> float:
+    if agent is not None and getattr(agent, "source_type", None) == "custom":
+        return 1.5
+    return 1.0
+
+
 def _branch_pressure_hint(branch: Branch) -> str | None:
     return _short_persona(
         (
@@ -139,6 +145,7 @@ def _visible_branch_agents(
                 + float(stats["last_round_spoken"]) * 0.35
                 + float(_tier_rank(tier)) * 0.8
             )
+            raw_score *= _source_multiplier(agent)
             raw_scores.append(raw_score)
             candidates.append(
                 {
@@ -170,6 +177,7 @@ def _visible_branch_agents(
             raw_score = float(
                 _tier_rank(getattr(agent.tier, "value", agent.tier))) + max(0.0, 0.2 - index * 0.03
             )
+            raw_score *= _source_multiplier(agent)
             raw_scores.append(raw_score)
             candidates.append(
                 {

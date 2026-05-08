@@ -1555,3 +1555,603 @@
     transition: none;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════
+   Bottom Section — Hook Summary / Resume / Sources / Oracle CTA
+   Unified editorial treatment for previously unstyled blocks.
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Hook Summary Panel (生成物快览) ────────────────── */
+
+@keyframes hookPulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+.hook-summary-panel {
+  border-top: 1px solid var(--border-default);
+  padding-top: 32px;
+  margin-bottom: 40px;
+}
+
+.hook-summary-panel__heading {
+  font-family: var(--font-heading);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+}
+
+.hook-summary-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.hook-summary-card {
+  padding: 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.hook-summary-card:hover:not(.hook-summary-card--disabled):not(.hook-summary-card--skeleton) {
+  border-color: var(--color-primary);
+  box-shadow: 0 2px 12px rgba(194, 24, 91, 0.12);
+  box-shadow: 0 2px 12px color-mix(in oklab, var(--color-primary) 12%, transparent);
+}
+
+.hook-summary-card--disabled {
+  background: rgba(245, 240, 235, 0.6);
+  background: color-mix(in oklab, var(--bg-surface) 82%, var(--border-default));
+  border-style: dashed;
+  border-color: rgba(210, 200, 190, 0.5);
+  border-color: color-mix(in oklab, var(--border-default) 58%, var(--bg-surface));
+  opacity: 0.7;
+}
+
+.hook-summary-card--skeleton {
+  pointer-events: none;
+}
+
+.hook-summary-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.hook-summary-card__icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.hook-summary-card__title {
+  font-family: var(--font-heading);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.hook-summary-card__body {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.hook-summary-card__disabled {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.hook-summary-card__skeleton {
+  display: block;
+  height: 12px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  animation: hookPulse 1.5s ease-in-out infinite;
+}
+
+.hook-summary-card__error {
+  color: var(--color-danger);
+  font-size: var(--text-xs);
+}
+
+.hook-summary-card__retry {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  margin-left: 8px;
+  padding: 0;
+}
+
+.hook-summary-card__retry:hover {
+  opacity: 0.8;
+}
+
+.hook-summary-card__stats {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hook-summary-card__count {
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.hook-summary-card__detail {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.hook-summary-card__empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Resume Panel (续跑模拟) ────────────────────────── */
+
+.result-resume {
+  border-top: 1px solid var(--border-default);
+  padding-top: 32px;
+  margin-bottom: 40px;
+}
+
+.result-resume__heading {
+  font-family: var(--font-heading);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0 0 16px;
+}
+
+.result-resume__form {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-bottom: 12px;
+}
+
+.result-resume__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.result-resume__label {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.result-resume__select,
+.result-resume__input {
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  transition: border-color var(--transition-fast);
+}
+
+.result-resume__select:focus,
+.result-resume__input:focus {
+  border-color: var(--color-primary);
+  outline: 2px solid rgba(194, 24, 91, 0.25);
+  outline: 2px solid color-mix(in oklab, var(--color-primary) 25%, transparent);
+  outline-offset: 1px;
+}
+
+.result-resume__select:disabled,
+.result-resume__input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.result-resume__select {
+  appearance: auto;
+  min-width: 140px;
+}
+
+.result-resume__input {
+  width: 72px;
+}
+
+.result-resume__submit {
+  padding: 8px 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: var(--color-primary);
+  color: white;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.result-resume__submit:hover:not(:disabled) {
+  box-shadow: 0 2px 12px rgba(194, 24, 91, 0.25);
+  box-shadow: 0 2px 12px color-mix(in oklab, var(--color-primary) 25%, transparent);
+}
+
+.result-resume__submit:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.result-resume__submit:disabled {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  border-color: var(--border-default);
+}
+
+.result-resume__feedback {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  margin-bottom: 8px;
+}
+
+.result-resume__feedback--error {
+  color: var(--color-danger);
+}
+
+.result-resume__feedback--success {
+  color: var(--color-success);
+}
+
+/* ── Source Family Cards (真实世界来源) ──────────────── */
+
+.result-sources {
+  border-top: 1px solid var(--border-default);
+  padding-top: 32px;
+  margin-bottom: 40px;
+}
+
+.result-sources__heading {
+  font-family: var(--font-heading);
+  font-size: var(--text-lg);
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+}
+
+.result-sources__grid {
+  display: none;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+@media (min-width: 768px) {
+  .result-sources__grid {
+    display: grid;
+  }
+}
+
+.result-mobile-sources-trigger {
+  position: fixed;
+  right: 16px;
+  bottom: 80px;
+  z-index: 40;
+  display: inline-flex;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  background: var(--text-primary);
+  color: var(--bg-surface);
+  box-shadow: var(--shadow-elevated);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: 8px 16px;
+}
+
+@media (min-width: 768px) {
+  .result-mobile-sources-trigger {
+    display: none;
+  }
+}
+
+.result-source-card {
+  padding: 20px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.result-source-card:hover {
+  border-color: rgba(194, 24, 91, 0.3);
+  border-color: color-mix(in oklab, var(--color-primary) 40%, var(--border-default));
+}
+
+.result-source-card__header {
+  margin-bottom: 12px;
+}
+
+.result-source-card__title {
+  font-family: var(--font-heading);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.result-source-card__subtitle {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.result-source-card__body {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.result-source-card__skeleton {
+  display: block;
+  width: 100%;
+  height: 10px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  margin-bottom: 8px;
+  animation: hookPulse 1.5s ease-in-out infinite;
+}
+
+.result-source-card__skeleton--wide {
+  width: 80%;
+}
+
+.result-source-card__skeleton--medium {
+  width: 60%;
+}
+
+.result-source-card__skeleton--narrow {
+  width: 40%;
+}
+
+.result-source-card__skeleton:last-child {
+  margin-bottom: 0;
+}
+
+.result-source-card__empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.result-source-card__rate-limited {
+  color: var(--color-warning);
+}
+
+.result-source-card__error {
+  color: var(--color-danger);
+}
+
+.result-source-card__item {
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.5);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(250, 243, 232, 0.6));
+  margin-bottom: 8px;
+}
+
+.result-source-card__item:last-child {
+  margin-bottom: 0;
+}
+
+.result-source-card__item-title {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.result-source-card__item-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.result-source-card__item-summary {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.result-source-card__item-url {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-decoration-color: var(--border-default);
+  text-underline-offset: 2px;
+  word-break: break-all;
+  margin-top: 4px;
+}
+
+.result-source-card__item-url:hover {
+  color: var(--color-primary);
+  text-decoration-color: currentColor;
+}
+
+.result-extension-section {
+  margin-top: 24px;
+}
+
+.result-extension-section__item {
+  margin-bottom: 16px;
+}
+
+.result-extension-section__item--compact {
+  margin-top: 8px;
+}
+
+.result-extension-link {
+  color: var(--color-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.result-extension-link--small {
+  font-size: var(--text-xs);
+}
+
+.result-extension-link:hover,
+.result-extension-link:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.result-faction-panel {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+}
+
+.result-faction-panel__header {
+  margin-bottom: 14px;
+}
+
+.result-faction-panel__eyebrow {
+  margin: 0;
+  color: var(--color-primary);
+  font-size: var(--text-xs);
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.result-faction-panel__title {
+  margin: 6px 0 0;
+  color: var(--text-primary);
+  font-size: var(--text-base);
+}
+
+.result-faction-panel__lead {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+/* ── Oracle CTA (向神谕询问此结果) ──────────────────── */
+
+.result-oracle-cta {
+  border-top: 1px solid var(--border-default);
+  padding-top: 24px;
+  margin-bottom: 40px;
+  text-align: center;
+}
+
+.result-oracle-cta__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 24px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(194, 24, 91, 0.2);
+  border: 1px solid color-mix(in oklab, var(--color-primary) 30%, var(--border-default));
+  background: rgba(250, 240, 245, 0.6);
+  background: color-mix(in oklab, var(--color-primary) 6%, var(--bg-surface));
+  color: var(--text-primary);
+  font-family: var(--font-heading);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+  text-decoration: none;
+}
+
+.result-oracle-cta__button:hover {
+  background: rgba(248, 230, 238, 0.8);
+  background: color-mix(in oklab, var(--color-primary) 12%, var(--bg-surface));
+  border-color: var(--color-primary);
+  box-shadow: 0 2px 16px rgba(194, 24, 91, 0.15);
+  box-shadow: 0 2px 16px color-mix(in oklab, var(--color-primary) 15%, transparent);
+}
+
+.result-oracle-cta__button:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ── Bottom Section Responsive ──────────────────────── */
+
+@media (max-width: 640px) {
+  .hook-summary-panel__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .result-sources__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .result-source-card {
+    padding: 16px;
+  }
+
+  .result-resume__form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .result-resume__select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .result-resume__input {
+    width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .hook-summary-panel__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hook-summary-card__skeleton,
+  .result-source-card__skeleton {
+    animation: none;
+  }
+}

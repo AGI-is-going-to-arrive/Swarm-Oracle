@@ -17,6 +17,7 @@ from app.services.llm_client import (
     format_untrusted_text_block,
     llm_call_json_with_stream_fallback,
     llm_request_scope,
+    sanitize_untrusted_text,
 )
 from app.services.vector_store import get_vector_store
 
@@ -399,6 +400,28 @@ def format_messages_for_context(
     return "\n".join(lines)
 
 
+def _format_agent_metadata_blocks(
+    agent: dict,
+    language: str,
+    *,
+    knowledge_max_chars: int = 300,
+    bias_max_chars: int = 600,
+) -> str:
+    parts: list[str] = []
+    domains = agent.get("knowledge_domains")
+    if domains and isinstance(domains, list):
+        domain_text = ", ".join(str(d) for d in domains[:20])
+        label = "知识领域" if _is_chinese(language) else "Knowledge domains"
+        parts.append(format_untrusted_text_block(label, domain_text, max_chars=knowledge_max_chars))
+    bias = agent.get("decision_bias")
+    if bias and isinstance(bias, dict):
+        import json as _json
+        bias_text = _json.dumps(bias, ensure_ascii=False, sort_keys=True)
+        label = "决策偏好" if _is_chinese(language) else "Decision bias"
+        parts.append(format_untrusted_text_block(label, bias_text, max_chars=bias_max_chars))
+    return "\n".join(parts)
+
+
 def _build_crowd_context(
     agent: dict,
     setting_background: str,
@@ -450,6 +473,10 @@ def _build_crowd_context(
         else format_untrusted_text_block("persona", persona_text, max_chars=300)
     ) if persona_text else ""
 
+    metadata_block = _format_agent_metadata_blocks(
+        agent, language, knowledge_max_chars=180, bias_max_chars=300,
+    )
+
     # Phase 4C: Slim cross-scenario hint for CROWD (max 200 chars)
     crowd_cross_block = ""
     if cross_scenario_hint and cross_scenario_hint.strip():
@@ -458,11 +485,36 @@ def _build_crowd_context(
         )
         crowd_cross_block = f"\n{_crowd_hint}"
 
-    return f"""{copy["roleplay_intro"].format(name=agent['name'])}
+    _raw_name = agent['name']
+    _raw_role = agent.get('role', '')
+    _safe_name = sanitize_untrusted_text(_raw_name, max_chars=100)
+    _safe_role = sanitize_untrusted_text(_raw_role, max_chars=200)
+    _safe_emotion = sanitize_untrusted_text(agent.get('emotion', 'neutral'), max_chars=80)
+    _is_custom_agent = agent.get("source_type") == "custom" or bool(
+        agent.get("agent_identity_id")
+    )
+    _roleplay_intro = copy["roleplay_intro"].format(name=_safe_name)
+    _identity_line = f"{copy['identity']}{_safe_role}"
+    if _is_custom_agent:
+        name_label = "名称" if _is_chinese(language) else "Name"
+        role_label = "身份" if _is_chinese(language) else "Role"
+        _roleplay_intro = (
+            "你要按下面这位参与者的身份说话。"
+            if _is_chinese(language)
+            else "Speak as the participant described below."
+        )
+        _identity_line = (
+            f"{copy['identity']}\n"
+            f"{format_untrusted_text_block(name_label, _raw_name, max_chars=100)}\n"
+            f"{format_untrusted_text_block(role_label, _raw_role, max_chars=200)}"
+        )
 
-{copy["identity"]}{agent.get('role', '')}
+    return f"""{_roleplay_intro}
+
+{_identity_line}
 {persona_block}
-{copy["emotion"]}{agent.get('emotion', 'neutral')}
+{metadata_block}
+{copy["emotion"]}{_safe_emotion}
 {web_block}{copy["background_brief"]}{bg_brief}
 
 {copy["topic_label"]}
@@ -619,12 +671,37 @@ def build_agent_context(
         )
     )
 
-    return f"""{copy["roleplay_intro"].format(name=agent['name'])}
+    metadata_block = _format_agent_metadata_blocks(agent, language)
 
-{copy["identity"]}{_safe_role}
+    _raw_name = agent['name']
+    _safe_name = sanitize_untrusted_text(_raw_name, max_chars=100)
+    _safe_emotion = sanitize_untrusted_text(agent.get('emotion', 'neutral'), max_chars=80)
+    _is_custom_agent = agent.get("source_type") == "custom" or bool(
+        agent.get("agent_identity_id")
+    )
+    _roleplay_intro = copy["roleplay_intro"].format(name=_safe_name)
+    _identity_line = f"{copy['identity']}{_safe_role}"
+    if _is_custom_agent:
+        name_label = "名称" if _is_chinese(language) else "Name"
+        role_label = "身份" if _is_chinese(language) else "Role"
+        _roleplay_intro = (
+            "你要按下面这位参与者的身份说话。"
+            if _is_chinese(language)
+            else "Speak as the participant described below."
+        )
+        _identity_line = (
+            f"{copy['identity']}\n"
+            f"{format_untrusted_text_block(name_label, _raw_name, max_chars=100)}\n"
+            f"{format_untrusted_text_block(role_label, _role_text, max_chars=200)}"
+        )
+
+    return f"""{_roleplay_intro}
+
+{_identity_line}
 {copy["persona"]}{_safe_persona}
 {persona_drive_line}
-{copy["emotion"]}{agent.get('emotion', 'neutral')}
+{metadata_block}
+{copy["emotion"]}{_safe_emotion}
 {web_block}
 {copy["world_background"]}
 {setting_background}

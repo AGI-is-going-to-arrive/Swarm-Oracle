@@ -40,6 +40,7 @@ class AgentIdentity(SQLModel, table=True):
     persona: Optional[str] = None
     decision_bias_json: Optional[str] = None  # JSON string
     knowledge_domain_json: Optional[str] = None  # JSON string (predefined tags only)
+    preferred_tier: str = Field(default="IMPORTANT", max_length=32)
     continuity_key: str = ""  # hash for Layer 1 matching
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)

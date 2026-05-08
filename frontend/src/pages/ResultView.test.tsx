@@ -3600,11 +3600,12 @@ describe('ResultView campaign summary', () => {
 });
 
 describe('ResultView explore deeper bridge', () => {
-  it('renders four bridge entries when branches exist and bridge capabilities are loaded', async () => {
+  it('renders five bridge entries when branches exist and bridge capabilities are loaded', async () => {
     setMockCapabilities({
       causal_graph: { enabled: true },
       replay_trace: { enabled: true },
       counterfactual_replay: { enabled: true },
+      agent_identity: { enabled: true },
     });
     vi.mocked(apiClient.getStory).mockResolvedValueOnce({
       scenario_id: 'scenario-1',
@@ -3647,7 +3648,7 @@ describe('ResultView explore deeper bridge', () => {
     const bridgeHeading = await screen.findByRole('heading', { name: 'result.bridge_title' });
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
-    expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(4);
+    expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(5);
   });
 
   it('does not render the bridge card when the story has no branches', async () => {
@@ -3961,7 +3962,7 @@ describe('ResultView explore deeper bridge', () => {
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
     const entries = within(bridgeSection as HTMLElement).getAllByRole('link');
-    expect(entries).toHaveLength(4);
+    expect(entries).toHaveLength(5);
     for (const entry of entries) {
       expect(entry).toHaveAttribute('aria-disabled', 'true');
       expect(entry.tagName).toBe('DIV');

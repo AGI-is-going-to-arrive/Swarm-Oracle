@@ -1884,6 +1884,7 @@ export default function ResultView() {
               const kgEnabled = capabilities?.kg_explorer?.enabled ?? false;
               const replayEnabled = capabilities?.replay_trace?.enabled ?? false;
               const compareEnabled = (capabilities?.counterfactual_replay?.enabled ?? false) && branches.length > 1;
+              const agentEnabled = !!(capabilities?.custom_agents?.enabled);
               const scenarioId = encodeURIComponent(activeScenarioId);
               const workbenchView = !causalEnabled && kgEnabled ? 'kg' : 'graph';
               const workbenchBranchQuery = analysisBranch
@@ -1957,6 +1958,18 @@ export default function ResultView() {
                   href: `/workbench/${scenarioId}?view=${workbenchView}${workbenchBranchQuery}`,
                   disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
                   disabledDefault: isReplayMode ? 'Not available in replay mode.' : 'Not enabled on this server.',
+                },
+                {
+                  key: 'agents',
+                  icon: '\u{1F9EC}',
+                  titleKey: 'result.bridge_agents',
+                  titleDefault: 'Agent Library',
+                  descKey: 'result.bridge_agents_desc',
+                  descDefault: 'Browse agent identities and cross-scenario memory.',
+                  enabled: agentEnabled && !isReplayMode,
+                  href: '/agents',
+                  disabledKey: 'result.bridge_agents_disabled',
+                  disabledDefault: 'Agent identity is not enabled.',
                 },
               ];
 
@@ -2423,12 +2436,12 @@ export default function ResultView() {
 
       {/* ── Phase 3 Replay-Safe Integration ───────────────── */}
       {activeScenarioId && (capabilities?.causal_graph?.enabled || capabilities?.factions?.enabled) && (
-        <section style={{ marginTop: '1.5rem' }}>
+        <section className="result-extension-section">
           {capabilities?.causal_graph?.enabled && (
-            <div style={{ marginBottom: '1rem' }}>
+            <div className="result-extension-section__item">
               <a
                 href={`/sim/${encodeURIComponent(activeScenarioId)}/causal-map`}
-                style={{ color: '#8ab4f8', textDecoration: 'none', fontWeight: 600, fontSize: '0.9rem' }}
+                className="result-extension-link"
               >
                 {t('result.causal_graph_link', 'View Causal Graph →')}
               </a>
@@ -2437,33 +2450,21 @@ export default function ResultView() {
           {capabilities?.factions?.enabled && factionTimelineBranch && (
             <section
               aria-labelledby="result-faction-timeline-heading"
-              style={{
-                marginTop: '1rem',
-                padding: '1rem',
-                borderRadius: 14,
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-                background: 'linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.72))',
-              }}
+              className="result-faction-panel"
             >
-              <div style={{ marginBottom: '0.85rem' }}>
+              <div className="result-faction-panel__header">
                 <p
-                  style={{
-                    margin: 0,
-                    fontSize: '0.72rem',
-                    letterSpacing: '0.08em',
-                    textTransform: 'uppercase',
-                    color: '#8ab4f8',
-                  }}
+                  className="result-faction-panel__eyebrow"
                 >
                   {t('result.faction_timeline_branch_analysis_label', 'Branch analysis')}
                 </p>
                 <h2
                   id="result-faction-timeline-heading"
-                  style={{ margin: '0.35rem 0 0', fontSize: '1rem', color: '#f8fafc' }}
+                  className="result-faction-panel__title"
                 >
                   {t('result.faction_timeline_title', 'Faction timeline analysis')}
                 </h2>
-                <p style={{ margin: '0.45rem 0 0', fontSize: '0.82rem', color: '#9aa4b2' }}>
+                <p className="result-faction-panel__lead">
                   {factionTimelineLead}
                 </p>
               </div>
@@ -2481,7 +2482,7 @@ export default function ResultView() {
 
       {/* ── Phase 3 Live-Only Integration ────────────────── */}
       {id && !isReplayMode && (
-        <section style={{ marginTop: '1.5rem' }}>
+        <section className="result-extension-section">
           {capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
             <>
               <CounterfactualPanel
@@ -2493,10 +2494,10 @@ export default function ResultView() {
                 onCreated={(branchId) => setCfBranchId(branchId)}
               />
               {cfBranchId && (
-                <div style={{ marginTop: '0.5rem' }}>
+                <div className="result-extension-section__item result-extension-section__item--compact">
                   <a
                     href={`/result/${encodeURIComponent(id)}/compare?branch_a=${encodeURIComponent(analysisBranch?.id ?? '')}&branch_b=${encodeURIComponent(cfBranchId)}`}
-                    style={{ color: '#8ab4f8', fontSize: '0.85rem' }}
+                    className="result-extension-link result-extension-link--small"
                   >
                     {t('result.compare_link', 'Compare branches →')}
                   </a>
@@ -2726,16 +2727,21 @@ export default function ResultView() {
               onClick={() => setMobileSourceSheetOpen(true)}
               aria-expanded={mobileSourceSheetOpen}
               aria-controls={mobileSourceSheetOpen ? "mobile-source-sheet" : undefined}
-              className="fixed bottom-20 right-4 z-40 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-100 shadow-lg md:hidden"
+              className="result-mobile-sources-trigger"
             >
               {t('source.mobile_sheet.title', { defaultValue: 'Live sources' })}
             </button>
-            <div
-              className="result-source-grid hidden gap-3 px-4 py-2 md:grid md:grid-cols-2"
-              data-testid="result-source-grid-desktop"
-            >
-              {sourceCards}
-            </div>
+            <section className="result-sources">
+              <h3 className="result-sources__heading">
+                {t('source.section_title', { defaultValue: 'Live Sources' })}
+              </h3>
+              <div
+                className="result-sources__grid"
+                data-testid="result-source-grid-desktop"
+              >
+                {sourceCards}
+              </div>
+            </section>
             <MobileSourceSheet
               open={mobileSourceSheetOpen}
               onOpenChange={setMobileSourceSheetOpen}

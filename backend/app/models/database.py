@@ -64,6 +64,7 @@ _LIGHTWEIGHT_ADDITIVE_COLUMNS = (
     ("agent", "group_id", "TEXT"),
     ("agent", "agent_identity_id", "TEXT"),
     ("agent", "source_type", "TEXT"),
+    ("agent_identity", "preferred_tier", "TEXT DEFAULT 'IMPORTANT'"),
     ("scenario", "visualization_enabled", "INTEGER DEFAULT 0"),
     ("scenario", "scene_theme", "TEXT"),
     ("scenario", "web_context_json", "TEXT"),

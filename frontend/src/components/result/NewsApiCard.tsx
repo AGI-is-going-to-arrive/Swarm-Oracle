@@ -41,24 +41,24 @@ export function NewsApiCard({ state = 'empty', items = [] }: NewsApiCardProps) {
           {items.map((item) => (
             <li
               key={item.id}
-              className="rounded-md border border-slate-700/40 bg-slate-900/50 p-2 text-xs"
+              className="result-source-card__item"
             >
-              <p className="font-medium text-slate-100">{item.title}</p>
-              <div className="mt-0.5 flex items-center gap-2 text-slate-400">
+              <p className="result-source-card__item-title">{item.title}</p>
+              <div className="result-source-card__item-meta">
                 {item.source && <span>{item.source}</span>}
                 {item.publishedAt && (
-                  <span className="text-slate-500">{item.publishedAt}</span>
+                  <span>{item.publishedAt}</span>
                 )}
               </div>
               {item.description && (
-                <p className="mt-1 line-clamp-3 text-slate-300">{item.description}</p>
+                <p className="result-source-card__item-summary">{item.description}</p>
               )}
               {item.url && /^https?:\/\//i.test(item.url) && (
                 <a
                   href={item.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mt-1 block underline hover:text-slate-200"
+                  className="result-source-card__item-url"
                 >
                   {item.url}
                 </a>

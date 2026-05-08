@@ -229,6 +229,27 @@ npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.t
   - `<dialog>.showModal()` 缺失时的 `AgentProfileModal` 降级
   - 关键 CSS token / 高流量页面表面的 sRGB / rgba fallback
 
+### Custom Agent Upgrade 定向回归
+
+```bash
+cd backend
+source .venv/bin/activate
+ruff check app/api/agents.py app/api/debate.py app/api/helpers.py app/services/persona_workshop.py app/services/memory.py app/services/simulator.py app/services/debate.py app/services/debate_prompts.py tests/test_persona_workshop.py tests/test_memory.py tests/test_debate_prompts.py tests/test_simulator.py tests/test_migration_022.py
+python -m pytest tests/test_persona_workshop.py tests/test_memory.py tests/test_debate_prompts.py tests/test_simulator.py tests/test_migration_022.py -q
+
+cd ../frontend
+npx tsc --noEmit -p tsconfig.app.json
+npm test -- --run src/pages/AgentLibrary.test.tsx src/pages/AgentWorkshopView.test.tsx src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts
+```
+
+浏览器复核优先覆盖：
+
+- `/agents` 创建 `IMPORTANT / CROWD` 两档自建 Agent，列表 badge 与编辑回填一致。
+- `/` 主模式 Agent attach panel 选中自建 Agent 后，创建 scenario 请求带 `custom_agent_identity_ids`。
+- Debate 创建时，已选自建 Agent 的前 2 个 ID 进入 `custom_agent_ids`。
+- `/result/:id` 在 `custom_agents` capability 开启时显示 Agent Library bridge。
+- 移动端 tier selector 单列显示，badge 不溢出。
+
 ### SimulationView / PredictionModal / Gameplay Cards 回归
 
 ```bash

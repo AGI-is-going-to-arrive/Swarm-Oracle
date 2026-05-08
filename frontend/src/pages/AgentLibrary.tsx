@@ -3,7 +3,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders, getSessionBoundUserId } from '../api/client';
 import { useAgentStore } from '../stores/agentStore';
@@ -29,8 +29,32 @@ const KNOWLEDGE_DOMAIN_KEYS = {
   religion: 'agents.domains.religion',
 } as const;
 
+type KnowledgeDomainKey = keyof typeof KNOWLEDGE_DOMAIN_KEYS;
+
+function getAgentDomains(agent: AgentIdentityInfo): string[] {
+  if (Array.isArray(agent.knowledge_domains)) {
+    return agent.knowledge_domains.filter((domain): domain is string => typeof domain === 'string');
+  }
+  if (!agent.knowledge_domain_json) return [];
+  try {
+    const parsed = JSON.parse(agent.knowledge_domain_json) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((domain): domain is string => typeof domain === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function getKnowledgeDomainLabelKey(domain: string): string {
+  return domain in KNOWLEDGE_DOMAIN_KEYS
+    ? KNOWLEDGE_DOMAIN_KEYS[domain as KnowledgeDomainKey]
+    : domain;
+}
+
 export function AgentLibrary() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { loading: capLoading, enabled } = useCapabilityCheck('custom_agents');
   const { identities, loading, error, fetchIdentities } = useAgentStore();
   const [profileAgent, setProfileAgent] = useState<AgentIdentityInfo | null>(null);
@@ -43,74 +67,88 @@ export function AgentLibrary() {
 
   const customAgents = identities.filter(a => a.kind === 'custom');
 
-  if (capLoading) return <div style={{ maxWidth: 900, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;
+  if (capLoading) {
+    return <div className="agent-page agent-page--centered">{t('common.loading', 'Loading...')}</div>;
+  }
   if (!enabled) return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>
-      <p style={{ color: '#888' }}>{t('agents.feature_disabled', 'Custom agents feature is not enabled.')}</p>
-      <Link to="/" style={{ color: '#8ab4f8' }}>{t('common.back_home', 'Back to Home')}</Link>
+    <div className="agent-page agent-page--centered">
+      <p className="agent-page__muted">{t('agents.feature_disabled', 'Custom agents feature is not enabled.')}</p>
+      <Link to="/" className="agent-link">{t('common.back_home', 'Back to Home')}</Link>
     </div>
   );
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: '2rem 1rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+    <div className="agent-page">
+      <div className="agent-page__header">
         <h1>{t('agents.library_title', 'Agent Library')}</h1>
         <Link
           to="/agents/new"
-          style={{
-            padding: '0.5rem 1.2rem', borderRadius: 6,
-            background: 'var(--color-accent, #4a90d9)', color: '#fff',
-            textDecoration: 'none', fontWeight: 600,
-          }}
+          className="agent-button agent-button--primary agent-button--link"
         >
           + {t('agents.create_btn', 'Create Agent')}
         </Link>
       </div>
 
       {loading && <p>{t('common.loading', 'Loading...')}</p>}
-      {error && <p role="alert" style={{ color: '#e74c3c' }}>{error}</p>}
+      {error && <p role="alert" className="agent-form__error">{error}</p>}
 
       {!loading && customAgents.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '3rem 1rem', color: '#888' }}>
-          <p style={{ fontSize: '1.1rem' }}>{t('agents.empty_state', 'No custom agents yet.')}</p>
+        <div className="agent-empty-state">
+          <p className="agent-empty-state__title">{t('agents.empty_state', 'No custom agents yet.')}</p>
           <p>{t('agents.empty_hint', 'Create your first agent to use in simulations.')}</p>
+          <Link to="/agents/new" className="agent-button agent-button--primary agent-button--link">
+            {t('agents.create_first', 'Create your first agent')}
+          </Link>
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '1rem' }}>
-        {customAgents.map(agent => (
-          <div
+      <div className="agent-library-grid">
+        {customAgents.map(agent => {
+          const domains = getAgentDomains(agent);
+          return (
+          <article
             key={agent.id}
-            role="button"
-            tabIndex={0}
-            onClick={() => setProfileAgent(agent)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setProfileAgent(agent); } }}
-            style={{
-              border: '1px solid var(--color-border, #555)',
-              borderRadius: 8, padding: '1rem',
-              background: 'var(--color-surface, #1a1a2e)',
-              cursor: 'pointer',
-              transition: 'border-color 0.15s',
-            }}
+            className="agent-card"
           >
-            <h3 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>{agent.display_name}</h3>
-            <p style={{ margin: '0 0 0.25rem', fontSize: '0.85rem', color: '#aaa' }}>{agent.role}</p>
+            <h3 className="agent-card__title">{agent.display_name}</h3>
+            <span className={`agent-tier-badge agent-tier-badge--${(agent.preferred_tier || 'IMPORTANT').toLowerCase()}`}>
+              {(agent.preferred_tier || 'IMPORTANT').toUpperCase()}
+            </span>
+            <p className="agent-card__role">{agent.role}</p>
             {agent.persona && (
-              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', color: '#888', lineHeight: 1.4 }}>
+              <p className="agent-card__persona">
                 {agent.persona.length > 120 ? agent.persona.slice(0, 120) + '...' : agent.persona}
               </p>
             )}
-            {agent.knowledge_domain_json && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                {JSON.parse(agent.knowledge_domain_json).map((d: string) => (
-                  <span key={d} style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: 3, background: 'rgba(74,144,217,0.2)', color: '#8ab4f8' }}>
-                    {t(KNOWLEDGE_DOMAIN_KEYS[d as keyof typeof KNOWLEDGE_DOMAIN_KEYS] ?? d, d)}
+            {domains.length > 0 && (
+              <div className="agent-card__domains">
+                {domains.map((domain) => (
+                  <span key={domain} className="agent-domain-token">
+                    {t(getKnowledgeDomainLabelKey(domain), domain)}
                   </span>
                 ))}
               </div>
             )}
-            <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
+            <div className="agent-card__actions">
               <button
+                type="button"
+                onClick={() => setProfileAgent(agent)}
+                className="agent-card__action"
+              >
+                {t('agents.view_profile', 'View profile')}
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(`/agents/edit/${agent.id}`);
+                }}
+                className="agent-card__action"
+              >
+                {t('agents.edit', 'Edit')}
+              </button>
+              <button
+                type="button"
                 onClick={async (e) => {
                   e.stopPropagation();
                   if (!confirm(t('agents.delete_confirm', 'Delete this agent?'))) return;
@@ -121,13 +159,14 @@ export function AgentLibrary() {
                   const userId = getSessionBoundUserId();
                   fetchIdentities(userId);
                 }}
-                style={{ fontSize: '0.8rem', padding: '4px 10px', borderRadius: 4, background: '#e74c3c22', color: '#e74c3c', border: '1px solid #e74c3c44', cursor: 'pointer' }}
+                className="agent-card__action agent-card__action--danger"
               >
                 {t('common.delete', 'Delete')}
               </button>
             </div>
-          </div>
-        ))}
+          </article>
+          );
+        })}
       </div>
       <AgentProfileModal
         identity={profileAgent}

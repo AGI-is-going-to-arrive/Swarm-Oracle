@@ -64,6 +64,40 @@ def _normalize_continuity_agent_key(name: str | None, role: str | None) -> str |
     return f"{normalized_name}::{normalized_role}"
 
 
+def _parse_json_list(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, str)]
+
+
+def _parse_json_object(raw: str | None) -> dict[str, object]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _normalize_agent_tier(raw_tier: object, *, is_custom: bool = False) -> AgentTier:
+    tier_value = str(raw_tier or "IMPORTANT").strip().upper() or "IMPORTANT"
+    if is_custom and tier_value == "CORE":
+        logger.warning("Custom agent attempted CORE tier; downgraded to IMPORTANT")
+        tier_value = "IMPORTANT"
+    if tier_value not in AgentTier.__members__:
+        if is_custom:
+            logger.warning("Invalid custom agent tier %s; downgraded to IMPORTANT", tier_value)
+        tier_value = "IMPORTANT"
+    return AgentTier(tier_value)
+
+
 async def verify_session(request: Request) -> str | None:
     """Lightweight auth: if SESSION_SECRET is configured, verify the request token.
 
@@ -738,8 +772,11 @@ async def parse_and_run_background(
                             "name": identity.display_name,
                             "role": identity.role,
                             "persona": identity.persona or "",
-                            "tier": "CROWD",
+                            "tier": identity.preferred_tier or "IMPORTANT",
                             "identity_id": identity.id,
+                            "source_type": "custom",
+                            "knowledge_domains": _parse_json_list(identity.knowledge_domain_json),
+                            "decision_bias": _parse_json_object(identity.decision_bias_json),
                         })
             except Exception:
                 logger.debug("custom agent injection failed (non-blocking)", exc_info=True)
@@ -764,12 +801,17 @@ async def parse_and_run_background(
 
         agent_name_to_id: dict[str, str] = {}
         for agent_data in parsed_agents:
+            is_custom_agent = agent_data.get("source_type") == "custom"
+            tier = _normalize_agent_tier(
+                agent_data.get("tier", "IMPORTANT"),
+                is_custom=is_custom_agent,
+            )
             agent = Agent(
                 scenario_id=scenario_id,
                 name=agent_data.get("name", "Unknown"),
                 role=agent_data.get("role", ""),
                 persona=agent_data.get("persona", ""),
-                tier=AgentTier(agent_data.get("tier", "IMPORTANT")),
+                tier=tier,
                 stance=agent_data.get("stance", ""),
             )
             # Phase 3 F1: Resolve identity for each agent

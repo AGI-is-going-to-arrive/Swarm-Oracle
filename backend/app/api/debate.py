@@ -142,6 +142,7 @@ class CreateDebateRequest(BaseModel):
     llm_requests_per_minute: int | None = None
     llm_tokens_per_minute: int | None = None
     reasoning_effort: str | None = None
+    custom_agent_ids: list[str] | None = None
 
     @field_validator("question")
     @classmethod
@@ -177,6 +178,18 @@ class CreateDebateRequest(BaseModel):
         if value is not None and value < 0:
             raise ValueError("LLM rate limits must be >= 0")
         return value
+
+    @field_validator("custom_agent_ids")
+    @classmethod
+    def validate_custom_agent_ids(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        if len(v) > 2:
+            raise ValueError("custom_agent_ids must have at most 2 entries")
+        cleaned = [x.strip() for x in v if x and x.strip()]
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("custom_agent_ids must not contain duplicates")
+        return cleaned or None
 
 
 class DebatePredictionRequest(BaseModel):
@@ -475,7 +488,11 @@ def _normalize_import_replay_predictions(predictions: list[Any]) -> list[dict[st
             counterplay_variant = None
         else:
             cleaned_counterplay_variant = str(raw_counterplay_variant).strip().lower()
-            counterplay_variant = None if cleaned_counterplay_variant in {"", "none"} else cleaned_counterplay_variant
+            counterplay_variant = (
+                None
+                if cleaned_counterplay_variant in {"", "none"}
+                else cleaned_counterplay_variant
+            )
         if counterplay_variant is not None and counterplay_variant not in _COUNTERPLAY_VARIANTS:
             raise api_error(
                 422,
@@ -702,10 +719,48 @@ async def create_debate(
             raise api_error(400, "BYOK_API_KEY_REQUIRED", "An API key is required when using a custom LLM base URL")  # noqa: E501
         req.llm_base_url = validated_url
     effective_user_id = resolve_authenticated_user_id(req.user_id, principal) or "anonymous"
+    if req.custom_agent_ids and not settings.FEATURE_CUSTOM_AGENTS:
+        raise HTTPException(status_code=400, detail="Custom agents feature is not enabled")
+    custom_agent_overrides = None
+    if req.custom_agent_ids and settings.FEATURE_CUSTOM_AGENTS:
+        from app.models.agent_identity import AgentIdentity
+        custom_agent_overrides = {}
+        side_keys = ["proposition", "opposition"]
+        with Session(get_engine()) as ca_session:
+            for idx, cid in enumerate(req.custom_agent_ids[:2]):
+                identity = ca_session.get(AgentIdentity, cid)
+                if identity is None or identity.kind != "custom":
+                    raise HTTPException(status_code=400, detail=f"Invalid custom agent id: {cid}")
+                if identity.user_id != effective_user_id:
+                    raise HTTPException(status_code=403, detail="Custom agent ownership mismatch")
+                import json as _json
+                try:
+                    knowledge_domains = (
+                        _json.loads(identity.knowledge_domain_json)
+                        if identity.knowledge_domain_json else None
+                    )
+                except (TypeError, ValueError):
+                    knowledge_domains = None
+                try:
+                    decision_bias = (
+                        _json.loads(identity.decision_bias_json)
+                        if identity.decision_bias_json else None
+                    )
+                except (TypeError, ValueError):
+                    decision_bias = None
+                custom_agent_overrides[side_keys[idx]] = {
+                    "display_name": identity.display_name,
+                    "role": identity.role,
+                    "persona": identity.persona or "",
+                    "source_identity_id": identity.id,
+                    "knowledge_domains": knowledge_domains,
+                    "decision_bias": decision_bias,
+                }
     debate = create_debate_record(
         req.question,
         profile_hint=req.profile_hint,
         user_id=effective_user_id,
+        custom_agent_overrides=custom_agent_overrides,
     )
     llm_overrides = None
     if (
@@ -999,7 +1054,13 @@ async def get_debate_argument_map(
         raise
     except Exception as exc:
         logger.warning("argument_map load failed debate=%s: %s", debate_id, exc, exc_info=True)
-        return {"snapshot_id": None, "nodes": [], "edges": [], "units": [], "error": "ARGUMENT_MAP_LOAD_FAILED"}
+        return {
+            "snapshot_id": None,
+            "nodes": [],
+            "edges": [],
+            "units": [],
+            "error": "ARGUMENT_MAP_LOAD_FAILED",
+        }
 
 
 @router.post("/api/debate/{debate_id}/predict")

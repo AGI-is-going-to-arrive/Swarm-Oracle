@@ -220,7 +220,7 @@
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
-| `FEATURE_CUSTOM_AGENTS` | `false` | 启用自建 Agent workshop CRUD |
+| `FEATURE_CUSTOM_AGENTS` | `false` | 启用自建 Agent workshop CRUD、主推演自建 Agent 注入，以及 Debate `custom_agent_ids` 绑定 |
 | `FEATURE_AGENT_IDENTITY` | `false` | 启用跨场景身份解析 + 记忆查询 |
 | `FEATURE_CAUSAL_GRAPH` | `false` | 启用因果图谱 API + simulator 逐轮写入 |
 | `FEATURE_GRAPH_ANALYSIS` | `false` | 启用 `GET /api/scenario/{id}/graph-analysis`；实际对外 enabled 还要求 `FEATURE_CAUSAL_GRAPH=true` |
@@ -240,7 +240,7 @@
 - 本地直启 backend 时，在 `backend/.env` 里设置这些变量并重启 backend 后生效。
 - 仓库根 `.env.docker` 当前已经把 `FEATURE_CAUSAL_GRAPH / FEATURE_FACTIONS / FEATURE_ARGUMENT_MAP` 打开，Docker 评审栈默认就是图谱开启态。
 - `ARGUMENT_MAP_LLM_ENRICHMENT` 只影响 argument map 的 enrich 路径，不改变 `FEATURE_ARGUMENT_MAP` 的开关语义；只有 argument map 功能启用时它才会生效。
-- `FEATURE_*=false` 时：受后端 gate 的 API 返回 404；simulator/debate 中的 hook 不执行；前端通过 `GET /api/capabilities` 检测到 `enabled=false` 后隐藏入口且不发请求。`FEATURE_KG_EXPLORER` 属于前端 capability gate，数据仍由 causal graph API 提供。
+- `FEATURE_*=false` 时：受后端 gate 的 API 通常返回 404；simulator/debate 中的 hook 不执行；前端通过 `GET /api/capabilities` 检测到 `enabled=false` 后隐藏入口且不发请求。`POST /api/debate` 如果显式带了 `custom_agent_ids` 且 `FEATURE_CUSTOM_AGENTS=false`，当前返回 400，避免调用方误以为 custom Agent 已参与本场 debate。`FEATURE_KG_EXPLORER` 属于前端 capability gate，数据仍由 causal graph API 提供。
 - `FEATURE_ROUNDTABLE_SURVEY / FEATURE_ROUNDTABLE_ANALYST` 会通过 `GET /api/capabilities` 暴露为 `roundtable_survey / roundtable_analyst`，供前端 capability gate 判断入口是否开放。
 - 这些开关大多可单独开启；`graph_analysis` 的 capability 需要 `FEATURE_GRAPH_ANALYSIS` 和 `FEATURE_CAUSAL_GRAPH` 同时为 true。
 

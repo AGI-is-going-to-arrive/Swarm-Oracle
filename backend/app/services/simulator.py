@@ -629,8 +629,14 @@ def _resolve_hierarchical_agent_sets(
         )
 
     leader_names = set(effective_group_leaders.values())
-    leader_agents = [agent for agent in agents if agent.get("name") in leader_names]
-    worker_agents = [agent for agent in agents if agent.get("name") not in leader_names]
+    leader_agents = [
+        agent for agent in agents
+        if agent.get("source_type") == "custom" or agent.get("name") in leader_names
+    ]
+    worker_agents = [
+        agent for agent in agents
+        if agent.get("source_type") != "custom" and agent.get("name") not in leader_names
+    ]
     return leader_agents, worker_agents, effective_group_leaders
 
 # ── Fork Detection Prompt Templates (consolidated) ─────────────────────
@@ -975,6 +981,9 @@ async def run_simulation(
         # Load agents
         db_agents = list(session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all())
         agents = [_agent_to_dict(a) for a in db_agents]
+
+        if settings.FEATURE_CUSTOM_AGENTS:
+            _enrich_custom_agent_metadata(engine, agents)
 
         # Phase 4C: Extract user_id for cross-scenario identity memory retrieval
         scenario_user_id: str = (
@@ -2124,6 +2133,15 @@ async def _gather_hierarchical_messages(
     2. Worker responses are synthesized from their Leader's output
     3. Dramatically reduces LLM calls: 1000 agents → ~10 LLM calls
     """
+    custom_workers = [a for a in worker_agents if a.get("source_type") == "custom"]
+    if custom_workers:
+        logger.warning(
+            "Custom agents found in worker set; promoting %d to leaders",
+            len(custom_workers),
+        )
+        leader_agents = [*leader_agents, *custom_workers]
+        worker_agents = [a for a in worker_agents if a.get("source_type") != "custom"]
+
     # Step 1: Gather Leader messages (with LLM calls)
     leader_messages = await _gather_agent_messages(
         engine, scenario_id, branch_id, round_id, round_num,
@@ -2420,12 +2438,56 @@ async def _narrate_branch_data(
 
 
 def _agent_to_dict(agent: Agent) -> dict:
+    tier = agent.tier.value
+    if agent.source_type == "custom" and tier == "CORE":
+        logger.warning(
+            "Custom agent %s persisted with CORE tier; downgraded to IMPORTANT",
+            agent.id,
+        )
+        tier = "IMPORTANT"
     return {
         "id": agent.id, "name": agent.name, "role": agent.role,
-        "persona": agent.persona, "tier": agent.tier.value,
+        "persona": agent.persona, "tier": tier,
         "stance": agent.stance, "emotion": agent.emotion,
         "group_id": agent.group_id,  # P3-A
+        "agent_identity_id": agent.agent_identity_id,
+        "source_type": agent.source_type,
     }
+
+
+def _enrich_custom_agent_metadata(engine, agents: list[dict]) -> None:
+    identity_ids = [
+        a["agent_identity_id"] for a in agents
+        if a.get("agent_identity_id") and a.get("source_type") == "custom"
+    ]
+    if not identity_ids:
+        return
+    try:
+        from app.models.agent_identity import AgentIdentity
+        with Session(engine) as session:
+            for iid in identity_ids:
+                identity = session.get(AgentIdentity, iid)
+                if identity is None:
+                    continue
+                for agent in agents:
+                    if agent.get("agent_identity_id") == iid:
+                        agent["source_type"] = "custom"
+                        if identity.knowledge_domain_json:
+                            try:
+                                agent["knowledge_domains"] = json.loads(
+                                    identity.knowledge_domain_json
+                                )
+                            except (TypeError, ValueError):
+                                agent["knowledge_domains"] = []
+                        if identity.decision_bias_json:
+                            try:
+                                agent["decision_bias"] = json.loads(
+                                    identity.decision_bias_json
+                                )
+                            except (TypeError, ValueError):
+                                agent["decision_bias"] = {}
+    except Exception:
+        logger.debug("custom agent metadata enrichment failed (non-fatal)", exc_info=True)
 
 
 def _format_setting(setting: dict, *, language: str = "Chinese") -> str:

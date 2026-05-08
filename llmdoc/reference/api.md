@@ -183,6 +183,12 @@
 说明：
 
 - Debate 是独立域，不与主模式复用 scenario authority。
+- `POST /api/debate` 当前接受可选 `custom_agent_ids`：
+  - 最多 2 个，重复值返回 422
+  - `FEATURE_CUSTOM_AGENTS=false` 时返回 400
+  - 每个 ID 都必须存在、`kind=custom` 且属于当前有效 `user_id`；跨用户返回 403
+  - 第 1 个 ID 覆盖 proposition，第 2 个 ID 覆盖 opposition
+  - 覆盖内容包括 display name、role、persona、knowledge domains 和 decision bias；这些文本只进入 prompt，不触发任何外部 URL 请求
 - replay import 会保留 imported `phase_insights` 与 `adjudication_mode`。
 - `POST /api/debate/import-replay` 当前会对 `turns / predictions / phase_insights` 的列表项做对象校验；非对象项仍返回 `422`。
 - `POST /api/debate/import-replay` 在 `FEATURE_ARGUMENT_MAP=true` 时，会在 turns 落库后同步抽取 argument map；导入完成后就能直接读取图谱。
@@ -256,6 +262,17 @@
 - `FEATURE_KG_EXPLORER` 只控制 KG Explorer / Timeline Galaxy 的前端 capability gate；当前页面数据仍读取 `GET /api/scenario/{id}/causal-graph`，因此也需要 `FEATURE_CAUSAL_GRAPH=true`。
 - `POST /api/agents/identities/preflight` 当前只返回需要 L3 确认的 `L2 fuzzy candidate`；`L1 exact` 和全新 identity 不会阻断前端启动。
 - `GET /api/agents/identities/{id}/growth-events` 当前要求 `user_id`；缺失时返回 400，identity 不存在或 owner 不匹配时返回 404。
+- `POST /api/agents/workshop` / `PUT /api/agents/workshop/{id}` 当前支持：
+  - `persona`
+  - `knowledge_domains`
+  - `decision_bias`
+  - `preferred_tier`
+- `preferred_tier` 只接受 `IMPORTANT / CROWD`。create 默认 `IMPORTANT`；update 不传表示不改。`CORE` 会被 schema 拒绝，不是自建 Agent 可选层级。
+- workshop response / identity list 当前会回显：
+  - 原始 JSON 字段：`knowledge_domain_json / decision_bias_json`
+  - 解析后的字段：`knowledge_domains / decision_bias`
+  - `preferred_tier`
+- 旧数据里 JSON 解析失败时，解析后的字段会降级为空，不影响 identity list 返回。
 - `GET /api/scenario/{id}/causal-graph` 当前会先 `trim` `branch_id`：
   - 空白值按未过滤处理
   - 不属于当前 `scenario` 的 `branch_id` 返回 `404 BRANCH_NOT_FOUND`

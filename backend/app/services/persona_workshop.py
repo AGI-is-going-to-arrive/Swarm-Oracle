@@ -25,6 +25,40 @@ ALLOWED_KNOWLEDGE_DOMAINS = [
     "philosophy", "history", "psychology", "sociology", "religion",
 ]
 
+ALLOWED_CUSTOM_AGENT_TIERS = {"CROWD", "IMPORTANT"}
+
+
+def _parse_json_list(raw: str | None) -> list[str] | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, list):
+        return None
+    values = [item for item in parsed if isinstance(item, str)]
+    return values or None
+
+
+def _parse_json_object(raw: str | None) -> dict | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _unwrap_untrusted_text_block(text: str) -> str:
+    marker = "/ UNTRUSTED DATA】\n```text\n"
+    if marker not in text:
+        return text
+    _, remainder = text.split(marker, 1)
+    inner, _, _ = remainder.partition("\n```")
+    return inner
+
 
 def _validate_knowledge_domains(domains: list[str] | None) -> list[str] | None:
     """Validate that all domains are in the allowed list."""
@@ -39,6 +73,17 @@ def _validate_knowledge_domains(domains: list[str] | None) -> list[str] | None:
     return domains
 
 
+def _validate_preferred_tier(value: str | None, default: str = "IMPORTANT") -> str:
+    raw_tier = default if value is None or not str(value).strip() else str(value)
+    tier = raw_tier.strip().upper()
+    if tier not in ALLOWED_CUSTOM_AGENT_TIERS:
+        raise ValueError(
+            "preferred_tier must be one of: "
+            f"{sorted(ALLOWED_CUSTOM_AGENT_TIERS)}"
+        )
+    return tier
+
+
 def create_custom_agent(
     user_id: str,
     display_name: str,
@@ -46,9 +91,11 @@ def create_custom_agent(
     persona: str | None,
     decision_bias: dict | None,
     knowledge_domains: list[str] | None,
+    preferred_tier: str = "IMPORTANT",
 ) -> str:
     """Create a custom agent identity, return identity_id."""
     _validate_knowledge_domains(knowledge_domains)
+    validated_preferred_tier = _validate_preferred_tier(preferred_tier)
 
     # Sanitize persona via untrusted text guardrail
     sanitized_persona = None
@@ -68,6 +115,7 @@ def create_custom_agent(
         decision_bias_json=json.dumps(decision_bias) if decision_bias else None,
         knowledge_domain_json=json.dumps(knowledge_domains) if knowledge_domains else None,
         continuity_key=continuity_key,
+        preferred_tier=validated_preferred_tier,
     )
 
     with Session(get_engine()) as session:
@@ -104,6 +152,7 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
         if "persona" in kwargs:
             raw_persona = kwargs["persona"]
             if raw_persona:
+                raw_persona = _unwrap_untrusted_text_block(raw_persona)
                 identity.persona = format_untrusted_text_block(
                     "persona", raw_persona, max_chars=2000,
                 )
@@ -119,6 +168,9 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
             domains = kwargs["knowledge_domains"]
             _validate_knowledge_domains(domains)
             identity.knowledge_domain_json = json.dumps(domains) if domains else None
+
+        if "preferred_tier" in kwargs:
+            identity.preferred_tier = _validate_preferred_tier(kwargs["preferred_tier"])
 
         # Regenerate continuity_key if role or persona changed
         if role_changed or persona_changed:
@@ -173,9 +225,12 @@ def list_custom_agents(user_id: str) -> list[dict]:
                 "display_name": i.display_name,
                 "role": i.role,
                 "persona": i.persona,
-                "decision_bias": json.loads(i.decision_bias_json) if i.decision_bias_json else None,
-                "knowledge_domains": json.loads(i.knowledge_domain_json) if i.knowledge_domain_json else None,  # noqa: E501
+                "decision_bias": _parse_json_object(i.decision_bias_json),
+                "decision_bias_json": i.decision_bias_json,
+                "knowledge_domains": _parse_json_list(i.knowledge_domain_json),
+                "knowledge_domain_json": i.knowledge_domain_json,
                 "continuity_key": i.continuity_key,
+                "preferred_tier": i.preferred_tier or "IMPORTANT",
                 "created_at": i.created_at.isoformat(),
                 "updated_at": i.updated_at.isoformat(),
             }
@@ -198,9 +253,12 @@ def list_all_agents(user_id: str) -> list[dict]:
                 "display_name": i.display_name,
                 "role": i.role,
                 "persona": i.persona,
-                "decision_bias": json.loads(i.decision_bias_json) if i.decision_bias_json else None,
-                "knowledge_domains": json.loads(i.knowledge_domain_json) if i.knowledge_domain_json else None,  # noqa: E501
+                "decision_bias": _parse_json_object(i.decision_bias_json),
+                "decision_bias_json": i.decision_bias_json,
+                "knowledge_domains": _parse_json_list(i.knowledge_domain_json),
+                "knowledge_domain_json": i.knowledge_domain_json,
                 "continuity_key": i.continuity_key,
+                "preferred_tier": i.preferred_tier or "IMPORTANT",
                 "created_at": i.created_at.isoformat(),
                 "updated_at": i.updated_at.isoformat(),
             }

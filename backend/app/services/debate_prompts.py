@@ -17,7 +17,6 @@ from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
     llm_call_json_with_stream_fallback,
-    sanitize_untrusted_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -1064,14 +1063,37 @@ def _build_system_message(
     side: DebateSide,
     phase: DebatePhase,
     profile_id: str,
+    knowledge_domains: list[str] | None = None,
+    decision_bias: dict[str, object] | None = None,
 ) -> str:
     """System-message preamble carrying persona and identity (separate from task)."""
-    safe_role = sanitize_untrusted_text(speaker_role, max_chars=100)
+    name_block = format_untrusted_text_block(
+        "发言者名称" if language == "zh" else "Speaker name",
+        speaker_name,
+        max_chars=100,
+    )
+    role_block = format_untrusted_text_block(
+        "发言者角色" if language == "zh" else "Speaker role",
+        speaker_role,
+        max_chars=100,
+    )
     persona_block = format_untrusted_text_block(
         "人设" if language == "zh" else "Persona",
         persona,
         max_chars=300,
     )
+    metadata_parts: list[str] = []
+    if knowledge_domains:
+        domain_text = ", ".join(str(d) for d in knowledge_domains[:20])
+        kd_label = "知识领域" if language == "zh" else "Knowledge domains"
+        metadata_parts.append(format_untrusted_text_block(kd_label, domain_text, max_chars=300))
+    if decision_bias and isinstance(decision_bias, dict):
+        import json as _json
+        bias_text = _json.dumps(decision_bias, ensure_ascii=False, sort_keys=True)
+        db_label = "决策偏好" if language == "zh" else "Decision bias"
+        metadata_parts.append(format_untrusted_text_block(db_label, bias_text, max_chars=600))
+    metadata_block = "\n".join(metadata_parts)
+    metadata_section = f"\n{metadata_block}" if metadata_block else ""
     is_judge = side == DebateSide.JUDGE or phase == DebatePhase.VERDICT
     if language == "zh":
         anti_template = (
@@ -1081,13 +1103,15 @@ def _build_system_message(
         )
         if is_judge:
             return (
-                f"你是 {speaker_name}（{safe_role}）。\n{persona_block}\n"
+                "你要按下面这位发言者的身份说话。\n"
+                f"{name_block}\n{role_block}\n{persona_block}{metadata_section}\n"
                 "你刚刚看完一场辩论，现在做点评。"
                 f"{anti_template}\n"
                 f"{UNTRUSTED_INPUT_GUARDRAIL}"
             )
         return (
-            f"你是 {speaker_name}（{safe_role}）。\n{persona_block}\n"
+            "你要按下面这位发言者的身份说话。\n"
+            f"{name_block}\n{role_block}\n{persona_block}{metadata_section}\n"
             "你正在一场辩论中发言。"
             f"{anti_template}\n"
             f"{UNTRUSTED_INPUT_GUARDRAIL}"
@@ -1100,12 +1124,14 @@ def _build_system_message(
     )
     if is_judge:
         return (
-            f"You are {speaker_name} ({safe_role}).\n{persona_block}\n"
+            "Speak as the debate participant described below.\n"
+            f"{name_block}\n{role_block}\n{persona_block}{metadata_section}\n"
             f"You just watched a full debate and are giving your ruling. {anti_template}\n"
             f"{UNTRUSTED_INPUT_GUARDRAIL}"
         )
     return (
-        f"You are {speaker_name} ({safe_role}).\n{persona_block}\n"
+        "Speak as the debate participant described below.\n"
+        f"{name_block}\n{role_block}\n{persona_block}{metadata_section}\n"
         f"You are speaking in a live debate. {anti_template}\n"
         f"{UNTRUSTED_INPUT_GUARDRAIL}"
     )
@@ -1145,6 +1171,8 @@ def build_turn_generation_prompt(
     verdict_tone: str | None = None,
     winner: str | None = None,
     persona: str = "",
+    knowledge_domains: list[str] | None = None,
+    decision_bias: dict[str, object] | None = None,
 ) -> tuple[str, str]:
     """Build the (system_message, user_prompt) pair for one debate turn.
 
@@ -1197,6 +1225,8 @@ def build_turn_generation_prompt(
         side=side,
         phase=phase,
         profile_id=profile_id,
+        knowledge_domains=knowledge_domains,
+        decision_bias=decision_bias,
     )
 
     side_block = _side_specific_instructions(language, phase, side)

@@ -51,10 +51,10 @@ export function PolymarketCard({
           {items.map((item) => (
             <li
               key={item.id}
-              className="rounded-md border border-slate-700/40 bg-slate-900/50 p-2 text-xs"
+              className="result-source-card__item"
             >
-              <p className="text-slate-100">{item.question}</p>
-              <div className="mt-1 flex items-center justify-between text-slate-400">
+              <p className="result-source-card__item-title">{item.question}</p>
+              <div className="result-source-card__item-meta">
                 {typeof item.probability === 'number' && (
                   <span>{Math.round(item.probability * 100)}%</span>
                 )}
@@ -63,7 +63,7 @@ export function PolymarketCard({
                     href={item.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="underline hover:text-slate-200"
+                    className="result-source-card__item-url"
                   >
                     {t('source.polymarket.open', { defaultValue: 'Open' })}
                   </a>

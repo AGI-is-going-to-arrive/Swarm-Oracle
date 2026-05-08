@@ -21,6 +21,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `自定义覆盖`：当前局单独指定 `provider / API key / base URL`
 - 首页高级设置当前还支持可选 `Organization ID`；值只在当前浏览器 session 内保存，并随请求头 `X-Org-Id` 透传，留空就不发送。
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。
+- 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑和选择自建 Agent；自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。
 - `SimulationView` 负责 live 推演、Theater、干预、玩法卡、结构化押注与 capture。
 - `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、campaign summary、分享、导出、结果追问与 replay/import；当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。`FEATURE_NEW_SOURCES=true` 且有 `family_context` 时，结果页当前还会渲染 `Polymarket / Finance / Academic / News` 四张 source family card；`polymarket.configured_host=non-us` 时会显示地域限制占位。结果页当前还新增了 capability-gated 的 `Explore Deeper` bridge（`causal / replay / compare / workbench`），workbench 文案会说明因果、知识图谱和节点追问在同一视图里查看；disabled 卡片保留 link 语义，但不再渲染无 `href` 的 `<a>`，文字对比也不再靠整卡 opacity 压低。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。结果页里的 `FactionTimeline` 当前会优先跟随正在展开查看的分支；未展开时会落到概率最高分支，并改成真实纵向时间线，`stance / confidence` 等指标直接可见，不再只藏在 tooltip badge 里。结果页的 compare / counterfactual 入口也跟随同一条 analysis branch 语义，不再固定拿 `branches[0]`。replay 模式下会继续保留 replay-safe 的 `causal graph` 入口和 `FactionTimeline`，但 `counterfactual / resume / result conversation` 这类 live-only 面板仍保持隐藏。标题、空态、轮次与事件标签都会跟随 UI 语言；FactionTimeline lead 文案当前也已走 i18n key + `{{title}}` 插值。`CompareDigestView` 的非活跃 pane 当前会保留更完整的待机镜像，不再是纯黑占位。前端 gated route 当前也把 `feature disabled` 和 `capability probe 失败` 分开显示：`ReplayView` 不再 silent redirect，`KGExplorerView / CompareDigestView / FactionTimeline` 也不再直接把原始错误字符串或所有异常压成空态。
 - replay 分支链路当前也已补硬化：`counterfactual` 会在 clone 前校验目标 round 里确实有该 agent 的消息；如果 seed 失败，会清理掉刚创建的脏 branch；`resume` 只有在预占 `simulation lock` 成功后才会返回 started。replay branch runtime lock 当前按 fail-closed 收口：续租返回 `None`、续租抛异常，或本地 lease 已过期时，都不会继续 clone / seed / schedule；heartbeat 会在请求内校验完成后才启动，避免同一请求自己和自己抢 SQLite 锁。若后台续跑期间丢掉预占的 `simulation lock`，任务也会直接 fail-closed 落成 `error`，不会失锁后继续跑；replay branch heartbeat 刷新异常时会释放原 lease，不再把后续请求卡到 TTL 过期。同分支重放更早轮次时，也会同步剪掉过期的 `AgentStateFrame / stance_shift`，不再把旧状态残留在当前图里。
@@ -33,6 +34,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 ### Debate Arena
 
 - 独立 debate 域，包含 live/result/replay。
+- Debate 创建请求当前可选传入最多 2 个属于当前用户的 `custom_agent_ids`；功能开关关闭时直接拒绝，ID 不存在、不是 custom 或跨用户都会被拒绝。传入后按顺序锁定 proposition / opposition 的名字、角色、persona 和 metadata，生成每轮发言时继续把 knowledge domains / decision bias 作为不可信 prompt metadata 注入。
 - 已落地结构化押注、counterplay、judge rationale、supporting turns 与 replay import。import replay 在 turns 落库后会同步抽取 argument map，导入完成后就能直接打开图谱。
 - Debate replay 分享当前优先走内联 `?replay=`；链接过长时会回退为本地只读 `?local=`。结果页在这条回退链路上会明确显示 `Save local read-only copy`，而导入入口继续保留 `Import as Local Run`。
 - result 页里的 argument map 当前改成按需加载，并重新对齐回主页面壳；首屏先给 `Load map`，只有用户点开后才真正挂图。
@@ -108,6 +110,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - mobile roundtable artifact replay readonly 当前也会跟随 active replay thread 恢复 `interaction_mode`，不再在自动化口径里卡成 `archivist_route`。
 - roundtable 的 scoped regression 当前已覆盖 Chromium 桌面/移动，以及桌面 Firefox / WebKit；`reseat / keyboard reseat / anchored thread / hotseat / witness_augmented / readonly replay` 口径与 Chromium 对齐。
 - `ending-room / roundtable` 的主文案当前已改成 factual anchor + `LLM first, template fallback`：participant snapshot 会带 `agent_role / agent_persona / bio_short / impact_score / branch_pressure`，但角色身份块和动态词汇身份提示都会按 `UNTRUSTED DATA` 注入；provider 慢、失败、空流式或仅 reasoning 输出时，会退到非流式改写或 deterministic fallback，不再默认先落模板再改写。roundtable verdict 与 follow-up fallback 现在要求是可直接显示的人话，不允许把 prompt 指令或模式标签原样露给用户。
+- Oracle participant 选择当前会给 `source_type=custom` 的 Agent 加 1.5x impact multiplier；这只影响会客厅/圆桌代表排序，不会把自建 Agent 提升成 `CORE`。
 - ending-room 后台生成当前也持有 runtime lock heartbeat；续租返回 `None`、续租抛异常，或 lease 过期时，会直接 fail-closed 把 room 落成 `error`，不会失锁后继续写 turn 或 result。
 - Oracle 页面当前按用户正在使用的 UI 语言渲染界面壳，不再强制跟随 `scenario.language` 覆盖全局语言开关。
 - Oracle fresh live room 的英文 deterministic copy 当前已补去混句兜底，不再把中文 hinge 直接嵌进英文句子；fresh live 的节点对话、KG Explorer 与 replay-view 浏览器链路本轮也已复核通过。
@@ -159,15 +162,15 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - frontend ResultView / CausalReviewView / locale 定向：`126 passed`
     - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
-  - backend 全量 `pytest` 最近一次记录为 `2399 passed, 2 skipped`
+  - backend 全量 `pytest` 最近一次记录为 `2412 passed, 2 skipped`
   - frontend `typecheck / lint / build / perf budgets` 通过
   - 本次 bridge/workbench 文案 + CausalReview guide key-node 标签窄集：`87 passed`
   - 本次前端 TypeScript noEmit：通过
-  - frontend 全量 vitest 最近一次记录为 `1782 passed`
+  - frontend 全量 vitest 最近一次记录为 `1790 passed`
   - 本轮真实验证还包括：
     - `cd backend && source .venv/bin/activate && ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
     - `cd frontend && npm exec -- tsc --noEmit -p tsconfig.app.json`：通过
-    - frontend i18n 深层 key + placeholder parity：`1587 = 1587`，通过
+    - frontend i18n 深层 key + placeholder parity：`1621 = 1621`，通过
   - frontend 目标文件 `eslint`、`typecheck`、`build / perf budgets` 通过
   - fixture-backed local preview 浏览器复核：
     - ResultView bridge DOM / disabled 样式通过
@@ -201,6 +204,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `zh-CN batch-a full`、`zh-CN batch-b full` 通过
   - focused browser spot-check 当前建议覆盖 CausalReview 节点对话、KG 工作台 `NodeQuickCard` 视口钳位，以及详情面板打开/关闭后的焦点恢复
   - focused browser spot-check 当前也已确认 `/agents` 继续按 capability gate 落 disabled 文案，不是假阳性
+  - 本轮 custom agent browser spot-check 已覆盖 `/agents` 创建 IMPORTANT / CROWD Agent、tier badge、编辑回填、ResultView Agent Library bridge、tooltip hover、移动端 tier selector 单列与 Debate `custom_agent_ids` 请求体。
   - 这轮 local preview 复核也已补：
     - 首页 source family disabled tooltip 已跟随当前 UI 语言
     - `ReplayView` capability disabled 不再回首页

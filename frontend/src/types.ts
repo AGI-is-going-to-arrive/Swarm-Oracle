@@ -944,8 +944,11 @@ export interface AgentIdentityInfo {
   display_name: string;
   role: string;
   persona?: string | null;
+  decision_bias?: Record<string, unknown> | null;
   decision_bias_json?: string | null;
+  knowledge_domains?: KnowledgeDomain[] | string[] | null;
   knowledge_domain_json?: string | null;
+  preferred_tier?: 'IMPORTANT' | 'CROWD' | null;
   continuity_key: string;
   created_at: string;
   updated_at: string;

@@ -552,6 +552,7 @@ export async function createDebate(
   question: string,
   profileHint?: string,
   options?: LlmProviderRequestOptions,
+  customAgentIds?: { proposition?: string; opposition?: string },
 ): Promise<DebateSnapshot> {
   return request('/debate', {
     method: 'POST',
@@ -565,6 +566,9 @@ export async function createDebate(
       ...(options?.llmTokensPerMinute != null && { llm_tokens_per_minute: options.llmTokensPerMinute }),
       ...(options?.reasoningEffort && { reasoning_effort: options.reasoningEffort }),
       ...(options?.userId && { user_id: options.userId }),
+      ...(customAgentIds && {
+        custom_agent_ids: [customAgentIds.proposition, customAgentIds.opposition].filter(Boolean),
+      }),
     }),
   });
 }
@@ -1070,6 +1074,23 @@ export async function getIdentityGrowthEvents(
   return safeGet(
     `/agents/identities/${encodeURIComponent(identityId)}/growth-events?user_id=${encodeURIComponent(uid)}`,
   );
+}
+
+/** PUT /api/agents/workshop/:identityId — update a custom agent */
+export async function updateAgent(
+  identityId: string,
+  data: {
+    display_name?: string;
+    role?: string;
+    persona?: string | null;
+    knowledge_domains?: string[];
+    preferred_tier?: 'IMPORTANT' | 'CROWD';
+  },
+): Promise<{ detail: string }> {
+  return request(`/agents/workshop/${encodeURIComponent(identityId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
 }
 
 /** GET /api/scenario/:id/faction-timeline — P1-8 faction overlay data */

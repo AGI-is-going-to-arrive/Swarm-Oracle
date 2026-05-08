@@ -132,6 +132,11 @@ class DebateRuntimeSnapshot:
     # Empty when LLM upgrade hasn't run or failed — callers must fall back to
     # ``get_participant_persona`` for the deterministic template.
     personas: dict[str, str] = field(default_factory=dict)
+    # Full per-side persona metadata mirrored from
+    # ``Debate.breakdown_json.metadata.personas``. Custom-agent attachments
+    # populate ``knowledge_domains`` / ``decision_bias`` here so turn generation
+    # can read them without re-loading the DB row.
+    persona_metadata: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def get_debate_prediction_options() -> dict[str, list[str]]:
@@ -139,6 +144,21 @@ def get_debate_prediction_options() -> dict[str, list[str]]:
 
 
 def _snapshot_debate_runtime(debate: Debate) -> DebateRuntimeSnapshot:
+    persona_metadata: dict[str, dict[str, Any]] = {}
+    personas: dict[str, str] = {}
+    breakdown = debate.breakdown_json
+    if isinstance(breakdown, dict):
+        meta = breakdown.get("metadata")
+        if isinstance(meta, dict):
+            personas_meta = meta.get("personas")
+            if isinstance(personas_meta, dict):
+                for side_key, side_data in personas_meta.items():
+                    if isinstance(side_data, dict):
+                        normalized_side = str(side_key)
+                        persona_metadata[normalized_side] = dict(side_data)
+                        persona = side_data.get("persona")
+                        if isinstance(persona, str) and persona.strip():
+                            personas[normalized_side] = persona
     return DebateRuntimeSnapshot(
         id=debate.id,
         question=debate.question,
@@ -154,6 +174,8 @@ def _snapshot_debate_runtime(debate: Debate) -> DebateRuntimeSnapshot:
         opposition_role=debate.opposition_role,
         judge_name=debate.judge_name,
         judge_role=debate.judge_role,
+        personas=personas,
+        persona_metadata=persona_metadata,
     )
 
 
@@ -1385,6 +1407,22 @@ async def _generate_turn_content(
             side=side,
             question=debate.question,
         )
+    # Custom-agent attachments persist knowledge_domains / decision_bias inside
+    # ``breakdown_json.metadata.personas[side]``; the runtime snapshot mirrors
+    # that into ``persona_metadata`` so the turn prompt can stay role-grounded
+    # without an extra DB hit.
+    side_meta = (debate.persona_metadata or {}).get(side.value)
+    knowledge_domains_arg: list[str] | None = None
+    decision_bias_arg: dict[str, object] | None = None
+    if isinstance(side_meta, dict):
+        kd = side_meta.get("knowledge_domains")
+        if isinstance(kd, list):
+            knowledge_domains_arg = [str(x) for x in kd if isinstance(x, str) and x.strip()]
+            if not knowledge_domains_arg:
+                knowledge_domains_arg = None
+        db = side_meta.get("decision_bias")
+        if isinstance(db, dict):
+            decision_bias_arg = dict(db)
     # The prompt builder now returns (system_msg, user_prompt). We concatenate
     # them with a blank line so a single-prompt LLM client still surfaces both.
     system_msg, user_prompt = build_turn_generation_prompt(
@@ -1400,6 +1438,8 @@ async def _generate_turn_content(
         verdict_tone=plan.verdict_tone,
         winner=plan.winner,
         persona=persona,
+        knowledge_domains=knowledge_domains_arg,
+        decision_bias=decision_bias_arg,
     )
     combined_prompt = f"{system_msg}\n\n{user_prompt}"
 
@@ -1478,11 +1518,18 @@ def create_debate_record(
     *,
     profile_hint: str | None = None,
     user_id: str = "anonymous",
+    custom_agent_overrides: dict | None = None,
 ) -> Debate:
     language = resolve_debate_language(question)
     profile_id = profile_hint or infer_debate_profile(question)
     scene_theme = select_debate_scene(profile_id)
     cast = build_cast(language, profile_id, question=question)
+    if custom_agent_overrides:
+        for side, override in custom_agent_overrides.items():
+            if side in cast:
+                cast[side]["name"] = override["display_name"]
+                cast[side]["role"] = override["role"]
+                cast[side]["persona"] = override.get("persona", "")
     debate = Debate(
         question=question,
         motion=build_motion(question, language),
@@ -1504,7 +1551,37 @@ def create_debate_record(
         session.add(debate)
         session.commit()
         session.refresh(debate)
-        return debate
+    if custom_agent_overrides:
+        engine_for_meta = get_engine()
+        with Session(engine_for_meta) as meta_session:
+            debate_for_meta = meta_session.get(Debate, debate.id)
+            if debate_for_meta is not None:
+                breakdown = debate_for_meta.breakdown_json
+                if not isinstance(breakdown, dict):
+                    breakdown = {}
+                meta = breakdown.get("metadata")
+                if not isinstance(meta, dict):
+                    meta = {}
+                personas = meta.get("personas")
+                if not isinstance(personas, dict):
+                    personas = {}
+                for side, override in custom_agent_overrides.items():
+                    personas[side] = {
+                        "role": override["role"],
+                        "persona": override.get("persona", ""),
+                        "custom_locked": True,
+                        "source_identity_id": override.get("source_identity_id"),
+                        "knowledge_domains": override.get("knowledge_domains"),
+                        "decision_bias": override.get("decision_bias"),
+                    }
+                meta["personas"] = personas
+                breakdown["metadata"] = meta
+                debate_for_meta.breakdown_json = breakdown
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(debate_for_meta, "breakdown_json")
+                meta_session.add(debate_for_meta)
+                meta_session.commit()
+    return debate
 
 
 def load_debate_snapshot(debate_id: str) -> dict[str, Any] | None:
@@ -1709,44 +1786,69 @@ async def run_debate_background(
                 with Session(engine) as _persona_session:
                     persona_debate = _persona_session.get(Debate, debate_id)
                     if persona_debate is not None:
-                        persona_debate.proposition_role = cast["proposition"]["role"]
-                        persona_debate.opposition_role = cast["opposition"]["role"]
-                        persona_debate.judge_role = cast["judge"]["role"]
                         breakdown = persona_debate.breakdown_json
                         if not isinstance(breakdown, dict):
                             breakdown = {}
                         meta = breakdown.get("metadata")
                         if not isinstance(meta, dict):
                             meta = {}
-                        meta["personas"] = {
-                            "proposition": {
+                        locked_sides = set()
+                        _personas_meta = meta.get("personas") if isinstance(meta, dict) else {}
+                        if isinstance(_personas_meta, dict):
+                            for _side_key, _side_data in _personas_meta.items():
+                                if (
+                                    isinstance(_side_data, dict)
+                                    and _side_data.get("custom_locked") is True
+                                ):
+                                    locked_sides.add(_side_key)
+                        if "proposition" not in locked_sides:
+                            persona_debate.proposition_role = cast["proposition"]["role"]
+                        if "opposition" not in locked_sides:
+                            persona_debate.opposition_role = cast["opposition"]["role"]
+                        if "judge" not in locked_sides:
+                            persona_debate.judge_role = cast["judge"]["role"]
+                        personas_payload = meta.get("personas")
+                        if not isinstance(personas_payload, dict):
+                            personas_payload = {}
+                        if "proposition" not in locked_sides:
+                            personas_payload["proposition"] = {
                                 "role": cast["proposition"]["role"],
                                 "persona": cast["proposition"]["persona"],
-                            },
-                            "opposition": {
+                            }
+                        if "opposition" not in locked_sides:
+                            personas_payload["opposition"] = {
                                 "role": cast["opposition"]["role"],
                                 "persona": cast["opposition"]["persona"],
-                            },
-                            "judge": {
+                            }
+                        if "judge" not in locked_sides:
+                            personas_payload["judge"] = {
                                 "role": cast["judge"]["role"],
                                 "persona": cast["judge"]["persona"],
-                            },
-                        }
+                            }
+                        meta["personas"] = personas_payload
                         breakdown["metadata"] = meta
                         persona_debate.breakdown_json = breakdown
                         flag_modified(persona_debate, "breakdown_json")
                         _persona_session.add(persona_debate)
                         _persona_session.commit()
                         # Sync runtime snapshot so subsequent prompts use the
-                        # LLM-generated roles + personas.
-                        debate.proposition_role = cast["proposition"]["role"]
-                        debate.opposition_role = cast["opposition"]["role"]
-                        debate.judge_role = cast["judge"]["role"]
-                        debate.personas = {
-                            "proposition": cast["proposition"]["persona"],
-                            "opposition": cast["opposition"]["persona"],
-                            "judge": cast["judge"]["persona"],
-                        }
+                        # LLM-generated roles + personas (skip locked sides).
+                        if "proposition" not in locked_sides:
+                            debate.proposition_role = cast["proposition"]["role"]
+                        if "opposition" not in locked_sides:
+                            debate.opposition_role = cast["opposition"]["role"]
+                        if "judge" not in locked_sides:
+                            debate.judge_role = cast["judge"]["role"]
+                        runtime_personas = (
+                            dict(debate.personas) if isinstance(debate.personas, dict) else {}
+                        )
+                        if "proposition" not in locked_sides:
+                            runtime_personas["proposition"] = cast["proposition"]["persona"]
+                        if "opposition" not in locked_sides:
+                            runtime_personas["opposition"] = cast["opposition"]["persona"]
+                        if "judge" not in locked_sides:
+                            runtime_personas["judge"] = cast["judge"]["persona"]
+                        debate.personas = runtime_personas
             except Exception:
                 logger.debug(
                     "LLM persona upgrade failed for debate %s; keeping template",

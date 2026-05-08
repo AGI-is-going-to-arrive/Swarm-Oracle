@@ -11,6 +11,7 @@
       "simulation_eta_hint": "按当前 {{agents}} 个 Agent × {{rounds}} 轮，主模式预计约 {{minutes}} 分钟。",
       "quick_starts": "快速开始",
       "history": "📜 历史记录",
+      "agents": "Agent 库",
       "loading_title": "正在构建推演场景",
       "loading_step_1": "解析问题与设定",
       "loading_step_2": "生成 Agent 群体",
@@ -376,6 +377,7 @@
       "web_sources_provider": "来源",
       "web_sources_cached": "缓存",
       "web_sources_visit": "访问来源",
+      "web_sources_empty": "没有匹配这个问题的实时来源。",
       "bridge_title": "深入探索",
       "bridge_causal_title": "因果图谱",
       "bridge_causal_desc": "从关键节点追溯结局为什么成立。",
@@ -388,6 +390,9 @@
       "bridge_single_branch": "需要多个分支。",
       "bridge_workbench_title": "打开图谱工作台",
       "bridge_workbench_desc": "把因果、知识图谱和节点追问放到同一视图",
+      "bridge_agents": "Agent 身份库",
+      "bridge_agents_desc": "浏览跨场景的 Agent 身份与记忆档案。",
+      "bridge_agents_disabled": "Agent 身份功能未启用。",
       "faction_timeline_branch_analysis_label": "分支分析",
       "faction_timeline_title": "阵营轨迹时间线",
       "faction_timeline_lead_expanded": "当前跟随你展开查看的结局分支“{{title}}”。",
@@ -1154,6 +1159,11 @@
     "agents": {
       "library_title": "Agent 库",
       "workshop_title": "创建自定义 Agent",
+      "edit_title": "编辑 Agent",
+      "edit": "编辑",
+      "view_profile": "查看档案",
+      "update_success": "Agent 已更新",
+      "not_found": "未找到该 Agent。",
       "create_btn": "创建 Agent",
       "name_label": "显示名称",
       "role_label": "角色",
@@ -1162,6 +1172,8 @@
       "attach_title": "附加自定义 Agent",
       "empty_state": "还没有自定义 Agent。",
       "empty_hint": "创建你的第一个自定义 Agent 并在推演中使用。",
+      "empty_cta": "还没有自定义 Agent。",
+      "create_first": "创建你的第一个 Agent",
       "delete_confirm": "确定删除这个 Agent 吗？",
       "domains": {
         "economics": "经济",
@@ -1183,7 +1195,14 @@
       "returning": "回归",
       "returning_label": "回归 Agent",
       "returning_tooltip": "{{name}} 带着跨场景记忆回来了。",
-      "feature_disabled": "自定义 Agent 功能未启用。"
+      "feature_disabled": "自定义 Agent 功能未启用。",
+      "tier_label": "Agent 参与层级",
+      "tier_important_title": "核心人物",
+      "tier_important_desc": "完整上下文记忆，主导对话走向",
+      "tier_crowd_title": "围观群众",
+      "tier_crowd_desc": "提供侧面视角，计算开销更低",
+      "knowledge_tooltip": "知识领域将注入到 Agent 的 Prompt 中，影响其对特定话题的专业度和切入角度",
+      "bias_tooltip": "决策偏好将影响 Agent 在权衡利弊时的立场倾向"
     },
     "causal": {
       "title": "因果图谱",
@@ -1484,6 +1503,7 @@
       "graph_handle": "图谱连接点",
       "submitting": "提交中...",
       "saving": "保存中...",
+      "save": "保存",
       "delete": "删除",
       "not_applicable": "不适用",
       "back_to_result": "返回结果页",
@@ -1667,12 +1687,19 @@
       }
     },
     "source": {
+      "section_title": "真实世界来源",
+      "mobile_sheet": {
+        "title": "实时来源",
+        "subtitle": "外部数据源快照。",
+        "close": "关闭实时来源"
+      },
       "polymarket": {
         "title": "Polymarket",
         "subtitle": "预测市场赔率",
         "empty": "没有匹配此问题的 Polymarket 市场。",
         "rate_limited": "Polymarket 请求受限，请稍后重试。",
         "network_error": "无法连接 Polymarket。",
+        "open": "打开市场",
         "geo_gated_title": "Polymarket 受地域限制",
         "geo_gated_subtitle": "需要 US 节点 — 当前地区无法获取实时价格。"
       },
@@ -1684,7 +1711,8 @@
       "academic": {
         "title": "学术",
         "subtitle": "同行评审研究",
-        "empty": "没有匹配此问题的学术论文。"
+        "empty": "没有匹配此问题的学术论文。",
+        "citations": "{{count}} 次引用"
       },
       "news_deep": {
         "title": "深度新闻",

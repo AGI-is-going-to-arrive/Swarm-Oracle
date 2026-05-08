@@ -11,6 +11,7 @@
       "simulation_eta_hint": "At {{agents}} agents × {{rounds}} rounds, the main simulation is expected to take about {{minutes}} min.",
       "quick_starts": "Quick Starts",
       "history": "📜 History",
+      "agents": "Agents",
       "loading_title": "Building Simulation Scenario",
       "loading_step_1": "Parsing question & settings",
       "loading_step_2": "Generating agent swarm",
@@ -376,6 +377,7 @@
       "web_sources_provider": "Provider",
       "web_sources_cached": "Cached",
       "web_sources_visit": "Visit source",
+      "web_sources_empty": "No live web sources matched this query.",
       "bridge_title": "Explore Deeper",
       "bridge_causal_title": "Causal Graph",
       "bridge_causal_desc": "Trace why an ending holds from its key nodes.",
@@ -388,6 +390,9 @@
       "bridge_single_branch": "Requires multiple branches.",
       "bridge_workbench_title": "Open Graph Workbench",
       "bridge_workbench_desc": "Inspect causality, knowledge graph, and node questions together",
+      "bridge_agents": "Agent Library",
+      "bridge_agents_desc": "Browse agent identities and cross-scenario memory.",
+      "bridge_agents_disabled": "Agent identity is not enabled.",
       "faction_timeline_branch_analysis_label": "Branch analysis",
       "faction_timeline_title": "Faction timeline analysis",
       "faction_timeline_lead_expanded": "Currently following the expanded ending branch \"{{title}}\".",
@@ -1154,6 +1159,11 @@
     "agents": {
       "library_title": "Agent Library",
       "workshop_title": "Create Custom Agent",
+      "edit_title": "Edit Agent",
+      "edit": "Edit",
+      "view_profile": "View profile",
+      "update_success": "Agent updated",
+      "not_found": "Agent not found.",
       "create_btn": "Create Agent",
       "name_label": "Display Name",
       "role_label": "Role",
@@ -1162,6 +1172,8 @@
       "attach_title": "Attach Custom Agents",
       "empty_state": "No custom agents yet.",
       "empty_hint": "Create your first agent to use in simulations.",
+      "empty_cta": "No custom agents yet.",
+      "create_first": "Create your first agent",
       "delete_confirm": "Delete this agent?",
       "domains": {
         "economics": "Economics",
@@ -1183,7 +1195,14 @@
       "returning": "Returning",
       "returning_label": "Returning agent",
       "returning_tooltip": "{{name}} has prior cross-scenario memory.",
-      "feature_disabled": "Custom agents feature is not enabled."
+      "feature_disabled": "Custom agents feature is not enabled.",
+      "tier_label": "Agent Tier",
+      "tier_important_title": "Core Persona",
+      "tier_important_desc": "Full context memory, leads the conversation",
+      "tier_crowd_title": "Crowd Member",
+      "tier_crowd_desc": "Provides side perspectives, lower compute cost",
+      "knowledge_tooltip": "Knowledge domains are injected into the Agent's prompt, influencing expertise and approach to specific topics",
+      "bias_tooltip": "Decision bias influences the Agent's stance when weighing trade-offs"
     },
     "causal": {
       "title": "Causal Graph",
@@ -1484,6 +1503,7 @@
       "graph_handle": "Graph handle",
       "submitting": "Submitting...",
       "saving": "Saving...",
+      "save": "Save",
       "delete": "Delete",
       "not_applicable": "N/A",
       "back_to_result": "Back to Result",
@@ -1667,12 +1687,19 @@
       }
     },
     "source": {
+      "section_title": "Live Sources",
+      "mobile_sheet": {
+        "title": "Live sources",
+        "subtitle": "External data providers snapshot.",
+        "close": "Close live sources"
+      },
       "polymarket": {
         "title": "Polymarket",
         "subtitle": "Prediction-market odds",
         "empty": "No Polymarket markets matched this question.",
         "rate_limited": "Polymarket rate limit reached. Retry shortly.",
         "network_error": "Could not reach Polymarket.",
+        "open": "Open market",
         "geo_gated_title": "Polymarket is geo-gated",
         "geo_gated_subtitle": "US host required — your region cannot access live prices."
       },
@@ -1684,7 +1711,8 @@
       "academic": {
         "title": "Academic",
         "subtitle": "Peer-reviewed research",
-        "empty": "No academic papers matched this question."
+        "empty": "No academic papers matched this question.",
+        "citations": "{{count}} citations"
       },
       "news_deep": {
         "title": "Deep News",

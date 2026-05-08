@@ -20,7 +20,7 @@
 |------|------|------|
 | App 入口 | `backend/app/main.py` | 挂载所有 router、根信息、`/metrics` |
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact |
-| Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、自建 Agent workshop |
+| Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、自建 Agent workshop 与自建 Agent tier 校验 |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
 | Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary |
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
@@ -54,6 +54,7 @@
 | 模块 | 位置 | 责任 |
 |------|------|------|
 | Core Models | `backend/app/models/database.py` | `Scenario`、`Branch`、`Round`、`Message`、`ReplayArtifact` 等 |
+| Agent Identity Models | `backend/app/models/agent_identity.py` | generated/custom identity、persona metadata、preferred tier |
 | Campaign Models | `backend/app/models/campaign.py` | director profile、mastery、badge、campaign log |
 | Debate Models | `backend/app/models/debate.py` | debate、turn、prediction、counterplay |
 | Ending Room Models | `backend/app/models/ending_room.py` | room、participant、thread、turn |
@@ -150,6 +151,13 @@
   - generated/custom identity 都会同步 profile
   - custom agent create/update/delete 会同步写入或清理 profile
   - 旧的 shared-collection profile 文档会在后续写入时自动清理，不再参与 memory eviction / compaction
+- 自建 Agent 当前多一层 `preferred_tier`：
+  - 迁移 `026_agent_identity_preferred_tier` 给 `agent_identity` 增加 `preferred_tier`，SQLite 走幂等 `ALTER TABLE ... ADD COLUMN ... DEFAULT 'IMPORTANT'`
+  - workshop create/update 只接受 `IMPORTANT / CROWD`
+  - 旧行里 `preferred_tier` 缺失、为空或无法识别时，注入层和 simulator 会回退到 `IMPORTANT`
+  - 自建 Agent 不允许获得 `CORE`；如果数据库里已经有脏的 custom `CORE`，scenario 注入和 `_agent_to_dict()` 都会降成 `IMPORTANT`
+  - `knowledge_domain_json / decision_bias_json` 解析失败时会降级为空 metadata，不阻断列表、推演或 debate
+  - 主推演和 Debate prompt 里，自建 Agent 的名字、角色、persona、knowledge domains 和 decision bias 都按不可信输入注入，不把用户文本当系统指令
 - main simulation 当前已补 continuity preflight/override 链路：
   - `POST /api/agents/identities/preflight` 会先跑 parser，再只把 `L2 fuzzy candidate` 返回给前端确认
   - `POST /api/scenario` 当前接受 `continuity_overrides`
@@ -294,6 +302,12 @@
   - `semantic_hash` 并发冲突当前收口到“单句跳过”而不是整 turn 回滚；同一 turn 里已经成功写入的 argument unit 不会被一起抹掉
 - `debate import-replay` 当前会把非法 `phase / speaker_side / prediction / counterplay` 字段统一收口为稳定 `422`；`turns / predictions / phase_insights` 的非对象 entry 也会直接拒绝，不再 silent corruption，也不再把枚举/浮点解析错误打成未分类 `500`。
 - `debate import-replay` 当前在 turns 落库后会同步抽取 argument map；功能开启时，导入完成后就能直接读到图谱，不再先落成空图。
+- `POST /api/debate` 当前可选传入 `custom_agent_ids`：
+  - 最多 2 个，重复值在 schema 层拒绝
+  - `FEATURE_CUSTOM_AGENTS=false` 时返回 400，不进入自建 Agent 绑定逻辑
+  - 每个 ID 都必须存在、`kind=custom` 且属于当前 `user_id` / signed principal；跨用户返回 403
+  - 第 1 个 custom Agent 锁到 proposition，第 2 个锁到 opposition，并把 persona、knowledge domains、decision bias 放入 `breakdown_json.metadata.personas`
+  - debate runtime snapshot 会透传这份 metadata，生成 turn prompt 时继续走不可信文本格式化
 - `phase_insights` 当前只要求 `pressure_margin / turn_count >= 0`；`confidence_drift.phase_margin / cumulative_margin` 可以是负数。
 - 常规 prediction 当前允许 `counterplay_variant: null`；只有显式给出非空值时才校验 variant。
 - WebSocket 入站消息有 64KB UTF-8 字节大小限制，超出会以 `1009` 状态码关闭连接。
@@ -318,8 +332,9 @@
   - `tests/test_causal_graph.py -q`：`68 passed`
   - `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q`：`125 passed`
   - `ruff check app/services/causal_graph.py tests/test_causal_graph.py`：通过
-- backend 全量 `pytest`：`2399 passed, 2 skipped`
+- backend 全量 `pytest`：`2412 passed, 2 skipped`
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
+- custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；仓库级 `ruff check app/ tests/` 当前仍有历史无关 lint 存量，未在本轮文档里改写成已全绿。
 
 ## WebSocket 口径
 

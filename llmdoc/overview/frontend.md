@@ -26,6 +26,8 @@
 | 页面 | 位置 | 责任 |
 |------|------|------|
 | InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、BYOK、quick starts、challenge、主模式档位、搜索增强 toggle、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、identity continuity preflight / confirm dialog |
+| AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、tier badge、profile modal、编辑/删除入口 |
+| AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains 与 `IMPORTANT / CROWD` tier 选择 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Theater、干预、玩法卡、押注、capture |
 | ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、archive、campaign summary、分享、导出、replay/import、真实世界来源卡片、counterfactual / resume / faction 入口，以及 capability-gated `Explore Deeper` bridge |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
@@ -112,6 +114,10 @@
   - 只要命中 `L2 fuzzy candidate` 才会弹确认框
   - 用户可选 `复用已有身份` 或 `创建新身份`
   - preflight 失败时会阻断启动并显示错误，不会静默绕过确认
+- InputView 当前也会在 `custom_agents` capability 开启时显示 Agent attach panel：
+  - 选中的自建 Agent 会通过 `customAgentIdentityIds -> custom_agent_identity_ids` 传给主推演
+  - 创建 Debate 时，会把当前选中的前 2 个自建 Agent 透传成 `customAgentIds -> custom_agent_ids`
+  - 这条链路只传 identity id，不引入 URL 或外部 fetch 配置
 
 ## Theater 与性能边界
 
@@ -189,6 +195,12 @@
 - 前端交付目标仍是浏览器端，不维护原生壳约束。
 - `follow-up` 体验已经可用，但与经典模式的完整流式一致性仍在继续收口。
 - InputView 当前会把 continuity 确认结果按 request-scoped `continuityOverrides` 传给 `POST /api/scenario`，只影响这次启动，不改本地缓存身份。
+- Agent Library / Workshop 当前按 `custom_agents` capability gate 显示：
+  - Workshop 的 tier selector 使用原生 radio 语义，选项固定为 `IMPORTANT / CROWD`
+  - 编辑旧 Agent 时会把后端返回的 `preferred_tier` 回填；缺失或未知值回退为 `IMPORTANT`
+  - knowledge domains 优先读取后端解析后的数组，旧 payload 只带 JSON 字符串时再本地 parse，解析失败显示为空
+  - Library card 显示 tier badge 和 domains；空库会给出创建入口
+  - 这些页面新增样式集中在共享 BEM class 和 editorial token 上，不使用新增 inline style
 - InputView 高级设置当前支持可选 `Organization ID`；值会写进 sessionStorage，并由 API client 自动映射成 `X-Org-Id`。清空输入时会同步移除该请求头。
 - InputView 的搜索增强当前口径：
   - `VITE_ENABLE_WEB_SEARCH=true` 时就显示 toggle，不再要求服务端默认搜索已就绪
@@ -354,6 +366,7 @@
   - `CounterfactualPanel`
   - `ResumePanel`
   - `FactionTimeline`
+- `ResultView` 当前在 `custom_agents` capability 开启时会显示 Agent Library bridge；这条入口只受 `custom_agents` gate 影响，不再误绑到 `agent_identity` gate。
 - `ResultView` 的阵营分析当前不再固定绑 `branches[0]`：
   - 用户展开了某个结局时，`FactionTimeline` 跟随当前展开分支
   - 没有展开分支时，默认跟随概率最高的分支
@@ -439,8 +452,9 @@
   - `cd frontend && npm run test -- --run src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts --reporter=verbose`：`87 passed`
   - `cd frontend && npx tsc --noEmit`：通过
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
-- frontend full vitest 本 session fresh rerun：`165 files / 1782 passed`。
-- frontend i18n key + placeholder parity：`1587 = 1587`，通过。
+- frontend full vitest 本 session fresh rerun：`165 files / 1790 passed`。
+- frontend i18n key + placeholder parity：`1621 = 1621`，通过。
+- custom agent upgrade browser spot-check 已覆盖桌面 `/agents` 创建 IMPORTANT / CROWD、tier badge、编辑回填、tooltip hover、ResultView bridge、移动端 tier selector 单列，以及 Debate 请求体里的 `custom_agent_ids`。
 - frontend 目标文件 `eslint`、`typecheck`、`build`（含 `perf:budgets:check`）当前通过。
 - fixture-backed local preview 浏览器复核当前已补：
   - ResultView bridge DOM / disabled 样式

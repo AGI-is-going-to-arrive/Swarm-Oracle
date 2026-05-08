@@ -882,6 +882,47 @@ class TestResolveHierarchicalAgentSets:
         assert "Missing Leader" in caplog.text
         assert "Worker Alpha" in caplog.text
 
+    def test_custom_agent_promoted_without_promoting_generated_same_name(self):
+        agents = [
+            {
+                "id": "generated-dup",
+                "name": "Duplicate",
+                "role": "generated worker",
+                "source_type": "generated",
+            },
+            {
+                "id": "custom-dup",
+                "name": "Duplicate",
+                "role": "custom participant",
+                "source_type": "custom",
+            },
+            {
+                "id": "generated-leader",
+                "name": "Named Leader",
+                "role": "leader",
+                "source_type": "generated",
+            },
+        ]
+        group_leaders = {"bloc": "Named Leader"}
+        agent_to_group = {
+            "Duplicate": "bloc",
+            "Named Leader": "bloc",
+        }
+
+        leader_agents, worker_agents, _effective_group_leaders = (
+            _resolve_hierarchical_agent_sets(
+                agents,
+                group_leaders,
+                agent_to_group,
+            )
+        )
+
+        assert [agent["id"] for agent in leader_agents] == [
+            "custom-dup",
+            "generated-leader",
+        ]
+        assert [agent["id"] for agent in worker_agents] == ["generated-dup"]
+
 
 class TestWorkerSynthesisHelpers:
     def test_stable_pick_is_deterministic_and_handles_edge_cases(self):
@@ -1269,6 +1310,26 @@ class TestAgentToDict:
         assert d["persona"] == ""
         assert d["tier"] == "IMPORTANT"
         assert d["emotion"] == "neutral"
+
+    def test_custom_core_tier_downgrades_to_important(self):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        a = Agent(
+            scenario_id=sid,
+            name="Custom Leader",
+            role="custom",
+            tier=AgentTier.CORE,
+            source_type="custom",
+        )
+        with Session(engine) as session:
+            session.add(a)
+            session.commit()
+            session.refresh(a)
+
+        d = _agent_to_dict(a)
+
+        assert d["source_type"] == "custom"
+        assert d["tier"] == "IMPORTANT"
 
 
 # ── _create_branch ───────────────────────────────────────────

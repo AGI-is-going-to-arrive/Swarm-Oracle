@@ -105,14 +105,14 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
   }, [canSubmit, isRoundValid, navigate, normalizedTotalRounds, onCreated, scenarioId, selectedBranch, selectedRound, t]);
 
   return (
-    <div style={{ border: '1px solid var(--color-border, #555)', borderRadius: 8, padding: '1rem', marginTop: '1rem' }}>
-      <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>
+    <div className="result-resume">
+      <h3 className="result-resume__heading">
         {t('resume.title', 'Resume Simulation')}
       </h3>
 
-      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-        <div>
-          <label htmlFor="resume-branch" style={{ display: 'block', fontSize: '0.8rem', marginBottom: 3 }}>
+      <div className="result-resume__form">
+        <div className="result-resume__field">
+          <label htmlFor="resume-branch" className="result-resume__label">
             {t('resume.branch', 'Branch')}
           </label>
           <select
@@ -123,7 +123,7 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
               setError(null);
             }}
             disabled={isLocked}
-            style={{ padding: '0.4rem', borderRadius: 4, border: '1px solid #555', background: '#1a1a2e', color: '#fff' }}
+            className="result-resume__select"
           >
             <option value="">{t('resume.select_branch', '-- Select --')}</option>
             {branches.map(b => (
@@ -132,8 +132,8 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
           </select>
         </div>
 
-        <div>
-          <label htmlFor="resume-round" style={{ display: 'block', fontSize: '0.8rem', marginBottom: 3 }}>
+        <div className="result-resume__field">
+          <label htmlFor="resume-round" className="result-resume__label">
             {t('resume.round', 'Round')}
           </label>
           <input
@@ -150,14 +150,14 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
             }}
             disabled={isLocked}
             aria-invalid={visibleError ? 'true' : undefined}
-            style={{ width: 60, padding: '0.4rem', borderRadius: 4, border: '1px solid #555', background: '#1a1a2e', color: '#fff' }}
+            className="result-resume__input"
           />
         </div>
       </div>
 
-      {visibleError && <p role="alert" style={{ color: '#e74c3c', fontSize: '0.85rem', marginBottom: '0.5rem' }}>{visibleError}</p>}
+      {visibleError && <p role="alert" className="result-resume__feedback result-resume__feedback--error">{visibleError}</p>}
       {result && (
-        <p style={{ color: '#2ecc71', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+        <p className="result-resume__feedback result-resume__feedback--success">
           {t('resume.created', 'Resume branch created!')}
         </p>
       )}
@@ -165,12 +165,7 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
       <button
         onClick={handleSubmit}
         disabled={!canSubmit}
-        style={{
-          padding: '0.5rem 1.2rem', borderRadius: 6,
-          background: canSubmit ? 'var(--color-accent, #4a90d9)' : '#555',
-          color: '#fff', border: 'none', cursor: canSubmit ? 'pointer' : 'not-allowed',
-          fontWeight: 600, fontSize: '0.85rem',
-        }}
+        className="result-resume__submit"
       >
         {submitting ? t('common.submitting', 'Submitting...') : t('resume.submit', 'Resume')}
       </button>

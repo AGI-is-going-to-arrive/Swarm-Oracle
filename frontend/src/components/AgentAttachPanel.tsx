@@ -4,6 +4,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useAgentStore } from '../stores/agentStore';
 import { useTranslation } from 'react-i18next';
 
@@ -26,49 +27,50 @@ export function AgentAttachPanel({ userId, visible }: Props) {
 
   const customAgents = identities.filter(a => a.kind === 'custom');
 
-  if (loading) return <p style={{ fontSize: '0.85rem', color: '#888' }}>{t('common.loading', 'Loading...')}</p>;
-  if (customAgents.length === 0) return null;
+  if (loading) return <p className="agent-page__muted">{t('common.loading', 'Loading...')}</p>;
+  if (customAgents.length === 0) {
+    return (
+      <div className="agent-attach-panel agent-attach-panel--empty">
+        <p className="agent-attach-panel__empty-copy">
+          {t('agents.empty_cta', 'No custom agents yet.')}
+          {' '}
+          <Link to="/agents/new" className="agent-link">
+            {t('agents.create_first', 'Create your first agent')}
+          </Link>
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <fieldset
-      style={{
-        border: '1px solid var(--color-border, #555)',
-        borderRadius: 8,
-        padding: '0.75rem',
-        marginTop: '0.75rem',
-      }}
-    >
-      <legend style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+    <fieldset className="agent-attach-panel">
+      <legend className="agent-attach-panel__legend">
         {t('agents.attach_title', 'Attach Custom Agents')}
         {selectedIds.size > 0 && (
-          <span style={{ fontWeight: 400, fontSize: '0.8rem', marginLeft: 8, color: '#8ab4f8' }}>
+          <span className="agent-attach-panel__count">
             ({selectedIds.size}/5)
           </span>
         )}
       </legend>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+      <div className="agent-attach-panel__list">
         {customAgents.map(agent => {
           const selected = selectedIds.has(agent.id);
           return (
             <label
               key={agent.id}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                padding: '6px 12px', borderRadius: 6,
-                border: selected ? '2px solid var(--color-accent, #4a90d9)' : '1px solid var(--color-border, #555)',
-                background: selected ? 'rgba(74,144,217,0.15)' : 'transparent',
-                cursor: 'pointer', fontSize: '0.85rem',
-                transition: 'border-color 0.15s, background 0.15s',
-              }}
+              className={`agent-attach-chip${selected ? ' agent-attach-chip--selected' : ''}`}
             >
               <input
+                className="agent-attach-chip__input"
                 type="checkbox"
                 checked={selected}
                 onChange={() => toggleSelection(agent.id)}
-                style={{ accentColor: 'var(--color-accent, #4a90d9)' }}
               />
-              <span style={{ fontWeight: 600 }}>{agent.display_name}</span>
-              <span style={{ color: '#888', fontSize: '0.75rem' }}>{agent.role}</span>
+              <span className="agent-attach-chip__name">{agent.display_name}</span>
+              <span className={`agent-tier-badge agent-tier-badge--${(agent.preferred_tier || 'IMPORTANT').toLowerCase()}`}>
+                {(agent.preferred_tier || 'IMPORTANT').toUpperCase()}
+              </span>
+              <span className="agent-attach-chip__role">{agent.role}</span>
             </label>
           );
         })}

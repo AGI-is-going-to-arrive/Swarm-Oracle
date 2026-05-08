@@ -815,6 +815,7 @@ export function InputView() {
 
     setIsSubmitting(true);
     try {
+      const [propositionAgentId, oppositionAgentId] = [...agentSelectedIds].slice(0, 2);
       const debate = await createDebate(trimmed, undefined, {
         llmApiKey: llmApiKey || undefined,
         llmBaseUrl: llmBaseUrl || undefined,
@@ -823,7 +824,10 @@ export function InputView() {
         llmTokensPerMinute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined,
         reasoningEffort: reasoningEffort || undefined,
         userId: directorIdentity.userId,
-      });
+      }, propositionAgentId ? {
+        proposition: propositionAgentId,
+        opposition: oppositionAgentId,
+      } : undefined);
       navigate(`/debate/${debate.id}`);
     } catch {
       setIsSubmitting(false);
@@ -1135,6 +1139,11 @@ export function InputView() {
                   <button className="btn btn-ghost" onClick={() => navigate('/history')}>
                     {t('home.history')}
                   </button>
+                  {caps?.custom_agents?.enabled && (
+                    <button className="btn btn-ghost" onClick={() => navigate('/agents')}>
+                      {t('home.agents', 'Agents')}
+                    </button>
+                  )}
                   <button className="btn btn-ghost" onClick={() => navigate('/leaderboard')}>
                     🏆
                   </button>
