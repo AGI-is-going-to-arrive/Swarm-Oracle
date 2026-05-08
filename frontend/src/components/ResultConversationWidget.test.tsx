@@ -141,6 +141,36 @@ describe('ResultConversationWidget — Sheet interaction', () => {
     expect(sheetPropsSpy.lastProps!.showResultDeepenHint).toBe(true);
   });
 
+  it('passes selected result branch context into the conversation origin', async () => {
+    const Widget = await loadWidget();
+    render(
+      <Widget
+        scenarioId="scen-42"
+        resultContext={{
+          branchId: 'branch-1',
+          title: 'Archive Branch',
+          insight: 'The archive held because the late challenge never landed.',
+          forkReason: 'The branch split when the council chose the archive path.',
+          keyMoments: ['The witness stayed silent.'],
+          comparisonTitles: ['Counter Branch'],
+        }}
+      />,
+    );
+
+    const origin = sheetPropsSpy.lastProps!.origin as Record<string, unknown>;
+    expect(origin).toMatchObject({
+      surface: 'result',
+      nodeId: 'result:branch-1',
+      nodeType: 'outcome',
+      branchId: 'branch-1',
+      nodeLabel: 'Archive Branch',
+      causeContext: ['The branch split when the council chose the archive path.'],
+      relatedContext: ['Counter Branch'],
+    });
+    expect(String(origin.excerpt)).toContain('The archive held because');
+    expect(String(origin.excerpt)).toContain('The witness stayed silent.');
+  });
+
   it('passes null identityId when primaryAgentIdentityId is undefined', async () => {
     const Widget = await loadWidget();
     render(<Widget scenarioId="scen-1" />);

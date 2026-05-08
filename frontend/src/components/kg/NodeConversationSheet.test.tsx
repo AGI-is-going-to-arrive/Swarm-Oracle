@@ -315,6 +315,33 @@ describe('NodeConversationSheet — input + send', () => {
     });
   });
 
+  it('renders committed assistant Markdown instead of raw markers', async () => {
+    vi.useRealTimers();
+    const fetchMock = vi.fn().mockResolvedValue(
+      makeSseResponse([
+        'event: turn_started\ndata: {"turn_id":"turn-md","thread_id":"thread-1","sequence":4}\n\n',
+        'event: turn_token_delta\ndata: {"turn_id":"turn-md","delta":"**一、重点**\\n"}\n\n',
+        'event: turn_token_delta\ndata: {"turn_id":"turn-md","delta":"- 第一条"}\n\n',
+        'event: turn_completed\ndata: {"turn_id":"turn-md","sequence":4,"status":"committed"}\n\n',
+      ]),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { getByTestId } = renderSheet();
+    const ta = getByTestId('node-conversation-input') as HTMLTextAreaElement;
+    act(() => {
+      fireEvent.change(ta, { target: { value: 'follow up' } });
+    });
+    fireEvent.click(getByTestId('node-conversation-send'));
+
+    await waitFor(() => {
+      const bubble = getByTestId('node-conversation-streaming');
+      expect(bubble.querySelector('strong')?.textContent).toBe('一、重点');
+      expect(bubble.querySelector('li')?.textContent).toBe('第一条');
+      expect(bubble.textContent).not.toContain('**');
+    });
+  });
+
   it('aborts the active follow-up request when the sheet unmounts', async () => {
     vi.useRealTimers();
     let requestSignal: AbortSignal | null | undefined;
@@ -418,23 +445,36 @@ describe('NodeConversationSheet — a11y', () => {
 
     expect(describedBy).toBeTruthy();
     expect(sheet).toHaveAccessibleDescription(
-      'Ask the agent about the selected node and review the streamed reply here.',
+      'Ask the shown conversation target about the selected node and review the streamed reply here.',
     );
     expect(document.getElementById(describedBy!)).toHaveTextContent(
-      'Ask the agent about the selected node and review the streamed reply here.',
+      'Ask the shown conversation target about the selected node and review the streamed reply here.',
     );
   });
 
   it('uses result-context copy when opened from the result conversation widget', () => {
-    const { getByTestId, getByText } = renderSheet({ showResultDeepenHint: true });
+    const { getByTestId, getByText } = renderSheet({
+      showResultDeepenHint: true,
+      origin: {
+        surface: 'result',
+        nodeId: 'result:branch-1',
+        nodeType: 'outcome',
+        nodeLabel: 'Archive Branch',
+        excerpt: 'The archive branch held because the late challenge never landed.',
+        causeContext: ['The council chose the archive path.'],
+        relatedContext: ['Counter Branch'],
+      },
+    });
     const sheet = getByTestId('node-conversation-sheet');
 
     expect(sheet).toHaveAccessibleName('Result conversation');
     expect(sheet).toHaveAccessibleDescription(
       'Ask about this result and review the streamed reply here.',
     );
-    expect(getByText('Ask about this result')).toBeInTheDocument();
-    expect(getByText('What drove this ending?')).toBeInTheDocument();
+    expect(getByTestId('node-context-banner')).toHaveTextContent('Archive Branch');
+    expect(getByText('Ask about "Archive Branch"')).toBeInTheDocument();
+    expect(getByText('Why did "Archive Branch" become the landing point?')).toBeInTheDocument();
+    expect(getByText('What really separates it from "Counter Branch"?')).toBeInTheDocument();
   });
 
   it('does not emit Radix dialog title/description accessibility warnings on render', () => {
@@ -961,7 +1001,7 @@ describe('NodeConversationSheet — T1 banner integration', () => {
     expect(queryByTestId('node-context-banner')).toBeNull();
   });
 
-  it('/start body excludes UI-only origin fields (agentName, emotion, stance, nodeLabel, typeColor)', async () => {
+  it('/start body excludes UI-only origin fields (surface, agentName, emotion, stance, nodeLabel, typeColor, targetLabel)', async () => {
     vi.useRealTimers();
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -970,6 +1010,7 @@ describe('NodeConversationSheet — T1 banner integration', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const origin = {
+      surface: 'causal' as const,
       nodeId: 'n1',
       nodeType: 'event',
       branchId: 'b1',
@@ -980,6 +1021,14 @@ describe('NodeConversationSheet — T1 banner integration', () => {
       stance: 0.7,
       nodeLabel: 'UI Label',
       typeColor: '#ff0000',
+      targetLabel: 'Graph analyst',
+      targetDescription: 'UI-only target copy',
+      meaningTitle: 'Event card',
+      meaningDescription: 'UI-only meaning copy',
+      causeContext: ['UI-only cause copy'],
+      effectContext: ['UI-only effect copy'],
+      relationContext: ['UI-only relation group copy'],
+      relatedContext: ['UI-only relation copy'],
     };
     const { getByTestId } = renderSheet({ threadId: null, origin });
     const ta = getByTestId('node-conversation-input') as HTMLTextAreaElement;
@@ -1000,11 +1049,20 @@ describe('NodeConversationSheet — T1 banner integration', () => {
     );
     expect(startCall).toBeTruthy();
     const body = JSON.parse(startCall![1].body as string);
+    expect(body).not.toHaveProperty('surface');
     expect(body).not.toHaveProperty('agentName');
     expect(body).not.toHaveProperty('emotion');
     expect(body).not.toHaveProperty('stance');
     expect(body).not.toHaveProperty('nodeLabel');
     expect(body).not.toHaveProperty('typeColor');
+    expect(body).not.toHaveProperty('targetLabel');
+    expect(body).not.toHaveProperty('targetDescription');
+    expect(body).not.toHaveProperty('meaningTitle');
+    expect(body).not.toHaveProperty('meaningDescription');
+    expect(body).not.toHaveProperty('causeContext');
+    expect(body).not.toHaveProperty('effectContext');
+    expect(body).not.toHaveProperty('relationContext');
+    expect(body).not.toHaveProperty('relatedContext');
     expect(body.origin_node_id).toBe('n1');
     expect(body.origin_node_type).toBe('event');
     expect(body.origin_branch_id).toBe('b1');

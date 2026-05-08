@@ -946,6 +946,25 @@ export default function ResultView() {
     [branches, dominantBranchFromStory, expandedBranch],
   );
   const analysisBranch = factionTimelineBranch;
+  const resultConversationContext = useMemo(() => {
+    if (!analysisBranch) return null;
+
+    const comparisonTitles = [...branches]
+      .filter((branch) => branch.id !== analysisBranch.id)
+      .sort((a, b) => b.probability - a.probability)
+      .slice(0, 2)
+      .map((branch) => branch.title)
+      .filter(Boolean);
+
+    return {
+      branchId: analysisBranch.id,
+      title: analysisBranch.title,
+      insight: analysisBranch.insight,
+      forkReason: analysisBranch.fork_reason,
+      keyMoments: analysisBranch.key_moments,
+      comparisonTitles,
+    };
+  }, [analysisBranch, branches]);
   const factionTimelineLead = factionTimelineBranch
     ? (
         expandedBranch === factionTimelineBranch.id
@@ -2760,6 +2779,7 @@ export default function ResultView() {
         <ResultConversationWidget
           scenarioId={activeScenarioId}
           primaryAgentIdentityId={primaryAgentIdentityId}
+          resultContext={resultConversationContext}
         />
       )}
     </div>

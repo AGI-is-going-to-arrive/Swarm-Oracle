@@ -249,15 +249,25 @@ describe('KGExplorerView happy path', () => {
 
   it('node click opens NodeConversationSheet (FE-3-seq wire-up)', async () => {
     renderAt('scn-42');
-    await waitFor(() => expect(getKgGraphMockState().nodeClickHandlers.length).toBeGreaterThan(0));
+    await waitFor(() => {
+      expect(getKgGraphMockState().nodeClickHandlers.length).toBeGreaterThan(0);
+      const dataUpdates = getKgGraphMockState().setOptionsCalls
+        .map(([options]) => (options as { data?: { nodes?: Array<{ id: string }> } }).data)
+        .filter(Boolean);
+      expect(dataUpdates.at(-1)?.nodes?.map((node) => node.id)).toEqual(['n1', 'n2']);
+    });
     // Sheet is not mounted prior to interaction.
     expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
     // Simulate node click via our mock Graph.on callback.
     act(() => {
-      getKgGraphMockState().nodeClickHandlers.at(-1)?.({ target: { id: 'node-9', type: 'circle' } });
+      getKgGraphMockState().nodeClickHandlers.at(-1)?.({ target: { id: 'n1', type: 'circle' } });
     });
     const sheet = await screen.findByTestId('node-conversation-sheet');
     expect(sheet).toBeInTheDocument();
+    expect(await screen.findByTestId('node-context-banner')).toHaveTextContent('Knowledge graph analyst');
+    expect(screen.getByTestId('conversation-quick-q-1')).toHaveTextContent('Which nodes are closest');
+    expect(screen.getByTestId('conversation-quick-q-1')).toHaveTextContent('alpha event');
+    expect(screen.getByText('Downstream: beta fork')).toBeInTheDocument();
   });
 
   it('starts node conversation with the explorer scenario id and a null identity id', async () => {
@@ -310,6 +320,10 @@ describe('KGExplorerView happy path', () => {
     expect(startBody.origin_node_id).toBe('node-9');
     expect(startBody.origin_node_type).toBe('event');
     expect(startBody.origin_round_number).toBe(1);
+    expect(startBody.origin_excerpt).toBe('Node 9');
+    expect(startBody).not.toHaveProperty('surface');
+    expect(startBody).not.toHaveProperty('targetLabel');
+    expect(startBody).not.toHaveProperty('relatedContext');
   });
 
   it('closes the open sheet when the route scenario id changes', async () => {

@@ -225,7 +225,7 @@
 - `start` 成功后，返回体会带 `thread_id / user_turn_id / assistant_turn_id`，供前端继续接 `/turn`。
 - 如果首个 `/turn` 和 bootstrap 阶段的 `first_user_content` 相同，后端当前会直接 claim 这条预留 assistant turn，而不是再追加一条重复的 user turn。
 - 同一个 bootstrap placeholder 只会被 claim 一次；并发重复首轮请求不会再同时拿到两条 live stream。
-- 流式 prompt 会按 thread origin 尝试补 scenario question、branch summary、origin graph node、相邻关系摘要和最近几轮同分支 transcript；前端传 `origin_excerpt` 时，也会放进同一段 untrusted context。这层只读取同 scenario 的最新 causal snapshot，且会截断文本。
+- 流式 prompt 会按 thread origin 尝试补 scenario question、branch summary、origin graph node、相邻关系摘要和最近几轮同分支 transcript；前端传 `origin_excerpt` 时，也会放进同一段 untrusted context。这层只读取同 scenario 的最新 causal snapshot，且会截断文本。origin 如果没有可用 `agent_name`，后端按 graph analyst 口径回答，不冒充具体参与者。
 - `start` 和后续 `/turn` 当前都会消耗 rolling 24h 的 daily quota：
   - user quota 键取自 `thread.owner_user_id`
   - org quota 键取自 `X-Org-Id` 落库后的 `thread.organization_id`
@@ -278,8 +278,11 @@
   - 不属于当前 `scenario` 的 `branch_id` 返回 `404 BRANCH_NOT_FOUND`
   - 旧 SQLite 如果还留有重复 `graph_snapshot`，运行时 repair 会保留最新 snapshot，并删除旧 snapshot 的 node/edge；返回体不再混入 stale duplicate node/edge
   - 成功返回体仍会带 `available_branches`
+- `GET /api/scenario/{id}/causal-graph` 的 `nodes[]` 除持久化图节点外，也可能包含合成节点：
+  - `type=outcome`：由 completed branch 投影出来，payload 带 `branch_id / title / probability / status / story_excerpt / insight / parent_branch_id`
+  - `id` 以 `legacy-event:` 开头的 event：用于只读回补旧 snapshot 里孤立 fork 的消息 provenance，payload 会带 `synthetic_provenance=true`
 - `GET /api/scenario/{id}/causal-graph` 的 `edges[]` 使用 `source / target / type / weight / label` 字段；有证据元数据时会返回
-  `evidence: { confidence_tier, source_ref, source_round_number, detail }`。旧边或无证据边的 `evidence` 可以为 `null`。重放轮次只会补齐旧边缺失的 evidence 字段，不覆盖已有非空值。当前 causal graph 会返回已有 `temporal / caused` 边，也可能返回后端规则生成的 `responds_to / supports_stance / opposes_stance`。这些 inter-agent 边只来自同一 `branch / round` 的 event 节点，`detail` 会透传确定性 rule / reason JSON；其它 causal graph 边可能仍只有 coarse provenance。客户端不要把 `detail` 当成 LLM 解释文本。
+  `evidence: { confidence_tier, source_ref, source_round_number, detail }`。旧边或无证据边的 `evidence` 可以为 `null`。重放轮次只会补齐旧边缺失的 evidence 字段，不覆盖已有非空值。当前 causal graph 会返回已有 `temporal / caused` 边，也可能返回后端规则生成的 `responds_to / supports_stance / opposes_stance`，以及合成结局使用的 `led_to`。inter-agent 边只来自同一 `branch / round` 的 event 节点，`detail` 会透传确定性 rule / reason JSON；其它 causal graph 边可能仍只有 coarse provenance。客户端不要把 `detail` 当成 LLM 解释文本。
 - `GET /api/scenario/{id}/graph-analysis` 返回 `god_nodes / degree_distribution / cross_branch_edges / summary`。大图会按最新 snapshot size 做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`。带 `branch_id` 时，预检按该 branch 的可见节点/边计数；未带 `branch_id` 时仍按全图计数。
 - `POST /api/scenario/{id}/counterfactual` 当前约束：
   - scenario 状态必须是 `done`；否则返回 `409 COUNTERFACTUAL_SCENARIO_STATUS_INVALID`

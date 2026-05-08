@@ -76,10 +76,50 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.edge_responds_to': 'responds to',
     'causal.edge_supports_stance': 'aligns with',
     'causal.edge_opposes_stance': 'opposes',
+    'causal.edge_led_to': 'leads to',
     'causal.edge_relation': '{{source}} {{relation}} {{target}}',
+    'causal.node_card_summary_isolated': 'No nearby links yet',
+    'causal.node_card_summary_event': 'Causes {{causeCount}} · effects {{effectCount}}',
+    'causal.node_card_summary_event_with_relations': 'Causes {{causeCount}} · effects {{effectCount}} · links {{relationCount}}',
+    'causal.node_card_summary_fork': 'Fork point · {{effectCount}} follow-ups',
+    'causal.node_card_summary_outcome': 'Endpoint · {{causeCount}} sources',
+    'causal.type_outcome': 'Outcome',
+    'node_context_banner.meaning_event_title': 'Event card',
+    'node_context_banner.meaning_event_description': 'This records one important move. The links explain why it matters and what it changes next.',
+    'node_context_banner.meaning_fork_title': 'Fork card',
+    'node_context_banner.meaning_fork_description': 'This marks where one route split into alternatives. The links explain what triggered the split and what it opened.',
+    'node_context_banner.meaning_outcome_title': 'Outcome card',
+    'node_context_banner.meaning_outcome_description': 'This is the endpoint of one branch. Incoming links explain which earlier moves carried the branch here.',
+    'node_context_banner.cause_title': 'Why this card appears',
+    'node_context_banner.effect_title': 'What it changes',
+    'node_context_banner.relation_title': 'Alignment and conflict',
+    'node_context_banner.cause_temporal': 'It follows {{node}}, so it continues that timeline.',
+    'node_context_banner.effect_temporal': '{{node}} happens after this card, so this card sets up the next beat.',
+    'node_context_banner.cause_led_to': '{{node}} pushed the story toward this card.',
+    'node_context_banner.effect_led_to': 'This card pushes the story toward {{node}}.',
+    'node_context_banner.cause_responds_to': 'It responds to or names {{node}}, so that earlier card is the direct context.',
+    'node_context_banner.effect_responds_to': '{{node}} responds to or names this card, so this card becomes what is being answered.',
+    'node_context_banner.relation_supports': 'It aligns with {{node}} in the same round.',
+    'node_context_banner.relation_opposes': 'It conflicts with {{node}} in the same round.',
+    'node_context_banner.cause_default': '{{node}} links into this card by {{relation}}.',
+    'node_context_banner.effect_default': 'This card links onward to {{node}} by {{relation}}.',
+    'node_context_banner.relation_more': '+{{count}} more nearby links',
+    'node_context_banner.related_title': 'Related links',
+    'node_context_banner.related_incoming': 'Source: {{node}} · {{relation}}',
+    'node_context_banner.related_outgoing': 'Next: {{relation}} · {{node}}',
     'causal.evidence_high': 'High',
     'causal.evidence_medium': 'Medium',
     'causal.evidence_low': 'Low',
+    'causal.evidence_high_context': 'high confidence',
+    'causal.evidence_medium_context': 'medium confidence',
+    'causal.evidence_low_context': 'low confidence',
+    'causal.edge_round_context': 'Round {{round}}',
+    'causal.edge_confidence_context': 'confidence: {{tier}}',
+    'causal.edge_context_suffix': '({{context}})',
+    'causal.guide_preview_action': 'View full',
+    'causal.guide_preview_aria': 'Show full text: {{label}}',
+    'causal.guide_expand_details': 'Show details',
+    'causal.guide_collapse_details': 'Hide details',
     'causal.error.network': 'Unable to load the causal graph. Check your connection and try again.',
     'causal.error.branch_not_found': 'The selected branch is no longer available for this scenario.',
     'causal.error.unauthorized': 'You do not have permission to view this causal graph.',
@@ -102,10 +142,50 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.edge_responds_to': '回应',
     'causal.edge_supports_stance': '立场一致',
     'causal.edge_opposes_stance': '立场对立',
+    'causal.edge_led_to': '导向',
     'causal.edge_relation': '{{source}} {{relation}} {{target}}',
+    'causal.node_card_summary_isolated': '暂无相邻关系',
+    'causal.node_card_summary_event': '前因 {{causeCount}} · 后续 {{effectCount}}',
+    'causal.node_card_summary_event_with_relations': '前因 {{causeCount}} · 后续 {{effectCount}} · 关系 {{relationCount}}',
+    'causal.node_card_summary_fork': '分岔点 · {{effectCount}} 条去向',
+    'causal.node_card_summary_outcome': '结局 · {{causeCount}} 个来源',
+    'causal.type_outcome': '结局',
+    'node_context_banner.meaning_event_title': '事件卡',
+    'node_context_banner.meaning_event_description': '它记录一次关键发言或行动。下面会说明它为什么重要，以及它把局面推向哪里。',
+    'node_context_banner.meaning_fork_title': '分岔卡',
+    'node_context_banner.meaning_fork_description': '它标记世界线开始分岔。下面会说明分岔从哪里来，又打开了哪些后续路线。',
+    'node_context_banner.meaning_outcome_title': '结局卡',
+    'node_context_banner.meaning_outcome_description': '它是某条路线的落点。下面会说明哪些发言、分岔或行动把这条线带到这里。',
+    'node_context_banner.cause_title': '为什么会出现',
+    'node_context_banner.effect_title': '它带来什么影响',
+    'node_context_banner.relation_title': '它和谁呼应或冲突',
+    'node_context_banner.cause_temporal': '它接在 {{node}} 之后，是这条时间线的下一步。',
+    'node_context_banner.effect_temporal': '{{node}} 接在它之后，说明这张卡铺垫了下一步。',
+    'node_context_banner.cause_led_to': '{{node}} 把局面推向了这张卡。',
+    'node_context_banner.effect_led_to': '这张卡把局面推向 {{node}}。',
+    'node_context_banner.cause_responds_to': '它回应或点名了 {{node}}，所以那张卡是它的直接上下文。',
+    'node_context_banner.effect_responds_to': '{{node}} 回应或点名了这张卡，说明它成了后续发言的对象。',
+    'node_context_banner.relation_supports': '它和 {{node}} 在同一回合立场相近。',
+    'node_context_banner.relation_opposes': '它和 {{node}} 在同一回合立场相冲。',
+    'node_context_banner.cause_default': '{{node}} 通过“{{relation}}”关联到这张卡之前。',
+    'node_context_banner.effect_default': '这张卡通过“{{relation}}”继续关联到 {{node}}。',
+    'node_context_banner.relation_more': '另有 {{count}} 条相邻关系',
+    'node_context_banner.related_title': '关联关系',
+    'node_context_banner.related_incoming': '前因：{{node}} · {{relation}}',
+    'node_context_banner.related_outgoing': '后续：{{relation}} · {{node}}',
     'causal.evidence_high': '高',
     'causal.evidence_medium': '中',
     'causal.evidence_low': '低',
+    'causal.evidence_high_context': '高可信度',
+    'causal.evidence_medium_context': '中等可信度',
+    'causal.evidence_low_context': '低可信度',
+    'causal.edge_round_context': '第 {{round}} 轮',
+    'causal.edge_confidence_context': '可信度：{{tier}}',
+    'causal.edge_context_suffix': '（{{context}}）',
+    'causal.guide_preview_action': '查看全文',
+    'causal.guide_preview_aria': '查看完整内容：{{label}}',
+    'causal.guide_expand_details': '展开详情',
+    'causal.guide_collapse_details': '收起详情',
     'causal.error.network': '因果图谱加载失败，请检查网络后重试。',
     'causal.error.branch_not_found': '所选分支已不在当前场景中。',
     'causal.error.unauthorized': '你没有权限查看此因果图谱。',
@@ -211,7 +291,13 @@ vi.mock('@xyflow/react', async () => {
       edges,
     }: {
       children?: React.ReactNode;
-      nodes?: Array<{ id: string; ariaLabel?: string | null; ariaRole?: string | null; className?: string | null }>;
+      nodes?: Array<{
+        id: string;
+        ariaLabel?: string | null;
+        ariaRole?: string | null;
+        className?: string | null;
+        data?: { summary?: string | null };
+      }>;
       edges?: Array<{ label?: string | null }>;
       ariaLabelConfig?: Record<string, string>;
       onInit?: (instance: { fitView: typeof fitViewMock }) => void;
@@ -242,6 +328,7 @@ vi.mock('@xyflow/react', async () => {
           data-min-zoom={String(minZoom ?? '')}
           data-edge-label={String(firstEdge?.label ?? '')}
           data-first-node-class-name={firstNode?.className ?? ''}
+          data-first-node-summary={String(firstNode?.data?.summary ?? '')}
         >
           {nodes?.map((node) => (
             <button
@@ -290,6 +377,14 @@ const renderView = (path = '/sim/test-id/causal-map') =>
       </Routes>
     </MemoryRouter>,
   );
+
+async function expandGraphOverview(user = userEvent.setup()) {
+  expect(await screen.findByText('Graph Overview')).toBeInTheDocument();
+  const detailsButton = screen.getByRole('button', { name: 'Show details' });
+  expect(detailsButton).toHaveAttribute('aria-expanded', 'false');
+  await user.click(detailsButton);
+  return user;
+}
 
 const createDeferredResponse = () => {
   let resolve!: (value: Response) => void;
@@ -538,7 +633,8 @@ describe('CausalReviewView', () => {
     expect(flow).toHaveAttribute('data-first-node-class-name', '');
   });
 
-  it('shows the guide panel when the graph has nodes', async () => {
+  it('shows the compact guide summary by default and expands details on demand', async () => {
+    const user = userEvent.setup();
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -554,13 +650,52 @@ describe('CausalReviewView', () => {
     renderView();
 
     expect(await screen.findByText('Graph Overview')).toBeInTheDocument();
+    expect(screen.getByText(/This graph is mainly a cause-and-effect timeline/)).toBeInTheDocument();
+    expect(screen.getByText('Graph size: 2 nodes · 1 edges')).toBeInTheDocument();
+    expect(screen.queryByText('Start with these nodes')).not.toBeInTheDocument();
+    expect(screen.queryByText('Link count means incoming plus outgoing relationships. It is context size, not a quality score.')).not.toBeInTheDocument();
+
+    const detailsButton = screen.getByRole('button', { name: 'Show details' });
+    expect(detailsButton).toHaveAttribute('aria-expanded', 'false');
+    await user.click(detailsButton);
+
+    expect(await screen.findByText('Start with these nodes')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hide details' })).toHaveAttribute('aria-expanded', 'true');
     const closeButton = screen.getByRole('button', { name: 'Close guide' });
     expect(closeButton).toHaveAttribute('aria-expanded', 'true');
     expect(closeButton).toHaveAttribute('aria-controls', 'causal-guide-panel');
-    expect(screen.getByText('Click any node to see details. Use the search bar to filter by agent.')).toBeInTheDocument();
+    expect(screen.getByText('Link count means incoming plus outgoing relationships. It is context size, not a quality score.')).toBeInTheDocument();
+    expect(screen.getByText('Click a node to read its full card, causes, effects, and chat target.')).toBeInTheDocument();
   });
 
-  it('localizes evidence tier labels in rendered edge badges', async () => {
+  it('explains fork-to-outcome routes in the guide panel', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-guide-routes',
+        nodes: [
+          { id: 'fork-1', key: 'f1', type: 'fork', label: 'Route split after council', round: 1, payload: null },
+          { id: 'event-1', key: 'e1', type: 'event', label: 'Advisor warns about supply lines', round: 2, payload: null },
+          { id: 'outcome-1', key: 'o1', type: 'outcome', label: 'Northern campaign stalls', round: 3, payload: null },
+        ],
+        edges: [
+          { id: 'edge-1', source: 'fork-1', target: 'event-1', type: 'caused', weight: 1, label: null },
+          { id: 'edge-2', source: 'fork-1', target: 'outcome-1', type: 'led_to', weight: 1, label: null },
+        ],
+      }),
+    } as Response);
+
+    renderView();
+    await expandGraphOverview(user);
+
+    expect(await screen.findByText('How branches resolve')).toBeInTheDocument();
+    expect(screen.getByText(/This graph connects 1 forks, 1 events, and 1 outcomes through 2 links/)).toBeInTheDocument();
+    expect(screen.getAllByText('Route split after council').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Northern campaign stalls').length).toBeGreaterThan(0);
+  });
+
+  it('keeps canvas edge labels human-readable while preserving evidence context in text summaries', async () => {
     applyTestLocale('zh');
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -591,9 +726,11 @@ describe('CausalReviewView', () => {
 
     const flow = await screen.findByTestId('reactflow');
     await waitFor(() => {
-      expect(flow).toHaveAttribute('data-edge-label', 'R2 [中]');
+      expect(flow).toHaveAttribute('data-edge-label', '导致');
     });
-    expect(flow).not.toHaveAttribute('data-edge-label', 'R2 [medium]');
+    expect(flow.getAttribute('data-edge-label') ?? '').not.toContain('R2');
+    expect(flow.getAttribute('data-edge-label') ?? '').not.toContain('[中]');
+    expect(screen.getByText('Alpha 导致 Beta （第 2 轮 · 可信度：中等可信度）')).toBeInTheDocument();
   });
 
   it('keeps guide counts tied to graphData even when search filters the visible graph', async () => {
@@ -613,10 +750,11 @@ describe('CausalReviewView', () => {
 
     renderView();
 
+    await expandGraphOverview(user);
     await screen.findByText('Graph Overview');
     await user.type(screen.getByPlaceholderText('Search nodes or agents...'), 'Alpha');
 
-    expect(screen.getByText('3 nodes · 1 edges')).toBeInTheDocument();
+    expect(screen.getByText('Graph size: 3 nodes · 1 edges')).toBeInTheDocument();
   });
 
   it('only lists key nodes whose degree is greater than zero', async () => {
@@ -635,14 +773,15 @@ describe('CausalReviewView', () => {
 
     renderView();
 
-    const keyNodesRow = (await screen.findByText('Key nodes:')).parentElement;
-    expect(keyNodesRow).not.toBeNull();
-    expect(keyNodesRow).toHaveTextContent('Connected Alpha (1)');
-    expect(keyNodesRow).toHaveTextContent('Connected Beta (1)');
-    expect(keyNodesRow).not.toHaveTextContent('Isolated Gamma (0)');
+    await expandGraphOverview();
+    expect(await screen.findByText('Start with these nodes')).toBeInTheDocument();
+    expect(screen.getByLabelText('Connected Alpha - 1 links')).toBeInTheDocument();
+    expect(screen.getByLabelText('Connected Beta - 1 links')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Isolated Gamma - 0 links')).not.toBeInTheDocument();
   });
 
   it('keeps verbose guide key node labels compact while preserving the full label', async () => {
+    const user = userEvent.setup();
     const longLabel = '诸葛亮昨夜翻检汉中粮册时发现秋雨让褒斜道慢了两日，木牛流马坏损又牵动成都后勤与北伐节奏';
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
@@ -658,12 +797,50 @@ describe('CausalReviewView', () => {
 
     renderView();
 
-    const keyNodesRow = (await screen.findByText('Key nodes:')).parentElement;
-    expect(keyNodesRow).not.toBeNull();
-    expect(keyNodesRow).toHaveTextContent('...');
-    expect(keyNodesRow).not.toHaveTextContent(`${longLabel} (1)`);
-    const fullLabelNode = screen.getByLabelText(`${longLabel} (1)`);
-    expect(fullLabelNode).toHaveAttribute('title', `${longLabel} (1)`);
+    await expandGraphOverview(user);
+    expect(await screen.findByText('Start with these nodes')).toBeInTheDocument();
+    expect(screen.queryByText(`${longLabel} (1)`)).not.toBeInTheDocument();
+    const fullLabelNode = screen.getByLabelText(`${longLabel} - 1 links`);
+    expect(fullLabelNode).toHaveTextContent('...');
+    expect(fullLabelNode).toHaveAttribute('title', `${longLabel} - 1 links`);
+    expect(screen.getByText(longLabel)).not.toBeVisible();
+    await user.click(screen.getByText('View full'));
+    expect(screen.getByText(longLabel)).toBeVisible();
+  });
+
+  it('expands guide event cards to the full payload content instead of the short graph label', async () => {
+    const user = userEvent.setup();
+    const shortLabel = '诸葛亮: 汉中秋雨拖慢粮道，木牛流马坏了两架';
+    const fullContent = '汉中秋雨拖慢粮道，木牛流马坏了两架，修起来比新造还费人；若成都调拨与军府号令不能一起稳住，前线每慢一拍都会让北伐失去主动。';
+    const fullDisplayText = `诸葛亮: ${fullContent}`;
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-guide-full-event-content',
+        nodes: [
+          {
+            id: 'n1',
+            key: 'e1',
+            type: 'event',
+            label: shortLabel,
+            round: 1,
+            payload: { agent_name: '诸葛亮', content: fullContent },
+          },
+          { id: 'n2', key: 'e2', type: 'event', label: 'Anchor node', round: 2, payload: null },
+        ],
+        edges: [{ id: 'edge-1', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: null }],
+      }),
+    } as Response);
+
+    renderView();
+
+    await expandGraphOverview(user);
+    const fullLabelNode = screen.getByLabelText(`${fullDisplayText} - 1 links`);
+    expect(fullLabelNode).toHaveTextContent(shortLabel);
+    expect(screen.getByText(fullDisplayText)).not.toBeVisible();
+
+    await user.click(screen.getByText('View full'));
+    expect(screen.getByText(fullDisplayText)).toBeVisible();
   });
 
   it('hides the guide panel after closing it and exposes the show-overview button', async () => {
@@ -679,6 +856,7 @@ describe('CausalReviewView', () => {
 
     renderView();
 
+    await expandGraphOverview(user);
     await user.click(await screen.findByRole('button', { name: 'Close guide' }));
 
     expect(screen.queryByText('Graph Overview')).not.toBeInTheDocument();
@@ -767,6 +945,7 @@ describe('CausalReviewView', () => {
     } as Response);
 
     renderView();
+    await expandGraphOverview(user);
 
     const guideHeading = (await screen.findByText('Graph Overview')).closest('strong');
     expect(guideHeading).not.toBeNull();
@@ -813,6 +992,59 @@ describe('CausalReviewView', () => {
       'minimap.ariaLabel': '缩略图',
     });
     expect(countCausalGraphRequests(fetchSpy)).toBe(1);
+  });
+
+  it('labels terminal outcome nodes with localized causal copy', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+      if (String(request).includes('/causal-graph')) {
+        return {
+          ok: true,
+          json: async () => ({
+            id: 'g-outcome',
+            nodes: [
+              {
+                id: 'outcome:br1',
+                key: 'outcome_br1',
+                type: 'outcome',
+                label: 'Stabilized future',
+                round: 1,
+                payload: { branch_id: 'br1' },
+              },
+              {
+                id: 'event:br1:1',
+                key: 'event_br1_1',
+                type: 'event',
+                label: 'Origin',
+                round: 1,
+                payload: { branch_id: 'br1' },
+              },
+            ],
+            edges: [
+              {
+                id: 'outcome-edge:event:br1:1:br1',
+                source: 'event:br1:1',
+                target: 'outcome:br1',
+                type: 'led_to',
+                weight: 1,
+                label: null,
+              },
+            ],
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({ branches: [], agents: [] }) } as Response;
+    });
+
+    renderView();
+
+    const flow = await screen.findByTestId('reactflow');
+    await waitFor(() => {
+      expect(flow.getAttribute('data-node-aria-label')).toContain(
+        'Open details: Outcome - Stabilized future',
+      );
+    });
+    expect(await screen.findByText('Outcome: 1')).toBeInTheDocument();
+    expect(await screen.findByText('Origin leads to Stabilized future')).toBeInTheDocument();
   });
 
   it('keeps node wrappers non-interactive so the card button owns the action semantics', async () => {
@@ -1475,12 +1707,13 @@ describe('CausalReviewView', () => {
       },
     });
 
-    expect(await screen.findByText('Old analysis node (9)')).toBeInTheDocument();
+    await expandGraphOverview(user);
+    expect(await screen.findByLabelText('Old branch node - 9 links')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Go br2' }));
 
     await waitFor(() => {
-      expect(screen.queryByText('Old analysis node (9)')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Old branch node - 9 links')).not.toBeInTheDocument();
     });
 
     branchTwoResponse.resolve({
@@ -1506,7 +1739,7 @@ describe('CausalReviewView', () => {
       },
     });
 
-    expect(await screen.findByText('New analysis node (5)')).toBeInTheDocument();
+    expect(await screen.findByLabelText('New branch node - 5 links')).toBeInTheDocument();
   });
 
   it('treats blank branch_id query params as no filter', async () => {
@@ -1971,6 +2204,97 @@ describe('CausalReviewView', () => {
     }
   });
 
+  it('explains why a node appears and what it changes in the conversation banner', async () => {
+    stubNoopWebSocket();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      applyTestLocale('zh');
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-sheet-relations',
+          available_branches: ['br1'],
+          nodes: [
+            { id: 'n1', key: 'e1', type: 'event', label: '诸葛亮', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+            { id: 'n2', key: 'e2', type: 'event', label: '司马懿', round: 2, payload: { agent_id: 'beta', branch_id: 'br1' } },
+            { id: 'n3', key: 'o1', type: 'outcome', label: '星落未尽', round: 3, payload: { branch_id: 'br1' } },
+          ],
+          edges: [
+            { id: 'edge-in', source: 'n1', target: 'n2', type: 'temporal', weight: 1, label: null },
+            { id: 'edge-out', source: 'n2', target: 'n3', type: 'led_to', weight: 1, label: null },
+          ],
+        }),
+      } as Response);
+
+      renderView();
+      await user.click(await screen.findByTestId('rf-node-n2'));
+
+      const meaning = await screen.findByTestId('node-context-banner-meaning');
+      expect(meaning).toHaveTextContent('事件卡');
+      expect(meaning).toHaveTextContent('它记录一次关键发言或行动');
+      const groups = await screen.findByTestId('node-context-banner-causal-groups');
+      expect(groups).toHaveTextContent('为什么会出现');
+      expect(groups).toHaveTextContent('它接在 事件 诸葛亮 R1 之后');
+      expect(groups).toHaveTextContent('它带来什么影响');
+      expect(groups).toHaveTextContent('这张卡把局面推向 结局 星落未尽 R3');
+    } finally {
+      applyTestLocale('en');
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('adds a compact cause/effect summary to graph node cards', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      applyTestLocale('zh');
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-card-summary',
+          available_branches: ['br1'],
+          nodes: [
+            { id: 'n2', key: 'e2', type: 'event', label: '司马懿', round: 2, payload: { agent_id: 'beta', branch_id: 'br1' } },
+            { id: 'n1', key: 'e1', type: 'event', label: '诸葛亮', round: 1, payload: { agent_id: 'alpha', branch_id: 'br1' } },
+            { id: 'n3', key: 'o1', type: 'outcome', label: '星落未尽', round: 3, payload: { branch_id: 'br1' } },
+          ],
+          edges: [
+            { id: 'edge-in', source: 'n1', target: 'n2', type: 'temporal', weight: 1, label: null },
+            { id: 'edge-out', source: 'n2', target: 'n3', type: 'led_to', weight: 1, label: null },
+          ],
+        }),
+      } as Response);
+
+      renderView();
+
+      const flow = await screen.findByTestId('reactflow');
+      await waitFor(() => {
+        expect(flow.getAttribute('data-first-node-summary')).toBe('前因 1 · 后续 1');
+      });
+    } finally {
+      applyTestLocale('en');
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('pane click clears highlight but keeps NodeConversationSheet open', async () => {
     stubNoopWebSocket();
     vi.stubGlobal('matchMedia', (q: string) => ({
@@ -2412,6 +2736,108 @@ describe('CausalReviewView', () => {
       expect(screen.getByTestId('node-context-banner-agent')).toHaveTextContent('Agent Alpha');
       expect(screen.getByTestId('node-context-banner-round')).toBeInTheDocument();
       expect(screen.getByTestId('node-context-banner-strip')).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('opens outcome conversations with story context and a graph analyst target', async () => {
+    stubNoopWebSocket();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-outcome-origin',
+          available_branches: ['br1'],
+          nodes: [
+            {
+              id: 'outcome-br1',
+              key: 'outcome_br1',
+              type: 'outcome',
+              label: '星落未尽',
+              round: 5,
+              payload: {
+                branch_id: 'br1',
+                story_excerpt: '夜潮压着粮道，守军仍在关口撑住。',
+                insight: '补给被稳住后，北线没有立刻崩盘。',
+              },
+            },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+      renderView();
+      await user.click(await screen.findByTestId('rf-node-outcome-br1'));
+
+      expect(await screen.findByTestId('node-context-banner')).toBeInTheDocument();
+      expect(screen.getByTestId('node-context-banner-meaning')).toHaveTextContent('Outcome card');
+      expect(screen.getByTestId('node-context-banner-meaning')).toHaveTextContent('endpoint of one branch');
+      expect(screen.getByTestId('node-context-banner-excerpt')).toHaveTextContent('夜潮压着粮道');
+      expect(screen.getByTestId('node-context-banner-excerpt')).toHaveTextContent('北线没有立刻崩盘');
+      expect(screen.getByTestId('node-context-banner-target')).toHaveTextContent('Outcome analyst');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('uses fork display summaries as conversation context instead of repeating the title', async () => {
+    stubNoopWebSocket();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    try {
+      const user = userEvent.setup();
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'g-fork-origin',
+          available_branches: ['br1', 'br2'],
+          nodes: [
+            {
+              id: 'fork-1',
+              key: 'fork_r2_br1',
+              type: 'fork',
+              label: '路线分岔：继续亲自北伐施压；另一条先稳汉中、成都和接班再说。',
+              round: 2,
+              payload: {
+                branch_id: 'br1',
+                display_reason: '路线分岔：继续亲自北伐施压；另一条先稳汉中、成都和接班再说。',
+                display_summary: '这会改写粮道、责任链、军政节奏和十年后的蜀汉结局。',
+              },
+            },
+          ],
+          edges: [],
+        }),
+      } as Response);
+
+      renderView();
+      await user.click(await screen.findByTestId('rf-node-fork-1'));
+
+      expect(await screen.findByTestId('node-context-banner')).toBeInTheDocument();
+      expect(screen.getByTestId('node-context-banner-meaning')).toHaveTextContent('Fork card');
+      expect(screen.getByTestId('node-context-banner-meaning')).toHaveTextContent('route split into alternatives');
+      expect(screen.getByTestId('node-context-banner-label')).toHaveTextContent('路线分岔');
+      expect(screen.getByTestId('node-context-banner-excerpt')).toHaveTextContent('改写粮道');
+      expect(screen.getByTestId('node-context-banner-target')).toHaveTextContent('Graph analyst');
     } finally {
       vi.unstubAllGlobals();
     }

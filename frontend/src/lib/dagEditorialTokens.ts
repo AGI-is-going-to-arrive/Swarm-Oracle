@@ -37,6 +37,7 @@ export const CAUSAL_NODE_TYPE_COLORS: Record<string, string> = {
   stance_shift: 'rebuttal',
   fork: 'claim',
   round: 'default',
+  outcome: 'support',
   verdict: 'verdict',
 };
 

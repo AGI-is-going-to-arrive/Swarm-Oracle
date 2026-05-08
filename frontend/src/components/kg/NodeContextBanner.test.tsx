@@ -62,6 +62,82 @@ describe('NodeContextBanner', () => {
     expect(queryByTestId('node-context-banner-agent')).toBeNull();
   });
 
+  it('does not repeat the same node label as excerpt', () => {
+    const duplicate = '路线分岔：先稳后攻；另一条继续强攻。';
+    const { getByTestId, queryByTestId } = render(
+      <NodeContextBanner
+        origin={{
+          nodeId: 'fork-1',
+          nodeType: 'fork',
+          nodeLabel: duplicate,
+          excerpt: duplicate,
+        }}
+      />,
+    );
+
+    expect(getByTestId('node-context-banner-label').textContent).toBe(duplicate);
+    expect(queryByTestId('node-context-banner-excerpt')).toBeNull();
+  });
+
+  it('renders the explicit conversation target when provided', () => {
+    const { getByTestId } = render(
+      <NodeContextBanner
+        origin={fullOrigin({
+          targetLabel: 'Graph analyst',
+          targetDescription: 'Answers from the selected node and nearby graph context.',
+        })}
+      />,
+    );
+
+    expect(getByTestId('node-context-banner-target').textContent).toContain('Graph analyst');
+    expect(getByTestId('node-context-banner-target-description').textContent).toContain('nearby graph context');
+  });
+
+  it('renders card meaning and grouped causal context when provided', () => {
+    const { getByTestId, queryByTestId } = render(
+      <NodeContextBanner
+        origin={fullOrigin({
+          meaningTitle: 'Event card',
+          meaningDescription: 'This records one important move.',
+          causeContext: ['It follows Event A.'],
+          effectContext: ['It pushes toward Outcome B.'],
+          relationContext: ['It conflicts with Event C.'],
+          relatedContext: ['Legacy relation should not duplicate'],
+        })}
+      />,
+    );
+
+    const meaning = getByTestId('node-context-banner-meaning');
+    expect(meaning.textContent).toContain('Event card');
+    expect(meaning.textContent).toContain('important move');
+    const groups = getByTestId('node-context-banner-causal-groups');
+    expect(groups.textContent).toContain('Why it appears');
+    expect(groups.textContent).toContain('It follows Event A.');
+    expect(groups.textContent).toContain('What it changes');
+    expect(groups.textContent).toContain('It pushes toward Outcome B.');
+    expect(groups.textContent).toContain('How it relates');
+    expect(groups.textContent).toContain('It conflicts with Event C.');
+    expect(queryByTestId('node-context-banner-relations')).toBeNull();
+  });
+
+  it('renders adjacent relation context when provided', () => {
+    const { getByTestId } = render(
+      <NodeContextBanner
+        origin={fullOrigin({
+          relatedContext: [
+            'Source: Zhuge Liang · responds to',
+            'Next: leads to · Falling Star',
+          ],
+        })}
+      />,
+    );
+
+    const relations = getByTestId('node-context-banner-relations');
+    expect(relations.textContent).toContain('Related links');
+    expect(relations.textContent).toContain('Source: Zhuge Liang · responds to');
+    expect(relations.textContent).toContain('Next: leads to · Falling Star');
+  });
+
   it('prefers agentName over nodeLabel when both are present', () => {
     const { getByTestId, queryByTestId } = render(
       <NodeContextBanner origin={fullOrigin({ agentName: 'Agent', nodeLabel: 'Label' })} />,

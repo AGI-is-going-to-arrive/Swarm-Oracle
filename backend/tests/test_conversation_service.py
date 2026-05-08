@@ -20,6 +20,64 @@ from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
 from app.services.conversation_service import _build_prompt, _load_prompt_context
 
 
+def test_prompt_without_agent_context_uses_graph_analyst_voice():
+    thread = AgentConversationThread(
+        scenario_id="scenario-analyst",
+        owner_user_id="owner-1",
+        origin_node_id="outcome:br1",
+        origin_node_type="outcome",
+        last_turn_sequence=0,
+        latest_status="idle",
+    )
+
+    prompt = _build_prompt(
+        thread=thread,
+        new_user_content="为什么会走到这个结局？",
+        history=[],
+        prompt_context=None,
+    )
+
+    assert "You are a graph analyst" in prompt
+    assert "Do not pretend to be a specific participant" in prompt
+    assert "You are an in-story Agent" not in prompt
+
+
+def test_prompt_with_agent_context_keeps_in_story_agent_voice():
+    thread = AgentConversationThread(
+        scenario_id="scenario-agent",
+        owner_user_id="owner-1",
+        origin_node_id="event-1",
+        origin_node_type="event",
+        last_turn_sequence=0,
+        latest_status="idle",
+    )
+
+    prompt = _build_prompt(
+        thread=thread,
+        new_user_content="你为什么这么判断？",
+        history=[],
+        prompt_context=type(
+            "PromptContextStub",
+            (),
+            {
+                "agent_name": "司马懿",
+                "agent_role": None,
+                "agent_persona": None,
+                "scenario_question": None,
+                "origin_excerpt": None,
+                "branch_summary": None,
+                "node_summary": None,
+                "relation_summaries": [],
+                "round_transcripts": [],
+            },
+        )(),
+    )
+
+    assert "You are an in-story Agent" in prompt
+    assert "Agent name" in prompt
+    assert "司马懿" in prompt
+
+
 def test_prompt_context_includes_recent_round_transcript_payload_and_edge_evidence():
     engine = get_engine()
     with Session(engine) as session:

@@ -31,7 +31,7 @@ import { comboLayout, shouldDegradeForMobile, degradeNodesForMobile } from '../l
 import { resolveG6Tokens, KG_NODE_TYPE_FILLS } from '../lib/graphTokens';
 import { buildKgG6Options, readAgentId, buildKgNodeLabel, hashStringToIndex, KG_AGENT_PALETTE } from '../lib/kgGraphConfig';
 import { buildSessionHeaders } from '../api/client';
-import { NodeConversationSheet } from '../components/kg/NodeConversationSheet';
+import { NodeConversationSheet, type NodeConversationOrigin } from '../components/kg/NodeConversationSheet';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -63,7 +63,14 @@ type KGExplorerErrorState = {
 type ViewportTier = 'mobile' | 'tablet' | 'desktop';
 type MobileActivePane = 'graph' | 'sidebar';
 
-function createClosedSheetState() {
+interface KGSheetState {
+  open: boolean;
+  scenarioId: string;
+  identityId: string | null;
+  origin: NodeConversationOrigin;
+}
+
+function createClosedSheetState(): KGSheetState {
   return {
     open: false,
     scenarioId: '',
@@ -165,18 +172,7 @@ export default function KGExplorerView() {
   const [typeFilter, setTypeFilter] = useState<Set<string>>(new Set());
   const [minimapContainer, setMinimapContainer] = useState<HTMLDivElement | null>(null);
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
-  const [sheetState, setSheetState] = useState<{
-    open: boolean;
-    scenarioId: string;
-    identityId: string | null;
-    origin: {
-      nodeId: string;
-      nodeType: string;
-      excerpt?: string;
-      branchId?: string | null;
-      roundNumber?: number | null;
-    };
-  }>(createClosedSheetState);
+  const [sheetState, setSheetState] = useState<KGSheetState>(createClosedSheetState);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const loadRequestIdRef = useRef(0);
@@ -293,20 +289,48 @@ export default function KGExplorerView() {
       const payload = typeof graphNode?.payload === 'object' && graphNode.payload !== null && !Array.isArray(graphNode.payload)
         ? graphNode.payload as Record<string, unknown>
         : {};
+      const relatedContext = (graphData?.edges ?? [])
+        .filter((edge) => edge.source === nodeId || edge.target === nodeId)
+        .slice(0, 3)
+        .flatMap((edge) => {
+          const outgoing = edge.source === nodeId;
+          const otherId = outgoing ? edge.target : edge.source;
+          const otherLabel = graphNodeById.get(otherId)?.label?.trim();
+          if (!otherLabel) return [];
+          return [
+            outgoing
+              ? t('kg_explorer.related_outgoing', {
+                  target: otherLabel,
+                  defaultValue: 'Downstream: {{target}}',
+                })
+              : t('kg_explorer.related_incoming', {
+                  source: otherLabel,
+                  defaultValue: 'Upstream: {{source}}',
+                }),
+          ];
+        });
       setSheetState({
         open: true,
         scenarioId,
         identityId: null,
         origin: {
+          surface: 'knowledge',
           nodeId,
           nodeType,
           excerpt: graphNode?.label,
+          nodeLabel: graphNode?.label,
           branchId: typeof payload.branch_id === 'string' ? payload.branch_id : null,
           roundNumber: graphNode?.round ?? null,
+          targetLabel: t('node_context_banner.target_knowledge_analyst_label', 'Knowledge graph analyst'),
+          targetDescription: t(
+            'node_context_banner.target_knowledge_analyst_description',
+            'Answers from this node and its connected concepts, agents, and events.',
+          ),
+          relatedContext,
         },
       });
     },
-    [graphNodeById, scenarioId],
+    [graphData?.edges, graphNodeById, scenarioId, t],
   );
 
   const tokens = useMemo(() => resolveG6Tokens(theme), [theme]);

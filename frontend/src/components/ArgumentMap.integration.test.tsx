@@ -739,10 +739,12 @@ describe('ArgumentMap', () => {
           snapshot_id: 's-sheet',
           nodes: [
             { id: 'n1', key: 'k1', type: 'claim', label: 'Main claim', round: 1, payload: null },
+            { id: 'n2', key: 'k2', type: 'evidence', label: 'Supporting evidence', round: 1, payload: null },
           ],
-          edges: [],
+          edges: [{ id: 'e1', source: 'n1', target: 'n2', type: 'supports', weight: 1, label: null }],
           units: [
             { id: 'u1', type: 'claim', status: 'standing', text: 'Main claim', turn_id: 't1', node_id: 'n1' },
+            { id: 'u2', type: 'evidence', status: 'accepted', text: 'Supporting evidence', turn_id: 't2', node_id: 'n2' },
           ],
         }),
       } as Response);
@@ -757,6 +759,9 @@ describe('ArgumentMap', () => {
       const sheet = await screen.findByTestId('node-conversation-sheet');
       expect(detailPanel).toHaveStyle({ right: '464px' });
       expect(sheet).toBeInTheDocument();
+      expect(await screen.findByTestId('node-context-banner')).toHaveTextContent('Verdict graph analyst');
+      expect(screen.getByText('What keeps "Main claim" standing?')).toBeInTheDocument();
+      expect(screen.getByText('supports: Supporting evidence')).toBeInTheDocument();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -830,6 +835,13 @@ describe('ArgumentMap', () => {
       const startBody = JSON.parse(String(startOptions.body));
       expect(startBody.scenario_id).toBe('scenario-arg-1');
       expect(startBody.agent_identity_id).toBeNull();
+      expect(startBody.origin_node_id).toBe('n1');
+      expect(startBody.origin_node_type).toBe('claim');
+      expect(startBody.origin_round_number).toBe(1);
+      expect(startBody.origin_excerpt).toBe('Main claim');
+      expect(startBody).not.toHaveProperty('surface');
+      expect(startBody).not.toHaveProperty('targetLabel');
+      expect(startBody).not.toHaveProperty('relatedContext');
     } finally {
       vi.unstubAllGlobals();
     }

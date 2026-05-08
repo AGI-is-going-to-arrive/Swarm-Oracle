@@ -323,18 +323,58 @@ export function NodeDetailPanel({
         const emotion = p?.emotion;
         const stance = p?.stance_score ?? p?.stance;
         const side = p?.side;
-        const hasSemanticFields = agentName || emotion || stance !== undefined || side;
+        const content = p?.content;
+        const storyExcerpt = p?.story_excerpt;
+        const insight = p?.insight;
+        const probability = p?.probability;
+        const outcomeStatus = node.type === 'outcome' ? p?.status : undefined;
+        const outcomeBranchId = node.type === 'outcome' ? p?.branch_id : undefined;
+        const forkReason = node.type === 'fork' ? (p?.display_reason ?? p?.reason) : undefined;
+        const forkSummary = node.type === 'fork' ? p?.display_summary : undefined;
+        const forkSourceBranch = node.type === 'fork' ? (p?.source_branch_id ?? p?.branch_id) : undefined;
+        const forkChildren = node.type === 'fork' && Array.isArray(p?.children)
+          ? p.children.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          : [];
+        const formattedProbability = typeof probability === 'number'
+          ? `${(probability * 100).toFixed(1)}%`
+          : probability;
+        const hasSemanticFields = (
+          agentName ||
+          emotion ||
+          stance !== undefined ||
+          side ||
+          content ||
+          storyExcerpt ||
+          insight ||
+          probability !== undefined ||
+          outcomeStatus ||
+          outcomeBranchId ||
+          forkReason ||
+          forkSummary ||
+          forkSourceBranch ||
+          forkChildren.length > 0
+        );
         return (
           <div style={{ marginBottom: '0.5rem' }}>
             <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: 4 }}>
               {t('node_detail.payload', 'Payload')}
             </div>
             {hasSemanticFields ? (
-              <div style={{ fontSize: '0.8rem', color: '#ccc', background: '#252540', padding: '8px', borderRadius: 4 }}>
-                {agentName != null && <div>{t('node_detail.agent', 'Agent')}: <strong>{String(agentName)}</strong></div>}
-                {emotion != null && <div>{t('node_detail.emotion', 'Emotion')}: {String(emotion)}</div>}
-                {stance != null && <div>{t('node_detail.stance', 'Stance')}: {String(stance)}</div>}
-                {side != null && <div>{t('node_detail.side', 'Side')}: {String(side)}</div>}
+              <div style={{ fontSize: '0.8rem', color: '#ccc', background: '#252540', padding: '8px', borderRadius: 4, lineHeight: 1.5 }}>
+                {agentName != null && <div><span>{t('node_detail.agent', 'Agent')}</span>: <strong>{String(agentName)}</strong></div>}
+                {emotion != null && <div><span>{t('node_detail.emotion', 'Emotion')}</span>: {String(emotion)}</div>}
+                {stance != null && <div><span>{t('node_detail.stance', 'Stance')}</span>: {String(stance)}</div>}
+                {side != null && <div><span>{t('node_detail.side', 'Side')}</span>: {String(side)}</div>}
+                {content != null && <div><span>{t('node_detail.content', 'Content')}</span>: {String(content)}</div>}
+                {storyExcerpt != null && <div><span>{t('node_detail.outcome_story', 'Outcome Story')}</span>: {String(storyExcerpt)}</div>}
+                {insight != null && <div><span>{t('node_detail.insight', 'Insight')}</span>: {String(insight)}</div>}
+                {formattedProbability != null && <div><span>{t('node_detail.probability', 'Probability')}</span>: {String(formattedProbability)}</div>}
+                {outcomeStatus != null && <div><span>{t('node_detail.status', 'Status')}</span>: {String(outcomeStatus)}</div>}
+                {outcomeBranchId != null && <div><span>{t('node_detail.branch', 'Branch')}</span>: {String(outcomeBranchId)}</div>}
+                {forkReason != null && <div><span>{t('node_detail.fork_reason', 'Fork Reason')}</span>: {String(forkReason)}</div>}
+                {forkSummary != null && <div><span>{t('node_detail.fork_impact', 'Impact')}</span>: {String(forkSummary)}</div>}
+                {forkSourceBranch != null && <div><span>{t('node_detail.source_branch', 'Source Branch')}</span>: {String(forkSourceBranch)}</div>}
+                {forkChildren.length > 0 && <div><span>{t('node_detail.child_branches', 'Child Branches')}</span>: {forkChildren.join(', ')}</div>}
               </div>
             ) : (
               <pre style={{

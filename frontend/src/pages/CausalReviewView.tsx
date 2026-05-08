@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { buildSessionHeaders, getGraphAnalysis, type GraphAnalysisResponse } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import useReducedMotion from '../hooks/useReducedMotion';
@@ -97,6 +98,60 @@ function formatGuideKeyNodeLabel(label: string): string {
   return `${compactLabel.slice(0, endIndex).trimEnd()}...`;
 }
 
+interface GuidePreviewTextProps {
+  label: string;
+  fullText?: string;
+  t: TFunction<'translation', undefined>;
+  tone?: 'strong' | 'body';
+}
+
+function GuidePreviewText({ label, fullText, t, tone = 'strong' }: GuidePreviewTextProps) {
+  const summaryLabel = cleanNodeDisplayText(label);
+  const expandedLabel = cleanNodeDisplayText(fullText || label);
+  const compactLabel = formatGuideKeyNodeLabel(summaryLabel);
+  const isTruncated = compactLabel !== summaryLabel || expandedLabel !== summaryLabel;
+  const textColor = tone === 'strong' ? CAUSAL_COLORS.textStrong : CAUSAL_COLORS.textBody;
+
+  if (!isTruncated) {
+    return (
+      <span title={expandedLabel} style={{ color: textColor, fontWeight: tone === 'strong' ? 600 : 500, overflowWrap: 'anywhere' }}>
+        {expandedLabel}
+      </span>
+    );
+  }
+
+  return (
+    <details title={expandedLabel} style={{ minWidth: 0 }}>
+      <summary
+        aria-label={t('causal.guide_preview_aria', {
+          label: expandedLabel,
+          defaultValue: 'Show full text: {{label}}',
+        })}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          minWidth: 0,
+          color: textColor,
+          fontWeight: tone === 'strong' ? 600 : 500,
+          cursor: 'pointer',
+          listStyle: 'none',
+        }}
+      >
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {compactLabel}
+        </span>
+        <span style={{ flex: '0 0 auto', color: CAUSAL_COLORS.textLink, fontSize: '0.66rem', fontWeight: 600 }}>
+          {t('causal.guide_preview_action', 'View full')}
+        </span>
+      </summary>
+      <div style={{ marginTop: 5, color: CAUSAL_COLORS.textBody, fontSize: '0.74rem', lineHeight: 1.45, overflowWrap: 'anywhere' }}>
+        {expandedLabel}
+      </div>
+    </details>
+  );
+}
+
 // ── Types ───────────────────────────────────────────────────
 
 interface GraphNodeData {
@@ -132,6 +187,39 @@ interface CausalGraphData {
   available_branches?: string[];
 }
 
+interface GuideNodeSummary {
+  id: string;
+  label: string;
+  fullText?: string;
+  type: string;
+  degree: number;
+  inDegree: number;
+  outDegree: number;
+}
+
+interface GuideRouteSummary {
+  id: string;
+  sourceLabel: string;
+  targetLabels: string[];
+  targetCount: number;
+}
+
+interface GuideStats {
+  godNodes: GuideNodeSummary[];
+  typeCounts: Record<string, number>;
+  totalNodes: number;
+  totalEdges: number;
+  forkCount: number;
+  eventCount: number;
+  outcomeCount: number;
+  routeSummaries: GuideRouteSummary[];
+  connectedComponents?: number;
+  density?: number;
+  avgDegree?: number;
+}
+
+type GuideMode = 'summary' | 'details' | 'closed';
+
 interface ScenarioBranchOption {
   id: string;
   title: string;
@@ -159,6 +247,52 @@ function createClosedSheetState(): NodeConversationSheetState {
   };
 }
 
+function buildGuideDegreeMap(graphData: CausalGraphData | null): Map<string, { inDegree: number; outDegree: number }> {
+  const degreeMap = new Map<string, { inDegree: number; outDegree: number }>();
+  if (!graphData) return degreeMap;
+
+  for (const node of graphData.nodes) {
+    degreeMap.set(node.id, { inDegree: 0, outDegree: 0 });
+  }
+  for (const edge of graphData.edges) {
+    const sourceDegree = degreeMap.get(edge.source);
+    if (sourceDegree) sourceDegree.outDegree += 1;
+    const targetDegree = degreeMap.get(edge.target);
+    if (targetDegree) targetDegree.inDegree += 1;
+  }
+  return degreeMap;
+}
+
+function buildGuideRouteSummaries(graphData: CausalGraphData | null): GuideRouteSummary[] {
+  if (!graphData) return [];
+  const nodeMap = new Map(graphData.nodes.map((node) => [node.id, node]));
+  const outgoingBySource = new Map<string, GraphEdgeData[]>();
+  for (const edge of graphData.edges) {
+    const existing = outgoingBySource.get(edge.source) ?? [];
+    existing.push(edge);
+    outgoingBySource.set(edge.source, existing);
+  }
+
+  return graphData.nodes
+    .filter((node) => node.type === 'fork')
+    .map((forkNode) => {
+      const outgoing = outgoingBySource.get(forkNode.id) ?? [];
+      const targets = outgoing
+        .map((edge) => nodeMap.get(edge.target))
+        .filter((node): node is GraphNodeData => Boolean(node));
+      const outcomeTargets = targets.filter((node) => node.type === 'outcome' || node.type === 'verdict');
+      const displayTargets = (outcomeTargets.length > 0 ? outcomeTargets : targets).slice(0, 2);
+      return {
+        id: forkNode.id,
+        sourceLabel: forkNode.label,
+        targetLabels: displayTargets.map((node) => node.label),
+        targetCount: targets.length,
+      };
+    })
+    .filter((route) => route.targetCount > 0)
+    .slice(0, 3);
+}
+
 function extractApiErrorState(payload: unknown, status: number): CausalGraphErrorState {
   if (payload && typeof payload === 'object') {
     const record = payload as Record<string, unknown>;
@@ -176,6 +310,52 @@ function extractApiErrorState(payload: unknown, status: number): CausalGraphErro
     }
   }
   return { code: null, status };
+}
+
+const DIVERGE_MARKER_RE = /\s*\[DIVERGE:[^\]]+\]\s*/gi;
+
+function cleanNodeDisplayText(value: string): string {
+  return value.replace(DIVERGE_MARKER_RE, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function readPayloadString(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function buildNodeConversationExcerpt(raw: GraphNodeData, payload: Record<string, unknown>): string {
+  const content = readPayloadString(payload, 'content');
+  if (raw.type === 'outcome') {
+    const outcomeExcerpt = cleanNodeDisplayText([
+      readPayloadString(payload, 'story_excerpt'),
+      readPayloadString(payload, 'insight'),
+    ].filter(Boolean).join(' '));
+    if (outcomeExcerpt) return outcomeExcerpt;
+  }
+  if (raw.type === 'fork') {
+    const forkExcerpt = cleanNodeDisplayText(
+      readPayloadString(payload, 'display_summary')
+        || readPayloadString(payload, 'display_reason')
+        || readPayloadString(payload, 'reason'),
+    );
+    if (forkExcerpt) return forkExcerpt;
+  }
+  const cleanedContent = cleanNodeDisplayText(content);
+  return cleanedContent || raw.label || raw.key;
+}
+
+function buildGuideNodeFullText(node: GraphNodeData | undefined, fallbackLabel: string): string {
+  const fallback = cleanNodeDisplayText(fallbackLabel);
+  if (!node) return fallback;
+  const payload = getPayloadRecord(node);
+  const excerpt = cleanNodeDisplayText(buildNodeConversationExcerpt(node, payload));
+  const label = cleanNodeDisplayText(node.label || node.key || fallback);
+  if (!excerpt || excerpt === label) return label || fallback;
+  if (node.type === 'event') {
+    const agentName = readPayloadString(payload, 'agent_name');
+    return cleanNodeDisplayText(agentName ? `${agentName}: ${excerpt}` : excerpt);
+  }
+  return Array.from(excerpt).length > Array.from(label).length ? excerpt : label;
 }
 
 function getCausalErrorMessage(
@@ -216,7 +396,10 @@ const PERF_TOOLTIP_LIMIT = 150;
 const PERF_TEXT_FALLBACK_LIMIT = 500;
 const NO_ARROW_TYPES = new Set(['temporal']);
 const GRAPH_COMPACT_MEDIA_QUERY = '(max-width: 768px)';
+const NODE_RELATION_CONTEXT_LIMIT = 3;
+const NODE_RELATION_LABEL_MAX_CHARS = 36;
 type CausalFitViewOptions = FitViewOptions<Node>;
+type CausalTranslate = TFunction<'translation', undefined>;
 
 function useCompactGraphViewport() {
   return useMediaQueryState(GRAPH_COMPACT_MEDIA_QUERY);
@@ -235,22 +418,276 @@ function getCausalNodeActionLabel(
   return `${t('causal.open_details', 'Open details')}: ${typeLabel} - ${label}`;
 }
 
-function getCausalEdgeRelationLabel(
+function getCausalEdgeBaseRelationLabel(
   edge: GraphEdgeData,
   t: (key: string, fallback: string) => string,
 ): string {
+  if (edge.label && edge.label.trim()) return edge.label.trim();
   let base: string;
-  if (edge.label && edge.label.trim()) base = edge.label.trim();
-  else if (edge.type === 'temporal') base = t('causal.edge_temporal', 'precedes');
+  if (edge.type === 'temporal') base = t('causal.edge_temporal', 'precedes');
+  else if (edge.type === 'led_to') base = t('causal.edge_led_to', 'leads to');
   else if (edge.type === 'responds_to') base = t('causal.edge_responds_to', 'responds to');
   else if (edge.type === 'supports_stance') base = t('causal.edge_supports_stance', 'aligns with');
   else if (edge.type === 'opposes_stance') base = t('causal.edge_opposes_stance', 'opposes');
   else base = t('causal.edge_caused', 'causes');
+  return base;
+}
+
+function getCausalEdgeRelationLabel(
+  edge: GraphEdgeData,
+  t: (key: string, fallback: string) => string,
+): string {
+  return getCausalEdgeBaseRelationLabel(edge, t);
+}
+
+function getEvidenceTierContextLabel(
+  tier: 'low' | 'medium' | 'high',
+  t: CausalTranslate,
+): string {
+  return t(`causal.evidence_${tier}_context`, getEvidenceTierLabel(tier, t));
+}
+
+function getCausalEdgeContextLabel(edge: GraphEdgeData, t: CausalTranslate): string | null {
+  const contextParts: string[] = [];
   const roundNum = edge.evidence?.source_round_number;
   if (roundNum != null) {
-    return `${base} (R${roundNum})`;
+    contextParts.push(t('causal.edge_round_context', {
+      round: roundNum,
+      defaultValue: 'Round {{round}}',
+    }));
   }
-  return base;
+  const tier = edge.evidence?.confidence_tier;
+  if (tier) {
+    contextParts.push(t('causal.edge_confidence_context', {
+      tier: getEvidenceTierContextLabel(tier, t),
+      defaultValue: 'confidence: {{tier}}',
+    }));
+  }
+  return contextParts.length > 0 ? contextParts.join(' · ') : null;
+}
+
+function truncateRelationNodeLabel(label: string): string {
+  const normalized = cleanNodeDisplayText(label);
+  const chars = Array.from(normalized);
+  if (chars.length <= NODE_RELATION_LABEL_MAX_CHARS) return normalized;
+  return `${chars.slice(0, NODE_RELATION_LABEL_MAX_CHARS).join('').trimEnd()}...`;
+}
+
+function getPayloadRecord(node: GraphNodeData): Record<string, unknown> {
+  return node.payload && typeof node.payload === 'object' && !Array.isArray(node.payload)
+    ? node.payload as Record<string, unknown>
+    : {};
+}
+
+function getCompactNodeName(node: GraphNodeData): string {
+  const payload = getPayloadRecord(node);
+  const agentName = readPayloadString(payload, 'agent_name');
+  if (agentName) return truncateRelationNodeLabel(agentName);
+  const label = cleanNodeDisplayText(node.label || node.key);
+  if (node.type === 'event') {
+    const [speaker] = label.split(/[：:]/);
+    const normalizedSpeaker = speaker?.trim();
+    if (normalizedSpeaker && normalizedSpeaker !== label && Array.from(normalizedSpeaker).length <= 16) {
+      return normalizedSpeaker;
+    }
+  }
+  return truncateRelationNodeLabel(label || node.key);
+}
+
+function formatRelatedNodeLabel(node: GraphNodeData, t: CausalTranslate): string {
+  const typeLabel = getCausalTypeLabel(node.type, t);
+  const nodeLabel = getCompactNodeName(node);
+  const roundLabel = node.round != null
+    ? t('node_context_banner.round', { round: node.round, defaultValue: 'R{{round}}' })
+    : '';
+  return [typeLabel, nodeLabel, roundLabel].filter(Boolean).join(' ');
+}
+
+interface NodeCausalMeaning {
+  meaningTitle: string;
+  meaningDescription: string;
+  causeContext: string[];
+  effectContext: string[];
+  relationContext: string[];
+  cardSummary: string;
+}
+
+function getNodeMeaningCopy(type: string, t: CausalTranslate): Pick<NodeCausalMeaning, 'meaningTitle' | 'meaningDescription'> {
+  if (type === 'fork') {
+    return {
+      meaningTitle: t('node_context_banner.meaning_fork_title', { defaultValue: 'Fork card' }),
+      meaningDescription: t('node_context_banner.meaning_fork_description', {
+        defaultValue: 'This marks where one route split into alternatives. The links explain what triggered the split and what it opened.',
+      }),
+    };
+  }
+  if (type === 'outcome') {
+    return {
+      meaningTitle: t('node_context_banner.meaning_outcome_title', { defaultValue: 'Outcome card' }),
+      meaningDescription: t('node_context_banner.meaning_outcome_description', {
+        defaultValue: 'This is the endpoint of one branch. Incoming links explain which earlier moves carried the branch here.',
+      }),
+    };
+  }
+  return {
+    meaningTitle: t('node_context_banner.meaning_event_title', { defaultValue: 'Event card' }),
+    meaningDescription: t('node_context_banner.meaning_event_description', {
+      defaultValue: 'This records one important move. The links explain why it matters and what it changes next.',
+    }),
+  };
+}
+
+function limitCausalContextLines(lines: string[], t: CausalTranslate): string[] {
+  if (lines.length <= NODE_RELATION_CONTEXT_LIMIT) return lines;
+  return [
+    ...lines.slice(0, NODE_RELATION_CONTEXT_LIMIT),
+    t('node_context_banner.relation_more', {
+      defaultValue: '+{{count}} more nearby links',
+      count: lines.length - NODE_RELATION_CONTEXT_LIMIT,
+    }),
+  ];
+}
+
+function buildNodeCardSummary(
+  raw: GraphNodeData,
+  t: CausalTranslate,
+  causeCount: number,
+  effectCount: number,
+  relationCount: number,
+): string {
+  const linkCount = causeCount + effectCount + relationCount;
+  if (linkCount === 0) {
+    return t('causal.node_card_summary_isolated', {
+      defaultValue: 'No nearby links yet',
+    });
+  }
+  if (raw.type === 'fork') {
+    return t('causal.node_card_summary_fork', {
+      defaultValue: 'Fork point · {{effectCount}} follow-ups',
+      effectCount,
+    });
+  }
+  if (raw.type === 'outcome') {
+    return t('causal.node_card_summary_outcome', {
+      defaultValue: 'Endpoint · {{causeCount}} sources',
+      causeCount,
+    });
+  }
+  if (relationCount > 0) {
+    return t('causal.node_card_summary_event_with_relations', {
+      defaultValue: 'Causes {{causeCount}} · effects {{effectCount}} · links {{relationCount}}',
+      causeCount,
+      effectCount,
+      relationCount,
+    });
+  }
+  return t('causal.node_card_summary_event', {
+    defaultValue: 'Causes {{causeCount}} · effects {{effectCount}}',
+    causeCount,
+    effectCount,
+  });
+}
+
+function buildNodeCausalMeaning(
+  raw: GraphNodeData,
+  edges: GraphEdgeData[],
+  nodeMap: Map<string, GraphNodeData>,
+  t: CausalTranslate,
+): NodeCausalMeaning {
+  const causeContext: string[] = [];
+  const effectContext: string[] = [];
+  const relationContext: string[] = [];
+  for (const edge of edges) {
+    if (edge.source !== raw.id && edge.target !== raw.id) continue;
+    const outgoing = edge.source === raw.id;
+    const relatedNode = nodeMap.get(outgoing ? edge.target : edge.source);
+    if (!relatedNode) continue;
+    const relation = getCausalEdgeBaseRelationLabel(edge, t);
+    const node = formatRelatedNodeLabel(relatedNode, t);
+
+    if (edge.type === 'supports_stance') {
+      relationContext.push(t('node_context_banner.relation_supports', {
+        defaultValue: 'It aligns with {{node}} in the same round.',
+        node,
+      }));
+      continue;
+    }
+    if (edge.type === 'opposes_stance') {
+      relationContext.push(t('node_context_banner.relation_opposes', {
+        defaultValue: 'It conflicts with {{node}} in the same round.',
+        node,
+      }));
+      continue;
+    }
+    if (edge.type === 'temporal') {
+      if (outgoing) {
+        effectContext.push(t('node_context_banner.effect_temporal', {
+          defaultValue: '{{node}} happens after this card, so this card sets up the next beat.',
+          node,
+        }));
+      } else {
+        causeContext.push(t('node_context_banner.cause_temporal', {
+          defaultValue: 'It follows {{node}}, so it continues that timeline.',
+          node,
+        }));
+      }
+      continue;
+    }
+    if (edge.type === 'led_to') {
+      if (outgoing) {
+        effectContext.push(t('node_context_banner.effect_led_to', {
+          defaultValue: 'This card pushes the story toward {{node}}.',
+          node,
+        }));
+      } else {
+        causeContext.push(t('node_context_banner.cause_led_to', {
+          defaultValue: '{{node}} pushed the story toward this card.',
+          node,
+        }));
+      }
+      continue;
+    }
+    if (edge.type === 'responds_to') {
+      if (outgoing) {
+        causeContext.push(t('node_context_banner.cause_responds_to', {
+          defaultValue: 'It responds to or names {{node}}, so that earlier card is the direct context.',
+          node,
+        }));
+      } else {
+        effectContext.push(t('node_context_banner.effect_responds_to', {
+          defaultValue: '{{node}} responds to or names this card, so this card becomes what is being answered.',
+          node,
+        }));
+      }
+      continue;
+    }
+
+    if (outgoing) {
+      effectContext.push(t('node_context_banner.effect_default', {
+        defaultValue: 'This card links onward to {{node}} by {{relation}}.',
+        node,
+        relation,
+      }));
+    } else {
+      causeContext.push(t('node_context_banner.cause_default', {
+        defaultValue: '{{node}} links into this card by {{relation}}.',
+        node,
+        relation,
+      }));
+    }
+  }
+
+  const causeCount = causeContext.length;
+  const effectCount = effectContext.length;
+  const relationCount = relationContext.length;
+  const meaningCopy = getNodeMeaningCopy(raw.type, t);
+  return {
+    ...meaningCopy,
+    causeContext: limitCausalContextLines(causeContext, t),
+    effectContext: limitCausalContextLines(effectContext, t),
+    relationContext: limitCausalContextLines(relationContext, t),
+    cardSummary: buildNodeCardSummary(raw, t, causeCount, effectCount, relationCount),
+  };
 }
 
 function getEvidenceTierLabel(
@@ -289,7 +726,7 @@ function extractAvailableBranches(data: Pick<CausalGraphData, 'nodes' | 'availab
 function layoutDagre(
   nodes: GraphNodeData[],
   edges: GraphEdgeData[],
-  t: (key: string, fallback: string) => string,
+  t: CausalTranslate,
   compactViewport: boolean,
   reducedMotion: boolean,
 ): { nodes: Node[]; edges: Edge[] } {
@@ -312,6 +749,7 @@ function layoutDagre(
 
   const animationsDisabled = reducedMotion || nodes.length > PERF_ANIMATION_LIMIT || edges.length > PERF_ANIMATION_LIMIT;
   const tooltipDisabled = nodes.length > PERF_TOOLTIP_LIMIT;
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
 
   const flowNodes: Node[] = nodes.map(n => {
     const pos = g.node(n.id);
@@ -320,6 +758,7 @@ function layoutDagre(
     const typeLabel = getCausalTypeLabel(n.type, t);
     const roundLabel = t('causal.round_label', 'Round');
     const ariaLabel = getCausalNodeActionLabel(typeLabel, fullLabel, t);
+    const causalMeaning = buildNodeCausalMeaning(n, edges, nodeMap, t);
     return {
       id: n.id,
       type: 'graphCard',
@@ -336,6 +775,7 @@ function layoutDagre(
         borderColor: '',
         accentColor: resolveCausalNodeColors(n.type, 'dark').accent,
         round: n.round ?? undefined,
+        summary: isLargeGraph ? undefined : causalMeaning.cardSummary,
         dimmed: false,
         selected: false,
         connected: false,
@@ -361,13 +801,9 @@ function layoutDagre(
     );
     const tier = hasEvidence ? e.evidence!.confidence_tier : null;
     const tierColor = tier ? EVIDENCE_TIER_COLORS[tier] ?? undefined : undefined;
-    const roundNum = hasEvidence ? e.evidence!.source_round_number : null;
-    const baseLabel = e.label ?? undefined;
-    const labelParts: string[] = [];
-    if (baseLabel) labelParts.push(baseLabel);
-    if (roundNum != null) labelParts.push(`R${roundNum}`);
-    if (tier) labelParts.push(`[${getEvidenceTierLabel(tier, t)}]`);
-    const edgeLabel = labelParts.length > 0 ? labelParts.join(' ') : undefined;
+    const edgeLabel = getCausalEdgeRelationLabel(e, t);
+    const evidenceContext = getCausalEdgeContextLabel(e, t);
+    const edgeDetail = [evidenceContext, e.evidence?.detail].filter(Boolean).join('\n');
     const parallelOffset = parallelOffsets.get(e.id);
     return {
       id: e.id,
@@ -380,7 +816,7 @@ function layoutDagre(
       markerEnd: NO_ARROW_TYPES.has(e.type) ? undefined : { type: MarkerType.ArrowClosed, color: stroke },
       data: {
         ...(edgeLabel ? { label: edgeLabel } : {}),
-        ...(e.evidence?.detail ? { detail: e.evidence.detail } : {}),
+        ...(edgeDetail ? { detail: edgeDetail } : {}),
         ...(parallelOffset != null ? { parallelOffset } : {}),
       },
       ...(parallelOffset != null ? {
@@ -413,7 +849,7 @@ export function CausalReviewView() {
   const [error, setError] = useState<CausalGraphErrorState | null>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
-  const [guideOpen, setGuideOpen] = useState(true);
+  const [guideMode, setGuideMode] = useState<GuideMode>('summary');
   const { enabled: graphAnalysisEnabled } = useCapabilityCheck('graph_analysis');
   const [serverAnalysis, setServerAnalysis] = useState<GraphAnalysisResponse | null>(null);
   const [agentNameMap, setAgentNameMap] = useState<Map<string, string>>(new Map());
@@ -435,9 +871,6 @@ export function CausalReviewView() {
   const detailRestoreFocusRef = useRef<HTMLElement | null>(null);
   const encodedScenarioId = id ? encodeURIComponent(id) : '';
 
-  const translate = useCallback((key: string, fallback: string) => (
-    t(key, fallback)
-  ), [t]);
   const currentGraphKey = `${id ?? ''}:${branchId ?? ''}`;
   const previousGraphKeyRef = useRef(currentGraphKey);
 
@@ -603,11 +1036,24 @@ export function CausalReviewView() {
   const causalListAriaLabel = t('causal.a11y_list', 'Causal events list');
   const causalRelationsAriaLabel = t('causal.a11y_relations', 'Causal relations list');
 
-  const guideStats = useMemo(() => {
+  const guideStats = useMemo<GuideStats | null>(() => {
+    const routeSummaries = buildGuideRouteSummaries(graphData);
+    const degreeById = buildGuideDegreeMap(graphData);
+    const graphNodeById = new Map((graphData?.nodes ?? []).map((node) => [node.id, node]));
     if (serverAnalysis) {
-      const godNodes = serverAnalysis.god_nodes.slice(0, 5).map((gn) => ({
-        id: gn.node_id, label: gn.label, degree: gn.total_degree, type: gn.type,
-      }));
+      const godNodes = serverAnalysis.god_nodes.slice(0, 5).map((gn) => {
+        const graphNode = graphNodeById.get(gn.node_id);
+        const label = graphNode?.label ?? gn.label;
+        return {
+          id: gn.node_id,
+          label,
+          fullText: buildGuideNodeFullText(graphNode, label),
+          degree: gn.total_degree,
+          type: graphNode?.type ?? gn.type,
+          inDegree: degreeById.get(gn.node_id)?.inDegree ?? gn.in_degree,
+          outDegree: degreeById.get(gn.node_id)?.outDegree ?? gn.out_degree,
+        };
+      });
       const typeCounts: Record<string, number> = {};
       if (graphData) {
         for (const node of graphData.nodes) {
@@ -619,31 +1065,49 @@ export function CausalReviewView() {
         typeCounts,
         totalNodes: serverAnalysis.summary.total_nodes,
         totalEdges: serverAnalysis.summary.total_edges,
+        forkCount: typeCounts.fork ?? 0,
+        eventCount: typeCounts.event ?? 0,
+        outcomeCount: (typeCounts.outcome ?? 0) + (typeCounts.verdict ?? 0),
         connectedComponents: serverAnalysis.summary.connected_components,
         density: serverAnalysis.summary.density,
         avgDegree: serverAnalysis.summary.avg_degree,
+        routeSummaries,
       };
     }
     if (!graphData || graphData.nodes.length === 0) return null;
-    const degreeMap = new Map<string, number>();
-    for (const node of graphData.nodes) degreeMap.set(node.id, 0);
-    for (const edge of graphData.edges) {
-      degreeMap.set(edge.source, (degreeMap.get(edge.source) ?? 0) + 1);
-      degreeMap.set(edge.target, (degreeMap.get(edge.target) ?? 0) + 1);
-    }
-    const godNodes = [...degreeMap.entries()]
-      .filter(([, deg]) => deg > 0)
+    const godNodes = [...degreeById.entries()]
+      .map(([nodeId, degrees]) => [nodeId, degrees.inDegree + degrees.outDegree] as const)
+      .filter(([, degree]) => degree > 0)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
-      .map(([nid, deg]) => {
+      .map(([nid, degree]) => {
         const node = graphData.nodes.find((n) => n.id === nid);
-        return { id: nid, label: node?.label ?? nid, degree: deg, type: node?.type ?? 'event' };
+        const degrees = degreeById.get(nid);
+        const label = node?.label ?? nid;
+        return {
+          id: nid,
+          label,
+          fullText: buildGuideNodeFullText(node, label),
+          degree,
+          type: node?.type ?? 'event',
+          inDegree: degrees?.inDegree ?? 0,
+          outDegree: degrees?.outDegree ?? 0,
+        };
       });
     const typeCounts: Record<string, number> = {};
     for (const node of graphData.nodes) {
       typeCounts[node.type] = (typeCounts[node.type] ?? 0) + 1;
     }
-    return { godNodes, typeCounts, totalNodes: graphData.nodes.length, totalEdges: graphData.edges.length };
+    return {
+      godNodes,
+      typeCounts,
+      totalNodes: graphData.nodes.length,
+      totalEdges: graphData.edges.length,
+      forkCount: typeCounts.fork ?? 0,
+      eventCount: typeCounts.event ?? 0,
+      outcomeCount: (typeCounts.outcome ?? 0) + (typeCounts.verdict ?? 0),
+      routeSummaries,
+    };
   }, [graphData, serverAnalysis]);
 
   useEffect(() => {
@@ -653,7 +1117,7 @@ export function CausalReviewView() {
 
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
-    const result = layoutDagre(filteredData.nodes, filteredData.edges, translate, isCompactViewport, reducedMotion);
+    const result = layoutDagre(filteredData.nodes, filteredData.edges, t, isCompactViewport, reducedMotion);
     if (!layoutAppliedRef.current && result.nodes.length > 0 && !reducedMotion && result.nodes.length <= LARGE_GRAPH_THRESHOLD) {
       layoutAppliedRef.current = true;
       return {
@@ -669,7 +1133,7 @@ export function CausalReviewView() {
       layoutAppliedRef.current = true;
     }
     return result;
-  }, [filteredData, isCompactViewport, isNonInteractiveFallback, translate, reducedMotion]);
+  }, [filteredData, isCompactViewport, isNonInteractiveFallback, t, reducedMotion]);
 
   const layoutSignature = useMemo(() => (
     `${layoutResult.nodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutResult.edges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
@@ -806,8 +1270,12 @@ export function CausalReviewView() {
         relation: getCausalEdgeRelationLabel(edge, t),
         target: target.label || target.key,
       });
-      if (edge.evidence?.confidence_tier) {
-        line += ` [${t(`causal.evidence_${edge.evidence.confidence_tier}`, edge.evidence.confidence_tier)}]`;
+      const contextLabel = getCausalEdgeContextLabel(edge, t);
+      if (contextLabel) {
+        line += ` ${t('causal.edge_context_suffix', {
+          context: contextLabel,
+          defaultValue: '({{context}})',
+        })}`;
       }
       return line;
     }).filter(Boolean) as string[]
@@ -887,23 +1355,50 @@ export function CausalReviewView() {
     const enrichedAgentName = typeof rawPayload.agent_name === 'string'
       ? rawPayload.agent_name
       : agentName;
-    const fullContent = typeof rawPayload.content === 'string' ? rawPayload.content : '';
+    const conversationExcerpt = buildNodeConversationExcerpt(raw, rawPayload);
+    const causalMeaning = buildNodeCausalMeaning(raw, filteredData?.edges ?? [], rawNodeMap, t);
+    const targetLabel = enrichedAgentName
+      ?? (raw.type === 'outcome'
+        ? t('node_context_banner.target_outcome_analyst_label', 'Outcome analyst')
+        : t('node_context_banner.target_graph_analyst_label', 'Graph analyst'));
+    const targetDescription = enrichedAgentName
+      ? t(
+        'node_context_banner.target_agent_description',
+        'Answers around this speaker and the selected graph context.',
+      )
+      : raw.type === 'outcome'
+        ? t(
+          'node_context_banner.target_outcome_analyst_description',
+          'Explains this outcome from its branch, nearby events, and causal links.',
+        )
+        : t(
+          'node_context_banner.target_graph_analyst_description',
+          'Explains this node from the branch, round, and nearby causal links.',
+        );
     setSheetState({
       open: true,
       scenarioId: id ?? '',
       identityId: null,
       origin: {
+        surface: 'causal',
         nodeId: raw.id,
         nodeType: raw.type,
-        excerpt: fullContent || raw.label || raw.key,
+        excerpt: conversationExcerpt,
         branchId: typeof rawPayload.branch_id === 'string' ? rawPayload.branch_id : (branchId ?? null),
         roundNumber: raw.round,
         agentName: enrichedAgentName,
         nodeLabel: raw.label || raw.key,
         typeColor: NODE_TYPE_COLORS_HEX[raw.type] ?? NODE_TYPE_COLORS_HEX.event,
+        targetLabel,
+        targetDescription,
+        meaningTitle: causalMeaning.meaningTitle,
+        meaningDescription: causalMeaning.meaningDescription,
+        causeContext: causalMeaning.causeContext,
+        effectContext: causalMeaning.effectContext,
+        relationContext: causalMeaning.relationContext,
       },
     });
-  }, [rawNodeMap, filteredData, id, agentNameMap, branchId]);
+  }, [rawNodeMap, filteredData, id, agentNameMap, branchId, t]);
 
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
     const triggerElement = event.target instanceof Element
@@ -921,6 +1416,7 @@ export function CausalReviewView() {
   const resetViewport = useCallback(() => {
     reactFlowRef.current?.fitView?.(viewportFitOptions);
   }, [viewportFitOptions]);
+  const guideDetailsOpen = guideMode === 'details';
 
   if (capLoading) return <div style={{ padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;
   if (!enabled) return (
@@ -1144,7 +1640,7 @@ export function CausalReviewView() {
         {/* B6: Collapsible Legend */}
         {legendOpen && (
           <div id={legendPanelId} style={{ padding: '0.5rem 1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.7rem', color: CAUSAL_COLORS.textMuted, borderBottom: `1px solid ${CAUSAL_COLORS.borderSubtle}` }}>
-            {Object.entries(NODE_TYPE_COLORS_HEX).filter(([k]) => ['event', 'intervention', 'stance_shift', 'fork', 'verdict'].includes(k)).map(([type, color]) => (
+            {Object.entries(NODE_TYPE_COLORS_HEX).filter(([k]) => ['event', 'intervention', 'stance_shift', 'fork', 'outcome', 'verdict'].includes(k)).map(([type, color]) => (
               <span key={type} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: color, display: 'inline-block' }} />
                 {t(`causal.type_${type}`, type.replace('_', ' '))}
@@ -1153,66 +1649,161 @@ export function CausalReviewView() {
           </div>
         )}
 
-        {/* Guide panel — collapsed by default after first dismiss, only when graph has data */}
-        {guideStats && guideOpen && (
+        {/* Guide panel: summary by default; details can be expanded or fully collapsed. */}
+        {guideStats && guideMode !== 'closed' && (
           <div id="causal-guide-panel" style={{ padding: '0.75rem 1rem', borderBottom: `1px solid ${CAUSAL_COLORS.borderSubtle}`, background: CAUSAL_COLORS.surfacePanel, fontSize: '0.78rem', color: CAUSAL_COLORS.textBody }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <strong style={{ color: CAUSAL_COLORS.textStrong, fontSize: '0.82rem' }}>
                 {t('causal.guide_title', 'Graph Overview')}
                 {agentSearch ? <span style={{ color: CAUSAL_COLORS.textMuted, fontWeight: 'normal', fontSize: '0.7rem' }}>{' '}({t('causal.guide_full_graph', 'full graph')})</span> : null}
               </strong>
-              <button
-                type="button"
-                onClick={() => setGuideOpen(false)}
-                style={{ background: 'none', border: 'none', color: CAUSAL_COLORS.textMuted, cursor: 'pointer', fontSize: '0.7rem', padding: '2px 6px' }}
-                aria-label={t('causal.guide_close', 'Close guide')}
-                aria-expanded={true}
-                aria-controls="causal-guide-panel"
-              >
-                ✕
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setGuideMode(guideDetailsOpen ? 'summary' : 'details')}
+                  aria-expanded={guideDetailsOpen}
+                  aria-controls="causal-guide-details"
+                  style={{ background: 'none', border: 'none', color: CAUSAL_COLORS.textLink, cursor: 'pointer', fontSize: '0.7rem', padding: '2px 0' }}
+                >
+                  {guideDetailsOpen
+                    ? t('causal.guide_collapse_details', 'Hide details')
+                    : t('causal.guide_expand_details', 'Show details')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGuideMode('closed')}
+                  style={{ background: 'none', border: 'none', color: CAUSAL_COLORS.textMuted, cursor: 'pointer', fontSize: '0.7rem', padding: '2px 6px' }}
+                  aria-label={t('causal.guide_close', 'Close guide')}
+                  aria-expanded={true}
+                  aria-controls="causal-guide-panel"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginBottom: 8 }}>
-              <span>{guideStats.totalNodes} {t('causal.nodes', 'nodes')} · {guideStats.totalEdges} {t('causal.edges', 'edges')}{
-                'density' in guideStats && guideStats.density != null
-                  ? ` · ${t('causal.density', 'density')}: ${(guideStats.density as number).toFixed(3)}`
-                  : ''
-              }{
-                'connectedComponents' in guideStats && guideStats.connectedComponents != null
-                  ? ` · ${t('causal.components', 'components')}: ${guideStats.connectedComponents as number}`
-                  : ''
-              }</span>
+            <p style={{ color: CAUSAL_COLORS.textSecondary, fontSize: '0.76rem', lineHeight: 1.55, margin: '0 0 10px' }}>
+              {guideStats.forkCount > 0 && guideStats.outcomeCount > 0
+                ? t('causal.guide_story', {
+                  forks: guideStats.forkCount,
+                  events: guideStats.eventCount,
+                  outcomes: guideStats.outcomeCount,
+                  edges: guideStats.totalEdges,
+                  defaultValue: 'This graph connects {{forks}} forks, {{events}} events, and {{outcomes}} outcomes through {{edges}} links. Start at the forks, then follow the events into their outcomes.',
+                })
+                : guideStats.forkCount > 0
+                  ? t('causal.guide_story_no_outcomes', {
+                    forks: guideStats.forkCount,
+                    events: guideStats.eventCount,
+                    edges: guideStats.totalEdges,
+                    defaultValue: 'This graph has {{forks}} forks and {{events}} events, but no clear outcome node yet. Start with the events that triggered each split.',
+                  })
+                  : t('causal.guide_story_no_forks', {
+                    events: guideStats.eventCount,
+                    outcomes: guideStats.outcomeCount,
+                    edges: guideStats.totalEdges,
+                    defaultValue: 'This graph is mainly a cause-and-effect timeline: {{events}} events and {{outcomes}} outcomes connected by {{edges}} links.',
+                  })}
+            </p>
+            <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: 10 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 7px', border: `1px solid ${CAUSAL_COLORS.borderSubtle}`, borderRadius: 6, background: CAUSAL_COLORS.surfaceField }}>
+                {t('causal.guide_stats_label', 'Graph size')}: {guideStats.totalNodes} {t('causal.nodes', 'nodes')} · {guideStats.totalEdges} {t('causal.edges', 'edges')}
+              </span>
               {Object.entries(guideStats.typeCounts).map(([type, count]) => (
-                <span key={type} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span key={type} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 7px', border: `1px solid ${CAUSAL_COLORS.borderSubtle}`, borderRadius: 6, background: CAUSAL_COLORS.surfaceField }}>
                   <span style={{ width: 8, height: 8, borderRadius: 2, background: NODE_TYPE_COLORS_HEX[type as keyof typeof NODE_TYPE_COLORS_HEX] ?? CAUSAL_COLORS.decorativeLegendFallback, display: 'inline-block' }} />
                   {t(`causal.type_${type}`, type.replace('_', ' '))}: {count as number}
                 </span>
               ))}
+              {'density' in guideStats && guideStats.density != null ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 7px', border: `1px solid ${CAUSAL_COLORS.borderSubtle}`, borderRadius: 6, background: CAUSAL_COLORS.surfaceField }}>
+                  {t('causal.density', 'density')}: {(guideStats.density as number).toFixed(3)}
+                </span>
+              ) : null}
+              {'connectedComponents' in guideStats && guideStats.connectedComponents != null ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 7px', border: `1px solid ${CAUSAL_COLORS.borderSubtle}`, borderRadius: 6, background: CAUSAL_COLORS.surfaceField }}>
+                  {t('causal.components', 'components')}: {guideStats.connectedComponents as number}
+                </span>
+              ) : null}
             </div>
-            {guideStats.godNodes.length > 0 && (
-              <div style={{ marginBottom: 6, lineHeight: 1.45 }}>
-                <span style={{ color: CAUSAL_COLORS.textMuted }}>{t('causal.guide_key_nodes', 'Key nodes')}: </span>
-                {guideStats.godNodes.map((gn, i) => {
-                  const fullLabel = `${gn.label} (${gn.degree})`;
-                  const displayLabel = `${formatGuideKeyNodeLabel(gn.label)} (${gn.degree})`;
-                  return (
-                    <span key={gn.id} aria-label={fullLabel} title={fullLabel}>
-                      {i > 0 && ' · '}
-                      <span style={{ color: CAUSAL_COLORS.textStrong }}>{displayLabel}</span>
-                    </span>
-                  );
-                })}
+            {guideDetailsOpen && (
+              <div id="causal-guide-details">
+                {guideStats.routeSummaries.length > 0 && (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.7rem', marginBottom: 5 }}>{t('causal.guide_routes_title', 'How branches resolve')}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 6 }}>
+                      {guideStats.routeSummaries.map((route) => {
+                        const hiddenTargetCount = Math.max(0, route.targetCount - route.targetLabels.length);
+                        return (
+                          <div key={route.id} style={{ border: `1px solid ${CAUSAL_COLORS.borderSubtle}`, borderRadius: 8, padding: '7px 8px', background: CAUSAL_COLORS.surfaceField, minWidth: 0 }}>
+                            <div style={{ minWidth: 0 }}>
+                              <GuidePreviewText label={route.sourceLabel} t={t} />
+                            </div>
+                            <div style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.7rem', marginTop: 3 }}>
+                              {t('causal.guide_route_connector', 'leads to')}
+                            </div>
+                            <div style={{ display: 'grid', gap: 4, color: CAUSAL_COLORS.textBody, marginTop: 3, overflowWrap: 'anywhere' }}>
+                              {route.targetLabels.map((label) => (
+                                <GuidePreviewText key={label} label={label} t={t} tone="body" />
+                              ))}
+                              {hiddenTargetCount > 0 ? ` ${t('causal.guide_route_more', { count: hiddenTargetCount, defaultValue: '+{{count}} more' })}` : ''}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {guideStats.godNodes.length > 0 && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.7rem', marginBottom: 5 }}>{t('causal.guide_key_nodes', 'Start with these nodes')}</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 6 }}>
+                      {guideStats.godNodes.map((gn) => {
+                      const typeLabel = getCausalTypeLabel(gn.type, t);
+                      const guideLabel = gn.fullText ?? gn.label;
+                      const fullLabel = `${guideLabel} - ${t('causal.guide_link_count', { count: gn.degree, defaultValue: '{{count}} links' })}`;
+                      const reasonKey = gn.type === 'fork'
+                        ? 'causal.guide_key_node_reason_fork'
+                        : gn.type === 'outcome' || gn.type === 'verdict'
+                          ? 'causal.guide_key_node_reason_outcome'
+                          : gn.type === 'intervention'
+                            ? 'causal.guide_key_node_reason_intervention'
+                            : 'causal.guide_key_node_reason_event';
+                      return (
+                        <div key={gn.id} aria-label={fullLabel} title={fullLabel} style={{ border: `1px solid ${CAUSAL_COLORS.borderSubtle}`, borderRadius: 8, padding: '7px 8px', background: CAUSAL_COLORS.surfaceField, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, minWidth: 0 }}>
+                            <span style={{ flex: '0 0 auto', color: CAUSAL_COLORS.textMuted, fontSize: '0.68rem' }}>{typeLabel}</span>
+                            <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+                              <GuidePreviewText label={gn.label} fullText={gn.fullText} t={t} />
+                            </div>
+                          </div>
+                          <div style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.68rem', marginBottom: 4 }}>
+                            {t('causal.guide_link_count', { count: gn.degree, defaultValue: '{{count}} links' })}
+                            {' · '}
+                            {t('causal.guide_link_breakdown', { incoming: gn.inDegree, outgoing: gn.outDegree, defaultValue: '{{incoming}} in · {{outgoing}} out' })}
+                          </div>
+                          <div style={{ color: CAUSAL_COLORS.textBody, lineHeight: 1.45 }}>
+                            {t(reasonKey, 'High-connectivity node: read its causes and follow-ups to understand the route.')}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    </div>
+                  </div>
+                )}
+                <p style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.7rem', margin: '0 0 4px' }}>
+                  {t('causal.guide_relation_explainer', 'Link count means incoming plus outgoing relationships. It is context size, not a quality score.')}
+                </p>
+                <p style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.7rem', margin: 0 }}>
+                  {t('causal.guide_hint', 'Click a node to read its full card, causes, effects, and chat target.')}
+                </p>
               </div>
             )}
-            <p style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.7rem', margin: 0 }}>
-              {t('causal.guide_hint', 'Click any node to see details. Use the search bar to filter by agent.')}
-            </p>
           </div>
         )}
-        {guideStats && !guideOpen && (
+        {guideStats && guideMode === 'closed' && (
           <button
             type="button"
-            onClick={() => setGuideOpen(true)}
+            onClick={() => setGuideMode('summary')}
             aria-expanded={false}
             aria-controls="causal-guide-panel"
             style={{ display: 'block', width: '100%', padding: '4px 1rem', background: 'none', border: 'none', borderBottom: `1px solid ${CAUSAL_COLORS.borderHairline}`, color: CAUSAL_COLORS.textMuted, fontSize: '0.68rem', cursor: 'pointer', textAlign: 'left' }}

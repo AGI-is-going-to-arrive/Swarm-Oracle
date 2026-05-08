@@ -72,6 +72,8 @@ function useIsMobile(maxWidth = 768): boolean {
 }
 
 export interface NodeConversationOrigin {
+  /** UI-only: source surface that opened the sheet. */
+  surface?: 'causal' | 'knowledge' | 'argument' | 'result';
   /** Graph node id (ArgumentMap/CausalReviewView/FactionTimeline/KGExplorer). */
   nodeId: string;
   /** Node type label (argument/causal/faction/kg). */
@@ -92,6 +94,22 @@ export interface NodeConversationOrigin {
   nodeLabel?: string;
   /** UI-only: override color for type strip (not sent to backend). */
   typeColor?: string;
+  /** UI-only: explicit answer target label (not sent to backend). */
+  targetLabel?: string;
+  /** UI-only: explicit answer target description (not sent to backend). */
+  targetDescription?: string;
+  /** UI-only: compact explanation of what this card means in the graph. */
+  meaningTitle?: string;
+  /** UI-only: compact explanation of the selected card's causal role. */
+  meaningDescription?: string;
+  /** UI-only: why this card appears in the causal chain. */
+  causeContext?: string[];
+  /** UI-only: what this card changes or leads to. */
+  effectContext?: string[];
+  /** UI-only: same-round alignment or conflict links. */
+  relationContext?: string[];
+  /** UI-only: compact adjacent graph links shown in the banner (not sent to backend). */
+  relatedContext?: string[];
 }
 
 export interface NodeConversationSheetProps {
@@ -180,7 +198,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   const originBranchId = origin?.branchId ?? null;
   const originRoundNumber = origin?.roundNumber ?? null;
   const originExcerpt = origin?.excerpt?.trim() || null;
-  const isResultContext = showResultDeepenHint && origin == null;
+  const isResultContext = showResultDeepenHint && (origin == null || origin.surface === 'result');
 
   const {
     state: convState,
@@ -475,7 +493,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
                   defaultValue: 'Ask about this result and review the streamed reply here.',
                 })
               : t('conversation.sheet.description', {
-                  defaultValue: 'Ask the agent about the selected node and review the streamed reply here.',
+                  defaultValue: 'Ask the shown conversation target about the selected node and review the streamed reply here.',
                 })}
           </SheetDescription>
         </SheetHeader>
@@ -505,6 +523,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
               onSelect={setInputValue}
               variant={isResultContext ? 'result' : 'node'}
               agentName={origin?.agentName}
+              origin={origin}
             />
           ) : null}
 

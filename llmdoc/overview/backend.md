@@ -100,9 +100,15 @@
   - 预占成功后的 lock lease 会在后台续跑期间持续续租，直到任务结束才释放
   - 如果后台续跑期间丢掉这把预占 lock，任务会直接 fail-closed 落成 `error`，不会失锁后继续跑
   - 不再出现 `201` 已返回、但后台其实没启动、scenario 卡在 `simulating` 的假成功
-- causal graph snapshot 当前会返回 `available_branches`（包含 fork payload 里的 `children`），供前端 branch selector 在过滤态下继续保留全量可切分支。
+- causal graph snapshot 当前会返回 `available_branches`（包含 fork payload 里的 `children`，也包含已完成结局分支），供前端 branch selector 在过滤态下继续保留全量可切分支。
 - causal graph snapshot 当前在 child branch 过滤时，也会保留该 fork 的直接 provenance 节点，不再返回只有 fork 自己的孤儿图。
+- causal graph snapshot 当前会把已完成的 `Branch` 投影成合成 `outcome` 结局节点：
+  - payload 带 `branch_id / title / probability / status / story_excerpt / insight / parent_branch_id`
+  - 同 branch 能找到最近 event / stance_shift / fork 时，会补一条 `led_to` 边连到结局节点
+  - 带 `branch_id` 过滤时，只返回匹配分支的结局节点，但 selector 仍保留所有可用分支
 - causal graph append 当前在“先重放早轮、后面轮次已存在”时，会把同 branch 的下一轮 temporal edge 一起补回；同一 round 如果不再产生 fork，也会清掉旧 fork 节点和 `available_branches` 里的残留 child branch，不再把过期分支信息留在快照里。
+- fork 节点当前会保留原始 `reason`，同时生成面向用户的 `display_reason / display_summary`；API 返回的 fork label 使用 `display_reason`，避免把 `因此应 fork` 这类内部模板话直接露给用户。
+- fork-only append 当前不会把同 round 已有 event / stance_shift provenance 清掉；旧 snapshot 如果已经留下孤立 fork，`build_snapshot()` 会从持久化的 `Round / AgentMessage` 回补只读合成 event provenance，并用 `synthetic_provenance=true` 标记。
 - causal graph append 当前也会在同一 `branch / round` 的 event 节点之间补 inter-agent 边：
   - `responds_to`：消息正文提到另一位 agent 的可信 display name；不会拿短 id 兜底匹配
   - `supports_stance / opposes_stance`：只按本轮派生 stance score 的固定阈值判断，不调用 LLM
@@ -277,6 +283,9 @@
   - origin branch 最近几轮 transcript 摘要
   - 历史 turn 只取最近 12 条，并按单 turn 长度截断
   - 这些图谱/场景文本统一通过 `format_untrusted_text_block()` 注入，不把节点 payload 当系统指令
+- Agent conversation prompt 当前会按 origin 语境选择回答身份：
+  - 有 `agent_name` 时，继续按 in-story Agent 口径回答
+  - 没有 `agent_name` 时，按 graph analyst 口径解释节点、分支、回合和相邻图谱上下文，不冒充具体参与者
 - `WS /ws/agent-conversation/{thread_id}` 当前也已上线：复用统一首帧 auth / pending-auth 容量门控；feature 关闭或 thread 不存在时返回 `4404`；owner freeze 按 thread owner 收口；容量仍按 scenario 维度计算，不会因为 thread 数量放大
   - scenario 删除如果发生在流式中途，会先在删除事务内把活跃 turn 标成 `scenario_deleted`，真正唤醒 in-flight SSE 的 cancel signal 改为事务提交后再发；这样 rollback 不会提前把客户端打成终态。当前 delete endpoint 会在 `session.commit()` 后 drain `session.info["scenario_deleted_turn_ids"]` 并统一调用 `signal_scenario_deleted_turns()`；signal 失败只记 warning，不会把已经删成功的请求误报成 500。事务成功提交后，流末尾仍会补 `turn_error(code=SCENARIO_DELETED)`；如果场景刚好在首个 chunk 出来前被删，也会直接收成这条终态，不再误落到 `LLM_5XX`
   - `DELETE /api/conversation/{thread_id}/active` 当前除了唤醒活跃流式协程，也会把还没开始流式的预留 `pending` assistant turn 直接收成 `aborted`；不会再出现 abort 已返回，但同一条预留 turn 还被后续 `/turn` claim 走的假成功

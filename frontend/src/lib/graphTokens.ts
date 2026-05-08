@@ -12,6 +12,7 @@ export const NODE_TYPE_COLORS: Record<string, string> = {
   stance_shift: 'oklch(0.58 0.18 300)', // violet
   fork: 'oklch(0.62 0.2 25)',           // rose red
   round: 'oklch(0.74 0.17 155)',        // green
+  outcome: 'oklch(0.67 0.14 185)',      // teal
   verdict: 'oklch(0.84 0.14 92)',       // yellow
   // Argument map unit types
   claim: 'oklch(0.67 0.15 250)',        // blue
@@ -60,6 +61,7 @@ export const NODE_ICONS: Record<string, string> = {
   stance_shift: 'ArrowLeftRight',
   fork: 'GitBranch',
   round: 'Clock',
+  outcome: 'FileCheck',
   verdict: 'Gavel',
   claim: 'Flag',
   evidence: 'FileCheck',
@@ -84,6 +86,7 @@ export const TYPE_LABEL_I18N: Record<string, [string, string]> = {
   stance_shift: ['causal.type_stance_shift', 'Stance Shift'],
   fork: ['causal.type_fork', 'Fork'],
   round: ['causal.type_round', 'Round'],
+  outcome: ['causal.type_outcome', 'Outcome'],
   verdict: ['causal.type_verdict', 'Verdict'],
   // Argument types
   claim: ['argument.claim', 'Claim'],
@@ -108,6 +111,7 @@ export const NODE_TYPE_COLORS_HEX: Record<string, string> = {
   stance_shift: '#9b59b6',
   fork: '#e74c3c',
   round: '#2ecc71',
+  outcome: '#1f9d88',
   verdict: '#f1c40f',
   claim: '#4a90d9',
   evidence: '#2ecc71',
@@ -121,6 +125,7 @@ export const KG_NODE_TYPE_FILLS: Record<string, string> = {
   stance_shift: '#7a8e7a',
   fork: '#a87060',
   round: '#6a8a8a',
+  outcome: '#5f9f91',
   verdict: '#b0943a',
 };
 

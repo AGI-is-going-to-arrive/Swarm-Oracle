@@ -99,6 +99,52 @@ describe('NodeDetailPanel', () => {
     expect(screen.getByText(/rate_cut/)).toBeInTheDocument();
   });
 
+  it('renders outcome payload as readable story and insight fields', () => {
+    const node: NodeDetail = {
+      id: 'outcome-br1',
+      label: '星落未尽',
+      type: 'outcome',
+      payload: {
+        branch_id: 'br1',
+        story_excerpt: '夜潮压着粮道，守军仍在关口撑住。',
+        insight: '补给被稳住后，北线没有立刻崩盘。',
+        probability: 0.42,
+        status: 'completed',
+      },
+    };
+
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+
+    expect(screen.getByText('Outcome Story')).toBeInTheDocument();
+    expect(screen.getByText(/夜潮压着粮道/)).toBeInTheDocument();
+    expect(screen.getByText('Insight')).toBeInTheDocument();
+    expect(screen.getByText(/北线没有立刻崩盘/)).toBeInTheDocument();
+    expect(screen.getByText(/Probability/)).toBeInTheDocument();
+  });
+
+  it('renders fork payload with display reason instead of raw template text first', () => {
+    const node: NodeDetail = {
+      id: 'fork-1',
+      label: '路线分岔：先稳后攻；另一条继续强攻。',
+      type: 'fork',
+      payload: {
+        display_reason: '路线分岔：先稳后攻；另一条继续强攻。',
+        display_summary: '这会改写后勤、继任与前线责任链。',
+        reason: '讨论已明确分成“先稳后攻”和“继续强攻”两套互相排斥的军事路线，并会改写后勤、继任与前线责任链，因此应 fork。',
+        source_branch_id: 'br1',
+      },
+    };
+
+    render(<NodeDetailPanel node={node} onClose={vi.fn()} />);
+
+    expect(screen.getByText('Fork Reason')).toBeInTheDocument();
+    expect(screen.getAllByText(/另一条继续强攻/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Impact/)).toBeInTheDocument();
+    expect(screen.getByText(/改写后勤/)).toBeInTheDocument();
+    expect(screen.queryByText(/讨论已明确分成/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Source Branch/)).toBeInTheDocument();
+  });
+
   it('does not render payload section when payload is null', () => {
     const node: NodeDetail = {
       id: 'n1',

@@ -72,6 +72,7 @@ export function useAgentConversation(
   const [state, setState] = useState<ConversationState>(INITIAL_STATE);
   const bubbleRegistryRef = useRef<Map<string, RegisteredStreamBubble>>(new Map());
   const activeTurnIdRef = useRef<string | null>(null);
+  const activeTurnBufferRef = useRef<string>('');
   const ariaLiveApi = useStreamingAriaLive({ debounceMs: options?.ariaLiveDebounceMs });
   const {
     appendToken: appendAriaLiveToken,
@@ -99,6 +100,7 @@ export function useAgentConversation(
   const clearActiveTurn = useCallback(
     (mode: 'preserve' | 'reset' = 'reset') => {
       activeTurnIdRef.current = null;
+      activeTurnBufferRef.current = '';
       if (mode === 'reset') {
         resetAriaLive();
       }
@@ -134,6 +136,7 @@ export function useAgentConversation(
         case 'turn_started': {
           const turnId = event.turn_id;
           activeTurnIdRef.current = turnId;
+          activeTurnBufferRef.current = '';
           // Reset bubble for this turn.
           getRegisteredBubble(turnId)?.reset();
           resetAriaLive();
@@ -152,6 +155,7 @@ export function useAgentConversation(
             }
             return prev;
           });
+          activeTurnBufferRef.current += event.delta;
           handleTokenDelta(event.turn_id, event.delta);
           break;
         }
@@ -160,11 +164,8 @@ export function useAgentConversation(
           if (activeTurnIdRef.current !== event.turn_id) {
             break;
           }
-          // Do NOT write finalize with accumulated buffer here — the
-          // bubble's textContent already has the streamed content.
-          // Caller may optionally pass the full text via a separate REST
-          // fetch + finalize() if they want deterministic finalization.
           if (event.status === 'committed') {
+            getRegisteredBubble(event.turn_id)?.finalize(activeTurnBufferRef.current);
             clearActiveTurn('preserve');
             completeAriaLive();
             setState((prev) => conversationReducer(prev, { type: 'commit' }));

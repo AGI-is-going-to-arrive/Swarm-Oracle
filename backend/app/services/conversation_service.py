@@ -1445,12 +1445,23 @@ def _build_prompt(
     is rendered outside the fence.
     """
     lines: list[str] = []
-    lines.append(
-        "You are an in-story Agent continuing a node-scoped dialogue with a user."
-    )
-    lines.append(
-        "Stay in character.  Respond in the same language the user writes in."
-    )
+    is_agent_voice = bool(prompt_context and prompt_context.agent_name)
+    if is_agent_voice:
+        lines.append(
+            "You are an in-story Agent continuing a node-scoped dialogue with a user."
+        )
+        lines.append(
+            "Stay in character.  Respond in the same language the user writes in."
+        )
+    else:
+        lines.append(
+            "You are a graph analyst continuing a node-scoped dialogue with a user."
+        )
+        lines.append(
+            "Do not pretend to be a specific participant.  Explain the selected node "
+            "using the scenario, branch, round, and adjacent graph context.  Respond "
+            "in the same language the user writes in."
+        )
     if prompt_context and prompt_context.agent_name:
         lines.append(
             format_untrusted_text_block(
@@ -1522,7 +1533,8 @@ def _build_prompt(
         "user turn",
         _truncate_prompt_text(new_user_content, _PROMPT_NEW_USER_LIMIT),
     )
-    tail_lines = [new_user_block, "Agent:"]
+    response_label = "Agent:" if is_agent_voice else "Analyst:"
+    tail_lines = [new_user_block, response_label]
     tail_text = "\n\n".join(tail_lines)
     selected_history: list[str] = []
     for block in reversed(history_blocks):
@@ -1533,7 +1545,7 @@ def _build_prompt(
     lines.extend(selected_history)
 
     lines.append(new_user_block)
-    lines.append("Agent:")
+    lines.append(response_label)
     prompt = "\n\n".join(lines)
     if len(prompt) <= _PROMPT_TOTAL_LIMIT:
         return prompt

@@ -323,13 +323,14 @@ node scripts/e2e-node-conversation-live.mjs desktop --url http://127.0.0.1:18931
   - 公共 `DELETE /api/conversation/{thread_id}/active` 路径既会 abort 活跃流，也会把预留 `pending` assistant turn 收成 `aborted`
   - bootstrap 预留 turn 在 started 前如果已经被 abort / cancel，不会再补 stale `turn_started`；如果场景已经删掉，会直接收成 `SCENARIO_DELETED`
   - cancel 和 next chunk 同 tick 完成时会优先 cancel，不再多漏一条 delta
+  - origin 没有 `agent_name` 时，prompt 会用 graph analyst 口径解释节点、分支、回合和相邻关系，不会冒充具体 Agent
 - frontend 这组回归当前主要看：
   - `GlobalOfflineBanner` 的 WS grace timer 行为和 SSR-safe effect fallback
   - `NodeConversationSheet` 的 unmount abort、multiline SSE frame、bubble ref 稳定性、origin excerpt 透传和 bootstrap start 迟到响应防护
-  - `NodeContextBanner` 的来源摘要展示与长 excerpt 展开/折叠
+  - `NodeContextBanner` 的来源摘要、对话目标、卡片意义、前因、后续、相关关系和长 excerpt 展开/折叠
   - `NodeQuickCard` 的视口钳位、关闭和打开详情交互
   - `useNodeConversationTransport` 通过组件合同回归继续覆盖 `/start` + `/turn` 链路
-  - `useAgentConversation` 在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，不再把 ghost 文本重新刷回 bubble 或 aria-live
+  - `useAgentConversation` 在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，不再把 ghost 文本重新刷回 bubble 或 aria-live；committed assistant 文本会交给 `SafeMarkdown` 渲染
 
 ### Backend Auth / Provider Safety 定向回归
 
@@ -398,17 +399,27 @@ npm run preview -- --host 127.0.0.1 --port 18930
 如果只复核图谱节点对话 / 节点详情回归：
 
 ```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_causal_graph.py tests/test_conversation_service.py -q
+ruff check app/services/causal_graph.py app/services/conversation_service.py tests/test_causal_graph.py tests/test_conversation_service.py
+
 cd frontend
-npm test -- --run src/components/ui/portal-primitives.test.tsx src/components/kg/NodeContextBanner.test.tsx src/components/kg/NodeConversationSheet.test.tsx src/components/NodeDetailPanel.test.tsx src/components/workbench/NodeQuickCard.test.tsx src/components/workbench/WorkbenchView.test.tsx src/pages/CausalReviewView.test.tsx src/components/ArgumentMap.test.tsx
-npm run build
-npm run preview -- --host 127.0.0.1 --port 18930
-node scripts/e2e-phase3-batch-a.mjs desktop --url http://127.0.0.1:18930 --headless
-node scripts/e2e-phase3-batch-b.mjs desktop --url http://127.0.0.1:18930 --browser webkit --headless
+npm test -- --run src/pages/CausalReviewView.test.tsx src/pages/KGExplorerView.test.tsx src/components/ArgumentMap.integration.test.tsx src/components/NodeDetailPanel.test.tsx src/components/ResultConversationWidget.test.tsx src/components/kg/EmptyStateQuickQuestions.test.tsx src/components/kg/NodeContextBanner.test.tsx src/components/kg/NodeConversationSheet.test.tsx src/i18n/locales.test.ts
+npm exec -- tsc --noEmit -p tsconfig.app.json
+npm exec -- eslint src/pages/CausalReviewView.tsx src/pages/KGExplorerView.tsx src/pages/ResultView.tsx src/components/ArgumentMap.tsx src/components/NodeDetailPanel.tsx src/components/ResultConversationWidget.tsx src/components/kg/EmptyStateQuickQuestions.tsx src/components/kg/NodeContextBanner.tsx src/components/kg/NodeConversationSheet.tsx src/components/kg/StreamingBubbleIsolated.tsx src/hooks/useAgentConversation.ts
 ```
 
 说明：
 
 - 如果要先收图谱节点对话 / 节点详情这条回归，优先跑上面的窄集；过了再决定要不要扩大到 full pytest / full vitest。
+- 这条窄集当前主要看：
+  - causal graph 是否把 completed branch 投影成 `outcome` 结局节点，并用 `led_to` 接到同分支最近来源节点
+  - fork label 是否使用用户可读的 `display_reason`，fork-only append 是否保留已有 provenance；旧孤立 fork 是否能回补只读 synthetic provenance
+  - `NodeContextBanner` 是否显示对话目标、卡片意义、前因、后续和相关关系
+  - 因果、知识、裁决和结果入口的空态追问是否跟随当前卡片语境
+  - 结果页追问是否跟随 `analysisBranch`，并带当前结局、洞察、分支原因、关键时刻和对比分支
+  - committed assistant 文本是否按 Markdown 渲染，不再把列表和加粗符号原样露出
 - 如果要先收 P1 前置图谱修复，最小窄集是：
 
 ```bash

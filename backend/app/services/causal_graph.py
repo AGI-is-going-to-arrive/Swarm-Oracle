@@ -17,7 +17,7 @@ from sqlalchemy import inspect, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from app.models.database import Agent, get_engine
+from app.models.database import Agent, AgentMessage, Branch, BranchStatus, Round, get_engine
 from app.models.graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,8 @@ _GRAPH_EDGE_EVIDENCE_COLUMNS = {
 INTER_AGENT_EDGE_TYPES = ("responds_to", "supports_stance", "opposes_stance")
 _LATIN_NAME_RE = re.compile(r"[A-Za-z]")
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_DIVERGE_MARKER_RE = re.compile(r"\s*\[DIVERGE:[^\]]+\]\s*", re.IGNORECASE)
+_FORK_REASON_QUOTE_RE = re.compile(r"[“\"']([^”\"']+)[”\"']")
 
 
 # ── Heuristics ──────────────────────────────────────────
@@ -75,6 +77,254 @@ def _collect_available_branches(nodes: Sequence[GraphNode]) -> list[str]:
                 if isinstance(child, str) and child:
                     branch_ids.add(child)
     return sorted(branch_ids)
+
+
+def _has_table(session: Session, table_name: str) -> bool:
+    return bool(inspect(session.get_bind()).has_table(table_name))
+
+
+def _story_excerpt(story: str, limit: int = 240) -> str:
+    cleaned = " ".join(story.split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 3].rstrip() + "..."
+
+
+def _strip_diverge_marker(text: str) -> str:
+    return " ".join(_DIVERGE_MARKER_RE.sub(" ", text).split()).strip()
+
+
+def _fork_route_names(cleaned_reason: str) -> list[str]:
+    route_names: list[str] = []
+    for item in _FORK_REASON_QUOTE_RE.findall(cleaned_reason):
+        candidate = item.strip()
+        if candidate and candidate not in route_names:
+            route_names.append(candidate)
+    return route_names
+
+
+def _finish_sentence(text: str) -> str:
+    stripped = text.strip(" ，,。")
+    if not stripped:
+        return ""
+    return stripped if stripped[-1] in "。.!?" else stripped + "。"
+
+
+def _display_fork_reason(reason: str | None) -> str:
+    cleaned = _strip_diverge_marker(reason or "")
+    if not cleaned:
+        return "Branch fork"
+
+    route_names = _fork_route_names(cleaned)
+    if len(route_names) >= 2:
+        if len(route_names) == 2:
+            return f"路线分岔：{route_names[0]}；另一条{route_names[1]}。"
+        return f"路线分岔：{'、'.join(route_names[:3])}。"
+
+    simplified = re.sub(r"，?因此应\s*fork。?$", "。", cleaned, flags=re.IGNORECASE)
+    if "讨论已明确分成" in simplified:
+        simplified = simplified.replace("讨论已明确分成", "出现路线分歧：")
+    return simplified
+
+
+def _display_fork_summary(reason: str | None) -> str:
+    cleaned = _strip_diverge_marker(reason or "")
+    if not cleaned:
+        return ""
+
+    quote_matches = list(_FORK_REASON_QUOTE_RE.finditer(cleaned))
+    tail = cleaned[quote_matches[1].end():] if len(quote_matches) >= 2 else cleaned
+    tail = re.sub(r"[，, ]*因此应\s*fork。?$", "", tail, flags=re.IGNORECASE)
+    tail = tail.strip(" ，,。")
+    if not tail:
+        return ""
+
+    impact_match = re.search(
+        r"(?:(?:并|而这|这)?(?:会|将会|会直接|直接)?)"
+        r"(改写|改变|影响|决定|牵动|重塑).+",
+        tail,
+    )
+    if not impact_match:
+        return ""
+
+    impact = impact_match.group(0)
+    impact = re.sub(
+        r"^(?:并|而这|这)?(?:会|将会|会直接|直接)?",
+        "",
+        impact,
+    ).strip(" ，,。")
+    return _finish_sentence(f"这会{impact}")
+
+
+def _load_outcome_branches(session: Session, scenario_id: str) -> list[Branch]:
+    if not _has_table(session, "branch"):
+        return []
+    return list(
+        session.exec(
+            select(Branch)
+            .where(
+                Branch.scenario_id == scenario_id,
+                Branch.status == BranchStatus.COMPLETED,
+            )
+            .order_by(Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc())
+        ).all()
+    )
+
+
+def _latest_source_node_for_outcome(
+    nodes: Sequence[GraphNode],
+    branch_id: str,
+) -> GraphNode | None:
+    candidates: list[GraphNode] = []
+    for node in nodes:
+        if _node_branch_id(node) != branch_id:
+            continue
+        if node.node_type not in {"event", "stance_shift", "fork"}:
+            continue
+        candidates.append(node)
+    if not candidates:
+        return None
+    priority = {"event": 2, "stance_shift": 1, "fork": 0}
+    return max(
+        candidates,
+        key=lambda node: (
+            node.round_number if node.round_number is not None else -1,
+            priority.get(node.node_type, -1),
+            node.id,
+        ),
+    )
+
+
+def _serialize_graph_node(node: GraphNode) -> dict[str, Any]:
+    payload = _safe_parse_payload(node.payload_json)
+    label = node.label
+    if node.node_type == "fork":
+        source_reason = str(payload.get("reason") or payload.get("display_reason") or label)
+        display_reason = _display_fork_reason(
+            source_reason
+        )
+        payload = {**payload, "display_reason": display_reason}
+        display_summary = _display_fork_summary(source_reason)
+        if display_summary:
+            payload["display_summary"] = display_summary
+        label = display_reason
+    return {
+        "id": node.id,
+        "key": node.node_key,
+        "type": node.node_type,
+        "label": label,
+        "round": node.round_number,
+        "payload": payload,
+    }
+
+
+def _synthetic_message_label(agent_name: str | None, content: str) -> str:
+    excerpt = content[:60] if agent_name else content[:80]
+    if agent_name and excerpt:
+        return f"{agent_name}: {excerpt}"
+    if excerpt:
+        return excerpt
+    return "Round event"
+
+
+def _load_orphan_fork_provenance(
+    session: Session,
+    *,
+    nodes: Sequence[GraphNode],
+    edges: Sequence[GraphEdge],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Surface persisted round messages for legacy fork nodes that lost their sources."""
+    if not _table_exists(session, "round") or not _table_exists(session, "agent_message"):
+        return [], []
+
+    incoming_fork_ids = {
+        edge.target_node_id
+        for edge in edges
+        if edge.edge_type == "caused" and edge.label == "triggered fork"
+    }
+    existing_event_by_ref = {
+        node.ref_id: node
+        for node in nodes
+        if node.node_type == "event" and node.ref_id is not None
+    }
+    synthetic_nodes_by_id: dict[str, dict[str, Any]] = {}
+    synthetic_edges: list[dict[str, Any]] = []
+
+    for fork_node in nodes:
+        if fork_node.node_type != "fork" or fork_node.id in incoming_fork_ids:
+            continue
+        payload = _safe_parse_payload(fork_node.payload_json)
+        source_branch_id = str(
+            payload.get("source_branch_id") or payload.get("branch_id") or ""
+        ).strip()
+        if not source_branch_id or fork_node.round_number is None:
+            continue
+
+        source_round = session.exec(
+            select(Round).where(
+                Round.branch_id == source_branch_id,
+                Round.round_number == fork_node.round_number,
+            )
+        ).first()
+        if source_round is None:
+            continue
+
+        messages = session.exec(
+            select(AgentMessage)
+            .where(AgentMessage.round_id == source_round.id)
+            .order_by(AgentMessage.id.asc())
+        ).all()
+        if not messages:
+            continue
+
+        message_records = [
+            {"agent_id": message.agent_id, "agent_name": None}
+            for message in messages
+        ]
+        agent_name_by_id = _build_agent_name_map(session, message_records)
+
+        for message in messages:
+            existing_source = existing_event_by_ref.get(message.id)
+            if existing_source is not None:
+                source_id = existing_source.id
+            else:
+                source_id = f"legacy-event:{message.id}"
+                if source_id not in synthetic_nodes_by_id:
+                    agent_name = agent_name_by_id.get(message.agent_id)
+                    synthetic_nodes_by_id[source_id] = {
+                        "id": source_id,
+                        "key": f"legacy_event_{message.id}",
+                        "type": "event",
+                        "label": _synthetic_message_label(agent_name, message.content),
+                        "round": fork_node.round_number,
+                        "payload": {
+                            "agent_id": message.agent_id,
+                            "agent_name": agent_name,
+                            "emotion": message.emotion,
+                            "branch_id": source_branch_id,
+                            "content": message.content,
+                            "synthetic_provenance": True,
+                        },
+                    }
+
+            synthetic_edges.append(
+                {
+                    "id": f"legacy-fork-edge:{source_id}:{fork_node.id}",
+                    "source": source_id,
+                    "target": fork_node.id,
+                    "type": "caused",
+                    "weight": 1.0,
+                    "label": "triggered fork",
+                    "evidence": {
+                        "confidence_tier": "medium",
+                        "source_ref": message.id,
+                        "source_round_number": fork_node.round_number,
+                        "detail": json.dumps({"source": "round_message_legacy_repair"}),
+                    },
+                }
+            )
+
+    return list(synthetic_nodes_by_id.values()), synthetic_edges
 
 
 def _has_unique_index_columns(
@@ -689,6 +939,7 @@ def append_round_nodes(
     with _get_scenario_lock(scenario_id):
         with Session(engine) as session:
             snapshot = _get_or_create_snapshot(session, scenario_id)
+            fork_only_append = fork_event is not None and not messages
 
             round_nodes_stmt = select(GraphNode).where(
                 GraphNode.snapshot_id == snapshot.id,
@@ -707,15 +958,23 @@ def append_round_nodes(
                 )
                 for idx, msg in enumerate(messages)
             }
-            stale_event_nodes = [
-                node
-                for node in round_nodes
-                if (
-                    node.node_type == "event"
-                    and _node_branch_id(node) == branch_id
-                    and (_node_branch_id(node), node.node_key) not in current_event_scopes
-                )
-            ]
+            stale_event_nodes = (
+                []
+                if fork_only_append
+                else [
+                    node
+                    for node in round_nodes
+                    if (
+                        node.node_type == "event"
+                        and _node_branch_id(node) == branch_id
+                        and (
+                            _node_branch_id(node),
+                            node.node_key,
+                        )
+                        not in current_event_scopes
+                    )
+                ]
+            )
             stale_event_node_ids = {node.id for node in stale_event_nodes}
             if stale_event_node_ids:
                 stale_edges = session.exec(
@@ -847,11 +1106,15 @@ def append_round_nodes(
             for record in message_records:
                 latest_record_by_agent[record["agent_id"]] = record
 
-            stale_frame_agent_ids = [
-                agent_id
-                for agent_id in frames_by_agent
-                if agent_id not in latest_record_by_agent
-            ]
+            stale_frame_agent_ids = (
+                []
+                if fork_only_append
+                else [
+                    agent_id
+                    for agent_id in frames_by_agent
+                    if agent_id not in latest_record_by_agent
+                ]
+            )
             for agent_id in stale_frame_agent_ids:
                 frame = frames_by_agent.pop(agent_id, None)
                 if frame is not None:
@@ -892,15 +1155,19 @@ def append_round_nodes(
                         }),
                     }
 
-            stale_shift_nodes = [
-                node
-                for node in round_nodes
-                if (
-                    node.node_type == "stance_shift"
-                    and _node_branch_id(node) == branch_id
-                    and (branch_id, node.node_key) not in desired_shift_records
-                )
-            ]
+            stale_shift_nodes = (
+                []
+                if fork_only_append
+                else [
+                    node
+                    for node in round_nodes
+                    if (
+                        node.node_type == "stance_shift"
+                        and _node_branch_id(node) == branch_id
+                        and (branch_id, node.node_key) not in desired_shift_records
+                    )
+                ]
+            )
             stale_shift_node_ids = {node.id for node in stale_shift_nodes}
             if stale_shift_node_ids:
                 stale_shift_edges = session.exec(
@@ -1116,14 +1383,21 @@ def append_round_nodes(
                 fork_key = f"fork_r{round_number}_{fork_event.get('branch_id', '')}"
                 fork_payload = dict(fork_event)
                 fork_payload["source_branch_id"] = branch_id
+                fork_payload["display_reason"] = _display_fork_reason(
+                    str(fork_payload.get("reason", ""))
+                )
+                display_summary = _display_fork_summary(str(fork_payload.get("reason", "")))
+                if display_summary:
+                    fork_payload["display_summary"] = display_summary
                 fork_payload_json = json.dumps(fork_payload)
+                fork_label = fork_payload["display_reason"][:80]
                 fork_node = fork_nodes_by_key.get(fork_key)
                 if fork_node is None:
                     fork_node = GraphNode(
                         snapshot_id=snapshot.id,
                         node_key=fork_key,
                         node_type="fork",
-                        label=fork_event.get("reason", "branch fork")[:80],
+                        label=fork_label,
                         round_number=round_number,
                         ref_model="branch",
                         ref_id=fork_event.get("branch_id"),
@@ -1133,7 +1407,7 @@ def append_round_nodes(
                     session.flush()
                     fork_nodes_by_key[fork_key] = fork_node
                 else:
-                    fork_node.label = fork_event.get("reason", "branch fork")[:80]
+                    fork_node.label = fork_label
                     fork_node.round_number = round_number
                     fork_node.ref_model = "branch"
                     fork_node.ref_id = fork_event.get("branch_id")
@@ -1226,12 +1500,16 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
         # Load nodes
         node_stmt = select(GraphNode).where(GraphNode.snapshot_id == snapshot.id)
         all_nodes = session.exec(node_stmt).all()
-        available_branches = _collect_available_branches(all_nodes)
+        outcome_branches = _load_outcome_branches(session, scenario_id)
+        available_branch_ids = set(_collect_available_branches(all_nodes))
+        available_branch_ids.update(branch.id for branch in outcome_branches)
+        available_branches = sorted(available_branch_ids)
 
         edge_stmt = select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id)
         all_edges = session.exec(edge_stmt).all()
 
         nodes = all_nodes
+        visible_outcome_branches = outcome_branches
 
         # Optionally filter by branch_id via payload
         if branch_id is not None:
@@ -1258,6 +1536,9 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
                         filtered_nodes_by_id[source_node.id] = source_node
 
             nodes = list(filtered_nodes_by_id.values())
+            visible_outcome_branches = [
+                branch for branch in outcome_branches if branch.id == branch_id
+            ]
 
         node_ids = {n.id for n in nodes}
 
@@ -1266,21 +1547,56 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
             e for e in all_edges
             if e.source_node_id in node_ids and e.target_node_id in node_ids
         ]
+        outcome_nodes: list[dict[str, Any]] = []
+        outcome_edges: list[dict[str, Any]] = []
+        for branch in visible_outcome_branches:
+            outcome_id = f"outcome:{branch.id}"
+            source_node = _latest_source_node_for_outcome(nodes, branch.id)
+            outcome_nodes.append(
+                {
+                    "id": outcome_id,
+                    "key": f"outcome_{branch.id}",
+                    "type": "outcome",
+                    "label": branch.title or "Outcome",
+                    "round": source_node.round_number if source_node is not None else None,
+                    "payload": {
+                        "branch_id": branch.id,
+                        "title": branch.title,
+                        "probability": branch.probability,
+                        "status": branch.status.value,
+                        "story_excerpt": _story_excerpt(branch.story),
+                        "insight": branch.insight,
+                        "parent_branch_id": branch.parent_branch_id,
+                    },
+                }
+            )
+            if source_node is not None:
+                outcome_edges.append(
+                    {
+                        "id": f"outcome-edge:{source_node.id}:{branch.id}",
+                        "source": source_node.id,
+                        "target": outcome_id,
+                        "type": "led_to",
+                        "weight": 1.0,
+                        "label": None,
+                        "evidence": None,
+                    }
+                )
+
+        provenance_nodes, provenance_edges = _load_orphan_fork_provenance(
+            session,
+            nodes=nodes,
+            edges=edges,
+        )
 
         return {
             "id": snapshot.id,
             "available_branches": available_branches,
-            "nodes": [
-                {
-                    "id": n.id,
-                    "key": n.node_key,
-                    "type": n.node_type,
-                    "label": n.label,
-                    "round": n.round_number,
-                    "payload": _safe_parse_payload(n.payload_json),
-                }
-                for n in nodes
-            ],
+            "nodes": (
+                [_serialize_graph_node(n) for n in nodes]
+                + provenance_nodes
+                + outcome_nodes
+            ),
             "edges": [
                 {
                     "id": e.id,
@@ -1302,5 +1618,5 @@ def build_snapshot(scenario_id: str, branch_id: str | None = None) -> dict:
                     ) else None,
                 }
                 for e in edges
-            ],
+            ] + provenance_edges + outcome_edges,
         }

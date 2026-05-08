@@ -10,7 +10,16 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from alembic import command as alembic_command
 from app.config import settings
-from app.models.database import Agent, Scenario, dispose_engine, get_engine
+from app.models.database import (
+    Agent,
+    AgentMessage,
+    Branch,
+    BranchStatus,
+    Round,
+    Scenario,
+    dispose_engine,
+    get_engine,
+)
 from app.models.graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
 from app.services.causal_graph import (
     _SCENARIO_LOCK_STRIPE_COUNT,
@@ -1589,6 +1598,25 @@ class TestBuildSnapshot:
         assert len(result["edges"]) == 1
         assert result["edges"][0]["type"] == "caused"
 
+    def test_fork_reason_is_serialized_as_human_display_copy(self):
+        messages = [MockMessage(emotion="calm", agent_id="a1", id="m5", content="trigger")]
+        fork = {
+            "branch_id": "br2",
+            "reason": (
+                "讨论已明确分成“先稳后攻”和“继续强攻”两套互相排斥的军事路线，"
+                "并会改写后勤、继任与前线责任链，因此应 fork。"
+            ),
+        }
+        append_round_nodes("sc5_human_fork", "br1", 1, messages, fork_event=fork)
+
+        result = build_snapshot("sc5_human_fork")
+        fork_node = next(node for node in result["nodes"] if node["type"] == "fork")
+
+        assert fork_node["label"] == "路线分岔：先稳后攻；另一条继续强攻。"
+        assert fork_node["payload"]["display_reason"] == "路线分岔：先稳后攻；另一条继续强攻。"
+        assert fork_node["payload"]["display_summary"] == "这会改写后勤、继任与前线责任链。"
+        assert fork_node["payload"]["reason"] == fork["reason"]
+
     def test_evidence_detail_serialized_when_only_evidence_json_is_set(self):
         _seed_snapshot_edge(
             "sc_evidence_detail_only",
@@ -1659,6 +1687,107 @@ class TestBuildSnapshot:
         assert len(result_br2["nodes"]) == 1
         assert result_br1["nodes"][0]["payload"]["branch_id"] == "br1"
         assert result_br2["nodes"][0]["payload"]["branch_id"] == "br2"
+
+    def test_completed_branch_story_is_returned_as_outcome_node(self):
+        with Session(get_engine()) as session:
+            session.add(Scenario(id="sc_outcome", question="What happens?"))
+            session.add(
+                Branch(
+                    id="br_outcome",
+                    scenario_id="sc_outcome",
+                    title="Stabilized future",
+                    story="The country stabilizes after a costly final round.",
+                    insight="Institutions mattered more than one battle.",
+                    probability=0.72,
+                    status=BranchStatus.COMPLETED,
+                )
+            )
+            session.commit()
+
+        append_round_nodes(
+            "sc_outcome",
+            "br_outcome",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id="m1", content="final cause")],
+        )
+
+        result = build_snapshot("sc_outcome")
+
+        outcome = next(node for node in result["nodes"] if node["type"] == "outcome")
+        event = next(node for node in result["nodes"] if node["type"] == "event")
+        assert outcome["id"] == "outcome:br_outcome"
+        assert outcome["label"] == "Stabilized future"
+        assert outcome["payload"] == {
+            "branch_id": "br_outcome",
+            "title": "Stabilized future",
+            "probability": 0.72,
+            "status": "COMPLETED",
+            "story_excerpt": "The country stabilizes after a costly final round.",
+            "insight": "Institutions mattered more than one battle.",
+            "parent_branch_id": None,
+        }
+
+        led_to_edges = [edge for edge in result["edges"] if edge["type"] == "led_to"]
+        assert led_to_edges == [
+            {
+                "id": f"outcome-edge:{event['id']}:br_outcome",
+                "source": event["id"],
+                "target": "outcome:br_outcome",
+                "type": "led_to",
+                "weight": 1.0,
+                "label": None,
+                "evidence": None,
+            }
+        ]
+
+    def test_branch_filter_returns_only_matching_outcome_node(self):
+        with Session(get_engine()) as session:
+            session.add(Scenario(id="sc_filtered_outcome", question="Which ending?"))
+            session.add_all(
+                [
+                    Branch(
+                        id="br_alpha",
+                        scenario_id="sc_filtered_outcome",
+                        title="Alpha ending",
+                        story="Alpha story",
+                        insight="Alpha insight",
+                        status=BranchStatus.COMPLETED,
+                    ),
+                    Branch(
+                        id="br_beta",
+                        scenario_id="sc_filtered_outcome",
+                        title="Beta ending",
+                        story="Beta story",
+                        insight="Beta insight",
+                        status=BranchStatus.COMPLETED,
+                    ),
+                ]
+            )
+            session.commit()
+
+        append_round_nodes(
+            "sc_filtered_outcome",
+            "br_alpha",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id="m1", content="alpha cause")],
+        )
+        append_round_nodes(
+            "sc_filtered_outcome",
+            "br_beta",
+            1,
+            [MockMessage(emotion="calm", agent_id="a2", id="m2", content="beta cause")],
+        )
+
+        result = build_snapshot("sc_filtered_outcome", branch_id="br_beta")
+
+        outcome_nodes = [node for node in result["nodes"] if node["type"] == "outcome"]
+        assert [node["payload"]["branch_id"] for node in outcome_nodes] == ["br_beta"]
+        assert set(result["available_branches"]) == {"br_alpha", "br_beta"}
+        assert all(
+            node["payload"].get("branch_id") == "br_beta"
+            for node in result["nodes"]
+            if node["type"] in {"event", "outcome"}
+        )
 
     def test_branch_filter_keeps_available_branches_for_selector_and_fork_children(self):
         append_round_nodes("sc6b", "br1", 1, [MockMessage(emotion="calm", agent_id="a1", id="m1")])
@@ -2012,6 +2141,108 @@ class TestForkEdgeFallback:
         result = build_snapshot("sc_fef2")
         caused = [e for e in result["edges"] if e["type"] == "caused"]
         assert len(caused) == 0
+
+    def test_fork_only_append_preserves_existing_round_event_provenance(self):
+        """Simulator records messages first, then appends fork metadata separately."""
+        append_round_nodes(
+            "sc_fef_fork_only",
+            "br1",
+            2,
+            [
+                MockMessage(
+                    emotion="calm",
+                    agent_id="a1",
+                    id="m_round",
+                    content="round trigger",
+                )
+            ],
+        )
+
+        append_round_nodes(
+            "sc_fef_fork_only",
+            "br1",
+            2,
+            [],
+            fork_event={"branch_id": "br_child", "reason": "late fork"},
+        )
+
+        result = build_snapshot("sc_fef_fork_only")
+        fork_node = next(node for node in result["nodes"] if node["type"] == "fork")
+        event_node = next(node for node in result["nodes"] if node["label"] == "round trigger")
+        caused = [
+            edge
+            for edge in result["edges"]
+            if (
+                edge["type"] == "caused"
+                and edge["source"] == event_node["id"]
+                and edge["target"] == fork_node["id"]
+                and edge["label"] == "triggered fork"
+            )
+        ]
+
+        assert len(caused) == 1
+
+    def test_build_snapshot_backfills_legacy_orphan_fork_provenance(self):
+        """Old snapshots can be missing event nodes after fork-only append cleanup."""
+        scenario_id = "sc_fef_legacy_orphan"
+        with Session(get_engine()) as session:
+            session.add(Scenario(id=scenario_id, question="legacy fork"))
+            session.add(Agent(id="agent_legacy", scenario_id=scenario_id, name="诸葛亮"))
+            session.add(
+                Branch(
+                    id="br_legacy",
+                    scenario_id=scenario_id,
+                    status=BranchStatus.ACTIVE,
+                )
+            )
+            session.add(Round(id="round_legacy", branch_id="br_legacy", round_number=2))
+            session.add(
+                AgentMessage(
+                    id="msg_legacy",
+                    round_id="round_legacy",
+                    agent_id="agent_legacy",
+                    content="先把汉中的粮道稳住，再谈北伐。",
+                    emotion="calm",
+                )
+            )
+            snapshot = GraphSnapshot(
+                owner_type="scenario",
+                owner_id=scenario_id,
+                graph_kind="causal_review",
+            )
+            session.add(snapshot)
+            session.flush()
+            session.add(
+                GraphNode(
+                    snapshot_id=snapshot.id,
+                    node_key="fork_r2_br_child",
+                    node_type="fork",
+                    label="late fork",
+                    round_number=2,
+                    payload_json=(
+                        '{"branch_id":"br_child","source_branch_id":"br_legacy",'
+                        '"reason":"late fork"}'
+                    ),
+                )
+            )
+            session.commit()
+
+        result = build_snapshot(scenario_id)
+        fork_node = next(node for node in result["nodes"] if node["type"] == "fork")
+        event_node = next(
+            node for node in result["nodes"]
+            if node["id"] == "legacy-event:msg_legacy"
+        )
+        caused = [
+            edge
+            for edge in result["edges"]
+            if edge["source"] == event_node["id"] and edge["target"] == fork_node["id"]
+        ]
+
+        assert event_node["label"].startswith("诸葛亮:")
+        assert event_node["payload"]["synthetic_provenance"] is True
+        assert len(caused) == 1
+        assert caused[0]["label"] == "triggered fork"
 
     def test_explicit_trigger_ids_replace_same_round_fallback_edges(self):
         """Replaying a fork with explicit trigger ids should not keep stale fallback provenance."""

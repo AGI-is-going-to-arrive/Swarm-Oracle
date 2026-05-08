@@ -124,11 +124,80 @@ describe('i18n locale resources', () => {
     const causalGuideKeys = [
       'guide_title',
       'guide_close',
+      'guide_story',
+      'guide_story_no_outcomes',
+      'guide_story_no_forks',
+      'guide_stats_label',
+      'guide_routes_title',
+      'guide_route_connector',
+      'guide_route_more',
       'guide_key_nodes',
+      'guide_link_count',
+      'guide_link_breakdown',
+      'guide_key_node_reason_fork',
+      'guide_key_node_reason_outcome',
+      'guide_key_node_reason_intervention',
+      'guide_key_node_reason_event',
+      'guide_relation_explainer',
       'guide_hint',
+      'guide_preview_action',
+      'guide_preview_aria',
+      'guide_expand_details',
+      'guide_collapse_details',
       'guide_show',
       'guide_full_graph',
       'empty_guide',
+      'evidence_high_context',
+      'evidence_medium_context',
+      'evidence_low_context',
+      'edge_round_context',
+      'edge_confidence_context',
+      'edge_context_suffix',
+    ] as const;
+    const conversationQuickQuestionKeys = [
+      'knowledge_q_1',
+      'knowledge_q_2',
+      'knowledge_q_3',
+      'argument_verdict_q_1',
+      'argument_verdict_q_2',
+      'argument_verdict_q_3',
+      'argument_evidence_q_1',
+      'argument_evidence_q_2',
+      'argument_evidence_q_3',
+      'argument_rebuttal_q_1',
+      'argument_rebuttal_q_2',
+      'argument_rebuttal_q_3',
+      'argument_claim_q_1',
+      'argument_claim_q_2',
+      'argument_claim_q_3',
+      'causal_fork_q_1',
+      'causal_fork_q_2_effect',
+      'causal_fork_q_2',
+      'causal_fork_q_3_cause',
+      'causal_fork_q_3',
+      'causal_outcome_q_1',
+      'causal_outcome_q_2_cause',
+      'causal_outcome_q_2',
+      'causal_outcome_q_3',
+      'causal_intervention_q_1',
+      'causal_intervention_q_2_effect',
+      'causal_intervention_q_2',
+      'causal_intervention_q_3',
+      'causal_event_q_1_agent',
+      'causal_event_q_1',
+      'causal_event_q_2_cause',
+      'causal_event_q_2',
+      'causal_event_q_3_effect',
+      'causal_event_q_3_relation',
+      'causal_event_q_3',
+      'result_topic_fallback',
+      'result_title_named',
+      'result_subtitle_named',
+      'result_context_q_1',
+      'result_context_q_2_cause',
+      'result_context_q_2',
+      'result_context_q_3_compare',
+      'result_context_q_3',
     ] as const;
 
     for (const key of resultBridgeKeys) {
@@ -143,6 +212,18 @@ describe('i18n locale resources', () => {
       expect(en.translation.causal[key]).toEqual(expect.any(String));
       expect(zh.translation.causal[key]).toEqual(expect.any(String));
     }
+    for (const key of conversationQuickQuestionKeys) {
+      expect(en.translation.conversation.empty_state[key]).toEqual(expect.any(String));
+      expect(zh.translation.conversation.empty_state[key]).toEqual(expect.any(String));
+    }
+    expect(en.translation.node_context_banner.target_knowledge_analyst_label).toEqual(expect.any(String));
+    expect(zh.translation.node_context_banner.target_knowledge_analyst_label).toEqual(expect.any(String));
+    expect(en.translation.node_context_banner.target_argument_analyst_label).toEqual(expect.any(String));
+    expect(zh.translation.node_context_banner.target_argument_analyst_label).toEqual(expect.any(String));
+    expect(en.translation.kg_explorer.related_incoming).toEqual(expect.any(String));
+    expect(zh.translation.kg_explorer.related_incoming).toEqual(expect.any(String));
+    expect(en.translation.argument.related_context_line).toEqual(expect.any(String));
+    expect(zh.translation.argument.related_context_line).toEqual(expect.any(String));
   });
 
   it('provides localized graph node detail labels and counterfactual labels', () => {
@@ -158,6 +239,20 @@ describe('i18n locale resources', () => {
     expect(zh.translation.node_detail.stance).toBe('立场');
     expect(en.translation.node_detail.side).toBe('Side');
     expect(zh.translation.node_detail.side).toBe('立场方');
+    expect(en.translation.node_detail.outcome_story).toBe('Outcome Story');
+    expect(zh.translation.node_detail.outcome_story).toBe('结局详情');
+    expect(en.translation.node_detail.fork_reason).toBe('Fork Reason');
+    expect(zh.translation.node_detail.fork_reason).toBe('分支原因');
+    expect(en.translation.node_detail.fork_impact).toBe('Impact');
+    expect(zh.translation.node_detail.fork_impact).toBe('影响');
+    expect(en.translation.node_context_banner.target_graph_analyst_label).toBe('Graph analyst');
+    expect(zh.translation.node_context_banner.target_graph_analyst_label).toBe('图谱解读 Agent');
+    expect(en.translation.node_context_banner.meaning_event_title).toBe('Event card');
+    expect(zh.translation.node_context_banner.meaning_event_title).toBe('事件卡');
+    expect(en.translation.node_context_banner.cause_title).toBe('Why this card appears');
+    expect(zh.translation.node_context_banner.cause_title).toBe('为什么会出现');
+    expect(en.translation.causal.node_card_summary_event).toBe('Causes {{causeCount}} · effects {{effectCount}}');
+    expect(zh.translation.causal.node_card_summary_event).toBe('前因 {{causeCount}} · 后续 {{effectCount}}');
     expect(en.translation.node_detail.copy_ref).toBe('Copy Reference');
     expect(zh.translation.node_detail.copy_ref).toBe('复制引用');
     expect(en.translation.node_detail.copy_ref_failed).toBe('Failed to copy reference');
@@ -316,6 +411,8 @@ describe('i18n locale resources', () => {
     expect(zh.translation.common.submitting).toBe('提交中...');
     expect(en.translation.causal.type_round).toBe('Round');
     expect(zh.translation.causal.type_round).toBe('回合');
+    expect(en.translation.causal.type_outcome).toBe('Outcome');
+    expect(zh.translation.causal.type_outcome).toBe('结局');
     expect(en.translation.causal.relationless_snapshot).toBe('No causal edges were generated for this scenario yet. Showing event snapshots instead.');
     expect(zh.translation.causal.relationless_snapshot).toBe('当前场景还没有生成因果连线，先显示事件快照。');
     expect(en.translation.causal.error.network).toBe('Unable to load the causal graph. Check your connection and try again.');

@@ -1796,6 +1796,72 @@ body.has-argument-map .lang-switch--global {
   font-weight: 500;
   color: #78716c;
 }
+.node-context-banner__target {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: #44403c;
+}
+.node-context-banner__target-prefix {
+  color: #78716c;
+}
+.node-context-banner__target-description {
+  margin-top: 2px;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #78716c;
+}
+.node-context-banner__meaning {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: rgba(245, 242, 238, 0.72);
+}
+.node-context-banner__meaning-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #292524;
+}
+.node-context-banner__meaning-description {
+  margin: 3px 0 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #57534e;
+}
+.node-context-banner__causal-groups {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(120, 113, 108, 0.14);
+}
+.node-context-banner__causal-group {
+  display: grid;
+  gap: 3px;
+}
+.node-context-banner__relations {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(120, 113, 108, 0.14);
+}
+.node-context-banner__relations-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: #78716c;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.node-context-banner__relations-list {
+  display: grid;
+  gap: 3px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.node-context-banner__relations-item {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #57534e;
+}
 .node-context-banner__agent {
   margin-top: 3px;
   font-size: 0.875rem;
@@ -2611,6 +2677,7 @@ body.has-argument-map .lang-switch--global {
 .ending-chat-markdown pre { margin: 0.5em 0; padding: 0.5em; background: var(--bg-elevated, rgba(0,0,0,0.05)); border-radius: 6px; overflow-x: auto; }
 .ending-chat-markdown blockquote { margin: 0.25em 0; padding-left: 0.75em; border-left: 3px solid var(--border-muted, #d1d5db); }
 
+.node-conversation-markdown { white-space: normal; }
 .node-conversation-markdown p { margin: 0; }
 .node-conversation-markdown p + p { margin-top: 0.5em; }
 .node-conversation-markdown ul, .node-conversation-markdown ol { margin: 0.25em 0; padding-left: 1.5em; }

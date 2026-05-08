@@ -180,11 +180,11 @@
 | `e2e-ws-contract-suite.mjs` | `frontend/scripts/e2e-ws-contract-suite.mjs` | WS 契约诊断脚本；当前覆盖 `scenario / debate / ending-room` 的首帧 auth、`4001 / 4404` 非重连、`1006` 可重连、auth timeout、oversize auth frame 和 pending-auth limit |
 | `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
 | `PipelineStepper.tsx` | `frontend/src/components/PipelineStepper.tsx` | `/sim/:id` 与 `/result/:id` 的 fixed-bottom pipeline progressbar；error 状态下 `aria-valuenow` 会钳到有效范围 |
-| `ResultConversationWidget.tsx` | `frontend/src/components/ResultConversationWidget.tsx` | 结果页轻量追问入口，复用 `NodeConversationSheet`；replay 结果页不渲染这条 live-only 入口 |
+| `ResultConversationWidget.tsx` | `frontend/src/components/ResultConversationWidget.tsx` | 结果页轻量追问入口，复用 `NodeConversationSheet`；会把当前 analysis branch 的标题、insight、fork reason、关键时刻和对比分支传成 result origin；replay 结果页不渲染这条 live-only 入口 |
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
 | `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
-| `NodeDetailPanel.tsx` | `frontend/src/components/NodeDetailPanel.tsx` | 两个图面的共用节点详情侧栏；显示 type / round / payload / unit details |
-| `NodeContextBanner.tsx` | `frontend/src/components/kg/NodeContextBanner.tsx` | `NodeConversationSheet` 的来源摘要卡；显示 node type、round、agent、label 和截断 excerpt |
+| `NodeDetailPanel.tsx` | `frontend/src/components/NodeDetailPanel.tsx` | 两个图面的共用节点详情侧栏；显示 type / round / payload / unit details；event / fork / outcome 会优先展示用户可读语义字段 |
+| `NodeContextBanner.tsx` | `frontend/src/components/kg/NodeContextBanner.tsx` | `NodeConversationSheet` 的来源摘要卡；显示 node type、round、对话目标、卡片意义、前因/后续/关系、label 和截断 excerpt |
 | `NodeQuickCard.tsx` | `frontend/src/components/workbench/NodeQuickCard.tsx` | KG 工作台桌面节点快览卡；按视口钳位位置，避免靠边节点把卡片挤出屏幕 |
 | `e2e-web-search-suite.mjs` | `frontend/scripts/e2e-web-search-suite.mjs` | 首页搜索增强专项 E2E：custom override、provider/key/base URL、scenario 请求体校验 |
 | `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择；桌面端 `@dnd-kit/core` 入席交互，移动端保留 click-to-seat） |
@@ -243,6 +243,7 @@
   - `branch_a / branch_b` 请求参数都会先做 `encodeURIComponent()`
 - `ReplayView` 当前在 `replay_trace` capability 关闭时会显示显式 unavailable surface，不再 silent redirect 到首页；如果 capability 探针自己失败，也会给出单独的 retry surface。trace 计数标签当前用静态本地化 copy（`Frame / Branches`、`帧 / 分支`），不会再把 `{{count}}` 模板串露到页面上。
 - `KGExplorerView` 当前会把 capability 失败、feature disabled、graph fetch 失败分开显示；graph fetch 失败时会清掉旧图，再给出本地化错误和 retry。主图用真实 G6 canvas 渲染，minimap 是 G6 minimap plugin，不是占位卡片；search / type filter 会更新图数据本身。点击节点时，`NodeConversationSheet` 收到的是业务 `kgType`、节点 label、branch 与 round，不再使用 G6 shape type。
+- KG / causal / argument / result 四种入口当前都会给 `NodeConversationSheet` 传 surface-specific origin。空态问题会按卡片类型和上下文生成：事件问前因后果，分支问分岔路线，结局问落点和对比分支，知识图谱问邻近概念，裁决图谱问主张/证据/裁决关系。
 - `WorkbenchView` 当前三种 tab 的能力门槛分开判断：`graph` 只要求 causal graph，`kg` 只要求 KG capability，`split` 才要求两者都可用。结果页的 workbench bridge 会把当前 analysis branch 写进 query，进入工作台后仍可保留同一条分析分支语义。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - ending-room artifact/local replay 当前统一落到 `/result/replay?...`；不再要求先拼出 `/result/:scenarioId?...` 才能读出来。artifact payload 里的 `scenario.total_rounds=null` 也会被前端 replay 正常接受，不会再把只读页打成空结果。
@@ -269,7 +270,7 @@
   - `后续三回合` 按钮：设置 `interaction_mode=epilogue` 并预填追问内容
   - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 和对应 `cited_branch_id / cited_refs_json` 发送
   - mobile sidebar sheet 已补 `SheetTitle / SheetDescription`；第一次 `Escape` 只关闭 sheet，不会误关外层 chamber
-- `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。桌面端现在按 non-modal 右侧 sidecar 挂载，移动端仍是 modal bottom sheet；有 origin 时会显示 `NodeContextBanner`，让用户看到当前追问来自哪个节点、哪一轮和哪段摘录。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，`/start` 和 `/turn` 会透传 origin branch / round / node / excerpt，SSE parser 也已兼容 multiline `data:` frame。bootstrap start 当前带 epoch guard；关闭或切换节点后的迟到 start response 不会再把旧 thread 写回当前 sheet。公共会话状态机在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，并用 committed turn 计数驱动结果页 deepen hint；不会再把 ghost 文本重新刷回 bubble 或 aria-live。结果页追问会使用 result context 的标题、说明和空态问题，不再套用“选择图节点”的文案。
+- `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。桌面端现在按 non-modal 右侧 sidecar 挂载，移动端仍是 modal bottom sheet；有 origin 时会显示 `NodeContextBanner`，让用户看到当前追问来自哪个节点、哪一轮、正在问谁、这张卡代表什么，以及它的前因/后续/关系。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，`/start` 和 `/turn` 会透传 origin branch / round / node / excerpt，SSE parser 也已兼容 multiline `data:` frame。bootstrap start 当前带 epoch guard；关闭或切换节点后的迟到 start response 不会再把旧 thread 写回当前 sheet。公共会话状态机在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，并用 committed turn 计数驱动结果页 deepen hint；committed assistant 文本会切到 `SafeMarkdown` 渲染，列表和加粗不会再显示成原始 Markdown。结果页追问会使用当前 result context 的标题、说明和空态问题，不再套用“选择图节点”的文案。
 - `DebateArenaView` 当前只允许在 live 当前 phase 的下注窗口打开/提交 quick counterplay；锁到历史 phase 时不再发起 counterplay。
 - `DebateArenaView` 当前在“当前 live phase”视图下会保留更早 phase 的已出现 turns，并以 `FoldableTurn` 历史卡形式继续展示；切到历史 phase 时仍只显示该 phase 自己的 turns。
 - Debate 的页面级播报当前只保留 phase cue；`SpotlightTurnCard` 的高亮态不再单独暴露 live-region 语义，避免同一轮变化在读屏器里重复播报。
@@ -344,8 +345,8 @@
 - `DebateResultView` 当前把 argument map 改成按需加载，并放回主结果壳内对齐：
   - 首屏只显示 `Load map / Hide map` 按钮和提示文案，不会默认把 React Flow 一起挂上来
   - 只有用户真正点开后才渲染 `ArgumentMap`，主要是为了减少结果页首屏额外开销
-- `ArgumentMap` 的节点对话当前需要调用方显式提供 `conversationScenarioId` 才会打开 `NodeConversationSheet`；`DebateArenaView` 和 `DebateResultView` 现在都传 `null`，所以 debate argument-map 节点暂时不会直接起对话，等真实 scenario id 接通后再开放。
-- `CausalReviewView` 的节点点击当前会同时打开详情和节点对话；节点对话固定传真实 `scenarioId`，`identityId` 保持为空，不再走假 id 或占位值。
+- `ArgumentMap` 的节点对话当前需要调用方显式提供 `conversationScenarioId` 才会打开 `NodeConversationSheet`；打开时会把附近最多 3 条论证关系作为 related context 传给 banner 和空态问题。`DebateArenaView` 和 `DebateResultView` 现在都传 `null`，所以 debate argument-map 节点暂时不会直接起对话，等真实 scenario id 接通后再开放。
+- `CausalReviewView` 的节点点击当前会同时打开详情和节点对话；节点对话固定传真实 `scenarioId`，`identityId` 保持为空，不再走假 id 或占位值。event 节点会尽量指向发言者；fork / outcome 等没有发言者的节点会走图谱解读 Agent / 结局解读 Agent 文案。
 - `DebateResultView` 当前的 replay 分享有两条只读路径：
   - URL 足够短时走内联 `?replay=`
   - URL 过长时，把 payload 落到本地存储后改走 `?local=`
@@ -406,9 +407,10 @@
 - `CausalReviewView` 当前在非交互 fallback（relationless snapshot / 大图 text fallback）时都会隐藏导出按钮，并且只保留一条具名的 a11y 列表；列表名会跟随当前语言本地化。
 - `CausalReviewView` 的 agent search 输入当前统一使用 `Search nodes or agents... / 搜索节点或 Agent...`；placeholder 和 `aria-label` 走同一条 i18n key。
 - `CausalReviewView` 当前补了 guide panel 和 explanatory empty-state：
-  - guide 会显示 full-graph 概览、key nodes 和说明文案
+  - guide 默认显示一句图谱概览和规模 chip，可继续展开详情，也可完全收起
+  - 展开后会显示分支去向、建议先看的节点、关系数说明和完整文本预览入口
   - close / show 两个按钮都带完整 disclosure `aria-expanded / aria-controls`
-  - key nodes 的可见标签会按近似显示宽度压短；完整 `label (degree)` 仍保留在 `aria-label / title`
+  - key nodes 的可见标签会按近似显示宽度压短；完整文本仍保留在 `aria-label / title`，长文本可用 `查看全文` 展开
   - guide / empty-state 文案当前集中走组件内 `CAUSAL_COLORS` dark-surface token，不再把正文直接压到低对比颜色
 - `CausalReviewView` 与 `ArgumentMap` 当前只会在图结构真的变化后重新 `fitView()`；search / status filter / branch 切换仍会重算视口，但选中节点或取消选中不会再把视口强制拉回去
 - `CausalReviewView` / `ArgumentMap` 的图节点、边、handle 可访问文案，以及 React Flow controls / `MiniMap` 文案当前都会跟随 UI 语言实时更新；切语言不会重打图请求。
@@ -416,6 +418,7 @@
 - 两个图面当前除了 node/unit 的 sr fallback list，也会额外输出本地化 relation list；因果图会保留 `causes / precedes`，`ArgumentMap` 会区分 `supports / rebuts / accepts / rejects / leaves unaddressed`，边语义不再只剩颜色和箭头。edge evidence 的 `low / medium / high` 也会走本地化文案，不再把 `[medium]` 这类原始值直接露出来。
 - `ArgumentMap` 当前在筛选结果为空时会保留筛选 chips 和 `Clear`，同时显示空态文案，不会把用户困在空态里；但这个空态只在当前图本来就有 `units` 时才会出现，node-only 图不会被状态筛选误筛成空白面板。
 - `ArgumentMap` / `NodeDetailPanel` 当前继续支持显示 `rejected` 状态；前端视觉 token 与后端合法状态口径已重新对齐
+- `NodeDetailPanel` 当前对 outcome / fork 会优先显示可读字段：结局详情、insight、概率、来源分支、分支原因、分支影响和子分支；没有这些语义字段时才回退 raw payload。
 - `ArgumentMap` 当前把 `verdict` 节点也接到共享 graph i18n label；节点可访问名称会跟随当前语言。
 - `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`；状态筛选激活时，摘要也会跟着当前可见 `units` 一起更新，不再继续显示全量分布。
 - `ArgumentMap` 当前在 compact viewport 下也会保留显式 controls 与本地化 mobile navigation hint；`prefers-reduced-motion` 下会关闭边动画、强度条宽度过渡和节点卡片 dim 过渡。

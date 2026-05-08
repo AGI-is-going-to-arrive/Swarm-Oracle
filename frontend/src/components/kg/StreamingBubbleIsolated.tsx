@@ -16,7 +16,9 @@
  * guards via internal `useRef` null checks.
  */
 
-import { memo, useCallback, useEffect, useRef } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+
+import { SafeMarkdown } from '../SafeMarkdown';
 
 export interface StreamingBubbleApi {
   /** Imperative; writes `delta` directly to DOM, no React re-render. */
@@ -49,6 +51,7 @@ export interface StreamingBubbleIsolatedProps {
 function StreamingBubbleIsolatedImpl(props: StreamingBubbleIsolatedProps) {
   const { initialText, onRef, className, testId } = props;
   const nodeRef = useRef<HTMLSpanElement | null>(null);
+  const [finalText, setFinalText] = useState<string | null>(null);
 
   // Wrap stable callbacks — each one internally null-checks nodeRef so
   // stale api references from StrictMode double-mount are safe.
@@ -60,13 +63,13 @@ function StreamingBubbleIsolatedImpl(props: StreamingBubbleIsolatedProps) {
   }, []);
 
   const finalize = useCallback((fullText: string) => {
-    if (!nodeRef.current) return;
-    nodeRef.current.textContent = fullText;
+    if (nodeRef.current) nodeRef.current.textContent = '';
+    setFinalText(fullText);
   }, []);
 
   const reset = useCallback(() => {
-    if (!nodeRef.current) return;
-    nodeRef.current.textContent = '';
+    setFinalText(null);
+    if (nodeRef.current) nodeRef.current.textContent = '';
   }, []);
 
   // Wire onRef on mount/unmount. Clean up FIRST so StrictMode double-mount
@@ -88,11 +91,21 @@ function StreamingBubbleIsolatedImpl(props: StreamingBubbleIsolatedProps) {
   }, [initialText]);
 
   return (
-    <span
-      ref={nodeRef}
+    <div
       className={className}
       data-testid={testId ?? 'node-conversation-streaming'}
-    />
+    >
+      <span
+        ref={nodeRef}
+        aria-hidden={finalText === null ? undefined : 'true'}
+        style={finalText === null ? undefined : { display: 'none' }}
+      />
+      {finalText !== null ? (
+        <SafeMarkdown className="node-conversation-markdown">
+          {finalText}
+        </SafeMarkdown>
+      ) : null}
+    </div>
   );
 }
 

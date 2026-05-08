@@ -30,7 +30,7 @@ import { ExportPanel } from './ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from './NodeDetailPanel';
 import GraphNodeCard from './GraphNodeCard';
 import AnimatedEdge from './AnimatedEdge';
-import { NodeConversationSheet } from './kg/NodeConversationSheet';
+import { NodeConversationSheet, type NodeConversationOrigin } from './kg/NodeConversationSheet';
 import {
   NODE_TYPE_COLORS_HEX,
   STATUS_COLORS_HEX,
@@ -496,7 +496,7 @@ interface ArgumentSheetState {
   open: boolean;
   scenarioId: string;
   identityId: string | null;
-  origin: { nodeId: string; nodeType: string; excerpt?: string };
+  origin: NodeConversationOrigin;
 }
 
 export function ArgumentMap({ debateId, visible, refreshTrigger, conversationScenarioId = null }: Props) {
@@ -870,13 +870,42 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     if (!conversationScenarioId) {
       return;
     }
+    const relatedContext = (filteredData?.edges ?? [])
+      .filter((edge) => edge.source === node.id || edge.target === node.id)
+      .slice(0, 3)
+      .flatMap((edge) => {
+        const otherId = edge.source === node.id ? edge.target : edge.source;
+        const other = rawNodeMap.get(otherId);
+        const otherLabel = other?.label?.trim();
+        if (!otherLabel) return [];
+        return [
+          t('argument.related_context_line', {
+            relation: getArgumentEdgeRelationLabel(edge, t),
+            label: otherLabel,
+            defaultValue: '{{relation}}: {{label}}',
+          }),
+        ];
+      });
     setSheetState({
       open: true,
       scenarioId: conversationScenarioId,
       identityId: null,
-      origin: { nodeId: node.id, nodeType, excerpt },
+      origin: {
+        surface: 'argument',
+        nodeId: node.id,
+        nodeType,
+        excerpt,
+        nodeLabel: raw?.label ?? unit?.text ?? node.id,
+        roundNumber: raw?.round ?? null,
+        targetLabel: t('node_context_banner.target_argument_analyst_label', 'Verdict graph analyst'),
+        targetDescription: t(
+          'node_context_banner.target_argument_analyst_description',
+          'Answers from this claim, evidence, or verdict and its nearby argument links.',
+        ),
+        relatedContext,
+      },
     });
-  }, [conversationScenarioId, rawNodeMap, unitByNodeId, unitById]);
+  }, [conversationScenarioId, filteredData?.edges, rawNodeMap, t, unitByNodeId, unitById]);
 
   // C3: Background click resets highlight + closes detail panel
   const onPaneClick = useCallback(() => {
