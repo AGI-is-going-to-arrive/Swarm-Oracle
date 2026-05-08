@@ -22,7 +22,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 首页高级设置当前还支持可选 `Organization ID`；值只在当前浏览器 session 内保存，并随请求头 `X-Org-Id` 透传，留空就不发送。
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。
 - 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑和选择自建 Agent；自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。
-- `SimulationView` 负责 live 推演、Theater、干预、玩法卡、结构化押注与 capture。
+- `SimulationView` 负责 live 推演、Classic 分支树、Theater、干预、玩法卡、结构化押注与 capture。Classic 分支卡片仍以 `Branch.title` 为真实标题；标题太短时，前端只补一小段 `description / fork_reason` 线索，方便用户看懂路线差异。
 - `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、campaign summary、分享、导出、结果追问与 replay/import；当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。`FEATURE_NEW_SOURCES=true` 且有 `family_context` 时，结果页当前还会渲染 `Polymarket / Finance / Academic / News` 四张 source family card；`polymarket.configured_host=non-us` 时会显示地域限制占位。结果页当前还新增了 capability-gated 的 `Explore Deeper` bridge（`causal / replay / compare / workbench`），workbench 文案会说明因果、知识图谱和节点追问在同一视图里查看；disabled 卡片保留 link 语义，但不再渲染无 `href` 的 `<a>`，文字对比也不再靠整卡 opacity 压低。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。结果页里的 `FactionTimeline` 当前会优先跟随正在展开查看的分支；未展开时会落到概率最高分支，并改成真实纵向时间线，`stance / confidence` 等指标直接可见，不再只藏在 tooltip badge 里。结果页的 compare / counterfactual 入口也跟随同一条 analysis branch 语义，不再固定拿 `branches[0]`；结果追问也跟随同一条 analysis branch，把当前结局标题、洞察、分支原因、关键时刻和对比分支传给对话面板。replay 模式下会继续保留 replay-safe 的 `causal graph` 入口和 `FactionTimeline`，但 `counterfactual / resume / result conversation` 这类 live-only 面板仍保持隐藏。标题、空态、轮次与事件标签都会跟随 UI 语言；FactionTimeline lead 文案当前也已走 i18n key + `{{title}}` 插值。`CompareDigestView` 的非活跃 pane 当前会保留更完整的待机镜像，不再是纯黑占位。前端 gated route 当前也把 `feature disabled` 和 `capability probe 失败` 分开显示：`ReplayView` 不再 silent redirect，`KGExplorerView / CompareDigestView / FactionTimeline` 也不再直接把原始错误字符串或所有异常压成空态。
 - replay 分支链路当前也已补硬化：`counterfactual` 会在 clone 前校验目标 round 里确实有该 agent 的消息；如果 seed 失败，会清理掉刚创建的脏 branch；`resume` 只有在预占 `simulation lock` 成功后才会返回 started。replay branch runtime lock 当前按 fail-closed 收口：续租返回 `None`、续租抛异常，或本地 lease 已过期时，都不会继续 clone / seed / schedule；heartbeat 会在请求内校验完成后才启动，避免同一请求自己和自己抢 SQLite 锁。若后台续跑期间丢掉预占的 `simulation lock`，任务也会直接 fail-closed 落成 `error`，不会失锁后继续跑；replay branch heartbeat 刷新异常时会释放原 lease，不再把后续请求卡到 TTL 过期。同分支重放更早轮次时，也会同步剪掉过期的 `AgentStateFrame / stance_shift`，不再把旧状态残留在当前图里。
 - graph viz 当前已收口：`CausalReviewView` 会忽略 stale branch 响应，branch 切换时会先清空旧图、导出面板和 server analysis；graph route fetch 里的 `scenarioId / debateId`，以及 `CausalReviewView` 返回结果页的 scenario link，也都会先做 `encodeURIComponent()`，带特殊字符的 id 不会再打坏请求或跳转。URL 里带不存在的 `branch_id` 时会直接报错，不再伪装成空图；分支 selector 会优先显示 scenario branch 的标题和概率，拿不到元数据时才回退 branch id；completed branch 当前会在因果图里显示为 `outcome` 结局节点，并由 `led_to` 边接到同分支最近的来源节点；只有源图本身就没有因果边时，`多节点但 0 edges` 才会切到本地化的 event snapshot fallback；如果只是 search / filter 把边筛空，交互图和导出入口仍会保留，不会把有边的图误判成 relationless fallback。
@@ -168,6 +168,13 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - 本次前端 TypeScript noEmit：通过
   - frontend 全量 vitest 最近一次记录为 `1790 passed`
   - 本轮真实验证还包括：
+    - Classic 分支标题定向验证：
+      - `cd frontend && npm exec -- vitest run src/components/BranchTree.test.tsx`：`5 passed`
+      - `cd frontend && npm exec -- eslint src/components/BranchTree.tsx src/components/BranchNode.tsx src/components/BranchTree.test.tsx src/components/branchTitle.ts`：通过
+      - `cd frontend && npm exec -- tsc --noEmit -p tsconfig.app.json`：通过
+      - `cd backend && source .venv/bin/activate && pytest tests/test_audit_fixes.py::TestForkPromptTemplateConsistency -q`：`31 passed`
+      - `cd backend && source .venv/bin/activate && pytest tests/test_simulator.py::TestDetectFork -q`：`4 passed`
+      - `cd backend && source .venv/bin/activate && ruff check app/services/simulator.py tests/test_audit_fixes.py`：通过
     - `cd backend && source .venv/bin/activate && ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
     - `cd frontend && npm exec -- tsc --noEmit -p tsconfig.app.json`：通过
     - frontend i18n 深层 key + placeholder parity：`1621 = 1621`，通过

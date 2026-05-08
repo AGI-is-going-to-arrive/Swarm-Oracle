@@ -20,6 +20,7 @@ import dagre from 'dagre';
 
 import { BranchNode } from './BranchNode';
 import { BranchEdge } from './BranchEdge';
+import { buildReadableBranchTitle } from './branchTitle';
 import { useSimulationStore } from '../stores/simulationStore';
 import type { Branch } from '../types';
 import './BranchTree.css';
@@ -38,7 +39,7 @@ const LAYOUT_CONFIG = {
 };
 
 const NODE_WIDTH = 340;
-const NODE_HEIGHT = 200;
+const NODE_HEIGHT = 224;
 
 function getLayoutedElements(rawNodes: Node[], rawEdges: Edge[]) {
   const g = new dagre.graphlib.Graph();
@@ -70,11 +71,19 @@ function buildBranchNodeData(
   branch: Branch,
   agentNames: string[],
   branchActivity: { thinking: number; recent: number },
+  isZh: boolean,
   onIntervene?: (branchId: string, title: string) => void,
   onDetail?: (branchId: string) => void,
 ) {
+  const rawTitle = branch.title || '';
   return {
-    title: branch.title || '',
+    title: buildReadableBranchTitle(
+      rawTitle,
+      branch.description,
+      branch.fork_reason,
+      isZh,
+    ),
+    rawTitle,
     description: branch.description,
     probability: branch.probability,
     status: branch.status,
@@ -93,6 +102,7 @@ function buildBranchNodeData(
 function layoutBranchesToFlow(
   branches: Branch[],
   agents: { id: string; name: string }[],
+  isZh: boolean,
   onIntervene?: (branchId: string, title: string) => void,
   onDetail?: (branchId: string) => void,
 ): {
@@ -109,7 +119,7 @@ function layoutBranchesToFlow(
       id: b.id,
       type: 'branchNode',
       position: { x: 0, y: 0 },
-      data: buildBranchNodeData(b, agentNames, { thinking: 0, recent: 0 }, onIntervene, onDetail),
+      data: buildBranchNodeData(b, agentNames, { thinking: 0, recent: 0 }, isZh, onIntervene, onDetail),
     };
   });
 
@@ -131,6 +141,7 @@ function applyBranchActivityToNodes(
   branches: Branch[],
   agents: { id: string; name: string }[],
   branchActivity: Record<string, { thinking: number; recent: number }>,
+  isZh: boolean,
   onIntervene?: (branchId: string, title: string) => void,
   onDetail?: (branchId: string) => void,
 ): Node[] {
@@ -143,20 +154,21 @@ function applyBranchActivityToNodes(
     const activity = branchActivity[branch.id] || { thinking: 0, recent: 0 };
     return {
       ...node,
-      data: buildBranchNodeData(branch, agentNames, activity, onIntervene, onDetail),
+      data: buildBranchNodeData(branch, agentNames, activity, isZh, onIntervene, onDetail),
     };
   });
 }
 
 // ── Component ───────────────────────────────────────────────
 export function BranchTree({ onIntervene, onDetail }: { onIntervene?: (branchId: string, title: string) => void; onDetail?: (branchId: string) => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const branches = useSimulationStore((s) => s.branches);
   const agents = useSimulationStore((s) => s.agents);
   const status = useSimulationStore((s) => s.status);
   const thinkingAgents = useSimulationStore((s) => s.thinkingAgents);
   const messages = useSimulationStore((s) => s.messages);
   const { fitView } = useReactFlow();
+  const isZh = (i18n.language || '').toLowerCase().startsWith('zh');
 
   // Compute per-branch activity: thinking count + recent messages (last 30s)
   const branchActivity = useMemo(() => {
@@ -179,13 +191,13 @@ export function BranchTree({ onIntervene, onDetail }: { onIntervene?: (branchId:
   }, [thinkingAgents, messages]);
 
   const { nodes: structuralNodes, edges: structuralEdges } = useMemo(
-    () => layoutBranchesToFlow(branches, agents, onIntervene, onDetail),
-    [branches, agents, onIntervene, onDetail],
+    () => layoutBranchesToFlow(branches, agents, isZh, onIntervene, onDetail),
+    [branches, agents, isZh, onIntervene, onDetail],
   );
 
   const layoutedNodes = useMemo(
-    () => applyBranchActivityToNodes(structuralNodes, branches, agents, branchActivity, onIntervene, onDetail),
-    [agents, branchActivity, branches, onDetail, onIntervene, structuralNodes],
+    () => applyBranchActivityToNodes(structuralNodes, branches, agents, branchActivity, isZh, onIntervene, onDetail),
+    [agents, branchActivity, branches, isZh, onDetail, onIntervene, structuralNodes],
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);

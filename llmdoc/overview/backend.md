@@ -34,7 +34,7 @@
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、narration 编排、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle) |
+| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle) |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
 | Memory | `backend/app/services/memory.py` | L1 压缩、context 组装 |
 | Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、缓存与上下文格式化 |
@@ -69,6 +69,8 @@
 - `Scenario.gameplay_state_json`
   玩法卡、押注、archive raw 的 authority。
 - 这两块都通过 `campaign` 路由读写，并带 `revision` 乐观并发控制。
+- fork detector 当前要求新分支标题写成“行动 + 目标/后果”。
+  这些标题仍作为 `Branch.title` 持久化，并随 `branch_fork` 事件广播给前端。
 
 ### Replay
 
@@ -344,6 +346,10 @@
 - backend 全量 `pytest`：`2412 passed, 2 skipped`
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 - custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；仓库级 `ruff check app/ tests/` 当前仍有历史无关 lint 存量，未在本轮文档里改写成已全绿。
+- Classic 分支标题提示本轮已补定向验证：
+  - `pytest tests/test_audit_fixes.py::TestForkPromptTemplateConsistency -q`：`31 passed`
+  - `pytest tests/test_simulator.py::TestDetectFork -q`：`4 passed`
+  - `ruff check app/services/simulator.py tests/test_audit_fixes.py`：通过
 
 ## WebSocket 口径
 

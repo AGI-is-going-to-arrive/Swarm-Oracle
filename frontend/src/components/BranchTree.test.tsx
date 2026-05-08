@@ -118,6 +118,7 @@ vi.mock('@xyflow/react', async () => {
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string) => key,
+    i18n: { language: 'zh-CN' },
   }),
 }));
 
@@ -125,7 +126,37 @@ vi.mock('../stores/simulationStore', () => ({
   useSimulationStore: (selector: (state: typeof mockStore) => unknown) => selector(mockStore),
 }));
 
+import { buildReadableBranchTitle } from './branchTitle';
 import { BranchTree } from './BranchTree';
+
+describe('buildReadableBranchTitle', () => {
+  it('adds the first description clue to terse Chinese branch titles', () => {
+    expect(buildReadableBranchTitle(
+      '固本再图北伐',
+      '诸葛亮把重心转向成都、汉中、剑阁的后方整备，优先固化粮道。',
+      '',
+      true,
+    )).toBe('固本再图北伐：诸葛亮把重心转向成都');
+  });
+
+  it('keeps already descriptive Chinese titles unchanged', () => {
+    expect(buildReadableBranchTitle(
+      '巩固粮道再北伐',
+      '诸葛亮把重心转向后方整备。',
+      '',
+      true,
+    )).toBe('巩固粮道再北伐');
+  });
+
+  it('adds a compact English clue to terse branch titles', () => {
+    expect(buildReadableBranchTitle(
+      'Total War',
+      'Cao Cao mobilizes two hundred thousand troops toward Jingzhou, forcing Liu Bei back.',
+      '',
+      false,
+    )).toBe('Total War: Cao Cao mobilizes two hundred thousand troops toward Jingzhou');
+  });
+});
 
 describe('BranchTree', () => {
   beforeEach(() => {

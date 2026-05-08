@@ -653,6 +653,15 @@ def _resolve_hierarchical_agent_sets(
 # Keys: preamble, criteria, reason_hint, title_hint, desc_hint, postamble
 # Empty string means the section is omitted for that variant.
 
+ZH_BRANCH_TITLE_HINT = (
+    "清晰的分支标题（10-18字，写成“行动 + 目标/后果”，"
+    "如：巩固粮道再北伐、急攻关中抢战机）"
+)
+EN_BRANCH_TITLE_HINT = (
+    "A clear branch title (5-10 words, action + expected consequence, "
+    "e.g. Secure Supply Lines Before Northern Push)"
+)
+
 _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
     # ---- Chinese variants ----------------------------------------------------
     ("Chinese", "a"): {
@@ -663,14 +672,15 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
             "2. 如果存在实质分歧，它会导致几条截然不同的历史走向？"
         ),
         "reason_hint": "一句话说明分歧的核心是什么",
-        "title_hint": "简短生动的走向标题（6-12字，如：火星殖民计划启动、地球建立统一防线）",
+        "title_hint": ZH_BRANCH_TITLE_HINT,
         "desc_hint": "这条路线独有的发展路径是什么？具体描述这一条走向的核心走势和结果（每条必须不同！）",  # noqa: E501
         "postamble": (
             "标题写法要求:\n"
-            "- 标题要像新闻标题一样吸引眼球，不要用\"走向A\"这种抽象表达\n"
-            "- 每个标题用最具辨识度的关键词，让人一眼看懂这条路线的核心区别\n"
-            "- 好的例子: \"全面开战\"、\"和谈妥协\"、\"技术突围\"、\"联盟瓦解\"\n"
-            "- 坏的例子: \"积极发展路线\"、\"保守应对方案\"、\"第一种可能性\"\n"
+            "- 标题要像新闻标题一样清楚，不要用\"走向A\"这种抽象表达\n"
+            "- 每个标题必须让人一眼看懂这条路线的行动和后果\n"
+            "- 避免只写四字词、诗化短句或内部黑话，除非标题本身已经说明具体动作\n"
+            "- 好的例子: \"巩固粮道再北伐\"、\"急攻关中抢战机\"、\"议和换取整军时间\"\n"
+            "- 坏的例子: \"全面开战\"、\"保守应对\"、\"第一种可能性\"\n"
             "\n"
             "描述写法要求:\n"
             "- 每条分支的 description 必须各不相同，具体描述该路线独有的发展走势\n"
@@ -689,7 +699,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
             "4. 若 should_fork=true，请尽量压缩成 2-4 条最具代表性的未来路径。"
         ),
         "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
-        "title_hint": "简短生动的走向标题（6-12字）",
+        "title_hint": ZH_BRANCH_TITLE_HINT,
         "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
         "postamble": "",
     },
@@ -700,7 +710,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         ),
         "criteria": "其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。",  # noqa: E501
         "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
-        "title_hint": "简短生动的走向标题（6-12字）",
+        "title_hint": ZH_BRANCH_TITLE_HINT,
         "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
         "postamble": "",
     },
@@ -711,7 +721,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         ),
         "criteria": "其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。",  # noqa: E501
         "reason_hint": "一句话说明这些分歧为何会或不会形成制度/责任/审批层面的分叉",
-        "title_hint": "简短生动的走向标题（6-12字）",
+        "title_hint": ZH_BRANCH_TITLE_HINT,
         "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
         "postamble": "",
     },
@@ -723,7 +733,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         ),
         "criteria": "",
         "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
-        "title_hint": "简短生动的走向标题（6-12字）",
+        "title_hint": ZH_BRANCH_TITLE_HINT,
         "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
         "postamble": "",
     },
@@ -736,7 +746,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         ),
         "criteria": "",
         "reason_hint": "一句话说明这些分歧为何会或不会形成互斥未来",
-        "title_hint": "简短生动的走向标题（6-12字）",
+        "title_hint": ZH_BRANCH_TITLE_HINT,
         "desc_hint": "这条路线独有的发展路径是什么？必须具体，不得与其它分支重复",
         "postamble": (
             "额外要求:\n"
@@ -754,14 +764,15 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
             "2. If a material split exists, how many genuinely different future paths does it create?"  # noqa: E501
         ),
         "reason_hint": "One sentence describing the core disagreement",
-        "title_hint": "A vivid future-path title (3-8 words, e.g. Mars Colony Launches, Earth Forms A Unified Front)",  # noqa: E501
+        "title_hint": EN_BRANCH_TITLE_HINT,
         "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Every branch must be meaningfully different.",  # noqa: E501
         "postamble": (
             "Title requirements:\n"
-            "- Titles should read like sharp headlines, not abstract placeholders such as 'Path A'\n"  # noqa: E501
-            "- Use the most distinctive keywords so the difference is obvious at a glance\n"
-            "- Good examples: \"Total War\", \"Negotiated Peace\", \"Tech Breakthrough\", \"Alliance Collapse\"\n"  # noqa: E501
-            "- Bad examples: \"Aggressive Development Path\", \"Conservative Response Plan\", \"First Possibility\"\n"  # noqa: E501
+            "- Titles should read like clear headlines, not abstract placeholders such as 'Path A'\n"  # noqa: E501
+            "- Each title must make the route's action and consequence obvious at a glance\n"
+            "- Avoid cryptic two-word labels unless the concrete action is already clear\n"
+            "- Good examples: \"Secure Supply Lines Before Northern Push\", \"Rush Guanzhong Before Wei Regroups\", \"Trade Truce For Time To Rebuild\"\n"  # noqa: E501
+            "- Bad examples: \"Total War\", \"Conservative Response Plan\", \"First Possibility\"\n"  # noqa: E501
             "\n"
             "Description requirements:\n"
             "- Each branch description must be concrete and different from the others\n"
@@ -782,7 +793,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         "reason_hint": (
             "One sentence on why these disagreements do or do not create incompatible futures"
         ),
-        "title_hint": "A vivid future-path title (3-8 words)",
+        "title_hint": EN_BRANCH_TITLE_HINT,
         "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
         "postamble": "",
     },
@@ -795,7 +806,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         "reason_hint": (
             "One sentence on why these disagreements do or do not create incompatible futures"
         ),
-        "title_hint": "A vivid future-path title (3-8 words)",
+        "title_hint": EN_BRANCH_TITLE_HINT,
         "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
         "postamble": "",
     },
@@ -806,7 +817,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         ),
         "criteria": "All other baseline expectations remain: do not fork on wording differences, evidence-threshold differences, or implementation details alone.",  # noqa: E501
         "reason_hint": "One sentence on why these disagreements do or do not create a fork in institutions, approvals, or responsibility chains",  # noqa: E501
-        "title_hint": "A vivid future-path title (3-8 words)",
+        "title_hint": EN_BRANCH_TITLE_HINT,
         "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
         "postamble": "",
     },
@@ -819,7 +830,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         "reason_hint": (
             "One sentence on why these disagreements do or do not create incompatible futures"
         ),
-        "title_hint": "A vivid future-path title (3-8 words)",
+        "title_hint": EN_BRANCH_TITLE_HINT,
         "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
         "postamble": "",
     },
@@ -833,7 +844,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
         "reason_hint": (
             "One sentence on why these disagreements do or do not create incompatible futures"
         ),
-        "title_hint": "A vivid future-path title (3-8 words)",
+        "title_hint": EN_BRANCH_TITLE_HINT,
         "desc_hint": "Describe the unique trajectory and outcome of this branch in concrete terms. Do not repeat other branches.",  # noqa: E501
         "postamble": (
             "Additional rules:\n"

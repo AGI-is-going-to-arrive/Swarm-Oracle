@@ -11,6 +11,7 @@ import './BranchNode.css';
 
 interface BranchNodeData {
   title: string;
+  rawTitle?: string;
   description?: string;
   probability: number;
   status: BranchStatus;
@@ -128,7 +129,7 @@ function BranchNodeComponent({ data }: { data: BranchNodeData }) {
           className="branch-node__intervene"
           onClick={(e) => {
             e.stopPropagation();
-            data.onIntervene!(data.branchId!, title || '');
+            data.onIntervene!(data.branchId!, data.rawTitle || title || '');
           }}
         >
           {t('sim.tree.intervene')}

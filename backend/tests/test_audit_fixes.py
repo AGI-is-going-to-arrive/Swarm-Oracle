@@ -375,6 +375,14 @@ class TestForkPromptTemplateConsistency:
         template = _get_fork_prompt_template(language, variant)
         assert "{language_directive}" in template
 
+    @pytest.mark.parametrize("variant", ["a", "b", "c", "d", "e", "f"])
+    def test_template_guides_branch_titles_toward_action_and_outcome(self, variant):
+        zh_template = _get_fork_prompt_template("Chinese", variant)
+        en_template = _get_fork_prompt_template("English", variant)
+
+        assert "行动 + 目标/后果" in zh_template
+        assert "action + expected consequence" in en_template
+
     def test_unknown_variant_falls_back_to_a(self):
         default_zh = _get_fork_prompt_template("Chinese", "a")
         fallback_zh = _get_fork_prompt_template("Chinese", "z")
