@@ -101,6 +101,24 @@ def test_finalize_accumulates_campaign_score_and_summaries():
 
     assert result["already_finalized"] is False
     assert result["campaign_score_delta"] == 9
+    assert sum(
+        item["points"] for item in result["score_breakdown"] if item["applied"]
+    ) == result["campaign_score_delta"]
+    assert [
+        item["id"]
+        for item in result["score_breakdown"]
+        if item["applied"] and item["points"] != 0
+    ] == [
+        "completed_run",
+        "daily_challenge",
+        "profile_signature",
+        "bet_placed",
+        "bet_hit",
+        "archive_s",
+    ]
+    assert next(
+        item for item in result["score_breakdown"] if item["id"] == "commitment_none"
+    )["applied"] is True
     assert result["profile"]["total_runs"] == 1
     assert result["profile"]["completed_challenges"] == 1
     assert result["profile"]["total_bets"] == 2
@@ -163,6 +181,21 @@ def test_finalize_rewards_completed_objectives_and_commitment_hit():
     )
 
     assert result["campaign_score_delta"] == 6
+    assert [
+        item["id"]
+        for item in result["score_breakdown"]
+        if item["applied"] and item["points"] != 0
+    ] == [
+        "completed_run",
+        "profile_aligned",
+        "bet_placed",
+        "archive_a",
+        "objectives_complete",
+        "commitment_hit",
+    ]
+    assert next(
+        item for item in result["score_breakdown"] if item["id"] == "bet_miss"
+    )["applied"] is True
 
 
 def test_finalize_penalizes_commitment_miss_without_dropping_below_one():
@@ -185,6 +218,14 @@ def test_finalize_penalizes_commitment_miss_without_dropping_below_one():
     )
 
     assert result["campaign_score_delta"] == 1
+    assert next(
+        item for item in result["score_breakdown"] if item["id"] == "commitment_miss"
+    ) == {
+        "id": "commitment_miss",
+        "label_key": "result.director_score_commitment_miss",
+        "points": -1,
+        "applied": True,
+    }
 
 
 def test_finalize_uses_gameplay_bet_count_when_request_under_reports_it():

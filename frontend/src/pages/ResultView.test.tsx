@@ -122,6 +122,17 @@ const {
       'result.archive_worldline_commitment_label': 'Worldline Commitment',
       'result.archive_signature_arc_label': 'Signature Arc',
       'result.archive_system_tracks_label': 'System Tracks',
+      'result.director_debrief_action_anchor_kicker': 'Use this run',
+      'result.director_debrief_action_anchor_title': 'Recheck {{branch}}',
+      'result.director_debrief_action_anchor_title_fallback': 'Recheck the decisive branch',
+      'result.director_debrief_action_anchor_detail': 'Key moment: {{moment}}',
+      'result.director_debrief_action_anchor_detail_fallback': 'Open the notebook for branch, goals, bets, and moments.',
+      'result.director_debrief_action_analysis_kicker': 'Tune next run',
+      'result.director_debrief_action_analysis_title_fallback': 'Open analysis tools',
+      'result.director_debrief_action_conversation_kicker': 'Ask next',
+      'result.director_debrief_action_conversation_title': 'Ask about this result',
+      'result.director_debrief_action_conversation_detail': 'Start from this branch context instead of a generic chat.',
+      'result.director_debrief_action_conversation_unavailable': 'Live conversation is unavailable here; use the saved debrief and analysis links.',
       'result.ending_room_picker_title': 'Pick visible participants for this worldline',
       'result.ending_room_picker_limit': 'Select up to {{count}}',
       'result.ending_room_picker_empty': 'No visible worldline roster is available here yet. The chamber will fall back to the default room selection.',
@@ -1136,8 +1147,18 @@ describe('ResultView campaign summary', () => {
     expect(screen.getByText('Lv.2')).toBeInTheDocument();
     expect(screen.getByText('5 points to next unlock')).toBeInTheDocument();
     expect(screen.getByText('Archive Record')).toBeInTheDocument();
-    expect(screen.getByText('Audit Pullback')).toBeInTheDocument();
-    expect(screen.getByText('result.director_debrief_score_completed')).toBeInTheDocument();
+    expect(screen.getAllByText('Audit Pullback').length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: /Recheck Archive Branch/ })).toHaveAttribute(
+      'href',
+      '#result-director-notebook',
+    );
+    expect(screen.getByRole('link', { name: /Audit Pullback/ })).toHaveAttribute(
+      'href',
+      '#result-bridge',
+    );
+    expect(screen.getByText('Live conversation is unavailable here; use the saved debrief and analysis links.')).toBeInTheDocument();
+    expect(screen.getByText('result.director_score_completed_run')).toBeInTheDocument();
+    expect(screen.getAllByText('What if the archive had to sync?').length).toBeGreaterThan(1);
   });
 
   it('does not refetch or finalize again when only the language changes', async () => {
@@ -2582,7 +2603,11 @@ describe('ResultView campaign summary', () => {
     );
 
     expect(await screen.findAllByText('Archive Branch')).not.toHaveLength(0);
-    expect(screen.getByText('Remote key moment')).toBeInTheDocument();
+    expect(screen.getAllByText('Remote key moment').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('What if the archive had to sync?').length).toBeGreaterThan(0);
+    expect(screen.getByText('result.archive_group_actions')).toBeInTheDocument();
+    expect(screen.getByText('result.archive_evidence_title')).toBeInTheDocument();
+    expect(screen.getByText('result.archive_cards_empty_short')).toBeInTheDocument();
     expect(screen.getByText('result.archive_branches_section')).toBeInTheDocument();
 
     await waitFor(() => {
@@ -2994,9 +3019,9 @@ describe('ResultView campaign summary', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Keep the local public hearing trail.')).toBeInTheDocument();
+    expect((await screen.findAllByText('Keep the local public hearing trail.')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Local Branch').length).toBeGreaterThan(0);
-    expect(screen.getByText('Remote key moment')).toBeInTheDocument();
+    expect(screen.getAllByText('Remote key moment').length).toBeGreaterThan(0);
     expect(screen.queryByText('Stale local moment')).not.toBeInTheDocument();
 
     await waitFor(() => {

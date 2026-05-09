@@ -48,7 +48,6 @@ export interface UseScenarioGraphResult {
 
 const inflightRequests = new Map<string, Promise<GraphPayload>>();
 
-// eslint-disable-next-line react-refresh/only-export-components
 export function resetInflightForTesting(): void {
   if (process.env.NODE_ENV === 'test' || import.meta.env?.MODE === 'test') {
     inflightRequests.clear();

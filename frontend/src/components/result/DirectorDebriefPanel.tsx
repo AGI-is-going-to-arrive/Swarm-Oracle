@@ -7,6 +7,7 @@ import {
 import type {
   CampaignFinalizeResult,
   CampaignScenarioSummary,
+  CampaignScoreBreakdownItem,
 } from '../../types';
 
 type CampaignResonance = CampaignScenarioSummary['profile_resonance'];
@@ -43,8 +44,53 @@ interface DirectorTacticalState {
   focusCards: GameplayCardId[];
 }
 
+type DirectorMomentKind = 'card' | 'bet' | 'commitment' | 'story';
+type DirectorBetOutcome = 'hit' | 'miss' | 'pending';
+
+interface DirectorWorldlineSummary {
+  title: string | null;
+  insight?: string | null;
+  forkReason?: string | null;
+  comparisonTitles?: string[];
+}
+
+interface DirectorCommitmentSummary {
+  active: boolean;
+  branchTitle?: string | null;
+  committedAtRound?: number | null;
+  outcome?: CampaignCommitmentOutcome | null;
+}
+
+interface DirectorBetHighlight {
+  targetLabel: string;
+  confidence: number;
+  placedAtRound: number;
+  outcome: DirectorBetOutcome;
+}
+
+interface DirectorMomentHighlight {
+  id: string;
+  kind: DirectorMomentKind;
+  label: string;
+  round?: number;
+  detail?: string;
+}
+
+interface DirectorInterventionSummary {
+  cardLabel: string;
+  branchTitle: string;
+  round: number;
+  directive: string;
+}
+
 export interface DirectorDebriefPanelProps {
   campaignSummary: CampaignFinalizeResult;
+  scenarioQuestion?: string | null;
+  worldlineSummary?: DirectorWorldlineSummary | null;
+  commitmentSummary?: DirectorCommitmentSummary | null;
+  betHighlights?: DirectorBetHighlight[];
+  momentHighlights?: DirectorMomentHighlight[];
+  interventionSummary?: DirectorInterventionSummary | null;
   profileLabel: string | null;
   profileHooks: string[];
   archiveGrade: string | null;
@@ -63,12 +109,11 @@ export interface DirectorDebriefPanelProps {
   systemTracks: DirectorSystemTracks | null;
   tacticalState: DirectorTacticalState | null;
   newlyUnlockedBadges: DirectorBadgeItem[];
-}
-
-interface ScoreFactor {
-  id: string;
-  label: string;
-  value: number;
+  dominantBranchTitle?: string | null;
+  keyMoments?: string[];
+  notebookHref?: string | null;
+  analysisHref?: string | null;
+  conversationHref?: string | null;
 }
 
 function scoreText(value: number): string {
@@ -79,8 +124,52 @@ function clampProgress(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+function clampTrack(value: number): number {
+  return Math.max(0, Math.min(6, Math.round(value)));
+}
+
+function DirectorActionCard({
+  href,
+  kicker,
+  title,
+  detail,
+}: {
+  href: string | null | undefined;
+  kicker: string;
+  title: string;
+  detail: string;
+}) {
+  const content = (
+    <>
+      <span className="director-debrief__action-kicker">{kicker}</span>
+      <strong>{title}</strong>
+      <span>{detail}</span>
+    </>
+  );
+
+  if (href) {
+    return (
+      <a className="director-debrief__action-card" href={href}>
+        {content}
+      </a>
+    );
+  }
+
+  return (
+    <div className="director-debrief__action-card is-disabled" aria-disabled="true">
+      {content}
+    </div>
+  );
+}
+
 export function DirectorDebriefPanel({
   campaignSummary,
+  scenarioQuestion = null,
+  worldlineSummary = null,
+  commitmentSummary = null,
+  betHighlights = [],
+  momentHighlights = [],
+  interventionSummary = null,
   profileLabel,
   profileHooks,
   archiveGrade,
@@ -99,89 +188,50 @@ export function DirectorDebriefPanel({
   systemTracks,
   tacticalState,
   newlyUnlockedBadges,
+  dominantBranchTitle = null,
+  keyMoments = [],
+  notebookHref = null,
+  analysisHref = null,
+  conversationHref = null,
 }: DirectorDebriefPanelProps) {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
 
-  const scoreFactors = useMemo<ScoreFactor[]>(() => {
-    const factors: ScoreFactor[] = [{
-      id: 'completed-run',
-      label: t('result.director_debrief_score_completed'),
-      value: 1,
-    }];
+  const fallbackScoreFactors = useMemo<CampaignScoreBreakdownItem[]>(() => {
+    const factors: CampaignScoreBreakdownItem[] = [];
+    const add = (id: string, points: number, applied: boolean) => {
+      factors.push({
+        id,
+        label_key: `result.director_score_${id}`,
+        points,
+        applied,
+      });
+    };
 
-    if (isDailyChallenge) {
-      factors.push({
-        id: 'daily-challenge',
-        label: t('result.director_debrief_score_daily'),
-        value: 1,
-      });
-    }
+    add('completed_run', 1, true);
+    add('daily_challenge', 1, isDailyChallenge);
 
-    if (profileResonance === 'signature') {
-      factors.push({
-        id: 'profile-signature',
-        label: t('result.director_debrief_score_signature'),
-        value: 2,
-      });
-    } else if (profileResonance === 'aligned') {
-      factors.push({
-        id: 'profile-aligned',
-        label: t('result.director_debrief_score_aligned'),
-        value: 1,
-      });
-    }
+    add('profile_signature', 2, profileResonance === 'signature');
+    add('profile_aligned', 1, profileResonance === 'aligned');
+    add('profile_offbeat', 0, profileResonance === 'offbeat');
 
-    if (betCount > 0) {
-      factors.push({
-        id: 'bet-placed',
-        label: t('result.director_debrief_score_bet'),
-        value: 1,
-      });
-    }
-    if (bettingHit === true) {
-      factors.push({
-        id: 'bet-hit',
-        label: t('result.director_debrief_score_bet_hit'),
-        value: 2,
-      });
-    }
+    add('bet_placed', 1, betCount > 0 || bettingHit != null);
+    add('bet_hit', 2, bettingHit === true);
+    add('bet_miss', 0, bettingHit === false);
+    add('bet_none', 0, betCount <= 0 && bettingHit == null);
 
-    if (archiveGrade === 'S') {
-      factors.push({
-        id: 'archive-s',
-        label: t('result.director_debrief_score_archive_s'),
-        value: 2,
-      });
-    } else if (archiveGrade === 'A') {
-      factors.push({
-        id: 'archive-a',
-        label: t('result.director_debrief_score_archive_a'),
-        value: 1,
-      });
-    }
+    add('archive_s', 2, archiveGrade === 'S');
+    add('archive_a', 1, archiveGrade === 'A');
+    add('archive_lower', 0, archiveGrade != null && !['S', 'A'].includes(archiveGrade));
 
-    if (objectiveTotalCount > 0 && objectiveCompletedCount >= objectiveTotalCount) {
-      factors.push({
-        id: 'objectives',
-        label: t('result.director_debrief_score_objectives'),
-        value: 1,
-      });
-    }
+    const objectivesComplete = objectiveTotalCount > 0 && objectiveCompletedCount >= objectiveTotalCount;
+    add('objectives_complete', 1, objectivesComplete);
+    add('objectives_incomplete', 0, objectiveTotalCount > 0 && !objectivesComplete);
 
-    if (commitmentOutcome === 'hit') {
-      factors.push({
-        id: 'commitment-hit',
-        label: t('result.director_debrief_score_commitment_hit'),
-        value: 1,
-      });
-    } else if (commitmentOutcome === 'miss') {
-      factors.push({
-        id: 'commitment-miss',
-        label: t('result.director_debrief_score_commitment_miss'),
-        value: -1,
-      });
-    }
+    add('commitment_hit', 1, commitmentOutcome === 'hit');
+    add('commitment_miss', -1, commitmentOutcome === 'miss');
+    add('commitment_pending', 0, commitmentOutcome === 'pending');
+    add('commitment_none', 0, commitmentOutcome == null);
 
     return factors;
   }, [
@@ -193,8 +243,14 @@ export function DirectorDebriefPanel({
     objectiveCompletedCount,
     objectiveTotalCount,
     profileResonance,
-    t,
   ]);
+  const scoreFactors = useMemo(() => {
+    const source = campaignSummary.score_breakdown?.length
+      ? campaignSummary.score_breakdown
+      : fallbackScoreFactors;
+    const applied = source.filter((factor) => factor.applied);
+    return applied.length > 0 ? applied : source.slice(0, 1);
+  }, [campaignSummary.score_breakdown, fallbackScoreFactors]);
 
   const nextScore = campaignSummary.mastery.next_level_score;
   const campaignScore = campaignSummary.mastery.campaign_score;
@@ -214,6 +270,54 @@ export function DirectorDebriefPanel({
   const focusCards = tacticalState?.focusCards.slice(0, 3).map((cardId) => (
     isZh ? getGameplayCardDefinition(cardId).labelZh : getGameplayCardDefinition(cardId).labelEn
   )) ?? [];
+  const firstKeyMoment = keyMoments.map((moment) => moment.trim()).find(Boolean) ?? null;
+  const firstMomentHighlight = momentHighlights[0] ?? null;
+  const scenarioQuestionText = scenarioQuestion?.trim() || null;
+  const worldlineTitle = worldlineSummary?.title?.trim()
+    || dominantBranchTitle
+    || t('result.director_debrief_worldline_unknown');
+  const worldlineDetail = worldlineSummary?.insight?.trim()
+    || worldlineSummary?.forkReason?.trim()
+    || (
+      (worldlineSummary?.comparisonTitles?.length ?? 0) > 0
+        ? t('result.director_debrief_worldline_compared', {
+            branches: worldlineSummary?.comparisonTitles?.join(' / '),
+          })
+        : t('result.director_debrief_worldline_detail_fallback')
+    );
+  const commitmentTitle = commitmentSummary?.active && commitmentSummary.branchTitle
+    ? commitmentSummary.branchTitle
+    : t('result.director_debrief_commitment_none_title');
+  const commitmentDetail = commitmentSummary?.active
+    ? (
+      typeof commitmentSummary.committedAtRound === 'number'
+        ? t('result.director_debrief_commitment_detail', {
+            outcome: commitmentOutcomeLabel,
+            round: commitmentSummary.committedAtRound,
+          })
+        : t('result.director_debrief_commitment_detail_no_round', {
+            outcome: commitmentOutcomeLabel,
+          })
+    )
+    : t('result.director_debrief_commitment_none_detail');
+  const topBet = betHighlights.find((entry) => entry.outcome !== 'pending') ?? betHighlights[0] ?? null;
+  const topBetConfidencePercent = topBet
+    ? Math.round(topBet.confidence <= 1 ? topBet.confidence * 100 : topBet.confidence)
+    : null;
+  const betOutcomeLabel = topBet
+    ? t(`result.bet_status_${topBet.outcome}`)
+    : t('result.director_debrief_no_bets');
+  const momentRows = momentHighlights.length > 0
+    ? momentHighlights
+    : firstKeyMoment
+      ? [{
+          id: 'story-fallback',
+          kind: 'story' as DirectorMomentKind,
+          label: firstKeyMoment,
+        }]
+      : [];
+  const riskPercent = systemTracks ? clampProgress((clampTrack(systemTracks.riskValue) / 6) * 100) : 0;
+  const resourcePercent = systemTracks ? clampProgress((clampTrack(systemTracks.resourceValue) / 6) * 100) : 0;
 
   return (
     <section className="result-campaign" aria-labelledby="director-debrief-title">
@@ -230,6 +334,81 @@ export function DirectorDebriefPanel({
           })}
         </p>
       </div>
+
+      <div className="director-debrief__question">
+        <span>{t('result.director_debrief_question_label')}</span>
+        <strong>
+          {scenarioQuestionText ?? t('result.director_debrief_question_empty')}
+        </strong>
+      </div>
+
+      <div className="director-debrief__summary-grid">
+        <article className="director-debrief__summary-item">
+          <span>{t('result.director_debrief_worldline_title')}</span>
+          <strong>{worldlineTitle}</strong>
+          <p>{worldlineDetail}</p>
+        </article>
+        <article className="director-debrief__summary-item">
+          <span>{t('result.director_debrief_commitment_title')}</span>
+          <strong>{commitmentTitle}</strong>
+          <p>{commitmentDetail}</p>
+        </article>
+        <article className="director-debrief__summary-item">
+          <span>{t('result.director_debrief_bet_title')}</span>
+          <strong>
+            {topBet
+              ? t('result.director_debrief_bet_target', { target: topBet.targetLabel })
+              : t('result.director_debrief_bet_none_title')}
+          </strong>
+          <p>
+            {topBet
+              ? t('result.director_debrief_bet_detail', {
+                  outcome: betOutcomeLabel,
+                  confidence: topBetConfidencePercent,
+                  round: topBet.placedAtRound,
+                })
+              : t('result.director_debrief_bet_none_detail')}
+          </p>
+        </article>
+      </div>
+
+      {interventionSummary && (
+        <article className="director-debrief__intervention">
+          <div>
+            <span>{t('result.director_debrief_intervention_title')}</span>
+            <strong>
+              {t('result.director_debrief_intervention_detail', {
+                card: interventionSummary.cardLabel,
+                branch: interventionSummary.branchTitle,
+                round: interventionSummary.round,
+              })}
+            </strong>
+          </div>
+          <p>{interventionSummary.directive}</p>
+        </article>
+      )}
+
+      {momentRows.length > 0 && (
+        <div className="director-debrief__moments">
+          <span>{t('result.director_debrief_moments_title')}</span>
+          <ul>
+            {momentRows.map((moment) => (
+              <li key={moment.id}>
+                <small>
+                  {moment.round
+                    ? t('result.director_debrief_moment_with_round', {
+                        kind: t(`result.director_debrief_moment_${moment.kind}`),
+                        round: moment.round,
+                      })
+                    : t(`result.director_debrief_moment_${moment.kind}`)}
+                </small>
+                <strong>{moment.label}</strong>
+                {moment.detail && <p>{moment.detail}</p>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="director-debrief__metrics" aria-label={t('result.director_debrief_metrics_aria')}>
         <div className="director-debrief__metric director-debrief__metric--primary">
@@ -284,52 +463,52 @@ export function DirectorDebriefPanel({
         </div>
       </div>
 
+      <div className="director-debrief__actions" aria-label={t('result.director_debrief_actions_aria')}>
+        <DirectorActionCard
+          href={notebookHref}
+          kicker={t('result.director_debrief_action_anchor_kicker')}
+          title={dominantBranchTitle
+            ? t('result.director_debrief_action_anchor_title', { branch: dominantBranchTitle })
+            : t('result.director_debrief_action_anchor_title_fallback')}
+          detail={firstMomentHighlight
+            ? t('result.director_debrief_action_anchor_detail_structured', {
+                kind: t(`result.director_debrief_moment_${firstMomentHighlight.kind}`),
+                moment: firstMomentHighlight.label,
+              })
+            : firstKeyMoment
+              ? t('result.director_debrief_action_anchor_detail', { moment: firstKeyMoment })
+            : t('result.director_debrief_action_anchor_detail_fallback')}
+        />
+        <DirectorActionCard
+          href={analysisHref}
+          kicker={t('result.director_debrief_action_analysis_kicker')}
+          title={tacticalState?.label ?? t('result.director_debrief_action_analysis_title_fallback')}
+          detail={tacticalState?.note ?? t('result.director_debrief_next_fallback')}
+        />
+        <DirectorActionCard
+          href={conversationHref}
+          kicker={t('result.director_debrief_action_conversation_kicker')}
+          title={t('result.director_debrief_action_conversation_title')}
+          detail={conversationHref
+            ? t('result.director_debrief_action_conversation_detail')
+            : t('result.director_debrief_action_conversation_unavailable')}
+        />
+      </div>
+
       <div className="director-debrief__columns">
         <article className="director-debrief__block">
           <h3>{t('result.director_debrief_score_title')}</h3>
           <ul className="director-debrief__score-list">
             {scoreFactors.map((factor) => (
               <li key={factor.id}>
-                <span>{factor.label}</span>
-                <strong className={factor.value < 0 ? 'is-negative' : undefined}>
-                  {scoreText(factor.value)}
+                <span>{t(factor.label_key, { defaultValue: factor.id.replaceAll('_', ' ') })}</span>
+                <strong className={factor.points < 0 ? 'is-negative' : undefined}>
+                  {scoreText(factor.points)}
                 </strong>
               </li>
             ))}
           </ul>
           <p>{t('result.director_debrief_score_total', { total: campaignSummary.campaign_score_delta })}</p>
-        </article>
-
-        <article className="director-debrief__block">
-          <h3>{t('result.director_debrief_next_title')}</h3>
-          <p>
-            {tacticalState?.note
-              ?? t('result.director_debrief_next_fallback')}
-          </p>
-          <div className="director-debrief__chips">
-            {tacticalState && (
-              <span className="director-debrief__chip director-debrief__chip--strong">
-                {tacticalState.label}
-              </span>
-            )}
-            {nextCardLabel && (
-              <span className="director-debrief__chip">
-                {t('result.director_debrief_next_card', { card: nextCardLabel })}
-              </span>
-            )}
-            {focusCards.map((card) => (
-              <span key={card} className="director-debrief__chip">{card}</span>
-            ))}
-          </div>
-          {signatureArc && (
-            <small>
-              {t('result.director_debrief_arc_progress', {
-                arc: signatureArc.label,
-                completed: signatureArc.completedSteps,
-                total: signatureArc.totalSteps,
-              })}
-            </small>
-          )}
         </article>
 
         <article className="director-debrief__block">
@@ -357,11 +536,41 @@ export function DirectorDebriefPanel({
               <>
                 <div>
                   <dt>{systemTracks.riskLabel}</dt>
-                  <dd>{systemTracks.riskValue}/6 · {systemTracks.pressure}</dd>
+                  <dd className="director-debrief__track-value">
+                    <span>{systemTracks.riskValue}/6 · {systemTracks.pressure}</span>
+                    <span
+                      className="director-debrief__track-meter director-debrief__track-meter--risk"
+                      role="meter"
+                      aria-label={t('result.director_debrief_track_aria', {
+                        label: systemTracks.riskLabel,
+                        value: systemTracks.riskValue,
+                      })}
+                      aria-valuemin={0}
+                      aria-valuemax={6}
+                      aria-valuenow={clampTrack(systemTracks.riskValue)}
+                    >
+                      <span style={{ width: `${riskPercent}%` }} />
+                    </span>
+                  </dd>
                 </div>
                 <div>
                   <dt>{systemTracks.resourceLabel}</dt>
-                  <dd>{systemTracks.resourceValue}/6</dd>
+                  <dd className="director-debrief__track-value">
+                    <span>{systemTracks.resourceValue}/6</span>
+                    <span
+                      className="director-debrief__track-meter director-debrief__track-meter--resource"
+                      role="meter"
+                      aria-label={t('result.director_debrief_track_aria', {
+                        label: systemTracks.resourceLabel,
+                        value: systemTracks.resourceValue,
+                      })}
+                      aria-valuemin={0}
+                      aria-valuemax={6}
+                      aria-valuenow={clampTrack(systemTracks.resourceValue)}
+                    >
+                      <span style={{ width: `${resourcePercent}%` }} />
+                    </span>
+                  </dd>
                 </div>
               </>
             )}
@@ -371,6 +580,30 @@ export function DirectorDebriefPanel({
               ? t('result.director_debrief_counterplay_hint')
               : t('result.director_debrief_stable_hint')}
           </p>
+          <div className="director-debrief__chips">
+            {tacticalState && (
+              <span className="director-debrief__chip director-debrief__chip--strong">
+                {tacticalState.label}
+              </span>
+            )}
+            {nextCardLabel && (
+              <span className="director-debrief__chip">
+                {t('result.director_debrief_next_card', { card: nextCardLabel })}
+              </span>
+            )}
+            {focusCards.map((card) => (
+              <span key={card} className="director-debrief__chip">{card}</span>
+            ))}
+          </div>
+          {signatureArc && (
+            <small>
+              {t('result.director_debrief_arc_progress', {
+                arc: signatureArc.label,
+                completed: signatureArc.completedSteps,
+                total: signatureArc.totalSteps,
+              })}
+            </small>
+          )}
         </article>
       </div>
 

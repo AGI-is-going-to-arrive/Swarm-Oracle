@@ -327,7 +327,7 @@ export function CompareDigestView() {
       if (win.render_game_to_text) delete win.render_game_to_text;
       if (win.capture_game_screenshot === capture) delete win.capture_game_screenshot;
     };
-  }, [activeBranchId, activeDiff?.divergence_score, activePane, agents.length, availableRounds, branchA, branchB, data, errorLabel, hasScenario, loading, messages.length, playbackMode, replaySpeed, scenarioQuestion, selectedRound, snapshots.a, snapshots.b]);
+  }, [activeBranchId, activeDiff?.divergence_score, activePane, agents.length, availableRounds, branchA, branchB, data, error, errorLabel, hasScenario, loading, messages.length, playbackMode, replaySpeed, scenarioQuestion, selectedRound, snapshots.a, snapshots.b]);
 
   if (capLoading) {
     return <div className="compare-digest-view compare-digest-view--empty">{t('common.loading', 'Loading...')}</div>;

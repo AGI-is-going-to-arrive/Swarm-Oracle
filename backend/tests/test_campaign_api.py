@@ -52,6 +52,21 @@ def test_finalize_then_get_campaign_summaries(client: TestClient):
     assert finalize.status_code == 200
     finalize_data = finalize.json()
     assert finalize_data["campaign_score_delta"] == 11
+    assert sum(
+        item["points"] for item in finalize_data["score_breakdown"] if item["applied"]
+    ) == finalize_data["campaign_score_delta"]
+    assert [
+        item["id"] for item in finalize_data["score_breakdown"] if item["applied"]
+    ] == [
+        "completed_run",
+        "daily_challenge",
+        "profile_signature",
+        "bet_placed",
+        "bet_hit",
+        "archive_s",
+        "objectives_complete",
+        "commitment_hit",
+    ]
     assert finalize_data["profile"]["user_id"] == "director-api"
     assert finalize_data["profile"]["last_daily_challenge_profile_id"] == "governance"
     assert finalize_data["mastery"]["profile_id"] == "governance"
@@ -91,6 +106,7 @@ def test_finalize_then_get_campaign_summaries(client: TestClient):
     assert scenario_summary_data["objective_total_count"] == 2
     assert scenario_summary_data["commitment_outcome"] == "hit"
     assert scenario_summary_data["campaign_score_delta"] == 11
+    assert scenario_summary_data["score_breakdown"] == finalize_data["score_breakdown"]
     assert scenario_summary_data["finalized_at"] is not None
 
 

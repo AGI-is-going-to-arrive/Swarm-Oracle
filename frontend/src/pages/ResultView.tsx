@@ -71,7 +71,6 @@ import {
 } from '../lib/predictionBetting';
 import { type ShareFlavorContext } from '../lib/shareEnvelope';
 import { getTheaterThemeLabel } from '../lib/themeLabels';
-import { getThemeAssetPath, isSceneThemeId } from '../lib/themeRegistry';
 import {
   getScenarioRuntimePresetConfig,
   loadScenarioRuntimePreset,
@@ -103,6 +102,7 @@ import ShareModal from '../components/ShareModal';
 import EndingChatModal from '../components/EndingChatModal';
 import {
   buildCampaignSummaryFromExistingData,
+  buildMomentHighlights,
   buildStoryKeyMoments,
   classifyCampaignFinalizeError,
   formatArchiveKeyMoment,
@@ -609,6 +609,7 @@ export default function ResultView() {
                     objective_total_count: evaluatedObjectives.length,
                     commitment_outcome: commitmentOutcome,
                     campaign_score_delta: campaign.campaign_score_delta,
+                    score_breakdown: campaign.score_breakdown ?? [],
                     finalized_at: null,
                   },
             );
@@ -1483,6 +1484,29 @@ export default function ResultView() {
     () => scenarioMeta ? getScenarioArchiveKeyMoments(scenarioMeta).map((moment) => formatArchiveKeyMoment(moment, isZh)) : [],
     [isZh, scenarioMeta],
   );
+  const directorMomentHighlights = useMemo(
+    () => buildMomentHighlights(archiveKeyMoments, isZh, 5),
+    [archiveKeyMoments, isZh],
+  );
+  const directorBetHighlights = useMemo(() => (
+    localBetOutcomes.slice(0, 3).map(({ bet, outcome }) => ({
+      targetLabel: bet.targetLabel,
+      confidence: bet.confidence,
+      placedAtRound: bet.placedAtRound,
+      outcome,
+    }))
+  ), [localBetOutcomes]);
+  const directorInterventionSummary = useMemo(() => {
+    const usage = scenarioMeta?.cards.usageLog.slice(-1)[0];
+    if (!usage) return null;
+    const definition = getGameplayCardDefinition(usage.cardId);
+    return {
+      cardLabel: isZh ? definition.labelZh : definition.labelEn,
+      branchTitle: usage.branchTitle,
+      round: usage.round,
+      directive: usage.directive,
+    };
+  }, [isZh, scenarioMeta?.cards.usageLog]);
   const newlyUnlockedBadges = useMemo(() => (
     campaignSummary?.newly_unlocked_badges.map((badge) => ({
       badge,
@@ -1563,10 +1587,31 @@ export default function ResultView() {
           ? {
               already_finalized: campaignSummary.already_finalized,
               campaign_score_delta: campaignSummary.campaign_score_delta,
+              score_breakdown: campaignSummary.score_breakdown ?? [],
               level: campaignSummary.mastery.level,
               score_to_next_level: campaignSummary.mastery.score_to_next_level,
               badge_count: campaignSummary.badges.length,
               newly_unlocked_badges: campaignSummary.newly_unlocked_badges.map((badge) => badge.badge_id),
+            }
+          : null,
+        director_debrief: campaignSummary
+          ? {
+              question: storyData?.question ?? scenario?.question ?? null,
+              worldline_title: displayArchive?.dominantBranchTitle ?? analysisBranch?.title ?? null,
+              commitment: {
+                active: Boolean((scenarioMeta?.commitment.active ?? false) || displayArchive?.commitmentOutcome),
+                branch_title: scenarioMeta?.commitment.branchTitle
+                  ?? (displayArchive?.commitmentOutcome ? displayArchive.dominantBranchTitle : null),
+                outcome: displayArchive?.commitmentOutcome ?? null,
+                committed_at_round: scenarioMeta?.commitment.committedAtRound ?? null,
+              },
+              bet_highlights: directorBetHighlights,
+              moment_highlights: directorMomentHighlights.map((moment) => ({
+                kind: moment.kind,
+                label: moment.label,
+                round: moment.round ?? null,
+              })),
+              intervention: directorInterventionSummary,
             }
           : null,
         controls: {
@@ -1597,7 +1642,7 @@ export default function ResultView() {
         delete win.render_game_to_text;
       }
     };
-  }, [activeEndingRoomBranch, agents.length, campaignSummary, completedObjectiveCount, displayArchive, displayBranchSnapshots, error, errorCode, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue, activeRuntimePreset, activeRuntimePresetConfig.branchSensitivity, activeRuntimePresetConfig.forkDetectorActiveBranchLimit, activeRuntimePresetConfig.forkPromptVariant, activeRuntimePresetLabel, scenarioRuntimePreset]);
+  }, [activeEndingRoomBranch, agents.length, analysisBranch?.title, campaignSummary, completedObjectiveCount, directorBetHighlights, directorInterventionSummary, directorMomentHighlights, displayArchive, displayBranchSnapshots, error, errorCode, evaluatedObjectives.length, expandedBranch, exporting, formattedArchiveKeyMoments, hasUnscored, id, isDailyChallenge, isReplayMode, loading, localBetOutcomes, predictions, replayUrl, scenario?.question, scenarioMeta, scoring, shareAutomation, showShare, storyData, systemTracks?.resourceValue, systemTracks?.riskValue, activeRuntimePreset, activeRuntimePresetConfig.branchSensitivity, activeRuntimePresetConfig.forkDetectorActiveBranchLimit, activeRuntimePresetConfig.forkPromptVariant, activeRuntimePresetLabel, scenarioRuntimePreset]);
 
   if (loading) {
     return (
@@ -1646,6 +1691,61 @@ export default function ResultView() {
   const dominantToneLabel = displayArchive?.dominantTone
     ? getEndingToneLabel(displayArchive.dominantTone, isZh)
     : t('result.archive_unset');
+  const archiveQuestion = storyData?.question ?? scenario?.question ?? t('result.archive_question_unset');
+  const archiveVerdictTitle = displayArchive?.dominantBranchTitle ?? analysisBranch?.title ?? t('result.archive_unset');
+  const archiveVerdictDetail = resultConversationContext?.insight
+    ?? resultConversationContext?.forkReason
+    ?? formattedArchiveKeyMoments[0]
+    ?? t('result.archive_verdict_fallback');
+  const archiveUsedCardCount = scenarioMeta?.cards.usageLog.length ?? 0;
+  const archiveCardDetail = archiveUsedCardCount > 0
+    ? t('result.archive_card_detail', { count: archiveUsedCardCount })
+    : t('result.archive_empty_card_hint');
+  const topArchiveBet = localBetOutcomes.find(({ outcome }) => outcome !== 'pending') ?? localBetOutcomes[0] ?? null;
+  const topArchiveBetConfidence = topArchiveBet
+    ? Math.round(topArchiveBet.bet.confidence <= 1 ? topArchiveBet.bet.confidence * 100 : topArchiveBet.bet.confidence)
+    : null;
+  const archiveBetDetail = topArchiveBet
+    ? t('result.archive_bet_detail', {
+        target: topArchiveBet.bet.targetLabel,
+        outcome: getBetOutcomeLabel(topArchiveBet.outcome, t),
+        confidence: topArchiveBetConfidence,
+        round: topArchiveBet.bet.placedAtRound,
+      })
+    : t('result.archive_empty_bet_hint');
+  const archiveCommitmentBranchTitle = scenarioMeta?.commitment.branchTitle
+    ?? (displayArchive?.commitmentOutcome ? displayArchive.dominantBranchTitle : null);
+  const archiveCommitmentDetail = archiveCommitmentBranchTitle
+    ? scenarioMeta?.commitment.committedAtRound
+      ? t('result.archive_commitment_detail_with_round', {
+          branch: archiveCommitmentBranchTitle,
+          round: scenarioMeta.commitment.committedAtRound,
+        })
+      : t('result.archive_commitment_detail', { branch: archiveCommitmentBranchTitle })
+    : t('result.archive_empty_commitment_hint');
+  const archiveCounterplayDetail = (displayArchive?.counterplayCardCount ?? 0) > 0
+    ? `${t('result.archive_last_counterplay')}: ${lastCounterplayCardLabel}`
+    : t('result.archive_empty_counterplay_hint');
+  const archiveGoalDetail = evaluatedObjectives.length > 0
+    ? evaluatedObjectives.map((objective) => `${objective.title} · ${objective.progress}`).join(' / ')
+    : t('result.archive_empty_goals_hint');
+  const archiveSignatureValue = signatureArcState?.label ?? t('result.archive_unset');
+  const archiveSignatureDetail = signatureArcState
+    ? `${signatureArcState.sequenceLabels.join(' → ')} · ${signatureArcState.completedSteps}/${signatureArcState.totalSteps}`
+    : t('result.archive_empty_signature_hint');
+  const archiveSystemValue = systemTracks
+    ? `${systemTracks.riskLabel} ${systemTracks.riskValue}/6`
+    : t('result.archive_unset');
+  const archiveSystemDetail = systemTracks
+    ? `${systemTracks.resourceLabel} ${systemTracks.resourceValue}/6 · ${systemTracks.pressure}`
+    : t('result.archive_empty_system_hint');
+  const archiveChallengeFeedback = challengeProgress
+    ? `${challengeProgress.completed ? t('result.archive_completed') : t('result.archive_in_progress')} · ${challengeFeedbackLabel ?? t('result.archive_cards_used', { count: challengeProgress.usedCards.length })}`
+    : isDailyChallenge
+      ? `${gameplayProfileLabel ? `${gameplayProfileLabel} · ` : ''}${t('result.archive_completed')}`
+      : t('result.archive_regular_run');
+  const visibleArchiveKeyMoments = formattedArchiveKeyMoments.slice(0, 4);
+  const hiddenArchiveKeyMoments = formattedArchiveKeyMoments.slice(4);
 
   return (
     <div className="result-view">
@@ -1906,7 +2006,7 @@ export default function ResultView() {
 
       {/* Explore Deeper Bridge */}
       {branches.length > 0 && !loading && !capLoading && activeScenarioId && (
-        <section className="result-bridge">
+        <section id="result-bridge" className="result-bridge">
           <h2 className="result-bridge__heading">{t('result.bridge_title', 'Explore Deeper')}</h2>
           <div className="result-bridge__grid">
             {(() => {
@@ -2164,7 +2264,7 @@ export default function ResultView() {
       )}
 
       {/* Director's Notebook fold */}
-      <section className="result-director-notebook">
+      <section id="result-director-notebook" className="result-director-notebook">
         <button
           type="button"
           className="result-director-notebook__trigger"
@@ -2189,22 +2289,21 @@ export default function ResultView() {
 
       {scenarioMeta && (
         <section className="result-archive">
-          <h2 className="result-archive__title">
-            <img src={getGameplayBadgeSrc('archive_record')} alt="" aria-hidden="true" />
-            <span>{t('result.archive_title')}</span>
-          </h2>
-          <div
-            className="result-archive__art"
-            role="img"
-            aria-label={t('common.archive_seal_alt')}
-            style={{
-              backgroundImage: scenario?.scene_theme && isSceneThemeId(scenario.scene_theme)
-                ? `linear-gradient(180deg, transparent 40%, oklch(98% 0.005 80 / 0.85)), url(${getThemeAssetPath(scenario.scene_theme)})`
-                : 'repeating-linear-gradient(135deg, oklch(50% 0.01 60 / 0.04) 0 1px, transparent 1px 12px), radial-gradient(ellipse at 30% 30%, oklch(55% 0.22 350 / 0.08), transparent 60%)',
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-            }}
-          />
+          <div className="result-archive__header">
+            <div>
+              <span className="result-archive__eyebrow">{t('result.archive_brief_label')}</span>
+              <h2 className="result-archive__title">
+                <img src={getGameplayBadgeSrc('archive_record')} alt="" aria-hidden="true" />
+                <span>{t('result.archive_title')}</span>
+              </h2>
+              <p className="result-archive__lead">{t('result.archive_lead')}</p>
+            </div>
+            <div className="result-archive__grade" aria-label={t('result.archive_grade')}>
+              <span>{t('result.archive_grade')}</span>
+              <strong>{displayArchive?.archiveGrade ?? 'C'}</strong>
+            </div>
+          </div>
+
           <div className="result-archive__meta">
             {gameplayProfileLabel && (
               <span className="archive-chip archive-chip--primary">{gameplayProfileLabel}</span>
@@ -2248,149 +2347,224 @@ export default function ResultView() {
             </div>
           )}
 
-          <div className="archive-summary-grid">
-            <div className="archive-summary-card">
-              <span className="archive-summary-card__label">{t('result.archive_dominant_branch')}</span>
-              <strong>{displayArchive?.dominantBranchTitle ?? t('result.archive_unset')}</strong>
+          <div className="result-archive__brief">
+            <div className="result-archive__question">
+              <span>{t('result.archive_question_label')}</span>
+              <p>{archiveQuestion}</p>
             </div>
-            <div className="archive-summary-card">
-              <span className="archive-summary-card__label">{t('result.archive_dominant_tone')}</span>
-              <strong>{dominantToneLabel}</strong>
-            </div>
-            <div className="archive-summary-card">
-              <span className="archive-summary-card__label">{t('result.archive_most_used_card')}</span>
-              <strong>{mostUsedCardLabel}</strong>
-            </div>
-            <div className="archive-summary-card">
-              <span className="archive-summary-card__label">{t('result.archive_bet_result')}</span>
-              <strong>{bettingHitLabel}</strong>
-            </div>
-            <div className="archive-summary-card">
-              <span className="archive-summary-card__label">{t('result.archive_counterplay')}</span>
-              <strong>{counterplaySummaryLabel}</strong>
-              {(displayArchive?.counterplayCardCount ?? 0) > 0 && (
-                <small>
-                  {t('result.archive_last_counterplay')}
-                  {': '}
-                  {lastCounterplayCardLabel}
-                </small>
-              )}
-            </div>
-            <div className="archive-summary-card">
-              <span className="archive-summary-card__label">{t('result.archive_grade')}</span>
-              <strong>{displayArchive?.archiveGrade ?? 'C'}</strong>
-            </div>
-            <div className="archive-summary-card">
-              <span className="archive-summary-card__label">{t('result.archive_resonance')}</span>
-              <strong>{profileResonanceLabel}</strong>
-            </div>
-            <div className="archive-summary-card">
-              <span className="archive-summary-card__label">{t('result.archive_director_goals_label')}</span>
-              <strong>{completedObjectiveCount}/{evaluatedObjectives.length || 0}</strong>
-              {evaluatedObjectives.length > 0 && (
-                <small>
-                  {evaluatedObjectives
-                    .map((objective) => `${objective.title} · ${objective.progress}`)
-                    .join(' / ')}
-                </small>
-              )}
-            </div>
-            <div className="archive-summary-card">
-              <span className="archive-summary-card__label">{t('result.archive_worldline_commitment_label')}</span>
-              <strong>{commitmentOutcomeLabel}</strong>
-              {scenarioMeta.commitment.active && scenarioMeta.commitment.branchTitle && (
-                <small>{scenarioMeta.commitment.branchTitle}</small>
-              )}
-            </div>
-            {signatureArcState && (
-              <div className="archive-summary-card">
-                <span className="archive-summary-card__label">{t('result.archive_signature_arc_label')}</span>
-                <strong>{signatureArcState.label}</strong>
-                <small>
-                  {signatureArcState.sequenceLabels.join(' → ')}
-                  {' · '}
-                  {signatureArcState.completedSteps}/{signatureArcState.totalSteps}
-                </small>
-              </div>
-            )}
-            {systemTracks && (
-              <div className="archive-summary-card">
-                <span className="archive-summary-card__label">{t('result.archive_system_tracks_label')}</span>
-                <strong>{systemTracks.riskLabel} {systemTracks.riskValue}/6</strong>
-                <small>{systemTracks.resourceLabel} {systemTracks.resourceValue}/6 · {systemTracks.pressure}</small>
-              </div>
-            )}
-            <div className="archive-summary-card">
-              <span className="archive-summary-card__label">{t('result.archive_challenge_feedback')}</span>
-              <strong>
-                {challengeProgress
-                  ? `${challengeProgress.completed ? t('result.archive_completed') : t('result.archive_in_progress')} · ${challengeFeedbackLabel ?? t('result.archive_cards_used', { count: challengeProgress.usedCards.length })}`
-                  : isDailyChallenge
-                    ? `${gameplayProfileLabel ? `${gameplayProfileLabel} · ` : ''}${t('result.archive_completed')}`
-                  : t('result.archive_regular_run')}
-              </strong>
+            <div className="result-archive__verdict">
+              <span>{t('result.archive_verdict_label')}</span>
+              <strong>{archiveVerdictTitle}</strong>
+              <p>{archiveVerdictDetail}</p>
             </div>
           </div>
 
-          {scenarioMeta.cards.usageLog.length > 0 && (
-            <div className="result-archive__section">
-              <h3>{t('result.archive_cards_section')}</h3>
-              <div className="archive-list">
-                {scenarioMeta.cards.usageLog.map((usage, index) => (
-                  <div key={`${usage.usedAt}-${index}`} className="archive-item">
-                    <strong>{isZh ? getGameplayCardDefinition(usage.cardId).labelZh : getGameplayCardDefinition(usage.cardId).labelEn}</strong>
-                    <span>R{usage.round} · {usage.branchTitle}</span>
-                    <p>{usage.directive}</p>
-                  </div>
-                ))}
+          <div className="archive-decision-grid">
+            <article className="archive-decision-panel archive-decision-panel--primary">
+              <h3>{t('result.archive_group_judgement')}</h3>
+              <dl className="archive-signal-list">
+                <div>
+                  <dt>{t('result.archive_dominant_branch')}</dt>
+                  <dd>
+                    <strong>{archiveVerdictTitle}</strong>
+                    <span>{t('result.archive_dominant_branch_hint')}</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t('result.archive_dominant_tone')}</dt>
+                  <dd>
+                    <strong>{dominantToneLabel}</strong>
+                    <span>{t('result.archive_dominant_tone_hint')}</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t('result.archive_resonance')}</dt>
+                  <dd>
+                    <strong>{profileResonanceLabel}</strong>
+                    <span>{t('result.archive_resonance_hint')}</span>
+                  </dd>
+                </div>
+              </dl>
+            </article>
+
+            <article className="archive-decision-panel">
+              <h3>{t('result.archive_group_actions')}</h3>
+              <dl className="archive-signal-list">
+                <div>
+                  <dt>{t('result.archive_most_used_card')}</dt>
+                  <dd>
+                    <strong>{mostUsedCardLabel}</strong>
+                    <span>{archiveCardDetail}</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t('result.archive_bet_result')}</dt>
+                  <dd>
+                    <strong>{bettingHitLabel}</strong>
+                    <span>{archiveBetDetail}</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t('result.archive_worldline_commitment_label')}</dt>
+                  <dd>
+                    <strong>{commitmentOutcomeLabel}</strong>
+                    <span>{archiveCommitmentDetail}</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t('result.archive_counterplay')}</dt>
+                  <dd>
+                    <strong>{counterplaySummaryLabel}</strong>
+                    <span>{archiveCounterplayDetail}</span>
+                  </dd>
+                </div>
+              </dl>
+            </article>
+
+            <article className="archive-decision-panel">
+              <h3>{t('result.archive_group_next')}</h3>
+              <dl className="archive-signal-list">
+                <div>
+                  <dt>{t('result.archive_director_goals_label')}</dt>
+                  <dd>
+                    <strong>{completedObjectiveCount}/{evaluatedObjectives.length || 0}</strong>
+                    <span>{archiveGoalDetail}</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t('result.archive_signature_arc_label')}</dt>
+                  <dd>
+                    <strong>{archiveSignatureValue}</strong>
+                    <span>{archiveSignatureDetail}</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t('result.archive_system_tracks_label')}</dt>
+                  <dd>
+                    <strong>{archiveSystemValue}</strong>
+                    <span>{archiveSystemDetail}</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t('result.archive_challenge_feedback')}</dt>
+                  <dd>
+                    <strong>{archiveChallengeFeedback}</strong>
+                    <span>{t('result.archive_challenge_feedback_hint')}</span>
+                  </dd>
+                </div>
+              </dl>
+            </article>
+          </div>
+
+          <div className="result-archive__evidence">
+            <div className="result-archive__evidence-head">
+              <div>
+                <h3>{t('result.archive_evidence_title')}</h3>
+                <p>{t('result.archive_evidence_lead')}</p>
+              </div>
+              <div className="archive-evidence-counts" aria-label={t('result.archive_evidence_counts_label')}>
+                <span>{t('result.archive_count_cards', { count: scenarioMeta.cards.usageLog.length })}</span>
+                <span>{t('result.archive_count_bets', { count: localBetOutcomes.length })}</span>
+                <span>{t('result.archive_count_moments', { count: formattedArchiveKeyMoments.length })}</span>
+                <span>{t('result.archive_count_branches', { count: displayBranchSnapshots.length })}</span>
               </div>
             </div>
-          )}
 
-          {scenarioMeta.betting.bets.length > 0 && (
-            <div className="result-archive__section">
-              <h3>{t('result.archive_bets_section')}</h3>
-              <div className="archive-list">
-                {localBetOutcomes.map(({ bet, outcome }) => (
-                  <div key={bet.betId} className="archive-item">
-                    <div className="archive-item__top">
-                      <strong>{bet.targetLabel}</strong>
-                      <span className={getBetOutcomeClass(outcome)}>
-                        {getBetOutcomeLabel(outcome, t)}
-                      </span>
+            <div className="archive-ledger-shell">
+              <section className="archive-ledger-panel archive-ledger-panel--moments">
+                <h3>{t('result.archive_moments_section')}</h3>
+                {visibleArchiveKeyMoments.length > 0 ? (
+                  <>
+                    <ol className="archive-moment-timeline">
+                      {visibleArchiveKeyMoments.map((moment, index) => (
+                        <li key={`${moment}-${index}`}>
+                          <span className="archive-moment-timeline__index">{String(index + 1).padStart(2, '0')}</span>
+                          <span className="archive-moment-timeline__text" title={moment}>{moment}</span>
+                        </li>
+                      ))}
+                    </ol>
+                    {hiddenArchiveKeyMoments.length > 0 && (
+                      <details className="archive-moment-more">
+                        <summary>{t('result.archive_moments_more', { count: hiddenArchiveKeyMoments.length })}</summary>
+                        <ol className="archive-moment-timeline archive-moment-timeline--compact">
+                          {hiddenArchiveKeyMoments.map((moment, index) => (
+                            <li key={`${moment}-${index + visibleArchiveKeyMoments.length}`}>
+                              <span className="archive-moment-timeline__index">
+                                {String(index + visibleArchiveKeyMoments.length + 1).padStart(2, '0')}
+                              </span>
+                              <span className="archive-moment-timeline__text" title={moment}>{moment}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      </details>
+                    )}
+                  </>
+                ) : (
+                  <p className="archive-empty-note">{t('result.archive_moments_empty')}</p>
+                )}
+              </section>
+
+              <div className="archive-ledger-rail">
+                <section className="archive-ledger-panel">
+                  <h3>{t('result.archive_cards_section')}</h3>
+                  {scenarioMeta.cards.usageLog.length > 0 ? (
+                    <div className="archive-compact-list">
+                      {scenarioMeta.cards.usageLog.slice(0, 3).map((usage, index) => (
+                        <div key={`${usage.usedAt}-${index}`} className="archive-compact-row">
+                          <span>{`R${usage.round}`}</span>
+                          <strong>{isZh ? getGameplayCardDefinition(usage.cardId).labelZh : getGameplayCardDefinition(usage.cardId).labelEn}</strong>
+                          <small>{usage.branchTitle}</small>
+                        </div>
+                      ))}
                     </div>
-                    <span>R{bet.placedAtRound} · {Math.round(bet.confidence * 100)}%</span>
-                    <p>{getStructuredBetKindLabel(bet.kind, isZh)}</p>
-                  </div>
-                ))}
+                  ) : (
+                    <p className="archive-empty-note">{t('result.archive_cards_empty_short')}</p>
+                  )}
+                </section>
+
+                <section className="archive-ledger-panel">
+                  <h3>{t('result.archive_bets_section')}</h3>
+                  {localBetOutcomes.length > 0 ? (
+                    <div className="archive-compact-list">
+                      {localBetOutcomes.slice(0, 3).map(({ bet, outcome }) => (
+                        <div key={bet.betId} className="archive-compact-row archive-compact-row--bet">
+                          <span>{`R${bet.placedAtRound}`}</span>
+                          <strong>{bet.targetLabel}</strong>
+                          <small>
+                            {Math.round(bet.confidence <= 1 ? bet.confidence * 100 : bet.confidence)}
+                            %
+                            {' · '}
+                            {getBetOutcomeLabel(outcome, t)}
+                          </small>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="archive-empty-note">{t('result.archive_bets_empty_short')}</p>
+                  )}
+                </section>
+
+                <section className="archive-ledger-panel">
+                  <h3>{t('result.archive_branches_section')}</h3>
+                  {displayBranchSnapshots.length > 0 ? (
+                    <div className="archive-compact-list">
+                      {displayBranchSnapshots.slice(0, 4).map((snapshot) => (
+                        <div key={snapshot.branchId} className="archive-compact-row archive-compact-row--branch">
+                          <span>{t('result.archive_branch_probability', { percent: Math.round(snapshot.probability * 100) })}</span>
+                          <strong>{snapshot.title}</strong>
+                          <span className="archive-branch-meter" aria-hidden="true">
+                            <span style={{ width: `${Math.round(snapshot.probability * 100)}%` }} />
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="archive-empty-note">{t('result.archive_branches_empty')}</p>
+                  )}
+                </section>
               </div>
             </div>
-          )}
-
-          {formattedArchiveKeyMoments.length > 0 && (
-            <div className="result-archive__section">
-              <h3>{t('result.archive_moments_section')}</h3>
-              <ul className="archive-moments">
-                {formattedArchiveKeyMoments.map((moment, index) => (
-                  <li key={`${moment}-${index}`}>{moment}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {displayBranchSnapshots.length > 0 && (
-            <div className="result-archive__section">
-              <h3>{t('result.archive_branches_section')}</h3>
-              <div className="archive-list">
-                {displayBranchSnapshots.map((snapshot) => (
-                  <div key={snapshot.branchId} className="archive-item">
-                    <strong>{snapshot.title}</strong>
-                    <span>{t('result.archive_branch_probability', { percent: Math.round(snapshot.probability * 100) })}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          </div>
         </section>
       )}
 
@@ -2401,6 +2575,23 @@ export default function ResultView() {
       {campaignSummary && (
         <DirectorDebriefPanel
           campaignSummary={campaignSummary}
+          scenarioQuestion={storyData?.question ?? scenario?.question ?? null}
+          worldlineSummary={{
+            title: displayArchive?.dominantBranchTitle ?? analysisBranch?.title ?? null,
+            insight: resultConversationContext?.insight ?? null,
+            forkReason: resultConversationContext?.forkReason ?? null,
+            comparisonTitles: resultConversationContext?.comparisonTitles ?? [],
+          }}
+          commitmentSummary={{
+            active: Boolean((scenarioMeta?.commitment.active ?? false) || displayArchive?.commitmentOutcome),
+            branchTitle: scenarioMeta?.commitment.branchTitle
+              ?? (displayArchive?.commitmentOutcome ? displayArchive.dominantBranchTitle : null),
+            committedAtRound: scenarioMeta?.commitment.committedAtRound ?? null,
+            outcome: displayArchive?.commitmentOutcome ?? null,
+          }}
+          betHighlights={directorBetHighlights}
+          momentHighlights={directorMomentHighlights}
+          interventionSummary={directorInterventionSummary}
           profileLabel={gameplayProfileLabel}
           profileHooks={gameplayProfileHooks}
           archiveGrade={displayArchive?.archiveGrade ?? null}
@@ -2418,6 +2609,15 @@ export default function ResultView() {
           signatureArc={signatureArcState}
           systemTracks={systemTracks}
           tacticalState={tacticalState}
+          dominantBranchTitle={displayArchive?.dominantBranchTitle ?? analysisBranch?.title ?? null}
+          keyMoments={formattedArchiveKeyMoments.slice(0, 2)}
+          notebookHref="#result-director-notebook"
+          analysisHref={activeScenarioId && branches.length > 0 ? '#result-bridge' : null}
+          conversationHref={
+            !isReplayMode && activeScenarioId && (capabilities?.agent_conversation?.enabled ?? false)
+              ? '#result-conversation'
+              : null
+          }
           newlyUnlockedBadges={newlyUnlockedBadges.map(({ badge, copy }) => ({
             id: badge.id,
             unlockedAt: badge.unlocked_at,
@@ -2780,12 +2980,14 @@ export default function ResultView() {
           agentIdentityId={primaryAgentIdentityId}
         />
       )}
-      {!isReplayMode && activeScenarioId && (
-        <ResultConversationWidget
-          scenarioId={activeScenarioId}
-          primaryAgentIdentityId={primaryAgentIdentityId}
-          resultContext={resultConversationContext}
-        />
+      {!isReplayMode && activeScenarioId && (capabilities?.agent_conversation?.enabled ?? false) && (
+        <div id="result-conversation">
+          <ResultConversationWidget
+            scenarioId={activeScenarioId}
+            primaryAgentIdentityId={primaryAgentIdentityId}
+            resultContext={resultConversationContext}
+          />
+        </div>
       )}
     </div>
   );

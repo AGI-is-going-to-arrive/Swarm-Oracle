@@ -140,6 +140,13 @@ export interface CampaignBadge {
   source_scenario_id?: string | null;
 }
 
+export interface CampaignScoreBreakdownItem {
+  id: string;
+  label_key: string;
+  points: number;
+  applied: boolean;
+}
+
 export interface CampaignProfileSummary {
   user_id: string;
   user_name: string;
@@ -173,6 +180,7 @@ export interface CampaignFinalizeResult {
   scenario_id: string;
   already_finalized: boolean;
   campaign_score_delta: number;
+  score_breakdown?: CampaignScoreBreakdownItem[];
   profile: CampaignProfileSummary;
   mastery: CampaignMastery;
   newly_unlocked_badges: CampaignBadge[];
@@ -191,6 +199,7 @@ export interface CampaignScenarioSummary {
   objective_total_count?: number;
   commitment_outcome?: 'hit' | 'miss' | 'pending' | null;
   campaign_score_delta: number;
+  score_breakdown?: CampaignScoreBreakdownItem[];
   finalized_at?: string | null;
 }
 

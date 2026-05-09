@@ -22,7 +22,7 @@
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact |
 | Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、自建 Agent workshop 与自建 Agent tier 校验 |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
-| Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary |
+| Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary、score breakdown |
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
 | Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard |
 | Debate | `backend/app/api/debate.py` | debate live/result/import-replay/predict |
@@ -69,6 +69,7 @@
 - `Scenario.gameplay_state_json`
   玩法卡、押注、archive raw 的 authority。
 - 这两块都通过 `campaign` 路由读写，并带 `revision` 乐观并发控制。
+- campaign finalize 与 scenario summary 当前返回同一套 `score_breakdown`；每项包含 `id / label_key / points / applied`，由后端按 archive grade、profile resonance、daily challenge、押注、director goals 与 worldline commitment 派生，不是新的持久化字段。
 - fork detector 当前要求新分支标题写成“行动 + 目标/后果”。
   这些标题仍作为 `Branch.title` 持久化，并随 `branch_fork` 事件广播给前端。
 

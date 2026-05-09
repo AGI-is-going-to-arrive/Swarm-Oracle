@@ -131,6 +131,7 @@
 - `gameplay-state` 采用分区级 authority：
   - 后端只要显式返回 `cards.usage_log`、`betting.bets`、`archive.key_moments`、`archive.branch_snapshots`，即使为空数组，也表示该分区 authoritative empty。
   - 前端不得再用本地缓存把该分区的旧数据补回去。
+- `summary` 与 `finalize` 会返回同一套 `score_breakdown`；每项包含 `id / label_key / points / applied`，由后端派生，用于解释 campaign score delta，不要求前端重新计算结算分。
 
 ## Predictions
 

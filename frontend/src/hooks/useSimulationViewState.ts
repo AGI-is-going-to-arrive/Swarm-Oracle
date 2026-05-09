@@ -551,7 +551,7 @@ export function useSimulationDirectorState({
       return commitmentDraftBranchIdOverride;
     }
     return activeBranches[0]?.id ?? '';
-  }, [activeBranches, commitmentDraftBranchIdOverride, scenarioMeta?.commitment.active, scenarioMeta?.commitment.branchId]);
+  }, [activeBranches, commitmentDraftBranchIdOverride, scenarioMeta]);
 
   const handleGameplayApplied = useCallback(async (
     nextMeta: NonNullable<typeof scenarioMeta>,

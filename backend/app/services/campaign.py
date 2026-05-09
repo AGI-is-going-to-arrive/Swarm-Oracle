@@ -456,6 +456,70 @@ def calculate_campaign_score_delta(
     return max(1, score)
 
 
+def build_campaign_score_breakdown(
+    *,
+    archive_grade: str,
+    profile_resonance: str,
+    completed_daily_challenge: bool,
+    bet_count: int,
+    betting_hit: bool | None,
+    objective_completed_count: int = 0,
+    objective_total_count: int = 0,
+    commitment_outcome: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return the authoritative itemized score factors for campaign finalize."""
+    normalized_grade = _normalize_archive_grade(archive_grade)
+    normalized_resonance = _normalize_profile_resonance(profile_resonance)
+    normalized_completed_count, normalized_total_count = _normalize_objective_counts(
+        objective_completed_count,
+        objective_total_count,
+    )
+    normalized_commitment_outcome = _normalize_commitment_outcome(commitment_outcome)
+
+    items: list[dict[str, Any]] = []
+
+    def add(item_id: str, points: int, applied: bool) -> None:
+        items.append(
+            {
+                "id": item_id,
+                "label_key": f"result.director_score_{item_id}",
+                "points": points,
+                "applied": applied,
+            }
+        )
+
+    add("completed_run", 1, True)
+    add("daily_challenge", 1, completed_daily_challenge)
+
+    add("profile_signature", 2, normalized_resonance == "signature")
+    add("profile_aligned", 1, normalized_resonance == "aligned")
+    add("profile_offbeat", 0, normalized_resonance == "offbeat")
+
+    has_resolved_bet = _has_resolved_bet(bet_count, betting_hit)
+    add("bet_placed", 1, has_resolved_bet)
+    add("bet_hit", 2, betting_hit is True)
+    add("bet_miss", 0, betting_hit is False)
+    add("bet_none", 0, not has_resolved_bet)
+
+    add("archive_s", 2, normalized_grade == "S")
+    add("archive_a", 1, normalized_grade == "A")
+    add("archive_lower", 0, normalized_grade not in {"S", "A"})
+
+    objectives_complete = (
+        normalized_total_count > 0
+        and normalized_completed_count >= normalized_total_count
+    )
+    add("objectives_complete", 1, objectives_complete)
+    add("objectives_incomplete", 0, normalized_total_count > 0 and not objectives_complete)
+
+    add("commitment_hit", 1, normalized_commitment_outcome == "hit")
+    add("commitment_miss", -1, normalized_commitment_outcome == "miss")
+    add("commitment_pending", 0, normalized_commitment_outcome == "pending")
+    add("commitment_none", 0, normalized_commitment_outcome is None)
+
+    return items
+
+
 def calculate_mastery_level(campaign_score: int) -> int:
     """Level up every fixed amount of campaign score, starting at level 1."""
     return max(1, campaign_score // LEVEL_SCORE_STEP + 1)
@@ -726,7 +790,11 @@ def _build_badge_summary(badge: DirectorBadgeUnlock) -> dict[str, Any]:
     }
 
 
-def _build_scenario_campaign_summary(log: ScenarioCampaignLog) -> dict[str, Any]:
+def _build_scenario_campaign_summary(
+    log: ScenarioCampaignLog,
+    *,
+    bet_count: int,
+) -> dict[str, Any]:
     return {
         "scenario_id": log.scenario_id,
         "profile_id": log.profile_id,
@@ -739,6 +807,16 @@ def _build_scenario_campaign_summary(log: ScenarioCampaignLog) -> dict[str, Any]
         "objective_total_count": log.objective_total_count,
         "commitment_outcome": log.commitment_outcome,
         "campaign_score_delta": log.campaign_score_delta,
+        "score_breakdown": build_campaign_score_breakdown(
+            archive_grade=log.archive_grade,
+            profile_resonance=log.profile_resonance,
+            completed_daily_challenge=log.completed_daily_challenge,
+            bet_count=bet_count,
+            betting_hit=log.betting_hit,
+            objective_completed_count=log.objective_completed_count,
+            objective_total_count=log.objective_total_count,
+            commitment_outcome=log.commitment_outcome,
+        ),
         "finalized_at": _serialize_datetime(log.created_at),
     }
 
@@ -908,11 +986,28 @@ def _build_finalize_summary(
 
     badges = _list_badge_unlocks(session, director_profile.id)
     last_daily_log = _get_last_daily_challenge_log(session, director_profile.id)
+    scenario = session.get(Scenario, log.scenario_id)
+    summary_bet_count = (
+        _scenario_bet_count(scenario.gameplay_state_json)
+        if scenario
+        else int(log.betting_hit is not None)
+    )
+    score_breakdown = build_campaign_score_breakdown(
+        archive_grade=log.archive_grade,
+        profile_resonance=log.profile_resonance,
+        completed_daily_challenge=log.completed_daily_challenge,
+        bet_count=summary_bet_count,
+        betting_hit=log.betting_hit,
+        objective_completed_count=log.objective_completed_count,
+        objective_total_count=log.objective_total_count,
+        commitment_outcome=log.commitment_outcome,
+    )
 
     return {
         "scenario_id": log.scenario_id,
         "already_finalized": already_finalized,
         "campaign_score_delta": log.campaign_score_delta,
+        "score_breakdown": score_breakdown,
         "profile": _build_profile_summary(director_profile, last_daily_log=last_daily_log),
         "mastery": _build_mastery_summary(mastery),
         "badges": [_build_badge_summary(badge) for badge in badges],
@@ -1231,7 +1326,16 @@ def get_scenario_campaign_summary(scenario_id: str) -> dict[str, Any]:
         ).first()
         if log is None:
             raise CampaignNotFoundError("Scenario campaign summary not found")
-        return _build_scenario_campaign_summary(log)
+        scenario = session.get(Scenario, scenario_id)
+        summary_bet_count = (
+            _scenario_bet_count(scenario.gameplay_state_json)
+            if scenario
+            else int(log.betting_hit is not None)
+        )
+        return _build_scenario_campaign_summary(
+            log,
+            bet_count=summary_bet_count,
+        )
 
 
 def list_campaign_mastery_summaries(user_id: str) -> list[dict[str, Any]] | None:

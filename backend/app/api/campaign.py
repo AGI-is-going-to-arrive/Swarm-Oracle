@@ -99,6 +99,13 @@ class CampaignBadgeResponse(BaseModel):
     source_scenario_id: str | None = None
 
 
+class CampaignScoreBreakdownItem(BaseModel):
+    id: str
+    label_key: str
+    points: int
+    applied: bool
+
+
 class CampaignDailyChallengeResponse(BaseModel):
     user_id: str
     profile_id: str
@@ -239,6 +246,7 @@ class CampaignFinalizeResponse(BaseModel):
     scenario_id: str
     already_finalized: bool
     campaign_score_delta: int
+    score_breakdown: list[CampaignScoreBreakdownItem]
     profile: CampaignProfileResponse
     mastery: CampaignMasteryResponse
     badges: list[CampaignBadgeResponse]
@@ -257,6 +265,7 @@ class CampaignScenarioSummaryResponse(BaseModel):
     objective_total_count: int = 0
     commitment_outcome: str | None = None
     campaign_score_delta: int
+    score_breakdown: list[CampaignScoreBreakdownItem] = Field(default_factory=list)
     finalized_at: str | None = None
 
 

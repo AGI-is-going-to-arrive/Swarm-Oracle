@@ -29,7 +29,7 @@
 | AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、tier badge、profile modal、编辑/删除入口 |
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains 与 `IMPORTANT / CROWD` tier 选择 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、archive、导演笔记/导演复盘、campaign summary、分享、导出、replay/import、真实世界来源卡片、counterfactual / resume / faction 入口，以及 capability-gated `Explore Deeper` bridge |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、导出、replay/import、真实世界来源卡片、counterfactual / resume / faction 入口，以及 capability-gated `Explore Deeper` bridge |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live |
 | DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import |
@@ -78,7 +78,7 @@
   - `replayCodec.ts`
 - 新生成的 replay token 当前统一走 `plain.*`，上限 `4096` 字符；payload 过大时继续回退 artifact / local readonly。旧的 `gz.*` token 仍可解码。
 - Simulation replay 的 branch / round selection 只在 simulation complete 后保留；live 或 incomplete 状态会清掉旧 selection，完成态下缺失或失效 selection 会回到默认 branch 和最新 round。
-- ResultView replay payload 可以携带 `campaignScenarioSummary / campaignSummary`；replay 页会用快照渲染导演复盘，但不会重新 finalize campaign。
+- ResultView replay payload 可以携带 `campaignScenarioSummary / campaignSummary`；`campaignSummary` 可带后端 `score_breakdown`，replay 页会用快照渲染导演复盘，但不会重新 finalize campaign。
 
 ## 实时链路
 
@@ -108,7 +108,8 @@
   - workbench 卡片当前指向因果、知识图谱和节点追问同一视图
   - disabled 卡片保留 link 语义，但不再渲染无 `href` 的 `<a>`
   - disabled 状态改成 dashed border + icon grayscale，文字对比不再靠整卡 opacity 压低
-- `ResultView` 的导演复盘当前由 `DirectorDebriefPanel` 渲染：展示得分拆解、等级进度、押注命中率、本局读数、题材连锁/下一步打法和新增徽章；数据来自现有 `campaignSummary`、archive summary、director state 与 gameplay card 状态。
+- `ResultView` 的因果档案当前把 what-if、结局判定、系统读数、玩家动作、下一步建议和证据账本放在同一块里；关键记录只露出前几条，剩余记录用 details 展开，避免把结果页撑成长列表。
+- `ResultView` 的导演复盘当前由 `DirectorDebriefPanel` 渲染：优先使用后端 `score_breakdown`，同时接收 what-if、主导世界线、世界线承诺、押注、最后一次干预、结构化关键记录、director goals 与 gameplay card 状态，展示得分原因、等级进度、本局读数、下一步入口和新增徽章。
 - `ResultView` 的 faction timeline lead 当前已走 i18n key + `{{title}}` 插值，不再在组件里手写 `isZh` 三元文案。
 - `ResultView` 的 replay/import 错误、ending-room replay action、archive summary label 和 ending-room picker copy 当前也已走 locale key；剩下的 `isZh` 用在玩法/候选人/弹窗语言选择这类领域语义上。
 - `ResultView` 当前仍是大文件；source family 里重复的 finance card 已抽成 `FinanceSourceCard`，后续新增 UI 仍应优先抽组件。
@@ -166,8 +167,8 @@
 | `useTranscriptScroll.ts` | `frontend/src/hooks/useTranscriptScroll.ts` | `EndingChatModal` 与 `WorldlineRoundtableView` 共享的 transcript scroll 锚定 hook |
 | `roundtableHelpers.ts` | `frontend/src/pages/roundtableHelpers.ts` | 圆桌纯函数：选型模式、锚点构建、fault-line 算法、anchor 描述 |
 | `endingChatHelpers.ts` | `frontend/src/components/endingChatHelpers.ts` | 会客厅纯函数：角色标签、模式标签、prompt 构建、anchor 描述 |
-| `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy |
-| `DirectorDebriefPanel.tsx` | `frontend/src/components/result/DirectorDebriefPanel.tsx` | 结果页导演复盘面板；把 campaign summary、archive 评级、世界线承诺、押注、目标和玩法卡状态展示成得分拆解、等级进度、本局读数、下一步打法与新增徽章 |
+| `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy、结构化关键记录 |
+| `DirectorDebriefPanel.tsx` | `frontend/src/components/result/DirectorDebriefPanel.tsx` | 结果页导演复盘面板；消费后端 `score_breakdown` 和结果页整理出的问题、世界线、承诺、押注、干预、关键记录、目标与玩法卡状态，展示得分原因、本局读数、下一步入口与新增徽章 |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
 | `ClassicBranchTree.tsx` / `BranchTree.tsx` / `branchTitle.ts` | `frontend/src/components/` | Classic 分支树；短标题会用 `description / fork_reason` 的首句补成更好读的展示标题，原始 `Branch.title` 仍保留给干预等业务动作 |
 | `PostVerdictPanel.tsx` | `frontend/src/pages/PostVerdictPanel.tsx` | completed live roundtable 的 `Deep Dive` 面板；聚合 participant-scoped `1-on-1 Interview`、`Research Analyst` 与 `Cross-Examine` |

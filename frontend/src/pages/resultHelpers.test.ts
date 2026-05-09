@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ApiError } from '../api/client';
 import {
+  buildMomentHighlights,
   buildCampaignFinalizeCacheEntryKey,
   buildCampaignSummaryFromExistingData,
   buildStoryKeyMoments,
@@ -96,6 +97,39 @@ describe('resultHelpers', () => {
     });
   });
 
+  describe('buildMomentHighlights', () => {
+    it('turns encoded gameplay records into useful debrief moments', () => {
+      expect(buildMomentHighlights([
+        'event:card:2:public_hearing',
+        'event:bet:3:Archive%20Branch',
+        'event:commitment:4:Archive%20Branch',
+      ], false)).toEqual([
+        expect.objectContaining({
+          kind: 'card',
+          label: 'Public Hearing',
+          round: 2,
+        }),
+        expect.objectContaining({
+          kind: 'bet',
+          label: 'Archive Branch',
+          round: 3,
+        }),
+        expect.objectContaining({
+          kind: 'commitment',
+          label: 'Archive Branch',
+          round: 4,
+        }),
+      ]);
+    });
+
+    it('keeps raw story moments and removes duplicates', () => {
+      expect(buildMomentHighlights(['Same hinge', 'Same hinge', 'Another hinge'], true)).toEqual([
+        expect.objectContaining({ kind: 'story', label: 'Same hinge' }),
+        expect.objectContaining({ kind: 'story', label: 'Another hinge' }),
+      ]);
+    });
+  });
+
   describe('sessionStorage cache', () => {
     beforeEach(() => {
       window.sessionStorage.clear();
@@ -148,6 +182,7 @@ describe('resultHelpers', () => {
       expect(result).not.toBeNull();
       expect(result!.already_finalized).toBe(true);
       expect(result!.scenario_id).toBe('s1');
+      expect(result!.score_breakdown).toEqual([]);
     });
   });
 });

@@ -16,6 +16,16 @@ import type { StructuredBetOutcome } from '../lib/predictionBetting';
 
 export const CAMPAIGN_FINALIZE_CACHE_KEY = 'swarmoracle:result-campaign-finalize:v1';
 
+export type ResultMomentKind = 'card' | 'bet' | 'commitment' | 'story';
+
+export interface ResultMomentHighlight {
+  id: string;
+  kind: ResultMomentKind;
+  label: string;
+  round?: number;
+  detail?: string;
+}
+
 export function buildCampaignFinalizeCacheEntryKey(
   scenarioId: string,
   userId: string,
@@ -145,6 +155,7 @@ export function buildCampaignSummaryFromExistingData(
     scenario_id: persistedSummary.scenario_id,
     already_finalized: true,
     campaign_score_delta: persistedSummary.campaign_score_delta,
+    score_breakdown: persistedSummary.score_breakdown ?? [],
     profile,
     mastery,
     badges,
@@ -184,4 +195,64 @@ export function formatArchiveKeyMoment(moment: string, isZh: boolean): string {
   return isZh
     ? `R${parsed.round} 承诺世界线 ${parsed.value}`
     : `R${parsed.round} committed to ${parsed.value}`;
+}
+
+export function buildMomentHighlights(
+  moments: string[],
+  isZh: boolean,
+  limit = 5,
+): ResultMomentHighlight[] {
+  const highlights: ResultMomentHighlight[] = [];
+  const seen = new Set<string>();
+
+  for (const rawMoment of moments) {
+    const raw = rawMoment.trim();
+    if (!raw) continue;
+
+    const parsed = parseScenarioMoment(raw);
+    let highlight: ResultMomentHighlight;
+
+    if (parsed?.kind === 'card') {
+      const definition = getGameplayCardDefinition(
+        parsed.value as Parameters<typeof getGameplayCardDefinition>[0],
+      );
+      highlight = {
+        id: `card-${parsed.round}-${parsed.value}`,
+        kind: 'card',
+        label: isZh ? definition.labelZh : definition.labelEn,
+        round: parsed.round,
+        detail: isZh ? '这次干预改变了分支走向。' : 'This intervention changed the branch trajectory.',
+      };
+    } else if (parsed?.kind === 'bet') {
+      highlight = {
+        id: `bet-${parsed.round}-${parsed.value}`,
+        kind: 'bet',
+        label: parsed.value,
+        round: parsed.round,
+        detail: isZh ? '这里记录了你的押注判断。' : 'This records the prediction you chose to back.',
+      };
+    } else if (parsed?.kind === 'commitment') {
+      highlight = {
+        id: `commitment-${parsed.round}-${parsed.value}`,
+        kind: 'commitment',
+        label: parsed.value,
+        round: parsed.round,
+        detail: isZh ? '这条世界线成为后续复盘锚点。' : 'This worldline became the anchor for the debrief.',
+      };
+    } else {
+      highlight = {
+        id: `story-${highlights.length}-${raw}`,
+        kind: 'story',
+        label: raw,
+      };
+    }
+
+    const key = `${highlight.kind}:${highlight.round ?? ''}:${highlight.label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    highlights.push(highlight);
+    if (highlights.length >= limit) break;
+  }
+
+  return highlights;
 }

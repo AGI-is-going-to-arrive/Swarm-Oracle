@@ -25,7 +25,7 @@ React + TypeScript frontend for SwarmOracle.
 |-------|-----------|-------------|
 | `/` | `InputView` | Scenario input, quick starts, daily challenge, provider policy, optional organization id |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, capture |
-| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, archive, director debrief / campaign summary, share/export, replay import, resume-from-round entry when counterfactual replay is enabled, plus the capability-gated `Explore Deeper` bridge |
+| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, ledger-style archive, director debrief / campaign summary, share/export, replay import, resume-from-round entry when counterfactual replay is enabled, plus the capability-gated `Explore Deeper` bridge |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
 | `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate result, supporting turns, replay digest, share/import |
 | `/history` | `HistoryView` | Scenario history, filtering, deletion |
@@ -85,9 +85,11 @@ React + TypeScript frontend for SwarmOracle.
 - `GlobalOfflineBanner.tsx`
   the WS-disconnect grace timer now uses an SSR-safe layout-effect fallback; current SPA behavior stays the same, and future SSR will not log the layout-effect warning
 - `ResultView.tsx`
-  the result surface now includes the director debrief, capability-gated `Explore Deeper` bridge with locale-backed causal / replay / compare / workbench copy, keeps disabled cards semantic without rendering bare anchors, encodes the existing causal / compare CTAs consistently, and routes faction-timeline lead copy through locale keys with `{{title}}` interpolation
+  the result surface now includes a ledger-style archive, director debrief, capability-gated `Explore Deeper` bridge with locale-backed causal / replay / compare / workbench copy, semantic disabled cards, and locale-backed faction-timeline lead copy
+- `resultHelpers.ts`
+  result-page pure helpers for bet badges, campaign cache, badge copy, and structured moment highlights used by the archive / debrief handoff
 - `DirectorDebriefPanel.tsx`
-  result-page director debrief panel that turns campaign summary, archive grade, worldline commitment, bets, goals, and gameplay card state into score breakdown, level progress, run readout, next action, and newly unlocked badges
+  result-page director debrief panel that consumes backend score breakdown plus question, worldline, commitment, bet, intervention, moment, goal, and gameplay state to render score reasons, run readout, next-action cards, and newly unlocked badges
 - `CausalReviewView.tsx`
   graph fetches now encode `scenarioId / branchId` before building request URLs; the guide / empty-state copy is now backed by the local `CAUSAL_COLORS` dark-surface palette, close/show controls expose a complete disclosure pattern, and long guide key-node labels stay visually compact while preserving the full label in `aria-label` / `title`
 - `ArgumentMap.tsx`
@@ -101,7 +103,7 @@ React + TypeScript frontend for SwarmOracle.
 ```bash
 cd frontend
 npm install
-npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/result/DirectorDebriefPanel.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
+npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/pages/resultHelpers.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/result/DirectorDebriefPanel.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
 npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.tsx src/lib/replayCodec.test.ts src/lib/debateReplay.test.ts src/components/AgentProfileModal.test.tsx src/lib/legacyCssFallbacks.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run lint

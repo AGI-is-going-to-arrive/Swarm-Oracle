@@ -2,7 +2,7 @@
    SwarmOracle — PredictionModal (P5-B)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { submitPrediction } from '../api/client';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
@@ -152,53 +152,32 @@ export default function PredictionModal({
       : effectiveBetKind === 'ending_tone'
         ? getEndingToneLabel(endingTone, isZh)
         : PROFILE_RESONANCE_OPTIONS[profileResonance][isZh ? 'zh' : 'en'];
-  const predictionPayloadLength = useMemo(
-    () => buildStructuredPredictionText({
-      kind: effectiveBetKind,
-      targetId: structuredTargetId,
-      targetLabel: structuredTargetLabel,
-      rationale: text,
-      confidence,
-      userName,
-      placedAtRound: currentRound,
-      sceneTheme,
-      question,
-    }).length,
-    [
-      confidence,
-      currentRound,
-      effectiveBetKind,
-      question,
-      sceneTheme,
-      structuredTargetId,
-      structuredTargetLabel,
-      text,
-      userName,
-    ],
-  );
-  const predictionRationaleLimit = useMemo(() => {
-    const payloadWithoutRationale = buildStructuredPredictionText({
-      kind: effectiveBetKind,
-      targetId: structuredTargetId,
-      targetLabel: structuredTargetLabel,
-      rationale: '',
-      confidence,
-      userName,
-      placedAtRound: currentRound,
-      sceneTheme,
-      question,
-    });
-    return Math.max(0, PREDICTION_TEXT_LIMIT - payloadWithoutRationale.length - 1);
-  }, [
+  const predictionPayloadLength = buildStructuredPredictionText({
+    kind: effectiveBetKind,
+    targetId: structuredTargetId,
+    targetLabel: structuredTargetLabel,
+    rationale: text,
     confidence,
-    currentRound,
-    effectiveBetKind,
-    question,
-    sceneTheme,
-    structuredTargetId,
-    structuredTargetLabel,
     userName,
-  ]);
+    placedAtRound: currentRound,
+    sceneTheme,
+    question,
+  }).length;
+  const payloadWithoutRationale = buildStructuredPredictionText({
+    kind: effectiveBetKind,
+    targetId: structuredTargetId,
+    targetLabel: structuredTargetLabel,
+    rationale: '',
+    confidence,
+    userName,
+    placedAtRound: currentRound,
+    sceneTheme,
+    question,
+  });
+  const predictionRationaleLimit = Math.max(
+    0,
+    PREDICTION_TEXT_LIMIT - payloadWithoutRationale.length - 1,
+  );
   const isPredictionTooLong = predictionPayloadLength > PREDICTION_TEXT_LIMIT;
   const canSubmit =
     Boolean(text.trim())

@@ -937,7 +937,7 @@ export function DebateArenaView() {
               {latestVisibleTurn && selectedPhase === currentPhase && (
                 <article
                   data-testid="debate-live-turn"
-                  className={`debate-turn-card debate-turn-card--${latestVisibleTurn.speaker_side} debate-turn-card--hot mb-4`}
+                  className={`debate-turn-card debate-turn-card--${latestVisibleTurn.speaker_side} debate-turn-card--hot`}
                 >
                   <div className="debate-turn-card__meta">
                     <span className={`debate-speaker-initial debate-speaker-initial--${latestVisibleTurn.speaker_side}`} aria-hidden="true">
