@@ -82,6 +82,7 @@ import {
   getGameplayCardDefinition,
   getGameplayProfileLabel,
   getGameplayProfileSignatureHooks,
+  getGameplayProfileTacticalState,
   getScenarioSystemTrackState,
   getGameplaySignatureArcState,
   inferGameplayProfile,
@@ -128,6 +129,7 @@ import { MobileSourceSheet } from '../components/result/MobileSourceSheet';
 import { FinanceSourceCard } from '../components/result/FinanceSourceCard';
 import { type SourceCategoryState } from '../components/result/SourceCategoryCard';
 import { HookSummaryPanel } from '../components/result/HookSummaryPanel';
+import { DirectorDebriefPanel } from '../components/result/DirectorDebriefPanel';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 const EMPTY_GAMEPLAY_PROFILE_HOOKS: string[] = [];
@@ -1001,6 +1003,15 @@ export default function ResultView() {
     if (!scenarioMeta || !resolvedProfileId) return null;
     return getScenarioSystemTrackState(
       resolvedProfileId as Parameters<typeof getScenarioSystemTrackState>[0],
+      scenarioMeta.cards.usageLog,
+      scenarioMeta.commitment,
+      isZh,
+    );
+  }, [isZh, resolvedProfileId, scenarioMeta]);
+  const tacticalState = useMemo(() => {
+    if (!scenarioMeta || !resolvedProfileId) return null;
+    return getGameplayProfileTacticalState(
+      resolvedProfileId as Parameters<typeof getGameplayProfileTacticalState>[0],
       scenarioMeta.cards.usageLog,
       scenarioMeta.commitment,
       isZh,
@@ -2158,9 +2169,14 @@ export default function ResultView() {
           type="button"
           className="result-director-notebook__trigger"
           aria-expanded={notebookOpen}
+          aria-label={t(notebookOpen ? 'result_ux.director_notebook_collapse' : 'result_ux.director_notebook_expand')}
+          aria-describedby="director-notebook-hint"
           onClick={() => setNotebookOpen((prev) => !prev)}
         >
-          <span>{t('result_ux.director_notebook')}</span>
+          <span className="result-director-notebook__trigger-copy">
+            <span>{t('result_ux.director_notebook')}</span>
+            <small id="director-notebook-hint">{t('result_ux.director_notebook_hint')}</small>
+          </span>
           <span aria-hidden="true">{notebookOpen ? '\u25B2' : '\u25BC'}</span>
         </button>
         <div
@@ -2383,43 +2399,32 @@ export default function ResultView() {
       </section>{/* end .result-director-notebook */}
 
       {campaignSummary && (
-        <section className="result-campaign">
-          <h2 className="result-campaign__title">{t('result.campaign_title')}</h2>
-          <div className="result-campaign__grid">
-            <div className="result-campaign__card">
-              <span>{t('result.campaign_delta')}</span>
-              <strong>+{campaignSummary.campaign_score_delta}</strong>
-            </div>
-            <div className="result-campaign__card">
-              <span>{t('result.campaign_level')}</span>
-              <strong>{t('home.campaign_mastery_level', { level: campaignSummary.mastery.level })}</strong>
-            </div>
-            <div className="result-campaign__card">
-              <span>{t('result.campaign_next')}</span>
-              <strong>
-                {(campaignSummary.mastery.score_to_next_level ?? 0) > 0
-                  ? t('home.campaign_next_unlock', { count: campaignSummary.mastery.score_to_next_level ?? 0 })
-                  : t('home.campaign_mastered')}
-              </strong>
-            </div>
-            <div className="result-campaign__card">
-              <span>{t('result.campaign_badges')}</span>
-              <strong>{campaignSummary.badges.length}</strong>
-            </div>
-          </div>
-          <div className="result-campaign__badges">
-            {newlyUnlockedBadges.length > 0 ? (
-              newlyUnlockedBadges.map(({ badge, copy }) => (
-                <article key={`${badge.id}-${badge.unlocked_at}`} className="result-campaign__badge">
-                  <strong>{copy.label}</strong>
-                  <small>{copy.description}</small>
-                </article>
-              ))
-            ) : (
-              <p className="result-campaign__empty">{t('result.campaign_badges_none')}</p>
-            )}
-          </div>
-        </section>
+        <DirectorDebriefPanel
+          campaignSummary={campaignSummary}
+          profileLabel={gameplayProfileLabel}
+          profileHooks={gameplayProfileHooks}
+          archiveGrade={displayArchive?.archiveGrade ?? null}
+          profileResonance={displayArchive?.profileResonance ?? null}
+          profileResonanceLabel={profileResonanceLabel}
+          directorStyleLabel={directorStyleLabel}
+          objectiveCompletedCount={displayArchive?.objectiveCompletedCount ?? 0}
+          objectiveTotalCount={displayArchive?.objectiveTotalCount ?? 0}
+          commitmentOutcome={displayArchive?.commitmentOutcome ?? null}
+          commitmentOutcomeLabel={commitmentOutcomeLabel}
+          commitmentBranchTitle={scenarioMeta?.commitment.branchTitle ?? null}
+          isDailyChallenge={isDailyChallenge}
+          betCount={scenarioMeta?.betting.bets.length ?? 0}
+          bettingHit={displayArchive?.bettingHit ?? null}
+          signatureArc={signatureArcState}
+          systemTracks={systemTracks}
+          tacticalState={tacticalState}
+          newlyUnlockedBadges={newlyUnlockedBadges.map(({ badge, copy }) => ({
+            id: badge.id,
+            unlockedAt: badge.unlocked_at,
+            label: copy.label,
+            description: copy.description,
+          }))}
+        />
       )}
 
       {campaignNotice && (

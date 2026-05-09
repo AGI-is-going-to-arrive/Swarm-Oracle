@@ -1129,6 +1129,196 @@
   margin-bottom: 16px;
 }
 
+.director-debrief__header {
+  max-width: 860px;
+  margin-bottom: 20px;
+}
+
+.director-debrief__eyebrow {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.director-debrief__lead {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+.director-debrief__metrics,
+.director-debrief__columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.director-debrief__metric,
+.director-debrief__block {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.director-debrief__metric {
+  min-height: 116px;
+  padding: 14px 16px;
+}
+
+.director-debrief__metric--primary {
+  border-color: color-mix(in oklab, var(--color-primary) 42%, var(--border-default));
+}
+
+.director-debrief__metric span,
+.director-debrief__block h3 {
+  display: block;
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.director-debrief__metric strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: var(--text-xl);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.director-debrief__metric small,
+.director-debrief__block small {
+  display: block;
+  margin-top: 8px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.director-debrief__progress {
+  margin: 16px 0 18px;
+}
+
+.director-debrief__progress-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.director-debrief__progress-copy strong {
+  color: var(--text-primary);
+}
+
+.director-debrief__progress-track {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--bg-muted) 82%, transparent);
+}
+
+.director-debrief__progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-primary);
+}
+
+.director-debrief__block {
+  padding: 16px;
+}
+
+.director-debrief__block p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.director-debrief__score-list {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.director-debrief__score-list li,
+.director-debrief__readout div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.director-debrief__score-list span,
+.director-debrief__readout dt {
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.director-debrief__score-list strong,
+.director-debrief__readout dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: 700;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.director-debrief__score-list strong.is-negative {
+  color: var(--color-danger);
+}
+
+.director-debrief__chips,
+.director-debrief__hook-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.director-debrief__chips {
+  margin-top: 12px;
+}
+
+.director-debrief__chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  max-width: 100%;
+  padding: 5px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.director-debrief__chip--strong {
+  border-color: color-mix(in oklab, var(--color-primary) 36%, var(--border-default));
+  color: var(--text-primary);
+}
+
+.director-debrief__readout {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.director-debrief__hook-row {
+  margin: 14px 0 16px;
+}
+
 .result-campaign__grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1473,6 +1663,20 @@
 
 .result-director-notebook__trigger:hover {
   color: var(--color-primary);
+}
+
+.result-director-notebook__trigger-copy {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+}
+
+.result-director-notebook__trigger-copy small {
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 400;
+  line-height: 1.45;
 }
 
 .result-director-notebook__body {

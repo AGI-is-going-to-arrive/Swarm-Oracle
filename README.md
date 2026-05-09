@@ -11,7 +11,7 @@
   - `Debate Arena` live/result/replay
   - `Oracle Chambers / 世界线圆桌`
   - replay 分享与导入
-  - director campaign、玩法卡、结构化押注
+  - director campaign / 导演复盘、玩法卡、结构化押注
 - 最近一次稳定全链签收工件位于 `frontend/output/e2e/2026-04-12T04-12-03-164Z-release-signoff/summary.json`。
 - 当前默认本地 `release-signoff` 脚本会覆盖：
   - backend checks
@@ -84,7 +84,7 @@
 | Butterfly Effect | 已落地，支持即时 / 回溯 / 批量干预 |
 | Gameplay Cards | 已落地，14 张卡，走共享 gameplay contract |
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响 |
-| Director Campaign | 已落地，含 goals、risk/resource、commitment、growth |
+| Director Campaign | 已落地，含 goals、risk/resource、commitment、growth 与结果页导演复盘 |
 | Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑自建 Agent、knowledge domains、`IMPORTANT / CROWD` tier、主推演注入和 Debate 双方席位绑定；自建 Agent 不开放 `CORE` 层级 |
 | Counterfactual Replay & Compare | 已落地，支持 counterfactual / resume / compare；compare 当前采用单活跃 Theater + shared round selector |
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale、readonly replay import；只有分享链接过长并回退到本地只读 `?local=` 时，结果页才会明确显示 `Save local read-only copy` |

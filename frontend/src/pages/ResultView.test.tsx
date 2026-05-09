@@ -525,6 +525,11 @@ vi.mock('../components/gameplayCards', () => ({
   getGameplayProfileLabel: vi.fn(() => 'Law'),
   getGameplayProfileSignatureHooks: vi.fn(() => ['Judicial review']),
   getGameplaySignatureArcState: vi.fn(() => null),
+  getGameplayProfileTacticalState: vi.fn(() => ({
+    label: 'Audit Pullback',
+    note: 'Expose the record before pushing the next branch.',
+    focusCards: ['public_hearing'],
+  })),
   getScenarioSystemTrackState: vi.fn(() => null),
   inferGameplayProfile: vi.fn(() => ({ id: 'law' })),
   isCounterplayCard: vi.fn(() => false),
@@ -1126,11 +1131,13 @@ describe('ResultView campaign summary', () => {
       }));
     });
 
-    expect(await screen.findByText('result.campaign_title')).toBeInTheDocument();
+    expect(await screen.findByText('result.director_debrief_title')).toBeInTheDocument();
     expect(screen.getByText('+5')).toBeInTheDocument();
     expect(screen.getByText('Lv.2')).toBeInTheDocument();
     expect(screen.getByText('5 points to next unlock')).toBeInTheDocument();
     expect(screen.getByText('Archive Record')).toBeInTheDocument();
+    expect(screen.getByText('Audit Pullback')).toBeInTheDocument();
+    expect(screen.getByText('result.director_debrief_score_completed')).toBeInTheDocument();
   });
 
   it('does not refetch or finalize again when only the language changes', async () => {
@@ -1283,7 +1290,7 @@ describe('ResultView campaign summary', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('result.campaign_title')).toBeInTheDocument();
+    expect(await screen.findByText('result.director_debrief_title')).toBeInTheDocument();
     expect(screen.getByText('+5')).toBeInTheDocument();
     expect(finalizeCampaignMock).not.toHaveBeenCalled();
     expect(getCampaignScenarioSummaryMock).toHaveBeenCalledWith('scenario-1');
@@ -1597,7 +1604,37 @@ describe('ResultView campaign summary', () => {
         campaign_score_delta: 5,
         finalized_at: null,
       },
-      campaignSummary: null,
+      campaignSummary: {
+        scenario_id: 'scenario-1',
+        already_finalized: true,
+        campaign_score_delta: 5,
+        profile: {
+          user_id: 'director-1',
+          user_name: 'Replay Director',
+          total_runs: 3,
+          completed_challenges: 0,
+          total_bets: 1,
+          hit_bets: 1,
+          highest_archive_grade: 'A',
+          created_at: '2026-03-17T00:00:00Z',
+          updated_at: '2026-03-17T00:00:00Z',
+        },
+        mastery: {
+          profile_id: 'law',
+          runs: 2,
+          challenge_completions: 0,
+          signature_hits: 0,
+          aligned_hits: 1,
+          campaign_score: 9,
+          level: 2,
+          best_archive_grade: 'A',
+          favorite_card_id: null,
+          next_level_score: 10,
+          score_to_next_level: 1,
+        },
+        badges: [],
+        newly_unlocked_badges: [],
+      },
       isDailyChallenge: false,
     });
 
@@ -1613,6 +1650,7 @@ describe('ResultView campaign summary', () => {
     );
 
     expect(await screen.findByText('result.title')).toBeInTheDocument();
+    expect(screen.getByText('result.director_debrief_title')).toBeInTheDocument();
     expect(finalizeCampaignMock).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'result.export' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'result.score_predictions' })).not.toBeInTheDocument();
@@ -1875,7 +1913,8 @@ describe('ResultView campaign summary', () => {
     expect(await screen.findByText('resume.title')).toBeInTheDocument();
     expect(screen.getByLabelText('resume.branch')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'resume.submit' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'result_ux.director_notebook' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'result_ux.director_notebook_collapse' }))
+      .toHaveAttribute('aria-expanded', 'true');
     expect(container.querySelector('.result-director-notebook__body .result-archive')).not.toBeNull();
     expect(screen.getByText('resume.title').closest('.result-director-notebook__body')).toBeNull();
   });
@@ -2382,10 +2421,10 @@ describe('ResultView campaign summary', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Public Hearing')).toBeInTheDocument();
+    expect((await screen.findAllByText('Public Hearing')).length).toBeGreaterThan(0);
     expect(screen.getByText('Bet Missed')).toBeInTheDocument();
     expect(screen.getByText('A')).toBeInTheDocument();
-    expect(screen.getByText('Direction aligned')).toBeInTheDocument();
+    expect(screen.getAllByText('Direction aligned').length).toBeGreaterThan(0);
     expect(screen.getByText('result.archive_daily_challenge')).toBeInTheDocument();
     expect(screen.getByText('Law · result.archive_completed')).toBeInTheDocument();
     expect(screen.queryByText('result.archive_director_points')).not.toBeInTheDocument();
@@ -3097,7 +3136,7 @@ describe('ResultView campaign summary', () => {
     });
 
     expect(screen.getByText('1/1')).toBeInTheDocument();
-    expect(screen.getByText('Worldline Commitment')).toBeInTheDocument();
+    expect(screen.getAllByText('Worldline Commitment').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Archive Branch').length).toBeGreaterThan(1);
   });
 
