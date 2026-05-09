@@ -36,6 +36,7 @@ const {
   findChallengeProgressByScenarioIdMock,
   getReplayArtifactMock,
   importReplayScenarioMock,
+  shareModalMock,
   upsertScenarioDirectorStateMock,
   upsertScenarioGameplayStateMock,
 } = vi.hoisted(() => ({
@@ -51,6 +52,10 @@ const {
     ...scenario,
     id: 'imported-result-1',
   })),
+  shareModalMock: vi.fn((props: unknown) => {
+    void props;
+    return null;
+  }),
   upsertScenarioDirectorStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
     scenario_id: scenarioId,
     ...(payload as Record<string, unknown>),
@@ -547,7 +552,7 @@ vi.mock('../components/gameplayCards', () => ({
 }));
 
 vi.mock('../components/ShareModal', () => ({
-  default: () => null,
+  default: (props: unknown) => shareModalMock(props),
 }));
 
 beforeEach(() => {
@@ -563,6 +568,7 @@ beforeEach(() => {
     web_search: { providers: {} },
   });
   setMockCapabilityLoading(false);
+  shareModalMock.mockClear();
   importReplayScenarioMock.mockReset();
   importReplayScenarioMock.mockImplementation(async (scenario: { id: string }) => ({
     ...scenario,
@@ -1886,7 +1892,7 @@ describe('ResultView campaign summary', () => {
       );
     });
 
-    const compareEntry = await screen.findByRole('link', { name: /result.bridge_compare_title/ });
+    const compareEntry = await screen.findByRole('link', { name: /result.next_replay_different/ });
     expect(compareEntry).toHaveAttribute(
       'href',
       '/result/scenario-1/compare?branch_a=branch-2&branch_b=branch-1',
@@ -3709,10 +3715,82 @@ describe('ResultView explore deeper bridge', () => {
       </MemoryRouter>,
     );
 
-    const bridgeHeading = await screen.findByRole('heading', { name: 'result.bridge_title' });
+    const bridgeHeading = await screen.findByRole('heading', { name: 'result.next_steps_heading' });
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
     expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(5);
+  });
+
+  it('passes only populated source families into share image artifacts', async () => {
+    const user = userEvent.setup();
+    setMockCapabilities({
+      causal_graph: { enabled: true },
+      replay_trace: { enabled: true },
+      counterfactual_replay: { enabled: true },
+      agent_identity: { enabled: true },
+    });
+    vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+      id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      web_search_context: {
+        query: 'archive sync',
+        snippets: [],
+        provider: 'test',
+        timestamp: '2026-03-17T00:00:00Z',
+        cached: false,
+        family_context: {
+          polymarket: { state: 'empty', items: [] },
+          news_deep: {
+            state: 'ready',
+            items: [{ id: 'n1', title: 'News', url: 'https://example.com/news' }],
+          },
+        },
+      },
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+    } as Scenario);
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const shareButton = await screen.findByRole('button', { name: /result\.next_share/ });
+    await waitFor(() => {
+      expect(shareButton).not.toBeDisabled();
+    });
+    await user.click(shareButton);
+
+    await waitFor(() => {
+      expect(shareModalMock).toHaveBeenCalled();
+    });
+    const props = shareModalMock.mock.calls.at(-1)?.[0] as { sourceFamilies?: string[] };
+    expect(props.sourceFamilies).toEqual(['news_deep']);
   });
 
   it('does not render the bridge card when the story has no branches', async () => {
@@ -3732,7 +3810,7 @@ describe('ResultView explore deeper bridge', () => {
     );
 
     expect(await screen.findByText('result.title')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'result.bridge_title' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'result.next_steps_heading' })).not.toBeInTheDocument();
   });
 
   it('does not render the bridge while capability state is still loading', async () => {
@@ -3747,7 +3825,7 @@ describe('ResultView explore deeper bridge', () => {
     );
 
     expect(await screen.findByText('result.title')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'result.bridge_title' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'result.next_steps_heading' })).not.toBeInTheDocument();
   });
 
   it('builds the causal entry href from the active scenario id and encoded branch id', async () => {
@@ -3797,7 +3875,7 @@ describe('ResultView explore deeper bridge', () => {
       </MemoryRouter>,
     );
 
-    const causalEntry = await screen.findByRole('link', { name: /result.bridge_causal_title/ });
+    const causalEntry = await screen.findByRole('link', { name: /result.next_understand_why/ });
     expect(causalEntry).toHaveAttribute(
       'href',
       `/sim/${encodeURIComponent(scenarioId)}/causal-map?branch_id=${encodeURIComponent(branchId)}`,
@@ -3960,7 +4038,7 @@ describe('ResultView explore deeper bridge', () => {
       </MemoryRouter>,
     );
 
-    const replayEntry = await screen.findByRole('link', { name: /result.bridge_replay_title/ });
+    const replayEntry = await screen.findByRole('link', { name: /result.next_replay_trace/ });
     expect(replayEntry).toHaveAttribute('aria-disabled', 'true');
     expect(replayEntry).toHaveTextContent('result.bridge_replay_unavailable');
   });
@@ -3978,7 +4056,7 @@ describe('ResultView explore deeper bridge', () => {
       </MemoryRouter>,
     );
 
-    const compareEntry = await screen.findByRole('link', { name: /result.bridge_compare_title/ });
+    const compareEntry = await screen.findByRole('link', { name: /result.next_replay_different/ });
     expect(compareEntry).toHaveAttribute('aria-disabled', 'true');
     expect(compareEntry).toHaveTextContent('result.bridge_single_branch');
   });
@@ -4022,7 +4100,7 @@ describe('ResultView explore deeper bridge', () => {
       </MemoryRouter>,
     );
 
-    const bridgeHeading = await screen.findByRole('heading', { name: 'result.bridge_title' });
+    const bridgeHeading = await screen.findByRole('heading', { name: 'result.next_steps_heading' });
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
     const entries = within(bridgeSection as HTMLElement).getAllByRole('link');
@@ -4152,7 +4230,7 @@ describe('ResultView workbench bridge gate', () => {
       </MemoryRouter>,
     );
 
-    const bridgeHeading = await screen.findByRole('heading', { name: 'result.bridge_title' });
+    const bridgeHeading = await screen.findByRole('heading', { name: 'result.next_steps_heading' });
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
     const workbenchEntry = within(bridgeSection as HTMLElement).getByText('result.bridge_workbench_title').closest('[role="link"]');
@@ -4247,7 +4325,7 @@ describe('ResultView HookSummaryPanel integration', () => {
     const hookPanel = await screen.findByRole('region', { name: /result\.hooks\.title/ });
     expect(hookPanel).toBeTruthy();
 
-    const bridgeHeading = screen.getByRole('heading', { name: 'result.bridge_title' });
+    const bridgeHeading = screen.getByRole('heading', { name: 'result.next_steps_heading' });
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
 
@@ -4255,6 +4333,7 @@ describe('ResultView HookSummaryPanel integration', () => {
     const children = Array.from(parent.children);
     const hookIdx = children.indexOf(hookPanel);
     const bridgeIdx = children.indexOf(bridgeSection!);
-    expect(hookIdx).toBeLessThan(bridgeIdx);
+    // P0-2: bridge section now appears before HookSummaryPanel (next-step center is prominent)
+    expect(bridgeIdx).toBeLessThan(hookIdx);
   });
 });

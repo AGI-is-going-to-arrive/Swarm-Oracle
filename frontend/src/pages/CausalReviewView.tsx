@@ -35,6 +35,7 @@ import {
   type FitViewOptions,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import './CausalReviewView.css';
 import { useSearchParams } from 'react-router-dom';
 import {
   NODE_TYPE_COLORS_HEX,
@@ -849,9 +850,11 @@ export function CausalReviewView() {
   const [error, setError] = useState<CausalGraphErrorState | null>(null);
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
+  const [analysisPanelOpen, setAnalysisPanelOpen] = useState(false);
   const [guideMode, setGuideMode] = useState<GuideMode>('summary');
   const { enabled: graphAnalysisEnabled } = useCapabilityCheck('graph_analysis');
   const [serverAnalysis, setServerAnalysis] = useState<GraphAnalysisResponse | null>(null);
+  const analysisPanelId = `causal-analysis-${useId().replace(/:/g, '-')}`;
   const [agentNameMap, setAgentNameMap] = useState<Map<string, string>>(new Map());
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
   const [sheetState, setSheetState] = useState<NodeConversationSheetState>(createClosedSheetState);
@@ -1630,6 +1633,26 @@ export function CausalReviewView() {
             >
               {legendOpen ? t('causal.hide_legend', 'Hide Legend') : t('causal.show_legend', 'Legend')}
             </button>
+            {serverAnalysis && (
+              <button
+                type="button"
+                onClick={() => setAnalysisPanelOpen(v => !v)}
+                aria-expanded={analysisPanelOpen}
+                aria-controls={analysisPanelId}
+                style={{
+                  minHeight: isCompactViewport ? 40 : 36,
+                  padding: '6px 12px',
+                  borderRadius: 10,
+                  border: `1px solid ${CAUSAL_COLORS.borderDefault}`,
+                  background: 'transparent',
+                  color: CAUSAL_COLORS.textLink,
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                }}
+              >
+                {t('causal.analysis_toggle', 'Show Analysis')}
+              </button>
+            )}
           </div>
           {nodeCount > 0 && !isNonInteractiveFallback && isCompactViewport ? (
             <span style={{ color: CAUSAL_COLORS.textMuted, fontSize: '0.76rem' }}>
@@ -1646,6 +1669,118 @@ export function CausalReviewView() {
                 {t(`causal.type_${type}`, type.replace('_', ' '))}
               </span>
             ))}
+          </div>
+        )}
+
+        {/* P1-2: Graph Analysis panel — gated on serverAnalysis being loaded. */}
+        {serverAnalysis && analysisPanelOpen && (
+          <div id={analysisPanelId} className="causal-analysis-panel" role="region" aria-label={t('causal.analysis_title', 'Graph Analysis')}>
+            <div className="causal-analysis-panel__header">
+              <h2 className="causal-analysis-panel__title">{t('causal.analysis_title', 'Graph Analysis')}</h2>
+              <button
+                type="button"
+                className="causal-analysis-panel__close"
+                onClick={() => setAnalysisPanelOpen(false)}
+                aria-label={t('causal.guide_close', 'Close')}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="causal-analysis-panel__stats">
+              <div className="causal-analysis-panel__stat">
+                <span className="causal-analysis-panel__stat-label">{t('causal.analysis_nodes', 'Nodes')}</span>
+                <span className="causal-analysis-panel__stat-value">{serverAnalysis.summary.total_nodes}</span>
+              </div>
+              <div className="causal-analysis-panel__stat">
+                <span className="causal-analysis-panel__stat-label">{t('causal.analysis_edges', 'Edges')}</span>
+                <span className="causal-analysis-panel__stat-value">{serverAnalysis.summary.total_edges}</span>
+              </div>
+              <div className="causal-analysis-panel__stat">
+                <span className="causal-analysis-panel__stat-label">{t('causal.analysis_density', 'Density')}</span>
+                <span className="causal-analysis-panel__stat-value">{(serverAnalysis.summary.density ?? 0).toFixed(3)}</span>
+              </div>
+              <div className="causal-analysis-panel__stat">
+                <span className="causal-analysis-panel__stat-label">{t('causal.analysis_avg_max_degree', 'Avg / Max Degree')}</span>
+                <span className="causal-analysis-panel__stat-value">
+                  {(serverAnalysis.summary.avg_degree ?? 0).toFixed(2)} / {serverAnalysis.summary.max_degree ?? 0}
+                </span>
+              </div>
+              <div className="causal-analysis-panel__stat">
+                <span className="causal-analysis-panel__stat-label">{t('causal.analysis_components', 'Components')}</span>
+                <span className="causal-analysis-panel__stat-value">{serverAnalysis.summary.connected_components}</span>
+              </div>
+            </div>
+            {serverAnalysis.god_nodes.length > 0 && (
+              <div className="causal-analysis-panel__section">
+                <span className="causal-analysis-panel__section-title">{t('causal.analysis_god_nodes', 'Key Nodes')}</span>
+                <div className="causal-analysis-panel__god-nodes">
+                  {serverAnalysis.god_nodes.slice(0, 5).map((gn) => {
+                    const typeLabel = getCausalTypeLabel(gn.type, t);
+                    return (
+                      <div key={gn.node_id} className="causal-analysis-panel__god-node">
+                        <span className="causal-analysis-panel__god-node-label" title={gn.label}>{gn.label}</span>
+                        <span className="causal-analysis-panel__god-node-meta">
+                          {typeLabel} · {gn.total_degree} ({gn.in_degree} in / {gn.out_degree} out)
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {serverAnalysis.cross_branch_edges.length > 0 && (
+              <div className="causal-analysis-panel__section">
+                <span className="causal-analysis-panel__section-title">{t('causal.analysis_cross_branch', 'Cross-branch Edges')}</span>
+                <div className="causal-analysis-panel__cross-branch">
+                  {serverAnalysis.cross_branch_edges.slice(0, 8).map((edge) => (
+                    <div
+                      key={`${edge.source_branch}->${edge.target_branch}`}
+                      className="causal-analysis-panel__cross-branch-row"
+                    >
+                      <span title={edge.source_branch}>{edge.source_branch.slice(0, 8)}</span>
+                      <span className="causal-analysis-panel__cross-branch-arrow" aria-hidden="true">→</span>
+                      <span title={edge.target_branch}>{edge.target_branch.slice(0, 8)}</span>
+                      <span className="causal-analysis-panel__cross-branch-count">
+                        {edge.edge_count} · {t(`causal.edge_${edge.primary_type}`, edge.primary_type)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {Object.keys(serverAnalysis.degree_distribution).length > 0 && (() => {
+              const entries = Object.entries(serverAnalysis.degree_distribution)
+                .map(([k, v]) => [k, Number(v)] as const)
+                .filter(([, v]) => Number.isFinite(v))
+                .sort((a, b) => {
+                  const na = Number(a[0]), nb = Number(b[0]);
+                  if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+                  if (Number.isFinite(na)) return -1;
+                  if (Number.isFinite(nb)) return 1;
+                  return a[0].localeCompare(b[0]);
+                });
+              if (entries.length === 0) return null;
+              const maxCount = entries.reduce((max, [, count]) => Math.max(max, count), 0);
+              return (
+                <div className="causal-analysis-panel__section">
+                  <span className="causal-analysis-panel__section-title">{t('causal.analysis_degree_distribution', 'Degree Distribution')}</span>
+                  <div className="causal-analysis-panel__degree-dist">
+                    {entries.map(([degree, count]) => {
+                      const pct = maxCount > 0 ? Math.max(2, (count / maxCount) * 100) : 0;
+                      return (
+                        <div key={degree} className="causal-analysis-panel__degree-row">
+                          <span className="causal-analysis-panel__degree-label">{t('causal.analysis_degree_n', 'Degree {{degree}}', { degree })}</span>
+                          <span className="causal-analysis-panel__degree-bar-track" aria-hidden="true">
+                            <span className="causal-analysis-panel__degree-bar-fill" style={{ width: `${pct}%` }} />
+                          </span>
+                          <span className="causal-analysis-panel__degree-count">{count}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 

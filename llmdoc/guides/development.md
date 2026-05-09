@@ -217,6 +217,7 @@ npm test -- --run src/lib/dailyChallenge.test.ts
 cd frontend
 npm test -- --run src/lib/scenarioMeta.test.ts src/lib/scenarioGameplayState.test.ts src/lib/archiveSummary.test.ts src/pages/resultHelpers.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/result/DirectorDebriefPanel.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
 npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.tsx src/lib/replayCodec.test.ts src/lib/debateReplay.test.ts src/components/AgentProfileModal.test.tsx src/lib/legacyCssFallbacks.test.ts
+npm test -- --run src/api/client.test.ts src/pages/InputView.test.tsx src/pages/ResultView.test.tsx src/pages/ReplayView.test.tsx src/pages/CausalReviewView.test.tsx src/pages/PostVerdictStreams.test.tsx src/components/AgentAttachPanel.test.tsx src/components/AgentProfileModal.test.tsx src/components/ResumePanel.test.tsx src/components/ShareModal.test.tsx src/i18n/locales.test.ts
 ```
 
 - Vitest 当前在 `frontend/src/setupTests.ts` 里统一注入内存版 `localStorage / sessionStorage`。
@@ -228,6 +229,7 @@ npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.t
   - `crypto.randomUUID()` 缺失时的本地 replay / director id fallback
   - `<dialog>.showModal()` 缺失时的 `AgentProfileModal` 降级
   - 关键 CSS token / 高流量页面表面的 sRGB / rgba fallback
+  - InputView accordion / Agent attach panel / ResultView bridge / ReplayView pagination / ResumePanel checkpoint picker / ShareModal PNG export 这些产品面回归
 
 ### Custom Agent Upgrade 定向回归
 
@@ -245,7 +247,7 @@ npm test -- --run src/pages/AgentLibrary.test.tsx src/pages/AgentWorkshopView.te
 浏览器复核优先覆盖：
 
 - `/agents` 创建 `IMPORTANT / CROWD` 两档自建 Agent，列表 badge 与编辑回填一致。
-- `/` 主模式 Agent attach panel 选中自建 Agent 后，创建 scenario 请求带 `custom_agent_identity_ids`。
+- `/` 主模式 Agent attach panel 选中自建 Agent 后，创建 scenario 请求带 `custom_agent_identity_ids`；loading/error/retry/empty 与超过 5 个可选项时的选择上限都要可见。
 - Debate 创建时，已选自建 Agent 的前 2 个 ID 进入 `custom_agent_ids`。
 - `/result/:id` 在 `custom_agents` capability 开启时显示 Agent Library bridge。
 - 移动端 tier selector 单列显示，badge 不溢出。
@@ -559,11 +561,11 @@ python -m pytest tests/test_roundtable_survey.py tests/test_roundtable_analyst.p
 ruff check app/services/
 
 cd ../frontend
-npx vitest run src/pages/RoundtableAgentChat.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/components/kg/NodeConversationSheet.test.tsx --reporter=verbose
+npx vitest run src/pages/RoundtableAgentChat.test.tsx src/pages/WorldlineRoundtableView.test.tsx src/pages/PostVerdictStreams.test.tsx src/components/kg/NodeConversationSheet.test.tsx --reporter=verbose
 npx tsc --noEmit -p tsconfig.app.json
 ```
 
-这组只看 completed-state roundtable 的 survey / analyst 后端合同，以及 Deep Dive 到 participant-scoped chat 的前端链路；如果改了开房、replay、移动端或跨浏览器口径，继续跑上面的完整 Oracle / Roundtable 回归。
+这组只看 completed-state roundtable 的 survey / analyst 后端合同，以及 Deep Dive 到 participant-scoped chat / analyst / survey 的前端链路；`PostVerdictStreams.test.tsx` 负责兜住首帧前 abort、完成后 abort、stream error、retry 和 source/tool chip。若改了开房、replay、移动端或跨浏览器口径，继续跑上面的完整 Oracle / Roundtable 回归。
 
 当前脚本口径：
 

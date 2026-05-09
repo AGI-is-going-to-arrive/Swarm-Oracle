@@ -3,7 +3,7 @@
  */
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
 const mockNavigate = vi.fn();
@@ -24,11 +24,25 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../api/client', () => ({
   resumeFromRound: vi.fn(),
+  getCheckpoints: vi.fn(),
   isApiError: vi.fn((error: unknown) => Boolean(error && typeof error === 'object' && 'status' in error)),
 }));
 
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: vi.fn(() => ({
+    enabled: true,
+    loading: false,
+    capabilities: null,
+    error: null,
+    reload: vi.fn(),
+  })),
+}));
+
 import { ResumePanel } from './ResumePanel';
-import { resumeFromRound } from '../api/client';
+import { getCheckpoints, resumeFromRound } from '../api/client';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import type { CheckpointInfo } from '../types';
+
 const MOCK_BRANCHES = [
   {
     id: 'branch-1',
@@ -39,6 +53,26 @@ const MOCK_BRANCHES = [
     title: 'Fork A',
   },
 ];
+
+const baseCheckpoint = (overrides: Partial<CheckpointInfo>): CheckpointInfo => ({
+  id: overrides.id ?? 'cp-default',
+  scenario_id: overrides.scenario_id ?? 'sc-123',
+  branch_id: overrides.branch_id ?? 'branch-1',
+  round_number: overrides.round_number ?? 1,
+  compressed_summary: overrides.compressed_summary ?? null,
+  blackboard_json: overrides.blackboard_json ?? null,
+  created_at: overrides.created_at ?? null,
+});
+
+function setEnabledCapability() {
+  vi.mocked(useCapabilityCheck).mockReturnValue({
+    enabled: true,
+    loading: false,
+    capabilities: null,
+    error: null,
+    reload: vi.fn(),
+  });
+}
 
 function renderPanel(props?: Partial<React.ComponentProps<typeof ResumePanel>>) {
   return render(
@@ -57,6 +91,19 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.useRealTimers();
+});
+
+beforeEach(() => {
+  // Default: capability disabled so existing tests see legacy numeric input.
+  vi.mocked(useCapabilityCheck).mockReturnValue({
+    enabled: false,
+    loading: false,
+    capabilities: null,
+    error: null,
+    reload: vi.fn(),
+  });
+  // Default: empty checkpoints list (numeric input fallback).
+  vi.mocked(getCheckpoints).mockResolvedValue([]);
 });
 
 describe('ResumePanel', () => {
@@ -290,5 +337,144 @@ describe('ResumePanel', () => {
     await waitFor(() => {
       expect(onCreated).toHaveBeenCalledWith('resume-002');
     });
+  });
+});
+
+describe('ResumePanel — checkpoint picker', () => {
+  it('renders checkpoint picker when getCheckpoints returns non-empty list', async () => {
+    setEnabledCapability();
+    vi.mocked(getCheckpoints).mockResolvedValue([
+      baseCheckpoint({ id: 'cp-1', round_number: 2, compressed_summary: 'Recap A' }),
+      baseCheckpoint({ id: 'cp-2', round_number: 4, compressed_summary: 'Recap B' }),
+    ]);
+
+    renderPanel({ totalRounds: 5 });
+
+    const picker = await screen.findByLabelText('Resume from checkpoint') as HTMLSelectElement;
+    expect(picker).toBeInTheDocument();
+    // placeholder + 2 checkpoints
+    await waitFor(() => {
+      expect(picker.options).toHaveLength(3);
+    });
+    expect(picker.options[0].value).toBe('');
+    expect(picker.options[1].value).toBe('cp-1');
+    expect(picker.options[2].value).toBe('cp-2');
+    // Numeric input should NOT be present.
+    expect(screen.queryByLabelText(/^Round$|^From Round$/)).not.toBeInTheDocument();
+  });
+
+  it('falls back to numeric input on empty list', async () => {
+    setEnabledCapability();
+    vi.mocked(getCheckpoints).mockResolvedValue([]);
+
+    renderPanel({ totalRounds: 5 });
+
+    await waitFor(() => {
+      expect(getCheckpoints).toHaveBeenCalled();
+    });
+    expect(screen.queryByLabelText('Resume from checkpoint')).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Round|From Round/)).toBeInTheDocument();
+  });
+
+  it('falls back to numeric input on getCheckpoints fetch error', async () => {
+    setEnabledCapability();
+    vi.mocked(getCheckpoints).mockRejectedValue(new Error('500 server'));
+
+    renderPanel({ totalRounds: 5 });
+
+    await waitFor(() => {
+      expect(getCheckpoints).toHaveBeenCalled();
+    });
+    // Picker absent, numeric input present.
+    expect(screen.queryByLabelText('Resume from checkpoint')).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Round|From Round/)).toBeInTheDocument();
+  });
+
+  it('refetches checkpoints on branch change', async () => {
+    setEnabledCapability();
+    const user = userEvent.setup();
+    vi.mocked(getCheckpoints).mockResolvedValue([]);
+
+    renderPanel({ totalRounds: 5 });
+
+    await waitFor(() => {
+      expect(getCheckpoints).toHaveBeenCalledTimes(1);
+    });
+    // Initial call: no branch yet (undefined).
+    expect(vi.mocked(getCheckpoints).mock.calls[0]).toEqual(['sc-123', undefined]);
+
+    await user.selectOptions(screen.getByLabelText('Branch'), 'branch-2');
+
+    await waitFor(() => {
+      expect(getCheckpoints).toHaveBeenCalledTimes(2);
+    });
+    expect(vi.mocked(getCheckpoints).mock.calls[1]).toEqual(['sc-123', 'branch-2']);
+  });
+
+  it('populates selectedRoundInput when a checkpoint is picked and submits with that round', async () => {
+    setEnabledCapability();
+    vi.mocked(getCheckpoints).mockResolvedValue([
+      baseCheckpoint({ id: 'cp-7', round_number: 3, compressed_summary: 'Round 3 recap' }),
+    ]);
+    vi.mocked(resumeFromRound).mockResolvedValueOnce({
+      branch_id: 'resume-cp',
+      message: 'ok',
+    });
+
+    const user = userEvent.setup();
+    renderPanel({ totalRounds: 5 });
+
+    await user.selectOptions(screen.getByLabelText('Branch'), 'branch-1');
+    const picker = await screen.findByLabelText('Resume from checkpoint');
+    // Submit must be disabled until a checkpoint is picked.
+    expect(screen.getByRole('button', { name: /Resume/ })).toBeDisabled();
+
+    await user.selectOptions(picker, 'cp-7');
+
+    // Resolved round hint visible.
+    expect(screen.getByTestId('resume-resolved-round')).toHaveTextContent('Round 3');
+    expect(screen.getByRole('button', { name: /Resume/ })).not.toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /Resume/ }));
+
+    await waitFor(() => {
+      expect(resumeFromRound).toHaveBeenCalledWith('sc-123', {
+        source_branch_id: 'branch-1',
+        round_number: 3,
+      });
+    });
+  });
+
+  it('shows compressed_summary preview when checkpoint has summary', async () => {
+    setEnabledCapability();
+    vi.mocked(getCheckpoints).mockResolvedValue([
+      baseCheckpoint({ id: 'cp-9', round_number: 2, compressed_summary: 'Compressed recap text' }),
+    ]);
+
+    const user = userEvent.setup();
+    renderPanel({ totalRounds: 5 });
+
+    const picker = await screen.findByLabelText('Resume from checkpoint');
+    await user.selectOptions(picker, 'cp-9');
+
+    expect(screen.getByText('Compressed recap text')).toBeInTheDocument();
+    expect(screen.getByText('Summary')).toBeInTheDocument();
+  });
+
+  it('filters out checkpoints whose round_number exceeds totalRounds', async () => {
+    setEnabledCapability();
+    vi.mocked(getCheckpoints).mockResolvedValue([
+      baseCheckpoint({ id: 'cp-low', round_number: 2 }),
+      baseCheckpoint({ id: 'cp-high', round_number: 99 }),
+    ]);
+
+    renderPanel({ totalRounds: 5 });
+
+    const picker = await screen.findByLabelText('Resume from checkpoint') as HTMLSelectElement;
+    await waitFor(() => {
+      // placeholder + 1 in-bounds checkpoint
+      expect(picker.options).toHaveLength(2);
+    });
+    expect(picker.options[1].value).toBe('cp-low');
   });
 });

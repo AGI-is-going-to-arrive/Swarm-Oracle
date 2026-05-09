@@ -297,6 +297,14 @@
       "templates_label": "快捷模板",
       "templates_hint": "点击模板快速填充，可自行修改"
     },
+    "progress": {
+      "aria_label": "预测进度",
+      "step_input": "输入",
+      "step_environment": "环境",
+      "step_simulation": "推演",
+      "step_report": "报告",
+      "step_deep_dive": "深入探索"
+    },
     "result": {
       "title": "推演结果",
       "subtitle": "多结局对比",
@@ -322,6 +330,8 @@
       "share_btn": "📱 生成文案",
       "copy_permalink_btn": "🔗 复制固定链接",
       "causal_graph_link": "查看因果图谱",
+      "source_historical": "已记录",
+      "source_historical_tooltip": "此数据在创建场景时记录",
       "compare_link": "对比分支",
       "permalink_copied": "✅ 固定链接已复制",
       "share_challenge_btn": "🔗 分享挑战",
@@ -517,6 +527,19 @@
       "bridge_not_enabled": "服务器未开启此功能。",
       "bridge_replay_unavailable": "回放模式下不可用。",
       "bridge_single_branch": "需要多个分支。",
+      "bridge_disabled_replay": "回放模式下不可用。",
+      "bridge_disabled_loading": "分享链接准备中…",
+      "next_steps_heading": "下一步",
+      "next_understand_why": "看懂为什么",
+      "next_understand_why_desc": "探索因果图谱，了解事件如何关联",
+      "next_replay_different": "改一个条件重演",
+      "next_replay_different_desc": "改变一个条件，看看会发生什么",
+      "next_ask_agent": "找 Agent 追问",
+      "next_ask_agent_desc": "与任意 Agent 深入对话",
+      "next_replay_trace": "回放推演",
+      "next_replay_trace_desc": "逐步回放模拟时间线",
+      "next_share": "分享结果",
+      "next_share_desc": "生成可分享的推演复盘",
       "bridge_workbench_title": "打开图谱工作台",
       "bridge_workbench_desc": "把因果、知识图谱和节点追问放到同一视图",
       "bridge_agents": "Agent 身份库",
@@ -592,7 +615,15 @@
       "platform_weibo": "微博",
       "platform_zhihu": "知乎",
       "platform_reddit": "Reddit",
-      "platform_x": "X"
+      "platform_x": "X",
+      "export_image": "导出为图片",
+      "export_downloading": "生成图片中…",
+      "export_image_failed": "图片导出失败，请重试。",
+      "artifact_footer": "由 SwarmOracle 生成",
+      "artifact_outcome": "结果",
+      "artifact_sources": "来源",
+      "artifact_agents": "参与 Agent",
+      "artifact_no_outcome": "待定"
     },
     "branch_detail": {
       "simulating": "推演中",
@@ -1285,6 +1316,20 @@
       "picker_branch_impact_summary": "影响 {{impact}} · 发言 {{turns}} 次 · 转折命中 {{hinges}} · 最近 R{{round}}",
       "picker_witness_impact_summary": "影响 {{impact}}"
     },
+    "analyst": {
+      "tool_causal_graph": "因果图谱",
+      "tool_identity": "身份记忆",
+      "tool_web": "网络搜索",
+      "status_aborted": "已中止",
+      "status_error": "出错"
+    },
+    "survey": {
+      "source_identity": "身份",
+      "source_agent": "Agent",
+      "source_branch": "分支",
+      "status_aborted": "已中止",
+      "status_error": "出错"
+    },
     "agents": {
       "library_title": "Agent 库",
       "workshop_title": "创建自定义 Agent",
@@ -1304,6 +1349,7 @@
       "empty_cta": "还没有自定义 Agent。",
       "create_first": "创建你的第一个 Agent",
       "delete_confirm": "确定删除这个 Agent 吗？",
+      "max_reached": "已达上限",
       "domains": {
         "economics": "经济",
         "politics": "政治",
@@ -1419,7 +1465,18 @@
       "edge_unaddressed": "未回应",
       "edge_responds_to": "回应",
       "edge_supports_stance": "立场一致",
-      "edge_opposes_stance": "立场对立"
+      "edge_opposes_stance": "立场对立",
+      "analysis_title": "图谱分析",
+      "analysis_nodes": "节点",
+      "analysis_edges": "连线",
+      "analysis_density": "密度",
+      "analysis_components": "连通分量",
+      "analysis_god_nodes": "关键节点",
+      "analysis_toggle": "显示分析",
+      "analysis_cross_branch": "跨分支连线",
+      "analysis_avg_max_degree": "平均/最大度",
+      "analysis_degree_distribution": "度分布",
+      "analysis_degree_n": "度 {{degree}}"
     },
     "compare": {
       "title": "反事实对比",
@@ -1457,6 +1514,8 @@
       "edge_unaddressed": "未回应",
       "edge_relation": "{{source}} {{relation}} {{target}}",
       "related_context_line": "{{relation}}：{{label}}",
+      "conversation_unavailable": "辩论结果不支持节点对话。",
+      "conversation_unavailable_dismiss": "关闭",
       "live_title": "论证图谱",
       "live_collapse": "收起",
       "live_expand": "展开",
@@ -1567,7 +1626,16 @@
       "event_alliance_broken": "同盟破裂",
       "event_betrayal": "背叛",
       "load_error": "加载 Agent 数据失败。",
-      "identity_disabled": "Agent 身份功能未启用，时间线数据不可用。"
+      "identity_disabled": "Agent 身份功能未启用，时间线数据不可用。",
+      "decision_bias": "决策偏好",
+      "no_bias": "无偏好数据",
+      "knowledge_domains": "知识领域",
+      "growth_events": "成长事件",
+      "domain_stem": "理工科",
+      "domain_humanities": "人文",
+      "domain_social": "社科",
+      "domain_nature": "自然",
+      "domain_pragmatic": "务实"
     },
     "export": {
       "png": "导出 PNG",
@@ -1650,7 +1718,12 @@
       "submit": "从此处续跑",
       "limit_reached": "每个场景最多 3 条回放分支",
       "error_generic": "续跑模拟失败",
-      "created": "续跑分支已创建！正在跳转..."
+      "created": "续跑分支已创建！正在跳转...",
+      "checkpoint_label": "从检查点恢复",
+      "checkpoint_select": "选择检查点",
+      "round_label": "第 {{round}} 轮",
+      "no_checkpoints": "无可用检查点",
+      "summary_preview": "摘要"
     },
     "common": {
       "loading": "加载中…",
@@ -2002,6 +2075,10 @@
       "feature_disabled_description": "当前环境未启用回放轨迹功能。",
       "feature_unavailable_title": "暂时无法确认回放能力",
       "feature_unavailable_description": "当前无法确认回放轨迹是否可用，请稍后重试。",
+      "load_more": "加载更多",
+      "filter_branch": "按分支筛选",
+      "all_branches": "全部分支",
+      "no_more": "没有更多条目",
       "scrubber": {
         "aria_label": "时间线滑块"
       },

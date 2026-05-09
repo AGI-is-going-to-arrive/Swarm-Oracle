@@ -11,6 +11,8 @@ interface AgentStoreState {
   loading: boolean;
   error: string | null;
   selectedIds: Set<string>;
+  loadedUserId: string | null;
+  requestSeq: number;
 
   fetchIdentities: (userId: string) => Promise<void>;
   toggleSelection: (id: string) => void;
@@ -18,23 +20,65 @@ interface AgentStoreState {
   setIdentities: (identities: AgentIdentityInfo[]) => void;
 }
 
+const pruneSelectedIds = (
+  selectedIds: Set<string>,
+  identities: AgentIdentityInfo[],
+): Set<string> => {
+  if (selectedIds.size === 0) return selectedIds;
+  const validIds = new Set(identities.map((a) => a.id));
+  const next = new Set<string>();
+  for (const id of selectedIds) {
+    if (validIds.has(id)) next.add(id);
+  }
+  return next;
+};
+
 export const useAgentStore = create<AgentStoreState>((set, get) => ({
   identities: [],
   loading: false,
   error: null,
   selectedIds: new Set(),
+  loadedUserId: null,
+  requestSeq: 0,
 
   fetchIdentities: async (userId: string) => {
-    set({ loading: true, error: null });
+    const effectiveUserId = getSessionBoundUserId(userId);
+    const state = get();
+
+    // Skip if already loaded for same user (cache hit)
+    if (state.loadedUserId === effectiveUserId && state.identities.length > 0 && !state.loading) {
+      return;
+    }
+
+    // If userId changed, clear stale data immediately
+    if (state.loadedUserId !== null && state.loadedUserId !== effectiveUserId) {
+      set({ identities: [], selectedIds: new Set() });
+    }
+
+    const reqId = state.requestSeq + 1;
+    set({ loading: true, error: null, requestSeq: reqId });
+
     try {
-      const effectiveUserId = getSessionBoundUserId(userId);
-      const res = await fetch(`/api/agents/identities?user_id=${encodeURIComponent(effectiveUserId)}`, {
-        headers: buildSessionHeaders(),
-      });
+      const res = await fetch(
+        `/api/agents/identities?user_id=${encodeURIComponent(effectiveUserId)}`,
+        { headers: buildSessionHeaders() },
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: AgentIdentityInfo[] = await res.json();
-      set({ identities: data, loading: false });
+
+      // Ignore stale responses (newer request was issued)
+      if (get().requestSeq !== reqId) return;
+
+      const prunedSelected = pruneSelectedIds(get().selectedIds, data);
+      set({
+        identities: data,
+        loading: false,
+        loadedUserId: effectiveUserId,
+        selectedIds: prunedSelected,
+      });
     } catch (err) {
+      // Ignore stale errors
+      if (get().requestSeq !== reqId) return;
       set({ error: (err as Error).message, loading: false });
     }
   },
@@ -52,5 +96,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
 
   clearSelection: () => set({ selectedIds: new Set() }),
 
-  setIdentities: (identities) => set({ identities }),
+  setIdentities: (identities) => {
+    const prunedSelected = pruneSelectedIds(get().selectedIds, identities);
+    set({ identities, selectedIds: prunedSelected });
+  },
 }));

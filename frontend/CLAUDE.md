@@ -46,6 +46,7 @@ npm run test:watch # vitest (watch mode)
 | `/agents` | `AgentLibrary` | Agent 身份库 (Phase 3 F1) |
 | `/agents/new` | `AgentWorkshopView` | 自建 Agent 工坊 (Phase 3 F3) |
 | `/sim/:id/causal-map` | `CausalReviewView` | 因果图谱 DAG (Phase 3 F2) |
+| `/replay/:id` | `ReplayView` | replay trace 分页与分支过滤 |
 | `/result/:id/compare` | `CompareDigestView` | 反事实分支对比 (Phase 3 F4) |
 | `/workbench/:id` | `WorkbenchView` | 图谱工作台 (Causal/Split/KG 三 tab，compact 降级) |
 
@@ -55,9 +56,9 @@ npm run test:watch # vitest (watch mode)
 
 | 文件 | 说明 |
 |------|------|
-| `InputView.tsx` | 首页输入，搜索增强 toggle + source family checkboxes + 模式选择器（默认展示） |
+| `InputView.tsx` | 首页输入，5 步进度、quick starts、搜索增强/source family、模式选择器、advanced accordion、BYOK 折叠区、Agent attach panel |
 | `SimulationView.tsx` | 模拟视图 + Phaser 集成 |
-| `ResultView.tsx` | 结果展示 (Summary-First 布局，含真实世界来源卡片，畸形数据防御) |
+| `ResultView.tsx` | 结果展示 (Summary-First 布局，含 What's Next bridge、真实世界来源卡片、historical badge、share artifact、畸形数据防御) |
 | `DebateArenaView.tsx` | 辩论竞技场 |
 | `DebateResultView.tsx` | 辩论结果 |
 | `WorldlineRoundtableView.tsx` | 世界线圆桌 (~2223 行) |
@@ -73,6 +74,7 @@ npm run test:watch # vitest (watch mode)
 | `AgentWorkshopView.tsx` | 自建 Agent 表单 (Phase 3 F3) |
 | `AgentLibrary.tsx` | Agent 身份网格 + 删除 (Phase 3 F1) |
 | `CausalReviewView.tsx` | @xyflow/react DAG + dagre 布局 (Phase 3 F2) |
+| `ReplayView.tsx` | replay trace 时间线，支持 cursor pagination、Load more、branch filter、capability unavailable surface |
 | `CompareDigestView.tsx` | 逐轮分支对比 + 发散度条 (Phase 3 F4) |
 | `WorkbenchView.tsx` | 图谱工作台 (Causal/Split/KG 三 tab，KG 依赖 causal_graph，compact 自动降级) |
 
@@ -83,21 +85,25 @@ npm run test:watch # vitest (watch mode)
 | `EndingChatModal.tsx` | 神谕密室聊天弹窗 (~1509 行) |
 | `BranchTree.tsx` / `ClassicBranchTree.tsx` | 分支树可视化 |
 | `InterventionModal.tsx` | 干预操作弹窗 |
-| `ShareModal.tsx` / `DebateShareModal.tsx` | 分享弹窗 |
+| `ShareModal.tsx` / `DebateShareModal.tsx` | 分享弹窗；主模式分享弹窗可触发 PNG share artifact 导出 |
 | `DebateBetModal.tsx` | 辩论投注弹窗 |
 | `GameplayCardsModal.tsx` | 游戏卡牌弹窗 |
 | `TimelineBar.tsx` | 时间线进度条 |
 | `AppErrorBoundary.tsx` | 全局错误边界 |
 | `LanguageSwitcher.tsx` | 语言切换器 |
 | `endingChatHelpers.ts` | 密室聊天辅助函数 |
-| `AgentAttachPanel.tsx` | Agent 勾选面板 (tab+space 键盘可达, Phase 3 F3) |
+| `AgentAttachPanel.tsx` | 首页 Agent 选择卡片 (最多 5 个，loading/error/retry/empty 状态，tab+space 键盘可达, Phase 3 F3) |
+| `AgentProfileModal.tsx` | Agent profile 弹窗，含 growth、memory timeline 和 decision bias 分布 |
+| `MemoryTimeline.tsx` | Agent 记忆时间线；样式已从组件内联迁到 CSS |
+| `ProgressIndicator.tsx` | 5 步流程 pill，当前用于 InputView / ResultView |
+| `ShareArtifact.tsx` | 1200×630 offscreen PNG 分享卡；只包含公开摘要字段 |
 | `ArgumentMap.tsx` | 辩论论证树 (role="tree", i18n 化 TYPE_LABELS, Phase 3 F6) |
 | `CounterfactualPanel.tsx` | 反事实种子选择器 (Phase 3 F4) |
 | `FactionTimeline.tsx` | 阵营时间线 (逐轮色条, Phase 3 F5) |
 | `FactionForceGraph.tsx` | 阵营力导向图 (G6 渲染, round slider + debounce, sr-only 回退, prefers-reduced-motion) |
 | `result/HookSummaryPanel.tsx` | 生成物快览卡片 (5 hook 状态汇总: causal/factions/checkpoints/identity/argument_map, branchId 透传) |
 | `ReturningBadge.tsx` | 跨场景回归标记 (已集成到 ResultView + capability gate, Phase 3 F1) |
-| `ExportPanel.tsx` | Graph 导出面板 (PNG html2canvas + SVG foreignObject clone, P1-3) |
+| `ExportPanel.tsx` | Graph 导出面板 (PNG html2canvas + native SVG rebuild；当前不依赖 foreignObject, P1-3) |
 | `NodeDetailPanel.tsx` | Graph 节点详情侧面板 (type/round/payload/unit, P1-4)；新增边级 evidence 渲染 (confidence_tier 徽章 + source_ref + source_round_number + detail，detail 按码点 `Array.from` 截断 200，支持 evidence 单条 / evidenceList 多条) |
 | `workbench/KGGraphBoard.tsx` | KG 工作台主体 (搜索 / 类型 chips 过滤 / 缩放控件 / 小地图 / SR fallback table / 移动 200 节点 aria-live 截断提示；P6 `lockHighlight`/`clearHighlight` 用 G6 `setElementState` batch API；P7 图例默认展开 + NodeConversationSheet 集成 + KG_NODE_TYPE_FILLS 暖灰色板) |
 | `workbench/CausalGraphBoard.tsx` | Causal DAG 工作台主体 (P7 新增 NodeConversationSheet 集成，点击节点可发起 Agent 对话) |
@@ -192,7 +198,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- **165 个测试文件** (`.test.ts` / `.test.tsx`) / **1769 tests**
+- **168 个测试文件** (`.test.ts` / `.test.tsx`) / **1843 tests**
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)

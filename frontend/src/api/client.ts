@@ -12,6 +12,7 @@ import type {
   CampaignBadge, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
   ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
   WebSearchFamily,
+  ReplayTraceResponse,
 } from '../types';
 import { getOrgId } from '../lib/orgContext';
 
@@ -429,8 +430,7 @@ async function requestText(path: string): Promise<string> {
     DEFAULT_TIMEOUT,
   );
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`API ${res.status}: ${body}`);
+    throw await parseErrorResponse(res);
   }
   return res.text();
 }
@@ -1093,6 +1093,24 @@ export async function updateAgent(
   });
 }
 
+/** GET /api/scenario/:id/replay-trace — P1-1 replay lineage for a scenario (paginated) */
+export async function getReplayTrace(
+  scenarioId: string,
+  opts?: { cursor?: string; limit?: number; branch_id?: string },
+  options?: RequestOptions,
+): Promise<ReplayTraceResponse> {
+  const params = new URLSearchParams();
+  if (opts?.cursor) params.set('after', opts.cursor);
+  if (opts?.limit != null) params.set('limit', String(opts.limit));
+  if (opts?.branch_id) params.set('root_branch_id', opts.branch_id);
+  const query = params.toString();
+  const suffix = query ? `?${query}` : '';
+  return safeGet(
+    `/scenario/${encodeURIComponent(scenarioId)}/replay-trace${suffix}`,
+    options,
+  );
+}
+
 /** GET /api/scenario/:id/faction-timeline — P1-8 faction overlay data */
 export async function getFactionTimeline(
   scenarioId: string,
@@ -1162,4 +1180,17 @@ export async function getFactionRelations(
   if (opts?.threshold != null) params.set('threshold', String(opts.threshold));
   if (opts?.topK != null) params.set('top_k', String(opts.topK));
   return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/faction-relations?${params}`);
+}
+
+// ── P1-3: Checkpoint picker for ResumePanel ──
+
+import type { CheckpointInfo } from '../types';
+
+/** GET /api/scenario/:id/checkpoints — list compressed checkpoints (P1-3) */
+export async function getCheckpoints(
+  scenarioId: string,
+  branchId?: string,
+): Promise<CheckpointInfo[]> {
+  const params = branchId ? `?branch_id=${encodeURIComponent(branchId)}` : '';
+  return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/checkpoints${params}`);
 }

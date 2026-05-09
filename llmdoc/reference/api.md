@@ -285,6 +285,15 @@
 - `GET /api/scenario/{id}/causal-graph` 的 `edges[]` 使用 `source / target / type / weight / label` 字段；有证据元数据时会返回
   `evidence: { confidence_tier, source_ref, source_round_number, detail }`。旧边或无证据边的 `evidence` 可以为 `null`。重放轮次只会补齐旧边缺失的 evidence 字段，不覆盖已有非空值。当前 causal graph 会返回已有 `temporal / caused` 边，也可能返回后端规则生成的 `responds_to / supports_stance / opposes_stance`，以及合成结局使用的 `led_to`。inter-agent 边只来自同一 `branch / round` 的 event 节点，`detail` 会透传确定性 rule / reason JSON；其它 causal graph 边可能仍只有 coarse provenance。客户端不要把 `detail` 当成 LLM 解释文本。
 - `GET /api/scenario/{id}/graph-analysis` 返回 `god_nodes / degree_distribution / cross_branch_edges / summary`。大图会按最新 snapshot size 做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`。带 `branch_id` 时，预检按该 branch 的可见节点/边计数；未带 `branch_id` 时仍按全图计数。
+- `GET /api/scenario/{id}/replay-trace` 当前是只读 cursor pagination：
+  - `after` 是上一页最后一个 branch id；空白值按未传处理
+  - `limit` 范围为 `1..100`
+  - `root_branch_id` 用于按 replay source branch 过滤分支链路，前端的 branch filter 会走这个参数
+  - 返回体为 `{ nodes, next_cursor }`，不写库，也不消耗 replay branch quota
+- `GET /api/scenario/{id}/checkpoints` 当前可选 `branch_id`：
+  - 不传时返回 scenario 下全部 checkpoint
+  - 传入时只返回该 branch 的 checkpoint
+  - 返回项包含 `round_number / compressed_summary / blackboard_json / created_at`；前端 resume 面板只把 `compressed_summary` 当作可见预览，不把它当新的 authority
 - `POST /api/scenario/{id}/counterfactual` 当前约束：
   - scenario 状态必须是 `done`；否则返回 `409 COUNTERFACTUAL_SCENARIO_STATUS_INVALID`
   - source branch 不存在时返回 `404 COUNTERFACTUAL_BRANCH_NOT_FOUND`

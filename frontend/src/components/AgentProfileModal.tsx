@@ -3,14 +3,18 @@
    Displays agent identity details, cross-scenario memories,
    and growth events timeline. Triggered from AgentLibrary
    cards or ReturningBadge.
+
+   P2-3 — De-inlined to BEM classes; added decision bias
+   visualization.
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AgentIdentityInfo, AgentMemoryEntry, AgentGrowthEvent, KnowledgeDomain } from '../types';
 import { getIdentityMemory, getIdentityGrowthEvents } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { MemoryTimeline } from './MemoryTimeline';
+import './AgentProfileModal.css';
 
 interface Props {
   identity: AgentIdentityInfo | null;
@@ -40,11 +44,84 @@ function closeDialogElement(dialog: HTMLDialogElement) {
   dialog.dispatchEvent(new Event('close'));
 }
 
+interface BiasRow {
+  key: string;
+  numeric: number | null;
+  text: string;
+  /** absolute |numeric| in [0, 1] for bar width relative to max-abs in this set */
+  magnitude: number;
+}
+
+function parseDecisionBias(identity: AgentIdentityInfo): Record<string, unknown> | null {
+  if (identity.decision_bias && typeof identity.decision_bias === 'object') {
+    return identity.decision_bias;
+  }
+  if (identity.decision_bias_json) {
+    try {
+      const parsed = JSON.parse(identity.decision_bias_json);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function buildBiasRows(bias: Record<string, unknown>): BiasRow[] {
+  const entries = Object.entries(bias);
+  if (entries.length === 0) return [];
+  // First pass: compute max absolute numeric so bars normalize to it
+  let maxAbs = 0;
+  for (const [, v] of entries) {
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      const abs = Math.abs(v);
+      if (abs > maxAbs) maxAbs = abs;
+    }
+  }
+  if (maxAbs === 0) maxAbs = 1; // avoid div/0; fallback to 1.0 baseline
+  return entries.map(([key, value]) => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      const magnitude = Math.min(1, Math.abs(value) / maxAbs);
+      return { key, numeric: value, text: value.toFixed(2), magnitude };
+    }
+    if (typeof value === 'string') {
+      return { key, numeric: null, text: value, magnitude: 0 };
+    }
+    if (typeof value === 'boolean') {
+      return { key, numeric: null, text: value ? 'true' : 'false', magnitude: 0 };
+    }
+    if (value == null) {
+      return { key, numeric: null, text: '—', magnitude: 0 };
+    }
+    try {
+      return { key, numeric: null, text: JSON.stringify(value), magnitude: 0 };
+    } catch {
+      return { key, numeric: null, text: String(value), magnitude: 0 };
+    }
+  });
+}
+
+function parseKnowledgeDomains(raw: string | null | undefined): KnowledgeDomain[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((domain): domain is KnowledgeDomain => (
+      typeof domain === 'string' && domain.trim().length > 0
+    ));
+  } catch {
+    return [];
+  }
+}
+
 export function AgentProfileModal({ identity, open, onClose }: Props) {
   const { t } = useTranslation();
   const { loading: capLoading, enabled: identityEnabled } = useCapabilityCheck('agent_identity');
   const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<Element | null>(null);
+  const requestSeqRef = useRef(0);
 
   const [memories, setMemories] = useState<AgentMemoryEntry[]>([]);
   const [events, setEvents] = useState<AgentGrowthEvent[]>([]);
@@ -89,6 +166,8 @@ export function AgentProfileModal({ identity, open, onClose }: Props) {
 
   // Fetch data when identity changes
   const fetchData = useCallback(async (id: string) => {
+    const requestId = requestSeqRef.current + 1;
+    requestSeqRef.current = requestId;
     setLoading(true);
     setError(null);
     try {
@@ -96,12 +175,17 @@ export function AgentProfileModal({ identity, open, onClose }: Props) {
         getIdentityMemory(id),
         getIdentityGrowthEvents(id),
       ]);
+      if (requestSeqRef.current !== requestId) return;
       setMemories(memRes.memories);
       setEvents(evtRes.events);
     } catch {
+      if (requestSeqRef.current !== requestId) return;
       setError('LOAD_ERROR');
+    } finally {
+      if (requestSeqRef.current === requestId) {
+        setLoading(false);
+      }
     }
-    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -112,69 +196,56 @@ export function AgentProfileModal({ identity, open, onClose }: Props) {
       return () => window.clearTimeout(timeoutId);
     }
 
+    requestSeqRef.current += 1;
     const resetTimeoutId = window.setTimeout(() => {
       setMemories([]);
       setEvents([]);
       setError(null);
+      setLoading(false);
     }, 0);
     return () => window.clearTimeout(resetTimeoutId);
   }, [open, identity, identityEnabled, fetchData]);
 
+  // Decision bias (computed before early return, but only used when identity exists)
+  const biasRows = useMemo<BiasRow[]>(() => {
+    if (!identity) return [];
+    const bias = parseDecisionBias(identity);
+    if (!bias) return [];
+    return buildBiasRows(bias);
+  }, [identity]);
+
   // ESC handling is built into <dialog>
   if (!identity) return <dialog ref={dialogRef} />;
 
-  const domains: KnowledgeDomain[] = (() => {
-    try {
-      return identity.knowledge_domain_json ? JSON.parse(identity.knowledge_domain_json) : [];
-    } catch { return []; }
-  })();
+  const domains = parseKnowledgeDomains(identity.knowledge_domain_json);
 
   const kindPair = KIND_LABEL_I18N[identity.kind];
   const kindLabel = kindPair ? t(kindPair[0], kindPair[1]) : identity.kind;
+  const isCustom = identity.kind === 'custom';
 
   return (
     <dialog
       ref={dialogRef}
+      className="agent-profile-modal"
       aria-label={t('agent_profile.dialog_label', 'Agent Profile')}
-      style={{
-        maxWidth: 520,
-        width: '90vw',
-        maxHeight: '85vh',
-        borderRadius: 12,
-        border: '1px solid #333',
-        background: '#1a1a2e',
-        color: '#e0e0e0',
-        padding: 0,
-        overflow: 'hidden',
-      }}
     >
       {/* Header */}
-      <div style={{
-        padding: '1rem 1.25rem',
-        borderBottom: '1px solid #333',
-        display: 'flex', alignItems: 'center', gap: '0.75rem',
-      }}>
-        {/* Avatar placeholder */}
-        <div style={{
-          width: 48, height: 48, borderRadius: '50%',
-          background: identity.kind === 'custom' ? '#9b59b622' : '#4a90d922',
-          border: `2px solid ${identity.kind === 'custom' ? '#9b59b6' : '#4a90d9'}`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '1.2rem', flexShrink: 0,
-        }}>
-          {identity.kind === 'custom' ? '🎭' : '🤖'}
+      <div className="agent-profile-modal__header">
+        <div
+          className={`agent-profile-modal__avatar ${isCustom ? 'agent-profile-modal__avatar--custom' : 'agent-profile-modal__avatar--generated'}`}
+          aria-hidden="true"
+        >
+          {isCustom ? '🎭' : '🤖'}
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h2 style={{ margin: 0, fontSize: '1.1rem', lineHeight: 1.3 }}>
+        <div className="agent-profile-modal__title-wrap">
+          <h2 className="agent-profile-modal__title">
             {identity.display_name}
           </h2>
-          <div style={{ fontSize: '0.75rem', color: '#888', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div className="agent-profile-modal__subtitle">
             <span>{identity.role}</span>
-            <span style={{
-              padding: '0 4px', borderRadius: 3, fontSize: '0.65rem',
-              background: identity.kind === 'custom' ? '#9b59b622' : '#4a90d922',
-              color: identity.kind === 'custom' ? '#9b59b6' : '#4a90d9',
-            }}>
+            <span
+              className={`agent-profile-modal__kind-badge ${isCustom ? 'agent-profile-modal__kind-badge--custom' : 'agent-profile-modal__kind-badge--generated'}`}
+            >
               {kindLabel}
             </span>
           </div>
@@ -183,24 +254,21 @@ export function AgentProfileModal({ identity, open, onClose }: Props) {
           type="button"
           onClick={onClose}
           aria-label={t('common.close', 'Close')}
-          style={{
-            background: 'none', border: 'none', color: '#888',
-            fontSize: '1.2rem', cursor: 'pointer', padding: 4,
-          }}
+          className="agent-profile-modal__close-btn"
         >
           ✕
         </button>
       </div>
 
       {/* Body — scrollable */}
-      <div style={{ padding: '1rem 1.25rem', overflowY: 'auto', maxHeight: 'calc(85vh - 80px)' }}>
+      <div className="agent-profile-modal__body">
         {/* Persona */}
         {identity.persona && (
-          <section style={{ marginBottom: '1rem' }}>
-            <h3 style={{ margin: '0 0 0.25rem', fontSize: '0.85rem', color: '#aaa' }}>
+          <section className="agent-profile-modal__section">
+            <h3 className="agent-profile-modal__section-title">
               {t('agent_profile.persona', 'Persona')}
             </h3>
-            <p style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.5, color: '#ccc' }}>
+            <p className="agent-profile-modal__persona">
               {identity.persona}
             </p>
           </section>
@@ -208,19 +276,13 @@ export function AgentProfileModal({ identity, open, onClose }: Props) {
 
         {/* Knowledge domains */}
         {domains.length > 0 && (
-          <section style={{ marginBottom: '1rem' }}>
-            <h3 style={{ margin: '0 0 0.25rem', fontSize: '0.85rem', color: '#aaa' }}>
+          <section className="agent-profile-modal__section">
+            <h3 className="agent-profile-modal__section-title">
               {t('agent_profile.domains', 'Knowledge Domains')}
             </h3>
-            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            <div className="agent-profile-modal__domains">
               {domains.map(d => (
-                <span
-                  key={d}
-                  style={{
-                    padding: '2px 8px', borderRadius: 4,
-                    background: '#2a2a4e', fontSize: '0.75rem', color: '#8ab4f8',
-                  }}
-                >
+                <span key={d} className="agent-profile-modal__domain-chip">
                   {d}
                 </span>
               ))}
@@ -228,37 +290,92 @@ export function AgentProfileModal({ identity, open, onClose }: Props) {
           </section>
         )}
 
+        {/* Decision Bias chart */}
+        <section className="agent-profile-modal__section">
+          <h3 className="agent-profile-modal__section-title">
+            {t('agent_profile.decision_bias', 'Decision Bias')}
+          </h3>
+          {biasRows.length === 0 ? (
+            <p className="agent-profile-modal__status">
+              {t('agent_profile.no_bias', 'No bias data')}
+            </p>
+          ) : (
+            <div
+              className="agent-profile-modal__bias-chart"
+              role="list"
+              aria-label={t('agent_profile.decision_bias', 'Decision Bias')}
+            >
+              {biasRows.map(row => {
+                const isNumeric = row.numeric != null;
+                const isNegative = isNumeric && row.numeric! < 0;
+                // half-track widths anchored at 50% midline
+                const widthPct = `${(row.magnitude * 50).toFixed(2)}%`;
+                return (
+                  <div key={row.key} className="agent-profile-modal__bias-row" role="listitem">
+                    <span className="agent-profile-modal__bias-key" title={row.key}>
+                      {row.key}
+                    </span>
+                    {isNumeric ? (
+                      <>
+                        <span
+                          className="agent-profile-modal__bias-track"
+                          aria-hidden="true"
+                        >
+                          <span
+                            className={`agent-profile-modal__bias-bar ${isNegative ? 'agent-profile-modal__bias-bar--negative' : 'agent-profile-modal__bias-bar--positive'}`}
+                            style={{
+                              width: widthPct,
+                              left: isNegative ? `calc(50% - ${widthPct})` : '50%',
+                            }}
+                          />
+                        </span>
+                        <span className="agent-profile-modal__bias-value">
+                          {row.text}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="agent-profile-modal__bias-value agent-profile-modal__bias-value--text">
+                        {row.text}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
         {/* Meta */}
-        <section style={{ marginBottom: '1rem', fontSize: '0.75rem', color: '#666', display: 'flex', gap: 12 }}>
+        <section className="agent-profile-modal__meta">
           <span>ID: {identity.continuity_key}</span>
           <span>{t('agent_profile.created', 'Created')}: {new Date(identity.created_at).toLocaleDateString()}</span>
         </section>
 
         {/* Divider */}
-        <hr style={{ border: 'none', borderTop: '1px solid #333', margin: '0.75rem 0' }} />
+        <hr className="agent-profile-modal__divider" />
 
         {/* Timeline */}
         <section>
-          <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>
+          <h3 className="agent-profile-modal__section-title agent-profile-modal__section-title--timeline">
             {t('agent_profile.timeline_title', 'Growth Timeline')}
           </h3>
           {capLoading && (
-            <p style={{ fontSize: '0.85rem', color: '#888' }}>
+            <p className="agent-profile-modal__status">
               {t('common.loading', 'Loading...')}
             </p>
           )}
           {!capLoading && !identityEnabled && (
-            <p style={{ fontSize: '0.85rem', color: '#888' }}>
+            <p className="agent-profile-modal__status">
               {t('agent_profile.identity_disabled', 'Agent identity feature is not enabled. Timeline data is unavailable.')}
             </p>
           )}
           {!capLoading && identityEnabled && loading && (
-            <p style={{ fontSize: '0.85rem', color: '#888' }}>
+            <p className="agent-profile-modal__status">
               {t('common.loading', 'Loading...')}
             </p>
           )}
           {!capLoading && identityEnabled && error && (
-            <p role="alert" style={{ fontSize: '0.85rem', color: '#e74c3c' }}>
+            <p role="alert" className="agent-profile-modal__status agent-profile-modal__status--error">
               {t('agent_profile.load_error', 'Failed to load agent data.')}
             </p>
           )}

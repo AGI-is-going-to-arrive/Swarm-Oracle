@@ -208,4 +208,88 @@ describe('AgentProfileModal', () => {
     });
     expect(screen.queryByText('Knowledge Domains')).not.toBeInTheDocument();
   });
+
+  it('ignores stale memory responses after switching identities', async () => {
+    let resolveFirstMemory!: (value: unknown) => void;
+    let resolveFirstEvents!: (value: unknown) => void;
+    const secondIdentity: AgentIdentityInfo = {
+      ...baseIdentity,
+      id: 'id-002',
+      display_name: 'Oracle Beta',
+    };
+
+    mockGetIdentityMemory.mockImplementation((id: string) => {
+      if (id === 'id-001') {
+        return new Promise((resolve) => {
+          resolveFirstMemory = resolve;
+        });
+      }
+      return Promise.resolve({
+        identity_id: 'id-002',
+        memories: [
+          { summary: 'Beta memory', scenario_id: 'sc2', created_at: '2026-04-02T10:00:00Z' },
+        ],
+      });
+    });
+    mockGetIdentityGrowthEvents.mockImplementation((id: string) => {
+      if (id === 'id-001') {
+        return new Promise((resolve) => {
+          resolveFirstEvents = resolve;
+        });
+      }
+      return Promise.resolve({ identity_id: 'id-002', events: [] });
+    });
+
+    const { rerender } = render(
+      <AgentProfileModal identity={baseIdentity} open={true} onClose={vi.fn()} />,
+    );
+    await waitFor(() => {
+      expect(mockGetIdentityMemory).toHaveBeenCalledWith('id-001');
+    });
+    rerender(<AgentProfileModal identity={secondIdentity} open={true} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Oracle Beta')).toBeInTheDocument();
+    expect(await screen.findByText('Beta memory')).toBeInTheDocument();
+
+    resolveFirstMemory({
+      identity_id: 'id-001',
+      memories: [
+        { summary: 'Stale Alpha memory', scenario_id: 'sc1', created_at: '2026-04-01T10:00:00Z' },
+      ],
+    });
+    resolveFirstEvents({ identity_id: 'id-001', events: [] });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Stale Alpha memory')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('Beta memory')).toBeInTheDocument();
+  });
+
+  it('ignores non-array and non-string knowledge domain entries', async () => {
+    const objectDomainIdentity: AgentIdentityInfo = {
+      ...baseIdentity,
+      knowledge_domain_json: JSON.stringify({ primary: 'economics' }),
+    };
+    const { rerender } = render(
+      <AgentProfileModal identity={objectDomainIdentity} open={true} onClose={vi.fn()} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText('Oracle Alpha')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Knowledge Domains')).not.toBeInTheDocument();
+
+    rerender(
+      <AgentProfileModal
+        identity={{
+          ...baseIdentity,
+          knowledge_domain_json: JSON.stringify(['economics', null, { name: 'politics' }]),
+        }}
+        open={true}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText('economics')).toBeInTheDocument();
+    expect(screen.queryByText('[object Object]')).not.toBeInTheDocument();
+  });
 });

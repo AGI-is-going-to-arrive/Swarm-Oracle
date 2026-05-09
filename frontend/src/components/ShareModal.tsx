@@ -2,13 +2,15 @@
    ShareModal — Generate social media copy for various platforms
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useCallback, useEffect, useId } from 'react';
+import { useState, useCallback, useEffect, useId, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { generateSocialCopy } from '../api/client';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import { loadLlmProviderPolicy, validateByok } from '../lib/llmProviderPolicy';
 import { type ShareFlavorContext } from '../lib/shareEnvelope';
+import type { BranchInfo } from '../types';
+import ShareArtifact, { type ShareArtifactHandle } from './ShareArtifact';
 import './ShareModal.css';
 
 interface Platform {
@@ -29,11 +31,23 @@ const PLATFORMS: Platform[] = [
 interface ShareModalProps {
   scenarioId: string;
   shareContext?: ShareFlavorContext;
+  /** Optional artifact-only data. Falls back to shareContext when omitted. */
+  branches?: BranchInfo[];
+  agentNames?: string[];
+  sourceFamilies?: string[];
   onClose: () => void;
   onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
 }
 
-export default function ShareModal({ scenarioId, shareContext, onClose, onAutomationStateChange }: ShareModalProps) {
+export default function ShareModal({
+  scenarioId,
+  shareContext,
+  branches,
+  agentNames,
+  sourceFamilies,
+  onClose,
+  onAutomationStateChange,
+}: ShareModalProps) {
   const { t } = useTranslation();
   const titleId = useId();
   const directorIdentity = getDirectorIdentity();
@@ -45,6 +59,31 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
   const [copyError, setCopyError] = useState('');
   const [copied, setCopied] = useState(false);
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [exportingImage, setExportingImage] = useState(false);
+  const [exportImageError, setExportImageError] = useState('');
+  const artifactRef = useRef<ShareArtifactHandle | null>(null);
+
+  /** When branches aren't supplied, synthesize a single fallback BranchInfo
+      from shareContext.dominantBranchTitle so the artifact still renders.
+      We never include sensitive fields — only outcome title + insight. */
+  const artifactBranches: BranchInfo[] = branches && branches.length > 0
+    ? branches
+    : (shareContext?.dominantBranchTitle
+        ? [{
+            id: 'share-artifact-fallback',
+            parent_branch_id: null,
+            fork_round: 0,
+            fork_reason: '',
+            title: shareContext.dominantBranchTitle,
+            summary: '',
+            story: '',
+            insight: shareContext?.counterplaySummary ?? '',
+            key_moments: [],
+            probability: 1,
+            status: 'COMPLETED',
+          }]
+        : []);
+  const artifactQuestion = shareContext?.question ?? '';
 
   const handleGenerate = useCallback(async (platform: string) => {
     if (loading) return;
@@ -107,6 +146,27 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
     }
   }, [copy, t]);
 
+  /** Capture the offscreen artifact card as PNG and trigger a download.
+      We do NOT include any LLM/API config here — the artifact only renders
+      question / outcome / source-family chips / agent display names. */
+  const handleExportImage = useCallback(async () => {
+    if (exportingImage) return;
+    if (!artifactRef.current) return;
+    setExportImageError('');
+    setExportingImage(true);
+    try {
+      const ok = await artifactRef.current.exportPng();
+      if (!ok) {
+        setExportImageError(t('share.export_image_failed', 'Image export failed. Please try again.'));
+      }
+    } catch (err) {
+      console.error('[ShareModal] export image failed', err);
+      setExportImageError(t('share.export_image_failed', 'Image export failed. Please try again.'));
+    } finally {
+      setExportingImage(false);
+    }
+  }, [exportingImage, t]);
+
   const activePlatformLabel = PLATFORMS.find(p => p.key === activePlatform);
 
   useEffect(() => {
@@ -123,12 +183,14 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
       copy_length: copy.length,
       share_context: shareContext ?? null,
       available_platforms: PLATFORMS.map((platform) => platform.key),
+      exporting_image: exportingImage,
+      export_image_error: exportImageError || null,
     });
 
     return () => {
       onAutomationStateChange?.(null);
     };
-  }, [activePlatform, copied, copy, copyError, error, loading, onAutomationStateChange, platformName, shareContext, status]);
+  }, [activePlatform, copied, copy, copyError, error, loading, onAutomationStateChange, platformName, shareContext, status, exportingImage, exportImageError]);
 
   return (
     <div className="share-overlay" onClick={onClose}>
@@ -156,15 +218,41 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
             <button
               type="button"
               key={p.key}
-              className={`share-platform-btn ${activePlatform === p.key ? 'active' : ''}`}
+              className={`share-platform-btn ${activePlatform === p.key ? 'share-platform-btn--active' : ''}`}
               onClick={() => handleGenerate(p.key)}
               disabled={loading}
+              aria-pressed={activePlatform === p.key}
             >
               <span className="share-platform-icon">{p.icon}</span>
               <span className="share-platform-label">{t(p.labelKey)}</span>
             </button>
           ))}
+          <button
+            type="button"
+            className="share-platform-btn share-platform-btn--image"
+            onClick={handleExportImage}
+            disabled={exportingImage || loading}
+            data-testid="share-export-image-btn"
+            aria-busy={exportingImage}
+          >
+            <span className="share-platform-icon" aria-hidden="true">🖼️</span>
+            <span className="share-platform-label">
+              {exportingImage
+                ? t('share.export_downloading', 'Generating image…')
+                : t('share.export_image', 'Export as Image')}
+            </span>
+          </button>
         </div>
+        {exportImageError && (
+          <p
+            className="share-modal__error-text"
+            role="alert"
+            aria-live="assertive"
+            style={{ padding: '0 24px 8px' }}
+          >
+            ⚠️ {exportImageError}
+          </p>
+        )}
 
         <div className="share-modal__content">
           {!activePlatform && !loading && (
@@ -202,7 +290,7 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
                 <span className="share-result-platform">{t('share.copy_label', { platform: platformName })}</span>
                 <button
                   type="button"
-                  className={`btn share-copy-btn ${copied ? 'copied' : ''}`}
+                  className={`btn share-copy-btn ${copied ? 'share-copy-btn--copied' : ''}`}
                   onClick={handleCopy}
                 >
                   {copied ? t('share.copied') : t('share.copy_btn')}
@@ -217,6 +305,16 @@ export default function ShareModal({ scenarioId, shareContext, onClose, onAutoma
             </div>
           )}
         </div>
+        {/* Offscreen ShareArtifact: kept in the DOM so html2canvas can
+            rasterize the real layout. position:fixed/left:-99999px keeps
+            it out of the viewport without skipping paint. */}
+        <ShareArtifact
+          ref={artifactRef}
+          question={artifactQuestion}
+          branches={artifactBranches}
+          agentNames={agentNames}
+          sourceFamilies={sourceFamilies}
+        />
       </div>
     </div>
   );

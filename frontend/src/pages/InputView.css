@@ -446,6 +446,56 @@
   gap: 32px;
 }
 
+/* Advanced settings accordion */
+.iv-advanced {
+  margin-top: 16px;
+  width: 100%;
+}
+
+.iv-advanced__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 12px 16px;
+  background: transparent;
+  border: 1px solid rgba(64, 48, 40, 0.08);
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--text-secondary, #6b5f56);
+  transition: border-color 0.2s;
+}
+
+.iv-advanced__trigger:hover {
+  border-color: rgba(64, 48, 40, 0.16);
+}
+
+.iv-advanced__body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.3s ease;
+}
+
+.iv-advanced__body.is-open {
+  grid-template-rows: 1fr;
+}
+
+.iv-advanced__body:not(.is-open) {
+  pointer-events: none;
+}
+
+.iv-advanced__inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iv-advanced__body {
+    transition: none;
+  }
+}
+
 /* ── Round Count Slider ── */
 .rounds-selector {
   display: flex;
@@ -1876,5 +1926,21 @@
   .new-source-toggle {
     flex: 1 1 100%;
     min-width: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .byok-fields,
+  .loading-overlay,
+  .loading-overlay__card,
+  .orbit-dot,
+  .loading-step__spinner,
+  .new-source-toggle {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .new-source-toggle:hover:not(.new-source-toggle--disabled) {
+    transform: none;
   }
 }

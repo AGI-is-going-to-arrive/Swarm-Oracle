@@ -4,11 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShareModal from './ShareModal';
 
-const { generateSocialCopyMock } = vi.hoisted(() => ({
+const { generateSocialCopyMock, html2canvasMock } = vi.hoisted(() => ({
   generateSocialCopyMock: vi.fn(async () => ({
     copy: '生成好的文案',
     platform_name: '小红书',
   })),
+  html2canvasMock: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -20,6 +21,10 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../api/client', () => ({
   generateSocialCopy: generateSocialCopyMock,
+}));
+
+vi.mock('../hooks/screenCaptureHtmlVendor', () => ({
+  html2canvas: html2canvasMock,
 }));
 
 vi.mock('../lib/directorIdentity', () => ({
@@ -54,10 +59,27 @@ describe('ShareModal automation callback', () => {
         writeText: vi.fn().mockResolvedValue(undefined),
       },
     });
+    if (typeof URL.createObjectURL !== 'function') {
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        value: vi.fn(),
+      });
+    }
+    if (typeof URL.revokeObjectURL !== 'function') {
+      Object.defineProperty(URL, 'revokeObjectURL', {
+        configurable: true,
+        value: vi.fn(),
+      });
+    }
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:swarmoracle-test');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    html2canvasMock.mockReset();
     generateSocialCopyMock.mockClear();
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -259,5 +281,64 @@ describe('ShareModal automation callback', () => {
 
     expect(generateSocialCopyMock).not.toHaveBeenCalled();
     expect(await screen.findByText(/conversation\.error\.byok_invalid/)).toBeInTheDocument();
+  });
+
+  it('exports the offscreen share artifact as a PNG without rendering BYOK secrets', async () => {
+    const toBlob = vi.fn((callback: BlobCallback) => {
+      callback(new Blob(['png'], { type: 'image/png' }));
+    });
+    html2canvasMock.mockResolvedValueOnce({ toBlob });
+    const user = userEvent.setup();
+
+    render(
+      <ShareModal
+        scenarioId="scenario-image"
+        shareContext={{
+          profileLabel: 'Risk desk',
+          runtimePresetLabel: 'Balanced',
+          profileHooks: ['hook'],
+          resonanceLabel: 'resonance',
+          permalinkUrl: 'https://example.com/result/scenario-image',
+        }}
+        branches={[
+          {
+            id: 'b1',
+            parent_branch_id: null,
+            fork_round: 0,
+            fork_reason: 'baseline',
+            title: 'Outcome A',
+            description: 'Description',
+            summary: 'Summary',
+            story: 'Story',
+            probability: 0,
+            insight: 'Unicode 标题 ✅',
+            key_moments: [],
+            status: 'COMPLETED',
+          },
+        ]}
+        agentNames={['Agent One']}
+        sourceFamilies={['news_deep']}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.queryByText('sk-test')).not.toBeInTheDocument();
+    expect(screen.queryByText('https://example.com/v1/chat/completions')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('share-export-image-btn'));
+
+    await waitFor(() => {
+      expect(html2canvasMock).toHaveBeenCalledWith(
+        expect.any(HTMLElement),
+        expect.objectContaining({
+          backgroundColor: '#0f172a',
+          width: 1200,
+          height: 630,
+        }),
+      );
+    });
+    expect(toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png', 0.95);
+    expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
   });
 });

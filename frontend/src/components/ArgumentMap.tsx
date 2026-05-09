@@ -519,6 +519,10 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
   });
   // P6 Phase 2: path highlighting
   const [highlightedPath, setHighlightedPath] = useState<Set<string> | null>(null);
+  // P1-4: surface a dismissible notice when node conversation isn't available
+  // (e.g. debate results with no scenario_id link).
+  const [noConversationNoticeOpen, setNoConversationNoticeOpen] = useState(false);
+  const noConversationDismissedRef = useRef(false);
   const edgeTypes = useMemo(() => ({ animated: AnimatedEdge }), []);
   // C5: Status filter
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
@@ -868,6 +872,10 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     const nodeType = unit?.type ?? raw?.type ?? 'unknown';
     const excerpt = unit?.text ?? raw?.label;
     if (!conversationScenarioId) {
+      // P1-4: tell the user why nothing happened (e.g. debate result graphs).
+      if (!noConversationDismissedRef.current) {
+        setNoConversationNoticeOpen(true);
+      }
       return;
     }
     const relatedContext = (filteredData?.edges ?? [])
@@ -911,6 +919,11 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
   const onPaneClick = useCallback(() => {
     setSelectedNode(null);
     setHighlightedPath(null);
+  }, []);
+  // P1-4: dismiss the "conversation unavailable" notice and remember the choice.
+  const dismissNoConversationNotice = useCallback(() => {
+    noConversationDismissedRef.current = true;
+    setNoConversationNoticeOpen(false);
   }, []);
   const resetViewport = useCallback(() => {
     reactFlowRef.current?.fitView?.(viewportFitOptions);
@@ -1247,6 +1260,25 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
               restoreFocusTarget={detailRestoreFocusRef.current}
               />
             </div>
+            {/* P1-4: explain why node conversation isn't available (debate result graphs). */}
+            {!conversationScenarioId && noConversationNoticeOpen ? (
+              <div className="argument-map__no-conversation-notice">
+                <span className="argument-map__no-conversation-text">
+                  {t(
+                    'argument.conversation_unavailable',
+                    'Node conversation is not available for debate results.',
+                  )}
+                </span>
+                <button
+                  type="button"
+                  className="argument-map__no-conversation-dismiss btn btn-ghost"
+                  onClick={dismissNoConversationNotice}
+                  aria-label={t('argument.conversation_unavailable_dismiss', 'Dismiss')}
+                >
+                  {t('argument.conversation_unavailable_dismiss', 'Dismiss')}
+                </button>
+              </div>
+            ) : null}
           </>
         )}
 

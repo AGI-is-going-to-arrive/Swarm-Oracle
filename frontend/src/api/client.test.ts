@@ -86,6 +86,28 @@ describe('api client request parsing', () => {
     );
   });
 
+  it('sanitizes failed plain-text export responses before surfacing the error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      headers: {
+        get: (name: string) => (name.toLowerCase() === 'content-type' ? 'text/plain' : null),
+      },
+      text: vi.fn().mockResolvedValue('Traceback api_key=sk-secret base_url=https://private.example'),
+    }));
+
+    let thrown: unknown;
+    try {
+      await exportScenario('scenario-1');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe('API 500 UNSTRUCTURED_ERROR: Server error');
+    expect((thrown as Error).message).not.toContain('sk-secret');
+  });
+
   it('buildSessionHeaders adds X-Org-Id from sessionStorage when present', () => {
     sessionStorage.setItem('swarmoracle_org_id', 'tenant-front');
 

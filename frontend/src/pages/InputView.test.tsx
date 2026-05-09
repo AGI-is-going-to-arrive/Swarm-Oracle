@@ -239,12 +239,20 @@ vi.mock('../components/QuickStartCards', () => ({
 }));
 
 async function openAdvancedSettings(user: ReturnType<typeof userEvent.setup>) {
-  const trigger = screen.getByRole('button', {
+  // Open the iv-advanced accordion (mode selectors, source families)
+  const advancedTrigger = screen.queryByRole('button', {
+    name: /home\.advanced_settings/i,
+  });
+  if (advancedTrigger && advancedTrigger.getAttribute('aria-expanded') !== 'true') {
+    await user.click(advancedTrigger);
+  }
+
+  // Also open the BYOK accordion if needed
+  const byokTrigger = screen.queryByRole('button', {
     name: /home\.byok_toggle/i,
   });
-
-  if (trigger.getAttribute('aria-expanded') !== 'true') {
-    await user.click(trigger);
+  if (byokTrigger && byokTrigger.getAttribute('aria-expanded') !== 'true') {
+    await user.click(byokTrigger);
   }
 }
 

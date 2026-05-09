@@ -1,0 +1,241 @@
+/* ═══════════════════════════════════════════════════════════
+   P2-3 — AgentProfileModal styles (BEM)
+   Extracted from inline styles in AgentProfileModal.tsx
+   ═══════════════════════════════════════════════════════════ */
+
+.agent-profile-modal {
+  max-width: 520px;
+  width: 90vw;
+  max-height: 85vh;
+  border-radius: 12px;
+  border: 1px solid #333;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Header */
+.agent-profile-modal__header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #333;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.agent-profile-modal__avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+.agent-profile-modal__avatar--generated {
+  background: #4a90d922;
+  border: 2px solid #4a90d9;
+}
+
+.agent-profile-modal__avatar--custom {
+  background: #9b59b622;
+  border: 2px solid #9b59b6;
+}
+
+.agent-profile-modal__title-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-profile-modal__title {
+  margin: 0;
+  font-size: 1.1rem;
+  line-height: 1.3;
+}
+
+.agent-profile-modal__subtitle {
+  font-size: 0.75rem;
+  color: #888;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-profile-modal__kind-badge {
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 0.65rem;
+}
+
+.agent-profile-modal__kind-badge--generated {
+  background: #4a90d922;
+  color: #4a90d9;
+}
+
+.agent-profile-modal__kind-badge--custom {
+  background: #9b59b622;
+  color: #9b59b6;
+}
+
+.agent-profile-modal__close-btn {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.agent-profile-modal__close-btn:hover {
+  color: #ccc;
+}
+
+/* Body */
+.agent-profile-modal__body {
+  padding: 1rem 1.25rem;
+  overflow-y: auto;
+  max-height: calc(85vh - 80px);
+}
+
+/* Sections */
+.agent-profile-modal__section {
+  margin-bottom: 1rem;
+}
+
+.agent-profile-modal__section-title {
+  margin: 0 0 0.25rem;
+  font-size: 0.85rem;
+  color: #aaa;
+}
+
+.agent-profile-modal__section-title--timeline {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  color: inherit;
+}
+
+.agent-profile-modal__persona {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #ccc;
+}
+
+/* Domain chips */
+.agent-profile-modal__domains {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.agent-profile-modal__domain-chip {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #2a2a4e;
+  font-size: 0.75rem;
+  color: #8ab4f8;
+}
+
+/* Meta */
+.agent-profile-modal__meta {
+  margin-bottom: 1rem;
+  font-size: 0.75rem;
+  color: #666;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Divider */
+.agent-profile-modal__divider {
+  border: none;
+  border-top: 1px solid #333;
+  margin: 0.75rem 0;
+}
+
+/* Status messages */
+.agent-profile-modal__status {
+  font-size: 0.85rem;
+  color: #888;
+  margin: 0;
+}
+
+.agent-profile-modal__status--error {
+  color: #e74c3c;
+}
+
+/* Decision Bias chart */
+.agent-profile-modal__bias-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.agent-profile-modal__bias-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 30%) 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+}
+
+.agent-profile-modal__bias-key {
+  color: #ccc;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-profile-modal__bias-track {
+  position: relative;
+  height: 8px;
+  background: #2a2a4e;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.agent-profile-modal__bias-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  background: linear-gradient(90deg, #4a90d9, #8ab4f8);
+  border-radius: 4px;
+  transition: width 0.3s ease, transform 0.3s ease;
+}
+
+.agent-profile-modal__bias-bar--positive {
+  transform-origin: left center;
+}
+
+.agent-profile-modal__bias-bar--negative {
+  background: linear-gradient(90deg, #e67e22, #e74c3c);
+  transform-origin: right center;
+}
+
+.agent-profile-modal__bias-value {
+  color: #8ab4f8;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.7rem;
+  min-width: 40px;
+  text-align: right;
+}
+
+.agent-profile-modal__bias-value--text {
+  color: #aaa;
+  font-style: italic;
+  grid-column: 2 / span 2;
+  text-align: left;
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-profile-modal__bias-bar {
+    transition: none;
+  }
+}

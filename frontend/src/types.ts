@@ -987,6 +987,34 @@ export interface AgentGrowthEvent {
   created_at: string | null;
 }
 
+// ── Replay Trace (P1-1) ─────────────────────────────────
+export interface ReplayTraceNode {
+  branch_id: string;
+  parent_branch_id: string | null;
+  replay_source_branch_id: string | null;
+  origin_round: number;
+  replay_kind: string;
+  status: string;
+  created_at: string;
+}
+
+export interface ReplayTraceResponse {
+  nodes: ReplayTraceNode[];
+  next_cursor: string | null;
+}
+
+// ── Phase 3: Checkpoints (P1-3 / counterfactual replay) ──
+
+export interface CheckpointInfo {
+  id: string;
+  scenario_id: string;
+  branch_id: string;
+  round_number: number;
+  compressed_summary: string | null;
+  blackboard_json: string | null;
+  created_at: string | null;
+}
+
 // ── Type Aliases ─────────────────────────────────────────
 export type BranchStatus = 'ACTIVE' | 'COMPLETED' | 'PRUNED';
 export type Branch = BranchInfo;

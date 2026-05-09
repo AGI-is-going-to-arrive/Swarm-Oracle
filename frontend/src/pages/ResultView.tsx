@@ -2,7 +2,7 @@
    SwarmOracle — ResultView (Multi-Ending Comparison)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useEffect, useMemo, useCallback, useRef, type FocusEvent } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, type FocusEvent, type ReactNode } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -130,6 +130,7 @@ import { FinanceSourceCard } from '../components/result/FinanceSourceCard';
 import { type SourceCategoryState } from '../components/result/SourceCategoryCard';
 import { HookSummaryPanel } from '../components/result/HookSummaryPanel';
 import { DirectorDebriefPanel } from '../components/result/DirectorDebriefPanel';
+import { ProgressIndicator } from '../components/ProgressIndicator';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 const EMPTY_GAMEPLAY_PROFILE_HOOKS: string[] = [];
@@ -1308,6 +1309,12 @@ export default function ResultView() {
   const sourceFamilyContext = (
     scenario?.web_search_context?.family_context ?? EMPTY_SOURCE_FAMILY_CONTEXT
   ) as SourceFamilyContext;
+  const shareSourceFamilies = useMemo(() => {
+    const families = Object.entries(sourceFamilyContext)
+      .filter(([, entry]) => Array.isArray(entry?.items) && entry.items.length > 0)
+      .map(([family]) => family);
+    return families.length > 0 ? families : undefined;
+  }, [sourceFamilyContext]);
   const polymarketContext = sourceFamilyContext.polymarket;
   const financeContext = sourceFamilyContext.finance;
   const academicContext = sourceFamilyContext.academic;
@@ -1749,6 +1756,7 @@ export default function ResultView() {
 
   return (
     <div className="result-view">
+      <ProgressIndicator currentStep={4} />
       {/* Header */}
       <header className="result-header">
         <button
@@ -1995,19 +2003,10 @@ export default function ResultView() {
         </div>
       )}
 
-      {/* Hook Summary Panel */}
-      {activeScenarioId && !loading && !capLoading && (
-        <HookSummaryPanel
-          scenarioId={activeScenarioId}
-          branchId={branches[0]?.id}
-          identityId={primaryAgentIdentityId ?? undefined}
-        />
-      )}
-
       {/* Explore Deeper Bridge */}
       {branches.length > 0 && !loading && !capLoading && activeScenarioId && (
         <section id="result-bridge" className="result-bridge">
-          <h2 className="result-bridge__heading">{t('result.bridge_title', 'Explore Deeper')}</h2>
+          <h2 className="result-bridge__heading">{t('result.next_steps_heading')}</h2>
           <div className="result-bridge__grid">
             {(() => {
               const causalEnabled = capabilities?.causal_graph?.enabled ?? false;
@@ -2036,9 +2035,9 @@ export default function ResultView() {
                 {
                   key: 'causal',
                   icon: '\u{1F578}️',
-                  titleKey: 'result.bridge_causal_title',
+                  titleKey: 'result.next_understand_why',
                   titleDefault: 'Causal Graph',
-                  descKey: 'result.bridge_causal_desc',
+                  descKey: 'result.next_understand_why_desc',
                   descDefault: 'Trace how events led to each ending.',
                   enabled: causalEnabled,
                   href: `/sim/${scenarioId}/causal-map${analysisBranch ? `?branch_id=${encodeURIComponent(analysisBranch.id)}` : ''}`,
@@ -2050,9 +2049,9 @@ export default function ResultView() {
                 {
                   key: 'replay',
                   icon: '\u{1F3AC}',
-                  titleKey: 'result.bridge_replay_title',
+                  titleKey: 'result.next_replay_trace',
                   titleDefault: 'Replay Trace',
-                  descKey: 'result.bridge_replay_desc',
+                  descKey: 'result.next_replay_trace_desc',
                   descDefault: 'Step through the simulation round by round.',
                   enabled: replayEnabled && !isReplayMode,
                   href: `/replay/${scenarioId}`,
@@ -2064,9 +2063,9 @@ export default function ResultView() {
                 {
                   key: 'compare',
                   icon: '\u{1F500}',
-                  titleKey: 'result.bridge_compare_title',
+                  titleKey: 'result.next_replay_different',
                   titleDefault: 'Compare Branches',
-                  descKey: 'result.bridge_compare_desc',
+                  descKey: 'result.next_replay_different_desc',
                   descDefault: 'See how different branches diverged.',
                   enabled: compareEnabled && !isReplayMode,
                   href: analysisBranch && branches.length > 1
@@ -2092,9 +2091,9 @@ export default function ResultView() {
                 {
                   key: 'agents',
                   icon: '\u{1F9EC}',
-                  titleKey: 'result.bridge_agents',
+                  titleKey: 'result.next_ask_agent',
                   titleDefault: 'Agent Library',
-                  descKey: 'result.bridge_agents_desc',
+                  descKey: 'result.next_ask_agent_desc',
                   descDefault: 'Browse agent identities and cross-scenario memory.',
                   enabled: agentEnabled && !isReplayMode,
                   href: '/agents',
@@ -2133,8 +2132,42 @@ export default function ResultView() {
                 );
               });
             })()}
+            {(() => {
+              const shareDisabled = isReplayMode || !replayUrl;
+              const shareStatusId = 'result-bridge-share-status';
+              const shareReason = isReplayMode
+                ? t('result.bridge_disabled_replay')
+                : !replayUrl
+                  ? t('result.bridge_disabled_loading')
+                  : undefined;
+              return (
+                <button
+                  className={`result-bridge__card${shareDisabled ? ' result-bridge__card--disabled' : ''}`}
+                  onClick={() => { if (!shareDisabled) setShowShare(true); }}
+                  disabled={shareDisabled}
+                  title={shareReason}
+                  aria-describedby={shareDisabled ? shareStatusId : undefined}
+                >
+                  <span className="result-bridge__card-icon" aria-hidden="true">📋</span>
+                  <span className="result-bridge__card-name">{t('result.next_share')}</span>
+                  <span className="result-bridge__card-desc">{t('result.next_share_desc')}</span>
+                  {shareDisabled && shareReason && (
+                    <span id={shareStatusId} className="result-bridge__card-status">{shareReason}</span>
+                  )}
+                </button>
+              );
+            })()}
           </div>
         </section>
+      )}
+
+      {/* Hook Summary Panel */}
+      {activeScenarioId && !loading && !capLoading && (
+        <HookSummaryPanel
+          scenarioId={activeScenarioId}
+          branchId={branches[0]?.id}
+          identityId={primaryAgentIdentityId ?? undefined}
+        />
       )}
 
       {/* Web Sources Section */}
@@ -2744,6 +2777,9 @@ export default function ResultView() {
         <ShareModal
           scenarioId={id}
           shareContext={shareFlavorContext}
+          branches={branches.map((b) => ({ ...b, fork_round: 0, summary: b.insight ?? '', status: b.status as 'COMPLETED' | 'ACTIVE' | 'PRUNED' }))}
+          agentNames={agents.slice(0, 3).map((a) => a.name)}
+          sourceFamilies={shareSourceFamilies}
           onAutomationStateChange={setShareAutomation}
           onClose={() => setShowShare(false)}
         />
@@ -2911,35 +2947,102 @@ export default function ResultView() {
           onClose={handleCloseEndingRoom}
         />
       )}
-      {/* FE-5: 4 source category grid (desktop) + mobile Sheet + Action Card */}
-      {capabilities?.web_search?.providers && (() => {
-        const providers = capabilities.web_search.providers;
+      {/* FE-5 + P1-5: 4 source category grid (desktop) + mobile Sheet + Action Card.
+          P1-5: render based on scenario payload presence (historical data) OR
+          current capability state (live), so that completed scenarios remain
+          viewable when feature flags are toggled off. Historical-only cards
+          show a "recorded" badge to distinguish from live data. */}
+      {(() => {
+        const providers = capabilities?.web_search?.providers;
+        const hasItems = (entry: { items?: unknown[] } | null | undefined): boolean =>
+          Boolean(entry && Array.isArray(entry.items) && entry.items.length > 0);
+        const hasPolymarketData = hasItems(polymarketContext);
+        const hasFinanceData = hasItems(financeContext);
+        const hasAcademicData = hasItems(academicContext);
+        const hasNewsDeepData = hasItems(newsDeepContext);
+        const polymarketLive = Boolean(providers?.polymarket?.enabled);
+        const financeLive = Boolean(providers?.finance?.enabled);
+        const academicLive = Boolean(providers?.academic?.enabled);
+        const newsDeepLive = Boolean(providers?.news_deep?.enabled);
+        const showPolymarket = polymarketLive || hasPolymarketData;
+        const showFinance = financeLive || hasFinanceData;
+        const showAcademic = academicLive || hasAcademicData;
+        const showNewsDeep = newsDeepLive || hasNewsDeepData;
+        if (!showPolymarket && !showFinance && !showAcademic && !showNewsDeep) {
+          return null;
+        }
+        const polymarketHistorical = !polymarketLive && hasPolymarketData;
+        const financeHistorical = !financeLive && hasFinanceData;
+        const academicHistorical = !academicLive && hasAcademicData;
+        const newsDeepHistorical = !newsDeepLive && hasNewsDeepData;
+        const historicalLabel = t('result.source_historical', { defaultValue: 'Recorded' });
+        const historicalTooltip = t('result.source_historical_tooltip', {
+          defaultValue: 'This data was recorded when the scenario was created',
+        });
+        const renderHistoricalBadge = (family: string) => (
+          <span
+            className="result-source-card__historical-badge"
+            data-testid={`result-sources-${family}-historical-badge`}
+            title={historicalTooltip}
+            aria-label={`${historicalLabel}: ${historicalTooltip}`}
+          >
+            {historicalLabel}
+          </span>
+        );
+        const wrapHistorical = (family: string, isHistorical: boolean, node: ReactNode) =>
+          isHistorical ? (
+            <div
+              key={family}
+              className="result-source-card-wrapper result-source-card-wrapper--historical"
+              data-historical="true"
+              data-source-family={family}
+            >
+              {renderHistoricalBadge(family)}
+              {node}
+            </div>
+          ) : (
+            <div
+              key={family}
+              className="result-source-card-wrapper"
+              data-source-family={family}
+            >
+              {node}
+            </div>
+          );
         const sourceCards = (
           <>
-            {providers.polymarket?.enabled && (
+            {showPolymarket && wrapHistorical(
+              'polymarket',
+              polymarketHistorical,
               <PolymarketCard
                 capability={polymarketCapability}
                 state={resolveSourceCategoryState(polymarketContext)}
                 items={polymarketContext?.items ?? []}
-              />
+              />,
             )}
-            {providers.finance?.enabled && (
+            {showFinance && wrapHistorical(
+              'finance',
+              financeHistorical,
               <FinanceSourceCard
                 state={resolveSourceCategoryState(financeContext)}
                 items={financeContext?.items ?? []}
-              />
+              />,
             )}
-            {providers.academic?.enabled && (
+            {showAcademic && wrapHistorical(
+              'academic',
+              academicHistorical,
               <SemanticScholarCard
                 state={resolveSourceCategoryState(academicContext)}
                 items={academicContext?.items ?? []}
-              />
+              />,
             )}
-            {providers.news_deep?.enabled && (
+            {showNewsDeep && wrapHistorical(
+              'news_deep',
+              newsDeepHistorical,
               <NewsApiCard
                 state={resolveSourceCategoryState(newsDeepContext)}
                 items={newsDeepContext?.items ?? []}
-              />
+              />,
             )}
           </>
         );

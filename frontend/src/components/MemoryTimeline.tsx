@@ -2,11 +2,15 @@
    P1-2 — Memory Timeline
    Vertical chronological timeline of an agent's growth events
    across scenarios, grouped by scenario.
+
+   P2-3 — De-inlined to BEM classes; added knowledge-domain
+   color categories and time markers per scenario group.
    ═══════════════════════════════════════════════════════════ */
 
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AgentGrowthEvent, AgentMemoryEntry } from '../types';
+import './MemoryTimeline.css';
 
 interface Props {
   events: AgentGrowthEvent[];
@@ -37,6 +41,18 @@ const EVENT_LABEL_I18N: Record<string, [string, string]> = {
   betrayal: ['agent_profile.event_betrayal', 'Betrayal'],
 };
 
+
+function formatTimeMarker(iso: string | null): string {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleDateString();
+  } catch {
+    return '';
+  }
+}
+
 interface TimelineEntry {
   kind: 'event' | 'memory';
   scenarioId: string | null;
@@ -65,7 +81,7 @@ export function MemoryTimeline({ events, memories }: Props) {
     return all;
   }, [events, memories]);
 
-  // Group by scenarioId
+  // Group by scenarioId, preserving insertion order (which is timestamp-ascending)
   const groups = useMemo(() => {
     const map = new Map<string, TimelineEntry[]>();
     for (const entry of entries) {
@@ -79,7 +95,7 @@ export function MemoryTimeline({ events, memories }: Props) {
 
   if (entries.length === 0) {
     return (
-      <p style={{ fontSize: '0.85rem', color: '#888' }}>
+      <p className="memory-timeline__empty">
         {t('agent_profile.no_history', 'No history yet.')}
       </p>
     );
@@ -87,115 +103,94 @@ export function MemoryTimeline({ events, memories }: Props) {
 
   return (
     <div
+      className="memory-timeline"
       role="list"
       aria-label={t('agent_profile.timeline_label', 'Agent growth timeline')}
-      style={{ position: 'relative', paddingLeft: 20 }}
     >
-      {/* Vertical line */}
-      <div
-        aria-hidden="true"
-        style={{
-          position: 'absolute', left: 8, top: 0, bottom: 0,
-          width: 2, background: '#333',
-        }}
-      />
+      {/* Vertical axis line */}
+      <div className="memory-timeline__axis" aria-hidden="true" />
 
-      {groups.map(([scenarioId, items]) => (
-        <div key={scenarioId} style={{ marginBottom: '1rem' }}>
-          {/* Scenario segment header */}
-          <div
-            style={{
-              position: 'relative',
-              fontSize: '0.7rem', color: '#888',
-              marginBottom: 6, paddingLeft: 4,
-            }}
-          >
-            <span
-              aria-hidden="true"
-              style={{
-                position: 'absolute', left: -16, top: 3,
-                width: 10, height: 10, borderRadius: '50%',
-                background: '#555', border: '2px solid #333',
-              }}
-            />
-            {t('agent_profile.scenario_label', 'Scenario')}: {scenarioId === 'unknown' ? '—' : scenarioId.slice(0, 8)}
-          </div>
+      {groups.map(([scenarioId, items]) => {
+        // Earliest timestamp in this group as the visual time marker
+        const firstTs = items.find(it => it.timestamp)?.timestamp ?? null;
+        const timeMarker = formatTimeMarker(firstTs);
+        return (
+          <div key={scenarioId} className="memory-timeline__group">
+            {/* Scenario segment header */}
+            <div className="memory-timeline__scenario-label">
+              <span className="memory-timeline__scenario-marker" aria-hidden="true" />
+              {t('agent_profile.scenario_label', 'Scenario')}:{' '}
+              {scenarioId === 'unknown' ? '—' : scenarioId.slice(0, 8)}
+              {timeMarker && (
+                <span className="memory-timeline__time-marker">· {timeMarker}</span>
+              )}
+            </div>
 
-          {items.map((entry, i) => {
-            if (entry.kind === 'event' && entry.event) {
-              const ev = entry.event;
-              const pair = EVENT_LABEL_I18N[ev.event_type];
-              const label = pair ? t(pair[0], pair[1]) : ev.event_type;
-              const color = EVENT_COLORS[ev.event_type] ?? '#888';
-              const icon = EVENT_ICONS[ev.event_type] ?? '📌';
-              return (
-                <div
-                  key={`e-${ev.id}`}
-                  role="listitem"
-                  style={{
-                    position: 'relative',
-                    marginBottom: 8, paddingLeft: 4,
-                    fontSize: '0.8rem',
-                  }}
-                >
-                  <span
-                    aria-hidden="true"
-                    style={{
-                      position: 'absolute', left: -14, top: 4,
-                      width: 6, height: 6, borderRadius: '50%',
-                      background: color,
-                    }}
-                  />
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span>{icon}</span>
-                    <strong style={{ color }}>{label}</strong>
-                    {ev.round_number != null && (
-                      <span style={{ color: '#666', fontSize: '0.7rem' }}>
-                        R{ev.round_number}
+            {items.map((entry, i) => {
+              if (entry.kind === 'event' && entry.event) {
+                const ev = entry.event;
+                const pair = EVENT_LABEL_I18N[ev.event_type];
+                const label = pair ? t(pair[0], pair[1]) : ev.event_type;
+                const color = EVENT_COLORS[ev.event_type] ?? '#888';
+                const icon = EVENT_ICONS[ev.event_type] ?? '📌';
+                return (
+                  <div
+                    key={`e-${ev.id}`}
+                    role="listitem"
+                    className="memory-timeline__event"
+                  >
+                    <span
+                      className="memory-timeline__event-dot"
+                      style={{ background: color }}
+                      aria-hidden="true"
+                    />
+                    <div className="memory-timeline__event-header">
+                      <span className="memory-timeline__event-icon" aria-hidden="true">
+                        {icon}
                       </span>
-                    )}
+                      <strong className="memory-timeline__event-label" style={{ color }}>
+                        {label}
+                      </strong>
+                      {ev.round_number != null && (
+                        <span className="memory-timeline__event-round">
+                          R{ev.round_number}
+                        </span>
+                      )}
+                    </div>
+                    <p className="memory-timeline__event-summary">
+                      {ev.summary}
+                    </p>
                   </div>
-                  <p style={{ margin: '2px 0 0', color: '#ccc', lineHeight: 1.4 }}>
-                    {ev.summary}
-                  </p>
-                </div>
-              );
-            }
-            if (entry.kind === 'memory' && entry.memory) {
-              return (
-                <div
-                  key={`m-${i}`}
-                  role="listitem"
-                  style={{
-                    position: 'relative',
-                    marginBottom: 8, paddingLeft: 4,
-                    fontSize: '0.8rem',
-                  }}
-                >
-                  <span
-                    aria-hidden="true"
-                    style={{
-                      position: 'absolute', left: -14, top: 4,
-                      width: 6, height: 6, borderRadius: '50%',
-                      background: '#4a90d9',
-                    }}
-                  />
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span>💭</span>
-                    <strong style={{ color: '#4a90d9' }}>
-                      {t('agent_profile.memory_entry', 'Memory')}
-                    </strong>
+                );
+              }
+              if (entry.kind === 'memory' && entry.memory) {
+                return (
+                  <div
+                    key={`m-${i}`}
+                    role="listitem"
+                    className="memory-timeline__event"
+                  >
+                    <span
+                      className="memory-timeline__event-dot memory-timeline__memory-dot"
+                      aria-hidden="true"
+                    />
+                    <div className="memory-timeline__event-header">
+                      <span className="memory-timeline__event-icon" aria-hidden="true">💭</span>
+                      <strong className="memory-timeline__memory-label">
+                        {t('agent_profile.memory_entry', 'Memory')}
+                      </strong>
+                    </div>
+                    <p className="memory-timeline__event-summary">
+                      {entry.memory.summary}
+                    </p>
                   </div>
-                  <p style={{ margin: '2px 0 0', color: '#ccc', lineHeight: 1.4 }}>
-                    {entry.memory.summary}
-                  </p>
-                </div>
-              );
-            }
-            return null;
-          })}
-        </div>
-      ))}
+                );
+              }
+              return null;
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 }

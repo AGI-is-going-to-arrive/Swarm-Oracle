@@ -1,0 +1,263 @@
+/* ═══════════════════════════════════════════════════════════
+   P2-4 — ShareArtifact
+   Offscreen 1200x630 OG-card for PNG export via html2canvas.
+   Fixed dimensions; not responsive (export-only target).
+   ═══════════════════════════════════════════════════════════ */
+
+.share-artifact {
+  /* Render offscreen so html2canvas can rasterize the real DOM.
+     position:fixed + left:-99999px keeps it in the layout tree
+     while keeping it invisible to users and screen readers. */
+  position: fixed;
+  top: 0;
+  left: -99999px;
+  pointer-events: none;
+  /* visibility:hidden would skip painting in some browsers and break
+     html2canvas, so we rely on offscreen positioning instead. */
+}
+
+.share-artifact__card {
+  width: 1200px;
+  height: 630px;
+  padding: 64px 72px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: #f8fafc;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(168, 85, 247, 0.35) 0%, transparent 45%),
+    radial-gradient(circle at 90% 100%, rgba(56, 189, 248, 0.32) 0%, transparent 50%),
+    linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.share-artifact__card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      transparent 0,
+      transparent 60px,
+      rgba(255, 255, 255, 0.018) 60px,
+      rgba(255, 255, 255, 0.018) 61px
+    );
+  pointer-events: none;
+}
+
+.share-artifact__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(248, 250, 252, 0.75);
+  position: relative;
+  z-index: 1;
+}
+
+.share-artifact__brand-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #a855f7, #38bdf8);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Cormorant Garamond', 'Times New Roman', serif;
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: 0;
+}
+
+.share-artifact__question {
+  font-family: 'Cormorant Garamond', 'Times New Roman', serif;
+  font-size: 44px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: #f8fafc;
+  margin: 0;
+  /* Clamp very long titles so we never overflow the 630px card. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+
+.share-artifact__outcome {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px 26px;
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  position: relative;
+  z-index: 1;
+}
+
+.share-artifact__outcome-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(196, 181, 253, 0.9);
+}
+
+.share-artifact__outcome-title {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  flex-wrap: nowrap;
+}
+
+.share-artifact__outcome-branch {
+  font-size: 28px;
+  font-weight: 700;
+  color: #f8fafc;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-artifact__outcome-prob {
+  font-family: 'Cormorant Garamond', 'Times New Roman', serif;
+  font-size: 36px;
+  font-weight: 700;
+  color: #38bdf8;
+  flex: 0 0 auto;
+}
+
+.share-artifact__outcome-insight {
+  font-size: 17px;
+  line-height: 1.5;
+  color: rgba(226, 232, 240, 0.92);
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.share-artifact__meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  position: relative;
+  z-index: 1;
+}
+
+.share-artifact__sources,
+.share-artifact__agents {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.share-artifact__meta-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.85);
+}
+
+.share-artifact__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.share-artifact__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  color: #e2e8f0;
+}
+
+.share-artifact__chip--polymarket {
+  background: rgba(217, 70, 239, 0.18);
+  border-color: rgba(217, 70, 239, 0.55);
+  color: #f0abfc;
+}
+
+.share-artifact__chip--finance {
+  background: rgba(34, 197, 94, 0.18);
+  border-color: rgba(34, 197, 94, 0.55);
+  color: #86efac;
+}
+
+.share-artifact__chip--academic {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.55);
+  color: #93c5fd;
+}
+
+.share-artifact__chip--news_deep {
+  background: rgba(251, 146, 60, 0.18);
+  border-color: rgba(251, 146, 60, 0.55);
+  color: #fdba74;
+}
+
+.share-artifact__agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 15px;
+  color: #e2e8f0;
+}
+
+.share-artifact__agent-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 500;
+}
+
+.share-artifact__agent-bullet {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #a855f7, #38bdf8);
+  flex: 0 0 auto;
+}
+
+.share-artifact__footer {
+  margin-top: auto;
+  padding-top: 20px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: rgba(148, 163, 184, 0.85);
+  letter-spacing: 0.04em;
+  position: relative;
+  z-index: 1;
+}
+
+.share-artifact__footer-brand {
+  font-weight: 600;
+  color: rgba(226, 232, 240, 0.95);
+  letter-spacing: 0.08em;
+}
+
+.share-artifact__footer-timestamp {
+  font-variant-numeric: tabular-nums;
+}

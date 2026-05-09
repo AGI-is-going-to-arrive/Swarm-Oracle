@@ -1,0 +1,109 @@
+/* ═══════════════════════════════════════════════════════════
+   P2-3 — MemoryTimeline styles (BEM)
+   Extracted from inline styles + adds knowledge domain colors
+   ═══════════════════════════════════════════════════════════ */
+
+.memory-timeline {
+  position: relative;
+  padding-left: 20px;
+}
+
+.memory-timeline__empty {
+  font-size: 0.85rem;
+  color: #888;
+  margin: 0;
+}
+
+/* Vertical axis line */
+.memory-timeline__axis {
+  position: absolute;
+  left: 8px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #333;
+}
+
+/* Scenario group */
+.memory-timeline__group {
+  margin-bottom: 1rem;
+}
+
+.memory-timeline__scenario-label {
+  position: relative;
+  font-size: 0.7rem;
+  color: #888;
+  margin-bottom: 6px;
+  padding-left: 4px;
+}
+
+.memory-timeline__scenario-marker {
+  position: absolute;
+  left: -16px;
+  top: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #555;
+  border: 2px solid #333;
+}
+
+.memory-timeline__time-marker {
+  font-variant-numeric: tabular-nums;
+  color: #aaa;
+  margin-left: 6px;
+}
+
+/* Event / memory entry */
+.memory-timeline__event {
+  position: relative;
+  margin-bottom: 8px;
+  padding-left: 4px;
+  font-size: 0.8rem;
+}
+
+.memory-timeline__event-dot {
+  position: absolute;
+  left: -14px;
+  top: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.memory-timeline__event-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.memory-timeline__event-icon {
+  font-size: 0.95rem;
+}
+
+.memory-timeline__event-label {
+  font-weight: 600;
+}
+
+.memory-timeline__event-round {
+  color: #666;
+  font-size: 0.7rem;
+}
+
+.memory-timeline__event-summary {
+  margin: 2px 0 0;
+  color: #ccc;
+  line-height: 1.4;
+}
+
+/* Memory entry uses blue accent */
+.memory-timeline__memory-label {
+  color: #4a90d9;
+  font-weight: 600;
+}
+
+.memory-timeline__memory-dot {
+  background: #4a90d9;
+}
+

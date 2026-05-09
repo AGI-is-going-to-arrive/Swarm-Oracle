@@ -25,11 +25,12 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、BYOK、quick starts、challenge、主模式档位、搜索增强 toggle、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、identity continuity preflight / confirm dialog |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog |
 | AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、tier badge、profile modal、编辑/删除入口 |
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains 与 `IMPORTANT / CROWD` tier 选择 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、导出、replay/import、真实世界来源卡片、counterfactual / resume / faction 入口，以及 capability-gated `Explore Deeper` bridge |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、导出、replay/import、真实世界来源卡片、historical source badge、counterfactual / resume / faction 入口，以及 capability-gated `What's Next` bridge |
+| ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live |
 | DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import |
@@ -102,12 +103,16 @@
 - REST API 路径参数统一使用 `encodeURIComponent()` 编码（约 30 处），防止含特殊字符的 ID 破坏 URL 结构。
 - API client 当前会把首页高级设置里的可选 `Organization ID` 以 session-scoped `X-Org-Id` 请求头透传；留空时不发送。
 - API 客户端对服务端错误文本做脱敏处理（`sanitizeErrorText`），超过 200 字符或包含 stack trace / HTML 的响应会被替换为通用错误信息。
-- `ResultView` 当前新增 `Explore Deeper` bridge：
+- `ResultView` 当前新增 `What's Next / 下一步` bridge：
   - capability ready 后才渲染
-  - `causal / replay / compare / workbench` 四张卡共用同一套 bridge 样式
+  - `causal / replay / compare / workbench / agents / share` 共用同一套 bridge 样式
   - workbench 卡片当前指向因果、知识图谱和节点追问同一视图
   - disabled 卡片保留 link 语义，但不再渲染无 `href` 的 `<a>`
-  - disabled 状态改成 dashed border + icon grayscale，文字对比不再靠整卡 opacity 压低
+  - disabled 状态会保留可见原因和 `aria-describedby`，文字对比不再靠整卡 opacity 压低
+- `ShareModal` 当前接入 `ShareArtifact`：
+  - PNG 导出只读取问题、主导结局、可见来源 family 和前 3 个 Agent 名
+  - BYOK key、base URL、用户邮箱、session token 和本地 provider 配置不进入导出卡片
+  - 导出失败会回到 modal 可见错误态，不只打 `console.error`
 - `ResultView` 的因果档案当前把 what-if、结局判定、系统读数、玩家动作、下一步建议和证据账本放在同一块里；关键记录只露出前几条，剩余记录用 details 展开，避免把结果页撑成长列表。
 - `ResultView` 的导演复盘当前由 `DirectorDebriefPanel` 渲染：优先使用后端 `score_breakdown`，同时接收 what-if、主导世界线、世界线承诺、押注、最后一次干预、结构化关键记录、director goals 与 gameplay card 状态，展示得分原因、等级进度、本局读数、下一步入口和新增徽章。
 - `ResultView` 的 faction timeline lead 当前已走 i18n key + `{{title}}` 插值，不再在组件里手写 `isZh` 三元文案。
@@ -121,6 +126,8 @@
   - 选中的自建 Agent 会通过 `customAgentIdentityIds -> custom_agent_identity_ids` 传给主推演
   - 创建 Debate 时，会把当前选中的前 2 个自建 Agent 透传成 `customAgentIds -> custom_agent_ids`
   - 这条链路只传 identity id，不引入 URL 或外部 fetch 配置
+  - attach panel 当前以卡片展示 Agent 名字、persona、knowledge domains 和 decision bias；React 按文本节点渲染这些用户字段，不走 `dangerouslySetInnerHTML`
+  - `agentStore` 会按 user id 缓存身份列表，忽略迟到响应，并在 user/list 变化时剪掉已经失效的 selected id
 
 ## Theater 与性能边界
 
@@ -173,7 +180,7 @@
 | `ClassicBranchTree.tsx` / `BranchTree.tsx` / `branchTitle.ts` | `frontend/src/components/` | Classic 分支树；短标题会用 `description / fork_reason` 的首句补成更好读的展示标题，原始 `Branch.title` 仍保留给干预等业务动作 |
 | `PostVerdictPanel.tsx` | `frontend/src/pages/PostVerdictPanel.tsx` | completed live roundtable 的 `Deep Dive` 面板；聚合 participant-scoped `1-on-1 Interview`、`Research Analyst` 与 `Cross-Examine` |
 | `RoundtableAgentChat.tsx` | `frontend/src/pages/RoundtableAgentChat.tsx` | 圆桌 post-verdict 的 `1-on-1 Interview`；按 participant 维护独立 conversation thread |
-| `AnalystStreamView.tsx` / `SurveyStreamView.tsx` / `postVerdictCaches.ts` | `frontend/src/pages/` | post-verdict analyst / survey 的独立流式 UI、缓存与 context reset |
+| `AnalystStreamView.tsx` / `SurveyStreamView.tsx` / `postVerdictCaches.ts` | `frontend/src/pages/` | post-verdict analyst / survey 的独立流式 UI、缓存与 context reset；会区分 user abort、stream error、retry 和 source/tool chip |
 | `useRoundtableSseStream.ts` | `frontend/src/hooks/useRoundtableSseStream.ts` | roundtable analyst / survey 共享 SSE hook；负责 POST stream、frame 解析、timeout 与 abort |
 | `manualChunks.ts` / `performanceBudgetConfig.mjs` | `frontend/src/lib/manualChunks.ts` / `frontend/scripts/lib/performanceBudgetConfig.mjs` | 前端构建分块与预算门禁单一事实源；React 保留在共享 `vendor`，`@antv/*` 隔离到 `g6-vendor`，`html2canvas / gif.js` 按需拆分，React Flow 栈继续走 Rollup 自动分块并纳入预算检查 |
 | `useG6Graph.ts` | `frontend/src/hooks/useG6Graph.ts` | G6 图谱 hook；等 ref-backed container 真正挂载后再建图，支持 options 更新、ResizeObserver resize、node click 订阅清理 |
@@ -194,6 +201,11 @@
 | `e2e-web-search-suite.mjs` | `frontend/scripts/e2e-web-search-suite.mjs` | 首页搜索增强专项 E2E：custom override、provider/key/base URL、scenario 请求体校验 |
 | `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择；桌面端 `@dnd-kit/core` 入席交互，移动端保留 click-to-seat） |
 | `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作 + phase 分隔线 + speaker 左侧色标） |
+| `AgentAttachPanel.tsx` | `frontend/src/components/AgentAttachPanel.tsx` | 首页自建 Agent 选择卡片；最多 5 个，支持 loading/error/retry/empty 状态，长 persona 和复杂 decision bias 只作为文本展示 |
+| `AgentProfileModal.tsx` | `frontend/src/components/AgentProfileModal.tsx` | Agent profile 弹窗；展示成长、记忆、timeline 和 decision bias 分布，切换 Agent 或关闭后的迟到请求不会覆盖当前弹窗 |
+| `MemoryTimeline.tsx` | `frontend/src/components/MemoryTimeline.tsx` | Agent 记忆时间线；样式已从组件内联迁到 CSS，按 scenario/time 组织事件 |
+| `ProgressIndicator.tsx` | `frontend/src/components/ProgressIndicator.tsx` | 5 步流程 pill；当前用在 InputView / ResultView，`currentStep` 会钳到有效范围 |
+| `ShareArtifact.tsx` | `frontend/src/components/ShareArtifact.tsx` | 1200×630 offscreen OG card；通过 html2canvas 导出 PNG，只包含公开展示用摘要字段 |
 
 ## 当前边界
 
@@ -222,6 +234,7 @@
 - ResultView 当前除了折叠的 `真实世界来源` 入口，也会按 `web_search_context.family_context` 渲染四张 source family card：
   - 被选中的 family 才会变成 `ready`
   - 未选中的 family 会保持 `empty`
+  - replay / historical payload 里已经带来源数据时，即使当前 capability 关闭，也会用 recorded badge 标出这是历史来源
   - `polymarket.configured_host=non-us` 时会显示 geo-gated placeholder
 - `SimulationView` 的 automation payload 当前已补：
   - `thinkingAgentCount`
@@ -248,7 +261,7 @@
   - compare `404` 走 `no data`
   - compare fetch / scenario fetch 失败走可重试的加载失败态
   - `branch_a / branch_b` 请求参数都会先做 `encodeURIComponent()`
-- `ReplayView` 当前在 `replay_trace` capability 关闭时会显示显式 unavailable surface，不再 silent redirect 到首页；如果 capability 探针自己失败，也会给出单独的 retry surface。trace 计数标签当前用静态本地化 copy（`Frame / Branches`、`帧 / 分支`），不会再把 `{{count}}` 模板串露到页面上。
+- `ReplayView` 当前在 `replay_trace` capability 关闭时会显示显式 unavailable surface，不再 silent redirect 到首页；如果 capability 探针自己失败，也会给出单独的 retry surface。trace 计数标签当前用静态本地化 copy（`Frame / Branches`、`帧 / 分支`），不会再把 `{{count}}` 模板串露到页面上。trace 数据通过 `after / limit / root_branch_id` 做 cursor pagination；空第一页但后端返回 `next_cursor` 时仍保留 `Load more`，rapid click 会被 loading guard 收口，branch filter 变化时会重置旧 cursor。
 - `KGExplorerView` 当前会把 capability 失败、feature disabled、graph fetch 失败分开显示；graph fetch 失败时会清掉旧图，再给出本地化错误和 retry。主图用真实 G6 canvas 渲染，minimap 是 G6 minimap plugin，不是占位卡片；search / type filter 会更新图数据本身。点击节点时，`NodeConversationSheet` 收到的是业务 `kgType`、节点 label、branch 与 round，不再使用 G6 shape type。
 - KG / causal / argument / result 四种入口当前都会给 `NodeConversationSheet` 传 surface-specific origin。空态问题会按卡片类型和上下文生成：事件问前因后果，分支问分岔路线，结局问落点和对比分支，知识图谱问邻近概念，裁决图谱问主张/证据/裁决关系。
 - `WorkbenchView` 当前三种 tab 的能力门槛分开判断：`graph` 只要求 causal graph，`kg` 只要求 KG capability，`split` 才要求两者都可用。结果页的 workbench bridge 会把当前 analysis branch 写进 query，进入工作台后仍可保留同一条分析分支语义。
@@ -326,7 +339,7 @@
   - `Cross-Examine`：对选中的 participants 发同一问题，按 participant 返回 survey response
 - `Deep Dive` 只在 live completed room 打开。roundtable replay 继续保持只读，只恢复 transcript / thread / share / import，不重新开放 chat、analyst 或 survey 这类 live 工具。
 - `1-on-1 Interview` 的请求失败、空响应或 stream error 当前显示为独立 `role=alert` 错误提示，不再追加成代表自己的气泡。
-- post-verdict 工具当前有独立于 room composer 的流状态与缓存：`PostVerdictPanel` 持有 tab / analyst / survey state，result context 变化时会 reset cache 并 abort in-flight stream；`AnalystStreamView` 与 `SurveyStreamView` 共享 `useRoundtableSseStream` 处理 SSE。
+- post-verdict 工具当前有独立于 room composer 的流状态与缓存：`PostVerdictPanel` 持有 tab / analyst / survey state，result context 变化时会 reset cache 并 abort in-flight stream；`AnalystStreamView` 与 `SurveyStreamView` 共享 `useRoundtableSseStream` 处理 SSE。用户 abort、首帧前 abort、完成后 abort 和服务端 error 会落到不同 UI 状态；analyst tool result 与 survey participant source 会以 chip 形式展示。
 - roundtable mobile 当前以 `live room` 为优先目标：
   - `live room` 已收口到首屏无页面级纵向滚动
   - `picker / reseat` 仍允许滚动，不与 live-room 口径混用
@@ -419,6 +432,9 @@
   - close / show 两个按钮都带完整 disclosure `aria-expanded / aria-controls`
   - key nodes 的可见标签会按近似显示宽度压短；完整文本仍保留在 `aria-label / title`，长文本可用 `查看全文` 展开
   - guide / empty-state 文案当前集中走组件内 `CAUSAL_COLORS` dark-surface token，不再把正文直接压到低对比颜色
+- `CausalReviewView` 当前在 `graph_analysis` 数据可用时会显示 analysis panel：
+  - summary、density、average / max degree、component、god nodes、cross-branch edges 和 degree distribution 都来自后端 `serverAnalysis`
+  - `serverAnalysis=null` 时不显示假分析，仍保留图本身和本地说明
 - `CausalReviewView` 与 `ArgumentMap` 当前只会在图结构真的变化后重新 `fitView()`；search / status filter / branch 切换仍会重算视口，但选中节点或取消选中不会再把视口强制拉回去
 - `CausalReviewView` / `ArgumentMap` 的图节点、边、handle 可访问文案，以及 React Flow controls / `MiniMap` 文案当前都会跟随 UI 语言实时更新；切语言不会重打图请求。
 - `CausalReviewView` / `ArgumentMap` 的 `MiniMap` 当前是非交互 overlay（`pointer-events: none`），只在桌面显示；移动端不再和图操作抢热区。
@@ -462,8 +478,8 @@
   - `cd frontend && npm run test -- --run src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts --reporter=verbose`：`87 passed`
   - `cd frontend && npx tsc --noEmit`：通过
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
-- frontend full vitest 本 session fresh rerun：`165 files / 1790 passed`。
-- frontend i18n key + placeholder parity：`1621 = 1621`，通过。
+- frontend full vitest 本 session fresh rerun：`168 files / 1843 passed`。
+- frontend i18n key + placeholder parity：通过。
 - Classic 分支标题本轮已补定向验证：
   - `npm exec -- vitest run src/components/BranchTree.test.tsx`：`5 passed`
   - `npm exec -- eslint src/components/BranchTree.tsx src/components/BranchNode.tsx src/components/BranchTree.test.tsx src/components/branchTitle.ts`：通过
@@ -531,6 +547,9 @@
   - 目的是让旧 Safari / Firefox 在不支持现代颜色函数时仍保持可读
 - `ResumePanel` 当前会：
   - 只在用户已选分支且 round 为有效整数时允许提交
+  - `counterfactual_replay` capability 可用时优先加载同 scenario / branch 的 checkpoints
+  - checkpoint 超过当前 `totalRounds` 会被过滤；选中 checkpoint 后会同步 round number
+  - `compressed_summary` 可见预览；没有 checkpoint 或加载失败时回到 round number 输入
   - 成功后锁表单并在 500ms 后跳回 `/sim/:id`
   - 对 `429` 统一显示 replay branch 上限提示
 - `ResumePanel` 当前有独立 smoke 入口：

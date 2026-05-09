@@ -1843,8 +1843,10 @@
 /* ── Explore Deeper Bridge ─────────────────────── */
 
 .result-bridge {
-  border-top: 1px solid var(--border-default);
-  padding: 32px 0 0;
+  margin: 32px 0;
+  padding: 24px 0;
+  border-top: 1px solid var(--border-default, rgba(64, 48, 40, 0.08));
+  border-bottom: 1px solid var(--border-default, rgba(64, 48, 40, 0.08));
 }
 
 .result-bridge__heading {
@@ -1857,8 +1859,8 @@
 
 .result-bridge__grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
 }
 
 .result-bridge__card {
@@ -1871,12 +1873,26 @@
   gap: 8px;
   text-decoration: none;
   color: inherit;
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  transition: border-color var(--transition-fast), box-shadow 0.15s ease, transform 0.15s ease;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
 }
 
 .result-bridge__card:hover:not(.result-bridge__card--disabled) {
   border-color: var(--color-primary);
-  box-shadow: 0 2px 12px color-mix(in oklab, var(--color-primary) 12%, transparent);
+  box-shadow: 0 4px 12px rgba(64, 48, 40, 0.08);
+  transform: translateY(-2px);
+}
+
+.result-bridge__card:disabled {
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .result-bridge__card { transition: none; }
+  .result-bridge__card:not(.result-bridge__card--disabled):hover { transform: none; }
 }
 
 .result-bridge__card:focus-visible {
@@ -1885,8 +1901,10 @@
 }
 
 .result-bridge__card--disabled {
+  background: var(--bg-hover, #f2eee8);
   background: color-mix(in oklab, var(--bg-surface) 82%, var(--border-default));
   border-style: dashed;
+  border-color: var(--border-default, rgba(64, 48, 40, 0.12));
   border-color: color-mix(in oklab, var(--border-default) 58%, var(--bg-surface));
   cursor: not-allowed;
   pointer-events: none;
@@ -2548,6 +2566,47 @@
   .result-mobile-sources-trigger {
     display: none;
   }
+}
+
+/* P1-5: Wrapper around each source card so we can stack the historical badge
+   without modifying the shared SourceCategoryCard component. */
+.result-source-card-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.result-source-card-wrapper > .result-source-card {
+  flex: 1 1 auto;
+}
+
+.result-source-card-wrapper--historical > .result-source-card {
+  border-style: dashed;
+  background: color-mix(in oklab, var(--bg-surface) 96%, var(--text-muted));
+}
+
+.result-source-card__historical-badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated, var(--bg-surface));
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: help;
 }
 
 .result-source-card {

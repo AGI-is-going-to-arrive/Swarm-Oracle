@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { buildSessionHeaders } from '../api/client';
+import { buildSessionHeaders, getReplayTrace, isApiError } from '../api/client';
+import type { ReplayTraceNode, ReplayTraceResponse } from '../types';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import {
   useReplayTimeline,
@@ -14,21 +15,6 @@ import { ReplayPlaybackControl } from '../components/replay/ReplayPlaybackContro
 import { ReplayTimelineScrubber } from '../components/replay/ReplayTimelineScrubber';
 
 // ── Types ─────────────────────────────────────────────────────
-
-interface ReplayTraceNode {
-  branch_id: string;
-  parent_branch_id: string | null;
-  replay_source_branch_id: string | null;
-  origin_round: number;
-  replay_kind: string;
-  status: string;
-  created_at: string;
-}
-
-interface ReplayTraceResponse {
-  nodes: ReplayTraceNode[];
-  next_cursor: string | null;
-}
 
 interface CausalGraphNode {
   id: string;
@@ -68,6 +54,21 @@ function extractAgentsFromGraph(graph: CausalGraphResponse | null): ReplayAgentI
   return [...agentMap.values()];
 }
 
+function makeTraceFallbackNode(node: ReplayTraceNode): CausalGraphNode {
+  return {
+    id: `trace-${node.branch_id}-${node.origin_round}`,
+    key: `trace-${node.branch_id}-${node.origin_round}`,
+    type: node.replay_kind || 'trace',
+    label: `Branch ${node.branch_id}`,
+    round: node.origin_round,
+    payload: {
+      branch_id: node.branch_id,
+      replay_kind: node.replay_kind,
+      content: `Branch ${node.branch_id}`,
+    },
+  };
+}
+
 function buildFrames(
   trace: ReplayTraceResponse | null,
   graph: CausalGraphResponse | null,
@@ -94,6 +95,21 @@ function buildFrames(
         list.push(node);
         nodesByRound.set(node.round, list);
       }
+    }
+  }
+  if (trace?.nodes) {
+    for (const traceNode of trace.nodes) {
+      if (typeof traceNode.origin_round !== 'number' || traceNode.origin_round < 0) continue;
+      const list = nodesByRound.get(traceNode.origin_round) ?? [];
+      const hasBranchNode = list.some((graphNode) => {
+        const payload = readPayload(graphNode);
+        return payload.branch_id === traceNode.branch_id;
+      });
+      if (hasBranchNode) continue;
+      const fallbackNode = makeTraceFallbackNode(traceNode);
+      list.push(fallbackNode);
+      nodesByRound.set(traceNode.origin_round, list);
+      if (!nodeByRound.has(traceNode.origin_round)) nodeByRound.set(traceNode.origin_round, fallbackNode);
     }
   }
 
@@ -153,40 +169,93 @@ export function ReplayView() {
   const [graph, setGraph] = useState<CausalGraphResponse | null>(null);
   const [loadingData, setLoadingData] = useState(true);
   const [error, setError] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [branchFilter, setBranchFilter] = useState<string>('');
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const fetchSeqRef = useRef(0);
+  const loadMoreSeqRef = useRef(0);
 
   const encodedId = id ? encodeURIComponent(id) : '';
 
   const fetchAll = useCallback(async () => {
-    if (!encodedId) return;
+    if (!id || !encodedId) return;
+    const requestId = fetchSeqRef.current + 1;
+    fetchSeqRef.current = requestId;
     setLoadingData(true);
     setError(null);
     setTrace(null);
     setGraph(null);
+    setBranchFilter('');
+    setLoadMoreError(null);
     try {
-      const [traceRes, graphRes] = await Promise.all([
-        fetch(`/api/scenario/${encodedId}/replay-trace`, { headers: buildSessionHeaders() }),
+      const [traceResult, graphRes] = await Promise.allSettled([
+        getReplayTrace(id),
         fetch(`/api/scenario/${encodedId}/causal-graph`, { headers: buildSessionHeaders() }),
       ]);
-      if (!traceRes.ok) {
-        setError(traceRes.status);
-        setTrace(null);
+      if (fetchSeqRef.current !== requestId) return;
+      if (traceResult.status === 'fulfilled') {
+        setTrace(traceResult.value);
       } else {
-        setTrace((await traceRes.json()) as ReplayTraceResponse);
+        const reason = traceResult.reason;
+        if (isApiError(reason)) {
+          setError(reason.status);
+        } else {
+          setError(-1);
+        }
+        setTrace(null);
       }
-      if (graphRes.ok) {
-        setGraph((await graphRes.json()) as CausalGraphResponse);
+      if (graphRes.status === 'fulfilled' && graphRes.value.ok) {
+        setGraph((await graphRes.value.json()) as CausalGraphResponse);
       } else {
         setGraph(null);
       }
     } catch {
+      if (fetchSeqRef.current !== requestId) return;
       setError(-1);
       setTrace(null);
       setGraph(null);
     } finally {
-      setLoadingData(false);
+      if (fetchSeqRef.current === requestId) {
+        setLoadingData(false);
+      }
     }
-  }, [encodedId]);
+  }, [encodedId, id]);
+
+  const loadMore = useCallback(async () => {
+    if (!id || !trace?.next_cursor || loadingMore) return;
+    const cursor = trace.next_cursor;
+    const requestId = loadMoreSeqRef.current + 1;
+    loadMoreSeqRef.current = requestId;
+    setLoadingMore(true);
+    setLoadMoreError(null);
+    try {
+      const next = await getReplayTrace(id, { cursor });
+      if (loadMoreSeqRef.current !== requestId) return;
+      setTrace((prev) => {
+        if (!prev) return next;
+        if (prev.next_cursor !== cursor) return prev;
+        const seen = new Set(prev.nodes.map((n) => n.branch_id));
+        const newNodes = next.nodes.filter((n) => !seen.has(n.branch_id));
+        const merged = [...prev.nodes, ...newNodes];
+        const nextCursor = next.next_cursor === cursor && newNodes.length === 0
+          ? null
+          : next.next_cursor;
+        return { nodes: merged, next_cursor: nextCursor };
+      });
+    } catch (err) {
+      if (loadMoreSeqRef.current !== requestId) return;
+      // Non-fatal: keep current trace; surface inline error so user may retry.
+      const message = err instanceof Error && err.message
+        ? err.message
+        : t('replay.load_more_error', 'Could not load more entries.');
+      setLoadMoreError(message);
+    } finally {
+      if (loadMoreSeqRef.current === requestId) {
+        setLoadingMore(false);
+      }
+    }
+  }, [id, trace, loadingMore, t]);
 
   useEffect(() => {
     if (!enabled || capabilityError) return;
@@ -223,6 +292,31 @@ export function ReplayView() {
     () => pickActiveAgent(frameIndex, nodeByFrame),
     [frameIndex, nodeByFrame],
   );
+
+  const branchOptions = useMemo<string[]>(() => {
+    const seen = new Set<string>();
+    for (const node of trace?.nodes ?? []) {
+      if (node.branch_id) seen.add(node.branch_id);
+    }
+    return [...seen].sort();
+  }, [trace]);
+
+  // Reset filter when current selection becomes invalid (e.g., after refetch).
+  useEffect(() => {
+    if (branchFilter && !branchOptions.includes(branchFilter)) {
+      setBranchFilter('');
+    }
+  }, [branchFilter, branchOptions]);
+
+  const visibleFrameNodes = useMemo(() => {
+    const nodes = nodesByFrame.get(frameIndex) ?? [];
+    if (!branchFilter) return nodes;
+    return nodes.filter((node) => {
+      const payload = readPayload(node);
+      const nodeBranchId = typeof payload.branch_id === 'string' ? payload.branch_id : null;
+      return nodeBranchId === branchFilter;
+    });
+  }, [branchFilter, frameIndex, nodesByFrame]);
 
   // Loading state
   if (capLoading || (!capabilityError && enabled && loadingData)) {
@@ -262,6 +356,7 @@ export function ReplayView() {
 
   const hasTrace = (trace?.nodes?.length ?? 0) > 0;
   const hasFrames = totalFrames > 0;
+  const hasPendingPage = Boolean(trace?.next_cursor);
   const showEmpty = !!error || !hasTrace || !hasFrames;
   const currentRound = frameToRound[frameIndex];
 
@@ -296,14 +391,40 @@ export function ReplayView() {
       </header>
 
       {showEmpty ? (
-        <ReplayEmptyState
-          message={error === -1
-            ? t('replay.empty.offline', 'Network error loading replay trace.')
-            : t('replay.empty.no_data', 'No replay lineage for this scenario yet.')}
-          onRetry={fetchAll}
-          retryLabel={t('replay.empty.retry', 'Retry')}
-          title={t('replay.empty.title', 'No replay trace available')}
-        />
+        <>
+          <ReplayEmptyState
+            message={error === -1
+              ? t('replay.empty.offline', 'Network error loading replay trace.')
+              : t('replay.empty.no_data', 'No replay lineage for this scenario yet.')}
+            onRetry={fetchAll}
+            retryLabel={t('replay.empty.retry', 'Retry')}
+            title={t('replay.empty.title', 'No replay trace available')}
+          />
+          {!error && hasPendingPage && (
+            <div className="replay-trace__load-more">
+              <button
+                type="button"
+                data-testid="replay-load-more"
+                className="replay-trace__load-more-btn"
+                onClick={loadMore}
+                disabled={loadingMore}
+              >
+                {loadingMore
+                  ? t('common.loading', 'Loading...')
+                  : t('replay.load_more', 'Load more')}
+              </button>
+              {loadMoreError && (
+                <p
+                  className="replay-trace__load-more-error"
+                  data-testid="replay-load-more-error"
+                  role="alert"
+                >
+                  {loadMoreError}
+                </p>
+              )}
+            </div>
+          )}
+        </>
       ) : (
         <>
           {/* ── Transport bar ── */}
@@ -346,10 +467,31 @@ export function ReplayView() {
             </span>
           </div>
 
+          {/* ── Branch filter ── */}
+          {branchOptions.length > 0 && (
+            <div className="replay-branch-filter">
+              <label htmlFor="replay-branch-filter-select" className="replay-branch-filter__label">
+                {t('replay.filter_branch', 'Filter by branch')}
+              </label>
+              <select
+                id="replay-branch-filter-select"
+                data-testid="replay-branch-filter-select"
+                className="replay-branch-filter__select"
+                value={branchFilter}
+                onChange={(e) => setBranchFilter(e.target.value)}
+              >
+                <option value="">{t('replay.all_branches', 'All branches')}</option>
+                {branchOptions.map((branchId) => (
+                  <option key={branchId} value={branchId}>{branchId}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* ── Trace cards ── */}
           <section aria-label={t('replay.trace.aria_label', 'Replay trace')} className="replay-trace">
             <div role="log" aria-live="polite" className="replay-trace__list">
-              {(nodesByFrame.get(frameIndex) ?? []).map(node => {
+              {visibleFrameNodes.map(node => {
                 const p = readPayload(node);
                 const agentId = typeof p.agent_id === 'string' ? p.agent_id : null;
                 const agentName = typeof p.agent_name === 'string' && p.agent_name.trim()
@@ -404,12 +546,41 @@ export function ReplayView() {
                   </div>
                 );
               })}
-              {(nodesByFrame.get(frameIndex) ?? []).length === 0 && (
+              {visibleFrameNodes.length === 0 && (
                 <p className="replay-trace__empty">
                   {t('replay.trace.no_events_frame', 'No events for this frame.')}
                 </p>
               )}
             </div>
+            {/* ── Load more (cursor pagination) ── */}
+            {trace?.next_cursor ? (
+              <div className="replay-trace__load-more">
+                <button
+                  type="button"
+                  data-testid="replay-load-more"
+                  className="replay-trace__load-more-btn"
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                >
+                  {loadingMore
+                    ? t('common.loading', 'Loading...')
+                    : t('replay.load_more', 'Load more')}
+                </button>
+                {loadMoreError && (
+                  <p
+                    className="replay-trace__load-more-error"
+                    data-testid="replay-load-more-error"
+                    role="alert"
+                  >
+                    {loadMoreError}
+                  </p>
+                )}
+              </div>
+            ) : (trace?.nodes.length ?? 0) > 0 ? (
+              <p className="replay-trace__no-more" data-testid="replay-no-more">
+                {t('replay.no_more', 'No more entries')}
+              </p>
+            ) : null}
           </section>
         </>
       )}

@@ -222,6 +222,520 @@ describe('ReplayView — data path', () => {
   });
 });
 
+describe('ReplayView — pagination (cursor-based load more)', () => {
+  beforeEach(() => {
+    mockedCap.mockReturnValue({ loading: false, enabled: true, capabilities: null });
+  });
+
+  function makeNode(branchId: string, originRound: number) {
+    return {
+      branch_id: branchId,
+      parent_branch_id: null,
+      replay_source_branch_id: null,
+      origin_round: originRound,
+      replay_kind: 'counterfactual',
+      status: 'active',
+      created_at: '2026-04-17T00:00:00Z',
+    };
+  }
+
+  function makeGraphNode(id: string, round: number, branchId?: string) {
+    return {
+      id,
+      key: `k-${id}`,
+      type: 'stance',
+      label: `event-${id}`,
+      round,
+      payload: {
+        agent_id: 'a1',
+        agent_name: 'Agent A',
+        ...(branchId ? { branch_id: branchId } : {}),
+      },
+    };
+  }
+
+  function findReplayTraceCalls(spy: { mock: { calls: unknown[][] } }) {
+    return spy.mock.calls.filter((call) => {
+      const input = call[0];
+      return typeof input === 'string'
+        ? input.includes('/replay-trace')
+        : String(input).includes('/replay-trace');
+    });
+  }
+
+  it('shows "Load more" button when next_cursor is non-null', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        return jsonResponse({
+          nodes: [makeNode('b1', 0)],
+          next_cursor: 'cursor-page-2',
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          nodes: [makeGraphNode('n1', 0)],
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-load-more');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-load-more')).toBeInTheDocument();
+    });
+    const btn = screen.getByTestId('replay-load-more') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    expect(screen.queryByTestId('replay-no-more')).toBeNull();
+  });
+
+  it('keeps pagination reachable when the first replay page is empty but has a cursor', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        if (url.includes('after=cursor-page-2')) {
+          return jsonResponse({
+            nodes: [makeNode('b1', 0)],
+            next_cursor: null,
+          });
+        }
+        return jsonResponse({
+          nodes: [],
+          next_cursor: 'cursor-page-2',
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({ id: 'g1', nodes: [], edges: [] });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-empty-first-page');
+
+    expect(await screen.findByTestId('replay-load-more')).toBeInTheDocument();
+    (screen.getByTestId('replay-load-more') as HTMLButtonElement).click();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Branches:\s*1/)).toBeInTheDocument();
+    });
+    expect(screen.getByText('Branch b1')).toBeInTheDocument();
+    expect(screen.queryByTestId('replay-load-more')).toBeNull();
+    expect(screen.getByTestId('replay-no-more')).toBeInTheDocument();
+  });
+
+  it('stops a stale empty next page from repeating the same cursor forever', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        if (url.includes('after=cursor-page-2')) {
+          return jsonResponse({
+            nodes: [],
+            next_cursor: 'cursor-page-2',
+          });
+        }
+        return jsonResponse({
+          nodes: [makeNode('b1', 0)],
+          next_cursor: 'cursor-page-2',
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({ id: 'g1', nodes: [], edges: [] });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-stale-cursor');
+
+    const btn = await screen.findByTestId('replay-load-more') as HTMLButtonElement;
+    btn.click();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('replay-load-more')).toBeNull();
+    });
+    expect(screen.getByTestId('replay-no-more')).toBeInTheDocument();
+  });
+
+  it('shows "No more entries" instead of button when next_cursor is null', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        return jsonResponse({
+          nodes: [makeNode('b1', 0)],
+          next_cursor: null,
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          nodes: [makeGraphNode('n1', 0)],
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-no-more');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-no-more')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('replay-load-more')).toBeNull();
+  });
+
+  it('clicking "Load more" issues a second fetch carrying the cursor', async () => {
+    // Note: client maps `cursor` arg → `after=` query param in the request URL.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        if (url.includes('after=cursor-page-2')) {
+          return jsonResponse({
+            nodes: [makeNode('b2', 1)],
+            next_cursor: null,
+          });
+        }
+        return jsonResponse({
+          nodes: [makeNode('b1', 0)],
+          next_cursor: 'cursor-page-2',
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          nodes: [makeGraphNode('n1', 0)],
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-cursor');
+
+    const btn = await screen.findByTestId('replay-load-more') as HTMLButtonElement;
+    btn.click();
+
+    await waitFor(() => {
+      const replayCalls = findReplayTraceCalls(fetchSpy);
+      expect(replayCalls.length).toBeGreaterThanOrEqual(2);
+    });
+    const replayCalls = findReplayTraceCalls(fetchSpy);
+    const secondCall = String(replayCalls[1][0]);
+    expect(secondCall).toContain('after=cursor-page-2');
+  });
+
+  it('merges nodes after loading more and dedups by branch_id', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        if (url.includes('after=')) {
+          return jsonResponse({
+            // b1 is duplicate from first page; b2 is new.
+            nodes: [makeNode('b1', 0), makeNode('b2', 1)],
+            next_cursor: null,
+          });
+        }
+        return jsonResponse({
+          nodes: [makeNode('b1', 0)],
+          next_cursor: 'cursor-page-2',
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          nodes: [makeGraphNode('n1', 0)],
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-merge');
+
+    // Initial page has 1 branch.
+    await waitFor(() => {
+      expect(screen.getByText(/Branches:\s*1/)).toBeInTheDocument();
+    });
+
+    const btn = await screen.findByTestId('replay-load-more') as HTMLButtonElement;
+    btn.click();
+
+    // After loading more: dedup keeps b1 once + adds b2 → 2 branches total.
+    await waitFor(() => {
+      expect(screen.getByText(/Branches:\s*2/)).toBeInTheDocument();
+    });
+    // No more button after exhaustion.
+    expect(screen.queryByTestId('replay-load-more')).toBeNull();
+    expect(screen.getByTestId('replay-no-more')).toBeInTheDocument();
+  });
+
+  it('disables the button while load-more is in flight', async () => {
+    const pending: { resolve: (value: Response) => void } = {
+      resolve: () => undefined,
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        if (url.includes('after=')) {
+          return new Promise<Response>((resolve) => {
+            pending.resolve = resolve;
+          });
+        }
+        return jsonResponse({
+          nodes: [makeNode('b1', 0)],
+          next_cursor: 'cursor-page-2',
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          nodes: [makeGraphNode('n1', 0)],
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-disabled');
+
+    const btn = await screen.findByTestId('replay-load-more') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    btn.click();
+
+    // While in flight, the button must be disabled.
+    await waitFor(() => {
+      expect((screen.getByTestId('replay-load-more') as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    // Release the pending fetch so cleanup is clean.
+    pending.resolve(jsonResponse({ nodes: [makeNode('b2', 1)], next_cursor: null }));
+    await waitFor(() => {
+      expect(screen.queryByTestId('replay-load-more')).toBeNull();
+    });
+  });
+
+  it('keeps button enabled and shows inline error when load-more fails', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        if (url.includes('after=')) {
+          throw new Error('network fail on page 2');
+        }
+        return jsonResponse({
+          nodes: [makeNode('b1', 0)],
+          next_cursor: 'cursor-page-2',
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          nodes: [makeGraphNode('n1', 0)],
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-error');
+
+    const btn = await screen.findByTestId('replay-load-more') as HTMLButtonElement;
+    btn.click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-load-more-error')).toBeInTheDocument();
+    });
+    // Button re-enabled for retry; cursor preserved (next_cursor remains non-null).
+    const btnAfter = screen.getByTestId('replay-load-more') as HTMLButtonElement;
+    expect(btnAfter.disabled).toBe(false);
+  });
+});
+
+describe('ReplayView — branch filter dropdown', () => {
+  beforeEach(() => {
+    mockedCap.mockReturnValue({ loading: false, enabled: true, capabilities: null });
+  });
+
+  function makeNode(branchId: string, originRound: number) {
+    return {
+      branch_id: branchId,
+      parent_branch_id: null,
+      replay_source_branch_id: null,
+      origin_round: originRound,
+      replay_kind: 'counterfactual',
+      status: 'active',
+      created_at: '2026-04-17T00:00:00Z',
+    };
+  }
+
+  function makeGraphNode(id: string, round: number, branchId: string) {
+    return {
+      id,
+      key: `k-${id}`,
+      type: 'stance',
+      label: `event-${id}`,
+      round,
+      payload: {
+        agent_id: 'a1',
+        agent_name: 'Agent A',
+        branch_id: branchId,
+        content: `payload from ${branchId}`,
+      },
+    };
+  }
+
+  it('renders the dropdown when trace has multiple branch_ids', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        return jsonResponse({
+          nodes: [makeNode('b1', 0), makeNode('b2', 0)],
+          next_cursor: null,
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          nodes: [
+            makeGraphNode('n1', 0, 'b1'),
+            makeGraphNode('n2', 0, 'b2'),
+          ],
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-filter');
+
+    const select = await screen.findByTestId('replay-branch-filter-select') as HTMLSelectElement;
+    const optionValues = Array.from(select.options).map((o) => o.value);
+    // 1 "all branches" + 2 branches.
+    expect(optionValues).toEqual(['', 'b1', 'b2']);
+  });
+
+  it('does not render the dropdown when trace has zero branch_ids', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        return jsonResponse({ nodes: [], next_cursor: null });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({ id: 'g1', nodes: [], edges: [] });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-empty-filter');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-empty')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('replay-branch-filter-select')).toBeNull();
+  });
+
+  it('filters visible frame nodes when a branch is selected', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        return jsonResponse({
+          nodes: [makeNode('b1', 0), makeNode('b2', 0)],
+          next_cursor: null,
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          // Two graph nodes at round=0 → both fall in frame 0.
+          nodes: [
+            makeGraphNode('n1', 0, 'b1'),
+            makeGraphNode('n2', 0, 'b2'),
+          ],
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-filter-action');
+
+    const select = await screen.findByTestId('replay-branch-filter-select') as HTMLSelectElement;
+    // Initially: both payloads visible.
+    expect(screen.getByText('payload from b1')).toBeInTheDocument();
+    expect(screen.getByText('payload from b2')).toBeInTheDocument();
+
+    // Select b1 — only that payload should remain.
+    select.value = 'b1';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('payload from b2')).toBeNull();
+    });
+    expect(screen.getByText('payload from b1')).toBeInTheDocument();
+  });
+
+  it('resets selection when current branch becomes invalid after refetch', async () => {
+    let callIndex = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        callIndex += 1;
+        if (callIndex === 1) {
+          return jsonResponse({
+            nodes: [makeNode('b1', 0), makeNode('b2', 0)],
+            next_cursor: null,
+          });
+        }
+        // After remount: only b3 remains; previously-selected b1 is gone.
+        return jsonResponse({
+          nodes: [makeNode('b3', 0)],
+          next_cursor: null,
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        if (callIndex <= 1) {
+          return jsonResponse({
+            id: 'g1',
+            nodes: [
+              makeGraphNode('n1', 0, 'b1'),
+              makeGraphNode('n2', 0, 'b2'),
+            ],
+            edges: [],
+          });
+        }
+        return jsonResponse({
+          id: 'g1',
+          nodes: [makeGraphNode('n3', 0, 'b3')],
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-filter-reset');
+
+    const select = await screen.findByTestId('replay-branch-filter-select') as HTMLSelectElement;
+    select.value = 'b1';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => {
+      expect(
+        (screen.getByTestId('replay-branch-filter-select') as HTMLSelectElement).value,
+      ).toBe('b1');
+    });
+
+    // Simulate a route remount → fetchAll re-runs and produces a different
+    // branch set. The component must reset branchFilter to '' (all branches)
+    // because the previously-selected branch is no longer in branchOptions.
+    cleanup();
+    renderAt('/replay/sc-filter-reset-2');
+
+    const select2 = await screen.findByTestId('replay-branch-filter-select') as HTMLSelectElement;
+    expect(select2.value).toBe('');
+    const optionValues = Array.from(select2.options).map((o) => o.value);
+    expect(optionValues).toEqual(['', 'b3']);
+  });
+});
+
 describe('ReplayView — HC-11 contract (no replayCodec import)', () => {
   it('source file does not import replayCodec (HC-11)', async () => {
     const { readFileSync } = await import('node:fs');

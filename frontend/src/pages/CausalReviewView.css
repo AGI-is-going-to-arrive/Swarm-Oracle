@@ -1,0 +1,216 @@
+/* ═══════════════════════════════════════════════════════════
+   CausalReviewView -- P1-2 Graph Analysis Panel
+   Renders the server-side graph_analysis payload (summary stats,
+   god nodes, cross-branch edges, degree distribution) inside
+   a collapsible panel above the graph canvas.
+   ═══════════════════════════════════════════════════════════ */
+
+.causal-analysis-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-subtle, #2a2a3a);
+  background: #17172a;
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--oracle-accent, #b88746) 6%, transparent), transparent 60%),
+    color-mix(in oklab, var(--bg-elevated, #17172a) 96%, black);
+  font-size: 0.82rem;
+  color: var(--text-secondary, #c9d3e7);
+  animation: causal-analysis-panel-in 220ms ease-out both;
+}
+
+.causal-analysis-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.causal-analysis-panel__title {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--text-primary, #f1f4fb);
+  letter-spacing: 0.02em;
+}
+
+.causal-analysis-panel__close {
+  background: none;
+  border: none;
+  color: var(--text-muted, #9aa4b2);
+  cursor: pointer;
+  font-size: 0.74rem;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.causal-analysis-panel__close:hover,
+.causal-analysis-panel__close:focus-visible {
+  color: var(--text-primary, #f1f4fb);
+  background: rgba(154, 164, 178, 0.14);
+  background: color-mix(in oklab, var(--text-muted, #9aa4b2) 14%, transparent);
+  outline: none;
+}
+
+.causal-analysis-panel__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.causal-analysis-panel__stat {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle, #2a2a3a);
+  border-radius: 8px;
+  background: #181828;
+  background: color-mix(in oklab, var(--bg-surface, #1a1a2e) 96%, black);
+}
+
+.causal-analysis-panel__stat-label {
+  color: var(--text-muted, #9aa4b2);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.causal-analysis-panel__stat-value {
+  color: var(--text-primary, #f1f4fb);
+  font-size: 1.04rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.causal-analysis-panel__section {
+  display: grid;
+  gap: 6px;
+}
+
+.causal-analysis-panel__section-title {
+  color: var(--text-muted, #9aa4b2);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.causal-analysis-panel__god-nodes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 6px;
+}
+
+.causal-analysis-panel__god-node {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle, #2a2a3a);
+  border-radius: 8px;
+  background: #171727;
+  background: color-mix(in oklab, var(--bg-surface, #1a1a2e) 94%, black);
+  min-width: 0;
+}
+
+.causal-analysis-panel__god-node-label {
+  color: var(--text-primary, #f1f4fb);
+  font-size: 0.82rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.causal-analysis-panel__god-node-meta {
+  color: var(--text-muted, #9aa4b2);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.causal-analysis-panel__cross-branch {
+  display: grid;
+  gap: 4px;
+}
+
+.causal-analysis-panel__cross-branch-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 0.74rem;
+  color: var(--text-body, #b8c1d1);
+  font-variant-numeric: tabular-nums;
+}
+
+.causal-analysis-panel__cross-branch-arrow {
+  color: var(--text-muted, #9aa4b2);
+}
+
+.causal-analysis-panel__cross-branch-count {
+  margin-left: auto;
+  color: var(--text-secondary, #c9d3e7);
+  font-weight: 600;
+}
+
+.causal-analysis-panel__degree-dist {
+  display: grid;
+  gap: 4px;
+}
+
+.causal-analysis-panel__degree-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 48px;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
+  color: var(--text-body, #b8c1d1);
+  font-variant-numeric: tabular-nums;
+}
+
+.causal-analysis-panel__degree-label {
+  color: var(--text-muted, #9aa4b2);
+}
+
+.causal-analysis-panel__degree-bar-track {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(154, 164, 178, 0.14);
+  background: color-mix(in oklab, var(--text-muted, #9aa4b2) 14%, transparent);
+  overflow: hidden;
+}
+
+.causal-analysis-panel__degree-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(184, 135, 70, 0.8), rgba(184, 135, 70, 0.5));
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--oracle-accent, #b88746) 80%, transparent),
+    color-mix(in oklab, var(--oracle-accent, #b88746) 50%, transparent)
+  );
+  transition: width 220ms ease-out;
+}
+
+.causal-analysis-panel__degree-count {
+  color: var(--text-secondary, #c9d3e7);
+  text-align: right;
+}
+
+.causal-analysis-panel__empty {
+  color: var(--text-muted, #9aa4b2);
+  font-size: 0.74rem;
+  margin: 0;
+}
+
+@keyframes causal-analysis-panel-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .causal-analysis-panel {
+    animation: none;
+  }
+  .causal-analysis-panel__degree-bar-fill {
+    transition: none;
+  }
+}

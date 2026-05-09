@@ -1000,6 +1000,31 @@ body.has-argument-map .lang-switch--global {
   bottom: auto;
 }
 
+.argument-map__no-conversation-notice {
+  margin-top: 8px;
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.8rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+
+.argument-map__no-conversation-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.argument-map__no-conversation-dismiss {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.55rem;
+  flex: 0 0 auto;
+}
+
 @media (max-height: 820px) {
   body.has-simulation-theater .lang-switch--global {
     bottom: calc(148px + env(safe-area-inset-bottom, 0px));
@@ -2723,4 +2748,128 @@ body.has-argument-map .lang-switch--global {
 
 @media (prefers-reduced-motion: reduce) {
   .typing-dot { animation: none; opacity: 0.6; }
+}
+
+/* ── Analyst tool chips (P2-2) ─────────────────────────── */
+.analyst-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.analyst-tool-chip__icon {
+  font-size: 0.85rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+.analyst-tool-chip__label {
+  display: inline-block;
+}
+.analyst-tool-chip--causal {
+  /* Blue — graph */
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.32);
+}
+.analyst-tool-chip--identity {
+  /* Purple — memory */
+  background: rgba(126, 58, 192, 0.12);
+  color: #6b21a8;
+  border-color: rgba(126, 58, 192, 0.32);
+}
+.analyst-tool-chip--web {
+  /* Green — web search */
+  background: rgba(22, 130, 76, 0.12);
+  color: #15803d;
+  border-color: rgba(22, 130, 76, 0.32);
+}
+.analyst-tool-chip--other {
+  background: var(--bg-elevated, rgba(120, 120, 120, 0.12));
+  color: var(--text-primary, #333);
+  border-color: var(--border-subtle, rgba(120, 120, 120, 0.32));
+}
+
+/* ── Survey source chips (P2-2) ────────────────────────── */
+.survey-source-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.survey-source-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+}
+.survey-source-chip--identity {
+  background: rgba(126, 58, 192, 0.12);
+  color: #6b21a8;
+  border-color: rgba(126, 58, 192, 0.32);
+}
+.survey-source-chip--agent {
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.32);
+}
+.survey-source-chip--branch {
+  background: rgba(22, 130, 76, 0.12);
+  color: #15803d;
+  border-color: rgba(22, 130, 76, 0.32);
+}
+
+/* ── Status pills: aborted vs error (shared) ───────────── */
+.analyst-status-pill,
+.survey-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.analyst-status-pill__dot,
+.survey-status-pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.analyst-status-pill--aborted,
+.survey-status-pill--aborted {
+  /* Amber — user-initiated abort */
+  background: rgba(180, 83, 9, 0.12);
+  color: #92400e;
+  border-color: rgba(180, 83, 9, 0.36);
+}
+.analyst-status-pill--error,
+.survey-status-pill--error {
+  /* Red — error */
+  background: rgba(185, 28, 28, 0.12);
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.36);
+}
+.analyst-status-pill__detail,
+.survey-status-pill__detail {
+  font-size: 0.8125rem;
+  color: var(--text-muted, #555);
 }

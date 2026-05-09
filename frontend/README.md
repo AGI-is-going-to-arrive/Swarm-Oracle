@@ -23,9 +23,10 @@ React + TypeScript frontend for SwarmOracle.
 
 | Route | Component | Description |
 |-------|-----------|-------------|
-| `/` | `InputView` | Scenario input, quick starts, daily challenge, provider policy, optional organization id |
+| `/` | `InputView` | Scenario input, progress indicator, quick starts, source families, provider policy, optional organization id, advanced/BYOK accordions, custom Agent attach panel |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, capture |
-| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, ledger-style archive, director debrief / campaign summary, share/export, replay import, resume-from-round entry when counterfactual replay is enabled, plus the capability-gated `Explore Deeper` bridge |
+| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, ledger-style archive, director debrief / campaign summary, share/export, PNG share artifact, replay import, resume checkpoint picker, source badges, plus the capability-gated `What's Next` bridge |
+| `/replay/:id` | `ReplayView` | Replay trace timeline with pagination, branch filter, and unavailable/probe-error states |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
 | `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate result, supporting turns, replay digest, share/import |
 | `/history` | `HistoryView` | Scenario history, filtering, deletion |
@@ -69,7 +70,9 @@ React + TypeScript frontend for SwarmOracle.
 - `predictionBetting.ts`
   structured bet helpers now fall back to the raw tone id when they receive an unknown ending tone label
 - `ResumePanel.tsx`
-  ResultView-side resume control for `POST /api/scenario/:id/resume`; now locks after success, validates round input on the client, and is covered by the dedicated resume smoke script
+  ResultView-side resume control for `POST /api/scenario/:id/resume`; prefers branch-scoped checkpoints when available, previews `compressed_summary`, falls back to round input when no checkpoint is available, locks after success, and is covered by the dedicated resume smoke script
+- `AgentAttachPanel.tsx`
+  homepage custom Agent picker; renders persona, domains, and decision bias as React text, caps selection at 5, and keeps loading/error/retry states visible
 - `experiments/phaser-custom/*`
   local curated Phaser entry, isolated spike configs, and repeatable custom-build validation scripts; current default `vite / vitest` also consume this entry, while `phaser3spectorjs-stub.cjs` keeps the build path quiet
 - `scripts/lib/frontendPreflight.mjs`
@@ -85,7 +88,7 @@ React + TypeScript frontend for SwarmOracle.
 - `GlobalOfflineBanner.tsx`
   the WS-disconnect grace timer now uses an SSR-safe layout-effect fallback; current SPA behavior stays the same, and future SSR will not log the layout-effect warning
 - `ResultView.tsx`
-  the result surface now includes a ledger-style archive, director debrief, capability-gated `Explore Deeper` bridge with locale-backed causal / replay / compare / workbench copy, semantic disabled cards, and locale-backed faction-timeline lead copy
+  the result surface now includes a ledger-style archive, director debrief, capability-gated `What's Next` bridge with locale-backed causal / replay / compare / workbench / agents / share copy, semantic disabled cards, historical source badges, and locale-backed faction-timeline lead copy
 - `resultHelpers.ts`
   result-page pure helpers for bet badges, campaign cache, badge copy, and structured moment highlights used by the archive / debrief handoff
 - `DirectorDebriefPanel.tsx`
@@ -97,6 +100,10 @@ React + TypeScript frontend for SwarmOracle.
   fail-soft `load_failed` responses stay on the Retry state and keep graph/export hidden
 - `ExportPanel.tsx`
   native SVG export rebuild now clips long node labels and prefers full labels over truncated card text
+- `ProgressIndicator.tsx`
+  5-step journey pill used by InputView and ResultView; invalid step values are clamped
+- `ShareArtifact.tsx`
+  offscreen 1200x630 PNG export card; it only receives display-safe summary fields, not BYOK or session configuration
 
 ## Validation
 
@@ -144,11 +151,7 @@ npm run build:spike:phaser-custom
   - `npm run test -- --run src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts --reporter=verbose`: `87 passed`
   - `npx tsc --noEmit`: pass
   - fixture-backed Playwright browser recheck for `ResultView` bridge copy + `CausalReviewView` compact guide labels: pass
-- Broader recent frontend baseline remains:
-  - frontend full vitest: `1365 passed`
-  - `npm exec -- eslint src/pages/ResultView.tsx src/pages/ResultView.test.tsx src/pages/CausalReviewView.tsx src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts`: pass
-  - `npm exec -- tsc --noEmit -p tsconfig.app.json`: pass
-  - `npm run build`: pass
+- Broader recent frontend baseline remains documented in `llmdoc/overview/frontend.md`; this file is not the current source for pass counts.
 - The default signoff target remains:
   - Chromium desktop/mobile
   - desktop Firefox / WebKit scoped regression

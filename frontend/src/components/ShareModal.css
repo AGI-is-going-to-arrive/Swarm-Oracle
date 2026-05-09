@@ -99,7 +99,7 @@
   box-shadow: 0 2px 8px oklch(60% 0.18 25 / 0.15);
 }
 
-.share-platform-btn.active {
+.share-platform-btn--active {
   border-color: oklch(55% 0.2 25);
   background: oklch(95% 0.06 25);
   color: oklch(40% 0.2 25);
@@ -109,6 +109,19 @@
 .share-platform-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.share-platform-btn--image {
+  /* Visually distinguishes the export-image action from text-copy targets
+     while reusing the existing platform button shell for layout parity. */
+  border-color: oklch(72% 0.12 280);
+  color: oklch(36% 0.16 280);
+}
+
+.share-platform-btn--image:hover:not(:disabled) {
+  border-color: oklch(60% 0.2 280);
+  background: oklch(96% 0.04 280);
+  box-shadow: 0 2px 8px oklch(60% 0.2 280 / 0.15);
 }
 
 .share-platform-icon {
@@ -245,7 +258,7 @@
   transition: all 0.2s;
 }
 
-.share-copy-btn.copied {
+.share-copy-btn--copied {
   background: oklch(55% 0.18 145);
   color: #fff;
   border-color: oklch(55% 0.18 145);
@@ -280,5 +293,23 @@
     align-items: flex-start;
     gap: 8px;
     flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .share-overlay,
+  .share-modal,
+  .share-modal__result,
+  .share-spinner {
+    animation: none;
+  }
+
+  .share-platform-btn,
+  .share-copy-btn {
+    transition: none;
+  }
+
+  .share-platform-btn:hover:not(:disabled) {
+    transform: none;
   }
 }

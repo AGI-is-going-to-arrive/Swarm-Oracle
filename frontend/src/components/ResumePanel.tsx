@@ -1,12 +1,18 @@
 /* ═══════════════════════════════════════════════════════════
    P1-9 — Resume Panel
    Allows selecting a branch + round to resume simulation.
+   P1-3 — Checkpoint picker enhancement: when checkpoints are
+   available, the user picks a checkpoint to seed the resume
+   round (with a compressed_summary preview); otherwise falls
+   back to the legacy numeric input.
    ═══════════════════════════════════════════════════════════ */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { isApiError, resumeFromRound } from '../api/client';
+import { getCheckpoints, isApiError, resumeFromRound } from '../api/client';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import type { CheckpointInfo } from '../types';
 
 interface BranchLike {
   id: string;
@@ -23,8 +29,11 @@ interface Props {
 export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Props) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { enabled: replayEnabled } = useCapabilityCheck('counterfactual_replay');
   const [selectedBranch, setSelectedBranch] = useState('');
   const [selectedRoundInput, setSelectedRoundInput] = useState('1');
+  const [selectedCheckpointId, setSelectedCheckpointId] = useState('');
+  const [checkpoints, setCheckpoints] = useState<CheckpointInfo[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
@@ -50,13 +59,61 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
       })
     : null;
   const visibleError = error ?? validationError;
-  const canSubmit = Boolean(selectedBranch) && isRoundValid && !isLocked;
+  const canSubmit = (
+    Boolean(selectedBranch)
+    && isRoundValid
+    && !isLocked
+    && !(checkpoints.length > 0 && !selectedCheckpointId)
+  );
 
   useEffect(() => () => {
     if (redirectTimerRef.current !== null) {
       window.clearTimeout(redirectTimerRef.current);
     }
   }, []);
+
+  // P1-3: load checkpoints (scenario-scoped) when capability enabled.
+  // Re-fetch when the user switches branch so the picker stays branch-scoped.
+  // Filter out checkpoints whose round exceeds totalRounds to avoid silently-disabled submit.
+  useEffect(() => {
+    if (!replayEnabled || !scenarioId) {
+      setCheckpoints([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await getCheckpoints(scenarioId, selectedBranch || undefined);
+        if (cancelled) return;
+        const filtered = list.filter((cp) => cp.round_number <= normalizedTotalRounds);
+        const sorted = [...filtered].sort((a, b) => a.round_number - b.round_number);
+        setCheckpoints(sorted);
+      } catch {
+        if (cancelled) return;
+        // Non-fatal: panel falls back to numeric input
+        setCheckpoints([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [replayEnabled, scenarioId, selectedBranch, normalizedTotalRounds]);
+
+  // Reset checkpoint selection when the available list changes.
+  useEffect(() => {
+    if (selectedCheckpointId
+      && !checkpoints.some((cp) => cp.id === selectedCheckpointId)) {
+      setSelectedCheckpointId('');
+    }
+  }, [checkpoints, selectedCheckpointId]);
+
+  const selectedCheckpoint = useMemo(
+    () => checkpoints.find((cp) => cp.id === selectedCheckpointId) ?? null,
+    [checkpoints, selectedCheckpointId],
+  );
+
+  const hasCheckpoints = checkpoints.length > 0;
+  const checkpointPickRequired = hasCheckpoints && !selectedCheckpointId;
 
   const handleSubmit = useCallback(async () => {
     if (!isRoundValid) {
@@ -133,27 +190,89 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
         </div>
 
         <div className="result-resume__field">
-          <label htmlFor="resume-round" className="result-resume__label">
-            {t('resume.round', 'Round')}
-          </label>
-          <input
-            id="resume-round"
-            type="number"
-            min={1}
-            max={normalizedTotalRounds}
-            step={1}
-            inputMode="numeric"
-            value={selectedRoundInput}
-            onChange={e => {
-              setSelectedRoundInput(e.target.value);
-              setError(null);
-            }}
-            disabled={isLocked}
-            aria-invalid={visibleError ? 'true' : undefined}
-            className="result-resume__input"
-          />
+          {hasCheckpoints ? (
+            <>
+              <label htmlFor="resume-checkpoint" className="result-resume__label">
+                {t('resume.checkpoint_label', 'Resume from checkpoint')}
+              </label>
+              <select
+                id="resume-checkpoint"
+                value={selectedCheckpointId}
+                onChange={e => {
+                  const next = e.target.value;
+                  setSelectedCheckpointId(next);
+                  setError(null);
+                  const picked = checkpoints.find((cp) => cp.id === next);
+                  if (picked) {
+                    setSelectedRoundInput(String(picked.round_number));
+                  }
+                }}
+                disabled={isLocked}
+                aria-invalid={visibleError ? 'true' : undefined}
+                className="result-resume__select"
+              >
+                <option value="">{t('resume.checkpoint_select', 'Select checkpoint')}</option>
+                {checkpoints.map((cp) => (
+                  <option key={cp.id} value={cp.id}>
+                    {t('resume.round_label', { round: cp.round_number, defaultValue: `Round ${cp.round_number}` })}
+                  </option>
+                ))}
+              </select>
+              {selectedCheckpoint && (
+                <p className="result-resume__hint" data-testid="resume-resolved-round">
+                  {t('resume.round_label', {
+                    round: selectedCheckpoint.round_number,
+                    defaultValue: `Round ${selectedCheckpoint.round_number}`,
+                  })}
+                </p>
+              )}
+              {checkpointPickRequired && (
+                <p className="result-resume__hint">
+                  {t('resume.checkpoint_select', 'Select checkpoint')}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <label htmlFor="resume-round" className="result-resume__label">
+                {t('resume.round', 'Round')}
+              </label>
+              <input
+                id="resume-round"
+                type="number"
+                min={1}
+                max={normalizedTotalRounds}
+                step={1}
+                inputMode="numeric"
+                value={selectedRoundInput}
+                onChange={e => {
+                  setSelectedRoundInput(e.target.value);
+                  setError(null);
+                }}
+                disabled={isLocked}
+                aria-invalid={visibleError ? 'true' : undefined}
+                className="result-resume__input"
+              />
+              {replayEnabled && (
+                <p className="result-resume__hint">
+                  {t('resume.no_checkpoints', 'No checkpoints available')}
+                </p>
+              )}
+            </>
+          )}
         </div>
       </div>
+
+      {selectedCheckpoint?.compressed_summary && (
+        <div className="result-resume__summary">
+          <p className="result-resume__summary-label">
+            {t('resume.summary_preview', 'Summary')}
+          </p>
+          <p className="result-resume__summary-body">
+            {selectedCheckpoint.compressed_summary}
+          </p>
+        </div>
+      )}
 
       {visibleError && <p role="alert" className="result-resume__feedback result-resume__feedback--error">{visibleError}</p>}
       {result && (

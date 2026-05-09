@@ -21,6 +21,7 @@ export interface AnalystCacheState {
   stoppedReason: AnalystStoppedReason | null;
   streaming: boolean;
   error: string | null;
+  aborted: boolean;
 }
 
 export function createInitialAnalystCache(): AnalystCacheState {
@@ -30,6 +31,7 @@ export function createInitialAnalystCache(): AnalystCacheState {
     stoppedReason: null,
     streaming: false,
     error: null,
+    aborted: false,
   };
 }
 
@@ -38,6 +40,7 @@ export interface SurveyCacheState {
   streaming: boolean;
   error: string | null;
   participantOrder: string[];
+  aborted: boolean;
 }
 
 export function createInitialSurveyCache(): SurveyCacheState {
@@ -46,5 +49,6 @@ export function createInitialSurveyCache(): SurveyCacheState {
     streaming: false,
     error: null,
     participantOrder: [],
+    aborted: false,
   };
 }
