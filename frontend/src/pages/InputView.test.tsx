@@ -257,6 +257,7 @@ async function openAdvancedSettings(user: ReturnType<typeof userEvent.setup>) {
 }
 
 async function confirmLaunchDialog(user: ReturnType<typeof userEvent.setup>) {
+  // Radix AlertDialog renders into document.body via Portal; query by role rather than container.
   const dialog = await screen.findByRole('dialog');
   const confirmBtn = within(dialog).getByRole('button', { name: 'home.submit' });
   await user.click(confirmBtn);
@@ -315,6 +316,10 @@ describe('InputView campaign progress', () => {
 
   beforeEach(() => {
     window.sessionStorage.clear();
+    window.localStorage.clear();
+    // S1-5: Suppress first-visit onboarding overlay so it doesn't intercept
+    // existing InputView interaction tests.
+    window.localStorage.setItem('swarm_onboarding_completed', 'true');
     __resetCapabilityCacheForTests();
     setMockLanguage('en');
     changeLanguageMock.mockClear();
@@ -1421,6 +1426,10 @@ describe('InputView campaign progress', () => {
 describe('InputView IME composition guard and confirm launch dialog', () => {
   beforeEach(() => {
     window.sessionStorage.clear();
+    window.localStorage.clear();
+    // S1-5: Suppress first-visit onboarding overlay so it doesn't intercept
+    // existing InputView interaction tests.
+    window.localStorage.setItem('swarm_onboarding_completed', 'true');
     __resetCapabilityCacheForTests();
     setMockLanguage('en');
     changeLanguageMock.mockClear();
@@ -1692,7 +1701,10 @@ describe('InputView IME composition guard and confirm launch dialog', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
     expect(startSimulationMock).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(textarea);
+    // Radix AlertDialog restores focus to the trigger asynchronously after close.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(textarea);
+    });
   });
 
   it('pressing Escape inside the dialog dismisses it', async () => {
@@ -1773,10 +1785,10 @@ describe('InputView IME composition guard and confirm launch dialog', () => {
     await user.type(textarea, 'What if backdrop click dismisses?');
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
-    const dialog = await screen.findByRole('dialog');
-    const backdrop = dialog.parentElement as HTMLElement;
+    await screen.findByRole('dialog');
+    // Radix renders overlay as a sibling of content; we tagged it with our backdrop class.
+    const backdrop = document.querySelector('.confirm-launch-backdrop') as HTMLElement;
     expect(backdrop).not.toBeNull();
-    expect(backdrop.classList.contains('confirm-launch-backdrop')).toBe(true);
 
     await user.click(backdrop);
 

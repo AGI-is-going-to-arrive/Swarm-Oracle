@@ -588,6 +588,161 @@ describe("simulationStore — handleWSEvent", () => {
   });
 });
 
+describe("simulationStore — S1-1 cancellation", () => {
+  it("transitions to cancelled when handling 'simulation_cancelled' WS event", () => {
+    const store = useSimulationStore;
+    store.getState().handleWSEvent({
+      type: "status",
+      data: { status: "simulating" },
+    } as WSEvent);
+    expect(store.getState().status).toBe("simulating");
+
+    store.getState().handleWSEvent({
+      type: "simulation_cancelled",
+      reason: "user_cancelled",
+    } as WSEvent);
+
+    expect(store.getState().status).toBe("cancelled");
+    expect(store.getState().cancelReason).toBe("user_cancelled");
+    expect(store.getState().thinkingAgents).toEqual([]);
+    expect(store.getState().error).toBeNull();
+  });
+
+  it("setCancelled action transitions store and stores reason", () => {
+    const store = useSimulationStore;
+    store.getState().handleWSEvent({
+      type: "status",
+      data: { status: "simulating" },
+    } as WSEvent);
+
+    store.getState().setCancelled("user_cancelled");
+
+    expect(store.getState().status).toBe("cancelled");
+    expect(store.getState().cancelReason).toBe("user_cancelled");
+    expect(store.getState().thinkingAgents).toEqual([]);
+  });
+
+  it("does not regress cancelled status when a stale 'status' event arrives", () => {
+    const store = useSimulationStore;
+    store.getState().setCancelled("user_cancelled");
+    expect(store.getState().status).toBe("cancelled");
+
+    store.getState().handleWSEvent({
+      type: "status",
+      data: { status: "simulating" },
+    } as WSEvent);
+
+    expect(store.getState().status).toBe("cancelled");
+    expect(store.getState().cancelReason).toBe("user_cancelled");
+  });
+
+  it("does not regress cancelled status when a snapshot resync is applied", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario({
+      id: "scenario-cancel",
+      question: "Q",
+      status: "simulating",
+      created_at: "2026-03-23T00:00:00Z",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+    store.getState().setCancelled("user_cancelled");
+    expect(store.getState().status).toBe("cancelled");
+
+    store.getState().setScenario({
+      id: "scenario-cancel",
+      question: "Q",
+      status: "simulating",
+      created_at: "2026-03-23T00:00:00Z",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+
+    expect(store.getState().status).toBe("cancelled");
+  });
+
+  it("ignores stale websocket state events after cancellation", () => {
+    const store = useSimulationStore;
+    store.getState().setScenario({
+      id: "scenario-cancel",
+      question: "Q",
+      status: "simulating",
+      created_at: "2026-03-23T00:00:00Z",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+    store.getState().setCancelled("user_cancelled");
+
+    const before = {
+      status: store.getState().status,
+      cancelReason: store.getState().cancelReason,
+      messages: store.getState().messages,
+      thinkingAgents: store.getState().thinkingAgents,
+      branches: store.getState().branches,
+      interventionLog: store.getState().interventionLog,
+      currentRound: store.getState().currentRound,
+    };
+
+    store.getState().handleWSEvent({
+      type: "agent_speak_start",
+      data: { agent: "Alpha", agent_id: "a1", branch: "b1", round: 1 },
+    } as WSEvent);
+    store.getState().handleWSEvent({
+      type: "agent_speak",
+      data: {
+        agent: "Alpha",
+        agent_id: "a1",
+        branch: "b1",
+        round: 1,
+        message: "late message",
+        emotion: "neutral",
+      },
+    } as WSEvent);
+    store.getState().handleWSEvent({
+      type: "round_summary",
+      data: { round: 1, branch_id: "b1", summary: "late round" },
+    } as WSEvent);
+    store.getState().handleWSEvent({
+      type: "branch_init",
+      data: { id: "b1", title: "Late branch", probability: 1, status: "ACTIVE", parent_branch_id: null },
+    } as WSEvent);
+    store.getState().handleWSEvent({
+      type: "intervention_applied",
+      data: { branch_id: "b1", text: "late intervention", round: 1, intervention_id: "int-late" },
+    } as WSEvent);
+
+    expect({
+      status: store.getState().status,
+      cancelReason: store.getState().cancelReason,
+      messages: store.getState().messages,
+      thinkingAgents: store.getState().thinkingAgents,
+      branches: store.getState().branches,
+      interventionLog: store.getState().interventionLog,
+      currentRound: store.getState().currentRound,
+    }).toEqual(before);
+  });
+
+  it("reset clears cancelled state back to idle", () => {
+    const store = useSimulationStore;
+    store.getState().setCancelled("user_cancelled");
+    expect(store.getState().status).toBe("cancelled");
+
+    store.getState().reset();
+
+    expect(store.getState().status).toBe("idle");
+    expect(store.getState().cancelReason).toBeNull();
+  });
+});
+
 describe("simulationStore — api error mapping", () => {
   it("forwards startSimulation options into createScenario", async () => {
     createScenarioMock.mockResolvedValueOnce({

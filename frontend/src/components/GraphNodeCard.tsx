@@ -48,6 +48,8 @@ export interface GraphNodeCardData {
   sourceCount?: number;
   summary?: string;
   accentColor?: string;  // 4px left border color
+  // S2-5: optional status tooltip text appended to the hover tip.
+  statusTooltip?: string;
   [key: string]: unknown;
 }
 
@@ -71,7 +73,8 @@ const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
   const d = data as unknown as GraphNodeCardData;
   const Icon = d.iconName ? ICON_MAP[d.iconName] : null;
   const isTruncated = d.fullLabel && d.fullLabel !== d.label;
-  const showTooltip = isTruncated && !d.tooltipDisabled;
+  const hasStatusTooltip = Boolean(d.statusTooltip && d.statusTooltip.trim().length > 0);
+  const showTooltip = (isTruncated || hasStatusTooltip) && !d.tooltipDisabled;
 
   const targetPos = resolvePos(d.targetPos, Position.Top);
   const sourcePos = resolvePos(d.sourcePos, Position.Bottom);
@@ -258,6 +261,21 @@ const GraphNodeCard = memo(function GraphNodeCard({ data }: NodeProps) {
               }}
             >
               {d.fullLabel}
+              {hasStatusTooltip && (
+                <span
+                  data-graph-node-status-tooltip="true"
+                  style={{
+                    display: 'block',
+                    marginTop: 6,
+                    paddingTop: 6,
+                    borderTop: '1px solid rgba(255,255,255,0.1)',
+                    fontSize: '0.7rem',
+                    opacity: 0.85,
+                  }}
+                >
+                  {d.statusTooltip}
+                </span>
+              )}
               <Tooltip.Arrow style={{ fill: '#2a2a40' }} />
             </Tooltip.Content>
           </Tooltip.Portal>

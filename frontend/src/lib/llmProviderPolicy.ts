@@ -1,3 +1,66 @@
+/**
+ * Setup wizard provider preset.
+ * Used by `SetupWizardView` (S0-1) to render the provider selection grid.
+ * Adding a new entry here automatically surfaces it in the wizard.
+ */
+export interface LlmProviderPreset {
+  /** Stable preset identifier (used as React key + radio value). */
+  id: string;
+  /** i18n key for the human-readable display name. */
+  nameKey: string;
+  /** Default base URL for this provider; empty string means "user must fill in". */
+  baseUrl: string;
+  /** Whether this provider mandates an API key (false for local-only stacks). */
+  requiresApiKey: boolean;
+  /** Lightweight visual marker (emoji or single letter) shown in the card. */
+  logoPlaceholder: string;
+}
+
+export const LLM_PROVIDER_PRESETS: LlmProviderPreset[] = [
+  {
+    id: 'openai',
+    nameKey: 'setup.provider_openai',
+    baseUrl: 'https://api.openai.com/v1',
+    requiresApiKey: true,
+    logoPlaceholder: '🤖',
+  },
+  {
+    id: 'anthropic',
+    nameKey: 'setup.provider_anthropic',
+    baseUrl: 'https://api.anthropic.com/v1',
+    requiresApiKey: true,
+    logoPlaceholder: '🧠',
+  },
+  {
+    id: 'deepseek',
+    nameKey: 'setup.provider_deepseek',
+    baseUrl: 'https://api.deepseek.com/v1',
+    requiresApiKey: true,
+    logoPlaceholder: '🔍',
+  },
+  {
+    id: 'ollama',
+    nameKey: 'setup.provider_ollama',
+    baseUrl: 'http://localhost:11434/v1',
+    requiresApiKey: false,
+    logoPlaceholder: '🦙',
+  },
+  {
+    id: 'lmstudio',
+    nameKey: 'setup.provider_lmstudio',
+    baseUrl: 'http://localhost:1234/v1',
+    requiresApiKey: false,
+    logoPlaceholder: '🖥️',
+  },
+  {
+    id: 'custom',
+    nameKey: 'setup.provider_custom',
+    baseUrl: '',
+    requiresApiKey: true,
+    logoPlaceholder: '⚙️',
+  },
+];
+
 export interface LlmProviderPolicy {
   apiKey: string;
   baseUrl: string;

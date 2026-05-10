@@ -14,7 +14,7 @@ import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import func as sa_func
 from sqlmodel import Session, select
@@ -22,6 +22,7 @@ from sqlmodel import Session, select
 from app.api.errors import api_error
 from app.api.helpers import (
     SessionPrincipal,
+    get_running_task,
     load_scenario_response,
     parse_and_run_background,
     parse_key_moments,
@@ -32,6 +33,7 @@ from app.api.helpers import (
     verify_session,
 )
 from app.api.schemas import (
+    ConversationThreadResponse,
     CreateScenarioRequest,
     ScenarioResponse,
     StoryBranch,
@@ -40,6 +42,7 @@ from app.api.schemas import (
 from app.config import settings
 from app.models import (
     Agent,
+    AgentConversationThread,
     AgentGroup,
     AgentGroupMember,
     AgentMessage,
@@ -68,11 +71,22 @@ from app.services.llm_client import (
     validate_llm_base_url,
 )
 from app.services.scoring import recompute_leaderboard_entry
+from app.services.simulation_cancel import create_cancel_token, request_cancel
 from app.services.vector_store import get_vector_store
 from app.services.web_context import validate_web_search_base_url
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_session)])
+
+_CANCELABLE_SCENARIO_STATUSES = {
+    ScenarioStatus.PARSING,
+    ScenarioStatus.SIMULATING,
+    ScenarioStatus.NARRATING,
+}
+_TERMINAL_SCENARIO_STATUSES = {
+    ScenarioStatus.DONE,
+    ScenarioStatus.ERROR,
+}
 _CJK_RE = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
 MAX_IMPORT_REPLAY_SCENARIO_BYTES = 1_000_000
 MAX_IMPORT_REPLAY_SCENARIO_GROUPS = 128
@@ -112,6 +126,12 @@ class CreateReplayArtifactRequest(BaseModel):
         if len(normalized) > 64:
             raise ValueError("kind too long (max 64 chars)")
         return normalized
+
+
+class ScenarioConversationListResponse(BaseModel):
+    items: list[ConversationThreadResponse]
+    cursor: int
+    has_more: bool
 
 
 def _extract_string_path(payload: dict[str, Any], *path: str) -> str | None:
@@ -171,6 +191,27 @@ def _coerce_int(value: Any, default: int = 0, *, minimum: int | None = None) -> 
     if minimum is not None:
         parsed = max(minimum, parsed)
     return parsed
+
+
+def _conversation_thread_to_response(
+    thread: AgentConversationThread,
+) -> ConversationThreadResponse:
+    return ConversationThreadResponse(
+        thread_id=thread.id,
+        scenario_id=thread.scenario_id,
+        agent_identity_id=thread.agent_identity_id,
+        owner_user_id=thread.owner_user_id,
+        origin_branch_id=thread.origin_branch_id,
+        origin_round_number=thread.origin_round_number,
+        origin_node_id=thread.origin_node_id,
+        origin_node_type=thread.origin_node_type,
+        last_turn_sequence=thread.last_turn_sequence,
+        latest_status=thread.latest_status,
+        active_turn_id=thread.active_turn_id,
+        created_at=thread.created_at,
+        updated_at=thread.updated_at,
+        turns=[],
+    )
 
 
 def _collect_scenario_delete_integrity_issues(
@@ -485,7 +526,11 @@ async def api_capabilities():
         ),
         "graph_analysis": _capability_entry(
             enabled=settings.FEATURE_GRAPH_ANALYSIS and settings.FEATURE_CAUSAL_GRAPH,
-            version="1.0" if (settings.FEATURE_GRAPH_ANALYSIS and settings.FEATURE_CAUSAL_GRAPH) else "0.0",
+            version=(
+                "1.0"
+                if (settings.FEATURE_GRAPH_ANALYSIS and settings.FEATURE_CAUSAL_GRAPH)
+                else "0.0"
+            ),
         ),
         "counterfactual_replay": _capability_entry(
             enabled=settings.FEATURE_COUNTERFACTUAL_REPLAY,
@@ -1031,6 +1076,87 @@ async def get_scenario(
     return result
 
 
+@router.get(
+    "/scenario/{scenario_id}/conversations",
+    response_model=ScenarioConversationListResponse,
+)
+async def list_scenario_conversations(
+    scenario_id: str,
+    cursor: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=50),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> ScenarioConversationListResponse:
+    """List Agent Conversation threads for a scenario."""
+    engine = get_engine()
+    with Session(engine) as session:
+        require_owned_scenario(session, scenario_id, principal)
+        if not settings.FEATURE_AGENT_CONVERSATION:
+            raise api_error(
+                404,
+                "FEATURE_DISABLED",
+                "Feature 'agent_conversation' is not enabled",
+            )
+
+        rows = list(
+            session.exec(
+                select(AgentConversationThread)
+                .where(AgentConversationThread.scenario_id == scenario_id)
+                .order_by(
+                    AgentConversationThread.created_at.desc(),
+                    AgentConversationThread.id.desc(),
+                )
+                .offset(cursor)
+                .limit(limit + 1)
+            ).all()
+        )
+
+    page_rows = rows[:limit]
+    has_more = len(rows) > limit
+    next_cursor = cursor + len(page_rows) if has_more else 0
+    return ScenarioConversationListResponse(
+        items=[_conversation_thread_to_response(thread) for thread in page_rows],
+        cursor=next_cursor,
+        has_more=has_more,
+    )
+
+
+@router.post("/scenario/{scenario_id}/cancel")
+async def cancel_scenario(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Request cooperative cancellation for a currently running simulation."""
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = require_owned_scenario(session, scenario_id, principal)
+        if scenario.status in _TERMINAL_SCENARIO_STATUSES:
+            raise api_error(
+                409,
+                "SIMULATION_NOT_RUNNING",
+                "Scenario is not currently running",
+            )
+        if scenario.status not in _CANCELABLE_SCENARIO_STATUSES | {ScenarioStatus.CANCELLED}:
+            raise api_error(
+                409,
+                "SIMULATION_NOT_RUNNING",
+                "Scenario is not currently running",
+            )
+        if scenario.status != ScenarioStatus.CANCELLED:
+            scenario.status = ScenarioStatus.CANCELLED
+            session.add(scenario)
+            session.commit()
+
+    if not request_cancel(scenario_id):
+        create_cancel_token(scenario_id)
+        request_cancel(scenario_id)
+
+    task = get_running_task(scenario_id)
+    if task is not None and not task.done():
+        task.cancel()
+
+    return {"status": "cancel_requested"}
+
+
 @router.get("/scenario/{scenario_id}/branches")
 async def get_branches(
     scenario_id: str,
@@ -1306,12 +1432,18 @@ async def delete_scenario(
         scenario = require_owned_scenario(session, scenario_id, principal)
 
         # M-7 fix: Allow deleting PARSING/ERROR/DONE scenarios
-        if scenario.status not in (ScenarioStatus.DONE, ScenarioStatus.ERROR, ScenarioStatus.PARSING):  # noqa: E501
+        # H6 fix: Also allow deleting CANCELLED scenarios (terminal state)
+        if scenario.status not in (
+            ScenarioStatus.DONE,
+            ScenarioStatus.ERROR,
+            ScenarioStatus.PARSING,
+            ScenarioStatus.CANCELLED,
+        ):
             raise api_error(
                 400,
                 "SCENARIO_DELETE_STATUS_INVALID",
                 f"Cannot delete: scenario is still '{scenario.status.value}'. "
-                "Only 'done', 'error', or 'parsing' scenarios can be deleted.",
+                "Only 'done', 'error', 'parsing', or 'cancelled' scenarios can be deleted.",
             )
 
         # Collect leaderboard users before the cascade wipes predictions.

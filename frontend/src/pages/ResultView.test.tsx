@@ -17,6 +17,7 @@ import {
 import en from '../i18n/locales/en.json';
 import zh from '../i18n/locales/zh.json';
 import ResultView from './ResultView';
+import { useUIPreferencesStore } from '../stores/uiPreferencesStore';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -558,6 +559,11 @@ vi.mock('../components/ShareModal', () => ({
 beforeEach(() => {
   setMockLanguage('en');
   changeLanguageMock.mockClear();
+  // S1-4: tests below predate the Reader/Workbench toggle and assume the full
+  // workbench layout. Reset the persisted UI preference store and force
+  // workbench mode so workbench-only sections (bridge, hooks, factions, etc.)
+  // remain visible. Individual tests can override to verify reader behavior.
+  useUIPreferencesStore.setState({ resultViewMode: 'workbench' });
   setMockCapabilities({
     agent_conversation: { enabled: false },
     agent_identity: { enabled: false },
@@ -1883,12 +1889,11 @@ describe('ResultView campaign summary', () => {
       await screen.findByText('Currently following the expanded ending branch "Counter Branch".'),
     ).toBeInTheDocument();
     await waitFor(() => {
-      expect(fetchSpy).toHaveBeenNthCalledWith(
-        2,
+      const factionCalls = fetchSpy.mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => url.includes('/faction-timeline'));
+      expect(factionCalls).toContain(
         '/api/scenario/scenario-1/faction-timeline?branch_id=branch-2',
-        expect.objectContaining({
-          headers: expect.any(Headers),
-        }),
       );
     });
 
@@ -4335,5 +4340,112 @@ describe('ResultView HookSummaryPanel integration', () => {
     const bridgeIdx = children.indexOf(bridgeSection!);
     // P0-2: bridge section now appears before HookSummaryPanel (next-step center is prominent)
     expect(bridgeIdx).toBeLessThan(hookIdx);
+  });
+});
+
+describe('ResultView Reader/Workbench mode toggle (S1-4)', () => {
+  beforeEach(() => {
+    // Default to reader mode for this suite to verify reader-only behavior.
+    useUIPreferencesStore.setState({ resultViewMode: 'reader' });
+    setMockCapabilities({
+      agent_conversation: { enabled: false },
+      agent_identity: { enabled: false },
+      causal_graph: { enabled: true },
+      replay_trace: { enabled: false },
+      counterfactual_replay: { enabled: false },
+      factions: { enabled: true },
+      web_search: { providers: {} },
+    });
+  });
+
+  const renderResult = (scenarioId = 'scenario-1') => {
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: scenarioId,
+      question: 'What if?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Branch one',
+          probability: 0.7,
+          status: 'COMPLETED',
+          story: 'Story.',
+          insight: 'Insight.',
+          key_moments: ['m1'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+        {
+          id: 'branch-2',
+          title: 'Branch two',
+          probability: 0.3,
+          status: 'COMPLETED',
+          story: 'Story.',
+          insight: 'Insight.',
+          key_moments: ['m2'],
+          parent_branch_id: null,
+          fork_reason: '',
+        },
+      ],
+    });
+    return render(
+      <MemoryRouter initialEntries={[`/result/${scenarioId}`]}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  };
+
+  it('renders the toggle in the header with Reader as default selection', async () => {
+    renderResult();
+    const toggleGroup = await screen.findByRole('group', { name: 'result.mode_toggle_label' });
+    expect(toggleGroup).toBeTruthy();
+
+    const readerBtn = within(toggleGroup).getByRole('radio', { name: 'result.mode_reader' });
+    const workbenchBtn = within(toggleGroup).getByRole('radio', { name: 'result.mode_workbench' });
+    expect(readerBtn.getAttribute('data-state')).toBe('on');
+    expect(workbenchBtn.getAttribute('data-state')).toBe('off');
+  });
+
+  it('hides workbench-only sections in Reader mode (bridge / hooks / agent roster / phase 3 panels)', async () => {
+    renderResult();
+    // Wait for first reader-mode element to confirm hydration
+    await screen.findByRole('group', { name: 'result.mode_toggle_label' });
+    expect(screen.queryByRole('heading', { name: 'result.next_steps_heading' })).toBeNull();
+    expect(screen.queryByRole('region', { name: /result\.hooks\.title/ })).toBeNull();
+    expect(screen.queryByText('result.agents')).toBeNull();
+  });
+
+  it('reveals workbench-only sections after switching to Workbench', async () => {
+    const user = userEvent.setup();
+    renderResult();
+
+    const toggleGroup = await screen.findByRole('group', { name: 'result.mode_toggle_label' });
+    const workbenchBtn = within(toggleGroup).getByRole('radio', { name: 'result.mode_workbench' });
+    await user.click(workbenchBtn);
+
+    expect(workbenchBtn.getAttribute('data-state')).toBe('on');
+    expect(useUIPreferencesStore.getState().resultViewMode).toBe('workbench');
+    expect(await screen.findByRole('heading', { name: 'result.next_steps_heading' })).toBeTruthy();
+  });
+
+  it('writes the toggle change back to the persisted store', async () => {
+    const user = userEvent.setup();
+    renderResult();
+
+    const toggleGroup = await screen.findByRole('group', { name: 'result.mode_toggle_label' });
+    const workbenchBtn = within(toggleGroup).getByRole('radio', { name: 'result.mode_workbench' });
+    await user.click(workbenchBtn);
+
+    // Persist middleware fronts the store; verifying state mutation here proves
+    // the toggle calls setResultViewMode (the persist layer is unit-tested at
+    // the store boundary in stores/uiPreferencesStore).
+    expect(useUIPreferencesStore.getState().resultViewMode).toBe('workbench');
+
+    // Switching back to reader works too.
+    const readerBtn = within(toggleGroup).getByRole('radio', { name: 'result.mode_reader' });
+    await user.click(readerBtn);
+    expect(useUIPreferencesStore.getState().resultViewMode).toBe('reader');
   });
 });

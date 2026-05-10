@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+from fastapi import HTTPException
 from sqlmodel import Session
 
 from app.models.agent_conversation import AgentConversationThread
@@ -17,7 +19,11 @@ from app.models.database import (
     get_engine,
 )
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
-from app.services.conversation_service import _build_prompt, _load_prompt_context
+from app.services.conversation_service import (
+    _build_prompt,
+    _load_prompt_context,
+    create_thread_with_first_turn,
+)
 
 
 def test_prompt_without_agent_context_uses_graph_analyst_voice():
@@ -215,3 +221,186 @@ def test_prompt_context_includes_recent_round_transcript_payload_and_edge_eviden
     assert "edge evidence detail marker" in prompt
     assert "quoted evidence marker" in prompt
     assert prompt.count("UNTRUSTED DATA") >= 2
+
+
+# ── H1 cross-scenario branch isolation ──────────────────────
+
+
+def _seed_scenario_with_branch(
+    session: Session,
+    *,
+    user_id: str,
+    transcript_marker: str,
+) -> tuple[str, str]:
+    """Create a scenario + branch + 1 round with a marker message."""
+    scenario = Scenario(
+        question=f"q-{user_id}",
+        status=ScenarioStatus.DONE,
+        user_id=user_id,
+    )
+    session.add(scenario)
+    session.flush()
+    branch = Branch(
+        scenario_id=scenario.id,
+        title=f"branch-{user_id}",
+        summary=f"summary-{user_id}",
+    )
+    agent = Agent(
+        scenario_id=scenario.id,
+        name=f"Agent-{user_id}",
+        role="role",
+    )
+    session.add(branch)
+    session.add(agent)
+    session.flush()
+    round_row = Round(
+        branch_id=branch.id,
+        round_number=1,
+        compressed_summary=f"summary-r1-{user_id}",
+    )
+    session.add(round_row)
+    session.flush()
+    session.add(
+        AgentMessage(
+            round_id=round_row.id,
+            agent_id=agent.id,
+            content=transcript_marker,
+            emotion="focused",
+        )
+    )
+    session.flush()
+    return scenario.id, branch.id
+
+
+def test_load_prompt_context_drops_cross_scenario_branch_id_from_transcript():
+    """H1: a thread that names a branch from another scenario must NOT leak
+    the foreign-scenario transcript through ``_summarize_round_transcripts``.
+
+    Pre-fix the function fell back to the raw ``branch_id`` after blanking the
+    branch row, which meant the summarizer pulled rounds from the wrong
+    scenario.  Post-fix the fallback must be ``None`` and the resulting prompt
+    must not contain the foreign transcript marker.
+    """
+    engine = get_engine()
+    with Session(engine) as session:
+        leak_scenario_id, leak_branch_id = _seed_scenario_with_branch(
+            session,
+            user_id="owner-leak",
+            transcript_marker="LEAK_SHOULD_NOT_APPEAR_IN_PROMPT",
+        )
+        own_scenario = Scenario(
+            question="own scenario",
+            status=ScenarioStatus.DONE,
+            user_id="owner-leak",
+        )
+        session.add(own_scenario)
+        session.flush()
+        session.commit()
+
+        # Build a thread anchored in own_scenario but pointing at the
+        # *other* scenario's branch — simulating either a stale row from
+        # before H1 was enforced, or a malformed ``thread.origin_branch_id``.
+        thread = AgentConversationThread(
+            scenario_id=own_scenario.id,
+            owner_user_id="owner-leak",
+            origin_branch_id=leak_branch_id,
+            origin_round_number=1,
+            origin_node_id=None,
+            origin_node_type=None,
+            last_turn_sequence=0,
+            latest_status="idle",
+        )
+
+        context = _load_prompt_context(session, thread)
+
+    assert context.branch_summary is None, (
+        "Foreign-scenario branch must be blanked, not summarized"
+    )
+    assert context.round_transcripts == (), (
+        "Foreign-scenario rounds must NOT be summarized into the prompt"
+    )
+
+    # Sanity check: the same thread anchored at the *correct* scenario does
+    # surface its transcript, proving the guard is the only thing dropping it.
+    with Session(engine) as session:
+        thread_ok = AgentConversationThread(
+            scenario_id=leak_scenario_id,
+            owner_user_id="owner-leak",
+            origin_branch_id=leak_branch_id,
+            origin_round_number=1,
+            origin_node_id=None,
+            origin_node_type=None,
+            last_turn_sequence=0,
+            latest_status="idle",
+        )
+        context_ok = _load_prompt_context(session, thread_ok)
+    assert context_ok.round_transcripts, (
+        "Same-scenario branch should still surface transcript content"
+    )
+    assert any(
+        "LEAK_SHOULD_NOT_APPEAR_IN_PROMPT" in chunk
+        for chunk in context_ok.round_transcripts
+    )
+
+
+def test_create_thread_with_first_turn_rejects_cross_scenario_origin_branch():
+    """H1: ``create_thread_with_first_turn`` must refuse a foreign branch up
+    front so a poisoned row never lands in the database.
+    """
+    engine = get_engine()
+    with Session(engine) as session:
+        _, leak_branch_id = _seed_scenario_with_branch(
+            session,
+            user_id="owner-x",
+            transcript_marker="cross-scenario-source",
+        )
+        own_scenario = Scenario(
+            question="own",
+            status=ScenarioStatus.DONE,
+            user_id="owner-x",
+        )
+        session.add(own_scenario)
+        session.flush()
+        own_scenario_id = own_scenario.id
+        session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_thread_with_first_turn(
+            scenario_id=own_scenario_id,
+            owner_user_id="owner-x",
+            agent_identity_id=None,
+            origin_branch_id=leak_branch_id,
+            origin_round_number=None,
+            origin_node_id=None,
+            origin_node_type=None,
+            first_user_content="hello",
+        )
+    assert exc_info.value.status_code == 404
+    detail = exc_info.value.detail
+    assert isinstance(detail, dict)
+    assert detail.get("code") == "BRANCH_NOT_FOUND"
+
+
+def test_create_thread_with_first_turn_accepts_same_scenario_origin_branch():
+    """Sanity: same-scenario branch still passes the H1 guard."""
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario_id, branch_id = _seed_scenario_with_branch(
+            session,
+            user_id="owner-ok",
+            transcript_marker="ok",
+        )
+        session.commit()
+
+    outcome = create_thread_with_first_turn(
+        scenario_id=scenario_id,
+        owner_user_id="owner-ok",
+        agent_identity_id=None,
+        origin_branch_id=branch_id,
+        origin_round_number=1,
+        origin_node_id=None,
+        origin_node_type=None,
+        first_user_content="hello",
+    )
+    assert outcome.thread.origin_branch_id == branch_id
+    assert outcome.thread.scenario_id == scenario_id

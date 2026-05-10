@@ -843,6 +843,11 @@ export async function deleteScenario(id: string): Promise<{ status: string; scen
   return request(`/scenario/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+/** POST /api/scenario/:id/cancel — request user-initiated cancellation (S1-1) */
+export async function cancelScenario(scenarioId: string): Promise<{ status: string }> {
+  return request(`/scenario/${encodeURIComponent(scenarioId)}/cancel`, { method: 'POST' });
+}
+
 /** GET /api/scenario/:id/export — export scenario as Markdown text (P5-C) */
 export async function exportScenario(id: string): Promise<string> {
   return requestText(`/scenario/${encodeURIComponent(id)}/export`);
@@ -1085,6 +1090,7 @@ export async function updateAgent(
     persona?: string | null;
     knowledge_domains?: string[];
     preferred_tier?: 'IMPORTANT' | 'CROWD';
+    decision_bias?: Record<string, number> | null;
   },
 ): Promise<{ detail: string }> {
   return request(`/agents/workshop/${encodeURIComponent(identityId)}`, {
@@ -1193,4 +1199,205 @@ export async function getCheckpoints(
 ): Promise<CheckpointInfo[]> {
   const params = branchId ? `?branch_id=${encodeURIComponent(branchId)}` : '';
   return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/checkpoints${params}`);
+}
+
+// ── S1-3 C2: Direct-fetch consolidation ──
+
+/** GET /api/scenario/:id/causal-graph — full causal DAG (optionally branch-filtered) */
+export async function getCausalGraph<T = unknown>(
+  scenarioId: string,
+  branchId?: string,
+  options?: RequestOptions,
+): Promise<T> {
+  const params = branchId ? `?branch_id=${encodeURIComponent(branchId)}` : '';
+  return safeGet(
+    `/scenario/${encodeURIComponent(scenarioId)}/causal-graph${params}`,
+    options,
+  );
+}
+
+/** GET /api/debate/:id/argument-map — debate argument tree */
+export async function getArgumentMap<T = unknown>(
+  debateId: string,
+  options?: RequestOptions,
+): Promise<T> {
+  return safeGet(`/debate/${encodeURIComponent(debateId)}/argument-map`, options);
+}
+
+/** GET /api/scenario/:id/compare — counterfactual branch comparison */
+export async function getCounterfactualCompare<T = unknown>(
+  scenarioId: string,
+  branchA: string,
+  branchB: string,
+  options?: RequestOptions,
+): Promise<T> {
+  const sid = encodeURIComponent(scenarioId);
+  const a = encodeURIComponent(branchA);
+  const b = encodeURIComponent(branchB);
+  return safeGet(`/scenario/${sid}/compare?branch_a=${a}&branch_b=${b}`, options);
+}
+
+/** POST /api/scenario/:id/counterfactual — submit counterfactual replay */
+export async function submitCounterfactual<T = unknown>(
+  scenarioId: string,
+  body: {
+    source_branch_id: string;
+    round_number: number;
+    agent_id: string;
+    source_message_content?: string | null;
+    replacement_content: string;
+  },
+): Promise<T> {
+  return request(`/scenario/${encodeURIComponent(scenarioId)}/counterfactual`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+/** GET /api/agents/identities — list custom agent identities for a user */
+export async function listAgentIdentities<T = unknown>(
+  userId: string,
+  options?: RequestOptions,
+): Promise<T> {
+  return safeGet(`/agents/identities?user_id=${encodeURIComponent(userId)}`, options);
+}
+
+/** POST /api/agents/workshop — create a custom agent identity */
+export async function createAgent<T = unknown>(
+  body: {
+    user_id: string;
+    display_name: string;
+    role: string;
+    persona: string | null;
+    knowledge_domains: string[];
+    preferred_tier: 'IMPORTANT' | 'CROWD';
+    decision_bias?: Record<string, number> | null;
+  },
+): Promise<T> {
+  return request('/agents/workshop', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+/** DELETE /api/agents/workshop/:identityId — delete a custom agent */
+export async function deleteAgent(identityId: string): Promise<{ detail: string }> {
+  return request(`/agents/workshop/${encodeURIComponent(identityId)}`, {
+    method: 'DELETE',
+  });
+}
+
+/** POST /api/admin/test-llm — admin LLM connection probe */
+export async function adminTestLlm<T = unknown>(
+  body: { base_url: string; api_key: string },
+): Promise<T> {
+  return request('/admin/test-llm', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+// ── S2-1: Conversation thread reload ──────────────────────
+
+/** Single conversation thread item for the scenario list view. */
+export interface ConversationListItem {
+  thread_id: string;
+  scenario_id: string;
+  agent_identity_id?: string | null;
+  owner_user_id: string;
+  origin_branch_id?: string | null;
+  origin_round_number?: number | null;
+  origin_node_id?: string | null;
+  origin_node_type?: string | null;
+  last_turn_sequence: number;
+  latest_status: string;
+  active_turn_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Cursor-paginated response for `GET /api/scenario/{id}/conversations`. */
+export interface ConversationListResponse {
+  items: ConversationListItem[];
+  cursor: number;
+  has_more: boolean;
+}
+
+/** Single turn returned by `GET /api/conversation/{thread_id}` playback. */
+export interface ConversationTurnDetail {
+  id: string;
+  thread_id: string;
+  role: string;
+  sequence: number;
+  status: string;
+  content: string;
+  error_code?: string | null;
+  error_message?: string | null;
+  model?: string | null;
+  source_branch_id?: string | null;
+  source_round_number?: number | null;
+  source_node_id?: string | null;
+  source_node_type?: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+}
+
+/** Full thread view returned by `GET /api/conversation/{thread_id}`. */
+export interface ConversationDetail extends ConversationListItem {
+  user_turn_id?: string | null;
+  assistant_turn_id?: string | null;
+  sequence_range?: number[] | null;
+  turns: ConversationTurnDetail[];
+}
+
+/** GET /api/scenario/:id/conversations — list reloadable conversation threads (S2-1) */
+export async function getScenarioConversations(
+  scenarioId: string,
+  cursor = 0,
+  limit = 20,
+  options?: RequestOptions,
+): Promise<ConversationListResponse> {
+  const params = new URLSearchParams();
+  params.set('cursor', String(cursor));
+  params.set('limit', String(limit));
+  return safeGet(
+    `/scenario/${encodeURIComponent(scenarioId)}/conversations?${params.toString()}`,
+    options,
+  );
+}
+
+/** GET /api/conversation/:thread_id — load full thread + ordered turn history (S2-1) */
+export async function getConversation(
+  threadId: string,
+  options?: RequestOptions,
+): Promise<ConversationDetail> {
+  return safeGet(`/conversation/${encodeURIComponent(threadId)}`, options);
+}
+
+// ── S2-3: Quota summary ───────────────────────────────────
+
+/** A single quota bucket returned by /api/quota/summary. */
+export interface QuotaBucket {
+  used: number;
+  limit: number;
+  remaining: number;
+}
+
+/** Response shape of `GET /api/quota/summary`. */
+export interface QuotaSummaryResponse {
+  conversation: QuotaBucket;
+  replay: QuotaBucket;
+}
+
+/** GET /api/quota/summary — fetch conversation + replay branch quota usage (S2-3). */
+export async function getQuotaSummary(
+  scenarioId?: string,
+  options?: RequestOptions,
+): Promise<QuotaSummaryResponse> {
+  const id = scenarioId?.trim();
+  const path = id
+    ? `/quota/summary?scenario_id=${encodeURIComponent(id)}`
+    : '/quota/summary';
+  return safeGet(path, options);
 }

@@ -4,7 +4,14 @@ import { useTranslation } from 'react-i18next';
 import type { AgentConversationWSEvent, EndingRoomParticipant } from '../types';
 import { SafeMarkdown } from '../components/SafeMarkdown';
 import { TypingIndicator } from '../components/TypingIndicator';
-import { buildSessionHeaders } from '../api/client';
+import {
+  ConversationHistoryPicker,
+} from '../components/ConversationHistoryPicker';
+import {
+  buildSessionHeaders,
+  type ConversationDetail,
+  type ConversationListItem,
+} from '../api/client';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
 import { parseSseFrame } from '../lib/parseSseFrame';
 
@@ -343,8 +350,48 @@ export default function RoundtableAgentChat({
     }
   }, []);
 
+  const handleHistorySelect = useCallback(
+    (detail: ConversationDetail, summary: ConversationListItem) => {
+      // S2-1: Hydrate the selected participant's chat from the loaded thread.
+      // Resolve which participant this thread belongs to: prefer the matching
+      // participant id (origin_node_id) if available, otherwise fall back to
+      // the currently-selected participant.
+      const targetParticipantId = (() => {
+        const candidate = summary.origin_node_id?.trim();
+        if (candidate && participants.some((p) => p.id === candidate)) return candidate;
+        return selectedId;
+      })();
+      if (!targetParticipantId) return;
+      const restored: ChatMessage[] = detail.turns
+        .filter((turn) => turn.role === 'user' || turn.role === 'assistant')
+        .map((turn) => ({
+          role: turn.role === 'user' ? 'user' : 'agent',
+          content: turn.content,
+        }));
+      setMessages((prev) => {
+        const next = new Map(prev);
+        next.set(targetParticipantId, restored);
+        return next;
+      });
+      setThreadIds((prev) => {
+        const next = new Map(prev);
+        next.set(targetParticipantId, detail.thread_id);
+        return next;
+      });
+      setSelectedId(targetParticipantId);
+      setParticipantError(targetParticipantId, null);
+    },
+    [participants, selectedId, setParticipantError],
+  );
+
   return (
     <div data-testid="roundtable-agent-chat" className="roundtable-agent-chat">
+      <ConversationHistoryPicker
+        scenarioId={scenarioId}
+        filterNodeTypes={['roundtable_participant']}
+        onSelect={handleHistorySelect}
+        className="roundtable-agent-chat__history"
+      />
       <div
         className="roundtable-agent-chat__picker"
         role="listbox"

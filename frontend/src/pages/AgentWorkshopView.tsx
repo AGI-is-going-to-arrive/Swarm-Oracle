@@ -5,7 +5,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { buildSessionHeaders, getSessionBoundUserId, updateAgent } from '../api/client';
+import {
+  createAgent,
+  getSessionBoundUserId,
+  listAgentIdentities,
+  updateAgent,
+} from '../api/client';
+import { DecisionBiasSlider } from '../components/Controls/DecisionBiasSlider';
+import {
+  type DecisionBiasKey,
+  withDecisionBiasDefaults,
+} from '../components/Controls/decisionBias';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import type { AgentIdentityInfo, KnowledgeDomain } from '../types';
 
@@ -42,6 +52,24 @@ interface FormState {
   persona: string;
   knowledgeDomains: Set<KnowledgeDomain>;
   preferredTier: PreferredTier;
+  decisionBias: Record<DecisionBiasKey, number>;
+}
+
+function normalizeDecisionBias(agent: AgentIdentityInfo): Record<DecisionBiasKey, number> {
+  if (agent.decision_bias && typeof agent.decision_bias === 'object') {
+    return withDecisionBiasDefaults(agent.decision_bias as Record<string, unknown>);
+  }
+  if (agent.decision_bias_json) {
+    try {
+      const parsed = JSON.parse(agent.decision_bias_json) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return withDecisionBiasDefaults(parsed as Record<string, unknown>);
+      }
+    } catch {
+      /* fall through to defaults */
+    }
+  }
+  return withDecisionBiasDefaults(null);
 }
 
 function isKnowledgeDomain(value: string): value is KnowledgeDomain {
@@ -81,6 +109,7 @@ export function AgentWorkshopView() {
     persona: '',
     knowledgeDomains: new Set(),
     preferredTier: 'IMPORTANT' as const,
+    decisionBias: withDecisionBiasDefaults(null),
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -92,15 +121,8 @@ export function AgentWorkshopView() {
     setLoadingAgent(true);
     setError(null);
     const userId = getSessionBoundUserId();
-    fetch(
-      `/api/agents/identities?user_id=${encodeURIComponent(userId)}`,
-      { headers: buildSessionHeaders() },
-    )
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((list: AgentIdentityInfo[]) => {
+    listAgentIdentities<AgentIdentityInfo[]>(userId)
+      .then((list) => {
         if (cancelled) return;
         const agent = list.find((a) => a.id === editId);
         if (!agent) {
@@ -114,6 +136,7 @@ export function AgentWorkshopView() {
           persona: agent.persona || '',
           knowledgeDomains: new Set(domains),
           preferredTier: normalizePreferredTier(agent.preferred_tier),
+          decisionBias: normalizeDecisionBias(agent),
         });
       })
       .catch((err) => {
@@ -135,6 +158,13 @@ export function AgentWorkshopView() {
     });
   }, []);
 
+  const handleBiasChange = useCallback((key: DecisionBiasKey, value: number) => {
+    setForm(prev => ({
+      ...prev,
+      decisionBias: { ...prev.decisionBias, [key]: value },
+    }));
+  }, []);
+
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.displayName.trim() || !form.role.trim()) return;
@@ -149,25 +179,19 @@ export function AgentWorkshopView() {
           persona: form.persona.trim() || null,
           knowledge_domains: [...form.knowledgeDomains],
           preferred_tier: form.preferredTier,
+          decision_bias: { ...form.decisionBias },
         });
       } else {
         const userId = getSessionBoundUserId();
-        const res = await fetch('/api/agents/workshop', {
-          method: 'POST',
-          headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({
-            user_id: userId,
-            display_name: form.displayName.trim(),
-            role: form.role.trim(),
-            persona: form.persona.trim() || null,
-            knowledge_domains: [...form.knowledgeDomains],
-            preferred_tier: form.preferredTier,
-          }),
+        await createAgent({
+          user_id: userId,
+          display_name: form.displayName.trim(),
+          role: form.role.trim(),
+          persona: form.persona.trim() || null,
+          knowledge_domains: [...form.knowledgeDomains],
+          preferred_tier: form.preferredTier,
+          decision_bias: { ...form.decisionBias },
         });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.detail || `HTTP ${res.status}`);
-        }
       }
       navigate('/agents');
     } catch (err) {
@@ -239,6 +263,14 @@ export function AgentWorkshopView() {
             value={form.persona}
             onChange={e => setForm(prev => ({ ...prev, persona: e.target.value }))}
             className="agent-form__textarea"
+          />
+        </div>
+
+        <div className="agent-form__field">
+          <DecisionBiasSlider
+            values={form.decisionBias}
+            onChange={handleBiasChange}
+            disabled={saving || loadingAgent}
           />
         </div>
 

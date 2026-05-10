@@ -695,6 +695,20 @@ def create_thread_with_first_turn(
         _verify_scenario_owner(session, scenario_id, owner_user_id)
         _verify_identity_owner(session, agent_identity_id, owner_user_id)
 
+        # H1: ``origin_branch_id`` must belong to the same scenario.  Without
+        # this guard a caller could pin a thread to a foreign-scenario branch,
+        # which then pollutes the prompt-context transcript summarizer (and any
+        # downstream code that re-uses ``thread.origin_branch_id``).  Conceal
+        # existence with a 404 to avoid scenario-id enumeration.
+        if origin_branch_id:
+            origin_branch = session.get(Branch, origin_branch_id)
+            if origin_branch is None or origin_branch.scenario_id != scenario_id:
+                raise api_error(
+                    404,
+                    "BRANCH_NOT_FOUND",
+                    "Origin branch not found for scenario",
+                )
+
         # HC-31 quota authority: reject at the gate before any sequence is
         # burned.  Thread cap is per-scenario (structural); daily caps are
         # rolling 24 h per-user / per-org.  A ``start`` adds 2 turns (user +
@@ -1396,7 +1410,12 @@ def _load_prompt_context(
     )
     branch = session.get(Branch, branch_id) if branch_id else None
     if branch is not None and branch.scenario_id != thread.scenario_id:
+        # H1: cross-scenario branch leak guard — the originating branch belongs
+        # to a different scenario than this thread, so we MUST NOT fall back to
+        # the raw ``branch_id`` for the transcript summarizer (would expose
+        # foreign-scenario rounds in the prompt).  Drop the reference entirely.
         branch = None
+        branch_id = None
 
     agent_name, agent_role, agent_persona = None, None, None
     if scenario:
@@ -1422,7 +1441,7 @@ def _load_prompt_context(
         ) if snapshot else (),
         round_transcripts=_summarize_round_transcripts(
             session,
-            branch_id=branch.id if branch is not None else branch_id,
+            branch_id=branch.id if branch is not None else None,
             origin_round_number=thread.origin_round_number,
         ),
         agent_name=agent_name,

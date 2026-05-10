@@ -32,7 +32,8 @@ class TestCreateCustomAgent:
             display_name="Test Agent",
             role="analyst",
             persona="A careful thinker",
-            decision_bias={"risk_averse": 0.8},
+            # W1: validator backfills the 5-key schema and drops unknown keys.
+            decision_bias={"caution": 0.8},
             knowledge_domains=["economics", "politics"],
         )
         assert identity_id
@@ -46,7 +47,10 @@ class TestCreateCustomAgent:
             assert identity.role == "analyst"
             assert identity.continuity_key  # non-empty hash
             assert json.loads(identity.knowledge_domain_json) == ["economics", "politics"]
-            assert json.loads(identity.decision_bias_json) == {"risk_averse": 0.8}
+            stored_bias = json.loads(identity.decision_bias_json)
+            assert stored_bias["caution"] == 0.8
+            # Other 4 keys backfilled with the 0.5 default.
+            assert stored_bias["optimism"] == 0.5
 
     def test_create_minimal_fields(self):
         identity_id = create_custom_agent(
@@ -271,3 +275,136 @@ class TestDeleteCustomAgent:
             "Tracks sanctions coalitions",
         )
         assert identity_id not in [c["identity_id"] for c in candidates]
+
+
+# ── H2 generated-agent immutability ─────────────────────────
+
+
+def _seed_generated_identity(user_id: str, *, role: str = "generated_role") -> str:
+    """Insert a non-custom identity row directly (simulates a sim-derived agent)."""
+    identity = AgentIdentity(
+        user_id=user_id,
+        kind="generated",
+        display_name="Auto Agent",
+        role=role,
+        persona=None,
+        continuity_key=f"continuity-{user_id}-{role}",
+        preferred_tier="IMPORTANT",
+    )
+    with Session(get_engine()) as session:
+        session.add(identity)
+        session.commit()
+        session.refresh(identity)
+        return identity.id
+
+
+class TestGeneratedAgentImmutability:
+    def test_update_rejects_generated_kind(self):
+        identity_id = _seed_generated_identity("u-gen-1")
+        with pytest.raises(PermissionError, match="not editable"):
+            update_custom_agent(identity_id, display_name="hijacked")
+
+        # State remains untouched.
+        with Session(get_engine()) as session:
+            identity = session.get(AgentIdentity, identity_id)
+            assert identity is not None
+            assert identity.display_name == "Auto Agent"
+            assert identity.kind == "generated"
+
+    def test_delete_rejects_generated_kind(self):
+        identity_id = _seed_generated_identity("u-gen-2")
+        with pytest.raises(PermissionError, match="not deletable"):
+            delete_custom_agent(identity_id)
+
+        with Session(get_engine()) as session:
+            assert session.get(AgentIdentity, identity_id) is not None
+
+    def test_update_still_allowed_for_custom_kind(self):
+        identity_id = create_custom_agent(
+            "u-custom-mix", "Custom", "role", None, None, None,
+        )
+        update_custom_agent(identity_id, display_name="renamed")
+        with Session(get_engine()) as session:
+            identity = session.get(AgentIdentity, identity_id)
+            assert identity is not None
+            assert identity.display_name == "renamed"
+
+
+# ── W1 decision_bias validation on create path ─────────────
+
+
+class TestCreateDecisionBiasValidation:
+    def test_create_rejects_out_of_range_value(self):
+        with pytest.raises(ValueError, match="must be 0-1"):
+            create_custom_agent(
+                user_id="u-bias-1",
+                display_name="Biased",
+                role="role",
+                persona=None,
+                decision_bias={"caution": 1.7},
+                knowledge_domains=None,
+            )
+
+    def test_create_rejects_non_dict_bias(self):
+        with pytest.raises(ValueError, match="must be an object"):
+            create_custom_agent(
+                user_id="u-bias-2",
+                display_name="BadType",
+                role="role",
+                persona=None,
+                decision_bias=["not", "a", "dict"],  # type: ignore[arg-type]
+                knowledge_domains=None,
+            )
+
+    def test_create_normalizes_partial_bias_to_full_schema(self):
+        """W1: validator backfills missing keys with the 0.5 default so the
+        column always reflects the bounded 5-key schema (no junk persisted)."""
+        identity_id = create_custom_agent(
+            user_id="u-bias-3",
+            display_name="Partial",
+            role="role",
+            persona=None,
+            decision_bias={"caution": 0.9},
+            knowledge_domains=None,
+        )
+        with Session(get_engine()) as session:
+            identity = session.get(AgentIdentity, identity_id)
+            assert identity is not None
+            assert identity.decision_bias_json is not None
+            stored = json.loads(identity.decision_bias_json)
+            assert stored["caution"] == 0.9
+            for key in (
+                "optimism",
+                "conservatism",
+                "risk_tolerance",
+                "creativity",
+            ):
+                assert stored[key] == 0.5
+
+    def test_create_accepts_none_bias(self):
+        identity_id = create_custom_agent(
+            user_id="u-bias-4",
+            display_name="NoBias",
+            role="role",
+            persona=None,
+            decision_bias=None,
+            knowledge_domains=None,
+        )
+        with Session(get_engine()) as session:
+            identity = session.get(AgentIdentity, identity_id)
+            assert identity is not None
+            assert identity.decision_bias_json is None
+
+    def test_create_rejects_boolean_value(self):
+        # validate_decision_bias's ``isinstance(val, bool)`` short-circuit was
+        # added because ``bool`` ⊂ ``int`` in Python.  Confirm the create
+        # path inherits this safety.
+        with pytest.raises(ValueError, match="must be 0-1"):
+            create_custom_agent(
+                user_id="u-bias-5",
+                display_name="BoolBias",
+                role="role",
+                persona=None,
+                decision_bias={"caution": True},
+                knowledge_domains=None,
+            )

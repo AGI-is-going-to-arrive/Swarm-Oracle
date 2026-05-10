@@ -1741,6 +1741,11 @@ async def run_debate_background(
     if not _try_mark_debate_running(debate_id):
         logger.warning("Debate %s already running; skipping duplicate execution", debate_id)
         return
+    current_task = asyncio.current_task()
+    if current_task is not None:
+        from app.api.helpers import register_running_task
+
+        register_running_task(debate_id, current_task)
     lock_lease = None
     lock_lease_holder: list[RuntimeLockLease | None] = [None]
     lock_heartbeat_stop: threading.Event | None = None
@@ -2154,6 +2159,10 @@ async def run_debate_background(
         release_runtime_lock(
             lock_lease_holder[0] if lock_lease_holder[0] is not None else lock_lease
         )
+        if current_task is not None:
+            from app.api.helpers import clear_running_task
+
+            clear_running_task(debate_id, current_task)
         _clear_running_debate(debate_id)
 
 

@@ -2,6 +2,10 @@
    SwarmOracle — Impeccable Premium Editorial System
    ═══════════════════════════════════════════════════════════ */
 
+/* Local self-hosted Google Fonts (S0-3). Must be first so @font-face
+   declarations are registered before any rule resolves font-family. */
+@import "./fonts.css";
+
 /* Tailwind v4 CSS-first: import theme + utilities only (NO preflight) */
 @import "tailwindcss/theme" layer(theme);
 @import "tailwindcss/utilities" layer(utilities);
@@ -1199,9 +1203,15 @@ body.has-argument-map .lang-switch--global {
     opacity: 1 !important;
     transform: none !important;
   }
-  /* Radix accordion/sheet data-state animations */
+  /* Radix accordion/sheet/dialog data-state animations */
   [data-state] {
     animation-duration: 0.01ms !important;
+  }
+  [class~="animate-in"],
+  [class~="animate-out"],
+  [data-state="open"][class~="data-[state=open]:animate-in"],
+  [data-state="closed"][class~="data-[state=closed]:animate-out"] {
+    animation: none !important;
   }
 }
 

@@ -17,9 +17,20 @@ import {
   useSimulationDirectorState,
 } from '../hooks/useSimulationViewState';
 import {
+  cancelScenario,
   createReplayArtifact,
   importReplayScenario,
 } from '../api/client';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 import { buildAutomationErrorState } from '../lib/apiErrorMessage';
 import {
   ensureScenarioObjectives,
@@ -163,6 +174,10 @@ export function SimulationView() {
   const [replayUrl, setReplayUrl] = useState<string | null>(null);
   const [replayLinkUnavailable, setReplayLinkUnavailable] = useState(false);
   const [importingReplay, setImportingReplay] = useState(false);
+  // S1-1: cancellation UI state
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [cancelInFlight, setCancelInFlight] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const lastCommitmentAction = useRef<'commit' | 'clear' | null>(null);
   const commitmentFeedbackTimer = useRef<number | null>(null);
   const recoveryLogEmitted = useRef(false);
@@ -224,6 +239,37 @@ export function SimulationView() {
     isSimulationComplete,
     navigate,
   });
+  // S1-1: cancel-button gating depends on isReplayMode (from replay state) and live status
+  const cancelledStatus = status === 'cancelled';
+  const canCancelSimulation =
+    !isReplayMode
+    && !cancelledStatus
+    && !isSimulationComplete
+    && status !== 'error'
+    && (status === 'parsing' || status === 'simulating' || status === 'narrating');
+  const handleCancelRequest = useCallback(() => {
+    if (!canCancelSimulation) return;
+    setCancelError(null);
+    setShowCancelConfirm(true);
+  }, [canCancelSimulation]);
+  const handleCancelDismiss = useCallback(() => {
+    if (cancelInFlight) return;
+    setShowCancelConfirm(false);
+  }, [cancelInFlight]);
+  const handleCancelConfirm = useCallback(async () => {
+    if (!id || cancelInFlight) return;
+    setCancelInFlight(true);
+    setCancelError(null);
+    try {
+      await cancelScenario(id);
+      setShowCancelConfirm(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'cancel_failed';
+      setCancelError(message);
+    } finally {
+      setCancelInFlight(false);
+    }
+  }, [cancelInFlight, id]);
   const {
     backendDirectorState,
     setBackendDirectorState,
@@ -1112,12 +1158,18 @@ export function SimulationView() {
           <h2 className="sim-header__question">
             {scenario?.question || t('sim.status.loading')}
           </h2>
-          <span className={`badge badge-${status === 'error' ? 'pruned' : 'active'}`}>
+          <span
+            className={`badge badge-${
+              status === 'error' || cancelledStatus ? 'pruned' : 'active'
+            }`}
+          >
             {status === 'error'
               ? t('sim.status.error')
-              : status === 'done'
-                ? t('sim.status.completed')
-                : t('sim.status.running')}
+              : cancelledStatus
+                ? t('simulation.cancelled_title')
+                : status === 'done'
+                  ? t('sim.status.completed')
+                  : t('sim.status.running')}
           </span>
           <span
             className="badge badge-active"
@@ -1145,7 +1197,18 @@ export function SimulationView() {
               {t('gameplay.open_btn')}
             </button>
           )}
-          {!isSimulationComplete && (
+          {canCancelSimulation && (
+            <button
+              type="button"
+              className="btn btn-danger sim-cancel-btn"
+              onClick={handleCancelRequest}
+              disabled={cancelInFlight}
+              data-testid="simulation-cancel-button"
+            >
+              {t('simulation.cancel_button')}
+            </button>
+          )}
+          {!isSimulationComplete && !cancelledStatus && (
             <button
               className="btn btn-ghost"
               onClick={() => setShowPrediction(true)}
@@ -1215,6 +1278,65 @@ export function SimulationView() {
           <p>🔒 {t('sim.replay.read_only')}</p>
         </div>
       )}
+
+      {cancelledStatus && (
+        <div className="sim-cancelled" role="status" aria-live="polite" data-testid="simulation-cancelled-banner">
+          <div className="sim-cancelled__copy">
+            <strong>{t('simulation.cancelled_title')}</strong>
+            <span>{t('simulation.cancelled_desc')}</span>
+          </div>
+          <button className="btn btn-ghost" onClick={() => navigate('/')}>
+            {t('sim.status.back')}
+          </button>
+        </div>
+      )}
+
+      <AlertDialog
+        open={showCancelConfirm}
+        onOpenChange={(open) => {
+          if (!open) handleCancelDismiss();
+        }}
+      >
+        <AlertDialogContent
+          aria-label={t('simulation.cancel_confirm_title')}
+          data-testid="simulation-cancel-confirm"
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('simulation.cancel_confirm_title')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('simulation.cancel_confirm_desc')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {cancelError && (
+            <p className="sim-cancel-error" role="alert">
+              {cancelError}
+            </p>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={(event) => {
+                if (cancelInFlight) {
+                  event.preventDefault();
+                }
+              }}
+              disabled={cancelInFlight}
+            >
+              {t('simulation.cancel_confirm_dismiss')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="btn btn-danger"
+              onClick={(event) => {
+                event.preventDefault();
+                void handleCancelConfirm();
+              }}
+              disabled={cancelInFlight}
+              data-testid="simulation-cancel-confirm-action"
+            >
+              {t('simulation.cancel_confirm_action')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Main content */}
       <div className="sim-content">

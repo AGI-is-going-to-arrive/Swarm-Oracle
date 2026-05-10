@@ -1,10 +1,48 @@
-__pycache__
-*.pyc
+# Local virtual environments and package metadata
 .venv
-.git
-.pytest_cache
+venv
+env
 *.egg-info
-chroma_data
-*.db
-test_*.py
+build
+dist
+wheelhouse
+
+# Python caches and test artifacts
+__pycache__
+**/__pycache__
+*.py[cod]
+*$py.class
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+.coverage.*
+htmlcov
+.tox
 tests/
+test_*.py
+
+# VCS and editor noise
+.git
+.gitignore
+.DS_Store
+*.swp
+*.swo
+.idea
+.vscode
+
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+
+# Runtime data and generated outputs
+*.db
+*.db-*
+chroma_data
+chroma_data*
+data
+logs
+output
+tmp
+temp

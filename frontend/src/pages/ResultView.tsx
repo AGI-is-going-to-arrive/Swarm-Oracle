@@ -90,6 +90,8 @@ import {
   type ScenarioResultReplayPayload,
 } from '../lib/scenarioReplay';
 import { useEndingRoomStore } from '../stores/endingRoomStore';
+import { useUIPreferencesStore, type ResultViewMode } from '../stores/uiPreferencesStore';
+import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
 import type {
   AgentInfo,
   CampaignFinalizeResult,
@@ -100,6 +102,7 @@ import type {
 } from '../types';
 import ShareModal from '../components/ShareModal';
 import EndingChatModal from '../components/EndingChatModal';
+import { QuotaBadge } from '../components/shared/QuotaBadge';
 import {
   buildCampaignSummaryFromExistingData,
   buildMomentHighlights,
@@ -168,6 +171,9 @@ export default function ResultView() {
   const directorIdentity = getDirectorIdentity();
 
   const { capabilities, loading: capLoading } = useCapabilityCheck('causal_graph');
+  const resultViewMode = useUIPreferencesStore((state) => state.resultViewMode);
+  const setResultViewMode = useUIPreferencesStore((state) => state.setResultViewMode);
+  const isWorkbenchMode = resultViewMode === 'workbench';
   const [cfBranchId, setCfBranchId] = useState<string | null>(null);
   const [notebookOpen, setNotebookOpen] = useState(true);
   const [webSourcesOpen, setWebSourcesOpen] = useState(false);
@@ -1780,6 +1786,34 @@ export default function ResultView() {
           <span className="archive-chip archive-chip--primary">
             {t('common.runtime_preset_label')} · {activeRuntimePresetLabel}
           </span>
+          {activeScenarioId && !isReplayMode && (
+            <>
+              <QuotaBadge scenarioId={activeScenarioId} type="conversation" />
+              <QuotaBadge scenarioId={activeScenarioId} type="replay" />
+            </>
+          )}
+        </div>
+        <div className="result-mode-toggle">
+          <ToggleGroup
+            type="single"
+            value={resultViewMode}
+            onValueChange={(val) => {
+              if (val === 'reader' || val === 'workbench') {
+                setResultViewMode(val as ResultViewMode);
+              }
+            }}
+            variant="outline"
+            size="sm"
+            aria-label={t('result.mode_toggle_label')}
+            className="result-mode-toggle__group"
+          >
+            <ToggleGroupItem value="reader" aria-label={t('result.mode_reader')}>
+              {t('result.mode_reader')}
+            </ToggleGroupItem>
+            <ToggleGroupItem value="workbench" aria-label={t('result.mode_workbench')}>
+              {t('result.mode_workbench')}
+            </ToggleGroupItem>
+          </ToggleGroup>
         </div>
         <div className="result-actions">
           <div className="result-actions__primary">
@@ -1841,7 +1875,7 @@ export default function ResultView() {
             >
               {t('result.leaderboard_link')}
             </button>
-            {activeScenarioId && capabilities?.causal_graph?.enabled && (
+            {isWorkbenchMode && activeScenarioId && capabilities?.causal_graph?.enabled && (
               <a
                 className="btn btn-ghost"
                 href={`/sim/${encodeURIComponent(activeScenarioId)}/causal-map`}
@@ -1849,7 +1883,7 @@ export default function ResultView() {
                 {t('result.causal_graph_link', 'View Causal Graph')}
               </a>
             )}
-            {activeScenarioId && analysisBranch && !isReplayMode && cfBranchId && (
+            {isWorkbenchMode && activeScenarioId && analysisBranch && !isReplayMode && cfBranchId && (
               <a
                 className="btn btn-ghost"
                 href={`/result/${encodeURIComponent(activeScenarioId)}/compare?branch_a=${encodeURIComponent(analysisBranch.id)}&branch_b=${encodeURIComponent(cfBranchId)}`}
@@ -2004,7 +2038,7 @@ export default function ResultView() {
       )}
 
       {/* Explore Deeper Bridge */}
-      {branches.length > 0 && !loading && !capLoading && activeScenarioId && (
+      {isWorkbenchMode && branches.length > 0 && !loading && !capLoading && activeScenarioId && (
         <section id="result-bridge" className="result-bridge">
           <h2 className="result-bridge__heading">{t('result.next_steps_heading')}</h2>
           <div className="result-bridge__grid">
@@ -2162,7 +2196,7 @@ export default function ResultView() {
       )}
 
       {/* Hook Summary Panel */}
-      {activeScenarioId && !loading && !capLoading && (
+      {isWorkbenchMode && activeScenarioId && !loading && !capLoading && (
         <HookSummaryPanel
           scenarioId={activeScenarioId}
           branchId={branches[0]?.id}
@@ -2669,7 +2703,7 @@ export default function ResultView() {
       )}
 
       {/* Agent Roster */}
-      {agents.length > 0 && (
+      {isWorkbenchMode && agents.length > 0 && (
         <section className="result-agents">
           <h2 className="result-agents-title">{t('result.agents')}</h2>
           <div className="result-agents-grid">
@@ -2692,7 +2726,7 @@ export default function ResultView() {
       )}
 
       {/* ── Phase 3 Replay-Safe Integration ───────────────── */}
-      {activeScenarioId && (capabilities?.causal_graph?.enabled || capabilities?.factions?.enabled) && (
+      {isWorkbenchMode && activeScenarioId && (capabilities?.causal_graph?.enabled || capabilities?.factions?.enabled) && (
         <section className="result-extension-section">
           {capabilities?.causal_graph?.enabled && (
             <div className="result-extension-section__item">
@@ -2738,7 +2772,7 @@ export default function ResultView() {
       )}
 
       {/* ── Phase 3 Live-Only Integration ────────────────── */}
-      {id && !isReplayMode && (
+      {isWorkbenchMode && id && !isReplayMode && (
         <section className="result-extension-section">
           {capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
             <>

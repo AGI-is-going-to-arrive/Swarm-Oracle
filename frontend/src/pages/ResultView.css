@@ -777,6 +777,55 @@
   color: var(--text-secondary);
 }
 
+/* ── Mode Toggle (S1-4) ─────────────────────────────── */
+
+.result-mode-toggle {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+  margin-bottom: 4px;
+}
+
+.result-mode-toggle__group {
+  background: var(--surface, rgba(255, 255, 255, 0.6));
+  /* sRGB fallback */
+  background: rgba(255, 255, 255, 0.6);
+  background: oklch(98% 0.005 80 / 0.6);
+  border-radius: 999px;
+  padding: 4px;
+  border: 1px solid var(--border-default, rgba(64, 48, 40, 0.15));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: background-color 200ms ease;
+}
+
+.result-mode-toggle__group [data-state="on"] {
+  background: var(--bg-elevated, rgba(245, 240, 232, 1));
+  background: oklch(94% 0.012 80);
+  color: var(--text-primary);
+  font-weight: 500;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+@media (max-width: 480px) {
+  .result-mode-toggle {
+    margin-top: 12px;
+  }
+  .result-mode-toggle__group {
+    width: 100%;
+    max-width: 280px;
+  }
+  .result-mode-toggle__group > * {
+    flex: 1 1 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .result-mode-toggle__group,
+  .result-mode-toggle__group [data-state="on"] {
+    transition: none;
+  }
+}
+
 /* ── Export Actions ──────────────────────────────────── */
 
 .result-actions {
@@ -1017,6 +1066,37 @@
 .archive-chip--challenge {
   background: var(--color-warning-bg);
   color: var(--color-warning-text);
+}
+
+/* QuotaBadge — S2-3 */
+.quota-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.quota-badge--loading {
+  opacity: 0.6;
+}
+
+.quota-badge--error {
+  background: var(--color-warning-bg, #fef3c7);
+  color: var(--color-warning-text, #92400e);
+}
+
+.quota-badge--disabled {
+  background: color-mix(in oklab, currentColor 8%, transparent);
+  color: var(--text-muted, #6b7280);
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 
 .archive-chip--winner {

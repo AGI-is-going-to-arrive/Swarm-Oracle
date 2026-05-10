@@ -16,6 +16,8 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 ### 主模式
 
 - 首页创建 scenario，支持 5 步进度提示、quick starts、agent/rounds、玩法档位、BYOK，以及 opt-in 的搜索增强推演；高级设置和 BYOK 现在分成两个可折叠区，首屏优先露出问题输入和快速开始。
+- 首次进入首页时会显示 onboarding carousel；用户完成或跳过后状态保存在本地，后续不再重复弹出。
+- 首页启动前会用 AlertDialog 做 launch confirmation；底部安全提示跟随中英语言切换，不写入用户 key 或 provider 细节。
 - 搜索增强当前在首页有两档入口：
   - `沿用服务器默认`：直接复用服务端默认 provider
   - `自定义覆盖`：当前局单独指定 `provider / API key / base URL`
@@ -23,13 +25,26 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。
 - 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑和选择自建 Agent；首页 attach panel 会以卡片展示 persona、knowledge domains 和 decision bias，最多选择 5 个，并只把 identity id 传给主推演。自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。
 - `SimulationView` 负责 live 推演、Classic 分支树、Theater、干预、玩法卡、结构化押注与 capture。Classic 分支卡片仍以 `Branch.title` 为真实标题；标题太短时，前端只补一小段 `description / fork_reason` 线索，方便用户看懂路线差异。
+- live 推演当前支持显式取消：前端会弹确认框，后端把 `parsing / simulating / narrating` 的 scenario 落成 `cancelled` 并请求后台任务停止；`done / error` 不会被取消路径回退成其它终态。
 - `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、导演复盘 / campaign summary、分享、导出、结果追问与 replay/import；因果档案当前改成问题、判定、系统读数、玩家动作、下一步和证据账本，不再把关键记录堆成一长串；导演复盘会优先使用后端 `score_breakdown`，并把 campaign summary、what-if、世界线承诺、押注、干预和关键时刻展示成生涯分变化、等级进度、本局读数和下一步入口；replay snapshot 带 `campaignSummary` 时只读展示，不重新 finalize。当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。`FEATURE_NEW_SOURCES=true` 且有 `family_context` 时，结果页当前还会渲染 `Polymarket / Finance / Academic / News` 四张 source family card；历史 replay 里已有数据但当前 family capability 未开启时，会显示 recorded badge，不把历史来源伪装成 live provider。`polymarket.configured_host=non-us` 时会显示地域限制占位。结果页当前的 `What's Next / 下一步` bridge 会展示 `causal / replay / compare / workbench / agents / share` 入口，disabled 卡片保留可见状态说明，但不再渲染无 `href` 的 `<a>`，文字对比也不再靠整卡 opacity 压低。分享弹窗当前还可导出 1200×630 PNG 卡片，卡片只包含问题、主导结局、可见来源 family 和前 3 个 Agent 名，不写入 BYOK key、base URL 或用户 token。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。结果页里的 `FactionTimeline` 当前会优先跟随正在展开查看的分支；未展开时会落到概率最高分支，并改成真实纵向时间线，`stance / confidence` 等指标直接可见，不再只藏在 tooltip badge 里。结果页的 compare / counterfactual / resume 入口也跟随同一条 analysis branch 语义，不再固定拿 `branches[0]`；resume 面板在可用时会优先让用户选择同分支 checkpoint，并显示 `compressed_summary` 预览，没有 checkpoint 时才回到 round number 输入。结果追问也跟随同一条 analysis branch，把当前结局标题、洞察、分支原因、关键时刻和对比分支传给对话面板。replay 模式下会继续保留 replay-safe 的 `causal graph` 入口和 `FactionTimeline`，但 `counterfactual / resume / result conversation` 这类 live-only 面板仍保持隐藏。标题、空态、轮次与事件标签都会跟随 UI 语言；FactionTimeline lead 文案当前也已走 i18n key + `{{title}}` 插值。`CompareDigestView` 的非活跃 pane 当前会保留更完整的待机镜像，不再是纯黑占位。前端 gated route 当前也把 `feature disabled` 和 `capability probe 失败` 分开显示：`ReplayView` 不再 silent redirect，`KGExplorerView / CompareDigestView / FactionTimeline` 也不再直接把原始错误字符串或所有异常压成空态。
+- ResultView 当前区分 `Reader / Workbench` 两种模式；Reader 是默认阅读模式，Workbench 承载因果图、KG 和节点追问等工作台入口，用户选择会保存在本地偏好里。
 - replay 分支链路当前也已补硬化：`counterfactual` 会在 clone 前校验目标 round 里确实有该 agent 的消息；如果 seed 失败，会清理掉刚创建的脏 branch；`resume` 只有在预占 `simulation lock` 成功后才会返回 started。replay branch runtime lock 当前按 fail-closed 收口：续租返回 `None`、续租抛异常，或本地 lease 已过期时，都不会继续 clone / seed / schedule；heartbeat 会在请求内校验完成后才启动，避免同一请求自己和自己抢 SQLite 锁。若后台续跑期间丢掉预占的 `simulation lock`，任务也会直接 fail-closed 落成 `error`，不会失锁后继续跑；replay branch heartbeat 刷新异常时会释放原 lease，不再把后续请求卡到 TTL 过期。同分支重放更早轮次时，也会同步剪掉过期的 `AgentStateFrame / stance_shift`，不再把旧状态残留在当前图里。
 - graph viz 当前已收口：`CausalReviewView` 会忽略 stale branch 响应，branch 切换时会先清空旧图、导出面板和 server analysis；`graph_analysis` 可用且后端返回分析时，页面会显示 summary、density、component、god nodes、degree bucket 和 cross-branch stats，`serverAnalysis=null` 时不硬造分析。graph route fetch 里的 `scenarioId / debateId`，以及 `CausalReviewView` 返回结果页的 scenario link，也都会先做 `encodeURIComponent()`，带特殊字符的 id 不会再打坏请求或跳转。URL 里带不存在的 `branch_id` 时会直接报错，不再伪装成空图；分支 selector 会优先显示 scenario branch 的标题和概率，拿不到元数据时才回退 branch id；completed branch 当前会在因果图里显示为 `outcome` 结局节点，并由 `led_to` 边接到同分支最近的来源节点；只有源图本身就没有因果边时，`多节点但 0 edges` 才会切到本地化的 event snapshot fallback；如果只是 search / filter 把边筛空，交互图和导出入口仍会保留，不会把有边的图误判成 relationless fallback。
 - 图谱交互当前也会跟随 UI 语言更新节点可访问名称、React Flow controls / minimap 文案、relation list 和 edge evidence tier；CausalReview 节点可拖拽、可选择，guide 里的长 key-node 可见标签会压短但完整 `label (degree)` 仍保留在 `aria-label / title`，search、branch、语言或 compact viewport 变化时才重置布局。compact viewport 下会继续保留显式 controls 和移动端导航提示；图页外层统一走 `100dvh`，移动端 header 和 relationless fallback 都锚在当前壳层内并避开 safe-area。
 - `ArgumentMap` 在 node-only 图时仍保留 screen-reader list 和键盘可达性，状态筛选也不会误把整张 node-only 图筛成空态；强度摘要会跟随当前筛选结果。`KGExplorerView` 当前使用真实 G6 主图和 minimap；搜索 / 类型过滤会更新可视图，不再只更新旁路列表。KG 节点点击会传业务 `kgType`、branch 与 round 给 `NodeConversationSheet`，不会把 G6 shape type 当节点语义。
 - `ExportPanel` 会区分 PNG / SVG 的忙态文案；SVG 导出改成 native SVG layer + node rebuild，长标题会按节点卡宽度裁剪显示，但 `<title>` 和文本内容仍保留完整节点标题，不再依赖 `foreignObject`。`LanguageSwitcher` 的 accessible name 当前也会带可见 `EN / 中文` 文本，语音控制和读屏口径不再分叉。后端 runtime repair 当前以最新 `causal-graph / argument-map` snapshot 为 authority，重复 snapshot 的旧残留会直接删除，不再把 stale 数据合回当前图。
 - CausalReview 节点点击当前会直接打开 `NodeConversationSheet`，并把 event / fork / outcome 的可读摘要作为 origin excerpt 交给后端 prompt context；面板会显示对话目标、卡片意义、前因、后续和相关关系，空态追问也会按事件、分支、结局、知识节点或裁决节点分别生成。大图超过 50 个节点时会用更紧的节点高度、间距和更低 `minZoom`，避免首屏过度撑开。KG 工作台桌面节点点击先显示 `NodeQuickCard` 快览卡；卡片会按视口钳位，用户再选择是否打开完整详情。
+- Agent conversation 历史当前可在节点对话等入口重新加载；列表按 scenario 做 cursor pagination，详情加载后由宿主组件恢复已提交 assistant 内容，迟到的 list/detail 响应不会覆盖新筛选或新节点。
+- 对话与 replay 相关入口当前会显示 `QuotaBadge`，通过后端 quota summary 读取 rolling conversation quota 与 replay branch 用量。
+
+### Admin Setup
+
+- `/admin/setup` 是 3 步本地配置向导：
+  - 选择 provider preset
+  - 填 API key / base URL
+  - 调 `/api/admin/test-llm` 做连接测试
+- 完成后只写入当前浏览器 session 的 BYOK provider policy；不会把 key 写入项目文档或 durable artifact。
+- 后端同时提供 `/api/admin/preflight` 和 `make preflight`，用于检查 SQLite、ChromaDB、LLM、web search、CORS 与数据目录写权限。
 
 ### Debate Arena
 
@@ -125,6 +140,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - Vite production 会额外产出旧浏览器入口
   - 运行时已补 `localStorage`、`crypto.randomUUID`、`<dialog>.showModal()`、`inert`、replay token portability 与关键配色 fallback
   - 但还没有 BrowserStack / Sauce 级实机签收
+- 前端字体当前 self-host 在 `frontend/public/fonts/`，`frontend/src/fonts.css` 用 `font-display: swap` 和 `unicode-range` 拆分；页面入口不再请求 Google Fonts CDN。
 - 主模式 authority 已以后端为准：
   - `director_state_json`
   - `gameplay_state_json`
@@ -162,11 +178,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - frontend ResultView / CausalReviewView / locale 定向：`126 passed`
     - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
-  - backend 全量 `pytest` 最近一次记录为 `2412 passed, 2 skipped`
+  - backend 全量 `pytest` 最近一次记录为 `2477 passed, 3 failed, 2 skipped`；其中两条 LLM gateway 失败已在定向重跑中恢复，剩余 `test_graph_analysis` 仍是既有基线差异
   - frontend `typecheck / lint / build / perf budgets` 通过
   - 本次 bridge/workbench 文案 + CausalReview guide key-node 标签窄集：`87 passed`
   - 本次前端 TypeScript noEmit：通过
-  - frontend 全量 vitest 最近一次记录为 `168 files / 1843 passed`
+  - frontend 全量 vitest 最近一次记录为 `177 files / 1904 passed`
   - 本轮真实验证还包括：
     - Classic 分支标题定向验证：
       - `cd frontend && npm exec -- vitest run src/components/BranchTree.test.tsx`：`5 passed`
@@ -216,6 +232,12 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - 首页 source family disabled tooltip 已跟随当前 UI 语言
     - `ReplayView` capability disabled 不再回首页
     - 结果页 `FactionTimeline` 空态已改成解释性提示
+  - Sprint 0-2 收尾复验当前已补：
+    - backend 本轮触碰文件定向 pytest：`36 passed`
+    - backend 本轮触碰文件 ruff：通过
+    - frontend full vitest：`177 files / 1904 passed`
+    - frontend `tsc / lint / build / i18n parity`：通过
+    - browser matrix：`72 passed / 0 failed`，覆盖 12 项功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375
 - 当前无产品级 active backlog；剩余架构级限制见 `overview/backlog.md`。
 
 ## 文档入口

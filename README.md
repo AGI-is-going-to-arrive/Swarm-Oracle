@@ -50,6 +50,9 @@
 - 最近一轮 Oracle roundtable 回归复验工件位于：
   - `frontend/output/e2e/20260508-fix-roundtable-desktop-zh-final4/summary.json`
   - `frontend/output/e2e/20260508-fix-roundtable-mobile-zh-final2/summary.json`
+- 最近一轮 Sprint 0-2 review/browser 矩阵工件位于：
+  - `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`
+  - 覆盖 12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，当前 `72 passed / 0 failed`
 - 单结局结果页当前只保留：
   - `进入会客厅`
   - `只改一步`
@@ -85,6 +88,7 @@
 | Gameplay Cards | 已落地，14 张卡，走共享 gameplay contract |
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响 |
 | Director Campaign | 已落地，含 goals、risk/resource、commitment、growth、后端 `score_breakdown` 与结果页导演复盘 / 因果档案 |
+| Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight` |
 | Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑自建 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；自建 Agent 不开放 `CORE` 层级 |
 | Counterfactual Replay & Compare | 已落地，支持 counterfactual / resume / compare；resume 当前会优先使用同分支 checkpoint picker，compare 当前采用单活跃 Theater + shared round selector |
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale、readonly replay import；只有分享链接过长并回退到本地只读 `?local=` 时，结果页才会明确显示 `Save local read-only copy` |
@@ -115,6 +119,7 @@ backend/   FastAPI + SQLModel + SQLite + ChromaDB
 - 前端写回 `director_state / gameplay_state` 时会带 `revision` 串行写入；如果遇到 stale conflict，会先回拉最新 authority，再只合并这次本地增量重试。
 - `ending_room` 是独立域，room/thread transcript 与 memory partition 隔离。
 - replay 分享优先走后端 `ReplayArtifact`，失败且 URL token 也不可用时，会回退为本地只读副本链接；Debate 当前会把这条入口明确标成 `Save local read-only copy`。
+- 前端字体已改为 self-hosted `/fonts/*.woff2`，入口页不再请求 Google Fonts CDN。
 
 ## 快速开始
 
@@ -173,6 +178,14 @@ cd backend
 source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
+
+本轮 Sprint 0-2 收尾验证的当前口径：
+
+- frontend `tsc / lint / test / build / i18n parity` 通过。
+- browser matrix：`72 passed / 0 failed`，工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`。
+- backend 本轮触碰文件的定向 pytest 与 ruff 通过。
+- backend 全量 pytest 当前还保留一个既有 `test_graph_analysis` 基线失败；两条 LLM gateway 失败已在重跑中恢复。
+- backend 全量 `ruff check app tests` 仍有既有跨仓库 lint 存量；本轮触碰文件已单独通过 ruff。
 
 完整签收入口：
 

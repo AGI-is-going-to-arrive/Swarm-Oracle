@@ -7,6 +7,7 @@ import GraphNodeCard from '../GraphNodeCard';
 import { useScenarioGraph, type GraphErrorState } from '../../hooks/useScenarioGraph';
 import { traceConnectedPath, buildParallelEdgeIndex, PERF_ANIMATION_LIMIT } from '../../lib/graphTraversal';
 import { resolveCausalNodeColors } from '../../lib/dagEditorialTokens';
+import { truncateCodepoints } from '../../lib/textUtils';
 import useMediaQueryState from '../../hooks/useMediaQueryState';
 import useReducedMotion from '../../hooks/useReducedMotion';
 import AnimatedEdge from '../AnimatedEdge';
@@ -186,7 +187,7 @@ function layoutDagre(
   const flowNodes: Node[] = nodes.map(n => {
     const pos = g.node(n.id);
     const fullLabel = n.label || n.key;
-    const label = fullLabel.length > 50 ? fullLabel.slice(0, 50) + '…' : fullLabel;
+    const label = truncateCodepoints(fullLabel, 50);
     const typeLabel = getCausalTypeLabel(n.type, t);
     const roundLabel = t('causal.round_label', 'Round');
     const ariaLabel = `${t('causal.open_details', 'Open details')}: ${typeLabel} - ${fullLabel}`;

@@ -43,6 +43,7 @@ from app.services.memory import (
 )
 from app.services.narrator import narrate_branch
 from app.services.runtime_lock import runtime_lock_is_active, simulation_lock_key
+from app.services.simulation_cancel import clear_cancel_token, get_cancel_token, is_cancelled
 
 # Phase 3 F2: Causal graph hook (non-blocking, fire-and-forget)
 try:
@@ -95,6 +96,17 @@ _FORK_DEBUG_MAX_SIGNAL_CHARS = 240
 _FORK_DEBUG_MAX_SUMMARY_CHARS = 1200
 _FORK_DEBUG_MAX_DESCRIPTION_CHARS = 240
 _IDENTITY_COMPACTION_STREAM_PROBE_TIMEOUT_SECONDS = 5.0
+
+
+class SimulationCancelled(Exception):
+    def __init__(self, scenario_id: str):
+        super().__init__(scenario_id)
+        self.scenario_id = scenario_id
+
+
+def _check_cancelled(scenario_id: str) -> None:
+    if is_cancelled(scenario_id):
+        raise SimulationCancelled(scenario_id)
 
 
 def _truncate_debug_text(value: Any, *, max_chars: int) -> str:
@@ -269,6 +281,42 @@ def _update_scenario_status(engine, scenario_id: str, status: ScenarioStatus) ->
         scenario.status = status
         session.add(scenario)
         session.commit()
+
+
+async def handle_simulation_cancelled(
+    scenario_id: str,
+    *,
+    ws_callback: Any = None,
+) -> None:
+    """Persist and broadcast the user-cancel terminal state once."""
+    token = get_cancel_token(scenario_id)
+    reason = token.reason if token is not None else "user_cancelled"
+    engine = get_engine()
+    should_broadcast = False
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None:
+            should_broadcast = False
+        elif scenario.status in {ScenarioStatus.DONE, ScenarioStatus.ERROR}:
+            should_broadcast = False
+        elif scenario.status == ScenarioStatus.CANCELLED:
+            should_broadcast = token is not None
+        else:
+            scenario.status = ScenarioStatus.CANCELLED
+            session.add(scenario)
+            session.commit()
+            should_broadcast = True
+
+    if should_broadcast and ws_callback:
+        await ws_callback(scenario_id, {"type": "simulation_cancelled", "reason": reason})
+
+    clear_cancel_token(scenario_id)
+    try:
+        from app.api.helpers import clear_running_task
+
+        clear_running_task(scenario_id)
+    except Exception:
+        logger.debug("Failed to clear running task for cancelled simulation", exc_info=True)
 
 
 def _pick_theater_ending_payload(
@@ -931,6 +979,38 @@ async def run_simulation(
     llm_overrides: dict | None = None,
     branch_id: str | None = None,
 ):
+    """Execute simulation with user-cancel handling.
+
+    Source-wiring sentinel: Phase 3 hooks remain in _run_simulation_impl via:
+    await asyncio.to_thread(
+                        _causal_append
+    await asyncio.to_thread(
+                        _factions_process
+    await asyncio.to_thread(
+                        _checkpoint_write
+    """
+    try:
+        await _run_simulation_impl(
+            scenario_id,
+            ws_callback=ws_callback,
+            llm_overrides=llm_overrides,
+            branch_id=branch_id,
+        )
+    except SimulationCancelled:
+        await handle_simulation_cancelled(scenario_id, ws_callback=ws_callback)
+    except asyncio.CancelledError:
+        if is_cancelled(scenario_id):
+            await handle_simulation_cancelled(scenario_id, ws_callback=ws_callback)
+            return
+        raise
+
+
+async def _run_simulation_impl(
+    scenario_id: str,
+    ws_callback: Any = None,
+    llm_overrides: dict | None = None,
+    branch_id: str | None = None,
+):
     """Execute the full simulation pipeline (Stage 2 + Stage 3).
 
     Args:
@@ -1178,6 +1258,7 @@ async def run_simulation(
 
     # ── Simulation loop ──────────────────────────────
     for round_num in range(start_round, sim_rounds + 1):
+        _check_cancelled(scenario_id)
         active_branches = [b for b in all_branches if b["status"] == "ACTIVE"]
         if not active_branches:
             break
@@ -1202,6 +1283,7 @@ async def run_simulation(
             }
 
         for branch_info in active_branches:
+            _check_cancelled(scenario_id)
             current_branch_id = branch_info["id"]
 
             # 0) Check for pending user interventions (Butterfly Effect)
@@ -1232,6 +1314,7 @@ async def run_simulation(
 
             if hierarchical and leader_agents:
                 # P3-A: hierarchical mode — only Leaders call LLM
+                _check_cancelled(scenario_id)
                 messages = await _gather_hierarchical_messages(
                     engine, scenario_id, current_branch_id, round_id, round_num,
                     leader_agents, worker_agents, agent_to_group, group_leaders,
@@ -1246,7 +1329,9 @@ async def run_simulation(
                     web_context_block=web_context_block,
                     scenario_user_id=scenario_user_id,
                 )
+                _check_cancelled(scenario_id)
             else:
+                _check_cancelled(scenario_id)
                 messages = await _gather_agent_messages(
                     engine, scenario_id, current_branch_id, round_id, round_num, agents, setting_bg, key_variable,  # noqa: E501
                     intervention_text=intervention_text,
@@ -1259,6 +1344,7 @@ async def run_simulation(
                     web_context_block=web_context_block,
                     scenario_user_id=scenario_user_id,
                 )
+                _check_cancelled(scenario_id)
 
             # 2) Round summary
             if detected_language.startswith("Chinese"):
@@ -1274,19 +1360,26 @@ async def run_simulation(
             # Phase 3 F2: Causal graph — record round nodes (non-blocking)
             if _CAUSAL_AVAILABLE and settings.FEATURE_CAUSAL_GRAPH:
                 try:
+                    _check_cancelled(scenario_id)
                     await asyncio.to_thread(
                         _causal_append, scenario_id, current_branch_id, round_num, messages,
                     )
+                    _check_cancelled(scenario_id)
+                except SimulationCancelled:
+                    raise
                 except Exception:
                     logger.debug("causal_graph append failed (non-blocking)", exc_info=True)
 
             # Phase 3 F5: Faction detection + WS broadcast (non-blocking)
             if _FACTIONS_AVAILABLE and settings.FEATURE_FACTIONS:
                 try:
+                    # H5 fix: cancel guard around factions to_thread.
+                    _check_cancelled(scenario_id)
                     _faction_result = await asyncio.to_thread(
                         _factions_process,
                         scenario_id, current_branch_id, round_num, messages,
                     )
+                    _check_cancelled(scenario_id)
                     if _faction_result:
                         if _faction_result.get("factions"):
                             await push({
@@ -1306,12 +1399,16 @@ async def run_simulation(
                                     "branch_id": current_branch_id,
                                 },
                             })
+                except SimulationCancelled:
+                    # H5 fix: cancel must not be swallowed by the non-blocking guard.
+                    raise
                 except Exception:
                     logger.debug("factions process_round failed (non-blocking)", exc_info=True)
 
             # Phase 3 F4: Checkpoint snapshot (non-blocking)
             if _CHECKPOINT_AVAILABLE and settings.FEATURE_COUNTERFACTUAL_REPLAY:
                 try:
+                    _check_cancelled(scenario_id)
                     bb_snapshot = None
                     _cp_bb = blackboards.get(current_branch_id)
                     if _cp_bb is not None:
@@ -1320,6 +1417,9 @@ async def run_simulation(
                         _checkpoint_write,
                         scenario_id, current_branch_id, round_num, agents, bb_snapshot,
                     )
+                    _check_cancelled(scenario_id)
+                except SimulationCancelled:
+                    raise
                 except Exception:
                     logger.debug("checkpoint write failed (non-blocking)", exc_info=True)
 
@@ -1399,6 +1499,7 @@ async def run_simulation(
                     fork_debug_entry["decision"] = "skipped"
                     _record_fork_debug_trace(engine, scenario_id, fork_debug_entry)
                 else:
+                    _check_cancelled(scenario_id)
                     fork_result = await _detect_fork(
                         engine,
                         current_branch_id,
@@ -1409,6 +1510,7 @@ async def run_simulation(
                         prompt_variant=fork_prompt_variant,
                         recent_summary=recent_summary,
                     )
+                    _check_cancelled(scenario_id)
                     fork_debug_entry["detector_invoked"] = True
                     fork_debug_entry["detector_result"] = _sanitize_fork_debug_result(
                         fork_result,
@@ -1464,6 +1566,7 @@ async def run_simulation(
                         # Phase 3 F2: Record fork in causal graph
                         if _CAUSAL_AVAILABLE and settings.FEATURE_CAUSAL_GRAPH:
                             try:
+                                _check_cancelled(scenario_id)
                                 await asyncio.to_thread(
                                     _causal_append,
                                     scenario_id, current_branch_id, round_num, [],
@@ -1473,6 +1576,9 @@ async def run_simulation(
                                         "children": [b["id"] for b in new_branch_infos],
                                     },
                                 )
+                                _check_cancelled(scenario_id)
+                            except SimulationCancelled:
+                                raise
                             except Exception:
                                 logger.debug("causal_graph fork append failed", exc_info=True)
 
@@ -1525,7 +1631,9 @@ async def run_simulation(
 
     narrated_branch_payloads: list[dict[str, Any]] = []
     for b in all_branches:
+        _check_cancelled(scenario_id)
         if b["status"] in ("ACTIVE", "COMPLETED"):
+            _check_cancelled(scenario_id)
             narration = await _narrate_branch_data(
                 engine,
                 b["id"],
@@ -1535,6 +1643,7 @@ async def run_simulation(
                 web_context_block=web_context_block,
                 question=scenario.question or "",
             )
+            _check_cancelled(scenario_id)
             _save_narration(engine, b["id"], narration)
             await push({
                 "type": "narration",
@@ -1655,7 +1764,12 @@ async def run_simulation(
             return list(set(_compaction_worklist))
 
         try:
+            # H5 fix: cancel guard around identity lifecycle to_thread.
+            _check_cancelled(scenario_id)
             _compaction_pairs = await asyncio.to_thread(_run_identity_lifecycle)
+            _check_cancelled(scenario_id)
+        except SimulationCancelled:
+            raise
         except Exception:
             _compaction_pairs = []
             logger.warning(
@@ -1704,6 +1818,9 @@ async def run_simulation(
             schedule_background_task(_run_compaction(_compaction_pairs))
 
     if scenario_finished:
+        # H5 fix: final cancel guard before broadcasting simulation_done so a
+        # late user cancel does not race the terminal "done" broadcast.
+        _check_cancelled(scenario_id)
         await push({"type": "simulation_done"})
 
     if branch_id is None:
@@ -1739,8 +1856,8 @@ async def _gather_agent_messages(
     - agent_speak: Final parsed message (content + emotion + diverge)
 
     When blackboard is provided, agents read shared briefing instead of
-    raw DB messages. Results are batch-posted to the blackboard AFTER
-    asyncio.gather returns (concurrency-safe).
+    raw DB messages. Agent utterances are persisted before their public
+    broadcast so refresh/resync cannot lose a message that the browser saw.
     """
     semaphore = asyncio.Semaphore(get_runtime_parallelism_limit())
 
@@ -1786,6 +1903,8 @@ async def _gather_agent_messages(
                 and scenario_user_id
             ):
                 try:
+                    # H5 fix: cancel guard around cross-scenario memory to_thread.
+                    _check_cancelled(scenario_id)
                     from app.services.vector_store import retrieve_identity_memories
                     cross_memories = await asyncio.to_thread(
                         retrieve_identity_memories,
@@ -1794,12 +1913,16 @@ async def _gather_agent_messages(
                         query_text=topic,
                         n_results=3,
                     )
+                    _check_cancelled(scenario_id)
                     if cross_memories:
                         cross_hint = "\n".join(
                             f"- {m.get('summary', '')}"
                             for m in cross_memories
                             if m.get("summary")
                         )
+                except SimulationCancelled:
+                    # H5 fix: cancel must not be swallowed by the non-fatal guard.
+                    raise
                 except Exception:
                     logger.debug(
                         "cross-scenario hint retrieval failed for agent %s (non-fatal)",
@@ -1860,6 +1983,8 @@ async def _gather_agent_messages(
             try:
                 _overrides = llm_overrides or {}
 
+                # H5 fix: per-agent cancel guard before each LLM call.
+                _check_cancelled(scenario_id)
                 # Pass-1: natural language generation (no JSON constraint)
                 with llm_request_scope(purpose="scenario_turn_generation"):
                     raw_text = await llm_call(
@@ -1873,6 +1998,7 @@ async def _gather_agent_messages(
                             else 0.8
                         ),
                     )
+                _check_cancelled(scenario_id)
 
                 # Pass-2: lightweight metadata extraction (bilingual + rich emotion vocabulary)
                 from app.services.llm_client import format_untrusted_text_block
@@ -1916,12 +2042,16 @@ async def _gather_agent_messages(
                         temperature=0.2,
                         fallback_mode="agent_message",
                     )
+                # H5 fix: cancel guard after Pass-2 metadata extraction.
+                _check_cancelled(scenario_id)
 
                 content = result.get("content", "") or raw_text
                 emotion = result.get("emotion", "neutral")
                 diverge = result.get("diverge")
                 if diverge and diverge.lower() in ("null", "none", ""):
                     diverge = None
+            except SimulationCancelled:
+                raise
             except Exception as exc:
                 logger.warning("Agent %s failed: %s", agent["name"], exc)
                 content = raw_text if raw_text else (
@@ -1938,7 +2068,21 @@ async def _gather_agent_messages(
                 "diverge": diverge,
             }
 
-            # Push final parsed message immediately (no batching)
+            _save_messages(
+                engine,
+                [
+                    {
+                        "round_id": round_id,
+                        "agent_id": msg["agent_id"],
+                        "content": msg["content"],
+                        "emotion": msg["emotion"],
+                        "diverge": msg.get("diverge"),
+                    }
+                ],
+            )
+            _check_cancelled(scenario_id)
+
+            # Push final parsed message only after it is durable.
             await push_event({
                 "type": "agent_speak",
                 "data": {
@@ -1988,23 +2132,10 @@ async def _gather_agent_messages(
 
             return msg
 
+    _check_cancelled(scenario_id)
     tasks = [process_agent(a) for a in agents]
     results = await asyncio.gather(*tasks)
-
-    # Batch-post results to Blackboard (after gather — concurrency-safe)
-    _save_messages(
-        engine,
-        [
-            {
-                "round_id": round_id,
-                "agent_id": msg["agent_id"],
-                "content": msg["content"],
-                "emotion": msg["emotion"],
-                "diverge": msg.get("diverge"),
-            }
-            for msg in results
-        ],
-    )
+    _check_cancelled(scenario_id)
 
     if blackboard is not None:
         for msg in results:
@@ -2154,6 +2285,7 @@ async def _gather_hierarchical_messages(
         worker_agents = [a for a in worker_agents if a.get("source_type") != "custom"]
 
     # Step 1: Gather Leader messages (with LLM calls)
+    _check_cancelled(scenario_id)
     leader_messages = await _gather_agent_messages(
         engine, scenario_id, branch_id, round_id, round_num,
         leader_agents, setting_bg, topic,
@@ -2167,6 +2299,7 @@ async def _gather_hierarchical_messages(
         web_context_block=web_context_block,
         scenario_user_id=scenario_user_id,
     )
+    _check_cancelled(scenario_id)
 
     # Build leader name → message lookup
     leader_msg_map: dict[str, dict] = {}

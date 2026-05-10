@@ -79,6 +79,7 @@
       "byok_tpm_help": "Maximum tokens per minute. This caps long-context and high-round runs.",
       "byok_hint": "Supports all OpenAI-compatible APIs (leave empty to use server defaults)",
       "byok_storage_notice": "Saved only for the current tab session and cleared when the tab closes",
+      "security_notice": "AI predictions are for entertainment and reference only. Do not use them for real financial, medical, or legal decisions.",
       "byok_test": "🔗 Test Connection",
       "byok_testing": "Testing...",
       "byok_test_ok": "✅ Connected",
@@ -540,6 +541,9 @@
       "next_replay_trace_desc": "Step through the simulation timeline",
       "next_share": "Share Results",
       "next_share_desc": "Generate a shareable summary",
+      "mode_reader": "Reader",
+      "mode_workbench": "Workbench",
+      "mode_toggle_label": "Result view mode",
       "bridge_workbench_title": "Open Graph Workbench",
       "bridge_workbench_desc": "Inspect causality, knowledge graph, and node questions together",
       "bridge_agents": "Agent Library",
@@ -1379,6 +1383,22 @@
       "knowledge_tooltip": "Knowledge domains are injected into the Agent's prompt, influencing expertise and approach to specific topics",
       "bias_tooltip": "Decision bias influences the Agent's stance when weighing trade-offs"
     },
+    "agent_workshop": {
+      "bias_title": "Decision Bias Profile",
+      "bias_hint": "Adjust how this agent makes decisions",
+      "bias_caution": "Caution",
+      "bias_optimism": "Optimism",
+      "bias_conservatism": "Conservatism",
+      "bias_risk_tolerance": "Risk Tolerance",
+      "bias_creativity": "Creativity"
+    },
+    "agent_library": {
+      "custom_group": "My Agents",
+      "generated_group": "System Generated",
+      "generated_badge": "Generated",
+      "generated_no_edit": "System-generated agents cannot be edited",
+      "generated_no_delete": "System-generated agents cannot be deleted"
+    },
     "causal": {
       "title": "Causal Graph",
       "nodes": "nodes",
@@ -1543,9 +1563,9 @@
       "legend_edges": "Relations",
       "legend_confidence": "Confidence",
       "status_accepted_tip": "Accepted by opponent or judge",
-      "status_standing_tip": "Still standing, not rebutted",
-      "status_unaddressed_tip": "Not yet addressed",
-      "status_rebutted_tip": "Has been rebutted",
+      "status_standing_tip": "Standing — this argument holds and has not been rebutted",
+      "status_unaddressed_tip": "Unaddressed — not yet engaged",
+      "status_rebutted_tip": "Rebutted — this argument was countered",
       "status_rejected_tip": "Rejected by judge",
       "legend_edge_supports": "Supports",
       "legend_edge_rebuts": "Rebuts",
@@ -1635,7 +1655,12 @@
       "domain_humanities": "Humanities",
       "domain_social": "Social",
       "domain_nature": "Nature",
-      "domain_pragmatic": "Pragmatic"
+      "domain_pragmatic": "Pragmatic",
+      "metrics_title": "Growth Metrics",
+      "metrics_scenarios": "Participated in {{count}} scenarios",
+      "metrics_shifts": "Shifted stance {{count}} times",
+      "metrics_growth": "{{count}} growth events recorded",
+      "metrics_empty": "No growth data yet"
     },
     "export": {
       "png": "Export PNG",
@@ -1880,6 +1905,13 @@
       "ending_most_likely": "Most Likely",
       "section_predictions": "Prediction Scores"
     },
+    "quota": {
+      "remaining": "{{count}} remaining",
+      "exhausted": "Quota exhausted",
+      "conversation_label": "Conversations",
+      "replay_label": "Replays",
+      "load_failed": "Quota unavailable"
+    },
     "conversation": {
       "sheet": {
         "title": "Conversation",
@@ -1972,6 +2004,17 @@
       },
       "cta": {
         "continue_chatting": "Continue chatting"
+      },
+      "history": {
+        "load_history": "Load History",
+        "loading": "Loading conversations...",
+        "load_failed": "Failed to load conversations.",
+        "retry": "Retry",
+        "no_history": "No conversation history",
+        "thread_count": "{{count}} messages",
+        "select_thread": "Select a conversation to reload",
+        "load_more": "Load more",
+        "untitled_thread": "Untitled conversation"
       }
     },
     "source": {
@@ -2149,6 +2192,70 @@
       "related_incoming": "Source: {{node}} · {{relation}}",
       "related_outgoing": "Next: {{relation}} · {{node}}",
       "related_more": "+{{count}} more links"
+    },
+    "setup": {
+      "title": "SwarmOracle Setup",
+      "step_count": "Step {{current}} of {{total}}",
+      "progress_aria": "Setup wizard progress",
+      "step1_title": "Choose your LLM provider",
+      "step2_title": "Configure API access",
+      "step3_title": "Test the connection",
+      "step3_intro": "Run a quick probe against your provider to confirm the credentials work.",
+      "provider_openai": "OpenAI",
+      "provider_anthropic": "Anthropic",
+      "provider_deepseek": "DeepSeek",
+      "provider_ollama": "Ollama (local)",
+      "provider_lmstudio": "LM Studio (local)",
+      "provider_custom": "Custom endpoint",
+      "provider_custom_hint": "Enter your own base URL on the next step",
+      "api_key_label": "API key",
+      "api_key_placeholder": "sk-…",
+      "base_url_label": "Base URL",
+      "optional_label": "optional",
+      "no_key_hint": "Local providers like Ollama and LM Studio do not require an API key.",
+      "test_button": "Test connection",
+      "testing": "Testing…",
+      "test_idle": "Ready to test.",
+      "test_success": "Connected successfully.",
+      "test_failure": "Connection failed.",
+      "test_failure_network": "Network error — check the base URL and try again.",
+      "test_failure_parse": "Server returned an unexpected response.",
+      "show_log": "Show raw response",
+      "hide_log": "Hide raw response",
+      "summary_provider": "Provider",
+      "summary_base_url": "Base URL",
+      "summary_api_key": "API key",
+      "summary_no_key": "(none)",
+      "back": "Back",
+      "next": "Next",
+      "finish": "Finish",
+      "skip": "Skip for now"
+    },
+    "onboarding": {
+      "welcome_title": "Welcome to SwarmOracle",
+      "welcome_desc": "Pose any \"what if\" question and watch a swarm of AI agents debate, deliberate, and surface alternate worldlines. Here are the four core gameplay modes plus a peek at the advanced toolkit.",
+      "roundtable_title": "Worldline Roundtable",
+      "roundtable_desc": "Multiple representatives gather around a virtual table to debate divergent futures. Steer the conversation, switch panelists, and watch consensus form (or fracture) in real time.",
+      "chamber_title": "Oracle Chamber",
+      "chamber_desc": "Step into a private room with a single agent for a deep, focused dialogue. Ask follow-ups, anchor quotes, and excavate the reasoning behind a chosen worldline.",
+      "one_move_title": "One Move Only",
+      "one_move_desc": "Change just one decision and replay the simulation to feel the butterfly effect. Compare branches side by side to see how a single nudge ripples across timelines.",
+      "advanced_title": "Advanced Toolkit",
+      "advanced_desc": "Build your own agents, explore causal graphs, replay traces, and analyze emergent factions. Look for the workshop, graph workbench, and counterfactual panels once a scenario is running.",
+      "skip": "Skip",
+      "back": "Back",
+      "next": "Next",
+      "done": "Get started",
+      "step_indicator": "Step {{current}} of {{total}}"
+    },
+    "simulation": {
+      "cancel_button": "Cancel Simulation",
+      "cancel_confirm_title": "Cancel Simulation?",
+      "cancel_confirm_desc": "This will stop all ongoing reasoning. This action cannot be undone.",
+      "cancel_confirm_action": "Yes, Cancel",
+      "cancel_confirm_dismiss": "Continue",
+      "cancelled_title": "Simulation Cancelled",
+      "cancelled_desc": "The simulation was cancelled."
     }
   }
 }

@@ -25,7 +25,8 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、首次引导和底部安全提示 |
+| SetupWizardView | `frontend/src/pages/SetupWizardView.tsx` | `/admin/setup` 3 步 provider 配置向导；选择 preset、填 API key/base URL、测试连接并写入 session-scoped provider policy |
 | AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、tier badge、profile modal、编辑/删除入口 |
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains 与 `IMPORTANT / CROWD` tier 选择 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
@@ -91,6 +92,7 @@
 
 - 前端会按 `sequence / event_id` 做重复丢弃与时序修正。
 - store 负责保持 phase/branch 状态单调，不让旧事件覆盖新状态。
+- `simulationStore` 把 `cancelled` 当终态处理；取消后晚到的 `status / state` 事件不会再把页面回退到 `simulating` 或重新触发 WS 重连。
 - `simulationStore` 的消息去重集（`seenMessageKeys`）按 scenario ID 隔离，切换场景时自动重置，避免跨场景 hash 碰撞。
 - `useSimulationWS` 在 `scenarioId` 为空或 `ready` 为 false 时不会发起连接；重连使用 `connectRef` 模式防止闭包过期；初始连接也会调用 `requestScenarioResync` 补拉状态（与 `useEndingRoomWS` 行为对齐）。
 - 三个 WS hooks 均支持首帧 auth：如果 `localStorage` 有 token，`onopen` 时发送 `{"type":"auth","token":"..."}`，收到 `auth_ok` 后才触发 resync；无 token 时直接 resync（兼容 auth 未开启场景）。
@@ -122,6 +124,10 @@
   - 只要命中 `L2 fuzzy candidate` 才会弹确认框
   - 用户可选 `复用已有身份` 或 `创建新身份`
   - preflight 失败时会阻断启动并显示错误，不会静默绕过确认
+- InputView 当前还有两层启动确认：
+  - 首次访问会显示 capability-aware onboarding carousel；完成或跳过后写入 localStorage
+  - 真正 launch 前使用 Radix AlertDialog 展示问题和本局设置，关闭后把焦点还给 textarea
+- InputView 底部安全提示当前走 locale key；中英切换时会一起更新。
 - InputView 当前也会在 `custom_agents` capability 开启时显示 Agent attach panel：
   - 选中的自建 Agent 会通过 `customAgentIdentityIds -> custom_agent_identity_ids` 传给主推演
   - 创建 Debate 时，会把当前选中的前 2 个自建 Agent 透传成 `customAgentIds -> custom_agent_ids`
@@ -206,6 +212,13 @@
 | `MemoryTimeline.tsx` | `frontend/src/components/MemoryTimeline.tsx` | Agent 记忆时间线；样式已从组件内联迁到 CSS，按 scenario/time 组织事件 |
 | `ProgressIndicator.tsx` | `frontend/src/components/ProgressIndicator.tsx` | 5 步流程 pill；当前用在 InputView / ResultView，`currentStep` 会钳到有效范围 |
 | `ShareArtifact.tsx` | `frontend/src/components/ShareArtifact.tsx` | 1200×630 offscreen OG card；通过 html2canvas 导出 PNG，只包含公开展示用摘要字段 |
+| `SetupWizardView.tsx` / `Setup/*` | `frontend/src/pages/SetupWizardView.tsx` / `frontend/src/components/Setup/` | `/admin/setup` provider 向导、preset radio card 和 LLM connection test |
+| `OnboardingGuide.tsx` / `useOnboardingState.ts` | `frontend/src/components/Onboarding/` / `frontend/src/hooks/useOnboardingState.ts` | 首页首次引导 carousel；完成状态写入 localStorage，存储不可用时不阻塞用户 |
+| `ConversationHistoryPicker.tsx` | `frontend/src/components/ConversationHistoryPicker.tsx` | scenario 级 Agent Conversation 历史选择器；负责分页、skeleton、重试和 stale response guard |
+| `QuotaBadge.tsx` | `frontend/src/components/shared/QuotaBadge.tsx` | conversation / replay quota pill；读取 `/api/quota/summary` |
+| `DecisionBiasSlider.tsx` | `frontend/src/components/Controls/DecisionBiasSlider.tsx` | Agent Workshop 的 5 维 decision bias slider；0-100 UI 映射到 0-1 payload |
+| `uiPreferencesStore.ts` | `frontend/src/stores/uiPreferencesStore.ts` | ResultView `reader / workbench` 模式偏好；使用 localStorage 持久化 |
+| `alert-dialog.tsx` | `frontend/src/components/ui/alert-dialog.tsx` | 共享 Radix AlertDialog wrapper；当前用于 InputView launch confirm 和 Simulation cancel confirm |
 
 ## 当前边界
 
@@ -240,6 +253,7 @@
   - `thinkingAgentCount`
   - `thinkingAgents`
   - classic live-fork fixture 已能直接观测“谁正在说话前的 thinking 态”
+- `SimulationView` 当前的 cancel 按钮走 Radix AlertDialog；确认后调用 `POST /api/scenario/{id}/cancel`，收到 cancelled 后保持终态，不把旧 WS 事件当成新一轮 live 状态。
 - Classic 分支树当前直接消费 `store.branches[].title`。
   如果标题过短，前端只在展示层拼上 `description / fork_reason` 的第一句线索；干预弹窗等业务动作仍拿原始标题。
 - `SimulationView` 的默认 director objectives 只在后端和本地 meta 都没有 objectives 时补一次；seed key 按 `scenario / question / gameplay profile / signature card` 计算，避免同一局反复 backfill。
@@ -264,6 +278,14 @@
 - `ReplayView` 当前在 `replay_trace` capability 关闭时会显示显式 unavailable surface，不再 silent redirect 到首页；如果 capability 探针自己失败，也会给出单独的 retry surface。trace 计数标签当前用静态本地化 copy（`Frame / Branches`、`帧 / 分支`），不会再把 `{{count}}` 模板串露到页面上。trace 数据通过 `after / limit / root_branch_id` 做 cursor pagination；空第一页但后端返回 `next_cursor` 时仍保留 `Load more`，rapid click 会被 loading guard 收口，branch filter 变化时会重置旧 cursor。
 - `KGExplorerView` 当前会把 capability 失败、feature disabled、graph fetch 失败分开显示；graph fetch 失败时会清掉旧图，再给出本地化错误和 retry。主图用真实 G6 canvas 渲染，minimap 是 G6 minimap plugin，不是占位卡片；search / type filter 会更新图数据本身。点击节点时，`NodeConversationSheet` 收到的是业务 `kgType`、节点 label、branch 与 round，不再使用 G6 shape type。
 - KG / causal / argument / result 四种入口当前都会给 `NodeConversationSheet` 传 surface-specific origin。空态问题会按卡片类型和上下文生成：事件问前因后果，分支问分岔路线，结局问落点和对比分支，知识图谱问邻近概念，裁决图谱问主张/证据/裁决关系。
+- `ConversationHistoryPicker` 是 Agent Conversation 历史的共享入口：
+  - 当前用于 `EndingChatModal`、`RoundtableAgentChat` 和 `NodeConversationSheet`
+  - 列表调用 `GET /api/scenario/{id}/conversations`
+  - 详情调用 `GET /api/conversation/{thread_id}`
+  - 支持 cursor pagination、skeleton、错误重试和空态；scenario/filter 切换时会丢弃迟到响应
+  - `NodeConversationSheet` 选择历史后会恢复最后一条已提交 assistant 回复
+- `QuotaBadge` 当前从 `GET /api/quota/summary` 读取 conversation / replay bucket；scenario 或 bucket 切换时，迟到响应不会覆盖新 badge。
+- `ResultView` 当前默认进入 Reader mode；Workbench mode 会持久化到 `swarm-ui-preferences`，并显示 graph / KG / workbench-only panels。结果页 header 会同时显示 conversation/replay `QuotaBadge`。
 - `WorkbenchView` 当前三种 tab 的能力门槛分开判断：`graph` 只要求 causal graph，`kg` 只要求 KG capability，`split` 才要求两者都可用。结果页的 workbench bridge 会把当前 analysis branch 写进 query，进入工作台后仍可保留同一条分析分支语义。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - ending-room artifact/local replay 当前统一落到 `/result/replay?...`；不再要求先拼出 `/result/:scenarioId?...` 才能读出来。artifact payload 里的 `scenario.total_rounds=null` 也会被前端 replay 正常接受，不会再把只读页打成空结果。
@@ -478,8 +500,9 @@
   - `cd frontend && npm run test -- --run src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts --reporter=verbose`：`87 passed`
   - `cd frontend && npx tsc --noEmit`：通过
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
-- frontend full vitest 本 session fresh rerun：`168 files / 1843 passed`。
+- frontend full vitest 本 session fresh rerun：`177 files / 1904 passed`。
 - frontend i18n key + placeholder parity：通过。
+- Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 - Classic 分支标题本轮已补定向验证：
   - `npm exec -- vitest run src/components/BranchTree.test.tsx`：`5 passed`
   - `npm exec -- eslint src/components/BranchTree.tsx src/components/BranchNode.tsx src/components/BranchTree.test.tsx src/components/branchTitle.ts`：通过
@@ -545,6 +568,10 @@
   - 全局 token 在 `index.css` 里先声明 fallback，再用 `oklch()` / `color-mix()` 覆盖
   - `SimulationView`、`ResultView`、`WorldlineRoundtableView` 的高流量表面已补关键 fallback
   - 目的是让旧 Safari / Firefox 在不支持现代颜色函数时仍保持可读
+- 字体当前通过 `src/fonts.css` 和 `public/fonts/*.woff2` 本地提供：
+  - `index.html` 不再 preconnect 或加载 Google Fonts
+  - `font-display: swap` 和 `unicode-range` 会让浏览器按实际文本拉取需要的字体分片
+  - 当前字体目录约 200 个 woff2 文件，约 11 MB
 - `ResumePanel` 当前会：
   - 只在用户已选分支且 round 为有效整数时允许提交
   - `counterfactual_replay` capability 可用时优先加载同 scenario / branch 的 checkpoints

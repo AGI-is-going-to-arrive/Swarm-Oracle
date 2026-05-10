@@ -37,6 +37,8 @@
   - 当前至少包括：
     - agent identity / workshop
     - campaign profile 系列
+    - admin diagnostics
+    - quota summary
     - 按 scenario / ending-room / thread owner 读取或写入的路由
 - 这类路由常见业务错误包括：
   - `SESSION_PRINCIPAL_REQUIRED`
@@ -52,6 +54,8 @@
 | `GET` | `/api/scenario/{scenario_id}/agents` | 获取 agent 列表 |
 | `GET` | `/api/scenario/{scenario_id}/groups` | 获取分层分组信息 |
 | `GET` | `/api/scenario/{scenario_id}/story` | 获取叙事结果 |
+| `GET` | `/api/scenario/{scenario_id}/conversations` | 分页列出该 scenario 下的 Agent Conversation thread 摘要 |
+| `POST` | `/api/scenario/{scenario_id}/cancel` | 请求取消仍在运行中的 scenario |
 | `GET` | `/api/scenarios` | 分页列出 scenario |
 | `DELETE` | `/api/scenario/{scenario_id}` | 级联删除 scenario 与关联数据 |
 | `POST` | `/api/scenario/import-replay` | 把 replay 快照导入为本地 scenario |
@@ -80,6 +84,8 @@
   - 前端通常先调用 `POST /api/agents/identities/preflight`
   - `reuse_existing` 需要带 `identity_id`，后端会校验它属于当前 `user_id`
   - `create_new` 会让真正的 identity 解析跳过 L2 fuzzy reuse
+- `GET /api/scenario/{scenario_id}/conversations` 受 `FEATURE_AGENT_CONVERSATION` gate，要求 signed principal 能看到该 scenario；`cursor` 是 offset cursor，`limit` 范围 `1..50`，返回项只带 thread 摘要，完整 turn 历史仍走 `GET /api/conversation/{thread_id}`。
+- `POST /api/scenario/{scenario_id}/cancel` 只接受 `parsing / simulating / narrating / cancelled`；`done / error` 会返回 `409 SIMULATION_NOT_RUNNING`。成功请求会把 scenario 持久化到 `cancelled`，并尽量取消本进程里的后台 task。
 - 删除 scenario 时会一并清理 replay、prediction、campaign side effect、ending-room 与向量数据。
 
 ## Replay Artifact
@@ -170,6 +176,20 @@
   `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst`。
   除 `web_search` 外，其余 12 个都是功能开关 registry entry，至少带 `enabled / version`。
 
+## Admin Diagnostics
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/admin/preflight` | 返回 SQLite、ChromaDB、LLM、web search、CORS 与 volume 预检结果 |
+| `POST` | `/api/admin/test-llm` | 用当前请求里的 provider 配置做一次 LLM 连接测试 |
+
+关键约束：
+
+- 两个 endpoint 都走业务 REST session gate。
+- `test-llm` 当前兼容 `api_key / llm_api_key`、`base_url / llm_base_url`、`model / llm_model` 这几组字段名。
+- `base_url` 会先做 URL 解析和 allowlist 校验；官方托管 host 只接受 `https`，本地开发 host 才允许 `http`。
+- 这些接口只用于本地配置和诊断，不会把 API key 写入项目文档、replay artifact 或 scenario 记录。
+
 ## Debate
 
 | 方法 | 路径 | 说明 |
@@ -237,6 +257,19 @@
 - scenario 删除打断 stream 时，服务端当前会补一条终态 `turn_error`，并带 `code: "SCENARIO_DELETED"`；如果删除发生在首个 `turn_started` 前，也会直接收成这条终态。
 - 已经进入流式阶段的 user abort / 连接断开仍收口到 `USER_ABORTED`。
 
+## Quota
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/quota/summary` | 返回当前用户的 conversation quota，并可选返回某个 scenario 的 replay quota |
+
+关键约束：
+
+- 开启 `SESSION_SECRET` 后要求 signed principal；裸 `SESSION_SECRET` 不能读取 owner-scoped quota。
+- 不带 `scenario_id` 时只返回 conversation bucket。
+- 带 `scenario_id` 时，后端会先校验 caller 能看到该 scenario，再返回 replay bucket。
+- `conversation` bucket 来自 rolling 24h conversation ledger；`replay` bucket 统计该 scenario 下 `counterfactual / resume` replay branch 用量。
+
 ## Phase 3 — Agents / Graphs
 
 | 方法 | 路径 | 说明 | 开关 |
@@ -247,6 +280,7 @@
 | `GET` | `/api/agents/identities/{id}/growth-events` | 成长事件时间线 | `FEATURE_AGENT_IDENTITY` |
 | `POST` | `/api/agents/workshop` | 创建自建 Agent | `FEATURE_CUSTOM_AGENTS` |
 | `PUT` | `/api/agents/workshop/{id}` | 更新自建 Agent | `FEATURE_CUSTOM_AGENTS` |
+| `PATCH` | `/api/agents/workshop/{id}` | 更新自建 Agent，当前与 `PUT` 同语义 | `FEATURE_CUSTOM_AGENTS` |
 | `DELETE` | `/api/agents/workshop/{id}` | 删除自建 Agent | `FEATURE_CUSTOM_AGENTS` |
 | `GET` | `/api/scenario/{id}/causal-graph` | 因果图谱 | `FEATURE_CAUSAL_GRAPH` |
 | `GET` | `/api/scenario/{id}/graph-analysis` | 因果图谱摘要分析 | `FEATURE_GRAPH_ANALYSIS` + `FEATURE_CAUSAL_GRAPH` |
@@ -268,7 +302,9 @@
   - `knowledge_domains`
   - `decision_bias`
   - `preferred_tier`
+- `decision_bias` 固定为 5 个 key：`caution / optimism / conservatism / risk_tolerance / creativity`。缺失 key 会补 `0.5`；未知 key 会被忽略；非数字、`NaN/Inf` 或超出 `0..1` 的值会被拒绝。
 - `preferred_tier` 只接受 `IMPORTANT / CROWD`。create 默认 `IMPORTANT`；update 不传表示不改。`CORE` 会被 schema 拒绝，不是自建 Agent 可选层级。
+- 只有 `kind=custom` 的 identity 可以通过 workshop update/delete 修改；generated identity 会返回 `AGENT_NOT_EDITABLE` 或 `AGENT_NOT_DELETABLE`。
 - workshop response / identity list 当前会回显：
   - 原始 JSON 字段：`knowledge_domain_json / decision_bias_json`
   - 解析后的字段：`knowledge_domains / decision_bias`
@@ -387,6 +423,7 @@
 说明：
 
 - scenario / debate live 事件都会带 `meta`，前端按 `sequence / event_id` 去重。
+- scenario cancel 成功后会广播 `simulation_cancelled`；前端把 `cancelled` 视为终态，晚到的旧 `status/state` 事件不能把页面带回 live 状态。
 - 空闲期会发送轻量 `heartbeat`。
 - `X-Session-Token` 只用于 REST。
 - 当 `SESSION_SECRET` 非空时，`scenario / debate / agent-conversation / ending-room` 这 4 条 WS 都继续走首帧 auth 协议，不依赖 HTTP-style dependency 注入。

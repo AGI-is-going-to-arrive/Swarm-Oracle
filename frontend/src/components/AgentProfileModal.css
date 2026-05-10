@@ -239,3 +239,22 @@
     transition: none;
   }
 }
+
+/* S2-5: Growth metrics summary */
+.agent-profile-modal__metrics-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-profile-modal__metrics-item {
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: #ccc;
+  padding: 4px 8px;
+  background: #2a2a4e;
+  border-radius: 4px;
+}

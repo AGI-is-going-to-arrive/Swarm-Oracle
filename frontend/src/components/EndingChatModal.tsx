@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { TypingIndicator } from './TypingIndicator';
 import { copyText } from '../lib/copyText';
+import { truncateCodepoints } from '../lib/textUtils';
 import { getEndingRoomModeLabel, getEndingRoomPhaseLabel, getEndingRoomStatusLabel } from '../lib/endingRoomLabels';
 import {
   buildOracleTranscriptLayoutMap,
@@ -50,6 +51,8 @@ import type {
 
 import { FactionBadge } from './FactionBadge';
 import { SafeMarkdown } from './SafeMarkdown';
+import { ConversationHistoryPicker } from './ConversationHistoryPicker';
+import type { ConversationDetail } from '../api/client';
 import { useFactionOverlay } from '../hooks/useFactionOverlay';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from './ui/sheet';
 import './EndingChatModal.css';
@@ -138,6 +141,7 @@ export default function EndingChatModal({
   const transcriptScrollSnapshotRef = useRef<TranscriptScrollSnapshot | null>(null);
   const [storyExpanded, setStoryExpanded] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [restoredConversation, setRestoredConversation] = useState<ConversationDetail | null>(null);
   const [replayActiveThreadId, setReplayActiveThreadId] = useState<string | null>(null);
   const [briefCopied, setBriefCopied] = useState(false);
   const [pendingQuestionAnchorIds, setPendingQuestionAnchorIds] = useState<string[]>([]);
@@ -931,7 +935,7 @@ export default function EndingChatModal({
 
   const storyText = branch.story || '—';
   const collapsedStory = storyText.length > 280 && !storyExpanded
-    ? `${storyText.slice(0, 280)}…`
+    ? truncateCodepoints(storyText, 280)
     : storyText;
   const addressedAgentIds = interactionMode === 'hotseat' && selectedAgentId
     ? [selectedAgentId]
@@ -1085,6 +1089,13 @@ export default function EndingChatModal({
   const handleTranscriptScroll = (event: UIEvent<HTMLDivElement>) => {
     syncTranscriptScrollSnapshot(captureTranscriptScrollSnapshot(event.currentTarget));
   };
+
+  const handleConversationHistorySelect = (detail: ConversationDetail) => {
+    // S2-1: hydrate inline restored-conversation panel.
+    setRestoredConversation(detail);
+  };
+
+  const handleRestoredConversationDismiss = () => setRestoredConversation(null);
 
   return (
     <div className="ending-chat-overlay" onClick={onClose}>
@@ -1468,6 +1479,47 @@ export default function EndingChatModal({
                   </button>
                   );
                 })}
+              </div>
+            )}
+
+            {!readOnly && scenarioId && (
+              <div className="ending-chat-history-row">
+                <ConversationHistoryPicker
+                  scenarioId={scenarioId}
+                  onSelect={handleConversationHistorySelect}
+                />
+                {restoredConversation && (
+                  <section
+                    className="ending-chat-restored-conversation"
+                    role="region"
+                    aria-label={t('conversation.history.select_thread')}
+                  >
+                    <header className="ending-chat-restored-conversation__header">
+                      <strong>{t('conversation.history.load_history')}</strong>
+                      <button
+                        type="button"
+                        className="ending-chat-restored-conversation__close"
+                        onClick={handleRestoredConversationDismiss}
+                      >
+                        {t('conversation.error.discard_cta')}
+                      </button>
+                    </header>
+                    <ul className="ending-chat-restored-conversation__turns">
+                      {restoredConversation.turns
+                        .filter((turn) => turn.role === 'user' || turn.role === 'assistant')
+                        .map((turn) => (
+                          <li
+                            key={turn.id}
+                            className={`ending-chat-restored-conversation__turn is-${turn.role}`}
+                          >
+                            <SafeMarkdown className="ending-chat-markdown">
+                              {turn.content}
+                            </SafeMarkdown>
+                          </li>
+                        ))}
+                    </ul>
+                  </section>
+                )}
               </div>
             )}
 

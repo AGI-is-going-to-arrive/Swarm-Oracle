@@ -19,8 +19,10 @@
 | 模块 | 位置 | 责任 |
 |------|------|------|
 | App 入口 | `backend/app/main.py` | 挂载所有 router、根信息、`/metrics` |
+| Admin | `backend/app/api/admin.py` | admin preflight 与 LLM 连接测试；受 session gate 保护 |
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact |
 | Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、自建 Agent workshop 与自建 Agent tier 校验 |
+| Quota | `backend/app/api/quota.py` | conversation / replay quota summary |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
 | Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary、score breakdown |
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
@@ -35,6 +37,8 @@
 | 模块 | 位置 | 责任 |
 |------|------|------|
 | Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle) |
+| Simulation Cancel | `backend/app/services/simulation_cancel.py` | scenario 取消 token、DB cancelled fallback 与后台任务取消信号 |
+| Preflight | `backend/app/services/preflight.py` | admin/CLI 预检：SQLite、ChromaDB、LLM、web search、CORS、volume |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
 | Memory | `backend/app/services/memory.py` | L1 压缩、context 组装 |
 | Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、缓存与上下文格式化 |
@@ -72,6 +76,12 @@
 - campaign finalize 与 scenario summary 当前返回同一套 `score_breakdown`；每项包含 `id / label_key / points / applied`，由后端按 archive grade、profile resonance、daily challenge、押注、director goals 与 worldline commitment 派生，不是新的持久化字段。
 - fork detector 当前要求新分支标题写成“行动 + 目标/后果”。
   这些标题仍作为 `Branch.title` 持久化，并随 `branch_fork` 事件广播给前端。
+- `POST /api/scenario/{id}/cancel` 当前只接受 `parsing / simulating / narrating / cancelled`：
+  - 请求会先把可取消 scenario 持久化为 `cancelled`
+  - 如果本进程没有本地 token，也会创建 token 并设置 cancel event，便于多 worker 下的后续检查看到 DB 终态
+  - 如果本进程有运行中的 background task，会直接 `task.cancel()`
+  - `done / error` 返回 `409 SIMULATION_NOT_RUNNING`，不会被取消路径降级
+- simulator 收到取消后不会把已经进入 `done / error` 的 scenario 回退成 `cancelled`；取消事件广播前，agent message 会先落库，避免前端收到不可重放的 stale 事件。
 
 ### Replay
 
@@ -165,6 +175,8 @@
   - workshop create/update 只接受 `IMPORTANT / CROWD`
   - 旧行里 `preferred_tier` 缺失、为空或无法识别时，注入层和 simulator 会回退到 `IMPORTANT`
   - 自建 Agent 不允许获得 `CORE`；如果数据库里已经有脏的 custom `CORE`，scenario 注入和 `_agent_to_dict()` 都会降成 `IMPORTANT`
+  - workshop update/delete 只允许 `kind=custom`；generated identity 会返回不可编辑/不可删除的业务错误
+  - `decision_bias` 固定为 `caution / optimism / conservatism / risk_tolerance / creativity` 5 个 key；缺失 key 补 `0.5`，未知 key 忽略，非数字、`NaN/Inf` 或超出 `0..1` 会被拒绝
   - `knowledge_domain_json / decision_bias_json` 解析失败时会降级为空 metadata，不阻断列表、推演或 debate
   - 主推演和 Debate prompt 里，自建 Agent 的名字、角色、persona、knowledge domains 和 decision bias 都按不可信输入注入，不把用户文本当系统指令
 - main simulation 当前已补 continuity preflight/override 链路：
@@ -286,6 +298,7 @@
   - origin branch 最近几轮 transcript 摘要
   - 历史 turn 只取最近 12 条，并按单 turn 长度截断
   - 这些图谱/场景文本统一通过 `format_untrusted_text_block()` 注入，不把节点 payload 当系统指令
+  - `origin_branch_id` 必须属于同一个 scenario；跨 scenario branch 会按不存在处理，不把其它 scenario transcript 暴露给当前 thread
 - Agent conversation prompt 当前会按 origin 语境选择回答身份：
   - 有 `agent_name` 时，继续按 in-story Agent 口径回答
   - 没有 `agent_name` 时，按 graph analyst 口径解释节点、分支、回合和相邻图谱上下文，不冒充具体参与者
@@ -336,6 +349,15 @@
   - backend 重启后不会归零
   - 多进程共用同一 SQLite 文件时会共享这份计数
   - 删除 scenario / thread 不会把已经消耗的 daily quota 返还回去
+- `GET /api/scenario/{id}/conversations` 当前按 scenario 列出 Agent Conversation thread：
+  - 受 `FEATURE_AGENT_CONVERSATION` gate
+  - 要求 signed principal 能看到该 scenario
+  - `cursor` 是 offset cursor，`limit` 范围 `1..50`
+  - 返回列表只带 thread 摘要；完整 turn 历史仍通过 `GET /api/conversation/{thread_id}` 读取
+- `GET /api/quota/summary` 当前返回两个 bucket：
+  - `conversation`：rolling 24h conversation turn 用量
+  - `replay`：当前 scenario 下 `counterfactual / resume` replay branch 数
+  - 开启 `SESSION_SECRET` 后要求 signed principal；裸 `SESSION_SECRET` 不能用来读取 owner-scoped quota
 
 ## 当前验证基线
 
@@ -344,13 +366,17 @@
   - `tests/test_causal_graph.py -q`：`68 passed`
   - `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q`：`125 passed`
   - `ruff check app/services/causal_graph.py tests/test_causal_graph.py`：通过
-- backend 全量 `pytest`：`2412 passed, 2 skipped`
+- backend 全量 `pytest` 最近一次记录：`2477 passed, 3 failed, 2 skipped`；两条 LLM gateway 失败定向重跑后恢复，剩余 `test_graph_analysis` 仍是既有基线差异
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 - custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；仓库级 `ruff check app/ tests/` 当前仍有历史无关 lint 存量，未在本轮文档里改写成已全绿。
 - Classic 分支标题提示本轮已补定向验证：
   - `pytest tests/test_audit_fixes.py::TestForkPromptTemplateConsistency -q`：`31 passed`
   - `pytest tests/test_simulator.py::TestDetectFork -q`：`4 passed`
   - `ruff check app/services/simulator.py tests/test_audit_fixes.py`：通过
+- Sprint 0-2 收尾定向验证：
+  - `tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py`：`36 passed`
+  - `ruff check app/api/scenarios.py app/api/quota.py app/services/simulation_cancel.py app/services/simulator.py tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py`：通过
+  - 仓库级 `ruff check app tests` 当前仍有既有无关 lint 存量，未改写成全绿
 
 ## WebSocket 口径
 

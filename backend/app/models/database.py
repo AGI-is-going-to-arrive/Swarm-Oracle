@@ -108,6 +108,7 @@ class ScenarioStatus(str, enum.Enum):
     NARRATING = "narrating"
     DONE = "done"
     ERROR = "error"
+    CANCELLED = "cancelled"
 
 
 class AgentTier(str, enum.Enum):

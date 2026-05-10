@@ -42,6 +42,11 @@ from app.services.runtime_lock import (
     release_runtime_lock,
     simulation_lock_key,
 )
+from app.services.simulation_cancel import (
+    clear_cancel_token,
+    get_or_create_cancel_token,
+    is_cancelled,
+)
 from app.services.simulator import reconcile_scenario_done_if_complete, run_simulation
 
 logger = logging.getLogger(__name__)
@@ -306,9 +311,29 @@ _background_tasks: set[asyncio.Task] = set()
 
 # C-1 fix: Anti-reentrancy now uses DB-level Scenario status instead of in-memory set.
 # The in-memory set is kept only as a fast-path check; the DB is the source of truth.
+# H2 fix: _running_simulations also includes scenarios in the parse phase so that
+# cancel requests during parse can locate the run (no spurious 409). The
+# `_parse_phase_simulations` subset lets run_sim_background distinguish a fresh
+# parse handoff from a re-entrant launch.
 _running_simulations: set[str] = set()
+_parse_phase_simulations: set[str] = set()
+_task_registry: dict[str, asyncio.Task] = {}
 _SIMULATION_LOCK_REFRESH_FRACTION = 0.33
 _SIMULATION_LOCK_LOSS_POLL_SECONDS = 0.01
+
+
+def register_running_task(scenario_id: str, task: asyncio.Task) -> None:
+    _task_registry[scenario_id] = task
+
+
+def clear_running_task(scenario_id: str, task: asyncio.Task | None = None) -> None:
+    if task is not None and _task_registry.get(scenario_id) is not task:
+        return
+    _task_registry.pop(scenario_id, None)
+
+
+def get_running_task(scenario_id: str) -> asyncio.Task | None:
+    return _task_registry.get(scenario_id)
 
 
 def _runtime_lock_lease_alive(
@@ -437,12 +462,22 @@ async def run_sim_background(
                        Kept only in memory — never persisted to DB.
         branch_id: Optional branch to simulate (for retrospective interventions).
     """
-    # C-3 fix: prevent double simulation launch
-    if scenario_id in _running_simulations:
+    # C-3 fix: prevent double simulation launch.
+    # H2 fix: a parse-phase handoff already added scenario_id to
+    # _running_simulations; only treat it as duplicate when the scenario is NOT
+    # in the parse-phase subset.
+    if scenario_id in _running_simulations and scenario_id not in _parse_phase_simulations:
         logger.warning("Simulation %s already running — skipping duplicate launch", scenario_id)
         release_runtime_lock(pre_acquired_lock_lease)
         return
+    _parse_phase_simulations.discard(scenario_id)
     _running_simulations.add(scenario_id)
+    current_task = asyncio.current_task()
+    if current_task is not None:
+        register_running_task(scenario_id, current_task)
+    # H2 fix: reuse any token registered by parse_and_run_background so cancel
+    # requests during parse are not lost when run_sim_background starts.
+    get_or_create_cancel_token(scenario_id)
     lock_lease_holder: list[RuntimeLockLease | None] = [pre_acquired_lock_lease]
     lock_lease_to_release = pre_acquired_lock_lease
     heartbeat_stop: threading.Event | None = None
@@ -529,44 +564,82 @@ async def run_sim_background(
                 _run_simulation_with_lock_guard(),
                 timeout=total_timeout,
             )
+    except asyncio.CancelledError:
+        if is_cancelled(scenario_id):
+            try:
+                from app.services.simulator import handle_simulation_cancelled
+
+                await handle_simulation_cancelled(
+                    scenario_id,
+                    ws_callback=ws_manager.broadcast,
+                )
+            except Exception:
+                logger.exception("Failed to finalize user-cancelled simulation %s", scenario_id)
+            return
+        raise
     except asyncio.TimeoutError:
-        logger.error("Simulation %s timed out after %ds", scenario_id, settings.MAX_ROUNDS * 180)
-        try:
-            await ws_manager.broadcast(scenario_id, {
-                "type": "simulation_error",
-                "data": {"error": GENERIC_SIMULATION_TIMEOUT_ERROR},
-            })
-        except Exception:
-            pass
-        engine = get_engine()
-        with Session(engine) as session:
-            s = session.get(Scenario, scenario_id)
-            if s:
-                s.status = ScenarioStatus.ERROR
-                session.add(s)
-                session.commit()
+        # H3 fix: a user cancel that races a timeout must not be overwritten.
+        if is_cancelled(scenario_id):
+            logger.info(
+                "Simulation %s timeout coincided with user cancel; preserving CANCELLED",  # noqa: E501
+                scenario_id,
+            )
+        else:
+            logger.error(
+                "Simulation %s timed out after %ds",
+                scenario_id, settings.MAX_ROUNDS * 180,
+            )
+            try:
+                await ws_manager.broadcast(scenario_id, {
+                    "type": "simulation_error",
+                    "data": {"error": GENERIC_SIMULATION_TIMEOUT_ERROR},
+                })
+            except Exception:
+                pass
+            engine = get_engine()
+            with Session(engine) as session:
+                s = session.get(Scenario, scenario_id)
+                # H3 fix: idempotent guard — never demote a CANCELLED row to ERROR.
+                if s and s.status != ScenarioStatus.CANCELLED:
+                    s.status = ScenarioStatus.ERROR
+                    session.add(s)
+                    session.commit()
     except Exception as exc:
-        logger.error("Simulation failed for %s: %s", scenario_id, exc, exc_info=True)
-        # Notify connected clients about the failure
-        try:
-            await ws_manager.broadcast(scenario_id, {
-                "type": "simulation_error",
-                "data": {"error": GENERIC_SIMULATION_ERROR},
-            })
-        except Exception:
-            pass  # WS broadcast is best-effort
-        engine = get_engine()
-        with Session(engine) as session:
-            s = session.get(Scenario, scenario_id)
-            if s:
-                s.status = ScenarioStatus.ERROR
-                session.add(s)
-                session.commit()
+        # H3 fix: lock-loss watcher cancels the sim task; the simulator persists
+        # CANCELLED before the watcher's RuntimeError reaches us. Suppress the
+        # generic error broadcast so the cancelled terminal state survives.
+        if is_cancelled(scenario_id):
+            logger.info(
+                "Simulation %s raised %s after user cancel; preserving CANCELLED",
+                scenario_id, type(exc).__name__,
+            )
+        else:
+            logger.error("Simulation failed for %s: %s", scenario_id, exc, exc_info=True)
+            try:
+                await ws_manager.broadcast(scenario_id, {
+                    "type": "simulation_error",
+                    "data": {"error": GENERIC_SIMULATION_ERROR},
+                })
+            except Exception:
+                pass  # WS broadcast is best-effort
+            engine = get_engine()
+            with Session(engine) as session:
+                s = session.get(Scenario, scenario_id)
+                # H3 fix: idempotent guard — never demote a CANCELLED row to ERROR.
+                if s and s.status != ScenarioStatus.CANCELLED:
+                    s.status = ScenarioStatus.ERROR
+                    session.add(s)
+                    session.commit()
     finally:
         if heartbeat_stop is not None and heartbeat_thread is not None:
             _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
         release_runtime_lock(lock_lease_to_release)
+        clear_cancel_token(scenario_id)
+        clear_running_task(scenario_id, current_task)
         _running_simulations.discard(scenario_id)
+        # H2 fix: belt-and-suspenders cleanup — parse-phase marker should already
+        # be cleared at handoff, but discard again in case of unusual re-entry.
+        _parse_phase_simulations.discard(scenario_id)
 
 
 def schedule_background_task(coro):
@@ -608,6 +681,17 @@ async def parse_and_run_background(
     """
     engine = get_engine()
 
+    # H2 fix: register cancel token + mark scenario as "running" before parse
+    # begins so cancel requests during parse are observable (no 409, token exists).
+    # _parse_phase_simulations is the subset run_sim_background uses to allow the
+    # legitimate parse->simulate handoff past its anti-reentrancy guard.
+    get_or_create_cancel_token(scenario_id)
+    _running_simulations.add(scenario_id)
+    _parse_phase_simulations.add(scenario_id)
+    parse_task = asyncio.current_task()
+    if parse_task is not None:
+        register_running_task(scenario_id, parse_task)
+
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if scenario and scenario.status != ScenarioStatus.SIMULATING:
@@ -626,6 +710,25 @@ async def parse_and_run_background(
 
     local_provider = is_local_provider_url(llm_base_url)
     quota_key = None if (disable_user_quota and local_provider) else (f"user:{user_id}" if user_id else None)  # noqa: E501
+
+    # H2 fix: if cancel landed before parse started, finalize as cancelled.
+    if is_cancelled(scenario_id):
+        try:
+            from app.services.simulator import handle_simulation_cancelled
+
+            await handle_simulation_cancelled(
+                scenario_id, ws_callback=ws_manager.broadcast,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to finalize early-cancelled scenario %s", scenario_id,
+            )
+        finally:
+            clear_cancel_token(scenario_id)
+            clear_running_task(scenario_id, parse_task)
+            _running_simulations.discard(scenario_id)
+            _parse_phase_simulations.discard(scenario_id)
+        return
 
     try:
         with llm_request_scope(
@@ -646,6 +749,32 @@ async def parse_and_run_background(
                 temperature=temperature,
                 model=llm_model,
             )
+    except asyncio.CancelledError:
+        # H2 fix: parse-stage cancellation funnels into the cancelled terminal state.
+        if is_cancelled(scenario_id):
+            try:
+                from app.services.simulator import handle_simulation_cancelled
+
+                await handle_simulation_cancelled(
+                    scenario_id, ws_callback=ws_manager.broadcast,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to finalize cancelled-during-parse scenario %s",
+                    scenario_id,
+                )
+            finally:
+                clear_cancel_token(scenario_id)
+                clear_running_task(scenario_id, parse_task)
+                _running_simulations.discard(scenario_id)
+                _parse_phase_simulations.discard(scenario_id)
+            return
+        # Not user-cancel: clean bookkeeping then propagate.
+        clear_cancel_token(scenario_id)
+        clear_running_task(scenario_id, parse_task)
+        _running_simulations.discard(scenario_id)
+        _parse_phase_simulations.discard(scenario_id)
+        raise
     except Exception as exc:
         logger.error("Parse failed for %s: %s", scenario_id, exc, exc_info=True)
         with Session(engine) as session:
@@ -662,6 +791,11 @@ async def parse_and_run_background(
             })
         except Exception:
             pass
+        # H2 fix: clean bookkeeping so cancel endpoint stops 409'ing on dead runs.
+        clear_cancel_token(scenario_id)
+        clear_running_task(scenario_id, parse_task)
+        _running_simulations.discard(scenario_id)
+        _parse_phase_simulations.discard(scenario_id)
         return
 
     parsed["mode"] = mode

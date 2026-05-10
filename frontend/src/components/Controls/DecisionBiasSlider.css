@@ -1,0 +1,158 @@
+/* ═══════════════════════════════════════════════════════════
+   DecisionBiasSlider — cool → neutral → warm gradient track
+   sRGB fallback with @supports OKLCH progressive enhancement
+   ═══════════════════════════════════════════════════════════ */
+
+.decision-bias {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid rgba(64, 48, 40, 0.18);
+  border-radius: 14px;
+  background: rgba(255, 250, 244, 0.55);
+}
+
+.decision-bias__title {
+  font-family: var(--font-heading, "Cormorant Garamond", serif);
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-primary, #2a1f18);
+  letter-spacing: 0.01em;
+}
+
+.decision-bias__hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted, #6b5d52);
+  line-height: 1.4;
+}
+
+.decision-bias__list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.decision-bias__row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.decision-bias__label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.decision-bias__label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-primary, #2a1f18);
+  cursor: pointer;
+}
+
+.decision-bias__value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary, #2a1f18);
+  background: rgba(64, 48, 40, 0.08);
+  border: 1px solid rgba(64, 48, 40, 0.12);
+}
+
+/* Slider wrapper: paint gradient on the underlying Radix Track */
+.decision-bias__slider {
+  width: 100%;
+}
+
+/* sRGB fallback gradient (cool blue → neutral → warm amber) */
+.decision-bias__slider [data-slot="track"],
+.decision-bias__slider [data-orientation="horizontal"] > span:first-child,
+.decision-bias__slider > span[data-orientation="horizontal"]:first-child,
+.decision-bias__slider > span:first-child {
+  background: linear-gradient(
+    to right,
+    #4a90d9 0%,
+    #b3b6bf 50%,
+    #e0a44a 100%
+  ) !important;
+  height: 6px !important;
+}
+
+/* OKLCH progressive enhancement */
+@supports (color: oklch(0.7 0.15 240)) {
+  .decision-bias__slider [data-slot="track"],
+  .decision-bias__slider [data-orientation="horizontal"] > span:first-child,
+  .decision-bias__slider > span[data-orientation="horizontal"]:first-child,
+  .decision-bias__slider > span:first-child {
+    background: linear-gradient(
+      to right,
+      oklch(0.65 0.14 240) 0%,
+      oklch(0.78 0.02 80) 50%,
+      oklch(0.74 0.14 65) 100%
+    ) !important;
+  }
+}
+
+/* Hide Radix Range fill so the gradient track stays visible end-to-end */
+.decision-bias__slider [data-slot="range"],
+.decision-bias__slider [data-orientation="horizontal"] > span:first-child > span,
+.decision-bias__slider > span:first-child > span {
+  background: transparent !important;
+}
+
+/* Thumb: slight elevation + clear focus ring */
+.decision-bias__slider [role="slider"] {
+  height: 18px !important;
+  width: 18px !important;
+  background: var(--bg-elevated, #fffaf3);
+  border: 2px solid rgba(64, 48, 40, 0.55);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: transform 120ms ease, border-color 120ms ease;
+}
+
+.decision-bias__slider [role="slider"]:hover {
+  transform: scale(1.06);
+}
+
+.decision-bias__slider [role="slider"]:focus-visible {
+  outline: none;
+  border-color: var(--accent, #c08a3a);
+  box-shadow: 0 0 0 3px rgba(192, 138, 58, 0.25);
+}
+
+.decision-bias__slider [role="slider"][data-disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Mobile: full-width row, label/value stacked */
+@media (max-width: 520px) {
+  .decision-bias {
+    padding: 14px 14px;
+  }
+  .decision-bias__row {
+    width: 100%;
+  }
+  .decision-bias__value {
+    min-width: 40px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .decision-bias__slider [role="slider"] {
+    transition: none;
+  }
+  .decision-bias__slider [role="slider"]:hover {
+    transform: none;
+  }
+}

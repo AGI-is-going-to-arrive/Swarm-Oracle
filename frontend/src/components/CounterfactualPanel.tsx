@@ -5,7 +5,7 @@
 
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { buildSessionHeaders } from '../api/client';
+import { ApiError, submitCounterfactual } from '../api/client';
 import type { AgentInfo, AgentMessage } from '../types';
 
 interface Props {
@@ -48,30 +48,21 @@ export function CounterfactualPanel({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch(`/api/scenario/${scenarioId}/counterfactual`, {
-        method: 'POST',
-        headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({
-          source_branch_id: branchId,
-          round_number: selectedRound,
-          agent_id: selectedAgent,
-          source_message_content: selectedSourceMessage?.message,
-          replacement_content: replacement.trim(),
-        }),
+      const data = await submitCounterfactual<{ branch_id: string }>(scenarioId, {
+        source_branch_id: branchId,
+        round_number: selectedRound,
+        agent_id: selectedAgent,
+        source_message_content: selectedSourceMessage?.message,
+        replacement_content: replacement.trim(),
       });
-      if (res.status === 429) {
-        setError(t('counterfactual.limit_reached', 'Maximum 3 counterfactuals per scenario'));
-        return;
-      }
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || `HTTP ${res.status}`);
-      }
-      const data = await res.json();
       setResult(data.branch_id);
       onCreated?.(data.branch_id);
     } catch (err) {
-      setError((err as Error).message);
+      if (err instanceof ApiError && err.status === 429) {
+        setError(t('counterfactual.limit_reached', 'Maximum 3 counterfactuals per scenario'));
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setSubmitting(false);
     }

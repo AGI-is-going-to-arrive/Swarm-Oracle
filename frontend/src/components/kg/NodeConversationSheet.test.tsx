@@ -12,12 +12,39 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { NodeConversationSheet } from './NodeConversationSheet';
+import type { ConversationDetail } from '../../api/client';
 
 const streamingAriaLiveMockState = vi.hoisted(() => ({
   useStreamingAriaLiveMock: vi.fn(),
   realUseStreamingAriaLive: null as null | ((...args: unknown[]) => unknown),
 }));
+const historyPickerMockState = vi.hoisted(() => ({
+  detail: null as ConversationDetail | null,
+}));
+
+vi.mock('../ConversationHistoryPicker', async () => {
+  const React = await import('react');
+  return {
+    ConversationHistoryPicker: ({
+      onSelect,
+    }: {
+      onSelect: (detail: ConversationDetail) => void;
+    }) =>
+      React.createElement(
+        'button',
+        {
+          type: 'button',
+          'data-testid': 'mock-conversation-history-select',
+          onClick: () => {
+            if (historyPickerMockState.detail) onSelect(historyPickerMockState.detail);
+          },
+        },
+        'history',
+      ),
+  };
+});
+
+import { NodeConversationSheet } from './NodeConversationSheet';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -79,6 +106,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  historyPickerMockState.detail = null;
   if (streamingAriaLiveMockState.realUseStreamingAriaLive) {
     streamingAriaLiveMockState.useStreamingAriaLiveMock.mockImplementation(
       streamingAriaLiveMockState.realUseStreamingAriaLive,
@@ -100,6 +128,50 @@ function renderSheet(overrides?: Partial<React.ComponentProps<typeof NodeConvers
       {...overrides}
     />,
   );
+}
+
+function makeConversationDetail(overrides?: Partial<ConversationDetail>): ConversationDetail {
+  return {
+    thread_id: 'history-thread',
+    scenario_id: 'scen-1',
+    agent_identity_id: 'id-1',
+    owner_user_id: 'user-1',
+    origin_branch_id: null,
+    origin_round_number: null,
+    origin_node_id: 'node-1',
+    origin_node_type: 'argument',
+    last_turn_sequence: 2,
+    latest_status: 'committed',
+    active_turn_id: null,
+    created_at: '2026-05-10T00:00:00Z',
+    updated_at: '2026-05-10T00:00:00Z',
+    user_turn_id: 'turn-user',
+    assistant_turn_id: 'turn-assistant',
+    sequence_range: [1, 2],
+    turns: [
+      {
+        id: 'turn-user',
+        thread_id: 'history-thread',
+        role: 'user',
+        sequence: 1,
+        status: 'committed',
+        content: 'What happened?',
+        created_at: '2026-05-10T00:00:00Z',
+        updated_at: '2026-05-10T00:00:00Z',
+      },
+      {
+        id: 'turn-assistant',
+        thread_id: 'history-thread',
+        role: 'assistant',
+        sequence: 2,
+        status: 'committed',
+        content: '**Restored answer**\n- Visible again',
+        created_at: '2026-05-10T00:00:00Z',
+        updated_at: '2026-05-10T00:00:00Z',
+      },
+    ],
+    ...overrides,
+  };
 }
 
 function makeSseResponse(frames: string[]) {
@@ -339,6 +411,23 @@ describe('NodeConversationSheet — input + send', () => {
       expect(bubble.querySelector('strong')?.textContent).toBe('一、重点');
       expect(bubble.querySelector('li')?.textContent).toBe('第一条');
       expect(bubble.textContent).not.toContain('**');
+    });
+  });
+
+  it('keeps a restored history assistant turn visible after selecting a thread', async () => {
+    vi.useRealTimers();
+    historyPickerMockState.detail = makeConversationDetail();
+
+    const { getByTestId } = renderSheet();
+
+    fireEvent.click(getByTestId('mock-conversation-history-select'));
+
+    await waitFor(() => {
+      const region = getByTestId('node-conversation-scroll-region');
+      const bubble = region.querySelector('.conv-bubble');
+      expect(region).toHaveTextContent('Restored answer');
+      expect(region.querySelector('strong')?.textContent).toBe('Restored answer');
+      expect(bubble).not.toHaveClass('conv-bubble--hidden');
     });
   });
 

@@ -1,0 +1,26 @@
+/* ═══════════════════════════════════════════════════════════
+   S2-5 — ArgumentMap node visual states
+   Status classes are applied to React Flow node wrappers via
+   `node.className` in layoutArgumentDag(). We target the inner
+   `.dag-card-node` button rendered by GraphNodeCard so that the
+   status visual stacks on top of the existing border/background.
+   ═══════════════════════════════════════════════════════════ */
+
+.argmap-node--standing .dag-card-node {
+  border-color: #22c55e;
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.argmap-node--rebutted .dag-card-node {
+  border-color: #ef4444;
+  text-decoration: line-through;
+  text-decoration-color: rgba(239, 68, 68, 0.7);
+  opacity: 0.7;
+}
+
+/* Keep the status visual evident even when the user dims the
+   node (search misses, neighbor dimming) — preserve contrast for
+   accessibility readers reaching the node by tab/keyboard. */
+.argmap-node--rebutted .dag-card-node[data-graph-node-card="true"] {
+  filter: grayscale(0.15);
+}

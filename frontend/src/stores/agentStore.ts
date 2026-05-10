@@ -3,7 +3,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { create } from 'zustand';
-import { buildSessionHeaders, getSessionBoundUserId } from '../api/client';
+import { getSessionBoundUserId, listAgentIdentities } from '../api/client';
 import type { AgentIdentityInfo } from '../types';
 
 interface AgentStoreState {
@@ -59,12 +59,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     set({ loading: true, error: null, requestSeq: reqId });
 
     try {
-      const res = await fetch(
-        `/api/agents/identities?user_id=${encodeURIComponent(effectiveUserId)}`,
-        { headers: buildSessionHeaders() },
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: AgentIdentityInfo[] = await res.json();
+      const data = await listAgentIdentities<AgentIdentityInfo[]>(effectiveUserId);
 
       // Ignore stale responses (newer request was issued)
       if (get().requestSeq !== reqId) return;

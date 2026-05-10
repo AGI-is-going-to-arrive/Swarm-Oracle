@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { buildSessionHeaders, getScenario, isApiError } from '../api/client';
+import {
+  ApiError,
+  getCounterfactualCompare,
+  getScenario,
+  isApiError,
+} from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useSimulationStore } from '../stores/simulationStore';
 import { PhaserGameLoader } from '../game';
@@ -106,21 +111,23 @@ export function CompareDigestView() {
     setError(null);
     setData(null);
     try {
-      const compareResponse = await fetch(
-        `/api/scenario/${encodeURIComponent(id)}/compare?branch_a=${encodeURIComponent(branchA)}&branch_b=${encodeURIComponent(branchB)}`,
-        { headers: buildSessionHeaders() },
-      );
-      if (!compareResponse.ok) {
+      let comparePayload: CompareData;
+      try {
+        comparePayload = await getCounterfactualCompare<CompareData>(id, branchA, branchB);
+      } catch (compareErr) {
         if (requestId !== loadRequestIdRef.current) return;
-        setError(
-          compareResponse.status === 404
-            ? { kind: 'no_data', status: compareResponse.status }
-            : { kind: 'load_failed', source: 'compare', status: compareResponse.status },
-        );
+        if (compareErr instanceof ApiError) {
+          setError(
+            compareErr.status === 404
+              ? { kind: 'no_data', status: compareErr.status }
+              : { kind: 'load_failed', source: 'compare', status: compareErr.status },
+          );
+        } else {
+          setError({ kind: 'load_failed', source: 'compare', status: null });
+        }
         return;
       }
 
-      const comparePayload = (await compareResponse.json()) as CompareData;
       const scenarioPayload = await getScenario(id);
       if (requestId !== loadRequestIdRef.current) return;
       setScenario(scenarioPayload);

@@ -33,6 +33,7 @@ from app.services.persona_workshop import (
     delete_custom_agent,
     list_all_agents,
     update_custom_agent,
+    validate_decision_bias,
 )
 
 logger = logging.getLogger(__name__)
@@ -425,6 +426,7 @@ async def create_workshop_agent(
     return {"id": identity_id}
 
 
+@router.patch("/workshop/{identity_id}")
 @router.put("/workshop/{identity_id}")
 async def update_workshop_agent(
     identity_id: str,
@@ -440,6 +442,11 @@ async def update_workshop_agent(
             status_code=400,
             content={"detail": "No fields to update"},
         )
+    try:
+        if "decision_bias" in kwargs and kwargs["decision_bias"] is not None:
+            kwargs["decision_bias"] = validate_decision_bias(kwargs["decision_bias"])
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
     if principal is not None:
         with Session(get_engine()) as session:
             identity = session.get(AgentIdentity, identity_id)
@@ -455,6 +462,15 @@ async def update_workshop_agent(
         update_custom_agent(identity_id, **kwargs)
     except LookupError:
         return JSONResponse(status_code=404, content={"detail": "Agent identity not found"})
+    except PermissionError as exc:
+        # H2: generated (kind!="custom") agents reject mutation at the service
+        # layer.  Surface a 403 so clients know the identity exists but cannot
+        # be edited via this surface.
+        raise api_error(
+            403,
+            "AGENT_NOT_EDITABLE",
+            str(exc) or "Generated agents cannot be edited",
+        ) from exc
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
     return {"detail": "updated"}
@@ -483,4 +499,11 @@ async def delete_workshop_agent(
         delete_custom_agent(identity_id)
     except LookupError:
         return JSONResponse(status_code=404, content={"detail": "Agent identity not found"})
+    except PermissionError as exc:
+        # H2: deleting a generated agent via the workshop surface is rejected.
+        raise api_error(
+            403,
+            "AGENT_NOT_DELETABLE",
+            str(exc) or "Generated agents cannot be deleted",
+        ) from exc
     return None

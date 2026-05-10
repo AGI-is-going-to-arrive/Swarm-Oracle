@@ -37,19 +37,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { buildSessionHeaders } from '../../api/client';
+import {
+  buildSessionHeaders,
+  type ConversationDetail,
+} from '../../api/client';
 import { mapBackendErrorCode } from '../../lib/conversationStateMachine';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet';
 import { cn } from '../../lib/utils';
 import { useAgentConversation, type RegisteredStreamBubble } from '../../hooks/useAgentConversation';
 import { useDraftAutoSave } from '../../hooks/useDraftAutoSave';
 import { useNodeConversationTransport } from '../../hooks/useNodeConversationTransport';
+import { SafeMarkdown } from '../SafeMarkdown';
 
 import { ConversationRecoveryBanner } from './ConversationRecoveryBanner';
 import { DraftRestoredBanner } from './DraftRestoredBanner';
 import { EmptyStateQuickQuestions } from './EmptyStateQuickQuestions';
 import { NodeContextBanner } from './NodeContextBanner';
 import { StreamingBubbleIsolated, type StreamingBubbleApi } from './StreamingBubbleIsolated';
+import { ConversationHistoryPicker } from '../ConversationHistoryPicker';
 
 function useIsMobile(maxWidth = 768): boolean {
   // Synchronous initialiser avoids the initial setState-in-effect cascade.
@@ -229,6 +234,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     setInputState({ draftKey, value: nextValue });
   }, [draftKey]);
   const [draftNoticeDismissed, setDraftNoticeDismissed] = useState<boolean>(false);
+  const [historyRestoredText, setHistoryRestoredText] = useState<string | null>(null);
   const sheetContentRef = useRef<HTMLDivElement | null>(null);
 
   // Persist input value to sessionStorage (debounced inside hook).
@@ -263,8 +269,13 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     if (!open) {
       abortActiveRequest();
       lastSubmittedMessageRef.current = null;
+      setHistoryRestoredText(null);
     }
   }, [abortActiveRequest, open]);
+
+  useEffect(() => {
+    setHistoryRestoredText(null);
+  }, [initialThreadId, originDraftScope, scenarioId]);
 
   useEffect(() => {
     flushAriaLiveNow();
@@ -288,6 +299,7 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     if (bootstrapPending) return;
     const text = inputValue.trim();
     if (text.length === 0) return;
+    setHistoryRestoredText(null);
     lastSubmittedMessageRef.current = text;
     draft.save(text);
     if (onSubmit) {
@@ -344,6 +356,24 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
     setInputValue('');
     setDraftNoticeDismissed(true);
   }, [draft, setInputValue]);
+
+  const handleHistorySelect = useCallback(
+    (detail: ConversationDetail) => {
+      // S2-1: Switch the sheet to the picked thread and replay the last
+      // assistant turn into the streaming bubble so it reads as restored.
+      setThreadId(detail.thread_id);
+      convDispatch({ type: 'reset' });
+      const lastAssistant = [...detail.turns]
+        .reverse()
+        .find((turn) => turn.role === 'assistant' && turn.content);
+      setHistoryRestoredText(lastAssistant?.content ?? null);
+      const bubble = bubbleRef.current;
+      if (bubble) {
+        bubble.reset();
+      }
+    },
+    [convDispatch, setThreadId],
+  );
 
   // Mobile snap-point state (40/70/100 vh). Starts at 70 (default reading
   // height). Cycled by the grab handle; raised/lowered by keyboard shortcut.
@@ -439,7 +469,8 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
   const showResultHint = showResultDeepenHint && convState.completedTurnCount >= 3;
 
   const showRecovery = convState.turn === 'error' || convState.turn === 'recovering';
-  const showEmpty = convState.turn === 'idle' && inputValue.length === 0;
+  const showEmpty =
+    convState.turn === 'idle' && inputValue.length === 0 && historyRestoredText === null;
   const isStreaming = convState.turn === 'streaming';
   const isDone = convState.turn === 'done';
 
@@ -501,6 +532,14 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
         {/* Node context banner (origin metadata — floating card) */}
         {origin ? <NodeContextBanner origin={origin} className="mx-4 mt-1 mb-2" /> : null}
 
+        {/* S2-1: history reload */}
+        <div className="mx-4 mb-2">
+          <ConversationHistoryPicker
+            scenarioId={scenarioId}
+            onSelect={handleHistorySelect}
+          />
+        </div>
+
         {/* Draft status */}
         {!draftNoticeDismissed && draft.restored !== null ? (
           <DraftRestoredBanner variant="restored" onDiscard={handleDiscardDraft} />
@@ -516,7 +555,17 @@ export function NodeConversationSheet(props: NodeConversationSheetProps) {
           className="flex-1 overflow-y-auto px-4 py-3"
         >
           <div className={cn('conv-bubble conv-bubble--assistant', showEmpty && 'conv-bubble--hidden')}>
-            <StreamingBubbleIsolated onRef={handleBubbleRef} />
+            {historyRestoredText !== null ? (
+              <SafeMarkdown className="node-conversation-markdown">
+                {historyRestoredText}
+              </SafeMarkdown>
+            ) : null}
+            <div
+              aria-hidden={historyRestoredText !== null ? 'true' : undefined}
+              style={historyRestoredText !== null ? { display: 'none' } : undefined}
+            >
+              <StreamingBubbleIsolated onRef={handleBubbleRef} />
+            </div>
           </div>
           {showEmpty ? (
             <EmptyStateQuickQuestions

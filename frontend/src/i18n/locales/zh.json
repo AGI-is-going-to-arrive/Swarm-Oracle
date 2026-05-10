@@ -79,6 +79,7 @@
       "byok_tpm_help": "每分钟最多 token 数，影响长上下文和高轮数的可承载范围。",
       "byok_hint": "支持所有 OpenAI 兼容 API（留空则使用服务器默认配置）",
       "byok_storage_notice": "仅保存在当前标签页会话中，关闭标签页后自动清除",
+      "security_notice": "AI 预测仅供娱乐和参考，请勿将其用于真实的金融、医疗或法律决策。",
       "byok_test": "🔗 测试连接",
       "byok_testing": "测试中...",
       "byok_test_ok": "✅ 连接成功",
@@ -540,6 +541,9 @@
       "next_replay_trace_desc": "逐步回放模拟时间线",
       "next_share": "分享结果",
       "next_share_desc": "生成可分享的推演复盘",
+      "mode_reader": "阅读",
+      "mode_workbench": "工作台",
+      "mode_toggle_label": "结果视图模式",
       "bridge_workbench_title": "打开图谱工作台",
       "bridge_workbench_desc": "把因果、知识图谱和节点追问放到同一视图",
       "bridge_agents": "Agent 身份库",
@@ -1379,6 +1383,22 @@
       "knowledge_tooltip": "知识领域将注入到 Agent 的 Prompt 中，影响其对特定话题的专业度和切入角度",
       "bias_tooltip": "决策偏好将影响 Agent 在权衡利弊时的立场倾向"
     },
+    "agent_workshop": {
+      "bias_title": "决策偏好配置",
+      "bias_hint": "调整此 Agent 的决策倾向",
+      "bias_caution": "谨慎度",
+      "bias_optimism": "乐观度",
+      "bias_conservatism": "保守度",
+      "bias_risk_tolerance": "风险容忍度",
+      "bias_creativity": "创造力"
+    },
+    "agent_library": {
+      "custom_group": "我的 Agent",
+      "generated_group": "系统生成",
+      "generated_badge": "生成",
+      "generated_no_edit": "系统生成的 Agent 不可编辑",
+      "generated_no_delete": "系统生成的 Agent 不可删除"
+    },
     "causal": {
       "title": "因果图谱",
       "nodes": "节点",
@@ -1543,9 +1563,9 @@
       "legend_edges": "关系",
       "legend_confidence": "置信度",
       "status_accepted_tip": "论点已被对方或评委采纳",
-      "status_standing_tip": "论点仍然成立，未被反驳",
-      "status_unaddressed_tip": "论点尚未被回应",
-      "status_rebutted_tip": "论点已被反驳",
+      "status_standing_tip": "有效论证 — 论点仍然成立，未被反驳",
+      "status_unaddressed_tip": "未回应 — 尚未被对方处理",
+      "status_rebutted_tip": "已反驳 — 论点已被对方驳倒",
       "status_rejected_tip": "论点已被驳回",
       "legend_edge_supports": "支持关系",
       "legend_edge_rebuts": "反驳关系",
@@ -1635,7 +1655,12 @@
       "domain_humanities": "人文",
       "domain_social": "社科",
       "domain_nature": "自然",
-      "domain_pragmatic": "务实"
+      "domain_pragmatic": "务实",
+      "metrics_title": "成长指标",
+      "metrics_scenarios": "参与了 {{count}} 个场景",
+      "metrics_shifts": "立场偏移 {{count}} 次",
+      "metrics_growth": "记录了 {{count}} 个成长事件",
+      "metrics_empty": "暂无成长数据"
     },
     "export": {
       "png": "导出 PNG",
@@ -1880,6 +1905,13 @@
       "ending_most_likely": "最可能",
       "section_predictions": "预测评分"
     },
+    "quota": {
+      "remaining": "剩余 {{count}} 次",
+      "exhausted": "配额已用尽",
+      "conversation_label": "对话",
+      "replay_label": "重播",
+      "load_failed": "配额不可用"
+    },
     "conversation": {
       "sheet": {
         "title": "对话",
@@ -1972,6 +2004,17 @@
       },
       "cta": {
         "continue_chatting": "继续对话"
+      },
+      "history": {
+        "load_history": "加载历史对话",
+        "loading": "加载对话中...",
+        "load_failed": "加载对话失败。",
+        "retry": "重试",
+        "no_history": "暂无对话历史",
+        "thread_count": "{{count}} 条消息",
+        "select_thread": "选择要重新加载的对话",
+        "load_more": "加载更多",
+        "untitled_thread": "未命名对话"
       }
     },
     "source": {
@@ -2149,6 +2192,70 @@
       "related_incoming": "前因：{{node}} · {{relation}}",
       "related_outgoing": "后续：{{relation}} · {{node}}",
       "related_more": "另有 {{count}} 条关联"
+    },
+    "setup": {
+      "title": "SwarmOracle 设置向导",
+      "step_count": "第 {{current}} / {{total}} 步",
+      "progress_aria": "设置向导进度",
+      "step1_title": "选择你的 LLM 供应商",
+      "step2_title": "配置 API 访问",
+      "step3_title": "测试连接",
+      "step3_intro": "向你的供应商发起一次快速探测，确认凭据可用。",
+      "provider_openai": "OpenAI",
+      "provider_anthropic": "Anthropic",
+      "provider_deepseek": "DeepSeek",
+      "provider_ollama": "Ollama（本地）",
+      "provider_lmstudio": "LM Studio（本地）",
+      "provider_custom": "自定义端点",
+      "provider_custom_hint": "下一步可填入你自己的 base URL",
+      "api_key_label": "API 密钥",
+      "api_key_placeholder": "sk-…",
+      "base_url_label": "Base URL",
+      "optional_label": "可选",
+      "no_key_hint": "Ollama、LM Studio 等本地供应商无需 API 密钥。",
+      "test_button": "测试连接",
+      "testing": "测试中…",
+      "test_idle": "可以开始测试。",
+      "test_success": "连接成功。",
+      "test_failure": "连接失败。",
+      "test_failure_network": "网络异常，请检查 base URL 后重试。",
+      "test_failure_parse": "服务端返回了不可解析的响应。",
+      "show_log": "显示原始响应",
+      "hide_log": "隐藏原始响应",
+      "summary_provider": "供应商",
+      "summary_base_url": "Base URL",
+      "summary_api_key": "API 密钥",
+      "summary_no_key": "（未填）",
+      "back": "上一步",
+      "next": "下一步",
+      "finish": "完成",
+      "skip": "稍后再说"
+    },
+    "onboarding": {
+      "welcome_title": "欢迎使用 SwarmOracle",
+      "welcome_desc": "提出任何「如果……」的假设性问题，让一群 AI 代理为你辩论、推演并展开多条平行世界线。下面我们快速介绍四种核心玩法和进阶工具。",
+      "roundtable_title": "世界线圆桌",
+      "roundtable_desc": "多位代表围坐在虚拟圆桌前，围绕分歧未来展开讨论。你可以主导话题、调整代表名单，并实时观察共识凝聚或分裂的过程。",
+      "chamber_title": "神谕密室",
+      "chamber_desc": "走进与单个代理的私密对话间，进行深度聚焦的交流。你可以追问、锚定引述，挖掘所选世界线背后的推理脉络。",
+      "one_move_title": "只改一步",
+      "one_move_desc": "只改变一个决定并重新推演，感受蝴蝶效应。把不同分支并排比较，看看一次小小的拨动如何在时间线之间扩散。",
+      "advanced_title": "进阶工具集",
+      "advanced_desc": "自建代理、探索因果图谱、回放推演轨迹、分析涌现的阵营。场景启动后，可以在工坊、图谱工作台和反事实面板中找到这些功能。",
+      "skip": "跳过",
+      "back": "上一步",
+      "next": "下一步",
+      "done": "开始体验",
+      "step_indicator": "第 {{current}} / {{total}} 步"
+    },
+    "simulation": {
+      "cancel_button": "取消推演",
+      "cancel_confirm_title": "确认取消推演？",
+      "cancel_confirm_desc": "这将停止所有正在进行的推理，此操作不可撤销。",
+      "cancel_confirm_action": "确认取消",
+      "cancel_confirm_dismiss": "继续推演",
+      "cancelled_title": "推演已取消",
+      "cancelled_desc": "推演已被取消。"
     }
   }
 }

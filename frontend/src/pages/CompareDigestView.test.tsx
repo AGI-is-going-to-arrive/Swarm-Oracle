@@ -6,6 +6,7 @@ import { CompareDigestView } from './CompareDigestView';
 
 const {
   getScenarioMock,
+  getCounterfactualCompareMock,
   captureElementDataUrlMock,
   captureCompositeElementDataUrlMock,
   storeState,
@@ -15,6 +16,7 @@ const {
   useCapabilityCheckMock,
 } = vi.hoisted(() => ({
   getScenarioMock: vi.fn(),
+  getCounterfactualCompareMock: vi.fn(),
   captureElementDataUrlMock: vi.fn(async () => 'data:image/png;base64,compare'),
   captureCompositeElementDataUrlMock: vi.fn(async () => 'data:image/png;base64,compare-composite'),
   useCapabilityCheckMock: vi.fn(() => ({ loading: false, enabled: true, capabilities: null, error: null })),
@@ -68,10 +70,26 @@ const {
   })(),
 }));
 
-vi.mock('../api/client', () => ({
-  buildSessionHeaders: () => ({}),
-  getScenario: getScenarioMock,
-}));
+vi.mock('../api/client', () => {
+  // Mirror the real ApiError shape so isApiError(...) works against thrown instances.
+  class MockApiError extends Error {
+    status: number;
+    code: string;
+    constructor(status: number, code: string, message: string) {
+      super(`API ${status} ${code}: ${message}`);
+      this.name = 'ApiError';
+      this.status = status;
+      this.code = code;
+    }
+  }
+  return {
+    ApiError: MockApiError,
+    buildSessionHeaders: () => ({}),
+    getScenario: getScenarioMock,
+    getCounterfactualCompare: getCounterfactualCompareMock,
+    isApiError: (err: unknown) => err instanceof MockApiError,
+  };
+});
 
 vi.mock('../stores/simulationStore', () => ({
   useSimulationStore: (selector: (state: Record<string, unknown>) => unknown) => selector({
@@ -137,8 +155,15 @@ function renderView(path: string) {
   );
 }
 
+// Helper: rebuild an ApiError equivalent reachable from the test mock factory.
+async function importMockApiError(): Promise<new (status: number, code: string, message: string) => Error> {
+  const mod = await import('../api/client') as { ApiError: new (status: number, code: string, message: string) => Error };
+  return mod.ApiError;
+}
+
 beforeEach(() => {
   getScenarioMock.mockReset();
+  getCounterfactualCompareMock.mockReset();
   captureElementDataUrlMock.mockClear();
   captureCompositeElementDataUrlMock.mockClear();
   setScenarioMock.mockClear();
@@ -164,20 +189,15 @@ describe('CompareDigestView', () => {
 
   it('renders a friendly fetch error with retry when compare loading fails', async () => {
     const user = userEvent.setup();
-    vi.spyOn(globalThis, 'fetch')
+    const ApiErrorCtor = await importMockApiError();
+    getCounterfactualCompareMock
+      .mockRejectedValueOnce(new ApiErrorCtor(500, 'INTERNAL_ERROR', 'boom'))
       .mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          scenario_id: 'test-id',
-          branch_a: 'a',
-          branch_b: 'b',
-          rounds: [{ round: 1, branch_a_summary: 'A', branch_b_summary: 'B', divergence_score: 0.12 }],
-        }),
-      } as Response);
+        scenario_id: 'test-id',
+        branch_a: 'a',
+        branch_b: 'b',
+        rounds: [{ round: 1, branch_a_summary: 'A', branch_b_summary: 'B', divergence_score: 0.12 }],
+      });
     getScenarioMock.mockResolvedValue({
       id: 'test-id',
       question: 'Recovered compare',
@@ -199,10 +219,10 @@ describe('CompareDigestView', () => {
   });
 
   it('renders no-data copy instead of raw HTTP 404 text', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
-      ok: false,
-      status: 404,
-    } as Response);
+    const ApiErrorCtor = await importMockApiError();
+    getCounterfactualCompareMock.mockRejectedValueOnce(
+      new ApiErrorCtor(404, 'NOT_FOUND', 'no compare data'),
+    );
 
     renderView('/result/test-id/compare?branch_a=a&branch_b=b');
 
@@ -232,18 +252,15 @@ describe('CompareDigestView', () => {
       ],
     });
 
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        scenario_id: 'test-id',
-        branch_a: 'a',
-        branch_b: 'b',
-        rounds: [
-          { round: 1, branch_a_summary: 'A round 1', branch_b_summary: 'B round 1', divergence_score: 0.33 },
-          { round: 2, branch_a_summary: 'A round 2', branch_b_summary: 'B round 2', divergence_score: 0.74 },
-        ],
-      }),
-    } as Response);
+    getCounterfactualCompareMock.mockResolvedValue({
+      scenario_id: 'test-id',
+      branch_a: 'a',
+      branch_b: 'b',
+      rounds: [
+        { round: 1, branch_a_summary: 'A round 1', branch_b_summary: 'B round 1', divergence_score: 0.33 },
+        { round: 2, branch_a_summary: 'A round 2', branch_b_summary: 'B round 2', divergence_score: 0.74 },
+      ],
+    });
 
     const user = userEvent.setup();
     renderView('/result/test-id/compare?branch_a=a&branch_b=b');
@@ -293,17 +310,14 @@ describe('CompareDigestView', () => {
       ],
       messages: [],
     });
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        scenario_id: 'test-id',
-        branch_a: 'a',
-        branch_b: 'b',
-        rounds: [
-          { round: 1, branch_a_summary: 'A round 1', branch_b_summary: 'B round 1', divergence_score: 0.33 },
-        ],
-      }),
-    } as Response);
+    getCounterfactualCompareMock.mockResolvedValue({
+      scenario_id: 'test-id',
+      branch_a: 'a',
+      branch_b: 'b',
+      rounds: [
+        { round: 1, branch_a_summary: 'A round 1', branch_b_summary: 'B round 1', divergence_score: 0.33 },
+      ],
+    });
 
     renderView('/result/test-id/compare?branch_a=a&branch_b=b');
     await screen.findByText('What if the archive split in two directions?');

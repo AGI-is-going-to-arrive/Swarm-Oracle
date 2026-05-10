@@ -64,7 +64,14 @@ export default function BranchDetailModal({ branch, onClose }: Props) {
             </span>
             <span className="bdm-probability">{Math.round((branch.probability ?? 0.5) * 100)}%</span>
           </div>
-          <button type="button" className="bdm-close" onClick={onClose}>×</button>
+          <button
+            type="button"
+            className="bdm-close"
+            onClick={onClose}
+            aria-label={t('common.close')}
+          >
+            ×
+          </button>
         </div>
 
         <div className="bdm-body">

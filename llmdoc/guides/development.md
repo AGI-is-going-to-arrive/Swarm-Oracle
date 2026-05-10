@@ -35,6 +35,19 @@ npm install
 npm run dev
 ```
 
+### Makefile 快捷入口
+
+仓库根目录现在也提供几个薄封装，方便先做本机预检再起服务：
+
+```bash
+make preflight
+make dev-backend
+make dev-frontend
+```
+
+- `make preflight` 会调用 backend 的预检脚本，覆盖 SQLite、ChromaDB、LLM、web search、CORS、volume、常用端口与磁盘空间。
+- 预检结果里只有 `fail` 会让命令非零退出；`warn` 用来提示本机缺配置或可选依赖，不直接阻塞开发。
+
 ### 预览构建
 
 ```bash
@@ -70,6 +83,8 @@ docker compose up --build -d
   - `FEATURE_ARGUMENT_MAP`
 - `KG Explorer`、`Replay Trace` 和图谱节点对话默认不随 Docker 评审栈开启；需要时显式设置 `FEATURE_KG_EXPLORER=true`、`FEATURE_REPLAY_TRACE=true`、`FEATURE_AGENT_CONVERSATION=true`，然后重启 backend。
 - 根目录 `.dockerignore` 当前已经排除了本地 `frontend/output`、SQLite/Chroma 数据和常见缓存；E2E 产物不会再被一起塞进 Docker build context。
+- compose 默认使用仓库根目录作为 build context，因此 compose 口径看根目录 `.dockerignore`；`backend/.dockerignore` 用于以后直接以 `backend/` 作为 context 构建 backend image 的场景。
+- backend image 当前是多阶段构建，runtime 阶段会做一次 Python import smoke，并带 `/` healthcheck。
 - 如果你要拉一套干净的评审栈，不复用旧 named volume，直接带 project 名启动：
 
 ```bash
@@ -113,6 +128,17 @@ cd backend
 source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
+
+如果这轮改动涉及 admin setup、quota、scenario cancel、conversation history 或 decision bias，优先补下面这组窄集：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest -q tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py --tb=short
+ruff check app/api/scenarios.py app/api/quota.py app/services/simulation_cancel.py app/services/simulator.py tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py
+```
+
+本轮 Sprint 0-2 收尾复核中，这组 pytest 为 `36 passed`，上述 touched-file ruff 为通过。
 
 ### Web Search 定向回归
 
@@ -230,6 +256,26 @@ npm test -- --run src/api/client.test.ts src/pages/InputView.test.tsx src/pages/
   - `<dialog>.showModal()` 缺失时的 `AgentProfileModal` 降级
   - 关键 CSS token / 高流量页面表面的 sRGB / rgba fallback
   - InputView accordion / Agent attach panel / ResultView bridge / ReplayView pagination / ResumePanel checkpoint picker / ShareModal PNG export 这些产品面回归
+
+如果这轮改动涉及 `/admin/setup`、首次引导、对话历史、QuotaBadge、cancel 终态或 ResultView 模式偏好，优先补下面这组窄集：
+
+```bash
+cd frontend
+npm test -- --run src/pages/SetupWizardView.test.tsx src/components/Onboarding/OnboardingGuide.test.tsx src/components/ConversationHistoryPicker.test.tsx src/components/shared/QuotaBadge.test.tsx src/stores/simulationStore.test.ts src/stores/uiPreferencesStore.test.ts src/components/ui/alert-dialog.test.tsx src/i18n/locales.test.ts
+npx tsc --noEmit -p tsconfig.app.json
+npm run lint
+npm run build
+```
+
+本轮 Sprint 0-2 收尾复核中，前端全量 vitest 为 `177 files / 1904 tests / 0 failed`，`tsc`、`lint`、`build` 和 `i18n parity` 都通过。浏览器矩阵覆盖 12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，结果为 `72 passed / 0 failed`。
+
+字体现在从本地 `/fonts` 提供。如果需要重生成字体 CSS 和 woff2 分片，使用：
+
+```bash
+bash frontend/scripts/download-fonts.sh
+```
+
+该脚本会更新 `frontend/src/fonts.css` 和 `frontend/public/fonts/*.woff2`。正常开发不需要每次运行。
 
 ### Custom Agent Upgrade 定向回归
 

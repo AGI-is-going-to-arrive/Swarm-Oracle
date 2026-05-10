@@ -33,6 +33,8 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | Module | File | Description |
 |--------|------|-------------|
 | Scenarios | `app/api/scenarios.py` | Core CRUD, story, export, replay artifact, replay import |
+| Admin | `app/api/admin.py` | Preflight diagnostics and `/admin/setup` LLM connection test endpoints |
+| Quota | `app/api/quota.py` | Conversation and replay quota summary |
 | Campaign | `app/api/campaign.py` | finalize, profile, mastery, badges, daily-status, weekly-summary, `director-state`, `gameplay-state`, scenario summary |
 | Conversation | `app/api/conversation.py` | Node conversation thread/start/get/turn/abort with SSE assistant streaming |
 | Debate | `app/api/debate.py` | Debate live/result/import-replay/predict + Debate WebSocket |
@@ -50,7 +52,12 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | `GET` | `/metrics` | Prometheus text metrics or minimal fallback text |
 | `POST` | `/api/scenario` | Create scenario and return placeholder state immediately |
 | `GET` | `/api/scenario/{id}` | Scenario details with top-level `director_state` and `gameplay_state` |
+| `POST` | `/api/scenario/{id}/cancel` | Request cancellation for a parsing/simulating/narrating scenario |
+| `GET` | `/api/scenario/{id}/conversations` | List scenario conversation thread summaries with cursor pagination |
 | `POST` | `/api/scenario/import-replay` | Import scenario replay as local run |
+| `GET` | `/api/quota/summary` | Conversation/replay quota summary for UI quota badges |
+| `GET` | `/api/admin/preflight` | SQLite/ChromaDB/LLM/web search/CORS/volume diagnostics |
+| `POST` | `/api/admin/test-llm` | Request-scoped LLM connection test for setup wizard |
 | `POST` | `/api/replay-artifact` | Persist replay payload and return short share id |
 | `GET` | `/api/replay-artifact/{id}` | Load replay payload |
 | `POST` | `/api/campaign/scenario/{id}/finalize` | Finalize campaign progress |
@@ -77,9 +84,9 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 ```
 
 - Latest local rerun in this session:
-  - `python -m pytest -q tests/test_evidence_card_flow.py`: `5 passed`
-  - `python -m pytest -q tests/test_session_auth.py -k 'auth_timeout_closes_4001 or oversized_auth_frame_closes_1009 or pending_blocks_new_connections'`: `3 passed`
-  - `python -m pytest -q`: `2248 passed, 2 skipped`
+  - `python -m pytest -q tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py --tb=short`: `36 passed`
+  - touched-file `ruff check` for scenario cancel / quota / decision-bias / preflight files: pass
+  - `python -m pytest -q`: `2477 passed, 3 failed, 2 skipped`; the two LLM gateway failures passed on targeted rerun, while `test_graph_analysis` remains a known baseline difference
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
 ## Runtime Notes
@@ -113,6 +120,10 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - BYOK `llm_base_url` and official `web_search_base_url` endpoints now require `https`; plain `http` is kept only for local/self-hosted development hosts on the allowlist.
 - `POST /api/scenario` now rejects out-of-range `rounds` at schema level, `import-replay` no longer repeatedly scans agents when it falls back by name, and `GET /api/scenario/{id}/groups` now batch-loads leader/member data.
 - `AgentGroup.scenario_id` now has an index, with both `init_db()` lightweight migration coverage and Alembic revision `011_add_agent_group_scenario_index`.
+- Scenario cancellation now has an explicit `cancelled` terminal state. `done / error` scenarios are not demoted by cancel requests, and late WebSocket events are not meant to restart the live UI.
+- `decision_bias` is a fixed five-key schema: `caution / optimism / conservatism / risk_tolerance / creativity`. Missing keys default to `0.5`; invalid numbers and out-of-range values are rejected.
+- Workshop update/delete only applies to custom identities. Generated identities are visible in the library/profile flows but are not editable through workshop endpoints.
+- Conversation origins are scoped to the same scenario; a cross-scenario `origin_branch_id` is treated as not found instead of leaking another scenario's transcript into the prompt context.
 
 ## Environment Variables
 

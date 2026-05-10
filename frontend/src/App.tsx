@@ -40,6 +40,8 @@ const WorkbenchView = lazy(() => import('./pages/WorkbenchView'));
 const KGExplorerView = lazy(() => import('./pages/KGExplorerView'));
 const TimelineGalaxy = lazy(() => import('./pages/TimelineGalaxy'));
 const ReplayView = lazy(() => import('./pages/ReplayView'));
+// S0-1: 3-step setup wizard at /admin/setup
+const SetupWizardView = lazy(() => import('./pages/SetupWizardView'));
 
 function RouteFallback() {
   const { t } = useTranslation();
@@ -80,6 +82,8 @@ export default function App() {
             <Route path="/timeline-galaxy/:id" element={<TimelineGalaxy />} />
             {/* FE-4: Replay View (gated by replay_trace capability server-side) */}
             <Route path="/replay/:id" element={<ReplayView />} />
+            {/* S0-1: Setup Wizard (admin onboarding) */}
+            <Route path="/admin/setup" element={<SetupWizardView />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

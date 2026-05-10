@@ -61,7 +61,7 @@ export interface Scenario {
   id: string;
   question: string;
   language?: 'zh' | 'en';
-  status: 'parsing' | 'simulating' | 'narrating' | 'done' | 'error';
+  status: 'parsing' | 'simulating' | 'narrating' | 'done' | 'error' | 'cancelled';
   created_at: string;
   total_rounds?: number;
   mode?: 'raw' | 'blackboard' | null;
@@ -942,6 +942,7 @@ export type WSEvent =
       type: 'simulation_error';
       data: { error: string | StructuredWsError };
       }
+    | { type: 'simulation_cancelled'; reason: string }
   ) & { meta?: WsEventMeta };
 
 // ── Phase 3: Agent Identity (F1/F3) ─────────────────────

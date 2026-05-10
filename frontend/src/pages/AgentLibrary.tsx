@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { buildSessionHeaders, getSessionBoundUserId } from '../api/client';
+import { deleteAgent, getSessionBoundUserId } from '../api/client';
 import { useAgentStore } from '../stores/agentStore';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { AgentProfileModal } from '../components/AgentProfileModal';
@@ -66,6 +66,7 @@ export function AgentLibrary() {
   }, [fetchIdentities, enabled]);
 
   const customAgents = identities.filter(a => a.kind === 'custom');
+  const generatedAgents = identities.filter(a => a.kind === 'generated');
 
   if (capLoading) {
     return <div className="agent-page agent-page--centered">{t('common.loading', 'Loading...')}</div>;
@@ -76,6 +77,84 @@ export function AgentLibrary() {
       <Link to="/" className="agent-link">{t('common.back_home', 'Back to Home')}</Link>
     </div>
   );
+
+  const renderAgentCard = (agent: AgentIdentityInfo) => {
+    const domains = getAgentDomains(agent);
+    const isGenerated = agent.kind === 'generated';
+    const noEditTitle = t('agent_library.generated_no_edit', 'System-generated agents cannot be edited');
+    const noDeleteTitle = t('agent_library.generated_no_delete', 'System-generated agents cannot be deleted');
+    return (
+      <article
+        key={agent.id}
+        className={`agent-card${isGenerated ? ' agent-card--generated' : ''}`}
+      >
+        <h3 className="agent-card__title">{agent.display_name}</h3>
+        <span className={`agent-tier-badge agent-tier-badge--${(agent.preferred_tier || 'IMPORTANT').toLowerCase()}`}>
+          {(agent.preferred_tier || 'IMPORTANT').toUpperCase()}
+        </span>
+        {isGenerated && (
+          <span className="agent-generated-badge" aria-label={t('agent_library.generated_group', 'System Generated')}>
+            {t('agent_library.generated_badge', 'Generated')}
+          </span>
+        )}
+        <p className="agent-card__role">{agent.role}</p>
+        {agent.persona && (
+          <p className="agent-card__persona">
+            {agent.persona.length > 120 ? agent.persona.slice(0, 120) + '...' : agent.persona}
+          </p>
+        )}
+        {domains.length > 0 && (
+          <div className="agent-card__domains">
+            {domains.map((domain) => (
+              <span key={domain} className="agent-domain-token">
+                {t(getKnowledgeDomainLabelKey(domain), domain)}
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="agent-card__actions">
+          <button
+            type="button"
+            onClick={() => setProfileAgent(agent)}
+            className="agent-card__action"
+          >
+            {t('agents.view_profile', 'View profile')}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (isGenerated) return;
+              navigate(`/agents/edit/${agent.id}`);
+            }}
+            className="agent-card__action"
+            disabled={isGenerated}
+            title={isGenerated ? noEditTitle : undefined}
+            aria-disabled={isGenerated || undefined}
+          >
+            {t('agents.edit', 'Edit')}
+          </button>
+          <button
+            type="button"
+            onClick={async (e) => {
+              e.stopPropagation();
+              if (isGenerated) return;
+              if (!confirm(t('agents.delete_confirm', 'Delete this agent?'))) return;
+              await deleteAgent(agent.id);
+              const userId = getSessionBoundUserId();
+              fetchIdentities(userId);
+            }}
+            className="agent-card__action agent-card__action--danger"
+            disabled={isGenerated}
+            title={isGenerated ? noDeleteTitle : undefined}
+            aria-disabled={isGenerated || undefined}
+          >
+            {t('common.delete', 'Delete')}
+          </button>
+        </div>
+      </article>
+    );
+  };
 
   return (
     <div className="agent-page">
@@ -92,7 +171,7 @@ export function AgentLibrary() {
       {loading && <p>{t('common.loading', 'Loading...')}</p>}
       {error && <p role="alert" className="agent-form__error">{error}</p>}
 
-      {!loading && customAgents.length === 0 && (
+      {!loading && customAgents.length === 0 && generatedAgents.length === 0 && (
         <div className="agent-empty-state">
           <p className="agent-empty-state__title">{t('agents.empty_state', 'No custom agents yet.')}</p>
           <p>{t('agents.empty_hint', 'Create your first agent to use in simulations.')}</p>
@@ -102,72 +181,28 @@ export function AgentLibrary() {
         </div>
       )}
 
-      <div className="agent-library-grid">
-        {customAgents.map(agent => {
-          const domains = getAgentDomains(agent);
-          return (
-          <article
-            key={agent.id}
-            className="agent-card"
-          >
-            <h3 className="agent-card__title">{agent.display_name}</h3>
-            <span className={`agent-tier-badge agent-tier-badge--${(agent.preferred_tier || 'IMPORTANT').toLowerCase()}`}>
-              {(agent.preferred_tier || 'IMPORTANT').toUpperCase()}
-            </span>
-            <p className="agent-card__role">{agent.role}</p>
-            {agent.persona && (
-              <p className="agent-card__persona">
-                {agent.persona.length > 120 ? agent.persona.slice(0, 120) + '...' : agent.persona}
-              </p>
-            )}
-            {domains.length > 0 && (
-              <div className="agent-card__domains">
-                {domains.map((domain) => (
-                  <span key={domain} className="agent-domain-token">
-                    {t(getKnowledgeDomainLabelKey(domain), domain)}
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="agent-card__actions">
-              <button
-                type="button"
-                onClick={() => setProfileAgent(agent)}
-                className="agent-card__action"
-              >
-                {t('agents.view_profile', 'View profile')}
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigate(`/agents/edit/${agent.id}`);
-                }}
-                className="agent-card__action"
-              >
-                {t('agents.edit', 'Edit')}
-              </button>
-              <button
-                type="button"
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  if (!confirm(t('agents.delete_confirm', 'Delete this agent?'))) return;
-                  await fetch(`/api/agents/workshop/${agent.id}`, {
-                    method: 'DELETE',
-                    headers: buildSessionHeaders(),
-                  });
-                  const userId = getSessionBoundUserId();
-                  fetchIdentities(userId);
-                }}
-                className="agent-card__action agent-card__action--danger"
-              >
-                {t('common.delete', 'Delete')}
-              </button>
-            </div>
-          </article>
-          );
-        })}
-      </div>
+      {customAgents.length > 0 && (
+        <section className="agent-library-section">
+          <h2 className="agent-library-section__title">
+            {t('agent_library.custom_group', 'My Agents')}
+          </h2>
+          <div className="agent-library-grid">
+            {customAgents.map(renderAgentCard)}
+          </div>
+        </section>
+      )}
+
+      {generatedAgents.length > 0 && (
+        <section className="agent-library-section">
+          <h2 className="agent-library-section__title">
+            {t('agent_library.generated_group', 'System Generated')}
+          </h2>
+          <div className="agent-library-grid">
+            {generatedAgents.map(renderAgentCard)}
+          </div>
+        </section>
+      )}
+
       <AgentProfileModal
         identity={profileAgent}
         open={profileAgent !== null}

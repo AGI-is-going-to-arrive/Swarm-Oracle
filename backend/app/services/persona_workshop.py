@@ -26,6 +26,13 @@ ALLOWED_KNOWLEDGE_DOMAINS = [
 ]
 
 ALLOWED_CUSTOM_AGENT_TIERS = {"CROWD", "IMPORTANT"}
+DECISION_BIAS_KEYS = [
+    "caution",
+    "optimism",
+    "conservatism",
+    "risk_tolerance",
+    "creativity",
+]
 
 
 def _parse_json_list(raw: str | None) -> list[str] | None:
@@ -73,6 +80,22 @@ def _validate_knowledge_domains(domains: list[str] | None) -> list[str] | None:
     return domains
 
 
+def validate_decision_bias(bias: dict) -> dict:
+    """Validate 5-key decision_bias schema, values in 0-1 range."""
+    if not isinstance(bias, dict):
+        raise ValueError("decision_bias must be an object")
+    validated = {}
+    for key in DECISION_BIAS_KEYS:
+        val = bias.get(key)
+        if val is None:
+            validated[key] = 0.5
+        elif not isinstance(val, bool) and isinstance(val, (int, float)) and 0 <= val <= 1:
+            validated[key] = float(val)
+        else:
+            raise ValueError(f"decision_bias.{key} must be 0-1, got {val}")
+    return validated
+
+
 def _validate_preferred_tier(value: str | None, default: str = "IMPORTANT") -> str:
     raw_tier = default if value is None or not str(value).strip() else str(value)
     tier = raw_tier.strip().upper()
@@ -97,6 +120,14 @@ def create_custom_agent(
     _validate_knowledge_domains(knowledge_domains)
     validated_preferred_tier = _validate_preferred_tier(preferred_tier)
 
+    # W1: enforce 5-key bounded schema on the create path too — previously only
+    # PATCH/PUT validated, so a POST could persist arbitrary keys / out-of-range
+    # values that later crashed downstream consumers.  Keep ``None``/empty as a
+    # legitimate "no override" signal (column stays NULL).
+    validated_bias: dict | None = None
+    if decision_bias:
+        validated_bias = validate_decision_bias(decision_bias)
+
     # Sanitize persona via untrusted text guardrail
     sanitized_persona = None
     if persona:
@@ -112,7 +143,7 @@ def create_custom_agent(
         display_name=display_name,
         role=role,
         persona=sanitized_persona,
-        decision_bias_json=json.dumps(decision_bias) if decision_bias else None,
+        decision_bias_json=json.dumps(validated_bias) if validated_bias else None,
         knowledge_domain_json=json.dumps(knowledge_domains) if knowledge_domains else None,
         continuity_key=continuity_key,
         preferred_tier=validated_preferred_tier,
@@ -133,11 +164,22 @@ def create_custom_agent(
 
 
 def update_custom_agent(identity_id: str, **kwargs) -> None:
-    """Update fields on an existing custom agent identity."""
+    """Update fields on an existing custom agent identity.
+
+    H2: only identities with ``kind == "custom"`` may be mutated through the
+    workshop surface.  Generated agents (auto-derived from a scenario) must
+    stay immutable so they keep faithfully representing the scenario that
+    spawned them — UI disabling the button is not enough since callers can
+    bypass the frontend.
+    """
     with Session(get_engine()) as session:
         identity = session.get(AgentIdentity, identity_id)
         if identity is None:
             raise LookupError(f"AgentIdentity {identity_id} not found")
+        if identity.kind != "custom":
+            raise PermissionError(
+                f"AgentIdentity {identity_id} kind={identity.kind!r} is not editable"
+            )
 
         if "display_name" in kwargs:
             identity.display_name = kwargs["display_name"]
@@ -162,6 +204,8 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
 
         if "decision_bias" in kwargs:
             bias = kwargs["decision_bias"]
+            if bias is not None:
+                bias = validate_decision_bias(bias)
             identity.decision_bias_json = json.dumps(bias) if bias else None
 
         if "knowledge_domains" in kwargs:
@@ -197,11 +241,20 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
 
 
 def delete_custom_agent(identity_id: str) -> None:
-    """Delete a custom agent identity."""
+    """Delete a custom agent identity.
+
+    H2: only identities with ``kind == "custom"`` may be removed via the
+    workshop API; generated agents are managed by the simulation pipeline and
+    must not be deletable from the user-facing surface.
+    """
     with Session(get_engine()) as session:
         identity = session.get(AgentIdentity, identity_id)
         if identity is None:
             raise LookupError(f"AgentIdentity {identity_id} not found")
+        if identity.kind != "custom":
+            raise PermissionError(
+                f"AgentIdentity {identity_id} kind={identity.kind!r} is not deletable"
+            )
         user_id = identity.user_id
         session.delete(identity)
         session.commit()

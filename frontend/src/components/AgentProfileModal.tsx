@@ -214,6 +214,27 @@ export function AgentProfileModal({ identity, open, onClose }: Props) {
     return buildBiasRows(bias);
   }, [identity]);
 
+  // S2-5: Growth metrics derived from events list.
+  // - scenario_count: distinct scenario_id appearances
+  // - stance_shifts: events of type 'stance_shift'
+  // - growth_events: total events recorded
+  const growthMetrics = useMemo(() => {
+    const scenarioIds = new Set<string>();
+    let stanceShifts = 0;
+    for (const ev of events) {
+      if (ev.scenario_id) scenarioIds.add(ev.scenario_id);
+      if (ev.event_type === 'stance_shift') stanceShifts += 1;
+    }
+    return {
+      scenarioCount: scenarioIds.size,
+      stanceShifts,
+      growthEvents: events.length,
+    };
+  }, [events]);
+  const hasGrowthMetrics = growthMetrics.scenarioCount > 0
+    || growthMetrics.stanceShifts > 0
+    || growthMetrics.growthEvents > 0;
+
   // ESC handling is built into <dialog>
   if (!identity) return <dialog ref={dialogRef} />;
 
@@ -353,6 +374,50 @@ export function AgentProfileModal({ identity, open, onClose }: Props) {
 
         {/* Divider */}
         <hr className="agent-profile-modal__divider" />
+
+        {/* S2-5: Growth metrics summary derived from events */}
+        {!capLoading && identityEnabled && !loading && !error && (
+          <section className="agent-profile-modal__section agent-profile-modal__metrics">
+            <h3 className="agent-profile-modal__section-title">
+              {t('agent_profile.metrics_title', 'Growth Metrics')}
+            </h3>
+            {hasGrowthMetrics ? (
+              <ul className="agent-profile-modal__metrics-list">
+                {growthMetrics.scenarioCount > 0 && (
+                  <li className="agent-profile-modal__metrics-item">
+                    {t(
+                      'agent_profile.metrics_scenarios',
+                      `Participated in ${growthMetrics.scenarioCount} scenarios`,
+                      { count: growthMetrics.scenarioCount },
+                    )}
+                  </li>
+                )}
+                {growthMetrics.stanceShifts > 0 && (
+                  <li className="agent-profile-modal__metrics-item">
+                    {t(
+                      'agent_profile.metrics_shifts',
+                      `Shifted stance ${growthMetrics.stanceShifts} times`,
+                      { count: growthMetrics.stanceShifts },
+                    )}
+                  </li>
+                )}
+                {growthMetrics.growthEvents > 0 && (
+                  <li className="agent-profile-modal__metrics-item">
+                    {t(
+                      'agent_profile.metrics_growth',
+                      `${growthMetrics.growthEvents} growth events recorded`,
+                      { count: growthMetrics.growthEvents },
+                    )}
+                  </li>
+                )}
+              </ul>
+            ) : (
+              <p className="agent-profile-modal__status">
+                {t('agent_profile.metrics_empty', 'No growth data yet')}
+              </p>
+            )}
+          </section>
+        )}
 
         {/* Timeline */}
         <section>

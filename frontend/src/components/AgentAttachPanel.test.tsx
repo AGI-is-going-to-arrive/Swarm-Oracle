@@ -14,17 +14,17 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-function jsonResponse(body: unknown, status = 200): Response {
+const { listAgentIdentitiesMock } = vi.hoisted(() => ({
+  listAgentIdentitiesMock: vi.fn(),
+}));
+
+vi.mock('../api/client', async (importActual) => {
+  const actual = await importActual<typeof import('../api/client')>();
   return {
-    ok: status >= 200 && status < 300,
-    status,
-    headers: {
-      get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
-    },
-    json: async () => body,
-    text: async () => JSON.stringify(body),
-  } as unknown as Response;
-}
+    ...actual,
+    listAgentIdentities: listAgentIdentitiesMock,
+  };
+});
 
 const customAgent: AgentIdentityInfo = {
   id: 'agent-1',
@@ -60,9 +60,13 @@ describe('AgentAttachPanel', () => {
   });
 
   it('shows the store error and retries loading agents instead of falling through to the empty CTA', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(jsonResponse({ detail: 'boom' }, 500))
-      .mockResolvedValueOnce(jsonResponse([customAgent]));
+    // After S1-3 C2, agentStore calls api/client.listAgentIdentities (which
+    // routes through safeGet with retry). Mock the higher-level helper to keep
+    // the test deterministic and avoid the 5xx retry backoff.
+    listAgentIdentitiesMock.mockReset();
+    listAgentIdentitiesMock
+      .mockRejectedValueOnce(new Error('HTTP 500'))
+      .mockResolvedValueOnce([customAgent]);
     const user = userEvent.setup();
 
     render(
@@ -77,10 +81,7 @@ describe('AgentAttachPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
 
     await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        expect.stringContaining('/api/agents/identities?user_id=user-1'),
-        expect.any(Object),
-      );
+      expect(listAgentIdentitiesMock).toHaveBeenCalledWith('user-1');
     });
     expect(await screen.findByText('Recovered Agent')).toBeInTheDocument();
   });

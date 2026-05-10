@@ -130,6 +130,52 @@
   font-size: 0.85rem;
 }
 
+/* ── S1-1 Cancellation surface ───────────────────────────── */
+.sim-cancel-btn {
+  font-weight: 600;
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: #ffffff;
+}
+.sim-cancel-btn:hover:not(:disabled) {
+  background: oklch(50% 0.18 25);
+  border-color: oklch(50% 0.18 25);
+  color: #ffffff;
+}
+.sim-cancel-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.sim-cancelled {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  background: hsla(15, 62%, 48%, 0.08);
+  background: oklch(60% 0.18 25 / 0.08);
+  border-bottom: 1px solid hsla(15, 62%, 48%, 0.15);
+  border-bottom: 1px solid oklch(60% 0.18 25 / 0.15);
+}
+.sim-cancelled__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sim-cancelled__copy strong {
+  color: var(--color-danger);
+  font-size: 0.95rem;
+}
+.sim-cancelled__copy span {
+  color: var(--text-muted, #6b6b6b);
+  font-size: 0.85rem;
+}
+.sim-cancel-error {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: 0.85rem;
+}
+
 /* ── Main Content ────────────────────────────────────────── */
 .sim-content {
   flex: 1;

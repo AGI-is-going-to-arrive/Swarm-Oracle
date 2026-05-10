@@ -117,6 +117,7 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
         const raw = JSON.parse(event.data) as WSEvent & {
           type: string;
           data?: Record<string, unknown>;
+          reason?: string;
         };
 
         // First-frame auth: auth_ok signals connection is established
@@ -128,6 +129,28 @@ export function useSimulationWS(scenarioId: string | undefined, ready: boolean =
           logWsDebug('SimulationWS', 'auth_ok', { streamId: currentScenarioId });
           requestScenarioResync(currentScenarioId, ws, messageVersionAtOpen);
           reconnectCount.current = 0;
+          return;
+        }
+
+        // S1-1: cancelled is a terminal state. Update store, suppress reconnect,
+        // and close the socket cleanly so onclose does not schedule retries.
+        if (raw.type === 'simulation_cancelled') {
+          logWsDebug('SimulationWS', 'simulation_cancelled', {
+            streamId: currentScenarioId,
+            reason: raw.reason ?? 'user_cancelled',
+          });
+          cleanedUp.current = true;
+          useSimulationStore.getState().setCancelled(raw.reason ?? 'user_cancelled');
+          if (reconnectTimerRef.current) {
+            window.clearTimeout(reconnectTimerRef.current);
+            reconnectTimerRef.current = null;
+          }
+          try {
+            ws.close(1000, 'simulation_cancelled');
+          } catch {
+            // ignore
+          }
+          wsRef.current = null;
           return;
         }
         const meta = raw.meta;

@@ -7,6 +7,7 @@ import { useSimulationWS } from './useSimulationWS';
 const storeState = {
   setScenario: vi.fn(),
   handleWSEvent: vi.fn(),
+  setCancelled: vi.fn(),
 };
 
 const { getScenarioMock } = vi.hoisted(() => ({
@@ -94,6 +95,7 @@ describe('useSimulationWS', () => {
     getScenarioMock.mockReset();
     storeState.setScenario.mockReset();
     storeState.handleWSEvent.mockReset();
+    storeState.setCancelled.mockReset();
     vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
     const sessionStore = new Map<string, string>();
     vi.stubGlobal('sessionStorage', {
@@ -435,5 +437,31 @@ describe('useSimulationWS', () => {
     });
 
     expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
+  it('handles simulation_cancelled event by setting cancelled state and suppressing reconnect', () => {
+    render(<Harness scenarioId="scenario-cancel" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onopen?.(new Event('open'));
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'simulation_cancelled',
+          reason: 'user_cancelled',
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.setCancelled).toHaveBeenCalledWith('user_cancelled');
+
+    // Socket was closed cleanly by the cancel handler — emitClose(1006) should
+    // not trigger a reconnect because cleanedUp guard is set.
+    act(() => {
+      MockWebSocket.instances[0]?.emitClose(1006);
+      vi.advanceTimersByTime(30000);
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(1);
   });
 });

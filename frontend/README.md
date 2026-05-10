@@ -23,9 +23,10 @@ React + TypeScript frontend for SwarmOracle.
 
 | Route | Component | Description |
 |-------|-----------|-------------|
-| `/` | `InputView` | Scenario input, progress indicator, quick starts, source families, provider policy, optional organization id, advanced/BYOK accordions, custom Agent attach panel |
+| `/` | `InputView` | Scenario input, progress indicator, quick starts, onboarding, launch confirmation, source families, provider policy, optional organization id, advanced/BYOK accordions, custom Agent attach panel |
+| `/admin/setup` | `SetupWizardView` | Three-step provider setup, API/base URL entry, and connection test |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, capture |
-| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, ledger-style archive, director debrief / campaign summary, share/export, PNG share artifact, replay import, resume checkpoint picker, source badges, plus the capability-gated `What's Next` bridge |
+| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, share/export, PNG share artifact, replay import, resume checkpoint picker, source badges, plus the capability-gated `What's Next` bridge |
 | `/replay/:id` | `ReplayView` | Replay trace timeline with pagination, branch filter, and unavailable/probe-error states |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
 | `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate result, supporting turns, replay digest, share/import |
@@ -73,6 +74,20 @@ React + TypeScript frontend for SwarmOracle.
   ResultView-side resume control for `POST /api/scenario/:id/resume`; prefers branch-scoped checkpoints when available, previews `compressed_summary`, falls back to round input when no checkpoint is available, locks after success, and is covered by the dedicated resume smoke script
 - `AgentAttachPanel.tsx`
   homepage custom Agent picker; renders persona, domains, and decision bias as React text, caps selection at 5, and keeps loading/error/retry states visible
+- `SetupWizardView.tsx / components/Setup/*`
+  local provider setup flow for `/admin/setup`; provider preset selection, API/base URL entry, and `/api/admin/test-llm` connection testing
+- `OnboardingGuide.tsx / useOnboardingState.ts`
+  first-run homepage carousel; completion is stored locally and storage failure does not block scenario launch
+- `components/ui/alert-dialog.tsx`
+  shared Radix AlertDialog wrapper for InputView launch confirmation and Simulation cancel confirmation
+- `ConversationHistoryPicker.tsx`
+  shared scenario conversation history picker for EndingChatModal, RoundtableAgentChat, and NodeConversationSheet
+- `QuotaBadge.tsx`
+  conversation/replay quota pill backed by `/api/quota/summary`
+- `DecisionBiasSlider.tsx`
+  five-axis Agent Workshop decision-bias control; the UI maps 0-100 sliders to the backend 0-1 payload
+- `uiPreferencesStore.ts`
+  localStorage-backed ResultView Reader/Workbench preference
 - `experiments/phaser-custom/*`
   local curated Phaser entry, isolated spike configs, and repeatable custom-build validation scripts; current default `vite / vitest` also consume this entry, while `phaser3spectorjs-stub.cjs` keeps the build path quiet
 - `scripts/lib/frontendPreflight.mjs`
@@ -147,6 +162,10 @@ npm run build:spike:phaser-custom
 ```
 
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
+- Latest Sprint 0-2 frontend verification:
+  - full vitest: `177 files / 1904 passed`
+  - `tsc / lint / build / i18n parity`: pass
+  - browser matrix: `72/72 PASS` at `output/e2e/sprint0-2-review-20260510-browser/summary.json`
 - Latest scoped reruns for the bridge / guide copy update:
   - `npm run test -- --run src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts --reporter=verbose`: `87 passed`
   - `npx tsc --noEmit`: pass
@@ -207,6 +226,8 @@ npm run build:spike:phaser-custom
 - `frontend/public/assets/ASSET_CREDITS.md`
   is the current asset inventory/source reference.
 - It is responsible only for asset scope and provenance, not for product scope or signoff status.
+- Self-hosted fonts are served from `/fonts` via `src/fonts.css`; `scripts/download-fonts.sh` regenerates the font CSS and woff2 files.
+- The latest Sprint 0-2 browser matrix is `72/72 PASS` at `output/e2e/sprint0-2-review-20260510-browser/summary.json`.
 
 ## Build
 

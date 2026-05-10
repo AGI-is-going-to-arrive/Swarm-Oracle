@@ -32,6 +32,7 @@ const STATUS_RANK: Record<SimulationState['status'], number> = {
   narrating: 3,
   done: 4,
   error: 4,
+  cancelled: 4,
 };
 
 const BRANCH_STATUS_RANK: Record<BranchInfo['status'], number> = {
@@ -58,9 +59,10 @@ export interface SimulationState {
   messages: AgentMessage[];
   groups: GroupInfo[];  // P3-A
   hierarchical: boolean;  // P3-A
-  status: 'idle' | 'parsing' | 'simulating' | 'narrating' | 'done' | 'error';
+  status: 'idle' | 'parsing' | 'simulating' | 'narrating' | 'done' | 'error' | 'cancelled';
   error: string | null;
   errorCode: string | null;
+  cancelReason: string | null;
 
   // V2: Pixel visualization
   visualizationEnabled: boolean;
@@ -84,6 +86,7 @@ export interface SimulationState {
   loadScenario: (id: string) => Promise<void>;
   handleWSEvent: (event: WSEvent) => void;
   toggleViewMode: () => void;
+  setCancelled: (reason?: string) => void;
   reset: () => void;
 }
 
@@ -103,6 +106,7 @@ const initialState = {
   status: 'idle' as const,
   error: null as string | null,
   errorCode: null as string | null,
+  cancelReason: null as string | null,
   // V2: Pixel visualization
   visualizationEnabled: false,
   viewMode: 'classic' as const,
@@ -173,9 +177,16 @@ function mergeScenarioStatus(
   current: SimulationState['status'],
   incoming: ActiveSimulationStatus,
 ): ActiveSimulationStatus {
+  // S1-1: cancelled is a terminal state and must not be regressed by stale
+  // snapshots/events arriving after the cancel WS frame.
+  if (current === 'cancelled') return current as ActiveSimulationStatus;
   if (current === 'done' && incoming !== 'error') return current;
   if (current === 'error' && incoming !== 'done') return current;
   return STATUS_RANK[current] > STATUS_RANK[incoming] ? (current as ActiveSimulationStatus) : incoming;
+}
+
+function shouldIgnoreCancelledEvent(status: SimulationState['status'], eventType: string): boolean {
+  return status === 'cancelled' && eventType !== 'heartbeat' && eventType !== 'simulation_cancelled';
 }
 
 function applyScenarioSnapshot(state: SimulationState, scenario: Scenario): Partial<SimulationState> {
@@ -282,6 +293,9 @@ export const useSimulationStore = create<SimulationState>((set) => ({
     if (currentScenarioId && currentScenarioId !== _seenScenarioId) {
       seenMessageKeys = new Set<string>();
       _seenScenarioId = currentScenarioId;
+    }
+    if (shouldIgnoreCancelledEvent(useSimulationStore.getState().status, event.type)) {
+      return;
     }
     switch (event.type) {
       case 'heartbeat':
@@ -547,23 +561,46 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         break;
 
       case 'simulation_done':
-        set({
-          status: 'done',
-          isSimulationComplete: true,
-          thinkingAgents: [],
+        // H4 fix: cancelled is terminal — late simulation_done must not regress it.
+        set((state) => {
+          if (state.status === 'cancelled') {
+            return { thinkingAgents: [] };
+          }
+          return {
+            status: 'done',
+            isSimulationComplete: true,
+            thinkingAgents: [],
+          };
         });
         break;
 
-      case 'simulation_error':
-        set({
-          status: 'error',
-          errorCode: getApiErrorCode(event.data.error),
-          error: getLocalizedApiErrorMessage(
-            event.data.error,
-            translate,
-            translate('common.api_errors.simulation_start_failed'),
-          ),
+      case 'simulation_cancelled':
+        set((state) => ({
+          status: 'cancelled',
+          cancelReason: event.reason ?? 'user_cancelled',
+          isSimulationComplete: state.isSimulationComplete,
           thinkingAgents: [],
+          error: null,
+          errorCode: null,
+        }));
+        break;
+
+      case 'simulation_error':
+        // H4 fix: cancelled is terminal — late simulation_error must not regress it.
+        set((state) => {
+          if (state.status === 'cancelled') {
+            return { thinkingAgents: [] };
+          }
+          return {
+            status: 'error',
+            errorCode: getApiErrorCode(event.data.error),
+            error: getLocalizedApiErrorMessage(
+              event.data.error,
+              translate,
+              translate('common.api_errors.simulation_start_failed'),
+            ),
+            thinkingAgents: [],
+          };
         });
         break;
 
@@ -587,6 +624,15 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         viewMode: newMode,
       };
     }),
+
+  setCancelled: (reason?: string) =>
+    set(() => ({
+      status: 'cancelled',
+      cancelReason: reason ?? 'user_cancelled',
+      thinkingAgents: [],
+      error: null,
+      errorCode: null,
+    })),
 
   reset: () => {
     seenMessageKeys = new Set<string>();

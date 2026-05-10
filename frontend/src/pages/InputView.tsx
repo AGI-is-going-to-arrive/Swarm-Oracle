@@ -18,7 +18,9 @@ import type { WebSearchFamily } from '../types';
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import { useAgentStore } from '../stores/agentStore';
 import { AgentAttachPanel } from '../components/AgentAttachPanel';
+import { OnboardingGuide } from '../components/Onboarding/OnboardingGuide';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { useOnboardingState } from '../hooks/useOnboardingState';
 import {
   markChallengeStarted,
 } from '../lib/dailyChallenge';
@@ -45,6 +47,18 @@ import { useWebSearchConfig } from '../hooks/useWebSearchConfig';
 import { useOrgContext } from '../hooks/useOrgContext';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
 import { ProgressIndicator } from '../components/ProgressIndicator';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogOverlay,
+  AlertDialogPortal,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 import { predictTextareaHeight } from '../lib/textLayout/inputPredict';
 import { validateByok } from '../lib/llmProviderPolicy';
 import './InputView.css';
@@ -220,6 +234,8 @@ export function InputView() {
   const [searchParams] = useSearchParams();
   const directorIdentity = getDirectorIdentity();
   const { capabilities: caps } = useCapabilityCheck('custom_agents');
+  // S1-5: First-visit onboarding guide. Hidden once the user finishes or skips.
+  const onboarding = useOnboardingState();
   const agentSelectedIds = useAgentStore((s) => s.selectedIds);
   const startSimulation = useSimulationStore((s) => s.startSimulation);
   const submitError = useSimulationStore((s) => s.error);
@@ -899,11 +915,18 @@ export function InputView() {
 
   const cancelLaunch = () => {
     setConfirmDialogData(null);
-    questionRef.current?.focus();
+    // Defer focus restoration so Radix's focus-trap teardown does not race ahead.
+    // Radix tries to restore focus to the original trigger; fall back to textarea
+    // if Radix loses track (e.g. when the dialog opened via keyboard from textarea).
+    requestAnimationFrame(() => {
+      if (document.activeElement === document.body) {
+        questionRef.current?.focus();
+      }
+    });
   };
 
-  const onConfirmDialogKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') { e.preventDefault(); cancelLaunch(); }
+  const handleConfirmOpenChange = (open: boolean) => {
+    if (!open) cancelLaunch();
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -1103,6 +1126,12 @@ export function InputView() {
 
   return (
     <div className="input-view">
+      {/* S1-5: First-visit onboarding guide. Suppressed while a launch is in
+          progress so the loading overlay stays focused. */}
+      <OnboardingGuide
+        open={!onboarding.completed && !isSubmitting}
+        onComplete={onboarding.complete}
+      />
       {/* Loading Overlay */}
       {isSubmitting && (
         <div className="loading-overlay">
@@ -1995,53 +2024,63 @@ export function InputView() {
             <span className="byok-test-error" role="alert">{continuityError}</span>
           )}
 
-          {confirmDialogData && (
-            <div
-              className="confirm-launch-backdrop"
-              role="presentation"
-              onClick={cancelLaunch}
-            >
-              <div
+          <p className="iv-security-notice">{t('home.security_notice')}</p>
+
+          <AlertDialog
+            open={!!confirmDialogData}
+            onOpenChange={handleConfirmOpenChange}
+          >
+            <AlertDialogPortal>
+              <AlertDialogOverlay
+                className="confirm-launch-backdrop"
+                onClick={cancelLaunch}
+              />
+              <AlertDialogContent
                 className="confirm-launch"
                 role="dialog"
                 aria-modal="true"
                 aria-label={t('home.confirm_launch_title')}
-                onClick={(e) => e.stopPropagation()}
-                onKeyDown={onConfirmDialogKeyDown}
+                aria-describedby="confirm-launch-settings"
+                onClick={(event) => event.stopPropagation()}
               >
-                <div className="confirm-launch__header">
-                  <h3>{t('home.confirm_launch_title')}</h3>
-                </div>
+                <AlertDialogHeader className="confirm-launch__header">
+                  <AlertDialogTitle asChild>
+                    <h3>{t('home.confirm_launch_title')}</h3>
+                  </AlertDialogTitle>
+                </AlertDialogHeader>
                 <div className="confirm-launch__body">
-                  <p className="confirm-launch__question">{confirmDialogData.question}</p>
-                  <p className="confirm-launch__settings">
+                  <p className="confirm-launch__question">
+                    {confirmDialogData?.question ?? ''}
+                  </p>
+                  <AlertDialogDescription
+                    id="confirm-launch-settings"
+                    className="confirm-launch__settings"
+                  >
                     {t('home.confirm_launch_settings', {
                       rounds,
                       agents: numAgents,
                       mode: t(mode === 'blackboard' ? 'home.mode_blackboard' : 'home.mode_raw'),
                     })}
-                  </p>
+                  </AlertDialogDescription>
                 </div>
-                <div className="confirm-launch__footer">
-                  <button
-                    type="button"
+                <AlertDialogFooter className="confirm-launch__footer">
+                  <AlertDialogCancel
                     className="btn btn-ghost"
                     onClick={cancelLaunch}
                   >
                     {t('common.cancel')}
-                  </button>
-                  <button
-                    type="button"
+                  </AlertDialogCancel>
+                  <AlertDialogAction
                     className="btn btn-primary"
                     onClick={confirmLaunch}
                     autoFocus
                   >
                     {t('home.submit')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialogPortal>
+          </AlertDialog>
 
           {pendingLaunch && continuityMatches.length > 0 && (
             <div className="continuity-dialog-backdrop" role="presentation">

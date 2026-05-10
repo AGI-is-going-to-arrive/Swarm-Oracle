@@ -198,8 +198,10 @@ export function buildEndingAnchorId(kind: 'verdict' | 'insight' | 'key_moment' |
 
 export function trimQuoteSnippet(content: string, maxLength = 120): string {
   const normalized = content.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, maxLength).trimEnd()}…`;
+  // Truncate by Unicode code points (not UTF-16 units) to preserve emoji / CJK extension chars.
+  const codepoints = Array.from(normalized);
+  if (codepoints.length <= maxLength) return normalized;
+  return `${codepoints.slice(0, maxLength).join('').trimEnd()}…`;
 }
 
 export function stripOracleReasoningText(content: string): string {

@@ -3,6 +3,10 @@ import { useCapabilityCheck } from './useCapabilityCheck';
 import { buildSessionHeaders } from '../api/client';
 import type { CapabilitiesResponse } from '../api/client';
 
+// Direct-fetch retained: this hook needs to swallow tier-specific HTTP errors
+// (e.g. 404 for "feature not enabled for this scenario") and surface a generic
+// "no data yet" state per hook key, rather than throwing ApiError. See
+// S1-3 C2 direct-fetch allowlist in CLAUDE.md.
 const BASE = '/api';
 
 export type HookKey = 'causal_graph' | 'factions' | 'checkpoints' | 'identity' | 'argument_map';

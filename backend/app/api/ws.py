@@ -10,7 +10,7 @@ import uuid
 from collections import defaultdict
 from contextlib import suppress
 from datetime import datetime, timezone
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Literal, TypedDict
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from sqlmodel import Session
@@ -34,6 +34,11 @@ _request_id_ctxvar: contextvars.ContextVar[str] = contextvars.ContextVar(
 # M-4 fix: Maximum WebSocket connections per scenario
 MAX_WS_PER_SCENARIO = 50
 WS_HEARTBEAT_INTERVAL_SECONDS = 20.0
+
+
+class SimulationCancelledEvent(TypedDict):
+    type: Literal["simulation_cancelled"]
+    reason: str
 
 
 def _heartbeat_event() -> dict[str, dict[str, str]]:

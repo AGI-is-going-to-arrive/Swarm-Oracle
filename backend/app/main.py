@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 # Phase 3: new API routers
+from app.api.admin import router as admin_router
 from app.api.agents import router as agents_router
 from app.api.campaign import router as campaign_router
 from app.api.conversation import router as conversation_router
@@ -24,6 +25,7 @@ from app.api.ending_rooms import (
 from app.api.graphs import router as graphs_router
 from app.api.interventions import router as interventions_router
 from app.api.predictions import router as predictions_router
+from app.api.quota import router as quota_router
 from app.api.replay_trace import router as replay_trace_router
 from app.api.scenarios import router as scenarios_router
 from app.api.social import router as social_router
@@ -117,7 +119,9 @@ app.include_router(agents_router)
 app.include_router(graphs_router)
 # Layer 3: BE-3 conversation + BE-4 replay-trace (OB-1 merge hand-off)
 app.include_router(conversation_router)
+app.include_router(quota_router)
 app.include_router(replay_trace_router)
+app.include_router(admin_router)
 
 # P3-9: Prometheus metrics (GET /metrics)
 try:

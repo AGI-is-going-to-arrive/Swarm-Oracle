@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { buildSessionHeaders } from '../api/client';
+import { truncateCodepoints } from '../lib/textUtils';
 import useReducedMotion from '../hooks/useReducedMotion';
 import useMediaQueryState from '../hooks/useMediaQueryState';
 import dagre from 'dagre';
@@ -26,6 +27,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import './ArgumentMap.css';
 import { ExportPanel } from './ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from './NodeDetailPanel';
 import GraphNodeCard from './GraphNodeCard';
@@ -201,9 +203,9 @@ const STATUS_LABEL_I18N: Record<string, [string, string]> = {
 // Tooltip descriptions for each status (hover/title attribute)
 const STATUS_TIP_I18N: Record<string, [string, string]> = {
   accepted: ['argument.status_accepted_tip', 'Accepted by opponent or judge'],
-  standing: ['argument.status_standing_tip', 'Still standing, not rebutted'],
-  unaddressed: ['argument.status_unaddressed_tip', 'Not yet addressed'],
-  rebutted: ['argument.status_rebutted_tip', 'Has been rebutted'],
+  standing: ['argument.status_standing_tip', 'Standing — this argument holds and has not been rebutted'],
+  unaddressed: ['argument.status_unaddressed_tip', 'Unaddressed — not yet engaged'],
+  rebutted: ['argument.status_rebutted_tip', 'Rebutted — this argument was countered'],
   rejected: ['argument.status_rejected_tip', 'Rejected by judge'],
 };
 
@@ -237,6 +239,28 @@ function getArgumentTypeLabel(type: string, t: (key: string, fallback: string) =
 function getArgumentStatusLabel(status: string, t: (key: string, fallback: string) => string): string {
   const pair = STATUS_LABEL_I18N[status];
   return pair ? t(pair[0], pair[1]) : status;
+}
+
+// S2-5: Map argument status to a stable CSS class for visual state.
+// Applied via React Flow `node.className`; ArgumentMap.css targets the
+// inner `.dag-card-node` button using descendant selectors.
+const STATUS_NODE_CLASS: Record<string, string> = {
+  standing: 'argmap-node argmap-node--standing',
+  rebutted: 'argmap-node argmap-node--rebutted',
+};
+
+function getArgumentStatusClass(status: string): string | undefined {
+  return STATUS_NODE_CLASS[status];
+}
+
+// S2-5: Tooltip explanation text (full sentence). Falls back to existing
+// short tip if a longer explanation key is missing.
+function getArgumentStatusTipText(
+  status: string,
+  t: (key: string, fallback: string) => string,
+): string | undefined {
+  const pair = STATUS_TIP_I18N[status];
+  return pair ? t(pair[0], pair[1]) : undefined;
 }
 
 function getArgumentNodeActionLabel(
@@ -378,21 +402,25 @@ function layoutArgumentDag(
     for (const u of units) {
       const pos = g.node(u.id);
       const fullLabel = u.text;
-      const label = fullLabel.length > 60 ? fullLabel.slice(0, 60) + '\u2026' : fullLabel;
+      const label = truncateCodepoints(fullLabel, 60);
       const typeLabel = getArgumentTypeLabel(u.type, t);
       const ariaLabel = getArgumentNodeActionLabel(typeLabel, fullLabel, t);
       const statusLabel = getArgumentStatusLabel(u.status, t);
+      const statusClass = getArgumentStatusClass(u.status);
+      const statusTip = getArgumentStatusTipText(u.status, t);
       flowNodes.push({
         id: u.id,
         type: 'graphCard',
         position: { x: pos.x - nodeWidth / 2, y: pos.y - nodeHeight / 2 },
         focusable: false,
         ariaLabel,
+        className: statusClass,
         data: {
           label,
           fullLabel,
           meta: `${typeLabel} · ${statusLabel}`,
           ariaLabel,
+          statusTooltip: statusTip,
           iconName: NODE_ICONS[u.type] ?? '',
           bgColor: NODE_TYPE_COLORS_HEX[u.type] ?? '#555',
           borderColor: STATUS_COLORS_HEX[u.status] ?? '',
@@ -418,20 +446,24 @@ function layoutArgumentDag(
     const typeLabel = getArgumentTypeLabel(typeKey, t);
     const statusLabel = statusKey ? getArgumentStatusLabel(statusKey, t) : '';
     const fullLabel = n.label;
-    const displayLabel = fullLabel.length > 60 ? fullLabel.slice(0, 60) + '\u2026' : fullLabel;
+    const displayLabel = truncateCodepoints(fullLabel, 60);
     const ariaLabel = getArgumentNodeActionLabel(typeLabel, n.label, t);
 
+    const statusClass = statusKey ? getArgumentStatusClass(statusKey) : undefined;
+    const statusTip = statusKey ? getArgumentStatusTipText(statusKey, t) : undefined;
     flowNodes.push({
       id: n.id,
       type: 'graphCard',
       position: { x: pos.x - nodeWidth / 2, y: pos.y - nodeHeight / 2 },
       focusable: false,
       ariaLabel,
+      className: statusClass,
       data: {
         label: displayLabel,
         fullLabel,
         meta: statusLabel ? `${typeLabel} · ${statusLabel}` : typeLabel,
         ariaLabel,
+        statusTooltip: statusTip,
         iconName: NODE_ICONS[typeKey] ?? '',
         bgColor: NODE_TYPE_COLORS_HEX[typeKey] ?? '#555',
         borderColor: statusKey ? (STATUS_COLORS_HEX[statusKey] ?? '') : '',

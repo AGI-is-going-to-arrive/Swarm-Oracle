@@ -164,7 +164,12 @@ export function DebateBetModal({
       <div className="debate-modal" onClick={(event) => event.stopPropagation()}>
         <header className="debate-modal__header">
           <h2>{t('debate.bet_title')}</h2>
-          <button type="button" className="debate-modal__close" onClick={onClose}>
+          <button
+            type="button"
+            className="debate-modal__close"
+            onClick={onClose}
+            aria-label={t('common.close')}
+          >
             ✕
           </button>
         </header>
