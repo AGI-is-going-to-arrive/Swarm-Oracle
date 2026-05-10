@@ -30,6 +30,7 @@ from app.models.database import AgentMessage, Branch, Round, Scenario, ScenarioS
 from app.services.causal_graph import build_snapshot
 from app.services.factions import get_faction_relations, get_faction_timeline
 from app.services.graph_analysis import analyze_graph
+from app.services.personality_drift import detect_personality_drift
 from app.services.replay import (
     _normalize_source_message_content,
     clone_until_round,
@@ -538,6 +539,19 @@ async def get_faction_relations_endpoint(
         threshold=threshold,
         top_k=top_k,
     )
+
+
+@router.get("/scenario/{scenario_id}/personality-drift")
+async def get_personality_drift(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Return Big Five personality drift report for every agent in a scenario."""
+    if not settings.FEATURE_AGENT_IDENTITY:
+        raise _feature_disabled("agent_identity")
+    with Session(get_engine()) as session:
+        require_owned_scenario(session, scenario_id, principal)
+        return await detect_personality_drift(scenario_id, session)
 
 
 @router.get("/scenario/{scenario_id}/checkpoints")

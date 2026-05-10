@@ -1,0 +1,344 @@
+/* ═══════════════════════════════════════════════════════════
+   CounterfactualBrand — 时钟倒拨品牌化卡片
+   editorial elegance: oracle 深色卡片 + amber accent
+   GSAP sepia 渐变入场（无 glitch）
+   ═══════════════════════════════════════════════════════════ */
+
+.cf-brand {
+  /* hex fallbacks — oracle tokens 已在 :root 提供 oklch 升级 */
+  --cf-brand-accent: #e2a000;
+  --cf-brand-accent-soft: rgba(226, 160, 0, 0.18);
+  --cf-brand-accent-deep: #b8830a;
+  --cf-brand-bg: rgba(21, 17, 13, 0.72);
+  --cf-brand-border: rgba(240, 238, 235, 0.16);
+  --cf-brand-border-strong: rgba(240, 238, 235, 0.32);
+  --cf-brand-text: #f0eeeb;
+  --cf-brand-text-dim: #b9b7b4;
+  --cf-brand-shadow: 0 8px 30px rgba(0, 0, 0, 0.32), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+
+  position: relative;
+  display: block;
+  width: 100%;
+  margin: 0 0 1rem 0;
+  padding: 1.25rem 1.4rem;
+  border-radius: 14px;
+  border: 1px solid var(--cf-brand-border);
+  background: var(--cf-brand-bg);
+  color: var(--cf-brand-text);
+  box-shadow: var(--cf-brand-shadow);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+@supports (color: oklch(75% 0.16 80)) {
+  .cf-brand {
+    --cf-brand-accent: var(--color-warning, oklch(75% 0.16 80));
+    --cf-brand-accent-soft: oklch(75% 0.16 80 / 0.18);
+    --cf-brand-accent-deep: oklch(58% 0.14 75);
+    --cf-brand-bg: var(--oracle-bg-bubble, oklch(18% 0.01 60 / 0.78));
+    --cf-brand-border: var(--oracle-border-dim, rgba(240, 238, 235, 0.16));
+    --cf-brand-border-strong: rgba(240, 238, 235, 0.32);
+    --cf-brand-text: var(--oracle-text-light, oklch(95% 0.005 80));
+    --cf-brand-text-dim: var(--oracle-text-dim, oklch(78% 0.005 80));
+  }
+}
+
+/* 装饰背景 — 沙漏暖光 */
+.cf-brand::before {
+  content: '';
+  position: absolute;
+  top: -40%;
+  right: -10%;
+  width: 280px;
+  height: 280px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(226, 160, 0, 0.12) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.cf-brand::after {
+  content: '';
+  position: absolute;
+  bottom: -30%;
+  left: -5%;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(184, 131, 10, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.cf-brand__inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Header */
+.cf-brand__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+}
+
+.cf-brand__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--cf-brand-accent-soft);
+  border: 1.5px solid rgba(226, 160, 0, 0.45);
+  color: var(--cf-brand-accent);
+}
+
+.cf-brand__icon-svg {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+.cf-brand__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.cf-brand__eyebrow {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--cf-brand-accent);
+  font-family: 'Cormorant Garamond', 'Noto Serif SC', serif;
+  font-style: italic;
+}
+
+.cf-brand__title {
+  font-size: 1.4rem;
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0;
+  font-family: 'Cormorant Garamond', 'Noto Serif SC', serif;
+  color: var(--cf-brand-text);
+}
+
+.cf-brand__desc {
+  font-size: 0.88rem;
+  line-height: 1.55;
+  margin: 0.2rem 0 0;
+  color: var(--cf-brand-text-dim);
+}
+
+/* Fork list */
+.cf-brand__forks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.6rem;
+}
+
+.cf-brand__fork {
+  position: relative;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--cf-brand-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+              background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cf-brand__fork:hover,
+.cf-brand__fork:focus-within {
+  transform: translateY(-1px);
+  border-color: var(--cf-brand-border-strong);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.cf-brand__fork-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.cf-brand__fork-round {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  background: var(--cf-brand-accent);
+  color: #1a1410;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.cf-brand__fork-title {
+  font-size: 0.96rem;
+  font-weight: 600;
+  color: var(--cf-brand-text);
+  font-family: 'Cormorant Garamond', 'Noto Serif SC', serif;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cf-brand__fork-desc {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 0;
+  color: var(--cf-brand-text-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.cf-brand__fork-cta {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.95rem;
+  min-height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--cf-brand-accent);
+  background: transparent;
+  color: var(--cf-brand-accent);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: 'Instrument Sans', 'Noto Sans SC', sans-serif;
+  transition: background 180ms ease, color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.cf-brand__fork-cta:hover,
+.cf-brand__fork-cta:focus-visible {
+  background: var(--cf-brand-accent);
+  color: #1a1410;
+  outline: none;
+}
+
+.cf-brand__fork-cta:focus-visible {
+  box-shadow: 0 0 0 3px var(--cf-brand-accent-soft);
+}
+
+.cf-brand__fork-cta:active {
+  transform: scale(0.97);
+}
+
+.cf-brand__fork-arrow {
+  display: inline-block;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+/* Footer hint */
+.cf-brand__footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed var(--cf-brand-border);
+}
+
+.cf-brand__hint {
+  font-size: 0.78rem;
+  color: var(--cf-brand-text-dim);
+  font-style: italic;
+  font-family: 'Cormorant Garamond', 'Noto Serif SC', serif;
+}
+
+/* Responsive — mobile 375px (Gemini spec: 垂直堆叠, padding 16px, icon 24px, CTA 100% 宽) */
+@media (max-width: 540px) {
+  .cf-brand {
+    padding: 16px;
+    border-radius: 12px;
+  }
+
+  .cf-brand__inner {
+    gap: 0.85rem;
+  }
+
+  .cf-brand__header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.6rem;
+  }
+
+  .cf-brand__icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .cf-brand__icon-svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .cf-brand__title {
+    font-size: 1.18rem;
+  }
+
+  .cf-brand__desc {
+    font-size: 0.82rem;
+  }
+
+  .cf-brand__fork {
+    padding: 0.75rem 0.85rem;
+  }
+
+  .cf-brand__fork-title {
+    font-size: 0.88rem;
+  }
+
+  .cf-brand__fork-desc {
+    font-size: 0.8rem;
+  }
+
+  .cf-brand__fork-cta {
+    align-self: stretch;
+    width: 100%;
+  }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .cf-brand__fork {
+    transition: none;
+  }
+  .cf-brand__fork:hover,
+  .cf-brand__fork:focus-within {
+    transform: none;
+  }
+  .cf-brand__fork-cta {
+    transition: none;
+  }
+  .cf-brand__fork-cta:active {
+    transform: none;
+  }
+}
+
+.cf-brand[data-reduced-motion='true'] {
+  filter: none !important;
+}

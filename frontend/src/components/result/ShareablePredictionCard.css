@@ -1,0 +1,233 @@
+/* ═══════════════════════════════════════════════════════════
+   S3-5 — ShareablePredictionCard
+   Fixed 1200×630 layout for html2canvas rasterization.
+   IMPORTANT: html2canvas cannot reliably resolve CSS custom
+   properties or oklch(); every value below is a hex/rgba
+   literal so the rasterized PNG matches what you see on screen.
+   ═══════════════════════════════════════════════════════════ */
+
+.prediction-card-host {
+  position: fixed;
+  top: 0;
+  left: -99999px;
+  pointer-events: none;
+}
+
+.prediction-card-host .prediction-card {
+  width: 1200px;
+  height: 630px;
+  display: flex;
+  flex-direction: row;
+  box-sizing: border-box;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif;
+  background-color: #0a0a14;
+  color: #f5f5fa;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ─── Left brand panel (40%) ──────────────────────────── */
+.prediction-card-host .prediction-card__brand {
+  flex: 0 0 480px;
+  height: 100%;
+  padding: 56px 48px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  position: relative;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(168, 85, 247, 0.45) 0%, transparent 55%),
+    radial-gradient(circle at 80% 90%, rgba(56, 189, 248, 0.40) 0%, transparent 55%),
+    linear-gradient(160deg, #14142b 0%, #1a1a3a 50%, #0a0a14 100%);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.prediction-card-host .prediction-card__brand-mark {
+  width: 88px;
+  height: 88px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, #f4c97a 0%, #d97757 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Cormorant Garamond', 'Times New Roman', Georgia, serif;
+  font-size: 56px;
+  font-weight: 700;
+  color: #0a0a14;
+  margin-bottom: 32px;
+  box-shadow: 0 8px 24px rgba(217, 119, 87, 0.32);
+}
+
+.prediction-card-host .prediction-card__brand-title {
+  font-family: 'Cormorant Garamond', 'Times New Roman', Georgia, serif;
+  font-size: 56px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #ffffff;
+  line-height: 1.0;
+  margin-bottom: 16px;
+}
+
+.prediction-card-host .prediction-card__brand-subtitle {
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(244, 201, 122, 0.92);
+  line-height: 1.3;
+}
+
+.prediction-card-host .prediction-card__brand-decoration {
+  position: absolute;
+  bottom: 56px;
+  left: 48px;
+  width: 64px;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #f4c97a 0%, #d97757 100%);
+}
+
+/* ─── Right content panel (60%) ───────────────────────── */
+.prediction-card-host .prediction-card__content {
+  flex: 1 1 auto;
+  height: 100%;
+  padding: 64px 64px 56px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background:
+    linear-gradient(180deg, #14142b 0%, #0f0f24 100%);
+  position: relative;
+}
+
+.prediction-card-host .prediction-card__question-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(244, 201, 122, 0.88);
+  margin-bottom: 14px;
+}
+
+.prediction-card-host .prediction-card__question {
+  font-family: 'Cormorant Garamond', 'Times New Roman', Georgia, serif;
+  font-size: 36px;
+  font-weight: 600;
+  line-height: 1.22;
+  color: #ffffff;
+  margin: 0 0 36px;
+  /* Two-line clamp keeps long titles inside the card height budget. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+/* ─── Probability block ───────────────────────────────── */
+.prediction-card-host .prediction-card__probability {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 28px;
+  padding: 20px 32px;
+  border-radius: 20px;
+  background: rgba(20, 20, 43, 0.65);
+  border: 1px solid rgba(244, 201, 122, 0.32);
+  align-self: flex-start;
+  overflow: hidden;
+}
+
+.prediction-card-host .prediction-card__probability-glow {
+  position: absolute;
+  inset: -40%;
+  background: radial-gradient(
+    circle at center,
+    rgba(244, 201, 122, 0.20) 0%,
+    transparent 60%
+  );
+  pointer-events: none;
+}
+
+.prediction-card-host .prediction-card__probability-block {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.prediction-card-host .prediction-card__probability-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(244, 201, 122, 0.88);
+}
+
+.prediction-card-host .prediction-card__probability-value {
+  font-family: 'Cormorant Garamond', 'Times New Roman', Georgia, serif;
+  font-size: 64px;
+  font-weight: 700;
+  line-height: 1.0;
+  color: #f4c97a;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Insight ─────────────────────────────────────────── */
+.prediction-card-host .prediction-card__insight {
+  font-size: 19px;
+  line-height: 1.55;
+  color: rgba(229, 229, 240, 0.94);
+  margin: 0 0 auto;
+  /* Three-line clamp leaves room for the footer baseline. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ─── Footer ──────────────────────────────────────────── */
+.prediction-card-host .prediction-card__footer {
+  margin-top: auto;
+  padding-top: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.prediction-card-host .prediction-card__footer-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(229, 229, 240, 0.78);
+}
+
+.prediction-card-host .prediction-card__footer-mode {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(244, 201, 122, 0.95);
+}
+
+.prediction-card-host .prediction-card__footer-divider {
+  color: rgba(229, 229, 240, 0.45);
+  font-weight: 400;
+}
+
+.prediction-card-host .prediction-card__footer-date,
+.prediction-card-host .prediction-card__footer-agents {
+  font-variant-numeric: tabular-nums;
+}
+
+.prediction-card-host .prediction-card__watermark {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(244, 201, 122, 0.78);
+}

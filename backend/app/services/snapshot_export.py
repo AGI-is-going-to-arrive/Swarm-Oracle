@@ -1,0 +1,1095 @@
+"""S3-6: Self-contained scenario snapshot export/import as ZIP archives.
+
+Exports a Scenario (with branches, agents, messages, causal graph) into a
+single ZIP file with manifest + checksums. Importing reconstructs the same
+graph topology under fresh primary keys for the importing user.
+
+ZIP layout
+----------
+- ``manifest.json``      Schema version, file sha256/size index.
+- ``scenario.json``      Scenario metadata (sensitive fields redacted).
+- ``branches.jsonl``     One JSON object per line.
+- ``agents.jsonl``       One JSON object per line (BYOK fields stripped).
+- ``messages.jsonl``     One JSON object per line, ordered by round_number.
+- ``causal_graph.json``  Latest causal graph snapshot (nodes + edges).
+- ``checksums.sha256``   ``<sha256>  <filename>`` lines for the data files.
+
+Privacy model
+-------------
+By default the export omits ``user_id`` and any BYOK / token fields.  Setting
+``include_private=True`` keeps the original ``user_id`` but still strips
+secrets (api keys, base urls, tokens).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import logging
+import math
+import stat
+import zipfile
+from datetime import datetime, timezone
+from pathlib import PurePosixPath
+from typing import Any
+
+from sqlmodel import Session, select
+
+from app.models import (
+    Agent,
+    AgentMessage,
+    Branch,
+    Round,
+    Scenario,
+)
+from app.models.database import get_engine
+from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
+
+logger = logging.getLogger(__name__)
+
+SNAPSHOT_VERSION = "1.0"
+GRAPH_SCHEMA_VERSION = 1
+MAX_IMPORT_ZIP_BYTES = 50 * 1024 * 1024  # 50 MB
+MAX_UNCOMPRESSED_MEMBER_BYTES = 100 * 1024 * 1024  # 100 MB per file
+MAX_UNCOMPRESSED_TOTAL_BYTES = 500 * 1024 * 1024  # 500 MB across all files
+MAX_ZIP_COMPRESSION_RATIO = 100.0
+MIN_RATIO_CHECK_MEMBER_BYTES = 1024 * 1024
+_SENSITIVE_KEYS = frozenset(
+    {
+        # Normalized form: lowercase, separators stripped (_, -)
+        "apikey",
+        "llmapikey",
+        "baseurl",
+        "llmbaseurl",
+        "websearchapikey",
+        "websearchbaseurl",
+        "sessionsecret",
+        "token",
+        "authtoken",
+        "authorization",
+        "secret",
+        "password",
+        "passwd",
+        "bearer",
+        "xapikey",
+    }
+)
+_DATA_FILES = (
+    "scenario.json",
+    "branches.jsonl",
+    "agents.jsonl",
+    "messages.jsonl",
+    "causal_graph.json",
+)
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    """Case-insensitive sensitive-key check that ignores separators (_/-)."""
+    if not isinstance(key, str):
+        return False
+    normalized = key.strip().lower().replace("-", "").replace("_", "")
+    return normalized in _SENSITIVE_KEYS
+
+
+class SnapshotImportError(ValueError):
+    """Raised when an imported ZIP fails validation."""
+
+
+# ── helpers ──────────────────────────────────────────────
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _redact_dict(value: Any) -> Any:
+    """Recursively drop sensitive keys from arbitrary JSON-shaped data.
+
+    Match is case-insensitive and ignores separators (``_``/``-``), so
+    ``api_key``, ``apiKey``, ``API-KEY``, ``Authorization`` are all stripped.
+    """
+    if isinstance(value, dict):
+        return {
+            k: _redact_dict(v)
+            for k, v in value.items()
+            if not _is_sensitive_key(k)
+        }
+    if isinstance(value, list):
+        return [_redact_dict(item) for item in value]
+    return value
+
+
+def _redact_json_string(raw: Any) -> Any:
+    """Best-effort redaction for JSON-encoded string fields.
+
+    If ``raw`` is a JSON string that decodes into a dict/list, the structure
+    is recursively redacted and re-encoded.  Non-JSON strings, ``None`` and
+    other primitives are returned unchanged.
+    """
+    if not isinstance(raw, str):
+        return raw
+    try:
+        decoded = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw
+    if not isinstance(decoded, (dict, list)):
+        return raw
+    return json.dumps(_redact_dict(decoded), ensure_ascii=False, default=str)
+
+
+def _serialize_scenario(scenario: Scenario, *, include_private: bool) -> dict[str, Any]:
+    parsed_context = _redact_dict(scenario.parsed_context) if scenario.parsed_context else None
+    director_state = (
+        _redact_dict(scenario.director_state_json) if scenario.director_state_json else None
+    )
+    gameplay_state = (
+        _redact_dict(scenario.gameplay_state_json) if scenario.gameplay_state_json else None
+    )
+    web_context = (
+        _redact_dict(scenario.web_context_json)
+        if isinstance(scenario.web_context_json, (dict, list))
+        else _redact_json_string(scenario.web_context_json)
+    )
+
+    payload: dict[str, Any] = {
+        "id": scenario.id,
+        "question": scenario.question,
+        "status": scenario.status.value,
+        "created_at": scenario.created_at.isoformat() if scenario.created_at else None,
+        "visualization_enabled": bool(scenario.visualization_enabled),
+        "scene_theme": scenario.scene_theme,
+        "parsed_context": parsed_context,
+        "director_state_json": director_state,
+        "gameplay_state_json": gameplay_state,
+        "web_context_json": web_context,
+    }
+    if include_private:
+        payload["user_id"] = scenario.user_id
+    return payload
+
+
+def _serialize_branch(branch: Branch) -> dict[str, Any]:
+    return {
+        "id": branch.id,
+        "scenario_id": branch.scenario_id,
+        "parent_branch_id": branch.parent_branch_id,
+        "fork_round": branch.fork_round,
+        "fork_reason": branch.fork_reason,
+        "title": branch.title,
+        "description": branch.description,
+        "summary": branch.summary,
+        "story": branch.story,
+        "insight": branch.insight,
+        "key_moments": branch.key_moments,
+        "probability": branch.probability,
+        "status": branch.status.value,
+        "replay_kind": branch.replay_kind,
+        "replay_source_branch_id": branch.replay_source_branch_id,
+        "replay_source_round": branch.replay_source_round,
+        "replay_source_agent_id": branch.replay_source_agent_id,
+    }
+
+
+def _serialize_agent(agent: Agent) -> dict[str, Any]:
+    return {
+        "id": agent.id,
+        "scenario_id": agent.scenario_id,
+        "name": agent.name,
+        "role": agent.role,
+        "persona": agent.persona,
+        "tier": agent.tier.value,
+        "stance": agent.stance,
+        "emotion": agent.emotion,
+        "group_id": agent.group_id,
+        "agent_identity_id": agent.agent_identity_id,
+        "source_type": agent.source_type,
+    }
+
+
+def _serialize_message(
+    message: AgentMessage,
+    round_number: int,
+    branch_id: str,
+) -> dict[str, Any]:
+    return {
+        "id": message.id,
+        "round_id": message.round_id,
+        "branch_id": branch_id,
+        "round_number": round_number,
+        "agent_id": message.agent_id,
+        "content": message.content,
+        "emotion": message.emotion,
+        "diverge": message.diverge,
+        "tokens_used": message.tokens_used,
+    }
+
+
+def _serialize_graph_node(node: GraphNode) -> dict[str, Any]:
+    return {
+        "id": node.id,
+        "snapshot_id": node.snapshot_id,
+        "node_key": node.node_key,
+        "node_type": node.node_type,
+        "label": node.label,
+        "round_number": node.round_number,
+        "ref_model": node.ref_model,
+        "ref_id": node.ref_id,
+        "payload_json": node.payload_json,
+    }
+
+
+def _serialize_graph_edge(edge: GraphEdge) -> dict[str, Any]:
+    return {
+        "id": edge.id,
+        "snapshot_id": edge.snapshot_id,
+        "source_node_id": edge.source_node_id,
+        "target_node_id": edge.target_node_id,
+        "edge_type": edge.edge_type,
+        "weight": edge.weight,
+        "label": edge.label,
+        "payload_json": edge.payload_json,
+        "confidence_tier": edge.confidence_tier,
+        "source_ref": edge.source_ref,
+        "source_round_number": edge.source_round_number,
+        "evidence_json": edge.evidence_json,
+    }
+
+
+def _collect_messages(
+    session: Session,
+    branches: list[Branch],
+) -> list[dict[str, Any]]:
+    if not branches:
+        return []
+    branch_ids = [b.id for b in branches]
+    rounds = list(
+        session.exec(
+            select(Round)
+            .where(Round.branch_id.in_(branch_ids))
+            .order_by(Round.branch_id, Round.round_number)
+        ).all()
+    )
+    if not rounds:
+        return []
+    round_ids = [r.id for r in rounds]
+    round_meta = {r.id: (r.branch_id, r.round_number) for r in rounds}
+    messages = list(
+        session.exec(
+            select(AgentMessage).where(AgentMessage.round_id.in_(round_ids))
+        ).all()
+    )
+    serialized = []
+    for msg in messages:
+        branch_id, round_number = round_meta.get(msg.round_id, ("", 0))
+        serialized.append(_serialize_message(msg, round_number, branch_id))
+    serialized.sort(
+        key=lambda m: (m["branch_id"], m["round_number"], m["id"]),
+    )
+    return serialized
+
+
+def _collect_causal_graph(
+    session: Session,
+    scenario_id: str,
+) -> dict[str, Any]:
+    snapshot = session.exec(
+        select(GraphSnapshot)
+        .where(
+            GraphSnapshot.owner_type == "scenario",
+            GraphSnapshot.owner_id == scenario_id,
+            GraphSnapshot.graph_kind == "causal_review",
+        )
+        .order_by(GraphSnapshot.created_at.desc())
+    ).first()
+    if snapshot is None:
+        return {"snapshot": None, "nodes": [], "edges": []}
+
+    nodes = list(
+        session.exec(
+            select(GraphNode).where(GraphNode.snapshot_id == snapshot.id)
+        ).all()
+    )
+    edges = list(
+        session.exec(
+            select(GraphEdge).where(GraphEdge.snapshot_id == snapshot.id)
+        ).all()
+    )
+    return {
+        "snapshot": {
+            "id": snapshot.id,
+            "owner_type": snapshot.owner_type,
+            "owner_id": snapshot.owner_id,
+            "graph_kind": snapshot.graph_kind,
+            "branch_id": snapshot.branch_id,
+            "round_number": snapshot.round_number,
+            "metadata_json": snapshot.metadata_json,
+            "created_at": (
+                snapshot.created_at.isoformat() if snapshot.created_at else None
+            ),
+        },
+        "nodes": [_serialize_graph_node(n) for n in nodes],
+        "edges": [_serialize_graph_edge(e) for e in edges],
+    }
+
+
+# ── manifest + zip build ─────────────────────────────────
+
+
+def build_snapshot_manifest(
+    scenario_id: str,
+    session: Session,
+    *,
+    include_private: bool = False,
+) -> dict[str, Any]:
+    """Assemble the in-memory payload for every file we are about to ZIP.
+
+    Returns a dict with keys ``manifest`` (without the per-file checksums —
+    those are filled in once the bytes are encoded) and ``payloads`` mapping
+    filename -> bytes.
+    """
+    scenario = session.get(Scenario, scenario_id)
+    if scenario is None:
+        raise SnapshotImportError(f"Scenario not found: {scenario_id}")
+
+    branches = list(
+        session.exec(select(Branch).where(Branch.scenario_id == scenario_id)).all()
+    )
+    agents = list(
+        session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).all()
+    )
+    messages = _collect_messages(session, branches)
+    graph = _collect_causal_graph(session, scenario_id)
+
+    scenario_payload = _serialize_scenario(scenario, include_private=include_private)
+    branches_payload = [_serialize_branch(b) for b in branches]
+    agents_payload = [_serialize_agent(a) for a in agents]
+
+    payloads: dict[str, bytes] = {
+        "scenario.json": json.dumps(
+            scenario_payload, ensure_ascii=False, default=str
+        ).encode("utf-8"),
+        "branches.jsonl": (
+            "\n".join(
+                json.dumps(b, ensure_ascii=False, default=str) for b in branches_payload
+            ).encode("utf-8")
+            if branches_payload
+            else b""
+        ),
+        "agents.jsonl": (
+            "\n".join(
+                json.dumps(a, ensure_ascii=False, default=str) for a in agents_payload
+            ).encode("utf-8")
+            if agents_payload
+            else b""
+        ),
+        "messages.jsonl": (
+            "\n".join(
+                json.dumps(m, ensure_ascii=False, default=str) for m in messages
+            ).encode("utf-8")
+            if messages
+            else b""
+        ),
+        "causal_graph.json": json.dumps(
+            graph, ensure_ascii=False, default=str
+        ).encode("utf-8"),
+    }
+
+    file_index = {
+        name: {"sha256": _sha256_bytes(data), "size": len(data)}
+        for name, data in payloads.items()
+    }
+    manifest = {
+        "version": SNAPSHOT_VERSION,
+        "created_at": _now_iso(),
+        "scenario_id": scenario.id,
+        "graph_schema_version": GRAPH_SCHEMA_VERSION,
+        "include_private": bool(include_private),
+        "files": file_index,
+    }
+    return {"manifest": manifest, "payloads": payloads}
+
+
+def export_snapshot_zip(
+    scenario_id: str,
+    session: Session,
+    *,
+    include_private: bool = False,
+) -> io.BytesIO:
+    """Serialize ``scenario_id`` as a ZIP byte stream."""
+    bundle = build_snapshot_manifest(
+        scenario_id, session, include_private=include_private
+    )
+    manifest = bundle["manifest"]
+    payloads: dict[str, bytes] = bundle["payloads"]
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps(manifest, ensure_ascii=False, default=str),
+        )
+        for name in _DATA_FILES:
+            zf.writestr(name, payloads.get(name, b""))
+        checksums_lines = [
+            f"{payloads_meta['sha256']}  {name}"
+            for name, payloads_meta in manifest["files"].items()
+        ]
+        zf.writestr("checksums.sha256", "\n".join(checksums_lines))
+
+    buffer.seek(0)
+    return buffer
+
+
+# ── import ───────────────────────────────────────────────
+
+
+def _load_jsonl(blob: bytes) -> list[dict[str, Any]]:
+    if not blob:
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in blob.decode("utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise SnapshotImportError(f"Malformed JSONL line: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise SnapshotImportError("JSONL row must be an object")
+        rows.append(parsed)
+    return rows
+
+
+def _load_json(blob: bytes) -> Any:
+    if not blob:
+        return None
+    try:
+        return json.loads(blob.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SnapshotImportError(f"Malformed JSON: {exc}") from exc
+
+
+def _is_safe_zip_member_name(name: str) -> bool:
+    if not name or "\x00" in name or "\\" in name:
+        return False
+    path = PurePosixPath(name)
+    if path.is_absolute():
+        return False
+    return all(part not in {"", ".", ".."} for part in path.parts)
+
+
+def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
+    return stat.S_IFMT(info.external_attr >> 16) == stat.S_IFLNK
+
+
+def _validate_zip_member_info(info: zipfile.ZipInfo) -> None:
+    if not _is_safe_zip_member_name(info.filename):
+        raise SnapshotImportError(f"Unsafe ZIP member name: {info.filename!r}")
+    if _is_zip_symlink(info):
+        raise SnapshotImportError(f"ZIP symlink entries are not supported: {info.filename!r}")
+    if info.file_size > MAX_UNCOMPRESSED_MEMBER_BYTES:
+        raise SnapshotImportError(
+            f"ZIP member too large after decompression "
+            f"({info.filename!r}: {info.file_size} > "
+            f"{MAX_UNCOMPRESSED_MEMBER_BYTES} bytes)"
+        )
+    if info.compress_size > 0 and info.file_size >= MIN_RATIO_CHECK_MEMBER_BYTES:
+        ratio = info.file_size / info.compress_size
+        if ratio > MAX_ZIP_COMPRESSION_RATIO:
+            raise SnapshotImportError(
+                f"ZIP member compression ratio too high "
+                f"({info.filename!r}: {ratio:.1f}x > {MAX_ZIP_COMPRESSION_RATIO:.1f}x)"
+            )
+
+
+def _is_sha256_hex(value: str) -> bool:
+    if len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _load_checksums_index(blob: bytes) -> dict[str, str]:
+    try:
+        text = blob.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SnapshotImportError(f"checksums.sha256 is not valid UTF-8: {exc}") from exc
+
+    checksums: dict[str, str] = {}
+    for line_no, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            raise SnapshotImportError(
+                f"checksums.sha256 line {line_no} must be '<sha256>  <filename>'"
+            )
+        digest = parts[0].lower()
+        name = parts[1].strip()
+        if not _is_sha256_hex(digest):
+            raise SnapshotImportError(f"Invalid SHA-256 digest on checksums line {line_no}")
+        if not _is_safe_zip_member_name(name):
+            raise SnapshotImportError(f"Unsafe checksum file name: {name!r}")
+        if name in checksums:
+            raise SnapshotImportError(f"Duplicate checksum entry for {name}")
+        checksums[name] = digest
+    return checksums
+
+
+def _validate_zip_integrity(zip_bytes: bytes) -> dict[str, bytes]:
+    """Open ZIP, validate manifest checksums, return file -> bytes map.
+
+    Security guards (in order):
+        - Outer ZIP byte cap (``MAX_IMPORT_ZIP_BYTES``) -- bounded upload.
+        - Per-member uncompressed cap (``MAX_UNCOMPRESSED_MEMBER_BYTES``)
+          and aggregate cap (``MAX_UNCOMPRESSED_TOTAL_BYTES``) -- ZIP-bomb
+          defence; checked from ``ZipInfo.file_size`` *before* reading.
+        - Only files listed in ``manifest.files`` are read; any extra ZIP
+          members are silently dropped to prevent checksum bypass via
+          omission.
+    """
+    if len(zip_bytes) > MAX_IMPORT_ZIP_BYTES:
+        raise SnapshotImportError(
+            f"ZIP too large (max {MAX_IMPORT_ZIP_BYTES} bytes)"
+        )
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    except zipfile.BadZipFile as exc:
+        raise SnapshotImportError(f"Invalid ZIP file: {exc}") from exc
+
+    with zf:
+        info_by_name = {info.filename: info for info in zf.infolist()}
+
+        # Bomb guard: aggregate uncompressed size across the whole archive.
+        # Catches an attacker who pads many members or hides bombs in
+        # extras that are not part of the manifest.
+        total_uncompressed = 0
+        for info in info_by_name.values():
+            _validate_zip_member_info(info)
+            total_uncompressed += info.file_size
+            if total_uncompressed > MAX_UNCOMPRESSED_TOTAL_BYTES:
+                raise SnapshotImportError(
+                    "ZIP uncompressed total too large "
+                    f"(> {MAX_UNCOMPRESSED_TOTAL_BYTES} bytes)"
+                )
+
+        if "manifest.json" not in info_by_name:
+            raise SnapshotImportError("ZIP missing manifest.json")
+
+        try:
+            manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SnapshotImportError(
+                f"Manifest is not valid JSON: {exc}"
+            ) from exc
+
+        if not isinstance(manifest, dict):
+            raise SnapshotImportError("Manifest must be a JSON object")
+
+        version = manifest.get("version")
+        if version != SNAPSHOT_VERSION:
+            raise SnapshotImportError(
+                f"Unsupported snapshot version: {version!r}"
+            )
+
+        files_index = manifest.get("files")
+        if not isinstance(files_index, dict):
+            raise SnapshotImportError("Manifest 'files' must be an object")
+
+        if "checksums.sha256" not in info_by_name:
+            raise SnapshotImportError("ZIP missing checksums.sha256")
+        checksums_index = _load_checksums_index(zf.read(info_by_name["checksums.sha256"]))
+        unexpected_checksums = set(checksums_index) - set(files_index)
+        if unexpected_checksums:
+            raise SnapshotImportError(
+                f"checksums.sha256 contains files not listed in manifest: "
+                f"{sorted(unexpected_checksums)!r}"
+            )
+
+        # Only read members listed in manifest.files. Any other ZIP entry
+        # (including data files added without a manifest record) is dropped
+        # so that an attacker cannot smuggle untrusted bytes into import.
+        contents: dict[str, bytes] = {}
+        for name, meta in files_index.items():
+            if not isinstance(meta, dict):
+                raise SnapshotImportError(
+                    f"Manifest entry for {name!r} must be an object"
+                )
+            if not _is_safe_zip_member_name(name):
+                raise SnapshotImportError(f"Unsafe manifest file name: {name!r}")
+            if name not in info_by_name:
+                raise SnapshotImportError(f"ZIP missing referenced file: {name}")
+            info = info_by_name[name]
+            _validate_zip_member_info(info)
+            blob = zf.read(info)
+            expected_size = meta.get("size")
+            expected_sha = meta.get("sha256")
+            if (
+                not isinstance(expected_size, int)
+                or isinstance(expected_size, bool)
+                or expected_size < 0
+            ):
+                raise SnapshotImportError(
+                    f"Manifest size for {name} must be a non-negative integer"
+                )
+            if not isinstance(expected_sha, str) or not _is_sha256_hex(expected_sha):
+                raise SnapshotImportError(
+                    f"Manifest sha256 for {name} must be a SHA-256 hex string"
+                )
+            expected_sha = expected_sha.lower()
+            checksum_sha = checksums_index.get(name)
+            if checksum_sha is None:
+                raise SnapshotImportError(f"checksums.sha256 missing entry for {name}")
+            if checksum_sha != expected_sha:
+                raise SnapshotImportError(f"checksums.sha256 mismatch for {name}")
+            if len(blob) != expected_size:
+                raise SnapshotImportError(
+                    f"File size mismatch for {name}: "
+                    f"expected {expected_size}, got {len(blob)}"
+                )
+            if _sha256_bytes(blob) != expected_sha:
+                raise SnapshotImportError(
+                    f"Checksum mismatch for {name}"
+                )
+            contents[name] = blob
+
+    return contents
+
+
+def _coerce_int_field(
+    value: Any,
+    field_name: str,
+    *,
+    default: int | None = None,
+    min_value: int | None = None,
+) -> int | None:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise SnapshotImportError(f"{field_name} must be an integer") from exc
+    if min_value is not None and parsed < min_value:
+        raise SnapshotImportError(f"{field_name} must be >= {min_value}")
+    return parsed
+
+
+def _coerce_float_field(
+    value: Any,
+    field_name: str,
+    *,
+    default: float | None = None,
+    min_value: float | None = None,
+    max_value: float | None = None,
+) -> float | None:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise SnapshotImportError(f"{field_name} must be a number") from exc
+    if not math.isfinite(parsed):
+        raise SnapshotImportError(f"{field_name} must be finite")
+    if min_value is not None and parsed < min_value:
+        raise SnapshotImportError(f"{field_name} must be >= {min_value}")
+    if max_value is not None and parsed > max_value:
+        raise SnapshotImportError(f"{field_name} must be <= {max_value}")
+    return parsed
+
+
+def import_snapshot_zip(
+    zip_data: bytes | io.BytesIO,
+    user_id: str | None,
+    session: Session,
+) -> str:
+    """Reconstruct a scenario from a ZIP archive. Returns the new scenario id."""
+    if isinstance(zip_data, io.BytesIO):
+        raw = zip_data.getvalue()
+    else:
+        raw = bytes(zip_data)
+
+    contents = _validate_zip_integrity(raw)
+    scenario_payload = _load_json(contents.get("scenario.json", b""))
+    if not isinstance(scenario_payload, dict):
+        raise SnapshotImportError("scenario.json must be a JSON object")
+
+    branches_rows = _load_jsonl(contents.get("branches.jsonl", b""))
+    agents_rows = _load_jsonl(contents.get("agents.jsonl", b""))
+    messages_rows = _load_jsonl(contents.get("messages.jsonl", b""))
+    graph_payload = _load_json(contents.get("causal_graph.json", b"")) or {}
+
+    from app.models import (
+        AgentTier as _AgentTier,
+    )
+    from app.models import (
+        BranchStatus as _BranchStatus,
+    )
+    from app.models import (
+        ScenarioStatus as _ScenarioStatus,
+    )
+
+    def _scenario_status(value: Any) -> _ScenarioStatus:
+        normalized = str(value or "").strip().lower()
+        if normalized in {s.value for s in _ScenarioStatus}:
+            return _ScenarioStatus(normalized)
+        return _ScenarioStatus.DONE
+
+    def _branch_status(value: Any) -> _BranchStatus:
+        normalized = str(value or "").strip().upper()
+        if normalized in {s.value for s in _BranchStatus}:
+            return _BranchStatus(normalized)
+        return _BranchStatus.COMPLETED
+
+    def _agent_tier(value: Any) -> _AgentTier:
+        normalized = str(value or "").strip().upper()
+        if normalized in {t.value for t in _AgentTier}:
+            return _AgentTier(normalized)
+        return _AgentTier.IMPORTANT
+
+    web_context_raw = scenario_payload.get("web_context_json")
+    web_context_value: Any
+    if isinstance(web_context_raw, (dict, list)):
+        web_context_value = _redact_dict(web_context_raw)
+    elif isinstance(web_context_raw, str):
+        web_context_value = _redact_json_string(web_context_raw)
+    else:
+        web_context_value = web_context_raw
+
+    scenario = Scenario(
+        question=str(scenario_payload.get("question", "")).strip()
+        or "Imported snapshot",
+        parsed_context=_redact_dict(scenario_payload.get("parsed_context"))
+        if isinstance(scenario_payload.get("parsed_context"), dict)
+        else None,
+        director_state_json=_redact_dict(scenario_payload.get("director_state_json"))
+        if isinstance(scenario_payload.get("director_state_json"), dict)
+        else None,
+        gameplay_state_json=_redact_dict(scenario_payload.get("gameplay_state_json"))
+        if isinstance(scenario_payload.get("gameplay_state_json"), dict)
+        else None,
+        status=_scenario_status(scenario_payload.get("status")),
+        user_id=user_id,
+        visualization_enabled=bool(scenario_payload.get("visualization_enabled")),
+        scene_theme=str(scenario_payload.get("scene_theme") or "").strip() or None,
+        web_context_json=web_context_value,
+    )
+    session.add(scenario)
+    session.flush()
+    new_scenario_id = scenario.id
+
+    branch_id_map: dict[str, str] = {}
+    pending_parents: list[tuple[str, str]] = []
+    for raw in branches_rows:
+        original_id = str(raw.get("id", "")).strip()
+        parent = str(raw.get("parent_branch_id") or "").strip()
+        branch = Branch(
+            scenario_id=new_scenario_id,
+            parent_branch_id=None,
+            fork_round=_coerce_int_field(
+                raw.get("fork_round"), "branches.fork_round", default=0, min_value=0,
+            ),
+            fork_reason=str(raw.get("fork_reason") or ""),
+            title=str(raw.get("title") or "Imported Branch"),
+            description=str(raw.get("description") or ""),
+            summary=str(raw.get("summary") or ""),
+            story=str(raw.get("story") or ""),
+            insight=str(raw.get("insight") or ""),
+            key_moments=raw.get("key_moments"),
+            probability=_coerce_float_field(
+                raw.get("probability"),
+                "branches.probability",
+                default=1.0,
+                min_value=0.0,
+                max_value=1.0,
+            ),
+            status=_branch_status(raw.get("status")),
+            replay_kind=raw.get("replay_kind"),
+            replay_source_branch_id=raw.get("replay_source_branch_id"),
+            replay_source_round=_coerce_int_field(
+                raw.get("replay_source_round"),
+                "branches.replay_source_round",
+                default=None,
+                min_value=1,
+            ),
+            replay_source_agent_id=raw.get("replay_source_agent_id"),
+        )
+        session.add(branch)
+        session.flush()
+        if original_id:
+            branch_id_map[original_id] = branch.id
+        if parent:
+            pending_parents.append((branch.id, parent))
+
+    for new_branch_id, parent_orig in pending_parents:
+        mapped_parent = branch_id_map.get(parent_orig)
+        if not mapped_parent:
+            continue
+        branch = session.get(Branch, new_branch_id)
+        if branch is None:
+            continue
+        branch.parent_branch_id = mapped_parent
+        session.add(branch)
+
+    agent_id_map: dict[str, str] = {}
+    for raw in agents_rows:
+        original_id = str(raw.get("id", "")).strip()
+        agent = Agent(
+            scenario_id=new_scenario_id,
+            name=str(raw.get("name") or "Imported Agent"),
+            role=str(raw.get("role") or ""),
+            persona=str(raw.get("persona") or ""),
+            tier=_agent_tier(raw.get("tier")),
+            stance=str(raw.get("stance") or ""),
+            emotion=str(raw.get("emotion") or "neutral"),
+            group_id=None,
+            # Importer is not the original identity owner; clearing this id
+            # prevents cross-user identity binding (and downstream drift
+            # reports leaking another user's persona baseline).
+            agent_identity_id=None,
+            source_type=raw.get("source_type"),
+        )
+        session.add(agent)
+        session.flush()
+        if original_id:
+            agent_id_map[original_id] = agent.id
+
+    round_lookup: dict[tuple[str, int], str] = {}
+    for raw in messages_rows:
+        branch_orig = str(raw.get("branch_id") or "").strip()
+        new_branch_id = branch_id_map.get(branch_orig)
+        if not new_branch_id:
+            continue
+        round_number = _coerce_int_field(
+            raw.get("round_number"), "messages.round_number", default=1, min_value=1,
+        )
+        if round_number is None:
+            round_number = 1
+        round_key = (new_branch_id, round_number)
+        round_id = round_lookup.get(round_key)
+        if round_id is None:
+            round_row = Round(
+                branch_id=new_branch_id, round_number=round_number,
+            )
+            session.add(round_row)
+            session.flush()
+            round_lookup[round_key] = round_row.id
+            round_id = round_row.id
+
+        agent_orig = str(raw.get("agent_id") or "").strip()
+        new_agent_id = agent_id_map.get(agent_orig)
+        if not new_agent_id:
+            continue
+        session.add(
+            AgentMessage(
+                round_id=round_id,
+                agent_id=new_agent_id,
+                content=str(raw.get("content") or ""),
+                emotion=str(raw.get("emotion") or "neutral"),
+                diverge=raw.get("diverge"),
+                tokens_used=_coerce_int_field(
+                    raw.get("tokens_used"),
+                    "messages.tokens_used",
+                    default=0,
+                    min_value=0,
+                ),
+            )
+        )
+
+    _import_causal_graph(
+        session,
+        graph_payload,
+        new_scenario_id=new_scenario_id,
+        branch_id_map=branch_id_map,
+        agent_id_map=agent_id_map,
+    )
+
+    session.commit()
+    logger.info(
+        "Imported snapshot as scenario %s (orig=%s)",
+        new_scenario_id,
+        scenario_payload.get("id"),
+    )
+    return new_scenario_id
+
+
+def _import_causal_graph(
+    session: Session,
+    graph_payload: dict[str, Any],
+    *,
+    new_scenario_id: str,
+    branch_id_map: dict[str, str],
+    agent_id_map: dict[str, str],
+) -> None:
+    if not isinstance(graph_payload, dict):
+        return
+    snapshot_meta = graph_payload.get("snapshot")
+    if not isinstance(snapshot_meta, dict):
+        return
+
+    nodes_raw = graph_payload.get("nodes") or []
+    edges_raw = graph_payload.get("edges") or []
+    if not isinstance(nodes_raw, list) or not isinstance(edges_raw, list):
+        raise SnapshotImportError("causal_graph nodes/edges must be lists")
+
+    snapshot = GraphSnapshot(
+        owner_type="scenario",
+        owner_id=new_scenario_id,
+        graph_kind=str(snapshot_meta.get("graph_kind") or "causal_review"),
+        branch_id=branch_id_map.get(str(snapshot_meta.get("branch_id") or ""))
+        if snapshot_meta.get("branch_id")
+        else None,
+        round_number=_coerce_int_field(
+            snapshot_meta.get("round_number"),
+            "causal_graph.snapshot.round_number",
+            default=None,
+            min_value=1,
+        ),
+        metadata_json=snapshot_meta.get("metadata_json"),
+    )
+    session.add(snapshot)
+    session.flush()
+    new_snapshot_id = snapshot.id
+
+    node_id_map: dict[str, str] = {}
+    for raw in nodes_raw:
+        if not isinstance(raw, dict):
+            continue
+        original_id = str(raw.get("id", "")).strip()
+        payload_json = raw.get("payload_json")
+        remapped_payload = _remap_payload_json(
+            payload_json,
+            branch_id_map=branch_id_map,
+            agent_id_map=agent_id_map,
+        )
+        node = GraphNode(
+            snapshot_id=new_snapshot_id,
+            node_key=str(raw.get("node_key") or original_id or ""),
+            node_type=str(raw.get("node_type") or "event"),
+            label=str(raw.get("label") or ""),
+            round_number=_coerce_int_field(
+                raw.get("round_number"),
+                "causal_graph.nodes.round_number",
+                default=None,
+                min_value=1,
+            ),
+            ref_model=raw.get("ref_model"),
+            ref_id=raw.get("ref_id"),
+            payload_json=remapped_payload,
+        )
+        session.add(node)
+        session.flush()
+        if original_id:
+            node_id_map[original_id] = node.id
+
+    for raw in edges_raw:
+        if not isinstance(raw, dict):
+            continue
+        src_orig = str(raw.get("source_node_id") or "").strip()
+        tgt_orig = str(raw.get("target_node_id") or "").strip()
+        new_src = node_id_map.get(src_orig)
+        new_tgt = node_id_map.get(tgt_orig)
+        if new_src is None or new_tgt is None:
+            raise SnapshotImportError(
+                f"Edge references unknown node(s): {src_orig!r} -> {tgt_orig!r}"
+            )
+        weight = raw.get("weight")
+        edge = GraphEdge(
+            snapshot_id=new_snapshot_id,
+            source_node_id=new_src,
+            target_node_id=new_tgt,
+            edge_type=str(raw.get("edge_type") or "caused"),
+            weight=_coerce_float_field(
+                weight,
+                "causal_graph.edges.weight",
+                default=None,
+            ),
+            label=raw.get("label"),
+            payload_json=raw.get("payload_json"),
+            confidence_tier=raw.get("confidence_tier"),
+            source_ref=raw.get("source_ref"),
+            source_round_number=_coerce_int_field(
+                raw.get("source_round_number"),
+                "causal_graph.edges.source_round_number",
+                default=None,
+                min_value=1,
+            ),
+            evidence_json=raw.get("evidence_json"),
+        )
+        session.add(edge)
+
+
+def _remap_payload_json(
+    payload_json: Any,
+    *,
+    branch_id_map: dict[str, str],
+    agent_id_map: dict[str, str],
+) -> Any:
+    """Best-effort branch/agent id remap inside graph node payloads."""
+    if payload_json is None:
+        return None
+    if not isinstance(payload_json, str):
+        return payload_json
+    try:
+        decoded = json.loads(payload_json)
+    except json.JSONDecodeError:
+        return payload_json
+
+    def _walk(value: Any) -> Any:
+        if isinstance(value, dict):
+            new_dict: dict[str, Any] = {}
+            for key, sub in value.items():
+                if key == "branch_id" and isinstance(sub, str):
+                    new_dict[key] = branch_id_map.get(sub, sub)
+                elif key == "agent_id" and isinstance(sub, str):
+                    new_dict[key] = agent_id_map.get(sub, sub)
+                elif key == "children" and isinstance(sub, list):
+                    new_dict[key] = [
+                        branch_id_map.get(child, child)
+                        if isinstance(child, str)
+                        else _walk(child)
+                        for child in sub
+                    ]
+                else:
+                    new_dict[key] = _walk(sub)
+            return new_dict
+        if isinstance(value, list):
+            return [_walk(item) for item in value]
+        return value
+
+    return json.dumps(_walk(decoded), ensure_ascii=False, default=str)
+
+
+# ── thin convenience wrappers ────────────────────────────
+
+
+def export_scenario_to_zip_bytes(
+    scenario_id: str,
+    *,
+    include_private: bool = False,
+) -> bytes:
+    """Convenience wrapper that opens its own session and returns ZIP bytes."""
+    with Session(get_engine()) as session:
+        buffer = export_snapshot_zip(
+            scenario_id, session, include_private=include_private,
+        )
+        return buffer.getvalue()
+
+
+def import_scenario_from_zip_bytes(
+    zip_bytes: bytes,
+    user_id: str | None,
+) -> str:
+    """Convenience wrapper that opens its own session for import."""
+    with Session(get_engine()) as session:
+        return import_snapshot_zip(zip_bytes, user_id, session)

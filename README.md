@@ -57,7 +57,7 @@
   - `进入会客厅`
   - `只改一步`
   - 不会展示 `发起圆桌` / `异线旁听席`
-- 当前无 active Phase 3 backlog；剩余架构级限制见 `llmdoc/overview/backlog.md`。
+- 当前 active handoff 在 `.claude/team-plan/comprehensive-improvement-plan.md`：Sprint 3 大部分已接线，但 `HOPsAnimation` 还没有挂到生产结果页；下次应先补 S3-4 和 Gate 3，再进入 Sprint 4。
 
 ## 文档契约
 
@@ -94,6 +94,7 @@
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale、readonly replay import；只有分享链接过长并回退到本地只读 `?local=` 时，结果页才会明确显示 `Save local read-only copy` |
 | Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面代表改选当前支持 `drag-to-seat / keyboard reseat`，移动端保留 `click-to-seat`；桌面 roundtable committed transcript 当前已补长段折叠 / 展开，phase insight 展示和预填 prompt 会把长段复述压成一句；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到 anchored thread restore，并已补 Firefox / WebKit scoped regression；单结局结果页只暴露 `进入会客厅 / 只改一步`；已新增 `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 两种交互模式，证据卡追问会把用户引用的世界线保留到 assistant turn；completed live roundtable 的 `1-on-1 Interview` 会先展示代表的角色、世界线、立场、最近原话和人物简介；Oracle 主文案当前以 factual anchor + LLM generation/rewrite fallback 为主，角色身份和动态词汇提示按 `UNTRUSTED DATA` 处理，follow-up 空流式或仅 reasoning 输出会退回非流式改写，最终 fallback 也必须是可直接显示的人话 |
 | Replay & Import | 主模式与 Debate 均支持；主模式 Replay Trace 支持分页和分支过滤；Debate replay 当前已补 `share -> readonly replay -> reload restore -> import` 完整 E2E 覆盖 |
+| Snapshot Export / Import | 已接线，受 `FEATURE_SNAPSHOT_EXPORT` gate；后端导出 ZIP snapshot 并校验导入 archive/manifest/checksum，前端首页导入、结果页导出。Gate 3 仍需 browser 导出→导入全链路和跨 OS ZIP 证据 |
 | i18n | UI 与自动生成内容按输入语言联动输出；Oracle fresh live room 的英文文案已补去混句兜底，不再把中文 hinge 直接嵌进英文句子；Oracle 英文 signoff 当前已覆盖 Chromium full 与桌面 Firefox / WebKit scoped regression |
 
 ## 架构概览
@@ -186,6 +187,7 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - backend 本轮触碰文件的定向 pytest 与 ruff 通过。
 - backend 全量 pytest 当前还保留一个既有 `test_graph_analysis` 基线失败；两条 LLM gateway 失败已在重跑中恢复。
 - backend 全量 `ruff check app tests` 仍有既有跨仓库 lint 存量；本轮触碰文件已单独通过 ruff。
+- Sprint 3 当前已补窄集验证：backend snapshot/personality drift `46 passed`，touched-file ruff 通过；frontend snapshot/share/HOPs/i18n/InputView `6 files / 95 tests passed`，`tsc / lint / build` 通过，build performance budget 无 violations；ResultView + ShareModal fixture browser 在 desktop/mobile Chromium 各 `13/13` 通过。
 
 完整签收入口：
 

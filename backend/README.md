@@ -32,7 +32,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 
 | Module | File | Description |
 |--------|------|-------------|
-| Scenarios | `app/api/scenarios.py` | Core CRUD, story, export, replay artifact, replay import |
+| Scenarios | `app/api/scenarios.py` | Core CRUD, story, export, replay artifact, replay import, snapshot export/import |
 | Admin | `app/api/admin.py` | Preflight diagnostics and `/admin/setup` LLM connection test endpoints |
 | Quota | `app/api/quota.py` | Conversation and replay quota summary |
 | Campaign | `app/api/campaign.py` | finalize, profile, mastery, badges, daily-status, weekly-summary, `director-state`, `gameplay-state`, scenario summary |
@@ -55,6 +55,9 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | `POST` | `/api/scenario/{id}/cancel` | Request cancellation for a parsing/simulating/narrating scenario |
 | `GET` | `/api/scenario/{id}/conversations` | List scenario conversation thread summaries with cursor pagination |
 | `POST` | `/api/scenario/import-replay` | Import scenario replay as local run |
+| `GET` | `/api/scenario/{id}/snapshot` | Export a feature-gated scenario ZIP snapshot |
+| `POST` | `/api/scenario/import-snapshot` | Import a checked ZIP snapshot as a new local run |
+| `GET` | `/api/scenario/{id}/personality-drift` | Return feature-gated personality drift warning data |
 | `GET` | `/api/quota/summary` | Conversation/replay quota summary for UI quota badges |
 | `GET` | `/api/admin/preflight` | SQLite/ChromaDB/LLM/web search/CORS/volume diagnostics |
 | `POST` | `/api/admin/test-llm` | Request-scoped LLM connection test for setup wizard |
@@ -86,6 +89,8 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - Latest local rerun in this session:
   - `python -m pytest -q tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py --tb=short`: `36 passed`
   - touched-file `ruff check` for scenario cancel / quota / decision-bias / preflight files: pass
+  - `python -m pytest tests/test_snapshot_export.py tests/test_personality_drift.py -q`: `46 passed`
+  - touched-file `ruff check` for snapshot export / personality drift / scenarios / graphs files: pass
   - `python -m pytest -q`: `2477 passed, 3 failed, 2 skipped`; the two LLM gateway failures passed on targeted rerun, while `test_graph_analysis` remains a known baseline difference
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
@@ -124,6 +129,8 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - `decision_bias` is a fixed five-key schema: `caution / optimism / conservatism / risk_tolerance / creativity`. Missing keys default to `0.5`; invalid numbers and out-of-range values are rejected.
 - Workshop update/delete only applies to custom identities. Generated identities are visible in the library/profile flows but are not editable through workshop endpoints.
 - Conversation origins are scoped to the same scenario; a cross-scenario `origin_branch_id` is treated as not found instead of leaking another scenario's transcript into the prompt context.
+- Snapshot export/import is guarded by `FEATURE_SNAPSHOT_EXPORT`. Export omits private owner data by default and strips common secret fields; import rejects path traversal, symlinks, suspicious compression ratios, checksum mismatches, and files over the 50 MB upload cap.
+- Personality drift is guarded by `FEATURE_AGENT_IDENTITY`. It is deterministic warning data for the UI, not a verdict gate.
 
 ## Environment Variables
 

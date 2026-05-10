@@ -1,0 +1,262 @@
+/* ═══════════════════════════════════════════════════════════
+   HOPsAnimation — Hypothetical Outcome Plots 概率采样动画
+   暖色调 + oklch 色板 + sRGB fallback
+   ═══════════════════════════════════════════════════════════ */
+
+.hops {
+  /* hex fallback first */
+  --hops-bg: rgba(21, 17, 13, 0.72);
+  --hops-border: rgba(240, 238, 235, 0.16);
+  --hops-text: #f0eeeb;
+  --hops-text-dim: #b9b7b4;
+  --hops-accent-start: #e2a000;
+  --hops-accent-end: #6b8eb8;
+  --hops-accent-soft: rgba(226, 160, 0, 0.18);
+  --hops-row-bg: rgba(240, 238, 235, 0.06);
+  --hops-row-bg-hi: rgba(226, 160, 0, 0.18);
+  --hops-flag-bg: rgba(226, 160, 0, 0.32);
+  --hops-flag-text: #ffe2a8;
+  --hops-track-bg: rgba(240, 238, 235, 0.08);
+
+  position: relative;
+  display: block;
+  width: 100%;
+  margin: 0 0 1rem 0;
+  padding: 1.1rem 1.25rem 1.25rem 1.25rem;
+  border-radius: 14px;
+  border: 1px solid var(--hops-border);
+  background: var(--hops-bg);
+  color: var(--hops-text);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+@supports (color: oklch(75% 0.16 80)) {
+  .hops {
+    --hops-bg: var(--oracle-bg-bubble, oklch(18% 0.01 60 / 0.78));
+    --hops-border: var(--oracle-border-dim, oklch(95% 0.005 80 / 0.16));
+    --hops-text: var(--oracle-text-light, oklch(95% 0.005 80));
+    --hops-text-dim: var(--oracle-text-dim, oklch(78% 0.005 80));
+    --hops-accent-start: var(--color-warning, oklch(75% 0.16 80));
+    --hops-accent-end: oklch(60% 0.12 240);
+    --hops-accent-soft: oklch(75% 0.16 80 / 0.2);
+    --hops-row-bg: oklch(95% 0.005 80 / 0.06);
+    --hops-row-bg-hi: oklch(75% 0.16 80 / 0.18);
+    --hops-flag-bg: oklch(75% 0.16 80 / 0.32);
+    --hops-flag-text: oklch(90% 0.1 80);
+    --hops-track-bg: oklch(95% 0.005 80 / 0.08);
+  }
+}
+
+.hops__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.hops__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.hops__title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--hops-text);
+}
+
+.hops__subtitle {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--hops-text-dim);
+}
+
+.hops__control {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.85rem;
+  min-height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--hops-border);
+  background: var(--hops-row-bg);
+  color: var(--hops-text);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 180ms ease, border-color 180ms ease, transform 120ms ease;
+}
+
+.hops__control:hover {
+  background: var(--hops-accent-soft);
+  border-color: var(--hops-accent-start);
+}
+
+.hops__control:active {
+  transform: scale(0.97);
+}
+
+.hops__control:focus-visible {
+  outline: 2px solid var(--hops-accent-start);
+  outline-offset: 2px;
+}
+
+.hops__control-icon {
+  font-size: 0.7rem;
+  line-height: 1;
+  color: var(--hops-accent-start);
+}
+
+.hops__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.hops__row {
+  display: grid;
+  grid-template-columns: minmax(80px, 0.9fr) minmax(0, 2fr) minmax(74px, auto);
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: var(--hops-row-bg);
+  transition: background-color 200ms ease, opacity 220ms ease, transform 220ms ease;
+  opacity: 0.5;
+}
+
+.hops__row[data-highlighted='true'] {
+  background: var(--hops-row-bg-hi);
+  opacity: 1;
+  transform: translateX(2px);
+  box-shadow: 0 0 0 1px var(--hops-accent-soft), 0 6px 18px rgba(226, 160, 0, 0.18);
+}
+
+.hops__row-title {
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--hops-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hops__bar-track {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--hops-track-bg);
+  overflow: hidden;
+}
+
+.hops__bar {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--hops-accent-start) 0%, var(--hops-accent-end) 100%);
+  transition: width 360ms ease;
+}
+
+.hops__row[data-highlighted='true'] .hops__bar {
+  box-shadow: 0 0 12px var(--hops-accent-soft);
+}
+
+.hops__prob {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  justify-content: flex-end;
+  font-size: 0.82rem;
+  color: var(--hops-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.hops__prob-value {
+  color: var(--hops-text);
+  font-weight: 600;
+}
+
+.hops__prob-flag {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--hops-flag-bg);
+  color: var(--hops-flag-text);
+}
+
+/* prefers-reduced-motion ─ 全条静态显示 */
+@media (prefers-reduced-motion: reduce) {
+  .hops__row {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .hops__row[data-highlighted='true'] {
+    transform: none;
+    box-shadow: none;
+  }
+  .hops__bar {
+    transition: none;
+  }
+  .hops__control:active {
+    transform: none;
+  }
+}
+
+/* 移动端 ≤ 480px ─ 紧凑布局 */
+@media (max-width: 480px) {
+  .hops {
+    padding: 0.9rem 0.95rem 1rem 0.95rem;
+  }
+  .hops__header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.6rem;
+    margin-bottom: 0.7rem;
+  }
+  .hops__control {
+    align-self: flex-end;
+  }
+  .hops__title {
+    font-size: 0.88rem;
+  }
+  .hops__subtitle {
+    font-size: 0.74rem;
+  }
+  .hops__row {
+    grid-template-columns: minmax(64px, 0.8fr) minmax(0, 1.8fr) minmax(54px, auto);
+    gap: 0.5rem;
+    padding: 0.45rem 0.55rem;
+  }
+  .hops__row-title {
+    font-size: 0.78rem;
+  }
+  .hops__prob {
+    font-size: 0.74rem;
+    gap: 0.3rem;
+  }
+  .hops__prob-flag {
+    font-size: 0.58rem;
+    padding: 0.08rem 0.32rem;
+  }
+  .hops__bar-track {
+    height: 8px;
+  }
+}

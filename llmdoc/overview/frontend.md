@@ -25,17 +25,17 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、首次引导和底部安全提示 |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、snapshot import、首次引导和底部安全提示 |
 | SetupWizardView | `frontend/src/pages/SetupWizardView.tsx` | `/admin/setup` 3 步 provider 配置向导；选择 preset、填 API key/base URL、测试连接并写入 session-scoped provider policy |
 | AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、tier badge、profile modal、编辑/删除入口 |
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains 与 `IMPORTANT / CROWD` tier 选择 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、导出、replay/import、真实世界来源卡片、historical source badge、counterfactual / resume / faction 入口，以及 capability-gated `What's Next` bridge |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、historical source badge、counterfactual / resume / faction 入口，以及 capability-gated `What's Next` bridge |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live |
 | DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import |
-| WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay |
+| WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay、participant follow-up、analyst ReACT 面板、人格漂移 warning |
 | HistoryView | `frontend/src/pages/HistoryView.tsx` | scenario 历史列表 |
 | LeaderboardView | `frontend/src/pages/LeaderboardView.tsx` | prediction leaderboard |
 
@@ -115,6 +115,13 @@
   - PNG 导出只读取问题、主导结局、可见来源 family 和前 3 个 Agent 名
   - BYOK key、base URL、用户邮箱、session token 和本地 provider 配置不进入导出卡片
   - 导出失败会回到 modal 可见错误态，不只打 `console.error`
+  - 预测卡片导出复用 `ShareablePredictionCard` 和 `screenCaptureHtmlVendor`，支持 PNG 下载；图片剪贴板按钮只有浏览器支持 `ClipboardItem + navigator.clipboard.write()` 时才显示
+  - modal 当前有共享 `useFocusTrap`、Escape 关闭、关闭/unmount abort；社交文案请求不会因为 automation state 触发父组件重渲染就被误 abort
+- snapshot import/export 当前受 `snapshot_export` capability 控制：
+  - 首页只在 capability enabled 时显示 `Import snapshot`
+  - 结果页只在非 replay 且 capability enabled 时显示 `Export snapshot`
+  - `SnapshotImportDialog` 前端先挡非 ZIP 和大于 50 MB 的文件，再调用后端 import
+  - `SnapshotExportWizard / SnapshotImportDialog / ShareModal / ResultView` 共享 `useFocusTrap`
 - `ResultView` 的因果档案当前把 what-if、结局判定、系统读数、玩家动作、下一步建议和证据账本放在同一块里；关键记录只露出前几条，剩余记录用 details 展开，避免把结果页撑成长列表。
 - `ResultView` 的导演复盘当前由 `DirectorDebriefPanel` 渲染：优先使用后端 `score_breakdown`，同时接收 what-if、主导世界线、世界线承诺、押注、最后一次干预、结构化关键记录、director goals 与 gameplay card 状态，展示得分原因、等级进度、本局读数、下一步入口和新增徽章。
 - `ResultView` 的 faction timeline lead 当前已走 i18n key + `{{title}}` 插值，不再在组件里手写 `isZh` 三元文案。
@@ -196,6 +203,7 @@
 | `e2e-new-source-ingestion-live.mjs` | `frontend/scripts/e2e-new-source-ingestion-live.mjs` | source-ingestion 专项脚本；默认走 fixture，`SWARM_E2E_MODE=live` 时走真实 backend。live 模式会先显式打开首页总开关，校验 `/api/scenario` 请求里的 `web_search_families`，再检查结果页四个 source family 的 live/non-empty 卡片；`Polymarket` 的 `non-us` geo-gate 也走同一条 live 口径 |
 | `e2e-capability-matrix.mjs` | `frontend/scripts/e2e-capability-matrix.mjs` | graph/playability capability matrix；当前覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route，fixture payload 也包含 `agent_conversation / kg_explorer / replay_trace`。`ReplayView` 的 disabled 路径现在会落显式 unavailable surface，不再回首页；如果脚本还按旧 redirect 口径断言，先同步脚本再跑 |
 | `e2e-ws-contract-suite.mjs` | `frontend/scripts/e2e-ws-contract-suite.mjs` | WS 契约诊断脚本；当前覆盖 `scenario / debate / ending-room` 的首帧 auth、`4001 / 4404` 非重连、`1006` 可重连、auth timeout、oversize auth frame 和 pending-auth limit |
+| `e2e-result-share-fixture.mjs` | `frontend/scripts/e2e-result-share-fixture.mjs` | ResultView + ShareModal fixture browser 回归；脚本 stub 后端 scenario/branch/story/social/capability JSON，检查真实分支渲染、分享弹窗、预测卡片、social endpoint、控制台/page/request 错误和横向溢出。`full` 默认跑 desktop + mobile Chromium |
 | `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
 | `PipelineStepper.tsx` | `frontend/src/components/PipelineStepper.tsx` | `/sim/:id` 与 `/result/:id` 的 fixed-bottom pipeline progressbar；error 状态下 `aria-valuenow` 会钳到有效范围 |
 | `ResultConversationWidget.tsx` | `frontend/src/components/ResultConversationWidget.tsx` | 结果页轻量追问入口，复用 `NodeConversationSheet`；会把当前 analysis branch 的标题、insight、fork reason、关键时刻和对比分支传成 result origin；replay 结果页不渲染这条 live-only 入口 |
@@ -409,6 +417,11 @@
   - `CounterfactualPanel`
   - `ResumePanel`
   - `FactionTimeline`
+- `CounterfactualBrand` 当前也接在 ResultView 的反事实入口上：
+  - 最多展示 3 个可回溯 fork point
+  - 点击后会把 `CounterfactualPanel` 的轮次同步到对应 `fork_round`
+  - `CounterfactualPanel.initialRound` 会钳制在 `1..totalRounds`
+- `HOPsAnimation` 当前只有组件、CSS 和 reduced-motion 测试；还没有生产页面导入，不能写成 ResultView 已展示 HOPs。
 - `ResultView` 当前在 `custom_agents` capability 开启时会显示 Agent Library bridge；这条入口只受 `custom_agents` gate 影响，不再误绑到 `agent_identity` gate。
 - `ResultView` 的阵营分析当前不再固定绑 `branches[0]`：
   - 用户展开了某个结局时，`FactionTimeline` 跟随当前展开分支

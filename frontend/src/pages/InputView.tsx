@@ -47,6 +47,7 @@ import { useWebSearchConfig } from '../hooks/useWebSearchConfig';
 import { useOrgContext } from '../hooks/useOrgContext';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
 import { ProgressIndicator } from '../components/ProgressIndicator';
+import SnapshotImportDialog from '../components/Export/SnapshotImportDialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -229,6 +230,7 @@ export function InputView() {
   const [vizEnabled, setVizEnabled] = useState(false);
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [showSnapshotImport, setShowSnapshotImport] = useState(false);
   const [runtimePreset, setRuntimePreset] = useState<ScenarioRuntimePresetId>(() => loadScenarioRuntimePreset());
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -1179,6 +1181,15 @@ export function InputView() {
                   {caps?.custom_agents?.enabled && (
                     <button className="btn btn-ghost" onClick={() => navigate('/agents')}>
                       {t('home.agents', 'Agents')}
+                    </button>
+                  )}
+                  {caps?.snapshot_export?.enabled && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => setShowSnapshotImport(true)}
+                    >
+                      {t('snapshot.import_btn')}
                     </button>
                   )}
                   <button className="btn btn-ghost" onClick={() => navigate('/leaderboard')}>
@@ -2169,6 +2180,14 @@ export function InputView() {
           )}
         </div>
       </div>
+      <SnapshotImportDialog
+        isOpen={showSnapshotImport}
+        onClose={() => setShowSnapshotImport(false)}
+        onImported={(scenarioId) => {
+          setShowSnapshotImport(false);
+          navigate(`/result/${encodeURIComponent(scenarioId)}`);
+        }}
+      />
     </div>
   );
 }

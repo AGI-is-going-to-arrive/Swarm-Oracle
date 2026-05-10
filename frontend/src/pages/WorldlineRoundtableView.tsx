@@ -93,6 +93,7 @@ import type {
 import RoundtablePickerPanel from './RoundtablePickerPanel';
 import RoundtableTranscriptList from './RoundtableTranscriptList';
 import PostVerdictPanel, { type PostVerdictTab } from './PostVerdictPanel';
+import PersonalityDriftWarning from '../components/PersonalityDriftWarning';
 import {
   createInitialAnalystCache,
   createInitialSurveyCache,
@@ -551,6 +552,7 @@ export default function WorldlineRoundtableView() {
     [participants],
   );
   const { enabled: factionsEnabled } = useCapabilityCheck('factions');
+  const { enabled: driftWarningEnabled } = useCapabilityCheck('agent_identity');
   // P1-8: faction overlay — hook discovers branches from participants
   const factionMap = useFactionOverlay(scenario?.id, undefined, participantsById, factionsEnabled);
   const speakerIndexMap = useMemo(() => {
@@ -1102,7 +1104,7 @@ export default function WorldlineRoundtableView() {
       if (el) {
         el.style.height = 'auto';
         el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-        el.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+        el.scrollIntoView?.({ behavior: getPreferredScrollBehavior(), block: 'nearest' });
       }
     });
   }, [setComposerDraft]);
@@ -2009,6 +2011,9 @@ export default function WorldlineRoundtableView() {
           </aside>
 
           <section className="worldline-roundtable-main">
+            {effectiveResult?.summary && id && (
+              <PersonalityDriftWarning scenarioId={id} enabled={driftWarningEnabled} />
+            )}
             {effectiveResult?.summary && (
               <section className="worldline-roundtable-synthesis">
                 <span className="worldline-roundtable-synthesis__eyebrow">{t('roundtable.phase_verdict')}</span>
@@ -2100,6 +2105,8 @@ export default function WorldlineRoundtableView() {
                     key={thread.id}
                     type="button"
                     className={`ending-chat-thread-chip ${(activeThread?.id ?? defaultThreadId) === thread.id ? 'is-active' : ''} ${thread.mode === 'room' ? 'is-room-thread' : ''} ${thread.interaction_mode === 'hotseat' ? 'is-hotseat-thread' : ''}`}
+                    role="tab"
+                    aria-selected={(activeThread?.id ?? defaultThreadId) === thread.id}
                     onClick={() => {
                       const nextMode = thread.mode === 'followup' ? thread.interaction_mode : 'archivist_route';
                       if (replayPayload) {
@@ -2286,6 +2293,7 @@ export default function WorldlineRoundtableView() {
                   ref={composerTextareaRef}
                   className="ending-chat-composer__input"
                   value={composerDraft}
+                  aria-label={t('roundtable.composer_label')}
                   placeholder={t('roundtable.composer_placeholder')}
                   onChange={(event) => {
                     setComposerDraft(event.target.value);

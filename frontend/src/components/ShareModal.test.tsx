@@ -1,14 +1,20 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShareModal from './ShareModal';
 
 const { generateSocialCopyMock, html2canvasMock } = vi.hoisted(() => ({
-  generateSocialCopyMock: vi.fn(async () => ({
-    copy: '生成好的文案',
-    platform_name: '小红书',
-  })),
+  generateSocialCopyMock: vi.fn(async (
+    ...args: [string?, string?, unknown?, { signal?: AbortSignal }?]
+  ) => {
+    void args;
+    return {
+      copy: '生成好的文案',
+      platform_name: '小红书',
+    };
+  }),
   html2canvasMock: vi.fn(),
 }));
 
@@ -118,27 +124,38 @@ describe('ShareModal automation callback', () => {
     expect(screen.queryByText('命中题材核心')).not.toBeInTheDocument();
     expect(screen.queryByText('关税杠杆')).not.toBeInTheDocument();
     expect(screen.queryByText(/https:\/\/example\.com\/result\/scenario-1/)).not.toBeInTheDocument();
-    expect(generateSocialCopyMock).toHaveBeenCalledWith('scenario-1', 'xiaohongshu', {
-      llmApiKey: 'sk-test',
-      llmBaseUrl: 'https://example.com/v1/chat/completions',
-      llmModel: 'gpt-test',
-      llmRequestsPerMinute: 10,
-      llmTokensPerMinute: 100000,
-      userId: 'director-1',
-    });
+    expect(generateSocialCopyMock).toHaveBeenCalledWith(
+      'scenario-1',
+      'xiaohongshu',
+      {
+        llmApiKey: 'sk-test',
+        llmBaseUrl: 'https://example.com/v1/chat/completions',
+        llmModel: 'gpt-test',
+        llmRequestsPerMinute: 10,
+        llmTokensPerMinute: 100000,
+        userId: 'director-1',
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
-  it('exposes dialog semantics and an accessible close control', () => {
+  it('exposes dialog semantics and closes from Escape', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
     render(
       <ShareModal
         scenarioId="scenario-dialog"
-        onClose={() => {}}
+        onClose={onClose}
       />,
     );
 
     const dialog = screen.getByRole('dialog', { name: 'share.title' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
-    expect(screen.getByRole('button', { name: 'common.close' })).toBeInTheDocument();
+    const closeButton = screen.getByRole('button', { name: 'common.close' });
+    expect(closeButton).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('shows loading guidance before the generated copy is ready', async () => {
@@ -177,6 +194,86 @@ describe('ShareModal automation callback', () => {
     await waitFor(() => {
       expect(screen.getByText(/稍后完成的文案/)).toBeInTheDocument();
     });
+  });
+
+  it('keeps an in-flight request alive when automation updates rerender the parent', async () => {
+    let requestSignal: AbortSignal | undefined;
+    let resolveRequest!: (value: { copy: string; platform_name: string }) => void;
+    generateSocialCopyMock.mockImplementationOnce(
+      (
+        _scenarioId?: string,
+        _platform?: string,
+        _options?: unknown,
+        requestOptions?: { signal?: AbortSignal },
+      ) => {
+        requestSignal = requestOptions?.signal;
+        return new Promise<{ copy: string; platform_name: string }>((resolve) => {
+          resolveRequest = resolve;
+        });
+      },
+    );
+    const user = userEvent.setup();
+
+    function RerenderHarness() {
+      const [, setAutomationState] = useState<Record<string, unknown> | null>(null);
+      return (
+        <ShareModal
+          scenarioId="scenario-parent-rerender"
+          onClose={() => {}}
+          onAutomationStateChange={setAutomationState}
+        />
+      );
+    }
+
+    render(<RerenderHarness />);
+
+    await user.click(screen.getByRole('button', { name: /share\.platform_xiaohongshu/ }));
+
+    await waitFor(() => {
+      expect(requestSignal).toBeDefined();
+    });
+    expect(requestSignal?.aborted).toBe(false);
+
+    resolveRequest({
+      copy: '父级重渲染后仍然完成的文案',
+      platform_name: '小红书',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/父级重渲染后仍然完成的文案/)).toBeInTheDocument();
+    });
+    expect(requestSignal?.aborted).toBe(false);
+  });
+
+  it('aborts in-flight social-copy generation when unmounted', async () => {
+    let requestSignal: AbortSignal | undefined;
+    generateSocialCopyMock.mockImplementationOnce(
+      (
+        _scenarioId?: string,
+        _platform?: string,
+        _options?: unknown,
+        requestOptions?: { signal?: AbortSignal },
+      ) => {
+        requestSignal = requestOptions?.signal;
+        return new Promise<{ copy: string; platform_name: string }>(() => undefined);
+      },
+    );
+    const user = userEvent.setup();
+    const view = render(
+      <ShareModal
+        scenarioId="scenario-abort"
+        onClose={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: /share\.platform_xiaohongshu/ }));
+
+    await waitFor(() => {
+      expect(requestSignal).toBeDefined();
+    });
+    view.unmount();
+
+    expect(requestSignal?.aborted).toBe(true);
   });
 
   it('shows an explicit copy error when Clipboard API is unavailable', async () => {

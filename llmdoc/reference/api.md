@@ -59,6 +59,8 @@
 | `GET` | `/api/scenarios` | 分页列出 scenario |
 | `DELETE` | `/api/scenario/{scenario_id}` | 级联删除 scenario 与关联数据 |
 | `POST` | `/api/scenario/import-replay` | 把 replay 快照导入为本地 scenario |
+| `GET` | `/api/scenario/{scenario_id}/snapshot` | 导出自包含 scenario ZIP snapshot |
+| `POST` | `/api/scenario/import-snapshot` | 导入 scenario ZIP snapshot 为本地 scenario |
 
 关键约束：
 
@@ -86,6 +88,7 @@
   - `create_new` 会让真正的 identity 解析跳过 L2 fuzzy reuse
 - `GET /api/scenario/{scenario_id}/conversations` 受 `FEATURE_AGENT_CONVERSATION` gate，要求 signed principal 能看到该 scenario；`cursor` 是 offset cursor，`limit` 范围 `1..50`，返回项只带 thread 摘要，完整 turn 历史仍走 `GET /api/conversation/{thread_id}`。
 - `POST /api/scenario/{scenario_id}/cancel` 只接受 `parsing / simulating / narrating / cancelled`；`done / error` 会返回 `409 SIMULATION_NOT_RUNNING`。成功请求会把 scenario 持久化到 `cancelled`，并尽量取消本进程里的后台 task。
+- `GET /api/scenario/{scenario_id}/snapshot` 和 `POST /api/scenario/import-snapshot` 受 `FEATURE_SNAPSHOT_EXPORT` gate；关闭时返回 404 `FEATURE_DISABLED`。export 会做 scenario ownership 校验；开启 `SESSION_SECRET` 时 import 要求 signed principal，并把新 scenario 绑定到该 principal。空文件返回 422 `SNAPSHOT_FILE_EMPTY`，超过 50 MB 返回 413 `SNAPSHOT_FILE_TOO_LARGE`，archive/manifest/checksum 不合法返回 422 `SNAPSHOT_IMPORT_INVALID`。
 - 删除 scenario 时会一并清理 replay、prediction、campaign side effect、ending-room 与向量数据。
 
 ## Replay Artifact
@@ -162,7 +165,7 @@
 | `GET` | `/api/scenario/{scenario_id}/export` | 导出 Markdown |
 | `POST` | `/api/health` | 后端健康检查 |
 | `POST` | `/api/health/test` | provider 探测与预算预检；返回服务端默认搜索 hint |
-| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 13-key capability registry (`web_search` + 12 个功能开关) |
+| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 14-key capability registry (`web_search` + 13 个功能开关) |
 | `GET` | `/` | 根信息 |
 | `GET` | `/metrics` | Prometheus 文本指标 |
 
@@ -173,8 +176,8 @@
 - `/api/health`、`/api/health/test`、`/api/capabilities` 当前都属于业务 REST 门禁范围；`/` 和 `/metrics` 仍是显式例外。
 - `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认配置是否 ready（`scope: "server"`），不是 per-provider 探测结果。
 - `GET /api/capabilities` 当前顶层 key 固定为：
-  `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst`。
-  除 `web_search` 外，其余 12 个都是功能开关 registry entry，至少带 `enabled / version`。
+  `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst / snapshot_export`。
+  除 `web_search` 外，其余 13 个都是功能开关 registry entry，至少带 `enabled / version`。
 
 ## Admin Diagnostics
 
@@ -284,6 +287,7 @@
 | `DELETE` | `/api/agents/workshop/{id}` | 删除自建 Agent | `FEATURE_CUSTOM_AGENTS` |
 | `GET` | `/api/scenario/{id}/causal-graph` | 因果图谱 | `FEATURE_CAUSAL_GRAPH` |
 | `GET` | `/api/scenario/{id}/graph-analysis` | 因果图谱摘要分析 | `FEATURE_GRAPH_ANALYSIS` + `FEATURE_CAUSAL_GRAPH` |
+| `GET` | `/api/scenario/{id}/personality-drift` | Agent 人格漂移 warning 数据 | `FEATURE_AGENT_IDENTITY` |
 | `POST` | `/api/scenario/{id}/counterfactual` | 创建反事实分支 | `FEATURE_COUNTERFACTUAL_REPLAY` |
 | `POST` | `/api/scenario/{id}/resume` | 从指定 round 续跑新分支 | `FEATURE_COUNTERFACTUAL_REPLAY` |
 | `GET` | `/api/scenario/{id}/compare` | 分支对比 | `FEATURE_COUNTERFACTUAL_REPLAY` |
@@ -321,6 +325,7 @@
 - `GET /api/scenario/{id}/causal-graph` 的 `edges[]` 使用 `source / target / type / weight / label` 字段；有证据元数据时会返回
   `evidence: { confidence_tier, source_ref, source_round_number, detail }`。旧边或无证据边的 `evidence` 可以为 `null`。重放轮次只会补齐旧边缺失的 evidence 字段，不覆盖已有非空值。当前 causal graph 会返回已有 `temporal / caused` 边，也可能返回后端规则生成的 `responds_to / supports_stance / opposes_stance`，以及合成结局使用的 `led_to`。inter-agent 边只来自同一 `branch / round` 的 event 节点，`detail` 会透传确定性 rule / reason JSON；其它 causal graph 边可能仍只有 coarse provenance。客户端不要把 `detail` 当成 LLM 解释文本。
 - `GET /api/scenario/{id}/graph-analysis` 返回 `god_nodes / degree_distribution / cross_branch_edges / summary`。大图会按最新 snapshot size 做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`。带 `branch_id` 时，预检按该 branch 的可见节点/边计数；未带 `branch_id` 时仍按全图计数。
+- `GET /api/scenario/{id}/personality-drift` 返回 `agent_id / agent_name / drift_score / drift_dimensions / severity / evidence`。结果按 drift score 降序排列；前端只把 medium/high 当 warning 展示，不把它当 hard gate。
 - `GET /api/scenario/{id}/replay-trace` 当前是只读 cursor pagination：
   - `after` 是上一页最后一个 branch id；空白值按未传处理
   - `limit` 范围为 `1..100`

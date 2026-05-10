@@ -232,6 +232,7 @@
 | `FEATURE_ROUNDTABLE_SURVEY` | `false` | 启用圆桌问卷 SSE 端点：`POST /api/scenario/{id}/survey` |
 | `FEATURE_ROUNDTABLE_ANALYST` | `false` | 启用圆桌 ReACT 分析师 SSE 端点：`POST /api/scenario/{id}/analyst` |
 | `FEATURE_KG_EXPLORER` | `false` | 启用 KG Explorer / Timeline Galaxy 的 capability gate；图谱数据仍读取 causal graph API |
+| `FEATURE_SNAPSHOT_EXPORT` | `false` | 启用 scenario ZIP snapshot 导出/导入 API，并让前端显示首页导入和结果页导出入口 |
 | `ARGUMENT_MAP_LLM_ENRICHMENT` | `true` | Argument map 在 rule-based 抽取后，默认追加每个 debate turn 一次 fire-and-forget LLM enrichment；设为 `false` 可退回纯规则模式 |
 
 说明：
@@ -242,6 +243,7 @@
 - `ARGUMENT_MAP_LLM_ENRICHMENT` 只影响 argument map 的 enrich 路径，不改变 `FEATURE_ARGUMENT_MAP` 的开关语义；只有 argument map 功能启用时它才会生效。
 - `FEATURE_*=false` 时：受后端 gate 的 API 通常返回 404；simulator/debate 中的 hook 不执行；前端通过 `GET /api/capabilities` 检测到 `enabled=false` 后隐藏入口且不发请求。`POST /api/debate` 如果显式带了 `custom_agent_ids` 且 `FEATURE_CUSTOM_AGENTS=false`，当前返回 400，避免调用方误以为 custom Agent 已参与本场 debate。`FEATURE_KG_EXPLORER` 属于前端 capability gate，数据仍由 causal graph API 提供。
 - `FEATURE_ROUNDTABLE_SURVEY / FEATURE_ROUNDTABLE_ANALYST` 会通过 `GET /api/capabilities` 暴露为 `roundtable_survey / roundtable_analyst`，供前端 capability gate 判断入口是否开放。
+- `FEATURE_SNAPSHOT_EXPORT` 会通过 `GET /api/capabilities` 暴露为 `snapshot_export`，关闭时后端 snapshot API 返回 404，前端不显示 import/export 入口。
 - 这些开关大多可单独开启；`graph_analysis` 的 capability 需要 `FEATURE_GRAPH_ANALYSIS` 和 `FEATURE_CAUSAL_GRAPH` 同时为 true。
 
 ## 相关文件

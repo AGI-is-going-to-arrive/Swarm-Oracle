@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import type { AnalystSSEEvent } from '../types';
 import { useRoundtableSseStream } from '../hooks/useRoundtableSseStream';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
+import ReACTReasoningPanel from '../components/ReACTReasoningPanel';
 import {
   createInitialAnalystCache,
   type AnalystCacheState,
@@ -18,7 +19,6 @@ interface AnalystStreamViewProps {
   contextVersion: number;
 }
 
-type AnalystToolKind = 'causal' | 'identity' | 'web' | 'other';
 const ANALYST_STOPPED_REASONS = new Set<AnalystStoppedReason>([
   'final_response',
   'llm_error',
@@ -32,26 +32,6 @@ function normalizeStoppedReason(reason: unknown): AnalystStoppedReason {
     ? reason as AnalystStoppedReason
     : 'final_response';
 }
-
-function classifyTool(action: string): AnalystToolKind {
-  switch (action) {
-    case 'query_causal_graph':
-      return 'causal';
-    case 'search_identity_memories':
-      return 'identity';
-    case 'search_web_context':
-      return 'web';
-    default:
-      return 'other';
-  }
-}
-
-const TOOL_ICON: Record<AnalystToolKind, string> = {
-  causal: '◈',
-  identity: '◎',
-  web: '◉',
-  other: '□',
-};
 
 export default function AnalystStreamView({
   scenarioId,
@@ -176,32 +156,12 @@ export default function AnalystStreamView({
     handleSubmit();
   }, [handleSubmit]);
 
-  const stoppedReasonLabel = (reason: AnalystStoppedReason | null): string => {
-    switch (reason) {
-      case 'final_response': return '';
-      case 'llm_error': return t('roundtable.analyst_error_llm');
-      case 'unexpected_action': return t('roundtable.analyst_error_action');
-      case 'max_iterations': return t('roundtable.analyst_max_iterations');
-      case 'stream_failure': return t('roundtable.analyst_error_stream');
-      default: return '';
-    }
-  };
-
-  const toolLabel = (action: string): string => {
-    const kind = classifyTool(action);
-    switch (kind) {
-      case 'causal': return t('analyst.tool_causal_graph');
-      case 'identity': return t('analyst.tool_identity');
-      case 'web': return t('analyst.tool_web');
-      default: return action;
-    }
-  };
-
   return (
     <div className="analyst-stream" data-testid="analyst-stream-view">
       <div className="analyst-stream__input">
         <textarea
           className="analyst-stream__textarea"
+          aria-label={t('roundtable.analyst_label')}
           placeholder={t('roundtable.analyst_placeholder')}
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
@@ -218,69 +178,14 @@ export default function AnalystStreamView({
         </button>
       </div>
 
-      {!cache.streaming
-        && cache.iterations.length === 0
-        && !cache.finalAnswer
-        && !cache.error
-        && !cache.aborted && (
-        <p className="analyst-stream__empty-hint">{t('roundtable.explore_analyst_desc')}</p>
-      )}
-
-      {cache.iterations.length > 0 && (
-        <div className="analyst-stream__iterations" aria-live="polite">
-          {cache.iterations.map((iteration) => {
-            const kind = classifyTool(iteration.action);
-            return (
-              <div key={iteration.iteration} className="analyst-stream__iteration">
-                <span className="analyst-stream__iteration-badge">{iteration.iteration}</span>
-                <div className="analyst-stream__iteration-body">
-                  <span
-                    className={`analyst-tool-chip analyst-tool-chip--${kind}`}
-                    data-tool-kind={kind}
-                  >
-                    <span className="analyst-tool-chip__icon" aria-hidden="true">{TOOL_ICON[kind]}</span>
-                    <span className="analyst-tool-chip__label">{toolLabel(iteration.action)}</span>
-                  </span>
-                  {iteration.summary && (
-                    <p className="analyst-stream__tool-summary">{iteration.summary}</p>
-                  )}
-                  {iteration.elapsed_ms != null && (
-                    <span className="analyst-stream__elapsed">
-                      {(iteration.elapsed_ms / 1000).toFixed(1)}s
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-          {cache.streaming && (
-            <div className="analyst-stream__thinking">
-              <span className="editorial-streaming-cursor">{t('roundtable.analyst_thinking')}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {cache.finalAnswer && (
-        <div className="analyst-stream__answer" aria-live="polite">
-          <p className="analyst-stream__answer-text">{cache.finalAnswer}</p>
-        </div>
-      )}
-
-      {cache.stoppedReason && cache.stoppedReason !== 'final_response' && (
-        <div className="analyst-stream__stopped">
-          <span className="analyst-status-pill analyst-status-pill--error" aria-label={t('analyst.status_error')}>
-            <span className="analyst-status-pill__dot" aria-hidden="true" />
-            <span className="analyst-status-pill__label">{t('analyst.status_error')}</span>
-          </span>
-          <span className="analyst-status-pill__detail">{stoppedReasonLabel(cache.stoppedReason)}</span>
-          {(cache.stoppedReason === 'llm_error' || cache.stoppedReason === 'stream_failure') && (
-            <button type="button" className="btn btn--sm" onClick={handleRetry}>
-              {t('roundtable.analyst_retry')}
-            </button>
-          )}
-        </div>
-      )}
+      <ReACTReasoningPanel
+        iterations={cache.iterations}
+        finalAnswer={cache.finalAnswer}
+        streaming={cache.streaming}
+        stoppedReason={cache.stoppedReason}
+        error={cache.error}
+        aborted={cache.aborted}
+      />
 
       {cache.error && !cache.stoppedReason && (
         <div className="analyst-stream__error">
@@ -289,6 +194,16 @@ export default function AnalystStreamView({
             <span className="analyst-status-pill__label">{t('analyst.status_error')}</span>
           </span>
           <span className="analyst-status-pill__detail">{cache.error}</span>
+          <button type="button" className="btn btn--sm" onClick={handleRetry}>
+            {t('roundtable.analyst_retry')}
+          </button>
+        </div>
+      )}
+
+      {cache.stoppedReason
+        && cache.stoppedReason !== 'final_response'
+        && (cache.stoppedReason === 'llm_error' || cache.stoppedReason === 'stream_failure') && (
+        <div className="analyst-stream__stopped">
           <button type="button" className="btn btn--sm" onClick={handleRetry}>
             {t('roundtable.analyst_retry')}
           </button>

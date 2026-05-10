@@ -3,7 +3,7 @@
    Allows selecting an agent + round to create a "what-if" branch.
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ApiError, submitCounterfactual } from '../api/client';
 import type { AgentInfo, AgentMessage } from '../types';
@@ -14,6 +14,7 @@ interface Props {
   agents: AgentInfo[];
   messages?: AgentMessage[];
   totalRounds: number;
+  initialRound?: number;
   onCreated?: (branchId: string) => void;
 }
 
@@ -23,12 +24,22 @@ export function CounterfactualPanel({
   agents,
   messages = [],
   totalRounds,
+  initialRound,
   onCreated,
 }: Props) {
   const { t } = useTranslation();
   const [selectedAgent, setSelectedAgent] = useState('');
-  const [selectedRound, setSelectedRound] = useState(1);
+  const [selectedRound, setSelectedRound] = useState(() => {
+    if (typeof initialRound !== 'number' || !Number.isFinite(initialRound)) return 1;
+    return Math.max(1, Math.min(totalRounds, Math.round(initialRound)));
+  });
   const [replacement, setReplacement] = useState('');
+
+  useEffect(() => {
+    if (typeof initialRound !== 'number' || !Number.isFinite(initialRound)) return;
+    const clamped = Math.max(1, Math.min(totalRounds, Math.round(initialRound)));
+    setSelectedRound(clamped);
+  }, [initialRound, totalRounds]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);

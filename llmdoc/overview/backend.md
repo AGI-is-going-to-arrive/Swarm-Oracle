@@ -20,7 +20,7 @@
 |------|------|------|
 | App 入口 | `backend/app/main.py` | 挂载所有 router、根信息、`/metrics` |
 | Admin | `backend/app/api/admin.py` | admin preflight 与 LLM 连接测试；受 session gate 保护 |
-| Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact |
+| Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import |
 | Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、自建 Agent workshop 与自建 Agent tier 校验 |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
@@ -40,6 +40,7 @@
 | Simulation Cancel | `backend/app/services/simulation_cancel.py` | scenario 取消 token、DB cancelled fallback 与后台任务取消信号 |
 | Preflight | `backend/app/services/preflight.py` | admin/CLI 预检：SQLite、ChromaDB、LLM、web search、CORS、volume |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
+| Personality Drift | `backend/app/services/personality_drift.py` | 从 identity metadata、消息和成长事件派生 Big Five drift warning |
 | Memory | `backend/app/services/memory.py` | L1 压缩、context 组装 |
 | Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、缓存与上下文格式化 |
 | LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断、JSON stream-first fallback |
@@ -50,6 +51,7 @@
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
 | Graph Analysis | `backend/app/services/graph_analysis.py` | 对最新 causal graph snapshot 做度数分布、god nodes、跨分支边摘要；大图会返回 `truncated: true` |
+| Snapshot Export | `backend/app/services/snapshot_export.py` | scenario ZIP export/import、manifest/checksum、旧 ID 到新 ID remap 与 ZIP 安全校验 |
 | Runtime Lock | `backend/app/services/runtime_lock.py` | SQLite shared lease + lease refresh，防重入 |
 | Gameplay Contract | `backend/app/services/gameplay_contract.py` | 读取共享玩法契约 |
 
@@ -131,6 +133,9 @@
   - 不存在的 branch 会返回 `404 BRANCH_NOT_FOUND`，不再伪装成 `200 + 空图`
 - `GET /api/scenario/{id}/graph-analysis` 当前同时要求 `FEATURE_GRAPH_ANALYSIS=true` 和 `FEATURE_CAUSAL_GRAPH=true`；返回 god nodes、degree distribution、cross-branch edges 和 summary。分析前会先按最新 snapshot 的 node/edge 数做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`；带 `branch_id` 时，预检会按该 branch 的可见节点/边计数，避免大 scenario 下的小 branch 查询被保守截断。
 - `GraphEdge` 当前已有 `confidence_tier / source_ref / source_round_number / evidence_json` nullable 字段。causal graph 新边会写入 coarse evidence，并在 API response 里返回；重放轮次遇到旧 edge 时，会只补齐缺失的 evidence 字段，不覆盖已有非空值。inter-agent 边会把确定性 rule / reason 写进 `evidence_json`；其它 causal graph 写图路径仍可能只有 coarse provenance。debate argument map 也会在 `GET /api/debate/{id}/argument-map` 的 `edges[].evidence` 返回 `confidence_tier / source_ref / source_round_number / detail`。`detail` 只是 `evidence_json` 的透传，不是 LLM 解释文本。
+- `GET /api/scenario/{id}/personality-drift` 当前要求 `FEATURE_AGENT_IDENTITY=true`，并先校验 caller 能看到该 scenario。返回值按 drift score 排序，只做 warning 数据，不阻断 verdict。
+- `GET /api/scenario/{id}/snapshot` 当前要求 `FEATURE_SNAPSHOT_EXPORT=true`，并先校验 scenario ownership。ZIP 包含 `manifest.json`、scenario、branches、agents、messages、causal graph 和 `checksums.sha256`；默认不导出 `user_id`，也会剥掉 API key、base URL、token、password 等敏感字段。
+- `POST /api/scenario/import-snapshot` 当前也受 `FEATURE_SNAPSHOT_EXPORT` gate；开启 `SESSION_SECRET` 时要求 signed principal。上传上限是 50 MB；导入前会拒绝绝对路径、`..`、反斜杠路径、symlink、超大 member、总解压超限、异常压缩比、manifest/schema/checksum 不匹配。导入会新建 scenario/branch/agent/message/graph 主键并 remap FK，imported agent 的 `agent_identity_id` 会清空。
 
 ### Ending Room
 
@@ -377,6 +382,8 @@
   - `tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py`：`36 passed`
   - `ruff check app/api/scenarios.py app/api/quota.py app/services/simulation_cancel.py app/services/simulator.py tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py`：通过
   - 仓库级 `ruff check app tests` 当前仍有既有无关 lint 存量，未改写成全绿
+- Sprint 3 snapshot / personality drift 窄集当前已跑：
+  - `python -m pytest tests/test_snapshot_export.py tests/test_personality_drift.py -q`：`46 passed`
 
 ## WebSocket 口径
 

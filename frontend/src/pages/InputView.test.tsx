@@ -10,6 +10,7 @@ const {
   createDebateMock,
   getCapabilitiesMock,
   identityPreflightMock,
+  importScenarioSnapshotMock,
   testLlmConnectionMock,
   startSimulationMock,
   getCampaignProfileMock,
@@ -120,6 +121,7 @@ const {
     createDebateMock: vi.fn(),
     getCapabilitiesMock: vi.fn(),
     identityPreflightMock: vi.fn(),
+    importScenarioSnapshotMock: vi.fn(),
     testLlmConnectionMock: vi.fn(),
     startSimulationMock: vi.fn(async () => 'scenario-1'),
     getCampaignProfileMock: vi.fn(),
@@ -174,6 +176,7 @@ vi.mock('../api/client', () => ({
   createDebate: createDebateMock,
   getCapabilities: getCapabilitiesMock,
   identityContinuityPreflight: identityPreflightMock,
+  importScenarioSnapshot: importScenarioSnapshotMock,
   testLlmConnection: testLlmConnectionMock,
   getCampaignProfile: getCampaignProfileMock,
   getCampaignMastery: getCampaignMasteryMock,
@@ -326,6 +329,7 @@ describe('InputView campaign progress', () => {
     createDebateMock.mockReset();
     startSimulationMock.mockClear();
     identityPreflightMock.mockReset();
+    importScenarioSnapshotMock.mockReset();
     testLlmConnectionMock.mockReset();
     getCapabilitiesMock.mockReset();
     // Default: server web search disabled (tests that need it override)
@@ -1338,6 +1342,41 @@ describe('InputView campaign progress', () => {
 
     await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
     expect(getCapabilitiesMock.mock.calls.length).toBe(initialCalls);
+  });
+
+  it('opens snapshot import from the homepage when the capability is enabled', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      custom_agents: { enabled: false },
+      snapshot_export: { enabled: true },
+    });
+    importScenarioSnapshotMock.mockResolvedValue({
+      scenario_id: 'imported-scenario',
+      status: 'imported',
+    });
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<InputView />} />
+          <Route path="/result/:id" element={<div>Imported result route</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'snapshot.import_btn' }));
+    expect(screen.getByRole('dialog', { name: 'snapshot.import_title' })).toBeInTheDocument();
+
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+    fireEvent.change(input!, {
+      target: {
+        files: [new File(['zip'], 'snapshot.zip', { type: 'application/zip' })],
+      },
+    });
+    await user.click(screen.getByTestId('snapshot-import-confirm'));
+    await user.click(await screen.findByTestId('snapshot-import-view-scenario'));
+
+    expect(await screen.findByText('Imported result route')).toBeInTheDocument();
   });
 
   it('strips web search secrets from identity continuity preflight while preserving them in scenario creation', async () => {

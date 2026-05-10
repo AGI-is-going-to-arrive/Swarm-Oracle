@@ -23,10 +23,10 @@ React + TypeScript frontend for SwarmOracle.
 
 | Route | Component | Description |
 |-------|-----------|-------------|
-| `/` | `InputView` | Scenario input, progress indicator, quick starts, onboarding, launch confirmation, source families, provider policy, optional organization id, advanced/BYOK accordions, custom Agent attach panel |
+| `/` | `InputView` | Scenario input, progress indicator, quick starts, onboarding, launch confirmation, source families, provider policy, optional organization id, advanced/BYOK accordions, custom Agent attach panel, feature-gated snapshot import |
 | `/admin/setup` | `SetupWizardView` | Three-step provider setup, API/base URL entry, and connection test |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, capture |
-| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, share/export, PNG share artifact, replay import, resume checkpoint picker, source badges, plus the capability-gated `What's Next` bridge |
+| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, share/export, prediction card, feature-gated snapshot export, replay import, resume checkpoint picker, source badges, plus the capability-gated `What's Next` bridge |
 | `/replay/:id` | `ReplayView` | Replay trace timeline with pagination, branch filter, and unavailable/probe-error states |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
 | `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate result, supporting turns, replay digest, share/import |
@@ -119,6 +119,14 @@ React + TypeScript frontend for SwarmOracle.
   5-step journey pill used by InputView and ResultView; invalid step values are clamped
 - `ShareArtifact.tsx`
   offscreen 1200x630 PNG export card; it only receives display-safe summary fields, not BYOK or session configuration
+- `ShareModal.tsx / ShareablePredictionCard.tsx`
+  share modal can download/copy a prediction card PNG when the browser supports it; social-copy requests are aborted on close/unmount, not on unrelated parent rerenders
+- `SnapshotExportWizard.tsx / SnapshotImportDialog.tsx`
+  feature-gated snapshot ZIP export/import UI; import rejects non-ZIP and files over 50 MB before calling the backend
+- `ReACTReasoningPanel.tsx / PersonalityDriftWarning.tsx`
+  roundtable analyst tool-chain surface and personality drift warning; the warning only shows risk data and does not block verdict rendering
+- `HOPsAnimation.tsx`
+  component, CSS, and reduced-motion test exist, but it is not yet imported by a production page; next Sprint 3 handoff starts from that wiring
 
 ## Validation
 
@@ -166,6 +174,13 @@ npm run build:spike:phaser-custom
   - full vitest: `177 files / 1904 passed`
   - `tsc / lint / build / i18n parity`: pass
   - browser matrix: `72/72 PASS` at `output/e2e/sprint0-2-review-20260510-browser/summary.json`
+- Latest Sprint 3 scoped verification:
+  - `npm test -- --run src/api/client.test.ts src/components/Export/SnapshotExportDialogs.test.tsx src/components/ShareModal.test.tsx src/components/result/HOPsAnimation.test.tsx src/pages/InputView.test.tsx src/i18n/locales.test.ts --reporter=basic`: `6 files / 95 tests passed`
+  - `npx tsc --noEmit -p tsconfig.app.json`: pass
+  - `npm run lint`: pass
+  - `npm run build`: pass, including performance budgets
+  - `node --check scripts/e2e-result-share-fixture.mjs`: pass
+  - `scripts/e2e-result-share-fixture.mjs full`: desktop/mobile Chromium `13/13` each
 - Latest scoped reruns for the bridge / guide copy update:
   - `npm run test -- --run src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts --reporter=verbose`: `87 passed`
   - `npx tsc --noEmit`: pass

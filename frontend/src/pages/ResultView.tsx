@@ -101,6 +101,7 @@ import type {
   StoryData,
 } from '../types';
 import ShareModal from '../components/ShareModal';
+import SnapshotExportWizard from '../components/Export/SnapshotExportWizard';
 import EndingChatModal from '../components/EndingChatModal';
 import { QuotaBadge } from '../components/shared/QuotaBadge';
 import {
@@ -119,9 +120,11 @@ import {
 } from './resultHelpers';
 import './ResultView.css';
 import { CounterfactualPanel } from '../components/CounterfactualPanel';
+import { CounterfactualBrand } from '../components/result/CounterfactualBrand';
 import { FactionTimeline } from '../components/FactionTimeline';
 import { ResumePanel } from '../components/ResumePanel';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { ReturningBadge } from '../components/ReturningBadge';
 import { ResultActionCard } from '../components/result/ResultActionCard';
 import { ResultConversationWidget } from '../components/ResultConversationWidget';
@@ -175,6 +178,7 @@ export default function ResultView() {
   const setResultViewMode = useUIPreferencesStore((state) => state.setResultViewMode);
   const isWorkbenchMode = resultViewMode === 'workbench';
   const [cfBranchId, setCfBranchId] = useState<string | null>(null);
+  const [cfInitialRound, setCfInitialRound] = useState<number | undefined>(undefined);
   const [notebookOpen, setNotebookOpen] = useState(true);
   const [webSourcesOpen, setWebSourcesOpen] = useState(false);
   const blurCollapsedPanelFocus = useCallback((event: FocusEvent<HTMLDivElement>) => {
@@ -193,6 +197,7 @@ export default function ResultView() {
   const [exportError, setExportError] = useState('');
   const exportResetTimerRef = useRef<number | null>(null);
   const [showShare, setShowShare] = useState(false);
+  const [showSnapshotExport, setShowSnapshotExport] = useState(false);
   const [activeEndingRoomBranchId, setActiveEndingRoomBranchId] = useState<string | null>(null);
   const [activeEndingRoomMode, setActiveEndingRoomMode] = useState<'ending_chamber' | 'one_move_only' | 'crossline_gallery'>('ending_chamber');
   const [activeEndingRoomSelectedAgentIds, setActiveEndingRoomSelectedAgentIds] = useState<string[]>([]);
@@ -202,6 +207,8 @@ export default function ResultView() {
     selectedAgentIds: string[];
     maxSelectable: number;
   } | null>(null);
+  const endingRoomPickerDialogRef = useRef<HTMLDivElement | null>(null);
+  const endingRoomPickerCloseRef = useRef<HTMLButtonElement | null>(null);
   const endingRoomAutomationRef = useRef<Record<string, unknown> | null>(null);
   const debugEndingRoomAppliedRef = useRef(false);
   const setEndingRoomAutomation = useCallback((value: Record<string, unknown> | null) => {
@@ -1417,6 +1424,19 @@ export default function ResultView() {
   const pendingEndingRoomCandidates = pendingEndingRoomPicker
     ? (branchEndingRoomCandidates[pendingEndingRoomPicker.branchId] ?? [])
     : [];
+  const endingRoomPickerOpen = Boolean(pendingEndingRoomPicker && pendingEndingRoomBranch);
+  useFocusTrap(endingRoomPickerDialogRef, endingRoomPickerOpen);
+  useEffect(() => {
+    if (!endingRoomPickerOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPendingEndingRoomPicker(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    endingRoomPickerCloseRef.current?.focus();
+    return () => window.removeEventListener('keydown', onKey);
+  }, [endingRoomPickerOpen]);
   const activeEndingRoomSelectedBranchIds = useMemo(
     () => {
       if (!activeEndingRoomBranch) return [];
@@ -1776,11 +1796,7 @@ export default function ResultView() {
           <p className="result-question">{storyData.question}</p>
         )}
         <p className="result-subtitle">
-          {t('result.subtitle')} — {branches.length} {isZh
-            ? '结局'
-            : branches.length === 1
-              ? 'ending'
-              : 'endings'}
+          {t('result.subtitle')} — {t('result.ending_count', { count: branches.length })}
         </p>
         <div className="result-archive__chips">
           <span className="archive-chip archive-chip--primary">
@@ -1867,6 +1883,15 @@ export default function ResultView() {
             >
               {challengeLinkCopied ? t('result.challenge_link_copied') : t('result.share_challenge_btn')}
             </button>
+            {capabilities?.snapshot_export?.enabled && id && !isReplayMode && (
+              <button
+                className="btn btn-ghost"
+                onClick={() => setShowSnapshotExport(true)}
+                data-testid="result-snapshot-export-btn"
+              >
+                {t('snapshot.export_btn', 'Export snapshot')}
+              </button>
+            )}
           </div>
           <div className="result-actions__overflow">
             <button
@@ -2776,12 +2801,29 @@ export default function ResultView() {
         <section className="result-extension-section">
           {capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
             <>
+              <CounterfactualBrand
+                branches={branches}
+                scenarioId={id}
+                onExplore={(_branchId, round) => {
+                  setCfInitialRound(round);
+                  if (typeof window === 'undefined') return;
+                  const panel = window.document.getElementById('cf-replacement');
+                  if (panel) {
+                    const behavior: ScrollBehavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+                      ? 'auto'
+                      : 'smooth';
+                    panel.scrollIntoView({ behavior, block: 'center' });
+                    (panel as HTMLTextAreaElement).focus({ preventScroll: true });
+                  }
+                }}
+              />
               <CounterfactualPanel
                 scenarioId={id}
                 branchId={analysisBranch?.id ?? ''}
                 agents={agents}
                 messages={scenario?.messages ?? []}
                 totalRounds={scenario?.total_rounds ?? 10}
+                initialRound={cfInitialRound}
                 onCreated={(branchId) => setCfBranchId(branchId)}
               />
               {cfBranchId && (
@@ -2818,9 +2860,19 @@ export default function ResultView() {
           onClose={() => setShowShare(false)}
         />
       )}
+      {/* S3-6: Snapshot export wizard */}
+      {showSnapshotExport && id && !isReplayMode && (
+        <SnapshotExportWizard
+          scenarioId={id}
+          isOpen={showSnapshotExport}
+          onClose={() => setShowSnapshotExport(false)}
+          scenarioTitle={scenario?.question ?? undefined}
+        />
+      )}
       {pendingEndingRoomPicker && pendingEndingRoomBranch && (
         <div className="ending-room-picker-overlay" onClick={() => setPendingEndingRoomPicker(null)}>
           <div
+            ref={endingRoomPickerDialogRef}
             className="ending-room-picker"
             role="dialog"
             aria-modal="true"
@@ -2845,6 +2897,7 @@ export default function ResultView() {
               </div>
               <button
                 type="button"
+                ref={endingRoomPickerCloseRef}
                 className="ending-room-picker__close"
                 onClick={() => setPendingEndingRoomPicker(null)}
                 aria-label={t('common.close')}
@@ -2866,6 +2919,7 @@ export default function ResultView() {
                       key={candidate.id}
                       type="button"
                       className={`ending-room-picker__card ${selected ? 'is-selected' : ''}`}
+                      aria-pressed={selected}
                       onClick={() => {
                         setPendingEndingRoomPicker((current) => {
                           if (!current || current.branchId !== pendingEndingRoomBranch.id) {

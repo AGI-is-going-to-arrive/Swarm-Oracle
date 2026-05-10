@@ -9,12 +9,14 @@ Extracted modules:
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import func as sa_func
 from sqlmodel import Session, select
@@ -568,6 +570,10 @@ async def api_capabilities():
         "replay_trace": _capability_entry(
             enabled=settings.FEATURE_REPLAY_TRACE,
             version="1.0" if settings.FEATURE_REPLAY_TRACE else "0.0",
+        ),
+        "snapshot_export": _capability_entry(
+            enabled=settings.FEATURE_SNAPSHOT_EXPORT,
+            version="1.0" if settings.FEATURE_SNAPSHOT_EXPORT else "0.0",
         ),
     }
 
@@ -1519,6 +1525,110 @@ async def delete_scenario(
 
     logger.info("Deleted scenario %s and all related data", scenario_id)
     return {"status": "deleted", "scenario_id": scenario_id}
+
+
+# ── S3-6: Snapshot Export / Import ───────────────────────
+
+
+MAX_IMPORT_SNAPSHOT_BYTES = 50 * 1024 * 1024  # 50 MB
+SNAPSHOT_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+def _require_snapshot_export_feature() -> None:
+    if not settings.FEATURE_SNAPSHOT_EXPORT:
+        raise api_error(
+            404,
+            "FEATURE_DISABLED",
+            "Feature 'snapshot_export' is not enabled",
+        )
+
+
+async def _read_snapshot_upload(file: UploadFile) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(SNAPSHOT_UPLOAD_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_IMPORT_SNAPSHOT_BYTES:
+            raise api_error(
+                413,
+                "SNAPSHOT_FILE_TOO_LARGE",
+                f"Snapshot file too large (max {MAX_IMPORT_SNAPSHOT_BYTES} bytes)",
+            )
+        chunks.append(chunk)
+
+    blob = b"".join(chunks)
+    if not blob:
+        raise api_error(
+            422,
+            "SNAPSHOT_FILE_EMPTY",
+            "Uploaded snapshot file is empty",
+        )
+    return blob
+
+
+@router.get("/scenario/{scenario_id}/snapshot")
+async def export_scenario_snapshot(
+    scenario_id: str,
+    include_private: bool = Query(False),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """S3-6: Export a scenario as a self-contained ZIP snapshot."""
+    _require_snapshot_export_feature()
+
+    from app.services.snapshot_export import export_snapshot_zip
+
+    engine = get_engine()
+    with Session(engine) as session:
+        require_owned_scenario(session, scenario_id, principal)
+        buffer = export_snapshot_zip(
+            scenario_id, session, include_private=include_private,
+        )
+
+    payload = buffer.getvalue()
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="scenario-{scenario_id}.zip"'
+        ),
+        "Content-Length": str(len(payload)),
+    }
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="application/zip",
+        headers=headers,
+    )
+
+
+@router.post("/scenario/import-snapshot")
+async def import_scenario_snapshot(
+    file: UploadFile = File(...),
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """S3-6: Import a scenario snapshot ZIP into a new scenario."""
+    _require_snapshot_export_feature()
+
+    from app.services.snapshot_export import (
+        SnapshotImportError,
+        import_snapshot_zip,
+    )
+
+    blob = await _read_snapshot_upload(file)
+
+    user_id = principal.subject if principal is not None else None
+    engine = get_engine()
+    try:
+        with Session(engine) as session:
+            new_scenario_id = import_snapshot_zip(blob, user_id, session)
+    except SnapshotImportError as exc:
+        raise api_error(
+            422,
+            "SNAPSHOT_IMPORT_INVALID",
+            str(exc),
+        ) from exc
+
+    return {"scenario_id": new_scenario_id, "status": "imported"}
 
 
 # Prediction / leaderboard routes now live exclusively in app.api.predictions.

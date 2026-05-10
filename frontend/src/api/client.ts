@@ -490,11 +490,59 @@ export interface CapabilitiesResponse {
   graph_analysis: CapabilityEntry;
   roundtable_survey: CapabilityEntry;
   roundtable_analyst: CapabilityEntry;
+  snapshot_export?: CapabilityEntry;
 }
 
 /** GET /api/capabilities — lightweight server capability hints (no LLM calls) */
 export async function getCapabilities(): Promise<CapabilitiesResponse> {
   return safeGet('/capabilities');
+}
+
+/**
+ * S3-6: Export a scenario as a self-contained ZIP snapshot.
+ * Returns a Blob (application/zip). Caller is responsible for triggering
+ * the browser download (e.g. URL.createObjectURL + anchor.click).
+ */
+export async function exportScenarioSnapshot(
+  scenarioId: string,
+  includePrivate = false,
+  options?: RequestOptions,
+): Promise<Blob> {
+  const path = `/scenario/${encodeURIComponent(scenarioId)}/snapshot?include_private=${includePrivate ? 'true' : 'false'}`;
+  const res = await fetchWithTimeout(path, {
+    method: 'GET',
+    headers: buildSessionHeaders(),
+    signal: options?.signal,
+  });
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+  return res.blob();
+}
+
+/**
+ * S3-6: Import a scenario snapshot ZIP into a new scenario.
+ * Returns the newly created scenario id.
+ */
+export async function importScenarioSnapshot(
+  file: File,
+  options?: RequestOptions,
+): Promise<{ scenario_id: string; status?: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetchWithTimeout('/scenario/import-snapshot', {
+    method: 'POST',
+    headers: buildSessionHeaders(),
+    body: form,
+    signal: options?.signal,
+  });
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+  return parseJsonResponse<{ scenario_id: string; status?: string }>(
+    res,
+    '/scenario/import-snapshot',
+  );
 }
 
 /** POST /api/health/test — test LLM connectivity with optional BYOK credentials */
@@ -858,9 +906,11 @@ export async function generateSocialCopy(
   id: string,
   platform: string,
   options?: LlmProviderRequestOptions,
+  requestOptions?: RequestOptions,
 ): Promise<{ platform: string; platform_name: string; copy: string }> {
   return request(`/scenario/${encodeURIComponent(id)}/social/${encodeURIComponent(platform)}`, {
     method: 'POST',
+    signal: requestOptions?.signal,
     body: JSON.stringify({
       ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
       ...(options?.llmBaseUrl && { llm_base_url: options.llmBaseUrl }),
@@ -1150,6 +1200,35 @@ export async function resumeFromRound(
     method: 'POST',
     body: JSON.stringify(body),
   });
+}
+
+// ── S3-3: Personality Drift ──
+
+export type PersonalityDriftSeverity = 'low' | 'medium' | 'high';
+
+export interface PersonalityDriftDimension {
+  dimension: string;
+  initial: number;
+  current: number;
+  delta: number;
+}
+
+export interface PersonalityDriftResult {
+  agent_id: string;
+  agent_name: string;
+  drift_score: number;
+  drift_dimensions: PersonalityDriftDimension[];
+  severity: PersonalityDriftSeverity;
+  evidence: string[];
+}
+
+/** GET /api/scenario/:id/personality-drift — S3-3 per-Agent personality drift analysis */
+export async function getPersonalityDrift(
+  scenarioId: string,
+): Promise<PersonalityDriftResult[]> {
+  return safeGet<PersonalityDriftResult[]>(
+    `/scenario/${encodeURIComponent(scenarioId)}/personality-drift`,
+  );
 }
 
 // ── P2-2: Faction Relations (force graph) ──

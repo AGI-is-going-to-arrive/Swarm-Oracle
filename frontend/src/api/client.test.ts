@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { appendEndingRoomUserTurn, buildSessionHeaders, createReplayArtifact, exportScenario, getScenario } from './client';
+import {
+  appendEndingRoomUserTurn,
+  buildSessionHeaders,
+  createReplayArtifact,
+  exportScenario,
+  exportScenarioSnapshot,
+  generateSocialCopy,
+  getScenario,
+  importScenarioSnapshot,
+} from './client';
 
 describe('api client request parsing', () => {
   afterEach(() => {
@@ -198,5 +207,67 @@ describe('api client request parsing', () => {
     const error = await result;
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe('API request timed out after 90000ms: /ending-room/room-1/user-turn');
+  });
+
+  it('aborts snapshot export when the caller signal is cancelled', async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => (
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Aborted', 'AbortError'));
+        });
+      })
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = exportScenarioSnapshot('scenario-1', false, {
+      signal: controller.signal,
+    }).catch((error: unknown) => error);
+    controller.abort();
+
+    const error = await result;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('API request aborted');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scenario/scenario-1/snapshot?include_private=false',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('passes caller abort signals through snapshot import and social copy requests', async () => {
+    const responses = [
+      {
+        ok: true,
+        headers: { get: () => 'application/json' },
+        text: vi.fn().mockResolvedValue('{"scenario_id":"imported","status":"imported"}'),
+      },
+      {
+        ok: true,
+        headers: { get: () => 'application/json' },
+        text: vi.fn().mockResolvedValue('{"platform":"x","platform_name":"X","copy":"done"}'),
+      },
+    ];
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responses[0])
+      .mockResolvedValueOnce(responses[1]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await importScenarioSnapshot(new File(['zip'], 'snap.zip', { type: 'application/zip' }), {
+      signal: new AbortController().signal,
+    });
+    await generateSocialCopy('scenario-1', 'x', undefined, {
+      signal: new AbortController().signal,
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/scenario/import-snapshot',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/scenario/scenario-1/social/x',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 });

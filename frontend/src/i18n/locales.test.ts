@@ -80,6 +80,19 @@ describe('i18n locale resources', () => {
     expect(zh.translation.result.compare_link).toBeTruthy();
   });
 
+  it('provides Sprint 3 snapshot, roundtable, and drift labels in both locales', () => {
+    expect(en.translation.result.ending_count).toContain('{{count}}');
+    expect(zh.translation.result.ending_count).toContain('{{count}}');
+    expect(en.translation.roundtable.composer_label).toBeTruthy();
+    expect(zh.translation.roundtable.composer_label).toBeTruthy();
+    expect(en.translation.roundtable.analyst_label).toBeTruthy();
+    expect(zh.translation.roundtable.analyst_label).toBeTruthy();
+    expect(en.translation.drift_warning.unavailable).toContain('temporarily unavailable');
+    expect(zh.translation.drift_warning.unavailable).toContain('暂不可用');
+    expect(en.translation.snapshot.import_btn).toBe('Import snapshot');
+    expect(zh.translation.snapshot.import_btn).toBe('导入快照');
+  });
+
   it('keeps the new bridge and graph-guide locale keys present in both English and Chinese resources', () => {
     const resultBridgeKeys = [
       'bridge_title',

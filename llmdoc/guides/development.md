@@ -269,6 +269,33 @@ npm run build
 
 本轮 Sprint 0-2 收尾复核中，前端全量 vitest 为 `177 files / 1904 tests / 0 failed`，`tsc`、`lint`、`build` 和 `i18n parity` 都通过。浏览器矩阵覆盖 12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，结果为 `72 passed / 0 failed`。
 
+### Sprint 3 snapshot / share / drift 窄集
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_snapshot_export.py tests/test_personality_drift.py -q
+
+cd ../frontend
+npm test -- --run src/api/client.test.ts src/components/Export/SnapshotExportDialogs.test.tsx src/components/ShareModal.test.tsx src/components/result/HOPsAnimation.test.tsx src/pages/InputView.test.tsx src/i18n/locales.test.ts
+node --check scripts/e2e-result-share-fixture.mjs
+npm run e2e:result:fixture -- --url http://127.0.0.1:5174 --headless
+```
+
+本轮已复核：
+
+- backend snapshot/personality drift 窄集：`46 passed`
+- backend snapshot/personality drift touched-file `ruff check`：通过
+- frontend snapshot/share/HOPs/i18n/InputView 窄集：`6 files / 95 tests passed`
+- frontend `tsc / lint / build`：通过；build 内 performance budget 无 violations
+- `node --check scripts/e2e-result-share-fixture.mjs`：通过
+- ResultView + ShareModal fixture browser：desktop + mobile Chromium 各 `13/13` 通过
+
+当前边界：
+
+- `HOPsAnimation` 只有组件、CSS 和 reduced-motion 测试，还没有生产页面导入；生产接线后要补 ResultView 级回归。
+- snapshot 导出/导入已有后端安全校验和前端 dialog 测试，但 Gate 3 仍需要 browser 级导出→导入全链路，以及跨 OS ZIP 互通证据。
+
 字体现在从本地 `/fonts` 提供。如果需要重生成字体 CSS 和 woff2 分片，使用：
 
 ```bash
