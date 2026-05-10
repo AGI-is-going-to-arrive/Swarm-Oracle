@@ -106,6 +106,8 @@ export class EndingScene extends Phaser.Scene {
   private currentStorySummary = '';
   private backgroundImage: Phaser.GameObjects.Image | null = null;
   private pendingEndingTextureLoads: Set<string> = new Set();
+  // Accessibility: skip decorative motion when user prefers reduced motion
+  private reducedMotion = false;
 
   constructor() {
     super({ key: 'EndingScene' });
@@ -121,6 +123,10 @@ export class EndingScene extends Phaser.Scene {
   }
 
   create(data: EndingSceneData): void {
+    // Detect reduced-motion preference (skip decorative cinematic effects)
+    this.reducedMotion = typeof window !== 'undefined'
+      && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+
     const { width, height } = this.scale;
 
     // Resolve which ending to show
@@ -211,15 +217,17 @@ export class EndingScene extends Phaser.Scene {
     divider.fillCircle(dividerGradientW / 2, dividerY, 2);
     cardContainer.add(divider);
 
-    // Divider pulse
-    this.tweens.add({
-      targets: divider,
-      alpha: 0.4,
-      duration: 1500,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut',
-    });
+    // Divider pulse (decorative — skip under reduced motion)
+    if (!this.reducedMotion) {
+      this.tweens.add({
+        targets: divider,
+        alpha: 0.4,
+        duration: 1500,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+    }
 
     // Story text
     const storyStr = data.story_summary
@@ -246,43 +254,53 @@ export class EndingScene extends Phaser.Scene {
     }).setOrigin(0.5);
     cardContainer.add(hintText);
 
-    // Hint pulsing
-    this.tweens.add({
-      targets: hintText,
-      alpha: 0.3,
-      duration: 1000,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut',
-    });
+    // Hint pulsing (decorative — skip under reduced motion)
+    if (!this.reducedMotion) {
+      this.tweens.add({
+        targets: hintText,
+        alpha: 0.3,
+        duration: 1000,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+    }
 
-    // Animate card entrance
-    cardContainer.setScale(0.7);
-    cardContainer.y = height / 2 + 20;
-    this.tweens.add({
-      targets: cardContainer,
-      alpha: 1,
-      scaleX: 1,
-      scaleY: 1,
-      y: height / 2,
-      duration: 900,
-      ease: 'Back.easeOut',
-      delay: 1500,
-    });
+    // Animate card entrance (instant under reduced motion — card must appear)
+    if (this.reducedMotion) {
+      cardContainer.setScale(1);
+      cardContainer.setAlpha(1);
+      cardContainer.y = height / 2;
+    } else {
+      cardContainer.setScale(0.7);
+      cardContainer.y = height / 2 + 20;
+      this.tweens.add({
+        targets: cardContainer,
+        alpha: 1,
+        scaleX: 1,
+        scaleY: 1,
+        y: height / 2,
+        duration: 900,
+        ease: 'Back.easeOut',
+        delay: 1500,
+      });
+    }
 
-    // ── 5. Dual-color particle effects ──────────────────
-    this.particleTimer = this.time.addEvent({
-      delay: 120,
-      repeat: -1,
-      callback: () => this.emitParticle(width, height, config),
-    });
+    // ── 5. Dual-color particle effects (decorative — skip under reduced motion) ──
+    if (!this.reducedMotion) {
+      this.particleTimer = this.time.addEvent({
+        delay: 120,
+        repeat: -1,
+        callback: () => this.emitParticle(width, height, config),
+      });
 
-    // ── 6. Initial burst particles ──────────────────────
-    this.time.delayedCall(1800, () => {
-      for (let i = 0; i < 20; i++) {
-        this.emitBurstParticle(width / 2, height / 2, config.accentColor);
-      }
-    });
+      // ── 6. Initial burst particles ──────────────────────
+      this.time.delayedCall(1800, () => {
+        for (let i = 0; i < 20; i++) {
+          this.emitBurstParticle(width / 2, height / 2, config.accentColor);
+        }
+      });
+    }
 
     // ── 7. Auto-return ──────────────────────────────────
     this.input.once('pointerdown', () => this.returnToWorld());
@@ -292,8 +310,12 @@ export class EndingScene extends Phaser.Scene {
       this.returnToWorld();
     });
 
-    // Fade in
-    this.cameras.main.fadeIn(800, 0, 0, 0);
+    // Avoid camera fade animations when the user requests reduced motion.
+    if (this.reducedMotion) {
+      this.cameras.main.setAlpha(1);
+    } else {
+      this.cameras.main.fadeIn(800, 0, 0, 0);
+    }
 
     console.log(`[EndingScene] V3 showing ending: ${endingId}`);
   }
@@ -307,18 +329,24 @@ export class EndingScene extends Phaser.Scene {
     this.backgroundImage = this.add.image(width / 2, height / 2, textureKey);
     this.backgroundImage.setDisplaySize(width, height);
     this.backgroundImage.setDepth(1);
-    this.backgroundImage.setAlpha(0);
-    this.backgroundImage.setScale(1.05);
 
-    this.tweens.add({
-      targets: this.backgroundImage,
-      alpha: 0.85,
-      scaleX: 1.0,
-      scaleY: 1.0,
-      duration: 3000,
-      ease: 'Power2',
-      delay: 400,
-    });
+    // Background must remain visible — under reduced motion show final state immediately
+    if (this.reducedMotion) {
+      this.backgroundImage.setAlpha(0.85);
+      this.backgroundImage.setScale(1.0);
+    } else {
+      this.backgroundImage.setAlpha(0);
+      this.backgroundImage.setScale(1.05);
+      this.tweens.add({
+        targets: this.backgroundImage,
+        alpha: 0.85,
+        scaleX: 1.0,
+        scaleY: 1.0,
+        duration: 3000,
+        ease: 'Power2',
+        delay: 400,
+      });
+    }
   }
 
   private ensureEndingTextureLoaded(endingId: string, onReady?: () => void): void {
@@ -432,9 +460,13 @@ export class EndingScene extends Phaser.Scene {
       this.particleTimer = null;
     }
 
-    this.cameras.main.fadeOut(800, 0, 0, 0);
-    this.cameras.main.once('camerafadeoutcomplete', () => {
+    if (this.reducedMotion) {
       this.scene.start('WorldScene');
-    });
+    } else {
+      this.cameras.main.fadeOut(800, 0, 0, 0);
+      this.cameras.main.once('camerafadeoutcomplete', () => {
+        this.scene.start('WorldScene');
+      });
+    }
   }
 }

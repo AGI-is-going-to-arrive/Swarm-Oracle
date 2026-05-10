@@ -150,7 +150,16 @@
       "campaign_next_unlock": "{{count}} points to next unlock",
       "campaign_mastered": "This profile is capped for the current milestone",
       "campaign_quickstart_unlocks": "{{count}} badges unlocked · {{runs}} completed runs",
-      "campaign_first_run": "Complete your first run to reveal campaign progress here"
+      "campaign_first_run": "Complete your first run to reveal campaign progress here",
+      "continuity_title": "Confirm identity continuity",
+      "continuity_subtitle": "These proposed agents may match identities from your earlier runs. Choose whether to reuse the existing identity or create a new one for this simulation.",
+      "continuity_reuse": "Reuse existing identity",
+      "continuity_create_new": "Create new identity",
+      "continuity_candidate_label": "Candidate identity",
+      "continuity_similarity_label": "Similarity",
+      "continuity_cancel": "Cancel",
+      "continuity_confirm": "Continue",
+      "continuity_preflight_error": "Identity continuity preflight failed. Please retry."
     },
     "sim": {
       "status": {
@@ -1510,7 +1519,23 @@
       "divergence_label": "Divergence",
       "branch_a_label": "Branch A (Original)",
       "branch_b_label": "Branch B (Counterfactual)",
-      "feature_disabled": "Counterfactual replay feature is not enabled."
+      "feature_disabled": "Counterfactual replay feature is not enabled.",
+      "latest_round": "Latest round",
+      "context_aria": "Comparison context",
+      "dual_stage_pill": "Dual-stage compare",
+      "stage_intro": "The active stage keeps playing live while the other pane holds same-round context for side-by-side reading.",
+      "captured_mirror": "Captured mirror",
+      "standby_mirror": "Standby mirror",
+      "path_weight_suffix": "path weight",
+      "branch_overview": "Branch overview",
+      "live_stage": "Live stage",
+      "current_stage": "Live stage",
+      "activate_pane": "Activate",
+      "after_activation_label": "Available after activation",
+      "placeholder_primary": "Keep this branch readable first, then capture a live frame after activation.",
+      "placeholder_detail": "Round, divergence, and branch weight stay visible so the two-stage compare feels complete from the first frame.",
+      "after_activation_detail": "After one activation, this pane keeps a mirrored stage snapshot for the branch.",
+      "play_round": "Play this round"
     },
     "argument": {
       "empty": "No argument map available.",

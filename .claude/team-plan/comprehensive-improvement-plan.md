@@ -14,15 +14,16 @@ Sprint 0-6 / ~20-25 周完整改进计划。当前文件包含 35 个命名任�
 
 ---
 
-## Local Sprint 0-3 Progress / S3-4 + Gate 3 Handoff
+## Local Sprint 0-4 Progress / Sprint 5 Handoff
 
-**更新时间**: 2026-05-10
-**对应代码状态**: Sprint 3 工作树 + 本文档同步会随本次提交入库
+**更新时间**: 2026-05-11 (Sprint 4 review/fix 签收)
+**对应代码状态**: Sprint 0-4 已完成本地审查、修复、全量测试与浏览器复测；下一轮从 Sprint 5 开始
 **注意**: `.claude/` 被 `.gitignore` 忽略，本文件需要显式 `git add -f`。以后新增 `.claude/` 文件仍不会被普通 `git add` 自动收录。
 
-### Sprint 0-3 当前状态
+### Sprint 0-4 当前状态
 
-- Sprint 0 / 1 / 2 已完成并提交到 `origin/master`；下次不要从 S0-2 重跑实现任务，除非先验明确发现回归。
+- Sprint 0 / 1 / 2 / 3 已完成并提交到 `origin/master`。Gate 3 已签收。
+- Sprint 4 已在当前工作树完成本地 review/fix/full tests/browser rerun，等待本次文档同步后提交。
 - 已落地能力：
   - `/admin/setup` 3 步 provider 设置向导
   - `/api/admin/preflight` 与 `/api/admin/test-llm`
@@ -38,6 +39,12 @@ Sprint 0-6 / ~20-25 周完整改进计划。当前文件包含 35 个命名任�
   - Agent Library generated/custom 分组、generated 禁用编辑/删除
   - 5 维 `decision_bias` schema + Agent Workshop slider
   - AgentProfileModal growth metrics 与 ArgumentMap 状态展示
+  - S3-4 `HOPsAnimation` 已接入生产 `ResultView`
+  - S4-1 backend KG realtime event contract：`GraphDelta` + `kg:delta` / `kg:snapshot_invalidated` + coalescer
+  - S4-2 `ResultView` 拆到 `frontend/src/pages/result/` 的 9 个子组件 + `ResultContext`
+  - S4-3 第一批 `isZh` 迁移：`CompareDigestView / InputView / DebateResultView / FactionTimeline` 与 25 个新 locale keys
+  - S4-4 voice variant 从 13 扩到 18：`tech-visionary / journalist / educator / artist / entrepreneur`
+  - S4-5 Phaser `EndingScene / TitleScene / WorldScene` reduced-motion guard
 - 已同步文档：
   - `README.md`
   - `backend/README.md`
@@ -48,52 +55,63 @@ Sprint 0-6 / ~20-25 周完整改进计划。当前文件包含 35 个命名任�
   - `llmdoc/reference/api.md`
   - `llmdoc/reference/config.md`
   - `llmdoc/guides/development.md`
-- Sprint 3 已落地大部分代码：
+- Sprint 3 已落地：
   - S3-1：`CounterfactualBrand` 已接到 `ResultView`，点击 fork point 会把 `CounterfactualPanel` 的 `initialRound` 同步到对应轮次。
   - S3-2：`AnalystStreamView` 已切到共享 `ReACTReasoningPanel`，展示 analyst 的工具调用、参数、结果摘要和最终回答。
   - S3-3：后端 `personality_drift.py`、`GET /api/scenario/{id}/personality-drift`、前端 `PersonalityDriftWarning` 已接线；当前使用 `FEATURE_AGENT_IDENTITY` gate，只做 warning，不 hard gate。
   - S3-5：`ShareModal` 已扩展预测卡片 PNG 下载 / 图片剪贴板复制、focus trap、Escape/关闭 abort；仍复用现有 `html2canvas` 动态导入。
   - S3-6：后端 snapshot ZIP export/import、`snapshot_export` capability、前端导出/导入弹窗、首页导入入口和结果页导出入口已接线；后端导入会校验 manifest/checksum、拒绝 ZIP traversal/symlink/zip bomb，并清空 imported `agent_identity_id`。
-  - S3-4：`HOPsAnimation` 组件、CSS 和 reduced-motion 测试已新增，但当前没有生产页面导入。下次从这里接线，不要把已完成的 S3-1/2/3/5/6 重做一遍。
+  - S3-4：`HOPsAnimation` 已接入 `ResultView.tsx`，在 endings-grid 前展示分支概率采样动画；`branches.length >= 2` 时可见，replay 模式下 `isPlaying=false`。
 
-### 真实验证结果
+### Gate 3 签收记录 (2026-05-10)
 
-- Browser matrix: `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`
-  - 12 项功能
-  - Chromium / Firefox / WebKit
-  - desktop 1440 / mobile 375
-  - `72 passed / 0 failed`
-- Frontend:
-  - `npx tsc --noEmit -p tsconfig.app.json`: pass
-  - `npm run lint`: pass
-  - `npm test -- --run`: `177 files / 1904 tests / 0 failed`
-  - `npm run build`: pass
-  - i18n parity: `en: 2053 zh: 2053 parity: PASS`
-- Backend:
-  - Sprint 0-2 touched-file pytest: `36 passed`
-  - Sprint 0-2 touched-file ruff: pass
-  - full pytest: `2477 passed, 3 failed, 2 skipped`
-    - 两条 LLM gateway failure 定向重跑后恢复
-    - 剩余 `tests/test_graph_analysis.py::test_graph_analysis_endpoint_returns_200_with_correct_shape` 是既有基线差异
-  - full `ruff check app tests` 仍有既有无关 lint 存量；不要在 Sprint 3 偷改无关 lint。
-- Sprint 3 本次真实验证：
-  - `cd backend && source .venv/bin/activate && python -m pytest tests/test_snapshot_export.py tests/test_personality_drift.py -q`: `46 passed`
-  - `cd frontend && npm test -- --run src/api/client.test.ts src/components/Export/SnapshotExportDialogs.test.tsx src/components/ShareModal.test.tsx src/components/result/HOPsAnimation.test.tsx src/pages/InputView.test.tsx src/i18n/locales.test.ts --reporter=basic`: `6 files / 95 tests passed`
-  - 本次文档收口前复跑：backend touched-file `ruff check` 通过；frontend `npx tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build`、`node --check scripts/e2e-result-share-fixture.mjs` 均通过，build 内的 performance budget 无 violations。
-  - 上一轮同一 Sprint 3 修复后已跑 fixture browser：`node scripts/e2e-result-share-fixture.mjs full --url http://127.0.0.1:5174 --headless --output-dir output/e2e/result-share-fixture-review`，desktop chromium 与 mobile chromium 均 `13/13` 通过。
-  - `InputView.test.tsx` 仍会打印既有 Radix/act warning；本次命令没有测试失败。
+- **S3-4 HOPs 生产接线**: 已完成。`HOPsAnimation` 接入 `ResultView`，传入 `branches` 数据，replay 模式 `isPlaying=false`。
+- **Frontend 全量回归**: `179 files / 1922 tests / 0 failed`（高于 baseline 177/1904）
+- **静态检查**: tsc pass, lint pass, build pass, i18n parity `2151=2151`
+- **HOPs 单元测试**: 8/8 passed（组件渲染、< 2 分支隐藏、概率百分比、play/pause、i18n、mobile overflow）
+- **浏览器实测**:
+  - fixture e2e `13/13` (desktop + mobile chromium)
+  - Sprint 3 组件探测 `9/10` (HOPs 可见、snapshot export 按钮+弹窗、无水平溢出、无 console 错误；1 FAIL 是测试脚本错误 selector，已修复)
+  - 无 horizontal overflow（desktop 1440=1440, mobile 390=390）
+- **跨 OS ZIP 兼容性**: 代码审查确认全部 PASS
+  - UTF-8 filenames: YES（所有成员名 ASCII）
+  - Path separator: YES（PurePosixPath + backslash 拒绝）
+  - LF 换行: YES（`"\n"` 拼接，`splitlines()` 读取）
+  - ZIP64: YES（Python 默认启用，50MB 上限使其不可触发）
+  - Checksum: YES（SHA-256 + size 双重校验）
+  - 真实跨 OS 证据: macOS 本地验证通过；Windows/Linux 未实测（无 CI 环境），但代码分析无平台依赖路径
+- **安全审查**（Claude 独立 + Codex 对抗式）:
+  - 0 Critical / 0 High
+  - 1 Medium 已修复：edge `payload_json`/`evidence_json` 走 `_remap_payload_json`
+  - 1 Low 已修复：新增 `MAX_ZIP_MEMBER_COUNT=256` 上限
+  - 后端修复验证：`snapshot_export.py` 34 tests passed + ruff clean
+- **Backend Sprint 3 窄测**: `46 passed`（snapshot_export + personality_drift）
+
+### Sprint 4 签收记录 (2026-05-11)
+
+- **Review 修复**:
+  - KG realtime coalescer 串行 flush、broadcast timeout 与 pending drain 已补。
+  - snapshot ZIP import 改按物理 member 计数并拒绝重复 member name。
+  - voice variant 去掉过宽的 `medium / scale` 误分类路径，并补齐现代 variant hook/brief 覆盖。
+  - Phaser reduced-motion 补 Ending / Title / World 的入口动画、camera fade、bubble typewriter 等路径。
+  - `ResultView` 的 HOPs 生产挂载已恢复；Gate 3 probe 最终通过。
+- **Backend 全量**: `cd backend && source .venv/bin/activate && pytest -x -q`：`2581 passed, 3 skipped, 9 warnings`。
+  - 9 个 warning 来自 `tests/test_web_context_integration.py` 的 `_noop_background` ResourceWarning，未阻塞本次 Sprint 4。
+- **Frontend 全量**: `cd frontend && npx vitest run`：`179 files / 1926 tests / 0 failed`。
+- **静态与构建**: `tsc --noEmit`、`eslint src/game/scenes --max-warnings=0`、`npm run build` 全部通过；build performance budget 无 violations。
+- **i18n parity**: `en:2159 zh:2159`，missing/mismatch 均为空。
+- **浏览器实测**: `e2e-gate3-sprint3-probe.mjs` 最终 rerun 为 desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
+- **跨平台边界**: 本轮真实 browser rerun 是 Chromium desktop/mobile；没有新增 Windows/Linux/Edge/Safari 实测证据，后续不能写成这些平台已 PASS。
+- **剩余 follow-up**:
+  - `frontend/src/pages/result/ResultContext.tsx` 仍是宽 context；如果 Sprint 5 继续改结果页，优先评估 selector / useMemo 收窄，避免无关子组件重渲染。
+  - backend `_noop_background` ResourceWarning 可单独收口，但当前不是失败项。
+  - 若 Sprint 5 需要前端实时 KG 增量消费，先验 `useScenarioGraph` 是否已消费 `kg:delta`；本轮代码只确认 backend event contract 和 coalescer。
 
 ### 下次执行方式
 
-1. 先跑 Baseline Gate 0，只读确认当前代码仍包含本次 Sprint 3 工作树。
-2. 不要重跑 S0-2，也不要重做已接线的 S3-1 / S3-2 / S3-3 / S3-5 / S3-6。
-3. 直接从 `Task S3-4: HOPs 动画分支循环` 的生产接线开始：
-   - 先把 `HOPsAnimation` 接入真实结果页或明确决定放弃生产入口。
-   - 如果接入结果页，补 `ResultView` 覆盖，确认 reduced-motion/mobile 不溢出。
-4. 然后继续执行 `Sprint 3 Gate: Review + Test`：
-   - snapshot 导出/导入仍需 browser 级全流程证据。
-   - snapshot ZIP Windows/macOS/Linux 互通目前还没有真实跨 OS 证据，不能写成已签收。
-5. Gate 3 通过后，再进入 `### Sprint 4: 品质提升`。
+1. 不要重跑 Sprint 0-4。Gate 3 与 Sprint 4 Gate 已签收。
+2. 先处理上面的 Sprint 4 follow-up（如果本轮 Sprint 5 会触碰同一区域），再进入 `Sprint 5: 高级功能`。
+3. 每个 Sprint / Phase / Gate 后继续执行 Claude+Codex 对抗式审查、修复非误判项、真实浏览器复测和 Claude+Codex 交叉 review；未实测的平台只能写 blocked / not verified。
 
 ---
 
@@ -136,7 +154,7 @@ Sprint 0-6 / ~20-25 周完整改进计划。当前文件包含 35 个命名任�
 6. **工具链**：本仓库使用 `npm`，因为 `frontend/package.json` 声明 `packageManager: npm@11.12.1` 且存在 `frontend/package-lock.json`。不得改用 pnpm/yarn。
 7. **`.claude/` 事实**：`.claude/` 被 `.gitignore` 忽略，`ccg:team-exec` 必须直接读取本计划路径；不要依赖 git diff 发现该计划文件。
 8. **文档更新门**：执行功能任务后不得自动更新 llmdoc/project docs。若需要同步文档，最终决策必须显式给出并等待用户确认：`使用 recorder agent 更新项目文档`。
-9. **首轮输出**：Claude Code 执行器开始 Sprint 0 前，必须先输出本计划的 DAG 摘要、每个 Layer 的并行组、共享文件串行点、当前 owner、Gate 0 命令结果和 NO-GO 条件；缺任一项则不得进入写操作。
+9. **首轮输出**：Claude Code 执行器开始当前 Sprint 前，必须先输出本计划的 DAG 摘要、每个 Layer 的并行组、共享文件串行点、当前 owner、Gate 0 命令结果和 NO-GO 条件；缺任一项则不得进入写操作。
 
 ### Baseline Gate 0: Read-only Baseline Verification
 
@@ -180,30 +198,33 @@ Baseline Gate 0 通过条件：
 - 当前已有用户触发的 simulation cancel 状态/事件；runtime lock-loss 仍保持独立 error/lock-loss 语义，不能和 user cancel 混用。S1-1 已完成。
 - 当前已有 `backend/app/api/quota.py` 与 `GET /api/quota/summary`；conversation/replay quota 显示由前端 `QuotaBadge` 消费。S2-3 已完成。
 - 当前已有 generated/custom Agent Library 展示、generated edit/delete disabled、5 维 decision_bias 校验与 slider、AgentProfileModal growth metrics 和 ArgumentMap 状态样式。S2-2/S2-4/S2-5 已完成。
-- `backend/app/services/causal_graph.py` 的 `append_round_nodes()` 当前不返回 `GraphDelta`；S4-1 的前置条件成立。
+- `backend/app/services/causal_graph.py` 的 `append_round_nodes()` 当前已返回 `GraphDelta`；`backend/app/services/kg_realtime.py` 负责合并、限频和过大 payload invalidation；`backend/app/api/ws.py` 已注册 typed `kg:delta` / `kg:snapshot_invalidated` 事件。
+- `frontend/src/pages/ResultView.tsx` 当前仍是 orchestrator，但已从 3194 行降到约 1900 行；新增拆分文件位于 `frontend/src/pages/result/`。`ResultContext` 仍偏宽，后续触碰结果页时优先评估 selector / useMemo。
+- `HOPsAnimation` 已挂到生产 `ResultView`；不要再按“组件存在但未接线”处理。
+- Sprint 4 i18n 第一批只覆盖 `CompareDigestView / InputView / DebateResultView / FactionTimeline` 及相关 25 个 keys；剩余 `isZh` 不要在 Sprint 5 里按旧估算直接批量替换，先刷新真实计数。
 - LLM 去模板化主路径已经存在于 debate/oracle/narrator；本计划只继续处理用户可见 fallback、错误态、zh-only 文案和新能力中的可见叙事，不重写 prompt instruction 或 import/query 逻辑。
 - 前端已有 Playwright Chromium/Firefox/WebKit 脚本和 legacy browser targets；legacy target 不等于实测通过。当前没有 BrowserStack/Sauce 或 Edge channel 全平台签收；Windows/macOS/Linux + Chrome/Firefox/Safari/Edge 需要按本计划逐 Gate 补足可运行证据。不能用 Vite target 代替浏览器证据，CI 现状也不能代表 Windows/macOS 全签收。
 
 ---
 
-## Codex 分析摘要（已按 Sprint 3 当前代码校准）
+## Codex 分析摘要（已按 Sprint 4 当前代码校准）
 
 1. **S0 已完成**：多阶段 Dockerfile、self-hosted fonts、admin setup、preflight CLI 和 root Makefile 已随 `a1a628a` 落地；后续只做回归修复，不再重做 S0。
 2. **S1 已完成**：user-initiated cancel token / cancelled terminal state / cancel endpoint / WS event 已落地；lock-loss 仍是独立 error/lock-loss 语义。
 3. **S2 已完成**：scenario-level conversation list、quota summary、generated Agent 展示、decision_bias schema/slider、growth metrics 和 argument-map 状态展示已落地。
-4. **S3 snapshot 已落地但仍需 Gate 3 浏览器全链路**：当前导出 `scenario / branches / agents / messages / causal_graph / manifest / checksums`，导入会重建 scenario、branch、agent、message、graph 主键并 remap FK；跨 OS ZIP 互通还没有真实证据。
-5. **S4 GraphDelta 是前置条件**：append_round_nodes() 当前返回 None，WS push 需先实现 delta 返回
+4. **S3 snapshot 已落地并过 Gate 3**：当前导出 `scenario / branches / agents / messages / causal_graph / manifest / checksums`，导入会重建 scenario、branch、agent、message、graph 主键并 remap FK；导入安全校验已补重复物理 member、member 数、checksum、路径与压缩比防护。跨 OS ZIP 互通仍只能写代码审查结果，不能写 Windows/Linux 实测 PASS。
+5. **S4 GraphDelta / KG realtime backend contract 已完成**：append_round_nodes() 返回 `GraphDelta`，coalescer 做 4Hz 合并、payload 上限、串行 flush 和 timeout；后续如果要前端增量消费，单独验 `useScenarioGraph`。
 6. **S5 Brier score 需新 journal 模型**：不能直接塞进现有 leaderboard
 7. **S6 无 PDF 库**：需新增 pypdf，chunk 入 SQLite+Chroma
 8. **去模板化范围修正**：debate/oracle/narrator 主路径已 LLM 化；本计划只处理 fallback 与 zh-only 用户可见文本，不处理 prompt instruction 或 import/query 逻辑
 9. **跨平台关注**：SQLite file: URI Windows 兼容、Docker volume bind mount 路径转义、UTF-8+LF 统一
 
-## Gemini 分析摘要（已按 Sprint 3 当前代码校准）
+## Gemini 分析摘要（已按 Sprint 4 当前代码校准）
 
 1. **S0 已完成**：Setup Wizard 使用 provider preset card 与连接测试状态；self-hosted fonts 已替换 Google Fonts CDN。
 2. **S1 已完成**：AlertDialog、Reader/Workbench、cancel confirm 和 onboarding carousel 已落地。
-3. **S3 前端当前状态**：CounterfactualBrand、ReACTReasoningPanel、ShareModal 预测卡片、snapshot import/export dialog、PersonalityDriftWarning 已接线；HOPsAnimation 目前只有组件/测试/CSS，未接生产页面。
-4. **S4**：ResultView 拆到现有小写 `components/result/` 约定下，按真实行段拆分 Bridge / HookSummary / WebSources / Predictions / DirectorDebrief / AgentRoster / Phase3Integration，isZh 半自动迁移
+3. **S3 前端当前状态**：CounterfactualBrand、ReACTReasoningPanel、ShareModal 预测卡片、snapshot import/export dialog、PersonalityDriftWarning 和 HOPsAnimation 都已接线。
+4. **S4**：ResultView 已按当前实现拆到小写 `frontend/src/pages/result/`；第一批 isZh 已覆盖 CompareDigestView / InputView / DebateResultView / FactionTimeline；Phaser reduced-motion 已覆盖 EndingScene / TitleScene / WorldScene 的本轮触碰路径。
 5. **S5**：3 列 bento-box journal 布局，SVG 校准曲线
 6. **跨浏览器**：补 raw OKLCH 的 sRGB / `@supports` fallback；验证现有服务端 heartbeat consume/reconnect 行为，而不是新增 client keepalive；Firefox 重点检查 `min-width:0` 与 overflow
 7. **性能**：html2canvas ~200KB 动态 import，IntersectionObserver 延迟 Phaser 初始化
@@ -571,7 +592,7 @@ Debate turn fallback → existing plain-text LLM retry path
 
 ### Sprint 3: 核心体验增强 (Week 7-10)
 
-**状态**: 部分完成。S3-1 / S3-2 / S3-3 / S3-5 / S3-6 已接线；S3-4 只有 `HOPsAnimation` 组件、CSS 和测试，尚未接入生产页面。下一轮从 S3-4 接线与 Gate 3 继续。
+**状态**: 已完成并过 Gate 3。S3-1 / S3-2 / S3-3 / S3-4 / S3-5 / S3-6 都已接线。
 
 #### Layer 3A (并行 — 3 个独立任务)
 
@@ -674,7 +695,7 @@ Debate turn fallback → existing plain-text LLM retry path
 
 ##### Task S3-4: HOPs 动画分支循环
 - **类型**: 前端 (Gemini 设计 → Claude 实现)
-- **当前状态**: 未完成。`HOPsAnimation.tsx/.css` 与 `HOPsAnimation.test.tsx` 已存在，但当前没有生产页面导入；下次从生产接线开始。
+- **当前状态**: 已完成。`HOPsAnimation` 已挂到 `ResultView`，多分支结果页可见；replay 模式下不播放。
 - **文件范围**:
   - `frontend/src/components/result/HOPsAnimation.tsx` (新建)
   - `frontend/src/components/result/HOPsAnimation.css` (新建)
@@ -687,7 +708,7 @@ Debate turn fallback → existing plain-text LLM retry path
 - **验收标准**: 动画流畅 60fps；reduced-motion 降级；mobile 适配
 
 #### Sprint 3 Gate: Review + Test
-- **当前状态**: 未签收。已完成 backend snapshot/drift 窄测、frontend Sprint 3 窄测和 ResultView+ShareModal fixture browser；HOPs 生产接线、snapshot browser 导出→导入全流程、跨 OS ZIP 互通仍待补。
+- **当前状态**: 已签收。Gate 3 已覆盖 HOPs 生产入口、snapshot/share 相关窄测和 ResultView fixture browser；Sprint 4 复测中 Gate 3 probe 最终 desktop/mobile `10/10`。
 - **Codex adversarial review**: snapshot 安全（ZIP bomb 防护、manifest 校验、untrusted 数据隔离）、drift 阈值合理性
 - **Playwright 测试**: 导出→导入全流程、drift warning 展示、卡片导出、HOPs 生产入口
 - **跨平台**: snapshot ZIP 在 Windows/macOS/Linux 间互通
@@ -697,18 +718,18 @@ Debate turn fallback → existing plain-text LLM retry path
 
 ### Sprint 4: 品质提升 (Week 10-14)
 
+**状态**: 已完成并经过本地 review/fix/full tests/browser rerun。后续只保留 Sprint 4 follow-up，不重做本节任务。
+
 #### Layer 4A (并行 + ResultView→isZh 串行子链)
 
 ##### Task S4-1: 实时 KG WS 推送
 - **类型**: 全栈 (Codex 后端 → Claude 前端)
+- **当前状态**: backend event contract 已完成。当前代码已实现 `GraphDelta`、KG realtime coalescer、`kg:delta` / `kg:snapshot_invalidated` typed WS events；前端实时增量消费不是本轮已验证事实，后续需要时单独验收。
 - **文件范围**:
   - `backend/app/services/causal_graph.py` (append_round_nodes 返回完整 GraphDelta)
   - `backend/app/services/kg_realtime.py` (新建 — coalescer + WS push)
   - `backend/app/api/ws.py` (新增 kg:delta 事件类型)
-  - `frontend/src/hooks/useScenarioGraph.ts` (增量更新支持)
-  - `frontend/src/types.ts` (typed `kg:delta` / `kg:snapshot_invalidated` event)
-  - `frontend/src/pages/CausalReviewView.tsx` (增量渲染)
-  - `frontend/src/pages/WorkbenchView.tsx` (增量渲染)
+  - 后续如需前端增量消费，再单独评估 `frontend/src/hooks/useScenarioGraph.ts` 与相关图谱页面
 - **依赖**: 无
 - **实施步骤**:
   1. **[BE-Codex]** `causal_graph.py`: `append_round_nodes()` 返回 `GraphDelta(added, updated, deleted, version, snapshot_invalidated)`，不能只返回 `nodes_added`
@@ -723,20 +744,19 @@ Debate turn fallback → existing plain-text LLM retry path
 
 ##### Task S4-2: ResultView 拆分
 - **类型**: 前端 (Claude 实现)
+- **当前状态**: 已完成第一阶段拆分。`ResultView.tsx` 从约 3194 行降到约 1900 行，已新增 9 个子组件和 `ResultContext`；`ResultContext` 宽 context 是后续 follow-up。
 - **文件范围**:
   - `frontend/src/pages/ResultView.tsx` (拆分为 orchestrator ~200 行)
-  - `frontend/src/components/result/ResultHeader.tsx` (新建，L1757-1865)
-  - `frontend/src/components/result/EndingsGrid.tsx` (新建，L1866-2005)
-  - `frontend/src/components/result/ExploreDeeperBridge.tsx` (新建，L2006-2162)
-  - `frontend/src/components/result/HookSummaryPanel.tsx` (新建，L2164-2171)
-  - `frontend/src/components/result/WebSources.tsx` (新建，L2173-2234)
-  - `frontend/src/components/result/Predictions.tsx` (新建，L2236-2297)
-  - `frontend/src/components/result/DirectorNotebookArchive.tsx` (新建，L2299-2606)
+  - `frontend/src/pages/result/ResultHeader.tsx` (新建)
+  - `frontend/src/pages/result/EndingCardsGrid.tsx` (新建)
+  - `frontend/src/pages/result/ExploreDeeperBridge.tsx` (新建)
+  - `frontend/src/pages/result/WebSourcesSection.tsx` (新建)
+  - `frontend/src/pages/result/PredictionsSection.tsx` (新建)
+  - `frontend/src/pages/result/DirectorNotebook.tsx` (新建)
   - `frontend/src/components/result/DirectorDebriefPanel.tsx` (现有组件，接线范围 L2608-2660)
-  - `frontend/src/components/result/AgentRoster.tsx` (新建，L2671-2692)
-  - `frontend/src/components/result/Phase3Integration.tsx` (新建，L2694-2773)
-  - `frontend/src/components/result/ResultModalsAndSources.tsx` (新建，L2775-3097)
-  - `frontend/src/components/result/ResultContext.tsx` (新建 — shared state Context)
+  - `frontend/src/pages/result/AgentRoster.tsx` (新建)
+  - `frontend/src/pages/result/ResultModals.tsx` (新建)
+  - `frontend/src/pages/result/ResultContext.tsx` (新建 — shared state Context)
   - `frontend/src/pages/ResultView.test.tsx` (先抽共享 harness，再按行为域拆分)
 - **依赖**: 无
 - **实施步骤**:
@@ -751,14 +771,14 @@ Debate turn fallback → existing plain-text LLM retry path
 
 ##### Task S4-3: isZh 迁移第一批 (~200 个)
 - **类型**: 前端 (Claude 实现)
+- **当前状态**: 已完成本轮第一批。实际覆盖 `CompareDigestView / InputView / DebateResultView / FactionTimeline`，新增/同步 25 个 locale keys，parity 为 `en:2159 zh:2159`。
 - **文件范围**:
-  - `frontend/src/components/gameplayCards.ts` (48 isZh)
-  - `frontend/src/pages/WorldlineRoundtableView.tsx` (当前约 50 isZh；迁移前必须刷新计数)
-  - `frontend/src/components/endingChatHelpers.ts` (44 isZh)
-  - `frontend/src/components/GameplayCardsModal.tsx` (39 isZh)
-  - `frontend/src/pages/ResultView.tsx` (当前约 35 isZh — 已拆分后分散到子组件；迁移前必须刷新计数)
-  - `frontend/src/i18n/locales/en.json` (+~200 keys)
-  - `frontend/src/i18n/locales/zh.json` (+~200 keys)
+  - `frontend/src/pages/CompareDigestView.tsx`
+  - `frontend/src/pages/InputView.tsx`
+  - `frontend/src/pages/DebateResultView.tsx`
+  - `frontend/src/components/FactionTimeline.tsx`
+  - `frontend/src/i18n/locales/en.json`
+  - `frontend/src/i18n/locales/zh.json`
 - **依赖**: S4-2 (ResultView 拆分后 isZh 分散到子组件)
 - **实施步骤**:
   1. 先运行 count refresh：`rg -n "isZh" frontend/src/...`，记录每个文件当前真实数量；不要沿用旧 38/47 计数
@@ -773,6 +793,7 @@ Debate turn fallback → existing plain-text LLM retry path
 
 ##### Task S4-4: Voice variant 扩展
 - **类型**: 后端 (Codex 实现)
+- **当前状态**: 已完成。voice variant 从 13 种扩展到 18 种，并补了 `medium` / `scale` 误分类回归。
 - **文件范围**:
   - `backend/app/services/ending_room_service/_content.py` (新增 5 variant)
   - `backend/tests/test_voice_variant.py` (扩展现有测试)
@@ -785,8 +806,11 @@ Debate turn fallback → existing plain-text LLM retry path
 
 ##### Task S4-5: Phaser reduced-motion
 - **类型**: 前端 (Claude 实现)
+- **当前状态**: 已完成本轮触碰范围。`EndingScene / TitleScene / WorldScene` 的 tween、camera fade、typewriter 等本轮路径已补 reduced-motion guard 和测试。
 - **文件范围**:
-  - `frontend/src/game/` (所有 Phaser scene 文件)
+  - `frontend/src/game/scenes/EndingScene.ts`
+  - `frontend/src/game/scenes/TitleScene.ts`
+  - `frontend/src/game/scenes/WorldScene.ts`
 - **依赖**: 无
 - **实施步骤**:
   1. 扫描 `game/` 目录所有 tween/animation
@@ -795,9 +819,16 @@ Debate turn fallback → existing plain-text LLM retry path
 - **验收标准**: game/ 零未 guard 的 tween；reduced-motion 下功能完整
 
 #### Sprint 4 Gate: Review + Test
+- **当前状态**: 已签收。Codex/Claude review 发现的真实问题已修复，并已完成全量 backend/frontend 测试、静态检查、build、i18n parity 和 browser rerun。
 - **Codex adversarial review**: KG WS 竞态、ResultView 拆分完整性、isZh 迁移正确性
 - **Playwright 测试**: KG 增量渲染、ResultView 各子组件、isZh 切换
-- **通过标准**: 0 Critical / 0 High；isZh parity 完整
+- **验证结果**:
+  - backend `pytest -x -q`：`2581 passed, 3 skipped, 9 warnings`
+  - frontend `npx vitest run`：`179 files / 1926 tests / 0 failed`
+  - `tsc --noEmit`、`eslint src/game/scenes --max-warnings=0`、`npm run build`：通过
+  - i18n parity：`en:2159 zh:2159`
+  - browser probe final rerun：desktop `10/10`、mobile `10/10`
+- **通过标准**: 0 Critical / 0 High；isZh parity 完整；未实测平台不宣称 PASS
 
 ---
 
@@ -1032,18 +1063,19 @@ Debate turn fallback → existing plain-text LLM retry path
 - **Layer 2A** (历史): Round A 并行 S2-1 对话重载 | S2-2 Agent展示 | S2-4 bias编辑 | S2-5 成长指标；Round B 串行 S2-3 配额（依赖 S2-1 的 `client.ts` 改动）
 
 ### Sprint 3 (2 Layer)
-- **状态**: S3-1 / S3-2 / S3-3 / S3-5 / S3-6 已完成当前代码接线；S3-4 未接生产页面，Gate 3 未签收
+- **状态**: 已完成并过 Gate 3
 - **Layer 3A** (历史): S3-1 时钟倒拨 | S3-2 ReACT | S3-5 分享卡
-- **Layer 3B** (继续): S3-4 HOPs 生产接线；S3-3 人格门控与 S3-6 快照导出只做回归修复，不重做
-- **Gate 3**: 下次从这里继续，补 HOPs 生产入口、snapshot browser 导出→导入、跨 OS ZIP 证据
+- **Layer 3B** (历史): S3-4 HOPs 生产接线 | S3-3 人格门控 | S3-6 快照导出
+- **Gate 3**: 已签收；后续不重跑
 
 ### Sprint 4 (2 Layer)
-- **状态**: Gate 3 通过后开始
-- **Layer 4A**: 并行 S4-1 KG WS | S4-2 ResultView拆分；S4-3 isZh迁移在 S4-2 之后串行启动；S4-5 Phaser motion 可并行但不得写 locale JSON
-- **Layer 4B** (并行 1+): S4-4 voice variants；locale JSON 由 i18n owner 串行合并
-- **Gate 4**: Codex+Claude 对抗式审查 + Playwright
+- **状态**: 已完成并过 Gate 4
+- **Layer 4A** (历史): S4-1 KG WS backend contract | S4-2 ResultView 拆分 | S4-3 isZh 第一批
+- **Layer 4B** (历史): S4-4 voice variants | S4-5 Phaser reduced-motion
+- **Gate 4**: 已完成 Codex+Claude 对抗式审查、修复、全量测试、build、i18n parity 与 Chromium desktop/mobile browser rerun
 
 ### Sprint 5 (1 Layer)
+- **状态**: 下一执行点。先确认 Sprint 4 follow-up 是否影响当前任务文件，再开写。
 - **Layer 5A**: Round A 并行 S5-1 Journal | S5-2 幻觉门控 | S5-3 角色卡 | S5-4 isZh第二批 | S5-5 排行榜；Round B 串行 S5-6 记忆检查（依赖 S5-3 的 `agents.py` 改动）
 - **Gate 5**: Codex+Claude 对抗式审查 + Playwright
 

@@ -451,32 +451,19 @@ export function InputView() {
     }),
     [estimatedSimulationMinutes, numAgents, rounds, t],
   );
-  const continuityCopy = useMemo(() => (
-    isZh
-      ? {
-        title: '确认身份连续性',
-        subtitle: '检测到以下角色可能对应你已有的跨场景身份。请选择是复用旧身份，还是为这次推演创建新身份。',
-        reuse: '复用已有身份',
-        createNew: '创建新身份',
-        candidateLabel: '候选身份',
-        similarityLabel: '相似度',
-        cancel: '取消',
-        confirm: '继续开始',
-      }
-      : {
-        title: 'Confirm identity continuity',
-        subtitle: 'These proposed agents may match identities from your earlier runs. Choose whether to reuse the existing identity or create a new one for this simulation.',
-        reuse: 'Reuse existing identity',
-        createNew: 'Create new identity',
-        candidateLabel: 'Candidate identity',
-        similarityLabel: 'Similarity',
-        cancel: 'Cancel',
-        confirm: 'Continue',
-      }
-  ), [isZh]);
+  const continuityCopy = useMemo(() => ({
+    title: t('home.continuity_title'),
+    subtitle: t('home.continuity_subtitle'),
+    reuse: t('home.continuity_reuse'),
+    createNew: t('home.continuity_create_new'),
+    candidateLabel: t('home.continuity_candidate_label'),
+    similarityLabel: t('home.continuity_similarity_label'),
+    cancel: t('home.continuity_cancel'),
+    confirm: t('home.continuity_confirm'),
+  }), [t]);
   const continuityPreflightErrorCopy = useMemo(
-    () => (isZh ? '身份连续性预检失败，请重试。' : 'Identity continuity preflight failed. Please retry.'),
-    [isZh],
+    () => t('home.continuity_preflight_error'),
+    [t],
   );
 
   const resizeQuestionField = useCallback(() => {

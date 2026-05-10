@@ -88,7 +88,7 @@
   - `create_new` 会让真正的 identity 解析跳过 L2 fuzzy reuse
 - `GET /api/scenario/{scenario_id}/conversations` 受 `FEATURE_AGENT_CONVERSATION` gate，要求 signed principal 能看到该 scenario；`cursor` 是 offset cursor，`limit` 范围 `1..50`，返回项只带 thread 摘要，完整 turn 历史仍走 `GET /api/conversation/{thread_id}`。
 - `POST /api/scenario/{scenario_id}/cancel` 只接受 `parsing / simulating / narrating / cancelled`；`done / error` 会返回 `409 SIMULATION_NOT_RUNNING`。成功请求会把 scenario 持久化到 `cancelled`，并尽量取消本进程里的后台 task。
-- `GET /api/scenario/{scenario_id}/snapshot` 和 `POST /api/scenario/import-snapshot` 受 `FEATURE_SNAPSHOT_EXPORT` gate；关闭时返回 404 `FEATURE_DISABLED`。export 会做 scenario ownership 校验；开启 `SESSION_SECRET` 时 import 要求 signed principal，并把新 scenario 绑定到该 principal。空文件返回 422 `SNAPSHOT_FILE_EMPTY`，超过 50 MB 返回 413 `SNAPSHOT_FILE_TOO_LARGE`，archive/manifest/checksum 不合法返回 422 `SNAPSHOT_IMPORT_INVALID`。
+- `GET /api/scenario/{scenario_id}/snapshot` 和 `POST /api/scenario/import-snapshot` 受 `FEATURE_SNAPSHOT_EXPORT` gate；关闭时返回 404 `FEATURE_DISABLED`。export 会做 scenario ownership 校验；开启 `SESSION_SECRET` 时 import 要求 signed principal，并把新 scenario 绑定到该 principal。空文件返回 422 `SNAPSHOT_FILE_EMPTY`，超过 50 MB 返回 413 `SNAPSHOT_FILE_TOO_LARGE`，archive/manifest/checksum 不合法返回 422 `SNAPSHOT_IMPORT_INVALID`。导入还会拒绝重复 ZIP member name、超过 256 个物理 member、路径穿越、symlink、异常压缩比和总解压超限。
 - 删除 scenario 时会一并清理 replay、prediction、campaign side effect、ending-room 与向量数据。
 
 ## Replay Artifact
@@ -324,7 +324,7 @@
   - `id` 以 `legacy-event:` 开头的 event：用于只读回补旧 snapshot 里孤立 fork 的消息 provenance，payload 会带 `synthetic_provenance=true`
 - `GET /api/scenario/{id}/causal-graph` 的 `edges[]` 使用 `source / target / type / weight / label` 字段；有证据元数据时会返回
   `evidence: { confidence_tier, source_ref, source_round_number, detail }`。旧边或无证据边的 `evidence` 可以为 `null`。重放轮次只会补齐旧边缺失的 evidence 字段，不覆盖已有非空值。当前 causal graph 会返回已有 `temporal / caused` 边，也可能返回后端规则生成的 `responds_to / supports_stance / opposes_stance`，以及合成结局使用的 `led_to`。inter-agent 边只来自同一 `branch / round` 的 event 节点，`detail` 会透传确定性 rule / reason JSON；其它 causal graph 边可能仍只有 coarse provenance。客户端不要把 `detail` 当成 LLM 解释文本。
-- `GET /api/scenario/{id}/graph-analysis` 返回 `god_nodes / degree_distribution / cross_branch_edges / summary`。大图会按最新 snapshot size 做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`。带 `branch_id` 时，预检按该 branch 的可见节点/边计数；未带 `branch_id` 时仍按全图计数。
+- `GET /api/scenario/{id}/graph-analysis` 返回 `god_nodes / degree_distribution / cross_branch_edges / summary`。`summary.total_nodes` 统计序列化 causal snapshot 的可见节点，包含合成 `outcome` nodes。大图会按最新 snapshot size 做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`。带 `branch_id` 时，预检按该 branch 的可见节点/边计数；未带 `branch_id` 时仍按全图计数。
 - `GET /api/scenario/{id}/personality-drift` 返回 `agent_id / agent_name / drift_score / drift_dimensions / severity / evidence`。结果按 drift score 降序排列；前端只把 medium/high 当 warning 展示，不把它当 hard gate。
 - `GET /api/scenario/{id}/replay-trace` 当前是只读 cursor pagination：
   - `after` 是上一页最后一个 branch id；空白值按未传处理
@@ -429,6 +429,9 @@
 
 - scenario / debate live 事件都会带 `meta`，前端按 `sequence / event_id` 去重。
 - scenario cancel 成功后会广播 `simulation_cancelled`；前端把 `cancelled` 视为终态，晚到的旧 `status/state` 事件不能把页面带回 live 状态。
+- scenario WS 当前也可以广播 `kg:delta` 与 `kg:snapshot_invalidated`：
+  - `kg:delta` 的 `data` 是合并后的 causal graph delta，包含 `scenario_id / version / added / updated / deleted / snapshot_invalidated`。
+  - `kg:snapshot_invalidated` 表示客户端应丢弃本地增量状态并拉取 `GET /api/scenario/{id}/causal-graph`。
 - 空闲期会发送轻量 `heartbeat`。
 - `X-Session-Token` 只用于 REST。
 - 当 `SESSION_SECRET` 非空时，`scenario / debate / agent-conversation / ending-room` 这 4 条 WS 都继续走首帧 auth 协议，不依赖 HTTP-style dependency 注入。

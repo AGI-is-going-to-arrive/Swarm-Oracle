@@ -1,6 +1,7 @@
 """Tests for causal graph service — F2 Phase C1 + v6 graph-viz upgrades."""
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -170,6 +171,135 @@ class TestDeriveStanceScore:
 
 
 class TestAppendRoundNodes:
+    def test_returns_graph_delta_with_added_records_and_version(self):
+        messages = [
+            MockMessage(emotion="calm", agent_id="a1", id="m1", content="point A"),
+            MockMessage(emotion="angry", agent_id="a2", id="m2", content="point B"),
+        ]
+
+        delta = append_round_nodes("sc_delta_add", "br1", 1, messages)
+
+        assert is_dataclass(delta)
+        assert delta.__class__.__name__ == "GraphDelta"
+        assert delta.version == 1
+        assert delta.deleted == []
+        assert delta.updated == []
+        assert delta.snapshot_invalidated is False
+        added_nodes = [record for record in delta.added if record["kind"] == "node"]
+        assert {record["key"] for record in added_nodes} == {"r1_a1_m1", "r1_a2_m2"}
+        assert all(record["snapshot_id"] for record in added_nodes)
+
+    def test_replayed_round_delta_reports_stale_deletes_and_node_updates(self):
+        initial_messages = [
+            {
+                "agent_id": "a1",
+                "agent_name": "Alice",
+                "content": "Bob should answer this.",
+                "emotion": "neutral",
+                "id": "m1",
+            },
+            {
+                "agent_id": "a2",
+                "agent_name": "Bob",
+                "content": "Initial answer.",
+                "emotion": "neutral",
+                "id": "m2",
+            },
+        ]
+        append_round_nodes("sc_delta_replay", "br1", 1, initial_messages)
+
+        with Session(get_engine()) as session:
+            snapshot = session.exec(
+                select(GraphSnapshot).where(GraphSnapshot.owner_id == "sc_delta_replay")
+            ).first()
+            assert snapshot is not None
+            retained_node = session.exec(
+                select(GraphNode).where(
+                    GraphNode.snapshot_id == snapshot.id,
+                    GraphNode.node_key == "r1_a1_m1",
+                )
+            ).one()
+            stale_node = session.exec(
+                select(GraphNode).where(
+                    GraphNode.snapshot_id == snapshot.id,
+                    GraphNode.node_key == "r1_a2_m2",
+                )
+            ).one()
+            stale_edge = session.exec(
+                select(GraphEdge).where(
+                    GraphEdge.snapshot_id == snapshot.id,
+                    GraphEdge.edge_type == "responds_to",
+                )
+            ).one()
+
+        delta = append_round_nodes(
+            "sc_delta_replay",
+            "br1",
+            1,
+            [
+                {
+                    "agent_id": "a1",
+                    "agent_name": "Alice",
+                    "content": "No named reply now.",
+                    "emotion": "neutral",
+                    "id": "m1",
+                }
+            ],
+        )
+
+        assert stale_node.id in delta.deleted
+        assert stale_edge.id in delta.deleted
+        updated_nodes = [record for record in delta.updated if record["kind"] == "node"]
+        assert any(
+            record["id"] == retained_node.id
+            and record["payload"]["content"] == "No named reply now."
+            for record in updated_nodes
+        )
+
+    def test_replayed_round_delta_reports_existing_edge_updates(self):
+        append_round_nodes(
+            "sc_delta_edge_update",
+            "br1",
+            1,
+            [MockMessage(emotion="calm", agent_id="a1", id="m1", content="first")],
+        )
+        append_round_nodes(
+            "sc_delta_edge_update",
+            "br1",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m2", content="second")],
+        )
+
+        with Session(get_engine()) as session:
+            snapshot = session.exec(
+                select(GraphSnapshot).where(GraphSnapshot.owner_id == "sc_delta_edge_update")
+            ).first()
+            assert snapshot is not None
+            temporal_edge = session.exec(
+                select(GraphEdge).where(
+                    GraphEdge.snapshot_id == snapshot.id,
+                    GraphEdge.edge_type == "temporal",
+                )
+            ).one()
+            temporal_edge.source_round_number = None
+            session.add(temporal_edge)
+            session.commit()
+            edge_id = temporal_edge.id
+
+        delta = append_round_nodes(
+            "sc_delta_edge_update",
+            "br1",
+            2,
+            [MockMessage(emotion="calm", agent_id="a1", id="m2", content="second")],
+        )
+
+        updated_edges = [record for record in delta.updated if record["kind"] == "edge"]
+        assert any(
+            record["id"] == edge_id
+            and record["evidence"]["source_round_number"] == 2
+            for record in updated_edges
+        )
+
     def test_creates_state_frames_and_nodes(self):
         messages = [
             MockMessage(emotion="calm", agent_id="a1", id="m1", content="point A"),

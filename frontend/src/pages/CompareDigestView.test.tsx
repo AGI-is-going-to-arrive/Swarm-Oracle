@@ -20,21 +20,51 @@ const {
   captureElementDataUrlMock: vi.fn(async () => 'data:image/png;base64,compare'),
   captureCompositeElementDataUrlMock: vi.fn(async () => 'data:image/png;base64,compare-composite'),
   useCapabilityCheckMock: vi.fn(() => ({ loading: false, enabled: true, capabilities: null, error: null })),
-  translateMock: (key: string, fallback?: string) => ({
-    'compare.title': 'Counterfactual Compare',
-    'compare.missing_params': 'Missing branch parameters',
-    'compare.divergence_label': 'Divergence',
-    'compare.branch_a_label': 'Branch A (Original)',
-    'compare.branch_b_label': 'Branch B (Counterfactual)',
-    'compare.no_data': 'No comparison data available.',
-    'compare.error_fetch': 'Unable to load comparison data right now. Please retry.',
-    'compare.feature_disabled': 'Counterfactual replay feature is not enabled.',
-    'common.loading': 'Loading...',
-    'common.back_to_result': 'Back to Result',
-    'common.retry': 'Retry',
-    'game.replay_btn': 'Replay',
-    'game.skip_btn': 'Skip',
-  }[key] ?? fallback ?? key),
+  translateMock: (key: string, fallbackOrOpts?: string | Record<string, unknown>, maybeOpts?: Record<string, unknown>) => {
+    const opts = typeof fallbackOrOpts === 'object' && fallbackOrOpts !== null
+      ? fallbackOrOpts
+      : maybeOpts;
+    const fallback = typeof fallbackOrOpts === 'string' ? fallbackOrOpts : undefined;
+    const map: Record<string, string> = {
+      'compare.title': 'Counterfactual Compare',
+      'compare.missing_params': 'Missing branch parameters',
+      'compare.divergence_label': 'Divergence',
+      'compare.branch_a_label': 'Branch A (Original)',
+      'compare.branch_b_label': 'Branch B (Counterfactual)',
+      'compare.no_data': 'No comparison data available.',
+      'compare.error_fetch': 'Unable to load comparison data right now. Please retry.',
+      'compare.feature_disabled': 'Counterfactual replay feature is not enabled.',
+      'compare.round': 'Round {{round}}',
+      'compare.latest_round': 'Latest round',
+      'compare.context_aria': 'Comparison context',
+      'compare.dual_stage_pill': 'Dual-stage compare',
+      'compare.stage_intro': 'The active stage keeps playing live while the other pane holds same-round context for side-by-side reading.',
+      'compare.captured_mirror': 'Captured mirror',
+      'compare.standby_mirror': 'Standby mirror',
+      'compare.path_weight_suffix': 'path weight',
+      'compare.branch_overview': 'Branch overview',
+      'compare.live_stage': 'Live stage',
+      'compare.current_stage': 'Live stage',
+      'compare.activate_pane': 'Activate',
+      'compare.after_activation_label': 'Available after activation',
+      'compare.placeholder_primary': 'Keep this branch readable first, then capture a live frame after activation.',
+      'compare.placeholder_detail': 'Round, divergence, and branch weight stay visible so the two-stage compare feels complete from the first frame.',
+      'compare.after_activation_detail': 'After one activation, this pane keeps a mirrored stage snapshot for the branch.',
+      'compare.play_round': 'Play this round',
+      'common.loading': 'Loading...',
+      'common.back_to_result': 'Back to Result',
+      'common.retry': 'Retry',
+      'game.replay_btn': 'Replay',
+      'game.skip_btn': 'Skip',
+    };
+    let template = map[key] ?? fallback ?? key;
+    if (opts) {
+      for (const [k, v] of Object.entries(opts)) {
+        template = template.replace(new RegExp(`{{\\s*${k}\\s*}}`, 'g'), String(v));
+      }
+    }
+    return template;
+  },
   ...(() => {
     const storeState = {
       scenario: null as Record<string, unknown> | null,

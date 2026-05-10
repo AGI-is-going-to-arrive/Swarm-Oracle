@@ -55,6 +55,7 @@ MAX_UNCOMPRESSED_MEMBER_BYTES = 100 * 1024 * 1024  # 100 MB per file
 MAX_UNCOMPRESSED_TOTAL_BYTES = 500 * 1024 * 1024  # 500 MB across all files
 MAX_ZIP_COMPRESSION_RATIO = 100.0
 MIN_RATIO_CHECK_MEMBER_BYTES = 1024 * 1024
+MAX_ZIP_MEMBER_COUNT = 256
 _SENSITIVE_KEYS = frozenset(
     {
         # Normalized form: lowercase, separators stripped (_, -)
@@ -569,13 +570,23 @@ def _validate_zip_integrity(zip_bytes: bytes) -> dict[str, bytes]:
         raise SnapshotImportError(f"Invalid ZIP file: {exc}") from exc
 
     with zf:
-        info_by_name = {info.filename: info for info in zf.infolist()}
+        infos = zf.infolist()
+
+        if len(infos) > MAX_ZIP_MEMBER_COUNT:
+            raise SnapshotImportError(
+                f"ZIP contains too many members ({len(infos)} > {MAX_ZIP_MEMBER_COUNT})"
+            )
 
         # Bomb guard: aggregate uncompressed size across the whole archive.
         # Catches an attacker who pads many members or hides bombs in
         # extras that are not part of the manifest.
+        info_by_name: dict[str, zipfile.ZipInfo] = {}
         total_uncompressed = 0
-        for info in info_by_name.values():
+        for info in infos:
+            if info.filename in info_by_name:
+                raise SnapshotImportError(
+                    f"Duplicate ZIP member name: {info.filename!r}"
+                )
             _validate_zip_member_info(info)
             total_uncompressed += info.file_size
             if total_uncompressed > MAX_UNCOMPRESSED_TOTAL_BYTES:
@@ -583,6 +594,7 @@ def _validate_zip_integrity(zip_bytes: bytes) -> dict[str, bytes]:
                     "ZIP uncompressed total too large "
                     f"(> {MAX_UNCOMPRESSED_TOTAL_BYTES} bytes)"
                 )
+            info_by_name[info.filename] = info
 
         if "manifest.json" not in info_by_name:
             raise SnapshotImportError("ZIP missing manifest.json")
@@ -1015,7 +1027,11 @@ def _import_causal_graph(
                 default=None,
             ),
             label=raw.get("label"),
-            payload_json=raw.get("payload_json"),
+            payload_json=_remap_payload_json(
+                raw.get("payload_json"),
+                branch_id_map=branch_id_map,
+                agent_id_map=agent_id_map,
+            ),
             confidence_tier=raw.get("confidence_tier"),
             source_ref=raw.get("source_ref"),
             source_round_number=_coerce_int_field(
@@ -1024,7 +1040,11 @@ def _import_causal_graph(
                 default=None,
                 min_value=1,
             ),
-            evidence_json=raw.get("evidence_json"),
+            evidence_json=_remap_payload_json(
+                raw.get("evidence_json"),
+                branch_id_map=branch_id_map,
+                agent_id_map=agent_id_map,
+            ),
         )
         session.add(edge)
 

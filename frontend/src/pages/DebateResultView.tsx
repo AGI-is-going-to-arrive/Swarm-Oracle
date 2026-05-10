@@ -334,19 +334,14 @@ export function DebateResultView() {
 
     return longformTexts.some((text) => hasMixedLanguageLongText(text));
   }, [judgeRationale, payload, supportingTurns]);
-  const mixedLanguageFallbackTitle = t(
-    'debate.result_language_fallback_title',
-    isZh ? '语言兜底' : 'Language fallback',
-  );
+  const mixedLanguageFallbackTitle = t('debate.result_language_fallback_title', 'Language fallback');
   const mixedLanguageFallbackNotice = t(
     'debate.result_language_fallback_notice',
-    isZh
-      ? '检测到结果页长文案混用中英文。当前保留原文展示，不再静默切换全局界面语言。'
-      : 'Mixed-language long-form result copy detected. Showing the original text instead of silently switching the global UI language.',
+    'Mixed-language long-form result copy detected. Showing the original text instead of silently switching the global UI language.',
   );
   const importReplayLabel = importingReplay
-    ? t('debate.importing_local_run', isZh ? '导入中...' : 'Importing...')
-    : t('debate.import_local_run', isZh ? '导入为本地运行' : 'Import as Local Run');
+    ? t('debate.importing_local_run', 'Importing...')
+    : t('debate.import_local_run', 'Import as Local Run');
 
   const handleImportReplay = async () => {
     if (!isReplayMode || !payload || importingReplay) return;

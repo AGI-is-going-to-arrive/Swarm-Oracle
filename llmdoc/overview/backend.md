@@ -51,7 +51,8 @@
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
 | Graph Analysis | `backend/app/services/graph_analysis.py` | 对最新 causal graph snapshot 做度数分布、god nodes、跨分支边摘要；大图会返回 `truncated: true` |
-| Snapshot Export | `backend/app/services/snapshot_export.py` | scenario ZIP export/import、manifest/checksum、旧 ID 到新 ID remap 与 ZIP 安全校验 |
+| KG Realtime | `backend/app/services/kg_realtime.py` | 合并 `GraphDelta` 后通过 scenario WS 推送 `kg:delta`，payload 过大或失效时推送 `kg:snapshot_invalidated` |
+| Snapshot Export | `backend/app/services/snapshot_export.py` | scenario ZIP export/import、manifest/checksum、旧 ID 到新 ID remap、物理 member 计数、重复 member 拒绝与 ZIP 安全校验 |
 | Runtime Lock | `backend/app/services/runtime_lock.py` | SQLite shared lease + lease refresh，防重入 |
 | Gameplay Contract | `backend/app/services/gameplay_contract.py` | 读取共享玩法契约 |
 
@@ -131,11 +132,11 @@
 - `GET /api/scenario/{id}/causal-graph` 当前会先校验 `branch_id` 属于当前 scenario：
   - 空白 `branch_id` 仍归一化为“全部分支”
   - 不存在的 branch 会返回 `404 BRANCH_NOT_FOUND`，不再伪装成 `200 + 空图`
-- `GET /api/scenario/{id}/graph-analysis` 当前同时要求 `FEATURE_GRAPH_ANALYSIS=true` 和 `FEATURE_CAUSAL_GRAPH=true`；返回 god nodes、degree distribution、cross-branch edges 和 summary。分析前会先按最新 snapshot 的 node/edge 数做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`；带 `branch_id` 时，预检会按该 branch 的可见节点/边计数，避免大 scenario 下的小 branch 查询被保守截断。
+- `GET /api/scenario/{id}/graph-analysis` 当前同时要求 `FEATURE_GRAPH_ANALYSIS=true` 和 `FEATURE_CAUSAL_GRAPH=true`；返回 god nodes、degree distribution、cross-branch edges 和 summary。`summary.total_nodes` 统计的是序列化 causal snapshot 的可见节点，包含合成 `outcome` nodes。分析前会先按最新 snapshot 的 node/edge 数做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`；带 `branch_id` 时，预检会按该 branch 的可见节点/边计数，避免大 scenario 下的小 branch 查询被保守截断。
 - `GraphEdge` 当前已有 `confidence_tier / source_ref / source_round_number / evidence_json` nullable 字段。causal graph 新边会写入 coarse evidence，并在 API response 里返回；重放轮次遇到旧 edge 时，会只补齐缺失的 evidence 字段，不覆盖已有非空值。inter-agent 边会把确定性 rule / reason 写进 `evidence_json`；其它 causal graph 写图路径仍可能只有 coarse provenance。debate argument map 也会在 `GET /api/debate/{id}/argument-map` 的 `edges[].evidence` 返回 `confidence_tier / source_ref / source_round_number / detail`。`detail` 只是 `evidence_json` 的透传，不是 LLM 解释文本。
 - `GET /api/scenario/{id}/personality-drift` 当前要求 `FEATURE_AGENT_IDENTITY=true`，并先校验 caller 能看到该 scenario。返回值按 drift score 排序，只做 warning 数据，不阻断 verdict。
 - `GET /api/scenario/{id}/snapshot` 当前要求 `FEATURE_SNAPSHOT_EXPORT=true`，并先校验 scenario ownership。ZIP 包含 `manifest.json`、scenario、branches、agents、messages、causal graph 和 `checksums.sha256`；默认不导出 `user_id`，也会剥掉 API key、base URL、token、password 等敏感字段。
-- `POST /api/scenario/import-snapshot` 当前也受 `FEATURE_SNAPSHOT_EXPORT` gate；开启 `SESSION_SECRET` 时要求 signed principal。上传上限是 50 MB；导入前会拒绝绝对路径、`..`、反斜杠路径、symlink、超大 member、总解压超限、异常压缩比、manifest/schema/checksum 不匹配。导入会新建 scenario/branch/agent/message/graph 主键并 remap FK，imported agent 的 `agent_identity_id` 会清空。
+- `POST /api/scenario/import-snapshot` 当前也受 `FEATURE_SNAPSHOT_EXPORT` gate；开启 `SESSION_SECRET` 时要求 signed principal。上传上限是 50 MB；导入前会拒绝绝对路径、`..`、反斜杠路径、symlink、重复 ZIP member name、超过 256 个物理 member、超大 member、总解压超限、异常压缩比、manifest/schema/checksum 不匹配。导入会新建 scenario/branch/agent/message/graph 主键并 remap FK，imported agent 的 `agent_identity_id` 会清空。
 
 ### Ending Room
 
@@ -159,7 +160,7 @@
 - `_phase_insight()` 当前会把长 turn commentary 压成 phase-specific 的一句主持人提炼；后端 result 不再默认把整段 transcript 复制进 phase insight。
 - Oracle 主文案的 LLM 路径当前先走 generation-first prompt，这一步不会把 anchor copy 当中心参考；只有生成为空或失败时，才进入带 anchor reference 的 rewrite fallback，最后才退 deterministic fallback。
 - Oracle prompt 当前包含双层角色化词汇提示：
-  - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science，共 13 种）提供领域专属术语、句式风格和情绪基调。已知限制：子串匹配可能造成少量误分类（如 warlord→imperial via "lord"）。
+  - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science / tech-visionary / journalist / educator / artist / entrepreneur，共 18 种）提供领域专属术语、句式风格和情绪基调。关键词匹配会避开已知过宽词，例如 `medium confidence` 不应误入 artist，`large-scale` 不应误入 entrepreneur。
   - 身份层：从 `persona_snapshot_json` 中提取 agent 的实际身份（`agent_role`）、简介（`bio_short`）、影响力（`impact_score`）、叙事地位（`tier`）和推演参与度（`turn_count / key_moment_hits`），动态生成 identity 提示。
   - prompt 里只有静态领域词汇会进入可信 `Persona vocabulary` 行；身份层会通过 `Persona Vocabulary Identity / UNTRUSTED DATA` fenced block 注入，三反引号和 prompt-injection 标记由统一 helper 处理。
   - 高影响力 agent（impact_score ≥ 0.75）措辞更自信有分量；低影响力 agent（≤ 0.35）措辞更谨慎。
@@ -371,7 +372,7 @@
   - `tests/test_causal_graph.py -q`：`68 passed`
   - `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q`：`125 passed`
   - `ruff check app/services/causal_graph.py tests/test_causal_graph.py`：通过
-- backend 全量 `pytest` 最近一次记录：`2477 passed, 3 failed, 2 skipped`；两条 LLM gateway 失败定向重跑后恢复，剩余 `test_graph_analysis` 仍是既有基线差异
+- backend 全量 `pytest -x -q` 最近一次记录：`2581 passed, 3 skipped, 9 warnings`；warning 来自 `tests/test_web_context_integration.py` 的 `_noop_background` ResourceWarning
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 - custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；仓库级 `ruff check app/ tests/` 当前仍有历史无关 lint 存量，未在本轮文档里改写成已全绿。
 - Classic 分支标题提示本轮已补定向验证：
@@ -389,6 +390,9 @@
 
 - 主模式与 Debate 都通过 WS 推送 live 事件。
 - 出站事件统一带顶层 `meta`，供前端按 `sequence / event_id` 去重与补拉。
+- scenario WS 当前也注册 KG realtime 事件：
+  - `kg:delta`：推送合并后的 `GraphDelta`
+  - `kg:snapshot_invalidated`：payload 过大、delta 标记失效或客户端需要 REST snapshot fallback 时使用
 - 空闲期会发送轻量 `heartbeat`，便于更快暴露半断开连接。
 - `ending_room` 也有独立 WS 通道，不复用 scenario/debate stream。
 - ending-room WS 当前挂在独立的 ws router 上：

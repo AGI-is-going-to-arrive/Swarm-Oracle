@@ -1,0 +1,467 @@
+/* ═══════════════════════════════════════════════════════════
+   SwarmOracle — Result modals + source family cards + conversation widget
+   ═══════════════════════════════════════════════════════════ */
+
+import { type Dispatch, type ReactNode, type RefObject, type SetStateAction } from 'react';
+import type { OracleReplayPayload } from '../../lib/oracleReplay';
+import type { ShareFlavorContext } from '../../lib/shareEnvelope';
+import type { EndingRoomCandidate } from '../../lib/endingRoomCandidates';
+import type { WebSearchProviderEntry } from '../../api/client';
+import type { StoryData } from '../../types';
+import ShareModal from '../../components/ShareModal';
+import SnapshotExportWizard from '../../components/Export/SnapshotExportWizard';
+import EndingChatModal from '../../components/EndingChatModal';
+import { ResultActionCard } from '../../components/result/ResultActionCard';
+import { ResultConversationWidget } from '../../components/ResultConversationWidget';
+import { PolymarketCard } from '../../components/result/PolymarketCard';
+import { SemanticScholarCard } from '../../components/result/SemanticScholarCard';
+import { NewsApiCard } from '../../components/result/NewsApiCard';
+import { MobileSourceSheet } from '../../components/result/MobileSourceSheet';
+import { FinanceSourceCard } from '../../components/result/FinanceSourceCard';
+import { type SourceCategoryState } from '../../components/result/SourceCategoryCard';
+import { getEndingRoomCandidateAvatar } from '../resultHelpers';
+import { useResultContext } from './ResultContext';
+
+interface PendingEndingRoomPicker {
+  branchId: string;
+  roomType: 'ending_chamber' | 'one_move_only';
+  selectedAgentIds: string[];
+  maxSelectable: number;
+}
+
+interface ResultModalsProps {
+  shareFlavorContext: ShareFlavorContext;
+  setShareAutomation: (next: Record<string, unknown> | null) => void;
+  pendingEndingRoomPicker: PendingEndingRoomPicker | null;
+  setPendingEndingRoomPicker: Dispatch<SetStateAction<PendingEndingRoomPicker | null>>;
+  pendingEndingRoomBranch: StoryData['branches'][number] | null;
+  pendingEndingRoomCandidates: EndingRoomCandidate[];
+  endingRoomPickerDialogRef: RefObject<HTMLDivElement | null>;
+  endingRoomPickerCloseRef: RefObject<HTMLButtonElement | null>;
+  openEndingRoomDirect: (
+    branchId: string,
+    roomType: 'ending_chamber' | 'one_move_only' | 'crossline_gallery',
+    selectedAgentIds?: string[],
+  ) => void;
+  activeEndingRoomBranch: StoryData['branches'][number] | null;
+  activeEndingRoomMode: 'ending_chamber' | 'one_move_only' | 'crossline_gallery';
+  activeEndingRoomSelectedBranchIds: string[];
+  activeEndingRoomSelectedAgentIds: string[];
+  activeEndingRoomReplayPayload: OracleReplayPayload | null;
+  endingRoomHeaderActions: ReactNode;
+  setEndingRoomAutomation: (next: Record<string, unknown> | null) => void;
+  handleEndingRoomModeChange: (next: 'ending_chamber' | 'one_move_only') => void;
+  handleCloseEndingRoom: () => void;
+  // Source family contexts
+  sourceFamilyContext: {
+    polymarket?: { state?: SourceCategoryState; items?: unknown[]; configured_host?: string; geo_gated?: boolean } | null;
+    finance?: { state?: SourceCategoryState; items?: unknown[] } | null;
+    academic?: { state?: SourceCategoryState; items?: unknown[] } | null;
+    news_deep?: { state?: SourceCategoryState; items?: unknown[] } | null;
+  };
+  polymarketCapability: WebSearchProviderEntry | undefined;
+  mobileSourceSheetOpen: boolean;
+  setMobileSourceSheetOpen: (next: boolean) => void;
+  resolveSourceCategoryState: (
+    entry: { state?: SourceCategoryState; items?: unknown[] } | null | undefined,
+  ) => SourceCategoryState;
+  resultConversationContext: {
+    branchId: string;
+    title: string;
+    insight?: string | null | undefined;
+    forkReason?: string | null | undefined;
+    keyMoments?: string[] | null | undefined;
+    comparisonTitles: string[];
+  } | null;
+}
+
+export default function ResultModals(props: ResultModalsProps) {
+  const {
+    shareFlavorContext,
+    setShareAutomation,
+    pendingEndingRoomPicker,
+    setPendingEndingRoomPicker,
+    pendingEndingRoomBranch,
+    pendingEndingRoomCandidates,
+    endingRoomPickerDialogRef,
+    endingRoomPickerCloseRef,
+    openEndingRoomDirect,
+    activeEndingRoomBranch,
+    activeEndingRoomMode,
+    activeEndingRoomSelectedBranchIds,
+    activeEndingRoomSelectedAgentIds,
+    activeEndingRoomReplayPayload,
+    endingRoomHeaderActions,
+    setEndingRoomAutomation,
+    handleEndingRoomModeChange,
+    handleCloseEndingRoom,
+    sourceFamilyContext,
+    polymarketCapability,
+    mobileSourceSheetOpen,
+    setMobileSourceSheetOpen,
+    resolveSourceCategoryState,
+    resultConversationContext,
+  } = props;
+
+  const {
+    t,
+    id,
+    isReplayMode,
+    showShare,
+    setShowShare,
+    showSnapshotExport,
+    setShowSnapshotExport,
+    scenario,
+    branches,
+    agents,
+    shareSourceFamilies,
+    capabilities,
+    activeScenarioId,
+    primaryAgentIdentityId,
+    isZh,
+    resolvedProfileId,
+    gameplayProfileLabel,
+    gameplayProfileHooks,
+  } = useResultContext();
+
+  const polymarketContext = sourceFamilyContext.polymarket;
+  const financeContext = sourceFamilyContext.finance;
+  const academicContext = sourceFamilyContext.academic;
+  const newsDeepContext = sourceFamilyContext.news_deep;
+
+  const providers = capabilities?.web_search?.providers;
+  const hasItems = (entry: { items?: unknown[] } | null | undefined): boolean =>
+    Boolean(entry && Array.isArray(entry.items) && entry.items.length > 0);
+  const hasPolymarketData = hasItems(polymarketContext);
+  const hasFinanceData = hasItems(financeContext);
+  const hasAcademicData = hasItems(academicContext);
+  const hasNewsDeepData = hasItems(newsDeepContext);
+  const polymarketLive = Boolean(providers?.polymarket?.enabled);
+  const financeLive = Boolean(providers?.finance?.enabled);
+  const academicLive = Boolean(providers?.academic?.enabled);
+  const newsDeepLive = Boolean(providers?.news_deep?.enabled);
+  const showPolymarket = polymarketLive || hasPolymarketData;
+  const showFinance = financeLive || hasFinanceData;
+  const showAcademic = academicLive || hasAcademicData;
+  const showNewsDeep = newsDeepLive || hasNewsDeepData;
+
+  const polymarketHistorical = !polymarketLive && hasPolymarketData;
+  const financeHistorical = !financeLive && hasFinanceData;
+  const academicHistorical = !academicLive && hasAcademicData;
+  const newsDeepHistorical = !newsDeepLive && hasNewsDeepData;
+  const historicalLabel = t('result.source_historical', { defaultValue: 'Recorded' });
+  const historicalTooltip = t('result.source_historical_tooltip', {
+    defaultValue: 'This data was recorded when the scenario was created',
+  });
+  const renderHistoricalBadge = (family: string) => (
+    <span
+      className="result-source-card__historical-badge"
+      data-testid={`result-sources-${family}-historical-badge`}
+      title={historicalTooltip}
+      aria-label={`${historicalLabel}: ${historicalTooltip}`}
+    >
+      {historicalLabel}
+    </span>
+  );
+  const wrapHistorical = (family: string, isHistorical: boolean, node: ReactNode) =>
+    isHistorical ? (
+      <div
+        key={family}
+        className="result-source-card-wrapper result-source-card-wrapper--historical"
+        data-historical="true"
+        data-source-family={family}
+      >
+        {renderHistoricalBadge(family)}
+        {node}
+      </div>
+    ) : (
+      <div
+        key={family}
+        className="result-source-card-wrapper"
+        data-source-family={family}
+      >
+        {node}
+      </div>
+    );
+
+  const showSourceCards = showPolymarket || showFinance || showAcademic || showNewsDeep;
+  const sourceCards = showSourceCards ? (
+    <>
+      {showPolymarket && wrapHistorical(
+        'polymarket',
+        polymarketHistorical,
+        <PolymarketCard
+          capability={polymarketCapability}
+          state={resolveSourceCategoryState(polymarketContext)}
+          items={(polymarketContext?.items ?? []) as Parameters<typeof PolymarketCard>[0]['items']}
+        />,
+      )}
+      {showFinance && wrapHistorical(
+        'finance',
+        financeHistorical,
+        <FinanceSourceCard
+          state={resolveSourceCategoryState(financeContext)}
+          items={(financeContext?.items ?? []) as Parameters<typeof FinanceSourceCard>[0]['items']}
+        />,
+      )}
+      {showAcademic && wrapHistorical(
+        'academic',
+        academicHistorical,
+        <SemanticScholarCard
+          state={resolveSourceCategoryState(academicContext)}
+          items={(academicContext?.items ?? []) as Parameters<typeof SemanticScholarCard>[0]['items']}
+        />,
+      )}
+      {showNewsDeep && wrapHistorical(
+        'news_deep',
+        newsDeepHistorical,
+        <NewsApiCard
+          state={resolveSourceCategoryState(newsDeepContext)}
+          items={(newsDeepContext?.items ?? []) as Parameters<typeof NewsApiCard>[0]['items']}
+        />,
+      )}
+    </>
+  ) : null;
+
+  return (
+    <>
+      {/* Share Modal (P6) */}
+      {showShare && id && !isReplayMode && (
+        <ShareModal
+          scenarioId={id}
+          shareContext={shareFlavorContext}
+          branches={branches.map((b) => ({ ...b, fork_round: 0, summary: b.insight ?? '', status: b.status as 'COMPLETED' | 'ACTIVE' | 'PRUNED' }))}
+          agentNames={agents.slice(0, 3).map((a) => a.name)}
+          sourceFamilies={shareSourceFamilies}
+          onAutomationStateChange={setShareAutomation}
+          onClose={() => setShowShare(false)}
+        />
+      )}
+      {/* S3-6: Snapshot export wizard */}
+      {showSnapshotExport && id && !isReplayMode && (
+        <SnapshotExportWizard
+          scenarioId={id}
+          isOpen={showSnapshotExport}
+          onClose={() => setShowSnapshotExport(false)}
+          scenarioTitle={scenario?.question ?? undefined}
+        />
+      )}
+      {pendingEndingRoomPicker && pendingEndingRoomBranch && (
+        <div className="ending-room-picker-overlay" onClick={() => setPendingEndingRoomPicker(null)}>
+          <div
+            ref={endingRoomPickerDialogRef}
+            className="ending-room-picker"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ending-room-picker-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="ending-room-picker__header">
+              <div>
+                <p className="ending-room-picker__kicker">
+                  {pendingEndingRoomPicker.roomType === 'one_move_only'
+                    ? t('ending_room.one_move_cta')
+                    : t('ending_room.entry_cta')}
+                </p>
+                <h3 id="ending-room-picker-title">
+                  {t('result.ending_room_picker_title')}
+                </h3>
+                <p>
+                  {pendingEndingRoomBranch.title}
+                  {' · '}
+                  {t('result.ending_room_picker_limit', { count: pendingEndingRoomPicker.maxSelectable })}
+                </p>
+              </div>
+              <button
+                type="button"
+                ref={endingRoomPickerCloseRef}
+                className="ending-room-picker__close"
+                onClick={() => setPendingEndingRoomPicker(null)}
+                aria-label={t('common.close')}
+              >
+                ×
+              </button>
+            </header>
+
+            <div className="ending-room-picker__body">
+              {pendingEndingRoomCandidates.length === 0 ? (
+                <p className="ending-room-picker__empty">
+                  {t('result.ending_room_picker_empty')}
+                </p>
+              ) : (
+                pendingEndingRoomCandidates.map((candidate) => {
+                  const selected = pendingEndingRoomPicker.selectedAgentIds.includes(candidate.id);
+                  return (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      className={`ending-room-picker__card ${selected ? 'is-selected' : ''}`}
+                      aria-pressed={selected}
+                      onClick={() => {
+                        setPendingEndingRoomPicker((current) => {
+                          if (!current || current.branchId !== pendingEndingRoomBranch.id) {
+                            return current;
+                          }
+                          const alreadySelected = current.selectedAgentIds.includes(candidate.id);
+                          if (alreadySelected) {
+                            return {
+                              ...current,
+                              selectedAgentIds: current.selectedAgentIds.filter((item) => item !== candidate.id),
+                            };
+                          }
+                          if (current.maxSelectable === 1) {
+                            return { ...current, selectedAgentIds: [candidate.id] };
+                          }
+                          if (current.selectedAgentIds.length >= current.maxSelectable) {
+                            return current;
+                          }
+                          return {
+                            ...current,
+                            selectedAgentIds: [...current.selectedAgentIds, candidate.id],
+                          };
+                        });
+                      }}
+                    >
+                      <img
+                        className="ending-room-picker__avatar"
+                        src={getEndingRoomCandidateAvatar(candidate.role, candidate.name)}
+                        alt=""
+                        aria-hidden="true"
+                      />
+                      <div className="ending-room-picker__card-copy">
+                        <strong>{candidate.name}</strong>
+                        <span>{candidate.role}</span>
+                        {candidate.persona && <small>{candidate.persona}</small>}
+                        <em>
+                          {candidate.contributionCount > 0
+                            ? t('result.ending_room_picker_impact', {
+                                impact: Math.round(candidate.impactScore * 100),
+                                turns: candidate.contributionCount,
+                                hinges: candidate.keyMomentHits,
+                                round: candidate.lastRound,
+                              })
+                            : t('result.ending_room_picker_fallback_roster')}
+                        </em>
+                        {candidate.fallbackCast && (
+                          <em className="ending-room-picker__fallback">
+                            {t('result.ending_room_picker_fallback_lineup')}
+                          </em>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            <footer className="ending-room-picker__footer">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setPendingEndingRoomPicker(null)}
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => openEndingRoomDirect(
+                  pendingEndingRoomPicker.branchId,
+                  pendingEndingRoomPicker.roomType,
+                  pendingEndingRoomPicker.selectedAgentIds,
+                )}
+                disabled={
+                  pendingEndingRoomCandidates.length > 0
+                  && pendingEndingRoomPicker.selectedAgentIds.length === 0
+                }
+              >
+                {t('result.ending_room_picker_enter')}
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+      {activeEndingRoomBranch && scenario && (
+        <EndingChatModal
+          open={Boolean(activeEndingRoomBranch)}
+          scenarioId={scenario.id}
+          branch={activeEndingRoomBranch}
+          roomType={activeEndingRoomMode}
+          selectedBranchIds={activeEndingRoomSelectedBranchIds}
+          profileId={resolvedProfileId}
+          profileLabel={gameplayProfileLabel}
+          profileHooks={gameplayProfileHooks}
+          selectedAgentIds={activeEndingRoomSelectedAgentIds}
+          galleryBranches={branches}
+          language={isZh ? 'zh' : 'en'}
+          readOnly={isReplayMode || Boolean(activeEndingRoomReplayPayload)}
+          fallbackMessages={
+            activeEndingRoomBranch
+              ? (scenario?.messages ?? []).filter((message) => message.branch === activeEndingRoomBranch.id)
+              : []
+          }
+          replayState={activeEndingRoomReplayPayload ? {
+            snapshot: activeEndingRoomReplayPayload.roomSnapshot,
+            result: activeEndingRoomReplayPayload.roomResult,
+            activeThreadId: activeEndingRoomReplayPayload.activeThreadId,
+            selectedAgentIds: activeEndingRoomReplayPayload.selectedAgentIds,
+          } : null}
+          headerActions={endingRoomHeaderActions}
+          onAutomationStateChange={setEndingRoomAutomation}
+          onModeChange={handleEndingRoomModeChange}
+          onClose={handleCloseEndingRoom}
+        />
+      )}
+      {/* FE-5 + P1-5: 4 source category grid (desktop) + mobile Sheet + Action Card.
+          P1-5: render based on scenario payload presence (historical data) OR
+          current capability state (live), so that completed scenarios remain
+          viewable when feature flags are toggled off. Historical-only cards
+          show a "recorded" badge to distinguish from live data. */}
+      {showSourceCards && (
+        <>
+          <button
+            type="button"
+            data-testid="result-mobile-sources-trigger"
+            onClick={() => setMobileSourceSheetOpen(true)}
+            aria-expanded={mobileSourceSheetOpen}
+            aria-controls={mobileSourceSheetOpen ? "mobile-source-sheet" : undefined}
+            className="result-mobile-sources-trigger"
+          >
+            {t('source.mobile_sheet.title', { defaultValue: 'Live sources' })}
+          </button>
+          <section className="result-sources">
+            <h3 className="result-sources__heading">
+              {t('source.section_title', { defaultValue: 'Live Sources' })}
+            </h3>
+            <div
+              className="result-sources__grid"
+              data-testid="result-source-grid-desktop"
+            >
+              {sourceCards}
+            </div>
+          </section>
+          <MobileSourceSheet
+            open={mobileSourceSheetOpen}
+            onOpenChange={setMobileSourceSheetOpen}
+          >
+            {sourceCards}
+          </MobileSourceSheet>
+        </>
+      )}
+      {!isReplayMode && capabilities?.agent_conversation?.enabled && primaryAgentIdentityId && (
+        <ResultActionCard
+          agentIdentityId={primaryAgentIdentityId}
+        />
+      )}
+      {!isReplayMode && activeScenarioId && (capabilities?.agent_conversation?.enabled ?? false) && (
+        <div id="result-conversation">
+          <ResultConversationWidget
+            scenarioId={activeScenarioId}
+            primaryAgentIdentityId={primaryAgentIdentityId}
+            resultContext={resultConversationContext}
+          />
+        </div>
+      )}
+    </>
+  );
+}

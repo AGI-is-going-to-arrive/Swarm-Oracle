@@ -618,6 +618,20 @@ export class WorldScene extends Phaser.Scene {
     const { width, height } = this.scale;
     const texKey = isSceneThemeId(newTheme) ? getSceneTextureKey(newTheme) : `scene_${newTheme}`;
 
+    // Reduced motion: swap immediately without wipe animation (scene must still update)
+    if (this.reducedMotion) {
+      this.isThemeTransitioning = true;
+      this.applyThemeSwap(newTheme, texKey, palette, width, height);
+      this.ensureSceneTexture(newTheme, () => {
+        if (!this.sys.isActive() || this.sceneTheme !== newTheme) return;
+        this.applyThemeSwap(newTheme, texKey, palette, this.scale.width, this.scale.height);
+      });
+      this.isThemeTransitioning = false;
+      this.sceneTheme = newTheme;
+      console.log(`[WorldScene] Theme transitioned to: ${newTheme} (reduced motion)`);
+      return;
+    }
+
     // B4: Vertical wipe transition (black curtain slides down then back up)
     this.isThemeTransitioning = true;
     const wipe = this.add.graphics();
@@ -1429,9 +1443,13 @@ export class WorldScene extends Phaser.Scene {
     });
 
     // B4: Typewriter reveal
-    let charIdx = initialChars;
-    const remainingChars = Math.max(visibleText.length - initialChars, 0);
+    let charIdx = this.reducedMotion ? visibleText.length : initialChars;
+    const remainingChars = this.reducedMotion ? 0 : Math.max(visibleText.length - initialChars, 0);
     let typewriterEvent: Phaser.Time.TimerEvent | null = null;
+
+    if (this.reducedMotion) {
+      textObj.setText(visibleText);
+    }
 
     if (remainingChars > 0) {
       typewriterEvent = this.time.addEvent({
@@ -1519,12 +1537,12 @@ export class WorldScene extends Phaser.Scene {
       agent.factionBar.fillRoundedRect(-8, barY, 16, 3, 1);
     }
 
-    // Smooth movement with ease-out
+    // Smooth movement with ease-out (instant snap under reduced motion)
     this.tweens.add({
       targets: agent.gameObject,
       x: targetX,
       y: targetY,
-      duration,
+      duration: this.reducedMotion ? 0 : duration,
       ease: 'Cubic.easeOut',
       onUpdate: () => this.cullAgent(agent, width, height),
     });
@@ -2071,12 +2089,16 @@ export class WorldScene extends Phaser.Scene {
     const tint = TIME_TINTS[phase] || TIME_TINTS.noon;
 
     if (this.lightingOverlay) {
-      // Crossfade
+      // Crossfade (instant under reduced motion — destroy immediately)
       const old = this.lightingOverlay;
-      this.tweens.add({
-        targets: old, alpha: 0, duration: 800,
-        onComplete: () => old.destroy(),
-      });
+      if (this.reducedMotion) {
+        old.destroy();
+      } else {
+        this.tweens.add({
+          targets: old, alpha: 0, duration: 800,
+          onComplete: () => old.destroy(),
+        });
+      }
     }
 
     if (tint.alpha > 0) {
@@ -2084,10 +2106,15 @@ export class WorldScene extends Phaser.Scene {
       this.lightingOverlay.fillStyle(tint.color, tint.alpha);
       this.lightingOverlay.fillRect(0, 0, width, height);
       this.lightingOverlay.setDepth(93);
-      this.lightingOverlay.setAlpha(0);
-      this.tweens.add({
-        targets: this.lightingOverlay, alpha: 1, duration: 800,
-      });
+      // Skip fade-in under reduced motion — show final state immediately
+      if (this.reducedMotion) {
+        this.lightingOverlay.setAlpha(1);
+      } else {
+        this.lightingOverlay.setAlpha(0);
+        this.tweens.add({
+          targets: this.lightingOverlay, alpha: 1, duration: 800,
+        });
+      }
     } else {
       this.lightingOverlay = null;
     }

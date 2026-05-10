@@ -35,6 +35,8 @@ export class TitleScene extends Phaser.Scene {
   private nebulaOverlay: Phaser.GameObjects.Graphics | null = null;
   private canSkip = false;
   private isTransitioning = false;
+  // Accessibility: skip decorative motion when user prefers reduced motion
+  private reducedMotion = false;
 
   constructor() {
     super({ key: 'TitleScene' });
@@ -52,6 +54,10 @@ export class TitleScene extends Phaser.Scene {
   }
 
   create(): void {
+    // Detect reduced-motion preference (skip decorative atmospheric effects)
+    this.reducedMotion = typeof window !== 'undefined'
+      && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+
     const { width, height } = this.scale;
 
     // ── 1. Deep space background with nebula gradient ─────
@@ -76,10 +82,18 @@ export class TitleScene extends Phaser.Scene {
     this.createShimmerScanline(width, height);
 
     // ── 8. Auto-transition sequence (click to skip) ──────
-    this.cameras.main.fadeIn(800, 0, 0, 0);
+    if (this.reducedMotion) {
+      this.cameras.main.setAlpha(1);
+    } else {
+      this.cameras.main.fadeIn(800, 0, 0, 0);
+    }
 
-    // Enable skip after initial title animation (1.5s)
-    this.time.delayedCall(1500, () => { this.canSkip = true; });
+    // Reduced motion users should not wait on the decorative title reveal.
+    if (this.reducedMotion) {
+      this.canSkip = true;
+    } else {
+      this.time.delayedCall(1500, () => { this.canSkip = true; });
+    }
 
     // Click/tap to skip
     this.input.on('pointerdown', () => {
@@ -141,28 +155,30 @@ export class TitleScene extends Phaser.Scene {
         star.setPosition(x, y);
         star.setDepth(2);
 
-        // Twinkling animation — phase-shifted
-        this.tweens.add({
-          targets: star,
-          alpha: layer.alpha * 0.2,
-          duration: 1500 + Math.random() * 3000,
-          yoyo: true,
-          repeat: -1,
-          ease: 'Sine.easeInOut',
-          delay: Math.random() * 2500,
-        });
-
-        // Slow parallax drift
-        if (layer.speedMax > 0.1) {
+        // Twinkling animation — phase-shifted (decorative — skip under reduced motion)
+        if (!this.reducedMotion) {
           this.tweens.add({
             targets: star,
-            y: y + (10 + Math.random() * 20) * layer.speedMax,
-            x: x + (Math.random() - 0.5) * 8,
-            duration: 8000 + Math.random() * 4000,
+            alpha: layer.alpha * 0.2,
+            duration: 1500 + Math.random() * 3000,
             yoyo: true,
             repeat: -1,
             ease: 'Sine.easeInOut',
+            delay: Math.random() * 2500,
           });
+
+          // Slow parallax drift (decorative)
+          if (layer.speedMax > 0.1) {
+            this.tweens.add({
+              targets: star,
+              y: y + (10 + Math.random() * 20) * layer.speedMax,
+              x: x + (Math.random() - 0.5) * 8,
+              duration: 8000 + Math.random() * 4000,
+              yoyo: true,
+              repeat: -1,
+              ease: 'Sine.easeInOut',
+            });
+          }
         }
 
         this.particles.push(star);
@@ -178,16 +194,19 @@ export class TitleScene extends Phaser.Scene {
     this.nebulaOverlay.fillEllipse(w * 0.5, h * 0.35, w * 1.2, h * 0.5);
     this.nebulaOverlay.setDepth(3);
 
-    this.tweens.add({
-      targets: this.nebulaOverlay,
-      alpha: 0.4,
-      scaleX: 1.05,
-      scaleY: 1.05,
-      duration: 6000,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut',
-    });
+    // Decorative pulse — skip under reduced motion
+    if (!this.reducedMotion) {
+      this.tweens.add({
+        targets: this.nebulaOverlay,
+        alpha: 0.4,
+        scaleX: 1.05,
+        scaleY: 1.05,
+        duration: 6000,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+    }
   }
 
   // ── Animated Title ────────────────────────────────────
@@ -211,32 +230,38 @@ export class TitleScene extends Phaser.Scene {
           offsetX: 0, offsetY: 0,
           color: '#ffd700', blur: 8, fill: false, stroke: true,
         },
-      }).setOrigin(0.5).setDepth(20).setAlpha(0).setScale(0.3);
+      }).setOrigin(0.5).setDepth(20);
 
-      // Bounce-in animation with stagger
-      this.tweens.add({
-        targets: letter,
-        alpha: 1,
-        scaleX: 1,
-        scaleY: 1,
-        y: h * 0.33,
-        duration: 400,
-        delay: 200 + i * 80,
-        ease: 'Back.easeOut',
-      });
-
-      // After reveal: gentle floating animation
-      this.time.delayedCall(200 + i * 80 + 500, () => {
+      // Title must remain readable — under reduced motion show letters instantly
+      if (this.reducedMotion) {
+        letter.setAlpha(1).setScale(1);
+      } else {
+        letter.setAlpha(0).setScale(0.3);
+        // Bounce-in animation with stagger
         this.tweens.add({
           targets: letter,
-          y: letter.y - 3 + Math.sin(i * 0.8) * 2,
-          duration: 2000 + Math.random() * 500,
-          yoyo: true,
-          repeat: -1,
-          ease: 'Sine.easeInOut',
-          delay: i * 100,
+          alpha: 1,
+          scaleX: 1,
+          scaleY: 1,
+          y: h * 0.33,
+          duration: 400,
+          delay: 200 + i * 80,
+          ease: 'Back.easeOut',
         });
-      });
+
+        // After reveal: gentle floating animation (decorative)
+        this.time.delayedCall(200 + i * 80 + 500, () => {
+          this.tweens.add({
+            targets: letter,
+            y: letter.y - 3 + Math.sin(i * 0.8) * 2,
+            duration: 2000 + Math.random() * 500,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut',
+            delay: i * 100,
+          });
+        });
+      }
     });
 
     // Subtitle — typewriter effect (appears after title animation)
@@ -260,62 +285,76 @@ export class TitleScene extends Phaser.Scene {
     const typewriterDelay = 200 + letters.length * 80 + 300;
     let charIdx = 0;
 
-    this.time.delayedCall(typewriterDelay, () => {
+    if (this.reducedMotion) {
       subtitleText.setAlpha(1);
-      cursor.setAlpha(1);
+      subtitleText.setText(subtitle);
+      cursor.setAlpha(0);
+    } else {
+      this.time.delayedCall(typewriterDelay, () => {
+        subtitleText.setAlpha(1);
 
-      // Cursor blink
-      this.tweens.add({
-        targets: cursor,
-        alpha: 0,
-        duration: 400,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Stepped',
+        cursor.setAlpha(1);
+
+        // Cursor blink
+        this.tweens.add({
+          targets: cursor,
+          alpha: 0,
+          duration: 400,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Stepped',
+        });
+
+        // Reveal one character at a time
+        this.time.addEvent({
+          delay: i18next.language === 'en' ? 50 : 80,
+          repeat: subtitle.length - 1,
+          callback: () => {
+            charIdx++;
+            subtitleText.setText(subtitle.slice(0, charIdx));
+            // Reposition cursor after text
+            const bounds = subtitleText.getBounds();
+            cursor.setX(bounds.right + 2);
+          },
+          callbackScope: this,
+        });
+
+        // Hide cursor after typing completes
+        this.time.delayedCall(
+          (i18next.language === 'en' ? 50 : 80) * subtitle.length + 600,
+          () => {
+            this.tweens.killTweensOf(cursor);
+            this.tweens.add({ targets: cursor, alpha: 0, duration: 300 });
+          },
+        );
       });
-
-      // Reveal one character at a time
-      this.time.addEvent({
-        delay: i18next.language === 'en' ? 50 : 80,
-        repeat: subtitle.length - 1,
-        callback: () => {
-          charIdx++;
-          subtitleText.setText(subtitle.slice(0, charIdx));
-          // Reposition cursor after text
-          const bounds = subtitleText.getBounds();
-          cursor.setX(bounds.right + 2);
-        },
-        callbackScope: this,
-      });
-
-      // Hide cursor after typing completes
-      this.time.delayedCall(
-        (i18next.language === 'en' ? 50 : 80) * subtitle.length + 600,
-        () => {
-          this.tweens.killTweensOf(cursor);
-          this.tweens.add({ targets: cursor, alpha: 0, duration: 300 });
-        },
-      );
-    });
+    }
 
     // Decorative line under subtitle
     const lineWidth = 120;
     const lineY = h * 0.49;
-    const lineLeft = this.add.graphics().setDepth(20).setAlpha(0);
+    const lineLeft = this.add.graphics().setDepth(20);
     lineLeft.fillGradientStyle(0x000000, PALETTE.accentPurple, 0x000000, PALETTE.accentPurple, 0, 1, 0, 1);
     lineLeft.fillRect(w / 2 - lineWidth, lineY, lineWidth, 1);
 
-    const lineRight = this.add.graphics().setDepth(20).setAlpha(0);
+    const lineRight = this.add.graphics().setDepth(20);
     lineRight.fillGradientStyle(PALETTE.accentPurple, 0x000000, PALETTE.accentPurple, 0x000000, 1, 0, 1, 0);
     lineRight.fillRect(w / 2, lineY, lineWidth, 1);
 
-    this.tweens.add({
-      targets: [lineLeft, lineRight],
-      alpha: 0.7,
-      duration: 600,
-      delay: 200 + letters.length * 80 + 600,
-      ease: 'Power2',
-    });
+    if (this.reducedMotion) {
+      lineLeft.setAlpha(0.7);
+      lineRight.setAlpha(0.7);
+    } else {
+      lineLeft.setAlpha(0);
+      lineRight.setAlpha(0);
+      this.tweens.add({
+        targets: [lineLeft, lineRight],
+        alpha: 0.7,
+        duration: 600,
+        delay: 200 + letters.length * 80 + 600,
+        ease: 'Power2',
+      });
+    }
 
     // Loading indicator
     const loadingStr = i18next.language === 'en'
@@ -325,26 +364,32 @@ export class TitleScene extends Phaser.Scene {
       fontSize: '10px',
       color: PALETTE.textDim,
       fontFamily: 'monospace',
-    }).setOrigin(0.5).setDepth(20).setAlpha(0);
+    }).setOrigin(0.5).setDepth(20);
 
-    this.tweens.add({
-      targets: loadingText,
-      alpha: 1,
-      duration: 500,
-      delay: 2000,
-      ease: 'Power2',
-      onComplete: () => {
-        // Pulse after appearing
-        this.tweens.add({
-          targets: loadingText,
-          alpha: 0.3,
-          duration: 700,
-          yoyo: true,
-          repeat: -1,
-          ease: 'Sine.easeInOut',
-        });
-      },
-    });
+    if (this.reducedMotion) {
+      // Loading hint must remain visible — show without fade/pulse
+      loadingText.setAlpha(1);
+    } else {
+      loadingText.setAlpha(0);
+      this.tweens.add({
+        targets: loadingText,
+        alpha: 1,
+        duration: 500,
+        delay: 2000,
+        ease: 'Power2',
+        onComplete: () => {
+          // Pulse after appearing (decorative)
+          this.tweens.add({
+            targets: loadingText,
+            alpha: 0.3,
+            duration: 700,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut',
+          });
+        },
+      });
+    }
 
     // Version tag
     this.add.text(w - 8, h - 8, 'v3.0', {
@@ -356,6 +401,9 @@ export class TitleScene extends Phaser.Scene {
 
   // ── Floating Orbs (ambient particles) ─────────────────
   private createFloatingOrbs(w: number, h: number): void {
+    // Floating orbs are purely decorative — skip entirely under reduced motion
+    if (this.reducedMotion) return;
+
     const orbColors = [PALETTE.accentPurple, PALETTE.accentCyan, PALETTE.starGold];
 
     for (let i = 0; i < 8; i++) {
@@ -407,6 +455,9 @@ export class TitleScene extends Phaser.Scene {
 
   // ── Shimmer Scanline (moving bright line) ─────────────
   private createShimmerScanline(w: number, h: number): void {
+    // Shimmer sweep is purely decorative — skip entirely under reduced motion
+    if (this.reducedMotion) return;
+
     const shimmer = this.add.graphics();
     shimmer.setDepth(45);
     shimmer.setAlpha(0);
@@ -443,6 +494,12 @@ export class TitleScene extends Phaser.Scene {
   // ── Transition to WorldScene ──────────────────────────
   private doTransition(): void {
     this.isTransitioning = true;
+    if (this.reducedMotion) {
+      this.cleanup();
+      this.scene.start('WorldScene');
+      return;
+    }
+
     this.cameras.main.fadeOut(600, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () => {
       this.cleanup();

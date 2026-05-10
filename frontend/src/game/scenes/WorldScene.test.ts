@@ -7,7 +7,13 @@
  * without a full Phaser runtime.
  */
 
+import { readFileSync } from 'node:fs';
+
 import { describe, it, expect } from 'vitest';
+
+function readWorldSceneSource(): string {
+  return readFileSync(`${process.cwd()}/src/game/scenes/WorldScene.ts`, 'utf8');
+}
 
 // ── Re-export testable constants via inline copy ────────
 // (WorldScene doesn't export them, so we validate structure/completeness here)
@@ -27,7 +33,7 @@ const EVENT_ANIM_KEYS = [
   'earthquake_shake', 'fire_spread', 'dark_fog_spread', 'tech_glow',
   'lightbulb_flash', 'treasure_sparkle', 'handshake_glow', 'generic_flash',
   'debate_spotlight', 'shadow_reveal', 'backchannel_signal', 'player_swap',
-  'portal_open', 'mandate_surge', 'evacuation_alarm',
+  'portal_open', 'mandate_surge', 'evacuation_alarm', 'hearing_bell',
 ];
 
 const FACTION_COLORS_KEYS = ['left', 'right', 'center', 'unknown'];
@@ -63,8 +69,8 @@ describe('WorldScene — THEME_PALETTES coverage', () => {
 });
 
 describe('WorldScene — EVENT_ANIM_CONFIGS', () => {
-  it('covers 15 event animation types', () => {
-    expect(EVENT_ANIM_KEYS).toHaveLength(15);
+  it('covers 16 event animation types', () => {
+    expect(EVENT_ANIM_KEYS).toHaveLength(16);
   });
 
   it('includes key events: earthquake, fire, fog, tech, handshake', () => {
@@ -86,6 +92,10 @@ describe('WorldScene — EVENT_ANIM_CONFIGS', () => {
   it('includes backchannel and evacuation gameplay animations', () => {
     expect(EVENT_ANIM_KEYS).toContain('backchannel_signal');
     expect(EVENT_ANIM_KEYS).toContain('evacuation_alarm');
+  });
+
+  it('includes public hearing gameplay animation', () => {
+    expect(EVENT_ANIM_KEYS).toContain('hearing_bell');
   });
 });
 
@@ -254,34 +264,38 @@ describe('reducedMotion tween guards', () => {
     // WorldScene.ts:506 — `if (this.reducedMotion) return;`
     // Verify the guard pattern exists in the class
     const guardPattern = /startAmbientMotes[\s\S]*?if\s*\(\s*this\.reducedMotion\s*\)\s*return/;
-    // This is a structural test — we can't instantiate Phaser.Scene in vitest,
-    // so we verify the guard pattern exists by importing the source text
-    expect(guardPattern).toBeDefined();
+    expect(readWorldSceneSource()).toMatch(guardPattern);
   });
 
   it('startIdleWander bails when reducedMotion is true', () => {
     // WorldScene.ts:1035 — `if (this.reducedMotion) return;`
     const guardPattern = /startIdleWander[\s\S]*?if\s*\(\s*this\.reducedMotion\s*\)\s*return/;
-    expect(guardPattern).toBeDefined();
+    expect(readWorldSceneSource()).toMatch(guardPattern);
   });
 
   it('playSplitAnimation bails when reducedMotion is true', () => {
     // WorldScene.ts:1506 — `if (this.reducedMotion) return;`
     const guardPattern = /playSplitAnimation[\s\S]*?if\s*\(\s*this\.reducedMotion\s*\)\s*return/;
-    expect(guardPattern).toBeDefined();
+    expect(readWorldSceneSource()).toMatch(guardPattern);
   });
 
   it('spawnAgent uses duration=0 when reducedMotion is true', () => {
     // WorldScene.ts:951 — `if (this.reducedMotion) { ... duration: 0 }`
     // WorldScene.ts:928 — `if (!this.reducedMotion) { ... }`
     const durationGuard = /duration:\s*this\.reducedMotion\s*\?\s*0\s*:/;
-    expect(durationGuard).toBeDefined();
+    expect(readWorldSceneSource()).toMatch(durationGuard);
+  });
+
+  it('shows full bubble text immediately when reducedMotion is true', () => {
+    const source = readWorldSceneSource();
+
+    expect(source).toContain('const remainingChars = this.reducedMotion ? 0 :');
+    expect(source).toContain('if (this.reducedMotion) {\n      textObj.setText(visibleText);');
   });
 
   it('WorldScene has at least 10 reducedMotion guards', async () => {
     // Count all reducedMotion references in the source
-    const fs = await import('fs');
-    const source = fs.readFileSync('src/game/scenes/WorldScene.ts', 'utf-8');
+    const source = readWorldSceneSource();
     const guardCount = (source.match(/this\.reducedMotion/g) || []).length;
     // Expect at least 10 guards (currently 12+)
     expect(guardCount).toBeGreaterThanOrEqual(10);

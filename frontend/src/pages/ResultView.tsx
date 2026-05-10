@@ -2,7 +2,7 @@
    SwarmOracle — ResultView (Multi-Ending Comparison)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useEffect, useMemo, useCallback, useRef, type FocusEvent, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, type FocusEvent } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -63,21 +63,15 @@ import {
   evaluateDirectorObjectives,
 } from '../lib/directorObjectives';
 import {
-  getEndingToneLabel,
-  getPredictionRationale,
-  getStructuredBetKindLabel,
-  parseStructuredPredictionText,
   resolveStructuredBetOutcome,
 } from '../lib/predictionBetting';
 import { type ShareFlavorContext } from '../lib/shareEnvelope';
-import { getTheaterThemeLabel } from '../lib/themeLabels';
 import {
   getScenarioRuntimePresetConfig,
   loadScenarioRuntimePreset,
   matchScenarioRuntimePreset,
 } from '../lib/runtimePreset';
 import {
-  getGameplayBadgeSrc,
   getGameplayCardDefinition,
   getGameplayProfileLabel,
   getGameplayProfileSignatureHooks,
@@ -90,8 +84,7 @@ import {
   type ScenarioResultReplayPayload,
 } from '../lib/scenarioReplay';
 import { useEndingRoomStore } from '../stores/endingRoomStore';
-import { useUIPreferencesStore, type ResultViewMode } from '../stores/uiPreferencesStore';
-import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
+import { useUIPreferencesStore } from '../stores/uiPreferencesStore';
 import type {
   AgentInfo,
   CampaignFinalizeResult,
@@ -100,43 +93,34 @@ import type {
   Scenario,
   StoryData,
 } from '../types';
-import ShareModal from '../components/ShareModal';
-import SnapshotExportWizard from '../components/Export/SnapshotExportWizard';
-import EndingChatModal from '../components/EndingChatModal';
-import { QuotaBadge } from '../components/shared/QuotaBadge';
 import {
   buildCampaignSummaryFromExistingData,
   buildMomentHighlights,
   buildStoryKeyMoments,
   classifyCampaignFinalizeError,
   formatArchiveKeyMoment,
-  getBetOutcomeClass,
-  getBetOutcomeLabel,
   getCampaignBadgeCopy,
   getCampaignBoundaryMessage,
-  getEndingRoomCandidateAvatar,
   readCachedCampaignFinalizeResult,
   writeCachedCampaignFinalizeResult,
 } from './resultHelpers';
 import './ResultView.css';
-import { CounterfactualPanel } from '../components/CounterfactualPanel';
-import { CounterfactualBrand } from '../components/result/CounterfactualBrand';
-import { FactionTimeline } from '../components/FactionTimeline';
-import { ResumePanel } from '../components/ResumePanel';
+import HOPsAnimation from '../components/result/HOPsAnimation';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useFocusTrap } from '../hooks/useFocusTrap';
-import { ReturningBadge } from '../components/ReturningBadge';
-import { ResultActionCard } from '../components/result/ResultActionCard';
-import { ResultConversationWidget } from '../components/ResultConversationWidget';
-import { PolymarketCard } from '../components/result/PolymarketCard';
-import { SemanticScholarCard } from '../components/result/SemanticScholarCard';
-import { NewsApiCard } from '../components/result/NewsApiCard';
-import { MobileSourceSheet } from '../components/result/MobileSourceSheet';
-import { FinanceSourceCard } from '../components/result/FinanceSourceCard';
 import { type SourceCategoryState } from '../components/result/SourceCategoryCard';
 import { HookSummaryPanel } from '../components/result/HookSummaryPanel';
 import { DirectorDebriefPanel } from '../components/result/DirectorDebriefPanel';
 import { ProgressIndicator } from '../components/ProgressIndicator';
+import { ResultContextProvider, type ResultViewContextValue } from './result/ResultContext';
+import ResultHeader from './result/ResultHeader';
+import EndingCardsGrid from './result/EndingCardsGrid';
+import ExploreDeeperBridge from './result/ExploreDeeperBridge';
+import WebSourcesSection from './result/WebSourcesSection';
+import PredictionsSection from './result/PredictionsSection';
+import DirectorNotebook from './result/DirectorNotebook';
+import AgentRoster from './result/AgentRoster';
+import ResultModals from './result/ResultModals';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 const EMPTY_GAMEPLAY_PROFILE_HOOKS: string[] = [];
@@ -1329,9 +1313,6 @@ export default function ResultView() {
     return families.length > 0 ? families : undefined;
   }, [sourceFamilyContext]);
   const polymarketContext = sourceFamilyContext.polymarket;
-  const financeContext = sourceFamilyContext.finance;
-  const academicContext = sourceFamilyContext.academic;
-  const newsDeepContext = sourceFamilyContext.news_deep;
   const polymarketCapability = capabilities?.web_search?.providers?.polymarket
     ? {
       ...capabilities.web_search.providers.polymarket,
@@ -1700,525 +1681,89 @@ export default function ResultView() {
     );
   }
 
-  const mostUsedCardLabel = displayArchive?.mostUsedCard
-    ? (isZh
-      ? getGameplayCardDefinition(
-          displayArchive.mostUsedCard as Parameters<typeof getGameplayCardDefinition>[0],
-        ).labelZh
-      : getGameplayCardDefinition(
-          displayArchive.mostUsedCard as Parameters<typeof getGameplayCardDefinition>[0],
-        ).labelEn)
-    : t('result.archive_no_cards');
-  const bettingHitLabel =
-    !scenarioMeta
-      ? t('result.archive_no_bets')
-      : scenarioMeta.betting.bets.length > 0
-        ? resolvedBetCount === 0
-          ? t('result.archive_pending')
-          : t('result.archive_hit_ratio', { hit: hitBetCount, total: scenarioMeta.betting.bets.length })
-        : displayArchive?.bettingHit == null
-          ? t('result.archive_no_bets')
-          : displayArchive.bettingHit
-            ? t('result.archive_bet_hit')
-            : t('result.archive_bet_miss');
-  const dominantToneLabel = displayArchive?.dominantTone
-    ? getEndingToneLabel(displayArchive.dominantTone, isZh)
-    : t('result.archive_unset');
-  const archiveQuestion = storyData?.question ?? scenario?.question ?? t('result.archive_question_unset');
-  const archiveVerdictTitle = displayArchive?.dominantBranchTitle ?? analysisBranch?.title ?? t('result.archive_unset');
-  const archiveVerdictDetail = resultConversationContext?.insight
-    ?? resultConversationContext?.forkReason
-    ?? formattedArchiveKeyMoments[0]
-    ?? t('result.archive_verdict_fallback');
-  const archiveUsedCardCount = scenarioMeta?.cards.usageLog.length ?? 0;
-  const archiveCardDetail = archiveUsedCardCount > 0
-    ? t('result.archive_card_detail', { count: archiveUsedCardCount })
-    : t('result.archive_empty_card_hint');
-  const topArchiveBet = localBetOutcomes.find(({ outcome }) => outcome !== 'pending') ?? localBetOutcomes[0] ?? null;
-  const topArchiveBetConfidence = topArchiveBet
-    ? Math.round(topArchiveBet.bet.confidence <= 1 ? topArchiveBet.bet.confidence * 100 : topArchiveBet.bet.confidence)
-    : null;
-  const archiveBetDetail = topArchiveBet
-    ? t('result.archive_bet_detail', {
-        target: topArchiveBet.bet.targetLabel,
-        outcome: getBetOutcomeLabel(topArchiveBet.outcome, t),
-        confidence: topArchiveBetConfidence,
-        round: topArchiveBet.bet.placedAtRound,
-      })
-    : t('result.archive_empty_bet_hint');
-  const archiveCommitmentBranchTitle = scenarioMeta?.commitment.branchTitle
-    ?? (displayArchive?.commitmentOutcome ? displayArchive.dominantBranchTitle : null);
-  const archiveCommitmentDetail = archiveCommitmentBranchTitle
-    ? scenarioMeta?.commitment.committedAtRound
-      ? t('result.archive_commitment_detail_with_round', {
-          branch: archiveCommitmentBranchTitle,
-          round: scenarioMeta.commitment.committedAtRound,
-        })
-      : t('result.archive_commitment_detail', { branch: archiveCommitmentBranchTitle })
-    : t('result.archive_empty_commitment_hint');
-  const archiveCounterplayDetail = (displayArchive?.counterplayCardCount ?? 0) > 0
-    ? `${t('result.archive_last_counterplay')}: ${lastCounterplayCardLabel}`
-    : t('result.archive_empty_counterplay_hint');
-  const archiveGoalDetail = evaluatedObjectives.length > 0
-    ? evaluatedObjectives.map((objective) => `${objective.title} · ${objective.progress}`).join(' / ')
-    : t('result.archive_empty_goals_hint');
-  const archiveSignatureValue = signatureArcState?.label ?? t('result.archive_unset');
-  const archiveSignatureDetail = signatureArcState
-    ? `${signatureArcState.sequenceLabels.join(' → ')} · ${signatureArcState.completedSteps}/${signatureArcState.totalSteps}`
-    : t('result.archive_empty_signature_hint');
-  const archiveSystemValue = systemTracks
-    ? `${systemTracks.riskLabel} ${systemTracks.riskValue}/6`
-    : t('result.archive_unset');
-  const archiveSystemDetail = systemTracks
-    ? `${systemTracks.resourceLabel} ${systemTracks.resourceValue}/6 · ${systemTracks.pressure}`
-    : t('result.archive_empty_system_hint');
-  const archiveChallengeFeedback = challengeProgress
-    ? `${challengeProgress.completed ? t('result.archive_completed') : t('result.archive_in_progress')} · ${challengeFeedbackLabel ?? t('result.archive_cards_used', { count: challengeProgress.usedCards.length })}`
-    : isDailyChallenge
-      ? `${gameplayProfileLabel ? `${gameplayProfileLabel} · ` : ''}${t('result.archive_completed')}`
-      : t('result.archive_regular_run');
-  const visibleArchiveKeyMoments = formattedArchiveKeyMoments.slice(0, 4);
-  const hiddenArchiveKeyMoments = formattedArchiveKeyMoments.slice(4);
+  const contextValue: ResultViewContextValue = {
+    id,
+    activeScenarioId,
+    navigate,
+    t,
+    isZh,
+    resultViewMode,
+    setResultViewMode,
+    isWorkbenchMode,
+    isReplayMode,
+    capabilities,
+    capLoading,
+    scenario,
+    storyData,
+    agents,
+    predictions,
+    branches,
+    analysisBranch,
+    primaryAgentIdentityId,
+    notebookOpen,
+    setNotebookOpen,
+    webSourcesOpen,
+    setWebSourcesOpen,
+    blurCollapsedPanelFocus,
+    expandedBranch,
+    setExpandedBranch,
+    exporting,
+    exportError,
+    importError,
+    importingReplay,
+    showResultReplayImportAction,
+    handleExport,
+    handleImportReplay,
+    replayUrl,
+    permalinkCopied,
+    handleCopyPermalink,
+    challengeLinkCopied,
+    handleShareChallenge,
+    showShare,
+    setShowShare,
+    showSnapshotExport,
+    setShowSnapshotExport,
+    handleOpenEndingRoom,
+    handleOpenRoundtable,
+    scoring,
+    scoreError,
+    hasUnscored,
+    handleScore,
+    activeRuntimePresetLabel,
+    cfBranchId,
+    setCfBranchId,
+    cfInitialRound,
+    setCfInitialRound,
+    scenarioMeta,
+    campaignSummary,
+    campaignScenarioSummary,
+    campaignError,
+    campaignNotice,
+    isDailyChallenge,
+    resolvedProfileId,
+    gameplayProfileLabel,
+    gameplayProfileHooks,
+    shareSourceFamilies,
+  };
 
   return (
+    <ResultContextProvider value={contextValue}>
+
     <div className="result-view">
       <ProgressIndicator currentStep={4} />
-      {/* Header */}
-      <header className="result-header">
-        <button
-          className="btn btn-ghost result-back"
-          onClick={() => navigate(!isReplayMode && id ? `/sim/${id}` : '/')}
-        >
-          {t('result.back')}
-        </button>
-        <h1 className="result-title">{t('result.title')}</h1>
-        {storyData?.question && (
-          <p className="result-question">{storyData.question}</p>
-        )}
-        <p className="result-subtitle">
-          {t('result.subtitle')} — {t('result.ending_count', { count: branches.length })}
-        </p>
-        <div className="result-archive__chips">
-          <span className="archive-chip archive-chip--primary">
-            {t('common.runtime_preset_label')} · {activeRuntimePresetLabel}
-          </span>
-          {activeScenarioId && !isReplayMode && (
-            <>
-              <QuotaBadge scenarioId={activeScenarioId} type="conversation" />
-              <QuotaBadge scenarioId={activeScenarioId} type="replay" />
-            </>
-          )}
-        </div>
-        <div className="result-mode-toggle">
-          <ToggleGroup
-            type="single"
-            value={resultViewMode}
-            onValueChange={(val) => {
-              if (val === 'reader' || val === 'workbench') {
-                setResultViewMode(val as ResultViewMode);
-              }
-            }}
-            variant="outline"
-            size="sm"
-            aria-label={t('result.mode_toggle_label')}
-            className="result-mode-toggle__group"
-          >
-            <ToggleGroupItem value="reader" aria-label={t('result.mode_reader')}>
-              {t('result.mode_reader')}
-            </ToggleGroupItem>
-            <ToggleGroupItem value="workbench" aria-label={t('result.mode_workbench')}>
-              {t('result.mode_workbench')}
-            </ToggleGroupItem>
-          </ToggleGroup>
-        </div>
-        <div className="result-actions">
-          <div className="result-actions__primary">
-            {branches.length > 1 && (
-              <button
-                className="btn"
-                onClick={handleOpenRoundtable}
-                disabled={isReplayMode || scenario?.status !== 'done'}
-              >
-                {t('roundtable.entry_cta')}
-              </button>
-            )}
-            {showResultReplayImportAction && (
-              <button
-                className="btn btn-primary"
-                onClick={() => void handleImportReplay()}
-                disabled={importingReplay}
-              >
-                {importingReplay
-                  ? t('sim.replay.importing')
-                  : t('sim.replay.import_local')}
-              </button>
-            )}
-          </div>
-          <div className="result-actions__secondary">
-            <button
-              className="btn"
-              onClick={handleExport}
-              disabled={exporting || isReplayMode}
-            >
-              {exporting ? t('result.exporting') : t('result.export')}
-            </button>
-            <button
-              className="btn"
-              onClick={() => setShowShare(true)}
-              disabled={isReplayMode || !replayUrl}
-            >
-              {t('result.share_btn')}
-            </button>
-            <button
-              className="btn btn-ghost"
-              onClick={() => void handleCopyPermalink()}
-              disabled={!replayUrl}
-            >
-              {permalinkCopied ? t('result.permalink_copied') : t('result.copy_permalink_btn')}
-            </button>
-            <button
-              className="btn btn-ghost"
-              onClick={() => void handleShareChallenge()}
-              disabled={!scenario}
-            >
-              {challengeLinkCopied ? t('result.challenge_link_copied') : t('result.share_challenge_btn')}
-            </button>
-            {capabilities?.snapshot_export?.enabled && id && !isReplayMode && (
-              <button
-                className="btn btn-ghost"
-                onClick={() => setShowSnapshotExport(true)}
-                data-testid="result-snapshot-export-btn"
-              >
-                {t('snapshot.export_btn', 'Export snapshot')}
-              </button>
-            )}
-          </div>
-          <div className="result-actions__overflow">
-            <button
-              className="btn btn-ghost"
-              onClick={() => navigate('/leaderboard')}
-            >
-              {t('result.leaderboard_link')}
-            </button>
-            {isWorkbenchMode && activeScenarioId && capabilities?.causal_graph?.enabled && (
-              <a
-                className="btn btn-ghost"
-                href={`/sim/${encodeURIComponent(activeScenarioId)}/causal-map`}
-              >
-                {t('result.causal_graph_link', 'View Causal Graph')}
-              </a>
-            )}
-            {isWorkbenchMode && activeScenarioId && analysisBranch && !isReplayMode && cfBranchId && (
-              <a
-                className="btn btn-ghost"
-                href={`/result/${encodeURIComponent(activeScenarioId)}/compare?branch_a=${encodeURIComponent(analysisBranch.id)}&branch_b=${encodeURIComponent(cfBranchId)}`}
-              >
-                {t('result.compare_link', 'Compare branches')}
-              </a>
-            )}
-          </div>
-        </div>
-        {exportError && <p className="result-error result-error--spaced">{exportError}</p>}
-        {importError && <p className="result-error result-error--spaced">{importError}</p>}
-      </header>
+      <ResultHeader />
 
-      {/* Ending Cards Grid */}
-      {branches.length === 0 ? (
-        <div className="result-empty">
-          <p>{t('result.no_stories')}</p>
-        </div>
-      ) : (
-        <div className="endings-grid">
-          {branches.map((branch, index) => {
-            const isExpanded = expandedBranch === branch.id;
-            const hasDetailContent = Boolean(
-              branch.story
-              || branch.fork_reason
-              || (branch.key_moments && branch.key_moments.length > 0),
-            );
-            const detailId = `ending-detail-${branch.id}`;
-            const titleId = `ending-title-${branch.id}`;
-
-            return (
-              <article
-                key={branch.id}
-                className={`ending-card ${isExpanded ? 'expanded' : ''} ${index === 0 ? 'ending-card--primary' : ''}`}
-                ref={(el) => { if (el) el.style.setProperty('--card-delay', `${index * 0.1}s`); }}
-              >
-                {/* Summary-First: always visible */}
-                <div className="ending-header">
-                  <span className="ending-index">
-                    {t('result.ending_card')} {index + 1}
-                  </span>
-                  <h2 id={titleId} className="ending-title">{branch.title}</h2>
-                </div>
-
-                <div className="probability-section">
-                  <div className="probability-label">
-                    <span>{t('result.probability')}</span>
-                    <span className="probability-value">
-                      {((branch.probability ?? 0) * 100).toFixed(1)}%
-                    </span>
-                  </div>
-                  <div className="probability-bar">
-                    <div
-                      className={`probability-fill ${(branch.probability ?? 0) > 0.6 ? 'probability-fill--high' : (branch.probability ?? 0) < 0.3 ? 'probability-fill--low' : 'probability-fill--mid'}`}
-                      ref={(el) => { if (el) el.style.setProperty('--prob-fill', `${Math.max((branch.probability ?? 0) * 100, 2)}%`); }}
-                    />
-                  </div>
-                </div>
-
-                {/* Insight always visible as the card's key takeaway */}
-                {branch.insight && (
-                  <blockquote className="insight-quote">{branch.insight}</blockquote>
-                )}
-
-                {/* Collapsible detail section */}
-                {isExpanded && (
-                  <section
-                    id={detailId}
-                    className="ending-detail"
-                    aria-labelledby={titleId}
-                  >
-                    <div className="ending-detail__inner">
-                      {branch.fork_reason && (
-                        <div className="fork-reason">
-                          <span className="fork-label">{t('result.fork_reason')}</span>
-                          <p>{branch.fork_reason}</p>
-                        </div>
-                      )}
-
-                      <div className="story-section">
-                        <h3 className="section-label">{t('result.story')}</h3>
-                        <p className="story-text full">
-                          {branch.story || '\u2014'}
-                        </p>
-                      </div>
-
-                      {branch.key_moments && branch.key_moments.length > 0 && (
-                        <div className="moments-section">
-                          <h3 className="section-label">{t('result.key_moments')}</h3>
-                          <ol className="moments-timeline">
-                            {branch.key_moments.map((moment, mi) => (
-                              <li key={mi}>{moment}</li>
-                            ))}
-                          </ol>
-                        </div>
-                      )}
-                    </div>
-                  </section>
-                )}
-
-                {/* Expand/collapse toggle */}
-                {hasDetailContent && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost expand-btn"
-                    aria-expanded={isExpanded}
-                    aria-controls={isExpanded ? detailId : undefined}
-                    onClick={() =>
-                      setExpandedBranch(
-                        isExpanded ? null : branch.id,
-                      )
-                    }
-                  >
-                    {isExpanded
-                      ? t('result.collapse')
-                      : t('result.read_full')}
-                  </button>
-                )}
-
-                <div className="ending-room-actions ending-action-band">
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => void handleOpenEndingRoom(branch.id, 'ending_chamber')}
-                    disabled={!isReplayMode && scenario?.status !== 'done'}
-                  >
-                    {t('ending_room.entry_cta')}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => void handleOpenEndingRoom(branch.id, 'one_move_only')}
-                    disabled={!isReplayMode && scenario?.status !== 'done'}
-                  >
-                    {t('ending_room.one_move_cta')}
-                  </button>
-                  {branches.length > 1 && (
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={() => void handleOpenEndingRoom(branch.id, 'crossline_gallery')}
-                      disabled={!isReplayMode && scenario?.status !== 'done'}
-                    >
-                      {t('roundtable.gallery_title')}
-                    </button>
-                  )}
-                </div>
-              </article>
-            );
-          })}
-        </div>
+      {/* HOPs probability sampling animation */}
+      {branches.length >= 2 && (
+        <HOPsAnimation
+          branches={branches}
+          isPlaying={!isReplayMode}
+        />
       )}
 
-      {/* Explore Deeper Bridge */}
-      {isWorkbenchMode && branches.length > 0 && !loading && !capLoading && activeScenarioId && (
-        <section id="result-bridge" className="result-bridge">
-          <h2 className="result-bridge__heading">{t('result.next_steps_heading')}</h2>
-          <div className="result-bridge__grid">
-            {(() => {
-              const causalEnabled = capabilities?.causal_graph?.enabled ?? false;
-              const kgEnabled = capabilities?.kg_explorer?.enabled ?? false;
-              const replayEnabled = capabilities?.replay_trace?.enabled ?? false;
-              const compareEnabled = (capabilities?.counterfactual_replay?.enabled ?? false) && branches.length > 1;
-              const agentEnabled = !!(capabilities?.custom_agents?.enabled);
-              const scenarioId = encodeURIComponent(activeScenarioId);
-              const workbenchView = !causalEnabled && kgEnabled ? 'kg' : 'graph';
-              const workbenchBranchQuery = analysisBranch
-                ? `&branch=${encodeURIComponent(analysisBranch.id)}`
-                : '';
+      <EndingCardsGrid />
 
-              const entries: Array<{
-                key: string;
-                icon: string;
-                titleKey: string;
-                titleDefault: string;
-                descKey: string;
-                descDefault: string;
-                enabled: boolean;
-                href: string;
-                disabledKey: string;
-                disabledDefault: string;
-              }> = [
-                {
-                  key: 'causal',
-                  icon: '\u{1F578}️',
-                  titleKey: 'result.next_understand_why',
-                  titleDefault: 'Causal Graph',
-                  descKey: 'result.next_understand_why_desc',
-                  descDefault: 'Trace how events led to each ending.',
-                  enabled: causalEnabled,
-                  href: `/sim/${scenarioId}/causal-map${analysisBranch ? `?branch_id=${encodeURIComponent(analysisBranch.id)}` : ''}`,
-                  disabledKey: 'result.bridge_not_enabled',
-                  disabledDefault: 'Not enabled on this server.',
-
-
-                },
-                {
-                  key: 'replay',
-                  icon: '\u{1F3AC}',
-                  titleKey: 'result.next_replay_trace',
-                  titleDefault: 'Replay Trace',
-                  descKey: 'result.next_replay_trace_desc',
-                  descDefault: 'Step through the simulation round by round.',
-                  enabled: replayEnabled && !isReplayMode,
-                  href: `/replay/${scenarioId}`,
-                  disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
-                  disabledDefault: isReplayMode ? 'Not available in replay mode.' : 'Not enabled on this server.',
-
-
-                },
-                {
-                  key: 'compare',
-                  icon: '\u{1F500}',
-                  titleKey: 'result.next_replay_different',
-                  titleDefault: 'Compare Branches',
-                  descKey: 'result.next_replay_different_desc',
-                  descDefault: 'See how different branches diverged.',
-                  enabled: compareEnabled && !isReplayMode,
-                  href: analysisBranch && branches.length > 1
-                    ? `/result/${scenarioId}/compare?branch_a=${encodeURIComponent(analysisBranch.id)}&branch_b=${encodeURIComponent((branches.find(b => b.id !== analysisBranch.id) ?? branches[0]).id)}`
-                    : '#',
-                  disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : (branches.length <= 1 ? 'result.bridge_single_branch' : 'result.bridge_not_enabled'),
-                  disabledDefault: isReplayMode ? 'Not available in replay mode.' : (branches.length <= 1 ? 'Only one branch — nothing to compare.' : 'Not enabled on this server.'),
-
-
-                },
-                {
-                  key: 'workbench',
-                  icon: '\u{1F6E0}️',
-                  titleKey: 'result.bridge_workbench_title',
-                  titleDefault: 'Open Graph Workbench',
-                  descKey: 'result.bridge_workbench_desc',
-                  descDefault: 'Compare causal and knowledge graphs side by side',
-                  enabled: (causalEnabled || kgEnabled) && !isReplayMode,
-                  href: `/workbench/${scenarioId}?view=${workbenchView}${workbenchBranchQuery}`,
-                  disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
-                  disabledDefault: isReplayMode ? 'Not available in replay mode.' : 'Not enabled on this server.',
-                },
-                {
-                  key: 'agents',
-                  icon: '\u{1F9EC}',
-                  titleKey: 'result.next_ask_agent',
-                  titleDefault: 'Agent Library',
-                  descKey: 'result.next_ask_agent_desc',
-                  descDefault: 'Browse agent identities and cross-scenario memory.',
-                  enabled: agentEnabled && !isReplayMode,
-                  href: '/agents',
-                  disabledKey: 'result.bridge_agents_disabled',
-                  disabledDefault: 'Agent identity is not enabled.',
-                },
-              ];
-
-              return entries.map((entry) => {
-                const isDisabled = !entry.enabled;
-                const statusId = `result-bridge-${entry.key}-status`;
-                return isDisabled ? (
-                  <div
-                    key={entry.key}
-                    className="result-bridge__card result-bridge__card--disabled"
-                    aria-disabled="true"
-                    tabIndex={-1}
-                    role="link"
-                    aria-describedby={statusId}
-                  >
-                    <span className="result-bridge__card-icon" aria-hidden="true">{entry.icon}</span>
-                    <span className="result-bridge__card-name">{t(entry.titleKey, entry.titleDefault)}</span>
-                    <span className="result-bridge__card-desc">{t(entry.descKey, entry.descDefault)}</span>
-                    <span id={statusId} className="result-bridge__card-status">{t(entry.disabledKey, entry.disabledDefault)}</span>
-                  </div>
-                ) : (
-                  <a
-                    key={entry.key}
-                    className="result-bridge__card"
-                    href={entry.href}
-                  >
-                    <span className="result-bridge__card-icon" aria-hidden="true">{entry.icon}</span>
-                    <span className="result-bridge__card-name">{t(entry.titleKey, entry.titleDefault)}</span>
-                    <span className="result-bridge__card-desc">{t(entry.descKey, entry.descDefault)}</span>
-                  </a>
-                );
-              });
-            })()}
-            {(() => {
-              const shareDisabled = isReplayMode || !replayUrl;
-              const shareStatusId = 'result-bridge-share-status';
-              const shareReason = isReplayMode
-                ? t('result.bridge_disabled_replay')
-                : !replayUrl
-                  ? t('result.bridge_disabled_loading')
-                  : undefined;
-              return (
-                <button
-                  className={`result-bridge__card${shareDisabled ? ' result-bridge__card--disabled' : ''}`}
-                  onClick={() => { if (!shareDisabled) setShowShare(true); }}
-                  disabled={shareDisabled}
-                  title={shareReason}
-                  aria-describedby={shareDisabled ? shareStatusId : undefined}
-                >
-                  <span className="result-bridge__card-icon" aria-hidden="true">📋</span>
-                  <span className="result-bridge__card-name">{t('result.next_share')}</span>
-                  <span className="result-bridge__card-desc">{t('result.next_share_desc')}</span>
-                  {shareDisabled && shareReason && (
-                    <span id={shareStatusId} className="result-bridge__card-status">{shareReason}</span>
-                  )}
-                </button>
-              );
-            })()}
-          </div>
-        </section>
-      )}
+      <ExploreDeeperBridge />
 
       {/* Hook Summary Panel */}
       {isWorkbenchMode && activeScenarioId && !loading && !capLoading && (
@@ -2229,440 +1774,31 @@ export default function ResultView() {
         />
       )}
 
-      {/* Web Sources Section */}
-      {scenario?.web_search_context
-        && typeof scenario.web_search_context.query === 'string'
-        && Array.isArray(scenario.web_search_context.snippets) && (
-        <section className="result-web-sources">
-          <button
-            type="button"
-            className="result-web-sources__trigger"
-            aria-expanded={webSourcesOpen}
-            onClick={() => setWebSourcesOpen((prev) => !prev)}
-          >
-            <span>{t('result.web_sources_title')}</span>
-            <span aria-hidden="true">{webSourcesOpen ? '\u25B2' : '\u25BC'}</span>
-          </button>
-          <div
-            className={`result-web-sources__body ${webSourcesOpen ? 'is-open' : ''}`}
-            aria-hidden={!webSourcesOpen}
-            inert={!webSourcesOpen || undefined}
-            onFocusCapture={webSourcesOpen ? undefined : blurCollapsedPanelFocus}
-          >
-            <div className="result-web-sources__inner">
-              <div className="result-web-sources__meta">
-                <span>{t('result.web_sources_query')}: {scenario.web_search_context.query}</span>
-                {typeof scenario.web_search_context.provider === 'string' && (
-                  <span>{t('result.web_sources_provider')}: {scenario.web_search_context.provider}</span>
-                )}
-                {scenario.web_search_context.cached && (
-                  <span>{t('result.web_sources_cached')}</span>
-                )}
-              </div>
-              <div className="result-web-sources__list">
-                {scenario.web_search_context.snippets
-                  .filter((s): s is { text: string; source_url: string } =>
-                    s != null && typeof s.text === 'string')
-                  .map((snippet, idx) => (
-                  <article key={idx} className="result-web-sources__item">
-                    <p className="result-web-sources__item-text">{snippet.text}</p>
-                    {snippet.source_url && /^https?:\/\//i.test(snippet.source_url) && (
-                      <a
-                        className="result-web-sources__item-url"
-                        href={snippet.source_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title={t('result.web_sources_visit')}
-                      >
-                        {snippet.source_url}
-                      </a>
-                    )}
-                  </article>
-                ))}
-                {scenario.web_search_context.snippets.length === 0 && (
-                  <p className="result-web-sources__item-text">
-                    {t('result.web_sources_empty', {
-                      defaultValue: 'No live web sources matched this query.',
-                    })}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
+      <WebSourcesSection />
 
-      {/* Predictions Section (P5-B) */}
-      {predictions.length > 0 && (
-        <section className="result-predictions">
-          <h2 className="result-predictions-title">{t('result.predictions_title')}</h2>
-          {hasUnscored && !isReplayMode && (
-            <button
-              className="btn result-score-btn"
-              onClick={handleScore}
-              disabled={scoring}
-            >
-              {scoring ? t('result.scoring') : t('result.score_predictions')}
-            </button>
-          )}
-          {scoreError && <p className="result-error">{scoreError}</p>}
-          <div className="predictions-grid">
-            {predictions.map((p) => (
-              <div key={p.id} className="prediction-card">
-                {(() => {
-                  const structuredBet = parseStructuredPredictionText(p.prediction_text);
-                  const structuredOutcome = structuredBet
-                    ? resolveStructuredBetOutcome(structuredBet.meta, betOutcomeContext)
-                    : null;
-                  return (
-                    <>
-                <div className="prediction-card__header">
-                  <span className="prediction-card__user">{p.user_name}</span>
-                  <span className="prediction-card__confidence">
-                    {Math.round((p.confidence ?? 0) * 100)}%
-                  </span>
-                </div>
-                {structuredBet && (
-                  <div className="prediction-card__bet-row">
-                    <p className="prediction-card__bet-kind">
-                      {getStructuredBetKindLabel(structuredBet.meta.kind, isZh)}
-                      {' · '}
-                      {structuredBet.meta.targetLabel}
-                    </p>
-                    {structuredOutcome && (
-                      <span className={getBetOutcomeClass(structuredOutcome)}>
-                        {getBetOutcomeLabel(structuredOutcome, t)}
-                      </span>
-                    )}
-                  </div>
-                )}
-                <p className="prediction-card__text">{getPredictionRationale(p.prediction_text)}</p>
-                {p.score != null && (
-                  <div className="prediction-card__score">
-                    <span className="score-value">{p.score.toFixed(0)}</span>
-                    <span className="score-label">/ 100</span>
-                    {p.score_reason && (
-                      <p className="score-reason">{p.score_reason}</p>
-                    )}
-                  </div>
-                )}
-                    </>
-                  );
-                })()}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      <PredictionsSection betOutcomeContext={betOutcomeContext} />
 
-      {/* Director's Notebook fold */}
-      <section id="result-director-notebook" className="result-director-notebook">
-        <button
-          type="button"
-          className="result-director-notebook__trigger"
-          aria-expanded={notebookOpen}
-          aria-label={t(notebookOpen ? 'result_ux.director_notebook_collapse' : 'result_ux.director_notebook_expand')}
-          aria-describedby="director-notebook-hint"
-          onClick={() => setNotebookOpen((prev) => !prev)}
-        >
-          <span className="result-director-notebook__trigger-copy">
-            <span>{t('result_ux.director_notebook')}</span>
-            <small id="director-notebook-hint">{t('result_ux.director_notebook_hint')}</small>
-          </span>
-          <span aria-hidden="true">{notebookOpen ? '\u25B2' : '\u25BC'}</span>
-        </button>
-        <div
-          className={`result-director-notebook__body ${notebookOpen ? 'is-open' : ''}`}
-          aria-hidden={!notebookOpen}
-          inert={!notebookOpen || undefined}
-          onFocusCapture={notebookOpen ? undefined : blurCollapsedPanelFocus}
-        >
-          <div className="result-director-notebook__inner">
-
-      {scenarioMeta && (
-        <section className="result-archive">
-          <div className="result-archive__header">
-            <div>
-              <span className="result-archive__eyebrow">{t('result.archive_brief_label')}</span>
-              <h2 className="result-archive__title">
-                <img src={getGameplayBadgeSrc('archive_record')} alt="" aria-hidden="true" />
-                <span>{t('result.archive_title')}</span>
-              </h2>
-              <p className="result-archive__lead">{t('result.archive_lead')}</p>
-            </div>
-            <div className="result-archive__grade" aria-label={t('result.archive_grade')}>
-              <span>{t('result.archive_grade')}</span>
-              <strong>{displayArchive?.archiveGrade ?? 'C'}</strong>
-            </div>
-          </div>
-
-          <div className="result-archive__meta">
-            {gameplayProfileLabel && (
-              <span className="archive-chip archive-chip--primary">{gameplayProfileLabel}</span>
-            )}
-            {scenario?.scene_theme && (
-              <span className="archive-chip">{getTheaterThemeLabel(scenario.scene_theme, isZh)}</span>
-            )}
-            {isDailyChallenge && (
-              <span className="archive-chip archive-chip--challenge">
-                <img src={getGameplayBadgeSrc('daily_challenge')} alt="" aria-hidden="true" />
-                <span>{t('result.archive_daily_challenge')}</span>
-              </span>
-            )}
-            {hasLocalDirectorState && (
-              <span className="archive-chip">
-                {t('result.archive_director_points', {
-                  remaining: scenarioMeta.director.remainingPoints,
-                  max: scenarioMeta.director.maxPoints,
-                })}
-              </span>
-            )}
-            {displayArchive?.bettingHit === true && (
-              <span className="archive-chip archive-chip--winner">
-                <img src={getGameplayBadgeSrc('bet_winner')} alt="" aria-hidden="true" />
-                <span>{t('result.archive_bet_hit')}</span>
-              </span>
-            )}
-            {directorStyleLabel && (
-              <span className="archive-chip">
-                {directorStyleLabel}
-              </span>
-            )}
-          </div>
-          {gameplayProfileHooks.length > 0 && (
-            <div className="result-archive__hooks" aria-label={t('common.theme_hooks_aria')}>
-              {gameplayProfileHooks.map((hook) => (
-                <span key={hook} className="archive-chip archive-chip--hook">
-                  {hook}
-                </span>
-              ))}
-            </div>
-          )}
-
-          <div className="result-archive__brief">
-            <div className="result-archive__question">
-              <span>{t('result.archive_question_label')}</span>
-              <p>{archiveQuestion}</p>
-            </div>
-            <div className="result-archive__verdict">
-              <span>{t('result.archive_verdict_label')}</span>
-              <strong>{archiveVerdictTitle}</strong>
-              <p>{archiveVerdictDetail}</p>
-            </div>
-          </div>
-
-          <div className="archive-decision-grid">
-            <article className="archive-decision-panel archive-decision-panel--primary">
-              <h3>{t('result.archive_group_judgement')}</h3>
-              <dl className="archive-signal-list">
-                <div>
-                  <dt>{t('result.archive_dominant_branch')}</dt>
-                  <dd>
-                    <strong>{archiveVerdictTitle}</strong>
-                    <span>{t('result.archive_dominant_branch_hint')}</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t('result.archive_dominant_tone')}</dt>
-                  <dd>
-                    <strong>{dominantToneLabel}</strong>
-                    <span>{t('result.archive_dominant_tone_hint')}</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t('result.archive_resonance')}</dt>
-                  <dd>
-                    <strong>{profileResonanceLabel}</strong>
-                    <span>{t('result.archive_resonance_hint')}</span>
-                  </dd>
-                </div>
-              </dl>
-            </article>
-
-            <article className="archive-decision-panel">
-              <h3>{t('result.archive_group_actions')}</h3>
-              <dl className="archive-signal-list">
-                <div>
-                  <dt>{t('result.archive_most_used_card')}</dt>
-                  <dd>
-                    <strong>{mostUsedCardLabel}</strong>
-                    <span>{archiveCardDetail}</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t('result.archive_bet_result')}</dt>
-                  <dd>
-                    <strong>{bettingHitLabel}</strong>
-                    <span>{archiveBetDetail}</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t('result.archive_worldline_commitment_label')}</dt>
-                  <dd>
-                    <strong>{commitmentOutcomeLabel}</strong>
-                    <span>{archiveCommitmentDetail}</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t('result.archive_counterplay')}</dt>
-                  <dd>
-                    <strong>{counterplaySummaryLabel}</strong>
-                    <span>{archiveCounterplayDetail}</span>
-                  </dd>
-                </div>
-              </dl>
-            </article>
-
-            <article className="archive-decision-panel">
-              <h3>{t('result.archive_group_next')}</h3>
-              <dl className="archive-signal-list">
-                <div>
-                  <dt>{t('result.archive_director_goals_label')}</dt>
-                  <dd>
-                    <strong>{completedObjectiveCount}/{evaluatedObjectives.length || 0}</strong>
-                    <span>{archiveGoalDetail}</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t('result.archive_signature_arc_label')}</dt>
-                  <dd>
-                    <strong>{archiveSignatureValue}</strong>
-                    <span>{archiveSignatureDetail}</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t('result.archive_system_tracks_label')}</dt>
-                  <dd>
-                    <strong>{archiveSystemValue}</strong>
-                    <span>{archiveSystemDetail}</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t('result.archive_challenge_feedback')}</dt>
-                  <dd>
-                    <strong>{archiveChallengeFeedback}</strong>
-                    <span>{t('result.archive_challenge_feedback_hint')}</span>
-                  </dd>
-                </div>
-              </dl>
-            </article>
-          </div>
-
-          <div className="result-archive__evidence">
-            <div className="result-archive__evidence-head">
-              <div>
-                <h3>{t('result.archive_evidence_title')}</h3>
-                <p>{t('result.archive_evidence_lead')}</p>
-              </div>
-              <div className="archive-evidence-counts" aria-label={t('result.archive_evidence_counts_label')}>
-                <span>{t('result.archive_count_cards', { count: scenarioMeta.cards.usageLog.length })}</span>
-                <span>{t('result.archive_count_bets', { count: localBetOutcomes.length })}</span>
-                <span>{t('result.archive_count_moments', { count: formattedArchiveKeyMoments.length })}</span>
-                <span>{t('result.archive_count_branches', { count: displayBranchSnapshots.length })}</span>
-              </div>
-            </div>
-
-            <div className="archive-ledger-shell">
-              <section className="archive-ledger-panel archive-ledger-panel--moments">
-                <h3>{t('result.archive_moments_section')}</h3>
-                {visibleArchiveKeyMoments.length > 0 ? (
-                  <>
-                    <ol className="archive-moment-timeline">
-                      {visibleArchiveKeyMoments.map((moment, index) => (
-                        <li key={`${moment}-${index}`}>
-                          <span className="archive-moment-timeline__index">{String(index + 1).padStart(2, '0')}</span>
-                          <span className="archive-moment-timeline__text" title={moment}>{moment}</span>
-                        </li>
-                      ))}
-                    </ol>
-                    {hiddenArchiveKeyMoments.length > 0 && (
-                      <details className="archive-moment-more">
-                        <summary>{t('result.archive_moments_more', { count: hiddenArchiveKeyMoments.length })}</summary>
-                        <ol className="archive-moment-timeline archive-moment-timeline--compact">
-                          {hiddenArchiveKeyMoments.map((moment, index) => (
-                            <li key={`${moment}-${index + visibleArchiveKeyMoments.length}`}>
-                              <span className="archive-moment-timeline__index">
-                                {String(index + visibleArchiveKeyMoments.length + 1).padStart(2, '0')}
-                              </span>
-                              <span className="archive-moment-timeline__text" title={moment}>{moment}</span>
-                            </li>
-                          ))}
-                        </ol>
-                      </details>
-                    )}
-                  </>
-                ) : (
-                  <p className="archive-empty-note">{t('result.archive_moments_empty')}</p>
-                )}
-              </section>
-
-              <div className="archive-ledger-rail">
-                <section className="archive-ledger-panel">
-                  <h3>{t('result.archive_cards_section')}</h3>
-                  {scenarioMeta.cards.usageLog.length > 0 ? (
-                    <div className="archive-compact-list">
-                      {scenarioMeta.cards.usageLog.slice(0, 3).map((usage, index) => (
-                        <div key={`${usage.usedAt}-${index}`} className="archive-compact-row">
-                          <span>{`R${usage.round}`}</span>
-                          <strong>{isZh ? getGameplayCardDefinition(usage.cardId).labelZh : getGameplayCardDefinition(usage.cardId).labelEn}</strong>
-                          <small>{usage.branchTitle}</small>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="archive-empty-note">{t('result.archive_cards_empty_short')}</p>
-                  )}
-                </section>
-
-                <section className="archive-ledger-panel">
-                  <h3>{t('result.archive_bets_section')}</h3>
-                  {localBetOutcomes.length > 0 ? (
-                    <div className="archive-compact-list">
-                      {localBetOutcomes.slice(0, 3).map(({ bet, outcome }) => (
-                        <div key={bet.betId} className="archive-compact-row archive-compact-row--bet">
-                          <span>{`R${bet.placedAtRound}`}</span>
-                          <strong>{bet.targetLabel}</strong>
-                          <small>
-                            {Math.round(bet.confidence <= 1 ? bet.confidence * 100 : bet.confidence)}
-                            %
-                            {' · '}
-                            {getBetOutcomeLabel(outcome, t)}
-                          </small>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="archive-empty-note">{t('result.archive_bets_empty_short')}</p>
-                  )}
-                </section>
-
-                <section className="archive-ledger-panel">
-                  <h3>{t('result.archive_branches_section')}</h3>
-                  {displayBranchSnapshots.length > 0 ? (
-                    <div className="archive-compact-list">
-                      {displayBranchSnapshots.slice(0, 4).map((snapshot) => (
-                        <div key={snapshot.branchId} className="archive-compact-row archive-compact-row--branch">
-                          <span>{t('result.archive_branch_probability', { percent: Math.round(snapshot.probability * 100) })}</span>
-                          <strong>{snapshot.title}</strong>
-                          <span className="archive-branch-meter" aria-hidden="true">
-                            <span style={{ width: `${Math.round(snapshot.probability * 100)}%` }} />
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="archive-empty-note">{t('result.archive_branches_empty')}</p>
-                  )}
-                </section>
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
-
-          </div>{/* end .result-director-notebook__inner */}
-        </div>{/* end .result-director-notebook__body */}
-      </section>{/* end .result-director-notebook */}
+      <DirectorNotebook
+        displayArchive={displayArchive}
+        hasLocalDirectorState={hasLocalDirectorState}
+        resolvedBetCount={resolvedBetCount}
+        hitBetCount={hitBetCount}
+        formattedArchiveKeyMoments={formattedArchiveKeyMoments}
+        localBetOutcomes={localBetOutcomes}
+        evaluatedObjectives={evaluatedObjectives}
+        signatureArcState={signatureArcState}
+        systemTracks={systemTracks}
+        challengeProgress={challengeProgress}
+        challengeFeedbackLabel={challengeFeedbackLabel}
+        lastCounterplayCardLabel={lastCounterplayCardLabel}
+        commitmentOutcomeLabel={commitmentOutcomeLabel}
+        counterplaySummaryLabel={counterplaySummaryLabel}
+        completedObjectiveCount={completedObjectiveCount}
+        displayBranchSnapshots={displayBranchSnapshots}
+        directorStyleLabel={directorStyleLabel}
+        profileResonanceLabel={profileResonanceLabel}
+        resultConversationContext={resultConversationContext}
+      />
 
       {campaignSummary && (
         <DirectorDebriefPanel
@@ -2727,459 +1863,38 @@ export default function ResultView() {
         <p className="result-error result-error--spaced">{campaignError}</p>
       )}
 
-      {/* Agent Roster */}
-      {isWorkbenchMode && agents.length > 0 && (
-        <section className="result-agents">
-          <h2 className="result-agents-title">{t('result.agents')}</h2>
-          <div className="result-agents-grid">
-            {agents.map((agent) => (
-              <div key={agent.id} className="result-agent-card">
-                <span className="result-agent-name">{agent.name}</span>
-                <span className="result-agent-role">{agent.role}</span>
-                {agent.tier && (
-                  <span className={`tier-badge tier-${agent.tier.toLowerCase()}`}>
-                    {agent.tier}
-                  </span>
-                )}
-                {capabilities?.agent_identity?.enabled && (
-                  <ReturningBadge isReturning={!!agent.is_returning} displayName={agent.name} />
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      <AgentRoster
+        factionTimelineBranch={factionTimelineBranch}
+        factionTimelineLead={factionTimelineLead}
+      />
 
-      {/* ── Phase 3 Replay-Safe Integration ───────────────── */}
-      {isWorkbenchMode && activeScenarioId && (capabilities?.causal_graph?.enabled || capabilities?.factions?.enabled) && (
-        <section className="result-extension-section">
-          {capabilities?.causal_graph?.enabled && (
-            <div className="result-extension-section__item">
-              <a
-                href={`/sim/${encodeURIComponent(activeScenarioId)}/causal-map`}
-                className="result-extension-link"
-              >
-                {t('result.causal_graph_link', 'View Causal Graph →')}
-              </a>
-            </div>
-          )}
-          {capabilities?.factions?.enabled && factionTimelineBranch && (
-            <section
-              aria-labelledby="result-faction-timeline-heading"
-              className="result-faction-panel"
-            >
-              <div className="result-faction-panel__header">
-                <p
-                  className="result-faction-panel__eyebrow"
-                >
-                  {t('result.faction_timeline_branch_analysis_label', 'Branch analysis')}
-                </p>
-                <h2
-                  id="result-faction-timeline-heading"
-                  className="result-faction-panel__title"
-                >
-                  {t('result.faction_timeline_title', 'Faction timeline analysis')}
-                </h2>
-                <p className="result-faction-panel__lead">
-                  {factionTimelineLead}
-                </p>
-              </div>
-              <FactionTimeline
-                scenarioId={activeScenarioId}
-                branchId={factionTimelineBranch.id}
-                branchLabel={factionTimelineBranch.title}
-                visible={true}
-                agentNames={Object.fromEntries(agents.map((a) => [a.id, a.name]))}
-              />
-            </section>
-          )}
-        </section>
-      )}
-
-      {/* ── Phase 3 Live-Only Integration ────────────────── */}
-      {isWorkbenchMode && id && !isReplayMode && (
-        <section className="result-extension-section">
-          {capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
-            <>
-              <CounterfactualBrand
-                branches={branches}
-                scenarioId={id}
-                onExplore={(_branchId, round) => {
-                  setCfInitialRound(round);
-                  if (typeof window === 'undefined') return;
-                  const panel = window.document.getElementById('cf-replacement');
-                  if (panel) {
-                    const behavior: ScrollBehavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-                      ? 'auto'
-                      : 'smooth';
-                    panel.scrollIntoView({ behavior, block: 'center' });
-                    (panel as HTMLTextAreaElement).focus({ preventScroll: true });
-                  }
-                }}
-              />
-              <CounterfactualPanel
-                scenarioId={id}
-                branchId={analysisBranch?.id ?? ''}
-                agents={agents}
-                messages={scenario?.messages ?? []}
-                totalRounds={scenario?.total_rounds ?? 10}
-                initialRound={cfInitialRound}
-                onCreated={(branchId) => setCfBranchId(branchId)}
-              />
-              {cfBranchId && (
-                <div className="result-extension-section__item result-extension-section__item--compact">
-                  <a
-                    href={`/result/${encodeURIComponent(id)}/compare?branch_a=${encodeURIComponent(analysisBranch?.id ?? '')}&branch_b=${encodeURIComponent(cfBranchId)}`}
-                    className="result-extension-link result-extension-link--small"
-                  >
-                    {t('result.compare_link', 'Compare branches →')}
-                  </a>
-                </div>
-              )}
-            </>
-          )}
-          {capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
-            <ResumePanel
-              scenarioId={id}
-              branches={branches}
-              totalRounds={scenario?.total_rounds ?? 10}
-            />
-          )}
-        </section>
-      )}
-
-      {/* Share Modal (P6) */}
-      {showShare && id && !isReplayMode && (
-        <ShareModal
-          scenarioId={id}
-          shareContext={shareFlavorContext}
-          branches={branches.map((b) => ({ ...b, fork_round: 0, summary: b.insight ?? '', status: b.status as 'COMPLETED' | 'ACTIVE' | 'PRUNED' }))}
-          agentNames={agents.slice(0, 3).map((a) => a.name)}
-          sourceFamilies={shareSourceFamilies}
-          onAutomationStateChange={setShareAutomation}
-          onClose={() => setShowShare(false)}
-        />
-      )}
-      {/* S3-6: Snapshot export wizard */}
-      {showSnapshotExport && id && !isReplayMode && (
-        <SnapshotExportWizard
-          scenarioId={id}
-          isOpen={showSnapshotExport}
-          onClose={() => setShowSnapshotExport(false)}
-          scenarioTitle={scenario?.question ?? undefined}
-        />
-      )}
-      {pendingEndingRoomPicker && pendingEndingRoomBranch && (
-        <div className="ending-room-picker-overlay" onClick={() => setPendingEndingRoomPicker(null)}>
-          <div
-            ref={endingRoomPickerDialogRef}
-            className="ending-room-picker"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="ending-room-picker-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <header className="ending-room-picker__header">
-              <div>
-                <p className="ending-room-picker__kicker">
-                  {pendingEndingRoomPicker.roomType === 'one_move_only'
-                    ? t('ending_room.one_move_cta')
-                    : t('ending_room.entry_cta')}
-                </p>
-                <h3 id="ending-room-picker-title">
-                  {t('result.ending_room_picker_title')}
-                </h3>
-                <p>
-                  {pendingEndingRoomBranch.title}
-                  {' · '}
-                  {t('result.ending_room_picker_limit', { count: pendingEndingRoomPicker.maxSelectable })}
-                </p>
-              </div>
-              <button
-                type="button"
-                ref={endingRoomPickerCloseRef}
-                className="ending-room-picker__close"
-                onClick={() => setPendingEndingRoomPicker(null)}
-                aria-label={t('common.close')}
-              >
-                ×
-              </button>
-            </header>
-
-            <div className="ending-room-picker__body">
-              {pendingEndingRoomCandidates.length === 0 ? (
-                <p className="ending-room-picker__empty">
-                  {t('result.ending_room_picker_empty')}
-                </p>
-              ) : (
-                pendingEndingRoomCandidates.map((candidate) => {
-                  const selected = pendingEndingRoomPicker.selectedAgentIds.includes(candidate.id);
-                  return (
-                    <button
-                      key={candidate.id}
-                      type="button"
-                      className={`ending-room-picker__card ${selected ? 'is-selected' : ''}`}
-                      aria-pressed={selected}
-                      onClick={() => {
-                        setPendingEndingRoomPicker((current) => {
-                          if (!current || current.branchId !== pendingEndingRoomBranch.id) {
-                            return current;
-                          }
-                          const alreadySelected = current.selectedAgentIds.includes(candidate.id);
-                          if (alreadySelected) {
-                            return {
-                              ...current,
-                              selectedAgentIds: current.selectedAgentIds.filter((item) => item !== candidate.id),
-                            };
-                          }
-                          if (current.maxSelectable === 1) {
-                            return { ...current, selectedAgentIds: [candidate.id] };
-                          }
-                          if (current.selectedAgentIds.length >= current.maxSelectable) {
-                            return current;
-                          }
-                          return {
-                            ...current,
-                            selectedAgentIds: [...current.selectedAgentIds, candidate.id],
-                          };
-                        });
-                      }}
-                    >
-                      <img
-                        className="ending-room-picker__avatar"
-                        src={getEndingRoomCandidateAvatar(candidate.role, candidate.name)}
-                        alt=""
-                        aria-hidden="true"
-                      />
-                      <div className="ending-room-picker__card-copy">
-                        <strong>{candidate.name}</strong>
-                        <span>{candidate.role}</span>
-                        {candidate.persona && <small>{candidate.persona}</small>}
-                        <em>
-                          {candidate.contributionCount > 0
-                            ? t('result.ending_room_picker_impact', {
-                                impact: Math.round(candidate.impactScore * 100),
-                                turns: candidate.contributionCount,
-                                hinges: candidate.keyMomentHits,
-                                round: candidate.lastRound,
-                              })
-                            : t('result.ending_room_picker_fallback_roster')}
-                        </em>
-                        {candidate.fallbackCast && (
-                          <em className="ending-room-picker__fallback">
-                            {t('result.ending_room_picker_fallback_lineup')}
-                          </em>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-
-            <footer className="ending-room-picker__footer">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => setPendingEndingRoomPicker(null)}
-              >
-                {t('common.cancel')}
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => openEndingRoomDirect(
-                  pendingEndingRoomPicker.branchId,
-                  pendingEndingRoomPicker.roomType,
-                  pendingEndingRoomPicker.selectedAgentIds,
-                )}
-                disabled={
-                  pendingEndingRoomCandidates.length > 0
-                  && pendingEndingRoomPicker.selectedAgentIds.length === 0
-                }
-              >
-                {t('result.ending_room_picker_enter')}
-              </button>
-            </footer>
-          </div>
-        </div>
-      )}
-      {activeEndingRoomBranch && scenario && (
-        <EndingChatModal
-          open={Boolean(activeEndingRoomBranch)}
-          scenarioId={scenario.id}
-          branch={activeEndingRoomBranch}
-          roomType={activeEndingRoomMode}
-          selectedBranchIds={activeEndingRoomSelectedBranchIds}
-          profileId={resolvedProfileId}
-          profileLabel={gameplayProfileLabel}
-          profileHooks={gameplayProfileHooks}
-          selectedAgentIds={activeEndingRoomSelectedAgentIds}
-          galleryBranches={branches}
-          language={isZh ? 'zh' : 'en'}
-          readOnly={isReplayMode || Boolean(activeEndingRoomReplayPayload)}
-          fallbackMessages={
-            activeEndingRoomBranch
-              ? (scenario?.messages ?? []).filter((message) => message.branch === activeEndingRoomBranch.id)
-              : []
-          }
-          replayState={activeEndingRoomReplayPayload ? {
-            snapshot: activeEndingRoomReplayPayload.roomSnapshot,
-            result: activeEndingRoomReplayPayload.roomResult,
-            activeThreadId: activeEndingRoomReplayPayload.activeThreadId,
-            selectedAgentIds: activeEndingRoomReplayPayload.selectedAgentIds,
-          } : null}
-          headerActions={endingRoomHeaderActions}
-          onAutomationStateChange={setEndingRoomAutomation}
-          onModeChange={handleEndingRoomModeChange}
-          onClose={handleCloseEndingRoom}
-        />
-      )}
-      {/* FE-5 + P1-5: 4 source category grid (desktop) + mobile Sheet + Action Card.
-          P1-5: render based on scenario payload presence (historical data) OR
-          current capability state (live), so that completed scenarios remain
-          viewable when feature flags are toggled off. Historical-only cards
-          show a "recorded" badge to distinguish from live data. */}
-      {(() => {
-        const providers = capabilities?.web_search?.providers;
-        const hasItems = (entry: { items?: unknown[] } | null | undefined): boolean =>
-          Boolean(entry && Array.isArray(entry.items) && entry.items.length > 0);
-        const hasPolymarketData = hasItems(polymarketContext);
-        const hasFinanceData = hasItems(financeContext);
-        const hasAcademicData = hasItems(academicContext);
-        const hasNewsDeepData = hasItems(newsDeepContext);
-        const polymarketLive = Boolean(providers?.polymarket?.enabled);
-        const financeLive = Boolean(providers?.finance?.enabled);
-        const academicLive = Boolean(providers?.academic?.enabled);
-        const newsDeepLive = Boolean(providers?.news_deep?.enabled);
-        const showPolymarket = polymarketLive || hasPolymarketData;
-        const showFinance = financeLive || hasFinanceData;
-        const showAcademic = academicLive || hasAcademicData;
-        const showNewsDeep = newsDeepLive || hasNewsDeepData;
-        if (!showPolymarket && !showFinance && !showAcademic && !showNewsDeep) {
-          return null;
-        }
-        const polymarketHistorical = !polymarketLive && hasPolymarketData;
-        const financeHistorical = !financeLive && hasFinanceData;
-        const academicHistorical = !academicLive && hasAcademicData;
-        const newsDeepHistorical = !newsDeepLive && hasNewsDeepData;
-        const historicalLabel = t('result.source_historical', { defaultValue: 'Recorded' });
-        const historicalTooltip = t('result.source_historical_tooltip', {
-          defaultValue: 'This data was recorded when the scenario was created',
-        });
-        const renderHistoricalBadge = (family: string) => (
-          <span
-            className="result-source-card__historical-badge"
-            data-testid={`result-sources-${family}-historical-badge`}
-            title={historicalTooltip}
-            aria-label={`${historicalLabel}: ${historicalTooltip}`}
-          >
-            {historicalLabel}
-          </span>
-        );
-        const wrapHistorical = (family: string, isHistorical: boolean, node: ReactNode) =>
-          isHistorical ? (
-            <div
-              key={family}
-              className="result-source-card-wrapper result-source-card-wrapper--historical"
-              data-historical="true"
-              data-source-family={family}
-            >
-              {renderHistoricalBadge(family)}
-              {node}
-            </div>
-          ) : (
-            <div
-              key={family}
-              className="result-source-card-wrapper"
-              data-source-family={family}
-            >
-              {node}
-            </div>
-          );
-        const sourceCards = (
-          <>
-            {showPolymarket && wrapHistorical(
-              'polymarket',
-              polymarketHistorical,
-              <PolymarketCard
-                capability={polymarketCapability}
-                state={resolveSourceCategoryState(polymarketContext)}
-                items={polymarketContext?.items ?? []}
-              />,
-            )}
-            {showFinance && wrapHistorical(
-              'finance',
-              financeHistorical,
-              <FinanceSourceCard
-                state={resolveSourceCategoryState(financeContext)}
-                items={financeContext?.items ?? []}
-              />,
-            )}
-            {showAcademic && wrapHistorical(
-              'academic',
-              academicHistorical,
-              <SemanticScholarCard
-                state={resolveSourceCategoryState(academicContext)}
-                items={academicContext?.items ?? []}
-              />,
-            )}
-            {showNewsDeep && wrapHistorical(
-              'news_deep',
-              newsDeepHistorical,
-              <NewsApiCard
-                state={resolveSourceCategoryState(newsDeepContext)}
-                items={newsDeepContext?.items ?? []}
-              />,
-            )}
-          </>
-        );
-        return (
-          <>
-            <button
-              type="button"
-              data-testid="result-mobile-sources-trigger"
-              onClick={() => setMobileSourceSheetOpen(true)}
-              aria-expanded={mobileSourceSheetOpen}
-              aria-controls={mobileSourceSheetOpen ? "mobile-source-sheet" : undefined}
-              className="result-mobile-sources-trigger"
-            >
-              {t('source.mobile_sheet.title', { defaultValue: 'Live sources' })}
-            </button>
-            <section className="result-sources">
-              <h3 className="result-sources__heading">
-                {t('source.section_title', { defaultValue: 'Live Sources' })}
-              </h3>
-              <div
-                className="result-sources__grid"
-                data-testid="result-source-grid-desktop"
-              >
-                {sourceCards}
-              </div>
-            </section>
-            <MobileSourceSheet
-              open={mobileSourceSheetOpen}
-              onOpenChange={setMobileSourceSheetOpen}
-            >
-              {sourceCards}
-            </MobileSourceSheet>
-          </>
-        );
-      })()}
-      {!isReplayMode && capabilities?.agent_conversation?.enabled && primaryAgentIdentityId && (
-        <ResultActionCard
-          agentIdentityId={primaryAgentIdentityId}
-        />
-      )}
-      {!isReplayMode && activeScenarioId && (capabilities?.agent_conversation?.enabled ?? false) && (
-        <div id="result-conversation">
-          <ResultConversationWidget
-            scenarioId={activeScenarioId}
-            primaryAgentIdentityId={primaryAgentIdentityId}
-            resultContext={resultConversationContext}
-          />
-        </div>
-      )}
+      <ResultModals
+        shareFlavorContext={shareFlavorContext}
+        setShareAutomation={setShareAutomation}
+        pendingEndingRoomPicker={pendingEndingRoomPicker}
+        setPendingEndingRoomPicker={setPendingEndingRoomPicker}
+        pendingEndingRoomBranch={pendingEndingRoomBranch}
+        pendingEndingRoomCandidates={pendingEndingRoomCandidates}
+        endingRoomPickerDialogRef={endingRoomPickerDialogRef}
+        endingRoomPickerCloseRef={endingRoomPickerCloseRef}
+        openEndingRoomDirect={openEndingRoomDirect}
+        activeEndingRoomBranch={activeEndingRoomBranch}
+        activeEndingRoomMode={activeEndingRoomMode}
+        activeEndingRoomSelectedBranchIds={activeEndingRoomSelectedBranchIds}
+        activeEndingRoomSelectedAgentIds={activeEndingRoomSelectedAgentIds}
+        activeEndingRoomReplayPayload={activeEndingRoomReplayPayload}
+        endingRoomHeaderActions={endingRoomHeaderActions}
+        setEndingRoomAutomation={setEndingRoomAutomation}
+        handleEndingRoomModeChange={handleEndingRoomModeChange}
+        handleCloseEndingRoom={handleCloseEndingRoom}
+        sourceFamilyContext={sourceFamilyContext}
+        polymarketCapability={polymarketCapability}
+        mobileSourceSheetOpen={mobileSourceSheetOpen}
+        setMobileSourceSheetOpen={setMobileSourceSheetOpen}
+        resolveSourceCategoryState={resolveSourceCategoryState}
+        resultConversationContext={resultConversationContext}
+      />
     </div>
+    </ResultContextProvider>
   );
 }

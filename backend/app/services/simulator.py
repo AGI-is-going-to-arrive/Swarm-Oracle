@@ -52,6 +52,12 @@ try:
 except ImportError:
     _CAUSAL_AVAILABLE = False
 
+try:
+    from app.services.kg_realtime import push_delta as _kg_push_delta
+    _KG_REALTIME_AVAILABLE = True
+except ImportError:
+    _KG_REALTIME_AVAILABLE = False
+
 # Phase 3 F5: Faction detection hook (non-blocking)
 try:
     from app.services.factions import process_round as _factions_process
@@ -107,6 +113,32 @@ class SimulationCancelled(Exception):
 def _check_cancelled(scenario_id: str) -> None:
     if is_cancelled(scenario_id):
         raise SimulationCancelled(scenario_id)
+
+
+async def _append_causal_graph_delta(
+    scenario_id: str,
+    branch_id: str,
+    round_number: int,
+    messages: list,
+    *,
+    fork_event: dict | None = None,
+) -> None:
+    delta = await asyncio.to_thread(
+        _causal_append,
+        scenario_id,
+        branch_id,
+        round_number,
+        messages,
+        **({"fork_event": fork_event} if fork_event is not None else {}),
+    )
+    if not _KG_REALTIME_AVAILABLE or delta is None:
+        return
+    if not (delta.added or delta.updated or delta.deleted or delta.snapshot_invalidated):
+        return
+    try:
+        await _kg_push_delta(scenario_id, delta)
+    except Exception:
+        logger.debug("kg_realtime delta push failed (non-blocking)", exc_info=True)
 
 
 def _truncate_debug_text(value: Any, *, max_chars: int) -> str:
@@ -1361,8 +1393,11 @@ async def _run_simulation_impl(
             if _CAUSAL_AVAILABLE and settings.FEATURE_CAUSAL_GRAPH:
                 try:
                     _check_cancelled(scenario_id)
-                    await asyncio.to_thread(
-                        _causal_append, scenario_id, current_branch_id, round_num, messages,
+                    await _append_causal_graph_delta(
+                        scenario_id,
+                        current_branch_id,
+                        round_num,
+                        messages,
                     )
                     _check_cancelled(scenario_id)
                 except SimulationCancelled:
@@ -1567,9 +1602,11 @@ async def _run_simulation_impl(
                         if _CAUSAL_AVAILABLE and settings.FEATURE_CAUSAL_GRAPH:
                             try:
                                 _check_cancelled(scenario_id)
-                                await asyncio.to_thread(
-                                    _causal_append,
-                                    scenario_id, current_branch_id, round_num, [],
+                                await _append_causal_graph_delta(
+                                    scenario_id,
+                                    current_branch_id,
+                                    round_num,
+                                    [],
                                     fork_event={
                                         "branch_id": current_branch_id,
                                         "reason": fork_result.get("reason", ""),

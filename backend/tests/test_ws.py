@@ -141,6 +141,34 @@ class TestWSManager:
         assert "中文测试" in sent_text  # Not escaped
 
     @pytest.mark.asyncio
+    async def test_broadcast_kg_delta_event_preserves_payload(self):
+        """KG delta events use the normal scenario WS envelope."""
+        mgr = WSManager()
+        ws = AsyncMock()
+        mgr._connections["s1"].append(ws)
+
+        await mgr.broadcast(
+            "s1",
+            {
+                "type": "kg:delta",
+                "data": {
+                    "scenario_id": "s1",
+                    "added": [{"kind": "node", "key": "n1"}],
+                    "updated": [],
+                    "deleted": [],
+                    "version": 7,
+                    "snapshot_invalidated": False,
+                },
+            },
+        )
+
+        sent = json.loads(ws.send_text.call_args[0][0])
+        assert sent["type"] == "kg:delta"
+        assert sent["data"]["version"] == 7
+        assert sent["data"]["added"][0]["key"] == "n1"
+        assert sent["meta"]["event_id"] == "s1:1"
+
+    @pytest.mark.asyncio
     async def test_broadcast_empty_scenario(self):
         """Should handle broadcast to scenario with no connections."""
         mgr = WSManager()

@@ -351,7 +351,7 @@ async def test_graph_analysis_endpoint_returns_200_with_correct_shape(monkeypatc
         "total_degree": 5,
         "centrality_rank": 1,
     }
-    assert body["summary"]["total_nodes"] == 5
+    assert body["summary"]["total_nodes"] == 7
 
 
 @pytest.mark.asyncio

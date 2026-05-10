@@ -91,7 +91,7 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
   - touched-file `ruff check` for scenario cancel / quota / decision-bias / preflight files: pass
   - `python -m pytest tests/test_snapshot_export.py tests/test_personality_drift.py -q`: `46 passed`
   - touched-file `ruff check` for snapshot export / personality drift / scenarios / graphs files: pass
-  - `python -m pytest -q`: `2477 passed, 3 failed, 2 skipped`; the two LLM gateway failures passed on targeted rerun, while `test_graph_analysis` remains a known baseline difference
+  - `pytest -x -q`: `2581 passed, 3 skipped, 9 warnings`; the warnings are ResourceWarnings from `tests/test_web_context_integration.py`
 - Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
 
 ## Runtime Notes

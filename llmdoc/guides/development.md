@@ -267,9 +267,9 @@ npm run lint
 npm run build
 ```
 
-本轮 Sprint 0-2 收尾复核中，前端全量 vitest 为 `177 files / 1904 tests / 0 failed`，`tsc`、`lint`、`build` 和 `i18n parity` 都通过。浏览器矩阵覆盖 12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，结果为 `72 passed / 0 failed`。
+当前前端全量回归最近一次记录为 `179 files / 1926 tests / 0 failed`，`tsc`、game scenes `eslint --max-warnings=0`、`build` 和 i18n parity `en:2159 zh:2159` 都通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 
-### Sprint 3 snapshot / share / drift 窄集
+### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
 ```bash
 cd backend
@@ -280,6 +280,7 @@ cd ../frontend
 npm test -- --run src/api/client.test.ts src/components/Export/SnapshotExportDialogs.test.tsx src/components/ShareModal.test.tsx src/components/result/HOPsAnimation.test.tsx src/pages/InputView.test.tsx src/i18n/locales.test.ts
 node --check scripts/e2e-result-share-fixture.mjs
 npm run e2e:result:fixture -- --url http://127.0.0.1:5174 --headless
+node scripts/e2e-gate3-sprint3-probe.mjs --url http://127.0.0.1:18930 --headless --output-dir output/e2e/codex-review/overall-rerun
 ```
 
 本轮已复核：
@@ -293,8 +294,9 @@ npm run e2e:result:fixture -- --url http://127.0.0.1:5174 --headless
 
 当前边界：
 
-- `HOPsAnimation` 只有组件、CSS 和 reduced-motion 测试，还没有生产页面导入；生产接线后要补 ResultView 级回归。
-- snapshot 导出/导入已有后端安全校验和前端 dialog 测试，但 Gate 3 仍需要 browser 级导出→导入全链路，以及跨 OS ZIP 互通证据。
+- `HOPsAnimation` 已接入生产 `ResultView`；多分支结果页可见，replay 模式下不播放。
+- Gate 3/Sprint 4 browser probe final rerun 当前为 desktop `10/10`、mobile `10/10`。
+- snapshot 导出/导入已有后端安全校验和前端 dialog 测试；Windows/Linux/Edge/Safari 没有本轮真实实测工件时，不要写成已通过。
 
 字体现在从本地 `/fonts` 提供。如果需要重生成字体 CSS 和 woff2 分片，使用：
 

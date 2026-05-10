@@ -30,7 +30,7 @@
 | AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、tier badge、profile modal、编辑/删除入口 |
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains 与 `IMPORTANT / CROWD` tier 选择 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、historical source badge、counterfactual / resume / faction 入口，以及 capability-gated `What's Next` bridge |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、historical source badge、counterfactual / resume / faction 入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live |
@@ -126,7 +126,7 @@
 - `ResultView` 的导演复盘当前由 `DirectorDebriefPanel` 渲染：优先使用后端 `score_breakdown`，同时接收 what-if、主导世界线、世界线承诺、押注、最后一次干预、结构化关键记录、director goals 与 gameplay card 状态，展示得分原因、等级进度、本局读数、下一步入口和新增徽章。
 - `ResultView` 的 faction timeline lead 当前已走 i18n key + `{{title}}` 插值，不再在组件里手写 `isZh` 三元文案。
 - `ResultView` 的 replay/import 错误、ending-room replay action、archive summary label 和 ending-room picker copy 当前也已走 locale key；剩下的 `isZh` 用在玩法/候选人/弹窗语言选择这类领域语义上。
-- `ResultView` 当前仍是大文件；source family 里重复的 finance card 已抽成 `FinanceSourceCard`，后续新增 UI 仍应优先抽组件。
+- `ResultView` 当前已做第一阶段拆分：入口仍是 `frontend/src/pages/ResultView.tsx`，主体区块拆到 `frontend/src/pages/result/ResultHeader.tsx`、`EndingCardsGrid.tsx`、`ExploreDeeperBridge.tsx`、`WebSourcesSection.tsx`、`PredictionsSection.tsx`、`DirectorNotebook.tsx`、`AgentRoster.tsx`、`ResultModals.tsx` 和 `ResultContext.tsx`。`ResultContext` 仍偏宽，后续触碰结果页时优先评估 selector / useMemo 收窄。
 - InputView 当前在 `agent_identity` capability 开启时会在主模式启动前先调用 identity continuity preflight：
   - 只要命中 `L2 fuzzy candidate` 才会弹确认框
   - 用户可选 `复用已有身份` 或 `创建新身份`
@@ -421,7 +421,7 @@
   - 最多展示 3 个可回溯 fork point
   - 点击后会把 `CounterfactualPanel` 的轮次同步到对应 `fork_round`
   - `CounterfactualPanel.initialRound` 会钳制在 `1..totalRounds`
-- `HOPsAnimation` 当前只有组件、CSS 和 reduced-motion 测试；还没有生产页面导入，不能写成 ResultView 已展示 HOPs。
+- `HOPsAnimation` 当前已挂到 `ResultView`，多分支结果页会在 endings grid 前展示分支概率采样动画；replay 模式下不播放。
 - `ResultView` 当前在 `custom_agents` capability 开启时会显示 Agent Library bridge；这条入口只受 `custom_agents` gate 影响，不再误绑到 `agent_identity` gate。
 - `ResultView` 的阵营分析当前不再固定绑 `branches[0]`：
   - 用户展开了某个结局时，`FactionTimeline` 跟随当前展开分支
@@ -513,8 +513,9 @@
   - `cd frontend && npm run test -- --run src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts --reporter=verbose`：`87 passed`
   - `cd frontend && npx tsc --noEmit`：通过
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
-- frontend full vitest 本 session fresh rerun：`177 files / 1904 passed`。
-- frontend i18n key + placeholder parity：通过。
+- frontend full vitest 本 session fresh rerun：`179 files / 1926 passed`。
+- frontend i18n key + placeholder parity：`en:2159 zh:2159`。
+- Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 - Classic 分支标题本轮已补定向验证：
   - `npm exec -- vitest run src/components/BranchTree.test.tsx`：`5 passed`

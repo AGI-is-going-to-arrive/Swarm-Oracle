@@ -58,7 +58,7 @@ npm run test:watch # vitest (watch mode)
 |------|------|
 | `InputView.tsx` | 首页输入，5 步进度、quick starts、搜索增强/source family、模式选择器、advanced accordion、BYOK 折叠区、Agent attach panel |
 | `SimulationView.tsx` | 模拟视图 + Phaser 集成 |
-| `ResultView.tsx` | 结果展示 (Summary-First 布局，含 What's Next bridge、真实世界来源卡片、historical badge、share artifact、畸形数据防御) |
+| `ResultView.tsx` | 结果展示 orchestrator (Summary-First 布局，含 What's Next bridge、真实世界来源卡片、historical badge、share artifact、畸形数据防御)；主体区块拆到 `src/pages/result/*` |
 | `DebateArenaView.tsx` | 辩论竞技场 |
 | `DebateResultView.tsx` | 辩论结果 |
 | `WorldlineRoundtableView.tsx` | 世界线圆桌 (~2223 行) |
@@ -181,7 +181,7 @@ npm run test:watch # vitest (watch mode)
 
 ### `scripts/` -- E2E 与工具脚本
 
-16 个 `.mjs` 脚本，包括 E2E 测试套件、资源生成、性能预算检查、Release 签核。
+32 个顶层 `.mjs` 脚本，包括 E2E 测试套件、资源生成、性能预算检查、Release 签核；另有少量子目录脚本。
 
 ## 关键依赖与配置
 
@@ -198,7 +198,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- **168 个测试文件** (`.test.ts` / `.test.tsx`) / **1843 tests**
+- **179 个测试文件** (`.test.ts` / `.test.tsx`) / **1926 tests**
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -232,7 +232,7 @@ frontend/
     hooks/              # 自定义 Hooks (10+)
     lib/                # 工具函数库 (30+ 文件)
     i18n/               # 国际化 (zh/en)
-  scripts/              # E2E + 工具脚本 (16 个)
+  scripts/              # E2E + 工具脚本 (32 个顶层 .mjs)
   package.json          # 依赖与脚本
   vite.config.ts        # Vite 配置
   vitest.config.ts      # 测试配置
@@ -388,6 +388,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-11 | Sprint 4 品质提升收口 | `ResultView.tsx` 第一阶段拆分为 orchestrator + `src/pages/result/ResultHeader.tsx`、`EndingCardsGrid.tsx`、`ExploreDeeperBridge.tsx`、`WebSourcesSection.tsx`、`PredictionsSection.tsx`、`DirectorNotebook.tsx`、`AgentRoster.tsx`、`ResultModals.tsx`、`ResultContext.tsx`；`HOPsAnimation` 已挂结果页，replay 模式不播放。`CompareDigestView`、`InputView`、`DebateResultView`、`FactionTimeline` 完成第一批 locale 迁移；`EndingScene`、`TitleScene`、`WorldScene` 补 reduced-motion guards。新增 `scripts/e2e-gate3-sprint3-probe.mjs`；fresh baseline `179 files / 1926 tests / 0 failed`，i18n parity `2159=2159`，Gate3 probe desktop/mobile `10/10`。`ResultContext` 仍偏宽，后续继续收窄 |
 | 2026-05-07 | 辩论竞技场去模板化前端适配 | `DebateArenaView.tsx`：修复 judge note 在 `result_ready` 状态下仍显示模板文本"评委仍在吸收"（新增 `if (latestTurn) note = latestTurn.content` 分支）；room card 新增 `.debate-room-card__persona` 展示 LLM 生成的角色人设；persona 移除 `aria-label` 遮蔽（改为让文本自然暴露给辅助技术）。`DebateScoreCard.tsx`：新增可选 `persona` prop + `.debate-score-card__persona` 展示区域，同步移除 `aria-label` 遮蔽。`DebateResultView.tsx`：透传 `participant.persona` 到 `DebateScoreCard`。`types.ts`：`DebatePhaseInsight` 新增 `strategy?: string`，`DebateParticipant` 新增 `persona?: string`。`DebateArena.css`：新增 `.debate-score-card__persona` 和 `.debate-room-card__persona` 样式（line-clamp-2 + 衬线小字）。`ArgumentMap.tsx`：移除未使用的 `sourceRef` 变量。i18n：简化 6 条模板化文案（`room_quote_judge`/`room_quote_waiting`/`pressure_even`/`pressure_edge`/`watchlist_open`/`watchlist_locked`），en/zh 同步更新；46 debate/result/i18n tests passed，tsc 0 errors，vite build 0 violations |
 | 2026-05-07 | 辩论竞技场 turn 卡片排版重构 | `FoldableTurn.tsx`：折叠状态从 `text-ellipsis whitespace-nowrap` 改为 `line-clamp-2` 多行截断，解决中文字符在 44px maxHeight 下被截断显示乱码；默认 fallback 高度 44px→100px。`DebateArena.css`：全面重构（+346 行），新增 OKLCH 色彩 token（`--debate-accent-pro/con/judge`）+ sRGB fallback + `@supports` 渐进增强；room grid 3 列→1 列堆叠；FoldableTurn 辩论覆盖（`article.group` 提升 padding 16px 18px / border-radius 16px / font-size 1rem / border-left 4px 对齐 debate-turn-card 质感）；speaker 首字母头像（`.debate-speaker-initial--{side}` 28px 彩色圆圈）；面板标题改衬线字体（`font-heading`）；accordion `border-b` 用 `!important` 压制 Tailwind utility 消除多余横线；situation grid 改 `auto-fit minmax(240px, 1fr)` 响应式；卡片入场动画 `debateCardIn` + `prefers-reduced-motion` guard。`DebateArenaView.tsx`：SpotlightTurnCard 替换为 `debate-turn-card` article（统一所有 turn 卡片样式：首字母头像 + side-specific 左边框 + 衬线 speaker name）；新增 `spotlightExpanded` state + `useEffect` 随 `latestVisibleTurn.id` 变化自动重置；side-specific phase chip（`.debate-phase-chip--con/--judge`）。Codex 审查修复 1 Critical + 3 Warning；Playwright 桌面+移动端验证通过；fresh baseline: `165 files / 1763 passed / 6 failed`（6 为预存 InputView），tsc 0 new errors，vite build 0 violations |
 | 2026-05-07 | 首页 IME 防护 + 推演确认弹窗 | `InputView.tsx`：新增 `isComposingRef`（useRef）+ `onCompositionStart/End` 处理器，`onKeyDown` 加三重 IME 防护（`isComposingRef.current \|\| e.nativeEvent.isComposing \|\| e.keyCode === 229`），解决中文拼音 Enter 确认候选词误触发推演；Enter/按钮提交改为 `requestLaunch()` → 弹出确认弹窗（`confirmDialogData` state）→ `confirmLaunch()` → `handleSubmit()`；弹窗显示问题预览 + 设置摘要（轮数/Agent/模式），Escape 关闭 + backdrop 点击关闭 + autoFocus 确认按钮。`InputView.css`：新增 `.confirm-launch-*` 样式（毛玻璃背景 + 圆角卡片 + `confirm-launch-scale-in` 入场动画 + `prefers-reduced-motion` guard + 640px 移动端 `column-reverse`）。`InputView.test.tsx`：+19 新测试（IME guard 7 + 确认弹窗 12）+ 9 个现有测试适配确认弹窗流程（添加 `confirmLaunchDialog` helper）+ DebateArenaView 1 个测试适配 argMapOpen 默认值变更。i18n +2 keys（`confirm_launch_title` / `confirm_launch_settings`），en/zh parity `1638=1638`；tsc 0 errors，vite build 0 violations |

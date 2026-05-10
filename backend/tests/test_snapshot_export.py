@@ -481,6 +481,66 @@ def test_import_rejects_path_traversal_member_name():
     assert "unsafe" in str(excinfo.value).lower()
 
 
+def test_import_rejects_duplicate_zip_member_name():
+    scenario_blob = json.dumps({"question": "duplicate member"}).encode("utf-8")
+    digest = hashlib.sha256(scenario_blob).hexdigest()
+    manifest = {
+        "version": "1.0",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "scenario_id": "probe",
+        "graph_schema_version": 1,
+        "include_private": False,
+        "files": {
+            "scenario.json": {
+                "sha256": digest,
+                "size": len(scenario_blob),
+            },
+        },
+    }
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+        zf.writestr("scenario.json", scenario_blob)
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            zf.writestr("scenario.json", b'{"question":"shadow member"}')
+        zf.writestr("checksums.sha256", f"{digest}  scenario.json")
+
+    with pytest.raises(SnapshotImportError) as excinfo:
+        with Session(get_engine()) as session:
+            import_snapshot_zip(out.getvalue(), "importer-dup-member", session)
+
+    assert "duplicate zip member" in str(excinfo.value).lower()
+
+
+def test_import_rejects_too_many_physical_zip_members():
+    from app.services import snapshot_export as snapshot_export_module
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "version": "1.0",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "scenario_id": "probe",
+                    "graph_schema_version": 1,
+                    "include_private": False,
+                    "files": {},
+                }
+            ),
+        )
+        zf.writestr("checksums.sha256", "")
+        for i in range(snapshot_export_module.MAX_ZIP_MEMBER_COUNT):
+            zf.writestr(f"extra-{i}.txt", b"x")
+
+    with pytest.raises(SnapshotImportError) as excinfo:
+        with Session(get_engine()) as session:
+            import_snapshot_zip(out.getvalue(), "importer-too-many-members", session)
+
+    assert "too many members" in str(excinfo.value).lower()
+
+
 def test_import_rejects_symlink_member():
     scenario_blob = json.dumps({"question": "symlink"}).encode("utf-8")
     manifest = {

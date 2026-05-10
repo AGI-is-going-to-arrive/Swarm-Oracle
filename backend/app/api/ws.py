@@ -41,6 +41,16 @@ class SimulationCancelledEvent(TypedDict):
     reason: str
 
 
+class KGDeltaEvent(TypedDict):
+    type: Literal["kg:delta"]
+    data: dict
+
+
+class KGSnapshotInvalidatedEvent(TypedDict):
+    type: Literal["kg:snapshot_invalidated"]
+    data: dict
+
+
 def _heartbeat_event() -> dict[str, dict[str, str]]:
     return {
         "type": "heartbeat",

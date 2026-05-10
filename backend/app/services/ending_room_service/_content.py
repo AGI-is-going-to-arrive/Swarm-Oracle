@@ -86,6 +86,14 @@ def _roundtable_variant_hook_fallback(
             ],
             "scholar": ["证词、账册和时序先对不上了", "记录链先漏页了", "案卷先开始彼此打架了"],
             "civic": ["账册和责任链先对不上了", "程序和签字链先漏了口子", "谁来背责先没人说得清了"],
+            "diplomat": ["退让底线先被碰穿了", "各方筹码先失了衡", "斡旋空间先缩没了"],
+            "advisor": ["可选项先变窄了", "窗口期先被拖过去了", "代价曲线先变陡了"],
+            "science": ["样本和假设先对不上了", "控制变量先被打乱了", "模型误差先开始放大"],
+            "tech-visionary": ["平台假设先塌了一角", "指数曲线先拐错了方向", "未来栈先暴露了断点"],
+            "journalist": ["公开记录先露了缝", "关键消息源先改了口", "谁受益先变得太清楚"],
+            "educator": ["问题定义先偏了", "关键概念先被误读了", "反例先把课堂秩序打破了"],
+            "artist": ["表达和行动先失了焦", "构图先把裂缝显出来了", "共振先变成了噪声"],
+            "entrepreneur": ["牵引力先失真了", "跑道先被烧短了", "下一轮实验先失了方向"],
             "plain": ["真正先滑开的那一下", "因果链先失了准头", "代价最早开始滚动的地方"],
         }
     else:
@@ -140,6 +148,46 @@ def _roundtable_variant_hook_fallback(
                 "the explanation chain broke before the paperwork could catch it",
                 "procedure stopped holding the damage inside one accountable line",
             ],
+            "diplomat": [
+                "the red line was crossed before mediation found leverage",
+                "the bargaining table lost balance before terms could hold",
+                "the concession space closed before the room admitted it",
+            ],
+            "advisor": [
+                "the option set narrowed before the decision was owned",
+                "the window closed before the trade-off was named",
+                "the cost curve steepened before counsel could slow it",
+            ],
+            "science": [
+                "the sample and the assumption stopped matching",
+                "the control variable broke before the model could defend itself",
+                "the error term widened before anyone named the bias",
+            ],
+            "tech-visionary": [
+                "the platform thesis exposed a break in the future stack",
+                "the exponential curve bent the wrong way first",
+                "the moonshot failed at the next concrete step",
+            ],
+            "journalist": [
+                "the public record exposed the first contradiction",
+                "the key source changed their line before the denial landed",
+                "who benefited became visible before anyone took responsibility",
+            ],
+            "educator": [
+                "the problem definition drifted before the lesson could hold",
+                "the key concept was misread before the answer formed",
+                "the counterexample broke the tidy frame first",
+            ],
+            "artist": [
+                "expression and action fell out of focus first",
+                "the composition made the fracture visible before the speech did",
+                "the resonance turned into noise before the ending was named",
+            ],
+            "entrepreneur": [
+                "traction distorted before the next experiment could validate it",
+                "the runway shortened before the pivot made sense",
+                "viability failed before the iteration could recover",
+            ],
             "plain": [
                 "the line of cause and cost slipped out of alignment",
                 "the first real slip came before anyone named the ending",
@@ -176,6 +224,48 @@ def _resolve_roundtable_hook(
 
 def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> str:
     normalized = f"{role_hint or ''} {bio_hint or ''}".strip().lower()
+    if any(
+        token in normalized
+        for token in (
+            "tech visionary", "silicon valley", "futurist", "disruption",
+            "paradigm shift", "exponential", "moonshot", "singularity",
+        )
+    ):
+        return "tech-visionary"
+    if any(
+        token in normalized
+        for token in (
+            "journalist", "reporter", "newsroom", "investigative",
+            "sources confirm", "on the record", "breaking", "exclusive",
+            "correspondent", "editorial desk",
+        )
+    ):
+        return "journalist"
+    if any(
+        token in normalized
+        for token in (
+            "educator", "professor", "teacher", "lecturer", "instructor",
+            "academic", "curriculum", "pedagogy", "let us unpack",
+        )
+    ):
+        return "educator"
+    if any(
+        token in normalized
+        for token in (
+            "artist", "painter", "composer", "curator", "creative director",
+            "aesthetic", "expression", "craft ", "resonance",
+        )
+    ):
+        return "artist"
+    if any(
+        token in normalized
+        for token in (
+            "entrepreneur", "startup", "founder", "cofounder", "venture builder",
+            "pivot", "runway", "traction", "iterate",
+            "growth-stage", "product-market fit",
+        )
+    ):
+        return "entrepreneur"
     if any(
         token in normalized
         for token in (
@@ -356,6 +446,26 @@ _VOCABULARY_HINTS: dict[str, dict[str, str]] = {
     "science": {
         "zh": "用词偏好：样本量、置信区间、控制变量、复现、偏差、模型假设。数据驱动表达。情绪基调：审慎的好奇。",  # noqa: E501
         "en": "Vocabulary: sample size, confidence interval, control variable, reproducibility, bias, model assumption. Data-driven expression. Tone: cautious curiosity.",  # noqa: E501
+    },
+    "tech-visionary": {
+        "zh": "用词偏好：颠覆、范式迁移、指数曲线、登月计划、平台化、未来栈。句式愿景先行但必须落到下一步。情绪基调：高能、笃定、略带硅谷式急迫。",  # noqa: E501
+        "en": "Vocabulary: disruption, paradigm shift, exponential curve, moonshot, platform, future stack. Vision-first phrasing grounded in the next step. Tone: high-energy Silicon Valley urgency.",  # noqa: E501
+    },
+    "journalist": {
+        "zh": "用词偏好：消息源证实、公开记录、独家、突发、采访、交叉核实。先给事实钩子，再指出谁受益、谁回避。情绪基调：紧凑、怀疑、追问到底。",  # noqa: E501
+        "en": "Vocabulary: sources confirm, on the record, exclusive, breaking, interview, cross-check. Lead with the factual hook, then name who benefits and who dodges. Tone: tight investigative skepticism.",  # noqa: E501
+    },
+    "educator": {
+        "zh": "用词偏好：根本上、请考虑、关键洞见、让我们拆解、概念框架、反例。先定义问题，再一步步展开。情绪基调：清晰、耐心、带课堂掌控感。",  # noqa: E501
+        "en": "Vocabulary: fundamentally, consider, the key insight, let us unpack, conceptual frame, counterexample. Define the problem, then unfold it step by step. Tone: clear academic instruction.",  # noqa: E501
+    },
+    "artist": {
+        "zh": "用词偏好：愿景、媒介、表达、技艺、共振、构图。先说感受形状，再说它如何改变行动。情绪基调：敏锐、审美化、克制地诗性。",  # noqa: E501
+        "en": "Vocabulary: vision, medium, expression, craft, resonance, composition. Start with the felt shape, then how it changes action. Tone: perceptive, aesthetic, restrainedly lyrical.",  # noqa: E501
+    },
+    "entrepreneur": {
+        "zh": "用词偏好：转向、跑道、牵引力、规模化、迭代、产品市场匹配。先判断可行性，再给下一轮实验。情绪基调：快速、务实、带创始人压力。",  # noqa: E501
+        "en": "Vocabulary: pivot, runway, traction, scale, iterate, product-market fit. Judge viability first, then name the next experiment. Tone: fast, pragmatic founder pressure.",  # noqa: E501
     },
 }
 
@@ -1205,6 +1315,42 @@ def _oracle_voice_brief(
                 "Speak like a political or administrative operator: procedural, precise, and quietly accusatory. "  # noqa: E501
                 "Name the ledger, explanation chain, or institutional leak before the finale."
             )
+        modern_voice_briefs = {
+            "diplomat": (
+                "Speak like a negotiator under pressure: measured, precise, and aware of leverage. "
+                "Name stakeholders, red lines, concessions, or terms before abstractions."
+            ),
+            "advisor": (
+                "Speak like a strategic counsel: options-first, cost-aware, and unsentimental. "
+                "Name the window, trade-off, variable, or risk exposure before giving the verdict."
+            ),
+            "science": (
+                "Speak like a cautious analyst: data-driven, hypothesis-aware, and allergic to overclaiming. "  # noqa: E501
+                "Name samples, assumptions, bias, or reproducibility before moralizing."
+            ),
+            "tech-visionary": (
+                "Speak like a high-energy builder with a concrete next step. "
+                "Use future-facing language, but ground every claim in platform risk, timing, or execution."  # noqa: E501
+            ),
+            "journalist": (
+                "Speak like an investigative reporter: tight, factual, and skeptical. "
+                "Lead with the source hook, then name who benefits, who dodges, or what the record contradicts."  # noqa: E501
+            ),
+            "educator": (
+                "Speak like a teacher under time pressure: clear, structured, and patient without being soft. "  # noqa: E501
+                "Define the mistake, give the counterexample, then state the lesson."
+            ),
+            "artist": (
+                "Speak like an artist reading a visible fracture: sensory, precise, and restrained. "  # noqa: E501
+                "Name composition, medium, resonance, or expression only when it changes action."
+            ),
+            "entrepreneur": (
+                "Speak like a founder judging viability: fast, practical, and experiment-minded. "
+                "Name traction, runway, pivot, or product-market fit before ambition."
+            ),
+        }
+        if variant in modern_voice_briefs:
+            return modern_voice_briefs[variant]
         return (
             "Speak like a representative defending one specific worldline. "
             "Name the decisive hinge, why it mattered, and what it cost. Do not narrate the process."  # noqa: E501

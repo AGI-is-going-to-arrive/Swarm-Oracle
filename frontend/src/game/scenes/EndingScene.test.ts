@@ -5,7 +5,13 @@
  * Validates ending configurations, type mappings, and resolution behavior.
  */
 
+import { readFileSync } from 'node:fs';
+
 import { describe, it, expect } from 'vitest';
+
+function readSceneSource(fileName: string): string {
+  return readFileSync(`${process.cwd()}/src/game/scenes/${fileName}`, 'utf8');
+}
 
 // ── Re-define testable constants from EndingScene ───────
 
@@ -157,5 +163,22 @@ describe('EndingScene — resolveEndingId', () => {
   it('falls back to neutral for unknown type', () => {
     const result = resolveEndingId({ ending_type: 'unknown_type' });
     expect(result).toBe('revolution');
+  });
+});
+
+describe('Phaser scene reduced-motion source guards', () => {
+  it('guards EndingScene camera fade-in under reduced motion', () => {
+    const source = readSceneSource('EndingScene.ts');
+
+    expect(source).toContain('if (this.reducedMotion) {\n      this.cameras.main.setAlpha(1);');
+    expect(source).toContain('} else {\n      this.cameras.main.fadeIn(800, 0, 0, 0);');
+  });
+
+  it('guards TitleScene camera fade-out under reduced motion', () => {
+    const source = readSceneSource('TitleScene.ts');
+
+    expect(source).toContain('if (this.reducedMotion) {\n      this.cleanup();');
+    expect(source).toContain("this.scene.start('WorldScene');\n      return;");
+    expect(source).toContain('this.cameras.main.fadeOut(600, 0, 0, 0);');
   });
 });

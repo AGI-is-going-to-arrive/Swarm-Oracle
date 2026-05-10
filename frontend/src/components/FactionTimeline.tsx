@@ -57,7 +57,6 @@ function formatMetric(value?: number | null): string {
 
 export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, agentNames }: Props) {
   const { t, i18n } = useTranslation();
-  const isZh = i18n.language.toLowerCase().startsWith('zh');
   const [timeline, setTimeline] = useState<RoundFactionData[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorStatus, setErrorStatus] = useState<number | 'unknown' | null>(null);
@@ -77,29 +76,23 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
   });
 
   const branchDisplayName = normalizeText(branchLabel) ?? normalizeText(branchId) ?? t('factions.current_branch', 'Current branch');
-  const membersLabel = t('factions.members', isZh ? '名成员' : 'members');
-  const scopeLabel = t('factions.branch_scope', isZh ? '分支范围' : 'Branch scope');
-  const roundSpanLabel = t('factions.round_span', isZh ? '轮次跨度' : 'Round span');
-  const factionCountLabel = t('factions.faction_count', isZh ? '阵营数' : 'Factions');
-  const stanceLabel = t('factions.stance', isZh ? '立场' : 'Stance');
-  const confidenceLabel = t('factions.confidence', isZh ? '置信度' : 'Confidence');
-  const actorLabel = t('factions.actor', isZh ? '行动者' : 'Actor');
-  const factionLabel = t('factions.faction', isZh ? '阵营' : 'Faction');
-  const eventTypeLabel = t('factions.event_type', isZh ? '类型' : 'Type');
-  const roundEventsLabel = t('factions.round_events', isZh ? '本轮事件' : 'Round events');
-  const unknownEventLabel = t('factions.event_labels.unknown', isZh ? '未知事件' : 'Unknown event');
+  const membersLabel = t('factions.members', 'members');
+  const scopeLabel = t('factions.branch_scope', 'Branch scope');
+  const roundSpanLabel = t('factions.round_span', 'Round span');
+  const factionCountLabel = t('factions.faction_count', 'Factions');
+  const stanceLabel = t('factions.stance', 'Stance');
+  const confidenceLabel = t('factions.confidence', 'Confidence');
+  const actorLabel = t('factions.actor', 'Actor');
+  const factionLabel = t('factions.faction', 'Faction');
+  const eventTypeLabel = t('factions.event_type', 'Type');
+  const roundEventsLabel = t('factions.round_events', 'Round events');
+  const unknownEventLabel = t('factions.event_labels.unknown', 'Unknown event');
   const errorMessage = useMemo(() => {
     if (errorStatus === 401 || errorStatus === 403) {
-      return t(
-        'factions.error_forbidden',
-        isZh ? '你没有权限查看这条阵营时间线。' : 'You do not have permission to view this faction timeline.',
-      );
+      return t('factions.error_forbidden', 'You do not have permission to view this faction timeline.');
     }
-    return t(
-      'factions.error_fetch',
-      isZh ? '阵营时间线暂时无法加载，请稍后重试。' : 'Unable to load the faction timeline right now. Please retry.',
-    );
-  }, [errorStatus, isZh, t]);
+    return t('factions.error_fetch', 'Unable to load the faction timeline right now. Please retry.');
+  }, [errorStatus, t]);
 
   const describeEventType = useCallback((eventType?: string | null) => {
     const normalizedEventType = eventType?.trim() || 'unknown';
@@ -169,7 +162,7 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
   const lastRound = timeline[timeline.length - 1]?.round ?? firstRound;
   const roundSpan = firstRound === lastRound
     ? t('factions.round_label', 'Round {{round}}', { round: firstRound })
-    : t('factions.round_span_range', isZh ? '第 {{start}} 轮 - 第 {{end}} 轮' : 'Rounds {{start}}-{{end}}', {
+    : t('factions.round_span_range', {
         start: firstRound,
         end: lastRound,
       });
@@ -353,7 +346,7 @@ export function FactionTimeline({ scenarioId, branchId, branchLabel, visible, ag
                     color: '#ffcb8a',
                   }}
                 >
-                  {t('factions.round_events_count', isZh ? '本轮事件 {{count}} 条' : '{{count}} round events', {
+                  {t('factions.round_events_count', {
                     count: round.events.length,
                   })}
                 </span>

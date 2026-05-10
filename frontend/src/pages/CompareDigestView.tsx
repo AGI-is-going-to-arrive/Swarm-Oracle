@@ -37,13 +37,8 @@ type CompareErrorState =
   | { kind: 'no_data'; status: number | null }
   | { kind: 'load_failed'; source: 'compare' | 'scenario' | 'capability'; status: number | null };
 
-function formatRoundLabel(round: number, isZh: boolean) {
-  return isZh ? `第 ${round} 轮` : `Round ${round}`;
-}
-
 export function CompareDigestView() {
-  const { t, i18n } = useTranslation();
-  const isZh = i18n.language.startsWith('zh');
+  const { t } = useTranslation();
   const {
     loading: capLoading,
     enabled,
@@ -174,8 +169,8 @@ export function CompareDigestView() {
     [data?.rounds, selectedRound],
   );
   const selectedRoundLabel = selectedRound != null
-    ? formatRoundLabel(selectedRound, isZh)
-    : (isZh ? '最新回合' : 'Latest round');
+    ? t('compare.round', { round: selectedRound })
+    : t('compare.latest_round');
   const activeDivergencePct = activeDiff
     ? Math.round(activeDiff.divergence_score * 100)
     : null;
@@ -427,7 +422,7 @@ export function CompareDigestView() {
 
       <section
         className="compare-digest-view__stage-note"
-        aria-label={isZh ? '对照上下文' : 'Comparison context'}
+        aria-label={t('compare.context_aria')}
       >
         <div className="compare-digest-view__stage-pills">
           <span className="compare-digest-view__stage-pill">{selectedRoundLabel}</span>
@@ -437,13 +432,11 @@ export function CompareDigestView() {
             </span>
           )}
           <span className="compare-digest-view__stage-pill">
-            {isZh ? '双舞台对照' : 'Dual-stage compare'}
+            {t('compare.dual_stage_pill')}
           </span>
         </div>
         <p>
-          {isZh
-            ? '当前舞台继续播放实况，另一侧保留同回合镜像线索，方便横向比对。'
-            : 'The active stage keeps playing live while the other pane holds same-round context for side-by-side reading.'}
+          {t('compare.stage_intro')}
         </p>
       </section>
 
@@ -453,11 +446,11 @@ export function CompareDigestView() {
           const isActive = activePane === pane;
           const divergencePct = Math.round((activeDiff?.divergence_score ?? 0) * 100);
           const mirrorStateLabel = snapshots[pane]
-            ? (isZh ? '已捕获镜像' : 'Captured mirror')
-            : (isZh ? '待机镜像' : 'Standby mirror');
+            ? t('compare.captured_mirror')
+            : t('compare.standby_mirror');
           const probabilityLabel = panel.probability != null
-            ? `${Math.round(panel.probability * 100)}% ${isZh ? '路径权重' : 'path weight'}`
-            : (isZh ? '分支概览' : 'Branch overview');
+            ? `${Math.round(panel.probability * 100)}% ${t('compare.path_weight_suffix')}`
+            : t('compare.branch_overview');
           return (
             <article
               key={pane}
@@ -468,7 +461,7 @@ export function CompareDigestView() {
                 <div>
                   <div className="compare-theater-pane__eyebrow">
                     <span className={`compare-theater-pane__status ${isActive ? 'is-live' : 'is-passive'}`}>
-                      {isActive ? (isZh ? '实况舞台' : 'Live stage') : mirrorStateLabel}
+                      {isActive ? t('compare.live_stage') : mirrorStateLabel}
                     </span>
                     <span>{selectedRoundLabel}</span>
                   </div>
@@ -484,8 +477,8 @@ export function CompareDigestView() {
                   disabled={isActive}
                 >
                   {isActive
-                    ? (isZh ? '当前舞台' : 'Live stage')
-                    : (isZh ? '切到此线' : 'Activate')}
+                    ? t('compare.current_stage')
+                    : t('compare.activate_pane')}
                 </button>
               </header>
 
@@ -516,14 +509,10 @@ export function CompareDigestView() {
                         {mirrorStateLabel}
                       </span>
                       <strong>
-                        {isZh
-                          ? '先保留这条分支的上下文，切换后再抓取实况画面。'
-                          : 'Keep this branch readable first, then capture a live frame after activation.'}
+                        {t('compare.placeholder_primary')}
                       </strong>
                       <span>
-                        {isZh
-                          ? '首屏先展示回合、分歧和分支权重，让双舞台对照保持完整。'
-                          : 'Round, divergence, and branch weight stay visible so the two-stage compare feels complete from the first frame.'}
+                        {t('compare.placeholder_detail')}
                       </span>
                     </div>
                     <div className="compare-theater-pane__placeholder-grid" aria-hidden="true">
@@ -540,11 +529,9 @@ export function CompareDigestView() {
                         <strong>{probabilityLabel}</strong>
                       </div>
                       <div className="compare-theater-pane__placeholder-card is-wide">
-                        <span>{isZh ? '切换后可用' : 'Available after activation'}</span>
+                        <span>{t('compare.after_activation_label')}</span>
                         <strong>
-                          {isZh
-                            ? '激活一次后，这里会保留该分支的舞台镜像。'
-                            : 'After one activation, this pane keeps a mirrored stage snapshot for the branch.'}
+                          {t('compare.after_activation_detail')}
                         </strong>
                       </div>
                     </div>
@@ -588,11 +575,11 @@ export function CompareDigestView() {
             <article key={round.round} className={`compare-round-card ${selectedRound === round.round ? 'is-selected' : ''}`}>
               <div className="compare-round-card__header">
                 <div>
-                  <strong>{formatRoundLabel(round.round, isZh)}</strong>
+                  <strong>{t('compare.round', { round: round.round })}</strong>
                   <span>{t('compare.divergence_label', 'Divergence')}: {divergencePct}%</span>
                 </div>
                 <button type="button" className="btn btn-ghost" onClick={() => handleRoundSelect(round.round)}>
-                  {isZh ? '播放这一轮' : 'Play this round'}
+                  {t('compare.play_round')}
                 </button>
               </div>
               <div className="compare-round-card__grid">

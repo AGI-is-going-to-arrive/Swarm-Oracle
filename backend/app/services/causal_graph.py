@@ -11,6 +11,7 @@ import logging
 import re
 import threading
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import inspect, or_
@@ -40,6 +41,17 @@ _LATIN_NAME_RE = re.compile(r"[A-Za-z]")
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _DIVERGE_MARKER_RE = re.compile(r"\s*\[DIVERGE:[^\]]+\]\s*", re.IGNORECASE)
 _FORK_REASON_QUOTE_RE = re.compile(r"[“\"']([^”\"']+)[”\"']")
+
+
+@dataclass
+class GraphDelta:
+    """Delta emitted by causal graph append operations."""
+
+    added: list[dict[str, Any]]
+    updated: list[dict[str, Any]]
+    deleted: list[str]
+    version: int
+    snapshot_invalidated: bool = False
 
 
 # ── Heuristics ──────────────────────────────────────────
@@ -216,6 +228,67 @@ def _serialize_graph_node(node: GraphNode) -> dict[str, Any]:
         "round": node.round_number,
         "payload": payload,
     }
+
+
+def _serialize_graph_node_delta(node: GraphNode) -> dict[str, Any]:
+    record = _serialize_graph_node(node)
+    record["kind"] = "node"
+    record["snapshot_id"] = node.snapshot_id
+    return record
+
+
+def _serialize_graph_edge(edge: GraphEdge) -> dict[str, Any]:
+    evidence = {
+        "confidence_tier": edge.confidence_tier,
+        "source_ref": edge.source_ref,
+        "source_round_number": edge.source_round_number,
+        "detail": edge.evidence_json,
+    } if (
+        edge.confidence_tier is not None
+        or edge.source_ref is not None
+        or edge.source_round_number is not None
+        or edge.evidence_json is not None
+    ) else None
+    return {
+        "kind": "edge",
+        "id": edge.id,
+        "snapshot_id": edge.snapshot_id,
+        "key": (
+            f"edge:{edge.source_node_id}:{edge.target_node_id}:"
+            f"{edge.edge_type}:{edge.label or ''}"
+        ),
+        "source": edge.source_node_id,
+        "target": edge.target_node_id,
+        "type": edge.edge_type,
+        "weight": edge.weight,
+        "label": edge.label,
+        "evidence": evidence,
+    }
+
+
+def _snapshot_metadata(snapshot: GraphSnapshot) -> dict[str, Any]:
+    return _safe_parse_payload(snapshot.metadata_json)
+
+
+def _snapshot_version(snapshot: GraphSnapshot) -> int:
+    raw_version = _snapshot_metadata(snapshot).get("version", 0)
+    try:
+        return max(0, int(raw_version))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _advance_snapshot_version(snapshot: GraphSnapshot) -> int:
+    metadata = _snapshot_metadata(snapshot)
+    version = _snapshot_version(snapshot) + 1
+    metadata["version"] = version
+    snapshot.metadata_json = json.dumps(metadata, separators=(",", ":"))
+    return version
+
+
+def _record_deleted(deleted: list[str], entity_id: str | None) -> None:
+    if entity_id and entity_id not in deleted:
+        deleted.append(entity_id)
 
 
 def _synthetic_message_label(agent_name: str | None, content: str) -> str:
@@ -687,6 +760,8 @@ def _add_inter_agent_edge(
     round_number: int,
     confidence_tier: str,
     reason: str,
+    added_records: list[dict[str, Any]] | None = None,
+    updated_records: list[dict[str, Any]] | None = None,
 ) -> None:
     if source_node_id == target_node_id:
         return
@@ -701,6 +776,8 @@ def _add_inter_agent_edge(
         confidence_tier=confidence_tier,
         source_round_number=round_number,
         evidence_json=_inter_agent_edge_evidence(edge_type, reason),
+        added_records=added_records,
+        updated_records=updated_records,
     )
 
 
@@ -713,6 +790,8 @@ def _extract_inter_agent_edges(
     round_number: int,
     message_records: list[dict[str, Any]],
     agent_name_map: dict[str, str],
+    added_records: list[dict[str, Any]] | None = None,
+    updated_records: list[dict[str, Any]] | None = None,
 ) -> None:
     latest_record_by_agent: dict[str, dict[str, Any]] = {}
     for record in message_records:
@@ -748,6 +827,8 @@ def _extract_inter_agent_edges(
                     f"message mentions display name for agent {target_agent_id} "
                     f"on branch {branch_id}"
                 ),
+                added_records=added_records,
+                updated_records=updated_records,
             )
 
     sorted_agent_ids = sorted(latest_record_by_agent)
@@ -787,6 +868,8 @@ def _extract_inter_agent_edges(
                     f"{left_agent_id}={left_stance:.2f}, "
                     f"{right_agent_id}={right_stance:.2f}"
                 ),
+                added_records=added_records,
+                updated_records=updated_records,
             )
 
 
@@ -824,11 +907,14 @@ def _add_edge_if_missing(
     source_ref: str | None = None,
     source_round_number: int | None = None,
     evidence_json: str | None = None,
+    added_records: list[dict[str, Any]] | None = None,
+    updated_records: list[dict[str, Any]] | None = None,
 ) -> None:
     signature = _edge_signature(source_node_id, target_node_id, edge_type, label)
     if signature in existing_edge_signatures:
         existing_edge = existing_edge_signatures[signature]
         if existing_edge is not None:
+            before = _serialize_graph_edge(existing_edge)
             if existing_edge.confidence_tier is None and confidence_tier is not None:
                 existing_edge.confidence_tier = confidence_tier
             if existing_edge.source_ref is None and source_ref is not None:
@@ -837,6 +923,11 @@ def _add_edge_if_missing(
                 existing_edge.source_round_number = source_round_number
             if existing_edge.evidence_json is None and evidence_json is not None:
                 existing_edge.evidence_json = evidence_json
+            if (
+                updated_records is not None
+                and _serialize_graph_edge(existing_edge) != before
+            ):
+                updated_records.append(_serialize_graph_edge(existing_edge))
         return
     edge = GraphEdge(
         snapshot_id=snapshot_id,
@@ -851,7 +942,10 @@ def _add_edge_if_missing(
         evidence_json=evidence_json,
     )
     session.add(edge)
+    session.flush()
     existing_edge_signatures[signature] = edge
+    if added_records is not None:
+        added_records.append(_serialize_graph_edge(edge))
 
 
 def derive_stance_score(message) -> float:
@@ -931,7 +1025,7 @@ def append_round_nodes(
     round_number: int,
     messages: list,
     fork_event: dict | None = None,
-) -> None:
+) -> GraphDelta:
     """Append graph nodes/edges for a completed simulation round."""
     engine = get_engine()
     _ensure_agent_state_frame_schema(engine)
@@ -939,6 +1033,9 @@ def append_round_nodes(
     with _get_scenario_lock(scenario_id):
         with Session(engine) as session:
             snapshot = _get_or_create_snapshot(session, scenario_id)
+            added_records: list[dict[str, Any]] = []
+            updated_records: list[dict[str, Any]] = []
+            deleted_records: list[str] = []
             fork_only_append = fork_event is not None and not messages
 
             round_nodes_stmt = select(GraphNode).where(
@@ -987,8 +1084,10 @@ def append_round_nodes(
                     )
                 ).all()
                 for edge in stale_edges:
+                    _record_deleted(deleted_records, edge.id)
                     session.delete(edge)
                 for node in stale_event_nodes:
+                    _record_deleted(deleted_records, node.id)
                     session.delete(node)
                 round_nodes = [
                     node for node in round_nodes if node.id not in stale_event_node_ids
@@ -1017,8 +1116,10 @@ def append_round_nodes(
                     )
                 ).all()
                 for edge in stale_fork_edges:
+                    _record_deleted(deleted_records, edge.id)
                     session.delete(edge)
                 for node in stale_fork_nodes:
+                    _record_deleted(deleted_records, node.id)
                     session.delete(node)
                 round_nodes = [
                     node for node in round_nodes if node.id not in stale_fork_node_ids
@@ -1086,12 +1187,17 @@ def append_round_nodes(
                     session.add(node)
                     session.flush()
                     event_nodes_by_key[node_scope] = node
+                    added_records.append(_serialize_graph_node_delta(node))
                 else:
+                    before = _serialize_graph_node_delta(node)
                     node.label = event_label
                     node.round_number = round_number
                     node.ref_model = "agent_message"
                     node.ref_id = msg_id
                     node.payload_json = payload_json
+                    after = _serialize_graph_node_delta(node)
+                    if after != before:
+                        updated_records.append(after)
 
                 message_records.append({
                     "agent_id": agent_id,
@@ -1180,8 +1286,10 @@ def append_round_nodes(
                     )
                 ).all()
                 for edge in stale_shift_edges:
+                    _record_deleted(deleted_records, edge.id)
                     session.delete(edge)
                 for node in stale_shift_nodes:
+                    _record_deleted(deleted_records, node.id)
                     session.delete(node)
                 round_nodes = [
                     node for node in round_nodes if node.id not in stale_shift_node_ids
@@ -1219,6 +1327,7 @@ def append_round_nodes(
                     )
                 ).all()
                 for edge in stale_inter_agent_edges:
+                    _record_deleted(deleted_records, edge.id)
                     session.delete(edge)
 
             existing_edge_signatures: dict[tuple[str, str, str, str], GraphEdge | None]
@@ -1305,6 +1414,8 @@ def append_round_nodes(
                             edge_type="temporal",
                             weight=0.5,
                             source_round_number=round_number,
+                            added_records=added_records,
+                            updated_records=updated_records,
                         )
 
             if graph_edge_supports_evidence:
@@ -1317,6 +1428,8 @@ def append_round_nodes(
                     round_number=round_number,
                     message_records=message_records,
                     agent_name_map=agent_name_map,
+                    added_records=added_records,
+                    updated_records=updated_records,
                 )
 
             if latest_record_by_agent:
@@ -1345,6 +1458,8 @@ def append_round_nodes(
                         edge_type="temporal",
                         weight=0.5,
                         source_round_number=round_number,
+                        added_records=added_records,
+                        updated_records=updated_records,
                     )
 
             for shift_scope, shift_record in desired_shift_records.items():
@@ -1362,10 +1477,15 @@ def append_round_nodes(
                     session.add(shift_node)
                     session.flush()
                     stance_shift_nodes_by_key[shift_scope] = shift_node
+                    added_records.append(_serialize_graph_node_delta(shift_node))
                 else:
+                    before = _serialize_graph_node_delta(shift_node)
                     shift_node.label = shift_record["label"]
                     shift_node.round_number = round_number
                     shift_node.payload_json = shift_record["payload_json"]
+                    after = _serialize_graph_node_delta(shift_node)
+                    if after != before:
+                        updated_records.append(after)
                 _add_edge_if_missing(
                     session,
                     existing_edge_signatures,
@@ -1377,6 +1497,8 @@ def append_round_nodes(
                     label="stance shift",
                     confidence_tier="medium",
                     source_round_number=round_number,
+                    added_records=added_records,
+                    updated_records=updated_records,
                 )
 
             if fork_event is not None:
@@ -1406,12 +1528,17 @@ def append_round_nodes(
                     session.add(fork_node)
                     session.flush()
                     fork_nodes_by_key[fork_key] = fork_node
+                    added_records.append(_serialize_graph_node_delta(fork_node))
                 else:
+                    before = _serialize_graph_node_delta(fork_node)
                     fork_node.label = fork_label
                     fork_node.round_number = round_number
                     fork_node.ref_model = "branch"
                     fork_node.ref_id = fork_event.get("branch_id")
                     fork_node.payload_json = fork_payload_json
+                    after = _serialize_graph_node_delta(fork_node)
+                    if after != before:
+                        updated_records.append(after)
 
                 existing_trigger_edges = session.exec(
                     select(GraphEdge).where(
@@ -1429,6 +1556,7 @@ def append_round_nodes(
                         edge.label,
                     )
                     existing_edge_signatures.pop(signature, None)
+                    _record_deleted(deleted_records, edge.id)
                     session.delete(edge)
 
                 trigger_ids = list(fork_event.get("trigger_node_ids") or [])
@@ -1474,14 +1602,31 @@ def append_round_nodes(
                         label="triggered fork",
                         confidence_tier="high",
                         source_round_number=round_number,
+                        added_records=added_records,
+                        updated_records=updated_records,
                     )
 
+            changed = bool(added_records or updated_records or deleted_records)
+            version = (
+                _advance_snapshot_version(snapshot)
+                if changed
+                else _snapshot_version(snapshot)
+            )
+            if changed:
+                session.add(snapshot)
             session.commit()
             logger.info(
                 "causal_graph: appended %d nodes for scenario=%s round=%d",
                 len(message_records),
                 scenario_id,
                 round_number,
+            )
+            return GraphDelta(
+                added=added_records,
+                updated=updated_records,
+                deleted=deleted_records,
+                version=version,
+                snapshot_invalidated=False,
             )
 
 

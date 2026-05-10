@@ -150,7 +150,16 @@
       "campaign_next_unlock": "距下次解锁还差 {{count}} 分",
       "campaign_mastered": "当前题材已达本阶段上限",
       "campaign_quickstart_unlocks": "已解锁 {{count}} 枚徽章 · 完成 {{runs}} 局推演",
-      "campaign_first_run": "完成第一局后会在这里看到导演生涯进展"
+      "campaign_first_run": "完成第一局后会在这里看到导演生涯进展",
+      "continuity_title": "确认身份连续性",
+      "continuity_subtitle": "检测到以下角色可能对应你已有的跨场景身份。请选择是复用旧身份，还是为这次推演创建新身份。",
+      "continuity_reuse": "复用已有身份",
+      "continuity_create_new": "创建新身份",
+      "continuity_candidate_label": "候选身份",
+      "continuity_similarity_label": "相似度",
+      "continuity_cancel": "取消",
+      "continuity_confirm": "继续开始",
+      "continuity_preflight_error": "身份连续性预检失败，请重试。"
     },
     "sim": {
       "status": {
@@ -1510,7 +1519,23 @@
       "divergence_label": "分歧度",
       "branch_a_label": "分支 A（原始）",
       "branch_b_label": "分支 B（反事实）",
-      "feature_disabled": "反事实重演功能未启用。"
+      "feature_disabled": "反事实重演功能未启用。",
+      "latest_round": "最新回合",
+      "context_aria": "对照上下文",
+      "dual_stage_pill": "双舞台对照",
+      "stage_intro": "当前舞台继续播放实况，另一侧保留同回合镜像线索，方便横向比对。",
+      "captured_mirror": "已捕获镜像",
+      "standby_mirror": "待机镜像",
+      "path_weight_suffix": "路径权重",
+      "branch_overview": "分支概览",
+      "live_stage": "实况舞台",
+      "current_stage": "当前舞台",
+      "activate_pane": "切到此线",
+      "after_activation_label": "切换后可用",
+      "placeholder_primary": "先保留这条分支的上下文，切换后再抓取实况画面。",
+      "placeholder_detail": "首屏先展示回合、分歧和分支权重，让双舞台对照保持完整。",
+      "after_activation_detail": "激活一次后，这里会保留该分支的舞台镜像。",
+      "play_round": "播放这一轮"
     },
     "argument": {
       "empty": "暂无论证图谱数据。",

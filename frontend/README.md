@@ -170,9 +170,11 @@ npm run build:spike:phaser-custom
 ```
 
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
-- Latest Sprint 0-2 frontend verification:
-  - full vitest: `177 files / 1904 passed`
-  - `tsc / lint / build / i18n parity`: pass
+- Latest Sprint 4 frontend verification:
+  - full vitest: `179 files / 1926 passed`
+  - `tsc / game scenes eslint / build / i18n parity`: pass; i18n parity is `2159=2159`
+  - Gate 3/Sprint 4 probe: desktop/mobile Chromium `10/10` at `output/e2e/codex-review/overall-rerun/`
+- Latest Sprint 0-2 browser matrix:
   - browser matrix: `72/72 PASS` at `output/e2e/sprint0-2-review-20260510-browser/summary.json`
 - Latest Sprint 3 scoped verification:
   - `npm test -- --run src/api/client.test.ts src/components/Export/SnapshotExportDialogs.test.tsx src/components/ShareModal.test.tsx src/components/result/HOPsAnimation.test.tsx src/pages/InputView.test.tsx src/i18n/locales.test.ts --reporter=basic`: `6 files / 95 tests passed`

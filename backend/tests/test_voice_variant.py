@@ -3,6 +3,7 @@
 Covers:
 - Expanded keywords for existing 10 variants
 - 3 new variants: diplomat, advisor, science
+- 5 modern variants: tech-visionary, journalist, educator, artist, entrepreneur
 - scholar/civic overlap fix (no shared tokens)
 - plain fallback reduction
 - Precedence order
@@ -11,8 +12,8 @@ Covers:
 import pytest
 
 from app.services.ending_room_service._content import (
-    _oracle_role_voice_variant,
     _VOCABULARY_HINTS,
+    _oracle_role_voice_variant,
 )
 
 # shorthand
@@ -230,6 +231,66 @@ class TestScience:
         assert V(role, bio) == "science"
 
 
+class TestTechVisionary:
+    @pytest.mark.parametrize("role,bio", [
+        ("Tech Visionary", None),
+        ("Silicon Valley Futurist", None),
+        (None, "disruption and paradigm shift operator"),
+        ("Moonshot Architect", None),
+        (None, "exponential platform strategist"),
+    ])
+    def test_tech_visionary_keywords(self, role, bio):
+        assert V(role, bio) == "tech-visionary"
+
+
+class TestJournalist:
+    @pytest.mark.parametrize("role,bio", [
+        ("Investigative Journalist", None),
+        ("Reporter", "sources confirm the minister changed position"),
+        ("Newsroom Editor", None),
+        (None, "on the record breaking exclusive"),
+        ("Correspondent", "exclusive field dispatch"),
+    ])
+    def test_journalist_keywords(self, role, bio):
+        assert V(role, bio) == "journalist"
+
+
+class TestEducator:
+    @pytest.mark.parametrize("role,bio", [
+        ("Educator", None),
+        ("Professor", "academic instructor"),
+        ("Teacher", "curriculum lead"),
+        ("Lecturer", None),
+        (None, "pedagogy specialist who says let us unpack the lesson"),
+    ])
+    def test_educator_keywords(self, role, bio):
+        assert V(role, bio) == "educator"
+
+
+class TestArtist:
+    @pytest.mark.parametrize("role,bio", [
+        ("Artist", None),
+        ("Painter", "creative medium and expression"),
+        ("Creative Director", None),
+        ("Composer", "works through craft and resonance"),
+        ("Curator", "aesthetic vision lead"),
+    ])
+    def test_artist_keywords(self, role, bio):
+        assert V(role, bio) == "artist"
+
+
+class TestEntrepreneur:
+    @pytest.mark.parametrize("role,bio", [
+        ("Entrepreneur", None),
+        ("Startup Founder", None),
+        (None, "pivot runway traction scale iterate"),
+        ("Cofounder", "growth-stage operator"),
+        ("Venture Builder", "product-market fit owner"),
+    ])
+    def test_entrepreneur_keywords(self, role, bio):
+        assert V(role, bio) == "entrepreneur"
+
+
 # ── Vocabulary hints exist for all variants ──────────────────────────
 
 
@@ -237,7 +298,8 @@ class TestVocabularyHints:
     @pytest.mark.parametrize("variant", [
         "imperial", "field", "finance", "market", "faith",
         "industry", "frontier", "survival", "scholar", "civic",
-        "diplomat", "advisor", "science",
+        "diplomat", "advisor", "science", "tech-visionary", "journalist",
+        "educator", "artist", "entrepreneur",
     ])
     def test_hint_exists_both_languages(self, variant):
         assert variant in _VOCABULARY_HINTS
@@ -245,6 +307,14 @@ class TestVocabularyHints:
         assert "en" in _VOCABULARY_HINTS[variant]
         assert len(_VOCABULARY_HINTS[variant]["zh"]) > 10
         assert len(_VOCABULARY_HINTS[variant]["en"]) > 10
+
+    def test_all_eighteen_variants_are_registered(self):
+        assert set(_VOCABULARY_HINTS) == {
+            "imperial", "field", "finance", "market", "faith",
+            "industry", "frontier", "survival", "scholar", "civic",
+            "diplomat", "advisor", "science", "tech-visionary", "journalist",
+            "educator", "artist", "entrepreneur",
+        }
 
 
 # ── Scholar/civic overlap fix ────────────────────────────────────────
@@ -290,6 +360,36 @@ class TestPrecedence:
         """An envoy who advises is diplomat first."""
         assert V("Advisory Envoy", None) == "diplomat"
 
+    def test_journalist_phrase_before_scholar_record(self):
+        """Specific reporter phrase beats generic scholar 'record' token."""
+        assert V("Reporter", "on the record source") == "journalist"
+
+
+# ── Modern variant overlap checks ────────────────────────────────────
+
+
+class TestModernVariantOverlap:
+    def test_artisan_stays_market_not_artist(self):
+        assert V("Artisan", "skilled woodworker") == "market"
+
+    def test_records_clerk_stays_scholar_not_journalist(self):
+        assert V("Clerk", "keeping official records") == "scholar"
+
+    def test_investor_stays_finance_not_entrepreneur(self):
+        assert V("Investor", "venture capital background") == "finance"
+
+    def test_engineer_stays_industry_not_tech_visionary(self):
+        assert V("Engineer", "factory platform upgrade") == "industry"
+
+    def test_scholar_stays_scholar_not_educator(self):
+        assert V("Scholar", "ancient texts") == "scholar"
+
+    def test_medium_confidence_data_analyst_stays_science(self):
+        assert V("Data Analyst", "medium confidence forecast") == "science"
+
+    def test_large_scale_medic_stays_survival(self):
+        assert V("Field Medic", "large-scale evacuation") == "survival"
+
 
 # ── Known substring collisions (document, not fix) ───────────────────
 
@@ -334,6 +434,11 @@ class TestPlainFallbackReduction:
         ("Royal Advisor", None, "advisor"),  # "royal" not in any token list
         ("Chief Strategist", None, "advisor"),
         ("Lead Researcher", None, "science"),
+        ("Tech Visionary", None, "tech-visionary"),
+        ("Investigative Journalist", None, "journalist"),
+        ("Professor", None, "educator"),
+        ("Creative Director", None, "artist"),
+        ("Startup Founder", None, "entrepreneur"),
         ("Doctor", "field hospital", "survival"),
         ("Bishop", None, "faith"),
         # Still plain — intentionally unclassifiable
