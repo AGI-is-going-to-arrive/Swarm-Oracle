@@ -88,9 +88,11 @@ class TestWorkshopCRUD:
         identity_id = create_resp.json()["id"]
 
         # Update
-        resp = await client.put(f"/api/agents/workshop/{identity_id}", json={
-            "display_name": "Updated",
-        })
+        resp = await client.put(
+            f"/api/agents/workshop/{identity_id}",
+            params={"user_id": "upd_user"},
+            json={"display_name": "Updated"},
+        )
         assert resp.status_code == 200
         assert resp.json()["detail"] == "updated"
 
@@ -113,7 +115,11 @@ class TestWorkshopCRUD:
         })
         identity_id = create_resp.json()["id"]
 
-        resp = await client.put(f"/api/agents/workshop/{identity_id}", json={})
+        resp = await client.put(
+            f"/api/agents/workshop/{identity_id}",
+            params={"user_id": "empty_upd"},
+            json={},
+        )
         assert resp.status_code == 400
 
     async def test_delete_agent(self, client: AsyncClient):
@@ -126,7 +132,10 @@ class TestWorkshopCRUD:
         identity_id = create_resp.json()["id"]
 
         # Delete
-        resp = await client.delete(f"/api/agents/workshop/{identity_id}")
+        resp = await client.delete(
+            f"/api/agents/workshop/{identity_id}",
+            params={"user_id": "del_user"},
+        )
         assert resp.status_code == 204
 
         # Verify gone
@@ -180,14 +189,21 @@ class TestFullLifecycle:
         assert agent["knowledge_domains"] == ["politics", "law"]
 
         # 3. Update
-        upd_resp = await client.put(f"/api/agents/workshop/{identity_id}", json={
-            "display_name": "Renamed Agent",
-            "knowledge_domains": ["philosophy"],
-        })
+        upd_resp = await client.put(
+            f"/api/agents/workshop/{identity_id}",
+            params={"user_id": "lifecycle_user"},
+            json={
+                "display_name": "Renamed Agent",
+                "knowledge_domains": ["philosophy"],
+            },
+        )
         assert upd_resp.status_code == 200
 
         # 4. Delete
-        del_resp = await client.delete(f"/api/agents/workshop/{identity_id}")
+        del_resp = await client.delete(
+            f"/api/agents/workshop/{identity_id}",
+            params={"user_id": "lifecycle_user"},
+        )
         assert del_resp.status_code == 204
 
         # 5. Verify deleted — list empty

@@ -120,7 +120,7 @@ export default function PredictionModal({
       : confidence <= 0.7
         ? t('prediction.confidence_mid')
         : t('prediction.confidence_high');
-  const betKindLabel = getStructuredBetKindLabel(effectiveBetKind, isZh);
+  const betKindLabel = getStructuredBetKindLabel(effectiveBetKind, t);
   const betTargetLabel =
     effectiveBetKind === 'branch_winner'
       ? (
@@ -322,9 +322,9 @@ export default function PredictionModal({
               onChange={(e) => setBetKind(e.target.value as StructuredBetKind)}
               disabled={isDisabled}
             >
-              <option value="branch_winner">{getStructuredBetKindLabel('branch_winner', isZh)}</option>
-              <option value="ending_tone">{getStructuredBetKindLabel('ending_tone', isZh)}</option>
-              <option value="profile_resonance">{getStructuredBetKindLabel('profile_resonance', isZh)}</option>
+              <option value="branch_winner">{getStructuredBetKindLabel('branch_winner', t)}</option>
+              <option value="ending_tone">{getStructuredBetKindLabel('ending_tone', t)}</option>
+              <option value="profile_resonance">{getStructuredBetKindLabel('profile_resonance', t)}</option>
             </select>
           </div>
 

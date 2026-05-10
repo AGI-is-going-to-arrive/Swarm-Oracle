@@ -575,6 +575,18 @@ async def api_capabilities():
             enabled=settings.FEATURE_SNAPSHOT_EXPORT,
             version="1.0" if settings.FEATURE_SNAPSHOT_EXPORT else "0.0",
         ),
+        "education_templates": _capability_entry(
+            enabled=settings.FEATURE_EDUCATION_TEMPLATES,
+            version="1.0" if settings.FEATURE_EDUCATION_TEMPLATES else "0.0",
+        ),
+        "persona_export": _capability_entry(
+            enabled=settings.FEATURE_PERSONA_EXPORT,
+            version="1.0" if settings.FEATURE_PERSONA_EXPORT else "0.0",
+        ),
+        "prediction_journal": _capability_entry(
+            enabled=settings.FEATURE_PREDICTION_JOURNAL,
+            version="1.0" if settings.FEATURE_PREDICTION_JOURNAL else "0.0",
+        ),
     }
 
 
@@ -1065,6 +1077,42 @@ async def get_replay_artifact(artifact_id: str):
             "payload": artifact.payload_json,
             "created_at": artifact.created_at.isoformat(),
         }
+
+
+# ── Education Scenario Templates ────────────────────────
+
+
+def _require_education_templates_feature() -> None:
+    if not settings.FEATURE_EDUCATION_TEMPLATES:
+        raise api_error(
+            404,
+            "FEATURE_DISABLED",
+            "Feature 'education_templates' is not enabled",
+        )
+
+
+@router.get("/scenario/templates")
+async def list_scenario_templates(
+    category: str | None = Query(default=None),
+    difficulty: str | None = Query(default=None),
+):
+    """List education scenario templates filtered by category/difficulty."""
+    _require_education_templates_feature()
+    from app.services.education_templates import list_templates
+
+    return {"templates": list_templates(category=category, difficulty=difficulty)}
+
+
+@router.get("/scenario/templates/{template_id}")
+async def get_scenario_template(template_id: str):
+    """Get a single education scenario template by ID."""
+    _require_education_templates_feature()
+    from app.services.education_templates import get_template
+
+    template = get_template(template_id)
+    if template is None:
+        raise api_error(404, "TEMPLATE_NOT_FOUND", f"Template '{template_id}' not found")
+    return template
 
 
 @router.get("/scenario/{scenario_id}", response_model=ScenarioResponse)

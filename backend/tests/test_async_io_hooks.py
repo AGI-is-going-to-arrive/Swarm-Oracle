@@ -20,7 +20,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ── Helpers ──────────────────────────────────────────────────
 
 def _make_messages(n: int = 3) -> list:
@@ -71,7 +70,7 @@ class TestCausalGraphMainPath:
         round_num = 3
 
         # Import the module-level alias
-        from app.services.simulator import _causal_append, _CAUSAL_AVAILABLE  # noqa: F401
+        from app.services.simulator import _CAUSAL_AVAILABLE, _causal_append  # noqa: F401
 
         # Simulate the exact code path from simulator.py:1132-1139
         if _CAUSAL_AVAILABLE and mock_settings.FEATURE_CAUSAL_GRAPH:
@@ -94,7 +93,7 @@ class TestCausalGraphMainPath:
         mock_settings.FEATURE_CAUSAL_GRAPH = True
         mock_to_thread.side_effect = RuntimeError("DB write failed")
 
-        from app.services.simulator import _causal_append, _CAUSAL_AVAILABLE
+        from app.services.simulator import _CAUSAL_AVAILABLE, _causal_append
 
         caught = False
         if _CAUSAL_AVAILABLE and mock_settings.FEATURE_CAUSAL_GRAPH:
@@ -141,7 +140,7 @@ class TestFactionsProcessRound:
         branch_id = "br-fac"
         round_num = 2
 
-        from app.services.simulator import _factions_process, _FACTIONS_AVAILABLE
+        from app.services.simulator import _FACTIONS_AVAILABLE, _factions_process
 
         mock_to_thread.return_value = None  # No factions detected
 
@@ -165,7 +164,7 @@ class TestFactionsProcessRound:
         mock_settings.FEATURE_FACTIONS = True
         mock_to_thread.side_effect = RuntimeError("Faction clustering failed")
 
-        from app.services.simulator import _factions_process, _FACTIONS_AVAILABLE
+        from app.services.simulator import _FACTIONS_AVAILABLE, _factions_process
 
         caught = False
         if _FACTIONS_AVAILABLE and mock_settings.FEATURE_FACTIONS:
@@ -208,7 +207,7 @@ class TestFactionsProcessRound:
         }
         mock_to_thread.return_value = faction_result
 
-        from app.services.simulator import _factions_process, _FACTIONS_AVAILABLE
+        from app.services.simulator import _FACTIONS_AVAILABLE, _factions_process
 
         pushed: list[dict] = []
 
@@ -254,7 +253,7 @@ class TestFactionsProcessRound:
         mock_settings.FEATURE_FACTIONS = True
         mock_to_thread.return_value = None
 
-        from app.services.simulator import _factions_process, _FACTIONS_AVAILABLE
+        from app.services.simulator import _FACTIONS_AVAILABLE, _factions_process
 
         pushed: list[dict] = []
 
@@ -297,7 +296,7 @@ class TestCheckpointWrite:
         round_num = 4
         bb_snapshot = {"summary": "round 4 global summary"}
 
-        from app.services.simulator import _checkpoint_write, _CHECKPOINT_AVAILABLE
+        from app.services.simulator import _CHECKPOINT_AVAILABLE, _checkpoint_write
 
         if _CHECKPOINT_AVAILABLE and mock_settings.FEATURE_COUNTERFACTUAL_REPLAY:
             try:
@@ -320,7 +319,7 @@ class TestCheckpointWrite:
         mock_settings.FEATURE_COUNTERFACTUAL_REPLAY = True
         mock_to_thread.side_effect = RuntimeError("Checkpoint DB error")
 
-        from app.services.simulator import _checkpoint_write, _CHECKPOINT_AVAILABLE
+        from app.services.simulator import _CHECKPOINT_AVAILABLE, _checkpoint_write
 
         caught = False
         if _CHECKPOINT_AVAILABLE and mock_settings.FEATURE_COUNTERFACTUAL_REPLAY:
@@ -355,7 +354,7 @@ class TestCheckpointWrite:
         mock_settings.FEATURE_COUNTERFACTUAL_REPLAY = True
         agents = _make_agents()
 
-        from app.services.simulator import _checkpoint_write, _CHECKPOINT_AVAILABLE
+        from app.services.simulator import _CHECKPOINT_AVAILABLE, _checkpoint_write
 
         if _CHECKPOINT_AVAILABLE and mock_settings.FEATURE_COUNTERFACTUAL_REPLAY:
             try:
@@ -393,7 +392,7 @@ class TestCausalGraphForkPath:
             "children": ["br-child-1", "br-child-2"],
         }
 
-        from app.services.simulator import _causal_append, _CAUSAL_AVAILABLE
+        from app.services.simulator import _CAUSAL_AVAILABLE, _causal_append
 
         if _CAUSAL_AVAILABLE and mock_settings.FEATURE_CAUSAL_GRAPH:
             try:
@@ -419,7 +418,7 @@ class TestCausalGraphForkPath:
         mock_settings.FEATURE_CAUSAL_GRAPH = True
         mock_to_thread.side_effect = RuntimeError("DAG insert failed")
 
-        from app.services.simulator import _causal_append, _CAUSAL_AVAILABLE
+        from app.services.simulator import _CAUSAL_AVAILABLE, _causal_append
 
         caught = False
         if _CAUSAL_AVAILABLE and mock_settings.FEATURE_CAUSAL_GRAPH:
@@ -455,7 +454,7 @@ class TestCausalGraphForkPath:
         """Fork path passes empty messages list (no new agent messages in fork itself)."""
         mock_settings.FEATURE_CAUSAL_GRAPH = True
 
-        from app.services.simulator import _causal_append, _CAUSAL_AVAILABLE
+        from app.services.simulator import _CAUSAL_AVAILABLE, _causal_append
 
         if _CAUSAL_AVAILABLE and mock_settings.FEATURE_CAUSAL_GRAPH:
             try:
@@ -665,6 +664,7 @@ class TestSimulatorSourceWiring:
         """Read the actual simulator.py source and verify each hook
         call site is wrapped in asyncio.to_thread."""
         import inspect
+
         from app.services import simulator
 
         source = inspect.getsource(simulator.run_simulation)

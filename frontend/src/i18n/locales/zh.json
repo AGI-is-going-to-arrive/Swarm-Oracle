@@ -717,7 +717,10 @@
       "branch_unavailable_note": "当前只开放了主世界线，先押结局倾向或题材回响会更稳。",
       "confidence_low": "猜测",
       "confidence_mid": "有根据",
-      "confidence_high": "确信"
+      "confidence_high": "确信",
+      "bet_kind_branch_winner": "押注世界线",
+      "bet_kind_profile_resonance": "押题材回响",
+      "bet_kind_ending_tone": "押注结局倾向"
     },
     "leaderboard": {
       "title": "预言家排行榜",
@@ -729,7 +732,24 @@
       "best_score": "最高分",
       "streak": "连胜",
       "empty": "暂无排行数据，快去预测吧！",
-      "back": "← 返回"
+      "empty_segment": "当前筛选条件下暂无结果",
+      "back": "← 返回",
+      "showing_count": "共 {{total}} 条，显示 {{filtered}} 条",
+      "filter_toggle": "筛选",
+      "filter_aria": "排行榜筛选条件",
+      "filter_type": "场景类型",
+      "filter_type_all": "全部",
+      "filter_type_debate": "辩论",
+      "filter_type_simulation": "推演",
+      "filter_type_roundtable": "圆桌",
+      "filter_date_from": "起始日期",
+      "filter_date_to": "结束日期",
+      "filter_date_invalid": "起始日期必须早于结束日期",
+      "filter_advanced": "高级筛选",
+      "filter_min_agents": "Agent 数下限",
+      "filter_max_agents": "Agent 数上限",
+      "filter_min_gt_max": "下限不能超过上限",
+      "filter_reset": "重置"
     },
     "history": {
       "title": "推演历史",
@@ -844,7 +864,22 @@
       "error_points": "导演点数不足，本轮暂时无法出牌。",
       "error_cooldown": "冷却中，还需 {{count}} 轮。",
       "error_min_round": "这张卡要到第 {{round}} 轮后才可使用。",
-      "success": "玩法卡已注入，世界线正在响应这次导演动作。"
+      "success": "玩法卡已注入，世界线正在响应这次导演动作。",
+      "crest_alt": "玩法策略徽记",
+      "scenario_hooks_aria": "题材钩子",
+      "signature_arc_title": "题材连锁事件",
+      "card_status_title": "当前卡牌状态",
+      "next_label": "下一步",
+      "recommended_label": "推荐",
+      "counter_label": "反制",
+      "cost_one": "消耗 1 点",
+      "cooldown_remaining": "冷却 {{count}} 轮",
+      "directive_label": "导向提示",
+      "card_directive_aria": "玩法卡指令",
+      "error_select_target_agent": "请选择目标角色。",
+      "error_two_different_agents_pact": "密约交易需要两名不同角色。",
+      "error_two_different_agents_debate": "文明辩论需要两名不同角色。",
+      "system_track_summary": "{{riskLabel}} {{riskValue}}/6；{{resourceLabel}} {{resourceValue}}/6"
     },
     "debate": {
       "entry_title": "辩论竞技场",
@@ -1409,7 +1444,126 @@
       "generated_group": "系统生成",
       "generated_badge": "生成",
       "generated_no_edit": "系统生成的 Agent 不可编辑",
-      "generated_no_delete": "系统生成的 Agent 不可删除"
+      "generated_no_delete": "系统生成的 Agent 不可删除",
+      "filter_aria": "筛选 Agent",
+      "all_tab": "全部",
+      "favorites": "收藏",
+      "favorites_section": "我的收藏",
+      "favorites_error": "加载收藏失败：{{message}}",
+      "no_favorites": "暂无收藏的 Agent",
+      "no_favorites_hint": "在任意 Agent 上点击爱心即可加入收藏。",
+      "search_placeholder": "搜索 Agent…",
+      "search_aria": "搜索 Agent",
+      "no_results": "没有匹配的 Agent。",
+      "favorite_aria": "添加到收藏",
+      "unfavorite_aria": "从收藏中移除",
+      "source_generated": "系统生成",
+      "source_custom": "自定义",
+      "source_label": "来源：{{source}}",
+      "bias_label": "决策倾向",
+      "view_details": "查看详情"
+    },
+    "persona_export": {
+      "export": "导出",
+      "import": "导入人设",
+      "import_title": "导入 Agent 人设",
+      "drop_zone": "拖拽 .json 文件到此处或点击浏览",
+      "paste_json": "或在下方粘贴 JSON",
+      "invalid_schema": "无效文件：schema_version 必须为 1",
+      "missing_fields": "缺少必填字段：name, role, persona_text",
+      "invalid_json": "无效 JSON",
+      "import_success": "人设导入成功",
+      "export_success": "人设已导出",
+      "submit": "导入",
+      "cancel": "取消"
+    },
+    "journal": {
+      "title": "预测日志",
+      "loading_capability": "正在检查日志访问权限…",
+      "lab": {
+        "title": "预测实验室"
+      },
+      "stats": {
+        "total": "预测总数",
+        "resolved": "已揭晓",
+        "pending": "待揭晓",
+        "brier": "平均 Brier 分"
+      },
+      "form": {
+        "aria": "记录一条新的预测",
+        "question": "问题",
+        "probability": "预测概率（0–1）",
+        "scenario_optional": "场景 ID（可选）",
+        "submit": "记录预测",
+        "invalid": "请填写问题，并将概率设置为 0 到 1 之间。"
+      },
+      "entries": {
+        "title": "最近的预测"
+      },
+      "entry": {
+        "resolved": "已揭晓",
+        "pending": "待揭晓",
+        "predicted": "预测值",
+        "created": "记录时间",
+        "outcome": "实际结果",
+        "outcome_yes": "已发生",
+        "outcome_no": "未发生",
+        "brier": "Brier 分",
+        "mark_yes": "标记为已发生",
+        "mark_no": "标记为未发生"
+      },
+      "side": {
+        "aria": "Agent 阵容与世界线面板"
+      },
+      "roster": {
+        "title": "Agent 阵容",
+        "empty": "还没有 Agent 互动记录。先记录一条预测来扩展你的阵容。",
+        "aria_label": "Agent 成长时间线"
+      },
+      "worldline": {
+        "title": "世界线地图",
+        "aria_label": "世界线分支缩略图",
+        "loading": "地图加载中…"
+      },
+      "calibration": {
+        "title": "校准曲线",
+        "aria_label": "校准曲线",
+        "x_axis": "预测概率",
+        "y_axis": "实际频率",
+        "empty": "尚无已揭晓的预测。",
+        "caption": "对角线表示完美校准；圆点大小与样本数量成正比。",
+        "point_tooltip": "{{range}}：预测 {{predicted}}，实际 {{actual}}（n={{count}}）"
+      }
+    },
+    "identity_inspector": {
+      "title": "身份记忆检查器",
+      "back_to_library": "返回 Agent 库",
+      "missing_id": "未选择身份。",
+      "count": "共 {{count}} 条记录",
+      "entry_title": "记忆条目",
+      "metadata_label": "记忆元数据",
+      "chip_scenario": "场景",
+      "chip_round": "轮次",
+      "confidence_label": "置信度",
+      "confidence_high": "高",
+      "confidence_medium": "中",
+      "confidence_low": "低",
+      "confidence_unknown": "未知",
+      "compacted_label": "已压缩",
+      "compacted_aria": "压缩后的记忆条目",
+      "expand": "展开",
+      "collapse": "收起",
+      "loading_aria": "加载记忆时间线中",
+      "timeline_aria": "身份记忆时间线",
+      "empty_title": "尚未记录任何记忆",
+      "error_load": "加载身份记忆失败。",
+      "error_not_found": "未找到对应身份。",
+      "type_episodic": "情景记忆",
+      "type_semantic": "语义记忆",
+      "type_growth": "成长事件",
+      "type_compacted": "压缩摘要",
+      "type_observation": "观察",
+      "type_reflection": "反思"
     },
     "causal": {
       "title": "因果图谱",
@@ -1799,9 +1953,11 @@
       "graph_edge_a11y": "图谱连线。关系详情可在下方文本摘要中查看。",
       "graph_handle": "图谱连接点",
       "submitting": "提交中...",
-      "saving": "保存中...",
+      "saving": "保存中…",
       "save": "保存",
       "delete": "删除",
+      "refresh": "刷新",
+      "refreshing": "刷新中…",
       "not_applicable": "不适用",
       "back_to_result": "返回结果页",
       "runtime_preset_label": "神谕档位",
@@ -2395,6 +2551,36 @@
       "import_success_hint": "已从快照创建新场景。",
       "import_view_scenario": "查看场景",
       "import_failed": "快照导入失败，请重试。"
+    },
+    "director_objectives": {
+      "next_signature_card": "下一张题材连锁牌",
+      "advance_signature_arc": "推进题材连锁",
+      "advance_signature_arc_detail": "打出「{{label}}」来推进当前题材连锁。",
+      "commit_worldline": "承诺一条世界线",
+      "commit_worldline_pending": "选择一条世界线作为本局重点投资对象。",
+      "current_commitment": "当前承诺：{{branchTitle}}",
+      "committed_worldline": "承诺世界线：{{branchTitle}}",
+      "completed": "已完成",
+      "not_committed": "未承诺",
+      "in_progress": "进行中",
+      "hit_dominant": "命中主导分支",
+      "miss_dominant": "未命中主导分支"
+    },
+    "education": {
+      "templates_title": "教育模板",
+      "use_template": "使用模板",
+      "filter_category": "类别",
+      "filter_difficulty": "难度",
+      "filter_all": "全部",
+      "difficulty_beginner": "入门",
+      "difficulty_intermediate": "进阶",
+      "difficulty_advanced": "高级",
+      "select_template": "使用此模板",
+      "suggested_config": "建议: {{agents}} 个代理, {{rounds}} 轮",
+      "no_templates": "未找到模板",
+      "loading": "正在加载模板…",
+      "close": "关闭",
+      "tags": "标签"
     }
   }
 }

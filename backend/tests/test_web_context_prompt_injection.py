@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from app.services.memory import build_agent_context
 from app.services.narrator import _build_narration_prompt
 from app.services.web_context import WebSearchResult, WebSearchSnippet, format_context_block

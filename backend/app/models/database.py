@@ -96,6 +96,7 @@ _LIGHTWEIGHT_ADDITIVE_COLUMNS = (
     ("graph_edge", "source_ref", "TEXT"),
     ("graph_edge", "source_round_number", "INTEGER"),
     ("graph_edge", "evidence_json", "TEXT"),
+    ("agent_identity", "is_favorite", "INTEGER DEFAULT 0"),
 )
 
 
@@ -408,12 +409,17 @@ def _has_legacy_ending_room_schema(connection) -> bool:
     return True
 
 
+_CORE_BOOTSTRAP_TABLES = frozenset({
+    "scenario", "agent", "branch", "round", "agent_message",
+    "debate", "ending_room", "agent_identity", "graph_node", "graph_edge",
+})
+
+
 def _has_bootstrap_sqlmodel_schema(connection) -> bool:
     table_names = set(
         connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").scalars()
     )
-    expected_tables = set(SQLModel.metadata.tables)
-    if not expected_tables <= table_names:
+    if not _CORE_BOOTSTRAP_TABLES <= table_names:
         return False
 
     for table_name, column_name, column_type in _LIGHTWEIGHT_ADDITIVE_COLUMNS:
@@ -421,6 +427,8 @@ def _has_bootstrap_sqlmodel_schema(connection) -> bool:
             _migrate_add_column(connection, table_name, column_name, column_type)
 
     for table_name, table in SQLModel.metadata.tables.items():
+        if table_name not in table_names:
+            continue
         expected_columns = {column.name for column in table.columns}
         if not _has_expected_columns(connection, table_name, expected_columns):
             return False

@@ -267,7 +267,7 @@ npm run lint
 npm run build
 ```
 
-当前前端全量回归最近一次记录为 `179 files / 1926 tests / 0 failed`，`tsc`、game scenes `eslint --max-warnings=0`、`build` 和 i18n parity `en:2159 zh:2159` 都通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
+当前 Sprint 5-6 前端全量回归最近一次记录为 `183 files / 1965 tests / 0 failed`，`npx tsc --noEmit -p tsconfig.app.json` 和 `npm run build` 都通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
@@ -326,6 +326,48 @@ npm test -- --run src/pages/AgentLibrary.test.tsx src/pages/AgentWorkshopView.te
 - Debate 创建时，已选自建 Agent 的前 2 个 ID 进入 `custom_agent_ids`。
 - `/result/:id` 在 `custom_agents` capability 开启时显示 Agent Library bridge。
 - 移动端 tier selector 单列显示，badge 不溢出。
+
+### Sprint 5-6 Agent / Journal / Templates / Leaderboard 回归
+
+```bash
+cd backend
+source .venv/bin/activate
+ruff check . --select E,F,I,W
+python -m pytest tests/test_journal_routes.py tests/test_agent_favorite.py tests/test_identity_inspector.py tests/test_document_ingestion.py tests/test_education_templates.py tests/test_persona_export.py tests/test_hallucination_gate.py tests/test_leaderboard_segment.py -q
+
+cd ../frontend
+npx tsc --noEmit -p tsconfig.app.json
+npm test -- --run src/components/__tests__/AgentCard.test.tsx src/components/__tests__/EducationTemplatePicker.test.tsx src/components/__tests__/PersonaExportImport.test.tsx src/components/__tests__/JournalPanels.test.tsx
+npx vitest run --reporter=verbose
+npm run build
+```
+
+本 session 已复核：
+
+- backend 全量 `ruff check . --select E,F,I,W`：通过
+- backend 全量 `python -m pytest -q --tb=short`：`2709 passed, 2 skipped, 9 warnings`
+- backend ruff 修复后 touched-test rerun：`207 passed, 7 skipped`
+- frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
+- frontend full vitest：`183 files / 1965 tests / 0 failed`
+- frontend 新组件窄集：`4 files / 39 tests passed`
+- frontend `npm run build`：通过，build performance budget 无 violations
+
+浏览器复核优先覆盖：
+
+- `/` 打开教育模板 picker，选择模板后问题、Agent 数和轮数回填。
+- `/agents` 收藏 Agent，切到 favorites tab 后列表同步。
+- `/agents` 单个/批量导出 persona JSON，导入 schema v1 JSON 后新增 Agent。
+- `/agents/new` document tab 上传 PDF；0 字节、非 PDF 和无文本 PDF 要有可见错误。
+- `/leaderboard` segment filters 与 URL params 同步；清空筛选后回到旧数组响应路径。
+- `/me/journal` 空日志、已 resolve、calibration 空数据都要能读。
+- `/agents/identities/:id/memories` 空 memory、跨用户 404 和向量库错误提示要分开。
+- 375px mobile 下 `EducationTemplatePicker`、`PersonaExportImport`、Agent card 和 leaderboard filters 不横向溢出。
+
+当前测试覆盖边界：
+
+- `AgentCard / EducationTemplatePicker / PersonaExportImport / JournalPanels` 已有组件级测试。
+- `AgentWorkshop` document tab、`AgentLibrary` import/export/favorites、`Leaderboard` segment UI、`PersonalJournalView`、`IdentityInspectorView` 仍建议补页面级前端测试。
+- `npx playwright test --project=chromium --project=firefox --project=webkit` 当前会因为没有这些 named projects 直接失败；本 session 用手动 Chromium browser spot-check 覆盖核心路径，Firefox / WebKit 未在这条 Playwright 命令下实测。
 
 ### SimulationView / PredictionModal / Gameplay Cards 回归
 

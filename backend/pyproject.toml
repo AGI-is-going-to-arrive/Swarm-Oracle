@@ -17,6 +17,7 @@ dependencies = [
     "websockets>=14.0",
     "alembic>=1.14",
     "prometheus-fastapi-instrumentator>=7.0",
+    "pypdf>=4.0",
     "python-multipart>=0.0.9",
 ]
 

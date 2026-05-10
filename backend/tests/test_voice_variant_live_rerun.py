@@ -8,8 +8,9 @@ Run: pytest tests/test_voice_variant_live_rerun.py -v -s
 Requires: LLM at http://127.0.0.1:8318/v1 (or 8317 fallback)
 """
 
-import httpx
 import json
+
+import httpx
 import pytest
 
 from app.models.ending_room import (
@@ -18,11 +19,11 @@ from app.models.ending_room import (
     EndingRoomPhase,
     EndingRoomType,
 )
+from app.services.ending_room_service import EndingRoomRoleSlot
 from app.services.ending_room_service._content import (
     _build_oracle_rewrite_prompt,
     _oracle_role_voice_variant,
 )
-from app.services.ending_room_service import EndingRoomRoleSlot
 
 LLM_URLS = ["http://127.0.0.1:8318/v1", "http://127.0.0.1:8317/v1"]
 LLM_API_KEY = "sk-12345678"
@@ -215,7 +216,6 @@ async def test_live_voice_variant_observation():
         text = r["generated"]
         markers = VARIANT_MARKERS.get(variant, [])
         hits = [m for m in markers if m in text]
-        miss_count = len(markers) - len(hits) if markers else 0
         print(f"\n  [{r['label']}]")
         print(f"    Variant markers found: {hits if hits else '(none — control or generic)'}")
         print(f"    Length: {len(text)} chars")
@@ -229,7 +229,7 @@ async def test_live_voice_variant_observation():
         for r in non_plain
     )
     print(f"\n  Total domain vocab hits across 4 non-plain agents: {total_hits}")
-    print(f"  (0 = no differentiation, higher = better)")
+    print("  (0 = no differentiation, higher = better)")
 
     # Don't hard-fail — this is observation, not regression
     if total_hits == 0:

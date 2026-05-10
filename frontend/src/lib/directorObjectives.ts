@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next';
 import type { GameplayCardId, GameplayProfileId } from '../components/gameplayCards';
 import { getGameplayCardLabel } from '../components/gameplayCards';
 import type { BranchInfo } from '../types';
@@ -45,25 +46,24 @@ export function evaluateDirectorObjectives(payload: {
   dominantBranch: Pick<BranchInfo, 'id' | 'title'> | null;
   isZh: boolean;
   isFinal: boolean;
+  t: TFunction;
 }): EvaluatedDirectorObjective[] {
-  const { objectives, meta, dominantBranch, isZh, isFinal } = payload;
+  const { objectives, meta, dominantBranch, isZh, isFinal, t } = payload;
 
   return objectives.map((objective) => {
     if (objective.kind === 'signature_arc_step') {
       const label = objective.targetCardId
         ? getGameplayCardLabel(objective.targetCardId, isZh)
-        : (isZh ? '下一张题材连锁牌' : 'Next signature-arc card');
+        : t('director_objectives.next_signature_card');
       const used = objective.targetCardId
         ? meta.cards.usageLog.some((usage) => usage.cardId === objective.targetCardId)
         : false;
       return {
         ...objective,
         status: used ? 'completed' : 'pending',
-        title: isZh ? '推进题材连锁' : 'Advance the Signature Arc',
-        detail: isZh
-          ? `打出「${label}」来推进当前题材连锁。`
-          : `Play "${label}" to advance the current signature arc.`,
-        progress: used ? (isZh ? '已完成' : 'Completed') : `0/1`,
+        title: t('director_objectives.advance_signature_arc'),
+        detail: t('director_objectives.advance_signature_arc_detail', { label }),
+        progress: used ? t('director_objectives.completed') : `0/1`,
       };
     }
 
@@ -71,11 +71,9 @@ export function evaluateDirectorObjectives(payload: {
       return {
         ...objective,
         status: 'pending',
-        title: isZh ? '承诺一条世界线' : 'Commit to a Worldline',
-        detail: isZh
-          ? '选择一条世界线作为本局重点投资对象。'
-          : 'Choose one worldline as the branch you will actively back in this run.',
-        progress: isZh ? '未承诺' : 'Not committed',
+        title: t('director_objectives.commit_worldline'),
+        detail: t('director_objectives.commit_worldline_pending'),
+        progress: t('director_objectives.not_committed'),
       };
     }
 
@@ -83,11 +81,9 @@ export function evaluateDirectorObjectives(payload: {
       return {
         ...objective,
         status: 'active',
-        title: isZh ? '承诺一条世界线' : 'Commit to a Worldline',
-        detail: isZh
-          ? `当前承诺：${meta.commitment.branchTitle}`
-          : `Current commitment: ${meta.commitment.branchTitle}`,
-        progress: isZh ? '进行中' : 'In progress',
+        title: t('director_objectives.commit_worldline'),
+        detail: t('director_objectives.current_commitment', { branchTitle: meta.commitment.branchTitle }),
+        progress: t('director_objectives.in_progress'),
       };
     }
 
@@ -95,13 +91,11 @@ export function evaluateDirectorObjectives(payload: {
     return {
       ...objective,
       status: hit ? 'completed' : 'failed',
-      title: isZh ? '承诺一条世界线' : 'Commit to a Worldline',
-      detail: isZh
-        ? `承诺世界线：${meta.commitment.branchTitle}`
-        : `Committed worldline: ${meta.commitment.branchTitle}`,
+      title: t('director_objectives.commit_worldline'),
+      detail: t('director_objectives.committed_worldline', { branchTitle: meta.commitment.branchTitle }),
       progress: hit
-        ? (isZh ? '命中主导分支' : 'Became the dominant branch')
-        : (isZh ? '未命中主导分支' : 'Did not become the dominant branch'),
+        ? t('director_objectives.hit_dominant')
+        : t('director_objectives.miss_dominant'),
     };
   });
 }

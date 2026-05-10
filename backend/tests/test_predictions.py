@@ -506,7 +506,10 @@ class TestScoringService(unittest.TestCase):
                 session.commit()
                 pred_id = pred.id
 
-            with patch("app.services.scoring.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+            with patch(
+                "app.services.scoring.llm_call_json_with_stream_fallback",
+                new_callable=AsyncMock,
+            ) as mock_llm:
                 mock_llm.return_value = {"score": 88, "reason": "命中主线"}
                 result = asyncio.run(
                     score_prediction(
@@ -563,7 +566,10 @@ class TestScoringService(unittest.TestCase):
                 session.commit()
                 pred_id = pred.id
 
-            with patch("app.services.scoring.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+            with patch(
+                "app.services.scoring.llm_call_json_with_stream_fallback",
+                new_callable=AsyncMock,
+            ) as mock_llm:
                 mock_llm.return_value = {"score": 88, "reason": "命中主线"}
                 result = asyncio.run(score_prediction(pred_id))
 
@@ -612,7 +618,10 @@ class TestScoringService(unittest.TestCase):
                 session.commit()
                 pred_id = pred.id
 
-            with patch("app.services.scoring.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+            with patch(
+                "app.services.scoring.llm_call_json_with_stream_fallback",
+                new_callable=AsyncMock,
+            ) as mock_llm:
                 mock_llm.return_value = {"score": 90, "reason": "Aligned"}
                 result = asyncio.run(score_prediction(pred_id))
 
@@ -725,7 +734,10 @@ class TestScoringService(unittest.TestCase):
                 session.commit()
                 pred_id = pred.id
 
-            with patch("app.services.scoring.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+            with patch(
+                "app.services.scoring.llm_call_json_with_stream_fallback",
+                new_callable=AsyncMock,
+            ) as mock_llm:
                 mock_llm.return_value = {"score": 88, "reason": "命中主线"}
                 with patch(
                     "app.services.scoring._update_leaderboard",

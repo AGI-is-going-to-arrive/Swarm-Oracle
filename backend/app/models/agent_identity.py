@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import Boolean, Column, UniqueConstraint, false
 from sqlmodel import Field, SQLModel
 
 
@@ -41,6 +41,10 @@ class AgentIdentity(SQLModel, table=True):
     decision_bias_json: Optional[str] = None  # JSON string
     knowledge_domain_json: Optional[str] = None  # JSON string (predefined tags only)
     preferred_tier: str = Field(default="IMPORTANT", max_length=32)
+    is_favorite: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default=false()),
+    )
     continuity_key: str = ""  # hash for Layer 1 matching
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)

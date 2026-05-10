@@ -45,7 +45,10 @@ async def _probe_non_stream(base_url: str) -> dict:
         chat_status = chat_resp.status_code
         if chat_resp.is_success:
             chat_data = chat_resp.json()
-            chat_content = ((chat_data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            chat_content = (
+                ((chat_data.get("choices") or [{}])[0].get("message") or {}).get("content")
+                or ""
+            )
         else:
             chat_data = {}
             chat_error = chat_resp.text[:300]
@@ -85,7 +88,10 @@ async def _probe_non_stream(base_url: str) -> dict:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _RUN_REAL_LLM_TESTS, reason="set RUN_REAL_LLM_TESTS=1 to enable live probes")
+@pytest.mark.skipif(
+    not _RUN_REAL_LLM_TESTS,
+    reason="set RUN_REAL_LLM_TESTS=1 to enable live probes",
+)
 async def test_live_gateway_non_stream_probe():
     observed = []
     for base_url in LLM_URLS:
@@ -98,7 +104,10 @@ async def test_live_gateway_non_stream_probe():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not _RUN_REAL_LLM_TESTS, reason="set RUN_REAL_LLM_TESTS=1 to enable live probes")
+@pytest.mark.skipif(
+    not _RUN_REAL_LLM_TESTS,
+    reason="set RUN_REAL_LLM_TESTS=1 to enable live probes",
+)
 async def test_live_gateway_stream_json_probe():
     prompt = 'Reply with strict JSON only: {"ok": true, "source": "stream"}'
     errors: list[str] = []

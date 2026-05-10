@@ -57,7 +57,7 @@
   - `进入会客厅`
   - `只改一步`
   - 不会展示 `发起圆桌` / `异线旁听席`
-- 当前 active handoff 在 `.claude/team-plan/comprehensive-improvement-plan.md`：Sprint 0-4 已完成本地审查、修复和验证；下次从 Sprint 4 剩余 follow-up 与 Sprint 5 开始。
+- 当前 active handoff 在 `.claude/team-plan/comprehensive-improvement-plan.md`：Sprint 0-4 已完成本地审查、修复和验证；当前工作树已进入 Sprint 5-6 的 Agent、Journal、模板与 leaderboard segment 收口。
 
 ## 文档契约
 
@@ -89,7 +89,12 @@
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响 |
 | Director Campaign | 已落地，含 goals、risk/resource、commitment、growth、后端 `score_breakdown` 与结果页导演复盘 / 因果档案 |
 | Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight` |
-| Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑自建 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；自建 Agent 不开放 `CORE` 层级 |
+| Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；自建 Agent 不开放 `CORE` 层级 |
+| Persona Export / Import | 已落地，受 `FEATURE_PERSONA_EXPORT` gate；支持单个 / 批量导出 `schema_version=1` JSON，并把导入结果创建为当前用户的新 custom Agent |
+| Education Templates | 已落地，受 `FEATURE_EDUCATION_TEMPLATES` gate；首页可打开模板选择器，按学科与难度筛选后回填问题、Agent 数和轮数 |
+| Prediction Journal | 已落地，受 `FEATURE_PREDICTION_JOURNAL` gate；支持个人预测日志、resolve、校准曲线和 journal 页面 |
+| Leaderboard Segments | 已落地；`/api/leaderboard` 在传入 segment filters 时返回 `entries + segment_metadata`，不传筛选时保持旧数组响应 |
+| Hallucination Gate | 已接线为 warning-only 后处理；只给 verdict 附加 claims / evidence / warning metadata，不阻断生成结果 |
 | Counterfactual Replay & Compare | 已落地，支持 counterfactual / resume / compare；resume 当前会优先使用同分支 checkpoint picker，compare 当前采用单活跃 Theater + shared round selector |
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale、readonly replay import；只有分享链接过长并回退到本地只读 `?local=` 时，结果页才会明确显示 `Save local read-only copy` |
 | Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面代表改选当前支持 `drag-to-seat / keyboard reseat`，移动端保留 `click-to-seat`；桌面 roundtable committed transcript 当前已补长段折叠 / 展开，phase insight 展示和预填 prompt 会把长段复述压成一句；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到 anchored thread restore，并已补 Firefox / WebKit scoped regression；单结局结果页只暴露 `进入会客厅 / 只改一步`；已新增 `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 两种交互模式，证据卡追问会把用户引用的世界线保留到 assistant turn；completed live roundtable 的 `1-on-1 Interview` 会先展示代表的角色、世界线、立场、最近原话和人物简介；Oracle 主文案当前以 factual anchor + LLM generation/rewrite fallback 为主，角色身份和动态词汇提示按 `UNTRUSTED DATA` 处理，follow-up 空流式或仅 reasoning 输出会退回非流式改写，最终 fallback 也必须是可直接显示的人话 |
@@ -102,15 +107,15 @@
 
 ```text
 frontend/  React + TypeScript + Vite
-  ├─ pages/         主模式、Debate、History、Leaderboard
+  ├─ pages/         主模式、Debate、History、Leaderboard、Agents、Journal
   ├─ game/          Pixel Theater / Phaser runtime
   ├─ stores/        页面状态与 authority 合流
   └─ lib/           replay、authority、gameplay、分享等 helper
 
 backend/   FastAPI + SQLModel + SQLite + ChromaDB
-  ├─ app/api/       scenarios / campaign / debate / ending-room / ws
-  ├─ app/services/  simulator / memory / llm / scoring / ending-room
-  ├─ app/models/    scenario / campaign / debate / ending-room / prediction
+  ├─ app/api/       scenarios / campaign / debate / ending-room / journal / ws
+  ├─ app/services/  simulator / memory / llm / scoring / ending-room / journal / persona export
+  ├─ app/models/    scenario / campaign / debate / ending-room / prediction / journal
   └─ shared/        gameplay contract
 ```
 
@@ -139,7 +144,7 @@ docker compose up --build -d
   - `FEATURE_CAUSAL_GRAPH`
   - `FEATURE_FACTIONS`
   - `FEATURE_ARGUMENT_MAP`
-- `KG Explorer`、`Replay Trace` 和图谱节点对话默认不随 Docker 评审栈开启；需要时显式设置 `FEATURE_KG_EXPLORER=true`、`FEATURE_REPLAY_TRACE=true`、`FEATURE_AGENT_CONVERSATION=true`，然后重启 backend。
+- `KG Explorer`、`Replay Trace`、图谱节点对话、教育模板、persona 导入导出和个人预测日志默认不随 Docker 评审栈开启；需要时显式设置对应 `FEATURE_*`，然后重启 backend。
 - 如果你只是想拉一套全新的评审环境，不复用旧 named volume，直接带 project 名起一套隔离栈：
 
 ```bash
@@ -181,14 +186,16 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-当前 Sprint 4 收口验证口径：
+当前 Sprint 5-6 收口验证口径：
 
-- backend 全量 `pytest -x -q`：`2581 passed, 3 skipped, 9 warnings`。
-- frontend 全量 `npx vitest run`：`179 files / 1926 tests / 0 failed`。
-- frontend `tsc --noEmit`、`eslint src/game/scenes --max-warnings=0`、`npm run build` 全部通过，build performance budget 无 violations。
-- i18n parity：`en:2159 zh:2159`，missing/mismatch 均为空。
-- Gate 3/Sprint 4 browser probe 最终 rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
-- 剩余非阻塞项：`ResultContext` 仍偏宽，后续可按 selector/useMemo 收窄；backend 全量 pytest 仍有 `tests/test_web_context_integration.py` 里的 `_noop_background` ResourceWarning。
+- backend 全量 `ruff check . --select E,F,I,W`：通过。
+- backend 全量 `python -m pytest -q --tb=short`：`2709 passed, 2 skipped, 9 warnings`。
+- backend ruff 修复后 touched-test rerun：`207 passed, 7 skipped`。
+- frontend `npx tsc --noEmit -p tsconfig.app.json`：通过。
+- frontend 全量 `npx vitest run --reporter=verbose`：`183 files / 1965 tests / 0 failed`。
+- frontend `npm run build`：通过，build performance budget 无 violations。
+- Playwright named browser projects 当前未配置 `chromium/firefox/webkit`；本轮改用手动 Chromium browser spot-check，覆盖首页教育模板、Agent 收藏/导出/导入、Leaderboard segment URL sync 和 375px mobile 检查。
+- 剩余非阻塞项：frontend vitest 仍有 React `act(...)` warning 与 `InputView.test.tsx` 里的 AlertDialog description warning；backend 全量 pytest 仍有 `tests/test_web_context_integration.py` 里的 `_noop_background` coroutine warning。
 
 完整签收入口：
 

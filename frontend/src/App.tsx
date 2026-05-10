@@ -32,6 +32,7 @@ const AgentLibrary = lazy(() => import('./pages/AgentLibrary'));
 const AgentWorkshopView = lazy(() => import('./pages/AgentWorkshopView'));
 const CausalReviewView = lazy(() => import('./pages/CausalReviewView'));
 const CompareDigestView = lazy(() => import('./pages/CompareDigestView'));
+const IdentityInspectorView = lazy(() => import('./pages/IdentityInspectorView'));
 // Graph playability upgrade (FE-2 / FE-4): G6 pages + replay view
 // - KGExplorerView + TimelineGalaxy share capability 'kg_explorer'
 // - ReplayView will be authored by FE-4; its chunk resolves lazily when
@@ -42,6 +43,8 @@ const TimelineGalaxy = lazy(() => import('./pages/TimelineGalaxy'));
 const ReplayView = lazy(() => import('./pages/ReplayView'));
 // S0-1: 3-step setup wizard at /admin/setup
 const SetupWizardView = lazy(() => import('./pages/SetupWizardView'));
+// Personal Prediction Journal at /me/journal
+const PersonalJournalView = lazy(() => import('./pages/PersonalJournalView'));
 
 function RouteFallback() {
   const { t } = useTranslation();
@@ -60,6 +63,7 @@ export default function App() {
             <Route path="/agents" element={<AgentLibrary />} />
             <Route path="/agents/new" element={<AgentWorkshopView />} />
             <Route path="/agents/edit/:id" element={<AgentWorkshopView />} />
+            <Route path="/agents/identities/:id/memories" element={<IdentityInspectorView />} />
             <Route path="/sim/replay" element={<SimulationView />} />
             {/* Phase 3: causal-map BEFORE :id catch-all (Gemini review) */}
             <Route path="/sim/:id/causal-map" element={<CausalReviewView />} />
@@ -84,6 +88,8 @@ export default function App() {
             <Route path="/replay/:id" element={<ReplayView />} />
             {/* S0-1: Setup Wizard (admin onboarding) */}
             <Route path="/admin/setup" element={<SetupWizardView />} />
+            {/* Personal Prediction Journal */}
+            <Route path="/me/journal" element={<PersonalJournalView />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

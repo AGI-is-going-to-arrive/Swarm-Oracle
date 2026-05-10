@@ -10,9 +10,11 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+from datetime import date, datetime, time, timezone
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, field_validator
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -24,7 +26,7 @@ from app.api.helpers import (
     resolve_authenticated_user_id,
     verify_session,
 )
-from app.models import Leaderboard, Prediction, Scenario, ScenarioStatus
+from app.models import Agent, Leaderboard, Prediction, Scenario, ScenarioStatus
 from app.models.database import get_engine
 from app.services.lang_detect import detect_language, get_anonymous_predictor_name
 from app.services.llm_client import validate_llm_base_url
@@ -37,6 +39,7 @@ OPEN_PREDICTION_STATUSES = {
     ScenarioStatus.SIMULATING,
 }
 ANONYMOUS_USER_ID = "anonymous"
+LEADERBOARD_SCENARIO_TYPES: frozenset[str] = frozenset({"debate", "simulation", "roundtable"})
 
 
 def _require_owned_prediction_scenario(
@@ -294,24 +297,267 @@ async def trigger_scoring(
     }
 
 
+def _parse_iso_date_boundary(raw: str, *, end_of_day: bool) -> datetime:
+    """Parse an ISO date or ISO datetime string into a UTC datetime boundary.
+
+    Accepts:
+      - Plain ISO dates (``2026-01-15``) — coerced to start (00:00:00) or end
+        (23:59:59.999999) of UTC day depending on ``end_of_day``.
+      - ISO datetimes with optional ``Z`` suffix (``2026-01-15T08:30:00Z``) —
+        used verbatim, normalized to UTC.
+
+    Raises ``ValueError`` on malformed input so callers can surface a 422.
+    """
+    cleaned = raw.strip()
+    if not cleaned:
+        raise ValueError("date string is empty")
+    # Allow trailing 'Z' (UTC) which fromisoformat accepts on Py3.11+ but be safe.
+    iso_compat = cleaned[:-1] + "+00:00" if cleaned.endswith("Z") else cleaned
+    try:
+        parsed_dt = datetime.fromisoformat(iso_compat)
+    except ValueError:
+        try:
+            parsed_date = date.fromisoformat(cleaned)
+        except ValueError as exc:
+            raise ValueError(f"invalid ISO date: {raw}") from exc
+        boundary_time = time.max if end_of_day else time.min
+        return datetime.combine(parsed_date, boundary_time, tzinfo=timezone.utc)
+    if parsed_dt.tzinfo is None:
+        parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+    return parsed_dt.astimezone(timezone.utc)
+
+
+def _resolve_scenario_type(scenario: Scenario) -> str | None:
+    """Best-effort scenario_type classification used by leaderboard segmentation.
+
+    Order of resolution:
+      1. ``parsed_context['scenario_type']`` if present and in allowlist.
+      2. ``parsed_context['interaction_mode']`` mapped to allowlist (heuristic).
+      3. None when not classifiable.
+    """
+    ctx = scenario.parsed_context or {}
+    if not isinstance(ctx, dict):
+        return None
+    explicit = ctx.get("scenario_type")
+    if isinstance(explicit, str) and explicit in LEADERBOARD_SCENARIO_TYPES:
+        return explicit
+    interaction = ctx.get("interaction_mode")
+    if isinstance(interaction, str):
+        lowered = interaction.lower()
+        if "debate" in lowered:
+            return "debate"
+        if "roundtable" in lowered or "round_table" in lowered:
+            return "roundtable"
+        if "simulation" in lowered or lowered in {"auto_recap", "archivist_route"}:
+            return "simulation"
+    return None
+
+
+def _scenario_type_sql_clause(scenario_type: str):
+    """Build the SQL equivalent of `_resolve_scenario_type` for leaderboard filters."""
+    context = Scenario.parsed_context
+    explicit = context["scenario_type"].as_string() == scenario_type
+    interaction = func.lower(context["interaction_mode"].as_string())
+    if scenario_type == "debate":
+        return or_(explicit, interaction.like("%debate%"))
+    if scenario_type == "roundtable":
+        return or_(
+            explicit,
+            interaction.like("%roundtable%"),
+            interaction.like("%round_table%"),
+        )
+    return or_(
+        explicit,
+        interaction.like("%simulation%"),
+        interaction == "auto_recap",
+        interaction == "archivist_route",
+    )
+
+
 @router.get("/leaderboard")
 async def get_leaderboard(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-) -> list[LeaderboardEntry]:
-    """Get the global prediction leaderboard (top N by avg score)."""
+    scenario_type: str | None = Query(default=None),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    min_agents: int | None = Query(default=None, ge=1, le=50),
+    max_agents: int | None = Query(default=None, ge=1, le=50),
+) -> list | dict:
+    """Get the global prediction leaderboard with optional segmentation filters.
+
+    Backwards compatibility: when **no** segment filter (``scenario_type``,
+    ``date_from``, ``date_to``, ``min_agents``, ``max_agents``) is supplied,
+    the response is a plain JSON array of ``LeaderboardEntry`` rows — exactly
+    the legacy contract. Only when at least one segment filter is supplied,
+    the response is wrapped as ``{"entries": [...], "segment_metadata": {...}}``
+    so that clients can inspect ``active_filters``, the unsegmented
+    ``total_count`` and the post-filter ``filtered_count``.
+    """
+    # ---- 1. Validate segment query params (HTTP 422 on bad input) --------
+    active_filters: dict[str, object] = {}
+
+    if scenario_type is not None:
+        if scenario_type not in LEADERBOARD_SCENARIO_TYPES:
+            raise api_error(
+                422,
+                "INVALID_SCENARIO_TYPE",
+                f"scenario_type must be one of {sorted(LEADERBOARD_SCENARIO_TYPES)}",
+            )
+        active_filters["scenario_type"] = scenario_type
+
+    parsed_date_from: datetime | None = None
+    if date_from is not None:
+        try:
+            parsed_date_from = _parse_iso_date_boundary(date_from, end_of_day=False)
+        except ValueError as exc:
+            raise api_error(422, "INVALID_DATE_FROM", str(exc)) from None
+        active_filters["date_from"] = date_from
+
+    parsed_date_to: datetime | None = None
+    if date_to is not None:
+        try:
+            parsed_date_to = _parse_iso_date_boundary(date_to, end_of_day=True)
+        except ValueError as exc:
+            raise api_error(422, "INVALID_DATE_TO", str(exc)) from None
+        active_filters["date_to"] = date_to
+
+    if parsed_date_from is not None and parsed_date_to is not None:
+        if parsed_date_from > parsed_date_to:
+            raise api_error(
+                422,
+                "INVALID_DATE_RANGE",
+                "date_from must be on or before date_to",
+            )
+
+    if min_agents is not None:
+        active_filters["min_agents"] = min_agents
+    if max_agents is not None:
+        active_filters["max_agents"] = max_agents
+    if (
+        min_agents is not None
+        and max_agents is not None
+        and min_agents > max_agents
+    ):
+        raise api_error(
+            422,
+            "INVALID_AGENT_RANGE",
+            "min_agents must be <= max_agents",
+        )
+
+    has_segment_filter = bool(active_filters)
+    capped_limit = min(limit, 100)
+
     engine = get_engine()
     with Session(engine) as session:
+        # ---- 2. Fast path: no segment filters → legacy list response ----
+        if not has_segment_filter:
+            entries_q = (
+                select(Leaderboard)
+                .where(Leaderboard.total_predictions >= 1)
+                .where(Leaderboard.user_id != ANONYMOUS_USER_ID)
+                .order_by(Leaderboard.avg_score.desc())
+                .offset(offset)
+                .limit(capped_limit)
+            )
+            entries = list(session.exec(entries_q).all())
+            return [
+                LeaderboardEntry(
+                    user_id=e.user_id,
+                    user_name=e.user_name,
+                    total_predictions=e.total_predictions,
+                    avg_score=round(e.avg_score, 1),
+                    best_score=round(e.best_score, 1),
+                    win_streak=e.win_streak,
+                ).model_dump()
+                for e in entries
+            ]
+
+        # ---- 3. Compute baseline total_count (segment-agnostic) ---------
+        total_count_value = session.exec(
+            select(func.count())
+            .select_from(Leaderboard)
+            .where(Leaderboard.total_predictions >= 1)
+            .where(Leaderboard.user_id != ANONYMOUS_USER_ID)
+        ).one()
+        if isinstance(total_count_value, tuple):
+            total_count_value = total_count_value[0]
+        total_count = int(total_count_value or 0)
+
+        # ---- 4. Build segment-aware user-id subquery --------------------
+        # Push filtering into SQL so we do not materialize all Scenario rows or
+        # build large scenario/user IN-lists in Python.
+        matching_user_ids_query = (
+            select(Prediction.user_id)
+            .join(Scenario, Prediction.scenario_id == Scenario.id)
+            .where(Prediction.user_id != ANONYMOUS_USER_ID)
+            .where(Prediction.user_id != "")
+        )
+        if parsed_date_from is not None:
+            matching_user_ids_query = matching_user_ids_query.where(
+                Scenario.created_at >= parsed_date_from
+            )
+        if parsed_date_to is not None:
+            matching_user_ids_query = matching_user_ids_query.where(
+                Scenario.created_at <= parsed_date_to
+            )
+
+        scenario_type_filter = active_filters.get("scenario_type")
+        if isinstance(scenario_type_filter, str):
+            matching_user_ids_query = matching_user_ids_query.where(
+                _scenario_type_sql_clause(scenario_type_filter)
+            )
+
+        if min_agents is not None or max_agents is not None:
+            agent_counts_sq = (
+                select(
+                    Agent.scenario_id.label("scenario_id"),
+                    func.count(Agent.id).label("agent_count"),
+                )
+                .group_by(Agent.scenario_id)
+                .subquery()
+            )
+            matching_user_ids_query = matching_user_ids_query.join(
+                agent_counts_sq,
+                agent_counts_sq.c.scenario_id == Scenario.id,
+                isouter=True,
+            )
+            agent_count = func.coalesce(agent_counts_sq.c.agent_count, 0)
+            if min_agents is not None:
+                matching_user_ids_query = matching_user_ids_query.where(
+                    agent_count >= min_agents
+                )
+            if max_agents is not None:
+                matching_user_ids_query = matching_user_ids_query.where(
+                    agent_count <= max_agents
+                )
+
+        matching_user_ids_sq = matching_user_ids_query.distinct().subquery()
+        matching_user_id_select = select(matching_user_ids_sq.c.user_id)
+
+        # ---- 5. Filtered count + paginated leaderboard slice -----------
+        filtered_count_value = session.exec(
+            select(func.count())
+            .select_from(Leaderboard)
+            .where(Leaderboard.total_predictions >= 1)
+            .where(Leaderboard.user_id != ANONYMOUS_USER_ID)
+            .where(Leaderboard.user_id.in_(matching_user_id_select))
+        ).one()
+        if isinstance(filtered_count_value, tuple):
+            filtered_count_value = filtered_count_value[0]
+        filtered_count = int(filtered_count_value or 0)
+
         entries = list(session.exec(
             select(Leaderboard)
             .where(Leaderboard.total_predictions >= 1)
             .where(Leaderboard.user_id != ANONYMOUS_USER_ID)
+            .where(Leaderboard.user_id.in_(matching_user_id_select))
             .order_by(Leaderboard.avg_score.desc())
             .offset(offset)
-            .limit(min(limit, 100))
+            .limit(capped_limit)
         ).all())
 
-        return [
+        entry_payload = [
             LeaderboardEntry(
                 user_id=e.user_id,
                 user_name=e.user_name,
@@ -322,3 +568,12 @@ async def get_leaderboard(
             )
             for e in entries
         ]
+
+        return {
+            "entries": [p.model_dump() for p in entry_payload],
+            "segment_metadata": {
+                "active_filters": active_filters,
+                "total_count": total_count,
+                "filtered_count": filtered_count,
+            },
+        }

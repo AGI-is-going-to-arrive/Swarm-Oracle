@@ -26,7 +26,6 @@ from app.models import (
     Scenario,
 )
 from app.models.database import get_engine
-from app.services.llm_client import validate_llm_base_url
 from app.services.ending_room_service import (
     EndingRoomServiceError,
     append_room_user_turn_async,
@@ -39,6 +38,7 @@ from app.services.ending_room_service import (
     load_ending_room_thread_snapshot,
     run_ending_room_background,
 )
+from app.services.llm_client import validate_llm_base_url
 
 router = APIRouter(prefix="/api", tags=["ending-room"], dependencies=[Depends(verify_session)])
 ws_router = APIRouter(tags=["ending-room"])

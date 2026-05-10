@@ -229,9 +229,12 @@ export default function GameplayCardsModal({
         ? getGameplayCardLabel(signatureArcState.nextCardId, isZh)
         : t('gameplay.signature_arc_free_pivot'),
     });
-  const systemTrackSummary = isZh
-    ? `${systemTracks.riskLabel} ${systemTracks.riskValue}/6；${systemTracks.resourceLabel} ${systemTracks.resourceValue}/6`
-    : `${systemTracks.riskLabel} ${systemTracks.riskValue}/6; ${systemTracks.resourceLabel} ${systemTracks.resourceValue}/6`;
+  const systemTrackSummary = t('gameplay.system_track_summary', {
+    riskLabel: systemTracks.riskLabel,
+    riskValue: systemTracks.riskValue,
+    resourceLabel: systemTracks.resourceLabel,
+    resourceValue: systemTracks.resourceValue,
+  });
   const directorPointsLabel = t('gameplay.director_points');
   const pressureLabel = t('gameplay.pressure_label');
   const commitmentLabel = t('gameplay.committed_branch_label');
@@ -367,7 +370,7 @@ export default function GameplayCardsModal({
 
   const handleSubmit = async () => {
     if (!targetBranch) {
-      setErrorMsg(isZh ? '当前没有可干预的活跃分支。' : 'No active branch is available for intervention.');
+      setErrorMsg(t('gameplay.error_no_active_branch'));
       return;
     }
     if (readOnly) {
@@ -376,15 +379,15 @@ export default function GameplayCardsModal({
     }
 
     if (requiresPrimaryAgent && !primaryAgentId) {
-      setErrorMsg(isZh ? '请选择目标角色。' : 'Select a target agent.');
+      setErrorMsg(t('gameplay.error_select_target_agent'));
       return;
     }
 
     if (requiresSecondAgent && (!secondaryAgentId || primaryAgentId === secondaryAgentId)) {
       setErrorMsg(
         cardId === 'backchannel_pact'
-          ? (isZh ? '密约交易需要两名不同角色。' : 'Backchannel Pact needs two different agents.')
-          : (isZh ? '文明辩论需要两名不同角色。' : 'Civilization Debate needs two different agents.'),
+          ? t('gameplay.error_two_different_agents_pact')
+          : t('gameplay.error_two_different_agents_debate'),
       );
       return;
     }
@@ -485,22 +488,22 @@ export default function GameplayCardsModal({
           <img
             className="gameplay-modal__art"
             src={GAMEPLAY_PANEL_ASSET}
-            alt={isZh ? '玩法策略徽记' : 'Gameplay tactics crest'}
+            alt={t('gameplay.crest_alt')}
           />
           <h2>{t('gameplay.title')}</h2>
           <p className="modal-subtitle">{t('gameplay.subtitle')}</p>
           <p className="gameplay-modal__profile">
-            {isZh ? '当前玩法画像' : 'Scenario profile'}:
+            {t('gameplay.profile_label')}:
             <strong>{getGameplayProfileLabel(gameplayProfile.id, isZh)}</strong>
             {' · '}
             {getGameplayProfileDescription(gameplayProfile.id, isZh)}
           </p>
-          <div className="gameplay-modal__hooks" aria-label={isZh ? '题材钩子' : 'Scenario hooks'}>
+          <div className="gameplay-modal__hooks" aria-label={t('gameplay.scenario_hooks_aria')}>
             {profileSignatureHooks.map((hook) => (
               <span key={hook} className="gameplay-modal__hook">{hook}</span>
             ))}
           </div>
-          <div className="gameplay-modal__stats" aria-label={isZh ? '导演状态' : 'Director state'}>
+          <div className="gameplay-modal__stats" aria-label={t('gameplay.director_state_aria')}>
             <div className="gameplay-modal__stat">
               <span>{directorPointsLabel}</span>
               <strong>{meta.director.remainingPoints}/{meta.director.maxPoints}</strong>
@@ -520,7 +523,7 @@ export default function GameplayCardsModal({
           </div>
           <div className="gameplay-modal__preview-stack">
             <section className="gameplay-modal__preview-note">
-              <strong>{isZh ? '题材连锁事件' : 'Signature arc'}</strong>
+              <strong>{t('gameplay.signature_arc_title')}</strong>
               <span>{signatureArcState.sequenceLabels.join(' → ')}</span>
               <span>{signatureArcProgressText}</span>
             </section>
@@ -536,7 +539,7 @@ export default function GameplayCardsModal({
             </section>
           </div>
           <div className={`gameplay-modal__availability ${cardAvailability.ok && !readOnly ? 'gameplay-modal__availability--ready' : ''}`}>
-            <strong>{isZh ? '当前卡牌状态' : 'Card status'}</strong>
+            <strong>{t('gameplay.card_status_title')}</strong>
             <span>{availabilityLabel}</span>
           </div>
           {readOnly && (
@@ -579,14 +582,14 @@ export default function GameplayCardsModal({
                             <img src={getGameplayBadgeSrc('recommended')} alt="" aria-hidden="true" />
                             <span>
                               {currentCardId === nextCardId
-                                ? (isZh ? '下一步' : 'Next')
-                                : (isZh ? '推荐' : 'Recommended')}
+                                ? t('gameplay.next_label')
+                                : t('gameplay.recommended_label')}
                             </span>
                           </span>
                         )}
                         {isCounterplayCard(currentCardId) && (
                           <span className="gameplay-card__badge gameplay-card__badge--counter">
-                            <span>{isZh ? '反制' : 'Counter'}</span>
+                            <span>{t('gameplay.counter_label')}</span>
                           </span>
                         )}
                       </span>
@@ -598,13 +601,13 @@ export default function GameplayCardsModal({
                       {getGameplayCardDirectivePreview(gameplayProfile.id, currentCardId, isZh)}
                     </span>
                     <span className="gameplay-card__meta">
-                      {isZh ? '消耗 1 点' : 'Cost 1'}
+                      {t('gameplay.cost_one')}
                       {getCardCooldownRemaining(meta, currentCardId, normalizedCurrentRound) > 0 && (
                         <>
                           {' · '}
-                          {isZh
-                            ? `冷却 ${getCardCooldownRemaining(meta, currentCardId, normalizedCurrentRound)} 轮`
-                            : `CD ${getCardCooldownRemaining(meta, currentCardId, normalizedCurrentRound)} rounds`}
+                          {t('gameplay.cooldown_remaining', {
+                            count: getCardCooldownRemaining(meta, currentCardId, normalizedCurrentRound),
+                          })}
                         </>
                       )}
                     </span>
@@ -618,7 +621,7 @@ export default function GameplayCardsModal({
             <div className="gameplay-modal__selection-head">
               <div className="gameplay-modal__selection-copy">
                 <span className="gameplay-modal__selection-kicker">
-                  {isZh ? '当前卡牌' : 'Selected card'}
+                  {t('gameplay.selected_card_label')}
                 </span>
                 <strong>{selectedCardLabel}</strong>
               </div>
@@ -656,7 +659,7 @@ export default function GameplayCardsModal({
               </div>
             )}
             <div className="gameplay-modal__selection-item">
-              <span>{isZh ? '导向提示' : 'Directive mode'}</span>
+              <span>{t('gameplay.directive_label')}</span>
               <strong>{directiveModeLabel}</strong>
             </div>
           </div>

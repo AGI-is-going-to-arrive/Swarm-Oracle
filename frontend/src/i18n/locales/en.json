@@ -717,7 +717,10 @@
       "branch_unavailable_note": "Only the root worldline is available for now. Ending-tone or resonance bets are the safer fallback.",
       "confidence_low": "Guess",
       "confidence_mid": "Informed",
-      "confidence_high": "Certain"
+      "confidence_high": "Certain",
+      "bet_kind_branch_winner": "Branch Winner",
+      "bet_kind_profile_resonance": "Theme Resonance",
+      "bet_kind_ending_tone": "Ending Tone"
     },
     "leaderboard": {
       "title": "Oracle Leaderboard",
@@ -729,7 +732,24 @@
       "best_score": "Best Score",
       "streak": "Streak",
       "empty": "No leaderboard data yet. Start predicting!",
-      "back": "← Back"
+      "empty_segment": "No results for this segment",
+      "back": "← Back",
+      "showing_count": "Showing {{filtered}} of {{total}}",
+      "filter_toggle": "Filters",
+      "filter_aria": "Leaderboard filters",
+      "filter_type": "Scenario type",
+      "filter_type_all": "All",
+      "filter_type_debate": "Debate",
+      "filter_type_simulation": "Simulation",
+      "filter_type_roundtable": "Roundtable",
+      "filter_date_from": "From",
+      "filter_date_to": "To",
+      "filter_date_invalid": "Start date must be before end date",
+      "filter_advanced": "Advanced",
+      "filter_min_agents": "Min agents",
+      "filter_max_agents": "Max agents",
+      "filter_min_gt_max": "Min agents cannot exceed max agents",
+      "filter_reset": "Reset"
     },
     "history": {
       "title": "Simulation History",
@@ -844,7 +864,22 @@
       "error_points": "Not enough director points for this move right now.",
       "error_cooldown": "Cooling down for {{count}} more round(s).",
       "error_min_round": "This card unlocks starting from round {{round}}.",
-      "success": "Card injected. The worldline is now reacting to your director move."
+      "success": "Card injected. The worldline is now reacting to your director move.",
+      "crest_alt": "Gameplay tactics crest",
+      "scenario_hooks_aria": "Scenario hooks",
+      "signature_arc_title": "Signature arc",
+      "card_status_title": "Card status",
+      "next_label": "Next",
+      "recommended_label": "Recommended",
+      "counter_label": "Counter",
+      "cost_one": "Cost 1",
+      "cooldown_remaining": "CD {{count}} rounds",
+      "directive_label": "Directive mode",
+      "card_directive_aria": "Gameplay card directive",
+      "error_select_target_agent": "Select a target agent.",
+      "error_two_different_agents_pact": "Backchannel Pact needs two different agents.",
+      "error_two_different_agents_debate": "Civilization Debate needs two different agents.",
+      "system_track_summary": "{{riskLabel}} {{riskValue}}/6; {{resourceLabel}} {{resourceValue}}/6"
     },
     "debate": {
       "entry_title": "Debate Arena",
@@ -1409,7 +1444,126 @@
       "generated_group": "System Generated",
       "generated_badge": "Generated",
       "generated_no_edit": "System-generated agents cannot be edited",
-      "generated_no_delete": "System-generated agents cannot be deleted"
+      "generated_no_delete": "System-generated agents cannot be deleted",
+      "filter_aria": "Filter agents",
+      "all_tab": "All",
+      "favorites": "Favorites",
+      "favorites_section": "Your Favorites",
+      "favorites_error": "Failed to load favorites: {{message}}",
+      "no_favorites": "No favorite agents yet",
+      "no_favorites_hint": "Tap the heart on any agent to save it here.",
+      "search_placeholder": "Search agents…",
+      "search_aria": "Search agents",
+      "no_results": "No agents match your search.",
+      "favorite_aria": "Add to favorites",
+      "unfavorite_aria": "Remove from favorites",
+      "source_generated": "Generated",
+      "source_custom": "Custom",
+      "source_label": "Source: {{source}}",
+      "bias_label": "Decision bias",
+      "view_details": "View details"
+    },
+    "persona_export": {
+      "export": "Export",
+      "import": "Import Persona",
+      "import_title": "Import Agent Persona",
+      "drop_zone": "Drop .json file here or click to browse",
+      "paste_json": "Or paste JSON below",
+      "invalid_schema": "Invalid file: schema_version must be 1",
+      "missing_fields": "Missing required fields: name, role, persona_text",
+      "invalid_json": "Invalid JSON",
+      "import_success": "Persona imported successfully",
+      "export_success": "Persona exported",
+      "submit": "Import",
+      "cancel": "Cancel"
+    },
+    "journal": {
+      "title": "Prediction Journal",
+      "loading_capability": "Checking journal access…",
+      "lab": {
+        "title": "Forecast Lab"
+      },
+      "stats": {
+        "total": "Total forecasts",
+        "resolved": "Resolved",
+        "pending": "Pending",
+        "brier": "Avg Brier"
+      },
+      "form": {
+        "aria": "Log a new forecast",
+        "question": "Question",
+        "probability": "Predicted probability (0–1)",
+        "scenario_optional": "Scenario ID (optional)",
+        "submit": "Log forecast",
+        "invalid": "Question and a probability between 0 and 1 are required."
+      },
+      "entries": {
+        "title": "Recent forecasts"
+      },
+      "entry": {
+        "resolved": "Resolved",
+        "pending": "Pending",
+        "predicted": "Predicted",
+        "created": "Logged",
+        "outcome": "Outcome",
+        "outcome_yes": "Happened",
+        "outcome_no": "Did not happen",
+        "brier": "Brier",
+        "mark_yes": "Mark as happened",
+        "mark_no": "Mark as did not happen"
+      },
+      "side": {
+        "aria": "Roster and worldline panels"
+      },
+      "roster": {
+        "title": "Agent Roster",
+        "empty": "No agent interactions yet. Forecast a question to grow your roster.",
+        "aria_label": "Agent growth timeline"
+      },
+      "worldline": {
+        "title": "Worldline Map",
+        "aria_label": "Worldline branch thumbnail",
+        "loading": "Loading map…"
+      },
+      "calibration": {
+        "title": "Calibration curve",
+        "aria_label": "Calibration curve",
+        "x_axis": "Predicted probability",
+        "y_axis": "Actual frequency",
+        "empty": "No resolved predictions yet.",
+        "caption": "Diagonal = perfect calibration; circle size scales with sample count.",
+        "point_tooltip": "{{range}}: predicted {{predicted}}, actual {{actual}} (n={{count}})"
+      }
+    },
+    "identity_inspector": {
+      "title": "Identity Memory Inspector",
+      "back_to_library": "Back to Agent Library",
+      "missing_id": "No identity selected.",
+      "count": "{{count}} entries",
+      "entry_title": "Memory entry",
+      "metadata_label": "Memory metadata",
+      "chip_scenario": "Scenario",
+      "chip_round": "Round",
+      "confidence_label": "Confidence",
+      "confidence_high": "High",
+      "confidence_medium": "Medium",
+      "confidence_low": "Low",
+      "confidence_unknown": "Unknown",
+      "compacted_label": "compacted",
+      "compacted_aria": "Compacted memory entry",
+      "expand": "Show more",
+      "collapse": "Show less",
+      "loading_aria": "Loading memory timeline",
+      "timeline_aria": "Identity memory timeline",
+      "empty_title": "No memories recorded yet",
+      "error_load": "Failed to load identity memories.",
+      "error_not_found": "Identity not found.",
+      "type_episodic": "Episodic memory",
+      "type_semantic": "Semantic memory",
+      "type_growth": "Growth event",
+      "type_compacted": "Compacted summary",
+      "type_observation": "Observation",
+      "type_reflection": "Reflection"
     },
     "causal": {
       "title": "Causal Graph",
@@ -1799,9 +1953,11 @@
       "graph_edge_a11y": "Graph edge. Relation details are available in the text summary below.",
       "graph_handle": "Graph handle",
       "submitting": "Submitting...",
-      "saving": "Saving...",
+      "saving": "Saving…",
       "save": "Save",
       "delete": "Delete",
+      "refresh": "Refresh",
+      "refreshing": "Refreshing…",
       "not_applicable": "N/A",
       "back_to_result": "Back to Result",
       "runtime_preset_label": "Oracle Profile",
@@ -2395,6 +2551,36 @@
       "import_success_hint": "A new scenario has been created from your snapshot.",
       "import_view_scenario": "View scenario",
       "import_failed": "Snapshot import failed. Please try again."
+    },
+    "director_objectives": {
+      "next_signature_card": "Next signature-arc card",
+      "advance_signature_arc": "Advance the Signature Arc",
+      "advance_signature_arc_detail": "Play \"{{label}}\" to advance the current signature arc.",
+      "commit_worldline": "Commit to a Worldline",
+      "commit_worldline_pending": "Choose one worldline as the branch you will actively back in this run.",
+      "current_commitment": "Current commitment: {{branchTitle}}",
+      "committed_worldline": "Committed worldline: {{branchTitle}}",
+      "completed": "Completed",
+      "not_committed": "Not committed",
+      "in_progress": "In progress",
+      "hit_dominant": "Became the dominant branch",
+      "miss_dominant": "Did not become the dominant branch"
+    },
+    "education": {
+      "templates_title": "Education Templates",
+      "use_template": "Use Template",
+      "filter_category": "Category",
+      "filter_difficulty": "Difficulty",
+      "filter_all": "All",
+      "difficulty_beginner": "Beginner",
+      "difficulty_intermediate": "Intermediate",
+      "difficulty_advanced": "Advanced",
+      "select_template": "Use this template",
+      "suggested_config": "Suggested: {{agents}} agents, {{rounds}} rounds",
+      "no_templates": "No templates found",
+      "loading": "Loading templates…",
+      "close": "Close",
+      "tags": "Tags"
     }
   }
 }

@@ -21,12 +21,13 @@
 | App 入口 | `backend/app/main.py` | 挂载所有 router、根信息、`/metrics` |
 | Admin | `backend/app/api/admin.py` | admin preflight 与 LLM 连接测试；受 session gate 保护 |
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import |
-| Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、自建 Agent workshop 与自建 Agent tier 校验 |
+| Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 persona 导入导出 |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
 | Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary、score breakdown |
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
-| Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard |
+| Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard 与 segment filters |
+| Journal | `backend/app/api/journal.py` | 个人预测日志、resolve 与 calibration 数据 |
 | Debate | `backend/app/api/debate.py` | debate live/result/import-replay/predict |
 | Ending Room | `backend/app/api/ending_rooms.py` | ending-room room/result/thread/user-turn、roundtable survey/analyst SSE 与 WS |
 | Scenario WS | `backend/app/api/ws.py` | 主模式 WebSocket + thread-scoped agent-conversation WebSocket |
@@ -50,6 +51,11 @@
 | Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile（串行化锁保护写入） |
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
+| Journal Service | `backend/app/services/journal_service.py` | personal prediction journal 写入、resolve、分页与 calibration 聚合 |
+| Document Ingestion | `backend/app/services/document_ingestion.py` | PDF 文本抽取、实体抽取与 persona 生成 helper |
+| Education Templates | `backend/app/services/education_templates.py` | 教育场景模板列表、分类 / 难度筛选与单模板读取 |
+| Persona Export | `backend/app/services/persona_export.py` | Agent persona schema v1 导出、批量导出、导入校验与 custom identity 创建 |
+| Hallucination Gate | `backend/app/services/hallucination_gate.py` | verdict 后的 warning-only claim / evidence 检查 |
 | Graph Analysis | `backend/app/services/graph_analysis.py` | 对最新 causal graph snapshot 做度数分布、god nodes、跨分支边摘要；大图会返回 `truncated: true` |
 | KG Realtime | `backend/app/services/kg_realtime.py` | 合并 `GraphDelta` 后通过 scenario WS 推送 `kg:delta`，payload 过大或失效时推送 `kg:snapshot_invalidated` |
 | Snapshot Export | `backend/app/services/snapshot_export.py` | scenario ZIP export/import、manifest/checksum、旧 ID 到新 ID remap、物理 member 计数、重复 member 拒绝与 ZIP 安全校验 |
@@ -61,11 +67,12 @@
 | 模块 | 位置 | 责任 |
 |------|------|------|
 | Core Models | `backend/app/models/database.py` | `Scenario`、`Branch`、`Round`、`Message`、`ReplayArtifact` 等 |
-| Agent Identity Models | `backend/app/models/agent_identity.py` | generated/custom identity、persona metadata、preferred tier |
+| Agent Identity Models | `backend/app/models/agent_identity.py` | generated/custom identity、persona metadata、preferred tier、favorite 标记 |
 | Campaign Models | `backend/app/models/campaign.py` | director profile、mastery、badge、campaign log |
 | Debate Models | `backend/app/models/debate.py` | debate、turn、prediction、counterplay |
 | Ending Room Models | `backend/app/models/ending_room.py` | room、participant、thread、turn |
 | Prediction Models | `backend/app/models/predictions.py` | prediction、leaderboard |
+| Prediction Journal Models | `backend/app/models/prediction_journal.py` | personal prediction journal entry |
 
 ## 当前 authority
 
@@ -178,6 +185,7 @@
   - 旧的 shared-collection profile 文档会在后续写入时自动清理，不再参与 memory eviction / compaction
 - 自建 Agent 当前多一层 `preferred_tier`：
   - 迁移 `026_agent_identity_preferred_tier` 给 `agent_identity` 增加 `preferred_tier`，SQLite 走幂等 `ALTER TABLE ... ADD COLUMN ... DEFAULT 'IMPORTANT'`
+  - 迁移 `028_agent_favorite` 给 `agent_identity` 增加 `is_favorite`，用于 Agent Library 收藏筛选
   - workshop create/update 只接受 `IMPORTANT / CROWD`
   - 旧行里 `preferred_tier` 缺失、为空或无法识别时，注入层和 simulator 会回退到 `IMPORTANT`
   - 自建 Agent 不允许获得 `CORE`；如果数据库里已经有脏的 custom `CORE`，scenario 注入和 `_agent_to_dict()` 都会降成 `IMPORTANT`
@@ -185,6 +193,19 @@
   - `decision_bias` 固定为 `caution / optimism / conservatism / risk_tolerance / creativity` 5 个 key；缺失 key 补 `0.5`，未知 key 忽略，非数字、`NaN/Inf` 或超出 `0..1` 会被拒绝
   - `knowledge_domain_json / decision_bias_json` 解析失败时会降级为空 metadata，不阻断列表、推演或 debate
   - 主推演和 Debate prompt 里，自建 Agent 的名字、角色、persona、knowledge domains 和 decision bias 都按不可信输入注入，不把用户文本当系统指令
+- Agent Library 相关 API 当前按 user scope 收口：
+  - favorite 只允许当前用户自己的 identity；跨用户或不存在统一返回 404
+  - identity inspector 会先校验 owner，再读取最多 100 条 memory；向量库异常会落 `error` 字段，不把只读 inspector 变成 fatal
+  - PDF 文档生成 Agent 只接受 PDF，上传上限 25 MB；无可抽取文本返回 `DOCUMENT_TEXT_EMPTY`
+  - persona export/import 使用 `schema_version=1`；bulk export 最多 20 个；import 会创建新的 custom identity，不覆盖旧数据
+- Prediction Journal 当前由 `prediction_journal_entry` 持久化：
+  - 迁移 `027_prediction_journal` 创建 journal 表
+  - list/create/resolve/calibration 都按当前 user scope 查询
+  - resolve 已解析 entry 会返回 409，不会重复改写结果
+- `FEATURE_HALLUCINATION_GATE` 当前只控制 verdict 后处理：
+  - 空 verdict、没有可校验 claim、低置信度或矛盾 claim 都只进入 warning metadata
+  - gate 不会阻断 verdict，也不会把 LLM 失败提升成业务失败
+- `GET /api/leaderboard` 当前保持旧兼容：不带 segment filter 时仍返回 leaderboard 数组；带 `scenario_type / date_from / date_to / min_agents / max_agents` 任一筛选时，才返回 `entries + segment_metadata`。
 - main simulation 当前已补 continuity preflight/override 链路：
   - `POST /api/agents/identities/preflight` 会先跑 parser，再只把 `L2 fuzzy candidate` 返回给前端确认
   - `POST /api/scenario` 当前接受 `continuity_overrides`
@@ -367,14 +388,18 @@
 
 ## 当前验证基线
 
+- Sprint 5-6 backend 本 session 已跑：
+  - `ruff check . --select E,F,I,W`：通过
+  - `python -m pytest -q --tb=short`：`2709 passed, 2 skipped, 9 warnings`
+  - ruff 修复后 touched-test rerun：`207 passed, 7 skipped`
+  - 仍有 `tests/test_web_context_integration.py` 相关 `_noop_background` coroutine warning，未影响测试通过
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：
   - `tests/test_causal_graph.py -q`：`68 passed`
   - `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q`：`125 passed`
   - `ruff check app/services/causal_graph.py tests/test_causal_graph.py`：通过
-- backend 全量 `pytest -x -q` 最近一次记录：`2581 passed, 3 skipped, 9 warnings`；warning 来自 `tests/test_web_context_integration.py` 的 `_noop_background` ResourceWarning
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
-- custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；仓库级 `ruff check app/ tests/` 当前仍有历史无关 lint 存量，未在本轮文档里改写成已全绿。
+- custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；本 session 后端仓库级 ruff 已全绿。
 - Classic 分支标题提示本轮已补定向验证：
   - `pytest tests/test_audit_fixes.py::TestForkPromptTemplateConsistency -q`：`31 passed`
   - `pytest tests/test_simulator.py::TestDetectFork -q`：`4 passed`
@@ -382,7 +407,6 @@
 - Sprint 0-2 收尾定向验证：
   - `tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py`：`36 passed`
   - `ruff check app/api/scenarios.py app/api/quota.py app/services/simulation_cancel.py app/services/simulator.py tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py`：通过
-  - 仓库级 `ruff check app tests` 当前仍有既有无关 lint 存量，未改写成全绿
 - Sprint 3 snapshot / personality drift 窄集当前已跑：
   - `python -m pytest tests/test_snapshot_export.py tests/test_personality_drift.py -q`：`46 passed`
 

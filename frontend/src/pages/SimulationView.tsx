@@ -338,10 +338,11 @@ export function SimulationView() {
           dominantBranch,
           isZh,
           isFinal: isSimulationComplete,
+          t,
         })
         : []
     ),
-    [dominantBranch, isSimulationComplete, isZh, scenarioMeta],
+    [dominantBranch, isSimulationComplete, isZh, scenarioMeta, t],
   );
   const completedObjectiveCount = useMemo(
     () => countCompletedObjectives(evaluatedObjectives),

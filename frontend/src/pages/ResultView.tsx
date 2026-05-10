@@ -496,6 +496,7 @@ export default function ResultView() {
           dominantBranch: dominantBranchForArchive,
           isZh: isZhRef.current,
           isFinal: true,
+          t,
         });
         const completedObjectiveCount = countCompletedObjectives(evaluatedObjectives);
         const commitmentOutcome = !workingMeta.commitment.active
@@ -1024,9 +1025,10 @@ export default function ResultView() {
           dominantBranch: dominantBranchFromStory,
           isZh,
           isFinal: true,
+          t,
         })
       : []
-  ), [dominantBranchFromStory, isZh, scenarioMeta]);
+  ), [dominantBranchFromStory, isZh, scenarioMeta, t]);
   const completedObjectiveCount = useMemo(
     () => countCompletedObjectives(evaluatedObjectives),
     [evaluatedObjectives],

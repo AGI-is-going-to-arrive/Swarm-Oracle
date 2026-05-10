@@ -1,6 +1,7 @@
 """API tests for Debate Arena Track D / Phase D1."""
 
 from __future__ import annotations
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest

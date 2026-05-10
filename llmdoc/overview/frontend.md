@@ -25,10 +25,12 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、snapshot import、首次引导和底部安全提示 |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、snapshot import、首次引导和底部安全提示 |
 | SetupWizardView | `frontend/src/pages/SetupWizardView.tsx` | `/admin/setup` 3 步 provider 配置向导；选择 preset、填 API key/base URL、测试连接并写入 session-scoped provider policy |
-| AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、tier badge、profile modal、编辑/删除入口 |
-| AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains 与 `IMPORTANT / CROWD` tier 选择 |
+| AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、编辑/删除入口、persona 单个/批量导出与 JSON 导入入口 |
+| AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择与 PDF document upload tab |
+| IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
+| PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
 | ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、historical source badge、counterfactual / resume / faction 入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
@@ -37,7 +39,7 @@
 | DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import |
 | WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay、participant follow-up、analyst ReACT 面板、人格漂移 warning |
 | HistoryView | `frontend/src/pages/HistoryView.tsx` | scenario 历史列表 |
-| LeaderboardView | `frontend/src/pages/LeaderboardView.tsx` | prediction leaderboard |
+| LeaderboardView | `frontend/src/pages/LeaderboardView.tsx` | prediction leaderboard 与 segment filters；筛选状态同步到 URL params |
 
 ## 状态与 authority 边界
 
@@ -216,7 +218,14 @@
 | `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择；桌面端 `@dnd-kit/core` 入席交互，移动端保留 click-to-seat） |
 | `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作 + phase 分隔线 + speaker 左侧色标） |
 | `AgentAttachPanel.tsx` | `frontend/src/components/AgentAttachPanel.tsx` | 首页自建 Agent 选择卡片；最多 5 个，支持 loading/error/retry/empty 状态，长 persona 和复杂 decision bias 只作为文本展示 |
+| `AgentCard.tsx` | `frontend/src/components/AgentCard.tsx` | Agent Library 共享卡片；展示 tier、domains、favorite 状态与 profile/edit/export 等动作 |
 | `AgentProfileModal.tsx` | `frontend/src/components/AgentProfileModal.tsx` | Agent profile 弹窗；展示成长、记忆、timeline 和 decision bias 分布，切换 Agent 或关闭后的迟到请求不会覆盖当前弹窗 |
+| `IdentityInspectorView.tsx` | `frontend/src/pages/IdentityInspectorView.tsx` | identity memory inspector 页面；空记忆、基础设施错误和正常 memory list 分开显示 |
+| `DocumentUploader.tsx` | `frontend/src/pages/AgentWorkshop/DocumentUploader.tsx` | Agent Workshop PDF 上传入口；展示抽取进度、错误和新建 identities |
+| `PersonaExportImport.tsx` / `personaExportImportUtils.ts` | `frontend/src/components/` | persona 导出/导入 UI 与 JSON 校验 helper；导入成功后刷新 Agent Library |
+| `EducationTemplatePicker.tsx` | `frontend/src/components/EducationTemplatePicker.tsx` | 首页教育模板 dialog；支持 category / difficulty filter、空结果、Escape 关闭和 focus trap |
+| `Journal/*` | `frontend/src/components/Journal/` | 个人 journal 辅助面板：Agent roster、calibration curve、worldline mini map |
+| `PersonalJournalView.tsx` | `frontend/src/pages/PersonalJournalView.tsx` | 个人预测日志页面；读取 `/api/me/journal` 与 `/api/me/calibration` |
 | `MemoryTimeline.tsx` | `frontend/src/components/MemoryTimeline.tsx` | Agent 记忆时间线；样式已从组件内联迁到 CSS，按 scenario/time 组织事件 |
 | `ProgressIndicator.tsx` | `frontend/src/components/ProgressIndicator.tsx` | 5 步流程 pill；当前用在 InputView / ResultView，`currentStep` 会钳到有效范围 |
 | `ShareArtifact.tsx` | `frontend/src/components/ShareArtifact.tsx` | 1200×630 offscreen OG card；通过 html2canvas 导出 PNG，只包含公开展示用摘要字段 |
@@ -235,9 +244,14 @@
 - InputView 当前会把 continuity 确认结果按 request-scoped `continuityOverrides` 传给 `POST /api/scenario`，只影响这次启动，不改本地缓存身份。
 - Agent Library / Workshop 当前按 `custom_agents` capability gate 显示：
   - Workshop 的 tier selector 使用原生 radio 语义，选项固定为 `IMPORTANT / CROWD`
+  - Workshop 的 document tab 只接受 PDF 上传；后端成功创建 identities 后，页面会显示新建 Agent 并提示用户回到 Library 查看
   - 编辑旧 Agent 时会把后端返回的 `preferred_tier` 回填；缺失或未知值回退为 `IMPORTANT`
   - knowledge domains 优先读取后端解析后的数组，旧 payload 只带 JSON 字符串时再本地 parse，解析失败显示为空
-  - Library card 显示 tier badge 和 domains；空库会给出创建入口
+  - Library card 显示 tier badge、domains 和 favorite 状态；空库会给出创建入口
+  - persona export/import 入口按 `persona_export` capability gate 显示；导入成功只新增当前用户的 custom Agent，不覆盖现有 Agent
+- Education template picker 当前按 `education_templates` capability gate 显示；选中模板后会回填首页问题、Agent 数和轮数。
+- Personal Journal 当前按 `prediction_journal` capability gate 显示；journal 与 calibration 数据都从当前 user scope 读取。
+- Leaderboard segment filters 当前会把 `type/date/agent count` 筛选同步到 URL params；不带筛选时仍消费旧数组响应。
   - 这些页面新增样式集中在共享 BEM class 和 editorial token 上，不使用新增 inline style
 - InputView 高级设置当前支持可选 `Organization ID`；值会写进 sessionStorage，并由 API client 自动映射成 `X-Org-Id`。清空输入时会同步移除该请求头。
 - InputView 的搜索增强当前口径：
@@ -513,7 +527,12 @@
   - `cd frontend && npm run test -- --run src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts --reporter=verbose`：`87 passed`
   - `cd frontend && npx tsc --noEmit`：通过
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
-- frontend full vitest 本 session fresh rerun：`179 files / 1926 passed`。
+- Sprint 5-6 frontend 本 session 已跑：
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npx vitest run --reporter=verbose`：`183 files / 1965 passed`
+  - `npm run build`：通过，build performance budget 无 violations
+  - 新组件窄集 `AgentCard / EducationTemplatePicker / PersonaExportImport / JournalPanels`：`4 files / 39 tests passed`
+  - Playwright named projects 当前没有 `chromium/firefox/webkit` 配置；本轮用手动 Chromium browser spot-check 覆盖首页模板、Agent 收藏/导出/导入、Leaderboard segment URL sync 和 375px mobile
 - frontend i18n key + placeholder parity：`en:2159 zh:2159`。
 - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。

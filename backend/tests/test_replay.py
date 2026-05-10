@@ -5,6 +5,7 @@ import json
 import pytest
 from sqlmodel import Session, select
 
+from app.models.checkpoint import ScenarioCheckpoint
 from app.models.database import (
     Agent,
     AgentMessage,
@@ -15,14 +16,12 @@ from app.models.database import (
     ScenarioStatus,
     get_engine,
 )
-from app.models.checkpoint import ScenarioCheckpoint
 from app.services.replay import (
     clone_until_round,
     compare_branches,
     seed_counterfactual,
     write_checkpoint,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -43,7 +42,15 @@ def _seed_branch(engine, scenario_id, *, title="主线", status=BranchStatus.ACT
         return b.id
 
 
-def _seed_agent(engine, scenario_id, *, name="Agent A", role="analyst", stance="支持", emotion="neutral"):
+def _seed_agent(
+    engine,
+    scenario_id,
+    *,
+    name="Agent A",
+    role="analyst",
+    stance="支持",
+    emotion="neutral",
+):
     a = Agent(scenario_id=scenario_id, name=name, role=role, stance=stance, emotion=emotion)
     with Session(engine) as session:
         session.add(a)

@@ -108,7 +108,10 @@ class TestCompressionBenchmark:
     @pytest.mark.parametrize("scenario", ["three_kingdoms", "tech_debate", "minimal"])
     async def test_structural_validity(self, scenario):
         """All scenarios should produce structurally valid output."""
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(
+            "app.services.memory.llm_call_json_with_stream_fallback",
+            new_callable=AsyncMock,
+        ) as mock_llm:
             mock_llm.return_value = SAMPLE_LLM_RESPONSES[scenario]
             result = await compress_rounds(SAMPLE_INPUTS[scenario])
 
@@ -120,7 +123,10 @@ class TestCompressionBenchmark:
     @pytest.mark.parametrize("scenario", ["three_kingdoms", "tech_debate"])
     async def test_field_completeness_rich_input(self, scenario):
         """Rich discussions should produce ≥80% field completeness."""
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(
+            "app.services.memory.llm_call_json_with_stream_fallback",
+            new_callable=AsyncMock,
+        ) as mock_llm:
             mock_llm.return_value = SAMPLE_LLM_RESPONSES[scenario]
             result = await compress_rounds(SAMPLE_INPUTS[scenario])
 
@@ -133,7 +139,10 @@ class TestCompressionBenchmark:
     @pytest.mark.parametrize("scenario", ["three_kingdoms", "tech_debate"])
     async def test_information_density(self, scenario):
         """Information density should be 10%-50% (not too sparse, not verbatim)."""
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(
+            "app.services.memory.llm_call_json_with_stream_fallback",
+            new_callable=AsyncMock,
+        ) as mock_llm:
             mock_llm.return_value = SAMPLE_LLM_RESPONSES[scenario]
             result = await compress_rounds(SAMPLE_INPUTS[scenario])
 
@@ -146,7 +155,10 @@ class TestCompressionBenchmark:
     @pytest.mark.parametrize("scenario", ["three_kingdoms", "tech_debate"])
     async def test_key_quotes_fidelity(self, scenario):
         """Key quotes should preserve speaker attribution [Name]."""
-        with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+        with patch(
+            "app.services.memory.llm_call_json_with_stream_fallback",
+            new_callable=AsyncMock,
+        ) as mock_llm:
             mock_llm.return_value = SAMPLE_LLM_RESPONSES[scenario]
             result = await compress_rounds(SAMPLE_INPUTS[scenario])
 
@@ -182,7 +194,10 @@ class TestCompressionBenchmark:
             if not input_text.strip():
                 result = await compress_rounds(input_text)
             else:
-                with patch("app.services.memory.llm_call_json_with_stream_fallback", new_callable=AsyncMock) as mock_llm:
+                with patch(
+                    "app.services.memory.llm_call_json_with_stream_fallback",
+                    new_callable=AsyncMock,
+                ) as mock_llm:
                     mock_llm.return_value = SAMPLE_LLM_RESPONSES[scenario]
                     result = await compress_rounds(input_text)
 

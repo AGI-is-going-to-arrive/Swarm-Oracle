@@ -6,7 +6,6 @@ import pytest
 
 from app.services.narrator import narrate_branch
 
-
 _FAKE_PASS1_TEXT = "Simulated narrative text for testing."
 
 

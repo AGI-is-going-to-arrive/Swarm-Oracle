@@ -36,7 +36,7 @@ export function getEndingRoomPhaseLabel(phase: EndingRoomPhase, t: Translator): 
   return t(`roundtable.phase_${phase}`);
 }
 
-export function getEndingRoomRoleLabel(role: EndingRoomRoleSlot, t: Translator, isZh: boolean): string {
+export function getEndingRoomRoleLabel(role: EndingRoomRoleSlot, t: Translator): string {
   switch (role) {
     case 'archivist':
       return t('roundtable.role_archivist');
@@ -47,7 +47,7 @@ export function getEndingRoomRoleLabel(role: EndingRoomRoleSlot, t: Translator, 
     case 'observer':
       return t('roundtable.gallery_title');
     case 'critic':
-      return isZh ? '评论者' : 'Critic';
+      return t('ending_room.role_critic');
     default:
       return role;
   }

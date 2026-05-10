@@ -15,7 +15,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 
 ### 主模式
 
-- 首页创建 scenario，支持 5 步进度提示、quick starts、agent/rounds、玩法档位、BYOK，以及 opt-in 的搜索增强推演；高级设置和 BYOK 现在分成两个可折叠区，首屏优先露出问题输入和快速开始。
+- 首页创建 scenario，支持 5 步进度提示、quick starts、教育模板、agent/rounds、玩法档位、BYOK，以及 opt-in 的搜索增强推演；高级设置和 BYOK 现在分成两个可折叠区，首屏优先露出问题输入和快速开始。
 - 首次进入首页时会显示 onboarding carousel；用户完成或跳过后状态保存在本地，后续不再重复弹出。
 - 首页启动前会用 AlertDialog 做 launch confirmation；底部安全提示跟随中英语言切换，不写入用户 key 或 provider 细节。
 - 搜索增强当前在首页有两档入口：
@@ -23,7 +23,9 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `自定义覆盖`：当前局单独指定 `provider / API key / base URL`
 - 首页高级设置当前还支持可选 `Organization ID`；值只在当前浏览器 session 内保存，并随请求头 `X-Org-Id` 透传，留空就不发送。
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。
-- 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑和选择自建 Agent；首页 attach panel 会以卡片展示 persona、knowledge domains 和 decision bias，最多选择 5 个，并只把 identity id 传给主推演。自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。
+- 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑、收藏和选择自建 Agent，也可以在 `/agents/new` 通过 PDF document tab 生成 Agent；首页 attach panel 会以卡片展示 persona、knowledge domains 和 decision bias，最多选择 5 个，并只把 identity id 传给主推演。自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。
+- 当 `persona_export` capability 开启时，Agent Library 支持 persona 单个/批量导出和 JSON 导入；导入会创建当前用户的新 custom Agent，不覆盖已有身份。
+- 当 `prediction_journal` capability 开启时，`/me/journal` 提供个人预测日志、resolve 状态和 calibration 可视化。
 - `SimulationView` 负责 live 推演、Classic 分支树、Theater、干预、玩法卡、结构化押注与 capture。Classic 分支卡片仍以 `Branch.title` 为真实标题；标题太短时，前端只补一小段 `description / fork_reason` 线索，方便用户看懂路线差异。
 - live 推演当前支持显式取消：前端会弹确认框，后端把 `parsing / simulating / narrating` 的 scenario 落成 `cancelled` 并请求后台任务停止；`done / error` 不会被取消路径回退成其它终态。
 - `ResultView` 负责结局对比、`counterfactual compare / resume / faction timeline`、档案、导演复盘 / campaign summary、分享、导出、结果追问与 replay/import；因果档案当前改成问题、判定、系统读数、玩家动作、下一步和证据账本，不再把关键记录堆成一长串；导演复盘会优先使用后端 `score_breakdown`，并把 campaign summary、what-if、世界线承诺、押注、干预和关键时刻展示成生涯分变化、等级进度、本局读数和下一步入口；replay snapshot 带 `campaignSummary` 时只读展示，不重新 finalize。当后端写入 `web_search_context` 时，也会显示真实世界来源卡片。`FEATURE_NEW_SOURCES=true` 且有 `family_context` 时，结果页当前还会渲染 `Polymarket / Finance / Academic / News` 四张 source family card；历史 replay 里已有数据但当前 family capability 未开启时，会显示 recorded badge，不把历史来源伪装成 live provider。`polymarket.configured_host=non-us` 时会显示地域限制占位。结果页当前的 `What's Next / 下一步` bridge 会展示 `causal / replay / compare / workbench / agents / share` 入口，disabled 卡片保留可见状态说明，但不再渲染无 `href` 的 `<a>`，文字对比也不再靠整卡 opacity 压低。分享弹窗当前还可导出 1200×630 PNG 卡片，卡片只包含问题、主导结局、可见来源 family 和前 3 个 Agent 名，不写入 BYOK key、base URL 或用户 token。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。结果页里的 `FactionTimeline` 当前会优先跟随正在展开查看的分支；未展开时会落到概率最高分支，并改成真实纵向时间线，`stance / confidence` 等指标直接可见，不再只藏在 tooltip badge 里。结果页的 compare / counterfactual / resume 入口也跟随同一条 analysis branch 语义，不再固定拿 `branches[0]`；resume 面板在可用时会优先让用户选择同分支 checkpoint，并显示 `compressed_summary` 预览，没有 checkpoint 时才回到 round number 输入。结果追问也跟随同一条 analysis branch，把当前结局标题、洞察、分支原因、关键时刻和对比分支传给对话面板。replay 模式下会继续保留 replay-safe 的 `causal graph` 入口和 `FactionTimeline`，但 `counterfactual / resume / result conversation` 这类 live-only 面板仍保持隐藏。标题、空态、轮次与事件标签都会跟随 UI 语言；FactionTimeline lead 文案当前也已走 i18n key + `{{title}}` 插值。`CompareDigestView` 的非活跃 pane 当前会保留更完整的待机镜像，不再是纯黑占位。前端 gated route 当前也把 `feature disabled` 和 `capability probe 失败` 分开显示：`ReplayView` 不再 silent redirect，`KGExplorerView / CompareDigestView / FactionTimeline` 也不再直接把原始错误字符串或所有异常压成空态。
@@ -38,6 +40,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - CausalReview 节点点击当前会直接打开 `NodeConversationSheet`，并把 event / fork / outcome 的可读摘要作为 origin excerpt 交给后端 prompt context；面板会显示对话目标、卡片意义、前因、后续和相关关系，空态追问也会按事件、分支、结局、知识节点或裁决节点分别生成。大图超过 50 个节点时会用更紧的节点高度、间距和更低 `minZoom`，避免首屏过度撑开。KG 工作台桌面节点点击先显示 `NodeQuickCard` 快览卡；卡片会按视口钳位，用户再选择是否打开完整详情。
 - Agent conversation 历史当前可在节点对话等入口重新加载；列表按 scenario 做 cursor pagination，详情加载后由宿主组件恢复已提交 assistant 内容，迟到的 list/detail 响应不会覆盖新筛选或新节点。
 - 对话与 replay 相关入口当前会显示 `QuotaBadge`，通过后端 quota summary 读取 rolling conversation quota 与 replay branch 用量。
+- Leaderboard 当前支持按 scenario type、日期和 Agent 数做 segment filter；筛选状态会同步到 URL，不带筛选时仍按旧 leaderboard 数组渲染。
 
 ### Admin Setup
 
@@ -180,11 +183,13 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - frontend ResultView / CausalReviewView / locale 定向：`126 passed`
     - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
-  - backend 全量 `pytest -x -q` 最近一次记录为 `2581 passed, 3 skipped, 9 warnings`；warning 来自 `tests/test_web_context_integration.py` 的 `_noop_background` ResourceWarning
+  - backend 全量 `ruff check . --select E,F,I,W` 最近一次记录为通过
+  - backend 全量 `python -m pytest -q --tb=short` 最近一次记录为 `2709 passed, 2 skipped, 9 warnings`
   - frontend `typecheck / lint / build / perf budgets` 通过
   - 本次 bridge/workbench 文案 + CausalReview guide key-node 标签窄集：`87 passed`
   - 本次前端 TypeScript noEmit：通过
-  - frontend 全量 vitest 最近一次记录为 `179 files / 1926 passed`
+  - frontend 全量 vitest 最近一次记录为 `183 files / 1965 passed`
+  - frontend `npx tsc --noEmit -p tsconfig.app.json` 与 `npm run build` 最近一次记录为通过
   - 本轮真实验证还包括：
     - Classic 分支标题定向验证：
       - `cd frontend && npm exec -- vitest run src/components/BranchTree.test.tsx`：`5 passed`
@@ -237,15 +242,16 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - Sprint 0-2 收尾复验当前已补：
     - backend 本轮触碰文件定向 pytest：`36 passed`
     - backend 本轮触碰文件 ruff：通过
-    - frontend full vitest 当前最新为：`179 files / 1926 passed`
+    - frontend full vitest 当前最新为：`183 files / 1965 passed`
     - frontend `tsc / lint / build / i18n parity`：通过
     - browser matrix：`72 passed / 0 failed`，覆盖 12 项功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375
-  - Sprint 4 收口验证当前已补：
-    - backend full pytest：`2581 passed, 3 skipped, 9 warnings`
-    - frontend full vitest：`179 files / 1926 passed`
-    - frontend `tsc / game scenes eslint / build / i18n parity`：通过，i18n parity 为 `en:2159 zh:2159`
-    - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`
-- 当前活跃执行点在 `.claude/team-plan/comprehensive-improvement-plan.md`：Sprint 0-4 不重跑；下一轮从 Sprint 4 follow-up 与 Sprint 5 开始。剩余架构级限制见 `overview/backlog.md`。
+  - Sprint 5-6 收口验证当前已补：
+    - backend full ruff：通过
+    - backend full pytest：`2709 passed, 2 skipped, 9 warnings`
+    - frontend full vitest：`183 files / 1965 passed`
+    - frontend `tsc / build`：通过
+    - Playwright named project 命令当前没有 `chromium/firefox/webkit` 可用项目；本轮改用手动 Chromium browser spot-check 覆盖首页模板、Agent 导入导出、Leaderboard segment URL sync 与 375px mobile
+- 当前活跃执行点在 `.claude/team-plan/comprehensive-improvement-plan.md`：Sprint 0-4 不重跑；当前工作树已进入 Sprint 5-6 的 Agent、Journal、模板与 leaderboard segment 收口。剩余架构级限制见 `overview/backlog.md`。
 
 ## 文档入口
 

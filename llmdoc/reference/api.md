@@ -49,6 +49,8 @@
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `POST` | `/api/scenario` | 创建 scenario 并启动后台模拟 |
+| `GET` | `/api/scenario/templates` | 列出教育场景模板 |
+| `GET` | `/api/scenario/templates/{template_id}` | 读取单个教育场景模板 |
 | `GET` | `/api/scenario/{scenario_id}` | 获取 scenario 详情 |
 | `GET` | `/api/scenario/{scenario_id}/branches` | 获取 branch 列表 |
 | `GET` | `/api/scenario/{scenario_id}/agents` | 获取 agent 列表 |
@@ -89,6 +91,7 @@
 - `GET /api/scenario/{scenario_id}/conversations` 受 `FEATURE_AGENT_CONVERSATION` gate，要求 signed principal 能看到该 scenario；`cursor` 是 offset cursor，`limit` 范围 `1..50`，返回项只带 thread 摘要，完整 turn 历史仍走 `GET /api/conversation/{thread_id}`。
 - `POST /api/scenario/{scenario_id}/cancel` 只接受 `parsing / simulating / narrating / cancelled`；`done / error` 会返回 `409 SIMULATION_NOT_RUNNING`。成功请求会把 scenario 持久化到 `cancelled`，并尽量取消本进程里的后台 task。
 - `GET /api/scenario/{scenario_id}/snapshot` 和 `POST /api/scenario/import-snapshot` 受 `FEATURE_SNAPSHOT_EXPORT` gate；关闭时返回 404 `FEATURE_DISABLED`。export 会做 scenario ownership 校验；开启 `SESSION_SECRET` 时 import 要求 signed principal，并把新 scenario 绑定到该 principal。空文件返回 422 `SNAPSHOT_FILE_EMPTY`，超过 50 MB 返回 413 `SNAPSHOT_FILE_TOO_LARGE`，archive/manifest/checksum 不合法返回 422 `SNAPSHOT_IMPORT_INVALID`。导入还会拒绝重复 ZIP member name、超过 256 个物理 member、路径穿越、symlink、异常压缩比和总解压超限。
+- `GET /api/scenario/templates` 和 `GET /api/scenario/templates/{template_id}` 受 `FEATURE_EDUCATION_TEMPLATES` gate；关闭时返回 404 `FEATURE_DISABLED`。列表接口支持 `category` 与 `difficulty` filter，空结果返回空数组。
 - 删除 scenario 时会一并清理 replay、prediction、campaign side effect、ending-room 与向量数据。
 
 ## Replay Artifact
@@ -156,6 +159,27 @@
 - 同一 `scenario_id + user_id` 只能提交一条 prediction。
 - `PredictRequest` 的 `user_id` 和 `user_name` 上限 128 字符。
 - `score-predictions` 支持 request-scoped provider policy。
+- `GET /api/leaderboard` 现在支持 segment filters：
+  - `scenario_type`: `debate / simulation / roundtable`
+  - `date_from / date_to`: ISO date 或 datetime
+  - `min_agents / max_agents`: `1..50`
+- 不带 segment filter 时，leaderboard 仍返回旧的 JSON 数组；只要带任一 segment filter，就返回 `{ entries, segment_metadata }`，其中 metadata 会带 `active_filters / total_count / filtered_count`。
+
+## Personal Prediction Journal
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/me/journal` | 分页列出当前用户的预测日志 |
+| `POST` | `/api/me/journal` | 写入一条个人预测日志 |
+| `PATCH` | `/api/me/journal/{entry_id}/resolve` | 解析一条未解析日志 |
+| `GET` | `/api/me/calibration` | 返回当前用户的校准曲线数据 |
+
+关键约束：
+
+- 这些端点受 `FEATURE_PREDICTION_JOURNAL` gate；关闭时返回 404 `FEATURE_DISABLED`。
+- user scope 来自 signed principal；无 signed session 的本地开发态可用 `X-User-Id`。
+- journal 写入会校验 scenario owner；不属于当前用户的 scenario 会返回 404。
+- 已 resolve 的 entry 再次 resolve 会返回 409 `JOURNAL_ENTRY_ALREADY_RESOLVED`。
 
 ## Social / Export / Health
 
@@ -165,7 +189,7 @@
 | `GET` | `/api/scenario/{scenario_id}/export` | 导出 Markdown |
 | `POST` | `/api/health` | 后端健康检查 |
 | `POST` | `/api/health/test` | provider 探测与预算预检；返回服务端默认搜索 hint |
-| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 14-key capability registry (`web_search` + 13 个功能开关) |
+| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 17-key capability registry (`web_search` + 16 个功能开关) |
 | `GET` | `/` | 根信息 |
 | `GET` | `/metrics` | Prometheus 文本指标 |
 
@@ -176,8 +200,8 @@
 - `/api/health`、`/api/health/test`、`/api/capabilities` 当前都属于业务 REST 门禁范围；`/` 和 `/metrics` 仍是显式例外。
 - `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认配置是否 ready（`scope: "server"`），不是 per-provider 探测结果。
 - `GET /api/capabilities` 当前顶层 key 固定为：
-  `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst / snapshot_export`。
-  除 `web_search` 外，其余 13 个都是功能开关 registry entry，至少带 `enabled / version`。
+  `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst / snapshot_export / education_templates / persona_export / prediction_journal`。
+  除 `web_search` 外，其余 16 个都是功能开关 registry entry，至少带 `enabled / version`。`FEATURE_HALLUCINATION_GATE` 只影响后端 warning metadata，不是 capability key。
 
 ## Admin Diagnostics
 
@@ -278,13 +302,21 @@
 | 方法 | 路径 | 说明 | 开关 |
 |------|------|------|------|
 | `GET` | `/api/agents/identities` | Agent 身份列表 | `FEATURE_CUSTOM_AGENTS` 或 `FEATURE_AGENT_IDENTITY` |
+| `GET` | `/api/agents/identities/favorites` | 当前用户收藏的 Agent 身份 | `FEATURE_CUSTOM_AGENTS` |
 | `POST` | `/api/agents/identities/preflight` | 创建 scenario 前预览 continuity 匹配 | `FEATURE_AGENT_IDENTITY` |
 | `GET` | `/api/agents/identities/{id}/memory` | 跨场景记忆 | `FEATURE_AGENT_IDENTITY` |
+| `GET` | `/api/agents/identities/{id}/memories` | identity memory inspector 明细 | `FEATURE_AGENT_IDENTITY` |
 | `GET` | `/api/agents/identities/{id}/growth-events` | 成长事件时间线 | `FEATURE_AGENT_IDENTITY` |
+| `POST` | `/api/agents/identities/{id}/favorite` | 收藏当前用户拥有的 Agent identity | `FEATURE_CUSTOM_AGENTS` |
+| `DELETE` | `/api/agents/identities/{id}/favorite` | 取消收藏当前用户拥有的 Agent identity | `FEATURE_CUSTOM_AGENTS` |
 | `POST` | `/api/agents/workshop` | 创建自建 Agent | `FEATURE_CUSTOM_AGENTS` |
 | `PUT` | `/api/agents/workshop/{id}` | 更新自建 Agent | `FEATURE_CUSTOM_AGENTS` |
 | `PATCH` | `/api/agents/workshop/{id}` | 更新自建 Agent，当前与 `PUT` 同语义 | `FEATURE_CUSTOM_AGENTS` |
 | `DELETE` | `/api/agents/workshop/{id}` | 删除自建 Agent | `FEATURE_CUSTOM_AGENTS` |
+| `POST` | `/api/agents/from-document` | 从 PDF 文档抽取实体并创建自建 Agent | `FEATURE_CUSTOM_AGENTS` |
+| `GET` | `/api/agents/identities/{id}/export` | 导出单个 Agent persona JSON | `FEATURE_PERSONA_EXPORT` |
+| `POST` | `/api/agents/export-bulk` | 批量导出 Agent persona JSON | `FEATURE_PERSONA_EXPORT` |
+| `POST` | `/api/agents/import` | 从 persona JSON 导入为新的 custom Agent | `FEATURE_PERSONA_EXPORT` |
 | `GET` | `/api/scenario/{id}/causal-graph` | 因果图谱 | `FEATURE_CAUSAL_GRAPH` |
 | `GET` | `/api/scenario/{id}/graph-analysis` | 因果图谱摘要分析 | `FEATURE_GRAPH_ANALYSIS` + `FEATURE_CAUSAL_GRAPH` |
 | `GET` | `/api/scenario/{id}/personality-drift` | Agent 人格漂移 warning 数据 | `FEATURE_AGENT_IDENTITY` |
@@ -300,7 +332,11 @@
 - 所有 Phase 3 endpoint 在对应 `FEATURE_*=false` 时返回 404，不执行任何业务逻辑。
 - `FEATURE_KG_EXPLORER` 只控制 KG Explorer / Timeline Galaxy 的前端 capability gate；当前页面数据仍读取 `GET /api/scenario/{id}/causal-graph`，因此也需要 `FEATURE_CAUSAL_GRAPH=true`。
 - `POST /api/agents/identities/preflight` 当前只返回需要 L3 确认的 `L2 fuzzy candidate`；`L1 exact` 和全新 identity 不会阻断前端启动。
+- favorite 只写当前用户拥有的 identity；跨用户或不存在的 identity 返回 404，不泄漏数据。
+- `GET /api/agents/identities/{id}/memories` 会按 owner 校验，并返回最多 100 条 inspector memory。向量库不可用时仍返回 200，但会带机器可读的 `error` 字段，方便前端区分空记忆和基础设施错误。
 - `GET /api/agents/identities/{id}/growth-events` 当前要求 `user_id`；缺失时返回 400，identity 不存在或 owner 不匹配时返回 404。
+- `POST /api/agents/from-document` 只接受 PDF (`application/pdf` / `application/x-pdf`)，上传上限 25 MB，最多读取 200 页和 100000 个字符；空文件、无可抽取文本或非法 PDF 会返回明确错误。
+- persona export 使用 `schema_version=1`；bulk export 最多 20 个 identity。import 不覆盖旧 identity，而是为当前用户创建新的 custom Agent。`schema_version` 不支持、必填字段缺失或 `decision_bias` 类型错误时返回 422 `PERSONA_IMPORT_INVALID`。
 - `POST /api/agents/workshop` / `PUT /api/agents/workshop/{id}` 当前支持：
   - `persona`
   - `knowledge_domains`

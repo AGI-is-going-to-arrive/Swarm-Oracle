@@ -8,6 +8,7 @@ Create Date: 2026-04-09
 from typing import Sequence, Union
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "016_checkpoint_faction_argument_tables"
@@ -95,7 +96,11 @@ def upgrade() -> None:
         sa.Column("semantic_hash", sa.String(), nullable=False, server_default=""),
         sa.Column("created_at", sa.DateTime(), nullable=False),
     )
-    op.create_index("ix_debate_argument_unit_semantic_hash", "debate_argument_unit", ["semantic_hash"])
+    op.create_index(
+        "ix_debate_argument_unit_semantic_hash",
+        "debate_argument_unit",
+        ["semantic_hash"],
+    )
 
 
 def downgrade() -> None:

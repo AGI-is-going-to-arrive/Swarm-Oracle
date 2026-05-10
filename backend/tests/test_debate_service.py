@@ -801,13 +801,20 @@ def test_serialize_debate_old_debate_without_personas():
 
 def test_serialize_debate_with_persisted_personas():
     """LLM personas persisted in breakdown_json should be surfaced."""
-    from app.services.debate import _serialize_debate
     from sqlalchemy.orm.attributes import flag_modified
+
+    from app.services.debate import _serialize_debate
 
     debate = create_debate_record(question="Should AI be regulated?")
     llm_personas = {
-        "proposition": {"role": "Tech Optimist", "persona": "A venture capitalist who built three AI startups"},
-        "opposition": {"role": "Ethics Professor", "persona": "A philosophy chair who testified before Congress"},
+        "proposition": {
+            "role": "Tech Optimist",
+            "persona": "A venture capitalist who built three AI startups",
+        },
+        "opposition": {
+            "role": "Ethics Professor",
+            "persona": "A philosophy chair who testified before Congress",
+        },
         "judge": {"role": "Neutral Observer", "persona": "A retired constitutional law scholar"},
     }
     with Session(get_engine()) as session:

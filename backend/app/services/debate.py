@@ -25,6 +25,11 @@ from app.models import (
     DebateTurn,
 )
 from app.models.database import get_engine
+
+# DPD Hallucination Verification Gate (warning-only, never blocks verdict).
+# We import the *module* (not the function) so that test patches against
+# `app.services.hallucination_gate.apply_hallucination_gate` are honored.
+from app.services import hallucination_gate as _hallucination_gate_module
 from app.services.debate_prompts import (
     build_cast,
     build_cast_async,
@@ -2315,6 +2320,44 @@ def _update_live_score(*, debate_id: str, proposition: int, opposition: int) -> 
         session.commit()
 
 
+def _apply_hallucination_gate_metadata(
+    *,
+    breakdown_json: dict[str, Any],
+    verdict_text: str,
+    graph_evidence: list[dict[str, Any]] | None,
+    web_evidence: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Run the DPD hallucination gate over a finalized verdict and stash
+    the report under ``breakdown_json["metadata"]["hallucination_gate"]``.
+
+    Behavior:
+      * If ``settings.FEATURE_HALLUCINATION_GATE`` is False, return the
+        breakdown unchanged (and do *not* invoke the gate at all — tests
+        rely on this for monkeypatch isolation).
+      * If the gate raises, swallow the exception, log at DEBUG, and leave
+        ``breakdown_json["metadata"]`` untouched. The gate must NEVER
+        block or corrupt the verdict.
+    """
+    if not getattr(settings, "FEATURE_HALLUCINATION_GATE", False):
+        return breakdown_json
+    try:
+        report = _hallucination_gate_module.apply_hallucination_gate(
+            verdict_text or "",
+            list(graph_evidence or []),
+            list(web_evidence or []),
+        )
+    except Exception:  # noqa: BLE001 — warning-only; never block verdict
+        logger.debug("hallucination gate failed (non-blocking)", exc_info=True)
+        return breakdown_json
+
+    metadata = breakdown_json.setdefault("metadata", {}) if isinstance(
+        breakdown_json, dict
+    ) else None
+    if isinstance(metadata, dict):
+        metadata["hallucination_gate"] = report
+    return breakdown_json
+
+
 def _finalize_debate(
     debate_id: str,
     plan: DebatePlan,
@@ -2438,6 +2481,54 @@ def _finalize_debate(
             _argmap_link_verdict(debate_id, finalized_summary)
         except Exception:
             logger.debug("argmap link_verdict failed (non-blocking)", exc_info=True)
+
+    # DPD Hallucination Verification Gate — warning-only, never blocks.
+    if getattr(settings, "FEATURE_HALLUCINATION_GATE", False):
+        try:
+            verdict_text = str(
+                finalized_summary.get("judge_summary")
+                or finalized_summary.get("best_argument", {}).get("content", "")
+                or ""
+            )
+            # Aggregate per-turn content as graph evidence; web evidence is
+            # not in scope here yet but kept as an explicit empty list for
+            # forward-compat with future ingestion.
+            graph_evidence: list[dict[str, Any]] = []
+            with Session(get_engine()) as gate_session:
+                gate_turns = list(
+                    gate_session.exec(
+                        select(DebateTurn)
+                        .where(DebateTurn.debate_id == debate_id)
+                        .order_by(DebateTurn.sequence.asc())
+                    ).all()
+                )
+                for turn in gate_turns:
+                    content = (turn.content or "").strip()
+                    if not content:
+                        continue
+                    graph_evidence.append(
+                        {
+                            "text": content,
+                            "source": f"turn:{turn.id}",
+                        }
+                    )
+                debate = gate_session.get(Debate, debate_id)
+                if debate is not None and isinstance(debate.breakdown_json, dict):
+                    updated = _apply_hallucination_gate_metadata(
+                        breakdown_json=debate.breakdown_json,
+                        verdict_text=verdict_text,
+                        graph_evidence=graph_evidence,
+                        web_evidence=[],
+                    )
+                    debate.breakdown_json = updated
+                    flag_modified(debate, "breakdown_json")
+                    gate_session.add(debate)
+                    gate_session.commit()
+                    finalized_summary["hallucination_gate"] = (
+                        updated.get("metadata", {}).get("hallucination_gate")
+                    )
+        except Exception:
+            logger.debug("hallucination gate hook failed (non-blocking)", exc_info=True)
 
     score_existing_predictions(debate_id)
     return finalized_summary

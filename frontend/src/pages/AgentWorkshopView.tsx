@@ -2,7 +2,7 @@
    Phase 3 F3 — Agent Workshop (Create / Edit Custom Agent)
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -10,6 +10,7 @@ import {
   getSessionBoundUserId,
   listAgentIdentities,
   updateAgent,
+  type DocumentAgentResult,
 } from '../api/client';
 import { DecisionBiasSlider } from '../components/Controls/DecisionBiasSlider';
 import {
@@ -18,6 +19,7 @@ import {
 } from '../components/Controls/decisionBias';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import type { AgentIdentityInfo, KnowledgeDomain } from '../types';
+import { DocumentUploader } from './AgentWorkshop/DocumentUploader';
 
 const KNOWLEDGE_DOMAINS: KnowledgeDomain[] = [
   'economics', 'politics', 'technology', 'science', 'military',
@@ -114,6 +116,9 @@ export function AgentWorkshopView() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingAgent, setLoadingAgent] = useState(false);
+  const [activeTab, setActiveTab] = useState<'manual' | 'document'>('manual');
+  const [importToast, setImportToast] = useState<string | null>(null);
+  const importToastTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!editId || !enabled) return;
@@ -203,6 +208,29 @@ export function AgentWorkshopView() {
 
   const canSubmit = form.displayName.trim().length > 0 && form.role.trim().length > 0 && !saving && !loadingAgent;
 
+  // Auto-dismiss the import success toast after a few seconds.
+  useEffect(() => () => {
+    if (importToastTimerRef.current != null) {
+      window.clearTimeout(importToastTimerRef.current);
+    }
+  }, []);
+
+  const handleAgentsImported = useCallback((result: DocumentAgentResult) => {
+    const message = t(
+      'agents.doc_uploader.toast_success',
+      '{{count}} agents imported from document',
+      { count: result.agents_created },
+    );
+    setImportToast(message);
+    if (importToastTimerRef.current != null) {
+      window.clearTimeout(importToastTimerRef.current);
+    }
+    importToastTimerRef.current = window.setTimeout(() => {
+      setImportToast(null);
+      importToastTimerRef.current = null;
+    }, 4500);
+  }, [t]);
+
   if (capLoading) {
     return <div className="agent-page agent-page--centered">{t('common.loading', 'Loading...')}</div>;
   }
@@ -217,11 +245,74 @@ export function AgentWorkshopView() {
     <div className="workshop-view agent-page agent-page--narrow">
       <h1>{isEditMode ? t('agents.edit_title', 'Edit Agent') : t('agents.workshop_title', 'Create Custom Agent')}</h1>
 
-      {loadingAgent && (
+      {!isEditMode && (
+        <div
+          className="agent-workshop-tabs"
+          role="tablist"
+          aria-label={t('agents.workshop_tabs_label', 'Agent creation method')}
+        >
+          <button
+            type="button"
+            role="tab"
+            id="agent-workshop-tab-manual"
+            aria-selected={activeTab === 'manual'}
+            aria-controls="agent-workshop-panel-manual"
+            tabIndex={activeTab === 'manual' ? 0 : -1}
+            className={`agent-workshop-tab${activeTab === 'manual' ? ' agent-workshop-tab--active' : ''}`}
+            onClick={() => setActiveTab('manual')}
+          >
+            {t('agents.tab_manual', 'Build manually')}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="agent-workshop-tab-document"
+            aria-selected={activeTab === 'document'}
+            aria-controls="agent-workshop-panel-document"
+            tabIndex={activeTab === 'document' ? 0 : -1}
+            className={`agent-workshop-tab${activeTab === 'document' ? ' agent-workshop-tab--active' : ''}`}
+            onClick={() => setActiveTab('document')}
+          >
+            {t('agents.tab_document', 'Import from document')}
+          </button>
+        </div>
+      )}
+
+      {importToast && (
+        <div className="agent-workshop-toast" role="status" aria-live="polite">
+          {importToast}
+        </div>
+      )}
+
+      {!isEditMode && activeTab === 'document' && (
+        <section
+          id="agent-workshop-panel-document"
+          role="tabpanel"
+          aria-labelledby="agent-workshop-tab-document"
+          className="agent-workshop-panel"
+        >
+          <p className="agent-page__muted">
+            {t(
+              'agents.doc_uploader.intro',
+              'Upload a PDF (research paper, report, manifesto…) and SwarmOracle will mine it for entities and turn them into custom agents.',
+            )}
+          </p>
+          <DocumentUploader onAgentsCreated={handleAgentsImported} />
+        </section>
+      )}
+
+      {(isEditMode || activeTab === 'manual') && loadingAgent && (
         <p className="agent-page__muted">{t('common.loading', 'Loading...')}</p>
       )}
 
-      <form className="agent-form" onSubmit={handleSubmit}>
+      {(isEditMode || activeTab === 'manual') && (
+      <form
+        id="agent-workshop-panel-manual"
+        role={isEditMode ? undefined : 'tabpanel'}
+        aria-labelledby={isEditMode ? undefined : 'agent-workshop-tab-manual'}
+        className="agent-form"
+        onSubmit={handleSubmit}
+      >
         <div className="agent-form__field">
           <label htmlFor="agent-name" className="agent-form__label">
             {t('agents.name_label', 'Display Name')} *
@@ -350,6 +441,7 @@ export function AgentWorkshopView() {
           </button>
         </div>
       </form>
+      )}
     </div>
   );
 }

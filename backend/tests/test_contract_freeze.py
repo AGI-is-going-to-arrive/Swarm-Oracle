@@ -540,6 +540,9 @@ _TOP_LEVEL_FROZEN_KEYS = frozenset(
         "roundtable_survey",
         "roundtable_analyst",
         "snapshot_export",
+        "education_templates",
+        "persona_export",
+        "prediction_journal",
     }
 )
 
@@ -567,7 +570,7 @@ _PROVIDERS_FROZEN_SUB_KEYS = frozenset(
 
 @pytest.mark.asyncio
 async def test_capabilities_top_level_keys_exact_freeze():
-    """QA-1: top-level capability registry is exactly 14 keys — no more, no less."""
+    """QA-1: top-level capability registry is exactly 17 keys — no more, no less."""
     from app.api.scenarios import api_capabilities
 
     result = await api_capabilities()

@@ -56,6 +56,7 @@ from .ending_room import (
     EndingRoomType,
 )
 from .graph import AgentStateFrame, GraphEdge, GraphNode, GraphSnapshot
+from .prediction_journal import PredictionJournalEntry
 from .predictions import Leaderboard, Prediction
 
 __all__ = [
@@ -66,6 +67,7 @@ __all__ = [
     "Debate", "DebateCounterplay", "DebatePhase", "DebatePrediction", "DebatePredictionKind", "DebateSide", "DebateStatus", "DebateTurn",  # noqa: E501
     "EndingRoom", "EndingRoomInteractionMode", "EndingRoomParticipant", "EndingRoomPhase", "EndingRoomRoleSlot", "EndingRoomStatus", "EndingRoomThread", "EndingRoomThreadMode", "EndingRoomTurn", "EndingRoomTurnSource", "EndingRoomType",  # noqa: E501
     "Prediction", "Leaderboard",
+    "PredictionJournalEntry",
     # Phase 3
     "AgentIdentity", "AgentIdentityCampaign", "AgentIdentityCampaignMember", "AgentGrowthEvent",
     "GraphSnapshot", "GraphNode", "GraphEdge", "AgentStateFrame",

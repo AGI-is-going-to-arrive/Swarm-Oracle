@@ -8,6 +8,7 @@ Create Date: 2026-04-09
 from typing import Sequence, Union
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "014_agent_identity_tables"
@@ -48,7 +49,12 @@ def upgrade() -> None:
     # -- AgentIdentityCampaignMember --
     op.create_table(
         "agent_identity_campaign_member",
-        sa.Column("campaign_id", sa.String(), sa.ForeignKey("agent_identity_campaign.id"), primary_key=True),
+        sa.Column(
+            "campaign_id",
+            sa.String(),
+            sa.ForeignKey("agent_identity_campaign.id"),
+            primary_key=True,
+        ),
         sa.Column("identity_id", sa.String(), sa.ForeignKey("agent_identity.id"), primary_key=True),
         sa.Column("slot_order", sa.Integer(), nullable=False, server_default="0"),
     )

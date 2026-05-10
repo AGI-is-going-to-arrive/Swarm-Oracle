@@ -383,7 +383,12 @@ class TestL2CosineMatching:
             persona="Ancient Chinese general who wrote The Art of War",
         )
         fake_candidates = [
-            {"identity_id": real_id, "distance": 0.07, "similarity": 0.93, "role": "Military Strategist"},
+            {
+                "identity_id": real_id,
+                "distance": 0.07,
+                "similarity": 0.93,
+                "role": "Military Strategist",
+            },
         ]
         with patch(
             "app.services.agent_identity.search_identity_candidates",
@@ -408,7 +413,12 @@ class TestL2CosineMatching:
             persona="Ancient Chinese general who wrote The Art of War",
         )
         fake_candidates = [
-            {"identity_id": real_id, "distance": 0.05, "similarity": 0.95, "role": "Military Strategist"},
+            {
+                "identity_id": real_id,
+                "distance": 0.05,
+                "similarity": 0.95,
+                "role": "Military Strategist",
+            },
         ]
         with patch(
             "app.services.agent_identity.search_identity_candidates",

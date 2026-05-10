@@ -21,7 +21,6 @@ interface PredictionsSectionProps {
 export default function PredictionsSection({ betOutcomeContext }: PredictionsSectionProps) {
   const {
     t,
-    isZh,
     predictions,
     hasUnscored,
     isReplayMode,
@@ -64,7 +63,7 @@ export default function PredictionsSection({ betOutcomeContext }: PredictionsSec
             {structuredBet && (
               <div className="prediction-card__bet-row">
                 <p className="prediction-card__bet-kind">
-                  {getStructuredBetKindLabel(structuredBet.meta.kind, isZh)}
+                  {getStructuredBetKindLabel(structuredBet.meta.kind, t)}
                   {' · '}
                   {structuredBet.meta.targetLabel}
                 </p>

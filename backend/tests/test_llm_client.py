@@ -17,8 +17,8 @@ from app.services.llm_client import (
     health_check,
     llm_call,
     llm_call_json,
-    llm_call_json_with_stream_fallback,
     llm_call_json_stream,
+    llm_call_json_with_stream_fallback,
     validate_llm_base_url,
 )
 
@@ -364,7 +364,11 @@ class TestLLMCall:
         )
 
     @pytest.mark.asyncio
-    async def test_cancelled_waiting_reservation_releases_sqlite_row_and_pending_counts(self, monkeypatch, tmp_path):
+    async def test_cancelled_waiting_reservation_releases_sqlite_row_and_pending_counts(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
         """Cancelling while blocked on semaphores should not leak reservations or pending counts."""
         self._reset_runtime_guard()
         db_path = tmp_path / "runtime_guard_cancel.db"
@@ -997,7 +1001,10 @@ class TestLLMCall:
         monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
         monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
 
-        with pytest.raises(llm_client.LLMError, match="Empty non-stream content|Unexpected response structure"):
+        with pytest.raises(
+            llm_client.LLMError,
+            match="Empty non-stream content|Unexpected response structure",
+        ):
             await llm_call(
                 "Reply with one sentence.",
                 reasoning_effort="low",

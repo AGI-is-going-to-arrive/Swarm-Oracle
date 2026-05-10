@@ -102,4 +102,7 @@ def test_identity_compaction_smoke_real_chroma(monkeypatch):
 
     memories = get_identity_memories(identity_id, limit=50)
     assert len(memories) == after_raw
-    assert all("Compacted summary from integration smoke test." not in m["summary"] for m in memories)
+    assert all(
+        "Compacted summary from integration smoke test." not in m["summary"]
+        for m in memories
+    )

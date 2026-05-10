@@ -61,6 +61,7 @@ def test_valid_bias_saves_successfully(client: TestClient):
 
     response = client.patch(
         f"/api/agents/workshop/{identity_id}",
+        params={"user_id": "bias-user"},
         json={"decision_bias": bias},
     )
 
@@ -74,6 +75,7 @@ def test_out_of_range_values_rejected(client: TestClient, value: float):
 
     response = client.patch(
         f"/api/agents/workshop/{identity_id}",
+        params={"user_id": "bias-user"},
         json={"decision_bias": {"caution": value}},
     )
 
@@ -86,6 +88,7 @@ def test_non_numeric_values_rejected(client: TestClient):
 
     response = client.patch(
         f"/api/agents/workshop/{identity_id}",
+        params={"user_id": "bias-user"},
         json={"decision_bias": {"optimism": "high"}},
     )
 
@@ -99,6 +102,7 @@ def test_non_finite_values_rejected(client: TestClient, raw_value: str):
 
     response = client.patch(
         f"/api/agents/workshop/{identity_id}",
+        params={"user_id": "bias-user"},
         content=f'{{"decision_bias": {{"caution": {raw_value}}}}}',
         headers={"Content-Type": "application/json"},
     )
@@ -113,6 +117,7 @@ def test_boolean_values_rejected(client: TestClient, raw_value: bool):
 
     response = client.patch(
         f"/api/agents/workshop/{identity_id}",
+        params={"user_id": "bias-user"},
         json={"decision_bias": {"creativity": raw_value}},
     )
 
@@ -125,6 +130,7 @@ def test_missing_keys_auto_fill_default(client: TestClient):
 
     response = client.patch(
         f"/api/agents/workshop/{identity_id}",
+        params={"user_id": "bias-user"},
         json={"decision_bias": {"caution": 0.25}},
     )
 
@@ -145,6 +151,7 @@ def test_unknown_keys_are_ignored(client: TestClient):
 
     response = client.patch(
         f"/api/agents/workshop/{identity_id}",
+        params={"user_id": "bias-user"},
         json={"decision_bias": bias},
     )
 

@@ -92,6 +92,19 @@ export function buildSessionHeaders(headers?: HeadersInit): Headers {
   return merged;
 }
 
+function userIdQuery(userId?: string | null): string {
+  return `user_id=${encodeURIComponent(getSessionBoundUserId(userId))}`;
+}
+
+function withUserIdQuery(path: string, userId?: string | null): string {
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}${userIdQuery(userId)}`;
+}
+
+function userIdHeader(userId?: string | null): Record<string, string> {
+  return { 'X-User-Id': getSessionBoundUserId(userId) };
+}
+
 function sanitizeErrorText(text: string): string {
   if (!text || text.length > 200) return 'Server error';
   if (/Traceback|at\s+\S+\s+\(|<html|<\/div>/i.test(text)) return 'Server error';
@@ -132,6 +145,9 @@ export function isApiError(error: unknown): error is ApiError {
 }
 
 async function parseJsonResponse<T>(res: Response, path: string): Promise<T> {
+  if (res.status === 204) {
+    return undefined as T;
+  }
   const contentType = res.headers.get('content-type')?.toLowerCase() ?? '';
   if (!contentType.includes('json')) {
     const body = await res.text().catch(() => '');
@@ -392,7 +408,7 @@ async function request<T>(
       // H-3 fix: spread init.headers AFTER defaults so user overrides win
       headers: buildSessionHeaders({ ...headers, ...(init?.headers as Record<string, string>) }),
     }, timeoutMs);
-    if (res.ok) {
+  if (res.ok) {
       return parseJsonResponse<T>(res, path);
     }
 
@@ -491,6 +507,53 @@ export interface CapabilitiesResponse {
   roundtable_survey: CapabilityEntry;
   roundtable_analyst: CapabilityEntry;
   snapshot_export?: CapabilityEntry;
+  education_templates?: CapabilityEntry;
+  persona_export?: CapabilityEntry;
+  prediction_journal?: CapabilityEntry;
+}
+
+/** Persona export/import payload — schema_version 1 contract. */
+export interface PersonaExportPayload {
+  schema_version: number;
+  exported_at: string;
+  persona: {
+    name: string;
+    role: string;
+    persona_text: string;
+    decision_bias: Record<string, number>;
+    tags: string[];
+  };
+}
+
+/** Education template type — pre-built classroom scenarios with suggested config. */
+export type EducationTemplate = {
+  id: string;
+  category: string;
+  title_zh: string;
+  title_en: string;
+  description_zh: string;
+  description_en: string;
+  difficulty: string;
+  suggested_agents: number;
+  suggested_rounds: number;
+  tags: string[];
+  default_config: Record<string, unknown>;
+};
+
+/** GET /api/scenario/templates — list available education templates with optional filters. */
+export async function listEducationTemplates(
+  params?: { category?: string; difficulty?: string },
+): Promise<{ templates: EducationTemplate[] }> {
+  const query: string[] = [];
+  if (params?.category) query.push(`category=${encodeURIComponent(params.category)}`);
+  if (params?.difficulty) query.push(`difficulty=${encodeURIComponent(params.difficulty)}`);
+  const suffix = query.length > 0 ? `?${query.join('&')}` : '';
+  return safeGet(`/scenario/templates${suffix}`);
+}
+
+/** GET /api/scenario/templates/:id — fetch a single education template. */
+export async function getEducationTemplate(id: string): Promise<EducationTemplate> {
+  return safeGet(`/scenario/templates/${encodeURIComponent(id)}`);
 }
 
 /** GET /api/capabilities — lightweight server capability hints (no LLM calls) */
@@ -963,9 +1026,40 @@ export async function scorePredictions(
   });
 }
 
-/** GET /api/leaderboard — global prediction leaderboard (P5-B) */
-export async function getLeaderboard(limit = 20): Promise<LeaderboardEntry[]> {
-  return safeGet(`/leaderboard?limit=${limit}`);
+export type LeaderboardScenarioType = 'debate' | 'simulation' | 'roundtable';
+
+export interface LeaderboardSegmentFilters {
+  scenarioType?: LeaderboardScenarioType | null;
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  minAgents?: number | null;
+  maxAgents?: number | null;
+}
+
+export interface LeaderboardSegmentMetadata {
+  active_filters: Record<string, unknown>;
+  total_count: number;
+  filtered_count: number;
+}
+
+export interface LeaderboardResponse {
+  entries: LeaderboardEntry[];
+  segment_metadata?: LeaderboardSegmentMetadata;
+}
+
+/** GET /api/leaderboard — global prediction leaderboard (P5-B) with optional segment filters */
+export async function getLeaderboard(
+  limit = 20,
+  filters?: LeaderboardSegmentFilters,
+): Promise<LeaderboardResponse | LeaderboardEntry[]> {
+  const params = new URLSearchParams();
+  params.set('limit', String(limit));
+  if (filters?.scenarioType) params.set('scenario_type', filters.scenarioType);
+  if (filters?.dateFrom) params.set('date_from', filters.dateFrom);
+  if (filters?.dateTo) params.set('date_to', filters.dateTo);
+  if (filters?.minAgents != null) params.set('min_agents', String(filters.minAgents));
+  if (filters?.maxAgents != null) params.set('max_agents', String(filters.maxAgents));
+  return safeGet(`/leaderboard?${params.toString()}`);
 }
 
 export interface FinalizeCampaignPayload {
@@ -1131,6 +1225,38 @@ export async function getIdentityGrowthEvents(
   );
 }
 
+// ── Identity Memory Inspector ───────────────────────────
+export interface IdentityMemoryMetadata {
+  scenario_id?: string | null;
+  round?: number | string | null;
+  type?: string | null;
+  [key: string]: unknown;
+}
+
+export interface IdentityMemoryEntry {
+  document: string;
+  metadata: IdentityMemoryMetadata;
+  timestamp: string | null;
+  confidence: number | string | null;
+  is_compacted: boolean;
+}
+
+export interface IdentityMemoriesResponse {
+  memories: IdentityMemoryEntry[];
+  total: number;
+}
+
+/** GET /api/agents/identities/:id/memories — inspector endpoint with full entry shape */
+export async function getIdentityMemories(
+  identityId: string,
+  options?: RequestOptions,
+): Promise<IdentityMemoriesResponse> {
+  return safeGet(
+    withUserIdQuery(`/agents/identities/${encodeURIComponent(identityId)}/memories`),
+    options,
+  );
+}
+
 /** PUT /api/agents/workshop/:identityId — update a custom agent */
 export async function updateAgent(
   identityId: string,
@@ -1143,7 +1269,7 @@ export async function updateAgent(
     decision_bias?: Record<string, number> | null;
   },
 ): Promise<{ detail: string }> {
-  return request(`/agents/workshop/${encodeURIComponent(identityId)}`, {
+  return request(withUserIdQuery(`/agents/workshop/${encodeURIComponent(identityId)}`), {
     method: 'PUT',
     body: JSON.stringify(data),
   });
@@ -1360,9 +1486,124 @@ export async function createAgent<T = unknown>(
 }
 
 /** DELETE /api/agents/workshop/:identityId — delete a custom agent */
-export async function deleteAgent(identityId: string): Promise<{ detail: string }> {
-  return request(`/agents/workshop/${encodeURIComponent(identityId)}`, {
+export async function deleteAgent(identityId: string): Promise<void> {
+  await request<void>(withUserIdQuery(`/agents/workshop/${encodeURIComponent(identityId)}`), {
     method: 'DELETE',
+  });
+}
+
+// ── Document-driven Agent Generation ─────────────────────
+
+/** Identity created by document-driven extraction. */
+export interface DocumentAgentIdentity {
+  id: string;
+  name: string;
+  role: string;
+}
+
+/** Response shape of `POST /api/agents/from-document`. */
+export interface DocumentAgentResult {
+  agents_created: number;
+  entities_extracted: number;
+  identities: DocumentAgentIdentity[];
+}
+
+/**
+ * POST /api/agents/from-document — multipart upload of a PDF that the
+ * backend mines for entities and converts into custom agent identities.
+ *
+ * Throws `ApiError` for documented HTTP error codes:
+ * - 413 (FILE_TOO_LARGE)
+ * - 415 (UNSUPPORTED_MEDIA_TYPE)
+ * - 422 (EXTRACTION_FAILED)
+ * Other failures throw a regular `Error` with a sanitized message.
+ */
+export async function uploadDocumentForAgents(
+  file: File,
+  signal?: AbortSignal,
+): Promise<DocumentAgentResult> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+
+  const res = await fetchWithTimeout(
+    withUserIdQuery('/agents/from-document'),
+    {
+      method: 'POST',
+      headers: buildSessionHeaders(),
+      body: form,
+      signal,
+    },
+    // Document parsing + entity extraction can be slow; lift the default
+    // 30s ceiling. Caller can still cancel via AbortSignal.
+    120_000,
+  );
+
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+  return parseJsonResponse<DocumentAgentResult>(res, '/agents/from-document');
+}
+
+// ── Agent Favorites ──────────────────────────────────────
+
+/** GET /api/agents/identities/favorites — list favorite agent identities */
+export async function getAgentFavorites<T = unknown>(
+  options?: RequestOptions,
+): Promise<T> {
+  return safeGet(withUserIdQuery('/agents/identities/favorites'), options);
+}
+
+/** POST /api/agents/identities/:id/favorite — mark an agent identity as favorite */
+export async function markAgentFavorite<T = unknown>(
+  identityId: string,
+): Promise<T> {
+  return request(withUserIdQuery(`/agents/identities/${encodeURIComponent(identityId)}/favorite`), {
+    method: 'POST',
+  });
+}
+
+/** DELETE /api/agents/identities/:id/favorite — unmark an agent identity favorite */
+export async function unmarkAgentFavorite(identityId: string): Promise<void> {
+  const res = await fetchWithTimeout(
+    withUserIdQuery(`/agents/identities/${encodeURIComponent(identityId)}/favorite`),
+    {
+      method: 'DELETE',
+      headers: buildSessionHeaders(),
+    },
+  );
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+}
+
+// ── Persona Export / Import ──────────────────────────────
+
+/** GET /api/agents/identities/:id/export — export a single persona as JSON. */
+export async function exportPersona(
+  identityId: number | string,
+): Promise<PersonaExportPayload> {
+  return safeGet(
+    withUserIdQuery(`/agents/identities/${encodeURIComponent(String(identityId))}/export`),
+  );
+}
+
+/** POST /api/agents/export-bulk — export multiple personas at once. */
+export async function exportPersonasBulk(
+  ids: Array<number | string>,
+): Promise<{ personas: PersonaExportPayload[] }> {
+  return request(withUserIdQuery('/agents/export-bulk'), {
+    method: 'POST',
+    body: JSON.stringify({ identity_ids: ids.map((id) => String(id)) }),
+  });
+}
+
+/** POST /api/agents/import — import a persona payload, returns new identity id. */
+export async function importPersona(
+  payload: PersonaExportPayload,
+): Promise<{ success: boolean; identity_id: number }> {
+  return request(withUserIdQuery('/agents/import'), {
+    method: 'POST',
+    body: JSON.stringify(payload),
   });
 }
 
@@ -1479,4 +1720,98 @@ export async function getQuotaSummary(
     ? `/quota/summary?scenario_id=${encodeURIComponent(id)}`
     : '/quota/summary';
   return safeGet(path, options);
+}
+
+/* ─── Personal Prediction Journal ───────────────────────────
+   Server-side endpoints under /api/me/* deliver per-user
+   forecast records and calibration aggregates. All endpoints
+   are user-scoped via the shared session token.
+   ──────────────────────────────────────────────────────── */
+
+export interface JournalEntry {
+  id: number;
+  user_id: string;
+  scenario_id: string | null;
+  question: string;
+  predicted_probability: number;
+  actual_outcome: boolean | null;
+  resolved_at: string | null;
+  created_at: string;
+  brier_score: number | null;
+}
+
+export interface JournalListResponse {
+  items: JournalEntry[];
+  limit: number;
+  offset: number;
+}
+
+export interface CalibrationBin {
+  range: [number, number];
+  predicted_avg: number | null;
+  actual_frequency: number | null;
+  count: number;
+}
+
+export interface CalibrationResponse {
+  bins: CalibrationBin[];
+}
+
+export interface CreateJournalEntryRequest {
+  question: string;
+  predicted_probability: number;
+  scenario_id?: string | null;
+}
+
+export interface ResolveJournalEntryRequest {
+  actual_outcome: boolean;
+}
+
+/** GET /api/me/journal — list the current user's prediction journal entries. */
+export async function listJournalEntries(options?: RequestOptions): Promise<JournalListResponse> {
+  return request(
+    '/me/journal',
+    {
+      signal: options?.signal,
+      headers: userIdHeader(),
+    },
+    DEFAULT_TIMEOUT,
+    { retryTransient: true, retryAttempts: DEFAULT_RETRY_ATTEMPTS },
+  );
+}
+
+/** GET /api/me/calibration — calibration histogram for the current user. */
+export async function getJournalCalibration(options?: RequestOptions): Promise<CalibrationResponse> {
+  return request(
+    '/me/calibration',
+    {
+      signal: options?.signal,
+      headers: userIdHeader(),
+    },
+    DEFAULT_TIMEOUT,
+    { retryTransient: true, retryAttempts: DEFAULT_RETRY_ATTEMPTS },
+  );
+}
+
+/** POST /api/me/journal — log a new forecast in the current user's journal. */
+export async function createJournalEntry(
+  body: CreateJournalEntryRequest,
+): Promise<JournalEntry> {
+  return request('/me/journal', {
+    method: 'POST',
+    headers: userIdHeader(),
+    body: JSON.stringify(body),
+  });
+}
+
+/** PATCH /api/me/journal/:id/resolve — record the actual outcome for a journal entry. */
+export async function resolveJournalEntry(
+  id: number | string,
+  body: ResolveJournalEntryRequest,
+): Promise<JournalEntry> {
+  return request(`/me/journal/${encodeURIComponent(id)}/resolve`, {
+    method: 'PATCH',
+    headers: userIdHeader(),
+    body: JSON.stringify(body),
+  });
 }

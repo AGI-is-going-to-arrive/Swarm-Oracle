@@ -18,6 +18,8 @@ import type { WebSearchFamily } from '../types';
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import { useAgentStore } from '../stores/agentStore';
 import { AgentAttachPanel } from '../components/AgentAttachPanel';
+import { EducationTemplatePicker } from '../components/EducationTemplatePicker';
+import type { EducationTemplate } from '../api/client';
 import { OnboardingGuide } from '../components/Onboarding/OnboardingGuide';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useOnboardingState } from '../hooks/useOnboardingState';
@@ -236,6 +238,8 @@ export function InputView() {
   const [searchParams] = useSearchParams();
   const directorIdentity = getDirectorIdentity();
   const { capabilities: caps } = useCapabilityCheck('custom_agents');
+  const { enabled: educationTemplatesEnabled } = useCapabilityCheck('education_templates');
+  const [educationPickerOpen, setEducationPickerOpen] = useState(false);
   // S1-5: First-visit onboarding guide. Hidden once the user finishes or skips.
   const onboarding = useOnboardingState();
   const agentSelectedIds = useAgentStore((s) => s.selectedIds);
@@ -856,6 +860,23 @@ export function InputView() {
     });
   };
 
+  const handleEducationTemplateSelect = useCallback((template: EducationTemplate) => {
+    const localizedTitle = isZh
+      ? (template.title_zh || template.title_en)
+      : (template.title_en || template.title_zh);
+    setQuestion(localizedTitle || '');
+    if (Number.isFinite(template.suggested_rounds) && template.suggested_rounds > 0) {
+      setRounds(template.suggested_rounds);
+    }
+    if (Number.isFinite(template.suggested_agents) && template.suggested_agents > 0) {
+      setNumAgents(template.suggested_agents);
+    }
+    setEducationPickerOpen(false);
+    requestAnimationFrame(() => {
+      questionRef.current?.focus();
+    });
+  }, [isZh]);
+
   const handleQuickStartSelect = async (preset: QuickStartPreset) => {
     setQuestion(preset.question);
     await launchSimulation({
@@ -1226,6 +1247,16 @@ export function InputView() {
                 >
                   {t('debate.entry_cta')}
                 </button>
+                {educationTemplatesEnabled && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn--submit edu-template-trigger"
+                    onClick={() => setEducationPickerOpen(true)}
+                    disabled={isSubmitting}
+                  >
+                    {t('education.use_template')}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -2175,6 +2206,13 @@ export function InputView() {
           navigate(`/result/${encodeURIComponent(scenarioId)}`);
         }}
       />
+      {educationTemplatesEnabled && (
+        <EducationTemplatePicker
+          open={educationPickerOpen}
+          onClose={() => setEducationPickerOpen(false)}
+          onSelect={handleEducationTemplateSelect}
+        />
+      )}
     </div>
   );
 }

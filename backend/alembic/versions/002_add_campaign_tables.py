@@ -7,8 +7,9 @@ Create Date: 2026-03-17
 
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "002_add_campaign_tables"
@@ -149,7 +150,10 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_scenario_campaign_log_profile_id", table_name="scenario_campaign_log")
-    op.drop_index("ix_scenario_campaign_log_director_profile_id", table_name="scenario_campaign_log")
+    op.drop_index(
+        "ix_scenario_campaign_log_director_profile_id",
+        table_name="scenario_campaign_log",
+    )
     op.drop_index("ix_scenario_campaign_log_scenario_id", table_name="scenario_campaign_log")
     op.drop_table("scenario_campaign_log")
 

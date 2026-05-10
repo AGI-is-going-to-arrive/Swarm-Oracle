@@ -8,6 +8,7 @@ Create Date: 2026-04-09
 from typing import Sequence, Union
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "015_graph_and_state_frame_tables"
@@ -35,7 +36,13 @@ def upgrade() -> None:
     op.create_table(
         "graph_node",
         sa.Column("id", sa.String(), primary_key=True),
-        sa.Column("snapshot_id", sa.String(), sa.ForeignKey("graph_snapshot.id"), nullable=False, index=True),
+        sa.Column(
+            "snapshot_id",
+            sa.String(),
+            sa.ForeignKey("graph_snapshot.id"),
+            nullable=False,
+            index=True,
+        ),
         sa.Column("node_key", sa.String(), nullable=False),
         sa.Column("node_type", sa.String(), nullable=False),
         sa.Column("label", sa.String(), nullable=False, server_default=""),
@@ -49,7 +56,13 @@ def upgrade() -> None:
     op.create_table(
         "graph_edge",
         sa.Column("id", sa.String(), primary_key=True),
-        sa.Column("snapshot_id", sa.String(), sa.ForeignKey("graph_snapshot.id"), nullable=False, index=True),
+        sa.Column(
+            "snapshot_id",
+            sa.String(),
+            sa.ForeignKey("graph_snapshot.id"),
+            nullable=False,
+            index=True,
+        ),
         sa.Column("source_node_id", sa.String(), sa.ForeignKey("graph_node.id"), nullable=False),
         sa.Column("target_node_id", sa.String(), sa.ForeignKey("graph_node.id"), nullable=False),
         sa.Column("edge_type", sa.String(), nullable=False),
@@ -71,7 +84,12 @@ def upgrade() -> None:
         sa.Column("emotion", sa.String(), nullable=True),
         sa.Column("summary_excerpt", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.UniqueConstraint("branch_id", "round_number", "agent_id", name="uq_state_frame_branch_round_agent"),
+        sa.UniqueConstraint(
+            "branch_id",
+            "round_number",
+            "agent_id",
+            name="uq_state_frame_branch_round_agent",
+        ),
     )
 
 

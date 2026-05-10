@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next';
 import type { BranchInfo } from '../types';
 
 export type StructuredBetKind = 'branch_winner' | 'ending_tone' | 'profile_resonance';
@@ -50,14 +51,14 @@ export const PROFILE_RESONANCE_OPTIONS: Record<ProfileResonanceId, { zh: string;
   offbeat: { zh: '走出了题材支线', en: 'Unexpected Side Route' },
 };
 
-export function getStructuredBetKindLabel(kind: StructuredBetKind, isZh: boolean): string {
+export function getStructuredBetKindLabel(kind: StructuredBetKind, t: TFunction): string {
   if (kind === 'branch_winner') {
-    return isZh ? '押注世界线' : 'Branch Winner';
+    return t('prediction.bet_kind_branch_winner');
   }
   if (kind === 'profile_resonance') {
-    return isZh ? '押题材回响' : 'Theme Resonance';
+    return t('prediction.bet_kind_profile_resonance');
   }
-  return isZh ? '押注结局倾向' : 'Ending Tone';
+  return t('prediction.bet_kind_ending_tone');
 }
 
 export function getEndingToneLabel(tone: EndingToneId | string, isZh: boolean): string {

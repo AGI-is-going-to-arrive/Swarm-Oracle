@@ -185,7 +185,10 @@ def test_refresh_runtime_lock_returns_none_when_lease_is_expired(monkeypatch, tm
         f"sqlite:///{db_path}",
     )
 
-    lease = acquire_runtime_lock(simulation_lock_key("scenario-refresh-expired"), lease_seconds=0.01)
+    lease = acquire_runtime_lock(
+        simulation_lock_key("scenario-refresh-expired"),
+        lease_seconds=0.01,
+    )
     assert lease is not None
     time.sleep(0.03)
 

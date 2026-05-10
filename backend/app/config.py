@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     FEATURE_KG_EXPLORER: bool = Field(default=False)
     FEATURE_NEW_SOURCES: bool = Field(default=False)
     FEATURE_SNAPSHOT_EXPORT: bool = Field(default=False)
+    FEATURE_PREDICTION_JOURNAL: bool = Field(default=False)
+    # DPD Hallucination Verification Gate — warning-only post-verdict check.
+    FEATURE_HALLUCINATION_GATE: bool = Field(default=False)
+    FEATURE_EDUCATION_TEMPLATES: bool = Field(default=False)
+    FEATURE_PERSONA_EXPORT: bool = Field(default=False)
 
     # ── Identity Memory Compaction ───────────────────────
     IDENTITY_COMPACT_THRESHOLD: int = 50   # trigger when raw doc count >= this

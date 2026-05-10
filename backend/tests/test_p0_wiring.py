@@ -11,7 +11,6 @@ from sqlmodel import Session, select
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
 from app.models.database import Agent, Branch, Scenario, ScenarioStatus, get_engine
 
-
 # ── Helpers ──────────────────────────────────────────────
 
 
@@ -116,6 +115,7 @@ class TestCustomAgentOwnership:
             result = _build_custom_agent_injection(session, [iid], None)
         assert len(result) == 0
 
+    @patch("app.config.settings.FEATURE_CUSTOM_AGENTS", False)
     def test_feature_flag_disabled_rejects_all(self):
         """When FEATURE_CUSTOM_AGENTS is disabled, guard short-circuits."""
         engine = get_engine()
@@ -325,10 +325,13 @@ class TestIdentityLifecycleHooks:
             assert sc_user_id == "legacy-user"
 
     @pytest.mark.asyncio
-    async def test_parse_and_run_background_respects_create_new_continuity_override(self, monkeypatch):
+    async def test_parse_and_run_background_respects_create_new_continuity_override(
+        self,
+        monkeypatch,
+    ):
         from app.api import helpers as helpers_api
-        from app.services.agent_identity import build_continuity_key, resolve_identity
         from app.config import settings
+        from app.services.agent_identity import build_continuity_key, resolve_identity
 
         previous = settings.FEATURE_AGENT_IDENTITY
         settings.FEATURE_AGENT_IDENTITY = True
@@ -411,10 +414,13 @@ class TestIdentityLifecycleHooks:
             assert agents[0].agent_identity_id != existing_identity_id
 
     @pytest.mark.asyncio
-    async def test_parse_and_run_background_matches_override_by_agent_name_and_role(self, monkeypatch):
+    async def test_parse_and_run_background_matches_override_by_agent_name_and_role(
+        self,
+        monkeypatch,
+    ):
         from app.api import helpers as helpers_api
-        from app.services.agent_identity import resolve_identity
         from app.config import settings
+        from app.services.agent_identity import resolve_identity
 
         previous = settings.FEATURE_AGENT_IDENTITY
         settings.FEATURE_AGENT_IDENTITY = True
@@ -604,7 +610,8 @@ class TestFactionWSEvents:
         """Faction result keys match contract-freeze expectations."""
         from app.services.factions import process_round
         msgs = []
-        for i, emo in enumerate(["aggressive", "cooperative", "aggressive", "cooperative", "anxious"]):
+        emotions = ["aggressive", "cooperative", "aggressive", "cooperative", "anxious"]
+        for i, emo in enumerate(emotions):
             m = MagicMock()
             m.agent_id = f"ws-{i}"
             m.emotion = emo

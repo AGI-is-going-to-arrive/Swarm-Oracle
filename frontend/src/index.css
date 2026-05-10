@@ -488,6 +488,115 @@
   gap: 16px;
 }
 
+.agent-library-grid--gallery {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.agent-library-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 18px;
+}
+
+.agent-library-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-default, rgba(64, 48, 40, 0.12));
+  border-radius: 999px;
+  background: var(--bg-surface, #fff);
+}
+
+.agent-library-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary, #6b5f56);
+  font-family: var(--font-body, inherit);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.agent-library-tab:hover {
+  background: rgba(124, 92, 62, 0.08);
+}
+
+.agent-library-tab:focus-visible {
+  outline: 2px solid var(--accent-primary, #7c5c3e);
+  outline-offset: 2px;
+}
+
+.agent-library-tab--active {
+  background: var(--accent-primary, #7c5c3e);
+  color: #fff;
+}
+
+.agent-library-tab--active:hover {
+  background: var(--accent-primary, #7c5c3e);
+}
+
+.agent-library-tab__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-library-tab:not(.agent-library-tab--active) .agent-library-tab__count {
+  background: rgba(64, 48, 40, 0.1);
+  color: var(--text-secondary, #6b5f56);
+}
+
+.agent-library-search {
+  flex: 1 1 220px;
+  min-width: 180px;
+  max-width: 360px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-default, rgba(64, 48, 40, 0.16));
+  border-radius: 8px;
+  background: var(--bg-surface, #fff);
+  font-family: var(--font-body, inherit);
+  font-size: 0.875rem;
+  color: var(--text-primary, #2d2520);
+}
+
+.agent-library-search:focus {
+  outline: none;
+  border-color: var(--accent-primary, #7c5c3e);
+  box-shadow: 0 0 0 3px rgba(124, 92, 62, 0.16);
+}
+
+.agent-library-card-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-library-card-wrap__delete {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-library-tab {
+    transition: none;
+  }
+}
+
 .agent-card {
   display: grid;
   gap: 8px;
