@@ -19,7 +19,7 @@
 | 模块 | 位置 | 责任 |
 |------|------|------|
 | App 入口 | `backend/app/main.py` | 挂载所有 router、根信息、`/metrics` |
-| Admin | `backend/app/api/admin.py` | admin preflight 与 LLM 连接测试；受 session gate 保护 |
+| Admin | `backend/app/api/admin.py` | admin preflight 与 LLM 连接测试；受 session gate 保护，`ADMIN_TOKEN` 非空时还要求 `X-Admin-Token` |
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import |
 | Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 persona 导入导出 |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary |
@@ -88,10 +88,10 @@
   这些标题仍作为 `Branch.title` 持久化，并随 `branch_fork` 事件广播给前端。
 - `POST /api/scenario/{id}/cancel` 当前只接受 `parsing / simulating / narrating / cancelled`：
   - 请求会先把可取消 scenario 持久化为 `cancelled`
-  - 如果本进程没有本地 token，也会创建 token 并设置 cancel event，便于多 worker 下的后续检查看到 DB 终态
+  - token 获取是幂等的；即使本进程已经有未触发 token，后续检查也会回读 DB `cancelled` 并设置本地 event
   - 如果本进程有运行中的 background task，会直接 `task.cancel()`
   - `done / error` 返回 `409 SIMULATION_NOT_RUNNING`，不会被取消路径降级
-- simulator 收到取消后不会把已经进入 `done / error` 的 scenario 回退成 `cancelled`；取消事件广播前，agent message 会先落库，避免前端收到不可重放的 stale 事件。
+- simulator 不会覆盖 `cancelled / done / error` 终态；取消事件广播前，agent message 会先落库，避免前端收到不可重放的 stale 事件。
 
 ### Replay
 
@@ -143,9 +143,9 @@
   - 不存在的 branch 会返回 `404 BRANCH_NOT_FOUND`，不再伪装成 `200 + 空图`
 - `GET /api/scenario/{id}/graph-analysis` 当前同时要求 `FEATURE_GRAPH_ANALYSIS=true` 和 `FEATURE_CAUSAL_GRAPH=true`；返回 god nodes、degree distribution、cross-branch edges 和 summary。`summary.total_nodes` 统计的是序列化 causal snapshot 的可见节点，包含合成 `outcome` nodes。分析前会先按最新 snapshot 的 node/edge 数做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`；带 `branch_id` 时，预检会按该 branch 的可见节点/边计数，避免大 scenario 下的小 branch 查询被保守截断。
 - `GraphEdge` 当前已有 `confidence_tier / source_ref / source_round_number / evidence_json` nullable 字段。causal graph 新边会写入 coarse evidence，并在 API response 里返回；重放轮次遇到旧 edge 时，会只补齐缺失的 evidence 字段，不覆盖已有非空值。inter-agent 边会把确定性 rule / reason 写进 `evidence_json`；其它 causal graph 写图路径仍可能只有 coarse provenance。debate argument map 也会在 `GET /api/debate/{id}/argument-map` 的 `edges[].evidence` 返回 `confidence_tier / source_ref / source_round_number / detail`。`detail` 只是 `evidence_json` 的透传，不是 LLM 解释文本。
-- `GET /api/scenario/{id}/personality-drift` 当前要求 `FEATURE_AGENT_IDENTITY=true`，并先校验 caller 能看到该 scenario。返回值按 drift score 排序，只做 warning 数据，不阻断 verdict。
-- `GET /api/scenario/{id}/snapshot` 当前要求 `FEATURE_SNAPSHOT_EXPORT=true`，并先校验 scenario ownership。ZIP 包含 `manifest.json`、scenario、branches、agents、messages、causal graph 和 `checksums.sha256`；默认不导出 `user_id`，也会剥掉 API key、base URL、token、password 等敏感字段。
-- `POST /api/scenario/import-snapshot` 当前也受 `FEATURE_SNAPSHOT_EXPORT` gate；开启 `SESSION_SECRET` 时要求 signed principal。上传上限是 50 MB；导入前会拒绝绝对路径、`..`、反斜杠路径、symlink、重复 ZIP member name、超过 256 个物理 member、超大 member、总解压超限、异常压缩比、manifest/schema/checksum 不匹配。导入会新建 scenario/branch/agent/message/graph 主键并 remap FK，imported agent 的 `agent_identity_id` 会清空。
+- `GET /api/scenario/{id}/personality-drift` 当前要求 `FEATURE_AGENT_IDENTITY=true`，并先校验 caller 能看到该 scenario。返回值按 drift score 排序，只做 warning 数据，不阻断 verdict；波动项来自消息 emotion 变化，不把 `Agent.stance` 当成时间线字段。
+- `GET /api/scenario/{id}/snapshot` 当前要求 `FEATURE_SNAPSHOT_EXPORT=true`，并先校验 scenario ownership。ZIP 包含 `manifest.json`、scenario、branches、agents、messages、causal graph 和 `checksums.sha256`；默认不导出 `user_id`，也会剥掉 API key、base URL、token、password 及常见 provider secret key 变体，branch `key_moments` 和 web context 这类 JSON 字符串也会被清理。
+- `POST /api/scenario/import-snapshot` 当前也受 `FEATURE_SNAPSHOT_EXPORT` gate；开启 `SESSION_SECRET` 时要求 signed principal。上传上限是 50 MB；导入前会拒绝绝对路径、`..`、反斜杠路径、symlink、重复 ZIP member name、超过 256 个物理 member、超大 member、总解压超限、异常压缩比、manifest/schema/checksum 不匹配、非 UTF-8 JSON/JSONL、单行超过 1 MB 的 JSONL，以及超过 100000 行的 JSONL。导入会新建 scenario/branch/agent/message/graph 主键并 remap FK，branch `replay_source_branch_id` 也会 remap；映射不到的旧引用会清空，imported agent 的 `agent_identity_id` 会清空。
 
 ### Ending Room
 
@@ -169,7 +169,7 @@
 - `_phase_insight()` 当前会把长 turn commentary 压成 phase-specific 的一句主持人提炼；后端 result 不再默认把整段 transcript 复制进 phase insight。
 - Oracle 主文案的 LLM 路径当前先走 generation-first prompt，这一步不会把 anchor copy 当中心参考；只有生成为空或失败时，才进入带 anchor reference 的 rewrite fallback，最后才退 deterministic fallback。
 - Oracle prompt 当前包含双层角色化词汇提示：
-  - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science / tech-visionary / journalist / educator / artist / entrepreneur，共 18 种）提供领域专属术语、句式风格和情绪基调。关键词匹配会避开已知过宽词，例如 `medium confidence` 不应误入 artist，`large-scale` 不应误入 entrepreneur。
+  - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science / tech-visionary / journalist / educator / artist / entrepreneur，共 18 种）提供领域专属术语、句式风格和情绪基调。ASCII 关键词按词边界匹配，CJK 仍按子串匹配，避免 `warlord/lord`、`consultant/consul`、`federation/ration` 这类旧误匹配；关键词匹配也会避开已知过宽词，例如 `medium confidence` 不应误入 artist，`large-scale` 不应误入 entrepreneur。
   - 身份层：从 `persona_snapshot_json` 中提取 agent 的实际身份（`agent_role`）、简介（`bio_short`）、影响力（`impact_score`）、叙事地位（`tier`）和推演参与度（`turn_count / key_moment_hits`），动态生成 identity 提示。
   - prompt 里只有静态领域词汇会进入可信 `Persona vocabulary` 行；身份层会通过 `Persona Vocabulary Identity / UNTRUSTED DATA` fenced block 注入，三反引号和 prompt-injection 标记由统一 helper 处理。
   - 高影响力 agent（impact_score ≥ 0.75）措辞更自信有分量；低影响力 agent（≤ 0.35）措辞更谨慎。
@@ -192,7 +192,7 @@
   - 旧行里 `preferred_tier` 缺失、为空或无法识别时，注入层和 simulator 会回退到 `IMPORTANT`
   - 自建 Agent 不允许获得 `CORE`；如果数据库里已经有脏的 custom `CORE`，scenario 注入和 `_agent_to_dict()` 都会降成 `IMPORTANT`
   - workshop update/delete 只允许 `kind=custom`；generated identity 会返回不可编辑/不可删除的业务错误
-  - `decision_bias` 固定为 `caution / optimism / conservatism / risk_tolerance / creativity` 5 个 key；缺失 key 补 `0.5`，未知 key 忽略，非数字、`NaN/Inf` 或超出 `0..1` 会被拒绝
+  - `decision_bias` 固定为 `caution / optimism / conservatism / risk_tolerance / creativity` 5 个 key；缺失 key 补 `0.5`，数字字符串会转成 float，boolean、非数字、`NaN/Inf`、超出 `0..1` 或未知 key 都会被拒绝
   - `knowledge_domain_json / decision_bias_json` 解析失败时会降级为空 metadata，不阻断列表、推演或 debate
   - 主推演和 Debate prompt 里，自建 Agent 的名字、角色、persona、knowledge domains 和 decision bias 都按不可信输入注入，不把用户文本当系统指令
 - Agent Library 相关 API 当前按 user scope 收口：
@@ -208,8 +208,8 @@
   - 迁移 `027_prediction_journal` 创建 journal 表
   - 迁移 `029_prediction_journal_calibration_index` 给 `user_id / resolved_at / actual_outcome` 增加 calibration 查询索引
   - list/create/resolve/calibration 都按当前 user scope 查询
-  - create 绑定 `scenario_id` 时会校验该 scenario 属于当前用户；旧的无 owner scenario 不会被任意用户认领
-  - resolve 使用条件更新收口；已解析 entry 或并发 stale resolve 会返回 409，不会重复改写结果
+  - create 绑定 `scenario_id` 时只查当前用户可见 scenario；不存在、跨用户、旧的无 owner scenario 都统一返回 404，不暴露资源是否存在
+  - resolve 只查当前用户 entry；不存在或跨用户 entry 返回 404，已解析 entry 或并发 stale resolve 会返回 409，不会重复改写结果
   - calibration 聚合会限制读取条数，避免一次把当前用户历史全量扫进内存
 - `FEATURE_HALLUCINATION_GATE` 当前只控制 verdict 后处理：
   - 空 verdict、没有可校验 claim、低置信度或矛盾 claim 都只进入 warning metadata
@@ -217,7 +217,7 @@
   - 矛盾检测会识别常见中英文否定；中文里 `无/无法/无力` 这类谓词否定会计入，`无论/无疑` 这类中性组合不会被当成否定
   - Debate result payload 会在存在时回显 `score_breakdown.metadata.hallucination_gate`
   - gate 不会阻断 verdict，也不会把 LLM 失败提升成业务失败
-- `GET /api/leaderboard` 当前保持旧兼容：不带 segment filter 时仍返回 leaderboard 数组；带 `scenario_type / date_from / date_to / min_agents / max_agents` 任一筛选时，才返回 `entries + segment_metadata`。
+- `GET /api/leaderboard` 当前保持旧兼容：不带 segment filter 时仍返回 leaderboard 数组；带 `scenario_type / date_from / date_to / min_agents / max_agents` 任一筛选时，才返回 `entries + segment_metadata`。分段响应的 `total_predictions / avg_score / best_score / win_streak` 会从匹配筛选条件的已评分 prediction 重新计算，`filtered_count` 是匹配 segment 的 distinct user 数，`total_count` 是未筛选的非 anonymous leaderboard user 数。
 - main simulation 当前已补 continuity preflight/override 链路：
   - `POST /api/agents/identities/preflight` 会先跑 parser，再只把 `L2 fuzzy candidate` 返回给前端确认
   - `POST /api/scenario` 当前接受 `continuity_overrides`
@@ -402,10 +402,10 @@
 
 - Sprint 5-6 backend 本 session 已跑：
   - `ruff check`：通过
-  - `python -m pytest -q --tb=short`：`2733 passed, 3 skipped`
-  - journal / hallucination gate / debate result metadata focused rerun：`33 passed`
-  - document ingestion focused rerun：`25 passed`
-  - web context integration warning regression：`9 passed`
+  - `python -m pytest -q --tb=short`：`2749 passed, 2 skipped`
+  - 当前 backend touched-file 定向回归：`314 passed`
+  - cancel / journal / snapshot / leaderboard segment focused rerun：`84 passed`
+  - prediction API 回归：`48 passed`
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：
   - `tests/test_causal_graph.py -q`：`68 passed`

@@ -132,11 +132,14 @@ def _validate_owned_scenario(
 ) -> None:
     if scenario_id is None:
         return
-    scenario = session.exec(select(Scenario).where(Scenario.id == scenario_id)).first()
+    scenario = session.exec(
+        select(Scenario).where(
+            Scenario.id == scenario_id,
+            Scenario.user_id == user_id,
+        )
+    ).first()
     if scenario is None:
         raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
-    if scenario.user_id != user_id:
-        raise api_error(403, "SCENARIO_FORBIDDEN", "Scenario does not belong to this user")
 
 
 @router.get("/journal", response_model=JournalListResponse)
@@ -181,11 +184,14 @@ async def resolve_journal_entry(
     user_id: str = Depends(get_current_user_id),
 ) -> JournalEntryResponse:
     with Session(get_engine()) as session:
-        entry = session.get(PredictionJournalEntry, entry_id)
+        entry = session.exec(
+            select(PredictionJournalEntry).where(
+                PredictionJournalEntry.id == entry_id,
+                PredictionJournalEntry.user_id == user_id,
+            )
+        ).first()
         if entry is None:
             raise api_error(404, "JOURNAL_ENTRY_NOT_FOUND", "Journal entry not found")
-        if entry.user_id != user_id:
-            raise api_error(403, "JOURNAL_ENTRY_FORBIDDEN", "Journal entry belongs to another user")
         try:
             resolved = resolve_entry(session, entry_id, body.actual_outcome)
         except AlreadyResolvedError as exc:

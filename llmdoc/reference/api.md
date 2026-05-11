@@ -89,8 +89,8 @@
   - `reuse_existing` 需要带 `identity_id`，后端会校验它属于当前 `user_id`
   - `create_new` 会让真正的 identity 解析跳过 L2 fuzzy reuse
 - `GET /api/scenario/{scenario_id}/conversations` 受 `FEATURE_AGENT_CONVERSATION` gate，要求 signed principal 能看到该 scenario；`cursor` 是 offset cursor，`limit` 范围 `1..50`，返回项只带 thread 摘要，完整 turn 历史仍走 `GET /api/conversation/{thread_id}`。
-- `POST /api/scenario/{scenario_id}/cancel` 只接受 `parsing / simulating / narrating / cancelled`；`done / error` 会返回 `409 SIMULATION_NOT_RUNNING`。成功请求会把 scenario 持久化到 `cancelled`，并尽量取消本进程里的后台 task。
-- `GET /api/scenario/{scenario_id}/snapshot` 和 `POST /api/scenario/import-snapshot` 受 `FEATURE_SNAPSHOT_EXPORT` gate；关闭时返回 404 `FEATURE_DISABLED`。export 会做 scenario ownership 校验；开启 `SESSION_SECRET` 时 import 要求 signed principal，并把新 scenario 绑定到该 principal。空文件返回 422 `SNAPSHOT_FILE_EMPTY`，超过 50 MB 返回 413 `SNAPSHOT_FILE_TOO_LARGE`，archive/manifest/checksum 不合法返回 422 `SNAPSHOT_IMPORT_INVALID`。导入还会拒绝重复 ZIP member name、超过 256 个物理 member、路径穿越、symlink、异常压缩比和总解压超限。
+- `POST /api/scenario/{scenario_id}/cancel` 只接受 `parsing / simulating / narrating / cancelled`；`done / error` 会返回 `409 SIMULATION_NOT_RUNNING`。成功请求会把 scenario 持久化到 `cancelled`，并尽量取消本进程里的后台 task。运行中 worker 即使已经有本地 cancel token，也会继续读取 DB `cancelled` 状态，避免跨进程取消被漏掉。
+- `GET /api/scenario/{scenario_id}/snapshot` 和 `POST /api/scenario/import-snapshot` 受 `FEATURE_SNAPSHOT_EXPORT` gate；关闭时返回 404 `FEATURE_DISABLED`。export 会做 scenario ownership 校验，并剥掉常见 secret key/base URL/token/password 变体，也会清理 `key_moments`、web context 这类 JSON 字符串里的敏感字段。开启 `SESSION_SECRET` 时 import 要求 signed principal，并把新 scenario 绑定到该 principal。空文件返回 422 `SNAPSHOT_FILE_EMPTY`，超过 50 MB 返回 413 `SNAPSHOT_FILE_TOO_LARGE`，archive/manifest/checksum 不合法、JSON/JSONL 不是 UTF-8、JSONL 行数或单行过大都会返回 422 `SNAPSHOT_IMPORT_INVALID`。导入还会拒绝重复 ZIP member name、超过 256 个物理 member、路径穿越、symlink、异常压缩比和总解压超限；branch 的 `replay_source_branch_id` 会按新 branch id remap，找不到来源时清空。
 - `GET /api/scenario/templates` 和 `GET /api/scenario/templates/{template_id}` 受 `FEATURE_EDUCATION_TEMPLATES` gate；关闭时返回 404 `FEATURE_DISABLED`。列表接口支持 `category` 与 `difficulty` filter，空结果返回空数组。
 - 删除 scenario 时会一并清理 replay、prediction、campaign side effect、ending-room 与向量数据；个人 journal entry 会保留，但关联的 `scenario_id` 会置空，避免硬删除破坏用户日志历史。
 
@@ -163,7 +163,7 @@
   - `scenario_type`: `debate / simulation / roundtable`
   - `date_from / date_to`: ISO date 或 datetime
   - `min_agents / max_agents`: `1..50`
-- 不带 segment filter 时，leaderboard 仍返回旧的 JSON 数组；只要带任一 segment filter，就返回 `{ entries, segment_metadata }`，其中 metadata 会带 `active_filters / total_count / filtered_count`。
+- 不带 segment filter 时，leaderboard 仍返回旧的 JSON 数组；只要带任一 segment filter，就返回 `{ entries, segment_metadata }`，其中 metadata 会带 `active_filters / total_count / filtered_count`。分段响应里的 `total_predictions / avg_score / best_score / win_streak` 会从匹配筛选条件的已评分 prediction 重新计算；`total_count` 仍表示未筛选的 leaderboard 行数。
 
 ## Personal Prediction Journal
 
@@ -177,9 +177,9 @@
 关键约束：
 
 - 这些端点受 `FEATURE_PREDICTION_JOURNAL` gate；关闭时返回 404 `FEATURE_DISABLED`。
-- `POST /api/me/journal` 如果带 `scenario_id`，该 scenario 必须属于当前用户；不存在返回 404，跨用户或无 owner 的旧 scenario 返回 403。
+- `POST /api/me/journal` 如果带 `scenario_id`，该 scenario 必须属于当前用户；不存在、跨用户或无 owner 的旧 scenario 都返回 404 `SCENARIO_NOT_FOUND`，不暴露资源是否存在。
 - user scope 来自 signed principal；无 signed session 的本地开发态可用 `X-User-Id`。
-- `PATCH /api/me/journal/{entry_id}/resolve` 只允许当前用户解析自己的 entry；已解析 entry 返回 409 `JOURNAL_ENTRY_ALREADY_RESOLVED`，并发 stale resolve 也返回 409，不会覆盖旧结果。
+- `PATCH /api/me/journal/{entry_id}/resolve` 只允许当前用户解析自己的 entry；不存在或跨用户 entry 都返回 404 `JOURNAL_ENTRY_NOT_FOUND`。已解析 entry 返回 409 `JOURNAL_ENTRY_ALREADY_RESOLVED`，并发 stale resolve 也返回 409，不会覆盖旧结果。
 - `GET /api/me/calibration` 只读取当前用户的 resolved entries；实现侧按 `user_id / resolved_at / actual_outcome` 索引和有界读取收口，接口返回形状不变。
 
 ## Social / Export / Health
@@ -213,9 +213,9 @@
 
 关键约束：
 
-- 两个 endpoint 都走业务 REST session gate。
+- 两个 endpoint 都走业务 REST session gate；如果配置了 `ADMIN_TOKEN`，还必须带匹配的 `X-Admin-Token`，否则返回 403 `ADMIN_TOKEN_REQUIRED`。
 - `test-llm` 当前兼容 `api_key / llm_api_key`、`base_url / llm_base_url`、`model / llm_model` 这几组字段名。
-- `base_url` 会先做 URL 解析和 allowlist 校验；官方托管 host 只接受 `https`，本地开发 host 才允许 `http`。
+- `base_url` 会先做 URL 解析和 allowlist 校验；官方托管 host 只接受 `https`，本地开发 host 才允许 `http`。`ENV=production` 时，`/api/admin/test-llm` 也会拒绝本地 LLM base URL。
 - 这些接口只用于本地配置和诊断，不会把 API key 写入项目文档、replay artifact 或 scenario 记录。
 
 ## Debate
@@ -345,7 +345,7 @@
   - `knowledge_domains`
   - `decision_bias`
   - `preferred_tier`
-- `decision_bias` 固定为 5 个 key：`caution / optimism / conservatism / risk_tolerance / creativity`。缺失 key 会补 `0.5`；未知 key 会被忽略；非数字、`NaN/Inf` 或超出 `0..1` 的值会被拒绝。
+- `decision_bias` 固定为 5 个 key：`caution / optimism / conservatism / risk_tolerance / creativity`。缺失 key 会补 `0.5`；未知 key 会被拒绝；数字字符串会按浮点数解析；boolean、非数字、`NaN/Inf` 或超出 `0..1` 的值会被拒绝。
 - `preferred_tier` 只接受 `IMPORTANT / CROWD`。create 默认 `IMPORTANT`；update 不传表示不改。`CORE` 会被 schema 拒绝，不是自建 Agent 可选层级。
 - 只有 `kind=custom` 的 identity 可以通过 workshop update/delete 修改；generated identity 会返回 `AGENT_NOT_EDITABLE` 或 `AGENT_NOT_DELETABLE`。
 - workshop response / identity list 当前会回显：
@@ -364,7 +364,7 @@
 - `GET /api/scenario/{id}/causal-graph` 的 `edges[]` 使用 `source / target / type / weight / label` 字段；有证据元数据时会返回
   `evidence: { confidence_tier, source_ref, source_round_number, detail }`。旧边或无证据边的 `evidence` 可以为 `null`。重放轮次只会补齐旧边缺失的 evidence 字段，不覆盖已有非空值。当前 causal graph 会返回已有 `temporal / caused` 边，也可能返回后端规则生成的 `responds_to / supports_stance / opposes_stance`，以及合成结局使用的 `led_to`。inter-agent 边只来自同一 `branch / round` 的 event 节点，`detail` 会透传确定性 rule / reason JSON；其它 causal graph 边可能仍只有 coarse provenance。客户端不要把 `detail` 当成 LLM 解释文本。
 - `GET /api/scenario/{id}/graph-analysis` 返回 `god_nodes / degree_distribution / cross_branch_edges / summary`。`summary.total_nodes` 统计序列化 causal snapshot 的可见节点，包含合成 `outcome` nodes。大图会按最新 snapshot size 做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`。带 `branch_id` 时，预检按该 branch 的可见节点/边计数；未带 `branch_id` 时仍按全图计数。
-- `GET /api/scenario/{id}/personality-drift` 返回 `agent_id / agent_name / drift_score / drift_dimensions / severity / evidence`。结果按 drift score 降序排列；前端只把 medium/high 当 warning 展示，不把它当 hard gate。
+- `GET /api/scenario/{id}/personality-drift` 返回 `agent_id / agent_name / drift_score / drift_dimensions / severity / evidence`。结果按 drift score 降序排列；波动项来自消息 emotion 变化，不读取不存在的 message stance 时间线。前端只把 medium/high 当 warning 展示，不把它当 hard gate。
 - `GET /api/scenario/{id}/replay-trace` 当前是只读 cursor pagination：
   - `after` 是上一页最后一个 branch id；空白值按未传处理
   - `limit` 范围为 `1..100`

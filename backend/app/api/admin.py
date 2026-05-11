@@ -2,20 +2,50 @@
 
 from __future__ import annotations
 
+import hmac
 from dataclasses import asdict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.api.errors import api_error
 from app.api.helpers import verify_session
-from app.services.llm_client import health_check, validate_llm_base_url
+from app.config import settings
+from app.services.llm_client import (
+    _is_local_base_url_hostname,
+    health_check,
+    validate_llm_base_url,
+)
 from app.services.preflight import run_preflight
+
+
+def verify_admin_token(
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> None:
+    """Reject requests when ADMIN_TOKEN is set and the header does not match.
+
+    When ``ADMIN_TOKEN`` is empty (default), admin endpoints stay open so
+    that local development and existing tests keep working. When the env var
+    is set, callers must supply a matching ``X-Admin-Token`` header. We use
+    ``hmac.compare_digest`` for constant-time comparison to avoid leaking
+    timing information about the configured token.
+    """
+    configured = settings.ADMIN_TOKEN.strip()
+    if not configured:
+        return
+    provided = (x_admin_token or "").strip()
+    if not provided or not hmac.compare_digest(provided, configured):
+        raise api_error(
+            403,
+            "ADMIN_TOKEN_REQUIRED",
+            "Admin endpoints require a valid X-Admin-Token header",
+        )
+
 
 router = APIRouter(
     prefix="/api/admin",
     tags=["admin"],
-    dependencies=[Depends(verify_session)],
+    dependencies=[Depends(verify_session), Depends(verify_admin_token)],
 )
 
 
@@ -59,6 +89,17 @@ async def api_test_llm(request: TestLlmRequest):
             "LLM_BASE_URL_NOT_ALLOWED",
             "Provided base_url is not in the allowed provider list",
         )
+
+    if validated_base_url is not None and settings.ENV == "production":
+        from urllib.parse import urlparse
+
+        hostname = (urlparse(validated_base_url).hostname or "").lower()
+        if _is_local_base_url_hostname(hostname):
+            raise api_error(
+                400,
+                "LLM_BASE_URL_NOT_ALLOWED",
+                "Local LLM endpoints are not permitted in production",
+            )
 
     llm_status = await health_check(
         api_key=request.api_key,

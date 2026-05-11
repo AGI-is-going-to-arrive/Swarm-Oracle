@@ -484,31 +484,30 @@ async def get_leaderboard(
             total_count_value = total_count_value[0]
         total_count = int(total_count_value or 0)
 
-        # ---- 4. Build segment-aware user-id subquery --------------------
-        # Push filtering into SQL so we do not materialize all Scenario rows or
-        # build large scenario/user IN-lists in Python.
-        matching_user_ids_query = (
-            select(Prediction.user_id)
-            .join(Scenario, Prediction.scenario_id == Scenario.id)
-            .where(Prediction.user_id != ANONYMOUS_USER_ID)
-            .where(Prediction.user_id != "")
-        )
-        if parsed_date_from is not None:
-            matching_user_ids_query = matching_user_ids_query.where(
-                Scenario.created_at >= parsed_date_from
+        # ---- 4. Build segment-scoped prediction queries -----------------
+        # Segment filters apply to scored predictions, not just to users.
+        # The legacy no-filter path still uses the materialized leaderboard.
+        def _segment_query(query):
+            query = (
+                query.join(Scenario, Prediction.scenario_id == Scenario.id)
+                .join(Leaderboard, Leaderboard.user_id == Prediction.user_id)
+                .where(Prediction.user_id != ANONYMOUS_USER_ID)
+                .where(Prediction.user_id != "")
+                .where(Prediction.score != None)  # noqa: E711
+                .where(Leaderboard.total_predictions >= 1)
+                .where(Leaderboard.user_id != ANONYMOUS_USER_ID)
             )
-        if parsed_date_to is not None:
-            matching_user_ids_query = matching_user_ids_query.where(
-                Scenario.created_at <= parsed_date_to
-            )
+            if parsed_date_from is not None:
+                query = query.where(Scenario.created_at >= parsed_date_from)
+            if parsed_date_to is not None:
+                query = query.where(Scenario.created_at <= parsed_date_to)
 
-        scenario_type_filter = active_filters.get("scenario_type")
-        if isinstance(scenario_type_filter, str):
-            matching_user_ids_query = matching_user_ids_query.where(
-                _scenario_type_sql_clause(scenario_type_filter)
-            )
+            scenario_type_filter = active_filters.get("scenario_type")
+            if isinstance(scenario_type_filter, str):
+                query = query.where(_scenario_type_sql_clause(scenario_type_filter))
 
-        if min_agents is not None or max_agents is not None:
+            if min_agents is None and max_agents is None:
+                return query
             agent_counts_sq = (
                 select(
                     Agent.scenario_id.label("scenario_id"),
@@ -517,54 +516,71 @@ async def get_leaderboard(
                 .group_by(Agent.scenario_id)
                 .subquery()
             )
-            matching_user_ids_query = matching_user_ids_query.join(
+            query = query.join(
                 agent_counts_sq,
                 agent_counts_sq.c.scenario_id == Scenario.id,
                 isouter=True,
             )
             agent_count = func.coalesce(agent_counts_sq.c.agent_count, 0)
             if min_agents is not None:
-                matching_user_ids_query = matching_user_ids_query.where(
-                    agent_count >= min_agents
-                )
+                query = query.where(agent_count >= min_agents)
             if max_agents is not None:
-                matching_user_ids_query = matching_user_ids_query.where(
-                    agent_count <= max_agents
-                )
+                query = query.where(agent_count <= max_agents)
+            return query
 
-        matching_user_ids_sq = matching_user_ids_query.distinct().subquery()
-        matching_user_id_select = select(matching_user_ids_sq.c.user_id)
-
-        # ---- 5. Filtered count + paginated leaderboard slice -----------
+        # ---- 5. Filtered count + paginated segment slice ----------------
+        matching_user_ids_sq = _segment_query(
+            select(Prediction.user_id.label("user_id"))
+        ).distinct().subquery()
         filtered_count_value = session.exec(
-            select(func.count())
-            .select_from(Leaderboard)
-            .where(Leaderboard.total_predictions >= 1)
-            .where(Leaderboard.user_id != ANONYMOUS_USER_ID)
-            .where(Leaderboard.user_id.in_(matching_user_id_select))
+            select(func.count()).select_from(matching_user_ids_sq)
         ).one()
         if isinstance(filtered_count_value, tuple):
             filtered_count_value = filtered_count_value[0]
         filtered_count = int(filtered_count_value or 0)
 
+        avg_score_expr = func.avg(Prediction.score)
         entries = list(session.exec(
-            select(Leaderboard)
-            .where(Leaderboard.total_predictions >= 1)
-            .where(Leaderboard.user_id != ANONYMOUS_USER_ID)
-            .where(Leaderboard.user_id.in_(matching_user_id_select))
-            .order_by(Leaderboard.avg_score.desc())
+            _segment_query(
+                select(
+                    Prediction.user_id.label("user_id"),
+                    func.max(Leaderboard.user_name).label("user_name"),
+                    func.count(Prediction.id).label("total_predictions"),
+                    avg_score_expr.label("avg_score"),
+                    func.max(Prediction.score).label("best_score"),
+                )
+            )
+            .group_by(Prediction.user_id)
+            .order_by(avg_score_expr.desc(), Prediction.user_id.asc())
             .offset(offset)
             .limit(capped_limit)
         ).all())
 
+        def _segment_win_streak(user_id: str) -> int:
+            scores = list(session.exec(
+                _segment_query(select(Prediction.score))
+                .where(Prediction.user_id == user_id)
+                .order_by(
+                    Prediction.created_at.desc(),
+                    Prediction.scored_at.desc(),
+                    Prediction.id.desc(),
+                )
+            ).all())
+            streak = 0
+            for score in scores:
+                if (score or 0.0) < 60:
+                    break
+                streak += 1
+            return streak
+
         entry_payload = [
             LeaderboardEntry(
-                user_id=e.user_id,
-                user_name=e.user_name,
-                total_predictions=e.total_predictions,
-                avg_score=round(e.avg_score, 1),
-                best_score=round(e.best_score, 1),
-                win_streak=e.win_streak,
+                user_id=str(e.user_id),
+                user_name=str(e.user_name or ""),
+                total_predictions=int(e.total_predictions or 0),
+                avg_score=round(float(e.avg_score or 0.0), 1),
+                best_score=round(float(e.best_score or 0.0), 1),
+                win_streak=_segment_win_streak(str(e.user_id)),
             )
             for e in entries
         ]

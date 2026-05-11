@@ -576,7 +576,7 @@ export default function ResultView() {
             if (!cancelled) {
               const kind = classifyCampaignFinalizeError(err);
               if (kind === 'missing' || kind === 'conflict') {
-                setCampaignNotice(getCampaignBoundaryMessage(kind, isZhRef.current));
+                setCampaignNotice(getCampaignBoundaryMessage(kind, t));
               } else {
                 setCampaignError(err instanceof Error ? err.message : 'Failed to finalize campaign');
               }
@@ -652,6 +652,7 @@ export default function ResultView() {
     roomReplayShareId,
     roomReplayToken,
     searchParams,
+    t,
   ]);
 
   const handleExport = async () => {
@@ -1497,12 +1498,12 @@ export default function ResultView() {
     })) ?? []
   ), [betOutcomeContext, scenarioMeta?.betting.bets]);
   const formattedArchiveKeyMoments = useMemo(
-    () => scenarioMeta ? getScenarioArchiveKeyMoments(scenarioMeta).map((moment) => formatArchiveKeyMoment(moment, isZh)) : [],
-    [isZh, scenarioMeta],
+    () => scenarioMeta ? getScenarioArchiveKeyMoments(scenarioMeta).map((moment) => formatArchiveKeyMoment(moment, isZh, t)) : [],
+    [isZh, scenarioMeta, t],
   );
   const directorMomentHighlights = useMemo(
-    () => buildMomentHighlights(archiveKeyMoments, isZh, 5),
-    [archiveKeyMoments, isZh],
+    () => buildMomentHighlights(archiveKeyMoments, isZh, 5, t),
+    [archiveKeyMoments, isZh, t],
   );
   const directorBetHighlights = useMemo(() => (
     localBetOutcomes.slice(0, 3).map(({ bet, outcome }) => ({
@@ -1526,9 +1527,9 @@ export default function ResultView() {
   const newlyUnlockedBadges = useMemo(() => (
     campaignSummary?.newly_unlocked_badges.map((badge) => ({
       badge,
-      copy: getCampaignBadgeCopy(badge.badge_id, isZh),
+      copy: getCampaignBadgeCopy(badge.badge_id, t),
     })) ?? []
-  ), [campaignSummary?.newly_unlocked_badges, isZh]);
+  ), [campaignSummary?.newly_unlocked_badges, t]);
   const hitBetCount = localBetOutcomes.filter((entry) => entry.outcome === 'hit').length;
   const resolvedBetCount = localBetOutcomes.filter((entry) => entry.outcome !== 'pending').length;
 

@@ -236,6 +236,62 @@ def test_leaderboard_scenario_type_filter_returns_only_matching_users(client):
     assert payload["segment_metadata"]["total_count"] == 3
 
 
+def test_leaderboard_segment_metrics_are_recomputed_from_matching_predictions(client):
+    engine = get_engine()
+    with Session(engine) as session:
+        base = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        debate_scenario_id = _seed_scenario(
+            session,
+            scenario_type="debate",
+            created_at=base,
+            agent_count=3,
+        )
+        simulation_scenario_id = _seed_scenario(
+            session,
+            scenario_type="simulation",
+            created_at=base + timedelta(days=1),
+            agent_count=5,
+        )
+        _seed_leaderboard_user(
+            session,
+            user_id="mixed-user",
+            user_name="Mixed",
+            avg_score=90.0,
+            total_predictions=2,
+        )
+        _link_user_to_scenario(
+            session,
+            user_id="mixed-user",
+            user_name="Mixed",
+            scenario_id=debate_scenario_id,
+            score=40.0,
+        )
+        _link_user_to_scenario(
+            session,
+            user_id="mixed-user",
+            user_name="Mixed",
+            scenario_id=simulation_scenario_id,
+            score=100.0,
+        )
+
+    resp = client.get("/api/leaderboard?scenario_type=debate")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert isinstance(payload, dict)
+    assert payload["segment_metadata"]["filtered_count"] == 1
+    assert payload["entries"] == [
+        {
+            "user_id": "mixed-user",
+            "user_name": "Mixed",
+            "total_predictions": 1,
+            "avg_score": 40.0,
+            "best_score": 40.0,
+            "win_streak": 0,
+        }
+    ]
+
+
 def test_leaderboard_scenario_type_filter_uses_interaction_mode_fallback(client):
     engine = get_engine()
     with Session(engine) as session:

@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next';
 import { isApiError } from '../api/client';
 import {
   getGameplayCardDefinition,
@@ -83,44 +84,17 @@ export function getEndingRoomCandidateAvatar(role: string, name: string): string
   return `/assets/characters/${mapRoleToSpriteId(role, name)}.png`;
 }
 
-export function getCampaignBadgeCopy(badgeId: string, isZh: boolean) {
-  const badges = {
-    daily_challenge: {
-      zh: {
-        label: '每日挑战',
-        description: '完成至少一场每日挑战。',
-      },
-      en: {
-        label: 'Daily Challenge',
-        description: 'Complete at least one daily challenge run.',
-      },
-    },
-    archive_record: {
-      zh: {
-        label: '档案留痕',
-        description: '拿到 A 或 S 级因果档案。',
-      },
-      en: {
-        label: 'Archive Record',
-        description: 'Earn an A or S causal archive grade.',
-      },
-    },
-    bet_winner: {
-      zh: {
-        label: '押注命中',
-        description: '至少命中一次已结算下注。',
-      },
-      en: {
-        label: 'Bet Winner',
-        description: 'Hit at least one resolved prediction bet.',
-      },
-    },
-  } as const;
-
-  const fallback = isZh
-    ? { label: badgeId, description: '新徽章已解锁。' }
-    : { label: badgeId, description: 'A new badge has been unlocked.' };
-  return badges[badgeId as keyof typeof badges]?.[isZh ? 'zh' : 'en'] ?? fallback;
+export function getCampaignBadgeCopy(badgeId: string, t: TFunction) {
+  const map: Record<string, { labelKey: string; descKey: string }> = {
+    daily_challenge: { labelKey: 'result.campaign_badge_daily_label', descKey: 'result.campaign_badge_daily_desc' },
+    archive_record: { labelKey: 'result.campaign_badge_archive_label', descKey: 'result.campaign_badge_archive_desc' },
+    bet_winner: { labelKey: 'result.campaign_badge_bet_label', descKey: 'result.campaign_badge_bet_desc' },
+  };
+  const entry = map[badgeId];
+  if (entry) {
+    return { label: t(entry.labelKey), description: t(entry.descKey) };
+  }
+  return { label: badgeId, description: t('result.campaign_badge_fallback_desc') };
 }
 
 export function classifyCampaignFinalizeError(err: unknown): 'missing' | 'conflict' | 'other' {
@@ -129,16 +103,13 @@ export function classifyCampaignFinalizeError(err: unknown): 'missing' | 'confli
   return 'other';
 }
 
-export function getCampaignBoundaryMessage(kind: 'missing' | 'conflict', isZh: boolean): string {
-  if (kind === 'missing') {
-    return isZh
-      ? '当前结果来自临时或模拟数据源，本地导演生涯未写入。'
-      : 'This result comes from a temporary or mocked data source, so campaign progress was not persisted locally.';
-  }
-
-  return isZh
-    ? '这条历史结果已归属于另一位导演档案，本设备不会重复计入生涯进展。'
-    : 'This archived run already belongs to another director profile, so it will not be counted again on this device.';
+export function getCampaignBoundaryMessage(
+  kind: 'missing' | 'conflict',
+  t: TFunction,
+): string {
+  return kind === 'missing'
+    ? t('result.campaign_boundary_missing')
+    : t('result.campaign_boundary_conflict');
 }
 
 export function buildCampaignSummaryFromExistingData(
@@ -172,7 +143,7 @@ export function buildStoryKeyMoments(story: StoryData): string[] {
   ));
 }
 
-export function formatArchiveKeyMoment(moment: string, isZh: boolean): string {
+export function formatArchiveKeyMoment(moment: string, isZh: boolean, t: TFunction): string {
   const parsed = parseScenarioMoment(moment);
   if (!parsed) return moment;
 
@@ -181,26 +152,21 @@ export function formatArchiveKeyMoment(moment: string, isZh: boolean): string {
       parsed.value as Parameters<typeof getGameplayCardDefinition>[0],
     );
     const label = isZh ? definition.labelZh : definition.labelEn;
-    return isZh
-      ? `R${parsed.round} 使用 ${label}`
-      : `R${parsed.round} played ${label}`;
+    return t('result.archive_moment_card', { round: parsed.round, label });
   }
 
   if (parsed.kind === 'bet') {
-    return isZh
-      ? `R${parsed.round} 下了 ${parsed.value}`
-      : `R${parsed.round} placed a bet on ${parsed.value}`;
+    return t('result.archive_moment_bet', { round: parsed.round, value: parsed.value });
   }
 
-  return isZh
-    ? `R${parsed.round} 承诺世界线 ${parsed.value}`
-    : `R${parsed.round} committed to ${parsed.value}`;
+  return t('result.archive_moment_commitment', { round: parsed.round, value: parsed.value });
 }
 
 export function buildMomentHighlights(
   moments: string[],
   isZh: boolean,
   limit = 5,
+  t?: TFunction,
 ): ResultMomentHighlight[] {
   const highlights: ResultMomentHighlight[] = [];
   const seen = new Set<string>();
@@ -221,7 +187,7 @@ export function buildMomentHighlights(
         kind: 'card',
         label: isZh ? definition.labelZh : definition.labelEn,
         round: parsed.round,
-        detail: isZh ? '这次干预改变了分支走向。' : 'This intervention changed the branch trajectory.',
+        detail: t ? t('result.moment_card_detail') : undefined,
       };
     } else if (parsed?.kind === 'bet') {
       highlight = {
@@ -229,7 +195,7 @@ export function buildMomentHighlights(
         kind: 'bet',
         label: parsed.value,
         round: parsed.round,
-        detail: isZh ? '这里记录了你的押注判断。' : 'This records the prediction you chose to back.',
+        detail: t ? t('result.moment_bet_detail') : undefined,
       };
     } else if (parsed?.kind === 'commitment') {
       highlight = {
@@ -237,7 +203,7 @@ export function buildMomentHighlights(
         kind: 'commitment',
         label: parsed.value,
         round: parsed.round,
-        detail: isZh ? '这条世界线成为后续复盘锚点。' : 'This worldline became the anchor for the debrief.',
+        detail: t ? t('result.moment_commitment_detail') : undefined,
       };
     } else {
       highlight = {

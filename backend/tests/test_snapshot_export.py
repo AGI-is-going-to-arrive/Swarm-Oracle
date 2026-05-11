@@ -998,6 +998,69 @@ def test_redaction_is_case_insensitive_and_separator_insensitive():
         assert needle not in raw, f"{needle!r} leaked into export bytes"
 
 
+def test_redaction_drops_common_secret_key_variants():
+    """Provider-specific key names must be treated as secret material."""
+    scenario = Scenario(
+        question="provider secret variants",
+        status=ScenarioStatus.DONE,
+        parsed_context={
+            "openai_api_key": "sk-openai-leak",
+            "provider_token": "provider-token-leak",
+            "xai_api_key": "sk-xai-leak",
+            "safe_note": "keep me",
+        },
+    )
+    with Session(get_engine()) as session:
+        session.add(scenario)
+        session.commit()
+        scenario_id = scenario.id
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        scenario_payload = json.loads(zf.read("scenario.json"))
+
+    parsed = scenario_payload.get("parsed_context") or {}
+    assert parsed == {"safe_note": "keep me"}
+    for needle in (b"sk-openai-leak", b"provider-token-leak", b"sk-xai-leak"):
+        assert needle not in raw
+
+
+def test_export_redacts_branch_key_moments_json_string():
+    scenario_id = _seed_scenario(api_key_in_context=False)
+    with Session(get_engine()) as session:
+        branch = Branch(
+            scenario_id=scenario_id,
+            title="secret moments",
+            key_moments=json.dumps(
+                {
+                    "summary": "visible",
+                    "api_key": "sk-branch-leak",
+                    "base_url": "https://branch-secret.example/v1",
+                }
+            ),
+            status=BranchStatus.COMPLETED,
+        )
+        session.add(branch)
+        session.commit()
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        branches = [
+            json.loads(line)
+            for line in zf.read("branches.jsonl").decode("utf-8").splitlines()
+            if line
+        ]
+
+    exported = json.loads(branches[0]["key_moments"])
+    assert exported == {"summary": "visible"}
+    assert b"sk-branch-leak" not in raw
+    assert b"branch-secret.example" not in raw
+
+
 def test_export_redacts_web_context_json_string():
     """Warning #2: ``web_context_json`` (JSON-encoded text) must also be scrubbed."""
     web_payload = {
@@ -1035,6 +1098,72 @@ def test_export_redacts_web_context_json_string():
     assert snippets and "apiKey" not in snippets[0]
     for needle in (b"sk-tavily-leak", b"tav-bearer", b"sk-snippet-leak"):
         assert needle not in raw
+
+
+@pytest.mark.parametrize(
+    ("filename", "payloads"),
+    [
+        (
+            "scenario.json",
+            {
+                "scenario.json": b"\xff",
+                "branches.jsonl": b"",
+                "agents.jsonl": b"",
+                "messages.jsonl": b"",
+                "causal_graph.json": b'{"snapshot":null,"nodes":[],"edges":[]}',
+            },
+        ),
+        (
+            "branches.jsonl",
+            {
+                "scenario.json": json.dumps({"question": "bad jsonl"}).encode("utf-8"),
+                "branches.jsonl": b"\xff",
+                "agents.jsonl": b"",
+                "messages.jsonl": b"",
+                "causal_graph.json": b'{"snapshot":null,"nodes":[],"edges":[]}',
+            },
+        ),
+        (
+            "agents.jsonl",
+            {
+                "scenario.json": json.dumps({"question": "bad agents"}).encode("utf-8"),
+                "branches.jsonl": b"",
+                "agents.jsonl": b"\xff",
+                "messages.jsonl": b"",
+                "causal_graph.json": b'{"snapshot":null,"nodes":[],"edges":[]}',
+            },
+        ),
+        (
+            "messages.jsonl",
+            {
+                "scenario.json": json.dumps({"question": "bad messages"}).encode("utf-8"),
+                "branches.jsonl": b"",
+                "agents.jsonl": b"",
+                "messages.jsonl": b"\xff",
+                "causal_graph.json": b'{"snapshot":null,"nodes":[],"edges":[]}',
+            },
+        ),
+        (
+            "causal_graph.json",
+            {
+                "scenario.json": json.dumps({"question": "bad graph"}).encode("utf-8"),
+                "branches.jsonl": b"",
+                "agents.jsonl": b"",
+                "messages.jsonl": b"",
+                "causal_graph.json": b"\xff",
+            },
+        ),
+    ],
+)
+def test_import_rejects_non_utf8_json_payloads(filename, payloads):
+    blob = _build_snapshot_zip_from_payloads(payloads)
+
+    with pytest.raises(SnapshotImportError) as excinfo:
+        with Session(get_engine()) as session:
+            import_snapshot_zip(blob, "importer-utf8", session)
+
+    assert filename in str(excinfo.value)
+    assert "utf-8" in str(excinfo.value).lower()
 
 
 def test_import_rejects_zip_bomb_oversized_member():

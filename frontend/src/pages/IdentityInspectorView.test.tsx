@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   IdentityMemoriesResponse,
   IdentityMemoryEntry,
-  RequestOptions,
 } from '../api/client';
 import IdentityInspectorView from './IdentityInspectorView';
 
@@ -155,8 +154,8 @@ describe('IdentityInspectorView', () => {
     const stale = createDeferred<IdentityMemoriesResponse>();
     const fresh = createDeferred<IdentityMemoriesResponse>();
     getIdentityMemoriesMock
-      .mockImplementationOnce((_identityId: string, _options?: RequestOptions) => stale.promise)
-      .mockImplementationOnce((_identityId: string, _options?: RequestOptions) => fresh.promise);
+      .mockImplementationOnce(() => stale.promise)
+      .mockImplementationOnce(() => fresh.promise);
 
     const user = userEvent.setup();
     renderInspector('/agents/identities/stale/memories');

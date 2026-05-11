@@ -606,7 +606,22 @@
       "ending_room_picker_impact": "Impact {{impact}} · {{turns}} turns · {{hinges}} hinge hits · latest R{{round}}",
       "ending_room_picker_fallback_roster": "No branch transcript roster yet, using the visible fallback cast",
       "ending_room_picker_fallback_lineup": "Fallback lineup",
-      "ending_room_picker_enter": "Enter chamber"
+      "ending_room_picker_enter": "Enter chamber",
+      "campaign_boundary_missing": "This result comes from a temporary or mocked data source, so campaign progress was not persisted locally.",
+      "campaign_boundary_conflict": "This archived run already belongs to another director profile, so it will not be counted again on this device.",
+      "campaign_badge_daily_label": "Daily Challenge",
+      "campaign_badge_daily_desc": "Complete at least one daily challenge run.",
+      "campaign_badge_archive_label": "Archive Record",
+      "campaign_badge_archive_desc": "Earn an A or S causal archive grade.",
+      "campaign_badge_bet_label": "Bet Winner",
+      "campaign_badge_bet_desc": "Hit at least one resolved prediction bet.",
+      "campaign_badge_fallback_desc": "A new badge has been unlocked.",
+      "archive_moment_card": "R{{round}} played {{label}}",
+      "archive_moment_bet": "R{{round}} placed a bet on {{value}}",
+      "archive_moment_commitment": "R{{round}} committed to {{value}}",
+      "moment_card_detail": "This intervention changed the branch trajectory.",
+      "moment_bet_detail": "This records the prediction you chose to back.",
+      "moment_commitment_detail": "This worldline became the anchor for the debrief."
     },
     "share": {
       "title": "📱 Generate Social Copy",
@@ -783,6 +798,10 @@
       "ending_ruin": "Civilization Collapse",
       "ending_tyranny": "Dark Tyranny",
       "ending_revolution": "Dawn of Revolution",
+      "ending_no_description": "(No description)",
+      "ending_return_hint": "▸ Click or wait to return ◂",
+      "title_subtitle": "Micro AI Civilization Simulator",
+      "title_loading_world": "◈ Initializing World ◈",
       "minimap_title": "Map",
       "bet_panel_title": "Live Odds",
       "bet_action": "Open Bet",
@@ -1367,7 +1386,12 @@
       "picker_seating_mode_label": "Roundtable seating mode",
       "picker_back_to_table": "Back to current table",
       "picker_branch_impact_summary": "Impact {{impact}} · {{turns}} turns · {{hinges}} hinge hits · latest R{{round}}",
-      "picker_witness_impact_summary": "Impact {{impact}}"
+      "picker_witness_impact_summary": "Impact {{impact}}",
+      "agent_chat_origin_role": "Role",
+      "agent_chat_origin_worldline": "Worldline",
+      "agent_chat_origin_stance": "Stance",
+      "agent_chat_origin_quote": "Recent quote",
+      "agent_chat_origin_bio": "Persona"
     },
     "analyst": {
       "tool_causal_graph": "Causal Graph",
@@ -1496,7 +1520,7 @@
       "bias_label": "Decision bias",
       "view_details": "View details"
     },
-      "persona_export": {
+    "persona_export": {
       "export": "Export",
       "export_agent_aria": "Export {{name}}",
       "import": "Import Persona",
@@ -1516,7 +1540,8 @@
       "import_success": "Persona imported successfully",
       "export_success": "Persona exported",
       "submit": "Import",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "menu_aria": "Persona export and import"
     },
     "journal": {
       "title": "Prediction Journal",
@@ -2638,6 +2663,52 @@
       "templates_error": "Could not load templates. Please retry.",
       "close": "Close",
       "tags": "Tags"
+    },
+    "quickstart": {
+      "zhuge_liang": {
+        "question": "What if Zhuge Liang lived 10 more years?",
+        "subtitle": "History / Three Kingdoms"
+      },
+      "mars_2000": {
+        "question": "What if humanity landed on Mars in 2000?",
+        "subtitle": "Tech / Parallel Universe"
+      },
+      "no_internet": {
+        "question": "What if the internet was never invented?",
+        "subtitle": "Society / Evolution"
+      },
+      "beethoven_today": {
+        "question": "What if Beethoven was born today?",
+        "subtitle": "Culture / Arts"
+      },
+      "einstein_engineer": {
+        "question": "What if Einstein chose engineering instead of physics?",
+        "subtitle": "Science / Butterfly Effect"
+      },
+      "rome_endures": {
+        "question": "What if the Roman Empire never fell?",
+        "subtitle": "History / Civilization"
+      },
+      "dragon_pact": {
+        "question": "What if the dragon pact guarding a kingdom collapsed overnight?",
+        "subtitle": "Mythic / Forbidden Order"
+      },
+      "last_refuge": {
+        "question": "What if the last refuge city only had thirty days of power left?",
+        "subtitle": "Survival / Last Reserves"
+      },
+      "random_leader_swap": {
+        "question": "What if every major institution had to swap leaders at random every week?",
+        "subtitle": "General / Hidden Agendas"
+      },
+      "lottery_committee": {
+        "question": "What if every critical city had to be governed by a lottery-picked emergency committee every thirty days?",
+        "subtitle": "General / Lottery Committees"
+      },
+      "rotating_oversight": {
+        "question": "What if every high-stakes decision had to be re-approved by a rotating external review board?",
+        "subtitle": "General / Rotating Oversight"
+      }
     }
   }
 }

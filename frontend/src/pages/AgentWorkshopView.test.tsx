@@ -53,7 +53,7 @@ describe('AgentWorkshopView', () => {
     renderView();
     expect(screen.getByLabelText(/Display Name/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Role/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Persona/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Persona')).toBeInTheDocument();
   });
 
   it('submit button is disabled when name/role are empty', () => {

@@ -230,8 +230,7 @@ export class EndingScene extends Phaser.Scene {
     }
 
     // Story text
-    const storyStr = data.story_summary
-      || (i18next.language === 'en' ? '(No description)' : '(无描述)');
+    const storyStr = data.story_summary || i18next.t('game.ending_no_description');
     this.currentStorySummary = storyStr;
     const storyText = this.add.text(0, 15, storyStr, {
       fontSize: '10px',
@@ -244,9 +243,7 @@ export class EndingScene extends Phaser.Scene {
     cardContainer.add(storyText);
 
     // Return hint at bottom of card
-    const returnHint = i18next.language === 'en'
-      ? '▸ Click or wait to return ◂'
-      : '▸ 点击或等待自动返回 ◂';
+    const returnHint = i18next.t('game.ending_return_hint');
     const hintText = this.add.text(0, cardH / 2 - 18, returnHint, {
       fontSize: '8px',
       color: '#666688',

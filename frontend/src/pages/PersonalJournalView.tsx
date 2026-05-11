@@ -205,7 +205,7 @@ export function PersonalJournalView() {
         setResolvingId(null);
       }
     },
-    [fetchAll],
+    [fetchAll, t],
   );
 
   const handleRetryLoad = useCallback(async () => {

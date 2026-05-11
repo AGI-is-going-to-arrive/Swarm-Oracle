@@ -74,25 +74,34 @@ export function EducationTemplatePicker({
     onClose();
   }, [onClose, resetFilters]);
 
-  const fetchTemplates = useCallback(() => {
-    if (templatesProp !== undefined) {
-      return;
-    }
+  const [fetchToken, setFetchToken] = useState(0);
 
+  const fetchTemplates = useCallback(() => {
+    setFetchToken((prev) => prev + 1);
+  }, []);
+
+  // Fetch templates when opened or when retry is requested.
+  // External-sync side effect (network → state); the leading sync setState
+  // triplet is a deliberate loading-state initialization, not a cascading render.
+  useEffect(() => {
+    if (!open) return;
+    if (templatesProp !== undefined) return;
+    let cancelled = false;
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setLoaded(false);
     setError(null);
 
     listEducationTemplates()
       .then((res) => {
-        if (requestId !== requestIdRef.current) return;
+        if (cancelled || requestId !== requestIdRef.current) return;
         setError(null);
         setTemplates(Array.isArray(res?.templates) ? res.templates : []);
       })
       .catch((err: unknown) => {
-        if (requestId !== requestIdRef.current) return;
+        if (cancelled || requestId !== requestIdRef.current) return;
         if (err instanceof Error) {
           console.debug('[EducationTemplatePicker] Failed to load templates', err);
         }
@@ -100,17 +109,15 @@ export function EducationTemplatePicker({
         setError('education.templates_error');
       })
       .finally(() => {
-        if (requestId !== requestIdRef.current) return;
+        if (cancelled || requestId !== requestIdRef.current) return;
         setLoading(false);
         setLoaded(true);
       });
-  }, [templatesProp]);
 
-  // Fetch templates when opened (unless templates injected via prop for tests).
-  useEffect(() => {
-    if (!open) return;
-    fetchTemplates();
-  }, [fetchTemplates, open]);
+    return () => {
+      cancelled = true;
+    };
+  }, [open, templatesProp, fetchToken]);
 
   // Escape closes the picker.
   useEffect(() => {

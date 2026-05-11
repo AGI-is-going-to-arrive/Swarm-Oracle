@@ -45,14 +45,23 @@ COPY --from=builder /app/backend/alembic.ini /app/backend/alembic.ini
 COPY --from=builder /app/backend/pyproject.toml /app/backend/pyproject.toml
 COPY --from=builder /app/shared/ /app/shared/
 
-# Preserve existing data roots while keeping compatibility with older chroma_data config.
-RUN mkdir -p /data/db /data/chroma /data/chroma_data
+# W-10: provision a non-root runtime user and grant ownership of the data
+# roots before the volume is mounted, so the container does not run as
+# uid 0.  Compatibility is preserved with the original /data layout used
+# by older deployments.
+RUN useradd --system --uid 1000 --user-group --create-home --shell /usr/sbin/nologin appuser \
+    && mkdir -p /data/db /data/chroma /data/chroma_data \
+    && chown -R appuser:appuser /app /data
+
+USER appuser
 
 RUN python -c "import chromadb, grpc, httptools, onnxruntime, tokenizers, uvloop; import app.main"
 
 EXPOSE 18927
 
+# W-11: use the stdlib http.client for the healthcheck so the probe does
+# not pay the cost of importing httpx (+ its TLS/h2 stack) every 30s.
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=15s \
-    CMD python -c "import httpx; r = httpx.get('http://localhost:18927/'); r.raise_for_status()"
+    CMD python -c "import http.client, sys; c = http.client.HTTPConnection('localhost', 18927, timeout=5); c.request('GET', '/'); r = c.getresponse(); sys.exit(0 if r.status < 400 else 1)"
 
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "18927"]

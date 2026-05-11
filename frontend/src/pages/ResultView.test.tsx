@@ -146,6 +146,21 @@ const {
       'result.ending_room_picker_fallback_roster': 'No branch transcript roster yet, using the visible fallback cast',
       'result.ending_room_picker_fallback_lineup': 'Fallback lineup',
       'result.ending_room_picker_enter': 'Enter chamber',
+      'result.archive_moment_card': 'R{{round}} played {{label}}',
+      'result.archive_moment_bet': 'R{{round}} placed a bet on {{value}}',
+      'result.archive_moment_commitment': 'R{{round}} committed to {{value}}',
+      'result.moment_card_detail': 'This intervention changed the branch trajectory.',
+      'result.moment_bet_detail': 'This records the prediction you chose to back.',
+      'result.moment_commitment_detail': 'This worldline became the anchor for the debrief.',
+      'result.campaign_boundary_missing': 'This result comes from a temporary or mocked data source, so campaign progress was not persisted locally.',
+      'result.campaign_boundary_conflict': 'This archived run already belongs to another director profile, so it will not be counted again on this device.',
+      'result.campaign_badge_daily_label': 'Daily Challenge',
+      'result.campaign_badge_daily_desc': 'Complete at least one daily challenge run.',
+      'result.campaign_badge_archive_label': 'Archive Record',
+      'result.campaign_badge_archive_desc': 'Earn an A or S causal archive grade.',
+      'result.campaign_badge_bet_label': 'Bet Winner',
+      'result.campaign_badge_bet_desc': 'Hit at least one resolved prediction bet.',
+      'result.campaign_badge_fallback_desc': 'A new badge has been unlocked.',
     };
     if (resultCopy[key]) {
       return options ? interpolate(resultCopy[key], options) : resultCopy[key];

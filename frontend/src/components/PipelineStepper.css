@@ -15,10 +15,13 @@
   gap: 0;
   padding: 8px 16px;
   padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  background: rgba(20, 23, 33, 0.92);
   background: oklch(0.18 0.01 260 / 0.92);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  border-top: 1px solid rgba(70, 76, 92, 0.4);
   border-top: 1px solid oklch(0.35 0.02 260 / 0.4);
+  box-shadow: 0 -2px 12px rgba(10, 12, 18, 0.3);
   box-shadow: 0 -2px 12px oklch(0.1 0.01 260 / 0.3);
   transition: opacity 0.4s ease-out, transform 0.3s ease-out;
 }

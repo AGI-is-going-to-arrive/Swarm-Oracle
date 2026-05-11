@@ -98,10 +98,11 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 
 - Latest local backend verification for the current Sprint 5-6 hardening:
   - `ruff check app tests`: pass
-  - `python -m pytest -q --tb=short`: `2733 passed, 3 skipped`
-  - journal / hallucination gate / debate result metadata focused rerun: `33 passed`
-  - document ingestion focused rerun: `25 passed`
-  - web context integration warning regression: `9 passed`
+  - `python -m pytest -q --tb=short`: `2749 passed, 2 skipped`
+  - touched-file backend rerun: `314 passed`
+  - cancel / journal / snapshot / leaderboard segment focused rerun: `84 passed`
+  - prediction API regression rerun: `48 passed`
+  - new red-to-green finding tests: `12 passed`
 - Current release judgment still lives in `llmdoc/guides/development.md`; this file only keeps the latest backend headline.
 
 ## Runtime Notes
@@ -115,10 +116,13 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - `social.py` still exposes both `GET` and `POST`, but provider overrides now must be sent in the `POST` body; `GET` query overrides are rejected to avoid leaking them into URLs.
 - `llm_client.py` now shares pending/quota accounting across processes through SQLite when they point at the same `DATABASE_URL`, while keeping the in-process semaphore and circuit breaker.
 - Backend logging now defaults to structured JSON; `uvicorn`, `uvicorn.error`, and `uvicorn.access` are aligned to the same root formatter. `LOG_LEVEL` and `LOG_FORMAT` control the behavior.
+- Admin diagnostics still use the session gate. When `ADMIN_TOKEN` is set, `/api/admin/*` also requires a matching `X-Admin-Token`; in `ENV=production`, `/api/admin/test-llm` rejects local LLM base URLs.
+- The backend Docker image now runs as non-root `appuser`; the runtime healthcheck uses stdlib `http.client` instead of importing `httpx` every probe.
 - Scenario JSON authority fields now use mutable JSON columns, so in-place updates to `parsed_context / director_state_json / gameplay_state_json` can persist correctly.
 - `shared/gameplay_contract.v1.json` now uses an mtime-aware cache and reloads after file updates without requiring a backend restart.
 - `shared/gameplay_contract.v1.json` missing at boot now raises a clear runtime error instead of failing later with a raw file-stat exception.
 - `scoring.py` now persists prediction scores and leaderboard materialization in one transaction, so a leaderboard failure does not leave scored predictions half-written.
+- Segment-filtered leaderboard responses recompute `total_predictions`, `avg_score`, `best_score`, and `win_streak` from matching scored predictions; the no-filter path still returns the materialized legacy array.
 - `predictions.py` now enforces one prediction per `scenario_id + user_id` at both layers: API pre-check plus SQLite unique index, and duplicate races still collapse to `409 PREDICTION_ALREADY_SUBMITTED`.
 - `runtime_lock_is_active()` now uses a read-only existence check for active leases instead of taking `BEGIN IMMEDIATE` on the shared lock table.
 - `vector_store.py` now treats the shared Chroma write lease as best-effort; if another worker already owns the same scenario lock, the write is skipped instead of busy-waiting in the caller.
@@ -136,14 +140,14 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - BYOK `llm_base_url` and official `web_search_base_url` endpoints now require `https`; plain `http` is kept only for local/self-hosted development hosts on the allowlist.
 - `POST /api/scenario` now rejects out-of-range `rounds` at schema level, `import-replay` no longer repeatedly scans agents when it falls back by name, and `GET /api/scenario/{id}/groups` now batch-loads leader/member data.
 - `AgentGroup.scenario_id` now has an index, with both `init_db()` lightweight migration coverage and Alembic revision `011_add_agent_group_scenario_index`.
-- Scenario cancellation now has an explicit `cancelled` terminal state. `done / error` scenarios are not demoted by cancel requests, and late WebSocket events are not meant to restart the live UI.
-- `decision_bias` is a fixed five-key schema: `caution / optimism / conservatism / risk_tolerance / creativity`. Missing keys default to `0.5`; invalid numbers and out-of-range values are rejected.
+- Scenario cancellation now has an explicit `cancelled` terminal state. `done / error` scenarios are not demoted by cancel requests, DB `cancelled` is still observed when a worker already has a local token, and late WebSocket events are not meant to restart the live UI.
+- `decision_bias` is a fixed five-key schema: `caution / optimism / conservatism / risk_tolerance / creativity`. Missing keys default to `0.5`; unknown keys are rejected; numeric strings are accepted; booleans, invalid numbers, and out-of-range values are rejected.
 - Workshop update/delete only applies to custom identities. Generated identities are visible in the library/profile flows but are not editable through workshop endpoints.
 - Conversation origins are scoped to the same scenario; a cross-scenario `origin_branch_id` is treated as not found instead of leaking another scenario's transcript into the prompt context.
-- Snapshot export/import is guarded by `FEATURE_SNAPSHOT_EXPORT`. Export omits private owner data by default and strips common secret fields; import rejects path traversal, symlinks, suspicious compression ratios, checksum mismatches, and files over the 50 MB upload cap.
+- Snapshot export/import is guarded by `FEATURE_SNAPSHOT_EXPORT`. Export omits private owner data by default and strips common secret field variants, including JSON-string payloads such as branch key moments; import rejects non-UTF-8 JSON/JSONL, oversized JSONL rows, path traversal, symlinks, suspicious compression ratios, checksum mismatches, and files over the 50 MB upload cap.
 - Personality drift is guarded by `FEATURE_AGENT_IDENTITY`. It is deterministic warning data for the UI, not a verdict gate.
 - Persona import/export is guarded by `FEATURE_PERSONA_EXPORT`. Exported persona text is unwrapped from the local untrusted-data wrapper; import creates a new custom identity for the caller and re-enters the normal custom-Agent creation path.
-- Prediction Journal is guarded by `FEATURE_PREDICTION_JOURNAL`. Entries are scoped to the current user; scenario-linked entries require scenario ownership, resolve uses a conditional update so stale or repeated resolves return `409`, and calibration reads use the `user_id / resolved_at / actual_outcome` index from Alembic `029`.
+- Prediction Journal is guarded by `FEATURE_PREDICTION_JOURNAL`. Entries are scoped to the current user; scenario-linked entries require scenario ownership and hide missing, foreign, or ownerless legacy scenarios as `404`; resolve hides foreign entries as `404`, uses a conditional update so stale or repeated resolves return `409`, and calibration reads use the `user_id / resolved_at / actual_outcome` index from Alembic `029`.
 - Hallucination Gate is guarded by `FEATURE_HALLUCINATION_GATE`. It stays warning-only, writes verdict metadata when enabled, and its contradiction check now handles common Chinese negators without treating neutral compounds like `无论 / 无疑` as contradictions.
 - Debate result payloads expose stored `hallucination_gate` metadata when verdict post-processing wrote it into `score_breakdown.metadata`.
 

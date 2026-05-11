@@ -305,10 +305,21 @@ def _get_fork_prompt_template(language: str, variant: str) -> str:
 
 
 def _update_scenario_status(engine, scenario_id: str, status: ScenarioStatus) -> None:
-    """Persist scenario status so reconnects/resyncs can recover the current stage."""
+    """Persist scenario status so reconnects/resyncs can recover the current stage.
+
+    Terminal states (CANCELLED, DONE, ERROR) are sticky and cannot be overwritten,
+    preventing races where a late simulator stage transition clobbers a user cancel.
+    """
+    _TERMINAL_STATUSES = {
+        ScenarioStatus.CANCELLED,
+        ScenarioStatus.DONE,
+        ScenarioStatus.ERROR,
+    }
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         if scenario is None or scenario.status == status:
+            return
+        if scenario.status in _TERMINAL_STATUSES:
             return
         scenario.status = status
         session.add(scenario)

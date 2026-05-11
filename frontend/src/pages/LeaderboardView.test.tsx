@@ -6,7 +6,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
   type LeaderboardResponse,
-  type LeaderboardSegmentFilters,
 } from '../api/client';
 import LeaderboardView from './LeaderboardView';
 
@@ -116,12 +115,8 @@ describe('LeaderboardView', () => {
     const staleAll = createDeferred<LeaderboardResponse>();
     const freshDebate = createDeferred<LeaderboardResponse>();
     getLeaderboardMock
-      .mockImplementationOnce(
-        (_limit: number, _filters?: LeaderboardSegmentFilters) => staleAll.promise,
-      )
-      .mockImplementationOnce(
-        (_limit: number, _filters?: LeaderboardSegmentFilters) => freshDebate.promise,
-      );
+      .mockImplementationOnce(() => staleAll.promise)
+      .mockImplementationOnce(() => freshDebate.promise);
 
     const user = userEvent.setup();
     render(

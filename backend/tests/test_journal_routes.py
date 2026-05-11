@@ -147,7 +147,7 @@ def test_resolve_already_resolved_entry_returns_409(client, journal_enabled):
     assert second.json()["detail"]["code"] == "JOURNAL_ENTRY_ALREADY_RESOLVED"
 
 
-def test_resolve_foreign_entry_returns_403(client, journal_enabled):
+def test_resolve_foreign_entry_is_hidden(client, journal_enabled):
     create_resp = client.post(
         "/api/me/journal",
         headers=_headers("owner-a"),
@@ -165,10 +165,11 @@ def test_resolve_foreign_entry_returns_403(client, journal_enabled):
         json={"actual_outcome": False},
     )
 
-    assert resolve_resp.status_code == 403
+    assert resolve_resp.status_code == 404
+    assert resolve_resp.json()["detail"]["code"] == "JOURNAL_ENTRY_NOT_FOUND"
 
 
-def test_create_rejects_unowned_legacy_scenario(client, journal_enabled):
+def test_create_hides_unowned_legacy_scenario(client, journal_enabled):
     with Session(get_engine()) as session:
         scenario = Scenario(
             id="legacy-null-owner-scenario",
@@ -189,8 +190,33 @@ def test_create_rejects_unowned_legacy_scenario(client, journal_enabled):
         },
     )
 
-    assert resp.status_code == 403
-    assert resp.json()["detail"]["code"] == "SCENARIO_FORBIDDEN"
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
+
+
+def test_create_hides_foreign_owned_scenario(client, journal_enabled):
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            id="foreign-owned-scenario",
+            question="Foreign scenario?",
+            status=ScenarioStatus.DONE,
+            user_id="owner-a",
+        )
+        session.add(scenario)
+        session.commit()
+
+    resp = client.post(
+        "/api/me/journal",
+        headers=_headers("owner-b"),
+        json={
+            "scenario_id": "foreign-owned-scenario",
+            "question": "Can I attach to a foreign scenario?",
+            "predicted_probability": 0.5,
+        },
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
 
 
 def test_resolve_stale_session_cannot_overwrite_settled_entry():

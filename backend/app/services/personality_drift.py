@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from collections import Counter
 from typing import Any
 
@@ -130,6 +131,16 @@ def _parse_decision_bias(raw: str | None) -> dict[str, float]:
     return result
 
 
+def _keyword_present(text: str, keyword: str) -> bool:
+    """Match a persona keyword in text. ASCII keywords use word-boundary regex
+    to prevent false positives like "uncreative" matching "creative"; CJK
+    keywords use plain substring search (no spaces between characters)."""
+    if keyword.isascii():
+        pattern = re.compile(r"\b" + re.escape(keyword) + r"\b", re.IGNORECASE)
+        return bool(pattern.search(text))
+    return keyword in text
+
+
 def _infer_baseline_from_persona(persona: str | None) -> dict[str, float]:
     """Infer Big Five baseline from persona text via keyword matching."""
     baseline = {dim: _NEUTRAL_BASELINE for dim in BIG_FIVE_DIMENSIONS}
@@ -140,7 +151,7 @@ def _infer_baseline_from_persona(persona: str | None) -> dict[str, float]:
     for dim, keywords in _PERSONA_KEYWORDS.items():
         delta = 0.0
         for keyword, weight in keywords.items():
-            if keyword in text:
+            if _keyword_present(text, keyword):
                 delta += weight
         baseline[dim] = _clamp(_NEUTRAL_BASELINE + delta)
     return baseline
@@ -192,17 +203,22 @@ def _compute_current_traits(
     return {dim: _clamp(value) for dim, value in current.items()}
 
 
-def _stance_volatility(messages: list[AgentMessage]) -> float:
-    """Compute normalized stance volatility from the message stream.
+def _emotion_volatility(messages: list[AgentMessage]) -> float:
+    """Compute normalized emotion volatility from the message stream.
 
-    Uses transitions between non-empty stance strings.  Higher value means
-    the agent flipped stance more often.  Clamped to [0, 1].
+    W-6 fix: previously named ``_stance_volatility`` even though it reads
+    ``AgentMessage.emotion``.  ``AgentMessage`` has no ``stance`` column
+    today — stance lives on ``Agent`` and is not part of the message
+    timeline — so the metric here is genuinely an emotion-flip rate.
+
+    Uses transitions between non-empty emotion strings.  Higher value
+    means the agent shifted emotion more often.  Clamped to [0, 1].
     """
-    stances = [m.emotion.strip().lower() for m in messages if m.emotion]
-    if len(stances) < 2:
+    emotions = [m.emotion.strip().lower() for m in messages if m.emotion]
+    if len(emotions) < 2:
         return 0.0
-    transitions = sum(1 for i in range(1, len(stances)) if stances[i] != stances[i - 1])
-    return _clamp(transitions / (len(stances) - 1))
+    transitions = sum(1 for i in range(1, len(emotions)) if emotions[i] != emotions[i - 1])
+    return _clamp(transitions / (len(emotions) - 1))
 
 
 def _classify_severity(score: float) -> str:
@@ -277,7 +293,7 @@ def _detect_for_agent(
     current = _compute_current_traits(emotion_counts)
 
     trait_drift = _euclidean_drift(initial, current)
-    volatility = _stance_volatility(messages)
+    volatility = _emotion_volatility(messages)
     drift_score = round(_clamp(0.7 * trait_drift + 0.3 * volatility), 4)
 
     evidence: list[str] = []

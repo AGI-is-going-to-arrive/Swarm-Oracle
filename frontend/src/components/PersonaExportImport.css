@@ -2,6 +2,26 @@
    PersonaExportImport — export button + import dialog
    ═══════════════════════════════════════════════════════════ */
 
+.persona-export-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workshop-view__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.workshop-view__header h1 {
+  margin: 0;
+}
+
 .persona-export-btn {
   display: inline-flex;
   align-items: center;

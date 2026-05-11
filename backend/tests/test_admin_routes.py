@@ -3,6 +3,7 @@
 from fastapi.testclient import TestClient
 
 import app.api.admin as admin_api
+from app.config import settings
 from app.main import app
 from app.services.preflight import PreflightCheckResult
 
@@ -78,3 +79,64 @@ def test_test_llm_route_rejects_disallowed_base_url():
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
+
+
+def test_admin_preflight_requires_admin_token_when_configured(monkeypatch):
+    """When ADMIN_TOKEN is set, /preflight rejects requests missing the header."""
+    monkeypatch.setattr(settings, "ADMIN_TOKEN", "super-secret-token")
+    client = TestClient(app)
+    response = client.get("/api/admin/preflight")
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "ADMIN_TOKEN_REQUIRED"
+
+
+def test_admin_test_llm_requires_admin_token_when_configured(monkeypatch):
+    """When ADMIN_TOKEN is set, /test-llm rejects requests missing the header."""
+    monkeypatch.setattr(settings, "ADMIN_TOKEN", "super-secret-token")
+    client = TestClient(app)
+    response = client.post(
+        "/api/admin/test-llm",
+        json={"api_key": "sk-test", "base_url": "http://127.0.0.1:9000/v1"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "ADMIN_TOKEN_REQUIRED"
+
+
+def test_admin_preflight_rejects_wrong_admin_token(monkeypatch):
+    """An incorrect X-Admin-Token still returns 403, not a partial match."""
+    monkeypatch.setattr(settings, "ADMIN_TOKEN", "super-secret-token")
+    client = TestClient(app)
+    response = client.get(
+        "/api/admin/preflight",
+        headers={"X-Admin-Token": "wrong-token"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "ADMIN_TOKEN_REQUIRED"
+
+
+def test_admin_preflight_accepts_valid_admin_token(monkeypatch):
+    """A correct X-Admin-Token unlocks the endpoint."""
+    async def _fake_run_preflight():
+        return [PreflightCheckResult("sqlite", "pass", "ok")]
+
+    monkeypatch.setattr(admin_api, "run_preflight", _fake_run_preflight)
+    monkeypatch.setattr(settings, "ADMIN_TOKEN", "super-secret-token")
+    client = TestClient(app)
+    response = client.get(
+        "/api/admin/preflight",
+        headers={"X-Admin-Token": "super-secret-token"},
+    )
+    assert response.status_code == 200
+    assert response.json()[0]["name"] == "sqlite"
+
+
+def test_admin_preflight_open_when_admin_token_unset(monkeypatch):
+    """Default empty ADMIN_TOKEN keeps admin endpoints open for development."""
+    async def _fake_run_preflight():
+        return [PreflightCheckResult("sqlite", "pass", "ok")]
+
+    monkeypatch.setattr(admin_api, "run_preflight", _fake_run_preflight)
+    monkeypatch.setattr(settings, "ADMIN_TOKEN", "")
+    client = TestClient(app)
+    response = client.get("/api/admin/preflight")
+    assert response.status_code == 200

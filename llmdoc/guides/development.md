@@ -84,7 +84,7 @@ docker compose up --build -d
 - `KG Explorer`、`Replay Trace` 和图谱节点对话默认不随 Docker 评审栈开启；需要时显式设置 `FEATURE_KG_EXPLORER=true`、`FEATURE_REPLAY_TRACE=true`、`FEATURE_AGENT_CONVERSATION=true`，然后重启 backend。
 - 根目录 `.dockerignore` 当前已经排除了本地 `frontend/output`、SQLite/Chroma 数据和常见缓存；E2E 产物不会再被一起塞进 Docker build context。
 - compose 默认使用仓库根目录作为 build context，因此 compose 口径看根目录 `.dockerignore`；`backend/.dockerignore` 用于以后直接以 `backend/` 作为 context 构建 backend image 的场景。
-- backend image 当前是多阶段构建，runtime 阶段会做一次 Python import smoke，并带 `/` healthcheck。
+- backend image 当前是多阶段构建，runtime 阶段会做一次 Python import smoke，并带 `/` healthcheck；runtime 进程以非 root `appuser` / uid `1000` 运行，`/data` 需要对该用户可写，healthcheck 用 stdlib `http.client` 请求 `/`。
 - 如果你要拉一套干净的评审栈，不复用旧 named volume，直接带 project 名启动：
 
 ```bash
@@ -134,8 +134,8 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest -q tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py --tb=short
-ruff check app/api/scenarios.py app/api/quota.py app/services/simulation_cancel.py app/services/simulator.py tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py
+python -m pytest -q tests/test_admin_routes.py tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py --tb=short
+ruff check app/api/admin.py app/api/scenarios.py app/api/quota.py app/services/simulation_cancel.py app/services/simulator.py tests/test_admin_routes.py tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py
 ```
 
 本轮 Sprint 0-2 收尾复核中，这组 pytest 为 `36 passed`，上述 touched-file ruff 为通过。
@@ -267,7 +267,7 @@ npm run lint
 npm run build
 ```
 
-当前 Sprint 5-6 前端全量回归最近一次记录为 `185 files / 1981 tests / 0 failed`，`npx tsc --noEmit -p tsconfig.app.json` 和 `npm run build` 都通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
+当前 Sprint 5-6 前端全量回归最近一次记录为 `184 files / 1980 tests / 0 failed`，`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint` 和 `npm run build` 都通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
@@ -333,7 +333,7 @@ npm test -- --run src/pages/AgentLibrary.test.tsx src/pages/AgentWorkshopView.te
 cd backend
 source .venv/bin/activate
 ruff check . --select E,F,I,W
-python -m pytest tests/test_journal_routes.py tests/test_agent_favorite.py tests/test_identity_inspector.py tests/test_document_ingestion.py tests/test_education_templates.py tests/test_persona_export.py tests/test_hallucination_gate.py tests/test_leaderboard_segment.py -q
+python -m pytest tests/test_admin_routes.py tests/test_journal_routes.py tests/test_agent_favorite.py tests/test_identity_inspector.py tests/test_document_ingestion.py tests/test_education_templates.py tests/test_persona_export.py tests/test_hallucination_gate.py tests/test_leaderboard_segment.py tests/test_simulation_cancel.py tests/test_snapshot_export.py tests/test_voice_variant.py tests/test_decision_bias.py tests/test_agents_api.py -q
 
 cd ../frontend
 npx tsc --noEmit -p tsconfig.app.json
@@ -345,15 +345,15 @@ npm run build
 本 session 已复核：
 
 - backend `ruff check`：通过
-- backend 全量 `python -m pytest -q --tb=short`：`2733 passed, 3 skipped`
-- backend focused rerun：journal / hallucination gate / debate result metadata `33 passed`
-- backend document ingestion focused rerun：`25 passed`
-- backend web context integration warning regression：`9 passed`
+- backend 全量 `python -m pytest -q --tb=short`：`2749 passed, 2 skipped`
+- backend touched-file 定向回归：`314 passed`
+- backend review-fix focused rerun：cancel / journal / snapshot / leaderboard segment `84 passed`
+- backend prediction API 回归：`48 passed`
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-- frontend full vitest：`185 files / 1981 tests / 0 failed`
+- frontend full vitest：`184 files / 1980 tests / 0 failed`
 - frontend Sprint 5-6 focused rerun：`7 files / 104 tests passed`
 - frontend `npm run build`：通过，build performance budget 无 violations
-- frontend i18n key + placeholder parity：`en:2372 zh:2372`
+- frontend i18n key + placeholder parity：`en:2419 zh:2419`
 
 浏览器复核优先覆盖：
 

@@ -395,26 +395,26 @@ class TestModernVariantOverlap:
 
 
 class TestSubstringCollisions:
-    """Substring matching causes predictable false positives.
+    """Word-boundary matching eliminates old substring false positives.
 
-    These tests document known collisions so future changes don't
-    unknowingly break or 'fix' them without upgrading the matcher.
+    After W-12 fix, ASCII keywords use \\b word boundaries so partial
+    substrings no longer cause misclassification.
     """
 
-    def test_warlord_matches_imperial_via_lord(self):
-        """'warlord' contains 'lord' → imperial, not field."""
-        assert V("Warlord", None) == "imperial"
+    def test_warlord_no_longer_matches_imperial(self):
+        """'warlord' no longer collides with 'lord' → field (war keyword)."""
+        assert V("Warlord", None) == "field"
 
-    def test_consultant_matches_diplomat_via_consul(self):
-        """'consultant' contains 'consul' → diplomat, not advisor."""
-        assert V("Consultant", None) == "diplomat"
+    def test_consultant_no_longer_matches_diplomat(self):
+        """'consultant' no longer collides with 'consul' → advisor."""
+        assert V("Consultant", None) == "advisor"
 
-    def test_federation_matches_survival_via_ration(self):
-        """'federation' contains 'ration' → survival."""
-        assert V(None, "Northern Federation delegate") == "survival"
+    def test_federation_no_longer_matches_survival(self):
+        """'federation' no longer collides with 'ration' → plain."""
+        assert V(None, "Northern Federation delegate") == "plain"
 
     def test_general_store_matches_field(self):
-        """'general store' contains 'general' → field."""
+        """'general store' contains 'general' → field (whole word match)."""
         assert V("Shopkeeper", "runs the general store") == "field"
 
 

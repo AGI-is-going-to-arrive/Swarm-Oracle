@@ -81,18 +81,39 @@ def _validate_knowledge_domains(domains: list[str] | None) -> list[str] | None:
 
 
 def validate_decision_bias(bias: dict) -> dict:
-    """Validate 5-key decision_bias schema, values in 0-1 range."""
+    """Validate 5-key decision_bias schema, values in 0-1 range.
+
+    W-7 fix: reject unknown keys explicitly so callers cannot smuggle
+    extra fields past the schema gate.
+    W-8 fix: accept numeric strings (e.g. ``"0.5"`` from JSON form posts)
+    by attempting a ``float`` coercion before the range check.
+    """
     if not isinstance(bias, dict):
         raise ValueError("decision_bias must be an object")
+    unexpected = set(bias.keys()) - set(DECISION_BIAS_KEYS)
+    if unexpected:
+        raise ValueError(
+            f"decision_bias has unknown keys: {sorted(unexpected)}. "
+            f"Allowed: {DECISION_BIAS_KEYS}"
+        )
     validated = {}
     for key in DECISION_BIAS_KEYS:
         val = bias.get(key)
         if val is None:
             validated[key] = 0.5
-        elif not isinstance(val, bool) and isinstance(val, (int, float)) and 0 <= val <= 1:
-            validated[key] = float(val)
-        else:
-            raise ValueError(f"decision_bias.{key} must be 0-1, got {val}")
+            continue
+        if isinstance(val, bool):
+            raise ValueError(f"decision_bias.{key} must be 0-1, got {val!r}")
+        if isinstance(val, str):
+            try:
+                val = float(val)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"decision_bias.{key} must be 0-1, got {val!r}"
+                ) from exc
+        if not isinstance(val, (int, float)) or not (0 <= val <= 1):
+            raise ValueError(f"decision_bias.{key} must be 0-1, got {val!r}")
+        validated[key] = float(val)
     return validated
 
 
@@ -186,6 +207,12 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
 
         role_changed = False
         persona_changed = False
+        # W-9: track the raw (pre-sanitization) persona so the continuity
+        # key is hashed from the same surface area regardless of whether
+        # ``persona`` is part of this update or has to be reused from the
+        # already-stored (and therefore already-wrapped) value.
+        raw_persona_for_key: str | None = _unwrap_untrusted_text_block(identity.persona) \
+            if identity.persona else None
 
         if "role" in kwargs:
             identity.role = kwargs["role"]
@@ -198,8 +225,10 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
                 identity.persona = format_untrusted_text_block(
                     "persona", raw_persona, max_chars=2000,
                 )
+                raw_persona_for_key = raw_persona
             else:
                 identity.persona = None
+                raw_persona_for_key = None
             persona_changed = True
 
         if "decision_bias" in kwargs:
@@ -216,10 +245,10 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
         if "preferred_tier" in kwargs:
             identity.preferred_tier = _validate_preferred_tier(kwargs["preferred_tier"])
 
-        # Regenerate continuity_key if role or persona changed
+        # Regenerate continuity_key if role or persona changed.  Uses the
+        # raw (unwrapped) persona so it stays byte-equivalent to the value
+        # ``create_custom_agent`` hashed at creation time.
         if role_changed or persona_changed:
-            # Use raw persona (before sanitization) for hashing, matching create behavior
-            raw_persona_for_key = kwargs.get("persona", identity.persona)
             identity.continuity_key = _make_continuity_key(
                 identity.role, raw_persona_for_key,
             )

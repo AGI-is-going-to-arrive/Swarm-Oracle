@@ -73,7 +73,7 @@ from app.services.llm_client import (
     validate_llm_base_url,
 )
 from app.services.scoring import recompute_leaderboard_entry
-from app.services.simulation_cancel import create_cancel_token, request_cancel
+from app.services.simulation_cancel import get_or_create_cancel_token, request_cancel
 from app.services.vector_store import get_vector_store
 from app.services.web_context import validate_web_search_base_url
 
@@ -1224,9 +1224,8 @@ async def cancel_scenario(
             session.add(scenario)
             session.commit()
 
-    if not request_cancel(scenario_id):
-        create_cancel_token(scenario_id)
-        request_cancel(scenario_id)
+    get_or_create_cancel_token(scenario_id)
+    request_cancel(scenario_id)
 
     task = get_running_task(scenario_id)
     if task is not None and not task.done():

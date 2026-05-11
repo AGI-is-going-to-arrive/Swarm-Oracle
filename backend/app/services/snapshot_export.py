@@ -56,6 +56,8 @@ MAX_UNCOMPRESSED_TOTAL_BYTES = 500 * 1024 * 1024  # 500 MB across all files
 MAX_ZIP_COMPRESSION_RATIO = 100.0
 MIN_RATIO_CHECK_MEMBER_BYTES = 1024 * 1024
 MAX_ZIP_MEMBER_COUNT = 256
+MAX_JSONL_ROWS = 100_000
+MAX_JSONL_LINE_BYTES = 1_048_576  # 1 MB per row
 _SENSITIVE_KEYS = frozenset(
     {
         # Normalized form: lowercase, separators stripped (_, -)
@@ -90,7 +92,20 @@ def _is_sensitive_key(key: Any) -> bool:
     if not isinstance(key, str):
         return False
     normalized = key.strip().lower().replace("-", "").replace("_", "")
-    return normalized in _SENSITIVE_KEYS
+    if normalized in _SENSITIVE_KEYS:
+        return True
+    return normalized.endswith(
+        (
+            "apikey",
+            "baseurl",
+            "token",
+            "secret",
+            "password",
+            "passwd",
+            "authorization",
+            "bearer",
+        )
+    )
 
 
 class SnapshotImportError(ValueError):
@@ -186,7 +201,7 @@ def _serialize_branch(branch: Branch) -> dict[str, Any]:
         "summary": branch.summary,
         "story": branch.story,
         "insight": branch.insight,
-        "key_moments": branch.key_moments,
+        "key_moments": _redact_json_string(branch.key_moments),
         "probability": branch.probability,
         "status": branch.status.value,
         "replay_kind": branch.replay_kind,
@@ -449,31 +464,45 @@ def export_snapshot_zip(
 # ── import ───────────────────────────────────────────────
 
 
-def _load_jsonl(blob: bytes) -> list[dict[str, Any]]:
+def _load_jsonl(blob: bytes, filename: str = "JSONL") -> list[dict[str, Any]]:
     if not blob:
         return []
     rows: list[dict[str, Any]] = []
-    for line in blob.decode("utf-8").splitlines():
-        line = line.strip()
+    try:
+        text = blob.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SnapshotImportError(f"{filename} is not valid UTF-8: {exc}") from exc
+    for raw_line in text.splitlines():
+        if len(raw_line.encode("utf-8")) > MAX_JSONL_LINE_BYTES:
+            raise SnapshotImportError(
+                f"{filename} row exceeds maximum size ({MAX_JSONL_LINE_BYTES} bytes)"
+            )
+        line = raw_line.strip()
         if not line:
             continue
+        if len(rows) >= MAX_JSONL_ROWS:
+            raise SnapshotImportError(
+                f"{filename} exceeds maximum row count ({MAX_JSONL_ROWS} rows)"
+            )
         try:
             parsed = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise SnapshotImportError(f"Malformed JSONL line: {exc}") from exc
+            raise SnapshotImportError(f"Malformed {filename} line: {exc}") from exc
         if not isinstance(parsed, dict):
-            raise SnapshotImportError("JSONL row must be an object")
+            raise SnapshotImportError(f"{filename} row must be an object")
         rows.append(parsed)
     return rows
 
 
-def _load_json(blob: bytes) -> Any:
+def _load_json(blob: bytes, filename: str = "JSON") -> Any:
     if not blob:
         return None
     try:
         return json.loads(blob.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise SnapshotImportError(f"{filename} is not valid UTF-8: {exc}") from exc
     except json.JSONDecodeError as exc:
-        raise SnapshotImportError(f"Malformed JSON: {exc}") from exc
+        raise SnapshotImportError(f"Malformed {filename}: {exc}") from exc
 
 
 def _is_safe_zip_member_name(name: str) -> bool:
@@ -732,14 +761,17 @@ def import_snapshot_zip(
         raw = bytes(zip_data)
 
     contents = _validate_zip_integrity(raw)
-    scenario_payload = _load_json(contents.get("scenario.json", b""))
+    scenario_payload = _load_json(contents.get("scenario.json", b""), "scenario.json")
     if not isinstance(scenario_payload, dict):
         raise SnapshotImportError("scenario.json must be a JSON object")
 
-    branches_rows = _load_jsonl(contents.get("branches.jsonl", b""))
-    agents_rows = _load_jsonl(contents.get("agents.jsonl", b""))
-    messages_rows = _load_jsonl(contents.get("messages.jsonl", b""))
-    graph_payload = _load_json(contents.get("causal_graph.json", b"")) or {}
+    branches_rows = _load_jsonl(contents.get("branches.jsonl", b""), "branches.jsonl")
+    agents_rows = _load_jsonl(contents.get("agents.jsonl", b""), "agents.jsonl")
+    messages_rows = _load_jsonl(contents.get("messages.jsonl", b""), "messages.jsonl")
+    graph_payload = _load_json(
+        contents.get("causal_graph.json", b""),
+        "causal_graph.json",
+    ) or {}
 
     from app.models import (
         AgentTier as _AgentTier,
@@ -817,7 +849,7 @@ def import_snapshot_zip(
             summary=str(raw.get("summary") or ""),
             story=str(raw.get("story") or ""),
             insight=str(raw.get("insight") or ""),
-            key_moments=raw.get("key_moments"),
+            key_moments=_redact_json_string(raw.get("key_moments")),
             probability=_coerce_float_field(
                 raw.get("probability"),
                 "branches.probability",
@@ -852,6 +884,22 @@ def import_snapshot_zip(
             continue
         branch.parent_branch_id = mapped_parent
         session.add(branch)
+
+    # Remap replay_source_branch_id from original snapshot ids to the newly
+    # generated branch ids so replay lineage queries stay consistent after
+    # import. Stale references (source branch not in this snapshot) are cleared.
+    for new_id in branch_id_map.values():
+        branch = session.get(Branch, new_id)
+        if branch is None or not branch.replay_source_branch_id:
+            continue
+        source_orig = str(branch.replay_source_branch_id)
+        mapped_source = branch_id_map.get(source_orig)
+        if mapped_source and mapped_source != branch.replay_source_branch_id:
+            branch.replay_source_branch_id = mapped_source
+            session.add(branch)
+        elif not mapped_source:
+            branch.replay_source_branch_id = None
+            session.add(branch)
 
     agent_id_map: dict[str, str] = {}
     for raw in agents_rows:

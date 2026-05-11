@@ -25,11 +25,13 @@ def get_or_create_cancel_token(scenario_id: str) -> SimulationCancelToken:
     H2 fix: scenario creation registers the token before parse begins so that
     cancel requests landing during parse do not race the registry.
     run_sim_background reuses any pre-registered token instead of clobbering it.
+
+    W-1 fix: use dict.setdefault for an atomic check-then-act so concurrent
+    callers cannot race in between the existence check and the registration.
     """
-    existing = _cancel_registry.get(scenario_id)
-    if existing is not None:
-        return existing
-    return create_cancel_token(scenario_id)
+    return _cancel_registry.setdefault(
+        scenario_id, SimulationCancelToken(scenario_id=scenario_id)
+    )
 
 def request_cancel(scenario_id: str, reason: str = 'user_cancelled') -> bool:
     token = _cancel_registry.get(scenario_id)
@@ -56,6 +58,13 @@ def _db_cancelled(scenario_id: str) -> bool:
 
 def is_cancelled(scenario_id: str) -> bool:
     token = _cancel_registry.get(scenario_id)
-    if token is not None and token.event.is_set():
-        return True
+    if token is not None:
+        # Fast path first, then consult DB so cross-worker cancellation is
+        # still observed when this process already has a local token.
+        if token.event.is_set():
+            return True
+        if _db_cancelled(scenario_id):
+            token.event.set()
+            return True
+        return False
     return _db_cancelled(scenario_id)

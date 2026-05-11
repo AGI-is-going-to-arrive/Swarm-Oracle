@@ -176,7 +176,7 @@ class TestFullLifecycle:
             "display_name": "Lifecycle Agent",
             "role": "diplomat",
             "persona": "A careful negotiator",
-            "decision_bias": {"cooperative": 0.9},
+            "decision_bias": {"caution": 0.9},
             "knowledge_domains": ["politics", "law"],
         })
         assert create_resp.status_code == 201

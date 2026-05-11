@@ -25,10 +25,10 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、snapshot import、首次引导和底部安全提示 |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
 | SetupWizardView | `frontend/src/pages/SetupWizardView.tsx` | `/admin/setup` 3 步 provider 配置向导；选择 preset、填 API key/base URL、测试连接并写入 session-scoped provider policy |
 | AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、编辑/删除入口、persona 单个/批量导出与 JSON 导入入口 |
-| AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择与 PDF document upload tab |
+| AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择、PDF document upload tab，以及 capability-gated persona import/export 菜单 |
 | IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
@@ -119,13 +119,14 @@
   - 导出失败会回到 modal 可见错误态，不只打 `console.error`
   - 预测卡片导出复用 `ShareablePredictionCard` 和 `screenCaptureHtmlVendor`，支持 PNG 下载；图片剪贴板按钮只有浏览器支持 `ClipboardItem + navigator.clipboard.write()` 时才显示
   - modal 当前有共享 `useFocusTrap`、Escape 关闭、关闭/unmount abort；社交文案请求不会因为 automation state 触发父组件重渲染就被误 abort
+  - `shareEnvelope.ts` 当前只保留 `ShareFlavorContext` 类型；前端不再本地拼接“题材档案”前缀到社交文案或 Markdown 导出
 - snapshot import/export 当前受 `snapshot_export` capability 控制：
   - 首页只在 capability enabled 时显示 `Import snapshot`
   - 结果页只在非 replay 且 capability enabled 时显示 `Export snapshot`
   - `SnapshotImportDialog` 前端先挡非 ZIP 和大于 50 MB 的文件，再调用后端 import
   - `SnapshotExportWizard / SnapshotImportDialog / ShareModal / ResultView` 共享 `useFocusTrap`
 - `ResultView` 的因果档案当前把 what-if、结局判定、系统读数、玩家动作、下一步建议和证据账本放在同一块里；关键记录只露出前几条，剩余记录用 details 展开，避免把结果页撑成长列表。
-- `ResultView` 的导演复盘当前由 `DirectorDebriefPanel` 渲染：优先使用后端 `score_breakdown`，同时接收 what-if、主导世界线、世界线承诺、押注、最后一次干预、结构化关键记录、director goals 与 gameplay card 状态，展示得分原因、等级进度、本局读数、下一步入口和新增徽章。
+- `ResultView` 的导演复盘当前由 `DirectorDebriefPanel` 渲染：优先使用后端 `score_breakdown`，同时接收 what-if、主导世界线、世界线承诺、押注、最后一次干预、结构化关键记录、director goals 与 gameplay card 状态，展示得分原因、等级进度、本局读数、下一步入口和新增徽章。campaign 边界提示、新徽章文案、archive key moment 和 moment detail 都走 `result.*` locale key。
 - `ResultView` 的 faction timeline lead 当前已走 i18n key + `{{title}}` 插值，不再在组件里手写 `isZh` 三元文案。
 - `ResultView` 的 replay/import 错误、ending-room replay action、archive summary label 和 ending-room picker copy 当前也已走 locale key；剩下的 `isZh` 用在玩法/候选人/弹窗语言选择这类领域语义上。
 - `ResultView` 当前已做第一阶段拆分：入口仍是 `frontend/src/pages/ResultView.tsx`，主体区块拆到 `frontend/src/pages/result/ResultHeader.tsx`、`EndingCardsGrid.tsx`、`ExploreDeeperBridge.tsx`、`WebSourcesSection.tsx`、`PredictionsSection.tsx`、`DirectorNotebook.tsx`、`AgentRoster.tsx`、`ResultModals.tsx` 和 `ResultContext.tsx`。`ResultContext` 仍偏宽，后续触碰结果页时优先评估 selector / useMemo 收窄。
@@ -149,6 +150,7 @@
 
 - Pixel Theater 运行时在 `frontend/src/game/`。
 - `PhaserGameLoader` 负责按需加载 Theater。
+- `TitleScene / EndingScene` 的副标题、初始化提示、无描述 fallback 和返回提示都走 `game.*` i18n key，不再用 `i18next.language` 手写中英分支。
 - screenshot / GIF capture runtime 已拆分，不进入默认首包。
 - 主题、素材与 UI asset 路径的单一事实源位于 `themeRegistry.ts`。
 - Theater 当前布局采用 canvas-first 浮动 HUD 方案：
@@ -190,7 +192,7 @@
 | `useTranscriptScroll.ts` | `frontend/src/hooks/useTranscriptScroll.ts` | `EndingChatModal` 与 `WorldlineRoundtableView` 共享的 transcript scroll 锚定 hook |
 | `roundtableHelpers.ts` | `frontend/src/pages/roundtableHelpers.ts` | 圆桌纯函数：选型模式、锚点构建、fault-line 算法、anchor 描述 |
 | `endingChatHelpers.ts` | `frontend/src/components/endingChatHelpers.ts` | 会客厅纯函数：角色标签、模式标签、prompt 构建、anchor 描述 |
-| `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、badge copy、结构化关键记录 |
+| `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、locale-backed badge copy、结构化关键记录 |
 | `DirectorDebriefPanel.tsx` | `frontend/src/components/result/DirectorDebriefPanel.tsx` | 结果页导演复盘面板；消费后端 `score_breakdown` 和结果页整理出的问题、世界线、承诺、押注、干预、关键记录、目标与玩法卡状态，展示得分原因、本局读数、下一步入口与新增徽章 |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
 | `ClassicBranchTree.tsx` / `BranchTree.tsx` / `branchTitle.ts` | `frontend/src/components/` | Classic 分支树；短标题会用 `description / fork_reason` 的首句补成更好读的展示标题，原始 `Branch.title` 仍保留给干预等业务动作 |
@@ -223,8 +225,9 @@
 | `AgentProfileModal.tsx` | `frontend/src/components/AgentProfileModal.tsx` | Agent profile 弹窗；展示成长、记忆、timeline 和 decision bias 分布，切换 Agent 或关闭后的迟到请求不会覆盖当前弹窗 |
 | `IdentityInspectorView.tsx` | `frontend/src/pages/IdentityInspectorView.tsx` | identity memory inspector 页面；切换 id 时清掉旧标题，迟到 memory 响应不会覆盖新 identity，空记忆、基础设施错误和正常 memory list 分开显示 |
 | `DocumentUploader.tsx` | `frontend/src/pages/AgentWorkshop/DocumentUploader.tsx` | Agent Workshop PDF 上传入口；展示抽取进度、错误和新建 identities，取消/重试只更新当前请求 |
-| `PersonaExportImport.tsx` / `personaExportImportUtils.ts` | `frontend/src/components/` | persona 导出/导入 UI 与 JSON 校验 helper；导入成功后刷新 Agent Library，失败时显示本地化错误，不直接露出原始 API 文本 |
-| `EducationTemplatePicker.tsx` | `frontend/src/components/EducationTemplatePicker.tsx` | 首页教育模板 dialog；支持 category / difficulty filter、空结果、Retry、Escape 关闭和 focus trap |
+| `PersonaExportImport.tsx` / `personaExportImportUtils.ts` | `frontend/src/components/` | persona 导出/导入 UI 与 JSON 校验 helper；导入成功后刷新 Agent Library，失败时显示本地化错误，不直接露出原始 API 文本；`AgentWorkshop/PersonaExportMenu.tsx` 复用同一组 ExportButton / ImportDialog primitive |
+| `EducationTemplatePicker.tsx` | `frontend/src/components/EducationTemplatePicker.tsx` | 首页教育模板 dialog；支持 category / difficulty filter、空结果、Retry、Escape 关闭和 focus trap；加载 / retry 使用 request id、cancel guard 和 fetch token，迟到响应不会覆盖当前状态 |
+| `QuickStartCards.tsx` | `frontend/src/components/QuickStartCards.tsx` | 首页 quick-start 预设卡；TypeScript 只保留 emoji、key、轮数、Agent 数和模式，题目与副标题从 `quickstart.*` locale key 读取 |
 | `Journal/*` | `frontend/src/components/Journal/` | 个人 journal 辅助面板：Agent roster、calibration curve、worldline mini map；当前右侧 roster / mini-map 是 Sprint 7 前的占位辅助面板 |
 | `PersonalJournalView.tsx` | `frontend/src/pages/PersonalJournalView.tsx` | 个人预测日志页面；读取 `/api/me/journal` 与 `/api/me/calibration`，resolve 后显示实际结果与 Brier 分，刷新时忽略迟到响应 |
 | `MemoryTimeline.tsx` | `frontend/src/components/MemoryTimeline.tsx` | Agent 记忆时间线；样式已从组件内联迁到 CSS，按 scenario/time 组织事件 |
@@ -535,11 +538,11 @@
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
 - Sprint 5-6 frontend 本 session 已跑：
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npx vitest run`：`185 files / 1981 tests / 0 failed`
+  - `npx vitest run`：`184 files / 1980 tests / 0 failed`
   - `npm run build`：通过，build performance budget 无 violations
   - Sprint 5-6 focused rerun：`7 files / 104 tests passed`
-  - Browser smoke 覆盖 `/`、`/agents`、`/agents/new`、`/leaderboard`、`/admin/setup`、`/me/journal`、`/agents/identities/:id/memories`：Chromium / Firefox / WebKit 桌面与 375px mobile 均渲染，console 无 JS error，移动端无横向溢出
-- frontend i18n key + placeholder parity：`en:2372 zh:2372`。
+  - Browser 复核覆盖 result fixture desktop/mobile Chromium `13/13`、capability matrix `30/30`，并手动打开 `/`、`/agents/new`、`/leaderboard`、`/admin/setup`、`/me/journal`；console warning/error 为 0，375px mobile 无横向溢出
+- frontend i18n key + placeholder parity：`en:2419 zh:2419`。
 - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 - Classic 分支标题本轮已补定向验证：

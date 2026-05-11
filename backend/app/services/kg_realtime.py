@@ -43,6 +43,7 @@ class KGRealtimeCoalescer:
         self._seen_keys: dict[str, set[str]] = defaultdict(set)
         self._flush_handles: dict[str, asyncio.TimerHandle] = {}
         self._flushing: set[str] = set()
+        self._flush_tasks: set[asyncio.Task[None]] = set()
 
     async def push_delta(self, scenario_id: str, delta: GraphDelta | None) -> None:
         """Merge a delta into the scenario buffer and schedule a coalesced flush."""
@@ -146,9 +147,15 @@ class KGRealtimeCoalescer:
         if scenario_id in self._flush_handles:
             return
         loop = asyncio.get_running_loop()
+
+        def _spawn_flush() -> None:
+            task = asyncio.create_task(self.flush_scenario(scenario_id))
+            self._flush_tasks.add(task)
+            task.add_done_callback(self._flush_tasks.discard)
+
         self._flush_handles[scenario_id] = loop.call_later(
             self.buffer_window_seconds,
-            lambda: asyncio.create_task(self.flush_scenario(scenario_id)),
+            _spawn_flush,
         )
 
     def _delta_payload(self, scenario_id: str, delta: GraphDelta) -> dict[str, Any]:
@@ -164,6 +171,10 @@ class KGRealtimeCoalescer:
     ) -> str:
         snapshot_id = str(record.get("snapshot_id") or "")
         node_key = str(record.get("key") or record.get("id") or "")
+        if not node_key:
+            # Fallback to a stable per-record fingerprint so records lacking
+            # both key and id do not collapse to the same dedup bucket.
+            node_key = f"anon:{id(record)}"
         return f"{scenario_id}:{snapshot_id}:{node_key}:{version}"
 
 

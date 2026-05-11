@@ -265,9 +265,7 @@ export class TitleScene extends Phaser.Scene {
     });
 
     // Subtitle — typewriter effect (appears after title animation)
-    const subtitle = i18next.language === 'en'
-      ? 'Micro AI Civilization Simulator'
-      : '微型 AI 文明推演器';
+    const subtitle = i18next.t('game.title_subtitle');
 
     const subtitleText = this.add.text(w / 2, h * 0.44, '', {
       fontSize: '11px',
@@ -357,9 +355,7 @@ export class TitleScene extends Phaser.Scene {
     }
 
     // Loading indicator
-    const loadingStr = i18next.language === 'en'
-      ? '◈ Initializing World ◈'
-      : '◈ 世界初始化中 ◈';
+    const loadingStr = i18next.t('game.title_loading_world');
     const loadingText = this.add.text(w / 2, h * 0.82, loadingStr, {
       fontSize: '10px',
       color: PALETTE.textDim,

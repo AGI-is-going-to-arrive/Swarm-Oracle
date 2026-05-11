@@ -33,7 +33,7 @@ React + TypeScript frontend for SwarmOracle.
 | `/history` | `HistoryView` | Scenario history, filtering, deletion |
 | `/leaderboard` | `LeaderboardView` | Prediction leaderboard with URL-synced segment filters |
 | `/agents` | `AgentLibrary` | Custom/generated Agent library, favorites filter, profile modal, persona import/export |
-| `/agents/new` | `AgentWorkshopView` | Custom Agent creation/editing with manual and PDF document tabs |
+| `/agents/new` | `AgentWorkshopView` | Custom Agent creation/editing with manual and PDF document tabs; persona import is available when the capability is enabled, and edit mode can export the current identity |
 | `/agents/identities/:id/memories` | `IdentityInspectorView` | Read-only identity memory inspector |
 | `/me/journal` | `PersonalJournalView` | Personal prediction journal, resolve flow, and calibration chart |
 
@@ -71,7 +71,7 @@ React + TypeScript frontend for SwarmOracle.
   thread-scoped node conversation WS now connects to `/ws/agent-conversation/{thread_id}`
   first-frame auth / `auth_ok` / `4001` / `4404` handling stays aligned with the shared backend contract
 - `PhaserGameLoader` / `useScreenCapture`
-  Theater-only loading and split capture runtime
+  Theater-only loading and split capture runtime; TitleScene / EndingScene runtime copy now reads `game.*` locale keys instead of branching on `i18next.language`
 - `predictionBetting.ts`
   structured bet helpers now fall back to the raw tone id when they receive an unknown ending tone label
 - `ResumePanel.tsx`
@@ -81,13 +81,15 @@ React + TypeScript frontend for SwarmOracle.
 - `AgentLibrary.tsx / AgentCard.tsx`
   Agent library surface with owned-identity favorites, pressed-button filtering, profile/edit/export actions, Unicode-safe long-persona truncation, and localized retry states for capability/favorite failures
 - `AgentWorkshopView.tsx / DocumentUploader.tsx`
-  custom Agent form; manual/document tabs use real tab semantics, and the document tab shows bounded PDF upload progress plus structured errors
+  custom Agent form; manual/document tabs use real tab semantics, the document tab shows bounded PDF upload progress plus structured errors, and the header reuses `PersonaExportMenu` for capability-gated persona import/export
 - `PersonaExportImport.tsx`
-  persona import/export UI; import success uses the string `identity_id` returned by the backend, refreshes the library, and does not show raw backend errors to users
+  persona import/export primitives; import success uses the string `identity_id` returned by the backend, refreshes the library, and does not show raw backend errors to users. `AgentWorkshop/PersonaExportMenu.tsx` now uses the same ExportButton / ImportDialog surface as Agent Library
 - `IdentityInspectorView.tsx`
   clears stale header state when identity ids change, ignores late memory responses, and keeps empty / infrastructure-error / loaded memory states distinct
 - `EducationTemplatePicker.tsx`
-  feature-gated template dialog with category/difficulty filters, focus trap, empty/retry states, and localized load errors
+  feature-gated template dialog with category/difficulty filters, focus trap, empty/retry states, localized load errors, and request-id/cancel guards so late retry responses do not overwrite the current open state
+- `QuickStartCards.tsx`
+  homepage quick-start presets keep only structural metadata in TypeScript; question and subtitle copy come from `quickstart.*` locale keys
 - `SetupWizardView.tsx / components/Setup/*`
   local provider setup flow for `/admin/setup`; provider preset selection, API/base URL entry, and `/api/admin/test-llm` connection testing
 - `OnboardingGuide.tsx / useOnboardingState.ts`
@@ -121,9 +123,9 @@ React + TypeScript frontend for SwarmOracle.
 - `GlobalOfflineBanner.tsx`
   the WS-disconnect grace timer now uses an SSR-safe layout-effect fallback; current SPA behavior stays the same, and future SSR will not log the layout-effect warning
 - `ResultView.tsx`
-  the result surface now includes a ledger-style archive, director debrief, capability-gated `What's Next` bridge with locale-backed causal / replay / compare / workbench / agents / share copy, semantic disabled cards, historical source badges, and locale-backed faction-timeline lead copy
+  the result surface now includes a ledger-style archive, director debrief, capability-gated `What's Next` bridge with locale-backed causal / replay / compare / workbench / agents / share copy, semantic disabled cards, historical source badges, and locale-backed faction-timeline lead copy. Campaign boundary notices, newly unlocked badge copy, archive key moments, and debrief moment details also read `result.*` locale keys
 - `resultHelpers.ts`
-  result-page pure helpers for bet badges, campaign cache, badge copy, and structured moment highlights used by the archive / debrief handoff
+  result-page pure helpers for bet badges, campaign cache, locale-backed badge copy, and structured moment highlights used by the archive / debrief handoff
 - `DirectorDebriefPanel.tsx`
   result-page director debrief panel that consumes backend score breakdown plus question, worldline, commitment, bet, intervention, moment, goal, and gameplay state to render score reasons, run readout, next-action cards, and newly unlocked badges
 - `CausalReviewView.tsx`
@@ -139,6 +141,8 @@ React + TypeScript frontend for SwarmOracle.
   offscreen 1200x630 PNG export card; it only receives display-safe summary fields, not BYOK or session configuration
 - `ShareModal.tsx / ShareablePredictionCard.tsx`
   share modal can download/copy a prediction card PNG when the browser supports it; social-copy requests are aborted on close/unmount, not on unrelated parent rerenders
+- `shareEnvelope.ts`
+  currently keeps only the `ShareFlavorContext` type; frontend no longer prepends a local theme archive envelope to social copy or Markdown export
 - `SnapshotExportWizard.tsx / SnapshotImportDialog.tsx`
   feature-gated snapshot ZIP export/import UI; import rejects non-ZIP and files over 50 MB before calling the backend
 - `ReACTReasoningPanel.tsx / PersonalityDriftWarning.tsx`
@@ -190,11 +194,11 @@ npm run build:spike:phaser-custom
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Latest Sprint 5-6 frontend verification:
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
-  - full vitest: `185 files / 1981 tests / 0 failed`
+  - full vitest: `184 files / 1980 tests / 0 failed`
   - Sprint 5-6 focused rerun: `7 files / 104 tests passed`
   - `npm run build`: pass, including performance budgets
-  - i18n parity: `en=2372 zh=2372`
-  - browser smoke covered `/`, `/agents`, `/agents/new`, `/leaderboard`, `/admin/setup`, `/me/journal`, and `/agents/identities/:id/memories` in Chromium / Firefox / WebKit on desktop and 375px mobile, with no JS console errors or horizontal overflow
+  - i18n parity: `en=2419 zh=2419`
+  - browser recheck covered result fixture desktop/mobile Chromium `13/13`, capability matrix `30/30`, and manual pages `/`, `/agents/new`, `/leaderboard`, `/admin/setup`, `/me/journal` with no console warning/error or 375px horizontal overflow
 - Older Sprint 0-4 rows below are historical artifacts, not the current pass-count source.
 - Latest Sprint 0-2 browser matrix:
   - browser matrix: `72/72 PASS` at `output/e2e/sprint0-2-review-20260510-browser/summary.json`

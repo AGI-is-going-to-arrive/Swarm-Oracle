@@ -57,7 +57,7 @@
   - `进入会客厅`
   - `只改一步`
   - 不会展示 `发起圆桌` / `异线旁听席`
-- 当前 active handoff 在 `.claude/team-plan/comprehensive-improvement-plan.md`：Sprint 0-6 已完成本地审查、修复和验证；当前工作树已完成 Agent、Journal、模板、leaderboard segment 与相关安全/可用性收口。剩余架构级限制见 `llmdoc/overview/backlog.md`。
+- 当前 active handoff 在 `.claude/team-plan/comprehensive-improvement-plan.md`：Sprint 0-6 已完成本地审查、修复和验证；当前工作树已完成 Agent、Journal、模板、leaderboard segment、snapshot、admin setup、cancel 与相关安全/可用性收口。剩余架构级限制见 `llmdoc/overview/backlog.md`。
 
 ## 文档契约
 
@@ -88,20 +88,20 @@
 | Gameplay Cards | 已落地，14 张卡，走共享 gameplay contract |
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响 |
 | Director Campaign | 已落地，含 goals、risk/resource、commitment、growth、后端 `score_breakdown` 与结果页导演复盘 / 因果档案 |
-| Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight` |
+| Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight`；设置 `ADMIN_TOKEN` 后 admin API 要求 `X-Admin-Token` |
 | Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；自建 Agent 不开放 `CORE` 层级 |
 | Persona Export / Import | 已落地，受 `FEATURE_PERSONA_EXPORT` gate；支持单个 / 批量导出 `schema_version=1` JSON；导入会为当前用户创建新的 custom Agent，并把 decision bias 归一化到安全的 5 维数值 |
 | Education Templates | 已落地，受 `FEATURE_EDUCATION_TEMPLATES` gate；首页可打开模板选择器，按学科与难度筛选后回填问题、Agent 数和轮数 |
-| Prediction Journal | 已落地，受 `FEATURE_PREDICTION_JOURNAL` gate；支持个人预测日志、resolve、校准曲线和 journal 页面；绑定 scenario 时按当前用户校验所有权，calibration 查询已走有界/索引路径 |
-| Leaderboard Segments | 已落地；`/api/leaderboard` 在传入 segment filters 时返回 `entries + segment_metadata`，不传筛选时保持旧数组响应 |
+| Prediction Journal | 已落地，受 `FEATURE_PREDICTION_JOURNAL` gate；支持个人预测日志、resolve、校准曲线和 journal 页面；绑定 scenario 时按当前用户校验所有权，跨用户或无 owner 的旧 scenario 统一隐藏成 404，calibration 查询已走有界/索引路径 |
+| Leaderboard Segments | 已落地；`/api/leaderboard` 在传入 segment filters 时返回 `entries + segment_metadata`，并按匹配到的已评分 prediction 重新计算分段指标；不传筛选时保持旧数组响应 |
 | Hallucination Gate | 已接线为 warning-only 后处理；只给 verdict 附加 claims / evidence / warning metadata，不阻断生成结果；`threshold` 只影响 claim 是否标记为 verified，常见中英文否定会进入矛盾检测 |
 | Counterfactual Replay & Compare | 已落地，支持 counterfactual / resume / compare；resume 当前会优先使用同分支 checkpoint picker，compare 当前采用单活跃 Theater + shared round selector |
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale、readonly replay import；只有分享链接过长并回退到本地只读 `?local=` 时，结果页才会明确显示 `Save local read-only copy` |
 | Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面代表改选当前支持 `drag-to-seat / keyboard reseat`，移动端保留 `click-to-seat`；桌面 roundtable committed transcript 当前已补长段折叠 / 展开，phase insight 展示和预填 prompt 会把长段复述压成一句；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到 anchored thread restore，并已补 Firefox / WebKit scoped regression；单结局结果页只暴露 `进入会客厅 / 只改一步`；已新增 `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 两种交互模式，证据卡追问会把用户引用的世界线保留到 assistant turn；completed live roundtable 的 `1-on-1 Interview` 会先展示代表的角色、世界线、立场、最近原话和人物简介；Oracle 主文案当前以 factual anchor + LLM generation/rewrite fallback 为主，角色身份和动态词汇提示按 `UNTRUSTED DATA` 处理，follow-up 空流式或仅 reasoning 输出会退回非流式改写，最终 fallback 也必须是可直接显示的人话 |
 | Replay & Import | 主模式与 Debate 均支持；主模式 Replay Trace 支持分页和分支过滤；Debate replay 当前已补 `share -> readonly replay -> reload restore -> import` 完整 E2E 覆盖 |
-| Snapshot Export / Import | 已接线，受 `FEATURE_SNAPSHOT_EXPORT` gate；后端导出 ZIP snapshot 并校验导入 archive/manifest/checksum，导入会拒绝 ZIP traversal、symlink、重复物理成员、超大 member 与异常压缩比；前端首页导入、结果页导出 |
+| Snapshot Export / Import | 已接线，受 `FEATURE_SNAPSHOT_EXPORT` gate；后端导出 ZIP snapshot 并校验导入 archive/manifest/checksum，导出会剥离常见 secret key/base URL/token 变体和 JSON 字符串里的敏感字段，导入会拒绝非 UTF-8 JSON/JSONL、ZIP traversal、symlink、重复物理成员、超大 member 与异常压缩比；前端首页导入、结果页导出 |
 | KG Realtime | 已接线，causal graph append 返回 `GraphDelta`，scenario WS 可推送 `kg:delta` / `kg:snapshot_invalidated`；payload 过大或 out-of-sync 时仍以 REST snapshot fallback 为准 |
-| i18n | UI 与自动生成内容按输入语言联动输出；Oracle fresh live room 的英文文案已补去混句兜底，不再把中文 hinge 直接嵌进英文句子；Oracle 英文 signoff 当前已覆盖 Chromium full 与桌面 Firefox / WebKit scoped regression |
+| i18n | UI 与自动生成内容按输入语言联动输出；QuickStart、ResultView campaign/archive 文案和 Phaser Title/Ending 文案都走 locale key；Oracle fresh live room 的英文文案已补去混句兜底，不再把中文 hinge 直接嵌进英文句子；Oracle 英文 signoff 当前已覆盖 Chromium full 与桌面 Firefox / WebKit scoped regression |
 
 ## 架构概览
 
@@ -139,6 +139,7 @@ docker compose up --build -d
 - Frontend: `http://localhost:18928`
 - Backend: `http://localhost:18927`
 - Docker 默认读取仓库根目录 `.env.docker`。
+- backend image runtime 以非 root `appuser` / uid `1000` 运行；挂载自定义 `/data` volume 时要保证该用户可写。
 - `.env.docker` 当前默认开启：
   - `FEATURE_COUNTERFACTUAL_REPLAY`
   - `FEATURE_CAUSAL_GRAPH`
@@ -189,14 +190,15 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 当前 Sprint 5-6 收口验证口径：
 
 - backend `ruff check`：通过。
-- backend 全量 `python -m pytest -q --tb=short`：`2733 passed, 3 skipped`。
-- backend Sprint 5-6 focused rerun：journal / hallucination gate / debate result metadata `33 passed`，document ingestion `25 passed`，web context integration `9 passed`。
+- backend 全量 `python -m pytest -q --tb=short`：`2749 passed, 2 skipped`。
+- backend touched-file 定向回归：`314 passed`。
+- backend review-fix focused rerun：cancel / journal / snapshot / leaderboard segment `84 passed`；prediction API 回归 `48 passed`；新增红绿窄集 `12 passed`。
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过。
-- frontend 全量 `npx vitest run`：`185 files / 1981 tests / 0 failed`。
+- frontend 全量 `npx vitest run`：`184 files / 1980 tests / 0 failed`。
 - frontend Sprint 5-6 focused rerun：`7 files / 104 tests passed`。
 - frontend `npm run build`：通过，build performance budget 无 violations。
-- frontend i18n key + placeholder parity：`en:2372 zh:2372`。
-- Browser smoke 覆盖 `/`、`/agents`、`/agents/new`、`/leaderboard`、`/admin/setup`、`/me/journal`、`/agents/identities/:id/memories`：Chromium / Firefox / WebKit 桌面与 375px mobile 均渲染，console 无 JS error，移动端无横向溢出。
+- frontend i18n key + placeholder parity：`en:2419 zh:2419`。
+- Browser 复核本 session 覆盖 result fixture desktop/mobile Chromium `13/13`、capability matrix `30/30`，并手动打开 `/`、`/agents/new`、`/leaderboard`、`/admin/setup`、`/me/journal`；console warning/error 为 0，375px mobile 无横向溢出。
 - i18n switch smoke 已覆盖 `/agents`、`/leaderboard`、`/me/journal` 的 `zh-CN -> en` 切换。
 
 完整签收入口：

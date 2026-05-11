@@ -126,6 +126,7 @@
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `ENV` | `development` | 运行环境标记；`production` 时 `/api/admin/test-llm` 不允许测试本地 LLM base URL |
 | `LOG_LEVEL` | `INFO` | 日志级别 |
 | `LOG_FORMAT` | `json` | `json` 或 `plain` |
 | `EXPOSE_API_DOCS` | `false` | 是否暴露 `/docs`、`/redoc`、`/openapi.json`。与 `LOG_LEVEL` 独立，生产环境开 DEBUG 日志不会意外暴露 API schema |
@@ -157,6 +158,7 @@
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `SESSION_SECRET` | `""` (空 = 跳过鉴权) | 设置后所有业务 REST 端点要求 `X-Session-Token` header，WebSocket 连接要求首帧 auth。未通过则返回 401/4001。 |
+| `ADMIN_TOKEN` | `""` (空 = 不额外保护 admin API) | 设置后 `/api/admin/*` 除 session gate 外，还要求匹配的 `X-Admin-Token` header；失败返回 403 `ADMIN_TOKEN_REQUIRED`。 |
 
 说明：
 
@@ -170,6 +172,7 @@
 - WS 首帧 auth 协议：服务端 accept 后等待客户端首帧（10 秒超时，64KB 上限），验证通过后回复 `{"type":"auth_ok"}`，再注册连接并启动 heartbeat。认证失败或超时返回 `close(4001)`。
 - 前端对 `4001`（认证失败）和 `4404`（资源不存在）不进行自动重连。
 - 当前显式例外是 app 级非业务端点，如 `/` 和 `/metrics`；挂在业务 router 下的 `/api/capabilities`、`/api/health`、`/api/health/test` 也受此门禁约束。
+- `ADMIN_TOKEN` 只收紧 `/api/admin/*`，不改变普通业务 REST 或 WebSocket 的 session gate 语义。
 - 不是最终 auth 设计。最终方案需要 JWT/OAuth2 + per-resource ownership + httpOnly cookie。
 
 ## Web Search Enhancement (搜索增强推演)

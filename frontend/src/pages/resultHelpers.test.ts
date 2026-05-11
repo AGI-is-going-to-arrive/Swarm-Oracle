@@ -46,17 +46,30 @@ describe('resultHelpers', () => {
   });
 
   describe('getCampaignBadgeCopy', () => {
-    it('returns known badge in zh', () => {
-      const copy = getCampaignBadgeCopy('daily_challenge', true);
-      expect(copy).toEqual({ label: '每日挑战', description: expect.any(String) });
+    const t = ((key: string) => key) as never;
+    it('returns known badge with i18n keys', () => {
+      expect(getCampaignBadgeCopy('daily_challenge', t)).toEqual({
+        label: 'result.campaign_badge_daily_label',
+        description: 'result.campaign_badge_daily_desc',
+      });
     });
-    it('returns known badge in en', () => {
-      const copy = getCampaignBadgeCopy('bet_winner', false);
-      expect(copy).toEqual({ label: 'Bet Winner', description: expect.any(String) });
+    it('returns known badge (bet_winner) with i18n keys', () => {
+      expect(getCampaignBadgeCopy('bet_winner', t)).toEqual({
+        label: 'result.campaign_badge_bet_label',
+        description: 'result.campaign_badge_bet_desc',
+      });
+    });
+    it('returns archive_record badge with i18n keys', () => {
+      expect(getCampaignBadgeCopy('archive_record', t)).toEqual({
+        label: 'result.campaign_badge_archive_label',
+        description: 'result.campaign_badge_archive_desc',
+      });
     });
     it('returns fallback for unknown badge', () => {
-      const copy = getCampaignBadgeCopy('unknown_badge', false);
-      expect(copy).toEqual({ label: 'unknown_badge', description: expect.any(String) });
+      expect(getCampaignBadgeCopy('unknown_badge', t)).toEqual({
+        label: 'unknown_badge',
+        description: 'result.campaign_badge_fallback_desc',
+      });
     });
   });
 
@@ -73,11 +86,12 @@ describe('resultHelpers', () => {
   });
 
   describe('getCampaignBoundaryMessage', () => {
-    it('returns message for missing', () => {
-      expect(getCampaignBoundaryMessage('missing', false)).toContain('temporary');
+    const t = ((key: string) => key) as never;
+    it('returns i18n key for missing', () => {
+      expect(getCampaignBoundaryMessage('missing', t)).toBe('result.campaign_boundary_missing');
     });
-    it('returns message for conflict', () => {
-      expect(getCampaignBoundaryMessage('conflict', true)).toContain('另一位');
+    it('returns i18n key for conflict', () => {
+      expect(getCampaignBoundaryMessage('conflict', t)).toBe('result.campaign_boundary_conflict');
     });
   });
 

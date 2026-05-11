@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.api.errors import api_error
 from app.api.graphs import MAX_REPLAY_BRANCHES
@@ -85,7 +85,7 @@ def _replay_usage(session: Session, *, scenario_id: str | None) -> int:
     total = session.exec(
         select(func.count(Branch.id)).where(
             Branch.scenario_id == scenario_id,
-            Branch.replay_kind.in_(["counterfactual", "resume"]),  # type: ignore[union-attr]
+            col(Branch.replay_kind).in_(["counterfactual", "resume"]),
         )
     ).one()
     return int(total or 0)

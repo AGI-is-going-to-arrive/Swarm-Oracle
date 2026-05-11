@@ -222,53 +222,87 @@ def _resolve_roundtable_hook(
     return _roundtable_variant_hook_fallback(variant=variant, language=language, seed=seed)
 
 
+_ASCII_TOKEN_PATTERN_CACHE: dict[str, "re.Pattern[str]"] = {}
+
+
+def _has_ascii_token(text: str, token: str) -> bool:
+    """W-12: match an ASCII keyword with word boundaries.
+
+    Plain ``token in text`` lets ``"lord" in "warlord"`` slip through and
+    mis-route entire personas (e.g. a *warlord* persona picks up the
+    ``imperial`` voice).  We require ASCII keywords to sit on a word
+    boundary; multi-word phrases keep substring semantics because spaces
+    already act as separators.
+    """
+    if not token:
+        return False
+    if " " in token:
+        return token in text
+    pattern = _ASCII_TOKEN_PATTERN_CACHE.get(token)
+    if pattern is None:
+        pattern = re.compile(rf"\b{re.escape(token)}\b")
+        _ASCII_TOKEN_PATTERN_CACHE[token] = pattern
+    return pattern.search(text) is not None
+
+
+def _matches_any_token(text: str, tokens: tuple[str, ...]) -> bool:
+    """Match ASCII tokens by word boundary, CJK tokens by substring."""
+    for token in tokens:
+        if token.isascii():
+            if _has_ascii_token(text, token):
+                return True
+        elif token in text:
+            return True
+    return False
+
+
 def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> str:
     normalized = f"{role_hint or ''} {bio_hint or ''}".strip().lower()
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "tech visionary", "silicon valley", "futurist", "disruption",
             "paradigm shift", "exponential", "moonshot", "singularity",
-        )
+        ),
     ):
         return "tech-visionary"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "journalist", "reporter", "newsroom", "investigative",
             "sources confirm", "on the record", "breaking", "exclusive",
             "correspondent", "editorial desk",
         )
     ):
         return "journalist"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "educator", "professor", "teacher", "lecturer", "instructor",
             "academic", "curriculum", "pedagogy", "let us unpack",
         )
     ):
         return "educator"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "artist", "painter", "composer", "curator", "creative director",
             "aesthetic", "expression", "craft ", "resonance",
         )
     ):
         return "artist"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "entrepreneur", "startup", "founder", "cofounder", "venture builder",
             "pivot", "runway", "traction", "iterate",
             "growth-stage", "product-market fit",
         )
     ):
         return "entrepreneur"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "皇", "贵族", "公爵", "亲王", "王储",
             "king", "queen", "emperor", "crown", "court",
             "noble", "duke", "lord", "baron", "prince", "princess",
@@ -276,9 +310,9 @@ def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> s
         )
     ):
         return "imperial"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "将", "统帅", "指挥官", "舰队", "参谋", "军师", "元帅",
             "commander", "captain", "marshal", "fleet", "guard",
             "general", "warlord", "chieftain", "warrior", "admiral",
@@ -286,9 +320,9 @@ def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> s
         )
     ):
         return "field"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "银行", "行长", "财政", "金融", "清算", "流动性",
             "审计", "会计", "投资",
             "bank", "banker", "finance", "treasury", "settlement", "liquidity",
@@ -296,9 +330,9 @@ def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> s
         )
     ):
         return "finance"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "摊主", "商户", "商贩", "市场", "港口", "贸易", "货运",
             "店主", "掌柜", "酒馆", "农夫", "工匠", "手艺人",
             "vendor", "merchant", "market", "port", "trade", "freight",
@@ -306,18 +340,18 @@ def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> s
         )
     ):
         return "market"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "祭司", "祭坛", "神官", "修士", "神谕", "僧", "和尚", "主教", "教会",
             "priest", "cleric", "oracle", "temple", "faith", "ritual", "covenant",
             "monk", "bishop", "cardinal", "church", "monastery", "abbey",
         )
     ):
         return "faith"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "工程", "工厂", "电网", "产能", "后勤", "调度",
             "技师", "矿", "工头",
             "engineer", "factory", "industrial", "grid", "throughput",
@@ -326,9 +360,9 @@ def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> s
         )
     ):
         return "industry"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "边疆", "拓荒", "殖民", "轨道", "补给舱", "生命维持",
             "宇航", "航天", "探险",
             "pilot", "orbital", "frontier", "colony", "expedition", "convoy",
@@ -337,9 +371,9 @@ def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> s
         )
     ):
         return "frontier"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "避难", "药品", "口粮", "撤离", "医疗",
             "医生", "大夫", "护士",
             "scout", "medic", "refuge", "ration", "evacuation",
@@ -348,17 +382,17 @@ def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> s
         )
     ):
         return "survival"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "史官", "书记官", "学者", "档案", "证人",
             "scribe", "scholar", "historian", "witness", "record", "ledger", "clerk",
         )
     ):
         return "scholar"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "议长", "文书", "总督", "知府", "太守", "官员", "大臣", "县令",
             "speaker", "minister", "council",
             "governor", "mayor", "senator", "representative",
@@ -366,25 +400,25 @@ def _oracle_role_voice_variant(role_hint: str | None, bio_hint: str | None) -> s
         )
     ):
         return "civic"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "外交", "大使", "使节", "使者", "领事",
             "diplomat", "ambassador", "envoy", "consul", "emissary", "negotiator",
         )
     ):
         return "diplomat"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "顾问", "谋士", "谋臣", "幕僚", "参赞",
             "advisor", "strategist", "counselor", "aide", "consultant",
         )
     ):
         return "advisor"
-    if any(
-        token in normalized
-        for token in (
+    if _matches_any_token(
+        normalized,
+        (
             "科学", "研究员", "实验", "分析师",
             "scientist", "researcher", "analyst", "laboratory",
         )

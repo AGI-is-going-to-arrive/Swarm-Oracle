@@ -148,7 +148,7 @@ def test_missing_keys_auto_fill_default(client: TestClient):
     }
 
 
-def test_unknown_keys_are_ignored(client: TestClient):
+def test_unknown_keys_are_rejected(client: TestClient):
     identity_id = _create_agent(client)
     bias = {key: 0.4 for key in DECISION_BIAS_KEYS}
     bias["aggression"] = 1.0
@@ -159,11 +159,5 @@ def test_unknown_keys_are_ignored(client: TestClient):
         json={"decision_bias": bias},
     )
 
-    assert response.status_code == 200
-    assert _stored_decision_bias(identity_id) == {
-        "caution": 0.4,
-        "optimism": 0.4,
-        "conservatism": 0.4,
-        "risk_tolerance": 0.4,
-        "creativity": 0.4,
-    }
+    assert response.status_code == 400
+    # 400 rejection means no side-effect; bias stays at creation default (None)

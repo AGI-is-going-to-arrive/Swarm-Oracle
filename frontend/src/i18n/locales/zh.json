@@ -606,7 +606,22 @@
       "ending_room_picker_impact": "影响 {{impact}} · 发言 {{turns}} 次 · 转折命中 {{hinges}} · 最近 R{{round}}",
       "ending_room_picker_fallback_roster": "当前世界线缺少逐条发言记录，按当前可见 roster 兜底",
       "ending_room_picker_fallback_lineup": "兜底阵容",
-      "ending_room_picker_enter": "进入会客厅"
+      "ending_room_picker_enter": "进入会客厅",
+      "campaign_boundary_missing": "当前结果来自临时或模拟数据源，本地导演生涯未写入。",
+      "campaign_boundary_conflict": "这条历史结果已归属于另一位导演档案，本设备不会重复计入生涯进展。",
+      "campaign_badge_daily_label": "每日挑战",
+      "campaign_badge_daily_desc": "完成至少一场每日挑战。",
+      "campaign_badge_archive_label": "档案留痕",
+      "campaign_badge_archive_desc": "拿到 A 或 S 级因果档案。",
+      "campaign_badge_bet_label": "押注命中",
+      "campaign_badge_bet_desc": "至少命中一次已结算下注。",
+      "campaign_badge_fallback_desc": "新徽章已解锁。",
+      "archive_moment_card": "R{{round}} 使用 {{label}}",
+      "archive_moment_bet": "R{{round}} 下了 {{value}}",
+      "archive_moment_commitment": "R{{round}} 承诺世界线 {{value}}",
+      "moment_card_detail": "这次干预改变了分支走向。",
+      "moment_bet_detail": "这里记录了你的押注判断。",
+      "moment_commitment_detail": "这条世界线成为后续复盘锚点。"
     },
     "share": {
       "title": "📱 一键生成文案",
@@ -783,6 +798,10 @@
       "ending_ruin": "文明崩塌",
       "ending_tyranny": "黑暗暴政",
       "ending_revolution": "革命之曙光",
+      "ending_no_description": "(无描述)",
+      "ending_return_hint": "▸ 点击或等待自动返回 ◂",
+      "title_subtitle": "微型 AI 文明推演器",
+      "title_loading_world": "◈ 世界初始化中 ◈",
       "minimap_title": "地图",
       "bet_panel_title": "实时赔率",
       "bet_action": "打开下注",
@@ -1367,7 +1386,12 @@
       "picker_seating_mode_label": "圆桌桌型",
       "picker_back_to_table": "返回当前圆桌",
       "picker_branch_impact_summary": "影响 {{impact}} · 发言 {{turns}} 次 · 转折命中 {{hinges}} · 最近 R{{round}}",
-      "picker_witness_impact_summary": "影响 {{impact}}"
+      "picker_witness_impact_summary": "影响 {{impact}}",
+      "agent_chat_origin_role": "角色",
+      "agent_chat_origin_worldline": "世界线",
+      "agent_chat_origin_stance": "立场",
+      "agent_chat_origin_quote": "最近原话",
+      "agent_chat_origin_bio": "人物"
     },
     "analyst": {
       "tool_causal_graph": "因果图谱",
@@ -1496,7 +1520,7 @@
       "bias_label": "决策倾向",
       "view_details": "查看详情"
     },
-      "persona_export": {
+    "persona_export": {
       "export": "导出",
       "export_agent_aria": "导出 {{name}}",
       "import": "导入人设",
@@ -1516,7 +1540,8 @@
       "import_success": "人设导入成功",
       "export_success": "人设已导出",
       "submit": "导入",
-      "cancel": "取消"
+      "cancel": "取消",
+      "menu_aria": "人设导出与导入"
     },
     "journal": {
       "title": "预测日志",
@@ -2638,6 +2663,52 @@
       "templates_error": "加载模板失败，请重试。",
       "close": "关闭",
       "tags": "标签"
+    },
+    "quickstart": {
+      "zhuge_liang": {
+        "question": "如果诸葛亮多活10年？",
+        "subtitle": "三国演义 · 历史推演"
+      },
+      "mars_2000": {
+        "question": "如果人类在2000年就登陆了火星？",
+        "subtitle": "科技 · 平行宇宙"
+      },
+      "no_internet": {
+        "question": "如果互联网从未被发明？",
+        "subtitle": "社会 · 文明走向"
+      },
+      "beethoven_today": {
+        "question": "如果贝多芬出生在现代？",
+        "subtitle": "文化 · 艺术演变"
+      },
+      "einstein_engineer": {
+        "question": "如果爱因斯坦选择了工程而不是物理？",
+        "subtitle": "科学 · 蝴蝶效应"
+      },
+      "rome_endures": {
+        "question": "如果罗马帝国从未衰落？",
+        "subtitle": "历史 · 文明推演"
+      },
+      "dragon_pact": {
+        "question": "如果王国与巨龙订立的守护契约在一夜之间失效，会发生什么？",
+        "subtitle": "神话秩序 · 龙契约与禁术代价"
+      },
+      "last_refuge": {
+        "question": "如果最后一座避难城只能再维持三十天供电，会发生什么？",
+        "subtitle": "生存极限 · 最后冗余"
+      },
+      "random_leader_swap": {
+        "question": "如果所有大型组织都必须每周随机交换一次负责人，会发生什么？",
+        "subtitle": "通用博弈 · 关键分歧"
+      },
+      "lottery_committee": {
+        "question": "如果所有关键城市都必须每三十天由抽签产生的临时委员会接管，会发生什么？",
+        "subtitle": "通用博弈 · 抽签委员会与临时授权"
+      },
+      "rotating_oversight": {
+        "question": "如果每一项重大决策都必须交给轮值外部评审团重新裁决，会发生什么？",
+        "subtitle": "通用博弈 · 轮值评审与再裁决"
+      }
     }
   }
 }

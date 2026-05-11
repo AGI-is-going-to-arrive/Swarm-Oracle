@@ -133,6 +133,13 @@ def test_is_cancelled_observes_db_cancelled_status_without_local_token():
     assert is_cancelled(scenario_id)
 
 
+def test_is_cancelled_observes_db_cancelled_status_with_local_token():
+    scenario_id = _seed_scenario(status=ScenarioStatus.CANCELLED)
+    create_cancel_token(scenario_id)
+
+    assert is_cancelled(scenario_id)
+
+
 @pytest.mark.parametrize("status", [ScenarioStatus.DONE, ScenarioStatus.ERROR])
 @pytest.mark.asyncio
 async def test_cancel_handler_does_not_demote_terminal_status(status: ScenarioStatus):
