@@ -5,11 +5,16 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 
+from sqlalchemy import update
 from sqlmodel import Session, select
 
 from app.models.prediction_journal import PredictionJournalEntry
 
 _CALIBRATION_BIN_COUNT = 10
+
+
+class AlreadyResolvedError(ValueError):
+    """Raised when attempting to resolve a journal entry that is already resolved."""
 
 
 def _utcnow() -> datetime:
@@ -54,14 +59,29 @@ def resolve_entry(
     if entry is None:
         raise ValueError("journal entry not found")
     if entry.resolved_at is not None or entry.actual_outcome is not None:
-        raise ValueError("journal entry already resolved")
+        raise AlreadyResolvedError("journal entry already resolved")
 
     outcome = bool(actual_outcome)
-    entry.actual_outcome = outcome
-    entry.resolved_at = _utcnow()
-    entry.brier_score = float((entry.predicted_probability - int(outcome)) ** 2)
-    session.add(entry)
+    resolved_at = _utcnow()
+    brier_score = float((entry.predicted_probability - int(outcome)) ** 2)
+    result = session.execute(
+        update(PredictionJournalEntry)
+        .where(PredictionJournalEntry.id == entry_id)
+        .where(PredictionJournalEntry.resolved_at.is_(None))
+        .where(PredictionJournalEntry.actual_outcome.is_(None))
+        .values(
+            actual_outcome=outcome,
+            resolved_at=resolved_at,
+            brier_score=brier_score,
+        )
+    )
+    if result.rowcount != 1:
+        session.rollback()
+        raise AlreadyResolvedError("journal entry already resolved")
     session.commit()
+    session.refresh(entry)
+    if entry.actual_outcome != outcome:
+        raise AlreadyResolvedError("journal entry already resolved")
     session.refresh(entry)
     return entry
 

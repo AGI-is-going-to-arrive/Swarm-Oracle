@@ -121,7 +121,7 @@ export function ExportButton({ identityId, name }: ExportButtonProps) {
 export interface ImportDialogProps {
   open: boolean;
   onClose: () => void;
-  onImported: (id: number) => void;
+  onImported: (id: string) => void;
 }
 
 export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {

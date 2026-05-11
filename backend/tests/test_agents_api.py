@@ -106,6 +106,7 @@ class TestWorkshopCRUD:
             "display_name": "X",
         })
         assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "AGENT_IDENTITY_NOT_FOUND"
 
     async def test_update_empty_body(self, client: AsyncClient):
         create_resp = await client.post("/api/agents/workshop", json={
@@ -121,6 +122,7 @@ class TestWorkshopCRUD:
             json={},
         )
         assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "AGENT_UPDATE_EMPTY"
 
     async def test_delete_agent(self, client: AsyncClient):
         # Create
@@ -145,13 +147,14 @@ class TestWorkshopCRUD:
     async def test_delete_not_found(self, client: AsyncClient):
         resp = await client.delete("/api/agents/workshop/nonexistent")
         assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "AGENT_IDENTITY_NOT_FOUND"
 
 
 class TestMemoryEndpoint:
     async def test_memory_requires_user_id(self, client: AsyncClient):
         resp = await client.get("/api/agents/identities/any-id/memory")
         assert resp.status_code == 400
-        assert "user_id" in resp.json()["detail"]
+        assert resp.json()["detail"]["code"] == "USER_ID_REQUIRED"
 
     async def test_memory_returns_404_for_nonexistent_identity(
         self, client: AsyncClient,

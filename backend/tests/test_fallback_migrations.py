@@ -409,6 +409,10 @@ def test_init_db_stamps_lightweight_bootstrap_schema_without_alembic_version(
     bootstrap_engine = create_engine(db_url)
     bootstrap_inspector = inspect(bootstrap_engine)
     assert "alembic_version" not in bootstrap_inspector.get_table_names()
+    with bootstrap_engine.begin() as conn:
+        conn.execute(text("DROP TABLE prediction_journal_entries"))
+    bootstrap_inspector = inspect(bootstrap_engine)
+    assert "prediction_journal_entries" not in bootstrap_inspector.get_table_names()
     bootstrap_engine.dispose()
 
     monkeypatch.undo()
@@ -420,6 +424,7 @@ def test_init_db_stamps_lightweight_bootstrap_schema_without_alembic_version(
     inspector = inspect(database_module.get_engine())
     assert "debate_argument_unit" in inspector.get_table_names()
     assert "graph_snapshot" in inspector.get_table_names()
+    assert "prediction_journal_entries" in inspector.get_table_names()
 
     with database_module.get_engine().connect() as conn:
         revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()

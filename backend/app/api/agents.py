@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
 from fastapi import APIRouter, Depends, File, UploadFile
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session, select
 
@@ -29,6 +29,7 @@ from app.services.document_ingestion import (
     generate_persona_from_entity,
 )
 from app.services.llm_client import (
+    get_runtime_parallelism_limit,
     is_local_provider_url,
     llm_call,
     llm_request_scope,
@@ -249,10 +250,7 @@ async def list_identities(
         raise api_error(404, "FEATURE_DISABLED", "Agent features are not enabled")
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     if not effective_user_id:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "user_id query parameter is required"},
-        )
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
     agents = list_all_agents(effective_user_id)
     return agents
 
@@ -267,10 +265,7 @@ async def list_favorite_identities(
         raise api_error(404, "FEATURE_DISABLED", "Custom agents feature is not enabled")
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     if not effective_user_id:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "user_id query parameter is required"},
-        )
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
     with Session(get_engine()) as session:
         identities = session.exec(
             select(AgentIdentity)
@@ -311,14 +306,11 @@ async def mark_identity_favorite(
         raise api_error(404, "FEATURE_DISABLED", "Custom agents feature is not enabled")
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     if not effective_user_id:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "user_id query parameter is required"},
-        )
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
     with Session(get_engine()) as session:
         identity = session.get(AgentIdentity, identity_id)
         if identity is None or identity.user_id != effective_user_id:
-            return JSONResponse(status_code=404, content={"detail": "Identity not found"})
+            raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Identity not found")
         identity.is_favorite = True
         session.add(identity)
         session.commit()
@@ -341,14 +333,11 @@ async def unmark_identity_favorite(
         raise api_error(404, "FEATURE_DISABLED", "Custom agents feature is not enabled")
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     if not effective_user_id:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "user_id query parameter is required"},
-        )
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
     with Session(get_engine()) as session:
         identity = session.get(AgentIdentity, identity_id)
         if identity is None or identity.user_id != effective_user_id:
-            return JSONResponse(status_code=404, content={"detail": "Identity not found"})
+            raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Identity not found")
         identity.is_favorite = False
         session.add(identity)
         session.commit()
@@ -370,21 +359,20 @@ async def preflight_identity_continuity(
         raise api_error(404, "FEATURE_DISABLED", "Agent identity feature is not enabled")
     effective_user_id = resolve_authenticated_user_id(req.user_id, principal)
     if not effective_user_id:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "user_id is required"},
-        )
+        raise api_error(400, "USER_ID_REQUIRED", "user_id is required")
     if req.llm_base_url:
         validated_url = validate_llm_base_url(req.llm_base_url)
         if validated_url is None:
-            return JSONResponse(
-                status_code=400,
-                content={"detail": "Provided llm_base_url is not in the allowed provider list"},
+            raise api_error(
+                400,
+                "LLM_BASE_URL_NOT_ALLOWED",
+                "Provided llm_base_url is not in the allowed provider list",
             )
         if not req.llm_api_key:
-            return JSONResponse(
-                status_code=400,
-                content={"detail": "An API key is required when using a custom LLM base URL"},
+            raise api_error(
+                400,
+                "BYOK_API_KEY_REQUIRED",
+                "An API key is required when using a custom LLM base URL",
             )
         req.llm_base_url = validated_url
 
@@ -464,27 +452,24 @@ async def get_identity_memory(
         raise api_error(404, "FEATURE_DISABLED", "Agent identity feature is not enabled")
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     if not effective_user_id:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "user_id query parameter is required"},
-        )
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
     try:
         with Session(get_engine()) as session:
             identity = session.get(AgentIdentity, identity_id)
             if not identity or identity.user_id != effective_user_id:
-                return JSONResponse(
-                    status_code=404,
-                    content={"detail": "Identity not found"},
-                )
+                raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Identity not found")
         from app.services.agent_identity import get_identity_memories
         memories = get_identity_memories(identity_id)
         return {"identity_id": identity_id, "memories": memories}
     except Exception as exc:
+        if getattr(exc, "status_code", None) is not None:
+            raise
         logger.warning("Failed to fetch identity memories: %s", exc)
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "Failed to retrieve identity memories"},
-        )
+        raise api_error(
+            500,
+            "IDENTITY_MEMORY_RETRIEVAL_FAILED",
+            "Failed to retrieve identity memories",
+        ) from exc
 
 
 # ── Identity Memory Inspector ───────────────────────────
@@ -724,20 +709,14 @@ async def inspect_identity_memories(
 
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     if not effective_user_id:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "user_id query parameter is required"},
-        )
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
 
     with Session(get_engine()) as session:
         identity = session.get(AgentIdentity, identity_id)
         # Concealment 404: same response for "missing" and "owned by another
         # user" so callers cannot enumerate other users' identity ids.
         if identity is None or identity.user_id != effective_user_id:
-            return JSONResponse(
-                status_code=404,
-                content={"detail": "Identity not found"},
-            )
+            raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Identity not found")
 
     entries, error_code = _load_identity_memory_entries(identity_id, effective_user_id)
     response: dict[str, object] = {"memories": entries, "total": len(entries)}
@@ -763,10 +742,7 @@ async def create_agents_from_document(
 
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     if not effective_user_id:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "user_id query parameter is required"},
-        )
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
 
     content_type = (file.content_type or "").lower()
     if content_type not in PDF_CONTENT_TYPES:
@@ -778,10 +754,20 @@ async def create_agents_from_document(
 
     blob = await _read_document_upload(file)
     try:
-        document_text = extract_pdf_text(
-            blob,
-            max_pages=200,
-            max_bytes=MAX_DOCUMENT_UPLOAD_BYTES,
+        document_text = await asyncio.wait_for(
+            asyncio.to_thread(
+                extract_pdf_text,
+                blob,
+                max_pages=200,
+                max_bytes=MAX_DOCUMENT_UPLOAD_BYTES,
+            ),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        raise api_error(
+            422,
+            "DOCUMENT_PDF_TIMEOUT",
+            "PDF parsing timed out — file may be malformed or too complex",
         )
     except ValueError as exc:
         raise api_error(422, "DOCUMENT_PDF_INVALID", str(exc)) from exc
@@ -799,12 +785,22 @@ async def create_agents_from_document(
         purpose="document_ingestion",
     ):
         entities = await extract_entities(chunks, llm_call)
-        personas = [
-            await generate_persona_from_entity(entity, llm_call)
-            for entity in entities[:20]
-        ]
+        sem = asyncio.Semaphore(get_runtime_parallelism_limit())
+
+        async def _generate_with_limit(entity: dict) -> dict:
+            async with sem:
+                return await generate_persona_from_entity(entity, llm_call)
+
+        personas = await asyncio.gather(
+            *(_generate_with_limit(e) for e in entities[:20])
+        )
     identities: list[dict] = []
+    seen_keys: set[str] = set()
     for persona in personas:
+        dedup_key = f"{persona['role']}:{persona.get('persona', '')[:30]}"
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
         try:
             identity_id = create_custom_agent(
                 user_id=effective_user_id,
@@ -816,7 +812,8 @@ async def create_agents_from_document(
                 preferred_tier="IMPORTANT",
             )
         except ValueError as exc:
-            return JSONResponse(status_code=400, content={"detail": str(exc)})
+            logger.warning("Skipped agent creation for %s: %s", persona["name"], exc)
+            continue
         identities.append({
             "id": identity_id,
             "name": persona["name"],
@@ -841,19 +838,13 @@ async def get_identity_growth_events(
         raise api_error(404, "FEATURE_DISABLED", "Agent identity feature is not enabled")
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     if not effective_user_id:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "user_id query parameter is required"},
-        )
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
     try:
         with Session(get_engine()) as session:
             # Verify identity belongs to the requesting user
             identity = session.get(AgentIdentity, identity_id)
             if not identity or identity.user_id != effective_user_id:
-                return JSONResponse(
-                    status_code=404,
-                    content={"detail": "Identity not found"},
-                )
+                raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Identity not found")
             events = session.exec(
                 select(AgentGrowthEvent)
                 .where(
@@ -885,11 +876,14 @@ async def get_identity_growth_events(
             ],
         }
     except Exception as exc:
+        if getattr(exc, "status_code", None) is not None:
+            raise
         logger.warning("Failed to fetch growth events: %s", exc)
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "Failed to retrieve growth events"},
-        )
+        raise api_error(
+            500,
+            "AGENT_GROWTH_EVENTS_RETRIEVAL_FAILED",
+            "Failed to retrieve growth events",
+        ) from exc
 
 
 @router.post("/workshop", status_code=201)
@@ -912,7 +906,7 @@ async def create_workshop_agent(
             preferred_tier=body.preferred_tier,
         )
     except ValueError as exc:
-        return JSONResponse(status_code=400, content={"detail": str(exc)})
+        raise api_error(400, "AGENT_CREATE_INVALID", str(exc)) from exc
     return {"id": identity_id}
 
 
@@ -929,26 +923,21 @@ async def update_workshop_agent(
         raise api_error(404, "FEATURE_DISABLED", "Custom agents feature is not enabled")
     kwargs = body.model_dump(exclude_unset=True)
     if not kwargs:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "No fields to update"},
-        )
+        raise api_error(400, "AGENT_UPDATE_EMPTY", "No fields to update")
     try:
         if "decision_bias" in kwargs and kwargs["decision_bias"] is not None:
             kwargs["decision_bias"] = validate_decision_bias(kwargs["decision_bias"])
     except ValueError as exc:
-        return JSONResponse(status_code=400, content={"detail": str(exc)})
+        raise api_error(400, "AGENT_UPDATE_INVALID", str(exc)) from exc
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     with Session(get_engine()) as session:
         identity = session.get(AgentIdentity, identity_id)
         if identity is None or identity.user_id != effective_user_id:
-            return JSONResponse(
-                status_code=404, content={"detail": "Agent identity not found"}
-            )
+            raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Agent identity not found")
     try:
         update_custom_agent(identity_id, **kwargs)
     except LookupError:
-        return JSONResponse(status_code=404, content={"detail": "Agent identity not found"})
+        raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Agent identity not found")
     except PermissionError as exc:
         # H2: generated (kind!="custom") agents reject mutation at the service
         # layer.  Surface a 403 so clients know the identity exists but cannot
@@ -959,7 +948,7 @@ async def update_workshop_agent(
             str(exc) or "Generated agents cannot be edited",
         ) from exc
     except ValueError as exc:
-        return JSONResponse(status_code=400, content={"detail": str(exc)})
+        raise api_error(400, "AGENT_UPDATE_INVALID", str(exc)) from exc
     return {"detail": "updated"}
 
 
@@ -976,13 +965,11 @@ async def delete_workshop_agent(
     with Session(get_engine()) as session:
         identity = session.get(AgentIdentity, identity_id)
         if identity is None or identity.user_id != effective_user_id:
-            return JSONResponse(
-                status_code=404, content={"detail": "Agent identity not found"}
-            )
+            raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Agent identity not found")
     try:
         delete_custom_agent(identity_id)
     except LookupError:
-        return JSONResponse(status_code=404, content={"detail": "Agent identity not found"})
+        raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Agent identity not found")
     except PermissionError as exc:
         # H2: deleting a generated agent via the workshop surface is rejected.
         raise api_error(
@@ -1017,13 +1004,10 @@ async def export_identity(
         raise api_error(404, "FEATURE_DISABLED", "Persona export feature is not enabled")
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     if not effective_user_id:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "user_id query parameter is required"},
-        )
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
     payload = export_persona(identity_id, effective_user_id)
     if payload is None:
-        return JSONResponse(status_code=404, content={"detail": "Identity not found"})
+        raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Identity not found")
     return payload
 
 
@@ -1038,10 +1022,7 @@ async def export_identities_bulk(
         raise api_error(404, "FEATURE_DISABLED", "Persona export feature is not enabled")
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     if not effective_user_id:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "user_id query parameter is required"},
-        )
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
     if len(body.identity_ids) > MAX_BULK_EXPORT:
         raise api_error(
             422,
@@ -1063,10 +1044,7 @@ async def import_identity(
         raise api_error(404, "FEATURE_DISABLED", "Persona export feature is not enabled")
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     if not effective_user_id:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": "user_id query parameter is required"},
-        )
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
     payload = body.model_dump()
     valid, error = validate_import_payload(payload)
     if not valid:

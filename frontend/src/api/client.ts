@@ -1600,7 +1600,7 @@ export async function exportPersonasBulk(
 /** POST /api/agents/import — import a persona payload, returns new identity id. */
 export async function importPersona(
   payload: PersonaExportPayload,
-): Promise<{ success: boolean; identity_id: number }> {
+): Promise<{ success: boolean; identity_id: string }> {
   return request(withUserIdQuery('/agents/import'), {
     method: 'POST',
     body: JSON.stringify(payload),

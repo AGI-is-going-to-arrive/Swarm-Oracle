@@ -344,24 +344,26 @@ npm run build
 
 本 session 已复核：
 
-- backend 全量 `ruff check . --select E,F,I,W`：通过
-- backend 全量 `python -m pytest -q --tb=short`：`2709 passed, 2 skipped, 9 warnings`
-- backend ruff 修复后 touched-test rerun：`207 passed, 7 skipped`
+- backend `ruff check`：通过
+- backend 全量 `python -m pytest -q --tb=short`：`2714 passed, 2 skipped, 9 warnings`
+- backend Sprint 5-6 touched-test rerun：`85 passed`
+- backend journal ownership 追加回归：`8 passed`
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
 - frontend full vitest：`183 files / 1965 tests / 0 failed`
 - frontend 新组件窄集：`4 files / 39 tests passed`
 - frontend `npm run build`：通过，build performance budget 无 violations
+- frontend i18n key + placeholder parity：`en:2354 zh:2354`
 
 浏览器复核优先覆盖：
 
-- `/` 打开教育模板 picker，选择模板后问题、Agent 数和轮数回填。
-- `/agents` 收藏 Agent，切到 favorites tab 后列表同步。
-- `/agents` 单个/批量导出 persona JSON，导入 schema v1 JSON 后新增 Agent。
-- `/agents/new` document tab 上传 PDF；0 字节、非 PDF 和无文本 PDF 要有可见错误。
+- `/` 打开教育模板 picker，Escape 可关闭；主问题输入的 IME guard 不应误触发启动。
+- `/me/journal` 提交预测、resolve、calibration chart 与 EN/中文切换都要能读。
+- `/agents` 收藏 Agent，切到 favorites filter 后列表同步。
+- `/agents/new` manual tab 能创建 Agent；document tab 上传 0 字节、非 PDF 和无文本 PDF 要有可见错误。
+- `/agents/identities/:id/memories` 空 memory、404 和向量库错误提示要分开。
 - `/leaderboard` segment filters 与 URL params 同步；清空筛选后回到旧数组响应路径。
-- `/me/journal` 空日志、已 resolve、calibration 空数据都要能读。
-- `/agents/identities/:id/memories` 空 memory、跨用户 404 和向量库错误提示要分开。
-- 375px mobile 下 `EducationTemplatePicker`、`PersonaExportImport`、Agent card 和 leaderboard filters 不横向溢出。
+- `/admin/setup` 3 步 provider 配置和连接测试要可用。
+- 375px mobile 下上述页面不横向溢出。
 
 当前测试覆盖边界：
 

@@ -5,6 +5,7 @@
       "placeholder_1": "如果诸葛亮多活10年？",
       "placeholder_2": "如果人类在2000年登陆火星？",
       "placeholder_3": "如果互联网从未被发明？",
+      "question_input_label": "推演问题",
       "submit": "⚡ 开始推演",
       "confirm_launch_title": "确认开始推演",
       "confirm_launch_settings": "{{rounds}} 轮 · {{agents}} 个 Agent · {{mode}}",
@@ -12,6 +13,7 @@
       "quick_starts": "快速开始",
       "history": "📜 历史记录",
       "agents": "Agent 库",
+      "leaderboard_button_label": "打开排行榜",
       "loading_title": "正在构建推演场景",
       "loading_step_1": "解析问题与设定",
       "loading_step_2": "生成 Agent 群体",
@@ -1428,7 +1430,34 @@
       "tier_crowd_title": "围观群众",
       "tier_crowd_desc": "提供侧面视角，计算开销更低",
       "knowledge_tooltip": "知识领域将注入到 Agent 的 Prompt 中，影响其对特定话题的专业度和切入角度",
-      "bias_tooltip": "决策偏好将影响 Agent 在权衡利弊时的立场倾向"
+      "bias_tooltip": "决策偏好将影响 Agent 在权衡利弊时的立场倾向",
+      "workshop_tabs_label": "Agent 创建方式",
+      "tab_manual": "手动创建",
+      "tab_document": "从文档导入",
+      "doc_uploader": {
+        "label": "文档上传器",
+        "dropzone_title": "把 PDF 拖到这里，或点击浏览",
+        "dropzone_aria": "点击或按 Enter 选择 PDF，或将文件拖放至此",
+        "accept_hint": "仅支持 PDF，单文件最大 {{max}} MB",
+        "action_upload": "上传并提取",
+        "action_upload_another": "再上传一份",
+        "action_create_agents": "创建 Agent",
+        "stages_label": "处理阶段",
+        "stage_reading": "正在读取 PDF…",
+        "stage_extracting": "正在提取实体…",
+        "stage_generating": "正在生成人设…",
+        "progress_label": "提取进度",
+        "success_title": "提取完成",
+        "success_count": "{{agents}} 个 Agent 就绪 · 共发现 {{entities}} 个实体",
+        "aria_done": "提取完成。{{count}} 个 Agent 待创建。",
+        "error_unsupported_type": "仅支持 PDF 格式的文件。",
+        "error_too_large": "文件超过 {{max}} MB，请上传更小的 PDF。",
+        "error_empty": "文件为空。",
+        "error_cancelled": "上传已取消。",
+        "error_extraction_failed": "无法从该文档中提取实体，请换一份 PDF 重试。",
+        "error_unauthorized": "你没有上传文档的权限，请登录后重试。",
+        "error_generic": "上传失败，请重试。"
+      }
     },
     "agent_workshop": {
       "bias_title": "决策偏好配置",
@@ -1479,6 +1508,8 @@
     },
     "journal": {
       "title": "预测日志",
+      "subtitle": "记录你的预测，等现实落定时复盘打分，看看校准曲线如何漂移。",
+      "feature_disabled": "本服务器未启用个人预测日志功能。",
       "loading_capability": "正在检查日志访问权限…",
       "lab": {
         "title": "预测实验室"
@@ -1498,7 +1529,8 @@
         "invalid": "请填写问题，并将概率设置为 0 到 1 之间。"
       },
       "entries": {
-        "title": "最近的预测"
+        "title": "最近的预测",
+        "empty": "还没有预测记录，请在上方记录你的第一条预测。"
       },
       "entry": {
         "resolved": "已揭晓",
@@ -1523,7 +1555,9 @@
       "worldline": {
         "title": "世界线地图",
         "aria_label": "世界线分支缩略图",
-        "loading": "地图加载中…"
+        "loading": "地图加载中…",
+        "empty": "还没有探索过任何世界线。",
+        "caption": "你最近探索过的场景分支缩略图。"
       },
       "calibration": {
         "title": "校准曲线",
@@ -1537,6 +1571,10 @@
     },
     "identity_inspector": {
       "title": "身份记忆检查器",
+      "title_with_name": "{{name}} 的记忆",
+      "subtitle": "跨场景记录的只读记忆时间线。",
+      "feature_disabled": "本服务器未启用 Agent 身份记忆功能。",
+      "capability_error": "暂时无法确认 Agent 身份功能是否可用。",
       "back_to_library": "返回 Agent 库",
       "missing_id": "未选择身份。",
       "count": "共 {{count}} 条记录",
@@ -1556,6 +1594,7 @@
       "loading_aria": "加载记忆时间线中",
       "timeline_aria": "身份记忆时间线",
       "empty_title": "尚未记录任何记忆",
+      "empty_text": "该身份还没有记录任何记忆条目。和这位 Agent 一起跑一次场景，时间线就会逐步填充。",
       "error_load": "加载身份记忆失败。",
       "error_not_found": "未找到对应身份。",
       "type_episodic": "情景记忆",

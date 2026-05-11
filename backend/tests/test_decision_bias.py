@@ -80,7 +80,8 @@ def test_out_of_range_values_rejected(client: TestClient, value: float):
     )
 
     assert response.status_code == 400
-    assert "decision_bias.caution must be 0-1" in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "AGENT_UPDATE_INVALID"
+    assert "decision_bias.caution must be 0-1" in response.json()["detail"]["message"]
 
 
 def test_non_numeric_values_rejected(client: TestClient):
@@ -93,7 +94,8 @@ def test_non_numeric_values_rejected(client: TestClient):
     )
 
     assert response.status_code == 400
-    assert "decision_bias.optimism must be 0-1" in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "AGENT_UPDATE_INVALID"
+    assert "decision_bias.optimism must be 0-1" in response.json()["detail"]["message"]
 
 
 @pytest.mark.parametrize("raw_value", ["NaN", "Infinity", "-Infinity"])
@@ -108,7 +110,8 @@ def test_non_finite_values_rejected(client: TestClient, raw_value: str):
     )
 
     assert response.status_code == 400
-    assert "decision_bias.caution must be 0-1" in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "AGENT_UPDATE_INVALID"
+    assert "decision_bias.caution must be 0-1" in response.json()["detail"]["message"]
 
 
 @pytest.mark.parametrize("raw_value", [True, False])
@@ -122,7 +125,8 @@ def test_boolean_values_rejected(client: TestClient, raw_value: bool):
     )
 
     assert response.status_code == 400
-    assert "decision_bias.creativity must be 0-1" in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "AGENT_UPDATE_INVALID"
+    assert "decision_bias.creativity must be 0-1" in response.json()["detail"]["message"]
 
 
 def test_missing_keys_auto_fill_default(client: TestClient):

@@ -217,7 +217,7 @@ describe('PersonaExportImport — ImportDialog', () => {
   });
 
   it('accepts valid JSON via textarea and calls importPersona', async () => {
-    mockImport.mockResolvedValueOnce({ success: true, identity_id: 99 });
+    mockImport.mockResolvedValueOnce({ success: true, identity_id: 'identity-99' });
     const onImported = vi.fn();
     const onClose = vi.fn();
     render(<ImportDialog open={true} onClose={onClose} onImported={onImported} />);
@@ -228,7 +228,7 @@ describe('PersonaExportImport — ImportDialog', () => {
 
     await waitFor(() => expect(mockImport).toHaveBeenCalledTimes(1));
     expect(mockImport).toHaveBeenCalledWith(expect.objectContaining({ schema_version: 1 }));
-    await waitFor(() => expect(onImported).toHaveBeenCalledWith(99));
+    await waitFor(() => expect(onImported).toHaveBeenCalledWith('identity-99'));
     expect(onClose).toHaveBeenCalled();
   });
 

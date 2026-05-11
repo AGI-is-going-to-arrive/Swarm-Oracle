@@ -161,9 +161,15 @@ export function AgentCard({
 
       {identity.persona && (
         <p className="agent-card-tile__persona">
-          {identity.persona.length > 140
-            ? `${identity.persona.slice(0, 140)}…`
-            : identity.persona}
+          {(() => {
+            // Use Array.from to count by code points so we don't slice in the
+            // middle of a CJK / emoji surrogate pair (which would render as
+            // a replacement character).
+            const codepoints = Array.from(identity.persona);
+            return codepoints.length > 140
+              ? `${codepoints.slice(0, 140).join('')}…`
+              : identity.persona;
+          })()}
         </p>
       )}
 

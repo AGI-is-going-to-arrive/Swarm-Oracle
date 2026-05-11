@@ -92,7 +92,7 @@
 - `POST /api/scenario/{scenario_id}/cancel` 只接受 `parsing / simulating / narrating / cancelled`；`done / error` 会返回 `409 SIMULATION_NOT_RUNNING`。成功请求会把 scenario 持久化到 `cancelled`，并尽量取消本进程里的后台 task。
 - `GET /api/scenario/{scenario_id}/snapshot` 和 `POST /api/scenario/import-snapshot` 受 `FEATURE_SNAPSHOT_EXPORT` gate；关闭时返回 404 `FEATURE_DISABLED`。export 会做 scenario ownership 校验；开启 `SESSION_SECRET` 时 import 要求 signed principal，并把新 scenario 绑定到该 principal。空文件返回 422 `SNAPSHOT_FILE_EMPTY`，超过 50 MB 返回 413 `SNAPSHOT_FILE_TOO_LARGE`，archive/manifest/checksum 不合法返回 422 `SNAPSHOT_IMPORT_INVALID`。导入还会拒绝重复 ZIP member name、超过 256 个物理 member、路径穿越、symlink、异常压缩比和总解压超限。
 - `GET /api/scenario/templates` 和 `GET /api/scenario/templates/{template_id}` 受 `FEATURE_EDUCATION_TEMPLATES` gate；关闭时返回 404 `FEATURE_DISABLED`。列表接口支持 `category` 与 `difficulty` filter，空结果返回空数组。
-- 删除 scenario 时会一并清理 replay、prediction、campaign side effect、ending-room 与向量数据。
+- 删除 scenario 时会一并清理 replay、prediction、campaign side effect、ending-room 与向量数据；个人 journal entry 会保留，但关联的 `scenario_id` 会置空，避免硬删除破坏用户日志历史。
 
 ## Replay Artifact
 
@@ -177,9 +177,9 @@
 关键约束：
 
 - 这些端点受 `FEATURE_PREDICTION_JOURNAL` gate；关闭时返回 404 `FEATURE_DISABLED`。
+- `POST /api/me/journal` 如果带 `scenario_id`，该 scenario 必须属于当前用户；不存在返回 404，跨用户或无 owner 的旧 scenario 返回 403。
 - user scope 来自 signed principal；无 signed session 的本地开发态可用 `X-User-Id`。
-- journal 写入会校验 scenario owner；不属于当前用户的 scenario 会返回 404。
-- 已 resolve 的 entry 再次 resolve 会返回 409 `JOURNAL_ENTRY_ALREADY_RESOLVED`。
+- `PATCH /api/me/journal/{entry_id}/resolve` 只允许当前用户解析自己的 entry；已解析 entry 返回 409 `JOURNAL_ENTRY_ALREADY_RESOLVED`，并发 stale resolve 也返回 409，不会覆盖旧结果。
 
 ## Social / Export / Health
 
@@ -335,8 +335,9 @@
 - favorite 只写当前用户拥有的 identity；跨用户或不存在的 identity 返回 404，不泄漏数据。
 - `GET /api/agents/identities/{id}/memories` 会按 owner 校验，并返回最多 100 条 inspector memory。向量库不可用时仍返回 200，但会带机器可读的 `error` 字段，方便前端区分空记忆和基础设施错误。
 - `GET /api/agents/identities/{id}/growth-events` 当前要求 `user_id`；缺失时返回 400，identity 不存在或 owner 不匹配时返回 404。
-- `POST /api/agents/from-document` 只接受 PDF (`application/pdf` / `application/x-pdf`)，上传上限 25 MB，最多读取 200 页和 100000 个字符；空文件、无可抽取文本或非法 PDF 会返回明确错误。
-- persona export 使用 `schema_version=1`；bulk export 最多 20 个 identity。import 不覆盖旧 identity，而是为当前用户创建新的 custom Agent。`schema_version` 不支持、必填字段缺失或 `decision_bias` 类型错误时返回 422 `PERSONA_IMPORT_INVALID`。
+- `POST /api/agents/from-document` 只接受 PDF (`application/pdf` / `application/x-pdf`)，上传上限 25 MB，最多读取 200 页和 100000 个字符，并带 30 秒解析超时；空文件返回 `DOCUMENT_FILE_EMPTY`，超大文件返回 413 `DOCUMENT_FILE_TOO_LARGE`，非法 PDF 返回 `DOCUMENT_PDF_INVALID`，无可抽取文本返回 `DOCUMENT_TEXT_EMPTY`，解析超时返回 `DOCUMENT_PDF_TIMEOUT`。
+- 文档生成 Agent 时，单个 persona 的业务校验失败会被跳过；持久化等运行时异常不会被包装成成功响应。
+- persona export 使用 `schema_version=1`；export 会去掉本地 untrusted-data wrapper，只导出可移植 persona 文本；bulk export 最多 20 个 identity。import 不覆盖旧 identity，而是为当前用户创建新的 custom Agent，成功响应为 `{ "success": true, "identity_id": "..." }`。`schema_version` 不支持、必填字段缺失或 `decision_bias` 不是对象时返回 422 `PERSONA_IMPORT_INVALID`；bias 对象里的 boolean、`NaN/Inf` 和非数字值会回到默认值，超出 `0..1` 的数字会被 clamp。
 - `POST /api/agents/workshop` / `PUT /api/agents/workshop/{id}` 当前支持：
   - `persona`
   - `knowledge_domains`

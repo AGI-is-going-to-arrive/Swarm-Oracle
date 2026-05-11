@@ -75,8 +75,9 @@ class TestExportPersona:
         persona = payload["persona"]
         assert persona["name"] == "Test Agent"
         assert persona["role"] == "analyst"
-        # persona_text in DB is wrapped via format_untrusted_text_block
-        assert "UNTRUSTED DATA" in persona["persona_text"]
+        # export unwraps the format_untrusted_text_block envelope
+        assert "UNTRUSTED DATA" not in persona["persona_text"]
+        assert persona["persona_text"] == "A careful thinker"
         # decision_bias survives, 5-key shape backfilled by workshop validator
         assert persona["decision_bias"]["caution"] == 0.7
         assert persona["decision_bias"]["risk_tolerance"] == 0.2

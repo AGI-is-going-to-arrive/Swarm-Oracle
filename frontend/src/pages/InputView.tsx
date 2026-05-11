@@ -2,7 +2,15 @@
    SwarmOracle — InputView (Landing Page)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useRef, useEffect, useCallback, useMemo, type FocusEvent } from 'react';
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  useMemo,
+  type FocusEvent,
+  type KeyboardEvent,
+} from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import gsap from 'gsap';
 import { useTranslation } from 'react-i18next';
@@ -58,8 +66,6 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
-  AlertDialogOverlay,
-  AlertDialogPortal,
   AlertDialogTitle,
 } from '../components/ui/alert-dialog';
 import { predictTextareaHeight } from '../lib/textLayout/inputPredict';
@@ -68,6 +74,14 @@ import './InputView.css';
 
 function estimateSimulationMinutes(rounds: number, numAgents: number) {
   return Math.max(1, Math.round(rounds * (0.75 + numAgents * 0.0225)));
+}
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
 }
 
 const HOME_DEFAULT_ROUNDS = 5;
@@ -251,6 +265,7 @@ export function InputView() {
   const isComposingRef = useRef(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
+  const continuityDialogRef = useRef<HTMLDivElement>(null);
   const typewriterTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleClosedConfigFocusCapture = useCallback((event: FocusEvent<HTMLDivElement>) => {
     if (isConfigOpen) return;
@@ -574,6 +589,11 @@ export function InputView() {
       typewriterTimeoutRef.current = null;
     }
 
+    if (prefersReducedMotion()) {
+      setPlaceholder(placeholders[0] || '');
+      return undefined;
+    }
+
     const scheduleTick = (callback: () => void, delay: number) => {
       typewriterTimeoutRef.current = setTimeout(callback, delay);
     };
@@ -618,6 +638,7 @@ export function InputView() {
 
   // Entry animations
   useEffect(() => {
+    if (prefersReducedMotion()) return;
     if (titleRef.current) {
       gsap.fromTo(
         titleRef.current,
@@ -689,6 +710,39 @@ export function InputView() {
     setContinuityChoices({});
     setContinuityError(null);
   }, [isSubmitting]);
+
+  const isContinuityDialogOpen = Boolean(pendingLaunch && continuityMatches.length > 0);
+
+  const handleContinuityDialogKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeContinuityDialog();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+
+    const dialog = continuityDialogRef.current;
+    if (!dialog) return;
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((element) => !element.hasAttribute('aria-hidden'));
+    if (focusable.length === 0) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }, [closeContinuityDialog]);
 
   const executeSimulationLaunch = useCallback(async (
     launch: PendingSimulationLaunch,
@@ -773,6 +827,28 @@ export function InputView() {
     isSubmitting,
     pendingLaunch,
   ]);
+
+  useEffect(() => {
+    if (!isContinuityDialogOpen) return undefined;
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const focusFirstControl = () => {
+      const dialog = continuityDialogRef.current;
+      const firstControl = dialog?.querySelector<HTMLElement>(
+        'input:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      );
+      (firstControl ?? dialog)?.focus();
+    };
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(focusFirstControl);
+    } else {
+      focusFirstControl();
+    }
+    return () => {
+      previousFocus?.focus();
+    };
+  }, [isContinuityDialogOpen]);
 
   const launchSimulation = async (launch: PendingSimulationLaunch) => {
     const trimmed = launch.nextQuestion.trim();
@@ -1200,7 +1276,11 @@ export function InputView() {
                       {t('snapshot.import_btn')}
                     </button>
                   )}
-                  <button className="btn btn-ghost" onClick={() => navigate('/leaderboard')}>
+                  <button
+                    className="btn btn-ghost"
+                    onClick={() => navigate('/leaderboard')}
+                    aria-label={t('home.leaderboard_button_label')}
+                  >
                     🏆
                   </button>
                 </div>
@@ -1218,6 +1298,7 @@ export function InputView() {
                   onCompositionStart={() => { isComposingRef.current = true; }}
                   onCompositionEnd={() => { isComposingRef.current = false; }}
                   placeholder={placeholder}
+                  aria-label={t('home.question_input_label')}
                   disabled={isSubmitting}
                   autoFocus
                   rows={1}
@@ -2059,65 +2140,64 @@ export function InputView() {
             open={!!confirmDialogData}
             onOpenChange={handleConfirmOpenChange}
           >
-            <AlertDialogPortal>
-              <AlertDialogOverlay
-                className="confirm-launch-backdrop"
-                onClick={cancelLaunch}
-              />
-              <AlertDialogContent
-                className="confirm-launch"
-                role="dialog"
-                aria-modal="true"
-                aria-label={t('home.confirm_launch_title')}
-                aria-describedby="confirm-launch-settings"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <AlertDialogHeader className="confirm-launch__header">
-                  <AlertDialogTitle asChild>
-                    <h3>{t('home.confirm_launch_title')}</h3>
-                  </AlertDialogTitle>
-                </AlertDialogHeader>
-                <div className="confirm-launch__body">
-                  <p className="confirm-launch__question">
-                    {confirmDialogData?.question ?? ''}
-                  </p>
-                  <AlertDialogDescription
-                    id="confirm-launch-settings"
-                    className="confirm-launch__settings"
-                  >
-                    {t('home.confirm_launch_settings', {
-                      rounds,
-                      agents: numAgents,
-                      mode: t(mode === 'blackboard' ? 'home.mode_blackboard' : 'home.mode_raw'),
-                    })}
-                  </AlertDialogDescription>
-                </div>
-                <AlertDialogFooter className="confirm-launch__footer">
-                  <AlertDialogCancel
-                    className="btn btn-ghost"
-                    onClick={cancelLaunch}
-                  >
-                    {t('common.cancel')}
-                  </AlertDialogCancel>
-                  <AlertDialogAction
-                    className="btn btn-primary"
-                    onClick={confirmLaunch}
-                    autoFocus
-                  >
-                    {t('home.submit')}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialogPortal>
+            <AlertDialogContent
+              className="confirm-launch"
+              overlayClassName="confirm-launch-backdrop"
+              onOverlayClick={cancelLaunch}
+              role="dialog"
+              aria-modal="true"
+              aria-label={t('home.confirm_launch_title')}
+              aria-describedby="confirm-launch-settings"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <AlertDialogHeader className="confirm-launch__header">
+                <AlertDialogTitle asChild>
+                  <h3>{t('home.confirm_launch_title')}</h3>
+                </AlertDialogTitle>
+              </AlertDialogHeader>
+              <div className="confirm-launch__body">
+                <p className="confirm-launch__question">
+                  {confirmDialogData?.question ?? ''}
+                </p>
+                <AlertDialogDescription
+                  id="confirm-launch-settings"
+                  className="confirm-launch__settings"
+                >
+                  {t('home.confirm_launch_settings', {
+                    rounds,
+                    agents: numAgents,
+                    mode: t(mode === 'blackboard' ? 'home.mode_blackboard' : 'home.mode_raw'),
+                  })}
+                </AlertDialogDescription>
+              </div>
+              <AlertDialogFooter className="confirm-launch__footer">
+                <AlertDialogCancel
+                  className="btn btn-ghost"
+                  onClick={cancelLaunch}
+                >
+                  {t('common.cancel')}
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  className="btn btn-primary"
+                  onClick={confirmLaunch}
+                  autoFocus
+                >
+                  {t('home.submit')}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
           </AlertDialog>
 
-          {pendingLaunch && continuityMatches.length > 0 && (
+          {isContinuityDialogOpen && (
             <div className="continuity-dialog-backdrop" role="presentation">
               <div
+                ref={continuityDialogRef}
                 className="continuity-dialog"
                 role="dialog"
                 aria-modal="true"
                 aria-label={continuityCopy.title}
+                tabIndex={-1}
+                onKeyDown={handleContinuityDialogKeyDown}
               >
                 <div className="continuity-dialog__header">
                   <h3>{continuityCopy.title}</h3>

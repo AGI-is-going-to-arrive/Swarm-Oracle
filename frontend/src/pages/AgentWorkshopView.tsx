@@ -2,7 +2,7 @@
    Phase 3 F3 — Agent Workshop (Create / Edit Custom Agent)
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -208,6 +208,37 @@ export function AgentWorkshopView() {
 
   const canSubmit = form.displayName.trim().length > 0 && form.role.trim().length > 0 && !saving && !loadingAgent;
 
+  const activateTab = useCallback((tab: 'manual' | 'document') => {
+    setActiveTab(tab);
+    const focusTab = () => {
+      document.getElementById(`agent-workshop-tab-${tab}`)?.focus();
+    };
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(focusTab);
+    } else {
+      focusTab();
+    }
+  }, []);
+
+  const handleTabKeyDown = useCallback((event: KeyboardEvent<HTMLButtonElement>) => {
+    const tabs = ['manual', 'document'] as const;
+    const currentIndex = tabs.indexOf(activeTab);
+    let nextIndex = currentIndex;
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = (currentIndex + tabs.length - 1) % tabs.length;
+    } else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = (currentIndex + 1) % tabs.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = tabs.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    activateTab(tabs[nextIndex]);
+  }, [activateTab, activeTab]);
+
   // Auto-dismiss the import success toast after a few seconds.
   useEffect(() => () => {
     if (importToastTimerRef.current != null) {
@@ -260,6 +291,7 @@ export function AgentWorkshopView() {
             tabIndex={activeTab === 'manual' ? 0 : -1}
             className={`agent-workshop-tab${activeTab === 'manual' ? ' agent-workshop-tab--active' : ''}`}
             onClick={() => setActiveTab('manual')}
+            onKeyDown={handleTabKeyDown}
           >
             {t('agents.tab_manual', 'Build manually')}
           </button>
@@ -272,6 +304,7 @@ export function AgentWorkshopView() {
             tabIndex={activeTab === 'document' ? 0 : -1}
             className={`agent-workshop-tab${activeTab === 'document' ? ' agent-workshop-tab--active' : ''}`}
             onClick={() => setActiveTab('document')}
+            onKeyDown={handleTabKeyDown}
           >
             {t('agents.tab_document', 'Import from document')}
           </button>

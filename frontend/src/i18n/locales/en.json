@@ -5,6 +5,7 @@
       "placeholder_1": "What if Zhuge Liang lived 10 more years?",
       "placeholder_2": "What if we landed on Mars in 2000?",
       "placeholder_3": "What if the internet was never invented?",
+      "question_input_label": "Simulation question",
       "submit": "Start Simulation",
       "confirm_launch_title": "Confirm Simulation Launch",
       "confirm_launch_settings": "{{rounds}} rounds · {{agents}} agents · {{mode}}",
@@ -12,6 +13,7 @@
       "quick_starts": "Quick Starts",
       "history": "📜 History",
       "agents": "Agents",
+      "leaderboard_button_label": "Open leaderboard",
       "loading_title": "Building Simulation Scenario",
       "loading_step_1": "Parsing question & settings",
       "loading_step_2": "Generating agent swarm",
@@ -1428,7 +1430,34 @@
       "tier_crowd_title": "Crowd Member",
       "tier_crowd_desc": "Provides side perspectives, lower compute cost",
       "knowledge_tooltip": "Knowledge domains are injected into the Agent's prompt, influencing expertise and approach to specific topics",
-      "bias_tooltip": "Decision bias influences the Agent's stance when weighing trade-offs"
+      "bias_tooltip": "Decision bias influences the Agent's stance when weighing trade-offs",
+      "workshop_tabs_label": "Agent creation method",
+      "tab_manual": "Build manually",
+      "tab_document": "Import from document",
+      "doc_uploader": {
+        "label": "Document uploader",
+        "dropzone_title": "Drop a PDF here, or click to browse",
+        "dropzone_aria": "Click or press Enter to choose a PDF, or drag and drop here",
+        "accept_hint": "PDF only, up to {{max}} MB",
+        "action_upload": "Upload and Extract",
+        "action_upload_another": "Upload another",
+        "action_create_agents": "Create Agents",
+        "stages_label": "Processing stages",
+        "stage_reading": "Reading PDF...",
+        "stage_extracting": "Extracting entities...",
+        "stage_generating": "Generating personas...",
+        "progress_label": "Extraction progress",
+        "success_title": "Extraction complete",
+        "success_count": "{{agents}} agents ready · {{entities}} entities found",
+        "aria_done": "Extraction complete. {{count}} agents ready to create.",
+        "error_unsupported_type": "Only PDF files are supported.",
+        "error_too_large": "File is larger than {{max}} MB. Please upload a smaller PDF.",
+        "error_empty": "File is empty.",
+        "error_cancelled": "Upload cancelled.",
+        "error_extraction_failed": "Could not extract entities from this document. Try a different PDF.",
+        "error_unauthorized": "You are not authorized to upload documents. Sign in and try again.",
+        "error_generic": "Upload failed. Please try again."
+      }
     },
     "agent_workshop": {
       "bias_title": "Decision Bias Profile",
@@ -1479,6 +1508,8 @@
     },
     "journal": {
       "title": "Prediction Journal",
+      "subtitle": "Track your forecasts, score them when reality lands, and watch your calibration drift.",
+      "feature_disabled": "Personal Prediction Journal is not enabled on this server.",
       "loading_capability": "Checking journal access…",
       "lab": {
         "title": "Forecast Lab"
@@ -1498,7 +1529,8 @@
         "invalid": "Question and a probability between 0 and 1 are required."
       },
       "entries": {
-        "title": "Recent forecasts"
+        "title": "Recent forecasts",
+        "empty": "No forecasts yet. Log your first prediction above."
       },
       "entry": {
         "resolved": "Resolved",
@@ -1523,7 +1555,9 @@
       "worldline": {
         "title": "Worldline Map",
         "aria_label": "Worldline branch thumbnail",
-        "loading": "Loading map…"
+        "loading": "Loading map…",
+        "empty": "No explored worldlines yet.",
+        "caption": "Branch thumbnail of the latest scenarios you have explored."
       },
       "calibration": {
         "title": "Calibration curve",
@@ -1537,6 +1571,10 @@
     },
     "identity_inspector": {
       "title": "Identity Memory Inspector",
+      "title_with_name": "Memory of {{name}}",
+      "subtitle": "Read-only timeline of memories recorded across scenarios.",
+      "feature_disabled": "Agent identity memory is not enabled on this server.",
+      "capability_error": "Unable to confirm whether agent identity is available right now.",
       "back_to_library": "Back to Agent Library",
       "missing_id": "No identity selected.",
       "count": "{{count}} entries",
@@ -1556,6 +1594,7 @@
       "loading_aria": "Loading memory timeline",
       "timeline_aria": "Identity memory timeline",
       "empty_title": "No memories recorded yet",
+      "empty_text": "This identity has not yet recorded any memory entries. Run a scenario with this agent to start populating the timeline.",
       "error_load": "Failed to load identity memories.",
       "error_not_found": "Identity not found.",
       "type_episodic": "Episodic memory",

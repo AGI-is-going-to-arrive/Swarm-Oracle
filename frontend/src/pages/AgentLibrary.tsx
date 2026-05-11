@@ -218,14 +218,13 @@ export function AgentLibrary() {
 
       <div
         className="agent-library-toolbar"
-        role="tablist"
+        role="group"
         aria-label={t('agent_library.filter_aria', 'Filter agents')}
       >
         <div className="agent-library-tabs">
           <button
             type="button"
-            role="tab"
-            aria-selected={tab === 'all'}
+            aria-pressed={tab === 'all'}
             className={`agent-library-tab${tab === 'all' ? ' agent-library-tab--active' : ''}`}
             onClick={() => setTab('all')}
           >
@@ -233,8 +232,7 @@ export function AgentLibrary() {
           </button>
           <button
             type="button"
-            role="tab"
-            aria-selected={tab === 'favorites'}
+            aria-pressed={tab === 'favorites'}
             className={`agent-library-tab${tab === 'favorites' ? ' agent-library-tab--active' : ''}`}
             onClick={() => setTab('favorites')}
           >

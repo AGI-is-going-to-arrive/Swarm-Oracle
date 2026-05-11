@@ -100,7 +100,7 @@ class TestGrowthEventsEndpoint:
             params={"user_id": "attacker-b"},
         )
         assert resp.status_code == 404
-        assert "not found" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["code"] == "AGENT_IDENTITY_NOT_FOUND"
 
     async def test_returns_400_missing_user_id(self, client: AsyncClient):
         """Missing user_id returns 400."""
@@ -108,7 +108,7 @@ class TestGrowthEventsEndpoint:
             "/api/agents/identities/any-id/growth-events"
         )
         assert resp.status_code == 400
-        assert "user_id" in resp.json()["detail"]
+        assert resp.json()["detail"]["code"] == "USER_ID_REQUIRED"
 
     async def test_returns_404_nonexistent_identity(self, client: AsyncClient):
         """Non-existent identity returns 404."""

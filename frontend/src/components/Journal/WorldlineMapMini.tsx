@@ -110,6 +110,12 @@ export function WorldlineMapMini({ branches, onSelect }: Props) {
 
   const seeds = useMemo(() => branches ?? [], [branches]);
   const layout = useMemo(() => layoutBranches(seeds), [seeds]);
+  // When the map carries interactive nodes (onSelect provided), `role="img"`
+  // would hide all descendants from assistive tech and turn the focusable
+  // <g role="button"> nodes into phantom focus stops. Switch to `role="figure"`
+  // in that case so screen readers can still reach the buttons.
+  const interactive = typeof onSelect === 'function';
+  const containerRole = interactive ? 'figure' : 'img';
 
   // Lazy render: only construct SVG once the element scrolls into the viewport.
   useEffect(() => {
@@ -136,7 +142,7 @@ export function WorldlineMapMini({ branches, onSelect }: Props) {
     <div
       ref={containerRef}
       className="journal-worldline-mini"
-      role="img"
+      role={containerRole}
       aria-label={t('journal.worldline.aria_label', 'Worldline branch thumbnail')}
     >
       {layout.nodes.length === 0 ? (
@@ -169,7 +175,6 @@ export function WorldlineMapMini({ branches, onSelect }: Props) {
           {/* Nodes */}
           {layout.nodes.map((node) => {
             const isRoot = node.parentId == null;
-            const interactive = typeof onSelect === 'function';
             return (
               <g
                 key={node.id}

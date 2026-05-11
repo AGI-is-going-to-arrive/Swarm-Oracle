@@ -97,6 +97,7 @@
 
 - 短链 replay 通过 `ReplayArtifact` 持久化。
 - SQLite 数据库如果是“由 lightweight bootstrap / `SQLModel.metadata.create_all()` 建出来、但还没有 `alembic_version`”的旧库，`init_db()` 当前会先补齐轻量 additive columns（包括 `graph_edge` 的 evidence 字段），再 `stamp` 到当前 head 并执行 upgrade；不会再重放初始迁移把已有表撞成 `table already exists`。
+- 同一类无版本旧库如果缺少后来加入的 SQLModel metadata 表，`init_db()` 会先按 metadata 补齐缺表，再 stamp 到当前 head；例如 `prediction_journal_entries` 不会因为旧库被直接 stamp 而缺失。
 - SQLite 本地旧库如果还留着 legacy `uq_ending_room_scope` 唯一索引（`scenario_id + anchor_branch_id + room_type + participant_set_hash`），`init_db()` 当前也会在 lightweight fallback 和 Alembic upgrade 后统一修回 `scope_fingerprint`；generation 升级后再点结果页 `进入会客厅 / 异线旁听席` 不会再因为旧索引直接 `500`。
 - `counterfactual` 与 `resume` 当前共用独立的 replay branch runtime lock；慢 clone / seed 路径也会续租，不再只在短请求里可靠。
 - `resume` 当前会先完成 scenario/source branch/round 校验，再尝试 replay branch lock；这些前置校验失败不会占用 replay branch lock。
@@ -107,6 +108,7 @@
   - heartbeat 刷新异常时会释放原 replay lease，不再把后续 replay/resume 锁死到 TTL 过期
 - 前端分享链路优先使用后端 artifact，失败时才回退本地 token。
 - `delete_scenario()` 当前也会同步清理该 scenario 关联的 `ReplayArtifact`，不会继续保留可读的旧 share artifact。
+- `delete_scenario()` 当前不会删除个人 prediction journal 历史；它会把相关 journal entry 的 `scenario_id` 置空，避免 FK enforcement 下硬删除失败，也避免用户日志跟着 scenario 一起消失。
 - `compare_branches()` 当前会先验证 `branch_a / branch_b` 属于传入的 `scenario_id`，不再允许跨场景 branch 混入 compare 结果。
 - `POST /api/scenario/{id}/counterfactual` 当前会在 clone 前先校验目标 `round_number` 里确实存在该 `agent_id` 的消息：
   - scenario 状态必须是 `done`；否则返回 `409 COUNTERFACTUAL_SCENARIO_STATUS_INVALID`
@@ -196,14 +198,19 @@
 - Agent Library 相关 API 当前按 user scope 收口：
   - favorite 只允许当前用户自己的 identity；跨用户或不存在统一返回 404
   - identity inspector 会先校验 owner，再读取最多 100 条 memory；向量库异常会落 `error` 字段，不把只读 inspector 变成 fatal
-  - PDF 文档生成 Agent 只接受 PDF，上传上限 25 MB；无可抽取文本返回 `DOCUMENT_TEXT_EMPTY`
+  - PDF 文档生成 Agent 只接受 PDF，上传上限 25 MB；空文件、非法 PDF、无可抽取文本和超大文件都会返回结构化错误
+  - PDF 解析最多读取 200 页 / 100000 字符，并带 30 秒解析超时；超时返回结构化错误，不让上传请求无限卡住
+  - 文档抽取阶段只会跳过业务校验失败的 persona；持久化等运行时异常不会伪装成 `201 + agents_created: 0`
   - persona export/import 使用 `schema_version=1`；bulk export 最多 20 个；import 会创建新的 custom identity，不覆盖旧数据
+  - persona import 会把 decision bias 归一化到 `caution / optimism / conservatism / risk_tolerance / creativity` 5 个 key；boolean、`NaN/Inf` 或非数字值落到默认值，超出 `0..1` 的数字会被 clamp
 - Prediction Journal 当前由 `prediction_journal_entry` 持久化：
   - 迁移 `027_prediction_journal` 创建 journal 表
   - list/create/resolve/calibration 都按当前 user scope 查询
-  - resolve 已解析 entry 会返回 409，不会重复改写结果
+  - create 绑定 `scenario_id` 时会校验该 scenario 属于当前用户；旧的无 owner scenario 不会被任意用户认领
+  - resolve 使用条件更新收口；已解析 entry 或并发 stale resolve 会返回 409，不会重复改写结果
 - `FEATURE_HALLUCINATION_GATE` 当前只控制 verdict 后处理：
   - 空 verdict、没有可校验 claim、低置信度或矛盾 claim 都只进入 warning metadata
+  - claim 是否标记为 verified 会使用调用方传入的 `threshold`
   - gate 不会阻断 verdict，也不会把 LLM 失败提升成业务失败
 - `GET /api/leaderboard` 当前保持旧兼容：不带 segment filter 时仍返回 leaderboard 数组；带 `scenario_type / date_from / date_to / min_agents / max_agents` 任一筛选时，才返回 `entries + segment_metadata`。
 - main simulation 当前已补 continuity preflight/override 链路：
@@ -389,9 +396,10 @@
 ## 当前验证基线
 
 - Sprint 5-6 backend 本 session 已跑：
-  - `ruff check . --select E,F,I,W`：通过
-  - `python -m pytest -q --tb=short`：`2709 passed, 2 skipped, 9 warnings`
-  - ruff 修复后 touched-test rerun：`207 passed, 7 skipped`
+  - `ruff check`：通过
+  - `python -m pytest -q --tb=short`：`2714 passed, 2 skipped, 9 warnings`
+  - Sprint 5-6 touched-test rerun：`85 passed`
+  - journal ownership 追加回归：`8 passed`
   - 仍有 `tests/test_web_context_integration.py` 相关 `_noop_background` coroutine warning，未影响测试通过
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：

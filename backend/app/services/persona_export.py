@@ -33,6 +33,7 @@ from app.models.database import get_engine
 from app.services.persona_workshop import (
     ALLOWED_KNOWLEDGE_DOMAINS,
     DECISION_BIAS_KEYS,
+    _unwrap_untrusted_text_block,
     create_custom_agent,
 )
 
@@ -145,13 +146,19 @@ def export_persona(
         decision_bias = _parse_json_object(identity.decision_bias_json)
         tags = _parse_json_list(identity.knowledge_domain_json)
 
+        raw_persona = (
+            _unwrap_untrusted_text_block(identity.persona)
+            if identity.persona
+            else ""
+        )
+
         return {
             "schema_version": SCHEMA_VERSION,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "persona": {
                 "name": identity.display_name or "",
                 "role": identity.role or "",
-                "persona_text": identity.persona or "",
+                "persona_text": raw_persona,
                 "decision_bias": decision_bias,
                 "tags": tags,
             },

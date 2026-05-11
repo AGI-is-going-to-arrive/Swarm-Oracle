@@ -422,6 +422,15 @@ def _has_bootstrap_sqlmodel_schema(connection) -> bool:
     if not _CORE_BOOTSTRAP_TABLES <= table_names:
         return False
 
+    missing_metadata_tables = set(SQLModel.metadata.tables) - table_names
+    if missing_metadata_tables:
+        SQLModel.metadata.create_all(connection, checkfirst=True)
+        table_names = set(
+            connection.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).scalars()
+        )
+
     for table_name, column_name, column_type in _LIGHTWEIGHT_ADDITIVE_COLUMNS:
         if table_name in table_names:
             _migrate_add_column(connection, table_name, column_name, column_type)
@@ -445,7 +454,7 @@ def _bootstrap_alembic_revision_for_sqlite(
 
     engine = _make_bootstrap_engine(database_url)
     try:
-        with engine.connect() as connection:
+        with engine.begin() as connection:
             current_revision = _current_alembic_revision(connection)
             if current_revision is None:
                 if _has_bootstrap_sqlmodel_schema(connection):

@@ -266,6 +266,7 @@ export function IdentityInspectorView() {
 
   // Resolve identity display name (best-effort, non-blocking for the timeline).
   useEffect(() => {
+    setIdentityName(null);
     if (!enabled || !identityId) return;
     let cancelled = false;
     const userId = getSessionBoundUserId();
@@ -274,9 +275,7 @@ export function IdentityInspectorView() {
         if (cancelled) return;
         if (Array.isArray(list)) {
           const match = list.find((agent) => agent.id === identityId);
-          if (match?.display_name) {
-            setIdentityName(match.display_name);
-          }
+          setIdentityName(match?.display_name || null);
         }
       })
       .catch(() => {

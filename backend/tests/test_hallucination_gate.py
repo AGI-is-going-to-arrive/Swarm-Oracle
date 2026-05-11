@@ -26,6 +26,16 @@ def test_extract_verifiable_claims_detects_causal_claim():
     assert claims[0]["claim_type"] == "causal"
 
 
+def test_extract_verifiable_claims_detects_non_initial_entities():
+    claims = extract_verifiable_claims("Alice supported Bob. The FDA approved Ozempic.")
+
+    assert [claim["text"] for claim in claims] == [
+        "Alice supported Bob",
+        "The FDA approved Ozempic",
+    ]
+    assert {claim["claim_type"] for claim in claims} == {"entity"}
+
+
 def test_extract_verifiable_claims_skips_question_only_verdict():
     assert extract_verifiable_claims("Is this true? 为什么会这样？") == []
 
@@ -121,6 +131,20 @@ def test_apply_hallucination_gate_warns_on_low_confidence_verdict():
 
     assert result["gate_passed"] is False
     assert result["warnings"]
+
+
+def test_apply_hallucination_gate_uses_custom_threshold_for_claim_status():
+    result = apply_hallucination_gate(
+        "Company revenue grew 20 percent in APAC.",
+        [{"text": "Company revenue grew in APAC", "source": "graph:a"}],
+        [],
+        threshold=0.5,
+    )
+
+    assert result["claims"][0]["confidence"] == 0.55
+    assert result["claims"][0]["verified"] is True
+    assert result["gate_passed"] is True
+    assert "low_confidence_claims" not in result["warnings"]
 
 
 def test_apply_hallucination_gate_empty_verdict():

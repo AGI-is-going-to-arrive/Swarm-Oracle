@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
 from app.config import settings
 from app.main import app
+from app.models import Scenario, ScenarioStatus
+from app.models.database import get_engine
+from app.models.prediction_journal import PredictionJournalEntry
+from app.services.journal_service import (
+    AlreadyResolvedError,
+    create_entry,
+    resolve_entry,
+)
 
 
 @pytest.fixture
@@ -155,3 +164,61 @@ def test_resolve_foreign_entry_returns_403(client, journal_enabled):
     )
 
     assert resolve_resp.status_code == 403
+
+
+def test_create_rejects_unowned_legacy_scenario(client, journal_enabled):
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            id="legacy-null-owner-scenario",
+            question="Legacy unowned scenario?",
+            status=ScenarioStatus.DONE,
+            user_id=None,
+        )
+        session.add(scenario)
+        session.commit()
+
+    resp = client.post(
+        "/api/me/journal",
+        headers=_headers("journal-user"),
+        json={
+            "scenario_id": "legacy-null-owner-scenario",
+            "question": "Can I attach to a legacy unowned scenario?",
+            "predicted_probability": 0.5,
+        },
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "SCENARIO_FORBIDDEN"
+
+
+def test_resolve_stale_session_cannot_overwrite_settled_entry():
+    with Session(get_engine()) as session:
+        entry = create_entry(
+            session,
+            user_id="race-user",
+            scenario_id=None,
+            question="Will the race settle once?",
+            predicted_probability=0.6,
+        )
+        entry_id = entry.id
+    assert entry_id is not None
+
+    first_session = Session(get_engine())
+    stale_session = Session(get_engine())
+    try:
+        assert first_session.get(PredictionJournalEntry, entry_id) is not None
+        assert stale_session.get(PredictionJournalEntry, entry_id) is not None
+
+        first = resolve_entry(first_session, entry_id, True)
+        assert first.actual_outcome is True
+
+        with pytest.raises(AlreadyResolvedError):
+            resolve_entry(stale_session, entry_id, False)
+    finally:
+        first_session.close()
+        stale_session.close()
+
+    with Session(get_engine()) as session:
+        final = session.get(PredictionJournalEntry, entry_id)
+    assert final is not None
+    assert final.actual_outcome is True

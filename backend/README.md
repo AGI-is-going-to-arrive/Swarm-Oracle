@@ -34,11 +34,13 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 |--------|------|-------------|
 | Scenarios | `app/api/scenarios.py` | Core CRUD, story, export, replay artifact, replay import, snapshot export/import |
 | Admin | `app/api/admin.py` | Preflight diagnostics and `/admin/setup` LLM connection test endpoints |
+| Agents | `app/api/agents.py` | custom Agent library/workshop, favorites, identity inspector, document import, persona export/import |
 | Quota | `app/api/quota.py` | Conversation and replay quota summary |
 | Campaign | `app/api/campaign.py` | finalize, profile, mastery, badges, daily-status, weekly-summary, `director-state`, `gameplay-state`, scenario summary |
 | Conversation | `app/api/conversation.py` | Node conversation thread/start/get/turn/abort with SSE assistant streaming |
 | Debate | `app/api/debate.py` | Debate live/result/import-replay/predict + Debate WebSocket |
 | Ending Room | `app/api/ending_rooms.py` | Oracle Chambers / roundtable room、thread、user-turn、result 与 ending-room WebSocket |
+| Journal | `app/api/journal.py` | Personal prediction journal create/list/resolve and calibration data |
 | Predictions | `app/api/predictions.py` | Scenario prediction and leaderboard |
 | Interventions | `app/api/interventions.py` | Standard / retrospective / batch intervention |
 | Social | `app/api/social.py` | Social media copy generation |
@@ -61,8 +63,16 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | `GET` | `/api/quota/summary` | Conversation/replay quota summary for UI quota badges |
 | `GET` | `/api/admin/preflight` | SQLite/ChromaDB/LLM/web search/CORS/volume diagnostics |
 | `POST` | `/api/admin/test-llm` | Request-scoped LLM connection test for setup wizard |
+| `GET` | `/api/agents/identities` | List generated/custom Agent identities visible to the current user |
+| `POST` | `/api/agents/workshop` | Create a custom Agent with persona, domains, tier and decision bias |
+| `POST` | `/api/agents/from-document` | Create custom Agents from a bounded PDF upload |
+| `POST` | `/api/agents/import` | Import persona JSON as a new custom Agent |
+| `GET` | `/api/agents/identities/{id}/memories` | Read-only identity memory inspector |
 | `POST` | `/api/replay-artifact` | Persist replay payload and return short share id |
 | `GET` | `/api/replay-artifact/{id}` | Load replay payload |
+| `GET/POST` | `/api/me/journal` | List or create personal prediction journal entries |
+| `PATCH` | `/api/me/journal/{entry_id}/resolve` | Resolve one owned journal entry |
+| `GET` | `/api/me/calibration` | Return current-user calibration data |
 | `POST` | `/api/campaign/scenario/{id}/finalize` | Finalize campaign progress |
 | `GET/PUT` | `/api/campaign/scenario/{id}/director-state` | Per-scenario director authority with `revision`-based optimistic concurrency |
 | `GET/PUT` | `/api/campaign/scenario/{id}/gameplay-state` | Per-scenario gameplay authority with `revision`-based optimistic concurrency |
@@ -86,13 +96,12 @@ source .venv/bin/activate
 python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py tests/test_llm_client.py tests/test_web_context.py tests/test_api.py -q
 ```
 
-- Latest local rerun in this session:
-  - `python -m pytest -q tests/test_simulation_cancel.py tests/test_quota_routes.py tests/test_decision_bias.py tests/test_preflight_cli.py --tb=short`: `36 passed`
-  - touched-file `ruff check` for scenario cancel / quota / decision-bias / preflight files: pass
-  - `python -m pytest tests/test_snapshot_export.py tests/test_personality_drift.py -q`: `46 passed`
-  - touched-file `ruff check` for snapshot export / personality drift / scenarios / graphs files: pass
-  - `pytest -x -q`: `2581 passed, 3 skipped, 9 warnings`; the warnings are ResourceWarnings from `tests/test_web_context_integration.py`
-- Current release judgment uses targeted backend checks plus `/metrics`; detailed contract lives in `llmdoc/guides/development.md`.
+- Latest local backend verification for the current Sprint 5-6 hardening:
+  - `ruff check`: pass
+  - `python -m pytest -q --tb=short`: `2714 passed, 2 skipped, 9 warnings`
+  - touched Sprint 5-6 backend route/service/model tests: `85 passed`
+  - journal ownership regression tests: `8 passed`
+- Current release judgment still lives in `llmdoc/guides/development.md`; this file only keeps the latest backend headline.
 
 ## Runtime Notes
 
@@ -117,6 +126,7 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - Scenario WebSocket capacity is now enforced against `registered + pending-auth` connections together, and the pending slot is reserved before `accept()`, so concurrent handshakes can no longer oversell `MAX_WS_PER_SCENARIO`.
 - `app/api/ws.py` now also exposes `/ws/agent-conversation/{thread_id}`; it reuses the shared first-frame auth / pending-auth budget path, returns `4404` when the feature is off or the thread is missing, and keeps capacity scoped to the owning scenario instead of multiplying by thread count.
 - `scenario_deletion.py` + `conversation_service.py` now mark active node-conversation turns as `scenario_deleted` inside the delete transaction, stage the affected turn ids in `session.info`, and let the delete endpoint drain that list only after commit; rollback no longer leaks a fake terminal delete event to the client.
+- `scenario_deletion.py` now keeps personal journal history when a scenario is hard-deleted by setting matching journal `scenario_id` values to `NULL`; prediction rows are still deleted with the scenario.
 - `DELETE /api/conversation/{thread_id}/active` now prefers waking the live stream task before falling back to direct CAS, so already-streamed partial text is not dropped by a route-level race.
 - Bootstrap-preclaimed node conversation turns now re-check the row status and cancel flag before the first `turn_started`; if the turn was already aborted they stay silent, and if the scenario was deleted they emit the final `SCENARIO_DELETED` error directly instead of leaking a stale start event.
 - Conversation SSE terminal fallback now emits `turn_error(code=LLM_5XX)` for generic provider-side failures instead of the older `STREAM_FAILED` bucket.
@@ -131,6 +141,8 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - Conversation origins are scoped to the same scenario; a cross-scenario `origin_branch_id` is treated as not found instead of leaking another scenario's transcript into the prompt context.
 - Snapshot export/import is guarded by `FEATURE_SNAPSHOT_EXPORT`. Export omits private owner data by default and strips common secret fields; import rejects path traversal, symlinks, suspicious compression ratios, checksum mismatches, and files over the 50 MB upload cap.
 - Personality drift is guarded by `FEATURE_AGENT_IDENTITY`. It is deterministic warning data for the UI, not a verdict gate.
+- Persona import/export is guarded by `FEATURE_PERSONA_EXPORT`. Exported persona text is unwrapped from the local untrusted-data wrapper; import creates a new custom identity for the caller and re-enters the normal custom-Agent creation path.
+- Prediction Journal is guarded by `FEATURE_PREDICTION_JOURNAL`. Entries are scoped to the current user; scenario-linked entries require scenario ownership, and resolve uses a conditional update so stale or repeated resolves return `409`.
 
 ## Environment Variables
 

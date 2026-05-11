@@ -201,9 +201,8 @@ _NUMERIC_RE = re.compile(r"\d")
 _PERCENT_RE = re.compile(r"\d+\s*%|\d+\s*percent|百分之|个百分点")
 # Treat 4-digit years as a strong temporal anchor.
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
-# An English capitalized word that isn't sentence-initial — weak proper-noun
-# heuristic. We inspect the trimmed sentence.
-_CAPITAL_WORD_RE = re.compile(r"(?<!^)(?<!\s)\b[A-Z][a-zA-Z]{2,}\b")
+# English capitalized/all-caps tokens used as a weak proper-noun heuristic.
+_CAPITAL_WORD_RE = re.compile(r"\b[A-Z][a-zA-Z]{2,}\b")
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -371,9 +370,18 @@ def _classify_claim(sentence: str) -> str | None:
         return "temporal"
     if _contains_any(sentence, CAUSAL_TOKENS):
         return "causal"
-    if _CAPITAL_WORD_RE.search(sentence):
+    if _has_non_initial_capitalized_word(sentence):
         return "entity"
     return None
+
+
+def _has_non_initial_capitalized_word(sentence: str) -> bool:
+    """Detect entity-ish capitalized tokens while ignoring the first word."""
+    for match in _CAPITAL_WORD_RE.finditer(sentence.strip()):
+        if match.start() == 0:
+            continue
+        return True
+    return False
 
 
 # ── Public API ──────────────────────────────────────────────────────────────
@@ -474,6 +482,7 @@ def verify_claims(
     claims: list[dict[str, Any]],
     graph_evidence: list[dict[str, Any]] | None,
     web_evidence: list[dict[str, Any]] | None,
+    threshold: float = DEFAULT_THRESHOLD,
 ) -> list[dict[str, Any]]:
     """Cross-verify each claim against graph + web evidence pools.
 
@@ -550,7 +559,7 @@ def verify_claims(
             confidence = min(confidence, CONFIDENCE_CONTRADICTION)
             verified = False
         else:
-            verified = confidence >= DEFAULT_THRESHOLD
+            verified = confidence >= threshold
 
         # If no supporting evidence at all, normalize confidence to a
         # below-threshold value so callers can distinguish "no signal" from
@@ -611,7 +620,7 @@ def apply_hallucination_gate(
             "threshold": threshold,
         }
 
-    verified = verify_claims(claims, graph_evidence, web_evidence)
+    verified = verify_claims(claims, graph_evidence, web_evidence, threshold=threshold)
 
     # Aggregate stats. `overall_confidence` is the mean per-claim confidence.
     confidences = [float(c.get("confidence") or 0.0) for c in verified]

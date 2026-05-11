@@ -371,6 +371,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .leaderboard-table tbody tr {
+    animation: none;
+  }
+
   .leaderboard-skeleton-row {
     animation: none;
   }

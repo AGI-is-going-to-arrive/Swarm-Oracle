@@ -482,7 +482,7 @@ export default function LeaderboardView() {
         <div className="leaderboard-empty">
           <p className="result-error">{errorMessage}</p>
           <button className="btn" onClick={load}>
-            ↺ Retry
+            ↺ {t('common.retry')}
           </button>
         </div>
       ) : entries.length === 0 ? (

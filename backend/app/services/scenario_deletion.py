@@ -53,6 +53,7 @@ from app.models import (
     Scenario,
     ScenarioCheckpoint,
 )
+from app.models.prediction_journal import PredictionJournalEntry
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +250,14 @@ def delete_scenario_cascade(
         )
     session.execute(sa_delete(EndingRoom).where(EndingRoom.scenario_id == scenario_id))
     session.execute(sa_delete(Prediction).where(Prediction.scenario_id == scenario_id))
+    # Nullify journal FK so scenario hard-delete does not fail under FK enforcement.
+    from sqlalchemy import update as sa_update
+
+    session.execute(
+        sa_update(PredictionJournalEntry)
+        .where(PredictionJournalEntry.scenario_id == scenario_id)
+        .values(scenario_id=None)
+    )
     session.execute(
         sa_delete(ReplayArtifact).where(
             ReplayArtifact.source_scenario_id == scenario_id

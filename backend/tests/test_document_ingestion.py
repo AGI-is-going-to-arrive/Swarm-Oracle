@@ -411,3 +411,54 @@ async def test_from_document_creates_agent_identities_from_stubbed_personas(
     assert identity is not None
     assert identity.user_id == TEST_USER
     assert identity.kind == "custom"
+
+
+async def test_from_document_returns_500_when_identity_persistence_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(agents_api.settings, "FEATURE_CUSTOM_AGENTS", True)
+    monkeypatch.setattr(
+        agents_api,
+        "extract_pdf_text",
+        lambda _blob, **_kwargs: "Alice document",
+    )
+    monkeypatch.setattr(agents_api, "chunk_document", lambda _text: ["Alice document"])
+
+    async def fake_extract_entities(_chunks, _llm_call_fn):
+        return [{
+            "name": "Alice",
+            "role": "strategist",
+            "traits": ["careful"],
+            "perspective": "risk",
+        }]
+
+    async def fake_generate_persona(entity, _llm_call_fn):
+        return {
+            "name": entity["name"],
+            "role": entity["role"],
+            "persona": "A careful strategist.",
+            "decision_bias": {
+                "caution": 0.8,
+                "optimism": 0.4,
+                "conservatism": 0.6,
+                "risk_tolerance": 0.3,
+                "creativity": 0.5,
+            },
+        }
+
+    def fail_create_custom_agent(**_kwargs):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(agents_api, "extract_entities", fake_extract_entities)
+    monkeypatch.setattr(agents_api, "generate_persona_from_entity", fake_generate_persona)
+    monkeypatch.setattr(agents_api, "create_custom_agent", fail_create_custom_agent)
+
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/agents/from-document",
+            params={"user_id": TEST_USER},
+            files={"file": ("agents.pdf", b"%PDF-stub", "application/pdf")},
+        )
+
+    assert resp.status_code == 500

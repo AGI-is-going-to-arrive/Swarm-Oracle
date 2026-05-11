@@ -123,6 +123,7 @@ async def test_marking_another_users_identity_returns_404(client: AsyncClient):
     )
 
     assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "AGENT_IDENTITY_NOT_FOUND"
     assert _get_identity("favorite-foreign-mark").is_favorite is False
 
 
@@ -135,6 +136,7 @@ async def test_unmarking_another_users_identity_returns_404(client: AsyncClient)
     )
 
     assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "AGENT_IDENTITY_NOT_FOUND"
     assert _get_identity("favorite-foreign-unmark").is_favorite is True
 
 

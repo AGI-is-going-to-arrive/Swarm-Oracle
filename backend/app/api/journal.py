@@ -21,6 +21,7 @@ from app.models import Scenario
 from app.models.database import get_engine
 from app.models.prediction_journal import PredictionJournalEntry
 from app.services.journal_service import (
+    AlreadyResolvedError,
     create_entry,
     get_calibration_data,
     get_user_journal,
@@ -134,7 +135,7 @@ def _validate_owned_scenario(
     scenario = session.exec(select(Scenario).where(Scenario.id == scenario_id)).first()
     if scenario is None:
         raise api_error(404, "SCENARIO_NOT_FOUND", "Scenario not found")
-    if scenario.user_id is not None and scenario.user_id != user_id:
+    if scenario.user_id != user_id:
         raise api_error(403, "SCENARIO_FORBIDDEN", "Scenario does not belong to this user")
 
 
@@ -187,13 +188,13 @@ async def resolve_journal_entry(
             raise api_error(403, "JOURNAL_ENTRY_FORBIDDEN", "Journal entry belongs to another user")
         try:
             resolved = resolve_entry(session, entry_id, body.actual_outcome)
+        except AlreadyResolvedError as exc:
+            raise api_error(
+                409,
+                "JOURNAL_ENTRY_ALREADY_RESOLVED",
+                "Journal entry is already resolved",
+            ) from exc
         except ValueError as exc:
-            if "already resolved" in str(exc):
-                raise api_error(
-                    409,
-                    "JOURNAL_ENTRY_ALREADY_RESOLVED",
-                    "Journal entry is already resolved",
-                ) from exc
             raise api_error(404, "JOURNAL_ENTRY_NOT_FOUND", str(exc)) from exc
     return _entry_to_response(resolved)
 

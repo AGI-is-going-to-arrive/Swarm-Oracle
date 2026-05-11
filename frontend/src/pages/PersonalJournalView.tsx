@@ -74,9 +74,7 @@ export function PersonalJournalView() {
   // Journal capability is optional — if the backend exposes a flag we honour
   // it, otherwise we render unconditionally. Falling back to truthy when the
   // server hasn't added the key yet keeps the page usable in dev.
-  const capability = useCapabilityCheck(
-    'prediction_journal' as Parameters<typeof useCapabilityCheck>[0],
-  );
+  const capability = useCapabilityCheck('prediction_journal');
   const { loading: capLoading, enabled: capEnabled, error: capError } = capability;
   // Treat capability probe failures as "open" rather than blocking the page
   // outright — the journal endpoints have their own auth gate.
@@ -444,6 +442,16 @@ export function PersonalJournalView() {
                 {t('journal.roster.title', 'Agent Roster')}
               </h2>
             </header>
+            {/*
+              TODO(sprint-7): wire AgentRosterPanel to real data.
+              Needs: per-identity growth events from
+              `GET /api/agents/identities/{id}/growth-events`
+              (see backend/app/api/agents.py). The panel currently
+              renders an empty state because no `events` / `identities`
+              props are passed. Owner of `agent_identity` capability
+              should aggregate the user's favorite/attached identities,
+              fan out the growth-events fetch, and pass them in.
+            */}
             <AgentRosterPanel />
           </section>
 
@@ -456,6 +464,17 @@ export function PersonalJournalView() {
                 {t('journal.worldline.title', 'Worldline Map')}
               </h2>
             </header>
+            {/*
+              TODO(sprint-7): wire WorldlineMapMini to real data.
+              Needs: branch seeds for the user's recent scenarios.
+              Source = `Scenario.branches` (see backend/app/models)
+              flattened into `WorldlineBranchSeed[]`
+              ({ id, parentId, label?, depth? }). No journal-scoped
+              endpoint exists yet — either reuse `getScenario` per
+              recent scenario (N small fetches) or add a thin
+              `/api/journal/branches` aggregate. Until then this is
+              a placeholder thumbnail.
+            */}
             <WorldlineMapMini />
             <p className="journal-card__caption">
               {t(
