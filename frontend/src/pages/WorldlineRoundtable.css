@@ -296,6 +296,7 @@
   padding: 10px 12px;
   border-radius: 12px;
   background: var(--bg-elevated);
+  -webkit-backdrop-filter: none;
   backdrop-filter: none;
   border: 1px solid var(--border-subtle);
 }
@@ -1655,6 +1656,7 @@ h3.roundtable-phase-divider {
     border-radius: 14px;
     background: var(--bg-surface);
     border: 1px solid var(--border-subtle);
+    -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
 
@@ -1931,6 +1933,7 @@ h3.roundtable-phase-divider {
     padding-top: 0;
     border-top: none;
     background: transparent;
+    -webkit-backdrop-filter: none;
     backdrop-filter: none;
     border-radius: 0;
   }
@@ -1941,8 +1944,10 @@ h3.roundtable-phase-divider {
     padding-inline: 0;
     padding-bottom: max(6px, env(safe-area-inset-bottom));
     z-index: 2;
+    background: linear-gradient(180deg, rgba(253, 252, 248, 0.92), rgba(253, 252, 248, 0.98));
     background: linear-gradient(180deg, oklch(99% 0.002 80 / 0.92), oklch(99% 0.002 80 / 0.98));
     border-top: 1px solid var(--border-default);
+    -webkit-backdrop-filter: blur(8px);
     backdrop-filter: blur(8px);
   }
 

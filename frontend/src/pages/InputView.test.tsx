@@ -1546,6 +1546,36 @@ describe('InputView IME composition guard and confirm launch dialog', () => {
     getChallengeProgressMock.mockReturnValue(null);
   });
 
+  it('marks advanced mode toggle buttons with aria-pressed', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await openAdvancedSettings(user);
+
+    expect(screen.getByRole('button', { name: /home\.mode_blackboard/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /home\.mode_raw/i })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: /home\.viz_classic/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /home\.viz_theater/i })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: /home\.reasoning_off/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /home\.runtime_preset_balanced/i })).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(screen.getByRole('button', { name: /home\.mode_raw/i }));
+    await user.click(screen.getByRole('button', { name: /home\.viz_theater/i }));
+    await user.click(screen.getByRole('button', { name: /home\.reasoning_high/i }));
+    await user.click(screen.getByRole('button', { name: /home\.runtime_preset_aggressive/i }));
+
+    expect(screen.getByRole('button', { name: /home\.mode_blackboard/i })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: /home\.mode_raw/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /home\.viz_classic/i })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: /home\.viz_theater/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /home\.reasoning_high/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /home\.runtime_preset_aggressive/i })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   // ── IME Composition Guard ──────────────────
 
   it('does not submit when Enter pressed during IME composition (isComposing=true)', async () => {
@@ -1735,6 +1765,39 @@ describe('InputView IME composition guard and confirm launch dialog', () => {
           question: 'What if confirm runs the sim?',
         }),
       );
+    });
+  });
+
+  it('announces the submitting overlay as busy status', async () => {
+    const user = userEvent.setup();
+    let resolveSimulation: (id: string) => void = () => {};
+    startSimulationMock.mockImplementationOnce(
+      () => new Promise<string>((resolve) => {
+        resolveSimulation = resolve;
+      }),
+    );
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
+    await user.type(textarea, 'What if loading overlay speaks?');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'home.submit' }));
+
+    const overlay = await screen.findByRole('status', { name: 'home.loading_title' });
+    expect(overlay).toHaveClass('loading-overlay');
+    expect(overlay).toHaveAttribute('aria-live', 'polite');
+    expect(overlay).toHaveAttribute('aria-busy', 'true');
+    expect(overlay).toHaveAttribute('aria-describedby', 'loading-overlay-tip');
+
+    await act(async () => {
+      resolveSimulation('scenario-loading');
     });
   });
 

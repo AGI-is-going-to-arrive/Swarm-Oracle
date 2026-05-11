@@ -97,10 +97,11 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 ```
 
 - Latest local backend verification for the current Sprint 5-6 hardening:
-  - `ruff check`: pass
-  - `python -m pytest -q --tb=short`: `2714 passed, 2 skipped, 9 warnings`
-  - touched Sprint 5-6 backend route/service/model tests: `85 passed`
-  - journal ownership regression tests: `8 passed`
+  - `ruff check app tests`: pass
+  - `python -m pytest -q --tb=short`: `2733 passed, 3 skipped`
+  - journal / hallucination gate / debate result metadata focused rerun: `33 passed`
+  - document ingestion focused rerun: `25 passed`
+  - web context integration warning regression: `9 passed`
 - Current release judgment still lives in `llmdoc/guides/development.md`; this file only keeps the latest backend headline.
 
 ## Runtime Notes
@@ -142,7 +143,9 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - Snapshot export/import is guarded by `FEATURE_SNAPSHOT_EXPORT`. Export omits private owner data by default and strips common secret fields; import rejects path traversal, symlinks, suspicious compression ratios, checksum mismatches, and files over the 50 MB upload cap.
 - Personality drift is guarded by `FEATURE_AGENT_IDENTITY`. It is deterministic warning data for the UI, not a verdict gate.
 - Persona import/export is guarded by `FEATURE_PERSONA_EXPORT`. Exported persona text is unwrapped from the local untrusted-data wrapper; import creates a new custom identity for the caller and re-enters the normal custom-Agent creation path.
-- Prediction Journal is guarded by `FEATURE_PREDICTION_JOURNAL`. Entries are scoped to the current user; scenario-linked entries require scenario ownership, and resolve uses a conditional update so stale or repeated resolves return `409`.
+- Prediction Journal is guarded by `FEATURE_PREDICTION_JOURNAL`. Entries are scoped to the current user; scenario-linked entries require scenario ownership, resolve uses a conditional update so stale or repeated resolves return `409`, and calibration reads use the `user_id / resolved_at / actual_outcome` index from Alembic `029`.
+- Hallucination Gate is guarded by `FEATURE_HALLUCINATION_GATE`. It stays warning-only, writes verdict metadata when enabled, and its contradiction check now handles common Chinese negators without treating neutral compounds like `无论 / 无疑` as contradictions.
+- Debate result payloads expose stored `hallucination_gate` metadata when verdict post-processing wrote it into `score_breakdown.metadata`.
 
 ## Environment Variables
 

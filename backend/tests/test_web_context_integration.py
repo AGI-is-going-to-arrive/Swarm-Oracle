@@ -28,9 +28,7 @@ def client():
 
 def _noop_background(*args, **kwargs):
     """Replacement for parse_and_run_background that does nothing."""
-    async def _noop(*a, **kw):
-        pass
-    return _noop(*(), **{})
+    return None
 
 
 def _mock_family_context(*ready_families: str) -> dict[str, dict[str, object]]:

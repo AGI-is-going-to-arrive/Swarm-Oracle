@@ -79,13 +79,15 @@ React + TypeScript frontend for SwarmOracle.
 - `AgentAttachPanel.tsx`
   homepage custom Agent picker; renders persona, domains, and decision bias as React text, caps selection at 5, and keeps loading/error/retry states visible
 - `AgentLibrary.tsx / AgentCard.tsx`
-  Agent library surface with owned-identity favorites, pressed-button filtering, profile/edit/export actions, and Unicode-safe long-persona truncation
+  Agent library surface with owned-identity favorites, pressed-button filtering, profile/edit/export actions, Unicode-safe long-persona truncation, and localized retry states for capability/favorite failures
 - `AgentWorkshopView.tsx / DocumentUploader.tsx`
   custom Agent form; manual/document tabs use real tab semantics, and the document tab shows bounded PDF upload progress plus structured errors
 - `PersonaExportImport.tsx`
-  persona import/export UI; import success uses the string `identity_id` returned by the backend and refreshes the library
+  persona import/export UI; import success uses the string `identity_id` returned by the backend, refreshes the library, and does not show raw backend errors to users
 - `IdentityInspectorView.tsx`
-  clears stale header state when identity ids change and keeps empty / infrastructure-error / loaded memory states distinct
+  clears stale header state when identity ids change, ignores late memory responses, and keeps empty / infrastructure-error / loaded memory states distinct
+- `EducationTemplatePicker.tsx`
+  feature-gated template dialog with category/difficulty filters, focus trap, empty/retry states, and localized load errors
 - `SetupWizardView.tsx / components/Setup/*`
   local provider setup flow for `/admin/setup`; provider preset selection, API/base URL entry, and `/api/admin/test-llm` connection testing
 - `OnboardingGuide.tsx / useOnboardingState.ts`
@@ -99,9 +101,9 @@ React + TypeScript frontend for SwarmOracle.
 - `DecisionBiasSlider.tsx`
   five-axis Agent Workshop decision-bias control; the UI maps 0-100 sliders to the backend 0-1 payload
 - `PersonalJournalView.tsx / components/Journal/*`
-  journal page reads current-user journal/calibration data, resolves entries with visible result/Brier output, and keeps side panels as helper placeholders until Sprint 7 fills them with live data
+  journal page reads current-user journal/calibration data, resolves entries with visible result/Brier output, ignores stale refreshes, and keeps side panels as helper placeholders until Sprint 7 fills them with live data
 - `LeaderboardView.tsx`
-  segment filters sync to URL params; loading, empty, retry and row animation states are localized and respect reduced-motion settings
+  segment filters sync to URL params; loading, empty, retry and row animation states are localized, ignore stale responses, and respect reduced-motion settings
 - `uiPreferencesStore.ts`
   localStorage-backed ResultView Reader/Workbench preference
 - `experiments/phaser-custom/*`
@@ -188,10 +190,11 @@ npm run build:spike:phaser-custom
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Latest Sprint 5-6 frontend verification:
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
-  - full vitest: `183 files / 1965 tests / 0 failed`
+  - full vitest: `185 files / 1981 tests / 0 failed`
+  - Sprint 5-6 focused rerun: `7 files / 104 tests passed`
   - `npm run build`: pass, including performance budgets
-  - i18n parity: `en=2354 zh=2354`
-  - manual Chromium spot-check covered `/`, `/me/journal`, `/agents`, `/agents/new`, `/agents/identities/{id}/memories`, `/leaderboard`, and `/admin/setup` on desktop plus 375px mobile
+  - i18n parity: `en=2372 zh=2372`
+  - browser smoke covered `/`, `/agents`, `/agents/new`, `/leaderboard`, `/admin/setup`, `/me/journal`, and `/agents/identities/:id/memories` in Chromium / Firefox / WebKit on desktop and 375px mobile, with no JS console errors or horizontal overflow
 - Older Sprint 0-4 rows below are historical artifacts, not the current pass-count source.
 - Latest Sprint 0-2 browser matrix:
   - browser matrix: `72/72 PASS` at `output/e2e/sprint0-2-review-20260510-browser/summary.json`

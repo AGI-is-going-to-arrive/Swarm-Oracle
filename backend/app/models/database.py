@@ -620,6 +620,7 @@ def _init_db_lightweight() -> None:
                 ["source_scenario_id"],
             )
             _migrate_create_index(conn, "debate", "ix_debate_user_id", ["user_id"])
+            _migrate_prediction_journal_calibration_index(conn)
 
             _migrate_normalize_enum_values(conn, "ending_room", "room_type", EndingRoomType)
             _migrate_normalize_enum_values(conn, "ending_room", "status", EndingRoomStatus)
@@ -689,6 +690,7 @@ def init_db():
                     "uq_ending_room_scope",
                     list(_ENDING_ROOM_SCOPE_UNIQUE_COLUMNS),
                 )
+                _migrate_prediction_journal_calibration_index(conn)
         except Exception as exc:
             logger.warning("SQLite post-upgrade index repair failed (best-effort): %s", exc)
 
@@ -734,6 +736,18 @@ def _migrate_table_exists(cursor, table: str) -> bool:
         raise ValueError(f"Unsafe SQL identifier rejected: {table!r}")
     result = _sqlite_exec(cursor, f"PRAGMA table_info({table})")
     return bool(result.fetchall())
+
+
+def _migrate_prediction_journal_calibration_index(cursor) -> None:
+    """Ensure resolved journal calibration queries have a SQLite index."""
+    if not _migrate_table_exists(cursor, "prediction_journal_entries"):
+        return
+    _migrate_create_index(
+        cursor,
+        "prediction_journal_entries",
+        "ix_prediction_journal_entries_user_resolved_at_outcome",
+        ["user_id", "resolved_at", "actual_outcome"],
+    )
 
 
 def _migrate_list_unique_index_columns(cursor, table: str) -> set[tuple[str, ...]]:

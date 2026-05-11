@@ -200,17 +200,22 @@
   - identity inspector 会先校验 owner，再读取最多 100 条 memory；向量库异常会落 `error` 字段，不把只读 inspector 变成 fatal
   - PDF 文档生成 Agent 只接受 PDF，上传上限 25 MB；空文件、非法 PDF、无可抽取文本和超大文件都会返回结构化错误
   - PDF 解析最多读取 200 页 / 100000 字符，并带 30 秒解析超时；超时返回结构化错误，不让上传请求无限卡住
+  - PDF 文本进入 LLM prompt 前会包进 untrusted text block；实体抽取会跳过 malformed JSON / 非对象条目，超大 LLM JSON response 会被拒绝
   - 文档抽取阶段只会跳过业务校验失败的 persona；持久化等运行时异常不会伪装成 `201 + agents_created: 0`
   - persona export/import 使用 `schema_version=1`；bulk export 最多 20 个；import 会创建新的 custom identity，不覆盖旧数据
   - persona import 会把 decision bias 归一化到 `caution / optimism / conservatism / risk_tolerance / creativity` 5 个 key；boolean、`NaN/Inf` 或非数字值落到默认值，超出 `0..1` 的数字会被 clamp
 - Prediction Journal 当前由 `prediction_journal_entry` 持久化：
   - 迁移 `027_prediction_journal` 创建 journal 表
+  - 迁移 `029_prediction_journal_calibration_index` 给 `user_id / resolved_at / actual_outcome` 增加 calibration 查询索引
   - list/create/resolve/calibration 都按当前 user scope 查询
   - create 绑定 `scenario_id` 时会校验该 scenario 属于当前用户；旧的无 owner scenario 不会被任意用户认领
   - resolve 使用条件更新收口；已解析 entry 或并发 stale resolve 会返回 409，不会重复改写结果
+  - calibration 聚合会限制读取条数，避免一次把当前用户历史全量扫进内存
 - `FEATURE_HALLUCINATION_GATE` 当前只控制 verdict 后处理：
   - 空 verdict、没有可校验 claim、低置信度或矛盾 claim 都只进入 warning metadata
   - claim 是否标记为 verified 会使用调用方传入的 `threshold`
+  - 矛盾检测会识别常见中英文否定；中文里 `无/无法/无力` 这类谓词否定会计入，`无论/无疑` 这类中性组合不会被当成否定
+  - Debate result payload 会在存在时回显 `score_breakdown.metadata.hallucination_gate`
   - gate 不会阻断 verdict，也不会把 LLM 失败提升成业务失败
 - `GET /api/leaderboard` 当前保持旧兼容：不带 segment filter 时仍返回 leaderboard 数组；带 `scenario_type / date_from / date_to / min_agents / max_agents` 任一筛选时，才返回 `entries + segment_metadata`。
 - main simulation 当前已补 continuity preflight/override 链路：
@@ -397,10 +402,10 @@
 
 - Sprint 5-6 backend 本 session 已跑：
   - `ruff check`：通过
-  - `python -m pytest -q --tb=short`：`2714 passed, 2 skipped, 9 warnings`
-  - Sprint 5-6 touched-test rerun：`85 passed`
-  - journal ownership 追加回归：`8 passed`
-  - 仍有 `tests/test_web_context_integration.py` 相关 `_noop_background` coroutine warning，未影响测试通过
+  - `python -m pytest -q --tb=short`：`2733 passed, 3 skipped`
+  - journal / hallucination gate / debate result metadata focused rerun：`33 passed`
+  - document ingestion focused rerun：`25 passed`
+  - web context integration warning regression：`9 passed`
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：
   - `tests/test_causal_graph.py -q`：`68 passed`

@@ -25,9 +25,10 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
   background: oklch(0% 0 0 / 0.45);
-  backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
   animation: edu-overlay-fade 0.18s ease-out;
 }
 
@@ -40,6 +41,9 @@
   background: var(--bg-elevated, #ffffff);
   color: var(--text-primary, #0f172a);
   border-radius: var(--edu-panel-radius);
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.18),
+    0 0 0 1px var(--border-subtle, rgba(15, 23, 42, 0.08));
   box-shadow:
     0 20px 50px oklch(0% 0 0 / 0.18),
     0 0 0 1px var(--border-subtle, rgba(15, 23, 42, 0.08));
@@ -93,6 +97,7 @@
   gap: 16px;
   padding: 16px 22px;
   border-bottom: 1px solid var(--border-subtle, rgba(15, 23, 42, 0.06));
+  background: var(--bg-elevated, #ffffff);
   background: color-mix(in oklab, var(--bg-elevated, #ffffff) 96%, var(--bg-base, #f8fafc) 4%);
 }
 
@@ -200,7 +205,9 @@
 }
 
 .edu-template-card:hover {
+  border-color: var(--color-primary, #3b82f6);
   border-color: color-mix(in oklab, var(--color-primary, #3b82f6) 32%, var(--border-default, rgba(15, 23, 42, 0.16)));
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.08);
   box-shadow: 0 12px 24px oklch(0% 0 0 / 0.08);
   transform: translateY(-2px);
 }
@@ -247,6 +254,7 @@
 .edu-template-card__tag {
   padding: 2px 8px;
   border-radius: 999px;
+  background: rgba(59, 130, 246, 0.1);
   background: color-mix(in oklab, var(--color-primary, #3b82f6) 10%, transparent);
   color: var(--color-primary, #3b82f6);
   font-size: 11px;

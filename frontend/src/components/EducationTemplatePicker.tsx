@@ -31,15 +31,15 @@ function isKnownDifficulty(value: string): value is Difficulty {
   return (DIFFICULTY_ORDER as readonly string[]).includes(value);
 }
 
-function getLocalizedTitle(tpl: EducationTemplate, isZh: boolean): string {
-  if (isZh) {
+function getLocalizedTitle(tpl: EducationTemplate, language: string): string {
+  if (language.startsWith('zh')) {
     return tpl.title_zh || tpl.title_en || tpl.id;
   }
   return tpl.title_en || tpl.title_zh || tpl.id;
 }
 
-function getLocalizedDescription(tpl: EducationTemplate, isZh: boolean): string {
-  if (isZh) {
+function getLocalizedDescription(tpl: EducationTemplate, language: string): string {
+  if (language.startsWith('zh')) {
     return tpl.description_zh || tpl.description_en || '';
   }
   return tpl.description_en || tpl.description_zh || '';
@@ -52,9 +52,10 @@ export function EducationTemplatePicker({
   templates: templatesProp,
 }: Props) {
   const { t, i18n } = useTranslation();
-  const isZh = i18n.language.startsWith('zh');
 
   const [templates, setTemplates] = useState<EducationTemplate[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string>('');
   const [difficultyFilter, setDifficultyFilter] = useState<string>('');
@@ -73,15 +74,16 @@ export function EducationTemplatePicker({
     onClose();
   }, [onClose, resetFilters]);
 
-  // Fetch templates when opened (unless templates injected via prop for tests).
-  useEffect(() => {
-    if (!open) return;
+  const fetchTemplates = useCallback(() => {
     if (templatesProp !== undefined) {
       return;
     }
 
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
+    setLoading(true);
+    setLoaded(false);
+    setError(null);
 
     listEducationTemplates()
       .then((res) => {
@@ -91,10 +93,24 @@ export function EducationTemplatePicker({
       })
       .catch((err: unknown) => {
         if (requestId !== requestIdRef.current) return;
+        if (err instanceof Error) {
+          console.debug('[EducationTemplatePicker] Failed to load templates', err);
+        }
         setTemplates([]);
-        setError(err instanceof Error ? err.message : 'Failed to load templates');
+        setError('education.templates_error');
+      })
+      .finally(() => {
+        if (requestId !== requestIdRef.current) return;
+        setLoading(false);
+        setLoaded(true);
       });
-  }, [open, templatesProp]);
+  }, [templatesProp]);
+
+  // Fetch templates when opened (unless templates injected via prop for tests).
+  useEffect(() => {
+    if (!open) return;
+    fetchTemplates();
+  }, [fetchTemplates, open]);
 
   // Escape closes the picker.
   useEffect(() => {
@@ -149,6 +165,9 @@ export function EducationTemplatePicker({
   );
 
   if (!open) return null;
+
+  const hasLoadedTemplates = templatesProp !== undefined || loaded;
+  const showLoading = templatesProp === undefined && (loading || (!loaded && !error));
 
   return (
     <div
@@ -228,21 +247,37 @@ export function EducationTemplatePicker({
         </div>
 
         <div className="edu-picker-body">
-          {error && (
-            <p className="edu-picker-error" role="alert">
-              {error}
+          {showLoading && (
+            <p className="edu-picker-status" role="status">
+              {t('education.templates_loading', 'Loading templates…')}
             </p>
           )}
-          {!error && filtered.length === 0 && (
+          {!showLoading && error && (
+            <div className="edu-picker-error" role="alert">
+              <p>
+                {error === 'education.templates_error'
+                  ? t('education.templates_error', 'Could not load templates. Please retry.')
+                  : error}
+              </p>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={fetchTemplates}
+              >
+                {t('common.retry', 'Retry')}
+              </button>
+            </div>
+          )}
+          {!showLoading && !error && hasLoadedTemplates && filtered.length === 0 && (
             <p className="edu-picker-empty" role="status">
               {t('education.no_templates')}
             </p>
           )}
-          {!error && filtered.length > 0 && (
+          {!showLoading && !error && filtered.length > 0 && (
             <div className="edu-picker-grid" data-testid="edu-picker-grid">
               {filtered.map((tpl) => {
-                const title = getLocalizedTitle(tpl, isZh);
-                const description = getLocalizedDescription(tpl, isZh);
+                const title = getLocalizedTitle(tpl, i18n.language);
+                const description = getLocalizedDescription(tpl, i18n.language);
                 const difficultyClass = isKnownDifficulty(tpl.difficulty)
                   ? `edu-difficulty-badge--${tpl.difficulty}`
                   : 'edu-difficulty-badge--unknown';

@@ -112,9 +112,12 @@ NEGATION_TOKENS: tuple[str, ...] = (
     "没",
     "没有",
     "未",
+    "无",
     "并未",
     "并非",
     "绝非",
+    "无法",
+    "无力",
     "not",
     "no",
     "never",
@@ -203,6 +206,27 @@ _PERCENT_RE = re.compile(r"\d+\s*%|\d+\s*percent|百分之|个百分点")
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 # English capitalized/all-caps tokens used as a weak proper-noun heuristic.
 _CAPITAL_WORD_RE = re.compile(r"\b[A-Z][a-zA-Z]{2,}\b")
+_CJK_SINGLE_NEGATORS = {"不", "没", "未", "无"}
+_CJK_NEGATION_EXCEPTIONS = (
+    "不仅",
+    "不只",
+    "不但",
+    "不过",
+    "不可避免",
+    "不可或缺",
+    "不可逆",
+    "不确定",
+    "不论",
+    "不管",
+    "无论",
+    "无疑",
+)
+_CJK_NEGATION_DELIMITERS = frozenset(
+    " \t\r\n,.;:!?，。；：！？、()[]{}（）【】「」『』“”\"'"
+)
+_CJK_NEGATION_PREDICATE_HINTS = frozenset(
+    "是会能可应需须将再在有增涨降跌减支反认同采纳采用包含构成成立发生导致造成"
+)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -324,6 +348,26 @@ def _has_hedge(text: str) -> bool:
     return _contains_any(text, HEDGE_TOKENS)
 
 
+def _has_cjk_single_negation(norm: str, token: str) -> bool:
+    """Detect single-character CJK negators without matching neutral compounds."""
+    start = 0
+    while True:
+        idx = norm.find(token, start)
+        if idx == -1:
+            return False
+        if any(norm.startswith(exception, idx) for exception in _CJK_NEGATION_EXCEPTIONS):
+            start = idx + len(token)
+            continue
+
+        prev_char = norm[idx - 1] if idx > 0 else ""
+        next_char = norm[idx + len(token)] if idx + len(token) < len(norm) else ""
+        preceded_by_boundary = not prev_char or prev_char in _CJK_NEGATION_DELIMITERS
+        followed_by_predicate = bool(next_char and next_char in _CJK_NEGATION_PREDICATE_HINTS)
+        if preceded_by_boundary or followed_by_predicate:
+            return True
+        start = idx + len(token)
+
+
 def _has_negation(text: str) -> bool:
     """Detect negation cues robust to CN/EN quirks (e.g., "did not", "n't")."""
     norm = _normalize(text)
@@ -334,6 +378,9 @@ def _has_negation(text: str) -> bool:
             # matching "no" inside "now". CJK negators fall through and use
             # plain substring matching below.
             if re.search(rf"(?:^|\W){re.escape(tok_l)}(?:\W|$)", norm):
+                return True
+        elif tok_l in _CJK_SINGLE_NEGATORS:
+            if _has_cjk_single_negation(norm, tok_l):
                 return True
         else:
             if tok_l in norm:
@@ -620,7 +667,24 @@ def apply_hallucination_gate(
             "threshold": threshold,
         }
 
-    verified = verify_claims(claims, graph_evidence, web_evidence, threshold=threshold)
+    graph_pool = list(graph_evidence or [])
+    web_pool = list(web_evidence or [])
+    if not graph_pool and not web_pool:
+        warnings.append("no_evidence_available")
+        return {
+            "claims": claims,
+            "overall_confidence": 0.0,
+            "warnings": warnings,
+            "gate_passed": False,
+            "threshold": threshold,
+            "stats": {
+                "claim_count": len(claims),
+                "contradictions": 0,
+                "unverified": 0,
+            },
+        }
+
+    verified = verify_claims(claims, graph_pool, web_pool, threshold=threshold)
 
     # Aggregate stats. `overall_confidence` is the mean per-claim confidence.
     confidences = [float(c.get("confidence") or 0.0) for c in verified]

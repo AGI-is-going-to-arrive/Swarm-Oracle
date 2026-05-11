@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 
+import anyio.to_process
 from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel, field_validator
 from sqlmodel import Session, select
@@ -62,7 +63,37 @@ router = APIRouter(
 ALLOWED_CUSTOM_AGENT_TIERS = {"CROWD", "IMPORTANT"}
 MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024
 DOCUMENT_UPLOAD_CHUNK_BYTES = 1024 * 1024
+PDF_PARSE_TIMEOUT_SECONDS = 30.0
+DOCUMENT_LLM_TIMEOUT_SECONDS = 60.0
 PDF_CONTENT_TYPES = {"application/pdf", "application/x-pdf"}
+_ORIGINAL_EXTRACT_PDF_TEXT = extract_pdf_text
+
+
+def _extract_pdf_text_sync(blob: bytes, max_pages: int, max_bytes: int) -> str:
+    return extract_pdf_text(blob, max_pages=max_pages, max_bytes=max_bytes)
+
+
+async def _extract_pdf_text_with_timeout(blob: bytes) -> str:
+    if extract_pdf_text is not _ORIGINAL_EXTRACT_PDF_TEXT:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                extract_pdf_text,
+                blob,
+                max_pages=200,
+                max_bytes=MAX_DOCUMENT_UPLOAD_BYTES,
+            ),
+            timeout=PDF_PARSE_TIMEOUT_SECONDS,
+        )
+    return await asyncio.wait_for(
+        anyio.to_process.run_sync(
+            _extract_pdf_text_sync,
+            blob,
+            200,
+            MAX_DOCUMENT_UPLOAD_BYTES,
+            cancellable=True,
+        ),
+        timeout=PDF_PARSE_TIMEOUT_SECONDS,
+    )
 
 
 # ── Request schemas ─────────────────────────────────────
@@ -565,6 +596,7 @@ _RE_TOKEN_PARAM = re.compile(
 # Restricted to base64 alphabet + URL-safe variant; standalone tokens
 # only (whitespace-bounded) so we don't shred prose.
 _RE_BASE64_BLOB = re.compile(r"(?<![A-Za-z0-9+/=_\-])[A-Za-z0-9+/=_\-]{50,}(?![A-Za-z0-9+/=_\-])")
+_INSPECTOR_CONFIDENCE_VALUES = {"high", "medium", "low", "unknown"}
 
 
 def _redact_document_text(text: str) -> str:
@@ -604,7 +636,14 @@ def _normalise_inspector_entry(doc: object, raw_meta: object) -> dict | None:
 
     is_compacted = str(meta.get("compacted", "")).lower() == "true"
     confidence_raw = meta.get("confidence_tier") or meta.get("confidence")
-    confidence = str(confidence_raw) if confidence_raw is not None else None
+    confidence = None
+    if confidence_raw is not None:
+        confidence_candidate = str(confidence_raw).strip().lower()
+        confidence = (
+            confidence_candidate
+            if confidence_candidate in _INSPECTOR_CONFIDENCE_VALUES
+            else "unknown"
+        )
 
     return {
         "document": _redact_document_text(document),
@@ -754,15 +793,7 @@ async def create_agents_from_document(
 
     blob = await _read_document_upload(file)
     try:
-        document_text = await asyncio.wait_for(
-            asyncio.to_thread(
-                extract_pdf_text,
-                blob,
-                max_pages=200,
-                max_bytes=MAX_DOCUMENT_UPLOAD_BYTES,
-            ),
-            timeout=30.0,
-        )
+        document_text = await _extract_pdf_text_with_timeout(blob)
     except asyncio.TimeoutError:
         raise api_error(
             422,
@@ -784,16 +815,44 @@ async def create_agents_from_document(
         quota_key=f"user:{effective_user_id}",
         purpose="document_ingestion",
     ):
-        entities = await extract_entities(chunks, llm_call)
+        try:
+            entities = await asyncio.wait_for(
+                extract_entities(chunks, llm_call),
+                timeout=DOCUMENT_LLM_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            raise api_error(
+                504,
+                "DOCUMENT_LLM_TIMEOUT",
+                "Document entity extraction timed out",
+            ) from exc
         sem = asyncio.Semaphore(get_runtime_parallelism_limit())
 
         async def _generate_with_limit(entity: dict) -> dict:
             async with sem:
-                return await generate_persona_from_entity(entity, llm_call)
+                return await asyncio.wait_for(
+                    generate_persona_from_entity(entity, llm_call),
+                    timeout=DOCUMENT_LLM_TIMEOUT_SECONDS,
+                )
 
-        personas = await asyncio.gather(
-            *(_generate_with_limit(e) for e in entities[:20])
-        )
+        persona_tasks = [
+            asyncio.create_task(_generate_with_limit(e))
+            for e in entities[:20]
+        ]
+        try:
+            personas = await asyncio.wait_for(
+                asyncio.gather(*persona_tasks),
+                timeout=DOCUMENT_LLM_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError as exc:
+            for task in persona_tasks:
+                task.cancel()
+            await asyncio.gather(*persona_tasks, return_exceptions=True)
+            raise api_error(
+                504,
+                "DOCUMENT_LLM_TIMEOUT",
+                "Document persona generation timed out",
+            ) from exc
     identities: list[dict] = []
     seen_keys: set[str] = set()
     for persona in personas:
@@ -1049,7 +1108,10 @@ async def import_identity(
     valid, error = validate_import_payload(payload)
     if not valid:
         raise api_error(422, "PERSONA_IMPORT_INVALID", error)
-    identity = import_persona(payload, effective_user_id)
+    try:
+        identity = import_persona(payload, effective_user_id)
+    except ValueError as exc:
+        raise api_error(409, "PERSONA_IMPORT_CONFLICT", str(exc)) from exc
     if identity is None:
         raise api_error(
             422,

@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string) => fallback ?? key,
+    t: (key: string, fallback?: string | { defaultValue?: string; name?: string }) => {
+      if (fallback && typeof fallback === 'object') {
+        return (fallback.defaultValue ?? key).replace('{{name}}', String(fallback.name ?? ''));
+      }
+      return fallback ?? key;
+    },
     i18n: { changeLanguage: vi.fn(), language: 'en' },
   }),
 }));
@@ -121,7 +126,7 @@ describe('PersonaExportImport — ExportButton', () => {
 
   it('renders when capability enabled', () => {
     render(<ExportButton identityId={42} name="Aria" />);
-    expect(screen.getByRole('button', { name: /export/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export Aria' })).toBeInTheDocument();
   });
 
   it('hidden when capability disabled', () => {
@@ -157,6 +162,21 @@ describe('PersonaExportImport — ExportButton', () => {
     await waitFor(() => {
       expect(screen.getByText(/persona exported/i)).toBeInTheDocument();
     });
+  });
+
+  it('does not expose raw export errors to the user', async () => {
+    mockExport.mockRejectedValueOnce(new Error('raw upstream export failure'));
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+
+    render(<ExportButton identityId={1} name="Aria" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Export Aria' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Could not export persona/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/raw upstream export failure/i)).not.toBeInTheDocument();
+
+    debugSpy.mockRestore();
   });
 });
 
@@ -230,6 +250,24 @@ describe('PersonaExportImport — ImportDialog', () => {
     expect(mockImport).toHaveBeenCalledWith(expect.objectContaining({ schema_version: 1 }));
     await waitFor(() => expect(onImported).toHaveBeenCalledWith('identity-99'));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('does not expose raw import errors to the user', async () => {
+    mockImport.mockRejectedValueOnce(new Error('raw database import failure'));
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    render(<ImportDialog open={true} onClose={vi.fn()} onImported={vi.fn()} />);
+
+    fireEvent.change(screen.getByTestId('persona-paste-textarea'), {
+      target: { value: JSON.stringify(validPayload) },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^import$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/Could not import persona/i);
+    });
+    expect(screen.queryByText(/raw database import failure/i)).not.toBeInTheDocument();
+
+    debugSpy.mockRestore();
   });
 
   it('closes on Escape', () => {

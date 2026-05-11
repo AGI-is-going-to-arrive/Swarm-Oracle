@@ -267,7 +267,7 @@ npm run lint
 npm run build
 ```
 
-当前 Sprint 5-6 前端全量回归最近一次记录为 `183 files / 1965 tests / 0 failed`，`npx tsc --noEmit -p tsconfig.app.json` 和 `npm run build` 都通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
+当前 Sprint 5-6 前端全量回归最近一次记录为 `185 files / 1981 tests / 0 failed`，`npx tsc --noEmit -p tsconfig.app.json` 和 `npm run build` 都通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
@@ -337,7 +337,7 @@ python -m pytest tests/test_journal_routes.py tests/test_agent_favorite.py tests
 
 cd ../frontend
 npx tsc --noEmit -p tsconfig.app.json
-npm test -- --run src/components/__tests__/AgentCard.test.tsx src/components/__tests__/EducationTemplatePicker.test.tsx src/components/__tests__/PersonaExportImport.test.tsx src/components/__tests__/JournalPanels.test.tsx
+npx vitest run src/components/__tests__/EducationTemplatePicker.test.tsx src/components/__tests__/PersonaExportImport.test.tsx src/pages/AgentLibrary.test.tsx src/pages/AgentWorkshopView.test.tsx src/pages/IdentityInspectorView.test.tsx src/pages/InputView.test.tsx src/pages/LeaderboardView.test.tsx src/pages/PersonalJournalView.test.tsx
 npx vitest run --reporter=verbose
 npm run build
 ```
@@ -345,14 +345,15 @@ npm run build
 本 session 已复核：
 
 - backend `ruff check`：通过
-- backend 全量 `python -m pytest -q --tb=short`：`2714 passed, 2 skipped, 9 warnings`
-- backend Sprint 5-6 touched-test rerun：`85 passed`
-- backend journal ownership 追加回归：`8 passed`
+- backend 全量 `python -m pytest -q --tb=short`：`2733 passed, 3 skipped`
+- backend focused rerun：journal / hallucination gate / debate result metadata `33 passed`
+- backend document ingestion focused rerun：`25 passed`
+- backend web context integration warning regression：`9 passed`
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-- frontend full vitest：`183 files / 1965 tests / 0 failed`
-- frontend 新组件窄集：`4 files / 39 tests passed`
+- frontend full vitest：`185 files / 1981 tests / 0 failed`
+- frontend Sprint 5-6 focused rerun：`7 files / 104 tests passed`
 - frontend `npm run build`：通过，build performance budget 无 violations
-- frontend i18n key + placeholder parity：`en:2354 zh:2354`
+- frontend i18n key + placeholder parity：`en:2372 zh:2372`
 
 浏览器复核优先覆盖：
 
@@ -364,12 +365,13 @@ npm run build
 - `/leaderboard` segment filters 与 URL params 同步；清空筛选后回到旧数组响应路径。
 - `/admin/setup` 3 步 provider 配置和连接测试要可用。
 - 375px mobile 下上述页面不横向溢出。
+- Chromium / Firefox / WebKit 桌面与 375px mobile smoke 都应保持 console clean。
 
 当前测试覆盖边界：
 
-- `AgentCard / EducationTemplatePicker / PersonaExportImport / JournalPanels` 已有组件级测试。
-- `AgentWorkshop` document tab、`AgentLibrary` import/export/favorites、`Leaderboard` segment UI、`PersonalJournalView`、`IdentityInspectorView` 仍建议补页面级前端测试。
-- `npx playwright test --project=chromium --project=firefox --project=webkit` 当前会因为没有这些 named projects 直接失败；本 session 用手动 Chromium browser spot-check 覆盖核心路径，Firefox / WebKit 未在这条 Playwright 命令下实测。
+- `EducationTemplatePicker / PersonaExportImport` 已有组件级测试。
+- `AgentLibrary / AgentWorkshopView / IdentityInspectorView / InputView / LeaderboardView / PersonalJournalView` 已补页面级前端测试。
+- 仓库 Playwright named project 仍不是这组回归的默认入口；本 session 用浏览器 smoke 覆盖 Chromium / Firefox / WebKit 桌面与 375px mobile。
 
 ### SimulationView / PredictionModal / Gameplay Cards 回归
 

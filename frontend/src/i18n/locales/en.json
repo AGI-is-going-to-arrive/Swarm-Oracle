@@ -1424,6 +1424,8 @@
       "returning_label": "Returning agent",
       "returning_tooltip": "{{name}} has prior cross-scenario memory.",
       "feature_disabled": "Custom agents feature is not enabled.",
+      "capability_error": "Could not check custom agent availability. Please retry.",
+      "delete_agent_aria": "Delete {{name}}",
       "tier_label": "Agent Tier",
       "tier_important_title": "Core Persona",
       "tier_important_desc": "Full context memory, leads the conversation",
@@ -1479,6 +1481,8 @@
       "favorites": "Favorites",
       "favorites_section": "Your Favorites",
       "favorites_error": "Failed to load favorites: {{message}}",
+      "favorites_error_generic": "Failed to load favorites. Please retry.",
+      "favorite_update_failed": "Could not update favorite. Please retry.",
       "no_favorites": "No favorite agents yet",
       "no_favorites_hint": "Tap the heart on any agent to save it here.",
       "search_placeholder": "Search agents…",
@@ -1492,8 +1496,9 @@
       "bias_label": "Decision bias",
       "view_details": "View details"
     },
-    "persona_export": {
+      "persona_export": {
       "export": "Export",
+      "export_agent_aria": "Export {{name}}",
       "import": "Import Persona",
       "import_title": "Import Agent Persona",
       "drop_zone": "Drop .json file here or click to browse",
@@ -1501,6 +1506,13 @@
       "invalid_schema": "Invalid file: schema_version must be 1",
       "missing_fields": "Missing required fields: name, role, persona_text",
       "invalid_json": "Invalid JSON",
+      "feature_disabled": "Persona export is not enabled.",
+      "export_not_found": "Persona could not be found.",
+      "export_failed": "Could not export persona. Please try again.",
+      "import_conflict": "This persona already exists for your account.",
+      "import_invalid": "Persona file failed server validation.",
+      "import_not_allowed": "Persona import is not enabled.",
+      "import_failed": "Could not import persona. Please try again.",
       "import_success": "Persona imported successfully",
       "export_success": "Persona exported",
       "submit": "Import",
@@ -1526,11 +1538,13 @@
         "probability": "Predicted probability (0–1)",
         "scenario_optional": "Scenario ID (optional)",
         "submit": "Log forecast",
-        "invalid": "Question and a probability between 0 and 1 are required."
+        "invalid": "Question and a probability between 0 and 1 are required.",
+        "create_failed": "Could not log forecast. Please retry."
       },
       "entries": {
         "title": "Recent forecasts",
-        "empty": "No forecasts yet. Log your first prediction above."
+        "empty": "No forecasts yet. Log your first prediction above.",
+        "load_failed": "Could not load forecasts. Please retry."
       },
       "entry": {
         "resolved": "Resolved",
@@ -1542,7 +1556,9 @@
         "outcome_no": "Did not happen",
         "brier": "Brier",
         "mark_yes": "Mark as happened",
-        "mark_no": "Mark as did not happen"
+        "mark_no": "Mark as did not happen",
+        "already_resolved": "This forecast has already been resolved.",
+        "resolve_failed": "Could not resolve forecast. Please retry."
       },
       "side": {
         "aria": "Roster and worldline panels"
@@ -2618,6 +2634,8 @@
       "suggested_config": "Suggested: {{agents}} agents, {{rounds}} rounds",
       "no_templates": "No templates found",
       "loading": "Loading templates…",
+      "templates_loading": "Loading templates…",
+      "templates_error": "Could not load templates. Please retry.",
       "close": "Close",
       "tags": "Tags"
     }

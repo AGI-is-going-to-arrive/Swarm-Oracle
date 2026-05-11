@@ -478,7 +478,7 @@ def _normalize_parse_result(
     hierarchical: bool,
 ) -> dict:
     if not isinstance(payload, dict):
-        return payload
+        raise ValueError("Parser result must be a JSON object")
 
     raw_agents = payload.get("agents")
     if isinstance(raw_agents, list):

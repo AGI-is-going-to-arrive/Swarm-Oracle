@@ -221,12 +221,12 @@
 | `AgentAttachPanel.tsx` | `frontend/src/components/AgentAttachPanel.tsx` | 首页自建 Agent 选择卡片；最多 5 个，支持 loading/error/retry/empty 状态，长 persona 和复杂 decision bias 只作为文本展示 |
 | `AgentCard.tsx` | `frontend/src/components/AgentCard.tsx` | Agent Library 共享卡片；展示 tier、domains、favorite 状态与 profile/edit/export 等动作；长 persona 按 Unicode code point 截断 |
 | `AgentProfileModal.tsx` | `frontend/src/components/AgentProfileModal.tsx` | Agent profile 弹窗；展示成长、记忆、timeline 和 decision bias 分布，切换 Agent 或关闭后的迟到请求不会覆盖当前弹窗 |
-| `IdentityInspectorView.tsx` | `frontend/src/pages/IdentityInspectorView.tsx` | identity memory inspector 页面；切换 id 时清掉旧标题，空记忆、基础设施错误和正常 memory list 分开显示 |
+| `IdentityInspectorView.tsx` | `frontend/src/pages/IdentityInspectorView.tsx` | identity memory inspector 页面；切换 id 时清掉旧标题，迟到 memory 响应不会覆盖新 identity，空记忆、基础设施错误和正常 memory list 分开显示 |
 | `DocumentUploader.tsx` | `frontend/src/pages/AgentWorkshop/DocumentUploader.tsx` | Agent Workshop PDF 上传入口；展示抽取进度、错误和新建 identities，取消/重试只更新当前请求 |
-| `PersonaExportImport.tsx` / `personaExportImportUtils.ts` | `frontend/src/components/` | persona 导出/导入 UI 与 JSON 校验 helper；导入成功后刷新 Agent Library |
-| `EducationTemplatePicker.tsx` | `frontend/src/components/EducationTemplatePicker.tsx` | 首页教育模板 dialog；支持 category / difficulty filter、空结果、Escape 关闭和 focus trap |
+| `PersonaExportImport.tsx` / `personaExportImportUtils.ts` | `frontend/src/components/` | persona 导出/导入 UI 与 JSON 校验 helper；导入成功后刷新 Agent Library，失败时显示本地化错误，不直接露出原始 API 文本 |
+| `EducationTemplatePicker.tsx` | `frontend/src/components/EducationTemplatePicker.tsx` | 首页教育模板 dialog；支持 category / difficulty filter、空结果、Retry、Escape 关闭和 focus trap |
 | `Journal/*` | `frontend/src/components/Journal/` | 个人 journal 辅助面板：Agent roster、calibration curve、worldline mini map；当前右侧 roster / mini-map 是 Sprint 7 前的占位辅助面板 |
-| `PersonalJournalView.tsx` | `frontend/src/pages/PersonalJournalView.tsx` | 个人预测日志页面；读取 `/api/me/journal` 与 `/api/me/calibration`，resolve 后显示实际结果与 Brier 分 |
+| `PersonalJournalView.tsx` | `frontend/src/pages/PersonalJournalView.tsx` | 个人预测日志页面；读取 `/api/me/journal` 与 `/api/me/calibration`，resolve 后显示实际结果与 Brier 分，刷新时忽略迟到响应 |
 | `MemoryTimeline.tsx` | `frontend/src/components/MemoryTimeline.tsx` | Agent 记忆时间线；样式已从组件内联迁到 CSS，按 scenario/time 组织事件 |
 | `ProgressIndicator.tsx` | `frontend/src/components/ProgressIndicator.tsx` | 5 步流程 pill；当前用在 InputView / ResultView，`currentStep` 会钳到有效范围 |
 | `ShareArtifact.tsx` | `frontend/src/components/ShareArtifact.tsx` | 1200×630 offscreen OG card；通过 html2canvas 导出 PNG，只包含公开展示用摘要字段 |
@@ -250,11 +250,12 @@
   - 编辑旧 Agent 时会把后端返回的 `preferred_tier` 回填；缺失或未知值回退为 `IMPORTANT`
   - knowledge domains 优先读取后端解析后的数组，旧 payload 只带 JSON 字符串时再本地 parse，解析失败显示为空
   - Library card 显示 tier badge、domains 和 favorite 状态；favorite filter 是 pressed button group，不是 tab panel；空库会给出创建入口
+  - capability / favorite 失败显示本地化错误与 Retry，不把原始后端错误文本直接露到页面
   - persona export/import 入口按 `persona_export` capability gate 显示；导入成功只新增当前用户的 custom Agent，不覆盖现有 Agent，返回的 `identity_id` 是 string
-- Education template picker 当前按 `education_templates` capability gate 显示；选中模板后会回填首页问题、Agent 数和轮数。
-- Personal Journal 当前按 `prediction_journal` capability gate 显示；journal 与 calibration 数据都从当前 user scope 读取，resolve 后会显示实际结果和 Brier 分。右侧 roster / worldline panel 目前是明确占位，不代表已有 live 联动。
+- Education template picker 当前按 `education_templates` capability gate 显示；选中模板后会回填首页问题、Agent 数和轮数；加载失败走本地化错误和 Retry，不显示 raw error。
+- Personal Journal 当前按 `prediction_journal` capability gate 显示；journal 与 calibration 数据都从当前 user scope 读取，resolve 后会显示实际结果和 Brier 分，refresh 会忽略迟到响应。右侧 roster / worldline panel 目前是明确占位，不代表已有 live 联动。
 - Leaderboard segment filters 当前会把 `type/date/agent count` 筛选同步到 URL params；不带筛选时仍消费旧数组响应。
-  - Leaderboard 的 loading、empty、retry 和 row/skeleton 动画都走 locale / reduced-motion 口径
+  - Leaderboard 的 loading、empty、retry 和 row/skeleton 动画都走 locale / reduced-motion 口径；快速切换筛选时会忽略迟到响应
   - 这些页面新增样式集中在共享 BEM class 和 editorial token 上，不使用新增 inline style
 - InputView 高级设置当前支持可选 `Organization ID`；值会写进 sessionStorage，并由 API client 自动映射成 `X-Org-Id`。清空输入时会同步移除该请求头。
 - InputView 的搜索增强当前口径：
@@ -534,11 +535,11 @@
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
 - Sprint 5-6 frontend 本 session 已跑：
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npx vitest run --reporter=verbose`：`183 files / 1965 tests / 0 failed`
+  - `npx vitest run`：`185 files / 1981 tests / 0 failed`
   - `npm run build`：通过，build performance budget 无 violations
-  - 新组件窄集 `AgentCard / EducationTemplatePicker / PersonaExportImport / JournalPanels`：`4 files / 39 tests passed`
-  - Playwright named projects 当前没有 `chromium/firefox/webkit` 配置；本轮用手动 Chromium browser spot-check 覆盖首页模板、Journal submit/resolve/语言切换、Agent 创建/收藏/PDF 错误态、Identity Inspector 空态/404、Leaderboard segment URL sync、Admin setup 连接测试和 375px mobile
-- frontend i18n key + placeholder parity：`en:2354 zh:2354`。
+  - Sprint 5-6 focused rerun：`7 files / 104 tests passed`
+  - Browser smoke 覆盖 `/`、`/agents`、`/agents/new`、`/leaderboard`、`/admin/setup`、`/me/journal`、`/agents/identities/:id/memories`：Chromium / Firefox / WebKit 桌面与 375px mobile 均渲染，console 无 JS error，移动端无横向溢出
+- frontend i18n key + placeholder parity：`en:2372 zh:2372`。
 - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 - Classic 分支标题本轮已补定向验证：

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
+import time
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -97,6 +99,29 @@ async def test_extract_pdf_text_malformed_pdf_raises_value_error():
 
     with pytest.raises(ValueError, match="Invalid PDF"):
         extract_pdf_text(b"not a pdf")
+
+
+async def test_from_document_pdf_timeout_returns_422(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(agents_api.settings, "FEATURE_CUSTOM_AGENTS", True)
+    monkeypatch.setattr(agents_api, "PDF_PARSE_TIMEOUT_SECONDS", 0.01)
+
+    def slow_extract_pdf_text(_blob, **_kwargs):
+        time.sleep(0.05)
+        return "Alice document"
+
+    monkeypatch.setattr(agents_api, "extract_pdf_text", slow_extract_pdf_text)
+
+    resp = await client.post(
+        "/api/agents/from-document",
+        params={"user_id": TEST_USER},
+        files={"file": ("agents.pdf", b"%PDF-stub", "application/pdf")},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "DOCUMENT_PDF_TIMEOUT"
 
 
 async def test_extract_pdf_text_truncates_total_text_to_100000_chars():
@@ -221,6 +246,13 @@ async def test_extract_entities_malformed_json_and_bad_entries_are_skipped():
         "traits": [],
         "perspective": "",
     }]
+
+
+async def test_parse_json_payload_rejects_oversized_llm_response():
+    from app.services.document_ingestion import MAX_LLM_RESPONSE_CHARS, _parse_json_payload
+
+    with pytest.raises(ValueError, match="too large"):
+        _parse_json_payload("x" * (MAX_LLM_RESPONSE_CHARS + 1))
 
 
 async def test_generate_persona_from_entity_returns_shape_and_clamps_decision_bias():
@@ -411,6 +443,121 @@ async def test_from_document_creates_agent_identities_from_stubbed_personas(
     assert identity is not None
     assert identity.user_id == TEST_USER
     assert identity.kind == "custom"
+
+
+async def test_from_document_entity_extraction_timeout_returns_504(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(agents_api.settings, "FEATURE_CUSTOM_AGENTS", True)
+    monkeypatch.setattr(agents_api, "DOCUMENT_LLM_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(
+        agents_api,
+        "extract_pdf_text",
+        lambda _blob, **_kwargs: "Alice document",
+    )
+    monkeypatch.setattr(agents_api, "chunk_document", lambda _text: ["Alice document"])
+
+    async def slow_extract_entities(_chunks, _llm_call_fn):
+        await asyncio.sleep(1)
+        return []
+
+    monkeypatch.setattr(agents_api, "extract_entities", slow_extract_entities)
+
+    resp = await client.post(
+        "/api/agents/from-document",
+        params={"user_id": TEST_USER},
+        files={"file": ("agents.pdf", b"%PDF-stub", "application/pdf")},
+    )
+
+    assert resp.status_code == 504
+    assert resp.json()["detail"]["code"] == "DOCUMENT_LLM_TIMEOUT"
+
+
+async def test_from_document_persona_generation_timeout_returns_504(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(agents_api.settings, "FEATURE_CUSTOM_AGENTS", True)
+    monkeypatch.setattr(agents_api, "DOCUMENT_LLM_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(
+        agents_api,
+        "extract_pdf_text",
+        lambda _blob, **_kwargs: "Alice document",
+    )
+    monkeypatch.setattr(agents_api, "chunk_document", lambda _text: ["Alice document"])
+
+    async def fake_extract_entities(_chunks, _llm_call_fn):
+        return [{
+            "name": "Alice",
+            "role": "strategist",
+            "traits": ["careful"],
+            "perspective": "risk",
+        }]
+
+    async def slow_generate_persona(_entity, _llm_call_fn):
+        await asyncio.sleep(1)
+        return {}
+
+    monkeypatch.setattr(agents_api, "extract_entities", fake_extract_entities)
+    monkeypatch.setattr(agents_api, "generate_persona_from_entity", slow_generate_persona)
+
+    resp = await client.post(
+        "/api/agents/from-document",
+        params={"user_id": TEST_USER},
+        files={"file": ("agents.pdf", b"%PDF-stub", "application/pdf")},
+    )
+
+    assert resp.status_code == 504
+    assert resp.json()["detail"]["code"] == "DOCUMENT_LLM_TIMEOUT"
+
+
+async def test_from_document_persona_batch_timeout_cancels_pending_tasks(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(agents_api.settings, "FEATURE_CUSTOM_AGENTS", True)
+    monkeypatch.setattr(agents_api, "DOCUMENT_LLM_TIMEOUT_SECONDS", 0.08)
+    monkeypatch.setattr(agents_api, "get_runtime_parallelism_limit", lambda: 1)
+    monkeypatch.setattr(
+        agents_api,
+        "extract_pdf_text",
+        lambda _blob, **_kwargs: "Alice and Bob document",
+    )
+    monkeypatch.setattr(agents_api, "chunk_document", lambda _text: ["Alice and Bob"])
+
+    async def fake_extract_entities(_chunks, _llm_call_fn):
+        return [
+            {"name": "Alice", "role": "strategist", "traits": [], "perspective": "risk"},
+            {"name": "Bob", "role": "operator", "traits": [], "perspective": "speed"},
+        ]
+
+    async def slow_generate_persona(entity, _llm_call_fn):
+        await asyncio.sleep(0.06)
+        return {
+            "name": entity["name"],
+            "role": entity["role"],
+            "persona": f"{entity['name']} persona.",
+            "decision_bias": {
+                "caution": 0.5,
+                "optimism": 0.5,
+                "conservatism": 0.5,
+                "risk_tolerance": 0.5,
+                "creativity": 0.5,
+            },
+        }
+
+    monkeypatch.setattr(agents_api, "extract_entities", fake_extract_entities)
+    monkeypatch.setattr(agents_api, "generate_persona_from_entity", slow_generate_persona)
+
+    resp = await client.post(
+        "/api/agents/from-document",
+        params={"user_id": TEST_USER},
+        files={"file": ("agents.pdf", b"%PDF-stub", "application/pdf")},
+    )
+
+    assert resp.status_code == 504
+    assert resp.json()["detail"]["code"] == "DOCUMENT_LLM_TIMEOUT"
 
 
 async def test_from_document_returns_500_when_identity_persistence_fails(

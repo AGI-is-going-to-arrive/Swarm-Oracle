@@ -346,6 +346,24 @@ class TestParseQuestion:
         assert 3 <= result["simulation_rounds"] <= 8
 
     @pytest.mark.asyncio
+    async def test_falls_back_when_llm_returns_non_object_payload(self, monkeypatch):
+        """Recovered JSON arrays should not escape parser normalization."""
+        llm_mock = AsyncMock(return_value=[{"name": "Alice"}])
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question(
+            "如果一个城市突然由志愿者委员会管理，会发生什么？",
+            max_agents=5,
+            target_agents=5,
+            max_rounds=8,
+        )
+
+        assert llm_mock.await_count == 1
+        assert result["setting"]["background"]
+        assert len(result["agents"]) == 5
+        assert 3 <= result["simulation_rounds"] <= 8
+
+    @pytest.mark.asyncio
     async def test_fallback_rounds_use_explicit_default_rounds(self, monkeypatch):
         """Fallback parse should honor caller-provided default rounds instead of hardcoding 10."""
         llm_mock = AsyncMock(side_effect=LLMError("Invalid JSON from LLM after recovery attempts"))

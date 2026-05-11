@@ -1220,14 +1220,21 @@ export function InputView() {
       />
       {/* Loading Overlay */}
       {isSubmitting && (
-        <div className="loading-overlay">
+        <div
+          className="loading-overlay"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+          aria-labelledby="loading-overlay-title"
+          aria-describedby="loading-overlay-tip"
+        >
           <div className="loading-overlay__card">
             <div className="loading-overlay__orbit">
               <span className="orbit-dot orbit-dot--1" />
               <span className="orbit-dot orbit-dot--2" />
               <span className="orbit-dot orbit-dot--3" />
             </div>
-            <h2 className="loading-overlay__title">{t('home.loading_title')}</h2>
+            <h2 id="loading-overlay-title" className="loading-overlay__title">{t('home.loading_title')}</h2>
             <div className="loading-steps">
               {loadingSteps.map((label, i) => (
                 <LoadingStep
@@ -1238,7 +1245,7 @@ export function InputView() {
                 />
               ))}
             </div>
-            <p className="loading-overlay__tip">{t('home.loading_tip')}</p>
+            <p id="loading-overlay-tip" className="loading-overlay__tip">{t('home.loading_tip')}</p>
           </div>
         </div>
       )}
@@ -1597,6 +1604,7 @@ export function InputView() {
                             <button
                               type="button"
                               className={`mode-btn ${mode === 'blackboard' ? 'mode-btn--active' : ''}`}
+                              aria-pressed={mode === 'blackboard'}
                               onClick={() => setMode('blackboard')}
                               disabled={isSubmitting}
                               title={t('home.mode_blackboard_title')}
@@ -1606,6 +1614,7 @@ export function InputView() {
                             <button
                               type="button"
                               className={`mode-btn ${mode === 'raw' ? 'mode-btn--active' : ''}`}
+                              aria-pressed={mode === 'raw'}
                               onClick={() => setMode('raw')}
                               disabled={isSubmitting}
                               title={t('home.mode_raw_title')}
@@ -1627,6 +1636,7 @@ export function InputView() {
                             <button
                               type="button"
                               className={`mode-btn ${!vizEnabled ? 'mode-btn--active' : ''}`}
+                              aria-pressed={!vizEnabled}
                               onClick={() => setVizEnabled(false)}
                               disabled={isSubmitting}
                             >
@@ -1635,6 +1645,7 @@ export function InputView() {
                             <button
                               type="button"
                               className={`mode-btn ${vizEnabled ? 'mode-btn--active' : ''}`}
+                              aria-pressed={vizEnabled}
                               onClick={() => setVizEnabled(true)}
                               disabled={isSubmitting}
                             >
@@ -1662,6 +1673,7 @@ export function InputView() {
                                 key={opt.value}
                                 type="button"
                                 className={`mode-btn ${reasoningEffort === opt.value ? 'mode-btn--active' : ''}`}
+                                aria-pressed={reasoningEffort === opt.value}
                                 onClick={() => setReasoningEffort(opt.value)}
                                 disabled={isSubmitting}
                               >
@@ -1684,6 +1696,7 @@ export function InputView() {
                                 key={preset}
                                 type="button"
                                 className={`mode-btn ${runtimePreset === preset ? 'mode-btn--active' : ''}`}
+                                aria-pressed={runtimePreset === preset}
                                 onClick={() => setRuntimePreset(preset)}
                                 disabled={isSubmitting}
                                 title={t(`home.runtime_preset_${preset}_desc`)}

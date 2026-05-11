@@ -9,7 +9,9 @@
   right: 0;
   bottom: 0;
   box-sizing: border-box;
+  background: rgba(26, 26, 26, 0.6);
   background: oklch(10% 0 0 / 0.6);
+  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
@@ -36,6 +38,7 @@
   max-height: 85vh;
   display: flex;
   flex-direction: column;
+  box-shadow: 0 24px 64px rgba(26, 26, 26, 0.25);
   box-shadow: 0 24px 64px oklch(10% 0 0 / 0.25);
   animation: share-slide-up 0.25s ease;
   overflow: hidden;
@@ -51,6 +54,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 20px 24px 16px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.3);
   border-bottom: 1px solid oklch(80% 0 0 / 0.3);
 }
 
@@ -69,6 +73,7 @@
   min-height: 44px;
   padding: 0;
   border-radius: 8px;
+  color: #737373;
   color: oklch(50% 0 0);
   transition: background 0.15s;
   display: inline-flex;
@@ -77,6 +82,7 @@
 }
 
 .share-modal__close:hover {
+  background: #e6e6e6;
   background: oklch(90% 0 0);
 }
 
@@ -94,6 +100,7 @@
   align-items: center;
   gap: 6px;
   padding: 8px 16px;
+  border: 1.5px solid #d9d9d9;
   border: 1.5px solid oklch(85% 0 0);
   border-radius: 10px;
   background: var(--bg-primary, #fff);
@@ -102,19 +109,26 @@
   font-weight: 500;
   min-height: 44px;
   transition: all 0.2s ease;
+  color: #4d4d4d;
   color: oklch(30% 0 0);
 }
 
 .share-platform-btn:hover:not(:disabled) {
+  border-color: #c86143;
   border-color: oklch(60% 0.18 25);
+  background: #fff1eb;
   background: oklch(96% 0.04 25);
   transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(200, 97, 67, 0.15);
   box-shadow: 0 2px 8px oklch(60% 0.18 25 / 0.15);
 }
 
 .share-platform-btn--active {
+  border-color: #bd5134;
   border-color: oklch(55% 0.2 25);
+  background: #fff0e8;
   background: oklch(95% 0.06 25);
+  color: #8f341f;
   color: oklch(40% 0.2 25);
   font-weight: 600;
 }
@@ -127,13 +141,18 @@
 .share-platform-btn--image {
   /* Visually distinguishes the export-image action from text-copy targets
      while reusing the existing platform button shell for layout parity. */
+  border-color: #aca5db;
   border-color: oklch(72% 0.12 280);
+  color: #4f3b9c;
   color: oklch(36% 0.16 280);
 }
 
 .share-platform-btn--image:hover:not(:disabled) {
+  border-color: #7f68d8;
   border-color: oklch(60% 0.2 280);
+  background: #f4f0ff;
   background: oklch(96% 0.04 280);
+  box-shadow: 0 2px 8px rgba(127, 104, 216, 0.15);
   box-shadow: 0 2px 8px oklch(60% 0.2 280 / 0.15);
 }
 
@@ -177,7 +196,9 @@
 .share-spinner {
   width: 32px;
   height: 32px;
+  border: 3px solid #e6e6e6;
   border: 3px solid oklch(90% 0 0);
+  border-top-color: #bd5134;
   border-top-color: oklch(55% 0.2 25);
   border-radius: 50%;
   animation: share-spin 0.8s linear infinite;
@@ -191,6 +212,7 @@
 .share-modal__error {
   text-align: center;
   padding: 32px 0;
+  color: #b54a27;
   color: oklch(55% 0.2 30);
 }
 
@@ -205,8 +227,11 @@
   margin-bottom: 12px;
   padding: 10px 12px;
   border-radius: 12px;
+  border: 1px solid #bfebcd;
   border: 1px solid oklch(85% 0.04 145);
+  background: #edfbf2;
   background: oklch(97% 0.04 145);
+  color: #236b39;
   color: oklch(34% 0.09 145);
 }
 
@@ -216,11 +241,14 @@
 
 .share-modal__status span {
   font-size: 0.78rem;
+  color: #3f7452;
   color: oklch(42% 0.04 145);
 }
 
 .share-modal__status--success {
+  border-color: #a7dfb9;
   border-color: oklch(80% 0.08 145);
+  background: #e6f8ed;
   background: oklch(96% 0.05 145);
 }
 

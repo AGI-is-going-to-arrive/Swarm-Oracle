@@ -187,6 +187,26 @@ def test_api_list_templates_filter_by_difficulty(client, enable_feature) -> None
     assert all(t["difficulty"] == "beginner" for t in payload["templates"])
 
 
+def test_api_list_templates_invalid_category_returns_422(client, enable_feature) -> None:
+    response = client.get(
+        "/api/scenario/templates",
+        params={"category": "not_a_real_category"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "TEMPLATE_CATEGORY_INVALID"
+
+
+def test_api_list_templates_invalid_difficulty_returns_422(client, enable_feature) -> None:
+    response = client.get(
+        "/api/scenario/templates",
+        params={"difficulty": "expert"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "TEMPLATE_DIFFICULTY_INVALID"
+
+
 def test_api_get_template_found(client, enable_feature) -> None:
     response = client.get("/api/scenario/templates/critical_thinking_media")
     assert response.status_code == 200

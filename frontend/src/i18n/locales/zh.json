@@ -1424,6 +1424,8 @@
       "returning_label": "回归 Agent",
       "returning_tooltip": "{{name}} 带着跨场景记忆回来了。",
       "feature_disabled": "自定义 Agent 功能未启用。",
+      "capability_error": "暂时无法确认自定义 Agent 功能是否可用，请重试。",
+      "delete_agent_aria": "删除 {{name}}",
       "tier_label": "Agent 参与层级",
       "tier_important_title": "核心人物",
       "tier_important_desc": "完整上下文记忆，主导对话走向",
@@ -1479,6 +1481,8 @@
       "favorites": "收藏",
       "favorites_section": "我的收藏",
       "favorites_error": "加载收藏失败：{{message}}",
+      "favorites_error_generic": "加载收藏失败，请重试。",
+      "favorite_update_failed": "更新收藏失败，请重试。",
       "no_favorites": "暂无收藏的 Agent",
       "no_favorites_hint": "在任意 Agent 上点击爱心即可加入收藏。",
       "search_placeholder": "搜索 Agent…",
@@ -1492,8 +1496,9 @@
       "bias_label": "决策倾向",
       "view_details": "查看详情"
     },
-    "persona_export": {
+      "persona_export": {
       "export": "导出",
+      "export_agent_aria": "导出 {{name}}",
       "import": "导入人设",
       "import_title": "导入 Agent 人设",
       "drop_zone": "拖拽 .json 文件到此处或点击浏览",
@@ -1501,6 +1506,13 @@
       "invalid_schema": "无效文件：schema_version 必须为 1",
       "missing_fields": "缺少必填字段：name, role, persona_text",
       "invalid_json": "无效 JSON",
+      "feature_disabled": "当前未启用人设导出功能。",
+      "export_not_found": "找不到该人设。",
+      "export_failed": "人设导出失败，请重试。",
+      "import_conflict": "该人设已存在于你的账号中。",
+      "import_invalid": "人设文件未通过服务器校验。",
+      "import_not_allowed": "当前未启用人设导入功能。",
+      "import_failed": "人设导入失败，请重试。",
       "import_success": "人设导入成功",
       "export_success": "人设已导出",
       "submit": "导入",
@@ -1526,11 +1538,13 @@
         "probability": "预测概率（0–1）",
         "scenario_optional": "场景 ID（可选）",
         "submit": "记录预测",
-        "invalid": "请填写问题，并将概率设置为 0 到 1 之间。"
+        "invalid": "请填写问题，并将概率设置为 0 到 1 之间。",
+        "create_failed": "记录预测失败，请重试。"
       },
       "entries": {
         "title": "最近的预测",
-        "empty": "还没有预测记录，请在上方记录你的第一条预测。"
+        "empty": "还没有预测记录，请在上方记录你的第一条预测。",
+        "load_failed": "加载预测记录失败，请重试。"
       },
       "entry": {
         "resolved": "已揭晓",
@@ -1542,7 +1556,9 @@
         "outcome_no": "未发生",
         "brier": "Brier 分",
         "mark_yes": "标记为已发生",
-        "mark_no": "标记为未发生"
+        "mark_no": "标记为未发生",
+        "already_resolved": "这条预测已经揭晓。",
+        "resolve_failed": "更新预测结果失败，请重试。"
       },
       "side": {
         "aria": "Agent 阵容与世界线面板"
@@ -2618,6 +2634,8 @@
       "suggested_config": "建议: {{agents}} 个代理, {{rounds}} 轮",
       "no_templates": "未找到模板",
       "loading": "正在加载模板…",
+      "templates_loading": "正在加载模板…",
+      "templates_error": "加载模板失败，请重试。",
       "close": "关闭",
       "tags": "标签"
     }

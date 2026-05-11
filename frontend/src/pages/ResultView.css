@@ -420,6 +420,7 @@
   background:
     radial-gradient(circle at top, oklch(76% 0.08 55 / 0.1), transparent 44%),
     color-mix(in oklab, var(--bg-overlay) 80%, black);
+  -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
 }
 
@@ -603,6 +604,7 @@
   padding: 20px;
   background: rgba(15, 12, 10, 0.84);
   background: color-mix(in oklab, var(--bg-overlay) 84%, black);
+  -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
 }
 

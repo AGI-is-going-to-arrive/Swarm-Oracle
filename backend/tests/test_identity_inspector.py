@@ -393,6 +393,29 @@ async def test_endpoint_surfaces_compaction_status(client: AsyncClient):
     assert by_doc["compacted summary"]["confidence"] == "medium"
 
 
+async def test_endpoint_projects_unknown_confidence_tier_to_unknown(
+    client: AsyncClient,
+):
+    _create_identity("inspector-confidence")
+    _store_raw_memory(
+        "inspector-confidence",
+        document="memory with injected confidence",
+        metadata={
+            "scenario_id": "scenario-confidence",
+            "created_at": "2026-05-10T11:00:00Z",
+            "confidence_tier": "admin_override",
+        },
+    )
+
+    resp = await client.get(
+        "/api/agents/identities/inspector-confidence/memories",
+        params={"user_id": OWNER_USER},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["memories"][0]["confidence"] == "unknown"
+
+
 async def test_endpoint_excludes_l2_profile_embeddings(client: AsyncClient):
     """identity_profile docs are matching aids — they must not appear here."""
     _create_identity("inspector-profile")

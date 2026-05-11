@@ -5,7 +5,7 @@
    to a single-column stack.
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -61,10 +61,10 @@ function formatDate(iso: string | null, locale: string): string {
   }
 }
 
-function describeError(err: unknown): string {
-  if (isApiError(err)) return err.message;
-  if (err instanceof Error) return err.message;
-  return 'Unknown error';
+function logUnexpectedJournalError(context: string, err: unknown) {
+  if (err instanceof Error) {
+    console.debug(`[PersonalJournalView] ${context} failed`, err);
+  }
 }
 
 export function PersonalJournalView() {
@@ -85,24 +85,41 @@ export function PersonalJournalView() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [resolvingId, setResolvingId] = useState<number | null>(null);
+  const fetchSeqRef = useRef(0);
+  const activeFetchControllerRef = useRef<AbortController | null>(null);
 
   const fetchAll = useCallback(
-    async (signal?: AbortSignal) => {
-      setError(null);
+    async () => {
+      const requestSeq = fetchSeqRef.current + 1;
+      fetchSeqRef.current = requestSeq;
+      activeFetchControllerRef.current?.abort();
+      const controller = new AbortController();
+      activeFetchControllerRef.current = controller;
+      const isStaleRequest = () =>
+        requestSeq !== fetchSeqRef.current || controller.signal.aborted;
+
+      setLoadError(null);
       try {
         const [list, calibration] = await Promise.all([
-          listJournalEntries({ signal }),
-          getJournalCalibration({ signal }),
+          listJournalEntries({ signal: controller.signal }),
+          getJournalCalibration({ signal: controller.signal }),
         ]);
-        if (signal?.aborted) return;
+        if (isStaleRequest()) return;
         setEntries(Array.isArray(list?.items) ? list.items : []);
         setBins(Array.isArray(calibration?.bins) ? calibration.bins : []);
       } catch (err) {
-        if (signal?.aborted) return;
-        setError(describeError(err));
+        if (isStaleRequest()) return;
+        logUnexpectedJournalError('Load', err);
+        setLoadError('journal.entries.load_failed');
+      } finally {
+        if (requestSeq === fetchSeqRef.current) {
+          activeFetchControllerRef.current = null;
+          setLoading(false);
+        }
       }
     },
     [],
@@ -110,12 +127,13 @@ export function PersonalJournalView() {
 
   useEffect(() => {
     if (capLoading || featureGated) return;
-    const controller = new AbortController();
     setLoading(true);
-    fetchAll(controller.signal).finally(() => {
-      if (!controller.signal.aborted) setLoading(false);
-    });
-    return () => controller.abort();
+    void fetchAll();
+    return () => {
+      fetchSeqRef.current += 1;
+      activeFetchControllerRef.current?.abort();
+      activeFetchControllerRef.current = null;
+    };
   }, [capLoading, featureGated, fetchAll]);
 
   const stats = useMemo(() => {
@@ -159,7 +177,8 @@ export function PersonalJournalView() {
         setRefreshing(true);
         await fetchAll();
       } catch (err) {
-        setError(describeError(err));
+        logUnexpectedJournalError('Create entry', err);
+        setError(t('journal.form.create_failed', 'Could not log forecast. Please retry.'));
       } finally {
         setSubmitting(false);
         setRefreshing(false);
@@ -176,13 +195,27 @@ export function PersonalJournalView() {
         await resolveJournalEntry(entry.id, { actual_outcome: outcome });
         await fetchAll();
       } catch (err) {
-        setError(describeError(err));
+        logUnexpectedJournalError('Resolve entry', err);
+        setError(
+          isApiError(err) && err.code === 'JOURNAL_ENTRY_ALREADY_RESOLVED'
+            ? t('journal.entry.already_resolved', 'This forecast has already been resolved.')
+            : t('journal.entry.resolve_failed', 'Could not resolve forecast. Please retry.'),
+        );
       } finally {
         setResolvingId(null);
       }
     },
     [fetchAll],
   );
+
+  const handleRetryLoad = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchAll();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchAll]);
 
   if (capLoading) {
     return (
@@ -347,6 +380,24 @@ export function PersonalJournalView() {
             </h3>
             {loading ? (
               <p>{t('common.loading', 'Loading…')}</p>
+            ) : loadError ? (
+              <div role="alert" className="journal-alert journal-alert--error">
+                <p>
+                  {loadError === 'journal.entries.load_failed'
+                    ? t(loadError, 'Could not load forecasts. Please retry.')
+                    : loadError}
+                </p>
+                <button
+                  type="button"
+                  className="journal-button journal-button--secondary"
+                  disabled={refreshing}
+                  onClick={() => void handleRetryLoad()}
+                >
+                  {refreshing
+                    ? t('common.refreshing', 'Refreshing…')
+                    : t('common.retry', 'Retry')}
+                </button>
+              </div>
             ) : entries.length === 0 ? (
               <p className="journal-view__muted">
                 {t(

@@ -26,10 +26,12 @@ import math
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from app.models.agent_identity import AgentIdentity
 from app.models.database import get_engine
+from app.services.llm_client import sanitize_untrusted_text
 from app.services.persona_workshop import (
     ALLOWED_KNOWLEDGE_DOMAINS,
     DECISION_BIAS_KEYS,
@@ -256,6 +258,11 @@ def import_persona(
     persona = payload["persona"]
     name = _truncate(persona.get("name"), max_chars=NAME_MAX_CHARS)
     role = _truncate(persona.get("role"), max_chars=ROLE_MAX_CHARS)
+    # Sanitize untrusted role/display_name before they flow into create_custom_agent
+    # (and downstream prompts). sanitize_untrusted_text strips control chars and
+    # escapes triple-backticks to prevent fence-breakout injection.
+    name = sanitize_untrusted_text(name, max_chars=NAME_MAX_CHARS)
+    role = sanitize_untrusted_text(role, max_chars=ROLE_MAX_CHARS)
     persona_text = _truncate(persona.get("persona_text"), max_chars=PERSONA_MAX_CHARS) or None
     decision_bias = _normalize_decision_bias(persona.get("decision_bias"))
     raw_tags = _sanitize_tags(persona.get("tags"))
@@ -274,6 +281,9 @@ def import_persona(
             knowledge_domains=safe_tags or None,
             preferred_tier="IMPORTANT",
         )
+    except IntegrityError as exc:
+        logger.info("persona_export.import create_custom_agent conflict: %s", exc)
+        raise ValueError("persona import conflicts with an existing identity") from exc
     except ValueError as exc:
         logger.info("persona_export.import create_custom_agent rejected: %s", exc)
         return None

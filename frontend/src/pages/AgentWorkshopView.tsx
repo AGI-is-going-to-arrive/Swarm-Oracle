@@ -101,7 +101,12 @@ function normalizePreferredTier(value: AgentIdentityInfo['preferred_tier']): Pre
 
 export function AgentWorkshopView() {
   const { t } = useTranslation();
-  const { loading: capLoading, enabled } = useCapabilityCheck('custom_agents');
+  const {
+    loading: capLoading,
+    enabled,
+    error: capError,
+    reload: reloadCapability,
+  } = useCapabilityCheck('custom_agents');
   const navigate = useNavigate();
   const { id: editId } = useParams<{ id: string }>();
   const isEditMode = !!editId;
@@ -265,6 +270,24 @@ export function AgentWorkshopView() {
   if (capLoading) {
     return <div className="agent-page agent-page--centered">{t('common.loading', 'Loading...')}</div>;
   }
+  if (capError) return (
+    <div className="agent-page agent-page--centered agent-page--narrow">
+      <p role="alert" className="agent-form__error">
+        {t(
+          'agents.capability_error',
+          'Could not check custom agent availability. Please retry.',
+        )}
+      </p>
+      <button
+        type="button"
+        className="agent-button agent-button--primary"
+        onClick={() => void reloadCapability?.()}
+      >
+        {t('common.retry', 'Retry')}
+      </button>
+      <Link to="/" className="agent-link">{t('common.back_home', 'Back to Home')}</Link>
+    </div>
+  );
   if (!enabled) return (
     <div className="agent-page agent-page--centered agent-page--narrow">
       <p className="agent-page__muted">{t('agents.feature_disabled', 'Custom agents feature is not enabled.')}</p>

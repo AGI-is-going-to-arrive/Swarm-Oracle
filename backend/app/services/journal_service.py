@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 from app.models.prediction_journal import PredictionJournalEntry
 
 _CALIBRATION_BIN_COUNT = 10
+_CALIBRATION_MAX_ENTRIES = 10_000
 
 
 class AlreadyResolvedError(ValueError):
@@ -104,14 +105,22 @@ def get_user_journal(
     )
 
 
-def get_calibration_data(session: Session, user_id: str) -> dict[str, list[dict[str, object]]]:
+def get_calibration_data(
+    session: Session,
+    user_id: str,
+    *,
+    max_entries: int = _CALIBRATION_MAX_ENTRIES,
+) -> dict[str, list[dict[str, object]]]:
     """Return ten resolved-entry calibration bins over [0.0, 1.0]."""
     buckets: list[list[PredictionJournalEntry]] = [[] for _ in range(_CALIBRATION_BIN_COUNT)]
     entries = session.exec(
-        select(PredictionJournalEntry).where(
+        select(PredictionJournalEntry)
+        .where(
             PredictionJournalEntry.user_id == user_id,
             PredictionJournalEntry.actual_outcome != None,  # noqa: E711
         )
+        .order_by(PredictionJournalEntry.resolved_at.desc())
+        .limit(max(1, max_entries))
     ).all()
 
     for entry in entries:

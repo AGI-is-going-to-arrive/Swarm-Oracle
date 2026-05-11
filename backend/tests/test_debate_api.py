@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
+from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import Session, select
 
 import app.api.debate as debate_api
@@ -268,6 +269,43 @@ def test_get_result_distinguishes_error_terminal_state(client: TestClient):
     assert resp.status_code == 500
     assert resp.json()["detail"]["code"] == "DEBATE_RESULT_ERROR_STATE"
     assert "ended with an error" in resp.json()["detail"]["message"]
+
+
+def test_get_result_exposes_hallucination_gate_metadata(client: TestClient):
+    debate = create_debate_record("Should the city publish every forecast correction?")
+    gate_report = {
+        "gate_passed": False,
+        "warnings": ["low_confidence_claims"],
+        "threshold": 0.75,
+    }
+    plan = build_debate_plan(debate.question)
+
+    with Session(get_engine()) as session:
+        stored = session.get(Debate, debate.id)
+        assert stored is not None
+        stored.status = DebateStatus.DONE
+        stored.winner = "proposition"
+        stored.verdict_tone = "order"
+        stored.score_proposition = 4
+        stored.score_opposition = 2
+        stored.audience_meter = 2
+        stored.best_argument = "The strongest case was transparent correction."
+        stored.best_rebuttal = "The rebuttal challenged process overhead."
+        stored.judge_summary = "The proposition carried the motion."
+        stored.breakdown_json = {
+            "dimensions": plan.breakdown,
+            "judge_rationale": {},
+            "counterplay_explanation": "",
+            "metadata": {"hallucination_gate": gate_report},
+        }
+        flag_modified(stored, "breakdown_json")
+        session.add(stored)
+        session.commit()
+
+    resp = client.get(f"/api/debate/{debate.id}/result")
+
+    assert resp.status_code == 200
+    assert resp.json()["result"]["hallucination_gate"] == gate_report
 
 
 def test_judge_analysis_fallback_uses_nonempty_turn_placeholders():

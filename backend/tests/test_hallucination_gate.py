@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from app.services.hallucination_gate import (
+    _has_negation,
     apply_hallucination_gate,
     extract_verifiable_claims,
     verify_claims,
@@ -133,6 +134,20 @@ def test_apply_hallucination_gate_warns_on_low_confidence_verdict():
     assert result["warnings"]
 
 
+def test_apply_hallucination_gate_empty_evidence_pool_warns_without_unverified_noise():
+    result = apply_hallucination_gate(
+        "Company revenue grew 20%.",
+        [],
+        [],
+    )
+
+    assert result["gate_passed"] is False
+    assert result["warnings"] == ["no_evidence_available"]
+    assert result["stats"]["claim_count"] == 1
+    assert result["stats"]["unverified"] == 0
+    assert "verified" not in result["claims"][0]
+
+
 def test_apply_hallucination_gate_uses_custom_threshold_for_claim_status():
     result = apply_hallucination_gate(
         "Company revenue grew 20 percent in APAC.",
@@ -217,3 +232,52 @@ def test_contradiction_reduces_confidence():
     )[0]
 
     assert contradicted["confidence"] < positive["confidence"]
+
+
+def test_cjk_negation_ignores_neutral_compounds():
+    assert _has_negation("这不仅是增长，也是结构变化") is False
+    assert _has_negation("这个过程不可逆") is False
+    assert _has_negation("不可避免增长20%") is False
+    assert _has_negation("这是不可或缺的条件") is False
+    assert _has_negation("走势仍不确定") is False
+
+
+def test_cjk_negation_still_detects_predicate_negation():
+    assert _has_negation("公司不增长 20%") is True
+    assert _has_negation("公司没有增长 20%") is True
+    assert _has_negation("公司无法增长 20%") is True
+    assert _has_negation("公司无力增长 20%") is True
+    assert _has_negation("公司无增长") is True
+
+
+def test_cjk_neutral_negation_compounds_do_not_create_contradiction():
+    claim = {
+        "text": "不可避免增长20%",
+        "source_sentence": "不可避免增长20%",
+        "claim_type": "statistical",
+    }
+
+    verified = verify_claims(
+        [claim],
+        [{"text": "公司增长20%", "source": "graph:positive"}],
+        [],
+    )
+
+    assert verified[0]["contradiction_found"] is False
+
+
+def test_cjk_wufa_negation_creates_contradiction():
+    claim = {
+        "text": "公司增长20%",
+        "source_sentence": "公司增长20%",
+        "claim_type": "statistical",
+    }
+
+    verified = verify_claims(
+        [claim],
+        [{"text": "公司无法增长20%", "source": "graph:negative"}],
+        [],
+    )
+
+    assert verified[0]["verified"] is False
+    assert verified[0]["contradiction_found"] is True

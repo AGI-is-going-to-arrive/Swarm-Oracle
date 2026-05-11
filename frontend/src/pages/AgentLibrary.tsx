@@ -9,7 +9,6 @@ import {
   deleteAgent,
   getAgentFavorites,
   getSessionBoundUserId,
-  isApiError,
   markAgentFavorite,
   unmarkAgentFavorite,
 } from '../api/client';
@@ -24,7 +23,12 @@ type LibraryTab = 'all' | 'favorites';
 
 export function AgentLibrary() {
   const { t } = useTranslation();
-  const { loading: capLoading, enabled } = useCapabilityCheck('custom_agents');
+  const {
+    loading: capLoading,
+    enabled,
+    error: capError,
+    reload: reloadCapability,
+  } = useCapabilityCheck('custom_agents');
   const { enabled: exportEnabled } = useCapabilityCheck('persona_export');
   const { identities, loading, error, fetchIdentities } = useAgentStore();
   const [profileAgent, setProfileAgent] = useState<AgentIdentityInfo | null>(null);
@@ -51,19 +55,21 @@ export function AgentLibrary() {
       }
       setFavoriteIds(ids);
     } catch (err) {
-      const message = isApiError(err) ? err.message : (err as Error).message;
-      setFavoritesError(message);
+      if (err instanceof Error) {
+        console.debug('[AgentLibrary] Failed to load favorites', err);
+      }
+      setFavoritesError('agent_library.favorites_error_generic');
     } finally {
       setFavoritesLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || capError) return;
     const userId = getSessionBoundUserId();
     fetchIdentities(userId);
     void refreshFavorites();
-  }, [fetchIdentities, enabled, refreshFavorites]);
+  }, [capError, fetchIdentities, enabled, refreshFavorites]);
 
   const handleToggleFavorite = useCallback(
     async (identity: AgentIdentityInfo) => {
@@ -97,8 +103,10 @@ export function AgentLibrary() {
           }
           return next;
         });
-        const message = isApiError(err) ? err.message : (err as Error).message;
-        setFavoritesError(message);
+        if (err instanceof Error) {
+          console.debug('[AgentLibrary] Failed to update favorite', err);
+        }
+        setFavoritesError('agent_library.favorite_update_failed');
       } finally {
         setPendingFavoriteId(null);
       }
@@ -154,6 +162,24 @@ export function AgentLibrary() {
   if (capLoading) {
     return <div className="agent-page agent-page--centered">{t('common.loading', 'Loading...')}</div>;
   }
+  if (capError) return (
+    <div className="agent-page agent-page--centered agent-page--narrow">
+      <p role="alert" className="agent-form__error">
+        {t(
+          'agents.capability_error',
+          'Could not check custom agent availability. Please retry.',
+        )}
+      </p>
+      <button
+        type="button"
+        className="agent-button agent-button--primary"
+        onClick={() => void reloadCapability?.()}
+      >
+        {t('common.retry', 'Retry')}
+      </button>
+      <Link to="/" className="agent-link">{t('common.back_home', 'Back to Home')}</Link>
+    </div>
+  );
   if (!enabled) return (
     <div className="agent-page agent-page--centered">
       <p className="agent-page__muted">{t('agents.feature_disabled', 'Custom agents feature is not enabled.')}</p>
@@ -178,6 +204,10 @@ export function AgentLibrary() {
             type="button"
             className="agent-card__action agent-card__action--danger"
             onClick={() => void handleDelete(agent)}
+            aria-label={t('agents.delete_agent_aria', {
+              name: agent.display_name,
+              defaultValue: 'Delete {{name}}',
+            })}
           >
             {t('common.delete', 'Delete')}
           </button>
@@ -258,7 +288,11 @@ export function AgentLibrary() {
       {error && <p role="alert" className="agent-form__error">{error}</p>}
       {favoritesError && (
         <p role="alert" className="agent-form__error">
-          {t('agent_library.favorites_error', { message: favoritesError })}
+          {favoritesError === 'agent_library.favorites_error_generic'
+            ? t(favoritesError, 'Failed to load favorites. Please retry.')
+            : favoritesError === 'agent_library.favorite_update_failed'
+              ? t(favoritesError, 'Could not update favorite. Please retry.')
+              : favoritesError}
         </p>
       )}
 

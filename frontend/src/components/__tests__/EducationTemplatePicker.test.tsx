@@ -126,6 +126,16 @@ describe('EducationTemplatePicker', () => {
     expect(await screen.findByText('History Lab')).toBeInTheDocument();
   });
 
+  it('shows loading while the initial API request is pending', () => {
+    apiMocks.listEducationTemplates.mockReturnValueOnce(new Promise(() => {}));
+    render(
+      <EducationTemplatePicker open onClose={vi.fn()} onSelect={vi.fn()} />,
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading templates…');
+    expect(screen.queryByText('education.no_templates')).not.toBeInTheDocument();
+  });
+
   it('filters by category via the dropdown', () => {
     render(
       <EducationTemplatePicker
@@ -277,11 +287,32 @@ describe('EducationTemplatePicker', () => {
 
   it('shows error state when API rejects', async () => {
     apiMocks.listEducationTemplates.mockRejectedValueOnce(new Error('boom'));
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
     render(
       <EducationTemplatePicker open onClose={vi.fn()} onSelect={vi.fn()} />,
     );
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('boom');
+      expect(screen.getByRole('alert')).toHaveTextContent('Could not load templates. Please retry.');
     });
+    expect(screen.queryByText('boom')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByText('education.no_templates')).not.toBeInTheDocument();
+    debugSpy.mockRestore();
+  });
+
+  it('retries after API errors', async () => {
+    apiMocks.listEducationTemplates.mockRejectedValueOnce(new Error('boom'));
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    render(
+      <EducationTemplatePicker open onClose={vi.fn()} onSelect={vi.fn()} />,
+    );
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    fireEvent.click(retry);
+
+    await waitFor(() => {
+      expect(apiMocks.listEducationTemplates).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText('History Lab')).toBeInTheDocument();
+    debugSpy.mockRestore();
   });
 });

@@ -33,6 +33,17 @@ function sanitizeFileNameStem(name: string): string {
   return trimmed.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '-').slice(0, 80) || 'agent';
 }
 
+function apiErrorCode(error: unknown): string | null {
+  if (!isApiError(error)) return null;
+  return error.code.trim().toUpperCase() || null;
+}
+
+function logUnexpectedPersonaError(context: string, error: unknown) {
+  if (error instanceof Error) {
+    console.debug(`[PersonaExportImport] ${context} failed`, error);
+  }
+}
+
 // ── ExportButton ────────────────────────────────────────
 
 export interface ExportButtonProps {
@@ -58,7 +69,13 @@ export function ExportButton({ identityId, name }: ExportButtonProps) {
         triggerJsonDownload(payload, fileName);
         setStatus({ kind: 'ok', message: t('persona_export.export_success', 'Persona exported') });
       } catch (err) {
-        const message = isApiError(err) ? err.message : (err as Error).message;
+        const code = apiErrorCode(err);
+        if (!code) logUnexpectedPersonaError('Export', err);
+        const message = code === 'FEATURE_DISABLED' || code === 'PERSONA_EXPORT_DISABLED'
+          ? t('persona_export.feature_disabled', 'Persona export is not enabled.')
+          : code === 'AGENT_IDENTITY_NOT_FOUND' || code === 'PERSONA_EXPORT_NOT_FOUND'
+            ? t('persona_export.export_not_found', 'Persona could not be found.')
+            : t('persona_export.export_failed', 'Could not export persona. Please try again.');
         setStatus({ kind: 'err', message });
       } finally {
         setBusy(false);
@@ -85,6 +102,10 @@ export function ExportButton({ identityId, name }: ExportButtonProps) {
         onClick={handleClick}
         disabled={busy}
         aria-busy={busy}
+        aria-label={t('persona_export.export_agent_aria', {
+          name,
+          defaultValue: 'Export {{name}}',
+        })}
       >
         <svg
           className="persona-export-btn__icon"
@@ -181,6 +202,18 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
     if (errorKey === 'persona_export.invalid_json') {
       return t('persona_export.invalid_json', 'Invalid JSON');
     }
+    if (errorKey === 'persona_export.import_conflict') {
+      return t('persona_export.import_conflict', 'This persona already exists for your account.');
+    }
+    if (errorKey === 'persona_export.import_invalid') {
+      return t('persona_export.import_invalid', 'Persona file failed server validation.');
+    }
+    if (errorKey === 'persona_export.import_not_allowed') {
+      return t('persona_export.import_not_allowed', 'Persona import is not enabled.');
+    }
+    if (errorKey === 'persona_export.import_failed') {
+      return t('persona_export.import_failed', 'Could not import persona. Please try again.');
+    }
     return errorKey;
   }, [errorKey, t]);
 
@@ -270,8 +303,17 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
         onClose();
       }
     } catch (err) {
-      const message = isApiError(err) ? err.message : (err as Error).message;
-      setErrorKey(message);
+      const code = apiErrorCode(err);
+      if (!code) logUnexpectedPersonaError('Import', err);
+      if (code === 'PERSONA_IMPORT_CONFLICT') {
+        setErrorKey('persona_export.import_conflict');
+      } else if (code === 'PERSONA_IMPORT_INVALID') {
+        setErrorKey('persona_export.import_invalid');
+      } else if (code === 'FEATURE_DISABLED' || code === 'PERSONA_EXPORT_DISABLED') {
+        setErrorKey('persona_export.import_not_allowed');
+      } else {
+        setErrorKey('persona_export.import_failed');
+      }
     } finally {
       setSubmitting(false);
     }

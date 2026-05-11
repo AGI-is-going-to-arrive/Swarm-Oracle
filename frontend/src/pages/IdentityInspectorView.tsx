@@ -4,7 +4,7 @@
    Capability gate: agent_identity
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -58,12 +58,12 @@ function truncatePreview(text: string, max: number): { preview: string; truncate
   return { preview: `${chars.slice(0, max).join('')}…`, truncated: true };
 }
 
-function formatTimestamp(iso: string | null): string {
+function formatTimestamp(iso: string | null, locale: string): string {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
   try {
-    return d.toLocaleString();
+    return d.toLocaleString(locale);
   } catch {
     return iso;
   }
@@ -87,7 +87,7 @@ interface MemoryRowProps {
 }
 
 function MemoryRow({ entry, index, expanded, onToggle }: MemoryRowProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const document = typeof entry.document === 'string' ? entry.document : '';
   const { preview, truncated } = truncatePreview(document, DOCUMENT_PREVIEW_CHARS);
   const bucket = bucketConfidence(entry.confidence);
@@ -96,7 +96,7 @@ function MemoryRow({ entry, index, expanded, onToggle }: MemoryRowProps) {
   const scenarioId = typeof meta.scenario_id === 'string' ? meta.scenario_id : null;
   const round = parseRound(meta.round);
   const memoryType = typeof meta.type === 'string' && meta.type.trim() ? meta.type : null;
-  const timestampLabel = formatTimestamp(entry.timestamp);
+  const timestampLabel = formatTimestamp(entry.timestamp, i18n.language);
   const rowId = `identity-memory-row-${index}`;
   const bodyId = `identity-memory-row-${index}-body`;
   const interactive = truncated;
@@ -235,32 +235,51 @@ export function IdentityInspectorView() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [expandedIndices, setExpandedIndices] = useState<Set<number>>(() => new Set());
   const [identityName, setIdentityName] = useState<string | null>(null);
+  const memoryRequestSeqRef = useRef(0);
+  const activeMemoryRequestRef = useRef<AbortController | null>(null);
 
   const loadMemories = useCallback(async () => {
     if (!identityId) return;
+    const requestSeq = memoryRequestSeqRef.current + 1;
+    memoryRequestSeqRef.current = requestSeq;
+    activeMemoryRequestRef.current?.abort();
+    const controller = new AbortController();
+    activeMemoryRequestRef.current = controller;
+
+    const isStaleRequest = () =>
+      requestSeq !== memoryRequestSeqRef.current || controller.signal.aborted;
+
     setLoading(true);
     setErrorMessage(null);
     setExpandedIndices(new Set());
     try {
-      const res = await getIdentityMemories(identityId);
+      const res = await getIdentityMemories(identityId, { signal: controller.signal });
+      if (isStaleRequest()) return;
       const memories = Array.isArray(res?.memories) ? res.memories : [];
       setEntries(memories);
       setTotal(typeof res?.total === 'number' ? res.total : memories.length);
     } catch (err) {
+      if (isStaleRequest()) return;
       const fallback = t('identity_inspector.error_load', 'Failed to load identity memories.');
       let message = fallback;
       if (isApiError(err)) {
         message = err.status === 404
           ? t('identity_inspector.error_not_found', 'Identity not found.')
-          : err.message || fallback;
-      } else if (err instanceof Error && err.message) {
-        message = err.message;
+          : fallback;
+        if (err.status !== 404) {
+          console.debug('[IdentityInspectorView] Failed to load memories', err);
+        }
+      } else if (err instanceof Error) {
+        console.debug('[IdentityInspectorView] Failed to load memories', err);
       }
       setEntries([]);
       setTotal(0);
       setErrorMessage(message);
     } finally {
-      setLoading(false);
+      if (requestSeq === memoryRequestSeqRef.current) {
+        activeMemoryRequestRef.current = null;
+        setLoading(false);
+      }
     }
   }, [identityId, t]);
 
@@ -287,8 +306,18 @@ export function IdentityInspectorView() {
   }, [enabled, identityId]);
 
   useEffect(() => {
-    if (!enabled || capabilityError) return;
+    if (!enabled || capabilityError) {
+      memoryRequestSeqRef.current += 1;
+      activeMemoryRequestRef.current?.abort();
+      activeMemoryRequestRef.current = null;
+      return;
+    }
     void loadMemories();
+    return () => {
+      memoryRequestSeqRef.current += 1;
+      activeMemoryRequestRef.current?.abort();
+      activeMemoryRequestRef.current = null;
+    };
   }, [enabled, capabilityError, loadMemories]);
 
   const sortedEntries = useMemo(() => {

@@ -1712,8 +1712,9 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
                     debate=debate,
                     plan=plan,
                 )
+        breakdown_metadata = _extract_breakdown_metadata(debate.breakdown_json)
         adjudication_mode = str(
-            _extract_breakdown_metadata(debate.breakdown_json).get("adjudication_mode") or "deterministic"  # noqa: E501
+            breakdown_metadata.get("adjudication_mode") or "deterministic"
         )
         snapshot["result"] = {
             "winner": debate.winner,
@@ -1725,6 +1726,7 @@ def load_debate_result_payload(debate_id: str) -> dict[str, Any] | None:
             "judge_summary": debate.judge_summary,
             "judge_rationale": judge_rationale,
             "adjudication_mode": adjudication_mode,
+            "hallucination_gate": breakdown_metadata.get("hallucination_gate"),
             "replay": _build_replay_digest(
                 turns,
                 debate=debate,
@@ -2341,10 +2343,14 @@ def _apply_hallucination_gate_metadata(
     if not getattr(settings, "FEATURE_HALLUCINATION_GATE", False):
         return breakdown_json
     try:
+        threshold = float(
+            getattr(settings, "HALLUCINATION_GATE_THRESHOLD", 0.75)
+        )
         report = _hallucination_gate_module.apply_hallucination_gate(
             verdict_text or "",
             list(graph_evidence or []),
             list(web_evidence or []),
+            threshold=threshold,
         )
     except Exception:  # noqa: BLE001 — warning-only; never block verdict
         logger.debug("hallucination gate failed (non-blocking)", exc_info=True)

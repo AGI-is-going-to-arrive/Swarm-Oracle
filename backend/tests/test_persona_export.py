@@ -235,6 +235,13 @@ class TestImportPersona:
             assert still_owned_by_alice is not None
             assert still_owned_by_alice.user_id == "alice"
 
+    def test_duplicate_continuity_key_raises_conflict_value_error(self):
+        payload = self._payload()
+
+        assert import_persona(payload, "dup-import-user") is not None
+        with pytest.raises(ValueError, match="conflicts"):
+            import_persona(payload, "dup-import-user")
+
 
 class TestValidateImportPayload:
     def test_valid_payload(self):
@@ -401,3 +408,32 @@ class TestPersonaExportAPI:
             },
         )
         assert resp.status_code == 422
+
+    async def test_post_import_duplicate_identity_returns_409(
+        self, client: AsyncClient,
+    ):
+        payload = {
+            "schema_version": SCHEMA_VERSION,
+            "exported_at": "2026-05-11T00:00:00+00:00",
+            "persona": {
+                "name": "Duplicate via API",
+                "role": "dup-strategist",
+                "persona_text": "Same persona text",
+                "decision_bias": {"caution": 0.8},
+                "tags": ["economics"],
+            },
+        }
+        first = await client.post(
+            "/api/agents/import",
+            params={"user_id": "dup-api-user"},
+            json=payload,
+        )
+        assert first.status_code == 201
+
+        second = await client.post(
+            "/api/agents/import",
+            params={"user_id": "dup-api-user"},
+            json=payload,
+        )
+        assert second.status_code == 409
+        assert second.json()["detail"]["code"] == "PERSONA_IMPORT_CONFLICT"

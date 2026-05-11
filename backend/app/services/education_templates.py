@@ -146,7 +146,9 @@ TEMPLATES: list[dict[str, Any]] = [
     },
 ]
 
-_VALID_DIFFICULTIES = {"beginner", "intermediate", "advanced"}
+VALID_CATEGORIES = frozenset(str(t["category"]) for t in TEMPLATES)
+VALID_DIFFICULTIES = frozenset({"beginner", "intermediate", "advanced"})
+_VALID_DIFFICULTIES = VALID_DIFFICULTIES
 _VALID_LANGUAGES = {"zh", "en"}
 
 

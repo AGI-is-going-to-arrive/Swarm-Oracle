@@ -180,6 +180,7 @@
 - `POST /api/me/journal` 如果带 `scenario_id`，该 scenario 必须属于当前用户；不存在返回 404，跨用户或无 owner 的旧 scenario 返回 403。
 - user scope 来自 signed principal；无 signed session 的本地开发态可用 `X-User-Id`。
 - `PATCH /api/me/journal/{entry_id}/resolve` 只允许当前用户解析自己的 entry；已解析 entry 返回 409 `JOURNAL_ENTRY_ALREADY_RESOLVED`，并发 stale resolve 也返回 409，不会覆盖旧结果。
+- `GET /api/me/calibration` 只读取当前用户的 resolved entries；实现侧按 `user_id / resolved_at / actual_outcome` 索引和有界读取收口，接口返回形状不变。
 
 ## Social / Export / Health
 
@@ -242,6 +243,7 @@
 - `POST /api/debate/import-replay` 在 `FEATURE_ARGUMENT_MAP=true` 时，会在 turns 落库后同步抽取 argument map；导入完成后就能直接读取图谱。
 - `phase_insights` 当前只要求 `pressure_margin / turn_count >= 0`；`confidence_drift.phase_margin / cumulative_margin` 可以为负数，表示置信优势反向漂移。
 - 常规 prediction 当前允许 `counterplay_variant: null`；只有显式给出非空值时才校验它是否属于合法 variant。
+- `GET /api/debate/{debate_id}/result` 会在存在时返回 verdict 后处理写入的 `result.hallucination_gate`；gate 关闭或没有 metadata 时该字段为 `null`/缺省，不影响 result 成功返回。
 - `GET /api/debate/{debate_id}/argument-map` 的 `edges[]` 使用 `source / target / type` 字段，并在有证据元数据时返回：
   `evidence: { confidence_tier, source_ref, source_round_number, detail }`。
   旧边或无证据边的 `evidence` 可以为 `null`。`detail` 同样是 `GraphEdge.evidence_json` 的预留透传字段；当前 argument-map 写边只填 coarse provenance，不填真实 detail。

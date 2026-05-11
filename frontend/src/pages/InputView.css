@@ -1363,6 +1363,7 @@
   /* OKLCH translucent surface with sRGB fallback */
   background: rgba(16, 12, 26, 0.38);
   background: oklch(0.18 0.04 290 / 0.42);
+  -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
   z-index: 40;
 }
@@ -1439,6 +1440,7 @@
   justify-content: center;
   padding: 24px;
   background: rgba(16, 12, 26, 0.38);
+  -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
 }
 

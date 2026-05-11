@@ -1098,9 +1098,33 @@ async def list_scenario_templates(
 ):
     """List education scenario templates filtered by category/difficulty."""
     _require_education_templates_feature()
-    from app.services.education_templates import list_templates
+    from app.services.education_templates import (
+        VALID_CATEGORIES,
+        VALID_DIFFICULTIES,
+        list_templates,
+    )
 
-    return {"templates": list_templates(category=category, difficulty=difficulty)}
+    normalized_category = category.strip() if category is not None else None
+    normalized_difficulty = difficulty.strip().lower() if difficulty is not None else None
+    if normalized_category is not None and normalized_category not in VALID_CATEGORIES:
+        raise api_error(
+            422,
+            "TEMPLATE_CATEGORY_INVALID",
+            "Unknown education template category",
+        )
+    if normalized_difficulty is not None and normalized_difficulty not in VALID_DIFFICULTIES:
+        raise api_error(
+            422,
+            "TEMPLATE_DIFFICULTY_INVALID",
+            "Unknown education template difficulty",
+        )
+
+    return {
+        "templates": list_templates(
+            category=normalized_category,
+            difficulty=normalized_difficulty,
+        )
+    }
 
 
 @router.get("/scenario/templates/{template_id}")

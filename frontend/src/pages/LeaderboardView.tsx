@@ -2,7 +2,7 @@
    SwarmOracle — LeaderboardView (P5-B + Segment Filters)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -128,6 +128,7 @@ export default function LeaderboardView() {
   );
   const [filtersOpenMobile, setFiltersOpenMobile] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const loadSeqRef = useRef(0);
 
   const errorMessage = errorFallback
     ? getLocalizedApiErrorMessage({ code: errorCode }, t, errorFallback)
@@ -141,25 +142,35 @@ export default function LeaderboardView() {
     advancedCount > 0;
 
   const load = useCallback(async () => {
+    const loadSeq = loadSeqRef.current + 1;
+    loadSeqRef.current = loadSeq;
     setLoading(true);
     setErrorFallback('');
     setErrorCode(null);
     try {
       const data = await getLeaderboard(50, segmentToFilters(segment));
+      if (loadSeq !== loadSeqRef.current) return;
       const { entries: rows, metadata: meta } = unwrapResponse(data);
       setEntries(rows);
       setMetadata(meta);
     } catch (err) {
+      if (loadSeq !== loadSeqRef.current) return;
       setErrorCode(getApiErrorCode(err));
       setErrorFallback('Failed to load leaderboard');
     } finally {
-      setLoading(false);
+      if (loadSeq === loadSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, [segment]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => () => {
+    loadSeqRef.current += 1;
+  }, []);
 
   const updateSegment = useCallback(
     (next: SegmentState) => {

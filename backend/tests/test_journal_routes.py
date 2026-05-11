@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import inspect, text
 from sqlmodel import Session
 
 from app.config import settings
@@ -14,6 +15,7 @@ from app.models.prediction_journal import PredictionJournalEntry
 from app.services.journal_service import (
     AlreadyResolvedError,
     create_entry,
+    get_calibration_data,
     resolve_entry,
 )
 
@@ -222,3 +224,54 @@ def test_resolve_stale_session_cannot_overwrite_settled_entry():
         final = session.get(PredictionJournalEntry, entry_id)
     assert final is not None
     assert final.actual_outcome is True
+
+
+def test_calibration_data_applies_sql_limit():
+    user_id = "calibration-limit-user"
+    with Session(get_engine()) as session:
+        for idx in range(6):
+            entry = create_entry(
+                session,
+                user_id=user_id,
+                scenario_id=None,
+                question=f"Will event {idx} resolve?",
+                predicted_probability=0.1 * idx,
+            )
+            assert entry.id is not None
+            resolve_entry(session, entry.id, actual_outcome=idx % 2 == 0)
+
+        payload = get_calibration_data(session, user_id, max_entries=5)
+
+    assert sum(int(bucket["count"]) for bucket in payload["bins"]) == 5
+
+
+def test_prediction_journal_has_calibration_query_index():
+    inspector = inspect(get_engine())
+
+    indexes = {
+        index["name"]: tuple(index["column_names"])
+        for index in inspector.get_indexes("prediction_journal_entries")
+    }
+
+    assert indexes["ix_prediction_journal_entries_user_resolved_at_outcome"] == (
+        "user_id",
+        "resolved_at",
+        "actual_outcome",
+    )
+
+
+def test_prediction_journal_calibration_query_uses_ordered_index():
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text(
+                "EXPLAIN QUERY PLAN "
+                "SELECT id FROM prediction_journal_entries "
+                "WHERE user_id = :user_id AND actual_outcome IS NOT NULL "
+                "ORDER BY resolved_at DESC LIMIT 10000"
+            ),
+            {"user_id": "journal-user"},
+        ).all()
+
+    plan = " ".join(str(row) for row in rows)
+    assert "ix_prediction_journal_entries_user_resolved_at_outcome" in plan
+    assert "USE TEMP B-TREE" not in plan.upper()

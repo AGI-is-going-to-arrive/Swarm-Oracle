@@ -15,6 +15,7 @@ from pypdf import PdfReader
 from app.services.llm_client import format_untrusted_text_block
 
 MAX_EXTRACTED_TEXT_CHARS = 100_000
+MAX_LLM_RESPONSE_CHARS = 50_000
 MAX_ENTITY_CHUNKS = 10
 MAX_ENTITIES = 20
 DECISION_BIAS_KEYS = (
@@ -150,6 +151,8 @@ def _parse_json_payload(raw: Any) -> Any:
     text = raw.strip()
     if not text:
         raise ValueError("LLM output is empty")
+    if len(text) > MAX_LLM_RESPONSE_CHARS:
+        raise ValueError("LLM output is too large to parse")
 
     try:
         return json.loads(text)

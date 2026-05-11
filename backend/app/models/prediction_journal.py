@@ -17,6 +17,12 @@ class PredictionJournalEntry(SQLModel, table=True):
     __table_args__ = (
         Index("ix_prediction_journal_entries_user_id", "user_id"),
         Index("ix_prediction_journal_entries_created_at", "created_at"),
+        Index(
+            "ix_prediction_journal_entries_user_resolved_at_outcome",
+            "user_id",
+            "resolved_at",
+            "actual_outcome",
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
