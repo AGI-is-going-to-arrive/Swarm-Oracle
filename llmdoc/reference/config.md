@@ -18,7 +18,7 @@
 | `LLM_REASONING_EFFORT` | `none` | 推理强度 |
 | `LLM_REQUESTS_PER_MINUTE` | `0` | 默认 RPM，`0` 表示不限 |
 | `LLM_TOKENS_PER_MINUTE` | `0` | 默认 TPM，`0` 表示不限 |
-| `DEBATE_USE_LLM` | `true` | Debate 是否优先走 LLM 文案 |
+| `DEBATE_USE_LLM` | `true` | Debate 是否优先走 LLM 生成；开启后会尝试生成角色 name/role/persona、turn、judge、phase insight 和 supporting-turn reason，失败时回退 deterministic copy |
 
 关键约束：
 
@@ -48,6 +48,7 @@
   - `/api/health/test` 是连通性探测，不走业务入口这条 `base_url + api_key` 绑定约束
 - `llm_requests_per_minute / llm_tokens_per_minute` 会覆盖服务端默认 RPM/TPM。触发限流后请求会排队等待下一个窗口（最多等 2 个 rate window），不会立即拒绝。
 - `disable_user_quota` 只对本地或 self-hosted provider 生效；它只移除单用户公平队列这一层，不会绕过全局并发、全局 pending、lane 隔离或 RPM/TPM 等待。
+- Debate 路径会把 request-scoped override 透传到本场内部 LLM 调用；包括 persona generation、turn generation、judge analysis、phase insight rewrite、supporting-turn reason 和 argument-map enrichment。
 
 ## Scenario 运行时调参
 

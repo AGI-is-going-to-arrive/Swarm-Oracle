@@ -28,7 +28,7 @@
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
 | Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard 与 segment filters |
 | Journal | `backend/app/api/journal.py` | 个人预测日志、resolve 与 calibration 数据 |
-| Debate | `backend/app/api/debate.py` | debate live/result/import-replay/predict |
+| Debate | `backend/app/api/debate.py` | debate live/result/import-replay/predict；后台 participant update 通过 WS 推给 live 页 |
 | Ending Room | `backend/app/api/ending_rooms.py` | ending-room room/result/thread/user-turn、roundtable survey/analyst SSE 与 WS |
 | Scenario WS | `backend/app/api/ws.py` | 主模式 WebSocket + thread-scoped agent-conversation WebSocket |
 | Social | `backend/app/api/social.py` | 社交文案与 Markdown 导出 |
@@ -60,6 +60,7 @@
 | KG Realtime | `backend/app/services/kg_realtime.py` | 合并 `GraphDelta` 后通过 scenario WS 推送 `kg:delta`，payload 过大或失效时推送 `kg:snapshot_invalidated` |
 | Snapshot Export | `backend/app/services/snapshot_export.py` | scenario ZIP export/import、manifest/checksum、旧 ID 到新 ID remap、物理 member 计数、重复 member 拒绝与 ZIP 安全校验 |
 | Runtime Lock | `backend/app/services/runtime_lock.py` | SQLite shared lease + lease refresh，防重入 |
+| Debate Prompts | `backend/app/services/debate_prompts.py` | Debate motion/cast/turn prompt；LLM name、role、persona 生成与清洗 |
 | Gameplay Contract | `backend/app/services/gameplay_contract.py` | 读取共享玩法契约 |
 
 ### 数据模型
@@ -196,6 +197,7 @@
   - `decision_bias` 固定为 `caution / optimism / conservatism / risk_tolerance / creativity` 5 个 key；缺失 key 补 `0.5`，数字字符串会转成 float，boolean、非数字、`NaN/Inf`、超出 `0..1` 或未知 key 都会被拒绝
   - `knowledge_domain_json / decision_bias_json` 解析失败时会降级为空 metadata，不阻断列表、推演或 debate
   - 主推演和 Debate prompt 里，自建 Agent 的名字、角色、persona、knowledge domains 和 decision bias 都按不可信输入注入，不把用户文本当系统指令
+  - 非 custom 的 Debate cast 在 LLM upgrade 时也会先清洗 name / role：控制字符、fence 和常见 prompt-injection 标记会被去掉，空值或失败时回退 deterministic 模板
 - Agent Library 相关 API 当前按 user scope 收口：
   - favorite 只允许当前用户自己的 identity；跨用户或不存在统一返回 404
   - identity inspector 会先校验 owner，再读取最多 100 条 memory；向量库异常会落 `error` 字段，不把只读 inspector 变成 fatal
@@ -270,6 +272,9 @@
   - memory 压缩
   - prediction scoring
   - debate judge summary
+  - debate persona generation
+  - debate phase insight rewrite
+  - debate supporting-turn reason
   - debate argument map enrichment
   - identity compaction
   - fork detection
@@ -374,6 +379,9 @@
   - 每个 ID 都必须存在、`kind=custom` 且属于当前 `user_id` / signed principal；跨用户返回 403
   - 第 1 个 custom Agent 锁到 proposition，第 2 个锁到 opposition，并把 persona、knowledge domains、decision bias 放入 `breakdown_json.metadata.personas`
   - debate runtime snapshot 会透传这份 metadata，生成 turn prompt 时继续走不可信文本格式化
+- `DEBATE_USE_LLM=true` 时，Debate 开局会按当前辩题为 proposition / opposition / judge 生成 name、role 和 persona；name/role 会去控制字符、fence 和 prompt-injection 标记并限长，失败或空值回退 deterministic 模板。
+- persona upgrade 成功后会写入 `breakdown_json.metadata.personas`，并在首个 `agent_speak` 前通过 `debate_participants_update` 广播最新 participants。
+- Debate 的 request-scoped BYOK / RPM / TPM 会继续透传到 persona generation、turn generation、judge analysis、phase insight rewrite、supporting-turn reason 和 argument-map enrichment。
 - `phase_insights` 当前只要求 `pressure_margin / turn_count >= 0`；`confidence_drift.phase_margin / cumulative_margin` 可以是负数。
 - 常规 prediction 当前允许 `counterplay_variant: null`；只有显式给出非空值时才校验 variant。
 - WebSocket 入站消息有 64KB UTF-8 字节大小限制，超出会以 `1009` 状态码关闭连接。
@@ -402,22 +410,16 @@
 
 ## 当前验证基线
 
-- 本轮 replay / preflight / vector_store 变更复验：
-  - `python -m pytest tests/ -x -q`：`2752 passed, 2 skipped`
-  - touched backend files `ruff check`：通过
-- Sprint 5-6 backend 本 session 已跑：
-  - `ruff check`：通过
-  - `python -m pytest tests/ -x -q`：`2752 passed, 2 skipped`
-  - 当前 backend touched-file 定向回归：`314 passed`
-  - cancel / journal / snapshot / leaderboard segment focused rerun：`84 passed`
-  - prediction API 回归：`48 passed`
+- 当前 backend 稳定验证口径：
+  - `python -m pytest tests/ -x -q --tb=short`：`2761 passed, 2 skipped`
+  - Debate touched-file `ruff check`：通过
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：
   - `tests/test_causal_graph.py -q`：`68 passed`
   - `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q`：`125 passed`
   - `ruff check app/services/causal_graph.py tests/test_causal_graph.py`：通过
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
-- custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；本 session 后端仓库级 ruff 已全绿。
+- custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；最近记录里后端仓库级 ruff 已全绿。
 - Classic 分支标题提示本轮已补定向验证：
   - `pytest tests/test_audit_fixes.py::TestForkPromptTemplateConsistency -q`：`31 passed`
   - `pytest tests/test_simulator.py::TestDetectFork -q`：`4 passed`
@@ -432,6 +434,7 @@
 
 - 主模式与 Debate 都通过 WS 推送 live 事件。
 - 出站事件统一带顶层 `meta`，供前端按 `sequence / event_id` 去重与补拉。
+- Debate live 当前还会广播 `debate_participants_update`：payload 只包含 `participants[]` 的 `side / name / role / persona`，用于在 LLM cast 更新后刷新前端出场卡，不携带 BYOK key、base URL 或 provider 配置。
 - scenario WS 当前也注册 KG realtime 事件：
   - `kg:delta`：推送合并后的 `GraphDelta`
   - `kg:snapshot_invalidated`：payload 过大、delta 标记失效或客户端需要 REST snapshot fallback 时使用

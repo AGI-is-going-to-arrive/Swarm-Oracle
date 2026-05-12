@@ -10,18 +10,23 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from typing import Any
 
 from app.models import DebatePhase, DebateSide
 from app.services.lang_detect import detect_language
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     format_untrusted_text_block,
+    has_prompt_injection_markers,
     llm_call_json_with_stream_fallback,
 )
 
 logger = logging.getLogger(__name__)
 
 _WHITESPACE_RE = re.compile(r"\s+")
+
+DEBATE_BANNED_TERMS_ZH = "「机制」「执行后果」「责任链」「世界线」「可执行性」「护栏」「阈值」「制度韧性」「协调成本」"  # noqa: E501
+DEBATE_BANNED_TERMS_EN = "'mechanism', 'accountability chain', 'execution framework', 'guardrails', 'worldline', 'executability', 'institutional resilience'"  # noqa: E501
 
 _PROFILE_KEYWORDS: dict[str, tuple[str, ...]] = {
     "law": ("law", "legal", "court", "judge", "constitution", "regulation", "ban", "veto", "审判", "法律", "法庭", "合宪", "禁令", "否决权"),  # noqa: E501
@@ -71,7 +76,7 @@ _PROFILE_LABELS_ZH = {
 
 _PROFILE_STYLE_ZH: dict[str, dict[str, str]] = {
     "law": {
-        "pro_case": "把争议装进可审查的条款和程序护栏",
+        "pro_case": "把争议装进可审查的条款和程序安全边界",
         "con_case": "先例漂移、程序债和例外失控",
         "pressure": "裁量失衡与规则真空",
         "challenge": "哪一条条款、哪一级复核、哪一个举证门槛会先失守？",
@@ -83,12 +88,12 @@ _PROFILE_STYLE_ZH: dict[str, dict[str, str]] = {
     "governance": {
         "pro_case": "把分散压力转进可协调的治理节奏",
         "con_case": "治理过载、责任漂移和执行碎裂",
-        "pressure": "失控的协调成本与政策空窗",
+        "pressure": "失控的沟通代价与政策空窗",
         "challenge": "谁来持续对齐委员会、预算和执行链，而不是只在开局高举口号？",
         "plan": "阶段问责、委员会节拍和可回滚授权",
         "close_pro": "动议的价值在于把混乱议题装进可治理、可纠偏的节奏。",
         "close_con": "若治理骨架还没准备好，提前加码只会把协同成本放大成系统性失灵。",
-        "judge_focus": "协调能力与制度韧性",
+        "judge_focus": "协调能力与制度承受力",
     },
     "trade": {
         "pro_case": "把摩擦转成激励重组和供应链先手",
@@ -111,40 +116,40 @@ _PROFILE_STYLE_ZH: dict[str, dict[str, str]] = {
         "judge_focus": "正当性与共同体稳定",
     },
     "ecology": {
-        "pro_case": "提前修正阈值，换取更长的系统缓冲区",
-        "con_case": "不可逆损耗、代际债和生态阈值误判",
-        "pressure": "被拖延的生态阈值与连锁代价",
-        "challenge": "一旦河流、森林或气候阈值跨过去，谁来承担那种不可逆后果？",
-        "plan": "分区阈值、监测回路与代际成本记账",
+        "pro_case": "提前修正临界点，换取更长的系统缓冲区",
+        "con_case": "不可逆损耗、代际债和生态临界点误判",
+        "pressure": "被拖延的生态临界点与连锁代价",
+        "challenge": "一旦河流、森林或气候临界点跨过去，谁来承担那种不可逆后果？",
+        "plan": "分区临界点、监测回路与代际成本记账",
         "close_pro": "生态议题的关键不是乐观口号，而是争取尚可修复的时间窗口。",
-        "close_con": "若代价不可逆，再温和的承诺也掩盖不了这条世界线的长期债务。",
-        "judge_focus": "阈值判断与长期代价",
+        "close_con": "若代价不可逆，再温和的承诺也掩盖不了这个方向的长期债务。",
+        "judge_focus": "临界点判断与长期代价",
     },
     "war": {
         "pro_case": "把高压局势转成可控制的战略主动权",
         "con_case": "补给透支、误判升级和反制失衡",
         "pressure": "被动扩大的战线与动员代价",
         "challenge": "当补给、战线和盟友承压时，哪一环会先崩，不是靠气势就能扛过去的。",
-        "plan": "补给冗余、升级阈值与战线节奏控制",
+        "plan": "补给冗余、升级边界与战线节奏控制",
         "close_pro": "战争题面的上限来自主动塑形，而不是无休止地等待更坏局面降临。",
         "close_con": "若升级链无法被约束，任何看似果断的推进都可能变成更昂贵的失控。",
         "judge_focus": "升级控制与战略可持续性",
     },
     "generic": {
-        "pro_case": "把混乱议题收束成更可执行的世界线",
+        "pro_case": "把混乱议题收束成更具体的方案",
         "con_case": "执行代价、反噬速度和制度裂口",
         "pressure": "被低估的系统摩擦",
-        "challenge": "如果这条世界线失手，第一批代价会落到谁头上？",
-        "plan": "先护栏、后扩张、再校正",
+        "challenge": "如果这个方向失手，第一批代价会落到谁头上？",
+        "plan": "先设安全边界、后扩张、再校正",
         "close_pro": "动议的价值在于把不确定性转成可管理的选择。",
         "close_con": "当关键前提还没有闭合，克制依然是更可信的答案。",
-        "judge_focus": "可执行性与后果清晰度",
+        "judge_focus": "落地能力与后果清晰度",
     },
 }
 
 _PROFILE_STYLE_EN: dict[str, dict[str, str]] = {
     "law": {
-        "pro_case": "turning the dispute into reviewable clauses and procedural guardrails",
+        "pro_case": "turning the dispute into reviewable clauses and procedural safeguards",
         "con_case": "precedent drift, due-process debt, and uncontrolled exceptions",
         "pressure": "discretion drift and rule vacuums",
         "challenge": "Which clause, review layer, or burden-of-proof threshold fails first?",
@@ -165,7 +170,7 @@ _PROFILE_STYLE_EN: dict[str, dict[str, str]] = {
             "The value of the motion is that it makes chaotic pressure governable and correctable."
         ),
         "close_con": "If the governing skeleton is not ready, acceleration only magnifies coordination failure.",  # noqa: E501
-        "judge_focus": "coordination capacity and institutional resilience",
+        "judge_focus": "coordination capacity and institutional strength",
     },
     "trade": {
         "pro_case": "converting friction into incentive realignment and supply-chain leverage",
@@ -202,7 +207,7 @@ _PROFILE_STYLE_EN: dict[str, dict[str, str]] = {
         "close_pro": (
             "Ecological upside comes from preserving a repair window, not from optimistic branding."
         ),
-        "close_con": "If the damage is irreversible, even moderate promises cannot hide the debt of this worldline.",  # noqa: E501
+        "close_con": "If the damage is irreversible, even moderate promises cannot hide the debt of this path.",  # noqa: E501
         "judge_focus": "threshold judgment and long-horizon cost",
     },
     "war": {
@@ -218,16 +223,16 @@ _PROFILE_STYLE_EN: dict[str, dict[str, str]] = {
         "judge_focus": "escalation control and strategic sustainability",
     },
     "generic": {
-        "pro_case": "turning a chaotic question into a more executable worldline",
+        "pro_case": "turning a chaotic question into a more practical path",
         "con_case": "execution cost, backlash speed, and institutional fracture lines",
         "pressure": "system friction that is being underestimated",
-        "challenge": "If this worldline breaks, who pays the first cost?",
-        "plan": "guardrails first, then expansion, then correction",
+        "challenge": "If this path breaks, who pays the first cost?",
+        "plan": "safeguards first, then expansion, then correction",
         "close_pro": "The motion matters because it converts uncertainty into a manageable choice.",
         "close_con": (
             "When the core premises are still open, restraint remains the more credible answer."
         ),
-        "judge_focus": "executability and consequence clarity",
+        "judge_focus": "practicality and consequence clarity",
     },
 }
 
@@ -356,8 +361,8 @@ def _get_profile_style(language: str, profile_id: str) -> dict[str, str]:
 def build_motion(question: str, language: str) -> str:
     compact = normalize_question(question)
     if language == "zh":
-        return f"本院动议：是否应推动这条假设世界线成为现实？{compact}"
-    return f"Motion: This house should advance the following worldline: {compact}"
+        return f"本院动议：{compact}"
+    return f"Motion: {compact}"
 
 
 _PERSONA_TEMPLATES_ZH: dict[str, dict[str, tuple[str, str]]] = {
@@ -372,13 +377,13 @@ _PERSONA_TEMPLATES_ZH: dict[str, dict[str, tuple[str, str]]] = {
         ),
         "judge": (
             "公共治理学派的资深评委",
-            "习惯用制度韧性与协调成本作为标尺，发言时不堆华丽辞藻，只挑场上真正撑得住的论点回应。",
+            "习惯用制度承受力与沟通代价作为标尺，发言时不堆华丽辞藻，只挑场上真正撑得住的论点回应。",
         ),
     },
     "war": {
         "proposition": (
             "曾在战略评估部门效力的退役指挥官",
-            "用补给线、升级阈值与前线节奏说话，语气压得很低，倾向用短句逼问主动权归谁。",
+            "用补给线、升级边界与前线节奏说话，语气压得很低，倾向用短句逼问主动权归谁。",
         ),
         "opposition": (
             "和平协调员出身，参与过多轮冲突收尾",
@@ -414,7 +419,7 @@ _PERSONA_TEMPLATES_ZH: dict[str, dict[str, tuple[str, str]]] = {
         ),
         "judge": (
             "贸易政策研究院的评委",
-            "权衡激励结构与成本分配是其本能；发言时少用形容词，多用一组具体数字或机制。",
+            "权衡激励结构与成本分配是其本能；发言时少用形容词，多用一组具体数字或流程。",
         ),
     },
     "faith": {
@@ -433,8 +438,8 @@ _PERSONA_TEMPLATES_ZH: dict[str, dict[str, tuple[str, str]]] = {
     },
     "ecology": {
         "proposition": (
-            "区域生态治理顾问，参与过多轮阈值监测",
-            "用阈值、回路与代际成本说话，语气务实，习惯把宏大议题压到一张监测表的层次。",
+            "区域生态治理顾问，参与过多轮临界点监测",
+            "用临界点、回路与代际成本说话，语气务实，习惯把宏大议题压到一张监测表的层次。",
         ),
         "opposition": (
             "环境历史学家，研究过若干不可逆崩溃案例",
@@ -442,7 +447,7 @@ _PERSONA_TEMPLATES_ZH: dict[str, dict[str, tuple[str, str]]] = {
         ),
         "judge": (
             "生态系统评估方向的评委",
-            "把阈值判断与长期账作为衡量；裁决时会指明哪一种代价是不可逆的，哪一种还能买回时间。",
+            "把临界点判断与长期账作为衡量；裁决时会指明哪一种代价是不可逆的，哪一种还能买回时间。",
         ),
     },
     "frontier": {
@@ -456,13 +461,13 @@ _PERSONA_TEMPLATES_ZH: dict[str, dict[str, tuple[str, str]]] = {
         ),
         "judge": (
             "拓荒史与公共风险方向的评委",
-            "习惯把可执行性与代价归属作为标尺；发言不带浪漫色彩，只问谁来兜底。",
+            "习惯把落地能力与代价归属作为标尺；发言不带浪漫色彩，只问谁来兜底。",
         ),
     },
     "mythic": {
         "proposition": (
             "象征系统研究者，懂得叙事如何转化为社会凝聚",
-            "习惯用神话结构解释当下决策；语气克制但带火，相信一个好故事可以推动一条世界线。",
+            "习惯用神话结构解释当下决策；语气克制但带火，相信一个好故事可以推动一个方向。",
         ),
         "opposition": (
             "民俗考古学家，研究过失控的预言与诅咒",
@@ -518,7 +523,7 @@ _PERSONA_TEMPLATES_ZH: dict[str, dict[str, tuple[str, str]]] = {
     "generic": {
         "proposition": (
             "跨领域政策架构师，最近主持过多个体系重构",
-            "讲究阶段授权、护栏顺序与代价分配；语气克制但有锋芒，习惯用机制本身去说服。",
+            "讲究阶段授权、安全边界顺序与代价分配；语气克制但有锋芒，习惯用具体安排去说服。",
         ),
         "opposition": (
             "前危机管理顾问，亲历过若干失败的「果断改革」",
@@ -526,7 +531,7 @@ _PERSONA_TEMPLATES_ZH: dict[str, dict[str, tuple[str, str]]] = {
         ),
         "judge": (
             "结构化辩论方向的资深评委",
-            "把可执行性与后果清晰度作为衡量；裁决时直接命中决定胜负的那个瞬间。",
+            "把落地能力与后果清晰度作为衡量；裁决时直接命中决定胜负的那个瞬间。",
         ),
     },
 }
@@ -545,7 +550,7 @@ _PERSONA_TEMPLATES_EN: dict[str, dict[str, tuple[str, str]]] = {
         ),
         "judge": (
             "Senior judge from the public-governance school",
-            "Reads the room through institutional resilience and coordination cost. "
+            "Reads the room through institutional strength and coordination burden. "
             "Skips ornate language; only engages arguments that actually hold up under stress.",
         ),
     },
@@ -597,7 +602,7 @@ _PERSONA_TEMPLATES_EN: dict[str, dict[str, tuple[str, str]]] = {
         "judge": (
             "Trade-policy bench voice",
             "Weighs incentive structure against cost allocation almost reflexively. "
-            "Few adjectives, many specific numbers and mechanisms.",
+            "Few adjectives, many specific numbers and concrete arrangements.",
         ),
     },
     "faith": {
@@ -647,7 +652,7 @@ _PERSONA_TEMPLATES_EN: dict[str, dict[str, tuple[str, str]]] = {
         ),
         "judge": (
             "Frontier-history and public-risk judge",
-            "Weighs executability against cost ownership. "
+            "Weighs practicality against cost ownership. "
             "Speaks without romance—only asks who carries the loss when the plan slips.",
         ),
     },
@@ -655,7 +660,7 @@ _PERSONA_TEMPLATES_EN: dict[str, dict[str, tuple[str, str]]] = {
         "proposition": (
             "Symbolic-systems researcher who studies narrative as social glue",
             "Reads decisions through mythic structure. "
-            "Restrained but igniting—believes a true story can move a worldline.",
+            "Restrained but igniting—believes a true story can move a path.",
         ),
         "opposition": (
             "Folkloric archaeologist who has documented runaway prophecies",
@@ -722,8 +727,8 @@ _PERSONA_TEMPLATES_EN: dict[str, dict[str, tuple[str, str]]] = {
     "generic": {
         "proposition": (
             "Cross-disciplinary policy architect who has just led several systems redesigns",
-            "Reasons through phased authorization, guardrail order, and cost allocation. "
-            "Restrained but edged—lets the mechanism do the persuading.",
+            "Reasons through phased authorization, safety order, and cost allocation. "
+            "Restrained but edged—lets the concrete arrangement do the persuading.",
         ),
         "opposition": (
             "Former crisis-management advisor who has lived through failed 'decisive reforms'",
@@ -732,7 +737,7 @@ _PERSONA_TEMPLATES_EN: dict[str, dict[str, tuple[str, str]]] = {
         ),
         "judge": (
             "Senior judge of structured debate",
-            "Weighs executability and consequence clarity. "
+            "Weighs practicality and consequence clarity. "
             "Ruling cuts straight to the moment that decided the match.",
         ),
     },
@@ -822,6 +827,8 @@ async def generate_persona_with_llm(
     profile_id: str,
     side: DebateSide,
     question: str,
+    *,
+    llm_overrides: dict[str, Any] | None = None,
 ) -> dict[str, str] | None:
     """LLM-driven role + persona generation tied to the actual debate question.
 
@@ -856,7 +863,8 @@ async def generate_persona_with_llm(
             f"立场：{side_label_zh}\n"
             f"领域：{profile_id}\n\n"
             "请输出 JSON：\n"
-            "{\"role\":\"角色头衔（5-15字，要和辩题直接相关，"
+            "{\"name\":\"角色姓名（2-4字中文名，要有辨识度）\","
+            "\"role\":\"角色头衔（5-15字，要和辩题直接相关，"
             "不要泛泛的'政策架构师'）\","
             "\"persona\":\"1-2句人设描写，说清楚这个人为什么会关心这个辩题、"
             "他的专业视角和说话习惯（不超过80字）\"}"
@@ -868,18 +876,23 @@ async def generate_persona_with_llm(
             f"Side: {side_label_en}\n"
             f"Domain: {profile_id}\n\n"
             "Return JSON:\n"
-            "{\"role\":\"role title (5-15 words, must tie directly to the debate "
+            "{\"name\":\"character name (2-4 words, distinctive)\","
+            "\"role\":\"role title (5-15 words, must tie directly to the debate "
             "question — no generic 'policy architect'),\""
             "\"persona\":\"1-2 sentence persona describing why this person cares "
             "about the question, their professional lens, and how they speak "
             "(under 80 words)\"}"
         )
 
+    overrides = llm_overrides or {}
     try:
         raw = await llm_call_json_with_stream_fallback(
             prompt,
             temperature=0.85,
             reasoning_effort="medium",
+            model=overrides.get("model"),
+            api_key=overrides.get("api_key"),
+            base_url=overrides.get("base_url"),
         )
     except Exception:
         logger.debug(
@@ -891,11 +904,44 @@ async def generate_persona_with_llm(
 
     if not isinstance(raw, dict):
         return None
-    role = str(raw.get("role") or "").strip()
+    role = _sanitize_debate_role(str(raw.get("role") or ""))
     persona = str(raw.get("persona") or "").strip()
+    raw_name = str(raw.get("name") or "").strip()
     if not role or not persona:
         return None
-    return {"role": role, "persona": persona}
+    name = _sanitize_debate_name(raw_name)
+    result: dict[str, str] = {"role": role, "persona": persona}
+    if name:
+        result["name"] = name
+    return result
+
+
+_CONTROL_CHAR_RE = re.compile(
+    "[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f-\\x9f\\u200b-\\u200c\\u200e-\\u200f\\u2028-\\u202f\\u2060\\ufeff]"  # noqa: E501
+)
+_MAX_DEBATE_NAME_LEN = 32
+_MAX_DEBATE_ROLE_LEN = 72
+
+
+def _sanitize_debate_role(raw: str) -> str:
+    """Sanitize LLM-generated debate role titles before persistence/UI rendering."""
+    cleaned = _CONTROL_CHAR_RE.sub("", raw).replace("```", "").strip()
+    cleaned = _WHITESPACE_RE.sub(" ", cleaned)
+    if has_prompt_injection_markers(cleaned):
+        return ""
+    if len(cleaned) > _MAX_DEBATE_ROLE_LEN:
+        cleaned = "".join(list(cleaned)[:_MAX_DEBATE_ROLE_LEN]).rstrip()
+    return cleaned
+
+
+def _sanitize_debate_name(raw: str) -> str:
+    """Sanitize LLM-generated debate character name."""
+    cleaned = _CONTROL_CHAR_RE.sub("", raw).replace("```", "").strip()
+    if has_prompt_injection_markers(cleaned):
+        return ""
+    if len(cleaned) > _MAX_DEBATE_NAME_LEN:
+        cleaned = "".join(list(cleaned)[:_MAX_DEBATE_NAME_LEN]).rstrip()
+    return cleaned
 
 
 async def build_cast_async(
@@ -903,6 +949,7 @@ async def build_cast_async(
     profile_id: str,
     *,
     question: str = "",
+    llm_overrides: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Async cast builder that prefers LLM-generated personas.
 
@@ -916,7 +963,10 @@ async def build_cast_async(
     sides = (DebateSide.PROPOSITION, DebateSide.OPPOSITION, DebateSide.JUDGE)
     results = await asyncio.gather(
         *(
-            generate_persona_with_llm(language, profile_id, side, question)
+            generate_persona_with_llm(
+                language, profile_id, side, question,
+                llm_overrides=llm_overrides,
+            )
             for side in sides
         ),
         return_exceptions=True,
@@ -926,6 +976,9 @@ async def build_cast_async(
         if isinstance(result, dict) and result.get("role") and result.get("persona"):
             base_cast[side_key]["role"] = result["role"]
             base_cast[side_key]["persona"] = result["persona"]
+            llm_name = str(result.get("name") or "").strip()
+            if llm_name:
+                base_cast[side_key]["name"] = llm_name
         # Exceptions or None → keep deterministic template fallback already in base_cast
     return base_cast
 
@@ -980,7 +1033,7 @@ def _build_turn_copy_zh(
     if phase == DebatePhase.OPENING and side == DebateSide.OPPOSITION:
         return f"我方反对。动议把收益叙事说得过于轻松，却低估了{style['con_case']}。"
     if phase == DebatePhase.CROSSFIRE and side == DebateSide.PROPOSITION:
-        return f"反方不断强调风险，却没有说明在不推动这条世界线时，如何处理已经暴露的{style['pressure']}。"  # noqa: E501
+        return f"反方不断强调风险，却没有说明在不推动这个方向时，如何处理已经暴露的{style['pressure']}。"  # noqa: E501
     if phase == DebatePhase.CROSSFIRE and side == DebateSide.OPPOSITION:
         return f"正方把愿景当成证据。请正面回答：{style['challenge']}"
     if phase == DebatePhase.REBUTTAL and side == DebateSide.PROPOSITION:
@@ -998,7 +1051,7 @@ def _build_turn_copy_zh(
             "balance": "均衡",
             "rupture": "断裂",
         }.get(verdict_tone or "", "均衡")
-        return f"裁决：{outcome}获胜。本场主导判词是「{tone_label}」。双方都形成了有效张力，但胜方在{style['judge_focus']}上更能把论点落到可执行后果。"  # noqa: E501
+        return f"裁决：{outcome}获胜。本场主导判词是「{tone_label}」。双方都形成了有效张力，但胜方在{style['judge_focus']}上更能把论点落到实际影响。"  # noqa: E501
     return motion
 
 
@@ -1098,8 +1151,7 @@ def _build_system_message(
     if language == "zh":
         anti_template = (
             "说话的方式：像在饭桌上跟人争论，不像在写政策分析。"
-            "绝对不要用「机制」「执行后果」「责任链」「世界线」「可执行性」"
-            "「护栏」「阈值」这类套话。用大白话。"
+            f"绝对不要用{DEBATE_BANNED_TERMS_ZH}这类套话。用大白话。"
         )
         if is_judge:
             return (
@@ -1119,8 +1171,7 @@ def _build_system_message(
 
     anti_template = (
         "Speak like you're arguing at a dinner table, not drafting a white paper. "
-        "NEVER use words like 'mechanism', 'accountability chain', "
-        "'execution framework', 'guardrails', 'worldline'. Use plain language."
+        f"NEVER use words like {DEBATE_BANNED_TERMS_EN}. Use plain language."
     )
     if is_judge:
         return (
@@ -1135,25 +1186,6 @@ def _build_system_message(
         f"You are speaking in a live debate. {anti_template}\n"
         f"{UNTRUSTED_INPUT_GUARDRAIL}"
     )
-
-
-def _format_intent_bullets(language: str, *labelled_items: tuple[str, str]) -> str:
-    """Format a small list of intent bullets, dropping empty values."""
-    lines: list[str] = []
-    for label, value in labelled_items:
-        if not value:
-            continue
-        compact = _WHITESPACE_RE.sub(" ", value).strip()
-        if not compact:
-            continue
-        lines.append(f"- {label}: {compact}")
-    if not lines:
-        return ""
-    if language == "zh":
-        header = "立场要点（仅供你内化，不要原样复述）："
-    else:
-        header = "Intent bullets (internalize, do not echo):"
-    return f"{header}\n" + "\n".join(lines)
 
 
 def build_turn_generation_prompt(
@@ -1183,7 +1215,7 @@ def build_turn_generation_prompt(
     - Splits identity / persona into a system message
     - Drops the anchor-copy block; turns intent into bullets only
     - Provides asymmetric pro/con/judge instruction blocks
-    - Keeps the untrusted-text guardrails on all user-supplied content
+    - Keeps untrusted-text protection on all user-supplied content
     """
     del anchor_copy  # explicitly discarded — no anchor injection any more
     phase_label = phase.value
@@ -1202,7 +1234,7 @@ def build_turn_generation_prompt(
         "",
     )
     # Intent bullets removed — static profile-style values were the #1 source
-    # of template echo (e.g. "把争议装进可审查的条款和程序护栏"). The LLM now
+    # of template echo (e.g. "把争议装进可审查的条款和程序安全边界"). The LLM now
     # relies on phase_argument_goal + side_block + recent_turns + latest opponent.
 
     verdict_hint = ""
@@ -1248,8 +1280,7 @@ def build_turn_generation_prompt(
             "- 对手说了什么就接什么，别绕开\n"
             "- 长短句混着来，别每句都又长又对称\n"
             "- 紧扣辩题本身，不要引入无关内容\n"
-            "- 绝对禁止使用「机制」「执行后果」「责任链」「世界线」"
-            "「可执行性」「护栏」「阈值」这类套话\n"
+            f"- 绝对禁止使用{DEBATE_BANNED_TERMS_ZH}这类套话\n"
             "- 如果是 verdict，必须明确给出胜方与判词语气\n"
             "- 直接输出台词，不要 JSON\n"
         )
@@ -1271,8 +1302,7 @@ def build_turn_generation_prompt(
         "- If the opponent just said something, respond to it directly\n"
         "- Mix short and long sentences — don't make every line the same length\n"
         "- Stay on topic, don't invent unrelated details\n"
-        "- NEVER use jargon like 'mechanism', 'accountability chain', "
-        "'execution framework', 'guardrails', 'worldline'\n"
+        f"- NEVER use jargon like {DEBATE_BANNED_TERMS_EN}\n"
         "- If this is the verdict, state the winner and tone\n"
         "- Output plain text only, no JSON\n"
     )

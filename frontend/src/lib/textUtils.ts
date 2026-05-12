@@ -50,3 +50,33 @@ export function countCodepoints(input: unknown): number {
   const text = typeof input === 'string' ? input : String(input ?? '');
   return Array.from(text).length;
 }
+
+export function getFirstGrapheme(text: string): string {
+  if (!text) return '?';
+  if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+    const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+    const first = seg.segment(text)[Symbol.iterator]().next();
+    return first.done ? '?' : first.value.segment;
+  }
+  const codepoints = Array.from(text);
+  const [first, second] = codepoints;
+  if (!first) return '?';
+
+  const isRegionalIndicator = (value: string | undefined) => {
+    if (!value) return false;
+    const point = value.codePointAt(0);
+    return point != null && point >= 0x1f1e6 && point <= 0x1f1ff;
+  };
+
+  if (isRegionalIndicator(first) && isRegionalIndicator(second)) {
+    return `${first}${second}`;
+  }
+
+  let cluster = first;
+  let index = 1;
+  while (codepoints[index] === '\u200d' && codepoints[index + 1]) {
+    cluster += `${codepoints[index]}${codepoints[index + 1]}`;
+    index += 2;
+  }
+  return cluster;
+}

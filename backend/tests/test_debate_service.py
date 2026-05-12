@@ -12,7 +12,7 @@ from sqlmodel import Session
 
 import app.services.debate as debate_module
 import app.services.runtime_lock as runtime_lock_module
-from app.models import DebatePhase, DebatePrediction, DebatePredictionKind
+from app.models import DebatePhase, DebatePrediction, DebatePredictionKind, DebateSide, DebateTurn
 from app.models.database import get_engine
 from app.services.debate import (
     _clear_running_debate,
@@ -736,6 +736,195 @@ async def test_run_debate_background_uses_llm_turn_generation_when_enabled(monke
     assert result["result"]["adjudication_mode"] == "llm_hybrid"
 
 
+@pytest.mark.asyncio
+async def test_run_debate_background_broadcasts_participants_after_persona_upgrade(
+    monkeypatch,
+):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+
+    async def _fake_build_cast_async(*_args, **_kwargs):
+        return {
+            "proposition": {
+                "name": "Ada Vale",
+                "role": "Public budget auditor",
+                "persona": "Tracks every promise against the public ledger.",
+            },
+            "opposition": {
+                "name": "Morgan Pike",
+                "role": "Emergency manager",
+                "persona": "Tests each proposal against the first chaotic week.",
+            },
+            "judge": {
+                "name": "Justice Roe",
+                "role": "Retired review chair",
+                "persona": "Cuts quickly to the exchange that decided the room.",
+            },
+        }
+
+    async def _fake_turn_content(**kwargs):
+        phase = kwargs["phase"]
+        side = kwargs["side"]
+        return f"{phase.value}:{side.value}"
+
+    async def _fake_judge_analysis(**_kwargs):
+        return {
+            "summary": "Judge summary",
+            "winner_reason": "Winner reason",
+            "loser_gap": "Loser gap",
+            "swing_factor": "Swing factor",
+            "closing_note": "Closing note",
+            "dimension_rationales": {
+                "coherence": "Coherence",
+                "evidence": "Evidence",
+                "adaptability": "Adaptability",
+                "impact": "Impact",
+            },
+            "counterplay_explanation": "",
+            "adjudication": None,
+        }
+
+    async def _fake_enhance_insights_with_llm(_debate, insights, _turns, **_kwargs):
+        return insights
+
+    async def _fake_supporting_turns(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(debate_module, "build_cast_async", _fake_build_cast_async)
+    monkeypatch.setattr(debate_module, "_generate_turn_content", _fake_turn_content)
+    monkeypatch.setattr(debate_module, "_generate_judge_analysis", _fake_judge_analysis)
+    monkeypatch.setattr(
+        debate_module,
+        "_enhance_insights_with_llm",
+        _fake_enhance_insights_with_llm,
+    )
+    monkeypatch.setattr(debate_module, "_build_supporting_turns", _fake_supporting_turns)
+
+    debate = create_debate_record(
+        "Should emergency budgets publish monthly receipts?"
+    )
+    pushed_events: list[dict] = []
+
+    async def _push(_debate_id: str, event: dict) -> None:
+        pushed_events.append(event)
+
+    await run_debate_background(debate.id, ws_callback=_push)
+
+    event_types = [event["type"] for event in pushed_events]
+    participant_events = [
+        event for event in pushed_events if event["type"] == "debate_participants_update"
+    ]
+    assert participant_events
+    assert event_types.index("debate_participants_update") < event_types.index("agent_speak")
+
+    participants = participant_events[-1]["data"]["participants"]
+    assert participants[0] == {
+        "side": "proposition",
+        "name": "Ada Vale",
+        "role": "Public budget auditor",
+        "persona": "Tracks every promise against the public ledger.",
+    }
+    assert participants[1]["name"] == "Morgan Pike"
+    assert participants[2]["persona"] == "Cuts quickly to the exchange that decided the room."
+
+    snapshot = load_debate_snapshot(debate.id)
+    assert snapshot is not None
+    assert snapshot["participants"][0]["name"] == "Ada Vale"
+
+
+@pytest.mark.asyncio
+async def test_phase_insight_enhancement_forwards_llm_overrides(monkeypatch):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+    captured: dict[str, object] = {}
+
+    async def _fake_json_call(_prompt: str, **kwargs):
+        captured.update(kwargs)
+        return {
+            "stakes": "This phase turns on the concrete audit promise.",
+            "judge_focus": "The judge is watching the receipt deadline.",
+            "commentary": "The proposition made the timeline feel real.",
+            "strategy": "One side narrows the promise while the other attacks delay.",
+        }
+
+    monkeypatch.setattr(
+        debate_module,
+        "llm_call_json_with_stream_fallback",
+        _fake_json_call,
+    )
+
+    debate = create_debate_record("Should emergency budgets publish monthly receipts?")
+    turn = DebateTurn(
+        id="turn-insight",
+        debate_id=debate.id,
+        sequence=1,
+        phase=DebatePhase.OPENING,
+        speaker_side=DebateSide.PROPOSITION,
+        speaker_name="Speaker",
+        content="Publish every receipt within thirty days.",
+    )
+    insights = [{
+        "phase": "opening",
+        "stakes": "Fallback stakes",
+        "judge_focus": "Fallback focus",
+        "commentary": "Fallback commentary",
+        "strategy": "",
+        "pressure_side": "proposition",
+        "pressure_margin": 4,
+        "turn_count": 1,
+        "confidence_drift": {
+            "direction": "proposition",
+            "phase_margin": 4,
+            "cumulative_margin": 4,
+        },
+    }]
+
+    await debate_module._enhance_insights_with_llm(
+        debate,
+        insights,
+        [turn],
+        llm_overrides={
+            "model": "byok-model",
+            "api_key": "byok-key",
+            "base_url": "https://byok.example/v1",
+        },
+    )
+
+    assert captured["model"] == "byok-model"
+    assert captured["api_key"] == "byok-key"
+    assert captured["base_url"] == "https://byok.example/v1"
+
+
+@pytest.mark.asyncio
+async def test_supporting_turn_reason_forwards_llm_overrides(monkeypatch):
+    monkeypatch.setattr(debate_module.settings, "DEBATE_USE_LLM", True)
+    captured: dict[str, object] = {}
+
+    async def _fake_llm_call(_prompt: str, **kwargs):
+        captured.update(kwargs)
+        return "This mattered because the deadline turned a vague promise into a testable claim."
+
+    monkeypatch.setattr(debate_module, "llm_call", _fake_llm_call)
+
+    reason = await debate_module._generate_supporting_turn_reason(
+        language="en",
+        kind="winner",
+        phase=DebatePhase.OPENING,
+        motion="Should emergency budgets publish monthly receipts?",
+        quote="Publish every receipt within thirty days.",
+        speaker_name="Speaker",
+        speaker_side="proposition",
+        llm_overrides={
+            "model": "byok-model",
+            "api_key": "byok-key",
+            "base_url": "https://byok.example/v1",
+        },
+    )
+
+    assert "deadline" in reason
+    assert captured["model"] == "byok-model"
+    assert captured["api_key"] == "byok-key"
+    assert captured["base_url"] == "https://byok.example/v1"
+
+
 # ---------------------------------------------------------------------------
 # Persona persistence & backward compatibility regression tests
 # ---------------------------------------------------------------------------
@@ -797,6 +986,30 @@ def test_serialize_debate_old_debate_without_personas():
 
     for p in result["participants"]:
         assert p["persona"], f"{p['side']} should have a fallback persona"
+
+
+def test_serialize_debate_old_debate_without_names_uses_side_defaults():
+    """Old rows with blank participant names must still render readable labels."""
+    from app.services.debate import _serialize_debate
+
+    debate = create_debate_record(question="Should we reform the tax code?")
+    with Session(get_engine()) as session:
+        db_debate = session.get(debate_module.Debate, debate.id)
+        db_debate.proposition_name = ""
+        db_debate.opposition_name = ""
+        db_debate.judge_name = ""
+        session.add(db_debate)
+        session.commit()
+
+    with Session(get_engine()) as session:
+        db_debate = session.get(debate_module.Debate, debate.id)
+        result = _serialize_debate(db_debate, [])
+
+    assert [p["name"] for p in result["participants"]] == [
+        "Proposition",
+        "Opposition",
+        "Judge",
+    ]
 
 
 def test_serialize_debate_with_persisted_personas():

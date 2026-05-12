@@ -29,6 +29,7 @@ import {
   type DebateLeader,
 } from '../lib/debateInsights';
 import { DEBATE_UI_ASSETS, getThemeAssetPath, getTheaterThemeLabel } from '../lib/themeRegistry';
+import { getFirstGrapheme } from '../lib/textUtils';
 import {
   captureElementDataUrl,
   useScreenCapture,
@@ -127,7 +128,20 @@ export function DebateArenaView() {
   const [counterplayRecord, setCounterplayRecord] = useState<DebateCounterplayRecord | null>(null);
   const [expandedPastTurnIds, setExpandedPastTurnIds] = useState<Set<string>>(new Set());
   const [spotlightExpanded, setSpotlightExpanded] = useState(false);
+  const [expandedRoomCards, setExpandedRoomCards] = useState<Set<string>>(new Set());
   const [strategyOpenItems, setStrategyOpenItems] = useState<string[]>(['clash']);
+
+  const toggleRoomCard = (side: string) => {
+    setExpandedRoomCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(side)) {
+        next.delete(side);
+      } else {
+        next.add(side);
+      }
+      return next;
+    });
+  };
   const revealRef = useRef(0);
   const previousPhaseRef = useRef<string | null>(null);
   const advanceTimeRemainderRef = useRef(0);
@@ -941,7 +955,7 @@ export function DebateArenaView() {
                 >
                   <div className="debate-turn-card__meta">
                     <span className={`debate-speaker-initial debate-speaker-initial--${latestVisibleTurn.speaker_side}`} aria-hidden="true">
-                      {latestVisibleTurn.speaker_name.charAt(0)}
+                      {getFirstGrapheme(latestVisibleTurn.speaker_name)}
                     </span>
                     <strong>{latestVisibleTurn.speaker_name}</strong>
                     <div className="debate-turn-card__tags">
@@ -1009,7 +1023,7 @@ export function DebateArenaView() {
                             badge={
                               <>
                                 <span className={`debate-speaker-initial debate-speaker-initial--${turn.speaker_side}`} aria-hidden="true">
-                                  {turn.speaker_name.charAt(0)}
+                                  {getFirstGrapheme(turn.speaker_name)}
                                 </span>
                                 <span className={`debate-phase-chip${turn.speaker_side === 'opposition' ? ' debate-phase-chip--con' : turn.speaker_side === 'judge' ? ' debate-phase-chip--judge' : ''}`}>
                                   {getDebateSideLabel(t, turn.speaker_side)}
@@ -1027,7 +1041,7 @@ export function DebateArenaView() {
                         >
                           <div className="debate-turn-card__meta">
                             <span className={`debate-speaker-initial debate-speaker-initial--${turn.speaker_side}`} aria-hidden="true">
-                              {turn.speaker_name.charAt(0)}
+                              {getFirstGrapheme(turn.speaker_name)}
                             </span>
                             <strong>{turn.speaker_name}</strong>
                             <div className="debate-turn-card__tags">
@@ -1102,8 +1116,8 @@ export function DebateArenaView() {
                           : participant.side === 'opposition'
                             ? debate.score.opposition
                             : debate.result_ready
-                              ? 1
-                              : 0
+                              ? t('debate.judge_verdict_ready')
+                              : t('debate.judge_pending')
                       }
                       active={
                         participant.side === activeSpeakerSide
@@ -1113,27 +1127,48 @@ export function DebateArenaView() {
                   ))}
                 </div>
                 <div className="debate-room-grid">
-                  {roomInsights.map((insight) => (
-                    <article
-                      key={insight.side}
-                      className={`debate-room-card debate-room-card--${insight.side} ${insight.active ? 'debate-room-card--active' : ''}`}
-                    >
-                      <div className="debate-room-card__meta">
-                        <strong>{getDebateSideLabel(t, insight.side)}</strong>
-                        <span className="debate-phase-chip">{insight.statusLabel}</span>
-                      </div>
-                      <p className="debate-room-card__role">{insight.role}</p>
-                      {insight.persona ? (
-                        <p className="debate-room-card__persona" title={insight.persona}>
-                          {insight.persona}
+                  {roomInsights.map((insight) => {
+                    const isExpanded = expandedRoomCards.has(insight.side);
+                    const personaLong = Boolean(insight.persona && insight.persona.length > 40);
+                    const noteLong = Boolean(insight.note && insight.note.length > 60);
+                    const hasExpandable = personaLong || noteLong;
+                    return (
+                      <article
+                        key={insight.side}
+                        className={`debate-room-card debate-room-card--${insight.side} ${insight.active ? 'debate-room-card--active' : ''}`}
+                      >
+                        <div className="debate-room-card__meta">
+                          <strong>{getDebateSideLabel(t, insight.side)}</strong>
+                          <span className="debate-phase-chip">{insight.statusLabel}</span>
+                        </div>
+                        <p className="debate-room-card__role">{insight.role}</p>
+                        {insight.persona ? (
+                          <p
+                            className={`debate-room-card__persona ${isExpanded ? 'debate-room-card__persona--expanded' : ''}`}
+                            title={isExpanded ? undefined : insight.persona}
+                          >
+                            {insight.persona}
+                          </p>
+                        ) : null}
+                        <p className={`debate-room-card__note ${isExpanded ? 'debate-room-card__note--expanded' : ''}`}>
+                          {insight.note}
                         </p>
-                      ) : null}
-                      <p className="debate-room-card__note">{insight.note}</p>
-                      {insight.sourceLabel && (
-                        <span className="debate-room-card__source">{insight.sourceLabel}</span>
-                      )}
-                    </article>
-                  ))}
+                        {hasExpandable ? (
+                          <button
+                            type="button"
+                            className="debate-card-expand-btn"
+                            onClick={() => toggleRoomCard(insight.side)}
+                            aria-expanded={isExpanded}
+                          >
+                            {isExpanded ? t('shared.foldable.collapse_text') : t('shared.foldable.show_full_text')}
+                          </button>
+                        ) : null}
+                        {insight.sourceLabel && (
+                          <span className="debate-room-card__source">{insight.sourceLabel}</span>
+                        )}
+                      </article>
+                    );
+                  })}
                 </div>
               </div>
             </section>

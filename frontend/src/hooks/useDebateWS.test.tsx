@@ -9,6 +9,7 @@ const storeState = {
   setDebate: vi.fn(),
   setPhase: vi.fn(),
   setScore: vi.fn(),
+  setParticipants: vi.fn(),
   setCounterplay: vi.fn(),
   appendTurn: vi.fn(),
   setVerdict: vi.fn(),
@@ -248,6 +249,7 @@ describe('useDebateWS', () => {
     expect(storeState.setDebate).not.toHaveBeenCalled();
     expect(storeState.setPhase).not.toHaveBeenCalled();
     expect(storeState.setScore).not.toHaveBeenCalled();
+    expect(storeState.setParticipants).not.toHaveBeenCalled();
     expect(storeState.setCounterplay).not.toHaveBeenCalled();
     expect(storeState.appendTurn).not.toHaveBeenCalled();
     expect(storeState.setVerdict).not.toHaveBeenCalled();
@@ -328,6 +330,45 @@ describe('useDebateWS', () => {
       winner: 'proposition',
       phase_insights: expect.any(Array),
     }));
+  });
+
+  it('forwards participant update events into the store', () => {
+    render(<Harness debateId="debate-participants" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+
+    act(() => {
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'debate_participants_update',
+          data: {
+            participants: [
+              {
+                side: 'proposition',
+                name: 'Dr. Vale',
+                role: 'Budget auditor',
+                persona: 'Reads every promise through the public ledger.',
+              },
+            ],
+          },
+          meta: {
+            stream_id: 'debate-participants',
+            sequence: 1,
+            event_id: 'debate-participants:1',
+          },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.setParticipants).toHaveBeenCalledWith([
+      expect.objectContaining({
+        side: 'proposition',
+        name: 'Dr. Vale',
+        role: 'Budget auditor',
+      }),
+    ], 'debate-participants');
   });
 
   it('drops duplicate or stale debate events by sequence', () => {

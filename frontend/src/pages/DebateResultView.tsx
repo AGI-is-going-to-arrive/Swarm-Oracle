@@ -566,7 +566,9 @@ export function DebateResultView() {
                           ? payload.result.score.proposition
                           : participant.side === 'opposition'
                             ? payload.result.score.opposition
-                            : 1
+                            : payload.result_ready
+                              ? t('debate.judge_verdict_ready')
+                              : t('debate.judge_pending')
                       }
                       active={participant.side === payload.result.winner}
                     />

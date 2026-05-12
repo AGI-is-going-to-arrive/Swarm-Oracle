@@ -5,6 +5,7 @@ import { create } from 'zustand';
 import { createDebate, getDebate } from '../api/client';
 import type {
   DebateCounterplayResult,
+  DebateParticipant,
   DebateVerdictEventPayload,
   DebateScore,
   DebateSnapshot,
@@ -13,6 +14,7 @@ import type {
 
 interface DebateState {
   debate: DebateSnapshot | null;
+  pendingParticipants: { debateId: string | null; participants: DebateParticipant[] } | null;
   status: 'idle' | 'loading' | 'live' | 'done' | 'error';
   error: string | null;
   errorCode: string | null;
@@ -21,6 +23,7 @@ interface DebateState {
   setDebate: (debate: DebateSnapshot) => void;
   appendTurn: (turn: DebateTurn) => void;
   setPhase: (phase: DebateSnapshot['current_phase']) => void;
+  setParticipants: (participants: DebateParticipant[], debateId?: string | null) => void;
   setScore: (score: DebateScore) => void;
   setCounterplay: (counterplay: DebateCounterplayResult) => void;
   setVerdict: (verdict: DebateVerdictEventPayload) => void;
@@ -30,6 +33,7 @@ interface DebateState {
 
 const initialState = {
   debate: null,
+  pendingParticipants: null as { debateId: string | null; participants: DebateParticipant[] } | null,
   status: 'idle' as const,
   error: null as string | null,
   errorCode: null as string | null,
@@ -58,6 +62,28 @@ function mergeTurns(current: DebateTurn[], incoming: DebateTurn[]): DebateTurn[]
   return sortTurns([...merged.values()]);
 }
 
+function mergeParticipants(
+  current: DebateParticipant[],
+  incoming: DebateParticipant[],
+): DebateParticipant[] {
+  const incomingBySide = new Map(incoming.map((participant) => [participant.side, participant]));
+  const currentSides = new Set(current.map((participant) => participant.side));
+  return [
+    ...current.map((participant) => {
+      const next = incomingBySide.get(participant.side);
+      if (!next) return participant;
+      return {
+        ...participant,
+        ...next,
+        name: next.name?.trim() ? next.name : participant.name,
+        role: next.role?.trim() ? next.role : participant.role,
+        persona: next.persona ?? participant.persona,
+      };
+    }),
+    ...incoming.filter((participant) => !currentSides.has(participant.side)),
+  ];
+}
+
 function laterPhase(
   left: DebateSnapshot['current_phase'],
   right: DebateSnapshot['current_phase'],
@@ -81,13 +107,20 @@ function moreFinalStatus(
 function mergeDebateSnapshot(
   current: DebateSnapshot | null,
   incoming: DebateSnapshot,
+  pendingParticipants?: { debateId: string | null; participants: DebateParticipant[] } | null,
 ): DebateSnapshot {
+  const participants = pendingParticipants
+    && (pendingParticipants.debateId == null || pendingParticipants.debateId === incoming.id)
+    ? mergeParticipants(incoming.participants, pendingParticipants.participants)
+    : incoming.participants;
+
   if (!current || current.id !== incoming.id) {
-    return { ...incoming, turns: sortTurns(incoming.turns) };
+    return { ...incoming, participants, turns: sortTurns(incoming.turns) };
   }
 
   return {
     ...incoming,
+    participants: mergeParticipants(current.participants, participants),
     turns: mergeTurns(current.turns, incoming.turns),
     current_phase: laterPhase(current.current_phase, incoming.current_phase),
     status: moreFinalStatus(current.status, incoming.status),
@@ -112,6 +145,7 @@ export const useDebateStore = create<DebateState>((set) => ({
       const debate = await createDebate(question);
       set({
         debate,
+        pendingParticipants: null,
         status: debate.status === 'done' ? 'done' : debate.status === 'error' ? 'error' : 'live',
         error: null,
         errorCode: null,
@@ -136,9 +170,10 @@ export const useDebateStore = create<DebateState>((set) => ({
     try {
       const debate = await getDebate(id);
       set((state) => {
-        const merged = mergeDebateSnapshot(state.debate, debate);
+        const merged = mergeDebateSnapshot(state.debate, debate, state.pendingParticipants);
         return {
           debate: merged,
+          pendingParticipants: null,
           status: merged.status === 'done' ? 'done' : merged.status === 'error' ? 'error' : 'live',
           error: null,
           errorCode: null,
@@ -158,9 +193,10 @@ export const useDebateStore = create<DebateState>((set) => ({
   },
 
   setDebate: (debate) => set((state) => {
-    const merged = mergeDebateSnapshot(state.debate, debate);
+    const merged = mergeDebateSnapshot(state.debate, debate, state.pendingParticipants);
     return {
       debate: merged,
+      pendingParticipants: null,
       status: merged.status === 'done' ? 'done' : merged.status === 'error' ? 'error' : 'live',
       error: null,
       errorCode: null,
@@ -188,6 +224,19 @@ export const useDebateStore = create<DebateState>((set) => ({
       debate: {
         ...state.debate,
         current_phase: laterPhase(state.debate.current_phase, phase),
+      },
+    };
+  }),
+
+  setParticipants: (participants, debateId = null) => set((state) => {
+    if (!state.debate) {
+      return { pendingParticipants: { debateId, participants } };
+    }
+    if (debateId && state.debate.id !== debateId) return state;
+    return {
+      debate: {
+        ...state.debate,
+        participants: mergeParticipants(state.debate.participants, participants),
       },
     };
   }),

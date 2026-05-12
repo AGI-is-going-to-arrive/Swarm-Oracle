@@ -233,6 +233,12 @@
 说明：
 
 - Debate 是独立域，不与主模式复用 scenario authority。
+- `POST /api/debate` 当前接受 request-scoped LLM override：
+  - `llm_api_key / llm_base_url / llm_model`
+  - `reasoning_effort`
+  - `llm_requests_per_minute / llm_tokens_per_minute`
+  - `llm_base_url` 必须通过 allowlist；自定义 base URL 必须同时带 `llm_api_key`
+  - 这些覆盖项只影响当前 debate，会用于 persona、turn、judge、phase insight、supporting turns 和 argument-map enrichment 相关 LLM 调用
 - `POST /api/debate` 当前接受可选 `custom_agent_ids`：
   - 最多 2 个，重复值返回 422
   - `FEATURE_CUSTOM_AGENTS=false` 时返回 400
@@ -468,6 +474,10 @@
 说明：
 
 - scenario / debate live 事件都会带 `meta`，前端按 `sequence / event_id` 去重。
+- Debate live 事件当前还包括 `debate_participants_update`：
+  - payload 为 `{ participants: DebateParticipant[] }`
+  - 通常在 LLM persona upgrade 成功后、首个 `agent_speak` 前广播
+  - 客户端应按 `side` 合并 participants，并允许该事件早于 REST snapshot 到达
 - scenario cancel 成功后会广播 `simulation_cancelled`；前端把 `cancelled` 视为终态，晚到的旧 `status/state` 事件不能把页面带回 live 状态。
 - scenario WS 当前也可以广播 `kg:delta` 与 `kg:snapshot_invalidated`：
   - `kg:delta` 的 `data` 是合并后的 causal graph delta，包含 `scenario_id / version / added / updated / deleted / snapshot_invalidated`。

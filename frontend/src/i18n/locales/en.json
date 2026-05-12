@@ -936,6 +936,8 @@
       "momentum_title": "Momentum",
       "audience_meter": "Audience meter {{value}}",
       "score_label": "Score",
+      "judge_verdict_ready": "Verdict",
+      "judge_pending": "Pending",
       "live_title": "Debate Arena",
       "live_subtitle": "Structured What-If duel",
       "motion_label": "Motion",
@@ -2133,6 +2135,8 @@
       "foldable": {
         "show_full": "Show full turn",
         "collapse": "Collapse turn",
+        "show_full_text": "Show full text",
+        "collapse_text": "Show less",
         "collapsed_hint": "Click to expand full turn",
         "turn_count": "{{count}} turns total",
         "phase_divider": "Phase {{phase}}"

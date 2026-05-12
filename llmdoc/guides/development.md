@@ -267,7 +267,7 @@ npm run lint
 npm run build
 ```
 
-当前 Sprint 5-6 前端全量回归最近一次记录为 `184 files / 1983 tests / 0 failed`，`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint` 和 `npm run build` 都通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
+当前全仓验证最近记录：backend full pytest `2761 passed, 2 skipped`，backend touched-file `ruff check` 通过；frontend full vitest `184 files / 1991 tests / 0 failed`，TypeScript noEmit 与目标文件 ESLint 通过；`git diff --check` 通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
@@ -342,18 +342,16 @@ npx vitest run --reporter=verbose
 npm run build
 ```
 
-本 session 已复核：
+最近稳定验证记录：
 
 - backend `ruff check`：通过
-- backend 全量 `python -m pytest tests/ -x -q`：`2752 passed, 2 skipped`
-- backend touched-file 定向回归：`314 passed`
-- backend review-fix focused rerun：cancel / journal / snapshot / leaderboard segment `84 passed`
-- backend prediction API 回归：`48 passed`
+- backend 全量 `python -m pytest tests/ -x -q --tb=short`：`2761 passed, 2 skipped`
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-- frontend full vitest：`184 files / 1983 tests / 0 failed`
-- frontend Sprint 5-6 focused rerun：`7 files / 104 tests passed`
-- frontend `npm run build`：通过，build performance budget 无 violations
-- frontend i18n key + placeholder parity：`en:2432 zh:2432`
+- frontend full vitest：`184 files / 1991 tests / 0 failed`
+- frontend 目标文件 ESLint：通过
+- frontend i18n key + placeholder parity：`en:2436 zh:2436`
+- `git diff --check`：通过
+- Chrome DevTools browser spot-check：Debate live/result 在 `1440px` 和 `375px` 均无水平溢出；`375px` expand button 为 `44px`，long role probe `overflow=0`
 
 浏览器复核优先覆盖：
 
@@ -371,7 +369,7 @@ npm run build
 
 - `EducationTemplatePicker / PersonaExportImport` 已有组件级测试。
 - `AgentLibrary / AgentWorkshopView / IdentityInspectorView / InputView / LeaderboardView / PersonalJournalView` 已补页面级前端测试。
-- 仓库 Playwright named project 仍不是这组回归的默认入口；本 session 用浏览器 smoke 覆盖 Chromium / Firefox / WebKit 桌面与 375px mobile。
+- 仓库 Playwright named project 仍不是这组回归的默认入口；最近记录用浏览器 smoke 覆盖 Chromium / Firefox / WebKit 桌面与 375px mobile。
 
 ### SimulationView / PredictionModal / Gameplay Cards 回归
 

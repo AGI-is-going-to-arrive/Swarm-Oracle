@@ -543,6 +543,10 @@
   margin: 0;
   color: var(--text-secondary);
   font-size: 0.875rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .debate-room-card__persona {
@@ -614,6 +618,10 @@
 
 .debate-score-card__role {
   font-size: 1rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .debate-score-card__persona {
@@ -628,6 +636,64 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
+}
+
+/* Expanded persona in score card */
+.debate-score-card__persona--expanded {
+  -webkit-line-clamp: unset;
+  display: block;
+  overflow: visible;
+}
+
+/* Expanded room card content */
+.debate-room-card__persona--expanded {
+  -webkit-line-clamp: unset;
+  display: block;
+  overflow: visible;
+}
+
+.debate-room-card__note--expanded {
+  -webkit-line-clamp: unset;
+  display: block;
+  overflow: visible;
+}
+
+/* Expand/collapse button for cards */
+.debate-card-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 2px 8px;
+  margin-top: 4px;
+  font-size: 0.6875rem;
+  line-height: 1.2;
+  color: var(--text-muted, #7a7060);
+  background: none;
+  border: 1px solid var(--border-default, rgba(64, 48, 40, 0.12));
+  border-radius: 10px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+  align-self: flex-start;
+  justify-self: start;
+}
+
+.debate-card-expand-btn:hover {
+  color: var(--text-primary, #3d3428);
+  border-color: var(--border-default, rgba(64, 48, 40, 0.25));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .debate-card-expand-btn {
+    transition: none;
+  }
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .debate-card-expand-btn {
+    min-height: 44px;
+    padding: 8px 12px;
+  }
 }
 
 .debate-score-card__score {
@@ -1098,6 +1164,12 @@
 
   .debate-score-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .debate-score-grid {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -35,8 +35,8 @@
 | ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
-| DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live |
-| DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import |
+| DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live、Podium Cards、room state、phase 历史卡、counterplay、live argument map |
+| DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import、裁判状态文案、按需加载 argument map |
 | WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay、participant follow-up、analyst ReACT 面板、人格漂移 warning |
 | HistoryView | `frontend/src/pages/HistoryView.tsx` | scenario 历史列表 |
 | LeaderboardView | `frontend/src/pages/LeaderboardView.tsx` | prediction leaderboard 与 segment filters；筛选状态同步到 URL params，顶部返回按钮回到首页 |
@@ -348,6 +348,9 @@
 - `DebateArenaView` 当前只允许在 live 当前 phase 的下注窗口打开/提交 quick counterplay；锁到历史 phase 时不再发起 counterplay。
 - `DebateArenaView` 当前在“当前 live phase”视图下会保留更早 phase 的已出现 turns，并以 `FoldableTurn` 历史卡形式继续展示；切到历史 phase 时仍只显示该 phase 自己的 turns。
 - Debate 的页面级播报当前只保留 phase cue；`SpotlightTurnCard` 的高亮态不再单独暴露 live-region 语义，避免同一轮变化在读屏器里重复播报。
+- `useDebateWS` 当前会处理 `debate_participants_update`；`debateStore` 按 `side` 合并 participants，并支持 WS 更新早于 REST snapshot 到达的情况。空 name/role 不会覆盖已有可读值。
+- `DebateArenaView / DebateResultView` 的 Podium/score card 当前会展示 participant role/persona；长 persona 和 room note 可展开，长 role/persona 会自动换行。裁判分数位显示本地化状态，不再用数字占位。
+- Debate live 的 speaker initial 当前按 grapheme 截取，emoji、旗帜和 CJK 扩展字符不会被 `charAt(0)` 截坏。
 - `WorldlineRoundtableView` 当前已补：
   - `Continue this table / Start anchored thread / Copy roundtable brief`
   - `phase insight` 级追问 / 开线程（当前会覆盖返回的全部 `phase_insights`，不再只限前 3 条）
@@ -540,13 +543,12 @@
   - `cd frontend && npm run test -- --run src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts --reporter=verbose`：`87 passed`
   - `cd frontend && npx tsc --noEmit`：通过
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
-- Sprint 5-6 frontend 本 session 已跑：
+- 当前 frontend 稳定验证口径：
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npx vitest run`：`184 files / 1983 tests / 0 failed`
-  - `npm run build`：通过，build performance budget 无 violations
-  - Sprint 5-6 focused rerun：`7 files / 104 tests passed`
-  - Browser 复核覆盖 result fixture desktop/mobile Chromium `13/13`、capability matrix `30/30`，并手动打开 `/`、`/agents/new`、`/leaderboard`、`/admin/setup`、`/me/journal`；console warning/error 为 0，375px mobile 无横向溢出
-- frontend i18n key + placeholder parity：`en:2432 zh:2432`。
+  - `npx vitest run`：`184 files / 1991 tests / 0 failed`
+  - 目标文件 ESLint：通过
+  - Debate live/result Chrome DevTools 复核覆盖 `1440px` 与 `375px`；score grid 单列、expand button `44px`、long role probe `overflow=0`
+- frontend i18n key + placeholder parity：`en:2436 zh:2436`。
 - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 - Classic 分支标题本轮已补定向验证：

@@ -90,6 +90,160 @@ describe('debateStore', () => {
     expect(useDebateStore.getState().debate?.turns.map((turn) => turn.id)).toEqual(['t1', 't2']);
   });
 
+  it('merges participant updates by debate side', () => {
+    useDebateStore.getState().setDebate({
+      id: 'debate-participants',
+      question: 'Q',
+      motion: 'M',
+      language: 'en',
+      profile_id: 'generic',
+      scene_theme: 'debate_arena_forum',
+      status: 'live',
+      current_phase: 'opening',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      participants: [
+        {
+          side: 'proposition',
+          name: 'Template Pro',
+          role: 'Template proposer',
+          persona: 'Template persona',
+        },
+        {
+          side: 'opposition',
+          name: 'Template Con',
+          role: 'Template skeptic',
+          persona: 'Template persona',
+        },
+      ],
+      score: { proposition: 0, opposition: 0, audience_meter: 0 },
+      turns: [],
+      available_prediction_options: { winner: ['proposition', 'opposition'], verdict_tone: ['order', 'balance', 'rupture'] },
+      result_ready: false,
+    });
+
+    useDebateStore.getState().setParticipants([
+      {
+        side: 'proposition',
+        name: 'LLM Pro',
+        role: 'Public budget auditor',
+        persona: 'Speaks from the ledger.',
+      },
+      {
+        side: 'judge',
+        name: 'LLM Judge',
+        role: 'Retired chair',
+        persona: 'Cuts to the deciding exchange.',
+      },
+    ]);
+
+    expect(useDebateStore.getState().debate?.participants).toEqual([
+      {
+        side: 'proposition',
+        name: 'LLM Pro',
+        role: 'Public budget auditor',
+        persona: 'Speaks from the ledger.',
+      },
+      {
+        side: 'opposition',
+        name: 'Template Con',
+        role: 'Template skeptic',
+        persona: 'Template persona',
+      },
+      {
+        side: 'judge',
+        name: 'LLM Judge',
+        role: 'Retired chair',
+        persona: 'Cuts to the deciding exchange.',
+      },
+    ]);
+  });
+
+  it('applies participant updates that arrive before the debate snapshot', () => {
+    useDebateStore.getState().setParticipants([
+      {
+        side: 'proposition',
+        name: 'Early Pro',
+        role: 'Ledger advocate',
+        persona: 'Arrived over WS before REST.',
+      },
+    ], 'debate-early-participants');
+
+    useDebateStore.getState().setDebate({
+      id: 'debate-early-participants',
+      question: 'Q',
+      motion: 'M',
+      language: 'en',
+      profile_id: 'generic',
+      scene_theme: 'debate_arena_forum',
+      status: 'live',
+      current_phase: 'opening',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      participants: [
+        {
+          side: 'proposition',
+          name: 'Template Pro',
+          role: 'Template proposer',
+          persona: 'Template persona',
+        },
+      ],
+      score: { proposition: 0, opposition: 0, audience_meter: 0 },
+      turns: [],
+      available_prediction_options: { winner: ['proposition', 'opposition'], verdict_tone: ['order', 'balance', 'rupture'] },
+      result_ready: false,
+    });
+
+    expect(useDebateStore.getState().debate?.participants[0]).toEqual({
+      side: 'proposition',
+      name: 'Early Pro',
+      role: 'Ledger advocate',
+      persona: 'Arrived over WS before REST.',
+    });
+  });
+
+  it('keeps existing participant fields when an update omits optional copy', () => {
+    useDebateStore.getState().setDebate({
+      id: 'debate-partial-participants',
+      question: 'Q',
+      motion: 'M',
+      language: 'en',
+      profile_id: 'generic',
+      scene_theme: 'debate_arena_forum',
+      status: 'live',
+      current_phase: 'opening',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      participants: [
+        {
+          side: 'proposition',
+          name: 'Template Pro',
+          role: 'Template proposer',
+          persona: 'Template persona',
+        },
+      ],
+      score: { proposition: 0, opposition: 0, audience_meter: 0 },
+      turns: [],
+      available_prediction_options: { winner: ['proposition', 'opposition'], verdict_tone: ['order', 'balance', 'rupture'] },
+      result_ready: false,
+    });
+
+    useDebateStore.getState().setParticipants([
+      {
+        side: 'proposition',
+        name: '',
+        role: 'Updated proposer',
+      },
+    ], 'debate-partial-participants');
+
+    expect(useDebateStore.getState().debate?.participants[0]).toEqual({
+      side: 'proposition',
+      name: 'Template Pro',
+      role: 'Updated proposer',
+      persona: 'Template persona',
+    });
+  });
+
   it('persists phase insights from verdict events', () => {
     useDebateStore.getState().setDebate({
       id: 'debate-3',

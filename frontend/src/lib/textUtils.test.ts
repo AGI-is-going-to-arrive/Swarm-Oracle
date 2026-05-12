@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { countCodepoints, truncateCodepoints } from './textUtils';
+import { countCodepoints, getFirstGrapheme, truncateCodepoints } from './textUtils';
 
 describe('truncateCodepoints', () => {
   it('returns the input unchanged when within the limit', () => {
@@ -61,5 +61,36 @@ describe('countCodepoints', () => {
   it('handles null/undefined', () => {
     expect(countCodepoints(null)).toBe(0);
     expect(countCodepoints(undefined)).toBe(0);
+  });
+});
+
+describe('getFirstGrapheme', () => {
+  it('returns a fallback for empty strings', () => {
+    expect(getFirstGrapheme('')).toBe('?');
+  });
+
+  it('keeps zero-width-joiner emoji together when Intl.Segmenter is available', () => {
+    expect(getFirstGrapheme('👩‍💻 Engineer')).toBe('👩‍💻');
+  });
+
+  it('keeps flag emoji pairs together when Intl.Segmenter is available', () => {
+    expect(getFirstGrapheme('🇺🇳 Delegate')).toBe('🇺🇳');
+  });
+
+  it('keeps common emoji clusters together without Intl.Segmenter', () => {
+    const originalSegmenter = Intl.Segmenter;
+    Object.defineProperty(Intl, 'Segmenter', {
+      configurable: true,
+      value: undefined,
+    });
+    try {
+      expect(getFirstGrapheme('🇺🇳 Delegate')).toBe('🇺🇳');
+      expect(getFirstGrapheme('👩‍💻 Engineer')).toBe('👩‍💻');
+    } finally {
+      Object.defineProperty(Intl, 'Segmenter', {
+        configurable: true,
+        value: originalSegmenter,
+      });
+    }
   });
 });

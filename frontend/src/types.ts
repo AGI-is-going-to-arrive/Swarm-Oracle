@@ -863,6 +863,7 @@ export type DebateWSEvent =
     | { type: 'agent_speak'; data: Omit<DebateTurn, 'created_at'> & { created_at?: string } }
     | { type: 'debate_phase_change'; data: { phase: DebatePhase } }
     | { type: 'debate_score_update'; data: { score: Omit<DebateScore, 'audience_meter'>; audience_meter: number } }
+    | { type: 'debate_participants_update'; data: { participants: DebateParticipant[] } }
     | { type: 'debate_counterplay'; data: DebateCounterplayResult }
     | { type: 'debate_verdict'; data: DebateVerdictEventPayload }
   ) & { meta?: WsEventMeta };

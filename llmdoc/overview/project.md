@@ -56,6 +56,8 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 独立 debate 域，包含 live/result/replay。
 - Debate 创建请求当前可选传入最多 2 个属于当前用户的 `custom_agent_ids`；功能开关关闭时直接拒绝，ID 不存在、不是 custom 或跨用户都会被拒绝。传入后按顺序锁定 proposition / opposition 的名字、角色、persona 和 metadata，生成每轮发言时继续把 knowledge domains / decision bias 作为不可信 prompt metadata 注入。
 - 已落地结构化押注、counterplay、judge rationale、supporting turns 与 replay import。import replay 在 turns 落库后会同步抽取 argument map，导入完成后就能直接打开图谱。
+- 非 custom 的 Debate cast 会先用 deterministic 模板占位；`DEBATE_USE_LLM=true` 时，后台会按当前辩题生成 name、role 和 persona。name/role 会先清洗控制字符、fence 和 prompt-injection 标记，失败或空值回退模板。
+- LLM persona upgrade 成功后，会在第一轮发言前通过 `debate_participants_update` 刷新 live 页参与者信息。前端按 `side` 合并，允许 WS 更新早于 REST snapshot 到达。
 - Debate replay 分享当前优先走内联 `?replay=`；链接过长时会回退为本地只读 `?local=`。结果页在这条回退链路上会明确显示 `Save local read-only copy`，而导入入口继续保留 `Import as Local Run`。
 - result 页里的 argument map 当前改成按需加载，并重新对齐回主页面壳；首屏先给 `Load map`，只有用户点开后才真正挂图。
 - 当前 phase 视图会保留更早 phase 的已出现 turns，并以折叠历史卡形式留在当前 live 视图里，不再直接丢掉。
@@ -67,6 +69,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - debate argument map 的 fail-soft 当前会显示明确失败文案和 `Retry`，不会再被误判成普通空态。
 - debate runtime lock 当前会在长运行期间持续续租；续租返回 `None`、续租抛异常，或本地 lease 已过期时，任务会 fail-closed 并把 debate 标成 `error`，不会继续生成后续内容。
 - Debate 页面壳当前继续跟随用户自己的 UI 语言，不会再因为 `debate.language` 或结果 payload 反向切全局语言；结果页的 mixed-language fallback 已覆盖 `phase commentary / replay quote / prediction score reason` 这些长文案来源，命中时会显示明确 fallback note，并保留原文展示。
+- Debate live/result 的 Podium Cards、score card 和 room card 当前支持长角色、人设与现场备注换行；长 persona / room note 可展开。裁判卡不再显示 `0/1`，而是跟随 UI 语言显示 `待裁决 / 已裁决`。移动端 score grid 会收成单列，避免横向溢出。
 
 ### Oracle Chambers / 世界线圆桌
 
@@ -184,12 +187,12 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
   - backend `ruff check` 最近一次记录为通过
-  - backend 全量 `python -m pytest tests/ -x -q` 最近一次记录为 `2752 passed, 2 skipped`
+  - backend 全量 `python -m pytest tests/ -x -q --tb=short` 最近一次记录为 `2761 passed, 2 skipped`
   - frontend `typecheck / lint / build / perf budgets` 通过
   - 本次 bridge/workbench 文案 + CausalReview guide key-node 标签窄集：`87 passed`
   - 本次前端 TypeScript noEmit：通过
-  - frontend 全量 vitest 最近一次记录为 `184 files / 1983 tests / 0 failed`
-  - frontend `npx tsc --noEmit -p tsconfig.app.json` 与 `npm run build` 最近一次记录为通过
+  - frontend 全量 vitest 最近一次记录为 `184 files / 1991 tests / 0 failed`
+  - frontend `npx tsc --noEmit -p tsconfig.app.json` 最近一次记录为通过
   - 本轮真实验证还包括：
     - Classic 分支标题定向验证：
       - `cd frontend && npm exec -- vitest run src/components/BranchTree.test.tsx`：`5 passed`
@@ -242,17 +245,18 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - Sprint 0-2 收尾复验当前已补：
     - backend 本轮触碰文件定向 pytest：`36 passed`
     - backend 本轮触碰文件 ruff：通过
-    - frontend full vitest 当前最新为：`184 files / 1983 tests / 0 failed`
+    - frontend full vitest 当前最新为：`184 files / 1991 tests / 0 failed`
     - frontend `tsc / lint / build / i18n parity`：通过
     - browser matrix：`72 passed / 0 failed`，覆盖 12 项功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375
   - Sprint 5-6 收口验证当前已补：
     - backend ruff：通过
-    - backend full pytest：`2752 passed, 2 skipped`
+    - backend full pytest：`2761 passed, 2 skipped`
     - backend touched-file 定向回归：`314 passed`
     - backend review-fix focused rerun：cancel / journal / snapshot / leaderboard segment `84 passed`；prediction API 回归 `48 passed`
-    - frontend full vitest：`184 files / 1983 tests / 0 failed`
+    - frontend full vitest：`184 files / 1991 tests / 0 failed`
     - frontend Sprint 5-6 focused rerun：`7 files / 104 tests passed`
-    - frontend `tsc / lint / build / i18n parity`：通过；i18n key count 为 `en:2432 zh:2432`
+    - frontend `tsc / lint / i18n parity`：通过；i18n key count 为 `en:2436 zh:2436`
+    - Debate live/result Chrome DevTools 复核覆盖 `1440px` 与 `375px`；score grid 单列、expand button `44px`、long role probe `overflow=0`
     - Browser 复核覆盖 result fixture desktop/mobile Chromium `13/13`、capability matrix `30/30`，并手动打开 `/`、`/agents/new`、`/leaderboard`、`/admin/setup`、`/me/journal`；console warning/error 为 0，375px mobile 无横向溢出
 - 当前活跃执行点在 `.claude/team-plan/comprehensive-improvement-plan.md`：Sprint 0-6 已完成本地审查、修复和验证；Agent、Journal、模板、leaderboard segment、snapshot、admin setup、cancel 与相关安全/可用性收口已并入当前工作树。剩余架构级限制见 `overview/backlog.md`。
 
