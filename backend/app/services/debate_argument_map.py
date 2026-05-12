@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 _snapshot_index_lock = threading.Lock()
 _snapshot_index_urls: set[str] = set()
 _enrichment_apply_lock = threading.Lock()
+_verdict_link_lock = threading.Lock()
 
 # ── Keyword sets for rule-based classification ──────────────
 
@@ -151,6 +152,11 @@ def _load_payload(payload_json: str | None) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _normalize_side_value(value: Any) -> str:
+    raw = getattr(value, "value", value)
+    return str(raw or "").strip().lower()
+
+
 def _load_latest_snapshot(session: Session, debate_id: str) -> GraphSnapshot | None:
     if session.connection().dialect.name == "sqlite":
         row = session.connection().exec_driver_sql(
@@ -190,6 +196,7 @@ def _build_turn_metadata(
             sentence_positions.setdefault(_semantic_hash(sentence), index)
         metadata[turn.id] = {
             "sequence": turn.sequence,
+            "speaker_side": _normalize_side_value(turn.speaker_side),
             "sentence_positions": sentence_positions,
         }
     return metadata
@@ -222,6 +229,32 @@ def _unit_rebuild_sort_key(
         sentence_index or 0,
         unit.created_at,
         node.node_key,
+        unit.id,
+    )
+
+
+def _unit_verdict_sort_key(
+    *,
+    unit: DebateArgumentUnit,
+    node: GraphNode | None,
+    turn_metadata: dict[str, dict[str, Any]],
+) -> tuple[bool, int, bool, int, Any, str]:
+    payload = _load_payload(node.payload_json if node else None)
+    metadata = turn_metadata.get(unit.turn_id, {})
+    turn_order = metadata.get("sequence")
+    if turn_order is None and node is not None:
+        turn_order = node.round_number
+    sentence_index = metadata.get("sentence_positions", {}).get(unit.semantic_hash)
+    if sentence_index is None:
+        payload_sentence_index = payload.get("sentence_index")
+        if isinstance(payload_sentence_index, int):
+            sentence_index = payload_sentence_index
+    return (
+        turn_order is None,
+        turn_order or 0,
+        sentence_index is None,
+        sentence_index or 0,
+        unit.created_at,
         unit.id,
     )
 
@@ -848,86 +881,175 @@ def link_verdict(debate_id: str, verdict_data: dict) -> None:
     supporting_turn_ids: set[str] = set()
     for item in raw_turns:
         if isinstance(item, dict):
-            supporting_turn_ids.add(item.get("id", ""))
+            turn_id = item.get("id", "")
+            if turn_id:
+                supporting_turn_ids.add(str(turn_id))
         elif isinstance(item, str):
             supporting_turn_ids.add(item)
+    winner = str(verdict_data.get("winner") or "").strip().lower()
 
     engine = get_engine()
     _ensure_argument_map_snapshot_index(engine)
-    with Session(engine) as session:
+    with _verdict_link_lock, Session(engine) as session:
         snapshot = _get_or_create_snapshot(session, debate_id)
 
         # Step 1: Re-query ALL units for full re-evaluation
-        all_units_stmt = (
+        all_debate_units = session.exec(
             select(DebateArgumentUnit)
-            .join(GraphNode, GraphNode.id == DebateArgumentUnit.node_id)
-            .where(
-                DebateArgumentUnit.debate_id == debate_id,
-                GraphNode.snapshot_id == snapshot.id,
+            .where(DebateArgumentUnit.debate_id == debate_id)
+            .order_by(DebateArgumentUnit.created_at.asc(), DebateArgumentUnit.id.asc())
+        ).all()
+
+        node_ids = list({unit.node_id for unit in all_debate_units if unit.node_id})
+        node_map: dict[str, GraphNode] = {}
+        if node_ids:
+            nodes = session.exec(
+                select(GraphNode).where(GraphNode.id.in_(node_ids))
+            ).all()
+            node_map = {node.id: node for node in nodes}
+
+        all_units = [
+            unit
+            for unit in all_debate_units
+            if not unit.node_id
+            or unit.node_id not in node_map
+            or node_map[unit.node_id].snapshot_id == snapshot.id
+        ]
+        turn_metadata = _build_turn_metadata(
+            session,
+            {unit.turn_id for unit in all_units if unit.turn_id},
+        )
+        all_units.sort(
+            key=lambda unit: _unit_verdict_sort_key(
+                unit=unit,
+                node=node_map.get(unit.node_id),
+                turn_metadata=turn_metadata,
             )
         )
-        all_units = session.exec(all_units_stmt).all()
+        turn_side_map = {
+            turn_id: _normalize_side_value(metadata.get("speaker_side"))
+            for turn_id, metadata in turn_metadata.items()
+            if metadata.get("speaker_side") is not None
+        }
+        node_side_map: dict[str, str] = {}
+        for node_id, node in node_map.items():
+            if node.snapshot_id != snapshot.id:
+                continue
+            payload = _load_payload(node.payload_json)
+            side = _normalize_side_value(payload.get("side"))
+            if not side and node.ref_id:
+                side = turn_side_map.get(node.ref_id, "")
+            node_side_map[node_id] = side
+
+        rebuts_edges = session.exec(
+            select(GraphEdge).where(
+                GraphEdge.snapshot_id == snapshot.id,
+                GraphEdge.edge_type == "rebuts",
+            )
+        ).all()
+        rebutted_node_ids = {
+            edge.target_node_id
+            for edge in rebuts_edges
+            if (
+                node_side_map.get(edge.source_node_id)
+                and node_side_map.get(edge.target_node_id)
+                and node_side_map[edge.source_node_id] != node_side_map[edge.target_node_id]
+            )
+        }
 
         # Step 2: Reset ALL unit statuses — aligned with edge types below
         for unit in all_units:
-            if unit.turn_id in supporting_turn_ids:
+            side = node_side_map.get(unit.node_id, "") or turn_side_map.get(unit.turn_id, "")
+            is_winner = side == winner
+            is_known_loser = bool(side and winner and side != winner)
+            has_rebuts = unit.node_id in rebutted_node_ids
+            in_supporting = unit.turn_id in supporting_turn_ids
+
+            if in_supporting and (is_winner or not side):
                 unit.status = "accepted"
+            elif has_rebuts and is_known_loser:
+                unit.status = "rejected"
+            elif has_rebuts and is_winner:
+                unit.status = "rebutted"
+            elif is_winner:
+                unit.status = "standing"
             else:
                 unit.status = "unaddressed"
+
+        if not supporting_turn_ids:
+            winner_standing = [
+                unit
+                for unit in all_units
+                if unit.status == "standing" and unit.unit_type == "claim"
+            ]
+            for unit in winner_standing[:3]:
+                unit.status = "accepted"
+
+        for unit in all_units:
             session.add(unit)
 
         # Step 3: Idempotent verdict node (reuse by fixed node_key)
         verdict_key = f"verdict_{debate_id}"
-        existing_verdict = session.exec(
+        existing_verdict_nodes = session.exec(
             select(GraphNode).where(
                 GraphNode.snapshot_id == snapshot.id,
                 GraphNode.node_key == verdict_key,
-            )
-        ).first()
+            ).order_by(GraphNode.id.asc())
+        ).all()
+        existing_verdict = existing_verdict_nodes[0] if existing_verdict_nodes else None
+        winner_raw = str(verdict_data.get("winner") or "").strip()
+        tone_raw = str(verdict_data.get("verdict_tone") or "Verdict").strip()
+        if winner_raw:
+            verdict_label_text = f"{winner_raw} · {tone_raw}"
+        else:
+            verdict_label_text = tone_raw
+        payload_json = json.dumps({
+            "winner": verdict_data.get("winner"),
+            "verdict_tone": verdict_data.get("verdict_tone"),
+            "judge_summary": str(
+                verdict_data.get("judge_summary") or verdict_data.get("best_argument") or ""
+            )[:300],
+        })
 
         if existing_verdict:
             verdict_node = existing_verdict
-            verdict_node.label = str(verdict_data.get("verdict_tone", "Verdict"))[:120]
-            verdict_node.payload_json = json.dumps({
-                "winner": verdict_data.get("winner"),
-                "verdict_tone": verdict_data.get("verdict_tone"),
-            })
+            verdict_node.label = verdict_label_text[:120]
+            verdict_node.payload_json = payload_json
             session.add(verdict_node)
-            # Clear ALL edges from verdict node before rebuild (covers legacy types)
+            # Clear ALL edges from verdict nodes before rebuild (covers legacy
+            # types and any duplicates left by older/concurrent runs).
+            old_verdict_ids = [node.id for node in existing_verdict_nodes]
             old_edges = session.exec(
                 select(GraphEdge).where(
                     GraphEdge.snapshot_id == snapshot.id,
-                    GraphEdge.source_node_id == verdict_node.id,
+                    GraphEdge.source_node_id.in_(old_verdict_ids),
                 )
             ).all()
             for oe in old_edges:
                 session.delete(oe)
+            for duplicate in existing_verdict_nodes[1:]:
+                session.delete(duplicate)
             session.flush()
         else:
-            verdict_label = verdict_data.get("verdict_tone", "Verdict")
             verdict_node = GraphNode(
                 snapshot_id=snapshot.id,
                 node_key=verdict_key,
                 node_type="verdict",
-                label=str(verdict_label)[:120],
-                payload_json=json.dumps({
-                    "winner": verdict_data.get("winner"),
-                    "verdict_tone": verdict_data.get("verdict_tone"),
-                }),
+                label=verdict_label_text[:120],
+                payload_json=payload_json,
             )
             session.add(verdict_node)
             session.flush()
 
         # Step 4: Rebuild edges — edge_type MATCHES unit.status
         for unit in all_units:
-            if not unit.node_id:
+            if not unit.node_id or unit.node_id not in node_side_map:
                 continue
-            edge_type = "accepted" if unit.turn_id in supporting_turn_ids else "unaddressed"
             session.add(GraphEdge(
                 snapshot_id=snapshot.id,
                 source_node_id=verdict_node.id,
                 target_node_id=unit.node_id,
-                edge_type=edge_type, weight=1.0,
+                edge_type=unit.status, weight=1.0,
                 confidence_tier="high",
                 source_ref="verdict_linking",
             ))

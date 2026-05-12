@@ -96,7 +96,7 @@
 | Leaderboard Segments | 已落地；`/api/leaderboard` 在传入 segment filters 时返回 `entries + segment_metadata`，并按匹配到的已评分 prediction 重新计算分段指标；不传筛选时保持旧数组响应 |
 | Hallucination Gate | 已接线为 warning-only 后处理；只给 verdict 附加 claims / evidence / warning metadata，不阻断生成结果；`threshold` 只影响 claim 是否标记为 verified，常见中英文否定会进入矛盾检测 |
 | Counterfactual Replay & Compare | 已落地，支持 counterfactual / resume / compare；resume 当前会优先使用同分支 checkpoint picker，并把结构化 checkpoint summary 转成人话预览；续跑结局卡会标出来源分支和独立概率说明，compare 当前采用单活跃 Theater + shared round selector |
-| Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale、readonly replay import；LLM cast 更新后 live 页会刷新名字、角色和 persona，长角色/人设可换行或展开，裁判卡显示本地化的 `待裁决 / 已裁决` 状态；只有分享链接过长并回退到本地只读 `?local=` 时，结果页才会明确显示 `Save local read-only copy` |
+| Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale、readonly replay import；argument map 支持五种 verdict status、三层 DAG 和移动端列表；LLM cast 更新后 live 页会刷新名字、角色和 persona，长角色/人设可换行或展开，裁判卡显示本地化的 `待裁决 / 已裁决` 状态；只有分享链接过长并回退到本地只读 `?local=` 时，结果页才会明确显示 `Save local read-only copy` |
 | Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面代表改选当前支持 `drag-to-seat / keyboard reseat`，移动端保留 `click-to-seat`；桌面 roundtable committed transcript 当前已补长段折叠 / 展开，phase insight 展示和预填 prompt 会把长段复述压成一句；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到 anchored thread restore，并已补 Firefox / WebKit scoped regression；单结局结果页只暴露 `进入会客厅 / 只改一步`；已新增 `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 两种交互模式，证据卡追问会把用户引用的世界线保留到 assistant turn；completed live roundtable 的 `1-on-1 Interview` 会先展示代表的角色、世界线、立场、最近原话和人物简介；Oracle 主文案当前以 factual anchor + LLM generation/rewrite fallback 为主，角色身份和动态词汇提示按 `UNTRUSTED DATA` 处理，follow-up 空流式或仅 reasoning 输出会退回非流式改写，最终 fallback 也必须是可直接显示的人话 |
 | Replay & Import | 主模式与 Debate 均支持；主模式 Replay Trace 支持分页和分支过滤；scenario/story branch response 会回显 `replay_kind / replay_source_branch_id` 以保留 replay provenance；Debate replay 当前已补 `share -> readonly replay -> reload restore -> import` 完整 E2E 覆盖 |
 | Snapshot Export / Import | 已接线，受 `FEATURE_SNAPSHOT_EXPORT` gate；后端导出 ZIP snapshot 并校验导入 archive/manifest/checksum，导出会剥离常见 secret key/base URL/token 变体和 JSON 字符串里的敏感字段，导入会拒绝非 UTF-8 JSON/JSONL、ZIP traversal、symlink、重复物理成员、超大 member 与异常压缩比；前端首页导入、结果页导出 |
@@ -190,11 +190,11 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 当前稳定验证口径：
 
 - backend `ruff check app/services/debate_prompts.py app/services/debate.py tests/test_debate_prompts.py tests/test_debate_service.py`：通过。
-- backend 全量 `python -m pytest tests/ -x -q --tb=short`：`2761 passed, 2 skipped`。
+- backend 全量 `python -m pytest tests/ -x -q --tb=short`：`2766 passed, 2 skipped`。
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过。
-- frontend 全量 `npx vitest run`：`184 files / 1991 tests / 0 failed`。
+- frontend 全量 `npx vitest run`：`184 files / 1994 tests passed`。
 - frontend 目标文件 ESLint：通过。
-- frontend i18n key + placeholder parity：`en:2436 zh:2436`。
+- frontend i18n key + placeholder parity：通过。
 - `git diff --check`：通过。
 - Chrome DevTools 实测 Debate live/result 在 `1440px` 与 `375px` 均无水平溢出；`375px` expand button 为 `44px`，long role probe `overflow=0`。
 

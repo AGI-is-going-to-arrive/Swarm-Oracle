@@ -15,7 +15,7 @@ from app.config import settings
 from app.models.checkpoint import DebateArgumentUnit
 from app.models.database import get_engine
 from app.models.debate import Debate, DebateTurn
-from app.models.graph import GraphNode, GraphSnapshot
+from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
 from app.services.debate_argument_map import (
     enrich_argument_units_for_turn,
     extract_argument_units,
@@ -205,7 +205,7 @@ def test_link_verdict_marks_accepted_and_unaddressed():
         speaker_side="opposition",
     )
 
-    link_verdict("d-verdict", {"supporting_turns": ["t1"]})
+    link_verdict("d-verdict", {"winner": "proposition", "supporting_turns": ["t1"]})
 
     result = get_argument_map("d-verdict")
     statuses = {u["turn_id"]: u["status"] for u in result["units"]}
@@ -226,7 +226,10 @@ def test_link_verdict_preserves_same_text_units_from_later_turns():
         speaker_side="opposition",
     )
 
-    link_verdict("d-verdict-same-text", {"supporting_turns": ["t2"]})
+    link_verdict(
+        "d-verdict-same-text",
+        {"winner": "opposition", "supporting_turns": ["t2"]},
+    )
 
     result = get_argument_map("d-verdict-same-text")
     statuses = {u["turn_id"]: u["status"] for u in result["units"]}
@@ -246,6 +249,175 @@ def test_link_verdict_no_supporting_turns_marks_all_unaddressed():
 
     result = get_argument_map("d-vnosupp")
     assert all(u["status"] == "unaddressed" for u in result["units"])
+
+
+def test_link_verdict_no_supporting_turns_accepts_first_three_winner_claims():
+    """Fallback acceptance is deterministic when the judge omits supporting_turns."""
+    for sequence in range(1, 5):
+        extract_argument_units(
+            debate_id="d-vfallback",
+            turn_id=f"t{sequence}",
+            content=f"Proposition claim {sequence}.",
+            speaker_side="proposition",
+            turn_sequence=sequence,
+        )
+    extract_argument_units(
+        debate_id="d-vfallback",
+        turn_id="t-opp",
+        content="Opposition claim.",
+        speaker_side="opposition",
+        turn_sequence=5,
+    )
+
+    link_verdict("d-vfallback", {"winner": "proposition", "supporting_turns": []})
+
+    result = get_argument_map("d-vfallback")
+    statuses = {unit["turn_id"]: unit["status"] for unit in result["units"]}
+    assert statuses["t1"] == "accepted"
+    assert statuses["t2"] == "accepted"
+    assert statuses["t3"] == "accepted"
+    assert statuses["t4"] == "standing"
+    assert statuses["t-opp"] == "unaddressed"
+
+
+def test_link_verdict_five_status_classification():
+    debate_id = "d-five-status"
+    turns = [
+        ("t-prop-accepted", "Accepted proposition claim.", "proposition"),
+        ("t-prop-rebutted", "Rebutted proposition claim.", "proposition"),
+        ("t-prop-standing", "Standing proposition claim.", "proposition"),
+        ("t-opp-rejected", "Rejected opposition claim.", "opposition"),
+        ("t-opp-unaddressed", "Unaddressed opposition claim.", "opposition"),
+    ]
+    for sequence, (turn_id, content, side) in enumerate(turns, start=1):
+        extract_argument_units(
+            debate_id=debate_id,
+            turn_id=turn_id,
+            content=content,
+            speaker_side=side,
+            turn_sequence=sequence,
+        )
+
+    result = get_argument_map(debate_id)
+    nodes_by_label = {node["label"]: node["id"] for node in result["nodes"]}
+    with Session(get_engine()) as session:
+        session.add(
+            GraphEdge(
+                snapshot_id=result["snapshot_id"],
+                source_node_id=nodes_by_label["Unaddressed opposition claim."],
+                target_node_id=nodes_by_label["Rebutted proposition claim."],
+                edge_type="rebuts",
+                weight=0.8,
+            )
+        )
+        session.add(
+            GraphEdge(
+                snapshot_id=result["snapshot_id"],
+                source_node_id=nodes_by_label["Standing proposition claim."],
+                target_node_id=nodes_by_label["Rejected opposition claim."],
+                edge_type="rebuts",
+                weight=0.8,
+            )
+        )
+        session.commit()
+
+    link_verdict(
+        debate_id,
+        {"winner": "proposition", "supporting_turns": ["t-prop-accepted"]},
+    )
+
+    result = get_argument_map(debate_id)
+    statuses = {unit["turn_id"]: unit["status"] for unit in result["units"]}
+    assert statuses == {
+        "t-prop-accepted": "accepted",
+        "t-prop-rebutted": "rebutted",
+        "t-prop-standing": "standing",
+        "t-opp-rejected": "rejected",
+        "t-opp-unaddressed": "unaddressed",
+    }
+    assert set(statuses.values()) == {
+        "accepted",
+        "rejected",
+        "rebutted",
+        "standing",
+        "unaddressed",
+    }
+
+
+def test_link_verdict_falls_back_to_turn_side_when_node_payload_is_malformed():
+    debate_id = "d-verdict-malformed-payload"
+    turns = [
+        ("t-prop", "Winner claim.", "proposition"),
+        ("t-opp", "Opposition rebuttal.", "opposition"),
+    ]
+    for sequence, (turn_id, content, side) in enumerate(turns, start=1):
+        extract_argument_units(
+            debate_id=debate_id,
+            turn_id=turn_id,
+            content=content,
+            speaker_side=side,
+            turn_sequence=sequence,
+        )
+
+    result = get_argument_map(debate_id)
+    nodes_by_label = {node["label"]: node["id"] for node in result["nodes"]}
+    with Session(get_engine()) as session:
+        prop_node = session.get(GraphNode, nodes_by_label["Winner claim."])
+        assert prop_node is not None
+        prop_node.payload_json = "{not-json"
+        session.add(prop_node)
+        session.add(
+            GraphEdge(
+                snapshot_id=result["snapshot_id"],
+                source_node_id=nodes_by_label["Opposition rebuttal."],
+                target_node_id=nodes_by_label["Winner claim."],
+                edge_type="rebuts",
+                weight=0.8,
+            )
+        )
+        session.commit()
+
+    link_verdict(
+        debate_id,
+        {"winner": "proposition", "supporting_turns": ["t-prop"]},
+    )
+
+    result = get_argument_map(debate_id)
+    statuses = {unit["turn_id"]: unit["status"] for unit in result["units"]}
+    assert statuses["t-prop"] == "accepted"
+    assert statuses["t-opp"] == "unaddressed"
+
+
+def test_link_verdict_resets_orphan_unit_without_creating_dangling_edge():
+    debate_id = "d-verdict-orphan-unit"
+    with Session(get_engine()) as session:
+        session.add(
+            DebateArgumentUnit(
+                debate_id=debate_id,
+                turn_id="t-orphan",
+                node_id="missing-node",
+                unit_type="claim",
+                status="standing",
+                canonical_text="Orphan claim.",
+                semantic_hash="orphan-claim",
+            )
+        )
+        session.commit()
+
+    link_verdict(debate_id, {"winner": "proposition", "supporting_turns": []})
+
+    with Session(get_engine()) as session:
+        unit = session.exec(
+            select(DebateArgumentUnit).where(
+                DebateArgumentUnit.debate_id == debate_id,
+                DebateArgumentUnit.turn_id == "t-orphan",
+            )
+        ).one()
+        assert unit.status == "unaddressed"
+
+    result = get_argument_map(debate_id)
+    node_ids = {node["id"] for node in result["nodes"]}
+    assert all(edge["target"] in node_ids for edge in result["edges"])
 
 
 def test_link_verdict_ignores_units_outside_current_snapshot():
@@ -1381,14 +1553,14 @@ def test_verdict_idempotent():
     )
 
     # First verdict: t1 is supported
-    link_verdict("d-videm", {"supporting_turns": ["t1"]})
+    link_verdict("d-videm", {"winner": "proposition", "supporting_turns": ["t1"]})
     result1 = get_argument_map("d-videm")
     statuses1 = {u["turn_id"]: u["status"] for u in result1["units"]}
     assert statuses1["t1"] == "accepted"
     assert statuses1["t2"] == "unaddressed"
 
     # Second verdict: t2 is supported instead
-    link_verdict("d-videm", {"supporting_turns": ["t2"]})
+    link_verdict("d-videm", {"winner": "opposition", "supporting_turns": ["t2"]})
     result2 = get_argument_map("d-videm")
     statuses2 = {u["turn_id"]: u["status"] for u in result2["units"]}
     assert statuses2["t1"] == "unaddressed"
@@ -1427,9 +1599,42 @@ def test_verdict_idempotent_updates_verdict_node_metadata():
     result = get_argument_map("d-vmeta")
     verdict_nodes = [n for n in result["nodes"] if n["type"] == "verdict"]
     assert len(verdict_nodes) == 1
-    assert verdict_nodes[0]["label"] == "Decisive"
+    assert verdict_nodes[0]["label"] == "opposition · Decisive"
     assert verdict_nodes[0]["payload"]["winner"] == "opposition"
     assert verdict_nodes[0]["payload"]["verdict_tone"] == "Decisive"
+
+
+def test_verdict_idempotent_removes_duplicate_verdict_nodes():
+    extract_argument_units(
+        debate_id="d-vdupe", turn_id="t1",
+        content="Claim A.",
+        speaker_side="proposition",
+    )
+    result = get_argument_map("d-vdupe")
+    with Session(get_engine()) as session:
+        for suffix in ("a", "b"):
+            session.add(GraphNode(
+                snapshot_id=result["snapshot_id"],
+                node_key="verdict_d-vdupe",
+                node_type="verdict",
+                label=f"Duplicate {suffix}",
+                payload_json='{"winner":"opposition"}',
+            ))
+        session.commit()
+
+    link_verdict(
+        "d-vdupe",
+        {
+            "supporting_turns": ["t1"],
+            "winner": "proposition",
+            "verdict_tone": "Decisive",
+        },
+    )
+
+    result = get_argument_map("d-vdupe")
+    verdict_nodes = [node for node in result["nodes"] if node["type"] == "verdict"]
+    assert len(verdict_nodes) == 1
+    assert verdict_nodes[0]["label"] == "proposition · Decisive"
 
 
 def test_verdict_creates_verdict_node():
@@ -1458,7 +1663,7 @@ def test_verdict_edges_match_unit_status():
         content="Unaddressed claim.",
         speaker_side="opposition",
     )
-    link_verdict("d-vedge", {"supporting_turns": ["t1"]})
+    link_verdict("d-vedge", {"winner": "proposition", "supporting_turns": ["t1"]})
 
     result = get_argument_map("d-vedge")
     verdict_edges = [e for e in result["edges"]

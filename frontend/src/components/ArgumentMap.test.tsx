@@ -1,7 +1,7 @@
 /**
  * Phase C2 — ArgumentMap tests (upgraded for @xyflow/react DAG)
  */
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,17 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'argument.evidence': 'Evidence',
     'argument.rebuttal': 'Rebuttal',
     'argument.counter': 'Counter',
+    'argument.empty': 'No argument map available.',
+    'argument.mobile_list_label': 'Argument units list',
+    'argument.tour_label': 'Argument map guide',
+    'argument.tour_step_verdict': 'This is the verdict — the starting point of the argument map.',
+    'argument.tour_step_filter': 'Filter by status to focus on specific arguments.',
+    'argument.tour_step_node': 'Click any node to see its argument chain and details.',
+    'argument.status_accepted': 'Accepted',
+    'argument.status_standing': 'Standing',
+    'argument.status_unaddressed': 'Unaddressed',
+    'argument.status_rebutted': 'Rebutted',
+    'argument.status_rejected': 'Rejected',
     'argument.a11y_label': 'Debate argument map',
     'argument.a11y_list': 'Argument units list',
     'argument.a11y_relations': 'Argument relations list',
@@ -35,6 +46,9 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'common.graph_toggle_interactivity': 'Toggle interactivity',
     'common.graph_minimap': 'Mini map',
     'common.graph_mobile_hint': 'Drag to pan. Pinch or use the graph controls to zoom.',
+    'common.skip': 'Skip',
+    'common.next': 'Next',
+    'common.done': 'Done',
     'argument.search_label': 'Search argument map',
     'argument.search_placeholder': 'Search label, text, type…',
     'argument.search_match_count': '{{matches}} matches, {{related}} related',
@@ -46,6 +60,17 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'argument.evidence': '证据',
     'argument.rebuttal': '反驳',
     'argument.counter': '反击',
+    'argument.empty': '暂无论证图谱数据。',
+    'argument.mobile_list_label': '论证单元列表',
+    'argument.tour_label': '论证图谱引导',
+    'argument.tour_step_verdict': '这是裁决 — 论证图谱的起点。',
+    'argument.tour_step_filter': '按状态筛选，聚焦特定论证。',
+    'argument.tour_step_node': '点击任意节点查看论证链和详情。',
+    'argument.status_accepted': '已采纳',
+    'argument.status_standing': '成立',
+    'argument.status_unaddressed': '未回应',
+    'argument.status_rebutted': '已反驳',
+    'argument.status_rejected': '已驳回',
     'argument.a11y_label': '辩论论证图谱',
     'argument.a11y_list': '论证单元列表',
     'argument.a11y_relations': '论证关系列表',
@@ -66,6 +91,9 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'common.graph_toggle_interactivity': '切换交互状态',
     'common.graph_minimap': '缩略图',
     'common.graph_mobile_hint': '可拖动画布；双指缩放或使用图谱控件调整视图。',
+    'common.skip': '跳过',
+    'common.next': '下一步',
+    'common.done': '完成',
     'argument.search_label': '搜索论证图',
     'argument.search_placeholder': '搜索标签、文本、类型…',
     'argument.search_match_count': '{{matches}} 条匹配，{{related}} 条相关',
@@ -229,12 +257,16 @@ vi.mock('@xyflow/react', async () => {
 });
 
 import { ArgumentMap } from './ArgumentMap';
+import { ArgumentMapMobileList } from './ArgumentMapMobileList';
+import { ArgumentMapTour } from './ArgumentMapTour';
 
 afterEach(() => {
   cleanup();
   fitViewMock.mockReset();
   currentLocale = 'en';
   document.body.classList.remove('has-argument-map');
+  window.localStorage.clear();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -282,17 +314,24 @@ describe('ArgumentMap', () => {
     render(<ArgumentMap debateId="d1" visible={true} />);
     await screen.findByTestId('reactflow');
 
+    // Single-status filter with no matching units: show the new in-graph
+    // empty state (status-specific icon + i18n message), keep the
+    // ReactFlow surface mounted, and keep all filter controls available.
     await user.click(screen.getByRole('button', { name: 'Accepted' }));
 
-    expect(await screen.findByText('No argument units match the selected filters.')).toBeInTheDocument();
+    const emptyState = await screen.findByTestId('argmap-filter-empty');
+    expect(emptyState).toBeInTheDocument();
+    expect(emptyState).toHaveAttribute('role', 'status');
+    expect(emptyState).toHaveAttribute('aria-live', 'polite');
     expect(screen.getByRole('button', { name: 'Standing' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument();
-    expect(screen.queryByTestId('reactflow')).not.toBeInTheDocument();
+    // The ReactFlow container stays mounted (in-graph overlay design).
+    expect(screen.queryByTestId('reactflow')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Clear' }));
 
     expect(await screen.findByTestId('reactflow')).toBeInTheDocument();
-    expect(screen.queryByText('No argument units match the selected filters.')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('argmap-filter-empty')).not.toBeInTheDocument();
   });
 
   it('renders ReactFlow component when data has units (fallback layout)', async () => {
@@ -616,4 +655,61 @@ describe('ArgumentMap', () => {
     matchMediaSpy.mockRestore();
   });
 
+});
+
+
+describe('ArgumentMapMobileList', () => {
+  it('uses localized existing argument labels and empty text', () => {
+    setTestLocale('zh');
+
+    const { rerender } = render(
+      <ArgumentMapMobileList
+        units={[
+          {
+            id: 'u1',
+            type: 'claim',
+            status: 'accepted',
+            text: '主张文本',
+            turn_id: 't1',
+            node_id: 'n1',
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole('list', { name: '论证单元列表' })).toBeInTheDocument();
+    expect(screen.getAllByText('论点')).toHaveLength(2);
+    expect(screen.getByText('已采纳')).toBeInTheDocument();
+    expect(screen.queryByText('argument.type_claim')).not.toBeInTheDocument();
+
+    rerender(<ArgumentMapMobileList units={[]} />);
+
+    expect(screen.getByText('暂无论证图谱数据。')).toBeInTheDocument();
+    expect(screen.queryByText('argument.no_data')).not.toBeInTheDocument();
+  });
+});
+
+
+describe('ArgumentMapTour', () => {
+  it('uses localized common action labels and records skip state', async () => {
+    setTestLocale('zh');
+    vi.useFakeTimers();
+
+    render(<ArgumentMapTour />);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+
+    expect(screen.getByRole('dialog', { name: '论证图谱引导' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '跳过' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '下一步' })).toBeInTheDocument();
+
+    await act(async () => {
+      screen.getByRole('button', { name: '跳过' }).click();
+    });
+
+    expect(window.localStorage.getItem('swarm.argmap.tour_seen')).toBe('1');
+    expect(screen.queryByRole('dialog', { name: '论证图谱引导' })).not.toBeInTheDocument();
+  });
 });

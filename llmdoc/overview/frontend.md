@@ -504,14 +504,16 @@
 - `CausalReviewView` / `ArgumentMap` 的图节点、边、handle 可访问文案，以及 React Flow controls / `MiniMap` 文案当前都会跟随 UI 语言实时更新；切语言不会重打图请求。
 - `CausalReviewView` / `ArgumentMap` 的 `MiniMap` 当前是非交互 overlay（`pointer-events: none`），只在桌面显示；移动端不再和图操作抢热区。
 - 两个图面当前除了 node/unit 的 sr fallback list，也会额外输出本地化 relation list；因果图会保留 `causes / precedes`，`ArgumentMap` 会区分 `supports / rebuts / accepts / rejects / leaves unaddressed`，边语义不再只剩颜色和箭头。edge evidence 的 `low / medium / high` 也会走本地化文案，不再把 `[medium]` 这类原始值直接露出来。
-- `ArgumentMap` 当前在筛选结果为空时会保留筛选 chips 和 `Clear`，同时显示空态文案，不会把用户困在空态里；但这个空态只在当前图本来就有 `units` 时才会出现，node-only 图不会被状态筛选误筛成空白面板。
-- `ArgumentMap` / `NodeDetailPanel` 当前继续支持显示 `rejected` 状态；前端视觉 token 与后端合法状态口径已重新对齐
+- `ArgumentMap` 当前在筛选结果为空时会保留筛选 chips 和 `Clear`，同时显示按状态区分的空态文案，不会把用户困在空态里；这个空态会拦截图面点击，只在当前图本来就有 `units` 时出现，node-only 图不会被状态筛选误筛成空白面板。
+- `ArgumentMap` / `NodeDetailPanel` 当前继续支持显示 `accepted / standing / unaddressed / rebutted / rejected` 五种状态；前端视觉 token 与后端合法状态口径已重新对齐，filter chip 会显示每个状态的当前数量。
 - `NodeDetailPanel` 当前对 outcome / fork 会优先显示可读字段：结局详情、insight、概率、来源分支、分支原因、分支影响和子分支；没有这些语义字段时才回退 raw payload。
-- `ArgumentMap` 当前把 `verdict` 节点也接到共享 graph i18n label；节点可访问名称会跟随当前语言。
+- `ArgumentMap` 当前把 `verdict` 节点也接到共享 graph i18n label；节点可访问名称会跟随当前语言。verdict 节点会优先显示 winner + 本地化“胜出 / wins”，完整摘要放在节点详情文本里。
 - `ArgumentStrengthMeter` 当前按本地化 `list / listitem` 摘要语义渲染，不再使用 `meter`；状态筛选激活时，摘要也会跟着当前可见 `units` 一起更新，不再继续显示全量分布。
-- `ArgumentMap` 当前在 compact viewport 下也会保留显式 controls 与本地化 mobile navigation hint；`prefers-reduced-motion` 下会关闭边动画、强度条宽度过渡和节点卡片 dim 过渡。
+- `ArgumentMap` 当前在 compact viewport 下也会保留显式 controls 与本地化 mobile navigation hint，并提供 `Graph / List` 切换；list 模式按 `claim / evidence / rebuttal / counter` 分组展示 accordion。`prefers-reduced-motion` 下会关闭边动画、强度条宽度过渡和节点卡片 dim 过渡。
 - `ArgumentMap` 与 `CausalReviewView` 的节点详情打开文案当前已走 i18n；screen-reader fallback 和 text fallback 不再把 `event / claim / standing` 这类原始 token 直接露给用户。
 - `ArgumentMap` 当前在 node-only 图（有节点、没 units）时，仍会保留 screen-reader fallback list；图节点 button 口径也继续支持键盘打开详情。
+- `ArgumentMap` 当前使用三层 DAG 口径：verdict 放顶层，claim 放中层，evidence / rebuttal 放下层；dagre 的边方向只用于排版，React Flow 渲染边仍保留原始 `source / target`。支持边为绿色实线，反驳边为红色虚线，verdict 连边为紫色。
+- `ArgumentMap` 当前有本地 `localStorage` 控制的一次性 3 步 tour；键盘快捷键只在非编辑区域接管，`/` 聚焦搜索，`F` fit view，`Escape` 清掉搜索、筛选和选中节点。
 - 两个图面的节点卡当前会直接显示 `type / round` 或 `type / status` 这层 meta；移动端图谱 chrome 也继续保留显式 controls、`Fit view` 和本地化导航提示。
 - 两个图面的节点卡当前都按 button 口径渲染：
   - 可键盘聚焦
@@ -545,10 +547,10 @@
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
 - 当前 frontend 稳定验证口径：
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npx vitest run`：`184 files / 1991 tests / 0 failed`
+  - `npx vitest run`：`184 files / 1994 tests passed`
   - 目标文件 ESLint：通过
   - Debate live/result Chrome DevTools 复核覆盖 `1440px` 与 `375px`；score grid 单列、expand button `44px`、long role probe `overflow=0`
-- frontend i18n key + placeholder parity：`en:2436 zh:2436`。
+- frontend i18n key + placeholder parity：通过。
 - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 - Classic 分支标题本轮已补定向验证：

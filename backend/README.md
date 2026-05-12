@@ -150,6 +150,7 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - Prediction Journal is guarded by `FEATURE_PREDICTION_JOURNAL`. Entries are scoped to the current user; scenario-linked entries require scenario ownership and hide missing, foreign, or ownerless legacy scenarios as `404`; resolve hides foreign entries as `404`, uses a conditional update so stale or repeated resolves return `409`, and calibration reads use the `user_id / resolved_at / actual_outcome` index from Alembic `029`.
 - Hallucination Gate is guarded by `FEATURE_HALLUCINATION_GATE`. It stays warning-only, writes verdict metadata when enabled, and its contradiction check now handles common Chinese negators without treating neutral compounds like `无论 / 无疑` as contradictions.
 - Debate result payloads expose stored `hallucination_gate` metadata when verdict post-processing wrote it into `score_breakdown.metadata`.
+- Debate argument-map verdict linking now writes five statuses: `accepted`, `standing`, `unaddressed`, `rebutted`, and `rejected`. Verdict nodes carry `winner`, `verdict_tone`, and a short `judge_summary` payload for the frontend.
 
 ## Environment Variables
 

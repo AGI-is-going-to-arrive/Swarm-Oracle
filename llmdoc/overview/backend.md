@@ -358,7 +358,7 @@
   - 第一层：rule-based sentence split + claim/evidence/rebuttal 分类；当前分句覆盖 `. ! ?`、`。！？` 和换行
   - 第二层：默认开启的 fire-and-forget LLM enrichment，补 `type / stance / confidence`
   - 第二层失败不会中断 debate 主链，也不会覆盖第一层结果
-  - judge turn 也会分句落 unit，但不会参与普通 `supports / rebuts` 抽取；verdict 语义只走 `link_verdict()` 的 `accepted / unaddressed` 连边
+  - judge turn 也会分句落 unit，但不会参与普通 `supports / rebuts` 抽取；verdict 语义只走 `link_verdict()` 重算成 `accepted / standing / unaddressed / rebutted / rejected` 五种状态
   - SQLite lightweight fallback 当前也会尽力把唯一语义修到 `debate_id + turn_id + semantic_hash`；如果 repair 本身失败，会记 warning，但不会把旧的 best-effort index 补齐链路一起打断
   - `DebateArgumentUnit` 的唯一语义当前是 `debate_id + turn_id + semantic_hash`，不再把跨 turn 的同句子误判成重复；`semantic_hash` 会按归一化后的文本计算，纯 whitespace 变体不会再在同一 turn 里拆成两条
   - `021` 迁移当前会移除 legacy 的 `debate_id + semantic_hash` 约束；升级前若已有同 turn 脏重复行，会先按 `created_at DESC, id DESC` 保留最新一条再升级
@@ -368,8 +368,9 @@
   - 读取结果当前只返回属于当前 snapshot 的 `nodes / edges / units`；旧 snapshot 里残留、但 `node_id` 不在当前图里的 unit 不会再混进来
   - `rebuttal` 的 target 当前统一按“最新的对手 claim”选择：先看更新的 round/turn；同一 turn 里再按句子顺序取最后一条，不再按 hash 字典序猜
   - 重建时不会复用旧 target；`supports / rebuts` 会按当前 claim 状态重新选边，`DebateTurn.content` 可用时再按 turn 内句子顺序定序
-  - `link_verdict()` 复用既有 verdict 节点时，也会同步刷新 verdict `label / winner / verdict_tone`
-  - `link_verdict()` 当前只会重连当前 snapshot 里的 argument units；其他 snapshot 的 stale unit 不会再被拉回当前图里，更不会留下悬空 verdict edge
+  - `link_verdict()` 复用既有 verdict 节点时，也会同步刷新 verdict `label / winner / verdict_tone / judge_summary`；`label` 当前用 `winner · verdict_tone` 这条短文案，`judge_summary` 只进 payload
+  - `link_verdict()` 当前只会重连当前 snapshot 里的 argument units；其他 snapshot 的 stale unit 不会再被拉回当前图里，缺 node 或 node 已丢失的 unit 只会重算状态，不会留下悬空 verdict edge
+  - 如果 judge 没给 `supporting_turns`，verdict fallback 会按当前 turn / 句子顺序最多把 3 条 winner-side claim 标为 `accepted`；winner side 会先读 node payload，payload 坏掉时再回退到 `DebateTurn.speaker_side`
   - `semantic_hash` 并发冲突当前收口到“单句跳过”而不是整 turn 回滚；同一 turn 里已经成功写入的 argument unit 不会被一起抹掉
 - `debate import-replay` 当前会把非法 `phase / speaker_side / prediction / counterplay` 字段统一收口为稳定 `422`；`turns / predictions / phase_insights` 的非对象 entry 也会直接拒绝，不再 silent corruption，也不再把枚举/浮点解析错误打成未分类 `500`。
 - `debate import-replay` 当前在 turns 落库后会同步抽取 argument map；功能开启时，导入完成后就能直接读到图谱，不再先落成空图。
@@ -411,7 +412,7 @@
 ## 当前验证基线
 
 - 当前 backend 稳定验证口径：
-  - `python -m pytest tests/ -x -q --tb=short`：`2761 passed, 2 skipped`
+  - `python -m pytest tests/ -x -q --tb=short`：`2766 passed, 2 skipped`
   - Debate touched-file `ruff check`：通过
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：

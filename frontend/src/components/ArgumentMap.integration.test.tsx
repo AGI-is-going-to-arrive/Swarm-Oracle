@@ -987,8 +987,8 @@ describe('ArgumentMap status filter (C5)', () => {
 
 // ── Phase C: Edge styling (C2) ──────────────────────────────
 
-describe('ArgumentMap edge styling (C2)', () => {
-  it('edges use EDGE_STYLES colors from graphTokens', async () => {
+describe('ArgumentMap edge styling (C2 + P1)', () => {
+  it('supports edges use ArgumentMap dual-encoding green', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -1006,7 +1006,9 @@ describe('ArgumentMap edge styling (C2)', () => {
     render(<ArgumentMap debateId="d1" visible={true} />);
     const flow = await screen.findByTestId('reactflow');
     expect(flow.getAttribute('data-edges')).toBe('1');
-    expect(flow.getAttribute('data-edge-stroke')).toBe('#2ecc71');
+    // P1: supports edges now use the ArgumentMap-local green (#2e7d32)
+    // instead of the shared EDGE_STYLES.supports color (#2ecc71).
+    expect(flow.getAttribute('data-edge-stroke')).toBe('#2e7d32');
     expect(flow.getAttribute('data-edge-animated')).toBe('false');
     expect(flow.getAttribute('data-edge-marker')).toContain('arrowclosed');
   });

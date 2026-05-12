@@ -131,8 +131,10 @@ React + TypeScript frontend for SwarmOracle.
 - `CausalReviewView.tsx`
   graph fetches now encode `scenarioId / branchId` before building request URLs; the guide / empty-state copy is now backed by the local `CAUSAL_COLORS` dark-surface palette, close/show controls expose a complete disclosure pattern, and long guide key-node labels stay visually compact while preserving the full label in `aria-label` / `title`
 - `ArgumentMap.tsx`
-  relation labels stay localized for `supports / rebuts / accepted / rejected / unaddressed`
+  status labels stay localized for `accepted / standing / unaddressed / rebutted / rejected`; the graph uses a verdict -> claims -> evidence/rebuttals DAG, side-tinted nodes, filter count badges, keyboard shortcuts, and mobile graph/list mode
   fail-soft `load_failed` responses stay on the Retry state and keep graph/export hidden
+- `ArgumentMapMobileList.tsx / ArgumentMapTour.tsx`
+  compact argument-map list and first-visit guide; both use existing `argument.*` and `common.*` locale keys
 - `ExportPanel.tsx`
   native SVG export rebuild now clips long node labels and prefers full labels over truncated card text
 - `ProgressIndicator.tsx`

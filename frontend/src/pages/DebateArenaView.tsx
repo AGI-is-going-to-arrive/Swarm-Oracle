@@ -99,6 +99,7 @@ export function DebateArenaView() {
 
   const { enabled: argMapEnabled } = useCapabilityCheck('argument_map');
   const [argMapOpen, setArgMapOpen] = useState(true);
+  const [stageMapOpen, setStageMapOpen] = useState(false);
   const [argMapRefreshKey, setArgMapRefreshKey] = useState(0);
   const liveArgumentMapPanelId = `debate-live-argument-map-${useId().replace(/:/g, '-')}`;
 
@@ -1271,8 +1272,22 @@ export function DebateArenaView() {
             <section className="debate-panel">
               <div className="debate-panel__header">
                 <h3>{t('debate.stage_map_title')}</h3>
-                <span className="debate-phase-chip">{getDebatePhaseLabel(t, selectedPhase)}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span className="debate-phase-chip">{getDebatePhaseLabel(t, selectedPhase)}</span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    aria-expanded={stageMapOpen}
+                    onClick={() => setStageMapOpen(o => !o)}
+                    style={{ fontSize: '0.78rem', padding: '4px 10px' }}
+                  >
+                    {stageMapOpen
+                      ? t('common.collapse', 'Collapse')
+                      : t('common.expand', 'Expand')}
+                  </button>
+                </div>
               </div>
+              {stageMapOpen && (
               <div className="debate-panel__body">
                 <p className="debate-rule-copy debate-stage-map__intro">{t('debate.stage_map_subtitle')}</p>
                 <div className="debate-stage-summary-list">
@@ -1316,6 +1331,7 @@ export function DebateArenaView() {
                   })}
                 </div>
               </div>
+              )}
             </section>
           </aside>
         </div>

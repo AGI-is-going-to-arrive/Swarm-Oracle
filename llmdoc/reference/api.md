@@ -254,6 +254,7 @@
 - `GET /api/debate/{debate_id}/argument-map` 的 `edges[]` 使用 `source / target / type` 字段，并在有证据元数据时返回：
   `evidence: { confidence_tier, source_ref, source_round_number, detail }`。
   旧边或无证据边的 `evidence` 可以为 `null`。`detail` 同样是 `GraphEdge.evidence_json` 的预留透传字段；当前 argument-map 写边只填 coarse provenance，不填真实 detail。
+- verdict linking 写出的 unit status 当前是 `accepted / standing / unaddressed / rebutted / rejected`。verdict 节点 payload 当前包含 `winner / verdict_tone / judge_summary`；`judge_summary` 是给前端展示用的短摘要，不作为新的判定 authority。
 - `GET /api/debate/{debate_id}/argument-map` 在功能开启但读取阶段出错时，当前走 fail-soft：
   返回 `200`，并带空的 `nodes / edges / units` 和 `error: "ARGUMENT_MAP_LOAD_FAILED"`。
 

@@ -267,7 +267,7 @@ npm run lint
 npm run build
 ```
 
-当前全仓验证最近记录：backend full pytest `2761 passed, 2 skipped`，backend touched-file `ruff check` 通过；frontend full vitest `184 files / 1991 tests / 0 failed`，TypeScript noEmit 与目标文件 ESLint 通过；`git diff --check` 通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
+当前全仓验证最近记录：backend full pytest `2766 passed, 2 skipped`，backend touched-file `ruff check` 通过；frontend full vitest `184 files / 1994 tests passed`，TypeScript noEmit 与目标文件 ESLint 通过；`git diff --check` 通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
@@ -345,11 +345,11 @@ npm run build
 最近稳定验证记录：
 
 - backend `ruff check`：通过
-- backend 全量 `python -m pytest tests/ -x -q --tb=short`：`2761 passed, 2 skipped`
+- backend 全量 `python -m pytest tests/ -x -q --tb=short`：`2766 passed, 2 skipped`
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-- frontend full vitest：`184 files / 1991 tests / 0 failed`
+- frontend full vitest：`184 files / 1994 tests passed`
 - frontend 目标文件 ESLint：通过
-- frontend i18n key + placeholder parity：`en:2436 zh:2436`
+- frontend i18n key + placeholder parity：通过
 - `git diff --check`：通过
 - Chrome DevTools browser spot-check：Debate live/result 在 `1440px` 和 `375px` 均无水平溢出；`375px` expand button 为 `44px`，long role probe `overflow=0`
 
@@ -565,6 +565,20 @@ python -m pytest tests/test_conversation.py tests/test_agent_conversation.py tes
   - ResultView replay 模式不暴露 live conversation
   - PipelineStepper error 状态 progressbar ARIA 值仍在合法范围内
   - conversation prompt 带轻量 scenario / branch / node / graph 语境
+
+如果只复核 debate argument map 的 verdict / DAG / i18n 口径：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_debate_argument_map.py -q --tb=short
+ruff check app/services/debate_argument_map.py tests/test_debate_argument_map.py
+
+cd ../frontend
+npm test -- --run src/components/ArgumentMap.test.tsx src/components/ArgumentMap.integration.test.tsx src/i18n/locales.test.ts
+npx tsc --noEmit -p tsconfig.app.json
+npx eslint src/components/ArgumentMap.tsx src/components/ArgumentMapMobileList.tsx src/components/ArgumentMapTour.tsx src/components/ArgumentMap.test.tsx src/i18n/locales.test.ts
+```
 - 当前这条窄集之外，focused browser spot-check 建议覆盖：
   - CausalReview 节点点击后打开 `NodeConversationSheet`，并带上当前节点摘录
   - KG 工作台桌面节点点击后先出现 `NodeQuickCard`，靠近视口边缘时不会溢出屏幕

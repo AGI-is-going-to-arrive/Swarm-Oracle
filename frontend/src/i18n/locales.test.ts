@@ -9,6 +9,42 @@ describe('i18n locale resources', () => {
     expect(zh.translation.common.cancel).toBe('取消');
     expect(en.translation.common.close).toBe('Close');
     expect(zh.translation.common.close).toBe('关闭');
+    expect(en.translation.common.skip).toBe('Skip');
+    expect(zh.translation.common.skip).toBe('跳过');
+    expect(en.translation.common.next).toBe('Next');
+    expect(zh.translation.common.next).toBe('下一步');
+    expect(en.translation.common.done).toBe('Done');
+    expect(zh.translation.common.done).toBe('完成');
+  });
+
+  it('provides ArgumentMap mobile, tour, filter, and verdict legend labels', () => {
+    const argumentMapKeys = [
+      'filter_empty_accepted',
+      'filter_empty_standing',
+      'filter_empty_unaddressed',
+      'filter_empty_rebutted',
+      'filter_empty_rejected',
+      'filter_count',
+      'legend_edge_verdict',
+      'mobile_list_label',
+      'tour_label',
+      'tour_step_verdict',
+      'tour_step_filter',
+      'tour_step_node',
+      'view_graph',
+      'view_list',
+      'verdict_wins',
+      'legend_confidence_high_desc',
+      'legend_confidence_medium_desc',
+      'legend_confidence_low_desc',
+    ] as const;
+
+    for (const key of argumentMapKeys) {
+      expect(en.translation.argument[key]).toBeTruthy();
+      expect(zh.translation.argument[key]).toBeTruthy();
+    }
+    expect(en.translation.argument.filter_count).toContain('{{count}}');
+    expect(zh.translation.argument.filter_count).toContain('{{count}}');
   });
 
   it('provides Phase D labels for shared debate and Oracle surfaces', () => {

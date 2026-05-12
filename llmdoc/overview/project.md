@@ -35,7 +35,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - replay 分支链路当前也已补硬化：`counterfactual` 会在 clone 前校验目标 round 里确实有该 agent 的消息；如果 seed 失败，会清理掉刚创建的脏 branch；`resume` 只有在预占 `simulation lock` 成功后才会返回 started。replay branch runtime lock 当前按 fail-closed 收口：续租返回 `None`、续租抛异常，或本地 lease 已过期时，都不会继续 clone / seed / schedule；heartbeat 会在请求内校验完成后才启动，避免同一请求自己和自己抢 SQLite 锁。若后台续跑期间丢掉预占的 `simulation lock`，任务也会直接 fail-closed 落成 `error`，不会失锁后继续跑；replay branch heartbeat 刷新异常时会释放原 lease，不再把后续请求卡到 TTL 过期。同分支重放更早轮次时，也会同步剪掉过期的 `AgentStateFrame / stance_shift`，不再把旧状态残留在当前图里。
 - graph viz 当前已收口：`CausalReviewView` 会忽略 stale branch 响应，branch 切换时会先清空旧图、导出面板和 server analysis；`graph_analysis` 可用且后端返回分析时，页面会显示 summary、density、component、god nodes、degree bucket 和 cross-branch stats，`serverAnalysis=null` 时不硬造分析。graph route fetch 里的 `scenarioId / debateId`，以及 `CausalReviewView` 返回结果页的 scenario link，也都会先做 `encodeURIComponent()`，带特殊字符的 id 不会再打坏请求或跳转。URL 里带不存在的 `branch_id` 时会直接报错，不再伪装成空图；分支 selector 会优先显示 scenario branch 的标题和概率，拿不到元数据时才回退 branch id；completed branch 当前会在因果图里显示为 `outcome` 结局节点，并由 `led_to` 边接到同分支最近的来源节点；只有源图本身就没有因果边时，`多节点但 0 edges` 才会切到本地化的 event snapshot fallback；如果只是 search / filter 把边筛空，交互图和导出入口仍会保留，不会把有边的图误判成 relationless fallback。
 - 图谱交互当前也会跟随 UI 语言更新节点可访问名称、React Flow controls / minimap 文案、relation list 和 edge evidence tier；CausalReview 节点可拖拽、可选择，guide 里的长 key-node 可见标签会压短但完整 `label (degree)` 仍保留在 `aria-label / title`，search、branch、语言或 compact viewport 变化时才重置布局。compact viewport 下会继续保留显式 controls 和移动端导航提示；图页外层统一走 `100dvh`，移动端 header 和 relationless fallback 都锚在当前壳层内并避开 safe-area。
-- `ArgumentMap` 在 node-only 图时仍保留 screen-reader list 和键盘可达性，状态筛选也不会误把整张 node-only 图筛成空态；强度摘要会跟随当前筛选结果。`KGExplorerView` 当前使用真实 G6 主图和 minimap；搜索 / 类型过滤会更新可视图，不再只更新旁路列表。KG 节点点击会传业务 `kgType`、branch 与 round 给 `NodeConversationSheet`，不会把 G6 shape type 当节点语义。
+- `ArgumentMap` 在 node-only 图时仍保留 screen-reader list 和键盘可达性，状态筛选也不会误把整张 node-only 图筛成空态；强度摘要会跟随当前筛选结果。argument map 当前按 verdict -> claims -> evidence/rebuttals 的三层 DAG 排布，支持 5 种 verdict status，移动端可切到按类型分组的列表。`KGExplorerView` 当前使用真实 G6 主图和 minimap；搜索 / 类型过滤会更新可视图，不再只更新旁路列表。KG 节点点击会传业务 `kgType`、branch 与 round 给 `NodeConversationSheet`，不会把 G6 shape type 当节点语义。
 - `ExportPanel` 会区分 PNG / SVG 的忙态文案；SVG 导出改成 native SVG layer + node rebuild，长标题会按节点卡宽度裁剪显示，但 `<title>` 和文本内容仍保留完整节点标题，不再依赖 `foreignObject`。`LanguageSwitcher` 的 accessible name 当前也会带可见 `EN / 中文` 文本，语音控制和读屏口径不再分叉。后端 runtime repair 当前以最新 `causal-graph / argument-map` snapshot 为 authority，重复 snapshot 的旧残留会直接删除，不再把 stale 数据合回当前图。
 - CausalReview 节点点击当前会直接打开 `NodeConversationSheet`，并把 event / fork / outcome 的可读摘要作为 origin excerpt 交给后端 prompt context；面板会显示对话目标、卡片意义、前因、后续和相关关系，空态追问也会按事件、分支、结局、知识节点或裁决节点分别生成。大图超过 50 个节点时会用更紧的节点高度、间距和更低 `minZoom`，避免首屏过度撑开。KG 工作台桌面节点点击先显示 `NodeQuickCard` 快览卡；卡片会按视口钳位，用户再选择是否打开完整详情。
 - Agent conversation 历史当前可在节点对话等入口重新加载；列表按 scenario 做 cursor pagination，详情加载后由宿主组件恢复已提交 assistant 内容，迟到的 list/detail 响应不会覆盖新筛选或新节点。
@@ -60,11 +60,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - LLM persona upgrade 成功后，会在第一轮发言前通过 `debate_participants_update` 刷新 live 页参与者信息。前端按 `side` 合并，允许 WS 更新早于 REST snapshot 到达。
 - Debate replay 分享当前优先走内联 `?replay=`；链接过长时会回退为本地只读 `?local=`。结果页在这条回退链路上会明确显示 `Save local read-only copy`，而导入入口继续保留 `Import as Local Run`。
 - result 页里的 argument map 当前改成按需加载，并重新对齐回主页面壳；首屏先给 `Load map`，只有用户点开后才真正挂图。
-- 当前 phase 视图会保留更早 phase 的已出现 turns，并以折叠历史卡形式留在当前 live 视图里，不再直接丢掉。
+- 当前 phase 视图会保留更早 phase 的已出现 turns，并以折叠历史卡形式留在当前 live 视图里，不再直接丢掉；阶段地图默认折叠，用户展开后再看完整阶段进度。
 - 页面级播报当前仍以 phase cue 为唯一 live region；`SpotlightTurnCard` 的高亮态不再单独挂 `aria-live`，避免同一轮变化被重复播报。
 - quick counterplay 当前只在 live 当前 phase 的 bet window 可提交；锁到历史 phase 时不会再发起 quick hedge。
 - debate argument map 当前保留 rule-based 抽取，并默认追加每个 turn 一次 fire-and-forget LLM enrichment；上游 provider 慢或失败时会自动回退成纯规则结果。
-- debate argument map 的 enrichment apply / rebuild 当前按串行收口；改写 unit type 后会按最新 claim 状态重建 `rebuts / supports` target。当前同一 turn 有多条对手 claim 时，`rebuttal` 会按句子顺序挂到最后一条 claim，而不是按 hash 顺序乱选；`counter` 改写后也会继续保留 `rebuts` 边；verdict 重算也会同步刷新 verdict 节点元数据，不再只改 unit 状态。whitespace-only 的句子变体当前也会按归一化文本去重，不再在同一 turn 里拆出重复单元。
+- debate argument map 的 enrichment apply / rebuild 当前按串行收口；改写 unit type 后会按最新 claim 状态重建 `rebuts / supports` target。当前同一 turn 有多条对手 claim 时，`rebuttal` 会按句子顺序挂到最后一条 claim，而不是按 hash 顺序乱选；`counter` 改写后也会继续保留 `rebuts` 边；verdict 重算会把 unit 收口到 `accepted / standing / unaddressed / rebutted / rejected` 五种状态，并同步刷新 verdict 节点的 winner、tone 和 judge summary。whitespace-only 的句子变体当前也会按归一化文本去重，不再在同一 turn 里拆出重复单元。
 - judge 的 verdict turn 当前不会再混入常规 `supports / rebuts` 抽取。
 - debate argument map 的 fail-soft 当前会显示明确失败文案和 `Retry`，不会再被误判成普通空态。
 - debate runtime lock 当前会在长运行期间持续续租；续租返回 `None`、续租抛异常，或本地 lease 已过期时，任务会 fail-closed 并把 debate 标成 `error`，不会继续生成后续内容。
@@ -187,11 +187,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
   - backend `ruff check` 最近一次记录为通过
-  - backend 全量 `python -m pytest tests/ -x -q --tb=short` 最近一次记录为 `2761 passed, 2 skipped`
+  - backend 全量 `python -m pytest tests/ -x -q --tb=short` 最近一次记录为 `2766 passed, 2 skipped`
   - frontend `typecheck / lint / build / perf budgets` 通过
   - 本次 bridge/workbench 文案 + CausalReview guide key-node 标签窄集：`87 passed`
   - 本次前端 TypeScript noEmit：通过
-  - frontend 全量 vitest 最近一次记录为 `184 files / 1991 tests / 0 failed`
+  - frontend 全量 vitest 最近一次记录为 `184 files / 1994 tests passed`
   - frontend `npx tsc --noEmit -p tsconfig.app.json` 最近一次记录为通过
   - 本轮真实验证还包括：
     - Classic 分支标题定向验证：
@@ -245,17 +245,17 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - Sprint 0-2 收尾复验当前已补：
     - backend 本轮触碰文件定向 pytest：`36 passed`
     - backend 本轮触碰文件 ruff：通过
-    - frontend full vitest 当前最新为：`184 files / 1991 tests / 0 failed`
+    - frontend full vitest 当前最新为：`184 files / 1994 tests passed`
     - frontend `tsc / lint / build / i18n parity`：通过
     - browser matrix：`72 passed / 0 failed`，覆盖 12 项功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375
   - Sprint 5-6 收口验证当前已补：
     - backend ruff：通过
-    - backend full pytest：`2761 passed, 2 skipped`
+    - backend full pytest：`2766 passed, 2 skipped`
     - backend touched-file 定向回归：`314 passed`
     - backend review-fix focused rerun：cancel / journal / snapshot / leaderboard segment `84 passed`；prediction API 回归 `48 passed`
-    - frontend full vitest：`184 files / 1991 tests / 0 failed`
+    - frontend full vitest：`184 files / 1994 tests passed`
     - frontend Sprint 5-6 focused rerun：`7 files / 104 tests passed`
-    - frontend `tsc / lint / i18n parity`：通过；i18n key count 为 `en:2436 zh:2436`
+    - frontend `tsc / lint / build / i18n parity`：通过
     - Debate live/result Chrome DevTools 复核覆盖 `1440px` 与 `375px`；score grid 单列、expand button `44px`、long role probe `overflow=0`
     - Browser 复核覆盖 result fixture desktop/mobile Chromium `13/13`、capability matrix `30/30`，并手动打开 `/`、`/agents/new`、`/leaderboard`、`/admin/setup`、`/me/journal`；console warning/error 为 0，375px mobile 无横向溢出
 - 当前活跃执行点在 `.claude/team-plan/comprehensive-improvement-plan.md`：Sprint 0-6 已完成本地审查、修复和验证；Agent、Journal、模板、leaderboard segment、snapshot、admin setup、cancel 与相关安全/可用性收口已并入当前工作树。剩余架构级限制见 `overview/backlog.md`。

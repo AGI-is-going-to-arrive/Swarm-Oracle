@@ -4,18 +4,52 @@
    `node.className` in layoutArgumentDag(). We target the inner
    `.dag-card-node` button rendered by GraphNodeCard so that the
    status visual stacks on top of the existing border/background.
+
+   Color palette (sRGB hex with rgba() fallbacks — no oklch-only
+   values; safe for Safari < 15.4):
+     - accepted:    #22c55e (green)
+     - standing:    #3b82f6 (blue)
+     - unaddressed: #f59e0b (amber, current default)
+     - rebutted:    #a855f7 (purple)
+     - rejected:    #ef4444 (red)
    ═══════════════════════════════════════════════════════════ */
 
-.argmap-node--standing .dag-card-node {
+/* P1: Status accent — 4px top bar on each node card. The existing
+   per-status `border-color` rules below paint the bar color via
+   border-top-color. */
+.argmap-node .dag-card-node {
+  border-top-width: 4px;
+  border-top-style: solid;
+}
+
+.argmap-node--accepted .dag-card-node {
   border-color: #22c55e;
   background: rgba(34, 197, 94, 0.08);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35), 0 0 12px rgba(34, 197, 94, 0.25);
+}
+
+.argmap-node--standing .dag-card-node {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.argmap-node--unaddressed .dag-card-node {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
 }
 
 .argmap-node--rebutted .dag-card-node {
-  border-color: #ef4444;
+  border-color: #a855f7;
+  background: rgba(168, 85, 247, 0.08);
   text-decoration: line-through;
-  text-decoration-color: rgba(239, 68, 68, 0.7);
-  opacity: 0.7;
+  text-decoration-color: rgba(168, 85, 247, 0.7);
+  opacity: 0.78;
+}
+
+.argmap-node--rejected .dag-card-node {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+  opacity: 0.85;
 }
 
 /* Keep the status visual evident even when the user dims the
@@ -23,4 +57,290 @@
    accessibility readers reaching the node by tab/keyboard. */
 .argmap-node--rebutted .dag-card-node[data-graph-node-card="true"] {
   filter: grayscale(0.15);
+}
+
+.argmap-node--rejected .dag-card-node[data-graph-node-card="true"] {
+  filter: grayscale(0.2);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Smooth filter transitions
+   When `statusFilter` changes, briefly fade the graph contents
+   to give visual continuity. Applied to the ReactFlow container
+   via class toggle (`argmap-filtering`).
+   ═══════════════════════════════════════════════════════════ */
+
+.argument-map-export-target {
+  transition: opacity 150ms ease-in-out;
+}
+
+.argument-map-container.argmap-filtering .argument-map-export-target {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .argument-map-export-target {
+    transition: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Per-filter empty state inside graph area
+   Renders when a single filter is active but no units match.
+   The container fills the graph area; status color is layered
+   in via a CSS variable set inline by ArgumentMap.tsx.
+   ═══════════════════════════════════════════════════════════ */
+
+.argmap-filter-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 1.5rem;
+  /* sRGB fallback first, then status-tinted background via CSS var */
+  background: rgba(20, 20, 28, 0.45);
+  background: var(--argmap-empty-bg, rgba(20, 20, 28, 0.45));
+  color: #cfd3da;
+  text-align: center;
+  pointer-events: auto;
+}
+
+.argmap-filter-empty__icon {
+  font-size: 2.25rem;
+  line-height: 1;
+  color: var(--argmap-empty-color, #cfd3da);
+  /* sRGB fallback */
+  color: #cfd3da;
+}
+
+.argmap-filter-empty__icon[data-color] {
+  color: var(--argmap-empty-color, #cfd3da);
+}
+
+.argmap-filter-empty__message {
+  margin: 0;
+  font-size: 0.92rem;
+  color: #e3e6eb;
+  max-width: 320px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Filter chip count badge
+   `(N)` after each filter label. Dimmed when count is 0.
+   ═══════════════════════════════════════════════════════════ */
+
+.argmap-filter-count {
+  display: inline-block;
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.74rem;
+  opacity: 0.85;
+}
+
+.argmap-filter-count--zero {
+  opacity: 0.4;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Mobile accordion list (< 768px alternative to DAG)
+   ═══════════════════════════════════════════════════════════ */
+
+.argmap-mobile-list {
+  padding: 0.75rem;
+}
+
+.argmap-mobile-empty {
+  padding: 2rem;
+  text-align: center;
+  color: #9ca3af;
+}
+
+.argmap-mobile-group {
+  margin-bottom: 0.5rem;
+  border: 1px solid rgba(64, 48, 40, 0.12);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.argmap-mobile-group[open] {
+  border-color: rgba(64, 48, 40, 0.2);
+}
+
+.argmap-mobile-group__header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+  background: rgba(64, 48, 40, 0.03);
+  user-select: none;
+}
+
+.argmap-mobile-group__count {
+  font-weight: 400;
+  color: #9ca3af;
+  font-size: 0.8rem;
+}
+
+.argmap-mobile-group__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.argmap-mobile-unit {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid rgba(64, 48, 40, 0.06);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.argmap-mobile-unit:hover,
+.argmap-mobile-unit:focus-visible {
+  background: rgba(64, 48, 40, 0.04);
+  outline: none;
+}
+
+.argmap-mobile-unit__header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.argmap-mobile-unit__badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 20px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.6;
+}
+
+.argmap-mobile-unit__type {
+  font-size: 0.75rem;
+  color: #9ca3af;
+}
+
+.argmap-mobile-unit__text {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #374151;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .argmap-mobile-unit {
+    transition: none;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Onboarding tour overlay
+   ═══════════════════════════════════════════════════════════ */
+
+.argmap-tour-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.argmap-tour-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  pointer-events: auto;
+}
+
+.argmap-tour-card {
+  position: relative;
+  z-index: 1;
+  background: #fff;
+  border-radius: 14px;
+  padding: 1.25rem 1.5rem;
+  max-width: 320px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  pointer-events: auto;
+  animation: argmap-tour-enter 200ms ease-out;
+}
+
+@keyframes argmap-tour-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .argmap-tour-card {
+    animation: none;
+  }
+}
+
+.argmap-tour-card__step {
+  margin: 0 0 0.25rem;
+  font-size: 0.72rem;
+  color: #9ca3af;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.argmap-tour-card__text {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  color: #374151;
+  line-height: 1.5;
+}
+
+.argmap-tour-card__actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+.argmap-tour-card__skip {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 0.4rem 0.75rem;
+}
+
+.argmap-tour-card__skip:hover {
+  color: #6b7280;
+}
+
+.argmap-tour-card__next {
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.4rem 1rem;
+  cursor: pointer;
+}
+
+.argmap-tour-card__next:hover {
+  background: #1d4ed8;
+}
+
+.argmap-tour-card__next:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }

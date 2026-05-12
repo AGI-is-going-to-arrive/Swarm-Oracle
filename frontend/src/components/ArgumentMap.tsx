@@ -33,6 +33,8 @@ import { NodeDetailPanel, type NodeDetail } from './NodeDetailPanel';
 import GraphNodeCard from './GraphNodeCard';
 import AnimatedEdge from './AnimatedEdge';
 import { NodeConversationSheet, type NodeConversationOrigin } from './kg/NodeConversationSheet';
+import { ArgumentMapMobileList } from './ArgumentMapMobileList';
+import { ArgumentMapTour } from './ArgumentMapTour';
 import {
   NODE_TYPE_COLORS_HEX,
   STATUS_COLORS_HEX,
@@ -210,18 +212,12 @@ const STATUS_TIP_I18N: Record<string, [string, string]> = {
 };
 
 // Edge types shown in the legend (compact: supports / rebuts / attacks)
-const EDGE_LEGEND_KEYS = ['supports', 'rebuts', 'attacks'] as const;
+const EDGE_LEGEND_KEYS = ['supports', 'rebuts', 'verdict'] as const;
 const EDGE_LEGEND_LABEL_I18N: Record<string, [string, string]> = {
   supports: ['argument.legend_edge_supports', 'Supports'],
   rebuts: ['argument.legend_edge_rebuts', 'Rebuts'],
   attacks: ['argument.legend_edge_attacks', 'Attacks'],
-};
-
-// Confidence tier labels for legend
-const CONFIDENCE_LEGEND_LABEL_I18N: Record<'high' | 'medium' | 'low', [string, string]> = {
-  high: ['argument.legend_confidence_high', 'High confidence'],
-  medium: ['argument.legend_confidence_medium', 'Medium confidence'],
-  low: ['argument.legend_confidence_low', 'Low confidence'],
+  verdict: ['argument.legend_edge_verdict', 'Verdict links'],
 };
 
 // localStorage key — track whether user has dismissed the guide
@@ -244,13 +240,85 @@ function getArgumentStatusLabel(status: string, t: (key: string, fallback: strin
 // S2-5: Map argument status to a stable CSS class for visual state.
 // Applied via React Flow `node.className`; ArgumentMap.css targets the
 // inner `.dag-card-node` button using descendant selectors.
+// Each status gets a distinct sRGB-safe border/glow treatment.
 const STATUS_NODE_CLASS: Record<string, string> = {
+  accepted: 'argmap-node argmap-node--accepted',
   standing: 'argmap-node argmap-node--standing',
+  unaddressed: 'argmap-node argmap-node--unaddressed',
   rebutted: 'argmap-node argmap-node--rebutted',
+  rejected: 'argmap-node argmap-node--rejected',
 };
 
 function getArgumentStatusClass(status: string): string | undefined {
   return STATUS_NODE_CLASS[status];
+}
+
+// Status-specific colors (sRGB hex only — no oklch). Used for filter chip
+// borders, empty-state tinting, and node border overrides. These values
+// are intentionally local to ArgumentMap.tsx so we don't change behavior
+// for KG / causal graphs that share `STATUS_COLORS_HEX` from graphTokens.
+const ARGMAP_STATUS_BORDER_COLORS: Record<string, string> = {
+  accepted: '#22c55e',
+  standing: '#3b82f6',
+  unaddressed: '#f59e0b',
+  rebutted: '#a855f7',
+  rejected: '#ef4444',
+};
+
+// P1: Side-based visual grouping. Proposition nodes get a warm pink wash,
+// opposition nodes get a cool blue wash, judge nodes get a warm gold wash.
+// Falls back to NODE_TYPE_COLORS_HEX for nodes without a recognized side
+// (e.g. verdict nodes — handled separately below).
+const SIDE_BG_COLORS: Record<string, string> = {
+  proposition: '#fce4ec', // warm pink
+  opposition: '#e3f2fd', // cool blue
+  judge: '#fff8e1', // warm gold
+};
+
+// P1: Edge dual encoding — color + dash pattern by edge type. Verdict
+// linking edges use purple (matching the verdict unit status). Supports
+// use solid green; rebuts/counter use dashed red.
+const ARGMAP_EDGE_STYLES: Record<string, { stroke: string; strokeDasharray?: string }> = {
+  supports: { stroke: '#2e7d32' }, // green solid
+  rebuts: { stroke: '#c62828', strokeDasharray: '6 3' }, // red dashed
+  counter: { stroke: '#c62828', strokeDasharray: '6 3' }, // red dashed
+  accepted: { stroke: '#7b1fa2' }, // purple
+  rejected: { stroke: '#7b1fa2' }, // purple
+  unaddressed: { stroke: '#7b1fa2' }, // purple
+  standing: { stroke: '#7b1fa2' }, // purple
+  rebutted: { stroke: '#7b1fa2' }, // purple
+  verdict: { stroke: '#7b1fa2' }, // purple legend sample
+};
+
+// Status-specific text emoji icons used for the per-filter empty state.
+const STATUS_EMPTY_ICONS: Record<string, string> = {
+  accepted: '✓', // ✓
+  standing: '⚡', // ⚡
+  unaddressed: '○', // ○
+  rebutted: '⟲', // ⟲
+  rejected: '✕', // ✕
+};
+
+// Map status -> i18n key/fallback for the per-filter empty state message.
+const STATUS_EMPTY_MESSAGE_I18N: Record<string, [string, string]> = {
+  accepted: ['argument.filter_empty_accepted', 'No accepted arguments'],
+  standing: ['argument.filter_empty_standing', 'No standing arguments'],
+  unaddressed: ['argument.filter_empty_unaddressed', 'No unaddressed arguments'],
+  rebutted: ['argument.filter_empty_rebutted', 'No rebutted arguments'],
+  rejected: ['argument.filter_empty_rejected', 'No rejected arguments'],
+};
+
+// Convert a #RRGGBB hex string into an rgba() string with the given
+// alpha. Used to build subtle status-tinted backgrounds for the
+// per-filter empty state without depending on oklch.
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return `rgba(120, 120, 120, ${alpha})`;
+  const v = m[1];
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 // S2-5: Tooltip explanation text (full sentence). Falls back to existing
@@ -380,18 +448,61 @@ function layoutArgumentDag(
   }
 
   const hasGraphNodes = rawNodes.length > 0;
-  const nodeWidth = 280;
-  const nodeHeight = 120;
+  const ARG_NODE_W = 240;
+  const ARG_NODE_H = 96;
 
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: 'TB', ranksep: 100, nodesep: 80 });
+  g.setGraph({
+    rankdir: 'TB',
+    ranksep: 140,
+    nodesep: 50,
+    edgesep: 20,
+    ranker: 'tight-tree',
+    marginx: 40,
+    marginy: 40,
+  });
 
   if (!hasGraphNodes) {
-    for (const u of units) g.setNode(u.id, { width: nodeWidth, height: nodeHeight });
+    for (const u of units) g.setNode(u.id, { width: ARG_NODE_W, height: ARG_NODE_H });
   } else {
-    for (const n of rawNodes) g.setNode(n.id, { width: nodeWidth, height: nodeHeight });
-    for (const e of rawEdges) g.setEdge(e.source, e.target);
+    for (const n of rawNodes) g.setNode(n.id, { width: ARG_NODE_W, height: ARG_NODE_H });
+
+    // Smart edge processing: build 3-tier hierarchy (verdict → claim → evidence/rebuttal)
+    // by selectively feeding edges to dagre. ReactFlow edges are unchanged.
+    const verdictNodeId = rawNodes.find(n => n.type === 'verdict')?.id;
+    const nodeTypeMap = new Map<string, string>();
+    for (const n of rawNodes) {
+      const unit = unitByNodeId.get(n.id);
+      const effectiveType = unit?.type ?? n.type;
+      nodeTypeMap.set(n.id, effectiveType);
+    }
+
+    for (const e of rawEdges) {
+      const edgeType = e.type || '';
+      const targetType = nodeTypeMap.get(e.target) || '';
+
+      if (e.source === verdictNodeId) {
+        // Verdict-linking edges: ONLY include verdict→claim edges for dagre ranking.
+        // Skip verdict→evidence and verdict→rebuttal to avoid flattening all units
+        // into the same rank as claims.
+        if (targetType === 'claim') {
+          g.setEdge(e.source, e.target, { minlen: 1, weight: 2 });
+        }
+        // verdict→evidence/rebuttal: skip for dagre (still rendered as ReactFlow edges)
+      } else if (edgeType === 'supports') {
+        // Invert supports for dagre: evidence supports claim semantically, but in DAG
+        // the claim should sit ABOVE evidence. Source/target in ReactFlow stay original.
+        g.setEdge(e.target, e.source, { minlen: 1, weight: 1 });
+      } else if (edgeType === 'rebuts' || edgeType === 'counter') {
+        // Invert rebuts for dagre: rebuttal targets claim semantically, but in DAG
+        // the claim should sit ABOVE rebuttal. Source/target in ReactFlow stay original.
+        g.setEdge(e.target, e.source, { minlen: 2, weight: 3 });
+      } else {
+        // Other edges (e.g. temporal, accepted, rejected, unaddressed): keep direction.
+        g.setEdge(e.source, e.target, { minlen: 1, weight: 1 });
+      }
+    }
   }
 
   dagre.layout(g);
@@ -408,10 +519,12 @@ function layoutArgumentDag(
       const statusLabel = getArgumentStatusLabel(u.status, t);
       const statusClass = getArgumentStatusClass(u.status);
       const statusTip = getArgumentStatusTipText(u.status, t);
+      // P1: units carry no payload so fall back to type-based color.
+      const sideBg = NODE_TYPE_COLORS_HEX[u.type] ?? '#555';
       flowNodes.push({
         id: u.id,
         type: 'graphCard',
-        position: { x: pos.x - nodeWidth / 2, y: pos.y - nodeHeight / 2 },
+        position: { x: pos.x - ARG_NODE_W / 2, y: pos.y - ARG_NODE_H / 2 },
         focusable: false,
         ariaLabel,
         className: statusClass,
@@ -422,8 +535,8 @@ function layoutArgumentDag(
           ariaLabel,
           statusTooltip: statusTip,
           iconName: NODE_ICONS[u.type] ?? '',
-          bgColor: NODE_TYPE_COLORS_HEX[u.type] ?? '#555',
-          borderColor: STATUS_COLORS_HEX[u.status] ?? '',
+          bgColor: sideBg,
+          borderColor: ARGMAP_STATUS_BORDER_COLORS[u.status] ?? STATUS_COLORS_HEX[u.status] ?? '',
           dimmed: false,
           selected: false,
           connected: false,
@@ -451,22 +564,52 @@ function layoutArgumentDag(
 
     const statusClass = statusKey ? getArgumentStatusClass(statusKey) : undefined;
     const statusTip = statusKey ? getArgumentStatusTipText(statusKey, t) : undefined;
+    // P1: extract side from raw payload (already a parsed object via
+    // mapBackendNode). Map proposition/opposition/judge to side-tinted
+    // backgrounds; fall back to the type color (or '#555') otherwise.
+    const payload = safeParsePayload(n.payload);
+    const side = String(payload?.side ?? '').toLowerCase();
+    const sideBg = SIDE_BG_COLORS[side]
+      ?? NODE_TYPE_COLORS_HEX[typeKey]
+      ?? '#555';
+
+    // Verdict nodes: show winner + truncated summary instead of raw tone label
+    let enrichedLabel = displayLabel;
+    let enrichedFullLabel = fullLabel;
+    if (n.type === 'verdict' && payload) {
+      const winner = String(payload.winner || '');
+      const summary = String(payload.judge_summary || '');
+      if (winner) {
+        const winnerText = winner === 'proposition'
+          ? t('debate.side_proposition', 'Proposition')
+          : winner === 'opposition'
+            ? t('debate.side_opposition', 'Opposition')
+            : winner;
+        enrichedLabel = summary
+          ? `${winnerText} ${t('argument.verdict_wins', 'wins')}`
+          : `${winnerText} ${t('argument.verdict_wins', 'wins')}`;
+        enrichedFullLabel = summary || fullLabel;
+      }
+    }
+
     flowNodes.push({
       id: n.id,
       type: 'graphCard',
-      position: { x: pos.x - nodeWidth / 2, y: pos.y - nodeHeight / 2 },
+      position: { x: pos.x - ARG_NODE_W / 2, y: pos.y - ARG_NODE_H / 2 },
       focusable: false,
       ariaLabel,
       className: statusClass,
       data: {
-        label: displayLabel,
-        fullLabel,
+        label: enrichedLabel,
+        fullLabel: enrichedFullLabel,
         meta: statusLabel ? `${typeLabel} · ${statusLabel}` : typeLabel,
         ariaLabel,
         statusTooltip: statusTip,
         iconName: NODE_ICONS[typeKey] ?? '',
-        bgColor: NODE_TYPE_COLORS_HEX[typeKey] ?? '#555',
-        borderColor: statusKey ? (STATUS_COLORS_HEX[statusKey] ?? '') : '',
+        bgColor: sideBg,
+        borderColor: statusKey
+          ? (ARGMAP_STATUS_BORDER_COLORS[statusKey] ?? STATUS_COLORS_HEX[statusKey] ?? '')
+          : '',
         dimmed: false,
         selected: false,
         connected: false,
@@ -479,10 +622,14 @@ function layoutArgumentDag(
     });
   }
 
-  // C2: Edge styling from EDGE_STYLES + evidence badge
+  // C2 + P1: Edge styling — prefer ArgumentMap dual encoding (supports green
+  // solid / rebuts red dashed / verdict purple) and fall back to shared
+  // EDGE_STYLES for any type not in our local map (e.g. temporal, attacks).
   const flowEdges: Edge[] = rawEdges.map(e => {
-    const style = EDGE_STYLES[e.type];
-    const stroke = style?.stroke ?? '#888';
+    const localStyle = ARGMAP_EDGE_STYLES[e.type];
+    const sharedStyle = EDGE_STYLES[e.type];
+    const stroke = localStyle?.stroke ?? sharedStyle?.stroke ?? '#888';
+    const strokeDasharray = localStyle?.strokeDasharray ?? sharedStyle?.strokeDasharray;
     const tier = e.evidence?.confidence_tier;
     const tierColor = tier ? EVIDENCE_TIER_COLORS[tier] ?? undefined : undefined;
     const roundNum = e.evidence?.source_round_number;
@@ -499,8 +646,8 @@ function layoutArgumentDag(
       source: e.source,
       target: e.target,
       label: edgeLabel,
-      animated: !reduceMotion && (style?.animated ?? false),
-      style: { stroke, strokeDasharray: style?.strokeDasharray },
+      animated: !reduceMotion && (sharedStyle?.animated ?? false),
+      style: { stroke, strokeDasharray },
       labelStyle: tierColor ? { fill: tierColor, fontSize: 10, fontWeight: 600 } : undefined,
       markerEnd: NO_ARROW_TYPES.has(e.type) ? undefined : { type: MarkerType.ArrowClosed, color: stroke },
       data: {
@@ -558,6 +705,8 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
   const edgeTypes = useMemo(() => ({ animated: AnimatedEdge }), []);
   // C5: Status filter
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
+  // P3: Mobile view toggle (graph vs list)
+  const [mobileViewMode, setMobileViewMode] = useState<'graph' | 'list'>('graph');
   // Guide panel open state (default: open on first visit, persisted)
   const [guideOpen, setGuideOpen] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
@@ -577,7 +726,9 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     }
   }, []);
   const exportRootId = `argument-map-${useId().replace(/:/g, '-')}`;
-  const reactFlowRef = useRef<{ fitView?: (options?: { padding?: number; duration?: number }) => void } | null>(null);
+  const reactFlowRef = useRef<{
+    fitView?: (options?: { padding?: number; duration?: number; nodes?: Array<{ id: string }> }) => void;
+  } | null>(null);
   const latestRequestIdRef = useRef(0);
   const detailRestoreFocusRef = useRef<HTMLElement | null>(null);
   const encodedDebateId = encodeURIComponent(debateId);
@@ -669,7 +820,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
         ...result,
         nodes: result.nodes.map((n, i) => ({
           ...n,
-          className: 'dag-node-enter',
+          className: [n.className, 'dag-node-enter'].filter(Boolean).join(' '),
           style: { ...n.style, animationDelay: `${Math.min(i * 30, 300)}ms` },
         })),
       };
@@ -683,7 +834,12 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     `${layoutNodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutEdges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
   ), [layoutNodes, layoutEdges]);
 
-  const noFilterResults = statusFilter.size > 0 && filteredData
+  // `noFilterResults` triggers the legacy "No argument units match"
+  // paragraph fallback. When exactly one status filter is active and we
+  // would normally show that fallback, defer to the new in-graph empty
+  // state (handled by `showFilterEmptyState` below) so users see the
+  // status-specific icon + message instead.
+  const noFilterResults = statusFilter.size > 1 && filteredData
     ? (data?.units.length ?? 0) > 0 && filteredData.units.length === 0
     : false;
   // Clear stale selection when filtered node disappears
@@ -843,6 +999,69 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
     reactFlowRef.current.fitView?.(viewportFitOptions);
   }, [layoutEdges.length, layoutNodes.length, layoutSignature, noFilterResults, viewportFitOptions]);
 
+  // P2: Keyboard shortcuts — f/F = fit view, / = focus search,
+  // Escape = clear selection + filters. Skip when the user is typing
+  // in any input/textarea/contenteditable so we don't fight form
+  // controls (search, BYOK fields, etc.).
+  useEffect(() => {
+    if (!visible) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target;
+      const isEditableTarget = target instanceof HTMLInputElement
+        || target instanceof HTMLTextAreaElement
+        || target instanceof HTMLSelectElement
+        || (
+          target instanceof HTMLElement
+          && (
+            target.isContentEditable
+            || Boolean(target.closest('[contenteditable="true"], [role="textbox"]'))
+          )
+        );
+      if (isEditableTarget) {
+        // Allow Escape inside the search box to clear filters too;
+        // every other key passes through.
+        if (e.key !== 'Escape') return;
+      }
+      switch (e.key) {
+        case 'f':
+        case 'F': {
+          if (e.metaKey || e.ctrlKey || e.altKey) return;
+          e.preventDefault();
+          reactFlowRef.current?.fitView?.(viewportFitOptions);
+          break;
+        }
+        case '/': {
+          if (e.metaKey || e.ctrlKey || e.altKey) return;
+          e.preventDefault();
+          const searchInput = document.querySelector<HTMLInputElement>('[data-testid="argmap-search-input"]');
+          searchInput?.focus();
+          break;
+        }
+        case 'Escape': {
+          setSelectedNode(null);
+          setStatusFilter(new Set());
+          setArgSearch('');
+          break;
+        }
+        default:
+          break;
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [viewportFitOptions, visible]);
+
+  // P2: Double-click a node to zoom-fit on it. ReactFlow's
+  // `zoomOnDoubleClick` is already disabled on the canvas so this
+  // doesn't double-fire.
+  const onNodeDoubleClick = useCallback((_event: React.MouseEvent, node: Node) => {
+    reactFlowRef.current?.fitView?.({
+      nodes: [{ id: node.id }],
+      padding: 0.5,
+      duration: prefersReducedMotion ? 0 : 300,
+    });
+  }, [prefersReducedMotion]);
+
 
   const { rawNodeMap, unitByNodeId, unitById } = useMemo(() => {
     const rnm = new Map<string, GraphNodeRaw>();
@@ -970,6 +1189,52 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
       return next;
     });
   }, []);
+
+  // Count units by status from the *unfiltered* data so the badge is
+  // a stable surface area regardless of the active filter set.
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      accepted: 0,
+      standing: 0,
+      unaddressed: 0,
+      rebutted: 0,
+      rejected: 0,
+    };
+    if (!data) return counts;
+    for (const u of data.units) {
+      if (counts[u.status] !== undefined) counts[u.status] += 1;
+    }
+    return counts;
+  }, [data]);
+
+  // When a single filter is active and produces 0 matches, surface a
+  // status-specific empty state inside the graph area.
+  const singleActiveStatus = statusFilter.size === 1
+    ? Array.from(statusFilter)[0]
+    : null;
+  const showFilterEmptyState = Boolean(
+    singleActiveStatus
+    && filteredData
+    && filteredData.units.length === 0
+    && (data?.units.length ?? 0) > 0,
+  );
+
+  // Smooth filter transition: toggle `argmap-filtering` briefly when the
+  // active filter set changes so the graph fades out then back in.
+  const [isFiltering, setIsFiltering] = useState(false);
+  const filterSignature = useMemo(
+    () => Array.from(statusFilter).sort().join('|'),
+    [statusFilter],
+  );
+  const filterSignatureRef = useRef(filterSignature);
+  useEffect(() => {
+    if (filterSignatureRef.current === filterSignature) return;
+    filterSignatureRef.current = filterSignature;
+    if (prefersReducedMotion) return;
+    setIsFiltering(true);
+    const timer = window.setTimeout(() => setIsFiltering(false), 150);
+    return () => window.clearTimeout(timer);
+  }, [filterSignature, prefersReducedMotion]);
 
   const graphAriaLabelConfig = useMemo(() => ({
     'node.a11yDescription.default': t('common.graph_node_a11y', 'Graph node. Press Enter or Space to open details.'),
@@ -1121,6 +1386,44 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
           </button>
         )}
 
+        {/* P3: Mobile view toggle (graph vs list) */}
+        {isCompactViewport && (
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+            <button
+              onClick={() => setMobileViewMode('graph')}
+              aria-pressed={mobileViewMode === 'graph'}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 8,
+                border: '1px solid rgba(64,48,40,0.15)',
+                background: mobileViewMode === 'graph' ? '#2563eb' : 'transparent',
+                color: mobileViewMode === 'graph' ? '#fff' : '#374151',
+                fontSize: '0.82rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {t('argument.view_graph', 'Graph')}
+            </button>
+            <button
+              onClick={() => setMobileViewMode('list')}
+              aria-pressed={mobileViewMode === 'list'}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 8,
+                border: '1px solid rgba(64,48,40,0.15)',
+                background: mobileViewMode === 'list' ? '#2563eb' : 'transparent',
+                color: mobileViewMode === 'list' ? '#fff' : '#374151',
+                fontSize: '0.82rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {t('argument.view_list', 'List')}
+            </button>
+          </div>
+        )}
+
         {/* C5: Status filter chips */}
         <div
           role="group"
@@ -1132,16 +1435,33 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
           </span>
           {STATUS_ORDER.map(status => {
             const active = statusFilter.has(status);
-            const color = STATUS_COLORS_HEX[status] ?? '#888';
+            // Prefer status-specific border colors (sRGB), fall back to the
+            // shared token if a status is somehow not registered.
+            const color = ARGMAP_STATUS_BORDER_COLORS[status]
+              ?? STATUS_COLORS_HEX[status]
+              ?? '#888';
             const chipBright = isBrightGraphBackground(color);
             const tipPair = STATUS_TIP_I18N[status];
             const tipText = tipPair ? t(tipPair[0], tipPair[1]) : undefined;
+            const count = statusCounts[status] ?? 0;
+            // aria-hidden span on the count below keeps the button's
+            // accessible name equal to the status label text (e.g.
+            // "Accepted"), preserving existing test/locator semantics.
+            // For users that benefit from a stronger description, the
+            // count is also reflected in the title attribute.
+            const countLabel = t('argument.filter_count', {
+              defaultValue: '{{count}} items',
+              count,
+            });
+            const titleWithCount = tipText
+              ? `${tipText} — ${countLabel}`
+              : countLabel;
             return (
               <button
                 key={status}
                 onClick={() => toggleStatus(status)}
                 aria-pressed={active}
-                title={tipText}
+                title={titleWithCount}
                 style={{
                   minHeight: 40,
                   padding: '6px 12px',
@@ -1155,6 +1475,13 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
                 }}
               >
                 {t(STATUS_LABEL_I18N[status][0], STATUS_LABEL_I18N[status][1])}
+                <span
+                  aria-hidden="true"
+                  className={`argmap-filter-count${count === 0 ? ' argmap-filter-count--zero' : ''}`}
+                >
+                  {' '}
+                  ({count})
+                </span>
               </button>
             );
           })}
@@ -1188,6 +1515,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
             onChange={(e) => setArgSearch(e.target.value)}
             placeholder={t('argument.search_placeholder', 'Search label, text, type…')}
             aria-label={t('argument.search_label', 'Search argument map')}
+            data-testid="argmap-search-input"
             style={{
               flex: isCompactViewport ? '1 1 100%' : '0 1 260px',
               minHeight: 44, padding: '6px 10px', fontSize: '0.82rem',
@@ -1215,6 +1543,28 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
           <p style={{ fontSize: '0.85rem', color: '#888' }}>
             {t('argument.no_results', 'No argument units match the selected filters.')}
           </p>
+        ) : isCompactViewport && mobileViewMode === 'list' ? (
+          <ArgumentMapMobileList
+            units={filteredData?.units ?? data?.units ?? []}
+            onUnitClick={(unitId, nodeId) => {
+              // Switch to graph view and select the node, using the same
+              // rawNodeMap / unitByNodeId / unitById lookup as onNodeClick.
+              setMobileViewMode('graph');
+              const raw = nodeId ? rawNodeMap.get(nodeId) : undefined;
+              const unit = (nodeId ? unitByNodeId.get(nodeId) : undefined) ?? unitById.get(unitId);
+              const resolvedId = nodeId ?? unitId;
+              setSelectedNode({
+                id: resolvedId,
+                label: raw?.label ?? unit?.text ?? resolvedId,
+                type: unit?.type ?? raw?.type ?? 'unknown',
+                round: raw?.round,
+                payload: raw?.payload,
+                unitText: unit?.text,
+                unitStatus: unit?.status,
+                unitTurnId: unit?.turn_id,
+              });
+            }}
+          />
         ) : (
           <>
             {/* Export controls (P1-3) */}
@@ -1233,8 +1583,42 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
                 overflow: 'hidden',
                 position: 'relative',
               }}
-              className="argument-map-container"
+              className={`argument-map-container${isFiltering ? ' argmap-filtering' : ''}`}
             >
+              {/* Per-filter empty state — shown only when a single status
+                  filter is active and zero units match. */}
+              {showFilterEmptyState && singleActiveStatus ? (
+                (() => {
+                  const emptyColor = ARGMAP_STATUS_BORDER_COLORS[singleActiveStatus] ?? '#cfd3da';
+                  const emptyIcon = STATUS_EMPTY_ICONS[singleActiveStatus] ?? '○';
+                  const messagePair = STATUS_EMPTY_MESSAGE_I18N[singleActiveStatus]
+                    ?? ['argument.no_results', 'No argument units match the selected filters.'];
+                  // Build a subtle tinted background via inline rgba()
+                  // (use a low-opacity wash for the status color).
+                  const tinted = hexToRgba(emptyColor, 0.06);
+                  return (
+                    <div
+                      className="argmap-filter-empty"
+                      role="status"
+                      aria-live="polite"
+                      data-testid="argmap-filter-empty"
+                      style={{
+                        // Layer rgba() fallback first, then via CSS var.
+                        background: tinted,
+                        ['--argmap-empty-bg' as string]: tinted,
+                        ['--argmap-empty-color' as string]: emptyColor,
+                      }}
+                    >
+                      <span className="argmap-filter-empty__icon" data-color aria-hidden="true">
+                        {emptyIcon}
+                      </span>
+                      <p className="argmap-filter-empty__message">
+                        {t(messagePair[0], messagePair[1])}
+                      </p>
+                    </div>
+                  );
+                })()
+              ) : null}
               <div
                 className="argument-map-export-target"
                 data-testid="argument-map-export-target"
@@ -1250,6 +1634,7 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
                   onNodeClick={onNodeClick}
+                  onNodeDoubleClick={onNodeDoubleClick}
                   onPaneClick={onPaneClick}
                 onInit={(instance) => {
                   reactFlowRef.current = instance;
@@ -1261,10 +1646,13 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
                 panActivationKeyCode={null}
                 zoomActivationKeyCode={null}
                 panOnDrag={[0, 1]}
-                preventScrolling={false}
-                zoomOnScroll={false}
+                preventScrolling
+                zoomOnScroll
+                zoomOnPinch
                 panOnScroll={false}
                 zoomOnDoubleClick={false}
+                minZoom={0.05}
+                maxZoom={4}
                 nodesDraggable={true}
                 nodesFocusable={false}
                 edgesFocusable={false}
@@ -1327,33 +1715,38 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
             color: '#888',
           }}
         >
-          {/* Row 1: Node types */}
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Row 1: Node types with descriptions */}
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'baseline' }}>
             <span style={{ color: '#aaa', fontWeight: 600, minWidth: 64 }}>
               {t('argument.legend_types', 'Node types')}
             </span>
-            {(['claim', 'evidence', 'rebuttal', 'counter'] as const).map(type => {
+            {([
+              ['claim', 'argument.legend_claim_desc', 'Core arguments from debaters'] as const,
+              ['evidence', 'argument.legend_evidence_desc', 'Facts or data supporting a claim'] as const,
+              ['rebuttal', 'argument.legend_rebuttal_desc', 'Counterarguments to opponent'] as const,
+              ['counter', 'argument.legend_counter_desc', 'Responses to rebuttals'] as const,
+            ]).map(([type, descKey, descFallback]) => {
               const pair = TYPE_LABEL_I18N[type];
               return (
                 <span key={type} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <span
                     aria-hidden="true"
                     style={{
-                      width: 10,
-                      height: 10,
-                      borderRadius: 2,
-                      background: NODE_TYPE_COLORS_HEX[type],
-                      display: 'inline-block',
+                      width: 10, height: 10, borderRadius: 2,
+                      background: NODE_TYPE_COLORS_HEX[type], display: 'inline-block',
                     }}
                   />
-                  {t(pair[0], pair[1])}
+                  <strong>{t(pair[0], pair[1])}</strong>
+                  <span style={{ color: '#aaa', fontSize: '0.65rem' }}>
+                    {t(descKey, descFallback)}
+                  </span>
                 </span>
               );
             })}
           </div>
 
-          {/* Row 2: Statuses */}
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Row 2: Statuses with descriptions */}
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'baseline' }}>
             <span style={{ color: '#aaa', fontWeight: 600, minWidth: 64 }}>
               {t('argument.legend_statuses', 'Statuses')}
             </span>
@@ -1363,47 +1756,42 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
               return (
                 <span
                   key={status}
-                  title={tipPair ? t(tipPair[0], tipPair[1]) : undefined}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
                 >
                   <span
                     aria-hidden="true"
                     style={{
-                      width: 10,
-                      height: 10,
-                      borderRadius: '50%',
-                      background: STATUS_COLORS_HEX[status] ?? '#888',
+                      width: 10, height: 10, borderRadius: '50%',
+                      background: ARGMAP_STATUS_BORDER_COLORS[status] ?? STATUS_COLORS_HEX[status] ?? '#888',
                       display: 'inline-block',
                     }}
                   />
-                  {t(labelPair[0], labelPair[1])}
+                  <strong>{t(labelPair[0], labelPair[1])}</strong>
+                  {tipPair && (
+                    <span style={{ color: '#aaa', fontSize: '0.65rem' }}>
+                      {t(tipPair[0], tipPair[1])}
+                    </span>
+                  )}
                 </span>
               );
             })}
           </div>
 
-          {/* Row 3: Edges */}
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Row 3: Edges with descriptions */}
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'baseline' }}>
             <span style={{ color: '#aaa', fontWeight: 600, minWidth: 64 }}>
               {t('argument.legend_edges', 'Relations')}
             </span>
             {EDGE_LEGEND_KEYS.map(edgeKey => {
-              const style = EDGE_STYLES[edgeKey];
+              const style = ARGMAP_EDGE_STYLES[edgeKey] ?? EDGE_STYLES[edgeKey];
               const stroke = style?.stroke ?? '#888';
               const dashed = Boolean(style?.strokeDasharray);
               const labelPair = EDGE_LEGEND_LABEL_I18N[edgeKey];
               return (
                 <span key={edgeKey} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <svg aria-hidden="true" width="22" height="6" viewBox="0 0 22 6" style={{ display: 'inline-block' }}>
-                    <line
-                      x1="0"
-                      y1="3"
-                      x2="22"
-                      y2="3"
-                      stroke={stroke}
-                      strokeWidth="2"
-                      strokeDasharray={dashed ? (style?.strokeDasharray ?? '') : undefined}
-                    />
+                    <line x1="0" y1="3" x2="22" y2="3" stroke={stroke} strokeWidth="2"
+                      strokeDasharray={dashed ? (style?.strokeDasharray ?? '') : undefined} />
                   </svg>
                   {t(labelPair[0], labelPair[1])}
                 </span>
@@ -1411,29 +1799,30 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
             })}
           </div>
 
-          {/* Row 4: Confidence tiers + total units */}
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Row 4: Confidence tiers with descriptions + total units */}
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'baseline' }}>
             <span style={{ color: '#aaa', fontWeight: 600, minWidth: 64 }}>
               {t('argument.legend_confidence', 'Confidence')}
             </span>
-            {(['high', 'medium', 'low'] as const).map(tier => {
-              const labelPair = CONFIDENCE_LEGEND_LABEL_I18N[tier];
-              return (
-                <span key={tier} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  <span
-                    aria-hidden="true"
-                    style={{
-                      width: 10,
-                      height: 10,
-                      borderRadius: 2,
-                      background: EVIDENCE_TIER_COLORS[tier] ?? '#888',
-                      display: 'inline-block',
-                    }}
-                  />
-                  {t(labelPair[0], labelPair[1])}
+            {([
+              ['high', '#22c55e', 'argument.legend_confidence_high_desc', 'Strong evidence, well-supported'] as const,
+              ['medium', '#eab308', 'argument.legend_confidence_medium_desc', 'Partial evidence, needs more support'] as const,
+              ['low', '#9ca3af', 'argument.legend_confidence_low_desc', 'Weak or indirect support'] as const,
+            ]).map(([tier, color, descKey, descFallback]) => (
+              <span key={tier} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span aria-hidden="true" style={{
+                  width: 10, height: 10, borderRadius: 2,
+                  background: EVIDENCE_TIER_COLORS[tier] ?? color, display: 'inline-block',
+                }} />
+                <strong>{t(`causal.evidence_${tier}`, tier)}</strong>
+                <span style={{ color: '#aaa', fontSize: '0.65rem' }}>
+                  {t(descKey, descFallback)}
                 </span>
-              );
-            })}
+              </span>
+            ))}
+            <span style={{ color: '#999', fontSize: '0.65rem' }}>
+              {t('argument.legend_thickness_hint', 'Thicker lines = stronger arguments')}
+            </span>
             <span style={{ marginLeft: 'auto' }}>
               {filteredData?.units.length ?? 0} {t('argument.total_units', 'units')}
             </span>
@@ -1470,6 +1859,10 @@ export function ArgumentMap({ debateId, visible, refreshTrigger, conversationSce
             origin={sheetState.origin}
           />
         ) : null}
+        {/* P3: First-visit guided tour — only when data is present and not in mobile list view */}
+        {data && data.units.length > 0 && !(isCompactViewport && mobileViewMode === 'list') && (
+          <ArgumentMapTour />
+        )}
       </div>
     </Tooltip.Provider>
   );
