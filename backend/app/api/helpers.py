@@ -1315,7 +1315,9 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
                  "status": b.status.value, "parent_branch_id": b.parent_branch_id,
                  "fork_round": b.fork_round,
                  "fork_reason": b.fork_reason,
-                 "story": b.story, "insight": b.insight}
+                 "story": b.story, "insight": b.insight,
+                 "replay_kind": b.replay_kind,
+                 "replay_source_branch_id": b.replay_source_branch_id}
                 for b in branches
             ],
             groups=[

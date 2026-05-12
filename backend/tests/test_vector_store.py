@@ -938,6 +938,88 @@ class TestIdentityMemory:
         with pytest.raises(Exception):
             vs._client.get_collection(name=_identity_collection_name("user-profile"))
 
+    def test_profile_write_timeout_releases_pending_gate(self, monkeypatch):
+        """A timed-out profile write should not make all future writes skip."""
+        release_first_write = threading.Event()
+        completed_first_write = threading.Event()
+        calls: list[str] = []
+
+        def _fake_store_identity_profile_sync(
+            _user_id: str,
+            identity_id: str,
+            _role: str,
+            _profile_text: str,
+            *,
+            replace_existing: bool,
+        ) -> None:
+            assert replace_existing is False
+            calls.append(identity_id)
+            if identity_id == "id-timeout":
+                try:
+                    release_first_write.wait(timeout=1)
+                finally:
+                    completed_first_write.set()
+
+        monkeypatch.setattr(
+            vector_store_module,
+            "_CHROMA_IDENTITY_PROFILE_WRITE_TIMEOUT_SECONDS",
+            0.01,
+        )
+        monkeypatch.setattr(
+            vector_store_module,
+            "_store_identity_profile_sync",
+            _fake_store_identity_profile_sync,
+        )
+
+        try:
+            store_identity_profile("user-timeout", "id-timeout", "Analyst", "Slow write")
+            store_identity_profile("user-timeout", "id-next", "Analyst", "Next write")
+        finally:
+            release_first_write.set()
+
+        assert calls == ["id-timeout", "id-next"]
+        assert completed_first_write.wait(timeout=0.2)
+
+    def test_profile_write_skips_when_local_chroma_lock_stays_busy(self, monkeypatch):
+        """A stuck Chroma critical section should not block the caller forever."""
+        class _FakeStore:
+            available = True
+
+        released_leases: list[object] = []
+        lease = object()
+        assert vector_store_module._CHROMA_WRITE_LOCK.acquire(timeout=1)
+        try:
+            monkeypatch.setattr(
+                vector_store_module,
+                "_CHROMA_IDENTITY_PROFILE_WRITE_TIMEOUT_SECONDS",
+                0.01,
+            )
+            monkeypatch.setattr(vector_store_module, "get_vector_store", lambda: _FakeStore())
+            monkeypatch.setattr(
+                vector_store_module,
+                "acquire_runtime_lock",
+                lambda *_args, **_kwargs: lease,
+            )
+            monkeypatch.setattr(
+                vector_store_module,
+                "release_runtime_lock",
+                lambda released: released_leases.append(released),
+            )
+
+            started_at = time.monotonic()
+            vector_store_module._store_identity_profile_sync(
+                "user-locked",
+                "id-locked",
+                "Analyst",
+                "Profile",
+                replace_existing=False,
+            )
+        finally:
+            vector_store_module._CHROMA_WRITE_LOCK.release()
+
+        assert time.monotonic() - started_at < 0.1
+        assert released_leases == [lease]
+
     def test_retrieve_ignores_legacy_profile_docs(self, temp_dir, monkeypatch):
         """Legacy profile docs in the memory collection must not leak into retrieval."""
         vs = VectorStore(persist_dir=temp_dir)

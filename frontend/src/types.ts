@@ -351,6 +351,8 @@ export interface BranchInfo {
   key_moments: string[];
   probability: number;
   status: 'ACTIVE' | 'COMPLETED' | 'PRUNED';
+  replay_kind?: string | null;
+  replay_source_branch_id?: string | null;
 }
 
 export interface AgentMessage {
@@ -486,6 +488,8 @@ export interface StoryBranch {
   key_moments: string[];
   parent_branch_id: string | null;
   fork_reason: string;
+  replay_kind?: string | null;
+  replay_source_branch_id?: string | null;
 }
 
 // ── Debate Arena ───────────────────────────────────────

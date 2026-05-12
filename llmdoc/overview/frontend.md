@@ -25,21 +25,21 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
 | SetupWizardView | `frontend/src/pages/SetupWizardView.tsx` | `/admin/setup` 3 步 provider 配置向导；选择 preset、填 API key/base URL、测试连接并写入 session-scoped provider policy |
-| AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、编辑/删除入口、persona 单个/批量导出与 JSON 导入入口 |
+| AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、编辑/删除入口、返回首页按钮、persona 单个/批量导出与 JSON 导入入口 |
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择、PDF document upload tab，以及 capability-gated persona import/export 菜单 |
 | IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、historical source badge、counterfactual / resume / faction 入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live |
 | DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import |
 | WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay、participant follow-up、analyst ReACT 面板、人格漂移 warning |
 | HistoryView | `frontend/src/pages/HistoryView.tsx` | scenario 历史列表 |
-| LeaderboardView | `frontend/src/pages/LeaderboardView.tsx` | prediction leaderboard 与 segment filters；筛选状态同步到 URL params |
+| LeaderboardView | `frontend/src/pages/LeaderboardView.tsx` | prediction leaderboard 与 segment filters；筛选状态同步到 URL params，顶部返回按钮回到首页 |
 
 ## 状态与 authority 边界
 
@@ -134,6 +134,7 @@
   - 只要命中 `L2 fuzzy candidate` 才会弹确认框
   - 用户可选 `复用已有身份` 或 `创建新身份`
   - preflight 失败时会阻断启动并显示错误，不会静默绕过确认
+  - 如果 preflight 打开确认框，submit loading 会先退出，避免按钮一直保持提交态
 - InputView 当前还有两层启动确认：
   - 首次访问会显示 capability-aware onboarding carousel；完成或跳过后写入 localStorage
   - 真正 launch 前使用 Radix AlertDialog 展示问题和本局设置，关闭后把焦点还给 textarea
@@ -412,6 +413,7 @@
   - 保留 replay-safe 的 `causal graph` 入口
   - 保留按当前展开分支切换的 `FactionTimeline`
   - 继续隐藏 live-only 的 `CounterfactualPanel / ResumePanel`
+- live Reader 模式当前只挂一个 `ResumePanel`，Workbench 模式继续走工作台侧面板；两个模式不会同时渲染两份续跑入口。
 - `ResultView` 的结局详情当前只在展开时挂载：
   - 收起时不会再把完整 story / key moments 留在 DOM 或可访问性树里
   - 展开按钮也不会再保留指向已卸载详情节点的悬空 `aria-controls`
@@ -440,11 +442,13 @@
   - `CounterfactualPanel`
   - `ResumePanel`
   - `FactionTimeline`
+- 续跑分支卡片当前会显示 resumed badge、来源分支按钮和独立概率说明；来源按钮会把焦点带回对应原始分支标题。
+- 前端 `StoryBranch / BranchInfo` 类型当前接受可空的 `replay_kind / replay_source_branch_id`，用于展示 resume/import/counterfactual 来源语义；普通分支可以没有这两个字段。
 - `CounterfactualBrand` 当前也接在 ResultView 的反事实入口上：
   - 最多展示 3 个可回溯 fork point
   - 点击后会把 `CounterfactualPanel` 的轮次同步到对应 `fork_round`
   - `CounterfactualPanel.initialRound` 会钳制在 `1..totalRounds`
-- `HOPsAnimation` 当前已挂到 `ResultView`，多分支结果页会在 endings grid 前展示分支概率采样动画；replay 模式下不播放。
+- `HOPsAnimation` 当前已挂到 `ResultView`，多分支结果页会在 endings grid 前展示分支概率采样动画和“100 次采样”说明；replay 模式下不播放。
 - `ResultView` 当前在 `custom_agents` capability 开启时会显示 Agent Library bridge；这条入口只受 `custom_agents` gate 影响，不再误绑到 `agent_identity` gate。
 - `ResultView` 的阵营分析当前不再固定绑 `branches[0]`：
   - 用户展开了某个结局时，`FactionTimeline` 跟随当前展开分支
@@ -538,11 +542,11 @@
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
 - Sprint 5-6 frontend 本 session 已跑：
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npx vitest run`：`184 files / 1980 tests / 0 failed`
+  - `npx vitest run`：`184 files / 1983 tests / 0 failed`
   - `npm run build`：通过，build performance budget 无 violations
   - Sprint 5-6 focused rerun：`7 files / 104 tests passed`
   - Browser 复核覆盖 result fixture desktop/mobile Chromium `13/13`、capability matrix `30/30`，并手动打开 `/`、`/agents/new`、`/leaderboard`、`/admin/setup`、`/me/journal`；console warning/error 为 0，375px mobile 无横向溢出
-- frontend i18n key + placeholder parity：`en:2419 zh:2419`。
+- frontend i18n key + placeholder parity：`en:2432 zh:2432`。
 - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 - Classic 分支标题本轮已补定向验证：
@@ -616,9 +620,10 @@
   - 当前字体目录约 200 个 woff2 文件，约 11 MB
 - `ResumePanel` 当前会：
   - 只在用户已选分支且 round 为有效整数时允许提交
-  - `counterfactual_replay` capability 可用时优先加载同 scenario / branch 的 checkpoints
+  - `counterfactual_replay` capability 可用时优先加载同 scenario / branch 的 checkpoints；选项标签会带上分支标题，避免同轮 checkpoint 看起来一样
   - checkpoint 超过当前 `totalRounds` 会被过滤；选中 checkpoint 后会同步 round number
-  - `compressed_summary` 可见预览；没有 checkpoint 或加载失败时回到 round number 输入
+  - `compressed_summary` 会先解析成可读摘要预览；结构化 JSON 不会直接露给用户
+  - 没有 checkpoint 或加载失败时回到 round number 输入
   - 成功后锁表单并在 500ms 后跳回 `/sim/:id`
   - 对 `429` 统一显示 replay branch 上限提示
 - `ResumePanel` 当前有独立 smoke 入口：

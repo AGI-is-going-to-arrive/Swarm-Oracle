@@ -4,6 +4,20 @@
 
 import { useResultContext } from './ResultContext';
 
+function focusEndingTitle(branchId: string) {
+  if (typeof window === 'undefined') return;
+  const schedule = window.requestAnimationFrame ?? ((callback: FrameRequestCallback) => window.setTimeout(callback, 0));
+  schedule(() => {
+    const title = window.document.getElementById(`ending-title-${branchId}`);
+    if (!(title instanceof HTMLElement)) return;
+    const behavior: ScrollBehavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      ? 'auto'
+      : 'smooth';
+    title.scrollIntoView?.({ behavior, block: 'center' });
+    title.focus({ preventScroll: true });
+  });
+}
+
 export default function EndingCardsGrid() {
   const {
     t,
@@ -46,7 +60,32 @@ export default function EndingCardsGrid() {
               <span className="ending-index">
                 {t('result.ending_card')} {index + 1}
               </span>
-              <h2 id={titleId} className="ending-title">{branch.title}</h2>
+              {branch.replay_kind === 'resume' && (
+                <span className="ending-resume-badge">
+                  {t('result.resume_branch_badge', 'Resumed')}
+                </span>
+              )}
+              {branch.replay_kind === 'resume' && branch.replay_source_branch_id && (() => {
+                const sourceBranch = branches.find((b) => b.id === branch.replay_source_branch_id);
+                return sourceBranch ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost ending-source-link"
+                    aria-controls={`ending-detail-${sourceBranch.id}`}
+                    aria-label={t('result.view_source_branch_aria', {
+                      title: sourceBranch.title,
+                      defaultValue: 'Open source branch: {{title}}',
+                    })}
+                    onClick={() => {
+                      setExpandedBranch(sourceBranch.id);
+                      focusEndingTitle(sourceBranch.id);
+                    }}
+                  >
+                    {t('result.view_source_branch', { title: sourceBranch.title, defaultValue: 'Source: {{title}}' })}
+                  </button>
+                ) : null;
+              })()}
+              <h2 id={titleId} className="ending-title" tabIndex={-1}>{branch.title}</h2>
             </div>
 
             <div className="probability-section">
@@ -62,6 +101,11 @@ export default function EndingCardsGrid() {
                   ref={(el) => { if (el) el.style.setProperty('--prob-fill', `${Math.max((branch.probability ?? 0) * 100, 2)}%`); }}
                 />
               </div>
+              {branch.replay_kind === 'resume' && (
+                <p className="probability-resume-hint">
+                  {t('result.resume_probability_hint', 'This is a standalone resumed branch — probability reflects its independent simulation.')}
+                </p>
+              )}
             </div>
 
             {/* Insight always visible as the card's key takeaway */}

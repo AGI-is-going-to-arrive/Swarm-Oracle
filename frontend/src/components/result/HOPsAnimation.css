@@ -79,6 +79,13 @@
   color: var(--hops-text-dim);
 }
 
+.hops__explainer {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-top: 4px;
+}
+
 .hops__control {
   flex-shrink: 0;
   display: inline-flex;
@@ -239,6 +246,9 @@
   }
   .hops__subtitle {
     font-size: 0.74rem;
+  }
+  .hops__explainer {
+    font-size: 0.7rem;
   }
   .hops__row {
     grid-template-columns: minmax(64px, 0.8fr) minmax(0, 1.8fr) minmax(54px, auto);

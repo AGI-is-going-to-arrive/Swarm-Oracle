@@ -267,7 +267,7 @@ npm run lint
 npm run build
 ```
 
-当前 Sprint 5-6 前端全量回归最近一次记录为 `184 files / 1980 tests / 0 failed`，`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint` 和 `npm run build` 都通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
+当前 Sprint 5-6 前端全量回归最近一次记录为 `184 files / 1983 tests / 0 failed`，`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint` 和 `npm run build` 都通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
@@ -345,15 +345,15 @@ npm run build
 本 session 已复核：
 
 - backend `ruff check`：通过
-- backend 全量 `python -m pytest -q --tb=short`：`2749 passed, 2 skipped`
+- backend 全量 `python -m pytest tests/ -x -q`：`2752 passed, 2 skipped`
 - backend touched-file 定向回归：`314 passed`
 - backend review-fix focused rerun：cancel / journal / snapshot / leaderboard segment `84 passed`
 - backend prediction API 回归：`48 passed`
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-- frontend full vitest：`184 files / 1980 tests / 0 failed`
+- frontend full vitest：`184 files / 1983 tests / 0 failed`
 - frontend Sprint 5-6 focused rerun：`7 files / 104 tests passed`
 - frontend `npm run build`：通过，build performance budget 无 violations
-- frontend i18n key + placeholder parity：`en:2419 zh:2419`
+- frontend i18n key + placeholder parity：`en:2432 zh:2432`
 
 浏览器复核优先覆盖：
 
@@ -576,9 +576,12 @@ python -m pytest tests/test_conversation.py tests/test_agent_conversation.py tes
 
 ```bash
 cd frontend
-npm test -- --run src/components/ResumePanel.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts
+npm test -- --run src/components/ResumePanel.test.tsx src/pages/ResultView.test.tsx src/components/result/HOPsAnimation.test.tsx src/pages/InputView.test.tsx src/pages/AgentLibrary.test.tsx src/pages/LeaderboardView.test.tsx src/lib/scenarioReplay.test.ts src/i18n/locales.test.ts
+npx tsc --noEmit -p tsconfig.app.json
 npm run e2e:resume -- full
 ```
+
+这组窄集主要覆盖 ResumePanel 的 checkpoint 摘要预览、续跑分支来源展示、Reader/Workbench 单一续跑入口、HOPs 概率说明、Agent Library / Leaderboard 返回按钮、InputView preflight loading 状态，以及 replay provenance 字段和 locale parity。
 
 ### P1-10 / P1-11 定向回归
 

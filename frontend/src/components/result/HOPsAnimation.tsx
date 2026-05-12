@@ -148,7 +148,10 @@ export default function HOPsAnimation({ branches, isPlaying = true }: HOPsAnimat
     : t('hops.play', { defaultValue: 'Play' });
   const titleLabel = t('hops.title', { defaultValue: 'Probability sampling' });
   const subtitleLabel = t('hops.subtitle', {
-    defaultValue: 'Each frame samples one branch based on its probability.',
+    defaultValue: 'Watch how outcomes shift across branches',
+  });
+  const explainerLabel = t('hops.explainer', {
+    defaultValue: 'If we ran this scenario 100 times, each branch would appear roughly this often. Higher probability = more likely outcome.',
   });
   const ariaLabel = t('hops.aria_label', {
     defaultValue: 'Hypothetical outcome plot animation',
@@ -166,6 +169,7 @@ export default function HOPsAnimation({ branches, isPlaying = true }: HOPsAnimat
         <div className="hops__heading">
           <h3 className="hops__title">{titleLabel}</h3>
           <p className="hops__subtitle">{subtitleLabel}</p>
+          <p className="hops__explainer">{explainerLabel}</p>
         </div>
         <button
           type="button"

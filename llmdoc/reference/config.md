@@ -121,6 +121,8 @@
 - `DATABASE_URL` 如果使用 SQLite URI 形式（例如 `sqlite:///file:/tmp/swarmoracle.db?uri=true`），当前会原样保留，不会再被路径规范化改写。
 - 当 `DATABASE_URL` 指向同一个 file-backed SQLite 文件时，runtime lock 会共享；这条口径既适用于普通 SQLite 文件路径，也适用于 `sqlite:///file:/...?...uri=true`。
 - `VectorStore` 的 collection cache 是进程内 LRU，实现细节不作为环境变量暴露。
+- `POST /api/agents/identities/preflight` 的解析阶段有固定 10 秒超时；超时返回 `504 IDENTITY_PREFLIGHT_TIMEOUT`，不是通过环境变量配置。
+- identity profile 写入 Chroma 时，调用方最多等待 5 秒；写入本身是 best-effort，并受单进程 pending gate、SQLite runtime lock 和本地 Chroma lock 保护。`CHROMA_PERSIST_DIR` 仍只配置持久化目录，不配置这些锁和超时参数。
 
 ## 日志与服务
 

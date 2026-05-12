@@ -23,9 +23,11 @@ _chromadb = None
 _CHROMA_AVAILABLE = True
 _CHROMA_WRITE_LOCK = threading.Lock()
 _CHROMA_WRITE_LOCK_KEY_PREFIX = "vector-store:chroma-write"
+_CHROMA_IDENTITY_PROFILE_WRITE_TIMEOUT_SECONDS = 5.0
 _CHROMA_WRITE_LOCK_LEASE_SECONDS = 10.0
 _CHROMA_INIT_TIMEOUT_SECONDS = 5.0
 _CHROMA_COLLECTION_NAME_MAX = 63  # Chroma DB hard limit
+_CHROMA_IDENTITY_PROFILE_WRITE_PENDING = threading.Semaphore(1)
 
 
 def _ensure_chromadb():
@@ -759,6 +761,73 @@ def store_identity_profile(
     if not profile_text:
         return
 
+    if not _CHROMA_IDENTITY_PROFILE_WRITE_PENDING.acquire(blocking=False):
+        logger.warning(
+            "L2 profile store skipped for %s: previous profile write still running",
+            user_id,
+        )
+        return
+
+    error_holder: dict[str, BaseException] = {}
+    pending_release_lock = threading.Lock()
+    pending_released = False
+
+    def _release_pending_once() -> None:
+        nonlocal pending_released
+        with pending_release_lock:
+            if pending_released:
+                return
+            pending_released = True
+            _CHROMA_IDENTITY_PROFILE_WRITE_PENDING.release()
+
+    def _run_write() -> None:
+        try:
+            _store_identity_profile_sync(
+                user_id,
+                identity_id,
+                role,
+                profile_text,
+                replace_existing=replace_existing,
+            )
+        except BaseException as exc:  # noqa: BLE001 - best-effort background write
+            error_holder["error"] = exc
+        finally:
+            _release_pending_once()
+
+    write_thread = threading.Thread(
+        target=_run_write,
+        name=f"chroma-identity-profile-{identity_id[:8]}",
+        daemon=True,
+    )
+    try:
+        write_thread.start()
+    except Exception as exc:
+        _release_pending_once()
+        logger.warning("L2 profile store scheduling failed for %s: %s", user_id, exc)
+        return
+
+    write_thread.join(_CHROMA_IDENTITY_PROFILE_WRITE_TIMEOUT_SECONDS)
+    if write_thread.is_alive():
+        _release_pending_once()
+        logger.warning(
+            "L2 profile store timed out after %.1fs for identity=%s; continuing",
+            _CHROMA_IDENTITY_PROFILE_WRITE_TIMEOUT_SECONDS,
+            identity_id,
+        )
+    elif "error" in error_holder:
+        exc = error_holder["error"]
+        logger.warning("L2 profile store failed (non-fatal): %s", exc)
+
+
+def _store_identity_profile_sync(
+    user_id: str,
+    identity_id: str,
+    role: str,
+    profile_text: str,
+    *,
+    replace_existing: bool,
+) -> None:
+    """Run the best-effort Chroma profile write behind the bounded caller wait."""
     store = get_vector_store()
     if not store.available:
         return
@@ -777,7 +846,10 @@ def store_identity_profile(
         return
 
     try:
-        with _CHROMA_WRITE_LOCK:
+        if not _CHROMA_WRITE_LOCK.acquire(timeout=_CHROMA_IDENTITY_PROFILE_WRITE_TIMEOUT_SECONDS):
+            logger.warning("L2 profile store skipped for %s: local Chroma write lock busy", user_id)
+            return
+        try:
             profile_collection_name = _identity_profile_collection_name(user_id)
             try:
                 collection = store._client.get_or_create_collection(
@@ -816,6 +888,8 @@ def store_identity_profile(
                 return
 
             _cleanup_legacy_identity_profile_docs(store, user_id, identity_id)
+        finally:
+            _CHROMA_WRITE_LOCK.release()
     finally:
         try:
             release_runtime_lock(lease)

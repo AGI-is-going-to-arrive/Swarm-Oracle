@@ -51,6 +51,8 @@ const storyData: StoryData = {
       key_moments: ['Moment 1'],
       parent_branch_id: null,
       fork_reason: '',
+      replay_kind: null,
+      replay_source_branch_id: null,
     },
   ],
 };
@@ -247,6 +249,8 @@ describe('scenarioReplay helpers', () => {
           key_moments: [`Moment ${index}`],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         })),
       },
     };

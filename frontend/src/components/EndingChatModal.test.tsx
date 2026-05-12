@@ -284,6 +284,8 @@ describe('EndingChatModal', () => {
     key_moments: ['Moment 1'],
     parent_branch_id: null,
     fork_reason: 'Early fork',
+    replay_kind: null,
+    replay_source_branch_id: null,
   };
 
   const installMatchMedia = ({

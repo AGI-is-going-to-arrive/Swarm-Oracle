@@ -157,7 +157,7 @@ describe('HOPsAnimation rendering behavior', () => {
     const subtitle = container.querySelector('.hops__subtitle');
     expect(title?.textContent).toBe('Probability sampling');
     expect(subtitle?.textContent).toBe(
-      'Each frame samples one branch based on its probability.',
+      'Watch how outcomes shift across branches',
     );
   });
 

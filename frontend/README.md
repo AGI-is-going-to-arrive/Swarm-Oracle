@@ -23,10 +23,10 @@ React + TypeScript frontend for SwarmOracle.
 
 | Route | Component | Description |
 |-------|-----------|-------------|
-| `/` | `InputView` | Scenario input, progress indicator, quick starts, onboarding, launch confirmation, source families, provider policy, optional organization id, advanced/BYOK accordions, custom Agent attach panel, feature-gated snapshot import |
+| `/` | `InputView` | Scenario input, progress indicator, quick starts, onboarding, launch confirmation, source families, provider policy, optional organization id, advanced/BYOK accordions, preflight-aware submit loading, custom Agent attach panel, feature-gated snapshot import |
 | `/admin/setup` | `SetupWizardView` | Three-step provider setup, API/base URL entry, and connection test |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, capture |
-| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, share/export, prediction card, feature-gated snapshot export, replay import, resume checkpoint picker, source badges, plus the capability-gated `What's Next` bridge |
+| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, share/export, prediction card, feature-gated snapshot export, replay import, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
 | `/replay/:id` | `ReplayView` | Replay trace timeline with pagination, branch filter, and unavailable/probe-error states |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
 | `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate result, supporting turns, replay digest, share/import |
@@ -75,11 +75,11 @@ React + TypeScript frontend for SwarmOracle.
 - `predictionBetting.ts`
   structured bet helpers now fall back to the raw tone id when they receive an unknown ending tone label
 - `ResumePanel.tsx`
-  ResultView-side resume control for `POST /api/scenario/:id/resume`; prefers branch-scoped checkpoints when available, previews `compressed_summary`, falls back to round input when no checkpoint is available, locks after success, and is covered by the dedicated resume smoke script
+  ResultView-side resume control for `POST /api/scenario/:id/resume`; prefers branch-scoped checkpoints when available, turns structured `compressed_summary` data into a readable preview, falls back to round input when no checkpoint is available, locks after success, and is covered by the dedicated resume smoke script
 - `AgentAttachPanel.tsx`
   homepage custom Agent picker; renders persona, domains, and decision bias as React text, caps selection at 5, and keeps loading/error/retry states visible
 - `AgentLibrary.tsx / AgentCard.tsx`
-  Agent library surface with owned-identity favorites, pressed-button filtering, profile/edit/export actions, Unicode-safe long-persona truncation, and localized retry states for capability/favorite failures
+  Agent library surface with owned-identity favorites, pressed-button filtering, profile/edit/export actions, Unicode-safe long-persona truncation, a localized back action, and localized retry states for capability/favorite failures
 - `AgentWorkshopView.tsx / DocumentUploader.tsx`
   custom Agent form; manual/document tabs use real tab semantics, the document tab shows bounded PDF upload progress plus structured errors, and the header reuses `PersonaExportMenu` for capability-gated persona import/export
 - `PersonaExportImport.tsx`
@@ -105,7 +105,7 @@ React + TypeScript frontend for SwarmOracle.
 - `PersonalJournalView.tsx / components/Journal/*`
   journal page reads current-user journal/calibration data, resolves entries with visible result/Brier output, ignores stale refreshes, and keeps side panels as helper placeholders until Sprint 7 fills them with live data
 - `LeaderboardView.tsx`
-  segment filters sync to URL params; loading, empty, retry and row animation states are localized, ignore stale responses, and respect reduced-motion settings
+  segment filters sync to URL params; loading, empty, retry, back action, and row animation states are localized, ignore stale responses, and respect reduced-motion settings
 - `uiPreferencesStore.ts`
   localStorage-backed ResultView Reader/Workbench preference
 - `experiments/phaser-custom/*`
@@ -148,7 +148,7 @@ React + TypeScript frontend for SwarmOracle.
 - `ReACTReasoningPanel.tsx / PersonalityDriftWarning.tsx`
   roundtable analyst tool-chain surface and personality drift warning; the warning only shows risk data and does not block verdict rendering
 - `HOPsAnimation.tsx`
-  component, CSS, and reduced-motion test exist, but it is not yet imported by a production page; next Sprint 3 handoff starts from that wiring
+  component, CSS, reduced-motion test, and ResultView wiring exist; multi-branch results show the probability sampling explainer before the ending cards, while replay mode keeps it hidden
 
 ## Validation
 
@@ -194,10 +194,10 @@ npm run build:spike:phaser-custom
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Latest Sprint 5-6 frontend verification:
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
-  - full vitest: `184 files / 1980 tests / 0 failed`
+  - full vitest: `184 files / 1983 tests / 0 failed`
   - Sprint 5-6 focused rerun: `7 files / 104 tests passed`
   - `npm run build`: pass, including performance budgets
-  - i18n parity: `en=2419 zh=2419`
+  - i18n parity: `en=2432 zh=2432`
   - browser recheck covered result fixture desktop/mobile Chromium `13/13`, capability matrix `30/30`, and manual pages `/`, `/agents/new`, `/leaderboard`, `/admin/setup`, `/me/journal` with no console warning/error or 375px horizontal overflow
 - Older Sprint 0-4 rows below are historical artifacts, not the current pass-count source.
 - Latest Sprint 0-2 browser matrix:

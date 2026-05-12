@@ -322,6 +322,10 @@
       "subtitle": "Multi-Ending Comparison",
       "ending_count": "Endings: {{count}}",
       "ending_card": "Ending",
+      "resume_branch_badge": "Resumed",
+      "resume_probability_hint": "This is a standalone resumed branch — probability reflects its independent simulation.",
+      "view_source_branch": "Source: {{title}}",
+      "view_source_branch_aria": "Open source branch: {{title}}",
       "probability": "Probability",
       "story": "Story",
       "insight": "Insight",
@@ -2010,10 +2014,18 @@
       "checkpoint_select": "Select checkpoint",
       "round_label": "Round {{round}}",
       "no_checkpoints": "No checkpoints available",
-      "summary_preview": "Summary"
+      "summary_preview": "Summary",
+      "select_branch_first": "Select a branch first",
+      "select_branch_hint": "Please select a branch to see available checkpoints",
+      "intro": "Pick a branch and checkpoint to create a new timeline branch that continues from that point.",
+      "checkpoint_context": "Resume with {{count}} agents from this checkpoint",
+      "checkpoint_context_with_stances": "Resume with {{count}} agents — current stances include: {{stances}}",
+      "stance_separator": ", "
     },
     "common": {
       "loading": "Loading…",
+      "back": "Back",
+      "go_back": "Go back",
       "back_home": "Back to Home",
       "cancel": "Cancel",
       "retry": "Retry",
@@ -2579,6 +2591,7 @@
     "hops": {
       "title": "Probability sampling",
       "subtitle": "Watch how outcomes shift across branches",
+      "explainer": "If we ran this scenario 100 times, each branch would appear roughly this often. Higher probability = more likely outcome.",
       "pause": "Pause",
       "play": "Play",
       "branch_fallback": "Branch",

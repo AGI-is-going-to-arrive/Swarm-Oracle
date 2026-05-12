@@ -1,5 +1,6 @@
 """Tests for app.api — REST API endpoints via FastAPI TestClient."""
 
+import asyncio
 import json
 from unittest.mock import patch
 
@@ -406,6 +407,31 @@ class TestIdentityPreflightEndpoint:
         assert data["matches"][0]["continuity_key"] == "ck-sun"
         assert data["summary"]["candidate_count"] == 1
         assert data["summary"]["new_identity_count"] == 1
+
+    def test_preflight_timeout_blocks_launch_instead_of_failing_open(self, client, monkeypatch):
+        from app.config import settings
+
+        previous = settings.FEATURE_AGENT_IDENTITY
+        settings.FEATURE_AGENT_IDENTITY = True
+
+        async def _slow_parse_question(*args, **kwargs):
+            await asyncio.sleep(0.05)
+            return {"agents": [], "groups": [], "simulation_rounds": 1}
+
+        monkeypatch.setattr(agents_api, "IDENTITY_PREFLIGHT_TIMEOUT_SECONDS", 0.01)
+        monkeypatch.setattr(agents_api, "parse_question", _slow_parse_question)
+
+        try:
+            resp = client.post("/api/agents/identities/preflight", json={
+                "question": "What if identity matching stalls?",
+                "user_id": "director-timeout",
+                "num_agents": 3,
+            })
+        finally:
+            settings.FEATURE_AGENT_IDENTITY = previous
+
+        assert resp.status_code == 504
+        assert _detail_code(resp) == "IDENTITY_PREFLIGHT_TIMEOUT"
 
 
 # ── Scenario CRUD ────────────────────────────────────────

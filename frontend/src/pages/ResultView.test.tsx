@@ -149,6 +149,10 @@ const {
       'result.archive_moment_card': 'R{{round}} played {{label}}',
       'result.archive_moment_bet': 'R{{round}} placed a bet on {{value}}',
       'result.archive_moment_commitment': 'R{{round}} committed to {{value}}',
+      'result.resume_branch_badge': 'Resumed',
+      'result.resume_probability_hint': 'This is a standalone resumed branch — probability reflects its independent simulation.',
+      'result.view_source_branch': 'Source: {{title}}',
+      'result.view_source_branch_aria': 'Open source branch: {{title}}',
       'result.moment_card_detail': 'This intervention changed the branch trajectory.',
       'result.moment_bet_detail': 'This records the prediction you chose to back.',
       'result.moment_commitment_detail': 'This worldline became the anchor for the debrief.',
@@ -666,6 +670,8 @@ describe('ResultView campaign summary', () => {
         key_moments: ['Moment 1'],
         parent_branch_id: null,
         fork_reason: '',
+        replay_kind: null,
+        replay_source_branch_id: null,
       }],
     });
 
@@ -1593,6 +1599,8 @@ describe('ResultView campaign summary', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         }],
       },
       agents: [
@@ -1757,6 +1765,8 @@ describe('ResultView campaign summary', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         }],
       },
       agents: [
@@ -1855,6 +1865,8 @@ describe('ResultView campaign summary', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
         {
           id: 'branch-2',
@@ -1866,6 +1878,8 @@ describe('ResultView campaign summary', () => {
           key_moments: ['Moment 2'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
       ],
     });
@@ -1958,12 +1972,73 @@ describe('ResultView campaign summary', () => {
 
     expect(await screen.findByText('result.title')).toBeInTheDocument();
     expect(await screen.findByText('resume.title')).toBeInTheDocument();
+    expect(screen.getAllByText('resume.title')).toHaveLength(1);
     expect(screen.getByLabelText('resume.branch')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'resume.submit' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'result_ux.director_notebook_collapse' }))
       .toHaveAttribute('aria-expanded', 'true');
     expect(container.querySelector('.result-director-notebook__body .result-archive')).not.toBeNull();
     expect(screen.getByText('resume.title').closest('.result-director-notebook__body')).toBeNull();
+  });
+
+  it('labels resumed ending cards and focuses the source branch when opened', async () => {
+    const user = userEvent.setup();
+    setMockCapabilities({
+      counterfactual_replay: { enabled: true },
+      web_search: { providers: {} },
+    });
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Source Branch',
+          probability: 0.6,
+          status: 'COMPLETED',
+          story: 'Source story.',
+          insight: 'Source insight.',
+          key_moments: ['Source moment'],
+          parent_branch_id: null,
+          fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
+        },
+        {
+          id: 'branch-resume',
+          title: 'Resume Branch',
+          probability: 0.4,
+          status: 'COMPLETED',
+          story: 'Resume story.',
+          insight: 'Resume insight.',
+          key_moments: ['Resume moment'],
+          parent_branch_id: 'branch-1',
+          fork_reason: '',
+          replay_kind: 'resume',
+          replay_source_branch_id: 'branch-1',
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Resumed')).toBeInTheDocument();
+    expect(screen.getByText('This is a standalone resumed branch — probability reflects its independent simulation.')).toBeInTheDocument();
+    const sourceButton = screen.getByRole('button', { name: 'Open source branch: Source Branch' });
+    expect(sourceButton).toHaveTextContent('Source: Source Branch');
+
+    await user.click(sourceButton);
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Source Branch' }));
+    });
   });
 
   it('shows an inline error when replay import fails', async () => {
@@ -2008,6 +2083,8 @@ describe('ResultView campaign summary', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         }],
       },
       agents: [
@@ -2151,6 +2228,8 @@ describe('ResultView campaign summary', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         }],
       },
       agents: [
@@ -2289,6 +2368,8 @@ describe('ResultView campaign summary', () => {
         key_moments: [`Moment ${index}`],
         parent_branch_id: null,
         fork_reason: '',
+        replay_kind: null,
+        replay_source_branch_id: null,
       })),
     });
 
@@ -3712,6 +3793,8 @@ describe('ResultView explore deeper bridge', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
         {
           id: 'branch-2',
@@ -3723,6 +3806,8 @@ describe('ResultView explore deeper bridge', () => {
           key_moments: ['Moment 2'],
           parent_branch_id: 'branch-1',
           fork_reason: 'Pressure spike',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
       ],
     });
@@ -3788,6 +3873,8 @@ describe('ResultView explore deeper bridge', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
       ],
     });
@@ -3883,6 +3970,8 @@ describe('ResultView explore deeper bridge', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
       ],
     });
@@ -3936,6 +4025,8 @@ describe('ResultView explore deeper bridge', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
       ],
     });
@@ -3994,6 +4085,8 @@ describe('ResultView explore deeper bridge', () => {
             key_moments: ['Moment 1'],
             parent_branch_id: null,
             fork_reason: '',
+            replay_kind: null,
+            replay_source_branch_id: null,
           },
           {
             id: 'branch-2',
@@ -4005,6 +4098,8 @@ describe('ResultView explore deeper bridge', () => {
             key_moments: ['Moment 2'],
             parent_branch_id: 'branch-1',
             fork_reason: 'Pressure spike',
+            replay_kind: null,
+            replay_source_branch_id: null,
           },
         ],
       },
@@ -4097,6 +4192,8 @@ describe('ResultView explore deeper bridge', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
         {
           id: 'branch-2',
@@ -4108,6 +4205,8 @@ describe('ResultView explore deeper bridge', () => {
           key_moments: ['Moment 2'],
           parent_branch_id: 'branch-1',
           fork_reason: 'Pressure spike',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
       ],
     });
@@ -4200,6 +4299,8 @@ describe('ResultView workbench bridge gate', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
       ],
     });
@@ -4238,6 +4339,8 @@ describe('ResultView workbench bridge gate', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
       ],
     });
@@ -4293,6 +4396,8 @@ describe('ResultView workbench bridge gate', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
       ],
     });
@@ -4330,6 +4435,8 @@ describe('ResultView HookSummaryPanel integration', () => {
           key_moments: ['Moment 1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
       ],
     });
@@ -4389,6 +4496,8 @@ describe('ResultView Reader/Workbench mode toggle (S1-4)', () => {
           key_moments: ['m1'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
         {
           id: 'branch-2',
@@ -4400,6 +4509,8 @@ describe('ResultView Reader/Workbench mode toggle (S1-4)', () => {
           key_moments: ['m2'],
           parent_branch_id: null,
           fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
         },
       ],
     });
@@ -4430,6 +4541,25 @@ describe('ResultView Reader/Workbench mode toggle (S1-4)', () => {
     expect(screen.queryByRole('heading', { name: 'result.next_steps_heading' })).toBeNull();
     expect(screen.queryByRole('region', { name: /result\.hooks\.title/ })).toBeNull();
     expect(screen.queryByText('result.agents')).toBeNull();
+  });
+
+  it('shows exactly one live resume panel in Reader mode when replay branching is enabled', async () => {
+    setMockCapabilities({
+      agent_conversation: { enabled: false },
+      agent_identity: { enabled: false },
+      causal_graph: { enabled: true },
+      replay_trace: { enabled: false },
+      counterfactual_replay: { enabled: true },
+      factions: { enabled: true },
+      web_search: { providers: {} },
+    });
+
+    renderResult();
+    await screen.findByRole('group', { name: 'result.mode_toggle_label' });
+
+    expect(screen.getAllByText('resume.title')).toHaveLength(1);
+    expect(screen.getByLabelText('resume.branch')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'result.next_steps_heading' })).toBeNull();
   });
 
   it('reveals workbench-only sections after switching to Workbench', async () => {

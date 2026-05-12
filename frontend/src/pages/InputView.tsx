@@ -883,8 +883,12 @@ export function InputView() {
       }
     }
 
+    setIsSubmitting(true);
+    setConfirmDialogData(null);
+
     const blockedByContinuityDialog = await maybeRunContinuityPreflight(launch);
     if (blockedByContinuityDialog) {
+      setIsSubmitting(false);
       return;
     }
 

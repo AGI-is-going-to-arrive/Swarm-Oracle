@@ -20,8 +20,8 @@
 |------|------|------|
 | App 入口 | `backend/app/main.py` | 挂载所有 router、根信息、`/metrics` |
 | Admin | `backend/app/api/admin.py` | admin preflight 与 LLM 连接测试；受 session gate 保护，`ADMIN_TOKEN` 非空时还要求 `X-Admin-Token` |
-| Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import |
-| Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 persona 导入导出 |
+| Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import；scenario/story branch response 会回显 replay provenance |
+| Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 persona 导入导出；identity preflight 解析超时按 504 fail-closed |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
 | Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary、score breakdown |
@@ -48,7 +48,7 @@
 | Conversation Service | `backend/app/services/conversation_service.py` | conversation thread/turn 创建、bootstrap claim、SSE stream 终态与取消原因收口 |
 | Roundtable Survey | `backend/app/services/roundtable_survey.py` | 世界线圆桌问卷 SSE；按 room 绑定 participant、补 identity memory、并发发问后逐条回传 |
 | Roundtable Analyst | `backend/app/services/roundtable_analyst.py` | 世界线圆桌 analyst SSE；有界 ReACT 工具循环，串 causal graph / identity memory / web evidence |
-| Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile（串行化锁保护写入） |
+| Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile；identity profile 写入有 pending gate、SQLite runtime lock、本地 Chroma lock 与 5 秒调用方等待上限 |
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
 | Journal Service | `backend/app/services/journal_service.py` | personal prediction journal 写入、resolve、分页与 calibration 聚合 |
@@ -96,6 +96,7 @@
 ### Replay
 
 - 短链 replay 通过 `ReplayArtifact` 持久化。
+- `GET /api/scenario/{id}` 与 `GET /api/scenario/{id}/story` 的 `branches[]` 会带 `replay_kind / replay_source_branch_id`，用于 replay、import、counterfactual 和 resume 链路恢复来源语义；普通分支字段可为空。
 - SQLite 数据库如果是“由 lightweight bootstrap / `SQLModel.metadata.create_all()` 建出来、但还没有 `alembic_version`”的旧库，`init_db()` 当前会先补齐轻量 additive columns（包括 `graph_edge` 的 evidence 字段），再 `stamp` 到当前 head 并执行 upgrade；不会再重放初始迁移把已有表撞成 `table already exists`。
 - 同一类无版本旧库如果缺少后来加入的 SQLModel metadata 表，`init_db()` 会先按 metadata 补齐缺表，再 stamp 到当前 head；例如 `prediction_journal_entries` 不会因为旧库被直接 stamp 而缺失。
 - SQLite 本地旧库如果还留着 legacy `uq_ending_room_scope` 唯一索引（`scenario_id + anchor_branch_id + room_type + participant_set_hash`），`init_db()` 当前也会在 lightweight fallback 和 Alembic upgrade 后统一修回 `scope_fingerprint`；generation 升级后再点结果页 `进入会客厅 / 异线旁听席` 不会再因为旧索引直接 `500`。
@@ -220,6 +221,7 @@
 - `GET /api/leaderboard` 当前保持旧兼容：不带 segment filter 时仍返回 leaderboard 数组；带 `scenario_type / date_from / date_to / min_agents / max_agents` 任一筛选时，才返回 `entries + segment_metadata`。分段响应的 `total_predictions / avg_score / best_score / win_streak` 会从匹配筛选条件的已评分 prediction 重新计算，`filtered_count` 是匹配 segment 的 distinct user 数，`total_count` 是未筛选的非 anonymous leaderboard user 数。
 - main simulation 当前已补 continuity preflight/override 链路：
   - `POST /api/agents/identities/preflight` 会先跑 parser，再只把 `L2 fuzzy candidate` 返回给前端确认
+  - parser 阶段最多等待 10 秒；超时返回 `504 IDENTITY_PREFLIGHT_TIMEOUT`，不会把失败当成“无匹配”继续启动
   - `POST /api/scenario` 当前接受 `continuity_overrides`
   - `reuse_existing` 会校验目标 identity 属于当前 `user_id`
   - `create_new` 会在真正 `resolve_identity()` 时跳过 L2 fuzzy reuse
@@ -400,9 +402,12 @@
 
 ## 当前验证基线
 
+- 本轮 replay / preflight / vector_store 变更复验：
+  - `python -m pytest tests/ -x -q`：`2752 passed, 2 skipped`
+  - touched backend files `ruff check`：通过
 - Sprint 5-6 backend 本 session 已跑：
   - `ruff check`：通过
-  - `python -m pytest -q --tb=short`：`2749 passed, 2 skipped`
+  - `python -m pytest tests/ -x -q`：`2752 passed, 2 skipped`
   - 当前 backend touched-file 定向回归：`314 passed`
   - cancel / journal / snapshot / leaderboard segment focused rerun：`84 passed`
   - prediction API 回归：`48 passed`

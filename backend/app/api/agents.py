@@ -64,10 +64,10 @@ ALLOWED_CUSTOM_AGENT_TIERS = {"CROWD", "IMPORTANT"}
 MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024
 DOCUMENT_UPLOAD_CHUNK_BYTES = 1024 * 1024
 PDF_PARSE_TIMEOUT_SECONDS = 30.0
+IDENTITY_PREFLIGHT_TIMEOUT_SECONDS = 10.0
 DOCUMENT_LLM_TIMEOUT_SECONDS = 60.0
 PDF_CONTENT_TYPES = {"application/pdf", "application/x-pdf"}
 _ORIGINAL_EXTRACT_PDF_TEXT = extract_pdf_text
-
 
 def _extract_pdf_text_sync(blob: bytes, max_pages: int, max_bytes: int) -> str:
     return extract_pdf_text(blob, max_pages=max_pages, max_bytes=max_bytes)
@@ -424,24 +424,39 @@ async def preflight_identity_continuity(
         else f"user:{effective_user_id}"
     )
 
-    with llm_request_scope(
-        quota_key=quota_key,
-        purpose="identity_preflight_parse",
-        requests_per_minute=req.llm_requests_per_minute,
-        tokens_per_minute=req.llm_tokens_per_minute,
-    ):
-        parsed = await parse_question(
-            req.question,
-            max_agents=num_agents,
-            target_agents=num_agents,
-            default_rounds=sim_rounds,
-            max_rounds=settings.MAX_ROUNDS,
-            hierarchical=use_hierarchical,
-            api_key=req.llm_api_key,
-            base_url=req.llm_base_url,
-            temperature=req.temperature,
-            model=req.llm_model,
+    try:
+        with llm_request_scope(
+            quota_key=quota_key,
+            purpose="identity_preflight_parse",
+            requests_per_minute=req.llm_requests_per_minute,
+            tokens_per_minute=req.llm_tokens_per_minute,
+        ):
+            parsed = await asyncio.wait_for(
+                parse_question(
+                    req.question,
+                    max_agents=num_agents,
+                    target_agents=num_agents,
+                    default_rounds=sim_rounds,
+                    max_rounds=settings.MAX_ROUNDS,
+                    hierarchical=use_hierarchical,
+                    api_key=req.llm_api_key,
+                    base_url=req.llm_base_url,
+                    temperature=req.temperature,
+                    model=req.llm_model,
+                ),
+                timeout=IDENTITY_PREFLIGHT_TIMEOUT_SECONDS,
+            )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Identity continuity preflight timed out after %.1fs for user=%s",
+            IDENTITY_PREFLIGHT_TIMEOUT_SECONDS,
+            effective_user_id,
         )
+        raise api_error(
+            504,
+            "IDENTITY_PREFLIGHT_TIMEOUT",
+            "Identity continuity preflight timed out. Please retry.",
+        ) from None
 
     matches: list[dict] = []
     exact_match_count = 0

@@ -14,6 +14,55 @@ import { getCheckpoints, isApiError, resumeFromRound } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import type { CheckpointInfo } from '../types';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function formatCheckpointSummary(
+  raw: string | null,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+  if (!raw) return '';
+  const trimmed = raw.trim();
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      const stances = parsed
+        .flatMap((item) => {
+          if (!isRecord(item) || typeof item.stance !== 'string') return [];
+          return item.stance && item.stance !== '?' ? [item.stance] : [];
+        })
+        .slice(0, 3)
+        .join(t('resume.stance_separator', { defaultValue: ', ' }));
+      return t(stances ? 'resume.checkpoint_context_with_stances' : 'resume.checkpoint_context', {
+        count: parsed.length,
+        stances: stances || undefined,
+        defaultValue: stances
+          ? 'Resume with {{count}} agents — current stances include: {{stances}}'
+          : 'Resume with {{count}} agents from this checkpoint',
+      });
+    }
+    if (isRecord(parsed)) {
+      const summary = parsed.global_summary || parsed.summary || parsed.compressed_summary;
+      if (typeof summary === 'string') return summary.trim();
+    }
+  } catch {
+    // not JSON — return raw if it looks like readable text
+  }
+  if (trimmed.startsWith('[{') || trimmed.startsWith('{"')) return '';
+  return raw;
+}
+
+function formatCheckpointOptionLabel(
+  cp: CheckpointInfo,
+  branchTitle: string,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+  const roundLabel = t('resume.round_label', { round: cp.round_number, defaultValue: `Round ${cp.round_number}` });
+  if (branchTitle) return `${roundLabel} — ${branchTitle}`;
+  return roundLabel;
+}
+
 interface BranchLike {
   id: string;
   title: string;
@@ -166,6 +215,9 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
       <h3 className="result-resume__heading">
         {t('resume.title', 'Resume Simulation')}
       </h3>
+      <p className="result-resume__intro">
+        {t('resume.intro', 'Pick a branch and checkpoint to create a new timeline branch that continues from that point.')}
+      </p>
 
       <div className="result-resume__form">
         <div className="result-resume__field">
@@ -177,6 +229,7 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
             value={selectedBranch}
             onChange={e => {
               setSelectedBranch(e.target.value);
+              setSelectedCheckpointId('');
               setError(null);
             }}
             disabled={isLocked}
@@ -207,16 +260,23 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
                     setSelectedRoundInput(String(picked.round_number));
                   }
                 }}
-                disabled={isLocked}
+                disabled={isLocked || !selectedBranch}
                 aria-invalid={visibleError ? 'true' : undefined}
                 className="result-resume__select"
               >
-                <option value="">{t('resume.checkpoint_select', 'Select checkpoint')}</option>
-                {checkpoints.map((cp) => (
-                  <option key={cp.id} value={cp.id}>
-                    {t('resume.round_label', { round: cp.round_number, defaultValue: `Round ${cp.round_number}` })}
-                  </option>
-                ))}
+                <option value="">
+                  {!selectedBranch
+                    ? t('resume.select_branch_first', 'Select a branch first')
+                    : t('resume.checkpoint_select', 'Select checkpoint')}
+                </option>
+                {checkpoints.map((cp) => {
+                  const branch = branches.find((b) => b.id === cp.branch_id);
+                  return (
+                    <option key={cp.id} value={cp.id}>
+                      {formatCheckpointOptionLabel(cp, branch?.title ?? '', t)}
+                    </option>
+                  );
+                })}
               </select>
               {selectedCheckpoint && (
                 <p className="result-resume__hint" data-testid="resume-resolved-round">
@@ -226,7 +286,12 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
                   })}
                 </p>
               )}
-              {checkpointPickRequired && (
+              {!selectedBranch && (
+                <p className="result-resume__hint">
+                  {t('resume.select_branch_hint', 'Please select a branch to see available checkpoints')}
+                </p>
+              )}
+              {selectedBranch && checkpointPickRequired && (
                 <p className="result-resume__hint">
                   {t('resume.checkpoint_select', 'Select checkpoint')}
                 </p>
@@ -263,16 +328,18 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
         </div>
       </div>
 
-      {selectedCheckpoint?.compressed_summary && (
-        <div className="result-resume__summary">
-          <p className="result-resume__summary-label">
-            {t('resume.summary_preview', 'Summary')}
-          </p>
-          <p className="result-resume__summary-body">
-            {selectedCheckpoint.compressed_summary}
-          </p>
-        </div>
-      )}
+      {selectedCheckpoint && (() => {
+        const readable = formatCheckpointSummary(selectedCheckpoint.compressed_summary, t);
+        if (!readable) return null;
+        return (
+          <div className="result-resume__summary">
+            <p className="result-resume__summary-label">
+              {t('resume.summary_preview', 'Summary')}
+            </p>
+            <p className="result-resume__summary-body">{readable}</p>
+          </div>
+        );
+      })()}
 
       {visibleError && <p role="alert" className="result-resume__feedback result-resume__feedback--error">{visibleError}</p>}
       {result && (

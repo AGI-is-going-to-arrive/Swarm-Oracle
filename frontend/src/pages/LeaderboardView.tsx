@@ -311,7 +311,7 @@ export default function LeaderboardView() {
   return (
     <div className="leaderboard-view">
       <header className="leaderboard-header">
-        <button className="btn btn-ghost" onClick={() => navigate(-1)}>
+        <button className="btn btn-ghost" onClick={() => navigate('/')}>
           {t('leaderboard.back')}
         </button>
         <h1 className="leaderboard-title">{t('leaderboard.title')}</h1>

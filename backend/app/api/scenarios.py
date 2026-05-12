@@ -1312,6 +1312,8 @@ async def get_story(
                     key_moments=parse_key_moments(b.key_moments),
                     parent_branch_id=b.parent_branch_id,
                     fork_reason=b.fork_reason,
+                    replay_kind=b.replay_kind,
+                    replay_source_branch_id=b.replay_source_branch_id,
                 ).model_dump()
                 for b in branches
             ],

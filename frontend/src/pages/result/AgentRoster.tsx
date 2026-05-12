@@ -158,6 +158,17 @@ export default function AgentRoster({
           )}
         </section>
       )}
+
+      {/* Resume panel — always available when capability enabled */}
+      {!isWorkbenchMode && id && !isReplayMode && capabilities?.counterfactual_replay?.enabled && branches.length > 0 && (
+        <section className="result-extension-section">
+          <ResumePanel
+            scenarioId={id}
+            branches={branches}
+            totalRounds={scenario?.total_rounds ?? 10}
+          />
+        </section>
+      )}
     </>
   );
 }

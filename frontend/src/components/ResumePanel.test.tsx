@@ -14,9 +14,10 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, options?: string | { defaultValue?: string }) => {
+    t: (key: string, options?: string | Record<string, unknown>) => {
       if (typeof options === 'string') return options;
-      return options?.defaultValue ?? key;
+      const template = typeof options?.defaultValue === 'string' ? options.defaultValue : key;
+      return template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => String(options?.[name] ?? ''));
     },
     i18n: { changeLanguage: vi.fn(), language: 'en' },
   }),
@@ -454,11 +455,39 @@ describe('ResumePanel — checkpoint picker', () => {
     const user = userEvent.setup();
     renderPanel({ totalRounds: 5 });
 
+    await user.selectOptions(screen.getByLabelText('Branch'), 'branch-1');
     const picker = await screen.findByLabelText('Resume from checkpoint');
     await user.selectOptions(picker, 'cp-9');
 
     expect(screen.getByText('Compressed recap text')).toBeInTheDocument();
     expect(screen.getByText('Summary')).toBeInTheDocument();
+  });
+
+  it('summarizes structured checkpoint arrays without crashing on malformed entries', async () => {
+    setEnabledCapability();
+    vi.mocked(getCheckpoints).mockResolvedValue([
+      baseCheckpoint({
+        id: 'cp-json',
+        round_number: 2,
+        compressed_summary: JSON.stringify([
+          null,
+          { stance: 'Hold the line' },
+          42,
+          { stance: '?' },
+          { stance: 'Negotiate' },
+        ]),
+      }),
+    ]);
+
+    const user = userEvent.setup();
+    renderPanel({ totalRounds: 5 });
+
+    await user.selectOptions(screen.getByLabelText('Branch'), 'branch-1');
+    const picker = await screen.findByLabelText('Resume from checkpoint');
+    await user.selectOptions(picker, 'cp-json');
+
+    expect(screen.getByText(/Resume with 5 agents/)).toHaveTextContent('Hold the line');
+    expect(screen.getByText(/Resume with 5 agents/)).toHaveTextContent('Negotiate');
   });
 
   it('filters out checkpoints whose round_number exceeds totalRounds', async () => {
