@@ -76,6 +76,37 @@ export default function WebSourcesSection() {
               </p>
             )}
           </div>
+
+          {/* Native search citations from LLM provider */}
+          {Array.isArray(scenario.web_search_context.native_citations)
+            && scenario.web_search_context.native_citations.length > 0 && (
+            <div className="result-web-sources__native" role="region" aria-label={t('result.native_citations_title')}>
+              <h4 className="result-web-sources__native-heading">
+                {t('result.native_citations_title')}
+              </h4>
+              <div className="result-web-sources__list">
+                {scenario.web_search_context.native_citations
+                  .filter((c): c is { text: string; source_url: string } =>
+                    c != null && typeof c.source_url === 'string' && c.source_url.trim() !== '')
+                  .map((cit, idx) => (
+                  <article key={`nc-${idx}`} className="result-web-sources__item result-web-sources__item--native">
+                    <p className="result-web-sources__item-text">{cit.text}</p>
+                    {/^https?:\/\//i.test(cit.source_url) && (
+                      <a
+                        className="result-web-sources__item-url"
+                        href={cit.source_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={t('result.web_sources_visit')}
+                      >
+                        {cit.source_url}
+                      </a>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </section>

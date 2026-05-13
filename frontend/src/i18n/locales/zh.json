@@ -542,6 +542,7 @@
       "web_sources_cached": "缓存",
       "web_sources_visit": "访问来源",
       "web_sources_empty": "没有匹配这个问题的实时来源。",
+      "native_citations_title": "AI 发现的来源",
       "bridge_title": "深入探索",
       "bridge_causal_title": "因果图谱",
       "bridge_causal_desc": "从关键节点追溯结局为什么成立。",

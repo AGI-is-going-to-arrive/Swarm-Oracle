@@ -542,6 +542,7 @@
       "web_sources_cached": "Cached",
       "web_sources_visit": "Visit source",
       "web_sources_empty": "No live web sources matched this query.",
+      "native_citations_title": "AI-Discovered Sources",
       "bridge_title": "Explore Deeper",
       "bridge_causal_title": "Causal Graph",
       "bridge_causal_desc": "Trace why an ending holds from its key nodes.",
