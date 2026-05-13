@@ -192,6 +192,8 @@
 | `WEB_SEARCH_MAX_RESULTS` | `5` | 每次搜索最大 snippet 数 |
 | `WEB_SEARCH_TIMEOUT_SECONDS` | `8` | `tavily / exa / searxng` 单次搜索超时 |
 | `WEB_SEARCH_CACHE_TTL_SECONDS` | `300` | 搜索结果缓存 TTL（5 分钟） |
+| `NATIVE_SEARCH_MAX_TOOL_CALLS` | `5` | 单次 LLM native search 调用允许的最大 web-search tool call 数；超过会 fail-closed |
+| `NATIVE_SEARCH_MAX_CITATIONS` | `50` | 单次 LLM native search 最多保留的 citation 数；超过会截断 |
 
 前端环境变量：
 
@@ -205,6 +207,7 @@
 - 搜索失败不阻断推演（graceful degradation）。
 - LLM native search 不由 `WEB_SEARCH_PROVIDER=native` 开启；当前只在 `llm_call(native_search_domains=...)` 且 provider 被识别为支持 native search 的 Responses API 路径下启用。未知 proxy、malformed URL、非 http(s) URL 或 chat endpoint 不会注入 native tools。
 - Native search citations 会写入 `web_context_json.native_citations`，但只保留安全的 `http/https` URL。
+- xAI app-layer 搜索的 `web_search_base_url` 官方托管地址只接受 `https://api.x.ai/v1/responses`；非 production 下允许 localhost / 127.0.0.1 / ::1 这类本地 xAI-compatible Responses proxy 做实测。
 - 前端 toggle 为 opt-in（默认关闭）。InputView 当前默认显示搜索增强入口，不再要求 `VITE_ENABLE_WEB_SEARCH=true` 或服务端默认搜索已就绪。
 - `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认搜索是否 ready（`scope: "server"`）：
   - ready 时，首页可选 `沿用服务器默认`

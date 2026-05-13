@@ -147,6 +147,7 @@ cd backend
 source .venv/bin/activate
 python -m pytest tests/test_web_context.py tests/test_web_context_integration.py tests/test_web_search_contract.py tests/test_config.py -q
 python -m pytest tests/test_web_context.py tests/test_web_context_integration.py tests/test_web_search_contract.py tests/test_llm_client.py tests/test_native_search_adapters.py tests/test_roundtable_analyst.py -q
+python -m pytest tests/test_llm_client.py tests/test_native_search_adapters.py tests/test_provider_contract_fixtures.py tests/test_web_context.py -q
 
 cd ../frontend
 npm test -- --run src/pages/InputView.test.tsx src/api/client.test.ts
@@ -155,6 +156,8 @@ npx tsc --noEmit -p tsconfig.app.json
 npm run lint
 VITE_ENABLE_WEB_SEARCH=true npm run build
 npm run e2e:web-search -- --url http://127.0.0.1:18930 --output-dir output/e2e/review-web-search --provider tavily
+npm run e2e:native-search -- full --url http://127.0.0.1:18930 --headless
+npm run e2e:capability-matrix -- --url http://127.0.0.1:18930 --output-dir output/e2e/capability-matrix-check --headless
 
 # source-ingestion: fixture + live
 cd ../backend
@@ -188,7 +191,7 @@ SWARM_E2E_MODE=live node scripts/e2e-new-source-ingestion-live.mjs full --url ht
   - 首页 `沿用服务器默认 / 自定义覆盖`
   - frontend custom override E2E 请求体校验
   - Source Family domain-filter capability gate、xAI `allowed_domains`、SearXNG `site:` 查询归一化、URL 后过滤和 native placeholder preflight warn
-  - P2/P3/P4b native path：provider detection、Responses API tools 注入、native citation 解析/过滤、`web_context_json` roundtrip、ResultView native citation 渲染
+  - P2/P3/P4b/P5 native path：provider detection、Responses API tools 注入、native citation 解析/过滤、`web_context_json` roundtrip、ResultView native citation 渲染、tool-call budget、citation cap、provider body error
 - `VITE_ENABLE_WEB_SEARCH=true` 保留在命令里只是显式环境和旧脚本兼容；当前 InputView 搜索增强入口默认可见，不再由这个 Vite 编译期开关决定是否显示
 - `e2e:web-search` 当前会额外校验 `/api/scenario` 请求体里是否真的带上：
   - `web_search_enabled`
@@ -202,14 +205,16 @@ SWARM_E2E_MODE=live node scripts/e2e-new-source-ingestion-live.mjs full --url ht
 - `e2e-new-source-ingestion-live.mjs` 当前默认走 fixture；`SWARM_E2E_MODE=live` 时才会打真实 backend。
 - live 模式现在会先显式打开首页总开关，再检查 `/api/scenario` 请求体里是否真的带上 `web_search_enabled=true`。
 - live 模式当前还会检查结果页四个 source family card：
-  - `us` 口径下要求四张卡都有非空 live 内容
-  - `non-us` 口径下要求 `Polymarket` 显示 geo-gated placeholder，其余被选 family 仍保持 `ready`
+  - `ready` 时要求可见列表项
+  - 真实 provider 没有可用结果或返回明确错误时，允许 `empty / failed / search_skipped / unsupported_provider / fallback_unconstrained` 这类可解释状态
+  - `non-us` 口径下要求 `Polymarket` 显示 geo-gated placeholder
 - 如果服务端默认搜索没 ready，live 脚本当前也支持：
   - `SWARM_E2E_WEB_SEARCH_PROVIDER`
   - `SWARM_E2E_WEB_SEARCH_API_KEY`
   - `SWARM_E2E_WEB_SEARCH_BASE_URL`
 - live 模式当前不再要求固定 snippet 文案；只要求结果页真的出现 web sources 入口，并能展开读到 snippet / link。
 - 如果要单独做真实 provider 烟测，可在 `backend/.venv` 下直接调用 `app.services.web_context.fetch_web_context()`。
+- 真实 provider E2E 不把 API key 写入文档或 summary；脚本输出会脱敏，只保留尾部少量字符用于排查。
 
 ### Backend 安全审计回归
 
@@ -272,7 +277,7 @@ npm run lint
 npm run build
 ```
 
-当前全仓验证最近记录：backend full pytest `2926 passed, 2 skipped`，`ruff check .` 通过；frontend full vitest `184 files / 2037 tests passed`，TypeScript noEmit、lint 与 build 通过，i18n parity 为 `2489/2489`。Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop 1440 与 mobile 375 六组合矩阵；native citation 复核覆盖 Chromium desktop、Firefox desktop、Chromium mobile 375 和 Chromium forced-colors/reduced-motion，未把 WebKit/Safari 写入 native citation 签收。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
+当前全仓验证最近记录：backend full pytest `2988 passed, 2 skipped`，`ruff check .` 通过；frontend full vitest `184 files / 2038 tests passed`，TypeScript noEmit、lint 与 build 通过，i18n parity 为 `2506/2506`。Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop 1440 与 mobile 375 六组合矩阵；native citation 复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵，WebKit Tab-to-links 按平台限制记录。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
@@ -350,9 +355,9 @@ npm run build
 最近稳定验证记录：
 
 - backend `ruff check .`：通过
-- backend 全量 `python -m pytest -q`：`2926 passed, 2 skipped`
+- backend 全量 `python -m pytest -q`：`2988 passed, 2 skipped`
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-- frontend full vitest：`184 files / 2037 tests passed`
+- frontend full vitest：`184 files / 2038 tests passed`
 - frontend `npm run lint`：通过
 - frontend `npm run build`：通过
 - frontend i18n key + placeholder parity：通过

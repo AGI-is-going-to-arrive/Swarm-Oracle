@@ -93,7 +93,11 @@ class ProviderSearchOutcome:
     status_reason: str | None = None
 
 
-def _detect_provider_body_error(provider: str, response_body: dict) -> str | None:
+class ProviderBodyError(RuntimeError):
+    """Provider returned HTTP 200 with an error envelope in the response body."""
+
+
+def _detect_provider_body_error(provider: str, response_body: object) -> str | None:
     """Detect HTTP 200 responses that contain an error in the body.
 
     Checks for provider-specific error patterns in otherwise-successful responses.
@@ -102,10 +106,16 @@ def _detect_provider_body_error(provider: str, response_body: dict) -> str | Non
         return None
     error_field = response_body.get("error")
     if isinstance(error_field, dict):
-        return f"{provider} body error: {error_field.get('message', 'unknown')}"
+        return f"{provider} body error"
     if isinstance(error_field, str) and error_field:
-        return f"{provider} body error: {error_field}"
+        return f"{provider} body error"
     return None
+
+
+def _raise_for_provider_body_error(provider: str, response_body: object) -> None:
+    body_error = _detect_provider_body_error(provider, response_body)
+    if body_error:
+        raise ProviderBodyError(body_error)
 
 
 def _normalize_domain_filter(domain: str) -> str:
@@ -277,6 +287,11 @@ _WEB_SEARCH_URL_ALLOWLIST: dict[str, frozenset[str]] = {
     "exa": frozenset({"api.exa.ai"}),
     "xai": frozenset({"api.x.ai"}),
 }
+_LOCAL_WEB_SEARCH_PROXY_HOSTS: frozenset[str] = frozenset({
+    "localhost",
+    "127.0.0.1",
+    "::1",
+})
 _ALLOWED_WEB_SEARCH_SCHEMES: frozenset[str] = frozenset({"http", "https"})
 def _clip_text(value: str, max_chars: int) -> str:
     normalized = " ".join(value.split())
@@ -562,6 +577,12 @@ def validate_web_search_base_url(provider: str, url: str | None) -> str | None:
                 return None
             return url
         hostname = (parsed.hostname or "").strip().lower()
+        if (
+            normalized_provider == "xai"
+            and settings.ENV != "production"
+            and hostname in _LOCAL_WEB_SEARCH_PROXY_HOSTS
+        ):
+            return url
         allowed_hosts = _WEB_SEARCH_URL_ALLOWLIST.get(normalized_provider)
         if not allowed_hosts or hostname not in allowed_hosts:
             return None
@@ -706,6 +727,7 @@ async def _search_tavily(
         resp = await client.post(endpoint, json=body)
         resp.raise_for_status()
         data = resp.json()
+        _raise_for_provider_body_error("tavily", data)
 
     snippets: list[WebSearchSnippet] = []
     for item in data.get("results", []):
@@ -771,6 +793,7 @@ async def _search_searxng(
         except (json.JSONDecodeError, ValueError):
             logger.warning("SearXNG returned non-JSON response")
             return []
+        _raise_for_provider_body_error("searxng", data)
 
     snippets: list[WebSearchSnippet] = []
     for item in data.get("results", []):
@@ -860,6 +883,7 @@ async def _search_exa(
         )
         resp.raise_for_status()
         data = resp.json()
+        _raise_for_provider_body_error("exa", data)
 
     snippets: list[WebSearchSnippet] = []
     for item in data.get("results", []):
@@ -892,6 +916,96 @@ def _find_xai_output_text(payload: dict) -> tuple[str, list[dict]]:
                 annotations = content.get("annotations", [])
                 return text.strip(), annotations if isinstance(annotations, list) else []
     return "", []
+
+
+def _parse_xai_event_stream_payload(raw_body: bytes | str) -> dict | None:
+    """Extract the final Responses payload from a text/event-stream body."""
+    text = raw_body.decode("utf-8", "replace") if isinstance(raw_body, bytes) else raw_body
+    data_lines: list[str] = []
+    completed_response: dict | None = None
+    last_output_text = ""
+    last_annotations: list[dict] = []
+
+    def _flush_event() -> None:
+        nonlocal data_lines, completed_response, last_output_text, last_annotations
+        if not data_lines:
+            return
+        data_blob = "\n".join(data_lines).strip()
+        data_lines = []
+        if not data_blob or data_blob == "[DONE]":
+            return
+        try:
+            event_payload = json.loads(data_blob)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(event_payload, dict):
+            return
+
+        payload_type = event_payload.get("type")
+        if payload_type == "response.completed":
+            response = event_payload.get("response")
+            if isinstance(response, dict):
+                completed_response = response
+        elif payload_type == "response.output_text.done":
+            text_value = event_payload.get("text")
+            if isinstance(text_value, str):
+                last_output_text = text_value
+        elif payload_type == "response.content_part.done":
+            part = event_payload.get("part")
+            if isinstance(part, dict) and part.get("type") == "output_text":
+                text_value = part.get("text")
+                if isinstance(text_value, str):
+                    last_output_text = text_value
+                annotations = part.get("annotations")
+                if isinstance(annotations, list):
+                    last_annotations = [
+                        annotation for annotation in annotations if isinstance(annotation, dict)
+                    ]
+
+    for line in text.splitlines():
+        if line == "":
+            _flush_event()
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line.removeprefix("data:").lstrip())
+    _flush_event()
+
+    if completed_response is not None:
+        return completed_response
+    if last_output_text:
+        return {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": last_output_text,
+                            "annotations": last_annotations,
+                        }
+                    ],
+                }
+            ]
+        }
+    return None
+
+
+def _decode_xai_response_payload(resp: httpx.Response) -> dict:
+    content_type = resp.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type == "text/event-stream":
+        payload = _parse_xai_event_stream_payload(resp.content)
+        if payload is not None:
+            return payload
+    try:
+        data = resp.json()
+    except json.JSONDecodeError:
+        payload = _parse_xai_event_stream_payload(resp.content)
+        if payload is not None:
+            return payload
+        raise
+    if not isinstance(data, dict):
+        return {}
+    return data
 
 
 def _strip_json_code_fence(raw: str) -> str:
@@ -1012,7 +1126,8 @@ async def _search_xai(
             },
         )
         resp.raise_for_status()
-        data = resp.json()
+        data = _decode_xai_response_payload(resp)
+        _raise_for_provider_body_error("xai", data)
 
     raw_text, annotations = _find_xai_output_text(data)
     if not raw_text:
@@ -1070,6 +1185,14 @@ async def _search_with_provider(
         snippets = await search_fn(query, request_config, include_domains=include_domains)
         state = "ready" if snippets else "empty"
         return ProviderSearchOutcome(snippets, state, dfm, dc)
+    except ProviderBodyError as exc:
+        logger.warning("Web search body error (%s): %s", provider, exc)
+        if not swallow_errors:
+            raise
+        return ProviderSearchOutcome(
+            [], "failed", dfm, dc,
+            status_reason=str(exc),
+        )
     except httpx.TimeoutException:
         logger.warning("Web search timeout (%s): query=%r", provider, query[:80])
         if not swallow_errors:

@@ -2266,6 +2266,11 @@
     forced-color-adjust: none;
     color: LinkText;
   }
+
+  .result-web-sources__item-url:focus-visible {
+    color: LinkText;
+    outline-color: Highlight;
+  }
 }
 
 @media (max-width: 640px) {

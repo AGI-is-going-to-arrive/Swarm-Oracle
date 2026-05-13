@@ -3733,6 +3733,49 @@ describe('ResultView campaign summary', () => {
       expect(nativeLinks[0]).toHaveAttribute('rel', 'noopener noreferrer');
     });
 
+    it('does not render native citations region when every native citation is unsafe', async () => {
+      vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+        id: 'scenario-1',
+        question: 'Native citation all-invalid safety test',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        messages: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+        web_search_context: {
+          query: 'test',
+          snippets: [],
+          provider: 'xai',
+          timestamp: '2026-04-07T00:00:00Z',
+          cached: false,
+          native_citations: [
+            { text: 'JS native source', source_url: 'javascript:alert(1)' },
+            { text: 'FTP native source', source_url: 'ftp://legacy.example.com/file' },
+            { text: { unsafe: true }, source_url: 'https://safe.example.com/object' },
+          ],
+        },
+      } as unknown as Scenario);
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      await userEvent.click(await screen.findByRole('button', { name: 'result.web_sources_title' }));
+
+      expect(screen.queryByText('result.native_citations_title')).not.toBeInTheDocument();
+      expect(screen.queryByText('JS native source')).not.toBeInTheDocument();
+      expect(screen.queryByText('FTP native source')).not.toBeInTheDocument();
+    });
+
     it('does not render web sources when web_search_context is null', async () => {
       render(
         <MemoryRouter initialEntries={['/result/scenario-1']}>

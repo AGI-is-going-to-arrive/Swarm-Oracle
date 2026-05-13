@@ -31,15 +31,18 @@
 
 ## Validation Snapshot
 
-- Backend full suite: `2926 passed, 2 skipped`.
+- Backend full suite: `2988 passed, 2 skipped`.
 - Backend targeted Web Search / native-search hardening suite: passed in-session before full suite.
 - Backend lint: `ruff check .` passed.
-- Frontend full vitest: `184 files / 2037 tests passed`.
+- Frontend full vitest: `184 files / 2038 tests passed`.
 - Frontend `tsc`, `lint`, and `build`: passed.
-- i18n parity: `2489/2489`.
-- Browser smoke: Chromium desktop, Firefox desktop, Chromium mobile `375px`,
-  plus Chromium forced-colors/reduced-motion passed for native citations.
-  WebKit/Safari was not counted for the native-citation signoff in this pass.
+- i18n parity: `2506/2506`.
+- Browser smoke: `e2e:native-search` passed for Chromium / Firefox / WebKit
+  desktop + mobile. WebKit Tab-to-links remains a platform limitation and is
+  recorded by the script.
+- Legacy release sweep: `e2e:web-search` used real Tavily / Exa / xAI-local /
+  SearXNG-local calls; `e2e:new-source-ingestion-live` passed desktop + mobile
+  live source ingestion; `e2e:capability-matrix` passed `30/30` gates.
 
 ## Codex Review Closure
 
@@ -58,17 +61,23 @@
 - P3 xAI native search pilot: done for xAI.
   - `llm_call(native_search_domains=...)` injects tools only for recognized Responses API providers.
   - `native_search_adapters.py` parses top-level citations and annotations, and sanitizes domains/citation URLs.
-  - OpenAI adapter remains skeleton/backlog; no live OpenAI fixture was signed off here.
+  - OpenAI adapter has structural/fixture-level support; no live OpenAI provider signoff was included here.
 - P4b native citation UI: done.
   - `native_citations` roundtrip through `web_context_json`.
   - `WebSourcesSection` filters malformed text/URL before rendering native links.
-- P5 release validation: partial.
-  - Full backend/frontend/lint/type/build/i18n and custom browser matrix passed.
-  - Remaining work: named E2E scripts, WebKit/Safari native-citation pass, provider fixtures, and explicit native-search `max_tool_calls` cost control.
+- P5 release validation: done.
+  - Full backend/frontend/lint/type/build/i18n passed.
+  - Named `e2e:native-search` exists and covers Chromium / Firefox / WebKit
+    desktop + mobile.
+  - Provider fixtures cover xAI + OpenAI success/error/tool-call/citation cases.
+  - Native-search `max_tool_calls` is enforced fail-closed; citation cap truncates
+    after provider parsing.
+  - Legacy release sweep has been rerun with real provider calls.
 
 ## New Debt
 
-- P5 still needs explicit native-search tool-call budget/cost control.
-- Native-citation browser signoff did not include WebKit/Safari in this pass.
 - OpenAI and other native adapters should stay backlog until official response
   fixtures and live-provider constraints are reviewed.
+- SearXNG live E2E depends on a JSON-enabled instance; the checked script handles
+  explicit empty/failed states, but local setup still has to provide `json`
+  output for full ready-state coverage.

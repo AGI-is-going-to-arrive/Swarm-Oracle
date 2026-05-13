@@ -28,7 +28,7 @@ docker compose up backend
 | 路由前缀 | 文件 | 功能 |
 |----------|------|------|
 | `/api/scenario` | `api/scenarios.py` | 场景 CRUD、模拟启动、导入/导出 Replay、Web 搜索增强 |
-| `/api/capabilities` | `api/scenarios.py` | 13-key 通用 capability registry（无 LLM 调用） |
+| `/api/capabilities` | `api/scenarios.py` | 17-key capability registry（`web_search` + 16 个功能开关，无 LLM 调用） |
 | `/api/debate` | `api/debate.py` | 辩论竞技场创建、快照、结果、预测投注 |
 | `/api/scenario/{id}/ending-room` | `api/ending_rooms.py` | 神谕密室 / 世界线圆桌创建、follow-up threads |
 | `/api/ending-room/{id}` | `api/ending_rooms.py` | 密室快照、结果、用户回合追加 |
@@ -79,6 +79,12 @@ docker compose up backend
 | `MAX_ROUNDS` | `40` | 最大模拟轮次 |
 | `LOG_LEVEL` | `INFO` | 日志级别 |
 | `LOG_FORMAT` | `json` | 日志格式 (json/plain) |
+| `ENABLE_WEB_SEARCH` | `false` | 启用 app-layer 搜索增强 |
+| `WEB_SEARCH_PROVIDER` | `tavily` | 服务端默认搜索 provider：`tavily / exa / xai / searxng`；`native` 仅 legacy 兼容 |
+| `WEB_SEARCH_API_KEY` | `""` | 服务端默认搜索 provider key；`searxng` 不需要 |
+| `SEARXNG_URL` | `http://localhost:8888` | SearXNG 基址 |
+| `NATIVE_SEARCH_MAX_TOOL_CALLS` | `5` | LLM native search 单次 tool-call 上限，超出 fail-closed |
+| `NATIVE_SEARCH_MAX_CITATIONS` | `50` | LLM native search citation 保留上限 |
 | `FEATURE_CUSTOM_AGENTS` | `false` | 启用自建 Agent CRUD + workshop API |
 | `FEATURE_AGENT_IDENTITY` | `false` | 启用跨场景身份解析 + 记忆 API |
 | `FEATURE_CAUSAL_GRAPH` | `false` | 启用因果图谱 API + simulator hook |
@@ -158,7 +164,7 @@ docker compose up backend
 
 ## 测试与质量
 
-- **67 个测试文件 / 2386 tests**，位于 `tests/`
+- **99 个 test_*.py 文件**，位于 `tests/`；最近 full pytest 为 `2988 passed, 2 skipped`
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`
@@ -276,6 +282,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-14 | Web Search P5 release gate | `llm_client.py`：native-search tool-call budget 从日志口径收紧为 fail-closed，citation list 按 `NATIVE_SEARCH_MAX_CITATIONS` 截断，并继续通过 ContextVar 隔离每次调用。`native_search_adapters.py`：Protocol 增加 `detect_body_error / count_tool_calls / max_tool_calls`，xAI/OpenAI adapter 覆盖 top-level citations、annotations、failed `web_search_call` 与 `tool_use` 计数。`web_context.py`：provider body error 统一映射成 failed outcome，不回显 provider 原始 message；xAI app-layer 支持 text/event-stream Responses payload，非 production 下允许 localhost xAI-compatible proxy 做实测。新增/扩展 `test_llm_client.py`、`test_native_search_adapters.py`、`test_provider_contract_fixtures.py`、`test_web_context.py`。验证：backend full `2988 passed, 2 skipped`，`ruff check .` 通过；真实 provider sweep 覆盖 Tavily / Exa / xAI-local / SearXNG-local |
 | 2026-05-12 | Debate argument-map verdict linking 收口 | `debate_argument_map.py`：`link_verdict()` 改为五种状态 `accepted / standing / unaddressed / rebutted / rejected`，winner side 先读 node payload，payload 坏掉时回退 `DebateTurn.speaker_side`；没有 `supporting_turns` 时按 turn/句子顺序最多采纳 3 条 winner-side claim。verdict 节点 label 同步 `winner · verdict_tone`，payload 带 `judge_summary`；重复 verdict node 会收敛，缺 node 的 unit 只重算状态，不生成悬空 verdict edge。新增/扩展 `test_debate_argument_map.py` 覆盖五状态、空 supporting_turns fallback、malformed payload、orphan unit 和重复 verdict node；backend full pytest `2766 passed, 2 skipped`，ruff 0 errors |
 | 2026-05-11 | Sprint 4 KG realtime + snapshot/voice hardening | `causal_graph.py` 新增 `GraphDelta` 返回，`kg_realtime.py` 新增 coalescer，`ws.py` 注册 `kg:delta` / `kg:snapshot_invalidated` typed events；coalescer 已补串行 flush、broadcast timeout 与 pending drain。`snapshot_export.py` 导入校验改按物理 ZIP member 计数，拒绝重复 member name 和超过 256 个 member。`_content.py` voice variant 从 13→18，新增 `tech-visionary / journalist / educator / artist / entrepreneur`，并补 `medium` / `scale` 误分类回归。fresh backend full `pytest -x -q`: `2581 passed, 3 skipped, 9 warnings` |
 | 2026-05-07 | 辩论竞技场全面去模板化 | `debate_prompts.py`：新增 `generate_persona_with_llm()` 异步 LLM persona 生成（temp=0.85，JSON 输出 `{"role":"...","persona":"..."}`，失败返回 None 回退模板）+ `build_cast_async()` 3 方 `asyncio.gather` 并行生成；`phase_argument_goal` 从公文体改为口语化任务描述（如"说清楚你为什么觉得这事值得推动"）；`_side_specific_instructions` 改为不对称的正/反方白话指令；output requirements 新增禁用术语列表（机制/执行后果/责任链/世界线/可执行性/护栏/阈值）；`_build_system_message` 中 persona 从 `sanitize_untrusted_text` 升级为 `format_untrusted_text_block` 包装为 UNTRUSTED DATA 防注入。`debate.py`：`DebateRuntimeSnapshot` 从 frozen 改为 mutable，新增 `personas: dict` 字段；`run_debate_background` 新增 async persona upgrade 步骤（`build_cast_async` → 持久化到 `breakdown_json.metadata.personas` → 更新 debate.*_role → 同步 snapshot.personas），受 `DEBATE_USE_LLM` gate + try/except；`_generate_turn_content` persona 优先读 `debate.personas[side.value]`，新增 pass-2 retry（temp 0.8→0.6，reasoning_effort medium→low）后 fallback 到 `anchor_copy`；`_serialize_debate` 新增 `_persona_for()` 从 `breakdown_json.metadata.personas` 读 LLM persona、回退 `get_participant_persona()` 模板；`_finalize_debate` 通过 `**_extract_persisted_personas_meta(debate.breakdown_json)` 合并 personas 到新 metadata；judge analysis prompt 中"机制/执行后果/责任链"/"mechanisms/accountability chains"改为"具体的论点、漏洞或转折"/"specific arguments, gaps, or turning points"；`_build_phase_stakes/judge_focus/commentary` 简化为中性短句。`test_debate_service.py` 新增 7 个 persona 持久化回归测试（None/空/malformed/有效/旧 debate 回退/新 debate LLM persona 透出）；135 debate tests passed，ruff 0 errors |

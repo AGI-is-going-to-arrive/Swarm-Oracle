@@ -7,6 +7,9 @@ import { chromium } from "playwright";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
+const IS_MAIN_MODULE = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 const DEFAULT_PROVIDER = process.env.SWARM_WEB_SEARCH_PROVIDER || "tavily";
@@ -140,6 +143,62 @@ async function waitForAutomation(page, predicate, timeout = 30000, label = "auto
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+function attachPageIssueMonitor(page) {
+  const issues = [];
+  page.on("pageerror", (error) => {
+    issues.push({ type: "pageerror", message: error.message });
+  });
+  page.on("requestfailed", (request) => {
+    const failure = request.failure()?.errorText ?? "unknown";
+    if (failure === "cancelled" && /\/fonts\/.*\.woff2(?:\?.*)?$/u.test(request.url())) {
+      return;
+    }
+    if (failure === "net::ERR_ABORTED" && /\/api\/campaign\/profile\//u.test(request.url())) {
+      return;
+    }
+    issues.push({ type: "requestfailed", url: request.url(), failure });
+  });
+  return issues;
+}
+
+async function confirmLaunchIfPresent(page) {
+  const dialog = page.locator('[role="alertdialog"], [role="dialog"]')
+    .filter({ hasText: /Confirm Simulation Launch|确认推演|确认|Launch/i })
+    .first();
+  try {
+    await dialog.waitFor({ state: "visible", timeout: 2000 });
+  } catch {
+    return false;
+  }
+  await dialog.getByRole("button", { name: /开始推演|Start Simulation/i }).click();
+  return true;
+}
+
+async function dismissWelcomeDialogIfPresent(page) {
+  const dialog = page.getByRole("dialog").first();
+  try {
+    await dialog.waitFor({ state: "visible", timeout: 5000 });
+  } catch {
+    return false;
+  }
+  const dismissButton = dialog.locator("button").filter({ hasText: /Skip|跳过|Close|关闭/i }).first();
+  if ((await dismissButton.count()) === 0) return false;
+  await dismissButton.click();
+  await dialog.waitFor({ state: "hidden", timeout: 5000 }).catch(() => {});
+  return true;
+}
+
+async function setRangeValue(page, selector, value) {
+  const locator = page.locator(selector);
+  if (await locator.count() === 0) return false;
+  await locator.evaluate((element, nextValue) => {
+    element.value = String(nextValue);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+  return true;
+}
+
 async function runWebSearchFlow(args) {
   const outputDir = args.outputDir || path.join(DEFAULT_OUTPUT_ROOT, `web-search-${timestampLabel()}`);
   ensureDir(outputDir);
@@ -147,10 +206,27 @@ async function runWebSearchFlow(args) {
   const browser = await launchBrowser(args.headless);
   const context = await browser.newContext({ viewport: { width: 1440, height: 1180 } });
   const page = await context.newPage();
+  const browserIssues = attachPageIssueMonitor(page);
   let capturedScenarioRequest = null;
 
   try {
     const resolvedBaseUrl = args.baseUrlOverride || defaultProviderBaseUrl(args.provider);
+    await page.route("**/api/agents/identities/preflight", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          needs_confirmation: false,
+          matches: [],
+          summary: {
+            agent_count: 0,
+            exact_match_count: 0,
+            candidate_count: 0,
+            new_identity_count: 0,
+          },
+        }),
+      });
+    });
     await page.route("**/api/scenario", async (route) => {
       const request = route.request();
       try {
@@ -158,29 +234,41 @@ async function runWebSearchFlow(args) {
       } catch {
         capturedScenarioRequest = null;
       }
-      await route.continue();
+      const minimizedPayload = capturedScenarioRequest && typeof capturedScenarioRequest === "object"
+        ? { ...capturedScenarioRequest, rounds: 1, num_agents: 3 }
+        : capturedScenarioRequest;
+      await route.continue({
+        headers: {
+          ...request.headers(),
+          "content-type": "application/json",
+        },
+        postData: JSON.stringify(minimizedPayload),
+      });
     });
 
     await page.goto(`${args.baseUrl}/`, { waitUntil: "domcontentloaded" });
+    await dismissWelcomeDialogIfPresent(page);
     await waitForAutomation(page, (payload) => payload.page?.kind === "input", 10000, "input page");
+    await dismissWelcomeDialogIfPresent(page);
 
     await page.locator("textarea.input--hero").fill(args.question);
+    await setRangeValue(page, "input.rounds-slider", 3);
+    await setRangeValue(page, "input.agents-slider", 3);
     await page.getByLabel(/搜索增强推演|Search-Augmented Simulation/i).check();
-    await page.getByRole("button", { name: /自定义覆盖|Custom override/i }).click();
+    await page.locator(".web-search-mode-switch .web-search-mode-btn").nth(1).click();
     await page.locator("#web-search-provider").selectOption(args.provider);
     await page.locator("#web-search-api-key").fill(args.apiKey);
     await page.locator("#web-search-base-url").fill(resolvedBaseUrl);
 
-    await page.screenshot({ path: path.join(outputDir, "web-search-custom-before-submit.png"), type: "png" });
-
     const submitButton = page.getByRole("button", { name: /开始推演|Start Simulation/i });
     await submitButton.click();
+    await confirmLaunchIfPresent(page);
 
     await page.waitForFunction(() => {
       return Boolean(document.querySelector(".loading-overlay")) || /\/sim\//.test(window.location.pathname);
     }, { timeout: 10000 });
 
-    await page.waitForURL(/\/sim\//, { timeout: 45000 });
+    await page.waitForFunction(() => /\/sim\//.test(window.location.pathname), { timeout: 90000 });
     const simulationPayload = await waitForAutomation(
       page,
       (payload) => payload.page?.kind === "simulation",
@@ -214,6 +302,7 @@ async function runWebSearchFlow(args) {
       finalUrl: page.url(),
       simulationStatus: simulationPayload?.scenario?.status ?? simulationPayload?.scenario?.phase ?? "unknown",
       capturedScenarioRequest: redactScenarioRequest(capturedScenarioRequest),
+      browserIssues,
       outputDir,
     };
     writeJson(path.join(outputDir, "summary.json"), summary);
@@ -225,7 +314,17 @@ async function runWebSearchFlow(args) {
   }
 }
 
-runWebSearchFlow(parseArgs(process.argv)).catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+export const __test__ = {
+  defaultProviderBaseUrl,
+  parseArgs,
+  redactScenarioRequest,
+  redactSensitiveValue,
+  resolveFrontendPath,
+};
+
+if (IS_MAIN_MODULE) {
+  runWebSearchFlow(parseArgs(process.argv)).catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

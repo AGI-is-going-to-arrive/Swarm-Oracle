@@ -1017,6 +1017,46 @@ class TestLLMCall:
                 model="gpt-test",
             )
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response_payload",
+        [
+            {"output": [None], "usage": {"total_tokens": 12}},
+            {"output": {"type": "message"}, "usage": {"total_tokens": 12}},
+            {
+                "output": [{"type": "message", "content": ["bad"]}],
+                "usage": {"total_tokens": 12},
+            },
+        ],
+    )
+    async def test_llm_call_raises_llmerror_on_malformed_responses_output(
+        self,
+        monkeypatch,
+        response_payload,
+    ):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return response_payload
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return _FakeResponse()
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+        with pytest.raises(llm_client.LLMError, match="Unexpected response structure"):
+            await llm_call(
+                "Reply with one sentence.",
+                reasoning_effort="low",
+                base_url="https://example.com/v1/responses",
+                api_key="sk-test",
+                model="gpt-test",
+            )
+
     def test_shared_async_client_is_reused(self):
         first = llm_client._get_shared_async_client()
         second = llm_client._get_shared_async_client()
@@ -1731,6 +1771,44 @@ class TestLlmCallNativeSearch:
         assert captured_payload["tools"][0]["filters"]["allowed_domains"] == ["arxiv.org"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("domains", [[], ["bad domain"]])
+    async def test_native_search_domains_empty_after_sanitization_do_not_inject_tools(
+        self,
+        monkeypatch,
+        domains,
+    ):
+        """Invalid/empty domain filters must not degrade into unconstrained native search."""
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        await llm_call(
+            "test prompt",
+            base_url="https://api.x.ai/v1/responses",
+            api_key="xai-key",
+            native_search_domains=domains,
+        )
+
+        assert "tools" not in captured_payload
+
+    @pytest.mark.asyncio
     async def test_chat_completions_no_tools_even_with_domains(self, monkeypatch):
         """Chat Completions endpoint never gets tools even with native_search_domains."""
         captured_payload = {}
@@ -1842,6 +1920,253 @@ class TestLlmCallNativeSearch:
         assert citations[0].source_url == "https://arxiv.org/abs/1"
 
     @pytest.mark.asyncio
+    async def test_native_search_tool_call_budget_exceeded_raises(self, monkeypatch):
+        """Native search responses over the tool-call budget should fail closed."""
+        async def mock_post(self, url, *, json=None, **kwargs):
+            return httpx.Response(
+                200,
+                json={
+                    "output": [
+                        *[
+                            {"type": "web_search_call", "status": "completed"}
+                            for _ in range(3)
+                        ],
+                        *[
+                            {"type": "tool_use", "name": "web_search"}
+                            for _ in range(3)
+                        ],
+                        {
+                            "type": "message",
+                            "content": [{
+                                "text": "over budget answer",
+                                "annotations": [
+                                    {"url": "https://example.com/a", "title": "A"},
+                                ],
+                            }],
+                        },
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client.settings.NATIVE_SEARCH_MAX_TOOL_CALLS", 5)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        with pytest.raises(llm_client.LLMError, match="tool-call budget exceeded"):
+            await llm_call(
+                "test prompt",
+                base_url="https://api.x.ai/v1/responses",
+                api_key="xai-key",
+                native_search_domains=["example.com"],
+            )
+        assert llm_client.get_last_native_citations() == []
+
+    @pytest.mark.asyncio
+    async def test_native_search_max_tool_calls_zero_fails_on_first_tool_call(
+        self,
+        monkeypatch,
+    ):
+        """A zero tool-call budget means any provider search call fails closed."""
+        async def mock_post(self, url, *, json=None, **kwargs):
+            return httpx.Response(
+                200,
+                json={
+                    "output": [
+                        {"type": "web_search_call", "status": "completed"},
+                        {"type": "message", "content": [{"text": "answer"}]},
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client.settings.NATIVE_SEARCH_MAX_TOOL_CALLS", 0)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        with pytest.raises(llm_client.LLMError, match="tool-call budget exceeded"):
+            await llm_call(
+                "test prompt",
+                base_url="https://api.x.ai/v1/responses",
+                api_key="xai-key",
+                native_search_domains=["example.com"],
+            )
+        assert llm_client.get_last_native_citations() == []
+
+    @pytest.mark.asyncio
+    async def test_native_search_citation_cap_truncates_over_limit(self, monkeypatch):
+        """Native search citations should be capped after provider parsing."""
+        async def mock_post(self, url, *, json=None, **kwargs):
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{
+                        "type": "message",
+                        "content": [{
+                            "text": "answer",
+                            "annotations": [
+                                {
+                                    "url": f"https://example.com/{idx}",
+                                    "title": f"Source {idx}",
+                                }
+                                for idx in range(3)
+                            ],
+                        }],
+                    }],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client.settings.NATIVE_SEARCH_MAX_CITATIONS", 2)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        await llm_call(
+            "test prompt",
+            base_url="https://api.x.ai/v1/responses",
+            api_key="xai-key",
+            native_search_domains=["example.com"],
+        )
+        citations = llm_client.get_last_native_citations()
+        assert [citation.source_url for citation in citations] == [
+            "https://example.com/0",
+            "https://example.com/1",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_native_search_citation_cap_zero_clears_citations(self, monkeypatch):
+        """A zero citation cap should store no native citations."""
+        async def mock_post(self, url, *, json=None, **kwargs):
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{
+                        "type": "message",
+                        "content": [{
+                            "text": "answer",
+                            "annotations": [
+                                {"url": "https://example.com/0", "title": "Source 0"},
+                            ],
+                        }],
+                    }],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client.settings.NATIVE_SEARCH_MAX_CITATIONS", 0)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        await llm_call(
+            "test prompt",
+            base_url="https://api.x.ai/v1/responses",
+            api_key="xai-key",
+            native_search_domains=["example.com"],
+        )
+
+        assert llm_client.get_last_native_citations() == []
+
+    @pytest.mark.asyncio
+    async def test_native_search_citation_cap_keeps_exact_limit(self, monkeypatch):
+        """Citation cap should not truncate when count is exactly at the limit."""
+        async def mock_post(self, url, *, json=None, **kwargs):
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{
+                        "type": "message",
+                        "content": [{
+                            "text": "answer",
+                            "annotations": [
+                                {"url": "https://example.com/0", "title": "Source 0"},
+                                {"url": "https://example.com/1", "title": "Source 1"},
+                            ],
+                        }],
+                    }],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client.settings.NATIVE_SEARCH_MAX_CITATIONS", 2)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        await llm_call(
+            "test prompt",
+            base_url="https://api.x.ai/v1/responses",
+            api_key="xai-key",
+            native_search_domains=["example.com"],
+        )
+
+        assert [c.source_url for c in llm_client.get_last_native_citations()] == [
+            "https://example.com/0",
+            "https://example.com/1",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_native_search_top_level_body_error_raises(self, monkeypatch):
+        """Native Responses bodies with top-level error must not be accepted as success."""
+        async def mock_post(self, url, *, json=None, **kwargs):
+            return httpx.Response(
+                200,
+                json={
+                    "error": {"message": "rate_limited"},
+                    "output": [{"type": "message", "content": [{"text": "answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        llm_client._provider_failures.clear()
+        llm_client._provider_circuit_until.clear()
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        with pytest.raises(llm_client.LLMError, match="Native search response error"):
+            await llm_call(
+                "test prompt",
+                base_url="https://api.x.ai/v1/responses",
+                api_key="xai-key",
+                native_search_domains=["example.com"],
+            )
+        assert llm_client._provider_failures.get("https://api.x.ai/v1/responses") == 1
+
+    @pytest.mark.asyncio
     async def test_no_native_search_no_citations(self, monkeypatch):
         """Without native_search_domains, no citations are populated (P0-2 regression)."""
         async def mock_post(self, url, *, json=None, **kwargs):
@@ -1866,6 +2191,60 @@ class TestLlmCallNativeSearch:
         await llm_call("test prompt", api_key="k")
         citations = get_last_native_citations()
         assert citations == []
+
+    @pytest.mark.asyncio
+    async def test_native_search_citations_are_context_isolated_across_tasks(
+        self,
+        monkeypatch,
+    ):
+        """Concurrent calls should keep native citation ContextVar values isolated."""
+        async def mock_post(self, url, *, json=None, **kwargs):
+            marker = "a" if "prompt-a" in (json or {}).get("input", "") else "b"
+            await asyncio.sleep(0)
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{
+                        "type": "message",
+                        "content": [{
+                            "text": f"answer {marker}",
+                            "annotations": [
+                                {
+                                    "url": f"https://example.com/{marker}",
+                                    "title": f"Source {marker}",
+                                },
+                            ],
+                        }],
+                    }],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        async def run_call(prompt: str) -> list[str]:
+            await llm_call(
+                prompt,
+                base_url="https://api.x.ai/v1/responses",
+                api_key="xai-key",
+                native_search_domains=["example.com"],
+            )
+            return [c.source_url for c in llm_client.get_last_native_citations()]
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        citations_a, citations_b = await asyncio.gather(
+            run_call("prompt-a"),
+            run_call("prompt-b"),
+        )
+
+        assert citations_a == ["https://example.com/a"]
+        assert citations_b == ["https://example.com/b"]
 
     @pytest.mark.asyncio
     async def test_malformed_url_resets_stale_citations(self):

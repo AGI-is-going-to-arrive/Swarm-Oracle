@@ -16,6 +16,7 @@ from typing import Protocol
 
 from app.services.web_context import (
     WebSearchSnippet,
+    _detect_provider_body_error,
     _sanitize_domain_filters,
     _sanitize_url,
 )
@@ -31,9 +32,20 @@ class NativeSearchAdapter(Protocol):
 
     def parse_citations(self, response_body: dict) -> list[WebSearchSnippet]: ...
 
-    def detect_body_error(self, response_body: dict) -> str | None: ...
+    def detect_body_error(self, response_body: object) -> str | None: ...
 
     def count_tool_calls(self, response_body: dict) -> int: ...
+
+
+def _build_web_search_tools(domains: list[str] | None, *, max_domains: int) -> list[dict]:
+    tool: dict = {"type": "web_search"}
+    if domains is None:
+        return [tool]
+    allowed_domains = _sanitize_domain_filters(domains, max_domains=max_domains)
+    if not allowed_domains:
+        return []
+    tool["filters"] = {"allowed_domains": allowed_domains}
+    return [tool]
 
 
 def _append_citation(
@@ -121,11 +133,7 @@ class XAIResponsesAdapter:
     max_tool_calls: int = 5
 
     def build_search_tools(self, *, domains: list[str] | None = None) -> list[dict]:
-        tool: dict = {"type": "web_search"}
-        allowed_domains = _sanitize_domain_filters(domains, max_domains=self.max_domains)
-        if allowed_domains:
-            tool["filters"] = {"allowed_domains": allowed_domains}
-        return [tool]
+        return _build_web_search_tools(domains, max_domains=self.max_domains)
 
     def parse_citations(self, response_body: dict) -> list[WebSearchSnippet]:
         citations = _parse_response_citations(response_body)
@@ -133,12 +141,17 @@ class XAIResponsesAdapter:
             return citations
         return _parse_annotation_citations(response_body)
 
-    def detect_body_error(self, response_body: dict) -> str | None:
+    def detect_body_error(self, response_body: object) -> str | None:
+        provider_error = _detect_provider_body_error("xAI", response_body)
+        if provider_error:
+            return provider_error
+        if not isinstance(response_body, dict):
+            return None
         for item in response_body.get("output", []):
             if not isinstance(item, dict):
                 continue
             if item.get("type") == "web_search_call" and item.get("status") == "failed":
-                return f"xAI web_search_call failed: {item.get('error', 'unknown')}"
+                return "xAI web_search_call failed"
         return None
 
     def count_tool_calls(self, response_body: dict) -> int:
@@ -156,11 +169,7 @@ class OpenAIResponsesAdapter:
     max_tool_calls: int = 5
 
     def build_search_tools(self, *, domains: list[str] | None = None) -> list[dict]:
-        tool: dict = {"type": "web_search"}
-        allowed_domains = _sanitize_domain_filters(domains, max_domains=self.max_domains)
-        if allowed_domains:
-            tool["filters"] = {"allowed_domains": allowed_domains}
-        return [tool]
+        return _build_web_search_tools(domains, max_domains=self.max_domains)
 
     def parse_citations(self, response_body: dict) -> list[WebSearchSnippet]:
         citations = _parse_response_citations(response_body)
@@ -168,12 +177,17 @@ class OpenAIResponsesAdapter:
             return citations
         return _parse_annotation_citations(response_body)
 
-    def detect_body_error(self, response_body: dict) -> str | None:
+    def detect_body_error(self, response_body: object) -> str | None:
+        provider_error = _detect_provider_body_error("OpenAI", response_body)
+        if provider_error:
+            return provider_error
+        if not isinstance(response_body, dict):
+            return None
         for item in response_body.get("output", []):
             if not isinstance(item, dict):
                 continue
             if item.get("type") == "web_search_call" and item.get("status") == "failed":
-                return f"OpenAI web_search_call failed: {item.get('error', 'unknown')}"
+                return "OpenAI web_search_call failed"
         return None
 
     def count_tool_calls(self, response_body: dict) -> int:
@@ -193,7 +207,7 @@ class _NullAdapter:
     def parse_citations(self, response_body: dict) -> list[WebSearchSnippet]:
         return []
 
-    def detect_body_error(self, response_body: dict) -> str | None:
+    def detect_body_error(self, response_body: object) -> str | None:
         return None
 
     def count_tool_calls(self, response_body: dict) -> int:

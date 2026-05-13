@@ -1,8 +1,8 @@
 # Web Search Augmented Simulation — Design Document (Final)
 
-> Status: **Implemented — P0/P1/P2/P3(xAI pilot)/P4a/P4b 已完成；P5 release hardening 仍有剩余项**
+> Status: **Implemented — P0/P1/P2/P3(xAI pilot)/P4a/P4b 已完成；P5 native-search release gate 与 legacy release sweep 已完成**
 > Date: 2026-05-14 (P2/P3/P4b re-baselined)
-> Scope: Batch 2 + P0/P1/P2/P3/P4a/P4b 已交付 — Tavily/Exa/SearXNG/xAI app-layer providers, TTL cache, prompt injection 三层注入, InputView toggle, ResultView 来源卡片, GET /api/capabilities, `provider_capability`, `web_search_families`, `web_search_context.family_context`, xAI native search pilot, `native_citations`
+> Scope: Batch 2 + P0/P1/P2/P3/P4a/P4b/P5 已交付 — Tavily/Exa/SearXNG/xAI app-layer providers, TTL cache, prompt injection 三层注入, InputView toggle, ResultView 来源卡片, GET /api/capabilities, `provider_capability`, `web_search_families`, `web_search_context.family_context`, xAI native search pilot, `native_citations`, native-search tool-call budget / citation cap
 
 ---
 
@@ -268,6 +268,8 @@ class Settings(BaseSettings):
     WEB_SEARCH_TIMEOUT_SECONDS: float = 8.0
     WEB_SEARCH_CACHE_TTL_SECONDS: int = 300
     SEARXNG_URL: str = "http://localhost:8888"
+    NATIVE_SEARCH_MAX_TOOL_CALLS: int = 5
+    NATIVE_SEARCH_MAX_CITATIONS: int = 50
 ```
 
 ---
@@ -308,6 +310,10 @@ SEARXNG_URL=http://localhost:8888
 WEB_SEARCH_MAX_RESULTS=5
 WEB_SEARCH_TIMEOUT_SECONDS=8
 WEB_SEARCH_CACHE_TTL_SECONDS=300
+
+# LLM native search budget
+NATIVE_SEARCH_MAX_TOOL_CALLS=5
+NATIVE_SEARCH_MAX_CITATIONS=50
 ```
 
 ### 5.2 前端 `.env` 模板更新
@@ -434,10 +440,10 @@ VITE_ENABLE_WEB_SEARCH=false
 
 5. **Multi-provider + 能力探测**（V2）
    - Exa / SearXNG provider
-   - xAI native search pilot 已完成；OpenAI adapter 仍是 skeleton/backlog
+   - xAI native search pilot 已完成；OpenAI adapter 已有 structural/fixture-level support，live OpenAI 签收仍是 backlog
    - 探测 API
 
-当前 P5 剩余项：命名 E2E (`e2e:web-search` / `e2e:new-source-ingestion-live` / `e2e:capability-matrix`) 还需要重新全跑；native citation 尚未计入 WebKit/Safari 签收；native-search explicit `max_tool_calls` 成本控制还没落地。
+当前 P5 native-search gate 已收口：`e2e:native-search` 覆盖 Chromium/Firefox/WebKit desktop+mobile，native citation 已计入 WebKit/Safari 签收，native-search explicit `max_tool_calls` 已 fail-closed。更广义的 legacy release sweep 也已追加完成：`e2e:web-search` 真实调用 Tavily/Exa/xAI-local/SearXNG-local，`e2e:new-source-ingestion-live` 真实覆盖 desktop+mobile source ingestion，`e2e:capability-matrix` 通过 30/30 gates。
 
 ---
 

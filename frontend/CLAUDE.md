@@ -183,7 +183,7 @@ npm run test:watch # vitest (watch mode)
 
 ### `scripts/` -- E2E 与工具脚本
 
-32 个顶层 `.mjs` 脚本，包括 E2E 测试套件、资源生成、性能预算检查、Release 签核；另有少量子目录脚本。
+顶层 `.mjs` 脚本包括 E2E 测试套件、资源生成、性能预算检查、Release 签核；另有少量子目录脚本。
 
 ## 关键依赖与配置
 
@@ -200,7 +200,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- **185 个测试文件** (`.test.ts` / `.test.tsx`) / **1981 tests**
+- 最近 full vitest 基线：`184 files / 2038 tests passed`
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -234,7 +234,7 @@ frontend/
     hooks/              # 自定义 Hooks (10+)
     lib/                # 工具函数库 (30+ 文件)
     i18n/               # 国际化 (zh/en)
-  scripts/              # E2E + 工具脚本 (32 个顶层 .mjs)
+  scripts/              # E2E + 工具脚本
   package.json          # 依赖与脚本
   vite.config.ts        # Vite 配置
   vitest.config.ts      # 测试配置
@@ -390,6 +390,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-14 | Web Search P5 + legacy release sweep | `WebSourcesSection.tsx`：native citations 区域补 `aria-controls`/`id` 关联，collapsed body 保持 `inert` 与焦点兜底。`ResultView.css`：source trigger/link 补 `:focus-visible` 与 forced-colors Highlight/LinkText 覆盖。`e2e-native-search-suite.mjs` 覆盖 native citation render/safety/a11y/focus/empty/all-unsafe，默认跑 Chromium / Firefox / WebKit desktop + mobile；WebKit Tab-to-links 限制按脚本记录。`e2e-web-search-suite.mjs` 真实校验 custom override 请求体并脱敏 summary；`e2e-new-source-ingestion-live.mjs` 支持 live desktop/mobile、确认弹窗、source family state 展示和输出目录分区；`e2e-capability-matrix.mjs` 补当前 capability keys 与 web_search provider shape；`release-signoff.mjs` 纳入 web search live、capability matrix、new source ingestion live。验证：frontend full `184 files / 2038 tests passed`，`tsc / eslint / build` 通过，i18n `2506/2506`，真实 provider sweep 覆盖 Tavily / Exa / xAI-local / SearXNG-local |
 | 2026-05-12 | ArgumentMap verdict / DAG / mobile 收口 | `ArgumentMap.tsx`：dagre 排版改成 verdict -> claim -> evidence/rebuttal 三层，React Flow 边仍保留原始 source/target；支持/反驳/verdict 连边分别用绿色实线、红色虚线、紫色；节点按 proposition/opposition/judge 着色，verdict 节点显示 winner + 本地化“胜出 / wins”。状态筛选补数量 badge、按状态空态、搜索/筛选 transition、`/`/`F`/`Escape` 快捷键和双击节点 fit view。新增 `ArgumentMapMobileList.tsx` 与 `ArgumentMapTour.tsx`；移动端可切 Graph/List，tour 由 localStorage 控制只显示一次。`DebateArenaView.tsx` 的阶段地图默认折叠。i18n：en/zh 补齐 argument map 新 key 与 `common.skip/next/done`。验证：backend full pytest `2766 passed, 2 skipped`，frontend full vitest `184 files / 1994 tests passed`，backend/frontend lint、TypeScript、build、i18n parity 通过；Chrome DevTools 复核目标 debate 的桌面/移动端 argument map，console 0 error |
 | 2026-05-11 | Sprint 5-6 Agent / Journal / Templates / Leaderboard 收口 | `/agents` favorites filter 改为 pressed-button group，Agent card 长 persona 按码点截断；`/agents/new` manual/document tab 补键盘与 PDF 错误态；persona import 使用后端返回的 string `identity_id` 并刷新库，导入/导出错误不再把原始后端文本露给用户。`/me/journal` 已接 submit/resolve/calibration，resolve 后显示实际结果与 Brier 分，刷新会忽略迟到响应；`/leaderboard` segment filters 同步 URL，retry/empty/loading 文案走 i18n、忽略迟到响应并遵守 reduced-motion。`InputView` 教育模板 picker、launch confirm、IME guard 和 `prefers-reduced-motion` 一并复核。真实验证：frontend full vitest `185 files / 1981 tests / 0 failed`，Sprint 5-6 窄集 `7 files / 104 tests passed`，`tsc` 通过，`npm run build` 通过，i18n parity `2372=2372`；browser smoke 覆盖 `/`、`/me/journal`、`/agents`、`/agents/new`、identity inspector、`/leaderboard`、`/admin/setup` 的 Chromium / Firefox / WebKit 桌面与 375px mobile |
 | 2026-05-11 | Sprint 4 品质提升收口 | `ResultView.tsx` 第一阶段拆分为 orchestrator + `src/pages/result/ResultHeader.tsx`、`EndingCardsGrid.tsx`、`ExploreDeeperBridge.tsx`、`WebSourcesSection.tsx`、`PredictionsSection.tsx`、`DirectorNotebook.tsx`、`AgentRoster.tsx`、`ResultModals.tsx`、`ResultContext.tsx`；`HOPsAnimation` 已挂结果页，replay 模式不播放。`CompareDigestView`、`InputView`、`DebateResultView`、`FactionTimeline` 完成第一批 locale 迁移；`EndingScene`、`TitleScene`、`WorldScene` 补 reduced-motion guards。新增 `scripts/e2e-gate3-sprint3-probe.mjs`；fresh baseline `179 files / 1926 tests / 0 failed`，i18n parity `2159=2159`，Gate3 probe desktop/mobile `10/10`。`ResultContext` 仍偏宽，后续继续收窄 |

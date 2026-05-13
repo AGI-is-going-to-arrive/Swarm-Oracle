@@ -155,7 +155,7 @@ class TestXAIContractFixtures:
     def test_failed_search_detected(self):
         err = self.adapter.detect_body_error(XAI_FAILED_SEARCH_FIXTURE)
         assert err is not None
-        assert "rate_limit_exceeded" in err
+        assert err == "xAI web_search_call failed"
 
     def test_success_no_body_error(self):
         assert self.adapter.detect_body_error(XAI_SUCCESS_FIXTURE) is None
@@ -213,13 +213,11 @@ class TestProviderBodyErrorFixtures:
 
     def test_string_error(self):
         result = _detect_provider_body_error("xai", BODY_ERROR_STRING_FIXTURE)
-        assert result is not None
-        assert "insufficient_quota" in result
+        assert result == "xai body error"
 
     def test_dict_error(self):
         result = _detect_provider_body_error("openai", BODY_ERROR_DICT_FIXTURE)
-        assert result is not None
-        assert "API key expired" in result
+        assert result == "openai body error"
 
     def test_clean_body(self):
         assert _detect_provider_body_error("tavily", BODY_CLEAN_FIXTURE) is None

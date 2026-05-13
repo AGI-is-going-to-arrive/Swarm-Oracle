@@ -40,7 +40,11 @@ class TestXAIResponsesAdapter:
 
     def test_build_tools_empty_domains(self):
         tools = self.adapter.build_search_tools(domains=[])
-        assert tools == [{"type": "web_search"}]
+        assert tools == []
+
+    def test_build_tools_all_invalid_domains(self):
+        tools = self.adapter.build_search_tools(domains=["bad domain", "javascript:alert(1)"])
+        assert tools == []
 
     def test_parse_citations_with_annotations(self):
         body = {
@@ -142,6 +146,11 @@ class TestXAIResponsesAdapter:
         assert self.adapter.detect_body_error({}) is None
         assert self.adapter.detect_body_error({"output": [{"type": "message"}]}) is None
 
+    def test_detect_body_error_returns_none_on_non_dict_input(self):
+        assert self.adapter.detect_body_error(None) is None
+        assert self.adapter.detect_body_error([]) is None
+        assert self.adapter.detect_body_error("bad") is None
+
     def test_detect_body_error_detects_failed_search_call(self):
         body = {
             "output": [
@@ -150,7 +159,7 @@ class TestXAIResponsesAdapter:
         }
         err = self.adapter.detect_body_error(body)
         assert err is not None
-        assert "rate_limited" in err
+        assert err == "xAI web_search_call failed"
 
     def test_detect_body_error_ignores_successful_search_call(self):
         body = {
@@ -199,6 +208,11 @@ class TestOpenAIResponsesAdapter:
         tools = adapter.build_search_tools(domains=domains)
         assert len(tools[0]["filters"]["allowed_domains"]) == 100
 
+    def test_build_tools_all_invalid_domains(self):
+        adapter = OpenAIResponsesAdapter()
+        tools = adapter.build_search_tools(domains=["bad domain", "javascript:alert(1)"])
+        assert tools == []
+
 
 class TestGetAdapter:
 
@@ -238,6 +252,11 @@ class TestOpenAIDetectBodyError:
     def test_clean_response(self):
         assert self.adapter.detect_body_error({}) is None
 
+    def test_non_dict_input_returns_none(self):
+        assert self.adapter.detect_body_error(None) is None
+        assert self.adapter.detect_body_error([]) is None
+        assert self.adapter.detect_body_error("bad") is None
+
     def test_failed_search_call(self):
         body = {
             "output": [
@@ -246,7 +265,7 @@ class TestOpenAIDetectBodyError:
         }
         err = self.adapter.detect_body_error(body)
         assert err is not None
-        assert "timeout" in err
+        assert err == "OpenAI web_search_call failed"
 
     def test_count_tool_calls(self):
         body = {

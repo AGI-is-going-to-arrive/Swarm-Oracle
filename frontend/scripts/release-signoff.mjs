@@ -546,6 +546,8 @@ async function main() {
   const nodeConversationLiveOutput = path.join(args.outputRoot, "node-conversation-live");
   const kgExplorerLiveOutput = path.join(args.outputRoot, "kg-explorer-live");
   const replayViewLiveOutput = path.join(args.outputRoot, "replay-view-live");
+  const webSearchLiveOutput = path.join(args.outputRoot, "web-search-live");
+  const capabilityMatrixOutput = path.join(args.outputRoot, "capability-matrix");
   const newSourceIngestionLiveOutput = path.join(args.outputRoot, "new-source-ingestion-live");
   const phase3aFirefoxOutput = path.join(args.outputRoot, "phase3a-firefox");
   const phase3bFirefoxOutput = path.join(args.outputRoot, "phase3b-firefox");
@@ -640,6 +642,10 @@ async function main() {
         "scripts/e2e-debate-suite.test.mjs",
         "scripts/e2e-frontend-preflight.test.mjs",
         "scripts/e2e-ending-room-followup-suite.test.mjs",
+        "scripts/e2e-web-search-suite.test.mjs",
+        "scripts/e2e-new-source-ingestion-live.test.mjs",
+        "scripts/e2e-capability-matrix.test.mjs",
+        "scripts/e2e-native-search-suite.test.mjs",
       ],
     );
     if (args.includeBackendChecks) {
@@ -1270,6 +1276,48 @@ async function main() {
       {
         artifactDir: replayViewLiveOutput,
         resultFile: path.join(replayViewLiveOutput, "result.json"),
+        env: {
+          SWARM_URL: args.baseUrl,
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "web_search_live",
+      nodeCommand,
+      [
+        "scripts/e2e-web-search-suite.mjs",
+        "--url",
+        args.baseUrl,
+        "--output-dir",
+        webSearchLiveOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: webSearchLiveOutput,
+        resultFile: path.join(webSearchLiveOutput, "summary.json"),
+        env: {
+          SWARM_URL: args.baseUrl,
+        },
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "capability_matrix",
+      nodeCommand,
+      [
+        "scripts/e2e-capability-matrix.mjs",
+        "--url",
+        args.baseUrl,
+        "--output-dir",
+        capabilityMatrixOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: capabilityMatrixOutput,
+        resultFile: path.join(capabilityMatrixOutput, "results.json"),
         env: {
           SWARM_URL: args.baseUrl,
         },

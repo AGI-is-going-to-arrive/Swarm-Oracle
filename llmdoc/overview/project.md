@@ -188,11 +188,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
   - backend `ruff check` 最近一次记录为通过
-  - backend 全量 `python -m pytest -q` 最近一次记录为 `2926 passed, 2 skipped`
+  - backend 全量 `python -m pytest -q` 最近一次记录为 `2988 passed, 2 skipped`
   - frontend `typecheck / lint / build / perf budgets` 通过
   - 本次 bridge/workbench 文案 + CausalReview guide key-node 标签窄集：`87 passed`
   - 本次前端 TypeScript noEmit：通过
-  - frontend 全量 vitest 最近一次记录为 `184 files / 2037 tests passed`
+  - frontend 全量 vitest 最近一次记录为 `184 files / 2038 tests passed`
   - frontend `npx tsc --noEmit -p tsconfig.app.json` 最近一次记录为通过
   - 本轮真实验证还包括：
     - Classic 分支标题定向验证：
@@ -212,13 +212,14 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - frontend P4a Source Family 定向回归：`157 passed`
     - backend `ruff check .`、frontend `tsc / lint / build` 通过
     - Playwright 复核 Chromium / Firefox / WebKit 的桌面 `1440px` 与移动 `375px` 六组合矩阵通过
-  - 本轮 Web Search P2/P3/P4b hardening 已补：
-    - backend full pytest：`2926 passed, 2 skipped`
+  - 本轮 Web Search P2/P3/P4b/P5 hardening 已补：
+    - backend full pytest：`2988 passed, 2 skipped`
     - backend `ruff check .`：通过
-    - frontend full vitest：`184 files / 2037 tests passed`
+    - frontend full vitest：`184 files / 2038 tests passed`
     - frontend `tsc / lint / build`：通过
-    - frontend i18n parity：`2489/2489`
-    - native citation 浏览器复核覆盖 Chromium desktop、Firefox desktop、Chromium mobile 375 和 forced-colors/reduced-motion；WebKit/Safari 未计入这次 native citation 签收
+    - frontend i18n parity：`2506/2506`
+    - native citation 浏览器复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵；WebKit Tab-to-links 按平台限制记录
+    - legacy release sweep 已用真实 provider 跑过：`e2e:web-search` 覆盖 Tavily / Exa / xAI-local / SearXNG-local，`e2e:new-source-ingestion-live` 覆盖 desktop + mobile live source ingestion，`e2e:capability-matrix` 为 `30 passed / 0 failed`
   - fixture-backed local preview 浏览器复核：
     - ResultView bridge DOM / disabled 样式通过
     - FactionTimeline 文案 i18n 插值通过
@@ -247,7 +248,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - graph smoke / release-signoff 当前都会先跑前端 deep-link preflight；preview 没 ready、SPA fallback 失效，或 entry module、CSS entry、legacy fallback 资源不一致 / 不可达时会直接 fail-closed，不再把 404 混成图谱回归
   - `phase3-batch-a full`、`phase3-batch-b full`、`phase3-batch-c full` 当前都已在 Chromium desktop/mobile + Firefox desktop + WebKit desktop 通过
   - `e2e-new-source-ingestion-live` 当前在 `fixture full` 和 `live full` 下都已 fresh 通过
-    - live 口径已补 `web_search_families` 请求、四个 source family 非空卡片，以及 `Polymarket us / non-us` 两条 geo-gate 路径
+    - live 口径已补 `web_search_families` 请求、结果页 web sources、四个 source family card 与 live state 展示；真实 provider 没有可用结果时允许 `empty / failed / search_skipped / unsupported_provider / fallback_unconstrained` 这类明确状态，不再把“四张卡必须非空”当成唯一成功条件
   - `zh-CN batch-a full`、`zh-CN batch-b full` 通过
   - focused browser spot-check 当前建议覆盖 CausalReview 节点对话、KG 工作台 `NodeQuickCard` 视口钳位，以及详情面板打开/关闭后的焦点恢复
   - focused browser spot-check 当前也已确认 `/agents` 继续按 capability gate 落 disabled 文案，不是假阳性
@@ -259,15 +260,15 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - Sprint 0-2 收尾复验当前已补：
     - backend 本轮触碰文件定向 pytest：`36 passed`
     - backend 本轮触碰文件 ruff：通过
-    - frontend full vitest 当前最新为：`184 files / 2037 tests passed`
+    - frontend full vitest 当前最新为：`184 files / 2038 tests passed`
     - frontend `tsc / lint / build / i18n parity`：通过
     - browser matrix：`72 passed / 0 failed`，覆盖 12 项功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375
   - Sprint 5-6 收口验证当前已补：
     - backend ruff：通过
-    - backend full pytest：`2926 passed, 2 skipped`
+    - backend full pytest：`2988 passed, 2 skipped`
     - backend touched-file 定向回归：`314 passed`
     - backend review-fix focused rerun：cancel / journal / snapshot / leaderboard segment `84 passed`；prediction API 回归 `48 passed`
-    - frontend full vitest：`184 files / 2037 tests passed`
+    - frontend full vitest：`184 files / 2038 tests passed`
     - frontend Sprint 5-6 focused rerun：`7 files / 104 tests passed`
     - frontend `tsc / lint / build / i18n parity`：通过
     - Debate live/result Chrome DevTools 复核覆盖 `1440px` 与 `375px`；score grid 单列、expand button `44px`、long role probe `overflow=0`

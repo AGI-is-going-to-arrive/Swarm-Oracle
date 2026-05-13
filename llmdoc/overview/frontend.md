@@ -206,7 +206,7 @@
 | `useNodeConversationTransport.ts` | `frontend/src/hooks/useNodeConversationTransport.ts` | `NodeConversationSheet` 的本地 transport hook；负责 `/start` / `/turn` 请求、origin branch/round/node/excerpt 透传、AbortController 生命周期和 SSE frame 解析 |
 | `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | 首页 `Organization ID` 的 sessionStorage 单一事实源；InputView 与 API client 共用，避免 header 逻辑散落 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
-| `e2e-new-source-ingestion-live.mjs` | `frontend/scripts/e2e-new-source-ingestion-live.mjs` | source-ingestion 专项脚本；默认走 fixture，`SWARM_E2E_MODE=live` 时走真实 backend。live 模式会先显式打开首页总开关，校验 `/api/scenario` 请求里的 `web_search_families`，再检查结果页四个 source family 的 live/non-empty 卡片；`Polymarket` 的 `non-us` geo-gate 也走同一条 live 口径 |
+| `e2e-new-source-ingestion-live.mjs` | `frontend/scripts/e2e-new-source-ingestion-live.mjs` | source-ingestion 专项脚本；默认走 fixture，`SWARM_E2E_MODE=live` 时走真实 backend。live 模式会先显式打开首页总开关，校验 `/api/scenario` 请求里的 `web_search_families`，再检查结果页四个 source family 的状态；ready 时要求真实列表项，provider non-ready / unavailable / failed 状态按显式 UI 接受；`Polymarket` 的 `non-us` geo-gate 也走同一条 live 口径 |
 | `e2e-capability-matrix.mjs` | `frontend/scripts/e2e-capability-matrix.mjs` | graph/playability capability matrix；当前覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route，fixture payload 也包含 `agent_conversation / kg_explorer / replay_trace`。`ReplayView` 的 disabled 路径现在会落显式 unavailable surface，不再回首页；如果脚本还按旧 redirect 口径断言，先同步脚本再跑 |
 | `e2e-ws-contract-suite.mjs` | `frontend/scripts/e2e-ws-contract-suite.mjs` | WS 契约诊断脚本；当前覆盖 `scenario / debate / ending-room` 的首帧 auth、`4001 / 4404` 非重连、`1006` 可重连、auth timeout、oversize auth frame 和 pending-auth limit |
 | `e2e-result-share-fixture.mjs` | `frontend/scripts/e2e-result-share-fixture.mjs` | ResultView + ShareModal fixture browser 回归；脚本 stub 后端 scenario/branch/story/social/capability JSON，检查真实分支渲染、分享弹窗、预测卡片、social endpoint、控制台/page/request 错误和横向溢出。`full` 默认跑 desktop + mobile Chromium |
@@ -555,12 +555,13 @@
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
 - 当前 frontend 稳定验证口径：
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npx vitest run`：`184 files / 2037 tests passed`
+  - `npx vitest run`：`184 files / 2038 tests passed`
   - `npm run lint`：通过
   - `npm run build`：通过
   - Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop `1440px` 与 mobile `375px` 六组合矩阵
-  - native citation 浏览器复核覆盖 Chromium desktop、Firefox desktop、Chromium mobile 375 和 forced-colors/reduced-motion；WebKit/Safari 未计入这次 native citation 签收
-- frontend i18n key + placeholder parity：通过；当前 en/zh 都是 `2489` 个 key。
+  - native citation 浏览器复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵；WebKit Tab-to-links 按平台限制记录
+  - legacy `e2e:web-search` 已用真实 provider 跑过 Tavily / Exa / xAI-local / SearXNG-local；`e2e:new-source-ingestion-live` 已跑 desktop + mobile live；`e2e:capability-matrix` 为 `30 passed / 0 failed`
+- frontend i18n key + placeholder parity：通过；当前 en/zh 都是 `2506` 个 key。
 - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 - Classic 分支标题本轮已补定向验证：
@@ -594,7 +595,7 @@
   - 结果页 `FactionTimeline` 空态文案已改成解释性提示
 - preview-driven Chromium `phase3-batch-a full / phase3-batch-b full / phase3-batch-c full` 本轮全绿。
 - `e2e-new-source-ingestion-live` 当前在 `fixture full` 和 `live full` 两条口径下都已通过。
-  - live 口径当前已覆盖 `web_search_families` 请求体、四个 source family 非空卡片，以及 `Polymarket us / non-us` 两条 geo-gate 路径
+  - live 口径当前已覆盖 `web_search_families` 请求体、结果页 web sources、四个 source family card 与 live state 展示；真实 provider 没有可用结果时允许明确的 non-ready state，不再要求每张 family card 都必须有列表项
 - focused browser spot-check 当前建议覆盖：
   - CausalReview 节点点击后打开 `NodeConversationSheet`，并带上当前节点摘录
   - KG 工作台桌面节点点击后先出现 `NodeQuickCard`，靠近视口边缘时不会溢出屏幕

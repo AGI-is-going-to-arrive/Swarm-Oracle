@@ -37,6 +37,18 @@ export default function WebSourcesSection() {
     return null;
   }
 
+  const nativeCitations = Array.isArray(scenario.web_search_context.native_citations)
+    ? scenario.web_search_context.native_citations
+      .map((citation) => {
+        if (citation == null || typeof citation.text !== 'string') {
+          return null;
+        }
+        const safeUrl = getSafeHttpUrl(citation.source_url);
+        return safeUrl ? { text: citation.text, source_url: safeUrl } : null;
+      })
+      .filter((citation): citation is { text: string; source_url: string } => citation != null)
+    : [];
+
   return (
     <section className="result-web-sources">
       <button
@@ -96,23 +108,13 @@ export default function WebSourcesSection() {
           </div>
 
           {/* Native search citations from LLM provider */}
-          {Array.isArray(scenario.web_search_context.native_citations)
-            && scenario.web_search_context.native_citations.length > 0 && (
+          {nativeCitations.length > 0 && (
             <div className="result-web-sources__native" role="region" aria-label={t('result.native_citations_title')}>
               <h4 className="result-web-sources__native-heading">
                 {t('result.native_citations_title')}
               </h4>
               <div className="result-web-sources__list">
-                {scenario.web_search_context.native_citations
-                  .map((c) => {
-                    if (c == null || typeof c.text !== 'string') {
-                      return null;
-                    }
-                    const safeUrl = getSafeHttpUrl(c.source_url);
-                    return safeUrl ? { text: c.text, source_url: safeUrl } : null;
-                  })
-                  .filter((c): c is { text: string; source_url: string } => c != null)
-                  .map((cit, idx) => (
+                {nativeCitations.map((cit, idx) => (
                   <article key={`nc-${idx}`} className="result-web-sources__item result-web-sources__item--native">
                     <p className="result-web-sources__item-text">{cit.text}</p>
                     <a

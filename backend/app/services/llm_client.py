@@ -1613,9 +1613,10 @@ async def llm_call(
         if (provider_profile.supports_native_search
                 and not provider_profile.is_proxy):
             from app.services.native_search_adapters import get_adapter
-            _native_adapter = get_adapter(provider_profile.name)
-            tools = _native_adapter.build_search_tools(domains=native_search_domains)
+            adapter = get_adapter(provider_profile.name)
+            tools = adapter.build_search_tools(domains=native_search_domains)
             if tools:
+                _native_adapter = adapter
                 payload["tools"] = tools
 
     logger.debug("LLM request → %s [%s] (effort=%s, %d chars, byok=%s, native_search=%s)",
@@ -1692,6 +1693,7 @@ async def llm_call(
         if _native_adapter is not None:
             body_error = _native_adapter.detect_body_error(data)
             if body_error:
+                await _record_provider_failure(provider_key)
                 raise LLMError(f"Native search response error: {body_error}")
         await _reconcile_rate_limit_usage(
             provider_key=provider_key,
@@ -1714,13 +1716,25 @@ async def llm_call(
         else:
             text = ""
             outputs = data.get("output", [])
-            msg = next((o for o in outputs if o.get("type") == "message"), None)
+            if not isinstance(outputs, list):
+                raise TypeError("Responses output must be a list")
+            msg = next(
+                (o for o in outputs if isinstance(o, dict) and o.get("type") == "message"),
+                None,
+            )
             if msg is None:
-                msg = next((o for o in outputs if "content" in o), None)
+                msg = next(
+                    (o for o in outputs if isinstance(o, dict) and "content" in o),
+                    None,
+                )
             if msg is not None:
                 parts = msg.get("content") or []
+                if not isinstance(parts, list):
+                    raise TypeError("Responses message content must be a list")
                 if parts:
                     first = parts[0] or {}
+                    if not isinstance(first, dict):
+                        raise TypeError("Responses message content part must be an object")
                     text = first.get("text") or first.get("output_text") or ""
             if not text:
                 text = data.get("output_text") or ""
@@ -1743,7 +1757,6 @@ async def llm_call(
         raise LLMError("Empty non-stream content")
     logger.debug("LLM response ← %d chars (tokens: in=%s out=%s)",
                  len(text), tok_in, tok_out)
-    await _record_provider_success(provider_key)
 
     # ── Parse native search citations if adapter was used ──
     if _native_adapter is not None and data is not None:
@@ -1751,9 +1764,8 @@ async def llm_call(
             tool_call_count = _native_adapter.count_tool_calls(data)
             max_allowed = settings.NATIVE_SEARCH_MAX_TOOL_CALLS
             if tool_call_count > max_allowed:
-                logger.warning(
-                    "Native search tool-call budget exceeded: %d > %d",
-                    tool_call_count, max_allowed,
+                raise LLMError(
+                    f"Native search tool-call budget exceeded: {tool_call_count} > {max_allowed}"
                 )
             citations = _native_adapter.parse_citations(data)
             max_citations = settings.NATIVE_SEARCH_MAX_CITATIONS
@@ -1769,9 +1781,13 @@ async def llm_call(
                     "Native search: %d citations, %d tool calls",
                     len(citations), tool_call_count,
                 )
+        except LLMError:
+            await _record_provider_failure(provider_key)
+            raise
         except Exception:
             logger.warning("Failed to parse native search citations", exc_info=True)
 
+    await _record_provider_success(provider_key)
     return text
 
 

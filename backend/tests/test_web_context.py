@@ -541,6 +541,19 @@ class TestWebSearchBaseUrlValidation:
         assert validate_web_search_base_url("exa", "https://api.exa.ai/search") == "https://api.exa.ai/search"
         assert validate_web_search_base_url("xai", "https://api.x.ai/v1/responses") == "https://api.x.ai/v1/responses"
 
+    def test_xai_accepts_local_development_proxy(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.ENV", "development")
+
+        assert validate_web_search_base_url(
+            "xai",
+            "http://127.0.0.1:8077/v1/responses",
+        ) == "http://127.0.0.1:8077/v1/responses"
+
+    def test_xai_rejects_local_proxy_in_production(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.ENV", "production")
+
+        assert validate_web_search_base_url("xai", "http://127.0.0.1:8077/v1/responses") is None
+
     @pytest.mark.parametrize(
         ("provider", "url"),
         [
@@ -661,6 +674,71 @@ class TestXaiProvider:
         assert snippets[0].text == "Snippet A"
         assert snippets[0].source_url == "https://x.ai/source-a"
         assert snippets[1].text == "Snippet B"
+
+    @pytest.mark.asyncio
+    async def test_formats_event_stream_response(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "xai-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 2)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+        monkeypatch.setattr(
+            "app.services.web_context.settings.XAI_WEB_SEARCH_MODEL",
+            "grok-4.20-fast",
+        )
+
+        completed_payload = {
+            "type": "response.completed",
+            "response": {
+                "output": [
+                    {"type": "reasoning", "status": "completed"},
+                    {
+                        "type": "message",
+                        "status": "completed",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(
+                                    {
+                                        "snippets": [
+                                            {
+                                                "text": "SSE snippet",
+                                                "source_url": "https://x.ai/sse-source",
+                                            }
+                                        ]
+                                    }
+                                ),
+                                "annotations": [],
+                            }
+                        ],
+                    },
+                ]
+            },
+        }
+        event_stream = (
+            "event: response.created\n"
+            "data: {\"type\":\"response.created\",\"response\":{\"output\":[]}}\n\n"
+            "event: response.completed\n"
+            f"data: {json.dumps(completed_payload)}\n\n"
+            "data: [DONE]\n\n"
+        )
+        mock_response = httpx.Response(
+            200,
+            content=event_stream.encode("utf-8"),
+            headers={"content-type": "text/event-stream; charset=utf-8"},
+            request=httpx.Request("POST", "http://127.0.0.1:8077/v1/responses"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_xai("test query")
+
+        assert len(snippets) == 1
+        assert snippets[0].text == "SSE snippet"
+        assert snippets[0].source_url == "https://x.ai/sse-source"
 
     @pytest.mark.asyncio
     async def test_no_api_key(self, monkeypatch):
@@ -2049,6 +2127,37 @@ class TestSearchWithProviderOutcome:
         assert outcome.snippets == []
 
     @pytest.mark.asyncio
+    async def test_xai_body_error_returns_failed_outcome(self, monkeypatch):
+        from app.services.web_context import _search_with_provider
+
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "xai-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 2)
+        monkeypatch.setattr(
+            "app.services.web_context.settings.XAI_WEB_SEARCH_MODEL",
+            "grok-4.3",
+        )
+
+        mock_response = httpx.Response(
+            200,
+            json={"error": {"message": "rate_limited"}},
+            request=httpx.Request("POST", "https://api.x.ai/v1/responses"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            outcome = await _search_with_provider("xai", "test query")
+
+        assert outcome.state == "failed"
+        assert outcome.snippets == []
+        assert outcome.status_reason == "xai body error"
+        assert "rate_limited" not in (outcome.status_reason or "")
+
+    @pytest.mark.asyncio
     async def test_timeout_returns_failed(self, monkeypatch):
         from app.services.web_context import _search_with_provider
 
@@ -2156,14 +2265,21 @@ class TestDetectProviderBodyError:
     def test_string_error_field(self):
         from app.services.web_context import _detect_provider_body_error
         result = _detect_provider_body_error("xai", {"error": "rate_limited"})
-        assert result is not None
-        assert "rate_limited" in result
+        assert result == "xai body error"
 
     def test_dict_error_field(self):
         from app.services.web_context import _detect_provider_body_error
         result = _detect_provider_body_error("openai", {"error": {"message": "quota exceeded"}})
-        assert result is not None
-        assert "quota exceeded" in result
+        assert result == "openai body error"
+
+    def test_dict_error_field_does_not_leak_secret_text(self):
+        from app.services.web_context import _detect_provider_body_error
+        result = _detect_provider_body_error(
+            "xai",
+            {"error": {"message": "invalid api key sk-live-secret"}},
+        )
+        assert result == "xai body error"
+        assert "sk-live-secret" not in result
 
     def test_non_dict_body_returns_none(self):
         from app.services.web_context import _detect_provider_body_error

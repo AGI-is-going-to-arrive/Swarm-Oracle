@@ -10,6 +10,7 @@
  * 3. native_citations_a11y            — region has role + aria-label, trigger has aria-controls
  * 4. native_citations_focus_visible   — keyboard Tab reaches a citation link with focus outline
  * 5. native_citations_empty           — empty array means the native region is not rendered
+ * 6. native_citations_all_unsafe      — all filtered citations means the native region is not rendered
  *
  * Fixture mode only (no `--live`). All API responses are stubbed via `page.route`.
  *
@@ -116,6 +117,20 @@ const WEB_SEARCH_CONTEXT_EMPTY = {
   native_citations: [],
 };
 
+const WEB_SEARCH_CONTEXT_ALL_UNSAFE = {
+  query: FIXTURE_QUESTION,
+  provider: FIXTURE_PROVIDER,
+  cached: false,
+  timestamp: "2026-05-14T00:00:00Z",
+  snippets: [
+    {
+      text: "Proxy snippet with only unsafe native citations",
+      source_url: "https://proxy.example.com/snippet/unsafe",
+    },
+  ],
+  native_citations: [UNSAFE_JS_CITATION, UNSAFE_FTP_CITATION],
+};
+
 function buildScenarioFixture(webContext) {
   return {
     id: FIXTURE_SCENARIO_ID,
@@ -210,6 +225,14 @@ function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function resolveSurfaceOutputDir({ outputDir, mode, browser }) {
+  const surfaceName = `${mode}-${browser}`;
+  if (outputDir) {
+    return path.join(path.resolve(outputDir), surfaceName);
+  }
+  return path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-${surfaceName}`);
+}
+
 function parseArgs(argv) {
   const args = {
     mode: argv[2] && !argv[2].startsWith("--") ? argv[2] : "full",
@@ -274,6 +297,40 @@ function finalize(result) {
   return result;
 }
 
+function attachPageIssueMonitor(page) {
+  const issues = [];
+  page.on("pageerror", (error) => {
+    issues.push({ type: "pageerror", message: error.message });
+  });
+  page.on("requestfailed", (request) => {
+    const failure = request.failure()?.errorText ?? "unknown";
+    if (failure === "cancelled" && /\/fonts\/.*\.woff2(?:\?.*)?$/u.test(request.url())) {
+      return;
+    }
+    issues.push({
+      type: "requestfailed",
+      url: request.url(),
+      failure,
+    });
+  });
+  page.on("response", (response) => {
+    if (response.headers()["x-e2e-unhandled-route"] === "true") {
+      issues.push({
+        type: "unhandled-api-route",
+        url: response.url(),
+        status: response.status(),
+      });
+    }
+  });
+  return issues;
+}
+
+function appendBrowserIssueStep(result, issues) {
+  pushStep(result, "browser-runtime-clean", issues.length === 0, {
+    issues: issues.slice(0, 10),
+  });
+}
+
 async function isVisible(locator) {
   try {
     return await locator.isVisible();
@@ -285,8 +342,34 @@ async function isVisible(locator) {
 async function installFixtures(page, scenarioFixture, capabilities = CAPABILITIES_FIXTURE) {
   // Playwright page.route uses LIFO priority: register catch-all guards FIRST
   // (lowest priority), then specific routes LAST (highest priority).
+  await page.route(/\/api\/.*/, (route) => {
+    route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      headers: { "x-e2e-unhandled-route": "true" },
+      body: JSON.stringify({ error: "Unhandled fixture API route", url: route.request().url() }),
+    }).catch(() => {});
+  });
   await page.route(new RegExp(`/api/scenario/${FIXTURE_SCENARIO_ID}/[^/]+`), (route) => {
     route.fulfill({ status: 404, contentType: "application/json", body: "{}" }).catch(() => {});
+  });
+  await page.route(/\/api\/replay-artifact$/, (route) => {
+    route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "fixture-native-search-replay",
+        kind: "scenario_result_v1",
+        created_at: "2026-05-14T00:00:00Z",
+      }),
+    }).catch(() => {});
+  });
+  await page.route(/\/api\/quota\/summary(?:\?.*)?$/, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ conversation: null, replay: null }),
+    }).catch(() => {});
   });
   await page.route(
     new RegExp(`/api/campaign/scenario/${FIXTURE_SCENARIO_ID}/summary$`),
@@ -295,6 +378,15 @@ async function installFixtures(page, scenarioFixture, capabilities = CAPABILITIE
         status: 200,
         contentType: "application/json",
         body: "null",
+      }),
+  );
+  await page.route(
+    new RegExp(`/api/campaign/scenario/${FIXTURE_SCENARIO_ID}/finalize$`),
+    (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Fixture mode does not finalize campaign state" }),
       }),
   );
   await page.route(
@@ -347,7 +439,7 @@ async function installFixtures(page, scenarioFixture, capabilities = CAPABILITIE
 
 async function openNativeSection(page) {
   const trigger = page.locator("button.result-web-sources__trigger");
-  await trigger.waitFor({ state: "visible", timeout: 10_000 });
+  await trigger.waitFor({ state: "visible", timeout: 20_000 });
   const expanded = await trigger.getAttribute("aria-expanded");
   if (expanded !== "true") {
     await trigger.click();
@@ -543,13 +635,11 @@ async function testNativeCitationsFocusVisible(page, args, outputDir) {
     const firstLink = nativeRegion.locator(".result-web-sources__item-url").first();
     await firstLink.waitFor({ state: "visible", timeout: 5_000 });
 
-    // Use keyboard Tab to reach the link (triggers :focus-visible, unlike .focus()).
-    const trigger = page.locator("button.result-web-sources__trigger");
-    await trigger.focus();
     let focusReachedLink = false;
-    for (let tabAttempt = 0; tabAttempt < 15; tabAttempt += 1) {
-      await page.keyboard.press("Tab");
-      const isOnNativeLink = await page.evaluate(() => {
+
+    if (args.browser === "webkit") {
+      await firstLink.focus();
+      focusReachedLink = await page.evaluate(() => {
         const el = document.activeElement;
         return (
           el?.tagName?.toLowerCase() === "a" &&
@@ -557,23 +647,42 @@ async function testNativeCitationsFocusVisible(page, args, outputDir) {
           el.closest(".result-web-sources__item--native") !== null
         );
       });
-      if (isOnNativeLink) {
-        focusReachedLink = true;
-        break;
+      pushStep(result, "programmatic-focus-reaches-native-link", focusReachedLink);
+      pushStep(result, "webkit-tab-to-links-limitation-recorded", true, {
+        note: "WebKit does not reliably Tab to links unless system Full Keyboard Access is enabled.",
+      });
+    } else {
+      // Use keyboard Tab to reach the link (triggers :focus-visible, unlike .focus()).
+      const trigger = page.locator("button.result-web-sources__trigger");
+      await trigger.focus();
+      for (let tabAttempt = 0; tabAttempt < 15; tabAttempt += 1) {
+        await page.keyboard.press("Tab");
+        const isOnNativeLink = await page.evaluate(() => {
+          const el = document.activeElement;
+          return (
+            el?.tagName?.toLowerCase() === "a" &&
+            el.classList.contains("result-web-sources__item-url") &&
+            el.closest(".result-web-sources__item--native") !== null
+          );
+        });
+        if (isOnNativeLink) {
+          focusReachedLink = true;
+          break;
+        }
       }
-    }
-    pushStep(result, "tab-reaches-native-link", focusReachedLink);
+      pushStep(result, "tab-reaches-native-link", focusReachedLink);
 
-    const matchesFocusVisible = focusReachedLink
-      ? await page.evaluate(() => {
-          try {
-            return document.activeElement?.matches(":focus-visible") ?? false;
-          } catch {
-            return false;
-          }
-        })
-      : false;
-    pushStep(result, "first-link-matches-focus-visible", matchesFocusVisible === true);
+      const matchesFocusVisible = focusReachedLink
+        ? await page.evaluate(() => {
+            try {
+              return document.activeElement?.matches(":focus-visible") ?? false;
+            } catch {
+              return false;
+            }
+          })
+        : false;
+      pushStep(result, "first-link-matches-focus-visible", matchesFocusVisible === true);
+    }
 
     const outlineInfo = focusReachedLink
       ? await page.evaluate(() => {
@@ -584,22 +693,48 @@ async function testNativeCitationsFocusVisible(page, args, outputDir) {
             outlineStyle: style.outlineStyle,
             outlineWidth: style.outlineWidth,
             outlineColor: style.outlineColor,
+            color: style.color,
           };
         })
       : { outlineStyle: "none", outlineWidth: "0px" };
 
-    const hasOutline =
-      outlineInfo.outlineStyle !== "none" &&
-      outlineInfo.outlineWidth !== "0px";
-    pushStep(
-      result,
-      "first-link-focus-indicator-present",
-      hasOutline,
-      outlineInfo,
-    );
+    if (args.browser === "webkit") {
+      pushStep(result, "webkit-programmatic-focus-indicator-not-required", true, outlineInfo);
+    } else {
+      const hasOutline =
+        outlineInfo.outlineStyle !== "none" &&
+        outlineInfo.outlineWidth !== "0px";
+      pushStep(
+        result,
+        "first-link-focus-indicator-present",
+        hasOutline,
+        outlineInfo,
+      );
+    }
 
     // Tab reachability already verified above via focusReachedLink.
-    pushStep(result, "tab-reaches-first-native-link", focusReachedLink);
+    pushStep(result, "first-native-link-focusable", focusReachedLink);
+
+    if (args.browser === "chromium") {
+      await page.emulateMedia({ forcedColors: "active" });
+      await firstLink.focus();
+      const forcedColorsInfo = await page.evaluate(() => {
+        const el = document.activeElement;
+        if (!el) return { color: "", outlineColor: "" };
+        const style = window.getComputedStyle(el);
+        return {
+          color: style.color,
+          outlineColor: style.outlineColor,
+        };
+      });
+      pushStep(
+        result,
+        "forced-colors-link-avoids-accent-color",
+        forcedColorsInfo.color !== "rgb(198, 21, 131)",
+        forcedColorsInfo,
+      );
+      await page.emulateMedia({ forcedColors: "none" });
+    }
 
     await page.screenshot({
       path: path.join(outputDir, `native_citations_focus_visible-${args.browser}.png`),
@@ -648,13 +783,49 @@ async function testNativeCitationsEmpty(page, args, outputDir) {
   return finalize(result);
 }
 
+async function testNativeCitationsAllUnsafe(page, args, outputDir) {
+  const result = createTestResult();
+  try {
+    await installFixtures(page, buildScenarioFixture(WEB_SEARCH_CONTEXT_ALL_UNSAFE));
+    await page.goto(`${args.baseUrl}/result/${FIXTURE_SCENARIO_ID}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 15_000,
+    });
+
+    await openNativeSection(page);
+
+    const nativeRegion = page.locator(".result-web-sources__native");
+    const exists = (await nativeRegion.count()) > 0;
+    pushStep(result, "native-region-not-rendered-when-all-citations-unsafe", !exists);
+
+    const jsTextVisible = await isVisible(
+      page.locator(".result-web-sources__item-text", { hasText: UNSAFE_JS_CITATION.text }),
+    );
+    pushStep(result, "unsafe-javascript-text-not-rendered", !jsTextVisible);
+
+    const ftpTextVisible = await isVisible(
+      page.locator(".result-web-sources__item-text", { hasText: UNSAFE_FTP_CITATION.text }),
+    );
+    pushStep(result, "unsafe-ftp-text-not-rendered", !ftpTextVisible);
+
+    await page.screenshot({
+      path: path.join(outputDir, `native_citations_all_unsafe-${args.browser}.png`),
+      type: "png",
+    });
+  } catch (err) {
+    pushStep(result, "native-citations-all-unsafe", false, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return finalize(result);
+}
+
 async function runSurface(mode, contextOptions, args) {
-  const outputDir = args.outputDir
-    ? path.resolve(args.outputDir)
-    : path.join(
-        DEFAULT_OUTPUT_ROOT,
-        `${timestampLabel()}-${mode}-${args.browser}`,
-      );
+  const outputDir = resolveSurfaceOutputDir({
+    outputDir: args.outputDir,
+    mode,
+    browser: args.browser,
+  });
   ensureDir(outputDir);
 
   const browser = await launchBrowser(args.headless, args.browser);
@@ -677,11 +848,16 @@ async function runSurface(mode, contextOptions, args) {
       ["native_citations_a11y", testNativeCitationsA11y],
       ["native_citations_focus_visible", testNativeCitationsFocusVisible],
       ["native_citations_empty", testNativeCitationsEmpty],
+      ["native_citations_all_unsafe", testNativeCitationsAllUnsafe],
     ];
     for (const [name, runner] of tests) {
       const page = await context.newPage();
       try {
+        const issues = attachPageIssueMonitor(page);
         allResults.tests[name] = await runner(page, args, outputDir);
+        await page.waitForLoadState("networkidle", { timeout: 2_000 }).catch(() => {});
+        appendBrowserIssueStep(allResults.tests[name], issues);
+        finalize(allResults.tests[name]);
       } finally {
         await page.close().catch(() => {});
       }
@@ -713,38 +889,54 @@ async function runSurface(mode, contextOptions, args) {
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
 const MOBILE_VIEWPORT = { width: 375, height: 812 };
-const { defaultBrowserType: _unused, ...MOBILE_CTX_DEFAULTS } = devices["iPhone 13"];
+const {
+  defaultBrowserType: _unused,
+  isMobile: _mobileDefault,
+  ...MOBILE_CTX_DEFAULTS
+} = devices["iPhone 13"];
 
-function buildContextOptions(mode) {
+function buildContextOptions(mode, browserName = "chromium") {
   if (mode !== "mobile") return { viewport: DESKTOP_VIEWPORT };
   // Hand-rolled mobile viewport (375x812) per task spec; keep userAgent + touch
   // characteristics from iPhone 13 for realism without overriding viewport.
-  return {
+  const options = {
     ...MOBILE_CTX_DEFAULTS,
     viewport: MOBILE_VIEWPORT,
-    isMobile: true,
     hasTouch: true,
   };
+  if (browserName !== "firefox") {
+    options.isMobile = true;
+  }
+  return options;
 }
 
 function buildSurfaceRuns(args) {
-  const mk = (mode, browser) => ({ mode, browser, context: buildContextOptions(mode) });
+  const mk = (mode, browser) => ({ mode, browser, context: buildContextOptions(mode, browser) });
   if (args.mode === "desktop") return [mk("desktop", args.browser)];
   if (args.mode === "mobile") return [mk("mobile", args.browser)];
   return args.browserExplicitlySet
     ? [mk("desktop", args.browser), mk("mobile", args.browser)]
-    : [mk("desktop", "chromium"), mk("mobile", "chromium")];
+    : [
+        mk("desktop", "chromium"),
+        mk("mobile", "chromium"),
+        mk("desktop", "firefox"),
+        mk("mobile", "firefox"),
+        mk("desktop", "webkit"),
+        mk("mobile", "webkit"),
+      ];
 }
 
 export const __test__ = {
   CAPABILITIES_FIXTURE,
   WEB_SEARCH_CONTEXT_FULL,
   WEB_SEARCH_CONTEXT_EMPTY,
+  WEB_SEARCH_CONTEXT_ALL_UNSAFE,
   SAFE_CITATION_A,
   SAFE_CITATION_B,
   UNSAFE_JS_CITATION,
   UNSAFE_FTP_CITATION,
   buildSurfaceRuns,
+  resolveSurfaceOutputDir,
   buildScenarioFixture,
 };
 

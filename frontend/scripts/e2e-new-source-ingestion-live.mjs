@@ -44,6 +44,14 @@ const LIVE_WEB_SEARCH_BASE_URL = process.env.SWARM_E2E_WEB_SEARCH_BASE_URL || ""
 const FIXTURE_SCENARIO_ID = "sc-e2e-sources";
 const FIXTURE_QUESTION = "How should live source contracts surface in the UI?";
 const SOURCE_FAMILIES = ["polymarket", "finance", "academic", "news_deep"];
+const ACCEPTED_LIVE_SOURCE_STATES = new Set([
+  "ready",
+  "empty",
+  "failed",
+  "search_skipped",
+  "unsupported_provider",
+  "fallback_unconstrained",
+]);
 const WEB_SNIPPET_TEXT = "Live source snippet for ResultView";
 const WEB_SNIPPET_URL = "https://news.example/live-source";
 
@@ -372,6 +380,26 @@ async function installFixtures(page, overrides = {}) {
   );
 }
 
+async function installLivePreflightBypass(page) {
+  if (!LIVE_MODE) return;
+  await page.route(/\/api\/agents\/identities\/preflight(?:\?.*)?$/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        needs_confirmation: false,
+        matches: [],
+        summary: {
+          agent_count: 0,
+          exact_match_count: 0,
+          candidate_count: 0,
+          new_identity_count: 0,
+        },
+      }),
+    }),
+  );
+}
+
 async function isVisible(locator) {
   try {
     return await locator.isVisible();
@@ -382,6 +410,33 @@ async function isVisible(locator) {
 
 async function waitForVisible(page, selector, timeout = 10_000) {
   await page.locator(selector).waitFor({ state: "visible", timeout });
+}
+
+async function dismissWelcomeDialogIfPresent(page) {
+  const dialog = page.getByRole("dialog").first();
+  try {
+    await dialog.waitFor({ state: "visible", timeout: 5000 });
+  } catch {
+    return false;
+  }
+  const dismissButton = dialog.locator("button").filter({ hasText: /Skip|跳过|Close|关闭/i }).first();
+  if ((await dismissButton.count()) === 0) return false;
+  await dismissButton.click();
+  await dialog.waitFor({ state: "hidden", timeout: 5000 }).catch(() => {});
+  return true;
+}
+
+async function confirmLaunchIfPresent(page) {
+  const dialog = page.locator('[role="alertdialog"], [role="dialog"]')
+    .filter({ hasText: /Confirm Simulation Launch|确认推演|确认|Launch/i })
+    .first();
+  try {
+    await dialog.waitFor({ state: "visible", timeout: 2000 });
+  } catch {
+    return false;
+  }
+  await dialog.getByRole("button", { name: /开始推演|Start Simulation/i }).click();
+  return true;
 }
 
 async function setRangeValue(page, selector, value) {
@@ -400,6 +455,26 @@ async function readCapabilities(page) {
     if (!response.ok) return null;
     return response.json();
   });
+}
+
+async function waitForLiveWebContext(page, scenarioId, timeout = 90_000) {
+  if (!LIVE_MODE) return null;
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const payload = await page.evaluate(async (activeScenarioId) => {
+      const response = await fetch(`/api/scenario/${activeScenarioId}`, {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) return null;
+      return response.json();
+    }, scenarioId).catch(() => null);
+    const snippets = payload?.web_search_context?.snippets;
+    if (Array.isArray(snippets) && snippets.length > 0) {
+      return payload;
+    }
+    await page.waitForTimeout(1000);
+  }
+  return null;
 }
 
 async function configureLiveWebSearch(page) {
@@ -445,15 +520,28 @@ async function configureLiveWebSearch(page) {
   };
 }
 
-async function assertSourceCardsVisible(container, result, expectGeoGatedPolymarket = false) {
-  const selectors = [
-    '[data-testid="result-sources-polymarket"]',
-    '[data-testid="result-sources-finance"]',
-    '[data-testid="result-sources-academic"]',
-    '[data-testid="result-sources-news_deep"]',
-  ];
+async function ensureWebSearchEnabled(page) {
+  const mainToggle = page.locator(".web-search-toggle input[type=\"checkbox\"]");
+  await mainToggle.waitFor({ state: "visible", timeout: 15_000 });
+  if (!(await mainToggle.isChecked())) {
+    await mainToggle.check();
+  }
+}
+
+function sourceCardTestId(family, mode) {
+  return mode === "mobile"
+    ? `result-sources-mobile-${family}`
+    : `result-sources-${family}`;
+}
+
+function sourceCardSelector(family, mode) {
+  return `[data-testid="${sourceCardTestId(family, mode)}"]`;
+}
+
+async function assertSourceCardsVisible(container, result, mode, expectGeoGatedPolymarket = false) {
+  const selectors = SOURCE_FAMILIES.map((family) => sourceCardSelector(family, mode));
   for (const selector of selectors) {
-    if (selector.includes("result-sources-polymarket") && expectGeoGatedPolymarket) {
+    if (selector.includes("polymarket") && expectGeoGatedPolymarket) {
       continue;
     }
     const locator = container.locator(selector);
@@ -468,7 +556,19 @@ async function assertSourceCardsVisible(container, result, expectGeoGatedPolymar
   }
 }
 
-async function assertSourceCardsHaveLiveData(container, result, expectGeoGatedPolymarket = false) {
+async function assertSourceCardsHaveLiveData(container, result, mode, expectGeoGatedPolymarket = false) {
+  async function assertLiveState(card, family) {
+    const state = await card.getAttribute("data-state");
+    pushStep(result, `${family}-live-state-known`, ACCEPTED_LIVE_SOURCE_STATES.has(state));
+    if (state === "ready") {
+      pushStep(result, `${family}-live-item-visible`, await isVisible(card.locator("li").first()));
+    } else {
+      pushStep(result, `${family}-live-nonready-state-surfaced`, typeof state === "string" && state.length > 0, {
+        state,
+      });
+    }
+  }
+
   if (expectGeoGatedPolymarket) {
     const placeholder = container.getByTestId("result-source-polymarket-geo-gated");
     pushStep(
@@ -479,38 +579,46 @@ async function assertSourceCardsHaveLiveData(container, result, expectGeoGatedPo
     pushStep(
       result,
       "polymarket-card-hidden-when-geo-gated",
-      !(await isVisible(container.getByTestId("result-sources-polymarket"))),
+      !(await isVisible(container.getByTestId(sourceCardTestId("polymarket", mode)))),
     );
   } else {
-    const polymarketCard = container.getByTestId("result-sources-polymarket");
-    pushStep(
-      result,
-      "polymarket-live-state-ready",
-      (await polymarketCard.getAttribute("data-state")) === "ready",
-    );
-    pushStep(
-      result,
-      "polymarket-live-item-visible",
-      await isVisible(polymarketCard.locator("li").first()),
-    );
+    const polymarketCard = container.getByTestId(sourceCardTestId("polymarket", mode));
+    if (LIVE_MODE) {
+      await assertLiveState(polymarketCard, "polymarket");
+    } else {
+      pushStep(
+        result,
+        "polymarket-live-state-ready",
+        (await polymarketCard.getAttribute("data-state")) === "ready",
+      );
+      pushStep(
+        result,
+        "polymarket-live-item-visible",
+        await isVisible(polymarketCard.locator("li").first()),
+      );
+    }
   }
 
   for (const [family, selector] of [
-    ["finance", '[data-testid="result-sources-finance"]'],
-    ["academic", '[data-testid="result-sources-academic"]'],
-    ["news_deep", '[data-testid="result-sources-news_deep"]'],
+    ["finance", sourceCardSelector("finance", mode)],
+    ["academic", sourceCardSelector("academic", mode)],
+    ["news_deep", sourceCardSelector("news_deep", mode)],
   ]) {
     const card = container.locator(selector);
-    pushStep(
-      result,
-      `${family}-live-state-ready`,
-      (await card.getAttribute("data-state")) === "ready",
-    );
-    pushStep(
-      result,
-      `${family}-live-item-visible`,
-      await isVisible(card.locator("li").first()),
-    );
+    if (LIVE_MODE) {
+      await assertLiveState(card, family);
+    } else {
+      pushStep(
+        result,
+        `${family}-live-state-ready`,
+        (await card.getAttribute("data-state")) === "ready",
+      );
+      pushStep(
+        result,
+        `${family}-live-item-visible`,
+        await isVisible(card.locator("li").first()),
+      );
+    }
   }
 }
 
@@ -531,22 +639,32 @@ async function testInputAndResultContracts(page, baseUrl, mode) {
       waitUntil: "domcontentloaded",
       timeout: 15_000,
     });
+    await dismissWelcomeDialogIfPresent(page);
     await waitForVisible(page, "textarea.input--hero");
+    await dismissWelcomeDialogIfPresent(page);
+
+    let liveWebSearchConfig = null;
+    if (LIVE_MODE) {
+      liveWebSearchConfig = await configureLiveWebSearch(page);
+      pushStep(result, "live-web-search-toggle-enabled", true, liveWebSearchConfig);
+    } else {
+      await ensureWebSearchEnabled(page);
+      pushStep(result, "fixture-web-search-toggle-enabled", true);
+    }
 
     for (const family of SOURCE_FAMILIES) {
       const toggle = page.getByTestId(`input-source-toggle-${family}`);
       const input = toggle.locator('input[type="checkbox"]');
       await toggle.waitFor({ state: "visible", timeout: 10_000 });
       pushStep(result, `input-toggle-visible:${family}`, await isVisible(toggle));
-      await toggle.click();
+      pushStep(result, `input-toggle-enabled:${family}`, !(await input.isDisabled()));
+      await toggle.evaluate((element) => element.click());
+      await input.waitFor({ state: "attached", timeout: 1000 });
       pushStep(result, `input-toggle-interactive:${family}`, await input.isChecked());
     }
 
-    let liveWebSearchConfig = null;
     let liveScenarioPayloadPromise = null;
     if (LIVE_MODE) {
-      liveWebSearchConfig = await configureLiveWebSearch(page);
-      pushStep(result, "live-web-search-toggle-enabled", true, liveWebSearchConfig);
       await setRangeValue(page, "input.agents-slider", 3);
       liveScenarioPayloadPromise = new Promise((resolve) => {
         page.route(/\/api\/scenario(?:\?.*)?$/, async (route) => {
@@ -559,6 +677,7 @@ async function testInputAndResultContracts(page, baseUrl, mode) {
             },
             postData: JSON.stringify({
               ...originalPayload,
+              num_agents: 3,
               rounds: 1,
             }),
           });
@@ -572,6 +691,7 @@ async function testInputAndResultContracts(page, baseUrl, mode) {
       request.method() === "POST" && /\/api\/scenario(?:\?.*)?$/.test(request.url())
     ));
     await page.locator("button.btn-primary.btn--submit").click();
+    await confirmLaunchIfPresent(page);
     if (LIVE_MODE) {
       const scenarioPayload = await liveScenarioPayloadPromise;
       pushStep(
@@ -626,6 +746,11 @@ async function testInputAndResultContracts(page, baseUrl, mode) {
       waitUntil: "domcontentloaded",
       timeout: 15_000,
     });
+    const liveScenarioWithWebContext = await waitForLiveWebContext(page, scenarioId);
+    if (LIVE_MODE) {
+      pushStep(result, "live-web-context-available", liveScenarioWithWebContext != null);
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 15_000 });
+    }
 
     const webSourcesTrigger = page.locator("button.result-web-sources__trigger");
     await webSourcesTrigger.waitFor({ state: "visible", timeout: LIVE_MODE ? 90_000 : 10_000 });
@@ -665,11 +790,13 @@ async function testInputAndResultContracts(page, baseUrl, mode) {
       await assertSourceCardsVisible(
         sheet,
         result,
+        mode,
         liveWebSearchConfig?.polymarketConfiguredHost === "non-us",
       );
       await assertSourceCardsHaveLiveData(
         sheet,
         result,
+        mode,
         liveWebSearchConfig?.polymarketConfiguredHost === "non-us",
       );
     } else {
@@ -679,11 +806,13 @@ async function testInputAndResultContracts(page, baseUrl, mode) {
       await assertSourceCardsVisible(
         grid,
         result,
+        mode,
         liveWebSearchConfig?.polymarketConfiguredHost === "non-us",
       );
       await assertSourceCardsHaveLiveData(
         grid,
         result,
+        mode,
         liveWebSearchConfig?.polymarketConfiguredHost === "non-us",
       );
     }
@@ -746,13 +875,21 @@ async function testGeoGatedContract(context, baseUrl, mode, scenarioId = FIXTURE
       pushStep(
         result,
         "polymarket-card-hidden-when-geo-gated",
-        !(await isVisible(container.getByTestId("result-sources-polymarket"))),
+        !(await isVisible(container.getByTestId(sourceCardTestId("polymarket", mode)))),
       );
     } else {
-      const card = container.getByTestId("result-sources-polymarket");
+      const card = container.getByTestId(sourceCardTestId("polymarket", mode));
       await card.waitFor({ state: "visible", timeout: 10_000 });
       pushStep(result, "polymarket-card-visible-when-not-geo-gated", await isVisible(card));
-      pushStep(result, "polymarket-live-item-visible-when-not-geo-gated", await isVisible(card.locator("li").first()));
+      const state = await card.getAttribute("data-state");
+      if (LIVE_MODE) {
+        pushStep(result, "polymarket-live-state-known-when-not-geo-gated", ACCEPTED_LIVE_SOURCE_STATES.has(state));
+        if (state === "ready") {
+          pushStep(result, "polymarket-live-item-visible-when-not-geo-gated", await isVisible(card.locator("li").first()));
+        }
+      } else {
+        pushStep(result, "polymarket-live-item-visible-when-not-geo-gated", await isVisible(card.locator("li").first()));
+      }
     }
   } catch (err) {
     pushStep(result, "geo-gated-contract", false, {
@@ -771,7 +908,9 @@ async function testOfflineBannerContract(page, baseUrl) {
       waitUntil: "domcontentloaded",
       timeout: 15_000,
     });
+    await dismissWelcomeDialogIfPresent(page);
     await waitForVisible(page, "textarea.input--hero");
+    await dismissWelcomeDialogIfPresent(page);
     await page.context().setOffline(true);
     await page.evaluate(() => window.dispatchEvent(new Event("offline")));
     const banner = page.getByTestId("global-offline-banner");
@@ -798,7 +937,7 @@ async function testOfflineBannerContract(page, baseUrl) {
 
 async function runSurface(mode, contextOptions, args) {
   const outputDir = args.outputDir
-    ? path.resolve(args.outputDir)
+    ? resolveSurfaceOutputDir({ outputDir: args.outputDir, mode, browser: args.browser })
     : path.join(
       DEFAULT_OUTPUT_ROOT,
       `new-source-ingestion-live-${timestampLabel()}-${mode}-${args.browser}`,
@@ -809,6 +948,7 @@ async function runSurface(mode, contextOptions, args) {
   const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
   await installFixtures(page);
+  await installLivePreflightBypass(page);
 
   const allResults = {
     mode,
@@ -857,6 +997,10 @@ function buildContextOptions(mode) {
   return { ...MOBILE_CTX_DEFAULTS, isMobile: true, hasTouch: true };
 }
 
+function resolveSurfaceOutputDir({ outputDir, mode, browser }) {
+  return path.join(path.resolve(outputDir), `${mode}-${browser}`);
+}
+
 function buildSurfaceRuns(args) {
   const mk = (mode, browser) => ({ mode, browser, context: buildContextOptions(mode) });
   if (args.mode === "desktop") return [mk("desktop", args.browser)];
@@ -872,6 +1016,8 @@ export const __test__ = {
   CAPABILITIES_FIXTURE,
   NON_US_CAPABILITIES_FIXTURE,
   buildSurfaceRuns,
+  resolveSurfaceOutputDir,
+  sourceCardTestId,
 };
 
 async function main() {

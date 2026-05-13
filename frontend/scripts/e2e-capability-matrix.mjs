@@ -20,6 +20,9 @@ import { chromium, firefox, webkit } from "playwright";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FRONTEND_ROOT = path.resolve(SCRIPT_DIR, "..");
+const IS_MAIN_MODULE = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 
@@ -33,6 +36,13 @@ const ALL_GATED_KEYS = [
   "agent_conversation",
   "kg_explorer",
   "replay_trace",
+  "graph_analysis",
+  "roundtable_survey",
+  "roundtable_analyst",
+  "snapshot_export",
+  "education_templates",
+  "persona_export",
+  "prediction_journal",
 ];
 
 const PAGES = [
@@ -137,6 +147,7 @@ function parseArgs(argv) {
   const args = {
     baseUrl: DEFAULT_BASE_URL,
     browser: "chromium",
+    outputDir: "",
     headless: process.env.HEADLESS === "1",
   };
 
@@ -148,6 +159,9 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--browser" && next) {
       args.browser = next;
+      i += 1;
+    } else if (arg === "--output-dir" && next) {
+      args.outputDir = next;
       i += 1;
     } else if (arg === "--headless") {
       args.headless = true;
@@ -186,6 +200,49 @@ function buildCapabilityPayload(enabledKeys) {
       server_enabled: false,
       method: "none",
       provider: null,
+      providers: {
+        polymarket: {
+          enabled: enabled.has("web_search"),
+          configured_host: "us",
+          capability: {
+            supports_domain_filter: true,
+            domain_filter_mode: "query",
+            max_domains: null,
+          },
+        },
+        finance: {
+          enabled: enabled.has("web_search"),
+          configured_host: "www.alphavantage.co",
+          capability: {
+            supports_domain_filter: true,
+            domain_filter_mode: "query",
+            max_domains: null,
+          },
+        },
+        academic: {
+          enabled: enabled.has("web_search"),
+          configured_host: "export.arxiv.org",
+          capability: {
+            supports_domain_filter: true,
+            domain_filter_mode: "query",
+            max_domains: null,
+          },
+        },
+        news_deep: {
+          enabled: enabled.has("web_search"),
+          configured_host: "api.gdeltproject.org",
+          capability: {
+            supports_domain_filter: true,
+            domain_filter_mode: "query",
+            max_domains: null,
+          },
+        },
+      },
+      provider_capability: {
+        supports_domain_filter: true,
+        supports_sources: true,
+        domain_filter_mode: "query",
+      },
     },
     custom_agents: base("custom_agents"),
     agent_identity: base("agent_identity"),
@@ -196,6 +253,13 @@ function buildCapabilityPayload(enabledKeys) {
     agent_conversation: base("agent_conversation"),
     kg_explorer: base("kg_explorer"),
     replay_trace: base("replay_trace"),
+    graph_analysis: base("graph_analysis"),
+    roundtable_survey: base("roundtable_survey"),
+    roundtable_analyst: base("roundtable_analyst"),
+    snapshot_export: base("snapshot_export"),
+    education_templates: base("education_templates"),
+    persona_export: base("persona_export"),
+    prediction_journal: base("prediction_journal"),
   };
 }
 
@@ -480,10 +544,12 @@ function printRow(result) {
 
 async function main() {
   const args = parseArgs(process.argv);
-  const outputRoot = path.join(
-    DEFAULT_OUTPUT_ROOT,
-    `capability-matrix-${timestampLabel()}`,
-  );
+  const outputRoot = args.outputDir
+    ? path.resolve(args.outputDir)
+    : path.join(
+      DEFAULT_OUTPUT_ROOT,
+      `capability-matrix-${timestampLabel()}`,
+    );
   ensureDir(outputRoot);
 
   console.log("== capability matrix ==");
@@ -534,7 +600,16 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+export const __test__ = {
+  ALL_GATED_KEYS,
+  PAGES,
+  buildCapabilityPayload,
+  parseArgs,
+};
+
+if (IS_MAIN_MODULE) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
