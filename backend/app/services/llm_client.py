@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from time import monotonic
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse, urlunparse
 
 import httpx
@@ -132,6 +132,81 @@ def _is_chat_completions_api(url: str | None = None) -> bool:
     """Detect API mode at call time (not module load) for test flexibility."""
     target_url = _resolve_llm_api_url(url)
     return target_url.endswith("/chat/completions")
+
+
+@dataclass(frozen=True)
+class LLMProviderProfile:
+    name: str
+    supports_native_search: bool = False
+    native_search_api: Literal["responses", "messages", "chat_extension", "none"] = "none"
+    requires_specific_endpoint: str | None = None
+    is_proxy: bool = False
+
+
+_KNOWN_LLM_PROVIDERS: dict[str, LLMProviderProfile] = {
+    "api.x.ai": LLMProviderProfile(
+        name="xai", supports_native_search=True,
+        native_search_api="responses",
+        requires_specific_endpoint="/v1/responses",
+    ),
+    "api.openai.com": LLMProviderProfile(
+        name="openai", supports_native_search=True,
+        native_search_api="responses",
+        requires_specific_endpoint="/v1/responses",
+    ),
+    "api.anthropic.com": LLMProviderProfile(
+        name="anthropic", supports_native_search=True,
+        native_search_api="messages",
+    ),
+    "generativelanguage.googleapis.com": LLMProviderProfile(
+        name="gemini", supports_native_search=True,
+        native_search_api="chat_extension",
+    ),
+    "api.perplexity.ai": LLMProviderProfile(
+        name="perplexity", supports_native_search=True,
+        native_search_api="chat_extension",
+    ),
+    "api.deepseek.com": LLMProviderProfile(
+        name="deepseek", supports_native_search=False,
+    ),
+    "api.minimax.chat": LLMProviderProfile(
+        name="minimax", supports_native_search=False,
+    ),
+    "dashscope.aliyuncs.com": LLMProviderProfile(
+        name="qwen", supports_native_search=True,
+        native_search_api="chat_extension",
+    ),
+    "api.zhipuai.cn": LLMProviderProfile(
+        name="glm", supports_native_search=True,
+        native_search_api="chat_extension",
+    ),
+    "api.moonshot.cn": LLMProviderProfile(
+        name="kimi", supports_native_search=True,
+        native_search_api="chat_extension",
+    ),
+    "openrouter.ai": LLMProviderProfile(
+        name="openrouter", is_proxy=True,
+    ),
+    "api.siliconflow.cn": LLMProviderProfile(
+        name="siliconflow", is_proxy=True,
+    ),
+}
+
+_DEFAULT_PROVIDER_PROFILE = LLMProviderProfile(name="default", supports_native_search=False)
+_UNKNOWN_PROXY_PROFILE = LLMProviderProfile(name="unknown", is_proxy=True)
+_LOCAL_PROXY_PROFILE = LLMProviderProfile(name="local", is_proxy=True)
+
+
+def detect_provider(base_url: str | None) -> LLMProviderProfile:
+    """Detect LLM provider capabilities from the base URL hostname."""
+    if base_url is None:
+        return _DEFAULT_PROVIDER_PROFILE
+    hostname = (urlparse(base_url).hostname or "").strip().lower()
+    if not hostname:
+        return _DEFAULT_PROVIDER_PROFILE
+    if hostname in _LOCAL_LLM_HOSTS:
+        return _LOCAL_PROXY_PROFILE
+    return _KNOWN_LLM_PROVIDERS.get(hostname, _UNKNOWN_PROXY_PROFILE)
 
 
 class LLMError(Exception):

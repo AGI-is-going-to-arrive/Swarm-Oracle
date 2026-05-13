@@ -81,6 +81,28 @@ PROVIDER_CAPABILITIES: dict[str, ProviderSearchCapability] = {
 }
 
 
+@dataclass(frozen=True)
+class ProviderSearchOutcome:
+    snippets: list[WebSearchSnippet]
+    state: Literal[
+        "ready", "empty", "failed", "search_skipped",
+        "unsupported_provider", "fallback_unconstrained",
+    ]
+    domain_filter_mode: Literal["api", "query", "prompt", "none"]
+    domain_coverage: Literal["full", "partial", "none"]
+    status_reason: str | None = None
+
+
+def _detect_provider_body_error(provider: str, response_body: dict) -> str | None:
+    """Detect HTTP 200 responses that contain an error in the body.
+
+    Adapter hook for providers like Anthropic (web_search_tool_result_error),
+    Qwen (silent search skip at high RPS), Kimi (incomplete tool-call loop).
+    Concrete implementations will be added per-provider in P3.
+    """
+    return None
+
+
 def _normalize_domain_filter(domain: str) -> str:
     """Normalize a domain for exact/subdomain matching and provider filters."""
     candidate = domain.strip().strip(".").lower()
@@ -354,13 +376,8 @@ async def fetch_family_context(
                 ),
             }
 
-        # Calculate domain coverage
-        domain_coverage = "full"
-        if cap.max_domains is not None and len(domains) > cap.max_domains:
-            domain_coverage = "partial"
-
         try:
-            snippets = await _search_with_provider(
+            outcome = await _search_with_provider(
                 provider,
                 query,
                 request_config,
@@ -368,11 +385,13 @@ async def fetch_family_context(
                 swallow_errors=False,
             )
             # Post-filter results against family domains
-            snippets = _filter_snippets_by_domain(snippets, domains)
+            snippets = _filter_snippets_by_domain(outcome.snippets, domains)
             metadata: dict[str, object] = {
-                "domain_filter_mode": cap.domain_filter_mode,
-                "domain_coverage": domain_coverage,
+                "domain_filter_mode": outcome.domain_filter_mode,
+                "domain_coverage": outcome.domain_coverage,
             }
+            if outcome.status_reason:
+                metadata["status_reason"] = outcome.status_reason
             return family, snippets, metadata
         except Exception:
             logger.warning("Family search failed: family=%s", family, exc_info=True)
@@ -959,31 +978,64 @@ async def _search_with_provider(
     *,
     include_domains: list[str] | None = None,
     swallow_errors: bool = True,
-) -> list[WebSearchSnippet]:
-    """Dispatch to the configured provider. Returns [] on any failure."""
+) -> ProviderSearchOutcome:
+    """Dispatch to the configured provider. Returns structured outcome."""
+    cap = PROVIDER_CAPABILITIES.get(provider)
+    dfm = cap.domain_filter_mode if cap else "none"
+    dc = "none"
+    if include_domains and cap and cap.max_domains is not None:
+        dc = "full" if len(include_domains) <= cap.max_domains else "partial"
+    elif include_domains:
+        dc = "full"
+
     search_fn = _PROVIDER_MAP.get(provider)
     if search_fn is None:
         logger.warning("Unknown web search provider: %s", provider)
         if not swallow_errors:
             raise ValueError(f"Unknown web search provider: {provider}")
-        return []
+        return ProviderSearchOutcome(
+            [], "unsupported_provider", "none", "none",
+            status_reason=f"Unknown provider: {provider}",
+        )
     try:
-        return await search_fn(query, request_config, include_domains=include_domains)
+        snippets = await search_fn(query, request_config, include_domains=include_domains)
+        state = "ready" if snippets else "empty"
+        return ProviderSearchOutcome(snippets, state, dfm, dc)
     except httpx.TimeoutException:
         logger.warning("Web search timeout (%s): query=%r", provider, query[:80])
         if not swallow_errors:
             raise
-        return []
+        return ProviderSearchOutcome(
+            [], "failed", dfm, dc,
+            status_reason=f"Timeout from provider '{provider}'",
+        )
     except httpx.HTTPStatusError as exc:
-        logger.warning("Web search HTTP error (%s): %s", provider, exc.response.status_code)
+        status_code = exc.response.status_code
+        logger.warning("Web search HTTP error (%s): %s", provider, status_code)
         if not swallow_errors:
             raise
-        return []
+        if status_code == 429:
+            return ProviderSearchOutcome(
+                [], "search_skipped", dfm, dc,
+                status_reason=f"Rate limited by provider '{provider}'",
+            )
+        if status_code in (400, 401, 403, 404, 422):
+            return ProviderSearchOutcome(
+                [], "unsupported_provider", dfm, dc,
+                status_reason=f"HTTP {status_code} from provider '{provider}'",
+            )
+        return ProviderSearchOutcome(
+            [], "failed", dfm, dc,
+            status_reason=f"HTTP {status_code} from provider '{provider}'",
+        )
     except Exception:
         logger.warning("Web search unexpected error (%s)", provider, exc_info=True)
         if not swallow_errors:
             raise
-        return []
+        return ProviderSearchOutcome(
+            [], "failed", dfm, dc,
+            status_reason=f"Unexpected error from provider '{provider}'",
+        )
 
 
 # ── Public API ──────────────────────────────────────────
@@ -1043,14 +1095,17 @@ async def fetch_web_context(
                 logger.info("Web search cache hit (post-lock) for query: %s", query[:60])
                 return cached
 
-            snippets = await _search_with_provider(provider, query, request_config)
-            if not snippets:
-                logger.info("Web search returned no results for query: %s", query[:60])
+            outcome = await _search_with_provider(provider, query, request_config)
+            if not outcome.snippets:
+                logger.info(
+                    "Web search returned no results for query: %s (state=%s)",
+                    query[:60], outcome.state,
+                )
                 return None
 
             result = WebSearchResult(
                 query=query,
-                snippets=snippets,
+                snippets=outcome.snippets,
                 provider=provider,
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 cached=False,
@@ -1067,7 +1122,7 @@ async def fetch_web_context(
 
     logger.info(
         "Web search success: provider=%s, snippets=%d, query=%s",
-        provider, len(snippets), query[:60],
+        provider, len(outcome.snippets), query[:60],
     )
     return result
 

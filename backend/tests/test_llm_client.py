@@ -1535,3 +1535,86 @@ def test_build_llm_payload_no_native_search_keys(target_url):
         assert key not in payload, (
             f"_build_llm_payload({target_url!r}) must not contain '{key}'"
         )
+
+
+# ── P2-1: detect_provider tests ──────────────────────────
+
+
+class TestDetectProvider:
+    """P2-1: LLM provider detection from base URL hostname."""
+
+    def setup_method(self):
+        from app.services.llm_client import detect_provider
+        self.detect = detect_provider
+
+    def test_none_returns_default(self):
+        p = self.detect(None)
+        assert p.name == "default"
+        assert p.supports_native_search is False
+        assert p.is_proxy is False
+
+    def test_empty_string_returns_default(self):
+        p = self.detect("")
+        assert p.name == "default"
+
+    @pytest.mark.parametrize("url,expected_name,expected_native,expected_api", [
+        ("https://api.x.ai/v1", "xai", True, "responses"),
+        ("https://api.openai.com/v1", "openai", True, "responses"),
+        ("https://api.anthropic.com/v1", "anthropic", True, "messages"),
+        ("https://generativelanguage.googleapis.com/v1", "gemini", True, "chat_extension"),
+        ("https://api.perplexity.ai/v1", "perplexity", True, "chat_extension"),
+        ("https://api.deepseek.com/v1", "deepseek", False, "none"),
+        ("https://api.minimax.chat/v1", "minimax", False, "none"),
+        ("https://dashscope.aliyuncs.com/v1", "qwen", True, "chat_extension"),
+        ("https://api.zhipuai.cn/v1", "glm", True, "chat_extension"),
+        ("https://api.moonshot.cn/v1", "kimi", True, "chat_extension"),
+    ])
+    def test_known_providers(self, url, expected_name, expected_native, expected_api):
+        p = self.detect(url)
+        assert p.name == expected_name
+        assert p.supports_native_search is expected_native
+        assert p.native_search_api == expected_api
+        assert p.is_proxy is False
+
+    @pytest.mark.parametrize("url,expected_name", [
+        ("https://openrouter.ai/api/v1", "openrouter"),
+        ("https://api.siliconflow.cn/v1", "siliconflow"),
+    ])
+    def test_known_proxies(self, url, expected_name):
+        p = self.detect(url)
+        assert p.name == expected_name
+        assert p.is_proxy is True
+        assert p.supports_native_search is False
+
+    @pytest.mark.parametrize("url", [
+        "http://localhost:8317/v1",
+        "http://127.0.0.1:8000/v1",
+        "http://0.0.0.0:11434/v1",
+        "http://host.docker.internal:8080/v1",
+    ])
+    def test_local_hosts(self, url):
+        p = self.detect(url)
+        assert p.name == "local"
+        assert p.is_proxy is True
+
+    def test_unknown_host_is_proxy(self):
+        p = self.detect("https://my-custom-llm.example.com/v1")
+        assert p.name == "unknown"
+        assert p.is_proxy is True
+        assert p.supports_native_search is False
+
+    def test_xai_requires_responses_endpoint(self):
+        p = self.detect("https://api.x.ai/v1/responses")
+        assert p.requires_specific_endpoint == "/v1/responses"
+
+    def test_case_insensitive_hostname(self):
+        p = self.detect("https://API.X.AI/v1")
+        assert p.name == "xai"
+
+    def test_url_with_trailing_slash(self):
+        p = self.detect("https://api.x.ai/v1/")
+        assert p.name == "xai"
+
+    def test_url_with_port(self):
+        p = self.detect("https://api.openai.com:443/v1")
+        assert p.name == "openai"

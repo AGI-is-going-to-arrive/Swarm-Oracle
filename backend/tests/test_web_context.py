@@ -1693,7 +1693,7 @@ class TestFamilyContextStates:
     @pytest.mark.asyncio
     async def test_ready_with_domain_coverage_full(self, monkeypatch):
         """Provider can handle all family domains → domain_coverage=full."""
-        from app.services.web_context import fetch_family_context
+        from app.services.web_context import ProviderSearchOutcome, fetch_family_context
         monkeypatch.setattr(
             "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
             "us",
@@ -1707,13 +1707,13 @@ class TestFamilyContextStates:
             include_domains=None,
             swallow_errors=True,
         ):
-            # Return matching-domain snippet so post-filter keeps it
-            return [
-                WebSearchSnippet(
+            return ProviderSearchOutcome(
+                [WebSearchSnippet(
                     text="Markets reprice",
                     source_url="https://bloomberg.com/x",
-                )
-            ]
+                )],
+                "ready", "api", "full",
+            )
 
         monkeypatch.setattr("app.services.web_context._search_with_provider", ok)
 
@@ -1736,7 +1736,7 @@ class TestFamilyContextStates:
     @pytest.mark.asyncio
     async def test_ready_with_domain_coverage_partial(self, monkeypatch):
         """xAI with 7-domain family → domain_coverage=partial."""
-        from app.services.web_context import fetch_family_context
+        from app.services.web_context import ProviderSearchOutcome, fetch_family_context
         monkeypatch.setattr(
             "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
             "us",
@@ -1750,12 +1750,13 @@ class TestFamilyContextStates:
             include_domains=None,
             swallow_errors=True,
         ):
-            return [
-                WebSearchSnippet(
+            return ProviderSearchOutcome(
+                [WebSearchSnippet(
                     text="Finance update",
                     source_url="https://bloomberg.com/article",
-                )
-            ]
+                )],
+                "ready", "api", "partial",
+            )
 
         monkeypatch.setattr("app.services.web_context._search_with_provider", ok)
 
@@ -1779,7 +1780,7 @@ class TestFamilyContextStates:
     @pytest.mark.asyncio
     async def test_url_post_filter_removes_off_domain(self, monkeypatch):
         """Results from non-family domains are filtered out."""
-        from app.services.web_context import fetch_family_context
+        from app.services.web_context import ProviderSearchOutcome, fetch_family_context
         monkeypatch.setattr(
             "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
             "us",
@@ -1793,14 +1794,17 @@ class TestFamilyContextStates:
             include_domains=None,
             swallow_errors=True,
         ):
-            return [
-                WebSearchSnippet(
-                    text="off-domain", source_url="https://reddit.com/r/x"
-                ),
-                WebSearchSnippet(
-                    text="on-domain", source_url="https://bloomberg.com/x"
-                ),
-            ]
+            return ProviderSearchOutcome(
+                [
+                    WebSearchSnippet(
+                        text="off-domain", source_url="https://reddit.com/r/x"
+                    ),
+                    WebSearchSnippet(
+                        text="on-domain", source_url="https://bloomberg.com/x"
+                    ),
+                ],
+                "ready", "api", "full",
+            )
 
         monkeypatch.setattr("app.services.web_context._search_with_provider", mixed)
 
@@ -1884,3 +1888,190 @@ class TestFamilyContextStates:
         parsed = _parse_web_context_json(raw)
         assert parsed is not None
         assert parsed["family_context"]["finance"]["state"] == "empty"
+
+
+# ── P2-3: ProviderSearchOutcome + error code mapping ─────
+
+
+class TestProviderSearchOutcome:
+    """P2-3: ProviderSearchOutcome dataclass contract."""
+
+    def test_frozen(self):
+        from app.services.web_context import ProviderSearchOutcome
+        o = ProviderSearchOutcome([], "empty", "none", "none")
+        with pytest.raises(AttributeError):
+            o.state = "ready"  # type: ignore[misc]
+
+    def test_ready_state(self):
+        from app.services.web_context import ProviderSearchOutcome, WebSearchSnippet
+        s = WebSearchSnippet(text="hi", source_url="https://example.com")
+        o = ProviderSearchOutcome([s], "ready", "api", "full")
+        assert o.state == "ready"
+        assert len(o.snippets) == 1
+        assert o.domain_filter_mode == "api"
+        assert o.domain_coverage == "full"
+        assert o.status_reason is None
+
+    def test_failed_with_reason(self):
+        from app.services.web_context import ProviderSearchOutcome
+        o = ProviderSearchOutcome(
+            [], "failed", "none", "none",
+            status_reason="Timeout from provider 'tavily'",
+        )
+        assert o.state == "failed"
+        assert "Timeout" in o.status_reason
+
+
+class TestSearchWithProviderOutcome:
+    """P2-3: _search_with_provider returns ProviderSearchOutcome with correct state."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_settings(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_PROVIDER", "tavily")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "test-key")
+        monkeypatch.setattr("app.services.web_context.settings.ENABLE_WEB_SEARCH", True)
+
+    @pytest.mark.asyncio
+    async def test_unknown_provider_returns_unsupported(self):
+        from app.services.web_context import _search_with_provider
+        outcome = await _search_with_provider("nonexistent", "test query")
+        assert outcome.state == "unsupported_provider"
+        assert outcome.snippets == []
+        assert "Unknown provider" in (outcome.status_reason or "")
+
+    @pytest.mark.asyncio
+    async def test_unknown_provider_raises_when_not_swallowed(self):
+        from app.services.web_context import _search_with_provider
+        with pytest.raises(ValueError, match="Unknown web search provider"):
+            await _search_with_provider("nonexistent", "test", swallow_errors=False)
+
+    @pytest.mark.asyncio
+    async def test_success_with_results_returns_ready(self, monkeypatch):
+        from app.services.web_context import WebSearchSnippet, _search_with_provider
+        snippet = WebSearchSnippet(text="result", source_url="https://example.com")
+
+        async def _mock_search(_q, _cfg, *, include_domains=None):
+            return [snippet]
+        monkeypatch.setattr("app.services.web_context._PROVIDER_MAP", {"tavily": _mock_search})
+
+        outcome = await _search_with_provider("tavily", "test query")
+        assert outcome.state == "ready"
+        assert len(outcome.snippets) == 1
+
+    @pytest.mark.asyncio
+    async def test_success_no_results_returns_empty(self, monkeypatch):
+        from app.services.web_context import _search_with_provider
+
+        async def _mock_search(_q, _cfg, *, include_domains=None):
+            return []
+        monkeypatch.setattr("app.services.web_context._PROVIDER_MAP", {"tavily": _mock_search})
+
+        outcome = await _search_with_provider("tavily", "test query")
+        assert outcome.state == "empty"
+        assert outcome.snippets == []
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_failed(self, monkeypatch):
+        from app.services.web_context import _search_with_provider
+
+        async def _mock_search(_q, _cfg, *, include_domains=None):
+            raise httpx.TimeoutException("timed out")
+        monkeypatch.setattr("app.services.web_context._PROVIDER_MAP", {"tavily": _mock_search})
+
+        outcome = await _search_with_provider("tavily", "test query")
+        assert outcome.state == "failed"
+        assert "Timeout" in (outcome.status_reason or "")
+
+    @pytest.mark.asyncio
+    async def test_429_returns_search_skipped(self, monkeypatch):
+        from app.services.web_context import _search_with_provider
+
+        async def _mock_search(_q, _cfg, *, include_domains=None):
+            resp = httpx.Response(429, request=httpx.Request("POST", "https://api.tavily.com"))
+            raise httpx.HTTPStatusError("rate limited", request=resp.request, response=resp)
+        monkeypatch.setattr("app.services.web_context._PROVIDER_MAP", {"tavily": _mock_search})
+
+        outcome = await _search_with_provider("tavily", "test query")
+        assert outcome.state == "search_skipped"
+        assert "Rate limited" in (outcome.status_reason or "")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status_code", [400, 401, 403, 404, 422])
+    async def test_client_errors_return_unsupported(self, monkeypatch, status_code):
+        from app.services.web_context import _search_with_provider
+
+        async def _mock_search(_q, _cfg, *, include_domains=None):
+            resp = httpx.Response(
+                status_code, request=httpx.Request("POST", "https://api.tavily.com"),
+            )
+            raise httpx.HTTPStatusError("error", request=resp.request, response=resp)
+        monkeypatch.setattr("app.services.web_context._PROVIDER_MAP", {"tavily": _mock_search})
+
+        outcome = await _search_with_provider("tavily", "test query")
+        assert outcome.state == "unsupported_provider"
+        assert f"HTTP {status_code}" in (outcome.status_reason or "")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status_code", [500, 502, 503])
+    async def test_server_errors_return_failed(self, monkeypatch, status_code):
+        from app.services.web_context import _search_with_provider
+
+        async def _mock_search(_q, _cfg, *, include_domains=None):
+            resp = httpx.Response(
+                status_code, request=httpx.Request("POST", "https://api.tavily.com"),
+            )
+            raise httpx.HTTPStatusError("error", request=resp.request, response=resp)
+        monkeypatch.setattr("app.services.web_context._PROVIDER_MAP", {"tavily": _mock_search})
+
+        outcome = await _search_with_provider("tavily", "test query")
+        assert outcome.state == "failed"
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_returns_failed(self, monkeypatch):
+        from app.services.web_context import _search_with_provider
+
+        async def _mock_search(_q, _cfg, *, include_domains=None):
+            raise RuntimeError("unexpected")
+        monkeypatch.setattr("app.services.web_context._PROVIDER_MAP", {"tavily": _mock_search})
+
+        outcome = await _search_with_provider("tavily", "test query")
+        assert outcome.state == "failed"
+        assert "Unexpected error" in (outcome.status_reason or "")
+
+    @pytest.mark.asyncio
+    async def test_domain_coverage_full_when_within_limit(self, monkeypatch):
+        from app.services.web_context import WebSearchSnippet, _search_with_provider
+        snippet = WebSearchSnippet(text="r", source_url="https://arxiv.org/abs/1")
+
+        async def _mock_search(_q, _cfg, *, include_domains=None):
+            return [snippet]
+        monkeypatch.setattr("app.services.web_context._PROVIDER_MAP", {"tavily": _mock_search})
+
+        outcome = await _search_with_provider(
+            "tavily", "test", include_domains=["arxiv.org", "nature.com"],
+        )
+        assert outcome.domain_coverage == "full"
+
+    @pytest.mark.asyncio
+    async def test_domain_coverage_partial_when_exceeds_limit(self, monkeypatch):
+        from app.services.web_context import WebSearchSnippet, _search_with_provider
+        snippet = WebSearchSnippet(text="r", source_url="https://arxiv.org/abs/1")
+
+        async def _mock_search(_q, _cfg, *, include_domains=None):
+            return [snippet]
+        monkeypatch.setattr("app.services.web_context._PROVIDER_MAP", {"xai": _mock_search})
+
+        # xAI has max_domains=5, sending 7 domains
+        domains = [f"d{i}.com" for i in range(7)]
+        outcome = await _search_with_provider("xai", "test", include_domains=domains)
+        assert outcome.domain_coverage == "partial"
+
+
+class TestDetectProviderBodyError:
+    """P2-4: _detect_provider_body_error stub always returns None."""
+
+    def test_stub_returns_none(self):
+        from app.services.web_context import _detect_provider_body_error
+        assert _detect_provider_body_error("tavily", {}) is None
+        assert _detect_provider_body_error("xai", {"error": "test"}) is None
+        assert _detect_provider_body_error("anthropic", {"content": []}) is None
