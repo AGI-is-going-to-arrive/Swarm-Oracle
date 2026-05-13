@@ -1227,16 +1227,19 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
         # P3-2: native search citations (from LLM native web_search tools)
         raw_citations = parsed.get("native_citations")
         if isinstance(raw_citations, list) and raw_citations:
+            from app.services.web_context import _sanitize_url
+
             safe_citations = []
             for cit in raw_citations:
                 if not isinstance(cit, dict):
                     continue
                 text = cit.get("text", "")
                 url = cit.get("source_url", "")
-                if isinstance(text, str) and isinstance(url, str) and url.strip():
+                safe_url = _sanitize_url(url if isinstance(url, str) else "", max_chars=2000)
+                if isinstance(text, str) and safe_url:
                     safe_citations.append({
                         "text": str(text)[:500],
-                        "source_url": str(url)[:2000],
+                        "source_url": safe_url,
                     })
             if safe_citations:
                 response["native_citations"] = safe_citations

@@ -1,7 +1,7 @@
 # Web Search / Source Family P0-P5 Status Update
 
-> Updated: 2026-05-13
-> Scope: P0 + P1 Web Search / Source Family contract hardening review.
+> Updated: 2026-05-14
+> Scope: P0-P5 Web Search / Source Family status after native-search review/fix.
 > Source of truth: current code, current tests, and this status note.
 > `.claude/team-plan/websearch-source-family-implementation-plan.md` is now a
 > historical implementation plan plus carry-forward checklist, not the primary
@@ -31,59 +31,44 @@
 
 ## Validation Snapshot
 
-- Backend full suite: `2835 passed, 2 skipped`.
-- Backend targeted Web Search / Source Family suite: `249 passed`.
-- Backend URL scheme filtering narrow rerun: `28 passed`.
+- Backend full suite: `2926 passed, 2 skipped`.
+- Backend targeted Web Search / native-search hardening suite: passed in-session before full suite.
 - Backend lint: `ruff check .` passed.
-- Frontend full vitest: `184 files / 2004 tests passed`.
-- Frontend InputView/API targeted suite: `76 passed`.
+- Frontend full vitest: `184 files / 2037 tests passed`.
 - Frontend `tsc`, `lint`, and `build`: passed.
-- Browser smoke: desktop `1440px`, mobile `375px`, and Chromium / Firefox /
-  WebKit headless Source Family checks passed.
+- i18n parity: `2489/2489`.
+- Browser smoke: Chromium desktop, Firefox desktop, Chromium mobile `375px`,
+  plus Chromium forced-colors/reduced-motion passed for native citations.
+  WebKit/Safari was not counted for the native-citation signoff in this pass.
 
-## Codex Review Carry-Forward
+## Codex Review Closure
 
-- W1 → P4a: `provider_capability` currently describes the server default
-  provider. If custom override must support a server-default `native` or future
-  unsupported provider, expose per-provider capability and make InputView choose
-  capability by active provider.
-- W2 → P4a: disabled Source Family reason is currently surfaced through
-  `title`; add visible or `sr-only` reason text with `aria-describedby` for
-  mobile and assistive tech.
-- W3 → test hardening: some native-search payload tests should assert that the
-  fake client was actually called before checking forbidden keys.
-- W4 → test hardening: the `web_search_key_not_passed_to_llm` test should spy
-  the scenario background call to prove web-search-only requests do not populate
-  LLM override fields.
-- W5 → P4a/P4b boundary: ResultView / SourceCategoryCard still need explicit
-  UI rendering for `failed / unsupported_provider / fallback_unconstrained /
-  search_skipped`; keep native citation UI in P4b, not P4a.
+- W1/W2/W5 are closed by P4a/P4b:
+  provider-aware Source Family gating, disabled reasons, new state cards, and
+  native citation UI are implemented.
+- W3/W4 are covered by current backend/frontend regression tests for
+  non-native payloads, LLM/Web Search BYOK separation, and request body shape.
+  Keep them as regression intent if these tests are rewritten.
 
 ## Readiness
 
-- P2 native LLM search adapter: not ready to execute without separate approval.
-  Preconditions still required:
-  - freeze native/app-layer state schema,
-  - add provider detection/profile layer,
-  - define provider fallback and citation storage contract,
-  - keep current non-native LLM payload tests as regression gates.
-- P3 provider adapters / automatic discovery: not ready. Provider discovery is a
-  P2 prerequisite, and xAI native pilot depends on P2 contracts.
-- P4a frontend provider-aware rendering: ready to plan independently of P2 once
-  this P0/P1 patch is accepted.
-  - Include Source Family state cards, disabled reason a11y, active-provider
-    capability selection, i18n parity, and mobile/desktop browser smoke.
-- P4b native citation/proxy fallback UI: gated on P2 + P3.
-- P5 validation:
-  - P5a app-layer validation depends on P0/P1 + P4a.
-  - P5b native-search validation depends on P2/P3/P4b.
+- P2 native/proxy fallback contract: done.
+  - `detect_provider()` rejects malformed/non-http URLs and does not native-enable unknown proxy hosts.
+  - `_search_with_provider()` now returns structured outcome state, including `429 -> search_skipped`, `4xx -> unsupported_provider`, and `5xx -> failed`.
+- P3 xAI native search pilot: done for xAI.
+  - `llm_call(native_search_domains=...)` injects tools only for recognized Responses API providers.
+  - `native_search_adapters.py` parses top-level citations and annotations, and sanitizes domains/citation URLs.
+  - OpenAI adapter remains skeleton/backlog; no live OpenAI fixture was signed off here.
+- P4b native citation UI: done.
+  - `native_citations` roundtrip through `web_context_json`.
+  - `WebSourcesSection` filters malformed text/URL before rendering native links.
+- P5 release validation: partial.
+  - Full backend/frontend/lint/type/build/i18n and custom browser matrix passed.
+  - Remaining work: named E2E scripts, WebKit/Safari native-citation pass, provider fixtures, and explicit native-search `max_tool_calls` cost control.
 
 ## New Debt
 
-- P1 does not yet implement a full `ProviderSearchOutcome` return object; the
-  current patch keeps base search fail-soft and adds `swallow_errors=False` for
-  family search. This is acceptable for P1, but P2 should introduce a structured
-  outcome before native fallback mapping.
-- `provider_capability` is not secret-bearing, but it is a coarse capability
-  field. Per-provider capability will be cleaner before custom override grows
-  beyond the four app-layer providers.
+- P5 still needs explicit native-search tool-call budget/cost control.
+- Native-citation browser signoff did not include WebKit/Safari in this pass.
+- OpenAI and other native adapters should stay backlog until official response
+  fixtures and live-provider constraints are reviewed.

@@ -178,17 +178,31 @@ class WebSearchResult:
             data = json.loads(raw)
             if not isinstance(data, dict):
                 return None
-            snippets = []
-            for s in data.get("snippets", []):
-                if not isinstance(s, dict):
-                    continue
-                raw_text = s.get("text", "")
-                raw_url = s.get("source_url", "")
-                text = str(raw_text) if raw_text is not None else ""
-                url = str(raw_url) if raw_url is not None else ""
-                if not text:
-                    continue  # skip snippets with no usable text
-                snippets.append(WebSearchSnippet(text=text, source_url=url))
+            def _coerce_snippets(raw_items: object) -> list[WebSearchSnippet]:
+                if not isinstance(raw_items, list):
+                    return []
+                result: list[WebSearchSnippet] = []
+                for s in raw_items:
+                    if not isinstance(s, dict):
+                        continue
+                    raw_text = s.get("text", "")
+                    raw_url = s.get("source_url", "")
+                    text = str(raw_text) if raw_text is not None else ""
+                    url = str(raw_url) if raw_url is not None else ""
+                    if not text:
+                        continue  # skip snippets with no usable text
+                    result.append(WebSearchSnippet(text=text, source_url=url))
+                return result
+
+            snippets = _coerce_snippets(data.get("snippets", []))
+            native_citations = []
+            for citation in _coerce_snippets(data.get("native_citations", [])):
+                safe_url = _sanitize_url(citation.source_url)
+                if safe_url:
+                    native_citations.append(WebSearchSnippet(
+                        text=citation.text[:500],
+                        source_url=safe_url,
+                    ))
             return cls(
                 query=data.get("query", ""),
                 snippets=snippets,
@@ -200,9 +214,51 @@ class WebSearchResult:
                     if isinstance(data.get("family_context"), dict)
                     else {}
                 ),
+                native_citations=native_citations,
             )
         except (json.JSONDecodeError, TypeError):
             return None
+
+
+def _sanitize_url(url: str | None, max_chars: int = 300) -> str:
+    """Sanitize a source URL for safe prompt/UI use.
+
+    - None / empty -> empty string
+    - Non-http(s) schemes -> empty string
+    - Missing host or malformed URLs -> empty string
+    - Control characters stripped, length capped
+    """
+    if not url:
+        return ""
+    cleaned = "".join(ch for ch in url if ch >= " " and ch != "\x7f")
+    cleaned = cleaned.strip()[:max_chars]
+    try:
+        parsed = urlparse(cleaned)
+    except ValueError:
+        return ""
+    if parsed.scheme.lower() not in _ALLOWED_WEB_SEARCH_SCHEMES:
+        return ""
+    if not (parsed.hostname or "").strip():
+        return ""
+    return cleaned
+
+
+def _sanitize_domain_filters(
+    domains: list[str] | None,
+    *,
+    max_domains: int | None = None,
+) -> list[str]:
+    """Normalize, deduplicate and cap provider domain-filter values."""
+    sanitized: list[str] = []
+    for domain in domains or []:
+        if not isinstance(domain, str):
+            continue
+        normalized = _normalize_domain_filter(domain)
+        if normalized and normalized not in sanitized:
+            sanitized.append(normalized)
+        if max_domains is not None and len(sanitized) >= max_domains:
+            break
+    return sanitized
 
 
 # ── In-Memory TTL Cache ─────────────────────────────────
@@ -386,7 +442,6 @@ async def fetch_family_context(
                 query,
                 request_config,
                 include_domains=domains,
-                swallow_errors=False,
             )
             # Post-filter results against family domains
             snippets = _filter_snippets_by_domain(outcome.snippets, domains)
@@ -394,6 +449,8 @@ async def fetch_family_context(
                 "domain_filter_mode": outcome.domain_filter_mode,
                 "domain_coverage": outcome.domain_coverage,
             }
+            if outcome.state not in {"ready", "empty"}:
+                metadata["state"] = outcome.state
             if outcome.status_reason:
                 metadata["status_reason"] = outcome.status_reason
             return family, snippets, metadata
@@ -562,6 +619,8 @@ def _cache_get(query: str, request_config: WebSearchRequestConfig) -> WebSearchR
         provider=result.provider,
         timestamp=result.timestamp,
         cached=True,
+        family_context=dict(result.family_context),
+        native_citations=list(result.native_citations),
     )
     return cached_result
 
@@ -932,8 +991,9 @@ async def _search_xai(
 
     tools: list[dict[str, object]] = [{"type": "web_search"}]
     if include_domains:
-        capped = include_domains[:5]
-        tools = [{"type": "web_search", "filters": {"allowed_domains": capped}}]
+        allowed_domains = _sanitize_domain_filters(include_domains, max_domains=5)
+        if allowed_domains:
+            tools = [{"type": "web_search", "filters": {"allowed_domains": allowed_domains}}]
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
@@ -1023,7 +1083,7 @@ async def _search_with_provider(
                 [], "search_skipped", dfm, dc,
                 status_reason=f"Rate limited by provider '{provider}'",
             )
-        if status_code in (400, 401, 403, 404, 422):
+        if 400 <= status_code < 500:
             return ProviderSearchOutcome(
                 [], "unsupported_provider", dfm, dc,
                 status_reason=f"HTTP {status_code} from provider '{provider}'",
@@ -1129,23 +1189,6 @@ async def fetch_web_context(
         provider, len(outcome.snippets), query[:60],
     )
     return result
-
-
-def _sanitize_url(url: str | None, max_chars: int = 300) -> str:
-    """Sanitize a source URL for safe prompt embedding.
-
-    - None / empty → empty string
-    - Non-http(s) schemes → empty string
-    - Control characters stripped, length capped
-    """
-    if not url:
-        return ""
-    cleaned = "".join(ch for ch in url if ch >= " " and ch != "\x7f")
-    cleaned = cleaned[:max_chars]
-    # Only allow http/https schemes
-    if not cleaned.lower().startswith(("http://", "https://")):
-        return ""
-    return cleaned
 
 
 def format_context_block(result: WebSearchResult | None) -> str:

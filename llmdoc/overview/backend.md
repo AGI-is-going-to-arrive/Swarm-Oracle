@@ -43,8 +43,9 @@
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
 | Personality Drift | `backend/app/services/personality_drift.py` | 从 identity metadata、消息和成长事件派生 Big Five drift warning |
 | Memory | `backend/app/services/memory.py` | L1 压缩、context 组装 |
-| Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、缓存与上下文格式化 |
-| LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断、JSON stream-first fallback |
+| Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、缓存、`ProviderSearchOutcome` 状态映射、native citation 序列化与上下文格式化 |
+| LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断、JSON stream-first fallback；Responses API native search tools 只在已识别 provider + 非 proxy 路径启用 |
+| Native Search Adapters | `backend/app/services/native_search_adapters.py` | provider-specific native search tools/citation parsing；当前有 xAI pilot、OpenAI skeleton 和 null adapter |
 | Conversation Service | `backend/app/services/conversation_service.py` | conversation thread/turn 创建、bootstrap claim、SSE stream 终态与取消原因收口 |
 | Roundtable Survey | `backend/app/services/roundtable_survey.py` | 世界线圆桌问卷 SSE；按 room 绑定 participant、补 identity memory、并发发问后逐条回传 |
 | Roundtable Analyst | `backend/app/services/roundtable_analyst.py` | 世界线圆桌 analyst SSE；有界 ReACT 工具循环，串 causal graph / identity memory / web evidence |
@@ -417,7 +418,7 @@
 ## 当前验证基线
 
 - 当前 backend 稳定验证口径：
-  - `python -m pytest -q`：`2841 passed, 2 skipped`
+  - `python -m pytest -q`：`2926 passed, 2 skipped`
   - `ruff check .`：通过
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：

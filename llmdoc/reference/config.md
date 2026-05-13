@@ -183,7 +183,7 @@
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `ENABLE_WEB_SEARCH` | `false` | 总开关，opt-in |
-| `WEB_SEARCH_PROVIDER` | `tavily` | 服务端默认搜索 provider：`tavily` / `exa` / `xai` / `searxng`；`native` 只保留 legacy 配置兼容，不代表已实现 |
+| `WEB_SEARCH_PROVIDER` | `tavily` | 服务端默认 app-layer 搜索 provider：`tavily` / `exa` / `xai` / `searxng`；`native` 只保留 legacy 配置兼容，不代表 app-layer provider 已实现 |
 | `WEB_SEARCH_API_KEY` | `""` | 服务端默认搜索 API Key（`searxng` 不需要） |
 | `XAI_WEB_SEARCH_MODEL` | `grok-4.20-reasoning` | `xai` provider 使用的模型 |
 | `XAI_WEB_SEARCH_TIMEOUT_SECONDS` | `45` | `xai` provider 独立超时 |
@@ -203,6 +203,8 @@
 
 - 搜索在场景创建时执行一次（Round 1 之前），结果存入 `Scenario.web_context_json`。
 - 搜索失败不阻断推演（graceful degradation）。
+- LLM native search 不由 `WEB_SEARCH_PROVIDER=native` 开启；当前只在 `llm_call(native_search_domains=...)` 且 provider 被识别为支持 native search 的 Responses API 路径下启用。未知 proxy、malformed URL、非 http(s) URL 或 chat endpoint 不会注入 native tools。
+- Native search citations 会写入 `web_context_json.native_citations`，但只保留安全的 `http/https` URL。
 - 前端 toggle 为 opt-in（默认关闭）。InputView 当前默认显示搜索增强入口，不再要求 `VITE_ENABLE_WEB_SEARCH=true` 或服务端默认搜索已就绪。
 - `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认搜索是否 ready（`scope: "server"`）：
   - ready 时，首页可选 `沿用服务器默认`

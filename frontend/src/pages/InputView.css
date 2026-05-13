@@ -474,6 +474,7 @@
 .iv-advanced__body {
   display: grid;
   grid-template-rows: 0fr;
+  overflow: hidden;
   transition: grid-template-rows 0.3s ease;
 }
 

@@ -190,6 +190,10 @@ export default function ResultView() {
   const [permalinkCopied, setPermalinkCopied] = useState(false);
   const [endingRoomPermalinkCopied, setEndingRoomPermalinkCopied] = useState(false);
   const [endingRoomLocalCopySaved, setEndingRoomLocalCopySaved] = useState(false);
+  const challengeLinkCopiedTimerRef = useRef<number | null>(null);
+  const permalinkCopiedTimerRef = useRef<number | null>(null);
+  const endingRoomPermalinkCopiedTimerRef = useRef<number | null>(null);
+  const endingRoomLocalCopySavedTimerRef = useRef<number | null>(null);
   const [importingEndingRoomReplay, setImportingEndingRoomReplay] = useState(false);
   // FE-5: mobile source sheet visibility (R1 FM5)
   const [mobileSourceSheetOpen, setMobileSourceSheetOpen] = useState(false);
@@ -235,6 +239,35 @@ export default function ResultView() {
   const loadResultErrorMessageRef = useRef(loadResultErrorMessage);
   const isZhRef = useRef(isZh);
   const translationRef = useRef(t);
+
+  const resetCopiedStateAfter = useCallback((
+    timerRef: { current: number | null },
+    reset: () => void,
+    delayMs: number,
+  ) => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+    }
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      reset();
+    }, delayMs);
+  }, []);
+
+  useEffect(() => () => {
+    [
+      challengeLinkCopiedTimerRef,
+      permalinkCopiedTimerRef,
+      endingRoomPermalinkCopiedTimerRef,
+      endingRoomLocalCopySavedTimerRef,
+      exportResetTimerRef,
+    ].forEach((timerRef) => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    });
+  }, []);
 
   useEffect(() => () => {
     if (exportResetTimerRef.current) {
@@ -717,14 +750,22 @@ export default function ResultView() {
     });
     await copyText(url);
     setChallengeLinkCopied(true);
-    window.setTimeout(() => setChallengeLinkCopied(false), 2000);
+    resetCopiedStateAfter(
+      challengeLinkCopiedTimerRef,
+      () => setChallengeLinkCopied(false),
+      2000,
+    );
   };
 
   const handleCopyPermalink = async () => {
     if (!replayUrl) return;
     await copyText(replayUrl);
     setPermalinkCopied(true);
-    window.setTimeout(() => setPermalinkCopied(false), 2000);
+    resetCopiedStateAfter(
+      permalinkCopiedTimerRef,
+      () => setPermalinkCopied(false),
+      2000,
+    );
   };
 
   const handleImportReplay = async () => {
@@ -1323,10 +1364,18 @@ export default function ResultView() {
     const copyWindowMs = 1800;
     const finalizeCopyState = (usedLocalFallback: boolean) => {
       setEndingRoomPermalinkCopied(true);
-      window.setTimeout(() => setEndingRoomPermalinkCopied(false), copyWindowMs);
+      resetCopiedStateAfter(
+        endingRoomPermalinkCopiedTimerRef,
+        () => setEndingRoomPermalinkCopied(false),
+        copyWindowMs,
+      );
       if (usedLocalFallback) {
         setEndingRoomLocalCopySaved(true);
-        window.setTimeout(() => setEndingRoomLocalCopySaved(false), copyWindowMs);
+        resetCopiedStateAfter(
+          endingRoomLocalCopySavedTimerRef,
+          () => setEndingRoomLocalCopySaved(false),
+          copyWindowMs,
+        );
       }
     };
 
@@ -1357,7 +1406,7 @@ export default function ResultView() {
       await copyText(buildOracleReplayLocalUrl(window.location.origin, effectiveEndingRoomReplayPayload, localId));
       finalizeCopyState(true);
     }
-  }, [effectiveEndingRoomReplayPayload]);
+  }, [effectiveEndingRoomReplayPayload, resetCopiedStateAfter]);
   const handleSaveEndingRoomReadonlyCopy = useCallback(() => {
     if (!effectiveEndingRoomReplayPayload) return;
     const localId = saveOracleReplayLocalCopy(effectiveEndingRoomReplayPayload);
@@ -1367,8 +1416,12 @@ export default function ResultView() {
     });
     navigate(`/result/replay?roomLocal=${localId}`, { replace: true });
     setEndingRoomLocalCopySaved(true);
-    window.setTimeout(() => setEndingRoomLocalCopySaved(false), 1800);
-  }, [applyEndingRoomReplay, effectiveEndingRoomReplayPayload, navigate]);
+    resetCopiedStateAfter(
+      endingRoomLocalCopySavedTimerRef,
+      () => setEndingRoomLocalCopySaved(false),
+      1800,
+    );
+  }, [applyEndingRoomReplay, effectiveEndingRoomReplayPayload, navigate, resetCopiedStateAfter]);
   const handleImportEndingRoomReplay = useCallback(async () => {
     const scenarioReplay = effectiveEndingRoomReplayPayload?.scenarioReplay;
     if (!scenarioReplay || importingEndingRoomReplay) return;

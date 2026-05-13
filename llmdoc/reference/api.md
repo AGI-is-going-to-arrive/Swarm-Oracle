@@ -83,6 +83,8 @@
   - 如果 custom override 的 provider 和服务端默认 provider 不同，调用方需要显式传该 provider 的 API key；后端不会跨 provider 复用默认 key
 - 搜索成功时，scenario response 会带 `web_search_context`，并持久化到 `Scenario.web_context_json`。
   - `FEATURE_NEW_SOURCES=true` 时，`web_search_context` 里还会带 `family_context`
+  - LLM native search 有 citation 时，`web_search_context` 可带 `native_citations`
+  - `native_citations` 只保留字符串 text 和安全的 `http/https` URL；旧 JSON、`null`、非数组和 unsafe URL 会被过滤或忽略
   - base search 和 family search 独立执行；base search 失败不会阻止已选择的 family search
   - 后端当前可写出 `ready / empty / failed / unsupported_provider`；历史/兼容 parser 还允许 `loading / rate_limited / network_error / search_skipped / fallback_unconstrained`
   - family entry 可能带 `domain_filter_mode / domain_coverage / status_reason`；`polymarket` 当前额外带 `configured_host / geo_gated`

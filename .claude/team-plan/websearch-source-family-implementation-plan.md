@@ -1,9 +1,9 @@
 # Web Search + Source Family 整合实施计划
 
-> **版本**: v1.1-audited | **创建日期**: 2026-05-13 | **审计更新**: 2026-05-13
+> **版本**: v1.1-audited | **创建日期**: 2026-05-13 | **审计更新**: 2026-05-14
 > **输入文档**: `.claude/team-plan/llm-websearch-passthrough-research.md` (R3) + `.claude/team-plan/source-family-availability-research.md` (R3)
-> **当前验证基线**: backend `2841 passed / 2 skipped` | frontend `184 files / 2036 tests passed` | tsc/lint/build 0 errors | ruff 0 errors | browser P4a matrix passed
-> **执行范围**: **P0 + P1 + P4a 已完成 (2026-05-13)**。P2/P3/P4b/P5 涉及 public API、持久化 JSON、native LLM tools、provider adapters 和 release signoff，仍需单独确认后再执行。
+> **当前验证基线**: backend `2926 passed / 2 skipped` | frontend `184 files / 2037 tests passed` | tsc/lint/build 0 errors | ruff 0 errors | i18n `2489/2489` parity | browser Chromium/Firefox/mobile native-citation matrix passed
+> **执行范围**: **P0 + P1 + P2 + P3(xAI pilot) + P4a + P4b 已完成；P5 部分签收**。P5 仍缺命名 E2E 脚本全跑、WebKit/Safari 矩阵、provider fixture 扩展和 explicit native-search tool-call budget。
 
 ---
 
@@ -16,7 +16,8 @@
 - ✅ DONE — P4a Source Family UI hardening 已完成：ResultView / SourceCategoryCard 覆盖 `failed / unsupported_provider / fallback_unconstrained / search_skipped`，active-provider capability selection、custom override no-provider warning、provider hint、disabled reason `aria-describedby` 与 desktop/mobile 唯一 ID 均已落地。
 - 已验证：backend full `2841 passed / 2 skipped`、backend provider capability parity 定向 `6 passed`、`ruff check .` 通过；frontend full vitest `184 files / 2036 passed`、P4a 定向 `157 passed`、tsc/lint/build 通过；Playwright 覆盖 Chromium/Firefox/WebKit 的 desktop 1440 与 mobile 375 六组合矩阵。
 - P4a 后续文档同步已按用户要求补齐：`llmdoc`、`CLAUDE.md`、`README.md`、`implement/` 和本 team-plan 口径一致。
-- 仍 gated：P2 native LLM search contract，P3 provider adapters/auto discovery，P4b native citation UI，P5 release validation。
+- 2026-05-14 追加完成：P2 native/proxy 状态模型、P3 xAI native search pilot + adapter contract、P4b native citation UI、安全/兼容/correctness hardening，以及 backend/frontend/browser 回归。
+- P5 当前为部分签收：full backend/frontend/lint/type/build/i18n 和自定义 Chromium/Firefox/mobile browser matrix 已通过；命名 E2E 脚本、WebKit/Safari 矩阵、provider fixture 扩展和 native-search `max_tool_calls` 成本控制仍需下一轮收口。
 
 ### 执行前审计结论（历史）
 
@@ -31,7 +32,7 @@
 ### 原安全执行门（历史）
 
 - **已执行完成**：P0 + P1，目标是锁定当前行为、修正 app-layer/source-family contract、xAI app-layer domain filters、SearXNG contract、capabilities/provider contract、前端 family disabled UX。
-- **不可直接执行**：P2/P3/P4b/P5。必须先由用户确认，因为它们涉及 native LLM search、API/schema 扩展、持久化 JSON 新字段、跨 provider adapters、浏览器矩阵和 release signoff。
+- **历史门已解除并执行**：P2/P3/P4b/P5 已由用户确认进入本轮 review/fix/test。当前只剩 P5 release-hardening remainder 继续 gated。
 - **文档门**：完成代码实施后，不自动更新 `llmdoc/` 或项目文档。只有用户明确选择 `使用 recorder agent 更新项目文档`，才执行文档同步。
 
 ---
@@ -139,11 +140,11 @@ native search requested
 
 **代码锚点**: `backend/app/config.py:172-180` 允许 `native`；`backend/app/services/web_context.py:874-879` 跳过；`backend/app/api/scenarios.py:437-438` capabilities 不 ready；`backend/app/services/preflight.py:91-92` 当前误报 pass。
 
-### ADR-9: Native LLM search 是 gated backlog
+### ADR-9: Native LLM search 已完成 xAI pilot，release 仍 gated
 
-**决策**: P2/P3 不在本轮直接执行。进入 native LLM search 前，必须先确认 public API、状态持久化、citation 存储、provider headers、retry/fallback 和浏览器展示的完整 contract。
+**决策**: P2/P3/P4b 已按用户确认范围完成 xAI pilot、状态持久化、citation 存储、provider headers、retry/fallback 和浏览器展示 contract。正式 release 仍需完成 P5 剩余项。
 
-**直接原因**: 这部分会改动 `llm_client.py` 主调用链、`web_context_json` schema、ResultView 展示和 provider-specific adapters，风险与文件数量都超出当前可安全直接执行范围。
+**剩余原因**: Native search 已改动 `llm_client.py` 主调用链、`web_context_json` schema、ResultView 展示和 provider-specific adapters；release 前还需要命名 E2E、WebKit/Safari、provider fixture 和 explicit tool-call budget 收口。
 
 ### ADR-10: Source Family 结果必须做 URL 后过滤
 
@@ -176,12 +177,12 @@ class ProviderSearchOutcome:
 | **P0** | ✅ **DONE 2026-05-13** | 基线锁定 + `native` placeholder 一致性修复 | 已落地 | 无 |
 | **P1** | ✅ **DONE 2026-05-13** | app-layer search / Source Family contract 加固 | 已落地 | P0 |
 | **P4a** | ✅ **DONE 2026-05-13** | Source Family UI 状态、disabled UX、i18n | 已落地 | P1 capability contract |
-| **P2** | ✅ **DONE 2026-05-13** | native/proxy 状态模型与持久化 contract | 已落地 | P1 |
-| **P3** | ✅ **DONE 2026-05-13** | xAI native search pilot + adapter 框架 | 已落地 | P2 |
-| **P4b** | ✅ **DONE 2026-05-13** | native citation / proxy fallback UI | 已落地 | P2/P3 |
-| **P5** | ✅ **DONE 2026-05-13** | release validation 与签收 | 已落地 | P4a + P2/P3/P4b |
+| **P2** | ✅ **DONE 2026-05-14** | native/proxy 状态模型与持久化 contract | 已落地 | P1 |
+| **P3** | ✅ **DONE 2026-05-14** | xAI native search pilot + adapter 框架 | 已落地；OpenAI live 接入仍为 backlog | P2 |
+| **P4b** | ✅ **DONE 2026-05-14** | native citation / proxy fallback UI | 已落地 | P2/P3 |
+| **P5** | ⚠️ **PARTIAL 2026-05-14** | release validation 与签收 | full tests/browser subset 已通过；release hardening 待收口 | P4a + P2/P3/P4b |
 
-**最终验证基线**: backend `2908 passed / 2 skipped` | frontend `184 files / 2036 tests passed` | tsc/lint/build 0 errors | ruff 0 errors | i18n 2489 parity
+**最终验证基线**: backend `2926 passed / 2 skipped` | frontend `184 files / 2037 tests passed` | tsc/lint/build 0 errors | ruff 0 errors | i18n `2489/2489` parity | browser Chromium/Firefox/mobile native-citation matrix passed
 
 ---
 
@@ -615,16 +616,16 @@ cd frontend && npm exec tsc -- --noEmit -p tsconfig.app.json
 
 ---
 
-## P2: GATED — Native/proxy fallback contract
+## P2: DONE — Native/proxy fallback contract
 
 ### 目标
-本阶段**不得由 `ccg:team-exec` 在当前任务中直接执行**。它只保留为下一轮设计草案：为非官方 API key、中转商、OpenAI-compatible proxy 设计 capability gate、状态持久化和 fail-soft fallback。
+本阶段已完成：为 official provider、非官方 API key、中转商、OpenAI-compatible proxy 设计 capability gate、状态持久化和 fail-soft fallback。
 
 ### 执行门
 
-- 必须先由用户确认继续 P2。
-- 必须先冻结 `llm_call` / `llm_call_stream` 入参 contract，以及 `web_context_json` 中 app-layer state 与 native state 的分层关系。
-- 必须先决定 fallback retry 是否会产生额外费用、是否暴露到 UI、是否写入审计日志。
+- 已由用户确认继续 P2/P3/P4b/P5。
+- 已冻结 `llm_call` / `llm_call_stream` 入参 contract，以及 `web_context_json` 中 app-layer state 与 native state 的分层关系。
+- Fallback retry 不在本次扩大；费用暴露和 explicit native-search tool-call budget 留给 P5 release-hardening。
 
 ### P2-1: Provider detection 与 capability registry
 
@@ -834,25 +835,25 @@ ruff check .
 
 ### P2 退出标准
 
-- [ ] `detect_provider()` 覆盖 15+ 已知 hostname + proxy + local + unknown
-- [ ] proxy 场景 scenario 创建不失败，native 层状态可表示 `unsupported_proxy`
-- [ ] 全部 HTTP 错误码 → 正确 status 映射
-- [ ] 200-body 错误检测 hook 预留
-- [ ] 后端全量 pytest 无新增失败
-- [ ] ruff 0 errors
+- [x] `detect_provider()` 覆盖 15+ 已知 hostname + proxy + local + unknown，并拒绝 malformed URL / non-http scheme / hostname-only false positive
+- [x] proxy/unknown 场景 scenario 创建不失败，native 层不会误注入 official provider tools
+- [x] 全部 HTTP 错误码 → 正确 status 映射：429=`search_skipped`，4xx=`unsupported_provider`，5xx=`failed`
+- [x] 200-body 错误检测 hook 已接入 adapter `detect_body_error()`
+- [x] 后端全量 pytest 无新增失败：`2926 passed / 2 skipped`
+- [x] ruff 0 errors
 
 ### P2 Review Gate
 
-- [ ] Codex adversarial review: 审查 proxy detection 是否有 false positive
+- [x] Codex adversarial review: proxy detection false positive 已审查并修复
 - [ ] Claude cross-review: 确认 fallback 链覆盖 ADR-6 的所有分支
-- [ ] Codex review: `_search_with_provider` 返回签名变更的向后兼容性
+- [x] Codex review: `_search_with_provider` 返回签名变更的向后兼容性已审查并修复
 
 ---
 
-## P3: GATED — Provider adapters
+## P3: DONE — Provider adapters
 
 ### 目标
-本阶段**不得由 `ccg:team-exec` 在当前任务中直接执行**。下一轮如果获批，只做 **xAI native search pilot**。OpenAI/Anthropic/Gemini/Perplexity/Qwen/GLM/Kimi 只作为研究 backlog，不进入同一执行批次。
+本阶段已在用户确认的 P2/P3/P4b/P5 范围内执行 **xAI native search pilot**。OpenAI/Anthropic/Gemini/Perplexity/Qwen/GLM/Kimi 仍作为研究 backlog，不进入本次 release signoff。
 
 ### P3-1: xAI LLM native search pilot (Responses API)
 
@@ -1024,20 +1025,20 @@ npm test --
 
 ### P3 退出标准
 
-- [ ] xAI native search adapter: tools 注入、citation 解析、fallback 全覆盖
-- [ ] OpenAI adapter: **不在 xAI pilot 批次执行**；如用户单独确认再加 contract test
-- [ ] Citation 存储: `web_context_json` 向后兼容
-- [ ] Citation 展示: `WebSourcesSection` 区分 app-layer 与 native
-- [ ] 无 native search 的调用路径完全不受影响 (P0-2 回归)
-- [ ] 后端全量 pytest 无新增失败
-- [ ] 前端全量 vitest 无新增失败
+- [x] xAI native search adapter: tools 注入、domain filter sanitization、citation 解析、fallback 全覆盖
+- [ ] OpenAI adapter: skeleton contract 已有；live adapter 接入和官方响应 fixture 仍需用户单独确认
+- [x] Citation 存储: `web_context_json` 向后兼容，旧 JSON / null / 非数组 payload 不崩
+- [x] Citation 展示: `WebSourcesSection` 区分 app-layer 与 native，并过滤 unsafe/native malformed citation
+- [x] 无 native search 的调用路径完全不受影响 (P0-2 回归)
+- [x] 后端全量 pytest 无新增失败：`2926 passed / 2 skipped`
+- [x] 前端全量 vitest 无新增失败：`184 files / 2037 tests passed`
 
 ### P3 Review Gate
 
-- [ ] Codex adversarial review: 审查 adapter 注入是否有安全漏洞 (prompt injection via tools)
-- [ ] Codex review: llm_call retry 逻辑正确 strip tools
+- [x] Codex adversarial review: adapter 注入 / prompt injection via tools 已审查；domain list 仅来自服务端 family selection
+- [x] Codex review: llm_call retry 逻辑与 native tools 注入路径已审查
 - [ ] Claude cross-review: citation 格式与 ResultView source card 兼容
-- [ ] 浏览器实测: native citation 在 ResultView 正确渲染
+- [x] 浏览器实测: native citation 在 ResultView 正确渲染
 
 ---
 
@@ -1045,8 +1046,8 @@ npm test --
 
 ### 目标
 P4 分成两段：
-- **P4a 可在 P1 后执行**：Source Family disabled state、新 `state` 展示、provider capability hint、i18n zh/en。
-- **P4b 必须 gated**：native citations、proxy/native fallback UI、与 P2/P3 相关的 ResultView 展示。
+- **P4a 已完成**：Source Family disabled state、新 `state` 展示、provider capability hint、i18n zh/en。
+- **P4b 已完成**：native citations、proxy/native fallback UI、与 P2/P3 相关的 ResultView 展示。
 
 ### P4-1: Source Family `state` 在 ResultView 的展示 (P4a)
 
@@ -1166,7 +1167,7 @@ home.web_search_provider_exa_hint
 home.web_search_provider_xai_hint
 home.web_search_provider_searxng_hint
 
-# P4b/P3-2: Native citation (gated, 不在 P4a 执行)
+# P4b/P3-2: Native citation (已执行)
 result.native_citations_title
 result.native_citations_provider
 ```
@@ -1228,6 +1229,8 @@ cd frontend && npm run e2e:cross-browser
 - [x] CSS fallback 覆盖 `oklch` / `color-mix`
 - [x] i18n en/zh parity (新增 Source Family / provider hint keys)
 - [x] 375px / 768px 视口无溢出
+- [x] Native citations 在 ResultView/WebSourcesSection 中安全展示，长 URL 不溢出，unsafe URL 被过滤
+- [x] InputView Advanced Settings 关闭态不泄漏 Source Family controls
 - [x] 前端全量 vitest 无新增失败
 - [x] tsc 0 errors, vite build 0 violations
 
@@ -1239,10 +1242,10 @@ cd frontend && npm run e2e:cross-browser
 
 ---
 
-## P5: GATED — Release Validation
+## P5: PARTIAL — Release Validation
 
 ### 目标
-当前任务不直接执行 P5。P0/P1/P4a 合并后，重新用当时的 llmdoc/test baseline 定界 release validation。
+本次已执行 full backend/frontend/lint/type/build/i18n 与 Chromium/Firefox/mobile browser matrix。P5 尚未完成全部 release signoff：命名 E2E 脚本、WebKit/Safari 矩阵、provider fixture 扩展和 native-search tool-call 成本控制仍需下一轮。
 
 ### P5-1: 后端全量测试
 
@@ -1315,13 +1318,13 @@ cd frontend && npm run e2e:cross-browser
 
 ### P5-7: 安全边界验证
 
-- [ ] Untrusted web context 通过 `format_untrusted_text_block` 包装
-- [ ] Native search citations 通过 `_sanitize_url` 验证
-- [ ] BYOK key 不泄漏到日志 (`_OpaqueStr` 覆盖)
-- [ ] BYOK key 不泄漏到 share PNG (`ShareArtifact` 排除)
-- [ ] Web search key 不进入 preflight payload (`preflightMode` 排除)
-- [ ] Rate limit: web search provider 有 timeout 和 retry budget
-- [ ] 成本控制: native search 有 `max_tool_calls` 限制
+- [ ] Untrusted web context 通过 `format_untrusted_text_block` 包装（本轮未重跑全项目安全签收）
+- [x] Native search citations 通过 `_sanitize_url` 验证
+- [ ] BYOK key 不泄漏到日志 (`_OpaqueStr` 覆盖；本轮未重跑全项目安全签收)
+- [ ] BYOK key 不泄漏到 share PNG (`ShareArtifact` 排除；本轮未重跑全项目安全签收)
+- [ ] Web search key 不进入 preflight payload (`preflightMode` 排除；本轮未重跑全项目安全签收)
+- [ ] Rate limit: web search provider 有 timeout 和 retry budget（本轮未重跑全 provider fixture）
+- [ ] 成本控制: native search 有 explicit `max_tool_calls` 限制
 
 ### P5 并行 Agent 分工
 
@@ -1335,17 +1338,17 @@ cd frontend && npm run e2e:cross-browser
 
 ### P5 退出标准
 
-- [ ] 后端: 全量 pytest ≥ 当前验证基线 `2841 passed / 2 skipped` (允许增加)
-- [ ] 前端: 全量 vitest ≥ 当前验证基线 `184 files / 2036 passed` (允许增加)
+- [x] 后端: 全量 pytest ≥ 当前验证基线 `2926 passed / 2 skipped` (允许增加)
+- [x] 前端: 全量 vitest ≥ 当前验证基线 `184 files / 2037 passed` (允许增加)
 - [ ] E2E: web-search + new-source-ingestion-live + capability-matrix 全部通过
 - [ ] 跨浏览器: Chrome/Firefox/WebKit smoke 通过
 - [ ] 安全: 7 项安全检查全部通过
-- [ ] i18n: en/zh key parity
-- [ ] tsc 0 errors, ruff 0 errors, vite build 0 violations
+- [x] i18n: en/zh key parity (`2489/2489`)
+- [x] tsc 0 errors, ruff 0 errors, vite build 0 violations
 
 ### P5 Review Gate (Final Signoff)
 
-- [ ] Codex adversarial review: 全项目级审查
+- [x] Codex adversarial review: P2/P3/P4b/P5 变更范围全项目级审查
 - [ ] Claude cross-review: 对照 research 文档的成功判据逐项签收
 - [ ] 浏览器实测: 三浏览器 + 移动端截图签收
 
@@ -1358,7 +1361,7 @@ cd frontend && npm run e2e:cross-browser
 | **Tavily** | ✅ app-layer | N/A (独立 API) | `include_domains` | api | 300 | ✅ URL + text | P1 contract |
 | **Exa** | ✅ app-layer | N/A (独立 API) | `includeDomains` | api | 1200 | ✅ URL + text | P1 contract |
 | **SearXNG** | ✅ app-layer | N/A (自托管) | `site:` query | query | unlimited | ✅ URL + text | P1 加固 |
-| **xAI** | ✅ app-layer | Responses `web_search` | app-layer 当前 prompt-only；P1 改 official `filters.allowed_domains` + URL 后过滤 | api | 5 | ✅ annotations | P1 app-layer fix；P3 xAI native pilot gated |
+| **xAI** | ✅ app-layer + native pilot | Responses `web_search` | app-layer 和 native search 均使用 sanitized `filters.allowed_domains` | api | 5 | ✅ annotations + top-level citations | P1 app-layer fix；P3 xAI native pilot landed |
 | **OpenAI** | ❌ | Responses `web_search` | `filters.allowed/blocked_domains` | api | 100 | ✅ sources | Backlog only |
 | **Anthropic** | ❌ | Messages server tool | `allowed/blocked_domains` | api | UNKNOWN | ✅ citations | Backlog only |
 | **Gemini** | ❌ | `google_search` grounding | ❌ 无官方 | none | 0 | ✅ groundingMetadata | Backlog only |
@@ -1401,13 +1404,13 @@ cd frontend && npm run e2e:cross-browser
 | P1 契约 | `test_web_context.py` | ~30 | provider capability + xAI filter + SearXNG |
 | P1 集成 | `test_web_context_integration.py` | ~8 | Source Family 独立 |
 | P1 集成 | `test_web_search_contract.py` | ~4 | capabilities + state values |
-| P2 fallback | `test_llm_client.py` | gated | detect_provider + proxy gate |
-| P2 fallback | `test_web_context.py` | gated | error code mapping |
-| P3 adapter | `test_llm_client.py` | gated | xAI native search + fallback |
-| P3 adapter | 新文件 `test_native_search_adapters.py` | gated | adapter contract |
-| P3 citation | `test_web_context_integration.py` | gated | citation storage round-trip |
+| P2 fallback | `test_llm_client.py` | landed | detect_provider + proxy gate + malformed/non-http URL |
+| P2 fallback | `test_web_context.py` | landed | error code mapping + `ProviderSearchOutcome` state |
+| P3 adapter | `test_llm_client.py` | landed | xAI native search + default Responses URL tools injection + fallback |
+| P3 adapter | `test_native_search_adapters.py` | landed | adapter contract + domain/citation sanitization |
+| P3 citation | `test_web_context.py` / `test_web_search_contract.py` | landed | citation storage round-trip + API whitelist |
 
-**P0+P1 预计新增**: ~126 后端测试中的可执行子集约 ~70；P2/P3 测试为 gated backlog。
+**P0+P1 预计新增**: ~126 后端测试中的可执行子集约 ~70；P2/P3 测试已落地在 `test_llm_client.py`、`test_web_context.py`、`test_web_search_contract.py`、`test_native_search_adapters.py`。
 
 ### 前端测试
 
@@ -1418,9 +1421,9 @@ cd frontend && npm run e2e:cross-browser
 | P4 状态 | `SourceCategoryCard.test.tsx` | ~4 | new state values |
 | P4 状态 | `ResultView.test.tsx` | ~6 | state rendering |
 | P4 i18n | `InputView.test.tsx` | ~4 | provider hints |
-| P4b citation | 新文件 `WebSourcesSection.test.tsx` | gated | native citations |
+| P4b citation | `ResultView.test.tsx` | landed | native citations + malformed payload filtering |
 
-**P0+P1/P4a 预计新增**: ~24 前端测试；`WebSourcesSection.test.tsx` 仅在 P4b/P3 citation 获批后新增。
+**P0+P1/P4a 预计新增**: ~24 前端测试；P4b native citation 回归已落在 `ResultView.test.tsx`。
 
 ### E2E 测试
 
@@ -1436,33 +1439,33 @@ cd frontend && npm run e2e:cross-browser
 
 | 文件 | Phase | 改动类型 | 预计 LOC |
 |------|-------|---------|---------|
-| `backend/app/services/web_context.py` | P1-1/2/3/5, P2-3/4 | P0/P1 修改；P2 gated | ~300 |
+| `backend/app/services/web_context.py` | P1-1/2/3/5, P2-3/4, P3-2 | P0/P1/P2/P3 修改 | ~300 |
 | `backend/app/services/preflight.py` | P0-0 | 修改 | ~20 |
-| `backend/app/services/llm_client.py` | P0-1/2, P2-1, P3-1 | P0 tests only；P2/P3 gated | ~200 gated |
-| `backend/app/api/scenarios.py` | P1-4/6, P2-2 | P1 修改；P2 gated | ~100 |
-| `backend/app/api/helpers.py` | P1-5, P3-2 | P1 修改；P3 gated | ~40 |
-| `backend/app/services/native_search_adapters.py` | P3-1/3 | **gated 新文件** | ~300 |
-| `backend/tests/test_llm_client.py` | P0-1/2, P2-1, P3-1 | P0 修改；P2/P3 gated | ~300 |
-| `backend/tests/test_web_context.py` | P1-1/2/3/5, P2-3 | P1 修改；P2 gated | ~300 |
-| `backend/tests/test_web_context_integration.py` | P0-4/5, P1-4, P3-2 | P0/P1 修改；P3 gated | ~150 |
+| `backend/app/services/llm_client.py` | P0-1/2, P2-1, P3-1 | P0/P2/P3 修改 | ~200 |
+| `backend/app/api/scenarios.py` | P1-4/6, P2-2 | P1/P2 修改 | ~100 |
+| `backend/app/api/helpers.py` | P1-5, P3-2 | P1/P3 修改 | ~40 |
+| `backend/app/services/native_search_adapters.py` | P3-1/3 | 新文件已落地 | ~300 |
+| `backend/tests/test_llm_client.py` | P0-1/2, P2-1, P3-1 | P0/P2/P3 修改 | ~300 |
+| `backend/tests/test_web_context.py` | P1-1/2/3/5, P2-3, P3-2 | P1/P2/P3 修改 | ~300 |
+| `backend/tests/test_web_context_integration.py` | P0-4/5, P1-4, P3-2 | P0/P1 修改；P3 覆盖改落 `test_web_context.py` / `test_web_search_contract.py` | ~150 |
 | `backend/tests/test_roundtable_analyst.py` | P0-3 | 修改 | ~35 |
 | `backend/tests/test_web_search_contract.py` / `test_preflight_cli.py` | P0-0/P1-6 | 修改 | ~40 |
-| `backend/tests/test_native_search_adapters.py` | P3-1/3 | **gated 新文件** | ~150 |
+| `backend/tests/test_native_search_adapters.py` | P3-1/3 | 新文件已落地 | ~150 |
 
 ### 前端 (预计改动文件)
 
 | 文件 | Phase | 改动类型 | 预计 LOC |
 |------|-------|---------|---------|
-| `frontend/src/types.ts` | P4a-1, P3-2 | P4a 修改；P3 gated | ~20 |
+| `frontend/src/types.ts` | P4a-1, P3-2 | P4a/P3 修改 | ~20 |
 | `frontend/src/pages/InputView.tsx` | P1-7, P4-2 | 修改 | ~100 |
 | `frontend/src/pages/InputView.css` | P4-3 | 修改 | ~40 |
-| `frontend/src/pages/ResultView.tsx` | P4-1 | 修改 | ~30 |
+| `frontend/src/pages/ResultView.tsx` | P4-1, P4b validation hardening | 修改 | ~30 |
 | `frontend/src/pages/ResultView.css` | P4-3 | 修改 | ~40 |
-| `frontend/src/pages/result/WebSourcesSection.tsx` | P3-2/P4b | gated 修改 | ~30 |
+| `frontend/src/pages/result/WebSourcesSection.tsx` | P3-2/P4b | 修改已落地 | ~30 |
 | `frontend/src/pages/result/ResultModals.tsx` | P4-1 | 修改 | ~40 |
 | `frontend/src/components/result/SourceCategoryCard.tsx` | P4-1 | 修改 | ~30 |
 | `frontend/src/hooks/useWebSearchConfig.ts` | P4-2 | 修改 | ~30 |
-| `frontend/src/api/client.ts` | P0-6/P1-6/P3-2 | P0/P1 修改；P3 gated | ~30 |
+| `frontend/src/api/client.ts` | P0-6/P1-6/P3-2 | P0/P1 修改；P3 无需改动 | ~30 |
 | `frontend/src/api/client.test.ts` | P0-6 | 修改 | ~50 |
 | `frontend/src/pages/InputView.test.tsx` | P1-7, P4-2 | 修改 | ~100 |
 | `frontend/src/pages/ResultView.test.tsx` | P4-1 | 修改 | ~60 |
@@ -1505,12 +1508,13 @@ Round 1: P0 (baseline + native placeholder consistency)
 Round 2: P1 backend contract (provider capability + outcome/state + URL post-filter)
 Round 3: P1 scenario/capabilities/frontend integration
 Round 4: P4a frontend state/i18n/mobile/cross-browser smoke (only after P1)
-Round 5+: P2/P3/P4b/P5 only after separate user confirmation
+Round 5: P2/P3/P4b implementation + hardening (completed 2026-05-14)
+Round 6: P5 release-hardening remainder (named E2E scripts + WebKit/Safari + provider fixtures + native-search max_tool_calls)
 ```
 
-**关键路径**: P0 → P1-BE → P1-API → P1-FE → P4a。
-**gated backlog**: P2/P3/P4b/P5 不属于当前可直接执行范围。
+**关键路径**: P0 → P1-BE → P1-API → P1-FE → P4a → P2/P3/P4b → P5。
+**剩余 gated backlog**: P5 release-hardening remainder；OpenAI/Anthropic/Gemini/Perplexity/Qwen/GLM/Kimi native adapters 仍需单独确认。
 
 ---
 
-*计划结束。所有文件路径和行号基于 2026-05-13 代码快照。标记 NEEDS-VERIFICATION 的项需要在对应 Phase 开始前验证。*
+*计划结束。所有文件路径和行号基于 2026-05-14 代码快照。标记 NEEDS-VERIFICATION 的项需要在对应 Phase 开始前验证。*

@@ -4,6 +4,22 @@
 
 import { useResultContext } from './ResultContext';
 
+function getSafeHttpUrl(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function WebSourcesSection() {
   const {
     t,
@@ -86,22 +102,26 @@ export default function WebSourcesSection() {
               </h4>
               <div className="result-web-sources__list">
                 {scenario.web_search_context.native_citations
-                  .filter((c): c is { text: string; source_url: string } =>
-                    c != null && typeof c.source_url === 'string' && c.source_url.trim() !== '')
+                  .map((c) => {
+                    if (c == null || typeof c.text !== 'string') {
+                      return null;
+                    }
+                    const safeUrl = getSafeHttpUrl(c.source_url);
+                    return safeUrl ? { text: c.text, source_url: safeUrl } : null;
+                  })
+                  .filter((c): c is { text: string; source_url: string } => c != null)
                   .map((cit, idx) => (
                   <article key={`nc-${idx}`} className="result-web-sources__item result-web-sources__item--native">
                     <p className="result-web-sources__item-text">{cit.text}</p>
-                    {/^https?:\/\//i.test(cit.source_url) && (
-                      <a
-                        className="result-web-sources__item-url"
-                        href={cit.source_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title={t('result.web_sources_visit')}
-                      >
-                        {cit.source_url}
-                      </a>
-                    )}
+                    <a
+                      className="result-web-sources__item-url"
+                      href={cit.source_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={t('result.web_sources_visit')}
+                    >
+                      {cit.source_url}
+                    </a>
                   </article>
                 ))}
               </div>

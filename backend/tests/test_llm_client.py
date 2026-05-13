@@ -1623,6 +1623,26 @@ class TestDetectProvider:
         p = self.detect("https://api.openai.com:443/v1")
         assert p.name == "openai"
 
+    @pytest.mark.parametrize("url", [
+        "ftp://api.x.ai/v1/responses",
+        "file://api.openai.com/v1/responses",
+        "javascript://api.x.ai/v1/responses",
+    ])
+    def test_non_http_scheme_is_not_detected_as_official_provider(self, url):
+        p = self.detect(url)
+        assert p.name == "unknown"
+        assert p.is_proxy is True
+        assert p.supports_native_search is False
+
+    @pytest.mark.parametrize("url", [
+        "https://[bad",
+        "https://api.x.ai:bad/v1",
+        "api.x.ai",
+    ])
+    def test_malformed_or_hostname_only_url_does_not_crash(self, url):
+        p = self.detect(url)
+        assert p.supports_native_search is False
+
 
 # ── P3-1: llm_call native search integration ──────────
 
@@ -1676,6 +1696,39 @@ class TestLlmCallNativeSearch:
         assert captured_payload["tools"][0]["type"] == "web_search"
         filters = captured_payload["tools"][0].get("filters", {})
         assert "arxiv.org" in filters.get("allowed_domains", [])
+
+    @pytest.mark.asyncio
+    async def test_default_responses_url_injects_tools(self, monkeypatch):
+        """Server default xAI Responses URL also supports native tools injection."""
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        from app.services.llm_client import llm_call
+        await llm_call(
+            "test prompt",
+            native_search_domains=["arxiv.org"],
+        )
+
+        assert "tools" in captured_payload
+        assert captured_payload["tools"][0]["filters"]["allowed_domains"] == ["arxiv.org"]
 
     @pytest.mark.asyncio
     async def test_chat_completions_no_tools_even_with_domains(self, monkeypatch):
@@ -1813,3 +1866,23 @@ class TestLlmCallNativeSearch:
         await llm_call("test prompt", api_key="k")
         citations = get_last_native_citations()
         assert citations == []
+
+    @pytest.mark.asyncio
+    async def test_malformed_url_resets_stale_citations(self):
+        """Early URL parsing failures must not leave previous native citations visible."""
+        from app.services.llm_client import get_last_native_citations, llm_call
+        from app.services.web_context import WebSearchSnippet
+
+        llm_client._last_native_citations.set([
+            WebSearchSnippet(text="old", source_url="https://old.example"),
+        ])
+
+        with pytest.raises(ValueError):
+            await llm_call(
+                "test prompt",
+                base_url="https://[bad",
+                api_key="xai-key",
+                native_search_domains=["arxiv.org"],
+            )
+
+        assert get_last_native_citations() == []

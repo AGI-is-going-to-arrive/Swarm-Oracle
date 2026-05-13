@@ -66,6 +66,7 @@ def validate_llm_base_url(url: str | None) -> str | None:
         return None
     try:
         parsed = urlparse(url)
+        _ = parsed.port
         scheme = (parsed.scheme or "").lower()
         if scheme not in _ALLOWED_URL_SCHEMES:
             logger.warning(
@@ -201,7 +202,15 @@ def detect_provider(base_url: str | None) -> LLMProviderProfile:
     """Detect LLM provider capabilities from the base URL hostname."""
     if base_url is None:
         return _DEFAULT_PROVIDER_PROFILE
-    hostname = (urlparse(base_url).hostname or "").strip().lower()
+    try:
+        parsed = urlparse(base_url)
+        _ = parsed.port
+        scheme = (parsed.scheme or "").strip().lower()
+        if scheme and scheme not in _ALLOWED_URL_SCHEMES:
+            return _UNKNOWN_PROXY_PROFILE
+        hostname = (parsed.hostname or "").strip().lower()
+    except ValueError:
+        return _DEFAULT_PROVIDER_PROFILE
     if not hostname:
         return _DEFAULT_PROVIDER_PROFILE
     if hostname in _LOCAL_LLM_HOSTS:
@@ -1519,14 +1528,14 @@ async def _reconcile_rate_limit_usage(
             logger.warning("Failed to reconcile runtime token usage: %s", exc)
 
 
-_last_native_citations: ContextVar[list[Any]] = ContextVar(
-    "_last_native_citations", default=[],
+_last_native_citations: ContextVar[list[Any] | None] = ContextVar(
+    "_last_native_citations", default=None,
 )
 
 
 def get_last_native_citations() -> list[Any]:
     """Return citations parsed from the most recent llm_call with native search."""
-    return _last_native_citations.get()
+    return list(_last_native_citations.get() or [])
 
 
 async def llm_call(
@@ -1559,6 +1568,9 @@ async def llm_call(
         Native search citations (if any) are stored in the _last_native_citations
         ContextVar and retrievable via get_last_native_citations().
     """
+    # Reset before any URL parsing or validation so early failures cannot expose
+    # stale citations from a previous call in the same task context.
+    _last_native_citations.set([])
     request_context = _REQUEST_CONTEXT.get()
     quota_key = _normalize_quota_key(request_context.quota_key)
     purpose = request_context.purpose
@@ -1597,7 +1609,7 @@ async def llm_call(
     # ── Native search tools injection (Responses API only) ──
     _native_adapter = None
     if native_search_domains is not None and not is_chat:
-        provider_profile = detect_provider(base_url)
+        provider_profile = detect_provider(base_url or target_url)
         if (provider_profile.supports_native_search
                 and not provider_profile.is_proxy):
             from app.services.native_search_adapters import get_adapter
@@ -1605,9 +1617,6 @@ async def llm_call(
             tools = _native_adapter.build_search_tools(domains=native_search_domains)
             if tools:
                 payload["tools"] = tools
-
-    # Reset citation context
-    _last_native_citations.set([])
 
     logger.debug("LLM request → %s [%s] (effort=%s, %d chars, byok=%s, native_search=%s)",
                  payload["model"],
@@ -1680,6 +1689,10 @@ async def llm_call(
             raise LLMError(f"LLM call failed after {max_retries + 1} attempts") from last_exc
 
         data = resp.json()
+        if _native_adapter is not None:
+            body_error = _native_adapter.detect_body_error(data)
+            if body_error:
+                raise LLMError(f"Native search response error: {body_error}")
         await _reconcile_rate_limit_usage(
             provider_key=provider_key,
             reservation_id=reservation_id,

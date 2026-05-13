@@ -448,6 +448,30 @@ class TestScenarioResponseWebSearchContext:
         assert family_context["polymarket"]["items"] == []
         assert family_context["finance"]["items"] == []
 
+    def test_parse_web_context_json_filters_native_citation_urls(self):
+        raw = json.dumps({
+            "query": "AI trends 2026",
+            "snippets": [],
+            "provider": "xai",
+            "timestamp": "2026-04-07T00:00:00Z",
+            "cached": False,
+            "native_citations": [
+                {"text": "safe", "source_url": "https://example.com/source"},
+                {"text": "js", "source_url": "javascript:alert(1)"},
+                {"text": "data", "source_url": "data:text/html,<h1>x</h1>"},
+                {"text": "ftp", "source_url": "ftp://example.com/file"},
+                {"text": "bad", "source_url": "https:///missing-host"},
+                {"text": {"not": "string"}, "source_url": "https://example.com/object"},
+            ],
+        })
+
+        result = _parse_web_context_json(raw)
+
+        assert result is not None
+        assert result["native_citations"] == [
+            {"text": "safe", "source_url": "https://example.com/source"},
+        ]
+
     def test_parse_web_context_json_invalid_json(self):
         assert _parse_web_context_json("not json") is None
 

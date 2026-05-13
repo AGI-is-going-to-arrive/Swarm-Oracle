@@ -1,8 +1,8 @@
 # Web Search Augmented Simulation — Design Document (Final)
 
-> Status: **Implemented — P0/P1 contract hardening 与 P4a Source Family UI 已完成；native LLM search V2 未启动**
-> Date: 2026-05-13 (P0/P1/P4a re-baselined)
-> Scope: Batch 2 + P0/P1/P4a 已交付 — Tavily/Exa/SearXNG/xAI app-layer providers, TTL cache, prompt injection 三层注入, InputView toggle, ResultView 来源卡片, GET /api/capabilities, `provider_capability`, `web_search_families`, `web_search_context.family_context`
+> Status: **Implemented — P0/P1/P2/P3(xAI pilot)/P4a/P4b 已完成；P5 release hardening 仍有剩余项**
+> Date: 2026-05-14 (P2/P3/P4b re-baselined)
+> Scope: Batch 2 + P0/P1/P2/P3/P4a/P4b 已交付 — Tavily/Exa/SearXNG/xAI app-layer providers, TTL cache, prompt injection 三层注入, InputView toggle, ResultView 来源卡片, GET /api/capabilities, `provider_capability`, `web_search_families`, `web_search_context.family_context`, xAI native search pilot, `native_citations`
 
 ---
 
@@ -30,7 +30,7 @@
 | **Perplexity** (pplx-api) | 内建实时搜索，返回内联引用 | Yes |
 | **Google Gemini** (with grounding) | `google_search_retrieval` tool | Yes |
 | **OpenAI** (web browsing) | `web_search` tool (仅特定 model) | Yes |
-| ~~**xAI Grok native search**~~ | ~~Native live-web grounding~~ | **V2** — 当前只实现 app-layer xAI search，不接 LLM native search |
+| **xAI Grok native search** | Responses `web_search` tool，返回 citations / annotations | Yes — 当前只做 xAI pilot；unknown proxy 不启用 native tools |
 
 ### 1.2 External Search API Providers (Model-Agnostic)
 
@@ -60,7 +60,8 @@ capability 不支持 → Source Family checkbox 保持可见但 disabled，不�
 ```
 backend/app/services/
   web_context.py          # NEW — 搜索编排 + 结果格式化
-  llm_client.py           # 不改动（安全区）
+  llm_client.py           # LLM 调用 + provider detection + native tools 注入
+  native_search_adapters.py # provider-specific tools/citation parsing
   narrator.py             # 读取 [REAL_WORLD_CONTEXT]
   simulator.py            # 读取 [REAL_WORLD_CONTEXT]
 ```
@@ -149,6 +150,7 @@ export interface WebSearchContext {
   provider: string;
   timestamp: string;
   cached: boolean;
+  native_citations?: Array<{ text: string; source_url: string }>;
   family_context?: {
     polymarket?: {
       state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready' | 'failed' | 'search_skipped' | 'unsupported_provider' | 'fallback_unconstrained';
@@ -349,6 +351,7 @@ VITE_ENABLE_WEB_SEARCH=false
 - 历史 payload 里的 `fallback_unconstrained / search_skipped` 也有专门文案
 - 后端 `status_reason` 会优先作为卡片说明；desktop grid 和 mobile sheet 使用不同 `aria-describedby` id
 - `polymarket.configured_host=non-us` 时显示 geo-gated placeholder
+- `native_citations` 非空时，`WebSourcesSection` 会在普通 snippets 后显示 native citation 区块；前端只渲染字符串 text + http(s) URL，后端也会在 API 白名单解析时过滤 unsafe URL
 
 ---
 
@@ -431,8 +434,10 @@ VITE_ENABLE_WEB_SEARCH=false
 
 5. **Multi-provider + 能力探测**（V2）
    - Exa / SearXNG provider
-   - Native search (Perplexity/Gemini/OpenAI)
+   - xAI native search pilot 已完成；OpenAI adapter 仍是 skeleton/backlog
    - 探测 API
+
+当前 P5 剩余项：命名 E2E (`e2e:web-search` / `e2e:new-source-ingestion-live` / `e2e:capability-matrix`) 还需要重新全跑；native citation 尚未计入 WebKit/Safari 签收；native-search explicit `max_tool_calls` 成本控制还没落地。
 
 ---
 

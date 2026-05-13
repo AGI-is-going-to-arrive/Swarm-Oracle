@@ -24,6 +24,15 @@ class TestXAIResponsesAdapter:
         tools = self.adapter.build_search_tools(domains=["a.com", "b.com"])
         assert tools == [{"type": "web_search", "filters": {"allowed_domains": ["a.com", "b.com"]}}]
 
+    def test_build_tools_sanitizes_domains(self):
+        tools = self.adapter.build_search_tools(
+            domains=["A.com", "bad domain", "a.com", "bücher.example"],
+        )
+        assert tools == [{
+            "type": "web_search",
+            "filters": {"allowed_domains": ["a.com", "xn--bcher-kva.example"]},
+        }]
+
     def test_build_tools_caps_at_max_domains(self):
         domains = [f"d{i}.com" for i in range(10)]
         tools = self.adapter.build_search_tools(domains=domains)
@@ -50,6 +59,33 @@ class TestXAIResponsesAdapter:
         assert len(citations) == 2
         assert citations[0].source_url == "https://example.com/1"
         assert citations[0].text == "Source 1"
+
+    def test_parse_citations_with_top_level_citations(self):
+        body = {
+            "citations": [
+                "https://example.com/1",
+                {"url": "https://example.com/2", "title": "Source 2"},
+            ],
+        }
+        citations = self.adapter.parse_citations(body)
+        assert [c.source_url for c in citations] == [
+            "https://example.com/1",
+            "https://example.com/2",
+        ]
+        assert citations[1].text == "Source 2"
+
+    def test_parse_citations_filters_unsafe_urls(self):
+        body = {
+            "citations": [
+                "javascript:alert(1)",
+                {"url": "ftp://example.com/file", "title": "FTP"},
+                {"url": "https:///missing-host", "title": "Bad"},
+                {"url": "https://safe.example/source", "title": "Safe"},
+            ],
+        }
+        citations = self.adapter.parse_citations(body)
+        assert len(citations) == 1
+        assert citations[0].source_url == "https://safe.example/source"
 
     def test_parse_citations_deduplicates_urls(self):
         body = {

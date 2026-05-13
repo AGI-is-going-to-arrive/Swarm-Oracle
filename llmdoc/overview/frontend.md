@@ -32,7 +32,7 @@
 | IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live、Podium Cards、room state、phase 历史卡、counterplay、live argument map |
@@ -274,6 +274,8 @@
   - 搜索总开关关闭，或 provider capability 从支持变成不支持时，已勾选的 source family 会被清空；重新打开不会恢复旧选择
   - disabled 的 source family 当前会保留可见项，并显示跟随当前 UI 语言的 tooltip，不再回落成英文硬编码
   - 输入搜索 API key / base URL 时不再反复重打 capability 探针
+  - Advanced Settings 关闭时会裁掉内部内容，不会把 Source Family controls 漏到关闭态页面里
+- ResultView 的来源展示当前会把普通 web snippets、Source Family cards 和 LLM native citations 分开显示；native citations 只接受字符串 text 和 http(s) URL，`javascript:`、非数组和 malformed replay payload 都不会渲染成链接。
 - InputView 的主问题输入有稳定 accessible name，并带 IME composition guard；中文输入法组词期间按 Enter 不会误触发启动。
 - continuity 确认框是 modal dialog：打开后会聚焦第一个控件，Tab 留在弹层内，Escape 或取消会关闭并恢复焦点。
 - `useCapabilityCheck` 当前会复用同一份 `/api/capabilities` 结果：
@@ -553,11 +555,12 @@
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
 - 当前 frontend 稳定验证口径：
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npx vitest run`：`184 files / 2036 tests passed`
+  - `npx vitest run`：`184 files / 2037 tests passed`
   - `npm run lint`：通过
   - `npm run build`：通过
   - Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop `1440px` 与 mobile `375px` 六组合矩阵
-- frontend i18n key + placeholder parity：通过；当前 en/zh 都是 `2488` 个 key。
+  - native citation 浏览器复核覆盖 Chromium desktop、Firefox desktop、Chromium mobile 375 和 forced-colors/reduced-motion；WebKit/Safari 未计入这次 native citation 签收
+- frontend i18n key + placeholder parity：通过；当前 en/zh 都是 `2489` 个 key。
 - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 - Classic 分支标题本轮已补定向验证：

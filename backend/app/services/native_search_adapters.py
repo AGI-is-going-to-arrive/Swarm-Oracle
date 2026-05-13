@@ -14,7 +14,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.services.web_context import WebSearchSnippet
+from app.services.web_context import (
+    WebSearchSnippet,
+    _sanitize_domain_filters,
+    _sanitize_url,
+)
 
 
 class NativeSearchAdapter(Protocol):
@@ -29,6 +33,66 @@ class NativeSearchAdapter(Protocol):
     def detect_body_error(self, response_body: dict) -> str | None: ...
 
 
+def _append_citation(
+    citations: list[WebSearchSnippet],
+    seen_urls: set[str],
+    *,
+    raw_url: object,
+    raw_title: object = "",
+) -> None:
+    url = _sanitize_url(raw_url if isinstance(raw_url, str) else "")
+    title = raw_title if isinstance(raw_title, str) else ""
+    if url and url not in seen_urls:
+        seen_urls.add(url)
+        citations.append(WebSearchSnippet(
+            text=(title or url)[:500],
+            source_url=url,
+        ))
+
+
+def _parse_response_citations(response_body: dict) -> list[WebSearchSnippet]:
+    citations: list[WebSearchSnippet] = []
+    seen_urls: set[str] = set()
+    raw_citations = response_body.get("citations", [])
+    if not isinstance(raw_citations, list):
+        return []
+    for item in raw_citations:
+        if isinstance(item, str):
+            _append_citation(citations, seen_urls, raw_url=item)
+        elif isinstance(item, dict):
+            _append_citation(
+                citations,
+                seen_urls,
+                raw_url=item.get("url", ""),
+                raw_title=item.get("title", ""),
+            )
+    return citations
+
+
+def _parse_annotation_citations(response_body: dict) -> list[WebSearchSnippet]:
+    citations: list[WebSearchSnippet] = []
+    seen_urls: set[str] = set()
+    for output_item in response_body.get("output", []):
+        if not isinstance(output_item, dict):
+            continue
+        if output_item.get("type") != "message":
+            continue
+        for part in output_item.get("content", []):
+            if not isinstance(part, dict):
+                continue
+            annotations = part.get("annotations", [])
+            if not isinstance(annotations, list):
+                continue
+            for ann in annotations:
+                _append_citation(
+                    citations,
+                    seen_urls,
+                    raw_url=ann.get("url", "") if isinstance(ann, dict) else "",
+                    raw_title=ann.get("title", "") if isinstance(ann, dict) else "",
+                )
+    return citations
+
+
 @dataclass(frozen=True)
 class XAIResponsesAdapter:
     """xAI Responses API native web search adapter.
@@ -41,28 +105,16 @@ class XAIResponsesAdapter:
 
     def build_search_tools(self, *, domains: list[str] | None = None) -> list[dict]:
         tool: dict = {"type": "web_search"}
-        if domains:
-            capped = domains[:self.max_domains]
-            tool["filters"] = {"allowed_domains": capped}
+        allowed_domains = _sanitize_domain_filters(domains, max_domains=self.max_domains)
+        if allowed_domains:
+            tool["filters"] = {"allowed_domains": allowed_domains}
         return [tool]
 
     def parse_citations(self, response_body: dict) -> list[WebSearchSnippet]:
-        citations: list[WebSearchSnippet] = []
-        seen_urls: set[str] = set()
-        for output_item in response_body.get("output", []):
-            if output_item.get("type") != "message":
-                continue
-            for part in output_item.get("content", []):
-                for ann in part.get("annotations", []):
-                    url = ann.get("url", "")
-                    title = ann.get("title", "")
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        citations.append(WebSearchSnippet(
-                            text=title or url,
-                            source_url=url,
-                        ))
-        return citations
+        citations = _parse_response_citations(response_body)
+        if citations:
+            return citations
+        return _parse_annotation_citations(response_body)
 
     def detect_body_error(self, response_body: dict) -> str | None:
         return None
@@ -79,28 +131,16 @@ class OpenAIResponsesAdapter:
 
     def build_search_tools(self, *, domains: list[str] | None = None) -> list[dict]:
         tool: dict = {"type": "web_search"}
-        if domains:
-            capped = domains[:self.max_domains]
-            tool["filters"] = {"allowed_domains": capped}
+        allowed_domains = _sanitize_domain_filters(domains, max_domains=self.max_domains)
+        if allowed_domains:
+            tool["filters"] = {"allowed_domains": allowed_domains}
         return [tool]
 
     def parse_citations(self, response_body: dict) -> list[WebSearchSnippet]:
-        citations: list[WebSearchSnippet] = []
-        seen_urls: set[str] = set()
-        for output_item in response_body.get("output", []):
-            if output_item.get("type") != "message":
-                continue
-            for part in output_item.get("content", []):
-                for ann in part.get("annotations", []):
-                    url = ann.get("url", "")
-                    title = ann.get("title", "")
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        citations.append(WebSearchSnippet(
-                            text=title or url,
-                            source_url=url,
-                        ))
-        return citations
+        citations = _parse_response_citations(response_body)
+        if citations:
+            return citations
+        return _parse_annotation_citations(response_body)
 
     def detect_body_error(self, response_body: dict) -> str | None:
         return None

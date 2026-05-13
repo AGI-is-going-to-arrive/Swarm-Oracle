@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 68+ 文件 / 2908 tests |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 184 文件 / 2036 tests |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 68+ 文件 / 2926 tests |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 184 文件 / 2037 tests |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -137,9 +137,9 @@ cd backend && alembic upgrade head
 - `detect_provider(base_url)` hostname 检测 15 个已知 LLM provider + proxy/local 分类（`LLMProviderProfile`）
 - `ProviderSearchOutcome` 结构化搜索结果：`state/domain_filter_mode/domain_coverage/status_reason`，HTTP error code 自动映射
 - Native search adapter 框架：`native_search_adapters.py` 含 xAI/OpenAI Responses adapter + null adapter，Protocol 接口 `build_search_tools/parse_citations/detect_body_error`
-- `llm_call()` 新增 `native_search_domains` 参数，Responses API 端点自动注入 `tools`，citation 通过 ContextVar 暴露
-- `native_citations` 字段已加入 `WebSearchResult` + `_parse_web_context_json` 白名单 + 前端 `WebSearchContext` 类型
-- `WebSourcesSection` 展示 native citations（indigo 左边框 + oklch fallback + forced-colors）
+- `llm_call()` 新增 `native_search_domains` 参数，Responses API 端点按 provider capability 自动注入 `tools`，citation 通过 ContextVar 暴露；malformed / non-http base URL 不启用 native tools
+- `native_citations` 字段已加入 `WebSearchResult` + `_parse_web_context_json` 白名单 + 前端 `WebSearchContext` 类型；后端和前端都会过滤非 http(s) citation URL
+- `WebSourcesSection` 展示 native citations（indigo 左边框 + oklch fallback + forced-colors），并跳过 malformed replay / foreign payload
 
 ### 辩论竞技场
 - Persona：`generate_persona_with_llm()` + `build_cast_async()` 3 方并行，失败回退模板，持久化 `breakdown_json.metadata.personas`
@@ -184,7 +184,8 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
-| 05-13 | Web Search P2-P5 release：P2 native/proxy 状态模型（`detect_provider` 15 hosts + `ProviderSearchOutcome` 结构化返回 + error code mapping）；P3 xAI native search pilot（adapter 框架 + `llm_call` tools 注入 + citation ContextVar）；P4b native citation UI（`WebSourcesSection` + oklch fallback + forced-colors）；P5 release signoff。BE 2908 / FE 2036 passed |
+| 05-14 | Web Search P2-P5 hardening：`detect_provider` malformed/non-http URL 收口，native citations 后端/前端双层 sanitize，`ProviderSearchOutcome` 429/4xx/5xx 映射修正，default Responses URL tools 注入修正，ResultView timer cleanup，InputView advanced accordion 溢出修复。BE 2926 / FE 2037 passed；P5 仍缺命名 E2E、WebKit/Safari 和 native-search tool-call budget |
+| 05-13 | Web Search P2-P4b release：P2 native/proxy 状态模型（`detect_provider` 15 hosts + `ProviderSearchOutcome` 结构化返回 + error code mapping）；P3 xAI native search pilot（adapter 框架 + `llm_call` tools 注入 + citation ContextVar）；P4b native citation UI（`WebSourcesSection` + oklch fallback + forced-colors）。BE 2908 / FE 2036 passed |
 | 05-13 | Web Search / Source Family hardening：provider capability registry + base/family 独立 try-block + xAI `filters.allowed_domains` + IDN/punycode 归一化 + P4a Source Family UI 状态收口。BE 2841 / FE 2036 passed |
 | 05-07 | 辩论去模板化：LLM persona 3 方并行 + prompt 口语化 + turn pass-2 retry；Oracle rewrite 上下文透传；worker synthesis 单元覆盖。BE 2386 / FE 1769 passed |
 | 05-07 | 辩论 turn 卡片排版（OKLCH + line-clamp-2）+ IME 三重防护 + 推演确认弹窗 |

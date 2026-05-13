@@ -776,11 +776,6 @@ async def create_scenario(
     from app.services.web_context import WebSearchResult as _WSR
     web_result: _WSR | None = None
 
-    # Detect LLM provider profile — used by downstream native search gating
-    # and recorded in scenario metadata for replay/debug.
-    from app.services.llm_client import detect_provider as _detect_provider
-    _provider_profile = _detect_provider(req.llm_base_url)
-
     if req.web_search_enabled:
         # --- Base search (independent) ---
         try:

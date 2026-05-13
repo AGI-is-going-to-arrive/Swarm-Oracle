@@ -3684,6 +3684,55 @@ describe('ResultView campaign summary', () => {
       expect(allLinks.some(el => el.getAttribute('href') === 'https://safe.example.com')).toBe(true);
     });
 
+    it('renders only safe native citations from malformed payloads', async () => {
+      vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+        id: 'scenario-1',
+        question: 'Native citation safety test',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        messages: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+        web_search_context: {
+          query: 'test',
+          snippets: [],
+          provider: 'xai',
+          timestamp: '2026-04-07T00:00:00Z',
+          cached: false,
+          native_citations: [
+            { text: 'Safe native source', source_url: 'https://safe.example.com/native' },
+            { text: 'JS native source', source_url: 'javascript:alert(1)' },
+            { text: { unsafe: true }, source_url: 'https://safe.example.com/object' },
+          ],
+        },
+      } as unknown as Scenario);
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      await userEvent.click(await screen.findByRole('button', { name: 'result.web_sources_title' }));
+
+      expect(await screen.findByText('result.native_citations_title')).toBeInTheDocument();
+      expect(screen.getByText('Safe native source')).toBeInTheDocument();
+      expect(screen.queryByText('JS native source')).not.toBeInTheDocument();
+      const nativeLinks = screen.getAllByRole('link').filter(
+        el => el.getAttribute('href')?.includes('safe.example.com'),
+      );
+      expect(nativeLinks).toHaveLength(1);
+      expect(nativeLinks[0]).toHaveAttribute('href', 'https://safe.example.com/native');
+      expect(nativeLinks[0]).toHaveAttribute('rel', 'noopener noreferrer');
+    });
+
     it('does not render web sources when web_search_context is null', async () => {
       render(
         <MemoryRouter initialEntries={['/result/scenario-1']}>
