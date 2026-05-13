@@ -2,8 +2,8 @@
 
 > **版本**: v1.1-audited | **创建日期**: 2026-05-13 | **审计更新**: 2026-05-13
 > **输入文档**: `.claude/team-plan/llm-websearch-passthrough-research.md` (R3) + `.claude/team-plan/source-family-availability-research.md` (R3)
-> **当前验证基线**: backend `2835 passed / 2 skipped` | frontend `184 files / 2004 tests passed` | tsc/lint/build 0 errors | ruff 0 errors
-> **执行范围**: **P0 + P1 已完成 (2026-05-13)**。P2/P3/P4b/P5 涉及 public API、持久化 JSON、native LLM tools、provider adapters、浏览器矩阵和 release signoff，仍需单独确认后再执行。
+> **当前验证基线**: backend `2841 passed / 2 skipped` | frontend `184 files / 2036 tests passed` | tsc/lint/build 0 errors | ruff 0 errors | browser P4a matrix passed
+> **执行范围**: **P0 + P1 + P4a 已完成 (2026-05-13)**。P2/P3/P4b/P5 涉及 public API、持久化 JSON、native LLM tools、provider adapters 和 release signoff，仍需单独确认后再执行。
 
 ---
 
@@ -13,9 +13,9 @@
 
 - ✅ DONE — P0 baseline hardening 已完成，`WEB_SEARCH_PROVIDER=native` 保持 legacy placeholder，preflight 不再把它报成可用 provider。
 - ✅ DONE — P1 app-layer / Source Family contract hardening 已完成：provider capability registry、xAI `filters.allowed_domains`、SearXNG 域名归一化、URL 后过滤、base/family 独立 try-block、family 扩展状态 parser、InputView domain-filter gate 均已落地。
-- 已验证：backend full `2835 passed / 2 skipped`、backend Web Search 定向 `249 passed`、URL scheme 过滤窄集 `28 passed`、`ruff check .` 通过；frontend full vitest `184 files / 2004 passed`、InputView/API 定向 `76 passed`、tsc/lint/build 通过；Playwright 覆盖桌面 1440、移动 375 和 Chromium/Firefox/WebKit headless smoke。
-- 本轮文档同步由用户在 2026-05-13 明确要求执行；`llmdoc`、`CLAUDE.md`、`README.md`、`implement/` 和本 team-plan 已按当前代码与测试事实更新。
-- 仍保留给 P4a：ResultView / SourceCategoryCard 对 `failed / unsupported_provider / fallback_unconstrained / search_skipped` 等扩展状态的专门文案，active-provider capability selection，以及 disabled reason 的 `aria-describedby`。
+- ✅ DONE — P4a Source Family UI hardening 已完成：ResultView / SourceCategoryCard 覆盖 `failed / unsupported_provider / fallback_unconstrained / search_skipped`，active-provider capability selection、custom override no-provider warning、provider hint、disabled reason `aria-describedby` 与 desktop/mobile 唯一 ID 均已落地。
+- 已验证：backend full `2841 passed / 2 skipped`、backend provider capability parity 定向 `6 passed`、`ruff check .` 通过；frontend full vitest `184 files / 2036 passed`、P4a 定向 `157 passed`、tsc/lint/build 通过；Playwright 覆盖 Chromium/Firefox/WebKit 的 desktop 1440 与 mobile 375 六组合矩阵。
+- P4a 后续文档同步已按用户要求补齐：`llmdoc`、`CLAUDE.md`、`README.md`、`implement/` 和本 team-plan 口径一致。
 - 仍 gated：P2 native LLM search contract，P3 provider adapters/auto discovery，P4b native citation UI，P5 release validation。
 
 ### 执行前审计结论（历史）
@@ -52,7 +52,7 @@
 | `backend/app/api/scenarios.py:735-768` | `fetch_web_context` 与 `fetch_family_context` 在同一 `try`，且 family 依赖 base result 非空。 | P1 改成 base/family 独立、异常隔离。 |
 | `backend/app/config.py:67,172-180` | `ENABLE_WEB_SEARCH` 在 `67`；validator 仍允许 `native`。 | 纠正旧 `config.py:66`，P0 处理 native placeholder。 |
 | `frontend/src/api/client.ts:310,329-333` | `preflightMode` 和 web search request body 条件发送真实存在。 | P0 前端 wire-format 测试落点。 |
-| `frontend/src/types.ts:13-30` + `SourceCategoryCard.tsx:13-18` | 当前 state union 只有旧 5 状态。 | P1/P4a 扩展 state，不新增平行 status。 |
+| `frontend/src/types.ts:13-55` + `SourceCategoryCard.tsx:13-35` | state union 已覆盖旧 5 状态 + `failed/unsupported_provider/fallback_unconstrained/search_skipped`，family metadata 已接住 `status_reason/domain_filter_mode/domain_coverage`。 | P4a 已扩展同一 state 模型，不新增平行 status。 |
 
 ---
 
@@ -175,13 +175,13 @@ class ProviderSearchOutcome:
 |-------|----------|------|----------|------|
 | **P0** | ✅ **DONE 2026-05-13** | 基线锁定 + `native` placeholder 一致性修复 | 已落地 | 无 |
 | **P1** | ✅ **DONE 2026-05-13** | app-layer search / Source Family contract 加固 | 已落地 | P0 |
-| **P4a** | **READY TO PLAN** | Source Family UI 状态、disabled UX、i18n | 需重新估算 | P1 capability contract |
+| **P4a** | ✅ **DONE 2026-05-13** | Source Family UI 状态、disabled UX、i18n | 已落地 | P1 capability contract |
 | **P2** | **GATED** | native/proxy 状态模型与持久化 contract 设计 | 需单独确认 | P1 |
 | **P3** | **GATED** | xAI native search pilot；其他 provider 只保留研究 backlog | 需单独确认 | P2 |
 | **P4b** | **GATED** | native citation / proxy fallback UI | 需单独确认 | P2/P3 |
-| **P5** | **GATED** | release validation 与跨浏览器签收 | P4a 或 native path 定界后再执行 | P4a；native 分支还依赖 P2/P3/P4b |
+| **P5** | **NEXT / GATED** | release validation 与跨浏览器签收 | 需单独确认 | P4a；native 分支还依赖 P2/P3/P4b |
 
-**当前 handoff**: P0 + P1 不再交给 `ccg:team-exec` 重做；后续建议先执行 P4a。P2/P3/P4b/P5 必须等待用户再次确认。
+**当前 handoff**: P0 + P1 + P4a 不再交给 `ccg:team-exec` 重做；下一步建议进入 P5 release validation/signoff。P2/P3/P4b/P5 必须等待用户再次确认。
 
 ---
 
@@ -335,8 +335,8 @@ cd frontend && npm test --
 
 - [x] 全部 P0 新测试通过
 - [x] `WEB_SEARCH_PROVIDER=native` 不再 preflight pass
-- [x] 后端全量 `pytest` 无新增失败：`2835 passed / 2 skipped`
-- [x] 前端全量 `vitest` 无新增失败：`184 files / 2004 passed`
+- [x] 后端全量 `pytest` 无新增失败：`2841 passed / 2 skipped`
+- [x] 前端全量 `vitest` 无新增失败：`184 files / 2036 passed`
 - [x] `ruff check .` 0 errors
 - [x] `npx tsc --noEmit -p tsconfig.app.json` 0 errors
 
@@ -1063,14 +1063,16 @@ P4 分成两段：
    ```typescript
    export type SourceCategoryState =
      | 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready'
+     | 'failed'
      | 'unsupported_provider'
      | 'fallback_unconstrained' | 'search_skipped';
    ```
 2. `SourceCategoryCard` switch 新增对应的 UI 分支:
+   - `failed` → error card "搜索失败"
    - `unsupported_provider` → info card "当前搜索服务不支持此分类"
    - `fallback_unconstrained` → warning card "搜索范围已扩大（未限定域名）"
    - `search_skipped` → muted card "搜索已跳过"
-3. `resolveSourceCategoryState` 处理新状态值
+3. `resolveSourceCategoryState` 处理新状态值，backend `status_reason` 优先作为 UI reason，desktop/mobile source cards 使用不同 test id / `aria-describedby` id，避免同一页面重复 ID。
 
 **i18n keys 新增**:
 ```json
@@ -1078,14 +1080,15 @@ P4 分成两段：
   "source.polymarket.unsupported_provider": "当前搜索服务不支持预测市场分类搜索",
   "source.polymarket.fallback_unconstrained": "搜索范围已扩大，未限定预测市场域名",
   "source.polymarket.search_skipped": "预测市场搜索已跳过",
-  // ... 同理 finance/academic/news_deep 各 3 keys = 12 keys
+  "source.polymarket.failed": "预测市场搜索失败",
+  // ... 同理 finance/academic/news_deep 各 4 keys = 16 keys
   "source.general.unsupported_provider": "Provider does not support domain-filtered search",
   "source.general.fallback_warning": "Results may include sources outside the target domain"
 }
 ```
 
 **风险**: 低。UI 扩展，向后兼容。
-**退出标准**: 每个新状态有对应的 UI + i18n + 测试。
+**退出标准**: 每个新状态有对应的 UI + i18n + 测试；`status_reason` 不被丢弃；desktop/mobile 不产生重复 `aria-describedby` id。
 
 ### P4-2: InputView 搜索增强区域 UX 优化 (P4a)
 
@@ -1105,9 +1108,11 @@ P4 分成两段：
    - Exa: "支持域名过滤，最多 1200 个域名"
    - xAI: "支持域名过滤，最多 5 个域名"
    - SearXNG: "自托管搜索，通过 site: 语法过滤"
+5. Custom override 空 base URL 不再继承 server-selected provider capability；输入无法识别 provider 的 URL 时降级为 `unknown`，保持 no-provider warning。
+6. SearXNG base URL 推断使用 hostname token 匹配，避免 `attacker-searxngfake.com` / `notsearx.example.com` 这类子串碰撞。
 
 **风险**: 低。纯 UI 信息展示。
-**退出标准**: 各 provider 提示正确展示；i18n 覆盖。
+**退出标准**: 各 provider 提示正确展示；empty/custom override warning 正确显示；provider 推断无新增子串碰撞；i18n 覆盖。
 
 ### P4-3: 跨浏览器兼容性审计 (P4a)
 
@@ -1148,6 +1153,7 @@ P4 分成两段：
 
 ```
 # P4-1: Source Family 新状态
+source.{family}.failed                   ×4
 source.{family}.unsupported_provider     ×4
 source.{family}.fallback_unconstrained   ×4
 source.{family}.search_skipped           ×4
@@ -1216,20 +1222,20 @@ cd frontend && npm run e2e:cross-browser
 
 ### P4 退出标准
 
-- [ ] 新 Source Family `state` 状态在 ResultView 正确渲染
-- [ ] InputView proxy info / no-config warning 正确显示
-- [ ] Provider capability hint 正确展示
-- [ ] CSS fallback 覆盖 `oklch` / `color-mix`
-- [ ] i18n en/zh parity (新增 ~25 keys)
-- [ ] 375px / 768px 视口无溢出
-- [ ] 前端全量 vitest 无新增失败
-- [ ] tsc 0 errors, vite build 0 violations
+- [x] 新 Source Family `state` 状态在 ResultView 正确渲染
+- [x] InputView proxy info / no-config warning 正确显示
+- [x] Provider capability hint 正确展示
+- [x] CSS fallback 覆盖 `oklch` / `color-mix`
+- [x] i18n en/zh parity (新增 Source Family / provider hint keys)
+- [x] 375px / 768px 视口无溢出
+- [x] 前端全量 vitest 无新增失败
+- [x] tsc 0 errors, vite build 0 violations
 
 ### P4 Review Gate
 
-- [ ] Codex review: i18n key 命名一致性
-- [ ] Claude cross-review: 跨浏览器 CSS fallback 完整性
-- [ ] 浏览器实测: Chrome/Safari/Firefox 三浏览器 desktop + mobile 截图
+- [x] Codex review: i18n key 命名一致性
+- [x] Claude cross-review: 跨浏览器 CSS fallback 完整性
+- [x] 浏览器实测: Chromium/WebKit/Firefox desktop + mobile matrix
 
 ---
 
@@ -1329,8 +1335,8 @@ cd frontend && npm run e2e:cross-browser
 
 ### P5 退出标准
 
-- [ ] 后端: 全量 pytest ≥ 当前验证基线 `2835 passed / 2 skipped` (允许增加)
-- [ ] 前端: 全量 vitest ≥ 当前验证基线 `184 files / 2004 passed` (允许增加)
+- [ ] 后端: 全量 pytest ≥ 当前验证基线 `2841 passed / 2 skipped` (允许增加)
+- [ ] 前端: 全量 vitest ≥ 当前验证基线 `184 files / 2036 passed` (允许增加)
 - [ ] E2E: web-search + new-source-ingestion-live + capability-matrix 全部通过
 - [ ] 跨浏览器: Chrome/Firefox/WebKit smoke 通过
 - [ ] 安全: 7 项安全检查全部通过

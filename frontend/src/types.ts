@@ -10,9 +10,25 @@ export type WebSearchFamilyState =
   | 'rate_limited'
   | 'network_error'
   | 'ready'
+  | 'failed'
   | 'unsupported_provider'
   | 'fallback_unconstrained'
   | 'search_skipped';
+
+export type WebSearchFamilyDomainFilterMode = 'api' | 'query' | 'none';
+export type WebSearchFamilyDomainCoverage = 'full' | 'partial';
+
+interface WebSearchFamilyMetadata {
+  state?: WebSearchFamilyState;
+  disabled_reason?: string;
+  status_reason?: string;
+  domain_filter_mode?: WebSearchFamilyDomainFilterMode;
+  domain_coverage?: WebSearchFamilyDomainCoverage;
+}
+
+type WebSearchFamilyEntry<TItem> = WebSearchFamilyMetadata & {
+  items: TItem[];
+};
 
 export interface WebSearchContext {
   query: string;
@@ -21,53 +37,38 @@ export interface WebSearchContext {
   timestamp: string;
   cached: boolean;
   family_context?: {
-    polymarket?: {
-      state?: WebSearchFamilyState;
+    polymarket?: WebSearchFamilyEntry<{
+      id: string;
+      question: string;
+      probability?: number;
+      url?: string;
+    }> & {
       configured_host?: string;
       geo_gated?: boolean;
-      disabled_reason?: string;
-      items: Array<{
-        id: string;
-        question: string;
-        probability?: number;
-        url?: string;
-      }>;
     };
-    finance?: {
-      state?: WebSearchFamilyState;
-      disabled_reason?: string;
-      items: Array<{
-        id: string;
-        title: string;
-        summary?: string;
-        source?: string;
-        url?: string;
-      }>;
-    };
-    academic?: {
-      state?: WebSearchFamilyState;
-      disabled_reason?: string;
-      items: Array<{
-        id: string;
-        title: string;
-        authors?: string[];
-        citationCount?: number;
-        abstract?: string;
-        url?: string;
-      }>;
-    };
-    news_deep?: {
-      state?: WebSearchFamilyState;
-      disabled_reason?: string;
-      items: Array<{
-        id: string;
-        title: string;
-        source?: string;
-        publishedAt?: string;
-        description?: string;
-        url?: string;
-      }>;
-    };
+    finance?: WebSearchFamilyEntry<{
+      id: string;
+      title: string;
+      summary?: string;
+      source?: string;
+      url?: string;
+    }>;
+    academic?: WebSearchFamilyEntry<{
+      id: string;
+      title: string;
+      authors?: string[];
+      citationCount?: number;
+      abstract?: string;
+      url?: string;
+    }>;
+    news_deep?: WebSearchFamilyEntry<{
+      id: string;
+      title: string;
+      source?: string;
+      publishedAt?: string;
+      description?: string;
+      url?: string;
+    }>;
   } | null;
 }
 

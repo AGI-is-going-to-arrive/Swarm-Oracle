@@ -11,6 +11,8 @@ import type { WebSearchProviderEntry } from '../../api/client';
 export interface PolymarketCardProps {
   capability?: WebSearchProviderEntry | undefined;
   state?: SourceCategoryState;
+  reason?: string;
+  testIdOverride?: string;
   items?: Array<{
     id: string;
     question: string;
@@ -22,6 +24,8 @@ export interface PolymarketCardProps {
 export function PolymarketCard({
   capability,
   state = 'empty',
+  reason,
+  testIdOverride,
   items = [],
 }: PolymarketCardProps) {
   const { t } = useTranslation();
@@ -45,6 +49,8 @@ export function PolymarketCard({
       title={title}
       subtitle={subtitle}
       state={resolvedState}
+      reason={reason}
+      testIdOverride={testIdOverride}
     >
       {resolvedState === 'ready' && items.length > 0 && (
         <ul className="space-y-2">

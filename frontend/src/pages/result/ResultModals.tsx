@@ -7,7 +7,7 @@ import type { OracleReplayPayload } from '../../lib/oracleReplay';
 import type { ShareFlavorContext } from '../../lib/shareEnvelope';
 import type { EndingRoomCandidate } from '../../lib/endingRoomCandidates';
 import type { WebSearchProviderEntry } from '../../api/client';
-import type { StoryData } from '../../types';
+import type { StoryData, WebSearchContext, WebSearchFamily } from '../../types';
 import ShareModal from '../../components/ShareModal';
 import SnapshotExportWizard from '../../components/Export/SnapshotExportWizard';
 import EndingChatModal from '../../components/EndingChatModal';
@@ -21,6 +21,10 @@ import { FinanceSourceCard } from '../../components/result/FinanceSourceCard';
 import { type SourceCategoryState } from '../../components/result/SourceCategoryCard';
 import { getEndingRoomCandidateAvatar } from '../resultHelpers';
 import { useResultContext } from './ResultContext';
+
+type SourceFamilyContext = NonNullable<WebSearchContext['family_context']>;
+type SourceFamilyEntry = NonNullable<SourceFamilyContext[WebSearchFamily]>;
+type SourceCardTarget = 'desktop' | 'mobile';
 
 interface PendingEndingRoomPicker {
   branchId: string;
@@ -53,12 +57,7 @@ interface ResultModalsProps {
   handleEndingRoomModeChange: (next: 'ending_chamber' | 'one_move_only') => void;
   handleCloseEndingRoom: () => void;
   // Source family contexts
-  sourceFamilyContext: {
-    polymarket?: { state?: SourceCategoryState; items?: unknown[]; configured_host?: string; geo_gated?: boolean } | null;
-    finance?: { state?: SourceCategoryState; items?: unknown[] } | null;
-    academic?: { state?: SourceCategoryState; items?: unknown[] } | null;
-    news_deep?: { state?: SourceCategoryState; items?: unknown[] } | null;
-  };
+  sourceFamilyContext: SourceFamilyContext;
   polymarketCapability: WebSearchProviderEntry | undefined;
   mobileSourceSheetOpen: boolean;
   setMobileSourceSheetOpen: (next: boolean) => void;
@@ -153,17 +152,26 @@ export default function ResultModals(props: ResultModalsProps) {
   const historicalTooltip = t('result.source_historical_tooltip', {
     defaultValue: 'This data was recorded when the scenario was created',
   });
-  const renderHistoricalBadge = (family: string) => (
+  const getSourceCardTestId = (target: SourceCardTarget, family: WebSearchFamily) =>
+    target === 'desktop' ? `result-sources-${family}` : `result-sources-mobile-${family}`;
+  const getSourceReason = (entry: SourceFamilyEntry | null | undefined) =>
+    entry?.status_reason ?? entry?.disabled_reason;
+  const renderHistoricalBadge = (target: SourceCardTarget, family: WebSearchFamily) => (
     <span
       className="result-source-card__historical-badge"
-      data-testid={`result-sources-${family}-historical-badge`}
+      data-testid={`${getSourceCardTestId(target, family)}-historical-badge`}
       title={historicalTooltip}
       aria-label={`${historicalLabel}: ${historicalTooltip}`}
     >
       {historicalLabel}
     </span>
   );
-  const wrapHistorical = (family: string, isHistorical: boolean, node: ReactNode) =>
+  const wrapHistorical = (
+    target: SourceCardTarget,
+    family: WebSearchFamily,
+    isHistorical: boolean,
+    node: ReactNode,
+  ) =>
     isHistorical ? (
       <div
         key={family}
@@ -171,7 +179,7 @@ export default function ResultModals(props: ResultModalsProps) {
         data-historical="true"
         data-source-family={family}
       >
-        {renderHistoricalBadge(family)}
+        {renderHistoricalBadge(target, family)}
         {node}
       </div>
     ) : (
@@ -185,38 +193,50 @@ export default function ResultModals(props: ResultModalsProps) {
     );
 
   const showSourceCards = showPolymarket || showFinance || showAcademic || showNewsDeep;
-  const sourceCards = showSourceCards ? (
+  const renderSourceCards = (target: SourceCardTarget) => showSourceCards ? (
     <>
       {showPolymarket && wrapHistorical(
+        target,
         'polymarket',
         polymarketHistorical,
         <PolymarketCard
           capability={polymarketCapability}
           state={resolveSourceCategoryState(polymarketContext)}
+          reason={getSourceReason(polymarketContext)}
+          testIdOverride={getSourceCardTestId(target, 'polymarket')}
           items={(polymarketContext?.items ?? []) as Parameters<typeof PolymarketCard>[0]['items']}
         />,
       )}
       {showFinance && wrapHistorical(
+        target,
         'finance',
         financeHistorical,
         <FinanceSourceCard
           state={resolveSourceCategoryState(financeContext)}
+          reason={getSourceReason(financeContext)}
+          testIdOverride={getSourceCardTestId(target, 'finance')}
           items={(financeContext?.items ?? []) as Parameters<typeof FinanceSourceCard>[0]['items']}
         />,
       )}
       {showAcademic && wrapHistorical(
+        target,
         'academic',
         academicHistorical,
         <SemanticScholarCard
           state={resolveSourceCategoryState(academicContext)}
+          reason={getSourceReason(academicContext)}
+          testIdOverride={getSourceCardTestId(target, 'academic')}
           items={(academicContext?.items ?? []) as Parameters<typeof SemanticScholarCard>[0]['items']}
         />,
       )}
       {showNewsDeep && wrapHistorical(
+        target,
         'news_deep',
         newsDeepHistorical,
         <NewsApiCard
           state={resolveSourceCategoryState(newsDeepContext)}
+          reason={getSourceReason(newsDeepContext)}
+          testIdOverride={getSourceCardTestId(target, 'news_deep')}
           items={(newsDeepContext?.items ?? []) as Parameters<typeof NewsApiCard>[0]['items']}
         />,
       )}
@@ -437,14 +457,14 @@ export default function ResultModals(props: ResultModalsProps) {
               className="result-sources__grid"
               data-testid="result-source-grid-desktop"
             >
-              {sourceCards}
+              {renderSourceCards('desktop')}
             </div>
           </section>
           <MobileSourceSheet
             open={mobileSourceSheetOpen}
             onOpenChange={setMobileSourceSheetOpen}
           >
-            {sourceCards}
+            {renderSourceCards('mobile')}
           </MobileSourceSheet>
         </>
       )}

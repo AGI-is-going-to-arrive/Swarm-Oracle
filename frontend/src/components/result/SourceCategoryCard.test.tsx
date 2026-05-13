@@ -55,6 +55,24 @@ describe('SourceCategoryCard', () => {
   });
 
   describe('P4-1 provider-aware states', () => {
+    it('renders failed state with error card + sr reason', () => {
+      renderCard({
+        family: 'finance',
+        title: 'Finance',
+        state: 'failed',
+        reason: 'Provider request timed out.',
+      });
+      const card = screen.getByTestId('result-sources-finance');
+      expect(card.getAttribute('data-state')).toBe('failed');
+      expect(card.className).toContain('result-source-card__failed');
+      expect(screen.getByTestId('result-source-failed')).toBeInTheDocument();
+      const reasonEl = screen.getByTestId('result-sources-finance-reason');
+      expect(reasonEl.textContent).toBe('Provider request timed out.');
+      expect(card.getAttribute('aria-describedby')).toBe(
+        'result-sources-finance-reason',
+      );
+    });
+
     it('renders unsupported_provider state with info card + sr reason', () => {
       renderCard({
         family: 'polymarket',
@@ -129,6 +147,17 @@ describe('SourceCategoryCard', () => {
         title: 'Deep News',
         state: 'unsupported_provider',
       });
+      expect(screen.getByTestId('result-sources-news_deep-reason')).toBeInTheDocument();
+
+      rerender(
+        <I18nextProvider i18n={i18n}>
+          <SourceCategoryCard
+            family="news_deep"
+            title="Deep News"
+            state="failed"
+          />
+        </I18nextProvider>,
+      );
       expect(screen.getByTestId('result-sources-news_deep-reason')).toBeInTheDocument();
 
       rerender(

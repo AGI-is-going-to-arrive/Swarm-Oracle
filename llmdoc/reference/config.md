@@ -211,6 +211,7 @@
 - 首页搜索增强当前有两档：
   - `沿用服务器默认`：只发送 `web_search_enabled=true`
   - `自定义覆盖`：额外发送 `web_search_provider / web_search_api_key / web_search_base_url`
+- 自定义覆盖下，前端只会从可识别的 `web_search_base_url` 推断 capability；空 base URL 或未知 host 会显示 no-provider warning，不会借用下拉 provider 的 capability。
 - 首页 4 个 source family toggle 只有在 `web_search_enabled=true` 且当前 provider capability 支持 domain filter 时，才会透传成 `web_search_families`；关闭搜索或 capability 不支持时会清空选择。
 - request-scoped override 当前约束：
   - `web_search_enabled=false` 时，override 字段会被忽略
@@ -223,7 +224,7 @@
   - `failed`：该 family 搜索异常
   - `unsupported_provider`：当前 provider 不支持 domain filter
   - `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` 时，`polymarket` 会显式带上 geo-gated 口径
-  - 历史 payload 解析还保留 `loading / rate_limited / network_error / search_skipped / fallback_unconstrained` 白名单，但当前 P0/P1 后端路径不会主动生成全部状态
+  - 历史 payload 解析还保留 `loading / rate_limited / network_error / search_skipped / fallback_unconstrained` 白名单；前端会为这些扩展状态显示专门文案，后端 `status_reason` 会作为说明进入卡片
 - 详细设计见 `implement/web_search_augmentation_design.md`。
 
 ## Phase 3 功能开关

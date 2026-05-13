@@ -8,10 +8,17 @@ type FinanceSourceItem = NonNullable<
 
 interface FinanceSourceCardProps {
   state: SourceCategoryState;
+  reason?: string;
+  testIdOverride?: string;
   items: FinanceSourceItem[];
 }
 
-export function FinanceSourceCard({ state, items }: FinanceSourceCardProps) {
+export function FinanceSourceCard({
+  state,
+  reason,
+  testIdOverride = 'result-sources-finance',
+  items,
+}: FinanceSourceCardProps) {
   const { t } = useTranslation();
 
   return (
@@ -20,7 +27,8 @@ export function FinanceSourceCard({ state, items }: FinanceSourceCardProps) {
       title={t('source.finance.title', { defaultValue: 'Finance' })}
       subtitle={t('source.finance.subtitle', { defaultValue: 'Market & macro indicators' })}
       state={state}
-      testIdOverride="result-sources-finance"
+      reason={reason}
+      testIdOverride={testIdOverride}
     >
       {state === 'ready' && (
         <ul className="space-y-2">

@@ -624,6 +624,39 @@ async def test_capabilities_web_search_providers_exact_shape_when_enabled():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["tavily", "exa", "searxng", "xai", "native", "unknown"])
+async def test_capabilities_web_search_provider_capability_matches_registry(provider):
+    """P4a: provider_capability mirrors the backend Web Search registry."""
+    from app.api.scenarios import api_capabilities
+    from app.config import settings
+    from app.services.web_context import PROVIDER_CAPABILITIES
+
+    original = settings.WEB_SEARCH_PROVIDER
+    settings.WEB_SEARCH_PROVIDER = provider
+    try:
+        result = await api_capabilities()
+    finally:
+        settings.WEB_SEARCH_PROVIDER = original
+
+    actual = result["web_search"]["provider_capability"]
+    cap = PROVIDER_CAPABILITIES.get(provider)
+    expected = (
+        {
+            "supports_domain_filter": cap.supports_domain_filter,
+            "supports_sources": cap.supports_sources,
+            "domain_filter_mode": cap.domain_filter_mode,
+        }
+        if cap is not None
+        else {
+            "supports_domain_filter": False,
+            "supports_sources": False,
+            "domain_filter_mode": "none",
+        }
+    )
+    assert actual == expected
+
+
+@pytest.mark.asyncio
 async def test_capabilities_feature_off_clears_providers():
     """QA-1: ``FEATURE_NEW_SOURCES=False`` → ``providers == {}`` (never missing)."""
     from app.api.scenarios import api_capabilities

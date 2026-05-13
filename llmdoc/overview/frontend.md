@@ -268,6 +268,8 @@
   - `provider_capability.supports_domain_filter=false` 时，4 个 source family toggle 会保持可见但不可选，并显示当前语言的说明
   - `沿用服务器默认` 模式只发送 `webSearchEnabled=true`
   - `自定义覆盖` 模式才发送 `webSearchProvider / webSearchApiKey / webSearchBaseUrl`
+  - 自定义覆盖的 provider capability 只从可识别的 base URL 推断；空 base URL 或未知 host 会显示 no-provider warning，不会借用当前下拉 provider 的 capability
+  - SearXNG base URL 推断只看 hostname label token（`searx` / `searxng`），不会用任意子串匹配
   - 4 个 source family toggle 只有在搜索总开关开启、且当前 provider 支持 domain filter 时，才会把勾选结果透传成 `webSearchFamilies -> web_search_families`
   - 搜索总开关关闭，或 provider capability 从支持变成不支持时，已勾选的 source family 会被清空；重新打开不会恢复旧选择
   - disabled 的 source family 当前会保留可见项，并显示跟随当前 UI 语言的 tooltip，不再回落成英文硬编码
@@ -281,7 +283,8 @@
 - ResultView 当前除了折叠的 `真实世界来源` 入口，也会按 `web_search_context.family_context` 渲染四张 source family card：
   - 被选中的 family 才会变成 `ready`
   - 未选中的 family 会保持 `empty`
-  - 后端可能返回 `failed / unsupported_provider / fallback_unconstrained / search_skipped` 等扩展状态；当前前端卡片还没有为这些状态做专门文案，P4a 需要补齐
+  - `failed / unsupported_provider / fallback_unconstrained / search_skipped` 都有专门文案；后端 `status_reason` 优先作为卡片说明，缺失时才回到本地化默认文案
+  - desktop grid 和 mobile sheet 分别使用自己的 source card test id / `aria-describedby` id，不复用同一组 DOM id
   - replay / historical payload 里已经带来源数据时，即使当前 capability 关闭，也会用 recorded badge 标出这是历史来源
   - `polymarket.configured_host=non-us` 时会显示 geo-gated placeholder
 - `SimulationView` 的 automation payload 当前已补：
@@ -550,11 +553,11 @@
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
 - 当前 frontend 稳定验证口径：
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npx vitest run`：`184 files / 2004 tests passed`
+  - `npx vitest run`：`184 files / 2036 tests passed`
   - `npm run lint`：通过
   - `npm run build`：通过
-  - Source Family Playwright 复核覆盖 `1440px` 与 `375px`，并通过 Chromium / Firefox / WebKit headless smoke
-- frontend i18n key + placeholder parity：通过。
+  - Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop `1440px` 与 mobile `375px` 六组合矩阵
+- frontend i18n key + placeholder parity：通过；当前 en/zh 都是 `2488` 个 key。
 - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 - Classic 分支标题本轮已补定向验证：

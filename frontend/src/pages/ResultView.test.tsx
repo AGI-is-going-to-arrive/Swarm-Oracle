@@ -3467,6 +3467,67 @@ describe('ResultView campaign summary', () => {
       expect(within(grid).getByTestId('result-sources-news_deep')).toHaveAttribute('data-state', 'ready');
     });
 
+    it('passes backend family status_reason into source card reason text', async () => {
+      setMockCapabilities({
+        agent_conversation: { enabled: false },
+        agent_identity: { enabled: false },
+        causal_graph: { enabled: false },
+        counterfactual_replay: { enabled: false },
+        factions: { enabled: false },
+        web_search: {
+          providers: {
+            finance: { enabled: true, degraded: false },
+          },
+        },
+      });
+      vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+        id: 'scenario-1',
+        question: 'What if finance search is unavailable?',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        messages: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+        web_search_context: {
+          query: 'finance unavailable',
+          snippets: [],
+          provider: 'native',
+          timestamp: '2026-04-07T00:00:00Z',
+          cached: false,
+          family_context: {
+            finance: {
+              state: 'unsupported_provider',
+              status_reason: 'Provider native does not support domain filtering.',
+              domain_filter_mode: 'none',
+              domain_coverage: 'partial',
+              items: [],
+            },
+          },
+        },
+      } as Scenario);
+
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      const grid = await screen.findByTestId('result-source-grid-desktop');
+      const finance = within(grid).getByTestId('result-sources-finance');
+      expect(finance).toHaveAttribute('data-state', 'unsupported_provider');
+      expect(within(grid).getByTestId('result-sources-finance-reason')).toHaveTextContent(
+        'Provider native does not support domain filtering.',
+      );
+      expect(finance).toHaveAttribute('aria-describedby', 'result-sources-finance-reason');
+    });
+
     it('keeps unselected families empty when family_context only marks a subset ready', async () => {
       setMockCapabilities({
         agent_conversation: { enabled: false },
@@ -3708,7 +3769,10 @@ describe('ResultView campaign summary', () => {
 
       const sourceSheet = await screen.findByTestId('mobile-source-sheet');
       expect(sourceSheet).toBeInTheDocument();
-      expect(within(sourceSheet).getByTestId('result-sources-finance')).toHaveAttribute('data-source-family', 'finance');
+      expect(within(sourceSheet).getByTestId('result-sources-mobile-finance')).toHaveAttribute('data-source-family', 'finance');
+      const sourceIds = Array.from(document.querySelectorAll<HTMLElement>('[id^="result-sources-"]'))
+        .map((el) => el.id);
+      expect(new Set(sourceIds).size).toBe(sourceIds.length);
     });
 
     it('renders geo-gated polymarket placeholder from family_context host override', async () => {
@@ -4637,6 +4701,11 @@ describe('resolveSourceCategoryState (P4-1)', () => {
     ).toBe('search_skipped');
   });
 
+  it('passes through failed state', async () => {
+    const { resolveSourceCategoryState } = await import('./resultHelpers');
+    expect(resolveSourceCategoryState({ state: 'failed', items: [] })).toBe('failed');
+  });
+
   it('downgrades ready to empty when items are missing/empty', async () => {
     const { resolveSourceCategoryState } = await import('./resultHelpers');
     expect(resolveSourceCategoryState({ state: 'ready', items: [] })).toBe('empty');
@@ -4663,9 +4732,10 @@ describe('ResultView P4-1 i18n key coverage', () => {
     'unsupported_provider',
     'fallback_unconstrained',
     'search_skipped',
+    'failed',
   ] as const;
 
-  it.each(families)('en/zh has all 3 new state copies for %s family', (family) => {
+  it.each(families)('en/zh has all provider-aware state copies for %s family', (family) => {
     const enSource = en.translation.source as unknown as Record<string, Record<string, string>>;
     const zhSource = zh.translation.source as unknown as Record<string, Record<string, string>>;
     const enFamily = enSource[family];

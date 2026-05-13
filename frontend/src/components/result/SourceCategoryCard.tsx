@@ -6,6 +6,7 @@
    empty, rate-limited, network-error, and content states.
 
    P4-1: extended with provider-aware states:
+   - failed: provider search failed without blocking result rendering
    - unsupported_provider: current provider can't fulfill the family
    - fallback_unconstrained: returned results but without domain scope
    - search_skipped: search intentionally skipped
@@ -21,6 +22,7 @@ export type SourceCategoryState =
   | 'rate_limited'
   | 'network_error'
   | 'ready'
+  | 'failed'
   | 'unsupported_provider'
   | 'fallback_unconstrained'
   | 'search_skipped';
@@ -48,6 +50,7 @@ const REASON_STATES: ReadonlySet<SourceCategoryState> = new Set<SourceCategorySt
   'unsupported_provider',
   'fallback_unconstrained',
   'search_skipped',
+  'failed',
 ]);
 
 export function SourceCategoryCard({
@@ -109,6 +112,22 @@ export function SourceCategoryCard({
           {t(`source.${family}.network_error`, {
             defaultValue: 'Network error while fetching sources.',
           })}
+        </p>
+      );
+      break;
+    case 'failed':
+      stateTestId = 'result-source-failed';
+      stateClass = 'result-source-card__failed';
+      stateBody = (
+        <p className="result-source-card__notice">
+          <span className="result-source-card__notice-icon" aria-hidden="true">
+            ⚠️
+          </span>
+          <span>
+            {t(`source.${family}.failed`, {
+              defaultValue: 'Source search failed for this category.',
+            })}
+          </span>
         </p>
       );
       break;
@@ -197,7 +216,9 @@ export function SourceCategoryCard({
           {reason
             ?? t(`source.${family}.${state}`, {
               defaultValue:
-                state === 'unsupported_provider'
+                state === 'failed'
+                  ? 'Source search failed for this category.'
+                  : state === 'unsupported_provider'
                   ? 'Current search provider does not support this category.'
                   : state === 'fallback_unconstrained'
                   ? 'Search scope expanded — domain filtering unavailable.'

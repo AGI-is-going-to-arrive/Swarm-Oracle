@@ -2347,6 +2347,7 @@
         "open": "打开市场",
         "geo_gated_title": "Polymarket 受地域限制",
         "geo_gated_subtitle": "需要 US 节点 — 当前地区无法获取实时价格。",
+        "failed": "本轮 Polymarket 检索失败。",
         "unsupported_provider": "当前搜索服务不支持 Polymarket 市场。",
         "fallback_unconstrained": "Polymarket 范围已放宽 —— 此 provider 不支持按域名过滤。",
         "search_skipped": "本轮跳过 Polymarket 检索。"
@@ -2355,6 +2356,7 @@
         "title": "金融",
         "subtitle": "市场与宏观指标",
         "empty": "没有匹配此问题的金融信号。",
+        "failed": "本轮金融来源检索失败。",
         "unsupported_provider": "当前搜索服务不支持金融信号。",
         "fallback_unconstrained": "金融范围已放宽 —— 此 provider 不支持按域名过滤。",
         "search_skipped": "本轮跳过金融检索。"
@@ -2364,6 +2366,7 @@
         "subtitle": "同行评审研究",
         "empty": "没有匹配此问题的学术论文。",
         "citations": "{{count}} 次引用",
+        "failed": "本轮学术来源检索失败。",
         "unsupported_provider": "当前搜索服务不支持学术来源。",
         "fallback_unconstrained": "学术范围已放宽 —— 此 provider 不支持按域名过滤。",
         "search_skipped": "本轮跳过学术检索。"
@@ -2372,6 +2375,7 @@
         "title": "深度新闻",
         "subtitle": "长尾新闻信号",
         "empty": "没有匹配此问题的深度新闻信号。",
+        "failed": "本轮深度新闻检索失败。",
         "unsupported_provider": "当前搜索服务不支持深度新闻来源。",
         "fallback_unconstrained": "深度新闻范围已放宽 —— 此 provider 不支持按域名过滤。",
         "search_skipped": "本轮跳过深度新闻检索。"

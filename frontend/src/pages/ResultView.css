@@ -2990,6 +2990,16 @@
   color: #9a3412;
 }
 
+.result-source-card__failed {
+  border-color: #fca5a5;
+  background-color: #fef2f2;
+  background-color: rgba(254, 202, 202, 0.44);
+}
+
+.result-source-card__failed .result-source-card__notice {
+  color: #991b1b;
+}
+
 .result-source-card__skipped {
   border-color: #d1d5db;
   background-color: #f9fafb;
@@ -3004,6 +3014,7 @@
 @media (forced-colors: active) {
   .result-source-card__unsupported,
   .result-source-card__fallback,
+  .result-source-card__failed,
   .result-source-card__skipped {
     border: 1px solid CanvasText;
     background-color: Canvas;
@@ -3011,6 +3022,7 @@
 
   .result-source-card__unsupported .result-source-card__notice,
   .result-source-card__fallback .result-source-card__notice,
+  .result-source-card__failed .result-source-card__notice,
   .result-source-card__skipped .result-source-card__notice {
     color: CanvasText;
   }

@@ -16,10 +16,17 @@ export interface NewsApiItem {
 
 export interface NewsApiCardProps {
   state?: SourceCategoryState;
+  reason?: string;
+  testIdOverride?: string;
   items?: NewsApiItem[];
 }
 
-export function NewsApiCard({ state = 'empty', items = [] }: NewsApiCardProps) {
+export function NewsApiCard({
+  state = 'empty',
+  reason,
+  testIdOverride,
+  items = [],
+}: NewsApiCardProps) {
   const { t } = useTranslation();
   const title = t('source.news_deep.title', { defaultValue: 'News (Deep)' });
   const subtitle = t('source.news_deep.subtitle', {
@@ -35,6 +42,8 @@ export function NewsApiCard({ state = 'empty', items = [] }: NewsApiCardProps) {
       title={title}
       subtitle={subtitle}
       state={resolvedState}
+      reason={reason}
+      testIdOverride={testIdOverride}
     >
       {resolvedState === 'ready' && items.length > 0 && (
         <ul className="space-y-2">

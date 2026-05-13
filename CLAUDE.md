@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 67+ 文件 / 2835 tests |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 184 文件 / 2004 tests |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 67+ 文件 / 2841 tests |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 184 文件 / 2036 tests |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -130,9 +130,10 @@ cd backend && alembic upgrade head
 
 ### Web 搜索增强
 - InputView toggle 默认可见，推演前自动搜索注入 Agent 提示词（CORE/IMPORTANT/CROWD 三层）
-- Source family 受 `FEATURE_NEW_SOURCES` + `provider_capability.supports_domain_filter` 双重门控
+- Source family 受 `FEATURE_NEW_SOURCES` + 当前有效 provider capability 双重门控；server default 读 `/api/capabilities`，custom override 只按可识别 base URL 推断，未知时显示 no-provider warning
 - Tavily/Exa API 域名过滤，SearXNG `site:` 查询，xAI Responses `filters.allowed_domains`；均做 URL 后过滤
 - `provider_capability` 描述服务端默认 provider，非 custom override 实时探测
+- ResultView source family card 已覆盖 `failed / unsupported_provider / fallback_unconstrained / search_skipped`，后端 `status_reason` 会作为说明文案进入卡片
 
 ### 辩论竞技场
 - Persona：`generate_persona_with_llm()` + `build_cast_async()` 3 方并行，失败回退模板，持久化 `breakdown_json.metadata.personas`
@@ -177,7 +178,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
-| 05-13 | Web Search contract hardening：provider capability registry + base/family 独立 try-block + xAI `filters.allowed_domains` + IDN/punycode 归一化。BE 2835 / FE 2004 passed |
+| 05-13 | Web Search / Source Family hardening：provider capability registry + base/family 独立 try-block + xAI `filters.allowed_domains` + IDN/punycode 归一化 + P4a Source Family UI 状态收口。BE 2841 / FE 2036 passed |
 | 05-07 | 辩论去模板化：LLM persona 3 方并行 + prompt 口语化 + turn pass-2 retry；Oracle rewrite 上下文透传；worker synthesis 单元覆盖。BE 2386 / FE 1769 passed |
 | 05-07 | 辩论 turn 卡片排版（OKLCH + line-clamp-2）+ IME 三重防护 + 推演确认弹窗 |
 | 05-06 | 首页 UX 重构（模式选择器默认展示）+ source family domain filter + web 搜索全栈审计（cache stampede 去重 + useWebSearchConfig hook） |

@@ -76,7 +76,7 @@
 - 这些字段的当前口径：
   - 只有 `web_search_enabled=true` 时才会真正参与搜索
   - `web_search_families` 当前只接受 `polymarket / finance / academic / news_deep`；空白会 trim，重复值会去重
-  - 首页当前只会在 web search 已开启、且当前服务端 provider 支持 domain filter 时发送已选 family；否则会清空 family 选择并发送空数组或不发送
+  - 首页当前只会在 web search 已开启、且当前有效 provider capability 支持 domain filter 时发送已选 family；server default 读服务端 capability，custom override 只在 base URL 可识别时推断 capability
   - `web_search_enabled=false` 时，override 字段会被忽略
   - 官方 provider 的 `web_search_base_url` 只接受 `https` endpoint
   - `searxng` 的 `web_search_base_url` 只接受和服务端 `SEARXNG_URL` 完全一致的基址

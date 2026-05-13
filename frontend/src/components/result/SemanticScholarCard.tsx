@@ -16,6 +16,7 @@ export interface SemanticScholarItem {
 
 export interface SemanticScholarCardProps {
   state?: SourceCategoryState;
+  reason?: string;
   items?: SemanticScholarItem[];
   testIdOverride?: string;
   title?: string;
@@ -24,6 +25,7 @@ export interface SemanticScholarCardProps {
 
 export function SemanticScholarCard({
   state = 'empty',
+  reason,
   items = [],
   testIdOverride,
   title,
@@ -47,6 +49,7 @@ export function SemanticScholarCard({
       title={resolvedTitle}
       subtitle={resolvedSubtitle}
       state={resolvedState}
+      reason={reason}
       testIdOverride={testIdOverride}
     >
       {resolvedState === 'ready' && items.length > 0 && (

@@ -67,8 +67,15 @@ const PROVIDER_CAPABILITY_TABLE: Record<WebSearchProviderOption, WebSearchProvid
   tavily: { supports_domain_filter: true, supports_sources: true, domain_filter_mode: 'api' },
   exa: { supports_domain_filter: true, supports_sources: true, domain_filter_mode: 'api' },
   xai: { supports_domain_filter: true, supports_sources: true, domain_filter_mode: 'api' },
-  searxng: { supports_domain_filter: true, supports_sources: false, domain_filter_mode: 'query' },
+  searxng: { supports_domain_filter: true, supports_sources: true, domain_filter_mode: 'query' },
 };
+
+function hasSearxHostToken(host: string): boolean {
+  return host
+    .split('.')
+    .flatMap((label) => label.split('-'))
+    .some((token) => token === 'searxng' || token === 'searx');
+}
 
 /**
  * Infer the provider option from a custom override base URL. Returns null when
@@ -86,7 +93,7 @@ export function inferProviderFromBaseUrl(baseUrl: string): WebSearchProviderOpti
   if (host === 'api.tavily.com' || host.endsWith('.tavily.com')) return 'tavily';
   if (host === 'api.exa.ai' || host.endsWith('.exa.ai')) return 'exa';
   if (host === 'api.x.ai' || host.endsWith('.x.ai')) return 'xai';
-  if (host.includes('searxng') || host.includes('searx.')) return 'searxng';
+  if (hasSearxHostToken(host)) return 'searxng';
   return null;
 }
 
@@ -175,8 +182,7 @@ export function useWebSearchConfig(): UseWebSearchConfigResult {
   );
 
   // Resolve the effective capability for the current configuration:
-  //  - custom_override + a usable base_url: infer from base_url host; fall back
-  //    to the selected provider when the base_url is empty.
+  //  - custom_override + a usable base_url: infer from base_url host.
   //  - custom_override without inference signal: treat as 'unknown' so the UI
   //    does not claim domain filter support for an arbitrary endpoint.
   //  - server_default: use the server-provided capability (or 'unknown' when
@@ -189,15 +195,6 @@ export function useWebSearchConfig(): UseWebSearchConfigResult {
           ...PROVIDER_CAPABILITY_TABLE[inferred],
           source: 'inferred',
           resolvedProvider: inferred,
-        };
-      }
-      // Empty base URL: fall back to the explicitly selected provider so the
-      // user still gets a usable hint while they decide whether to override.
-      if (!webSearchBaseUrl.trim()) {
-        return {
-          ...PROVIDER_CAPABILITY_TABLE[webSearchProvider],
-          source: 'inferred',
-          resolvedProvider: webSearchProvider,
         };
       }
       return {
@@ -241,8 +238,6 @@ export function useWebSearchConfig(): UseWebSearchConfigResult {
   }, [
     webSearchMode,
     inferredCustomProvider,
-    webSearchBaseUrl,
-    webSearchProvider,
     serverProviderCapability,
     webSearchServerProvider,
   ]);

@@ -2347,6 +2347,7 @@
         "open": "Open market",
         "geo_gated_title": "Polymarket is geo-gated",
         "geo_gated_subtitle": "US host required — your region cannot access live prices.",
+        "failed": "Polymarket search failed for this run.",
         "unsupported_provider": "The current search provider does not support Polymarket markets.",
         "fallback_unconstrained": "Polymarket scope expanded — domain filtering unavailable for this provider.",
         "search_skipped": "Polymarket lookup skipped for this run."
@@ -2355,6 +2356,7 @@
         "title": "Finance",
         "subtitle": "Market & macro indicators",
         "empty": "No finance signals matched this question.",
+        "failed": "Finance source search failed for this run.",
         "unsupported_provider": "The current search provider does not support finance signals.",
         "fallback_unconstrained": "Finance scope expanded — domain filtering unavailable for this provider.",
         "search_skipped": "Finance lookup skipped for this run."
@@ -2364,6 +2366,7 @@
         "subtitle": "Peer-reviewed research",
         "empty": "No academic papers matched this question.",
         "citations": "{{count}} citations",
+        "failed": "Academic source search failed for this run.",
         "unsupported_provider": "The current search provider does not support academic sources.",
         "fallback_unconstrained": "Academic scope expanded — domain filtering unavailable for this provider.",
         "search_skipped": "Academic lookup skipped for this run."
@@ -2372,6 +2375,7 @@
         "title": "Deep News",
         "subtitle": "Long-tail news signals",
         "empty": "No deep-news signals matched this question.",
+        "failed": "Deep-news source search failed for this run.",
         "unsupported_provider": "The current search provider does not support deep-news sources.",
         "fallback_unconstrained": "Deep-news scope expanded — domain filtering unavailable for this provider.",
         "search_skipped": "Deep-news lookup skipped for this run."

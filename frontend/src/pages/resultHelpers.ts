@@ -21,6 +21,7 @@ const KNOWN_SOURCE_CATEGORY_STATES: ReadonlySet<SourceCategoryState> = new Set<S
   'rate_limited',
   'network_error',
   'ready',
+  'failed',
   'unsupported_provider',
   'fallback_unconstrained',
   'search_skipped',

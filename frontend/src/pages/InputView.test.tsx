@@ -2416,6 +2416,27 @@ describe('InputView P4-2 provider capability hints', () => {
     expect(warning.getAttribute('aria-live')).toBe('polite');
   });
 
+  it('shows no-provider warning for custom override until a recognisable base URL is set', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+    await selectCustomOverride(user);
+
+    const warning = await screen.findByTestId('iv-no-provider-warning');
+    expect(warning).toBeInTheDocument();
+
+    const baseUrlInput = screen.getByLabelText('home.web_search_base_url_label') as HTMLInputElement;
+    await user.type(baseUrlInput, 'https://api.tavily.com');
+    await waitFor(() => {
+      expect(screen.queryByTestId('iv-no-provider-warning')).not.toBeInTheDocument();
+    });
+  });
+
   it('hides no-provider warning when server default provider is available', async () => {
     const user = userEvent.setup();
     getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());
@@ -2465,6 +2486,8 @@ describe('inferProviderFromBaseUrl (P4-2 unit)', () => {
     expect(inferProviderFromBaseUrl('https://mexamples.com')).toBeNull();
     expect(inferProviderFromBaseUrl('https://attacker-tavilyfake.com')).toBeNull();
     expect(inferProviderFromBaseUrl('https://my-app-xai.io')).toBeNull();
+    expect(inferProviderFromBaseUrl('https://attacker-searxngfake.com')).toBeNull();
+    expect(inferProviderFromBaseUrl('https://notsearx.example.com')).toBeNull();
   });
 
   it('returns null for invalid URLs instead of guessing', async () => {

@@ -1,8 +1,8 @@
 # Web Search Augmented Simulation — Design Document (Final)
 
-> Status: **Implemented — P0/P1 contract hardening 已完成；native LLM search V2 未启动；ResultView 扩展状态文案留给 P4a**
-> Date: 2026-05-13 (P0/P1 re-baselined)
-> Scope: Batch 2 + P0/P1 已交付 — Tavily/Exa/SearXNG/xAI app-layer providers, TTL cache, prompt injection 三层注入, InputView toggle, ResultView 来源卡片, GET /api/capabilities, `provider_capability`, `web_search_families`, `web_search_context.family_context`
+> Status: **Implemented — P0/P1 contract hardening 与 P4a Source Family UI 已完成；native LLM search V2 未启动**
+> Date: 2026-05-13 (P0/P1/P4a re-baselined)
+> Scope: Batch 2 + P0/P1/P4a 已交付 — Tavily/Exa/SearXNG/xAI app-layer providers, TTL cache, prompt injection 三层注入, InputView toggle, ResultView 来源卡片, GET /api/capabilities, `provider_capability`, `web_search_families`, `web_search_context.family_context`
 
 ---
 
@@ -152,20 +152,32 @@ export interface WebSearchContext {
   family_context?: {
     polymarket?: {
       state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready' | 'failed' | 'search_skipped' | 'unsupported_provider' | 'fallback_unconstrained';
+      status_reason?: string;
+      domain_filter_mode?: 'api' | 'query' | 'none';
+      domain_coverage?: 'full' | 'partial';
       configured_host?: string;
       geo_gated?: boolean;
       items: Array<{ id: string; question: string; probability?: number; url?: string }>;
     };
     finance?: {
       state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready' | 'failed' | 'search_skipped' | 'unsupported_provider' | 'fallback_unconstrained';
+      status_reason?: string;
+      domain_filter_mode?: 'api' | 'query' | 'none';
+      domain_coverage?: 'full' | 'partial';
       items: Array<{ id: string; title: string; summary?: string; source?: string; url?: string }>;
     };
     academic?: {
       state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready' | 'failed' | 'search_skipped' | 'unsupported_provider' | 'fallback_unconstrained';
+      status_reason?: string;
+      domain_filter_mode?: 'api' | 'query' | 'none';
+      domain_coverage?: 'full' | 'partial';
       items: Array<{ id: string; title: string; authors?: string[]; citationCount?: number; abstract?: string; url?: string }>;
     };
     news_deep?: {
       state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready' | 'failed' | 'search_skipped' | 'unsupported_provider' | 'fallback_unconstrained';
+      status_reason?: string;
+      domain_filter_mode?: 'api' | 'query' | 'none';
+      domain_coverage?: 'full' | 'partial';
       items: Array<{ id: string; title: string; source?: string; publishedAt?: string; description?: string; url?: string }>;
     };
   } | null;
@@ -214,7 +226,7 @@ return {
 }
 ```
 
-前端消费路径：`InputView.tsx` 读取 `/api/capabilities`。搜索增强入口默认可见；Source Family checkbox 由 `provider_capability.supports_domain_filter` 控制。该 capability 目前描述服务端默认 provider，不是用户 custom override 的实时探测结果。
+前端消费路径：`InputView.tsx` 读取 `/api/capabilities`。搜索增强入口默认可见；server default 模式下 Source Family checkbox 由服务端 `provider_capability.supports_domain_filter` 控制。custom override 模式不会做实时探测，只会从可识别的 base URL 推断 Tavily / Exa / xAI / SearXNG；空 base URL 或未知 host 会显示 no-provider warning。
 
 ---
 
@@ -334,8 +346,9 @@ VITE_ENABLE_WEB_SEARCH=false
 - 未选中的 family 保持 `empty`
 - provider 不支持 domain filter 时进入 `unsupported_provider`
 - family 内部 provider error 会进入 `failed`
+- 历史 payload 里的 `fallback_unconstrained / search_skipped` 也有专门文案
+- 后端 `status_reason` 会优先作为卡片说明；desktop grid 和 mobile sheet 使用不同 `aria-describedby` id
 - `polymarket.configured_host=non-us` 时显示 geo-gated placeholder
-- 当前 ResultView 还没有为所有扩展状态补专门 UI 文案；这属于 P4a。
 
 ---
 

@@ -150,6 +150,7 @@ python -m pytest tests/test_web_context.py tests/test_web_context_integration.py
 
 cd ../frontend
 npm test -- --run src/pages/InputView.test.tsx src/api/client.test.ts
+npm exec -- vitest run src/components/result/SourceCategoryCard.test.tsx src/pages/InputView.test.tsx src/pages/ResultView.test.tsx --reporter=dot
 npx tsc --noEmit -p tsconfig.app.json
 npm run lint
 VITE_ENABLE_WEB_SEARCH=true npm run build
@@ -270,7 +271,7 @@ npm run lint
 npm run build
 ```
 
-当前全仓验证最近记录：backend full pytest `2835 passed, 2 skipped`，`ruff check .` 通过；frontend full vitest `184 files / 2004 tests passed`，TypeScript noEmit、lint 与 build 通过。Source Family Playwright 复核覆盖 desktop 1440、mobile 375，以及 Chromium / Firefox / WebKit headless smoke。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
+当前全仓验证最近记录：backend full pytest `2841 passed, 2 skipped`，`ruff check .` 通过；frontend full vitest `184 files / 2036 tests passed`，TypeScript noEmit、lint 与 build 通过。Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop 1440 与 mobile 375 六组合矩阵。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
@@ -348,9 +349,9 @@ npm run build
 最近稳定验证记录：
 
 - backend `ruff check .`：通过
-- backend 全量 `python -m pytest -x -q --tb=short`：`2835 passed, 2 skipped`
+- backend 全量 `python -m pytest -q`：`2841 passed, 2 skipped`
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-- frontend full vitest：`184 files / 2004 tests passed`
+- frontend full vitest：`184 files / 2036 tests passed`
 - frontend `npm run lint`：通过
 - frontend `npm run build`：通过
 - frontend i18n key + placeholder parity：通过

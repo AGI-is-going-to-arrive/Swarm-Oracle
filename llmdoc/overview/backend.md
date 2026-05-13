@@ -330,6 +330,7 @@
     - 未选中的 family 会保持 `empty`
     - 当前 provider 不支持 domain filter 时，family 会标成 `unsupported_provider`
     - family 搜索异常时，family 会标成 `failed`
+    - family entry 可能带 `domain_filter_mode / domain_coverage / status_reason`，这些字段会经 API helper 白名单保留给前端展示
     - `polymarket` 当前额外带 `configured_host / geo_gated`
     - `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` 时，`polymarket` 会显式保持 `empty + geo_gated`
 - Ending Room 的同步服务函数（`create_ending_room`、`create_ending_room_thread`、`load_ending_room_snapshot` 等）在 async 端点中通过 `asyncio.to_thread()` 调用，不阻塞事件循环。路由层对 `to_thread` 内部的非业务异常有通用 `except Exception` 兜底，不会让裸 DB 异常直接落成未分类 500。
@@ -416,7 +417,7 @@
 ## 当前验证基线
 
 - 当前 backend 稳定验证口径：
-  - `python -m pytest -x -q --tb=short`：`2835 passed, 2 skipped`
+  - `python -m pytest -q`：`2841 passed, 2 skipped`
   - `ruff check .`：通过
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：
