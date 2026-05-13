@@ -2146,10 +2146,29 @@ class TestSearchWithProviderOutcome:
 
 
 class TestDetectProviderBodyError:
-    """P2-4: _detect_provider_body_error stub always returns None."""
+    """P5: _detect_provider_body_error detects error fields in response body."""
 
-    def test_stub_returns_none(self):
+    def test_clean_body_returns_none(self):
         from app.services.web_context import _detect_provider_body_error
         assert _detect_provider_body_error("tavily", {}) is None
-        assert _detect_provider_body_error("xai", {"error": "test"}) is None
         assert _detect_provider_body_error("anthropic", {"content": []}) is None
+
+    def test_string_error_field(self):
+        from app.services.web_context import _detect_provider_body_error
+        result = _detect_provider_body_error("xai", {"error": "rate_limited"})
+        assert result is not None
+        assert "rate_limited" in result
+
+    def test_dict_error_field(self):
+        from app.services.web_context import _detect_provider_body_error
+        result = _detect_provider_body_error("openai", {"error": {"message": "quota exceeded"}})
+        assert result is not None
+        assert "quota exceeded" in result
+
+    def test_non_dict_body_returns_none(self):
+        from app.services.web_context import _detect_provider_body_error
+        assert _detect_provider_body_error("xai", "not a dict") is None  # type: ignore[arg-type]
+
+    def test_empty_string_error_returns_none(self):
+        from app.services.web_context import _detect_provider_body_error
+        assert _detect_provider_body_error("xai", {"error": ""}) is None

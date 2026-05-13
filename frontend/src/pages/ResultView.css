@@ -2219,6 +2219,14 @@
   text-decoration: underline;
 }
 
+.result-web-sources__item-url:focus-visible {
+  color: var(--color-accent);
+  text-decoration: underline;
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .result-web-sources__native {
   margin-top: 16px;
   padding-top: 16px;
@@ -2246,6 +2254,17 @@
 @media (forced-colors: active) {
   .result-web-sources__item--native {
     border-left-color: Highlight;
+  }
+
+  .result-web-sources__trigger:focus-visible,
+  .result-web-sources__item-url:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  .result-web-sources__item-url {
+    forced-color-adjust: none;
+    color: LinkText;
   }
 }
 
@@ -2457,6 +2476,13 @@
 
 .result-web-sources__trigger:hover {
   color: var(--color-primary);
+}
+
+.result-web-sources__trigger:focus-visible {
+  color: var(--color-primary);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 .result-web-sources__body {

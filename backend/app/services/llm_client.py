@@ -1748,10 +1748,27 @@ async def llm_call(
     # ── Parse native search citations if adapter was used ──
     if _native_adapter is not None and data is not None:
         try:
+            tool_call_count = _native_adapter.count_tool_calls(data)
+            max_allowed = settings.NATIVE_SEARCH_MAX_TOOL_CALLS
+            if tool_call_count > max_allowed:
+                logger.warning(
+                    "Native search tool-call budget exceeded: %d > %d",
+                    tool_call_count, max_allowed,
+                )
             citations = _native_adapter.parse_citations(data)
+            max_citations = settings.NATIVE_SEARCH_MAX_CITATIONS
+            if len(citations) > max_citations:
+                logger.warning(
+                    "Native search citations capped: %d → %d",
+                    len(citations), max_citations,
+                )
+                citations = citations[:max_citations]
             if citations:
                 _last_native_citations.set(citations)
-                logger.info("Native search: parsed %d citations", len(citations))
+                logger.info(
+                    "Native search: %d citations, %d tool calls",
+                    len(citations), tool_call_count,
+                )
         except Exception:
             logger.warning("Failed to parse native search citations", exc_info=True)
 

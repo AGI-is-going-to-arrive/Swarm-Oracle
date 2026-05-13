@@ -573,3 +573,23 @@ def test_real_provider_preflight_pass(monkeypatch, provider, needs_key):
     from app.services.preflight import _check_web_search
     result = _check_web_search()
     assert result.status == "pass", f"{provider} with valid config should pass"
+
+
+class TestNativeSearchBudgetConfig:
+    """P5-4: Budget config constants exist and have sane defaults."""
+
+    def test_max_tool_calls_default(self):
+        from app.config import settings
+        assert settings.NATIVE_SEARCH_MAX_TOOL_CALLS == 5
+
+    def test_max_citations_default(self):
+        from app.config import settings
+        assert settings.NATIVE_SEARCH_MAX_CITATIONS == 50
+
+    def test_max_tool_calls_positive(self):
+        from app.config import settings
+        assert settings.NATIVE_SEARCH_MAX_TOOL_CALLS > 0
+
+    def test_max_citations_positive(self):
+        from app.config import settings
+        assert settings.NATIVE_SEARCH_MAX_CITATIONS > 0

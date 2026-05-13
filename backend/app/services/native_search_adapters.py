@@ -25,12 +25,15 @@ class NativeSearchAdapter(Protocol):
     """Protocol for provider-specific native search integration."""
 
     max_domains: int
+    max_tool_calls: int
 
     def build_search_tools(self, *, domains: list[str] | None = None) -> list[dict]: ...
 
     def parse_citations(self, response_body: dict) -> list[WebSearchSnippet]: ...
 
     def detect_body_error(self, response_body: dict) -> str | None: ...
+
+    def count_tool_calls(self, response_body: dict) -> int: ...
 
 
 def _append_citation(
@@ -93,6 +96,19 @@ def _parse_annotation_citations(response_body: dict) -> list[WebSearchSnippet]:
     return citations
 
 
+def _count_web_search_tool_calls(response_body: dict) -> int:
+    """Count web_search tool-use invocations in a Responses API output."""
+    count = 0
+    for item in response_body.get("output", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "web_search_call":
+            count += 1
+        elif item.get("type") == "tool_use" and item.get("name") == "web_search":
+            count += 1
+    return count
+
+
 @dataclass(frozen=True)
 class XAIResponsesAdapter:
     """xAI Responses API native web search adapter.
@@ -102,6 +118,7 @@ class XAIResponsesAdapter:
     """
 
     max_domains: int = 5
+    max_tool_calls: int = 5
 
     def build_search_tools(self, *, domains: list[str] | None = None) -> list[dict]:
         tool: dict = {"type": "web_search"}
@@ -117,7 +134,15 @@ class XAIResponsesAdapter:
         return _parse_annotation_citations(response_body)
 
     def detect_body_error(self, response_body: dict) -> str | None:
+        for item in response_body.get("output", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "web_search_call" and item.get("status") == "failed":
+                return f"xAI web_search_call failed: {item.get('error', 'unknown')}"
         return None
+
+    def count_tool_calls(self, response_body: dict) -> int:
+        return _count_web_search_tool_calls(response_body)
 
 
 @dataclass(frozen=True)
@@ -128,6 +153,7 @@ class OpenAIResponsesAdapter:
     """
 
     max_domains: int = 100
+    max_tool_calls: int = 5
 
     def build_search_tools(self, *, domains: list[str] | None = None) -> list[dict]:
         tool: dict = {"type": "web_search"}
@@ -143,7 +169,15 @@ class OpenAIResponsesAdapter:
         return _parse_annotation_citations(response_body)
 
     def detect_body_error(self, response_body: dict) -> str | None:
+        for item in response_body.get("output", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "web_search_call" and item.get("status") == "failed":
+                return f"OpenAI web_search_call failed: {item.get('error', 'unknown')}"
         return None
+
+    def count_tool_calls(self, response_body: dict) -> int:
+        return _count_web_search_tool_calls(response_body)
 
 
 @dataclass(frozen=True)
@@ -151,6 +185,7 @@ class _NullAdapter:
     """No-op adapter for providers without native search."""
 
     max_domains: int = 0
+    max_tool_calls: int = 0
 
     def build_search_tools(self, *, domains: list[str] | None = None) -> list[dict]:
         return []
@@ -160,6 +195,9 @@ class _NullAdapter:
 
     def detect_body_error(self, response_body: dict) -> str | None:
         return None
+
+    def count_tool_calls(self, response_body: dict) -> int:
+        return 0
 
 
 _ADAPTER_REGISTRY: dict[str, NativeSearchAdapter] = {

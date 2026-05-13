@@ -96,10 +96,15 @@ class ProviderSearchOutcome:
 def _detect_provider_body_error(provider: str, response_body: dict) -> str | None:
     """Detect HTTP 200 responses that contain an error in the body.
 
-    Adapter hook for providers like Anthropic (web_search_tool_result_error),
-    Qwen (silent search skip at high RPS), Kimi (incomplete tool-call loop).
-    Concrete implementations will be added per-provider in P3.
+    Checks for provider-specific error patterns in otherwise-successful responses.
     """
+    if not isinstance(response_body, dict):
+        return None
+    error_field = response_body.get("error")
+    if isinstance(error_field, dict):
+        return f"{provider} body error: {error_field.get('message', 'unknown')}"
+    if isinstance(error_field, str) and error_field:
+        return f"{provider} body error: {error_field}"
     return None
 
 

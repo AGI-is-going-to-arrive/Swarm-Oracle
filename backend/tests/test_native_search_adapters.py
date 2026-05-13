@@ -138,8 +138,53 @@ class TestXAIResponsesAdapter:
         citations = self.adapter.parse_citations(body)
         assert citations[0].text == "https://fallback.com"
 
-    def test_detect_body_error_returns_none(self):
+    def test_detect_body_error_returns_none_on_clean(self):
         assert self.adapter.detect_body_error({}) is None
+        assert self.adapter.detect_body_error({"output": [{"type": "message"}]}) is None
+
+    def test_detect_body_error_detects_failed_search_call(self):
+        body = {
+            "output": [
+                {"type": "web_search_call", "status": "failed", "error": "rate_limited"},
+            ],
+        }
+        err = self.adapter.detect_body_error(body)
+        assert err is not None
+        assert "rate_limited" in err
+
+    def test_detect_body_error_ignores_successful_search_call(self):
+        body = {
+            "output": [
+                {"type": "web_search_call", "status": "completed"},
+            ],
+        }
+        assert self.adapter.detect_body_error(body) is None
+
+    def test_count_tool_calls_zero(self):
+        assert self.adapter.count_tool_calls({}) == 0
+        assert self.adapter.count_tool_calls({"output": []}) == 0
+
+    def test_count_tool_calls_web_search_call(self):
+        body = {
+            "output": [
+                {"type": "web_search_call", "status": "completed"},
+                {"type": "message", "content": [{"text": "hi"}]},
+                {"type": "web_search_call", "status": "completed"},
+            ],
+        }
+        assert self.adapter.count_tool_calls(body) == 2
+
+    def test_count_tool_calls_tool_use_named(self):
+        body = {
+            "output": [
+                {"type": "tool_use", "name": "web_search"},
+                {"type": "tool_use", "name": "code_interpreter"},
+            ],
+        }
+        assert self.adapter.count_tool_calls(body) == 1
+
+    def test_max_tool_calls_default(self):
+        assert self.adapter.max_tool_calls == 5
 
 
 class TestOpenAIResponsesAdapter:
@@ -175,3 +220,43 @@ class TestGetAdapter:
     def test_null_adapter_max_domains(self):
         adapter = get_adapter("unknown_provider")
         assert adapter.max_domains == 0
+
+    def test_null_adapter_max_tool_calls(self):
+        adapter = get_adapter("unknown_provider")
+        assert adapter.max_tool_calls == 0
+
+    def test_null_adapter_count_tool_calls(self):
+        adapter = get_adapter("unknown_provider")
+        assert adapter.count_tool_calls({"output": [{"type": "web_search_call"}]}) == 0
+
+
+class TestOpenAIDetectBodyError:
+
+    def setup_method(self):
+        self.adapter = OpenAIResponsesAdapter()
+
+    def test_clean_response(self):
+        assert self.adapter.detect_body_error({}) is None
+
+    def test_failed_search_call(self):
+        body = {
+            "output": [
+                {"type": "web_search_call", "status": "failed", "error": "timeout"},
+            ],
+        }
+        err = self.adapter.detect_body_error(body)
+        assert err is not None
+        assert "timeout" in err
+
+    def test_count_tool_calls(self):
+        body = {
+            "output": [
+                {"type": "web_search_call", "status": "completed"},
+                {"type": "web_search_call", "status": "completed"},
+                {"type": "web_search_call", "status": "completed"},
+            ],
+        }
+        assert self.adapter.count_tool_calls(body) == 3
+
+    def test_max_tool_calls_default(self):
+        assert self.adapter.max_tool_calls == 5

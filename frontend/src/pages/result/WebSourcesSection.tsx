@@ -43,12 +43,14 @@ export default function WebSourcesSection() {
         type="button"
         className="result-web-sources__trigger"
         aria-expanded={webSourcesOpen}
+        aria-controls="result-web-sources-body"
         onClick={() => setWebSourcesOpen((prev) => !prev)}
       >
         <span>{t('result.web_sources_title')}</span>
         <span aria-hidden="true">{webSourcesOpen ? '▲' : '▼'}</span>
       </button>
       <div
+        id="result-web-sources-body"
         className={`result-web-sources__body ${webSourcesOpen ? 'is-open' : ''}`}
         aria-hidden={!webSourcesOpen}
         inert={!webSourcesOpen || undefined}

@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     SEARXNG_URL: str = "http://localhost:8888"
     NEW_SOURCES_POLYMARKET_CONFIGURED_HOST: str = "us"
 
+    # ── Native Search Budget ─────────────────────────────
+    NATIVE_SEARCH_MAX_TOOL_CALLS: int = 5
+    NATIVE_SEARCH_MAX_CITATIONS: int = 50
+
     # ── Phase 3 Feature Flags ────────────────────────────
     FEATURE_CUSTOM_AGENTS: bool = False
     FEATURE_AGENT_IDENTITY: bool = False
