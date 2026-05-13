@@ -23,6 +23,10 @@ from app.services.llm_client import (
 )
 
 
+async def _noop_async_none(*_args, **_kwargs):
+    return None
+
+
 @pytest.fixture(autouse=True)
 async def reset_shared_async_client():
     await llm_client.close_shared_async_client()
@@ -1618,3 +1622,194 @@ class TestDetectProvider:
     def test_url_with_port(self):
         p = self.detect("https://api.openai.com:443/v1")
         assert p.name == "openai"
+
+
+# ── P3-1: llm_call native search integration ──────────
+
+
+class TestLlmCallNativeSearch:
+    """P3-1: Verify tools injection and citation parsing in llm_call."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_env(self, monkeypatch):
+        monkeypatch.setattr("app.services.llm_client.settings.LLM_RESPONSES_URL",
+                            "https://api.x.ai/v1/responses")
+        monkeypatch.setattr("app.services.llm_client.settings.LLM_API_KEY", "test-key")
+        monkeypatch.setattr("app.services.llm_client.settings.LLM_MODEL_NAME", "grok-4.20")
+        monkeypatch.setattr("app.services.llm_client.settings.LLM_REASONING_EFFORT", "low")
+
+    @pytest.mark.asyncio
+    async def test_xai_responses_injects_tools(self, monkeypatch):
+        """xAI Responses endpoint with native_search_domains injects tools."""
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            resp = httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+            return resp
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        # Skip runtime guard
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        from app.services.llm_client import llm_call
+        result = await llm_call(
+            "test prompt",
+            base_url="https://api.x.ai/v1/responses",
+            api_key="xai-key",
+            native_search_domains=["arxiv.org", "nature.com"],
+        )
+        assert result == "answer"
+        assert "tools" in captured_payload
+        assert captured_payload["tools"][0]["type"] == "web_search"
+        filters = captured_payload["tools"][0].get("filters", {})
+        assert "arxiv.org" in filters.get("allowed_domains", [])
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_no_tools_even_with_domains(self, monkeypatch):
+        """Chat Completions endpoint never gets tools even with native_search_domains."""
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            resp = httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"content": "chat answer"}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+            return resp
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        from app.services.llm_client import llm_call
+        result = await llm_call(
+            "test prompt",
+            base_url="https://api.x.ai/v1/chat/completions",
+            api_key="xai-key",
+            native_search_domains=["arxiv.org"],
+        )
+        assert result == "chat answer"
+        assert "tools" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_proxy_no_tools(self, monkeypatch):
+        """Proxy providers never get tools injected."""
+        captured_payload = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            resp = httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "proxy answer"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+            return resp
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        from app.services.llm_client import llm_call
+        result = await llm_call(
+            "test prompt",
+            base_url="https://openrouter.ai/api/v1/responses",
+            api_key="or-key",
+            native_search_domains=["arxiv.org"],
+        )
+        assert result == "proxy answer"
+        assert "tools" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_citations_populated_from_response(self, monkeypatch):
+        """Citations are parsed from response annotations."""
+        async def mock_post(self, url, *, json=None, **kwargs):
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{
+                        "type": "message",
+                        "content": [{
+                            "text": "AI research shows...",
+                            "annotations": [
+                                {"url": "https://arxiv.org/abs/1", "title": "Paper 1"},
+                                {"url": "https://nature.com/2", "title": "Paper 2"},
+                            ],
+                        }],
+                    }],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        from app.services.llm_client import get_last_native_citations, llm_call
+        await llm_call(
+            "test prompt",
+            base_url="https://api.x.ai/v1/responses",
+            api_key="xai-key",
+            native_search_domains=["arxiv.org"],
+        )
+        citations = get_last_native_citations()
+        assert len(citations) == 2
+        assert citations[0].source_url == "https://arxiv.org/abs/1"
+
+    @pytest.mark.asyncio
+    async def test_no_native_search_no_citations(self, monkeypatch):
+        """Without native_search_domains, no citations are populated (P0-2 regression)."""
+        async def mock_post(self, url, *, json=None, **kwargs):
+            return httpx.Response(
+                200,
+                json={
+                    "output": [{"type": "message", "content": [{"text": "plain"}]}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+
+        from app.services.llm_client import get_last_native_citations, llm_call
+        await llm_call("test prompt", api_key="k")
+        citations = get_last_native_citations()
+        assert citations == []

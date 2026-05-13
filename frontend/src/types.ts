@@ -70,6 +70,7 @@ export interface WebSearchContext {
       url?: string;
     }>;
   } | null;
+  native_citations?: Array<{ text: string; source_url: string }>;
 }
 
 export interface Scenario {

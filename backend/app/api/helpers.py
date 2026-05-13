@@ -1223,6 +1223,24 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
         }
         if safe_family_context:
             response["family_context"] = safe_family_context
+
+        # P3-2: native search citations (from LLM native web_search tools)
+        raw_citations = parsed.get("native_citations")
+        if isinstance(raw_citations, list) and raw_citations:
+            safe_citations = []
+            for cit in raw_citations:
+                if not isinstance(cit, dict):
+                    continue
+                text = cit.get("text", "")
+                url = cit.get("source_url", "")
+                if isinstance(text, str) and isinstance(url, str) and url.strip():
+                    safe_citations.append({
+                        "text": str(text)[:500],
+                        "source_url": str(url)[:2000],
+                    })
+            if safe_citations:
+                response["native_citations"] = safe_citations
+
         return response
     except (json.JSONDecodeError, TypeError):
         return None

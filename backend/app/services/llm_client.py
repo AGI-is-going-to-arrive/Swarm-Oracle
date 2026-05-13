@@ -1519,6 +1519,16 @@ async def _reconcile_rate_limit_usage(
             logger.warning("Failed to reconcile runtime token usage: %s", exc)
 
 
+_last_native_citations: ContextVar[list[Any]] = ContextVar(
+    "_last_native_citations", default=[],
+)
+
+
+def get_last_native_citations() -> list[Any]:
+    """Return citations parsed from the most recent llm_call with native search."""
+    return _last_native_citations.get()
+
+
 async def llm_call(
     input_text: str,
     *,
@@ -1528,6 +1538,7 @@ async def llm_call(
     timeout: float = 120.0,
     api_key: str | None = None,
     base_url: str | None = None,
+    native_search_domains: list[str] | None = None,
 ) -> str:
     """Call LLM via Chat Completions or Responses API (auto-detected from URL).
 
@@ -1539,9 +1550,14 @@ async def llm_call(
         timeout: Request timeout in seconds.
         api_key: BYOK — override API key for this call.
         base_url: BYOK — override base URL for this call.
+        native_search_domains: When set, inject native search tools for
+            supported providers (Responses API only). Domains are passed to
+            the adapter's build_search_tools().
 
     Returns:
         The text content from the LLM response.
+        Native search citations (if any) are stored in the _last_native_citations
+        ContextVar and retrievable via get_last_native_citations().
     """
     request_context = _REQUEST_CONTEXT.get()
     quota_key = _normalize_quota_key(request_context.quota_key)
@@ -1578,10 +1594,26 @@ async def llm_call(
         if effort:
             payload["reasoning"] = {"effort": effort}
 
-    logger.debug("LLM request → %s [%s] (effort=%s, %d chars, byok=%s)",
+    # ── Native search tools injection (Responses API only) ──
+    _native_adapter = None
+    if native_search_domains is not None and not is_chat:
+        provider_profile = detect_provider(base_url)
+        if (provider_profile.supports_native_search
+                and not provider_profile.is_proxy):
+            from app.services.native_search_adapters import get_adapter
+            _native_adapter = get_adapter(provider_profile.name)
+            tools = _native_adapter.build_search_tools(domains=native_search_domains)
+            if tools:
+                payload["tools"] = tools
+
+    # Reset citation context
+    _last_native_citations.set([])
+
+    logger.debug("LLM request → %s [%s] (effort=%s, %d chars, byok=%s, native_search=%s)",
                  payload["model"],
                  "chat" if is_chat else "responses",
-                 effort, len(input_text), bool(api_key or base_url))
+                 effort, len(input_text), bool(api_key or base_url),
+                 bool(_native_adapter))
 
     reservation_id = await _reserve_runtime_slot(
         quota_key=quota_key,
@@ -1699,6 +1731,16 @@ async def llm_call(
     logger.debug("LLM response ← %d chars (tokens: in=%s out=%s)",
                  len(text), tok_in, tok_out)
     await _record_provider_success(provider_key)
+
+    # ── Parse native search citations if adapter was used ──
+    if _native_adapter is not None and data is not None:
+        try:
+            citations = _native_adapter.parse_citations(data)
+            if citations:
+                _last_native_citations.set(citations)
+                logger.info("Native search: parsed %d citations", len(citations))
+        except Exception:
+            logger.warning("Failed to parse native search citations", exc_info=True)
 
     return text
 

@@ -164,9 +164,13 @@ class WebSearchResult:
     timestamp: str = ""
     cached: bool = False
     family_context: dict[str, dict[str, object]] = field(default_factory=dict)
+    native_citations: list[WebSearchSnippet] = field(default_factory=list)
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), ensure_ascii=False)
+        d = asdict(self)
+        if not d.get("native_citations"):
+            d.pop("native_citations", None)
+        return json.dumps(d, ensure_ascii=False)
 
     @classmethod
     def from_json(cls, raw: str) -> WebSearchResult | None:
