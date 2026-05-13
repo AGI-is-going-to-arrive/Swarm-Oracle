@@ -14,6 +14,7 @@
 - ✅ DONE — P0 baseline hardening 已完成，`WEB_SEARCH_PROVIDER=native` 保持 legacy placeholder，preflight 不再把它报成可用 provider。
 - ✅ DONE — P1 app-layer / Source Family contract hardening 已完成：provider capability registry、xAI `filters.allowed_domains`、SearXNG 域名归一化、URL 后过滤、base/family 独立 try-block、family 扩展状态 parser、InputView domain-filter gate 均已落地。
 - 已验证：backend full `2835 passed / 2 skipped`、backend Web Search 定向 `249 passed`、URL scheme 过滤窄集 `28 passed`、`ruff check .` 通过；frontend full vitest `184 files / 2004 passed`、InputView/API 定向 `76 passed`、tsc/lint/build 通过；Playwright 覆盖桌面 1440、移动 375 和 Chromium/Firefox/WebKit headless smoke。
+- 本轮文档同步由用户在 2026-05-13 明确要求执行；`llmdoc`、`CLAUDE.md`、`README.md`、`implement/` 和本 team-plan 已按当前代码与测试事实更新。
 - 仍保留给 P4a：ResultView / SourceCategoryCard 对 `failed / unsupported_provider / fallback_unconstrained / search_skipped` 等扩展状态的专门文案，active-provider capability selection，以及 disabled reason 的 `aria-describedby`。
 - 仍 gated：P2 native LLM search contract，P3 provider adapters/auto discovery，P4b native citation UI，P5 release validation。
 
