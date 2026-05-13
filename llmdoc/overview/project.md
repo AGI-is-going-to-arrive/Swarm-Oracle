@@ -21,6 +21,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 搜索增强当前在首页有两档入口：
   - `沿用服务器默认`：直接复用服务端默认 provider
   - `自定义覆盖`：当前局单独指定 `provider / API key / base URL`
+- Source Family 当前按服务端 provider capability 开关选择项；provider 不支持 domain filter 时，四个 family checkbox 会保留可见但禁用，已选 family 会被清空，不会把旧选择带进下一次提交。
 - 首页高级设置当前还支持可选 `Organization ID`；值只在当前浏览器 session 内保存，并随请求头 `X-Org-Id` 透传，留空就不发送。
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。preflight 解析阶段超时会返回 `504 IDENTITY_PREFLIGHT_TIMEOUT`，不会被当成“无匹配”继续启动。
 - 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑、收藏和选择自建 Agent，也可以在 `/agents/new` 通过 PDF document tab 生成 Agent；首页 attach panel 会以卡片展示 persona、knowledge domains 和 decision bias，最多选择 5 个，并只把 identity id 传给主推演。自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。Agent Library 的 favorites 是普通筛选按钮，Workshop 的 manual/document tab 支持键盘方向键切换；capability/favorite 失败会显示本地化错误和 retry，不直接露出原始后端文本。
@@ -187,11 +188,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
   - backend `ruff check` 最近一次记录为通过
-  - backend 全量 `python -m pytest tests/ -x -q --tb=short` 最近一次记录为 `2766 passed, 2 skipped`
+  - backend 全量 `python -m pytest -x -q --tb=short` 最近一次记录为 `2835 passed, 2 skipped`
   - frontend `typecheck / lint / build / perf budgets` 通过
   - 本次 bridge/workbench 文案 + CausalReview guide key-node 标签窄集：`87 passed`
   - 本次前端 TypeScript noEmit：通过
-  - frontend 全量 vitest 最近一次记录为 `184 files / 1994 tests passed`
+  - frontend 全量 vitest 最近一次记录为 `184 files / 2004 tests passed`
   - frontend `npx tsc --noEmit -p tsconfig.app.json` 最近一次记录为通过
   - 本轮真实验证还包括：
     - Classic 分支标题定向验证：
@@ -205,6 +206,11 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - `cd frontend && npm exec -- tsc --noEmit -p tsconfig.app.json`：通过
     - frontend i18n 深层 key + placeholder parity：通过
   - frontend 目标文件 `eslint`、`typecheck`、`build / perf budgets` 通过
+  - 本轮 Web Search / Source Family P0-P1 contract hardening 已补：
+    - backend 定向回归 `249 passed`，URL scheme 过滤窄集 `28 passed`
+    - frontend InputView / API client 定向回归 `76 passed`
+    - backend `ruff check .`、frontend `tsc / lint / build` 通过
+    - Playwright 复核桌面 `1440px`、移动 `375px` 和 Chromium / Firefox / WebKit headless smoke 通过
   - fixture-backed local preview 浏览器复核：
     - ResultView bridge DOM / disabled 样式通过
     - FactionTimeline 文案 i18n 插值通过
@@ -245,15 +251,15 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - Sprint 0-2 收尾复验当前已补：
     - backend 本轮触碰文件定向 pytest：`36 passed`
     - backend 本轮触碰文件 ruff：通过
-    - frontend full vitest 当前最新为：`184 files / 1994 tests passed`
+    - frontend full vitest 当前最新为：`184 files / 2004 tests passed`
     - frontend `tsc / lint / build / i18n parity`：通过
     - browser matrix：`72 passed / 0 failed`，覆盖 12 项功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375
   - Sprint 5-6 收口验证当前已补：
     - backend ruff：通过
-    - backend full pytest：`2766 passed, 2 skipped`
+    - backend full pytest：`2835 passed, 2 skipped`
     - backend touched-file 定向回归：`314 passed`
     - backend review-fix focused rerun：cancel / journal / snapshot / leaderboard segment `84 passed`；prediction API 回归 `48 passed`
-    - frontend full vitest：`184 files / 1994 tests passed`
+    - frontend full vitest：`184 files / 2004 tests passed`
     - frontend Sprint 5-6 focused rerun：`7 files / 104 tests passed`
     - frontend `tsc / lint / build / i18n parity`：通过
     - Debate live/result Chrome DevTools 复核覆盖 `1440px` 与 `375px`；score grid 单列、expand button `44px`、long role probe `overflow=0`

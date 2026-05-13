@@ -468,6 +468,22 @@ export interface CapabilityEntry {
   degraded_mode: string | null;
 }
 
+/** P1-6: provider-level domain-filter capability for the currently configured provider. */
+export type WebSearchDomainFilterMode = 'api' | 'query' | 'prompt' | 'none';
+
+export interface WebSearchProviderCapability {
+  supports_domain_filter: boolean;
+  supports_sources: boolean;
+  domain_filter_mode: WebSearchDomainFilterMode;
+}
+
+/** P1-6: per-family capability nested under each provider entry (FEATURE_NEW_SOURCES). */
+export interface WebSearchFamilyCapability {
+  supports_domain_filter: boolean;
+  domain_filter_mode: WebSearchDomainFilterMode;
+  max_domains: number | null;
+}
+
 /** Phase 3 / FE-1: per-provider nested entry under web_search.providers */
 export interface WebSearchProviderEntry {
   enabled: boolean;
@@ -475,6 +491,8 @@ export interface WebSearchProviderEntry {
   rate_limit_rps: number;
   ttl_seconds: number;
   byok_allowed: boolean;
+  /** P1-6: per-family capability (only set when FEATURE_NEW_SOURCES=true). */
+  capability?: WebSearchFamilyCapability;
 }
 
 /** Phase 3 / FE-1: web_search.providers block (only populated when FEATURE_NEW_SOURCES=true) */
@@ -493,6 +511,8 @@ export interface CapabilitiesResponse {
     method: string;
     provider: string | null;
     providers?: WebSearchProvidersBlock;
+    /** P1-6: capability info for the currently configured server-side provider. */
+    provider_capability?: WebSearchProviderCapability;
   };
   custom_agents: CapabilityEntry;
   agent_identity: CapabilityEntry;

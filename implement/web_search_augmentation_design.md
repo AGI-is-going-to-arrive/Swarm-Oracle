@@ -1,8 +1,8 @@
 # Web Search Augmented Simulation — Design Document (Final)
 
-> Status: **Implemented — Phase 1-5 完成；FE-5 source family request/response projection + live/non-us signoff 已补齐；V2 未启动**
-> Date: 2026-04-19 (re-baselined)
-> Scope: Batch 2 已交付 — Tavily/SearXNG providers, TTL cache, prompt injection 三层注入, InputView toggle, ResultView 来源卡片, GET /api/capabilities, `web_search_families`, `web_search_context.family_context`
+> Status: **Implemented — P0/P1 contract hardening 已完成；native LLM search V2 未启动；ResultView 扩展状态文案留给 P4a**
+> Date: 2026-05-13 (P0/P1 re-baselined)
+> Scope: Batch 2 + P0/P1 已交付 — Tavily/Exa/SearXNG/xAI app-layer providers, TTL cache, prompt injection 三层注入, InputView toggle, ResultView 来源卡片, GET /api/capabilities, `provider_capability`, `web_search_families`, `web_search_context.family_context`
 
 ---
 
@@ -30,7 +30,7 @@
 | **Perplexity** (pplx-api) | 内建实时搜索，返回内联引用 | Yes |
 | **Google Gemini** (with grounding) | `google_search_retrieval` tool | Yes |
 | **OpenAI** (web browsing) | `web_search` tool (仅特定 model) | Yes |
-| ~~**xAI Grok**~~ | ~~Native live-web grounding~~ | **V2** — 当前 SSRF allowlist 未包含 `api.x.ai`，V1 不实现 |
+| ~~**xAI Grok native search**~~ | ~~Native live-web grounding~~ | **V2** — 当前只实现 app-layer xAI search，不接 LLM native search |
 
 ### 1.2 External Search API Providers (Model-Agnostic)
 
@@ -39,16 +39,17 @@
 | **Tavily** (推荐默认) | 1000 req/mo | ~1-2s | P0 |
 | **Exa** | 1000 req/mo | ~1-3s | P1 fallback |
 | **SearXNG** (self-hosted) | 无限 | ~2-5s | P2 |
+| **xAI** (app-layer Responses web_search) | 取决于账号 | ~1-5s | P1 |
 
-**Fallback chain:** Tavily → Exa → skip (graceful degradation)
+**Fallback chain:** 当前没有跨 provider fallback chain。配置哪个 provider 就调用哪个 provider；失败时 fail-soft 继续推演。
 
 ### 1.3 Provider 能力探测（三层）
 
-1. **静态注册表** — `web_context.py` 中维护已知 hostname → 能力映射
-2. **运行时探测** — 对 OpenAI 等按 model 验证搜索支持
-3. **前端通告** — 后端返回 `web_search.available` 控制 toggle 显示
+1. **静态注册表** — `web_context.py` 中维护 `PROVIDER_CAPABILITIES`
+2. **能力通告** — `GET /api/capabilities.web_search.provider_capability` 描述服务端默认 provider 的 domain-filter/source 能力
+3. **前端门控** — InputView 用 `supports_domain_filter` 禁用或启用 Source Family checkbox
 
-探测失败 → toggle 隐藏，不阻断正常推演。
+capability 不支持 → Source Family checkbox 保持可见但 disabled，不阻断普通推演。
 
 ---
 
@@ -150,21 +151,21 @@ export interface WebSearchContext {
   cached: boolean;
   family_context?: {
     polymarket?: {
-      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready' | 'failed' | 'search_skipped' | 'unsupported_provider' | 'fallback_unconstrained';
       configured_host?: string;
       geo_gated?: boolean;
       items: Array<{ id: string; question: string; probability?: number; url?: string }>;
     };
     finance?: {
-      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready' | 'failed' | 'search_skipped' | 'unsupported_provider' | 'fallback_unconstrained';
       items: Array<{ id: string; title: string; summary?: string; source?: string; url?: string }>;
     };
     academic?: {
-      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready' | 'failed' | 'search_skipped' | 'unsupported_provider' | 'fallback_unconstrained';
       items: Array<{ id: string; title: string; authors?: string[]; citationCount?: number; abstract?: string; url?: string }>;
     };
     news_deep?: {
-      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready' | 'failed' | 'search_skipped' | 'unsupported_provider' | 'fallback_unconstrained';
       items: Array<{ id: string; title: string; source?: string; publishedAt?: string; description?: string; url?: string }>;
     };
   } | null;
@@ -190,28 +191,30 @@ export interface Scenario {
 
 ### 3.5 后端 Capabilities 响应 — Server Configuration Hint
 
-**复用现有 `POST /api/health/test` 端点**（`backend/app/api/scenarios.py:350`），在其返回值中扩展 `web_search` 字段。不新增 endpoint。
+当前以 `GET /api/capabilities` 作为前端轻量探测端点（无 LLM 调用）。`POST /api/health/test` 仍返回 server-level `web_search` hint，但不作为 Source Family UI gate。
 
 > **重要语义约束**: `web_search` 字段报告的是**服务端全局配置状态**（`ENABLE_WEB_SEARCH` + provider + API key 是否配齐），**不是**当前被测试的 BYOK `llm_base_url / model` 的真实搜索能力。字段名 `scope: "server"` 显式标记此限制。
 >
 > Per-provider 能力探测（例如检测 Perplexity/Gemini 是否原生支持搜索）属于 V2 范围（§1.3 layer 2: 运行时探测）。
 
 ```python
-# scenarios.py api_health_test 返回值扩展
+# capabilities response 中的 web_search 片段
 return {
-    "server": "ok",
-    "llm": llm_status,
-    "probe": probe,
     "web_search": {                          # NEW — server config hint
         "scope": "server",                   # ⚠️ server-level, NOT per-provider
-        "server_enabled": True,              # ENABLE_WEB_SEARCH && (native || key configured)
+        "server_enabled": True,              # ENABLE_WEB_SEARCH && key/self-host configured
         "method": "native" | "external" | "none",
-        "provider": "tavily" | "searxng" | None,
+        "provider": "tavily" | "exa" | "searxng" | "xai" | "native" | None,
+        "provider_capability": {
+            "supports_domain_filter": true,
+            "supports_sources": true,
+            "domain_filter_mode": "api" | "query" | "prompt" | "none",
+        },
     },
 }
 ```
 
-前端消费路径：`InputView.tsx` 中现有的 `handleTestLlm()` 已解析 `/api/health/test` 响应，从 `web_search.server_enabled` 控制 toggle 显示。前端应理解这仅表示"服务端已配置搜索"，不保证当前 BYOK provider 支持搜索——搜索实际会走服务端配置的 external provider（如 Tavily），与 LLM provider 无关。
+前端消费路径：`InputView.tsx` 读取 `/api/capabilities`。搜索增强入口默认可见；Source Family checkbox 由 `provider_capability.supports_domain_filter` 控制。该 capability 目前描述服务端默认 provider，不是用户 custom override 的实时探测结果。
 
 ---
 
@@ -277,10 +280,11 @@ SESSION_SECRET=
 # 总开关（默认关闭）
 ENABLE_WEB_SEARCH=false
 
-# 搜索提供商: tavily | exa | searxng | brave | native
+# 搜索提供商: tavily | exa | searxng | xai | native
+# native 当前只是 legacy placeholder，不是已实现 provider
 WEB_SEARCH_PROVIDER=tavily
 
-# 搜索 API Key（searxng 和 native 模式不需要）
+# 搜索 API Key（searxng 和 native 模式不需要；native 会返回未实现/warn）
 WEB_SEARCH_API_KEY=
 
 # SearXNG 实例地址（仅 WEB_SEARCH_PROVIDER=searxng 时使用）
@@ -295,7 +299,7 @@ WEB_SEARCH_CACHE_TTL_SECONDS=300
 ### 5.2 前端 `.env` 模板更新
 
 ```bash
-# Web Search UI toggle（默认隐藏）
+# 历史兼容变量；InputView 搜索增强入口当前默认可见，不再用它决定显示/隐藏
 VITE_ENABLE_WEB_SEARCH=false
 ```
 
@@ -307,8 +311,8 @@ VITE_ENABLE_WEB_SEARCH=false
 
 - 放置位置：Runtime Preset 和 BYOK 之间
 - **默认关闭 (opt-in)**
-- 仅当 `VITE_ENABLE_WEB_SEARCH=true` 且后端 capabilities 返回 `available: true` 时显示
-- 探测失败/provider 不支持 → toggle 隐藏
+- 搜索增强入口默认可见，不再由 `VITE_ENABLE_WEB_SEARCH` 决定显示/隐藏
+- Source Family checkbox 只有在 web search 开启且 `provider_capability.supports_domain_filter=true` 时可选；关闭 web search 或 capability 不支持会清空已选 family
 
 ### 6.2 搜索状态指示
 
@@ -326,9 +330,12 @@ VITE_ENABLE_WEB_SEARCH=false
 
 `scenario.web_search_context.family_context` 非空时，ResultView 还会显示四张 source family card：
 
-- 被选中的 family 才会进入 `ready`
+- 被选中的 family 成功后进入 `ready`
 - 未选中的 family 保持 `empty`
+- provider 不支持 domain filter 时进入 `unsupported_provider`
+- family 内部 provider error 会进入 `failed`
 - `polymarket.configured_host=non-us` 时显示 geo-gated placeholder
+- 当前 ResultView 还没有为所有扩展状态补专门 UI 文案；这属于 P4a。
 
 ---
 
@@ -346,14 +353,16 @@ VITE_ENABLE_WEB_SEARCH=false
 | `test_fetch_api_error` | 500 → 返回 None |
 | `test_cache_hit` | 相同 query 命中缓存 |
 | `test_provider_detection_perplexity` | perplexity URL → NativeSearchProvider |
-| `test_fallback_chain` | 主 provider 失败 → fallback → 返回结果 |
+| provider capability / URL 后过滤测试 | provider capability、IDN/punycode、suffix lookalike、非 http(s) URL 过滤 |
+| xAI / SearXNG family tests | xAI `allowed_domains`、SearXNG `site:` 域名归一化 |
 
 ### 7.2 后端集成测试 (`tests/test_web_context_integration.py`)
 
 | 测试 | 验证点 |
 |------|--------|
 | `test_create_scenario_with_search` | POST `/api/scenario` + `web_search_enabled=true` → `web_context_json` 存储 |
-| `test_create_scenario_selected_families` | `web_search_families` 只让被选中的 family 变成 `ready` |
+| `test_create_scenario_selected_families` | `web_search_families` 只让被选中的 family 进入搜索路径 |
+| base/family independent tests | base search 失败不阻断 family；family 失败不丢弃 base context |
 | `test_create_scenario_polymarket_geo_gate` | `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` → `polymarket` 保持 `empty + geo_gated` |
 | `test_create_scenario_search_failure` | Mock 超时 → 场景正常创建，无 context |
 | `test_create_scenario_search_disabled` | `web_search_enabled=false` → 不调用搜索 |
@@ -364,7 +373,7 @@ VITE_ENABLE_WEB_SEARCH=false
 
 | 测试 | 验证点 |
 |------|--------|
-| `test_toggle_hidden_flag_off` | `VITE_ENABLE_WEB_SEARCH=false` → 不渲染 |
+| source family disabled gate tests | provider capability 不支持 domain filter → checkbox disabled + 清空旧选择 |
 | `test_toggle_opt_in_default_off` | toggle 默认关闭状态 |
 | `test_toggle_sends_flag` | 开启 → 请求含 `web_search_enabled: true` |
 | `test_toggle_sends_selected_families` | source family toggle → 请求含 `web_search_families` |

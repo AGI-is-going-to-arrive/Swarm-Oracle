@@ -515,3 +515,37 @@ class TestScenarioResponseWebSearchContext:
         result = load_scenario_response(engine, scenario_id)
         assert result is not None
         assert result.web_search_context is None
+
+
+# ── Preflight Provider Consistency (P0-0) ───────────────
+
+
+# Test: native provider must not preflight pass
+def test_native_provider_preflight_not_pass(monkeypatch):
+    """WEB_SEARCH_PROVIDER=native must not report preflight pass (ADR-8)."""
+    monkeypatch.setattr("app.config.settings.ENABLE_WEB_SEARCH", True)
+    monkeypatch.setattr("app.config.settings.WEB_SEARCH_PROVIDER", "native")
+    from app.services.preflight import _check_web_search
+    result = _check_web_search()
+    assert result.status != "pass", "native provider must not pass preflight"
+    assert result.status == "warn"
+    assert "not yet implemented" in result.message.lower() or "native" in result.message.lower()
+
+
+@pytest.mark.parametrize("provider,needs_key", [
+    ("tavily", True),
+    ("exa", True),
+    ("xai", True),
+    ("searxng", False),
+])
+def test_real_provider_preflight_pass(monkeypatch, provider, needs_key):
+    """Real providers with valid config should pass preflight."""
+    monkeypatch.setattr("app.config.settings.ENABLE_WEB_SEARCH", True)
+    monkeypatch.setattr("app.config.settings.WEB_SEARCH_PROVIDER", provider)
+    if needs_key:
+        monkeypatch.setattr("app.config.settings.WEB_SEARCH_API_KEY", "test-key-123")
+    else:
+        monkeypatch.setattr("app.config.settings.SEARXNG_URL", "http://localhost:8888")
+    from app.services.preflight import _check_web_search
+    result = _check_web_search()
+    assert result.status == "pass", f"{provider} with valid config should pass"

@@ -124,29 +124,52 @@ function NewSourceToggleItem({
 }) {
   const { t } = useTranslation();
   // Per-family capability gate (server may disable any family independently).
-  const { enabled: featureEnabled, loading } = useCapabilityCheck(
+  const { enabled: featureEnabled, loading, capabilities } = useCapabilityCheck(
     'web_search',
     `providers.${family}.enabled`,
   );
+  // P1-7: gate on whether the current provider supports domain filtering.
+  // If the capability registry does not expose `provider_capability` (legacy server),
+  // treat domain filter as supported to remain backward compatible.
+  const providerCapability = capabilities?.web_search?.provider_capability;
+  const domainFilterSupported = providerCapability
+    ? providerCapability.supports_domain_filter === true
+    : true;
   const testId = `input-source-toggle-${family}`;
-  const effectiveDisabled = Boolean(disabled) || loading || !featureEnabled;
+  const effectiveDisabled =
+    Boolean(disabled) || loading || !featureEnabled || !domainFilterSupported;
   const title = t(`input_source.${family}.label`, {
     defaultValue: family.replace('_', ' '),
   });
   const tooltip = t(`input_source.${family}.tooltip`, {
     defaultValue: 'External source provider.',
   });
+  const tooltipText = disabled
+    ? t('input_source.search_disabled_tooltip', {
+        defaultValue: 'Enable web search to use source categories.',
+      })
+    : !featureEnabled
+      ? t('input_source.disabled_tooltip', {
+          defaultValue: 'This source is not available on the server.',
+        })
+      : !domainFilterSupported
+        ? t('input_source.domain_filter_unsupported', {
+            defaultValue: 'The current search provider does not support domain-specific filtering.',
+          })
+        : tooltip;
+  const effectiveChecked = featureEnabled && !disabled && domainFilterSupported && checked;
   return (
     <label
-      className={`new-source-toggle ${checked ? 'new-source-toggle--active' : ''} ${effectiveDisabled ? 'new-source-toggle--disabled' : ''}`}
+      className={`new-source-toggle ${effectiveChecked ? 'new-source-toggle--active' : ''} ${effectiveDisabled ? 'new-source-toggle--disabled' : ''}`}
       data-testid={testId}
       data-source-family={family}
       data-feature-enabled={featureEnabled ? 'true' : 'false'}
-      title={featureEnabled ? tooltip : t('input_source.disabled_tooltip', { defaultValue: 'This source is not available on the server.' })}
+      data-domain-filter-supported={domainFilterSupported ? 'true' : 'false'}
+      title={tooltipText}
     >
       <input
         type="checkbox"
-        checked={featureEnabled && checked}
+        checked={effectiveChecked}
         onChange={(evt) => onChange(evt.target.checked)}
         disabled={effectiveDisabled}
       />
@@ -252,6 +275,10 @@ export function InputView() {
   const [searchParams] = useSearchParams();
   const directorIdentity = getDirectorIdentity();
   const { capabilities: caps } = useCapabilityCheck('custom_agents');
+  const { capabilities: wsCapabilities } = useCapabilityCheck('web_search');
+  const parentDomainFilterSupported = wsCapabilities?.web_search?.provider_capability
+    ? wsCapabilities.web_search.provider_capability.supports_domain_filter === true
+    : true;
   const { enabled: educationTemplatesEnabled } = useCapabilityCheck('education_templates');
   const [educationPickerOpen, setEducationPickerOpen] = useState(false);
   // S1-5: First-visit onboarding guide. Hidden once the user finishes or skips.
@@ -412,6 +439,7 @@ export function InputView() {
   }, [webSearchProvider]);
   const webSearchUsesCustomOverride = webSearchEnabled && webSearchMode === 'custom_override';
   const selectedWebSearchFamilies = useMemo<WebSearchFamily[]>(() => {
+    if (!webSearchEnabled || !parentDomainFilterSupported) return [];
     const nextFamilies: WebSearchFamily[] = [];
     if (newSourceTogglePolymarket) nextFamilies.push('polymarket');
     if (newSourceToggleFinance) nextFamilies.push('finance');
@@ -423,6 +451,8 @@ export function InputView() {
     newSourceToggleFinance,
     newSourceToggleNewsDeep,
     newSourceTogglePolymarket,
+    parentDomainFilterSupported,
+    webSearchEnabled,
   ]);
   const byokBudgetRecommendation = useMemo(() => {
     if (byokRequestsPerMinute == null && byokTokensPerMinute == null) return null;
@@ -550,6 +580,17 @@ export function InputView() {
   useEffect(() => {
     saveScenarioRuntimePreset(runtimePreset);
   }, [runtimePreset]);
+
+  // P1-7: clear source family selections when the gate closes
+  // so stale picks don't sneak into a later run if it reopens.
+  useEffect(() => {
+    if (!webSearchEnabled || !parentDomainFilterSupported) {
+      setNewSourceTogglePolymarket(false);
+      setNewSourceToggleFinance(false);
+      setNewSourceToggleAcademic(false);
+      setNewSourceToggleNewsDeep(false);
+    }
+  }, [parentDomainFilterSupported, webSearchEnabled]);
 
   // BYOK auto-expand: open advanced config when sessionStorage has a saved BYOK key
   useEffect(() => {
@@ -1595,7 +1636,7 @@ export function InputView() {
                       academic: setNewSourceToggleAcademic,
                       news_deep: setNewSourceToggleNewsDeep,
                     }}
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || !webSearchEnabled}
                   />
 
                   {/* ── Mode Selectors (inline with input area) ── */}

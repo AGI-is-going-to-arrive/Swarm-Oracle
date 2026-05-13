@@ -1987,3 +1987,238 @@ describe('InputView IME composition guard and confirm launch dialog', () => {
     expect(startSimulationMock).not.toHaveBeenCalled();
   });
 });
+
+// P1-7: Source Family toggle UX gate (search-off + provider capability)
+describe('Source Family toggle UX gate', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    window.localStorage.setItem('swarm_onboarding_completed', 'true');
+    __resetCapabilityCacheForTests();
+    setMockLanguage('en');
+    changeLanguageMock.mockClear();
+    createDebateMock.mockReset();
+    startSimulationMock.mockClear();
+    identityPreflightMock.mockReset();
+    testLlmConnectionMock.mockReset();
+    getCapabilitiesMock.mockReset();
+    identityPreflightMock.mockResolvedValue({
+      needs_confirmation: false,
+      matches: [],
+      summary: {
+        agent_count: 0,
+        exact_match_count: 0,
+        candidate_count: 0,
+        new_identity_count: 0,
+      },
+    });
+    import.meta.env.VITE_ENABLE_WEB_SEARCH = 'true';
+    getCampaignProfileMock.mockResolvedValue({
+      id: 'profile-p17',
+      user_id: 'director-1',
+      user_name: 'Local Director',
+      total_runs: 0,
+      completed_challenges: 0,
+      total_bets: 0,
+      hit_bets: 0,
+      highest_archive_grade: null,
+      created_at: '2026-03-17T00:00:00Z',
+      updated_at: '2026-03-17T00:00:00Z',
+      last_daily_challenge_completed_at: null,
+      last_daily_challenge_profile_id: null,
+      last_daily_challenge_scenario_id: null,
+    });
+    getCampaignMasteryMock.mockResolvedValue([]);
+    getCampaignBadgesMock.mockResolvedValue([]);
+    getCampaignChallengeRotationMock.mockResolvedValue({
+      local_date: '2026-03-17',
+      week_key: '2026-03-16',
+      today_challenge: {
+        id: 'challenge-p17',
+        question: 'What if web search is gated by capability?',
+        question_en: 'What if web search is gated by capability?',
+        subtitle_zh: '能力门控',
+        subtitle_en: 'Capability gating',
+        profile_id: 'governance',
+        rounds: 3,
+        num_agents: 3,
+        mode: 'blackboard',
+        visualization_enabled: true,
+      },
+      weekly_challenges: [],
+    });
+    getCampaignDailyChallengeStatusMock.mockResolvedValue(null);
+    getCampaignWeeklySummaryMock.mockResolvedValue(null);
+    getChallengeProgressMock.mockReturnValue(null);
+  });
+
+  const buildCapabilitiesWithProviders = (overrides: Partial<{
+    supportsDomainFilter: boolean;
+    includeProviderCapability: boolean;
+  }> = {}) => ({
+    web_search: {
+      scope: 'server' as const,
+      server_enabled: true,
+      method: 'external',
+      provider: 'tavily',
+      providers: {
+        polymarket: { enabled: true, configured_host: 'us', rate_limit_rps: 2, ttl_seconds: 60, byok_allowed: true },
+        finance: { enabled: true, configured_host: 'www.alphavantage.co', rate_limit_rps: 5, ttl_seconds: 300, byok_allowed: true },
+        academic: { enabled: true, configured_host: 'export.arxiv.org', rate_limit_rps: 3, ttl_seconds: 1800, byok_allowed: true },
+        news_deep: { enabled: true, configured_host: 'api.gdeltproject.org', rate_limit_rps: 1, ttl_seconds: 900, byok_allowed: false },
+      },
+      ...(overrides.includeProviderCapability !== false
+        ? {
+          provider_capability: {
+            supports_domain_filter: overrides.supportsDomainFilter ?? true,
+            supports_sources: true,
+            domain_filter_mode: 'api' as const,
+          },
+        }
+        : {}),
+    },
+  });
+
+  it('disables family toggles when web search is off', async () => {
+    getCapabilitiesMock.mockResolvedValue(buildCapabilitiesWithProviders());
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Wait for the source toggles to render (capability resolved).
+    const polymarketToggle = await screen.findByTestId('input-source-toggle-polymarket');
+    // Web search is off by default → all four toggle checkboxes should be disabled.
+    const checkbox = polymarketToggle.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox).toBeDisabled();
+
+    for (const family of ['finance', 'academic', 'news_deep']) {
+      const label = screen.getByTestId(`input-source-toggle-${family}`);
+      const cb = label.querySelector('input[type="checkbox"]') as HTMLInputElement;
+      expect(cb).toBeDisabled();
+    }
+  });
+
+  it('clears family selections when web search is turned off', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue(buildCapabilitiesWithProviders());
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Enable web search first.
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+    const searchCheckbox = screen.getByText('home.web_search_toggle').closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    await user.click(searchCheckbox);
+    expect(searchCheckbox.checked).toBe(true);
+
+    // Tick two family toggles.
+    await user.click(screen.getByTestId('input-source-toggle-polymarket'));
+    await user.click(screen.getByTestId('input-source-toggle-academic'));
+
+    const polyCheckbox = screen
+      .getByTestId('input-source-toggle-polymarket')
+      .querySelector('input[type="checkbox"]') as HTMLInputElement;
+    const acadCheckbox = screen
+      .getByTestId('input-source-toggle-academic')
+      .querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(polyCheckbox.checked).toBe(true);
+    expect(acadCheckbox.checked).toBe(true);
+
+    // Turn web search off → family selections should clear.
+    await user.click(searchCheckbox);
+    expect(searchCheckbox.checked).toBe(false);
+
+    await waitFor(() => {
+      expect(polyCheckbox.checked).toBe(false);
+      expect(acadCheckbox.checked).toBe(false);
+    });
+  });
+
+  it('shows search_disabled_tooltip when web search is off', async () => {
+    getCapabilitiesMock.mockResolvedValue(buildCapabilitiesWithProviders());
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    const polymarketToggle = await screen.findByTestId('input-source-toggle-polymarket');
+    // Tooltip is rendered as the label's title attribute.
+    expect(polymarketToggle.getAttribute('title')).toBe('input_source.search_disabled_tooltip');
+  });
+
+  it('disables family toggles when provider has no domain filter support', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue(
+      buildCapabilitiesWithProviders({ supportsDomainFilter: false }),
+    );
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Even with web search on, family toggles must be disabled because the
+    // configured provider can't honor domain-specific filters.
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+    const searchCheckbox = screen
+      .getByText('home.web_search_toggle')
+      .closest('label')
+      ?.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    await user.click(searchCheckbox);
+
+    const polymarketToggle = await screen.findByTestId('input-source-toggle-polymarket');
+    const polyCheckbox = polymarketToggle.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(polyCheckbox).toBeDisabled();
+    expect(polymarketToggle.getAttribute('data-domain-filter-supported')).toBe('false');
+    expect(polymarketToggle.getAttribute('title')).toBe('input_source.domain_filter_unsupported');
+  });
+
+  it('excludes families from submission payload when domain filter is unsupported', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue(
+      buildCapabilitiesWithProviders({ supportsDomainFilter: false }),
+    );
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+
+    // Enable web search.
+    const searchCheckbox = screen.getByText('home.web_search_toggle').closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    await user.click(searchCheckbox);
+    expect(searchCheckbox.checked).toBe(true);
+
+    // Type a question and submit.
+    await user.type(screen.getAllByRole('textbox')[0], 'Test domain filter gate');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          webSearchEnabled: true,
+          webSearchFamilies: [],
+        }),
+      );
+    });
+  });
+});

@@ -76,14 +76,16 @@
 - 这些字段的当前口径：
   - 只有 `web_search_enabled=true` 时才会真正参与搜索
   - `web_search_families` 当前只接受 `polymarket / finance / academic / news_deep`；空白会 trim，重复值会去重
+  - 首页当前只会在 web search 已开启、且当前服务端 provider 支持 domain filter 时发送已选 family；否则会清空 family 选择并发送空数组或不发送
   - `web_search_enabled=false` 时，override 字段会被忽略
   - 官方 provider 的 `web_search_base_url` 只接受 `https` endpoint
   - `searxng` 的 `web_search_base_url` 只接受和服务端 `SEARXNG_URL` 完全一致的基址
   - 如果 custom override 的 provider 和服务端默认 provider 不同，调用方需要显式传该 provider 的 API key；后端不会跨 provider 复用默认 key
 - 搜索成功时，scenario response 会带 `web_search_context`，并持久化到 `Scenario.web_context_json`。
   - `FEATURE_NEW_SOURCES=true` 时，`web_search_context` 里还会带 `family_context`
-  - 后端只会把被选中的 family 标成 `ready`；未选中的 family 保持 `empty`
-  - `polymarket` 当前额外带 `configured_host / geo_gated`
+  - base search 和 family search 独立执行；base search 失败不会阻止已选择的 family search
+  - 后端当前可写出 `ready / empty / failed / unsupported_provider`；历史/兼容 parser 还允许 `loading / rate_limited / network_error / search_skipped / fallback_unconstrained`
+  - family entry 可能带 `domain_filter_mode / domain_coverage / status_reason`；`polymarket` 当前额外带 `configured_host / geo_gated`
 - `POST /api/scenario` 当前也接受可选 `continuity_overrides`：
   - 前端通常先调用 `POST /api/agents/identities/preflight`
   - `reuse_existing` 需要带 `identity_id`，后端会校验它属于当前 `user_id`
@@ -191,7 +193,7 @@
 | `GET` | `/api/scenario/{scenario_id}/export` | 导出 Markdown |
 | `POST` | `/api/health` | 后端健康检查 |
 | `POST` | `/api/health/test` | provider 探测与预算预检；返回服务端默认搜索 hint |
-| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 17-key capability registry (`web_search` + 16 个功能开关) |
+| `GET` | `/api/capabilities` | 轻量配置探测（无 LLM 调用），返回 `web_search` + 功能开关 capability registry |
 | `GET` | `/` | 根信息 |
 | `GET` | `/metrics` | Prometheus 文本指标 |
 
@@ -200,7 +202,12 @@
 - provider overrides 只能通过 `POST body` 传入，不能放在社交文案 `GET query` 中。
 - `export` 通过附件下载返回 Markdown 文件。
 - `/api/health`、`/api/health/test`、`/api/capabilities` 当前都属于业务 REST 门禁范围；`/` 和 `/metrics` 仍是显式例外。
-- `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认配置是否 ready（`scope: "server"`），不是 per-provider 探测结果。
+- `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认配置是否 ready（`scope: "server"`），不是 request-scoped custom override 探测结果。
+- `web_search.provider_capability` 描述当前服务端默认搜索 provider 的能力：
+  - `supports_domain_filter`
+  - `supports_sources`
+  - `domain_filter_mode`: `api / query / prompt / none`
+- `FEATURE_NEW_SOURCES=true` 时，`web_search.providers.{family}.capability` 会给每个 family entry 附上同一套 domain-filter 能力摘要和 `max_domains`。
 - `GET /api/capabilities` 当前顶层 key 固定为：
   `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst / snapshot_export / education_templates / persona_export / prediction_journal`。
   除 `web_search` 外，其余 16 个都是功能开关 registry entry，至少带 `enabled / version`。`FEATURE_HALLUCINATION_GATE` 只影响后端 warning metadata，不是 capability key。

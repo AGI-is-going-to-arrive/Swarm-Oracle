@@ -146,9 +146,10 @@ ruff check app/api/admin.py app/api/scenarios.py app/api/quota.py app/services/s
 cd backend
 source .venv/bin/activate
 python -m pytest tests/test_web_context.py tests/test_web_context_integration.py tests/test_web_search_contract.py tests/test_config.py -q
+python -m pytest tests/test_web_context.py tests/test_web_context_integration.py tests/test_web_search_contract.py tests/test_llm_client.py tests/test_roundtable_analyst.py -q
 
 cd ../frontend
-npm test -- --run src/pages/InputView.test.tsx
+npm test -- --run src/pages/InputView.test.tsx src/api/client.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run lint
 VITE_ENABLE_WEB_SEARCH=true npm run build
@@ -185,6 +186,8 @@ SWARM_E2E_MODE=live node scripts/e2e-new-source-ingestion-live.mjs full --url ht
   - request-scoped `provider / API key / base URL`
   - 首页 `沿用服务器默认 / 自定义覆盖`
   - frontend custom override E2E 请求体校验
+  - Source Family domain-filter capability gate、xAI `allowed_domains`、SearXNG `site:` 查询归一化、URL 后过滤和 native placeholder preflight warn
+- `VITE_ENABLE_WEB_SEARCH=true` 保留在命令里只是显式环境和旧脚本兼容；当前 InputView 搜索增强入口默认可见，不再由这个 Vite 编译期开关决定是否显示
 - `e2e:web-search` 当前会额外校验 `/api/scenario` 请求体里是否真的带上：
   - `web_search_enabled`
   - `web_search_provider`
@@ -267,7 +270,7 @@ npm run lint
 npm run build
 ```
 
-当前全仓验证最近记录：backend full pytest `2766 passed, 2 skipped`，backend touched-file `ruff check` 通过；frontend full vitest `184 files / 1994 tests passed`，TypeScript noEmit 与目标文件 ESLint 通过；`git diff --check` 通过。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
+当前全仓验证最近记录：backend full pytest `2835 passed, 2 skipped`，`ruff check .` 通过；frontend full vitest `184 files / 2004 tests passed`，TypeScript noEmit、lint 与 build 通过。Source Family Playwright 复核覆盖 desktop 1440、mobile 375，以及 Chromium / Firefox / WebKit headless smoke。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
@@ -344,11 +347,12 @@ npm run build
 
 最近稳定验证记录：
 
-- backend `ruff check`：通过
-- backend 全量 `python -m pytest tests/ -x -q --tb=short`：`2766 passed, 2 skipped`
+- backend `ruff check .`：通过
+- backend 全量 `python -m pytest -x -q --tb=short`：`2835 passed, 2 skipped`
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-- frontend full vitest：`184 files / 1994 tests passed`
-- frontend 目标文件 ESLint：通过
+- frontend full vitest：`184 files / 2004 tests passed`
+- frontend `npm run lint`：通过
+- frontend `npm run build`：通过
 - frontend i18n key + placeholder parity：通过
 - `git diff --check`：通过
 - Chrome DevTools browser spot-check：Debate live/result 在 `1440px` 和 `375px` 均无水平溢出；`375px` expand button 为 `44px`，long role probe `overflow=0`

@@ -1390,3 +1390,148 @@ class TestStripReasoningBlocks:
 
     def test_strips_case_insensitive(self):
         assert _strip_reasoning_blocks("<THINK>loud</THINK>ok") == "ok"
+
+
+# ── P0-1: _resolve_llm_api_url table-driven tests ────────
+
+
+@pytest.mark.parametrize("input_url,expected_url", [
+    ("https://api.x.ai/v1", "https://api.x.ai/v1/chat/completions"),
+    ("https://api.x.ai/v1/responses", "https://api.x.ai/v1/responses"),
+    ("https://api.openai.com/v1", "https://api.openai.com/v1/chat/completions"),
+    ("https://api.openai.com/v1/responses", "https://api.openai.com/v1/responses"),
+    ("http://localhost:8317/v1", "http://localhost:8317/v1/chat/completions"),
+    ("http://localhost:8317/v1/responses", "http://localhost:8317/v1/responses"),
+    ("https://api.deepseek.com/v1", "https://api.deepseek.com/v1/chat/completions"),
+    ("https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1/chat/completions"),
+    ("https://api.x.ai/v1/", "https://api.x.ai/v1/chat/completions"),
+    ("https://api.x.ai/v1/chat/completions", "https://api.x.ai/v1/chat/completions"),
+    (
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    ),
+])
+def test_resolve_llm_api_url_matrix(input_url, expected_url):
+    """Table-driven test for _resolve_llm_api_url covering xAI/OpenAI/local/proxy endpoints."""
+    from app.services.llm_client import _resolve_llm_api_url
+    assert _resolve_llm_api_url(input_url) == expected_url
+
+
+# ── P0-2: No native search payload regression tests ─────
+
+
+FORBIDDEN_NATIVE_SEARCH_KEYS = {
+    "tools", "tool_choice", "tool_calls", "web_search", "web_search_options",
+    "google_search", "grounding", "enable_search", "search_options",
+}
+
+
+@pytest.mark.asyncio
+async def test_llm_call_payload_no_native_search_keys(monkeypatch):
+    """llm_call() must not include any native search params in payload (HC-7)."""
+    captured_json: dict = {}
+
+    class _FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+        def raise_for_status(self):
+            return None
+
+    class _FakeClient:
+        async def post(self, _url, *, json=None, headers=None, timeout=None):
+            if json is not None:
+                captured_json.update(json)
+            return _FakeResponse()
+
+    monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+    monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+    try:
+        await llm_call(
+            "test prompt",
+            reasoning_effort="low",
+            base_url="http://127.0.0.1:8317/v1",
+            api_key="sk-test",
+            model="gpt-5.4-mini",
+        )
+    except Exception:
+        pass  # We only care about the payload shape
+
+    for key in FORBIDDEN_NATIVE_SEARCH_KEYS:
+        assert key not in captured_json, f"Payload must not contain '{key}'"
+
+
+@pytest.mark.asyncio
+async def test_llm_call_stream_payload_no_native_search_keys(monkeypatch):
+    """llm_call_stream() must not include any native search params in payload (HC-7)."""
+    captured_json: dict = {}
+
+    class _FakeStreamResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            for line in (
+                'data: {"choices":[{"delta":{"content":"OK"}}]}',
+                "data: [DONE]",
+            ):
+                yield line
+
+    class _FakeStreamClient:
+        def stream(self, _method, _url, *, json=None, headers=None, timeout=None):
+            if json is not None:
+                captured_json.update(json)
+            return _FakeStreamResponse()
+
+    monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeStreamClient())
+    monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+
+    from app.services.llm_client import llm_call_stream
+
+    try:
+        async for _chunk in llm_call_stream(
+            "test prompt",
+            reasoning_effort="low",
+            base_url="http://127.0.0.1:8317/v1",
+            api_key="sk-test",
+            model="gpt-5.4-mini",
+        ):
+            pass
+    except Exception:
+        pass  # We only care about the payload shape
+
+    for key in FORBIDDEN_NATIVE_SEARCH_KEYS:
+        assert key not in captured_json, f"Stream payload must not contain '{key}'"
+
+
+@pytest.mark.parametrize("target_url", [
+    "https://api.x.ai/v1/chat/completions",
+    "https://api.openai.com/v1/chat/completions",
+    "http://127.0.0.1:8317/v1/chat/completions",
+    "https://api.x.ai/v1/responses",
+    "https://api.openai.com/v1/responses",
+])
+def test_build_llm_payload_no_native_search_keys(target_url):
+    """_build_llm_payload() helper must not emit any native search params (HC-7)."""
+    from app.services.llm_client import _build_llm_payload
+    payload, _is_chat = _build_llm_payload(
+        input_text="test prompt",
+        model="gpt-5.4-mini",
+        reasoning_effort="low",
+        target_url=target_url,
+    )
+    for key in FORBIDDEN_NATIVE_SEARCH_KEYS:
+        assert key not in payload, (
+            f"_build_llm_payload({target_url!r}) must not contain '{key}'"
+        )

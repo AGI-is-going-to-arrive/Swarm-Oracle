@@ -470,7 +470,41 @@ async def api_capabilities():
     which triggers an actual LLM connectivity test.  Returns a capability
     registry where each key has {enabled, version, server_only, degraded_mode}.
     """
+    from app.config import settings as _cfg
+    from app.services.web_context import PROVIDER_CAPABILITIES
+
     ws_hint = _build_web_search_server_hint()
+
+    # P1-6: provider-level capability info for the currently configured provider.
+    current_provider = (_cfg.WEB_SEARCH_PROVIDER or "").strip().lower()
+    cap = PROVIDER_CAPABILITIES.get(current_provider)
+    provider_capability: dict[str, object] = (
+        {
+            "supports_domain_filter": cap.supports_domain_filter,
+            "supports_sources": cap.supports_sources,
+            "domain_filter_mode": cap.domain_filter_mode,
+        }
+        if cap is not None
+        else {
+            "supports_domain_filter": False,
+            "supports_sources": False,
+            "domain_filter_mode": "none",
+        }
+    )
+
+    def _family_capability() -> dict[str, object]:
+        if cap is not None:
+            return {
+                "supports_domain_filter": cap.supports_domain_filter,
+                "domain_filter_mode": cap.domain_filter_mode,
+                "max_domains": cap.max_domains,
+            }
+        return {
+            "supports_domain_filter": False,
+            "domain_filter_mode": "none",
+            "max_domains": None,
+        }
+
     providers_block = (
         {
             "polymarket": {
@@ -479,6 +513,7 @@ async def api_capabilities():
                 "rate_limit_rps": 2,
                 "ttl_seconds": 60,
                 "byok_allowed": True,
+                "capability": _family_capability(),
             },
             "finance": {
                 "enabled": settings.FEATURE_NEW_SOURCES,
@@ -486,6 +521,7 @@ async def api_capabilities():
                 "rate_limit_rps": 5,
                 "ttl_seconds": 300,
                 "byok_allowed": True,
+                "capability": _family_capability(),
             },
             "academic": {
                 "enabled": settings.FEATURE_NEW_SOURCES,
@@ -493,6 +529,7 @@ async def api_capabilities():
                 "rate_limit_rps": 3,
                 "ttl_seconds": 1800,
                 "byok_allowed": True,
+                "capability": _family_capability(),
             },
             "news_deep": {
                 "enabled": settings.FEATURE_NEW_SOURCES,
@@ -500,6 +537,7 @@ async def api_capabilities():
                 "rate_limit_rps": 1,
                 "ttl_seconds": 900,
                 "byok_allowed": False,
+                "capability": _family_capability(),
             },
         }
         if settings.FEATURE_NEW_SOURCES
@@ -513,6 +551,7 @@ async def api_capabilities():
             ),
             **ws_hint,
             "providers": providers_block,
+            "provider_capability": provider_capability,
         },
         "custom_agents": _capability_entry(
             enabled=settings.FEATURE_CUSTOM_AGENTS,
@@ -730,9 +769,14 @@ async def create_scenario(
         },
     )
     # Web Search Enhancement: fetch context synchronously before response.
-    # Bounded by provider timeout settings. Failure never blocks scenario creation.
+    # P1-4: Base search and family search are now INDEPENDENT — a failure in
+    # one path never discards the result of the other. Bounded by provider
+    # timeout settings. Failure never blocks scenario creation.
     web_context_json: str | None = None
+    from app.services.web_context import WebSearchResult as _WSR
+    web_result: _WSR | None = None
     if req.web_search_enabled:
+        # --- Base search (independent) ---
         try:
             from app.services.web_context import fetch_web_context
             web_result = await fetch_web_context(
@@ -741,29 +785,50 @@ async def create_scenario(
                 api_key_override=req.web_search_api_key,
                 base_url_override=req.web_search_base_url,
             )
-            if web_result is not None:
-                if settings.FEATURE_NEW_SOURCES and req.web_search_families:
-                    from app.services.web_context import (
-                        _resolve_request_config,
-                        fetch_family_context,
-                    )
-
-                    family_config = _resolve_request_config(
-                        provider_override=req.web_search_provider,
-                        api_key_override=req.web_search_api_key,
-                        base_url_override=req.web_search_base_url,
-                    )
-                    web_result.family_context = await fetch_family_context(
-                        question,
-                        req.web_search_families,
-                        request_config=family_config,
-                    )
-                web_context_json = web_result.to_json()
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "Web search failed for scenario (non-blocking): %s", exc,
             )
+
+        # --- Family search (independent) ---
+        if settings.FEATURE_NEW_SOURCES and req.web_search_families:
+            try:
+                from datetime import datetime, timezone
+
+                from app.services.web_context import (
+                    _resolve_request_config,
+                    fetch_family_context,
+                )
+
+                family_config = _resolve_request_config(
+                    provider_override=req.web_search_provider,
+                    api_key_override=req.web_search_api_key,
+                    base_url_override=req.web_search_base_url,
+                )
+                family_context = await fetch_family_context(
+                    question,
+                    req.web_search_families,
+                    request_config=family_config,
+                )
+                if web_result is not None:
+                    web_result.family_context = family_context
+                else:
+                    # Base search failed/returned None but family search succeeded.
+                    web_result = _WSR(
+                        query=question,
+                        snippets=[],
+                        provider=family_config.provider,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        cached=False,
+                        family_context=family_context,
+                    )
+            except Exception:
+                logger.warning(
+                    "Family context fetch failed (non-blocking)", exc_info=True,
+                )
+
+        if web_result is not None:
+            web_context_json = web_result.to_json()
 
     scenario.web_context_json = web_context_json  # None if search disabled/failed
 

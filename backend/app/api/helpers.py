@@ -1135,6 +1135,17 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
             })
         safe_family_context: dict[str, dict] = {}
         raw_family_context = parsed.get("family_context")
+        VALID_FAMILY_STATES = {
+            "loading",
+            "empty",
+            "rate_limited",
+            "network_error",
+            "ready",
+            "failed",
+            "search_skipped",
+            "unsupported_provider",
+            "fallback_unconstrained",
+        }
         if isinstance(raw_family_context, dict):
             for family in ("polymarket", "finance", "academic", "news_deep"):
                 entry = raw_family_context.get(family)
@@ -1142,7 +1153,7 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
                     continue
                 raw_state = entry.get("state")
                 state = raw_state if isinstance(raw_state, str) else "empty"
-                if state not in {"loading", "empty", "rate_limited", "network_error", "ready"}:
+                if state not in VALID_FAMILY_STATES:
                     state = "empty"
                 raw_items = entry.get("items")
                 safe_items = []
@@ -1187,6 +1198,15 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
                     safe_entry["configured_host"] = configured_host
                 if isinstance(entry.get("geo_gated"), bool):
                     safe_entry["geo_gated"] = entry["geo_gated"]
+                # P1-5: preserve optional metadata fields from family search
+                for meta_key in (
+                    "domain_filter_mode",
+                    "domain_coverage",
+                    "status_reason",
+                ):
+                    meta_val = entry.get(meta_key)
+                    if isinstance(meta_val, str) and meta_val.strip():
+                        safe_entry[meta_key] = meta_val
                 safe_family_context[family] = safe_entry
 
         # Return strict whitelist object — no extra keys leak through.

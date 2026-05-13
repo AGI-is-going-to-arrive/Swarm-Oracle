@@ -89,7 +89,12 @@ def _check_web_search() -> PreflightCheckResult:
         return PreflightCheckResult("web_search", "fail", "SearXNG URL is not configured")
 
     if provider == "native":
-        return PreflightCheckResult("web_search", "pass", "Web search is enabled with native")
+        return PreflightCheckResult(
+            "web_search",
+            "warn",
+            "Web search provider 'native' is not yet implemented; "
+            "web search will be skipped at runtime",
+        )
 
     if settings.WEB_SEARCH_API_KEY.strip():
         return PreflightCheckResult(

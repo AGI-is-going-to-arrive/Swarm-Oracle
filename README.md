@@ -95,6 +95,7 @@
 | Prediction Journal | 已落地，受 `FEATURE_PREDICTION_JOURNAL` gate；支持个人预测日志、resolve、校准曲线和 journal 页面；绑定 scenario 时按当前用户校验所有权，跨用户或无 owner 的旧 scenario 统一隐藏成 404，calibration 查询已走有界/索引路径 |
 | Leaderboard Segments | 已落地；`/api/leaderboard` 在传入 segment filters 时返回 `entries + segment_metadata`，并按匹配到的已评分 prediction 重新计算分段指标；不传筛选时保持旧数组响应 |
 | Hallucination Gate | 已接线为 warning-only 后处理；只给 verdict 附加 claims / evidence / warning metadata，不阻断生成结果；`threshold` 只影响 claim 是否标记为 verified，常见中英文否定会进入矛盾检测 |
+| Web Search / Source Family | 已落地为 opt-in 搜索增强；支持服务端默认搜索和当前请求自定义 `provider / API key / base URL`。Source Family 支持 `polymarket / finance / academic / news_deep`，按 provider capability 控制前端 family checkbox；Tavily/Exa 走 API 域名过滤，SearXNG 走归一化 `site:` 查询 + URL 后过滤，xAI app-layer 走 `filters.allowed_domains` + URL 后过滤。LLM BYOK 和 Web Search BYOK 独立，不复用 key。 |
 | Counterfactual Replay & Compare | 已落地，支持 counterfactual / resume / compare；resume 当前会优先使用同分支 checkpoint picker，并把结构化 checkpoint summary 转成人话预览；续跑结局卡会标出来源分支和独立概率说明，compare 当前采用单活跃 Theater + shared round selector |
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale、readonly replay import；argument map 支持五种 verdict status、三层 DAG 和移动端列表；LLM cast 更新后 live 页会刷新名字、角色和 persona，长角色/人设可换行或展开，裁判卡显示本地化的 `待裁决 / 已裁决` 状态；只有分享链接过长并回退到本地只读 `?local=` 时，结果页才会明确显示 `Save local read-only copy` |
 | Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面代表改选当前支持 `drag-to-seat / keyboard reseat`，移动端保留 `click-to-seat`；桌面 roundtable committed transcript 当前已补长段折叠 / 展开，phase insight 展示和预填 prompt 会把长段复述压成一句；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到 anchored thread restore，并已补 Firefox / WebKit scoped regression；单结局结果页只暴露 `进入会客厅 / 只改一步`；已新增 `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 两种交互模式，证据卡追问会把用户引用的世界线保留到 assistant turn；completed live roundtable 的 `1-on-1 Interview` 会先展示代表的角色、世界线、立场、最近原话和人物简介；Oracle 主文案当前以 factual anchor + LLM generation/rewrite fallback 为主，角色身份和动态词汇提示按 `UNTRUSTED DATA` 处理，follow-up 空流式或仅 reasoning 输出会退回非流式改写，最终 fallback 也必须是可直接显示的人话 |
@@ -189,14 +190,14 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 
 当前稳定验证口径：
 
-- backend `ruff check app/services/debate_prompts.py app/services/debate.py tests/test_debate_prompts.py tests/test_debate_service.py`：通过。
-- backend 全量 `python -m pytest tests/ -x -q --tb=short`：`2766 passed, 2 skipped`。
+- backend `ruff check .`：通过。
+- backend 全量 `python -m pytest -x -q --tb=short`：`2835 passed, 2 skipped`。
+- backend Web Search / Source Family 定向回归：`249 passed`；追加 URL scheme 过滤窄集：`28 passed`。
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过。
-- frontend 全量 `npx vitest run`：`184 files / 1994 tests passed`。
-- frontend 目标文件 ESLint：通过。
-- frontend i18n key + placeholder parity：通过。
-- `git diff --check`：通过。
-- Chrome DevTools 实测 Debate live/result 在 `1440px` 与 `375px` 均无水平溢出；`375px` expand button 为 `44px`，long role probe `overflow=0`。
+- frontend 全量 `npx vitest run`：`184 files / 2004 tests passed`。
+- frontend `npm run lint` 和 `npm run build`：通过。
+- frontend InputView / API client 定向回归：`76 passed`。
+- Playwright 实测 Source Family 首页交互在桌面 `1440px` 与移动 `375px` 通过；Chromium / Firefox / WebKit headless smoke 通过。
 
 完整签收入口：
 

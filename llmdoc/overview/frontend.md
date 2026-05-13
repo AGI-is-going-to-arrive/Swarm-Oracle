@@ -263,11 +263,13 @@
   - 这些页面新增样式集中在共享 BEM class 和 editorial token 上，不使用新增 inline style
 - InputView 高级设置当前支持可选 `Organization ID`；值会写进 sessionStorage，并由 API client 自动映射成 `X-Org-Id`。清空输入时会同步移除该请求头。
 - InputView 的搜索增强当前口径：
-  - `VITE_ENABLE_WEB_SEARCH=true` 时就显示 toggle，不再要求服务端默认搜索已就绪
+  - 搜索增强入口默认显示；`VITE_ENABLE_WEB_SEARCH` 只是旧开关，不再决定入口是否出现
   - `GET /api/capabilities` 只决定 `沿用服务器默认` 是否可选，不决定整个 section 是否显示
+  - `provider_capability.supports_domain_filter=false` 时，4 个 source family toggle 会保持可见但不可选，并显示当前语言的说明
   - `沿用服务器默认` 模式只发送 `webSearchEnabled=true`
   - `自定义覆盖` 模式才发送 `webSearchProvider / webSearchApiKey / webSearchBaseUrl`
-  - 4 个 source family toggle 当前会把勾选结果透传成 `webSearchFamilies -> web_search_families`
+  - 4 个 source family toggle 只有在搜索总开关开启、且当前 provider 支持 domain filter 时，才会把勾选结果透传成 `webSearchFamilies -> web_search_families`
+  - 搜索总开关关闭，或 provider capability 从支持变成不支持时，已勾选的 source family 会被清空；重新打开不会恢复旧选择
   - disabled 的 source family 当前会保留可见项，并显示跟随当前 UI 语言的 tooltip，不再回落成英文硬编码
   - 输入搜索 API key / base URL 时不再反复重打 capability 探针
 - InputView 的主问题输入有稳定 accessible name，并带 IME composition guard；中文输入法组词期间按 Enter 不会误触发启动。
@@ -279,6 +281,7 @@
 - ResultView 当前除了折叠的 `真实世界来源` 入口，也会按 `web_search_context.family_context` 渲染四张 source family card：
   - 被选中的 family 才会变成 `ready`
   - 未选中的 family 会保持 `empty`
+  - 后端可能返回 `failed / unsupported_provider / fallback_unconstrained / search_skipped` 等扩展状态；当前前端卡片还没有为这些状态做专门文案，P4a 需要补齐
   - replay / historical payload 里已经带来源数据时，即使当前 capability 关闭，也会用 recorded badge 标出这是历史来源
   - `polymarket.configured_host=non-us` 时会显示 geo-gated placeholder
 - `SimulationView` 的 automation payload 当前已补：
@@ -547,9 +550,10 @@
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
 - 当前 frontend 稳定验证口径：
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npx vitest run`：`184 files / 1994 tests passed`
-  - 目标文件 ESLint：通过
-  - Debate live/result Chrome DevTools 复核覆盖 `1440px` 与 `375px`；score grid 单列、expand button `44px`、long role probe `overflow=0`
+  - `npx vitest run`：`184 files / 2004 tests passed`
+  - `npm run lint`：通过
+  - `npm run build`：通过
+  - Source Family Playwright 复核覆盖 `1440px` 与 `375px`，并通过 Chromium / Firefox / WebKit headless smoke
 - frontend i18n key + placeholder parity：通过。
 - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。

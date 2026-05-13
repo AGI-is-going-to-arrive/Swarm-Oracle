@@ -316,16 +316,20 @@
 - `resolve_identity()` 当前已支持复用外层 SQLModel session，避免 scenario parse 路径在同一事务里二次开 session 时撞到 SQLite `database is locked`。
 - request-scoped BYOK / RPM / TPM 当前不仅作用在主 simulation turns，也会继续透传到 fork detection、narration、memory compression 与 identity compaction。
 - 搜索增强当前走 `web_context.py`：
-  - provider 支持 `tavily / exa / xai / searxng`
+  - app-layer provider 支持 `tavily / exa / xai / searxng`；`native` 仍是 legacy placeholder，preflight 会给 warn，不会当作已实现 provider pass
   - `POST /api/scenario` 可传 request-scoped `web_search_families / web_search_provider / web_search_api_key / web_search_base_url`
   - `web_search_enabled=false` 时，这些 override 字段会在路由层被忽略，不影响正常建局
   - custom provider override 不会再复用“另一个 provider”的服务端默认 key
-  - `xai` 走 Responses API + `web_search` tool，并使用独立 `XAI_WEB_SEARCH_TIMEOUT_SECONDS`
+  - `xai` 走 Responses API + `web_search` tool；source family 会用 `filters.allowed_domains`，并在返回后再次按 URL 过滤
+  - `searxng` 的 source family 会先把域名规范化再拼 `site:` query，返回后也会再次按 URL 过滤
+  - source family URL 后过滤当前只接受 `http/https`，会做 IDN/punycode 规范化，并只允许 exact host 或真实子域名匹配
   - 官方 provider 的 `web_search_base_url` 当前只接受 `https`
   - `searxng` 自定义 base URL 当前只接受与服务端 `SEARXNG_URL` 完全一致的基址
-  - `FEATURE_NEW_SOURCES=true` 且搜索成功时，backend 会把同一份 live snippets 投影成 `web_search_context.family_context`
+  - `FEATURE_NEW_SOURCES=true` 且选中了 family 时，base search 与 family search 分开执行；base search 失败不会短路 family search
     - 只被选中的 family 会标成 `ready`
     - 未选中的 family 会保持 `empty`
+    - 当前 provider 不支持 domain filter 时，family 会标成 `unsupported_provider`
+    - family 搜索异常时，family 会标成 `failed`
     - `polymarket` 当前额外带 `configured_host / geo_gated`
     - `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` 时，`polymarket` 会显式保持 `empty + geo_gated`
 - Ending Room 的同步服务函数（`create_ending_room`、`create_ending_room_thread`、`load_ending_room_snapshot` 等）在 async 端点中通过 `asyncio.to_thread()` 调用，不阻塞事件循环。路由层对 `to_thread` 内部的非业务异常有通用 `except Exception` 兜底，不会让裸 DB 异常直接落成未分类 500。
@@ -412,8 +416,8 @@
 ## 当前验证基线
 
 - 当前 backend 稳定验证口径：
-  - `python -m pytest tests/ -x -q --tb=short`：`2766 passed, 2 skipped`
-  - Debate touched-file `ruff check`：通过
+  - `python -m pytest -x -q --tb=short`：`2835 passed, 2 skipped`
+  - `ruff check .`：通过
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：
   - `tests/test_causal_graph.py -q`：`68 passed`

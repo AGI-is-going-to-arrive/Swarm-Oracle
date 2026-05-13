@@ -183,7 +183,7 @@
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `ENABLE_WEB_SEARCH` | `false` | 总开关，opt-in |
-| `WEB_SEARCH_PROVIDER` | `tavily` | 服务端默认搜索 provider：`tavily` / `exa` / `xai` / `searxng` |
+| `WEB_SEARCH_PROVIDER` | `tavily` | 服务端默认搜索 provider：`tavily` / `exa` / `xai` / `searxng`；`native` 只保留 legacy 配置兼容，不代表已实现 |
 | `WEB_SEARCH_API_KEY` | `""` | 服务端默认搜索 API Key（`searxng` 不需要） |
 | `XAI_WEB_SEARCH_MODEL` | `grok-4.20-reasoning` | `xai` provider 使用的模型 |
 | `XAI_WEB_SEARCH_TIMEOUT_SECONDS` | `45` | `xai` provider 独立超时 |
@@ -197,29 +197,33 @@
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `VITE_ENABLE_WEB_SEARCH` | `false` | 控制 InputView 搜索增强 toggle 显示 |
+| `VITE_ENABLE_WEB_SEARCH` | `false` | 旧编译期开关；InputView 当前默认显示搜索增强入口，不再靠它决定入口是否出现 |
 
 说明：
 
 - 搜索在场景创建时执行一次（Round 1 之前），结果存入 `Scenario.web_context_json`。
 - 搜索失败不阻断推演（graceful degradation）。
-- 前端 toggle 为 opt-in（默认关闭）。当前只要 `VITE_ENABLE_WEB_SEARCH=true` 就会显示，不再要求服务端默认搜索已就绪。
+- 前端 toggle 为 opt-in（默认关闭）。InputView 当前默认显示搜索增强入口，不再要求 `VITE_ENABLE_WEB_SEARCH=true` 或服务端默认搜索已就绪。
 - `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认搜索是否 ready（`scope: "server"`）：
   - ready 时，首页可选 `沿用服务器默认`
   - not ready 时，首页仍可选 `自定义覆盖`
+  - `provider_capability` 描述当前服务端默认 provider 是否支持 domain filter 和 sources；它不是每个 custom override provider 的实时探测结果
 - 首页搜索增强当前有两档：
   - `沿用服务器默认`：只发送 `web_search_enabled=true`
   - `自定义覆盖`：额外发送 `web_search_provider / web_search_api_key / web_search_base_url`
-- 首页 4 个 source family toggle 当前会跟着 `web_search_enabled=true` 一起透传成 `web_search_families`。
+- 首页 4 个 source family toggle 只有在 `web_search_enabled=true` 且当前 provider capability 支持 domain filter 时，才会透传成 `web_search_families`；关闭搜索或 capability 不支持时会清空选择。
 - request-scoped override 当前约束：
   - `web_search_enabled=false` 时，override 字段会被忽略
   - 如果 custom override 的 provider 与服务端默认 provider 不同，留空不会复用服务端默认 key，需要显式填写该 provider 的 key
   - 官方 provider 的 `web_search_base_url` 当前只接受 `https`
   - `searxng` 的 `web_search_base_url` 只接受和 `SEARXNG_URL` 完全一致的基址
-- `FEATURE_NEW_SOURCES=true` 且搜索成功时，后端会把同一份 live snippets 投影成 `web_search_context.family_context`：
-  - 被选中的 family 才会变成 `ready`
-  - 未选中的 family 会保持 `empty`
+- `FEATURE_NEW_SOURCES=true` 且选中了 family 时，后端会为 base search 和 family search 分开执行。`family_context` 当前可能出现：
+  - `ready`：该 family 有通过 URL 后过滤的结果
+  - `empty`：未选中或搜索后没有可用结果
+  - `failed`：该 family 搜索异常
+  - `unsupported_provider`：当前 provider 不支持 domain filter
   - `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` 时，`polymarket` 会显式带上 geo-gated 口径
+  - 历史 payload 解析还保留 `loading / rate_limited / network_error / search_skipped / fallback_unconstrained` 白名单，但当前 P0/P1 后端路径不会主动生成全部状态
 - 详细设计见 `implement/web_search_augmentation_design.md`。
 
 ## Phase 3 功能开关

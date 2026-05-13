@@ -1167,3 +1167,720 @@ class TestCacheHardening:
     def test_sanitize_url_javascript_scheme(self):
         """javascript: scheme must be rejected by _sanitize_url."""
         assert _sanitize_url("javascript:alert(1)") == ""
+
+
+# ── P1-1: ProviderSearchCapability registry ────────────────
+
+
+class TestProviderCapabilities:
+    def test_all_known_providers_have_capabilities(self):
+        from app.services.web_context import PROVIDER_CAPABILITIES
+        for provider in ("tavily", "exa", "searxng", "xai", "native"):
+            assert provider in PROVIDER_CAPABILITIES
+
+    def test_native_provider_no_domain_filter(self):
+        from app.services.web_context import PROVIDER_CAPABILITIES
+        cap = PROVIDER_CAPABILITIES["native"]
+        assert not cap.supports_domain_filter
+        assert cap.domain_filter_mode == "none"
+
+    def test_xai_max_domains_is_five(self):
+        from app.services.web_context import PROVIDER_CAPABILITIES
+        assert PROVIDER_CAPABILITIES["xai"].max_domains == 5
+
+    def test_capability_is_frozen(self):
+        import dataclasses
+
+        from app.services.web_context import PROVIDER_CAPABILITIES
+        cap = PROVIDER_CAPABILITIES["tavily"]
+        assert dataclasses.is_dataclass(cap)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cap.max_domains = 999  # type: ignore[misc]
+
+
+# ── P1-2: xAI domain filter ─────────────────────────────────
+
+
+def _xai_mock_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={"output": []},
+        request=httpx.Request("POST", "https://api.x.ai/v1/responses"),
+    )
+
+
+class TestXaiDomainFilter:
+    @pytest.mark.asyncio
+    async def test_no_domains_no_filters(self, monkeypatch):
+        """include_domains=None → tools has no filters key."""
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "xai-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 2)
+        monkeypatch.setattr(
+            "app.services.web_context.settings.XAI_WEB_SEARCH_MODEL",
+            "grok-4.20-reasoning",
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = _xai_mock_response()
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            await _search_xai("test query", include_domains=None)
+
+        call_kwargs = mock_instance.post.call_args.kwargs
+        body = call_kwargs["json"]
+        tools = body["tools"]
+        assert isinstance(tools, list)
+        assert tools[0]["type"] == "web_search"
+        assert "filters" not in tools[0]
+
+    @pytest.mark.asyncio
+    async def test_domains_within_limit(self, monkeypatch):
+        """include_domains with ≤5 entries → filters.allowed_domains matches."""
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "xai-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 2)
+        monkeypatch.setattr(
+            "app.services.web_context.settings.XAI_WEB_SEARCH_MODEL",
+            "grok-4.20-reasoning",
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = _xai_mock_response()
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            await _search_xai("test query", include_domains=["a.com", "b.com"])
+
+        body = mock_instance.post.call_args.kwargs["json"]
+        tools = body["tools"]
+        assert tools[0]["filters"]["allowed_domains"] == ["a.com", "b.com"]
+
+    @pytest.mark.asyncio
+    async def test_domains_exceeds_limit_truncated(self, monkeypatch):
+        """include_domains with 7 entries → truncated to first 5."""
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "xai-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 2)
+        monkeypatch.setattr(
+            "app.services.web_context.settings.XAI_WEB_SEARCH_MODEL",
+            "grok-4.20-reasoning",
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = _xai_mock_response()
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            domains = [f"d{i}.com" for i in range(7)]
+            await _search_xai("test query", include_domains=domains)
+
+        body = mock_instance.post.call_args.kwargs["json"]
+        tools = body["tools"]
+        allowed = tools[0]["filters"]["allowed_domains"]
+        assert len(allowed) == 5
+        assert allowed == domains[:5]
+
+    @pytest.mark.asyncio
+    async def test_empty_domains_no_filters(self, monkeypatch):
+        """include_domains=[] → no filters key in tools."""
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "xai-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 2)
+        monkeypatch.setattr(
+            "app.services.web_context.settings.XAI_WEB_SEARCH_MODEL",
+            "grok-4.20-reasoning",
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = _xai_mock_response()
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            await _search_xai("test query", include_domains=[])
+
+        body = mock_instance.post.call_args.kwargs["json"]
+        tools = body["tools"]
+        assert "filters" not in tools[0]
+
+    def test_filter_snippets_by_domain_matches(self):
+        from app.services.web_context import (
+            WebSearchSnippet,
+            _filter_snippets_by_domain,
+        )
+        snippets = [
+            WebSearchSnippet(text="a", source_url="https://bloomberg.com/article"),
+            WebSearchSnippet(text="b", source_url="https://reddit.com/r/test"),
+        ]
+        result = _filter_snippets_by_domain(snippets, ["bloomberg.com"])
+        assert len(result) == 1
+        assert "bloomberg" in result[0].source_url
+
+    def test_filter_snippets_by_domain_none_returns_all(self):
+        from app.services.web_context import (
+            WebSearchSnippet,
+            _filter_snippets_by_domain,
+        )
+        snippets = [WebSearchSnippet(text="a", source_url="https://x.com")]
+        assert _filter_snippets_by_domain(snippets, None) == snippets
+
+    def test_filter_snippets_by_domain_empty_returns_all(self):
+        from app.services.web_context import (
+            WebSearchSnippet,
+            _filter_snippets_by_domain,
+        )
+        snippets = [WebSearchSnippet(text="a", source_url="https://x.com")]
+        assert _filter_snippets_by_domain(snippets, []) == snippets
+
+    def test_filter_snippets_by_domain_subdomain_match(self):
+        """Subdomains match if hostname endswith allowed domain."""
+        from app.services.web_context import (
+            WebSearchSnippet,
+            _filter_snippets_by_domain,
+        )
+        snippets = [
+            WebSearchSnippet(text="a", source_url="https://news.bloomberg.com/x"),
+        ]
+        result = _filter_snippets_by_domain(snippets, ["bloomberg.com"])
+        assert len(result) == 1
+
+    def test_filter_snippets_by_domain_invalid_url_dropped(self):
+        """Snippets whose URL has no hostname are dropped."""
+        from app.services.web_context import (
+            WebSearchSnippet,
+            _filter_snippets_by_domain,
+        )
+        snippets = [
+            WebSearchSnippet(text="a", source_url="not a url"),
+            WebSearchSnippet(text="b", source_url="https://bloomberg.com/x"),
+        ]
+        result = _filter_snippets_by_domain(snippets, ["bloomberg.com"])
+        assert len(result) == 1
+        assert "bloomberg" in result[0].source_url
+
+    def test_filter_rejects_suffix_lookalike(self):
+        """evilft.com must NOT match ft.com — only exact or subdomain matches."""
+        from app.services.web_context import (
+            WebSearchSnippet,
+            _filter_snippets_by_domain,
+        )
+        snippets = [
+            WebSearchSnippet(text="evil", source_url="https://evilft.com/x"),
+            WebSearchSnippet(text="fake", source_url="https://fakeapnews.com/y"),
+            WebSearchSnippet(text="real", source_url="https://ft.com/z"),
+            WebSearchSnippet(text="sub", source_url="https://www.apnews.com/w"),
+        ]
+        result = _filter_snippets_by_domain(snippets, ["ft.com", "apnews.com"])
+        assert len(result) == 2
+        urls = [s.source_url for s in result]
+        assert "https://ft.com/z" in urls
+        assert "https://www.apnews.com/w" in urls
+
+    def test_filter_handles_trailing_dots(self):
+        """Trailing dots in hostname or domain are stripped before matching."""
+        from app.services.web_context import (
+            WebSearchSnippet,
+            _filter_snippets_by_domain,
+        )
+        snippets = [
+            WebSearchSnippet(text="a", source_url="https://bloomberg.com./x"),
+        ]
+        result = _filter_snippets_by_domain(snippets, ["bloomberg.com."])
+        assert len(result) == 1
+
+    def test_filter_matches_idn_punycode_equivalents(self):
+        """Unicode IDNs and punycode hostnames should normalize to the same domain."""
+        from app.services.web_context import (
+            WebSearchSnippet,
+            _filter_snippets_by_domain,
+        )
+
+        snippets = [
+            WebSearchSnippet(text="idn", source_url="https://xn--bcher-kva.example/story"),
+            WebSearchSnippet(text="other", source_url="https://example.com/story"),
+        ]
+
+        result = _filter_snippets_by_domain(snippets, ["bücher.example"])
+
+        assert len(result) == 1
+        assert result[0].text == "idn"
+
+    def test_filter_drops_urls_without_hostname(self):
+        """data/javascript/blob URLs have no trustworthy hostname and are dropped."""
+        from app.services.web_context import (
+            WebSearchSnippet,
+            _filter_snippets_by_domain,
+        )
+
+        snippets = [
+            WebSearchSnippet(text="data", source_url="data:text/plain,hello"),
+            WebSearchSnippet(text="js", source_url="javascript:alert(1)"),
+            WebSearchSnippet(text="blob", source_url="blob:https://bloomberg.com/uuid"),
+            WebSearchSnippet(text="ok", source_url="https://bloomberg.com/story"),
+        ]
+
+        result = _filter_snippets_by_domain(snippets, ["bloomberg.com"])
+
+        assert [snippet.text for snippet in result] == ["ok"]
+
+    def test_filter_rejects_non_http_schemes_with_allowed_hostname(self):
+        """Scheme must still be http(s), even when the URL parser finds a hostname."""
+        from app.services.web_context import (
+            WebSearchSnippet,
+            _filter_snippets_by_domain,
+        )
+
+        snippets = [
+            WebSearchSnippet(text="js", source_url="javascript://bloomberg.com/x"),
+            WebSearchSnippet(text="data", source_url="data://bloomberg.com/x"),
+            WebSearchSnippet(text="ftp", source_url="ftp://bloomberg.com/x"),
+            WebSearchSnippet(text="https", source_url="https://bloomberg.com/x"),
+            WebSearchSnippet(text="http", source_url="http://bloomberg.com/y"),
+        ]
+
+        result = _filter_snippets_by_domain(snippets, ["bloomberg.com"])
+
+        assert [snippet.text for snippet in result] == ["https", "http"]
+
+
+# ── P1-3: SearXNG site: contract hardening ──────────────────
+
+
+def _searxng_empty_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={"results": []},
+        request=httpx.Request("GET", "http://localhost:8888/search"),
+    )
+
+
+class TestSearxngDomainContract:
+    @pytest.mark.asyncio
+    async def test_site_query_construction(self, monkeypatch):
+        """Domains are appended as site: filters."""
+        monkeypatch.setattr(
+            "app.services.web_context.settings.SEARXNG_URL", "http://localhost:8888"
+        )
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 5)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.get.return_value = _searxng_empty_response()
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            await _search_searxng("test", include_domains=["a.com", "b.com"])
+
+        params = mock_instance.get.call_args.kwargs["params"]
+        q = params.get("q", "")
+        assert "site:a.com" in q
+        assert "site:b.com" in q
+        assert "(test)" in q
+
+    @pytest.mark.asyncio
+    async def test_no_domains_plain_query(self, monkeypatch):
+        """include_domains=None → no site: prefix."""
+        monkeypatch.setattr(
+            "app.services.web_context.settings.SEARXNG_URL", "http://localhost:8888"
+        )
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 5)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.get.return_value = _searxng_empty_response()
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            await _search_searxng("test query", include_domains=None)
+
+        q = mock_instance.get.call_args.kwargs["params"].get("q", "")
+        assert "site:" not in q
+        assert q == "test query"
+
+    @pytest.mark.asyncio
+    async def test_empty_domains_plain_query(self, monkeypatch):
+        """include_domains=[] → no site: prefix."""
+        monkeypatch.setattr(
+            "app.services.web_context.settings.SEARXNG_URL", "http://localhost:8888"
+        )
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 5)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.get.return_value = _searxng_empty_response()
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            await _search_searxng("test query", include_domains=[])
+
+        q = mock_instance.get.call_args.kwargs["params"].get("q", "")
+        assert "site:" not in q
+        assert q == "test query"
+
+    @pytest.mark.asyncio
+    async def test_special_char_domains_filtered(self, monkeypatch):
+        """Domains with query-breaking chars are excluded from site: filter."""
+        monkeypatch.setattr(
+            "app.services.web_context.settings.SEARXNG_URL", "http://localhost:8888"
+        )
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 5)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.get.return_value = _searxng_empty_response()
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            await _search_searxng(
+                "test",
+                include_domains=[
+                    'bad"domain',
+                    "ok.com",
+                    "evil (x)",
+                    "line\nbreak.com",
+                    "zero\u200bwidth.com",
+                    "bücher.example",
+                ],
+            )
+
+        q = mock_instance.get.call_args.kwargs["params"].get("q", "")
+        # only safe domains pass through
+        assert "site:ok.com" in q
+        assert "site:xn--bcher-kva.example" in q
+        assert 'bad"domain' not in q
+        assert "evil (x)" not in q
+        assert "line\nbreak.com" not in q
+        assert "zero\u200bwidth.com" not in q
+
+    @pytest.mark.asyncio
+    async def test_json_parse_failure_returns_empty(self, monkeypatch):
+        """Non-JSON response → returns [] gracefully."""
+        monkeypatch.setattr(
+            "app.services.web_context.settings.SEARXNG_URL", "http://localhost:8888"
+        )
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 5)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        mock_response = httpx.Response(
+            200,
+            content=b"<html>NOT JSON</html>",
+            request=httpx.Request("GET", "http://localhost:8888/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.get.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_searxng("test query")
+
+        assert snippets == []
+
+
+# ── P1-5: fetch_family_context state extension ──────────────
+
+
+class TestFamilyContextStates:
+    @pytest.mark.asyncio
+    async def test_unsupported_provider_state(self, monkeypatch):
+        """Provider with domain_filter_mode=none → unsupported_provider state."""
+        from app.services.web_context import fetch_family_context
+        monkeypatch.setattr(
+            "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
+            "us",
+        )
+
+        request_config = WebSearchRequestConfig(
+            provider="native",
+            api_key="",
+            base_url="",
+            model="",
+            timeout_seconds=5.0,
+        )
+        result = await fetch_family_context(
+            "AI trends",
+            ["finance", "academic"],
+            request_config=request_config,
+        )
+        assert result["finance"]["state"] == "unsupported_provider"
+        assert "status_reason" in result["finance"]
+        assert "native" in result["finance"]["status_reason"]
+        assert result["academic"]["state"] == "unsupported_provider"
+
+    @pytest.mark.asyncio
+    async def test_failed_state_on_exception(self, monkeypatch):
+        """Search exception → failed state."""
+        from app.services.web_context import fetch_family_context
+        monkeypatch.setattr(
+            "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
+            "us",
+        )
+
+        async def boom(
+            provider,
+            query,
+            request_config=None,
+            *,
+            include_domains=None,
+            swallow_errors=True,
+        ):
+            raise RuntimeError("provider blew up")
+
+        monkeypatch.setattr("app.services.web_context._search_with_provider", boom)
+
+        request_config = WebSearchRequestConfig(
+            provider="tavily",
+            api_key="tvly-x",
+            base_url="https://api.tavily.com/search",
+            model="",
+            timeout_seconds=5.0,
+        )
+        result = await fetch_family_context(
+            "AI trends",
+            ["finance"],
+            request_config=request_config,
+        )
+        assert result["finance"]["state"] == "failed"
+        assert "status_reason" in result["finance"]
+
+    @pytest.mark.asyncio
+    async def test_failed_state_when_provider_timeout_is_not_swallowed(self, monkeypatch):
+        """Family search must map provider-level failures to failed state."""
+        from app.services.web_context import fetch_family_context
+
+        monkeypatch.setattr(
+            "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
+            "us",
+        )
+
+        async def timeout_provider(query, request_config=None, **kwargs):
+            raise httpx.TimeoutException("provider timeout")
+
+        monkeypatch.setitem(wc._PROVIDER_MAP, "tavily", timeout_provider)
+
+        request_config = WebSearchRequestConfig(
+            provider="tavily",
+            api_key="tvly-x",
+            base_url="https://api.tavily.com/search",
+            model="",
+            timeout_seconds=5.0,
+        )
+        result = await fetch_family_context(
+            "AI trends",
+            ["finance"],
+            request_config=request_config,
+        )
+
+        assert result["finance"]["state"] == "failed"
+        assert result["finance"]["items"] == []
+        assert "status_reason" in result["finance"]
+
+    @pytest.mark.asyncio
+    async def test_ready_with_domain_coverage_full(self, monkeypatch):
+        """Provider can handle all family domains → domain_coverage=full."""
+        from app.services.web_context import fetch_family_context
+        monkeypatch.setattr(
+            "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
+            "us",
+        )
+
+        async def ok(
+            provider,
+            query,
+            request_config=None,
+            *,
+            include_domains=None,
+            swallow_errors=True,
+        ):
+            # Return matching-domain snippet so post-filter keeps it
+            return [
+                WebSearchSnippet(
+                    text="Markets reprice",
+                    source_url="https://bloomberg.com/x",
+                )
+            ]
+
+        monkeypatch.setattr("app.services.web_context._search_with_provider", ok)
+
+        request_config = WebSearchRequestConfig(
+            provider="tavily",
+            api_key="tvly-x",
+            base_url="https://api.tavily.com/search",
+            model="",
+            timeout_seconds=5.0,
+        )
+        result = await fetch_family_context(
+            "AI trends",
+            ["finance"],
+            request_config=request_config,
+        )
+        assert result["finance"]["state"] == "ready"
+        assert result["finance"]["domain_filter_mode"] == "api"
+        assert result["finance"]["domain_coverage"] == "full"
+
+    @pytest.mark.asyncio
+    async def test_ready_with_domain_coverage_partial(self, monkeypatch):
+        """xAI with 7-domain family → domain_coverage=partial."""
+        from app.services.web_context import fetch_family_context
+        monkeypatch.setattr(
+            "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
+            "us",
+        )
+
+        async def ok(
+            provider,
+            query,
+            request_config=None,
+            *,
+            include_domains=None,
+            swallow_errors=True,
+        ):
+            return [
+                WebSearchSnippet(
+                    text="Finance update",
+                    source_url="https://bloomberg.com/article",
+                )
+            ]
+
+        monkeypatch.setattr("app.services.web_context._search_with_provider", ok)
+
+        request_config = WebSearchRequestConfig(
+            provider="xai",
+            api_key="xai-x",
+            base_url="https://api.x.ai/v1/responses",
+            model="grok-4.20-reasoning",
+            timeout_seconds=5.0,
+        )
+        # FAMILY_DOMAIN_FILTERS["finance"] has 7 entries; xAI max_domains=5
+        result = await fetch_family_context(
+            "AI trends",
+            ["finance"],
+            request_config=request_config,
+        )
+        assert result["finance"]["state"] == "ready"
+        assert result["finance"]["domain_coverage"] == "partial"
+        assert result["finance"]["domain_filter_mode"] == "api"
+
+    @pytest.mark.asyncio
+    async def test_url_post_filter_removes_off_domain(self, monkeypatch):
+        """Results from non-family domains are filtered out."""
+        from app.services.web_context import fetch_family_context
+        monkeypatch.setattr(
+            "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
+            "us",
+        )
+
+        async def mixed(
+            provider,
+            query,
+            request_config=None,
+            *,
+            include_domains=None,
+            swallow_errors=True,
+        ):
+            return [
+                WebSearchSnippet(
+                    text="off-domain", source_url="https://reddit.com/r/x"
+                ),
+                WebSearchSnippet(
+                    text="on-domain", source_url="https://bloomberg.com/x"
+                ),
+            ]
+
+        monkeypatch.setattr("app.services.web_context._search_with_provider", mixed)
+
+        request_config = WebSearchRequestConfig(
+            provider="tavily",
+            api_key="tvly-x",
+            base_url="https://api.tavily.com/search",
+            model="",
+            timeout_seconds=5.0,
+        )
+        result = await fetch_family_context(
+            "AI trends",
+            ["finance"],
+            request_config=request_config,
+        )
+        assert result["finance"]["state"] == "ready"
+        items = result["finance"]["items"]
+        # Only on-domain snippet survived post-filter
+        assert len(items) == 1
+
+    def test_parse_web_context_json_accepts_new_states(self):
+        """helpers._parse_web_context_json accepts new state values."""
+        from app.api.helpers import _parse_web_context_json
+        for state in (
+            "failed",
+            "search_skipped",
+            "unsupported_provider",
+            "fallback_unconstrained",
+        ):
+            raw = json.dumps({
+                "query": "test",
+                "snippets": [],
+                "provider": "tavily",
+                "timestamp": "",
+                "cached": False,
+                "family_context": {
+                    "finance": {"state": state, "items": []},
+                },
+            })
+            parsed = _parse_web_context_json(raw)
+            assert parsed is not None
+            assert parsed["family_context"]["finance"]["state"] == state
+
+    def test_parse_web_context_json_preserves_metadata(self):
+        """helpers._parse_web_context_json preserves domain_filter_mode/coverage."""
+        from app.api.helpers import _parse_web_context_json
+        raw = json.dumps({
+            "query": "test",
+            "snippets": [],
+            "provider": "tavily",
+            "timestamp": "",
+            "cached": False,
+            "family_context": {
+                "finance": {
+                    "state": "ready",
+                    "items": [],
+                    "domain_filter_mode": "api",
+                    "domain_coverage": "full",
+                },
+            },
+        })
+        parsed = _parse_web_context_json(raw)
+        assert parsed is not None
+        finance = parsed["family_context"]["finance"]
+        assert finance["domain_filter_mode"] == "api"
+        assert finance["domain_coverage"] == "full"
+
+    def test_parse_web_context_json_invalid_state_falls_back(self):
+        """Unknown state falls back to 'empty'."""
+        from app.api.helpers import _parse_web_context_json
+        raw = json.dumps({
+            "query": "test",
+            "snippets": [],
+            "provider": "tavily",
+            "timestamp": "",
+            "cached": False,
+            "family_context": {
+                "finance": {"state": "bogus_state", "items": []},
+            },
+        })
+        parsed = _parse_web_context_json(raw)
+        assert parsed is not None
+        assert parsed["family_context"]["finance"]["state"] == "empty"

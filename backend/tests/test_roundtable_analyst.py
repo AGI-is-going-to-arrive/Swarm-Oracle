@@ -517,3 +517,121 @@ def test_analyst_handles_non_object_decision_payload(client, monkeypatch):
             },
         )
     ]
+
+
+# ---------------------------------------------------------------------------
+# P0-3 baseline locking tests: search_web_context app-layer regression
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_search_web_context_disabled_skips_fetch(monkeypatch):
+    """When ENABLE_WEB_SEARCH=false, fetch_web_context must NOT be called and
+    the tool must return the disabled-message stub."""
+    from app.services.roundtable_analyst import _tool_search_web_context
+
+    settings.ENABLE_WEB_SEARCH = False
+
+    call_tracker = {"called": False}
+
+    async def _mock_fetch(*args, **kwargs):
+        call_tracker["called"] = True
+        return None
+
+    monkeypatch.setattr(
+        "app.services.roundtable_analyst.fetch_web_context",
+        _mock_fetch,
+    )
+
+    result = await _tool_search_web_context(
+        "scenario question",
+        "analyst question",
+        {"query": "coalition hinge"},
+    )
+
+    assert call_tracker["called"] is False
+    assert "ENABLE_WEB_SEARCH is disabled" in result
+
+
+@pytest.mark.asyncio
+async def test_search_web_context_returns_empty_when_fetch_none(monkeypatch):
+    """When fetch_web_context returns None, the tool must return the
+    no-context stub (no LLM BYOK override path)."""
+    from app.services.roundtable_analyst import _tool_search_web_context
+
+    settings.ENABLE_WEB_SEARCH = True
+
+    captured: dict[str, object] = {}
+
+    async def _mock_fetch(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return None
+
+    monkeypatch.setattr(
+        "app.services.roundtable_analyst.fetch_web_context",
+        _mock_fetch,
+    )
+
+    result = await _tool_search_web_context(
+        "scenario question",
+        "analyst question",
+        {"query": "no-evidence query"},
+    )
+
+    assert "No web context found" in result
+    assert "no-evidence query" in result
+    # Verify app-layer search: positional query arg only, NO BYOK overrides.
+    assert captured["args"] == ("no-evidence query",)
+    assert captured["kwargs"] == {}
+
+
+@pytest.mark.asyncio
+async def test_search_web_context_never_passes_byok_override(monkeypatch):
+    """The analyst's search_web_context must use app-layer search only —
+    never forward request-scoped BYOK overrides (api_key/base_url/provider)."""
+    from app.services.roundtable_analyst import _tool_search_web_context
+
+    settings.ENABLE_WEB_SEARCH = True
+
+    captured_calls: list[dict[str, object]] = []
+
+    async def _mock_fetch(*args, **kwargs):
+        captured_calls.append({"args": args, "kwargs": kwargs})
+        return WebSearchResult(
+            query=args[0] if args else "",
+            provider="tavily",
+            timestamp="2026-04-28T00:00:00Z",
+            cached=False,
+            snippets=[
+                WebSearchSnippet(
+                    text="App-layer result",
+                    source_url="https://example.com/app",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.services.roundtable_analyst.fetch_web_context",
+        _mock_fetch,
+    )
+
+    # Even if params contain BYOK-like fields, the tool must ignore them
+    # and call fetch_web_context with only the query.
+    result = await _tool_search_web_context(
+        "scenario question",
+        "analyst question",
+        {
+            "query": "byok-isolation-check",
+            "api_key": "should-be-ignored",
+            "base_url": "https://malicious.example.com",
+            "provider": "exa",
+        },
+    )
+
+    assert len(captured_calls) == 1
+    call = captured_calls[0]
+    assert call["args"] == ("byok-isolation-check",)
+    # No BYOK overrides should leak into the fetch call.
+    assert call["kwargs"] == {}
+    assert "provider=tavily" in result
+    assert "App-layer result" in result

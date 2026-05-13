@@ -2379,7 +2379,9 @@
         "label": "Investigative",
         "tooltip": "Search AP, BBC, NYT, ProPublica & investigative sources"
       },
-      "disabled_tooltip": "This data source is not enabled on the server."
+      "disabled_tooltip": "This data source is not enabled on the server.",
+      "domain_filter_unsupported": "The current search provider does not support domain-specific filtering.",
+      "search_disabled_tooltip": "Enable web search to use source categories."
     },
     "offline_banner": {
       "title": "You're offline",

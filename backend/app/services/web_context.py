@@ -17,8 +17,10 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -44,6 +46,92 @@ class WebSearchRequestConfig:
     base_url: str = ""
     model: str = ""
     timeout_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
+class ProviderSearchCapability:
+    supports_domain_filter: bool
+    supports_sources: bool
+    domain_filter_mode: Literal["api", "query", "prompt", "none"]
+    max_domains: int | None = None
+    supports_citation_url: bool = True
+
+
+PROVIDER_CAPABILITIES: dict[str, ProviderSearchCapability] = {
+    "tavily": ProviderSearchCapability(
+        supports_domain_filter=True, supports_sources=True,
+        domain_filter_mode="api", max_domains=300,
+    ),
+    "exa": ProviderSearchCapability(
+        supports_domain_filter=True, supports_sources=True,
+        domain_filter_mode="api", max_domains=1200,
+    ),
+    "searxng": ProviderSearchCapability(
+        supports_domain_filter=True, supports_sources=True,
+        domain_filter_mode="query", max_domains=None,
+    ),
+    "xai": ProviderSearchCapability(
+        supports_domain_filter=True, supports_sources=True,
+        domain_filter_mode="api", max_domains=5,
+    ),
+    "native": ProviderSearchCapability(
+        supports_domain_filter=False, supports_sources=False,
+        domain_filter_mode="none",
+    ),
+}
+
+
+def _normalize_domain_filter(domain: str) -> str:
+    """Normalize a domain for exact/subdomain matching and provider filters."""
+    candidate = domain.strip().strip(".").lower()
+    if not candidate:
+        return ""
+    if any(unicodedata.category(ch).startswith("C") for ch in candidate):
+        return ""
+    if any(ch.isspace() or ch in '"\'()' for ch in candidate):
+        return ""
+    try:
+        candidate = candidate.encode("idna").decode("ascii")
+    except UnicodeError:
+        return ""
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", candidate):
+        return ""
+    if ".." in candidate:
+        return ""
+    return candidate
+
+
+def _filter_snippets_by_domain(
+    snippets: list[WebSearchSnippet],
+    allowed_domains: list[str] | None,
+) -> list[WebSearchSnippet]:
+    """Post-filter snippets to only include URLs matching allowed domains.
+
+    A snippet matches when its URL hostname ends with one of the allowed
+    domains (case-insensitive). Invalid URLs are silently dropped. If
+    ``allowed_domains`` is None or empty, all snippets pass through.
+    """
+    if not allowed_domains:
+        return snippets
+    allowed_set = {
+        normalized
+        for domain in allowed_domains
+        if (normalized := _normalize_domain_filter(domain))
+    }
+    if not allowed_set:
+        return []
+    filtered: list[WebSearchSnippet] = []
+    for s in snippets:
+        try:
+            parsed_url = urlparse(s.source_url)
+            if parsed_url.scheme.lower() not in _ALLOWED_WEB_SEARCH_SCHEMES:
+                continue
+            hostname = _normalize_domain_filter(parsed_url.hostname or "")
+            if any(hostname == d or hostname.endswith("." + d) for d in allowed_set):
+                filtered.append(s)
+        except Exception:
+            continue
+    return filtered
 
 
 @dataclass
@@ -251,24 +339,65 @@ async def fetch_family_context(
     if not families_to_search:
         return family_context
 
-    async def _search_family(family: str) -> tuple[str, list[WebSearchSnippet]]:
+    async def _search_family(
+        family: str,
+    ) -> tuple[str, list[WebSearchSnippet], dict[str, object]]:
         domains = FAMILY_DOMAIN_FILTERS[family]
+        cap = PROVIDER_CAPABILITIES.get(provider)
+
+        # Provider doesn't support domain filtering at all
+        if not cap or not cap.supports_domain_filter or cap.domain_filter_mode == "none":
+            return family, [], {
+                "state": "unsupported_provider",
+                "status_reason": (
+                    f"Provider '{provider}' does not support domain filtering"
+                ),
+            }
+
+        # Calculate domain coverage
+        domain_coverage = "full"
+        if cap.max_domains is not None and len(domains) > cap.max_domains:
+            domain_coverage = "partial"
+
         try:
             snippets = await _search_with_provider(
-                provider, query, request_config, include_domains=domains,
+                provider,
+                query,
+                request_config,
+                include_domains=domains,
+                swallow_errors=False,
             )
-            return family, snippets
+            # Post-filter results against family domains
+            snippets = _filter_snippets_by_domain(snippets, domains)
+            metadata: dict[str, object] = {
+                "domain_filter_mode": cap.domain_filter_mode,
+                "domain_coverage": domain_coverage,
+            }
+            return family, snippets, metadata
         except Exception:
             logger.warning("Family search failed: family=%s", family, exc_info=True)
-            return family, []
+            return family, [], {
+                "state": "failed",
+                "status_reason": f"Search error for family '{family}'",
+            }
 
     results = await asyncio.gather(*[_search_family(f) for f in families_to_search])
 
-    for family, snippets in results:
+    for family, snippets, metadata in results:
         items = _snippets_to_family_items(family, query, snippets)
-        if items:
+        state = metadata.pop("state", None)
+        if state:
+            # Pre-determined state (unsupported_provider, failed, etc.)
+            family_context[family]["state"] = state
+        elif items:
             family_context[family]["state"] = "ready"
             family_context[family]["items"] = items
+        # else: stays "empty" (default)
+
+        # Add optional metadata (domain_filter_mode, domain_coverage, status_reason)
+        for key in ("domain_filter_mode", "domain_coverage", "status_reason"):
+            if key in metadata:
+                family_context[family][key] = metadata[key]
 
     return family_context
 
@@ -535,8 +664,14 @@ async def _search_searxng(
 
     effective_query = query
     if include_domains:
-        site_filter = " OR ".join(f"site:{d}" for d in include_domains)
-        effective_query = f"({query}) ({site_filter})"
+        safe_domains = [
+            normalized
+            for domain in include_domains
+            if (normalized := _normalize_domain_filter(domain))
+        ]
+        if safe_domains:
+            site_filter = " OR ".join(f"site:{d}" for d in safe_domains)
+            effective_query = f"({query}) ({site_filter})"
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.get(
@@ -544,7 +679,11 @@ async def _search_searxng(
             params={"q": effective_query, "format": "json"},
         )
         resp.raise_for_status()
-        data = resp.json()
+        try:
+            data = resp.json()
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("SearXNG returned non-JSON response")
+            return []
 
     snippets: list[WebSearchSnippet] = []
     for item in data.get("results", []):
@@ -559,7 +698,10 @@ async def _search_searxng(
         if text and url:
             snippets.append(WebSearchSnippet(text=text, source_url=url))
 
-    return snippets[:max_results]
+    result_snippets = snippets[:max_results]
+    if include_domains:
+        result_snippets = _filter_snippets_by_domain(result_snippets, include_domains)
+    return result_snippets
 
 
 # ── Exa Provider ───────────────────────────────────────
@@ -755,13 +897,6 @@ async def _search_xai(
         if request_config and request_config.model
         else settings.XAI_WEB_SEARCH_MODEL
     )
-    domain_instruction = ""
-    if include_domains:
-        domains_str = ", ".join(include_domains)
-        domain_instruction = (
-            f"\nOnly return results from these domains: {domains_str}.\n"
-            "Ignore results from other domains.\n"
-        )
     prompt = (
         "Use web search.\n"
         "Return a strict JSON object with key "
@@ -769,9 +904,13 @@ async def _search_xai(
         "Each item must be an object with keys \"text\" and \"source_url\".\n"
         "text must be a concise factual snippet under 400 characters grounded in the source.\n"
         "source_url must be the exact source URL.\n"
-        f"{domain_instruction}"
         "No markdown. No extra prose outside JSON."
     )
+
+    tools: list[dict[str, object]] = [{"type": "web_search"}]
+    if include_domains:
+        capped = include_domains[:5]
+        tools = [{"type": "web_search", "filters": {"allowed_domains": capped}}]
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
@@ -780,7 +919,7 @@ async def _search_xai(
             json={
                 "model": model,
                 "input": prompt + f"\n\nUser query: {query}",
-                "tools": [{"type": "web_search"}],
+                "tools": tools,
                 "max_output_tokens": output_budget,
             },
         )
@@ -793,9 +932,14 @@ async def _search_xai(
 
     structured = _parse_xai_structured_snippets(raw_text, max_results)
     if structured:
+        if include_domains:
+            structured = _filter_snippets_by_domain(structured, include_domains)
         return structured
 
-    return _fallback_xai_citation_snippets(raw_text, annotations, max_results)
+    fallback = _fallback_xai_citation_snippets(raw_text, annotations, max_results)
+    if include_domains:
+        fallback = _filter_snippets_by_domain(fallback, include_domains)
+    return fallback
 
 
 # ── Provider Dispatch ───────────────────────────────────
@@ -814,22 +958,31 @@ async def _search_with_provider(
     request_config: WebSearchRequestConfig | None = None,
     *,
     include_domains: list[str] | None = None,
+    swallow_errors: bool = True,
 ) -> list[WebSearchSnippet]:
     """Dispatch to the configured provider. Returns [] on any failure."""
     search_fn = _PROVIDER_MAP.get(provider)
     if search_fn is None:
         logger.warning("Unknown web search provider: %s", provider)
+        if not swallow_errors:
+            raise ValueError(f"Unknown web search provider: {provider}")
         return []
     try:
         return await search_fn(query, request_config, include_domains=include_domains)
     except httpx.TimeoutException:
         logger.warning("Web search timeout (%s): query=%r", provider, query[:80])
+        if not swallow_errors:
+            raise
         return []
     except httpx.HTTPStatusError as exc:
         logger.warning("Web search HTTP error (%s): %s", provider, exc.response.status_code)
+        if not swallow_errors:
+            raise
         return []
     except Exception:
         logger.warning("Web search unexpected error (%s)", provider, exc_info=True)
+        if not swallow_errors:
+            raise
         return []
 
 

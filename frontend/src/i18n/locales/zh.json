@@ -2379,7 +2379,9 @@
         "label": "深度报道",
         "tooltip": "搜索 AP、BBC、NYT、ProPublica 等深度报道来源"
       },
-      "disabled_tooltip": "此数据源未在服务器上启用。"
+      "disabled_tooltip": "此数据源未在服务器上启用。",
+      "domain_filter_unsupported": "当前搜索服务不支持按域名分类搜索。",
+      "search_disabled_tooltip": "启用网络搜索后可使用分类来源。"
     },
     "offline_banner": {
       "title": "你目前离线",

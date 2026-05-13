@@ -354,3 +354,524 @@ class TestCreateScenarioWithWebSearch:
         assert resp.status_code == 200
         data = resp.json()
         assert data.get("web_search_context") is None
+
+
+class TestSourceFamilyShortCircuitBaseline:
+    """P0-5 baseline + P1-4 fixed behavior tests for the source-family
+    short-circuit logic at `backend/app/api/scenarios.py:create_scenario`.
+
+    P0 baseline (now retired):
+    - fetch_web_context() was called first; only if its result was non-None
+      AND FEATURE_NEW_SOURCES was true AND req.web_search_families was truthy
+      did fetch_family_context() run.
+    - Both calls shared the SAME try-block — a family exception swallowed the
+      base web_context_json.
+
+    P1-4 fix (current behavior asserted below):
+    - Base search and family search live in SEPARATE try-blocks.
+    - Family search may run even when base search returns None.
+    - A family exception does NOT discard a successful base result.
+    """
+
+    def test_family_search_runs_when_base_returns_none(self, client):
+        """P1-4: fetch_web_context=None → fetch_family_context now still runs
+        (independent execution). The result is exposed through the family
+        envelope, even though the base snippets list is empty."""
+        family_called = {"called": False}
+
+        async def _mock_family(*a, **kw):
+            family_called["called"] = True
+            return _mock_family_context("finance")
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "app.services.web_context.fetch_family_context",
+                side_effect=_mock_family,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "test family runs on base None",
+                "web_search_enabled": True,
+                "web_search_families": ["finance"],
+            })
+
+        assert resp.status_code == 200
+        assert family_called["called"] is True, (
+            "P1-4: fetch_family_context must run independently of base result"
+        )
+        data = resp.json()
+        # Base search returned None but family succeeded → ctx is non-None
+        # and the family envelope is surfaced.
+        assert data.get("web_search_context") is not None
+        assert data["web_search_context"]["snippets"] == []
+        assert data["web_search_context"]["family_context"]["finance"]["state"] == "ready"
+
+    def test_family_search_skipped_when_feature_disabled(self, client):
+        """FEATURE_NEW_SOURCES=false → family search must be skipped even when
+        base result is non-None and families are requested."""
+        base_result = WebSearchResult(
+            query="feature gated",
+            provider="tavily",
+            timestamp="2026-04-28T00:00:00Z",
+            cached=False,
+            snippets=[
+                WebSearchSnippet(text="Base hit", source_url="https://example.com/base"),
+            ],
+        )
+
+        family_called = {"called": False}
+
+        async def _mock_family(*a, **kw):
+            family_called["called"] = True
+            return {}
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=base_result,
+            ),
+            patch(
+                "app.services.web_context.fetch_family_context",
+                side_effect=_mock_family,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", False),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "test short circuit on feature flag",
+                "web_search_enabled": True,
+                "web_search_families": ["finance", "academic"],
+            })
+
+        assert resp.status_code == 200
+        assert family_called["called"] is False, (
+            "fetch_family_context must not run when FEATURE_NEW_SOURCES is disabled"
+        )
+        # Base context should still be persisted/returned.
+        data = resp.json()
+        assert data.get("web_search_context") is not None
+        assert data["web_search_context"]["query"] == "feature gated"
+        # family_context must remain unset/None when feature is disabled.
+        assert data["web_search_context"].get("family_context") is None
+
+    def test_family_search_skipped_when_families_empty(self, client):
+        """FEATURE_NEW_SOURCES=true but empty families list → family search
+        must still be skipped (truthiness gate at line 745)."""
+        base_result = WebSearchResult(
+            query="empty families",
+            provider="tavily",
+            timestamp="2026-04-28T00:00:00Z",
+            cached=False,
+            snippets=[
+                WebSearchSnippet(text="Base only", source_url="https://example.com/base"),
+            ],
+        )
+
+        family_called = {"called": False}
+
+        async def _mock_family(*a, **kw):
+            family_called["called"] = True
+            return {}
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=base_result,
+            ),
+            patch(
+                "app.services.web_context.fetch_family_context",
+                side_effect=_mock_family,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "test short circuit on empty families",
+                "web_search_enabled": True,
+                "web_search_families": [],
+            })
+
+        assert resp.status_code == 200
+        assert family_called["called"] is False
+        assert resp.json().get("web_search_context") is not None
+
+    def test_family_exception_preserves_base_context(self, client):
+        """P1-4 fix: when fetch_family_context raises, the base
+        web_context_json is preserved.
+
+        Previously (P0 baseline) the shared try-block discarded base context
+        whenever family search threw. P1-4 split base and family into
+        independent try-blocks; verify the new contract here."""
+        base_result = WebSearchResult(
+            query="base survives?",
+            provider="tavily",
+            timestamp="2026-04-28T00:00:00Z",
+            cached=False,
+            snippets=[
+                WebSearchSnippet(text="Base snippet", source_url="https://example.com/base"),
+            ],
+        )
+
+        async def _failing_family(*a, **kw):
+            raise RuntimeError("family search exploded")
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=base_result,
+            ),
+            patch(
+                "app.services.web_context.fetch_family_context",
+                side_effect=_failing_family,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "test family exception preserves base",
+                "web_search_enabled": True,
+                "web_search_families": ["finance"],
+            })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        # P1-4: base context survives a family exception.
+        assert data.get("web_search_context") is not None, (
+            "P1-4: base context must be preserved even when family search raises"
+        )
+        assert data["web_search_context"]["query"] == "base survives?"
+        snippets = data["web_search_context"]["snippets"]
+        assert any(s.get("text") == "Base snippet" for s in snippets)
+        # family_context should be absent / empty because family fetch failed.
+        family_context = data["web_search_context"].get("family_context") or {}
+        assert not any(
+            (entry or {}).get("state") == "ready" for entry in family_context.values()
+        ), "Family entries must not be marked ready when fetch_family_context raised"
+
+        # Confirm DB persists the surviving base context.
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario = session.get(Scenario, data["id"])
+            assert scenario is not None
+            assert scenario.web_context_json is not None
+            assert "base survives?" in scenario.web_context_json
+
+
+class TestSourceFamilyIndependentExecution:
+    """P1-4: Base search and family search run in independent try-blocks.
+
+    These tests lock the four (base_succeeds, family_succeeds) combinations:
+    - base None  / family ready   → context exposes family only
+    - base ready / family raises  → context exposes base only
+    - base ready / family ready   → both surfaced together
+    - base raises / family raises → no context, scenario still created
+    """
+
+    def test_family_runs_when_base_returns_none(self, client):
+        """Base None + family success → scenario has family_context."""
+        async def _family_ok(*a, **kw):
+            return _mock_family_context("finance")
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "app.services.web_context.fetch_family_context",
+                side_effect=_family_ok,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "base none, family ok",
+                "web_search_enabled": True,
+                "web_search_families": ["finance"],
+            })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        ctx = data.get("web_search_context")
+        assert ctx is not None
+        assert ctx["snippets"] == []
+        assert ctx["family_context"]["finance"]["state"] == "ready"
+        assert ctx["family_context"]["finance"]["items"][0]["title"]
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario = session.get(Scenario, data["id"])
+            assert scenario is not None
+            assert scenario.web_context_json is not None
+            assert '"family_context"' in scenario.web_context_json
+
+    def test_base_preserved_when_family_fails(self, client):
+        """Base success + family exception → scenario keeps base context."""
+        base_result = WebSearchResult(
+            query="base only please",
+            provider="tavily",
+            timestamp="2026-05-13T00:00:00Z",
+            cached=False,
+            snippets=[
+                WebSearchSnippet(text="Resilient base", source_url="https://example.com/base"),
+            ],
+        )
+
+        async def _family_fail(*a, **kw):
+            raise RuntimeError("family exploded")
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=base_result,
+            ),
+            patch(
+                "app.services.web_context.fetch_family_context",
+                side_effect=_family_fail,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "base ok, family fails",
+                "web_search_enabled": True,
+                "web_search_families": ["finance"],
+            })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        ctx = data.get("web_search_context")
+        assert ctx is not None
+        assert ctx["query"] == "base only please"
+        assert any(s.get("text") == "Resilient base" for s in ctx["snippets"])
+        # No family entry was successfully filled.
+        family_context = ctx.get("family_context") or {}
+        assert not any(
+            (entry or {}).get("state") == "ready" for entry in family_context.values()
+        )
+
+    def test_both_succeed_merged(self, client):
+        """Base + family both succeed → merged result with both surfaces."""
+        base_result = WebSearchResult(
+            query="merged path",
+            provider="tavily",
+            timestamp="2026-05-13T00:00:00Z",
+            cached=False,
+            snippets=[
+                WebSearchSnippet(text="Base hit", source_url="https://example.com/base"),
+            ],
+        )
+
+        async def _family_ok(*a, **kw):
+            return _mock_family_context("finance", "academic")
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=base_result,
+            ),
+            patch(
+                "app.services.web_context.fetch_family_context",
+                side_effect=_family_ok,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "base ok, family ok",
+                "web_search_enabled": True,
+                "web_search_families": ["finance", "academic"],
+            })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        ctx = data.get("web_search_context")
+        assert ctx is not None
+        assert any(s.get("text") == "Base hit" for s in ctx["snippets"])
+        family_context = ctx["family_context"]
+        assert family_context["finance"]["state"] == "ready"
+        assert family_context["academic"]["state"] == "ready"
+        assert family_context["polymarket"]["state"] == "empty"
+        assert family_context["news_deep"]["state"] == "empty"
+
+    def test_both_fail_no_web_context(self, client):
+        """Both base and family fail → no web_context_json, scenario still created."""
+        async def _base_fail(*a, **kw):
+            raise RuntimeError("base exploded")
+
+        async def _family_fail(*a, **kw):
+            raise RuntimeError("family exploded")
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                side_effect=_base_fail,
+            ),
+            patch(
+                "app.services.web_context.fetch_family_context",
+                side_effect=_family_fail,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "both fail",
+                "web_search_enabled": True,
+                "web_search_families": ["finance"],
+            })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("web_search_context") is None
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario = session.get(Scenario, data["id"])
+            assert scenario is not None
+            assert scenario.web_context_json is None
+
+
+class TestBYOKKeyIsolation:
+    """P0-4: Verify LLM BYOK key/base_url never leaks into web search path,
+    and web search key never leaks into LLM path.
+
+    Locks the contract at:
+    - `app/api/scenarios.py:738-743` — web search uses req.web_search_*
+    - `app/services/web_context.py:361-375` — `_resolve_request_config()`
+      only reads WEB_SEARCH_* settings
+    - `app/api/scenarios.py:798+` — LLM call uses req.llm_api_key
+    """
+
+    def test_llm_key_not_passed_to_web_search(self, client):
+        """llm_api_key present + web_search_api_key absent →
+        fetch_web_context must NOT receive the LLM key/base_url."""
+        captured_config: dict[str, object] = {}
+
+        async def _mock_fetch(
+            question,
+            *,
+            provider_override=None,
+            api_key_override=None,
+            base_url_override=None,
+        ):
+            captured_config["question"] = question
+            captured_config["provider"] = provider_override
+            captured_config["api_key"] = api_key_override
+            captured_config["base_url"] = base_url_override
+            return None
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                side_effect=_mock_fetch,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "test BYOK isolation",
+                "web_search_enabled": True,
+                "llm_api_key": "sk-llm-secret-key",
+                "llm_base_url": "https://api.openai.com/v1",
+                # NO web_search_api_key or web_search_base_url
+            })
+
+        assert resp.status_code == 200
+        # LLM key/base_url must NOT have leaked into the web search path.
+        assert captured_config.get("api_key") != "sk-llm-secret-key"
+        assert captured_config.get("base_url") != "https://api.openai.com/v1"
+        # With no web_search_* overrides, the overrides should be None (settings fallback).
+        assert captured_config.get("api_key") is None
+        assert captured_config.get("base_url") is None
+
+    def test_web_search_key_not_passed_to_llm(self, client):
+        """web_search_api_key present + llm_api_key absent → web search receives
+        the search key while the LLM path must NOT see it.
+
+        We assert schema-level separation: the request accepts both fields
+        independently and the search path receives only the search key."""
+        captured_config: dict[str, object] = {}
+
+        async def _mock_fetch(
+            question,
+            *,
+            provider_override=None,
+            api_key_override=None,
+            base_url_override=None,
+        ):
+            captured_config["api_key"] = api_key_override
+            captured_config["base_url"] = base_url_override
+            captured_config["provider"] = provider_override
+            return None
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                side_effect=_mock_fetch,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "test reverse isolation",
+                "web_search_enabled": True,
+                "web_search_api_key": "tavily-search-key",
+                "web_search_base_url": "https://api.tavily.com",
+                # NO llm_api_key
+            })
+
+        assert resp.status_code == 200
+        # Web search path receives its own key.
+        assert captured_config.get("api_key") == "tavily-search-key"
+        assert captured_config.get("base_url") == "https://api.tavily.com"
+
+    def test_both_byok_keys_stay_separate(self, client):
+        """Both BYOK keys present → web search path must only receive the
+        web search key (not the LLM key)."""
+        search_captured: dict[str, object] = {}
+
+        async def _mock_fetch(
+            question,
+            *,
+            provider_override=None,
+            api_key_override=None,
+            base_url_override=None,
+        ):
+            search_captured["api_key"] = api_key_override
+            search_captured["base_url"] = base_url_override
+            search_captured["provider"] = provider_override
+            return None
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                side_effect=_mock_fetch,
+            ),
+            patch("app.api.scenarios.parse_and_run_background", side_effect=_noop_background),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "test dual BYOK",
+                "web_search_enabled": True,
+                "llm_api_key": "sk-llm-key",
+                "llm_base_url": "https://api.openai.com/v1",
+                "web_search_api_key": "tavily-key",
+                "web_search_provider": "tavily",
+            })
+
+        assert resp.status_code == 200
+        # Web search must receive the web search key + provider, never the LLM key.
+        assert search_captured.get("api_key") == "tavily-key"
+        assert search_captured.get("provider") == "tavily"
+        assert search_captured.get("api_key") != "sk-llm-key"
+        assert search_captured.get("base_url") != "https://api.openai.com/v1"

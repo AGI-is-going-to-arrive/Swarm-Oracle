@@ -4,12 +4,15 @@ import {
   appendEndingRoomUserTurn,
   buildSessionHeaders,
   createReplayArtifact,
+  createScenario,
   exportScenario,
   exportScenarioSnapshot,
   generateSocialCopy,
   getScenario,
+  identityContinuityPreflight,
   importScenarioSnapshot,
 } from './client';
+import type { CreateScenarioOptions } from './client';
 
 describe('api client request parsing', () => {
   afterEach(() => {
@@ -269,5 +272,122 @@ describe('api client request parsing', () => {
       '/api/scenario/scenario-1/social/x',
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+});
+
+describe('web search wire-format', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function stubScenarioCreate(): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+      },
+      text: vi.fn().mockResolvedValue('{"id":"scenario-1"}'),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  function getRequestBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    return JSON.parse(init.body as string) as Record<string, unknown>;
+  }
+
+  it('should omit web_search fields when webSearchEnabled is false', async () => {
+    const fetchMock = stubScenarioCreate();
+
+    const options: CreateScenarioOptions = {
+      question: 'What if?',
+      webSearchEnabled: false,
+      webSearchFamilies: ['polymarket'],
+      webSearchProvider: 'tavily',
+      webSearchApiKey: 'sk-secret',
+      webSearchBaseUrl: 'https://example.com',
+    };
+    await createScenario(options);
+
+    const body = getRequestBody(fetchMock);
+    expect(body).not.toHaveProperty('web_search_enabled');
+    expect(body).not.toHaveProperty('web_search_families');
+    expect(body).not.toHaveProperty('web_search_provider');
+    expect(body).not.toHaveProperty('web_search_api_key');
+    expect(body).not.toHaveProperty('web_search_base_url');
+  });
+
+  it('should include web_search_enabled and families when enabled with server default', async () => {
+    const fetchMock = stubScenarioCreate();
+
+    await createScenario({
+      question: 'What if?',
+      webSearchEnabled: true,
+      webSearchFamilies: ['polymarket', 'finance'],
+    });
+
+    const body = getRequestBody(fetchMock);
+    expect(body.web_search_enabled).toBe(true);
+    expect(body.web_search_families).toEqual(['polymarket', 'finance']);
+    expect(body).not.toHaveProperty('web_search_provider');
+    expect(body).not.toHaveProperty('web_search_api_key');
+    expect(body).not.toHaveProperty('web_search_base_url');
+  });
+
+  it('should default web_search_families to [] when enabled without families list', async () => {
+    const fetchMock = stubScenarioCreate();
+
+    await createScenario({
+      question: 'What if?',
+      webSearchEnabled: true,
+    });
+
+    const body = getRequestBody(fetchMock);
+    expect(body.web_search_enabled).toBe(true);
+    expect(body.web_search_families).toEqual([]);
+  });
+
+  it('should include all web search fields when enabled with custom override', async () => {
+    const fetchMock = stubScenarioCreate();
+
+    await createScenario({
+      question: 'What if?',
+      webSearchEnabled: true,
+      webSearchFamilies: ['academic'],
+      webSearchProvider: 'tavily',
+      webSearchApiKey: 'sk-test-key',
+      webSearchBaseUrl: 'https://api.tavily.com',
+    });
+
+    const body = getRequestBody(fetchMock);
+    expect(body.web_search_enabled).toBe(true);
+    expect(body.web_search_families).toEqual(['academic']);
+    expect(body.web_search_provider).toBe('tavily');
+    expect(body.web_search_api_key).toBe('sk-test-key');
+    expect(body.web_search_base_url).toBe('https://api.tavily.com');
+  });
+
+  it('should strip web search override fields in preflight mode', async () => {
+    const fetchMock = stubScenarioCreate();
+
+    await identityContinuityPreflight({
+      question: 'What if?',
+      webSearchEnabled: true,
+      webSearchFamilies: ['news_deep'],
+      webSearchProvider: 'exa',
+      webSearchApiKey: 'sk-preflight-secret',
+      webSearchBaseUrl: 'https://api.exa.ai',
+    });
+
+    const body = getRequestBody(fetchMock);
+    // Preflight may still carry the enabled flag + families to check configuration.
+    expect(body.web_search_enabled).toBe(true);
+    expect(body.web_search_families).toEqual(['news_deep']);
+    // Override credentials must NOT leak through preflight (data minimization).
+    expect(body).not.toHaveProperty('web_search_provider');
+    expect(body).not.toHaveProperty('web_search_api_key');
+    expect(body).not.toHaveProperty('web_search_base_url');
   });
 });
