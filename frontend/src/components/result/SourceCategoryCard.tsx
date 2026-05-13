@@ -4,6 +4,11 @@
 
    FE-5 (v2): standard card shell with title, subtitle, skeleton,
    empty, rate-limited, network-error, and content states.
+
+   P4-1: extended with provider-aware states:
+   - unsupported_provider: current provider can't fulfill the family
+   - fallback_unconstrained: returned results but without domain scope
+   - search_skipped: search intentionally skipped
    ═══════════════════════════════════════════════════════════ */
 
 import { type ReactNode } from 'react';
@@ -15,13 +20,23 @@ export type SourceCategoryState =
   | 'empty'
   | 'rate_limited'
   | 'network_error'
-  | 'ready';
+  | 'ready'
+  | 'unsupported_provider'
+  | 'fallback_unconstrained'
+  | 'search_skipped';
 
 export interface SourceCategoryCardProps {
   family: 'polymarket' | 'finance' | 'academic' | 'news_deep';
   title: string;
   subtitle?: string;
   state: SourceCategoryState;
+  /**
+   * Optional disabled / fallback reason copy. When provided, an sr-only
+   * span is rendered and linked via aria-describedby for the
+   * `unsupported_provider`, `fallback_unconstrained`, and `search_skipped`
+   * states.
+   */
+  reason?: string;
   children?: ReactNode;
   /** Optional extra className for the outer element. */
   className?: string;
@@ -29,20 +44,30 @@ export interface SourceCategoryCardProps {
   testIdOverride?: string;
 }
 
+const REASON_STATES: ReadonlySet<SourceCategoryState> = new Set<SourceCategoryState>([
+  'unsupported_provider',
+  'fallback_unconstrained',
+  'search_skipped',
+]);
+
 export function SourceCategoryCard({
   family,
   title,
   subtitle,
   state,
+  reason,
   children,
   className,
   testIdOverride,
 }: SourceCategoryCardProps) {
   const { t } = useTranslation();
   const baseTestId = testIdOverride ?? `result-sources-${family}`;
+  const reasonId = `${baseTestId}-reason`;
+  const hasReason = REASON_STATES.has(state);
 
   let stateTestId: string | undefined;
   let stateBody: ReactNode = null;
+  let stateClass: string | undefined;
 
   switch (state) {
     case 'loading':
@@ -87,6 +112,59 @@ export function SourceCategoryCard({
         </p>
       );
       break;
+    case 'unsupported_provider':
+      stateTestId = 'result-source-unsupported';
+      stateClass = 'result-source-card__unsupported';
+      stateBody = (
+        <p className="result-source-card__notice">
+          <span className="result-source-card__notice-icon" aria-hidden="true">
+            ℹ️
+          </span>
+          <span>
+            {t(`source.${family}.unsupported_provider`, {
+              defaultValue:
+                'Current search provider does not support this category.',
+            })}
+          </span>
+        </p>
+      );
+      break;
+    case 'fallback_unconstrained':
+      stateTestId = 'result-source-fallback';
+      stateClass = 'result-source-card__fallback';
+      stateBody = (
+        <>
+          <p className="result-source-card__notice">
+            <span className="result-source-card__notice-icon" aria-hidden="true">
+              ⚠️
+            </span>
+            <span>
+              {t(`source.${family}.fallback_unconstrained`, {
+                defaultValue:
+                  'Search scope expanded — domain filtering unavailable.',
+              })}
+            </span>
+          </p>
+          {children}
+        </>
+      );
+      break;
+    case 'search_skipped':
+      stateTestId = 'result-source-skipped';
+      stateClass = 'result-source-card__skipped';
+      stateBody = (
+        <p className="result-source-card__notice">
+          <span className="result-source-card__notice-icon" aria-hidden="true">
+            ⏭
+          </span>
+          <span>
+            {t(`source.${family}.search_skipped`, {
+              defaultValue: 'Search skipped.',
+            })}
+          </span>
+        </p>
+      );
+      break;
     case 'ready':
     default:
       stateBody = children ?? null;
@@ -97,8 +175,9 @@ export function SourceCategoryCard({
       data-testid={baseTestId}
       data-state={state}
       data-source-family={family}
-      className={cn('result-source-card', className)}
+      className={cn('result-source-card', stateClass, className)}
       aria-labelledby={`${baseTestId}-title`}
+      aria-describedby={hasReason ? reasonId : undefined}
     >
       <header className="result-source-card__header">
         <h3
@@ -109,6 +188,23 @@ export function SourceCategoryCard({
         </h3>
         {subtitle && <p className="result-source-card__subtitle">{subtitle}</p>}
       </header>
+      {hasReason && (
+        <span
+          id={reasonId}
+          data-testid={`${baseTestId}-reason`}
+          className="result-source-card__sr-reason"
+        >
+          {reason
+            ?? t(`source.${family}.${state}`, {
+              defaultValue:
+                state === 'unsupported_provider'
+                  ? 'Current search provider does not support this category.'
+                  : state === 'fallback_unconstrained'
+                  ? 'Search scope expanded — domain filtering unavailable.'
+                  : 'Search skipped.',
+            })}
+        </span>
+      )}
       <div
         className="source-category-card__body result-source-card__body"
         data-testid={stateTestId}

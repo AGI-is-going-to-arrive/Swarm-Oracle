@@ -1930,16 +1930,82 @@
   text-overflow: ellipsis;
 }
 
+/* P4-2: visible (not just sr-only) reason line for disabled toggles. Honors
+   mobile reading patterns — the title attribute is unreliable on touch, so
+   the reason wraps below the label when present. */
+.new-source-toggle__reason {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--text-muted, #6b665e);
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
 .new-source-toggle--disabled {
-  opacity: 0.45;
+  opacity: 0.55;
   cursor: not-allowed;
-  pointer-events: none;
+  /* Keep pointer events on so the title tooltip still works on hover; the
+     <input> stays disabled to block selection. */
+}
+
+.new-source-toggle--disabled input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
+/* P4-2: Provider capability hint shown next to the provider dropdown and the
+   base URL input. Compact, low-emphasis text designed to flow under existing
+   help text without competing with it. */
+.iv-provider-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--text-muted, #6b665e);
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+/* P4-2: Inline warning shown above the source-family toggles when no provider
+   is currently resolvable (no server default + unrecognized custom override
+   base URL). Uses a soft amber palette to read as advisory rather than
+   error. Tested down to 375px viewports. */
+.iv-no-provider-warning {
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(202, 138, 4, 0.32);
+  border-radius: 12px;
+  background: rgba(254, 252, 232, 0.92);
+  color: #854d0e;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  max-width: 560px;
+}
+
+@supports (color: oklch(0.5 0.1 80)) {
+  .iv-no-provider-warning {
+    border-color: oklch(0.72 0.13 80 / 0.4);
+    background: oklch(0.97 0.04 90 / 0.94);
+    color: oklch(0.45 0.12 70);
+  }
 }
 
 @media (max-width: 520px) {
   .new-source-toggle {
     flex: 1 1 100%;
     min-width: 0;
+  }
+
+  /* On narrow viewports the truncated single-line tooltip is unreliable, so
+     allow the secondary description line to wrap with the disabled reason. */
+  .new-source-toggle__copy > span {
+    white-space: normal;
+  }
+
+  .iv-no-provider-warning {
+    margin-left: 0;
+    margin-right: 0;
   }
 }
 
@@ -1956,5 +2022,94 @@
 
   .new-source-toggle:hover:not(.new-source-toggle--disabled) {
     transform: none;
+  }
+}
+
+/* ── Windows High Contrast (forced-colors) ─────────────────
+   Ensure source-family toggles, mode buttons, and BYOK/web-search
+   surfaces remain readable when the user opts into a forced-colors
+   palette. Custom gradients/backgrounds collapse to Canvas/CanvasText
+   and explicit borders ensure clickable cards keep their boundaries. */
+@media (forced-colors: active) {
+  .new-source-toggle,
+  .new-source-toggle--active,
+  .new-source-toggle--disabled,
+  .web-search-toggle,
+  .web-search-toggle--active,
+  .web-search-toggle--disabled,
+  .web-search-card,
+  .web-search-fields,
+  .web-search-mode-btn,
+  .web-search-mode-btn--active,
+  .web-search-summary,
+  .web-search-provider-chip,
+  .web-search-provider-chip--ready,
+  .web-search-provider-chip--warning,
+  .web-search-status,
+  .mode-btn,
+  .mode-btn--active,
+  .byok-toggle,
+  .byok-fields,
+  .byok-switch,
+  .byok-probe-card,
+  .byok-probe-card--warn,
+  .byok-probe-badge,
+  .iv-config__trigger,
+  .iv-advanced__trigger,
+  .daily-challenge-card,
+  .daily-challenge-card__pill,
+  .daily-challenge-card__pill--done,
+  .daily-challenge-card__pill--profile,
+  .weekly-challenge-card,
+  .shared-challenge-banner,
+  .weekly-challenge-card__side,
+  .weekly-growth-list__item,
+  .iv-no-provider-warning,
+  .iv-provider-hint,
+  .confirm-launch,
+  .confirm-launch__question,
+  .continuity-dialog,
+  .continuity-dialog__card,
+  .continuity-dialog__candidate,
+  .continuity-dialog__option {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    forced-color-adjust: none;
+  }
+
+  .new-source-toggle--active,
+  .web-search-toggle--active,
+  .web-search-mode-btn--active,
+  .mode-btn--active {
+    border: 2px solid Highlight;
+    color: HighlightText;
+    background: Highlight;
+  }
+
+  .new-source-toggle--disabled,
+  .web-search-toggle--disabled,
+  .mode-btn:disabled,
+  .byok-toggle:disabled {
+    color: GrayText;
+    border-color: GrayText;
+  }
+
+  .web-search-status--error,
+  .byok-test-btn--fail,
+  .byok-test-error,
+  .byok-probe-warning {
+    color: LinkText;
+    border-color: LinkText;
+  }
+
+  .iv-config__trigger:focus-visible,
+  .iv-advanced__trigger:focus-visible,
+  .mode-btn:focus-visible,
+  .web-search-mode-btn:focus-visible,
+  .new-source-toggle:focus-within,
+  .web-search-toggle:focus-within {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
   }
 }

@@ -109,6 +109,17 @@ interface NewSourceTogglesProps {
   newsDeep: boolean;
   onChange: Record<WebSearchFamily, (next: boolean) => void>;
   disabled?: boolean;
+  /**
+   * Search-enabled gate. When false, all toggles are rendered as disabled
+   * with a "enable search first" hint. Independent from `disabled` (which is
+   * used during form submission).
+   */
+  searchEnabled?: boolean;
+  /**
+   * Whether the effective provider supports domain-specific filtering. When
+   * false, all toggles are disabled with an "unsupported by provider" hint.
+   */
+  supportsDomainFilter?: boolean;
 }
 
 function NewSourceToggleItem({
@@ -116,48 +127,67 @@ function NewSourceToggleItem({
   checked,
   onChange,
   disabled,
+  searchEnabled,
+  supportsDomainFilter,
 }: {
   family: WebSearchFamily;
   checked: boolean;
   onChange: (next: boolean) => void;
   disabled?: boolean;
+  searchEnabled?: boolean;
+  supportsDomainFilter?: boolean;
 }) {
   const { t } = useTranslation();
   // Per-family capability gate (server may disable any family independently).
-  const { enabled: featureEnabled, loading, capabilities } = useCapabilityCheck(
+  const { enabled: featureEnabled, loading } = useCapabilityCheck(
     'web_search',
     `providers.${family}.enabled`,
   );
-  // P1-7: gate on whether the current provider supports domain filtering.
-  // If the capability registry does not expose `provider_capability` (legacy server),
-  // treat domain filter as supported to remain backward compatible.
-  const providerCapability = capabilities?.web_search?.provider_capability;
-  const domainFilterSupported = providerCapability
-    ? providerCapability.supports_domain_filter === true
-    : true;
+  // P4-2: the parent (InputView) now resolves provider capability via
+  // useWebSearchConfig (so custom-override providers get their own capability
+  // rather than the server default). We honor that explicit signal when given
+  // and fall back to "supported" only when the prop is omitted entirely.
+  const domainFilterSupported = supportsDomainFilter ?? true;
+  const searchToggleOn = searchEnabled ?? true;
   const testId = `input-source-toggle-${family}`;
   const effectiveDisabled =
-    Boolean(disabled) || loading || !featureEnabled || !domainFilterSupported;
+    Boolean(disabled)
+    || loading
+    || !featureEnabled
+    || !domainFilterSupported
+    || !searchToggleOn;
   const title = t(`input_source.${family}.label`, {
     defaultValue: family.replace('_', ' '),
   });
   const tooltip = t(`input_source.${family}.tooltip`, {
     defaultValue: 'External source provider.',
   });
-  const tooltipText = disabled
-    ? t('input_source.search_disabled_tooltip', {
-        defaultValue: 'Enable web search to use source categories.',
-      })
+  // Order matters: the most actionable hint wins. "Enable web search first"
+  // beats "provider does not support filter" because the former is fixable
+  // here while the latter only resolves if the user switches provider.
+  // Keys live in the `input_source.*` namespace to remain stable for tests
+  // and translators (these tooltips predate P4 and are referenced widely).
+  const disabledReasonKey = !searchToggleOn
+    ? 'input_source.search_disabled_tooltip'
     : !featureEnabled
-      ? t('input_source.disabled_tooltip', {
-          defaultValue: 'This source is not available on the server.',
-        })
+      ? 'input_source.disabled_tooltip'
       : !domainFilterSupported
-        ? t('input_source.domain_filter_unsupported', {
-            defaultValue: 'The current search provider does not support domain-specific filtering.',
-          })
-        : tooltip;
-  const effectiveChecked = featureEnabled && !disabled && domainFilterSupported && checked;
+        ? 'input_source.domain_filter_unsupported'
+        : null;
+  const disabledReason = disabledReasonKey
+    ? t(disabledReasonKey, {
+        defaultValue:
+          disabledReasonKey === 'input_source.search_disabled_tooltip'
+            ? 'Enable web search to use source categories.'
+            : disabledReasonKey === 'input_source.disabled_tooltip'
+              ? 'This data source is not enabled on the server.'
+              : 'The current search provider does not support domain-specific filtering.',
+      })
+    : null;
+  const reasonId = disabledReason ? `new-source-toggle-reason-${family}` : undefined;
+  const tooltipText = disabledReason ?? tooltip;
+  const effectiveChecked =
+    featureEnabled && !disabled && domainFilterSupported && searchToggleOn && checked;
   return (
     <label
       className={`new-source-toggle ${effectiveChecked ? 'new-source-toggle--active' : ''} ${effectiveDisabled ? 'new-source-toggle--disabled' : ''}`}
@@ -172,10 +202,20 @@ function NewSourceToggleItem({
         checked={effectiveChecked}
         onChange={(evt) => onChange(evt.target.checked)}
         disabled={effectiveDisabled}
+        aria-describedby={reasonId}
       />
       <span className="new-source-toggle__copy">
         <strong>{title}</strong>
         <span>{tooltip}</span>
+        {disabledReason && (
+          <small
+            id={reasonId}
+            className="new-source-toggle__reason"
+            data-testid={`${testId}-reason`}
+          >
+            {disabledReason}
+          </small>
+        )}
       </span>
     </label>
   );
@@ -188,6 +228,8 @@ function NewSourceToggles({
   newsDeep,
   onChange,
   disabled,
+  searchEnabled,
+  supportsDomainFilter,
 }: NewSourceTogglesProps) {
   const { enabled: pmEnabled } = useCapabilityCheck('web_search', 'providers.polymarket.enabled');
   const { enabled: finEnabled } = useCapabilityCheck('web_search', 'providers.finance.enabled');
@@ -201,24 +243,32 @@ function NewSourceToggles({
         checked={polymarket}
         onChange={onChange.polymarket}
         disabled={disabled}
+        searchEnabled={searchEnabled}
+        supportsDomainFilter={supportsDomainFilter}
       />
       <NewSourceToggleItem
         family="finance"
         checked={finance}
         onChange={onChange.finance}
         disabled={disabled}
+        searchEnabled={searchEnabled}
+        supportsDomainFilter={supportsDomainFilter}
       />
       <NewSourceToggleItem
         family="academic"
         checked={academic}
         onChange={onChange.academic}
         disabled={disabled}
+        searchEnabled={searchEnabled}
+        supportsDomainFilter={supportsDomainFilter}
       />
       <NewSourceToggleItem
         family="news_deep"
         checked={newsDeep}
         onChange={onChange.news_deep}
         disabled={disabled}
+        searchEnabled={searchEnabled}
+        supportsDomainFilter={supportsDomainFilter}
       />
     </div>
   );
@@ -275,10 +325,6 @@ export function InputView() {
   const [searchParams] = useSearchParams();
   const directorIdentity = getDirectorIdentity();
   const { capabilities: caps } = useCapabilityCheck('custom_agents');
-  const { capabilities: wsCapabilities } = useCapabilityCheck('web_search');
-  const parentDomainFilterSupported = wsCapabilities?.web_search?.provider_capability
-    ? wsCapabilities.web_search.provider_capability.supports_domain_filter === true
-    : true;
   const { enabled: educationTemplatesEnabled } = useCapabilityCheck('education_templates');
   const [educationPickerOpen, setEducationPickerOpen] = useState(false);
   // S1-5: First-visit onboarding guide. Hidden once the user finishes or skips.
@@ -320,6 +366,9 @@ export function InputView() {
     setWebSearchBaseUrl,
     webSearchStatus,
     setWebSearchStatus,
+    effectiveProviderCapability,
+    supportsDomainFilter,
+    inferredCustomProvider,
   } = useWebSearchConfig();
   const {
     showByok,
@@ -439,7 +488,7 @@ export function InputView() {
   }, [webSearchProvider]);
   const webSearchUsesCustomOverride = webSearchEnabled && webSearchMode === 'custom_override';
   const selectedWebSearchFamilies = useMemo<WebSearchFamily[]>(() => {
-    if (!webSearchEnabled || !parentDomainFilterSupported) return [];
+    if (!webSearchEnabled || !supportsDomainFilter) return [];
     const nextFamilies: WebSearchFamily[] = [];
     if (newSourceTogglePolymarket) nextFamilies.push('polymarket');
     if (newSourceToggleFinance) nextFamilies.push('finance');
@@ -451,7 +500,7 @@ export function InputView() {
     newSourceToggleFinance,
     newSourceToggleNewsDeep,
     newSourceTogglePolymarket,
-    parentDomainFilterSupported,
+    supportsDomainFilter,
     webSearchEnabled,
   ]);
   const byokBudgetRecommendation = useMemo(() => {
@@ -584,13 +633,13 @@ export function InputView() {
   // P1-7: clear source family selections when the gate closes
   // so stale picks don't sneak into a later run if it reopens.
   useEffect(() => {
-    if (!webSearchEnabled || !parentDomainFilterSupported) {
+    if (!webSearchEnabled || !supportsDomainFilter) {
       setNewSourceTogglePolymarket(false);
       setNewSourceToggleFinance(false);
       setNewSourceToggleAcademic(false);
       setNewSourceToggleNewsDeep(false);
     }
-  }, [parentDomainFilterSupported, webSearchEnabled]);
+  }, [supportsDomainFilter, webSearchEnabled]);
 
   // BYOK auto-expand: open advanced config when sessionStorage has a saved BYOK key
   useEffect(() => {
@@ -1548,6 +1597,7 @@ export function InputView() {
                               value={webSearchProvider}
                               onChange={(e) => setWebSearchProvider(e.target.value as 'tavily' | 'exa' | 'xai' | 'searxng')}
                               disabled={isSubmitting}
+                              aria-describedby="web-search-provider-capability-hint"
                             >
                               <option value="tavily">Tavily</option>
                               <option value="exa">Exa</option>
@@ -1555,6 +1605,26 @@ export function InputView() {
                               <option value="searxng">SearXNG</option>
                             </select>
                             <span className="web-search-field-help">{t('home.web_search_provider_hint')}</span>
+                            {/* P4-2: per-provider capability hint. Renders a friendly
+                                line explaining how each provider applies the
+                                domain filter (e.g., API param vs site: syntax). */}
+                            <span
+                              id="web-search-provider-capability-hint"
+                              className="iv-provider-hint"
+                              data-testid="iv-provider-capability-hint"
+                              data-provider={webSearchProvider}
+                            >
+                              {t(`home.web_search_provider_${webSearchProvider}_hint`, {
+                                defaultValue:
+                                  webSearchProvider === 'tavily'
+                                    ? 'Domain filtering is supported.'
+                                    : webSearchProvider === 'exa'
+                                      ? 'Domain filtering is supported.'
+                                      : webSearchProvider === 'xai'
+                                        ? 'Domain filtering is supported (up to 5 domains).'
+                                        : 'Self-hosted search. Filters via site: query syntax.',
+                              })}
+                            </span>
                           </div>
                           <div className="byok-field web-search-field">
                             <label className="byok-label" htmlFor="web-search-api-key">
@@ -1587,6 +1657,28 @@ export function InputView() {
                               aria-describedby={webSearchUrlError ? 'web-search-base-url-error' : undefined}
                             />
                             <span className="web-search-field-help">{t('home.web_search_base_url_hint')}</span>
+                            {/* P4-2: surface the provider we inferred from the
+                                base_url host so the user can confirm the
+                                override targets the expected backend. When the
+                                host is unknown we tell them domain filter is
+                                unavailable for this run. */}
+                            {webSearchBaseUrl.trim() && (
+                              <span
+                                className="iv-provider-hint"
+                                data-testid="iv-inferred-provider-hint"
+                                data-inferred-provider={inferredCustomProvider ?? 'unknown'}
+                              >
+                                {inferredCustomProvider
+                                  ? t('home.web_search_inferred_provider', {
+                                      defaultValue: 'Detected provider: {{provider}}',
+                                      provider: inferredCustomProvider,
+                                    })
+                                  : t('home.web_search_inferred_provider_unknown', {
+                                      defaultValue:
+                                        'Could not detect provider from this base URL. Domain filtering will be disabled.',
+                                    })}
+                              </span>
+                            )}
                             {webSearchUrlError && (
                               <span
                                 id="web-search-base-url-error"
@@ -1624,6 +1716,23 @@ export function InputView() {
                 onFocusCapture={handleClosedAdvancedFocusCapture}
               >
                 <div className="iv-advanced__inner">
+                  {/* P4-2: warn the user when no provider is resolvable (no server
+                      default + custom override base URL points at an unknown host).
+                      Without a provider the source-family checkboxes cannot filter,
+                      so we surface the issue rather than silently disabling them. */}
+                  {webSearchEnabled && effectiveProviderCapability.source === 'unknown' && (
+                    <div
+                      className="iv-no-provider-warning"
+                      role="status"
+                      aria-live="polite"
+                      data-testid="iv-no-provider-warning"
+                    >
+                      {t('home.web_search_no_provider_warning', {
+                        defaultValue:
+                          'No search provider is currently resolvable. Configure a server default or a recognized custom override to use source categories.',
+                      })}
+                    </div>
+                  )}
                   {/* FE-5: 4 new source toggles (polymarket/finance/academic/news_deep) */}
                   <NewSourceToggles
                     polymarket={newSourceTogglePolymarket}
@@ -1636,7 +1745,9 @@ export function InputView() {
                       academic: setNewSourceToggleAcademic,
                       news_deep: setNewSourceToggleNewsDeep,
                     }}
-                    disabled={isSubmitting || !webSearchEnabled}
+                    disabled={isSubmitting}
+                    searchEnabled={webSearchEnabled}
+                    supportsDomainFilter={supportsDomainFilter}
                   />
 
                   {/* ── Mode Selectors (inline with input area) ── */}

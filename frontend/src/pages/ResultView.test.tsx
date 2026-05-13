@@ -4594,3 +4594,88 @@ describe('ResultView Reader/Workbench mode toggle (S1-4)', () => {
     expect(useUIPreferencesStore.getState().resultViewMode).toBe('reader');
   });
 });
+
+describe('resolveSourceCategoryState (P4-1)', () => {
+  it('returns "empty" for null/undefined entry', async () => {
+    const { resolveSourceCategoryState } = await import('./resultHelpers');
+    expect(resolveSourceCategoryState(null)).toBe('empty');
+    expect(resolveSourceCategoryState(undefined)).toBe('empty');
+  });
+
+  it('infers ready when state missing but items present', async () => {
+    const { resolveSourceCategoryState } = await import('./resultHelpers');
+    expect(resolveSourceCategoryState({ items: [{}, {}] })).toBe('ready');
+  });
+
+  it('infers empty when state missing and items empty', async () => {
+    const { resolveSourceCategoryState } = await import('./resultHelpers');
+    expect(resolveSourceCategoryState({ items: [] })).toBe('empty');
+    expect(resolveSourceCategoryState({})).toBe('empty');
+  });
+
+  it('passes through unsupported_provider state', async () => {
+    const { resolveSourceCategoryState } = await import('./resultHelpers');
+    expect(
+      resolveSourceCategoryState({ state: 'unsupported_provider', items: [] }),
+    ).toBe('unsupported_provider');
+  });
+
+  it('passes through fallback_unconstrained (even when items are present)', async () => {
+    const { resolveSourceCategoryState } = await import('./resultHelpers');
+    expect(
+      resolveSourceCategoryState({ state: 'fallback_unconstrained', items: [{}] }),
+    ).toBe('fallback_unconstrained');
+    expect(
+      resolveSourceCategoryState({ state: 'fallback_unconstrained', items: [] }),
+    ).toBe('fallback_unconstrained');
+  });
+
+  it('passes through search_skipped state', async () => {
+    const { resolveSourceCategoryState } = await import('./resultHelpers');
+    expect(
+      resolveSourceCategoryState({ state: 'search_skipped', items: [] }),
+    ).toBe('search_skipped');
+  });
+
+  it('downgrades ready to empty when items are missing/empty', async () => {
+    const { resolveSourceCategoryState } = await import('./resultHelpers');
+    expect(resolveSourceCategoryState({ state: 'ready', items: [] })).toBe('empty');
+    expect(resolveSourceCategoryState({ state: 'ready' })).toBe('empty');
+  });
+
+  it('falls back to empty for unknown state values', async () => {
+    const { resolveSourceCategoryState } = await import('./resultHelpers');
+    expect(resolveSourceCategoryState({ state: 'bogus_value' })).toBe('empty');
+    expect(resolveSourceCategoryState({ state: '' })).toBe('empty');
+  });
+
+  it('preserves legacy states (loading / rate_limited / network_error)', async () => {
+    const { resolveSourceCategoryState } = await import('./resultHelpers');
+    expect(resolveSourceCategoryState({ state: 'loading' })).toBe('loading');
+    expect(resolveSourceCategoryState({ state: 'rate_limited' })).toBe('rate_limited');
+    expect(resolveSourceCategoryState({ state: 'network_error' })).toBe('network_error');
+  });
+});
+
+describe('ResultView P4-1 i18n key coverage', () => {
+  const families = ['polymarket', 'finance', 'academic', 'news_deep'] as const;
+  const newStates = [
+    'unsupported_provider',
+    'fallback_unconstrained',
+    'search_skipped',
+  ] as const;
+
+  it.each(families)('en/zh has all 3 new state copies for %s family', (family) => {
+    const enSource = en.translation.source as unknown as Record<string, Record<string, string>>;
+    const zhSource = zh.translation.source as unknown as Record<string, Record<string, string>>;
+    const enFamily = enSource[family];
+    const zhFamily = zhSource[family];
+    expect(enFamily).toBeDefined();
+    expect(zhFamily).toBeDefined();
+    for (const state of newStates) {
+      expect(enFamily[state]).toBeTruthy();
+      expect(zhFamily[state]).toBeTruthy();
+      expect(enFamily[state]).not.toBe(zhFamily[state]);
+    }
+  });
+});

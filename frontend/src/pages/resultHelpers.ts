@@ -3,6 +3,7 @@ import { isApiError } from '../api/client';
 import {
   getGameplayCardDefinition,
 } from '../components/gameplayCards';
+import type { SourceCategoryState } from '../components/result/SourceCategoryCard';
 import { mapRoleToSpriteId } from '../game/managers/VizSynthesizer';
 import { parseScenarioMoment } from '../lib/scenarioMeta';
 import type {
@@ -13,6 +14,37 @@ import type {
   CampaignScenarioSummary,
   StoryData,
 } from '../types';
+
+const KNOWN_SOURCE_CATEGORY_STATES: ReadonlySet<SourceCategoryState> = new Set<SourceCategoryState>([
+  'loading',
+  'empty',
+  'rate_limited',
+  'network_error',
+  'ready',
+  'unsupported_provider',
+  'fallback_unconstrained',
+  'search_skipped',
+]);
+
+export function resolveSourceCategoryState(
+  entry:
+    | { state?: SourceCategoryState | string; items?: unknown[] }
+    | null
+    | undefined,
+): SourceCategoryState {
+  if (!entry) return 'empty';
+  if (!entry.state) {
+    return Array.isArray(entry.items) && entry.items.length > 0 ? 'ready' : 'empty';
+  }
+  if (!KNOWN_SOURCE_CATEGORY_STATES.has(entry.state as SourceCategoryState)) {
+    return 'empty';
+  }
+  const state = entry.state as SourceCategoryState;
+  if (state === 'ready' && (!Array.isArray(entry.items) || entry.items.length === 0)) {
+    return 'empty';
+  }
+  return state;
+}
 import type { StructuredBetOutcome } from '../lib/predictionBetting';
 
 export const CAMPAIGN_FINALIZE_CACHE_KEY = 'swarmoracle:result-campaign-finalize:v1';

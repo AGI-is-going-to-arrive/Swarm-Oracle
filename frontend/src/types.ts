@@ -4,6 +4,16 @@
 
 export type WebSearchFamily = 'polymarket' | 'finance' | 'academic' | 'news_deep';
 
+export type WebSearchFamilyState =
+  | 'loading'
+  | 'empty'
+  | 'rate_limited'
+  | 'network_error'
+  | 'ready'
+  | 'unsupported_provider'
+  | 'fallback_unconstrained'
+  | 'search_skipped';
+
 export interface WebSearchContext {
   query: string;
   snippets: Array<{ text: string; source_url: string }>;
@@ -12,9 +22,10 @@ export interface WebSearchContext {
   cached: boolean;
   family_context?: {
     polymarket?: {
-      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      state?: WebSearchFamilyState;
       configured_host?: string;
       geo_gated?: boolean;
+      disabled_reason?: string;
       items: Array<{
         id: string;
         question: string;
@@ -23,7 +34,8 @@ export interface WebSearchContext {
       }>;
     };
     finance?: {
-      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      state?: WebSearchFamilyState;
+      disabled_reason?: string;
       items: Array<{
         id: string;
         title: string;
@@ -33,7 +45,8 @@ export interface WebSearchContext {
       }>;
     };
     academic?: {
-      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      state?: WebSearchFamilyState;
+      disabled_reason?: string;
       items: Array<{
         id: string;
         title: string;
@@ -44,7 +57,8 @@ export interface WebSearchContext {
       }>;
     };
     news_deep?: {
-      state?: 'loading' | 'empty' | 'rate_limited' | 'network_error' | 'ready';
+      state?: WebSearchFamilyState;
+      disabled_reason?: string;
       items: Array<{
         id: string;
         title: string;

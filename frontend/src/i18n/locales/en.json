@@ -64,6 +64,14 @@
       "web_search_status_success": "Real-world context acquired",
       "web_search_status_error": "Search returned no results, proceeding",
       "web_search_status_skipped": "Search not enabled",
+      "web_search_provider_tavily_hint": "Supports domain filtering.",
+      "web_search_provider_exa_hint": "Supports domain filtering.",
+      "web_search_provider_xai_hint": "Supports domain filtering (max 5 domains).",
+      "web_search_provider_searxng_hint": "Self-hosted search, site: syntax filtering.",
+      "web_search_no_provider_warning": "No search provider configured. Please set up a provider or use custom override.",
+      "web_search_domain_filter_unsupported": "Current provider does not support domain-filtered search.",
+      "web_search_inferred_provider": "Detected provider: {{provider}}",
+      "web_search_inferred_provider_unknown": "Could not detect provider from URL.",
       "advanced_settings": "Advanced Settings",
       "advanced_settings_expanded": "Advanced Settings (collapse)",
       "byok_toggle": "🔑 Custom LLM",
@@ -2338,23 +2346,35 @@
         "network_error": "Could not reach Polymarket.",
         "open": "Open market",
         "geo_gated_title": "Polymarket is geo-gated",
-        "geo_gated_subtitle": "US host required — your region cannot access live prices."
+        "geo_gated_subtitle": "US host required — your region cannot access live prices.",
+        "unsupported_provider": "The current search provider does not support Polymarket markets.",
+        "fallback_unconstrained": "Polymarket scope expanded — domain filtering unavailable for this provider.",
+        "search_skipped": "Polymarket lookup skipped for this run."
       },
       "finance": {
         "title": "Finance",
         "subtitle": "Market & macro indicators",
-        "empty": "No finance signals matched this question."
+        "empty": "No finance signals matched this question.",
+        "unsupported_provider": "The current search provider does not support finance signals.",
+        "fallback_unconstrained": "Finance scope expanded — domain filtering unavailable for this provider.",
+        "search_skipped": "Finance lookup skipped for this run."
       },
       "academic": {
         "title": "Academic",
         "subtitle": "Peer-reviewed research",
         "empty": "No academic papers matched this question.",
-        "citations": "{{count}} citations"
+        "citations": "{{count}} citations",
+        "unsupported_provider": "The current search provider does not support academic sources.",
+        "fallback_unconstrained": "Academic scope expanded — domain filtering unavailable for this provider.",
+        "search_skipped": "Academic lookup skipped for this run."
       },
       "news_deep": {
         "title": "Deep News",
         "subtitle": "Long-tail news signals",
-        "empty": "No deep-news signals matched this question."
+        "empty": "No deep-news signals matched this question.",
+        "unsupported_provider": "The current search provider does not support deep-news sources.",
+        "fallback_unconstrained": "Deep-news scope expanded — domain filtering unavailable for this provider.",
+        "search_skipped": "Deep-news lookup skipped for this run."
       }
     },
     "result_action": {

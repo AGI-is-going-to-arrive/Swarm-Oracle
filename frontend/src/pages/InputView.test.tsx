@@ -2184,6 +2184,17 @@ describe('Source Family toggle UX gate', () => {
     expect(polyCheckbox).toBeDisabled();
     expect(polymarketToggle.getAttribute('data-domain-filter-supported')).toBe('false');
     expect(polymarketToggle.getAttribute('title')).toBe('input_source.domain_filter_unsupported');
+
+    // P4-5: a11y — the disabled checkbox must link to a visible reason via
+    // aria-describedby; the reason span has its own data-testid and id.
+    const reasonId = polyCheckbox.getAttribute('aria-describedby');
+    expect(reasonId).toBe('new-source-toggle-reason-polymarket');
+    const reasonEl = polymarketToggle.querySelector(`#${reasonId}`);
+    expect(reasonEl).not.toBeNull();
+    expect(reasonEl?.getAttribute('data-testid')).toBe(
+      'input-source-toggle-polymarket-reason',
+    );
+    expect(reasonEl?.textContent).toBe('input_source.domain_filter_unsupported');
   });
 
   it('excludes families from submission payload when domain filter is unsupported', async () => {
@@ -2220,5 +2231,245 @@ describe('Source Family toggle UX gate', () => {
         }),
       );
     });
+  });
+});
+
+describe('InputView P4-2 provider capability hints', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    window.localStorage.setItem('swarm_onboarding_completed', 'true');
+    __resetCapabilityCacheForTests();
+    setMockLanguage('en');
+    changeLanguageMock.mockClear();
+    createDebateMock.mockReset();
+    startSimulationMock.mockClear();
+    identityPreflightMock.mockReset();
+    testLlmConnectionMock.mockReset();
+    getCapabilitiesMock.mockReset();
+    identityPreflightMock.mockResolvedValue({
+      needs_confirmation: false,
+      matches: [],
+      summary: {
+        agent_count: 0,
+        exact_match_count: 0,
+        candidate_count: 0,
+        new_identity_count: 0,
+      },
+    });
+    import.meta.env.VITE_ENABLE_WEB_SEARCH = 'true';
+    getCampaignProfileMock.mockResolvedValue({
+      id: 'profile-p4',
+      user_id: 'director-p4',
+      user_name: 'P4 Director',
+      total_runs: 0,
+      completed_challenges: 0,
+      total_bets: 0,
+      hit_bets: 0,
+      highest_archive_grade: null,
+      created_at: '2026-05-13T00:00:00Z',
+      updated_at: '2026-05-13T00:00:00Z',
+      last_daily_challenge_completed_at: null,
+      last_daily_challenge_profile_id: null,
+      last_daily_challenge_scenario_id: null,
+    });
+    getCampaignMasteryMock.mockResolvedValue([]);
+    getCampaignBadgesMock.mockResolvedValue([]);
+    getCampaignChallengeRotationMock.mockResolvedValue({
+      local_date: '2026-05-13',
+      week_key: '2026-05-11',
+      today_challenge: {
+        id: 'challenge-p4',
+        question: 'What if provider capability changes?',
+        question_en: 'What if provider capability changes?',
+        subtitle_zh: '能力',
+        subtitle_en: 'Capability',
+        profile_id: 'governance',
+        rounds: 3,
+        num_agents: 3,
+        mode: 'blackboard',
+        visualization_enabled: true,
+      },
+      weekly_challenges: [],
+    });
+    getCampaignDailyChallengeStatusMock.mockResolvedValue(null);
+    getCampaignWeeklySummaryMock.mockResolvedValue(null);
+    getChallengeProgressMock.mockReturnValue(null);
+  });
+
+  const buildBaseCapabilities = (overrides: Partial<{
+    serverEnabled: boolean;
+    provider: string;
+    supportsDomainFilter: boolean;
+  }> = {}) => ({
+    web_search: {
+      scope: 'server' as const,
+      server_enabled: overrides.serverEnabled ?? true,
+      method: 'external',
+      provider: overrides.provider ?? 'tavily',
+      providers: {
+        polymarket: { enabled: true, configured_host: 'us', rate_limit_rps: 2, ttl_seconds: 60, byok_allowed: true },
+        finance: { enabled: true, configured_host: 'www.alphavantage.co', rate_limit_rps: 5, ttl_seconds: 300, byok_allowed: true },
+        academic: { enabled: true, configured_host: 'export.arxiv.org', rate_limit_rps: 3, ttl_seconds: 1800, byok_allowed: true },
+        news_deep: { enabled: true, configured_host: 'api.gdeltproject.org', rate_limit_rps: 1, ttl_seconds: 900, byok_allowed: false },
+      },
+      provider_capability: {
+        supports_domain_filter: overrides.supportsDomainFilter ?? true,
+        supports_sources: true,
+        domain_filter_mode: 'api' as const,
+      },
+    },
+  });
+
+  async function selectCustomOverride(user: ReturnType<typeof userEvent.setup>) {
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+    const searchCheckbox = screen
+      .getByText('home.web_search_toggle')
+      .closest('label')
+      ?.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    await user.click(searchCheckbox);
+    // Custom override is rendered as a <button> with aria-pressed (not a radio).
+    const customBtn = (await screen.findByText('home.web_search_mode_custom'))
+      .closest('button') as HTMLButtonElement;
+    await user.click(customBtn);
+  }
+
+  it('shows provider capability hint for the selected provider in custom override', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+    await selectCustomOverride(user);
+
+    const hint = await screen.findByTestId('iv-provider-capability-hint');
+    expect(hint).toBeInTheDocument();
+    expect(hint.getAttribute('data-provider')).toBe('tavily');
+
+    const select = screen.getByLabelText('home.web_search_provider_label') as HTMLSelectElement;
+    await user.selectOptions(select, 'searxng');
+    const updatedHint = await screen.findByTestId('iv-provider-capability-hint');
+    expect(updatedHint.getAttribute('data-provider')).toBe('searxng');
+  });
+
+  it('renders inferred-provider hint only when base URL is non-empty', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+    await selectCustomOverride(user);
+
+    expect(screen.queryByTestId('iv-inferred-provider-hint')).not.toBeInTheDocument();
+
+    const baseUrlInput = screen.getByLabelText('home.web_search_base_url_label') as HTMLInputElement;
+    await user.type(baseUrlInput, 'https://api.tavily.com');
+    const hint = await screen.findByTestId('iv-inferred-provider-hint');
+    expect(hint.getAttribute('data-inferred-provider')).toBe('tavily');
+  });
+
+  it('marks inferred-provider as unknown for an unrecognised base URL host', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+    await selectCustomOverride(user);
+
+    const baseUrlInput = screen.getByLabelText('home.web_search_base_url_label') as HTMLInputElement;
+    await user.type(baseUrlInput, 'https://api.unknown-vendor.io');
+    const hint = await screen.findByTestId('iv-inferred-provider-hint');
+    expect(hint.getAttribute('data-inferred-provider')).toBe('unknown');
+  });
+
+  it('shows no-provider warning when effective capability source is unknown', async () => {
+    const user = userEvent.setup();
+    // Server has no default + we'll point custom override at an unknown host
+    // so effectiveProviderCapability.source resolves to 'unknown'.
+    getCapabilitiesMock.mockResolvedValue(
+      buildBaseCapabilities({ serverEnabled: false }),
+    );
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+    await selectCustomOverride(user);
+    const baseUrlInput = screen.getByLabelText('home.web_search_base_url_label') as HTMLInputElement;
+    await user.type(baseUrlInput, 'https://api.unknown-vendor.io');
+
+    const warning = await screen.findByTestId('iv-no-provider-warning');
+    expect(warning).toBeInTheDocument();
+    expect(warning.getAttribute('role')).toBe('status');
+    expect(warning.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('hides no-provider warning when server default provider is available', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+    const searchCheckbox = screen
+      .getByText('home.web_search_toggle')
+      .closest('label')
+      ?.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    await user.click(searchCheckbox);
+
+    expect(screen.queryByTestId('iv-no-provider-warning')).not.toBeInTheDocument();
+  });
+});
+
+describe('inferProviderFromBaseUrl (P4-2 unit)', () => {
+  it('returns null for empty / whitespace input', async () => {
+    const { inferProviderFromBaseUrl } = await import('../hooks/useWebSearchConfig');
+    expect(inferProviderFromBaseUrl('')).toBeNull();
+    expect(inferProviderFromBaseUrl('   ')).toBeNull();
+  });
+
+  it('matches tavily/exa/xai/searxng hosts', async () => {
+    const { inferProviderFromBaseUrl } = await import('../hooks/useWebSearchConfig');
+    expect(inferProviderFromBaseUrl('https://api.tavily.com')).toBe('tavily');
+    expect(inferProviderFromBaseUrl('https://api.exa.ai/search')).toBe('exa');
+    expect(inferProviderFromBaseUrl('https://api.x.ai/v1')).toBe('xai');
+    expect(inferProviderFromBaseUrl('http://my-searxng.local/')).toBe('searxng');
+  });
+
+  it('returns null for an unrecognized host', async () => {
+    const { inferProviderFromBaseUrl } = await import('../hooks/useWebSearchConfig');
+    expect(inferProviderFromBaseUrl('https://api.unknown-vendor.io')).toBeNull();
+  });
+
+  it('does not false-positive on substring collisions', async () => {
+    const { inferProviderFromBaseUrl } = await import('../hooks/useWebSearchConfig');
+    expect(inferProviderFromBaseUrl('https://example.com')).toBeNull();
+    expect(inferProviderFromBaseUrl('https://hexagon.io')).toBeNull();
+    expect(inferProviderFromBaseUrl('https://mexamples.com')).toBeNull();
+    expect(inferProviderFromBaseUrl('https://attacker-tavilyfake.com')).toBeNull();
+    expect(inferProviderFromBaseUrl('https://my-app-xai.io')).toBeNull();
+  });
+
+  it('returns null for invalid URLs instead of guessing', async () => {
+    const { inferProviderFromBaseUrl } = await import('../hooks/useWebSearchConfig');
+    expect(inferProviderFromBaseUrl('not-a-url-tavily')).toBeNull();
+    expect(inferProviderFromBaseUrl('exa.ai')).toBeNull();
   });
 });

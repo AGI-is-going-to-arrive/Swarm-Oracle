@@ -64,6 +64,14 @@
       "web_search_status_success": "已获取真实世界背景",
       "web_search_status_error": "搜索未返回结果，将继续推演",
       "web_search_status_skipped": "未启用搜索增强",
+      "web_search_provider_tavily_hint": "支持域名过滤。",
+      "web_search_provider_exa_hint": "支持域名过滤。",
+      "web_search_provider_xai_hint": "支持域名过滤（最多 5 个域名）。",
+      "web_search_provider_searxng_hint": "自托管搜索，site: 语法过滤。",
+      "web_search_no_provider_warning": "未配置搜索服务，请设置服务或使用自定义覆盖。",
+      "web_search_domain_filter_unsupported": "当前搜索服务不支持域名过滤搜索。",
+      "web_search_inferred_provider": "检测到搜索服务：{{provider}}",
+      "web_search_inferred_provider_unknown": "无法从 URL 检测搜索服务。",
       "advanced_settings": "高级设置",
       "advanced_settings_expanded": "高级设置（收起）",
       "byok_toggle": "🔑 自定义 LLM",
@@ -2338,23 +2346,35 @@
         "network_error": "无法连接 Polymarket。",
         "open": "打开市场",
         "geo_gated_title": "Polymarket 受地域限制",
-        "geo_gated_subtitle": "需要 US 节点 — 当前地区无法获取实时价格。"
+        "geo_gated_subtitle": "需要 US 节点 — 当前地区无法获取实时价格。",
+        "unsupported_provider": "当前搜索服务不支持 Polymarket 市场。",
+        "fallback_unconstrained": "Polymarket 范围已放宽 —— 此 provider 不支持按域名过滤。",
+        "search_skipped": "本轮跳过 Polymarket 检索。"
       },
       "finance": {
         "title": "金融",
         "subtitle": "市场与宏观指标",
-        "empty": "没有匹配此问题的金融信号。"
+        "empty": "没有匹配此问题的金融信号。",
+        "unsupported_provider": "当前搜索服务不支持金融信号。",
+        "fallback_unconstrained": "金融范围已放宽 —— 此 provider 不支持按域名过滤。",
+        "search_skipped": "本轮跳过金融检索。"
       },
       "academic": {
         "title": "学术",
         "subtitle": "同行评审研究",
         "empty": "没有匹配此问题的学术论文。",
-        "citations": "{{count}} 次引用"
+        "citations": "{{count}} 次引用",
+        "unsupported_provider": "当前搜索服务不支持学术来源。",
+        "fallback_unconstrained": "学术范围已放宽 —— 此 provider 不支持按域名过滤。",
+        "search_skipped": "本轮跳过学术检索。"
       },
       "news_deep": {
         "title": "深度新闻",
         "subtitle": "长尾新闻信号",
-        "empty": "没有匹配此问题的深度新闻信号。"
+        "empty": "没有匹配此问题的深度新闻信号。",
+        "unsupported_provider": "当前搜索服务不支持深度新闻来源。",
+        "fallback_unconstrained": "深度新闻范围已放宽 —— 此 provider 不支持按域名过滤。",
+        "search_skipped": "本轮跳过深度新闻检索。"
       }
     },
     "result_action": {

@@ -108,7 +108,6 @@ import './ResultView.css';
 import HOPsAnimation from '../components/result/HOPsAnimation';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useFocusTrap } from '../hooks/useFocusTrap';
-import { type SourceCategoryState } from '../components/result/SourceCategoryCard';
 import { HookSummaryPanel } from '../components/result/HookSummaryPanel';
 import { DirectorDebriefPanel } from '../components/result/DirectorDebriefPanel';
 import { ProgressIndicator } from '../components/ProgressIndicator';
@@ -128,18 +127,7 @@ const EMPTY_SOURCE_FAMILY_CONTEXT = {};
 
 type SourceFamilyContext = NonNullable<NonNullable<Scenario['web_search_context']>['family_context']>;
 
-function resolveSourceCategoryState(
-  entry: { state?: SourceCategoryState; items?: unknown[] } | null | undefined,
-): SourceCategoryState {
-  if (!entry) return 'empty';
-  if (!entry.state) {
-    return Array.isArray(entry.items) && entry.items.length > 0 ? 'ready' : 'empty';
-  }
-  if (entry.state === 'ready' && (!Array.isArray(entry.items) || entry.items.length === 0)) {
-    return 'empty';
-  }
-  return entry.state;
-}
+import { resolveSourceCategoryState } from './resultHelpers';
 
 export default function ResultView() {
   const { id } = useParams<{ id: string }>();
