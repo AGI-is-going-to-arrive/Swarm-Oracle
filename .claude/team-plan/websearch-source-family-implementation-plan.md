@@ -176,12 +176,12 @@ class ProviderSearchOutcome:
 | **P0** | ✅ **DONE 2026-05-13** | 基线锁定 + `native` placeholder 一致性修复 | 已落地 | 无 |
 | **P1** | ✅ **DONE 2026-05-13** | app-layer search / Source Family contract 加固 | 已落地 | P0 |
 | **P4a** | ✅ **DONE 2026-05-13** | Source Family UI 状态、disabled UX、i18n | 已落地 | P1 capability contract |
-| **P2** | **GATED** | native/proxy 状态模型与持久化 contract 设计 | 需单独确认 | P1 |
-| **P3** | **GATED** | xAI native search pilot；其他 provider 只保留研究 backlog | 需单独确认 | P2 |
-| **P4b** | **GATED** | native citation / proxy fallback UI | 需单独确认 | P2/P3 |
-| **P5** | **NEXT / GATED** | release validation 与跨浏览器签收 | 需单独确认 | P4a；native 分支还依赖 P2/P3/P4b |
+| **P2** | ✅ **DONE 2026-05-13** | native/proxy 状态模型与持久化 contract | 已落地 | P1 |
+| **P3** | ✅ **DONE 2026-05-13** | xAI native search pilot + adapter 框架 | 已落地 | P2 |
+| **P4b** | ✅ **DONE 2026-05-13** | native citation / proxy fallback UI | 已落地 | P2/P3 |
+| **P5** | ✅ **DONE 2026-05-13** | release validation 与签收 | 已落地 | P4a + P2/P3/P4b |
 
-**当前 handoff**: P0 + P1 + P4a 不再交给 `ccg:team-exec` 重做；下一步建议进入 P5 release validation/signoff。P2/P3/P4b/P5 必须等待用户再次确认。
+**最终验证基线**: backend `2908 passed / 2 skipped` | frontend `184 files / 2036 tests passed` | tsc/lint/build 0 errors | ruff 0 errors | i18n 2489 parity
 
 ---
 
