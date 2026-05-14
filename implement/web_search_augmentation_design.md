@@ -23,14 +23,17 @@
 
 ## 1. Provider Capability Matrix
 
-### 1.1 Native Web Search Providers
+### 1.1 Model-native Web Search Path
 
-| Provider | Search Mechanism | BYOK Compatible |
-|----------|-----------------|-----------------|
-| **Perplexity** (pplx-api) | 内建实时搜索，返回内联引用 | Yes |
-| **Google Gemini** (with grounding) | `google_search_retrieval` tool | Yes |
-| **OpenAI** (web browsing) | `web_search` tool (仅特定 model) | Yes |
-| **xAI Grok native search** | Responses `web_search` tool，返回 citations / annotations | Yes — 当前只做 xAI pilot；unknown proxy 不启用 native tools |
+模型原生联网不是 `WEB_SEARCH_PROVIDER=native`，也不是 app-layer provider。
+当前只在 `llm_call(native_search_domains=...)` 收到 Source Family 域名、且 LLM endpoint
+被识别为支持 native search 的非 proxy Responses API 路径时注入 tools。
+
+| Provider | Current support | Notes |
+|----------|-----------------|-------|
+| **xAI Grok native search** | Live pilot signed off | Responses `web_search` tool，返回 citations / annotations；unknown proxy 不启用 native tools |
+| **OpenAI Responses native search** | Structural / fixture-level adapter | adapter 已有结构支持；live OpenAI 签收仍是 backlog |
+| Other providers | Not exposed as current app capability | 可能有各自 grounding/search 机制，但本项目当前不在前端或 app-layer provider 列表中承诺可用 |
 
 ### 1.2 External Search API Providers (Model-Agnostic)
 
@@ -38,10 +41,22 @@
 |----------|-----------|---------|--------|
 | **Tavily** (推荐默认) | 1000 req/mo | ~1-2s | P0 |
 | **Exa** | 1000 req/mo | ~1-3s | P1 fallback |
-| **SearXNG** (self-hosted) | 无限 | ~2-5s | P2 |
+| **SearXNG** (self-hosted/local preferred) | No search API key | ~2-5s | P2 |
 | **xAI** (app-layer Responses web_search) | 取决于账号 | ~1-5s | P1 |
 
 **Fallback chain:** 当前没有跨 provider fallback chain。配置哪个 provider 就调用哪个 provider；失败时 fail-soft 继续推演。
+
+SearXNG 不需要搜索 API key，但它不是“免费稳定搜索服务”的保证；它仍依赖一个可访问、
+且通常需要启用 JSON 的 SearXNG 实例。自建或本地实例适合开发 / 验收；公共实例只适合
+实验，可能没有 JSON API、限流、返回空结果、临时下线，因此不能作为稳定发布能力或免费
+额度承诺。
+
+No-key experimental search 当前不进入 provider 列表：
+
+- public SearXNG instance：可作为实验输入，但不默认推荐给普通用户。
+- local Google / Bing / Baidu HTML scraping：不使用官方 API，稳定性和合规风险高。
+- browser / user-assisted search：隐私与交互负担高，难以保证自动化签收。
+- product-managed server default：推荐默认路径，由部署方承担 provider/key/成本与稳定性。
 
 ### 1.3 Provider 能力探测（三层）
 
@@ -209,7 +224,8 @@ export interface Scenario {
 
 > **重要语义约束**: `web_search` 字段报告的是**服务端全局配置状态**（`ENABLE_WEB_SEARCH` + provider + API key 是否配齐），**不是**当前被测试的 BYOK `llm_base_url / model` 的真实搜索能力。字段名 `scope: "server"` 显式标记此限制。
 >
-> Per-provider 能力探测（例如检测 Perplexity/Gemini 是否原生支持搜索）属于 V2 范围（§1.3 layer 2: 运行时探测）。
+> Model-native search 能力不由这个 `web_search` block 表达。当前只在 runtime 的 provider detection
+> 和 Responses adapter gate 里处理 xAI / OpenAI 这类已接线 provider。
 
 ```python
 # capabilities response 中的 web_search 片段
@@ -228,7 +244,7 @@ return {
 }
 ```
 
-前端消费路径：`InputView.tsx` 读取 `/api/capabilities`。搜索增强入口默认可见；server default 模式下 Source Family checkbox 由服务端 `provider_capability.supports_domain_filter` 控制。custom override 模式不会做实时探测；可识别的 base URL 会推断 Tavily / Exa / xAI / SearXNG，空 base URL 会使用下拉 provider 的 capability，只有非空且未知的 host 会显示 no-provider warning。
+前端消费路径：`InputView.tsx` 读取 `/api/capabilities`。搜索增强入口默认可见；推荐路径是 server default，普通用户只需打开开关，provider / key / base URL 输入不展示。高级 custom override 模式不会做实时探测；可识别的 base URL 会推断 Tavily / Exa / xAI / SearXNG，空 base URL 会使用下拉 provider 的 capability，只有非空且未知的 host 会显示 no-provider warning。模型原生联网只通过说明文案暴露为独立 LLM native path，不作为第三个 app-layer mode。
 
 ---
 

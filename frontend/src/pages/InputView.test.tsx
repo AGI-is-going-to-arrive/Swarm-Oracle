@@ -1308,7 +1308,7 @@ describe('InputView campaign progress', () => {
     expect(payload?.webSearchBaseUrl).toBeUndefined();
   });
 
-  it('defaults to server mode and hides override fields until custom override is selected', async () => {
+  it('defaults to recommended server search and hides override fields until requested', async () => {
     const user = userEvent.setup();
     getCapabilitiesMock.mockResolvedValue({
       web_search: { scope: 'server', server_enabled: true, method: 'external', provider: 'tavily' },
@@ -1328,15 +1328,17 @@ describe('InputView campaign progress', () => {
     expect(checkbox).toBeInTheDocument();
     if (checkbox) await user.click(checkbox);
 
-    expect(screen.getByRole('button', { name: /home\.web_search_mode_server/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('home.web_search_server_summary')).toBeInTheDocument();
     expect(screen.queryByLabelText('home.web_search_provider_label')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('home.web_search_api_key_label')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('home.web_search_base_url_label')).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /home\.web_search_mode_custom/i }));
+    await user.click(screen.getByRole('button', { name: /home\.web_search_change_provider/i }));
 
     expect(screen.getByLabelText('home.web_search_provider_label')).toBeInTheDocument();
     expect(screen.getByLabelText('home.web_search_api_key_label')).toBeInTheDocument();
+    expect(screen.queryByLabelText('home.web_search_base_url_label')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /home\.web_search_custom_endpoint_toggle/i }));
     expect(screen.getByLabelText('home.web_search_base_url_label')).toBeInTheDocument();
   });
 
@@ -1364,7 +1366,8 @@ describe('InputView campaign progress', () => {
     expect(screen.getByRole('button', { name: /home\.web_search_mode_custom/i })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByLabelText('home.web_search_provider_label')).toBeInTheDocument();
     expect(screen.getByLabelText('home.web_search_api_key_label')).toBeInTheDocument();
-    expect(screen.getByLabelText('home.web_search_base_url_label')).toBeInTheDocument();
+    expect(screen.queryByLabelText('home.web_search_base_url_label')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /home\.web_search_custom_endpoint_toggle/i })).toBeInTheDocument();
   });
 
   it('forwards web search provider overrides when custom fields are filled', async () => {
@@ -1387,9 +1390,9 @@ describe('InputView campaign progress', () => {
     expect(checkbox).toBeInTheDocument();
     if (checkbox) await user.click(checkbox);
 
-    await user.click(screen.getByRole('button', { name: /home\.web_search_mode_custom/i }));
     await user.selectOptions(screen.getByLabelText('home.web_search_provider_label'), 'xai');
     await user.type(screen.getByLabelText('home.web_search_api_key_label'), 'xai-test-key');
+    await user.click(screen.getByRole('button', { name: /home\.web_search_custom_endpoint_toggle/i }));
     await user.type(screen.getByLabelText('home.web_search_base_url_label'), 'https://api.x.ai/v1/responses');
     await user.type(screen.getAllByRole('textbox')[0], 'What if custom search?');
     await user.click(screen.getByRole('button', { name: 'home.submit' }));
@@ -1477,8 +1480,9 @@ describe('InputView campaign progress', () => {
     expect(checkbox).toBeInTheDocument();
     if (checkbox) await user.click(checkbox);
 
-    await user.click(screen.getByRole('button', { name: /home\.web_search_mode_custom/i }));
+    await user.click(screen.getByRole('button', { name: /home\.web_search_change_provider/i }));
     await user.type(screen.getByLabelText('home.web_search_api_key_label'), 'custom-key');
+    await user.click(screen.getByRole('button', { name: /home\.web_search_custom_endpoint_toggle/i }));
     await user.type(screen.getByLabelText('home.web_search_base_url_label'), 'https://api.tavily.com/search');
 
     await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
@@ -2453,7 +2457,13 @@ describe('InputView P4-2 provider capability hints', () => {
       .closest('label')
       ?.querySelector('input[type="checkbox"]') as HTMLInputElement;
     await user.click(searchCheckbox);
-    // Custom override is rendered as a <button> with aria-pressed (not a radio).
+    const changeProviderBtn = screen.queryByRole('button', {
+      name: /home\.web_search_change_provider/i,
+    });
+    if (changeProviderBtn) {
+      await user.click(changeProviderBtn);
+      return;
+    }
     const customBtn = (await screen.findByText('home.web_search_mode_custom'))
       .closest('button') as HTMLButtonElement;
     await user.click(customBtn);
@@ -2480,6 +2490,25 @@ describe('InputView P4-2 provider capability hints', () => {
     expect(updatedHint.getAttribute('data-provider')).toBe('searxng');
   });
 
+  it('treats SearXNG as no-key search with an instance URL', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+    await selectCustomOverride(user);
+
+    await user.type(screen.getByLabelText('home.web_search_api_key_label'), 'temporary-key');
+    await user.selectOptions(screen.getByLabelText('home.web_search_provider_label'), 'searxng');
+
+    expect(screen.queryByLabelText('home.web_search_api_key_label')).not.toBeInTheDocument();
+    expect(screen.getByText('home.web_search_searxng_no_key')).toBeInTheDocument();
+    expect(screen.getByLabelText('home.web_search_searxng_url_label')).toBeInTheDocument();
+  });
+
   it('renders inferred-provider hint only when base URL is non-empty', async () => {
     const user = userEvent.setup();
     getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());
@@ -2493,6 +2522,7 @@ describe('InputView P4-2 provider capability hints', () => {
 
     expect(screen.queryByTestId('iv-inferred-provider-hint')).not.toBeInTheDocument();
 
+    await user.click(screen.getByRole('button', { name: /home\.web_search_custom_endpoint_toggle/i }));
     const baseUrlInput = screen.getByLabelText('home.web_search_base_url_label') as HTMLInputElement;
     await user.type(baseUrlInput, 'https://api.tavily.com');
     const hint = await screen.findByTestId('iv-inferred-provider-hint');
@@ -2510,6 +2540,7 @@ describe('InputView P4-2 provider capability hints', () => {
     );
     await selectCustomOverride(user);
 
+    await user.click(screen.getByRole('button', { name: /home\.web_search_custom_endpoint_toggle/i }));
     const baseUrlInput = screen.getByLabelText('home.web_search_base_url_label') as HTMLInputElement;
     await user.type(baseUrlInput, 'https://api.unknown-vendor.io');
     const hint = await screen.findByTestId('iv-inferred-provider-hint');
@@ -2530,6 +2561,7 @@ describe('InputView P4-2 provider capability hints', () => {
       </MemoryRouter>,
     );
     await selectCustomOverride(user);
+    await user.click(screen.getByRole('button', { name: /home\.web_search_custom_endpoint_toggle/i }));
     const baseUrlInput = screen.getByLabelText('home.web_search_base_url_label') as HTMLInputElement;
     await user.type(baseUrlInput, 'https://api.unknown-vendor.io');
 

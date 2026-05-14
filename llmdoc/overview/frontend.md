@@ -25,7 +25,7 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、`沿用服务器默认 / 自定义覆盖` 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、推荐已配置搜索 / 高级自定义 provider 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
 | SetupWizardView | `frontend/src/pages/SetupWizardView.tsx` | `/admin/setup` 3 步 provider 配置向导；选择 preset、填 API key/base URL、测试连接并写入 session-scoped provider policy |
 | AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、编辑/删除入口、返回首页按钮、persona 单个/批量导出与 JSON 导入入口 |
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择、PDF document upload tab，以及 capability-gated persona import/export 菜单 |
@@ -265,12 +265,13 @@
 - InputView 高级设置当前支持可选 `Organization ID`；值会写进 sessionStorage，并由 API client 自动映射成 `X-Org-Id`。清空输入时会同步移除该请求头。
 - InputView 的搜索增强当前口径：
   - 搜索增强入口默认显示；`VITE_ENABLE_WEB_SEARCH` 只是旧开关，不再决定入口是否出现
-  - `GET /api/capabilities` 只决定 `沿用服务器默认` 是否可选，不决定整个 section 是否显示
+  - `GET /api/capabilities` 只决定推荐的已配置搜索是否可直接使用，不决定整个 section 是否显示
   - `provider_capability.supports_domain_filter=false` 时，4 个 source family toggle 会保持可见但不可选，并显示当前语言的说明
-  - `沿用服务器默认` 模式只发送 `webSearchEnabled=true`
-  - `自定义覆盖` 模式才发送 `webSearchProvider / webSearchApiKey / webSearchBaseUrl`
-  - 自定义覆盖的 provider capability 会先从可识别的 base URL 推断；base URL 为空时使用当前下拉 provider 的 capability，只有非空未知 host 会显示 no-provider warning
-  - 模型原生搜索当前不是前端独立模式；首页只暴露 server default / custom override，native citations 只在后端 LLM native path 真的产出后由 ResultView 展示
+  - `推荐：使用已配置搜索` 模式只发送 `webSearchEnabled=true`，provider / key / base URL 输入不展示
+  - `高级：使用我的搜索服务` 模式才发送 `webSearchProvider / webSearchApiKey / webSearchBaseUrl`
+  - 高级模式下，API 型 provider 先显示 API key；base URL 只在用户打开自定义 endpoint 后展示；SearXNG 隐藏 API key，直接展示实例地址
+  - 自定义 provider capability 会先从可识别的 base URL 推断；base URL 为空时使用当前下拉 provider 的 capability，只有非空未知 host 会显示 no-provider warning
+  - 模型原生搜索当前不是前端独立模式；首页只用说明文案解释它是独立 LLM native path，native citations 只在后端 LLM native path 真的产出后由 ResultView 展示
   - SearXNG base URL 推断只看 hostname label token（`searx` / `searxng`），不会用任意子串匹配
   - 4 个 source family toggle 只有在搜索总开关开启、且当前 provider 支持 domain filter 时，才会把勾选结果透传成 `webSearchFamilies -> web_search_families`
   - 搜索总开关关闭，或 provider capability 从支持变成不支持时，已勾选的 source family 会被清空；重新打开不会恢复旧选择

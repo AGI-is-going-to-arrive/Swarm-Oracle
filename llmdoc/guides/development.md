@@ -188,7 +188,7 @@ SWARM_E2E_MODE=live node scripts/e2e-new-source-ingestion-live.mjs full --url ht
 - 这组回归当前覆盖：
   - `tavily / exa / xai / searxng` provider dispatch
   - request-scoped `provider / API key / base URL`
-  - 首页 `沿用服务器默认 / 自定义覆盖`
+  - 首页推荐已配置搜索 / 高级自定义 provider
   - frontend custom override E2E 请求体校验
   - Source Family domain-filter capability gate、xAI `allowed_domains`、SearXNG `site:` 查询归一化、URL 后过滤和 native placeholder preflight warn
   - P2/P3/P4b/P5 native path：provider detection、Responses API tools 注入、native citation 解析/过滤、`web_context_json` roundtrip、ResultView native citation 渲染、tool-call budget、citation cap、provider body error

@@ -76,7 +76,7 @@
 - 这些字段的当前口径：
   - 只有 `web_search_enabled=true` 时才会真正参与搜索
   - `web_search_families` 当前只接受 `polymarket / finance / academic / news_deep`；空白会 trim，重复值会去重
-  - 首页当前只会在 web search 已开启、且当前有效 provider capability 支持 domain filter 时发送已选 family；server default 读服务端 capability，custom override 有可识别 base URL 时按 URL 推断 capability，base URL 为空时按下拉 provider 使用 capability
+  - 首页当前只会在 web search 已开启、且当前有效 provider capability 支持 domain filter 时发送已选 family；推荐 server default 读服务端 capability，advanced custom override 有可识别 base URL 时按 URL 推断 capability，base URL 为空时按下拉 provider 使用 capability
   - `web_search_enabled=false` 时，override 字段会被忽略
   - 官方 provider 的 `web_search_base_url` 只接受 `https` endpoint
   - `searxng` 的 `web_search_base_url` 只接受和服务端 `SEARXNG_URL` 完全一致的基址
@@ -86,7 +86,7 @@
   - LLM native search 有 citation 时，`web_search_context` 可带 `native_citations`
   - `native_citations` 只保留字符串 text 和安全的 `http/https` URL；旧 JSON、`null`、非数组和 unsafe URL 会被过滤或忽略
   - base search 和 family search 独立执行；base search 失败不会阻止已选择的 family search
-  - 后端当前可写出 `ready / empty / failed / unsupported_provider`；历史/兼容 parser 还允许 `loading / rate_limited / network_error / search_skipped / fallback_unconstrained`
+  - 后端当前可写出 `ready / empty / failed / unsupported_provider / search_skipped`；历史/兼容 parser 还允许 `loading / rate_limited / network_error / fallback_unconstrained`
   - family entry 可能带 `domain_filter_mode / domain_coverage / status_reason`；`polymarket` 当前额外带 `configured_host / geo_gated`
 - `POST /api/scenario` 当前也接受可选 `continuity_overrides`：
   - 前端通常先调用 `POST /api/agents/identities/preflight`
@@ -204,12 +204,12 @@
 - provider overrides 只能通过 `POST body` 传入，不能放在社交文案 `GET query` 中。
 - `export` 通过附件下载返回 Markdown 文件。
 - `/api/health`、`/api/health/test`、`/api/capabilities` 当前都属于业务 REST 门禁范围；`/` 和 `/metrics` 仍是显式例外。
-- `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认配置是否 ready（`scope: "server"`），不是 request-scoped custom override 探测结果。前端 custom override 为空 base URL 时使用下拉 provider 的本地 capability 表；非空未知 host 仍按 unknown 处理。
+- `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认配置是否 ready（`scope: "server"`），不是 request-scoped custom override 探测结果。前端推荐路径只依赖该 server hint；advanced custom override 为空 base URL 时使用下拉 provider 的本地 capability 表，非空未知 host 仍按 unknown 处理。
 - `web_search.provider_capability` 描述当前服务端默认搜索 provider 的能力：
   - `supports_domain_filter`
   - `supports_sources`
   - `domain_filter_mode`: `api / query / prompt / none`
-- 模型原生搜索不通过 `web_search.provider_capability` 表达。当前它由 runtime 在 LLM provider 支持 native search、且拿到 source family domains 时注入 provider tools；前端启动前没有单独的 native-search mode/capability 提示。
+- 模型原生搜索不通过 `web_search.provider_capability` 表达，也不是 `WEB_SEARCH_PROVIDER=native`。当前它由 runtime 在 LLM provider 支持 native search、且拿到 source family domains 时注入 provider tools；前端只用说明文案解释它和 server default/custom override 是两条路径，不把它当成可独立选择的 app-layer provider。
 - `FEATURE_NEW_SOURCES=true` 时，`web_search.providers.{family}.capability` 会给每个 family entry 附上同一套 domain-filter 能力摘要和 `max_domains`。
 - `GET /api/capabilities` 当前顶层 key 固定为：
   `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst / snapshot_export / education_templates / persona_export / prediction_journal`。

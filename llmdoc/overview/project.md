@@ -18,9 +18,10 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 首页创建 scenario，支持 5 步进度提示、quick starts、教育模板、agent/rounds、玩法档位、BYOK，以及 opt-in 的搜索增强推演；高级设置和 BYOK 现在分成两个可折叠区，首屏优先露出问题输入和快速开始。
 - 首次进入首页时会显示 onboarding carousel；用户完成或跳过后状态保存在本地，后续不再重复弹出。
 - 首页启动前会用 AlertDialog 做 launch confirmation；底部安全提示跟随中英语言切换，不写入用户 key 或 provider 细节。
-- 搜索增强当前在首页有两档入口：
-  - `沿用服务器默认`：直接复用服务端默认 provider
-  - `自定义覆盖`：当前局单独指定 `provider / API key / base URL`
+- 搜索增强当前在首页按低配置路径呈现：
+  - `推荐：使用已配置搜索`：服务端默认 provider 可用时，普通用户只需打开开关，不需要理解 provider / API key / base URL
+  - `高级：使用我的搜索服务`：服务端默认不可用、或本轮要用自己的 provider key / 本地 SearXNG / 自定义 endpoint 时再展开
+- 模型原生联网不是第三个 app-layer provider；它只在 Source Family 域名传给受支持的非 proxy Responses 模型时由 runtime 注入 native tools，并在结果页展示 native citations。
 - Source Family 当前按有效 provider capability 开关选择项；server default 读服务端 `provider_capability`，custom override 有可识别 base URL 时按 URL 推断 Tavily / Exa / xAI / SearXNG，base URL 为空时使用下拉 provider 的 capability，只有非空未知 host 会显示 no-provider warning。provider 不支持 domain filter 时，四个 family checkbox 会保留可见但禁用，已选 family 会被清空，不会把旧选择带进下一次提交。
 - 首页高级设置当前还支持可选 `Organization ID`；值只在当前浏览器 session 内保存，并随请求头 `X-Org-Id` 透传，留空就不发送。
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。preflight 解析阶段超时会返回 `504 IDENTITY_PREFLIGHT_TIMEOUT`，后端不会把它当成“无匹配”；当前首页启动流会提示错误，但继续按无 continuity override 启动。
