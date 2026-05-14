@@ -241,6 +241,7 @@
 | `FEATURE_CUSTOM_AGENTS` | `false` | 启用自建 Agent workshop CRUD、主推演自建 Agent 注入，以及 Debate `custom_agent_ids` 绑定 |
 | `FEATURE_AGENT_IDENTITY` | `false` | 启用跨场景身份解析 + 记忆查询 |
 | `FEATURE_PREDICTION_JOURNAL` | `false` | 启用个人预测日志、resolve 与校准数据 API |
+| `FEATURE_RESULT_VERDICT` | `true` | 启用 Result Quality verdict generation、branch question-answer 持久化、`/api/capabilities.result_verdict` 与 story extra fields |
 | `FEATURE_HALLUCINATION_GATE` | `false` | 启用 verdict 后的 hallucination warning metadata；只告警，不阻断生成 |
 | `HALLUCINATION_GATE_THRESHOLD` | `0.75` | Hallucination Gate 的 claim verified 阈值，范围 `0..1`；只影响 metadata，不阻断 verdict |
 | `FEATURE_EDUCATION_TEMPLATES` | `false` | 启用教育模板 API，并让前端首页显示模板选择器 |
@@ -260,15 +261,16 @@
 
 说明：
 
-- `FEATURE_COUNTERFACTUAL_REPLAY` 当前默认开启，其余 Phase 3 功能默认关闭，可通过环境变量逐个启用。
+- `FEATURE_COUNTERFACTUAL_REPLAY` 和 `FEATURE_RESULT_VERDICT` 当前默认开启，其余 Phase 3 功能默认关闭，可通过环境变量逐个启用。
 - 本地直启 backend 时，在 `backend/.env` 里设置这些变量并重启 backend 后生效。
 - 仓库根 `.env.docker` 当前已经把 `FEATURE_CAUSAL_GRAPH / FEATURE_FACTIONS / FEATURE_ARGUMENT_MAP` 打开，Docker 评审栈默认就是图谱开启态。
 - `ARGUMENT_MAP_LLM_ENRICHMENT` 只影响 argument map 的 enrich 路径，不改变 `FEATURE_ARGUMENT_MAP` 的开关语义；只有 argument map 功能启用时它才会生效。
-- `FEATURE_*=false` 时：受后端 gate 的 API 通常返回 404；simulator/debate 中的 hook 不执行；前端通过 `GET /api/capabilities` 检测到 `enabled=false` 后隐藏入口且不发请求。`POST /api/debate` 如果显式带了 `custom_agent_ids` 且 `FEATURE_CUSTOM_AGENTS=false`，当前返回 400，避免调用方误以为 custom Agent 已参与本场 debate。`FEATURE_KG_EXPLORER` 属于前端 capability gate，数据仍由 causal graph API 提供。
+- `FEATURE_*=false` 时：受后端 gate 的 API 通常返回 404；simulator/debate 中的 hook 不执行；前端通过 `GET /api/capabilities` 检测到 `enabled=false` 后隐藏入口且不发请求。`POST /api/debate` 如果显式带了 `custom_agent_ids` 且 `FEATURE_CUSTOM_AGENTS=false`，当前返回 400，避免调用方误以为 custom Agent 已参与本场 debate。`FEATURE_KG_EXPLORER` 属于前端 capability gate，数据仍由 causal graph API 提供。`FEATURE_RESULT_VERDICT=false` 是字段级开关：不生成/回显 Result Quality verdict 和 branch question-answer，不让 story endpoint 变成 404。
 - `FEATURE_HALLUCINATION_GATE` 当前不是前端 capability key；它只控制后端 verdict 后处理是否附加 claims / evidence / warning metadata。`HALLUCINATION_GATE_THRESHOLD` 只改变 claim 的 verified 判定阈值。
 - `FEATURE_ROUNDTABLE_SURVEY / FEATURE_ROUNDTABLE_ANALYST` 会通过 `GET /api/capabilities` 暴露为 `roundtable_survey / roundtable_analyst`，供前端 capability gate 判断入口是否开放。
 - `FEATURE_SNAPSHOT_EXPORT` 会通过 `GET /api/capabilities` 暴露为 `snapshot_export`，关闭时后端 snapshot API 返回 404，前端不显示 import/export 入口。
 - `FEATURE_EDUCATION_TEMPLATES / FEATURE_PERSONA_EXPORT / FEATURE_PREDICTION_JOURNAL` 会通过 `GET /api/capabilities` 暴露为 `education_templates / persona_export / prediction_journal`。
+- `FEATURE_RESULT_VERDICT` 会通过 `GET /api/capabilities` 暴露为 `result_verdict`，并控制结果页是否读取 story verdict 字段。
 - 这些开关大多可单独开启；`graph_analysis` 的 capability 需要 `FEATURE_GRAPH_ANALYSIS` 和 `FEATURE_CAUSAL_GRAPH` 同时为 true。
 
 ## 相关文件

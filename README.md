@@ -87,6 +87,7 @@
 | Butterfly Effect | 已落地，支持即时 / 回溯 / 批量干预 |
 | Gameplay Cards | 已落地，14 张卡，走共享 gameplay contract |
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响 |
+| Result Quality / Question Anchoring | 已落地，受 `FEATURE_RESULT_VERDICT` 和 `/api/capabilities.result_verdict` 控制；结果页在有 verdict 时先给出直接回答原问题的预测结论、置信度，并在结局卡有数据时显示分支级一句话回答 |
 | Director Campaign | 已落地，含 goals、risk/resource、commitment、growth、后端 `score_breakdown` 与结果页导演复盘 / 因果档案 |
 | Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight`；设置 `ADMIN_TOKEN` 后 admin API 要求 `X-Admin-Token` |
 | Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；identity continuity preflight 超时会按 504 返回，后端不会把它伪装成“无匹配”；首页启动流当前会提示错误但继续按无 continuity override 启动；自建 Agent 不开放 `CORE` 层级 |
@@ -188,18 +189,13 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-当前稳定验证口径：
+当前验证口径（2026-05-15 Result Quality release-gate）：
 
-- backend `ruff check .`：通过。
-- backend 全量 `python -m pytest -q`：`3008 passed, 2 skipped`。
-- backend Web Search / Source Family 定向回归：`249 passed`；provider capability parity 定向：`6 passed`。
-- frontend `npx tsc --noEmit -p tsconfig.app.json`：通过。
-- frontend 全量 `npx vitest run --reporter=dot`：`184 files / 2041 tests passed`。
-- frontend `npm run lint` 和 `npm run build`：通过。
-- frontend P4a Source Family 定向回归：`157 passed`。
-- Playwright 实测 Source Family 首页交互在桌面 `1440px` 与移动 `375px` 通过；Chromium / Firefox / WebKit 六组合矩阵通过。
-- 本轮 native citation 浏览器复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵；WebKit Tab-to-links 仍按平台限制记录。
-- Legacy Web Search release sweep 已用真实 provider 跑过：`e2e:web-search` 覆盖 Tavily / Exa / xAI-local / SearXNG-local，`e2e:new-source-ingestion-live` 覆盖 desktop + mobile 真实 source ingestion，`e2e:capability-matrix` 为 `30 passed / 0 failed`。
+- backend Result Quality 定向回归通过；`ruff check app/` 通过。
+- backend broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e__blackboard_e2e.py -k "not scaled_benchmark and not test_parse_modern"`：`1 failed, 3025 passed, 2 skipped, 2 deselected`；失败项是 `tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 的 live LLM matrix timeout。
+- frontend `npx tsc --noEmit && npm test -- --run`：`185 files / 2047 tests passed`。
+- frontend `npx eslint src/ --max-warnings=0` 和 `npm run build` 通过；i18n parity spot-check 为 `en=67 zh=67 match=true`。
+- 浏览器复核覆盖新结果页 `bd85148c-e739-4d22-a299-692532ff4154` 和旧结果页 `3daa95fe-8f30-48bd-b188-96961d2a1b12`；新页显示 verdict，旧页隐藏 verdict；桌面与 `375x812` 移动端无 JS console error，英文切换可用。
 
 完整签收入口：
 

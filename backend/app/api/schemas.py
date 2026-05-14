@@ -396,6 +396,7 @@ class StoryBranch(BaseModel):
     fork_reason: str = ""
     replay_kind: str | None = None
     replay_source_branch_id: str | None = None
+    question_answer: str | None = None
 
 
 # ── Replay Trace (BE-4) ──────────────────────────────────────────────

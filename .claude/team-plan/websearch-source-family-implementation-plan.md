@@ -2,7 +2,7 @@
 
 > **版本**: v1.1-audited | **创建日期**: 2026-05-13 | **审计更新**: 2026-05-14
 > **输入文档**: `.claude/team-plan/llm-websearch-passthrough-research.md` (R3) + `.claude/team-plan/source-family-availability-research.md` (R3)
-> **当前验证基线**: backend `2988 passed / 2 skipped` | frontend `184 files / 2038 tests passed` | tsc/lint/build 0 errors | ruff 0 errors | i18n `2506/2506` parity | `e2e:native-search` Chromium/Firefox/WebKit desktop+mobile matrix passed
+> **Web Search 当时验证基线**: backend `2988 passed / 2 skipped` | frontend `184 files / 2038 tests passed` | tsc/lint/build 0 errors | ruff 0 errors | i18n `2506/2506` parity | `e2e:native-search` Chromium/Firefox/WebKit desktop+mobile matrix passed
 > **执行范围**: **P0 + P1 + P2 + P3(xAI pilot) + P4a + P4b 已完成；P5 native-search release gate 已完成**。Legacy release sweep 已追加完成：`e2e:web-search` 覆盖 Tavily/Exa/xAI-local/SearXNG-local 真实调用，`e2e:new-source-ingestion-live` 覆盖 desktop+mobile 真实 source ingestion，`e2e:capability-matrix` 覆盖 30/30 capability gates。
 
 ---
@@ -1339,8 +1339,8 @@ cd frontend && npm run e2e:cross-browser
 
 ### P5 退出标准
 
-- [x] 后端: 全量 pytest ≥ 当前验证基线 `2988 passed / 2 skipped` (允许增加)
-- [x] 前端: 全量 vitest ≥ 当前验证基线 `184 files / 2038 passed` (允许增加)
+- [x] 后端: 全量 pytest ≥ 该计划验证基线 `2988 passed / 2 skipped` (允许增加)
+- [x] 前端: 全量 vitest ≥ 该计划验证基线 `184 files / 2038 passed` (允许增加)
 - [x] E2E: native-search named suite 通过；legacy web-search + new-source-ingestion-live + capability-matrix release sweep 已追加通过
 - [x] 跨浏览器: Chrome/Firefox/WebKit native-search smoke 通过
 - [ ] 安全: 7 项安全检查全部通过

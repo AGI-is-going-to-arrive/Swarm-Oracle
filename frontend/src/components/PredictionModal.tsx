@@ -23,6 +23,34 @@ import { placeBet, type ScenarioMeta } from '../lib/scenarioMeta';
 import type { BranchInfo } from '../types';
 import './PredictionModal.css';
 
+function useScrollFade(ref: React.RefObject<HTMLDivElement | null>) {
+  const [top, setTop] = useState(false);
+  const [bottom, setBottom] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => {
+      setTop(el.scrollTop > 4);
+      setBottom(el.scrollTop + el.clientHeight < el.scrollHeight - 4);
+    };
+    check();
+    el.addEventListener('scroll', check, { passive: true });
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(check) : null;
+    ro?.observe(el);
+    if (!ro) {
+      window.addEventListener('resize', check);
+    }
+    return () => {
+      el.removeEventListener('scroll', check);
+      ro?.disconnect();
+      if (!ro) {
+        window.removeEventListener('resize', check);
+      }
+    };
+  }, [ref]);
+  return { top, bottom };
+}
+
 const PREDICTION_TEXT_LIMIT = 500;
 
 interface Props {
@@ -67,7 +95,9 @@ export default function PredictionModal({
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollFade = useScrollFade(bodyRef);
   const shouldAutoFocusText = (() => {
     if (typeof window === 'undefined') return false;
     if (window.innerWidth <= 720) return false;
@@ -272,15 +302,21 @@ export default function PredictionModal({
     };
   }, [canSubmit, confidence, confidenceLabel, effectiveBetKind, effectiveTargetBranchId, endingTone, errorMsg, isPredictionTooLong, onAutomationStateChange, predictionPayloadLength, predictionRationaleLimit, profileResonance, status, text, userName.length]);
 
+  const scrollCls = [
+    'modal-content prediction-modal',
+    scrollFade.top ? 'has-scroll-top' : '',
+    scrollFade.bottom ? 'has-scroll-bottom' : '',
+  ].filter(Boolean).join(' ');
+
   return (
     <div className="modal-overlay prediction-modal-overlay" onClick={(e) => e.target === e.currentTarget && handleClose()}>
-      <div className="modal-content prediction-modal">
+      <div className={scrollCls}>
         <header className="modal-header">
           <h2>{t('prediction.title')}</h2>
           <p className="modal-subtitle">{t('prediction.subtitle')}</p>
         </header>
 
-        <div className="modal-body">
+        <div className="modal-body" ref={bodyRef}>
           <section className="prediction-summary" aria-label={t('prediction.bet_preview_prefix')}>
             <div className="prediction-summary__head">
               <span className="prediction-summary__kicker">
@@ -312,6 +348,12 @@ export default function PredictionModal({
               </p>
             )}
           </section>
+
+          <div className="pred-group-divider" aria-hidden="true">
+            <span className="pred-group-divider__label">
+              {t('prediction.group_bet_config', { defaultValue: 'Bet Config' })}
+            </span>
+          </div>
 
           <div className="pred-field">
             <label className="pred-label" htmlFor="pred-kind">{t('prediction.bet_kind_label')}</label>
@@ -401,6 +443,12 @@ export default function PredictionModal({
                 {betTargetLabel}
               </span>
             </div>
+          </div>
+
+          <div className="pred-group-divider" aria-hidden="true">
+            <span className="pred-group-divider__label">
+              {t('prediction.group_oracle_info', { defaultValue: 'Oracle Info' })}
+            </span>
           </div>
 
           {/* Confidence Slider */}

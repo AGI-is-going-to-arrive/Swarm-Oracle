@@ -28,6 +28,7 @@ from app.models.database import get_engine
 from app.services.blackboard import Blackboard
 from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
+    format_untrusted_text_block,
     get_last_native_citations,
     get_runtime_parallelism_limit,
     llm_call,
@@ -104,6 +105,7 @@ _FORK_DEBUG_MAX_SIGNAL_CHARS = 240
 _FORK_DEBUG_MAX_SUMMARY_CHARS = 1200
 _FORK_DEBUG_MAX_DESCRIPTION_CHARS = 240
 _IDENTITY_COMPACTION_STREAM_PROBE_TIMEOUT_SECONDS = 5.0
+_RESULT_VERDICT_TIMEOUT_SECONDS = 10.0
 
 
 class SimulationCancelled(Exception):
@@ -1047,6 +1049,9 @@ def _build_fork_prompt(variant_data: dict[str, str], language: str) -> str:
 
     if language == "Chinese":
         input_section = (
+            "\u3010用户原始问题\u3011\n"
+            "{question_block}\n"
+            "\n"
             "\u3010最近讨论摘要\u3011\n"
             "{recent_summary}\n"
             "\n"
@@ -1057,8 +1062,12 @@ def _build_fork_prompt(variant_data: dict[str, str], language: str) -> str:
         )
         json_label = "输出严格 JSON:"
         should_fork_val = "true或false"
+        title_direction_rule = "分支标题应反映对用户问题的不同预测方向，而非泛化的叙事标题"
     else:
         input_section = (
+            "[Original User Question]\n"
+            "{question_block}\n"
+            "\n"
             "[Recent Discussion Summary]\n"
             "{recent_summary}\n"
             "\n"
@@ -1069,6 +1078,10 @@ def _build_fork_prompt(variant_data: dict[str, str], language: str) -> str:
         )
         json_label = "Return strict JSON:"
         should_fork_val = "true or false"
+        title_direction_rule = (
+            "Branch titles should reflect different prediction directions for "
+            "the user's question, not generic narrative titles."
+        )
 
     json_block = (
         "{{\n"
@@ -1087,6 +1100,7 @@ def _build_fork_prompt(variant_data: dict[str, str], language: str) -> str:
     parts: list[str] = [preamble, input_section]
     if criteria:
         parts.append(criteria)
+    parts.append(title_direction_rule)
     parts.append(f"{json_label}\n{json_block}")
     if postamble:
         parts.append(postamble)
@@ -1641,6 +1655,7 @@ async def _run_simulation_impl(
                         language=detected_language,
                         prompt_variant=fork_prompt_variant,
                         recent_summary=recent_summary,
+                        question=scenario.question or "",
                     )
                     _check_cancelled(scenario_id)
                     fork_debug_entry["detector_invoked"] = True
@@ -1795,6 +1810,17 @@ async def _run_simulation_impl(
                 "story": narration.get("story", ""),
                 "insight": narration.get("insight", ""),
             })
+
+    if branch_id is None and settings.FEATURE_RESULT_VERDICT:
+        verdict = await _generate_verdict(
+            scenario.question or "",
+            narrated_branch_payloads,
+            web_context_block,
+            detected_language,
+            llm_overrides=llm_overrides,
+        )
+        if verdict is not None:
+            _persist_result_quality_verdict(engine, scenario_id, verdict)
 
     # ── Done ─────────────────────────────────────────
     # Cleanup pending interventions for this scenario (prevent memory leak)
@@ -2589,6 +2615,7 @@ async def _detect_fork(
     language: str = "Chinese",
     prompt_variant: str = "a",
     recent_summary: str | None = None,
+    question: str = "",
 ) -> dict:
     """Detect if current discussion warrants a branch fork."""
     recent_text = recent_summary
@@ -2596,10 +2623,28 @@ async def _detect_fork(
         recent_msgs = _get_recent_messages(engine, branch_id, max_rounds=3)
         recent_text = format_messages_for_context(recent_msgs, max_recent=15)
     prompt_template = _get_fork_prompt_template(language, prompt_variant)
+    diverge_text = "\n".join(f"- {s}" for s in diverge_signals)
 
     prompt = prompt_template.format(
-        recent_summary=recent_text,
-        diverge_signals="\n".join(f"- {s}" for s in diverge_signals),
+        question_block=format_untrusted_text_block(
+            "用户原始问题" if _is_chinese_language(language) else "Original user question",
+            question or "(empty)",
+            max_chars=1200,
+        ),
+        recent_summary=format_untrusted_text_block(
+            "最近讨论摘要" if _is_chinese_language(language) else "Recent discussion summary",
+            recent_text or "(empty)",
+            max_chars=4000,
+        ),
+        diverge_signals=format_untrusted_text_block(
+            (
+                "Agent 标记的分歧信号"
+                if _is_chinese_language(language)
+                else "Divergence signals marked by agents"
+            ),
+            diverge_text or "(none)",
+            max_chars=1600,
+        ),
         sensitivity=sensitivity,
         language_directive=get_language_directive(language),
     )
@@ -2618,6 +2663,205 @@ async def _detect_fork(
     except Exception as exc:
         logger.warning("Fork detection failed: %s", exc)
         return {"should_fork": False}
+
+
+def _parse_result_verdict_json(raw_text: str) -> dict[str, Any]:
+    cleaned = (raw_text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+    try:
+        parsed = json.loads(cleaned, strict=False)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if not match:
+            raise
+        parsed = json.loads(match.group(0), strict=False)
+    if not isinstance(parsed, dict):
+        raise ValueError("verdict response is not a JSON object")
+    return parsed
+
+
+def _normalize_result_verdict_confidence(value: object) -> str:
+    confidence = str(value or "").strip().lower()
+    return confidence if confidence in {"high", "medium", "low"} else "medium"
+
+
+def _one_line_answer(text: str, *, max_chars: int = 220) -> str:
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 1].rstrip() + "…"
+
+
+def _result_branch_summaries(branches: list) -> list[dict[str, object]]:
+    summaries: list[dict[str, object]] = []
+    for branch in branches[:8]:
+        if not isinstance(branch, dict):
+            continue
+        probability_raw = branch.get("probability", 0)
+        try:
+            probability: float | int = round(float(probability_raw), 3)
+        except (TypeError, ValueError):
+            probability = 0
+        summaries.append({
+            "title": str(branch.get("title") or "").strip(),
+            "insight": str(branch.get("insight") or "").strip(),
+            "probability": probability,
+        })
+    return summaries
+
+
+def _copy_parsed_context(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+async def _generate_verdict(
+    question: str,
+    branches: list,
+    web_context: str,
+    language: str,
+    llm_overrides: dict | None = None,
+) -> dict | None:
+    """Generate a one-paragraph verdict directly answering the user's question."""
+    try:
+        is_chinese = _is_chinese_language(language)
+        branch_summaries = _result_branch_summaries(branches)
+        if not question.strip() or not branch_summaries:
+            return None
+
+        question_block = format_untrusted_text_block(
+            "用户问题" if is_chinese else "User question",
+            question,
+            max_chars=1200,
+        )
+        branches_block = format_untrusted_text_block(
+            "分支摘要" if is_chinese else "Branch summaries",
+            json.dumps(branch_summaries, ensure_ascii=False),
+            max_chars=5000,
+        )
+        web_block = format_untrusted_text_block(
+            "真实世界上下文" if is_chinese else "Real-world context",
+            web_context or "(none)",
+            max_chars=3000,
+        )
+        factual_guardrail = "\n".join(
+            f"branch_{idx + 1}: title={item['title']}; "
+            f"probability={item['probability']}; insight={item['insight']}"
+            for idx, item in enumerate(branch_summaries)
+        )
+        guardrail_block = format_untrusted_text_block(
+            "事实护栏" if is_chinese else "Factual guardrail",
+            factual_guardrail,
+            max_chars=2500,
+        )
+
+        if is_chinese:
+            prompt = (
+                "你是 SwarmOracle 的结果裁判。请基于已完成的分支，"
+                "直接回答用户最初的问题。\n\n"
+                f"{question_block}\n\n"
+                f"{branches_block}\n\n"
+                f"{web_block}\n\n"
+                f"{guardrail_block}\n\n"
+                "要求：\n"
+                "- verdict 用一段话回答用户问题，2-4 句，先给判断，再说明理由。\n"
+                "- question_answer 用一句话给出最短答案。\n"
+                "- confidence 只能是 high / medium / low。\n"
+                "- 不要发明分支摘要或真实世界上下文之外的确定事实；证据不足时明确保留不确定性。\n"
+                "- 只输出严格 JSON："
+                "{\"verdict\":\"...\",\"confidence\":\"medium\",\"question_answer\":\"...\"}\n"
+                f"{get_language_directive(language)}"
+            )
+        else:
+            prompt = (
+                "You are SwarmOracle's result judge. Based on the completed "
+                "branches, answer the user's original question directly.\n\n"
+                f"{question_block}\n\n"
+                f"{branches_block}\n\n"
+                f"{web_block}\n\n"
+                f"{guardrail_block}\n\n"
+                "Requirements:\n"
+                "- `verdict` must be one paragraph, 2-4 sentences: give the "
+                "answer first, then the reason.\n"
+                "- `question_answer` must be the shortest one-sentence answer.\n"
+                "- `confidence` must be exactly high, medium, or low.\n"
+                "- Do not invent facts outside the branch summaries or "
+                "real-world context; state uncertainty when evidence is thin.\n"
+                "- Output strict JSON only: "
+                "{\"verdict\":\"...\",\"confidence\":\"medium\",\"question_answer\":\"...\"}\n"
+                f"{get_language_directive(language)}"
+            )
+
+        _overrides = llm_overrides or {}
+        with llm_request_scope(purpose="scenario_result_verdict"):
+            raw_text = await asyncio.wait_for(
+                llm_call(
+                    prompt,
+                    reasoning_effort="low",
+                    model=_overrides.get("model"),
+                    api_key=_overrides.get("api_key"),
+                    base_url=_overrides.get("base_url"),
+                    temperature=(
+                        _overrides.get("temperature")
+                        if _overrides.get("temperature") is not None
+                        else 0.3
+                    ),
+                    timeout=_RESULT_VERDICT_TIMEOUT_SECONDS,
+                ),
+                timeout=_RESULT_VERDICT_TIMEOUT_SECONDS,
+            )
+
+        parsed = _parse_result_verdict_json(raw_text)
+        verdict_text = str(parsed.get("verdict") or "").strip()
+        if not verdict_text:
+            return None
+        question_answer = str(parsed.get("question_answer") or "").strip()
+        if not question_answer:
+            question_answer = _one_line_answer(verdict_text)
+        return {
+            "verdict": verdict_text,
+            "confidence": _normalize_result_verdict_confidence(
+                parsed.get("confidence"),
+            ),
+            "question_answer": _one_line_answer(question_answer),
+        }
+    except Exception:
+        logger.debug("result verdict generation failed (non-blocking)", exc_info=True)
+        return None
+
+
+def _persist_result_quality_verdict(
+    engine,
+    scenario_id: str,
+    verdict: dict[str, object],
+) -> None:
+    try:
+        verdict_text = str(verdict.get("verdict") or "").strip()
+        if not verdict_text:
+            return
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            if scenario is None:
+                return
+            ctx = _copy_parsed_context(scenario.parsed_context)
+            result_quality = ctx.get("result_quality")
+            result_quality = dict(result_quality) if isinstance(result_quality, dict) else {}
+            result_quality.update({
+                "verdict": verdict_text,
+                "confidence": _normalize_result_verdict_confidence(
+                    verdict.get("confidence"),
+                ),
+                "question_answer": _one_line_answer(
+                    str(verdict.get("question_answer") or verdict_text),
+                ),
+            })
+            ctx["result_quality"] = result_quality
+            scenario.parsed_context = ctx
+            session.add(scenario)
+            session.commit()
+    except Exception:
+        logger.debug("result verdict persistence failed (non-blocking)", exc_info=True)
 
 
 async def _compress_round_memory(
@@ -3066,6 +3310,26 @@ def _save_narration(engine, branch_id, narration: dict):
             elif isinstance(key_moments, str):
                 # LLM returned a string instead of list — wrap it
                 branch.key_moments = json.dumps([key_moments], ensure_ascii=False)
+            question_answer = _one_line_answer(
+                str(narration.get("question_answer") or ""),
+            )
+            if question_answer and settings.FEATURE_RESULT_VERDICT:
+                scenario = session.get(Scenario, branch.scenario_id)
+                if scenario:
+                    ctx = _copy_parsed_context(scenario.parsed_context)
+                    result_quality = ctx.get("result_quality")
+                    result_quality = (
+                        dict(result_quality) if isinstance(result_quality, dict) else {}
+                    )
+                    branch_answers = result_quality.get("branch_question_answers")
+                    branch_answers = (
+                        dict(branch_answers) if isinstance(branch_answers, dict) else {}
+                    )
+                    branch_answers[branch.id] = question_answer
+                    result_quality["branch_question_answers"] = branch_answers
+                    ctx["result_quality"] = result_quality
+                    scenario.parsed_context = ctx
+                    session.add(scenario)
             branch.status = BranchStatus.COMPLETED
             session.add(branch)
             session.commit()

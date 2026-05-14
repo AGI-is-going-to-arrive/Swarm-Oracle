@@ -20,7 +20,7 @@
 |------|------|------|
 | App 入口 | `backend/app/main.py` | 挂载所有 router、根信息、`/metrics` |
 | Admin | `backend/app/api/admin.py` | admin preflight 与 LLM 连接测试；受 session gate 保护，`ADMIN_TOKEN` 非空时还要求 `X-Admin-Token` |
-| Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import；scenario/story branch response 会回显 replay provenance |
+| Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import；scenario/story branch response 会回显 replay provenance，并在 Result Quality 开启时回显 `verdict / verdict_confidence / branches[].question_answer` |
 | Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 persona 导入导出；identity preflight 解析超时按 504 fail-closed |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
@@ -37,7 +37,7 @@
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记 |
+| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记 |
 | Simulation Cancel | `backend/app/services/simulation_cancel.py` | scenario 取消 token、DB cancelled fallback 与后台任务取消信号 |
 | Preflight | `backend/app/services/preflight.py` | admin/CLI 预检：SQLite、ChromaDB、LLM、web search、CORS、volume |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
@@ -85,6 +85,8 @@
 - `Scenario.gameplay_state_json`
   玩法卡、押注、archive raw 的 authority。
 - 这两块都通过 `campaign` 路由读写，并带 `revision` 乐观并发控制。
+- `Scenario.parsed_context.result_quality`
+  Result Quality 的持久载荷；当前存顶层 `verdict / confidence / question_answer` 和 `branch_question_answers`，受 `FEATURE_RESULT_VERDICT` 控制，不是新表或新 column。
 - campaign finalize 与 scenario summary 当前返回同一套 `score_breakdown`；每项包含 `id / label_key / points / applied`，由后端按 archive grade、profile resonance、daily challenge、押注、director goals 与 worldline commitment 派生，不是新的持久化字段。
 - fork detector 当前要求新分支标题写成“行动 + 目标/后果”。
   这些标题仍作为 `Branch.title` 持久化，并随 `branch_fork` 事件广播给前端。
@@ -418,9 +420,11 @@
 
 ## 当前验证基线
 
-- 当前 backend 稳定验证口径：
-  - `python -m pytest -q`：`3008 passed, 2 skipped`
-  - `ruff check .`：通过
+- 当前 Result Quality release-gate 后端验证口径：
+  - Result Quality narrator / simulator / story / capability contract 定向回归：通过
+  - `ruff check app/`：通过
+  - broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e__blackboard_e2e.py -k "not scaled_benchmark and not test_parse_modern"`：`1 failed, 3025 passed, 2 skipped, 2 deselected`
+  - 失败项：`tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix`，live LLM matrix timeout
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：
   - `tests/test_causal_graph.py -q`：`68 passed`

@@ -96,6 +96,14 @@ MAX_IMPORT_REPLAY_SCENARIO_AGENTS = 256
 MAX_IMPORT_REPLAY_SCENARIO_BRANCHES = 256
 MAX_IMPORT_REPLAY_SCENARIO_MESSAGES = 5_000
 MAX_REPLAY_ARTIFACT_BYTES = 2_000_000
+_RESULT_VERDICT_CONFIDENCE_VALUES = {"high", "medium", "low"}
+
+
+def _normalize_result_verdict_confidence(value: object) -> str | None:
+    if value is None:
+        return None
+    confidence = str(value).strip().lower()
+    return confidence if confidence in _RESULT_VERDICT_CONFIDENCE_VALUES else "medium"
 
 
 class ImportReplayScenarioRequest(BaseModel):
@@ -543,7 +551,7 @@ async def api_capabilities():
         if settings.FEATURE_NEW_SOURCES
         else {}
     )
-    return {
+    capabilities = {
         "web_search": {
             **_capability_entry(
                 enabled=ws_hint.get("server_enabled", False),
@@ -626,7 +634,12 @@ async def api_capabilities():
             enabled=settings.FEATURE_PREDICTION_JOURNAL,
             version="1.0" if settings.FEATURE_PREDICTION_JOURNAL else "0.0",
         ),
+        "result_verdict": _capability_entry(
+            enabled=settings.FEATURE_RESULT_VERDICT,
+            version="1.0" if settings.FEATURE_RESULT_VERDICT else "0.0",
+        ),
     }
+    return capabilities
 
 
 @router.post("/health")
@@ -1360,10 +1373,30 @@ async def get_story(
                 )
             ).all()
 
+        raw_result_quality = (
+            scenario.parsed_context.get("result_quality")
+            if isinstance(scenario.parsed_context, dict)
+            else None
+        )
+        result_quality = (
+            raw_result_quality
+            if settings.FEATURE_RESULT_VERDICT and isinstance(raw_result_quality, dict)
+            else {}
+        )
+        raw_branch_answers = result_quality.get("branch_question_answers")
+        branch_question_answers = (
+            raw_branch_answers if isinstance(raw_branch_answers, dict) else {}
+        )
+        verdict_text = str(result_quality.get("verdict") or "").strip() or None
+
         return {
             "scenario_id": scenario_id,
             "question": scenario.question,
             "status": scenario.status.value,
+            "verdict": verdict_text,
+            "verdict_confidence": _normalize_result_verdict_confidence(
+                result_quality.get("confidence"),
+            ) if verdict_text else None,
             "branches": [
                 StoryBranch(
                     id=b.id,
@@ -1381,6 +1414,11 @@ async def get_story(
                     fork_reason=b.fork_reason,
                     replay_kind=b.replay_kind,
                     replay_source_branch_id=b.replay_source_branch_id,
+                    question_answer=(
+                        str(answer).strip() or None
+                        if (answer := branch_question_answers.get(b.id)) is not None
+                        else None
+                    ),
                 ).model_dump()
                 for b in branches
             ],

@@ -530,6 +530,7 @@ export interface CapabilitiesResponse {
   education_templates?: CapabilityEntry;
   persona_export?: CapabilityEntry;
   prediction_journal?: CapabilityEntry;
+  result_verdict?: CapabilityEntry;
 }
 
 /** Persona export/import payload — schema_version 1 contract. */

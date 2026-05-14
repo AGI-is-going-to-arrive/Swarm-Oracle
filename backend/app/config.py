@@ -97,6 +97,7 @@ class Settings(BaseSettings):
     FEATURE_NEW_SOURCES: bool = Field(default=False)
     FEATURE_SNAPSHOT_EXPORT: bool = Field(default=False)
     FEATURE_PREDICTION_JOURNAL: bool = Field(default=False)
+    FEATURE_RESULT_VERDICT: bool = Field(default=True)
     # DPD Hallucination Verification Gate — warning-only post-verdict check.
     FEATURE_HALLUCINATION_GATE: bool = Field(default=False)
     HALLUCINATION_GATE_THRESHOLD: float = Field(default=0.75, ge=0.0, le=1.0)

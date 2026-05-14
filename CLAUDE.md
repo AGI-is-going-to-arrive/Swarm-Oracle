@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 68+ 文件 / 2991 tests |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 184 文件 / 2038 tests |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | Result Quality gate: 3025 passed + 1 live LLM timeout |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 185 文件 / 2047 tests |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -128,6 +128,11 @@ cd backend && alembic upgrade head
 - WS 首帧 auth 协议（`auth` → `auth_ok`），4001/4404 不重连；`MAX_WS_PER_SCENARIO=50` 含 pending_auth
 - `GET /api/capabilities` 轻量配置端点（无 LLM 调用），不暴露 key/base URL
 
+### Result Quality / Question Anchoring
+- `FEATURE_RESULT_VERDICT` 默认开启；主 scenario 完成后，simulator 生成直接回答原问题的 verdict、confidence 和一句话答案，失败时 fail-soft，不阻断 `simulation_done`
+- 结果质量数据写在 `Scenario.parsed_context.result_quality`，包括顶层 `verdict / confidence / question_answer` 和 `branch_question_answers`；没有新增 DB 表或 column
+- `/api/capabilities.result_verdict` 控制前端展示；ResultView 只有在 capability enabled 且 story verdict 非空时显示 `ResultVerdictPanel`，旧 scenario 保持原 subtitle
+
 ### Web 搜索增强
 - InputView toggle 默认可见，推演前自动搜索注入 Agent 提示词（CORE/IMPORTANT/CROWD 三层）
 - Source family 受 `FEATURE_NEW_SOURCES` + 当前有效 provider capability 双重门控；server default 读 `/api/capabilities`，custom override 只按可识别 base URL 推断，未知时显示 no-provider warning
@@ -162,7 +167,7 @@ cd backend && alembic upgrade head
 
 ### Phase 3 (F1-F6)
 - 13 ORM 模型，Alembic 014-016 + 022 + 025；8 后端服务；`/api/agents/*` + `/api/graphs/*`
-- `/api/capabilities` = web_search + 16 功能开关；Feature flags 以 `config.py` 为准，多数默认 `false`
+- `/api/capabilities` = web_search + 17 功能开关；Feature flags 以 `config.py` 为准，多数默认 `false`
 - 5 前端页面 + 9 组件 + `useScenarioGraph`/`useHookSummary` hook
 - `simulator.py` 4 非阻塞 hook（因果图谱/阵营/检查点/身份），均受 `FEATURE_*` 控制
 - 前端页面均通过 `useCapabilityCheck` hook 做 capability gate
@@ -188,6 +193,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
+| 05-15 | Result Quality / Question Anchoring：`FEATURE_RESULT_VERDICT`、story `verdict / verdict_confidence / branches[].question_answer`、ResultView `ResultVerdictPanel` 和 branch answer 展示已接通；verdict 生成 fail-soft，prompt 输入继续走 untrusted-data guardrail。验证：backend 定向回归与 `ruff check app/` 通过，backend broad command 为 `1 failed, 3025 passed, 2 skipped, 2 deselected`（live LLM matrix timeout）；frontend `185 files / 2047 tests passed`，tsc/eslint/build/i18n spot-check 和新旧结果页浏览器复核通过 |
 | 05-14 | Web Search P5 前端边界修复：`SourceCategoryCard` status_reason 对普通用户可见（`aria-hidden` visible `<p>` + forced-colors 覆盖），`ResultModals` 卡片在可解释状态（failed/unsupported/skipped/fallback）下始终显示并带 historical badge，`WebSourcesSection` native-only 场景独立渲染 citations 并抑制空态文案，后端 `_parse_web_context_json` 缺失 snippets 归一化为空列表。BE 2991 / FE 2038 passed |
 | 05-14 | Web Search P5 Release Gate：native search tool-call budget（`NATIVE_SEARCH_MAX_TOOL_CALLS=5` fail-closed + `NATIVE_SEARCH_MAX_CITATIONS=50` 截断），`detect_body_error` 从空壳改为 xAI/OpenAI failed search call + 通用 body error 检测且不回显 provider 原始 message，`WebSourcesSection` a11y 加固（`aria-controls`/`id` 关联 + `:focus-visible` trigger/url + forced-colors Highlight），命名 E2E `e2e:native-search` 脚本（6 场景 x Chromium/Firefox/WebKit desktop+mobile），provider contract fixture 覆盖；legacy release sweep 追加真实调用 Tavily/Exa/xAI-local/SearXNG-local，并通过 `e2e:web-search`、`e2e:new-source-ingestion-live`、`e2e:capability-matrix`。BE 2988 / FE 2038 passed；WebKit Tab-to-links 为已知平台限制 |
 | 05-14 | Web Search P2-P5 hardening：`detect_provider` malformed/non-http URL 收口，native citations 后端/前端双层 sanitize，`ProviderSearchOutcome` 429/4xx/5xx 映射修正，default Responses URL tools 注入修正，ResultView timer cleanup，InputView advanced accordion 溢出修复。BE 2926 / FE 2037 passed |

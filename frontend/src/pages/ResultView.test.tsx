@@ -215,6 +215,7 @@ const {
     replay_trace: { enabled: false },
     counterfactual_replay: { enabled: false },
     factions: { enabled: false },
+    result_verdict: { enabled: true },
     web_search: { providers: {} },
   };
   let currentCapabilityLoading = false;

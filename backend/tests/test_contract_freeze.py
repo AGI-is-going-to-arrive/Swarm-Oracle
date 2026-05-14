@@ -543,6 +543,7 @@ _TOP_LEVEL_FROZEN_KEYS = frozenset(
         "education_templates",
         "persona_export",
         "prediction_journal",
+        "result_verdict",
     }
 )
 
@@ -570,7 +571,7 @@ _PROVIDERS_FROZEN_SUB_KEYS = frozenset(
 
 @pytest.mark.asyncio
 async def test_capabilities_top_level_keys_exact_freeze():
-    """QA-1: top-level capability registry is exactly 17 keys — no more, no less."""
+    """QA-1: top-level capability registry is exactly 18 keys — no more, no less."""
     from app.api.scenarios import api_capabilities
 
     result = await api_capabilities()
@@ -722,6 +723,7 @@ async def test_capabilities_additive_only_no_regression_on_frozen_keys():
         "FEATURE_REPLAY_TRACE",
         "FEATURE_NEW_SOURCES",
         "FEATURE_GRAPH_ANALYSIS",
+        "FEATURE_RESULT_VERDICT",
     )
     snapshots = {name: getattr(settings, name) for name in toggles}
     try:

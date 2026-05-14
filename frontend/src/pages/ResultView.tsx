@@ -113,6 +113,7 @@ import { DirectorDebriefPanel } from '../components/result/DirectorDebriefPanel'
 import { ProgressIndicator } from '../components/ProgressIndicator';
 import { ResultContextProvider, type ResultViewContextValue } from './result/ResultContext';
 import ResultHeader from './result/ResultHeader';
+import ResultVerdictPanel from './result/ResultVerdictPanel';
 import EndingCardsGrid from './result/EndingCardsGrid';
 import ExploreDeeperBridge from './result/ExploreDeeperBridge';
 import WebSourcesSection from './result/WebSourcesSection';
@@ -146,6 +147,7 @@ export default function ResultView() {
   const directorIdentity = getDirectorIdentity();
 
   const { capabilities, loading: capLoading } = useCapabilityCheck('causal_graph');
+  const resultVerdictEnabled = capabilities?.result_verdict?.enabled ?? false;
   const resultViewMode = useUIPreferencesStore((state) => state.resultViewMode);
   const setResultViewMode = useUIPreferencesStore((state) => state.setResultViewMode);
   const isWorkbenchMode = resultViewMode === 'workbench';
@@ -1796,6 +1798,14 @@ export default function ResultView() {
     <div className="result-view">
       <ProgressIndicator currentStep={4} />
       <ResultHeader />
+
+      {resultVerdictEnabled && (
+        <ResultVerdictPanel
+          verdict={storyData?.verdict ?? null}
+          confidence={storyData?.verdict_confidence ?? null}
+          question={storyData?.question ?? ''}
+        />
+      )}
 
       {/* HOPs probability sampling animation */}
       {branches.length >= 2 && (

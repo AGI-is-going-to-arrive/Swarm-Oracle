@@ -35,11 +35,11 @@ def _build_narration_prompt(
     question_section = f"\n【场景问题】\n{question_block}\n" if question_block else ""
     question_section_en = f"\n[Scenario Question]\n{question_block}\n" if question_block else ""
     if _is_chinese(language):
-        return f"""你是一位出色的故事讲述者。\
-请把以下群体推演的原始交互记录改写成一段引人入胜的叙事。
+        return f"""你是一位预测分析师兼叙事者。\
+请把以下群体推演的原始交互记录改写成一段有分析锚点、也有叙事张力的结果叙事。
 
 {UNTRUSTED_INPUT_GUARDRAIL}
-{web_block}{question_section}
+{web_block}
 
 【分支标题】
 {branch_title_block}
@@ -56,17 +56,22 @@ def _build_narration_prompt(
 3. 找出 2-3 个真正改变走向的「转折点」，在叙事中制造张力
 4. 结尾回扣用户的原始 what-if 问题，给出深刻启示
 5. 总字数控制在 300-500 字
+6. 每个段落必须与用户的原始问题相关联
+7. ❌ 不要泛泛而谈，每个结论必须直接回应用户的具体问题
+8. 最终段落必须直接回答用户的问题，给出明确的判断
 
+{question_section}
 直接输出叙事文本，不要包裹在 JSON 里。
 
 {get_language_directive(language)}
 """
 
-    return f"""You are an excellent narrative writer. Rewrite the \
-following raw simulation transcript into an engaging story.
+    return f"""You are a prediction analyst and narrator. Rewrite the \
+following raw simulation transcript into a result narrative with analytical \
+anchoring and narrative tension.
 
 {UNTRUSTED_INPUT_GUARDRAIL}
-{web_block}{question_section_en}
+{web_block}
 
 [Branch Title]
 {branch_title_block}
@@ -83,7 +88,11 @@ Writing requirements:
 3. Identify 2-3 real turning points that changed the outcome and build narrative tension around them
 4. End by connecting back to the original what-if question with a deeper takeaway
 5. Keep the total length around 300-500 words
+6. Every paragraph must connect back to the user's original question
+7. Do not speak in generic terms; every conclusion must directly answer the user's specific question
+8. The final paragraph must directly answer the user's question and give a clear judgment
 
+{question_section_en}
 Output the narrative text directly, do not wrap it in JSON.
 
 {get_language_directive(language)}
@@ -232,6 +241,7 @@ async def narrate_branch(
                 f"输出严格 JSON：\n"
                 f'{{"story": "完整叙事正文（保留原文）", '
                 f'"insight": "一句话启示", '
+                f'"question_answer": "一句话直接回答用户的问题", '
                 f'"key_moments": ["转折点1", "转折点2"]}}'
             )
         else:
@@ -244,6 +254,7 @@ async def narrate_branch(
                 f"Output strict JSON:\n"
                 f'{{"story": "full narrative (preserve original)", '
                 f'"insight": "one-sentence takeaway", '
+                f'"question_answer": "one-sentence direct answer to the user\'s question", '
                 f'"key_moments": ["turning point 1", "turning point 2"]}}'
             )
         with llm_request_scope(purpose="scenario_narration"):
@@ -279,6 +290,7 @@ async def narrate_branch(
 
     story = str(result.get("story", "") or "").strip()
     insight = str(result.get("insight", "") or "").strip()
+    question_answer = str(result.get("question_answer", "") or "").strip()
     if not insight:
         # reconcile_scenario_done_if_complete requires non-empty insight on every
         # COMPLETED branch — without this guard a single LLM response that omits
@@ -297,5 +309,6 @@ async def narrate_branch(
     return {
         "story": story,
         "insight": insight,
+        "question_answer": question_answer,
         "key_moments": key_moments,
     }

@@ -492,6 +492,8 @@ export interface StoryData {
   question: string;
   status: string;
   branches: StoryBranch[];
+  verdict?: string | null;
+  verdict_confidence?: 'high' | 'medium' | 'low' | null;
 }
 
 export interface StoryBranch {
@@ -506,6 +508,7 @@ export interface StoryBranch {
   fork_reason: string;
   replay_kind?: string | null;
   replay_source_branch_id?: string | null;
+  question_answer?: string | null;
 }
 
 // ── Debate Arena ───────────────────────────────────────

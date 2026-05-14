@@ -277,7 +277,22 @@ npm run lint
 npm run build
 ```
 
-当前全仓验证最近记录：backend full pytest `3008 passed, 2 skipped`，`ruff check .` 通过；frontend full vitest `184 files / 2041 tests passed`，TypeScript noEmit、lint 与 build 通过，i18n parity 为 `2621/2621`。Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop 1440 与 mobile 375 六组合矩阵；native citation 复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵，WebKit Tab-to-links 按平台限制记录。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
+如果这轮改动涉及 Result Quality / verdict / question answer，优先补这组窄集：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_narrator.py tests/test_simulator.py tests/test_contract_freeze.py -q -k "question_answer or result_verdict or capabilities"
+ruff check app/
+
+cd ../frontend
+npm test -- --run src/pages/ResultView.test.tsx src/pages/result/ResultVerdictPanel.test.tsx src/i18n/locales.test.ts
+npx tsc --noEmit
+npx eslint src/ --max-warnings=0
+npm run build
+```
+
+当前 Result Quality release-gate 记录：backend 定向回归和 `ruff check app/` 通过；backend broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e__blackboard_e2e.py -k "not scaled_benchmark and not test_parse_modern"` 为 `1 failed, 3025 passed, 2 skipped, 2 deselected`，失败项是 live LLM matrix timeout。frontend `npx tsc --noEmit && npm test -- --run` 为 `185 files / 2047 tests passed`，eslint、build、top-level i18n parity spot-check 通过。浏览器复核覆盖新 verdict 结果页、旧无 verdict 结果页、英文切换、桌面与 `375x812` mobile，console 无 JS error。Source Family 和 native citation 的历史 browser matrix 仍按对应 release 行读取，不代表本轮重新跑全浏览器矩阵。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
@@ -355,9 +370,9 @@ npm run build
 最近稳定验证记录：
 
 - backend `ruff check .`：通过
-- backend 全量 `python -m pytest -q`：`3008 passed, 2 skipped`
+- backend full pytest 的 Web Search 当时记录：`3008 passed, 2 skipped`
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-- frontend full vitest：`184 files / 2041 tests passed`
+- frontend full vitest 的 Web Search 当时记录：`184 files / 2041 tests passed`
 - frontend `npm run lint`：通过
 - frontend `npm run build`：通过
 - frontend i18n key + placeholder parity：通过
@@ -819,7 +834,7 @@ npm run assets:provenance:check
 
 ### LLM 集成测试
 
-`test_blackboard_e2e.py`、`test_token_matrix.py`、`test_e2e_matrix.py` 是需要真实 LLM 服务的集成测试。URL 从 `settings.LLM_RESPONSES_URL` 读取（通过 `_resolve_llm_api_url()` 统一解析），不再硬编码本地端口。`test_blackboard_e2e.py` 当前会对瞬时 `5xx` 做有限重试；持续 `4xx / 5xx` 仍然直接失败。运行方式：
+`test_blackboard_e2e.py`、`test_token_matrix.py`、`test_e2e_matrix.py` 是需要真实 LLM 服务的集成测试。URL 从 `settings.LLM_RESPONSES_URL` 读取（通过 `_resolve_llm_api_url()` 统一解析），不再硬编码本地端口。`test_blackboard_e2e.py` 当前会对瞬时 `5xx` 做有限重试；持续 `4xx / 5xx` 仍然直接失败。`test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 对 live provider 延迟敏感，timeout 需要单独记录，不应写成普通 unit/contract 回归全绿。运行方式：
 
 ```bash
 cd backend

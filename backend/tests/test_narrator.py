@@ -19,6 +19,7 @@ class TestNarrateBranch:
         mock_extract.return_value = {
             "story": "一个关于勇气的故事",
             "insight": "勇气是成功的关键",
+            "question_answer": "会，勇气让队伍更可能成功。",
             "key_moments": ["转折点1", "转折点2"],
         }
 
@@ -31,8 +32,31 @@ class TestNarrateBranch:
 
         assert result["story"] == "一个关于勇气的故事"
         assert result["insight"] == "勇气是成功的关键"
+        assert result["question_answer"] == "会，勇气让队伍更可能成功。"
         assert len(result["key_moments"]) == 2
         mock_pass1.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
+    async def test_question_answer_is_returned(self, mock_extract, mock_pass1):
+        """Structured question_answer must survive the narrator boundary."""
+        mock_pass1.return_value = _FAKE_PASS1_TEXT
+        mock_extract.return_value = {
+            "story": "叙事正文",
+            "insight": "一句启示",
+            "question_answer": "直接答案",
+            "key_moments": [],
+        }
+
+        result = await narrate_branch(
+            branch_title="测试分支",
+            probability=0.7,
+            agents_summary="A(角色1), B(角色2)",
+            raw_rounds="[R1 A]: 发言内容",
+        )
+
+        assert result["question_answer"] == "直接答案"
 
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call", new_callable=AsyncMock)

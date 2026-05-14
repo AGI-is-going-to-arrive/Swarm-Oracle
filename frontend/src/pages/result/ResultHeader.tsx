@@ -40,6 +40,12 @@ export default function ResultHeader() {
     exportError,
     importError,
   } = useResultContext();
+  const hasResultVerdict = Boolean(
+    capabilities?.result_verdict?.enabled
+      && typeof storyData?.verdict === 'string'
+      && storyData.verdict.trim(),
+  );
+  const subtitleKey = hasResultVerdict ? 'result.subtitle_prediction' : 'result.subtitle';
 
   return (
     <header className="result-header">
@@ -54,7 +60,7 @@ export default function ResultHeader() {
         <p className="result-question">{storyData.question}</p>
       )}
       <p className="result-subtitle">
-        {t('result.subtitle')} — {t('result.ending_count', { count: branches.length })}
+        {t(subtitleKey)} — {t('result.ending_count', { count: branches.length })}
       </p>
       <div className="result-archive__chips">
         <span className="archive-chip archive-chip--primary">

@@ -26,7 +26,7 @@ React + TypeScript frontend for SwarmOracle.
 | `/` | `InputView` | Scenario input, progress indicator, quick starts, onboarding, launch confirmation, source families, provider policy, optional organization id, advanced/BYOK accordions, preflight-aware submit loading, custom Agent attach panel, feature-gated snapshot import |
 | `/admin/setup` | `SetupWizardView` | Three-step provider setup, API/base URL entry, and connection test |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, capture |
-| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, share/export, prediction card, feature-gated snapshot export, replay import, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
+| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Result Quality verdict panel when available, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, share/export, prediction card, feature-gated snapshot export, replay import, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
 | `/replay/:id` | `ReplayView` | Replay trace timeline with pagination, branch filter, and unavailable/probe-error states |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
 | `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate result, supporting turns, replay digest, share/import |
@@ -123,7 +123,7 @@ React + TypeScript frontend for SwarmOracle.
 - `GlobalOfflineBanner.tsx`
   the WS-disconnect grace timer now uses an SSR-safe layout-effect fallback; current SPA behavior stays the same, and future SSR will not log the layout-effect warning
 - `ResultView.tsx`
-  the result surface now includes a ledger-style archive, director debrief, capability-gated `What's Next` bridge with locale-backed causal / replay / compare / workbench / agents / share copy, semantic disabled cards, historical source badges, and locale-backed faction-timeline lead copy. Campaign boundary notices, newly unlocked badge copy, archive key moments, and debrief moment details also read `result.*` locale keys
+  the result surface now includes a capability-gated `ResultVerdictPanel`, prediction subtitle switching, branch-level question answers in `EndingCardsGrid`, a ledger-style archive, director debrief, capability-gated `What's Next` bridge with locale-backed causal / replay / compare / workbench / agents / share copy, semantic disabled cards, historical source badges, and locale-backed faction-timeline lead copy. Campaign boundary notices, newly unlocked badge copy, archive key moments, verdict labels, confidence copy, and debrief moment details also read `result.*` locale keys
 - `resultHelpers.ts`
   result-page pure helpers for bet badges, campaign cache, locale-backed badge copy, and structured moment highlights used by the archive / debrief handoff
 - `DirectorDebriefPanel.tsx`
@@ -195,11 +195,11 @@ npm run build:spike:phaser-custom
 
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Current frontend verification:
-  - `npx tsc --noEmit -p tsconfig.app.json`: pass
-  - full vitest: `184 files / 2041 tests / 0 failed`
+  - `npx tsc --noEmit && npm test -- --run`: `185 files / 2047 tests passed`
+  - `npx eslint src/ --max-warnings=0`: pass
   - `npm run build`: pass, including performance budgets
-  - i18n parity: `en=2621 zh=2621`
-  - browser recheck covered result fixture desktop/mobile Chromium `13/13`, capability matrix `30/30`, and manual pages `/`, `/agents/new`, `/leaderboard`, `/admin/setup`, `/me/journal` with no console warning/error or 375px horizontal overflow
+  - i18n parity spot-check: `en=67 zh=67 match=true`
+  - browser recheck covered one new result with verdict and one old result without verdict, desktop and `375x812` mobile, English language switch, and no console JS errors
 - Older Sprint 0-4 rows below are historical artifacts, not the current pass-count source.
 - Latest Sprint 0-2 browser matrix:
   - browser matrix: `72/72 PASS` at `output/e2e/sprint0-2-review-20260510-browser/summary.json`

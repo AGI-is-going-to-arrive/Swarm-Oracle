@@ -35,7 +35,7 @@ npm run test:watch # vitest (watch mode)
 | `/` | `InputView` | 首页，创建场景/辩论入口 |
 | `/sim/:id` | `SimulationView` | 模拟实时观察 + Phaser 剧场 |
 | `/sim/replay` | `SimulationView` | Replay 模式 |
-| `/result/:id` | `ResultView` | 模拟结果展示 |
+| `/result/:id` | `ResultView` | 模拟结果展示，含 capability-gated Result Quality verdict panel |
 | `/result/replay` | `ResultView` | Replay 结果 |
 | `/debate/:id` | `DebateArenaView` | 辩论实时观察 |
 | `/debate/:id/result` | `DebateResultView` | 辩论结果 |
@@ -58,7 +58,7 @@ npm run test:watch # vitest (watch mode)
 |------|------|
 | `InputView.tsx` | 首页输入，5 步进度、quick starts、搜索增强/source family、模式选择器、advanced accordion、BYOK 折叠区、Agent attach panel |
 | `SimulationView.tsx` | 模拟视图 + Phaser 集成 |
-| `ResultView.tsx` | 结果展示 orchestrator (Summary-First 布局，含 What's Next bridge、真实世界来源卡片、historical badge、share artifact、畸形数据防御)；主体区块拆到 `src/pages/result/*` |
+| `ResultView.tsx` | 结果展示 orchestrator (Summary-First 布局，含 ResultVerdictPanel、What's Next bridge、真实世界来源卡片、historical badge、share artifact、畸形数据防御)；主体区块拆到 `src/pages/result/*` |
 | `DebateArenaView.tsx` | 辩论竞技场 |
 | `DebateResultView.tsx` | 辩论结果 |
 | `WorldlineRoundtableView.tsx` | 世界线圆桌 (~2223 行) |
@@ -200,7 +200,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- 最近 full vitest 基线：`184 files / 2041 tests passed`
+- 最近 full vitest 基线：`185 files / 2047 tests passed`
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -252,6 +252,7 @@ frontend/
 | `Scenario` | 场景快照，含 agents/branches/groups/messages/director_state/gameplay_state | `Scenario` 表 + 关联 |
 | `AgentInfo` | Agent 信息 (id/name/role/persona/tier/stance/emotion/group_id) | `Agent` 表 |
 | `BranchInfo` | 分支信息 (含 story/insight/key_moments/probability/status) | `Branch` 表 |
+| `StoryData / StoryBranch` | 结果页 story payload；`verdict / verdict_confidence` 和 `question_answer` 都是可空字段，旧 scenario 或 feature off 时不渲染 verdict panel | `/api/scenario/{id}/story` |
 | `AgentMessage` | Agent 发言 (agent/message/emotion/diverge/branch/round/synthesized) | `AgentMessage` 表 |
 | `GroupInfo` / `AgentGroupDetail` | P3-A 分组信息 | `AgentGroup` 表 |
 
@@ -390,6 +391,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-15 | Result Quality / Question Anchoring | `ResultView.tsx` 按 `/api/capabilities.result_verdict` 接入 `ResultVerdictPanel`；`ResultHeader` 只有在 capability enabled 且 story verdict 非空时切到预测结果 subtitle；`EndingCardsGrid` 只在 branch `question_answer` 非空时显示分支级一句话回答；`PredictionModal.css` 同步收口单滚动容器、safe-area、reduced-motion、forced-colors 和 OKLCH fallback。验证：frontend `npx tsc --noEmit && npm test -- --run` 为 `185 files / 2047 tests passed`，eslint/build/i18n spot-check 通过；浏览器复核新 verdict 页、旧无 verdict 页、英文切换、桌面与 `375x812` mobile，console 无 JS error |
 | 2026-05-14 | Session launch / web search settings 回归修复 | `InputView.tsx`：`launchInFlightRef` 防 BYOK 自动 preflight 和 continuity confirmation 重复启动；continuity preflight 失败时显示错误但继续按无 override 启动。`useWebSearchConfig.ts`：custom override 且 base URL 为空时使用下拉 provider capability，非空未知 host 才保留 unknown/no-provider。`SimulationView.tsx/css`：取消确认框补 busy 状态、`aria-busy`、`role=status`、reduced-motion/forced-colors/mobile 样式。验证：frontend full `184 files / 2041 tests passed`，`tsc / eslint / build` 通过，i18n `2621/2621` |
 | 2026-05-14 | Web Search P5 前端边界修复 | `SourceCategoryCard.tsx`：`status_reason` 新增可见 `<p aria-hidden="true">` 段落（`.result-source-card__reason-detail`），普通用户可看到后端具体失败原因；空字符串 reason 在 `ResultModals` 归一化为 undefined。`ResultModals.tsx`：卡片显示条件从 `live \|\| hasItems` 扩展为 `live \|\| hasItems \|\| hasExplainableEntry`（覆盖 failed/unsupported_provider/search_skipped/fallback_unconstrained），capability disabled 时带 historical badge。`WebSourcesSection.tsx`：放宽 snippets 必须为数组的 guard，native-only 场景（无 snippets）可独立渲染 citations；有 native citations 时抑制 "No live web sources" 空态文案。`ResultView.css`：新增 `.result-source-card__reason-detail` 样式 + forced-colors 覆盖。验证：frontend full `184 files / 2038 tests passed`，`tsc / eslint / build` 通过，i18n `2506/2506`；Playwright 实测 desktop 1280x800 + mobile 375x812 覆盖 status_reason 可见性、卡片显示条件、native-only citations、a11y 属性完整性 |
 | 2026-05-14 | Web Search P5 + legacy release sweep | `WebSourcesSection.tsx`：native citations 区域补 `aria-controls`/`id` 关联，collapsed body 保持 `inert` 与焦点兜底。`ResultView.css`：source trigger/link 补 `:focus-visible` 与 forced-colors Highlight/LinkText 覆盖。`e2e-native-search-suite.mjs` 覆盖 native citation render/safety/a11y/focus/empty/all-unsafe，默认跑 Chromium / Firefox / WebKit desktop + mobile；WebKit Tab-to-links 限制按脚本记录。`e2e-web-search-suite.mjs` 真实校验 custom override 请求体并脱敏 summary；`e2e-new-source-ingestion-live.mjs` 支持 live desktop/mobile、确认弹窗、source family state 展示和输出目录分区；`e2e-capability-matrix.mjs` 补当前 capability keys 与 web_search provider shape；`release-signoff.mjs` 纳入 web search live、capability matrix、new source ingestion live。验证：frontend full `184 files / 2038 tests passed`，`tsc / eslint / build` 通过，i18n `2506/2506`，真实 provider sweep 覆盖 Tavily / Exa / xAI-local / SearXNG-local |

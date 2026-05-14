@@ -308,6 +308,63 @@
   border-top: 1px solid var(--border-subtle);
 }
 
+/* ── Branch-specific answer to original question ───── */
+.ending-card__answer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm, 2px);
+  border-left: 3px solid var(--color-primary, #c61583);
+  background: rgba(198, 21, 131, 0.05);
+  background: color-mix(in oklab, var(--color-primary, #c61583) 5%, var(--bg-surface, #fff));
+  font-family: var(--font-body, system-ui, -apple-system, 'Noto Sans SC', sans-serif);
+}
+
+.ending-card__answer-label {
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-primary, #c61583);
+}
+
+.ending-card__answer-text {
+  font-size: var(--text-base, 0.95rem);
+  font-weight: 500;
+  line-height: 1.55;
+  color: var(--text-primary, #181611);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .ending-card__answer {
+    padding: 8px 12px;
+  }
+  .ending-card__answer-text {
+    font-size: 0.9rem;
+  }
+}
+
+@media (forced-colors: active) {
+  .ending-card__answer {
+    border: 1px solid CanvasText;
+    border-left: 3px solid Highlight;
+    background: Canvas;
+    color: CanvasText;
+    forced-color-adjust: none;
+  }
+  .ending-card__answer-label {
+    color: Highlight;
+  }
+  .ending-card__answer-text {
+    color: CanvasText;
+  }
+}
+
 /* ── Insight (always visible) ──────────────────────── */
 .insight-quote {
   font-family: var(--font-heading);

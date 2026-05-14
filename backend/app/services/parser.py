@@ -337,7 +337,13 @@ def _should_replace_parse_result(current: dict, retry: dict) -> bool:
 
 
 def _fallback_initial_title(question: str, language: str) -> str:
-    stripped = question.strip()
+    stripped = (question or "").strip()
+    if stripped:
+        compact_question = re.sub(r"\s+", " ", stripped)
+        compact_question = re.sub(r"[？?！!。,.，；;：:]+$", "", compact_question).strip()
+        if compact_question:
+            return f"{compact_question[:20]}...".strip()
+
     if language == "Chinese":
         stripped = re.sub(r"^如果", "", stripped)
         stripped = re.sub(r"[？?！!。,.，；;：:]+$", "", stripped)

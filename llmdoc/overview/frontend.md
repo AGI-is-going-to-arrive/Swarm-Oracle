@@ -32,7 +32,7 @@
 | IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel、分支级 question answer、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live、Podium Cards、room state、phase 历史卡、counterplay、live argument map |
@@ -113,6 +113,11 @@
   - workbench 卡片当前指向因果、知识图谱和节点追问同一视图
   - disabled 卡片保留 link 语义，但不再渲染无 `href` 的 `<a>`
   - disabled 状态会保留可见原因和 `aria-describedby`，文字对比不再靠整卡 opacity 压低
+- `ResultView` 当前在 `result_verdict` capability enabled 且 story verdict 非空时显示 `ResultVerdictPanel`：
+  - panel 用 React 文本节点渲染 verdict，不走 raw HTML
+  - `verdict_confidence` 只接受 `high / medium / low`，未知值显示成 `medium`
+  - 空 verdict 时整块隐藏，旧 scenario 继续显示原来的多结局 subtitle
+  - confidence badge 与 region heading 已有屏幕阅读器文本和 `aria-live`
 - `ShareModal` 当前接入 `ShareArtifact`：
   - PNG 导出只读取问题、主导结局、可见来源 family 和前 3 个 Agent 名
   - BYOK key、base URL、用户邮箱、session token 和本地 provider 配置不进入导出卡片
@@ -129,7 +134,7 @@
 - `ResultView` 的导演复盘当前由 `DirectorDebriefPanel` 渲染：优先使用后端 `score_breakdown`，同时接收 what-if、主导世界线、世界线承诺、押注、最后一次干预、结构化关键记录、director goals 与 gameplay card 状态，展示得分原因、等级进度、本局读数、下一步入口和新增徽章。campaign 边界提示、新徽章文案、archive key moment 和 moment detail 都走 `result.*` locale key。
 - `ResultView` 的 faction timeline lead 当前已走 i18n key + `{{title}}` 插值，不再在组件里手写 `isZh` 三元文案。
 - `ResultView` 的 replay/import 错误、ending-room replay action、archive summary label 和 ending-room picker copy 当前也已走 locale key；剩下的 `isZh` 用在玩法/候选人/弹窗语言选择这类领域语义上。
-- `ResultView` 当前已做第一阶段拆分：入口仍是 `frontend/src/pages/ResultView.tsx`，主体区块拆到 `frontend/src/pages/result/ResultHeader.tsx`、`EndingCardsGrid.tsx`、`ExploreDeeperBridge.tsx`、`WebSourcesSection.tsx`、`PredictionsSection.tsx`、`DirectorNotebook.tsx`、`AgentRoster.tsx`、`ResultModals.tsx` 和 `ResultContext.tsx`。`ResultContext` 仍偏宽，后续触碰结果页时优先评估 selector / useMemo 收窄。
+- `ResultView` 当前已做第一阶段拆分：入口仍是 `frontend/src/pages/ResultView.tsx`，主体区块拆到 `frontend/src/pages/result/ResultHeader.tsx`、`EndingCardsGrid.tsx`、`ResultVerdictPanel.tsx`、`ExploreDeeperBridge.tsx`、`WebSourcesSection.tsx`、`PredictionsSection.tsx`、`DirectorNotebook.tsx`、`AgentRoster.tsx`、`ResultModals.tsx` 和 `ResultContext.tsx`。`ResultContext` 仍偏宽，后续触碰结果页时优先评估 selector / useMemo 收窄。
 - InputView 当前在 `agent_identity` capability 开启时会在主模式启动前先调用 identity continuity preflight：
   - 只要命中 `L2 fuzzy candidate` 才会弹确认框
   - 用户可选 `复用已有身份` 或 `创建新身份`
@@ -306,6 +311,7 @@
   - 如果用户已经手动改选了一个仍然有效的 branch，提交时会继续用用户当前选择；commitment branch 只作为默认兜底，不会把用户已选目标强行改回去
   - 提交给 backend 的 structured prediction text 仍按 500 字符预算；textarea 会先扣掉下注元数据占用的长度，超限时显示本地化错误
   - 对应的 `predict-late-branches` fixture 当前会先采 `before` 工件，再放出 late branch 事件；`before` 态应保持 `ending_tone`，`after` 态才切到 `branch_winner`
+  - CSS 当前已收口到单滚动容器、`100dvh` / safe-area、移动端 44px footer control、`prefers-reduced-motion` 和 forced-colors fallback；OKLCH 颜色仍带 sRGB fallback
 - `GameplayCardsModal` 的 directive textarea 只在桌面 fine pointer 环境自动聚焦；手机和粗指针设备不会自动弹出键盘。
 - `endingRoomStore` 当前会在 committed turn、room hydrate、thread hydrate 时清掉 stale draft；迟到的 `turn_start / turn_delta` 不再把 ghost bubble 重新挂回当前 transcript。
 - `endingRoomStore` 当前把 `snapshot / result / thread hydrate + commitTurn` 作为 authority；`pendingDrafts` 只是流式草稿缓存。recoverable `turn_error` 只清 draft，不会把整个 room 升成 fatal error。
@@ -557,14 +563,15 @@
   - `cd frontend && npx tsc --noEmit`：通过
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
 - 当前 frontend 稳定验证口径：
-  - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npx vitest run --reporter=dot`：`184 files / 2041 tests passed`
-  - `npm run lint`：通过
-  - `npm run build`：通过
+  - `npx tsc --noEmit && npm test -- --run`：`185 files / 2047 tests passed`
+  - `npx eslint src/ --max-warnings=0`：通过
+  - `npm run build`：通过，performance budget 无 violations
+  - i18n parity spot-check：`en=67 zh=67 match=true`
+  - browser Result Quality 复核覆盖新结果页有 verdict、旧结果页无 verdict、英文切换、桌面与 `375x812` mobile，console 无 JS error
   - Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop `1440px` 与 mobile `375px` 六组合矩阵
   - native citation 浏览器复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵；WebKit Tab-to-links 按平台限制记录
   - legacy `e2e:web-search` 已用真实 provider 跑过 Tavily / Exa / xAI-local / SearXNG-local；`e2e:new-source-ingestion-live` 已跑 desktop + mobile live；`e2e:capability-matrix` 为 `30 passed / 0 failed`
-- frontend i18n key + placeholder parity：通过；当前 en/zh 都是 `2621` 个 key。
+- frontend i18n key + placeholder parity 的历史深层记录保留在对应 release 行；本轮只跑了 top-level spot-check。
 - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 - Classic 分支标题本轮已补定向验证：

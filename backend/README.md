@@ -32,7 +32,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 
 | Module | File | Description |
 |--------|------|-------------|
-| Scenarios | `app/api/scenarios.py` | Core CRUD, story, export, replay artifact, replay import, snapshot export/import |
+| Scenarios | `app/api/scenarios.py` | Core CRUD, story, result-quality verdict fields, export, replay artifact, replay import, snapshot export/import |
 | Admin | `app/api/admin.py` | Preflight diagnostics and `/admin/setup` LLM connection test endpoints |
 | Agents | `app/api/agents.py` | custom Agent library/workshop, favorites, identity inspector, document import, persona export/import |
 | Quota | `app/api/quota.py` | Conversation and replay quota summary |
@@ -52,8 +52,10 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 |--------|------|-------------|
 | `GET` | `/` | Root info / process-level health |
 | `GET` | `/metrics` | Prometheus text metrics or minimal fallback text |
+| `GET` | `/api/capabilities` | Lightweight capability registry; includes `result_verdict` when configured |
 | `POST` | `/api/scenario` | Create scenario and return placeholder state immediately |
 | `GET` | `/api/scenario/{id}` | Scenario details with top-level `director_state` and `gameplay_state` |
+| `GET` | `/api/scenario/{id}/story` | Scenario story; with `FEATURE_RESULT_VERDICT=true` may include top-level `verdict / verdict_confidence` and `branches[].question_answer` |
 | `POST` | `/api/scenario/{id}/cancel` | Request cancellation for a parsing/simulating/narrating scenario |
 | `GET` | `/api/scenario/{id}/conversations` | List scenario conversation thread summaries with cursor pagination |
 | `POST` | `/api/scenario/import-replay` | Import scenario replay as local run |
@@ -96,13 +98,11 @@ source .venv/bin/activate
 python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py tests/test_llm_client.py tests/test_web_context.py tests/test_api.py -q
 ```
 
-- Latest local backend verification for the current Sprint 5-6 hardening:
-  - `ruff check app tests`: pass
-  - `python -m pytest -q --tb=short`: `2749 passed, 2 skipped`
-  - touched-file backend rerun: `314 passed`
-  - cancel / journal / snapshot / leaderboard segment focused rerun: `84 passed`
-  - prediction API regression rerun: `48 passed`
-  - new red-to-green finding tests: `12 passed`
+- Latest local backend verification for the Result Quality release-gate:
+  - Result Quality narrator / simulator / story / capability contract targeted tests: pass
+  - `ruff check app/`: pass
+  - broad backend command with the release-gate filter: `1 failed, 3025 passed, 2 skipped, 2 deselected`
+  - failure: `tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix`, live LLM matrix timeout
 - Current release judgment still lives in `llmdoc/guides/development.md`; this file only keeps the latest backend headline.
 
 ## Runtime Notes
@@ -112,6 +112,8 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - `memory.py` now uses a two-stage rolling compaction path: long windows first summarize older dialogue into a bounded overflow briefing, then merge that briefing with the most recent raw window for the final summary. The older slice now also keeps high-signal lines first (`CORE/LEADER`, `emotion/diverge`, intervention / gameplay card / betting / fork / result markers) instead of relying on naive head-tail truncation.
 - `memory.py` and `narrator.py` now honor in-memory BYOK overrides from the simulation pipeline; credentials still stay in memory and are not persisted into scenario records.
 - `narrator.py` now wraps branch title / participant summary / raw rounds in the same untrusted-data guardrail style already used by other prompt builders.
+- `simulator.py` now writes Result Quality data into `Scenario.parsed_context.result_quality` when `FEATURE_RESULT_VERDICT=true`; verdict generation is fail-soft, so malformed JSON, provider timeout, or empty output does not block scenario completion.
+- `narrator.py` returns a branch-level `question_answer`; simulator stores it under `result_quality.branch_question_answers`, not as a new database column.
 - `social.py` now selects wrapper / prompt language by scenario language, so English scenarios no longer receive Chinese wrapper text.
 - `social.py` still exposes both `GET` and `POST`, but provider overrides now must be sent in the `POST` body; `GET` query overrides are rejected to avoid leaking them into URLs.
 - `llm_client.py` now shares pending/quota accounting across processes through SQLite when they point at the same `DATABASE_URL`, while keeping the in-process semaphore and circuit breaker.
@@ -155,6 +157,8 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 ## Environment Variables
 
 See `../.env.example` for the full list.
+
+- `FEATURE_RESULT_VERDICT` defaults to `true` and controls result verdict generation, branch question-answer persistence, `/api/capabilities.result_verdict`, and the extra story response fields.
 
 Memory compression tuning now includes developer-only backend knobs:
 

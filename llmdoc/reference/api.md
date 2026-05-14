@@ -93,6 +93,7 @@
   - `reuse_existing` 需要带 `identity_id`，后端会校验它属于当前 `user_id`
   - `create_new` 会让真正的 identity 解析跳过 L2 fuzzy reuse
 - `GET /api/scenario/{scenario_id}` 和 `GET /api/scenario/{scenario_id}/story` 的 `branches[]` 当前会回显 `replay_kind / replay_source_branch_id`；普通分支可为 `null`，replay/import/counterfactual/resume 分支用它保留来源分支语义。
+- `GET /api/scenario/{scenario_id}/story` 在 `FEATURE_RESULT_VERDICT=true` 且 `parsed_context.result_quality` 有数据时，会额外回显顶层 `verdict / verdict_confidence`，以及 `branches[].question_answer`。关闭开关、旧 scenario、空字符串或 malformed `result_quality` 都会降级为空字段；未知 confidence 会归一化为 `medium`。
 - `GET /api/scenario/{scenario_id}/conversations` 受 `FEATURE_AGENT_CONVERSATION` gate，要求 signed principal 能看到该 scenario；`cursor` 是 offset cursor，`limit` 范围 `1..50`，返回项只带 thread 摘要，完整 turn 历史仍走 `GET /api/conversation/{thread_id}`。
 - `POST /api/scenario/{scenario_id}/cancel` 只接受 `parsing / simulating / narrating / cancelled`；`done / error` 会返回 `409 SIMULATION_NOT_RUNNING`。成功请求会把 scenario 持久化到 `cancelled`，并尽量取消本进程里的后台 task。运行中 worker 即使已经有本地 cancel token，也会继续读取 DB `cancelled` 状态，避免跨进程取消被漏掉。
 - `GET /api/scenario/{scenario_id}/snapshot` 和 `POST /api/scenario/import-snapshot` 受 `FEATURE_SNAPSHOT_EXPORT` gate；关闭时返回 404 `FEATURE_DISABLED`。export 会做 scenario ownership 校验，并剥掉常见 secret key/base URL/token/password 变体，也会清理 `key_moments`、web context 这类 JSON 字符串里的敏感字段。开启 `SESSION_SECRET` 时 import 要求 signed principal，并把新 scenario 绑定到该 principal。空文件返回 422 `SNAPSHOT_FILE_EMPTY`，超过 50 MB 返回 413 `SNAPSHOT_FILE_TOO_LARGE`，archive/manifest/checksum 不合法、JSON/JSONL 不是 UTF-8、JSONL 行数或单行过大都会返回 422 `SNAPSHOT_IMPORT_INVALID`。导入还会拒绝重复 ZIP member name、超过 256 个物理 member、路径穿越、symlink、异常压缩比和总解压超限；branch 的 `replay_source_branch_id` 会按新 branch id remap，找不到来源时清空。
@@ -212,8 +213,8 @@
 - 模型原生搜索不通过 `web_search.provider_capability` 表达，也不是 `WEB_SEARCH_PROVIDER=native`。当前它由 runtime 在 LLM provider 支持 native search、且拿到 source family domains 时注入 provider tools；前端只用说明文案解释它和 server default/custom override 是两条路径，不把它当成可独立选择的 app-layer provider。
 - `FEATURE_NEW_SOURCES=true` 时，`web_search.providers.{family}.capability` 会给每个 family entry 附上同一套 domain-filter 能力摘要和 `max_domains`。
 - `GET /api/capabilities` 当前顶层 key 固定为：
-  `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst / snapshot_export / education_templates / persona_export / prediction_journal`。
-  除 `web_search` 外，其余 16 个都是功能开关 registry entry，至少带 `enabled / version`。`FEATURE_HALLUCINATION_GATE` 只影响后端 warning metadata，不是 capability key。
+  `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst / snapshot_export / education_templates / persona_export / prediction_journal / result_verdict`。
+  除 `web_search` 外，其余 17 个都是功能开关 registry entry，至少带 `enabled / version`。`FEATURE_HALLUCINATION_GATE` 只影响后端 warning metadata，不是 capability key；`result_verdict` 是 story 字段与前端展示 gate，不是新 endpoint。
 
 ## Admin Diagnostics
 

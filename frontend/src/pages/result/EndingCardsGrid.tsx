@@ -108,6 +108,24 @@ export default function EndingCardsGrid() {
               )}
             </div>
 
+            {/* Branch-specific answer to the user's question (when available) */}
+            {(() => {
+              const branchAnswer = branch.question_answer;
+              const trimmed = typeof branchAnswer === 'string' ? branchAnswer.trim() : '';
+              if (!trimmed) return null;
+              return (
+                <p
+                  className="ending-card__answer"
+                  data-testid={`ending-card-answer-${branch.id}`}
+                >
+                  <span className="ending-card__answer-label">
+                    {t('result.branch_answer_label', { defaultValue: 'Answer to Your Question' })}
+                  </span>
+                  <span className="ending-card__answer-text">{trimmed}</span>
+                </p>
+              );
+            })()}
+
             {/* Insight always visible as the card's key takeaway */}
             {branch.insight && (
               <blockquote className="insight-quote">{branch.insight}</blockquote>
