@@ -369,6 +369,26 @@ describe('web search wire-format', () => {
     expect(body.web_search_base_url).toBe('https://api.tavily.com');
   });
 
+  it('should include Firecrawl web search override fields', async () => {
+    const fetchMock = stubScenarioCreate();
+
+    await createScenario({
+      question: 'What if?',
+      webSearchEnabled: true,
+      webSearchFamilies: ['news_deep'],
+      webSearchProvider: 'firecrawl',
+      webSearchApiKey: 'fc-test-key',
+      webSearchBaseUrl: 'https://api.firecrawl.dev/v2/search',
+    });
+
+    const body = getRequestBody(fetchMock);
+    expect(body.web_search_enabled).toBe(true);
+    expect(body.web_search_families).toEqual(['news_deep']);
+    expect(body.web_search_provider).toBe('firecrawl');
+    expect(body.web_search_api_key).toBe('fc-test-key');
+    expect(body.web_search_base_url).toBe('https://api.firecrawl.dev/v2/search');
+  });
+
   it('should strip web search override fields in preflight mode', async () => {
     const fetchMock = stubScenarioCreate();
 

@@ -91,6 +91,16 @@ class TestCreateScenarioRequestWebSearch:
         })
         assert resp.status_code in (200, 500)
 
+    def test_web_search_firecrawl_override_accepted_in_api_payload(self, client):
+        resp = client.post("/api/scenario", json={
+            "question": "What if pigs fly?",
+            "web_search_enabled": True,
+            "web_search_provider": "firecrawl",
+            "web_search_api_key": "fc-test-key",
+            "web_search_base_url": "https://api.firecrawl.dev/v2/search",
+        })
+        assert resp.status_code in (200, 500)
+
     def test_web_search_provider_rejects_unknown_value(self):
         with pytest.raises(ValueError):
             CreateScenarioRequest(
@@ -279,6 +289,20 @@ class TestHealthTestWebSearchServerHint:
         assert ws["server_enabled"] is True
         assert ws["method"] == "external"
         assert ws["provider"] == "exa"
+
+    def test_server_enabled_firecrawl_with_key(self, client, monkeypatch):
+        self._patch_llm(monkeypatch)
+        from app.config import settings
+        monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
+        monkeypatch.setattr(settings, "WEB_SEARCH_PROVIDER", "firecrawl")
+        monkeypatch.setattr(settings, "WEB_SEARCH_API_KEY", "fc-test-key")
+
+        data = client.post("/api/health/test", json=self._TEST_PAYLOAD).json()
+        ws = data["web_search"]
+        assert ws["scope"] == "server"
+        assert ws["server_enabled"] is True
+        assert ws["method"] == "external"
+        assert ws["provider"] == "firecrawl"
 
     def test_server_enabled_xai_with_key(self, client, monkeypatch):
         self._patch_llm(monkeypatch)

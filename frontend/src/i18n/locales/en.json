@@ -73,6 +73,7 @@
       "web_search_status_skipped": "Search not enabled",
       "web_search_provider_tavily_hint": "API-backed search with domain filtering.",
       "web_search_provider_exa_hint": "API-backed neural/web search with domain filtering.",
+      "web_search_provider_firecrawl_hint": "API-backed web search with domain filtering and optional scraping.",
       "web_search_provider_xai_hint": "Responses web search with domain filtering, capped at 5 domains.",
       "web_search_provider_searxng_hint": "No API key; requires a reachable SearXNG instance and uses site: query filtering.",
       "web_search_no_provider_warning": "No search provider is resolvable for source categories. Ordinary search can still run if the provider request succeeds.",

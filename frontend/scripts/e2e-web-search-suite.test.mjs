@@ -7,6 +7,7 @@ import { __test__ } from "./e2e-web-search-suite.mjs";
 test("default provider base URLs match provider allowlist contracts", () => {
   assert.equal(__test__.defaultProviderBaseUrl("tavily"), "https://api.tavily.com/search");
   assert.equal(__test__.defaultProviderBaseUrl("exa"), "https://api.exa.ai/search");
+  assert.equal(__test__.defaultProviderBaseUrl("firecrawl"), "https://api.firecrawl.dev/v2/search");
   assert.equal(__test__.defaultProviderBaseUrl("xai"), "https://api.x.ai/v1/responses");
   assert.equal(__test__.defaultProviderBaseUrl("searxng"), "http://localhost:8888");
 });

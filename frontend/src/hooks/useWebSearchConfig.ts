@@ -6,7 +6,7 @@ import {
   type WebSearchProviderCapability,
 } from '../api/client';
 
-export type WebSearchProviderOption = 'tavily' | 'exa' | 'xai' | 'searxng';
+export type WebSearchProviderOption = 'tavily' | 'exa' | 'firecrawl' | 'xai' | 'searxng';
 export type WebSearchMode = 'server_default' | 'custom_override';
 export type WebSearchStatus = 'idle' | 'searching' | 'success' | 'skipped' | 'error';
 
@@ -58,7 +58,7 @@ export interface UseWebSearchConfigResult {
 }
 
 /**
- * Built-in capability table for the four supported providers. This mirrors the
+ * Built-in capability table for the supported providers. This mirrors the
  * server-side `provider_capability` registry and lets the UI render hints when
  * the user supplies a custom override (where the server cannot tell us which
  * provider the BYOK base_url targets).
@@ -66,6 +66,7 @@ export interface UseWebSearchConfigResult {
 const PROVIDER_CAPABILITY_TABLE: Record<WebSearchProviderOption, WebSearchProviderCapability> = {
   tavily: { supports_domain_filter: true, supports_sources: true, domain_filter_mode: 'api' },
   exa: { supports_domain_filter: true, supports_sources: true, domain_filter_mode: 'api' },
+  firecrawl: { supports_domain_filter: true, supports_sources: true, domain_filter_mode: 'api' },
   xai: { supports_domain_filter: true, supports_sources: true, domain_filter_mode: 'api' },
   searxng: { supports_domain_filter: true, supports_sources: true, domain_filter_mode: 'query' },
 };
@@ -92,6 +93,7 @@ export function inferProviderFromBaseUrl(baseUrl: string): WebSearchProviderOpti
   }
   if (host === 'api.tavily.com' || host.endsWith('.tavily.com')) return 'tavily';
   if (host === 'api.exa.ai' || host.endsWith('.exa.ai')) return 'exa';
+  if (host === 'api.firecrawl.dev') return 'firecrawl';
   if (host === 'api.x.ai' || host.endsWith('.x.ai')) return 'xai';
   if (hasSearxHostToken(host)) return 'searxng';
   return null;
@@ -150,7 +152,7 @@ export function useWebSearchConfig(): UseWebSearchConfigResult {
           setWebSearchServerProvider(typeof serverProvider === 'string' ? serverProvider : null);
           setServerProviderCapability(res.web_search?.provider_capability ?? null);
           if (
-            (serverProvider === 'tavily' || serverProvider === 'exa' || serverProvider === 'xai' || serverProvider === 'searxng')
+            (serverProvider === 'tavily' || serverProvider === 'exa' || serverProvider === 'firecrawl' || serverProvider === 'xai' || serverProvider === 'searxng')
             && !webSearchApiKeyRef.current.trim()
             && !webSearchBaseUrlRef.current.trim()
           ) {
@@ -216,6 +218,7 @@ export function useWebSearchConfig(): UseWebSearchConfigResult {
     const serverProviderOption =
       webSearchServerProvider === 'tavily'
         || webSearchServerProvider === 'exa'
+        || webSearchServerProvider === 'firecrawl'
         || webSearchServerProvider === 'xai'
         || webSearchServerProvider === 'searxng'
         ? (webSearchServerProvider as WebSearchProviderOption)

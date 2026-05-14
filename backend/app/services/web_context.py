@@ -66,6 +66,10 @@ PROVIDER_CAPABILITIES: dict[str, ProviderSearchCapability] = {
         supports_domain_filter=True, supports_sources=True,
         domain_filter_mode="api", max_domains=1200,
     ),
+    "firecrawl": ProviderSearchCapability(
+        supports_domain_filter=True, supports_sources=True,
+        domain_filter_mode="api", max_domains=None,
+    ),
     "searxng": ProviderSearchCapability(
         supports_domain_filter=True, supports_sources=True,
         domain_filter_mode="query", max_domains=None,
@@ -353,6 +357,7 @@ _inflight_locks: dict[str, asyncio.Lock] = {}
 _WEB_SEARCH_URL_ALLOWLIST: dict[str, frozenset[str]] = {
     "tavily": frozenset({"api.tavily.com"}),
     "exa": frozenset({"api.exa.ai"}),
+    "firecrawl": frozenset({"api.firecrawl.dev"}),
     "xai": frozenset({"api.x.ai"}),
 }
 _LOCAL_WEB_SEARCH_PROXY_HOSTS: frozenset[str] = frozenset({
@@ -622,6 +627,8 @@ def _default_provider_base_url(provider: str) -> str:
         return "https://api.tavily.com/search"
     if normalized_provider == "exa":
         return "https://api.exa.ai/search"
+    if normalized_provider == "firecrawl":
+        return "https://api.firecrawl.dev/v2/search"
     if normalized_provider == "xai":
         return "https://api.x.ai/v1/responses"
     if normalized_provider == "searxng":
@@ -969,6 +976,88 @@ async def _search_exa(
     return snippets[:max_results]
 
 
+# ── Firecrawl Provider ─────────────────────────────────
+
+
+def _coerce_firecrawl_snippet_text(item: dict) -> str:
+    for field_name in ("description", "markdown", "snippet", "title"):
+        raw_value = item.get(field_name)
+        if isinstance(raw_value, str) and raw_value.strip():
+            return raw_value.strip()
+    return ""
+
+
+async def _search_firecrawl(
+    query: str,
+    request_config: WebSearchRequestConfig | None = None,
+    *,
+    include_domains: list[str] | None = None,
+) -> list[WebSearchSnippet]:
+    """Call Firecrawl v2 Search API and normalize web results into snippets."""
+    api_key = request_config.api_key if request_config else settings.WEB_SEARCH_API_KEY
+    if not api_key:
+        logger.warning("Firecrawl search skipped: WEB_SEARCH_API_KEY not configured")
+        return []
+
+    timeout = (
+        request_config.timeout_seconds
+        if request_config
+        else settings.WEB_SEARCH_TIMEOUT_SECONDS
+    )
+    max_results = settings.WEB_SEARCH_MAX_RESULTS
+    endpoint = (
+        request_config.base_url
+        if request_config and request_config.base_url
+        else _default_provider_base_url("firecrawl")
+    )
+
+    body: dict[str, object] = {
+        "query": query,
+        "limit": max_results,
+        "sources": [{"type": "web"}],
+    }
+    if include_domains:
+        safe_domains = _sanitize_domain_filters(include_domains)
+        if safe_domains:
+            body["includeDomains"] = safe_domains
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(
+            endpoint,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=body,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        _raise_for_provider_body_error("firecrawl", data)
+
+    raw_data = data.get("data") if isinstance(data, dict) else None
+    if isinstance(raw_data, dict):
+        raw_results = raw_data.get("web", [])
+    elif isinstance(raw_data, list):
+        raw_results = raw_data
+    else:
+        raw_results = []
+
+    snippets: list[WebSearchSnippet] = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        raw_text = _coerce_firecrawl_snippet_text(item)
+        raw_url = item.get("url", "")
+        if not isinstance(raw_text, str) or not isinstance(raw_url, str):
+            continue
+        text = _truncate_snippet(raw_text.strip())
+        url = _sanitize_url(raw_url.strip())
+        if text and url:
+            snippets.append(WebSearchSnippet(text=text, source_url=url))
+
+    result_snippets = snippets[:max_results]
+    if include_domains:
+        result_snippets = _filter_snippets_by_domain(result_snippets, include_domains)
+    return result_snippets
+
+
 # ── xAI Provider ───────────────────────────────────────
 
 
@@ -1218,6 +1307,7 @@ async def _search_xai(
 _PROVIDER_MAP = {
     "tavily": _search_tavily,
     "exa": _search_exa,
+    "firecrawl": _search_firecrawl,
     "searxng": _search_searxng,
     "xai": _search_xai,
 }

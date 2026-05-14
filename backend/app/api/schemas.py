@@ -177,8 +177,10 @@ class CreateScenarioRequest(BaseModel):
         if v is None:
             return None
         normalized = v.strip().lower()
-        if normalized not in {"tavily", "exa", "xai", "searxng"}:
-            raise ValueError("web_search_provider must be one of tavily, exa, xai, searxng")
+        if normalized not in {"tavily", "exa", "firecrawl", "xai", "searxng"}:
+            raise ValueError(
+                "web_search_provider must be one of tavily, exa, firecrawl, xai, searxng"
+            )
         return normalized
 
     @field_validator("user_id")

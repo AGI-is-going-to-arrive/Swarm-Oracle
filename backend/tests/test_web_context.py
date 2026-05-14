@@ -31,6 +31,7 @@ from app.services.web_context import (
     _resolve_request_config,
     _sanitize_url,
     _search_exa,
+    _search_firecrawl,
     _search_searxng,
     _search_tavily,
     _search_xai,
@@ -594,6 +595,7 @@ class TestWebSearchBaseUrlValidation:
     def test_official_providers_accept_matching_hosts(self):
         assert validate_web_search_base_url("tavily", "https://api.tavily.com/search") == "https://api.tavily.com/search"
         assert validate_web_search_base_url("exa", "https://api.exa.ai/search") == "https://api.exa.ai/search"
+        assert validate_web_search_base_url("firecrawl", "https://api.firecrawl.dev/v2/search") == "https://api.firecrawl.dev/v2/search"
         assert validate_web_search_base_url("xai", "https://api.x.ai/v1/responses") == "https://api.x.ai/v1/responses"
 
     def test_xai_accepts_local_development_proxy(self, monkeypatch):
@@ -614,6 +616,7 @@ class TestWebSearchBaseUrlValidation:
         [
             ("tavily", "http://api.tavily.com/search"),
             ("exa", "http://api.exa.ai/search"),
+            ("firecrawl", "http://api.firecrawl.dev/v2/search"),
             ("xai", "http://api.x.ai/v1/responses"),
         ],
     )
@@ -670,6 +673,111 @@ class TestExaProvider:
 
         snippets = await _search_exa("test")
         assert snippets == []
+
+
+class TestFirecrawlProvider:
+    @pytest.mark.asyncio
+    async def test_formats_v2_results_and_sends_domain_filters(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "fc-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 3)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        mock_response = httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "web": [
+                        {
+                            "url": "https://reuters.com/world/example",
+                            "title": "Reuters story",
+                            "description": "Firecrawl description A",
+                        },
+                        {
+                            "url": "https://bbc.com/news/example",
+                            "title": "BBC story",
+                            "markdown": "Firecrawl markdown B",
+                        },
+                        {
+                            "url": "https://ignored.example.com/unsafe",
+                            "description": "Filtered by local post-filter",
+                        },
+                    ]
+                },
+            },
+            request=httpx.Request("POST", "https://api.firecrawl.dev/v2/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_firecrawl(
+                "test query",
+                include_domains=[" Reuters.com ", "bad domain", "bbc.com"],
+            )
+
+        assert [snippet.source_url for snippet in snippets] == [
+            "https://reuters.com/world/example",
+            "https://bbc.com/news/example",
+        ]
+        assert snippets[0].text == "Firecrawl description A"
+        assert snippets[1].text == "Firecrawl markdown B"
+
+        call = mock_instance.post.call_args
+        assert call.args[0] == "https://api.firecrawl.dev/v2/search"
+        assert call.kwargs["headers"]["Authorization"] == "Bearer fc-test"
+        assert call.kwargs["json"] == {
+            "query": "test query",
+            "limit": 3,
+            "sources": [{"type": "web"}],
+            "includeDomains": ["reuters.com", "bbc.com"],
+        }
+
+    @pytest.mark.asyncio
+    async def test_no_api_key(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "")
+
+        snippets = await _search_firecrawl("test")
+
+        assert snippets == []
+
+    @pytest.mark.asyncio
+    async def test_skips_non_string_fields(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "fc-test")
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 5)
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_TIMEOUT_SECONDS", 5.0)
+
+        mock_response = httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "web": [
+                        {"url": 123, "description": "bad url"},
+                        {"url": "https://ok.example.com/a", "description": ["bad text"]},
+                        {"url": "https://ok.example.com/b", "title": "Good title"},
+                    ]
+                },
+            },
+            request=httpx.Request("POST", "https://api.firecrawl.dev/v2/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_firecrawl("test")
+
+        assert len(snippets) == 1
+        assert snippets[0].text == "Good title"
+        assert snippets[0].source_url == "https://ok.example.com/b"
 
 
 class TestXaiProvider:
@@ -1348,7 +1456,7 @@ class TestCacheHardening:
 class TestProviderCapabilities:
     def test_all_known_providers_have_capabilities(self):
         from app.services.web_context import PROVIDER_CAPABILITIES
-        for provider in ("tavily", "exa", "searxng", "xai", "native"):
+        for provider in ("tavily", "exa", "firecrawl", "searxng", "xai", "native"):
             assert provider in PROVIDER_CAPABILITIES
 
     def test_native_provider_no_domain_filter(self):
@@ -1360,6 +1468,13 @@ class TestProviderCapabilities:
     def test_xai_max_domains_is_five(self):
         from app.services.web_context import PROVIDER_CAPABILITIES
         assert PROVIDER_CAPABILITIES["xai"].max_domains == 5
+
+    def test_firecrawl_uses_api_domain_filter(self):
+        from app.services.web_context import PROVIDER_CAPABILITIES
+        cap = PROVIDER_CAPABILITIES["firecrawl"]
+        assert cap.supports_domain_filter is True
+        assert cap.supports_sources is True
+        assert cap.domain_filter_mode == "api"
 
     def test_capability_is_frozen(self):
         import dataclasses

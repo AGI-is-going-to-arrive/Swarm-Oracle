@@ -215,7 +215,7 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   visualizationEnabled?: boolean;
   webSearchEnabled?: boolean;
   webSearchFamilies?: WebSearchFamily[];
-  webSearchProvider?: 'tavily' | 'exa' | 'xai' | 'searxng';
+  webSearchProvider?: 'tavily' | 'exa' | 'firecrawl' | 'xai' | 'searxng';
   webSearchApiKey?: string;
   webSearchBaseUrl?: string;
   customAgentIdentityIds?: string[];

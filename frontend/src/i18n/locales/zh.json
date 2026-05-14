@@ -73,6 +73,7 @@
       "web_search_status_skipped": "未启用搜索增强",
       "web_search_provider_tavily_hint": "API 型搜索，支持域名过滤。",
       "web_search_provider_exa_hint": "API 型神经/网页搜索，支持域名过滤。",
+      "web_search_provider_firecrawl_hint": "API 型网页搜索，支持域名过滤，可选抓取能力。",
       "web_search_provider_xai_hint": "Responses web search，支持域名过滤，最多 5 个域名。",
       "web_search_provider_searxng_hint": "无需 API key；需要可访问的 SearXNG 实例，并通过 site: 查询过滤。",
       "web_search_no_provider_warning": "来源分类当前无法解析搜索服务。普通搜索仍会在 provider 请求成功时继续尝试。",

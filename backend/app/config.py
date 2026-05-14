@@ -65,7 +65,7 @@ class Settings(BaseSettings):
 
     # ── Web Search Enhancement ────────────────────────────
     ENABLE_WEB_SEARCH: bool = False
-    WEB_SEARCH_PROVIDER: str = "tavily"  # tavily | exa | xai | searxng
+    WEB_SEARCH_PROVIDER: str = "tavily"  # tavily | exa | firecrawl | xai | searxng
     WEB_SEARCH_API_KEY: str = ""
     XAI_WEB_SEARCH_MODEL: str = "grok-4.20-reasoning"
     XAI_WEB_SEARCH_TIMEOUT_SECONDS: float = 45.0
@@ -177,9 +177,10 @@ class Settings(BaseSettings):
     @classmethod
     def validate_web_search_provider(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {"tavily", "exa", "xai", "searxng", "native"}:
+        if normalized not in {"tavily", "exa", "firecrawl", "xai", "searxng", "native"}:
             raise ValueError(
-                "WEB_SEARCH_PROVIDER must be one of 'tavily', 'exa', 'xai', 'searxng', 'native'"
+                "WEB_SEARCH_PROVIDER must be one of "
+                "'tavily', 'exa', 'firecrawl', 'xai', 'searxng', 'native'"
             )
         return normalized
 

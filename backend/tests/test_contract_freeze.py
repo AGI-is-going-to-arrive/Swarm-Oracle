@@ -624,7 +624,10 @@ async def test_capabilities_web_search_providers_exact_shape_when_enabled():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", ["tavily", "exa", "searxng", "xai", "native", "unknown"])
+@pytest.mark.parametrize(
+    "provider",
+    ["tavily", "exa", "firecrawl", "searxng", "xai", "native", "unknown"],
+)
 async def test_capabilities_web_search_provider_capability_matches_registry(provider):
     """P4a: provider_capability mirrors the backend Web Search registry."""
     from app.api.scenarios import api_capabilities
@@ -784,6 +787,29 @@ class TestWebSearchBaseUrlAllowlist:
         from app.services.web_context import validate_web_search_base_url
 
         assert validate_web_search_base_url("exa", "http://api.exa.ai/search") is None
+
+    def test_firecrawl_accepts_exact_host_over_https(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        assert validate_web_search_base_url("firecrawl", "https://api.firecrawl.dev/v2/search") == (
+            "https://api.firecrawl.dev/v2/search"
+        )
+
+    def test_firecrawl_rejects_plain_http(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        assert (
+            validate_web_search_base_url("firecrawl", "http://api.firecrawl.dev/v2/search")
+            is None
+        )
+
+    def test_firecrawl_rejects_subdomain_substitution(self):
+        from app.services.web_context import validate_web_search_base_url
+
+        assert validate_web_search_base_url(
+            "firecrawl",
+            "https://api.firecrawl.dev.attacker.dev/v2/search",
+        ) is None
 
     def test_xai_accepts_exact_host_over_https(self):
         from app.services.web_context import validate_web_search_base_url

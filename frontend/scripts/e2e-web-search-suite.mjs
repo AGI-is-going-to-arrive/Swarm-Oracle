@@ -112,6 +112,8 @@ function defaultProviderBaseUrl(provider) {
   switch (provider) {
     case "exa":
       return "https://api.exa.ai/search";
+    case "firecrawl":
+      return "https://api.firecrawl.dev/v2/search";
     case "xai":
       return "https://api.x.ai/v1/responses";
     case "searxng":

@@ -2488,6 +2488,32 @@ describe('InputView P4-2 provider capability hints', () => {
     await user.selectOptions(select, 'searxng');
     const updatedHint = await screen.findByTestId('iv-provider-capability-hint');
     expect(updatedHint.getAttribute('data-provider')).toBe('searxng');
+
+    await user.selectOptions(select, 'firecrawl');
+    const firecrawlHint = await screen.findByTestId('iv-provider-capability-hint');
+    expect(firecrawlHint.getAttribute('data-provider')).toBe('firecrawl');
+  });
+
+  it('treats Firecrawl as an API-key provider with the official v2 endpoint placeholder', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+    await selectCustomOverride(user);
+
+    const select = screen.getByLabelText('home.web_search_provider_label') as HTMLSelectElement;
+    await user.selectOptions(select, 'firecrawl');
+
+    expect(screen.getByLabelText('home.web_search_api_key_label')).toBeInTheDocument();
+    expect(screen.queryByText('home.web_search_searxng_no_key')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /home\.web_search_custom_endpoint_toggle/i }));
+    const baseUrlInput = screen.getByLabelText('home.web_search_base_url_label') as HTMLInputElement;
+    expect(baseUrlInput.placeholder).toBe('https://api.firecrawl.dev/v2/search');
   });
 
   it('treats SearXNG as no-key search with an instance URL', async () => {
@@ -2616,10 +2642,11 @@ describe('inferProviderFromBaseUrl (P4-2 unit)', () => {
     expect(inferProviderFromBaseUrl('   ')).toBeNull();
   });
 
-  it('matches tavily/exa/xai/searxng hosts', async () => {
+  it('matches tavily/exa/firecrawl/xai/searxng hosts', async () => {
     const { inferProviderFromBaseUrl } = await import('../hooks/useWebSearchConfig');
     expect(inferProviderFromBaseUrl('https://api.tavily.com')).toBe('tavily');
     expect(inferProviderFromBaseUrl('https://api.exa.ai/search')).toBe('exa');
+    expect(inferProviderFromBaseUrl('https://api.firecrawl.dev/v2/search')).toBe('firecrawl');
     expect(inferProviderFromBaseUrl('https://api.x.ai/v1')).toBe('xai');
     expect(inferProviderFromBaseUrl('http://my-searxng.local/')).toBe('searxng');
   });
@@ -2635,6 +2662,7 @@ describe('inferProviderFromBaseUrl (P4-2 unit)', () => {
     expect(inferProviderFromBaseUrl('https://hexagon.io')).toBeNull();
     expect(inferProviderFromBaseUrl('https://mexamples.com')).toBeNull();
     expect(inferProviderFromBaseUrl('https://attacker-tavilyfake.com')).toBeNull();
+    expect(inferProviderFromBaseUrl('https://api.firecrawl.dev.attacker.dev')).toBeNull();
     expect(inferProviderFromBaseUrl('https://my-app-xai.io')).toBeNull();
     expect(inferProviderFromBaseUrl('https://attacker-searxngfake.com')).toBeNull();
     expect(inferProviderFromBaseUrl('https://notsearx.example.com')).toBeNull();

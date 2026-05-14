@@ -479,6 +479,8 @@ export function InputView() {
     switch (webSearchProvider) {
       case 'exa':
         return 'https://api.exa.ai/search';
+      case 'firecrawl':
+        return 'https://api.firecrawl.dev/v2/search';
       case 'xai':
         return 'https://api.x.ai/v1/responses';
       case 'searxng':
@@ -497,7 +499,7 @@ export function InputView() {
     webSearchUsesCustomOverride
     && webSearchBaseUrl.trim().length > 0
     && inferredCustomProvider == null;
-  const handleWebSearchProviderChange = (next: 'tavily' | 'exa' | 'xai' | 'searxng') => {
+  const handleWebSearchProviderChange = (next: 'tavily' | 'exa' | 'firecrawl' | 'xai' | 'searxng') => {
     setWebSearchProvider(next);
     if (next === 'searxng') {
       setWebSearchApiKey('');
@@ -1634,12 +1636,13 @@ export function InputView() {
                               id="web-search-provider"
                               className="input byok-input web-search-select"
                               value={webSearchProvider}
-                              onChange={(e) => handleWebSearchProviderChange(e.target.value as 'tavily' | 'exa' | 'xai' | 'searxng')}
+                              onChange={(e) => handleWebSearchProviderChange(e.target.value as 'tavily' | 'exa' | 'firecrawl' | 'xai' | 'searxng')}
                               disabled={isSubmitting}
                               aria-describedby="web-search-provider-capability-hint"
                             >
                               <option value="tavily">Tavily</option>
                               <option value="exa">Exa</option>
+                              <option value="firecrawl">Firecrawl</option>
                               <option value="xai">xAI</option>
                               <option value="searxng">SearXNG</option>
                             </select>
@@ -1659,9 +1662,11 @@ export function InputView() {
                                     ? 'Domain filtering is supported.'
                                     : webSearchProvider === 'exa'
                                       ? 'Domain filtering is supported.'
-                                      : webSearchProvider === 'xai'
-                                        ? 'Domain filtering is supported (up to 5 domains).'
-                                        : 'Self-hosted search. Filters via site: query syntax.',
+                                      : webSearchProvider === 'firecrawl'
+                                        ? 'API-backed search with domain filtering.'
+                                        : webSearchProvider === 'xai'
+                                          ? 'Domain filtering is supported (up to 5 domains).'
+                                          : 'Self-hosted search. Filters via site: query syntax.',
                               })}
                             </span>
                           </div>
