@@ -16,6 +16,7 @@ backend/.env
 backend/swarmoracle.db
 /swarmoracle.db
 backend/chroma_data/
+backend/chroma_data_backup_*/
 chroma_data/
 
 # Node / build
