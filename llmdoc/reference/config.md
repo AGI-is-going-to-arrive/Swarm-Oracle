@@ -208,6 +208,7 @@
 - LLM native search 不由 `WEB_SEARCH_PROVIDER=native` 开启；当前只在 `llm_call(native_search_domains=...)` 且 provider 被识别为支持 native search 的 Responses API 路径下启用。未知 proxy、malformed URL、非 http(s) URL 或 chat endpoint 不会注入 native tools。
 - Native search citations 会写入 `web_context_json.native_citations`，但只保留安全的 `http/https` URL。
 - xAI app-layer 搜索的 `web_search_base_url` 官方托管地址只接受 `https://api.x.ai/v1/responses`；非 production 下允许 localhost / 127.0.0.1 / ::1 这类本地 xAI-compatible Responses proxy 做实测。
+- SearXNG 不需要搜索 API key，但需要一个可访问的 SearXNG 实例；可以是本地 Docker / 自建服务 / 公共实例。公共实例不保证 JSON/API 可用性和稳定性。
 - 前端 toggle 为 opt-in（默认关闭）。InputView 当前默认显示搜索增强入口，不再要求 `VITE_ENABLE_WEB_SEARCH=true` 或服务端默认搜索已就绪。
 - `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认搜索是否 ready（`scope: "server"`）：
   - ready 时，首页可选 `沿用服务器默认`
@@ -216,7 +217,7 @@
 - 首页搜索增强当前有两档：
   - `沿用服务器默认`：只发送 `web_search_enabled=true`
   - `自定义覆盖`：额外发送 `web_search_provider / web_search_api_key / web_search_base_url`
-- 自定义覆盖下，前端只会从可识别的 `web_search_base_url` 推断 capability；空 base URL 或未知 host 会显示 no-provider warning，不会借用下拉 provider 的 capability。
+- 自定义覆盖下，前端会先从可识别的 `web_search_base_url` 推断 capability；base URL 为空时使用下拉选择的 provider capability，和后端默认 endpoint 解析保持一致；只有非空且未知的 host 才会显示 no-provider warning。
 - 首页 4 个 source family toggle 只有在 `web_search_enabled=true` 且当前 provider capability 支持 domain filter 时，才会透传成 `web_search_families`；关闭搜索或 capability 不支持时会清空选择。
 - request-scoped override 当前约束：
   - `web_search_enabled=false` 时，override 字段会被忽略

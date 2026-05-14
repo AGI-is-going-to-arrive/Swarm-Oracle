@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 from typing import Any
 
 from sqlalchemy import func
@@ -191,6 +192,43 @@ def _truncate_debug_text(value: Any, *, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return f"{text[: max_chars - 1]}…"
+
+
+_DIVERGE_MARKER_START_RE = re.compile(r"\[DIVERGE\s*[:：]", re.IGNORECASE)
+
+
+def _find_diverge_marker_end(text: str, start: int) -> int | None:
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return None
+
+
+def _strip_diverge_marker(text: str) -> str:
+    """Remove [DIVERGE: ...] markers from user-facing content.
+
+    The Pass-1 prompt instructs LLMs to emit these markers as internal fork
+    signals; they must not leak into the displayed agent message.
+    """
+    chunks: list[str] = []
+    search_from = 0
+    while True:
+        match = _DIVERGE_MARKER_START_RE.search(text, search_from)
+        if not match:
+            chunks.append(text[search_from:])
+            break
+        chunks.append(text[search_from:match.start()])
+        marker_end = _find_diverge_marker_end(text, match.start())
+        if marker_end is None:
+            break
+        search_from = marker_end
+    return "".join(chunks).rstrip()
 
 
 def _sanitize_fork_debug_signals(signals: list[str]) -> list[str]:
@@ -2162,6 +2200,7 @@ async def _gather_agent_messages(
                 _check_cancelled(scenario_id)
 
                 content = result.get("content", "") or raw_text
+                content = _strip_diverge_marker(content)
                 emotion = result.get("emotion", "neutral")
                 diverge = result.get("diverge")
                 if diverge and diverge.lower() in ("null", "none", ""):
@@ -2173,6 +2212,7 @@ async def _gather_agent_messages(
                 content = raw_text if raw_text else (
                     f"({agent['name']}沉默了)"
                 )
+                content = _strip_diverge_marker(content)
                 emotion = "neutral"
                 diverge = None
 

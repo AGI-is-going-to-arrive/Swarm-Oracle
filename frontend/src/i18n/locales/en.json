@@ -2587,6 +2587,7 @@
       "cancel_confirm_desc": "This will stop all ongoing reasoning. This action cannot be undone.",
       "cancel_confirm_action": "Yes, Cancel",
       "cancel_confirm_dismiss": "Continue",
+      "cancel_confirm_in_progress": "Cancelling simulation...",
       "cancelled_title": "Simulation Cancelled",
       "cancelled_desc": "The simulation was cancelled."
     },

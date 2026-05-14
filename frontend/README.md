@@ -95,7 +95,7 @@ React + TypeScript frontend for SwarmOracle.
 - `OnboardingGuide.tsx / useOnboardingState.ts`
   first-run homepage carousel; completion is stored locally and storage failure does not block scenario launch
 - `components/ui/alert-dialog.tsx`
-  shared Radix AlertDialog wrapper for InputView launch confirmation and Simulation cancel confirmation
+  shared Radix AlertDialog wrapper for InputView launch confirmation and Simulation cancel confirmation; the cancel dialog exposes busy state with `aria-busy` and a live status line while the cancel request is in flight
 - `ConversationHistoryPicker.tsx`
   shared scenario conversation history picker for EndingChatModal, RoundtableAgentChat, and NodeConversationSheet
 - `QuotaBadge.tsx`
@@ -194,12 +194,11 @@ npm run build:spike:phaser-custom
 ```
 
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
-- Latest Sprint 5-6 frontend verification:
+- Current frontend verification:
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
-  - full vitest: `184 files / 1983 tests / 0 failed`
-  - Sprint 5-6 focused rerun: `7 files / 104 tests passed`
+  - full vitest: `184 files / 2041 tests / 0 failed`
   - `npm run build`: pass, including performance budgets
-  - i18n parity: `en=2432 zh=2432`
+  - i18n parity: `en=2621 zh=2621`
   - browser recheck covered result fixture desktop/mobile Chromium `13/13`, capability matrix `30/30`, and manual pages `/`, `/agents/new`, `/leaderboard`, `/admin/setup`, `/me/journal` with no console warning/error or 375px horizontal overflow
 - Older Sprint 0-4 rows below are historical artifacts, not the current pass-count source.
 - Latest Sprint 0-2 browser matrix:

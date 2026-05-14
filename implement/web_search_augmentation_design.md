@@ -228,7 +228,7 @@ return {
 }
 ```
 
-前端消费路径：`InputView.tsx` 读取 `/api/capabilities`。搜索增强入口默认可见；server default 模式下 Source Family checkbox 由服务端 `provider_capability.supports_domain_filter` 控制。custom override 模式不会做实时探测，只会从可识别的 base URL 推断 Tavily / Exa / xAI / SearXNG；空 base URL 或未知 host 会显示 no-provider warning。
+前端消费路径：`InputView.tsx` 读取 `/api/capabilities`。搜索增强入口默认可见；server default 模式下 Source Family checkbox 由服务端 `provider_capability.supports_domain_filter` 控制。custom override 模式不会做实时探测；可识别的 base URL 会推断 Tavily / Exa / xAI / SearXNG，空 base URL 会使用下拉 provider 的 capability，只有非空且未知的 host 会显示 no-provider warning。
 
 ---
 
@@ -296,11 +296,10 @@ SESSION_SECRET=
 # 总开关（默认关闭）
 ENABLE_WEB_SEARCH=false
 
-# 搜索提供商: tavily | exa | searxng | xai | native
-# native 当前只是 legacy placeholder，不是已实现 provider
+# 搜索提供商: tavily | exa | searxng | xai
 WEB_SEARCH_PROVIDER=tavily
 
-# 搜索 API Key（searxng 和 native 模式不需要；native 会返回未实现/warn）
+# 搜索 API Key（searxng 不需要）
 WEB_SEARCH_API_KEY=
 
 # SearXNG 实例地址（仅 WEB_SEARCH_PROVIDER=searxng 时使用）

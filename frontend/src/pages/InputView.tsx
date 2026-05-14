@@ -336,6 +336,7 @@ export function InputView() {
   const reset = useSimulationStore((s) => s.reset);
   const [confirmDialogData, setConfirmDialogData] = useState<{ question: string } | null>(null);
   const isComposingRef = useRef(false);
+  const launchInFlightRef = useRef(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
   const continuityDialogRef = useRef<HTMLDivElement>(null);
@@ -858,6 +859,10 @@ export function InputView() {
     } catch {
       setWebSearchStatus('idle');
       setIsSubmitting(false);
+      setPendingLaunch(null);
+      setContinuityMatches([]);
+      setContinuityChoices({});
+      launchInFlightRef.current = false;
     } finally {
       document.body.classList.remove('has-pipeline-launching');
     }
@@ -891,12 +896,12 @@ export function InputView() {
     } catch (error) {
       console.warn('[InputView] identity continuity preflight failed', error);
       setContinuityError(continuityPreflightErrorCopy);
-      return true;
+      return false;
     }
   }, [buildSimulationOptions, caps?.agent_identity?.enabled, continuityPreflightErrorCopy]);
 
   const confirmContinuityLaunch = useCallback(async () => {
-    if (!pendingLaunch || isSubmitting) return;
+    if (!pendingLaunch || isSubmitting || launchInFlightRef.current) return;
     const overrides: ContinuityOverride[] = continuityMatches.map((match) => {
       const action = continuityChoices[match.continuity_key] ?? 'reuse_existing';
       return {
@@ -909,7 +914,12 @@ export function InputView() {
         agentRole: match.role,
       };
     });
-    await executeSimulationLaunch(pendingLaunch, overrides);
+    launchInFlightRef.current = true;
+    try {
+      await executeSimulationLaunch(pendingLaunch, overrides);
+    } finally {
+      launchInFlightRef.current = false;
+    }
   }, [
     continuityChoices,
     continuityMatches,
@@ -943,6 +953,7 @@ export function InputView() {
   const launchSimulation = async (launch: PendingSimulationLaunch) => {
     const trimmed = launch.nextQuestion.trim();
     if (!trimmed || isSubmitting) return;
+    if (launchInFlightRef.current) return;
     if (isSimulationBudgetBlocked) return;
     setWebSearchUrlError('');
     const byokValidation = validateByok({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
@@ -966,23 +977,31 @@ export function InputView() {
       }
     }
 
-    if (llmApiKey.trim() && !hasFreshProbe) {
-      const probe = await handleTestConnection();
-      if (!probe.ok) {
+    launchInFlightRef.current = true;
+    try {
+      if (llmApiKey.trim() && !hasFreshProbe) {
+        const probe = await handleTestConnection();
+        if (!probe.ok) {
+          return;
+        }
+      }
+
+      setIsSubmitting(true);
+      setConfirmDialogData(null);
+
+      const blockedByContinuityDialog = await maybeRunContinuityPreflight(launch);
+      if (blockedByContinuityDialog) {
+        setIsSubmitting(false);
+        launchInFlightRef.current = false;
         return;
       }
-    }
 
-    setIsSubmitting(true);
-    setConfirmDialogData(null);
-
-    const blockedByContinuityDialog = await maybeRunContinuityPreflight(launch);
-    if (blockedByContinuityDialog) {
+      await executeSimulationLaunch(launch);
+    } catch {
       setIsSubmitting(false);
-      return;
+    } finally {
+      launchInFlightRef.current = false;
     }
-
-    await executeSimulationLaunch(launch);
   };
 
   const launchDebate = async ({
@@ -1082,7 +1101,7 @@ export function InputView() {
 
   const requestLaunch = (q: string) => {
     const trimmed = q.trim();
-    if (!trimmed || isSubmitting) return;
+    if (!trimmed || isSubmitting || launchInFlightRef.current || isSimulationBudgetBlocked) return;
     setConfirmDialogData({ question: trimmed });
   };
 
@@ -1090,7 +1109,7 @@ export function InputView() {
     if (!confirmDialogData) return;
     const q = confirmDialogData.question;
     setConfirmDialogData(null);
-    handleSubmit(q);
+    void handleSubmit(q).catch(() => {});
   };
 
   const cancelLaunch = () => {

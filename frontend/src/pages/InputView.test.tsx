@@ -846,6 +846,63 @@ describe('InputView campaign progress', () => {
     });
   });
 
+  it('does not reopen launch confirmation while BYOK auto preflight is in flight', async () => {
+    const user = userEvent.setup();
+    let resolveProbe: (value: {
+      server: string;
+      llm: { status: string; model: string; response: string };
+      probe: null;
+    }) => void = () => {};
+    testLlmConnectionMock.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveProbe = resolve;
+      }),
+    );
+
+    window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
+      apiKey: 'sk-test',
+      baseUrl: '',
+      model: '',
+      reasoningEffort: '',
+      requestsPerMinute: null,
+      tokensPerMinute: null,
+      disableUserQuota: false,
+    }));
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
+    });
+    await user.type(screen.getAllByRole('textbox')[0], 'Launch with slow BYOK preflight');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(testLlmConnectionMock).toHaveBeenCalledTimes(1);
+    });
+
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(startSimulationMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveProbe({
+        server: 'ok',
+        llm: { status: 'ok', model: 'test-model', response: 'OK' },
+        probe: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('blocks simulation launch when BYOK baseUrl is set without an apiKey', async () => {
     const user = userEvent.setup();
     window.sessionStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify({
@@ -974,7 +1031,72 @@ describe('InputView campaign progress', () => {
     });
   });
 
-  it('blocks simulation start when identity continuity preflight fails', async () => {
+  it('ignores repeated continuity confirmation clicks while launch is in flight', async () => {
+    const user = userEvent.setup();
+    let resolveSimulation: (id: string) => void = () => {};
+
+    getCapabilitiesMock.mockResolvedValue({
+      agent_identity: { enabled: true },
+    });
+    identityPreflightMock.mockResolvedValueOnce({
+      needs_confirmation: true,
+      matches: [
+        {
+          name: 'Sun Tzu',
+          role: 'Military Strategist',
+          persona: 'Legendary Chinese warfare tactician',
+          continuity_key: 'ck-sun-tzu',
+          match_kind: 'l2_candidate',
+          needs_confirmation: true,
+          candidate_identity: {
+            id: 'identity-1',
+            display_name: 'Sun Tzu',
+            role: 'Military Strategist',
+            persona: 'Ancient Chinese general',
+            kind: 'generated',
+            continuity_key: 'legacy-ck',
+            similarity: 0.91,
+          },
+        },
+      ],
+      summary: {
+        agent_count: 1,
+        exact_match_count: 0,
+        candidate_count: 1,
+        new_identity_count: 0,
+      },
+    });
+    startSimulationMock.mockImplementationOnce(
+      () => new Promise<string>((resolve) => {
+        resolveSimulation = resolve;
+      }),
+    );
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getAllByRole('textbox')[0], 'What if Sun Tzu returns?');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    const dialog = await screen.findByRole('dialog', { name: 'Confirm identity continuity' });
+    const continueButton = within(dialog).getByRole('button', { name: 'Continue' });
+    fireEvent.click(continueButton);
+    fireEvent.click(continueButton);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      resolveSimulation('scenario-1');
+    });
+  });
+
+  it('proceeds with simulation when identity continuity preflight fails', async () => {
     const user = userEvent.setup();
 
     getCapabilitiesMock.mockResolvedValue({
@@ -995,8 +1117,9 @@ describe('InputView campaign progress', () => {
     await waitFor(() => {
       expect(identityPreflightMock).toHaveBeenCalledTimes(1);
     });
-    expect(startSimulationMock).not.toHaveBeenCalled();
-    expect(await screen.findByRole('alert')).toHaveTextContent('Identity continuity preflight failed. Please retry.');
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('publishes homepage challenge and growth summaries inside render_game_to_text', async () => {
@@ -2416,7 +2539,7 @@ describe('InputView P4-2 provider capability hints', () => {
     expect(warning.getAttribute('aria-live')).toBe('polite');
   });
 
-  it('shows no-provider warning for custom override until a recognisable base URL is set', async () => {
+  it('hides no-provider warning for custom override with empty base URL (dropdown fallback)', async () => {
     const user = userEvent.setup();
     getCapabilitiesMock.mockResolvedValue(buildBaseCapabilities());
 
@@ -2427,11 +2550,6 @@ describe('InputView P4-2 provider capability hints', () => {
     );
     await selectCustomOverride(user);
 
-    const warning = await screen.findByTestId('iv-no-provider-warning');
-    expect(warning).toBeInTheDocument();
-
-    const baseUrlInput = screen.getByLabelText('home.web_search_base_url_label') as HTMLInputElement;
-    await user.type(baseUrlInput, 'https://api.tavily.com');
     await waitFor(() => {
       expect(screen.queryByTestId('iv-no-provider-warning')).not.toBeInTheDocument();
     });

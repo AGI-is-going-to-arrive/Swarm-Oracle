@@ -76,7 +76,7 @@
 - 这些字段的当前口径：
   - 只有 `web_search_enabled=true` 时才会真正参与搜索
   - `web_search_families` 当前只接受 `polymarket / finance / academic / news_deep`；空白会 trim，重复值会去重
-  - 首页当前只会在 web search 已开启、且当前有效 provider capability 支持 domain filter 时发送已选 family；server default 读服务端 capability，custom override 只在 base URL 可识别时推断 capability
+  - 首页当前只会在 web search 已开启、且当前有效 provider capability 支持 domain filter 时发送已选 family；server default 读服务端 capability，custom override 有可识别 base URL 时按 URL 推断 capability，base URL 为空时按下拉 provider 使用 capability
   - `web_search_enabled=false` 时，override 字段会被忽略
   - 官方 provider 的 `web_search_base_url` 只接受 `https` endpoint
   - `searxng` 的 `web_search_base_url` 只接受和服务端 `SEARXNG_URL` 完全一致的基址
@@ -204,11 +204,12 @@
 - provider overrides 只能通过 `POST body` 传入，不能放在社交文案 `GET query` 中。
 - `export` 通过附件下载返回 Markdown 文件。
 - `/api/health`、`/api/health/test`、`/api/capabilities` 当前都属于业务 REST 门禁范围；`/` 和 `/metrics` 仍是显式例外。
-- `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认配置是否 ready（`scope: "server"`），不是 request-scoped custom override 探测结果。
+- `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认配置是否 ready（`scope: "server"`），不是 request-scoped custom override 探测结果。前端 custom override 为空 base URL 时使用下拉 provider 的本地 capability 表；非空未知 host 仍按 unknown 处理。
 - `web_search.provider_capability` 描述当前服务端默认搜索 provider 的能力：
   - `supports_domain_filter`
   - `supports_sources`
   - `domain_filter_mode`: `api / query / prompt / none`
+- 模型原生搜索不通过 `web_search.provider_capability` 表达。当前它由 runtime 在 LLM provider 支持 native search、且拿到 source family domains 时注入 provider tools；前端启动前没有单独的 native-search mode/capability 提示。
 - `FEATURE_NEW_SOURCES=true` 时，`web_search.providers.{family}.capability` 会给每个 family entry 附上同一套 domain-filter 能力摘要和 `max_domains`。
 - `GET /api/capabilities` 当前顶层 key 固定为：
   `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst / snapshot_export / education_templates / persona_export / prediction_journal`。
@@ -350,7 +351,7 @@
 
 - 所有 Phase 3 endpoint 在对应 `FEATURE_*=false` 时返回 404，不执行任何业务逻辑。
 - `FEATURE_KG_EXPLORER` 只控制 KG Explorer / Timeline Galaxy 的前端 capability gate；当前页面数据仍读取 `GET /api/scenario/{id}/causal-graph`，因此也需要 `FEATURE_CAUSAL_GRAPH=true`。
-- `POST /api/agents/identities/preflight` 当前只返回需要 L3 确认的 `L2 fuzzy candidate`；`L1 exact` 和全新 identity 不会阻断前端启动。解析阶段最多等待 10 秒；超时返回 `504 IDENTITY_PREFLIGHT_TIMEOUT`，调用方不应把它当成“无匹配”继续启动 scenario。
+- `POST /api/agents/identities/preflight` 当前只返回需要 L3 确认的 `L2 fuzzy candidate`；`L1 exact` 和全新 identity 不会阻断前端启动。解析阶段最多等待 10 秒；超时返回 `504 IDENTITY_PREFLIGHT_TIMEOUT`，后端不会把它包装成“无匹配”。当前首页启动流会提示 preflight 错误，但继续按无 continuity override 创建 scenario。
 - favorite 只写当前用户拥有的 identity；跨用户或不存在的 identity 返回 404，不泄漏数据。
 - `GET /api/agents/identities/{id}/memories` 会按 owner 校验，并返回最多 100 条 inspector memory。向量库不可用时仍返回 200，但会带机器可读的 `error` 字段，方便前端区分空记忆和基础设施错误。
 - `GET /api/agents/identities/{id}/growth-events` 当前要求 `user_id`；缺失时返回 400，identity 不存在或 owner 不匹配时返回 404。

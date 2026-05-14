@@ -200,7 +200,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- 最近 full vitest 基线：`184 files / 2038 tests passed`
+- 最近 full vitest 基线：`184 files / 2041 tests passed`
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -390,6 +390,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-14 | Session launch / web search settings 回归修复 | `InputView.tsx`：`launchInFlightRef` 防 BYOK 自动 preflight 和 continuity confirmation 重复启动；continuity preflight 失败时显示错误但继续按无 override 启动。`useWebSearchConfig.ts`：custom override 且 base URL 为空时使用下拉 provider capability，非空未知 host 才保留 unknown/no-provider。`SimulationView.tsx/css`：取消确认框补 busy 状态、`aria-busy`、`role=status`、reduced-motion/forced-colors/mobile 样式。验证：frontend full `184 files / 2041 tests passed`，`tsc / eslint / build` 通过，i18n `2621/2621` |
 | 2026-05-14 | Web Search P5 前端边界修复 | `SourceCategoryCard.tsx`：`status_reason` 新增可见 `<p aria-hidden="true">` 段落（`.result-source-card__reason-detail`），普通用户可看到后端具体失败原因；空字符串 reason 在 `ResultModals` 归一化为 undefined。`ResultModals.tsx`：卡片显示条件从 `live \|\| hasItems` 扩展为 `live \|\| hasItems \|\| hasExplainableEntry`（覆盖 failed/unsupported_provider/search_skipped/fallback_unconstrained），capability disabled 时带 historical badge。`WebSourcesSection.tsx`：放宽 snippets 必须为数组的 guard，native-only 场景（无 snippets）可独立渲染 citations；有 native citations 时抑制 "No live web sources" 空态文案。`ResultView.css`：新增 `.result-source-card__reason-detail` 样式 + forced-colors 覆盖。验证：frontend full `184 files / 2038 tests passed`，`tsc / eslint / build` 通过，i18n `2506/2506`；Playwright 实测 desktop 1280x800 + mobile 375x812 覆盖 status_reason 可见性、卡片显示条件、native-only citations、a11y 属性完整性 |
 | 2026-05-14 | Web Search P5 + legacy release sweep | `WebSourcesSection.tsx`：native citations 区域补 `aria-controls`/`id` 关联，collapsed body 保持 `inert` 与焦点兜底。`ResultView.css`：source trigger/link 补 `:focus-visible` 与 forced-colors Highlight/LinkText 覆盖。`e2e-native-search-suite.mjs` 覆盖 native citation render/safety/a11y/focus/empty/all-unsafe，默认跑 Chromium / Firefox / WebKit desktop + mobile；WebKit Tab-to-links 限制按脚本记录。`e2e-web-search-suite.mjs` 真实校验 custom override 请求体并脱敏 summary；`e2e-new-source-ingestion-live.mjs` 支持 live desktop/mobile、确认弹窗、source family state 展示和输出目录分区；`e2e-capability-matrix.mjs` 补当前 capability keys 与 web_search provider shape；`release-signoff.mjs` 纳入 web search live、capability matrix、new source ingestion live。验证：frontend full `184 files / 2038 tests passed`，`tsc / eslint / build` 通过，i18n `2506/2506`，真实 provider sweep 覆盖 Tavily / Exa / xAI-local / SearXNG-local |
 | 2026-05-12 | ArgumentMap verdict / DAG / mobile 收口 | `ArgumentMap.tsx`：dagre 排版改成 verdict -> claim -> evidence/rebuttal 三层，React Flow 边仍保留原始 source/target；支持/反驳/verdict 连边分别用绿色实线、红色虚线、紫色；节点按 proposition/opposition/judge 着色，verdict 节点显示 winner + 本地化“胜出 / wins”。状态筛选补数量 badge、按状态空态、搜索/筛选 transition、`/`/`F`/`Escape` 快捷键和双击节点 fit view。新增 `ArgumentMapMobileList.tsx` 与 `ArgumentMapTour.tsx`；移动端可切 Graph/List，tour 由 localStorage 控制只显示一次。`DebateArenaView.tsx` 的阶段地图默认折叠。i18n：en/zh 补齐 argument map 新 key 与 `common.skip/next/done`。验证：backend full pytest `2766 passed, 2 skipped`，frontend full vitest `184 files / 1994 tests passed`，backend/frontend lint、TypeScript、build、i18n parity 通过；Chrome DevTools 复核目标 debate 的桌面/移动端 argument map，console 0 error |

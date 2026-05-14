@@ -53,6 +53,7 @@ from app.services.simulator import (
     _save_messages,
     _save_narration,
     _save_round_summary,
+    _strip_diverge_marker,
     _summarize_identity_compaction_group,
     _update_branch_status,
     add_pending_intervention,
@@ -88,6 +89,28 @@ def _make_agent(engine, scenario_id, name="TestAgent", tier=AgentTier.IMPORTANT)
         session.add(a)
         session.commit()
         return a.id
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("", ""),
+        ("No fork marker here.", "No fork marker here."),
+        ("Speech. [DIVERGE: split over water rights]", "Speech."),
+        ("Speech. [DIVERGE：围绕路线分裂]", "Speech."),
+        ("Before [DIVERGE: hidden signal] after", "Before  after"),
+        ("Before [DIVERGE : hidden signal] after", "Before  after"),
+        ("Before [DIVERGE： use [A] branch] after", "Before  after"),
+        ("Before [DIVERGE: unclosed marker", "Before"),
+        (
+            "Before [diverge: first] middle [DIVERGE：second] after",
+            "Before  middle  after",
+        ),
+        (f"{'x' * 10_000} [DIVERGE: split]", "x" * 10_000),
+    ],
+)
+def test_strip_diverge_marker_handles_user_facing_edges(raw: str, expected: str):
+    assert _strip_diverge_marker(raw) == expected
 
 
 # ── _format_setting ──────────────────────────────────────────
@@ -1226,6 +1249,94 @@ class TestGatherHierarchicalMessages:
 
 
 class TestGatherAgentMessages:
+    @pytest.mark.asyncio
+    async def test_strips_diverge_marker_from_extracted_content(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        rid = _create_round(engine, bid, 1)
+
+        agent_id = _make_agent(engine, sid, name="谋士", tier=AgentTier.IMPORTANT)
+        with Session(engine) as session:
+            agent_dict = _agent_to_dict(session.get(Agent, agent_id))
+
+        async def _fake_llm_call_json(*args, **kwargs):
+            return {
+                "content": "稳住阵线 [DIVERGE：use [A] branch] 等候信号",
+                "emotion": "calm",
+                "diverge": None,
+            }
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        results = await _gather_agent_messages(
+            engine,
+            sid,
+            bid,
+            rid,
+            1,
+            [agent_dict],
+            "时代: 测试\n地点: 本地\n背景: marker 清理",
+            "是否推进",
+            language="Chinese",
+        )
+
+        assert results[0]["content"] == "稳住阵线  等候信号"
+
+    @pytest.mark.asyncio
+    async def test_strips_diverge_marker_from_raw_fallback_content(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="主线", probability=1.0)
+        rid = _create_round(engine, bid, 1)
+
+        agent_id = _make_agent(engine, sid, name="斥候", tier=AgentTier.IMPORTANT)
+        with Session(engine) as session:
+            agent_dict = _agent_to_dict(session.get(Agent, agent_id))
+
+        async def _fake_raw_llm_call(*args, **kwargs):
+            return "发现伏兵 [DIVERGE : 立即撤退]"
+
+        async def _raise_llm_call_json(*args, **kwargs):
+            raise RuntimeError("metadata extraction failed")
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _raise_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _raise_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_raw_llm_call)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        results = await _gather_agent_messages(
+            engine,
+            sid,
+            bid,
+            rid,
+            1,
+            [agent_dict],
+            "时代: 测试\n地点: 本地\n背景: fallback 清理",
+            "是否推进",
+            language="Chinese",
+        )
+
+        assert results[0]["content"] == "发现伏兵"
+        assert results[0]["emotion"] == "neutral"
+
     @pytest.mark.asyncio
     async def test_skips_db_recent_message_query_when_blackboard_has_context(self, monkeypatch):
         engine = get_engine()

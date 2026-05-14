@@ -36,6 +36,7 @@ const {
   getScenarioDirectorStateMock,
   getScenarioGameplayStateMock,
   importReplayScenarioMock,
+  cancelScenarioMock,
   createReplayArtifactMock,
   getReplayArtifactMock,
 } = vi.hoisted(() => ({
@@ -76,6 +77,7 @@ const {
     ...scenario,
     id: 'imported-sim-1',
   })),
+  cancelScenarioMock: vi.fn(async () => ({ status: 'cancelled' })),
   createReplayArtifactMock: vi.fn(async () => ({
     id: 'share-sim-1',
     kind: 'simulation_view_v1',
@@ -196,6 +198,7 @@ vi.mock('../api/client', async () => {
   const actual = await vi.importActual<typeof import('../api/client')>('../api/client');
   return {
     ...actual,
+    cancelScenario: cancelScenarioMock,
     createReplayArtifact: createReplayArtifactMock,
     getScenarioDirectorState: getScenarioDirectorStateMock,
     getScenarioGameplayState: getScenarioGameplayStateMock,
@@ -344,6 +347,8 @@ describe('SimulationView replay automation output', () => {
       archive: { key_moments: [], branch_snapshots: [] },
     }));
     importReplayScenarioMock.mockClear();
+    cancelScenarioMock.mockReset();
+    cancelScenarioMock.mockResolvedValue({ status: 'cancelled' });
     createReplayArtifactMock.mockClear();
     getReplayArtifactMock.mockReset();
     getReplayArtifactMock.mockResolvedValue(null);
@@ -615,6 +620,42 @@ describe('SimulationView replay automation output', () => {
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/\/sim\/scenario-1$/));
+    });
+  });
+
+  it('announces cancel progress while the cancel request is in flight', async () => {
+    const user = userEvent.setup();
+    let resolveCancel: (value: { status: string }) => void = () => {};
+    cancelScenarioMock.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveCancel = resolve;
+      }),
+    );
+    mockStore.scenario = {
+      ...baseScenario,
+      status: 'simulating',
+    };
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByTestId('simulation-cancel-button'));
+    const dialog = await screen.findByTestId('simulation-cancel-confirm');
+    await user.click(screen.getByTestId('simulation-cancel-confirm-action'));
+
+    expect(dialog).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByText('simulation.cancel_confirm_in_progress')).toHaveAttribute('role', 'status');
+    expect(cancelScenarioMock).toHaveBeenCalledWith('scenario-1');
+
+    await act(async () => {
+      resolveCancel({ status: 'cancelled' });
     });
   });
 

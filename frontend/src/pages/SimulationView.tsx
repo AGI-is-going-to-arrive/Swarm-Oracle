@@ -1299,12 +1299,17 @@ export function SimulationView() {
         }}
       >
         <AlertDialogContent
+          className="sim-cancel-dialog"
+          overlayClassName="sim-cancel-dialog-backdrop"
           aria-label={t('simulation.cancel_confirm_title')}
+          aria-busy={cancelInFlight}
           data-testid="simulation-cancel-confirm"
         >
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('simulation.cancel_confirm_title')}</AlertDialogTitle>
-            <AlertDialogDescription>
+          <AlertDialogHeader className="sim-cancel-dialog__header">
+            <AlertDialogTitle asChild>
+              <h3>{t('simulation.cancel_confirm_title')}</h3>
+            </AlertDialogTitle>
+            <AlertDialogDescription className="sim-cancel-dialog__desc">
               {t('simulation.cancel_confirm_desc')}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1313,8 +1318,14 @@ export function SimulationView() {
               {cancelError}
             </p>
           )}
-          <AlertDialogFooter>
+          {cancelInFlight && (
+            <p className="sim-cancel-dialog__busy" role="status" aria-live="polite">
+              {t('simulation.cancel_confirm_in_progress')}
+            </p>
+          )}
+          <AlertDialogFooter className="sim-cancel-dialog__footer">
             <AlertDialogCancel
+              className="btn btn-ghost"
               onClick={(event) => {
                 if (cancelInFlight) {
                   event.preventDefault();
@@ -1325,7 +1336,7 @@ export function SimulationView() {
               {t('simulation.cancel_confirm_dismiss')}
             </AlertDialogCancel>
             <AlertDialogAction
-              className="btn btn-danger"
+              className="btn sim-cancel-dialog__action"
               onClick={(event) => {
                 event.preventDefault();
                 void handleCancelConfirm();

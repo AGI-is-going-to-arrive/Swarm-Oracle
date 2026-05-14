@@ -277,7 +277,7 @@ npm run lint
 npm run build
 ```
 
-当前全仓验证最近记录：backend full pytest `2988 passed, 2 skipped`，`ruff check .` 通过；frontend full vitest `184 files / 2038 tests passed`，TypeScript noEmit、lint 与 build 通过，i18n parity 为 `2506/2506`。Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop 1440 与 mobile 375 六组合矩阵；native citation 复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵，WebKit Tab-to-links 按平台限制记录。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
+当前全仓验证最近记录：backend full pytest `3008 passed, 2 skipped`，`ruff check .` 通过；frontend full vitest `184 files / 2041 tests passed`，TypeScript noEmit、lint 与 build 通过，i18n parity 为 `2621/2621`。Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop 1440 与 mobile 375 六组合矩阵；native citation 复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵，WebKit Tab-to-links 按平台限制记录。Sprint 0-2 browser matrix 工件仍位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
@@ -355,9 +355,9 @@ npm run build
 最近稳定验证记录：
 
 - backend `ruff check .`：通过
-- backend 全量 `python -m pytest -q`：`2988 passed, 2 skipped`
+- backend 全量 `python -m pytest -q`：`3008 passed, 2 skipped`
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-- frontend full vitest：`184 files / 2038 tests passed`
+- frontend full vitest：`184 files / 2041 tests passed`
 - frontend `npm run lint`：通过
 - frontend `npm run build`：通过
 - frontend i18n key + placeholder parity：通过

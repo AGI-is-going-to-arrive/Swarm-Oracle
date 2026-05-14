@@ -37,7 +37,7 @@
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle) |
+| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记 |
 | Simulation Cancel | `backend/app/services/simulation_cancel.py` | scenario 取消 token、DB cancelled fallback 与后台任务取消信号 |
 | Preflight | `backend/app/services/preflight.py` | admin/CLI 预检：SQLite、ChromaDB、LLM、web search、CORS、volume |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
@@ -318,6 +318,7 @@
 - request-scoped BYOK / RPM / TPM 当前不仅作用在主 simulation turns，也会继续透传到 fork detection、narration、memory compression 与 identity compaction。
 - 搜索增强当前走 `web_context.py`：
   - app-layer provider 支持 `tavily / exa / xai / searxng`；`native` 仍是 legacy placeholder，preflight 会给 warn，不会当作已实现 provider pass
+  - 模型原生联网不是 `WEB_SEARCH_PROVIDER=native` 这条 app-layer provider；它来自 simulation runtime 把 source family domain 传给支持 native search 的非 proxy Responses API LLM provider
   - `POST /api/scenario` 可传 request-scoped `web_search_families / web_search_provider / web_search_api_key / web_search_base_url`
   - `web_search_enabled=false` 时，这些 override 字段会在路由层被忽略，不影响正常建局
   - custom provider override 不会再复用“另一个 provider”的服务端默认 key
@@ -418,7 +419,7 @@
 ## 当前验证基线
 
 - 当前 backend 稳定验证口径：
-  - `python -m pytest -q`：`2988 passed, 2 skipped`
+  - `python -m pytest -q`：`3008 passed, 2 skipped`
   - `ruff check .`：通过
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：

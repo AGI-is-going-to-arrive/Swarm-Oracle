@@ -183,8 +183,10 @@ export function useWebSearchConfig(): UseWebSearchConfigResult {
 
   // Resolve the effective capability for the current configuration:
   //  - custom_override + a usable base_url: infer from base_url host.
-  //  - custom_override without inference signal: treat as 'unknown' so the UI
-  //    does not claim domain filter support for an arbitrary endpoint.
+  //  - custom_override + an empty base_url: use the selected provider, matching
+  //    the backend's default endpoint resolution for that provider.
+  //  - custom_override + an unrecognized non-empty base_url: treat as unknown
+  //    so the UI does not promise domain-filter support for an arbitrary endpoint.
   //  - server_default: use the server-provided capability (or 'unknown' when
   //    the server is silent / no provider is configured).
   const effectiveProviderCapability = useMemo<EffectiveProviderCapability>(() => {
@@ -195,6 +197,13 @@ export function useWebSearchConfig(): UseWebSearchConfigResult {
           ...PROVIDER_CAPABILITY_TABLE[inferred],
           source: 'inferred',
           resolvedProvider: inferred,
+        };
+      }
+      if (!webSearchBaseUrl.trim()) {
+        return {
+          ...PROVIDER_CAPABILITY_TABLE[webSearchProvider],
+          source: 'inferred',
+          resolvedProvider: webSearchProvider,
         };
       }
       return {
@@ -237,6 +246,8 @@ export function useWebSearchConfig(): UseWebSearchConfigResult {
     };
   }, [
     webSearchMode,
+    webSearchBaseUrl,
+    webSearchProvider,
     inferredCustomProvider,
     serverProviderCapability,
     webSearchServerProvider,

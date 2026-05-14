@@ -133,8 +133,9 @@
 - InputView 当前在 `agent_identity` capability 开启时会在主模式启动前先调用 identity continuity preflight：
   - 只要命中 `L2 fuzzy candidate` 才会弹确认框
   - 用户可选 `复用已有身份` 或 `创建新身份`
-  - preflight 失败时会阻断启动并显示错误，不会静默绕过确认
+  - preflight 失败时会显示错误，但继续按无 continuity override 启动，不会把失败伪装成“无匹配”确认结果
   - 如果 preflight 打开确认框，submit loading 会先退出，避免按钮一直保持提交态
+  - BYOK 自动 preflight 或 continuity launch 仍在路上时，会用同步 ref guard 防重复弹 launch confirmation 或重复启动
 - InputView 当前还有两层启动确认：
   - 首次访问会显示 capability-aware onboarding carousel；完成或跳过后写入 localStorage
   - 真正 launch 前使用 Radix AlertDialog 展示问题和本局设置，关闭后把焦点还给 textarea
@@ -268,7 +269,8 @@
   - `provider_capability.supports_domain_filter=false` 时，4 个 source family toggle 会保持可见但不可选，并显示当前语言的说明
   - `沿用服务器默认` 模式只发送 `webSearchEnabled=true`
   - `自定义覆盖` 模式才发送 `webSearchProvider / webSearchApiKey / webSearchBaseUrl`
-  - 自定义覆盖的 provider capability 只从可识别的 base URL 推断；空 base URL 或未知 host 会显示 no-provider warning，不会借用当前下拉 provider 的 capability
+  - 自定义覆盖的 provider capability 会先从可识别的 base URL 推断；base URL 为空时使用当前下拉 provider 的 capability，只有非空未知 host 会显示 no-provider warning
+  - 模型原生搜索当前不是前端独立模式；首页只暴露 server default / custom override，native citations 只在后端 LLM native path 真的产出后由 ResultView 展示
   - SearXNG base URL 推断只看 hostname label token（`searx` / `searxng`），不会用任意子串匹配
   - 4 个 source family toggle 只有在搜索总开关开启、且当前 provider 支持 domain filter 时，才会把勾选结果透传成 `webSearchFamilies -> web_search_families`
   - 搜索总开关关闭，或 provider capability 从支持变成不支持时，已勾选的 source family 会被清空；重新打开不会恢复旧选择
@@ -293,7 +295,7 @@
   - `thinkingAgentCount`
   - `thinkingAgents`
   - classic live-fork fixture 已能直接观测“谁正在说话前的 thinking 态”
-- `SimulationView` 当前的 cancel 按钮走 Radix AlertDialog；确认后调用 `POST /api/scenario/{id}/cancel`，收到 cancelled 后保持终态，不把旧 WS 事件当成新一轮 live 状态。
+- `SimulationView` 当前的 cancel 按钮走 Radix AlertDialog；确认后调用 `POST /api/scenario/{id}/cancel`，请求 in-flight 时 dialog 标 `aria-busy`，显示 `role=status` 的取消中提示，并禁用关闭/确认按钮；收到 cancelled 后保持终态，不把旧 WS 事件当成新一轮 live 状态。
 - Classic 分支树当前直接消费 `store.branches[].title`。
   如果标题过短，前端只在展示层拼上 `description / fork_reason` 的第一句线索；干预弹窗等业务动作仍拿原始标题。
 - `SimulationView` 的默认 director objectives 只在后端和本地 meta 都没有 objectives 时补一次；seed key 按 `scenario / question / gameplay profile / signature card` 计算，避免同一局反复 backfill。
@@ -555,13 +557,13 @@
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
 - 当前 frontend 稳定验证口径：
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npx vitest run`：`184 files / 2038 tests passed`
+  - `npx vitest run --reporter=dot`：`184 files / 2041 tests passed`
   - `npm run lint`：通过
   - `npm run build`：通过
   - Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop `1440px` 与 mobile `375px` 六组合矩阵
   - native citation 浏览器复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵；WebKit Tab-to-links 按平台限制记录
   - legacy `e2e:web-search` 已用真实 provider 跑过 Tavily / Exa / xAI-local / SearXNG-local；`e2e:new-source-ingestion-live` 已跑 desktop + mobile live；`e2e:capability-matrix` 为 `30 passed / 0 failed`
-- frontend i18n key + placeholder parity：通过；当前 en/zh 都是 `2506` 个 key。
+- frontend i18n key + placeholder parity：通过；当前 en/zh 都是 `2621` 个 key。
 - Gate 3/Sprint 4 browser probe final rerun：desktop `10/10`、mobile `10/10`，工件位于 `frontend/output/e2e/codex-review/overall-rerun/`。
 - Sprint 0-2 browser matrix 当前工件位于 `frontend/output/e2e/sprint0-2-review-20260510-browser/summary.json`：12 个功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375，`72 passed / 0 failed`。
 - Classic 分支标题本轮已补定向验证：

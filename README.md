@@ -89,13 +89,13 @@
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响 |
 | Director Campaign | 已落地，含 goals、risk/resource、commitment、growth、后端 `score_breakdown` 与结果页导演复盘 / 因果档案 |
 | Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight`；设置 `ADMIN_TOKEN` 后 admin API 要求 `X-Admin-Token` |
-| Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；identity continuity preflight 超时会按 504 fail-closed，不会当成“无匹配”继续启动；自建 Agent 不开放 `CORE` 层级 |
+| Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；identity continuity preflight 超时会按 504 返回，后端不会把它伪装成“无匹配”；首页启动流当前会提示错误但继续按无 continuity override 启动；自建 Agent 不开放 `CORE` 层级 |
 | Persona Export / Import | 已落地，受 `FEATURE_PERSONA_EXPORT` gate；支持单个 / 批量导出 `schema_version=1` JSON；导入会为当前用户创建新的 custom Agent，并把 decision bias 归一化到安全的 5 维数值 |
 | Education Templates | 已落地，受 `FEATURE_EDUCATION_TEMPLATES` gate；首页可打开模板选择器，按学科与难度筛选后回填问题、Agent 数和轮数 |
 | Prediction Journal | 已落地，受 `FEATURE_PREDICTION_JOURNAL` gate；支持个人预测日志、resolve、校准曲线和 journal 页面；绑定 scenario 时按当前用户校验所有权，跨用户或无 owner 的旧 scenario 统一隐藏成 404，calibration 查询已走有界/索引路径 |
 | Leaderboard Segments | 已落地；`/api/leaderboard` 在传入 segment filters 时返回 `entries + segment_metadata`，并按匹配到的已评分 prediction 重新计算分段指标；不传筛选时保持旧数组响应 |
 | Hallucination Gate | 已接线为 warning-only 后处理；只给 verdict 附加 claims / evidence / warning metadata，不阻断生成结果；`threshold` 只影响 claim 是否标记为 verified，常见中英文否定会进入矛盾检测 |
-| Web Search / Source Family | 已落地为 opt-in 搜索增强；支持服务端默认搜索和当前请求自定义 `provider / API key / base URL`。Source Family 支持 `polymarket / finance / academic / news_deep`，按当前有效 provider capability 控制前端 family checkbox；server default 读服务端 capability，custom override 只在 base URL 可识别时推断 provider，未知时显示 no-provider warning。Tavily/Exa 走 API 域名过滤，SearXNG 走归一化 `site:` 查询 + URL 后过滤，xAI app-layer 走 `filters.allowed_domains` + URL 后过滤。xAI native search pilot 会在 Responses API 路径注入 provider tools，并把安全的 native citations 展示在 ResultView；native search 有 tool-call budget 和 citation cap，超出 tool-call budget 会 fail-closed。未知 proxy、malformed URL 或非 http(s) base URL 不启用 native tools；非 production 下可指向本地 xAI-compatible Responses proxy 做 app-layer 测试。LLM BYOK 和 Web Search BYOK 独立，不复用 key。 |
+| Web Search / Source Family | 已落地为 opt-in 搜索增强；支持服务端默认搜索和当前请求自定义 `provider / API key / base URL`。Source Family 支持 `polymarket / finance / academic / news_deep`，按当前有效 provider capability 控制前端 family checkbox；server default 读服务端 capability，custom override 有可识别 base URL 时按 URL 推断 provider，base URL 为空时按下拉 provider 使用默认 endpoint，只有非空且未知的 base URL 才显示 no-provider warning。Tavily/Exa 走 API 域名过滤，SearXNG 走归一化 `site:` 查询 + URL 后过滤；SearXNG 不需要搜索 API key，但需要可访问的 SearXNG 实例。xAI app-layer 走 `filters.allowed_domains` + URL 后过滤。模型原生联网是独立的 LLM native path：当 Source Family 域名传入支持 native search 的非 proxy Responses API provider 时注入 provider tools，并把安全的 native citations 展示在 ResultView；前端当前不把它暴露成独立搜索模式。native search 有 tool-call budget 和 citation cap，超出 tool-call budget 会 fail-closed。未知 proxy、malformed URL 或非 http(s) base URL 不启用 native tools；非 production 下可指向本地 xAI-compatible Responses proxy 做 app-layer 测试。LLM BYOK 和 Web Search BYOK 独立，不复用 key。 |
 | Counterfactual Replay & Compare | 已落地，支持 counterfactual / resume / compare；resume 当前会优先使用同分支 checkpoint picker，并把结构化 checkpoint summary 转成人话预览；续跑结局卡会标出来源分支和独立概率说明，compare 当前采用单活跃 Theater + shared round selector |
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale、readonly replay import；argument map 支持五种 verdict status、三层 DAG 和移动端列表；LLM cast 更新后 live 页会刷新名字、角色和 persona，长角色/人设可换行或展开，裁判卡显示本地化的 `待裁决 / 已裁决` 状态；只有分享链接过长并回退到本地只读 `?local=` 时，结果页才会明确显示 `Save local read-only copy` |
 | Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面代表改选当前支持 `drag-to-seat / keyboard reseat`，移动端保留 `click-to-seat`；桌面 roundtable committed transcript 当前已补长段折叠 / 展开，phase insight 展示和预填 prompt 会把长段复述压成一句；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到 anchored thread restore，并已补 Firefox / WebKit scoped regression；单结局结果页只暴露 `进入会客厅 / 只改一步`；已新增 `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 两种交互模式，证据卡追问会把用户引用的世界线保留到 assistant turn；completed live roundtable 的 `1-on-1 Interview` 会先展示代表的角色、世界线、立场、最近原话和人物简介；Oracle 主文案当前以 factual anchor + LLM generation/rewrite fallback 为主，角色身份和动态词汇提示按 `UNTRUSTED DATA` 处理，follow-up 空流式或仅 reasoning 输出会退回非流式改写，最终 fallback 也必须是可直接显示的人话 |
@@ -191,10 +191,10 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 当前稳定验证口径：
 
 - backend `ruff check .`：通过。
-- backend 全量 `python -m pytest -q`：`2988 passed, 2 skipped`。
+- backend 全量 `python -m pytest -q`：`3008 passed, 2 skipped`。
 - backend Web Search / Source Family 定向回归：`249 passed`；provider capability parity 定向：`6 passed`。
 - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过。
-- frontend 全量 `npx vitest run`：`184 files / 2038 tests passed`。
+- frontend 全量 `npx vitest run --reporter=dot`：`184 files / 2041 tests passed`。
 - frontend `npm run lint` 和 `npm run build`：通过。
 - frontend P4a Source Family 定向回归：`157 passed`。
 - Playwright 实测 Source Family 首页交互在桌面 `1440px` 与移动 `375px` 通过；Chromium / Firefox / WebKit 六组合矩阵通过。

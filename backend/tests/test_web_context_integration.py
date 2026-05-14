@@ -842,7 +842,9 @@ class TestBYOKKeyIsolation:
         the search key while the LLM path must NOT see it.
 
         We assert schema-level separation: the request accepts both fields
-        independently and the search path receives only the search key."""
+        independently and the search path receives only the search key. The
+        Tavily base URL is paired with an explicit provider so this contract
+        remains stable when the server default provider is SearXNG."""
         captured_config: dict[str, object] = {}
 
         async def _mock_fetch(
@@ -867,6 +869,7 @@ class TestBYOKKeyIsolation:
             resp = client.post("/api/scenario", json={
                 "question": "test reverse isolation",
                 "web_search_enabled": True,
+                "web_search_provider": "tavily",
                 "web_search_api_key": "tavily-search-key",
                 "web_search_base_url": "https://api.tavily.com",
                 # NO llm_api_key
@@ -875,6 +878,7 @@ class TestBYOKKeyIsolation:
         assert resp.status_code == 200
         # Web search path receives its own key.
         assert captured_config.get("api_key") == "tavily-search-key"
+        assert captured_config.get("provider") == "tavily"
         assert captured_config.get("base_url") == "https://api.tavily.com"
 
     def test_both_byok_keys_stay_separate(self, client):

@@ -198,7 +198,7 @@ backend/
 | 函数 | 说明 |
 |------|------|
 | `run_simulation(scenario_id, ws_callback, llm_overrides, branch_id)` | **主入口**，执行完整模拟流水线 (Stage 2 模拟 + Stage 3 叙事) |
-| `_gather_agent_messages(...)` | 并发收集所有 Agent 的 LLM 响应，支持 Blackboard 模式和 DB 直读模式 |
+| `_gather_agent_messages(...)` | 并发收集所有 Agent 的 LLM 响应，支持 Blackboard 模式和 DB 直读模式；用户可见 `content` 会清理内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记，`diverge` 字段仍独立给 fork 检测使用 |
 | `_gather_hierarchical_messages(...)` | P3-A 层级模式：仅 Leader Agent 调用 LLM，Worker 从 Leader 输出合成响应，1000 agent 降为 ~10 次 LLM 调用 |
 | `_detect_fork(...)` | 分歧检测：分析 Agent diverge 信号，通过 LLM 判断是否需要分叉时间线 |
 | `_compress_round_memory(...)` | 每 N 轮压缩记忆，更新 Blackboard 全局摘要 |
@@ -282,6 +282,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-14 | Agent diverge marker 清理 | `simulator.py`：新增 `_strip_diverge_marker()`，在 Pass-2 JSON extraction 成功路径和 raw fallback 路径清理用户可见 `content` 里的 `[DIVERGE: ...]` / `[DIVERGE：...]` 内部标记，支持冒号前空格、大小写、嵌套方括号和未闭合 marker；`diverge` 字段仍独立用于 fork 检测。`test_simulator.py` 覆盖空字符串、无 marker、半角/全角冒号、mid-text、未闭合、长文本、成功路径和 fallback 路径。验证：backend full `3008 passed, 2 skipped`，`ruff check .` 通过 |
 | 2026-05-14 | Web Search P5 前端边界修复 | `helpers.py`：`_parse_web_context_json` 将缺失 `snippets` 归一化为空列表，不再丢弃 native-only payload。`simulator.py`：native search domains 从 family selection 派生并传入 `llm_call`。`web_context.py`：`merge_native_citations_into_web_context_json` 清洗去重 native citations 写回 `web_context_json`。新增/扩展 `test_simulator.py`（144 行）、`test_web_context.py`（55 行）、`test_web_context_integration.py`（107 行）。验证：backend full `2991 passed, 7 skipped`，`ruff check .` 通过 |
 | 2026-05-14 | Web Search P5 release gate | `llm_client.py`：native-search tool-call budget 从日志口径收紧为 fail-closed，citation list 按 `NATIVE_SEARCH_MAX_CITATIONS` 截断，并继续通过 ContextVar 隔离每次调用。`native_search_adapters.py`：Protocol 增加 `detect_body_error / count_tool_calls / max_tool_calls`，xAI/OpenAI adapter 覆盖 top-level citations、annotations、failed `web_search_call` 与 `tool_use` 计数。`web_context.py`：provider body error 统一映射成 failed outcome，不回显 provider 原始 message；xAI app-layer 支持 text/event-stream Responses payload，非 production 下允许 localhost xAI-compatible proxy 做实测。新增/扩展 `test_llm_client.py`、`test_native_search_adapters.py`、`test_provider_contract_fixtures.py`、`test_web_context.py`。验证：backend full `2988 passed, 2 skipped`，`ruff check .` 通过；真实 provider sweep 覆盖 Tavily / Exa / xAI-local / SearXNG-local |
 | 2026-05-12 | Debate argument-map verdict linking 收口 | `debate_argument_map.py`：`link_verdict()` 改为五种状态 `accepted / standing / unaddressed / rebutted / rejected`，winner side 先读 node payload，payload 坏掉时回退 `DebateTurn.speaker_side`；没有 `supporting_turns` 时按 turn/句子顺序最多采纳 3 条 winner-side claim。verdict 节点 label 同步 `winner · verdict_tone`，payload 带 `judge_summary`；重复 verdict node 会收敛，缺 node 的 unit 只重算状态，不生成悬空 verdict edge。新增/扩展 `test_debate_argument_map.py` 覆盖五状态、空 supporting_turns fallback、malformed payload、orphan unit 和重复 verdict node；backend full pytest `2766 passed, 2 skipped`，ruff 0 errors |
