@@ -276,6 +276,74 @@ def _sanitize_domain_filters(
     return sanitized
 
 
+def _coerce_native_citation(citation: object) -> WebSearchSnippet | None:
+    if isinstance(citation, WebSearchSnippet):
+        raw_text = citation.text
+        raw_url = citation.source_url
+    elif isinstance(citation, dict):
+        raw_text = citation.get("text", "")
+        raw_url = citation.get("source_url", "")
+    else:
+        raw_text = getattr(citation, "text", "")
+        raw_url = getattr(citation, "source_url", "")
+
+    text = str(raw_text or "").strip()
+    url = _sanitize_url(str(raw_url or ""))
+    if not text or not url:
+        return None
+    return WebSearchSnippet(text=text[:500], source_url=url)
+
+
+def merge_native_citations_into_web_context_json(
+    raw: str | None,
+    citations: list[object] | None,
+    *,
+    query: str = "",
+    provider: str = "native",
+) -> str | None:
+    """Merge native-provider citations into a stored web context envelope.
+
+    App-layer search may fail while provider-native search still returns
+    citations. In that case we create a minimal WebSearchResult so the API can
+    expose the citations through the same response field.
+    """
+    incoming = [_coerce_native_citation(c) for c in (citations or [])]
+    safe_incoming = [c for c in incoming if c is not None]
+    if not safe_incoming:
+        return raw
+
+    result = WebSearchResult.from_json(raw) if raw else None
+    if result is None:
+        result = WebSearchResult(
+            query=query,
+            snippets=[],
+            provider=provider,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            cached=False,
+        )
+
+    seen_urls: set[str] = set()
+    merged: list[WebSearchSnippet] = []
+    for citation in [*result.native_citations, *safe_incoming]:
+        safe = _coerce_native_citation(citation)
+        if safe is None or safe.source_url in seen_urls:
+            continue
+        seen_urls.add(safe.source_url)
+        merged.append(safe)
+
+    if len(merged) == len(result.native_citations) and raw:
+        return raw
+
+    result.native_citations = merged
+    if not result.query:
+        result.query = query
+    if not result.provider:
+        result.provider = provider
+    if not result.timestamp:
+        result.timestamp = datetime.now(timezone.utc).isoformat()
+    return result.to_json()
+
+
 # ── In-Memory TTL Cache ─────────────────────────────────
 
 _MAX_CACHE_SIZE = 200

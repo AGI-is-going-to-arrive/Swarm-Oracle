@@ -38,6 +38,7 @@ from app.services.web_context import (
     clear_cache,
     fetch_web_context,
     format_context_block,
+    merge_native_citations_into_web_context_json,
     validate_web_search_base_url,
 )
 
@@ -119,6 +120,60 @@ class TestWebSearchResultSerialization:
         assert result is not None
         assert result.query == ""
         assert result.snippets == []
+
+    def test_merge_native_citations_sanitizes_dedupes_and_preserves_context(self):
+        raw = WebSearchResult(
+            query="AI trends 2026",
+            snippets=[WebSearchSnippet(text="Base", source_url="https://example.com/base")],
+            provider="tavily",
+            timestamp="2026-04-07T12:00:00Z",
+            family_context={
+                "finance": {
+                    "state": "unsupported_provider",
+                    "items": [],
+                    "status_reason": "Provider does not support domain filtering",
+                }
+            },
+            native_citations=[
+                WebSearchSnippet(text="Existing", source_url="https://example.com/native"),
+            ],
+        ).to_json()
+
+        merged = merge_native_citations_into_web_context_json(
+            raw,
+            [
+                WebSearchSnippet(text="Duplicate", source_url="https://example.com/native"),
+                WebSearchSnippet(text="Unsafe", source_url="javascript:alert(1)"),
+                WebSearchSnippet(text="Fresh", source_url="https://arxiv.org/abs/1234"),
+            ],
+            query="unused",
+            provider="xai",
+        )
+
+        restored = WebSearchResult.from_json(merged or "")
+        assert restored is not None
+        assert restored.query == "AI trends 2026"
+        assert restored.provider == "tavily"
+        assert restored.family_context["finance"]["status_reason"]
+        assert [c.source_url for c in restored.native_citations] == [
+            "https://example.com/native",
+            "https://arxiv.org/abs/1234",
+        ]
+
+    def test_merge_native_citations_can_create_context_when_base_search_failed(self):
+        merged = merge_native_citations_into_web_context_json(
+            None,
+            [WebSearchSnippet(text="Native hit", source_url="https://example.com/native")],
+            query="fallback question",
+            provider="xai",
+        )
+
+        restored = WebSearchResult.from_json(merged or "")
+        assert restored is not None
+        assert restored.query == "fallback question"
+        assert restored.provider == "xai"
+        assert restored.snippets == []
+        assert restored.native_citations[0].source_url == "https://example.com/native"
 
 
 class TestBuildSourceFamilyContext:

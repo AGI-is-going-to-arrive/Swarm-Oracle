@@ -164,7 +164,7 @@ docker compose up backend
 
 ## 测试与质量
 
-- **99 个 test_*.py 文件**，位于 `tests/`；最近 full pytest 为 `2988 passed, 2 skipped`
+- **99 个 test_*.py 文件**，位于 `tests/`；最近 full pytest 为 `2991 passed, 7 skipped`
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`
@@ -282,6 +282,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-14 | Web Search P5 前端边界修复 | `helpers.py`：`_parse_web_context_json` 将缺失 `snippets` 归一化为空列表，不再丢弃 native-only payload。`simulator.py`：native search domains 从 family selection 派生并传入 `llm_call`。`web_context.py`：`merge_native_citations_into_web_context_json` 清洗去重 native citations 写回 `web_context_json`。新增/扩展 `test_simulator.py`（144 行）、`test_web_context.py`（55 行）、`test_web_context_integration.py`（107 行）。验证：backend full `2991 passed, 7 skipped`，`ruff check .` 通过 |
 | 2026-05-14 | Web Search P5 release gate | `llm_client.py`：native-search tool-call budget 从日志口径收紧为 fail-closed，citation list 按 `NATIVE_SEARCH_MAX_CITATIONS` 截断，并继续通过 ContextVar 隔离每次调用。`native_search_adapters.py`：Protocol 增加 `detect_body_error / count_tool_calls / max_tool_calls`，xAI/OpenAI adapter 覆盖 top-level citations、annotations、failed `web_search_call` 与 `tool_use` 计数。`web_context.py`：provider body error 统一映射成 failed outcome，不回显 provider 原始 message；xAI app-layer 支持 text/event-stream Responses payload，非 production 下允许 localhost xAI-compatible proxy 做实测。新增/扩展 `test_llm_client.py`、`test_native_search_adapters.py`、`test_provider_contract_fixtures.py`、`test_web_context.py`。验证：backend full `2988 passed, 2 skipped`，`ruff check .` 通过；真实 provider sweep 覆盖 Tavily / Exa / xAI-local / SearXNG-local |
 | 2026-05-12 | Debate argument-map verdict linking 收口 | `debate_argument_map.py`：`link_verdict()` 改为五种状态 `accepted / standing / unaddressed / rebutted / rejected`，winner side 先读 node payload，payload 坏掉时回退 `DebateTurn.speaker_side`；没有 `supporting_turns` 时按 turn/句子顺序最多采纳 3 条 winner-side claim。verdict 节点 label 同步 `winner · verdict_tone`，payload 带 `judge_summary`；重复 verdict node 会收敛，缺 node 的 unit 只重算状态，不生成悬空 verdict edge。新增/扩展 `test_debate_argument_map.py` 覆盖五状态、空 supporting_turns fallback、malformed payload、orphan unit 和重复 verdict node；backend full pytest `2766 passed, 2 skipped`，ruff 0 errors |
 | 2026-05-11 | Sprint 4 KG realtime + snapshot/voice hardening | `causal_graph.py` 新增 `GraphDelta` 返回，`kg_realtime.py` 新增 coalescer，`ws.py` 注册 `kg:delta` / `kg:snapshot_invalidated` typed events；coalescer 已补串行 flush、broadcast timeout 与 pending drain。`snapshot_export.py` 导入校验改按物理 ZIP member 计数，拒绝重复 member name 和超过 256 个 member。`_content.py` voice variant 从 13→18，新增 `tech-visionary / journalist / educator / artist / entrepreneur`，并补 `medium` / `scale` 误分类回归。fresh backend full `pytest -x -q`: `2581 passed, 3 skipped, 9 warnings` |

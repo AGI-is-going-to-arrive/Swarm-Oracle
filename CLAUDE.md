@@ -50,7 +50,7 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 68+ 文件 / 2988 tests |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | 68+ 文件 / 2991 tests |
 | frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 184 文件 / 2038 tests |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
@@ -140,8 +140,10 @@ cd backend && alembic upgrade head
 - `llm_call()` 新增 `native_search_domains` 参数，Responses API 端点按 provider capability 自动注入 `tools`，citation 通过 ContextVar 暴露；malformed / non-http base URL 不启用 native tools
 - Native search budget：`NATIVE_SEARCH_MAX_TOOL_CALLS=5` 对单次 LLM 调用的 web search tool 调用数 fail-closed，`NATIVE_SEARCH_MAX_CITATIONS=50` 对 citation 列表截断
 - `detect_body_error` 已实现 xAI/OpenAI `web_search_call status=failed` 检测 + 通用 body `error` 字段检测；对外只返回通用 body-error reason，不回显 provider 原始 message
-- `native_citations` 字段已加入 `WebSearchResult` + `_parse_web_context_json` 白名单 + 前端 `WebSearchContext` 类型；后端和前端都会过滤非 http(s) citation URL
-- `WebSourcesSection` 展示 native citations（indigo 左边框 + oklch fallback + forced-colors + focus-visible），`aria-controls`/`id` 关联，并跳过 malformed replay / foreign payload
+- `native_citations` 字段已加入 `WebSearchResult` + `_parse_web_context_json` 白名单 + 前端 `WebSearchContext` 类型；后端和前端都会过滤非 http(s) citation URL；`_parse_web_context_json` 将缺失 `snippets` 归一化为空列表，不再丢弃 native-only payload
+- `WebSourcesSection` 展示 native citations（indigo 左边框 + oklch fallback + forced-colors + focus-visible），`aria-controls`/`id` 关联，并跳过 malformed replay / foreign payload；native-only 场景（无 snippets）仍可独立渲染 citations
+- `SourceCategoryCard` 的 `status_reason` 对普通用户可见（`.result-source-card__reason-detail`），screen reader 仍通过 `aria-describedby` → sr-only span 获取；空字符串 reason 归一化为 undefined
+- `ResultModals` 卡片显示条件：provider enabled OR 有 items OR family_context 含可解释状态（failed/unsupported_provider/search_skipped/fallback_unconstrained）；capability disabled 时带 historical badge
 
 ### 辩论竞技场
 - Persona：`generate_persona_with_llm()` + `build_cast_async()` 3 方并行，失败回退模板，持久化 `breakdown_json.metadata.personas`
@@ -186,6 +188,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
+| 05-14 | Web Search P5 前端边界修复：`SourceCategoryCard` status_reason 对普通用户可见（`aria-hidden` visible `<p>` + forced-colors 覆盖），`ResultModals` 卡片在可解释状态（failed/unsupported/skipped/fallback）下始终显示并带 historical badge，`WebSourcesSection` native-only 场景独立渲染 citations 并抑制空态文案，后端 `_parse_web_context_json` 缺失 snippets 归一化为空列表。BE 2991 / FE 2038 passed |
 | 05-14 | Web Search P5 Release Gate：native search tool-call budget（`NATIVE_SEARCH_MAX_TOOL_CALLS=5` fail-closed + `NATIVE_SEARCH_MAX_CITATIONS=50` 截断），`detect_body_error` 从空壳改为 xAI/OpenAI failed search call + 通用 body error 检测且不回显 provider 原始 message，`WebSourcesSection` a11y 加固（`aria-controls`/`id` 关联 + `:focus-visible` trigger/url + forced-colors Highlight），命名 E2E `e2e:native-search` 脚本（6 场景 x Chromium/Firefox/WebKit desktop+mobile），provider contract fixture 覆盖；legacy release sweep 追加真实调用 Tavily/Exa/xAI-local/SearXNG-local，并通过 `e2e:web-search`、`e2e:new-source-ingestion-live`、`e2e:capability-matrix`。BE 2988 / FE 2038 passed；WebKit Tab-to-links 为已知平台限制 |
 | 05-14 | Web Search P2-P5 hardening：`detect_provider` malformed/non-http URL 收口，native citations 后端/前端双层 sanitize，`ProviderSearchOutcome` 429/4xx/5xx 映射修正，default Responses URL tools 注入修正，ResultView timer cleanup，InputView advanced accordion 溢出修复。BE 2926 / FE 2037 passed |
 | 05-13 | Web Search P2-P4b release：P2 native/proxy 状态模型（`detect_provider` 15 hosts + `ProviderSearchOutcome` 结构化返回 + error code mapping）；P3 xAI native search pilot（adapter 框架 + `llm_call` tools 注入 + citation ContextVar）；P4b native citation UI（`WebSourcesSection` + oklch fallback + forced-colors）。BE 2908 / FE 2036 passed |

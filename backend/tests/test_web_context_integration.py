@@ -504,6 +504,47 @@ class TestSourceFamilyShortCircuitBaseline:
         assert family_called["called"] is False
         assert resp.json().get("web_search_context") is not None
 
+    def test_selected_families_are_passed_to_background_parse(self, client):
+        """Selected source families must survive the create route handoff.
+
+        The simulator uses the parsed context to decide whether native provider
+        search should receive server-controlled domain filters.
+        """
+        base_result = WebSearchResult(
+            query="native handoff",
+            provider="tavily",
+            timestamp="2026-05-14T00:00:00Z",
+            cached=False,
+            snippets=[WebSearchSnippet(text="Base", source_url="https://example.com/base")],
+        )
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=base_result,
+            ),
+            patch(
+                "app.services.web_context.fetch_family_context",
+                new_callable=AsyncMock,
+                return_value=_mock_family_context("finance", "academic"),
+            ),
+            patch("app.api.scenarios.parse_and_run_background") as parse_mock,
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "native handoff",
+                "web_search_enabled": True,
+                "web_search_families": ["finance", "academic"],
+            })
+
+        assert resp.status_code == 200
+        assert parse_mock.call_args is not None
+        assert parse_mock.call_args.kwargs["web_search_families"] == [
+            "finance",
+            "academic",
+        ]
+
     def test_family_exception_preserves_base_context(self, client):
         """P1-4 fix: when fetch_family_context raises, the base
         web_context_json is preserved.
@@ -875,3 +916,69 @@ class TestBYOKKeyIsolation:
         assert search_captured.get("provider") == "tavily"
         assert search_captured.get("api_key") != "sk-llm-key"
         assert search_captured.get("base_url") != "https://api.openai.com/v1"
+
+
+@pytest.mark.asyncio
+async def test_parse_and_run_background_persists_selected_web_search_families(monkeypatch):
+    """The parsed context is the simulator's source for native search domains."""
+    from app.api import helpers as helpers_api
+
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = Scenario(question="native search handoff")
+        session.add(scenario)
+        session.commit()
+        scenario_id = scenario.id
+
+    async def _fake_parse_question(*args, **kwargs):
+        return {
+            "setting": {},
+            "key_variable": "native search handoff",
+            "initial_title": "Native Search Handoff",
+            "agents": [{
+                "name": "Analyst",
+                "role": "researcher",
+                "persona": "careful",
+                "tier": "CORE",
+                "stance": "",
+            }],
+            "groups": [],
+            "simulation_rounds": 1,
+        }
+
+    async def _fake_run_sim_background(*args, **kwargs):
+        helpers_api._parse_phase_simulations.discard(scenario_id)
+        helpers_api._running_simulations.discard(scenario_id)
+        helpers_api.clear_cancel_token(scenario_id)
+        return None
+
+    monkeypatch.setattr(helpers_api, "parse_question", _fake_parse_question)
+    monkeypatch.setattr(helpers_api, "run_sim_background", _fake_run_sim_background)
+
+    await helpers_api.parse_and_run_background(
+        scenario_id,
+        question="native search handoff",
+        num_agents=1,
+        mode="raw",
+        hierarchical=False,
+        rounds=1,
+        visualization_enabled=False,
+        reasoning_effort=None,
+        temperature=None,
+        branch_sensitivity=None,
+        fork_prompt_variant=None,
+        fork_detector_active_branch_limit=None,
+        user_id=None,
+        llm_api_key=None,
+        llm_base_url=None,
+        llm_model=None,
+        llm_requests_per_minute=None,
+        llm_tokens_per_minute=None,
+        disable_user_quota=None,
+        web_search_families=["finance", "academic"],
+    )
+
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        assert scenario.parsed_context["web_search_families"] == ["finance", "academic"]

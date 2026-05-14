@@ -26,6 +26,10 @@ type SourceFamilyContext = NonNullable<WebSearchContext['family_context']>;
 type SourceFamilyEntry = NonNullable<SourceFamilyContext[WebSearchFamily]>;
 type SourceCardTarget = 'desktop' | 'mobile';
 
+const EXPLAINABLE_SOURCE_STATES: ReadonlySet<string> = new Set([
+  'failed', 'unsupported_provider', 'search_skipped', 'fallback_unconstrained',
+]);
+
 interface PendingEndingRoomPicker {
   branchId: string;
   roomType: 'ending_chamber' | 'one_move_only';
@@ -131,6 +135,8 @@ export default function ResultModals(props: ResultModalsProps) {
   const providers = capabilities?.web_search?.providers;
   const hasItems = (entry: { items?: unknown[] } | null | undefined): boolean =>
     Boolean(entry && Array.isArray(entry.items) && entry.items.length > 0);
+  const hasExplainableEntry = (entry: SourceFamilyEntry | null | undefined): boolean =>
+    Boolean(entry && typeof entry.state === 'string' && EXPLAINABLE_SOURCE_STATES.has(entry.state));
   const hasPolymarketData = hasItems(polymarketContext);
   const hasFinanceData = hasItems(financeContext);
   const hasAcademicData = hasItems(academicContext);
@@ -139,23 +145,25 @@ export default function ResultModals(props: ResultModalsProps) {
   const financeLive = Boolean(providers?.finance?.enabled);
   const academicLive = Boolean(providers?.academic?.enabled);
   const newsDeepLive = Boolean(providers?.news_deep?.enabled);
-  const showPolymarket = polymarketLive || hasPolymarketData;
-  const showFinance = financeLive || hasFinanceData;
-  const showAcademic = academicLive || hasAcademicData;
-  const showNewsDeep = newsDeepLive || hasNewsDeepData;
+  const showPolymarket = polymarketLive || hasPolymarketData || hasExplainableEntry(polymarketContext);
+  const showFinance = financeLive || hasFinanceData || hasExplainableEntry(financeContext);
+  const showAcademic = academicLive || hasAcademicData || hasExplainableEntry(academicContext);
+  const showNewsDeep = newsDeepLive || hasNewsDeepData || hasExplainableEntry(newsDeepContext);
 
-  const polymarketHistorical = !polymarketLive && hasPolymarketData;
-  const financeHistorical = !financeLive && hasFinanceData;
-  const academicHistorical = !academicLive && hasAcademicData;
-  const newsDeepHistorical = !newsDeepLive && hasNewsDeepData;
+  const polymarketHistorical = !polymarketLive && (hasPolymarketData || hasExplainableEntry(polymarketContext));
+  const financeHistorical = !financeLive && (hasFinanceData || hasExplainableEntry(financeContext));
+  const academicHistorical = !academicLive && (hasAcademicData || hasExplainableEntry(academicContext));
+  const newsDeepHistorical = !newsDeepLive && (hasNewsDeepData || hasExplainableEntry(newsDeepContext));
   const historicalLabel = t('result.source_historical', { defaultValue: 'Recorded' });
   const historicalTooltip = t('result.source_historical_tooltip', {
     defaultValue: 'This data was recorded when the scenario was created',
   });
   const getSourceCardTestId = (target: SourceCardTarget, family: WebSearchFamily) =>
     target === 'desktop' ? `result-sources-${family}` : `result-sources-mobile-${family}`;
-  const getSourceReason = (entry: SourceFamilyEntry | null | undefined) =>
-    entry?.status_reason ?? entry?.disabled_reason;
+  const getSourceReason = (entry: SourceFamilyEntry | null | undefined) => {
+    const raw = entry?.status_reason ?? entry?.disabled_reason;
+    return typeof raw === 'string' && raw.trim() ? raw : undefined;
+  };
   const renderHistoricalBadge = (target: SourceCardTarget, family: WebSearchFamily) => (
     <span
       className="result-source-card__historical-badge"

@@ -872,6 +872,7 @@ async def create_scenario(
                 override.model_dump()
                 for override in (req.continuity_overrides or [])
             ] or None,
+            web_search_families=req.web_search_families if req.web_search_enabled else None,
         )
     )
 

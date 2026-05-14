@@ -208,23 +208,34 @@ export function SourceCategoryCard({
         {subtitle && <p className="result-source-card__subtitle">{subtitle}</p>}
       </header>
       {hasReason && (
-        <span
-          id={reasonId}
-          data-testid={`${baseTestId}-reason`}
-          className="result-source-card__sr-reason"
-        >
-          {reason
-            ?? t(`source.${family}.${state}`, {
-              defaultValue:
-                state === 'failed'
-                  ? 'Source search failed for this category.'
-                  : state === 'unsupported_provider'
-                  ? 'Current search provider does not support this category.'
-                  : state === 'fallback_unconstrained'
-                  ? 'Search scope expanded — domain filtering unavailable.'
-                  : 'Search skipped.',
-            })}
-        </span>
+        <>
+          <span
+            id={reasonId}
+            data-testid={`${baseTestId}-reason`}
+            className="result-source-card__sr-reason"
+          >
+            {reason
+              ?? t(`source.${family}.${state}`, {
+                defaultValue:
+                  state === 'failed'
+                    ? 'Source search failed for this category.'
+                    : state === 'unsupported_provider'
+                    ? 'Current search provider does not support this category.'
+                    : state === 'fallback_unconstrained'
+                    ? 'Search scope expanded — domain filtering unavailable.'
+                    : 'Search skipped.',
+              })}
+          </span>
+          {reason && (
+            <p
+              className="result-source-card__reason-detail"
+              aria-hidden="true"
+              data-testid={`${baseTestId}-reason-detail`}
+            >
+              {reason}
+            </p>
+          )}
+        </>
       )}
       <div
         className="source-category-card__body result-source-card__body"

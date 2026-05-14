@@ -27,6 +27,7 @@ from app.models.database import get_engine
 from app.services.blackboard import Blackboard
 from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
+    get_last_native_citations,
     get_runtime_parallelism_limit,
     llm_call,
     llm_call_json,
@@ -113,6 +114,50 @@ class SimulationCancelled(Exception):
 def _check_cancelled(scenario_id: str) -> None:
     if is_cancelled(scenario_id):
         raise SimulationCancelled(scenario_id)
+
+
+def _native_search_domains_from_context(ctx: dict[str, Any]) -> list[str] | None:
+    selected_families = ctx.get("web_search_families")
+    if not isinstance(selected_families, list) or not selected_families:
+        return None
+
+    from app.services.web_context import FAMILY_DOMAIN_FILTERS, _sanitize_domain_filters
+
+    domains: list[str] = []
+    for family in selected_families:
+        if not isinstance(family, str):
+            continue
+        domains.extend(FAMILY_DOMAIN_FILTERS.get(family.strip(), []))
+    sanitized = _sanitize_domain_filters(domains)
+    return sanitized or None
+
+
+def _persist_native_citations(
+    engine,
+    scenario_id: str,
+    citations: list[object] | None,
+) -> bool:
+    if not citations:
+        return False
+
+    from app.services.web_context import merge_native_citations_into_web_context_json
+
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is None:
+            return False
+        next_json = merge_native_citations_into_web_context_json(
+            scenario.web_context_json,
+            citations,
+            query=scenario.question or "",
+            provider="native",
+        )
+        if not next_json or next_json == scenario.web_context_json:
+            return False
+        scenario.web_context_json = next_json
+        session.add(scenario)
+        session.commit()
+        return True
 
 
 async def _append_causal_graph_delta(
@@ -1127,6 +1172,7 @@ async def _run_simulation_impl(
     # P3-A: Detect hierarchical mode from parsed groups
     groups_data = ctx.get("groups", [])
     hierarchical = bool(groups_data) and ctx.get("hierarchical", False)
+    native_search_domains = _native_search_domains_from_context(ctx)
 
     # Build group membership lookup
     group_leaders: dict[str, str] = {}   # {group_name: leader_agent_name}
@@ -1371,6 +1417,7 @@ async def _run_simulation_impl(
                     agent_prev_emotions=agent_prev_emotions,
                     web_context_block=web_context_block,
                     scenario_user_id=scenario_user_id,
+                    native_search_domains=native_search_domains,
                 )
                 _check_cancelled(scenario_id)
             else:
@@ -1386,6 +1433,7 @@ async def _run_simulation_impl(
                     agent_prev_emotions=agent_prev_emotions,
                     web_context_block=web_context_block,
                     scenario_user_id=scenario_user_id,
+                    native_search_domains=native_search_domains,
                 )
                 _check_cancelled(scenario_id)
 
@@ -1896,6 +1944,7 @@ async def _gather_agent_messages(
     agent_prev_emotions: dict[str, str] | None = None,
     web_context_block: str = "",
     scenario_user_id: str = "",
+    native_search_domains: list[str] | None = None,
 ) -> list[dict]:
     """Gather messages from all agents for this round.
 
@@ -1908,6 +1957,7 @@ async def _gather_agent_messages(
     broadcast so refresh/resync cannot lose a message that the browser saw.
     """
     semaphore = asyncio.Semaphore(get_runtime_parallelism_limit())
+    native_citation_lock = asyncio.Lock()
 
     # Build shared context: prefer Blackboard briefing, fall back to DB
     if blackboard is not None:
@@ -2045,8 +2095,26 @@ async def _gather_agent_messages(
                             if _overrides.get("temperature") is not None
                             else 0.8
                         ),
+                        native_search_domains=native_search_domains,
                     )
                 _check_cancelled(scenario_id)
+                if native_search_domains:
+                    citations = get_last_native_citations()
+                    if citations:
+                        try:
+                            async with native_citation_lock:
+                                await asyncio.to_thread(
+                                    _persist_native_citations,
+                                    engine,
+                                    scenario_id,
+                                    citations,
+                                )
+                        except Exception:
+                            logger.debug(
+                                "native citation persistence failed for scenario %s",
+                                scenario_id,
+                                exc_info=True,
+                            )
 
                 # Pass-2: lightweight metadata extraction (bilingual + rich emotion vocabulary)
                 from app.services.llm_client import format_untrusted_text_block
@@ -2316,6 +2384,7 @@ async def _gather_hierarchical_messages(
     agent_prev_emotions: dict[str, str] | None = None,
     web_context_block: str = "",
     scenario_user_id: str = "",
+    native_search_domains: list[str] | None = None,
 ) -> list[dict]:
     """P3-A: Hierarchical message gathering.
 
@@ -2346,6 +2415,7 @@ async def _gather_hierarchical_messages(
         agent_prev_emotions=agent_prev_emotions,
         web_context_block=web_context_block,
         scenario_user_id=scenario_user_id,
+        native_search_domains=native_search_domains,
     )
     _check_cancelled(scenario_id)
 

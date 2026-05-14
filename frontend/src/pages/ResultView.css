@@ -3016,6 +3016,17 @@
   border: 0;
 }
 
+.result-source-card__reason-detail {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: var(--radius-sm);
+  word-break: break-word;
+}
+
 .result-source-card__notice {
   display: flex;
   align-items: flex-start;
@@ -3085,6 +3096,12 @@
   .result-source-card__fallback .result-source-card__notice,
   .result-source-card__failed .result-source-card__notice,
   .result-source-card__skipped .result-source-card__notice {
+    color: CanvasText;
+  }
+
+  .result-source-card__reason-detail {
+    border: 1px solid CanvasText;
+    background: Canvas;
     color: CanvasText;
   }
 }

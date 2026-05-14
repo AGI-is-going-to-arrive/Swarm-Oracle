@@ -673,6 +673,7 @@ async def parse_and_run_background(
     disable_user_quota: bool | None,
     custom_agent_identity_ids: list[str] | None = None,
     continuity_overrides: list[dict] | None = None,
+    web_search_families: list[str] | None = None,
 ):
     """Parse a scenario in the background, then hand off to the simulator.
 
@@ -811,6 +812,8 @@ async def parse_and_run_background(
         parsed["user_id"] = user_id
     if disable_user_quota and local_provider:
         parsed["disable_user_quota"] = True
+    if web_search_families:
+        parsed["web_search_families"] = list(web_search_families)
 
     # Only persist non-sensitive display config.
     if llm_base_url:
@@ -1117,10 +1120,10 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
             return None
         if not isinstance(parsed.get("provider"), str):
             return None
-        # Validate snippets is a list of well-formed dicts
+        # Validate snippets is a list of well-formed dicts (treat absent as [])
         snippets = parsed.get("snippets")
         if not isinstance(snippets, list):
-            return None
+            snippets = []
         safe_snippets = []
         for s in snippets:
             if not isinstance(s, dict):

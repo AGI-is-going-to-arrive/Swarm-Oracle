@@ -29,16 +29,20 @@ export default function WebSourcesSection() {
     blurCollapsedPanelFocus,
   } = useResultContext();
 
-  if (
-    !scenario?.web_search_context
-    || typeof scenario.web_search_context.query !== 'string'
-    || !Array.isArray(scenario.web_search_context.snippets)
-  ) {
+  const ctx = scenario?.web_search_context;
+  if (!ctx || typeof ctx.query !== 'string') {
     return null;
   }
 
-  const nativeCitations = Array.isArray(scenario.web_search_context.native_citations)
-    ? scenario.web_search_context.native_citations
+  const snippets = Array.isArray(ctx.snippets)
+    ? ctx.snippets.filter(
+        (s): s is { text: string; source_url: string } =>
+          s != null && typeof s.text === 'string',
+      )
+    : [];
+
+  const nativeCitations = Array.isArray(ctx.native_citations)
+    ? ctx.native_citations
       .map((citation) => {
         if (citation == null || typeof citation.text !== 'string') {
           return null;
@@ -48,6 +52,10 @@ export default function WebSourcesSection() {
       })
       .filter((citation): citation is { text: string; source_url: string } => citation != null)
     : [];
+
+  if (snippets.length === 0 && nativeCitations.length === 0 && !Array.isArray(ctx.snippets)) {
+    return null;
+  }
 
   return (
     <section className="result-web-sources">
@@ -70,19 +78,16 @@ export default function WebSourcesSection() {
       >
         <div className="result-web-sources__inner">
           <div className="result-web-sources__meta">
-            <span>{t('result.web_sources_query')}: {scenario.web_search_context.query}</span>
-            {typeof scenario.web_search_context.provider === 'string' && (
-              <span>{t('result.web_sources_provider')}: {scenario.web_search_context.provider}</span>
+            <span>{t('result.web_sources_query')}: {ctx.query}</span>
+            {typeof ctx.provider === 'string' && (
+              <span>{t('result.web_sources_provider')}: {ctx.provider}</span>
             )}
-            {scenario.web_search_context.cached && (
+            {ctx.cached && (
               <span>{t('result.web_sources_cached')}</span>
             )}
           </div>
           <div className="result-web-sources__list">
-            {scenario.web_search_context.snippets
-              .filter((s): s is { text: string; source_url: string } =>
-                s != null && typeof s.text === 'string')
-              .map((snippet, idx) => (
+            {snippets.map((snippet, idx) => (
               <article key={idx} className="result-web-sources__item">
                 <p className="result-web-sources__item-text">{snippet.text}</p>
                 {snippet.source_url && /^https?:\/\//i.test(snippet.source_url) && (
@@ -98,7 +103,7 @@ export default function WebSourcesSection() {
                 )}
               </article>
             ))}
-            {scenario.web_search_context.snippets.length === 0 && (
+            {snippets.length === 0 && nativeCitations.length === 0 && Array.isArray(ctx.snippets) && (
               <p className="result-web-sources__item-text">
                 {t('result.web_sources_empty', {
                   defaultValue: 'No live web sources matched this query.',

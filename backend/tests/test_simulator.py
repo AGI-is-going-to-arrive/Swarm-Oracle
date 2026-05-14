@@ -44,7 +44,9 @@ from app.services.simulator import (
     _get_recent_messages,
     _load_latest_compressed_briefing,
     _narrate_branch_data,
+    _native_search_domains_from_context,
     _normalized_active_branch_probabilities,
+    _persist_native_citations,
     _pick_theater_ending_payload,
     _resolve_hierarchical_agent_sets,
     _save_message,
@@ -59,6 +61,7 @@ from app.services.simulator import (
     reconcile_scenario_done_if_complete,
     run_simulation,
 )
+from app.services.web_context import WebSearchResult, WebSearchSnippet
 from app.visualization.mapper import VisualizationMapper
 
 # ── Module-level fake for the new Pass-1 natural-text call ────
@@ -280,6 +283,147 @@ class TestNormalizedActiveBranchProbabilities:
             assert persisted_b is not None
             assert persisted_a.probability == 0.625
             assert persisted_b.probability == 0.375
+
+
+class TestNativeSearchRuntimeWiring:
+    def test_native_search_domains_come_only_from_selected_source_families(self):
+        domains = _native_search_domains_from_context({
+            "web_search_families": [
+                "finance",
+                "academic",
+                "finance",
+                "unknown",
+                123,
+            ]
+        })
+
+        assert domains is not None
+        assert "reuters.com" in domains
+        assert "arxiv.org" in domains
+        assert domains.count("reuters.com") == 1
+        assert all(isinstance(domain, str) for domain in domains)
+
+    def test_native_search_domains_are_absent_without_selected_families(self):
+        assert _native_search_domains_from_context({}) is None
+        assert _native_search_domains_from_context({"web_search_families": []}) is None
+        assert _native_search_domains_from_context({"web_search_families": "finance"}) is None
+
+    def test_persist_native_citations_merges_into_scenario_web_context_json(self):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.web_context_json = WebSearchResult(
+                query="AI policy",
+                snippets=[],
+                provider="tavily",
+                timestamp="2026-05-14T00:00:00Z",
+                native_citations=[
+                    WebSearchSnippet(
+                        text="Existing",
+                        source_url="https://example.com/native",
+                    )
+                ],
+            ).to_json()
+            session.add(scenario)
+            session.commit()
+
+        changed = _persist_native_citations(
+            engine,
+            scenario_id,
+            [
+                WebSearchSnippet(text="Duplicate", source_url="https://example.com/native"),
+                WebSearchSnippet(text="New", source_url="https://arxiv.org/abs/5678"),
+                WebSearchSnippet(text="Unsafe", source_url="file:///tmp/leak"),
+            ],
+        )
+
+        assert changed is True
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            restored = WebSearchResult.from_json(scenario.web_context_json or "")
+
+        assert restored is not None
+        assert [c.source_url for c in restored.native_citations] == [
+            "https://example.com/native",
+            "https://arxiv.org/abs/5678",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_gather_agent_messages_passes_domains_and_persists_last_citations(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        branch_id = _create_branch(engine, scenario_id, title="Native branch")
+        round_id = _create_round(engine, branch_id, 1)
+        agent_id = _make_agent(engine, scenario_id, name="Native Analyst")
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.web_context_json = WebSearchResult(
+                query="AI policy",
+                snippets=[],
+                provider="tavily",
+                timestamp="2026-05-14T00:00:00Z",
+            ).to_json()
+            session.add(scenario)
+            agent = _agent_to_dict(session.get(Agent, agent_id))
+
+        captured_domains: list[list[str] | None] = []
+
+        async def _fake_llm_call(*args, **kwargs):
+            captured_domains.append(kwargs.get("native_search_domains"))
+            return "Native cited response"
+
+        async def _fake_llm_call_json(*args, **kwargs):
+            return {
+                "content": "Native cited response",
+                "emotion": "calm",
+                "diverge": None,
+            }
+
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "app.services.simulator.get_last_native_citations",
+            lambda: [WebSearchSnippet(text="Native citation", source_url="https://reuters.com/a")],
+        )
+
+        messages = await _gather_agent_messages(
+            engine,
+            scenario_id,
+            branch_id,
+            round_id,
+            1,
+            [agent],
+            "Era: Test\nLocation: Lab\nBackground: Runtime native citations",
+            "AI policy",
+            language="English",
+            native_search_domains=["reuters.com"],
+        )
+
+        assert messages[0]["content"] == "Native cited response"
+        assert captured_domains == [["reuters.com"]]
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            restored = WebSearchResult.from_json(scenario.web_context_json or "")
+
+        assert restored is not None
+        assert restored.native_citations[0].source_url == "https://reuters.com/a"
 
 
 class TestRunSimulation:
