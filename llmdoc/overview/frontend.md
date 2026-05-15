@@ -563,11 +563,13 @@
   - `cd frontend && npx tsc --noEmit`：通过
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
 - 当前 frontend 稳定验证口径：
-  - `npx tsc --noEmit && npm test -- --run`：`185 files / 2047 tests passed`
+  - `npx tsc --noEmit`：通过
+  - ResultView / ResultVerdictPanel / locale targeted vitest：`98 passed`
+  - full vitest：`185 files / 2047 tests passed`
   - `npx eslint src/ --max-warnings=0`：通过
   - `npm run build`：通过，performance budget 无 violations
-  - i18n parity spot-check：`en=67 zh=67 match=true`
-  - browser Result Quality 复核覆盖新结果页有 verdict、旧结果页无 verdict、英文切换、桌面与 `375x812` mobile，console 无 JS error
+  - i18n parity spot-check：`en=2509 zh=2509 equal=true`
+  - browser Result Quality 复核覆盖新结果页有 verdict 和分支答案、旧结果页无 verdict、语言切换、桌面与 `375x812` mobile，console 无 JS error
   - Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop `1440px` 与 mobile `375px` 六组合矩阵
   - native citation 浏览器复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵；WebKit Tab-to-links 按平台限制记录
   - legacy `e2e:web-search` 已用真实 provider 跑过 Tavily / Exa / xAI-local / SearXNG-local；`e2e:new-source-ingestion-live` 已跑 desktop + mobile live；`e2e:capability-matrix` 为 `30 passed / 0 failed`

@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | Result Quality gate: 3025 passed + 1 live LLM timeout |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 185 文件 / 2047 tests |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | Result Quality targeted: 15 passed；broad run 有 live/timeout follow-up |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 185 文件 / 2047 tests；i18n 2509/2509 |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -193,7 +193,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
-| 05-15 | Result Quality / Question Anchoring：`FEATURE_RESULT_VERDICT`、story `verdict / verdict_confidence / branches[].question_answer`、ResultView `ResultVerdictPanel` 和 branch answer 展示已接通；verdict 生成 fail-soft，prompt 输入继续走 untrusted-data guardrail。验证：backend 定向回归与 `ruff check app/` 通过，backend broad command 为 `1 failed, 3025 passed, 2 skipped, 2 deselected`（live LLM matrix timeout）；frontend `185 files / 2047 tests passed`，tsc/eslint/build/i18n spot-check 和新旧结果页浏览器复核通过 |
+| 05-15 | Result Quality / Question Anchoring：`FEATURE_RESULT_VERDICT`、story `verdict / verdict_confidence / branches[].question_answer`、ResultView `ResultVerdictPanel` 和 branch answer 展示已接通；verdict 生成 fail-soft，prompt 输入继续走 untrusted-data guardrail。验证：backend targeted `15 passed, 181 deselected`，`ruff check app/ tests/test_parser.py` 通过；backend broad command 为 `3 failed, 3024 passed, 7 skipped, 1 deselected`，其中 parser clamp 和 conversation abort 已单独复验通过，live LLM matrix 仍是 120s 慢路径风险；frontend `185 files / 2047 tests passed`，tsc/eslint/build/i18n `2509/2509` 和新旧结果页浏览器复核通过 |
 | 05-14 | Web Search P5 前端边界修复：`SourceCategoryCard` status_reason 对普通用户可见（`aria-hidden` visible `<p>` + forced-colors 覆盖），`ResultModals` 卡片在可解释状态（failed/unsupported/skipped/fallback）下始终显示并带 historical badge，`WebSourcesSection` native-only 场景独立渲染 citations 并抑制空态文案，后端 `_parse_web_context_json` 缺失 snippets 归一化为空列表。BE 2991 / FE 2038 passed |
 | 05-14 | Web Search P5 Release Gate：native search tool-call budget（`NATIVE_SEARCH_MAX_TOOL_CALLS=5` fail-closed + `NATIVE_SEARCH_MAX_CITATIONS=50` 截断），`detect_body_error` 从空壳改为 xAI/OpenAI failed search call + 通用 body error 检测且不回显 provider 原始 message，`WebSourcesSection` a11y 加固（`aria-controls`/`id` 关联 + `:focus-visible` trigger/url + forced-colors Highlight），命名 E2E `e2e:native-search` 脚本（6 场景 x Chromium/Firefox/WebKit desktop+mobile），provider contract fixture 覆盖；legacy release sweep 追加真实调用 Tavily/Exa/xAI-local/SearXNG-local，并通过 `e2e:web-search`、`e2e:new-source-ingestion-live`、`e2e:capability-matrix`。BE 2988 / FE 2038 passed；WebKit Tab-to-links 为已知平台限制 |
 | 05-14 | Web Search P2-P5 hardening：`detect_provider` malformed/non-http URL 收口，native citations 后端/前端双层 sanitize，`ProviderSearchOutcome` 429/4xx/5xx 映射修正，default Responses URL tools 注入修正，ResultView timer cleanup，InputView advanced accordion 溢出修复。BE 2926 / FE 2037 passed |

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import app.services.narrator as narrator_module
 from app.services.narrator import narrate_branch
 
 _FAKE_PASS1_TEXT = "Simulated narrative text for testing."
@@ -57,6 +58,63 @@ class TestNarrateBranch:
         )
 
         assert result["question_answer"] == "直接答案"
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
+    async def test_extract_prompt_includes_original_question(self, mock_extract, mock_pass1):
+        """Pass-2 extraction needs the question to produce anchored direct answers."""
+        mock_pass1.return_value = _FAKE_PASS1_TEXT
+        mock_extract.return_value = {
+            "story": "叙事正文",
+            "insight": "一句启示",
+            "question_answer": "直接答案",
+            "key_moments": [],
+        }
+        question = "如果供应链断裂，谁最先承压？"
+
+        await narrate_branch(
+            branch_title="测试分支",
+            probability=0.7,
+            agents_summary="A(角色1)",
+            raw_rounds="[R1 A]: 发言内容",
+            question=question,
+        )
+
+        extract_prompt = mock_extract.call_args[0][0]
+        assert "场景问题 / UNTRUSTED DATA" in extract_prompt
+        assert question in extract_prompt
+        assert "一句话直接回答用户的问题" in extract_prompt
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
+    async def test_extract_prompt_omits_question_answer_when_verdict_disabled(
+        self,
+        mock_extract,
+        mock_pass1,
+        monkeypatch,
+    ):
+        """Feature-off narration should not spend tokens extracting discarded fields."""
+        monkeypatch.setattr(narrator_module.settings, "FEATURE_RESULT_VERDICT", False)
+        mock_pass1.return_value = _FAKE_PASS1_TEXT
+        mock_extract.return_value = {
+            "story": "叙事正文",
+            "insight": "一句启示",
+            "key_moments": [],
+        }
+
+        await narrate_branch(
+            branch_title="测试分支",
+            probability=0.7,
+            agents_summary="A(角色1)",
+            raw_rounds="[R1 A]: 发言内容",
+            question="如果供应链断裂，谁最先承压？",
+        )
+
+        extract_prompt = mock_extract.call_args[0][0]
+        assert "question_answer" not in extract_prompt
+        assert "直接回答用户的问题" not in extract_prompt
 
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call", new_callable=AsyncMock)

@@ -282,8 +282,8 @@ npm run build
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_narrator.py tests/test_simulator.py tests/test_contract_freeze.py -q -k "question_answer or result_verdict or capabilities"
-ruff check app/
+python -m pytest tests/test_simulator.py tests/test_contract_freeze.py tests/test_parser.py -q -k "question_answer or result_verdict or capability or rounds_clamped"
+ruff check app/ tests/test_parser.py
 
 cd ../frontend
 npm test -- --run src/pages/ResultView.test.tsx src/pages/result/ResultVerdictPanel.test.tsx src/i18n/locales.test.ts
@@ -292,7 +292,7 @@ npx eslint src/ --max-warnings=0
 npm run build
 ```
 
-当前 Result Quality release-gate 记录：backend 定向回归和 `ruff check app/` 通过；backend broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e__blackboard_e2e.py -k "not scaled_benchmark and not test_parse_modern"` 为 `1 failed, 3025 passed, 2 skipped, 2 deselected`，失败项是 live LLM matrix timeout。frontend `npx tsc --noEmit && npm test -- --run` 为 `185 files / 2047 tests passed`，eslint、build、top-level i18n parity spot-check 通过。浏览器复核覆盖新 verdict 结果页、旧无 verdict 结果页、英文切换、桌面与 `375x812` mobile，console 无 JS error。Source Family 和 native citation 的历史 browser matrix 仍按对应 release 行读取，不代表本轮重新跑全浏览器矩阵。
+当前 Result Quality release-gate 记录：backend 定向回归为 `15 passed, 181 deselected`，`ruff check app/ tests/test_parser.py` 通过；backend broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e_alembic.py -k "not test_parse_modern"` 曾返回 `3 failed, 3024 passed, 7 skipped, 1 deselected`，后续确认 `test_rounds_clamped` 和 `test_abort_route_returns_within_100ms_for_stalled_stream` 可单独通过，`test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 是 live LLM matrix 在 `120s` timeout 下的慢路径风险。frontend `npx tsc --noEmit`、targeted vitest `98 passed`、full vitest `185 files / 2047 tests passed`、eslint、build 和 i18n parity `2509/2509` 通过。浏览器复核覆盖新 verdict 结果页、旧无 verdict 结果页、语言切换、桌面与 `375x812` mobile；本地 SQLite 场景数据回填后，指定新 verdict scenario 显示 12 个可见分支 answer cards，旧 scenario 仍无 verdict / answers。Source Family 和 native citation 的历史 browser matrix 仍按对应 release 行读取，不代表本轮重新跑全浏览器矩阵。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 

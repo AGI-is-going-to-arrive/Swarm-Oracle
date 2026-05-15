@@ -101,7 +101,7 @@ _RESULT_VERDICT_CONFIDENCE_VALUES = {"high", "medium", "low"}
 
 def _normalize_result_verdict_confidence(value: object) -> str | None:
     if value is None:
-        return None
+        return "medium"
     confidence = str(value).strip().lower()
     return confidence if confidence in _RESULT_VERDICT_CONFIDENCE_VALUES else "medium"
 
@@ -1415,8 +1415,9 @@ async def get_story(
                     replay_kind=b.replay_kind,
                     replay_source_branch_id=b.replay_source_branch_id,
                     question_answer=(
-                        str(answer).strip() or None
+                        answer.strip() or None
                         if (answer := branch_question_answers.get(b.id)) is not None
+                        and isinstance(answer, str)
                         else None
                     ),
                 ).model_dump()

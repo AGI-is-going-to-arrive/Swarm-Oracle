@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from app.config import settings
 from app.services.lang_detect import get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
@@ -231,17 +232,29 @@ async def narrate_branch(
 
         # Pass-2: extract structured fields
         extract_lang = "zh" if _is_chinese(language) else "en"
+        question_extract_block = f"\n\n{question_block}" if question_block else ""
+        question_answer_field = (
+            '"question_answer": "一句话直接回答用户的问题", '
+            if settings.FEATURE_RESULT_VERDICT
+            else ""
+        )
+        question_answer_field_en = (
+            '"question_answer": "one-sentence direct answer to the user\'s question", '
+            if settings.FEATURE_RESULT_VERDICT
+            else ""
+        )
         if extract_lang == "zh":
             raw_block = format_untrusted_text_block(
                 "原文", raw_story, max_chars=5000,
             )
             extract_prompt = (
-                f"从以下叙事文本中提取结构化信息。\n\n"
+                f"从以下叙事文本中提取结构化信息。"
+                f"{question_extract_block}\n\n"
                 f"{raw_block}\n\n"
                 f"输出严格 JSON：\n"
                 f'{{"story": "完整叙事正文（保留原文）", '
                 f'"insight": "一句话启示", '
-                f'"question_answer": "一句话直接回答用户的问题", '
+                f"{question_answer_field}"
                 f'"key_moments": ["转折点1", "转折点2"]}}'
             )
         else:
@@ -249,12 +262,13 @@ async def narrate_branch(
                 "Text", raw_story, max_chars=5000,
             )
             extract_prompt = (
-                f"Extract structured fields from the narrative below.\n\n"
+                f"Extract structured fields from the narrative below."
+                f"{question_extract_block}\n\n"
                 f"{raw_block}\n\n"
                 f"Output strict JSON:\n"
                 f'{{"story": "full narrative (preserve original)", '
                 f'"insight": "one-sentence takeaway", '
-                f'"question_answer": "one-sentence direct answer to the user\'s question", '
+                f"{question_answer_field_en}"
                 f'"key_moments": ["turning point 1", "turning point 2"]}}'
             )
         with llm_request_scope(purpose="scenario_narration"):

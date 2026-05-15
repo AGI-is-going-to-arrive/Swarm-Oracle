@@ -165,7 +165,7 @@ docker compose up backend
 
 ## 测试与质量
 
-- **99+ 个 test_*.py 文件**，位于 `tests/`；本轮 Result Quality gate 的 broad command 为 `1 failed, 3025 passed, 2 skipped, 2 deselected`，失败项是 live LLM matrix timeout
+- **99+ 个 test_*.py 文件**，位于 `tests/`；本轮 Result Quality targeted 为 `15 passed, 181 deselected`，broad command 为 `3 failed, 3024 passed, 7 skipped, 1 deselected`；parser clamp 和 conversation abort 已单独复验通过，剩余风险是 live LLM matrix 的 120s 慢路径
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`
@@ -185,7 +185,7 @@ backend/
     services/            # 业务逻辑 (23 个服务)
     visualization/       # 可视化映射 (5 个文件)
   alembic/               # 数据库迁移 (16 个版本)
-  tests/                 # 测试 (67 个文件)
+  tests/                 # 测试 (99+ 个 test_*.py 文件)
   pyproject.toml         # 项目配置
   Dockerfile             # Docker 构建
 ```
@@ -283,7 +283,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
-| 2026-05-15 | Result Quality / Question Anchoring | `config.py` 新增 `FEATURE_RESULT_VERDICT`；`simulator.py` 在主 scenario 完成后生成直接回答原问题的 verdict/confidence/question_answer，LLM malformed JSON、timeout 或空输出都 fail-soft；`narrator.py` 返回 branch `question_answer`；`scenarios.py` 在 story payload 中按 feature gate 回显 `verdict / verdict_confidence / branches[].question_answer`，并把未知 confidence 归一化为 `medium`。验证：Result Quality 定向回归通过，`ruff check app/` 通过；broad backend command 为 `1 failed, 3025 passed, 2 skipped, 2 deselected`，失败项 `test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 为 live LLM matrix timeout |
+| 2026-05-15 | Result Quality / Question Anchoring | `config.py` 新增 `FEATURE_RESULT_VERDICT`；`simulator.py` 在主 scenario 完成后生成直接回答原问题的 verdict/confidence/question_answer，LLM malformed JSON、timeout 或空输出都 fail-soft；`narrator.py` 返回 branch `question_answer`，Pass-2 extraction 会带原问题，feature off 时不再要求该字段；`scenarios.py` 在 story payload 中按 feature gate 回显 `verdict / verdict_confidence / branches[].question_answer`，未知 confidence 归一化为 `medium`，非字符串 branch answer 不回显。验证：Result Quality targeted `15 passed, 181 deselected`，`ruff check app/ tests/test_parser.py` 通过；broad backend command 为 `3 failed, 3024 passed, 7 skipped, 1 deselected`，其中 parser clamp 和 conversation abort 已单独复验通过，`test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 为 live LLM matrix 120s 慢路径风险 |
 | 2026-05-14 | Agent diverge marker 清理 | `simulator.py`：新增 `_strip_diverge_marker()`，在 Pass-2 JSON extraction 成功路径和 raw fallback 路径清理用户可见 `content` 里的 `[DIVERGE: ...]` / `[DIVERGE：...]` 内部标记，支持冒号前空格、大小写、嵌套方括号和未闭合 marker；`diverge` 字段仍独立用于 fork 检测。`test_simulator.py` 覆盖空字符串、无 marker、半角/全角冒号、mid-text、未闭合、长文本、成功路径和 fallback 路径。验证：backend full `3008 passed, 2 skipped`，`ruff check .` 通过 |
 | 2026-05-14 | Web Search P5 前端边界修复 | `helpers.py`：`_parse_web_context_json` 将缺失 `snippets` 归一化为空列表，不再丢弃 native-only payload。`simulator.py`：native search domains 从 family selection 派生并传入 `llm_call`。`web_context.py`：`merge_native_citations_into_web_context_json` 清洗去重 native citations 写回 `web_context_json`。新增/扩展 `test_simulator.py`（144 行）、`test_web_context.py`（55 行）、`test_web_context_integration.py`（107 行）。验证：backend full `2991 passed, 7 skipped`，`ruff check .` 通过 |
 | 2026-05-14 | Web Search P5 release gate | `llm_client.py`：native-search tool-call budget 从日志口径收紧为 fail-closed，citation list 按 `NATIVE_SEARCH_MAX_CITATIONS` 截断，并继续通过 ContextVar 隔离每次调用。`native_search_adapters.py`：Protocol 增加 `detect_body_error / count_tool_calls / max_tool_calls`，xAI/OpenAI adapter 覆盖 top-level citations、annotations、failed `web_search_call` 与 `tool_use` 计数。`web_context.py`：provider body error 统一映射成 failed outcome，不回显 provider 原始 message；xAI app-layer 支持 text/event-stream Responses payload，非 production 下允许 localhost xAI-compatible proxy 做实测。新增/扩展 `test_llm_client.py`、`test_native_search_adapters.py`、`test_provider_contract_fixtures.py`、`test_web_context.py`。验证：backend full `2988 passed, 2 skipped`，`ruff check .` 通过；真实 provider sweep 覆盖 Tavily / Exa / xAI-local / SearXNG-local |

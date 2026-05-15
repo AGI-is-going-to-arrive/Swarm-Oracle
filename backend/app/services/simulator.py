@@ -2673,10 +2673,10 @@ def _parse_result_verdict_json(raw_text: str) -> dict[str, Any]:
     try:
         parsed = json.loads(cleaned, strict=False)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-        if not match:
+        start = cleaned.find("{")
+        if start == -1:
             raise
-        parsed = json.loads(match.group(0), strict=False)
+        parsed, _ = json.JSONDecoder(strict=False).raw_decode(cleaned[start:])
     if not isinstance(parsed, dict):
         raise ValueError("verdict response is not a JSON object")
     return parsed

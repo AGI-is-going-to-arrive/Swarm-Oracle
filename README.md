@@ -191,11 +191,10 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 
 当前验证口径（2026-05-15 Result Quality release-gate）：
 
-- backend Result Quality 定向回归通过；`ruff check app/` 通过。
-- backend broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e__blackboard_e2e.py -k "not scaled_benchmark and not test_parse_modern"`：`1 failed, 3025 passed, 2 skipped, 2 deselected`；失败项是 `tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 的 live LLM matrix timeout。
-- frontend `npx tsc --noEmit && npm test -- --run`：`185 files / 2047 tests passed`。
-- frontend `npx eslint src/ --max-warnings=0` 和 `npm run build` 通过；i18n parity spot-check 为 `en=67 zh=67 match=true`。
-- 浏览器复核覆盖新结果页 `bd85148c-e739-4d22-a299-692532ff4154` 和旧结果页 `3daa95fe-8f30-48bd-b188-96961d2a1b12`；新页显示 verdict，旧页隐藏 verdict；桌面与 `375x812` 移动端无 JS console error，英文切换可用。
+- backend Result Quality 定向回归：`15 passed, 181 deselected`；`ruff check app/ tests/test_parser.py` 通过。
+- backend broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e_alembic.py -k "not test_parse_modern"`：`3 failed, 3024 passed, 7 skipped, 1 deselected`。后续单独确认 `test_rounds_clamped` 和 conversation abort timing 通过；`test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 是 live LLM matrix 在 120s timeout 下的慢路径风险。
+- frontend `npx tsc --noEmit`、targeted vitest `98 passed`、full vitest `185 files / 2047 tests passed`、`npx eslint src/ --max-warnings=0` 和 `npm run build` 通过；i18n parity spot-check 为 `en=2509 zh=2509 equal=true`。
+- 浏览器复核覆盖新结果页 `bd85148c-e739-4d22-a299-692532ff4154` 和旧结果页 `3daa95fe-8f30-48bd-b188-96961d2a1b12`；本地 SQLite 场景数据回填后，新页显示 verdict 和 12 个可见分支答案，旧页隐藏 verdict 且 answers=0；桌面与 `375x812` 移动端无 JS console error，语言切换可用。
 
 完整签收入口：
 

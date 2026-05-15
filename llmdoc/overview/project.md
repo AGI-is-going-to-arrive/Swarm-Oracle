@@ -188,14 +188,14 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - frontend ResultView / CausalReviewView / locale 定向：`126 passed`
     - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
-  - 本轮 Result Quality release-gate 后端定向回归与 `ruff check app/` 通过
-  - backend broad command 最近一次记录为 `1 failed, 3025 passed, 2 skipped, 2 deselected`；失败项是 `tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 的 live LLM matrix timeout
+  - 本轮 Result Quality release-gate 后端定向回归为 `15 passed, 181 deselected`；`ruff check app/ tests/test_parser.py` 通过
+  - backend broad command 最近一次记录为 `3 failed, 3024 passed, 7 skipped, 1 deselected`；parser clamp 和 conversation abort 已单独复验通过，剩余风险是 `tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 的 live LLM matrix 120s 慢路径
   - frontend `typecheck / lint / build / perf budgets` 通过
   - 本次 bridge/workbench 文案 + CausalReview guide key-node 标签窄集：`87 passed`
   - 本次前端 TypeScript noEmit：通过
   - frontend 全量 vitest 最近一次记录为 `185 files / 2047 tests passed`
   - frontend `npx tsc --noEmit` 最近一次记录为通过
-  - frontend eslint、build、i18n parity spot-check 与 Result Quality 新旧结果页浏览器复核通过
+  - frontend eslint、build、i18n parity `2509/2509` 与 Result Quality 新旧结果页浏览器复核通过；本地 SQLite 场景数据回填后，新 verdict 页显示 12 个可见分支 answer cards
   - 本轮真实验证还包括：
     - Classic 分支标题定向验证：
       - `cd frontend && npm exec -- vitest run src/components/BranchTree.test.tsx`：`5 passed`

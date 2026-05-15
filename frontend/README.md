@@ -195,11 +195,13 @@ npm run build:spike:phaser-custom
 
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Current frontend verification:
-  - `npx tsc --noEmit && npm test -- --run`: `185 files / 2047 tests passed`
+  - `npx tsc --noEmit`: pass
+  - targeted ResultView / ResultVerdictPanel / locale vitest: `98 passed`
+  - full vitest: `185 files / 2047 tests passed`
   - `npx eslint src/ --max-warnings=0`: pass
   - `npm run build`: pass, including performance budgets
-  - i18n parity spot-check: `en=67 zh=67 match=true`
-  - browser recheck covered one new result with verdict and one old result without verdict, desktop and `375x812` mobile, English language switch, and no console JS errors
+  - i18n parity spot-check: `en=2509 zh=2509 equal=true`
+  - browser recheck covered one new result with verdict and visible branch answers after local SQLite data backfill, plus one old result without verdict, desktop and `375x812` mobile, language switch, and no console JS errors
 - Older Sprint 0-4 rows below are historical artifacts, not the current pass-count source.
 - Latest Sprint 0-2 browser matrix:
   - browser matrix: `72/72 PASS` at `output/e2e/sprint0-2-review-20260510-browser/summary.json`

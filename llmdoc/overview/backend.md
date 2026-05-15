@@ -421,10 +421,10 @@
 ## 当前验证基线
 
 - 当前 Result Quality release-gate 后端验证口径：
-  - Result Quality narrator / simulator / story / capability contract 定向回归：通过
-  - `ruff check app/`：通过
-  - broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e__blackboard_e2e.py -k "not scaled_benchmark and not test_parse_modern"`：`1 failed, 3025 passed, 2 skipped, 2 deselected`
-  - 失败项：`tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix`，live LLM matrix timeout
+  - Result Quality narrator / simulator / story / capability / parser 定向回归：`15 passed, 181 deselected`
+  - `ruff check app/ tests/test_parser.py`：通过
+  - broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e_alembic.py -k "not test_parse_modern"`：`3 failed, 3024 passed, 7 skipped, 1 deselected`
+  - 后续确认：parser clamp 和 conversation abort timing 单独通过；`tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 是 live LLM matrix 在 120s timeout 下的慢路径风险
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：
   - `tests/test_causal_graph.py -q`：`68 passed`

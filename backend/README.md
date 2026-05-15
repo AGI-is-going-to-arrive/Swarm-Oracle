@@ -52,7 +52,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 |--------|------|-------------|
 | `GET` | `/` | Root info / process-level health |
 | `GET` | `/metrics` | Prometheus text metrics or minimal fallback text |
-| `GET` | `/api/capabilities` | Lightweight capability registry; includes `result_verdict` when configured |
+| `GET` | `/api/capabilities` | Lightweight capability registry; always includes `result_verdict`, with `enabled/version` reflecting `FEATURE_RESULT_VERDICT` |
 | `POST` | `/api/scenario` | Create scenario and return placeholder state immediately |
 | `GET` | `/api/scenario/{id}` | Scenario details with top-level `director_state` and `gameplay_state` |
 | `GET` | `/api/scenario/{id}/story` | Scenario story; with `FEATURE_RESULT_VERDICT=true` may include top-level `verdict / verdict_confidence` and `branches[].question_answer` |
@@ -99,10 +99,10 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 ```
 
 - Latest local backend verification for the Result Quality release-gate:
-  - Result Quality narrator / simulator / story / capability contract targeted tests: pass
-  - `ruff check app/`: pass
-  - broad backend command with the release-gate filter: `1 failed, 3025 passed, 2 skipped, 2 deselected`
-  - failure: `tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix`, live LLM matrix timeout
+  - Result Quality narrator / simulator / story / capability / parser targeted tests: `15 passed, 181 deselected`
+  - `ruff check app/ tests/test_parser.py`: pass
+  - broad backend command with the release-gate filter: `3 failed, 3024 passed, 7 skipped, 1 deselected`
+  - follow-up: parser clamp and conversation abort timing pass individually; `tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` remains a live LLM matrix slow path under the 120s timeout
 - Current release judgment still lives in `llmdoc/guides/development.md`; this file only keeps the latest backend headline.
 
 ## Runtime Notes

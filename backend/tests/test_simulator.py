@@ -45,6 +45,7 @@ from app.services.simulator import (
     _load_latest_compressed_briefing,
     _narrate_branch_data,
     _native_search_domains_from_context,
+    _parse_result_verdict_json,
     _normalized_active_branch_probabilities,
     _persist_native_citations,
     _persist_result_quality_verdict,
@@ -1908,6 +1909,25 @@ class TestFormatMessageForCompression:
 # ── _update_branch_status ────────────────────────────────────
 
 
+class TestParseResultVerdictJson:
+    def test_uses_first_json_object_when_response_has_trailing_object(self):
+        raw = (
+            'preface {"verdict":"供应链风险最高。","confidence":"high",'
+            '"question_answer":"供应链风险最高。"} extra {"note":"ignored"}'
+        )
+
+        result = _parse_result_verdict_json(raw)
+
+        assert result == {
+            "verdict": "供应链风险最高。",
+            "confidence": "high",
+            "question_answer": "供应链风险最高。",
+        }
+
+
+# ── _update_branch_status ────────────────────────────────────
+
+
 class TestUpdateBranchStatus:
     def test_to_completed(self):
         engine = get_engine()
@@ -2029,6 +2049,7 @@ class TestSaveNarration:
             scenario = session.get(Scenario, sid)
             result_quality = scenario.parsed_context["result_quality"]
             assert result_quality["verdict"] == "总体判断是供应链风险最高。"
+            assert result_quality["question_answer"] == "供应链风险最高。"
             assert result_quality["branch_question_answers"][bid] == (
                 "这条线说明风险会先集中在供应链。"
             )
@@ -2143,6 +2164,40 @@ async def test_get_story_normalizes_malformed_result_quality(monkeypatch):
                 "confidence": "certain",
                 "branch_question_answers": {
                     bid: "   ",
+                },
+            },
+        }
+        branch = session.get(Branch, bid)
+        branch.status = BranchStatus.COMPLETED
+        session.add(scenario)
+        session.add(branch)
+        session.commit()
+    monkeypatch.setattr(scenarios_api.settings, "SESSION_SECRET", "")
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_VERDICT", True)
+
+    payload = await scenarios_api.get_story(sid, principal=None)
+
+    assert payload["verdict"] == "总体判断是供应链风险最高。"
+    assert payload["verdict_confidence"] == "medium"
+    assert payload["branches"][0]["question_answer"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_story_defaults_missing_confidence_and_rejects_non_string_answer(
+    monkeypatch,
+):
+    import app.api.scenarios as scenarios_api
+
+    engine = get_engine()
+    sid = _make_scenario(engine)
+    bid = _create_branch(engine, sid, title="old_title")
+    with Session(engine) as session:
+        scenario = session.get(Scenario, sid)
+        scenario.parsed_context = {
+            "result_quality": {
+                "verdict": "总体判断是供应链风险最高。",
+                "branch_question_answers": {
+                    bid: {"answer": "供应链风险最高。"},
                 },
             },
         }

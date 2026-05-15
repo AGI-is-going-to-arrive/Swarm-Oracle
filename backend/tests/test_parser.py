@@ -7,7 +7,7 @@ import pytest
 
 import app.services.parser as parser_module
 from app.services.llm_client import LLMError
-from app.services.parser import parse_question
+from app.services.parser import _fallback_initial_title, parse_question
 
 
 class TestParseQuestion:
@@ -50,16 +50,44 @@ class TestParseQuestion:
         assert len(core_agents) >= 1
 
     @pytest.mark.asyncio
-    async def test_rounds_clamped(self):
+    async def test_rounds_clamped(self, monkeypatch):
         """simulation_rounds should be clamped to valid range."""
-        result = await parse_question("如果地球停止自转？", max_rounds=10)
-        assert 3 <= result["simulation_rounds"] <= 10
+        llm_mock = AsyncMock(return_value={
+            "setting": {"time_period": "未来", "location": "地球", "background": "测试背景"},
+            "key_variable": "自转停止",
+            "initial_title": "地球停转",
+            "agents": [
+                {
+                    "name": "地球物理学家",
+                    "role": "地球物理学家",
+                    "persona": "谨慎",
+                    "stance": "观望",
+                    "tier": "CORE",
+                },
+            ],
+            "simulation_rounds": 99,
+            "branch_sensitivity": 0.7,
+        })
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question("如果地球停止自转？", max_agents=1, max_rounds=10)
+
+        assert llm_mock.await_count == 1
+        assert result["simulation_rounds"] == 10
 
     @pytest.mark.asyncio
     async def test_sensitivity_clamped(self):
         """branch_sensitivity should be clamped to [0, 1]."""
         result = await parse_question("如果人类发明了时间机器？")
         assert 0.0 <= result["branch_sensitivity"] <= 1.0
+
+    def test_fallback_initial_title_strips_question_prefixes_before_truncating(self):
+        """Fallback titles should not keep generic what-if prefixes."""
+        assert _fallback_initial_title("如果诸葛亮多活十年？", "Chinese") == "诸葛亮多活十年"
+        assert (
+            _fallback_initial_title("What if the cabinet fractures?", "English")
+            == "the cabinet fractures"
+        )
 
     @pytest.mark.asyncio
     async def test_retries_underfilled_agent_plan_and_tops_up_small_shortfall(self, monkeypatch):

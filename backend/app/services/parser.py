@@ -338,24 +338,25 @@ def _should_replace_parse_result(current: dict, retry: dict) -> bool:
 
 def _fallback_initial_title(question: str, language: str) -> str:
     stripped = (question or "").strip()
-    if stripped:
-        compact_question = re.sub(r"\s+", " ", stripped)
-        compact_question = re.sub(r"[？?！!。,.，；;：:]+$", "", compact_question).strip()
-        if compact_question:
-            return f"{compact_question[:20]}...".strip()
-
     if language == "Chinese":
-        stripped = re.sub(r"^如果", "", stripped)
-        stripped = re.sub(r"[？?！!。,.，；;：:]+$", "", stripped)
-        return (stripped[:8] or "变局开端").strip()
+        stripped = re.sub(r"^如果", "", stripped).strip()
+        fallback = "变局开端"
+        limit = 20
+    else:
+        lowered = stripped.lower()
+        for prefix in ("what if", "if"):
+            if lowered.startswith(prefix):
+                stripped = stripped[len(prefix):].strip()
+                break
+        fallback = "Turning Point"
+        limit = 24
 
-    lowered = stripped.lower()
-    for prefix in ("what if", "if"):
-        if lowered.startswith(prefix):
-            stripped = stripped[len(prefix):].strip(" ?!.,:")
-            break
     compact = re.sub(r"\s+", " ", stripped)
-    return (compact[:24] or "Turning Point").strip()
+    compact = re.sub(r"[？?！!。,.，；;：:]+$", "", compact).strip()
+    if not compact:
+        return fallback
+    suffix = "..." if len(compact) > limit else ""
+    return f"{compact[:limit]}{suffix}".strip()
 
 
 def _build_unique_agent_name(
