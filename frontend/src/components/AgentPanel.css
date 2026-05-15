@@ -243,6 +243,45 @@
 
 /* ── Speech Bubble ─────────────────────────────────────── */
 
+.agent-worldline-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 0 12px 10px;
+  border-left: 2px solid var(--border-default);
+}
+
+.agent-worldline-group__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-left: 20px;
+}
+
+.agent-worldline-group__title {
+  min-width: 0;
+  flex: 1;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-worldline-group__rounds {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+}
+
 .speech-bubble-wrap {
   animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }

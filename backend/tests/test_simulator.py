@@ -45,8 +45,8 @@ from app.services.simulator import (
     _load_latest_compressed_briefing,
     _narrate_branch_data,
     _native_search_domains_from_context,
-    _parse_result_verdict_json,
     _normalized_active_branch_probabilities,
+    _parse_result_verdict_json,
     _persist_native_citations,
     _persist_result_quality_verdict,
     _pick_theater_ending_payload,
@@ -1463,6 +1463,70 @@ class TestGatherAgentMessages:
         assert "viz:bubble_show" in event_types
         assert "viz:agent_move" in event_types
         assert "viz:emotion_change" in event_types
+
+    @pytest.mark.asyncio
+    async def test_agent_prompt_includes_worldline_context_and_variation_guard(self, monkeypatch):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        parent_bid = _create_branch(engine, sid, title="原始主线", probability=0.6)
+        bid = _create_branch(
+            engine,
+            sid,
+            parent_branch_id=parent_bid,
+            fork_round=2,
+            fork_reason="资源优先投入客服中台，而不是继续卷模型榜单",
+            title="放大生态拿下默认入口",
+            probability=0.4,
+        )
+        rid = _create_round(engine, bid, 3)
+
+        agent_id = _make_agent(engine, sid, name="周鸿祎", tier=AgentTier.IMPORTANT)
+        with Session(engine) as session:
+            agent_dict = _agent_to_dict(session.get(Agent, agent_id))
+
+        captured_prompts: list[str] = []
+
+        async def _capture_llm_call(prompt, *_args, **_kwargs):
+            captured_prompts.append(prompt)
+            return "先别再说榜单，客服入口才是现金流。"
+
+        async def _fake_llm_call_json(*args, **kwargs):
+            return {
+                "content": "先别再说榜单，客服入口才是现金流。",
+                "emotion": "calm",
+                "diverge": None,
+            }
+
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.llm_call", _capture_llm_call)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await _gather_agent_messages(
+            engine,
+            sid,
+            bid,
+            rid,
+            3,
+            [agent_dict],
+            "时代: 现代\n地点: 北京\n背景: AI 应用竞争",
+            "DeepSeek 是否会改变企业软件入口",
+            language="Chinese",
+        )
+
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "当前世界线" in prompt
+        assert "放大生态拿下默认入口" in prompt
+        assert "资源优先投入客服中台" in prompt
+        assert "不要复用" in prompt
 
     @pytest.mark.asyncio
     async def test_respects_request_scoped_parallelism_limit(self, monkeypatch):

@@ -14,6 +14,8 @@ const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 const DEFAULT_OUTPUT_ROOT = path.join(FRONTEND_ROOT, "output", "e2e");
 const DEFAULT_PROVIDER = process.env.SWARM_WEB_SEARCH_PROVIDER || "tavily";
 const DEFAULT_API_KEY = process.env.SWARM_WEB_SEARCH_API_KEY || "web-search-e2e-dummy-key";
+const INTENSITY_VALUES = new Set(["light", "standard", "deep"]);
+const DEFAULT_INTENSITY = normalizeWebSearchIntensity(process.env.SWARM_WEB_SEARCH_INTENSITY || "standard");
 const DEFAULT_QUESTION = process.env.SWARM_WEB_SEARCH_QUESTION || "What happens if Melbourne bans all private cars for one year?";
 
 function resolveFrontendPath(inputPath) {
@@ -68,6 +70,14 @@ function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function normalizeWebSearchIntensity(value) {
+  const normalized = String(value || "standard").trim().toLowerCase();
+  if (!INTENSITY_VALUES.has(normalized)) {
+    throw new Error(`Unsupported web search intensity: ${value}`);
+  }
+  return normalized;
+}
+
 function parseArgs(argv) {
   const args = {
     baseUrl: DEFAULT_BASE_URL,
@@ -75,6 +85,7 @@ function parseArgs(argv) {
     provider: DEFAULT_PROVIDER,
     apiKey: DEFAULT_API_KEY,
     baseUrlOverride: "",
+    intensity: DEFAULT_INTENSITY,
     outputDir: "",
     headless: process.env.HEADLESS === "1",
   };
@@ -96,6 +107,9 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--base-url" && next) {
       args.baseUrlOverride = next;
+      i += 1;
+    } else if (arg === "--intensity" && next) {
+      args.intensity = normalizeWebSearchIntensity(next);
       i += 1;
     } else if (arg === "--output-dir" && next) {
       args.outputDir = resolveFrontendPath(next);
@@ -237,7 +251,17 @@ async function runWebSearchFlow(args) {
         capturedScenarioRequest = null;
       }
       const minimizedPayload = capturedScenarioRequest && typeof capturedScenarioRequest === "object"
-        ? { ...capturedScenarioRequest, rounds: 1, num_agents: 3 }
+        ? {
+            ...capturedScenarioRequest,
+            rounds: 1,
+            num_agents: 3,
+            web_search_enabled: false,
+            web_search_families: undefined,
+            web_search_provider: undefined,
+            web_search_api_key: undefined,
+            web_search_base_url: undefined,
+            web_search_intensity: undefined,
+          }
         : capturedScenarioRequest;
       await route.continue({
         headers: {
@@ -257,9 +281,31 @@ async function runWebSearchFlow(args) {
     await setRangeValue(page, "input.rounds-slider", 3);
     await setRangeValue(page, "input.agents-slider", 3);
     await page.getByLabel(/搜索增强推演|Search-Augmented Simulation/i).check();
-    await page.locator(".web-search-mode-switch .web-search-mode-btn").nth(1).click();
+    const advancedTrigger = page.locator(".iv-advanced__trigger").first();
+    if ((await advancedTrigger.count()) > 0 && (await advancedTrigger.getAttribute("aria-expanded")) !== "true") {
+      await advancedTrigger.click();
+    }
+    await page.getByTestId(`web-search-intensity-${args.intensity}`).click();
+    const changeProviderButton = page
+      .getByRole("button", { name: /Use my provider for this run|本轮改用我的搜索服务/i })
+      .first();
+    if ((await changeProviderButton.count()) > 0 && (await changeProviderButton.isVisible())) {
+      await changeProviderButton.click();
+    } else {
+      await page.locator(".web-search-mode-switch .web-search-mode-btn").nth(1).click();
+    }
+    await page.locator("#web-search-provider").waitFor({ state: "visible" });
     await page.locator("#web-search-provider").selectOption(args.provider);
-    await page.locator("#web-search-api-key").fill(args.apiKey);
+
+    const apiKeyInput = page.locator("#web-search-api-key");
+    if ((await apiKeyInput.count()) > 0 && await apiKeyInput.isVisible()) {
+      await apiKeyInput.fill(args.apiKey);
+    }
+
+    const baseUrlInput = page.locator("#web-search-base-url");
+    if ((await baseUrlInput.count()) === 0 || !(await baseUrlInput.isVisible())) {
+      await page.locator(".web-search-secondary-btn--inline").first().click();
+    }
     await page.locator("#web-search-base-url").fill(resolvedBaseUrl);
 
     const submitButton = page.getByRole("button", { name: /开始推演|Start Simulation/i });
@@ -287,11 +333,18 @@ async function runWebSearchFlow(args) {
     if (capturedScenarioRequest.web_search_provider !== args.provider) {
       throw new Error(`Expected web_search_provider=${args.provider}, got ${capturedScenarioRequest.web_search_provider}`);
     }
-    if (capturedScenarioRequest.web_search_api_key !== args.apiKey) {
+    if (args.provider === "searxng") {
+      if (capturedScenarioRequest.web_search_api_key) {
+        throw new Error("SearXNG scenario request unexpectedly included web_search_api_key");
+      }
+    } else if (capturedScenarioRequest.web_search_api_key !== args.apiKey) {
       throw new Error("Captured scenario request did not include the expected web_search_api_key");
     }
     if (capturedScenarioRequest.web_search_base_url !== resolvedBaseUrl) {
       throw new Error(`Expected web_search_base_url=${resolvedBaseUrl}, got ${capturedScenarioRequest.web_search_base_url}`);
+    }
+    if (capturedScenarioRequest.web_search_intensity !== args.intensity) {
+      throw new Error(`Expected web_search_intensity=${args.intensity}, got ${capturedScenarioRequest.web_search_intensity}`);
     }
 
     await page.screenshot({ path: path.join(outputDir, "web-search-custom-simulation.png"), type: "png" });
@@ -299,6 +352,7 @@ async function runWebSearchFlow(args) {
     const summary = {
       mode: "web-search",
       provider: args.provider,
+      intensity: args.intensity,
       baseUrl: resolvedBaseUrl,
       question: args.question,
       finalUrl: page.url(),

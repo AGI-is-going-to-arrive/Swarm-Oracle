@@ -71,6 +71,14 @@ describe('i18n locale resources', () => {
     expect(zh.translation.home.reasoning_low).toBe('轻量');
     expect(zh.translation.home.reasoning_medium).toBe('均衡');
     expect(zh.translation.home.reasoning_high).toBe('深入');
+    expect(en.translation.home.web_search_intensity_label).toBe('Search Depth');
+    expect(zh.translation.home.web_search_intensity_label).toBe('搜索深度');
+    expect(en.translation.home.web_search_intensity_light).toBe('Light');
+    expect(en.translation.home.web_search_intensity_standard).toBe('Standard');
+    expect(en.translation.home.web_search_intensity_deep).toBe('Deep');
+    expect(zh.translation.home.web_search_intensity_light).toBe('轻量');
+    expect(zh.translation.home.web_search_intensity_standard).toBe('标准');
+    expect(zh.translation.home.web_search_intensity_deep).toBe('深入');
     expect(en.translation.sim.theater_unavailable_hint).toContain('Pixel Theater');
     expect(zh.translation.sim.theater_unavailable_hint).toContain('像素剧场');
     expect(zh.translation.game.capture_mode_panel).toBe('面板');

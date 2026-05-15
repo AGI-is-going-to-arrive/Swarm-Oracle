@@ -82,6 +82,13 @@
       "web_search_inferred_provider_unknown": "Could not detect provider from URL.",
       "web_search_unknown_endpoint_warning": "This endpoint is not recognized. Ordinary search may still be attempted, but source categories will stay off.",
       "web_search_native_hint": "Model-native search is separate: supported non-proxy Responses models may add AI-discovered citations when source categories provide allowed domains.",
+      "web_search_intensity_label": "Search Depth",
+      "web_search_intensity_light": "Light",
+      "web_search_intensity_standard": "Standard",
+      "web_search_intensity_deep": "Deep",
+      "web_search_intensity_light_desc": "Fetches 3 results and injects 3 snippets. Best for quick runs.",
+      "web_search_intensity_standard_desc": "Fetches 5 results and injects 5 snippets. Recommended default.",
+      "web_search_intensity_deep_desc": "Fetches 10 results and injects 8 snippets. Use for serious questions.",
       "advanced_settings": "Advanced Settings",
       "advanced_settings_expanded": "Advanced Settings (collapse)",
       "byok_toggle": "🔑 Custom LLM",
@@ -230,7 +237,9 @@
         "tier_crowd": "Crowd",
         "show_all": "Show all",
         "filter_agent": "Filter {{name}}'s messages",
-        "no_agent_messages": "No messages from this agent"
+        "no_agent_messages": "No messages from this agent",
+        "worldline_group": "Worldline: {{title}}",
+        "worldline_round_range": "R{{start}}-R{{end}}"
       },
       "tree": {
         "win_rate": "Win Rate",

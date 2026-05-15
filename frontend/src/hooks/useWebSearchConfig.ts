@@ -9,6 +9,7 @@ import {
 export type WebSearchProviderOption = 'tavily' | 'exa' | 'firecrawl' | 'xai' | 'searxng';
 export type WebSearchMode = 'server_default' | 'custom_override';
 export type WebSearchStatus = 'idle' | 'searching' | 'success' | 'skipped' | 'error';
+export type WebSearchIntensity = 'light' | 'standard' | 'deep';
 
 /**
  * Effective provider capability resolved from either the server default
@@ -41,6 +42,8 @@ export interface UseWebSearchConfigResult {
   setWebSearchApiKey: (next: string) => void;
   webSearchBaseUrl: string;
   setWebSearchBaseUrl: (next: string) => void;
+  webSearchIntensity: WebSearchIntensity;
+  setWebSearchIntensity: (next: WebSearchIntensity) => void;
   webSearchStatus: WebSearchStatus;
   setWebSearchStatus: (next: WebSearchStatus) => void;
   webSearchAvailable: boolean;
@@ -105,6 +108,30 @@ const UNKNOWN_CAPABILITY: WebSearchProviderCapability = {
   domain_filter_mode: 'none' as WebSearchDomainFilterMode,
 };
 
+const WEB_SEARCH_INTENSITY_STORAGE_KEY = 'swarmoracle.web-search-intensity.v1';
+
+function normalizeWebSearchIntensity(value: unknown): WebSearchIntensity {
+  return value === 'light' || value === 'deep' || value === 'standard'
+    ? value
+    : 'standard';
+}
+
+function loadWebSearchIntensity(): WebSearchIntensity {
+  try {
+    return normalizeWebSearchIntensity(window.localStorage.getItem(WEB_SEARCH_INTENSITY_STORAGE_KEY));
+  } catch {
+    return 'standard';
+  }
+}
+
+function saveWebSearchIntensity(value: WebSearchIntensity): void {
+  try {
+    window.localStorage.setItem(WEB_SEARCH_INTENSITY_STORAGE_KEY, value);
+  } catch {
+    // Storage is an enhancement; search should still be usable without it.
+  }
+}
+
 /**
  * Web Search Enhancement state hook.
  *
@@ -124,6 +151,7 @@ export function useWebSearchConfig(): UseWebSearchConfigResult {
   const [webSearchProvider, setWebSearchProvider] = useState<WebSearchProviderOption>('tavily');
   const [webSearchApiKey, setWebSearchApiKey] = useState('');
   const [webSearchBaseUrl, setWebSearchBaseUrl] = useState('');
+  const [webSearchIntensity, setWebSearchIntensity] = useState<WebSearchIntensity>(() => loadWebSearchIntensity());
   const webSearchApiKeyRef = useRef(webSearchApiKey);
   const webSearchBaseUrlRef = useRef(webSearchBaseUrl);
   const [webSearchStatus, setWebSearchStatus] = useState<WebSearchStatus>('idle');
@@ -137,6 +165,10 @@ export function useWebSearchConfig(): UseWebSearchConfigResult {
     webSearchApiKeyRef.current = webSearchApiKey;
     webSearchBaseUrlRef.current = webSearchBaseUrl;
   }, [webSearchApiKey, webSearchBaseUrl]);
+
+  useEffect(() => {
+    saveWebSearchIntensity(webSearchIntensity);
+  }, [webSearchIntensity]);
 
   // On mount: check server web search capability via lightweight GET /api/capabilities
   // (no LLM call — pure config check). Retries once after 3s on failure.
@@ -272,6 +304,8 @@ export function useWebSearchConfig(): UseWebSearchConfigResult {
     setWebSearchApiKey,
     webSearchBaseUrl,
     setWebSearchBaseUrl,
+    webSearchIntensity,
+    setWebSearchIntensity,
     webSearchStatus,
     setWebSearchStatus,
     webSearchAvailable: viteFlagEnabled,

@@ -82,6 +82,13 @@
       "web_search_inferred_provider_unknown": "无法从 URL 检测搜索服务。",
       "web_search_unknown_endpoint_warning": "这个 endpoint 无法识别。仍可尝试普通搜索，但来源分类会保持关闭。",
       "web_search_native_hint": "模型原生联网是另一条路径：受支持的非 proxy Responses 模型可在来源分类提供域名后追加 AI 发现的引用。",
+      "web_search_intensity_label": "搜索深度",
+      "web_search_intensity_light": "轻量",
+      "web_search_intensity_standard": "标准",
+      "web_search_intensity_deep": "深入",
+      "web_search_intensity_light_desc": "抓取 3 条结果，注入 3 条片段。适合快速推演。",
+      "web_search_intensity_standard_desc": "抓取 5 条结果，注入 5 条片段。默认推荐。",
+      "web_search_intensity_deep_desc": "抓取 10 条结果，注入 8 条片段。适合严肃问题。",
       "advanced_settings": "高级设置",
       "advanced_settings_expanded": "高级设置（收起）",
       "byok_toggle": "🔑 自定义 LLM",
@@ -230,7 +237,9 @@
         "tier_crowd": "群众",
         "show_all": "显示全部",
         "filter_agent": "筛选 {{name}} 的消息",
-        "no_agent_messages": "该 Agent 暂无发言"
+        "no_agent_messages": "该 Agent 暂无发言",
+        "worldline_group": "世界线：{{title}}",
+        "worldline_round_range": "R{{start}}-R{{end}}"
       },
       "tree": {
         "win_rate": "存活",

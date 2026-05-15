@@ -51,6 +51,8 @@ export default function WorkbenchView() {
 
   const capLoading = causalLoading || kgLoading;
   const capError = causalError || kgError;
+  const encodedScenarioId = encodeURIComponent(id);
+  const resultHref = id ? `/result/${encodedScenarioId}` : '/';
 
   useEffect(() => {
     if (capLoading) return;
@@ -151,9 +153,22 @@ export default function WorkbenchView() {
           flexWrap: 'wrap',
         }}
       >
-        <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>
-          {t('workbench.title', 'Graph Workbench')}
-        </h1>
+        <div style={{ display: 'grid', gap: '0.2rem', minWidth: 0 }}>
+          <Link
+            to={resultHref}
+            style={{
+              color: 'var(--text-link, #8ab4f8)',
+              fontSize: '0.9rem',
+              textDecoration: 'none',
+              width: 'fit-content',
+            }}
+          >
+            &larr; {t('common.back_to_result', 'Back to Result')}
+          </Link>
+          <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>
+            {t('workbench.title', 'Graph Workbench')}
+          </h1>
+        </div>
         <LayoutSwitcher
           mode={effectiveMode}
           onChange={handleModeChange}

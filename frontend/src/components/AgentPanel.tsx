@@ -5,6 +5,7 @@
 import { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
+import type { AgentMessage, BranchInfo } from '../types';
 import './AgentPanel.css';
 
 // ── Deterministic Pixel Avatar ──────────────────────────────
@@ -88,12 +89,65 @@ function EmotionDot({ emotion }: { emotion: string }) {
 }
 
 // ── Branch short label ──────────────────────────────────────
-function branchShortLabel(branchId: string, branches: Array<{ id: string; description?: string }>): string {
+function branchShortLabel(branchId: string, branches: Array<{ id: string; description?: string; title?: string }>): string {
   const branch = branches.find((b) => b.id === branchId);
-  if (branch?.description) {
-    return branch.description.length > 14 ? branch.description.slice(0, 14) + '…' : branch.description;
+  const label = branch?.description || branch?.title;
+  if (label) {
+    return label.length > 14 ? label.slice(0, 14) + '…' : label;
   }
   return branchId.slice(0, 6);
+}
+
+function branchDisplayTitle(
+  branchId: string,
+  branches: BranchInfo[],
+  fallbackTitle?: string,
+): string {
+  const branch = branches.find((b) => b.id === branchId);
+  return branch?.title || branch?.description || fallbackTitle || branchId.slice(0, 6);
+}
+
+interface AgentMessageGroup {
+  branchId: string;
+  title: string;
+  startRound: number;
+  endRound: number;
+  messages: Array<{ message: AgentMessage; originalIndex: number }>;
+}
+
+function groupMessagesByWorldline(
+  filteredMessages: AgentMessage[],
+  branches: BranchInfo[],
+): AgentMessageGroup[] {
+  const groups = new Map<string, AgentMessageGroup>();
+
+  filteredMessages.forEach((message, originalIndex) => {
+    const existing = groups.get(message.branch);
+    if (existing) {
+      existing.messages.push({ message, originalIndex });
+      existing.startRound = Math.min(existing.startRound, message.round);
+      existing.endRound = Math.max(existing.endRound, message.round);
+      return;
+    }
+
+    groups.set(message.branch, {
+      branchId: message.branch,
+      title: branchDisplayTitle(message.branch, branches, message.branch_title),
+      startRound: message.round,
+      endRound: message.round,
+      messages: [{ message, originalIndex }],
+    });
+  });
+
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    messages: [...group.messages].sort((a, b) => {
+      if (a.message.round !== b.message.round) {
+        return a.message.round - b.message.round;
+      }
+      return a.originalIndex - b.originalIndex;
+    }),
+  }));
 }
 
 // ── MessageText: parse agent name mentions ──────────────────
@@ -194,6 +248,11 @@ export function AgentPanel({ onBranchDetail }: AgentPanelProps) {
     return messages.filter((m) => m.agent_id === filterAgentId);
   }, [messages, filterAgentId]);
 
+  const selectedAgentMessageGroups = useMemo(() => {
+    if (!filterAgentId) return [];
+    return groupMessagesByWorldline(filteredMessages, branches);
+  }, [branches, filterAgentId, filteredMessages]);
+
   // Auto-scroll on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -218,6 +277,38 @@ export function AgentPanel({ onBranchDetail }: AgentPanelProps) {
   const handleAgentClick = (agentId: string) => {
     setFilterAgentId((prev) => (prev === agentId ? null : agentId));
   };
+
+  const renderSpeechBubble = (msg: AgentMessage, keyIndex: number) => (
+    <div key={`${msg.agent_id}-${msg.branch}-${msg.round}-${keyIndex}`} className="speech-bubble-wrap">
+      <div className="bubble-header">
+        <PixelAvatar name={msg.agent} size={24} />
+        <span
+          className="bubble-agent agent-mention"
+          role="button"
+          tabIndex={0}
+          onClick={(e) => { e.stopPropagation(); scrollToAgent(msg.agent_id); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); scrollToAgent(msg.agent_id); } }}
+        >{msg.agent}</span>
+        <span
+          className="bubble-branch agent-mention"
+          role="button"
+          tabIndex={0}
+          onClick={(e) => { e.stopPropagation(); onBranchDetail?.(msg.branch); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onBranchDetail?.(msg.branch); } }}
+          title={msg.branch}
+        >
+          🌿 {branchShortLabel(msg.branch, branches)}
+        </span>
+        <span className="bubble-round">
+          {t('sim.panel.round')}{msg.round}
+        </span>
+        <EmotionDot emotion={msg.emotion} />
+      </div>
+      <div className="speech-bubble">
+        <MessageText text={msg.message} agents={agents} onAgentClick={scrollToAgent} />
+      </div>
+    </div>
+  );
 
   return (
     <aside className="agent-panel">
@@ -273,38 +364,29 @@ export function AgentPanel({ onBranchDetail }: AgentPanelProps) {
             <p className="waiting-text">
               {filterAgentId ? t('sim.panel.no_agent_messages') : t('sim.panel.waiting')}
             </p>
-          ) : (
-            filteredMessages.map((msg, i) => (
-              <div key={`${msg.agent_id}-${msg.branch}-${msg.round}-${i}`} className="speech-bubble-wrap">
-                <div className="bubble-header">
-                  <PixelAvatar name={msg.agent} size={24} />
-                  <span
-                    className="bubble-agent agent-mention"
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => { e.stopPropagation(); scrollToAgent(msg.agent_id); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); scrollToAgent(msg.agent_id); } }}
-                  >{msg.agent}</span>
-                  <span
-                    className="bubble-branch agent-mention"
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => { e.stopPropagation(); onBranchDetail?.(msg.branch); }}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onBranchDetail?.(msg.branch); } }}
-                    title={msg.branch}
-                  >
-                    🌿 {branchShortLabel(msg.branch, branches)}
+          ) : filterAgentId ? (
+            selectedAgentMessageGroups.map((group) => (
+              <section
+                key={group.branchId}
+                className="agent-worldline-group"
+                data-testid="agent-worldline-group"
+              >
+                <div className="agent-worldline-group__header">
+                  <span className="agent-worldline-group__title">
+                    {t('sim.panel.worldline_group', { title: group.title })}
                   </span>
-                  <span className="bubble-round">
-                    {t('sim.panel.round')}{msg.round}
+                  <span className="agent-worldline-group__rounds">
+                    {t('sim.panel.worldline_round_range', {
+                      start: group.startRound,
+                      end: group.endRound,
+                    })}
                   </span>
-                  <EmotionDot emotion={msg.emotion} />
                 </div>
-                <div className="speech-bubble">
-                  <MessageText text={msg.message} agents={agents} onAgentClick={scrollToAgent} />
-                </div>
-              </div>
+                {group.messages.map(({ message, originalIndex }) => renderSpeechBubble(message, originalIndex))}
+              </section>
             ))
+          ) : (
+            filteredMessages.map((msg, i) => renderSpeechBubble(msg, i))
           )}
           <div ref={messagesEndRef} />
         </div>

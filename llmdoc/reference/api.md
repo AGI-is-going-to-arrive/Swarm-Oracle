@@ -73,11 +73,14 @@
   - `web_search_provider`
   - `web_search_api_key`
   - `web_search_base_url`
+  - `web_search_intensity`
 - 这些字段的当前口径：
   - 只有 `web_search_enabled=true` 时才会真正参与搜索
   - `web_search_families` 当前只接受 `polymarket / finance / academic / news_deep`；空白会 trim，重复值会去重
+  - `web_search_intensity` 当前只接受 `light / standard / deep`；开启搜索但未传时默认为 `standard`
+  - `light` 抓取并注入 3 条，`standard` 抓取并注入 5 条，`deep` 抓取 10 条并向 prompt 注入 8 条
   - 首页当前只会在 web search 已开启、且当前有效 provider capability 支持 domain filter 时发送已选 family；推荐 server default 读服务端 capability，advanced custom override 有可识别 base URL 时按 URL 推断 capability，base URL 为空时按下拉 provider 使用 capability
-  - `web_search_enabled=false` 时，override 字段会被忽略
+  - `web_search_enabled=false` 时，override 字段和 intensity 都会被忽略
   - 官方 provider 的 `web_search_base_url` 只接受 `https` endpoint
   - `searxng` 的 `web_search_base_url` 只接受和服务端 `SEARXNG_URL` 完全一致的基址
   - 如果 custom override 的 provider 和服务端默认 provider 不同，调用方需要显式传该 provider 的 API key；后端不会跨 provider 复用默认 key

@@ -674,6 +674,9 @@ async def parse_and_run_background(
     custom_agent_identity_ids: list[str] | None = None,
     continuity_overrides: list[dict] | None = None,
     web_search_families: list[str] | None = None,
+    web_search_intensity: str | None = None,
+    web_search_max_results: int | None = None,
+    web_search_snippet_limit: int | None = None,
 ):
     """Parse a scenario in the background, then hand off to the simulator.
 
@@ -814,6 +817,12 @@ async def parse_and_run_background(
         parsed["disable_user_quota"] = True
     if web_search_families:
         parsed["web_search_families"] = list(web_search_families)
+    if web_search_intensity:
+        parsed["web_search_intensity"] = web_search_intensity
+    if web_search_max_results is not None:
+        parsed["web_search_max_results"] = web_search_max_results
+    if web_search_snippet_limit is not None:
+        parsed["web_search_snippet_limit"] = web_search_snippet_limit
 
     # Only persist non-sensitive display config.
     if llm_base_url:

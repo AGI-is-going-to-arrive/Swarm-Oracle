@@ -109,6 +109,7 @@ class CreateScenarioRequest(BaseModel):
     web_search_provider: str | None = None
     web_search_api_key: str | None = None
     web_search_base_url: str | None = None
+    web_search_intensity: str | None = None
     # Phase 3 F3: Custom agent identities to include in simulation
     custom_agent_identity_ids: list[str] | None = None
     continuity_overrides: list["ContinuityOverrideRequest"] | None = None
@@ -182,6 +183,17 @@ class CreateScenarioRequest(BaseModel):
                 "web_search_provider must be one of tavily, exa, firecrawl, xai, searxng"
             )
         return normalized
+
+    @model_validator(mode="after")
+    def validate_web_search_intensity(self) -> "CreateScenarioRequest":
+        if not self.web_search_enabled:
+            self.web_search_intensity = None
+            return self
+        normalized = (self.web_search_intensity or "standard").strip().lower()
+        if normalized not in {"light", "standard", "deep"}:
+            raise ValueError("web_search_intensity must be 'light', 'standard', or 'deep'")
+        self.web_search_intensity = normalized
+        return self
 
     @field_validator("user_id")
     @classmethod

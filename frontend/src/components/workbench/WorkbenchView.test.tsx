@@ -112,6 +112,12 @@ describe('WorkbenchView', () => {
     expect(await screen.findByTestId('causal-board')).toBeTruthy();
   });
 
+  it('renders a stable link back to the result page', async () => {
+    renderWorkbench('/workbench/abc?view=graph');
+    const link = await screen.findByRole('link', { name: /Back to Result/i });
+    expect(link.getAttribute('href')).toBe('/result/abc');
+  });
+
   it('renders split mode on desktop — both boards present', async () => {
     renderWorkbench('/workbench/abc?view=split');
     expect(await screen.findByTestId('graph-workbench-shell')).toBeTruthy();

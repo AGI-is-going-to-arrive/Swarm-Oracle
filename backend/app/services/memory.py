@@ -147,6 +147,9 @@ def _memory_copy(language: str) -> dict[str, str]:
             "emotion": "【当前情绪】",
             "background_brief": "【背景概要】",
             "world_background": "【世界背景】",
+            "worldline_heading": "【当前世界线】",
+            "worldline_label": "世界线信息",
+            "worldline_instruction": "把这条世界线当成本轮真实处境来回应。你的措辞、例子和判断必须贴合它的标题与分叉原因；同一个角色在不同世界线里发言时，不要复用同一组例子、句式或结论。",  # noqa: E501
             "memories": "【你的记忆碎片】",
             "roleplay_intro": "你是{name}。你正坐在一场关于未来走向的讨论桌前，旁边坐着其他几个人，每个人都在为自己关心的事情说话。",  # noqa: E501
             "crowd_instruction_title": "轮到你开口了。",
@@ -188,6 +191,9 @@ def _memory_copy(language: str) -> dict[str, str]:
         "emotion": "[Current Emotion] ",
         "background_brief": "[Background Summary] ",
         "world_background": "[World Background]",
+        "worldline_heading": "[Current Worldline]",
+        "worldline_label": "Worldline information",
+        "worldline_instruction": "Treat this worldline as the factual situation for this turn. Your wording, examples, and judgment must respond to its title and fork reason; when the same agent speaks across different worldlines, do not reuse the same examples, phrasing, or conclusion.",  # noqa: E501
         "memories": "[Your Memory Fragments]",
         "roleplay_intro": "You are {name}. You are sitting at a table where people are arguing about what happens next, and each person at the table cares about something different.",  # noqa: E501
         "crowd_instruction_title": "Your turn to say something.",
@@ -432,6 +438,7 @@ def _build_crowd_context(
     intervention_text: str = "",
     language: str = "Chinese",
     web_context_block: str = "",
+    worldline_context: str = "",
     include_json_format: bool = True,
     cross_scenario_hint: str = "",
 ) -> str:
@@ -465,6 +472,16 @@ def _build_crowd_context(
     )
 
     web_block = f"\n{web_context_block}\n" if web_context_block else ""
+    worldline_block = ""
+    if worldline_context and worldline_context.strip():
+        worldline_data = format_untrusted_text_block(
+            copy["worldline_label"], worldline_context, max_chars=700,
+        )
+        worldline_block = (
+            f"\n\n{copy['worldline_heading']}\n"
+            f"{worldline_data}\n"
+            f"{copy['worldline_instruction']}"
+        )
 
     persona_text = agent.get("persona", "")
     _already_wrapped = persona_text.startswith("【")
@@ -518,7 +535,7 @@ def _build_crowd_context(
 {web_block}{copy["background_brief"]}{bg_brief}
 
 {copy["topic_label"]}
-{topic_block}{intervention_block}
+{topic_block}{intervention_block}{worldline_block}
 
 {conversation_label}
 {conversation_block}{crowd_cross_block}
@@ -585,6 +602,7 @@ def build_agent_context(
     intervention_text: str = "",
     language: str = "Chinese",
     web_context_block: str = "",
+    worldline_context: str = "",
     cross_scenario_hint: str = "",
     include_json_format: bool = True,
 ) -> str:
@@ -614,6 +632,7 @@ def build_agent_context(
             intervention_text=intervention_text,
             language=language,
             web_context_block=web_context_block,
+            worldline_context=worldline_context,
             include_json_format=include_json_format,
             cross_scenario_hint=cross_scenario_hint,
         )
@@ -640,6 +659,16 @@ def build_agent_context(
     )
 
     web_block = f"\n{web_context_block}\n" if web_context_block else ""
+    worldline_block = ""
+    if worldline_context and worldline_context.strip():
+        worldline_data = format_untrusted_text_block(
+            copy["worldline_label"], worldline_context, max_chars=1000,
+        )
+        worldline_block = (
+            f"\n\n{copy['worldline_heading']}\n"
+            f"{worldline_data}\n"
+            f"{copy['worldline_instruction']}"
+        )
 
     cross_scenario_block = ""
     if cross_scenario_hint and cross_scenario_hint.strip():
@@ -707,7 +736,7 @@ def build_agent_context(
 {setting_background}
 
 {copy["topic_label"]}
-{topic_block}{intervention_block}
+{topic_block}{intervention_block}{worldline_block}
 
 {copy["dialogue_label"] if not shared_briefing else copy["shared_label"]}
 {conversation_block}{memories_block}{cross_scenario_block}

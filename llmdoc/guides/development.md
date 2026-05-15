@@ -155,7 +155,7 @@ npm exec -- vitest run src/components/result/SourceCategoryCard.test.tsx src/pag
 npx tsc --noEmit -p tsconfig.app.json
 npm run lint
 VITE_ENABLE_WEB_SEARCH=true npm run build
-npm run e2e:web-search -- --url http://127.0.0.1:18930 --output-dir output/e2e/review-web-search --provider tavily
+npm run e2e:web-search -- --url http://127.0.0.1:18930 --output-dir output/e2e/review-web-search --provider tavily --intensity standard
 npm run e2e:native-search -- full --url http://127.0.0.1:18930 --headless
 npm run e2e:capability-matrix -- --url http://127.0.0.1:18930 --output-dir output/e2e/capability-matrix-check --headless
 
@@ -188,6 +188,7 @@ SWARM_E2E_MODE=live node scripts/e2e-new-source-ingestion-live.mjs full --url ht
 - 这组回归当前覆盖：
   - `tavily / exa / xai / searxng` provider dispatch
   - request-scoped `provider / API key / base URL`
+  - 搜索深度 `light / standard / deep` 的请求体和后端预算映射
   - 首页推荐已配置搜索 / 高级自定义 provider
   - frontend custom override E2E 请求体校验
   - Source Family domain-filter capability gate、xAI `allowed_domains`、SearXNG `site:` 查询归一化、URL 后过滤和 native placeholder preflight warn
@@ -198,6 +199,7 @@ SWARM_E2E_MODE=live node scripts/e2e-new-source-ingestion-live.mjs full --url ht
   - `web_search_provider`
   - `web_search_api_key`
   - `web_search_base_url`
+  - `web_search_intensity`
 - `e2e-new-source-ingestion-live.mjs` 当前也会校验 `/api/scenario` 请求体里是否真的带上：
   - `web_search_enabled`
   - `web_search_families`
@@ -212,6 +214,7 @@ SWARM_E2E_MODE=live node scripts/e2e-new-source-ingestion-live.mjs full --url ht
   - `SWARM_E2E_WEB_SEARCH_PROVIDER`
   - `SWARM_E2E_WEB_SEARCH_API_KEY`
   - `SWARM_E2E_WEB_SEARCH_BASE_URL`
+  - `SWARM_WEB_SEARCH_INTENSITY`
 - live 模式当前不再要求固定 snippet 文案；只要求结果页真的出现 web sources 入口，并能展开读到 snippet / link。
 - 如果要单独做真实 provider 烟测，可在 `backend/.venv` 下直接调用 `app.services.web_context.fetch_web_context()`。
 - 真实 provider E2E 不把 API key 写入文档或 summary；脚本输出会脱敏，只保留尾部少量字符用于排查。

@@ -46,6 +46,34 @@ class WebSearchRequestConfig:
     base_url: str = ""
     model: str = ""
     timeout_seconds: float = 0.0
+    max_results: int = 0
+    snippet_limit: int = 0
+
+
+@dataclass(frozen=True)
+class WebSearchIntensityConfig:
+    intensity: Literal["light", "standard", "deep"]
+    max_results: int
+    snippet_limit: int
+
+
+WEB_SEARCH_INTENSITY_PRESETS: dict[str, WebSearchIntensityConfig] = {
+    "light": WebSearchIntensityConfig("light", max_results=3, snippet_limit=3),
+    "standard": WebSearchIntensityConfig("standard", max_results=5, snippet_limit=5),
+    "deep": WebSearchIntensityConfig("deep", max_results=10, snippet_limit=8),
+}
+DEFAULT_WEB_SEARCH_INTENSITY = "standard"
+
+
+def resolve_web_search_intensity_config(
+    intensity: str | None,
+) -> WebSearchIntensityConfig:
+    """Return the bounded result/snippet preset for a request intensity."""
+    normalized = (intensity or DEFAULT_WEB_SEARCH_INTENSITY).strip().lower()
+    return WEB_SEARCH_INTENSITY_PRESETS.get(
+        normalized,
+        WEB_SEARCH_INTENSITY_PRESETS[DEFAULT_WEB_SEARCH_INTENSITY],
+    )
 
 
 @dataclass(frozen=True)
@@ -556,8 +584,9 @@ async def fetch_family_context(
 
     results = await asyncio.gather(*[_search_family(f) for f in families_to_search])
 
+    max_items = _request_max_results(request_config)
     for family, snippets, metadata in results:
-        items = _snippets_to_family_items(family, query, snippets)
+        items = _snippets_to_family_items(family, query, snippets, max_items=max_items)
         state = metadata.pop("state", None)
         if state:
             # Pre-determined state (unsupported_provider, failed, etc.)
@@ -672,6 +701,7 @@ def _resolve_request_config(
     provider_override: str | None = None,
     api_key_override: str | None = None,
     base_url_override: str | None = None,
+    intensity: str | None = None,
 ) -> WebSearchRequestConfig:
     default_provider = settings.WEB_SEARCH_PROVIDER.strip().lower()
     provider = (provider_override or default_provider).strip().lower()
@@ -688,21 +718,31 @@ def _resolve_request_config(
         if provider == "xai"
         else settings.WEB_SEARCH_TIMEOUT_SECONDS
     )
+    intensity_config = resolve_web_search_intensity_config(intensity)
     return WebSearchRequestConfig(
         provider=provider,
         api_key=api_key,
         base_url=base_url,
         model=model,
         timeout_seconds=timeout_seconds,
+        max_results=intensity_config.max_results,
+        snippet_limit=intensity_config.snippet_limit,
     )
 
 
 def _cache_key(query: str, request_config: WebSearchRequestConfig) -> str:
     payload = (
         f"{query.strip().lower()}::{request_config.provider}::"
-        f"{request_config.base_url}::{request_config.api_key}::{request_config.model}"
+        f"{request_config.base_url}::{request_config.api_key}::{request_config.model}::"
+        f"{request_config.max_results}::{request_config.snippet_limit}"
     )
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _request_max_results(request_config: WebSearchRequestConfig | None) -> int:
+    if request_config and request_config.max_results > 0:
+        return max(1, min(10, int(request_config.max_results)))
+    return settings.WEB_SEARCH_MAX_RESULTS
 
 
 def _cache_get(query: str, request_config: WebSearchRequestConfig) -> WebSearchResult | None:
@@ -783,7 +823,7 @@ async def _search_tavily(
         if request_config
         else settings.WEB_SEARCH_TIMEOUT_SECONDS
     )
-    max_results = settings.WEB_SEARCH_MAX_RESULTS
+    max_results = _request_max_results(request_config)
     endpoint = (
         request_config.base_url
         if request_config and request_config.base_url
@@ -844,7 +884,7 @@ async def _search_searxng(
         if request_config
         else settings.WEB_SEARCH_TIMEOUT_SECONDS
     )
-    max_results = settings.WEB_SEARCH_MAX_RESULTS
+    max_results = _request_max_results(request_config)
 
     effective_query = query
     if include_domains:
@@ -931,7 +971,7 @@ async def _search_exa(
         if request_config
         else settings.WEB_SEARCH_TIMEOUT_SECONDS
     )
-    max_results = settings.WEB_SEARCH_MAX_RESULTS
+    max_results = _request_max_results(request_config)
     endpoint = (
         request_config.base_url
         if request_config and request_config.base_url
@@ -1004,7 +1044,7 @@ async def _search_firecrawl(
         if request_config
         else settings.WEB_SEARCH_TIMEOUT_SECONDS
     )
-    max_results = settings.WEB_SEARCH_MAX_RESULTS
+    max_results = _request_max_results(request_config)
     endpoint = (
         request_config.base_url
         if request_config and request_config.base_url
@@ -1243,8 +1283,8 @@ async def _search_xai(
         if request_config
         else settings.XAI_WEB_SEARCH_TIMEOUT_SECONDS
     )
-    max_results = settings.WEB_SEARCH_MAX_RESULTS
-    output_budget = max(300, min(900, 180 * max_results))
+    max_results = _request_max_results(request_config)
+    output_budget = max(300, min(1800, 180 * max_results))
     endpoint = (
         request_config.base_url
         if request_config and request_config.base_url
@@ -1396,6 +1436,7 @@ async def fetch_web_context(
     provider_override: str | None = None,
     api_key_override: str | None = None,
     base_url_override: str | None = None,
+    intensity: str | None = None,
 ) -> WebSearchResult | None:
     """Fetch web search context for a scenario question.
 
@@ -1418,6 +1459,7 @@ async def fetch_web_context(
         provider_override=provider_override,
         api_key_override=api_key_override,
         base_url_override=base_url_override,
+        intensity=intensity,
     )
 
     # Check cache
@@ -1477,7 +1519,11 @@ async def fetch_web_context(
     return result
 
 
-def format_context_block(result: WebSearchResult | None) -> str:
+def format_context_block(
+    result: WebSearchResult | None,
+    *,
+    snippet_limit: int | None = None,
+) -> str:
     """Render a [REAL_WORLD_CONTEXT] prompt block from search results.
 
     Returns empty string if result is None or has no snippets.
@@ -1492,7 +1538,14 @@ def format_context_block(result: WebSearchResult | None) -> str:
         f"The following real-world information was retrieved on {result.timestamp}:",
         "",
     ]
-    for i, snippet in enumerate(result.snippets, 1):
+    limit: int | None = None
+    if snippet_limit is not None:
+        try:
+            limit = max(1, min(10, int(snippet_limit)))
+        except (TypeError, ValueError):
+            limit = None
+    snippets = result.snippets[:limit] if limit is not None else result.snippets
+    for i, snippet in enumerate(snippets, 1):
         safe_url = _sanitize_url(snippet.source_url)
         url_suffix = f"\n   Source: {safe_url}" if safe_url else ""
         sanitized = format_untrusted_text_block(

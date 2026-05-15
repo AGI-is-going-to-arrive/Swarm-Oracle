@@ -218,6 +218,7 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   webSearchProvider?: 'tavily' | 'exa' | 'firecrawl' | 'xai' | 'searxng';
   webSearchApiKey?: string;
   webSearchBaseUrl?: string;
+  webSearchIntensity?: 'light' | 'standard' | 'deep';
   customAgentIdentityIds?: string[];
   continuityOverrides?: ContinuityOverride[];
 }
@@ -301,6 +302,7 @@ function buildScenarioRequestBody(
     webSearchProvider,
     webSearchApiKey,
     webSearchBaseUrl,
+    webSearchIntensity,
     userId,
     disableUserQuota,
     customAgentIdentityIds,
@@ -328,6 +330,7 @@ function buildScenarioRequestBody(
     ...(visualizationEnabled != null && { visualization_enabled: visualizationEnabled }),
     ...(webSearchEnabled && { web_search_enabled: true }),
     ...(webSearchEnabled && { web_search_families: webSearchFamilies ?? [] }),
+    ...(webSearchEnabled && { web_search_intensity: webSearchIntensity ?? 'standard' }),
     ...(webSearchEnabled && !preflightMode && webSearchProvider && { web_search_provider: webSearchProvider }),
     ...(webSearchEnabled && !preflightMode && webSearchApiKey && { web_search_api_key: webSearchApiKey }),
     ...(webSearchEnabled && !preflightMode && webSearchBaseUrl && { web_search_base_url: webSearchBaseUrl }),

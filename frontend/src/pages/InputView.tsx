@@ -366,6 +366,8 @@ export function InputView() {
     setWebSearchApiKey,
     webSearchBaseUrl,
     setWebSearchBaseUrl,
+    webSearchIntensity,
+    setWebSearchIntensity,
     webSearchStatus,
     setWebSearchStatus,
     effectiveProviderCapability,
@@ -789,6 +791,7 @@ export function InputView() {
       webSearchProvider: webSearchUsesCustomOverride ? webSearchProvider : undefined,
       webSearchApiKey: webSearchUsesCustomOverride && webSearchApiKey.trim() ? webSearchApiKey.trim() : undefined,
       webSearchBaseUrl: webSearchUsesCustomOverride && webSearchBaseUrl.trim() ? webSearchBaseUrl.trim() : undefined,
+      webSearchIntensity: webSearchEnabled ? webSearchIntensity : undefined,
       continuityOverrides,
       ...buildScenarioRuntimePresetOptions(runtimePreset),
       ...(agentSelectedIds.size > 0 && { customAgentIdentityIds: [...agentSelectedIds] }),
@@ -807,6 +810,7 @@ export function InputView() {
     webSearchApiKey,
     webSearchBaseUrl,
     webSearchEnabled,
+    webSearchIntensity,
     selectedWebSearchFamilies,
     webSearchProvider,
     webSearchUsesCustomOverride,
@@ -1198,6 +1202,7 @@ export function InputView() {
         web_search: {
           enabled: webSearchEnabled,
           families: selectedWebSearchFamilies,
+          intensity: webSearchIntensity,
           mode: webSearchMode,
           server_enabled: webSearchServerEnabled,
           server_provider: webSearchServerProvider,
@@ -1332,6 +1337,7 @@ export function InputView() {
     webSearchApiKey,
     webSearchBaseUrl,
     webSearchEnabled,
+    webSearchIntensity,
     selectedWebSearchFamilies,
     webSearchMode,
     webSearchProvider,
@@ -1831,6 +1837,36 @@ export function InputView() {
                     searchEnabled={webSearchEnabled}
                     supportsDomainFilter={supportsDomainFilter}
                   />
+
+                  {webSearchEnabled && (
+                    <div className="mode-selector-wrap">
+                      <div className="mode-selector">
+                        <span className="mode-label">{t('home.web_search_intensity_label')}</span>
+                        <div className="mode-options">
+                          {([
+                            { value: 'light', label: t('home.web_search_intensity_light') },
+                            { value: 'standard', label: t('home.web_search_intensity_standard') },
+                            { value: 'deep', label: t('home.web_search_intensity_deep') },
+                          ] as const).map((opt) => (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              className={`mode-btn ${webSearchIntensity === opt.value ? 'mode-btn--active' : ''}`}
+                              data-testid={`web-search-intensity-${opt.value}`}
+                              aria-pressed={webSearchIntensity === opt.value}
+                              onClick={() => setWebSearchIntensity(opt.value)}
+                              disabled={isSubmitting}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <span className="mode-desc">
+                        {t(`home.web_search_intensity_${webSearchIntensity}_desc`)}
+                      </span>
+                    </div>
+                  )}
 
                   {/* ── Mode Selectors (inline with input area) ── */}
                   <div className="iv-mode-selectors">

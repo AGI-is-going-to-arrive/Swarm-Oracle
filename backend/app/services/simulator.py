@@ -1179,7 +1179,10 @@ async def _run_simulation_impl(
         if scenario.web_context_json:
             from app.services.web_context import WebSearchResult, format_context_block
             ws_result = WebSearchResult.from_json(scenario.web_context_json)
-            web_context_block = format_context_block(ws_result)
+            web_context_block = format_context_block(
+                ws_result,
+                snippet_limit=ctx.get("web_search_snippet_limit"),
+            )
         sim_rounds = ctx.get("simulation_rounds", 10)
         sensitivity = ctx.get("branch_sensitivity", 0.7)
         fork_prompt_variant = str(ctx.get("fork_prompt_variant", "a") or "a").strip().lower()
@@ -1997,6 +2000,45 @@ async def _run_simulation_impl(
 # ── Internal helpers ─────────────────────────────────────
 
 
+def _build_worldline_context(engine, branch_id: str, language: str = "Chinese") -> str:
+    with Session(engine) as session:
+        branch = session.get(Branch, branch_id)
+        if not branch:
+            return ""
+        parent = session.get(Branch, branch.parent_branch_id) if branch.parent_branch_id else None
+
+    status = getattr(branch.status, "value", branch.status)
+    if _is_chinese_language(language):
+        lines = [
+            f"当前世界线ID: {branch.id}",
+            f"标题: {branch.title or '未命名世界线'}",
+            f"状态: {status or '未知'}",
+            f"分叉起点: R{branch.fork_round}",
+        ]
+        if branch.fork_reason:
+            lines.append(f"分叉原因: {branch.fork_reason}")
+        if parent:
+            lines.append(f"来源世界线: {parent.title or parent.id}")
+        lines.append("本轮发言要回应这条世界线独有的标题、转折和风险，不要把其它世界线的说法直接搬过来。")
+        return "\n".join(lines)
+
+    lines = [
+        f"Current worldline id: {branch.id}",
+        f"Title: {branch.title or 'Untitled worldline'}",
+        f"Status: {status or 'unknown'}",
+        f"Fork origin: R{branch.fork_round}",
+    ]
+    if branch.fork_reason:
+        lines.append(f"Fork reason: {branch.fork_reason}")
+    if parent:
+        lines.append(f"Source worldline: {parent.title or parent.id}")
+    lines.append(
+        "This turn must respond to this worldline's specific title, hinge, and risk; "
+        "do not copy the wording of another worldline.",
+    )
+    return "\n".join(lines)
+
+
 async def _gather_agent_messages(
     engine, scenario_id, branch_id, round_id, round_num, agents, setting_bg, topic,
     *, intervention_text: str | None = None,
@@ -2035,6 +2077,7 @@ async def _gather_agent_messages(
     if not shared_text or shared_text in {"(尚无共享信息)", "(no shared briefing yet)"}:
         recent_msgs = _get_recent_messages(engine, branch_id, max_rounds=2)
     emotion_state = agent_prev_emotions if agent_prev_emotions is not None else {}
+    worldline_context = _build_worldline_context(engine, branch_id, language)
 
     async def push_event(event: dict):
         """Push event if callback is available."""
@@ -2106,6 +2149,7 @@ async def _gather_agent_messages(
                     intervention_text=intervention_text or "",
                     language=language,
                     web_context_block=web_context_block,
+                    worldline_context=worldline_context,
                     include_json_format=False,
                     cross_scenario_hint=cross_hint,
                 )
@@ -2123,6 +2167,7 @@ async def _gather_agent_messages(
                     intervention_text=intervention_text or "",
                     language=language,
                     web_context_block=web_context_block,
+                    worldline_context=worldline_context,
                     include_json_format=False,
                     cross_scenario_hint=cross_hint,
                 )

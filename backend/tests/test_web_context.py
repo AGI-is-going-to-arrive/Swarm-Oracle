@@ -321,6 +321,35 @@ class TestTavilyProvider:
 
         assert len(snippets) == 1
 
+    @pytest.mark.asyncio
+    async def test_uses_request_config_max_results(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "")
+        request_config = WebSearchRequestConfig(
+            provider="tavily",
+            api_key="tvly-request-key",
+            base_url="https://api.tavily.com/search",
+            timeout_seconds=5.0,
+            max_results=10,
+            snippet_limit=8,
+        )
+        mock_response = httpx.Response(
+            200,
+            json={"results": [{"url": "https://a.com", "content": "A"}]},
+            request=httpx.Request("POST", "https://api.tavily.com/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_tavily("test", request_config)
+
+        assert len(snippets) == 1
+        assert mock_instance.post.call_args.kwargs["json"]["max_results"] == 10
+
 
 # ── Provider type-guard regression ──────────────────────
 
@@ -530,6 +559,38 @@ class TestSearxngProvider:
         assert len(snippets) == 1
         assert snippets[0].source_url == "https://c.com"
 
+    @pytest.mark.asyncio
+    async def test_uses_request_config_max_results(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_MAX_RESULTS", 3)
+        request_config = WebSearchRequestConfig(
+            provider="searxng",
+            base_url="http://localhost:8888",
+            timeout_seconds=5.0,
+            max_results=10,
+            snippet_limit=8,
+        )
+        mock_response = httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"title": f"R{i}", "url": f"https://example.com/{i}", "content": f"Content {i}"}
+                    for i in range(10)
+                ]
+            },
+            request=httpx.Request("GET", "http://localhost:8888/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.get.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_searxng("test query", request_config)
+
+        assert len(snippets) == 10
+
 
 class TestRequestConfig:
     def test_custom_provider_without_custom_key_does_not_reuse_server_key(self, monkeypatch):
@@ -561,6 +622,17 @@ class TestRequestConfig:
         assert config.provider == "tavily"
         assert config.api_key == "server-tavily-key"
         assert config.base_url == "https://api.tavily.com/search"
+        assert config.max_results == 5
+        assert config.snippet_limit == 5
+
+    def test_intensity_maps_to_bounded_request_config(self):
+        light = _resolve_request_config(intensity="light")
+        standard = _resolve_request_config(intensity=None)
+        deep = _resolve_request_config(intensity="deep")
+
+        assert (light.max_results, light.snippet_limit) == (3, 3)
+        assert (standard.max_results, standard.snippet_limit) == (5, 5)
+        assert (deep.max_results, deep.snippet_limit) == (10, 8)
 
     def test_cache_key_changes_when_xai_model_changes(self):
         key_a = _cache_key(
@@ -582,6 +654,12 @@ class TestRequestConfig:
             ),
         )
         assert key_a != key_b
+
+    def test_cache_key_changes_when_intensity_changes(self):
+        key_light = _cache_key("query", _resolve_request_config(intensity="light"))
+        key_deep = _cache_key("query", _resolve_request_config(intensity="deep"))
+
+        assert key_light != key_deep
 
 
 class TestWebSearchBaseUrlValidation:
@@ -674,6 +752,35 @@ class TestExaProvider:
         snippets = await _search_exa("test")
         assert snippets == []
 
+    @pytest.mark.asyncio
+    async def test_uses_request_config_max_results(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "")
+        request_config = WebSearchRequestConfig(
+            provider="exa",
+            api_key="exa-request-key",
+            base_url="https://api.exa.ai/search",
+            timeout_seconds=5.0,
+            max_results=10,
+            snippet_limit=8,
+        )
+        mock_response = httpx.Response(
+            200,
+            json={"results": [{"url": "https://exa.ai/post", "text": "A"}]},
+            request=httpx.Request("POST", "https://api.exa.ai/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_exa("test", request_config)
+
+        assert len(snippets) == 1
+        assert mock_instance.post.call_args.kwargs["json"]["numResults"] == 10
+
 
 class TestFirecrawlProvider:
     @pytest.mark.asyncio
@@ -744,6 +851,35 @@ class TestFirecrawlProvider:
         snippets = await _search_firecrawl("test")
 
         assert snippets == []
+
+    @pytest.mark.asyncio
+    async def test_uses_request_config_max_results(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "")
+        request_config = WebSearchRequestConfig(
+            provider="firecrawl",
+            api_key="fc-request-key",
+            base_url="https://api.firecrawl.dev/v2/search",
+            timeout_seconds=5.0,
+            max_results=10,
+            snippet_limit=8,
+        )
+        mock_response = httpx.Response(
+            200,
+            json={"success": True, "data": {"web": [{"url": "https://a.com", "description": "A"}]}},
+            request=httpx.Request("POST", "https://api.firecrawl.dev/v2/search"),
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = mock_response
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            snippets = await _search_firecrawl("test", request_config)
+
+        assert len(snippets) == 1
+        assert mock_instance.post.call_args.kwargs["json"]["limit"] == 10
 
     @pytest.mark.asyncio
     async def test_skips_non_string_fields(self, monkeypatch):
@@ -981,6 +1117,25 @@ class TestFormatContextBlock:
         assert "Source: https://a.com" in block
         assert "Source: https://b.com" in block
         assert "IMPORTANT: Use this factual context" in block
+
+    def test_snippet_limit_caps_prompt_injection_without_mutating_result(self):
+        result = WebSearchResult(
+            query="climate 2026",
+            snippets=[
+                WebSearchSnippet(text=f"Context {i}", source_url=f"https://example.com/{i}")
+                for i in range(10)
+            ],
+            provider="tavily",
+            timestamp="2026-04-07T12:00:00Z",
+        )
+
+        block = format_context_block(result, snippet_limit=3)
+
+        assert len(result.snippets) == 10
+        assert "Source #3" in block
+        assert "Context 2" in block
+        assert "Source #4" not in block
+        assert "Context 3" not in block
 
     def test_sanitizes_injection(self):
         """Snippet containing injection markers should trigger guardrail."""
@@ -1525,6 +1680,32 @@ class TestXaiDomainFilter:
         assert "filters" not in tools[0]
 
     @pytest.mark.asyncio
+    async def test_request_config_controls_result_count_and_output_budget(self, monkeypatch):
+        monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "")
+        request_config = WebSearchRequestConfig(
+            provider="xai",
+            api_key="xai-request-key",
+            base_url="https://api.x.ai/v1/responses",
+            model="grok-4.20-reasoning",
+            timeout_seconds=45.0,
+            max_results=10,
+            snippet_limit=8,
+        )
+
+        with patch("app.services.web_context.httpx.AsyncClient") as MockClient:
+            mock_instance = AsyncMock()
+            mock_instance.post.return_value = _xai_mock_response()
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            await _search_xai("test query", request_config)
+
+        body = mock_instance.post.call_args.kwargs["json"]
+        assert '"snippets" containing at most 10 items' in body["input"]
+        assert body["max_output_tokens"] == 1800
+
+    @pytest.mark.asyncio
     async def test_domains_within_limit(self, monkeypatch):
         """include_domains with ≤5 entries → filters.allowed_domains matches."""
         monkeypatch.setattr("app.services.web_context.settings.WEB_SEARCH_API_KEY", "xai-test")
@@ -1884,6 +2065,50 @@ class TestSearxngDomainContract:
 
 
 class TestFamilyContextStates:
+    @pytest.mark.asyncio
+    async def test_family_items_follow_request_config_max_results(self, monkeypatch):
+        from app.services.web_context import ProviderSearchOutcome, fetch_family_context
+
+        async def fake_search(
+            provider,
+            query,
+            request_config=None,
+            *,
+            include_domains=None,
+            swallow_errors=True,
+        ):
+            return ProviderSearchOutcome(
+                snippets=[
+                    WebSearchSnippet(
+                        text=f"Finance context {i}",
+                        source_url=f"https://bloomberg.com/story-{i}",
+                    )
+                    for i in range(10)
+                ],
+                state="ready",
+                domain_filter_mode="api",
+                domain_coverage="full",
+            )
+
+        monkeypatch.setattr("app.services.web_context._search_with_provider", fake_search)
+        request_config = WebSearchRequestConfig(
+            provider="tavily",
+            api_key="tvly-x",
+            base_url="https://api.tavily.com/search",
+            timeout_seconds=5.0,
+            max_results=10,
+            snippet_limit=8,
+        )
+
+        result = await fetch_family_context(
+            "AI trends",
+            ["finance"],
+            request_config=request_config,
+        )
+
+        assert result["finance"]["state"] == "ready"
+        assert len(result["finance"]["items"]) == 10
+
     @pytest.mark.asyncio
     async def test_unsupported_provider_state(self, monkeypatch):
         """Provider with domain_filter_mode=none → unsupported_provider state."""

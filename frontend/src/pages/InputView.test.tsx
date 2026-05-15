@@ -1291,6 +1291,7 @@ describe('InputView campaign progress', () => {
         expect.objectContaining({
           question: 'What if with search?',
           webSearchEnabled: true,
+          webSearchIntensity: 'standard',
         }),
       );
     });
@@ -1306,6 +1307,70 @@ describe('InputView campaign progress', () => {
     expect(payload?.webSearchProvider).toBeUndefined();
     expect(payload?.webSearchApiKey).toBeUndefined();
     expect(payload?.webSearchBaseUrl).toBeUndefined();
+  });
+
+  it('persists web search intensity and includes it in launch payload', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem('swarmoracle.web-search-intensity.v1', 'deep');
+    getCapabilitiesMock.mockResolvedValue({
+      web_search: { scope: 'server', server_enabled: true, method: 'external', provider: 'tavily' },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+
+    const checkbox = screen.getByText('home.web_search_toggle').closest('label')?.querySelector('input[type="checkbox"]');
+    expect(checkbox).toBeInTheDocument();
+    if (checkbox) await user.click(checkbox);
+    await openAdvancedSettings(user);
+
+    expect(screen.getByRole('button', { name: /home\.web_search_intensity_deep/i })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('button', { name: /home\.web_search_intensity_light/i }));
+    expect(window.localStorage.getItem('swarmoracle.web-search-intensity.v1')).toBe('light');
+
+    await user.type(screen.getAllByRole('textbox')[0], 'What if light search?');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          question: 'What if light search?',
+          webSearchEnabled: true,
+          webSearchIntensity: 'light',
+        }),
+      );
+    });
+  });
+
+  it('falls back to standard web search intensity for invalid stored values', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem('swarmoracle.web-search-intensity.v1', 'extreme');
+    getCapabilitiesMock.mockResolvedValue({
+      web_search: { scope: 'server', server_enabled: true, method: 'external', provider: 'tavily' },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('home.web_search_toggle')).toBeInTheDocument();
+    });
+    const checkbox = screen.getByText('home.web_search_toggle').closest('label')?.querySelector('input[type="checkbox"]');
+    if (checkbox) await user.click(checkbox);
+    await openAdvancedSettings(user);
+
+    expect(screen.getByRole('button', { name: /home\.web_search_intensity_standard/i })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('defaults to recommended server search and hides override fields until requested', async () => {
@@ -1406,6 +1471,7 @@ describe('InputView campaign progress', () => {
           webSearchProvider: 'xai',
           webSearchApiKey: 'xai-test-key',
           webSearchBaseUrl: 'https://api.x.ai/v1/responses',
+          webSearchIntensity: 'standard',
         }),
       );
     });

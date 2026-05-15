@@ -23,10 +23,11 @@ React + TypeScript frontend for SwarmOracle.
 
 | Route | Component | Description |
 |-------|-----------|-------------|
-| `/` | `InputView` | Scenario input, progress indicator, quick starts, onboarding, launch confirmation, source families, provider policy, optional organization id, advanced/BYOK accordions, preflight-aware submit loading, custom Agent attach panel, feature-gated snapshot import |
+| `/` | `InputView` | Scenario input, progress indicator, quick starts, onboarding, launch confirmation, source families, search-depth selector, provider policy, optional organization id, advanced/BYOK accordions, preflight-aware submit loading, custom Agent attach panel, feature-gated snapshot import |
 | `/admin/setup` | `SetupWizardView` | Three-step provider setup, API/base URL entry, and connection test |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, capture |
 | `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Result Quality verdict panel when available, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, share/export, prediction card, feature-gated snapshot export, replay import, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
+| `/workbench/:id` | `WorkbenchView` | Dedicated graph workbench for causal / split / KG layouts; preserves the analysis branch query and links back to the scenario result page |
 | `/replay/:id` | `ReplayView` | Replay trace timeline with pagination, branch filter, and unavailable/probe-error states |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
 | `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate result, supporting turns, replay digest, share/import |
@@ -72,6 +73,8 @@ React + TypeScript frontend for SwarmOracle.
   first-frame auth / `auth_ok` / `4001` / `4404` handling stays aligned with the shared backend contract
 - `PhaserGameLoader` / `useScreenCapture`
   Theater-only loading and split capture runtime; TitleScene / EndingScene runtime copy now reads `game.*` locale keys instead of branching on `i18next.language`
+- `AgentPanel.tsx`
+  live agent roster and transcript panel; filtering one agent groups that agent's messages by worldline, sorts each group by round, and uses branch titles/descriptions for the group header
 - `predictionBetting.ts`
   structured bet helpers now fall back to the raw tone id when they receive an unknown ending tone label
 - `ResumePanel.tsx`
@@ -108,6 +111,8 @@ React + TypeScript frontend for SwarmOracle.
   segment filters sync to URL params; loading, empty, retry, back action, and row animation states are localized, ignore stale responses, and respect reduced-motion settings
 - `uiPreferencesStore.ts`
   localStorage-backed ResultView Reader/Workbench preference
+- `WorkbenchView.tsx`
+  dedicated graph workbench shell; causal, split, and KG tabs keep separate capability gates, preserve the selected branch from the URL, and expose a stable back link to `/result/:id`
 - `experiments/phaser-custom/*`
   local curated Phaser entry, isolated spike configs, and repeatable custom-build validation scripts; current default `vite / vitest` also consume this entry, while `phaser3spectorjs-stub.cjs` keeps the build path quiet
 - `scripts/lib/frontendPreflight.mjs`

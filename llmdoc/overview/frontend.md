@@ -25,7 +25,7 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、可选 `Organization ID`、推荐已配置搜索 / 高级自定义 provider 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、搜索深度选择、可选 `Organization ID`、推荐已配置搜索 / 高级自定义 provider 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
 | SetupWizardView | `frontend/src/pages/SetupWizardView.tsx` | `/admin/setup` 3 步 provider 配置向导；选择 preset、填 API key/base URL、测试连接并写入 session-scoped provider policy |
 | AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、编辑/删除入口、返回首页按钮、persona 单个/批量导出与 JSON 导入入口 |
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择、PDF document upload tab，以及 capability-gated persona import/export 菜单 |
@@ -33,6 +33,7 @@
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
 | ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel、分支级 question answer、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
+| WorkbenchView | `frontend/src/pages/WorkbenchView.tsx` | 独立图谱工作台；支持 `graph / split / kg` 三种 view，保留 URL 里的 analysis branch，并提供返回结果页链接 |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live、Podium Cards、room state、phase 历史卡、counterplay、live argument map |
@@ -218,13 +219,14 @@
 | `e2e-result-share-fixture.mjs` | `frontend/scripts/e2e-result-share-fixture.mjs` | ResultView + ShareModal fixture browser 回归；脚本 stub 后端 scenario/branch/story/social/capability JSON，检查真实分支渲染、分享弹窗、预测卡片、social endpoint、控制台/page/request 错误和横向溢出。`full` 默认跑 desktop + mobile Chromium |
 | `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
 | `PipelineStepper.tsx` | `frontend/src/components/PipelineStepper.tsx` | `/sim/:id` 与 `/result/:id` 的 fixed-bottom pipeline progressbar；error 状态下 `aria-valuenow` 会钳到有效范围 |
+| `AgentPanel.tsx` | `frontend/src/components/AgentPanel.tsx` | 主推演右侧 Agent 列表与实时发言；筛选某个 Agent 时，会按世界线分组展示该 Agent 的发言，并在每组内按 round 排序 |
 | `ResultConversationWidget.tsx` | `frontend/src/components/ResultConversationWidget.tsx` | 结果页轻量追问入口，复用 `NodeConversationSheet`；会把当前 analysis branch 的标题、insight、fork reason、关键时刻和对比分支传成 result origin；replay 结果页不渲染这条 live-only 入口 |
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
 | `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
 | `NodeDetailPanel.tsx` | `frontend/src/components/NodeDetailPanel.tsx` | 两个图面的共用节点详情侧栏；显示 type / round / payload / unit details；event / fork / outcome 会优先展示用户可读语义字段 |
 | `NodeContextBanner.tsx` | `frontend/src/components/kg/NodeContextBanner.tsx` | `NodeConversationSheet` 的来源摘要卡；显示 node type、round、对话目标、卡片意义、前因/后续/关系、label 和截断 excerpt |
 | `NodeQuickCard.tsx` | `frontend/src/components/workbench/NodeQuickCard.tsx` | KG 工作台桌面节点快览卡；按视口钳位位置，避免靠边节点把卡片挤出屏幕 |
-| `e2e-web-search-suite.mjs` | `frontend/scripts/e2e-web-search-suite.mjs` | 首页搜索增强专项 E2E：custom override、provider/key/base URL、scenario 请求体校验 |
+| `e2e-web-search-suite.mjs` | `frontend/scripts/e2e-web-search-suite.mjs` | 首页搜索增强专项 E2E：custom override、provider/key/base URL、搜索深度、scenario 请求体校验 |
 | `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择；桌面端 `@dnd-kit/core` 入席交互，移动端保留 click-to-seat） |
 | `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作 + phase 分隔线 + speaker 左侧色标） |
 | `AgentAttachPanel.tsx` | `frontend/src/components/AgentAttachPanel.tsx` | 首页自建 Agent 选择卡片；最多 5 个，支持 loading/error/retry/empty 状态，长 persona 和复杂 decision bias 只作为文本展示 |
@@ -274,6 +276,7 @@
   - `provider_capability.supports_domain_filter=false` 时，4 个 source family toggle 会保持可见但不可选，并显示当前语言的说明
   - `推荐：使用已配置搜索` 模式只发送 `webSearchEnabled=true`，provider / key / base URL 输入不展示
   - `高级：使用我的搜索服务` 模式才发送 `webSearchProvider / webSearchApiKey / webSearchBaseUrl`
+  - 搜索深度保存在 `localStorage`，当前可选 `light / standard / deep`；提交时映射成 `webSearchIntensity -> web_search_intensity`
   - 高级模式下，API 型 provider 先显示 API key；base URL 只在用户打开自定义 endpoint 后展示；SearXNG 隐藏 API key，直接展示实例地址
   - 自定义 provider capability 会先从可识别的 base URL 推断；base URL 为空时使用当前下拉 provider 的 capability，只有非空未知 host 会显示 no-provider warning
   - 模型原生搜索当前不是前端独立模式；首页只用说明文案解释它是独立 LLM native path，native citations 只在后端 LLM native path 真的产出后由 ResultView 展示
@@ -335,7 +338,7 @@
   - `NodeConversationSheet` 选择历史后会恢复最后一条已提交 assistant 回复
 - `QuotaBadge` 当前从 `GET /api/quota/summary` 读取 conversation / replay bucket；scenario 或 bucket 切换时，迟到响应不会覆盖新 badge。
 - `ResultView` 当前默认进入 Reader mode；Workbench mode 会持久化到 `swarm-ui-preferences`，并显示 graph / KG / workbench-only panels。结果页 header 会同时显示 conversation/replay `QuotaBadge`。
-- `WorkbenchView` 当前三种 tab 的能力门槛分开判断：`graph` 只要求 causal graph，`kg` 只要求 KG capability，`split` 才要求两者都可用。结果页的 workbench bridge 会把当前 analysis branch 写进 query，进入工作台后仍可保留同一条分析分支语义。
+- `WorkbenchView` 当前三种 tab 的能力门槛分开判断：`graph` 只要求 causal graph，`kg` 只要求 KG capability，`split` 才要求两者都可用。结果页的 workbench bridge 会把当前 analysis branch 写进 query，进入工作台后仍可保留同一条分析分支语义；正常工作台 header 会提供返回对应结果页的链接。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - ending-room artifact/local replay 当前统一落到 `/result/replay?...`；不再要求先拼出 `/result/:scenarioId?...` 才能读出来。artifact payload 里的 `scenario.total_rounds=null` 也会被前端 replay 正常接受，不会再把只读页打成空结果。
 - ending-room replay automation helper 当前识别 `roomReplay / roomShare / roomLocal`；roundtable 页面除 `roomShare / roomLocal` 外也兼容 `share / local` 别名。

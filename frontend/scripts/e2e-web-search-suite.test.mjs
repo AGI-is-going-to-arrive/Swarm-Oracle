@@ -22,6 +22,8 @@ test("parseArgs resolves frontend-relative output dirs", () => {
     "exa",
     "--api-key",
     "secret-key",
+    "--intensity",
+    "deep",
     "--output-dir",
     "output/e2e/web-search-live",
     "--headless",
@@ -30,10 +32,18 @@ test("parseArgs resolves frontend-relative output dirs", () => {
   assert.equal(args.baseUrl, "http://127.0.0.1:19030");
   assert.equal(args.provider, "exa");
   assert.equal(args.apiKey, "secret-key");
+  assert.equal(args.intensity, "deep");
   assert.equal(args.headless, true);
   assert.equal(
     args.outputDir,
     path.resolve("output/e2e/web-search-live"),
+  );
+});
+
+test("parseArgs rejects unsupported web search intensity values", () => {
+  assert.throws(
+    () => __test__.parseArgs(["node", "script", "--intensity", "extreme"]),
+    /Unsupported web search intensity/u,
   );
 });
 

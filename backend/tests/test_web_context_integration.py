@@ -264,7 +264,71 @@ class TestCreateScenarioWithWebSearch:
             provider_override="exa",
             api_key_override="exa-test-key",
             base_url_override="https://api.exa.ai/search",
+            intensity="standard",
         )
+
+    def test_web_search_intensity_maps_to_base_family_and_background(self, client):
+        mock_result = WebSearchResult(
+            query="What if deep search?",
+            snippets=[
+                WebSearchSnippet(
+                    text=f"deep result {i}",
+                    source_url=f"https://exa.ai/{i}",
+                )
+                for i in range(10)
+            ],
+            provider="exa",
+            timestamp="2026-04-13T12:00:00Z",
+            cached=False,
+        )
+
+        def _close_background(coro):
+            coro.close()
+            return None
+
+        with (
+            patch(
+                "app.services.web_context.fetch_web_context",
+                new_callable=AsyncMock,
+                return_value=mock_result,
+            ) as mock_fetch,
+            patch(
+                "app.services.web_context.fetch_family_context",
+                new_callable=AsyncMock,
+                return_value=_mock_family_context("finance"),
+            ) as mock_family,
+            patch(
+                "app.api.scenarios.parse_and_run_background",
+                new_callable=AsyncMock,
+            ) as parse_mock,
+            patch("app.api.scenarios.schedule_background_task", side_effect=_close_background),
+            patch("app.api.scenarios.settings.FEATURE_NEW_SOURCES", True),
+        ):
+            resp = client.post("/api/scenario", json={
+                "question": "What if deep search?",
+                "web_search_enabled": True,
+                "web_search_intensity": "deep",
+                "web_search_families": ["finance"],
+                "web_search_provider": "exa",
+                "web_search_api_key": "exa-test-key",
+                "web_search_base_url": "https://api.exa.ai/search",
+            })
+
+        assert resp.status_code == 200
+        mock_fetch.assert_awaited_once_with(
+            "What if deep search?",
+            provider_override="exa",
+            api_key_override="exa-test-key",
+            base_url_override="https://api.exa.ai/search",
+            intensity="deep",
+        )
+        family_config = mock_family.call_args.kwargs["request_config"]
+        assert family_config.provider == "exa"
+        assert family_config.max_results == 10
+        assert family_config.snippet_limit == 8
+        assert parse_mock.call_args.kwargs["web_search_intensity"] == "deep"
+        assert parse_mock.call_args.kwargs["web_search_max_results"] == 10
+        assert parse_mock.call_args.kwargs["web_search_snippet_limit"] == 8
 
     def test_web_search_disabled_no_fetch(self, client):
         """web_search_enabled=false → fetch_web_context never called."""
@@ -296,6 +360,7 @@ class TestCreateScenarioWithWebSearch:
                 "web_search_enabled": False,
                 "web_search_provider": "tavily",
                 "web_search_base_url": "https://not-allowed.example.com/search",
+                "web_search_intensity": "extreme",
             })
 
         assert resp.status_code == 200
@@ -853,10 +918,12 @@ class TestBYOKKeyIsolation:
             provider_override=None,
             api_key_override=None,
             base_url_override=None,
+            intensity=None,
         ):
             captured_config["api_key"] = api_key_override
             captured_config["base_url"] = base_url_override
             captured_config["provider"] = provider_override
+            captured_config["intensity"] = intensity
             return None
 
         with (
@@ -880,6 +947,7 @@ class TestBYOKKeyIsolation:
         assert captured_config.get("api_key") == "tavily-search-key"
         assert captured_config.get("provider") == "tavily"
         assert captured_config.get("base_url") == "https://api.tavily.com"
+        assert captured_config.get("intensity") == "standard"
 
     def test_both_byok_keys_stay_separate(self, client):
         """Both BYOK keys present → web search path must only receive the
@@ -892,10 +960,12 @@ class TestBYOKKeyIsolation:
             provider_override=None,
             api_key_override=None,
             base_url_override=None,
+            intensity=None,
         ):
             search_captured["api_key"] = api_key_override
             search_captured["base_url"] = base_url_override
             search_captured["provider"] = provider_override
+            search_captured["intensity"] = intensity
             return None
 
         with (
@@ -918,6 +988,7 @@ class TestBYOKKeyIsolation:
         # Web search must receive the web search key + provider, never the LLM key.
         assert search_captured.get("api_key") == "tavily-key"
         assert search_captured.get("provider") == "tavily"
+        assert search_captured.get("intensity") == "standard"
         assert search_captured.get("api_key") != "sk-llm-key"
         assert search_captured.get("base_url") != "https://api.openai.com/v1"
 
@@ -980,9 +1051,15 @@ async def test_parse_and_run_background_persists_selected_web_search_families(mo
         llm_tokens_per_minute=None,
         disable_user_quota=None,
         web_search_families=["finance", "academic"],
+        web_search_intensity="deep",
+        web_search_max_results=10,
+        web_search_snippet_limit=8,
     )
 
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
         assert scenario is not None
         assert scenario.parsed_context["web_search_families"] == ["finance", "academic"]
+        assert scenario.parsed_context["web_search_intensity"] == "deep"
+        assert scenario.parsed_context["web_search_max_results"] == 10
+        assert scenario.parsed_context["web_search_snippet_limit"] == 8

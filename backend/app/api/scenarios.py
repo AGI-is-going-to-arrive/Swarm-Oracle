@@ -75,7 +75,10 @@ from app.services.llm_client import (
 from app.services.scoring import recompute_leaderboard_entry
 from app.services.simulation_cancel import get_or_create_cancel_token, request_cancel
 from app.services.vector_store import get_vector_store
-from app.services.web_context import validate_web_search_base_url
+from app.services.web_context import (
+    resolve_web_search_intensity_config,
+    validate_web_search_base_url,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_session)])
@@ -706,6 +709,7 @@ async def create_scenario(
         req.web_search_provider = None
         req.web_search_api_key = None
         req.web_search_base_url = None
+        req.web_search_intensity = None
 
     if req.web_search_base_url:
         effective_web_search_provider = req.web_search_provider or settings.WEB_SEARCH_PROVIDER
@@ -760,6 +764,11 @@ async def create_scenario(
     )
 
     viz_enabled = req.visualization_enabled or False
+    web_search_intensity_config = (
+        resolve_web_search_intensity_config(req.web_search_intensity)
+        if req.web_search_enabled
+        else None
+    )
     initial_scene_theme = None
     if viz_enabled:
         try:
@@ -779,6 +788,11 @@ async def create_scenario(
             "mode": mode,
             "hierarchical": use_hierarchical,
             "simulation_rounds": sim_rounds,
+            **({
+                "web_search_intensity": web_search_intensity_config.intensity,
+                "web_search_max_results": web_search_intensity_config.max_results,
+                "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
+            } if web_search_intensity_config else {}),
         },
     )
     # Web Search Enhancement: fetch context synchronously before response.
@@ -798,6 +812,7 @@ async def create_scenario(
                 provider_override=req.web_search_provider,
                 api_key_override=req.web_search_api_key,
                 base_url_override=req.web_search_base_url,
+                intensity=req.web_search_intensity,
             )
         except Exception as exc:
             logger.warning(
@@ -818,6 +833,7 @@ async def create_scenario(
                     provider_override=req.web_search_provider,
                     api_key_override=req.web_search_api_key,
                     base_url_override=req.web_search_base_url,
+                    intensity=req.web_search_intensity,
                 )
                 family_context = await fetch_family_context(
                     question,
@@ -886,6 +902,15 @@ async def create_scenario(
                 for override in (req.continuity_overrides or [])
             ] or None,
             web_search_families=req.web_search_families if req.web_search_enabled else None,
+            web_search_intensity=(
+                web_search_intensity_config.intensity if web_search_intensity_config else None
+            ),
+            web_search_max_results=(
+                web_search_intensity_config.max_results if web_search_intensity_config else None
+            ),
+            web_search_snippet_limit=(
+                web_search_intensity_config.snippet_limit if web_search_intensity_config else None
+            ),
         )
     )
 

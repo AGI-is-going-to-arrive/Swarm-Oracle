@@ -308,6 +308,7 @@ describe('web search wire-format', () => {
       webSearchProvider: 'tavily',
       webSearchApiKey: 'sk-secret',
       webSearchBaseUrl: 'https://example.com',
+      webSearchIntensity: 'deep',
     };
     await createScenario(options);
 
@@ -317,6 +318,7 @@ describe('web search wire-format', () => {
     expect(body).not.toHaveProperty('web_search_provider');
     expect(body).not.toHaveProperty('web_search_api_key');
     expect(body).not.toHaveProperty('web_search_base_url');
+    expect(body).not.toHaveProperty('web_search_intensity');
   });
 
   it('should include web_search_enabled and families when enabled with server default', async () => {
@@ -331,6 +333,7 @@ describe('web search wire-format', () => {
     const body = getRequestBody(fetchMock);
     expect(body.web_search_enabled).toBe(true);
     expect(body.web_search_families).toEqual(['polymarket', 'finance']);
+    expect(body.web_search_intensity).toBe('standard');
     expect(body).not.toHaveProperty('web_search_provider');
     expect(body).not.toHaveProperty('web_search_api_key');
     expect(body).not.toHaveProperty('web_search_base_url');
@@ -347,6 +350,7 @@ describe('web search wire-format', () => {
     const body = getRequestBody(fetchMock);
     expect(body.web_search_enabled).toBe(true);
     expect(body.web_search_families).toEqual([]);
+    expect(body.web_search_intensity).toBe('standard');
   });
 
   it('should include all web search fields when enabled with custom override', async () => {
@@ -359,6 +363,7 @@ describe('web search wire-format', () => {
       webSearchProvider: 'tavily',
       webSearchApiKey: 'sk-test-key',
       webSearchBaseUrl: 'https://api.tavily.com',
+      webSearchIntensity: 'deep',
     });
 
     const body = getRequestBody(fetchMock);
@@ -367,6 +372,7 @@ describe('web search wire-format', () => {
     expect(body.web_search_provider).toBe('tavily');
     expect(body.web_search_api_key).toBe('sk-test-key');
     expect(body.web_search_base_url).toBe('https://api.tavily.com');
+    expect(body.web_search_intensity).toBe('deep');
   });
 
   it('should include Firecrawl web search override fields', async () => {
@@ -399,12 +405,14 @@ describe('web search wire-format', () => {
       webSearchProvider: 'exa',
       webSearchApiKey: 'sk-preflight-secret',
       webSearchBaseUrl: 'https://api.exa.ai',
+      webSearchIntensity: 'light',
     });
 
     const body = getRequestBody(fetchMock);
     // Preflight may still carry the enabled flag + families to check configuration.
     expect(body.web_search_enabled).toBe(true);
     expect(body.web_search_families).toEqual(['news_deep']);
+    expect(body.web_search_intensity).toBe('light');
     // Override credentials must NOT leak through preflight (data minimization).
     expect(body).not.toHaveProperty('web_search_provider');
     expect(body).not.toHaveProperty('web_search_api_key');

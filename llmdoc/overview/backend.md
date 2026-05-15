@@ -37,13 +37,13 @@
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记 |
+| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent prompt 会带当前世界线标题/分叉原因，Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记 |
 | Simulation Cancel | `backend/app/services/simulation_cancel.py` | scenario 取消 token、DB cancelled fallback 与后台任务取消信号 |
 | Preflight | `backend/app/services/preflight.py` | admin/CLI 预检：SQLite、ChromaDB、LLM、web search、CORS、volume |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
 | Personality Drift | `backend/app/services/personality_drift.py` | 从 identity metadata、消息和成长事件派生 Big Five drift warning |
-| Memory | `backend/app/services/memory.py` | L1 压缩、context 组装 |
-| Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、缓存、`ProviderSearchOutcome` 状态映射、native citation 序列化与上下文格式化 |
+| Memory | `backend/app/services/memory.py` | L1 压缩、context 组装；Agent context 可接收当前世界线块，提醒同一角色在不同分支里不要复用同一组例子和结论 |
+| Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、搜索深度预算、缓存、`ProviderSearchOutcome` 状态映射、native citation 序列化与上下文格式化 |
 | LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断、JSON stream-first fallback；Responses API native search tools 只在已识别 provider + 非 proxy 路径启用 |
 | Native Search Adapters | `backend/app/services/native_search_adapters.py` | provider-specific native search tools/citation parsing；当前有 xAI native pilot、OpenAI structural adapter/fixtures 和 null adapter；OpenAI live signoff 仍是 backlog |
 | Conversation Service | `backend/app/services/conversation_service.py` | conversation thread/turn 创建、bootstrap claim、SSE stream 终态与取消原因收口 |
@@ -321,7 +321,8 @@
 - 搜索增强当前走 `web_context.py`：
   - app-layer provider 支持 `tavily / exa / xai / searxng`；`native` 仍是 legacy placeholder，preflight 会给 warn，不会当作已实现 provider pass
   - 模型原生联网不是 `WEB_SEARCH_PROVIDER=native` 这条 app-layer provider；它来自 simulation runtime 把 source family domain 传给支持 native search 的非 proxy Responses API LLM provider
-  - `POST /api/scenario` 可传 request-scoped `web_search_families / web_search_provider / web_search_api_key / web_search_base_url`
+  - `POST /api/scenario` 可传 request-scoped `web_search_families / web_search_provider / web_search_api_key / web_search_base_url / web_search_intensity`
+  - `web_search_intensity` 当前只接受 `light / standard / deep`；分别对应 3/3、5/5、10/8 的抓取结果数与 prompt 注入片段数
   - `web_search_enabled=false` 时，这些 override 字段会在路由层被忽略，不影响正常建局
   - custom provider override 不会再复用“另一个 provider”的服务端默认 key
   - `xai` 走 Responses API + `web_search` tool；source family 会用 `filters.allowed_domains`，并在返回后再次按 URL 过滤

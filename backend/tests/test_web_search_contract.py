@@ -64,6 +64,37 @@ class TestCreateScenarioRequestWebSearch:
         )
         assert req.web_search_families == ["polymarket", "academic"]
 
+    def test_web_search_intensity_defaults_standard_when_enabled(self):
+        req = CreateScenarioRequest(
+            question="What if AI takes over?",
+            web_search_enabled=True,
+        )
+        assert req.web_search_intensity == "standard"
+
+    def test_web_search_intensity_normalizes_known_values(self):
+        req = CreateScenarioRequest(
+            question="What if AI takes over?",
+            web_search_enabled=True,
+            web_search_intensity=" Deep ",
+        )
+        assert req.web_search_intensity == "deep"
+
+    def test_web_search_intensity_rejects_unknown_when_enabled(self):
+        with pytest.raises(ValueError):
+            CreateScenarioRequest(
+                question="What if AI takes over?",
+                web_search_enabled=True,
+                web_search_intensity="extreme",
+            )
+
+    def test_web_search_intensity_ignored_when_disabled(self):
+        req = CreateScenarioRequest(
+            question="What if AI takes over?",
+            web_search_enabled=False,
+            web_search_intensity="extreme",
+        )
+        assert req.web_search_intensity is None
+
     def test_web_search_enabled_accepted_in_api_payload(self, client):
         """POST /api/scenario should accept web_search_enabled without 422."""
         resp = client.post("/api/scenario", json={
@@ -78,6 +109,30 @@ class TestCreateScenarioRequestWebSearch:
             "question": "What if pigs fly?",
             "web_search_enabled": True,
             "web_search_families": ["polymarket", "finance"],
+        })
+        assert resp.status_code in (200, 500)
+
+    def test_web_search_intensity_accepted_in_api_payload(self, client):
+        resp = client.post("/api/scenario", json={
+            "question": "What if pigs fly?",
+            "web_search_enabled": True,
+            "web_search_intensity": "deep",
+        })
+        assert resp.status_code in (200, 500)
+
+    def test_web_search_intensity_rejected_in_api_payload(self, client):
+        resp = client.post("/api/scenario", json={
+            "question": "What if pigs fly?",
+            "web_search_enabled": True,
+            "web_search_intensity": "extreme",
+        })
+        assert resp.status_code == 422
+
+    def test_web_search_intensity_ignored_when_disabled_in_api_payload(self, client):
+        resp = client.post("/api/scenario", json={
+            "question": "What if pigs fly?",
+            "web_search_enabled": False,
+            "web_search_intensity": "extreme",
         })
         assert resp.status_code in (200, 500)
 

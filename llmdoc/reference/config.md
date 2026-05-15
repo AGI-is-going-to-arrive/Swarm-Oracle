@@ -210,6 +210,11 @@
 - xAI app-layer 搜索的 `web_search_base_url` 官方托管地址只接受 `https://api.x.ai/v1/responses`；非 production 下允许 localhost / 127.0.0.1 / ::1 这类本地 xAI-compatible Responses proxy 做实测。
 - SearXNG 不需要搜索 API key，但需要一个可访问的 SearXNG 实例；可以是本地 Docker / 自建服务 / 公共实例。公共实例只适合实验：可能没有启用 JSON API、被限流、返回空结果或临时下线，不能作为稳定发布能力或免费额度承诺。
 - 前端 toggle 为 opt-in（默认关闭）。InputView 当前默认显示搜索增强入口，不再要求 `VITE_ENABLE_WEB_SEARCH=true` 或服务端默认搜索已就绪。
+- 首页搜索深度不是环境变量，是 `POST /api/scenario` 的单局字段 `web_search_intensity`，前端会保存在 `localStorage`：
+  - `light`：抓取 3 条结果，并向 prompt 注入 3 条 snippet
+  - `standard`：抓取 5 条结果，并向 prompt 注入 5 条 snippet
+  - `deep`：抓取 10 条结果，并向 prompt 注入 8 条 snippet
+  - 未传或本地存储值非法时回到 `standard`
 - `GET /api/capabilities` 的 `web_search` 字段当前只表达服务端默认搜索是否 ready（`scope: "server"`）：
   - ready 时，首页默认展示 `推荐：使用已配置搜索`
   - not ready 时，首页仍可选 `高级：使用我的搜索服务`
@@ -221,6 +226,7 @@
 - 首页 4 个 source family toggle 只有在 `web_search_enabled=true` 且当前 provider capability 支持 domain filter 时，才会透传成 `web_search_families`；关闭搜索或 capability 不支持时会清空选择。
 - request-scoped override 当前约束：
   - `web_search_enabled=false` 时，override 字段会被忽略
+  - `web_search_intensity` 只接受 `light / standard / deep`；关闭搜索时会被忽略
   - 如果 custom override 的 provider 与服务端默认 provider 不同，留空不会复用服务端默认 key，需要显式填写该 provider 的 key
   - 官方 provider 的 `web_search_base_url` 当前只接受 `https`
   - `searxng` 的 `web_search_base_url` 只接受和 `SEARXNG_URL` 完全一致的基址
