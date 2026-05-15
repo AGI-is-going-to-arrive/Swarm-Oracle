@@ -298,6 +298,9 @@ export function AgentWorkshopView() {
 
   return (
     <div className="workshop-view agent-page agent-page--narrow">
+      <Link to="/agents" className="workshop-view__back">
+        ← {t('agents.back_to_library')}
+      </Link>
       <div className="workshop-view__header">
         <h1>{isEditMode ? t('agents.edit_title', 'Edit Agent') : t('agents.workshop_title', 'Create Custom Agent')}</h1>
         <PersonaExportMenu

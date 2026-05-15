@@ -1443,6 +1443,7 @@
     },
     "agents": {
       "library_title": "Agent Library",
+      "back_to_library": "Back to Agent Library",
       "workshop_title": "Create Custom Agent",
       "edit_title": "Edit Agent",
       "edit": "Edit",

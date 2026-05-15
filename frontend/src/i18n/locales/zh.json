@@ -1443,6 +1443,7 @@
     },
     "agents": {
       "library_title": "Agent 库",
+      "back_to_library": "返回 Agent 库",
       "workshop_title": "创建自定义 Agent",
       "edit_title": "编辑 Agent",
       "edit": "编辑",

@@ -3,7 +3,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   deleteAgent,
@@ -23,7 +23,6 @@ type LibraryTab = 'all' | 'favorites';
 
 export function AgentLibrary() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const {
     loading: capLoading,
     enabled,
@@ -228,14 +227,13 @@ export function AgentLibrary() {
     <div className="agent-page">
       <div className="agent-page__header">
         <div className="agent-page__title-row">
-          <button
-            type="button"
+          <Link
+            to="/"
             className="agent-button agent-button--back"
-            onClick={() => navigate(-1)}
-            aria-label={t('common.go_back', 'Go back')}
+            aria-label={t('common.back_home', 'Back to Home')}
           >
             ← {t('common.back', 'Back')}
-          </button>
+          </Link>
           <h1>{t('agents.library_title', 'Agent Library')}</h1>
         </div>
         <div className="agent-page__header-actions">

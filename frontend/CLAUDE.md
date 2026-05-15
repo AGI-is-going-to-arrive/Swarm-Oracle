@@ -71,8 +71,8 @@ npm run test:watch # vitest (watch mode)
 | `roundtableHelpers.ts` | 圆桌辅助函数 |
 | `resultHelpers.ts` | 结果辅助函数 |
 | `simulationHelpers.ts` | 模拟辅助函数 |
-| `AgentWorkshopView.tsx` | 自建 Agent 表单 (Phase 3 F3) |
-| `AgentLibrary.tsx` | Agent 身份网格 + 删除 (Phase 3 F1) |
+| `AgentWorkshopView.tsx` | 自建 Agent 表单 + 返回 Agent 库链接 (Phase 3 F3) |
+| `AgentLibrary.tsx` | Agent 身份网格 + 删除 + 返回首页 (Phase 3 F1) |
 | `CausalReviewView.tsx` | @xyflow/react DAG + dagre 布局 (Phase 3 F2) |
 | `ReplayView.tsx` | replay trace 时间线，支持 cursor pagination、Load more、branch filter、capability unavailable surface |
 | `CompareDigestView.tsx` | 逐轮分支对比 + 发散度条 (Phase 3 F4) |
@@ -391,6 +391,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-15 | Agent 页面导航修复 | `AgentWorkshopView.tsx`：标题上方新增 `← 返回 Agent 库` 文字链接（`<Link to="/agents">`，样式 `.workshop-view__back`）。`AgentLibrary.tsx`：返回按钮从 `navigate(-1)` 改为 `<Link to="/">`，修复从 `/agents/new` 跳转到 `/agents` 后点返回会回到 `/agents/new` 的历史栈 bug；移除不再使用的 `useNavigate` import。i18n 新增 `agents.back_to_library`（zh: 返回 Agent 库 / en: Back to Agent Library）。验证：frontend full vitest `185 files / 2047 tests passed`，tsc/eslint/build 通过，i18n `2527/2527`，浏览器实测 `/agents/new` → `/agents` → `/` 导航链路正确 |
 | 2026-05-15 | Result Quality / Question Anchoring | `ResultView.tsx` 按 `/api/capabilities.result_verdict` 接入 `ResultVerdictPanel`；`ResultHeader` 只有在 capability enabled 且 story verdict 非空时切到预测结果 subtitle；`EndingCardsGrid` 只在 branch `question_answer` 非空时显示分支级一句话回答；`PredictionModal.css` 同步收口单滚动容器、safe-area、reduced-motion、forced-colors 和 OKLCH fallback。验证：frontend `npx tsc --noEmit`、targeted vitest `98 passed`、full vitest `185 files / 2047 tests passed`、eslint/build/i18n `2509/2509` 通过；浏览器复核新 verdict 页、旧无 verdict 页、语言切换、桌面与 `375x812` mobile，console 无 JS error |
 | 2026-05-14 | Session launch / web search settings 回归修复 | `InputView.tsx`：`launchInFlightRef` 防 BYOK 自动 preflight 和 continuity confirmation 重复启动；continuity preflight 失败时显示错误但继续按无 override 启动。`useWebSearchConfig.ts`：custom override 且 base URL 为空时使用下拉 provider capability，非空未知 host 才保留 unknown/no-provider。`SimulationView.tsx/css`：取消确认框补 busy 状态、`aria-busy`、`role=status`、reduced-motion/forced-colors/mobile 样式。验证：frontend full `184 files / 2041 tests passed`，`tsc / eslint / build` 通过，i18n `2621/2621` |
 | 2026-05-14 | Web Search P5 前端边界修复 | `SourceCategoryCard.tsx`：`status_reason` 新增可见 `<p aria-hidden="true">` 段落（`.result-source-card__reason-detail`），普通用户可看到后端具体失败原因；空字符串 reason 在 `ResultModals` 归一化为 undefined。`ResultModals.tsx`：卡片显示条件从 `live \|\| hasItems` 扩展为 `live \|\| hasItems \|\| hasExplainableEntry`（覆盖 failed/unsupported_provider/search_skipped/fallback_unconstrained），capability disabled 时带 historical badge。`WebSourcesSection.tsx`：放宽 snippets 必须为数组的 guard，native-only 场景（无 snippets）可独立渲染 citations；有 native citations 时抑制 "No live web sources" 空态文案。`ResultView.css`：新增 `.result-source-card__reason-detail` 样式 + forced-colors 覆盖。验证：frontend full `184 files / 2038 tests passed`，`tsc / eslint / build` 通过，i18n `2506/2506`；Playwright 实测 desktop 1280x800 + mobile 375x812 覆盖 status_reason 可见性、卡片显示条件、native-only citations、a11y 属性完整性 |

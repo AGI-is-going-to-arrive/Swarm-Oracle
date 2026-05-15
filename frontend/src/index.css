@@ -166,6 +166,21 @@
   text-align: center;
 }
 
+.workshop-view__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  margin-bottom: 8px;
+  transition: color 0.15s;
+}
+
+.workshop-view__back:hover {
+  color: var(--text-primary);
+}
+
 .agent-page__header {
   display: flex;
   align-items: center;
