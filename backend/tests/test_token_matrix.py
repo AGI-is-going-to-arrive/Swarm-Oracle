@@ -6,12 +6,16 @@ map 1:1 to prompt tokens (validated with real API calls).
 
 Then runs a few real LLM calls at key matrix points to validate.
 
-Run:  .venv/bin/python -m pytest tests/test_token_matrix.py -v -s
+Run:
+    .venv/bin/python -m pytest tests/test_token_matrix.py -v -s
+    RUN_REAL_LLM_TESTS=1 .venv/bin/python -m pytest \
+        tests/test_token_matrix.py::TestLLMValidation -v -s
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 
 import httpx
@@ -349,6 +353,13 @@ class TestSyntheticMatrix:
 #  Test 2: Real LLM validation at key matrix points
 # ══════════════════════════════════════════════════════════════
 
+_RUN_REAL_LLM_TESTS = os.getenv("RUN_REAL_LLM_TESTS") == "1"
+
+
+@pytest.mark.skipif(
+    not _RUN_REAL_LLM_TESTS,
+    reason="set RUN_REAL_LLM_TESTS=1 to enable live token validation",
+)
 class TestLLMValidation:
     """Validate bytes→tokens correlation with real API calls."""
 

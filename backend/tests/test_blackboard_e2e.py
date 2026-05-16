@@ -4,7 +4,7 @@ Compares RAW mode (tier-filtered DB messages) vs BLACKBOARD mode
 across 5 agents × 3 rounds with concurrent execution per round.
 
 Run with:
-    .venv/bin/python -m pytest tests/test_blackboard_e2e.py -v -s
+    RUN_REAL_LLM_TESTS=1 .venv/bin/python -m pytest tests/test_blackboard_e2e.py -v -s
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -29,6 +30,11 @@ from app.services.memory import (
 )
 
 logger = logging.getLogger(__name__)
+_RUN_REAL_LLM_TESTS = os.getenv("RUN_REAL_LLM_TESTS") == "1"
+pytestmark = pytest.mark.skipif(
+    not _RUN_REAL_LLM_TESTS,
+    reason="set RUN_REAL_LLM_TESTS=1 to enable live blackboard benchmark",
+)
 
 # Derive from settings via the same resolver used by llm_client at runtime.
 LLM_API_URL = _resolve_llm_api_url()

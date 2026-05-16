@@ -10,13 +10,14 @@ Matrix (trimmed for fast CI):
   Total API calls: ~78 calls (2 modes per config)
   Estimated time: ~2-3 min with concurrency=8
 
-Run:  .venv/bin/python -m pytest tests/test_e2e_matrix.py -v -s
+Run:  RUN_REAL_LLM_TESTS=1 .venv/bin/python -m pytest tests/test_e2e_matrix.py -v -s
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -36,6 +37,11 @@ LLM_API_URL = _resolve_llm_api_url()
 CONCURRENCY = 8
 RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 REQUEST_RETRY_ATTEMPTS = 3
+_RUN_REAL_LLM_TESTS = os.getenv("RUN_REAL_LLM_TESTS") == "1"
+pytestmark = pytest.mark.skipif(
+    not _RUN_REAL_LLM_TESTS,
+    reason="set RUN_REAL_LLM_TESTS=1 to enable live LLM matrix tests",
+)
 
 SETTING = "三国末期，天下三分。曹魏、蜀汉、东吴在军事、外交、经济等领域展开全面博弈。"
 TOPIC = "如果诸葛亮北伐成功占领长安，三国格局将如何改变？"

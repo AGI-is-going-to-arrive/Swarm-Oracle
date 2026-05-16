@@ -98,11 +98,10 @@ source .venv/bin/activate
 python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py tests/test_llm_client.py tests/test_web_context.py tests/test_api.py -q
 ```
 
-- Latest local backend verification for the Result Quality release-gate:
-  - Result Quality narrator / simulator / story / capability / parser targeted tests: `15 passed, 181 deselected`
-  - `ruff check app/ tests/test_parser.py`: pass
-  - broad backend command with the release-gate filter: `3 failed, 3024 passed, 7 skipped, 1 deselected`
-  - follow-up: parser clamp and conversation abort timing pass individually; `tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` remains a live LLM matrix slow path under the 120s timeout
+- Latest local backend verification for the Document Ingestion / backend gate:
+  - `python -m pytest tests/test_document_ingestion.py -q`: `48 passed`
+  - `python -m pytest -x -q --timeout=60`: `3070 passed, 6 skipped`
+  - live LLM benchmark / observation tests are opt-in with `RUN_REAL_LLM_TESTS=1`
 - Current release judgment still lives in `llmdoc/guides/development.md`; this file only keeps the latest backend headline.
 
 ## Runtime Notes
@@ -129,6 +128,7 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - `runtime_lock_is_active()` now uses a read-only existence check for active leases instead of taking `BEGIN IMMEDIATE` on the shared lock table.
 - `vector_store.py` now treats the shared Chroma write lease as best-effort; if another worker already owns the same scenario lock, the write is skipped instead of busy-waiting in the caller.
 - Agent identity L2 profiles now live in a dedicated `identity_profile_{user_id}` Chroma collection; custom agent create/update/delete 会同步 profile，旧的 shared-collection profile 文档会在后续写入时自动清理。
+- Document-driven custom Agent import now keeps PDF parsing capped at 25 MB / 200 pages / 1000000 extracted characters, uses a two-stage long-document entity pass, reports `agents_failed` for partial persona failures, and leaves live LLM benchmark tests behind the `RUN_REAL_LLM_TESTS=1` gate.
 - Ending-room WebSocket 现在只走共享的首帧 auth 协议；HTTP `verify_session` 继续只服务 REST，不再误包住 ending-room WS 路由。
 - Scenario WebSocket capacity is now enforced against `registered + pending-auth` connections together, and the pending slot is reserved before `accept()`, so concurrent handshakes can no longer oversell `MAX_WS_PER_SCENARIO`.
 - `app/api/ws.py` now also exposes `/ws/agent-conversation/{thread_id}`; it reuses the shared first-frame auth / pending-auth budget path, returns `4404` when the feature is off or the thread is missing, and keeps capacity scoped to the owning scenario instead of multiplying by thread count.

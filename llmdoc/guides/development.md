@@ -295,7 +295,7 @@ npx eslint src/ --max-warnings=0
 npm run build
 ```
 
-当前 Result Quality release-gate 记录：backend 定向回归为 `15 passed, 181 deselected`，`ruff check app/ tests/test_parser.py` 通过；backend broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e_alembic.py -k "not test_parse_modern"` 曾返回 `3 failed, 3024 passed, 7 skipped, 1 deselected`，后续确认 `test_rounds_clamped` 和 `test_abort_route_returns_within_100ms_for_stalled_stream` 可单独通过，`test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 是 live LLM matrix 在 `120s` timeout 下的慢路径风险。frontend `npx tsc --noEmit`、targeted vitest `98 passed`、full vitest `185 files / 2047 tests passed`、eslint、build 和 i18n parity `2509/2509` 通过。浏览器复核覆盖新 verdict 结果页、旧无 verdict 结果页、语言切换、桌面与 `375x812` mobile；本地 SQLite 场景数据回填后，指定新 verdict scenario 显示 12 个可见分支 answer cards，旧 scenario 仍无 verdict / answers。Source Family 和 native citation 的历史 browser matrix 仍按对应 release 行读取，不代表本轮重新跑全浏览器矩阵。
+当前 Document Ingestion / backend gate 记录：backend 文档导入定向回归 `python -m pytest tests/test_document_ingestion.py -q` 为 `48 passed`；frontend 文档上传与 locale 窄集 `npm test -- --run src/pages/AgentWorkshop/DocumentUploader.test.tsx src/i18n/locales.test.ts` 为 `19 passed`；backend full gate `python -m pytest -x -q --timeout=60` 为 `3070 passed, 6 skipped`。live LLM benchmark / observation 测试默认跳过，需要 `RUN_REAL_LLM_TESTS=1` 显式开启。Source Family、native citation 和 Result Quality 浏览器矩阵仍按各自 release 行读取，不代表本轮重新跑全浏览器矩阵。
 
 ### Sprint 3/4 snapshot / share / HOPs / ResultView 窄集
 
@@ -837,18 +837,18 @@ npm run assets:provenance:check
 
 ### LLM 集成测试
 
-`test_blackboard_e2e.py`、`test_token_matrix.py`、`test_e2e_matrix.py` 是需要真实 LLM 服务的集成测试。URL 从 `settings.LLM_RESPONSES_URL` 读取（通过 `_resolve_llm_api_url()` 统一解析），不再硬编码本地端口。`test_blackboard_e2e.py` 当前会对瞬时 `5xx` 做有限重试；持续 `4xx / 5xx` 仍然直接失败。`test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 对 live provider 延迟敏感，timeout 需要单独记录，不应写成普通 unit/contract 回归全绿。运行方式：
+`test_blackboard_e2e.py`、`test_token_matrix.py::TestLLMValidation`、`test_e2e_matrix.py` 和 `test_voice_variant_live_rerun.py` 是需要真实 LLM 服务的集成测试。URL 从 `settings.LLM_RESPONSES_URL` 读取（通过 `_resolve_llm_api_url()` 统一解析），不再硬编码本地端口。默认 backend full gate 会跳过这些测试；只有设置 `RUN_REAL_LLM_TESTS=1` 时才执行。`test_blackboard_e2e.py` 当前会对瞬时 `5xx` 做有限重试；持续 `4xx / 5xx` 仍然直接失败。`test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 对 live provider 延迟敏感，timeout 需要单独记录，不应写成普通 unit/contract 回归全绿。运行方式：
 
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_blackboard_e2e.py tests/test_token_matrix.py tests/test_e2e_matrix.py -v
+RUN_REAL_LLM_TESTS=1 python -m pytest tests/test_blackboard_e2e.py tests/test_token_matrix.py::TestLLMValidation tests/test_e2e_matrix.py tests/test_voice_variant_live_rerun.py -v
 ```
 
 如需使用不同 LLM 服务：
 
 ```bash
-LLM_API_KEY=sk-xxx LLM_MODEL_NAME=gpt-xxx LLM_RESPONSES_URL=https://your-api/v1 python -m pytest tests/test_token_matrix.py tests/test_e2e_matrix.py -v
+RUN_REAL_LLM_TESTS=1 LLM_API_KEY=sk-xxx LLM_MODEL_NAME=gpt-xxx LLM_RESPONSES_URL=https://your-api/v1 python -m pytest tests/test_token_matrix.py::TestLLMValidation tests/test_e2e_matrix.py -v
 ```
 
 ### Backend JSON Stream-First 定向回归

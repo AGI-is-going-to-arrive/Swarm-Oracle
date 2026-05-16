@@ -449,6 +449,8 @@ def _purpose_lane(purpose: str | None) -> str:
         return "identity_parse"
     if normalized == "scenario_runtime":
         return "scenario"
+    if normalized == "document_ingestion":
+        return "document"
     if normalized == "scenario_turn_generation":
         return "scenario_turn"
     if normalized == "scenario_fork_detection":
@@ -482,6 +484,8 @@ def _purpose_lane_limit(purpose: str | None) -> int | None:
         return 1 if global_limit <= 3 else 2
     if lane == "oracle":
         return 1 if global_limit <= 4 else 2
+    if lane == "document":
+        return 1 if global_limit <= 2 else min(global_limit, 4)
     if lane in {"parse", "identity_parse", "background"}:
         return 1
     return max(1, min(global_limit, 2))

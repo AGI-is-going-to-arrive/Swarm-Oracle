@@ -233,7 +233,7 @@
 | `AgentCard.tsx` | `frontend/src/components/AgentCard.tsx` | Agent Library 共享卡片；展示 tier、domains、favorite 状态与 profile/edit/export 等动作；长 persona 按 Unicode code point 截断 |
 | `AgentProfileModal.tsx` | `frontend/src/components/AgentProfileModal.tsx` | Agent profile 弹窗；展示成长、记忆、timeline 和 decision bias 分布，切换 Agent 或关闭后的迟到请求不会覆盖当前弹窗 |
 | `IdentityInspectorView.tsx` | `frontend/src/pages/IdentityInspectorView.tsx` | identity memory inspector 页面；切换 id 时清掉旧标题，迟到 memory 响应不会覆盖新 identity，空记忆、基础设施错误和正常 memory list 分开显示 |
-| `DocumentUploader.tsx` | `frontend/src/pages/AgentWorkshop/DocumentUploader.tsx` | Agent Workshop PDF 上传入口；展示抽取进度、错误和新建 identities，取消/重试只更新当前请求 |
+| `DocumentUploader.tsx` | `frontend/src/pages/AgentWorkshop/DocumentUploader.tsx` | Agent Workshop PDF 上传入口；展示抽取进度、部分成功、错误和新建 identities，取消/重试只更新当前请求 |
 | `PersonaExportImport.tsx` / `personaExportImportUtils.ts` | `frontend/src/components/` | persona 导出/导入 UI 与 JSON 校验 helper；导入成功后刷新 Agent Library，失败时显示本地化错误，不直接露出原始 API 文本；`AgentWorkshop/PersonaExportMenu.tsx` 复用同一组 ExportButton / ImportDialog primitive |
 | `EducationTemplatePicker.tsx` | `frontend/src/components/EducationTemplatePicker.tsx` | 首页教育模板 dialog；支持 category / difficulty filter、空结果、Retry、Escape 关闭和 focus trap；加载 / retry 使用 request id、cancel guard 和 fetch token，迟到响应不会覆盖当前状态 |
 | `QuickStartCards.tsx` | `frontend/src/components/QuickStartCards.tsx` | 首页 quick-start 预设卡；TypeScript 只保留 emoji、key、轮数、Agent 数和模式，题目与副标题从 `quickstart.*` locale key 读取 |
@@ -258,7 +258,7 @@
 - Agent Library / Workshop 当前按 `custom_agents` capability gate 显示：
   - Workshop 的 tier selector 使用原生 radio 语义，选项固定为 `IMPORTANT / CROWD`
   - Workshop 的 manual / document tab 使用真实 tab 语义，支持方向键、Home 和 End 切换
-  - Workshop 的 document tab 只接受 PDF 上传；后端成功创建 identities 后，页面会显示新建 Agent 并提示用户回到 Library 查看；空文件、非法 PDF 和无文本 PDF 会显示错误态
+  - Workshop 的 document tab 只接受 PDF 上传；上传请求给后端最多 8 分钟处理，期间用户仍可取消。后端成功创建 identities 后，页面会显示新建 Agent 并提示用户回到 Library 查看；部分 persona 失败会显示失败数量但保留已创建 Agent；0 个 Agent 创建成功时不会显示确认按钮。空文件、非法 PDF、无文本 PDF、处理超时和全部创建失败都会显示本地化错误态
   - 编辑旧 Agent 时会把后端返回的 `preferred_tier` 回填；缺失或未知值回退为 `IMPORTANT`
   - knowledge domains 优先读取后端解析后的数组，旧 payload 只带 JSON 字符串时再本地 parse，解析失败显示为空
   - Library card 显示 tier badge、domains 和 favorite 状态；favorite filter 是 pressed button group，不是 tab panel；空库会给出创建入口

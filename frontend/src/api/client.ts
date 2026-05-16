@@ -1529,8 +1529,11 @@ export interface DocumentAgentIdentity {
 export interface DocumentAgentResult {
   agents_created: number;
   entities_extracted: number;
+  agents_failed?: number;
   identities: DocumentAgentIdentity[];
 }
+
+const DOCUMENT_AGENT_UPLOAD_TIMEOUT_MS = 480_000;
 
 /**
  * POST /api/agents/from-document — multipart upload of a PDF that the
@@ -1559,7 +1562,7 @@ export async function uploadDocumentForAgents(
     },
     // Document parsing + entity extraction can be slow; lift the default
     // 30s ceiling. Caller can still cancel via AbortSignal.
-    120_000,
+    DOCUMENT_AGENT_UPLOAD_TIMEOUT_MS,
   );
 
   if (!res.ok) {

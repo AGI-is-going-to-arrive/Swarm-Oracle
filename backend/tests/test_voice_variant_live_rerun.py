@@ -4,11 +4,12 @@ Calls the real LLM to generate rewritten text for the SAME anchor copy
 across 5 different agent variants. The only variable is the vocabulary hint
 injected by the voice variant system.
 
-Run: pytest tests/test_voice_variant_live_rerun.py -v -s
+Run: RUN_REAL_LLM_TESTS=1 pytest tests/test_voice_variant_live_rerun.py -v -s
 Requires: LLM at http://127.0.0.1:8318/v1 (or 8317 fallback)
 """
 
 import json
+import os
 
 import httpx
 import pytest
@@ -28,6 +29,11 @@ from app.services.ending_room_service._content import (
 LLM_URLS = ["http://127.0.0.1:8318/v1", "http://127.0.0.1:8317/v1"]
 LLM_API_KEY = "sk-12345678"
 LLM_MODEL = "gpt-5.4-mini"
+_RUN_REAL_LLM_TESTS = os.getenv("RUN_REAL_LLM_TESTS") == "1"
+pytestmark = pytest.mark.skipif(
+    not _RUN_REAL_LLM_TESTS,
+    reason="set RUN_REAL_LLM_TESTS=1 to enable live voice variant observation",
+)
 
 # ── Same anchor copy for all agents (zh) ─────────────────────────────
 ANCHOR_COPY_ZH = (

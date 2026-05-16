@@ -26,7 +26,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - Source Family 当前按有效 provider capability 开关选择项；server default 读服务端 `provider_capability`，custom override 有可识别 base URL 时按 URL 推断 Tavily / Exa / xAI / SearXNG，base URL 为空时使用下拉 provider 的 capability，只有非空未知 host 会显示 no-provider warning。provider 不支持 domain filter 时，四个 family checkbox 会保留可见但禁用，已选 family 会被清空，不会把旧选择带进下一次提交。
 - 首页高级设置当前还支持可选 `Organization ID`；值只在当前浏览器 session 内保存，并随请求头 `X-Org-Id` 透传，留空就不发送。
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。preflight 解析阶段超时会返回 `504 IDENTITY_PREFLIGHT_TIMEOUT`，后端不会把它当成“无匹配”；当前首页启动流会提示错误，但继续按无 continuity override 启动。
-- 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑、收藏和选择自建 Agent，也可以在 `/agents/new` 通过 PDF document tab 生成 Agent；首页 attach panel 会以卡片展示 persona、knowledge domains 和 decision bias，最多选择 5 个，并只把 identity id 传给主推演。自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。Agent Library 的 favorites 是普通筛选按钮，Workshop 的 manual/document tab 支持键盘方向键切换；capability/favorite 失败会显示本地化错误和 retry，不直接露出原始后端文本。
+- 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑、收藏和选择自建 Agent，也可以在 `/agents/new` 通过 PDF document tab 生成 Agent；长 PDF 会走采样粗扫 + 全文证据精提，部分 persona 失败时保留已创建 Agent 并显示失败数量。首页 attach panel 会以卡片展示 persona、knowledge domains 和 decision bias，最多选择 5 个，并只把 identity id 传给主推演。自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。Agent Library 的 favorites 是普通筛选按钮，Workshop 的 manual/document tab 支持键盘方向键切换；capability/favorite 失败会显示本地化错误和 retry，不直接露出原始后端文本。
 - 当 `persona_export` capability 开启时，Agent Library 支持 persona 单个/批量导出和 JSON 导入；Agent Workshop 也会在 header 显示同一套导入/导出菜单。导入会创建当前用户的新 custom Agent，不覆盖已有身份，并把 decision bias 归一化到安全的 5 维数值。导入/导出失败会显示本地化提示，意外错误只进入 debug log。
 - 当 `prediction_journal` capability 开启时，`/me/journal` 提供个人预测日志、resolve 状态和 calibration 可视化；绑定 scenario 时按当前用户校验所有权，跨用户或无 owner 的旧 scenario 统一隐藏成 404，刷新时会忽略迟到响应，不用旧请求覆盖新列表。
 - `SimulationView` 负责 live 推演、Classic 分支树、Theater、干预、玩法卡、结构化押注与 capture。Classic 分支卡片仍以 `Branch.title` 为真实标题；标题太短时，前端只补一小段 `description / fork_reason` 线索，方便用户看懂路线差异。右侧 Agent 面板在筛选某个 Agent 时，会把该 Agent 的发言按世界线分组，并在组内按 round 排序。
@@ -190,8 +190,8 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - frontend ResultView / CausalReviewView / locale 定向：`126 passed`
     - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
-  - 本轮 Result Quality release-gate 后端定向回归为 `15 passed, 181 deselected`；`ruff check app/ tests/test_parser.py` 通过
-  - backend broad command 最近一次记录为 `3 failed, 3024 passed, 7 skipped, 1 deselected`；parser clamp 和 conversation abort 已单独复验通过，剩余风险是 `tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 的 live LLM matrix 120s 慢路径
+  - Document Ingestion 定向后端回归：`48 passed`
+  - backend full gate 最近一次记录为 `3070 passed, 6 skipped`；live LLM benchmark / observation 测试默认跳过，需要 `RUN_REAL_LLM_TESTS=1` 显式开启
   - frontend `typecheck / lint / build / perf budgets` 通过
   - 本次 bridge/workbench 文案 + CausalReview guide key-node 标签窄集：`87 passed`
   - 本次前端 TypeScript noEmit：通过

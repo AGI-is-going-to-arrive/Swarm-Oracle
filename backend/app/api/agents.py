@@ -65,12 +65,18 @@ MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024
 DOCUMENT_UPLOAD_CHUNK_BYTES = 1024 * 1024
 PDF_PARSE_TIMEOUT_SECONDS = 30.0
 IDENTITY_PREFLIGHT_TIMEOUT_SECONDS = 10.0
-DOCUMENT_LLM_TIMEOUT_SECONDS = 60.0
 PDF_CONTENT_TYPES = {"application/pdf", "application/x-pdf"}
+PDF_FALLBACK_CONTENT_TYPES = {"", "application/octet-stream"}
 _ORIGINAL_EXTRACT_PDF_TEXT = extract_pdf_text
 
-def _extract_pdf_text_sync(blob: bytes, max_pages: int, max_bytes: int) -> str:
-    return extract_pdf_text(blob, max_pages=max_pages, max_bytes=max_bytes)
+
+def _extract_pdf_text_sync(blob: bytes, max_pages: int, max_bytes: int, max_chars: int) -> str:
+    return extract_pdf_text(
+        blob,
+        max_pages=max_pages,
+        max_bytes=max_bytes,
+        max_chars=max_chars,
+    )
 
 
 async def _extract_pdf_text_with_timeout(blob: bytes) -> str:
@@ -81,6 +87,7 @@ async def _extract_pdf_text_with_timeout(blob: bytes) -> str:
                 blob,
                 max_pages=200,
                 max_bytes=MAX_DOCUMENT_UPLOAD_BYTES,
+                max_chars=settings.DOCUMENT_MAX_EXTRACTED_TEXT_CHARS,
             ),
             timeout=PDF_PARSE_TIMEOUT_SECONDS,
         )
@@ -90,6 +97,7 @@ async def _extract_pdf_text_with_timeout(blob: bytes) -> str:
             blob,
             200,
             MAX_DOCUMENT_UPLOAD_BYTES,
+            settings.DOCUMENT_MAX_EXTRACTED_TEXT_CHARS,
             cancellable=True,
         ),
         timeout=PDF_PARSE_TIMEOUT_SECONDS,
@@ -269,6 +277,14 @@ async def _read_document_upload(file: UploadFile) -> bytes:
             "Uploaded document file is empty",
         )
     return blob
+
+
+def _is_pdf_upload(file: UploadFile) -> bool:
+    content_type = (file.content_type or "").lower()
+    if content_type in PDF_CONTENT_TYPES:
+        return True
+    filename = (file.filename or "").lower()
+    return content_type in PDF_FALLBACK_CONTENT_TYPES and filename.endswith(".pdf")
 
 
 @router.get("/identities")
@@ -798,8 +814,7 @@ async def create_agents_from_document(
     if not effective_user_id:
         raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
 
-    content_type = (file.content_type or "").lower()
-    if content_type not in PDF_CONTENT_TYPES:
+    if not _is_pdf_upload(file):
         raise api_error(
             415,
             "UNSUPPORTED_DOCUMENT_TYPE",
@@ -833,7 +848,7 @@ async def create_agents_from_document(
         try:
             entities = await asyncio.wait_for(
                 extract_entities(chunks, llm_call),
-                timeout=DOCUMENT_LLM_TIMEOUT_SECONDS,
+                timeout=settings.DOCUMENT_ENTITY_TIMEOUT,
             )
         except asyncio.TimeoutError as exc:
             raise api_error(
@@ -847,27 +862,41 @@ async def create_agents_from_document(
             async with sem:
                 return await asyncio.wait_for(
                     generate_persona_from_entity(entity, llm_call),
-                    timeout=DOCUMENT_LLM_TIMEOUT_SECONDS,
+                    timeout=settings.DOCUMENT_PERSONA_SINGLE_TIMEOUT,
                 )
 
         persona_tasks = [
             asyncio.create_task(_generate_with_limit(e))
             for e in entities[:20]
         ]
-        try:
-            personas = await asyncio.wait_for(
-                asyncio.gather(*persona_tasks),
-                timeout=DOCUMENT_LLM_TIMEOUT_SECONDS,
+        pending: set[asyncio.Task]
+        if persona_tasks:
+            _, pending = await asyncio.wait(
+                persona_tasks,
+                timeout=settings.DOCUMENT_PERSONA_TIMEOUT,
             )
-        except asyncio.TimeoutError as exc:
-            for task in persona_tasks:
-                task.cancel()
-            await asyncio.gather(*persona_tasks, return_exceptions=True)
-            raise api_error(
-                504,
-                "DOCUMENT_LLM_TIMEOUT",
-                "Document persona generation timed out",
-            ) from exc
+        else:
+            pending = set()
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        personas: list[dict] = []
+        agents_failed = len(pending)
+        persona_timed_out = bool(pending)
+        for task in persona_tasks:
+            if task in pending:
+                continue
+            try:
+                personas.append(task.result())
+            except asyncio.TimeoutError as exc:
+                persona_timed_out = True
+                agents_failed += 1
+                logger.warning("Skipped persona generation from document: %s", exc)
+            except Exception as exc:
+                agents_failed += 1
+                logger.warning("Skipped persona generation from document: %s", exc)
     identities: list[dict] = []
     seen_keys: set[str] = set()
     for persona in personas:
@@ -887,6 +916,7 @@ async def create_agents_from_document(
             )
         except ValueError as exc:
             logger.warning("Skipped agent creation for %s: %s", persona["name"], exc)
+            agents_failed += 1
             continue
         identities.append({
             "id": identity_id,
@@ -894,8 +924,22 @@ async def create_agents_from_document(
             "role": persona["role"],
         })
 
+    if entities and not identities and agents_failed > 0:
+        if persona_timed_out:
+            raise api_error(
+                504,
+                "DOCUMENT_LLM_TIMEOUT",
+                "Document persona generation timed out",
+            )
+        raise api_error(
+            502,
+            "DOCUMENT_AGENT_CREATION_FAILED",
+            "Document persona generation failed for all extracted entities",
+        )
+
     return {
         "agents_created": len(identities),
+        "agents_failed": agents_failed,
         "entities_extracted": len(entities),
         "identities": identities,
     }

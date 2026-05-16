@@ -109,6 +109,24 @@
 - `LLM_CONCURRENCY` 的修改需要重启 backend 才能稳定生效。
 - `LLM_CONCURRENCY / LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 设为 `<= 0` 时表示关闭对应限制，不是字面上的 `0 并发 / 0 pending`。
 
+## Document Ingestion 配置
+
+这些变量只影响 `/api/agents/from-document` 的 PDF 抽取和 Agent 生成：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `DOCUMENT_ENTITY_TIMEOUT` | `120` | 实体抽取总超时，单位秒 |
+| `DOCUMENT_PERSONA_TIMEOUT` | `300` | persona 批次总超时，单位秒；超时后保留已完成 Agent |
+| `DOCUMENT_PERSONA_SINGLE_TIMEOUT` | `60` | 单个 persona 生成超时，单位秒 |
+| `DOCUMENT_MAX_TEXT_FOR_SCAN` | `50000` | 判断长文档和粗扫来源文本的字符上限 |
+| `DOCUMENT_SCAN_SAMPLE_SIZE` | `10000` | 粗扫送入 LLM 的采样字符上限 |
+| `DOCUMENT_MAX_EXTRACTED_TEXT_CHARS` | `1000000` | 单个 PDF 最多保留的可抽取文本字符数 |
+
+说明：
+
+- 短文档继续走原有 chunk 抽取；长文档先粗扫候选实体，再用候选名和 alias 在全文里取证据精提。
+- persona 生成会使用 LLM document lane，不会和 scenario runtime 共享全部并发槽。
+
 ## 数据存储
 
 | 变量 | 默认值 | 说明 |

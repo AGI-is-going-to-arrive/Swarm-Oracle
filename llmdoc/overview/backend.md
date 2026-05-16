@@ -53,7 +53,7 @@
 | Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
 | Journal Service | `backend/app/services/journal_service.py` | personal prediction journal 写入、resolve、分页与 calibration 聚合 |
-| Document Ingestion | `backend/app/services/document_ingestion.py` | PDF 文本抽取、实体抽取与 persona 生成 helper |
+| Document Ingestion | `backend/app/services/document_ingestion.py` | PDF 文本抽取、长文档实体抽取与 persona 生成 helper |
 | Education Templates | `backend/app/services/education_templates.py` | 教育场景模板列表、分类 / 难度筛选与单模板读取 |
 | Persona Export | `backend/app/services/persona_export.py` | Agent persona schema v1 导出、批量导出、导入校验与 custom identity 创建 |
 | Hallucination Gate | `backend/app/services/hallucination_gate.py` | verdict 后的 warning-only claim / evidence 检查 |
@@ -204,10 +204,10 @@
 - Agent Library 相关 API 当前按 user scope 收口：
   - favorite 只允许当前用户自己的 identity；跨用户或不存在统一返回 404
   - identity inspector 会先校验 owner，再读取最多 100 条 memory；向量库异常会落 `error` 字段，不把只读 inspector 变成 fatal
-  - PDF 文档生成 Agent 只接受 PDF，上传上限 25 MB；空文件、非法 PDF、无可抽取文本和超大文件都会返回结构化错误
-  - PDF 解析最多读取 200 页 / 100000 字符，并带 30 秒解析超时；超时返回结构化错误，不让上传请求无限卡住
-  - PDF 文本进入 LLM prompt 前会包进 untrusted text block；实体抽取会跳过 malformed JSON / 非对象条目，超大 LLM JSON response 会被拒绝
-  - 文档抽取阶段只会跳过业务校验失败的 persona；持久化等运行时异常不会伪装成 `201 + agents_created: 0`
+  - PDF 文档生成 Agent 只接受 PDF；`application/pdf / application/x-pdf` 直接通过，空 content type 或 `application/octet-stream` 只在文件名以 `.pdf` 结尾时作为兼容路径接受。上传上限 25 MB；空文件、非法 PDF、无可抽取文本和超大文件都会返回结构化错误
+  - PDF 解析最多读取 200 页 / 1000000 字符，并带 30 秒解析超时；超时返回结构化错误，不让上传请求无限卡住
+  - 短文档继续走原有 chunk 抽取；长文档先做采样粗扫，再用候选名和 alias 在全文里取证据片段精提。粗扫、候选和证据文本都会包进 untrusted text block；malformed JSON、非对象条目和超大 LLM JSON response 会被拒绝或跳过
+  - 实体提取和 persona 批次使用独立超时；persona 生成按 `0.7 -> 0.6 -> 0.5` 递减温度重试。部分 persona 失败会保留已创建 Agent，并在响应里返回 `agents_failed`；全部失败才返回结构化错误
   - persona export/import 使用 `schema_version=1`；bulk export 最多 20 个；import 会创建新的 custom identity，不覆盖旧数据
   - persona import 会把 decision bias 归一化到 `caution / optimism / conservatism / risk_tolerance / creativity` 5 个 key；boolean、`NaN/Inf` 或非数字值落到默认值，超出 `0..1` 的数字会被 clamp
 - Prediction Journal 当前由 `prediction_journal_entry` 持久化：
@@ -421,11 +421,10 @@
 
 ## 当前验证基线
 
-- 当前 Result Quality release-gate 后端验证口径：
-  - Result Quality narrator / simulator / story / capability / parser 定向回归：`15 passed, 181 deselected`
-  - `ruff check app/ tests/test_parser.py`：通过
-  - broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e_alembic.py -k "not test_parse_modern"`：`3 failed, 3024 passed, 7 skipped, 1 deselected`
-  - 后续确认：parser clamp 和 conversation abort timing 单独通过；`tests/test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 是 live LLM matrix 在 120s timeout 下的慢路径风险
+- 当前 Document Ingestion / backend gate 后端验证口径：
+  - `python -m pytest tests/test_document_ingestion.py -q`：`48 passed`
+  - `python -m pytest -x -q --timeout=60`：`3070 passed, 6 skipped`
+  - live LLM benchmark / observation 测试默认跳过；需要 `RUN_REAL_LLM_TESTS=1` 才会执行
 - backend `agent-conversation / quota / migration` 定向回归当前通过
 - P1 post-review follow-up 窄集当前也已补：
   - `tests/test_causal_graph.py -q`：`68 passed`

@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     LLM_CIRCUIT_BREAKER_RESET_SECONDS: int = 30
     DEBATE_USE_LLM: bool = True
     ORACLE_CHAMBERS_USE_LLM: bool = True
+    DOCUMENT_ENTITY_TIMEOUT: int = 120
+    DOCUMENT_PERSONA_TIMEOUT: int = 300
+    DOCUMENT_PERSONA_SINGLE_TIMEOUT: int = 60
+    DOCUMENT_MAX_TEXT_FOR_SCAN: int = 50_000
+    DOCUMENT_SCAN_SAMPLE_SIZE: int = 10_000
+    DOCUMENT_MAX_EXTRACTED_TEXT_CHARS: int = 1_000_000
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"  # json | plain
     EXPOSE_API_DOCS: bool = False  # Separate toggle for /docs, /redoc, /openapi.json
@@ -238,6 +244,12 @@ class Settings(BaseSettings):
             "MEMORY_CROWD_MAX_RECENT": self.MEMORY_CROWD_MAX_RECENT,
             "MEMORY_CORE_CONTEXT_MAX_CHARS": self.MEMORY_CORE_CONTEXT_MAX_CHARS,
             "MEMORY_IMPORTANT_CONTEXT_MAX_CHARS": self.MEMORY_IMPORTANT_CONTEXT_MAX_CHARS,
+            "DOCUMENT_ENTITY_TIMEOUT": self.DOCUMENT_ENTITY_TIMEOUT,
+            "DOCUMENT_PERSONA_TIMEOUT": self.DOCUMENT_PERSONA_TIMEOUT,
+            "DOCUMENT_PERSONA_SINGLE_TIMEOUT": self.DOCUMENT_PERSONA_SINGLE_TIMEOUT,
+            "DOCUMENT_MAX_TEXT_FOR_SCAN": self.DOCUMENT_MAX_TEXT_FOR_SCAN,
+            "DOCUMENT_SCAN_SAMPLE_SIZE": self.DOCUMENT_SCAN_SAMPLE_SIZE,
+            "DOCUMENT_MAX_EXTRACTED_TEXT_CHARS": self.DOCUMENT_MAX_EXTRACTED_TEXT_CHARS,
         }
         for field_name, value in positive_int_fields.items():
             if value <= 0:

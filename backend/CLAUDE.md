@@ -165,7 +165,7 @@ docker compose up backend
 
 ## 测试与质量
 
-- **99+ 个 test_*.py 文件**，位于 `tests/`；本轮 Result Quality targeted 为 `15 passed, 181 deselected`，broad command 为 `3 failed, 3024 passed, 7 skipped, 1 deselected`；parser clamp 和 conversation abort 已单独复验通过，剩余风险是 live LLM matrix 的 120s 慢路径
+- **99+ 个 test_*.py 文件**，位于 `tests/`；当前 backend full gate 为 `3070 passed, 6 skipped`，Document Ingestion 定向为 `48 passed`；live LLM benchmark / observation 测试默认跳过，需要 `RUN_REAL_LLM_TESTS=1` 显式开启
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`
@@ -283,6 +283,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-16 | Document Ingestion Upgrade | `document_ingestion.py`：短文档保留原 chunk 抽取，长文档新增采样粗扫 + 全文证据精提，PDF 文本上限调整为 1000000 字符，候选 alias 和证据片段都走 untrusted-data guardrail；persona 生成按 `0.7 -> 0.6 -> 0.5` 递减温度重试。`agents.py`：实体抽取、persona 批次、单个 persona 超时分离；部分 persona 失败保留成功 identities 并返回 `agents_failed`，全部失败返回结构化错误；空 content type / `application/octet-stream` 的 `.pdf` 文件名走 PDF 兼容路径。`config.py` 新增 `DOCUMENT_ENTITY_TIMEOUT / DOCUMENT_PERSONA_TIMEOUT / DOCUMENT_PERSONA_SINGLE_TIMEOUT / DOCUMENT_MAX_TEXT_FOR_SCAN / DOCUMENT_SCAN_SAMPLE_SIZE / DOCUMENT_MAX_EXTRACTED_TEXT_CHARS`。验证：`tests/test_document_ingestion.py` 为 `48 passed`，backend full gate `3070 passed, 6 skipped`；live LLM benchmark / observation 测试改为 `RUN_REAL_LLM_TESTS=1` opt-in |
 | 2026-05-15 | Result Quality / Question Anchoring | `config.py` 新增 `FEATURE_RESULT_VERDICT`；`simulator.py` 在主 scenario 完成后生成直接回答原问题的 verdict/confidence/question_answer，LLM malformed JSON、timeout 或空输出都 fail-soft；`narrator.py` 返回 branch `question_answer`，Pass-2 extraction 会带原问题，feature off 时不再要求该字段；`scenarios.py` 在 story payload 中按 feature gate 回显 `verdict / verdict_confidence / branches[].question_answer`，未知 confidence 归一化为 `medium`，非字符串 branch answer 不回显。验证：Result Quality targeted `15 passed, 181 deselected`，`ruff check app/ tests/test_parser.py` 通过；broad backend command 为 `3 failed, 3024 passed, 7 skipped, 1 deselected`，其中 parser clamp 和 conversation abort 已单独复验通过，`test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 为 live LLM matrix 120s 慢路径风险 |
 | 2026-05-14 | Agent diverge marker 清理 | `simulator.py`：新增 `_strip_diverge_marker()`，在 Pass-2 JSON extraction 成功路径和 raw fallback 路径清理用户可见 `content` 里的 `[DIVERGE: ...]` / `[DIVERGE：...]` 内部标记，支持冒号前空格、大小写、嵌套方括号和未闭合 marker；`diverge` 字段仍独立用于 fork 检测。`test_simulator.py` 覆盖空字符串、无 marker、半角/全角冒号、mid-text、未闭合、长文本、成功路径和 fallback 路径。验证：backend full `3008 passed, 2 skipped`，`ruff check .` 通过 |
 | 2026-05-14 | Web Search P5 前端边界修复 | `helpers.py`：`_parse_web_context_json` 将缺失 `snippets` 归一化为空列表，不再丢弃 native-only payload。`simulator.py`：native search domains 从 family selection 派生并传入 `llm_call`。`web_context.py`：`merge_native_citations_into_web_context_json` 清洗去重 native citations 写回 `web_context_json`。新增/扩展 `test_simulator.py`（144 行）、`test_web_context.py`（55 行）、`test_web_context_integration.py`（107 行）。验证：backend full `2991 passed, 7 skipped`，`ruff check .` 通过 |

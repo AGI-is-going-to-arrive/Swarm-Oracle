@@ -359,8 +359,9 @@
 - favorite 只写当前用户拥有的 identity；跨用户或不存在的 identity 返回 404，不泄漏数据。
 - `GET /api/agents/identities/{id}/memories` 会按 owner 校验，并返回最多 100 条 inspector memory。向量库不可用时仍返回 200，但会带机器可读的 `error` 字段，方便前端区分空记忆和基础设施错误。
 - `GET /api/agents/identities/{id}/growth-events` 当前要求 `user_id`；缺失时返回 400，identity 不存在或 owner 不匹配时返回 404。
-- `POST /api/agents/from-document` 只接受 PDF (`application/pdf` / `application/x-pdf`)，上传上限 25 MB，最多读取 200 页和 100000 个字符，并带 30 秒解析超时；空文件返回 `DOCUMENT_FILE_EMPTY`，超大文件返回 413 `DOCUMENT_FILE_TOO_LARGE`，非法 PDF 返回 `DOCUMENT_PDF_INVALID`，无可抽取文本返回 `DOCUMENT_TEXT_EMPTY`，解析超时返回 `DOCUMENT_PDF_TIMEOUT`。
-- 文档生成 Agent 时，单个 persona 的业务校验失败会被跳过；持久化等运行时异常不会被包装成成功响应。
+- `POST /api/agents/from-document` 只接受 PDF：`application/pdf / application/x-pdf` 直接通过，空 content type 或 `application/octet-stream` 只在文件名以 `.pdf` 结尾时作为兼容路径接受。上传上限 25 MB，最多读取 200 页和 1000000 个字符，并带 30 秒 PDF 解析超时；空文件返回 `DOCUMENT_FILE_EMPTY`，超大文件返回 413 `DOCUMENT_FILE_TOO_LARGE`，非法 PDF 返回 `DOCUMENT_PDF_INVALID`，无可抽取文本返回 `DOCUMENT_TEXT_EMPTY`，解析超时返回 `DOCUMENT_PDF_TIMEOUT`。
+- 文档实体提取有独立超时；长文档会先采样粗扫候选实体和 alias，再从全文取匹配证据做精提。所有 PDF 文本、候选和证据进入 prompt 前都会按 untrusted text block 包装。
+- 文档生成 Agent 时，单个 persona 超时、业务校验失败或生成失败会被计入 `agents_failed`，已成功创建的 identities 仍会返回；全部 persona 都失败时返回结构化错误，不会伪装成 `201 + agents_created: 0`。持久化等运行时异常不会被包装成成功响应。
 - persona export 使用 `schema_version=1`；export 会去掉本地 untrusted-data wrapper，只导出可移植 persona 文本；bulk export 最多 20 个 identity。import 不覆盖旧 identity，而是为当前用户创建新的 custom Agent，成功响应为 `{ "success": true, "identity_id": "..." }`。`schema_version` 不支持、必填字段缺失或 `decision_bias` 不是对象时返回 422 `PERSONA_IMPORT_INVALID`；bias 对象里的 boolean、`NaN/Inf` 和非数字值会回到默认值，超出 `0..1` 的数字会被 clamp。
 - `POST /api/agents/workshop` / `PUT /api/agents/workshop/{id}` 当前支持：
   - `persona`

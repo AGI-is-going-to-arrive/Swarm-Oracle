@@ -76,6 +76,12 @@ def _seed_message(engine, scenario_id, round_id, *, content: str):
 
 
 class TestRetrospectiveIntervention:
+    @pytest.fixture(autouse=True)
+    def _disable_background_simulation(self, monkeypatch):
+        import app.api.helpers as helpers_module
+
+        monkeypatch.setattr(helpers_module, "schedule_background_task", lambda coro: coro.close())
+
     def test_success(self, client):
         """Should create a new branch forked at specified round."""
         engine = get_engine()
@@ -181,9 +187,6 @@ class TestRetrospectiveIntervention:
 
     def test_new_branch_probability_has_floor(self, client, monkeypatch):
         """Retrospective reruns should not decay below the configured floor."""
-        import app.api.helpers as helpers_module
-
-        monkeypatch.setattr(helpers_module, "schedule_background_task", lambda coro: coro.close())
         engine = get_engine()
         sid = _seed_scenario(engine)
         bid = _seed_branch(engine, sid, probability=0.1)

@@ -71,6 +71,8 @@ export function EntityExtractionProgress({
   }, [activeIndex, isComplete, result?.agents_created, t]);
 
   const identities = useMemo(() => result?.identities ?? [], [result]);
+  const agentsFailed = Math.max(0, result?.agents_failed ?? 0);
+  const hasCreatedAgents = identities.length > 0;
 
   if (isComplete) {
     return (
@@ -86,18 +88,41 @@ export function EntityExtractionProgress({
 
         <div className="doc-uploader-progress__summary">
           <h3 className="doc-uploader-progress__heading">
-            {t('agents.doc_uploader.success_title', 'Extraction complete')}
+            {hasCreatedAgents
+              ? t('agents.doc_uploader.success_title', 'Extraction complete')
+              : t('agents.doc_uploader.no_agents_title', 'No agents created')}
           </h3>
           <p className="doc-uploader-progress__count">
-            {t(
-              'agents.doc_uploader.success_count',
-              '{{agents}} agents ready · {{entities}} entities found',
-              {
-                agents: result?.agents_created ?? 0,
-                entities: result?.entities_extracted ?? 0,
-              },
-            )}
+            {hasCreatedAgents
+              ? t(
+                'agents.doc_uploader.success_count',
+                '{{agents}} agents ready · {{entities}} entities found',
+                {
+                  agents: result?.agents_created ?? 0,
+                  entities: result?.entities_extracted ?? 0,
+                },
+              )
+              : t(
+                'agents.doc_uploader.no_agents_count',
+                '{{entities}} entities found · 0 agents ready',
+                { entities: result?.entities_extracted ?? 0 },
+              )}
           </p>
+          {agentsFailed > 0 && (
+            <p className="doc-uploader-progress__count">
+              {hasCreatedAgents
+                ? t(
+                  'agents.doc_uploader.partial_success',
+                  '{{count}} extracted agents could not be created. The rest are ready.',
+                  { count: agentsFailed },
+                )
+                : t(
+                  'agents.doc_uploader.all_failed',
+                  '{{count}} extracted agents could not be created.',
+                  { count: agentsFailed },
+                )}
+            </p>
+          )}
         </div>
 
         {identities.length > 0 && (
@@ -121,13 +146,15 @@ export function EntityExtractionProgress({
               {t('agents.doc_uploader.action_upload_another', 'Upload another')}
             </button>
           )}
-          <button
-            type="button"
-            className="doc-uploader-button doc-uploader-button--primary"
-            onClick={() => onConfirm?.(identities)}
-          >
-            {t('agents.doc_uploader.action_create_agents', 'Create Agents')}
-          </button>
+          {hasCreatedAgents && (
+            <button
+              type="button"
+              className="doc-uploader-button doc-uploader-button--primary"
+              onClick={() => onConfirm?.(identities)}
+            >
+              {t('agents.doc_uploader.action_create_agents', 'Create Agents')}
+            </button>
+          )}
         </div>
       </div>
     );

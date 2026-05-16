@@ -21,7 +21,7 @@ import {
   type DocumentAgentIdentity,
   type DocumentAgentResult,
 } from '../../api/client';
-import { getApiErrorStatus } from '../../lib/apiErrorMessage';
+import { getApiErrorCode, getApiErrorStatus } from '../../lib/apiErrorMessage';
 import { EntityExtractionProgress, type ExtractionStage } from './EntityExtractionProgress';
 import './DocumentUploader.css';
 
@@ -109,7 +109,39 @@ export function DocumentUploader({ onAgentsCreated }: DocumentUploaderProps) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         return t('agents.doc_uploader.error_cancelled', 'Upload cancelled.');
       }
+      const code = getApiErrorCode(error);
+      switch (code) {
+        case 'DOCUMENT_FILE_EMPTY':
+          return t(
+            'agents.doc_uploader.error_empty',
+            'File is empty.',
+          );
+        case 'DOCUMENT_TEXT_EMPTY':
+          return t(
+            'agents.doc_uploader.error_empty_text',
+            'The PDF contains no extractable text. Try an OCR-readable PDF.',
+          );
+        case 'DOCUMENT_AGENT_CREATION_FAILED':
+          return t(
+            'agents.doc_uploader.error_no_agents_created',
+            'No agents could be created from this PDF. Try a document with clearer named entities.',
+          );
+        case 'DOCUMENT_PDF_TIMEOUT':
+        case 'DOCUMENT_LLM_TIMEOUT':
+          return t(
+            'agents.doc_uploader.error_timeout',
+            'Document processing timed out. Try a smaller PDF or fewer pages.',
+          );
+        default:
+          break;
+      }
       const status = getApiErrorStatus(error);
+      if (status === 504) {
+        return t(
+          'agents.doc_uploader.error_timeout',
+          'Document processing timed out. Try a smaller PDF or fewer pages.',
+        );
+      }
       switch (status) {
         case 413:
           return t(
@@ -141,6 +173,12 @@ export function DocumentUploader({ onAgentsCreated }: DocumentUploaderProps) {
         'Upload failed. Please try again.',
       );
       const msg = error instanceof Error ? error.message : '';
+      if (msg.toLowerCase().includes('timed out')) {
+        return t(
+          'agents.doc_uploader.error_timeout',
+          'Document processing timed out. Try a smaller PDF or fewer pages.',
+        );
+      }
       // If the API returned a typed message, prefer it; otherwise show the
       // generic localized fallback so we don't leak server-side details.
       return msg && msg.length < 200 && !file?.name.includes(msg)
@@ -193,6 +231,17 @@ export function DocumentUploader({ onAgentsCreated }: DocumentUploaderProps) {
         // Clear stage timers and snap to "done".
         stageTimersRef.current.forEach((id) => window.clearTimeout(id));
         stageTimersRef.current = [];
+        if ((result.agents_created ?? 0) <= 0 || result.identities.length === 0) {
+          setStatus({
+            kind: 'error',
+            file,
+            message: t(
+              'agents.doc_uploader.error_no_agents_created',
+              'No agents could be created from this PDF. Try a document with clearer named entities.',
+            ),
+          });
+          return;
+        }
         setStatus({ kind: 'success', file, result });
         onAgentsCreated?.(result);
       } catch (err) {
@@ -211,7 +260,7 @@ export function DocumentUploader({ onAgentsCreated }: DocumentUploaderProps) {
         }
       }
     },
-    [advanceStage, mapApiErrorToMessage, onAgentsCreated, validateFile],
+    [advanceStage, mapApiErrorToMessage, onAgentsCreated, t, validateFile],
   );
 
   const handleFileChosen = useCallback(

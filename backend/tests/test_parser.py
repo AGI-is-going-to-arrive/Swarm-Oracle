@@ -76,10 +76,30 @@ class TestParseQuestion:
         assert result["simulation_rounds"] == 10
 
     @pytest.mark.asyncio
-    async def test_sensitivity_clamped(self):
+    async def test_sensitivity_clamped(self, monkeypatch):
         """branch_sensitivity should be clamped to [0, 1]."""
-        result = await parse_question("如果人类发明了时间机器？")
+        llm_mock = AsyncMock(return_value={
+            "setting": {"time_period": "未来", "location": "地球", "background": "测试背景"},
+            "key_variable": "时间机器",
+            "initial_title": "时间分歧",
+            "agents": [
+                {
+                    "name": "时间物理学家",
+                    "role": "时间物理学家",
+                    "persona": "谨慎",
+                    "stance": "观望",
+                    "tier": "CORE",
+                },
+            ],
+            "simulation_rounds": 8,
+            "branch_sensitivity": 9.5,
+        })
+        monkeypatch.setattr(parser_module, "llm_call_json_with_stream_fallback", llm_mock)
+
+        result = await parse_question("如果人类发明了时间机器？", max_agents=1, target_agents=1)
+        assert llm_mock.await_count == 1
         assert 0.0 <= result["branch_sensitivity"] <= 1.0
+        assert result["branch_sensitivity"] == 1.0
 
     def test_fallback_initial_title_strips_question_prefixes_before_truncating(self):
         """Fallback titles should not keep generic what-if prefixes."""

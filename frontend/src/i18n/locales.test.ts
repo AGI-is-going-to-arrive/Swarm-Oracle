@@ -451,6 +451,27 @@ describe('i18n locale resources', () => {
     expect(onlyZh).toEqual([]);
   });
 
+  it('provides document uploader locale keys used by the workshop import flow', () => {
+    const docUploaderKeys = [
+      'intro',
+      'toast_success',
+      'partial_success',
+      'all_failed',
+      'error_empty_text',
+      'error_timeout',
+      'error_no_agents_created',
+      'no_agents_title',
+      'no_agents_count',
+    ] as const;
+
+    for (const key of docUploaderKeys) {
+      expect(en.translation.agents.doc_uploader[key]).toBeTruthy();
+      expect(zh.translation.agents.doc_uploader[key]).toBeTruthy();
+    }
+    expect(en.translation.agents.doc_uploader.toast_success).toContain('{{count}}');
+    expect(zh.translation.agents.doc_uploader.toast_success).toContain('{{count}}');
+  });
+
   it('provides KGGraphBoard locale keys for workbench knowledge-graph panel', () => {
     expect(en.translation.kg_graph_board.search_placeholder).toBe('Search by agent name or content...');
     expect(zh.translation.kg_graph_board.search_placeholder).toBe('搜索 Agent 名称或内容...');

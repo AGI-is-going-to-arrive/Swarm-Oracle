@@ -84,7 +84,7 @@ React + TypeScript frontend for SwarmOracle.
 - `AgentLibrary.tsx / AgentCard.tsx`
   Agent library surface with owned-identity favorites, pressed-button filtering, profile/edit/export actions, Unicode-safe long-persona truncation, a localized back action, and localized retry states for capability/favorite failures
 - `AgentWorkshopView.tsx / DocumentUploader.tsx`
-  custom Agent form; manual/document tabs use real tab semantics, the document tab shows bounded PDF upload progress plus structured errors, and the header reuses `PersonaExportMenu` for capability-gated persona import/export
+  custom Agent form; manual/document tabs use real tab semantics, the document tab shows bounded PDF upload progress, partial success, 0-agent and structured error states, and the header reuses `PersonaExportMenu` for capability-gated persona import/export
 - `PersonaExportImport.tsx`
   persona import/export primitives; import success uses the string `identity_id` returned by the backend, refreshes the library, and does not show raw backend errors to users. `AgentWorkshop/PersonaExportMenu.tsx` now uses the same ExportButton / ImportDialog surface as Agent Library
 - `IdentityInspectorView.tsx`
