@@ -103,6 +103,26 @@ export function QuotaBadge({ scenarioId, type, fetcher }: QuotaBadgeProps) {
     );
   }
 
+  if (type === 'conversation' && !bucket.enforced) {
+    return (
+      <span
+        className="quota-badge"
+        role="status"
+        aria-live="polite"
+        aria-disabled={false}
+        title={t('quota.local_unmetered_title')}
+        data-quota-type={type}
+        data-quota-remaining={bucket.remaining}
+        data-quota-limit={bucket.limit}
+        data-quota-enforced={bucket.enforced}
+        data-quota-scope={bucket.scope}
+        data-quota-window-seconds={bucket.window_seconds ?? ''}
+      >
+        {label} · {t('quota.local_unmetered')}
+      </span>
+    );
+  }
+
   const exhausted = bucket.remaining <= 0;
 
   return (
@@ -115,6 +135,9 @@ export function QuotaBadge({ scenarioId, type, fetcher }: QuotaBadgeProps) {
       data-quota-type={type}
       data-quota-remaining={bucket.remaining}
       data-quota-limit={bucket.limit}
+      data-quota-enforced={bucket.enforced}
+      data-quota-scope={bucket.scope}
+      data-quota-window-seconds={bucket.window_seconds ?? ''}
     >
       {label} ·{' '}
       {exhausted ? t('quota.exhausted') : t('quota.remaining', { count: bucket.remaining })}

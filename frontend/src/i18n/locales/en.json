@@ -381,6 +381,7 @@
       "share_btn": "📱 Generate Copy",
       "copy_permalink_btn": "🔗 Copy Permalink",
       "causal_graph_link": "View Causal Graph",
+      "open_workbench_link": "Graph Workbench",
       "source_historical": "Recorded",
       "source_historical_tooltip": "This data was recorded when the scenario was created",
       "compare_link": "Compare branches",
@@ -593,7 +594,7 @@
       "next_share": "Share Results",
       "next_share_desc": "Generate a shareable summary",
       "mode_reader": "Reader",
-      "mode_workbench": "Workbench",
+      "mode_workbench": "Explore",
       "mode_toggle_label": "Result view mode",
       "bridge_workbench_title": "Open Graph Workbench",
       "bridge_workbench_desc": "Inspect causality, knowledge graph, and node questions together",
@@ -2264,6 +2265,8 @@
     "quota": {
       "remaining": "{{count}} remaining",
       "exhausted": "Quota exhausted",
+      "local_unmetered": "Local mode",
+      "local_unmetered_title": "Local single-user runs do not consume the daily conversation quota.",
       "conversation_label": "Conversations",
       "replay_label": "Replays",
       "load_failed": "Quota unavailable"

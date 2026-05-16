@@ -381,6 +381,7 @@
       "share_btn": "📱 生成文案",
       "copy_permalink_btn": "🔗 复制固定链接",
       "causal_graph_link": "查看因果图谱",
+      "open_workbench_link": "图谱工作台",
       "source_historical": "已记录",
       "source_historical_tooltip": "此数据在创建场景时记录",
       "compare_link": "对比分支",
@@ -593,7 +594,7 @@
       "next_share": "分享结果",
       "next_share_desc": "生成可分享的推演复盘",
       "mode_reader": "阅读",
-      "mode_workbench": "工作台",
+      "mode_workbench": "探索",
       "mode_toggle_label": "结果视图模式",
       "bridge_workbench_title": "打开图谱工作台",
       "bridge_workbench_desc": "把因果、知识图谱和节点追问放到同一视图",
@@ -2264,6 +2265,8 @@
     "quota": {
       "remaining": "剩余 {{count}} 次",
       "exhausted": "配额已用尽",
+      "local_unmetered": "本机模式",
+      "local_unmetered_title": "本机单人使用不会消耗每日对话配额。",
       "conversation_label": "对话",
       "replay_label": "重播",
       "load_failed": "配额不可用"

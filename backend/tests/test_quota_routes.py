@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.api import quota as quota_module
 from app.main import app
@@ -78,8 +78,22 @@ def test_quota_summary_route_reachable_and_returns_shape(client: TestClient):
     body = response.json()
     assert set(body) == {"conversation", "replay"}
     for key in ("conversation", "replay"):
-        assert set(body[key]) == {"used", "limit", "remaining"}
+        assert set(body[key]) == {
+            "used",
+            "limit",
+            "remaining",
+            "enforced",
+            "scope",
+            "window_seconds",
+        }
         assert all(isinstance(body[key][field], int) for field in ("used", "limit", "remaining"))
+        assert isinstance(body[key]["enforced"], bool)
+    assert body["conversation"]["scope"] == "local"
+    assert body["conversation"]["enforced"] is False
+    assert body["conversation"]["window_seconds"] == 86400
+    assert body["replay"]["scope"] == "scenario"
+    assert body["replay"]["enforced"] is True
+    assert body["replay"]["window_seconds"] is None
 
 
 def test_quota_summary_aggregates_scenario_usage(client: TestClient, monkeypatch):
@@ -101,9 +115,22 @@ def test_quota_summary_aggregates_scenario_usage(client: TestClient, monkeypatch
     response = client.get("/api/quota/summary", params={"scenario_id": scenario_id})
 
     assert response.status_code == 200
-    assert response.json() == {
-        "conversation": {"used": 7, "limit": 10, "remaining": 3},
-        "replay": {"used": 2, "limit": 3, "remaining": 1},
+    body = response.json()
+    assert body["conversation"] == {
+        "used": 7,
+        "limit": 10,
+        "remaining": 3,
+        "enforced": False,
+        "scope": "local",
+        "window_seconds": 86400,
+    }
+    assert body["replay"] == {
+        "used": 2,
+        "limit": 3,
+        "remaining": 1,
+        "enforced": True,
+        "scope": "scenario",
+        "window_seconds": None,
     }
 
 
@@ -122,8 +149,46 @@ def test_quota_summary_global_usage_follows_signed_principal(client: TestClient,
     )
 
     assert response.status_code == 200
-    assert response.json()["conversation"] == {"used": 4, "limit": 10, "remaining": 6}
-    assert response.json()["replay"] == {"used": 0, "limit": 3, "remaining": 3}
+    assert response.json()["conversation"] == {
+        "used": 4,
+        "limit": 10,
+        "remaining": 6,
+        "enforced": True,
+        "scope": "user",
+        "window_seconds": 86400,
+    }
+    assert response.json()["replay"] == {
+        "used": 0,
+        "limit": 3,
+        "remaining": 3,
+        "enforced": True,
+        "scope": "scenario",
+        "window_seconds": None,
+    }
+
+
+def test_quota_summary_global_usage_can_follow_org_scope(client: TestClient, monkeypatch):
+    monkeypatch.setattr(quota_module.settings, "CONVERSATION_TURNS_PER_USER_PER_DAY", 10)
+    scenario_id = _seed_scenario()
+    _seed_quota_hit(scenario_id, delta=4, owner_user_id=None)
+    with Session(get_engine()) as session:
+        hit = session.exec(select(AgentConversationQuotaLedger)).first()
+        assert hit is not None
+        hit.organization_id = "local-org"
+        session.add(hit)
+        session.commit()
+
+    response = client.get("/api/quota/summary", headers={"X-Org-Id": "local-org"})
+
+    assert response.status_code == 200
+    assert response.json()["conversation"] == {
+        "used": 4,
+        "limit": 10,
+        "remaining": 6,
+        "enforced": True,
+        "scope": "org",
+        "window_seconds": 86400,
+    }
 
 
 def test_quota_summary_session_validation(client: TestClient, monkeypatch):

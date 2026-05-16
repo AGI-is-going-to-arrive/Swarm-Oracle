@@ -4198,9 +4198,10 @@ describe('ResultView explore deeper bridge', () => {
 
     const causalLinks = await screen.findAllByRole('link', { name: 'result.causal_graph_link' });
     expect(causalLinks).toHaveLength(2);
-    for (const link of causalLinks) {
-      expect(link).toHaveAttribute('href', `/sim/${encodeURIComponent(scenarioId)}/causal-map`);
-    }
+    expect(causalLinks.map((link) => link.getAttribute('href'))).toEqual(expect.arrayContaining([
+      `/sim/${encodeURIComponent(scenarioId)}/causal-map`,
+      `/sim/${encodeURIComponent(scenarioId)}/causal-map?branch_id=branch-1`,
+    ]));
   });
 
   it('disables the replay bridge entry in replay mode', async () => {
@@ -4691,13 +4692,27 @@ describe('ResultView Reader/Workbench mode toggle (S1-4)', () => {
     expect(workbenchBtn.getAttribute('data-state')).toBe('off');
   });
 
-  it('hides workbench-only sections in Reader mode (bridge / hooks / agent roster / phase 3 panels)', async () => {
+  it('keeps next-step graph actions visible in Reader mode while hiding workbench-only panels', async () => {
     renderResult();
     // Wait for first reader-mode element to confirm hydration
     await screen.findByRole('group', { name: 'result.mode_toggle_label' });
-    expect(screen.queryByRole('heading', { name: 'result.next_steps_heading' })).toBeNull();
+    expect(await screen.findByRole('heading', { name: 'result.next_steps_heading' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: /result\.hooks\.title/ })).toBeNull();
     expect(screen.queryByText('result.agents')).toBeNull();
+  });
+
+  it('exposes direct graph and graph-workbench links from the reader header', async () => {
+    renderResult();
+    await screen.findByRole('group', { name: 'result.mode_toggle_label' });
+
+    expect(screen.getByRole('link', { name: 'result.causal_graph_link' })).toHaveAttribute(
+      'href',
+      '/sim/scenario-1/causal-map?branch_id=branch-1',
+    );
+    expect(screen.getByRole('link', { name: 'result.open_workbench_link' })).toHaveAttribute(
+      'href',
+      '/workbench/scenario-1?view=graph&branch=branch-1',
+    );
   });
 
   it('shows exactly one live resume panel in Reader mode when replay branching is enabled', async () => {
@@ -4716,7 +4731,7 @@ describe('ResultView Reader/Workbench mode toggle (S1-4)', () => {
 
     expect(screen.getAllByText('resume.title')).toHaveLength(1);
     expect(screen.getByLabelText('resume.branch')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'result.next_steps_heading' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'result.next_steps_heading' })).toBeTruthy();
   });
 
   it('reveals workbench-only sections after switching to Workbench', async () => {

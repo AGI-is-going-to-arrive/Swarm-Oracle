@@ -1729,6 +1729,9 @@ export interface QuotaBucket {
   used: number;
   limit: number;
   remaining: number;
+  enforced: boolean;
+  scope: 'local' | 'user' | 'org' | 'scenario';
+  window_seconds: number | null;
 }
 
 /** Response shape of `GET /api/quota/summary`. */

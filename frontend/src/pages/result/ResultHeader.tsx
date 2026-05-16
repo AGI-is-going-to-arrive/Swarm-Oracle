@@ -46,6 +46,34 @@ export default function ResultHeader() {
       && storyData.verdict.trim(),
   );
   const subtitleKey = hasResultVerdict ? 'result.subtitle_prediction' : 'result.subtitle';
+  const causalEnabled = capabilities?.causal_graph?.enabled ?? false;
+  const kgEnabled = capabilities?.kg_explorer?.enabled ?? false;
+  const encodedScenarioId = activeScenarioId ? encodeURIComponent(activeScenarioId) : null;
+  const analysisBranchQuery = analysisBranch
+    ? `?branch_id=${encodeURIComponent(analysisBranch.id)}`
+    : '';
+  const causalGraphHref = encodedScenarioId && causalEnabled
+    ? `/sim/${encodedScenarioId}/causal-map${analysisBranchQuery}`
+    : null;
+  const workbenchView = !causalEnabled && kgEnabled ? 'kg' : 'graph';
+  const workbenchBranchQuery = analysisBranch
+    ? `&branch=${encodeURIComponent(analysisBranch.id)}`
+    : '';
+  const graphWorkbenchHref = encodedScenarioId && !isReplayMode && (causalEnabled || kgEnabled)
+    ? `/workbench/${encodedScenarioId}?view=${workbenchView}${workbenchBranchQuery}`
+    : null;
+
+  const handleModeChange = (val: string) => {
+    if (val !== 'reader' && val !== 'workbench') return;
+    setResultViewMode(val as ResultViewMode);
+    if (val !== 'workbench') return;
+    window.requestAnimationFrame(() => {
+      const bridge = document.getElementById('result-bridge');
+      if (!bridge || typeof bridge.scrollIntoView !== 'function') return;
+      const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+      bridge.scrollIntoView({ block: 'start', behavior: reducedMotion ? 'auto' : 'smooth' });
+    });
+  };
 
   return (
     <header className="result-header">
@@ -77,11 +105,7 @@ export default function ResultHeader() {
         <ToggleGroup
           type="single"
           value={resultViewMode}
-          onValueChange={(val) => {
-            if (val === 'reader' || val === 'workbench') {
-              setResultViewMode(val as ResultViewMode);
-            }
-          }}
+          onValueChange={handleModeChange}
           variant="outline"
           size="sm"
           aria-label={t('result.mode_toggle_label')}
@@ -164,12 +188,20 @@ export default function ResultHeader() {
           >
             {t('result.leaderboard_link')}
           </button>
-          {isWorkbenchMode && activeScenarioId && capabilities?.causal_graph?.enabled && (
+          {causalGraphHref && (
             <a
-              className="btn btn-ghost"
-              href={`/sim/${encodeURIComponent(activeScenarioId)}/causal-map`}
+              className="btn btn-ghost result-actions__graph-link"
+              href={causalGraphHref}
             >
               {t('result.causal_graph_link', 'View Causal Graph')}
+            </a>
+          )}
+          {graphWorkbenchHref && (
+            <a
+              className="btn btn-ghost result-actions__graph-link"
+              href={graphWorkbenchHref}
+            >
+              {t('result.open_workbench_link', 'Graph Workbench')}
             </a>
           )}
           {isWorkbenchMode && activeScenarioId && analysisBranch && !isReplayMode && cfBranchId && (

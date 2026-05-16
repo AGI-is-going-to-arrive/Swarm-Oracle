@@ -120,6 +120,8 @@ describe('i18n locale resources', () => {
   it('provides localized labels for ResultView Phase C action links', () => {
     expect(en.translation.result.causal_graph_link).toBeTruthy();
     expect(zh.translation.result.causal_graph_link).toBeTruthy();
+    expect(en.translation.result.open_workbench_link).toBeTruthy();
+    expect(zh.translation.result.open_workbench_link).toBeTruthy();
     expect(en.translation.result.compare_link).toBeTruthy();
     expect(zh.translation.result.compare_link).toBeTruthy();
   });

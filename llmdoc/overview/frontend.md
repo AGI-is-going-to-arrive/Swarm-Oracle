@@ -32,7 +32,7 @@
 | IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel、分支级 question answer、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel、分支级 question answer、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | WorkbenchView | `frontend/src/pages/WorkbenchView.tsx` | 独立图谱工作台；支持 `graph / split / kg` 三种 view，保留 URL 里的 analysis branch，并提供返回结果页链接 |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
@@ -108,10 +108,11 @@
 - REST API 路径参数统一使用 `encodeURIComponent()` 编码（约 30 处），防止含特殊字符的 ID 破坏 URL 结构。
 - API client 当前会把首页高级设置里的可选 `Organization ID` 以 session-scoped `X-Org-Id` 请求头透传；留空时不发送。
 - API 客户端对服务端错误文本做脱敏处理（`sanitizeErrorText`），超过 200 字符或包含 stack trace / HTML 的响应会被替换为通用错误信息。
-- `ResultView` 当前新增 `What's Next / 下一步` bridge：
-  - capability ready 后才渲染
+- `ResultView` 当前的 `What's Next / 下一步` bridge：
+  - capability ready 后在 Reader / Explore 都渲染，不再只藏在探索面板下面
   - `causal / replay / compare / workbench / agents / share` 共用同一套 bridge 样式
-  - workbench 卡片当前指向因果、知识图谱和节点追问同一视图
+  - header 也会在 capability 允许时直接显示 `查看因果图谱` 和 `/workbench/:id` 图谱工作台入口
+  - workbench 卡片当前指向因果、知识图谱和节点追问同一视图，并保留当前 analysis branch query
   - disabled 卡片保留 link 语义，但不再渲染无 `href` 的 `<a>`
   - disabled 状态会保留可见原因和 `aria-describedby`，文字对比不再靠整卡 opacity 压低
 - `ResultView` 当前在 `result_verdict` capability enabled 且 story verdict 非空时显示 `ResultVerdictPanel`：
@@ -245,9 +246,9 @@
 | `SetupWizardView.tsx` / `Setup/*` | `frontend/src/pages/SetupWizardView.tsx` / `frontend/src/components/Setup/` | `/admin/setup` provider 向导、preset radio card 和 LLM connection test |
 | `OnboardingGuide.tsx` / `useOnboardingState.ts` | `frontend/src/components/Onboarding/` / `frontend/src/hooks/useOnboardingState.ts` | 首页首次引导 carousel；完成状态写入 localStorage，存储不可用时不阻塞用户 |
 | `ConversationHistoryPicker.tsx` | `frontend/src/components/ConversationHistoryPicker.tsx` | scenario 级 Agent Conversation 历史选择器；负责分页、skeleton、重试和 stale response guard |
-| `QuotaBadge.tsx` | `frontend/src/components/shared/QuotaBadge.tsx` | conversation / replay quota pill；读取 `/api/quota/summary` |
+| `QuotaBadge.tsx` | `frontend/src/components/shared/QuotaBadge.tsx` | conversation / replay quota pill；读取 `/api/quota/summary`，本机 local conversation 显示本机模式，replay 仍显示 scenario branch quota |
 | `DecisionBiasSlider.tsx` | `frontend/src/components/Controls/DecisionBiasSlider.tsx` | Agent Workshop 的 5 维 decision bias slider；0-100 UI 映射到 0-1 payload |
-| `uiPreferencesStore.ts` | `frontend/src/stores/uiPreferencesStore.ts` | ResultView `reader / workbench` 模式偏好；使用 localStorage 持久化 |
+| `uiPreferencesStore.ts` | `frontend/src/stores/uiPreferencesStore.ts` | ResultView `reader / workbench` 内部模式偏好；界面显示为 Reader / Explore，使用 localStorage 持久化 |
 | `alert-dialog.tsx` | `frontend/src/components/ui/alert-dialog.tsx` | 共享 Radix AlertDialog wrapper；当前用于 InputView launch confirm 和 Simulation cancel confirm，并支持 overlay class / overlay click handler |
 
 ## 当前边界
@@ -336,9 +337,9 @@
   - 详情调用 `GET /api/conversation/{thread_id}`
   - 支持 cursor pagination、skeleton、错误重试和空态；scenario/filter 切换时会丢弃迟到响应
   - `NodeConversationSheet` 选择历史后会恢复最后一条已提交 assistant 回复
-- `QuotaBadge` 当前从 `GET /api/quota/summary` 读取 conversation / replay bucket；scenario 或 bucket 切换时，迟到响应不会覆盖新 badge。
-- `ResultView` 当前默认进入 Reader mode；Workbench mode 会持久化到 `swarm-ui-preferences`，并显示 graph / KG / workbench-only panels。结果页 header 会同时显示 conversation/replay `QuotaBadge`。
-- `WorkbenchView` 当前三种 tab 的能力门槛分开判断：`graph` 只要求 causal graph，`kg` 只要求 KG capability，`split` 才要求两者都可用。结果页的 workbench bridge 会把当前 analysis branch 写进 query，进入工作台后仍可保留同一条分析分支语义；正常工作台 header 会提供返回对应结果页的链接。
+- `QuotaBadge` 当前从 `GET /api/quota/summary` 读取 conversation / replay bucket；本机 local conversation 会显示本机模式，scenario 或 bucket 切换时，迟到响应不会覆盖新 badge。
+- `ResultView` 当前默认进入 Reader mode；界面上的 Explore mode 会持久化到 `swarm-ui-preferences` 的 workbench 键，并显示 graph / KG / workbench-only panels。结果页 header 会同时显示 conversation/replay `QuotaBadge`，也会在能力允许时直接显示 `查看因果图谱` 与 `图谱工作台`。
+- `WorkbenchView` 当前三种 tab 的能力门槛分开判断：`graph` 只要求 causal graph，`kg` 只要求 KG capability，`split` 才要求两者都可用。结果页 header、next-step bridge 和 `/workbench/:id` 都会把当前 analysis branch 写进 query，进入工作台后仍可保留同一条分析分支语义；正常工作台 header 会提供返回对应结果页的链接。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - ending-room artifact/local replay 当前统一落到 `/result/replay?...`；不再要求先拼出 `/result/:scenarioId?...` 才能读出来。artifact payload 里的 `scenario.total_rounds=null` 也会被前端 replay 正常接受，不会再把只读页打成空结果。
 - ending-room replay automation helper 当前识别 `roomReplay / roomShare / roomLocal`；roundtable 页面除 `roomShare / roomLocal` 外也兼容 `share / local` 别名。
@@ -436,7 +437,7 @@
   - 保留 replay-safe 的 `causal graph` 入口
   - 保留按当前展开分支切换的 `FactionTimeline`
   - 继续隐藏 live-only 的 `CounterfactualPanel / ResumePanel`
-- live Reader 模式当前只挂一个 `ResumePanel`，Workbench 模式继续走工作台侧面板；两个模式不会同时渲染两份续跑入口。
+- live Reader 模式当前只挂一个 `ResumePanel`，Explore 模式继续走工作台侧面板；两个模式不会同时渲染两份续跑入口。
 - `ResultView` 的结局详情当前只在展开时挂载：
   - 收起时不会再把完整 story / key moments 留在 DOM 或可访问性树里
   - 展开按钮也不会再保留指向已卸载详情节点的悬空 `aria-controls`
@@ -565,6 +566,11 @@
   - `cd frontend && npm run test -- --run src/pages/CausalReviewView.test.tsx src/i18n/locales.test.ts --reporter=verbose`：`87 passed`
   - `cd frontend && npx tsc --noEmit`：通过
   - Playwright：ResultView bridge 文案和 CausalReview guide 长 key-node 标签压缩 / `title` / `aria-label` 保留通过
+- 本轮 local quota + ResultView 图谱入口定向复验：
+  - `npm test -- --run src/components/shared/QuotaBadge.test.tsx src/lib/conversationStateMachine.test.ts src/pages/ResultView.test.tsx src/i18n/locales.test.ts`：`121 passed`
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm exec -- eslint src/pages/result/ResultHeader.tsx src/pages/result/ExploreDeeperBridge.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts`：通过
+  - 浏览器实测本机结果页显示 `对话 · 本机模式`，header 可直接进入因果图谱和图谱工作台；点击 `探索` 会滚到下一步区。
 - 当前 frontend 稳定验证口径：
   - `npx tsc --noEmit`：通过
   - ResultView / ResultVerdictPanel / locale targeted vitest：`98 passed`

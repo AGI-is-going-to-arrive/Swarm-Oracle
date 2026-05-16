@@ -312,14 +312,18 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/api/quota/summary` | 返回当前用户的 conversation quota，并可选返回某个 scenario 的 replay quota |
+| `GET` | `/api/quota/summary` | 返回 conversation 与 replay 两个 quota bucket |
 
 关键约束：
 
-- 开启 `SESSION_SECRET` 后要求 signed principal；裸 `SESSION_SECRET` 不能读取 owner-scoped quota。
-- 不带 `scenario_id` 时只返回 conversation bucket。
-- 带 `scenario_id` 时，后端会先校验 caller 能看到该 scenario，再返回 replay bucket。
-- `conversation` bucket 来自 rolling 24h conversation ledger；`replay` bucket 统计该 scenario 下 `counterfactual / resume` replay branch 用量。
+- 每个 bucket 都带 `used / limit / remaining / enforced / scope / window_seconds`。
+- 开启 `SESSION_SECRET` 后，owner-scoped 读取要求 signed principal；裸 `SESSION_SECRET` 不能读取 owner-scoped quota。
+- `conversation.scope` 可能是 `local / user / org`：
+  - 无 signed principal 且无 `X-Org-Id` 时是 `local`，`enforced=false`，前端显示本机模式，不把 `500` 当成在线额度。
+  - 有 signed principal 时按 user rolling 24h ledger 统计。
+  - 有 `X-Org-Id` 且无 signed principal 时按 org rolling 24h ledger 统计；header 只接受 `[A-Za-z0-9_-]`，最长 128 字符。
+- `replay.scope` 固定是 `scenario`，`enforced=true`；不带 `scenario_id` 时 `used=0`。
+- 带 `scenario_id` 时，后端会先校验 caller 能看到该 scenario，再统计该 scenario 下 `counterfactual / resume` replay branch 用量。
 
 ## Phase 3 — Agents / Graphs
 

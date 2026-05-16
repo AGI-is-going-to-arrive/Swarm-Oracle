@@ -14,6 +14,8 @@ i18n.init({
         quota: {
           remaining: '{{count}} remaining',
           exhausted: 'Quota exhausted',
+          local_unmetered: 'Local mode',
+          local_unmetered_title: 'Local single-user runs do not consume the daily conversation quota.',
           conversation_label: 'Conversations',
           replay_label: 'Replays',
           load_failed: 'Quota unavailable',
@@ -29,8 +31,22 @@ afterEach(() => {
 
 function makeSummary(overrides: Partial<QuotaSummaryResponse> = {}): QuotaSummaryResponse {
   return {
-    conversation: { used: 0, limit: 500, remaining: 500 },
-    replay: { used: 0, limit: 3, remaining: 3 },
+    conversation: {
+      used: 0,
+      limit: 500,
+      remaining: 500,
+      enforced: true,
+      scope: 'user',
+      window_seconds: 86400,
+    },
+    replay: {
+      used: 0,
+      limit: 3,
+      remaining: 3,
+      enforced: true,
+      scope: 'scenario',
+      window_seconds: null,
+    },
     ...overrides,
   };
 }
@@ -56,7 +72,16 @@ function renderBadge(props: Parameters<typeof QuotaBadge>[0]) {
 describe('QuotaBadge', () => {
   it('shows remaining count when quota available', async () => {
     const fetcher = vi.fn().mockResolvedValue(
-      makeSummary({ conversation: { used: 100, limit: 500, remaining: 400 } }),
+      makeSummary({
+        conversation: {
+          used: 100,
+          limit: 500,
+          remaining: 400,
+          enforced: true,
+          scope: 'user',
+          window_seconds: 86400,
+        },
+      }),
     );
     renderBadge({ scenarioId: 's1', type: 'conversation', fetcher });
     await waitFor(() => {
@@ -68,7 +93,16 @@ describe('QuotaBadge', () => {
 
   it('shows exhausted state when remaining is 0', async () => {
     const fetcher = vi.fn().mockResolvedValue(
-      makeSummary({ replay: { used: 3, limit: 3, remaining: 0 } }),
+      makeSummary({
+        replay: {
+          used: 3,
+          limit: 3,
+          remaining: 0,
+          enforced: true,
+          scope: 'scenario',
+          window_seconds: null,
+        },
+      }),
     );
     renderBadge({ scenarioId: 's1', type: 'replay', fetcher });
     await waitFor(() => {
@@ -86,6 +120,32 @@ describe('QuotaBadge', () => {
       expect(screen.getByText(/Quota unavailable/)).toBeInTheDocument();
     });
     expect(screen.getByRole('status').className).toContain('quota-badge--error');
+  });
+
+  it('shows local mode instead of a fake daily remaining count when conversation quota is not enforced', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      makeSummary({
+        conversation: {
+          used: 0,
+          limit: 500,
+          remaining: 500,
+          enforced: false,
+          scope: 'local',
+          window_seconds: 86400,
+        },
+      }),
+    );
+    renderBadge({ scenarioId: 'local-scenario', type: 'conversation', fetcher });
+    await waitFor(() => {
+      expect(screen.getByText(/Local mode/)).toBeInTheDocument();
+    });
+    const badge = screen.getByRole('status');
+    expect(badge).toHaveAttribute('data-quota-enforced', 'false');
+    expect(badge).toHaveAttribute(
+      'title',
+      'Local single-user runs do not consume the daily conversation quota.',
+    );
+    expect(screen.queryByText(/500 remaining/)).not.toBeInTheDocument();
   });
 
   it('renders replay label for replay type', async () => {
@@ -123,7 +183,14 @@ describe('QuotaBadge', () => {
     await act(async () => {
       secondRequest.resolve(
         makeSummary({
-          replay: { used: 1, limit: 3, remaining: 2 },
+          replay: {
+            used: 1,
+            limit: 3,
+            remaining: 2,
+            enforced: true,
+            scope: 'scenario',
+            window_seconds: null,
+          },
         }),
       );
       await secondRequest.promise;
@@ -134,8 +201,22 @@ describe('QuotaBadge', () => {
     await act(async () => {
       firstRequest.resolve(
         makeSummary({
-          conversation: { used: 1, limit: 500, remaining: 499 },
-          replay: { used: 2, limit: 3, remaining: 1 },
+          conversation: {
+            used: 1,
+            limit: 500,
+            remaining: 499,
+            enforced: true,
+            scope: 'user',
+            window_seconds: 86400,
+          },
+          replay: {
+            used: 2,
+            limit: 3,
+            remaining: 1,
+            enforced: true,
+            scope: 'scenario',
+            window_seconds: null,
+          },
         }),
       );
       await firstRequest.promise;

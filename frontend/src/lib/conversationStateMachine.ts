@@ -127,6 +127,10 @@ export function conversationReducer(
 export function mapBackendErrorCode(backendCode: string): RecoveryCode {
   switch (backendCode) {
     case 'QUOTA_EXCEEDED':
+    case 'DAILY_QUOTA_EXCEEDED':
+    case 'ORG_DAILY_QUOTA_EXCEEDED':
+    case 'THREAD_LIMIT_REACHED':
+    case 'THREAD_FULL':
       return 'quota_exceeded';
     case 'STREAM_TIMEOUT':
     case 'USER_ABORTED':

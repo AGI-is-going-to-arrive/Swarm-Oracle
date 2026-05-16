@@ -22,7 +22,7 @@
 | Admin | `backend/app/api/admin.py` | admin preflight 与 LLM 连接测试；受 session gate 保护，`ADMIN_TOKEN` 非空时还要求 `X-Admin-Token` |
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import；scenario/story branch response 会回显 replay provenance，并在 Result Quality 开启时回显 `verdict / verdict_confidence / branches[].question_answer` |
 | Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 Agent 备份导入导出；identity preflight 解析超时按 504 fail-closed |
-| Quota | `backend/app/api/quota.py` | conversation / replay quota summary |
+| Quota | `backend/app/api/quota.py` | conversation / replay quota summary；bucket 会回显 `enforced / scope / window_seconds` |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
 | Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary、score breakdown |
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
@@ -415,9 +415,10 @@
   - `cursor` 是 offset cursor，`limit` 范围 `1..50`
   - 返回列表只带 thread 摘要；完整 turn 历史仍通过 `GET /api/conversation/{thread_id}` 读取
 - `GET /api/quota/summary` 当前返回两个 bucket：
-  - `conversation`：rolling 24h conversation turn 用量
-  - `replay`：当前 scenario 下 `counterfactual / resume` replay branch 数
-  - 开启 `SESSION_SECRET` 后要求 signed principal；裸 `SESSION_SECRET` 不能用来读取 owner-scoped quota
+  - `conversation`：`local / user / org` scope；本机无 signed principal / org 时 `enforced=false`，不把 500 次显示成在线额度
+  - `replay`：`scenario` scope；统计当前 scenario 下 `counterfactual / resume` replay branch 数
+  - 每个 bucket 都带 `used / limit / remaining / enforced / scope / window_seconds`
+  - 开启 `SESSION_SECRET` 后，owner-scoped 读取要求 signed principal；裸 `SESSION_SECRET` 不能用来读取 owner-scoped quota
 
 ## 当前验证基线
 
@@ -426,6 +427,9 @@
   - `python -m pytest -x -q --timeout=60`：`3070 passed, 6 skipped`
   - live LLM benchmark / observation 测试默认跳过；需要 `RUN_REAL_LLM_TESTS=1` 才会执行
 - backend `agent-conversation / quota / migration` 定向回归当前通过
+- 本轮 local quota contract 定向复验：
+  - `pytest tests/test_quota_routes.py tests/test_agent_conversation.py::TestDocumentedQuotas -q`：`13 passed`
+  - `ruff check app/api/quota.py tests/test_quota_routes.py`：通过
 - P1 post-review follow-up 窄集当前也已补：
   - `tests/test_causal_graph.py -q`：`68 passed`
   - `tests/test_debate_argument_map.py tests/test_graph_analysis.py tests/test_causal_graph.py -q`：`125 passed`

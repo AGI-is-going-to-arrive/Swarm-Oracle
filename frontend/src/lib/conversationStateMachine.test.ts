@@ -100,6 +100,13 @@ describe('mapBackendErrorCode', () => {
     expect(mapBackendErrorCode('QUOTA_EXCEEDED')).toBe('quota_exceeded');
   });
 
+  it('maps concrete backend quota codes → quota_exceeded', () => {
+    expect(mapBackendErrorCode('DAILY_QUOTA_EXCEEDED')).toBe('quota_exceeded');
+    expect(mapBackendErrorCode('ORG_DAILY_QUOTA_EXCEEDED')).toBe('quota_exceeded');
+    expect(mapBackendErrorCode('THREAD_LIMIT_REACHED')).toBe('quota_exceeded');
+    expect(mapBackendErrorCode('THREAD_FULL')).toBe('quota_exceeded');
+  });
+
   it('maps LLM_5XX → server_error', () => {
     expect(mapBackendErrorCode('LLM_5XX')).toBe('server_error');
   });

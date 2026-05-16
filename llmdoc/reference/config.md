@@ -105,6 +105,7 @@
   - backend 重启后不会归零
   - 多进程会共享同一份 rolling 24h 计数
   - 删除 scenario / thread 不会把已消耗额度返还
+- 本机单人使用且没有 signed principal / `X-Org-Id` 时，quota summary 会把 conversation 标成 `local` + `enforced=false`；这只是展示口径，不改变 user / org ledger 的持久化规则。
 - `LLM_CONCURRENCY` 当前会叠加全局并发和按用途的 lane 隔离；scenario fan-out 不会再独占 Oracle / Debate / parse / background 的全部 slot。
 - `LLM_CONCURRENCY` 的修改需要重启 backend 才能稳定生效。
 - `LLM_CONCURRENCY / LLM_MAX_PENDING / LLM_USER_MAX_PENDING` 设为 `<= 0` 时表示关闭对应限制，不是字面上的 `0 并发 / 0 pending`。

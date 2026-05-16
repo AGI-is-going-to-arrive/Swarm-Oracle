@@ -2400,6 +2400,15 @@
   flex-wrap: wrap;
 }
 
+.result-actions__graph-link {
+  border-color: color-mix(in oklab, var(--color-primary) 28%, var(--border-default));
+  background: color-mix(in oklab, var(--color-primary) 4%, var(--bg-surface));
+}
+
+.result-actions__graph-link:hover {
+  border-color: var(--color-primary);
+}
+
 /* ── Ending Action Band ────────────────────────────── */
 
 .ending-action-band {

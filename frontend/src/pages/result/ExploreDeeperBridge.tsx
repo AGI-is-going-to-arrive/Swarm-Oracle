@@ -7,7 +7,6 @@ import { useResultContext } from './ResultContext';
 export default function ExploreDeeperBridge() {
   const {
     t,
-    isWorkbenchMode,
     branches,
     capLoading,
     activeScenarioId,
@@ -18,8 +17,9 @@ export default function ExploreDeeperBridge() {
     setShowShare,
   } = useResultContext();
 
-  // Visibility guard: workbench mode + branches present + scenario id ready
-  if (!isWorkbenchMode || branches.length === 0 || capLoading || !activeScenarioId) {
+  // Result-level next steps should stay visible in Reader mode. The dedicated
+  // Workbench mode only reveals heavier analysis panels below this bridge.
+  if (branches.length === 0 || capLoading || !activeScenarioId) {
     return null;
   }
 
