@@ -12,16 +12,19 @@ vi.mock('react-router-dom', async () => {
   return { ...actual, useNavigate: () => mockNavigate };
 });
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, options?: string | Record<string, unknown>) => {
-      if (typeof options === 'string') return options;
-      const template = typeof options?.defaultValue === 'string' ? options.defaultValue : key;
-      return template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => String(options?.[name] ?? ''));
-    },
-    i18n: { changeLanguage: vi.fn(), language: 'en' },
-  }),
-}));
+vi.mock('react-i18next', () => {
+  const t = (key: string, options?: string | Record<string, unknown>) => {
+    if (typeof options === 'string') return options;
+    const template = typeof options?.defaultValue === 'string' ? options.defaultValue : key;
+    return template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => String(options?.[name] ?? ''));
+  };
+  return {
+    useTranslation: () => ({
+      t,
+      i18n: { changeLanguage: vi.fn(), language: 'en' },
+    }),
+  };
+});
 
 vi.mock('../api/client', () => ({
   resumeFromRound: vi.fn(),
@@ -344,6 +347,7 @@ describe('ResumePanel', () => {
 describe('ResumePanel — checkpoint picker', () => {
   it('renders checkpoint picker when getCheckpoints returns non-empty list', async () => {
     setEnabledCapability();
+    const user = userEvent.setup();
     vi.mocked(getCheckpoints).mockResolvedValue([
       baseCheckpoint({ id: 'cp-1', round_number: 2, compressed_summary: 'Recap A' }),
       baseCheckpoint({ id: 'cp-2', round_number: 4, compressed_summary: 'Recap B' }),
@@ -351,6 +355,7 @@ describe('ResumePanel — checkpoint picker', () => {
 
     renderPanel({ totalRounds: 5 });
 
+    await user.selectOptions(screen.getByLabelText('Branch'), 'branch-1');
     const picker = await screen.findByLabelText('Resume from checkpoint') as HTMLSelectElement;
     expect(picker).toBeInTheDocument();
     // placeholder + 2 checkpoints
@@ -366,9 +371,11 @@ describe('ResumePanel — checkpoint picker', () => {
 
   it('falls back to numeric input on empty list', async () => {
     setEnabledCapability();
+    const user = userEvent.setup();
     vi.mocked(getCheckpoints).mockResolvedValue([]);
 
     renderPanel({ totalRounds: 5 });
+    await user.selectOptions(screen.getByLabelText('Branch'), 'branch-1');
 
     await waitFor(() => {
       expect(getCheckpoints).toHaveBeenCalled();
@@ -379,9 +386,11 @@ describe('ResumePanel — checkpoint picker', () => {
 
   it('falls back to numeric input on getCheckpoints fetch error', async () => {
     setEnabledCapability();
+    const user = userEvent.setup();
     vi.mocked(getCheckpoints).mockRejectedValue(new Error('500 server'));
 
     renderPanel({ totalRounds: 5 });
+    await user.selectOptions(screen.getByLabelText('Branch'), 'branch-1');
 
     await waitFor(() => {
       expect(getCheckpoints).toHaveBeenCalled();
@@ -389,6 +398,7 @@ describe('ResumePanel — checkpoint picker', () => {
     // Picker absent, numeric input present.
     expect(screen.queryByLabelText('Resume from checkpoint')).not.toBeInTheDocument();
     expect(screen.getByLabelText(/Round|From Round/)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load checkpoints for this branch');
   });
 
   it('refetches checkpoints on branch change', async () => {
@@ -398,11 +408,14 @@ describe('ResumePanel — checkpoint picker', () => {
 
     renderPanel({ totalRounds: 5 });
 
+    expect(getCheckpoints).not.toHaveBeenCalled();
+
+    await user.selectOptions(screen.getByLabelText('Branch'), 'branch-1');
+
     await waitFor(() => {
       expect(getCheckpoints).toHaveBeenCalledTimes(1);
     });
-    // Initial call: no branch yet (undefined).
-    expect(vi.mocked(getCheckpoints).mock.calls[0]).toEqual(['sc-123', undefined]);
+    expect(vi.mocked(getCheckpoints).mock.calls[0]).toEqual(['sc-123', 'branch-1']);
 
     await user.selectOptions(screen.getByLabelText('Branch'), 'branch-2');
 
@@ -492,12 +505,14 @@ describe('ResumePanel — checkpoint picker', () => {
 
   it('filters out checkpoints whose round_number exceeds totalRounds', async () => {
     setEnabledCapability();
+    const user = userEvent.setup();
     vi.mocked(getCheckpoints).mockResolvedValue([
       baseCheckpoint({ id: 'cp-low', round_number: 2 }),
       baseCheckpoint({ id: 'cp-high', round_number: 99 }),
     ]);
 
     renderPanel({ totalRounds: 5 });
+    await user.selectOptions(screen.getByLabelText('Branch'), 'branch-1');
 
     const picker = await screen.findByLabelText('Resume from checkpoint') as HTMLSelectElement;
     await waitFor(() => {

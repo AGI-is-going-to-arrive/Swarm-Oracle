@@ -2,6 +2,7 @@
    SwarmOracle — Agent roster + Phase 3 extension sections
    ═══════════════════════════════════════════════════════════ */
 
+import { useMemo, useState } from 'react';
 import type { StoryData } from '../../types';
 import { CounterfactualPanel } from '../../components/CounterfactualPanel';
 import { CounterfactualBrand } from '../../components/result/CounterfactualBrand';
@@ -35,6 +36,13 @@ export default function AgentRoster({
     setCfBranchId,
     setCfInitialRound,
   } = useResultContext();
+  const [cfSourceBranchId, setCfSourceBranchId] = useState<string | null>(null);
+  const [cfSelectionNotice, setCfSelectionNotice] = useState<string | null>(null);
+  const counterfactualSourceBranch = useMemo(() => {
+    if (!cfSourceBranchId) return analysisBranch;
+    return branches.find((branch) => branch.id === cfSourceBranchId) ?? analysisBranch;
+  }, [analysisBranch, branches, cfSourceBranchId]);
+  const counterfactualSourceBranchId = counterfactualSourceBranch?.id ?? '';
 
   return (
     <>
@@ -115,8 +123,16 @@ export default function AgentRoster({
               <CounterfactualBrand
                 branches={branches}
                 scenarioId={id}
-                onExplore={(_branchId, round) => {
+                onExplore={(sourceBranchId, round) => {
+                  const sourceBranch = branches.find((branch) => branch.id === sourceBranchId);
+                  const sourceTitle = sourceBranch?.title || sourceBranchId;
+                  setCfSourceBranchId(sourceBranchId);
                   setCfInitialRound(round);
+                  setCfSelectionNotice(t('counterfactual.source_selected', {
+                    branch: sourceTitle,
+                    round,
+                    defaultValue: 'Editing {{branch}} at round {{round}}',
+                  }));
                   if (typeof window === 'undefined') return;
                   const panel = window.document.getElementById('cf-replacement');
                   if (panel) {
@@ -128,9 +144,18 @@ export default function AgentRoster({
                   }
                 }}
               />
+              {cfSelectionNotice && (
+                <p
+                  role="status"
+                  aria-live="polite"
+                  style={{ color: 'var(--color-success, #2ecc71)', fontSize: '0.85rem', margin: '0.5rem 0' }}
+                >
+                  {cfSelectionNotice}
+                </p>
+              )}
               <CounterfactualPanel
                 scenarioId={id}
-                branchId={analysisBranch?.id ?? ''}
+                branchId={counterfactualSourceBranchId}
                 agents={agents}
                 messages={scenario?.messages ?? []}
                 totalRounds={scenario?.total_rounds ?? 10}
@@ -140,7 +165,7 @@ export default function AgentRoster({
               {cfBranchId && (
                 <div className="result-extension-section__item result-extension-section__item--compact">
                   <a
-                    href={`/result/${encodeURIComponent(id)}/compare?branch_a=${encodeURIComponent(analysisBranch?.id ?? '')}&branch_b=${encodeURIComponent(cfBranchId)}`}
+                    href={`/result/${encodeURIComponent(id)}/compare?branch_a=${encodeURIComponent(counterfactualSourceBranchId)}&branch_b=${encodeURIComponent(cfBranchId)}`}
                     className="result-extension-link result-extension-link--small"
                   >
                     {t('result.compare_link', 'Compare branches →')}

@@ -616,13 +616,19 @@ npx eslint src/components/ArgumentMap.tsx src/components/ArgumentMapMobileList.t
 ### Resume / P1-9 定向回归
 
 ```bash
+cd backend
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_counterfactual.py tests/test_resume.py tests/test_api.py::TestStoryEndpoint -q -p no:cacheprovider
+.venv/bin/ruff check app/api/scenarios.py app/api/schemas.py app/api/graphs.py tests/test_counterfactual.py tests/test_resume.py tests/test_api.py
+
 cd frontend
-npm test -- --run src/components/ResumePanel.test.tsx src/pages/ResultView.test.tsx src/components/result/HOPsAnimation.test.tsx src/pages/InputView.test.tsx src/pages/AgentLibrary.test.tsx src/pages/LeaderboardView.test.tsx src/lib/scenarioReplay.test.ts src/i18n/locales.test.ts
-npx tsc --noEmit -p tsconfig.app.json
+NODE_OPTIONS=--max-old-space-size=8192 npm exec -- vitest run src/components/ResumePanel.test.tsx src/i18n/locales.test.ts --reporter=dot --maxWorkers=1
+NODE_OPTIONS=--max-old-space-size=8192 npm exec -- vitest run src/pages/ResultView.test.tsx -t "frames faction timeline" --reporter=dot --maxWorkers=1
+NODE_OPTIONS=--max-old-space-size=8192 npm exec -- tsc --noEmit -p tsconfig.app.json
+npm exec -- eslint src/components/CounterfactualPanel.tsx src/components/ResumePanel.tsx src/components/result/CounterfactualBrand.tsx src/pages/result/AgentRoster.tsx src/components/ResumePanel.test.tsx src/i18n/locales.test.ts src/pages/ResultView.test.tsx
 npm run e2e:resume -- full
 ```
 
-这组窄集主要覆盖 ResumePanel 的 checkpoint 摘要预览、续跑分支来源展示、Reader/Workbench 单一续跑入口、HOPs 概率说明、Agent Library / Leaderboard 返回按钮、InputView preflight loading 状态，以及 replay provenance 字段和 locale parity。
+这组窄集主要覆盖 ResultView 的反事实来源定位、ResumePanel 的 branch-scoped checkpoint picker、checkpoint 摘要预览、续跑分支来源展示、ResultView 相关渲染入口，以及 replay provenance 字段和 locale parity。需要完整产品面回归时，再补 `npm run e2e:resume -- full`。
 
 ### P1-10 / P1-11 定向回归
 

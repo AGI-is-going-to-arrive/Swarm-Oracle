@@ -126,6 +126,26 @@ describe('i18n locale resources', () => {
     expect(zh.translation.result.compare_link).toBeTruthy();
   });
 
+  it('provides localized counterfactual replay source feedback labels', () => {
+    const counterfactualKeys = [
+      'intro',
+      'round_label',
+      'no_rounds',
+      'no_source_branch',
+      'no_source_rounds',
+      'no_agents_for_round',
+      'source_ready',
+      'select_source_agent',
+      'source_selected',
+    ] as const;
+    for (const key of counterfactualKeys) {
+      expect(en.translation.counterfactual[key]).toBeTruthy();
+      expect(zh.translation.counterfactual[key]).toBeTruthy();
+    }
+    expect(en.translation.resume.checkpoint_load_error).toBeTruthy();
+    expect(zh.translation.resume.checkpoint_load_error).toBeTruthy();
+  });
+
   it('provides Sprint 3 snapshot, roundtable, and drift labels in both locales', () => {
     expect(en.translation.result.ending_count).toContain('{{count}}');
     expect(zh.translation.result.ending_count).toContain('{{count}}');
@@ -371,10 +391,10 @@ describe('i18n locale resources', () => {
     expect(en.translation.argument.filter_status_group).toBe('Filter argument units by status');
     expect(zh.translation.argument.filter_status_group).toBe('按状态筛选论证单元');
 
-    expect(en.translation.counterfactual.title).toBe('What-If Replay');
-    expect(zh.translation.counterfactual.title).toBe('假设重演');
-    expect(en.translation.counterfactual.submit).toBe('Create What-If');
-    expect(zh.translation.counterfactual.submit).toBe('创建假设分支');
+    expect(en.translation.counterfactual.title).toBe('Rewrite One Line');
+    expect(zh.translation.counterfactual.title).toBe('改一句话重演');
+    expect(en.translation.counterfactual.submit).toBe('Create rewrite branch');
+    expect(zh.translation.counterfactual.submit).toBe('创建改写分支');
   });
 
   it('provides localized faction timeline labels on the ResultView branch analysis section', () => {

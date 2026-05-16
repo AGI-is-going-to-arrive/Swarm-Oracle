@@ -68,13 +68,13 @@ def _seed_scenario(engine, *, status=ScenarioStatus.SIMULATING, question="测试
 
 def _seed_branch(engine, scenario_id, *, title="主线", probability=1.0,
                  status=BranchStatus.ACTIVE, story="", insight="",
-                 key_moments="", parent_branch_id=None, fork_reason=""):
+                 key_moments="", parent_branch_id=None, fork_reason="", fork_round=0):
     """Create a branch and return its ID."""
     b = Branch(
         scenario_id=scenario_id, title=title, probability=probability,
         status=status, story=story, insight=insight,
         key_moments=key_moments, parent_branch_id=parent_branch_id,
-        fork_reason=fork_reason,
+        fork_reason=fork_reason, fork_round=fork_round,
     )
     with Session(engine) as session:
         session.add(b)
@@ -2146,7 +2146,7 @@ class TestStoryEndpoint:
         assert resp.json()["branches"][0]["key_moments"] == []
 
     def test_get_story_branch_with_parent(self, client):
-        """Story should include parent_branch_id and fork_reason."""
+        """Story should include parent_branch_id, fork_round, and fork_reason."""
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
         root = _seed_branch(
@@ -2156,13 +2156,14 @@ class TestStoryEndpoint:
         _seed_branch(
             engine, sid,
             title="分支", probability=0.5, status=BranchStatus.COMPLETED,
-            parent_branch_id=root, fork_reason="意见分歧",
+            parent_branch_id=root, fork_reason="意见分歧", fork_round=3,
         )
 
         resp = client.get(f"/api/scenario/{sid}/story")
         data = resp.json()
         child = next(b for b in data["branches"] if b["title"] == "分支")
         assert child["parent_branch_id"] == root
+        assert child["fork_round"] == 3
         assert child["fork_reason"] == "意见分歧"
 
 

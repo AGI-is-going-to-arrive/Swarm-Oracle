@@ -569,6 +569,18 @@ async def list_checkpoints(
             ScenarioCheckpoint.scenario_id == scenario_id
         )
         if branch_id:
+            branch_exists = session.exec(
+                select(Branch.id).where(
+                    Branch.id == branch_id,
+                    Branch.scenario_id == scenario_id,
+                )
+            ).first()
+            if branch_exists is None:
+                raise api_error(
+                    404,
+                    "CHECKPOINT_BRANCH_NOT_FOUND",
+                    f"Branch {branch_id} not found in scenario",
+                )
             stmt = stmt.where(ScenarioCheckpoint.branch_id == branch_id)
         stmt = stmt.order_by(ScenarioCheckpoint.round_number)
 

@@ -405,6 +405,7 @@ class StoryBranch(BaseModel):
     insight: str = ""
     key_moments: list[str] = []
     parent_branch_id: str | None = None
+    fork_round: int = 0
     fork_reason: str = ""
     replay_kind: str | None = None
     replay_source_branch_id: str | None = None

@@ -3,7 +3,7 @@
    Allows selecting an agent + round to create a "what-if" branch.
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ApiError, submitCounterfactual } from '../api/client';
 import type { AgentInfo, AgentMessage } from '../types';
@@ -18,6 +18,17 @@ interface Props {
   onCreated?: (branchId: string) => void;
 }
 
+function normalizeRound(value: number | undefined, availableRounds: number[], totalRounds: number): number {
+  if (availableRounds.length > 0) {
+    if (typeof value === 'number' && availableRounds.includes(Math.round(value))) {
+      return Math.round(value);
+    }
+    return availableRounds[0];
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(totalRounds, Math.round(value)));
+}
+
 export function CounterfactualPanel({
   scenarioId,
   branchId,
@@ -29,30 +40,67 @@ export function CounterfactualPanel({
 }: Props) {
   const { t } = useTranslation();
   const [selectedAgent, setSelectedAgent] = useState('');
-  const [selectedRound, setSelectedRound] = useState(() => {
-    if (typeof initialRound !== 'number' || !Number.isFinite(initialRound)) return 1;
-    return Math.max(1, Math.min(totalRounds, Math.round(initialRound)));
-  });
+  const [selectedRound, setSelectedRound] = useState(1);
   const [replacement, setReplacement] = useState('');
-
-  useEffect(() => {
-    if (typeof initialRound !== 'number' || !Number.isFinite(initialRound)) return;
-    const clamped = Math.max(1, Math.min(totalRounds, Math.round(initialRound)));
-    setSelectedRound(clamped);
-  }, [initialRound, totalRounds]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
 
-  const selectedSourceMessage = [...messages]
-    .reverse()
-    .find((message) => (
+  const branchMessages = useMemo(
+    () => messages.filter((message) => (
       message.branch === branchId
-      && message.round === selectedRound
-      && message.agent_id === selectedAgent
-    ));
+      && Number.isInteger(message.round)
+      && message.round >= 1
+    )),
+    [branchId, messages],
+  );
+  const availableRounds = useMemo(
+    () => Array.from(new Set(branchMessages.map((message) => message.round))).sort((a, b) => a - b),
+    [branchMessages],
+  );
+  const hasSourceRounds = availableRounds.length > 0;
+  const roundMessages = useMemo(
+    () => branchMessages.filter((message) => message.round === selectedRound),
+    [branchMessages, selectedRound],
+  );
+  const agentIdsForRound = useMemo(
+    () => new Set(roundMessages.map((message) => message.agent_id)),
+    [roundMessages],
+  );
+  const availableAgents = useMemo(
+    () => agents.filter((agent) => agentIdsForRound.has(agent.id)),
+    [agentIdsForRound, agents],
+  );
+  const selectedSourceMessage = useMemo(
+    () => [...roundMessages]
+      .reverse()
+      .find((message) => message.agent_id === selectedAgent),
+    [roundMessages, selectedAgent],
+  );
 
-  const canSubmit = selectedAgent && replacement.trim() && !submitting;
+  useEffect(() => {
+    setSelectedRound((current) => normalizeRound(initialRound ?? current, availableRounds, totalRounds));
+  }, [availableRounds, initialRound, totalRounds]);
+
+  useEffect(() => {
+    if (selectedAgent && !agentIdsForRound.has(selectedAgent)) {
+      setSelectedAgent('');
+    }
+  }, [agentIdsForRound, selectedAgent]);
+
+  useEffect(() => {
+    setSelectedAgent('');
+    setError(null);
+    setResult(null);
+  }, [branchId]);
+
+  const canSubmit = Boolean(
+    branchId
+    && selectedAgent
+    && selectedSourceMessage
+    && replacement.trim()
+    && !submitting,
+  );
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
@@ -91,9 +139,15 @@ export function CounterfactualPanel({
 
   return (
     <div style={{ border: '1px solid var(--color-border, #555)', borderRadius: 8, padding: '1rem', marginTop: '1rem' }}>
-      <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>
-        {t('counterfactual.title', 'What-If Replay')}
+      <h3 style={{ margin: '0 0 0.35rem', fontSize: '1rem' }}>
+        {t('counterfactual.title', 'Rewrite One Line')}
       </h3>
+      <p style={{ color: '#8f98ad', fontSize: '0.86rem', lineHeight: 1.5, margin: '0 0 0.85rem' }}>
+        {t(
+          'counterfactual.intro',
+          'Change one saved agent statement. The system creates a counterfactual branch from that edited moment.',
+        )}
+      </p>
 
       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
         <div>
@@ -104,10 +158,11 @@ export function CounterfactualPanel({
             id="cf-agent"
             value={selectedAgent}
             onChange={e => setSelectedAgent(e.target.value)}
+            disabled={!hasSourceRounds || availableAgents.length === 0}
             style={{ padding: '0.4rem', borderRadius: 4, border: '1px solid #555', background: '#1a1a2e', color: '#fff' }}
           >
             <option value="">{t('counterfactual.select_agent', '-- Select --')}</option>
-            {agents.map(a => (
+            {availableAgents.map(a => (
               <option key={a.id} value={a.id}>{a.name} ({a.role})</option>
             ))}
           </select>
@@ -117,22 +172,46 @@ export function CounterfactualPanel({
           <label htmlFor="cf-round" style={{ display: 'block', fontSize: '0.8rem', marginBottom: 3 }}>
             {t('counterfactual.round', 'Round')}
           </label>
-          <input
+          <select
             id="cf-round"
-            type="number"
-            min={1}
-            max={totalRounds}
-            value={selectedRound}
+            value={hasSourceRounds ? String(selectedRound) : ''}
             onChange={e => {
               const raw = Number(e.target.value);
-              const clamped = Math.max(1, Math.min(totalRounds, Math.round(raw)));
-              setSelectedRound(Number.isInteger(raw) ? clamped : selectedRound);
+              if (Number.isInteger(raw) && availableRounds.includes(raw)) {
+                setSelectedRound(raw);
+                setSelectedAgent('');
+              }
             }}
-            aria-invalid={!Number.isInteger(selectedRound) || selectedRound < 1 || selectedRound > totalRounds}
-            style={{ width: 60, padding: '0.4rem', borderRadius: 4, border: '1px solid #555', background: '#1a1a2e', color: '#fff' }}
-          />
+            disabled={!hasSourceRounds}
+            aria-invalid={!hasSourceRounds}
+            style={{ minWidth: 88, padding: '0.4rem', borderRadius: 4, border: '1px solid #555', background: '#1a1a2e', color: '#fff' }}
+          >
+            {!hasSourceRounds && (
+              <option value="">{t('counterfactual.no_rounds', 'No source rounds')}</option>
+            )}
+            {availableRounds.map((round) => (
+              <option key={round} value={round}>
+                {t('counterfactual.round_label', 'Round {{round}}', { round })}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
+
+      <p role="status" aria-live="polite" style={{ color: '#b8c0d4', fontSize: '0.82rem', margin: '0 0 0.75rem' }}>
+        {!branchId
+          ? t('counterfactual.no_source_branch', 'No source branch is available for editing.')
+          : !hasSourceRounds
+            ? t('counterfactual.no_source_rounds', 'This branch has no persisted source messages that can be edited.')
+            : availableAgents.length === 0
+              ? t('counterfactual.no_agents_for_round', 'No agents spoke in the selected round.')
+              : selectedSourceMessage
+                ? t('counterfactual.source_ready', 'Editing {{agent}} in round {{round}}.', {
+                    agent: selectedSourceMessage.agent,
+                    round: selectedRound,
+                  })
+                : t('counterfactual.select_source_agent', 'Select an agent who spoke in this round.')}
+      </p>
 
       <div style={{ marginBottom: '0.75rem' }}>
         <label htmlFor="cf-replacement" style={{ display: 'block', fontSize: '0.8rem', marginBottom: 3 }}>
@@ -151,7 +230,7 @@ export function CounterfactualPanel({
 
       {error && <p role="alert" style={{ color: '#e74c3c', fontSize: '0.85rem', marginBottom: '0.5rem' }}>{error}</p>}
       {result && (
-        <p style={{ color: '#2ecc71', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+        <p role="status" aria-live="polite" style={{ color: '#2ecc71', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
           {t('counterfactual.created', 'Counterfactual branch created!')}
         </p>
       )}

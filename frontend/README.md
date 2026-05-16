@@ -26,7 +26,7 @@ React + TypeScript frontend for SwarmOracle.
 | `/` | `InputView` | Scenario input, progress indicator, quick starts, onboarding, launch confirmation, source families, search-depth selector, provider policy, optional organization id, advanced/BYOK accordions, preflight-aware submit loading, custom Agent attach panel, feature-gated snapshot import |
 | `/admin/setup` | `SetupWizardView` | Three-step provider setup, API/base URL entry, and connection test |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, capture |
-| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Result Quality verdict panel when available, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, share/export, prediction card, feature-gated snapshot export, replay import, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
+| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Result Quality verdict panel when available, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, share/export, prediction card, feature-gated snapshot export, replay import, rewrite-one-line counterfactuals, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
 | `/workbench/:id` | `WorkbenchView` | Dedicated graph workbench for causal / split / KG layouts; preserves the analysis branch query and links back to the scenario result page |
 | `/replay/:id` | `ReplayView` | Replay trace timeline with pagination, branch filter, and unavailable/probe-error states |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
@@ -78,7 +78,9 @@ React + TypeScript frontend for SwarmOracle.
 - `predictionBetting.ts`
   structured bet helpers now fall back to the raw tone id when they receive an unknown ending tone label
 - `ResumePanel.tsx`
-  ResultView-side resume control for `POST /api/scenario/:id/resume`; prefers branch-scoped checkpoints when available, turns structured `compressed_summary` data into a readable preview, falls back to round input when no checkpoint is available, locks after success, and is covered by the dedicated resume smoke script
+  ResultView-side resume control for `POST /api/scenario/:id/resume`; waits for a source branch before loading checkpoints, prefers branch-scoped checkpoints when available, turns structured `compressed_summary` data into a readable preview, falls back to round input when no checkpoint is available or checkpoint loading fails, locks after success, and is covered by the dedicated resume smoke script
+- `CounterfactualPanel.tsx`
+  ResultView-side counterfactual control for `POST /api/scenario/:id/counterfactual`; edits one persisted source message, restricts rounds and agents to the selected source branch, sends the original source message for backend matching, and shows status feedback when the source branch/round is selected
 - `AgentAttachPanel.tsx`
   homepage custom Agent picker; renders persona, domains, and decision bias as React text, caps selection at 5, and keeps loading/error/retry states visible
 - `AgentLibrary.tsx / AgentCard.tsx`

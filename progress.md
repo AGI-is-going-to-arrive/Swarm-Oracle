@@ -17447,3 +17447,81 @@ QA Inventory
 - 当前边界：
   - 本轮没有重跑 backend 全量 pytest、frontend 全量 vitest 或完整 Oracle E2E；只记录上面这些实际跑过的定向验证
   - `1-on-1 Interview` 仍复用 existing conversation `/start` + `/turn`，这轮没有改 conversation API 合同
+
+## 2026-05-17 Result replay controls reality check
+
+- 本轮目标：
+  - 把结果页里的“改一句话重演”和“从检查点续跑”从看起来像同一件事的 UI，收口成两条清楚的真实链路
+  - 验证 counterfactual branch、checkpoint resume、locale 覆盖和浏览器实测都是真接线，不是只滚动到下方表单
+
+- 本轮后端收口：
+  - `backend/app/api/schemas.py`
+    - `StoryBranch` 增加 `fork_round`
+  - `backend/app/api/scenarios.py`
+    - `/story` 的 branch response 回显 `fork_round`
+  - `backend/app/api/graphs.py`
+    - `GET /api/scenario/{id}/checkpoints?branch_id=...` 会先校验 branch 属于当前 scenario
+    - 跨 scenario 或不存在的 branch 返回 `404 CHECKPOINT_BRANCH_NOT_FOUND`
+  - `backend/tests/test_api.py`
+    - 锁住 story response 的 `parent_branch_id / fork_round / fork_reason`
+  - `backend/tests/test_counterfactual.py`
+    - 补 checkpoint branch 跨场景拒绝测试
+
+- 本轮前端收口：
+  - `frontend/src/components/result/CounterfactualBrand.tsx`
+    - 只展示带真实正整数 `fork_round` 和 `parent_branch_id` 的 fork point
+    - 点击“回到第 N 轮”会把来源分支切到 parent branch，而不是切到已经 fork 出来的 child branch
+  - `frontend/src/pages/result/AgentRoster.tsx`
+    - 点击 fork point 后给用户可见 status 反馈，并把 `CounterfactualPanel` 指向正确来源分支
+  - `frontend/src/components/CounterfactualPanel.tsx`
+    - round 从自由数字输入改成来源分支已有消息回合的下拉
+    - Agent 只显示该回合实际发过言的 Agent
+    - 提交时带 `source_message_content`，让后端匹配到唯一旧发言
+  - `frontend/src/components/ResumePanel.tsx`
+    - 先选来源分支，再加载该分支 checkpoint
+    - 有 checkpoint 时必须选择 checkpoint；加载失败会给错误反馈，并回到 round 输入
+    - 成功反馈改成 `role=status`
+  - `frontend/src/i18n/locales/en.json`
+  - `frontend/src/i18n/locales/zh.json`
+    - 文案区分 `Rewrite One Line / 改一句话重演` 和 `Continue from Checkpoint / 从检查点续跑`
+
+- 本轮文档同步：
+  - `README.md`
+  - `frontend/README.md`
+  - `backend/CLAUDE.md`
+  - `frontend/CLAUDE.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/reference/api.md`
+  - `llmdoc/guides/development.md`
+  - `progress.md`
+
+- 本轮实际验证：
+  - `cd backend && PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_counterfactual.py tests/test_resume.py tests/test_api.py::TestStoryEndpoint -q -p no:cacheprovider`
+    - `60 passed`
+  - `cd backend && .venv/bin/ruff check app/api/scenarios.py app/api/schemas.py app/api/graphs.py tests/test_counterfactual.py tests/test_resume.py tests/test_api.py`
+    - 通过
+  - `cd frontend && npm exec -- eslint src/components/CounterfactualPanel.tsx src/components/ResumePanel.tsx src/components/result/CounterfactualBrand.tsx src/pages/result/AgentRoster.tsx src/components/ResumePanel.test.tsx src/i18n/locales.test.ts src/pages/ResultView.test.tsx`
+    - 通过
+  - `cd frontend && NODE_OPTIONS=--max-old-space-size=8192 npm exec -- vitest run src/components/ResumePanel.test.tsx src/i18n/locales.test.ts --reporter=dot --maxWorkers=1`
+    - `43 passed`
+  - `cd frontend && NODE_OPTIONS=--max-old-space-size=8192 npm exec -- vitest run src/pages/ResultView.test.tsx -t "frames faction timeline" --reporter=dot --maxWorkers=1`
+    - `1 passed / 78 skipped`
+  - `cd frontend && NODE_OPTIONS=--max-old-space-size=8192 npm exec -- tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `git diff --check`
+    - 通过
+
+- 真实浏览器 spot-check：
+  - 打开本地结果页 `7a864b9b-346b-4bdc-9436-6d8e10af1ee8`
+  - 点击 `回到第 3 轮` 后，页面聚焦到反事实表单，并显示已经定位到来源分支和第 3 轮
+  - 创建反事实分支返回 `201 Created`，branch 为 `5c591207-7e65-4b25-bfa6-b76cd4f66ce2`，后端记录 `replay_kind=counterfactual / fork_round=3`
+  - 选择同一来源分支后，checkpoint 请求带 `branch_id`，下拉只显示该分支 checkpoint
+  - 选择第 3 轮 checkpoint 后创建续跑分支返回 `201 Created`，branch 为 `e2959104-9612-4941-8795-2eb1a1214f53`，后台完成后 DB 状态为 `COMPLETED`
+  - 英文 UI 显示 `Rewrite One Line` 和 `Continue from Checkpoint`
+
+- 当前边界：
+  - 本轮没有重跑 backend 全量 pytest、frontend 全量 vitest 或完整 release signoff
+  - 浏览器实测创建了两条本地 replay branch；没有自动清理，因为删除本地数据需要单独确认
+  - 浏览器 console 仍有既有 `[WS] Unhandled event type: kg:delta` warning；本轮没有改 KG realtime handler

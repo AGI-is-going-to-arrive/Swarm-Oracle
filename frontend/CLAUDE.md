@@ -100,7 +100,7 @@ npm run test:watch # vitest (watch mode)
 | `ArgumentMap.tsx` | 辩论论证图谱；当前支持五种 verdict status、三层 DAG、状态数量筛选、键盘快捷键、side 色彩和 mobile graph/list 切换 |
 | `ArgumentMapMobileList.tsx` | 论证图谱移动端列表；按 claim/evidence/rebuttal/counter 分组的 accordion |
 | `ArgumentMapTour.tsx` | 论证图谱首次访问引导；使用 localStorage 控制只显示一次 |
-| `CounterfactualPanel.tsx` | 反事实种子选择器 (Phase 3 F4) |
+| `CounterfactualPanel.tsx` | 结果页反事实改写入口；只允许选择来源分支里真实存在的回合和该回合发过言的 Agent，并把原始发言随请求发给后端匹配 |
 | `FactionTimeline.tsx` | 阵营时间线 (逐轮色条, Phase 3 F5) |
 | `FactionForceGraph.tsx` | 阵营力导向图 (G6 渲染, round slider + debounce, sr-only 回退, prefers-reduced-motion) |
 | `result/HookSummaryPanel.tsx` | 生成物快览卡片 (5 hook 状态汇总: causal/factions/checkpoints/identity/argument_map, branchId 透传) |
@@ -252,7 +252,7 @@ frontend/
 | `Scenario` | 场景快照，含 agents/branches/groups/messages/director_state/gameplay_state | `Scenario` 表 + 关联 |
 | `AgentInfo` | Agent 信息 (id/name/role/persona/tier/stance/emotion/group_id) | `Agent` 表 |
 | `BranchInfo` | 分支信息 (含 story/insight/key_moments/probability/status) | `Branch` 表 |
-| `StoryData / StoryBranch` | 结果页 story payload；`verdict / verdict_confidence` 和 `question_answer` 都是可空字段，旧 scenario 或 feature off 时不渲染 verdict panel | `/api/scenario/{id}/story` |
+| `StoryData / StoryBranch` | 结果页 story payload；`verdict / verdict_confidence` 和 `question_answer` 都是可空字段，branch 还会带 `fork_round / replay_kind / replay_source_branch_id` 供 counterfactual、resume 和 replay provenance 使用 | `/api/scenario/{id}/story` |
 | `AgentMessage` | Agent 发言 (agent/message/emotion/diverge/branch/round/synthesized) | `AgentMessage` 表 |
 | `GroupInfo` / `AgentGroupDetail` | P3-A 分组信息 | `AgentGroup` 表 |
 

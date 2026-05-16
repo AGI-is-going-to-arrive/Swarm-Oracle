@@ -467,11 +467,12 @@
   - `ResumePanel`
   - `FactionTimeline`
 - 续跑分支卡片当前会显示 resumed badge、来源分支按钮和独立概率说明；来源按钮会把焦点带回对应原始分支标题。
-- 前端 `StoryBranch / BranchInfo` 类型当前接受可空的 `replay_kind / replay_source_branch_id`，用于展示 resume/import/counterfactual 来源语义；普通分支可以没有这两个字段。
+- 前端 `StoryBranch / BranchInfo` 类型当前接受 `fork_round`，以及可空的 `replay_kind / replay_source_branch_id`，用于展示 fork point、resume/import/counterfactual 来源语义；普通分支可以没有 replay 字段。
 - `CounterfactualBrand` 当前也接在 ResultView 的反事实入口上：
   - 最多展示 3 个可回溯 fork point
-  - 点击后会把 `CounterfactualPanel` 的轮次同步到对应 `fork_round`
-  - `CounterfactualPanel.initialRound` 会钳制在 `1..totalRounds`
+  - 只使用带真实正整数 `fork_round` 和 `parent_branch_id` 的分支
+  - 点击后会把 `CounterfactualPanel` 的来源分支同步到 parent branch，并把轮次同步到对应 `fork_round`
+  - `CounterfactualPanel` 只允许选择该来源分支里已保存消息的回合，以及该回合实际发言过的 Agent；提交时会带原始发言文本，让后端做唯一消息匹配
 - `HOPsAnimation` 当前已挂到 `ResultView`，多分支结果页会在 endings grid 前展示分支概率采样动画和“100 次采样”说明；replay 模式下不播放。
 - `ResultView` 当前在 `custom_agents` capability 开启时会显示 Agent Library bridge；这条入口只受 `custom_agents` gate 影响，不再误绑到 `agent_identity` gate。
 - `ResultView` 的阵营分析当前不再固定绑 `branches[0]`：
@@ -655,11 +656,11 @@
   - `font-display: swap` 和 `unicode-range` 会让浏览器按实际文本拉取需要的字体分片
   - 当前字体目录约 200 个 woff2 文件，约 11 MB
 - `ResumePanel` 当前会：
-  - 只在用户已选分支且 round 为有效整数时允许提交
-  - `counterfactual_replay` capability 可用时优先加载同 scenario / branch 的 checkpoints；选项标签会带上分支标题，避免同轮 checkpoint 看起来一样
+  - 先等用户选定来源分支，再加载同 scenario / branch 的 checkpoints
+  - 有 checkpoint 时要求用户选中一个 checkpoint；没有 checkpoint 时才回到 round number 输入
   - checkpoint 超过当前 `totalRounds` 会被过滤；选中 checkpoint 后会同步 round number
   - `compressed_summary` 会先解析成可读摘要预览；结构化 JSON 不会直接露给用户
-  - 没有 checkpoint 或加载失败时回到 round number 输入
+  - checkpoint 加载失败时显示错误反馈，并回到 round number 输入
   - 成功后锁表单并在 500ms 后跳回 `/sim/:id`
   - 对 `429` 统一显示 replay branch 上限提示
 - `ResumePanel` 当前有独立 smoke 入口：

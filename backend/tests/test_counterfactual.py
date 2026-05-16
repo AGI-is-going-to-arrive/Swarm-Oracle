@@ -844,3 +844,21 @@ class TestCheckpoints:
         data = resp.json()
         assert len(data) == 1
         assert data[0]["branch_id"] == bid_a
+
+    def test_rejects_branch_from_other_scenario(self, client):
+        """GET checkpoints should reject branch_id from a different scenario."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, question="Scenario A")
+        other_sid = _seed_scenario(engine, question="Scenario B")
+        foreign_branch = _seed_branch(engine, other_sid, title="Foreign")
+
+        resp = client.get(
+            f"/api/scenario/{sid}/checkpoints",
+            params={"branch_id": foreign_branch},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == {
+            "code": "CHECKPOINT_BRANCH_NOT_FOUND",
+            "message": f"Branch {foreign_branch} not found in scenario",
+        }

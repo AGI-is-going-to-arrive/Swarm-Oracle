@@ -20,7 +20,7 @@
 |------|------|------|
 | App 入口 | `backend/app/main.py` | 挂载所有 router、根信息、`/metrics` |
 | Admin | `backend/app/api/admin.py` | admin preflight 与 LLM 连接测试；受 session gate 保护，`ADMIN_TOKEN` 非空时还要求 `X-Admin-Token` |
-| Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import；scenario/story branch response 会回显 replay provenance，并在 Result Quality 开启时回显 `verdict / verdict_confidence / branches[].question_answer` |
+| Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import；scenario/story branch response 会回显 `parent_branch_id / fork_round / fork_reason / replay_kind / replay_source_branch_id`，并在 Result Quality 开启时回显 `verdict / verdict_confidence / branches[].question_answer` |
 | Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 Agent 备份导入导出；identity preflight 解析超时按 504 fail-closed |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary；bucket 会回显 `enforced / scope / window_seconds` |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
@@ -100,7 +100,7 @@
 ### Replay
 
 - 短链 replay 通过 `ReplayArtifact` 持久化。
-- `GET /api/scenario/{id}` 与 `GET /api/scenario/{id}/story` 的 `branches[]` 会带 `replay_kind / replay_source_branch_id`，用于 replay、import、counterfactual 和 resume 链路恢复来源语义；普通分支字段可为空。
+- `GET /api/scenario/{id}` 与 `GET /api/scenario/{id}/story` 的 `branches[]` 会带 `fork_round / replay_kind / replay_source_branch_id`，用于结果页还原 fork point，并让 replay、import、counterfactual 和 resume 链路恢复来源语义；普通分支的 replay 字段可为空。
 - SQLite 数据库如果是“由 lightweight bootstrap / `SQLModel.metadata.create_all()` 建出来、但还没有 `alembic_version`”的旧库，`init_db()` 当前会先补齐轻量 additive columns（包括 `graph_edge` 的 evidence 字段），再 `stamp` 到当前 head 并执行 upgrade；不会再重放初始迁移把已有表撞成 `table already exists`。
 - 同一类无版本旧库如果缺少后来加入的 SQLModel metadata 表，`init_db()` 会先按 metadata 补齐缺表，再 stamp 到当前 head；例如 `prediction_journal_entries` 不会因为旧库被直接 stamp 而缺失。
 - SQLite 本地旧库如果还留着 legacy `uq_ending_room_scope` 唯一索引（`scenario_id + anchor_branch_id + room_type + participant_set_hash`），`init_db()` 当前也会在 lightweight fallback 和 Alembic upgrade 后统一修回 `scope_fingerprint`；generation 升级后再点结果页 `进入会客厅 / 异线旁听席` 不会再因为旧索引直接 `500`。
@@ -130,6 +130,7 @@
   - 预占成功后的 lock lease 会在后台续跑期间持续续租，直到任务结束才释放
   - 如果后台续跑期间丢掉这把预占 lock，任务会直接 fail-closed 落成 `error`，不会失锁后继续跑
   - 不再出现 `201` 已返回、但后台其实没启动、scenario 卡在 `simulating` 的假成功
+- `GET /api/scenario/{id}/checkpoints?branch_id=...` 当前会先确认 branch 属于同一个 scenario；跨 scenario 或不存在的 branch 返回 `404 CHECKPOINT_BRANCH_NOT_FOUND`，不会退成空列表。
 - causal graph snapshot 当前会返回 `available_branches`（包含 fork payload 里的 `children`，也包含已完成结局分支），供前端 branch selector 在过滤态下继续保留全量可切分支。
 - causal graph snapshot 当前在 child branch 过滤时，也会保留该 fork 的直接 provenance 节点，不再返回只有 fork 自己的孤儿图。
 - causal graph snapshot 当前会把已完成的 `Branch` 投影成合成 `outcome` 结局节点：

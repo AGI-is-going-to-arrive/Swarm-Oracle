@@ -85,6 +85,7 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
   const [checkpoints, setCheckpoints] = useState<CheckpointInfo[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [checkpointError, setCheckpointError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const redirectTimerRef = useRef<number | null>(null);
 
@@ -125,28 +126,33 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
   // Re-fetch when the user switches branch so the picker stays branch-scoped.
   // Filter out checkpoints whose round exceeds totalRounds to avoid silently-disabled submit.
   useEffect(() => {
-    if (!replayEnabled || !scenarioId) {
+    if (!replayEnabled || !scenarioId || !selectedBranch) {
       setCheckpoints([]);
+      setCheckpointError(null);
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const list = await getCheckpoints(scenarioId, selectedBranch || undefined);
+        const list = await getCheckpoints(scenarioId, selectedBranch);
         if (cancelled) return;
         const filtered = list.filter((cp) => cp.round_number <= normalizedTotalRounds);
         const sorted = [...filtered].sort((a, b) => a.round_number - b.round_number);
         setCheckpoints(sorted);
+        setCheckpointError(null);
       } catch {
         if (cancelled) return;
-        // Non-fatal: panel falls back to numeric input
         setCheckpoints([]);
+        setCheckpointError(t(
+          'resume.checkpoint_load_error',
+          'Could not load checkpoints for this branch. You can still enter a round manually.',
+        ));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [replayEnabled, scenarioId, selectedBranch, normalizedTotalRounds]);
+  }, [replayEnabled, scenarioId, selectedBranch, normalizedTotalRounds, t]);
 
   // Reset checkpoint selection when the available list changes.
   useEffect(() => {
@@ -231,6 +237,7 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
               setSelectedBranch(e.target.value);
               setSelectedCheckpointId('');
               setError(null);
+              setCheckpointError(null);
             }}
             disabled={isLocked}
             className="result-resume__select"
@@ -243,7 +250,24 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
         </div>
 
         <div className="result-resume__field">
-          {hasCheckpoints ? (
+          {replayEnabled && !selectedBranch ? (
+            <>
+              <label htmlFor="resume-checkpoint" className="result-resume__label">
+                {t('resume.checkpoint_label', 'Resume from checkpoint')}
+              </label>
+              <select
+                id="resume-checkpoint"
+                value=""
+                disabled
+                className="result-resume__select"
+              >
+                <option value="">{t('resume.select_branch_first', 'Select a branch first')}</option>
+              </select>
+              <p className="result-resume__hint">
+                {t('resume.select_branch_hint', 'Please select a branch to see available checkpoints')}
+              </p>
+            </>
+          ) : hasCheckpoints ? (
             <>
               <label htmlFor="resume-checkpoint" className="result-resume__label">
                 {t('resume.checkpoint_label', 'Resume from checkpoint')}
@@ -342,8 +366,13 @@ export function ResumePanel({ scenarioId, branches, totalRounds, onCreated }: Pr
       })()}
 
       {visibleError && <p role="alert" className="result-resume__feedback result-resume__feedback--error">{visibleError}</p>}
+      {checkpointError && (
+        <p role="alert" className="result-resume__feedback result-resume__feedback--error">
+          {checkpointError}
+        </p>
+      )}
       {result && (
-        <p className="result-resume__feedback result-resume__feedback--success">
+        <p role="status" aria-live="polite" className="result-resume__feedback result-resume__feedback--success">
           {t('resume.created', 'Resume branch created!')}
         </p>
       )}

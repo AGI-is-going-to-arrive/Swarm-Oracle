@@ -9,7 +9,7 @@ interface CounterfactualBranchLike {
   title: string;
   parent_branch_id: string | null;
   fork_reason?: string;
-  fork_round?: number;
+  fork_round?: number | null;
   insight?: string;
   probability?: number;
 }
@@ -17,11 +17,12 @@ interface CounterfactualBranchLike {
 interface CounterfactualBrandProps {
   branches: CounterfactualBranchLike[];
   scenarioId: string;
-  onExplore: (branchId: string, round: number) => void;
+  onExplore: (sourceBranchId: string, round: number) => void;
 }
 
 interface ForkPoint {
   branchId: string;
+  sourceBranchId: string;
   round: number;
   title: string;
   reason: string;
@@ -29,21 +30,31 @@ interface ForkPoint {
 }
 
 const MAX_FORK_HIGHLIGHT = 3;
-const DEFAULT_FORK_ROUND = 1;
+
+function isUsableForkRound(value: number | null | undefined): value is number {
+  return (
+    typeof value === 'number'
+    && Number.isFinite(value)
+    && Number.isInteger(value)
+    && value >= 1
+  );
+}
 
 function pickForkPoints(branches: CounterfactualBranchLike[]): ForkPoint[] {
   const candidates = branches.filter((branch) => {
     if (!branch.parent_branch_id) return false;
+    if (!isUsableForkRound(branch.fork_round)) return false;
     return Boolean(branch.fork_reason || branch.insight || branch.title);
   });
   candidates.sort((a, b) => {
     const probDelta = (b.probability ?? 0) - (a.probability ?? 0);
     if (probDelta !== 0) return probDelta;
-    return (a.fork_round ?? DEFAULT_FORK_ROUND) - (b.fork_round ?? DEFAULT_FORK_ROUND);
+    return (a.fork_round ?? 0) - (b.fork_round ?? 0);
   });
   return candidates.slice(0, MAX_FORK_HIGHLIGHT).map((branch) => ({
     branchId: branch.id,
-    round: branch.fork_round ?? DEFAULT_FORK_ROUND,
+    sourceBranchId: branch.parent_branch_id ?? branch.id,
+    round: branch.fork_round ?? 1,
     title: branch.title,
     reason: branch.fork_reason ?? '',
     insight: branch.insight ?? '',
@@ -191,7 +202,7 @@ export function CounterfactualBrand({ branches, scenarioId: _scenarioId, onExplo
                 <button
                   type="button"
                   className="cf-brand__fork-cta"
-                  onClick={handleExploreClick(fork.branchId, fork.round)}
+                  onClick={handleExploreClick(fork.sourceBranchId, fork.round)}
                   aria-label={t('counterfactual_brand.explore_aria', '回到第 {{round}} 轮探索 {{title}}', {
                     round: fork.round,
                     title: fork.title,

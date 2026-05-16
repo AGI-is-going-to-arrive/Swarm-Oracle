@@ -264,7 +264,7 @@ backend/
 |------|--------|----------|------|
 | `scenario` | `Scenario` | `id(PK)`, `question`, `parsed_context(JSON)`, `director_state_json(JSON)`, `gameplay_state_json(JSON)`, `web_context_json(JSON)`, `status`, `created_at`, `user_id`, `visualization_enabled`, `scene_theme` | has many: agents, branches |
 | `agent` | `Agent` | `id(PK)`, `scenario_id(FK)`, `name`, `role`, `persona`, `tier(AgentTier)`, `stance`, `emotion`, `group_id` | belongs to: scenario |
-| `branch` | `Branch` | `id(PK)`, `scenario_id(FK)`, `parent_branch_id`, `fork_round`, `fork_reason`, `title`, `description`, `summary`, `story`, `insight`, `key_moments(JSON str)`, `probability`, `status(BranchStatus)` | belongs to: scenario; has many: rounds |
+| `branch` | `Branch` | `id(PK)`, `scenario_id(FK)`, `parent_branch_id`, `fork_round`, `fork_reason`, `title`, `description`, `summary`, `story`, `insight`, `key_moments(JSON str)`, `probability`, `status(BranchStatus)`, `replay_kind`, `replay_source_branch_id` | belongs to: scenario; has many: rounds |
 | `round` | `Round` | `id(PK)`, `branch_id(FK)`, `round_number`, `compressed_summary` | belongs to: branch; has many: messages |
 | `agent_message` | `AgentMessage` | `id(PK)`, `round_id(FK)`, `agent_id(FK)`, `content`, `emotion`, `diverge`, `tokens_used` | belongs to: round |
 | `intervention_log` | `InterventionLog` | `id(PK)`, `scenario_id(FK)`, `branch_id(FK)`, `round_number`, `user_input`, `created_at` | -- |

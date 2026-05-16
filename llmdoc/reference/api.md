@@ -95,7 +95,7 @@
   - 前端通常先调用 `POST /api/agents/identities/preflight`
   - `reuse_existing` 需要带 `identity_id`，后端会校验它属于当前 `user_id`
   - `create_new` 会让真正的 identity 解析跳过 L2 fuzzy reuse
-- `GET /api/scenario/{scenario_id}` 和 `GET /api/scenario/{scenario_id}/story` 的 `branches[]` 当前会回显 `replay_kind / replay_source_branch_id`；普通分支可为 `null`，replay/import/counterfactual/resume 分支用它保留来源分支语义。
+- `GET /api/scenario/{scenario_id}` 和 `GET /api/scenario/{scenario_id}/story` 的 `branches[]` 当前会回显 `fork_round / replay_kind / replay_source_branch_id`；普通分支的 replay 字段可为 `null`，replay/import/counterfactual/resume 分支用它保留来源分支语义，结果页也用 `fork_round` 定位可回溯的 fork point。
 - `GET /api/scenario/{scenario_id}/story` 在 `FEATURE_RESULT_VERDICT=true` 且 `parsed_context.result_quality` 有数据时，会额外回显顶层 `verdict / verdict_confidence`，以及 `branches[].question_answer`。关闭开关、旧 scenario、空字符串或 malformed `result_quality` 都会降级为空字段；未知 confidence 会归一化为 `medium`。
 - `GET /api/scenario/{scenario_id}/conversations` 受 `FEATURE_AGENT_CONVERSATION` gate，要求 signed principal 能看到该 scenario；`cursor` 是 offset cursor，`limit` 范围 `1..50`，返回项只带 thread 摘要，完整 turn 历史仍走 `GET /api/conversation/{thread_id}`。
 - `POST /api/scenario/{scenario_id}/cancel` 只接受 `parsing / simulating / narrating / cancelled`；`done / error` 会返回 `409 SIMULATION_NOT_RUNNING`。成功请求会把 scenario 持久化到 `cancelled`，并尽量取消本进程里的后台 task。运行中 worker 即使已经有本地 cancel token，也会继续读取 DB `cancelled` 状态，避免跨进程取消被漏掉。
@@ -399,7 +399,8 @@
   - 返回体为 `{ nodes, next_cursor }`，不写库，也不消耗 replay branch quota
 - `GET /api/scenario/{id}/checkpoints` 当前可选 `branch_id`：
   - 不传时返回 scenario 下全部 checkpoint
-  - 传入时只返回该 branch 的 checkpoint
+  - 传入时会先校验 branch 属于当前 scenario；不存在或跨 scenario 时返回 `404 CHECKPOINT_BRANCH_NOT_FOUND`
+  - 校验通过后只返回该 branch 的 checkpoint
   - 返回项包含 `round_number / compressed_summary / blackboard_json / created_at`；前端 resume 面板只把 `compressed_summary` 当作可见预览，不把它当新的 authority
 - `POST /api/scenario/{id}/counterfactual` 当前约束：
   - scenario 状态必须是 `done`；否则返回 `409 COUNTERFACTUAL_SCENARIO_STATUS_INVALID`
