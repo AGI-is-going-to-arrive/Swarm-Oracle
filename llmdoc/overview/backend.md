@@ -21,7 +21,7 @@
 | App 入口 | `backend/app/main.py` | 挂载所有 router、根信息、`/metrics` |
 | Admin | `backend/app/api/admin.py` | admin preflight 与 LLM 连接测试；受 session gate 保护，`ADMIN_TOKEN` 非空时还要求 `X-Admin-Token` |
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import；scenario/story branch response 会回显 replay provenance，并在 Result Quality 开启时回显 `verdict / verdict_confidence / branches[].question_answer` |
-| Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 persona 导入导出；identity preflight 解析超时按 504 fail-closed |
+| Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 Agent 备份导入导出；identity preflight 解析超时按 504 fail-closed |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
 | Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary、score breakdown |
@@ -55,7 +55,7 @@
 | Journal Service | `backend/app/services/journal_service.py` | personal prediction journal 写入、resolve、分页与 calibration 聚合 |
 | Document Ingestion | `backend/app/services/document_ingestion.py` | PDF 文本抽取、长文档实体抽取与 persona 生成 helper |
 | Education Templates | `backend/app/services/education_templates.py` | 教育场景模板列表、分类 / 难度筛选与单模板读取 |
-| Persona Export | `backend/app/services/persona_export.py` | Agent persona schema v1 导出、批量导出、导入校验与 custom identity 创建 |
+| Agent Backups | `backend/app/services/persona_export.py` | Agent 备份 schema v1 导出、批量导出、导入校验与 custom identity 创建 |
 | Hallucination Gate | `backend/app/services/hallucination_gate.py` | verdict 后的 warning-only claim / evidence 检查 |
 | Graph Analysis | `backend/app/services/graph_analysis.py` | 对最新 causal graph snapshot 做度数分布、god nodes、跨分支边摘要；大图会返回 `truncated: true` |
 | KG Realtime | `backend/app/services/kg_realtime.py` | 合并 `GraphDelta` 后通过 scenario WS 推送 `kg:delta`，payload 过大或失效时推送 `kg:snapshot_invalidated` |
@@ -208,8 +208,8 @@
   - PDF 解析最多读取 200 页 / 1000000 字符，并带 30 秒解析超时；超时返回结构化错误，不让上传请求无限卡住
   - 短文档继续走原有 chunk 抽取；长文档先做采样粗扫，再用候选名和 alias 在全文里取证据片段精提。粗扫、候选和证据文本都会包进 untrusted text block；malformed JSON、非对象条目和超大 LLM JSON response 会被拒绝或跳过
   - 实体提取和 persona 批次使用独立超时；persona 生成按 `0.7 -> 0.6 -> 0.5` 递减温度重试。部分 persona 失败会保留已创建 Agent，并在响应里返回 `agents_failed`；全部失败才返回结构化错误
-  - persona export/import 使用 `schema_version=1`；bulk export 最多 20 个；import 会创建新的 custom identity，不覆盖旧数据
-  - persona import 会把 decision bias 归一化到 `caution / optimism / conservatism / risk_tolerance / creativity` 5 个 key；boolean、`NaN/Inf` 或非数字值落到默认值，超出 `0..1` 的数字会被 clamp
+  - Agent 备份导出/导入使用 `schema_version=1`；bulk export 最多 20 个；import 会创建新的 custom identity，不覆盖旧数据
+  - Agent 备份导入会把 decision bias 归一化到 `caution / optimism / conservatism / risk_tolerance / creativity` 5 个 key；boolean、`NaN/Inf` 或非数字值落到默认值，超出 `0..1` 的数字会被 clamp
 - Prediction Journal 当前由 `prediction_journal_entry` 持久化：
   - 迁移 `027_prediction_journal` 创建 journal 表
   - 迁移 `029_prediction_journal_calibration_index` 给 `user_id / resolved_at / actual_outcome` 增加 calibration 查询索引

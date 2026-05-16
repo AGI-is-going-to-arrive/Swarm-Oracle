@@ -33,8 +33,8 @@ React + TypeScript frontend for SwarmOracle.
 | `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate result, supporting turns, replay digest, share/import |
 | `/history` | `HistoryView` | Scenario history, filtering, deletion |
 | `/leaderboard` | `LeaderboardView` | Prediction leaderboard with URL-synced segment filters |
-| `/agents` | `AgentLibrary` | Custom/generated Agent library, favorites filter, profile modal, persona import/export |
-| `/agents/new` | `AgentWorkshopView` | Custom Agent creation/editing with manual and PDF document tabs; persona import is available when the capability is enabled, and edit mode can export the current identity |
+| `/agents` | `AgentLibrary` | Custom/generated Agent library, favorites filter, profile modal, Agent backup export, and create-from-backup entry |
+| `/agents/new` | `AgentWorkshopView` | Custom Agent creation/editing with manual and PDF document tabs; backup-based Agent creation is available when the capability is enabled, and edit mode can export the current identity |
 | `/agents/identities/:id/memories` | `IdentityInspectorView` | Read-only identity memory inspector |
 | `/me/journal` | `PersonalJournalView` | Personal prediction journal, resolve flow, and calibration chart |
 
@@ -84,9 +84,9 @@ React + TypeScript frontend for SwarmOracle.
 - `AgentLibrary.tsx / AgentCard.tsx`
   Agent library surface with owned-identity favorites, pressed-button filtering, profile/edit/export actions, Unicode-safe long-persona truncation, a localized back action, and localized retry states for capability/favorite failures
 - `AgentWorkshopView.tsx / DocumentUploader.tsx`
-  custom Agent form; manual/document tabs use real tab semantics, the document tab shows bounded PDF upload progress, partial success, 0-agent and structured error states, and the header reuses `PersonaExportMenu` for capability-gated persona import/export
+  custom Agent form; manual/document tabs use real tab semantics, the document tab shows bounded PDF upload progress, partial success, 0-agent and structured error states, and the header reuses `PersonaExportMenu` for capability-gated Agent backup tools
 - `PersonaExportImport.tsx`
-  persona import/export primitives; import success uses the string `identity_id` returned by the backend, refreshes the library, and does not show raw backend errors to users. `AgentWorkshop/PersonaExportMenu.tsx` now uses the same ExportButton / ImportDialog surface as Agent Library
+  Agent backup export / create-from-backup primitives; create-from-backup success uses the string `identity_id` returned by the backend, refreshes the library, and does not show raw backend errors to users. The JSON paste path is kept behind an advanced disclosure. `AgentWorkshop/PersonaExportMenu.tsx` now uses the same ExportButton / ImportDialog surface as Agent Library
 - `IdentityInspectorView.tsx`
   clears stale header state when identity ids change, ignores late memory responses, and keeps empty / infrastructure-error / loaded memory states distinct
 - `EducationTemplatePicker.tsx`

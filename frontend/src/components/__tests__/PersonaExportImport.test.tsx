@@ -49,6 +49,11 @@ const validPayload: PersonaExportPayload = {
   },
 };
 
+function openPastePanel(): HTMLElement {
+  fireEvent.click(screen.getByRole('button', { name: /advanced: paste json content/i }));
+  return screen.getByTestId('persona-paste-textarea');
+}
+
 describe('PersonaExportImport — validatePersonaPayload', () => {
   it('accepts a well-formed payload', () => {
     const result = validatePersonaPayload(validPayload);
@@ -106,7 +111,7 @@ describe('PersonaExportImport — triggerJsonDownload', () => {
     URL.revokeObjectURL = vi.fn();
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
 
-    triggerJsonDownload(validPayload, 'aria-persona.json');
+    triggerJsonDownload(validPayload, 'aria-agent-backup.json');
     expect(URL.createObjectURL).toHaveBeenCalled();
     expect(clickSpy).toHaveBeenCalled();
 
@@ -126,7 +131,10 @@ describe('PersonaExportImport — ExportButton', () => {
 
   it('renders when capability enabled', () => {
     render(<ExportButton identityId={42} name="Aria" />);
-    expect(screen.getByRole('button', { name: 'Export Aria' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export backup for Aria' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export backup for Aria' })).toHaveTextContent(
+      'Export Backup',
+    );
   });
 
   it('hidden when capability disabled', () => {
@@ -160,7 +168,7 @@ describe('PersonaExportImport — ExportButton', () => {
     fireEvent.click(screen.getByRole('button', { name: /export/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/persona exported/i)).toBeInTheDocument();
+      expect(screen.getByText(/Agent backup exported/i)).toBeInTheDocument();
     });
   });
 
@@ -169,10 +177,10 @@ describe('PersonaExportImport — ExportButton', () => {
     const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
 
     render(<ExportButton identityId={1} name="Aria" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Export Aria' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Export backup for Aria' }));
 
     await waitFor(() => {
-      expect(screen.getByText(/Could not export persona/i)).toBeInTheDocument();
+      expect(screen.getByText(/Could not export Agent backup/i)).toBeInTheDocument();
     });
     expect(screen.queryByText(/raw upstream export failure/i)).not.toBeInTheDocument();
 
@@ -188,10 +196,18 @@ describe('PersonaExportImport — ImportDialog', () => {
   });
   afterEach(() => { cleanup(); });
 
-  it('opens and shows drop zone + paste field', () => {
+  it('opens as a backup creation dialog with advanced JSON paste collapsed', () => {
     render(<ImportDialog open={true} onClose={vi.fn()} onImported={vi.fn()} />);
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: /Create Agent from Backup/i })).toBeInTheDocument();
+    expect(screen.getByText(/creates a new Agent/i)).toBeInTheDocument();
+    expect(screen.getByText(/Upload a JSON backup exported from Agent Library/i)).toBeInTheDocument();
     expect(screen.getByTestId('persona-drop-zone')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /advanced: paste json content/i })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    expect(screen.queryByTestId('persona-paste-textarea')).not.toBeInTheDocument();
+    openPastePanel();
     expect(screen.getByTestId('persona-paste-textarea')).toBeInTheDocument();
   });
 
@@ -204,22 +220,22 @@ describe('PersonaExportImport — ImportDialog', () => {
 
   it('shows invalid_schema error when schema_version != 1', async () => {
     render(<ImportDialog open={true} onClose={vi.fn()} onImported={vi.fn()} />);
-    const textarea = screen.getByTestId('persona-paste-textarea');
+    const textarea = openPastePanel();
     const bad = JSON.stringify({ ...validPayload, schema_version: 2 });
     fireEvent.change(textarea, { target: { value: bad } });
 
-    const submit = screen.getByRole('button', { name: /^import$/i });
+    const submit = screen.getByRole('button', { name: /create as new agent/i });
     fireEvent.click(submit);
 
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent(/schema_version must be 1/i);
+      expect(screen.getByRole('alert')).toHaveTextContent(/backup file is not supported/i);
     });
     expect(mockImport).not.toHaveBeenCalled();
   });
 
   it('shows missing_fields error when required fields absent', async () => {
     render(<ImportDialog open={true} onClose={vi.fn()} onImported={vi.fn()} />);
-    const textarea = screen.getByTestId('persona-paste-textarea');
+    const textarea = openPastePanel();
     fireEvent.change(textarea, {
       target: {
         value: JSON.stringify({
@@ -228,10 +244,10 @@ describe('PersonaExportImport — ImportDialog', () => {
         }),
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: /^import$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create as new agent/i }));
 
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent(/Missing required fields/i);
+      expect(screen.getByRole('alert')).toHaveTextContent(/missing the Agent name/i);
     });
     expect(mockImport).not.toHaveBeenCalled();
   });
@@ -242,9 +258,9 @@ describe('PersonaExportImport — ImportDialog', () => {
     const onClose = vi.fn();
     render(<ImportDialog open={true} onClose={onClose} onImported={onImported} />);
 
-    const textarea = screen.getByTestId('persona-paste-textarea');
+    const textarea = openPastePanel();
     fireEvent.change(textarea, { target: { value: JSON.stringify(validPayload) } });
-    fireEvent.click(screen.getByRole('button', { name: /^import$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create as new agent/i }));
 
     await waitFor(() => expect(mockImport).toHaveBeenCalledTimes(1));
     expect(mockImport).toHaveBeenCalledWith(expect.objectContaining({ schema_version: 1 }));
@@ -257,13 +273,13 @@ describe('PersonaExportImport — ImportDialog', () => {
     const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
     render(<ImportDialog open={true} onClose={vi.fn()} onImported={vi.fn()} />);
 
-    fireEvent.change(screen.getByTestId('persona-paste-textarea'), {
+    fireEvent.change(openPastePanel(), {
       target: { value: JSON.stringify(validPayload) },
     });
-    fireEvent.click(screen.getByRole('button', { name: /^import$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create as new agent/i }));
 
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent(/Could not import persona/i);
+      expect(screen.getByRole('alert')).toHaveTextContent(/Could not create Agent from backup/i);
     });
     expect(screen.queryByText(/raw database import failure/i)).not.toBeInTheDocument();
 
@@ -296,9 +312,9 @@ describe('PersonaExportImport — ImportDialog', () => {
 
   it('detects invalid JSON in textarea', async () => {
     render(<ImportDialog open={true} onClose={vi.fn()} onImported={vi.fn()} />);
-    const textarea = screen.getByTestId('persona-paste-textarea');
+    const textarea = openPastePanel();
     fireEvent.change(textarea, { target: { value: '{not-json' } });
-    fireEvent.click(screen.getByRole('button', { name: /^import$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create as new agent/i }));
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(/Invalid JSON/i);
@@ -307,7 +323,7 @@ describe('PersonaExportImport — ImportDialog', () => {
 
   it('disables submit button when textarea empty', () => {
     render(<ImportDialog open={true} onClose={vi.fn()} onImported={vi.fn()} />);
-    const submit = screen.getByRole('button', { name: /^import$/i });
+    const submit = screen.getByRole('button', { name: /create as new agent/i });
     expect(submit).toBeDisabled();
   });
 
@@ -318,7 +334,7 @@ describe('PersonaExportImport — ImportDialog', () => {
     const labelId = dialog.getAttribute('aria-labelledby');
     expect(labelId).toBeTruthy();
     if (labelId) {
-      expect(document.getElementById(labelId)).toHaveTextContent(/Import Agent Persona/i);
+      expect(document.getElementById(labelId)).toHaveTextContent(/Create Agent from Backup/i);
     }
   });
 });

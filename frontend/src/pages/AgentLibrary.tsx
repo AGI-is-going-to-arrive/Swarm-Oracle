@@ -243,7 +243,7 @@ export function AgentLibrary() {
               className="agent-button"
               onClick={() => setImportOpen(true)}
             >
-              {t('persona_export.import', 'Import Persona')}
+              {t('persona_export.import', 'Create Agent from Backup')}
             </button>
           )}
           <Link
@@ -254,6 +254,15 @@ export function AgentLibrary() {
           </Link>
         </div>
       </div>
+
+      {exportEnabled && identities.length > 0 && (
+        <p className="agent-library-backup-hint">
+          {t(
+            'agent_library.backup_hint',
+            'To back up an existing Agent, click Export Backup on its card.',
+          )}
+        </p>
+      )}
 
       <div
         className="agent-library-toolbar"

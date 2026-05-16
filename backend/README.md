@@ -34,7 +34,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 |--------|------|-------------|
 | Scenarios | `app/api/scenarios.py` | Core CRUD, story, result-quality verdict fields, export, replay artifact, replay import, snapshot export/import |
 | Admin | `app/api/admin.py` | Preflight diagnostics and `/admin/setup` LLM connection test endpoints |
-| Agents | `app/api/agents.py` | custom Agent library/workshop, favorites, identity inspector, document import, persona export/import |
+| Agents | `app/api/agents.py` | custom Agent library/workshop, favorites, identity inspector, document import, Agent backup export/create-from-backup (`persona_export`) |
 | Quota | `app/api/quota.py` | Conversation and replay quota summary |
 | Campaign | `app/api/campaign.py` | finalize, profile, mastery, badges, daily-status, weekly-summary, `director-state`, `gameplay-state`, scenario summary |
 | Conversation | `app/api/conversation.py` | Node conversation thread/start/get/turn/abort with SSE assistant streaming |
@@ -68,7 +68,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | `GET` | `/api/agents/identities` | List generated/custom Agent identities visible to the current user |
 | `POST` | `/api/agents/workshop` | Create a custom Agent with persona, domains, tier and decision bias |
 | `POST` | `/api/agents/from-document` | Create custom Agents from a bounded PDF upload |
-| `POST` | `/api/agents/import` | Import persona JSON as a new custom Agent |
+| `POST` | `/api/agents/import` | Create a new custom Agent from an Agent backup JSON |
 | `GET` | `/api/agents/identities/{id}/memories` | Read-only identity memory inspector |
 | `POST` | `/api/replay-artifact` | Persist replay payload and return short share id |
 | `GET` | `/api/replay-artifact/{id}` | Load replay payload |

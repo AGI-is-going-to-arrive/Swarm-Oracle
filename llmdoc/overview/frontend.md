@@ -27,8 +27,8 @@
 |------|------|------|
 | InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、搜索深度选择、可选 `Organization ID`、推荐已配置搜索 / 高级自定义 provider 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
 | SetupWizardView | `frontend/src/pages/SetupWizardView.tsx` | `/admin/setup` 3 步 provider 配置向导；选择 preset、填 API key/base URL、测试连接并写入 session-scoped provider policy |
-| AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、编辑/删除入口、返回首页按钮、persona 单个/批量导出与 JSON 导入入口 |
-| AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择、PDF document upload tab，以及 capability-gated persona import/export 菜单 |
+| AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、编辑/删除入口、返回首页按钮、卡片级 Agent 备份导出与从备份创建 Agent 入口 |
+| AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择、PDF document upload tab，以及 capability-gated Agent 备份工具 |
 | IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
@@ -234,7 +234,7 @@
 | `AgentProfileModal.tsx` | `frontend/src/components/AgentProfileModal.tsx` | Agent profile 弹窗；展示成长、记忆、timeline 和 decision bias 分布，切换 Agent 或关闭后的迟到请求不会覆盖当前弹窗 |
 | `IdentityInspectorView.tsx` | `frontend/src/pages/IdentityInspectorView.tsx` | identity memory inspector 页面；切换 id 时清掉旧标题，迟到 memory 响应不会覆盖新 identity，空记忆、基础设施错误和正常 memory list 分开显示 |
 | `DocumentUploader.tsx` | `frontend/src/pages/AgentWorkshop/DocumentUploader.tsx` | Agent Workshop PDF 上传入口；展示抽取进度、部分成功、错误和新建 identities，取消/重试只更新当前请求 |
-| `PersonaExportImport.tsx` / `personaExportImportUtils.ts` | `frontend/src/components/` | persona 导出/导入 UI 与 JSON 校验 helper；导入成功后刷新 Agent Library，失败时显示本地化错误，不直接露出原始 API 文本；`AgentWorkshop/PersonaExportMenu.tsx` 复用同一组 ExportButton / ImportDialog primitive |
+| `PersonaExportImport.tsx` / `personaExportImportUtils.ts` | `frontend/src/components/` | Agent 备份导出 / 从备份创建 UI 与 JSON 校验 helper；创建成功后刷新 Agent Library，失败时显示本地化错误，不直接露出原始 API 文本；`AgentWorkshop/PersonaExportMenu.tsx` 复用同一组 ExportButton / ImportDialog primitive |
 | `EducationTemplatePicker.tsx` | `frontend/src/components/EducationTemplatePicker.tsx` | 首页教育模板 dialog；支持 category / difficulty filter、空结果、Retry、Escape 关闭和 focus trap；加载 / retry 使用 request id、cancel guard 和 fetch token，迟到响应不会覆盖当前状态 |
 | `QuickStartCards.tsx` | `frontend/src/components/QuickStartCards.tsx` | 首页 quick-start 预设卡；TypeScript 只保留 emoji、key、轮数、Agent 数和模式，题目与副标题从 `quickstart.*` locale key 读取 |
 | `Journal/*` | `frontend/src/components/Journal/` | 个人 journal 辅助面板：Agent roster、calibration curve、worldline mini map；当前右侧 roster / mini-map 是 Sprint 7 前的占位辅助面板 |
@@ -263,7 +263,7 @@
   - knowledge domains 优先读取后端解析后的数组，旧 payload 只带 JSON 字符串时再本地 parse，解析失败显示为空
   - Library card 显示 tier badge、domains 和 favorite 状态；favorite filter 是 pressed button group，不是 tab panel；空库会给出创建入口
   - capability / favorite 失败显示本地化错误与 Retry，不把原始后端错误文本直接露到页面
-  - persona export/import 入口按 `persona_export` capability gate 显示；导入成功只新增当前用户的 custom Agent，不覆盖现有 Agent，返回的 `identity_id` 是 string
+  - Agent 备份入口按 `persona_export` capability gate 显示；Library 卡片显示导出备份，Library / Workshop header 显示从备份创建 Agent。从备份创建成功只新增当前用户的 custom Agent，不覆盖现有 Agent，返回的 `identity_id` 是 string；粘贴 JSON 入口默认折叠在高级区域
 - Education template picker 当前按 `education_templates` capability gate 显示；选中模板后会回填首页问题、Agent 数和轮数；加载失败走本地化错误和 Retry，不显示 raw error。
 - Personal Journal 当前按 `prediction_journal` capability gate 显示；journal 与 calibration 数据都从当前 user scope 读取，resolve 后会显示实际结果和 Brier 分，refresh 会忽略迟到响应。右侧 roster / worldline panel 目前是明确占位，不代表已有 live 联动。
 - Leaderboard segment filters 当前会把 `type/date/agent count` 筛选同步到 URL params；不带筛选时仍消费旧数组响应。

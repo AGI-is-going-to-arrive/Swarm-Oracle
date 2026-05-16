@@ -54,7 +54,7 @@ export function PersonaExportMenu({
     <div
       className="persona-export-menu"
       role="group"
-      aria-label={t('persona_export.menu_aria', 'Persona export and import')}
+      aria-label={t('persona_export.menu_aria', 'Agent backup tools')}
     >
       {identityId && identityName && (
         <ExportButton identityId={identityId} name={identityName} />
@@ -64,7 +64,7 @@ export function PersonaExportMenu({
         className="agent-button"
         onClick={() => setImportOpen(true)}
       >
-        {t('persona_export.import', 'Import Persona')}
+        {t('persona_export.import', 'Create Agent from Backup')}
       </button>
       <ImportDialog
         open={importOpen}

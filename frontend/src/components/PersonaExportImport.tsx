@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════
    PersonaExportImport — export button + import dialog for
-   user-portable Agent persona JSON files (schema_version 1).
+   user-portable Agent backup JSON files (schema_version 1).
    ═══════════════════════════════════════════════════════════ */
 
 import {
@@ -65,17 +65,17 @@ export function ExportButton({ identityId, name }: ExportButtonProps) {
       setStatus(null);
       try {
         const payload = await exportPersona(identityId);
-        const fileName = `${sanitizeFileNameStem(name)}-persona.json`;
+        const fileName = `${sanitizeFileNameStem(name)}-agent-backup.json`;
         triggerJsonDownload(payload, fileName);
-        setStatus({ kind: 'ok', message: t('persona_export.export_success', 'Persona exported') });
+        setStatus({ kind: 'ok', message: t('persona_export.export_success', 'Agent backup exported') });
       } catch (err) {
         const code = apiErrorCode(err);
         if (!code) logUnexpectedPersonaError('Export', err);
         const message = code === 'FEATURE_DISABLED' || code === 'PERSONA_EXPORT_DISABLED'
-          ? t('persona_export.feature_disabled', 'Persona export is not enabled.')
+          ? t('persona_export.feature_disabled', 'Agent backups are not enabled.')
           : code === 'AGENT_IDENTITY_NOT_FOUND' || code === 'PERSONA_EXPORT_NOT_FOUND'
-            ? t('persona_export.export_not_found', 'Persona could not be found.')
-            : t('persona_export.export_failed', 'Could not export persona. Please try again.');
+            ? t('persona_export.export_not_found', 'Agent backup could not be found.')
+            : t('persona_export.export_failed', 'Could not export Agent backup. Please try again.');
         setStatus({ kind: 'err', message });
       } finally {
         setBusy(false);
@@ -104,7 +104,7 @@ export function ExportButton({ identityId, name }: ExportButtonProps) {
         aria-busy={busy}
         aria-label={t('persona_export.export_agent_aria', {
           name,
-          defaultValue: 'Export {{name}}',
+          defaultValue: 'Export backup for {{name}}',
         })}
       >
         <svg
@@ -122,7 +122,7 @@ export function ExportButton({ identityId, name }: ExportButtonProps) {
             strokeLinejoin="round"
           />
         </svg>
-        {t('persona_export.export', 'Export')}
+        {t('persona_export.export', 'Export Backup')}
       </button>
       {status && (
         <span
@@ -148,10 +148,13 @@ export interface ImportDialogProps {
 export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
   const { t } = useTranslation();
   const titleId = useId();
+  const descriptionId = `${titleId}-description`;
+  const pastePanelId = `${titleId}-paste-panel`;
   const [pasted, setPasted] = useState('');
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   useFocusTrap(dialogRef, open);
@@ -163,6 +166,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
       setErrorKey(null);
       setSubmitting(false);
       setDragActive(false);
+      setPasteOpen(false);
     }
   }, [open]);
 
@@ -194,25 +198,31 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
   const errorMessage = useMemo(() => {
     if (!errorKey) return null;
     if (errorKey === 'persona_export.invalid_schema') {
-      return t('persona_export.invalid_schema', 'Invalid file: schema_version must be 1');
+      return t(
+        'persona_export.invalid_schema',
+        'This backup file is not supported. Use a SwarmOracle Agent backup with schema_version 1.',
+      );
     }
     if (errorKey === 'persona_export.missing_fields') {
-      return t('persona_export.missing_fields', 'Missing required fields: name, role, persona_text');
+      return t(
+        'persona_export.missing_fields',
+        'This backup is missing the Agent name, role, or persona text.',
+      );
     }
     if (errorKey === 'persona_export.invalid_json') {
       return t('persona_export.invalid_json', 'Invalid JSON');
     }
     if (errorKey === 'persona_export.import_conflict') {
-      return t('persona_export.import_conflict', 'This persona already exists for your account.');
+      return t('persona_export.import_conflict', 'This Agent backup already exists for your account.');
     }
     if (errorKey === 'persona_export.import_invalid') {
-      return t('persona_export.import_invalid', 'Persona file failed server validation.');
+      return t('persona_export.import_invalid', 'Agent backup failed server validation.');
     }
     if (errorKey === 'persona_export.import_not_allowed') {
-      return t('persona_export.import_not_allowed', 'Persona import is not enabled.');
+      return t('persona_export.import_not_allowed', 'Creating Agents from backup is not enabled.');
     }
     if (errorKey === 'persona_export.import_failed') {
-      return t('persona_export.import_failed', 'Could not import persona. Please try again.');
+      return t('persona_export.import_failed', 'Could not create Agent from backup. Please try again.');
     }
     return errorKey;
   }, [errorKey, t]);
@@ -336,12 +346,13 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        aria-describedby={descriptionId}
         className="persona-import-dialog"
         tabIndex={-1}
       >
         <header className="persona-import-dialog__header">
           <h2 id={titleId} className="persona-import-dialog__title">
-            {t('persona_export.import_title', 'Import Agent Persona')}
+            {t('persona_export.import_title', 'Create Agent from Backup')}
           </h2>
           <button
             type="button"
@@ -352,6 +363,12 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
             ×
           </button>
         </header>
+        <p id={descriptionId} className="persona-import-dialog__intro">
+          {t(
+            'persona_export.import_description',
+            'Upload a JSON backup exported from Agent Library. This creates a new Agent and does not overwrite your existing Agents.',
+          )}
+        </p>
 
         <form onSubmit={handleSubmit}>
           <div
@@ -382,7 +399,10 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
               />
             </svg>
             <span className="persona-drop-zone__hint">
-              {t('persona_export.drop_zone', 'Drop .json file here or click to browse')}
+              {t(
+                'persona_export.drop_zone',
+                'Drop a .json backup exported from Agent Library, or click to choose a file',
+              )}
             </span>
             <input
               ref={fileInputRef}
@@ -390,25 +410,39 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
               accept=".json,application/json"
               onChange={handleFileInput}
               className="persona-drop-zone__file"
-              aria-label={t('persona_export.drop_zone', 'Drop .json file here or click to browse')}
+              aria-hidden="true"
+              tabIndex={-1}
             />
           </div>
 
           <div className="persona-paste-section">
-            <label className="persona-paste-label" htmlFor={`${titleId}-paste`}>
-              {t('persona_export.paste_json', 'Or paste JSON below')}
-            </label>
-            <textarea
-              id={`${titleId}-paste`}
-              className="persona-paste-textarea"
-              value={pasted}
-              onChange={(e) => {
-                setPasted(e.target.value);
-                if (errorKey) setErrorKey(null);
-              }}
-              spellCheck={false}
-              data-testid="persona-paste-textarea"
-            />
+            <button
+              type="button"
+              className="persona-paste-toggle"
+              aria-expanded={pasteOpen}
+              aria-controls={pastePanelId}
+              onClick={() => setPasteOpen((value) => !value)}
+            >
+              {t('persona_export.paste_json_toggle', 'Advanced: paste JSON content')}
+            </button>
+            {pasteOpen && (
+              <div id={pastePanelId} className="persona-paste-panel">
+                <label className="persona-paste-label" htmlFor={`${titleId}-paste`}>
+                  {t('persona_export.paste_json', 'JSON backup content')}
+                </label>
+                <textarea
+                  id={`${titleId}-paste`}
+                  className="persona-paste-textarea"
+                  value={pasted}
+                  onChange={(e) => {
+                    setPasted(e.target.value);
+                    if (errorKey) setErrorKey(null);
+                  }}
+                  spellCheck={false}
+                  data-testid="persona-paste-textarea"
+                />
+              </div>
+            )}
           </div>
 
           {errorMessage && (
@@ -432,7 +466,7 @@ export function ImportDialog({ open, onClose, onImported }: ImportDialogProps) {
               disabled={submitting || !pasted.trim()}
               aria-busy={submitting}
             >
-              {t('persona_export.submit', 'Import')}
+              {t('persona_export.submit', 'Create as New Agent')}
             </button>
           </div>
         </form>

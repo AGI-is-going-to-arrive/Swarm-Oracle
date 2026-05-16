@@ -338,9 +338,9 @@
 | `PATCH` | `/api/agents/workshop/{id}` | 更新自建 Agent，当前与 `PUT` 同语义 | `FEATURE_CUSTOM_AGENTS` |
 | `DELETE` | `/api/agents/workshop/{id}` | 删除自建 Agent | `FEATURE_CUSTOM_AGENTS` |
 | `POST` | `/api/agents/from-document` | 从 PDF 文档抽取实体并创建自建 Agent | `FEATURE_CUSTOM_AGENTS` |
-| `GET` | `/api/agents/identities/{id}/export` | 导出单个 Agent persona JSON | `FEATURE_PERSONA_EXPORT` |
-| `POST` | `/api/agents/export-bulk` | 批量导出 Agent persona JSON | `FEATURE_PERSONA_EXPORT` |
-| `POST` | `/api/agents/import` | 从 persona JSON 导入为新的 custom Agent | `FEATURE_PERSONA_EXPORT` |
+| `GET` | `/api/agents/identities/{id}/export` | 导出单个 Agent 备份 JSON | `FEATURE_PERSONA_EXPORT` |
+| `POST` | `/api/agents/export-bulk` | 批量导出 Agent 备份 JSON | `FEATURE_PERSONA_EXPORT` |
+| `POST` | `/api/agents/import` | 从 Agent 备份 JSON 创建新的 custom Agent | `FEATURE_PERSONA_EXPORT` |
 | `GET` | `/api/scenario/{id}/causal-graph` | 因果图谱 | `FEATURE_CAUSAL_GRAPH` |
 | `GET` | `/api/scenario/{id}/graph-analysis` | 因果图谱摘要分析 | `FEATURE_GRAPH_ANALYSIS` + `FEATURE_CAUSAL_GRAPH` |
 | `GET` | `/api/scenario/{id}/personality-drift` | Agent 人格漂移 warning 数据 | `FEATURE_AGENT_IDENTITY` |
@@ -362,7 +362,7 @@
 - `POST /api/agents/from-document` 只接受 PDF：`application/pdf / application/x-pdf` 直接通过，空 content type 或 `application/octet-stream` 只在文件名以 `.pdf` 结尾时作为兼容路径接受。上传上限 25 MB，最多读取 200 页和 1000000 个字符，并带 30 秒 PDF 解析超时；空文件返回 `DOCUMENT_FILE_EMPTY`，超大文件返回 413 `DOCUMENT_FILE_TOO_LARGE`，非法 PDF 返回 `DOCUMENT_PDF_INVALID`，无可抽取文本返回 `DOCUMENT_TEXT_EMPTY`，解析超时返回 `DOCUMENT_PDF_TIMEOUT`。
 - 文档实体提取有独立超时；长文档会先采样粗扫候选实体和 alias，再从全文取匹配证据做精提。所有 PDF 文本、候选和证据进入 prompt 前都会按 untrusted text block 包装。
 - 文档生成 Agent 时，单个 persona 超时、业务校验失败或生成失败会被计入 `agents_failed`，已成功创建的 identities 仍会返回；全部 persona 都失败时返回结构化错误，不会伪装成 `201 + agents_created: 0`。持久化等运行时异常不会被包装成成功响应。
-- persona export 使用 `schema_version=1`；export 会去掉本地 untrusted-data wrapper，只导出可移植 persona 文本；bulk export 最多 20 个 identity。import 不覆盖旧 identity，而是为当前用户创建新的 custom Agent，成功响应为 `{ "success": true, "identity_id": "..." }`。`schema_version` 不支持、必填字段缺失或 `decision_bias` 不是对象时返回 422 `PERSONA_IMPORT_INVALID`；bias 对象里的 boolean、`NaN/Inf` 和非数字值会回到默认值，超出 `0..1` 的数字会被 clamp。
+- Agent 备份使用 `schema_version=1`；export 会去掉本地 untrusted-data wrapper，只导出可移植 persona 文本；bulk export 最多 20 个 identity。import 不覆盖旧 identity，而是为当前用户创建新的 custom Agent，成功响应为 `{ "success": true, "identity_id": "..." }`。`schema_version` 不支持、必填字段缺失或 `decision_bias` 不是对象时返回 422 `PERSONA_IMPORT_INVALID`；bias 对象里的 boolean、`NaN/Inf` 和非数字值会回到默认值，超出 `0..1` 的数字会被 clamp。
 - `POST /api/agents/workshop` / `PUT /api/agents/workshop/{id}` 当前支持：
   - `persona`
   - `knowledge_domains`

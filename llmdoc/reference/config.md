@@ -269,7 +269,7 @@
 | `FEATURE_HALLUCINATION_GATE` | `false` | 启用 verdict 后的 hallucination warning metadata；只告警，不阻断生成 |
 | `HALLUCINATION_GATE_THRESHOLD` | `0.75` | Hallucination Gate 的 claim verified 阈值，范围 `0..1`；只影响 metadata，不阻断 verdict |
 | `FEATURE_EDUCATION_TEMPLATES` | `false` | 启用教育模板 API，并让前端首页显示模板选择器 |
-| `FEATURE_PERSONA_EXPORT` | `false` | 启用 persona 单个 / 批量导出与 JSON 导入 API |
+| `FEATURE_PERSONA_EXPORT` | `false` | 启用 Agent 备份导出与从 JSON 备份创建 Agent API |
 | `FEATURE_CAUSAL_GRAPH` | `false` | 启用因果图谱 API + simulator 逐轮写入 |
 | `FEATURE_GRAPH_ANALYSIS` | `false` | 启用 `GET /api/scenario/{id}/graph-analysis`；实际对外 enabled 还要求 `FEATURE_CAUSAL_GRAPH=true` |
 | `FEATURE_COUNTERFACTUAL_REPLAY` | `true` | 启用反事实回溯 + 分支比较 + 检查点 |

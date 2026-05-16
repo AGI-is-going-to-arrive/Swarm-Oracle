@@ -11,10 +11,13 @@ vi.mock('react-i18next', () => ({
         return (fallback.defaultValue ?? key).replace('{{name}}', String(fallback.name ?? ''));
       }
       return ({
-      'agents.library_title': 'Agent 资料库',
-      'agents.create_btn': '创建 Agent',
-      'agents.empty_state': '还没有自定义 Agent。',
-      'agents.empty_hint': '创建你的第一个自定义 Agent 并在推演中使用。',
+        'agents.library_title': 'Agent 资料库',
+        'agents.create_btn': '创建 Agent',
+        'agents.empty_state': '还没有自定义 Agent。',
+        'agents.empty_hint': '创建你的第一个自定义 Agent 并在推演中使用。',
+        'agent_library.backup_hint': '要备份现有 Agent，请在对应卡片上点击“导出备份”。',
+        'persona_export.export': '导出备份',
+        'persona_export.import': '从备份创建 Agent',
       }[key] ?? fallback ?? key);
     },
     i18n: { changeLanguage: vi.fn(), language: 'zh' },
@@ -30,8 +33,10 @@ const mockCapability = vi.hoisted(() => ({
 
 const mockApi = vi.hoisted(() => ({
   deleteAgent: vi.fn(),
-  getAgentFavorites: vi.fn(async () => []),
+  exportPersona: vi.fn(),
+  getAgentFavorites: vi.fn(),
   getSessionBoundUserId: vi.fn(() => 'test_user'),
+  importPersona: vi.fn(),
   isApiError: vi.fn(() => false),
   markAgentFavorite: vi.fn(),
   unmarkAgentFavorite: vi.fn(),
@@ -39,8 +44,10 @@ const mockApi = vi.hoisted(() => ({
 
 vi.mock('../api/client', () => ({
   deleteAgent: mockApi.deleteAgent,
+  exportPersona: mockApi.exportPersona,
   getAgentFavorites: mockApi.getAgentFavorites,
   getSessionBoundUserId: mockApi.getSessionBoundUserId,
+  importPersona: mockApi.importPersona,
   isApiError: mockApi.isApiError,
   markAgentFavorite: mockApi.markAgentFavorite,
   unmarkAgentFavorite: mockApi.unmarkAgentFavorite,
@@ -93,7 +100,7 @@ describe('AgentLibrary', () => {
     mockAgentStore.fetchIdentities.mockClear();
     mockApi.deleteAgent.mockClear();
     mockApi.getAgentFavorites.mockClear();
-    mockApi.getAgentFavorites.mockResolvedValue([]);
+    mockApi.getAgentFavorites.mockReturnValue(new Promise(() => {}));
     mockApi.getSessionBoundUserId.mockClear();
     mockApi.isApiError.mockClear();
     mockApi.isApiError.mockReturnValue(false);
@@ -117,6 +124,7 @@ describe('AgentLibrary', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'Agent 资料库' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '从备份创建 Agent' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /\+ 创建 Agent/ })).toBeInTheDocument();
     expect(screen.getByText('还没有自定义 Agent。')).toBeInTheDocument();
     expect(screen.getByText('创建你的第一个自定义 Agent 并在推演中使用。')).toBeInTheDocument();
@@ -190,5 +198,31 @@ describe('AgentLibrary', () => {
     );
 
     expect(screen.getByRole('button', { name: 'Delete Ada' })).toBeInTheDocument();
+  });
+
+  it('makes the Agent backup export entry visible on existing Agent cards', () => {
+    mockAgentStore.identities = [{
+      id: 'custom-1',
+      user_id: 'test_user',
+      kind: 'custom',
+      display_name: 'Ada',
+      role: 'Forecaster',
+      persona: 'Careful and concise.',
+      decision_bias: null,
+      decision_bias_json: null,
+      preferred_tier: 'IMPORTANT',
+      continuity_key: 'ada',
+      created_at: '2026-05-11T00:00:00Z',
+      updated_at: '2026-05-11T00:00:00Z',
+    }];
+
+    render(
+      <MemoryRouter initialEntries={['/agents']}>
+        <AgentLibrary />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('要备份现有 Agent，请在对应卡片上点击“导出备份”。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export backup for Ada' })).toHaveTextContent('导出备份');
   });
 });
