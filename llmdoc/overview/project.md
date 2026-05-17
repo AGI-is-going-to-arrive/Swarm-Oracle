@@ -156,7 +156,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 主模式 authority 已以后端为准：
   - `director_state_json`
   - `gameplay_state_json`
-- 已完成干预的 effect receipt 持久化在 `InterventionLog.effect_summary_json`；前端只读展示，snapshot import/export 会 remap receipt 引用。
+- 已完成干预的 effect receipt 持久化在 `InterventionLog.effect_summary_json`；写回前会校验当前 scenario/branch，前端只读展示，snapshot import/export 会 remap receipt 引用。
 - `scenarioMeta` 仍存在，但只承担缓存、兼容与 replay 输入职责。
 - 自定义 BYOK 与搜索增强 override 的官方托管 base URL 当前要求 `https`；只有本地或 self-hosted 开发地址才允许 `http`。
 - replay 分享优先走后端 `ReplayArtifact`；当 artifact 不可用且 URL token 也过大时，Oracle replay 会回退为本地只读副本链接。
@@ -176,12 +176,14 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 
 - 主闭环当前维持 `release-candidate` 级别。
 - 当前稳定基线仍保留：
-  - 本轮 gameplay-system hardening 定向复验：
-    - backend gameplay/snapshot/migration pytest：`129 passed`
-    - backend touched-file ruff：通过
-    - Alembic `020 -> 030` 全链路 offline SQL upgrade/downgrade：生成成功（`973 / 414` 行）
-    - frontend gameplay targeted vitest：`11 files / 163 tests passed`
-    - frontend `tsc / lint / build + perf budgets`、3 个 gameplay E2E 脚本 `node --check`、i18n parity `2625/2625` 与 `git diff --check`：通过
+  - 本轮 gameplay-system hardening 最终复验：
+    - backend full pytest：`3141 passed, 6 skipped`
+    - backend `ruff check .`：通过
+    - frontend full vitest：`189 files / 2107 tests passed`
+    - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
+    - frontend gameplay / prediction / receipt / debate copy 相关目标文件 eslint：通过
+    - 3 个 gameplay 浏览器 E2E 脚本：desktop/mobile 共 `6/6` runs、`74/74` steps 通过
+    - `git diff --check`：通过
   - `graph / replay / backend correctness` 修复，以及 UI review findings 对应前端修复，当前都已并入基线
   - P1 post-review hardening 的 fresh 验证当前已补：
     - backend P1/迁移/契约窄集 pytest：`186 passed`
@@ -198,14 +200,14 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
     - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
   - backend `agent-conversation / quota / migration` 定向回归当前通过
   - Document Ingestion 定向后端回归：`48 passed`
-  - backend full gate 最近一次记录为 `3070 passed, 6 skipped`；live LLM benchmark / observation 测试默认跳过，需要 `RUN_REAL_LLM_TESTS=1` 显式开启
-  - frontend `typecheck / lint / build / perf budgets` 通过
+  - backend full gate 最近一次记录为 `3141 passed, 6 skipped`；live LLM benchmark / observation 测试默认跳过，需要 `RUN_REAL_LLM_TESTS=1` 显式开启
+  - frontend `typecheck` 与 gameplay 相关目标文件 eslint 通过；full lint / build / perf budgets 仍沿用前一轮全量基线
   - 本次 bridge/workbench 文案 + CausalReview guide key-node 标签窄集：`87 passed`
   - 本次前端 TypeScript noEmit：通过
   - 本轮 local quota + ResultView 图谱入口定向复验：backend quota `13 passed`，frontend targeted vitest `121 passed`，后端 ruff、前端 eslint 与 `tsconfig.app` noEmit 通过；浏览器实测本机结果页显示 `对话 · 本机模式`，图谱直达入口可见，`探索` 会滚到下一步区
-  - frontend 全量 vitest 最近一次记录为 `185 files / 2047 tests passed`
-  - frontend `npx tsc --noEmit` 最近一次记录为通过
-  - frontend eslint、build、i18n parity `2509/2509` 与 Result Quality 新旧结果页浏览器复核通过；本地 SQLite 场景数据回填后，新 verdict 页显示 12 个可见分支 answer cards
+  - frontend 全量 vitest 最近一次记录为 `189 files / 2107 tests passed`
+  - frontend `npx tsc --noEmit -p tsconfig.app.json` 最近一次记录为通过
+  - frontend full eslint、build、i18n parity `2509/2509` 与 Result Quality 新旧结果页浏览器复核是前一轮全量基线；本地 SQLite 场景数据回填后，新 verdict 页显示 12 个可见分支 answer cards
   - 本轮真实验证还包括：
     - Classic 分支标题定向验证：
       - `cd frontend && npm exec -- vitest run src/components/BranchTree.test.tsx`：`5 passed`

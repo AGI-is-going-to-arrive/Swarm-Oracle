@@ -156,6 +156,37 @@ describe('GameplayCardsModal dialog accessibility', () => {
     });
   });
 
+  it('associates rendered control labels with their selects', () => {
+    renderGameplayCardsModal();
+
+    const controls = document.querySelector<HTMLElement>('.gameplay-modal-v2__controls');
+    expect(controls).not.toBeNull();
+    const labels = Array.from((controls as HTMLElement).querySelectorAll('label'));
+    expect(labels.map((label) => label.textContent)).toContain('gameplay.target_branch');
+
+    labels.forEach((label) => {
+      expect(label.htmlFor).not.toBe('');
+      const control = document.getElementById(label.htmlFor);
+      expect(control).toBeInstanceOf(HTMLSelectElement);
+      expect(screen.getByLabelText(label.textContent ?? '')).toBe(control);
+    });
+  });
+
+  it('keeps empty branch and agent control states accessible without submitting', async () => {
+    const user = userEvent.setup();
+    renderGameplayCardsModal({ branches: [], agents: [] });
+
+    expect(screen.getByLabelText('gameplay.target_branch')).toBeInstanceOf(HTMLSelectElement);
+    expect(screen.getByText('gameplay.waiting_branches')).toBeInTheDocument();
+
+    const submit = document.querySelector<HTMLButtonElement>('.gameplay-modal-v2__submit');
+    expect(submit).not.toBeNull();
+    await user.click(submit as HTMLButtonElement);
+
+    expect(interveneMock).not.toHaveBeenCalled();
+    expect(screen.getByText('gameplay.error_no_active_branch')).toBeInTheDocument();
+  });
+
   it('closes when Escape is pressed', async () => {
     const user = userEvent.setup();
     const { onClose } = renderGameplayCardsModal();

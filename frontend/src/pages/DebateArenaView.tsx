@@ -398,9 +398,11 @@ export function DebateArenaView() {
     ].filter(Boolean).join(' · ');
   }, [phaseCue, t]);
   const unlockProgressLabel = useMemo(() => {
-    if (isZh) return `已解锁 ${phaseUnlockCount}/${DEBATE_PHASE_ORDER.length}`;
-    return `${phaseUnlockCount}/${DEBATE_PHASE_ORDER.length} unlocked`;
-  }, [isZh, phaseUnlockCount]);
+    return t('debate.unlock_progress', {
+      unlocked: phaseUnlockCount,
+      total: DEBATE_PHASE_ORDER.length,
+    });
+  }, [phaseUnlockCount, t]);
   const stageStateLabel = useMemo(() => {
     return phaseLocked ? t('debate.stage_status_locked') : t('debate.stage_status_live');
   }, [phaseLocked, t]);

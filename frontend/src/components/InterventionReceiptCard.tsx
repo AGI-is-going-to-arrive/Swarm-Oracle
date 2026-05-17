@@ -50,6 +50,7 @@ export function InterventionReceiptCard({
   const isZh = i18n.language.startsWith('zh');
   const [effects, setEffects] = useState<InterventionEffect[]>([]);
   const [state, setState] = useState<LoadState>('idle');
+  const [stateScenarioId, setStateScenarioId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!enabled || !scenarioId) {
@@ -60,6 +61,7 @@ export function InterventionReceiptCard({
     // useEffect body (react-hooks/set-state-in-effect).
     void Promise.resolve().then(() => {
       if (cancelled) return;
+      setStateScenarioId(scenarioId);
       setState('loading');
     });
     getInterventionEffects(scenarioId)
@@ -67,11 +69,13 @@ export function InterventionReceiptCard({
         if (cancelled) return;
         const list = Array.isArray(payload?.effects) ? payload.effects : [];
         setEffects(list);
+        setStateScenarioId(scenarioId);
         setState('ready');
       })
       .catch(() => {
         if (cancelled) return;
         setEffects([]);
+        setStateScenarioId(scenarioId);
         setState('error');
       });
     return () => {
@@ -84,6 +88,7 @@ export function InterventionReceiptCard({
     if (enabled && scenarioId) return;
     void Promise.resolve().then(() => {
       setEffects([]);
+      setStateScenarioId(null);
       setState('idle');
     });
   }, [enabled, scenarioId]);
@@ -98,10 +103,11 @@ export function InterventionReceiptCard({
     });
   }, [effects]);
 
-  if (!enabled) {
+  if (!enabled || !scenarioId) {
     return null;
   }
-  if (state === 'loading') {
+  const hasCurrentScenarioState = stateScenarioId === scenarioId;
+  if (state === 'loading' && hasCurrentScenarioState) {
     return (
       <section
         className="intervention-receipt-card intervention-receipt-card--loading"
@@ -120,7 +126,7 @@ export function InterventionReceiptCard({
       </section>
     );
   }
-  if (state === 'error') {
+  if (state === 'error' && hasCurrentScenarioState) {
     return (
       <section
         className="intervention-receipt-card intervention-receipt-card--error"
@@ -139,7 +145,11 @@ export function InterventionReceiptCard({
       </section>
     );
   }
-  if (state === 'ready' && sortedEffects.length === 0) {
+  if (
+    state !== 'ready' ||
+    !hasCurrentScenarioState ||
+    sortedEffects.length === 0
+  ) {
     return null;
   }
 

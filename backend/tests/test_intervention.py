@@ -459,7 +459,7 @@ class TestBatchIntervention:
             },
         )
 
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert resp.json()["detail"]["code"] == "GAMEPLAY_CARD_ON_COOLDOWN"
         with Session(engine) as session:
             assert session.exec(

@@ -36,13 +36,13 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | Admin | `app/api/admin.py` | Preflight diagnostics and `/admin/setup` LLM connection test endpoints |
 | Agents | `app/api/agents.py` | custom Agent library/workshop, favorites, identity inspector, document import, Agent backup export/create-from-backup (`persona_export`) |
 | Quota | `app/api/quota.py` | Conversation and replay quota summary |
-| Campaign | `app/api/campaign.py` | finalize, profile, mastery, badges, daily-status, weekly-summary, `director-state`, `gameplay-state`, scenario summary |
+| Campaign | `app/api/campaign.py` | finalize, profile, mastery, badges, daily-status, weekly-summary, `director-state`, `gameplay-state`, scenario summary, read-only intervention effects |
 | Conversation | `app/api/conversation.py` | Node conversation thread/start/get/turn/abort with SSE assistant streaming |
 | Debate | `app/api/debate.py` | Debate live/result/import-replay/predict + Debate WebSocket |
 | Ending Room | `app/api/ending_rooms.py` | Oracle Chambers / roundtable room、thread、user-turn、result 与 ending-room WebSocket |
 | Journal | `app/api/journal.py` | Personal prediction journal create/list/resolve and calibration data |
 | Predictions | `app/api/predictions.py` | Scenario prediction and leaderboard |
-| Interventions | `app/api/interventions.py` | Standard / retrospective / batch intervention |
+| Interventions | `app/api/interventions.py` | Standard / retrospective / batch intervention, including contract-checked gameplay card injection |
 | Social | `app/api/social.py` | Social media copy generation |
 | WebSocket | `app/api/ws.py` | Scenario real-time events + thread-scoped agent-conversation WebSocket |
 
@@ -78,6 +78,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | `POST` | `/api/campaign/scenario/{id}/finalize` | Finalize campaign progress |
 | `GET/PUT` | `/api/campaign/scenario/{id}/director-state` | Per-scenario director authority with `revision`-based optimistic concurrency |
 | `GET/PUT` | `/api/campaign/scenario/{id}/gameplay-state` | Per-scenario gameplay authority with `revision`-based optimistic concurrency |
+| `GET` | `/api/scenario/{id}/intervention-effects` | Read persisted intervention effect receipts for one owned scenario |
 | `GET` | `/api/campaign/scenario/{id}/summary` | Scenario campaign summary |
 | `GET` | `/api/campaign/profile/{user_id}/weekly-summary` | Weekly campaign summary |
 | `POST` | `/api/debate` | Create debate |
@@ -98,6 +99,9 @@ source .venv/bin/activate
 python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py tests/test_llm_client.py tests/test_web_context.py tests/test_api.py -q
 ```
 
+- Latest local backend verification for gameplay-system hardening:
+  - `python -m pytest -q`: `3141 passed, 6 skipped`
+  - `ruff check .`: pass
 - Latest local backend verification for the Document Ingestion / backend gate:
   - `python -m pytest tests/test_document_ingestion.py -q`: `48 passed`
   - `python -m pytest -x -q --timeout=60`: `3070 passed, 6 skipped`
@@ -122,6 +126,10 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - Scenario JSON authority fields now use mutable JSON columns, so in-place updates to `parsed_context / director_state_json / gameplay_state_json` can persist correctly.
 - `shared/gameplay_contract.v1.json` now uses an mtime-aware cache and reloads after file updates without requiring a backend restart.
 - `shared/gameplay_contract.v1.json` missing at boot now raises a clear runtime error instead of failing later with a raw file-stat exception.
+- `gameplay_contract.py` now builds gameplay-card prompts on the backend and wraps target branch text, Agent names and custom directives as untrusted data before sending them to the model.
+- `memory.py` now uses canonical gameplay card labels for known card ids and wraps unknown `card_label` text as untrusted data before it enters Agent memory context.
+- `snapshot_export.py` now drops malformed or scalar JSON-string secret fields as empty values instead of exporting their raw text.
+- `simulator.py` now checks scenario/branch before writing persisted intervention effect receipts, so stale pending metadata from another branch is ignored.
 - `scoring.py` now persists prediction scores and leaderboard materialization in one transaction, so a leaderboard failure does not leave scored predictions half-written.
 - Segment-filtered leaderboard responses recompute `total_predictions`, `avg_score`, `best_score`, and `win_streak` from matching scored predictions; the no-filter path still returns the materialized legacy array.
 - `predictions.py` now enforces one prediction per `scenario_id + user_id` at both layers: API pre-check plus SQLite unique index, and duplicate races still collapse to `409 PREDICTION_ALREADY_SUBMITTED`.

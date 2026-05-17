@@ -99,7 +99,7 @@
 - `GET /api/scenario/{scenario_id}/story` 在 `FEATURE_RESULT_VERDICT=true` 且 `parsed_context.result_quality` 有数据时，会额外回显顶层 `verdict / verdict_confidence`，以及 `branches[].question_answer`。关闭开关、旧 scenario、空字符串或 malformed `result_quality` 都会降级为空字段；未知 confidence 会归一化为 `medium`。
 - `GET /api/scenario/{scenario_id}/conversations` 受 `FEATURE_AGENT_CONVERSATION` gate，要求 signed principal 能看到该 scenario；`cursor` 是 offset cursor，`limit` 范围 `1..50`，返回项只带 thread 摘要，完整 turn 历史仍走 `GET /api/conversation/{thread_id}`。
 - `POST /api/scenario/{scenario_id}/cancel` 只接受 `parsing / simulating / narrating / cancelled`；`done / error` 会返回 `409 SIMULATION_NOT_RUNNING`。成功请求会把 scenario 持久化到 `cancelled`，并尽量取消本进程里的后台 task。运行中 worker 即使已经有本地 cancel token，也会继续读取 DB `cancelled` 状态，避免跨进程取消被漏掉。
-- `GET /api/scenario/{scenario_id}/snapshot` 和 `POST /api/scenario/import-snapshot` 受 `FEATURE_SNAPSHOT_EXPORT` gate；关闭时返回 404 `FEATURE_DISABLED`。export 会做 scenario ownership 校验，并剥掉常见 secret key/base URL/token/password 变体，也会清理 `key_moments`、web context 和 intervention effect summary 这类 JSON 字符串里的敏感字段。snapshot ZIP 当前会携带 `intervention_receipts.jsonl` 与 receipt schema version；旧 ZIP 缺少这个文件时仍可导入。开启 `SESSION_SECRET` 时 import 要求 signed principal，并把新 scenario 绑定到该 principal。空文件返回 422 `SNAPSHOT_FILE_EMPTY`，超过 50 MB 返回 413 `SNAPSHOT_FILE_TOO_LARGE`，archive/manifest/checksum 不合法、JSON/JSONL 不是 UTF-8、JSONL 行数或单行过大都会返回 422 `SNAPSHOT_IMPORT_INVALID`。导入还会拒绝重复 ZIP member name、超过 256 个物理 member、路径穿越、symlink、异常压缩比和总解压超限；branch 的 `replay_source_branch_id` 会按新 branch id remap，找不到来源时清空。receipt 的顶层 `branch_id` 必须能 remap，否则导入拒绝；summary 内部映射不到的 branch 引用会置空，pending intervention 不会被重新排队。
+- `GET /api/scenario/{scenario_id}/snapshot` 和 `POST /api/scenario/import-snapshot` 受 `FEATURE_SNAPSHOT_EXPORT` gate；关闭时返回 404 `FEATURE_DISABLED`。export 会做 scenario ownership 校验，并剥掉常见 secret key/base URL/token/password 变体，也会清理 `key_moments`、web context 和 intervention effect summary 这类 JSON 字符串里的敏感字段；JSON 字符串解析失败或解析后不是对象/数组时导出为空值。snapshot ZIP 当前会携带 `intervention_receipts.jsonl` 与 receipt schema version；旧 ZIP 缺少这个文件时仍可导入。开启 `SESSION_SECRET` 时 import 要求 signed principal，并把新 scenario 绑定到该 principal。空文件返回 422 `SNAPSHOT_FILE_EMPTY`，超过 50 MB 返回 413 `SNAPSHOT_FILE_TOO_LARGE`，archive/manifest/checksum 不合法、JSON/JSONL 不是 UTF-8、JSONL 行数或单行过大都会返回 422 `SNAPSHOT_IMPORT_INVALID`。导入还会拒绝重复 ZIP member name、超过 256 个物理 member、路径穿越、symlink、异常压缩比和总解压超限；branch 的 `replay_source_branch_id` 会按新 branch id remap，找不到来源时清空。receipt 的顶层 `branch_id` 必须能 remap，否则导入拒绝；summary 内部映射不到的 branch 引用会置空，pending intervention 不会被重新排队。
 - `GET /api/scenario/templates` 和 `GET /api/scenario/templates/{template_id}` 受 `FEATURE_EDUCATION_TEMPLATES` gate；关闭时返回 404 `FEATURE_DISABLED`。列表接口支持 `category` 与 `difficulty` filter，空结果返回空数组。
 - 删除 scenario 时会一并清理 replay、prediction、campaign side effect、ending-room 与向量数据；个人 journal entry 会保留，但关联的 `scenario_id` 会置空，避免硬删除破坏用户日志历史。
 
@@ -128,8 +128,8 @@
 
 关键约束：
 
-- 正式玩法卡仍走 `intervene`，但 `card_id / profile_id / directive`、authority、冷却与 director points 在后端校验并落库；后端会从共享 gameplay contract 生成可读 prompt，不信任前端传来的 prompt 模板。
-- `InterveneRequest.text` 和 `RetrospectiveInterveneRequest.text` 上限 2000 字符（strip 后计算），空文本返回 422。
+- 正式玩法卡仍走 `intervene`，但 `card_id / profile_id / directive`、authority、冷却与 director points 在后端校验并落库；后端会从共享 gameplay contract 生成可读 prompt，不信任前端传来的 prompt 模板。玩法卡业务校验失败返回结构化 `422`，例如 `GAMEPLAY_CARD_INVALID`、`GAMEPLAY_CARD_PROFILE_REQUIRED`、`GAMEPLAY_CARD_MIN_ROUND`、`GAMEPLAY_CARD_POINTS_EXHAUSTED`、`GAMEPLAY_CARD_ON_COOLDOWN`。
+- `InterveneRequest.text` 和 `RetrospectiveInterveneRequest.text` 上限 2000 字符（strip 后计算）；普通空文本仍返回 `400 INTERVENTION_TEXT_EMPTY`。
 - 当多个 backend worker 共用同一个 SQLite 文件时，待处理干预会进入共享 pending queue。
 - `GET /api/scenario/{scenario_id}/intervention-effects` 走 scenario ownership 校验，只读取 `InterventionLog.effect_summary_json`，按最新 receipt 优先返回；旧行缺失或 malformed summary 会跳过，不会伪造 receipt，也不会修改 pending queue。
 

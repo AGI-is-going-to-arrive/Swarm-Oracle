@@ -58,20 +58,20 @@ function getQuestionTopic(origin: EmptyStateQuickQuestionOrigin | undefined, fal
   return clipQuestionCopy(subject || fallback, QUESTION_TOPIC_MAX_CHARS);
 }
 
-function hasChineseLanguage(language: string | undefined): boolean {
-  return (language ?? '').toLowerCase().startsWith('zh');
-}
-
 function buildNodeQuestions(
   origin: EmptyStateQuickQuestionOrigin | undefined,
   t: QuickQuestionTranslate,
-  language: string | undefined,
 ): string[] | null {
   if (!origin) return null;
 
   const nodeType = cleanQuestionCopy(origin.nodeType).toLowerCase();
   const surface = origin.surface;
-  const topic = getQuestionTopic(origin, hasChineseLanguage(language) ? '这个节点' : 'this node');
+  const topic = getQuestionTopic(
+    origin,
+    t('conversation.empty_state.node_topic_fallback', {
+      defaultValue: 'this node',
+    }),
+  );
   const agent = cleanQuestionCopy(origin.agentName);
   const cause = firstContextLine(origin.causeContext);
   const effect = firstContextLine(origin.effectContext);
@@ -260,11 +260,15 @@ function buildNodeQuestions(
 function buildResultQuestions(
   origin: EmptyStateQuickQuestionOrigin | undefined,
   t: QuickQuestionTranslate,
-  language: string | undefined,
 ): string[] | null {
   if (!origin) return null;
 
-  const topic = getQuestionTopic(origin, hasChineseLanguage(language) ? '这个结果' : 'this result');
+  const topic = getQuestionTopic(
+    origin,
+    t('conversation.empty_state.result_topic_fallback', {
+      defaultValue: 'this result',
+    }),
+  );
   const cause = firstContextLine(origin.causeContext);
   const relation = firstContextLine(
     origin.relatedContext && origin.relatedContext.length > 0
@@ -298,7 +302,7 @@ function buildResultQuestions(
 
 export function EmptyStateQuickQuestions(props: EmptyStateQuickQuestionsProps) {
   const { onSelect, className, variant = 'node', origin } = props;
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const keyFor = (suffix: string) => (
     variant === 'result'
       ? `conversation.empty_state.result_${suffix}`
@@ -320,10 +324,9 @@ export function EmptyStateQuickQuestions(props: EmptyStateQuickQuestionsProps) {
         quick_q_3: 'Who else was affected?',
       };
 
-  const language = i18n?.resolvedLanguage ?? i18n?.language;
   const contextualQuestions = variant === 'node'
-    ? buildNodeQuestions(origin, t, language)
-    : buildResultQuestions(origin, t, language);
+    ? buildNodeQuestions(origin, t)
+    : buildResultQuestions(origin, t);
   const resultTopic = variant === 'result' && origin
     ? getQuestionTopic(origin, t('conversation.empty_state.result_topic_fallback', { defaultValue: 'this result' }))
     : null;

@@ -395,6 +395,75 @@ def test_export_includes_intervention_receipts_and_redacts_summary_secrets():
     assert b"receipt-secret.example" not in raw
 
 
+def test_export_drops_malformed_intervention_receipt_summary_json():
+    scenario_id = _seed_scenario(api_key_in_context=False)
+    root_id, _ = _seed_branch_tree(scenario_id)
+    malformed_summary = (
+        '{"visible":"keep","api_key":"sk-malformed-receipt",'
+        '"token":"receipt-token-leak"'
+    )
+    with Session(get_engine()) as session:
+        log = InterventionLog(
+            scenario_id=scenario_id,
+            branch_id=root_id,
+            round_number=2,
+            user_input="malformed receipt probe",
+            effect_summary_json=malformed_summary,
+        )
+        session.add(log)
+        session.commit()
+        log_id = log.id
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        rows = [
+            json.loads(line)
+            for line in zf.read("intervention_receipts.jsonl").decode("utf-8").splitlines()
+            if line
+        ]
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == log_id
+    assert row["effect_summary_json"] is None
+    assert b"sk-malformed-receipt" not in raw
+    assert b"receipt-token-leak" not in raw
+
+
+def test_export_drops_scalar_intervention_receipt_summary_json():
+    scenario_id = _seed_scenario(api_key_in_context=False)
+    root_id, _ = _seed_branch_tree(scenario_id)
+    with Session(get_engine()) as session:
+        log = InterventionLog(
+            scenario_id=scenario_id,
+            branch_id=root_id,
+            round_number=2,
+            user_input="scalar receipt probe",
+            effect_summary_json=json.dumps("sk-json-scalar-leak"),
+        )
+        session.add(log)
+        session.commit()
+        log_id = log.id
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        rows = [
+            json.loads(line)
+            for line in zf.read("intervention_receipts.jsonl").decode("utf-8").splitlines()
+            if line
+        ]
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == log_id
+    assert row["effect_summary_json"] is None
+    assert b"sk-json-scalar-leak" not in raw
+
+
 def test_manifest_checksums_match_payload_bytes():
     scenario_id = _seed_scenario(api_key_in_context=False)
     _seed_branch_tree(scenario_id)

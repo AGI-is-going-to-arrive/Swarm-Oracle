@@ -100,6 +100,7 @@ export default function PredictionModal({
   const bodyRef = useRef<HTMLDivElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const submittedPredictionRef = useRef<{ pendingMeta: ScenarioMeta } | null>(null);
+  const submittingRef = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
@@ -233,13 +234,14 @@ export default function PredictionModal({
 
   const handleSubmit = async () => {
     const trimmed = text.trim();
-    if (!trimmed || status === 'submitting' || status === 'success') return;
+    if (!trimmed || submittingRef.current || status === 'submitting' || status === 'success') return;
     if (effectiveBetKind === 'branch_winner' && !hasValidBranchTarget) {
       setStatus('error');
       setErrorMsg(t('prediction.error_branch_pending'));
       return;
     }
 
+    submittingRef.current = true;
     setStatus('submitting');
     setErrorMsg('');
 
@@ -255,6 +257,7 @@ export default function PredictionModal({
       question,
     });
     if (predictionText.length > PREDICTION_TEXT_LIMIT) {
+      submittingRef.current = false;
       setStatus('error');
       setErrorMsg(t('prediction.error_too_long'));
       return;
@@ -291,6 +294,7 @@ export default function PredictionModal({
         });
         submittedPredictionRef.current = { pendingMeta: nextMeta };
       } catch (err) {
+        submittingRef.current = false;
         setStatus('error');
         setErrorMsg(getLocalizedApiErrorMessage(err, t, t('prediction.error')));
         return;
@@ -301,12 +305,14 @@ export default function PredictionModal({
     try {
       await onPlacedBet?.(nextMeta);
     } catch (err) {
+      submittingRef.current = false;
       setStatus('error');
       setErrorMsg(getLocalizedApiErrorMessage(err, t, t('prediction.error_persistence')));
       return;
     }
 
     submittedPredictionRef.current = null;
+    submittingRef.current = false;
     setStatus('success');
     closeTimerRef.current = setTimeout(() => onClose(), 1200);
   };

@@ -262,6 +262,39 @@ async function testRecommendedRowFirst(page) {
       .count();
     pushStep(result, "recommended-row-not-empty", recommendedCardCount > 0, { count: recommendedCardCount });
 
+    const domOrder = await modal.evaluate((node) => {
+      const recommendedSection = node.querySelector(".gameplay-modal-v2__section--primary");
+      const firstRecommendedCard = node.querySelector(
+        ".gameplay-modal-v2__recommended-grid .gameplay-card-v2, .gameplay-card-v2--recommended",
+      );
+      const firstToggle = node.querySelector(".gameplay-modal-v2__group-toggle");
+      return {
+        hasRecommendedSection: Boolean(recommendedSection),
+        hasRecommendedCard: Boolean(firstRecommendedCard),
+        hasFirstToggle: Boolean(firstToggle),
+        cardInsideRecommended: Boolean(
+          recommendedSection && firstRecommendedCard && recommendedSection.contains(firstRecommendedCard),
+        ),
+        recommendedBeforeFirstToggle: Boolean(
+          recommendedSection &&
+            firstToggle &&
+            (recommendedSection.compareDocumentPosition(firstToggle) & Node.DOCUMENT_POSITION_FOLLOWING),
+        ),
+      };
+    });
+    pushStep(
+      result,
+      "recommended-section-before-collapsible-groups",
+      domOrder.recommendedBeforeFirstToggle,
+      domOrder,
+    );
+    pushStep(
+      result,
+      "recommended-card-contained-in-recommended-section",
+      domOrder.cardInsideRecommended,
+      domOrder,
+    );
+
     const groupToggleCount = await modal.locator(".gameplay-modal-v2__group-toggle").count();
     pushStep(result, "more-section-collapsible-groups-present", groupToggleCount > 0, { count: groupToggleCount });
 
@@ -275,6 +308,47 @@ async function testRecommendedRowFirst(page) {
     );
   } catch (err) {
     pushStep(result, "recommended-row-first", false, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return finalize(result);
+}
+
+async function testInitialFocusInsideDialog(page) {
+  const result = createTestResult();
+  try {
+    const modal = page.locator(".gameplay-modal-v2").first();
+    const focusState = await modal.evaluate((node) => {
+      const active = node.ownerDocument?.activeElement;
+      const win = node.ownerDocument?.defaultView;
+      const expectedDirectiveFocus = Boolean(
+        win &&
+          win.innerWidth > 720 &&
+          (typeof win.matchMedia !== "function" || win.matchMedia("(pointer: fine)").matches),
+      );
+      return {
+        focusInside: Boolean(active) && (node === active || node.contains(active)),
+        expectedDirectiveFocus,
+        directiveFocused: Boolean(active?.matches?.(".gameplay-modal__textarea")),
+        closeFocused: Boolean(active?.matches?.(".gameplay-modal-v2__footer .btn-ghost")),
+        activeElement: active
+          ? {
+              tagName: active.tagName,
+              id: active.id,
+              className: typeof active.className === "string" ? active.className : "",
+            }
+          : null,
+      };
+    });
+    pushStep(result, "initial-focus-inside-dialog", focusState.focusInside, focusState);
+    pushStep(
+      result,
+      "initial-focus-target-matches-layout",
+      focusState.expectedDirectiveFocus ? focusState.directiveFocused : focusState.closeFocused,
+      focusState,
+    );
+  } catch (err) {
+    pushStep(result, "initial-focus", false, {
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -406,6 +480,7 @@ async function runSurface(mode, contextOptions, args) {
     } else {
       allResults.tests.recommendedRowFirst = await testRecommendedRowFirst(page);
       allResults.tests.dialogSemantics = await testDialogSemantics(page);
+      allResults.tests.initialFocus = await testInitialFocusInsideDialog(page);
       allResults.tests.cardApplyMarker = await testCardApplyMarker(page);
       allResults.tests.localeSplit = await testLocaleSplit(page);
     }

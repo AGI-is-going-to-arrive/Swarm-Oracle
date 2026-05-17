@@ -126,18 +126,18 @@ def _persist_gameplay_card_usage(
 
     card_def = GAMEPLAY_CARD_DEFS.get(req.card_id)
     if card_def is None or not card_def.get("manual_enabled", False):
-        raise api_error(400, "GAMEPLAY_CARD_INVALID", "Unknown or unavailable gameplay card")
+        raise api_error(422, "GAMEPLAY_CARD_INVALID", "Unknown or unavailable gameplay card")
 
     if not req.profile_id:
-        raise api_error(400, "GAMEPLAY_CARD_PROFILE_REQUIRED", "Gameplay card profile is required")
+        raise api_error(422, "GAMEPLAY_CARD_PROFILE_REQUIRED", "Gameplay card profile is required")
     if req.profile_id not in GAMEPLAY_PROFILE_DEFS:
-        raise api_error(400, "GAMEPLAY_CARD_INVALID", "Unknown gameplay card profile")
+        raise api_error(422, "GAMEPLAY_CARD_INVALID", "Unknown gameplay card profile")
 
     effective_round = max(current_round, 1)
     min_round = max(1, int(card_def.get("min_round", 1) or 1))
     if effective_round < min_round:
         raise api_error(
-            400,
+            422,
             "GAMEPLAY_CARD_MIN_ROUND",
             f"Gameplay card is available from round {min_round}",
         )
@@ -147,7 +147,7 @@ def _persist_gameplay_card_usage(
     card_cost = max(0, int(card_def.get("cost", 0) or 0))
     if remaining_points < card_cost:
         raise api_error(
-            400,
+            422,
             "GAMEPLAY_CARD_POINTS_EXHAUSTED",
             "Not enough director points for this gameplay card",
         )
@@ -157,7 +157,7 @@ def _persist_gameplay_card_usage(
     if last_used_round is not None and effective_round - last_used_round < cooldown_rounds:
         remaining = cooldown_rounds - (effective_round - last_used_round)
         raise api_error(
-            400,
+            422,
             "GAMEPLAY_CARD_ON_COOLDOWN",
             f"Gameplay card is cooling down for {remaining} more round(s)",
         )
@@ -230,7 +230,7 @@ def _build_pending_intervention_payload(
     if not req.card_id:
         return text, None
     if not req.profile_id:
-        raise api_error(400, "GAMEPLAY_CARD_PROFILE_REQUIRED", "Gameplay card profile is required")
+        raise api_error(422, "GAMEPLAY_CARD_PROFILE_REQUIRED", "Gameplay card profile is required")
 
     try:
         directive = resolve_server_card_directive(
@@ -247,7 +247,7 @@ def _build_pending_intervention_payload(
             target_branch_title=branch.title,
         )
     except ValueError as exc:
-        raise api_error(400, "GAMEPLAY_CARD_INVALID", str(exc)) from exc
+        raise api_error(422, "GAMEPLAY_CARD_INVALID", str(exc)) from exc
 
     metadata = {
         "card_id": req.card_id,

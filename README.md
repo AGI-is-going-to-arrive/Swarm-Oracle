@@ -85,7 +85,7 @@
 | Multi-Agent Simulation | 已落地，支持 branch、narration、visualization；选中某个 Agent 时，实时发言会按世界线分组，方便看同一角色在不同分支里的差异 |
 | Pixel Theater | 已落地，Phaser 驱动，按需加载 |
 | Butterfly Effect | 已落地，支持即时 / 回溯 / 批量干预；完成后会把可解释的干预效果写成只读 receipt |
-| Gameplay Cards | 已落地，14 张卡与 18 个玩法 profile 走共享 gameplay contract；后端校验可用性、冷却与点数，并生成可读的正式干预 prompt |
+| Gameplay Cards | 已落地，14 张卡与 18 个玩法 profile 走共享 gameplay contract；后端校验可用性、冷却与点数，重建正式干预 prompt，并把分支、Agent 名和自定义指令按 untrusted data 包裹 |
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响；题材回响放在高级选项里 |
 | Result Quality / Question Anchoring | 已落地，受 `FEATURE_RESULT_VERDICT` 和 `/api/capabilities.result_verdict` 控制；结果页在有 verdict 时先给出直接回答原问题的预测结论、置信度，并在结局卡有数据时显示分支级一句话回答 |
 | Director Campaign | 已落地，含 goals、risk/resource、commitment、growth、后端 `score_breakdown` 与结果页导演复盘 / 因果档案 |
@@ -101,7 +101,7 @@
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale、readonly replay import；argument map 支持五种 verdict status、三层 DAG 和移动端列表；LLM cast 更新后 live 页会刷新名字、角色和 persona，长角色/人设可换行或展开，裁判卡显示本地化的 `待裁决 / 已裁决` 状态；只有分享链接过长并回退到本地只读 `?local=` 时，结果页才会明确显示 `Save local read-only copy` |
 | Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面代表改选当前支持 `drag-to-seat / keyboard reseat`，移动端保留 `click-to-seat`；桌面 roundtable committed transcript 当前已补长段折叠 / 展开，phase insight 展示和预填 prompt 会把长段复述压成一句；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已重新签收到 anchored thread restore，并已补 Firefox / WebKit scoped regression；单结局结果页只暴露 `进入会客厅 / 只改一步`；已新增 `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)` 两种交互模式，证据卡追问会把用户引用的世界线保留到 assistant turn；completed live roundtable 的 `1-on-1 Interview` 会先展示代表的角色、世界线、立场、最近原话和人物简介；Oracle 主文案当前以 factual anchor + LLM generation/rewrite fallback 为主，角色身份和动态词汇提示按 `UNTRUSTED DATA` 处理，follow-up 空流式或仅 reasoning 输出会退回非流式改写，最终 fallback 也必须是可直接显示的人话 |
 | Replay & Import | 主模式与 Debate 均支持；主模式 Replay Trace 支持分页和分支过滤；scenario/story branch response 会回显 `replay_kind / replay_source_branch_id` 以保留 replay provenance；Debate replay 当前已补 `share -> readonly replay -> reload restore -> import` 完整 E2E 覆盖 |
-| Snapshot Export / Import | 已接线，受 `FEATURE_SNAPSHOT_EXPORT` gate；后端导出 ZIP snapshot 并校验导入 archive/manifest/checksum，导出会剥离常见 secret key/base URL/token 变体和 JSON 字符串里的敏感字段，并携带只读干预 receipt ledger；导入会拒绝非 UTF-8 JSON/JSONL、ZIP traversal、symlink、重复物理成员、超大 member、异常压缩比和无法映射的顶层 receipt branch 引用；旧 snapshot 仍可导入，pending intervention 不会被重新排队；前端首页导入、结果页导出 |
+| Snapshot Export / Import | 已接线，受 `FEATURE_SNAPSHOT_EXPORT` gate；后端导出 ZIP snapshot 并校验导入 archive/manifest/checksum，导出会剥离常见 secret key/base URL/token 变体和 JSON 字符串里的敏感字段，malformed 或标量 JSON 字符串按空值处理，并携带只读干预 receipt ledger；导入会拒绝非 UTF-8 JSON/JSONL、ZIP traversal、symlink、重复物理成员、超大 member、异常压缩比和无法映射的顶层 receipt branch 引用；旧 snapshot 仍可导入，pending intervention 不会被重新排队；前端首页导入、结果页导出 |
 | KG Realtime | 已接线，causal graph append 返回 `GraphDelta`，scenario WS 可推送 `kg:delta` / `kg:snapshot_invalidated`；payload 过大或 out-of-sync 时仍以 REST snapshot fallback 为准 |
 | i18n | UI 与自动生成内容按输入语言联动输出；QuickStart、ResultView campaign/archive 文案和 Phaser Title/Ending 文案都走 locale key；Oracle fresh live room 的英文文案已补去混句兜底，不再把中文 hinge 直接嵌进英文句子；Oracle 英文 signoff 当前已覆盖 Chromium full 与桌面 Firefox / WebKit scoped regression |
 
@@ -191,10 +191,10 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 
 当前验证口径（最近更新：2026-05-18 gameplay-system hardening）：
 
-- gameplay-system hardening 定向复验：backend gameplay/snapshot/migration pytest `129 passed`；backend touched-file ruff 通过；Alembic `020 -> 030` 全链路 offline SQL upgrade/downgrade 生成成功（`973 / 414` 行）；frontend gameplay targeted vitest `11 files / 163 tests passed`；`tsc`、`lint`、`build + perf budgets`、3 个 gameplay E2E 脚本 `node --check`、i18n parity `2625/2625` 和 `git diff --check` 均通过。
+- gameplay-system hardening 最终复验：backend full pytest `3141 passed, 6 skipped`；backend `ruff check .` 通过；frontend full vitest `189 files / 2107 tests passed`；`npx tsc --noEmit -p tsconfig.app.json` 通过；frontend gameplay / prediction / receipt / debate copy 相关目标文件 eslint 通过；3 个 gameplay 浏览器 E2E 脚本 desktop/mobile 共 `6/6` runs、`74/74` steps 通过；`git diff --check` 通过。
 - backend Result Quality 定向回归：`15 passed, 181 deselected`；`ruff check app/ tests/test_parser.py` 通过。
 - backend broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e_alembic.py -k "not test_parse_modern"`：`3 failed, 3024 passed, 7 skipped, 1 deselected`。后续单独确认 `test_rounds_clamped` 和 conversation abort timing 通过；`test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 是 live LLM matrix 在 120s timeout 下的慢路径风险。
-- frontend `npx tsc --noEmit`、targeted vitest `98 passed`、full vitest `185 files / 2047 tests passed`、`npx eslint src/ --max-warnings=0` 和 `npm run build` 通过；i18n parity spot-check 为 `en=2509 zh=2509 equal=true`。
+- 较早 Result Quality 前端基线：`npx tsc --noEmit`、targeted vitest `98 passed`、full vitest `185 files / 2047 tests passed`、`npx eslint src/ --max-warnings=0` 和 `npm run build` 通过；i18n parity spot-check 为 `en=2509 zh=2509 equal=true`。
 - 浏览器复核覆盖新结果页 `bd85148c-e739-4d22-a299-692532ff4154` 和旧结果页 `3daa95fe-8f30-48bd-b188-96961d2a1b12`；本地 SQLite 场景数据回填后，新页显示 verdict 和 12 个可见分支答案，旧页隐藏 verdict 且 answers=0；桌面与 `375x812` 移动端无 JS console error，语言切换可用。
 
 完整签收入口：

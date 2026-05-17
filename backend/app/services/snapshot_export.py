@@ -148,17 +148,17 @@ def _redact_json_string(raw: Any) -> Any:
     """Best-effort redaction for JSON-encoded string fields.
 
     If ``raw`` is a JSON string that decodes into a dict/list, the structure
-    is recursively redacted and re-encoded.  Non-JSON strings, ``None`` and
-    other primitives are returned unchanged.
+    is recursively redacted and re-encoded.  Malformed JSON strings are
+    treated as untrusted and dropped instead of being exported raw.
     """
     if not isinstance(raw, str):
         return raw
     try:
         decoded = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
-        return raw
+        return None
     if not isinstance(decoded, (dict, list)):
-        return raw
+        return None
     return json.dumps(_redact_dict(decoded), ensure_ascii=False, default=str)
 
 

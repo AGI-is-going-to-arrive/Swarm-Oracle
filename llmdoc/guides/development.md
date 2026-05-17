@@ -147,8 +147,8 @@ ruff check app/api/admin.py app/api/scenarios.py app/api/quota.py app/services/s
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_interventions.py tests/test_campaign_api.py tests/test_snapshot_export.py tests/test_migration_030.py tests/test_migration_022.py tests/test_fallback_migrations.py -q
-ruff check app/api/interventions.py app/api/campaign.py app/services/gameplay_contract.py app/services/simulator.py app/services/snapshot_export.py tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_interventions.py tests/test_campaign_api.py tests/test_snapshot_export.py tests/test_migration_030.py tests/test_migration_022.py tests/test_fallback_migrations.py
+python -m pytest tests/test_api.py tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_memory.py tests/test_snapshot_export.py tests/test_migration_030.py tests/test_migration_022.py tests/test_fallback_migrations.py -q
+ruff check app/api/interventions.py app/api/campaign.py app/services/gameplay_contract.py app/services/memory.py app/services/simulator.py app/services/snapshot_export.py tests/test_api.py tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_memory.py tests/test_snapshot_export.py tests/test_migration_030.py tests/test_migration_022.py tests/test_fallback_migrations.py
 alembic upgrade 030_gameplay_intervention_metadata --sql >/tmp/upgrade-test-alembic-full-up.sql
 alembic downgrade 030_gameplay_intervention_metadata:base --sql >/tmp/upgrade-test-alembic-full-down.sql
 ```
@@ -168,7 +168,9 @@ node --check scripts/e2e-intervention-receipt.mjs
 
 ```bash
 cd frontend
-npm run e2e:gameplay:full -- --url http://127.0.0.1:18928 --headless
+node scripts/e2e-gameplay-cards-modal.mjs full --url http://127.0.0.1:18928 --headless
+node scripts/e2e-prediction-modal.mjs full --url http://127.0.0.1:18928 --headless
+node scripts/e2e-intervention-receipt.mjs full --url http://127.0.0.1:18928 --headless
 ```
 
 ### Web Search 定向回归

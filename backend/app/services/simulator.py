@@ -789,6 +789,8 @@ def _persist_intervention_effect(
     *,
     intervention_log_id: str | None,
     summary: dict[str, Any],
+    scenario_id: str | None = None,
+    branch_id: str | None = None,
 ) -> None:
     """Write the effect receipt back to InterventionLog.effect_summary_json.
 
@@ -808,6 +810,24 @@ def _persist_intervention_effect(
         with Session(engine) as session:
             log = session.get(InterventionLog, intervention_log_id)
             if log is None:
+                return
+            if scenario_id is not None and log.scenario_id != scenario_id:
+                logger.debug(
+                    "intervention effect summary scenario mismatch dropped",
+                    extra={
+                        "intervention_log_id": intervention_log_id,
+                        "expected_scenario_id": scenario_id,
+                    },
+                )
+                return
+            if branch_id is not None and log.branch_id != branch_id:
+                logger.debug(
+                    "intervention effect summary branch mismatch dropped",
+                    extra={
+                        "intervention_log_id": intervention_log_id,
+                        "expected_branch_id": branch_id,
+                    },
+                )
                 return
             log.effect_summary_json = payload
             session.add(log)
@@ -1832,6 +1852,8 @@ async def _run_simulation_impl(
                             engine,
                             intervention_log_id=str(effect_log_id),
                             summary=effect_summary,
+                            scenario_id=scenario_id,
+                            branch_id=current_branch_id,
                         )
                 except SimulationCancelled:
                     raise

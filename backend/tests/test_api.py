@@ -1702,7 +1702,7 @@ class TestInterveneEndpoint:
             },
         )
 
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert _detail_code(resp) == "GAMEPLAY_CARD_ON_COOLDOWN"
 
     def test_intervene_nonexistent_scenario(self, client):
@@ -1834,7 +1834,7 @@ class TestInterveneEndpoint:
             },
         )
 
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert _detail_code(resp) == "GAMEPLAY_CARD_ON_COOLDOWN"
 
     def test_intervene_batch_keeps_gameplay_card_validation_atomic(self, client):
@@ -1865,7 +1865,7 @@ class TestInterveneEndpoint:
             },
         )
 
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert _detail_code(resp) == "GAMEPLAY_CARD_ON_COOLDOWN"
 
         with Session(engine) as session:

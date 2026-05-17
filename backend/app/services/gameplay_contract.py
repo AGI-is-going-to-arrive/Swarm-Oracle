@@ -8,6 +8,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from app.services.llm_client import format_untrusted_text_block
+
 CONTRACT_PATH = Path(__file__).resolve().parents[3] / "shared" / "gameplay_contract.v1.json"
 _CONTRACT_CACHE: tuple[int, dict[str, Any]] | None = None
 _CONTRACT_CACHE_LOCK = Lock()
@@ -55,26 +57,30 @@ def _find_contract_entry(entries: list[Any], entry_id: str, kind: str) -> dict[s
     raise ValueError(f"Unknown gameplay {kind}: {entry_id}")
 
 
-def _agent_line(
+def _agent_block(
     language: str,
     primary_agent_name: str | None,
     secondary_agent_name: str | None,
 ) -> str | None:
     primary = (primary_agent_name or "").strip()
     secondary = (secondary_agent_name or "").strip()
+    label = "受影响角色" if not language.lower().startswith("en") else "Affected agents"
+    lines: list[str] = []
     if primary and secondary:
-        return (
-            f"受影响角色：{primary}、{secondary}"
-            if not language.lower().startswith("en")
-            else f"Affected agents: {primary}, {secondary}"
-        )
-    if primary:
-        return (
-            f"受影响角色：{primary}"
-            if not language.lower().startswith("en")
-            else f"Affected agent: {primary}"
-        )
+        lines.append(f"primary: {primary}")
+        lines.append(f"secondary: {secondary}")
+    elif primary:
+        lines.append(f"primary: {primary}")
+    if lines:
+        return format_untrusted_text_block(label, "\n".join(lines), max_chars=240)
     return None
+
+
+def _untrusted_prompt_block(label: str, value: str, *, max_chars: int = 800) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    return format_untrusted_text_block(label, text, max_chars=max_chars)
 
 
 def _sanitize_custom_directive(value: str) -> str:
@@ -149,7 +155,7 @@ def build_server_card_prompt(
     )
 
     branch = (target_branch_title or "").strip()
-    agent_line = _agent_line("en" if is_en else "zh", primary_agent_name, secondary_agent_name)
+    agent_block = _agent_block("en" if is_en else "zh", primary_agent_name, secondary_agent_name)
 
     if is_en:
         lines = [
@@ -157,11 +163,12 @@ def build_server_card_prompt(
             f"Profile: {profile_label}",
         ]
         if branch:
-            lines.append(f"Target branch: {branch}")
-        if agent_line:
-            lines.append(agent_line)
+            lines.append(_untrusted_prompt_block("Target branch", branch, max_chars=240))
+        if agent_block:
+            lines.append(agent_block)
+        directive_block = _untrusted_prompt_block("Player directive", directive, max_chars=800)
         lines.extend([
-            f"Player directive: {directive}",
+            f"Player directive:\n{directive_block}" if directive_block else "Player directive:",
             (
                 "In the next round, treat this as a concrete event that has "
                 "just happened in the target worldline."
@@ -183,11 +190,12 @@ def build_server_card_prompt(
         f"题材档案：{profile_label}",
     ]
     if branch:
-        lines.append(f"目标分支：{branch}")
-    if agent_line:
-        lines.append(agent_line)
+        lines.append(_untrusted_prompt_block("目标分支", branch, max_chars=240))
+    if agent_block:
+        lines.append(agent_block)
+    directive_block = _untrusted_prompt_block("玩家指令", directive, max_chars=800)
     lines.extend([
-        f"玩家指令：{directive}",
+        f"玩家指令：\n{directive_block}" if directive_block else "玩家指令：",
         "下一轮：把这件事当作目标世界线里刚刚发生的具体事件处理。",
         "受影响角色必须直接回应，其余角色也要表现出它如何改变立场、联盟、优先级或风险判断。",
         "后续轮次要继续承接这次干预的后果，直到新的事件、证据或分支决定改变局势。",

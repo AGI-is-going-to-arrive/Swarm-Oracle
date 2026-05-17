@@ -91,17 +91,17 @@ def _format_intervention_card_line(
     if not isinstance(raw_card_id, str) or not raw_card_id.strip():
         return ""
     card_id = sanitize_untrusted_text(raw_card_id, max_chars=80)
+    card_label = _resolve_gameplay_card_label(card_id, language)
+    if card_label:
+        if _is_chinese(language):
+            return f"玩法卡：{card_label}"
+        return f"Gameplay card: {card_label}"
+
     raw_label = intervention_metadata.get("card_label")
-    card_label = (
-        sanitize_untrusted_text(raw_label, max_chars=120)
-        if isinstance(raw_label, str) and raw_label.strip()
-        else _resolve_gameplay_card_label(card_id, language)
-    )
-    if not card_label:
+    if not isinstance(raw_label, str) or not raw_label.strip():
         return ""
-    if _is_chinese(language):
-        return f"玩法卡：{card_label}"
-    return f"Gameplay card: {card_label}"
+    label = "玩法卡标签" if _is_chinese(language) else "Gameplay card label"
+    return format_untrusted_text_block(label, raw_label, max_chars=120)
 
 
 def _build_compress_prompt(

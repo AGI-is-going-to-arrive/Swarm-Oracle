@@ -54,6 +54,17 @@ describe('InterventionReceiptCard', () => {
     expect(getInterventionEffectsMock).not.toHaveBeenCalled();
   });
 
+  it('renders no receipt DOM before effects for the current scenario load', async () => {
+    getInterventionEffectsMock.mockReturnValueOnce(new Promise(() => {}));
+    const { container, unmount } = render(
+      <InterventionReceiptCard scenarioId="scenario-1" enabled />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTestId('intervention-receipt-card')).toBeNull();
+    unmount();
+    await flushReceiptStateReset();
+  });
+
   it('shows loading state then renders effect entries newest first', async () => {
     getInterventionEffectsMock.mockResolvedValueOnce({
       effects: [
@@ -117,7 +128,50 @@ describe('InterventionReceiptCard', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('intervention-receipt-card-loading')).toBeNull();
     });
-    expect(container.querySelector('[data-testid="intervention-receipt-card"]')).toBeNull();
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('does not show stale receipts while a new scenario refetch is pending', async () => {
+    let resolveSecondFetch: (payload: { effects: [] }) => void = () => {};
+    getInterventionEffectsMock
+      .mockResolvedValueOnce({
+        effects: [
+          {
+            intervention_log_id: 'log-scenario-1',
+            card_id: null,
+            card_label: null,
+            round_number: 1,
+            affected_agents: [],
+            response_excerpts: [],
+            confidence: 0,
+            no_response_detected: true,
+            created_at: '2026-05-17T10:00:00Z',
+          },
+        ],
+      })
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSecondFetch = resolve;
+        }),
+      );
+
+    const { rerender, container } = render(
+      <InterventionReceiptCard scenarioId="scenario-1" enabled />,
+    );
+    expect(await screen.findByTestId('intervention-receipt-card')).toBeInTheDocument();
+
+    rerender(<InterventionReceiptCard scenarioId="scenario-2" enabled />);
+    expect(screen.queryByTestId('intervention-receipt-card')).toBeNull();
+
+    await act(async () => {
+      resolveSecondFetch({ effects: [] });
+    });
+    await waitFor(() => {
+      expect(getInterventionEffectsMock).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(container).toBeEmptyDOMElement();
+    });
   });
 
   it('shows error state when the request fails', async () => {

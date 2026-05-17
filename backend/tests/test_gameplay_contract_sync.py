@@ -59,7 +59,18 @@ def test_gameplay_contract_profile_directives_cover_all_cards():
     card_ids = {card["id"] for card in contract["cards"]}
 
     for profile in contract["profiles"]:
-        assert set(profile["default_directives"]) == card_ids
+        directives = profile["default_directives"]
+        assert set(directives) == card_ids
+        for card_id, localized in directives.items():
+            assert isinstance(localized, dict), (
+                f"{profile['id']}:{card_id} directive must be localized"
+            )
+            for language in ("zh", "en"):
+                value = localized.get(language)
+                assert isinstance(value, str), (
+                    f"{profile['id']}:{card_id}.{language} must be a string"
+                )
+                assert value.strip(), f"{profile['id']}:{card_id}.{language} must not be empty"
 
 
 def test_gameplay_contract_profile_recommendations_exist_in_cards():

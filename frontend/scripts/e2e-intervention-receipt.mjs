@@ -241,6 +241,22 @@ async function testReceiptVisible(page) {
     const entries = card.locator(".intervention-receipt-card__entry");
     const count = await entries.count();
     pushStep(result, "card-has-entries", count >= 1, { count });
+    const entryTexts = await entries.evaluateAll((nodes) =>
+      nodes.map((node) => node.textContent || ""),
+    );
+    pushStep(
+      result,
+      "entries-newest-first",
+      LIVE_MODE ||
+        (
+          entryTexts.length >= 2 &&
+          entryTexts[0].includes("R2") &&
+          entryTexts[0].includes("Human Takeover") &&
+          entryTexts[1].includes("R1") &&
+          !entryTexts[1].includes("Human Takeover")
+        ),
+      LIVE_MODE ? { skipped: "live-mode", entryTexts } : { entryTexts },
+    );
     pushStep(
       result,
       "card-no-internal-log-id-leak",

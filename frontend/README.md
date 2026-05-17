@@ -25,7 +25,7 @@ React + TypeScript frontend for SwarmOracle.
 |-------|-----------|-------------|
 | `/` | `InputView` | Scenario input, progress indicator, quick starts, onboarding, launch confirmation, source families, search-depth selector, provider policy, optional organization id, advanced/BYOK accordions, preflight-aware submit loading, custom Agent attach panel, feature-gated snapshot import |
 | `/admin/setup` | `SetupWizardView` | Three-step provider setup, API/base URL entry, and connection test |
-| `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, capture |
+| `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, read-only intervention receipts, capture |
 | `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Result Quality verdict panel when available, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, share/export, prediction card, feature-gated snapshot export, replay import, rewrite-one-line counterfactuals, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
 | `/workbench/:id` | `WorkbenchView` | Dedicated graph workbench for causal / split / KG layouts; preserves the analysis branch query and links back to the scenario result page |
 | `/replay/:id` | `ReplayView` | Replay trace timeline with pagination, branch filter, and unavailable/probe-error states |
@@ -77,6 +77,12 @@ React + TypeScript frontend for SwarmOracle.
   live agent roster and transcript panel; filtering one agent groups that agent's messages by worldline, sorts each group by round, and uses branch titles/descriptions for the group header
 - `predictionBetting.ts`
   structured bet helpers now fall back to the raw tone id when they receive an unknown ending tone label
+- `GameplayCardsModal.tsx`
+  profile-driven recommended cards stay first, branch / agent / source selects have explicit label/id pairs, and desktop-only directive autofocus avoids opening mobile keyboards
+- `PredictionModal.tsx`
+  structured prediction submit stays serial and now blocks same-frame double-clicks while keeping the retry path after gameplay-state persistence errors
+- `InterventionReceiptCard.tsx`
+  reads persisted effects for the current scenario only, renders newest-first, returns no DOM for empty effects, and does not expose internal log ids
 - `ResumePanel.tsx`
   ResultView-side resume control for `POST /api/scenario/:id/resume`; waits for a source branch before loading checkpoints, prefers branch-scoped checkpoints when available, turns structured `compressed_summary` data into a readable preview, falls back to round input when no checkpoint is available or checkpoint loading fails, locks after success, and is covered by the dedicated resume smoke script
 - `CounterfactualPanel.tsx`
@@ -202,13 +208,12 @@ npm run build:spike:phaser-custom
 
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Current frontend verification:
-  - `npx tsc --noEmit`: pass
-  - targeted ResultView / ResultVerdictPanel / locale vitest: `98 passed`
-  - full vitest: `185 files / 2047 tests passed`
-  - `npx eslint src/ --max-warnings=0`: pass
-  - `npm run build`: pass, including performance budgets
-  - i18n parity spot-check: `en=2509 zh=2509 equal=true`
-  - browser recheck covered one new result with verdict and visible branch answers after local SQLite data backfill, plus one old result without verdict, desktop and `375x812` mobile, language switch, and no console JS errors
+  - `npx tsc --noEmit -p tsconfig.app.json`: pass
+  - full vitest: `189 files / 2107 tests passed`
+  - gameplay / prediction / receipt / debate copy related targeted eslint: pass
+  - gameplay browser E2E scripts: desktop/mobile `6/6` runs, `74/74` steps passed
+  - older ResultView / ResultVerdictPanel / locale targeted vitest: `98 passed`
+  - older full `npx eslint src/ --max-warnings=0` and `npm run build` baselines remain documented in `llmdoc/overview/frontend.md`
 - Older Sprint 0-4 rows below are historical artifacts, not the current pass-count source.
 - Latest Sprint 0-2 browser matrix:
   - browser matrix: `72/72 PASS` at `output/e2e/sprint0-2-review-20260510-browser/summary.json`

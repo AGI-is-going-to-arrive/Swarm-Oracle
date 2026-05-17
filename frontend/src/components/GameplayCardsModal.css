@@ -53,7 +53,9 @@
   gap: 4px;
   padding: 10px 12px;
   border-radius: 14px;
+  border: 1px solid rgba(198, 21, 131, 0.12);
   border: 1px solid color-mix(in oklab, var(--color-primary) 12%, var(--border-default));
+  background: #fbf7fb;
   background: color-mix(in oklab, var(--color-primary-glow) 40%, var(--bg-surface) 60%);
 }
 
@@ -134,7 +136,9 @@
   margin-top: 10px;
   padding: 12px 14px;
   border-radius: 14px;
+  border: 1px solid rgba(186, 111, 18, 0.20);
   border: 1px solid color-mix(in oklab, var(--color-warning) 20%, var(--border-default));
+  background: #fff9ed;
   background: color-mix(in oklab, var(--color-warning) 8%, var(--bg-surface));
   color: var(--text-secondary);
   font-size: var(--text-xs);
@@ -146,7 +150,9 @@
 }
 
 .gameplay-modal__availability--ready {
+  border-color: rgba(31, 138, 75, 0.24);
   border-color: color-mix(in oklab, var(--color-success) 24%, var(--border-default));
+  background: #f1fbf5;
   background: color-mix(in oklab, var(--color-success) 9%, var(--bg-surface));
 }
 

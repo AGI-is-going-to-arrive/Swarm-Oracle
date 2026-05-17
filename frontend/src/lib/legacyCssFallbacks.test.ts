@@ -53,12 +53,14 @@ describe('legacy CSS color fallbacks', () => {
     expect(css).toMatch(/\.gameplay-card-v2--selected\s*\{[\s\S]*?background:\s*linear-gradient\(180deg, #fff4fa, var\(--bg-surface\)\);[\s\S]*?background:\s*linear-gradient\(180deg, color-mix\(in oklab, var\(--color-primary-glow\) 70%, var\(--bg-elevated\)\), var\(--bg-surface\)\);/);
     expect(css).toMatch(/\.gameplay-card-v2__badge--counter\s*\{[\s\S]*?background:\s*#fff1cc;[\s\S]*?background:\s*color-mix\(in oklab, var\(--color-warning\) 16%, var\(--bg-surface\)\);/);
     expect(css).toMatch(/\.gameplay-modal-v2__preview\s*\{[\s\S]*?background:\s*#fbfaf7;[\s\S]*?background:\s*color-mix\(in oklab, var\(--bg-surface\) 88%, var\(--bg-elevated\)\);/);
+    expect(css).toMatch(/\.gameplay-modal__stat\s*\{[\s\S]*?border:\s*1px solid rgba\(198, 21, 131, 0\.12\);[\s\S]*?border:\s*1px solid color-mix\(in oklab, var\(--color-primary\) 12%, var\(--border-default\)\);[\s\S]*?background:\s*#fbf7fb;[\s\S]*?background:\s*color-mix\(in oklab, var\(--color-primary-glow\) 40%, var\(--bg-surface\) 60%\);/);
+    expect(css).toMatch(/\.gameplay-modal__availability\s*\{[\s\S]*?border:\s*1px solid rgba\(186, 111, 18, 0\.20\);[\s\S]*?border:\s*1px solid color-mix\(in oklab, var\(--color-warning\) 20%, var\(--border-default\)\);[\s\S]*?background:\s*#fff9ed;[\s\S]*?background:\s*color-mix\(in oklab, var\(--color-warning\) 8%, var\(--bg-surface\)\);/);
   });
 
   it('keeps intervention receipt accents and long names resilient', () => {
     const css = readCss('src/components/InterventionReceiptCard.css');
 
-    expect(css).toMatch(/\.intervention-receipt-card\s*\{[\s\S]*?border-left-color:\s*#3a6cd6;[\s\S]*?@supports \(border-left-color: oklch\(58% 0\.16 250\)\)/);
+    expect(css).toMatch(/\.intervention-receipt-card\s*\{[\s\S]*?border-left:\s*3px solid #3a6cd6;[\s\S]*?@supports \(border-left-color: oklch\(58% 0\.16 250\)\)/);
     expect(css).toMatch(/\.intervention-receipt-card__affected-line\s*\{[\s\S]*?overflow-wrap:\s*anywhere;[\s\S]*?word-break:\s*break-word;/);
   });
 });

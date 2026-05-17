@@ -1,5 +1,5 @@
 import type { ComponentProps } from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -388,6 +388,50 @@ describe('PredictionModal automation callback', () => {
 
     expect(submitPrediction).toHaveBeenCalledTimes(1);
     expect(onPlacedBet).toHaveBeenCalledTimes(2);
+  });
+
+  it('prevents duplicate submit while the prediction request is in flight', async () => {
+    const user = userEvent.setup();
+    const { submitPrediction } = await import('../api/client');
+    let resolvePrediction!: (value: {
+      id: string;
+      scenario_id: string;
+      user_name: string;
+      prediction_text: string;
+      confidence: number;
+      score: null;
+      score_reason: null;
+      created_at: string;
+    }) => void;
+    vi.mocked(submitPrediction).mockReturnValue(
+      new Promise((resolve) => {
+        resolvePrediction = resolve;
+      }),
+    );
+    const onPlacedBet = vi.fn<(meta: unknown) => Promise<void>>().mockResolvedValue(undefined);
+
+    renderPredictionModal({ onPlacedBet });
+
+    await user.type(screen.getByLabelText('prediction.text_label'), 'Only submit once.');
+    await user.dblClick(screen.getByRole('button', { name: 'prediction.submit' }));
+
+    expect(submitPrediction).toHaveBeenCalledTimes(1);
+    expect(onPlacedBet).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolvePrediction({
+        id: 'prediction-in-flight',
+        scenario_id: 'scenario-1',
+        user_name: 'Test Director',
+        prediction_text: 'Structured bet',
+        confidence: 0.7,
+        score: null,
+        score_reason: null,
+        created_at: '2026-03-19T00:00:00Z',
+      });
+    });
+
+    await waitFor(() => expect(onPlacedBet).toHaveBeenCalledTimes(1));
   });
 
   it('releases the scenario meta lock after a successful submission', async () => {

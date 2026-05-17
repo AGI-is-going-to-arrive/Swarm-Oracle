@@ -23,7 +23,7 @@
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import；scenario/story branch response 会回显 `parent_branch_id / fork_round / fork_reason / replay_kind / replay_source_branch_id`，并在 Result Quality 开启时回显 `verdict / verdict_confidence / branches[].question_answer` |
 | Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 Agent 备份导入导出；identity preflight 解析超时按 504 fail-closed |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary；bucket 会回显 `enforced / scope / window_seconds` |
-| Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板；正式玩法卡注入会在后端校验 contract、冷却、点数和 pending metadata |
+| Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板；正式玩法卡注入会在后端校验 contract、冷却、点数和 pending metadata，玩法卡业务校验失败返回结构化 `422` |
 | Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary、score breakdown、只读 intervention effect receipts |
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
 | Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard 与 segment filters |
@@ -37,12 +37,12 @@
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、干预 pending metadata 消费与 effect receipt 写回、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent prompt 会带当前世界线标题/分叉原因，Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记 |
+| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、干预 pending metadata 消费与 effect receipt 写回；receipt 写回前会核对当前 scenario/branch，Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent prompt 会带当前世界线标题/分叉原因，Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记 |
 | Simulation Cancel | `backend/app/services/simulation_cancel.py` | scenario 取消 token、DB cancelled fallback 与后台任务取消信号 |
 | Preflight | `backend/app/services/preflight.py` | admin/CLI 预检：SQLite、ChromaDB、LLM、web search、CORS、volume |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
 | Personality Drift | `backend/app/services/personality_drift.py` | 从 identity metadata、消息和成长事件派生 Big Five drift warning |
-| Memory | `backend/app/services/memory.py` | L1 压缩、context 组装；Agent context 可接收当前世界线块，提醒同一角色在不同分支里不要复用同一组例子和结论 |
+| Memory | `backend/app/services/memory.py` | L1 压缩、context 组装；Agent context 可接收当前世界线块，提醒同一角色在不同分支里不要复用同一组例子和结论；已知玩法卡用 contract label，未知 `card_label` 会按 untrusted data 包裹 |
 | Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、搜索深度预算、缓存、`ProviderSearchOutcome` 状态映射、native citation 序列化与上下文格式化 |
 | LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断、JSON stream-first fallback；Responses API native search tools 只在已识别 provider + 非 proxy 路径启用 |
 | Native Search Adapters | `backend/app/services/native_search_adapters.py` | provider-specific native search tools/citation parsing；当前有 xAI native pilot、OpenAI structural adapter/fixtures 和 null adapter；OpenAI live signoff 仍是 backlog |
@@ -59,10 +59,10 @@
 | Hallucination Gate | `backend/app/services/hallucination_gate.py` | verdict 后的 warning-only claim / evidence 检查 |
 | Graph Analysis | `backend/app/services/graph_analysis.py` | 对最新 causal graph snapshot 做度数分布、god nodes、跨分支边摘要；大图会返回 `truncated: true` |
 | KG Realtime | `backend/app/services/kg_realtime.py` | 合并 `GraphDelta` 后通过 scenario WS 推送 `kg:delta`，payload 过大或失效时推送 `kg:snapshot_invalidated` |
-| Snapshot Export | `backend/app/services/snapshot_export.py` | scenario ZIP export/import、manifest/checksum、旧 ID 到新 ID remap、intervention receipt ledger、物理 member 计数、重复 member 拒绝与 ZIP 安全校验 |
+| Snapshot Export | `backend/app/services/snapshot_export.py` | scenario ZIP export/import、manifest/checksum、旧 ID 到新 ID remap、intervention receipt ledger、物理 member 计数、重复 member 拒绝与 ZIP 安全校验；JSON 字符串字段只有对象/数组会递归脱敏，malformed 或标量值按空值处理 |
 | Runtime Lock | `backend/app/services/runtime_lock.py` | SQLite shared lease + lease refresh，防重入 |
 | Debate Prompts | `backend/app/services/debate_prompts.py` | Debate motion/cast/turn prompt；LLM name、role、persona 生成与清洗 |
-| Gameplay Contract | `backend/app/services/gameplay_contract.py` | 读取共享玩法契约，生成后端权威的安全玩法卡指令与可读 prompt |
+| Gameplay Contract | `backend/app/services/gameplay_contract.py` | 读取共享玩法契约，生成后端权威的安全玩法卡指令与可读 prompt；目标世界线、Agent 名和自定义 directive 都按 untrusted data 包裹进 prompt |
 
 ### 数据模型
 
@@ -86,9 +86,9 @@
   玩法卡、押注、archive raw 的 authority。
 - 这两块都通过 `campaign` 路由读写，并带 `revision` 乐观并发控制。
 - `PendingIntervention.metadata_json`
-  只保存待处理干预的运行时元数据，例如玩法卡、profile、目标分支和原始用户输入；snapshot import 不会把 pending queue 重新排队。
+  只保存待处理干预的运行时元数据，例如玩法卡、profile、目标分支和原始用户输入；玩法卡 prompt 由后端 contract 重建，snapshot import 不会把 pending queue 重新排队。
 - `InterventionLog.effect_summary_json`
-  干预完成后的只读效果回执；effects endpoint 和 snapshot export/import 都读取这份持久化数据，不从前端重算。
+  干预完成后的只读效果回执；effects endpoint 和 snapshot export/import 都读取这份持久化数据，不从前端重算。写回时会丢弃 scenario/branch 不匹配的 pending metadata。
 - `Scenario.parsed_context.result_quality`
   Result Quality 的持久载荷；当前存顶层 `verdict / confidence / question_answer` 和 `branch_question_answers`，受 `FEATURE_RESULT_VERDICT` 控制，不是新表或新 column。
 - campaign finalize 与 scenario summary 当前返回同一套 `score_breakdown`；每项包含 `id / label_key / points / applied`，由后端按 archive grade、profile resonance、daily challenge、押注、director goals 与 worldline commitment 派生，不是新的持久化字段。
@@ -154,7 +154,7 @@
 - `GET /api/scenario/{id}/graph-analysis` 当前同时要求 `FEATURE_GRAPH_ANALYSIS=true` 和 `FEATURE_CAUSAL_GRAPH=true`；返回 god nodes、degree distribution、cross-branch edges 和 summary。`summary.total_nodes` 统计的是序列化 causal snapshot 的可见节点，包含合成 `outcome` nodes。分析前会先按最新 snapshot 的 node/edge 数做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`；带 `branch_id` 时，预检会按该 branch 的可见节点/边计数，避免大 scenario 下的小 branch 查询被保守截断。
 - `GraphEdge` 当前已有 `confidence_tier / source_ref / source_round_number / evidence_json` nullable 字段。causal graph 新边会写入 coarse evidence，并在 API response 里返回；重放轮次遇到旧 edge 时，会只补齐缺失的 evidence 字段，不覆盖已有非空值。inter-agent 边会把确定性 rule / reason 写进 `evidence_json`；其它 causal graph 写图路径仍可能只有 coarse provenance。debate argument map 也会在 `GET /api/debate/{id}/argument-map` 的 `edges[].evidence` 返回 `confidence_tier / source_ref / source_round_number / detail`。`detail` 只是 `evidence_json` 的透传，不是 LLM 解释文本。
 - `GET /api/scenario/{id}/personality-drift` 当前要求 `FEATURE_AGENT_IDENTITY=true`，并先校验 caller 能看到该 scenario。返回值按 drift score 排序，只做 warning 数据，不阻断 verdict；波动项来自消息 emotion 变化，不把 `Agent.stance` 当成时间线字段。
-- `GET /api/scenario/{id}/snapshot` 当前要求 `FEATURE_SNAPSHOT_EXPORT=true`，并先校验 scenario ownership。ZIP 包含 `manifest.json`、scenario、branches、agents、messages、causal graph、`intervention_receipts.jsonl` 和 `checksums.sha256`；manifest 会带 receipt schema version。默认不导出 `user_id`，也会剥掉 API key、base URL、token、password 及常见 provider secret key 变体，branch `key_moments`、web context 和 effect summary 这类 JSON 字符串也会被清理。
+- `GET /api/scenario/{id}/snapshot` 当前要求 `FEATURE_SNAPSHOT_EXPORT=true`，并先校验 scenario ownership。ZIP 包含 `manifest.json`、scenario、branches、agents、messages、causal graph、`intervention_receipts.jsonl` 和 `checksums.sha256`；manifest 会带 receipt schema version。默认不导出 `user_id`，也会剥掉 API key、base URL、token、password 及常见 provider secret key 变体，branch `key_moments`、web context 和 effect summary 这类 JSON 字符串也会被清理；malformed JSON 字符串或解析后不是对象/数组的值会导出为空值，不再把原文带出。
 - `POST /api/scenario/import-snapshot` 当前也受 `FEATURE_SNAPSHOT_EXPORT` gate；开启 `SESSION_SECRET` 时要求 signed principal。上传上限是 50 MB；导入前会拒绝绝对路径、`..`、反斜杠路径、symlink、重复 ZIP member name、超过 256 个物理 member、超大 member、总解压超限、异常压缩比、manifest/schema/checksum 不匹配、非 UTF-8 JSON/JSONL、单行超过 1 MB 的 JSONL，以及超过 100000 行的 JSONL。导入会新建 scenario/branch/agent/message/graph/intervention receipt 主键并 remap FK，branch `replay_source_branch_id` 与 receipt 的 scenario/branch/log/agent 引用也会 remap；映射不到的旧引用会清空，但顶层 receipt `branch_id` 映射不到会拒绝导入。旧 snapshot 没有 `intervention_receipts.jsonl` 时仍可导入，pending intervention 不会随 snapshot import 重新排队。
 
 ### Ending Room
@@ -442,6 +442,9 @@
   - `ruff check app/services/causal_graph.py tests/test_causal_graph.py`：通过
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 - custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；最近记录里后端仓库级 ruff 已全绿。
+- gameplay-system hardening 最终后端复验：
+  - `python -m pytest -q`：`3141 passed, 6 skipped`
+  - `ruff check .`：通过
 - Classic 分支标题提示本轮已补定向验证：
   - `pytest tests/test_audit_fixes.py::TestForkPromptTemplateConsistency -q`：`31 passed`
   - `pytest tests/test_simulator.py::TestDetectFork -q`：`4 passed`

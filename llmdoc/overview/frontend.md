@@ -193,9 +193,9 @@
 | `scenarioDirectorState.ts` | `frontend/src/lib/scenarioDirectorState.ts` | director_state 映射 |
 | `predictionBetting.ts` | `frontend/src/lib/predictionBetting.ts` | 结构化押注 helper |
 | `gameplayContract.ts` | `frontend/src/lib/gameplayContract.ts` | 共享玩法契约消费层 |
-| `GameplayCardsModal.tsx` | `frontend/src/components/GameplayCardsModal.tsx` | 玩法卡弹窗；推荐卡、分组折叠、后端 contract payload、focus trap 与 disclosure ARIA |
-| `PredictionModal.tsx` | `frontend/src/components/PredictionModal.tsx` | 结构化预测弹窗；串行提交、branch 晚到兜底、高级题材回响 disclosure 与 focus trap |
-| `InterventionReceiptCard.tsx` | `frontend/src/components/InterventionReceiptCard.tsx` | 只读干预效果回执；读取 persisted effects，不展示内部 log id |
+| `GameplayCardsModal.tsx` | `frontend/src/components/GameplayCardsModal.tsx` | 玩法卡弹窗；推荐卡、分组折叠、后端 contract payload、focus trap、label/select 显式关联与 disclosure ARIA |
+| `PredictionModal.tsx` | `frontend/src/components/PredictionModal.tsx` | 结构化预测弹窗；串行提交、快速重复提交防护、branch 晚到兜底、高级题材回响 disclosure 与 focus trap |
+| `InterventionReceiptCard.tsx` | `frontend/src/components/InterventionReceiptCard.tsx` | 只读干预效果回执；只展示当前 scenario 的 persisted effects，倒序展示，不展示内部 log id |
 | `roundtableSelection.ts` | `frontend/src/lib/roundtableSelection.ts` | `trait_mix / fault_line_first / witness_augmented` 选择辅助与测试入口 |
 | `endingRoomReplayAutomation.js` | `frontend/src/lib/endingRoomReplayAutomation.js` | ending-room replay URL 判定 helper；当前识别 `roomReplay / roomShare / roomLocal`，并复用 live modal / readonly UI 判定；replay action 文案兼容 `Save copy / 保存副本` 与 `Import run / 导入运行` |
 | `roundtableReplayAutomation.js` | `frontend/src/lib/roundtableReplayAutomation.js` | roundtable live / readonly replay automation payload 判定 helper |
@@ -321,10 +321,10 @@
   - 提交给 backend 的 structured prediction text 仍按 500 字符预算；textarea 会先扣掉下注元数据占用的长度，超限时显示本地化错误
   - 对应的 `predict-late-branches` fixture 当前会先采 `before` 工件，再放出 late branch 事件；`before` 态应保持 `ending_tone`，`after` 态才切到 `branch_winner`
   - CSS 当前已收口到单滚动容器、`100dvh` / safe-area、移动端 44px footer control、`prefers-reduced-motion` 和 forced-colors fallback；OKLCH 颜色仍带 sRGB fallback
-  - 预测提交按“prediction API -> 本地 bet meta -> gameplay-state 持久化回调”串行；最后一步失败时弹窗保持打开，重试复用 pending meta，不重复提交 prediction。
+  - 预测提交按“prediction API -> 本地 bet meta -> gameplay-state 持久化回调”串行；最后一步失败时弹窗保持打开，重试复用 pending meta，不重复提交 prediction。同步提交锁会拦住同一帧内的快速重复点击。
   - `profile_resonance` 默认藏在高级选项里；disclosure 展开时才挂载内容，并只在目标 DOM 存在时输出 `aria-controls`。
-- `GameplayCardsModal` 当前先展示 profile/局势驱动的 3 张推荐卡，再把剩余卡按 4 个分组折叠展示；分组按钮使用 `aria-expanded`，只在展开且 region 存在时输出 `aria-controls`。directive textarea 只在桌面 fine pointer 环境自动聚焦；手机和粗指针设备不会自动弹出键盘。
-- `InterventionReceiptCard` 当前在 completed SimulationView 中只读展示已持久化的 intervention effects；它读取 `/api/scenario/{id}/intervention-effects`，按 `created_at` 防御性倒序展示，有 loading/error/empty 折叠态，不显示内部 `intervention_log_id`。
+- `GameplayCardsModal` 当前先展示 profile/局势驱动的 3 张推荐卡，再把剩余卡按 4 个分组折叠展示；分组按钮使用 `aria-expanded`，只在展开且 region 存在时输出 `aria-controls`。branch / agent / source select 都有稳定的 `label htmlFor` / `id` 配对。directive textarea 只在桌面 fine pointer 环境自动聚焦；手机和粗指针设备不会自动弹出键盘。
+- `InterventionReceiptCard` 当前在 completed SimulationView 中只读展示已持久化的 intervention effects；它读取 `/api/scenario/{id}/intervention-effects`，只接受当前 scenario 的 state，按 `created_at` 防御性倒序展示。没有 effects、scenario 不匹配或页面还没完成时不渲染卡片；有 loading/error 折叠态，不显示内部 `intervention_log_id`。
 - `endingRoomStore` 当前会在 committed turn、room hydrate、thread hydrate 时清掉 stale draft；迟到的 `turn_start / turn_delta` 不再把 ghost bubble 重新挂回当前 transcript。
 - `endingRoomStore` 当前把 `snapshot / result / thread hydrate + commitTurn` 作为 authority；`pendingDrafts` 只是流式草稿缓存。recoverable `turn_error` 只清 draft，不会把整个 room 升成 fatal error。
 - `endingRoomStore.loadRoom` 当前在 result 加载失败时不再把整个 room 标记为 error；room 仍可正常使用，result 会在下次 WS 事件或手动刷新时重试。
@@ -581,12 +581,14 @@
   - `npm exec -- eslint src/pages/result/ResultHeader.tsx src/pages/result/ExploreDeeperBridge.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts`：通过
   - 浏览器实测本机结果页显示 `对话 · 本机模式`，header 可直接进入因果图谱和图谱工作台；点击 `探索` 会滚到下一步区。
 - 当前 frontend 稳定验证口径：
-  - `npx tsc --noEmit`：通过
-  - ResultView / ResultVerdictPanel / locale targeted vitest：`98 passed`
-  - full vitest：`185 files / 2047 tests passed`
-  - `npx eslint src/ --max-warnings=0`：通过
-  - `npm run build`：通过，performance budget 无 violations
-  - i18n parity spot-check：`en=2509 zh=2509 equal=true`
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - full vitest：`189 files / 2107 tests passed`
+  - gameplay / prediction / receipt / debate copy 相关目标文件 eslint：通过
+  - 3 个 gameplay 浏览器 E2E 脚本：desktop/mobile 共 `6/6` runs、`74/74` steps 通过
+  - ResultView / ResultVerdictPanel / locale targeted vitest：较早基线 `98 passed`
+  - `npx eslint src/ --max-warnings=0`：历史全量基线通过；本轮只复验了上述目标文件
+  - `npm run build`：历史全量基线通过，performance budget 无 violations；本轮 gameplay hardening 未重跑 build
+  - i18n parity spot-check：历史记录 `en=2509 zh=2509 equal=true`；本轮 locale 测试随 full vitest 通过
   - browser Result Quality 复核覆盖新结果页有 verdict 和分支答案、旧结果页无 verdict、语言切换、桌面与 `375x812` mobile，console 无 JS error
   - Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop `1440px` 与 mobile `375px` 六组合矩阵
   - native citation 浏览器复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵；WebKit Tab-to-links 按平台限制记录

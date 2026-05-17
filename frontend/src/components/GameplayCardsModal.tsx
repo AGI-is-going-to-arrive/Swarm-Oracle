@@ -156,6 +156,10 @@ export default function GameplayCardsModal({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   const subtitleId = useId();
+  const targetBranchSelectId = useId();
+  const primaryAgentSelectId = useId();
+  const secondaryAgentSelectId = useId();
+  const sourceBranchSelectId = useId();
   useFocusTrap(dialogRef, true);
   const shouldAutoFocusDirective = (() => {
     if (typeof window === 'undefined') return false;
@@ -732,8 +736,9 @@ export default function GameplayCardsModal({
 
           <section className="gameplay-modal-v2__controls">
             <div className="modal-field gameplay-modal__field">
-              <label>{t('gameplay.target_branch')}</label>
+              <label htmlFor={targetBranchSelectId}>{t('gameplay.target_branch')}</label>
               <select
+                id={targetBranchSelectId}
                 className="gameplay-select"
                 value={targetBranchId ?? ''}
                 onChange={(event) => setTargetBranchIdOverride(event.target.value)}
@@ -753,8 +758,9 @@ export default function GameplayCardsModal({
 
             {requiresPrimaryAgent && (
               <div className="modal-field gameplay-modal__field">
-                <label>{t('gameplay.primary_agent')}</label>
+                <label htmlFor={primaryAgentSelectId}>{t('gameplay.primary_agent')}</label>
                 <select
+                  id={primaryAgentSelectId}
                   className="gameplay-select"
                   value={primaryAgentId}
                   onChange={(event) => setPrimaryAgentIdOverride(event.target.value)}
@@ -775,8 +781,9 @@ export default function GameplayCardsModal({
 
             {requiresSecondAgent && (
               <div className="modal-field gameplay-modal__field">
-                <label>{t('gameplay.secondary_agent')}</label>
+                <label htmlFor={secondaryAgentSelectId}>{t('gameplay.secondary_agent')}</label>
                 <select
+                  id={secondaryAgentSelectId}
                   className="gameplay-select"
                   value={secondaryAgentId}
                   onChange={(event) => setSecondaryAgentIdOverride(event.target.value)}
@@ -797,8 +804,9 @@ export default function GameplayCardsModal({
 
             {requiresSourceBranch && (
               <div className="modal-field gameplay-modal__field">
-                <label>{t('gameplay.source_branch')}</label>
+                <label htmlFor={sourceBranchSelectId}>{t('gameplay.source_branch')}</label>
                 <select
+                  id={sourceBranchSelectId}
                   className="gameplay-select"
                   value={sourceBranchId}
                   onChange={(event) => setSourceBranchIdOverride(event.target.value)}
