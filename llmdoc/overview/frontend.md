@@ -97,6 +97,7 @@
 - store 负责保持 phase/branch 状态单调，不让旧事件覆盖新状态。
 - `simulationStore` 把 `cancelled` 当终态处理；取消后晚到的 `status / state` 事件不会再把页面回退到 `simulating` 或重新触发 WS 重连。
 - `simulationStore` 的消息去重集（`seenMessageKeys`）按 scenario ID 隔离，切换场景时自动重置，避免跨场景 hash 碰撞。
+- `simulationStore` 当前会接收 `kg:delta` 与 `kg:snapshot_invalidated`，但不在 store 内维护图谱增量状态；图谱视图仍以各自的 REST snapshot / resync 路径为准。
 - `useSimulationWS` 在 `scenarioId` 为空或 `ready` 为 false 时不会发起连接；重连使用 `connectRef` 模式防止闭包过期；初始连接也会调用 `requestScenarioResync` 补拉状态（与 `useEndingRoomWS` 行为对齐）。
 - 三个 WS hooks 均支持首帧 auth：如果 `localStorage` 有 token，`onopen` 时发送 `{"type":"auth","token":"..."}`，收到 `auth_ok` 后才触发 resync；无 token 时直接 resync（兼容 auth 未开启场景）。
 - 三个 WS hooks 对 `4001`（认证失败）和 `4404`（资源不存在）不进行自动重连；`1006`（异常断连）照常重连。

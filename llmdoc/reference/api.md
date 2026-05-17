@@ -504,7 +504,7 @@
 - scenario cancel 成功后会广播 `simulation_cancelled`；前端把 `cancelled` 视为终态，晚到的旧 `status/state` 事件不能把页面带回 live 状态。
 - scenario WS 当前也可以广播 `kg:delta` 与 `kg:snapshot_invalidated`：
   - `kg:delta` 的 `data` 是合并后的 causal graph delta，包含 `scenario_id / version / added / updated / deleted / snapshot_invalidated`。
-  - `kg:snapshot_invalidated` 表示客户端应丢弃本地增量状态并拉取 `GET /api/scenario/{id}/causal-graph`。
+  - `kg:snapshot_invalidated` 表示维护本地图谱增量状态的客户端应丢弃本地增量状态，并拉取 `GET /api/scenario/{id}/causal-graph`。
 - 空闲期会发送轻量 `heartbeat`。
 - `X-Session-Token` 只用于 REST。
 - 当 `SESSION_SECRET` 非空时，`scenario / debate / agent-conversation / ending-room` 这 4 条 WS 都继续走首帧 auth 协议，不依赖 HTTP-style dependency 注入。
