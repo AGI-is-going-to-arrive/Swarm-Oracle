@@ -571,6 +571,34 @@ describe("simulationStore — handleWSEvent", () => {
     ]);
   });
 
+  it("accepts KG realtime graph events without logging unhandled warnings", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      useSimulationStore.getState().handleWSEvent({
+        type: "kg:delta",
+        data: {
+          scenario_id: "scenario-kg",
+          version: 2,
+          added: [],
+          updated: [],
+          deleted: [],
+          snapshot_invalidated: false,
+        },
+      } as WSEvent);
+      useSimulationStore.getState().handleWSEvent({
+        type: "kg:snapshot_invalidated",
+        data: {
+          scenario_id: "scenario-kg",
+          version: 3,
+        },
+      } as WSEvent);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("handles 'simulation_error' → sets error state", () => {
     const store = useSimulationStore;
     store.getState().handleWSEvent({

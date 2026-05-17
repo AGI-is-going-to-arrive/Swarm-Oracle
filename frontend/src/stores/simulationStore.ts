@@ -560,6 +560,10 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         }));
         break;
 
+      case 'kg:delta':
+      case 'kg:snapshot_invalidated':
+        break;
+
       case 'simulation_done':
         // H4 fix: cancelled is terminal — late simulation_done must not regress it.
         set((state) => {

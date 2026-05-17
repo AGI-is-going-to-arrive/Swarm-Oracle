@@ -961,6 +961,24 @@ export type WSEvent =
     | { type: 'intervention_injected'; data: { branch_id: string; round: number; text: string } }
     | { type: 'retrospective_start'; data: { branch_id: string; source_branch_id: string; from_round: number; text: string; intervention_id: string } }
     | { type: 'batch_intervention_applied'; data: { interventions: BatchInterventionEntry[] } }
+    | {
+      type: 'kg:delta';
+      data: {
+        scenario_id: string;
+        version: number;
+        added: unknown[];
+        updated: unknown[];
+        deleted: string[];
+        snapshot_invalidated: boolean;
+      };
+    }
+    | {
+      type: 'kg:snapshot_invalidated';
+      data: {
+        scenario_id: string;
+        version: number;
+      };
+    }
     | { type: 'simulation_done' }
     | {
       type: 'simulation_error';
