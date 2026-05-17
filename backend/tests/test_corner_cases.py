@@ -563,14 +563,15 @@ class TestEngineManagedSqlitePaths:
         class _FakeConnection:
             def __init__(self):
                 self.commands: list[tuple[str, object]] = []
-                self.rows = [(1, "第一条"), (2, "第二条")]
+                self.rows = [(1, "第一条", None), (2, "第二条", None)]
                 self.commits = 0
                 self.rollbacks = 0
 
             def exec_driver_sql(self, statement: str, params=None):
                 normalized = " ".join(statement.split())
                 self.commands.append((normalized, params))
-                if normalized.startswith("SELECT id, user_input FROM pending_intervention"):
+                pending_select = "SELECT id, user_input, metadata_json FROM pending_intervention"
+                if normalized.startswith(pending_select):
                     row = self.rows[0] if self.rows else None
                     return _FakeResult(row=row)
                 if normalized.startswith("DELETE FROM pending_intervention WHERE id = ?"):
@@ -615,8 +616,10 @@ class TestEngineManagedSqlitePaths:
         )
 
         key = "scenario-1:branch-1"
-        assert await simulator_module.pop_next_pending_intervention(key) == "第一条"
-        assert await simulator_module.pop_next_pending_intervention(key) == "第二条"
+        result = await simulator_module.pop_next_pending_intervention(key)
+        assert result is not None and result.text == "第一条"
+        result = await simulator_module.pop_next_pending_intervention(key)
+        assert result is not None and result.text == "第二条"
         assert await simulator_module.pop_next_pending_intervention(key) is None
 
         assert fake_connection.commits == 3

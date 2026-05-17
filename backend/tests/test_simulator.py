@@ -3028,6 +3028,50 @@ class TestCornerCases:
             ).first() is None
 
     @pytest.mark.asyncio
+    async def test_pending_intervention_db_queue_roundtrips_metadata(self):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid)
+        key = f"{sid}:{bid}"
+        metadata = {"card_id": "human_takeover", "card_label": "Human Takeover"}
+
+        await add_pending_intervention(key, "接管一轮", metadata=metadata)
+
+        with Session(engine) as session:
+            queued = session.exec(
+                select(PendingIntervention).where(
+                    PendingIntervention.scenario_id == sid,
+                    PendingIntervention.branch_id == bid,
+                )
+            ).one()
+            assert queued.metadata_json is not None
+
+        popped = await pop_next_pending_intervention(key)
+
+        assert popped == "接管一轮"
+        assert str(popped) == "接管一轮"
+        assert popped.text == "接管一轮"
+        assert popped.metadata == metadata
+
+    @pytest.mark.asyncio
+    async def test_pending_intervention_memory_queue_roundtrips_metadata(self, monkeypatch):
+        key = "scenario-memory:branch-memory"
+        metadata = {"card_id": "spy_infiltrate"}
+        monkeypatch.setattr(simulator_module, "_pending_intervention_db_path", lambda: None)
+        simulator_module.pending_interventions.clear()
+
+        try:
+            await add_pending_intervention(key, "影子议程", metadata=metadata)
+            popped = await pop_next_pending_intervention(key)
+
+            assert popped == "影子议程"
+            assert str(popped) == "影子议程"
+            assert popped.text == "影子议程"
+            assert popped.metadata == metadata
+        finally:
+            simulator_module.pending_interventions.clear()
+
+    @pytest.mark.asyncio
     async def test_clear_pending_interventions_for_scenario_is_scoped(self):
         engine = get_engine()
         cleanup_sid = _make_scenario(engine)

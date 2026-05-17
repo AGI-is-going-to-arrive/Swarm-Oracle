@@ -61,6 +61,11 @@ const LazyTimelineBar = lazy(() =>
   import('../components/TimelineBar').then((mod) => ({ default: mod.TimelineBar }))
 );
 const LazyInterventionModal = lazy(() => import('../components/InterventionModal'));
+const LazyInterventionReceiptCard = lazy(() =>
+  import('../components/InterventionReceiptCard').then((mod) => ({
+    default: mod.InterventionReceiptCard,
+  })),
+);
 const LazyBranchDetailModal = lazy(() => import('../components/BranchDetailModal'));
 const LazyPredictionModal = lazy(() => import('../components/PredictionModal'));
 const LazyGameplayCardsModal = lazy(() => import('../components/GameplayCardsModal'));
@@ -167,6 +172,12 @@ export function SimulationView() {
   const [predictionAutomation, setPredictionAutomation] = useState<Record<string, unknown> | null>(null);
   const [showGameplayCards, setShowGameplayCards] = useState(false);
   const [gameplayAutomation, setGameplayAutomation] = useState<Record<string, unknown> | null>(null);
+  const [gameplayToast, setGameplayToast] = useState<string | null>(null);
+  const [gameplayActiveMarker, setGameplayActiveMarker] = useState<{
+    cardLabel: string;
+    round: number;
+  } | null>(null);
+  const gameplayToastTimerRef = useRef<number | null>(null);
   const [commitmentFeedback, setCommitmentFeedback] = useState<{
     tone: 'info' | 'success';
     message: string;
@@ -942,6 +953,43 @@ export function SimulationView() {
     setGameplayAutomation(null);
     refreshLocalMeta();
   }, [refreshLocalMeta]);
+  const handleGameplayAppliedWithFeedback = useCallback(
+    async (...args: Parameters<typeof handleGameplayApplied>) => {
+      const result = await handleGameplayApplied(...args);
+      const [nextMeta] = args;
+      const usageList = nextMeta?.cards?.usageLog ?? [];
+      const latestUsage = usageList.length > 0 ? usageList[usageList.length - 1] : null;
+      if (latestUsage) {
+        const cardDef = getGameplayCardDefinition(latestUsage.cardId);
+        const cardLabel = isZh ? cardDef.labelZh : cardDef.labelEn;
+        setGameplayActiveMarker({ cardLabel, round: latestUsage.round });
+      }
+      setGameplayToast(t('gameplay.toast_applied'));
+      if (gameplayToastTimerRef.current) {
+        window.clearTimeout(gameplayToastTimerRef.current);
+      }
+      gameplayToastTimerRef.current = window.setTimeout(() => {
+        setGameplayToast(null);
+        gameplayToastTimerRef.current = null;
+      }, 3200);
+      return result;
+    },
+    [handleGameplayApplied, isZh, t],
+  );
+  useEffect(() => {
+    return () => {
+      if (gameplayToastTimerRef.current) {
+        window.clearTimeout(gameplayToastTimerRef.current);
+        gameplayToastTimerRef.current = null;
+      }
+    };
+  }, []);
+  useEffect(() => {
+    if (!gameplayActiveMarker) return;
+    if (currentRound > gameplayActiveMarker.round) {
+      setGameplayActiveMarker(null);
+    }
+  }, [currentRound, gameplayActiveMarker]);
   const filteredReplayMessages = useMemo(
     () => (
       canUseReplayControls
@@ -1670,6 +1718,19 @@ export function SimulationView() {
       </Suspense>
       )}
 
+      {/* Phase 4: Intervention Effect Receipts — only when simulation has produced receipts.
+         Component returns null when there are no persisted effects, so legacy scenarios
+         that never used interventions stay visually unchanged. */}
+      {id && isSimulationComplete && (
+        <Suspense fallback={null}>
+          <LazyInterventionReceiptCard
+            scenarioId={id}
+            enabled
+            refreshKey={branches.length}
+          />
+        </Suspense>
+      )}
+
       {/* Intervention Modal */}
       {interventionTarget && id && !isReplayMode && (
         <Suspense fallback={null}>
@@ -1724,11 +1785,27 @@ export function SimulationView() {
             currentRound={Math.max(currentRound, 1)}
             readOnly={!canUseGameplayCards}
             disabledReason={!canUseGameplayCards ? t('sim.warmup.cards_preview') : null}
-            onApplied={handleGameplayApplied}
+            onApplied={handleGameplayAppliedWithFeedback}
             onAutomationStateChange={setGameplayAutomation}
             onClose={handleGameplayCardsClose}
           />
         </Suspense>
+      )}
+
+      {gameplayActiveMarker && !isReplayMode && (
+        <div
+          className="sim-gameplay-active-marker"
+          role="status"
+          aria-label={t('gameplay.active_marker_aria')}
+        >
+          {t('gameplay.active_marker', { label: gameplayActiveMarker.cardLabel })}
+        </div>
+      )}
+
+      {gameplayToast && (
+        <div className="sim-gameplay-toast" role="status" aria-live="polite">
+          {gameplayToast}
+        </div>
       )}
     </div>
   );

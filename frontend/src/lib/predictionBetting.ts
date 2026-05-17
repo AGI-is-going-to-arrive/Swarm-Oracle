@@ -5,6 +5,17 @@ export type StructuredBetKind = 'branch_winner' | 'ending_tone' | 'profile_reson
 export type EndingToneId = 'order' | 'balance' | 'rupture';
 export type ProfileResonanceId = 'signature' | 'aligned' | 'offbeat';
 export type StructuredBetOutcome = 'hit' | 'miss' | 'pending';
+const STRUCTURED_BET_KINDS = new Set<StructuredBetKind>([
+  'branch_winner',
+  'ending_tone',
+  'profile_resonance',
+]);
+
+export interface StructuredBetSettlement {
+  hit: boolean | null;
+  reasonKey: string;
+  reasonParams: Record<string, string>;
+}
 
 export interface StructuredBetDraft {
   kind: StructuredBetKind;
@@ -69,6 +80,21 @@ export function getEndingToneLabel(tone: EndingToneId | string, isZh: boolean): 
   return isZh ? match.zh : match.en;
 }
 
+export function getStructuredBetTargetLabel(
+  bet: Pick<ParsedStructuredBet['meta'], 'kind' | 'targetId' | 'targetLabel'>,
+  isZh: boolean,
+): string {
+  if (bet.kind === 'ending_tone' && bet.targetId) {
+    const option = ENDING_TONE_OPTIONS[bet.targetId as EndingToneId];
+    if (option) return isZh ? option.zh : option.en;
+  }
+  if (bet.kind === 'profile_resonance' && bet.targetId) {
+    const option = PROFILE_RESONANCE_OPTIONS[bet.targetId as ProfileResonanceId];
+    if (option) return isZh ? option.zh : option.en;
+  }
+  return bet.targetLabel || bet.targetId || '';
+}
+
 export function buildStructuredPredictionText(draft: StructuredBetDraft): string {
   const meta = {
     version: 2,
@@ -103,7 +129,21 @@ export function parseStructuredPredictionText(text: string): ParsedStructuredBet
 
   const rawMeta = text.slice(BET_MARKER.length, firstLineEnd);
   try {
-    const meta = JSON.parse(rawMeta) as ParsedStructuredBet['meta'];
+    const raw = JSON.parse(rawMeta) as Partial<ParsedStructuredBet['meta']>;
+    if (!STRUCTURED_BET_KINDS.has(raw.kind as StructuredBetKind)) {
+      return null;
+    }
+    if (typeof raw.targetLabel !== 'string') {
+      return null;
+    }
+    const meta: ParsedStructuredBet['meta'] = {
+      version: typeof raw.version === 'number' ? raw.version : 2,
+      kind: raw.kind as StructuredBetKind,
+      targetId: typeof raw.targetId === 'string' ? raw.targetId : undefined,
+      targetLabel: raw.targetLabel,
+      sceneTheme: raw.sceneTheme ?? null,
+      question: typeof raw.question === 'string' ? raw.question : '',
+    };
     return {
       meta,
       rationale: text.slice(firstLineEnd + 1).trim(),
@@ -195,4 +235,83 @@ export function getStructuredBetOptions(branches: BranchInfo[]) {
       id: branch.id,
       label: branch.title,
     }));
+}
+
+export function resolveStructuredBetSettlement(
+  bet: Pick<ParsedStructuredBet['meta'], 'kind' | 'targetId' | 'targetLabel'>,
+  context: StructuredBetOutcomeContext,
+  isZh = false,
+): StructuredBetSettlement {
+  if (bet.kind === 'branch_winner') {
+    if (!context.dominantBranchTitle) {
+      return {
+        hit: null,
+        reasonKey: 'prediction.reason.branch_pending',
+        reasonParams: {},
+      };
+    }
+    const hit =
+      bet.targetId === context.dominantBranchId
+      || bet.targetLabel === context.dominantBranchTitle;
+    return {
+      hit,
+      reasonKey: hit
+        ? 'prediction.reason.branch_hit'
+        : 'prediction.reason.branch_miss',
+      reasonParams: {
+        dominantBranch: context.dominantBranchTitle,
+        targetBranch: bet.targetLabel,
+      },
+    };
+  }
+
+  if (bet.kind === 'ending_tone') {
+    if (!context.dominantTone) {
+      return {
+        hit: null,
+        reasonKey: 'prediction.reason.ending_pending',
+        reasonParams: {},
+      };
+    }
+    const option = ENDING_TONE_OPTIONS[context.dominantTone];
+    const hit = matchesStructuredBetOption(
+      bet.targetId,
+      bet.targetLabel,
+      context.dominantTone,
+      option,
+    );
+    return {
+      hit,
+      reasonKey: hit
+        ? 'prediction.reason.ending_hit'
+        : 'prediction.reason.ending_miss',
+      reasonParams: {
+        targetTone: getStructuredBetTargetLabel(bet, isZh),
+      },
+    };
+  }
+
+  if (!context.profileResonance) {
+    return {
+      hit: null,
+      reasonKey: 'prediction.reason.profile_pending',
+      reasonParams: {},
+    };
+  }
+  const option = PROFILE_RESONANCE_OPTIONS[context.profileResonance];
+  const hit = matchesStructuredBetOption(
+    bet.targetId,
+    bet.targetLabel,
+    context.profileResonance,
+    option,
+  );
+  return {
+    hit,
+    reasonKey: hit
+      ? 'prediction.reason.profile_hit'
+      : 'prediction.reason.profile_miss',
+    reasonParams: {
+      targetResonance: getStructuredBetTargetLabel(bet, isZh),
+    },
+  };
 }

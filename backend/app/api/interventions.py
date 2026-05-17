@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -29,7 +30,11 @@ from app.models import (
 )
 from app.models.database import get_engine
 from app.services.campaign import normalize_scenario_gameplay_state
-from app.services.gameplay_contract import load_gameplay_contract
+from app.services.gameplay_contract import (
+    build_server_card_prompt,
+    load_gameplay_contract,
+    resolve_server_card_directive,
+)
 from app.services.simulator import (
     _pending_intervention_db_path,
     add_pending_intervention,
@@ -52,6 +57,18 @@ def _build_gameplay_card_defs() -> dict[str, dict]:
 
 
 GAMEPLAY_CARD_DEFS = _build_gameplay_card_defs()
+
+
+def _build_gameplay_profile_defs() -> dict[str, dict]:
+    contract = load_gameplay_contract()
+    return {
+        str(profile["id"]): profile
+        for profile in contract.get("profiles", [])
+        if isinstance(profile, dict) and profile.get("id")
+    }
+
+
+GAMEPLAY_PROFILE_DEFS = _build_gameplay_profile_defs()
 
 
 def _now_iso() -> str:
@@ -102,6 +119,7 @@ def _persist_gameplay_card_usage(
     branch: Branch,
     current_round: int,
     req: InterveneRequest,
+    language: str,
 ) -> dict | None:
     if not req.card_id:
         return None
@@ -112,6 +130,8 @@ def _persist_gameplay_card_usage(
 
     if not req.profile_id:
         raise api_error(400, "GAMEPLAY_CARD_PROFILE_REQUIRED", "Gameplay card profile is required")
+    if req.profile_id not in GAMEPLAY_PROFILE_DEFS:
+        raise api_error(400, "GAMEPLAY_CARD_INVALID", "Unknown gameplay card profile")
 
     effective_round = max(current_round, 1)
     min_round = max(1, int(card_def.get("min_round", 1) or 1))
@@ -142,6 +162,12 @@ def _persist_gameplay_card_usage(
             f"Gameplay card is cooling down for {remaining} more round(s)",
         )
 
+    directive = resolve_server_card_directive(
+        req.card_id,
+        req.profile_id,
+        req.directive,
+        language,
+    )
     next_state = {
         "revision": current_state["revision"] + 1,
         "cards": {
@@ -154,7 +180,7 @@ def _persist_gameplay_card_usage(
                     "branch_title": branch.title,
                     "round": effective_round,
                     "cost": card_cost,
-                    "directive": req.directive or req.text.strip(),
+                    "directive": directive,
                     "used_at": _now_iso(),
                 },
             ],
@@ -184,6 +210,66 @@ def _persist_gameplay_card_usage(
             "Gameplay state revision mismatch",
         )
     return next_state
+
+
+def _scenario_runtime_language(scenario: Scenario) -> str:
+    if isinstance(scenario.parsed_context, dict):
+        language = scenario.parsed_context.get("_language")
+        if isinstance(language, str) and language.strip():
+            return language.strip()
+    return "Chinese"
+
+
+def _build_pending_intervention_payload(
+    req: InterveneRequest,
+    branch: Branch,
+    *,
+    language: str = "Chinese",
+) -> tuple[str, dict | None]:
+    text = req.text.strip()
+    if not req.card_id:
+        return text, None
+    if not req.profile_id:
+        raise api_error(400, "GAMEPLAY_CARD_PROFILE_REQUIRED", "Gameplay card profile is required")
+
+    try:
+        directive = resolve_server_card_directive(
+            req.card_id,
+            req.profile_id,
+            req.directive,
+            language,
+        )
+        prompt_text = build_server_card_prompt(
+            req.card_id,
+            req.profile_id,
+            custom_directive=directive,
+            language=language,
+            target_branch_title=branch.title,
+        )
+    except ValueError as exc:
+        raise api_error(400, "GAMEPLAY_CARD_INVALID", str(exc)) from exc
+
+    metadata = {
+        "card_id": req.card_id,
+        "profile_id": req.profile_id,
+        "custom_directive": directive,
+        "target_branch_title": branch.title,
+    }
+    return prompt_text, metadata
+
+
+def _effect_raw_user_input(text: str, metadata: dict | None) -> str:
+    if metadata:
+        directive = metadata.get("custom_directive")
+        if isinstance(directive, str) and directive.strip():
+            return directive.strip()
+    return text
+
+
+def _encode_metadata(metadata: dict | None) -> str | None:
+    if not metadata:
+        return None
+    return json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _clone_branch_history(
@@ -300,6 +386,7 @@ async def intervene(
     gameplay_state = None
     with Session(engine) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
+        scenario_language = _scenario_runtime_language(scenario)
         if scenario.status not in (ScenarioStatus.SIMULATING, ScenarioStatus.NARRATING):
             raise api_error(
                 400,
@@ -336,23 +423,36 @@ async def intervene(
             branch=branch,
             current_round=current_round,
             req=req,
+            language=scenario_language,
         )
+
+        pending_text, pending_metadata = _build_pending_intervention_payload(
+            req,
+            branch,
+            language=scenario_language,
+        )
+        visible_text = _effect_raw_user_input(text, pending_metadata)
 
         # Save intervention log
         log = InterventionLog(
             scenario_id=scenario_id,
             branch_id=req.branch_id,
             round_number=current_round,
-            user_input=req.text.strip(),
+            user_input=visible_text,
         )
         session.add(log)
         session.commit()
         session.refresh(log)
         log_id = log.id
 
+    # Attach intervention_log_id so the simulator can write back the effect receipt.
+    effect_metadata: dict = dict(pending_metadata or {})
+    effect_metadata["intervention_log_id"] = log_id
+    effect_metadata["raw_user_input"] = visible_text
+
     # Queue intervention for the simulator (C-4 fix: thread-safe access)
     key = f"{scenario_id}:{req.branch_id}"
-    await add_pending_intervention(key, req.text.strip())
+    await add_pending_intervention(key, pending_text, metadata=effect_metadata)
     pending_count = await get_pending_intervention_count(key)
     queued_ahead = max(0, pending_count - 1)
 
@@ -362,7 +462,7 @@ async def intervene(
         "type": "intervention_applied",
         "data": {
             "branch_id": req.branch_id,
-            "text": req.text.strip(),
+            "text": visible_text,
             "round": current_round,
             "intervention_id": log_id,
             "pending_count": pending_count,
@@ -465,9 +565,14 @@ async def intervene_retrospective(
         new_branch_id = new_branch.id
         log_id = log.id
 
-    # Queue intervention on the new branch (C-4 fix: thread-safe access)
+    # Queue intervention on the new branch (C-4 fix: thread-safe access).
+    # Attach intervention_log_id so the simulator can persist the effect receipt.
+    retro_metadata: dict = {
+        "intervention_log_id": log_id,
+        "raw_user_input": req.text.strip(),
+    }
     key = f"{scenario_id}:{new_branch_id}"
-    await add_pending_intervention(key, req.text.strip())
+    await add_pending_intervention(key, req.text.strip(), metadata=retro_metadata)
 
     # H-4 fix: Trigger background simulation for the new retrospective branch
     from app.api.helpers import run_sim_background, schedule_background_task
@@ -512,9 +617,10 @@ async def intervene_batch(
     # Validate ALL branches first (atomic: all-or-nothing)
     results = []
     use_persisted_queue = _pending_intervention_db_path() is not None
-    memory_queue_entries: list[tuple[str, str]] = []
+    memory_queue_entries: list[tuple[str, str, dict | None]] = []
     with Session(engine) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
+        scenario_language = _scenario_runtime_language(scenario)
         if scenario.status not in (ScenarioStatus.SIMULATING, ScenarioStatus.NARRATING):
             raise api_error(
                 400,
@@ -566,18 +672,31 @@ async def intervene_batch(
                 branch=branch,
                 current_round=current_round,
                 req=item,
+                language=scenario_language,
             )
             if next_gameplay_state is not None:
                 scenario.gameplay_state_json = next_gameplay_state
+
+            pending_text, pending_metadata = _build_pending_intervention_payload(
+                item,
+                branch,
+                language=scenario_language,
+            )
+            visible_text = _effect_raw_user_input(item.text.strip(), pending_metadata)
 
             log = InterventionLog(
                 scenario_id=scenario_id,
                 branch_id=item.branch_id,
                 round_number=current_round,
-                user_input=item.text.strip(),
+                user_input=visible_text,
             )
             session.add(log)
             session.flush()  # get log.id
+
+            # Attach intervention_log_id so the simulator can persist effect receipts.
+            effect_metadata: dict = dict(pending_metadata or {})
+            effect_metadata["intervention_log_id"] = log.id
+            effect_metadata["raw_user_input"] = visible_text
 
             key = f"{scenario_id}:{item.branch_id}"
             if use_persisted_queue:
@@ -585,23 +704,24 @@ async def intervene_batch(
                     PendingIntervention(
                         scenario_id=scenario_id,
                         branch_id=item.branch_id,
-                        user_input=item.text.strip(),
+                        user_input=pending_text,
+                        metadata_json=_encode_metadata(effect_metadata),
                     )
                 )
             else:
-                memory_queue_entries.append((key, item.text.strip()))
+                memory_queue_entries.append((key, pending_text, effect_metadata))
 
             results.append({
                 "branch_id": item.branch_id,
-                "text": item.text.strip(),
+                "text": visible_text,
                 "round": current_round,
                 "intervention_id": log.id,
             })
         session.commit()
 
     if not use_persisted_queue:
-        for key, text in memory_queue_entries:
-            await add_pending_intervention(key, text)
+        for key, text, metadata in memory_queue_entries:
+            await add_pending_intervention(key, text, metadata=metadata)
 
     # Broadcast batch event
     from app.api.ws import ws_manager

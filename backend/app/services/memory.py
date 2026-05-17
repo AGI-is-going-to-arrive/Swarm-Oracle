@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from app.config import settings
 from app.services.lang_detect import get_language_directive
@@ -59,6 +60,48 @@ _COMPRESS_PRIORITY_KEYWORDS = (
 
 def _is_chinese(language: str) -> bool:
     return language == "Chinese"
+
+
+def _resolve_gameplay_card_label(card_id: str, language: str) -> str:
+    try:
+        from app.services.gameplay_contract import load_gameplay_contract
+
+        contract = load_gameplay_contract()
+        for card in contract.get("cards", []):
+            if not isinstance(card, dict) or card.get("id") != card_id:
+                continue
+            labels = card.get("labels", {})
+            if not isinstance(labels, dict):
+                return ""
+            key = "zh" if _is_chinese(language) else "en"
+            fallback_key = "en" if key == "zh" else "zh"
+            return str(labels.get(key) or labels.get(fallback_key) or "").strip()
+    except Exception:
+        logger.debug("Failed to resolve gameplay card label for %s", card_id, exc_info=True)
+    return ""
+
+
+def _format_intervention_card_line(
+    intervention_metadata: dict[str, Any] | None,
+    language: str,
+) -> str:
+    if not isinstance(intervention_metadata, dict):
+        return ""
+    raw_card_id = intervention_metadata.get("card_id")
+    if not isinstance(raw_card_id, str) or not raw_card_id.strip():
+        return ""
+    card_id = sanitize_untrusted_text(raw_card_id, max_chars=80)
+    raw_label = intervention_metadata.get("card_label")
+    card_label = (
+        sanitize_untrusted_text(raw_label, max_chars=120)
+        if isinstance(raw_label, str) and raw_label.strip()
+        else _resolve_gameplay_card_label(card_id, language)
+    )
+    if not card_label:
+        return ""
+    if _is_chinese(language):
+        return f"玩法卡：{card_label}"
+    return f"Gameplay card: {card_label}"
 
 
 def _build_compress_prompt(
@@ -436,6 +479,7 @@ def _build_crowd_context(
     *,
     conversation_label: str = "刚才的对话",
     intervention_text: str = "",
+    intervention_metadata: dict[str, Any] | None = None,
     language: str = "Chinese",
     web_context_block: str = "",
     worldline_context: str = "",
@@ -460,7 +504,10 @@ def _build_crowd_context(
     topic_block = format_untrusted_text_block(copy["topic_label"], current_topic, max_chars=2000)
 
     if intervention_text:
+        card_line = _format_intervention_card_line(intervention_metadata, language)
+        card_block = f"\n{card_line}" if card_line else ""
         intervention_block = f"""\n\n{copy["intervention_heading"]}
+{card_block}
 {format_untrusted_text_block(copy["intervention_label"], intervention_text, max_chars=1200)}
 {copy["intervention_note_crowd"]}"""
         intervention_instruction = copy["intervention_instruction_crowd"]
@@ -600,6 +647,7 @@ def build_agent_context(
     tier: str = "",
     shared_briefing: str = "",
     intervention_text: str = "",
+    intervention_metadata: dict[str, Any] | None = None,
     language: str = "Chinese",
     web_context_block: str = "",
     worldline_context: str = "",
@@ -630,6 +678,7 @@ def build_agent_context(
             conversation_section,
             conversation_label=copy["shared_label"] if shared_briefing else copy["dialogue_label"],
             intervention_text=intervention_text,
+            intervention_metadata=intervention_metadata,
             language=language,
             web_context_block=web_context_block,
             worldline_context=worldline_context,
@@ -647,7 +696,10 @@ def build_agent_context(
     topic_block = format_untrusted_text_block(copy["topic_label"], current_topic, max_chars=2000)
 
     if intervention_text:
+        card_line = _format_intervention_card_line(intervention_metadata, language)
+        card_block = f"\n{card_line}" if card_line else ""
         intervention_block = f"""\n\n{copy["intervention_heading"]}
+{card_block}
 {format_untrusted_text_block(copy["intervention_label"], intervention_text, max_chars=1200)}
 {copy["intervention_note_full"]}"""
         intervention_instruction = copy["intervention_instruction_full"]

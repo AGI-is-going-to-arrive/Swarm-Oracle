@@ -1,8 +1,9 @@
-import type { GameplayProfileId } from '../components/gameplayCards';
+import { resolveGameplayProfileId } from './gameplayProfileSummary';
 import {
   type ScenarioRuntimePresetId,
   normalizeScenarioRuntimePreset,
 } from './runtimePreset';
+import type { GameplayProfileId } from './themeRegistry';
 
 export interface SharedChallengePayload {
   question: string;
@@ -28,8 +29,8 @@ export function buildSharedChallengeSearch(payload: SharedChallengePayload): str
   params.set('agents', String(payload.numAgents));
   params.set('mode', payload.mode);
   params.set('viz', payload.visualizationEnabled ? '1' : '0');
-  if (payload.profileId) {
-    params.set('profile', payload.profileId);
+  if (payload.profileId != null) {
+    params.set('profile', resolveGameplayProfileId(payload.profileId));
   }
   if (payload.runtimePreset) {
     params.set('preset', payload.runtimePreset);
@@ -65,13 +66,15 @@ export function readSharedChallengePayload(
     return null;
   }
 
+  const profileParam = params.get('profile');
+
   return {
     question,
     rounds,
     numAgents,
     mode,
     visualizationEnabled: normalizeBoolean(params.get('viz')),
-    profileId: (params.get('profile')?.trim() as GameplayProfileId | null) || null,
+    profileId: profileParam == null ? null : resolveGameplayProfileId(profileParam),
     runtimePreset: runtimePreset ? normalizeScenarioRuntimePreset(runtimePreset) : null,
   };
 }

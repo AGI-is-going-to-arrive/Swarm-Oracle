@@ -54,7 +54,7 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
           event.preventDefault();
           last.focus();
         }
-      } else if (active2 === last) {
+      } else if (active2 === last || !container.contains(active2)) {
         event.preventDefault();
         first.focus();
       }

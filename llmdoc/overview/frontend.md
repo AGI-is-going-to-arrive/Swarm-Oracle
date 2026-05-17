@@ -31,7 +31,7 @@
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择、PDF document upload tab，以及 capability-gated Agent 备份工具 |
 | IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
-| SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、capture |
+| SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、只读干预回执、capture |
 | ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel、分支级 question answer、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | WorkbenchView | `frontend/src/pages/WorkbenchView.tsx` | 独立图谱工作台；支持 `graph / split / kg` 三种 view，保留 URL 里的 analysis branch，并提供返回结果页链接 |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
@@ -192,6 +192,9 @@
 | `scenarioDirectorState.ts` | `frontend/src/lib/scenarioDirectorState.ts` | director_state 映射 |
 | `predictionBetting.ts` | `frontend/src/lib/predictionBetting.ts` | 结构化押注 helper |
 | `gameplayContract.ts` | `frontend/src/lib/gameplayContract.ts` | 共享玩法契约消费层 |
+| `GameplayCardsModal.tsx` | `frontend/src/components/GameplayCardsModal.tsx` | 玩法卡弹窗；推荐卡、分组折叠、后端 contract payload、focus trap 与 disclosure ARIA |
+| `PredictionModal.tsx` | `frontend/src/components/PredictionModal.tsx` | 结构化预测弹窗；串行提交、branch 晚到兜底、高级题材回响 disclosure 与 focus trap |
+| `InterventionReceiptCard.tsx` | `frontend/src/components/InterventionReceiptCard.tsx` | 只读干预效果回执；读取 persisted effects，不展示内部 log id |
 | `roundtableSelection.ts` | `frontend/src/lib/roundtableSelection.ts` | `trait_mix / fault_line_first / witness_augmented` 选择辅助与测试入口 |
 | `endingRoomReplayAutomation.js` | `frontend/src/lib/endingRoomReplayAutomation.js` | ending-room replay URL 判定 helper；当前识别 `roomReplay / roomShare / roomLocal`，并复用 live modal / readonly UI 判定；replay action 文案兼容 `Save copy / 保存副本` 与 `Import run / 导入运行` |
 | `roundtableReplayAutomation.js` | `frontend/src/lib/roundtableReplayAutomation.js` | roundtable live / readonly replay automation payload 判定 helper |
@@ -218,6 +221,7 @@
 | `e2e-capability-matrix.mjs` | `frontend/scripts/e2e-capability-matrix.mjs` | graph/playability capability matrix；当前覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route，fixture payload 也包含 `agent_conversation / kg_explorer / replay_trace`。`ReplayView` 的 disabled 路径现在会落显式 unavailable surface，不再回首页；如果脚本还按旧 redirect 口径断言，先同步脚本再跑 |
 | `e2e-ws-contract-suite.mjs` | `frontend/scripts/e2e-ws-contract-suite.mjs` | WS 契约诊断脚本；当前覆盖 `scenario / debate / ending-room` 的首帧 auth、`4001 / 4404` 非重连、`1006` 可重连、auth timeout、oversize auth frame 和 pending-auth limit |
 | `e2e-result-share-fixture.mjs` | `frontend/scripts/e2e-result-share-fixture.mjs` | ResultView + ShareModal fixture browser 回归；脚本 stub 后端 scenario/branch/story/social/capability JSON，检查真实分支渲染、分享弹窗、预测卡片、social endpoint、控制台/page/request 错误和横向溢出。`full` 默认跑 desktop + mobile Chromium |
+| `e2e-gameplay-cards-modal.mjs` / `e2e-prediction-modal.mjs` / `e2e-intervention-receipt.mjs` | `frontend/scripts/` | gameplay surface fixture E2E；默认用 `page.route()` stub 后端，`SWARM_E2E_MODE=live` 时才走 live backend |
 | `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
 | `PipelineStepper.tsx` | `frontend/src/components/PipelineStepper.tsx` | `/sim/:id` 与 `/result/:id` 的 fixed-bottom pipeline progressbar；error 状态下 `aria-valuenow` 会钳到有效范围 |
 | `AgentPanel.tsx` | `frontend/src/components/AgentPanel.tsx` | 主推演右侧 Agent 列表与实时发言；筛选某个 Agent 时，会按世界线分组展示该 Agent 的发言，并在每组内按 round 排序 |
@@ -316,7 +320,10 @@
   - 提交给 backend 的 structured prediction text 仍按 500 字符预算；textarea 会先扣掉下注元数据占用的长度，超限时显示本地化错误
   - 对应的 `predict-late-branches` fixture 当前会先采 `before` 工件，再放出 late branch 事件；`before` 态应保持 `ending_tone`，`after` 态才切到 `branch_winner`
   - CSS 当前已收口到单滚动容器、`100dvh` / safe-area、移动端 44px footer control、`prefers-reduced-motion` 和 forced-colors fallback；OKLCH 颜色仍带 sRGB fallback
-- `GameplayCardsModal` 的 directive textarea 只在桌面 fine pointer 环境自动聚焦；手机和粗指针设备不会自动弹出键盘。
+  - 预测提交按“prediction API -> 本地 bet meta -> gameplay-state 持久化回调”串行；最后一步失败时弹窗保持打开，重试复用 pending meta，不重复提交 prediction。
+  - `profile_resonance` 默认藏在高级选项里；disclosure 展开时才挂载内容，并只在目标 DOM 存在时输出 `aria-controls`。
+- `GameplayCardsModal` 当前先展示 profile/局势驱动的 3 张推荐卡，再把剩余卡按 4 个分组折叠展示；分组按钮使用 `aria-expanded`，只在展开且 region 存在时输出 `aria-controls`。directive textarea 只在桌面 fine pointer 环境自动聚焦；手机和粗指针设备不会自动弹出键盘。
+- `InterventionReceiptCard` 当前在 completed SimulationView 中只读展示已持久化的 intervention effects；它读取 `/api/scenario/{id}/intervention-effects`，按 `created_at` 防御性倒序展示，有 loading/error/empty 折叠态，不显示内部 `intervention_log_id`。
 - `endingRoomStore` 当前会在 committed turn、room hydrate、thread hydrate 时清掉 stale draft；迟到的 `turn_start / turn_delta` 不再把 ghost bubble 重新挂回当前 transcript。
 - `endingRoomStore` 当前把 `snapshot / result / thread hydrate + commitTurn` 作为 authority；`pendingDrafts` 只是流式草稿缓存。recoverable `turn_error` 只清 draft，不会把整个 room 升成 fatal error。
 - `endingRoomStore.loadRoom` 当前在 result 加载失败时不再把整个 room 标记为 error；room 仍可正常使用，result 会在下次 WS 事件或手动刷新时重试。
@@ -649,7 +656,9 @@
 - graph-viz 相关构建回归当前也会检查共享 `vendor` chunk，并按 modern / legacy 两套 chunk 名一起核对 `vendor / phaser / capture-html / capture-gif / g6-vendor / i18n-vendor / radix-vendor / dnd-vendor / icon-vendor / pretext`，不再额外要求独立的 `flow-vendor`。
 - 关键页面样式当前已补一层 sRGB / rgba fallback：
   - 全局 token 在 `index.css` 里先声明 fallback，再用 `oklch()` / `color-mix()` 覆盖
-  - `SimulationView`、`ResultView`、`WorldlineRoundtableView` 的高流量表面已补关键 fallback
+  - `SimulationView`、`ResultView`、`WorldlineRoundtableView`、`GameplayCardsModal`、`PredictionModal`、`InterventionReceiptCard` 的高流量表面已补关键 fallback
+  - gameplay / prediction / receipt 相关 CSS 会在 `prefers-reduced-motion` 下禁用入口、hover 或 slider thumb transform，并在 forced-colors 下显式区分 selected、recommended、disabled 和 silent confidence 状态
+  - 玩法卡说明、预测摘要和 receipt agent 名等长文本有 wrap 或 ellipsis containment，避免移动端横向溢出
   - 目的是让旧 Safari / Firefox 在不支持现代颜色函数时仍保持可读
 - 字体当前通过 `src/fonts.css` 和 `public/fonts/*.woff2` 本地提供：
   - `index.html` 不再 preconnect 或加载 Google Fonts

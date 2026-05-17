@@ -2,9 +2,10 @@
    SwarmOracle — PredictionModal (P5-B)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { submitPrediction } from '../api/client';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { createCompatUuid } from '../lib/compatUuid';
 import { getDirectorIdentity, updateDirectorName } from '../lib/directorIdentity';
@@ -81,6 +82,7 @@ export default function PredictionModal({
   const directorIdentity = getDirectorIdentity();
   const [text, setText] = useState('');
   const [betKind, setBetKind] = useState<StructuredBetKind>('branch_winner');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const branchOptions = getStructuredBetOptions(branches);
   const committedBranchId = initialMeta?.commitment.branchId ?? '';
   const defaultTargetBranchId =
@@ -97,7 +99,14 @@ export default function PredictionModal({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const submittedPredictionRef = useRef<{ pendingMeta: ScenarioMeta } | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+  const subtitleId = useId();
+  const advancedSectionId = useId();
   const scrollFade = useScrollFade(bodyRef);
+  useFocusTrap(dialogRef, true);
   const shouldAutoFocusText = (() => {
     if (typeof window === 'undefined') return false;
     if (window.innerWidth <= 720) return false;
@@ -108,8 +117,11 @@ export default function PredictionModal({
   })();
 
   useEffect(() => {
-    if (!shouldAutoFocusText) return;
-    inputRef.current?.focus();
+    if (shouldAutoFocusText) {
+      inputRef.current?.focus();
+      return;
+    }
+    closeButtonRef.current?.focus();
   }, [shouldAutoFocusText]);
 
   // Cleanup auto-close timer on unmount
@@ -125,10 +137,14 @@ export default function PredictionModal({
     onClose();
   }, [status, onClose]);
 
-  // Close on Escape key (guarded)
+  // Close on Escape key (only when this dialog is topmost — guarded against background dispatch).
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClose();
+      if (e.key !== 'Escape') return;
+      const overlays = document.querySelectorAll<HTMLElement>('[data-modal-overlay="true"]');
+      const topmost = overlays[overlays.length - 1];
+      if (topmost && topmost !== dialogRef.current?.parentElement) return;
+      handleClose();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
@@ -244,36 +260,55 @@ export default function PredictionModal({
       return;
     }
 
-    try {
-      const trimmedName = userName.trim();
-      await submitPrediction(
-        scenarioId,
-        predictionText,
-        confidence,
-        trimmedName || undefined,
-        directorIdentity.userId,
-      );
-      if (trimmedName) {
-        updateDirectorName(trimmedName);
+    // Step 1: submitPrediction (idempotent retry — skip if already submitted but persist failed).
+    let nextMeta: ScenarioMeta;
+    if (submittedPredictionRef.current) {
+      nextMeta = submittedPredictionRef.current.pendingMeta;
+    } else {
+      try {
+        const trimmedName = userName.trim();
+        await submitPrediction(
+          scenarioId,
+          predictionText,
+          confidence,
+          trimmedName || undefined,
+          directorIdentity.userId,
+        );
+        if (trimmedName) {
+          updateDirectorName(trimmedName);
+        }
+        // Step 2: local placeBet
+        nextMeta = placeBet(scenarioId, {
+          betId: createCompatUuid(),
+          kind: effectiveBetKind,
+          targetId: structuredTargetId,
+          targetLabel: structuredTargetLabel,
+          confidence,
+          userName: userName.trim() || undefined,
+          placedAtRound: currentRound,
+          placedAt: new Date().toISOString(),
+          resolved: false,
+        });
+        submittedPredictionRef.current = { pendingMeta: nextMeta };
+      } catch (err) {
+        setStatus('error');
+        setErrorMsg(getLocalizedApiErrorMessage(err, t, t('prediction.error')));
+        return;
       }
-      const nextMeta = placeBet(scenarioId, {
-        betId: createCompatUuid(),
-        kind: effectiveBetKind,
-        targetId: structuredTargetId,
-        targetLabel: structuredTargetLabel,
-        confidence,
-        userName: userName.trim() || undefined,
-        placedAtRound: currentRound,
-        placedAt: new Date().toISOString(),
-        resolved: false,
-      });
+    }
+
+    // Step 3: await gameplay-state persistence — surface specific error, keep modal open.
+    try {
       await onPlacedBet?.(nextMeta);
-      setStatus('success');
-      closeTimerRef.current = setTimeout(() => onClose(), 1200);
     } catch (err) {
       setStatus('error');
-      setErrorMsg(getLocalizedApiErrorMessage(err, t, t('prediction.error')));
+      setErrorMsg(getLocalizedApiErrorMessage(err, t, t('prediction.error_persistence')));
+      return;
     }
+
+    submittedPredictionRef.current = null;
+    setStatus('success');
+    closeTimerRef.current = setTimeout(() => onClose(), 1200);
   };
 
   useEffect(() => {
@@ -309,11 +344,22 @@ export default function PredictionModal({
   ].filter(Boolean).join(' ');
 
   return (
-    <div className="modal-overlay prediction-modal-overlay" onClick={(e) => e.target === e.currentTarget && handleClose()}>
-      <div className={scrollCls}>
+    <div
+      className="modal-overlay prediction-modal-overlay"
+      data-modal-overlay="true"
+      onClick={(e) => e.target === e.currentTarget && handleClose()}
+    >
+      <div
+        ref={dialogRef}
+        className={scrollCls}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={subtitleId}
+      >
         <header className="modal-header">
-          <h2>{t('prediction.title')}</h2>
-          <p className="modal-subtitle">{t('prediction.subtitle')}</p>
+          <h2 id={titleId}>{t('prediction.title')}</h2>
+          <p id={subtitleId} className="modal-subtitle">{t('prediction.subtitle')}</p>
         </header>
 
         <div className="modal-body" ref={bodyRef}>
@@ -366,8 +412,37 @@ export default function PredictionModal({
             >
               <option value="branch_winner">{getStructuredBetKindLabel('branch_winner', t)}</option>
               <option value="ending_tone">{getStructuredBetKindLabel('ending_tone', t)}</option>
-              <option value="profile_resonance">{getStructuredBetKindLabel('profile_resonance', t)}</option>
+              {(advancedOpen || effectiveBetKind === 'profile_resonance') && (
+                <option value="profile_resonance">{getStructuredBetKindLabel('profile_resonance', t)}</option>
+              )}
             </select>
+          </div>
+
+          <div className="pred-advanced">
+            <button
+              type="button"
+              className="pred-advanced__toggle"
+              aria-expanded={advancedOpen}
+              aria-controls={advancedOpen ? advancedSectionId : undefined}
+              onClick={() => setAdvancedOpen((prev) => !prev)}
+              disabled={isDisabled}
+            >
+              <span aria-hidden="true">{advancedOpen ? '▾' : '▸'}</span>
+              {' '}
+              {advancedOpen
+                ? t('prediction.hide_advanced')
+                : t('prediction.show_advanced')}
+            </button>
+            {advancedOpen && (
+              <div className="pred-advanced__body" id={advancedSectionId}>
+                <p className="pred-advanced__hint">{t('prediction.advanced_section_hint')}</p>
+                <p className="pred-advanced__caption">
+                  {t('prediction.advanced_section_label')}
+                  {' · '}
+                  {getStructuredBetKindLabel('profile_resonance', t)}
+                </p>
+              </div>
+            )}
           </div>
 
           {effectiveBetKind === 'branch_winner' && branchOptions.length > 0 && (
@@ -494,6 +569,7 @@ export default function PredictionModal({
 
         <footer className="modal-footer">
           <button
+            ref={closeButtonRef}
             className="btn btn-ghost"
             onClick={handleClose}
             disabled={status === 'submitting'}

@@ -133,17 +133,33 @@ const GAMEPLAY_BADGE_ASSET_PATHS = {
   betWinner: '/assets/ui/generated/badge_bet_winner.png',
 } as const;
 
-export function getGameplayProfileSummary(profileId: GameplayProfileId): GameplayProfileSummary {
-  return GAMEPLAY_PROFILE_SUMMARIES[profileId];
+function hasGameplayProfileSummary(profileId: string): profileId is GameplayProfileId {
+  return Object.prototype.hasOwnProperty.call(GAMEPLAY_PROFILE_SUMMARIES, profileId);
 }
 
-export function getGameplayProfileLabel(profileId: GameplayProfileId, isZh: boolean): string {
+export function resolveGameplayProfileId(
+  profileId: GameplayProfileId | string | null | undefined,
+): GameplayProfileId {
+  const normalized = typeof profileId === 'string' ? profileId.trim() : '';
+  return normalized && hasGameplayProfileSummary(normalized) ? normalized : 'generic';
+}
+
+export function getGameplayProfileSummary(
+  profileId: GameplayProfileId | string | null | undefined,
+): GameplayProfileSummary {
+  return GAMEPLAY_PROFILE_SUMMARIES[resolveGameplayProfileId(profileId)];
+}
+
+export function getGameplayProfileLabel(
+  profileId: GameplayProfileId | string | null | undefined,
+  isZh: boolean,
+): string {
   const profile = getGameplayProfileSummary(profileId);
   return isZh ? profile.labelZh : profile.labelEn;
 }
 
 export function getGameplayProfileSignatureHooks(
-  profileId: GameplayProfileId,
+  profileId: GameplayProfileId | string | null | undefined,
   isZh: boolean,
 ): string[] {
   const profile = getGameplayProfileSummary(profileId);

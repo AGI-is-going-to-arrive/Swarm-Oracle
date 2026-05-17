@@ -165,6 +165,31 @@ describe('archiveSummary helpers', () => {
     expect(summary.bettingHit).toBe(false);
   });
 
+  it('matches ending tone archive bets by stable target id when labels are stale', () => {
+    const summary = buildArchiveSummary({
+      branches,
+      usages,
+      bets: [
+        {
+          betId: 'bet-tone-id',
+          kind: 'ending_tone',
+          targetId: 'balance',
+          targetLabel: 'legacy freeform label',
+          confidence: 0.65,
+          placedAtRound: 2,
+          placedAt: '2026-03-15T00:02:00Z',
+          resolved: false,
+        },
+      ],
+      keyMomentCount: 2,
+      isDailyChallenge: false,
+      profileId: 'governance',
+    });
+
+    expect(summary.dominantTone).toBe('balance');
+    expect(summary.bettingHit).toBe(true);
+  });
+
   it('rewards completed objectives and a successful branch commitment in archive grading', () => {
     const summary = buildArchiveSummary({
       branches,
@@ -208,6 +233,90 @@ describe('archiveSummary helpers', () => {
 
     expect(summary.counterplayCardCount).toBe(1);
     expect(summary.lastCounterplayCard).toBe('audit_reckoning');
+  });
+
+  it('returns null dominantTone when branch lacks tone-bearing keywords', () => {
+    const ambiguousBranches: BranchInfo[] = [
+      {
+        id: 'b-ambiguous',
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: '',
+        title: '日常运营',
+        summary: '',
+        story: '团队按部就班地推进着既定的工作流程，没有特别的事件发生。',
+        insight: '一切都在按计划进行。',
+        key_moments: [],
+        probability: 1,
+        status: 'COMPLETED',
+      },
+    ];
+
+    const summary = buildArchiveSummary({
+      branches: ambiguousBranches,
+      usages: [],
+      bets: [] as StructuredBetRecord[],
+      keyMomentCount: 0,
+      isDailyChallenge: false,
+      profileId: 'generic',
+    });
+
+    expect(summary.dominantTone).toBeNull();
+  });
+
+  it('returns null dominantTone when no branches are provided', () => {
+    const summary = buildArchiveSummary({
+      branches: [],
+      usages: [],
+      bets: [] as StructuredBetRecord[],
+      keyMomentCount: 0,
+      isDailyChallenge: false,
+      profileId: 'generic',
+    });
+
+    expect(summary.dominantBranchTitle).toBeNull();
+    expect(summary.dominantTone).toBeNull();
+  });
+
+  it('does not count ending_tone bets as hit when dominantTone cannot be inferred', () => {
+    const ambiguousBranches: BranchInfo[] = [
+      {
+        id: 'b-quiet',
+        parent_branch_id: null,
+        fork_round: 0,
+        fork_reason: '',
+        title: '常规推进',
+        summary: '',
+        story: '故事平稳推进，没有明显的方向倾向。',
+        insight: '保持现状。',
+        key_moments: [],
+        probability: 1,
+        status: 'COMPLETED',
+      },
+    ];
+
+    const summary = buildArchiveSummary({
+      branches: ambiguousBranches,
+      usages: [],
+      bets: [
+        {
+          betId: 'bet-tone-no-evidence',
+          kind: 'ending_tone',
+          targetId: 'order',
+          targetLabel: '秩序',
+          confidence: 0.5,
+          placedAtRound: 1,
+          placedAt: '2026-03-15T00:00:00Z',
+          resolved: false,
+        },
+      ],
+      keyMomentCount: 0,
+      isDailyChallenge: false,
+      profileId: 'generic',
+    });
+
+    expect(summary.dominantTone).toBeNull();
+    expect(summary.bettingHit).toBe(false);
   });
 
   it('returns localized director style labels', () => {

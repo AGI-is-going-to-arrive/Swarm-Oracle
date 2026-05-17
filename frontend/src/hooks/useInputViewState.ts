@@ -21,7 +21,8 @@ import {
   loadLlmProviderPolicy,
   saveLlmProviderPolicy,
 } from '../lib/llmProviderPolicy';
-import type { GameplayProfileId } from '../components/gameplayCards';
+import { resolveGameplayProfileId } from '../lib/gameplayProfileSummary';
+import type { GameplayProfileId } from '../lib/themeRegistry';
 import type {
   CampaignBadge,
   CampaignChallengeRotation,
@@ -55,7 +56,7 @@ function normalizeChallengeDefinition(
     questionEn: challenge.question_en ?? challenge.question,
     subtitleZh: challenge.subtitle_zh,
     subtitleEn: challenge.subtitle_en,
-    profileId: challenge.profile_id as GameplayProfileId,
+    profileId: resolveGameplayProfileId(challenge.profile_id),
     rounds: challenge.rounds,
     numAgents: challenge.num_agents,
     mode: challenge.mode,

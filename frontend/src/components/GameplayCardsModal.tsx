@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { intervene } from '../api/client';
 import { dispatchVizEvent } from '../game';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { getApiErrorCode, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import {
   applyCardUsage,
@@ -17,27 +18,22 @@ import { GAMEPLAY_PANEL_ASSET } from '../lib/themeRegistry';
 import {
   buildAgentsById,
   buildGameplayAutoDirective,
-  buildGameplayCardPrompt,
   getDefaultGameplayTargetBranch,
   getGameplayCardDefinition,
-  getGameplayBadgeSrc,
+  getGameplayCardDisplayModel,
   getGameplayCardLabel,
-  getGameplayCardDirectivePreview,
   getGameplayProfileDescription,
-  getGameplayProfileFrameSrc,
   getGameplayProfileLabel,
   getGameplayProfileTacticalState,
-  getGameplayProfileSignatureHooks,
   getScenarioSystemTrackState,
   getGameplaySignatureArcState,
-  getRecommendedGameplayCards,
   getSuggestedGameplayAgents,
   getSuggestedSourceBranchId,
   inferGameplayProfile,
   isCounterplayCard,
+  type GameplayCardGroupId,
   type GameplayCardId,
 } from './gameplayCards';
-import { CONTRACT_GAMEPLAY_CARD_DEFS } from '../lib/gameplayContract';
 import './InterventionModal.css';
 import './GameplayCardsModal.css';
 
@@ -58,6 +54,20 @@ interface Props {
   onClose: () => void;
   onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
 }
+
+const GROUP_ICON_KEYS: Record<GameplayCardGroupId, string> = {
+  role_play: 'gameplay.group_role_play_icon',
+  worldline_distort: 'gameplay.group_worldline_distort_icon',
+  crisis_dispatch: 'gameplay.group_crisis_dispatch_icon',
+  counter_cool: 'gameplay.group_counter_cool_icon',
+};
+
+const GROUP_TITLE_KEYS: Record<GameplayCardGroupId, string> = {
+  role_play: 'gameplay.group_role_play_title',
+  worldline_distort: 'gameplay.group_worldline_distort_title',
+  crisis_dispatch: 'gameplay.group_crisis_dispatch_title',
+  counter_cool: 'gameplay.group_counter_cool_title',
+};
 
 export default function GameplayCardsModal({
   scenarioId,
@@ -80,17 +90,17 @@ export default function GameplayCardsModal({
     [question, sceneTheme],
   );
   const [meta, setMeta] = useState<ScenarioMeta>(() => initialMeta ?? loadScenarioMeta(scenarioId));
-  const recommendedCards = useMemo(
-    () => getRecommendedGameplayCards(gameplayProfile.id, meta.cards.usageLog, meta.commitment),
+  const displayModel = useMemo(
+    () => getGameplayCardDisplayModel(gameplayProfile.id, {
+      usages: meta.cards.usageLog,
+      commitment: meta.commitment,
+    }),
     [gameplayProfile.id, meta.cards.usageLog, meta.commitment],
   );
-  const defaultCardId = useMemo(
-    () => (CONTRACT_GAMEPLAY_CARD_DEFS[0]?.id ?? 'civilization_debate') as GameplayCardId,
-    [],
-  );
-  const profileSignatureHooks = useMemo(
-    () => getGameplayProfileSignatureHooks(gameplayProfile.id, isZh),
-    [gameplayProfile.id, isZh],
+  const recommendedCards = displayModel.recommended;
+  const defaultCardId = useMemo<GameplayCardId>(
+    () => (recommendedCards[0] ?? displayModel.groups.flatMap((group) => group.cardIds)[0] ?? 'civilization_debate'),
+    [displayModel.groups, recommendedCards],
   );
   const signatureArcState = useMemo(
     () => getGameplaySignatureArcState(gameplayProfile.id, meta.cards.usageLog, isZh),
@@ -117,15 +127,15 @@ export default function GameplayCardsModal({
     },
     [activeBranches, meta.commitment.active, meta.commitment.branchId],
   );
-  const [cardId, setCardId] = useState<GameplayCardId>(recommendedCards[0] ?? defaultCardId);
+  const [cardId, setCardId] = useState<GameplayCardId>(defaultCardId);
   const [targetBranchIdOverride, setTargetBranchIdOverride] = useState<string | null>(defaultTargetBranchId);
-  const suggestedAgents = useMemo(
-    () => getSuggestedGameplayAgents(recommendedCards[0] ?? defaultCardId, agents, gameplayProfile.id),
-    [agents, defaultCardId, gameplayProfile.id, recommendedCards],
+  const initialSuggestion = useMemo(
+    () => getSuggestedGameplayAgents(defaultCardId, agents, gameplayProfile.id),
+    [agents, defaultCardId, gameplayProfile.id],
   );
-  const [primaryAgentIdOverride, setPrimaryAgentIdOverride] = useState<string | null>(suggestedAgents.primaryAgentId);
+  const [primaryAgentIdOverride, setPrimaryAgentIdOverride] = useState<string | null>(initialSuggestion.primaryAgentId);
   const [secondaryAgentIdOverride, setSecondaryAgentIdOverride] = useState<string | null>(
-    suggestedAgents.secondaryAgentId ?? agents[1]?.id ?? agents[0]?.id ?? '',
+    initialSuggestion.secondaryAgentId ?? agents[1]?.id ?? agents[0]?.id ?? '',
   );
   const [sourceBranchIdOverride, setSourceBranchIdOverride] = useState<string | null>(
     getSuggestedSourceBranchId(branches, defaultTargetBranchId, gameplayProfile.id),
@@ -134,8 +144,19 @@ export default function GameplayCardsModal({
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [queueNotice, setQueueNotice] = useState('');
+  const [expandedGroups, setExpandedGroups] = useState<Record<GameplayCardGroupId, boolean>>({
+    role_play: false,
+    worldline_distort: false,
+    crisis_dispatch: false,
+    counter_cool: false,
+  });
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+  const subtitleId = useId();
+  useFocusTrap(dialogRef, true);
   const shouldAutoFocusDirective = (() => {
     if (typeof window === 'undefined') return false;
     if (window.innerWidth <= 720) return false;
@@ -205,40 +226,14 @@ export default function GameplayCardsModal({
   const targetBranch = activeBranches.find((branch) => branch.id === targetBranchId) ?? activeBranches[0] ?? null;
   const sourceBranch = branches.find((branch) => branch.id === sourceBranchId) ?? null;
   const cardDef = getGameplayCardDefinition(cardId);
-  const profileFrameSrc = getGameplayProfileFrameSrc(gameplayProfile.id);
   const cardAvailability = canUseCard(meta, cardId, normalizedCurrentRound);
   const cardCooldownRemaining = getCardCooldownRemaining(meta, cardId, normalizedCurrentRound);
   const selectedCardLabel = isZh ? cardDef.labelZh : cardDef.labelEn;
   const waitingBranchLabel = t('gameplay.waiting_branches');
   const waitingAgentLabel = t('gameplay.waiting_agents');
   const waitingSourceLabel = t('gameplay.waiting_source_branch');
-  const directiveModeLabel = customDirectiveOverride
-    ? t('gameplay.directive_manual')
-    : t('gameplay.directive_auto');
   const submittingLabel = t('gameplay.submitting');
   const readOnlyLabel = t('gameplay.preview_only_cta');
-  const signatureArcProgressText = signatureArcState.completed
-    ? t('gameplay.signature_arc_completed', {
-      current: signatureArcState.totalSteps,
-      total: signatureArcState.totalSteps,
-    })
-    : t('gameplay.signature_arc_progress', {
-      current: signatureArcState.completedSteps,
-      total: signatureArcState.totalSteps,
-      next: signatureArcState.nextCardId
-        ? getGameplayCardLabel(signatureArcState.nextCardId, isZh)
-        : t('gameplay.signature_arc_free_pivot'),
-    });
-  const systemTrackSummary = t('gameplay.system_track_summary', {
-    riskLabel: systemTracks.riskLabel,
-    riskValue: systemTracks.riskValue,
-    resourceLabel: systemTracks.resourceLabel,
-    resourceValue: systemTracks.resourceValue,
-  });
-  const directorPointsLabel = t('gameplay.director_points');
-  const pressureLabel = t('gameplay.pressure_label');
-  const commitmentLabel = t('gameplay.committed_branch_label');
-  const tacticalLabel = t('gameplay.play_pattern_label');
   const previewStatusLabel = t('gameplay.preview_only_note');
   const availabilityLabel = readOnly
     ? previewStatusLabel
@@ -250,6 +245,55 @@ export default function GameplayCardsModal({
       )
       : t('gameplay.ready_note');
 
+  const lastAppliedUsage = useMemo(() => {
+    const usages = meta.cards.usageLog;
+    if (!usages.length) return null;
+    return usages
+      .filter((usage) => usage.round === normalizedCurrentRound)
+      .slice(-1)[0]
+      ?? null;
+  }, [meta.cards.usageLog, normalizedCurrentRound]);
+
+  const buildCardPreview = useCallback(
+    (selectedCardId: GameplayCardId): string => {
+      const card = getGameplayCardDefinition(selectedCardId);
+      const cardLabel = isZh ? card.labelZh : card.labelEn;
+      const suggestion = getSuggestedGameplayAgents(selectedCardId, agents, gameplayProfile.id);
+      const primaryName = selectedCardId === cardId
+        ? (primaryAgentId ? agentsById[primaryAgentId]?.name : '')
+        : (suggestion.primaryAgentId ? agentsById[suggestion.primaryAgentId]?.name : '');
+      const secondaryName = selectedCardId === cardId
+        ? (secondaryAgentId ? agentsById[secondaryAgentId]?.name : '')
+        : (suggestion.secondaryAgentId ? agentsById[suggestion.secondaryAgentId]?.name : '');
+      const fallbackPrimary = t('gameplay.card_preview_fallback_primary');
+      const fallbackTheme = t('gameplay.card_preview_fallback_theme');
+      const namesList = [primaryName, secondaryName].filter((name): name is string => Boolean(name && name.trim()));
+      const primaryDisplay = namesList.length > 0 ? namesList.join(isZh ? '、' : ' & ') : fallbackPrimary;
+      const themeDisplay = cardLabel || fallbackTheme;
+      return t('gameplay.card_preview_template', {
+        primary: primaryDisplay,
+        theme: themeDisplay,
+      });
+    },
+    [agents, agentsById, cardId, gameplayProfile.id, isZh, primaryAgentId, secondaryAgentId, t],
+  );
+
+  const buildWhyNow = useCallback(
+    (currentCardId: GameplayCardId): string => {
+      if (currentCardId === signatureArcState.nextCardId) {
+        return t('gameplay.card_why_now_signature');
+      }
+      if (recommendedCards.includes(currentCardId)) {
+        if (systemTracks.counterplayRecommended && isCounterplayCard(currentCardId)) {
+          return t('gameplay.card_why_now_counter');
+        }
+        return t('gameplay.card_why_now_recommended');
+      }
+      return t('gameplay.card_why_now_default');
+    },
+    [recommendedCards, signatureArcState.nextCardId, systemTracks.counterplayRecommended, t],
+  );
+
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setMeta(initialMeta ?? loadScenarioMeta(scenarioId));
@@ -259,10 +303,16 @@ export default function GameplayCardsModal({
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
-      setCardId((current) => recommendedCards.includes(current) ? current : (recommendedCards[0] ?? defaultCardId));
+      setCardId((current) => {
+        const allKnown = [
+          ...recommendedCards,
+          ...displayModel.groups.flatMap((group) => group.cardIds),
+        ];
+        return allKnown.includes(current) ? current : (recommendedCards[0] ?? defaultCardId);
+      });
     }, 0);
     return () => window.clearTimeout(timeoutId);
-  }, [defaultCardId, recommendedCards]);
+  }, [defaultCardId, displayModel.groups, recommendedCards]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -280,8 +330,11 @@ export default function GameplayCardsModal({
   }, [autoDirective]);
 
   useEffect(() => {
-    if (!shouldAutoFocusDirective) return;
-    inputRef.current?.focus();
+    if (shouldAutoFocusDirective) {
+      inputRef.current?.focus();
+      return;
+    }
+    closeButtonRef.current?.focus();
   }, [shouldAutoFocusDirective]);
 
   useEffect(() => {
@@ -356,7 +409,11 @@ export default function GameplayCardsModal({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') handleClose();
+      if (event.key !== 'Escape') return;
+      const overlays = document.querySelectorAll<HTMLElement>('[data-modal-overlay="true"]');
+      const topmost = overlays[overlays.length - 1];
+      if (topmost && topmost !== dialogRef.current?.parentElement) return;
+      handleClose();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
@@ -409,32 +466,15 @@ export default function GameplayCardsModal({
     setStatus('submitting');
     setErrorMsg('');
     setQueueNotice('');
-
-    const prompt = buildGameplayCardPrompt({
-      cardId,
-      question,
-      sceneTheme,
-      profileId: gameplayProfile.id,
-      targetBranchTitle: targetBranch.title,
-      sourceBranchTitle: sourceBranch?.title,
-      agentsById,
-      primaryAgentId,
-      secondaryAgentId,
-      customDirective,
-      signatureArcLabel: signatureArcState.label,
-      signatureArcProgress: signatureArcProgressText,
-      systemTrackSummary,
-      profileDoctrine: tacticalState.note,
-      isZh,
-    });
+    const directiveText = (customDirective.trim() || autoDirective).trim();
 
     try {
       const response = await intervene(scenarioId, {
         branch_id: targetBranch.id,
-        text: prompt,
+        text: directiveText,
         card_id: cardId,
         profile_id: gameplayProfile.id,
-        directive: customDirective,
+        directive: directiveText,
       });
 
       dispatchVizEvent('viz:event_anim', {
@@ -451,7 +491,7 @@ export default function GameplayCardsModal({
             branchId: targetBranch.id,
             branchTitle: targetBranch.title,
             round: normalizedCurrentRound,
-            directive: customDirective,
+            directive: directiveText,
             usedAt: new Date().toISOString(),
           });
       setMeta(nextMeta);
@@ -481,31 +521,123 @@ export default function GameplayCardsModal({
     }
   };
 
+  const renderCard = (currentCardId: GameplayCardId, options: { highlighted: boolean }) => {
+    const card = getGameplayCardDefinition(currentCardId);
+    const selected = currentCardId === cardId;
+    const counter = isCounterplayCard(currentCardId);
+    const cooldown = getCardCooldownRemaining(meta, currentCardId, normalizedCurrentRound);
+    const cardLabel = isZh ? card.labelZh : card.labelEn;
+    const cardDesc = isZh ? card.descriptionZh : card.descriptionEn;
+    const previewText = buildCardPreview(currentCardId);
+    const whyNowText = buildWhyNow(currentCardId);
+    return (
+      <button
+        key={currentCardId}
+        type="button"
+        className={`gameplay-card-v2 ${selected ? 'gameplay-card-v2--selected' : ''} ${options.highlighted ? 'gameplay-card-v2--recommended' : ''}`}
+        aria-pressed={selected}
+        onClick={() => setCardId(currentCardId)}
+        disabled={isDisabled}
+      >
+        <span className="gameplay-card-v2__head">
+          <span className="gameplay-card-v2__icon" aria-hidden="true">{card.icon}</span>
+          <span className="gameplay-card-v2__title">{cardLabel}</span>
+          {options.highlighted && (
+            <span className="gameplay-card-v2__badge gameplay-card-v2__badge--recommended">
+              {t('gameplay.recommended_label')}
+            </span>
+          )}
+          {counter && !options.highlighted && (
+            <span className="gameplay-card-v2__badge gameplay-card-v2__badge--counter">
+              {t('gameplay.counter_label')}
+            </span>
+          )}
+        </span>
+        <span className="gameplay-card-v2__desc">{cardDesc}</span>
+        <dl className="gameplay-card-v2__questions">
+          <div className="gameplay-card-v2__row">
+            <dt>{t('gameplay.card_question_action')}</dt>
+            <dd>{previewText}</dd>
+          </div>
+          <div className="gameplay-card-v2__row">
+            <dt>{t('gameplay.card_question_affected')}</dt>
+            <dd>
+              {card.requiresPrimaryAgent || card.requiresSecondaryAgent
+                ? t('gameplay.card_affected_targeted')
+                : t('gameplay.card_affected_branch')}
+            </dd>
+          </div>
+          <div className="gameplay-card-v2__row">
+            <dt>{t('gameplay.card_question_next_round')}</dt>
+            <dd>{cardDesc}</dd>
+          </div>
+          <div className="gameplay-card-v2__row">
+            <dt>{t('gameplay.card_question_why_now')}</dt>
+            <dd>{whyNowText}</dd>
+          </div>
+        </dl>
+        <span className="gameplay-card-v2__meta">
+          <span>{t('gameplay.cost_one')}</span>
+          {cooldown > 0 && (
+            <span>{t('gameplay.cooldown_remaining', { count: cooldown })}</span>
+          )}
+        </span>
+      </button>
+    );
+  };
+
+  const toggleGroup = (groupId: GameplayCardGroupId) => {
+    setExpandedGroups((current) => ({ ...current, [groupId]: !current[groupId] }));
+  };
+
+  const submitButtonLabel = readOnly
+    ? readOnlyLabel
+    : isDisabled && status === 'submitting'
+      ? submittingLabel
+      : t('gameplay.submit_action');
+
   return (
-    <div className="modal-overlay" onClick={(event) => event.target === event.currentTarget && handleClose()}>
-      <div className="modal-content gameplay-modal">
-        <header className="modal-header">
+    <div
+      className="modal-overlay"
+      data-modal-overlay="true"
+      onClick={(event) => event.target === event.currentTarget && handleClose()}
+    >
+      <div
+        ref={dialogRef}
+        className="modal-content gameplay-modal gameplay-modal-v2"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={subtitleId}
+      >
+        <header className="modal-header gameplay-modal-v2__header">
           <img
             className="gameplay-modal__art"
             src={GAMEPLAY_PANEL_ASSET}
             alt={t('gameplay.crest_alt')}
           />
-          <h2>{t('gameplay.title')}</h2>
-          <p className="modal-subtitle">{t('gameplay.subtitle')}</p>
+          <h2 id={titleId}>{t('gameplay.title')}</h2>
+          <p id={subtitleId} className="modal-subtitle">{t('gameplay.subtitle')}</p>
           <p className="gameplay-modal__profile">
             {t('gameplay.profile_label')}:
             <strong>{getGameplayProfileLabel(gameplayProfile.id, isZh)}</strong>
             {' · '}
             {getGameplayProfileDescription(gameplayProfile.id, isZh)}
           </p>
-          <div className="gameplay-modal__hooks" aria-label={t('gameplay.scenario_hooks_aria')}>
-            {profileSignatureHooks.map((hook) => (
-              <span key={hook} className="gameplay-modal__hook">{hook}</span>
-            ))}
-          </div>
+          {lastAppliedUsage && (
+            <p
+              className="gameplay-modal-v2__active-marker"
+              role="status"
+              aria-label={t('gameplay.active_marker_aria')}
+            >
+              {t('gameplay.active_marker', {
+                label: getGameplayCardLabel(lastAppliedUsage.cardId as GameplayCardId, isZh),
+              })}
+            </p>
+          )}
           <div className="gameplay-modal__stats" aria-label={t('gameplay.director_state_aria')}>
             <div className="gameplay-modal__stat">
-              <span>{directorPointsLabel}</span>
+              <span>{t('gameplay.director_points')}</span>
               <strong>{meta.director.remainingPoints}/{meta.director.maxPoints}</strong>
             </div>
             <div className="gameplay-modal__stat">
@@ -517,28 +649,13 @@ export default function GameplayCardsModal({
               <strong>{systemTracks.resourceValue}/6</strong>
             </div>
             <div className="gameplay-modal__stat">
-              <span>{pressureLabel}</span>
+              <span>{t('gameplay.pressure_label')}</span>
               <strong>{systemTracks.pressure}</strong>
             </div>
           </div>
-          <div className="gameplay-modal__preview-stack">
-            <section className="gameplay-modal__preview-note">
-              <strong>{t('gameplay.signature_arc_title')}</strong>
-              <span>{signatureArcState.sequenceLabels.join(' → ')}</span>
-              <span>{signatureArcProgressText}</span>
-            </section>
-            <section className="gameplay-modal__preview-note gameplay-modal__preview-note--secondary">
-              <strong>{tacticalLabel}</strong>
-              <span>{tacticalState.label}</span>
-              <span>{tacticalState.note}</span>
-              <span>
-                {commitmentLabel}
-                {': '}
-                <strong>{meta.commitment.branchTitle ?? '—'}</strong>
-              </span>
-            </section>
-          </div>
-          <div className={`gameplay-modal__availability ${cardAvailability.ok && !readOnly ? 'gameplay-modal__availability--ready' : ''}`}>
+          <div
+            className={`gameplay-modal__availability ${cardAvailability.ok && !readOnly ? 'gameplay-modal__availability--ready' : ''}`}
+          >
             <strong>{t('gameplay.card_status_title')}</strong>
             <span>{availabilityLabel}</span>
           </div>
@@ -549,231 +666,184 @@ export default function GameplayCardsModal({
           )}
         </header>
 
-        <div className="modal-body gameplay-modal__body">
-          <div className="gameplay-card-grid">
-            {CONTRACT_GAMEPLAY_CARD_DEFS.map((card) => {
-              const nextCardId = signatureArcState.nextCardId as GameplayCardId | null;
-              const currentCardId = card.id as GameplayCardId;
-              const selected = currentCardId === cardId;
-              const recommended = currentCardId === nextCardId
-                || recommendedCards.slice(0, 3).includes(currentCardId);
-              return (
-                <button
-                  key={currentCardId}
-                  className={`gameplay-card gameplay-card--profile-${gameplayProfile.id} ${selected ? 'gameplay-card--active' : 'gameplay-card--inactive'}`}
-                  type="button"
-                  aria-pressed={selected}
-                  onClick={() => setCardId(currentCardId)}
-                  disabled={isDisabled}
-                >
-                  <img
-                    className="gameplay-card__frame"
-                    src={profileFrameSrc}
-                    alt=""
-                    aria-hidden="true"
-                  />
-                  <span className="gameplay-card__content">
-                    <span className="gameplay-card__head">
-                      <span className="gameplay-card__icon">{card.icon}</span>
-                      <span className="gameplay-card__label">{isZh ? card.labelZh : card.labelEn}</span>
-                      <span className="gameplay-card__badge-stack">
-                        {recommended && (
-                          <span className="gameplay-card__badge gameplay-card__badge--recommended">
-                            <img src={getGameplayBadgeSrc('recommended')} alt="" aria-hidden="true" />
-                            <span>
-                              {currentCardId === nextCardId
-                                ? t('gameplay.next_label')
-                                : t('gameplay.recommended_label')}
-                            </span>
-                          </span>
-                        )}
-                        {isCounterplayCard(currentCardId) && (
-                          <span className="gameplay-card__badge gameplay-card__badge--counter">
-                            <span>{t('gameplay.counter_label')}</span>
-                          </span>
-                        )}
-                      </span>
-                    </span>
-                    <span className="gameplay-card__desc">
-                      {isZh ? card.descriptionZh : card.descriptionEn}
-                    </span>
-                    <span className="gameplay-card__flavor">
-                      {getGameplayCardDirectivePreview(gameplayProfile.id, currentCardId, isZh)}
-                    </span>
-                    <span className="gameplay-card__meta">
-                      {t('gameplay.cost_one')}
-                      {getCardCooldownRemaining(meta, currentCardId, normalizedCurrentRound) > 0 && (
-                        <>
-                          {' · '}
-                          {t('gameplay.cooldown_remaining', {
-                            count: getCardCooldownRemaining(meta, currentCardId, normalizedCurrentRound),
-                          })}
-                        </>
-                      )}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <section className="gameplay-modal__selection" aria-live="polite">
-            <div className="gameplay-modal__selection-head">
-              <div className="gameplay-modal__selection-copy">
-                <span className="gameplay-modal__selection-kicker">
-                  {t('gameplay.selected_card_label')}
-                </span>
-                <strong>{selectedCardLabel}</strong>
-              </div>
-              <span
-                className={`gameplay-modal__selection-state ${cardAvailability.ok && !readOnly ? 'gameplay-modal__selection-state--ready' : ''}`}
-              >
-                {readOnly ? readOnlyLabel : availabilityLabel}
-              </span>
+        <div className="modal-body gameplay-modal-v2__body">
+          <section
+            className="gameplay-modal-v2__section gameplay-modal-v2__section--primary"
+            aria-labelledby="gameplay-recommended-heading"
+          >
+            <div className="gameplay-modal-v2__section-head">
+              <h3 id="gameplay-recommended-heading">{t('gameplay.recommended_section_title')}</h3>
+              <p>{t('gameplay.recommended_section_subtitle')}</p>
             </div>
-            <div className="gameplay-modal__selection-grid">
-              <div className="gameplay-modal__selection-item">
-                <span>{t('gameplay.target_branch')}</span>
-                <strong>{targetBranch?.title ?? waitingBranchLabel}</strong>
-              </div>
-              <div className="gameplay-modal__selection-item">
-                <span>{directorPointsLabel}</span>
-                <strong>{meta.director.remainingPoints}/{meta.director.maxPoints}</strong>
-              </div>
-              {requiresPrimaryAgent && (
-                <div className="gameplay-modal__selection-item">
-                  <span>{t('gameplay.primary_agent')}</span>
-                  <strong>{primaryAgentId ? (agentsById[primaryAgentId]?.name ?? waitingAgentLabel) : waitingAgentLabel}</strong>
-                </div>
-              )}
-              {requiresSecondAgent && (
-                <div className="gameplay-modal__selection-item">
-                  <span>{t('gameplay.secondary_agent')}</span>
-                  <strong>{secondaryAgentId ? (agentsById[secondaryAgentId]?.name ?? waitingAgentLabel) : waitingAgentLabel}</strong>
-                </div>
-              )}
-              {requiresSourceBranch && (
-                <div className="gameplay-modal__selection-item">
-                <span>{t('gameplay.source_branch')}</span>
-                <strong>{sourceBranch?.title ?? waitingSourceLabel}</strong>
-              </div>
-            )}
-            <div className="gameplay-modal__selection-item">
-              <span>{t('gameplay.directive_label')}</span>
-              <strong>{directiveModeLabel}</strong>
+            <div className="gameplay-modal-v2__recommended-grid">
+              {recommendedCards.map((currentCardId) => renderCard(currentCardId, { highlighted: true }))}
             </div>
-          </div>
           </section>
 
-          <div className="modal-field gameplay-modal__field">
-            <label>{t('gameplay.target_branch')}</label>
-            <select
-              className="gameplay-select"
-              value={targetBranchId ?? ''}
-              onChange={(event) => setTargetBranchIdOverride(event.target.value)}
-              disabled={isDisabled}
-            >
-              {activeBranches.length > 0 ? (
-                activeBranches.map((branch) => (
-                  <option key={branch.id} value={branch.id}>
-                    {branch.title}
-                  </option>
-                ))
-              ) : (
-                <option value="">{waitingBranchLabel}</option>
-              )}
-            </select>
-          </div>
+          <section
+            className="gameplay-modal-v2__section"
+            aria-labelledby="gameplay-more-heading"
+          >
+            <div className="gameplay-modal-v2__section-head">
+              <h3 id="gameplay-more-heading">{t('gameplay.more_options_title')}</h3>
+              <p>{t('gameplay.more_options_subtitle')}</p>
+            </div>
+            <div className="gameplay-modal-v2__groups">
+              {displayModel.groups.map((group) => {
+                const expanded = expandedGroups[group.id];
+                if (group.cardIds.length === 0) return null;
+                const groupId = `gameplay-group-${group.id}`;
+                return (
+                  <div key={group.id} className="gameplay-modal-v2__group">
+                    <button
+                      type="button"
+                      className="gameplay-modal-v2__group-toggle"
+                      aria-expanded={expanded}
+                      aria-controls={expanded ? groupId : undefined}
+                      onClick={() => toggleGroup(group.id)}
+                    >
+                      <span className="gameplay-modal-v2__group-icon" aria-hidden="true">
+                        {t(GROUP_ICON_KEYS[group.id])}
+                      </span>
+                      <span className="gameplay-modal-v2__group-title">{t(GROUP_TITLE_KEYS[group.id])}</span>
+                      <span className="gameplay-modal-v2__group-count">{group.cardIds.length}</span>
+                      <span className="gameplay-modal-v2__group-chevron" aria-hidden="true">
+                        {expanded ? '−' : '+'}
+                      </span>
+                      <span className="sr-only">
+                        {expanded ? t('gameplay.group_collapse') : t('gameplay.group_expand')}
+                      </span>
+                    </button>
+                    {expanded && (
+                      <div
+                        id={groupId}
+                        className="gameplay-modal-v2__group-cards"
+                        role="region"
+                        aria-label={t(GROUP_TITLE_KEYS[group.id])}
+                      >
+                        {group.cardIds.map((currentCardId) => renderCard(currentCardId, { highlighted: false }))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
 
-          {requiresPrimaryAgent && (
+          <section className="gameplay-modal-v2__controls">
             <div className="modal-field gameplay-modal__field">
-              <label>{t('gameplay.primary_agent')}</label>
+              <label>{t('gameplay.target_branch')}</label>
               <select
                 className="gameplay-select"
-                value={primaryAgentId}
-                onChange={(event) => setPrimaryAgentIdOverride(event.target.value)}
+                value={targetBranchId ?? ''}
+                onChange={(event) => setTargetBranchIdOverride(event.target.value)}
                 disabled={isDisabled}
               >
-                {agents.length > 0 ? (
-                agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name}
-                  </option>
-                ))
-              ) : (
-                <option value="">{waitingAgentLabel}</option>
-              )}
-            </select>
-          </div>
-          )}
-
-          {requiresSecondAgent && (
-            <div className="modal-field gameplay-modal__field">
-              <label>{t('gameplay.secondary_agent')}</label>
-              <select
-                className="gameplay-select"
-                value={secondaryAgentId}
-                onChange={(event) => setSecondaryAgentIdOverride(event.target.value)}
-                disabled={isDisabled}
-              >
-                {agents.length > 0 ? (
-                agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name}
-                  </option>
-                ))
-              ) : (
-                <option value="">{waitingAgentLabel}</option>
-              )}
-            </select>
-          </div>
-          )}
-
-          {requiresSourceBranch && (
-            <div className="modal-field gameplay-modal__field">
-              <label>{t('gameplay.source_branch')}</label>
-              <select
-                className="gameplay-select"
-                value={sourceBranchId}
-                onChange={(event) => setSourceBranchIdOverride(event.target.value)}
-                disabled={isDisabled}
-              >
-                {branches.filter((branch) => branch.id !== targetBranchId).length > 0 ? (
-                  branches
-                    .filter((branch) => branch.id !== targetBranchId)
-                    .map((branch) => (
-                      <option key={branch.id} value={branch.id}>
-                        {branch.title}
-                      </option>
-                    ))
+                {activeBranches.length > 0 ? (
+                  activeBranches.map((branch) => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.title}
+                    </option>
+                  ))
                 ) : (
-                  <option value="">{waitingSourceLabel}</option>
+                  <option value="">{waitingBranchLabel}</option>
                 )}
               </select>
             </div>
-          )}
 
-          <textarea
-            ref={inputRef}
-            className="intervention-input gameplay-modal__textarea"
-            aria-label={isZh ? '玩法卡指令' : 'Gameplay card directive'}
-            placeholder={placeholder}
-            value={customDirective}
-            onChange={(event) => setCustomDirectiveOverride(event.target.value)}
-            disabled={isDisabled}
-            rows={4}
-          />
+            {requiresPrimaryAgent && (
+              <div className="modal-field gameplay-modal__field">
+                <label>{t('gameplay.primary_agent')}</label>
+                <select
+                  className="gameplay-select"
+                  value={primaryAgentId}
+                  onChange={(event) => setPrimaryAgentIdOverride(event.target.value)}
+                  disabled={isDisabled}
+                >
+                  {agents.length > 0 ? (
+                    agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>
+                        {agent.name}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">{waitingAgentLabel}</option>
+                  )}
+                </select>
+              </div>
+            )}
 
-          <p className="template-hint gameplay-modal__hint">
-            {t('gameplay.hint')}
-          </p>
+            {requiresSecondAgent && (
+              <div className="modal-field gameplay-modal__field">
+                <label>{t('gameplay.secondary_agent')}</label>
+                <select
+                  className="gameplay-select"
+                  value={secondaryAgentId}
+                  onChange={(event) => setSecondaryAgentIdOverride(event.target.value)}
+                  disabled={isDisabled}
+                >
+                  {agents.length > 0 ? (
+                    agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>
+                        {agent.name}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">{waitingAgentLabel}</option>
+                  )}
+                </select>
+              </div>
+            )}
+
+            {requiresSourceBranch && (
+              <div className="modal-field gameplay-modal__field">
+                <label>{t('gameplay.source_branch')}</label>
+                <select
+                  className="gameplay-select"
+                  value={sourceBranchId}
+                  onChange={(event) => setSourceBranchIdOverride(event.target.value)}
+                  disabled={isDisabled}
+                >
+                  {branches.filter((branch) => branch.id !== targetBranchId).length > 0 ? (
+                    branches
+                      .filter((branch) => branch.id !== targetBranchId)
+                      .map((branch) => (
+                        <option key={branch.id} value={branch.id}>
+                          {branch.title}
+                        </option>
+                      ))
+                  ) : (
+                    <option value="">{waitingSourceLabel}</option>
+                  )}
+                </select>
+              </div>
+            )}
+
+            <textarea
+              ref={inputRef}
+              className="intervention-input gameplay-modal__textarea"
+              aria-label={t('gameplay.card_directive_aria')}
+              placeholder={placeholder}
+              value={customDirective}
+              onChange={(event) => setCustomDirectiveOverride(event.target.value)}
+              disabled={isDisabled}
+              rows={4}
+            />
+
+            <p className="gameplay-modal-v2__preview" role="status" aria-live="polite">
+              <strong>{t('gameplay.card_preview_label')}</strong>
+              <span>{buildCardPreview(cardId)}</span>
+            </p>
+
+            <p className="template-hint gameplay-modal__hint">{t('gameplay.hint')}</p>
+          </section>
 
           <div className="gameplay-modal__status" aria-live="polite">
             {errorMsg && <p className="modal-error">{errorMsg}</p>}
             {status === 'success' && (
               <>
                 <p className="modal-success">
-                  {t('gameplay.success')}
+                  {t('gameplay.toast_applied')}
                 </p>
                 {queueNotice && (
                   <p className="template-hint gameplay-modal__hint">{queueNotice}</p>
@@ -783,16 +853,24 @@ export default function GameplayCardsModal({
           </div>
         </div>
 
-        <footer className="modal-footer">
-          <button className="btn btn-ghost" onClick={handleClose} disabled={status === 'submitting'}>
+        <footer className="modal-footer gameplay-modal-v2__footer">
+          <button
+            ref={closeButtonRef}
+            className="btn btn-ghost"
+            onClick={handleClose}
+            disabled={status === 'submitting'}
+          >
             {t('intervention.cancel')}
           </button>
-          <button className="btn btn-primary" onClick={handleSubmit} disabled={isDisabled}>
-            {status === 'submitting'
-              ? submittingLabel
-              : readOnly
-                ? readOnlyLabel
-                : t('gameplay.apply')}
+          <button className="btn btn-primary gameplay-modal-v2__submit" onClick={handleSubmit} disabled={isDisabled}>
+            <span className="gameplay-modal-v2__submit-primary">
+              {status === 'submitting' ? submittingLabel : submitButtonLabel}
+            </span>
+            {!readOnly && status !== 'submitting' && (
+              <span className="gameplay-modal-v2__submit-secondary">
+                {`· ${selectedCardLabel}`}
+              </span>
+            )}
           </button>
         </footer>
       </div>

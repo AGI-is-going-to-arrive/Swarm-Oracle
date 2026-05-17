@@ -13,7 +13,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from app.models import Scenario, ScenarioStatus
+from app.models import Branch, Scenario, ScenarioStatus
 from app.models.campaign import (
     DirectorBadgeUnlock,
     DirectorProfile,
@@ -28,6 +28,7 @@ VALID_ARCHIVE_GRADES = set(ARCHIVE_GRADE_ORDER)
 VALID_PROFILE_RESONANCES = {"signature", "aligned", "offbeat"}
 VALID_COMMITMENT_OUTCOMES = {"hit", "miss", "pending"}
 VALID_GAMEPLAY_BET_KINDS = {"branch_winner", "ending_tone", "profile_resonance"}
+VALID_ENDING_TONES = {"order", "balance", "rupture"}
 LEVEL_SCORE_STEP = 5
 BADGE_IDS = ("daily_challenge", "archive_record", "bet_winner")
 
@@ -78,6 +79,15 @@ class CampaignStateError(CampaignError):
 
 class CampaignConflictError(CampaignError):
     """Raised when a scenario is finalized for a different profile."""
+
+
+class CampaignBetValidationError(CampaignError):
+    """Raised when a gameplay-state bet entry fails strict target validation."""
+
+    def __init__(self, code: str, message: str, *, bet_id: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.bet_id = bet_id
 
 
 def _now() -> datetime:
@@ -279,13 +289,24 @@ def _normalize_usage_log_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _normalize_bet_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+def _normalize_bet_entry(
+    entry: dict[str, Any],
+    *,
+    strict: bool = False,
+    valid_branch_ids: set[str] | None = None,
+) -> dict[str, Any] | None:
     bet_id = str(entry.get("bet_id", "")).strip()
     kind = str(entry.get("kind", "")).strip()
     target_label = str(entry.get("target_label", "")).strip()
     placed_at = str(entry.get("placed_at", "")).strip()
 
     if not bet_id or not target_label or not placed_at or kind not in VALID_GAMEPLAY_BET_KINDS:
+        if strict:
+            raise CampaignBetValidationError(
+                "GAMEPLAY_BET_INVALID_KIND",
+                f"Bet entry missing required fields or kind not supported: {kind!r}",
+                bet_id=bet_id or None,
+            )
         return None
 
     target_id = (
@@ -309,6 +330,38 @@ def _normalize_bet_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
         placed_at_round = max(1, int(entry.get("placed_at_round", 1)))
     except (TypeError, ValueError):
         placed_at_round = 1
+
+    if strict:
+        if kind == "ending_tone":
+            if target_id is None or target_id not in VALID_ENDING_TONES:
+                raise CampaignBetValidationError(
+                    "GAMEPLAY_BET_INVALID_ENDING_TONE",
+                    f"ending_tone bet target_id must be one of "
+                    f"{sorted(VALID_ENDING_TONES)}, got {target_id!r}",
+                    bet_id=bet_id,
+                )
+        elif kind == "profile_resonance":
+            if target_id is None or target_id not in VALID_PROFILE_RESONANCES:
+                raise CampaignBetValidationError(
+                    "GAMEPLAY_BET_INVALID_PROFILE_RESONANCE",
+                    f"profile_resonance bet target_id must be one of "
+                    f"{sorted(VALID_PROFILE_RESONANCES)}, got {target_id!r}",
+                    bet_id=bet_id,
+                )
+        elif kind == "branch_winner":
+            if target_id is None:
+                raise CampaignBetValidationError(
+                    "GAMEPLAY_BET_MISSING_BRANCH_TARGET",
+                    "branch_winner bet target_id is required",
+                    bet_id=bet_id,
+                )
+            if valid_branch_ids is not None and target_id not in valid_branch_ids:
+                raise CampaignBetValidationError(
+                    "GAMEPLAY_BET_INVALID_BRANCH_TARGET",
+                    f"branch_winner bet target_id must belong to current scenario "
+                    f"branches, got {target_id!r}",
+                    bet_id=bet_id,
+                )
 
     return {
         "bet_id": bet_id,
@@ -372,7 +425,12 @@ def _normalize_archive_state(payload: dict[str, Any] | None) -> dict[str, Any]:
     return state
 
 
-def normalize_scenario_gameplay_state(payload: dict[str, Any] | None) -> dict[str, Any]:
+def normalize_scenario_gameplay_state(
+    payload: dict[str, Any] | None,
+    *,
+    strict: bool = False,
+    valid_branch_ids: set[str] | None = None,
+) -> dict[str, Any]:
     state = get_default_scenario_gameplay_state()
     if not isinstance(payload, dict):
         return state
@@ -400,7 +458,11 @@ def normalize_scenario_gameplay_state(payload: dict[str, Any] | None) -> dict[st
         for entry in raw_betting.get("bets") or []:
             if not isinstance(entry, dict):
                 continue
-            normalized = _normalize_bet_entry(entry)
+            normalized = _normalize_bet_entry(
+                entry,
+                strict=strict,
+                valid_branch_ids=valid_branch_ids,
+            )
             if normalized is None:
                 continue
             bets.append(normalized)
@@ -1291,8 +1353,15 @@ def save_scenario_gameplay_state(
         if expected_revision != current_state["revision"]:
             raise CampaignConflictError("Gameplay state revision mismatch")
 
+        scenario_branch_ids: set[str] = set(
+            session.exec(
+                select(Branch.id).where(Branch.scenario_id == scenario_id)
+            ).all()
+        )
         next_state = normalize_scenario_gameplay_state(
-            _with_state_revision(gameplay_state, current_state["revision"] + 1)
+            _with_state_revision(gameplay_state, current_state["revision"] + 1),
+            strict=True,
+            valid_branch_ids=scenario_branch_ids,
         )
         result = session.exec(
             update(Scenario)

@@ -12,6 +12,7 @@ ZIP layout
 - ``agents.jsonl``       One JSON object per line (BYOK fields stripped).
 - ``messages.jsonl``     One JSON object per line, ordered by round_number.
 - ``causal_graph.json``  Latest causal graph snapshot (nodes + edges).
+- ``intervention_receipts.jsonl`` Persisted intervention effect receipts.
 - ``checksums.sha256``   ``<sha256>  <filename>`` lines for the data files.
 
 Privacy model
@@ -40,6 +41,7 @@ from app.models import (
     Agent,
     AgentMessage,
     Branch,
+    InterventionLog,
     Round,
     Scenario,
 )
@@ -50,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 SNAPSHOT_VERSION = "1.0"
 GRAPH_SCHEMA_VERSION = 1
+INTERVENTION_RECEIPT_SCHEMA_VERSION = 1
 MAX_IMPORT_ZIP_BYTES = 50 * 1024 * 1024  # 50 MB
 MAX_UNCOMPRESSED_MEMBER_BYTES = 100 * 1024 * 1024  # 100 MB per file
 MAX_UNCOMPRESSED_TOTAL_BYTES = 500 * 1024 * 1024  # 500 MB across all files
@@ -84,6 +87,7 @@ _DATA_FILES = (
     "agents.jsonl",
     "messages.jsonl",
     "causal_graph.json",
+    "intervention_receipts.jsonl",
 )
 
 
@@ -276,6 +280,18 @@ def _serialize_graph_edge(edge: GraphEdge) -> dict[str, Any]:
     }
 
 
+def _serialize_intervention_receipt(row: InterventionLog) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "scenario_id": row.scenario_id,
+        "branch_id": row.branch_id,
+        "round_number": row.round_number,
+        "user_input": row.user_input,
+        "effect_summary_json": _redact_json_string(row.effect_summary_json),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
 def _collect_messages(
     session: Session,
     branches: list[Branch],
@@ -307,6 +323,23 @@ def _collect_messages(
         key=lambda m: (m["branch_id"], m["round_number"], m["id"]),
     )
     return serialized
+
+
+def _collect_intervention_receipts(
+    session: Session,
+    scenario_id: str,
+) -> list[dict[str, Any]]:
+    rows = list(
+        session.exec(
+            select(InterventionLog)
+            .where(InterventionLog.scenario_id == scenario_id)
+            .order_by(
+                InterventionLog.created_at.asc(),
+                InterventionLog.id.asc(),
+            )
+        ).all()
+    )
+    return [_serialize_intervention_receipt(row) for row in rows]
 
 
 def _collect_causal_graph(
@@ -380,6 +413,7 @@ def build_snapshot_manifest(
     )
     messages = _collect_messages(session, branches)
     graph = _collect_causal_graph(session, scenario_id)
+    intervention_receipts = _collect_intervention_receipts(session, scenario_id)
 
     scenario_payload = _serialize_scenario(scenario, include_private=include_private)
     branches_payload = [_serialize_branch(b) for b in branches]
@@ -413,6 +447,14 @@ def build_snapshot_manifest(
         "causal_graph.json": json.dumps(
             graph, ensure_ascii=False, default=str
         ).encode("utf-8"),
+        "intervention_receipts.jsonl": (
+            "\n".join(
+                json.dumps(row, ensure_ascii=False, default=str)
+                for row in intervention_receipts
+            ).encode("utf-8")
+            if intervention_receipts
+            else b""
+        ),
     }
 
     file_index = {
@@ -424,6 +466,7 @@ def build_snapshot_manifest(
         "created_at": _now_iso(),
         "scenario_id": scenario.id,
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
+        "intervention_receipt_schema_version": INTERVENTION_RECEIPT_SCHEMA_VERSION,
         "include_private": bool(include_private),
         "files": file_index,
     }
@@ -749,6 +792,72 @@ def _coerce_float_field(
     return parsed
 
 
+def _coerce_datetime_field(value: Any, field_name: str) -> datetime:
+    if value is None or value == "":
+        return datetime.now(timezone.utc)
+    if not isinstance(value, str):
+        raise SnapshotImportError(f"{field_name} must be an ISO datetime string")
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise SnapshotImportError(f"{field_name} must be an ISO datetime string") from exc
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _remap_intervention_effect_summary(
+    value: Any,
+    *,
+    new_scenario_id: str,
+    new_branch_id: str,
+    new_intervention_log_id: str,
+    branch_id_map: dict[str, str],
+    agent_id_map: dict[str, str],
+) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    else:
+        decoded = value
+    if not isinstance(decoded, dict):
+        return None
+
+    redacted = _redact_dict(decoded)
+
+    def _walk(current: Any) -> Any:
+        if isinstance(current, dict):
+            remapped: dict[str, Any] = {}
+            for key, sub in current.items():
+                if key == "scenario_id" and isinstance(sub, str):
+                    remapped[key] = new_scenario_id
+                elif key == "branch_id" and isinstance(sub, str):
+                    remapped[key] = branch_id_map.get(sub)
+                elif key == "agent_id" and isinstance(sub, str):
+                    remapped[key] = agent_id_map.get(sub, sub)
+                elif key == "intervention_log_id" and isinstance(sub, str):
+                    remapped[key] = new_intervention_log_id
+                else:
+                    remapped[key] = _walk(sub)
+            return remapped
+        if isinstance(current, list):
+            return [_walk(item) for item in current]
+        return current
+
+    remapped = _walk(redacted)
+    remapped["scenario_id"] = new_scenario_id
+    remapped["branch_id"] = new_branch_id
+    remapped["intervention_log_id"] = new_intervention_log_id
+    return json.dumps(remapped, ensure_ascii=False, default=str)
+
+
 def import_snapshot_zip(
     zip_data: bytes | io.BytesIO,
     user_id: str | None,
@@ -768,6 +877,10 @@ def import_snapshot_zip(
     branches_rows = _load_jsonl(contents.get("branches.jsonl", b""), "branches.jsonl")
     agents_rows = _load_jsonl(contents.get("agents.jsonl", b""), "agents.jsonl")
     messages_rows = _load_jsonl(contents.get("messages.jsonl", b""), "messages.jsonl")
+    intervention_receipt_rows = _load_jsonl(
+        contents.get("intervention_receipts.jsonl", b""),
+        "intervention_receipts.jsonl",
+    )
     graph_payload = _load_json(
         contents.get("causal_graph.json", b""),
         "causal_graph.json",
@@ -965,6 +1078,42 @@ def import_snapshot_zip(
                 ),
             )
         )
+
+    for raw in intervention_receipt_rows:
+        branch_orig = str(raw.get("branch_id") or "").strip()
+        new_branch_id = branch_id_map.get(branch_orig)
+        if not new_branch_id:
+            raise SnapshotImportError(
+                "intervention_receipts.branch_id references a branch "
+                f"not present in this snapshot: {branch_orig!r}"
+            )
+        intervention_log = InterventionLog(
+            scenario_id=new_scenario_id,
+            branch_id=new_branch_id,
+            round_number=_coerce_int_field(
+                raw.get("round_number"),
+                "intervention_receipts.round_number",
+                default=0,
+                min_value=0,
+            )
+            or 0,
+            user_input=str(raw.get("user_input") or ""),
+            created_at=_coerce_datetime_field(
+                raw.get("created_at"),
+                "intervention_receipts.created_at",
+            ),
+        )
+        session.add(intervention_log)
+        session.flush()
+        intervention_log.effect_summary_json = _remap_intervention_effect_summary(
+            raw.get("effect_summary_json"),
+            new_scenario_id=new_scenario_id,
+            new_branch_id=new_branch_id,
+            new_intervention_log_id=intervention_log.id,
+            branch_id_map=branch_id_map,
+            agent_id_map=agent_id_map,
+        )
+        session.add(intervention_log)
 
     _import_causal_graph(
         session,

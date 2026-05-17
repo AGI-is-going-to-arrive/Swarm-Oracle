@@ -416,7 +416,9 @@
   gap: 6px;
   padding: 2px 8px 2px 4px;
   border-radius: 999px;
+  background: #f7e3ec;
   background: oklch(92% 0.07 320);
+  color: #9a2566;
   color: oklch(48% 0.18 340);
   font-size: 10px;
   font-weight: 700;
@@ -425,7 +427,9 @@
 }
 
 .gameplay-card__badge--recommended {
+  background: #f7e3ec;
   background: oklch(92% 0.07 320);
+  color: #9a2566;
   color: oklch(48% 0.18 340);
 }
 
@@ -469,32 +473,48 @@
 
 .gameplay-card--profile-trade {
   --gameplay-card-overlay:
+    radial-gradient(circle at 18% 18%, rgba(126, 178, 255, 0.22), transparent 32%),
+    linear-gradient(135deg, rgba(229, 169, 73, 0.18), transparent 58%);
+  --gameplay-card-overlay:
     radial-gradient(circle at 18% 18%, oklch(92% 0.12 225 / 0.22), transparent 32%),
     linear-gradient(135deg, oklch(78% 0.12 75 / 0.18), transparent 58%);
+  --gameplay-card-shadow: #d88a00;
   --gameplay-card-shadow: oklch(72% 0.18 60);
   --gameplay-card-frame-filter: hue-rotate(-12deg) saturate(1.1) brightness(1.03);
 }
 
 .gameplay-card--profile-law {
   --gameplay-card-overlay:
+    linear-gradient(145deg, rgba(173, 189, 244, 0.18), transparent 46%),
+    repeating-linear-gradient(90deg, rgba(198, 205, 244, 0.08) 0 6px, transparent 6px 18px);
+  --gameplay-card-overlay:
     linear-gradient(145deg, oklch(84% 0.07 255 / 0.18), transparent 46%),
     repeating-linear-gradient(90deg, oklch(88% 0.05 255 / 0.08) 0 6px, transparent 6px 18px);
+  --gameplay-card-shadow: #4465d8;
   --gameplay-card-shadow: oklch(66% 0.14 255);
   --gameplay-card-frame-filter: hue-rotate(148deg) saturate(0.88) brightness(1.08);
 }
 
 .gameplay-card--profile-faith {
   --gameplay-card-overlay:
+    radial-gradient(circle at 22% 14%, rgba(255, 204, 95, 0.24), transparent 28%),
+    linear-gradient(160deg, rgba(222, 105, 192, 0.18), transparent 58%);
+  --gameplay-card-overlay:
     radial-gradient(circle at 22% 14%, oklch(88% 0.12 70 / 0.24), transparent 28%),
     linear-gradient(160deg, oklch(76% 0.16 330 / 0.18), transparent 58%);
+  --gameplay-card-shadow: #d14fa8;
   --gameplay-card-shadow: oklch(74% 0.16 320);
   --gameplay-card-frame-filter: hue-rotate(10deg) saturate(1.18) brightness(1.02);
 }
 
 .gameplay-card--profile-ecology {
   --gameplay-card-overlay:
+    radial-gradient(circle at 82% 18%, rgba(92, 222, 172, 0.2), transparent 30%),
+    linear-gradient(145deg, rgba(93, 190, 106, 0.18), transparent 54%);
+  --gameplay-card-overlay:
     radial-gradient(circle at 82% 18%, oklch(86% 0.12 165 / 0.2), transparent 30%),
     linear-gradient(145deg, oklch(74% 0.12 145 / 0.18), transparent 54%);
+  --gameplay-card-shadow: #23b981;
   --gameplay-card-shadow: oklch(70% 0.15 160);
   --gameplay-card-frame-filter: hue-rotate(-46deg) saturate(1.08) brightness(1.04);
 }
@@ -506,6 +526,7 @@
   padding: 12px 14px;
   border-radius: 16px;
   border: 1px solid var(--border-subtle);
+  background: #fbfaf7;
   background: color-mix(in oklab, var(--bg-surface) 88%, white 12%);
 }
 
@@ -615,5 +636,522 @@
   }
   .gameplay-card::before {
     display: none;
+  }
+}
+
+/* ---------- Phase 2 redesign: v2 layout ---------- */
+
+.gameplay-modal-v2 {
+  max-width: 760px;
+}
+
+.gameplay-modal-v2__body {
+  display: grid;
+  gap: 18px;
+}
+
+.gameplay-modal-v2__active-marker {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(46, 160, 67, 0.28);
+  border: 1px solid color-mix(in oklab, var(--color-success) 28%, transparent);
+  background: #eef8f1;
+  background: color-mix(in oklab, var(--color-success) 12%, var(--bg-surface));
+  color: #176c35;
+  color: color-mix(in oklab, var(--color-success) 72%, var(--text-primary));
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.gameplay-modal-v2__section {
+  display: grid;
+  gap: 10px;
+}
+
+.gameplay-modal-v2__section-head h3 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.gameplay-modal-v2__section-head p {
+  margin: 4px 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.gameplay-modal-v2__section--primary {
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(198, 21, 131, 0.22);
+  border: 1px solid color-mix(in oklab, var(--color-primary) 22%, var(--border-default));
+  background: linear-gradient(155deg, #fff3fa, var(--bg-elevated));
+  background:
+    linear-gradient(155deg, color-mix(in oklab, var(--color-primary-glow) 60%, var(--bg-surface) 40%), var(--bg-elevated));
+}
+
+.gameplay-modal-v2__recommended-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.gameplay-modal-v2__groups {
+  display: grid;
+  gap: 10px;
+}
+
+.gameplay-modal-v2__group {
+  border-radius: 14px;
+  border: 1px solid var(--border-subtle);
+  background: #fbfaf7;
+  background: color-mix(in oklab, var(--bg-surface) 92%, var(--bg-elevated));
+  overflow: hidden;
+}
+
+.gameplay-modal-v2__group-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+}
+
+.gameplay-modal-v2__group-toggle:hover {
+  background: #fff4fa;
+  background: color-mix(in oklab, var(--color-primary-glow) 26%, transparent);
+}
+
+.gameplay-modal-v2__group-toggle:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+  background: #fff4fa;
+  background: color-mix(in oklab, var(--color-primary-glow) 26%, transparent);
+}
+
+.gameplay-modal-v2__group-icon {
+  font-size: 1.1rem;
+}
+
+.gameplay-modal-v2__group-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.gameplay-modal-v2__group-count {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff7fb;
+  background: color-mix(in oklab, var(--color-primary-glow) 40%, var(--bg-elevated));
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.gameplay-modal-v2__group-chevron {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #fff7fb;
+  background: color-mix(in oklab, var(--bg-elevated) 80%, var(--color-primary-glow));
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.gameplay-modal-v2__group-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  padding: 12px 14px 14px;
+}
+
+.gameplay-card-v2 {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  padding: 12px 13px 12px 13px;
+  border-radius: 14px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+  min-width: 0;
+}
+
+.gameplay-card-v2:hover {
+  transform: translateY(-1px);
+  border-color: rgba(198, 21, 131, 0.36);
+  border-color: color-mix(in oklab, var(--color-primary) 36%, var(--border-default));
+}
+
+.gameplay-card-v2:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(198, 21, 131, 0.24);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 24%, transparent);
+}
+
+.gameplay-card-v2--selected {
+  border-color: rgba(198, 21, 131, 0.6);
+  border-color: color-mix(in oklab, var(--color-primary) 60%, transparent);
+  background: linear-gradient(180deg, #fff4fa, var(--bg-surface));
+  background: linear-gradient(180deg, color-mix(in oklab, var(--color-primary-glow) 70%, var(--bg-elevated)), var(--bg-surface));
+  box-shadow: 0 0 0 1px rgba(198, 21, 131, 0.28);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-primary) 28%, transparent);
+}
+
+.gameplay-card-v2--recommended {
+  border-color: rgba(198, 21, 131, 0.36);
+  border-color: color-mix(in oklab, var(--color-primary) 36%, var(--border-default));
+}
+
+.gameplay-card-v2__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gameplay-card-v2__icon {
+  font-size: 1.15rem;
+}
+
+.gameplay-card-v2__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.gameplay-card-v2__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.gameplay-card-v2__badge--recommended {
+  background: #f6daeb;
+  background: color-mix(in oklab, var(--color-primary) 18%, var(--bg-surface));
+  color: #9a2566;
+  color: color-mix(in oklab, var(--color-primary) 84%, var(--text-primary));
+}
+
+.gameplay-card-v2__badge--counter {
+  background: #fff1cc;
+  background: color-mix(in oklab, var(--color-warning) 16%, var(--bg-surface));
+  color: #8a5a00;
+  color: color-mix(in oklab, var(--color-warning) 72%, var(--text-primary));
+}
+
+.gameplay-card-v2__desc {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.gameplay-card-v2__questions {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fbfaf7;
+  background: color-mix(in oklab, var(--bg-surface) 92%, var(--bg-base));
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.gameplay-card-v2__row {
+  display: grid;
+  grid-template-columns: minmax(0, 96px) minmax(0, 1fr);
+  gap: 6px;
+}
+
+.gameplay-card-v2__row dt {
+  margin: 0;
+  font-weight: 700;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.gameplay-card-v2__row dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.gameplay-card-v2__meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.gameplay-card-v2:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.gameplay-modal-v2__controls {
+  display: grid;
+  gap: 10px;
+}
+
+.gameplay-modal-v2__preview {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px dashed rgba(198, 21, 131, 0.32);
+  border: 1px dashed color-mix(in oklab, var(--color-primary) 32%, var(--border-default));
+  background: #fbfaf7;
+  background: color-mix(in oklab, var(--bg-surface) 88%, var(--bg-elevated));
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+}
+
+.gameplay-modal-v2__preview strong {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.gameplay-modal-v2__footer {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.gameplay-modal-v2__submit {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 100%;
+}
+
+.gameplay-modal-v2__submit-primary {
+  font-weight: 700;
+}
+
+.gameplay-modal-v2__submit-secondary {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.82;
+  overflow-wrap: anywhere;
+}
+
+/* SR-only utility (component-local fallback). */
+.gameplay-modal-v2 .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 520px) {
+  .gameplay-modal-v2 {
+    max-height: calc(100dvh - 16px);
+    padding: 18px;
+  }
+
+  .gameplay-modal-v2__recommended-grid,
+  .gameplay-modal-v2__group-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .gameplay-modal-v2__footer {
+    flex-direction: column-reverse;
+  }
+
+  .gameplay-modal-v2__footer .btn {
+    width: 100%;
+  }
+
+  .gameplay-card-v2__row {
+    grid-template-columns: minmax(0, 84px) minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gameplay-card-v2,
+  .gameplay-modal-v2__group-toggle {
+    transition: none;
+  }
+
+  .gameplay-card-v2:hover {
+    transform: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .gameplay-modal,
+  .gameplay-modal-v2,
+  .gameplay-card-v2,
+  .gameplay-modal-v2__group,
+  .gameplay-modal__stat,
+  .gameplay-modal__availability,
+  .gameplay-modal-v2__section--primary,
+  .gameplay-modal-v2__preview,
+  .gameplay-modal__field {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    forced-color-adjust: none;
+  }
+  .gameplay-card-v2--selected,
+  .gameplay-card-v2--recommended {
+    border-color: Highlight;
+    background: Canvas;
+    color: CanvasText;
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+  .gameplay-modal-v2__group-toggle {
+    background: Canvas;
+    color: CanvasText;
+    forced-color-adjust: none;
+  }
+  .gameplay-modal-v2__group-toggle:hover,
+  .gameplay-modal-v2__group-toggle:focus-visible {
+    background: Highlight;
+    color: HighlightText;
+  }
+  .gameplay-card-v2__badge--recommended,
+  .gameplay-modal-v2__active-marker {
+    border: 1px solid Highlight;
+    background: Highlight;
+    color: HighlightText;
+  }
+  .gameplay-card-v2:disabled,
+  .gameplay-modal-v2__group-toggle:disabled,
+  .gameplay-modal-v2__submit:disabled {
+    color: GrayText;
+    border-color: GrayText;
+  }
+  .gameplay-card-v2--selected:disabled,
+  .gameplay-card-v2--recommended:disabled {
+    outline: none;
+    border-color: GrayText;
+    background: Canvas;
+    color: GrayText;
+    box-shadow: none;
+  }
+  .gameplay-modal-v2__group-toggle:focus-visible,
+  .gameplay-card-v2:focus-visible,
+  .gameplay-select:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
+/* ---------- Phase 2 toast & active marker (host: SimulationView) ---------- */
+
+.sim-gameplay-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  transform: translateX(-50%);
+  z-index: 1000;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 16px;
+  border-radius: 14px;
+  background: rgb(20, 26, 40);
+  background: oklch(28% 0.04 260);
+  color: #f8fafc;
+  color: oklch(96% 0.01 250);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  font-weight: 600;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 12px 32px oklch(0% 0 0 / 0.22);
+  animation: sim-gameplay-toast-in 0.24s ease-out;
+}
+
+@keyframes sim-gameplay-toast-in {
+  from { transform: translate(-50%, 12px); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+
+.sim-gameplay-active-marker {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 16px);
+  right: 16px;
+  z-index: 999;
+  max-width: min(280px, calc(100vw - 32px));
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  border: 1px solid color-mix(in oklab, var(--color-success, oklch(72% 0.18 145)) 36%, transparent);
+  background: rgba(220, 252, 231, 0.95);
+  background: color-mix(in oklab, var(--color-success, oklch(72% 0.18 145)) 14%, var(--bg-surface, #ffffff));
+  color: #14532d;
+  color: color-mix(in oklab, var(--color-success, oklch(72% 0.18 145)) 78%, var(--text-primary, #111111));
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 6px 18px oklch(0% 0 0 / 0.1);
+}
+
+@media (max-width: 520px) {
+  .sim-gameplay-active-marker {
+    top: auto;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 76px);
+    right: 50%;
+    transform: translateX(50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sim-gameplay-toast {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .sim-gameplay-toast,
+  .sim-gameplay-active-marker {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
   }
 }

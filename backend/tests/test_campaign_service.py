@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from sqlmodel import Session, select
 
-from app.models import Scenario, ScenarioStatus
+from app.models import Branch, Scenario, ScenarioStatus
 from app.models.campaign import (
     DirectorBadgeUnlock,
     DirectorProfile,
@@ -19,6 +19,7 @@ from app.models.campaign import (
 )
 from app.models.database import get_engine
 from app.services.campaign import (
+    CampaignBetValidationError,
     CampaignConflictError,
     CampaignError,
     finalize_scenario_campaign,
@@ -27,6 +28,7 @@ from app.services.campaign import (
     get_scenario_director_state,
     get_scenario_gameplay_state,
     get_weekly_campaign_summary,
+    normalize_scenario_gameplay_state,
     save_scenario_director_state,
     save_scenario_gameplay_state,
 )
@@ -40,6 +42,13 @@ def _seed_completed_scenario(question: str = "测试 campaign") -> str:
         session.commit()
         session.refresh(scenario)
         return scenario.id
+
+
+def _seed_branch(scenario_id: str, branch_id: str, title: str = "Branch") -> None:
+    engine = get_engine()
+    with Session(engine) as session:
+        session.add(Branch(id=branch_id, scenario_id=scenario_id, title=title))
+        session.commit()
 
 
 def _set_scenario_gameplay_state(scenario_id: str, gameplay_state: dict) -> None:
@@ -842,6 +851,7 @@ def test_scenario_director_state_rejects_stale_revision():
 
 def test_scenario_gameplay_state_defaults_and_round_trip():
     scenario_id = _seed_completed_scenario("gameplay state round trip")
+    _seed_branch(scenario_id, "branch-1", "Judicial Review")
 
     default_state = get_scenario_gameplay_state(scenario_id)
     assert default_state["revision"] == 0
@@ -969,3 +979,233 @@ def test_scenario_gameplay_state_rejects_stale_revision():
                 },
             },
         )
+
+
+def _bet_payload(**overrides) -> dict:
+    base = {
+        "bet_id": "bet-x",
+        "kind": "branch_winner",
+        "target_id": "branch-real",
+        "target_label": "Real Branch",
+        "confidence": 0.5,
+        "placed_at_round": 1,
+        "placed_at": "2026-03-20T00:00:00Z",
+        "resolved": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def _state_with_bet(bet: dict, revision: int = 0) -> dict:
+    return {
+        "revision": revision,
+        "cards": {"usage_log": []},
+        "betting": {"bets": [bet]},
+        "archive": {"key_moments": [], "branch_snapshots": []},
+    }
+
+
+def test_save_gameplay_state_accepts_each_valid_ending_tone():
+    scenario_id = _seed_completed_scenario("svc tone valid")
+    revision = 0
+    for tone in ("order", "balance", "rupture"):
+        saved = save_scenario_gameplay_state(
+            scenario_id,
+            _state_with_bet(
+                _bet_payload(
+                    bet_id=f"bet-{tone}",
+                    kind="ending_tone",
+                    target_id=tone,
+                    target_label=tone.title(),
+                ),
+                revision=revision,
+            ),
+        )
+        assert saved["betting"]["bets"][0]["target_id"] == tone
+        revision = saved["revision"]
+
+
+def test_save_gameplay_state_rejects_invalid_ending_tone_target():
+    scenario_id = _seed_completed_scenario("svc tone invalid")
+    with pytest.raises(CampaignBetValidationError) as exc:
+        save_scenario_gameplay_state(
+            scenario_id,
+            _state_with_bet(
+                _bet_payload(
+                    kind="ending_tone",
+                    target_id="rebirth",
+                    target_label="Rebirth",
+                )
+            ),
+        )
+    assert exc.value.code == "GAMEPLAY_BET_INVALID_ENDING_TONE"
+    assert exc.value.bet_id == "bet-x"
+
+
+def test_save_gameplay_state_rejects_missing_ending_tone_target():
+    scenario_id = _seed_completed_scenario("svc tone missing")
+    with pytest.raises(CampaignBetValidationError) as exc:
+        save_scenario_gameplay_state(
+            scenario_id,
+            _state_with_bet(
+                _bet_payload(
+                    kind="ending_tone",
+                    target_id=None,
+                    target_label="Mystery",
+                )
+            ),
+        )
+    assert exc.value.code == "GAMEPLAY_BET_INVALID_ENDING_TONE"
+
+
+def test_save_gameplay_state_accepts_each_valid_profile_resonance():
+    scenario_id = _seed_completed_scenario("svc resonance valid")
+    revision = 0
+    for value in ("signature", "aligned", "offbeat"):
+        saved = save_scenario_gameplay_state(
+            scenario_id,
+            _state_with_bet(
+                _bet_payload(
+                    bet_id=f"bet-{value}",
+                    kind="profile_resonance",
+                    target_id=value,
+                    target_label=value.title(),
+                ),
+                revision=revision,
+            ),
+        )
+        assert saved["betting"]["bets"][0]["target_id"] == value
+        revision = saved["revision"]
+
+
+def test_save_gameplay_state_rejects_invalid_profile_resonance_target():
+    scenario_id = _seed_completed_scenario("svc resonance invalid")
+    with pytest.raises(CampaignBetValidationError) as exc:
+        save_scenario_gameplay_state(
+            scenario_id,
+            _state_with_bet(
+                _bet_payload(
+                    kind="profile_resonance",
+                    target_id="uncertain",
+                    target_label="Uncertain",
+                )
+            ),
+        )
+    assert exc.value.code == "GAMEPLAY_BET_INVALID_PROFILE_RESONANCE"
+
+
+def test_save_gameplay_state_accepts_branch_winner_when_target_belongs_to_scenario():
+    scenario_id = _seed_completed_scenario("svc branch valid")
+    _seed_branch(scenario_id, "branch-actual")
+
+    saved = save_scenario_gameplay_state(
+        scenario_id,
+        _state_with_bet(
+            _bet_payload(
+                kind="branch_winner",
+                target_id="branch-actual",
+                target_label="Actual Branch",
+            )
+        ),
+    )
+    assert saved["betting"]["bets"][0]["target_id"] == "branch-actual"
+
+
+def test_save_gameplay_state_rejects_branch_winner_with_unknown_target():
+    scenario_id = _seed_completed_scenario("svc branch invalid")
+    _seed_branch(scenario_id, "branch-actual")
+
+    with pytest.raises(CampaignBetValidationError) as exc:
+        save_scenario_gameplay_state(
+            scenario_id,
+            _state_with_bet(
+                _bet_payload(
+                    kind="branch_winner",
+                    target_id="branch-ghost",
+                    target_label="Ghost",
+                )
+            ),
+        )
+    assert exc.value.code == "GAMEPLAY_BET_INVALID_BRANCH_TARGET"
+
+
+def test_save_gameplay_state_rejects_branch_winner_missing_target():
+    scenario_id = _seed_completed_scenario("svc branch missing")
+    _seed_branch(scenario_id, "branch-actual")
+
+    with pytest.raises(CampaignBetValidationError) as exc:
+        save_scenario_gameplay_state(
+            scenario_id,
+            _state_with_bet(
+                _bet_payload(
+                    kind="branch_winner",
+                    target_id=None,
+                    target_label="Without ID",
+                )
+            ),
+        )
+    assert exc.value.code == "GAMEPLAY_BET_MISSING_BRANCH_TARGET"
+
+
+def test_save_gameplay_state_rejects_branch_winner_when_scenario_has_no_branches():
+    """Empty branch set still rejects any branch_winner target_id."""
+    scenario_id = _seed_completed_scenario("svc branch empty scenario")
+
+    with pytest.raises(CampaignBetValidationError) as exc:
+        save_scenario_gameplay_state(
+            scenario_id,
+            _state_with_bet(
+                _bet_payload(
+                    kind="branch_winner",
+                    target_id="anything",
+                    target_label="Anything",
+                )
+            ),
+        )
+    assert exc.value.code == "GAMEPLAY_BET_INVALID_BRANCH_TARGET"
+
+
+def test_normalize_gameplay_state_backward_compatible_without_strict():
+    """Legacy persisted payloads must round-trip through normalize without raising."""
+    legacy_payload = {
+        "betting": {
+            "bets": [
+                {
+                    "bet_id": "legacy-bet",
+                    "kind": "branch_winner",
+                    "target_id": "branch-orphan",
+                    "target_label": "Legacy Branch",
+                    "placed_at": "2024-01-01T00:00:00Z",
+                },
+                {
+                    "bet_id": "legacy-tone",
+                    "kind": "ending_tone",
+                    "target_id": "rebirth",
+                    "target_label": "Mystic",
+                    "placed_at": "2024-01-01T00:00:01Z",
+                },
+            ]
+        }
+    }
+    state = normalize_scenario_gameplay_state(legacy_payload)
+    assert len(state["betting"]["bets"]) == 2
+    assert state["betting"]["bets"][0]["target_id"] == "branch-orphan"
+
+
+def test_normalize_gameplay_state_strict_mode_raises_on_invalid_ending_tone():
+    payload = {
+        "betting": {
+            "bets": [
+                {
+                    "bet_id": "bet-strict",
+                    "kind": "ending_tone",
+                    "target_id": "unknown",
+                    "target_label": "Unknown",
+                    "placed_at": "2026-03-20T00:00:00Z",
+                }
+            ]
+        }
+    }
+    with pytest.raises(CampaignBetValidationError) as exc:
+        normalize_scenario_gameplay_state(payload, strict=True)
+    assert exc.value.code == "GAMEPLAY_BET_INVALID_ENDING_TONE"

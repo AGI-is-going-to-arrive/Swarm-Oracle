@@ -1845,3 +1845,37 @@ export async function resolveJournalEntry(
     body: JSON.stringify(body),
   });
 }
+
+/** Phase 4: intervention effect receipt payload (newest first). */
+export interface InterventionEffectAffectedAgent {
+  agent_id: string;
+  display_name: string;
+}
+
+export interface InterventionEffectExcerpt {
+  agent_id: string;
+  excerpt: string;
+}
+
+export interface InterventionEffect {
+  intervention_log_id: string;
+  card_id: string | null;
+  card_label: string | null;
+  round_number: number;
+  affected_agents: InterventionEffectAffectedAgent[];
+  response_excerpts: InterventionEffectExcerpt[];
+  confidence: number;
+  no_response_detected: boolean;
+  created_at: string;
+}
+
+export interface InterventionEffectsResponse {
+  effects: InterventionEffect[];
+}
+
+/** GET /api/scenario/:id/intervention-effects — Phase 4 effect receipts. */
+export async function getInterventionEffects(
+  scenarioId: string,
+): Promise<InterventionEffectsResponse> {
+  return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/intervention-effects`);
+}

@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AgentInfo, BranchInfo } from '../types';
+import { buildSharedChallengeSearch, readSharedChallengePayload } from '../lib/challengeShare';
+import { GAMEPLAY_CONTRACT } from '../lib/gameplayContract';
+import {
+  getGameplayProfileLabel as getGameplayProfileSummaryLabel,
+  getGameplayProfileSignatureHooks as getGameplayProfileSummaryHooks,
+  resolveGameplayProfileId,
+} from '../lib/gameplayProfileSummary';
+import { GAMEPLAY_PROFILE_FRAME_ASSETS } from '../lib/themeRegistry';
 import {
   buildAgentsById,
   buildGameplayAutoDirective,
   buildGameplayCardPrompt,
   getGameplayBadgeSrc,
+  getGameplayCardDisplayModel,
   getGameplayProfileFrameSrc,
   getGameplayProfileLabel,
   getGameplayProfileSignatureHooks,
@@ -18,6 +27,8 @@ import {
   getGameplayProfileTacticalState,
   inferGameplayProfile,
   isCounterplayCard,
+  type GameplayCardId,
+  type GameplayProfileId,
 } from './gameplayCards';
 
 const agents: AgentInfo[] = [
@@ -231,10 +242,10 @@ describe('gameplayCards helpers', () => {
     expect(prompt).toContain('可能不可逆');
   });
 
-  it('falls back to a generic directive preview for newly added counterplay cards', () => {
+  it('uses contract directives for newly added counterplay cards', () => {
     const preview = getGameplayCardDirectivePreview('governance', 'audit_reckoning', true);
-    expect(preview).toContain('审计清算');
-    expect(preview).toContain('反制');
+    expect(preview).toContain('责任账本');
+    expect(preview).toContain('误判');
   });
 
   it('recommends counterplay cards when risk is high or resources are low', () => {
@@ -284,6 +295,19 @@ describe('gameplayCards helpers', () => {
     expect(tracks.pressure).toBeTruthy();
   });
 
+  it('ignores stale unknown card ids when computing derived track state', () => {
+    const staleUsage = {
+      cardId: 'missing_card',
+      profileId: 'governance',
+      round: 1,
+    } as never;
+
+    expect(() => getScenarioSystemTrackState('governance', [staleUsage], null, true)).not.toThrow();
+    const tracks = getScenarioSystemTrackState('governance', [staleUsage], null, true);
+    expect(tracks.riskValue).toBe(0);
+    expect(tracks.resourceValue).toBe(3);
+  });
+
   it('infers gameplay profiles from theme and question', () => {
     expect(inferGameplayProfile('如果人工智能统治世界？', 'scifi_base').id).toBe('governance');
     expect(inferGameplayProfile('citizens assembly after election crisis', 'civic_chamber').id).toBe('governance');
@@ -327,6 +351,9 @@ describe('gameplayCards helpers', () => {
     expect(
       inferGameplayProfile('如果一支远征舰队在荒芜边疆建立流动自治城邦，会发生什么？', 'space_station').id,
     ).toBe('frontier');
+    expect(inferGameplayProfile('central bank liquidity run after credit default', 'modern_city').id).toBe('finance');
+    expect(inferGameplayProfile('hospital triage after vaccine shortage and ICU overload', 'modern_city').id).toBe('medical');
+    expect(inferGameplayProfile('chip platform cybersecurity incident in an open source stack', 'scifi_base').id).toBe('technology');
   });
 
   it('provides recommended cards and profile label', () => {
@@ -413,6 +440,107 @@ describe('gameplayCards helpers', () => {
     expect(getRecommendedGameplayCards('faith')).toContain('forbidden_ritual');
     expect(getRecommendedGameplayCards('frontier')).toContain('evacuation_order');
     expect(getRecommendedGameplayCards('law')).toContain('backchannel_pact');
+  });
+
+  it('falls back to generic for unknown profile ids', () => {
+    const unknownProfileId = 'unknown_profile' as GameplayProfileId;
+
+    expect(getGameplayProfileLabel(unknownProfileId, false)).toBe('General Tension');
+    expect(getGameplayProfileSignatureHooks(unknownProfileId, true)).toEqual(
+      getGameplayProfileSignatureHooks('generic', true),
+    );
+    expect(getGameplayProfileFrameSrc(unknownProfileId)).toContain('gameplay_card_frame_generic');
+    expect(getGameplayCardDirectivePreview(unknownProfileId, 'audit_reckoning', true)).toContain('公开责任');
+    expect(getRecommendedGameplayCards(unknownProfileId).slice(0, 3)).toEqual(
+      getRecommendedGameplayCards('generic').slice(0, 3),
+    );
+    expect(getGameplayProfileTacticalState(unknownProfileId, [], null, false).label).toBe('Center Probe');
+    expect(getScenarioSystemTrackState(unknownProfileId, [], null, false).riskLabel).toBe('Tension Clock');
+    expect(resolveGameplayProfileId('unknown_profile')).toBe('generic');
+    expect(resolveGameplayProfileId('')).toBe('generic');
+    expect(getGameplayProfileSummaryLabel('unknown_profile', false)).toBe('General Tension');
+    expect(getGameplayProfileSummaryHooks('  ', true)).toEqual(
+      getGameplayProfileSummaryHooks('generic', true),
+    );
+
+    const sharedPayload = readSharedChallengePayload(new URLSearchParams(
+      '?sharedChallenge=1&question=What+if%3F&rounds=4&agents=5&mode=blackboard&viz=1&profile=unknown_profile',
+    ));
+    expect(sharedPayload?.profileId).toBe('generic');
+    const emptyProfilePayload = readSharedChallengePayload(new URLSearchParams(
+      '?sharedChallenge=1&question=What+if%3F&rounds=4&agents=5&mode=blackboard&viz=1&profile=',
+    ));
+    expect(emptyProfilePayload?.profileId).toBe('generic');
+
+    const sharedSearch = buildSharedChallengeSearch({
+      question: 'What if?',
+      rounds: 4,
+      numAgents: 5,
+      mode: 'blackboard',
+      visualizationEnabled: true,
+      profileId: unknownProfileId,
+    });
+    expect(new URLSearchParams(sharedSearch).get('profile')).toBe('generic');
+  });
+
+  it('keeps shared gameplay contract synchronized with frontend profile and card ids', () => {
+    const contractCardIds = new Set(GAMEPLAY_CONTRACT.cards.map((card) => card.id));
+    const contractProfileIds = new Set(GAMEPLAY_CONTRACT.profiles.map((profile) => profile.id));
+    const frontendProfileIds = Object.keys(GAMEPLAY_PROFILE_FRAME_ASSETS).filter((profileId) => profileId !== 'generic');
+
+    expect([...contractProfileIds]).toEqual(expect.arrayContaining(frontendProfileIds));
+
+    for (const profile of GAMEPLAY_CONTRACT.profiles) {
+      expect(new Set(Object.keys(profile.default_directives))).toEqual(contractCardIds);
+      expect(profile.recommended_cards.every((cardId) => contractCardIds.has(cardId))).toBe(true);
+    }
+  });
+
+  it('returns at most 3 recommended cards in the display model', () => {
+    const model = getGameplayCardDisplayModel('governance');
+    expect(model.recommended.length).toBeLessThanOrEqual(3);
+    expect(model.recommended.length).toBeGreaterThan(0);
+  });
+
+  it('partitions cards into four named groups without recommended overlap', () => {
+    const model = getGameplayCardDisplayModel('governance');
+    expect(model.groups.map((group) => group.id)).toEqual([
+      'role_play',
+      'worldline_distort',
+      'crisis_dispatch',
+      'counter_cool',
+    ]);
+    const allGrouped: GameplayCardId[] = model.groups.flatMap((group) => group.cardIds);
+    for (const cardId of allGrouped) {
+      expect(model.recommended).not.toContain(cardId);
+    }
+  });
+
+  it('places counter cards under counter_cool group', () => {
+    const model = getGameplayCardDisplayModel('generic');
+    const counterCool = model.groups.find((group) => group.id === 'counter_cool');
+    expect(counterCool?.cardIds).toEqual(
+      expect.arrayContaining(['audit_reckoning', 'intel_blowback', 'mandate_snapback', 'ceasefire_committee']),
+    );
+  });
+
+  it('uses scenarioContext to bias recommended cards', () => {
+    const baseline = getGameplayCardDisplayModel('governance');
+    const pressured = getGameplayCardDisplayModel('governance', {
+      usages: [
+        { cardId: 'forbidden_ritual', profileId: 'governance', round: 1 },
+        { cardId: 'mandate_surge', profileId: 'governance', round: 2 },
+      ],
+      commitment: { active: true },
+    });
+    expect(pressured.recommended[0]).toBe('audit_reckoning');
+    expect(baseline.recommended).not.toEqual(pressured.recommended);
+  });
+
+  it('falls back to generic profile for unknown ids in display model', () => {
+    const model = getGameplayCardDisplayModel('unknown_profile');
+    expect(model.recommended.length).toBeGreaterThan(0);
+    expect(model.groups).toHaveLength(4);
   });
 
   it('builds mandate surge prompts as branch-wide legitimacy shocks', () => {

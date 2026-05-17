@@ -20,7 +20,7 @@ from sqlalchemy import create_engine, inspect, text
 _PREV_REVISION = "021_scope_debate_argument_unit_dedup_per_turn"
 _GRAPH_EDGE_EVIDENCE_DOWN_REVISION = "023_agent_conversation_quota_ledger"
 _AGENT_IDENTITY_PREFERRED_TIER_DOWN_REVISION = "025_backfill_graph_node_agent_name"
-_HEAD_REVISION = "029_prediction_journal_calibration_index"
+_HEAD_REVISION = "030_gameplay_intervention_metadata"
 
 
 def _alembic_runtime_or_skip():

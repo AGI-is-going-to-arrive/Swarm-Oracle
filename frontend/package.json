@@ -59,7 +59,11 @@
     "e2e:kg-explorer-live": "node scripts/e2e-kg-explorer-live.mjs full",
     "e2e:replay-view-live": "node scripts/e2e-replay-view-live.mjs full",
     "e2e:new-source-ingestion-live": "node scripts/e2e-new-source-ingestion-live.mjs full",
-    "e2e:native-search": "node scripts/e2e-native-search-suite.mjs"
+    "e2e:native-search": "node scripts/e2e-native-search-suite.mjs",
+    "e2e:gameplay:cards": "node scripts/e2e-gameplay-cards-modal.mjs full",
+    "e2e:gameplay:prediction": "node scripts/e2e-prediction-modal.mjs full",
+    "e2e:gameplay:receipt": "node scripts/e2e-intervention-receipt.mjs full",
+    "e2e:gameplay:full": "npm run e2e:gameplay:cards && npm run e2e:gameplay:prediction && npm run e2e:gameplay:receipt"
   },
   "dependencies": {
     "@antv/g6": "^5.1.0",

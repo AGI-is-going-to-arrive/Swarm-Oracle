@@ -8,11 +8,15 @@ import {
   exportScenario,
   exportScenarioSnapshot,
   generateSocialCopy,
+  getInterventionEffects,
   getScenario,
   identityContinuityPreflight,
   importScenarioSnapshot,
 } from './client';
-import type { CreateScenarioOptions } from './client';
+import type {
+  CreateScenarioOptions,
+  InterventionEffectsResponse,
+} from './client';
 
 describe('api client request parsing', () => {
   afterEach(() => {
@@ -417,5 +421,61 @@ describe('web search wire-format', () => {
     expect(body).not.toHaveProperty('web_search_provider');
     expect(body).not.toHaveProperty('web_search_api_key');
     expect(body).not.toHaveProperty('web_search_base_url');
+  });
+});
+
+describe('getInterventionEffects', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('hits the scenario-scoped intervention-effects endpoint and returns parsed effects', async () => {
+    const payload: InterventionEffectsResponse = {
+      effects: [
+        {
+          intervention_log_id: 'log-1',
+          card_id: 'human_takeover',
+          card_label: 'Human Takeover',
+          round_number: 3,
+          affected_agents: [{ agent_id: 'a1', display_name: 'Auditor' }],
+          response_excerpts: [{ agent_id: 'a1', excerpt: 'we will publish' }],
+          confidence: 0.6,
+          no_response_detected: false,
+          created_at: '2026-05-17T10:00:00Z',
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-type' ? 'application/json' : null,
+      },
+      text: vi.fn().mockResolvedValue(JSON.stringify(payload)),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getInterventionEffects('scenario-1');
+    expect(result).toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('/api/scenario/scenario-1/intervention-effects');
+  });
+
+  it('url-encodes the scenario id to prevent path traversal', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-type' ? 'application/json' : null,
+      },
+      text: vi.fn().mockResolvedValue(JSON.stringify({ effects: [] })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getInterventionEffects('a/b?c');
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('/api/scenario/a%2Fb%3Fc/intervention-effects');
   });
 });

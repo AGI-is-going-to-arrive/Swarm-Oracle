@@ -9,7 +9,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision: str = "020_harden_graph_snapshot_and_state_frame_constraints"
 down_revision: Union[str, None] = "019_add_debate_user_owner"
@@ -18,6 +18,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def _has_unique_index_columns(table_name: str, expected_columns: tuple[str, ...]) -> bool:
+    if context.is_offline_mode():
+        return False
+
     bind = op.get_bind()
     if bind.dialect.name != "sqlite":
         return False
@@ -32,7 +35,48 @@ def _has_unique_index_columns(table_name: str, expected_columns: tuple[str, ...]
     return False
 
 
+def _agent_state_frame_copy_from(
+    unique_constraint_name: str,
+    unique_columns: tuple[str, ...],
+) -> sa.Table:
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "agent_state_frame",
+        metadata,
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("scenario_id", sa.String(), nullable=False),
+        sa.Column("branch_id", sa.String(), nullable=False),
+        sa.Column("round_number", sa.Integer(), nullable=False),
+        sa.Column("agent_id", sa.String(), nullable=False),
+        sa.Column("stance_score", sa.Float(), nullable=False, server_default="0.0"),
+        sa.Column("stance_label", sa.String(), nullable=True),
+        sa.Column("emotion", sa.String(), nullable=True),
+        sa.Column("summary_excerpt", sa.Text(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.UniqueConstraint(*unique_columns, name=unique_constraint_name),
+    )
+    sa.Index("ix_agent_state_frame_scenario_id", table.c.scenario_id)
+    sa.Index("ix_agent_state_frame_branch_id", table.c.branch_id)
+    return table
+
+
+def _agent_state_frame_batch_kwargs(
+    unique_constraint_name: str,
+    unique_columns: tuple[str, ...],
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {"recreate": "always"}
+    if context.is_offline_mode():
+        kwargs["copy_from"] = _agent_state_frame_copy_from(
+            unique_constraint_name,
+            unique_columns,
+        )
+    return kwargs
+
+
 def _dedupe_graph_snapshots() -> None:
+    if context.is_offline_mode():
+        return
+
     bind = op.get_bind()
     latest_tiebreaker = "rowid DESC" if bind.dialect.name == "sqlite" else "id DESC"
     duplicate_groups = bind.execute(
@@ -129,6 +173,9 @@ def _dedupe_graph_snapshots() -> None:
 
 
 def _dedupe_agent_state_frames_for_legacy_constraint() -> None:
+    if context.is_offline_mode():
+        return
+
     bind = op.get_bind()
     duplicate_groups = bind.execute(
         sa.text(
@@ -193,8 +240,17 @@ def upgrade() -> None:
     target_columns = ("scenario_id", "branch_id", "round_number", "agent_id")
     legacy_columns = ("branch_id", "round_number", "agent_id")
     if not _has_unique_index_columns("agent_state_frame", target_columns):
-        with op.batch_alter_table("agent_state_frame", recreate="always") as batch_op:
-            if _has_unique_index_columns("agent_state_frame", legacy_columns):
+        with op.batch_alter_table(
+            "agent_state_frame",
+            **_agent_state_frame_batch_kwargs(
+                "uq_state_frame_branch_round_agent",
+                legacy_columns,
+            ),
+        ) as batch_op:
+            if context.is_offline_mode() or _has_unique_index_columns(
+                "agent_state_frame",
+                legacy_columns,
+            ):
                 batch_op.drop_constraint("uq_state_frame_branch_round_agent", type_="unique")
             batch_op.create_unique_constraint(
                 "uq_state_frame_scenario_branch_round_agent",
@@ -205,7 +261,13 @@ def upgrade() -> None:
 def downgrade() -> None:
     _dedupe_agent_state_frames_for_legacy_constraint()
 
-    with op.batch_alter_table("agent_state_frame", recreate="always") as batch_op:
+    with op.batch_alter_table(
+        "agent_state_frame",
+        **_agent_state_frame_batch_kwargs(
+            "uq_state_frame_scenario_branch_round_agent",
+            ("scenario_id", "branch_id", "round_number", "agent_id"),
+        ),
+    ) as batch_op:
         batch_op.drop_constraint("uq_state_frame_scenario_branch_round_agent", type_="unique")
         batch_op.create_unique_constraint(
             "uq_state_frame_branch_round_agent",

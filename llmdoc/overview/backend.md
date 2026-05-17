@@ -23,8 +23,8 @@
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import；scenario/story branch response 会回显 `parent_branch_id / fork_round / fork_reason / replay_kind / replay_source_branch_id`，并在 Result Quality 开启时回显 `verdict / verdict_confidence / branches[].question_answer` |
 | Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 Agent 备份导入导出；identity preflight 解析超时按 504 fail-closed |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary；bucket 会回显 `enforced / scope / window_seconds` |
-| Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板 |
-| Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary、score breakdown |
+| Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板；正式玩法卡注入会在后端校验 contract、冷却、点数和 pending metadata |
+| Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary、score breakdown、只读 intervention effect receipts |
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
 | Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard 与 segment filters |
 | Journal | `backend/app/api/journal.py` | 个人预测日志、resolve 与 calibration 数据 |
@@ -37,7 +37,7 @@
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent prompt 会带当前世界线标题/分叉原因，Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记 |
+| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、干预 pending metadata 消费与 effect receipt 写回、Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent prompt 会带当前世界线标题/分叉原因，Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记 |
 | Simulation Cancel | `backend/app/services/simulation_cancel.py` | scenario 取消 token、DB cancelled fallback 与后台任务取消信号 |
 | Preflight | `backend/app/services/preflight.py` | admin/CLI 预检：SQLite、ChromaDB、LLM、web search、CORS、volume |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
@@ -59,16 +59,16 @@
 | Hallucination Gate | `backend/app/services/hallucination_gate.py` | verdict 后的 warning-only claim / evidence 检查 |
 | Graph Analysis | `backend/app/services/graph_analysis.py` | 对最新 causal graph snapshot 做度数分布、god nodes、跨分支边摘要；大图会返回 `truncated: true` |
 | KG Realtime | `backend/app/services/kg_realtime.py` | 合并 `GraphDelta` 后通过 scenario WS 推送 `kg:delta`，payload 过大或失效时推送 `kg:snapshot_invalidated` |
-| Snapshot Export | `backend/app/services/snapshot_export.py` | scenario ZIP export/import、manifest/checksum、旧 ID 到新 ID remap、物理 member 计数、重复 member 拒绝与 ZIP 安全校验 |
+| Snapshot Export | `backend/app/services/snapshot_export.py` | scenario ZIP export/import、manifest/checksum、旧 ID 到新 ID remap、intervention receipt ledger、物理 member 计数、重复 member 拒绝与 ZIP 安全校验 |
 | Runtime Lock | `backend/app/services/runtime_lock.py` | SQLite shared lease + lease refresh，防重入 |
 | Debate Prompts | `backend/app/services/debate_prompts.py` | Debate motion/cast/turn prompt；LLM name、role、persona 生成与清洗 |
-| Gameplay Contract | `backend/app/services/gameplay_contract.py` | 读取共享玩法契约 |
+| Gameplay Contract | `backend/app/services/gameplay_contract.py` | 读取共享玩法契约，生成后端权威的安全玩法卡指令与可读 prompt |
 
 ### 数据模型
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| Core Models | `backend/app/models/database.py` | `Scenario`、`Branch`、`Round`、`Message`、`ReplayArtifact` 等 |
+| Core Models | `backend/app/models/database.py` | `Scenario`、`Branch`、`Round`、`Message`、`ReplayArtifact`、`PendingIntervention`、`InterventionLog` 等 |
 | Agent Identity Models | `backend/app/models/agent_identity.py` | generated/custom identity、persona metadata、preferred tier、favorite 标记 |
 | Campaign Models | `backend/app/models/campaign.py` | director profile、mastery、badge、campaign log |
 | Debate Models | `backend/app/models/debate.py` | debate、turn、prediction、counterplay |
@@ -85,6 +85,10 @@
 - `Scenario.gameplay_state_json`
   玩法卡、押注、archive raw 的 authority。
 - 这两块都通过 `campaign` 路由读写，并带 `revision` 乐观并发控制。
+- `PendingIntervention.metadata_json`
+  只保存待处理干预的运行时元数据，例如玩法卡、profile、目标分支和原始用户输入；snapshot import 不会把 pending queue 重新排队。
+- `InterventionLog.effect_summary_json`
+  干预完成后的只读效果回执；effects endpoint 和 snapshot export/import 都读取这份持久化数据，不从前端重算。
 - `Scenario.parsed_context.result_quality`
   Result Quality 的持久载荷；当前存顶层 `verdict / confidence / question_answer` 和 `branch_question_answers`，受 `FEATURE_RESULT_VERDICT` 控制，不是新表或新 column。
 - campaign finalize 与 scenario summary 当前返回同一套 `score_breakdown`；每项包含 `id / label_key / points / applied`，由后端按 archive grade、profile resonance、daily challenge、押注、director goals 与 worldline commitment 派生，不是新的持久化字段。
@@ -150,8 +154,8 @@
 - `GET /api/scenario/{id}/graph-analysis` 当前同时要求 `FEATURE_GRAPH_ANALYSIS=true` 和 `FEATURE_CAUSAL_GRAPH=true`；返回 god nodes、degree distribution、cross-branch edges 和 summary。`summary.total_nodes` 统计的是序列化 causal snapshot 的可见节点，包含合成 `outcome` nodes。分析前会先按最新 snapshot 的 node/edge 数做 SQL 预检，超过 `5000 nodes / 20000 edges` 时返回 `truncated: true`；带 `branch_id` 时，预检会按该 branch 的可见节点/边计数，避免大 scenario 下的小 branch 查询被保守截断。
 - `GraphEdge` 当前已有 `confidence_tier / source_ref / source_round_number / evidence_json` nullable 字段。causal graph 新边会写入 coarse evidence，并在 API response 里返回；重放轮次遇到旧 edge 时，会只补齐缺失的 evidence 字段，不覆盖已有非空值。inter-agent 边会把确定性 rule / reason 写进 `evidence_json`；其它 causal graph 写图路径仍可能只有 coarse provenance。debate argument map 也会在 `GET /api/debate/{id}/argument-map` 的 `edges[].evidence` 返回 `confidence_tier / source_ref / source_round_number / detail`。`detail` 只是 `evidence_json` 的透传，不是 LLM 解释文本。
 - `GET /api/scenario/{id}/personality-drift` 当前要求 `FEATURE_AGENT_IDENTITY=true`，并先校验 caller 能看到该 scenario。返回值按 drift score 排序，只做 warning 数据，不阻断 verdict；波动项来自消息 emotion 变化，不把 `Agent.stance` 当成时间线字段。
-- `GET /api/scenario/{id}/snapshot` 当前要求 `FEATURE_SNAPSHOT_EXPORT=true`，并先校验 scenario ownership。ZIP 包含 `manifest.json`、scenario、branches、agents、messages、causal graph 和 `checksums.sha256`；默认不导出 `user_id`，也会剥掉 API key、base URL、token、password 及常见 provider secret key 变体，branch `key_moments` 和 web context 这类 JSON 字符串也会被清理。
-- `POST /api/scenario/import-snapshot` 当前也受 `FEATURE_SNAPSHOT_EXPORT` gate；开启 `SESSION_SECRET` 时要求 signed principal。上传上限是 50 MB；导入前会拒绝绝对路径、`..`、反斜杠路径、symlink、重复 ZIP member name、超过 256 个物理 member、超大 member、总解压超限、异常压缩比、manifest/schema/checksum 不匹配、非 UTF-8 JSON/JSONL、单行超过 1 MB 的 JSONL，以及超过 100000 行的 JSONL。导入会新建 scenario/branch/agent/message/graph 主键并 remap FK，branch `replay_source_branch_id` 也会 remap；映射不到的旧引用会清空，imported agent 的 `agent_identity_id` 会清空。
+- `GET /api/scenario/{id}/snapshot` 当前要求 `FEATURE_SNAPSHOT_EXPORT=true`，并先校验 scenario ownership。ZIP 包含 `manifest.json`、scenario、branches、agents、messages、causal graph、`intervention_receipts.jsonl` 和 `checksums.sha256`；manifest 会带 receipt schema version。默认不导出 `user_id`，也会剥掉 API key、base URL、token、password 及常见 provider secret key 变体，branch `key_moments`、web context 和 effect summary 这类 JSON 字符串也会被清理。
+- `POST /api/scenario/import-snapshot` 当前也受 `FEATURE_SNAPSHOT_EXPORT` gate；开启 `SESSION_SECRET` 时要求 signed principal。上传上限是 50 MB；导入前会拒绝绝对路径、`..`、反斜杠路径、symlink、重复 ZIP member name、超过 256 个物理 member、超大 member、总解压超限、异常压缩比、manifest/schema/checksum 不匹配、非 UTF-8 JSON/JSONL、单行超过 1 MB 的 JSONL，以及超过 100000 行的 JSONL。导入会新建 scenario/branch/agent/message/graph/intervention receipt 主键并 remap FK，branch `replay_source_branch_id` 与 receipt 的 scenario/branch/log/agent 引用也会 remap；映射不到的旧引用会清空，但顶层 receipt `branch_id` 映射不到会拒绝导入。旧 snapshot 没有 `intervention_receipts.jsonl` 时仍可导入，pending intervention 不会随 snapshot import 重新排队。
 
 ### Ending Room
 
@@ -315,6 +319,7 @@
 - `AgentStateFrame` 当前按 `scenario_id + branch_id + round_number + agent_id` 唯一。
   同一个 `(branch / round / agent)` 组合就算出现在不同 scenario，也不会再互相撞库。
   `020` 迁移当前也兼容“runtime repair 先跑、Alembic 后补”的顺序，不会再因为旧约束名已经不存在而卡住升级；runtime repair 在重建唯一约束前也会先按最新一条脏数据去重，不会因为 legacy 重复行直接炸掉。
+  `020` 到 `030` 的 offline Alembic SQL 当前不依赖运行时 SQLite reflection / PRAGMA 查询；`030` 只新增 `pending_intervention.metadata_json` 与 `intervention_log.effect_summary_json`，并有 offline SQL 与 SQLite downgrade/upgrade roundtrip 覆盖。
 - `GraphSnapshot` 当前按 `owner_type + owner_id + graph_kind` 唯一。
   同一个 causal graph / argument map 在首次并发创建时，会回退到同一份 snapshot，而不是拆成多份；读取最新 snapshot 时，SQLite 按 `created_at DESC, rowid DESC`，非 SQLite 按 `created_at DESC, id DESC`。如果 SQLite legacy duplicate snapshot 还残留，runtime repair 会直接以最新 snapshot 为 authority，删除其他重复 snapshot 的 `graph_node / graph_edge` 和相关引用边；不会把旧残留合回当前图。
 - `resolve_identity()` 当前已支持复用外层 SQLModel session，避免 scenario parse 路径在同一事务里二次开 session 时撞到 SQLite `database is locked`。

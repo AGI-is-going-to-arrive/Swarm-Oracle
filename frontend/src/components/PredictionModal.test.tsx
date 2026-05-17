@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import type { ComponentProps } from 'react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -34,11 +35,44 @@ function makeBranch(overrides: Partial<BranchInfo> & Pick<BranchInfo, 'id' | 'ti
   };
 }
 
+function renderPredictionModal(
+  overrides: Partial<ComponentProps<typeof PredictionModal>> = {},
+) {
+  const onClose = vi.fn();
+  render(
+    <PredictionModal
+      scenarioId="scenario-1"
+      {...overrides}
+      onClose={onClose}
+    />,
+  );
+  return { onClose };
+}
+
 describe('PredictionModal automation callback', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
     window.sessionStorage.clear();
+  });
+
+  it('exposes modal dialog semantics and moves initial focus inside', async () => {
+    renderPredictionModal();
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    await waitFor(() => {
+      expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    });
+  });
+
+  it('closes when Escape is pressed', async () => {
+    const user = userEvent.setup();
+    const { onClose } = renderPredictionModal();
+
+    await user.keyboard('{Escape}');
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('reports text and confidence changes', async () => {
@@ -130,6 +164,12 @@ describe('PredictionModal automation callback', () => {
       />,
     );
 
+    const advancedToggle = screen.getByRole('button', { name: /prediction\.show_advanced/ });
+    expect(advancedToggle).not.toHaveAttribute('aria-controls');
+    await user.click(advancedToggle);
+    const controlsId = advancedToggle.getAttribute('aria-controls');
+    expect(controlsId).toBeTruthy();
+    expect(document.getElementById(controlsId as string)).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText('prediction.bet_kind_label'), 'profile_resonance');
     await user.type(screen.getByLabelText('prediction.text_label'), '我押这局会精准命中题材核心。');
 
@@ -158,6 +198,7 @@ describe('PredictionModal automation callback', () => {
       )),
     ).toBeInTheDocument();
 
+    await user.click(screen.getByRole('button', { name: /prediction\.show_advanced/ }));
     await user.selectOptions(screen.getByLabelText('prediction.bet_kind_label'), 'profile_resonance');
     expect(screen.getByRole('option', { name: 'Direction Aligned' })).toBeInTheDocument();
     expect(
@@ -304,6 +345,49 @@ describe('PredictionModal automation callback', () => {
     expect(onPlacedBet).toHaveBeenCalledTimes(1);
     expect(onPlacedBet.mock.calls[0][0].betting.bets[0].targetId).toBe('branch-alt');
     expect(onPlacedBet.mock.calls[0][0].betting.bets[0].targetLabel).toBe('Alternate worldline');
+  });
+
+  it('surfaces a persistence error without closing the modal and retry skips re-submitting the prediction', async () => {
+    const user = userEvent.setup();
+    const { submitPrediction } = await import('../api/client');
+    vi.mocked(submitPrediction).mockResolvedValue({
+      id: 'prediction-persistence',
+      scenario_id: 'scenario-1',
+      user_name: 'Test Director',
+      prediction_text: 'Structured bet',
+      confidence: 0.7,
+      score: null,
+      score_reason: null,
+      created_at: '2026-03-19T00:00:00Z',
+    });
+    const persistenceError = new Error('gameplay-state persistence failed');
+    const onPlacedBet = vi
+      .fn<(meta: unknown) => Promise<void>>()
+      .mockRejectedValueOnce(persistenceError)
+      .mockResolvedValueOnce(undefined);
+    const onClose = vi.fn();
+
+    render(
+      <PredictionModal
+        scenarioId="scenario-1"
+        onClose={onClose}
+        onPlacedBet={onPlacedBet}
+      />,
+    );
+
+    await user.type(screen.getByLabelText('prediction.text_label'), 'Persist this prediction.');
+    await user.click(screen.getByRole('button', { name: 'prediction.submit' }));
+
+    expect(submitPrediction).toHaveBeenCalledTimes(1);
+    expect(onPlacedBet).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(await screen.findByText('prediction.error_persistence')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'prediction.submit' })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: 'prediction.submit' }));
+
+    expect(submitPrediction).toHaveBeenCalledTimes(1);
+    expect(onPlacedBet).toHaveBeenCalledTimes(2);
   });
 
   it('releases the scenario meta lock after a successful submission', async () => {

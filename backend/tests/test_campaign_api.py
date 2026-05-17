@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.main import app
-from app.models import Scenario, ScenarioStatus
+from app.models import Branch, Scenario, ScenarioStatus
 from app.models.database import get_engine
 from app.services import daily_challenges as daily_challenges_module
 
@@ -27,6 +27,13 @@ def _seed_completed_scenario(question: str = "API campaign 测试") -> str:
         session.commit()
         session.refresh(scenario)
         return scenario.id
+
+
+def _seed_branch(scenario_id: str, branch_id: str, title: str = "Branch") -> None:
+    engine = get_engine()
+    with Session(engine) as session:
+        session.add(Branch(id=branch_id, scenario_id=scenario_id, title=title))
+        session.commit()
 
 
 def test_finalize_then_get_campaign_summaries(client: TestClient):
@@ -420,6 +427,7 @@ def test_director_state_endpoint_rejects_incomplete_active_commitment(client: Te
 
 def test_gameplay_state_endpoint_round_trip_and_scenario_readback(client: TestClient):
     scenario_id = _seed_completed_scenario("gameplay state api")
+    _seed_branch(scenario_id, "branch-1", "Judicial Review")
 
     initial = client.get(f"/api/campaign/scenario/{scenario_id}/gameplay-state")
     assert initial.status_code == 200
@@ -579,3 +587,368 @@ def test_gameplay_state_endpoint_rejects_stale_revision_conflict(client: TestCli
     )
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["code"] == "GAMEPLAY_STATE_CONFLICT"
+
+
+def _gameplay_state_with_bet(bet: dict) -> dict:
+    return {
+        "revision": 0,
+        "cards": {"usage_log": []},
+        "betting": {"bets": [bet]},
+        "archive": {"key_moments": [], "branch_snapshots": []},
+    }
+
+
+def test_gameplay_state_endpoint_accepts_valid_branch_winner_bet(client: TestClient):
+    scenario_id = _seed_completed_scenario("gameplay valid branch_winner")
+    _seed_branch(scenario_id, "branch-real-1", "Real Branch")
+
+    response = client.put(
+        f"/api/campaign/scenario/{scenario_id}/gameplay-state",
+        json=_gameplay_state_with_bet(
+            {
+                "bet_id": "bet-good-branch",
+                "kind": "branch_winner",
+                "target_id": "branch-real-1",
+                "target_label": "Real Branch",
+                "confidence": 0.5,
+                "placed_at_round": 1,
+                "placed_at": "2026-03-20T00:00:00Z",
+                "resolved": False,
+            }
+        ),
+    )
+    assert response.status_code == 200
+    assert response.json()["betting"]["bets"][0]["target_id"] == "branch-real-1"
+
+
+def test_gameplay_state_endpoint_rejects_branch_winner_with_unknown_target(client: TestClient):
+    scenario_id = _seed_completed_scenario("gameplay unknown branch_winner")
+    _seed_branch(scenario_id, "branch-real-1", "Real Branch")
+
+    response = client.put(
+        f"/api/campaign/scenario/{scenario_id}/gameplay-state",
+        json=_gameplay_state_with_bet(
+            {
+                "bet_id": "bet-ghost-branch",
+                "kind": "branch_winner",
+                "target_id": "branch-does-not-exist",
+                "target_label": "Ghost",
+                "confidence": 0.5,
+                "placed_at_round": 1,
+                "placed_at": "2026-03-20T00:00:00Z",
+                "resolved": False,
+            }
+        ),
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "GAMEPLAY_BET_INVALID_BRANCH_TARGET"
+
+
+def test_gameplay_state_endpoint_rejects_branch_winner_missing_target(client: TestClient):
+    scenario_id = _seed_completed_scenario("gameplay branch_winner missing target")
+    _seed_branch(scenario_id, "branch-real-1", "Real Branch")
+
+    response = client.put(
+        f"/api/campaign/scenario/{scenario_id}/gameplay-state",
+        json=_gameplay_state_with_bet(
+            {
+                "bet_id": "bet-no-target",
+                "kind": "branch_winner",
+                "target_id": None,
+                "target_label": "Real Branch",
+                "confidence": 0.5,
+                "placed_at_round": 1,
+                "placed_at": "2026-03-20T00:00:00Z",
+                "resolved": False,
+            }
+        ),
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "GAMEPLAY_BET_MISSING_BRANCH_TARGET"
+
+
+def test_gameplay_state_endpoint_accepts_valid_ending_tone_bet(client: TestClient):
+    scenario_id = _seed_completed_scenario("gameplay valid ending_tone")
+
+    for tone in ("order", "balance", "rupture"):
+        response = client.put(
+            f"/api/campaign/scenario/{scenario_id}/gameplay-state",
+            json={
+                "revision": (tone != "order") * 1 + (tone == "rupture") * 1,
+                "cards": {"usage_log": []},
+                "betting": {
+                    "bets": [
+                        {
+                            "bet_id": f"bet-tone-{tone}",
+                            "kind": "ending_tone",
+                            "target_id": tone,
+                            "target_label": tone.title(),
+                            "confidence": 0.5,
+                            "placed_at_round": 1,
+                            "placed_at": "2026-03-20T00:00:00Z",
+                            "resolved": False,
+                        }
+                    ]
+                },
+                "archive": {"key_moments": [], "branch_snapshots": []},
+            },
+        )
+        assert response.status_code == 200, (tone, response.json())
+
+
+def test_gameplay_state_endpoint_rejects_unknown_ending_tone_target(client: TestClient):
+    scenario_id = _seed_completed_scenario("gameplay invalid ending_tone")
+
+    response = client.put(
+        f"/api/campaign/scenario/{scenario_id}/gameplay-state",
+        json=_gameplay_state_with_bet(
+            {
+                "bet_id": "bet-bad-tone",
+                "kind": "ending_tone",
+                "target_id": "rebirth",
+                "target_label": "Rebirth",
+                "confidence": 0.5,
+                "placed_at_round": 1,
+                "placed_at": "2026-03-20T00:00:00Z",
+                "resolved": False,
+            }
+        ),
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "GAMEPLAY_BET_INVALID_ENDING_TONE"
+
+
+def test_gameplay_state_endpoint_accepts_valid_profile_resonance_bet(client: TestClient):
+    scenario_id = _seed_completed_scenario("gameplay valid profile_resonance")
+
+    response = client.put(
+        f"/api/campaign/scenario/{scenario_id}/gameplay-state",
+        json=_gameplay_state_with_bet(
+            {
+                "bet_id": "bet-resonance-aligned",
+                "kind": "profile_resonance",
+                "target_id": "aligned",
+                "target_label": "Aligned",
+                "confidence": 0.5,
+                "placed_at_round": 1,
+                "placed_at": "2026-03-20T00:00:00Z",
+                "resolved": False,
+            }
+        ),
+    )
+    assert response.status_code == 200
+
+
+def test_gameplay_state_endpoint_rejects_unknown_profile_resonance_target(client: TestClient):
+    scenario_id = _seed_completed_scenario("gameplay invalid profile_resonance")
+
+    response = client.put(
+        f"/api/campaign/scenario/{scenario_id}/gameplay-state",
+        json=_gameplay_state_with_bet(
+            {
+                "bet_id": "bet-bad-resonance",
+                "kind": "profile_resonance",
+                "target_id": "uncertain",
+                "target_label": "Uncertain",
+                "confidence": 0.5,
+                "placed_at_round": 1,
+                "placed_at": "2026-03-20T00:00:00Z",
+                "resolved": False,
+            }
+        ),
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "GAMEPLAY_BET_INVALID_PROFILE_RESONANCE"
+
+
+def test_gameplay_state_get_preserves_legacy_bets_without_strict_failure(client: TestClient):
+    """Reads of pre-existing scenarios must not fail validation (backward compat)."""
+    scenario_id = _seed_completed_scenario("gameplay legacy preserve")
+
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.gameplay_state_json = {
+            "revision": 0,
+            "cards": {"usage_log": []},
+            "betting": {
+                "bets": [
+                    {
+                        "bet_id": "legacy-1",
+                        "kind": "branch_winner",
+                        "target_id": "branch-orphan",
+                        "target_label": "Legacy Branch",
+                        "confidence": 0.5,
+                        "placed_at_round": 1,
+                        "placed_at": "2024-01-01T00:00:00Z",
+                        "resolved": False,
+                    }
+                ]
+            },
+            "archive": {"key_moments": [], "branch_snapshots": []},
+        }
+        session.add(scenario)
+        session.commit()
+
+    response = client.get(f"/api/campaign/scenario/{scenario_id}/gameplay-state")
+    assert response.status_code == 200
+    assert response.json()["betting"]["bets"][0]["bet_id"] == "legacy-1"
+
+
+# ── Phase 4: intervention effect endpoint ──────────────────
+
+
+def _seed_intervention_log_with_effect(
+    scenario_id: str,
+    *,
+    branch_id: str = "branch-effect",
+    round_number: int = 2,
+    user_input: str = "请强推公开解释义务",
+    effect_summary: dict | None = None,
+) -> str:
+    import json as _json
+
+    from app.models import Branch, InterventionLog
+
+    engine = get_engine()
+    with Session(engine) as session:
+        existing_branch = session.get(Branch, branch_id)
+        if existing_branch is None:
+            session.add(Branch(id=branch_id, scenario_id=scenario_id, title="Effect Branch"))
+        log = InterventionLog(
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_number=round_number,
+            user_input=user_input,
+        )
+        if effect_summary is not None:
+            log.effect_summary_json = _json.dumps(
+                effect_summary, ensure_ascii=False, sort_keys=True
+            )
+        session.add(log)
+        session.commit()
+        session.refresh(log)
+        return log.id
+
+
+def test_intervention_effects_endpoint_returns_newest_first(client: TestClient):
+    scenario_id = _seed_completed_scenario("intervention effects 测试")
+    older = _seed_intervention_log_with_effect(
+        scenario_id,
+        round_number=1,
+        user_input="第一回合干预",
+        effect_summary={
+            "intervention_log_id": "ignored",
+            "card_id": "human_takeover",
+            "round_number": 1,
+            "user_input": "第一回合干预",
+            "affected_agents": [
+                {"agent_id": "agent-1", "display_name": "审计官"}
+            ],
+            "response_excerpts": [
+                {"agent_id": "agent-1", "excerpt": "我会公开解释这一回合。"}
+            ],
+            "confidence": 0.5,
+            "no_response_detected": False,
+        },
+    )
+    import time as _time
+
+    _time.sleep(0.01)  # ensure created_at ordering differs
+    newer = _seed_intervention_log_with_effect(
+        scenario_id,
+        round_number=2,
+        user_input="第二回合干预",
+        effect_summary={
+            "intervention_log_id": "ignored",
+            "card_id": None,
+            "round_number": 2,
+            "user_input": "第二回合干预",
+            "affected_agents": [],
+            "response_excerpts": [],
+            "confidence": 0.0,
+            "no_response_detected": True,
+        },
+    )
+
+    response = client.get(f"/api/scenario/{scenario_id}/intervention-effects")
+    assert response.status_code == 200
+    body = response.json()
+    assert "effects" in body
+    ids = [entry["intervention_log_id"] for entry in body["effects"]]
+    assert newer in ids
+    assert older in ids
+    assert ids.index(newer) < ids.index(older)
+
+    newer_entry = next(e for e in body["effects"] if e["intervention_log_id"] == newer)
+    older_entry = next(e for e in body["effects"] if e["intervention_log_id"] == older)
+    assert newer_entry["no_response_detected"] is True
+    assert older_entry["affected_agents"][0]["agent_id"] == "agent-1"
+    assert older_entry["card_label"]  # card_label resolved from gameplay contract
+    assert older_entry["confidence"] == 0.5
+
+
+def test_intervention_effects_endpoint_skips_logs_without_summary(client: TestClient):
+    scenario_id = _seed_completed_scenario("intervention effects no-summary")
+    _seed_intervention_log_with_effect(
+        scenario_id,
+        round_number=1,
+        user_input="legacy intervention without receipt",
+        effect_summary=None,  # legacy scenario — no receipt persisted
+    )
+
+    response = client.get(f"/api/scenario/{scenario_id}/intervention-effects")
+    assert response.status_code == 200
+    assert response.json() == {"effects": []}
+
+
+def test_intervention_effects_endpoint_missing_scenario_returns_404(client: TestClient):
+    response = client.get("/api/scenario/does-not-exist/intervention-effects")
+    # ownership guard returns 404 SCENARIO_NOT_FOUND for unknown scenario_id;
+    # the endpoint never exposes other users' data.
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
+
+
+def test_intervention_effects_endpoint_ignores_malformed_summary(client: TestClient):
+    scenario_id = _seed_completed_scenario("intervention effects malformed")
+    import json as _json
+
+    from app.models import Branch, InterventionLog
+
+    engine = get_engine()
+    with Session(engine) as session:
+        session.add(
+            Branch(
+                id="branch-malformed",
+                scenario_id=scenario_id,
+                title="Malformed Branch",
+            )
+        )
+        # Hand-craft a log row whose effect summary is not valid JSON.
+        log = InterventionLog(
+            scenario_id=scenario_id,
+            branch_id="branch-malformed",
+            round_number=1,
+            user_input="malformed test",
+        )
+        log.effect_summary_json = "{not valid json"
+        session.add(log)
+
+        # And one whose JSON parses but isn't an object.
+        log2 = InterventionLog(
+            scenario_id=scenario_id,
+            branch_id="branch-malformed",
+            round_number=2,
+            user_input="malformed list",
+        )
+        log2.effect_summary_json = _json.dumps([1, 2, 3])
+        session.add(log2)
+
+        session.commit()
+
+    response = client.get(f"/api/scenario/{scenario_id}/intervention-effects")
+    assert response.status_code == 200
+    # Both malformed rows must be silently filtered out.
+    assert response.json() == {"effects": []}

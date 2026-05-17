@@ -1056,6 +1056,47 @@
   margin-bottom: 8px;
 }
 
+.prediction-card__settlement-reason {
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  background: color-mix(in oklab, var(--bg-elevated) 84%, var(--text-muted) 16%);
+  border-left: 3px solid var(--border-default);
+  word-break: break-word;
+}
+
+.prediction-card__settlement-reason--hit {
+  color: var(--color-success);
+  background: color-mix(in oklab, var(--color-success) 10%, var(--bg-elevated));
+  border-left-color: var(--color-success);
+}
+
+.prediction-card__settlement-reason--miss {
+  color: var(--color-warning);
+  background: color-mix(in oklab, var(--color-warning) 10%, var(--bg-elevated));
+  border-left-color: var(--color-warning);
+}
+
+.prediction-card__settlement-reason--pending {
+  color: var(--text-muted);
+  background: color-mix(in oklab, var(--bg-elevated) 84%, var(--text-muted) 16%);
+  border-left-color: var(--border-default);
+}
+
+@media (forced-colors: active) {
+  .prediction-card__settlement-reason {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    forced-color-adjust: none;
+  }
+}
+
 .prediction-card__score {
   padding-top: 12px;
   border-top: 1px solid var(--border-subtle);

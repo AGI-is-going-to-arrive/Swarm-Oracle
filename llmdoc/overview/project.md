@@ -29,10 +29,10 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑、收藏和选择自建 Agent，也可以在 `/agents/new` 通过 PDF document tab 生成 Agent；长 PDF 会走采样粗扫 + 全文证据精提，部分 persona 失败时保留已创建 Agent 并显示失败数量。首页 attach panel 会以卡片展示 persona、knowledge domains 和 decision bias，最多选择 5 个，并只把 identity id 传给主推演。自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。Agent Library 的 favorites 是普通筛选按钮，Workshop 的 manual/document tab 支持键盘方向键切换；capability/favorite 失败会显示本地化错误和 retry，不直接露出原始后端文本。
 - 当 `persona_export` capability 开启时，Agent Library 的卡片可导出 Agent 备份，顶部可从备份创建新的 custom Agent；Agent Workshop header 也会显示同一套备份工具，编辑已有 Agent 时才显示导出。备份导入不会覆盖已有身份，并会把 decision bias 归一化到安全的 5 维数值；粘贴 JSON 入口默认折叠在高级区域。导入/导出失败会显示本地化提示，意外错误只进入 debug log。
 - 当 `prediction_journal` capability 开启时，`/me/journal` 提供个人预测日志、resolve 状态和 calibration 可视化；绑定 scenario 时按当前用户校验所有权，跨用户或无 owner 的旧 scenario 统一隐藏成 404，刷新时会忽略迟到响应，不用旧请求覆盖新列表。
-- `SimulationView` 负责 live 推演、Classic 分支树、Theater、干预、玩法卡、结构化押注与 capture。Classic 分支卡片仍以 `Branch.title` 为真实标题；标题太短时，前端只补一小段 `description / fork_reason` 线索，方便用户看懂路线差异。右侧 Agent 面板在筛选某个 Agent 时，会把该 Agent 的发言按世界线分组，并在组内按 round 排序。
+- `SimulationView` 负责 live 推演、Classic 分支树、Theater、干预、玩法卡、结构化押注、干预回执与 capture。Classic 分支卡片仍以 `Branch.title` 为真实标题；标题太短时，前端只补一小段 `description / fork_reason` 线索，方便用户看懂路线差异。右侧 Agent 面板在筛选某个 Agent 时，会把该 Agent 的发言按世界线分组，并在组内按 round 排序。
 - live 推演当前支持显式取消：前端会弹确认框，后端把 `parsing / simulating / narrating` 的 scenario 落成 `cancelled` 并请求后台任务停止；已有本地 token 的 worker 也会继续回查 DB `cancelled`，`cancelled / done / error` 终态不会被后续 stage 覆盖。
 - `ResultView` 负责结局对比、Result Quality verdict、`counterfactual compare / resume / faction timeline`、档案、导演复盘 / campaign summary、分享、导出、结果追问与 replay/import；当 `result_verdict` capability 开启且 story 带 verdict 时，结果页会先显示直接回答原问题的预测结论和置信度，结局卡有 `question_answer` 时会显示分支级一句话回答；旧 scenario 或关闭开关时仍走原来的多结局 subtitle。因果档案当前改成问题、判定、系统读数、玩家动作、下一步和证据账本，不再把关键记录堆成一长串；导演复盘会优先使用后端 `score_breakdown`，并把 campaign summary、what-if、世界线承诺、押注、干预和关键时刻展示成生涯分变化、等级进度、本局读数和下一步入口；replay snapshot 带 `campaignSummary` 时只读展示，不重新 finalize。当后端写入 `web_search_context` 时，也会显示真实世界来源卡片；如果 payload 带 `native_citations`，结果页会单独展示 native citations，并跳过非字符串 text、非 http(s) URL 或 malformed replay 数据。`FEATURE_NEW_SOURCES=true` 且有 `family_context` 时，结果页当前还会渲染 `Polymarket / Finance / Academic / News` 四张 source family card；`failed / unsupported_provider / fallback_unconstrained / search_skipped` 都有专门文案，后端 `status_reason` 会进入卡片说明，desktop 和 mobile sheet 的 `aria-describedby` id 不复用。历史 replay 里已有数据但当前 family capability 未开启时，会显示 recorded badge，不把历史来源伪装成 live provider。`polymarket.configured_host=non-us` 时会显示地域限制占位。结果页当前的 `What's Next / 下一步` bridge 会展示 `causal / replay / compare / workbench / agents / share` 入口，disabled 卡片保留可见状态说明，但不再渲染无 `href` 的 `<a>`，文字对比也不再靠整卡 opacity 压低。分享弹窗当前还可导出 1200×630 PNG 卡片，卡片只包含问题、主导结局、可见来源 family 和前 3 个 Agent 名，不写入 BYOK key、base URL 或用户 token。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。续跑结局卡会显示 `续跑分支` badge、来源分支按钮和独立概率说明；点击来源按钮会展开并聚焦来源分支标题。结果页里的 `FactionTimeline` 当前会优先跟随正在展开查看的分支；未展开时会落到概率最高分支，并改成真实纵向时间线，`stance / confidence` 等指标直接可见，不再只藏在 tooltip badge 里。结果页的 compare / counterfactual / resume 入口也跟随同一条 analysis branch 语义，不再固定拿 `branches[0]`；counterfactual 入口会用 story 返回的 `fork_round` 和 `parent_branch_id` 定位来源分支，只允许改写来源分支里真实存在的一句旧发言；resume 面板在可用时会优先让用户先选分支，再选择同分支 checkpoint，并把可读 `compressed_summary` 摘成预览；没有 checkpoint 时才回到 round number 输入。结果追问也跟随同一条 analysis branch，把当前结局标题、洞察、分支原因、关键时刻和对比分支传给对话面板。replay 模式下会继续保留 replay-safe 的 `causal graph` 入口和 `FactionTimeline`，但 `counterfactual / resume / result conversation` 这类 live-only 面板仍保持隐藏。标题、空态、轮次与事件标签都会跟随 UI 语言；FactionTimeline lead 文案当前也已走 i18n key + `{{title}}` 插值。`CompareDigestView` 的非活跃 pane 当前会保留更完整的待机镜像，不再是纯黑占位。前端 gated route 当前也把 `feature disabled` 和 `capability probe 失败` 分开显示：`ReplayView` 不再 silent redirect，`KGExplorerView / CompareDigestView / FactionTimeline` 也不再直接把原始错误字符串或所有异常压成空态。
-- Sprint 3 核心体验当前已完成接线：结果页有时钟倒拨入口、HOPs 分支概率动画、预测分享卡片和 snapshot export；首页有 snapshot import；圆桌 analyst 使用 ReACT 工具链面板；人格漂移只做 warning，不阻断 verdict。
+- Sprint 3 核心体验当前已完成接线：结果页有时钟倒拨入口、HOPs 分支概率动画、预测分享卡片和 snapshot export；首页有 snapshot import；snapshot export/import 会保留已完成干预的只读回执，但不会把 pending intervention 重新排队；圆桌 analyst 使用 ReACT 工具链面板；人格漂移只做 warning，不阻断 verdict。
 - Sprint 4 品质提升当前已完成本地审查与修复：backend KG realtime event contract、ResultView 第一阶段拆分、isZh 文案继续迁到 locale key、voice variant 18 种和 Phaser reduced-motion guard 已并入当前工作树。ResultView 后续如果继续改，应优先收窄 `ResultContext` 的宽 context。
 - ResultView 当前界面文案区分 `Reader / Explore` 两种模式；Reader 是默认阅读模式，并保留可用的 resume 面板、下一步入口和 header 图谱直达入口；Explore 会展开因果图、KG 和节点追问等较重面板，切换时滚到下一步区。用户选择仍保存在本地偏好里，内部键名沿用 `workbench`。
 - 独立 `/workbench/:id` 图谱工作台保留 `view` 与 `branch` query，三种视图继续按各自 capability gate 判断；结果页 header 和下一步 bridge 都会带上当前 analysis branch，页面顶部会提供返回对应结果页的链接。
@@ -156,6 +156,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 主模式 authority 已以后端为准：
   - `director_state_json`
   - `gameplay_state_json`
+- 已完成干预的 effect receipt 持久化在 `InterventionLog.effect_summary_json`；前端只读展示，snapshot import/export 会 remap receipt 引用。
 - `scenarioMeta` 仍存在，但只承担缓存、兼容与 replay 输入职责。
 - 自定义 BYOK 与搜索增强 override 的官方托管 base URL 当前要求 `https`；只有本地或 self-hosted 开发地址才允许 `http`。
 - replay 分享优先走后端 `ReplayArtifact`；当 artifact 不可用且 URL token 也过大时，Oracle replay 会回退为本地只读副本链接。
@@ -175,6 +176,12 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 
 - 主闭环当前维持 `release-candidate` 级别。
 - 当前稳定基线仍保留：
+  - 本轮 gameplay-system hardening 定向复验：
+    - backend gameplay/snapshot/migration pytest：`129 passed`
+    - backend touched-file ruff：通过
+    - Alembic `020 -> 030` 全链路 offline SQL upgrade/downgrade：生成成功（`973 / 414` 行）
+    - frontend gameplay targeted vitest：`11 files / 163 tests passed`
+    - frontend `tsc / lint / build + perf budgets`、3 个 gameplay E2E 脚本 `node --check`、i18n parity `2625/2625` 与 `git diff --check`：通过
   - `graph / replay / backend correctness` 修复，以及 UI review findings 对应前端修复，当前都已并入基线
   - P1 post-review hardening 的 fresh 验证当前已补：
     - backend P1/迁移/契约窄集 pytest：`186 passed`

@@ -129,7 +129,7 @@ export default function DirectorNotebook(props: DirectorNotebookArchiveProps) {
             : t('result.archive_bet_miss');
   const dominantToneLabel = displayArchive?.dominantTone
     ? getEndingToneLabel(displayArchive.dominantTone, isZh)
-    : t('result.archive_unset');
+    : t('result.archive_tone_not_enough_evidence');
   const archiveQuestion = storyData?.question ?? scenario?.question ?? t('result.archive_question_unset');
   const archiveVerdictTitle = displayArchive?.dominantBranchTitle ?? analysisBranch?.title ?? t('result.archive_unset');
   const archiveVerdictDetail = resultConversationContext?.insight

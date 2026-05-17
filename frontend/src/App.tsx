@@ -45,6 +45,15 @@ const ReplayView = lazy(() => import('./pages/ReplayView'));
 const SetupWizardView = lazy(() => import('./pages/SetupWizardView'));
 // Personal Prediction Journal at /me/journal
 const PersonalJournalView = lazy(() => import('./pages/PersonalJournalView'));
+const GameplayCardsModalPreview = lazy(() =>
+  import('./pages/E2EPreviewSurfaces').then((mod) => ({ default: mod.GameplayCardsModalPreview }))
+);
+const PredictionModalPreview = lazy(() =>
+  import('./pages/E2EPreviewSurfaces').then((mod) => ({ default: mod.PredictionModalPreview }))
+);
+const InterventionReceiptPreview = lazy(() =>
+  import('./pages/E2EPreviewSurfaces').then((mod) => ({ default: mod.InterventionReceiptPreview }))
+);
 
 function RouteFallback() {
   const { t } = useTranslation();
@@ -90,6 +99,9 @@ export default function App() {
             <Route path="/admin/setup" element={<SetupWizardView />} />
             {/* Personal Prediction Journal */}
             <Route path="/me/journal" element={<PersonalJournalView />} />
+            <Route path="/__gameplay_cards_modal_preview" element={<GameplayCardsModalPreview />} />
+            <Route path="/__prediction_modal_preview" element={<PredictionModalPreview />} />
+            <Route path="/__intervention_receipt_preview" element={<InterventionReceiptPreview />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

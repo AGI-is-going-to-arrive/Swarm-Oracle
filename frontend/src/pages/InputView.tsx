@@ -434,10 +434,10 @@ export function InputView() {
     ? t('home.campaign_next_unlock', { count: dailyMastery.score_to_next_level })
     : t('home.campaign_mastered');
   const sharedChallengeProfileLabel = sharedChallengeBanner?.profileId
-    ? getGameplayProfileLabel(sharedChallengeBanner.profileId as never, isZh)
+    ? getGameplayProfileLabel(sharedChallengeBanner.profileId, isZh)
     : null;
   const weeklyTopProfileLabel = campaignWeeklySummary?.top_profile_id
-    ? getGameplayProfileLabel(campaignWeeklySummary.top_profile_id as never, isZh)
+    ? getGameplayProfileLabel(campaignWeeklySummary.top_profile_id, isZh)
     : null;
   const byokRequestsPerMinute = parseOptionalRuntimeLimit(llmRequestsPerMinute);
   const byokTokensPerMinute = parseOptionalRuntimeLimit(llmTokensPerMinute);
@@ -463,7 +463,7 @@ export function InputView() {
       : 'not_started';
   const topMasteryEntries = topMasteries.map((mastery) => ({
     profile_id: mastery.profile_id,
-    profile_label: getGameplayProfileLabel(mastery.profile_id as never, isZh),
+    profile_label: getGameplayProfileLabel(mastery.profile_id, isZh),
     level: mastery.level,
     score_to_next_level: mastery.score_to_next_level ?? null,
   }));
@@ -2199,7 +2199,7 @@ export function InputView() {
                   <div className="daily-challenge-card__hooks">
                     {topMasteries.map((mastery) => (
                       <span key={mastery.profile_id} className="daily-challenge-card__pill daily-challenge-card__pill--profile">
-                        {getGameplayProfileLabel(mastery.profile_id as never, isZh)}
+                        {getGameplayProfileLabel(mastery.profile_id, isZh)}
                         {' · '}
                         {t('home.campaign_mastery_level', { level: mastery.level })}
                       </span>

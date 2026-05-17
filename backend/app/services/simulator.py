@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import func
@@ -19,6 +20,7 @@ from app.models import (
     AgentMessage,
     Branch,
     BranchStatus,
+    InterventionLog,
     PendingIntervention,
     Round,
     Scenario,
@@ -93,7 +95,23 @@ except ImportError:
 # File-backed SQLite deployments use a shared DB queue so different workers
 # can see the same pending interventions. In-memory fallback is kept only
 # for tests / non-file SQLite URLs.
-pending_interventions: dict[str, list[str]] = {}
+@dataclass(frozen=True)
+class PendingInterventionItem:
+    text: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __str__(self) -> str:
+        return self.text
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self.text == other
+        if isinstance(other, PendingInterventionItem):
+            return self.text == other.text and self.metadata == other.metadata
+        return False
+
+
+pending_interventions: dict[str, list[PendingInterventionItem]] = {}
 _intervention_lock = asyncio.Lock()
 
 logger = logging.getLogger(__name__)
@@ -523,6 +541,281 @@ def _split_intervention_key(key: str) -> tuple[str, str]:
     return scenario_id, branch_id
 
 
+def _encode_intervention_metadata(metadata: dict[str, Any] | None) -> str | None:
+    if not metadata:
+        return None
+    return json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _decode_intervention_metadata(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _coerce_pending_intervention_item(
+    value: str | PendingInterventionItem,
+) -> PendingInterventionItem:
+    if isinstance(value, PendingInterventionItem):
+        return value
+    return PendingInterventionItem(str(value), {})
+
+
+# ── Effect Receipt (Phase 4) ───────────────────────────────
+
+
+_INTERVENTION_KEYWORD_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[一-鿿]+", re.UNICODE)
+_CJK_RANGE_RE = re.compile(r"[一-鿿]")
+_INTERVENTION_KEYWORD_STOPWORDS_ZH = {
+    "请",
+    "把",
+    "和",
+    "的",
+    "了",
+    "在",
+    "是",
+    "也",
+    "都",
+    "就",
+    "我",
+    "你",
+    "他",
+    "她",
+    "它",
+    "我们",
+    "他们",
+    "你们",
+    "这个",
+    "那个",
+    "这些",
+    "那些",
+    "这样",
+    "那样",
+    "一个",
+    "什么",
+    "如果",
+    "不要",
+    "下一",
+    "下一轮",
+    "请求",
+    "玩法卡",
+    "题材",
+    "档案",
+}
+_INTERVENTION_KEYWORD_STOPWORDS_EN = {
+    "the",
+    "and",
+    "but",
+    "for",
+    "with",
+    "this",
+    "that",
+    "have",
+    "from",
+    "your",
+    "their",
+    "they",
+    "them",
+    "next",
+    "round",
+    "player",
+    "directive",
+    "gameplay",
+    "card",
+    "profile",
+    "please",
+    "should",
+    "would",
+    "could",
+}
+_INTERVENTION_KEYWORD_MAX = 8
+_INTERVENTION_KEYWORD_MIN_LEN_ASCII = 4
+_INTERVENTION_EXCERPT_MAX_CHARS = 200
+
+
+def _extract_intervention_keywords(text: str) -> list[str]:
+    """Pull a small set of content keywords from the user's intervention.
+
+    The receipt detector is intentionally deterministic and dependency-free:
+    it tokenizes the raw user input, drops common stopwords, then keeps the
+    most informative tokens for substring matching against agent replies.
+
+    For CJK runs we expand into overlapping bigrams so we can detect echoes
+    even when neither side has a tokenizer — e.g. "公开解释义务" → ["公开",
+    "开解", "解释", "释义", "义务"]. Whole runs are also kept when short.
+    """
+
+    if not text:
+        return []
+
+    tokens = _INTERVENTION_KEYWORD_TOKEN_RE.findall(text)
+    keywords: list[str] = []
+    seen: set[str] = set()
+
+    def _add(candidate: str) -> bool:
+        norm = candidate.strip()
+        if not norm:
+            return False
+        lowered = norm.lower()
+        is_cjk = bool(_CJK_RANGE_RE.search(norm))
+        if is_cjk:
+            if len(norm) < 2:
+                return False
+            if norm in _INTERVENTION_KEYWORD_STOPWORDS_ZH:
+                return False
+        else:
+            if len(lowered) < _INTERVENTION_KEYWORD_MIN_LEN_ASCII:
+                return False
+            if lowered in _INTERVENTION_KEYWORD_STOPWORDS_EN:
+                return False
+        if lowered in seen:
+            return False
+        seen.add(lowered)
+        keywords.append(norm)
+        return len(keywords) >= _INTERVENTION_KEYWORD_MAX
+
+    for token in tokens:
+        if not token:
+            continue
+        is_cjk = bool(_CJK_RANGE_RE.search(token))
+        if is_cjk and len(token) > 2:
+            # Whole-phrase first, then bigrams, so direct quoted echoes win.
+            if _add(token):
+                break
+            stop = False
+            for i in range(len(token) - 1):
+                if _add(token[i : i + 2]):
+                    stop = True
+                    break
+            if stop:
+                break
+        else:
+            if _add(token):
+                break
+    return keywords
+
+
+def _truncate_excerpt(text: str, max_chars: int = _INTERVENTION_EXCERPT_MAX_CHARS) -> str:
+    """Shrink agent content down to a short, sentence-friendly excerpt."""
+
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) <= max_chars:
+        return cleaned
+    cut = cleaned[:max_chars]
+    for terminator in ("。", "！", "？", "!", "?", ".", "；", ";", ","):
+        idx = cut.rfind(terminator)
+        if idx >= max_chars // 2:
+            return cut[: idx + 1].rstrip()
+    return cut.rstrip() + "…"
+
+
+def _build_intervention_effect_summary(
+    *,
+    intervention_log_id: str | None,
+    card_id: str | None,
+    round_number: int,
+    user_input: str,
+    messages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Detect which agents echoed the intervention and produce a structured receipt.
+
+    Matching is purely keyword/substring based (no LLM, no semantic inference).
+    Confidence is the fraction of matched keywords, capped at 1.0 — when no
+    keywords could be extracted but at least one agent spoke, the receipt
+    falls back to a "no clear echo detected" record instead of being empty.
+    """
+
+    keywords = _extract_intervention_keywords(user_input)
+    affected_agents: list[dict[str, str]] = []
+    response_excerpts: list[dict[str, str]] = []
+    seen_agent_ids: set[str] = set()
+    best_match_score = 0.0
+
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        agent_id = str(msg.get("agent_id") or "").strip()
+        if not agent_id or agent_id in seen_agent_ids:
+            continue
+        content = str(msg.get("content") or "")
+        if not content:
+            continue
+        if not keywords:
+            continue
+        lowered_content = content.lower()
+        matched_kw = [
+            kw for kw in keywords if kw and (kw in content or kw.lower() in lowered_content)
+        ]
+        if not matched_kw:
+            continue
+        seen_agent_ids.add(agent_id)
+        display_name = str(msg.get("agent_name") or "").strip() or agent_id
+        affected_agents.append({"agent_id": agent_id, "display_name": display_name})
+        response_excerpts.append(
+            {
+                "agent_id": agent_id,
+                "excerpt": _truncate_excerpt(content),
+            }
+        )
+        score = len(matched_kw) / max(1, len(keywords))
+        if score > best_match_score:
+            best_match_score = score
+
+    if affected_agents:
+        confidence = round(min(1.0, max(0.0, best_match_score)), 3)
+    else:
+        confidence = 0.0
+
+    return {
+        "intervention_log_id": intervention_log_id,
+        "card_id": card_id,
+        "round_number": int(round_number),
+        "user_input": (user_input or "")[:500],
+        "affected_agents": affected_agents,
+        "response_excerpts": response_excerpts,
+        "confidence": confidence,
+        "no_response_detected": not affected_agents,
+    }
+
+
+def _persist_intervention_effect(
+    engine,
+    *,
+    intervention_log_id: str | None,
+    summary: dict[str, Any],
+) -> None:
+    """Write the effect receipt back to InterventionLog.effect_summary_json.
+
+    Safe to call from replay / read-only paths: when the row does not exist
+    or the JSON cannot be serialized we log and drop silently — the receipt
+    is a non-blocking enrichment, not part of the simulation contract.
+    """
+
+    if not intervention_log_id:
+        return
+    try:
+        payload = json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        logger.debug("intervention effect summary serialization failed", exc_info=True)
+        return
+    try:
+        with Session(engine) as session:
+            log = session.get(InterventionLog, intervention_log_id)
+            if log is None:
+                return
+            log.effect_summary_json = payload
+            session.add(log)
+            session.commit()
+    except SQLAlchemyError:
+        logger.debug("intervention effect summary persist failed", exc_info=True)
+
+
 def _coerce_stance_value(raw_stance: Any) -> float:
     """Convert parser/domain stance values into a safe visualization scalar.
 
@@ -623,10 +916,11 @@ async def get_pending_interventions(key: str) -> list[str]:
             return texts
 
     async with _intervention_lock:
-        return pending_interventions.pop(key, [])
+        queued = pending_interventions.pop(key, [])
+        return [_coerce_pending_intervention_item(item).text for item in queued]
 
 
-async def pop_next_pending_intervention(key: str) -> str | None:
+async def pop_next_pending_intervention(key: str) -> PendingInterventionItem | None:
     """Atomically pop the next intervention while preserving per-branch order."""
     db_path = _pending_intervention_db_path()
     if db_path is not None:
@@ -637,7 +931,7 @@ async def pop_next_pending_intervention(key: str) -> str | None:
                 conn.exec_driver_sql("BEGIN IMMEDIATE")
                 row = conn.exec_driver_sql(
                     """
-                    SELECT id, user_input
+                    SELECT id, user_input, metadata_json
                     FROM pending_intervention
                     WHERE scenario_id = ? AND branch_id = ?
                     ORDER BY id ASC
@@ -653,7 +947,10 @@ async def pop_next_pending_intervention(key: str) -> str | None:
                     (row[0],),
                 )
                 conn.commit()
-                return str(row[1])
+                return PendingInterventionItem(
+                    text=str(row[1]),
+                    metadata=_decode_intervention_metadata(row[2]),
+                )
             except Exception:
                 try:
                     conn.rollback()
@@ -665,13 +962,17 @@ async def pop_next_pending_intervention(key: str) -> str | None:
         queue = pending_interventions.get(key)
         if not queue:
             return None
-        next_text = queue.pop(0)
+        next_item = _coerce_pending_intervention_item(queue.pop(0))
         if not queue:
             pending_interventions.pop(key, None)
-        return next_text
+        return next_item
 
 
-async def add_pending_intervention(key: str, text: str) -> None:
+async def add_pending_intervention(
+    key: str,
+    text: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     """Append one intervention while preserving FIFO order across workers."""
     db_path = _pending_intervention_db_path()
     if db_path is not None:
@@ -683,6 +984,7 @@ async def add_pending_intervention(key: str, text: str) -> None:
                     scenario_id=scenario_id,
                     branch_id=branch_id,
                     user_input=text,
+                    metadata_json=_encode_intervention_metadata(metadata),
                 )
             )
             session.commit()
@@ -691,7 +993,7 @@ async def add_pending_intervention(key: str, text: str) -> None:
     async with _intervention_lock:
         if key not in pending_interventions:
             pending_interventions[key] = []
-        pending_interventions[key].append(text)
+        pending_interventions[key].append(PendingInterventionItem(text, metadata or {}))
 
 
 async def get_pending_intervention_count(key: str) -> int:
@@ -1432,7 +1734,11 @@ async def _run_simulation_impl(
 
             # 0) Check for pending user interventions (Butterfly Effect)
             intervention_key = f"{scenario_id}:{current_branch_id}"
-            intervention_text = await pop_next_pending_intervention(intervention_key)
+            intervention_item = await pop_next_pending_intervention(intervention_key)
+            intervention_text = intervention_item.text if intervention_item is not None else None
+            intervention_metadata = (
+                intervention_item.metadata if intervention_item is not None else {}
+            )
             if intervention_text is not None:
                 await push({
                     "type": "intervention_injected",
@@ -1464,6 +1770,7 @@ async def _run_simulation_impl(
                     leader_agents, worker_agents, agent_to_group, group_leaders,
                     setting_bg, key_variable,
                     intervention_text=intervention_text,
+                    intervention_metadata=intervention_metadata,
                     push=push,
                     blackboard=bb,
                     llm_overrides=llm_overrides,
@@ -1480,6 +1787,7 @@ async def _run_simulation_impl(
                 messages = await _gather_agent_messages(
                     engine, scenario_id, current_branch_id, round_id, round_num, agents, setting_bg, key_variable,  # noqa: E501
                     intervention_text=intervention_text,
+                    intervention_metadata=intervention_metadata,
                     push=push,
                     blackboard=bb,
                     llm_overrides=llm_overrides,
@@ -1502,6 +1810,36 @@ async def _run_simulation_impl(
                 "data": {"branch_id": current_branch_id, "round": round_num,
                          "summary": summary_text},
             })
+
+            # Phase 4: Persist intervention effect receipt if an intervention ran this round.
+            if intervention_text is not None:
+                try:
+                    effect_log_id = (intervention_metadata or {}).get("intervention_log_id")
+                    raw_user_input = (intervention_metadata or {}).get("raw_user_input")
+                    if not raw_user_input:
+                        raw_user_input = intervention_text
+                    effect_summary = _build_intervention_effect_summary(
+                        intervention_log_id=(
+                            str(effect_log_id) if effect_log_id else None
+                        ),
+                        card_id=(intervention_metadata or {}).get("card_id"),
+                        round_number=round_num,
+                        user_input=str(raw_user_input),
+                        messages=messages,
+                    )
+                    if effect_log_id:
+                        _persist_intervention_effect(
+                            engine,
+                            intervention_log_id=str(effect_log_id),
+                            summary=effect_summary,
+                        )
+                except SimulationCancelled:
+                    raise
+                except Exception:
+                    logger.debug(
+                        "intervention effect summary hook failed (non-blocking)",
+                        exc_info=True,
+                    )
 
             # Phase 3 F2: Causal graph — record round nodes (non-blocking)
             if _CAUSAL_AVAILABLE and settings.FEATURE_CAUSAL_GRAPH:
@@ -2042,6 +2380,7 @@ def _build_worldline_context(engine, branch_id: str, language: str = "Chinese") 
 async def _gather_agent_messages(
     engine, scenario_id, branch_id, round_id, round_num, agents, setting_bg, topic,
     *, intervention_text: str | None = None,
+    intervention_metadata: dict[str, Any] | None = None,
     push=None,
     blackboard: Blackboard | None = None,
     llm_overrides: dict | None = None,
@@ -2147,6 +2486,7 @@ async def _gather_agent_messages(
                     tier=agent_tier,
                     shared_briefing=agent_briefing,
                     intervention_text=intervention_text or "",
+                    intervention_metadata=intervention_metadata,
                     language=language,
                     web_context_block=web_context_block,
                     worldline_context=worldline_context,
@@ -2165,6 +2505,7 @@ async def _gather_agent_messages(
                     retrieved_memories=l2_memories,
                     tier=agent_tier,
                     intervention_text=intervention_text or "",
+                    intervention_metadata=intervention_metadata,
                     language=language,
                     web_context_block=web_context_block,
                     worldline_context=worldline_context,
@@ -2487,6 +2828,7 @@ async def _gather_hierarchical_messages(
     leader_agents, worker_agents, agent_to_group, group_leaders,
     setting_bg, topic,
     *, intervention_text: str | None = None,
+    intervention_metadata: dict[str, Any] | None = None,
     push=None,
     blackboard: Blackboard | None = None,
     llm_overrides: dict | None = None,
@@ -2518,6 +2860,7 @@ async def _gather_hierarchical_messages(
         engine, scenario_id, branch_id, round_id, round_num,
         leader_agents, setting_bg, topic,
         intervention_text=intervention_text,
+        intervention_metadata=intervention_metadata,
         push=push,
         blackboard=blackboard,
         llm_overrides=llm_overrides,

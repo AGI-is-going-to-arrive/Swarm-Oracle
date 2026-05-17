@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlmodel import Session
+from sqlalchemy.exc import SQLAlchemyError
+from sqlmodel import Session, select
 
 from app.api.errors import api_error_from_exception
 from app.api.helpers import (
@@ -16,8 +19,10 @@ from app.api.helpers import (
     resolve_authenticated_user_id,
     verify_session,
 )
+from app.models import InterventionLog
 from app.models.database import get_engine
 from app.services.campaign import (
+    CampaignBetValidationError,
     CampaignConflictError,
     CampaignError,
     CampaignNotFoundError,
@@ -35,10 +40,22 @@ from app.services.campaign import (
     save_scenario_gameplay_state,
 )
 from app.services.daily_challenges import get_challenge_rotation
+from app.services.gameplay_contract import load_gameplay_contract
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/campaign",
     tags=["campaign"],
+    dependencies=[Depends(verify_session)],
+)
+
+
+# Phase 4: intervention-effects sub-router lives outside the /api/campaign prefix
+# because consumers expect /api/scenario/{scenario_id}/intervention-effects.
+scenario_intervention_effects_router = APIRouter(
+    prefix="/api",
+    tags=["interventions"],
     dependencies=[Depends(verify_session)],
 )
 
@@ -651,6 +668,8 @@ async def put_gameplay_state(
         raise api_error_from_exception(404, "GAMEPLAY_STATE_NOT_FOUND", exc) from exc
     except CampaignConflictError as exc:
         raise api_error_from_exception(409, "GAMEPLAY_STATE_CONFLICT", exc) from exc
+    except CampaignBetValidationError as exc:
+        raise api_error_from_exception(422, exc.code, exc) from exc
     except CampaignError as exc:
         raise api_error_from_exception(400, "GAMEPLAY_STATE_INVALID", exc) from exc
 
@@ -758,3 +777,177 @@ async def finalize_campaign(
         raise api_error_from_exception(400, "CAMPAIGN_FINALIZE_INVALID", exc) from exc
 
     return CampaignFinalizeResponse(**result)
+
+
+# ── Phase 4: intervention effect receipts ──────────────────
+
+
+class InterventionEffectAffectedAgent(BaseModel):
+    agent_id: str
+    display_name: str
+
+
+class InterventionEffectExcerpt(BaseModel):
+    agent_id: str
+    excerpt: str
+
+
+class InterventionEffectResponse(BaseModel):
+    intervention_log_id: str
+    card_id: str | None = None
+    card_label: str | None = None
+    round_number: int
+    affected_agents: list[InterventionEffectAffectedAgent] = Field(default_factory=list)
+    response_excerpts: list[InterventionEffectExcerpt] = Field(default_factory=list)
+    confidence: float = 0.0
+    no_response_detected: bool = False
+    created_at: str
+
+
+class InterventionEffectsResponse(BaseModel):
+    effects: list[InterventionEffectResponse] = Field(default_factory=list)
+
+
+def _card_label_lookup() -> dict[str, dict[str, str]]:
+    """Map gameplay card id → localized labels for the receipt response.
+
+    Cached at module import in `_CARD_LABELS` below; we recompute lazily so
+    contract reloads in tests pick up changes.
+    """
+
+    try:
+        contract = load_gameplay_contract()
+    except Exception:  # pragma: no cover - contract is bundled
+        logger.debug("intervention effects: gameplay contract load failed", exc_info=True)
+        return {}
+    mapping: dict[str, dict[str, str]] = {}
+    for card in contract.get("cards", []) or []:
+        if not isinstance(card, dict):
+            continue
+        card_id = card.get("id")
+        if not card_id:
+            continue
+        labels = card.get("labels", {})
+        if not isinstance(labels, dict):
+            labels = {}
+        mapping[str(card_id)] = {
+            "zh": str(labels.get("zh") or labels.get("en") or card_id),
+            "en": str(labels.get("en") or labels.get("zh") or card_id),
+        }
+    return mapping
+
+
+def _resolve_card_label(card_id: str | None) -> str | None:
+    if not card_id:
+        return None
+    entry = _card_label_lookup().get(str(card_id))
+    if not entry:
+        return None
+    # Prefer Chinese label by default; callers localize as needed.
+    return entry.get("zh") or entry.get("en")
+
+
+def _decode_effect_summary(raw: str | None) -> dict | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _coerce_str_list(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, str]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        agent_id = str(entry.get("agent_id") or "").strip()
+        if not agent_id:
+            continue
+        out.append(
+            {
+                "agent_id": agent_id,
+                "display_name": str(entry.get("display_name") or "").strip() or agent_id,
+                "excerpt": str(entry.get("excerpt") or ""),
+            }
+        )
+    return out
+
+
+@scenario_intervention_effects_router.get(
+    "/scenario/{scenario_id}/intervention-effects",
+    response_model=InterventionEffectsResponse,
+)
+async def get_intervention_effects(
+    scenario_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> InterventionEffectsResponse:
+    """Return persisted intervention effect receipts for the scenario, newest first.
+
+    Read-only / replay path: this endpoint inspects already-persisted
+    `InterventionLog.effect_summary_json` rows. It never enqueues new
+    interventions and never mutates state.
+    """
+
+    engine = get_engine()
+    effects: list[InterventionEffectResponse] = []
+    try:
+        with Session(engine) as session:
+            # Ownership guard — raises 404 when principal doesn't own scenario.
+            require_owned_scenario(session, scenario_id, principal)
+            rows = session.exec(
+                select(InterventionLog)
+                .where(InterventionLog.scenario_id == scenario_id)
+                .order_by(InterventionLog.created_at.desc())
+            ).all()
+    except SQLAlchemyError:
+        logger.debug("intervention effects: DB read failed", exc_info=True)
+        return InterventionEffectsResponse(effects=[])
+
+    for row in rows:
+        summary = _decode_effect_summary(row.effect_summary_json)
+        if summary is None:
+            # Older scenarios have no receipt — skip rather than fabricate.
+            continue
+        card_id = summary.get("card_id")
+        card_id_str = str(card_id) if card_id else None
+        affected_raw = _coerce_str_list(summary.get("affected_agents"))
+        excerpt_raw = _coerce_str_list(summary.get("response_excerpts"))
+        try:
+            confidence_value = float(summary.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence_value = 0.0
+        try:
+            round_number_value = int(summary.get("round_number", row.round_number) or 0)
+        except (TypeError, ValueError):
+            round_number_value = int(row.round_number or 0)
+        effects.append(
+            InterventionEffectResponse(
+                intervention_log_id=str(row.id),
+                card_id=card_id_str,
+                card_label=_resolve_card_label(card_id_str),
+                round_number=round_number_value,
+                affected_agents=[
+                    InterventionEffectAffectedAgent(
+                        agent_id=entry["agent_id"],
+                        display_name=entry["display_name"],
+                    )
+                    for entry in affected_raw
+                ],
+                response_excerpts=[
+                    InterventionEffectExcerpt(
+                        agent_id=entry["agent_id"],
+                        excerpt=entry["excerpt"],
+                    )
+                    for entry in excerpt_raw
+                ],
+                confidence=max(0.0, min(1.0, confidence_value)),
+                no_response_detected=bool(summary.get("no_response_detected", False)),
+                created_at=row.created_at.isoformat() if row.created_at else "",
+            )
+        )
+
+    return InterventionEffectsResponse(effects=effects)

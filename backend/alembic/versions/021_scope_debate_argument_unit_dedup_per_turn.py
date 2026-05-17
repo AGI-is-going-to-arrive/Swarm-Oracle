@@ -9,7 +9,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision: str = "021_scope_debate_argument_unit_dedup_per_turn"
 down_revision: Union[str, None] = "020_harden_graph_snapshot_and_state_frame_constraints"
@@ -18,6 +18,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def _has_unique_index_columns(table_name: str, expected_columns: tuple[str, ...]) -> bool:
+    if context.is_offline_mode():
+        return False
+
     bind = op.get_bind()
     if bind.dialect.name != "sqlite":
         return False
@@ -32,7 +35,52 @@ def _has_unique_index_columns(table_name: str, expected_columns: tuple[str, ...]
     return False
 
 
+def _debate_argument_unit_copy_from(
+    unique_constraint_name: str | None = None,
+    unique_columns: tuple[str, ...] = (),
+) -> sa.Table:
+    metadata = sa.MetaData()
+    constraints = (
+        [sa.UniqueConstraint(*unique_columns, name=unique_constraint_name)]
+        if unique_constraint_name
+        else []
+    )
+    table = sa.Table(
+        "debate_argument_unit",
+        metadata,
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("debate_id", sa.String(), nullable=False),
+        sa.Column("turn_id", sa.String(), nullable=False),
+        sa.Column("node_id", sa.String(), nullable=False),
+        sa.Column("unit_type", sa.String(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False, server_default="standing"),
+        sa.Column("canonical_text", sa.Text(), nullable=False, server_default=""),
+        sa.Column("semantic_hash", sa.String(), nullable=False, server_default=""),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        *constraints,
+    )
+    sa.Index("ix_debate_argument_unit_debate_id", table.c.debate_id)
+    sa.Index("ix_debate_argument_unit_semantic_hash", table.c.semantic_hash)
+    return table
+
+
+def _debate_argument_unit_batch_kwargs(
+    unique_constraint_name: str | None = None,
+    unique_columns: tuple[str, ...] = (),
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {"recreate": "always"}
+    if context.is_offline_mode():
+        kwargs["copy_from"] = _debate_argument_unit_copy_from(
+            unique_constraint_name,
+            unique_columns,
+        )
+    return kwargs
+
+
 def _dedupe_debate_argument_units_per_turn() -> None:
+    if context.is_offline_mode():
+        return
+
     bind = op.get_bind()
     duplicate_groups = bind.execute(
         sa.text(
@@ -111,7 +159,10 @@ def upgrade() -> None:
     _dedupe_debate_argument_units_per_turn()
 
     if not has_target_constraint or has_legacy_constraint:
-        with op.batch_alter_table("debate_argument_unit", recreate="always") as batch_op:
+        with op.batch_alter_table(
+            "debate_argument_unit",
+            **_debate_argument_unit_batch_kwargs(),
+        ) as batch_op:
             if has_target_constraint:
                 batch_op.drop_constraint(
                     "uq_debate_argument_unit_debate_turn_hash",
@@ -129,5 +180,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("debate_argument_unit", recreate="always") as batch_op:
+    with op.batch_alter_table(
+        "debate_argument_unit",
+        **_debate_argument_unit_batch_kwargs(
+            "uq_debate_argument_unit_debate_turn_hash",
+            ("debate_id", "turn_id", "semantic_hash"),
+        ),
+    ) as batch_op:
         batch_op.drop_constraint("uq_debate_argument_unit_debate_turn_hash", type_="unique")

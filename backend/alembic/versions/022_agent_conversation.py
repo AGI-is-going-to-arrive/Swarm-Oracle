@@ -13,7 +13,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision: str = "022_agent_conversation"
 down_revision: Union[str, None] = "021_scope_debate_argument_unit_dedup_per_turn"
@@ -25,6 +25,9 @@ _BRANCH_REPLAY_SOURCE_INDEX = "idx_branch_replay_source"
 
 
 def _branch_has_replay_source_column() -> bool:
+    if context.is_offline_mode():
+        return True
+
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     if "branch" not in inspector.get_table_names():
@@ -34,6 +37,9 @@ def _branch_has_replay_source_column() -> bool:
 
 
 def _index_exists(table_name: str, index_name: str) -> bool:
+    if context.is_offline_mode():
+        return False
+
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     if table_name not in inspector.get_table_names():
@@ -187,7 +193,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    if _index_exists("branch", _BRANCH_REPLAY_SOURCE_INDEX):
+    if context.is_offline_mode() or _index_exists("branch", _BRANCH_REPLAY_SOURCE_INDEX):
         op.drop_index(_BRANCH_REPLAY_SOURCE_INDEX, table_name="branch")
 
     op.drop_index("ix_turn_thread_seq", table_name="agent_conversation_turn")

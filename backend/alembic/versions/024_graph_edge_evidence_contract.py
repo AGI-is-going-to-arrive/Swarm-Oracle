@@ -9,7 +9,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision: str = "024_graph_edge_evidence_contract"
 down_revision: Union[str, None] = "023_agent_conversation_quota_ledger"
@@ -30,6 +30,8 @@ _ALLOWED_TABLES = frozenset({"graph_edge"})
 def _existing_columns(table: str) -> set[str]:
     if table not in _ALLOWED_TABLES:
         raise ValueError(f"Table {table!r} not in migration allowlist")
+    if context.is_offline_mode():
+        return set()
     bind = op.get_bind()
     # PRAGMA does not support parameter binding; allowlist above prevents injection.
     rows = bind.execute(sa.text(f"PRAGMA table_info('{table}')")).fetchall()
@@ -54,6 +56,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if context.is_offline_mode():
+        for col_name, _col_type in reversed(_NEW_COLUMNS):
+            op.execute(sa.text(f"ALTER TABLE graph_edge DROP COLUMN {col_name}"))
+        return
+
     with op.batch_alter_table("graph_edge") as batch_op:
         batch_op.drop_column("evidence_json")
         batch_op.drop_column("source_round_number")

@@ -23,6 +23,8 @@ from app.models import (
     AgentTier,
     Branch,
     BranchStatus,
+    InterventionLog,
+    PendingIntervention,
     Round,
     Scenario,
     ScenarioStatus,
@@ -150,6 +152,44 @@ def _seed_messages(branch_id: str, agent_id: str) -> None:
         session.commit()
 
 
+def _seed_intervention_receipt(
+    scenario_id: str,
+    branch_id: str,
+    *,
+    agent_id: str = "agent-a",
+    user_input: str = "请让审计官强制公开解释义务",
+    round_number: int = 2,
+) -> str:
+    effect_summary = {
+        "intervention_log_id": "original-log-id",
+        "card_id": "human_takeover",
+        "round_number": round_number,
+        "user_input": user_input,
+        "scenario_id": scenario_id,
+        "branch_id": branch_id,
+        "comparison": {"branch_id": "stale-branch-not-in-snapshot"},
+        "affected_agents": [{"agent_id": agent_id, "display_name": "审计官"}],
+        "response_excerpts": [
+            {"agent_id": agent_id, "excerpt": "公开解释义务会改变下一轮表态。"},
+        ],
+        "confidence": 0.72,
+        "no_response_detected": False,
+        "api_key": "sk-receipt-leak",
+        "base_url": "https://receipt-secret.example/v1",
+    }
+    with Session(get_engine()) as session:
+        log = InterventionLog(
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+            round_number=round_number,
+            user_input=user_input,
+            effect_summary_json=json.dumps(effect_summary, ensure_ascii=False),
+        )
+        session.add(log)
+        session.commit()
+        return log.id
+
+
 def _seed_causal_graph(scenario_id: str, branch_id: str, agent_id: str) -> None:
     with Session(get_engine()) as session:
         snapshot = GraphSnapshot(
@@ -254,6 +294,7 @@ def test_export_empty_scenario_produces_valid_zip():
         assert "agents.jsonl" in names
         assert "messages.jsonl" in names
         assert "causal_graph.json" in names
+        assert "intervention_receipts.jsonl" in names
         assert "checksums.sha256" in names
 
         manifest = json.loads(zf.read("manifest.json"))
@@ -317,6 +358,41 @@ def test_export_includes_causal_graph_nodes_and_edges():
     edge = graph["edges"][0]
     assert edge["edge_type"] == "caused"
     assert edge["confidence_tier"] == "high"
+
+
+def test_export_includes_intervention_receipts_and_redacts_summary_secrets():
+    scenario_id = _seed_scenario(api_key_in_context=False)
+    root_id, _ = _seed_branch_tree(scenario_id)
+    log_id = _seed_intervention_receipt(scenario_id, root_id)
+
+    with Session(get_engine()) as session:
+        buffer = export_snapshot_zip(scenario_id, session)
+
+    raw = buffer.getvalue()
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        rows = [
+            json.loads(line)
+            for line in zf.read("intervention_receipts.jsonl").decode("utf-8").splitlines()
+            if line
+        ]
+        manifest = json.loads(zf.read("manifest.json"))
+
+    assert "intervention_receipts.jsonl" in manifest["files"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == log_id
+    assert row["scenario_id"] == scenario_id
+    assert row["branch_id"] == root_id
+    assert row["round_number"] == 2
+    assert row["user_input"] == "请让审计官强制公开解释义务"
+    assert row["created_at"]
+    summary = json.loads(row["effect_summary_json"])
+    assert summary["card_id"] == "human_takeover"
+    assert summary["affected_agents"][0]["display_name"] == "审计官"
+    assert "api_key" not in summary
+    assert "base_url" not in summary
+    assert b"sk-receipt-leak" not in raw
+    assert b"receipt-secret.example" not in raw
 
 
 def test_manifest_checksums_match_payload_bytes():
@@ -428,6 +504,137 @@ def test_import_creates_new_scenario_with_remapped_ids():
         node_ids = {n.id for n in nodes}
         assert edges[0].source_node_id in node_ids
         assert edges[0].target_node_id in node_ids
+
+
+def test_import_restores_intervention_receipts_with_remapped_branch_ids():
+    scenario_id = _seed_scenario(api_key_in_context=False)
+    root_id, _ = _seed_branch_tree(scenario_id)
+    a1_id, _ = _seed_agents(scenario_id)
+    original_log_id = _seed_intervention_receipt(
+        scenario_id,
+        root_id,
+        agent_id=a1_id,
+    )
+
+    with Session(get_engine()) as session:
+        blob = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with Session(get_engine()) as session:
+        new_id = import_snapshot_zip(blob, "importer-receipt", session)
+
+    with Session(get_engine()) as session:
+        imported_logs = list(
+            session.exec(
+                select(InterventionLog).where(InterventionLog.scenario_id == new_id)
+            ).all()
+        )
+        assert len(imported_logs) == 1
+        imported_log = imported_logs[0]
+        assert imported_log.id != original_log_id
+        assert imported_log.branch_id != root_id
+        imported_branch = session.get(Branch, imported_log.branch_id)
+        assert imported_branch is not None
+        assert imported_branch.scenario_id == new_id
+        assert imported_log.round_number == 2
+        assert imported_log.user_input == "请让审计官强制公开解释义务"
+        assert imported_log.effect_summary_json is not None
+        summary = json.loads(imported_log.effect_summary_json)
+        imported_agents = list(
+            session.exec(select(Agent).where(Agent.scenario_id == new_id)).all()
+        )
+        imported_agent_ids = {agent.id for agent in imported_agents}
+        assert summary["scenario_id"] == new_id
+        assert summary["branch_id"] == imported_log.branch_id
+        assert summary["comparison"]["branch_id"] is None
+        assert summary["intervention_log_id"] == imported_log.id
+        assert summary["card_id"] == "human_takeover"
+        assert summary["affected_agents"][0]["display_name"] == "审计官"
+        assert summary["affected_agents"][0]["agent_id"] in imported_agent_ids
+        assert summary["affected_agents"][0]["agent_id"] != a1_id
+        assert summary["response_excerpts"][0]["agent_id"] in imported_agent_ids
+        assert "api_key" not in summary
+        assert "base_url" not in summary
+
+
+def test_import_old_snapshot_without_intervention_receipts_file_still_succeeds():
+    payloads = {
+        "scenario.json": json.dumps({"question": "legacy snapshot"}).encode("utf-8"),
+        "branches.jsonl": b'{"id":"branch-legacy","title":"Legacy branch"}',
+        "agents.jsonl": b"",
+        "messages.jsonl": b"",
+        "causal_graph.json": b'{"snapshot":null,"nodes":[],"edges":[]}',
+    }
+    blob = _build_snapshot_zip_from_payloads(payloads)
+
+    with Session(get_engine()) as session:
+        new_id = import_snapshot_zip(blob, "importer-legacy", session)
+
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, new_id)
+        assert scenario is not None
+        logs = list(
+            session.exec(
+                select(InterventionLog).where(InterventionLog.scenario_id == new_id)
+            ).all()
+        )
+        assert logs == []
+
+
+def test_import_rejects_intervention_receipt_with_unmapped_branch():
+    payloads = {
+        "scenario.json": json.dumps({"question": "bad receipt branch"}).encode("utf-8"),
+        "branches.jsonl": b"",
+        "agents.jsonl": b"",
+        "messages.jsonl": b"",
+        "causal_graph.json": b'{"snapshot":null,"nodes":[],"edges":[]}',
+        "intervention_receipts.jsonl": (
+            b'{"branch_id":"missing-branch","round_number":1,'
+            b'"user_input":"orphaned receipt","effect_summary_json":"{}"}'
+        ),
+    }
+    blob = _build_snapshot_zip_from_payloads(payloads)
+
+    with pytest.raises(SnapshotImportError) as excinfo:
+        with Session(get_engine()) as session:
+            import_snapshot_zip(blob, "importer-bad-receipt", session)
+
+    assert "intervention_receipts.branch_id" in str(excinfo.value)
+
+
+def test_snapshot_import_does_not_reenqueue_pending_interventions():
+    scenario_id = _seed_scenario(api_key_in_context=False)
+    root_id, _ = _seed_branch_tree(scenario_id)
+    with Session(get_engine()) as session:
+        session.add(
+            PendingIntervention(
+                scenario_id=scenario_id,
+                branch_id=root_id,
+                user_input="pending action should not restart after import",
+                metadata_json=json.dumps(
+                    {
+                        "intervention_log_id": "pending-log",
+                        "card_id": "human_takeover",
+                    }
+                ),
+            )
+        )
+        session.commit()
+
+    with Session(get_engine()) as session:
+        blob = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with Session(get_engine()) as session:
+        new_id = import_snapshot_zip(blob, "importer-no-pending", session)
+
+    with Session(get_engine()) as session:
+        pending_rows = list(
+            session.exec(
+                select(PendingIntervention).where(
+                    PendingIntervention.scenario_id == new_id
+                )
+            ).all()
+        )
+        assert pending_rows == []
 
 
 def test_import_rejects_checksum_mismatch():

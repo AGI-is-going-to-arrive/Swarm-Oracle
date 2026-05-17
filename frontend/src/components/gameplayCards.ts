@@ -6,6 +6,7 @@ import {
 } from '../lib/gameplayContract';
 import {
   GAMEPLAY_PROFILE_CATALOG,
+  getGameplayBadgeSrc,
   type GameplayProfileCatalogEntry,
 } from '../lib/gameplayProfileCatalog';
 import {
@@ -15,11 +16,7 @@ import {
 } from '../lib/themeRegistry';
 
 export type { GameplayProfileId } from '../lib/themeRegistry';
-export {
-  getGameplayBadgeSrc,
-  getGameplayProfileLabel,
-  getGameplayProfileSignatureHooks,
-} from '../lib/gameplayProfileCatalog';
+export { getGameplayBadgeSrc };
 export type { GameplayBadgeId } from '../lib/gameplayProfileCatalog';
 
 export type GameplayCardId =
@@ -129,9 +126,10 @@ interface GameplaySignatureArcDefinition {
 }
 
 const gameplayCardDefs = CONTRACT_GAMEPLAY_CARD_DEFS as GameplayCardDefinition[];
-const gameplayProfiles = GAMEPLAY_PROFILE_CATALOG as Record<GameplayProfileId, GameplayProfileDefinition>;
-const gameplaySignatureArcs = CONTRACT_SIGNATURE_ARCS as Record<GameplayProfileId, GameplaySignatureArcDefinition>;
+const gameplayProfiles = GAMEPLAY_PROFILE_CATALOG as Partial<Record<GameplayProfileId, GameplayProfileDefinition>>;
+const gameplaySignatureArcs = CONTRACT_SIGNATURE_ARCS as Partial<Record<GameplayProfileId, GameplaySignatureArcDefinition>>;
 const gameplayCardEffects = CONTRACT_CARD_SYSTEM_EFFECTS as Record<GameplayCardId, { risk: number; resource: number }>;
+const neutralCardEffect = { risk: 0, resource: 0 } as const;
 const COUNTERPLAY_CARD_IDS = new Set<GameplayCardId>([
   'audit_reckoning',
   'intel_blowback',
@@ -140,6 +138,41 @@ const COUNTERPLAY_CARD_IDS = new Set<GameplayCardId>([
   'resource_triage',
   'public_hearing',
 ]);
+
+export type GameplayCardGroupId =
+  | 'role_play'
+  | 'worldline_distort'
+  | 'crisis_dispatch'
+  | 'counter_cool';
+
+const GROUP_DEFINITIONS: Array<{ id: GameplayCardGroupId; cards: GameplayCardId[] }> = [
+  { id: 'role_play', cards: ['human_takeover', 'civilization_debate'] },
+  {
+    id: 'worldline_distort',
+    cards: ['spacetime_rift', 'spy_infiltrate', 'backchannel_pact', 'forbidden_ritual'],
+  },
+  { id: 'crisis_dispatch', cards: ['evacuation_order', 'resource_triage', 'mandate_surge'] },
+  {
+    id: 'counter_cool',
+    cards: [
+      'public_hearing',
+      'audit_reckoning',
+      'intel_blowback',
+      'mandate_snapback',
+      'ceasefire_committee',
+    ],
+  },
+];
+
+export interface GameplayCardGroupModel {
+  id: GameplayCardGroupId;
+  cardIds: GameplayCardId[];
+}
+
+export interface GameplayCardDisplayModel {
+  recommended: GameplayCardId[];
+  groups: GameplayCardGroupModel[];
+}
 
 const PROFILE_HEURISTICS: Partial<Record<GameplayProfileId, GameplayProfileHeuristics>> = {
   governance: {
@@ -196,6 +229,36 @@ const PROFILE_HEURISTICS: Partial<Record<GameplayProfileId, GameplayProfileHeuri
     primaryRoleKeywords: ['避难', 'survival', 'doctor', 'security', 'scout', 'commander'],
     secondaryRoleKeywords: ['社区', '粮', 'worker', 'medic', 'mayor'],
     sourceBranchKeywords: ['饥荒', '瘟疫', '撤离', 'famine', 'plague', 'retreat', 'collapse'],
+  },
+  finance: {
+    primaryRoleKeywords: ['银行', '央行', '财政', '风控', 'bank', 'central bank', 'treasury', 'risk', 'finance'],
+    secondaryRoleKeywords: ['监管', '交易', '审计', 'regulator', 'trader', 'auditor', 'market'],
+    sourceBranchKeywords: ['挤兑', '流动性', '信用', 'bailout', 'liquidity', 'credit', 'market'],
+  },
+  scholar: {
+    primaryRoleKeywords: ['学者', '教授', '研究', '教育', 'scholar', 'professor', 'research', 'educator'],
+    secondaryRoleKeywords: ['学生', '审稿', '学院', 'student', 'reviewer', 'faculty'],
+    sourceBranchKeywords: ['范式', '论文', '学院', 'paradigm', 'paper', 'campus'],
+  },
+  medical: {
+    primaryRoleKeywords: ['医生', '医院', '医疗', '公共卫生', 'doctor', 'hospital', 'medical', 'public health'],
+    secondaryRoleKeywords: ['患者', '护士', '伦理', 'patient', 'nurse', 'ethics'],
+    sourceBranchKeywords: ['分诊', '疫情', '疫苗', 'triage', 'pandemic', 'vaccine'],
+  },
+  technology: {
+    primaryRoleKeywords: ['技术', '工程', '算法', '架构', 'engineer', 'technology', 'platform', 'architecture'],
+    secondaryRoleKeywords: ['安全', '产品', '开源', 'security', 'product', 'open source'],
+    sourceBranchKeywords: ['算力', '芯片', '平台', 'compute', 'chip', 'platform', 'stack'],
+  },
+  entertainment: {
+    primaryRoleKeywords: ['媒体', '娱乐', '明星', '导演', 'media', 'entertainment', 'celebrity', 'director'],
+    secondaryRoleKeywords: ['粉丝', '记者', '平台', 'fan', 'journalist', 'platform'],
+    sourceBranchKeywords: ['舆论', '流量', '票房', 'reputation', 'audience', 'box office'],
+  },
+  diplomacy: {
+    primaryRoleKeywords: ['外交', '使节', '条约', '峰会', 'diplomat', 'envoy', 'treaty', 'summit'],
+    secondaryRoleKeywords: ['联盟', '中立', '调解', 'alliance', 'neutral', 'mediator'],
+    sourceBranchKeywords: ['停火', '制裁', '条约', 'ceasefire', 'sanction', 'treaty'],
   },
 };
 
@@ -619,10 +682,16 @@ const PROFILE_STRATEGY_RULES: Record<GameplayProfileId, GameplayProfileStrategyD
 const KEYWORD_TO_PROFILE: Array<[GameplayProfileId, string[]]> = [
   ['generic', ['随机交换负责人', '随机交换一次负责人', '每周随机交换一次负责人', '轮换负责人', '抽签换帅', '随机换帅', '每周换负责人', '所有关键城市都必须每三十天由抽签产生的临时委员会接管', '抽签产生的临时委员会', '如果每一项重大决策都必须交给轮值外部评审团重新裁决', '轮值外部评审团重新裁决', '轮值外部评审团', 'lottery-picked emergency committee', 'temporary lottery committee', 'lottery committee', 'rotating external review board', 'every high-stakes decision had to be re-approved by a rotating external review board', 'swap leaders', 'leader shuffle', 'rotating leadership', 'random leadership', 'weekly leadership shuffle']],
   ['law', ['法院', '法庭', '法律', '合规', '宪法', '宪章', '司法', '审计', '否决', 'court', 'legal', 'constitutional', 'judicial', 'compliance', 'audit', 'veto']],
+  ['finance', ['金融', '银行', '央行', '挤兑', '流动性', '信用违约', '财政', 'finance', 'bank', 'central bank', 'liquidity', 'credit crisis', 'default', 'bailout', 'market panic']],
   ['trade', ['贸易', '商路', '港口', '关税', '商团', '供应链', '海峡', 'trade', 'tariff', 'port', 'merchant', 'supply chain', 'logistics', 'harbor']],
   ['faith', ['宗教', '教会', '神谕', '异端', '神权', '圣', 'religion', 'church', 'faith', 'prophecy', 'heresy', 'sacred', 'temple']],
   ['ecology', ['生态', '气候', '森林', '水源', '淡水', '枯竭', '干旱', '迁徙', '瘟疫', '洪水', '环境', 'climate', 'ecology', 'forest', 'migration', 'plague', 'drought', 'water', 'freshwater', 'environment']],
   ['governance', ['人工智能', '算法', '民主', '治理', '选举', 'ai', 'algorithm', 'govern', 'democracy', 'internet']],
+  ['medical', ['医疗', '医院', '医生', '护士', '患者', '公共卫生', '疫情', '疫苗', '分诊', 'medical', 'hospital', 'doctor', 'nurse', 'patient', 'public health', 'pandemic', 'vaccine', 'triage']],
+  ['technology', ['技术', '软件', '芯片', '算力', '开源', '网络安全', 'technology', 'software', 'chip', 'compute', 'open source', 'cybersecurity', 'tech stack']],
+  ['scholar', ['学术', '学院', '大学', '教授', '论文', '范式', 'academic', 'academy', 'university', 'professor', 'paper', 'paradigm']],
+  ['entertainment', ['娱乐', '媒体', '明星', '粉丝', '票房', '流量', 'entertainment', 'media', 'celebrity', 'fan', 'box office', 'audience']],
+  ['diplomacy', ['外交', '峰会', '条约', '联盟', '制裁', '大使', 'diplomacy', 'summit', 'treaty', 'alliance', 'sanction', 'ambassador']],
   ['war', ['战争', '战场', '围攻', '军', '补给线', '后勤', '车队', '运输枢纽', 'war', 'battle', 'invasion', 'siege', 'supply line', 'convoy', 'logistics hub']],
   ['empire', ['帝国', '王朝', '王国', '古罗马', '三国', 'empire', 'dynasty', 'kingdom', 'roman']],
   ['industry', ['工业', '工厂', '资源', '能源', '市场', '蒸汽', 'industrial', 'factory', 'resource', 'market', 'energy']],
@@ -631,11 +700,56 @@ const KEYWORD_TO_PROFILE: Array<[GameplayProfileId, string[]]> = [
   ['survival', ['末日', '崩塌', '灾难', '灭绝', 'survival', 'collapse', 'apocalypse', 'disaster', 'extinction']],
 ];
 
+function hasOwnRecordKey<T>(
+  record: Partial<Record<GameplayProfileId, T>>,
+  profileId: string | null | undefined,
+): profileId is GameplayProfileId {
+  return (
+    typeof profileId === 'string'
+    && Object.prototype.hasOwnProperty.call(record, profileId)
+    && Boolean(record[profileId as GameplayProfileId])
+  );
+}
+
+function getGameplayCardEffect(cardId: GameplayCardId): { risk: number; resource: number } {
+  return gameplayCardEffects[cardId] ?? neutralCardEffect;
+}
+
+function resolveGameplayProfileId(
+  profileId: GameplayProfileId | string | null | undefined,
+): GameplayProfileId {
+  return hasOwnRecordKey(gameplayProfiles, profileId) ? profileId : 'generic';
+}
+
+function getGameplayProfile(
+  profileId: GameplayProfileId | string | null | undefined,
+): GameplayProfileDefinition {
+  const profile = gameplayProfiles[resolveGameplayProfileId(profileId)] ?? gameplayProfiles.generic;
+  if (!profile) {
+    throw new Error('Gameplay profile contract is missing the generic fallback profile.');
+  }
+  return profile;
+}
+
+function getGameplaySignatureArcDefinition(
+  profileId: GameplayProfileId | string | null | undefined,
+): GameplaySignatureArcDefinition {
+  const arc = gameplaySignatureArcs[resolveGameplayProfileId(profileId)] ?? gameplaySignatureArcs.generic;
+  if (!arc) {
+    throw new Error('Gameplay signature arc contract is missing the generic fallback profile.');
+  }
+  return arc;
+}
+
 export function getGameplayCardDefinition(cardId: GameplayCardId): GameplayCardDefinition {
   return (
     gameplayCardDefs.find((card) => card.id === cardId)
     ?? gameplayCardDefs[0]
   );
+}
+
+export function isGameplayCardId(cardId: string | null | undefined): cardId is GameplayCardId {
+  return typeof cardId === 'string' && gameplayCardDefs.some((card) => card.id === cardId);
 }
 
 export function getGameplayCardLabel(cardId: GameplayCardId, isZh: boolean): string {
@@ -649,6 +763,7 @@ export function inferGameplayProfile(
 ): GameplayProfileDefinition {
   const scores = new Map<GameplayProfileId, number>();
   const addScore = (profileId: GameplayProfileId, amount: number) => {
+    if (!hasOwnRecordKey(gameplayProfiles, profileId)) return;
     scores.set(profileId, (scores.get(profileId) ?? 0) + amount);
   };
 
@@ -674,12 +789,25 @@ export function inferGameplayProfile(
     }
   }
 
-  return bestProfileId ? gameplayProfiles[bestProfileId] : gameplayProfiles.generic;
+  return bestProfileId ? getGameplayProfile(bestProfileId) : getGameplayProfile('generic');
 }
 
 export function getGameplayProfileDescription(profileId: GameplayProfileId, isZh: boolean): string {
-  const profile = gameplayProfiles[profileId];
+  const profile = getGameplayProfile(profileId);
   return isZh ? profile.descriptionZh : profile.descriptionEn;
+}
+
+export function getGameplayProfileLabel(profileId: GameplayProfileId, isZh: boolean): string {
+  const profile = getGameplayProfile(profileId);
+  return isZh ? profile.labelZh : profile.labelEn;
+}
+
+export function getGameplayProfileSignatureHooks(
+  profileId: GameplayProfileId,
+  isZh: boolean,
+): string[] {
+  const profile = getGameplayProfile(profileId);
+  return isZh ? profile.signatureHooksZh : profile.signatureHooksEn;
 }
 
 export function getGameplayCardDirectivePreview(
@@ -691,11 +819,11 @@ export function getGameplayCardDirectivePreview(
 }
 
 export function getGameplayProfileFrameSrc(profileId: GameplayProfileId): string {
-  return GAMEPLAY_PROFILE_FRAME_ASSETS[profileId];
+  return GAMEPLAY_PROFILE_FRAME_ASSETS[resolveGameplayProfileId(profileId)];
 }
 
 export function getGameplaySignatureArc(profileId: GameplayProfileId, isZh: boolean) {
-  const arc = gameplaySignatureArcs[profileId];
+  const arc = getGameplaySignatureArcDefinition(profileId);
   return {
     ...arc,
     label: isZh ? arc.labelZh : arc.labelEn,
@@ -709,9 +837,10 @@ export function getGameplaySignatureArcState(
   usages: GameplayUsageLike[],
   isZh: boolean,
 ) {
-  const arc = getGameplaySignatureArc(profileId, isZh);
+  const resolvedProfileId = resolveGameplayProfileId(profileId);
+  const arc = getGameplaySignatureArc(resolvedProfileId, isZh);
   const relevantUsages = usages
-    .filter((usage) => usage.profileId === profileId)
+    .filter((usage) => resolveGameplayProfileId(usage.profileId) === resolvedProfileId)
     .sort((a, b) => a.round - b.round);
 
   let matchedSteps = 0;
@@ -722,8 +851,8 @@ export function getGameplaySignatureArcState(
     }
   }
 
-  const riskValue = relevantUsages.reduce((sum, usage) => sum + gameplayCardEffects[usage.cardId].risk, 0);
-  const resourceValue = relevantUsages.reduce((sum, usage) => sum + gameplayCardEffects[usage.cardId].resource, 0);
+  const riskValue = relevantUsages.reduce((sum, usage) => sum + getGameplayCardEffect(usage.cardId).risk, 0);
+  const resourceValue = relevantUsages.reduce((sum, usage) => sum + getGameplayCardEffect(usage.cardId).resource, 0);
   const normalizedRisk = Math.max(0, Math.min(6, riskValue));
   const normalizedResource = Math.max(0, Math.min(6, 3 + resourceValue));
   const nextCardId = arc.sequence[matchedSteps] ?? null;
@@ -750,9 +879,9 @@ export function getScenarioSystemTrackState(
   commitment: BranchCommitmentLike | null | undefined,
   isZh: boolean,
 ) {
-  const arc = getGameplaySignatureArc(profileId, isZh);
-  const totalRisk = usages.reduce((sum, usage) => sum + gameplayCardEffects[usage.cardId].risk, 0);
-  const totalResource = usages.reduce((sum, usage) => sum + gameplayCardEffects[usage.cardId].resource, 0);
+  const arc = getGameplaySignatureArc(resolveGameplayProfileId(profileId), isZh);
+  const totalRisk = usages.reduce((sum, usage) => sum + getGameplayCardEffect(usage.cardId).risk, 0);
+  const totalResource = usages.reduce((sum, usage) => sum + getGameplayCardEffect(usage.cardId).resource, 0);
   const commitmentRisk = commitment?.active ? 1 : 0;
   const commitmentResource = commitment?.active ? -1 : 0;
   const riskValue = Math.max(0, Math.min(6, totalRisk + commitmentRisk));
@@ -781,8 +910,9 @@ export function getGameplayProfileTacticalState(
   commitment?: BranchCommitmentLike | null,
   isZh = true,
 ) {
-  const strategy = PROFILE_STRATEGY_RULES[profileId] ?? PROFILE_STRATEGY_RULES.generic;
-  const systemTracks = getScenarioSystemTrackState(profileId, usages, commitment, isZh);
+  const resolvedProfileId = resolveGameplayProfileId(profileId);
+  const strategy = PROFILE_STRATEGY_RULES[resolvedProfileId] ?? PROFILE_STRATEGY_RULES.generic;
+  const systemTracks = getScenarioSystemTrackState(resolvedProfileId, usages, commitment, isZh);
 
   let mode: GameplayTacticalMode = 'opening';
   if (systemTracks.riskValue >= 4 || systemTracks.resourceValue <= 2) {
@@ -800,15 +930,39 @@ export function getGameplayProfileTacticalState(
   };
 }
 
+export function getGameplayCardDisplayModel(
+  profileId: GameplayProfileId | string | null | undefined,
+  scenarioContext?: {
+    usages?: GameplayUsageLike[];
+    commitment?: BranchCommitmentLike | null;
+  } | null,
+): GameplayCardDisplayModel {
+  const ranked = getRecommendedGameplayCards(
+    resolveGameplayProfileId(profileId),
+    scenarioContext?.usages ?? [],
+    scenarioContext?.commitment ?? null,
+  );
+  const recommended = ranked.slice(0, 3);
+  const recommendedSet = new Set<GameplayCardId>(recommended);
+
+  const groups: GameplayCardGroupModel[] = GROUP_DEFINITIONS.map((definition) => ({
+    id: definition.id,
+    cardIds: definition.cards.filter((cardId) => !recommendedSet.has(cardId)),
+  }));
+
+  return { recommended, groups };
+}
+
 export function getRecommendedGameplayCards(
   profileId: GameplayProfileId,
   usages: GameplayUsageLike[] = [],
   commitment?: BranchCommitmentLike | null,
 ): GameplayCardId[] {
-  const cards = [...gameplayProfiles[profileId].recommendedCards];
-  const arcState = getGameplaySignatureArcState(profileId, usages, true);
-  const systemTracks = getScenarioSystemTrackState(profileId, usages, commitment, true);
-  const tacticalState = getGameplayProfileTacticalState(profileId, usages, commitment, true);
+  const resolvedProfileId = resolveGameplayProfileId(profileId);
+  const cards = [...getGameplayProfile(resolvedProfileId).recommendedCards];
+  const arcState = getGameplaySignatureArcState(resolvedProfileId, usages, true);
+  const systemTracks = getScenarioSystemTrackState(resolvedProfileId, usages, commitment, true);
+  const tacticalState = getGameplayProfileTacticalState(resolvedProfileId, usages, commitment, true);
   const counterplayCards = Array.from(COUNTERPLAY_CARD_IDS);
   const priorities: GameplayCardId[] = [];
 
@@ -820,7 +974,7 @@ export function getRecommendedGameplayCards(
     priorities.push(arcState.nextCardId);
   }
   if (commitment?.active) {
-    priorities.push(...PROFILE_STRATEGY_RULES[profileId].committed.focusCards);
+    priorities.push(...(PROFILE_STRATEGY_RULES[resolvedProfileId] ?? PROFILE_STRATEGY_RULES.generic).committed.focusCards);
   }
   if (systemTracks.counterplayRecommended) {
     priorities.push(
@@ -919,7 +1073,7 @@ export function getSuggestedGameplayAgents(
   agents: AgentInfo[],
   profileId: GameplayProfileId = 'generic',
 ): { primaryAgentId: string; secondaryAgentId?: string } {
-  const heuristics = PROFILE_HEURISTICS[profileId];
+  const heuristics = PROFILE_HEURISTICS[resolveGameplayProfileId(profileId)];
   const sorted = [...agents].sort((a, b) => {
     const keywordDiff = roleKeywordScore(b, heuristics?.primaryRoleKeywords) - roleKeywordScore(a, heuristics?.primaryRoleKeywords);
     if (keywordDiff !== 0) return keywordDiff;
@@ -1007,7 +1161,7 @@ export function getSuggestedSourceBranchId(
   profileId: GameplayProfileId = 'generic',
 ): string {
   const candidates = branches.filter((branch) => branch.id !== targetBranchId);
-  const keywords = PROFILE_HEURISTICS[profileId]?.sourceBranchKeywords ?? [];
+  const keywords = PROFILE_HEURISTICS[resolveGameplayProfileId(profileId)]?.sourceBranchKeywords ?? [];
   const scoreBranch = (branch: BranchInfo) => {
     const haystack = `${branch.title} ${branch.summary} ${branch.fork_reason}`.toLowerCase();
     return keywords.reduce((score, keyword) => (
@@ -1039,7 +1193,7 @@ export function buildGameplayAutoDirective(params: {
   const base = resolveGameplayDirective(profileId, cardId, isZh);
 
   if (isZh) {
-    return `围绕题目「${question}」在${sceneTheme ? `${sceneTheme}场景` : '当前场景'}中推进：${base}`;
+    return `基于「${question}」${sceneTheme ? `和${sceneTheme}场景` : '在当前场景'}推进：${base}`;
   }
 
   return `For the question "${question}"${sceneTheme ? ` in the ${sceneTheme} scene` : ''}: ${base}`;
@@ -1086,7 +1240,7 @@ export function buildGameplayCardPrompt(input: GameplayCardPromptInput): string 
 
   return [
     ...buildDirectorOverridePrefix(isZh),
-    isZh ? `[Special Card: ${card.labelEn} / ${card.labelZh}]` : `[Special Card: ${card.labelEn}]`,
+    isZh ? `[Gameplay Action: ${card.labelEn} / ${card.labelZh}]` : `[Gameplay Action: ${card.labelEn}]`,
     isZh ? `当前 What-If：${question}` : `What-if premise: ${question}`,
     isZh ? `场景主题：${sceneTheme || '当前世界线'}` : `Scene theme: ${sceneTheme || 'current timeline'}`,
     isZh ? `目标分支：${targetBranchTitle}` : `Target branch: ${targetBranchTitle}`,
@@ -1114,13 +1268,13 @@ function resolveGameplayDirective(
   cardId: GameplayCardId,
   isZh: boolean,
 ): string {
-  const directive = gameplayProfiles[profileId].defaultDirectives[cardId];
+  const profile = getGameplayProfile(profileId);
+  const directive = profile.defaultDirectives[cardId];
   if (directive) {
     return isZh ? directive.zh : directive.en;
   }
 
   const card = getGameplayCardDefinition(cardId);
-  const profile = gameplayProfiles[profileId];
   return isZh
     ? `围绕${profile.labelZh}局势执行「${card.labelZh}」，明确要反制什么、代价落到谁头上、以及后续余波。`
     : `Use "${card.labelEn}" inside the ${profile.labelEn.toLowerCase()} situation and spell out what is being countered, who pays the cost, and what follow-on consequences remain.`;

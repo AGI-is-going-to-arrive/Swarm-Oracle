@@ -1,6 +1,7 @@
 """Sync checks between the shared gameplay contract and backend card events."""
 
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -10,6 +11,16 @@ import pytest
 
 from app.services.gameplay_contract import load_gameplay_contract
 from app.visualization.card_events import CARD_TYPES
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+THEME_REGISTRY_PATH = REPO_ROOT / "frontend" / "src" / "lib" / "themeRegistry.ts"
+
+
+def _frontend_gameplay_profile_ids() -> set[str]:
+    source = THEME_REGISTRY_PATH.read_text(encoding="utf-8")
+    match = re.search(r"export type GameplayProfileId\s*=(?P<body>.*?);", source, re.S)
+    assert match is not None
+    return set(re.findall(r"'([^']+)'", match.group("body")))
 
 
 def test_backend_card_types_match_contract_ids():
@@ -33,6 +44,30 @@ def test_backend_branching_bonus_follows_contract():
 
     for card_id, card_type in CARD_TYPES.items():
         assert card_type["branching_bonus"] == contract_by_id[card_id].get("branching_bonus", 0)
+
+
+def test_gameplay_contract_profiles_cover_frontend_profile_ids():
+    contract = load_gameplay_contract()
+    contract_profile_ids = {profile["id"] for profile in contract["profiles"]}
+    frontend_profile_ids = _frontend_gameplay_profile_ids()
+
+    assert frontend_profile_ids - {"generic"} <= contract_profile_ids
+
+
+def test_gameplay_contract_profile_directives_cover_all_cards():
+    contract = load_gameplay_contract()
+    card_ids = {card["id"] for card in contract["cards"]}
+
+    for profile in contract["profiles"]:
+        assert set(profile["default_directives"]) == card_ids
+
+
+def test_gameplay_contract_profile_recommendations_exist_in_cards():
+    contract = load_gameplay_contract()
+    card_ids = {card["id"] for card in contract["cards"]}
+
+    for profile in contract["profiles"]:
+        assert set(profile["recommended_cards"]) <= card_ids
 
 
 def test_gameplay_contract_reload_tracks_file_mtime(tmp_path, monkeypatch):

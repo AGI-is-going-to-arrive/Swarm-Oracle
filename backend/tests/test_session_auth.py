@@ -540,6 +540,7 @@ async def test_cross_owner_checkpoints_returns_404(monkeypatch):
             "/api/campaign/scenario/{scenario_id}/finalize",
             _campaign_finalize_payload("owner-a"),
         ),
+        ("get", "/api/scenario/{scenario_id}/intervention-effects", None),
     ],
 )
 async def test_campaign_scenario_routes_reject_cross_owner_access(

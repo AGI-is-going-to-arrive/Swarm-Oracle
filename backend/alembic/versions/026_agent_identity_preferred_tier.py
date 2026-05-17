@@ -9,7 +9,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision: str = "026_agent_identity_preferred_tier"
 down_revision: Union[str, None] = "025_backfill_graph_node_agent_name"
@@ -22,6 +22,8 @@ _ALLOWED_TABLES = frozenset({"agent_identity"})
 def _existing_columns(table: str) -> set[str]:
     if table not in _ALLOWED_TABLES:
         raise ValueError(f"Table {table!r} not in migration allowlist")
+    if context.is_offline_mode():
+        return set()
     bind = op.get_bind()
     rows = bind.execute(sa.text(f"PRAGMA table_info('{table}')")).fetchall()
     return {row[1] for row in rows}
@@ -51,5 +53,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if context.is_offline_mode():
+        op.execute(sa.text("ALTER TABLE agent_identity DROP COLUMN preferred_tier"))
+        return
+
     with op.batch_alter_table("agent_identity") as batch_op:
         batch_op.drop_column("preferred_tier")

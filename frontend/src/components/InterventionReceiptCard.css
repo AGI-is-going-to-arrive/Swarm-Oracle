@@ -1,0 +1,234 @@
+/* ═══════════════════════════════════════════════════════════
+   SwarmOracle — Intervention Receipt Card Styles (Phase 4)
+   ═══════════════════════════════════════════════════════════
+   OKLCH primary with sRGB fallbacks via the existing design
+   tokens. Card is read-only — replay/review paths reuse the
+   same styles unchanged.
+   ═══════════════════════════════════════════════════════════ */
+
+.intervention-receipt-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-left: 3px solid oklch(58% 0.16 250);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  color: var(--text-primary);
+  box-shadow: var(--shadow-elevated);
+  /* sRGB fallback used when oklch() is unsupported. */
+  border-left-color: #3a6cd6;
+  animation: receiptIn 280ms ease-out;
+}
+
+@supports (border-left-color: oklch(58% 0.16 250)) {
+  .intervention-receipt-card {
+    border-left-color: oklch(58% 0.16 250);
+  }
+}
+
+.intervention-receipt-card--loading,
+.intervention-receipt-card--error {
+  min-height: 64px;
+}
+
+.intervention-receipt-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.intervention-receipt-card__title {
+  font-family: var(--font-heading);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.intervention-receipt-card__subtitle {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.intervention-receipt-card__hint {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.intervention-receipt-card__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.intervention-receipt-card__entry {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.intervention-receipt-card__entry-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.intervention-receipt-card__entry-heading {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.intervention-receipt-card__confidence {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #3a6cd6;
+  color: #3a6cd6;
+  background: rgba(58, 108, 214, 0.06);
+}
+
+@supports (color: oklch(60% 0.12 250)) {
+  .intervention-receipt-card__confidence {
+    color: oklch(60% 0.12 250);
+    border-color: oklch(60% 0.12 250);
+    background: oklch(95% 0.02 250 / 0.55);
+  }
+}
+
+.intervention-receipt-card__confidence--silent {
+  color: var(--text-secondary);
+  border-color: var(--border-default);
+  background: transparent;
+}
+
+.intervention-receipt-card__no-response {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin: 0;
+  font-style: italic;
+}
+
+.intervention-receipt-card__affected-line {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.intervention-receipt-card__excerpts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.intervention-receipt-card__excerpt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 10px;
+  border-left: 2px solid #d9d6cf;
+  border-left-color: oklch(85% 0.01 80);
+}
+
+.intervention-receipt-card__speaker {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+
+.intervention-receipt-card__quote {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-primary);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+@media (max-width: 480px) {
+  .intervention-receipt-card {
+    padding: 14px 14px;
+    gap: 10px;
+  }
+  .intervention-receipt-card__entry {
+    padding: 10px 12px;
+  }
+  .intervention-receipt-card__entry-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .intervention-receipt-card__confidence {
+    align-self: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .intervention-receipt-card {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .intervention-receipt-card {
+    border: 1px solid CanvasText;
+    border-left: 3px solid Highlight;
+    background: Canvas;
+    color: CanvasText;
+  }
+  .intervention-receipt-card__entry {
+    border: 1px solid CanvasText;
+    background: Canvas;
+  }
+  .intervention-receipt-card__confidence {
+    border: 1px solid Highlight;
+    color: Highlight;
+    background: Canvas;
+  }
+  .intervention-receipt-card__confidence--silent {
+    border-color: GrayText;
+    color: GrayText;
+  }
+  .intervention-receipt-card__excerpt {
+    border-left: 2px solid CanvasText;
+  }
+}
+
+@keyframes receiptIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

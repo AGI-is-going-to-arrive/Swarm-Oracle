@@ -124,7 +124,7 @@ function inferDominantTone(branch: ArchiveBranchLike | null): EndingToneId | nul
     return 'order';
   }
   if (RUPTURE_KEYWORDS.some((keyword) => corpus.includes(keyword))) return 'rupture';
-  return 'order';
+  return null;
 }
 
 function pickMostUsedCard(usages: CardUsageRecord[]): GameplayCardId | null {
@@ -156,9 +156,13 @@ function getCounterplaySummary(usages: CardUsageRecord[]): {
   };
 }
 
-function matchesEndingTone(targetLabel: string, tone: EndingToneId): boolean {
+function matchesEndingTone(
+  targetId: string | undefined,
+  targetLabel: string,
+  tone: EndingToneId,
+): boolean {
   const option = ENDING_TONE_OPTIONS[tone];
-  return matchesArchiveBetOption(undefined, targetLabel, tone, option);
+  return matchesArchiveBetOption(targetId, targetLabel, tone, option);
 }
 
 function resolveBettingHit(
@@ -184,7 +188,7 @@ function resolveBettingHit(
       );
     }
     if (!dominantTone) return false;
-    return matchesEndingTone(bet.targetLabel, dominantTone);
+    return matchesEndingTone(bet.targetId, bet.targetLabel, dominantTone);
   });
 }
 

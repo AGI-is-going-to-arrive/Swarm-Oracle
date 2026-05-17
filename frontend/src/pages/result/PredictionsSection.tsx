@@ -9,8 +9,10 @@ import {
 import {
   getPredictionRationale,
   getStructuredBetKindLabel,
+  getStructuredBetTargetLabel,
   parseStructuredPredictionText,
   resolveStructuredBetOutcome,
+  resolveStructuredBetSettlement,
 } from '../../lib/predictionBetting';
 import { useResultContext } from './ResultContext';
 
@@ -21,6 +23,7 @@ interface PredictionsSectionProps {
 export default function PredictionsSection({ betOutcomeContext }: PredictionsSectionProps) {
   const {
     t,
+    isZh,
     predictions,
     hasUnscored,
     isReplayMode,
@@ -52,6 +55,12 @@ export default function PredictionsSection({ betOutcomeContext }: PredictionsSec
               const structuredOutcome = structuredBet
                 ? resolveStructuredBetOutcome(structuredBet.meta, betOutcomeContext)
                 : null;
+              const structuredSettlement = structuredBet
+                ? resolveStructuredBetSettlement(structuredBet.meta, betOutcomeContext, isZh)
+                : null;
+              const structuredTargetLabel = structuredBet
+                ? getStructuredBetTargetLabel(structuredBet.meta, isZh)
+                : '';
               return (
                 <>
             <div className="prediction-card__header">
@@ -65,7 +74,7 @@ export default function PredictionsSection({ betOutcomeContext }: PredictionsSec
                 <p className="prediction-card__bet-kind">
                   {getStructuredBetKindLabel(structuredBet.meta.kind, t)}
                   {' · '}
-                  {structuredBet.meta.targetLabel}
+                  {structuredTargetLabel}
                 </p>
                 {structuredOutcome && (
                   <span className={getBetOutcomeClass(structuredOutcome)}>
@@ -73,6 +82,14 @@ export default function PredictionsSection({ betOutcomeContext }: PredictionsSec
                   </span>
                 )}
               </div>
+            )}
+            {structuredSettlement && (
+              <p
+                className={`prediction-card__settlement-reason prediction-card__settlement-reason--${structuredSettlement.hit === true ? 'hit' : structuredSettlement.hit === false ? 'miss' : 'pending'}`}
+                data-testid="prediction-settlement-reason"
+              >
+                {t(structuredSettlement.reasonKey, structuredSettlement.reasonParams)}
+              </p>
             )}
             <p className="prediction-card__text">{getPredictionRationale(p.prediction_text)}</p>
             {p.score != null && (

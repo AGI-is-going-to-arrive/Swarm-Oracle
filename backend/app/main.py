@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from app.api.admin import router as admin_router
 from app.api.agents import router as agents_router
 from app.api.campaign import router as campaign_router
+from app.api.campaign import scenario_intervention_effects_router
 from app.api.conversation import router as conversation_router
 from app.api.debate import router as debate_router
 from app.api.debate import ws_router as debate_ws_router
@@ -109,6 +110,7 @@ app.include_router(scenarios_router)
 app.include_router(interventions_router)
 app.include_router(social_router)
 app.include_router(campaign_router)
+app.include_router(scenario_intervention_effects_router)
 app.include_router(debate_router)
 app.include_router(debate_ws_router)
 app.include_router(ending_rooms_router)

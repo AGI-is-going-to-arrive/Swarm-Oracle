@@ -17,7 +17,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision: str = "025_backfill_graph_node_agent_name"
 down_revision: Union[str, None] = "024_graph_edge_evidence_contract"
@@ -46,6 +46,10 @@ def _table_exists(bind: sa.engine.Connection, table: str) -> bool:
 
 
 def upgrade() -> None:
+    if context.is_offline_mode():
+        log.info("025 backfill skipped: offline SQL generation mode")
+        return
+
     bind = op.get_bind()
 
     # Guard: both tables must exist (defensive — they should always exist

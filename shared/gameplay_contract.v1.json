@@ -671,6 +671,22 @@
         "forbidden_ritual": {
           "zh": "动用一条程序外、代价高昂的黑箱紧急授权，以短期稳定换取长期信任裂缝。",
           "en": "Invoke an out-of-band emergency override with a steep cost, trading short-term stability for long-term trust damage."
+        },
+        "audit_reckoning": {
+          "zh": "强制公开算法裁决、地方复核与紧急授权的责任账本，要求每一方承认一项误判或越权成本。",
+          "en": "Force the algorithmic ruling, local review, and emergency override ledgers into public view, making every side own one misjudgment or overreach cost."
+        },
+        "intel_blowback": {
+          "zh": "让一份被误读或刻意筛选的数据反噬中央叙事，迫使技术方解释哪些风险被压低。",
+          "en": "Make a misread or selectively filtered dataset blow back against the central narrative, forcing the technical bloc to explain which risks were suppressed."
+        },
+        "mandate_snapback": {
+          "zh": "让地方选民与公民陪审团收回授权，要求所有高风险算法政策回到人工复核窗口。",
+          "en": "Let local voters and civic juries pull the mandate back, requiring every high-risk algorithmic policy to return to human review."
+        },
+        "ceasefire_committee": {
+          "zh": "成立临时暂停委员会，冻结最具争议的自动裁决，并给中央、地方与技术方一个限时谈判窗口。",
+          "en": "Create a temporary pause committee that freezes the most disputed automated rulings and gives central, local, and technical actors a limited negotiation window."
         }
       },
       "signature_arc": {
@@ -767,6 +783,22 @@
         "forbidden_ritual": {
           "zh": "动用一项危险且可能越线的焦土/禁武方案，换取短期战场逆转。",
           "en": "Invoke a dangerous scorched-earth or taboo-weapons measure to force a short-term battlefield reversal."
+        },
+        "audit_reckoning": {
+          "zh": "清算前线伤亡、后勤失误与误判情报，要求主战派说明谁承担下一次推进的真实代价。",
+          "en": "Audit casualties, logistics failures, and bad intelligence, making the hawks state who will pay the true cost of the next push."
+        },
+        "intel_blowback": {
+          "zh": "让一份错误战报反噬指挥链，暴露继续进攻其实建立在过期情报上。",
+          "en": "Make a faulty battlefield report blow back through the command chain, revealing that continued assault rests on stale intelligence."
+        },
+        "mandate_snapback": {
+          "zh": "后方民意突然撤回战争授权，要求先停火、公开补给余量，再决定是否继续推进。",
+          "en": "Home-front mandate snaps back, demanding ceasefire, supply transparency, and only then a decision on renewed advance."
+        },
+        "ceasefire_committee": {
+          "zh": "建立由前线、后勤与平民代表组成的停火委员会，限定一轮内交换伤员、补给与误判证据。",
+          "en": "Form a ceasefire committee of front-line, logistics, and civilian representatives to trade casualty, supply, and miscalculation evidence within one round."
         }
       },
       "signature_arc": {
@@ -863,6 +895,22 @@
         "forbidden_ritual": {
           "zh": "启用一项血统诏令、禁军誓约或秘仪惩戒，强行改写帝国忠诚结构。",
           "en": "Invoke a bloodline decree, praetorian oath, or secret rite to forcibly rewrite the empire’s loyalty structure."
+        },
+        "audit_reckoning": {
+          "zh": "公开清算宫廷税赋、军团效忠与行省贡赋，逼皇权承认哪条旧秩序已经失灵。",
+          "en": "Expose court taxes, legion loyalty, and provincial tribute accounts, forcing the throne to admit which old order has failed."
+        },
+        "intel_blowback": {
+          "zh": "让一份来自行省的密报反噬宫廷，证明中央误判了贵族、军团或商路的真实站队。",
+          "en": "Let a provincial dispatch blow back against the court, proving the center misread noble, legion, or trade-route loyalties."
+        },
+        "mandate_snapback": {
+          "zh": "都城与行省共同撤回对扩权诏令的默许，要求重谈税赋、驻军与自治边界。",
+          "en": "The capital and provinces withdraw consent for the power grab, forcing renegotiation of taxes, garrisons, and autonomy boundaries."
+        },
+        "ceasefire_committee": {
+          "zh": "设立宫廷-行省停战委员会，暂缓军团调动，用一轮谈判换取忠诚、粮税与赦免条件。",
+          "en": "Create a court-provincial truce committee that pauses legion movement and trades loyalty, grain, tax, and amnesty terms in one round."
         }
       },
       "signature_arc": {
@@ -959,6 +1007,22 @@
         "forbidden_ritual": {
           "zh": "启动一项高污染、高透支且不可持续的极限增产方案，换取短期产能冲刺。",
           "en": "Trigger a highly polluting, unsustainable surge-production scheme to buy a short-term throughput spike."
+        },
+        "audit_reckoning": {
+          "zh": "强制公开产能、事故、库存与停机账本，要求管理层说明哪条产线必须先停。",
+          "en": "Force throughput, accident, inventory, and shutdown ledgers into the open, making management state which line must stop first."
+        },
+        "intel_blowback": {
+          "zh": "让被压下的安全警报或供应链数据反噬调度系统，证明继续满载会触发更大停摆。",
+          "en": "Let suppressed safety alerts or supply-chain data blow back against dispatch, proving full load will trigger a larger shutdown."
+        },
+        "mandate_snapback": {
+          "zh": "工人与社区撤回对极限增产的默许，要求先保安全冗余、公开库存，再谈订单。",
+          "en": "Workers and communities pull back consent for surge production, demanding safety slack and inventory transparency before orders."
+        },
+        "ceasefire_committee": {
+          "zh": "成立停机谈判委员会，让工厂、工会与配给方暂停互相施压，重新排定产线和保障顺序。",
+          "en": "Form a shutdown negotiation committee so factories, labor, and rationing officials stop pressuring each other and reorder lines and protections."
         }
       },
       "signature_arc": {
@@ -1055,6 +1119,22 @@
         "forbidden_ritual": {
           "zh": "强行动用一项撕毁旧约、扣押船队或祭出黑箱担保的危险交易手段，换取短期筹码。",
           "en": "Invoke a dangerous taboo trade move such as voiding old covenants, seizing fleets, or using opaque guarantees to buy leverage."
+        },
+        "audit_reckoning": {
+          "zh": "公开港口账本、补贴、保险与封锁收益，要求商团说明谁在把成本转嫁给沿岸城市。",
+          "en": "Expose port ledgers, subsidies, insurance, and blockade gains, forcing merchant blocs to explain who is shifting costs onto coastal cities."
+        },
+        "intel_blowback": {
+          "zh": "让一份错误运力预测或保险情报反噬商团，使封锁路线的真实脆弱性暴露。",
+          "en": "Make a false capacity forecast or insurance report blow back against the merchants, exposing the blockade route’s fragility."
+        },
+        "mandate_snapback": {
+          "zh": "港口工人、客户与沿岸议会撤回对封锁的默许，要求先重谈关税与通行优先级。",
+          "en": "Port labor, clients, and coastal councils withdraw consent for the blockade, demanding new tariff and passage priorities first."
+        },
+        "ceasefire_committee": {
+          "zh": "成立商路停火委员会，暂缓扣船与关税报复，用一轮谈判交换航道、补给与赔偿条件。",
+          "en": "Create a trade-route ceasefire committee that pauses seizures and tariff retaliation while negotiating lanes, supplies, and compensation."
         }
       },
       "signature_arc": {
@@ -1151,6 +1231,22 @@
         "forbidden_ritual": {
           "zh": "启用一项程序外的紧急例外或密室授权，以牺牲正当性换取一次危险裁断。",
           "en": "Invoke an extra-procedural emergency exception or closed-door mandate, sacrificing legitimacy for a dangerous ruling."
+        },
+        "audit_reckoning": {
+          "zh": "公开判例、证据包与执行备忘，要求法院和执行方说明哪条程序红线被越过。",
+          "en": "Expose precedent, evidence packs, and enforcement memos, forcing the court and implementers to state which procedural line was crossed."
+        },
+        "intel_blowback": {
+          "zh": "让一份被选择性引用的证据反噬裁决，迫使各方重审事实链与证人可信度。",
+          "en": "Make selectively cited evidence blow back against the ruling, forcing a review of the fact chain and witness credibility."
+        },
+        "mandate_snapback": {
+          "zh": "公民团体与监督机构撤回对紧急例外的授权，要求所有执行动作回到公开程序。",
+          "en": "Civic groups and oversight bodies pull back emergency authorization, requiring every enforcement move to return to public procedure."
+        },
+        "ceasefire_committee": {
+          "zh": "成立程序停火委员会，冻结争议执行，并让法院、执行方与受影响群体限时交换补救条件。",
+          "en": "Form a procedural ceasefire committee that freezes disputed enforcement and has the court, implementers, and affected groups trade remedy terms."
         }
       },
       "signature_arc": {
@@ -1247,6 +1343,22 @@
         "forbidden_ritual": {
           "zh": "立刻动用禁术、圣物或献祭仪式，以高昂神权代价换取一次神谕偏转。",
           "en": "Invoke a forbidden rite, relic, or sacrificial act to bend the prophecy at a steep sacred cost."
+        },
+        "audit_reckoning": {
+          "zh": "公开祭品、赎罪与圣殿仓储账本，要求祭司承认哪项神谕解释正在消耗信众。",
+          "en": "Expose sacrifice, penance, and temple reserve ledgers, forcing clergy to admit which prophecy reading is consuming the faithful."
+        },
+        "intel_blowback": {
+          "zh": "让一段被隐瞒的神谕残句反噬教团叙事，证明当前解释并非唯一合法道路。",
+          "en": "Let a concealed prophecy fragment blow back against the clergy’s narrative, proving the current reading is not the only legitimate path."
+        },
+        "mandate_snapback": {
+          "zh": "信众与世俗盟友撤回对禁令的顺从，要求公开仪式代价并暂停异端清洗。",
+          "en": "Believers and secular allies withdraw obedience to the ban, demanding ritual cost transparency and a pause on heresy purges."
+        },
+        "ceasefire_committee": {
+          "zh": "成立圣殿调停委员会，让祭司、君主与异议信众暂缓清洗，先谈庇护、粮仓与解释权。",
+          "en": "Create a temple mediation committee where clergy, rulers, and dissenters pause purges to negotiate sanctuary, granaries, and interpretive authority."
         }
       },
       "signature_arc": {
@@ -1343,6 +1455,22 @@
         "forbidden_ritual": {
           "zh": "动用一项高代价的气候工程、抽水禁令或保育区豁免，冒险换取短期生存缓冲。",
           "en": "Invoke a costly climate intervention, emergency extraction ban, or sanctuary exemption to buy a short-lived survival buffer."
+        },
+        "audit_reckoning": {
+          "zh": "公开阈值、排放、水权与迁徙账本，要求行政方说明哪些区域被牺牲给短期增长。",
+          "en": "Expose threshold, emissions, water-right, and migration ledgers, forcing administrators to name which zones were sacrificed for short-term growth."
+        },
+        "intel_blowback": {
+          "zh": "让被压低的生态预警反噬扩张路线，证明下一季的水、疫病或迁徙压力已被误判。",
+          "en": "Make suppressed ecological warnings blow back against the expansion route, proving next-season water, outbreak, or migration pressure was misread."
+        },
+        "mandate_snapback": {
+          "zh": "受灾社区撤回对扩张的默许，要求先保水源、迁徙走廊与防疫能力。",
+          "en": "Affected communities pull back consent for expansion, demanding water, migration corridors, and outbreak capacity first."
+        },
+        "ceasefire_committee": {
+          "zh": "成立生态停火委员会，暂停上游抽取和下游封锁，用一轮谈判重新分配水权、迁徙与余粮。",
+          "en": "Form an ecological ceasefire committee that pauses upstream extraction and downstream blockades while reallocating water, migration lanes, and reserves."
         }
       },
       "signature_arc": {
@@ -1439,6 +1567,22 @@
         "forbidden_ritual": {
           "zh": "启动一项高风险生命维持实验、封存协议或返航禁令，强行换取边疆窗口。",
           "en": "Invoke a high-risk life-support experiment, sealing protocol, or return-ban to force open a frontier window."
+        },
+        "audit_reckoning": {
+          "zh": "公开氧气、返航席位、试采收益与故障记录，要求舰队说明哪些殖民者被推到风险前沿。",
+          "en": "Expose oxygen, return-seat, extraction-gain, and failure records, forcing the fleet to state which settlers were pushed to the risk frontier."
+        },
+        "intel_blowback": {
+          "zh": "让一条错误的轨道信号或资源坐标反噬远征计划，证明继续外扩会切断生命维持线。",
+          "en": "Make a faulty orbital signal or resource coordinate blow back against the expedition plan, proving further expansion will sever life support."
+        },
+        "mandate_snapback": {
+          "zh": "殖民地居民撤回对外扩的授权，要求先保障返航权、氧气配额与维修窗口。",
+          "en": "Colonists pull back authorization for expansion, demanding return rights, oxygen quotas, and repair windows first."
+        },
+        "ceasefire_committee": {
+          "zh": "成立边疆停火委员会，暂停试采和自治争吵，先谈氧气、返航席位与远端哨站取舍。",
+          "en": "Form a frontier ceasefire committee that pauses extraction and autonomy fights to negotiate oxygen, return seats, and outpost trade-offs."
         }
       },
       "signature_arc": {
@@ -1535,6 +1679,22 @@
         "forbidden_ritual": {
           "zh": "立刻施放一项禁术、龙契约或王权秘仪，以巨大代价换取一次神话级转向。",
           "en": "Invoke a forbidden spell, dragon pact, or royal rite to force a mythic pivot at great cost."
+        },
+        "audit_reckoning": {
+          "zh": "公开禁术代价、王室誓约与边境献祭账本，要求守护者承认哪条传说正在吃掉现实。",
+          "en": "Expose forbidden costs, royal oaths, and frontier sacrifice ledgers, forcing guardians to admit which legend is consuming reality."
+        },
+        "intel_blowback": {
+          "zh": "让一段被误译的预言反噬法师议会，证明当前仪式路线会引出更大的灾厄。",
+          "en": "Make a mistranslated prophecy blow back against the mage council, proving the current rite invites a larger disaster."
+        },
+        "mandate_snapback": {
+          "zh": "王国民众与边境守望者收回对禁术的服从，要求先公开代价、暂停献祭。",
+          "en": "The kingdom’s crowds and wardens withdraw obedience to forbidden magic, demanding cost disclosure and a pause on sacrifice."
+        },
+        "ceasefire_committee": {
+          "zh": "成立王国调停委员会，让法师、王权与守望者暂停互相指控，先谈庇护、法阵与龙火边界。",
+          "en": "Create a kingdom mediation committee so mages, the crown, and wardens pause blame and negotiate shelter, wards, and dragonfire limits."
         }
       },
       "signature_arc": {
@@ -1631,6 +1791,22 @@
         "forbidden_ritual": {
           "zh": "动用最后储备、封门令或极端牺牲协议，换取一次高代价的生存喘息。",
           "en": "Invoke last-reserve burn, a hard shelter seal, or an extreme sacrifice protocol to buy one costly breath of survival."
+        },
+        "audit_reckoning": {
+          "zh": "公开余粮、药品、床位与撤离名额账本，要求避难负责人说明谁一直在被延后。",
+          "en": "Expose food, medicine, beds, and evacuation-slot ledgers, forcing shelter leaders to state who has been repeatedly delayed."
+        },
+        "intel_blowback": {
+          "zh": "让一份错误避难路线或库存报告反噬领导层，证明继续隐瞒会导致下一轮崩盘。",
+          "en": "Make a false refuge-route or stock report blow back against leadership, proving concealment will cause the next collapse."
+        },
+        "mandate_snapback": {
+          "zh": "避难居民撤回对极端配给的忍耐，要求重写儿童、病患、守卫与技术人员的优先级。",
+          "en": "Shelter residents pull back tolerance for extreme rationing, demanding a new priority order for children, patients, guards, and technicians."
+        },
+        "ceasefire_committee": {
+          "zh": "成立避难所停火委员会，让守卫、医护与居民暂停抢夺资源，先谈配给、撤离与最后冗余。",
+          "en": "Form a shelter ceasefire committee so guards, medics, and residents pause resource grabs and negotiate rations, evacuation, and last reserves."
         }
       },
       "signature_arc": {
@@ -1650,6 +1826,678 @@
         "resource_track_labels": {
           "zh": "生存余量",
           "en": "Survival Buffer"
+        }
+      }
+    },
+    {
+      "id": "finance",
+      "labels": {
+        "zh": "金融风控",
+        "en": "Financial Risk"
+      },
+      "descriptions": {
+        "zh": "适合银行、央行、挤兑、流动性、信用与市场恐慌类问题。",
+        "en": "Fits banking, central banks, runs, liquidity, credit, and market panic."
+      },
+      "signature_hooks": {
+        "zh": [
+          "流动性断点",
+          "信用锚",
+          "监管窗口"
+        ],
+        "en": [
+          "Liquidity breaks",
+          "Credit anchors",
+          "Regulatory windows"
+        ]
+      },
+      "recommended_cards": [
+        "backchannel_pact",
+        "audit_reckoning",
+        "intel_blowback",
+        "resource_triage",
+        "public_hearing",
+        "mandate_snapback",
+        "spy_infiltrate",
+        "ceasefire_committee",
+        "mandate_surge",
+        "human_takeover"
+      ],
+      "default_directives": {
+        "civilization_debate": {
+          "zh": "应优先保住系统性流动性，还是先清算高杠杆机构以恢复信用纪律。",
+          "en": "Should the branch protect systemic liquidity first, or liquidate high-leverage institutions to restore credit discipline?"
+        },
+        "spy_infiltrate": {
+          "zh": "暗中放大一条存款挤兑或做空传闻，迫使监管者过早消耗救助弹药。",
+          "en": "Quietly amplify a bank-run or short-selling rumor so regulators burn bailout ammunition too early."
+        },
+        "backchannel_pact": {
+          "zh": "让央行、财政部与头部银行私下交换担保、资产折价与高管问责条件，避免公开挤兑。",
+          "en": "Broker a private bargain among the central bank, treasury, and major banks over guarantees, asset haircuts, and executive accountability before a public run."
+        },
+        "human_takeover": {
+          "zh": "由玩家亲自宣布暂停某类交易或担保窗口，把市场节奏从自动抛售中拉回人工裁量。",
+          "en": "Let the player personally suspend a trading class or guarantee window, pulling market tempo out of automated selloff and back into human judgment."
+        },
+        "spacetime_rift": {
+          "zh": "另一条时间线的清算数据泄漏，显示当前救助方案会把信用风险转嫁给储户或纳税人。",
+          "en": "A liquidation record leaks from another timeline showing the current rescue plan shifts credit risk onto depositors or taxpayers."
+        },
+        "mandate_surge": {
+          "zh": "储户、小企业与地方政府同时要求冻结奖金、公开坏账并保住支付系统。",
+          "en": "Depositors, small firms, and local governments demand frozen bonuses, bad-loan transparency, and payment-system protection."
+        },
+        "evacuation_order": {
+          "zh": "立即发布资金撤离令，优先保护工资、医院和公共支付通道，其余投机仓位延后清算。",
+          "en": "Issue a capital evacuation order that protects payroll, hospitals, and public payment rails first while speculative positions wait."
+        },
+        "public_hearing": {
+          "zh": "召开金融公开听证，要求监管、银行与债权人各自公开一条坏账、流动性或担保事实。",
+          "en": "Open a financial hearing and require regulators, banks, and creditors to disclose one bad-loan, liquidity, or guarantee fact each."
+        },
+        "resource_triage": {
+          "zh": "立即执行流动性分诊，明确哪些支付通道、银行和债务到期先获救，哪些资产必须折价。",
+          "en": "Run liquidity triage and decide which payment rails, banks, and maturities get protected first and which assets must take haircuts."
+        },
+        "forbidden_ritual": {
+          "zh": "启用高代价资本管制、强制并表或黑箱担保，以短期止血换取长期信用裂缝。",
+          "en": "Invoke costly capital controls, forced consolidation, or opaque guarantees, trading short-term stabilization for long-term credit damage."
+        },
+        "audit_reckoning": {
+          "zh": "公开坏账、关联交易与救助条件账本，要求每个机构承认一项被隐藏的损失或转嫁成本。",
+          "en": "Expose bad loans, related-party trades, and bailout terms, forcing every institution to own one hidden loss or shifted cost."
+        },
+        "intel_blowback": {
+          "zh": "让一份误导性评级、压力测试或流动性报告反噬市场叙事，迫使监管重估真实缺口。",
+          "en": "Make a misleading rating, stress test, or liquidity report blow back against market confidence, forcing regulators to reprice the real gap."
+        },
+        "mandate_snapback": {
+          "zh": "储户与纳税人撤回对无条件救助的默许，要求先问责、折价和保护基础支付。",
+          "en": "Depositors and taxpayers pull back consent for unconditional rescue, demanding accountability, haircuts, and basic payment protection first."
+        },
+        "ceasefire_committee": {
+          "zh": "成立金融停火委员会，暂停挤兑、追缴与抛售一轮，交换担保、折价与清算顺序。",
+          "en": "Form a financial ceasefire committee that pauses runs, margin calls, and selloffs for one round while negotiating guarantees, haircuts, and liquidation order."
+        }
+      },
+      "signature_arc": {
+        "labels": {
+          "zh": "信用止血链",
+          "en": "Credit Stabilization Arc"
+        },
+        "sequence": [
+          "audit_reckoning",
+          "resource_triage",
+          "ceasefire_committee"
+        ],
+        "risk_track_labels": {
+          "zh": "挤兑时钟",
+          "en": "Run Clock"
+        },
+        "resource_track_labels": {
+          "zh": "流动性缓冲",
+          "en": "Liquidity Buffer"
+        }
+      }
+    },
+    {
+      "id": "scholar",
+      "labels": {
+        "zh": "学术范式",
+        "en": "Scholarly Paradigm"
+      },
+      "descriptions": {
+        "zh": "适合大学、学派、论文争议、教育制度与知识权威类问题。",
+        "en": "Fits universities, schools of thought, paper disputes, education systems, and knowledge authority."
+      },
+      "signature_hooks": {
+        "zh": [
+          "范式裂缝",
+          "同行评议",
+          "证据门槛"
+        ],
+        "en": [
+          "Paradigm fractures",
+          "Peer review",
+          "Evidence thresholds"
+        ]
+      },
+      "recommended_cards": [
+        "civilization_debate",
+        "public_hearing",
+        "audit_reckoning",
+        "mandate_snapback",
+        "backchannel_pact",
+        "human_takeover",
+        "intel_blowback",
+        "mandate_surge",
+        "spy_infiltrate",
+        "ceasefire_committee"
+      ],
+      "default_directives": {
+        "civilization_debate": {
+          "zh": "让两派学者公开争论旧范式是否还能解释新证据，还是必须重写教材和资助方向。",
+          "en": "Make two scholarly factions debate whether the old paradigm still explains the new evidence, or whether textbooks and funding must change."
+        },
+        "spy_infiltrate": {
+          "zh": "让一名评审暗中压低相反证据的权重，以维护自己学派的资助和声誉。",
+          "en": "Have a reviewer quietly down-weight opposing evidence to protect their school’s funding and reputation."
+        },
+        "backchannel_pact": {
+          "zh": "让学院委员会与核心期刊私下交换录用、资助和数据开放条件，避免公开学派分裂。",
+          "en": "Broker a private deal between the faculty committee and key journal over acceptance, funding, and data disclosure to avoid an open schism."
+        },
+        "human_takeover": {
+          "zh": "由玩家以主持人身份要求暂停结论，先复核数据、方法和利益冲突。",
+          "en": "Let the player chair the session and pause conclusions until data, methods, and conflicts of interest are reviewed."
+        },
+        "spacetime_rift": {
+          "zh": "另一条时间线泄漏的复现实验显示，主流论文会在三个月后被推翻。",
+          "en": "A replication result from another timeline leaks, showing the mainstream paper will be overturned in three months."
+        },
+        "mandate_surge": {
+          "zh": "学生、资助方与公众突然要求公开数据、重审评议过程并暂停有争议课程。",
+          "en": "Students, funders, and the public demand open data, review-process scrutiny, and a pause on contested curricula."
+        },
+        "evacuation_order": {
+          "zh": "立即撤离高风险研究项目的学生和患者样本，冻结尚未复核的数据访问。",
+          "en": "Evacuate students and subject samples from high-risk projects immediately, freezing access to unreviewed data."
+        },
+        "public_hearing": {
+          "zh": "召开学术公开听证，要求主流学派、反方与方法审查者各自拿出一条可复现实证。",
+          "en": "Open an academic hearing and require the mainstream school, opposition, and methods reviewers to produce one reproducible fact each."
+        },
+        "resource_triage": {
+          "zh": "立即重排实验室、奖学金和算力资源，决定哪些验证任务先做，哪些宣传项目暂停。",
+          "en": "Reallocate labs, scholarships, and compute, deciding which validation tasks go first and which publicity projects pause."
+        },
+        "forbidden_ritual": {
+          "zh": "动用一项越过同行评议的紧急发布、封闭数据或学术封杀，以声誉代价换取短期话语权。",
+          "en": "Invoke emergency publication, sealed data, or academic blacklisting outside peer review, buying short-term narrative control at reputational cost."
+        },
+        "audit_reckoning": {
+          "zh": "公开评审意见、原始数据和资助关系，要求每个学派承认一处证据短板。",
+          "en": "Expose peer reviews, raw data, and funding ties, forcing every school to admit one evidence weakness."
+        },
+        "intel_blowback": {
+          "zh": "让被选择性引用的论文、复现实验或匿名评审反噬主流结论，迫使学界重算可信度。",
+          "en": "Make selectively cited papers, replication results, or anonymous reviews blow back against the mainstream conclusion, forcing a credibility reset."
+        },
+        "mandate_snapback": {
+          "zh": "学生和资助方收回默认信任，要求先开放数据、复核方法，再继续推广结论。",
+          "en": "Students and funders pull back default trust, demanding open data and methods review before the conclusion spreads further."
+        },
+        "ceasefire_committee": {
+          "zh": "成立跨学派暂停委员会，冻结互相封杀，用一轮时间确定复现、署名和教材修订条件。",
+          "en": "Form a cross-school pause committee that freezes mutual blacklisting while setting replication, authorship, and curriculum-revision terms."
+        }
+      },
+      "signature_arc": {
+        "labels": {
+          "zh": "范式复核链",
+          "en": "Paradigm Review Arc"
+        },
+        "sequence": [
+          "civilization_debate",
+          "audit_reckoning",
+          "public_hearing"
+        ],
+        "risk_track_labels": {
+          "zh": "话语撕裂",
+          "en": "Discourse Fracture"
+        },
+        "resource_track_labels": {
+          "zh": "证据余量",
+          "en": "Evidence Reserve"
+        }
+      }
+    },
+    {
+      "id": "medical",
+      "labels": {
+        "zh": "医疗分诊",
+        "en": "Medical Triage"
+      },
+      "descriptions": {
+        "zh": "适合医院、公共卫生、疫情、疫苗、患者分诊与医疗伦理类问题。",
+        "en": "Fits hospitals, public health, outbreaks, vaccines, patient triage, and medical ethics."
+      },
+      "signature_hooks": {
+        "zh": [
+          "床位红线",
+          "患者优先级",
+          "公共卫生信任"
+        ],
+        "en": [
+          "Bed limits",
+          "Patient priority",
+          "Public-health trust"
+        ]
+      },
+      "recommended_cards": [
+        "resource_triage",
+        "evacuation_order",
+        "public_hearing",
+        "audit_reckoning",
+        "intel_blowback",
+        "ceasefire_committee",
+        "human_takeover",
+        "mandate_snapback",
+        "mandate_surge",
+        "backchannel_pact"
+      ],
+      "default_directives": {
+        "civilization_debate": {
+          "zh": "让临床、公共卫生和伦理代表争论床位应优先给存活概率最高者，还是最脆弱群体。",
+          "en": "Make clinicians, public-health officials, and ethicists debate whether beds go first to highest survival odds or the most vulnerable groups."
+        },
+        "spy_infiltrate": {
+          "zh": "让一名内部人士暗中压低院内感染或药品短缺数据，迫使错误分诊继续运行。",
+          "en": "Have an insider quietly suppress hospital infection or medicine shortage data, keeping a flawed triage path in motion."
+        },
+        "backchannel_pact": {
+          "zh": "让医院管理层与药品供应方私下交换床位、疫苗和责任豁免条件，避免公开崩盘。",
+          "en": "Broker a private deal between hospital leadership and suppliers over beds, vaccines, and liability waivers before collapse becomes public."
+        },
+        "human_takeover": {
+          "zh": "由玩家以值班总负责人身份重写分诊顺序，并明确谁必须等待或转院。",
+          "en": "Let the player act as duty lead, rewrite triage order, and state who must wait or transfer."
+        },
+        "spacetime_rift": {
+          "zh": "另一条时间线的病例曲线泄漏，显示当前方案会在下一轮压垮 ICU。",
+          "en": "A case curve from another timeline leaks, showing the current plan will overwhelm ICU capacity next round."
+        },
+        "mandate_surge": {
+          "zh": "患者家属、医护与社区同时要求公开床位、药品和疫苗分配规则。",
+          "en": "Families, staff, and communities demand transparent bed, medicine, and vaccine allocation rules."
+        },
+        "evacuation_order": {
+          "zh": "立即发布医疗撤离令，优先转运危重患者、儿童和暴露医护，并关闭高感染病区。",
+          "en": "Issue a medical evacuation order that moves critical patients, children, and exposed staff first while closing high-infection wards."
+        },
+        "public_hearing": {
+          "zh": "召开医疗公开听证，要求医院、社区与供应方各自公开一条床位、药品或感染风险证据。",
+          "en": "Open a medical hearing and require hospitals, communities, and suppliers to disclose one bed, medicine, or infection-risk fact each."
+        },
+        "resource_triage": {
+          "zh": "立即执行医疗资源分诊，决定 ICU、氧气、疫苗和医护排班谁先获得保护，哪些服务暂停。",
+          "en": "Run medical resource triage and decide which ICU beds, oxygen, vaccines, and staff shifts get protected first and which services pause."
+        },
+        "forbidden_ritual": {
+          "zh": "启用高风险试验疗法、强制隔离或责任豁免，以伦理代价换取短期生存窗口。",
+          "en": "Invoke an experimental therapy, forced isolation, or liability waiver, trading ethical cost for a short-term survival window."
+        },
+        "audit_reckoning": {
+          "zh": "公开分诊记录、药品库存和感染数据，要求管理层说明谁因隐瞒而承受额外风险。",
+          "en": "Expose triage logs, medicine inventory, and infection data, forcing leadership to state who carried extra risk because of concealment."
+        },
+        "intel_blowback": {
+          "zh": "让一份错误病例预测或疫苗报告反噬院方决策，迫使所有角色重算生命线。",
+          "en": "Make a faulty case forecast or vaccine report blow back against hospital decisions, forcing every actor to recalculate lifelines."
+        },
+        "mandate_snapback": {
+          "zh": "患者家属与医护撤回对黑箱分诊的忍耐，要求公开优先级并保留申诉窗口。",
+          "en": "Families and staff pull back tolerance for black-box triage, demanding visible priorities and an appeal window."
+        },
+        "ceasefire_committee": {
+          "zh": "成立医疗停火委员会，让医院、家属与供应方暂停互相指责，先谈床位、转运和药品分配。",
+          "en": "Form a medical ceasefire committee so hospitals, families, and suppliers pause blame and negotiate beds, transfers, and medicine allocation."
+        }
+      },
+      "signature_arc": {
+        "labels": {
+          "zh": "生命线分诊链",
+          "en": "Lifeline Triage Arc"
+        },
+        "sequence": [
+          "resource_triage",
+          "evacuation_order",
+          "ceasefire_committee"
+        ],
+        "risk_track_labels": {
+          "zh": "过载时钟",
+          "en": "Overload Clock"
+        },
+        "resource_track_labels": {
+          "zh": "护理余量",
+          "en": "Care Reserve"
+        }
+      }
+    },
+    {
+      "id": "technology",
+      "labels": {
+        "zh": "技术路线",
+        "en": "Technology Stack"
+      },
+      "descriptions": {
+        "zh": "适合软件平台、AI、芯片、网络安全、开源与技术治理类问题。",
+        "en": "Fits software platforms, AI, chips, cybersecurity, open source, and technology governance."
+      },
+      "signature_hooks": {
+        "zh": [
+          "架构债",
+          "算力瓶颈",
+          "安全反噬"
+        ],
+        "en": [
+          "Architecture debt",
+          "Compute bottlenecks",
+          "Security blowback"
+        ]
+      },
+      "recommended_cards": [
+        "spy_infiltrate",
+        "backchannel_pact",
+        "spacetime_rift",
+        "resource_triage",
+        "intel_blowback",
+        "audit_reckoning",
+        "public_hearing",
+        "human_takeover",
+        "mandate_snapback",
+        "ceasefire_committee"
+      ],
+      "default_directives": {
+        "civilization_debate": {
+          "zh": "让平台、开源社区与安全方争论应继续快速上线，还是先冻结架构重做安全边界。",
+          "en": "Make the platform, open-source community, and security team debate fast deployment versus freezing the architecture to rebuild safety boundaries."
+        },
+        "spy_infiltrate": {
+          "zh": "让一名工程或安全角色暗中植入依赖选择，迫使所有人后来只能沿着单一技术路线走。",
+          "en": "Have an engineering or security actor quietly bias a dependency choice so everyone later becomes locked into one stack path."
+        },
+        "backchannel_pact": {
+          "zh": "让平台方与芯片/云供应方私下交换算力、漏洞披露和独占接口条件。",
+          "en": "Broker a private deal between the platform and chip/cloud supplier over compute, vulnerability disclosure, and exclusive interfaces."
+        },
+        "human_takeover": {
+          "zh": "由玩家亲自冻结发布，要求先修关键漏洞、公开依赖风险，再谈增长。",
+          "en": "Let the player freeze release, requiring critical vulnerability fixes and dependency-risk disclosure before growth."
+        },
+        "spacetime_rift": {
+          "zh": "另一条时间线的事故报告泄漏，显示当前架构债会在下一次扩容时触发系统性故障。",
+          "en": "An incident report from another timeline leaks, showing current architecture debt will trigger systemic failure during the next scale-up."
+        },
+        "mandate_surge": {
+          "zh": "用户、开发者与监管者突然要求开源审计、数据可携带和暂停高风险上线。",
+          "en": "Users, developers, and regulators demand open audits, data portability, and a pause on high-risk deployment."
+        },
+        "evacuation_order": {
+          "zh": "立即发布技术撤离令，优先迁移关键用户、密钥和基础服务，关闭最危险的实验接口。",
+          "en": "Issue a technical evacuation order that migrates key users, credentials, and core services first while closing the riskiest experimental interfaces."
+        },
+        "public_hearing": {
+          "zh": "召开技术公开听证，要求平台、安全团队与用户代表各自公开一条漏洞、依赖或数据风险。",
+          "en": "Open a technology hearing and require the platform, security team, and user representatives to reveal one vulnerability, dependency, or data-risk fact each."
+        },
+        "resource_triage": {
+          "zh": "立即执行技术资源分诊，决定算力、工程人力、修复窗口和用户迁移谁先获得保障。",
+          "en": "Run technology resource triage and decide which compute, engineers, repair windows, and user migrations get protected first."
+        },
+        "forbidden_ritual": {
+          "zh": "启用封闭黑箱补丁、强制数据迁移或高风险模型开关，以信任代价换取短期上线。",
+          "en": "Invoke a closed black-box patch, forced data migration, or high-risk model switch, buying deployment speed at trust cost."
+        },
+        "audit_reckoning": {
+          "zh": "公开依赖、事故、漏洞和算力分配账本，要求平台承认哪项风险被包装成路线选择。",
+          "en": "Expose dependency, incident, vulnerability, and compute-allocation ledgers, forcing the platform to admit which risk was disguised as strategy."
+        },
+        "intel_blowback": {
+          "zh": "让被延迟披露的漏洞、基准或安全报告反噬发布计划，迫使路线重排。",
+          "en": "Make a delayed vulnerability, benchmark, or security report blow back against the release plan, forcing a stack reprioritization."
+        },
+        "mandate_snapback": {
+          "zh": "用户和开发者撤回对平台路线的默认信任，要求先保可迁移、可审计和可回滚。",
+          "en": "Users and developers pull back default trust in the platform path, demanding portability, auditability, and rollback first."
+        },
+        "ceasefire_committee": {
+          "zh": "成立技术停火委员会，暂停上线争夺，让平台、安全和开源方先谈漏洞、接口与算力边界。",
+          "en": "Form a technology ceasefire committee that pauses launch fights while platform, security, and open-source actors negotiate vulnerabilities, interfaces, and compute boundaries."
+        }
+      },
+      "signature_arc": {
+        "labels": {
+          "zh": "架构熔断链",
+          "en": "Architecture Breaker Arc"
+        },
+        "sequence": [
+          "intel_blowback",
+          "audit_reckoning",
+          "resource_triage"
+        ],
+        "risk_track_labels": {
+          "zh": "故障时钟",
+          "en": "Failure Clock"
+        },
+        "resource_track_labels": {
+          "zh": "工程余量",
+          "en": "Engineering Buffer"
+        }
+      }
+    },
+    {
+      "id": "entertainment",
+      "labels": {
+        "zh": "舆论叙事",
+        "en": "Narrative Spotlight"
+      },
+      "descriptions": {
+        "zh": "适合媒体、娱乐产业、明星、粉丝、票房、平台声誉与公共叙事类问题。",
+        "en": "Fits media, entertainment, celebrities, fandoms, box office, platform reputation, and public narrative."
+      },
+      "signature_hooks": {
+        "zh": [
+          "口碑反噬",
+          "流量筹码",
+          "叙事控制"
+        ],
+        "en": [
+          "Reputation blowback",
+          "Attention leverage",
+          "Narrative control"
+        ]
+      },
+      "recommended_cards": [
+        "civilization_debate",
+        "mandate_surge",
+        "backchannel_pact",
+        "public_hearing",
+        "audit_reckoning",
+        "mandate_snapback",
+        "intel_blowback",
+        "spy_infiltrate",
+        "human_takeover",
+        "ceasefire_committee"
+      ],
+      "default_directives": {
+        "civilization_debate": {
+          "zh": "让创作者、平台和观众公开争论应保护艺术表达，还是先回应伤害与商业操控。",
+          "en": "Make creators, platforms, and audiences debate protecting artistic expression versus answering harm and commercial manipulation first."
+        },
+        "spy_infiltrate": {
+          "zh": "让一名公关或平台角色暗中引导热搜，把真实争议转化成对自己有利的话题。",
+          "en": "Have a PR or platform actor quietly steer trending topics, converting the real dispute into a favorable narrative."
+        },
+        "backchannel_pact": {
+          "zh": "让平台、经纪公司与品牌私下交换推荐位、声明措辞和赔偿条件，避免公开撕裂。",
+          "en": "Broker a private deal among platform, agency, and brand over recommendation slots, statement wording, and compensation to avoid public rupture."
+        },
+        "human_takeover": {
+          "zh": "由玩家亲自发布一段声明，改变粉丝、媒体和平台对事件的解释框架。",
+          "en": "Let the player issue a statement that changes how fans, media, and the platform frame the event."
+        },
+        "spacetime_rift": {
+          "zh": "另一条时间线的票房、退订或舆情曲线泄漏，显示当前公关路线会彻底反噬。",
+          "en": "A box-office, churn, or sentiment curve leaks from another timeline, showing the current PR path will backfire completely."
+        },
+        "mandate_surge": {
+          "zh": "粉丝、从业者与观众同时要求公开合同、算法推荐和道歉条件。",
+          "en": "Fans, workers, and viewers demand contract transparency, algorithmic recommendation disclosure, and apology terms."
+        },
+        "evacuation_order": {
+          "zh": "立即发布舆论撤离令，优先保护未成年演员、现场人员和关键证据，暂停最易引战的宣传素材。",
+          "en": "Issue a narrative evacuation order that protects minors, crew, and key evidence first while pausing the most inflammatory promotion."
+        },
+        "public_hearing": {
+          "zh": "召开公开听证，要求平台、创作者、品牌和受影响群体各自拿出一条合同、推荐或伤害证据。",
+          "en": "Open a public hearing requiring platform, creators, brands, and affected groups to surface one contract, recommendation, or harm fact each."
+        },
+        "resource_triage": {
+          "zh": "立即重排曝光、赔偿、档期与保护资源，决定谁先被保护，哪些商业动作必须延期。",
+          "en": "Reallocate exposure, compensation, schedule, and protection resources, deciding who is protected first and which commercial moves wait."
+        },
+        "forbidden_ritual": {
+          "zh": "动用封号、黑箱降权或买断沉默等高代价手段，以信任损失换取短期控场。",
+          "en": "Invoke bans, opaque downranking, or silence-buyouts, trading trust damage for short-term narrative control."
+        },
+        "audit_reckoning": {
+          "zh": "公开推荐、合同、赔偿和危机公关账本，要求平台与品牌承认一项操控或转嫁。",
+          "en": "Expose recommendation, contract, compensation, and crisis-PR ledgers, forcing platform and brand to admit one manipulation or shifted cost."
+        },
+        "intel_blowback": {
+          "zh": "让被剪辑、误读或买量的信息反噬宣传路线，迫使所有人重新解释事件。",
+          "en": "Make edited, misread, or bought attention data blow back against the campaign, forcing everyone to reinterpret the event."
+        },
+        "mandate_snapback": {
+          "zh": "观众和从业者撤回对平台解释的默认信任，要求公开规则、赔偿与保护承诺。",
+          "en": "Audiences and workers pull back default trust in the platform narrative, demanding rules, compensation, and protection commitments."
+        },
+        "ceasefire_committee": {
+          "zh": "成立舆论停火委员会，让平台、创作者、品牌和受影响者暂停互撕，先谈声明、赔偿与推荐边界。",
+          "en": "Form a narrative ceasefire committee where platform, creators, brands, and affected people pause attacks to negotiate statements, compensation, and recommendation boundaries."
+        }
+      },
+      "signature_arc": {
+        "labels": {
+          "zh": "口碑回摆链",
+          "en": "Reputation Snapback Arc"
+        },
+        "sequence": [
+          "mandate_surge",
+          "audit_reckoning",
+          "mandate_snapback"
+        ],
+        "risk_track_labels": {
+          "zh": "舆论热度",
+          "en": "Attention Heat"
+        },
+        "resource_track_labels": {
+          "zh": "信任余量",
+          "en": "Trust Reserve"
+        }
+      }
+    },
+    {
+      "id": "diplomacy",
+      "labels": {
+        "zh": "外交斡旋",
+        "en": "Diplomatic Mediation"
+      },
+      "descriptions": {
+        "zh": "适合条约、峰会、联盟、制裁、停火与跨阵营谈判类问题。",
+        "en": "Fits treaties, summits, alliances, sanctions, ceasefires, and cross-bloc negotiation."
+      },
+      "signature_hooks": {
+        "zh": [
+          "条约筹码",
+          "停火窗口",
+          "联盟裂缝"
+        ],
+        "en": [
+          "Treaty leverage",
+          "Ceasefire windows",
+          "Alliance fractures"
+        ]
+      },
+      "recommended_cards": [
+        "backchannel_pact",
+        "ceasefire_committee",
+        "spy_infiltrate",
+        "public_hearing",
+        "intel_blowback",
+        "mandate_snapback",
+        "civilization_debate",
+        "audit_reckoning",
+        "mandate_surge",
+        "human_takeover"
+      ],
+      "default_directives": {
+        "civilization_debate": {
+          "zh": "让鹰派、调停方与受制裁方公开争论应继续施压，还是用有限让步换取可验证停火。",
+          "en": "Make hawks, mediators, and sanctioned actors debate continued pressure versus limited concessions for verifiable ceasefire."
+        },
+        "spy_infiltrate": {
+          "zh": "让一名使节暗中向联盟一侧泄漏谈判底线，迫使对方误判筹码。",
+          "en": "Have an envoy quietly leak negotiation red lines to one bloc, making the other side misread leverage."
+        },
+        "backchannel_pact": {
+          "zh": "让两个公开对立阵营私下交换停火、制裁豁免和人质/通道条件，暂不对盟友说明。",
+          "en": "Broker a private pact between public adversaries over ceasefire, sanction relief, and hostage or corridor terms without briefing allies yet."
+        },
+        "human_takeover": {
+          "zh": "由玩家以首席谈判者身份提出一项限时条约草案，迫使所有阵营表态。",
+          "en": "Let the player act as chief negotiator and table a time-limited treaty draft that forces every bloc to answer."
+        },
+        "spacetime_rift": {
+          "zh": "另一条时间线的外交电报泄漏，显示当前强硬路线会让关键盟友倒戈。",
+          "en": "A diplomatic cable from another timeline leaks, showing the current hard line will flip a key ally."
+        },
+        "mandate_surge": {
+          "zh": "边境民众、盟友议会与商路利益方同时要求停火、开放通道并公开谈判底线。",
+          "en": "Border communities, allied parliaments, and trade interests demand ceasefire, corridor access, and public negotiation red lines."
+        },
+        "evacuation_order": {
+          "zh": "立即发布外交撤离令，优先保护使馆人员、人道通道和关键证人，暂停最危险的边境动作。",
+          "en": "Issue a diplomatic evacuation order that protects embassy staff, humanitarian corridors, and key witnesses first while pausing the riskiest border moves."
+        },
+        "public_hearing": {
+          "zh": "召开公开外交听证，要求盟友、调停方与受影响群体各自公开一条制裁、停火或通道证据。",
+          "en": "Open a diplomatic hearing and require allies, mediators, and affected groups to disclose one sanction, ceasefire, or corridor fact each."
+        },
+        "resource_triage": {
+          "zh": "立即执行外交资源分诊，决定谈判席位、人道通道、制裁豁免与安全保证谁先获得。",
+          "en": "Run diplomatic resource triage and decide which seats, humanitarian corridors, sanction waivers, and security guarantees go first."
+        },
+        "forbidden_ritual": {
+          "zh": "动用秘密承认、黑箱豁免或越线安全保证，以盟友信任为代价换取短期停火。",
+          "en": "Invoke secret recognition, opaque waivers, or overreaching security guarantees, buying short-term ceasefire at allied-trust cost."
+        },
+        "audit_reckoning": {
+          "zh": "公开制裁效果、密约、通道失误与盟友承诺账本，要求各方承认一项外交代价。",
+          "en": "Expose sanction effects, secret deals, corridor failures, and ally commitments, forcing each side to own one diplomatic cost."
+        },
+        "intel_blowback": {
+          "zh": "让一份错误情报或泄漏电报反噬谈判路线，证明某项红线是误判而非实力。",
+          "en": "Make a faulty intelligence brief or leaked cable blow back against the negotiation path, proving a red line was misread weakness or strength."
+        },
+        "mandate_snapback": {
+          "zh": "盟友议会与边境民众撤回对强硬路线的授权，要求先保人道通道和可验证停火。",
+          "en": "Allied parliaments and border communities pull back authorization for the hard line, demanding humanitarian corridors and verifiable ceasefire first."
+        },
+        "ceasefire_committee": {
+          "zh": "成立外交停火委员会，让对立阵营、调停者和受影响群体暂停升级，先谈核验、通道和制裁节奏。",
+          "en": "Form a diplomatic ceasefire committee where adversaries, mediators, and affected groups pause escalation to negotiate verification, corridors, and sanction pacing."
+        }
+      },
+      "signature_arc": {
+        "labels": {
+          "zh": "条约停火链",
+          "en": "Treaty Ceasefire Arc"
+        },
+        "sequence": [
+          "backchannel_pact",
+          "ceasefire_committee",
+          "public_hearing"
+        ],
+        "risk_track_labels": {
+          "zh": "误判时钟",
+          "en": "Miscalculation Clock"
+        },
+        "resource_track_labels": {
+          "zh": "谈判筹码",
+          "en": "Negotiation Leverage"
         }
       }
     },
@@ -1727,6 +2575,22 @@
         "forbidden_ritual": {
           "zh": "动用一项代价极高且可能不可逆的非常规手段，强行换取局势转折。",
           "en": "Invoke a costly and potentially irreversible extraordinary measure to force a sharp turn in the branch."
+        },
+        "audit_reckoning": {
+          "zh": "公开责任、资源与关键选择账本，要求每个阵营承认一个自己造成或转嫁的代价。",
+          "en": "Expose accountability, resource, and decision ledgers, forcing every faction to own one cost it caused or shifted."
+        },
+        "intel_blowback": {
+          "zh": "让一份被误读、隐瞒或滥用的信息反噬当前共识，迫使所有角色重新评估风险。",
+          "en": "Make misread, concealed, or abused information blow back against the current consensus, forcing every actor to reassess risk."
+        },
+        "mandate_snapback": {
+          "zh": "让群众、基层或外部监督者撤回默认授权，要求当前世界线重新公开表态与排优先级。",
+          "en": "Let the public, grassroots, or outside overseers pull back default authorization and force the branch to restate positions and priorities."
+        },
+        "ceasefire_committee": {
+          "zh": "成立临时停火/暂停委员会，让关键阵营停止升级一轮，交换底线、补救和下一步条件。",
+          "en": "Create a temporary ceasefire or pause committee where key factions stop escalating for one round and trade red lines, remedies, and next-step terms."
         }
       },
       "signature_arc": {

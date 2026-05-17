@@ -97,6 +97,8 @@ _LIGHTWEIGHT_ADDITIVE_COLUMNS = (
     ("graph_edge", "source_round_number", "INTEGER"),
     ("graph_edge", "evidence_json", "TEXT"),
     ("agent_identity", "is_favorite", "INTEGER DEFAULT 0"),
+    ("pending_intervention", "metadata_json", "TEXT"),
+    ("intervention_log", "effect_summary_json", "TEXT"),
 )
 
 
@@ -224,6 +226,7 @@ class InterventionLog(SQLModel, table=True):
     round_number: int = 0
     user_input: str = ""
     created_at: datetime = Field(default_factory=_now)
+    effect_summary_json: Optional[str] = None
 
 
 class PendingIntervention(SQLModel, table=True):
@@ -243,6 +246,7 @@ class PendingIntervention(SQLModel, table=True):
     scenario_id: str = Field(foreign_key="scenario.id")
     branch_id: str = Field(foreign_key="branch.id")
     user_input: str = ""
+    metadata_json: Optional[str] = None
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -691,6 +695,9 @@ def init_db():
                     list(_ENDING_ROOM_SCOPE_UNIQUE_COLUMNS),
                 )
                 _migrate_prediction_journal_calibration_index(conn)
+                for table_name, column_name, column_type in _LIGHTWEIGHT_ADDITIVE_COLUMNS:
+                    if table_name in {"pending_intervention", "intervention_log"}:
+                        _migrate_add_column(conn, table_name, column_name, column_type)
         except Exception as exc:
             logger.warning("SQLite post-upgrade index repair failed (best-effort): %s", exc)
 

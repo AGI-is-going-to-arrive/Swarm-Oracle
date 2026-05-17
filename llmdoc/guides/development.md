@@ -140,6 +140,37 @@ ruff check app/api/admin.py app/api/scenarios.py app/api/quota.py app/services/s
 
 本轮 Sprint 0-2 收尾复核中，这组 pytest 为 `36 passed`，上述 touched-file ruff 为通过。
 
+### Gameplay / Snapshot 定向回归
+
+如果这轮改动涉及玩法卡、结构化押注、干预回执、snapshot export/import 或 Alembic 020-030，优先跑下面这组窄集：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_interventions.py tests/test_campaign_api.py tests/test_snapshot_export.py tests/test_migration_030.py tests/test_migration_022.py tests/test_fallback_migrations.py -q
+ruff check app/api/interventions.py app/api/campaign.py app/services/gameplay_contract.py app/services/simulator.py app/services/snapshot_export.py tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_interventions.py tests/test_campaign_api.py tests/test_snapshot_export.py tests/test_migration_030.py tests/test_migration_022.py tests/test_fallback_migrations.py
+alembic upgrade 030_gameplay_intervention_metadata --sql >/tmp/upgrade-test-alembic-full-up.sql
+alembic downgrade 030_gameplay_intervention_metadata:base --sql >/tmp/upgrade-test-alembic-full-down.sql
+```
+
+```bash
+cd frontend
+npm test -- --run src/api/client.test.ts src/components/gameplayCards.test.ts src/components/GameplayCardsModal.test.tsx src/components/PredictionModal.test.tsx src/components/InterventionReceiptCard.test.tsx src/lib/archiveSummary.test.ts src/lib/predictionBetting.test.ts src/lib/legacyCssFallbacks.test.ts src/pages/SimulationView.test.tsx src/pages/result/PredictionsSection.test.tsx src/i18n/locales.test.ts
+npx tsc --noEmit -p tsconfig.app.json
+npm run lint
+npm run build
+node --check scripts/e2e-gameplay-cards-modal.mjs
+node --check scripts/e2e-prediction-modal.mjs
+node --check scripts/e2e-intervention-receipt.mjs
+```
+
+本地已有前端预览服务时，可以用 fixture-first gameplay surface E2E 做浏览器复核：
+
+```bash
+cd frontend
+npm run e2e:gameplay:full -- --url http://127.0.0.1:18928 --headless
+```
+
 ### Web Search 定向回归
 
 ```bash
