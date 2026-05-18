@@ -56,6 +56,15 @@ def _roundtable_participant_variant(participant: EndingRoomParticipant | None) -
     return _oracle_role_voice_variant(role_hint, bio_hint)
 
 
+def _roundtable_question_prefix(scenario_question: str | None, *, language: str) -> str:
+    question = sanitize_untrusted_text(str(scenario_question or ""), max_chars=180)
+    if not question:
+        return ""
+    if language == "zh":
+        return f"针对「{question}」这个问题，"
+    return f"For the question '{question}', "
+
+
 def _roundtable_variant_hook_fallback(
     *,
     variant: str,
@@ -685,6 +694,7 @@ def _build_roundtable_opening_content(
     *,
     participant: EndingRoomParticipant | None = None,
     language: str,
+    scenario_question: str | None = None,
 ) -> str:
     """Build a minimal factual anchor for the opening turn.
 
@@ -702,12 +712,17 @@ def _build_roundtable_opening_content(
         language=language,
     )
     insight = _oracle_visible_clause(branch_card.get("insight"), language=language, limit=72)
+    question_prefix = _roundtable_question_prefix(scenario_question, language=language)
     if language == "zh":
-        base = f"《{title}》的关键转折在「{hook}」。"
+        base = f"{question_prefix}《{title}》的关键转折在「{hook}」。"
         if insight and insight != hook:
             base += f"这之后的走向是「{insight}」。"
         return base
-    base = f"The key turning point in {title} was '{hook}'."
+    base = (
+        f"{question_prefix}the key turning point in {title} was '{hook}'."
+        if question_prefix
+        else f"The key turning point in {title} was '{hook}'."
+    )
     if insight and insight != hook:
         base += f" From there it moved toward '{insight}'."
     return base
@@ -717,17 +732,23 @@ def _build_roundtable_crossfire_content(
     branch_cards: list[dict[str, Any]],
     *,
     language: str,
+    scenario_question: str | None = None,
 ) -> str:
     """Pure factual contrast anchor for the crossfire turn.
 
     Returns a minimal hinge comparison; voice and tone differentiation
     are produced by the LLM generation layer.
     """
+    question_prefix = _roundtable_question_prefix(scenario_question, language=language)
     if not branch_cards:
         return (
-            "尚无可对比的世界线摘要。"
+            f"{question_prefix}尚无可对比的世界线摘要。"
             if language == "zh"
-            else "No worldline summaries available to compare yet."
+            else (
+                f"{question_prefix}no worldline summaries are available to compare yet."
+                if question_prefix
+                else "No worldline summaries available to compare yet."
+            )
         )
     lead = branch_cards[0]
     lead_hook = _resolve_roundtable_hook(lead, participant=None, language=language)
@@ -737,26 +758,35 @@ def _build_roundtable_crossfire_content(
     rival = branch_cards[1] if len(branch_cards) > 1 else None
     if language == "zh":
         if rival is None:
-            return f"焦点：《{lead_title}》的关键转折——「{lead_hook}」。"
+            return f"{question_prefix}焦点：《{lead_title}》的关键转折——「{lead_hook}」。"
         rival_hook = _resolve_roundtable_hook(rival, participant=None, language=language)
         rival_title = _oracle_visible_text(rival.get("title"), language=language, limit=40) or "另一条世界线"  # noqa: E501
         return (
-            f"对比：《{lead_title}》的转折在「{lead_hook}」；"
+            f"{question_prefix}对比：《{lead_title}》的转折在「{lead_hook}」；"
             f"《{rival_title}》的转折在「{rival_hook}」。"
         )
     if rival is None:
-        return f"Focus: the key hinge of {lead_title} was '{lead_hook}'."
+        return (
+            f"{question_prefix}focus: the key hinge of {lead_title} was '{lead_hook}'."
+            if question_prefix
+            else f"Focus: the key hinge of {lead_title} was '{lead_hook}'."
+        )
     rival_hook = _resolve_roundtable_hook(rival, participant=None, language=language)
     rival_title = _oracle_visible_text(rival.get("title"), language=language, limit=40) or "another ending"  # noqa: E501
     return (
-        f"Contrast: {lead_title} hinged on '{lead_hook}'; "
-        f"{rival_title} hinged on '{rival_hook}'."
+        (
+            f"{question_prefix}contrast: {lead_title} hinged on '{lead_hook}'; "
+            if question_prefix
+            else f"Contrast: {lead_title} hinged on '{lead_hook}'; "
+        )
+        + f"{rival_title} hinged on '{rival_hook}'."
     )
 
 def _build_roundtable_verdict_content(
     branch_cards: list[dict[str, Any]],
     *,
     language: str,
+    scenario_question: str | None = None,
 ) -> str:
     """Build display-ready verdict anchor copy.
 
@@ -776,10 +806,11 @@ def _build_roundtable_verdict_content(
     lead_hinge = hinges[0] if hinges else ("关键转折" if language == "zh" else "the hinge")
     rival_title = titles[1] if len(titles) > 1 else None
     rival_hinge = hinges[1] if len(hinges) > 1 else None
+    question_prefix = _roundtable_question_prefix(scenario_question, language=language)
     if language == "zh":
         if rival_title and rival_hinge:
             return (
-                f"我把这桌的分歧压到一句话："
+                f"{question_prefix}我把这桌的分歧压到一句话："
                 f"《{lead_title}》的证据更扎实，因为「{lead_hinge}」先改变了局面；"
                 f"《{rival_title}》提醒我们「{rival_hinge}」这笔代价不能抹掉，"
                 "但它还没推翻前一个转折。"
@@ -787,12 +818,12 @@ def _build_roundtable_verdict_content(
                 f"再沿着《{rival_title}》留下的代价继续追问。"
             )
         return (
-            f"这桌最后落在《{lead_title}》这条线：真正撑起判断的是「{lead_hinge}」。"
+            f"{question_prefix}这桌最后落在《{lead_title}》这条线：真正撑起判断的是「{lead_hinge}」。"
             "我的裁决是：先看这个转折带来的实际后果，再决定后续追问要往哪边打。"
         )
     if rival_title and rival_hinge:
         return (
-            "I would reduce this table to one disagreement: "
+            f"{question_prefix}I would reduce this table to one disagreement: "
             f"{lead_title} has the stronger evidence because "
             f"'{lead_hinge}' changed the situation first; "
             f"{rival_title} still matters because '{rival_hinge}' names a real cost, "
@@ -801,7 +832,12 @@ def _build_roundtable_verdict_content(
             f"then keep pressing the cost left by {rival_title}."
         )
     return (
-        f"This table lands on {lead_title}: the judgment rests on '{lead_hinge}'. "
+        (
+            f"{question_prefix}this table lands on {lead_title}: "
+            if question_prefix
+            else f"This table lands on {lead_title}: "
+        )
+        + f"the judgment rests on '{lead_hinge}'. "
         "My verdict is to follow that concrete hinge first, "
         "then ask what cost still needs pressure."
     )
@@ -813,6 +849,7 @@ def _build_roundtable_witness_content(
     witness: EndingRoomParticipant,
     branch_rows: list[dict[str, Any]],
     language: str,
+    scenario_question: str | None = None,
 ) -> str:
     """Factual witness anchor: name + quote + role + branch hinge.
 
@@ -843,8 +880,9 @@ def _build_roundtable_witness_content(
         language=language,
         limit=40,
     ) or ("当前世界线" if language == "zh" else "this branch")
+    question_prefix = _roundtable_question_prefix(scenario_question, language=language)
     if language == "zh":
-        parts: list[str] = [f"{witness.display_name}（证人）"]
+        parts: list[str] = [f"{question_prefix}{witness.display_name}（证人）"]
         if quote and latest_round > 0:
             parts.append(f"R{latest_round} 原话：「{quote}」")
         if role_hint:
@@ -853,7 +891,7 @@ def _build_roundtable_witness_content(
             parts.append(bio_hint)
         parts.append(f"《{branch_title}》核心转折：「{evidence_hook}」")
         return "。".join(parts) + "。"
-    parts_en: list[str] = [f"{witness.display_name} (witness)"]
+    parts_en: list[str] = [f"{question_prefix}{witness.display_name} (witness)"]
     if quote and latest_round > 0:
         parts_en.append(f"R{latest_round} note: '{quote}'")
     if role_hint:

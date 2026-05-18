@@ -51,7 +51,7 @@
   font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
   font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.14em;
+  letter-spacing: 0;
   text-transform: uppercase;
   color: var(--color-primary, #c61583);
 }
@@ -83,6 +83,89 @@
   overflow-wrap: anywhere;
 }
 
+/* ── Pending fallback (no verdict yet) ─────────────────── */
+.result-verdict-panel--pending {
+  /* lower visual weight to signal incomplete data */
+  opacity: 0.78;
+  /* dashed left border instead of solid to communicate "in progress" */
+  border-left-style: dashed;
+  /* sRGB fallback */
+  border-left-color: rgba(64, 48, 40, 0.32);
+  background: #fbfaf8;
+  background: linear-gradient(
+    180deg,
+    rgba(64, 48, 40, 0.025),
+    rgba(255, 255, 255, 0) 60%
+  ),
+  var(--bg-surface, #fff);
+}
+
+@supports (background: oklch(98% 0.01 80)) {
+  .result-verdict-panel--pending {
+    border-left-color: oklch(45% 0.01 80 / 0.4);
+    background:
+      linear-gradient(
+        180deg,
+        oklch(40% 0.005 80 / 0.04),
+        oklch(98% 0.005 80 / 0) 60%
+      ),
+      var(--bg-surface, oklch(99% 0.002 80));
+  }
+}
+
+.result-verdict-panel--pending .result-verdict-panel__label {
+  /* mute the eyebrow label as well */
+  color: var(--text-secondary, #58554f);
+  /* sRGB fallback first */
+  color: rgba(64, 48, 40, 0.7);
+}
+
+@supports (color: oklch(45% 0.01 80)) {
+  .result-verdict-panel--pending .result-verdict-panel__label {
+    color: oklch(45% 0.01 80);
+  }
+}
+
+.result-verdict-panel__pending {
+  font-family: var(--font-body, system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', sans-serif);
+  font-size: 0.95rem;
+  font-style: italic;
+  font-weight: 400;
+  line-height: 1.55;
+  letter-spacing: 0;
+  /* sRGB fallback */
+  color: #58554f;
+  color: var(--text-secondary, #58554f);
+  margin: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+@supports (color: oklch(45% 0.01 80)) {
+  .result-verdict-panel__pending {
+    color: oklch(45% 0.01 80);
+  }
+}
+
+@media (max-width: 640px) {
+  .result-verdict-panel__pending {
+    font-size: 0.9rem;
+  }
+}
+
+@media (forced-colors: active) {
+  .result-verdict-panel--pending {
+    border-left-color: GrayText;
+    opacity: 1;
+  }
+  .result-verdict-panel--pending .result-verdict-panel__label {
+    color: GrayText;
+  }
+  .result-verdict-panel__pending {
+    color: GrayText;
+  }
+}
+
 .result-verdict-panel__badge {
   display: inline-flex;
   align-items: center;
@@ -92,7 +175,7 @@
   font-family: var(--font-body, system-ui, sans-serif);
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
   text-transform: uppercase;
   border: 1px solid transparent;
   white-space: nowrap;

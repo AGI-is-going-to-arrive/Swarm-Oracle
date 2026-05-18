@@ -32,12 +32,55 @@ describe('ResultVerdictPanel', () => {
     );
   });
 
-  it('hides completely when verdict text is blank', () => {
-    const { container } = render(
-      <ResultVerdictPanel verdict="   " confidence="high" question="Will AI replace programmers?" />,
+  it('shows a neutral unavailable fallback that anchors the question when verdict is blank', () => {
+    render(
+      <ResultVerdictPanel
+        verdict="   "
+        confidence="high"
+        question="Will AI replace programmers?"
+      />,
     );
 
-    expect(container).toBeEmptyDOMElement();
+    const pendingPanel = screen.getByTestId('result-verdict-panel-pending');
+    expect(pendingPanel).toBeInTheDocument();
+    // CSS class keeps the legacy `--pending` suffix for style continuity,
+    // but the semantics are now "verdict unavailable" rather than "analyzing".
+    expect(pendingPanel).toHaveClass('result-verdict-panel--pending');
+    expect(screen.getByTestId('result-verdict-question')).toHaveTextContent(
+      'Will AI replace programmers?',
+    );
+    // unavailable fallback is rendered, the confidence badge is suppressed
+    expect(screen.queryByTestId('result-verdict-confidence-badge')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('result-verdict-text')).not.toBeInTheDocument();
+    const pendingMessage = screen.getByTestId('result-verdict-pending');
+    expect(pendingMessage).toHaveTextContent(/no prediction verdict is available/i);
+    expect(pendingMessage).not.toHaveTextContent(/analyzing/i);
+  });
+
+  it('still renders the pending panel even when both verdict and question are missing', () => {
+    render(<ResultVerdictPanel verdict={null} confidence={null} question="" />);
+
+    const pendingPanel = screen.getByTestId('result-verdict-panel-pending');
+    expect(pendingPanel).toBeInTheDocument();
+    expect(screen.queryByTestId('result-verdict-question')).not.toBeInTheDocument();
+    expect(screen.getByTestId('result-verdict-pending')).toBeInTheDocument();
+  });
+
+  it('treats an undefined verdict as unavailable', () => {
+    render(
+      <ResultVerdictPanel
+        verdict={undefined}
+        confidence="medium"
+        question="Will the port fail first?"
+      />,
+    );
+
+    expect(screen.getByTestId('result-verdict-panel-pending')).toBeInTheDocument();
+    expect(screen.getByTestId('result-verdict-question')).toHaveTextContent(
+      'Will the port fail first?',
+    );
+    expect(screen.queryByTestId('result-verdict-confidence-badge')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('result-verdict-text')).not.toBeInTheDocument();
   });
 
   it('renders verdict markup as plain text', () => {

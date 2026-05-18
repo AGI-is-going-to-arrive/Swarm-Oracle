@@ -839,6 +839,11 @@ async function runDebateFlow(page, {
   await disableAutoReveal(page);
   const liveHooks = await probeDebateAutomationHooks(page, ["panel"]);
   assertDebateAutomationHooks("debate live hooks", liveHooks, { panel: "data_url" });
+  const stageMapList = page.locator(".debate-stage-summary-list");
+  if (await stageMapList.count() === 0) {
+    await page.locator('[data-testid="debate-stage-map-toggle"]').click();
+    await stageMapList.first().waitFor({ state: "visible", timeout: 5000 });
+  }
   const liveSurfaceState = await page.evaluate(() => ({
     has_overview_grid: Boolean(document.querySelector(".debate-situation-grid")),
     has_room_grid: Boolean(document.querySelector(".debate-room-grid")),

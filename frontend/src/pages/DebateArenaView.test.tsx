@@ -452,6 +452,29 @@ describe('DebateArenaView', () => {
     expect(captureElementDataUrlMock).toHaveBeenCalledWith('.debate-modal', 'element');
   });
 
+  it('keeps stage map collapsed by default while exposing a stable automation toggle', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/debate/debate-1']}>
+        <Routes>
+          <Route path="/debate/:id" element={<DebateArenaView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('debate.stage_map_title')).toBeInTheDocument();
+    expect(document.querySelector('.debate-stage-summary-list')).not.toBeInTheDocument();
+
+    const toggle = screen.getByTestId('debate-stage-map-toggle');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    await user.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.querySelector('.debate-stage-summary-list')).toBeInTheDocument();
+  });
+
   it('offers a counterplay preset during live betting windows', async () => {
     const user = userEvent.setup();
     mockDebateStore.debate = {

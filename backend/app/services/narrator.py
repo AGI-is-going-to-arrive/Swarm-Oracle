@@ -33,13 +33,26 @@ def _build_narration_prompt(
     question_block: str = "",
 ) -> str:
     web_block = f"\n{web_context_block}\n" if web_context_block else ""
-    question_section = f"\n【场景问题】\n{question_block}\n" if question_block else ""
-    question_section_en = f"\n[Scenario Question]\n{question_block}\n" if question_block else ""
+    question_section = (
+        "\n【场景问题】\n"
+        f"{question_block}\n"
+        "CRITICAL: 叙述的每一段都必须回到这个具体问题，使用场景内的具体细节展示这条分支如何回答或探索它，禁止写通用 what-if 叙述。\n"  # noqa: E501
+        if question_block
+        else ""
+    )
+    question_section_en = (
+        "\n[Scenario Question]\n"
+        f"{question_block}\n"
+        "CRITICAL: Every paragraph must return to this specific question, using concrete scenario details to show how this branch answers or explores it; do not write generic what-if narration.\n"  # noqa: E501
+        if question_block
+        else ""
+    )
     if _is_chinese(language):
         return f"""你是一位预测分析师兼叙事者。\
 请把以下群体推演的原始交互记录改写成一段有分析锚点、也有叙事张力的结果叙事。
 
 {UNTRUSTED_INPUT_GUARDRAIL}
+{question_section}
 {web_block}
 
 【分支标题】
@@ -55,13 +68,12 @@ def _build_narration_prompt(
 1. 用生动的第三人称讲述，像一部精彩的历史纪录片
 2. 重点刻画人物的具体言行和内心挣扎，而不是堆砌抽象概念
 3. 找出 2-3 个真正改变走向的「转折点」，在叙事中制造张力
-4. 结尾回扣用户的原始 what-if 问题，给出深刻启示
+4. 结尾必须回扣用户的原始 what-if 问题，并用本分支的具体事件给出启示
 5. 总字数控制在 300-500 字
-6. 每个段落必须与用户的原始问题相关联
+6. 每个段落都必须明确回答或推进用户的原始问题，不能离题写通用历史叙事
 7. ❌ 不要泛泛而谈，每个结论必须直接回应用户的具体问题
-8. 最终段落必须直接回答用户的问题，给出明确的判断
+8. 最终段落必须直接回答用户的问题，给出明确、具体、可落到本分支事件上的判断
 
-{question_section}
 直接输出叙事文本，不要包裹在 JSON 里。
 
 {get_language_directive(language)}
@@ -72,6 +84,7 @@ following raw simulation transcript into a result narrative with analytical \
 anchoring and narrative tension.
 
 {UNTRUSTED_INPUT_GUARDRAIL}
+{question_section_en}
 {web_block}
 
 [Branch Title]
@@ -87,13 +100,15 @@ Writing requirements:
 1. Use vivid third-person narration, like a strong documentary sequence
 2. Focus on concrete actions, lines, and internal tension instead of abstract summary
 3. Identify 2-3 real turning points that changed the outcome and build narrative tension around them
-4. End by connecting back to the original what-if question with a deeper takeaway
+4. End by connecting back to the original what-if question using this branch's concrete events
 5. Keep the total length around 300-500 words
-6. Every paragraph must connect back to the user's original question
-7. Do not speak in generic terms; every conclusion must directly answer the user's specific question
-8. The final paragraph must directly answer the user's question and give a clear judgment
+6. Every paragraph must explicitly answer or advance the user's original question;
+   do not drift into generic historical narration
+7. Do not speak in generic terms; every conclusion must directly answer the user's
+   specific question
+8. The final paragraph must directly answer the user's question with a concrete
+   judgment grounded in this branch's events
 
-{question_section_en}
 Output the narrative text directly, do not wrap it in JSON.
 
 {get_language_directive(language)}
@@ -133,17 +148,25 @@ def _build_fallback_narration(
     raw_rounds: str,
     *,
     language: str,
+    question: str = "",
 ) -> dict:
     lines = [line.strip() for line in raw_rounds.splitlines() if line.strip()]
     key_moments = lines[:2]
+    compact_question = " ".join(str(question or "").split())[:300]
     if language == "Chinese":
-        story_lines = [
-            f"分支《{branch_title or '未命名分支'}》最终以 {probability:.0%} 的概率停留在当前走向。",  # noqa: E501
-        ]
+        opener = (
+            f"关于「{compact_question}」这个问题，本分支的推演表明《{branch_title or '未命名分支'}》最终以 {probability:.0%} 的概率停留在当前走向。"  # noqa: E501
+            if compact_question
+            else f"分支《{branch_title or '未命名分支'}》最终以 {probability:.0%} 的概率停留在当前走向。"  # noqa: E501
+        )
+        story_lines = [opener]
     else:
-        story_lines = [
-            f"Branch '{branch_title or 'Untitled Branch'}' settled into its current path with a final probability of {probability:.0%}.",  # noqa: E501
-        ]
+        opener = (
+            f"For the question '{compact_question}', this branch shows that '{branch_title or 'Untitled Branch'}' settled into its current path with a final probability of {probability:.0%}."  # noqa: E501
+            if compact_question
+            else f"Branch '{branch_title or 'Untitled Branch'}' settled into its current path with a final probability of {probability:.0%}."  # noqa: E501
+        )
+        story_lines = [opener]
     if key_moments:
         story_lines.append("关键交互包括：" if language == "Chinese" else "Key interactions included:")  # noqa: E501
         story_lines.extend(key_moments)
@@ -232,14 +255,14 @@ async def narrate_branch(
 
         # Pass-2: extract structured fields
         extract_lang = "zh" if _is_chinese(language) else "en"
-        question_extract_block = f"\n\n{question_block}" if question_block else ""
+        question_extract_block = f"\n\n{question_block}"
         question_answer_field = (
-            '"question_answer": "一句话直接回答用户的问题", '
+            '"question_answer": "重新阅读原始问题，用包含姓名、事件或结果等具体叙事细节的一句话回答；不得复述或改写问题本身，不得含糊", '  # noqa: E501
             if settings.FEATURE_RESULT_VERDICT
             else ""
         )
         question_answer_field_en = (
-            '"question_answer": "one-sentence direct answer to the user\'s question", '
+            '"question_answer": "re-read the original question and answer in ONE concrete sentence using names, events, or outcomes; do not paraphrase the question or stay vague", '  # noqa: E501
             if settings.FEATURE_RESULT_VERDICT
             else ""
         )
@@ -293,6 +316,7 @@ async def narrate_branch(
             probability,
             raw_rounds,
             language=language,
+            question=question,
         )
     key_moments_raw = result.get("key_moments", [])
     if isinstance(key_moments_raw, str):

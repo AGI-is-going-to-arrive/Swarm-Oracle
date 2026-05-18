@@ -1279,6 +1279,7 @@ export function DebateArenaView() {
                   <button
                     type="button"
                     className="btn btn-ghost"
+                    data-testid="debate-stage-map-toggle"
                     aria-expanded={stageMapOpen}
                     onClick={() => setStageMapOpen(o => !o)}
                     style={{ fontSize: '0.78rem', padding: '4px 10px' }}

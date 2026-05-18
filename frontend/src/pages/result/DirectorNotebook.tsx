@@ -132,10 +132,27 @@ export default function DirectorNotebook(props: DirectorNotebookArchiveProps) {
     : t('result.archive_tone_not_enough_evidence');
   const archiveQuestion = storyData?.question ?? scenario?.question ?? t('result.archive_question_unset');
   const archiveVerdictTitle = displayArchive?.dominantBranchTitle ?? analysisBranch?.title ?? t('result.archive_unset');
-  const archiveVerdictDetail = resultConversationContext?.insight
+  // Prefer the actual LLM-produced verdict (storyData.verdict) over the
+  // insight/forkReason fallback chain so the "Archive verdict" section
+  // surfaces the system's direct answer instead of branch poetry.
+  const llmVerdictText = typeof storyData?.verdict === 'string' ? storyData.verdict.trim() : '';
+  const hasLlmVerdict = llmVerdictText.length > 0;
+  const archiveVerdictFallbackDetail = resultConversationContext?.insight
     ?? resultConversationContext?.forkReason
     ?? formattedArchiveKeyMoments[0]
     ?? t('result.archive_verdict_fallback');
+  // Primary detail: the AI verdict when available; otherwise legacy fallback.
+  const archiveVerdictDetail = hasLlmVerdict
+    ? llmVerdictText
+    : archiveVerdictFallbackDetail;
+  // Secondary detail: only show the branch insight when the AI verdict
+  // is also present (so the user sees both signals distinctly).
+  const archiveVerdictSecondaryDetail = hasLlmVerdict
+    ? (resultConversationContext?.insight
+      ?? resultConversationContext?.forkReason
+      ?? formattedArchiveKeyMoments[0]
+      ?? null)
+    : null;
   const archiveUsedCardCount = scenarioMeta?.cards.usageLog.length ?? 0;
   const archiveCardDetail = archiveUsedCardCount > 0
     ? t('result.archive_card_detail', { count: archiveUsedCardCount })
@@ -278,7 +295,40 @@ export default function DirectorNotebook(props: DirectorNotebookArchiveProps) {
             <div className="result-archive__verdict">
               <span>{t('result.archive_verdict_label')}</span>
               <strong>{archiveVerdictTitle}</strong>
-              <p>{archiveVerdictDetail}</p>
+              {hasLlmVerdict ? (
+                <>
+                  <p
+                    className="result-archive__verdict-detail result-archive__verdict-detail--ai"
+                    data-testid="result-archive-verdict-ai"
+                  >
+                    <span className="result-archive__verdict-tag">
+                      {t('result.archive_verdict_tag_ai', { defaultValue: 'AI Verdict' })}
+                    </span>
+                    <span className="result-archive__verdict-body">{archiveVerdictDetail}</span>
+                  </p>
+                  {archiveVerdictSecondaryDetail && (
+                    <p
+                      className="result-archive__verdict-detail result-archive__verdict-detail--insight"
+                      data-testid="result-archive-verdict-insight"
+                    >
+                      <span className="result-archive__verdict-tag result-archive__verdict-tag--muted">
+                        {t('result.archive_verdict_tag_insight', { defaultValue: 'Branch Insight' })}
+                      </span>
+                      <span className="result-archive__verdict-body">{archiveVerdictSecondaryDetail}</span>
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p
+                  className="result-archive__verdict-detail result-archive__verdict-detail--insight"
+                  data-testid="result-archive-verdict-insight"
+                >
+                  <span className="result-archive__verdict-tag result-archive__verdict-tag--muted">
+                    {t('result.archive_verdict_tag_insight', { defaultValue: 'Branch Insight' })}
+                  </span>
+                  <span className="result-archive__verdict-body">{archiveVerdictDetail}</span>
+                </p>
+              )}
             </div>
           </div>
 

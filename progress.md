@@ -17581,3 +17581,70 @@ QA Inventory
 - 当前边界：
   - 本地没有可复用的活跃 live scenario 可做真实浏览器 live-skip 取证；live skip 这条路径本轮由代码审查和 `PhaserGame.test.ts` 覆盖。
   - 本轮未改 backend，因此没有重跑 backend 全量 pytest。
+
+## 2026-05-19 Result Quality / Question Anchoring review fix
+
+- 本轮目标：
+  - 复查 Result Quality 和 Oracle question anchoring 的未提交改动。
+  - 修掉确认存在的前端样式、回归测试和 Debate E2E 自动化问题。
+  - 按当前真实代码和测试结果同步相关文档，不把旧口径或猜测写进文档。
+
+- 本轮后端收口：
+  - `backend/app/services/simulator.py`
+    - verdict prompt 的 branch summaries 现在包含 `story_excerpt[:1200]`，并把 untrusted block 预算扩到 15000 字符。
+  - `backend/app/services/narrator.py`
+    - Pass-1 把原问题放到分支标题前。
+    - Pass-2 始终带 question block，并要求 `question_answer` 回答具体问题。
+    - fallback narration 也接收 question，避免无 LLM 时丢掉原问题锚点。
+  - `backend/app/services/ending_room_service/_content.py`
+    - roundtable opening / witness / crossfire / verdict 静态模板接入清洗后的 scenario question 前缀。
+  - `backend/app/services/ending_room_service/_utils.py`
+    - `_phase_insight()` 会先剥掉重复问题前缀再压缩，避免长问题把 insight 预算吃光。
+
+- 本轮前端收口：
+  - `frontend/src/pages/result/ResultVerdictPanel.tsx`
+    - capability enabled 但 story verdict 为空、null 或 undefined 时显示中性的 unavailable fallback，并保留原问题。
+  - `frontend/src/pages/result/EndingCardsGrid.tsx`
+    - branch `question_answer` 放到概率条上方；空白值不渲染 focal block。
+  - `frontend/src/pages/result/DirectorNotebook.tsx`
+    - “档案结论”优先显示 story verdict，再补 branch insight / fork reason。
+  - `frontend/src/pages/result/ResultVerdictPanel.css`
+    - 新增 pending / unavailable 样式、forced-colors 和 OKLCH fallback；新增 `letter-spacing` 保持为 `0`。
+  - `frontend/src/pages/DebateArenaView.tsx`
+    - 阶段地图继续默认折叠，但按钮暴露 `data-testid="debate-stage-map-toggle"`。
+  - `frontend/scripts/e2e-debate-suite.mjs`
+    - 自动化会先展开阶段地图，再检查 `.debate-stage-summary-list`。
+
+- 本轮文档同步：
+  - `README.md`
+  - `CLAUDE.md`
+  - `backend/README.md`
+  - `backend/CLAUDE.md`
+  - `frontend/README.md`
+  - `frontend/CLAUDE.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/guides/development.md`
+  - `progress.md`
+
+- 本轮实际验证：
+  - `cd backend && .venv/bin/python -m pytest tests/test_narrator.py tests/test_simulator.py tests/test_ending_room_service.py -q`
+    - `290 passed`
+  - `cd backend && .venv/bin/ruff check app/services/narrator.py app/services/simulator.py app/services/ending_room_service tests/test_narrator.py tests/test_simulator.py tests/test_ending_room_service.py`
+    - 通过
+  - `cd frontend && NODE_OPTIONS=--max-old-space-size=8192 npm test -- --run src/pages/DebateArenaView.test.tsx src/pages/result/ResultVerdictPanel.test.tsx src/pages/result/EndingCardsGrid.test.tsx --reporter=dot --maxWorkers=1`
+    - `25 passed`
+  - `cd frontend && node -e "const en=require('./src/i18n/locales/en.json'); const zh=require('./src/i18n/locales/zh.json'); function c(o){let n=0; for (const k of Object.keys(o)){ if(o[k] && typeof o[k]==='object' && !Array.isArray(o[k])) n+=c(o[k]); else n++; } return n } const e=c(en), z=c(zh); console.log(e===z ? 'PARITY OK '+e+' '+z : 'MISMATCH '+e+' '+z); process.exit(e===z?0:1)"`
+    - `PARITY OK 2730 2730`
+  - 本轮前面已跑过：
+    - `npm run lint` 通过
+    - `npm run build` 通过
+    - `node --check scripts/e2e-debate-suite.mjs` 通过
+    - Debate mobile Chromium 390px E2E 通过，artifact 在 `/tmp/swarmoracle-e2e-debate-mobile-390-fixed`
+    - Debate mobile Chromium 320px E2E 通过，artifact 在 `/tmp/swarmoracle-e2e-debate-mobile-320-fixed`
+    - `git diff --check` 通过
+
+- 当前边界：
+  - 本轮没有重跑 backend 全量 pytest、frontend 全量 vitest 或完整 release signoff。
+  - Debate E2E 修的是阶段地图默认折叠导致的自动化假失败；没有改 stage map 的默认 UX。

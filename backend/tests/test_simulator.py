@@ -39,6 +39,7 @@ from app.services.simulator import (
     _format_setting,
     _gather_agent_messages,
     _gather_hierarchical_messages,
+    _generate_verdict,
     _get_branch,
     _get_messages_in_range,
     _get_recent_messages,
@@ -51,6 +52,7 @@ from app.services.simulator import (
     _persist_result_quality_verdict,
     _pick_theater_ending_payload,
     _resolve_hierarchical_agent_sets,
+    _result_branch_summaries,
     _save_message,
     _save_messages,
     _save_narration,
@@ -1987,6 +1989,114 @@ class TestParseResultVerdictJson:
             "confidence": "high",
             "question_answer": "供应链风险最高。",
         }
+
+
+class TestResultVerdictInputs:
+    def test_result_branch_summaries_include_stripped_story_excerpt(self):
+        long_story = "  " + ("这条线的具体事件。" * 120) + "  "
+
+        summaries = _result_branch_summaries([
+            {
+                "title": "供应链线",
+                "insight": "港口先拥堵",
+                "probability": "0.8123",
+                "story": long_story,
+            }
+        ])
+
+        assert summaries == [
+            {
+                "title": "供应链线",
+                "insight": "港口先拥堵",
+                "probability": 0.812,
+                "story_excerpt": long_story.strip()[:1200],
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_generate_verdict_prompt_includes_question_and_story_details(self, monkeypatch):
+        captured: dict[str, str] = {}
+
+        async def _fake_llm_call(prompt: str, **_kwargs):
+            captured["prompt"] = prompt
+            return (
+                '{"verdict":"第八条线回答了问题。","confidence":"medium",'
+                '"question_answer":"第八条线最能回答。"}'
+            )
+
+        monkeypatch.setattr(simulator_module, "llm_call", _fake_llm_call)
+        branches = [
+            {
+                "title": f"分支 {idx}",
+                "insight": f"洞察 {idx}",
+                "probability": 0.1,
+                "story": ("细节 " * 240) + (f"branch-{idx}-specific-detail" if idx == 8 else ""),
+            }
+            for idx in range(1, 9)
+        ]
+
+        question = "如果供应链断裂，谁最先承压？"
+
+        result = await _generate_verdict(
+            question,
+            branches,
+            "",
+            "Chinese",
+        )
+
+        assert result is not None
+        assert question in captured["prompt"]
+        assert "story_excerpt" in captured["prompt"]
+        assert "branch-8-specific-detail" in captured["prompt"]
+
+    def test_result_branch_summaries_each_entry_has_story_excerpt_key(self):
+        """Every branch summary must expose a `story_excerpt` key.
+
+        Required by downstream verdict prompt anchoring.
+        """
+        summaries = _result_branch_summaries([
+            {"title": "线 A", "insight": "洞察 A", "probability": 0.4, "story": "A 的故事"},
+            {"title": "线 B", "insight": "洞察 B", "probability": 0.6, "story": "B 的故事"},
+        ])
+
+        assert len(summaries) == 2
+        for entry in summaries:
+            assert "story_excerpt" in entry
+
+    def test_result_branch_summaries_truncates_story_to_1200_chars(self):
+        """Story must be truncated to 1200 characters to keep verdict prompt bounded."""
+        long_story = "x" * 5000
+
+        summaries = _result_branch_summaries([
+            {"title": "线", "insight": "洞察", "probability": 0.5, "story": long_story},
+        ])
+
+        assert summaries[0]["story_excerpt"] == "x" * 1200
+        assert len(summaries[0]["story_excerpt"]) == 1200
+
+    def test_result_branch_summaries_empty_story_yields_empty_excerpt(self):
+        """When story is empty string, story_excerpt must be empty string (not missing/None)."""
+        summaries = _result_branch_summaries([
+            {"title": "线", "insight": "洞察", "probability": 0.5, "story": ""},
+        ])
+
+        assert summaries[0]["story_excerpt"] == ""
+
+    def test_result_branch_summaries_none_story_yields_empty_excerpt(self):
+        """When story is None, story_excerpt must coerce to empty string."""
+        summaries = _result_branch_summaries([
+            {"title": "线", "insight": "洞察", "probability": 0.5, "story": None},
+        ])
+
+        assert summaries[0]["story_excerpt"] == ""
+
+    def test_result_branch_summaries_missing_story_key_yields_empty_excerpt(self):
+        """When story key is missing entirely, story_excerpt must coerce to empty string."""
+        summaries = _result_branch_summaries([
+            {"title": "线", "insight": "洞察", "probability": 0.5},
+        ])
+
+        assert summaries[0]["story_excerpt"] == ""
 
 
 # ── _update_branch_status ────────────────────────────────────

@@ -37,8 +37,10 @@ from app.services.ending_room_service import (
     _build_oracle_generation_prompt,
     _build_oracle_rewrite_prompt,
     _build_room_plan,
+    _build_roundtable_crossfire_content,
     _build_roundtable_opening_content,
     _build_roundtable_verdict_content,
+    _build_roundtable_witness_content,
     _maybe_rewrite_oracle_copy,
     _normalize_oracle_generated_content,
     _oracle_vocabulary_hints,
@@ -60,6 +62,7 @@ from app.services.ending_room_service import (
     load_ending_room_thread_snapshot,
     run_ending_room_background,
 )
+from app.services.ending_room_service._content import _roundtable_question_prefix
 from app.services.runtime_lock import release_runtime_lock
 
 
@@ -1351,6 +1354,120 @@ def test_roundtable_verdict_fallback_is_display_ready_not_prompt_instructions():
     assert "我的裁决" in content
 
 
+def test_roundtable_deterministic_anchors_include_scenario_question():
+    question = "如果诸葛亮多活十年，北伐会不会更早成功？"
+    branch_cards = [
+        {
+            "title": "秩序线",
+            "insight": "成都和汉中先稳住，北伐窗口被推迟打开。",
+            "key_moments": ["粮道先稳住"],
+            "story": "秩序线让后方粮道保住了十年。",
+        },
+        {
+            "title": "急进线",
+            "insight": "北伐提前启动，但粮道压力先爆开。",
+            "key_moments": ["粮道压力先爆开"],
+            "story": "急进线在第三轮后失去统一调度。",
+        },
+    ]
+    witness = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=EndingRoomRoleSlot.CRITIC,
+        display_name="马谡",
+        source_branch_id="branch-1",
+        source_agent_id="agent-1",
+        persona_snapshot_json={"agent_role": "证人", "witness_branch_title": "急进线"},
+    )
+
+    opening = _build_roundtable_opening_content(
+        branch_cards[0],
+        participant=None,
+        language="zh",
+        scenario_question=question,
+    )
+    crossfire = _build_roundtable_crossfire_content(
+        branch_cards,
+        language="zh",
+        scenario_question=question,
+    )
+    verdict = _build_roundtable_verdict_content(
+        branch_cards,
+        language="zh",
+        scenario_question=question,
+    )
+    witness_content = _build_roundtable_witness_content(
+        branch_cards[1],
+        witness=witness,
+        branch_rows=[],
+        language="zh",
+        scenario_question=question,
+    )
+
+    assert f"针对「{question}」" in opening
+    assert f"针对「{question}」" in crossfire
+    assert f"针对「{question}」" in verdict
+    assert f"针对「{question}」" in witness_content
+
+
+def test_roundtable_deterministic_anchors_include_english_question_prefix():
+    question = "What if Beethoven had modern production tools?"
+    branch_cards = [
+        {
+            "title": "Platform Line",
+            "insight": "Beethoven releases modular motifs directly to listeners.",
+            "key_moments": ["the studio becomes a public remix desk"],
+            "story": "The audience becomes part of the distribution loop.",
+        },
+        {
+            "title": "Patron Line",
+            "insight": "Court sponsors still shape the release calendar.",
+            "key_moments": ["the patron contract controls the first release"],
+            "story": "The old patronage system survives in platform form.",
+        },
+    ]
+    witness = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=EndingRoomRoleSlot.CRITIC,
+        display_name="Producer",
+        source_branch_id="branch-1",
+        source_agent_id="agent-1",
+        persona_snapshot_json={
+            "agent_role": "witness",
+            "witness_branch_title": "Platform Line",
+        },
+    )
+
+    opening = _build_roundtable_opening_content(
+        branch_cards[0],
+        participant=None,
+        language="en",
+        scenario_question=question,
+    )
+    crossfire = _build_roundtable_crossfire_content(
+        branch_cards,
+        language="en",
+        scenario_question=question,
+    )
+    verdict = _build_roundtable_verdict_content(
+        branch_cards,
+        language="en",
+        scenario_question=question,
+    )
+    witness_content = _build_roundtable_witness_content(
+        branch_cards[1],
+        witness=witness,
+        branch_rows=[],
+        language="en",
+        scenario_question=question,
+    )
+
+    expected = f"For the question '{question}'"
+    assert expected in opening
+    assert expected in crossfire
+    assert expected in verdict
+    assert expected in witness_content
+
+
 def test_phase_insight_compacts_turn_text_instead_of_repeating_transcript():
     raw_commentary = (
         "诸葛亮多活十年这件事，真正先改变的是成都和汉中的防线节奏。"
@@ -1364,6 +1481,338 @@ def test_phase_insight_compacts_turn_text_instead_of_repeating_transcript():
     assert len(insight["commentary"]) < len(raw_commentary)
     assert "transcript 和侧栏" not in insight["commentary"]
     assert insight["stakes"] == "世界线切口"
+
+
+def test_phase_insight_compacts_hook_after_concrete_long_chinese_question_prefix():
+    question = (
+        "如果贝多芬出生在现代并且拥有完整的数字音乐制作工具和社交媒体平台，"
+        "他的音乐创作和传播方式会发生怎样的改变？"
+    )
+    commentary = (
+        f"针对「{question}」这个问题，"
+        "《数字作曲线》的关键转折在「贝多芬用采样器把交响乐拆成可 remix 的主题」。"
+        "这之后的走向是「他绕开宫廷赞助，直接通过平台发布并与听众共创」。"
+    )
+
+    insight = _phase_insight(
+        "zh",
+        EndingRoomPhase.OPENING,
+        commentary,
+        scenario_question=question,
+    )
+
+    assert "贝多芬用采样器" in insight["commentary"]
+    assert question[:60] not in insight["commentary"]
+    assert insight["commentary"].startswith("这轮先钉住")
+
+
+def test_phase_insight_compacts_hook_after_long_english_question_prefix():
+    question = (
+        "What if Beethoven's symphonic writing emerged inside a modern digital "
+        "audio workstation and social media release cycle?"
+    )
+    commentary = (
+        f"For the question '{question}', "
+        "Platform Line hinged on 'Beethoven posts remix stems'. "
+        "From there the audience becomes part of the release loop."
+    )
+
+    insight = _phase_insight(
+        "en",
+        EndingRoomPhase.OPENING,
+        commentary,
+        scenario_question=question,
+    )
+
+    assert "Beethoven posts remix stems" in insight["commentary"]
+    assert "For the question" not in insight["commentary"]
+    assert insight["commentary"].startswith("This round pins down")
+
+
+def test_phase_insight_empty_question_uses_legacy_no_prefix_path():
+    commentary = "《秩序线》的关键转折在「粮道先稳住」。"
+
+    insight = _phase_insight(
+        "zh",
+        EndingRoomPhase.OPENING,
+        commentary,
+        scenario_question="",
+    )
+
+    assert insight["commentary"] == "这轮先钉住：《秩序线》的关键转折在「粮道先稳住」"
+
+
+def test_phase_insight_handles_unicode_question_prefix_delimiters():
+    question = "如果问题里包含右括号」、emoji 🎼、RTL שלום，会怎样？"
+    commentary = (
+        f"针对「{question}」这个问题，"
+        "真正先改变的是「跨语系记录」。后续讨论必须落在这个证据点。"
+    )
+
+    insight = _phase_insight(
+        "zh",
+        EndingRoomPhase.CROSSFIRE,
+        commentary,
+        scenario_question=question,
+    )
+
+    assert "跨语系记录" in insight["commentary"]
+    assert question[:20] not in insight["commentary"]
+
+
+def test_phase_insight_mentions_scenario_question_for_verdict():
+    question = "如果诸葛亮多活十年，北伐会不会更早成功？"
+
+    insight = _phase_insight(
+        "zh",
+        EndingRoomPhase.VERDICT,
+        "裁定落在秩序线的粮道稳定。",
+        scenario_question=question,
+    )
+
+    assert f"针对「{question}」" in insight["commentary"]
+    assert "裁定落在" in insight["commentary"]
+
+
+def test_phase_insight_does_not_double_inject_question_already_in_commentary_zh():
+    """Regression: when commentary already carries the scenario question (because
+    `_build_roundtable_*_content` prepends `针对「{question}」这个问题，`), the phase
+    insight must not prepend the question a second time. Otherwise the question
+    appears twice and eats the 64-char compression budget."""
+    question = "如果诸葛亮多活十年，北伐会不会更早成功？"
+    commentary = (
+        f"针对「{question}」这个问题，"
+        "《秩序线》的关键转折在「粮道先稳住」。这之后的走向是「北伐窗口被推迟打开」。"
+    )
+
+    insight = _phase_insight(
+        "zh",
+        EndingRoomPhase.OPENING,
+        commentary,
+        scenario_question=question,
+    )
+
+    # The question text must appear at most once in the rendered commentary.
+    assert insight["commentary"].count(question) <= 1
+    # The OPENING phase prefix in `_phase_insight` is `围绕「{question}」，` —
+    # that one (the second injection) must not appear, since the commentary
+    # already carries the question via the upstream `_build_roundtable_*_content`
+    # prefix `针对「{question}」这个问题，`.
+    assert f"围绕「{question}」" not in insight["commentary"]
+
+
+def test_phase_insight_does_not_double_inject_question_already_in_commentary_en():
+    question = "What if Zhuge Liang had lived ten more years?"
+    commentary = (
+        f"For the question '{question}', "
+        "the key turning point in Order Line was 'the supply route stabilized first'."
+    )
+
+    insight = _phase_insight(
+        "en",
+        EndingRoomPhase.OPENING,
+        commentary,
+        scenario_question=question,
+    )
+
+    assert insight["commentary"].count(question) <= 1
+    # OPENING phase uses `Around the question '...', ` as its prefix —
+    # that second injection must not appear.
+    assert f"Around the question '{question}'" not in insight["commentary"]
+
+
+def test_phase_insight_does_not_double_inject_long_question_already_in_commentary():
+    """A long (200+ char) question is most damaging: a duplicate echo would exhaust
+    the entire 64-char compression budget, pushing out the actual hook/insight."""
+    long_question = (
+        "如果诸葛亮在北伐前夕没有病逝，而是再多活十年并继续主持蜀汉国政，"
+        "那么蜀汉在经济、军事、外交三个维度上的发展轨迹是否会出现根本性偏移？"
+        "进一步追问：荆州方向的攻防策略会不会更激进，吴蜀联盟是否会因此重新调整？"
+    )
+    assert len(long_question) >= 100  # sanity check this is "long"
+
+    commentary = (
+        f"针对「{long_question}」这个问题，"
+        "《秩序线》的关键转折在「粮道先稳住」。"
+        "这之后的走向是「北伐窗口被推迟打开，朝廷得以重新评估外交筹码」。"
+    )
+
+    insight = _phase_insight(
+        "zh",
+        EndingRoomPhase.CROSSFIRE,
+        commentary,
+        scenario_question=long_question,
+    )
+
+    # The leading 60-char prefix of the question text must appear at most once,
+    # i.e. no duplicate echo of the long question.
+    assert insight["commentary"].count(long_question[:60]) <= 1
+    # CROSSFIRE phase would inject `围绕「{question}」，` if not deduped —
+    # that prefix must NOT appear.
+    assert f"围绕「{long_question}" not in insight["commentary"]
+
+
+def test_phase_insight_still_compacts_when_long_question_is_in_commentary():
+    """Even when the upstream prefix is huge, `_phase_insight` should not crash
+    and should still produce a commentary within reasonable length bounds."""
+    long_question = "x" * 200
+    commentary = f"针对「{long_question}」这个问题，秩序线的关键转折在粮道先稳住。"
+
+    insight = _phase_insight(
+        "zh",
+        EndingRoomPhase.OPENING,
+        commentary,
+        scenario_question=long_question,
+    )
+
+    # The output should be bounded (commentary_text = phase prefix + 64-char compact)
+    # and must NOT prepend the long question a second time.
+    assert f"围绕「{long_question}" not in insight["commentary"]
+    # Still emits a valid phase-prefixed commentary shape (`这轮先钉住：...`).
+    assert "这轮先钉住" in insight["commentary"]
+
+
+def test_phase_insight_still_adds_question_prefix_when_commentary_lacks_question():
+    """Sanity check: when the commentary does NOT already contain the question
+    (e.g. follow-up replies, LLM-generated commentary that dropped the prefix),
+    `_phase_insight` should still inject the question prefix as before."""
+    question = "如果秦朝没有焚书坑儒，思想会不会更多元？"
+    commentary = "《秩序线》的关键转折在「文献先保住」。"
+
+    insight = _phase_insight(
+        "zh",
+        EndingRoomPhase.VERDICT,
+        commentary,
+        scenario_question=question,
+    )
+
+    # Verdict path uses the `针对「...」，` prefix.
+    assert f"针对「{question}」" in insight["commentary"]
+    assert insight["commentary"].count(question) == 1
+
+
+def test_phase_insight_preserves_hook_when_long_chinese_question_prefix_present():
+    """Budget-survival regression for the long-question compression bug.
+
+    The upstream `_roundtable_question_prefix` prepends ``针对「{question}」这个问题，``
+    to the commentary. For a 50+ char question that prefix consumes the entire
+    64-char compaction budget, truncating the actual hook out of the rendered
+    insight. `_phase_insight` must strip the prefix BEFORE compaction so the
+    insight content survives.
+    """
+    long_question = (
+        "如果贝多芬出生在现代并且拥有完整的数字音乐制作工具和"
+        "社交媒体平台他的音乐创作和传播方式会发生怎样的改变"
+    )
+    assert len(long_question) >= 50
+    hook = "数字工具改写创作流程的关键节点"
+    commentary = (
+        f"针对「{long_question}」这个问题，"
+        f"《贝多芬的现代化重生》的关键转折在「{hook}」。"
+        "这之后的走向是「全球流量重塑了古典音乐传播格局」。"
+    )
+
+    insight = _phase_insight(
+        "zh",
+        EndingRoomPhase.OPENING,
+        commentary,
+        scenario_question=long_question,
+    )
+
+    # The genuine hook must survive the 64-char budget.
+    assert hook in insight["commentary"], (
+        f"hook '{hook}' was eaten by question-prefix bloat; got: {insight['commentary']!r}"
+    )
+    # OPENING phase prefix should still be applied.
+    assert "这轮先钉住" in insight["commentary"]
+    # Dedup guard still holds: question must not be re-injected via `围绕「...」，`.
+    assert f"围绕「{long_question}" not in insight["commentary"]
+
+
+def test_phase_insight_preserves_hook_when_long_english_question_prefix_present():
+    """English equivalent of the budget-survival regression."""
+    long_question = (
+        "What if Beethoven had been born in the modern era with access to the "
+        "full suite of digital music production tools and global social media "
+        "platforms and how would his creative process and audience reach change"
+    )
+    assert len(long_question) >= 100
+    hook = "Modern Beethoven"
+    commentary = (
+        f"For the question '{long_question}', "
+        f"the key turning point in {hook} was 'digital tools rewriting composition'. "
+        "From there it moved toward 'global virality reshaping classical reach'."
+    )
+
+    insight = _phase_insight(
+        "en",
+        EndingRoomPhase.OPENING,
+        commentary,
+        scenario_question=long_question,
+    )
+
+    # Before the fix, the 64-char budget was entirely consumed by the question
+    # prefix, leaving the rendered insight as just `Around the question '...',`
+    # with no actual hinge content. After the fix, the hook should survive.
+    assert hook in insight["commentary"], (
+        f"hook '{hook}' was eaten by question-prefix bloat; got: {insight['commentary']!r}"
+    )
+    assert "This round pins down" in insight["commentary"]
+    assert f"Around the question '{long_question}'" not in insight["commentary"]
+
+
+def test_phase_insight_compacts_normally_when_commentary_has_no_question_prefix():
+    """Commentary that was NOT produced via `_roundtable_question_prefix` should
+    flow through the original compaction path unchanged."""
+    commentary = (
+        "《秩序线》的关键转折在「粮道先稳住」。这之后的走向是「北伐窗口被推迟打开」。"
+    )
+
+    insight = _phase_insight("zh", EndingRoomPhase.OPENING, commentary)
+
+    # No scenario_question passed -> no `围绕「...」，` prefix injected.
+    assert "围绕" not in insight["commentary"]
+    assert "这轮先钉住" in insight["commentary"]
+    # Hook from the first clause survives.
+    assert "粮道先稳住" in insight["commentary"]
+
+
+def test_phase_insight_does_not_crash_on_empty_commentary():
+    """Empty commentary must not raise; falls back to phase focus copy."""
+    insight = _phase_insight(
+        "zh",
+        EndingRoomPhase.OPENING,
+        "",
+        scenario_question="如果项目延期，团队该如何应对？",
+    )
+
+    assert isinstance(insight["commentary"], str)
+    assert insight["commentary"]  # non-empty
+    assert insight["stakes"] == "世界线切口"
+
+    insight_no_q = _phase_insight("en", EndingRoomPhase.VERDICT, "")
+    assert isinstance(insight_no_q["commentary"], str)
+    assert insight_no_q["commentary"]
+    assert insight_no_q["stakes"] == "Archivist summary"
+
+
+def test_strip_question_prefix_unit_cases():
+    """Direct unit coverage for `_strip_question_prefix` patterns."""
+    from app.services.ending_room_service._utils import _strip_question_prefix
+
+    # Chinese roundtable prefix
+    assert _strip_question_prefix("针对「Q」这个问题，rest") == "rest"
+    # Chinese verdict re-injection prefix (`围绕「...」，`)
+    assert _strip_question_prefix("围绕「Q」短，rest") == "rest"
+    # English roundtable prefix (case-insensitive)
+    assert _strip_question_prefix("For the question 'Q', rest") == "rest"
+    assert _strip_question_prefix("for the question 'Q', rest") == "rest"
+    # English re-injection prefix
+    assert _strip_question_prefix("Around the question 'Q', rest") == "rest"
+    # No prefix -> unchanged
+    assert _strip_question_prefix("plain commentary text") == "plain commentary text"
+    # Empty/falsy -> empty string, no crash
+    assert _strip_question_prefix("") == ""
 
 
 def test_thread_followup_prompts_keep_reply_on_active_anchor():
@@ -1808,9 +2257,17 @@ def test_worldline_roundtable_background_prefers_llm_for_each_turn_and_keeps_clo
     assert payload["result"]["summary"] == expected_verdict
     assert payload["result"]["archivist_note"] == expected_closing
     assert len(prompts) == 4
+    scenario_question = "如果帝国被分成两条世界线？"
+    assert all(f"scenario_question={scenario_question}" in prompt for prompt in prompts)
     assert any("worldline_story=" in prompt for prompt in prompts)
     assert any("importance_score=" in prompt for prompt in prompts)
     assert any("other_worldlines=" in prompt for prompt in prompts)
+    phase_comments = [
+        insight["commentary"]
+        for insight in payload["result"]["phase_insights"]
+    ]
+    assert any(f"围绕「{scenario_question}」" in comment for comment in phase_comments)
+    assert any(f"针对「{scenario_question}」" in comment for comment in phase_comments)
 
 
 def test_roundtable_snapshot_keeps_representatives_in_scope_order():
@@ -3305,3 +3762,197 @@ def test_rewrite_prompt_omits_vocabulary_for_plain_variant_no_snapshot():
 
     # Plain variant with minimal snapshot — still includes identity from agent_role
     assert "Bystander" in prompt
+
+
+# ── _roundtable_question_prefix template structure ─────────────
+
+
+def test_roundtable_question_prefix_zh_uses_chinese_template():
+    """Chinese language must produce the `针对「{q}」这个问题，` template."""
+    prefix = _roundtable_question_prefix("如果供应链断裂，谁最先承压？", language="zh")
+    assert prefix == "针对「如果供应链断裂，谁最先承压？」这个问题，"
+
+
+def test_roundtable_question_prefix_en_uses_english_template():
+    """English language must produce the `For the question '{q}', ` template."""
+    prefix = _roundtable_question_prefix(
+        "If the supply chain breaks, who feels it first?", language="en"
+    )
+    assert prefix == "For the question 'If the supply chain breaks, who feels it first?', "
+
+
+def test_roundtable_question_prefix_empty_question_returns_empty_string_zh():
+    """Empty question must return empty string (no prefix) — zh."""
+    assert _roundtable_question_prefix("", language="zh") == ""
+
+
+def test_roundtable_question_prefix_empty_question_returns_empty_string_en():
+    """Empty question must return empty string (no prefix) — en."""
+    assert _roundtable_question_prefix("", language="en") == ""
+
+
+def test_roundtable_question_prefix_none_question_returns_empty_string():
+    """None question must return empty string (no prefix)."""
+    assert _roundtable_question_prefix(None, language="zh") == ""
+    assert _roundtable_question_prefix(None, language="en") == ""
+
+
+def test_roundtable_question_prefix_truncates_long_question_zh():
+    """Question over 180 chars must be sanitized/truncated by sanitize_untrusted_text."""
+    long_q = "问" * 500
+    prefix = _roundtable_question_prefix(long_q, language="zh")
+
+    # Output must contain the template wrapper
+    assert prefix.startswith("针对「")
+    assert prefix.endswith("」这个问题，")
+    # The wrapped question payload must NOT include all 500 chars
+    assert "问" * 500 not in prefix
+    # 180 chars must fit (the documented sanitize_untrusted_text limit)
+    assert "问" * 180 in prefix
+
+
+def test_roundtable_question_prefix_truncates_long_question_en():
+    """English long question must also be truncated by sanitize_untrusted_text (max 180 chars)."""
+    long_q = "Q" * 500
+    prefix = _roundtable_question_prefix(long_q, language="en")
+
+    assert prefix.startswith("For the question '")
+    assert prefix.endswith("', ")
+    assert "Q" * 500 not in prefix
+    assert "Q" * 180 in prefix
+
+
+def test_build_roundtable_opening_content_includes_question_prefix_zh():
+    """Opening anchor must inject the deterministic question prefix when scenario_question given."""
+    question = "如果供应链断裂，谁最先承压？"
+    branch_card = {
+        "title": "秩序线",
+        "insight": "港口稳住",
+        "key_moments": ["港口先稳"],
+        "story": "秩序线让港口先稳住。",
+    }
+
+    content = _build_roundtable_opening_content(
+        branch_card,
+        participant=None,
+        language="zh",
+        scenario_question=question,
+    )
+
+    assert content.startswith(f"针对「{question}」这个问题，")
+
+
+def test_build_roundtable_opening_content_includes_question_prefix_en():
+    """Opening anchor (en) must inject the English question prefix."""
+    question = "If the supply chain breaks, who feels it first?"
+    branch_card = {
+        "title": "Order Line",
+        "insight": "Ports stabilized",
+        "key_moments": ["Ports held"],
+        "story": "Order line held the ports.",
+    }
+
+    content = _build_roundtable_opening_content(
+        branch_card,
+        participant=None,
+        language="en",
+        scenario_question=question,
+    )
+
+    assert content.startswith(f"For the question '{question}', ")
+
+
+def test_build_roundtable_opening_content_omits_prefix_when_question_empty_zh():
+    """No scenario_question means no prefix — anchor must still be display-ready."""
+    branch_card = {
+        "title": "秩序线",
+        "insight": "港口稳住",
+        "key_moments": ["港口先稳"],
+        "story": "秩序线让港口先稳住。",
+    }
+
+    content = _build_roundtable_opening_content(
+        branch_card,
+        participant=None,
+        language="zh",
+        scenario_question=None,
+    )
+
+    assert "针对「" not in content
+    # Anchor must still carry the worldline title
+    assert "秩序线" in content
+
+
+def test_build_roundtable_verdict_content_includes_question_prefix_zh():
+    """Verdict anchor must inject the deterministic question prefix when scenario_question given."""
+    question = "如果供应链断裂，谁最先承压？"
+    branch_cards = [
+        {
+            "title": "秩序线",
+            "insight": "港口稳住",
+            "key_moments": ["港口先稳"],
+            "story": "秩序线让港口先稳住。",
+        },
+        {
+            "title": "裂变线",
+            "insight": "港口失守",
+            "key_moments": ["港口失守"],
+            "story": "裂变线让港口失守。",
+        },
+    ]
+
+    content = _build_roundtable_verdict_content(
+        branch_cards,
+        language="zh",
+        scenario_question=question,
+    )
+
+    assert content.startswith(f"针对「{question}」这个问题，")
+
+
+def test_build_roundtable_verdict_content_includes_question_prefix_en():
+    """Verdict anchor (en) must inject the English question prefix."""
+    question = "If the supply chain breaks, who feels it first?"
+    branch_cards = [
+        {
+            "title": "Order Line",
+            "insight": "Ports stabilized",
+            "key_moments": ["Ports held"],
+            "story": "Order line held the ports.",
+        },
+        {
+            "title": "Fracture Line",
+            "insight": "Ports fell",
+            "key_moments": ["Ports fell"],
+            "story": "Fracture line lost the ports.",
+        },
+    ]
+
+    content = _build_roundtable_verdict_content(
+        branch_cards,
+        language="en",
+        scenario_question=question,
+    )
+
+    assert content.startswith(f"For the question '{question}', ")
+
+
+def test_build_roundtable_verdict_content_omits_prefix_when_question_empty_zh():
+    """No scenario_question means no prefix — verdict anchor must still be display-ready."""
+    branch_cards = [
+        {
+            "title": "秩序线",
+            "insight": "港口稳住",
+            "key_moments": ["港口先稳"],
+            "story": "秩序线让港口先稳住。",
+        },
+    ]
+
+    content = _build_roundtable_verdict_content(
+        branch_cards,
+        language="zh",
+        scenario_question=None,
+    )
+
+    assert "针对「" not in content
+    assert "秩序线" in content

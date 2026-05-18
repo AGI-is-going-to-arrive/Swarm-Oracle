@@ -129,9 +129,11 @@ cd backend && alembic upgrade head
 - `GET /api/capabilities` 轻量配置端点（无 LLM 调用），不暴露 key/base URL
 
 ### Result Quality / Question Anchoring
-- `FEATURE_RESULT_VERDICT` 默认开启；主 scenario 完成后，simulator 生成直接回答原问题的 verdict、confidence 和一句话答案，失败时 fail-soft，不阻断 `simulation_done`
+- `FEATURE_RESULT_VERDICT` 默认开启；主 scenario 完成后，simulator 生成直接回答原问题的 verdict、confidence 和一句话答案，生成失败时 fail-soft，不阻断 `simulation_done`
+- verdict prompt 会读取分支标题、insight、概率和最多 1200 字的 `story_excerpt`；分支摘要整体仍用 untrusted text block 限住预算
+- narration Pass-1 / Pass-2 都带原问题锚点；Pass-2 要求 `question_answer` 用具体姓名、事件或结果回答，不只是改写问题本身
 - 结果质量数据写在 `Scenario.parsed_context.result_quality`，包括顶层 `verdict / confidence / question_answer` 和 `branch_question_answers`；没有新增 DB 表或 column
-- `/api/capabilities.result_verdict` 控制前端展示；ResultView 只有在 capability enabled 且 story verdict 非空时显示 `ResultVerdictPanel`，旧 scenario 保持原 subtitle
+- `/api/capabilities.result_verdict` 控制前端展示；ResultView capability enabled 时会挂 `ResultVerdictPanel`，story verdict 非空时显示 verdict 和 confidence，缺失时显示中性的“暂无预测结论”并保留原问题；标题 subtitle 只有在 verdict 非空时切到预测结论口径
 
 ### Web 搜索增强
 - InputView toggle 默认可见，推演前自动搜索注入 Agent 提示词（CORE/IMPORTANT/CROWD 三层）
@@ -159,6 +161,7 @@ cd backend && alembic upgrade head
 ### Oracle 文案
 - 3-tier fallback：generation temp=0.82 → rewrite temp=0.78 → static anchor
 - 四种房间类型均接入 factual_guardrail + scenario_question + transcript_quotes
+- roundtable 静态锚点会把 `scenario_question` 压成短问题前缀；phase insight 会先去掉已存在的问题前缀再压成一句，避免长问题挤掉真正的转折点
 - 13 种 voice variant（role_hint + bio_hint 子串匹配），stream 温度 0.75 + reasoning_effort medium
 
 ### 圆桌
@@ -193,6 +196,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
+| 05-19 | Result Quality / Question Anchoring 二次收口：narrator Pass-1/Pass-2 都锚定原问题，fallback 叙事也带 question；verdict prompt 使用分支 `story_excerpt`，分支摘要预算扩大到 15000 字符；roundtable opening/crossfire/witness/verdict 静态锚点透传 `scenario_question`，`_phase_insight()` 去重问题前缀后再压缩。前端 ResultVerdictPanel 对 blank/null/undefined verdict 显示中性 fallback，不再提示“正在分析”；EndingCardsGrid 把 branch `question_answer` 放到概率条上方；DirectorNotebook 优先展示 story verdict，再展示 branch insight；Debate E2E 会展开默认折叠的阶段地图后再断言完整列表。验证：backend targeted `290 passed`；frontend Result/Debate targeted `25 passed`；frontend lint/build 通过；Debate mobile Chromium 390px 与 320px E2E 通过；i18n parity `2730/2730` |
 | 05-16 | Document Ingestion Upgrade：`/api/agents/from-document` 支持长 PDF 的采样粗扫 + 全文证据精提，PDF 文本上限调整为 1000000 字符，实体抽取/persona 批次/persona 单个超时拆成独立配置；persona 生成按 `0.7 -> 0.6 -> 0.5` 递减温度重试，部分失败会保留已创建 Agent 并返回 `agents_failed`。Agent Workshop document tab 延长上传超时到 8 分钟，补齐 partial success / 0-agent / timeout / no-text 本地化错误。默认 backend full gate 通过：`3070 passed, 6 skipped`；文档导入后端定向 `48 passed`，前端 DocumentUploader + locale 窄集 `19 passed`；live LLM benchmark / observation 测试改为 `RUN_REAL_LLM_TESTS=1` opt-in |
 | 05-15 | Agent 页面导航修复：`AgentWorkshopView` 新增返回 Agent 库的文字链接（`← 返回 Agent 库`），`AgentLibrary` 返回按钮从 `navigate(-1)` 改为 `<Link to="/">`，修复从 `/agents/new` 进入 `/agents` 后点返回会回到 `/agents/new` 的 bug。i18n 新增 `agents.back_to_library` key，en/zh parity `2527/2527`。FE 185 files / 2047 passed |
 | 05-15 | Result Quality / Question Anchoring：`FEATURE_RESULT_VERDICT`、story `verdict / verdict_confidence / branches[].question_answer`、ResultView `ResultVerdictPanel` 和 branch answer 展示已接通；verdict 生成 fail-soft，prompt 输入继续走 untrusted-data guardrail。验证：backend targeted `15 passed, 181 deselected`，`ruff check app/ tests/test_parser.py` 通过；backend broad command 为 `3 failed, 3024 passed, 7 skipped, 1 deselected`，其中 parser clamp 和 conversation abort 已单独复验通过，live LLM matrix 仍是 120s 慢路径风险；frontend `185 files / 2047 tests passed`，tsc/eslint/build/i18n `2509/2509` 和新旧结果页浏览器复核通过 |

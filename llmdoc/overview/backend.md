@@ -93,7 +93,7 @@
 - `InterventionLog.effect_summary_json`
   干预完成后的只读效果回执；effects endpoint 和 snapshot export/import 都读取这份持久化数据，不从前端重算。写回时会丢弃 scenario/branch 不匹配的 pending metadata。
 - `Scenario.parsed_context.result_quality`
-  Result Quality 的持久载荷；当前存顶层 `verdict / confidence / question_answer` 和 `branch_question_answers`，受 `FEATURE_RESULT_VERDICT` 控制，不是新表或新 column。
+  Result Quality 的持久载荷；当前存顶层 `verdict / confidence / question_answer` 和 `branch_question_answers`，受 `FEATURE_RESULT_VERDICT` 控制，不是新表或新 column。verdict prompt 会读取分支标题、insight、概率和最多 1200 字的 `story_excerpt`；分支摘要整体仍按 untrusted text block 限制预算。
 - `Scenario.parsed_context.campaign_context`
   Campaign daily/weekly 的创建时上下文；`POST /api/scenario` 会校验 challenge/track 是否来自当前 catalog，并把 `challenge_local_date / week_key` 改成服务端 UTC 日期和 ISO week。daily streak 与 weekly bonus 不使用前端本地日期做 authority。
 - campaign finalize 与 scenario summary 当前返回同一套 `score_breakdown`；每项包含 `id / label_key / points / applied`。新 scenario 会优先从持久化 `director_state_json / gameplay_state_json` 派生 archive grade、profile resonance、daily challenge、押注、director goals、worldline commitment、weekly bonus 和 badge unlock；旧 scenario 缺这些 authority 时才回到 legacy request fallback。
@@ -182,7 +182,8 @@
 - Oracle 的 participant snapshot 当前会带 `agent_name / agent_role / agent_persona / agent_stance / agent_emotion / tier / impact_score / branch_pressure / latest_quote / opening_quote / source_type`，供 ending-room / roundtable 的 LLM 生成直接消费。
 - `ending-room / roundtable` 的主文案生成当前走 `LLM first, template fallback`：先 structured LLM，再 plain-text retry，最后才回 deterministic fallback；模板不再是主路径。
 - roundtable verdict 和 follow-up 的 deterministic fallback 当前必须是 display-ready copy：不能包含 prompt 指令、模式标签或事实清单式占位，因为 LLM 关闭或耗尽时它会直接展示给用户。
-- `_phase_insight()` 当前会把长 turn commentary 压成 phase-specific 的一句主持人提炼；后端 result 不再默认把整段 transcript 复制进 phase insight。
+- roundtable opening / crossfire / witness / verdict 的 deterministic anchor 会用经过清洗和截断的 `scenario_question` 加问题前缀；没有 scenario question 时仍返回可直接展示的普通文案。
+- `_phase_insight()` 当前会先剥掉 roundtable question prefix，再把长 turn commentary 压成 phase-specific 的一句主持人提炼；后端 result 不再默认把整段 transcript 或重复问题复制进 phase insight。
 - Oracle 主文案的 LLM 路径当前先走 generation-first prompt，这一步不会把 anchor copy 当中心参考；只有生成为空或失败时，才进入带 anchor reference 的 rewrite fallback，最后才退 deterministic fallback。
 - Oracle prompt 当前包含双层角色化词汇提示：
   - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science / tech-visionary / journalist / educator / artist / entrepreneur，共 18 种）提供领域专属术语、句式风格和情绪基调。ASCII 关键词按词边界匹配，CJK 仍按子串匹配，避免 `warlord/lord`、`consultant/consul`、`federation/ration` 这类旧误匹配；关键词匹配也会避开已知过宽词，例如 `medium confidence` 不应误入 artist，`large-scale` 不应误入 entrepreneur。
@@ -298,7 +299,7 @@
   - `chat/completions` 的 `choices[0].message.content` 为空会直接报错
   - `responses` 会先尝试 `content[].text`、`content[].output_text`、top-level `output_text`；还拿不到正文就报错
   - 这样上层不会再把空正文拖到 `json.loads("")` 才暴露
-- `narrate_branch()` 当前会保证 completed branch 的 `insight` 非空；如果 LLM 只返回 story 或空 payload，会从 story 截一段，或者退到当前语言的简短 fallback，避免 reconcile 因空 insight 卡住。
+- `narrate_branch()` 当前会保证 completed branch 的 `insight` 非空；如果 LLM 只返回 story 或空 payload，会从 story 截一段，或者退到当前语言的简短 fallback，避免 reconcile 因空 insight 卡住。Result Quality 开启时，Pass-1、Pass-2 和 fallback 都会带原问题锚点，分支级 `question_answer` 也按原问题提取。
 - 本地兼容网关的 live probe 当前有独立测试：
   - `backend/tests/test_llm_gateway_probe.py`
   - 用来确认本地 OpenAI-compatible 端点的非流式正文和流式 JSON 路径是否可用。

@@ -3114,10 +3114,12 @@ def _result_branch_summaries(branches: list) -> list[dict[str, object]]:
             probability: float | int = round(float(probability_raw), 3)
         except (TypeError, ValueError):
             probability = 0
+        story_excerpt = str(branch.get("story") or "").strip()[:1200]
         summaries.append({
             "title": str(branch.get("title") or "").strip(),
             "insight": str(branch.get("insight") or "").strip(),
             "probability": probability,
+            "story_excerpt": story_excerpt,
         })
     return summaries
 
@@ -3148,7 +3150,7 @@ async def _generate_verdict(
         branches_block = format_untrusted_text_block(
             "分支摘要" if is_chinese else "Branch summaries",
             json.dumps(branch_summaries, ensure_ascii=False),
-            max_chars=5000,
+            max_chars=15000,
         )
         web_block = format_untrusted_text_block(
             "真实世界上下文" if is_chinese else "Real-world context",

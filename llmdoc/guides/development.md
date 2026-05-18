@@ -326,11 +326,11 @@ npm run build
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_simulator.py tests/test_contract_freeze.py tests/test_parser.py -q -k "question_answer or result_verdict or capability or rounds_clamped"
+python -m pytest tests/test_narrator.py tests/test_simulator.py tests/test_contract_freeze.py tests/test_parser.py -q -k "question_answer or result_verdict or capability or rounds_clamped or question_block"
 ruff check app/ tests/test_parser.py
 
 cd ../frontend
-npm test -- --run src/pages/ResultView.test.tsx src/pages/result/ResultVerdictPanel.test.tsx src/i18n/locales.test.ts
+npm test -- --run src/pages/ResultView.test.tsx src/pages/result/ResultVerdictPanel.test.tsx src/pages/result/EndingCardsGrid.test.tsx src/i18n/locales.test.ts
 npx tsc --noEmit
 npx eslint src/ --max-warnings=0
 npm run build
@@ -696,6 +696,7 @@ npm run build
   - 页面壳不再跟着 debate payload 里的 `language` 静默改全局 UI 语言
   - mixed-language fallback 当前覆盖 `phase commentary / replay quote / prediction score reason`
   - `e2e-debate-suite` 当前会覆盖 `share -> readonly replay -> reload restore -> import`
+  - live 阶段地图保持默认折叠；脚本会先点击 `debate-stage-map-toggle` 展开，再断言 `.debate-stage-summary-list`
   - backend import replay 当前接受负数 `confidence_drift.phase_margin / cumulative_margin`，也接受常规 prediction 的 `counterplay_variant: null`
   - desktop Firefox / WebKit scoped rerun 当前也已通过
 

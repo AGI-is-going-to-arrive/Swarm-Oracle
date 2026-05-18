@@ -130,15 +130,15 @@ docker compose up backend
 
 | 服务 | 文件 | 职责 |
 |------|------|------|
-| ending_room_service | `ending_room_service/` (包) | 密室/圆桌编排核心，拆分为 _utils/_participants/_threads/_content；Oracle 文案采用 generation-first 3-tier fallback（纯生成→rewrite→静态模板），四种房间类型均注入 scenario_question + transcript_quotes + factual_guardrail |
-| simulator | `simulator.py` | 多代理模拟引擎，含 Result Quality verdict generation / branch question-answer persistence，以及 4 个 Phase 3 hook：causal/factions(+WS 事件发射)/checkpoint/identity lifecycle (均受 `FEATURE_*` gate；identity hook 通过 `asyncio.to_thread` 非阻塞执行) |
+| ending_room_service | `ending_room_service/` (包) | 密室/圆桌编排核心，拆分为 _utils/_participants/_threads/_content；Oracle 文案采用 generation-first 3-tier fallback（纯生成→rewrite→静态模板），四种房间类型均注入 scenario_question + transcript_quotes + factual_guardrail；roundtable 静态锚点会用清洗后的 scenario question 作问题前缀，phase insight 会先去重问题前缀再压缩 |
+| simulator | `simulator.py` | 多代理模拟引擎，含 Result Quality verdict generation / branch question-answer persistence，verdict prompt 使用分支 title / insight / probability / story_excerpt，以及 4 个 Phase 3 hook：causal/factions(+WS 事件发射)/checkpoint/identity lifecycle (均受 `FEATURE_*` gate；identity hook 通过 `asyncio.to_thread` 非阻塞执行) |
 | debate | `debate.py` | 辩论引擎，含 argument map 抽取+verdict linking hook (受 `FEATURE_ARGUMENT_MAP` gate) |
 | llm_client | `llm_client.py` | LLM 调用封装 (JSON/流式/探测)，BYOK URL allowlist + scheme 校验，不可信文本 guardrail，content=null 防御 |
 | campaign | `campaign.py` | Campaign 计算 |
 | memory | `memory.py` | Agent 记忆管理与压缩 |
 | blackboard | `blackboard.py` | 黑板模式通信 |
 | web_context | `web_context.py` | Web 搜索增强 (Tavily/SearXNG/Exa/xAI 提供商, TTL 缓存 + stampede 去重, snippet 规范化, 上下文格式化)；`FEATURE_NEW_SOURCES` 开启后支持 source family 分类搜索（`fetch_family_context` 异步并发，每个 family 通过 `include_domains` 在对应领域网站独立搜索） |
-| narrator | `narrator.py` | 叙事生成；返回 branch-level `question_answer` 供 Result Quality 存入 `parsed_context.result_quality.branch_question_answers` |
+| narrator | `narrator.py` | 叙事生成；Pass-1、Pass-2 和 fallback 都带原问题锚点；返回 branch-level `question_answer` 供 Result Quality 存入 `parsed_context.result_quality.branch_question_answers` |
 | scoring | `scoring.py` | 预测评分 |
 | vector_store | `vector_store.py` | ChromaDB 向量检索 (含 identity memory 双层存储，identity memory 写入经 `identity:{user_id}` 粒度串行化锁保护) |
 | persona_workshop | `persona_workshop.py` | 用户自建 Agent CRUD + persona 防注入 (Phase 3 F3) |
@@ -283,6 +283,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-19 | Result Quality / Oracle question anchoring 二次收口 | `simulator.py`：`_result_branch_summaries()` 给 verdict prompt 增加 `story_excerpt[:1200]`，branch summaries untrusted block 扩到 15000 字符；`narrator.py`：Pass-1 把原问题放在分支标题前，Pass-2 始终带 question block 并要求具体 `question_answer`，fallback narration 也接收 question；`ending_room_service`：roundtable opening / witness / crossfire / verdict 静态模板接入清洗后的 scenario question 前缀，`_phase_insight()` 会先剥掉重复问题前缀再压缩。验证：Result Quality backend targeted `290 passed`，相关 `ruff check` 通过 |
 | 2026-05-16 | Document Ingestion Upgrade | `document_ingestion.py`：短文档保留原 chunk 抽取，长文档新增采样粗扫 + 全文证据精提，PDF 文本上限调整为 1000000 字符，候选 alias 和证据片段都走 untrusted-data guardrail；persona 生成按 `0.7 -> 0.6 -> 0.5` 递减温度重试。`agents.py`：实体抽取、persona 批次、单个 persona 超时分离；部分 persona 失败保留成功 identities 并返回 `agents_failed`，全部失败返回结构化错误；空 content type / `application/octet-stream` 的 `.pdf` 文件名走 PDF 兼容路径。`config.py` 新增 `DOCUMENT_ENTITY_TIMEOUT / DOCUMENT_PERSONA_TIMEOUT / DOCUMENT_PERSONA_SINGLE_TIMEOUT / DOCUMENT_MAX_TEXT_FOR_SCAN / DOCUMENT_SCAN_SAMPLE_SIZE / DOCUMENT_MAX_EXTRACTED_TEXT_CHARS`。验证：`tests/test_document_ingestion.py` 为 `48 passed`，backend full gate `3070 passed, 6 skipped`；live LLM benchmark / observation 测试改为 `RUN_REAL_LLM_TESTS=1` opt-in |
 | 2026-05-15 | Result Quality / Question Anchoring | `config.py` 新增 `FEATURE_RESULT_VERDICT`；`simulator.py` 在主 scenario 完成后生成直接回答原问题的 verdict/confidence/question_answer，LLM malformed JSON、timeout 或空输出都 fail-soft；`narrator.py` 返回 branch `question_answer`，Pass-2 extraction 会带原问题，feature off 时不再要求该字段；`scenarios.py` 在 story payload 中按 feature gate 回显 `verdict / verdict_confidence / branches[].question_answer`，未知 confidence 归一化为 `medium`，非字符串 branch answer 不回显。验证：Result Quality targeted `15 passed, 181 deselected`，`ruff check app/ tests/test_parser.py` 通过；broad backend command 为 `3 failed, 3024 passed, 7 skipped, 1 deselected`，其中 parser clamp 和 conversation abort 已单独复验通过，`test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 为 live LLM matrix 120s 慢路径风险 |
 | 2026-05-14 | Agent diverge marker 清理 | `simulator.py`：新增 `_strip_diverge_marker()`，在 Pass-2 JSON extraction 成功路径和 raw fallback 路径清理用户可见 `content` 里的 `[DIVERGE: ...]` / `[DIVERGE：...]` 内部标记，支持冒号前空格、大小写、嵌套方括号和未闭合 marker；`diverge` 字段仍独立用于 fork 检测。`test_simulator.py` 覆盖空字符串、无 marker、半角/全角冒号、mid-text、未闭合、长文本、成功路径和 fallback 路径。验证：backend full `3008 passed, 2 skipped`，`ruff check .` 通过 |

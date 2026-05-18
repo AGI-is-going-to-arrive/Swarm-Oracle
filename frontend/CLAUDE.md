@@ -35,7 +35,7 @@ npm run test:watch # vitest (watch mode)
 | `/` | `InputView` | 首页，创建场景/辩论入口 |
 | `/sim/:id` | `SimulationView` | 模拟实时观察 + Phaser 剧场 |
 | `/sim/replay` | `SimulationView` | Replay 模式 |
-| `/result/:id` | `ResultView` | 模拟结果展示，含 capability-gated Result Quality verdict panel |
+| `/result/:id` | `ResultView` | 模拟结果展示，含 capability-gated Result Quality verdict panel / unavailable fallback |
 | `/result/replay` | `ResultView` | Replay 结果 |
 | `/debate/:id` | `DebateArenaView` | 辩论实时观察 |
 | `/debate/:id/result` | `DebateResultView` | 辩论结果 |
@@ -58,8 +58,8 @@ npm run test:watch # vitest (watch mode)
 |------|------|
 | `InputView.tsx` | 首页输入，5 步进度、quick starts、搜索增强/source family、模式选择器、advanced accordion、BYOK 折叠区、Agent attach panel |
 | `SimulationView.tsx` | 模拟视图 + Phaser 集成 |
-| `ResultView.tsx` | 结果展示 orchestrator (Summary-First 布局，含 ResultVerdictPanel、What's Next bridge、真实世界来源卡片、historical badge、share artifact、畸形数据防御)；主体区块拆到 `src/pages/result/*` |
-| `DebateArenaView.tsx` | 辩论竞技场 |
+| `ResultView.tsx` | 结果展示 orchestrator (Summary-First 布局，含 ResultVerdictPanel / unavailable fallback、What's Next bridge、真实世界来源卡片、historical badge、share artifact、畸形数据防御)；主体区块拆到 `src/pages/result/*` |
+| `DebateArenaView.tsx` | 辩论竞技场；阶段地图默认折叠，自动化通过稳定 toggle hook 展开 |
 | `DebateResultView.tsx` | 辩论结果 |
 | `WorldlineRoundtableView.tsx` | 世界线圆桌 (~2223 行) |
 | `HistoryView.tsx` | 历史记录 |
@@ -394,6 +394,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-19 | Result Quality / Question Anchoring 二次收口 | `ResultVerdictPanel` 在 capability enabled 但 story verdict 为空、null 或 undefined 时显示中性的 unavailable fallback，并继续显示原问题；`EndingCardsGrid` 把 branch `question_answer` 放到概率条上方，空白值不渲染 focal block；`DirectorNotebook` 的档案结论优先显示 story verdict，再补 branch insight；`ResultVerdictPanel.css` 新增 pending/unavailable forced-colors 与 OKLCH fallback，新增样式的 `letter-spacing` 保持为 `0`；`DebateArenaView` 阶段地图继续默认折叠，但按钮暴露 `debate-stage-map-toggle`，`e2e-debate-suite` 会展开后再断言 `.debate-stage-summary-list`。验证：Result/Debate targeted vitest `25 passed`，`npm run lint` 和 `npm run build` 通过，Debate mobile Chromium 390px / 320px E2E 通过，i18n parity `2730/2730` |
 | 2026-05-15 | Agent 页面导航修复 | `AgentWorkshopView.tsx`：标题上方新增 `← 返回 Agent 库` 文字链接（`<Link to="/agents">`，样式 `.workshop-view__back`）。`AgentLibrary.tsx`：返回按钮从 `navigate(-1)` 改为 `<Link to="/">`，修复从 `/agents/new` 跳转到 `/agents` 后点返回会回到 `/agents/new` 的历史栈 bug；移除不再使用的 `useNavigate` import。i18n 新增 `agents.back_to_library`（zh: 返回 Agent 库 / en: Back to Agent Library）。验证：frontend full vitest `185 files / 2047 tests passed`，tsc/eslint/build 通过，i18n `2527/2527`，浏览器实测 `/agents/new` → `/agents` → `/` 导航链路正确 |
 | 2026-05-15 | Result Quality / Question Anchoring | `ResultView.tsx` 按 `/api/capabilities.result_verdict` 接入 `ResultVerdictPanel`；`ResultHeader` 只有在 capability enabled 且 story verdict 非空时切到预测结果 subtitle；`EndingCardsGrid` 只在 branch `question_answer` 非空时显示分支级一句话回答；`PredictionModal.css` 同步收口单滚动容器、safe-area、reduced-motion、forced-colors 和 OKLCH fallback。验证：frontend `npx tsc --noEmit`、targeted vitest `98 passed`、full vitest `185 files / 2047 tests passed`、eslint/build/i18n `2509/2509` 通过；浏览器复核新 verdict 页、旧无 verdict 页、语言切换、桌面与 `375x812` mobile，console 无 JS error |
 | 2026-05-14 | Session launch / web search settings 回归修复 | `InputView.tsx`：`launchInFlightRef` 防 BYOK 自动 preflight 和 continuity confirmation 重复启动；continuity preflight 失败时显示错误但继续按无 override 启动。`useWebSearchConfig.ts`：custom override 且 base URL 为空时使用下拉 provider capability，非空未知 host 才保留 unknown/no-provider。`SimulationView.tsx/css`：取消确认框补 busy 状态、`aria-busy`、`role=status`、reduced-motion/forced-colors/mobile 样式。验证：frontend full `184 files / 2041 tests passed`，`tsc / eslint / build` 通过，i18n `2621/2621` |

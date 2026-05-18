@@ -436,7 +436,14 @@ def create_ending_room(
                 "summary": gallery_note,
                 "next_move": None,
                 "archivist_note": gallery_note,
-                "phase_insights": [_phase_insight(resolved_language, EndingRoomPhase.VERDICT, gallery_note)],  # noqa: E501
+                "phase_insights": [
+                    _phase_insight(
+                        resolved_language,
+                        EndingRoomPhase.VERDICT,
+                        gallery_note,
+                        scenario_question=scenario.question,
+                    )
+                ],
                 "supporting_turns": [],
             }
             initial_status = EndingRoomStatus.DONE
@@ -676,6 +683,8 @@ def _rebuild_room_result(
     participants: list[EndingRoomParticipant],
     planned_turns: list[dict[str, Any]],
     base_result: dict[str, Any],
+    *,
+    scenario_question: str | None = None,
 ) -> dict[str, Any]:
     phase_filter = {
         EndingRoomType.WORLDLINE_ROUNDTABLE: {EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE, EndingRoomPhase.VERDICT},  # noqa: E501
@@ -699,7 +708,12 @@ def _rebuild_room_result(
         "summary": verdict_text,
         "archivist_note": archivist_note,
         "phase_insights": [
-            _phase_insight(room.language, turn["phase"], turn["content"])
+            _phase_insight(
+                room.language,
+                turn["phase"],
+                turn["content"],
+                scenario_question=scenario_question,
+            )
             for turn in planned_turns
             if turn["phase"] in phase_filter
         ],
@@ -773,7 +787,13 @@ async def _enhance_room_plan_with_llm(
                 "content": generated_content,
             }
         )
-    return enhanced_turns, _rebuild_room_result(room, participants, enhanced_turns, result)
+    return enhanced_turns, _rebuild_room_result(
+        room,
+        participants,
+        enhanced_turns,
+        result,
+        scenario_question=scenario_question,
+    )
 
 
 def _load_scenario_question(scenario_id: str) -> str | None:
@@ -1241,6 +1261,8 @@ def _build_room_plan(
     selected_branch_ids = _normalize_branch_ids(
         (room.config_json or {}).get("selected_branch_ids") or []
     )
+    scenario = session.get(Scenario, room.scenario_id)
+    scenario_question = scenario.question if scenario is not None else None
     archivist = next(participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST)  # noqa: E501
 
     if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
@@ -1260,6 +1282,7 @@ def _build_room_plan(
                     branch_cards_by_id.get(participant.source_branch_id or "", {}),
                     participant=participant,
                     language=room.language,
+                    scenario_question=scenario_question,
                 ),
                 "emotion": "focused",
                 "cited_branch_id": participant.source_branch_id,
@@ -1289,6 +1312,7 @@ def _build_room_plan(
                       witness=witness,
                       branch_rows=_load_branch_rows(session, witness.source_branch_id, language=room.language),  # noqa: E501
                       language=room.language,
+                      scenario_question=scenario_question,
                   ),
                   "emotion": "measured",
                   "cited_branch_id": witness.source_branch_id,
@@ -1314,6 +1338,7 @@ def _build_room_plan(
                     "content": _build_roundtable_crossfire_content(
                         context["branches"],
                         language=room.language,
+                        scenario_question=scenario_question,
                     ),
                     "emotion": "measured",
                     "cited_branch_id": None,
@@ -1329,6 +1354,7 @@ def _build_room_plan(
                     "content": _build_roundtable_verdict_content(
                         context["branches"],
                         language=room.language,
+                        scenario_question=scenario_question,
                     ),
                     "emotion": "neutral",
                     "cited_branch_id": None,
@@ -1353,7 +1379,12 @@ def _build_room_plan(
                 planned_turns[-1]["content"],
             ),
             "phase_insights": [
-                _phase_insight(room.language, turn["phase"], turn["content"])
+                _phase_insight(
+                    room.language,
+                    turn["phase"],
+                    turn["content"],
+                    scenario_question=scenario_question,
+                )
                 for turn in planned_turns
                 if turn["phase"] in {EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE, EndingRoomPhase.CLOSING, EndingRoomPhase.VERDICT}  # noqa: E501
             ],
@@ -1503,7 +1534,15 @@ def _build_room_plan(
             "summary": move_text,
             "next_move": move_text,
             "archivist_note": move_text,
-            "phase_insights": [_phase_insight(room.language, turn["phase"], turn["content"]) for turn in planned_turns],  # noqa: E501
+            "phase_insights": [
+                _phase_insight(
+                    room.language,
+                    turn["phase"],
+                    turn["content"],
+                    scenario_question=scenario_question,
+                )
+                for turn in planned_turns
+            ],
             "supporting_turns": [
                 {
                     "turn_id": None,
@@ -1671,7 +1710,15 @@ def _build_room_plan(
         "summary": verdict_text,
         "next_move": None,
         "archivist_note": verdict_text,
-        "phase_insights": [_phase_insight(room.language, turn["phase"], turn["content"]) for turn in planned_turns],  # noqa: E501
+        "phase_insights": [
+            _phase_insight(
+                room.language,
+                turn["phase"],
+                turn["content"],
+                scenario_question=scenario_question,
+            )
+            for turn in planned_turns
+        ],
         "supporting_turns": [
             {
                 "turn_id": None,

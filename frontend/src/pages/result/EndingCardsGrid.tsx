@@ -49,10 +49,14 @@ export default function EndingCardsGrid() {
         const detailId = `ending-detail-${branch.id}`;
         const titleId = `ending-title-${branch.id}`;
 
+        const branchAnswerRaw = branch.question_answer;
+        const branchAnswerText = typeof branchAnswerRaw === 'string' ? branchAnswerRaw.trim() : '';
+        const hasBranchAnswer = branchAnswerText.length > 0;
+
         return (
           <article
             key={branch.id}
-            className={`ending-card ${isExpanded ? 'expanded' : ''} ${index === 0 ? 'ending-card--primary' : ''}`}
+            className={`ending-card ${isExpanded ? 'expanded' : ''} ${index === 0 ? 'ending-card--primary' : ''} ${hasBranchAnswer ? 'ending-card--has-answer' : ''}`}
             ref={(el) => { if (el) el.style.setProperty('--card-delay', `${index * 0.1}s`); }}
           >
             {/* Summary-First: always visible */}
@@ -88,6 +92,21 @@ export default function EndingCardsGrid() {
               <h2 id={titleId} className="ending-title" tabIndex={-1}>{branch.title}</h2>
             </div>
 
+            {/* Branch-specific answer to the user's question, rendered as the
+                focal point of the card when present — placed BEFORE the
+                probability bar so the answer leads the reading order. */}
+            {hasBranchAnswer && (
+              <p
+                className="ending-card__answer ending-card__answer--focal"
+                data-testid={`ending-card-answer-${branch.id}`}
+              >
+                <span className="ending-card__answer-label">
+                  {t('result.branch_answer_label', { defaultValue: 'Answer to Your Question' })}
+                </span>
+                <span className="ending-card__answer-text">{branchAnswerText}</span>
+              </p>
+            )}
+
             <div className="probability-section">
               <div className="probability-label">
                 <span>{t('result.probability')}</span>
@@ -108,27 +127,14 @@ export default function EndingCardsGrid() {
               )}
             </div>
 
-            {/* Branch-specific answer to the user's question (when available) */}
-            {(() => {
-              const branchAnswer = branch.question_answer;
-              const trimmed = typeof branchAnswer === 'string' ? branchAnswer.trim() : '';
-              if (!trimmed) return null;
-              return (
-                <p
-                  className="ending-card__answer"
-                  data-testid={`ending-card-answer-${branch.id}`}
-                >
-                  <span className="ending-card__answer-label">
-                    {t('result.branch_answer_label', { defaultValue: 'Answer to Your Question' })}
-                  </span>
-                  <span className="ending-card__answer-text">{trimmed}</span>
-                </p>
-              );
-            })()}
-
-            {/* Insight always visible as the card's key takeaway */}
+            {/* Insight visible as a secondary takeaway when the focal
+                question_answer is present, otherwise as the primary takeaway. */}
             {branch.insight && (
-              <blockquote className="insight-quote">{branch.insight}</blockquote>
+              <blockquote
+                className={`insight-quote ${hasBranchAnswer ? 'insight-quote--secondary' : ''}`}
+              >
+                {branch.insight}
+              </blockquote>
             )}
 
             {/* Collapsible detail section */}

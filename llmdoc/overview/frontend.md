@@ -32,7 +32,7 @@
 | IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、只读干预回执、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel、分支级 question answer、因果档案 / archive、导演笔记/导演复盘、campaign summary、weekly leaderboard preview、achievement toast、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel（verdict 缺失时显示 unavailable fallback）、分支级 question answer（显示在概率条上方）、因果档案 / archive（档案结论优先 story verdict）、导演笔记/导演复盘、campaign summary、weekly leaderboard preview、achievement toast、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | WorkbenchView | `frontend/src/pages/WorkbenchView.tsx` | 独立图谱工作台；支持 `graph / split / kg` 三种 view，保留 URL 里的 analysis branch，并提供返回结果页链接 |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
@@ -117,10 +117,13 @@
   - workbench 卡片当前指向因果、知识图谱和节点追问同一视图，并保留当前 analysis branch query
   - disabled 卡片保留 link 语义，但不再渲染无 `href` 的 `<a>`
   - disabled 状态会保留可见原因和 `aria-describedby`，文字对比不再靠整卡 opacity 压低
-- `ResultView` 当前在 `result_verdict` capability enabled 且 story verdict 非空时显示 `ResultVerdictPanel`：
+- `ResultView` 当前在 `result_verdict` capability enabled 时显示 `ResultVerdictPanel`：
   - panel 用 React 文本节点渲染 verdict，不走 raw HTML
   - `verdict_confidence` 只接受 `high / medium / low`，未知值显示成 `medium`
-  - 空 verdict 时整块隐藏，旧 scenario 继续显示原来的多结局 subtitle
+  - story verdict 非空时显示 verdict 和 confidence；空 verdict、旧 scenario 或生成失败时显示中性的“暂无预测结论”，并尽量保留原问题
+  - `ResultHeader` 只有在 capability enabled 且 story verdict 非空时，才把 subtitle 切到预测结论口径
+  - 结局卡的 `question_answer` 非空时会作为 focal answer 放在概率条上方；空白值不渲染 focal block
+  - 因果档案的“档案结论”优先显示 story verdict，同时保留 branch insight 作为次级信号；没有 verdict 时仍回退到 insight / fork reason / key moment
   - confidence badge 与 region heading 已有屏幕阅读器文本和 `aria-live`
 - `ShareModal` 当前接入 `ShareArtifact`：
   - PNG 导出只读取问题、主导结局、可见来源 family 和前 3 个 Agent 名
@@ -388,7 +391,7 @@
 - `WorldlineRoundtableView` 当前已补：
   - `Continue this table / Start anchored thread / Copy roundtable brief`
   - `phase insight` 级追问 / 开线程（当前会覆盖返回的全部 `phase_insights`，不再只限前 3 条）
-  - phase insight 展示和 phase prompt 预填会先压成长段 commentary 的第一句；如果标题已经包含同一句，preview 不再重复显示。
+  - phase insight 展示和 phase prompt 预填会先压成长段 commentary 的第一句；后端会去掉重复的问题前缀再压缩，如果标题已经包含同一句，preview 不再重复显示。
   - transcript `quote` 级 `Follow this quote / Start anchored thread`
   - transcript `quote` 级 `Hotseat this rep / 点名这位代表`
   - committed transcript 长段折叠 / 展开
@@ -743,6 +746,7 @@
   - 优先复用最近成功的稳定 fixture
   - replay `Copy / Save / Import` 优先走 hero/header action scoped locator，也兼容 `More actions / 更多操作` 菜单
   - live room page 复用前会先做 revalidate；readonly replay 也会校验 replay URL 契约
+- `e2e-debate-suite.mjs` 当前会保持 Debate live 阶段地图默认折叠的产品契约；脚本在检查 `.debate-stage-summary-list` 前会点击 `debate-stage-map-toggle` 展开阶段地图。
   - artifact/local readonly replay 都会额外校验 reload restore；缺字段直接失败
   - result -> roundtable 入口当前也会重试；如果还停在结果页，会落 `roundtable-entry-stall.json` 并直接失败
   - 首开、`reseat / drag-to-seat / keyboard reseat / expert witness / selection mode reopen` 当前统一按 `90s` ready budget 等待最终 `has_result=true`

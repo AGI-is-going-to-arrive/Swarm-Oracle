@@ -486,7 +486,64 @@ def sanitize_untrusted_text(text: str, *, max_chars: int = 4000) -> str:
     return normalized
 
 
-def _phase_insight(language: str, phase: EndingRoomPhase, commentary: str) -> dict[str, Any]:
+_QUESTION_PREFIX_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Chinese: `针对「...」这个问题，` (emitted by _roundtable_question_prefix)
+    re.compile(r"^针对「[^」]*」这个问题，\s*"),
+    # Chinese: `围绕「...」，` (emitted by _phase_insight itself when re-injected upstream)
+    re.compile(r"^围绕「[^」]*」[^，]*，\s*"),
+    # English: `For the question '...', ` (emitted by _roundtable_question_prefix / verdict)
+    re.compile(r"^For the question '[^']*',\s*", re.IGNORECASE),
+    # English: `Around the question '...', ` (re-injected upstream)
+    re.compile(r"^Around the question '[^']*',\s*", re.IGNORECASE),
+)
+
+
+def _strip_question_prefix(text: str, *, scenario_question: str | None = None) -> str:
+    """Strip upstream `_roundtable_question_prefix`-style prefixes from commentary.
+
+    The roundtable content builders prepend a fixed prefix carrying the user's
+    question (e.g. ``针对「{question}」这个问题，``). When ``_phase_insight``
+    then takes the first clause and compresses it to 64 chars, a long question
+    consumes the entire budget and pushes the actual hook/insight out. Stripping
+    the prefix here keeps the compaction budget available for the genuine
+    insight content; the question context is re-added downstream by
+    ``_phase_insight`` itself with its own dedup guard, so no information is
+    lost.
+    """
+    candidate = str(text or "")
+    question = sanitize_untrusted_text(str(scenario_question or ""), max_chars=180)
+    if question:
+        exact_prefixes = (
+            f"针对「{question}」这个问题，",
+            f"针对「{question}」，",
+            f"围绕「{question}」，",
+            f"For the question '{question}', ",
+            f"Around the question '{question}', ",
+        )
+        for prefix in exact_prefixes:
+            if candidate.startswith(prefix):
+                return candidate[len(prefix):].lstrip()
+        question_probe = question[:60]
+        for pattern in _QUESTION_PREFIX_PATTERNS:
+            match = pattern.match(candidate)
+            if match and question_probe in match.group(0):
+                return candidate[match.end():].lstrip()
+        return candidate
+
+    for pattern in _QUESTION_PREFIX_PATTERNS:
+        stripped = pattern.sub("", candidate, count=1)
+        if stripped != candidate:
+            return stripped.lstrip()
+    return candidate
+
+
+def _phase_insight(
+    language: str,
+    phase: EndingRoomPhase,
+    commentary: str,
+    *,
+    scenario_question: str | None = None,
+) -> dict[str, Any]:
     if language == "zh":
         labels = {
             EndingRoomPhase.OPENING: ("世界线切口", "先确认这条线怎么走到这里"),
@@ -504,7 +561,15 @@ def _phase_insight(language: str, phase: EndingRoomPhase, commentary: str) -> di
             EndingRoomPhase.VERDICT: ("Archivist summary", "Collapse the room into archive language"),  # noqa: E501
         }
     stakes, focus = labels[phase]
-    normalized = re.sub(r"\s+", " ", str(commentary or "")).strip()
+    # Strip the upstream `_roundtable_question_prefix` so the 64-char compaction
+    # budget goes to the actual insight, not a redundant echo of the question
+    # (which is re-added below with a dedup guard for callers that did not
+    # prepend the prefix themselves).
+    stripped_commentary = _strip_question_prefix(
+        str(commentary or ""),
+        scenario_question=scenario_question,
+    )
+    normalized = re.sub(r"\s+", " ", stripped_commentary).strip()
     first_clause = re.split(r"[。！？.!?]\s*", normalized, maxsplit=1)[0].strip()
     compacted = _compact_clause(first_clause or normalized, limit=64) or focus
     if language == "zh":
@@ -525,6 +590,28 @@ def _phase_insight(language: str, phase: EndingRoomPhase, commentary: str) -> di
             EndingRoomPhase.VERDICT: "The verdict lands on",
         }
         commentary_text = f"{phase_prefixes[phase]}: {compacted}"
+    question = sanitize_untrusted_text(str(scenario_question or ""), max_chars=180)
+    # Avoid double-injecting the question: upstream `_build_roundtable_*_content`
+    # already prepends `针对「{question}」这个问题，` / `For the question '{question}', `
+    # to the commentary, so re-adding a `_phase_insight` prefix would eat the 64-char
+    # compression budget with a redundant question echo. We detect by checking whether
+    # the raw question text (or a leading 60-char prefix for very long questions) is
+    # already present in the normalized commentary.
+    raw_commentary = str(commentary or "")
+    if question:
+        question_already_present = (
+            question in raw_commentary
+            or (len(question) > 60 and question[:60] in raw_commentary)
+        )
+    else:
+        question_already_present = False
+    if question and not question_already_present:
+        if language == "zh":
+            prefix = "针对" if phase == EndingRoomPhase.VERDICT else "围绕"
+            commentary_text = f"{prefix}「{question}」，{commentary_text}"
+        else:
+            prefix = "For" if phase == EndingRoomPhase.VERDICT else "Around"
+            commentary_text = f"{prefix} the question '{question}', {commentary_text}"
     return {
         "phase": phase.value,
         "stakes": stakes,
