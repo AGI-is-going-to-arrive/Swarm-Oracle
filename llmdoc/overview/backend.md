@@ -183,7 +183,7 @@
 - `ending-room / roundtable` 的主文案生成当前走 `LLM first, template fallback`：先 structured LLM，再 plain-text retry，最后才回 deterministic fallback；模板不再是主路径。
 - roundtable verdict 和 follow-up 的 deterministic fallback 当前必须是 display-ready copy：不能包含 prompt 指令、模式标签或事实清单式占位，因为 LLM 关闭或耗尽时它会直接展示给用户。
 - roundtable opening / crossfire / witness / verdict 的 deterministic anchor 会用经过清洗和截断的 `scenario_question` 加问题前缀；没有 scenario question 时仍返回可直接展示的普通文案。
-- `_phase_insight()` 当前会先剥掉 roundtable question prefix，再把长 turn commentary 压成 phase-specific 的一句主持人提炼；后端 result 不再默认把整段 transcript 或重复问题复制进 phase insight。
+- `_phase_insight()` 当前会先剥掉 roundtable question prefix，再按中文 96 字 / 英文 160 chars 的预算，把长 turn commentary 压成 phase-specific 的一句主持人提炼；后端 result 不再默认把整段 transcript 或重复问题复制进 phase insight。
 - Oracle 主文案的 LLM 路径当前先走 generation-first prompt，这一步不会把 anchor copy 当中心参考；只有生成为空或失败时，才进入带 anchor reference 的 rewrite fallback，最后才退 deterministic fallback。
 - Oracle prompt 当前包含双层角色化词汇提示：
   - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science / tech-visionary / journalist / educator / artist / entrepreneur，共 18 种）提供领域专属术语、句式风格和情绪基调。ASCII 关键词按词边界匹配，CJK 仍按子串匹配，避免 `warlord/lord`、`consultant/consul`、`federation/ration` 这类旧误匹配；关键词匹配也会避开已知过宽词，例如 `medium confidence` 不应误入 artist，`large-scale` 不应误入 entrepreneur。

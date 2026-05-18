@@ -51,6 +51,7 @@ React + TypeScript frontend for SwarmOracle.
   replay/director/prediction/scenario-meta local ids no longer assume `crypto.randomUUID()` is available; fallback order is `randomUUID` -> `getRandomValues` -> timestamp/random
 - `WorldlineRoundtableView.tsx`
   launch payload now follows the latest `selectionMode` and current UI language instead of reusing stale callback state
+  phase insight cards now start collapsed; the header keeps a short preview, and the expanded body shows the backend's longer language-aware one-line commentary
 - `e2e-ending-room-followup-suite.mjs`
   current followup flow uses API setup for hotseat / all-present / epilogue, submits evidence-card through the real UI drawer, and treats replay/import coverage as fail-closed rather than best-effort
 - `useEndingRoomWS.ts`

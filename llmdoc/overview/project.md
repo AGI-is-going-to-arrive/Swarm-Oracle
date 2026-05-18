@@ -103,7 +103,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - transcript `quote` 级追问 / 开线程
   - transcript `quote` 级 `点名这位代表 / Hotseat this rep`
 - roundtable committed transcript 当前已补长段折叠 / 展开，避免主区直接被长段挤满。
-- roundtable 的 phase insight 当前只展示压缩后的一句话；后端会先剥掉重复的问题前缀再压缩，旧 payload 里如果残留整段 transcript 复述，侧栏和预填 prompt 也会先取第一句，避免重复占屏。
+- roundtable 的 phase insight 当前默认折叠；header 只留短 preview，展开后显示后端压缩后的一句话。后端会先剥掉重复的问题前缀，再按中文 96 字 / 英文 160 chars 的预算压缩；旧 payload 里如果残留整段 transcript 复述，侧栏和预填 prompt 也会先取第一句，避免重复占屏。
 - 已新增两种交互模式：
   - `后续三回合 (epilogue)`：在结局讨论后继续 3 回合短叙事推演，不重开主 simulation。
   - `证据投牌 (evidence_card)`：把另一条世界线的摘要卡引入当前房间，由档案官解释差异。

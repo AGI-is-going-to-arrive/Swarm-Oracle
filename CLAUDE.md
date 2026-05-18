@@ -161,7 +161,7 @@ cd backend && alembic upgrade head
 ### Oracle 文案
 - 3-tier fallback：generation temp=0.82 → rewrite temp=0.78 → static anchor
 - 四种房间类型均接入 factual_guardrail + scenario_question + transcript_quotes
-- roundtable 静态锚点会把 `scenario_question` 压成短问题前缀；phase insight 会先去掉已存在的问题前缀再压成一句，避免长问题挤掉真正的转折点
+- roundtable 静态锚点会把 `scenario_question` 压成短问题前缀；phase insight 会先去掉已存在的问题前缀，再按中文 96 字 / 英文 160 chars 预算压成一句，前端卡片默认折叠，避免长问题或长转述挤掉真正的转折点
 - 13 种 voice variant（role_hint + bio_hint 子串匹配），stream 温度 0.75 + reasoning_effort medium
 
 ### 圆桌
@@ -196,6 +196,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
+| 05-19 | Roundtable phase insight 可读性收口：`_phase_insight()` 保留去重问题前缀，但把 commentary 预算从固定 64 放宽为中文 96 字 / 英文 160 chars；`WorldlineRoundtableView` 的 phase insight accordion 改为默认全部折叠，标题继续只显示短 preview，用户展开后再看更完整的一句主持人提炼。验证：`test_ending_room_service.py` 133 passed，`WorldlineRoundtableView.test.tsx` 46 passed，相关 ruff/eslint 和 frontend build 通过 |
 | 05-19 | Result Quality / Question Anchoring 二次收口：narrator Pass-1/Pass-2 都锚定原问题，fallback 叙事也带 question；verdict prompt 使用分支 `story_excerpt`，分支摘要预算扩大到 15000 字符；roundtable opening/crossfire/witness/verdict 静态锚点透传 `scenario_question`，`_phase_insight()` 去重问题前缀后再压缩。前端 ResultVerdictPanel 对 blank/null/undefined verdict 显示中性 fallback，不再提示“正在分析”；EndingCardsGrid 把 branch `question_answer` 放到概率条上方；DirectorNotebook 优先展示 story verdict，再展示 branch insight；Debate E2E 会展开默认折叠的阶段地图后再断言完整列表。验证：backend targeted `290 passed`；frontend Result/Debate targeted `25 passed`；frontend lint/build 通过；Debate mobile Chromium 390px 与 320px E2E 通过；i18n parity `2730/2730` |
 | 05-16 | Document Ingestion Upgrade：`/api/agents/from-document` 支持长 PDF 的采样粗扫 + 全文证据精提，PDF 文本上限调整为 1000000 字符，实体抽取/persona 批次/persona 单个超时拆成独立配置；persona 生成按 `0.7 -> 0.6 -> 0.5` 递减温度重试，部分失败会保留已创建 Agent 并返回 `agents_failed`。Agent Workshop document tab 延长上传超时到 8 分钟，补齐 partial success / 0-agent / timeout / no-text 本地化错误。默认 backend full gate 通过：`3070 passed, 6 skipped`；文档导入后端定向 `48 passed`，前端 DocumentUploader + locale 窄集 `19 passed`；live LLM benchmark / observation 测试改为 `RUN_REAL_LLM_TESTS=1` opt-in |
 | 05-15 | Agent 页面导航修复：`AgentWorkshopView` 新增返回 Agent 库的文字链接（`← 返回 Agent 库`），`AgentLibrary` 返回按钮从 `navigate(-1)` 改为 `<Link to="/">`，修复从 `/agents/new` 进入 `/agents` 后点返回会回到 `/agents/new` 的 bug。i18n 新增 `agents.back_to_library` key，en/zh parity `2527/2527`。FE 185 files / 2047 passed |

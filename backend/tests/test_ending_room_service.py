@@ -1761,6 +1761,42 @@ def test_phase_insight_preserves_hook_when_long_english_question_prefix_present(
     assert f"Around the question '{long_question}'" not in insight["commentary"]
 
 
+def test_phase_insight_uses_roomier_language_aware_commentary_budget():
+    """Phase insight copy is short UI copy, but 64 chars is too tight for English
+    and trims useful context even after the question prefix is stripped.
+    """
+    question = "How would a modern Beethoven reach listeners?"
+    english_detail = (
+        "digital tools rewrite composition while global platforms change "
+        "audience reach"
+    )
+    english = _phase_insight(
+        "en",
+        EndingRoomPhase.OPENING,
+        (
+            f"For the question '{question}', "
+            f"the key turning point was that {english_detail}."
+        ),
+        scenario_question=question,
+    )
+
+    assert english_detail in english["commentary"]
+
+    chinese_question = "如果贝多芬出生在现代，数字工具和社交媒体会怎样改变他的音乐？"
+    chinese_detail = "数字工具改写创作流程，同时平台分发改变听众到达路径"
+    chinese = _phase_insight(
+        "zh",
+        EndingRoomPhase.OPENING,
+        (
+            f"针对「{chinese_question}」这个问题，"
+            f"关键转折是{chinese_detail}。"
+        ),
+        scenario_question=chinese_question,
+    )
+
+    assert chinese_detail in chinese["commentary"]
+
+
 def test_phase_insight_compacts_normally_when_commentary_has_no_question_prefix():
     """Commentary that was NOT produced via `_roundtable_question_prefix` should
     flow through the original compaction path unchanged."""

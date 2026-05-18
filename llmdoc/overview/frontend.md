@@ -391,7 +391,7 @@
 - `WorldlineRoundtableView` 当前已补：
   - `Continue this table / Start anchored thread / Copy roundtable brief`
   - `phase insight` 级追问 / 开线程（当前会覆盖返回的全部 `phase_insights`，不再只限前 3 条）
-  - phase insight 展示和 phase prompt 预填会先压成长段 commentary 的第一句；后端会去掉重复的问题前缀再压缩，如果标题已经包含同一句，preview 不再重复显示。
+  - phase insight 卡片默认折叠；header 保留短 preview，展开后显示后端按中文 96 字 / 英文 160 chars 预算压缩的一句 commentary。phase prompt 预填仍使用这条 commentary；后端会去掉重复的问题前缀，如果标题已经包含同一句，preview 不再重复显示。
   - transcript `quote` 级 `Follow this quote / Start anchored thread`
   - transcript `quote` 级 `Hotseat this rep / 点名这位代表`
   - committed transcript 长段折叠 / 展开

@@ -561,17 +561,18 @@ def _phase_insight(
             EndingRoomPhase.VERDICT: ("Archivist summary", "Collapse the room into archive language"),  # noqa: E501
         }
     stakes, focus = labels[phase]
-    # Strip the upstream `_roundtable_question_prefix` so the 64-char compaction
-    # budget goes to the actual insight, not a redundant echo of the question
-    # (which is re-added below with a dedup guard for callers that did not
-    # prepend the prefix themselves).
+    # Strip the upstream `_roundtable_question_prefix` so the compaction budget
+    # goes to the actual insight, not a redundant echo of the question (which is
+    # re-added below with a dedup guard for callers that did not prepend the
+    # prefix themselves).
     stripped_commentary = _strip_question_prefix(
         str(commentary or ""),
         scenario_question=scenario_question,
     )
     normalized = re.sub(r"\s+", " ", stripped_commentary).strip()
     first_clause = re.split(r"[。！？.!?]\s*", normalized, maxsplit=1)[0].strip()
-    compacted = _compact_clause(first_clause or normalized, limit=64) or focus
+    commentary_limit = 96 if language == "zh" else 160
+    compacted = _compact_clause(first_clause or normalized, limit=commentary_limit) or focus
     if language == "zh":
         phase_prefixes = {
             EndingRoomPhase.OPENING: "这轮先钉住",

@@ -1333,6 +1333,9 @@ describe('WorldlineRoundtableView', () => {
     await screen.findByRole('button', { name: 'Keep asking' });
     const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
     expect(phaseSection).toBeTruthy();
+    await user.click(within(phaseSection as HTMLElement).getByRole('button', {
+      name: /Explain the hinge in plain language\./,
+    }));
     await within(phaseSection as HTMLElement).findByText(/Explain the hinge in plain language\./, { selector: '.worldline-roundtable-insight p' });
     await user.click(within(phaseSection as HTMLElement).getByRole('button', { name: 'New topic' }));
 
@@ -1409,6 +1412,9 @@ describe('WorldlineRoundtableView', () => {
     await screen.findByRole('button', { name: 'Keep asking' });
     const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
     expect(phaseSection).toBeTruthy();
+    await user.click(within(phaseSection as HTMLElement).getByRole('button', {
+      name: /Closing\./,
+    }));
     await within(phaseSection as HTMLElement).findByText(/Closing\./, { selector: '.worldline-roundtable-insight p' });
     await user.click(within(phaseSection as HTMLElement).getByRole('button', { name: 'New topic' }));
 
@@ -1420,6 +1426,7 @@ describe('WorldlineRoundtableView', () => {
   });
 
   it('renders phase insight commentary instead of stakes-only shorthand', async () => {
+    const user = userEvent.setup();
     const baseState = createBaseStoreState();
     storeState.snapshot = baseState.snapshot;
     storeState.result = {
@@ -1474,11 +1481,15 @@ describe('WorldlineRoundtableView', () => {
     await screen.findByRole('button', { name: 'Keep asking' });
     const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
     expect(phaseSection).toBeTruthy();
+    await user.click(within(phaseSection as HTMLElement).getByRole('button', {
+      name: /Representative A argues/,
+    }));
     expect(within(phaseSection as HTMLElement).getByText(/Representative A argues that the hinge was the missed verification loop, not the ending label\./, { selector: '.worldline-roundtable-insight p' })).toBeInTheDocument();
     expect(within(phaseSection as HTMLElement).queryByText(/Opening hinge\./, { selector: '.worldline-roundtable-insight p' })).toBeNull();
   });
 
   it('compacts persisted long phase insight transcript copies in the sidebar', async () => {
+    const user = userEvent.setup();
     const baseState = createBaseStoreState();
     storeState.snapshot = baseState.snapshot;
     storeState.result = {
@@ -1532,11 +1543,83 @@ describe('WorldlineRoundtableView', () => {
     await screen.findByText('The table settled on one archival verdict.');
     const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
     expect(phaseSection).toBeTruthy();
+    await user.click(within(phaseSection as HTMLElement).getByRole('button', {
+      name: /Representative A pins the supply road as the hinge/,
+    }));
     expect(within(phaseSection as HTMLElement).getByText(
       'Representative A pins the supply road as the hinge.',
       { selector: '.worldline-roundtable-insight p' },
     )).toBeInTheDocument();
     expect(within(phaseSection as HTMLElement).queryByText(/persisted transcript copy repeats/)).toBeNull();
+  });
+
+  it('keeps phase insight details collapsed until the reader opens a phase', async () => {
+    const user = userEvent.setup();
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot;
+    storeState.result = {
+      summary: 'The table settled on one archival verdict.',
+      archivist_note: 'Keep the table scoped.',
+      phase_insights: [
+        {
+          phase: 'opening',
+          stakes: 'Opening hinge.',
+          moderator_focus: 'Focus the frame.',
+          commentary: 'Representative A pins the supply road as the hinge.',
+        },
+      ],
+    } as EndingRoomResult;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Branch A',
+          probability: 0.62,
+          insight: 'Branch A insight',
+          story: 'Story A',
+          key_moments: ['Moment A'],
+        },
+        {
+          id: 'branch-b',
+          title: 'Branch B',
+          probability: 0.38,
+          insight: 'Branch B insight',
+          story: 'Story B',
+          key_moments: ['Moment B'],
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    renderRoundtableView();
+
+    await screen.findByText('The table settled on one archival verdict.');
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
+    expect(phaseSection).toBeTruthy();
+    const phaseTrigger = within(phaseSection as HTMLElement).getByRole('button', {
+      name: /Representative A pins the supply road as the hinge/i,
+    });
+    expect(phaseTrigger).toHaveAttribute('aria-expanded', 'false');
+
+    await user.click(phaseTrigger);
+
+    expect(phaseTrigger).toHaveAttribute('aria-expanded', 'true');
+    expect(within(phaseSection as HTMLElement).getByText(
+      'Representative A pins the supply road as the hinge.',
+      { selector: '.worldline-roundtable-insight p' },
+    )).toBeInTheDocument();
   });
 
   it('does not duplicate the archivist note when it matches the summary verbatim', async () => {

@@ -1939,9 +1939,6 @@ export default function WorldlineRoundtableView() {
                 <Accordion
                   type="single"
                   collapsible
-                  defaultValue={effectiveResult.phase_insights.length > 0
-                    ? `${effectiveResult.phase_insights[effectiveResult.phase_insights.length - 1].phase}-${effectiveResult.phase_insights.length - 1}`
-                    : undefined}
                   aria-label={t('roundtable.phase_insights_label')}
                 >
                   {effectiveResult.phase_insights.map((insight, index) => {

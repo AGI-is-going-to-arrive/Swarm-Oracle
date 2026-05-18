@@ -17648,3 +17648,55 @@ QA Inventory
 - 当前边界：
   - 本轮没有重跑 backend 全量 pytest、frontend 全量 vitest 或完整 release signoff。
   - Debate E2E 修的是阶段地图默认折叠导致的自动化假失败；没有改 stage map 的默认 UX。
+
+## 2026-05-19 Roundtable phase insight readability follow-up
+
+- 本轮目标：
+  - 回答并修正 `_phase_insight()` 固定 64 字预算过紧的问题。
+  - 保留后端更长的一句主持人提炼，同时避免前端默认展开后撑高首屏。
+  - 按当前代码和本轮真实验证结果同步相关文档。
+
+- 本轮后端收口：
+  - `backend/app/services/ending_room_service/_utils.py`
+    - `_phase_insight()` 仍先剥掉重复的 roundtable question prefix。
+    - commentary 预算从固定 64 chars 改成语言感知：中文 96 字、英文 160 chars。
+  - `backend/tests/test_ending_room_service.py`
+    - 新增语言感知预算回归，锁住英文不再被 64 chars 截成半句。
+
+- 本轮前端收口：
+  - `frontend/src/pages/WorldlineRoundtableView.tsx`
+    - phase insight accordion 不再默认展开最后一条；用户点击后才展开正文。
+    - header 仍保留短 preview，展开后显示后端更宽预算的一句 commentary。
+  - `frontend/src/pages/WorldlineRoundtableView.test.tsx`
+    - 新增默认折叠回归。
+    - 旧的 phase insight 内容断言改为先展开，再检查正文和操作按钮。
+
+- 本轮文档同步：
+  - `README.md`
+  - `CLAUDE.md`
+  - `backend/README.md`
+  - `backend/CLAUDE.md`
+  - `frontend/README.md`
+  - `frontend/CLAUDE.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/overview/frontend.md`
+  - `progress.md`
+
+- 本轮实际验证：
+  - `cd backend && .venv/bin/python -m pytest tests/test_ending_room_service.py -q`
+    - `133 passed`
+  - `cd backend && .venv/bin/ruff check app/services/ending_room_service/_utils.py tests/test_ending_room_service.py`
+    - 通过
+  - `cd frontend && NODE_OPTIONS=--max-old-space-size=8192 npm test -- --run src/pages/WorldlineRoundtableView.test.tsx --reporter=dot --maxWorkers=1`
+    - `46 passed`
+  - `cd frontend && npm exec -- eslint src/pages/WorldlineRoundtableView.tsx src/pages/WorldlineRoundtableView.test.tsx`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过，`perf:budgets:check` status 为 ok，violations 为 `[]`
+  - `git diff --check`
+    - 通过
+
+- 当前边界：
+  - 本轮没有重跑 backend 全量 pytest、frontend 全量 vitest 或完整 release signoff。
+  - 本轮没有新增 API、配置项、DB schema 或 i18n key。
