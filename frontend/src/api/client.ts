@@ -9,7 +9,7 @@ import type {
   PredictionInfo, LeaderboardEntry,
   DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
   AppendEndingRoomUserTurnRequest, CreateEndingRoomRequest, CreateEndingRoomThreadRequest, EndingRoomResultPayload, EndingRoomSnapshot, EndingRoomThreadSnapshot,
-  CampaignContext, CampaignBadge, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
+  CampaignContext, CampaignBadge, CampaignBadgeDefinition, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
   ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
   WebSearchFamily,
   ReplayTraceResponse,
@@ -1133,6 +1133,20 @@ export async function getCampaignBadges(
   options?: RequestOptions,
 ): Promise<CampaignBadge[]> {
   return safeGet(`/campaign/profile/${encodeURIComponent(userId)}/badges`, options);
+}
+
+/**
+ * GET /api/campaign/badge-definitions — static badge registry.
+ *
+ * Returns the full catalog of badges (name_key + description_key + category)
+ * used by `BadgeCabinet` to render locked + unlocked tiles side by side.
+ * This endpoint is not user-scoped; the campaign router may still require a
+ * session token when SESSION_SECRET is enabled.
+ */
+export async function getCampaignBadgeDefinitions(
+  options?: RequestOptions,
+): Promise<CampaignBadgeDefinition[]> {
+  return safeGet(`/campaign/badge-definitions`, options);
 }
 
 export async function getCampaignScenarioSummary(

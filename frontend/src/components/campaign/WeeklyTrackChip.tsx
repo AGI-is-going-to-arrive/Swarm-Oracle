@@ -19,9 +19,15 @@ export const WeeklyTrackChip: React.FC<WeeklyTrackChipProps> = ({
   const title = isZh ? track.title_zh : track.title_en;
   const subtitle = isZh ? track.subtitle_zh : track.subtitle_en;
 
+  const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onClick();
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
+      event.stopPropagation();
       onClick();
     }
   };
@@ -36,48 +42,90 @@ export const WeeklyTrackChip: React.FC<WeeklyTrackChipProps> = ({
           min-height: 44px;
           min-width: 44px;
           padding: 0.5rem 0.875rem;
-          border-radius: 999px;
-          border: 1px solid rgba(148, 122, 96, 0.35);
-          background: rgba(255, 250, 240, 0.7);
-          color: #4b3a26;
+          border-radius: 12px;
+          border: 1px solid #e1ddd7;
+          background: #fcfcfa;
+          color: #181611;
+          font-family: 'Instrument Sans', 'Noto Sans SC', sans-serif;
           font-size: 0.85rem;
           font-weight: 500;
           cursor: pointer;
-          line-height: 1.2;
+          line-height: 1.3;
           transition: background-color 0.15s ease, border-color 0.15s ease,
             box-shadow 0.15s ease, transform 0.15s ease;
         }
+        @supports (background: oklch(99% 0.002 80)) {
+          .weekly-track-chip {
+            border-color: oklch(90% 0.01 80);
+            background: oklch(99% 0.002 80);
+            color: oklch(20% 0.01 80);
+          }
+        }
         .weekly-track-chip:hover {
-          background: rgba(255, 244, 220, 0.95);
-          border-color: rgba(148, 122, 96, 0.6);
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+          transform: translateY(-1px);
+        }
+        @supports (box-shadow: 0 4px 20px oklch(0% 0 0 / 0.03)) {
+          .weekly-track-chip:hover {
+            box-shadow: 0 4px 20px oklch(0% 0 0 / 0.03);
+          }
         }
         .weekly-track-chip:focus-visible {
-          outline: 2px solid #c97f2c;
+          outline: 2px solid #c61583;
           outline-offset: 2px;
         }
+        @supports (outline-color: oklch(55% 0.22 350)) {
+          .weekly-track-chip:focus-visible {
+            outline-color: oklch(55% 0.22 350);
+          }
+        }
         .weekly-track-chip--active {
-          background: linear-gradient(180deg, #fde68a 0%, #f59e0b 100%);
-          border-color: #c97f2c;
-          color: #3b2415;
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+          background: rgba(184, 134, 11, 0.06);
+          border-color: rgba(184, 134, 11, 0.2);
+          border-left: 3px solid #b8860b;
+          padding-left: calc(0.875rem - 2px);
+          color: #181611;
+        }
+        @supports (background: oklch(72% 0.14 75 / 0.06)) {
+          .weekly-track-chip--active {
+            background: oklch(72% 0.14 75 / 0.06);
+            border-color: oklch(72% 0.14 75 / 0.2);
+            border-left-color: oklch(72% 0.14 75);
+            color: oklch(20% 0.01 80);
+          }
         }
         .weekly-track-chip__dot {
-          width: 0.5rem;
-          height: 0.5rem;
+          width: 0.375rem;
+          height: 0.375rem;
           border-radius: 999px;
-          background: rgba(148, 122, 96, 0.45);
+          background: #928f88;
           flex-shrink: 0;
         }
+        @supports (background: oklch(65% 0.01 80)) {
+          .weekly-track-chip__dot {
+            background: oklch(65% 0.01 80);
+          }
+        }
         .weekly-track-chip--active .weekly-track-chip__dot {
-          background: #c97f2c;
+          background: #b8860b;
+        }
+        @supports (background: oklch(72% 0.14 75)) {
+          .weekly-track-chip--active .weekly-track-chip__dot {
+            background: oklch(72% 0.14 75);
+          }
         }
         .weekly-track-chip__active-label {
+          font-family: 'Instrument Sans', 'Noto Sans SC', sans-serif;
           font-size: 0.7rem;
-          padding: 0.1rem 0.45rem;
-          border-radius: 999px;
-          background: rgba(255, 255, 255, 0.55);
-          color: #4b3a26;
-          font-weight: 600;
+          font-weight: 500;
+          letter-spacing: 0.02em;
+          color: #8b6914;
+          text-transform: uppercase;
+        }
+        @supports (color: oklch(42% 0.08 75)) {
+          .weekly-track-chip__active-label {
+            color: oklch(42% 0.08 75);
+          }
         }
         @media (forced-colors: active) {
           .weekly-track-chip {
@@ -100,12 +148,15 @@ export const WeeklyTrackChip: React.FC<WeeklyTrackChipProps> = ({
           .weekly-track-chip {
             transition: none;
           }
+          .weekly-track-chip:hover {
+            transform: none;
+          }
         }
       `}</style>
       <button
         type="button"
         className={`weekly-track-chip ${active ? 'weekly-track-chip--active' : ''}`}
-        onClick={onClick}
+        onClick={handleClick}
         onKeyDown={handleKeyDown}
         aria-pressed={active}
         aria-describedby={subtitleId}

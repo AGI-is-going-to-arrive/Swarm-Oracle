@@ -167,6 +167,14 @@ export interface CampaignBadge {
   source_scenario_id?: string | null;
 }
 
+export interface CampaignBadgeDefinition {
+  id: string;
+  name_key: string;
+  description_key: string;
+  category: string;
+  one_time?: boolean;
+}
+
 export interface CampaignScoreBreakdownItem {
   id: string;
   label_key: string;

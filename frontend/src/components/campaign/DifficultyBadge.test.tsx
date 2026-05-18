@@ -34,4 +34,11 @@ describe('DifficultyBadge', () => {
     expect(badge).toBeInTheDocument();
     expect(badge).toHaveClass('diff-expert');
   });
+
+  it('uses the neutral visual style for unknown difficulty values', () => {
+    render(<DifficultyBadge difficulty="nightmare mode" />);
+    const badge = screen.getByText('nightmare mode');
+    expect(badge).toHaveClass('diff-normal');
+    expect(badge).not.toHaveClass('diff-nightmare');
+  });
 });

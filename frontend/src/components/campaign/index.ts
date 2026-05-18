@@ -8,3 +8,5 @@ export { BadgeCabinet } from './BadgeCabinet';
 export type { BadgeDefinition } from './BadgeCabinet';
 export { LevelProgress } from './LevelProgress';
 export { AchievementToast } from './AchievementToast';
+export { CampaignProgressSheet } from './CampaignProgressSheet';
+export type { CampaignProgressSheetProps } from './CampaignProgressSheet';

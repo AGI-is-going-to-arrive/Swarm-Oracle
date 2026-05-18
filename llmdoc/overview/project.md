@@ -16,7 +16,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 ### 主模式
 
 - 首页创建 scenario，支持 5 步进度提示、quick starts、教育模板、agent/rounds、玩法档位、BYOK，以及 opt-in 的搜索增强推演；高级设置和 BYOK 现在分成两个可折叠区，首屏优先露出问题输入和快速开始。
-- Campaign 入口当前在首页内提供每日挑战和每周 track：前端从 rotation 读取今日挑战、difficulty、active weekly track 和刷新倒计时；创建 scenario 时会带上 campaign context，后端再校验 catalog、服务端 UTC 日期和 ISO week。
+- Campaign 入口当前在首页内提供每日挑战、每周 track 和成长卡：前端从 rotation 读取今日挑战、difficulty、active weekly track 和刷新倒计时；成长卡可打开进度 sheet，查看徽章、profile mastery 和本周摘要；创建 scenario 时会带上 campaign context，后端再校验 catalog、服务端 UTC 日期和 ISO week。
 - 首次进入首页时会显示 onboarding carousel；用户完成或跳过后状态保存在本地，后续不再重复弹出。
 - 首页启动前会用 AlertDialog 做 launch confirmation；底部安全提示跟随中英语言切换，不写入用户 key 或 provider 细节。
 - 搜索增强当前在首页按低配置路径呈现：
@@ -180,17 +180,21 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - daily challenge catalog：52 条
   - weekly track registry：7 条
   - badge registry：15 条
+  - gameplay profile 展示名以共享 contract 的中英标签为准；daily catalog、首页轻量 summary 和后端玩法 prompt 需要保持同一组 label。
   - scenario 创建会持久化 `campaign_context`，并由后端校验 daily/weekly catalog、服务端 UTC 日期和 ISO week；streak 与 weekly aggregate 不信任前端本地日期。
   - campaign finalize 优先从持久化 `director_state_json / gameplay_state_json` 派生 `score_breakdown`、daily/streak、weekly bonus 和 badge unlock；旧 scenario 缺少 `campaign_context` 时仍保留 legacy fallback。
+  - 首页成长 sheet 读取静态 badge definitions、当前用户 badges、mastery 和 weekly summary；旧本地数据里的 `daily_challenge / archive_record / bet_winner` 徽章 id 会映射到当前 registry id 展示。
 - 最近完整本地验证：
   - backend `ruff check .`：通过
   - backend `python -m pytest tests/ -x -q --tb=short`：`3180 passed, 6 skipped`
+  - backend Campaign/profile label 窄集：`154 passed`，目标文件 `ruff check` 通过
   - frontend `npx tsc --noEmit`：通过
-  - frontend `npx eslint src/game/`：通过
+  - frontend `npm run lint`：通过
   - frontend `npm run build`：通过
-  - frontend full vitest：`198 files / 2160 tests passed`
-  - frontend i18n key parity spot-check：`en keys: 1 zh keys: 1 match: true`
+  - frontend full vitest：`199 files / 2169 tests passed`
+  - frontend i18n key parity spot-check：`zh: 2744`、`en: 2744`、parity OK
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0
+  - CampaignProgressSheet browser spot-check：desktop 与 mobile forced-colors / reduced-motion 下可打开、可滚动，console/page error 为 0
   - 浏览器 E2E：Chromium mobile / gameplay / intervention / prediction、Firefox gameplay / intervention、WebKit gameplay / intervention 均通过；最终 Chromium gameplay mini 复验通过
   - `git diff --check`：通过
 - 剩余架构级限制见 `overview/backlog.md`。

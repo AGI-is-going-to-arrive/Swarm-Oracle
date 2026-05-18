@@ -32,4 +32,17 @@ describe('LevelProgress', () => {
     const bar = screen.getByRole('progressbar');
     expect(bar.getAttribute('aria-valuemin')).toBe('0');
   });
+
+  it('keeps progressbar aria values valid when current score exceeds the next level', () => {
+    const { container } = render(
+      <LevelProgress level={50} currentScore={100000} nextLevelScore={90000} />,
+    );
+    const bar = screen.getByRole('progressbar');
+    const fill = container.querySelector('.level-progress__fill') as HTMLElement;
+
+    expect(Number(bar.getAttribute('aria-valuenow'))).toBeLessThanOrEqual(
+      Number(bar.getAttribute('aria-valuemax')),
+    );
+    expect(fill.style.width).toBe('100%');
+  });
 });

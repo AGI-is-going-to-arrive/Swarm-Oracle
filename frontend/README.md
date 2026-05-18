@@ -23,7 +23,7 @@ React + TypeScript frontend for SwarmOracle.
 
 | Route | Component | Description |
 |-------|-----------|-------------|
-| `/` | `InputView` | Scenario input, progress indicator, quick starts, daily challenge, weekly track, difficulty, streak/refresh countdown, onboarding, launch confirmation, source families, search-depth selector, provider policy, advanced/BYOK accordions, preflight-aware submit loading, custom Agent attach panel, feature-gated snapshot import |
+| `/` | `InputView` | Scenario input, progress indicator, quick starts, daily challenge, weekly track, difficulty, streak/refresh countdown, progress sheet, onboarding, launch confirmation, source families, search-depth selector, provider policy, advanced/BYOK accordions, preflight-aware submit loading, custom Agent attach panel, feature-gated snapshot import |
 | `/admin/setup` | `SetupWizardView` | Three-step provider setup, API/base URL entry, and connection test |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, read-only intervention receipts, capture |
 | `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Result Quality verdict panel when available, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, weekly leaderboard preview, achievement toast, share/export, prediction card, feature-gated snapshot export, replay import, rewrite-one-line counterfactuals, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
@@ -80,7 +80,7 @@ React + TypeScript frontend for SwarmOracle.
 - `GameplayCardsModal.tsx`
   profile-driven recommended cards stay first, branch / agent / source selects have explicit label/id pairs, and desktop-only directive autofocus avoids opening mobile keyboards
 - `components/campaign/*`
-  campaign UI components for streak, difficulty, refresh countdown, weekly track chip/dialog/leaderboard, badge cabinet, level progress, and achievement toast
+  campaign UI components for streak, difficulty, refresh countdown, weekly track chip/dialog/leaderboard, progress sheet, badge cabinet, level progress, and achievement toast
 - `dailyChallenge.ts`
   challenge date key and ISO week helpers for the campaign launch UI; server finalize remains the authority for dates, streaks, weekly bonus, and unlocks
 - `PredictionModal.tsx`
@@ -215,8 +215,9 @@ npm run build:spike:phaser-custom
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
   - `npm run lint`: pass
   - `npm run build`: pass
-  - full vitest: `198 files / 2157 tests passed`
-  - i18n vitest: `2 files / 21 tests passed`
+  - full vitest: `199 files / 2169 tests passed`
+  - i18n key parity spot-check: `zh: 2744`, `en: 2744`, parity OK
+  - CampaignProgressSheet browser spot-check: desktop and mobile forced-colors / reduced-motion open and scroll without console/page errors
   - campaign/gameplay browser E2E: Chromium mobile / gameplay / intervention / prediction, Firefox gameplay / intervention, and WebKit gameplay / intervention passed
 - Older Sprint 0-4 rows below are historical artifacts, not the current pass-count source.
 - Latest Sprint 0-2 browser matrix:

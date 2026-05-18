@@ -677,7 +677,7 @@ async def get_badges(
     response_model=list[CampaignBadgeDefinitionResponse],
 )
 async def get_badge_definitions() -> list[CampaignBadgeDefinitionResponse]:
-    """Phase 3: return the static badge registry (no session required)."""
+    """Phase 3: return the static badge registry, without user progress."""
     from app.services.badge_registry import get_all_badge_definitions
 
     return [

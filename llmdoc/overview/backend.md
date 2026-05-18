@@ -24,7 +24,7 @@
 | Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 Agent 备份导入导出；identity preflight 解析超时按 504 fail-closed |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary；bucket 会回显 `enforced / scope / window_seconds` |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板；正式玩法卡注入会在后端校验 contract、冷却、点数和 pending metadata，玩法卡业务校验失败返回结构化 `422` |
-| Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge definitions、user unlocks、daily rotation、weekly track summary、leaderboard preview、score breakdown、只读 intervention effect receipts |
+| Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badges、badge definitions、user unlocks、daily rotation、weekly track summary、leaderboard preview、score breakdown、只读 intervention effect receipts |
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
 | Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard 与 segment filters |
 | Journal | `backend/app/api/journal.py` | 个人预测日志、resolve 与 calibration 数据 |
@@ -451,6 +451,9 @@
 - Campaign Gameplay Enhancement 最终后端复验：
   - `python -m pytest tests/ -x -q --tb=short`：`3180 passed, 6 skipped`
   - `ruff check .`：通过
+- Campaign/profile label 本轮窄集复验：
+  - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`：`154 passed`
+  - `ruff check app/services/daily_challenges.py tests/test_gameplay_contract.py tests/test_interventions.py`：通过
 - Classic 分支标题提示本轮已补定向验证：
   - `pytest tests/test_audit_fixes.py::TestForkPromptTemplateConsistency -q`：`31 passed`
   - `pytest tests/test_simulator.py::TestDetectFork -q`：`4 passed`

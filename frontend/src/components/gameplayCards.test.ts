@@ -368,7 +368,7 @@ describe('gameplayCards helpers', () => {
     expect(getRecommendedGameplayCards('survival')).toContain('evacuation_order');
     expect(getRecommendedGameplayCards('faith')[0]).toBe('forbidden_ritual');
     expect(getRecommendedGameplayCards('mythic')[0]).toBe('forbidden_ritual');
-    expect(getGameplayProfileLabel('war', true)).toBe('战争抉择');
+    expect(getGameplayProfileLabel('war', true)).toBe('战争冲突');
     expect(getGameplayProfileFrameSrc('empire')).toContain('gameplay_card_frame_empire');
     expect(getGameplayProfileFrameSrc('trade')).toContain('gameplay_card_frame_trade');
     expect(getGameplayProfileFrameSrc('law')).toContain('gameplay_card_frame_law');
@@ -445,7 +445,7 @@ describe('gameplayCards helpers', () => {
   it('falls back to generic for unknown profile ids', () => {
     const unknownProfileId = 'unknown_profile' as GameplayProfileId;
 
-    expect(getGameplayProfileLabel(unknownProfileId, false)).toBe('General Tension');
+    expect(getGameplayProfileLabel(unknownProfileId, false)).toBe('General Topics');
     expect(getGameplayProfileSignatureHooks(unknownProfileId, true)).toEqual(
       getGameplayProfileSignatureHooks('generic', true),
     );
@@ -458,7 +458,7 @@ describe('gameplayCards helpers', () => {
     expect(getScenarioSystemTrackState(unknownProfileId, [], null, false).riskLabel).toBe('Tension Clock');
     expect(resolveGameplayProfileId('unknown_profile')).toBe('generic');
     expect(resolveGameplayProfileId('')).toBe('generic');
-    expect(getGameplayProfileSummaryLabel('unknown_profile', false)).toBe('General Tension');
+    expect(getGameplayProfileSummaryLabel('unknown_profile', false)).toBe('General Topics');
     expect(getGameplayProfileSummaryHooks('  ', true)).toEqual(
       getGameplayProfileSummaryHooks('generic', true),
     );
@@ -493,6 +493,16 @@ describe('gameplayCards helpers', () => {
     for (const profile of GAMEPLAY_CONTRACT.profiles) {
       expect(new Set(Object.keys(profile.default_directives))).toEqual(contractCardIds);
       expect(profile.recommended_cards.every((cardId) => contractCardIds.has(cardId))).toBe(true);
+    }
+  });
+
+  it('keeps homepage profile labels and hooks synchronized with the shared contract', () => {
+    for (const profile of GAMEPLAY_CONTRACT.profiles) {
+      const profileId = profile.id as GameplayProfileId;
+      expect(getGameplayProfileSummaryLabel(profileId, true)).toBe(profile.labels.zh);
+      expect(getGameplayProfileSummaryLabel(profileId, false)).toBe(profile.labels.en);
+      expect(getGameplayProfileSummaryHooks(profileId, true)).toEqual(profile.signature_hooks.zh);
+      expect(getGameplayProfileSummaryHooks(profileId, false)).toEqual(profile.signature_hooks.en);
     }
   });
 

@@ -88,7 +88,7 @@
 | Gameplay Cards | 已落地，14 张卡与 18 个玩法 profile 走共享 gameplay contract；后端校验可用性、冷却与点数，重建正式干预 prompt，并把分支、Agent 名和自定义指令按 untrusted data 包裹 |
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响；题材回响放在高级选项里 |
 | Result Quality / Question Anchoring | 已落地，受 `FEATURE_RESULT_VERDICT` 和 `/api/capabilities.result_verdict` 控制；结果页在有 verdict 时先给出直接回答原问题的预测结论、置信度，并在结局卡有数据时显示分支级一句话回答 |
-| Director Campaign | 已落地，含 52 条 daily challenge catalog、streak、7 条 weekly track + leaderboard、15 个 registry badge、非线性 mastery level、后端权威 `score_breakdown` 与结果页导演复盘 / 因果档案 |
+| Director Campaign | 已落地，含 52 条 daily challenge catalog、streak、7 条 weekly track + leaderboard、15 个 registry badge、非线性 mastery level、首页成长 sheet、后端权威 `score_breakdown` 与结果页导演复盘 / 因果档案 |
 | Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight`；设置 `ADMIN_TOKEN` 后 admin API 要求 `X-Admin-Token` |
 | Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；identity continuity preflight 超时会按 504 返回，后端不会把它伪装成“无匹配”；首页启动流当前会提示错误但继续按无 continuity override 启动；自建 Agent 不开放 `CORE` 层级 |
 | Agent Backups | 已落地，受 `FEATURE_PERSONA_EXPORT` gate；支持单个 / 批量导出 `schema_version=1` Agent 备份 JSON；从备份创建会为当前用户创建新的 custom Agent，不覆盖已有 Agent，并把 decision bias 归一化到安全的 5 维数值 |
@@ -189,11 +189,12 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-当前验证口径（最近更新：2026-05-18 Phaser Theater loading hardening）：
+当前验证口径（最近更新：2026-05-19 Campaign progress sheet / profile label hardening）：
 
-- backend（本轮未改）：`ruff check .` 通过；`python -m pytest tests/ -x -q --tb=short` 为 `3180 passed, 6 skipped`。
-- frontend：`npx tsc --noEmit`、`npx eslint src/game/`、`npx vitest run`、`npm run build` 通过；full vitest 为 `198 files / 2160 tests passed`；i18n key parity spot-check 为 `en keys: 1 zh keys: 1 match: true`。
+- backend：仓库级基线仍是 `ruff check .` 通过、`python -m pytest tests/ -x -q --tb=short` 为 `3180 passed, 6 skipped`；本轮 Campaign/profile label 窄集为 `154 passed`，目标文件 `ruff check` 通过。
+- frontend：`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build`、`npm test` 通过；full vitest 为 `199 files / 2169 tests passed`；i18n key parity spot-check 为 `zh: 2744`、`en: 2744`、parity OK。
 - Phaser browser spot-check：本地 `/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 有 1 个 canvas，当前 scene 为 `WorldScene`，4 个 Agent 可见，console error 为 0。
+- CampaignProgressSheet browser spot-check：desktop 与 mobile forced-colors / reduced-motion 下可打开、可滚动，console/page error 为 0。
 - 浏览器 E2E：Chromium mobile / gameplay / intervention / prediction、Firefox gameplay / intervention、WebKit gameplay / intervention 均通过；最终 Chromium gameplay mini 复验通过。
 - `git diff --check` 通过。
 

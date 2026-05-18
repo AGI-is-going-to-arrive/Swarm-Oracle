@@ -12,12 +12,15 @@ interface BadgeCabinetProps {
   definitions: BadgeDefinition[];
   unlockedIds: string[];
   loading?: boolean;
+  /** When true, suppress the internal "Badge Collection" h3 title (parent already renders a section heading). */
+  hideTitle?: boolean;
 }
 
 export const BadgeCabinet: React.FC<BadgeCabinetProps> = ({
   definitions,
   unlockedIds,
   loading = false,
+  hideTitle = false,
 }) => {
   const { t } = useTranslation();
   const idPrefix = React.useId();
@@ -38,7 +41,7 @@ export const BadgeCabinet: React.FC<BadgeCabinetProps> = ({
         .badge-cabinet__title {
           font-size: 1rem;
           font-weight: 600;
-          color: #3b2415;
+          color: #181611;
           margin: 0;
         }
         .badge-cabinet__grid {
@@ -53,33 +56,40 @@ export const BadgeCabinet: React.FC<BadgeCabinetProps> = ({
           gap: 0.4rem;
           padding: 0.85rem 0.65rem;
           border-radius: 0.75rem;
-          border: 1px solid rgba(148, 122, 96, 0.3);
-          background: rgba(255, 250, 240, 0.6);
+          border: 1px solid #e1ddd7;
+          background: #fcfcfa;
           text-align: center;
           transition: background-color 0.15s ease, border-color 0.15s ease;
         }
         .badge-cabinet__card--locked {
-          opacity: 0.4;
+          opacity: 1;
+          color: #4a4741;
         }
         .badge-cabinet__card--unlocked {
           opacity: 1;
-          border-color: rgba(201, 127, 44, 0.6);
-          background: linear-gradient(180deg, rgba(253, 230, 138, 0.5) 0%, rgba(255, 250, 240, 0.7) 100%);
+          border-color: rgba(46, 139, 122, 0.5);
+          background: linear-gradient(180deg, rgba(46, 139, 122, 0.12) 0%, rgba(252, 252, 250, 0.9) 100%);
         }
         .badge-cabinet__icon {
           font-size: 1.5rem;
           line-height: 1;
         }
+        .badge-cabinet__icon--unlocked {
+          color: #2e8b7a;
+        }
         .badge-cabinet__name {
           font-size: 0.85rem;
           font-weight: 600;
-          color: #3b2415;
+          color: #181611;
           line-height: 1.25;
         }
         .badge-cabinet__desc {
           font-size: 0.75rem;
-          color: #6b513a;
+          color: #4f4b45;
           line-height: 1.3;
+        }
+        .badge-cabinet__card--locked .badge-cabinet__icon {
+          color: #6f6a62;
         }
         .badge-cabinet__skeleton {
           height: 6rem;
@@ -123,7 +133,7 @@ export const BadgeCabinet: React.FC<BadgeCabinetProps> = ({
         }
       `}</style>
       <section className="badge-cabinet" aria-label={cabinetTitle}>
-        <h3 className="badge-cabinet__title">{cabinetTitle}</h3>
+        {!hideTitle && <h3 className="badge-cabinet__title">{cabinetTitle}</h3>}
         {loading ? (
           <div className="badge-cabinet__grid" role="status" aria-busy="true">
             {Array.from({ length: 6 }).map((_, idx) => (
@@ -151,7 +161,12 @@ export const BadgeCabinet: React.FC<BadgeCabinetProps> = ({
                   aria-labelledby={`${nameId} ${stateId}`}
                   aria-describedby={description ? descId : undefined}
                 >
-                  <span className="badge-cabinet__icon" aria-hidden="true">
+                  <span
+                    className={`badge-cabinet__icon${
+                      unlocked ? ' badge-cabinet__icon--unlocked' : ''
+                    }`}
+                    aria-hidden="true"
+                  >
                     {unlocked ? '✓' : '🔒'}
                   </span>
                   <span id={nameId} className="badge-cabinet__name">{name}</span>

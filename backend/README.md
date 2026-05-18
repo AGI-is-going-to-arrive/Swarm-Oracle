@@ -36,7 +36,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | Admin | `app/api/admin.py` | Preflight diagnostics and `/admin/setup` LLM connection test endpoints |
 | Agents | `app/api/agents.py` | custom Agent library/workshop, favorites, identity inspector, document import, Agent backup export/create-from-backup (`persona_export`) |
 | Quota | `app/api/quota.py` | Conversation and replay quota summary |
-| Campaign | `app/api/campaign.py` | finalize, profile, mastery, badge definitions, user unlocks, daily rotation, weekly summary, `director-state`, `gameplay-state`, scenario summary, read-only intervention effects |
+| Campaign | `app/api/campaign.py` | finalize, profile, mastery, badges, badge definitions, user unlocks, daily rotation, weekly summary, `director-state`, `gameplay-state`, scenario summary, read-only intervention effects |
 | Conversation | `app/api/conversation.py` | Node conversation thread/start/get/turn/abort with SSE assistant streaming |
 | Debate | `app/api/debate.py` | Debate live/result/import-replay/predict + Debate WebSocket |
 | Ending Room | `app/api/ending_rooms.py` | Oracle Chambers / roundtable room、thread、user-turn、result 与 ending-room WebSocket |
@@ -82,6 +82,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | `GET` | `/api/campaign/scenario/{id}/summary` | Scenario campaign summary |
 | `GET` | `/api/campaign/profile/{user_id}/weekly-summary` | Weekly campaign summary |
 | `GET` | `/api/campaign/challenges/rotation` | Daily challenge and active weekly track rotation |
+| `GET` | `/api/campaign/profile/{user_id}/badges` | Earned badges for the current user scope |
 | `GET` | `/api/campaign/badge-definitions` | Static badge registry definitions |
 | `GET` | `/api/campaign/profile/{user_id}/unlocks` | Badge unlocks for the current user scope |
 | `POST` | `/api/debate` | Create debate |
@@ -105,6 +106,9 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - Latest local backend verification for Campaign Gameplay Enhancement:
   - `python -m pytest tests/ -x -q --tb=short`: `3180 passed, 6 skipped`
   - `ruff check .`: pass
+- Latest targeted Campaign/profile label verification:
+  - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`: `154 passed`
+  - `ruff check app/services/daily_challenges.py tests/test_gameplay_contract.py tests/test_interventions.py`: pass
 - Latest local backend verification for the Document Ingestion / backend gate:
   - `python -m pytest tests/test_document_ingestion.py -q`: `48 passed`
   - `python -m pytest -x -q --timeout=60`: `3070 passed, 6 skipped`

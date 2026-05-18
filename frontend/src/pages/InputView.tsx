@@ -70,7 +70,7 @@ import {
 } from '../components/ui/alert-dialog';
 import { predictTextareaHeight } from '../lib/textLayout/inputPredict';
 import { validateByok } from '../lib/llmProviderPolicy';
-import { StreakIndicator, DifficultyBadge, RefreshCountdown, WeeklyTrackChip, WeeklyTrackDialog } from '../components/campaign';
+import { StreakIndicator, DifficultyBadge, RefreshCountdown, WeeklyTrackChip, WeeklyTrackDialog, CampaignProgressSheet } from '../components/campaign';
 import './InputView.css';
 
 function estimateSimulationMinutes(rounds: number, numAgents: number) {
@@ -348,6 +348,7 @@ export function InputView() {
   const reset = useSimulationStore((s) => s.reset);
   const [confirmDialogData, setConfirmDialogData] = useState<{ question: string } | null>(null);
   const [weeklyTrackDialogOpen, setWeeklyTrackDialogOpen] = useState(false);
+  const [campaignSheetOpen, setCampaignSheetOpen] = useState(false);
   const isComposingRef = useRef(false);
   const launchInFlightRef = useRef(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -441,9 +442,6 @@ export function InputView() {
     ),
     [challengeProfileId, isZh],
   );
-  const nextUnlockLabel = dailyMastery?.score_to_next_level != null
-    ? t('home.campaign_next_unlock', { count: dailyMastery.score_to_next_level })
-    : t('home.campaign_mastered');
   const sharedChallengeProfileLabel = sharedChallengeBanner?.profileId
     ? getGameplayProfileLabel(sharedChallengeBanner.profileId, isZh)
     : null;
@@ -2143,26 +2141,11 @@ export function InputView() {
                   <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
                     {challengeProfileLabel}
                   </span>
-                  {dailyMastery && (
-                    <span className="daily-challenge-card__pill">
-                      {t('home.campaign_mastery_level', { level: dailyMastery.level })}
-                    </span>
-                  )}
-                  {challengeHooks.map((hook) => (
+                  {challengeHooks.slice(0, 2).map((hook) => (
                     <span key={hook} className="daily-challenge-card__pill">
                       {hook}
                     </span>
                   ))}
-                </div>
-                <div className="daily-challenge-card__campaign">
-                  <span className="daily-challenge-card__campaign-label">
-                    {t('home.campaign_progress')}
-                  </span>
-                  <strong>
-                    {dailyMastery
-                      ? `${t('home.campaign_mastery_level', { level: dailyMastery.level })} · ${nextUnlockLabel}`
-                      : t('home.campaign_first_run')}
-                  </strong>
                 </div>
                 {todayChallengeProgress && (
                   <div className="daily-challenge-card__status">
@@ -2252,10 +2235,7 @@ export function InputView() {
                   {campaignWeeklySummary && (
                     <span className="daily-challenge-card__pill">
                       {t('home.weekly_challenge_completed_runs', { runs: campaignWeeklySummary.total_runs })}
-                    </span>
-                  )}
-                  {campaignWeeklySummary && (
-                    <span className="daily-challenge-card__pill">
+                      {' · '}
                       {t('home.weekly_challenge_score', { score: campaignWeeklySummary.campaign_score_delta })}
                     </span>
                   )}
@@ -2269,7 +2249,28 @@ export function InputView() {
             </section>
             )}
 
-            <section className="weekly-challenge-card weekly-challenge-card--growth">
+            <section
+              className={`weekly-challenge-card weekly-challenge-card--growth${
+                hasDirectorGrowth ? ' iv-growth-button' : ''
+              }`}
+              {...(hasDirectorGrowth
+                ? {
+                    role: 'button',
+                    tabIndex: 0,
+                    onClick: () => setCampaignSheetOpen(true),
+                    onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setCampaignSheetOpen(true);
+                      }
+                    },
+                    'aria-label': t('campaign_sheet.open_aria', {
+                      defaultValue: 'Open progress details',
+                    }),
+                    'aria-describedby': 'director-growth-summary',
+                  }
+                : {})}
+            >
               <div className="weekly-challenge-card__side">
                 <img
                   className="weekly-challenge-card__badge-art"
@@ -2279,6 +2280,15 @@ export function InputView() {
                 />
               </div>
               <div className="weekly-challenge-card__copy">
+                {hasDirectorGrowth && (
+                  <span id="director-growth-summary" className="sr-only">
+                    {t('campaign_sheet.open_summary', {
+                      runs: campaignProfile?.total_runs ?? 0,
+                      badges: campaignBadges.length,
+                      defaultValue: '{{runs}} total runs; {{badges}} badges unlocked.',
+                    })}
+                  </span>
+                )}
                 <span className="daily-challenge-card__eyebrow">
                   {t('home.director_growth_label')}
                 </span>
@@ -2318,6 +2328,11 @@ export function InputView() {
                       </span>
                     ))}
                   </div>
+                )}
+                {hasDirectorGrowth && (
+                  <span className="daily-challenge-card__pill iv-growth-cta">
+                    {t('campaign_sheet.open_cta', { defaultValue: 'View full progress →' })}
+                  </span>
                 )}
               </div>
             </section>
@@ -2530,6 +2545,21 @@ export function InputView() {
               onCancel={handleWeeklyTrackCancel}
             />
           )}
+
+          <CampaignProgressSheet
+            open={campaignSheetOpen}
+            onOpenChange={setCampaignSheetOpen}
+            userId={directorIdentity.userId}
+            weeklySummary={campaignWeeklySummary}
+            weeklyTrackName={
+              campaignChallengeRotation?.weekly_track
+                ? (isZh
+                    ? campaignChallengeRotation.weekly_track.title_zh
+                    : campaignChallengeRotation.weekly_track.title_en) ?? null
+                : null
+            }
+          />
+
 
           <AlertDialog
             open={!!confirmDialogData}

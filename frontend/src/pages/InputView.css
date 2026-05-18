@@ -69,6 +69,72 @@
   margin-bottom: 80px;
 }
 
+/* ── Campaign Cards: shared editorial tokens ──
+ * Each card sets its own accent via --card-accent / --card-accent-bg.
+ * sRGB declared first; OKLCH overrides where supported. */
+.daily-challenge-card,
+.shared-challenge-banner,
+.weekly-challenge-card {
+  --card-accent: #c2185b;
+  --card-accent-bg: rgba(194, 24, 91, 0.06);
+  --card-accent-soft: rgba(194, 24, 91, 0.10);
+  --card-border: #e1ddd7;
+  --card-bg-elevated: #ffffff;
+  --card-bg-surface: #fcfcfa;
+  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+  --card-text-primary: #181611;
+  --card-text-secondary: #58554f;
+  --card-neutral-pill-bg: #f0ece6;
+  --card-neutral-pill-border: #e1ddd7;
+}
+
+@supports (color: oklch(0% 0 0)) {
+  .daily-challenge-card,
+  .shared-challenge-banner,
+  .weekly-challenge-card {
+    --card-border: var(--border-subtle, oklch(90% 0.01 80));
+    --card-bg-elevated: var(--bg-elevated, #ffffff);
+    --card-bg-surface: var(--bg-surface, oklch(99% 0.002 80));
+    --card-shadow: var(--shadow-card, 0 4px 20px oklch(0% 0 0 / 0.03));
+    --card-text-primary: var(--text-primary, oklch(20% 0.01 80));
+    --card-text-secondary: var(--text-secondary, oklch(45% 0.01 80));
+    --card-neutral-pill-bg: oklch(95% 0.005 80);
+    --card-neutral-pill-border: oklch(90% 0.01 80);
+  }
+}
+
+/* Per-card accent overrides */
+.daily-challenge-card {
+  --card-accent: #c2185b;
+  --card-accent-bg: rgba(194, 24, 91, 0.06);
+  --card-accent-soft: rgba(194, 24, 91, 0.10);
+}
+
+.weekly-challenge-card:not(.weekly-challenge-card--growth) {
+  --card-accent: #b8860b;
+  --card-accent-bg: rgba(184, 134, 11, 0.06);
+  --card-accent-soft: rgba(184, 134, 11, 0.10);
+}
+
+.weekly-challenge-card--growth {
+  --card-accent: #2e8b7a;
+  --card-accent-bg: rgba(46, 139, 122, 0.06);
+  --card-accent-soft: rgba(46, 139, 122, 0.10);
+}
+
+@supports (color: oklch(0% 0 0)) {
+  .daily-challenge-card {
+    --card-accent: oklch(55% 0.22 350);
+  }
+  .weekly-challenge-card:not(.weekly-challenge-card--growth) {
+    --card-accent: oklch(72% 0.14 75);
+  }
+  .weekly-challenge-card--growth {
+    --card-accent: oklch(65% 0.12 180);
+  }
+}
+
+/* ── Daily Challenge Card (primary accent) ── */
 .daily-challenge-card {
   position: relative;
   width: 100%;
@@ -76,10 +142,12 @@
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 18px 20px;
-  border: 1px solid rgba(194, 24, 91, 0.12);
-  border-radius: 18px;
-  background: linear-gradient(135deg, rgba(194, 24, 91, 0.06), rgba(142, 68, 173, 0.06));
+  padding: 20px 22px;
+  border: 1px solid var(--card-border);
+  border-left: 3px solid var(--card-accent);
+  border-radius: 16px;
+  background: var(--card-bg-elevated);
+  box-shadow: var(--card-shadow);
 }
 
 .daily-challenge-card__art {
@@ -88,15 +156,15 @@
   object-fit: cover;
   object-position: center;
   border-radius: 12px;
-  border: 1px solid rgba(194, 24, 91, 0.12);
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.06);
+  border: 1px solid var(--card-border);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.04);
   flex-shrink: 0;
 }
 
 .daily-challenge-card__copy {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -104,116 +172,98 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-family: var(--font-body);
+  font-family: var(--font-body, 'Instrument Sans', 'Noto Sans SC', sans-serif);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--clr-primary, #c2185b);
+  color: var(--card-accent);
 }
 
 .daily-challenge-card__eyebrow-icon {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   object-fit: contain;
   flex-shrink: 0;
-  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.1));
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.08));
 }
 
 .daily-challenge-card__title {
-  font-family: var(--font-heading);
-  font-size: clamp(1.1rem, 1rem + 0.36vw, 1.45rem);
+  font-family: var(--font-heading, 'Cormorant Garamond', 'Noto Serif SC', serif);
+  font-size: clamp(1.15rem, 1rem + 0.4vw, 1.5rem);
   font-weight: 500;
-  line-height: 1.18;
-  letter-spacing: -0.02em;
-  color: var(--text-primary);
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  color: var(--text-primary, #181611);
 }
 
 .daily-challenge-card__subtitle {
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--text-secondary);
+  font-family: var(--font-body, 'Instrument Sans', 'Noto Sans SC', sans-serif);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--card-text-secondary);
 }
 
 .daily-challenge-card__hooks {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .daily-challenge-card__status {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 6px;
-}
-
-.daily-challenge-card__campaign {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 8px;
-}
-
-.daily-challenge-card__campaign-label {
-  font-family: var(--font-body);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.daily-challenge-card__campaign strong {
-  font-family: var(--font-body);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.45;
-  color: var(--text-primary);
+  margin-top: 4px;
 }
 
 .daily-challenge-card__pill {
-  padding: 3px 8px;
+  padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid rgba(194, 24, 91, 0.12);
-  color: var(--text-secondary);
+  background: var(--card-neutral-pill-bg);
+  border: 1px solid var(--card-neutral-pill-border);
+  color: var(--text-secondary, #58554f);
+  font-family: var(--font-body, 'Instrument Sans', 'Noto Sans SC', sans-serif);
   font-size: 11px;
   font-weight: 600;
-}
-
-.daily-challenge-card__pill--done {
-  background: rgba(194, 24, 91, 0.12);
-  color: var(--clr-primary, #c2185b);
+  letter-spacing: 0.01em;
 }
 
 .daily-challenge-card__pill--profile {
-  background: rgba(194, 24, 91, 0.12);
-  color: var(--clr-primary, #c2185b);
+  background: var(--card-accent-bg);
+  border-color: transparent;
+  color: var(--card-accent);
+}
+
+.daily-challenge-card__pill--done {
+  background: var(--card-accent-soft);
+  border-color: transparent;
+  color: var(--card-accent);
 }
 
 .daily-challenge-card__action {
   flex-shrink: 0;
 }
 
+/* ── Shared Challenge Banner + Weekly Track Card ── */
 .shared-challenge-banner,
 .weekly-challenge-card {
   width: 100%;
   display: flex;
   gap: 18px;
-  padding: 16px 18px;
-  border-radius: 18px;
-  border: 1px solid rgba(64, 48, 40, 0.08);
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: var(--shadow-card);
+  padding: 18px 20px;
+  border-radius: 16px;
+  border: 1px solid var(--card-border);
+  border-left: 3px solid var(--card-accent);
+  background: var(--card-bg-elevated);
+  box-shadow: var(--card-shadow);
 }
 
 .shared-challenge-banner {
   flex-direction: column;
   gap: 10px;
-  background: linear-gradient(135deg, rgba(255, 247, 232, 0.94), rgba(255, 252, 247, 0.98));
-  border-color: rgba(194, 24, 91, 0.14);
+  background: var(--card-bg-surface);
 }
 
 .weekly-challenge-card {
@@ -224,37 +274,37 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 84px;
-  min-width: 84px;
-  min-height: 84px;
-  border-radius: 18px;
-  border: 1px solid rgba(194, 24, 91, 0.08);
-  background: linear-gradient(180deg, rgba(255, 247, 250, 0.88), rgba(255, 252, 254, 0.92));
+  width: 72px;
+  min-width: 72px;
+  min-height: 72px;
+  border-radius: 14px;
+  border: 1px solid var(--card-border);
+  background: var(--card-accent-bg);
 }
 
 .weekly-challenge-card__badge-art {
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
   object-fit: contain;
-  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.08));
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.06));
 }
 
 .shared-challenge-banner__eyebrow {
-  font-family: var(--font-body);
+  font-family: var(--font-body, 'Instrument Sans', 'Noto Sans SC', sans-serif);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--clr-primary, #c2185b);
+  color: var(--card-accent);
 }
 
 .shared-challenge-banner__title {
-  font-family: var(--font-heading);
+  font-family: var(--font-heading, 'Cormorant Garamond', 'Noto Serif SC', serif);
   font-size: clamp(1.08rem, 0.98rem + 0.28vw, 1.35rem);
   font-weight: 500;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
-  color: var(--text-primary);
+  line-height: 1.22;
+  letter-spacing: -0.015em;
+  color: var(--card-text-primary);
 }
 
 .shared-challenge-banner__meta,
@@ -273,11 +323,14 @@
 }
 
 .weekly-challenge-card--growth {
-  gap: 12px;
+  gap: 14px;
 }
 
+/* Weekly/Growth cards reuse the daily-challenge typography utilities,
+ * but inherit the per-card accent via the shared CSS variables above. */
 .weekly-challenge-card .daily-challenge-card__eyebrow {
   margin-bottom: -2px;
+  color: var(--card-accent);
 }
 
 .weekly-challenge-card .daily-challenge-card__title,
@@ -300,11 +353,11 @@
 }
 
 .weekly-challenge-card .daily-challenge-card__hooks {
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .weekly-challenge-card .daily-challenge-card__status {
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .weekly-challenge-card--growth .daily-challenge-card__hooks {
@@ -317,23 +370,24 @@
   gap: 2px;
   min-width: 140px;
   padding: 10px 12px;
-  border-radius: 14px;
-  background: rgba(255, 248, 243, 0.72);
-  border: 1px solid rgba(194, 24, 91, 0.08);
+  border-radius: 12px;
+  background: var(--card-bg-surface);
+  border: 1px solid var(--card-border);
 }
 
 .weekly-growth-list__item strong {
-  font-family: var(--font-heading);
+  font-family: var(--font-heading, 'Cormorant Garamond', 'Noto Serif SC', serif);
   font-size: 1rem;
   font-weight: 500;
   line-height: 1.2;
   letter-spacing: -0.015em;
-  color: var(--text-primary);
+  color: var(--text-primary, #181611);
 }
 
 .weekly-growth-list__item span {
+  font-family: var(--font-body, 'Instrument Sans', 'Noto Sans SC', sans-serif);
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--text-secondary, #58554f);
 }
 
 /* ── Staged Reveal Entry Animations ── */
@@ -2159,6 +2213,7 @@
   .iv-advanced__trigger:focus-visible,
   .mode-btn:focus-visible,
   .web-search-mode-btn:focus-visible,
+  .iv-growth-button:focus-visible,
   .new-source-toggle:focus-within,
   .web-search-toggle:focus-within {
     outline: 2px solid Highlight;

@@ -600,8 +600,8 @@
     {
       "id": "governance",
       "labels": {
-        "zh": "治理博弈",
-        "en": "Governance Conflict"
+        "zh": "政治治理",
+        "en": "Politics & Governance"
       },
       "descriptions": {
         "zh": "适合 AI 治理、民主、制度与权力分配类问题。",
@@ -712,8 +712,8 @@
     {
       "id": "war",
       "labels": {
-        "zh": "战争抉择",
-        "en": "War Doctrine"
+        "zh": "战争冲突",
+        "en": "War & Conflict"
       },
       "descriptions": {
         "zh": "适合战争、入侵、边疆冲突和军事扩张类问题。",
@@ -824,8 +824,8 @@
     {
       "id": "empire",
       "labels": {
-        "zh": "帝国统合",
-        "en": "Imperial Balance"
+        "zh": "帝国兴衰",
+        "en": "Rise & Fall of Empires"
       },
       "descriptions": {
         "zh": "适合帝国、王朝、君主制、历史秩序维持类问题。",
@@ -936,8 +936,8 @@
     {
       "id": "industry",
       "labels": {
-        "zh": "工业与资源",
-        "en": "Industry and Resources"
+        "zh": "工业革新",
+        "en": "Industry & Innovation"
       },
       "descriptions": {
         "zh": "适合工业革命、能源、资源调配、市场与生产线类问题。",
@@ -1048,8 +1048,8 @@
     {
       "id": "trade",
       "labels": {
-        "zh": "贸易绞盘",
-        "en": "Trade Leverage"
+        "zh": "贸易经济",
+        "en": "Trade & Economics"
       },
       "descriptions": {
         "zh": "适合港口、关税、商路、供应链与商团博弈类问题。",
@@ -1160,8 +1160,8 @@
     {
       "id": "law",
       "labels": {
-        "zh": "法律红线",
-        "en": "Legal Red Lines"
+        "zh": "法律正义",
+        "en": "Law & Justice"
       },
       "descriptions": {
         "zh": "适合宪法、法院、程序正义、合规与否决权类问题。",
@@ -1272,8 +1272,8 @@
     {
       "id": "faith",
       "labels": {
-        "zh": "神权号角",
-        "en": "Sacred Order"
+        "zh": "宗教信仰",
+        "en": "Religion & Faith"
       },
       "descriptions": {
         "zh": "适合宗教、教会、神谕、异端与象征合法性类问题。",
@@ -1384,8 +1384,8 @@
     {
       "id": "ecology",
       "labels": {
-        "zh": "生态阈值",
-        "en": "Ecology Thresholds"
+        "zh": "生态环境",
+        "en": "Ecology & Environment"
       },
       "descriptions": {
         "zh": "适合气候、水源、瘟疫、环境承载与长期韧性类问题。",
@@ -1496,8 +1496,8 @@
     {
       "id": "frontier",
       "labels": {
-        "zh": "边疆探索",
-        "en": "Frontier Expansion"
+        "zh": "探索未知",
+        "en": "Frontiers & Exploration"
       },
       "descriptions": {
         "zh": "适合太空、海洋、边疆探索与新殖民地治理类问题。",
@@ -1608,8 +1608,8 @@
     {
       "id": "mythic",
       "labels": {
-        "zh": "神话秩序",
-        "en": "Mythic Order"
+        "zh": "神话传说",
+        "en": "Myths & Legends"
       },
       "descriptions": {
         "zh": "适合奇幻、魔法、神权与传说秩序类问题。",
@@ -1720,8 +1720,8 @@
     {
       "id": "survival",
       "labels": {
-        "zh": "生存极限",
-        "en": "Survival Pressure"
+        "zh": "极限生存",
+        "en": "Survival"
       },
       "descriptions": {
         "zh": "适合末日、崩塌、灾难、资源短缺与社会存亡类问题。",
@@ -1832,8 +1832,8 @@
     {
       "id": "finance",
       "labels": {
-        "zh": "金融风控",
-        "en": "Financial Risk"
+        "zh": "金融市场",
+        "en": "Finance & Markets"
       },
       "descriptions": {
         "zh": "适合银行、央行、挤兑、流动性、信用与市场恐慌类问题。",
@@ -1944,8 +1944,8 @@
     {
       "id": "scholar",
       "labels": {
-        "zh": "学术范式",
-        "en": "Scholarly Paradigm"
+        "zh": "科学学术",
+        "en": "Science & Academia"
       },
       "descriptions": {
         "zh": "适合大学、学派、论文争议、教育制度与知识权威类问题。",
@@ -2056,8 +2056,8 @@
     {
       "id": "medical",
       "labels": {
-        "zh": "医疗分诊",
-        "en": "Medical Triage"
+        "zh": "医学伦理",
+        "en": "Medicine & Ethics"
       },
       "descriptions": {
         "zh": "适合医院、公共卫生、疫情、疫苗、患者分诊与医疗伦理类问题。",
@@ -2168,8 +2168,8 @@
     {
       "id": "technology",
       "labels": {
-        "zh": "技术路线",
-        "en": "Technology Stack"
+        "zh": "科技未来",
+        "en": "Technology & Future"
       },
       "descriptions": {
         "zh": "适合软件平台、AI、芯片、网络安全、开源与技术治理类问题。",
@@ -2280,8 +2280,8 @@
     {
       "id": "entertainment",
       "labels": {
-        "zh": "舆论叙事",
-        "en": "Narrative Spotlight"
+        "zh": "文化传媒",
+        "en": "Culture & Media"
       },
       "descriptions": {
         "zh": "适合媒体、娱乐产业、明星、粉丝、票房、平台声誉与公共叙事类问题。",
@@ -2392,8 +2392,8 @@
     {
       "id": "diplomacy",
       "labels": {
-        "zh": "外交斡旋",
-        "en": "Diplomatic Mediation"
+        "zh": "外交关系",
+        "en": "Diplomacy & Relations"
       },
       "descriptions": {
         "zh": "适合条约、峰会、联盟、制裁、停火与跨阵营谈判类问题。",
@@ -2504,8 +2504,8 @@
     {
       "id": "generic",
       "labels": {
-        "zh": "通用博弈",
-        "en": "General Tension"
+        "zh": "综合话题",
+        "en": "General Topics"
       },
       "descriptions": {
         "zh": "适合暂时无法归类的问题，用通用冲突机制增强推演。",

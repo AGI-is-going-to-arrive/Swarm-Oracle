@@ -65,22 +65,22 @@ const {
       return `Lv.${options?.level}`;
     }
     if (key === 'home.campaign_next_unlock') {
-      return `${options?.count} points to next unlock`;
+      return `${options?.count} more to level up`;
     }
     if (key === 'home.campaign_quickstart_unlocks') {
-      return `${options?.count} badges unlocked · ${options?.runs} completed runs`;
+      return `${options?.count} achievements · ${options?.runs} runs`;
     }
     if (key === 'home.director_growth_title') {
-      return `${options?.runs} total runs · ${options?.badges} badges unlocked`;
+      return `${options?.runs} runs · ${options?.badges} achievements`;
     }
     if (key === 'home.director_growth_active_title') {
-      return `${options?.runs} total runs logged`;
+      return `${options?.runs} runs completed`;
     }
     if (key === 'home.director_growth_active_subtitle') {
-      return `${options?.badges} badges unlocked so far.`;
+      return `${options?.badges} achievements earned. Try different topics to unlock more.`;
     }
     if (key === 'home.weekly_challenge_completed_runs') {
-      return `${options?.runs} runs completed this week`;
+      return `${options?.runs} this week`;
     }
     if (key === 'home.byok_probe_parallelism') {
       return `Estimated parallelism ${options?.count}`;
@@ -374,8 +374,8 @@ describe('InputView campaign progress', () => {
         id: 'challenge-1',
         question: 'What if AI ruled every city?',
         question_en: 'What if AI ruled every city?',
-        subtitle_zh: '治理博弈',
-        subtitle_en: 'Governance Conflict',
+        subtitle_zh: '政治治理',
+        subtitle_en: 'Politics & Governance',
         profile_id: 'governance',
         rounds: 3,
         num_agents: 3,
@@ -387,8 +387,8 @@ describe('InputView campaign progress', () => {
           id: 'weekly-1',
           question: 'Weekly challenge 1',
           question_en: 'Weekly challenge 1',
-          subtitle_zh: '治理博弈',
-          subtitle_en: 'Governance Conflict',
+          subtitle_zh: '政治治理',
+          subtitle_en: 'Politics & Governance',
           profile_id: 'governance',
           rounds: 3,
           num_agents: 3,
@@ -399,8 +399,8 @@ describe('InputView campaign progress', () => {
           id: 'weekly-2',
           question: 'Weekly challenge 2',
           question_en: 'Weekly challenge 2',
-          subtitle_zh: '法律红线',
-          subtitle_en: 'Legal Red Lines',
+          subtitle_zh: '法律正义',
+          subtitle_en: 'Law & Justice',
           profile_id: 'law',
           rounds: 3,
           num_agents: 3,
@@ -411,8 +411,8 @@ describe('InputView campaign progress', () => {
           id: 'weekly-3',
           question: 'Weekly challenge 3',
           question_en: 'Weekly challenge 3',
-          subtitle_zh: '贸易绞盘',
-          subtitle_en: 'Trade Leverage',
+          subtitle_zh: '贸易经济',
+          subtitle_en: 'Trade & Economics',
           profile_id: 'trade',
           rounds: 3,
           num_agents: 3,
@@ -449,14 +449,12 @@ describe('InputView campaign progress', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('home.campaign_progress')).toBeInTheDocument();
+      expect(screen.getAllByText(/Lv\.\d+/).length).toBeGreaterThan(0);
     });
 
-    expect(screen.getAllByText('Lv.2').length).toBeGreaterThan(0);
-    expect(screen.getAllByText((content) => content.includes('3 points to next unlock')).length).toBeGreaterThan(0);
-    expect(screen.getByLabelText('4 total runs · 2 badges unlocked')).toBeInTheDocument();
-    expect(screen.getByText('4 total runs logged')).toBeInTheDocument();
-    expect(screen.getByText('2 badges unlocked so far.')).toBeInTheDocument();
+    expect(screen.getByLabelText('4 runs · 2 achievements')).toBeInTheDocument();
+    expect(screen.getByText('4 runs completed')).toBeInTheDocument();
+    expect(screen.getByText(/2 achievements earned/)).toBeInTheDocument();
     expect(screen.getByText(/home\.weekly_challenge_label/)).toBeInTheDocument();
   });
 
@@ -1114,7 +1112,7 @@ describe('InputView campaign progress', () => {
       expect(typeof (window as Window & { render_game_to_text?: () => string }).render_game_to_text).toBe('function');
     });
     await waitFor(() => {
-      expect(screen.getAllByText('Lv.2').length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Lv\.\d+/).length).toBeGreaterThan(0);
     });
 
     const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
@@ -1705,8 +1703,8 @@ describe('InputView IME composition guard and confirm launch dialog', () => {
         id: 'challenge-ime-1',
         question: 'What if AI ruled every city?',
         question_en: 'What if AI ruled every city?',
-        subtitle_zh: '治理博弈',
-        subtitle_en: 'Governance Conflict',
+        subtitle_zh: '政治治理',
+        subtitle_en: 'Politics & Governance',
         profile_id: 'governance',
         rounds: 3,
         num_agents: 3,

@@ -25,7 +25,7 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、daily challenge、weekly track、difficulty、streak/refresh countdown、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、搜索深度选择、推荐已配置搜索 / 高级自定义 provider 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、daily challenge、weekly track、difficulty、streak/refresh countdown、成长卡与 CampaignProgressSheet、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、搜索深度选择、推荐已配置搜索 / 高级自定义 provider 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
 | SetupWizardView | `frontend/src/pages/SetupWizardView.tsx` | `/admin/setup` 3 步 provider 配置向导；选择 preset、填 API key/base URL、测试连接并写入 session-scoped provider policy |
 | AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、编辑/删除入口、返回首页按钮、卡片级 Agent 备份导出与从备份创建 Agent 入口 |
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择、PDF document upload tab，以及 capability-gated Agent 备份工具 |
@@ -61,7 +61,7 @@
   - `frontend/src/lib/scenarioDirectorState.ts`
   - `frontend/src/lib/scenarioGameplayState.ts`
 - 主模式里 `scenario / branches / messages / status` 是 durable truth；`thinkingAgents` 只是瞬时 UI 态，resync 时会清空，不承担 replay authority。
-- Campaign launch context 只表达本轮入口意图；daily/weekly catalog、服务端日期、ISO week、streak、weekly bonus 和 badge unlock 都以后端 summary/finalize 为准。前端只展示后端返回的 campaign summary、weekly summary 和 badge payload。
+- Campaign launch context 只表达本轮入口意图；daily/weekly catalog、服务端日期、ISO week、streak、weekly bonus 和 badge unlock 都以后端 summary/finalize 为准。前端只展示后端返回的 campaign summary、weekly summary、静态 badge definitions、user badges 和 mastery；首页进度 sheet 允许部分请求失败时继续展示已取到的区块。未知 `profile_id` 会回退到 `General Topics / 综合话题`，不把 raw id 直接露给用户。
 
 ### 兼容与缓存层
 
@@ -195,9 +195,9 @@
 | `scenarioGameplayState.ts` | `frontend/src/lib/scenarioGameplayState.ts` | gameplay_state 映射与判等 |
 | `scenarioDirectorState.ts` | `frontend/src/lib/scenarioDirectorState.ts` | director_state 映射 |
 | `predictionBetting.ts` | `frontend/src/lib/predictionBetting.ts` | 结构化押注 helper |
-| `gameplayContract.ts` | `frontend/src/lib/gameplayContract.ts` | 共享玩法契约消费层 |
+| `gameplayContract.ts` | `frontend/src/lib/gameplayContract.ts` | 共享玩法契约消费层；profile 展示名与首页轻量 summary 需要和 shared contract 保持一致 |
 | `GameplayCardsModal.tsx` | `frontend/src/components/GameplayCardsModal.tsx` | 玩法卡弹窗；推荐卡、分组折叠、后端 contract payload、focus trap、label/select 显式关联与 disclosure ARIA |
-| Campaign Components | `frontend/src/components/campaign/*` | campaign UI 组件；覆盖 streak、difficulty、refresh countdown、weekly track chip/dialog/leaderboard、badge cabinet、level progress 和 achievement toast |
+| Campaign Components | `frontend/src/components/campaign/*` | campaign UI 组件；覆盖 streak、difficulty、refresh countdown、weekly track chip/dialog/leaderboard、progress sheet、badge cabinet、level progress 和 achievement toast；progress sheet 会并行读取 badge definitions、user badges、mastery，并复用已取到的 weekly summary |
 | `dailyChallenge.ts` | `frontend/src/lib/dailyChallenge.ts` | challenge date key 与 ISO week helper；用于前端入口显示和请求 context，最终结算仍以后端派生日期为准 |
 | `PredictionModal.tsx` | `frontend/src/components/PredictionModal.tsx` | 结构化预测弹窗；串行提交、快速重复提交防护、branch 晚到兜底、高级题材回响 disclosure 与 focus trap |
 | `InterventionReceiptCard.tsx` | `frontend/src/components/InterventionReceiptCard.tsx` | 只读干预效果回执；只展示当前 scenario 的 persisted effects，倒序展示，不展示内部 log id |
@@ -587,11 +587,12 @@
   - 浏览器实测本机结果页显示 `对话 · 本机模式`，header 可直接进入因果图谱和图谱工作台；点击 `探索` 会滚到下一步区。
 - 当前 frontend 稳定验证口径：
   - `npx tsc --noEmit`：通过
-  - `npx eslint src/game/`：通过
+  - `npm run lint`：通过
   - `npm run build`：通过
-  - full vitest：`198 files / 2160 tests passed`
-  - i18n key parity spot-check：`en keys: 1 zh keys: 1 match: true`
+  - full vitest：`199 files / 2169 tests passed`
+  - i18n key parity spot-check：`zh: 2744`、`en: 2744`、parity OK
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0
+  - CampaignProgressSheet browser spot-check：desktop 与 mobile forced-colors / reduced-motion 下可打开、可滚动，console/page error 为 0
   - campaign/gameplay 浏览器 E2E：Chromium mobile / gameplay / intervention / prediction、Firefox gameplay / intervention、WebKit gameplay / intervention 均通过；最终 Chromium gameplay mini 复验通过
   - Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop `1440px` 与 mobile `375px` 六组合矩阵
   - native citation 浏览器复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵；WebKit Tab-to-links 按平台限制记录
@@ -824,6 +825,7 @@
   - 所有新增动画均有 `prefers-reduced-motion: reduce` 覆盖
 - `ResultView` 的 `endingRoomAutomation` 当前使用 `useRef` 而不是 `useState`。原因：EndingChatModal 的 automation effect 每次 deps 变化都会生成新对象并调用 `onAutomationStateChange`。如果用 `useState`，每次调用都会触发 ResultView 重渲染，形成 "store→effect→setState→re-render" 循环（190+ "Maximum update depth exceeded" error）。改为 `useRef` 后回调写入 ref 不触发渲染，`render_game_to_text()` 在调用时通过 `ref.current` 读取最新值。
 - `themeRegistry.ts` 当前 `GameplayProfileId` 包含 18 种：`governance / war / empire / industry / trade / law / faith / ecology / frontier / mythic / survival / finance / scholar / medical / technology / entertainment / diplomacy / generic`。
+  - 展示名以 shared gameplay contract 为准；首页轻量 summary 与 contract 同步，未知值回退到 `generic`。
   - 新增的 6 种 profile（`finance / scholar / medical / technology / entertainment / diplomacy`）现在均有各自专属 card frame PNG（通过 Gemini Image API 生成），不再复用其他 profile 的素材。
   - 新增 11 个主题场景入口（`finance_exchange / cyber_market / medical_institute / academy_hall / tech_campus / arena_colosseum / concert_hall / media_tower / diplomatic_summit / underground_network`）。
   - 当前全部 33 个主题场景（含变体）均已有专属 PNG 素材（512x288 像素风），无占位图。

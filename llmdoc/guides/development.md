@@ -164,6 +164,13 @@ node --check scripts/e2e-prediction-modal.mjs
 node --check scripts/e2e-intervention-receipt.mjs
 ```
 
+如果同步了 `src/i18n/locales/*.json`，再跑一次顶层 key parity：
+
+```bash
+cd frontend
+node -e "const zh=require('./src/i18n/locales/zh.json'); const en=require('./src/i18n/locales/en.json'); function count(o){let n=0; for(const [k,v] of Object.entries(o)){ if(typeof v==='object'&&v!==null)n+=count(v); else n+=1; } return n;} console.log('zh:',count(zh),'en:',count(en),'parity:',count(zh)===count(en)?'OK':'MISMATCH')"
+```
+
 本地已有前端预览服务时，可以用 fixture-first gameplay surface E2E 做浏览器复核：
 
 ```bash

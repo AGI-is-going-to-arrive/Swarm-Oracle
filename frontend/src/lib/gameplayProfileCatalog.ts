@@ -30,17 +30,29 @@ const GAMEPLAY_BADGE_ASSET_PATHS = {
   betWinner: '/assets/ui/generated/badge_bet_winner.png',
 } as const;
 
-export function getGameplayProfileLabel(profileId: GameplayProfileId, isZh: boolean): string {
-  const profile = GAMEPLAY_PROFILE_CATALOG[profileId];
+export function getGameplayProfileLabel(
+  profileId: GameplayProfileId | string | null | undefined,
+  isZh: boolean,
+): string {
+  const profile = GAMEPLAY_PROFILE_CATALOG[resolveGameplayProfileId(profileId)];
   return isZh ? profile.labelZh : profile.labelEn;
 }
 
 export function getGameplayProfileSignatureHooks(
-  profileId: GameplayProfileId,
+  profileId: GameplayProfileId | string | null | undefined,
   isZh: boolean,
 ): string[] {
-  const profile = GAMEPLAY_PROFILE_CATALOG[profileId];
+  const profile = GAMEPLAY_PROFILE_CATALOG[resolveGameplayProfileId(profileId)];
   return isZh ? profile.signatureHooksZh : profile.signatureHooksEn;
+}
+
+function resolveGameplayProfileId(
+  profileId: GameplayProfileId | string | null | undefined,
+): GameplayProfileId {
+  const normalized = typeof profileId === 'string' ? profileId.trim() : '';
+  return normalized && Object.prototype.hasOwnProperty.call(GAMEPLAY_PROFILE_CATALOG, normalized)
+    ? (normalized as GameplayProfileId)
+    : 'generic';
 }
 
 export function getGameplayBadgeSrc(badgeId: GameplayBadgeId): string {

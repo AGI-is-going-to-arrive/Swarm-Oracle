@@ -8,9 +8,17 @@ interface LevelProgressProps {
 
 export function LevelProgress({ level, currentScore, nextLevelScore }: LevelProgressProps) {
   const { t } = useTranslation();
-  const prevLevelScore = 2 * level * level;
-  const range = nextLevelScore - prevLevelScore;
-  const progress = range > 0 ? Math.min(100, Math.max(0, ((currentScore - prevLevelScore) / range) * 100)) : 0;
+  const safeLevel = Math.max(0, Number.isFinite(level) ? level : 0);
+  const safeCurrentScore = Number.isFinite(currentScore) ? currentScore : 0;
+  const safeNextLevelScore = Number.isFinite(nextLevelScore) ? nextLevelScore : 0;
+  const prevLevelScore = 2 * safeLevel * safeLevel;
+  const ariaMaxScore = Math.max(safeNextLevelScore, prevLevelScore + 1);
+  const clampedCurrentScore = Math.min(Math.max(safeCurrentScore, prevLevelScore), ariaMaxScore);
+  const range = ariaMaxScore - prevLevelScore;
+  const progress = Math.min(
+    100,
+    Math.max(0, ((clampedCurrentScore - prevLevelScore) / range) * 100),
+  );
 
   return (
     <div className="level-progress">
@@ -23,9 +31,9 @@ export function LevelProgress({ level, currentScore, nextLevelScore }: LevelProg
       <div
         className="level-progress__bar"
         role="progressbar"
-        aria-valuenow={currentScore}
+        aria-valuenow={clampedCurrentScore}
         aria-valuemin={prevLevelScore}
-        aria-valuemax={nextLevelScore}
+        aria-valuemax={ariaMaxScore}
         aria-label={t('campaign.level_progress', { level })}
       >
         <div className="level-progress__fill" style={{ width: `${progress}%` }} />
@@ -49,11 +57,11 @@ export function LevelProgress({ level, currentScore, nextLevelScore }: LevelProg
         .level-progress__fill {
           height: 100%;
           border-radius: 0.25rem;
-          background: oklch(0.65 0.2 260);
+          background: #2e8b7a;
           transition: width 0.3s ease;
         }
-        @supports not (color: oklch(0 0 0)) {
-          .level-progress__fill { background: #6366f1; }
+        @supports (background: oklch(0.65 0.12 180)) {
+          .level-progress__fill { background: oklch(0.65 0.12 180); }
         }
         @media (prefers-reduced-motion: reduce) {
           .level-progress__fill { transition: none; }

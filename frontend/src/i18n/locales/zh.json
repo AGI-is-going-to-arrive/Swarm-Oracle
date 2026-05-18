@@ -152,32 +152,32 @@
       "daily_challenge_start": "开始今日挑战",
       "daily_challenge_continue": "继续今日挑战",
       "daily_challenge_replay": "再玩一次",
-      "weekly_challenge_label": "本周赛道",
-      "weekly_challenge_title": "{{week}} 周挑战",
-      "weekly_challenge_summary": "本周已完成 {{runs}} 局 · 累计 {{score}} 点生涯分",
-      "weekly_challenge_intro": "本周重点题材轮换，建议优先推进这些画像。",
-      "weekly_challenge_completed_runs": "本周已完成 {{runs}} 局",
-      "weekly_challenge_fallback": "每周会轮换 3 个重点题材。完成这些题材的局数，可以更快拉开导演档案的宽度。",
+      "weekly_challenge_label": "本周主题",
+      "weekly_challenge_title": "本周推演主题",
+      "weekly_challenge_summary": "本周完成 {{runs}} 局 · 积累 {{score}} 分",
+      "weekly_challenge_intro": "本周聚焦以下议题方向，完成相关推演可获额外积分。",
+      "weekly_challenge_completed_runs": "本周 {{runs}} 局",
+      "weekly_challenge_fallback": "每周轮换 3 个议题方向，完成相关推演可加速积累经验和解锁成就。",
       "weekly_challenge_runs": "{{count}} 局",
-      "weekly_challenge_score": "本周累计 {{score}} 点",
-      "weekly_challenge_top_profile": "本周最活跃：{{profile}}",
-      "director_growth_label": "导演成长",
-      "director_growth_title": "累计 {{runs}} 局 · 已解锁 {{badges}} 枚徽章",
-      "director_growth_active_title": "累计 {{runs}} 局推演",
-      "director_growth_active_subtitle": "已解锁 {{badges}} 枚徽章，继续推进题材局来拉开成长轨。",
-      "director_growth_runs": "累计 {{runs}} 局",
-      "director_growth_badges": "已解锁 {{badges}} 枚徽章",
-      "director_growth_empty_title": "导演成长尚未解锁",
-      "director_growth_empty": "完成第一局结算后，这里会开始记录导演成长",
-      "director_growth_hint": "先完成几局推演，这里会出现你最强的题材成长轨。",
+      "weekly_challenge_score": "本周 {{score}} 分",
+      "weekly_challenge_top_profile": "最活跃：{{profile}}",
+      "director_growth_label": "我的成长",
+      "director_growth_title": "{{runs}} 局推演 · {{badges}} 枚成就",
+      "director_growth_active_title": "已完成 {{runs}} 局",
+      "director_growth_active_subtitle": "已获得 {{badges}} 枚成就徽章，尝试更多议题来解锁新成就。",
+      "director_growth_runs": "{{runs}} 局推演",
+      "director_growth_badges": "{{badges}} 枚成就",
+      "director_growth_empty_title": "开始你的推演之旅",
+      "director_growth_empty": "完成首次推演后，这里将记录你的成长轨迹",
+      "director_growth_hint": "完成推演后，你的擅长领域和成就将展示在这里。",
       "shared_challenge_label": "分享挑战",
       "shared_challenge_prefilled": "已从分享链接预填开局配置",
-      "campaign_progress": "导演生涯",
+      "campaign_progress": "成长进度",
       "campaign_mastery_level": "Lv.{{level}}",
-      "campaign_next_unlock": "距下次解锁还差 {{count}} 分",
-      "campaign_mastered": "当前题材已达本阶段上限",
-      "campaign_quickstart_unlocks": "已解锁 {{count}} 枚徽章 · 完成 {{runs}} 局推演",
-      "campaign_first_run": "完成第一局后会在这里看到导演生涯进展",
+      "campaign_next_unlock": "再积累 {{count}} 分即可升级",
+      "campaign_mastered": "当前领域已达阶段上限",
+      "campaign_quickstart_unlocks": "{{count}} 枚成就 · {{runs}} 局推演",
+      "campaign_first_run": "完成首次推演后查看成长进度",
       "continuity_title": "确认身份连续性",
       "continuity_subtitle": "检测到以下角色可能对应你已有的跨场景身份。请选择是复用旧身份，还是为这次推演创建新身份。",
       "continuity_reuse": "复用已有身份",
@@ -1551,10 +1551,52 @@
       "badge_cabinet_title": "徽章收藏",
       "badge_locked": "未解锁",
       "badge_unlocked": "已解锁",
-      "level_progress": "等级 {{level}}",
-      "score_progress": "距下一等级还需 {{current}} / {{next}} 分",
+      "level_progress": "Lv.{{level}}",
+      "score_progress": "{{current}} / {{next}} 分",
       "achievement_unlocked": "成就解锁！",
-      "achievement_dismiss": "关闭"
+      "achievement_dismiss": "关闭",
+      "badges": {
+        "first_daily": { "name": "初次推演", "description": "首次完成每日挑战" },
+        "streak_3": { "name": "三日连胜", "description": "连续 3 天完成每日挑战" },
+        "streak_7": { "name": "一周达人", "description": "连续 7 天完成每日挑战" },
+        "streak_14": { "name": "双周之星", "description": "连续 14 天完成每日挑战" },
+        "streak_30": { "name": "月度传奇", "description": "连续 30 天完成每日挑战" },
+        "weekly_finisher": { "name": "赛道达人", "description": "完成一轮周赛道" },
+        "weekly_bonus": { "name": "额外奖励", "description": "获得周赛奖励积分" },
+        "archive_a": { "name": "A 级档案", "description": "获得 A 级档案评分" },
+        "archive_s": { "name": "S 级档案", "description": "获得 S 级档案评分" },
+        "bet_first": { "name": "初次命中", "description": "首次成功预测下注" },
+        "bet_streak_3": { "name": "三连中", "description": "连续命中 3 次预测" },
+        "profile_level_3": { "name": "小有成就", "description": "任意领域达到等级 3" },
+        "profile_level_5": { "name": "领域专家", "description": "任意领域达到等级 5" },
+        "five_profiles_level_3": { "name": "全面发展", "description": "5 个领域均达到等级 3" },
+        "objective_finisher": { "name": "目标达人", "description": "完成所有导演目标" }
+      }
+    },
+    "campaign_sheet": {
+      "title": "我的成长",
+      "subtitle": "查看徽章收藏、领域精通与本周表现。",
+      "close": "关闭成长面板",
+      "open_aria": "查看完整成长详情",
+      "open_summary": "累计 {{runs}} 次推演；已解锁 {{badges}} 枚徽章。",
+      "open_cta": "查看完整成长 →",
+      "section_badges": "成就徽章",
+      "section_mastery": "领域精通",
+      "section_weekly": "本周概览",
+      "badge_count": "已解锁 {{unlocked}}/{{total}}",
+      "mastery_count": "共 {{count}} 个领域",
+      "mastery_runs": "{{runs}} 次推演",
+      "weekly_runs": "推演",
+      "weekly_score": "积分",
+      "weekly_daily": "日挑战",
+      "weekly_hits": "命中",
+      "weekly_top_profile": "最常使用：{{profile}}",
+      "weekly_track": "本周赛道：{{track}}",
+      "empty_badges": "完成首次推演后，这里将记录你解锁的徽章。",
+      "empty_mastery": "完成任意一次推演开启你的领域精通之旅。",
+      "empty_weekly": "本周还没有推演记录。",
+      "loading": "加载中...",
+      "error_load": "成长数据加载失败"
     },
     "badge": {
       "first_daily": {
@@ -2984,23 +3026,23 @@
       },
       "dragon_pact": {
         "question": "如果王国与巨龙订立的守护契约在一夜之间失效，会发生什么？",
-        "subtitle": "神话秩序 · 龙契约与禁术代价"
+        "subtitle": "神话传说 · 龙契约与禁术代价"
       },
       "last_refuge": {
         "question": "如果最后一座避难城只能再维持三十天供电，会发生什么？",
-        "subtitle": "生存极限 · 最后冗余"
+        "subtitle": "极限生存 · 最后冗余"
       },
       "random_leader_swap": {
         "question": "如果所有大型组织都必须每周随机交换一次负责人，会发生什么？",
-        "subtitle": "通用博弈 · 关键分歧"
+        "subtitle": "综合话题 · 关键分歧"
       },
       "lottery_committee": {
         "question": "如果所有关键城市都必须每三十天由抽签产生的临时委员会接管，会发生什么？",
-        "subtitle": "通用博弈 · 抽签委员会与临时授权"
+        "subtitle": "综合话题 · 抽签委员会与临时授权"
       },
       "rotating_oversight": {
         "question": "如果每一项重大决策都必须交给轮值外部评审团重新裁决，会发生什么？",
-        "subtitle": "通用博弈 · 轮值评审与再裁决"
+        "subtitle": "综合话题 · 轮值评审与再裁决"
       }
     }
   }

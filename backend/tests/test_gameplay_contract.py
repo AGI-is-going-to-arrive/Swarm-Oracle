@@ -35,7 +35,7 @@ def test_build_server_card_prompt_returns_readable_zh_prompt():
     )
 
     assert "人类潜入" in prompt
-    assert "治理博弈" in prompt
+    assert "政治治理" in prompt
     assert "请强推公开解释义务" in prompt
     assert "主线" in prompt
     assert "顾星河" in prompt
@@ -56,7 +56,7 @@ def test_build_server_card_prompt_returns_readable_en_prompt():
     )
 
     assert "Civilization Debate" in prompt
-    assert "Governance Conflict" in prompt
+    assert "Politics & Governance" in prompt
     assert "Force a public legitimacy debate." in prompt
     assert "Human Oversight" in prompt
     assert "Milan" in prompt

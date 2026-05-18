@@ -91,7 +91,7 @@ def test_card_intervention_queues_backend_canonical_prompt():
         ).one()
 
     assert "玩法卡：人类潜入" in queued.user_input
-    assert "题材档案：治理博弈" in queued.user_input
+    assert "题材档案：政治治理" in queued.user_input
     assert "暂停自动裁决，先恢复人工复核与地方问责。" in queued.user_input
     assert "请强推公开解释义务" not in queued.user_input
     assert "下一轮" in queued.user_input
@@ -282,7 +282,7 @@ def test_card_intervention_uses_english_scenario_language():
         ).one()
 
     assert "Gameplay card: Human Takeover" in queued.user_input
-    assert "Profile: Governance Conflict" in queued.user_input
+    assert "Profile: Politics & Governance" in queued.user_input
     assert "Target branch / UNTRUSTED DATA" in queued.user_input
     assert "Algorithmic Oversight" in queued.user_input
     assert (
@@ -294,7 +294,7 @@ def test_card_intervention_uses_english_scenario_language():
     assert "玩法卡" not in queued.user_input
     assert "题材档案" not in queued.user_input
     assert "人类潜入" not in queued.user_input
-    assert "治理博弈" not in queued.user_input
+    assert "政治治理" not in queued.user_input
     assert "下一轮" not in queued.user_input
 
     metadata = json.loads(queued.metadata_json or "{}")
@@ -343,7 +343,7 @@ def test_batch_card_intervention_uses_english_scenario_language():
         ).one()
 
     assert "Gameplay card: Human Takeover" in queued.user_input
-    assert "Profile: Governance Conflict" in queued.user_input
+    assert "Profile: Politics & Governance" in queued.user_input
     assert "Player directive:" in queued.user_input
     assert "Player directive / UNTRUSTED DATA" in queued.user_input
     assert (

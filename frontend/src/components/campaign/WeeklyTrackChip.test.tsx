@@ -45,12 +45,33 @@ describe('WeeklyTrackChip', () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it('does not bubble clicks to an interactive parent', () => {
+    const onClick = vi.fn();
+    const parentClick = vi.fn();
+    render(
+      <div onClick={parentClick}>
+        <WeeklyTrackChip track={track} onClick={onClick} />
+      </div>,
+    );
+
+    fireEvent.click(screen.getByRole('button'));
+
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(parentClick).not.toHaveBeenCalled();
+  });
+
   it('calls onClick on Enter key', () => {
     const onClick = vi.fn();
-    render(<WeeklyTrackChip track={track} onClick={onClick} />);
+    const parentKeyDown = vi.fn();
+    render(
+      <div onKeyDown={parentKeyDown}>
+        <WeeklyTrackChip track={track} onClick={onClick} />
+      </div>,
+    );
     const btn = screen.getByRole('button');
     fireEvent.keyDown(btn, { key: 'Enter' });
     expect(onClick).toHaveBeenCalledTimes(1);
+    expect(parentKeyDown).not.toHaveBeenCalled();
   });
 
   it('calls onClick on Space key', () => {

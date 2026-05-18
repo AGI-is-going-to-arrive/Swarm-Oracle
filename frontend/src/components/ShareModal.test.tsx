@@ -97,7 +97,7 @@ describe('ShareModal automation callback', () => {
       <ShareModal
         scenarioId="scenario-1"
         shareContext={{
-          profileLabel: '贸易绞盘',
+          profileLabel: '贸易经济',
           runtimePresetLabel: '校准',
           profileHooks: ['关税杠杆', '港口封锁'],
           resonanceLabel: '命中题材核心',
@@ -119,7 +119,7 @@ describe('ShareModal automation callback', () => {
     expect(screen.getByText('share.ready')).toBeInTheDocument();
     expect(screen.getByText('share.ready_hint')).toBeInTheDocument();
     expect(screen.getByText('生成好的文案')).toBeInTheDocument();
-    expect(screen.queryByText('贸易绞盘')).not.toBeInTheDocument();
+    expect(screen.queryByText('贸易经济')).not.toBeInTheDocument();
     expect(screen.queryByText('校准')).not.toBeInTheDocument();
     expect(screen.queryByText('命中题材核心')).not.toBeInTheDocument();
     expect(screen.queryByText('关税杠杆')).not.toBeInTheDocument();
