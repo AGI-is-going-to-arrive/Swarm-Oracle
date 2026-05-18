@@ -13,6 +13,7 @@ const {
   mockEventBridgeOn,
   mockSynthesizeBubbles,
   mockSynthesizeLatestBubbles,
+  mockEnsureReplayStartsInWorldScene,
   mockUseSimulationStoreSubscribe,
 } = vi.hoisted(() => ({
   mockGameInstances: [] as Array<{
@@ -30,6 +31,7 @@ const {
   mockEventBridgeOn: vi.fn(),
   mockSynthesizeBubbles: vi.fn(),
   mockSynthesizeLatestBubbles: vi.fn(),
+  mockEnsureReplayStartsInWorldScene: vi.fn(() => false),
   mockUseSimulationStoreSubscribe: vi.fn(),
 }));
 
@@ -100,7 +102,7 @@ vi.mock('./replaySelection', () => ({
 }));
 
 vi.mock('./replaySync', () => ({
-  ensureReplayStartsInWorldScene: vi.fn(() => false),
+  ensureReplayStartsInWorldScene: mockEnsureReplayStartsInWorldScene,
 }));
 
 vi.mock('../stores/simulationStore', () => {
@@ -156,6 +158,9 @@ describe('PhaserGame replay speed behavior', () => {
     mockEventBridgeOn.mockReset();
     mockSynthesizeBubbles.mockReset();
     mockSynthesizeLatestBubbles.mockReset();
+    mockEnsureReplayStartsInWorldScene.mockReset();
+    mockEnsureReplayStartsInWorldScene.mockReturnValue(false);
+    mockEventBridgeOn.mockReturnValue(() => {});
     mockUseSimulationStoreSubscribe.mockReset();
     mockUseSimulationStoreSubscribe.mockReturnValue(() => {});
     mockSynthesizeBubbles.mockImplementation(() => vi.fn());
@@ -210,5 +215,35 @@ describe('PhaserGame replay speed behavior', () => {
 
     view.unmount();
     expect(mockGameInstances[0]?.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the replay sync timer when TitleScene was already skipped', () => {
+    const clearIntervalSpy = vi.spyOn(window, 'clearInterval');
+    try {
+      const view = render(
+        createElement(PhaserGame, {
+          replaySpeed: 1,
+          playbackMode: 'replay',
+          playbackBranchId: 'branch-1',
+          playbackRound: 1,
+        }),
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+
+      expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+      expect(mockEnsureReplayStartsInWorldScene).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(450);
+      });
+
+      expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+      view.unmount();
+    } finally {
+      clearIntervalSpy.mockRestore();
+    }
   });
 });

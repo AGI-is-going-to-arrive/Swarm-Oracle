@@ -161,9 +161,10 @@
 
 - Pixel Theater 运行时在 `frontend/src/game/`。
 - `PhaserGameLoader` 负责按需加载 Theater。
+- live simulation 已经有 Agent 且尚未完成时，Phaser 会跳过 `TitleScene` 直接进入 `WorldScene`；completed replay 仍走 replay sync，避免停在标题页。
 - `TitleScene / EndingScene` 的副标题、初始化提示、无描述 fallback 和返回提示都走 `game.*` i18n key，不再用 `i18next.language` 手写中英分支。
 - screenshot / GIF capture runtime 已拆分，不进入默认首包。
-- 主题、素材与 UI asset 路径的单一事实源位于 `themeRegistry.ts`。
+- 主题、素材与 UI asset 路径的单一事实源位于 `themeRegistry.ts`；冷启动标题等待期间会预拉当前 scene theme PNG，`WorldScene` 初始 bootstrap 和后续 theme swap 也会按需补拉真实场景图。
 - Theater 当前布局采用 canvas-first 浮动 HUD 方案：
   - Phaser canvas 以 `position: absolute; inset: 0` 填满整个舞台区域
   - 控制面板（header / status / director / filters / timeline）浮动在 canvas 上方，使用 `backdrop-filter: blur(12px)` 半透明叠加
@@ -181,6 +182,7 @@
   - 尺寸 = `max(40, Math.min(width, height) * 0.055)` 宽，保持 2:3 宽高比
   - 阴影、名牌、faction bar 位置跟随 sprite 尺寸自动计算（`spriteH` 存储在 `AgentSpriteData` 中，各处统一使用 `spriteH * 0.5 + 2` 作 Y 偏移）
   - 阵营聚拢动画：`viz:faction_cluster` 事件驱动，对象池 flash、命名常量、tween 预算限制、reduced-motion snap
+  - 重复 `scene_init` 会按 agent id 清掉旧 container、minimap dot、halo/wander timer 和相关 tween，再创建新 sprite，避免重复角色或 idle-wander loop 残留
   - 原始 640×640 PNG 素材的宽高比不会因为 canvas 比例变化而拉伸
 
 ## 关键模块
@@ -584,11 +586,12 @@
   - `npm exec -- eslint src/pages/result/ResultHeader.tsx src/pages/result/ExploreDeeperBridge.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts`：通过
   - 浏览器实测本机结果页显示 `对话 · 本机模式`，header 可直接进入因果图谱和图谱工作台；点击 `探索` 会滚到下一步区。
 - 当前 frontend 稳定验证口径：
-  - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npm run lint`：通过
+  - `npx tsc --noEmit`：通过
+  - `npx eslint src/game/`：通过
   - `npm run build`：通过
-  - full vitest：`198 files / 2157 tests passed`
-  - i18n vitest：`2 files / 21 tests passed`
+  - full vitest：`198 files / 2160 tests passed`
+  - i18n key parity spot-check：`en keys: 1 zh keys: 1 match: true`
+  - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0
   - campaign/gameplay 浏览器 E2E：Chromium mobile / gameplay / intervention / prediction、Firefox gameplay / intervention、WebKit gameplay / intervention 均通过；最终 Chromium gameplay mini 复验通过
   - Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop `1440px` 与 mobile `375px` 六组合矩阵
   - native citation 浏览器复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵；WebKit Tab-to-links 按平台限制记录

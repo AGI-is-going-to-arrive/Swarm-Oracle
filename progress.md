@@ -17525,3 +17525,59 @@ QA Inventory
   - 本轮没有重跑 backend 全量 pytest、frontend 全量 vitest 或完整 release signoff
   - 浏览器实测创建了两条本地 replay branch；没有自动清理，因为删除本地数据需要单独确认
   - 浏览器 console 仍有既有 `[WS] Unhandled event type: kg:delta` warning；本轮没有改 KG realtime handler
+
+## 2026-05-18 Phaser Theater loading hardening
+
+- 本轮目标：
+  - 复查 Pixel Theater 背景加载优化的未提交改动，确认 live / replay / cold boot 路径不互相踩踏。
+  - 修掉 review 中确认的非 Info 问题，并用真实前端全量验证收口。
+
+- 本轮前端收口：
+  - `frontend/src/game/PhaserGame.tsx`
+    - live simulation 已有 Agent 且未完成时，registry 写入 `skipTitleScene`，让 `TitleScene` 直接切到 `WorldScene`。
+    - replay sync timer 在 `WorldScene` 已经 active、`TitleScene` 已经不 active 时会主动清掉，不再留下空转 interval。
+    - store subscription 成功跳过 completed replay 标题页后也会清 replay sync timer。
+  - `frontend/src/game/scenes/TitleScene.ts`
+    - `skipTitleScene` 为 true 时直接进入 `WorldScene`。
+    - 冷启动标题等待期间按 `initialSceneTheme` 预拉真实 scene PNG；未知 theme 会被 `isSceneThemeId` 拦住。
+  - `frontend/src/game/scenes/WorldScene.ts`
+    - initial bootstrap 先应用程序背景，再按需拉取真实 scene texture，加载完成后确认 scene 仍匹配再替换。
+    - 重复 `scene_init` 会清掉同 id 旧 Agent 的 container、minimap dot、halo/wander timer 和相关 tween，再创建新 sprite。
+    - shutdown 会清 pending scene/sprite texture load tracking，避免旧 key 阻塞后续加载。
+  - `frontend/src/game/PhaserGame.test.ts`
+    - 补 replay sync timer 在 TitleScene 已被跳过时只清一次、且不继续调用 replay sync 的测试。
+  - `frontend/src/game/scenes/WorldScene.test.ts`
+    - 补 idle-wander 初始 timer 可追踪、stale completion 不回写旧 Agent 记录的测试。
+
+- 本轮文档同步：
+  - `README.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `progress.md`
+
+- 本轮实际验证：
+  - `cd frontend && npm test -- --run src/game/PhaserGame.test.ts src/game/scenes/WorldScene.test.ts src/game/replaySync.test.ts`
+    - `3 passed / 43 tests passed`
+  - `cd frontend && npx tsc --noEmit`
+    - 通过
+  - `cd frontend && npx eslint src/game/PhaserGame.tsx src/game/PhaserGame.test.ts src/game/scenes/WorldScene.ts src/game/scenes/WorldScene.test.ts`
+    - 通过
+  - `cd frontend && npx tsc --noEmit && npx eslint src/game/ && npx vitest run && npm run build`
+    - 通过
+    - full vitest：`198 files / 2160 tests passed`
+    - `npm run build` 里的 `perf:budgets:check` status 为 ok，violations 为 `[]`
+  - `cd frontend && node -e "const en = require('./src/i18n/locales/en.json'); const zh = require('./src/i18n/locales/zh.json'); const enKeys = JSON.stringify(Object.keys(en).sort()); const zhKeys = JSON.stringify(Object.keys(zh).sort()); console.log('en keys:', Object.keys(en).length, 'zh keys:', Object.keys(zh).length, 'match:', enKeys === zhKeys)"`
+    - `en keys: 1 zh keys: 1 match: true`
+  - `git diff --check`
+    - 通过
+
+- 真实浏览器 spot-check：
+  - 打开本地 `/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9`
+  - 页面 title 为 `SwarmOracle`
+  - 页面有 1 个 Phaser canvas，当前 scene 为 `WorldScene`
+  - automation state 显示 `theme = modern_city`、`agent_count = 4`、Agent 可见、`is_transitioning = false`
+  - console error 为 0
+
+- 当前边界：
+  - 本地没有可复用的活跃 live scenario 可做真实浏览器 live-skip 取证；live skip 这条路径本轮由代码审查和 `PhaserGame.test.ts` 覆盖。
+  - 本轮未改 backend，因此没有重跑 backend 全量 pytest。

@@ -256,6 +256,20 @@ describe('WorldScene — prefers-reduced-motion', () => {
   });
 });
 
+describe('WorldScene — agent lifecycle cleanup', () => {
+  it('tracks the initial idle-wander timer so duplicate spawns can cancel it', () => {
+    const source = readWorldSceneSource();
+    expect(source).toContain('const initialDelay = 500 + Math.random() * 2000;');
+    expect(source).toContain('agent.wanderTimer = this.time.delayedCall(initialDelay, scheduleNext);');
+  });
+
+  it('guards idle-wander completion against stale agent records', () => {
+    expect(readWorldSceneSource()).toContain(
+      'if (this.agentSprites.get(agentId) !== a || !a.gameObject) return;',
+    );
+  });
+});
+
 describe('reducedMotion tween guards', () => {
   // These tests verify that key animation methods bail out or use duration=0
   // when reducedMotion is true, by checking the guard patterns in the source.

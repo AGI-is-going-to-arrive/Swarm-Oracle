@@ -7,6 +7,7 @@
  */
 import Phaser from 'phaser';
 import i18next from 'i18next';
+import { isSceneThemeId, getSceneTextureKey, getThemeAssetPath } from '../../lib/themeRegistry';
 
 // ── Color Palette (unified GBC-inspired) ──────────────────
 const PALETTE = {
@@ -54,6 +55,12 @@ export class TitleScene extends Phaser.Scene {
   }
 
   create(): void {
+    if (this.registry.get('skipTitleScene') === true) {
+      console.log('[TitleScene] Skipping for live simulation');
+      this.scene.start('WorldScene');
+      return;
+    }
+
     // Detect reduced-motion preference (skip decorative atmospheric effects)
     this.reducedMotion = typeof window !== 'undefined'
       && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
@@ -110,6 +117,15 @@ export class TitleScene extends Phaser.Scene {
     });
 
     console.log('[TitleScene] V3.1 title screen — click to skip or auto-transition in 4s');
+
+    const sceneThemeId = this.registry.get('initialSceneTheme') as string | undefined;
+    if (sceneThemeId && isSceneThemeId(sceneThemeId)) {
+      const texKey = getSceneTextureKey(sceneThemeId);
+      if (!this.textures.exists(texKey)) {
+        this.load.image(texKey, getThemeAssetPath(sceneThemeId));
+        this.load.start();
+      }
+    }
   }
 
   // ── Background Gradient ───────────────────────────────

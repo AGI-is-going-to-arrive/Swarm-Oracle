@@ -135,6 +135,7 @@ export function PhaserGame({
           const state = useSimulationStore.getState();
           game.registry.set('initialSceneTheme', resolveSceneTheme(state));
           game.registry.set('initialSpriteKeys', getInitialSpriteKeysForAgents(state.agents));
+          game.registry.set('skipTitleScene', state.agents.length > 0 && !state.isSimulationComplete);
         },
       },
       scene: [BootScene, TitleScene, WorldScene, EndingScene],
@@ -176,16 +177,28 @@ export function PhaserGame({
       await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
     };
 
+    const clearReplaySyncTimer = () => {
+      if (replaySyncTimer.current) {
+        window.clearInterval(replaySyncTimer.current);
+        replaySyncTimer.current = null;
+      }
+    };
+
     replaySyncTimer.current = window.setInterval(() => {
-      if (titleSkipDone.current) return;
+      const game = gameRef.current;
+      if (
+        titleSkipDone.current ||
+        (game?.scene.isActive('WorldScene') && !game.scene.isActive('TitleScene'))
+      ) {
+        titleSkipDone.current = true;
+        clearReplaySyncTimer();
+        return;
+      }
 
       const state = useSimulationStore.getState();
       if (ensureReplayStartsInWorldScene(gameRef.current, state)) {
         titleSkipDone.current = true;
-        if (replaySyncTimer.current) {
-          window.clearInterval(replaySyncTimer.current);
-          replaySyncTimer.current = null;
-        }
+        clearReplaySyncTimer();
         console.log('[PhaserGame] Replay sync timer skipped TitleScene');
       }
     }, 150);
@@ -350,7 +363,7 @@ export function PhaserGame({
       if (state.agents.length > 0) {
         window.setTimeout(() => {
           bootstrapWorldSceneFromStore(useSimulationStore.getState(), 'scene_ready');
-        }, 300);
+        }, 0);
       }
     });
 
@@ -361,6 +374,7 @@ export function PhaserGame({
     const storeUnsub = useSimulationStore.subscribe((state, prevState) => {
       if (!titleSkipDone.current && ensureReplayStartsInWorldScene(gameRef.current, state)) {
         titleSkipDone.current = true;
+        clearReplaySyncTimer();
         console.log('[PhaserGame] Skipped TitleScene for completed theater replay');
       }
 
@@ -429,10 +443,7 @@ export function PhaserGame({
       storeUnsub();
       if (bubbleCleanup.current) bubbleCleanup.current();
       clearReplayDoneTimer();
-      if (replaySyncTimer.current) {
-        window.clearInterval(replaySyncTimer.current);
-        replaySyncTimer.current = null;
-      }
+      clearReplaySyncTimer();
       replayPlaybackSyncRef.current = null;
       EventBridge.stop();
       if (gameRef.current) {

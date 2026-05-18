@@ -771,6 +771,13 @@ export class WorldScene extends Phaser.Scene {
           if (isInitialBootstrap) {
             this.applyThemeSwap(nextTheme, texKey, palette, this.scale.width, this.scale.height);
             this.sceneTheme = nextTheme;
+            // Fetch the real theme PNG if not already loaded
+            if (isSceneThemeId(nextTheme) && !this.textures.exists(texKey)) {
+              this.ensureSceneTexture(nextTheme, () => {
+                if (!this.sys.isActive() || this.sceneTheme !== nextTheme) return;
+                this.applyThemeSwap(nextTheme, texKey, palette, this.scale.width, this.scale.height);
+              });
+            }
           } else {
             this.transitionTheme(nextTheme);
           }
@@ -992,6 +999,24 @@ export class WorldScene extends Phaser.Scene {
   // ── Agent Spawning ────────────────────────────────────
 
   private spawnAgent(agent: { agent_id: string; name: string; sprite_id: string; x: number; y: number }): void {
+    // Idempotency guard: destroy existing agent with same ID to prevent duplicates
+    const existing = this.agentSprites.get(agent.agent_id);
+    if (existing) {
+      if (existing.haloTween) { existing.haloTween.stop(); }
+      if (existing.wanderTimer) { existing.wanderTimer.destroy(); }
+      if (existing.gameObject) {
+        this.tweens.killTweensOf(existing.gameObject);
+        this.tweens.killTweensOf(existing.gameObject.list);
+        existing.gameObject.destroy();
+      }
+      const dot = this.minimapDots.get(agent.agent_id);
+      if (dot) {
+        dot.destroy();
+        this.minimapDots.delete(agent.agent_id);
+      }
+      this.agentSprites.delete(agent.agent_id);
+    }
+
     const { width, height } = this.scale;
     const x = (agent.x / 800) * width;
     const y = (agent.y / 450) * height;
@@ -1200,20 +1225,24 @@ export class WorldScene extends Phaser.Scene {
           duration,
           ease: 'Sine.easeInOut',
           onComplete: () => {
+            if (this.agentSprites.get(agentId) !== a || !a.gameObject) return;
             a.x = targetX;
             a.y = targetY;
             // Update minimap dot position
             this.updateMinimapDot(agentId, targetX, targetY);
+            // Schedule next wander after this one finishes
+            a.wanderTimer = this.time.delayedCall(duration + 200, scheduleNext);
           },
         });
-
-        // Schedule next wander after this one finishes
-        this.time.delayedCall(duration + 200, scheduleNext);
       });
     };
 
     // Start after a random initial delay so agents don't all move at once
-    this.time.delayedCall(500 + Math.random() * 2000, scheduleNext);
+    const agent = this.agentSprites.get(agentId);
+    if (agent) {
+      const initialDelay = 500 + Math.random() * 2000;
+      agent.wanderTimer = this.time.delayedCall(initialDelay, scheduleNext);
+    }
   }
 
   // ── Dialogue Bubbles ──────────────────────────────────
@@ -2154,11 +2183,21 @@ export class WorldScene extends Phaser.Scene {
         agentData.haloTween.stop();
         agentData.haloTween = undefined;
       }
+      if (agentData.wanderTimer) {
+        agentData.wanderTimer.destroy();
+        agentData.wanderTimer = undefined;
+      }
       if (agentData.gameObject) {
+        this.tweens.killTweensOf(agentData.gameObject);
+        this.tweens.killTweensOf(agentData.gameObject.list);
         agentData.gameObject.destroy();
       }
     });
     this.agentSprites.clear();
+
+    // 2b. Clear pending texture load tracking to prevent stale keys blocking future loads
+    this.pendingSceneTextureLoads.clear();
+    this.pendingSpriteTextureLoads.clear();
 
     // 3. Destroy bubble containers
     this.bubbles.forEach((bubble) => bubble.destroy());

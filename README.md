@@ -83,7 +83,7 @@
 | 能力 | 当前状态 |
 |------|----------|
 | Multi-Agent Simulation | 已落地，支持 branch、narration、visualization；选中某个 Agent 时，实时发言会按世界线分组，方便看同一角色在不同分支里的差异 |
-| Pixel Theater | 已落地，Phaser 驱动，按需加载 |
+| Pixel Theater | 已落地，Phaser 驱动，按需加载；live 已有 Agent 时可直接进 WorldScene，场景 PNG 缺失时先显示程序背景再替换 |
 | Butterfly Effect | 已落地，支持即时 / 回溯 / 批量干预；完成后会把可解释的干预效果写成只读 receipt |
 | Gameplay Cards | 已落地，14 张卡与 18 个玩法 profile 走共享 gameplay contract；后端校验可用性、冷却与点数，重建正式干预 prompt，并把分支、Agent 名和自定义指令按 untrusted data 包裹 |
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响；题材回响放在高级选项里 |
@@ -189,10 +189,11 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-当前验证口径（最近更新：2026-05-18 Campaign Gameplay Enhancement）：
+当前验证口径（最近更新：2026-05-18 Phaser Theater loading hardening）：
 
-- backend：`ruff check .` 通过；`python -m pytest tests/ -x -q --tb=short` 为 `3180 passed, 6 skipped`。
-- frontend：`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build` 通过；`npx vitest run --reporter=verbose` 为 `198 files / 2157 tests passed`；`npx vitest run src/i18n/ --reporter=verbose` 为 `2 files / 21 tests passed`。
+- backend（本轮未改）：`ruff check .` 通过；`python -m pytest tests/ -x -q --tb=short` 为 `3180 passed, 6 skipped`。
+- frontend：`npx tsc --noEmit`、`npx eslint src/game/`、`npx vitest run`、`npm run build` 通过；full vitest 为 `198 files / 2160 tests passed`；i18n key parity spot-check 为 `en keys: 1 zh keys: 1 match: true`。
+- Phaser browser spot-check：本地 `/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 有 1 个 canvas，当前 scene 为 `WorldScene`，4 个 Agent 可见，console error 为 0。
 - 浏览器 E2E：Chromium mobile / gameplay / intervention / prediction、Firefox gameplay / intervention、WebKit gameplay / intervention 均通过；最终 Chromium gameplay mini 复验通过。
 - `git diff --check` 通过。
 
