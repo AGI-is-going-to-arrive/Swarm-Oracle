@@ -578,7 +578,7 @@ describe('InputView campaign progress', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('home.daily_challenge_done')).toBeInTheDocument();
+    expect(await screen.findByText(/campaign\.daily_completed/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'home.daily_challenge_replay' })).toBeInTheDocument();
   });
 
@@ -729,25 +729,6 @@ describe('InputView campaign progress', () => {
     expect(screen.getByText('At 5 rounds stay at or below 5 agents; at 5 agents stay at or below 5 rounds')).toBeInTheDocument();
   });
 
-  it('persists an optional org id from advanced settings', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <MemoryRouter>
-        <InputView />
-      </MemoryRouter>,
-    );
-
-    await openAdvancedSettings(user);
-
-    const orgIdInput = await screen.findByLabelText('home.org_id_label');
-
-    await user.type(orgIdInput, 'tenant-alpha');
-    expect(window.sessionStorage.getItem('swarmoracle_org_id')).toBe('tenant-alpha');
-
-    await user.clear(orgIdInput);
-    expect(window.sessionStorage.getItem('swarmoracle_org_id')).toBeNull();
-  });
 
   it('shows short helper copy for each BYOK field', async () => {
     const user = userEvent.setup();

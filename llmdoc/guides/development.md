@@ -140,22 +140,22 @@ ruff check app/api/admin.py app/api/scenarios.py app/api/quota.py app/services/s
 
 本轮 Sprint 0-2 收尾复核中，这组 pytest 为 `36 passed`，上述 touched-file ruff 为通过。
 
-### Gameplay / Snapshot 定向回归
+### Gameplay / Campaign / Snapshot 定向回归
 
-如果这轮改动涉及玩法卡、结构化押注、干预回执、snapshot export/import 或 Alembic 020-030，优先跑下面这组窄集：
+如果这轮改动涉及玩法卡、结构化押注、Campaign daily/weekly/badge、干预回执、snapshot export/import 或 Alembic 020-031，优先跑下面这组窄集：
 
 ```bash
 cd backend
 source .venv/bin/activate
-python -m pytest tests/test_api.py tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_memory.py tests/test_snapshot_export.py tests/test_migration_030.py tests/test_migration_022.py tests/test_fallback_migrations.py -q
-ruff check app/api/interventions.py app/api/campaign.py app/services/gameplay_contract.py app/services/memory.py app/services/simulator.py app/services/snapshot_export.py tests/test_api.py tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_memory.py tests/test_snapshot_export.py tests/test_migration_030.py tests/test_migration_022.py tests/test_fallback_migrations.py
-alembic upgrade 030_gameplay_intervention_metadata --sql >/tmp/upgrade-test-alembic-full-up.sql
-alembic downgrade 030_gameplay_intervention_metadata:base --sql >/tmp/upgrade-test-alembic-full-down.sql
+python -m pytest tests/test_api.py tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py tests/test_memory.py tests/test_snapshot_export.py tests/test_migration_030.py tests/test_migration_022.py tests/test_fallback_migrations.py tests/test_vector_store.py -q
+ruff check app/api/interventions.py app/api/campaign.py app/api/scenarios.py app/models/database.py app/services/campaign.py app/services/daily_challenges.py app/services/gameplay_contract.py app/services/memory.py app/services/simulator.py app/services/snapshot_export.py app/services/vector_store.py tests/test_api.py tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py tests/test_memory.py tests/test_snapshot_export.py tests/test_migration_030.py tests/test_migration_022.py tests/test_fallback_migrations.py tests/test_vector_store.py
+alembic upgrade 031_campaign_gameplay_ledger --sql >/tmp/upgrade-test-alembic-full-up.sql
+alembic downgrade 031_campaign_gameplay_ledger:030_gameplay_intervention_metadata --sql >/tmp/upgrade-test-alembic-full-down.sql
 ```
 
 ```bash
 cd frontend
-npm test -- --run src/api/client.test.ts src/components/gameplayCards.test.ts src/components/GameplayCardsModal.test.tsx src/components/PredictionModal.test.tsx src/components/InterventionReceiptCard.test.tsx src/lib/archiveSummary.test.ts src/lib/predictionBetting.test.ts src/lib/legacyCssFallbacks.test.ts src/pages/SimulationView.test.tsx src/pages/result/PredictionsSection.test.tsx src/i18n/locales.test.ts
+npm test -- --run src/api/client.test.ts src/components/gameplayCards.test.ts src/components/GameplayCardsModal.test.tsx src/components/PredictionModal.test.tsx src/components/InterventionReceiptCard.test.tsx src/components/campaign src/lib/archiveSummary.test.ts src/lib/dailyChallenge.test.ts src/lib/predictionBetting.test.ts src/lib/legacyCssFallbacks.test.ts src/pages/InputView.test.tsx src/pages/ResultView.test.tsx src/pages/SimulationView.test.tsx src/pages/result/PredictionsSection.test.tsx src/i18n/locales.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run lint
 npm run build
@@ -168,6 +168,7 @@ node --check scripts/e2e-intervention-receipt.mjs
 
 ```bash
 cd frontend
+node scripts/e2e-suite.mjs mobile --url http://127.0.0.1:18928 --headless
 node scripts/e2e-gameplay-cards-modal.mjs full --url http://127.0.0.1:18928 --headless
 node scripts/e2e-prediction-modal.mjs full --url http://127.0.0.1:18928 --headless
 node scripts/e2e-intervention-receipt.mjs full --url http://127.0.0.1:18928 --headless

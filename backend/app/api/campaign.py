@@ -116,6 +116,16 @@ class CampaignBadgeResponse(BaseModel):
     source_scenario_id: str | None = None
 
 
+class CampaignBadgeDefinitionResponse(BaseModel):
+    """Phase 3: static badge registry entry (definition, not unlock)."""
+
+    id: str
+    name_key: str
+    description_key: str
+    category: str
+    one_time: bool = True
+
+
 class CampaignScoreBreakdownItem(BaseModel):
     id: str
     label_key: str
@@ -135,6 +145,28 @@ class CampaignDailyChallengeResponse(BaseModel):
     betting_hit: bool | None = None
     profile_resonance: str | None = None
     campaign_score_delta: int | None = None
+    # Campaign Phase 1: durable challenge fields
+    challenge_id: str | None = None
+    challenge_local_date: str | None = None
+    difficulty_tier: str | None = None
+    streak_after: int | None = None
+    campaign_context_source: str | None = None
+    # Campaign Phase 2a: streak / activity envelope
+    current_streak: int = 0
+    recent_daily_completion_days: int = 0
+    next_refresh_at: str | None = None
+
+
+class CampaignLeaderboardEntryResponse(BaseModel):
+    """One row in a weekly leaderboard.
+
+    Privacy-by-design: ``user_name`` is masked (first 3 chars + ``***``) and
+    no user_id is exposed. Rank is 1-indexed.
+    """
+
+    rank: int
+    user_name: str
+    score: int
 
 
 class CampaignWeeklySummaryResponse(BaseModel):
@@ -149,6 +181,16 @@ class CampaignWeeklySummaryResponse(BaseModel):
     best_archive_grade: str | None = None
     top_profile_id: str | None = None
     profile_runs: dict[str, int] = Field(default_factory=dict)
+    # Campaign Phase 1: durable week + weekly-track aggregates
+    week_key: str | None = None
+    weekly_bonus_total: int = 0
+    weekly_track_runs: dict[str, int] = Field(default_factory=dict)
+    # Campaign Phase 2b: active weekly track + leaderboard preview
+    weekly_track_id: str | None = None
+    rank: int | None = None
+    leaderboard_entries: list[CampaignLeaderboardEntryResponse] = Field(
+        default_factory=list
+    )
 
 
 class CampaignChallengeDefinitionResponse(BaseModel):
@@ -162,13 +204,45 @@ class CampaignChallengeDefinitionResponse(BaseModel):
     num_agents: int
     mode: Literal["blackboard", "raw"]
     visualization_enabled: bool
+    # Campaign Phase 2a: per-challenge difficulty + hierarchical hint
+    hierarchical: bool = False
+    difficulty_tier: str | None = None
+
+
+class CampaignChallengeRecommendedParamsResponse(BaseModel):
+    num_agents: int | None = None
+    rounds: int | None = None
+    mode: Literal["blackboard", "raw"] | None = None
+    hierarchical: bool = False
+    visualization_enabled: bool = True
+    difficulty_tier: str | None = None
+
+
+class CampaignWeeklyTrackResponse(BaseModel):
+    id: str
+    week_key: str
+    title_zh: str
+    title_en: str
+    subtitle_zh: str
+    subtitle_en: str
+    profile_ids: list[str]
+    recommended_params: dict[str, object] = Field(default_factory=dict)
+    bonus_rules: str
+    bonus_rules_zh: str | None = None
+    bonus_rules_en: str | None = None
 
 
 class CampaignChallengeRotationResponse(BaseModel):
     local_date: str
     week_key: str
+    iso_week_key: str | None = None
+    next_refresh_at: str | None = None
     today_challenge: CampaignChallengeDefinitionResponse
+    today_recommended_params: (
+        CampaignChallengeRecommendedParamsResponse | None
+    ) = None
     weekly_challenges: list[CampaignChallengeDefinitionResponse]
+    weekly_track: CampaignWeeklyTrackResponse | None = None
 
 
 class CampaignFinalizeRequest(BaseModel):
@@ -268,6 +342,16 @@ class CampaignFinalizeResponse(BaseModel):
     mastery: CampaignMasteryResponse
     badges: list[CampaignBadgeResponse]
     newly_unlocked_badges: list[CampaignBadgeResponse]
+    # Campaign Phase 1: durable challenge/track provenance + dedupe + streak
+    campaign_context_source: str | None = None
+    challenge_id: str | None = None
+    challenge_local_date: str | None = None
+    week_key: str | None = None
+    weekly_track_id: str | None = None
+    difficulty_tier: str | None = None
+    weekly_bonus_delta: int = 0
+    streak_after: int | None = None
+    already_counted_daily_challenge: bool = False
 
 
 class CampaignScenarioSummaryResponse(BaseModel):
@@ -284,6 +368,15 @@ class CampaignScenarioSummaryResponse(BaseModel):
     campaign_score_delta: int
     score_breakdown: list[CampaignScoreBreakdownItem] = Field(default_factory=list)
     finalized_at: str | None = None
+    # Campaign Phase 1: durable challenge/track provenance
+    challenge_id: str | None = None
+    challenge_local_date: str | None = None
+    week_key: str | None = None
+    weekly_track_id: str | None = None
+    difficulty_tier: str | None = None
+    weekly_bonus_delta: int = 0
+    streak_after: int | None = None
+    campaign_context_source: str | None = None
 
 
 class ScenarioDirectorObjectiveResponse(BaseModel):
@@ -574,6 +667,45 @@ async def get_badges(
     user_id: str,
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> list[CampaignBadgeResponse]:
+    user_id = resolve_authenticated_user_id(user_id, principal) or user_id
+    badges = list_campaign_badge_summaries(user_id)
+    return [CampaignBadgeResponse(**badge) for badge in badges]
+
+
+@router.get(
+    "/badge-definitions",
+    response_model=list[CampaignBadgeDefinitionResponse],
+)
+async def get_badge_definitions() -> list[CampaignBadgeDefinitionResponse]:
+    """Phase 3: return the static badge registry (no session required)."""
+    from app.services.badge_registry import get_all_badge_definitions
+
+    return [
+        CampaignBadgeDefinitionResponse(
+            id=badge.id,
+            name_key=badge.name_key,
+            description_key=badge.description_key,
+            category=badge.category,
+            one_time=badge.one_time,
+        )
+        for badge in get_all_badge_definitions()
+    ]
+
+
+@router.get(
+    "/profile/{user_id}/unlocks",
+    response_model=list[CampaignBadgeResponse],
+)
+async def get_user_unlocks(
+    user_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+) -> list[CampaignBadgeResponse]:
+    """Phase 3 alias of /badges that explicitly conveys 'badge unlocks for X'.
+
+    Kept as a separate route so future per-unlock metadata (notification read
+    flag, surfaced_at, etc.) can extend this endpoint without disturbing the
+    legacy /badges contract.
+    """
     user_id = resolve_authenticated_user_id(user_id, principal) or user_id
     badges = list_campaign_badge_summaries(user_id)
     return [CampaignBadgeResponse(**badge) for badge in badges]

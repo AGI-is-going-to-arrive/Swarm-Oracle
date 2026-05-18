@@ -34,7 +34,7 @@ docker compose up backend
 | `/api/ending-room/{id}` | `api/ending_rooms.py` | 密室快照、结果、用户回合追加 |
 | `/api/scenario/{id}/survey` | `api/ending_rooms.py` | 圆桌问卷 SSE 端点，受 `FEATURE_ROUNDTABLE_SURVEY` gate |
 | `/api/scenario/{id}/analyst` | `api/ending_rooms.py` | 圆桌分析师 SSE 端点，受 `FEATURE_ROUNDTABLE_ANALYST` gate |
-| `/api/campaign` | `api/campaign.py` | Campaign 档案、徽章、精通度、每日挑战 |
+| `/api/campaign` | `api/campaign.py` | Campaign 档案、徽章定义/解锁、精通度、每日挑战、每周 track、leaderboard preview |
 | `/api/scenario/{id}/predict` | `api/predictions.py` | 预测提交、评分、排行榜 |
 | `/api/scenario/{id}/intervene` | `api/interventions.py` | 蝴蝶效应干预（单次/回溯/批量） |
 | `/api/scenario/{id}/social` | `api/social.py` | 社交媒体文案生成 |

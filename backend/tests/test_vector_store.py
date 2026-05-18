@@ -41,6 +41,22 @@ def temp_dir():
     shutil.rmtree(d, ignore_errors=True)
 
 
+def test_reset_vector_store_closes_existing_store(monkeypatch):
+    class _FakeStore:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    fake = _FakeStore()
+    monkeypatch.setattr(vector_store_module, "_vector_store", fake)
+
+    reset_vector_store()
+
+    assert fake.closed is True
+    assert vector_store_module._vector_store is None
+
+
 # ── TestVectorStore: Core CRUD ───────────────────────────────
 
 

@@ -99,6 +99,20 @@ _LIGHTWEIGHT_ADDITIVE_COLUMNS = (
     ("agent_identity", "is_favorite", "INTEGER DEFAULT 0"),
     ("pending_intervention", "metadata_json", "TEXT"),
     ("intervention_log", "effect_summary_json", "TEXT"),
+    # Campaign Phase 1 — durable challenge / track provenance (alembic 031).
+    # NB: the lightweight migrator only accepts a small whitelist of type
+    # tokens (TEXT / INTEGER / ...), so the parameterised VARCHAR(n) widths
+    # the alembic migration uses are flattened to TEXT here. SQLite stores
+    # all text in the same dynamic affinity, so the practical schema is
+    # equivalent.
+    ("scenario_campaign_log", "challenge_id", "TEXT"),
+    ("scenario_campaign_log", "challenge_local_date", "TEXT"),
+    ("scenario_campaign_log", "week_key", "TEXT"),
+    ("scenario_campaign_log", "weekly_track_id", "TEXT"),
+    ("scenario_campaign_log", "difficulty_tier", "TEXT"),
+    ("scenario_campaign_log", "weekly_bonus_delta", "INTEGER DEFAULT 0"),
+    ("scenario_campaign_log", "streak_after", "INTEGER"),
+    ("scenario_campaign_log", "campaign_context_source", "TEXT"),
 )
 
 
@@ -438,6 +452,7 @@ def _has_bootstrap_sqlmodel_schema(connection) -> bool:
     for table_name, column_name, column_type in _LIGHTWEIGHT_ADDITIVE_COLUMNS:
         if table_name in table_names:
             _migrate_add_column(connection, table_name, column_name, column_type)
+    _migrate_campaign_ledger_indexes(connection)
 
     for table_name, table in SQLModel.metadata.tables.items():
         if table_name not in table_names:
@@ -611,6 +626,7 @@ def _init_db_lightweight() -> None:
                     "created_at",
                 ],
             )
+            _migrate_campaign_ledger_indexes(conn)
             _migrate_create_index(
                 conn,
                 "replay_artifact",
@@ -695,6 +711,7 @@ def init_db():
                     list(_ENDING_ROOM_SCOPE_UNIQUE_COLUMNS),
                 )
                 _migrate_prediction_journal_calibration_index(conn)
+                _migrate_campaign_ledger_indexes(conn)
                 for table_name, column_name, column_type in _LIGHTWEIGHT_ADDITIVE_COLUMNS:
                     if table_name in {"pending_intervention", "intervention_log"}:
                         _migrate_add_column(conn, table_name, column_name, column_type)
@@ -754,6 +771,25 @@ def _migrate_prediction_journal_calibration_index(cursor) -> None:
         "prediction_journal_entries",
         "ix_prediction_journal_entries_user_resolved_at_outcome",
         ["user_id", "resolved_at", "actual_outcome"],
+    )
+
+
+def _migrate_campaign_ledger_indexes(cursor) -> None:
+    """Ensure campaign ledger indexes created by Alembic 031 exist on SQLite."""
+    if not _migrate_table_exists(cursor, "scenario_campaign_log"):
+        return
+    _migrate_create_index(
+        cursor,
+        "scenario_campaign_log",
+        "ix_campaign_log_weekly_lookup",
+        ["week_key", "director_profile_id", "weekly_track_id"],
+    )
+    _sqlite_exec(
+        cursor,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_campaign_log_daily_dedupe "
+        "ON scenario_campaign_log "
+        "(director_profile_id, challenge_local_date, challenge_id) "
+        "WHERE challenge_id IS NOT NULL AND challenge_local_date IS NOT NULL",
     )
 
 

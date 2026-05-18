@@ -45,6 +45,7 @@ export interface NormalizedChallengeDefinition {
   numAgents: number;
   mode: 'blackboard' | 'raw';
   visualizationEnabled: boolean;
+  difficulty_tier?: 'easy' | 'normal' | 'hard' | 'expert' | string;
 }
 
 function normalizeChallengeDefinition(
@@ -61,6 +62,7 @@ function normalizeChallengeDefinition(
     numAgents: challenge.num_agents,
     mode: challenge.mode,
     visualizationEnabled: challenge.visualization_enabled,
+    difficulty_tier: challenge.difficulty_tier,
   };
 }
 

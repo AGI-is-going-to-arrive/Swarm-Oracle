@@ -571,6 +571,7 @@
       "director_score_commitment_miss": "Worldline commitment broke",
       "director_score_commitment_pending": "Commitment still pending",
       "director_score_commitment_none": "No commitment to judge",
+      "director_score_weekly_track_bonus": "Weekly track bonus",
       "director_debrief_score_total": "Total applied this run: +{{total}}",
       "director_debrief_next_title": "What to do next",
       "director_debrief_next_fallback": "Use the branch tools first, then run another scenario in this profile with one explicit commitment.",
@@ -1519,6 +1520,103 @@
       "source_branch": "Branch",
       "status_aborted": "Aborted",
       "status_error": "Error"
+    },
+    "campaign": {
+      "streak_count": "{{count}} day streak",
+      "streak_zero": "Start your streak!",
+      "difficulty_easy": "Easy",
+      "difficulty_normal": "Normal",
+      "difficulty_hard": "Hard",
+      "difficulty_expert": "Expert",
+      "refresh_countdown": "Refreshes in {{time}}",
+      "refresh_duration_hours_minutes": "{{hours}}h {{minutes}}m",
+      "refresh_duration_minutes": "{{minutes}}m",
+      "refresh_available": "New challenge available",
+      "daily_completed": "Completed today",
+      "weekly_track_label": "Weekly Track",
+      "weekly_track_active": "Active this week",
+      "weekly_confirm_title": "Join Weekly Track?",
+      "weekly_confirm_body": "Complete challenges in this track for bonus points and leaderboard ranking.",
+      "weekly_confirm_action": "Join Track",
+      "weekly_cancel": "Cancel",
+      "weekly_bonus_rules": "Bonus",
+      "leaderboard_title": "Leaderboard",
+      "leaderboard_empty": "No entries yet",
+      "leaderboard_loading": "Loading...",
+      "leaderboard_error": "Could not load leaderboard",
+      "leaderboard_privacy_note": "Names are partially hidden for privacy",
+      "leaderboard_your_rank": "Your rank: #{{rank}}",
+      "leaderboard_name_col": "Name",
+      "leaderboard_score_col": "Score",
+      "badge_cabinet_title": "Badge Collection",
+      "badge_locked": "Locked",
+      "badge_unlocked": "Unlocked",
+      "level_progress": "Level {{level}}",
+      "score_progress": "{{current}} / {{next}} points to next level",
+      "achievement_unlocked": "Achievement Unlocked!",
+      "achievement_dismiss": "Dismiss"
+    },
+    "badge": {
+      "first_daily": {
+        "name": "First Steps",
+        "description": "Complete your first daily challenge"
+      },
+      "streak_3": {
+        "name": "On a Roll",
+        "description": "Maintain a 3-day streak"
+      },
+      "streak_7": {
+        "name": "Week Warrior",
+        "description": "Maintain a 7-day streak"
+      },
+      "streak_14": {
+        "name": "Fortnight Force",
+        "description": "Maintain a 14-day streak"
+      },
+      "streak_30": {
+        "name": "Monthly Master",
+        "description": "Maintain a 30-day streak"
+      },
+      "weekly_finisher": {
+        "name": "Track Completer",
+        "description": "Complete a weekly track"
+      },
+      "weekly_bonus": {
+        "name": "Bonus Hunter",
+        "description": "Earn a weekly track bonus"
+      },
+      "archive_a": {
+        "name": "A-Rank Archivist",
+        "description": "Achieve A-rank archive grade"
+      },
+      "archive_s": {
+        "name": "S-Rank Legend",
+        "description": "Achieve S-rank archive grade"
+      },
+      "bet_first": {
+        "name": "First Bet",
+        "description": "Place your first prediction bet"
+      },
+      "bet_streak_3": {
+        "name": "Oracle's Touch",
+        "description": "Win 3 consecutive bets"
+      },
+      "profile_level_3": {
+        "name": "Rising Star",
+        "description": "Reach level 3 with any profile"
+      },
+      "profile_level_5": {
+        "name": "Veteran Director",
+        "description": "Reach level 5 with any profile"
+      },
+      "five_profiles_level_3": {
+        "name": "Polymath",
+        "description": "Reach level 3 with 5 different profiles"
+      },
+      "objective_finisher": {
+        "name": "Mission Complete",
+        "description": "Complete all objectives in a scenario"
+      }
     },
     "agents": {
       "library_title": "Agent Library",

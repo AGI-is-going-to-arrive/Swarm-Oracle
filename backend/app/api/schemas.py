@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.config import settings
+
+_CAMPAIGN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+_CAMPAIGN_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_CAMPAIGN_WEEK_PATTERN = re.compile(r"^\d{4}-W\d{2}$")
 
 # ── Request schemas ──────────────────────────────────────
 
@@ -80,6 +86,73 @@ class WebSearchOverride(BaseModel):
     base_url: str | None = None
 
 
+class CampaignContext(BaseModel):
+    """Authoritative challenge/track context attached to a scenario at creation.
+
+    Persisted into ``Scenario.parsed_context.campaign_context`` and read by
+    ``finalize_scenario_campaign`` to drive durable daily-dedupe, streak, and
+    weekly-bonus accounting. Legacy callers that omit this context fall back
+    to the ``completed_daily_challenge`` boolean (``campaign_context_source``
+    becomes ``"legacy_bool"``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    challenge_id: str | None = None
+    challenge_local_date: str | None = None  # YYYY-MM-DD
+    week_key: str | None = None  # e.g. "2026-W20"
+    weekly_track_id: str | None = None
+    profile_id: str | None = None
+    difficulty_tier: Literal["easy", "normal", "hard", "expert"] | None = None
+    is_daily_challenge: bool = False
+    is_weekly_track: bool = False
+
+    @field_validator("challenge_local_date")
+    @classmethod
+    def validate_date_format(cls, v: str | None) -> str | None:
+        if v is not None and not _CAMPAIGN_DATE_PATTERN.match(v):
+            raise ValueError("challenge_local_date must be YYYY-MM-DD")
+        return v
+
+    @field_validator("week_key")
+    @classmethod
+    def validate_week_key_format(cls, v: str | None) -> str | None:
+        if v is not None and not _CAMPAIGN_WEEK_PATTERN.match(v):
+            raise ValueError("week_key must be YYYY-Wnn")
+        return v
+
+    @field_validator("challenge_id", "weekly_track_id", "profile_id")
+    @classmethod
+    def validate_id_charset(cls, v: str | None) -> str | None:
+        if v is not None and not _CAMPAIGN_ID_PATTERN.match(v):
+            raise ValueError("id fields must be 1-64 chars of [a-zA-Z0-9_-]")
+        return v
+
+    @model_validator(mode="after")
+    def validate_paired_intent_fields(self) -> "CampaignContext":
+        """Daily / weekly intents must come with their required identifiers.
+
+        Without these guarantees, a request would set ``is_daily_challenge=True``
+        but the ledger would have nothing to dedupe on, and ``streak_after`` /
+        weekly bonus accounting would silently no-op. Catching it at the API
+        boundary keeps callers honest.
+        """
+        if self.is_daily_challenge and not self.challenge_id:
+            raise ValueError(
+                "challenge_id is required when is_daily_challenge=True"
+            )
+        if self.is_weekly_track:
+            if not self.week_key:
+                raise ValueError(
+                    "week_key is required when is_weekly_track=True"
+                )
+            if not self.weekly_track_id:
+                raise ValueError(
+                    "weekly_track_id is required when is_weekly_track=True"
+                )
+        return self
+
+
 class CreateScenarioRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -113,6 +186,8 @@ class CreateScenarioRequest(BaseModel):
     # Phase 3 F3: Custom agent identities to include in simulation
     custom_agent_identity_ids: list[str] | None = None
     continuity_overrides: list["ContinuityOverrideRequest"] | None = None
+    # Campaign Phase 1: authoritative challenge/track context for finalize accounting
+    campaign_context: CampaignContext | None = None
 
     @field_validator("custom_agent_identity_ids")
     @classmethod

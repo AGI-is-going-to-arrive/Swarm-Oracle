@@ -77,10 +77,17 @@ def test_finalize_then_get_campaign_summaries(client: TestClient):
     assert finalize_data["profile"]["user_id"] == "director-api"
     assert finalize_data["profile"]["last_daily_challenge_profile_id"] == "governance"
     assert finalize_data["mastery"]["profile_id"] == "governance"
-    assert {badge["badge_id"] for badge in finalize_data["badges"]} == {
-        "daily_challenge",
-        "archive_record",
-        "bet_winner",
+    # Phase 3 registry: the legacy three-badge tuple has been replaced with a
+    # registry-driven sweep. An S-grade run with bet_hit=True and a daily-
+    # challenge completion unlocks ``first_daily``, ``archive_a``, ``archive_s``,
+    # ``bet_first``, plus ``objective_finisher`` (objectives complete) and
+    # ``weekly_finisher`` only if the run actually carried a weekly track.
+    assert {badge["badge_id"] for badge in finalize_data["badges"]} >= {
+        "first_daily",
+        "archive_a",
+        "archive_s",
+        "bet_first",
+        "objective_finisher",
     }
 
     profile = client.get("/api/campaign/profile/director-api")
@@ -97,7 +104,17 @@ def test_finalize_then_get_campaign_summaries(client: TestClient):
 
     badges = client.get("/api/campaign/profile/director-api/badges")
     assert badges.status_code == 200
-    assert len(badges.json()) == 3
+    # Phase 3 registry: legacy three-badge tuple is replaced by a finer
+    # registry sweep — an S-grade run with bet_hit + completed_daily +
+    # objectives_complete fires at least five distinct badges.
+    badge_ids = {row["badge_id"] for row in badges.json()}
+    assert {
+        "first_daily",
+        "archive_a",
+        "archive_s",
+        "bet_first",
+        "objective_finisher",
+    } <= badge_ids
 
     scenario_summary = client.get(f"/api/campaign/scenario/{scenario_id}/summary")
     assert scenario_summary.status_code == 200
@@ -235,6 +252,9 @@ def test_empty_campaign_endpoints_return_placeholder_summary(client: TestClient)
 
 
 def test_challenge_rotation_endpoint_returns_today_and_weekly_challenges(client: TestClient):
+    # The catalog grew from 12→50 entries in Phase 2a, so we no longer assert
+    # a specific id — only structural properties. Rotation stability under
+    # catalog growth is covered by the dedicated test below.
     response = client.get(
         "/api/campaign/challenges/rotation",
         params={
@@ -247,9 +267,19 @@ def test_challenge_rotation_endpoint_returns_today_and_weekly_challenges(client:
     data = response.json()
     assert data["local_date"] == "2026-03-17"
     assert data["week_key"] == "2026-03-16"
-    assert data["today_challenge"]["id"] == "daily-mythic-pact"
-    assert data["today_challenge"]["profile_id"] == "mythic"
+    today = data["today_challenge"]
+    assert isinstance(today["id"], str) and today["id"].startswith("daily-")
+    assert isinstance(today["profile_id"], str)
+    # Phase 2a: every catalog entry now exposes its difficulty tier.
+    assert today["difficulty_tier"] in {"easy", "normal", "hard", "expert"}
     assert len(data["weekly_challenges"]) == 3
+    # Phase 2a + 2b: rotation surfaces ISO week_key, next-midnight refresh,
+    # the active weekly track block, and per-challenge recommended params.
+    assert data["iso_week_key"].startswith("2026-W")
+    assert data["next_refresh_at"] is not None
+    assert data["today_recommended_params"]["difficulty_tier"] == today["difficulty_tier"]
+    assert data["weekly_track"]["id"].startswith("weekly-")
+    assert data["weekly_track"]["week_key"] == data["iso_week_key"]
 
 
 def test_challenge_rotation_is_stable_when_catalog_grows_without_rotation_change():
@@ -952,3 +982,391 @@ def test_intervention_effects_endpoint_ignores_malformed_summary(client: TestCli
     assert response.status_code == 200
     # Both malformed rows must be silently filtered out.
     assert response.json() == {"effects": []}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Campaign Phase 1: campaign_context create + finalize round-trip
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _attach_context_to_scenario(scenario_id: str, context: dict) -> None:
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        parsed = dict(scenario.parsed_context or {})
+        parsed["campaign_context"] = context
+        scenario.parsed_context = parsed
+        session.add(scenario)
+        session.commit()
+
+
+def test_create_scenario_persists_campaign_context_in_parsed_context(client: TestClient):
+    # Use real catalog ids — the C-1 catalog cross-check rejects unknown ones.
+    today = datetime.now(timezone.utc).date().isoformat()
+    today_challenge = daily_challenges_module.get_today_challenge_definition(today)
+    active_track = daily_challenges_module.get_current_weekly_track(today)
+    payload = {
+        "question": "Phase 1 context routing",
+        "user_id": "director-ctx-create",
+        "num_agents": 3,
+        "campaign_context": {
+            "challenge_id": today_challenge["id"],
+            "weekly_track_id": active_track["id"],
+            "week_key": "2026-W21",
+            "profile_id": today_challenge["profile_id"],
+            "difficulty_tier": "normal",
+            "is_daily_challenge": True,
+            "is_weekly_track": True,
+        },
+    }
+    response = client.post("/api/scenario", json=payload)
+    assert response.status_code == 200, response.text
+    scenario_id = response.json()["id"]
+
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        assert isinstance(scenario.parsed_context, dict)
+        persisted = scenario.parsed_context["campaign_context"]
+    assert persisted["challenge_id"] == today_challenge["id"]
+    assert persisted["weekly_track_id"] == active_track["id"]
+    assert persisted["profile_id"] == today_challenge["profile_id"]
+    assert persisted["difficulty_tier"] == today_challenge["difficulty_tier"]
+    assert persisted["is_daily_challenge"] is True
+    assert persisted["is_weekly_track"] is True
+    # Server-derive guard overrode the client-supplied date/week_key, so only
+    # format conformance is meaningful — concrete values are server-controlled.
+    import re as _re
+    assert _re.match(r"^\d{4}-\d{2}-\d{2}$", persisted["challenge_local_date"])
+    assert _re.match(r"^\d{4}-W\d{2}$", persisted["week_key"])
+
+
+def test_create_scenario_rejects_non_current_daily_campaign_context(client: TestClient):
+    today = datetime.now(timezone.utc).date().isoformat()
+    today_challenge = daily_challenges_module.get_today_challenge_definition(today)
+    other = next(
+        challenge
+        for challenge in daily_challenges_module.DAILY_CHALLENGES
+        if challenge["id"] != today_challenge["id"]
+    )
+    response = client.post(
+        "/api/scenario",
+        json={
+            "question": "wrong daily",
+            "campaign_context": {
+                "challenge_id": other["id"],
+                "is_daily_challenge": True,
+            },
+        },
+    )
+    assert response.status_code == 422
+    assert "server daily rotation" in response.text
+
+
+def test_create_scenario_rejects_non_active_weekly_track_context(client: TestClient):
+    today = datetime.now(timezone.utc).date().isoformat()
+    active_track = daily_challenges_module.get_current_weekly_track(today)
+    other = next(
+        track
+        for track in daily_challenges_module.WEEKLY_TRACKS
+        if track["id"] != active_track["id"]
+    )
+    response = client.post(
+        "/api/scenario",
+        json={
+            "question": "wrong weekly",
+            "campaign_context": {
+                "week_key": "2099-W01",
+                "weekly_track_id": other["id"],
+                "is_weekly_track": True,
+            },
+        },
+    )
+    assert response.status_code == 422
+    assert "active server weekly track" in response.text
+
+
+def test_create_scenario_rejects_malformed_campaign_context(client: TestClient):
+    payload = {
+        "question": "malformed context",
+        "campaign_context": {
+            "challenge_local_date": "not-a-date",
+        },
+    }
+    response = client.post("/api/scenario", json=payload)
+    assert response.status_code == 422
+    assert "challenge_local_date" in response.text
+
+
+def test_finalize_with_attached_context_returns_durable_fields(client: TestClient):
+    scenario_id = _seed_completed_scenario("api-context-finalize")
+    _attach_context_to_scenario(
+        scenario_id,
+        {
+            "challenge_id": "policy-2026-05-18",
+            "challenge_local_date": "2026-05-18",
+            "week_key": "2026-W21",
+            "weekly_track_id": "wt-spring",
+            "profile_id": "governance",
+            "difficulty_tier": "hard",
+            "is_daily_challenge": True,
+            "is_weekly_track": True,
+        },
+    )
+
+    finalize = client.post(
+        f"/api/campaign/scenario/{scenario_id}/finalize",
+        json={
+            "user_id": "director-api-ctx",
+            "user_name": "Cassie",
+            "profile_id": "governance",
+            "archive_grade": "A",
+            "profile_resonance": "signature",
+        },
+    )
+    assert finalize.status_code == 200, finalize.text
+    data = finalize.json()
+    assert data["campaign_context_source"] == "scenario_context"
+    assert data["challenge_id"] == "policy-2026-05-18"
+    assert data["challenge_local_date"] == "2026-05-18"
+    assert data["week_key"] == "2026-W21"
+    assert data["weekly_track_id"] == "wt-spring"
+    assert data["difficulty_tier"] == "hard"
+    assert data["weekly_bonus_delta"] == 1
+    assert data["streak_after"] == 1
+    breakdown = {item["id"]: item for item in data["score_breakdown"]}
+    assert breakdown["daily_challenge"]["applied"] is True
+    assert breakdown["weekly_theme_bonus"]["applied"] is True
+
+    summary = client.get(f"/api/campaign/scenario/{scenario_id}/summary")
+    assert summary.status_code == 200
+    summary_data = summary.json()
+    assert summary_data["challenge_id"] == "policy-2026-05-18"
+    assert summary_data["challenge_local_date"] == "2026-05-18"
+    assert summary_data["week_key"] == "2026-W21"
+    assert summary_data["weekly_track_id"] == "wt-spring"
+    assert summary_data["weekly_bonus_delta"] == 1
+    assert summary_data["streak_after"] == 1
+    assert summary_data["campaign_context_source"] == "scenario_context"
+
+
+def test_finalize_daily_dedupe_round_trip_via_api(client: TestClient):
+    """Two scenarios on the same (director, day, challenge) → second is deduped."""
+    context = {
+        "challenge_id": "api-dedupe-1",
+        "challenge_local_date": "2026-05-18",
+        "profile_id": "governance",
+        "is_daily_challenge": True,
+    }
+
+    first_id = _seed_completed_scenario("api-dedupe-first")
+    _attach_context_to_scenario(first_id, context)
+    first = client.post(
+        f"/api/campaign/scenario/{first_id}/finalize",
+        json={
+            "user_id": "director-api-dedupe",
+            "user_name": "Dee",
+            "profile_id": "governance",
+            "archive_grade": "B",
+            "profile_resonance": "offbeat",
+        },
+    )
+    assert first.status_code == 200
+    first_data = first.json()
+    assert first_data["already_counted_daily_challenge"] is False
+
+    second_id = _seed_completed_scenario("api-dedupe-second")
+    _attach_context_to_scenario(second_id, context)
+    second = client.post(
+        f"/api/campaign/scenario/{second_id}/finalize",
+        json={
+            "user_id": "director-api-dedupe",
+            "user_name": "Dee",
+            "profile_id": "governance",
+            "archive_grade": "B",
+            "profile_resonance": "offbeat",
+        },
+    )
+    assert second.status_code == 200
+    second_data = second.json()
+    assert second_data["already_counted_daily_challenge"] is True
+    assert second_data["streak_after"] is None
+    breakdown = {item["id"]: item for item in second_data["score_breakdown"]}
+    assert breakdown["already_counted_daily_challenge"]["applied"] is False
+    assert breakdown["daily_challenge"]["applied"] is False
+    assert second_data["campaign_score_delta"] < first_data["campaign_score_delta"]
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 2a / 2b: daily depth + weekly track API surface
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def test_challenge_rotation_includes_phase2_envelope(client: TestClient):
+    response = client.get(
+        "/api/campaign/challenges/rotation",
+        params={"local_date": "2026-05-18", "weekly_count": 3},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    # Phase 2a envelope
+    assert data["iso_week_key"].startswith("2026-W")
+    assert data["next_refresh_at"] is not None
+    today_params = data["today_recommended_params"]
+    assert today_params["num_agents"] == data["today_challenge"]["num_agents"]
+    assert today_params["difficulty_tier"] == data["today_challenge"]["difficulty_tier"]
+    # Phase 2b envelope
+    weekly = data["weekly_track"]
+    assert weekly["id"].startswith("weekly-")
+    assert isinstance(weekly["profile_ids"], list) and len(weekly["profile_ids"]) >= 1
+    assert "weekly_bonus" in weekly["bonus_rules"] or "bonus" in weekly["bonus_rules"]
+    assert weekly["bonus_rules_zh"]
+    assert weekly["bonus_rules_en"]
+
+
+def test_daily_status_endpoint_surfaces_streak_and_next_refresh(client: TestClient):
+    response = client.get(
+        "/api/campaign/profile/empty-director-2a/daily-status",
+        params={
+            "profile_id": "governance",
+            "local_date": "2026-05-18",
+            "timezone_offset_minutes": 0,
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["current_streak"] == 0
+    assert data["recent_daily_completion_days"] == 0
+    assert data["next_refresh_at"] is not None
+    assert data["next_refresh_at"].endswith("+00:00")
+
+
+def test_weekly_summary_includes_track_and_masked_leaderboard(client: TestClient):
+    # Use the actually-active weekly track id for 2026-05-18 so the leaderboard
+    # scope (which filters by ``weekly_track_id == active_track``) picks the row.
+    from app.services.daily_challenges import get_current_weekly_track
+
+    active_track = get_current_weekly_track("2026-05-18")["id"]
+    scenario_id = _seed_completed_scenario("api-track-leaderboard")
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        parsed = dict(scenario.parsed_context or {})
+        parsed["campaign_context"] = {
+            "challenge_id": "daily-ai-governance",
+            "challenge_local_date": "2026-05-18",
+            # 2026-05-18 falls in ISO W21 — must match what the leaderboard
+            # query derives from ``local_date.isocalendar()``.
+            "week_key": "2026-W21",
+            "weekly_track_id": active_track,
+            "profile_id": "governance",
+            "is_daily_challenge": True,
+            "is_weekly_track": True,
+        }
+        scenario.parsed_context = parsed
+        session.add(scenario)
+        session.commit()
+
+    finalize = client.post(
+        f"/api/campaign/scenario/{scenario_id}/finalize",
+        json={
+            "user_id": "director-leaderboard",
+            "user_name": "Leaderboard Pioneer",
+            "profile_id": "governance",
+            "archive_grade": "A",
+            "profile_resonance": "signature",
+        },
+    )
+    assert finalize.status_code == 200, finalize.text
+
+    weekly = client.get(
+        "/api/campaign/profile/director-leaderboard/weekly-summary",
+        params={"local_date": "2026-05-18", "timezone_offset_minutes": 0},
+    )
+    assert weekly.status_code == 200, weekly.text
+    data = weekly.json()
+    # Phase 2b: active weekly track id + rank + masked leaderboard
+    assert data["weekly_track_id"] is not None
+    assert data["weekly_track_id"].startswith("weekly-")
+    assert data["rank"] == 1
+    leaderboard = data["leaderboard_entries"]
+    assert len(leaderboard) >= 1
+    top = leaderboard[0]
+    assert top["rank"] == 1
+    # Privacy: full names must be masked to first-3-chars + ***
+    assert top["user_name"].endswith("***")
+    assert top["user_name"].startswith("Lea")  # "Leaderboard..." → "Lea***"
+    assert isinstance(top["score"], int)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Phase 3: badge-definitions + per-user unlocks endpoints
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def test_badge_definitions_endpoint_returns_phase3_registry(client: TestClient):
+    response = client.get("/api/campaign/badge-definitions")
+    assert response.status_code == 200
+    data = response.json()
+    ids = {row["id"] for row in data}
+    # Sanity: at least the 15 Phase 3 badges are present.
+    assert {
+        "first_daily",
+        "streak_3",
+        "weekly_finisher",
+        "archive_a",
+        "archive_s",
+        "bet_first",
+        "profile_level_3",
+        "five_profiles_level_3",
+        "objective_finisher",
+    } <= ids
+    sample = next(row for row in data if row["id"] == "first_daily")
+    assert sample["category"] == "daily"
+    assert sample["name_key"] == "campaign.badges.first_daily.name"
+    assert sample["one_time"] is True
+
+
+def test_user_unlocks_endpoint_mirrors_badges(client: TestClient):
+    scenario_id = _seed_completed_scenario("phase3-unlocks-endpoint")
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        parsed = dict(scenario.parsed_context or {})
+        parsed["campaign_context"] = {
+            "challenge_id": "daily-ai-governance",
+            "challenge_local_date": "2026-05-18",
+            "profile_id": "governance",
+            "is_daily_challenge": True,
+        }
+        scenario.parsed_context = parsed
+        session.add(scenario)
+        session.commit()
+
+    finalize = client.post(
+        f"/api/campaign/scenario/{scenario_id}/finalize",
+        json={
+            "user_id": "director-unlocks-endpoint",
+            "user_name": "UnlocksUser",
+            "profile_id": "governance",
+            "archive_grade": "S",
+            "profile_resonance": "signature",
+        },
+    )
+    assert finalize.status_code == 200, finalize.text
+    unlocks = client.get(
+        "/api/campaign/profile/director-unlocks-endpoint/unlocks"
+    )
+    assert unlocks.status_code == 200
+    badge_ids = {row["badge_id"] for row in unlocks.json()}
+    assert "first_daily" in badge_ids
+    assert "archive_a" in badge_ids
+    assert "archive_s" in badge_ids
+    # Compatibility: legacy /badges endpoint returns the same payload.
+    legacy = client.get("/api/campaign/profile/director-unlocks-endpoint/badges")
+    assert legacy.status_code == 200
+    assert {row["badge_id"] for row in legacy.json()} == badge_ids

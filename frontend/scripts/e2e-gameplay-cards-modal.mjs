@@ -518,9 +518,18 @@ async function runSurface(mode, contextOptions, args) {
 const DESKTOP_VIEWPORT = { width: 1280, height: 800 };
 const { defaultBrowserType: _unused, ...MOBILE_CTX_DEFAULTS } = devices["iPhone 13"];
 
-function buildContextOptions(mode) {
+function buildContextOptions(mode, browser) {
   if (mode !== "mobile") return { viewport: DESKTOP_VIEWPORT };
-  return { ...MOBILE_CTX_DEFAULTS, viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true };
+  const context = {
+    ...MOBILE_CTX_DEFAULTS,
+    viewport: { width: 375, height: 812 },
+    isMobile: true,
+    hasTouch: true,
+  };
+  if (browser === "firefox") {
+    delete context.isMobile;
+  }
+  return context;
 }
 
 function resolveSurfaceOutputDir({ outputDir, mode, browser }) {
@@ -531,7 +540,7 @@ function resolveSurfaceOutputDir({ outputDir, mode, browser }) {
 }
 
 function buildSurfaceRuns(args) {
-  const mk = (mode, browser) => ({ mode, browser, context: buildContextOptions(mode) });
+  const mk = (mode, browser) => ({ mode, browser, context: buildContextOptions(mode, browser) });
   if (args.mode === "desktop") return [mk("desktop", args.browser)];
   if (args.mode === "mobile") return [mk("mobile", args.browser)];
   return args.browserExplicitlySet

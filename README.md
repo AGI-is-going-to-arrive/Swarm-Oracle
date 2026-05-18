@@ -88,7 +88,7 @@
 | Gameplay Cards | 已落地，14 张卡与 18 个玩法 profile 走共享 gameplay contract；后端校验可用性、冷却与点数，重建正式干预 prompt，并把分支、Agent 名和自定义指令按 untrusted data 包裹 |
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响；题材回响放在高级选项里 |
 | Result Quality / Question Anchoring | 已落地，受 `FEATURE_RESULT_VERDICT` 和 `/api/capabilities.result_verdict` 控制；结果页在有 verdict 时先给出直接回答原问题的预测结论、置信度，并在结局卡有数据时显示分支级一句话回答 |
-| Director Campaign | 已落地，含 goals、risk/resource、commitment、growth、后端 `score_breakdown` 与结果页导演复盘 / 因果档案 |
+| Director Campaign | 已落地，含 52 条 daily challenge catalog、streak、7 条 weekly track + leaderboard、15 个 registry badge、非线性 mastery level、后端权威 `score_breakdown` 与结果页导演复盘 / 因果档案 |
 | Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight`；设置 `ADMIN_TOKEN` 后 admin API 要求 `X-Admin-Token` |
 | Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；identity continuity preflight 超时会按 504 返回，后端不会把它伪装成“无匹配”；首页启动流当前会提示错误但继续按无 continuity override 启动；自建 Agent 不开放 `CORE` 层级 |
 | Agent Backups | 已落地，受 `FEATURE_PERSONA_EXPORT` gate；支持单个 / 批量导出 `schema_version=1` Agent 备份 JSON；从备份创建会为当前用户创建新的 custom Agent，不覆盖已有 Agent，并把 decision bias 归一化到安全的 5 维数值 |
@@ -189,13 +189,12 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-当前验证口径（最近更新：2026-05-18 gameplay-system hardening）：
+当前验证口径（最近更新：2026-05-18 Campaign Gameplay Enhancement）：
 
-- gameplay-system hardening 最终复验：backend full pytest `3141 passed, 6 skipped`；backend `ruff check .` 通过；frontend full vitest `189 files / 2107 tests passed`；`npx tsc --noEmit -p tsconfig.app.json` 通过；frontend gameplay / prediction / receipt / debate copy 相关目标文件 eslint 通过；3 个 gameplay 浏览器 E2E 脚本 desktop/mobile 共 `6/6` runs、`74/74` steps 通过；`git diff --check` 通过。
-- backend Result Quality 定向回归：`15 passed, 181 deselected`；`ruff check app/ tests/test_parser.py` 通过。
-- backend broad command `python -m pytest tests/ -q --timeout=120 --ignore=tests/test_e2e_alembic.py -k "not test_parse_modern"`：`3 failed, 3024 passed, 7 skipped, 1 deselected`。后续单独确认 `test_rounds_clamped` 和 conversation abort timing 通过；`test_e2e_matrix.py::TestE2EMatrix::test_full_matrix` 是 live LLM matrix 在 120s timeout 下的慢路径风险。
-- 较早 Result Quality 前端基线：`npx tsc --noEmit`、targeted vitest `98 passed`、full vitest `185 files / 2047 tests passed`、`npx eslint src/ --max-warnings=0` 和 `npm run build` 通过；i18n parity spot-check 为 `en=2509 zh=2509 equal=true`。
-- 浏览器复核覆盖新结果页 `bd85148c-e739-4d22-a299-692532ff4154` 和旧结果页 `3daa95fe-8f30-48bd-b188-96961d2a1b12`；本地 SQLite 场景数据回填后，新页显示 verdict 和 12 个可见分支答案，旧页隐藏 verdict 且 answers=0；桌面与 `375x812` 移动端无 JS console error，语言切换可用。
+- backend：`ruff check .` 通过；`python -m pytest tests/ -x -q --tb=short` 为 `3180 passed, 6 skipped`。
+- frontend：`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build` 通过；`npx vitest run --reporter=verbose` 为 `198 files / 2157 tests passed`；`npx vitest run src/i18n/ --reporter=verbose` 为 `2 files / 21 tests passed`。
+- 浏览器 E2E：Chromium mobile / gameplay / intervention / prediction、Firefox gameplay / intervention、WebKit gameplay / intervention 均通过；最终 Chromium gameplay mini 复验通过。
+- `git diff --check` 通过。
 
 完整签收入口：
 

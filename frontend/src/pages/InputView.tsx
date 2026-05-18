@@ -22,7 +22,7 @@ import {
   type CreateScenarioOptions,
   type IdentityContinuityMatch,
 } from '../api/client';
-import type { WebSearchFamily } from '../types';
+import type { WebSearchFamily, CampaignContext } from '../types';
 import { getDirectorIdentity } from '../lib/directorIdentity';
 import { useAgentStore } from '../stores/agentStore';
 import { AgentAttachPanel } from '../components/AgentAttachPanel';
@@ -32,6 +32,7 @@ import { OnboardingGuide } from '../components/Onboarding/OnboardingGuide';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useOnboardingState } from '../hooks/useOnboardingState';
 import {
+  challengeDateKey,
   markChallengeStarted,
 } from '../lib/dailyChallenge';
 import { stringifyAutomationPayload } from '../game/automation';
@@ -54,7 +55,6 @@ import {
   useSharedChallengePrefill,
 } from '../hooks/useInputViewState';
 import { useWebSearchConfig } from '../hooks/useWebSearchConfig';
-import { useOrgContext } from '../hooks/useOrgContext';
 import { QuickStartCards, type QuickStartPreset } from '../components/QuickStartCards';
 import { ProgressIndicator } from '../components/ProgressIndicator';
 import SnapshotImportDialog from '../components/Export/SnapshotImportDialog';
@@ -70,6 +70,7 @@ import {
 } from '../components/ui/alert-dialog';
 import { predictTextareaHeight } from '../lib/textLayout/inputPredict';
 import { validateByok } from '../lib/llmProviderPolicy';
+import { StreakIndicator, DifficultyBadge, RefreshCountdown, WeeklyTrackChip, WeeklyTrackDialog } from '../components/campaign';
 import './InputView.css';
 
 function estimateSimulationMinutes(rounds: number, numAgents: number) {
@@ -293,7 +294,17 @@ type PendingSimulationLaunch = {
   nextMode: 'raw' | 'blackboard';
   nextVisualization: boolean;
   challengeId?: string;
+  campaignContext?: CampaignContext;
 };
+
+function normalizeCampaignDifficultyTier(
+  value: string | undefined,
+): CampaignContext['difficulty_tier'] {
+  if (value === 'easy' || value === 'normal' || value === 'hard' || value === 'expert') {
+    return value;
+  }
+  return undefined;
+}
 
 export function InputView() {
   const { t, i18n } = useTranslation();
@@ -336,6 +347,7 @@ export function InputView() {
   const submitErrorCode = useSimulationStore((s) => s.errorCode);
   const reset = useSimulationStore((s) => s.reset);
   const [confirmDialogData, setConfirmDialogData] = useState<{ question: string } | null>(null);
+  const [weeklyTrackDialogOpen, setWeeklyTrackDialogOpen] = useState(false);
   const isComposingRef = useRef(false);
   const launchInFlightRef = useRef(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -400,7 +412,6 @@ export function InputView() {
   } = useInputByokSettings(t, {
     onWebSearchServerHint: setWebSearchServerEnabled,
   });
-  const { orgId, setOrgId } = useOrgContext();
   const {
     campaignProfile,
     campaignBadges,
@@ -772,6 +783,43 @@ export function InputView() {
     continuityOverrides?: ContinuityOverride[],
   ): CreateScenarioOptions => {
     const trimmed = launch.nextQuestion.trim();
+
+    let campaignContext: CampaignContext | undefined = launch.campaignContext;
+    if (!campaignContext && launch.challengeId) {
+      if (todayChallenge && launch.challengeId === todayChallenge.id) {
+        const activeTrack = campaignChallengeRotation?.weekly_track;
+        campaignContext = {
+          challenge_id: todayChallenge.id,
+          challenge_local_date: campaignChallengeRotation?.local_date ?? challengeDateKey(),
+          profile_id: todayChallenge.profileId,
+          difficulty_tier: normalizeCampaignDifficultyTier(todayChallenge.difficulty_tier),
+          is_daily_challenge: true,
+          ...(activeTrack && campaignChallengeRotation?.iso_week_key
+            ? {
+                week_key: campaignChallengeRotation.iso_week_key,
+                weekly_track_id: activeTrack.id,
+                is_weekly_track: true,
+              }
+            : {}),
+        };
+      } else if (weeklyChallenges) {
+        const weeklyMatch = weeklyChallenges.find((c) => c.id === launch.challengeId);
+        const activeTrack = campaignChallengeRotation?.weekly_track;
+        if (weeklyMatch && activeTrack && campaignChallengeRotation?.iso_week_key) {
+          // Phase 2b: campaign_context.week_key MUST be the ISO YYYY-Wnn form
+          // (matches the backend validator). The legacy `week_key` field on
+          // the rotation response is the Monday-of-week date; use
+          // `iso_week_key` instead. Falls back to undefined if missing.
+          campaignContext = {
+            week_key: campaignChallengeRotation.iso_week_key,
+            weekly_track_id: activeTrack.id,
+            profile_id: activeTrack.profile_ids?.[0] ?? weeklyMatch.profileId,
+            is_weekly_track: true,
+          };
+        }
+      }
+    }
+
     return {
       question: trimmed,
       rounds: launch.nextRounds,
@@ -795,6 +843,7 @@ export function InputView() {
       continuityOverrides,
       ...buildScenarioRuntimePresetOptions(runtimePreset),
       ...(agentSelectedIds.size > 0 && { customAgentIdentityIds: [...agentSelectedIds] }),
+      ...(campaignContext && { campaignContext }),
     };
   }, [
     agentSelectedIds,
@@ -814,6 +863,9 @@ export function InputView() {
     selectedWebSearchFamilies,
     webSearchProvider,
     webSearchUsesCustomOverride,
+    todayChallenge,
+    weeklyChallenges,
+    campaignChallengeRotation,
   ]);
 
   const closeContinuityDialog = useCallback(() => {
@@ -1119,6 +1171,51 @@ export function InputView() {
       nextVisualization: todayChallenge.visualizationEnabled,
       challengeId: todayChallenge.id,
     });
+  };
+
+  const handleWeeklyChipClick = () => {
+    setWeeklyTrackDialogOpen(true);
+  };
+
+  const handleWeeklyTrackConfirm = async () => {
+    const track = campaignChallengeRotation?.weekly_track;
+    setWeeklyTrackDialogOpen(false);
+    if (!track || isSubmitting || launchInFlightRef.current) return;
+
+    const firstWeekly = weeklyChallenges[0];
+    if (!firstWeekly) return;
+
+    const profileId = track.profile_ids?.[0] ?? firstWeekly.profileId;
+    const recommendedAgents = track.recommended_params?.num_agents ?? firstWeekly.numAgents;
+    const recommendedRounds = track.recommended_params?.rounds ?? firstWeekly.rounds;
+
+    const trackQuestion = isZh ? firstWeekly.question : firstWeekly.questionEn;
+
+    setQuestion(trackQuestion);
+    setRounds(recommendedRounds);
+    setNumAgents(recommendedAgents);
+    setMode(firstWeekly.mode);
+    setVizEnabled(firstWeekly.visualizationEnabled);
+
+    await launchSimulation({
+      nextQuestion: trackQuestion,
+      nextRounds: recommendedRounds,
+      nextAgents: recommendedAgents,
+      nextMode: firstWeekly.mode,
+      nextVisualization: firstWeekly.visualizationEnabled,
+      challengeId: firstWeekly.id,
+      campaignContext: {
+        // Phase 2b: ISO YYYY-Wnn form required by backend CampaignContext.
+        week_key: campaignChallengeRotation?.iso_week_key,
+        weekly_track_id: track.id,
+        profile_id: profileId,
+        is_weekly_track: true,
+      },
+    });
+  };
+
+  const handleWeeklyTrackCancel = () => {
+    setWeeklyTrackDialogOpen(false);
   };
 
   const requestLaunch = (q: string) => {
@@ -2032,9 +2129,15 @@ export function InputView() {
                   />
                   <span>{t('home.daily_challenge_label')}</span>
                 </span>
-                <strong className="daily-challenge-card__title">{todayChallengeQuestion}</strong>
-                <span className="daily-challenge-card__subtitle">
-                  {isZh ? todayChallenge.subtitleZh : todayChallenge.subtitleEn}
+                <strong className="daily-challenge-card__title" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  {todayChallengeQuestion}
+                  {todayChallengeProgress?.current_streak !== undefined && (
+                    <StreakIndicator streak={todayChallengeProgress.current_streak} />
+                  )}
+                </strong>
+                <span className="daily-challenge-card__subtitle" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <DifficultyBadge difficulty={todayChallenge.difficulty_tier} />
+                  <span>{isZh ? todayChallenge.subtitleZh : todayChallenge.subtitleEn}</span>
                 </span>
                 <div className="daily-challenge-card__hooks" aria-label={t('common.theme_hooks_aria')}>
                   <span className="daily-challenge-card__pill daily-challenge-card__pill--profile">
@@ -2065,7 +2168,7 @@ export function InputView() {
                   <div className="daily-challenge-card__status">
                     <span className={`daily-challenge-card__pill ${todayChallengeProgress.completed ? 'daily-challenge-card__pill--done' : ''}`}>
                       {todayChallengeProgress.completed
-                        ? t('home.daily_challenge_done')
+                        ? `✓ ${t('campaign.daily_completed')}`
                         : t('home.daily_challenge_in_progress')}
                     </span>
                     {todayChallengeProgress.profileResonance && (
@@ -2087,6 +2190,7 @@ export function InputView() {
                     )}
                   </div>
                 )}
+                <RefreshCountdown nextRefreshAt={todayChallengeProgress?.next_refresh_at} />
               </div>
               <button
                 type="button"
@@ -2135,6 +2239,15 @@ export function InputView() {
                     </span>
                   ))}
                 </div>
+                {campaignChallengeRotation.weekly_track && (
+                  <div className="weekly-track-chip-row" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    <WeeklyTrackChip
+                      track={campaignChallengeRotation.weekly_track}
+                      active={campaignWeeklySummary?.weekly_track_id === campaignChallengeRotation.weekly_track.id}
+                      onClick={handleWeeklyChipClick}
+                    />
+                  </div>
+                )}
                 <div className="daily-challenge-card__status">
                   {campaignWeeklySummary && (
                     <span className="daily-challenge-card__pill">
@@ -2275,20 +2388,6 @@ export function InputView() {
                         />
                       </div>
                       <div className="byok-field">
-                        <label className="byok-label" htmlFor="org-id">{t('home.org_id_label')}</label>
-                        <span className="byok-field-help">{t('home.org_id_help')}</span>
-                        <input
-                          id="org-id"
-                          type="text"
-                          className="input byok-input"
-                          value={orgId ?? ''}
-                          onChange={(e) => setOrgId(e.target.value)}
-                          placeholder="team-alpha"
-                          disabled={isSubmitting}
-                          autoComplete="off"
-                        />
-                      </div>
-                      <div className="byok-field">
                         <label className="byok-label" htmlFor="byok-rpm">{t('home.byok_rpm_label')}</label>
                         <span className="byok-field-help">{t('home.byok_rpm_help')}</span>
                         <input
@@ -2422,6 +2521,15 @@ export function InputView() {
           )}
 
           <p className="iv-security-notice">{t('home.security_notice')}</p>
+
+          {campaignChallengeRotation?.weekly_track && (
+            <WeeklyTrackDialog
+              track={campaignChallengeRotation.weekly_track}
+              open={weeklyTrackDialogOpen}
+              onConfirm={handleWeeklyTrackConfirm}
+              onCancel={handleWeeklyTrackCancel}
+            />
+          )}
 
           <AlertDialog
             open={!!confirmDialogData}

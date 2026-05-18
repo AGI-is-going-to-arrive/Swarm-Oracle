@@ -25,14 +25,14 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、challenge、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、搜索深度选择、可选 `Organization ID`、推荐已配置搜索 / 高级自定义 provider 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、daily challenge、weekly track、difficulty、streak/refresh countdown、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、搜索深度选择、推荐已配置搜索 / 高级自定义 provider 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
 | SetupWizardView | `frontend/src/pages/SetupWizardView.tsx` | `/admin/setup` 3 步 provider 配置向导；选择 preset、填 API key/base URL、测试连接并写入 session-scoped provider policy |
 | AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、编辑/删除入口、返回首页按钮、卡片级 Agent 备份导出与从备份创建 Agent 入口 |
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择、PDF document upload tab，以及 capability-gated Agent 备份工具 |
 | IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、只读干预回执、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel、分支级 question answer、因果档案 / archive、导演笔记/导演复盘、campaign summary、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel、分支级 question answer、因果档案 / archive、导演笔记/导演复盘、campaign summary、weekly leaderboard preview、achievement toast、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | WorkbenchView | `frontend/src/pages/WorkbenchView.tsx` | 独立图谱工作台；支持 `graph / split / kg` 三种 view，保留 URL 里的 analysis branch，并提供返回结果页链接 |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
@@ -61,6 +61,7 @@
   - `frontend/src/lib/scenarioDirectorState.ts`
   - `frontend/src/lib/scenarioGameplayState.ts`
 - 主模式里 `scenario / branches / messages / status` 是 durable truth；`thinkingAgents` 只是瞬时 UI 态，resync 时会清空，不承担 replay authority。
+- Campaign launch context 只表达本轮入口意图；daily/weekly catalog、服务端日期、ISO week、streak、weekly bonus 和 badge unlock 都以后端 summary/finalize 为准。前端只展示后端返回的 campaign summary、weekly summary 和 badge payload。
 
 ### 兼容与缓存层
 
@@ -107,7 +108,7 @@
   - 首帧 auth、`auth_ok`、`4001 / 4404` 非重连口径与另外三条 WS 保持一致
 - `useEndingRoomWS` 与 `useAgentConversationWS` 当前都按同源 `window.location.host` 组装 WS host，不再写死本地 dev backend 端口；ending-room live room 当前实际连接 `/ws/ending-room/{room_id}`，不再从前端走旧的 `/api/ws/...` 路径；`19030 -> 19027` 这类 preview/backend 组合下，ending-room / roundtable live 更新也能正常跟上。
 - REST API 路径参数统一使用 `encodeURIComponent()` 编码（约 30 处），防止含特殊字符的 ID 破坏 URL 结构。
-- API client 当前会把首页高级设置里的可选 `Organization ID` 以 session-scoped `X-Org-Id` 请求头透传；留空时不发送。
+- API client 当前仍会读取 session-scoped `Organization ID` 并映射成 `X-Org-Id`；InputView 当前没有专门的 Organization ID 输入框。
 - API 客户端对服务端错误文本做脱敏处理（`sanitizeErrorText`），超过 200 字符或包含 stack trace / HTML 的响应会被替换为通用错误信息。
 - `ResultView` 当前的 `What's Next / 下一步` bridge：
   - capability ready 后在 Reader / Explore 都渲染，不再只藏在探索面板下面
@@ -194,6 +195,8 @@
 | `predictionBetting.ts` | `frontend/src/lib/predictionBetting.ts` | 结构化押注 helper |
 | `gameplayContract.ts` | `frontend/src/lib/gameplayContract.ts` | 共享玩法契约消费层 |
 | `GameplayCardsModal.tsx` | `frontend/src/components/GameplayCardsModal.tsx` | 玩法卡弹窗；推荐卡、分组折叠、后端 contract payload、focus trap、label/select 显式关联与 disclosure ARIA |
+| Campaign Components | `frontend/src/components/campaign/*` | campaign UI 组件；覆盖 streak、difficulty、refresh countdown、weekly track chip/dialog/leaderboard、badge cabinet、level progress 和 achievement toast |
+| `dailyChallenge.ts` | `frontend/src/lib/dailyChallenge.ts` | challenge date key 与 ISO week helper；用于前端入口显示和请求 context，最终结算仍以后端派生日期为准 |
 | `PredictionModal.tsx` | `frontend/src/components/PredictionModal.tsx` | 结构化预测弹窗；串行提交、快速重复提交防护、branch 晚到兜底、高级题材回响 disclosure 与 focus trap |
 | `InterventionReceiptCard.tsx` | `frontend/src/components/InterventionReceiptCard.tsx` | 只读干预效果回执；只展示当前 scenario 的 persisted effects，倒序展示，不展示内部 log id |
 | `roundtableSelection.ts` | `frontend/src/lib/roundtableSelection.ts` | `trait_mix / fault_line_first / witness_augmented` 选择辅助与测试入口 |
@@ -216,7 +219,7 @@
 | `manualChunks.ts` / `performanceBudgetConfig.mjs` | `frontend/src/lib/manualChunks.ts` / `frontend/scripts/lib/performanceBudgetConfig.mjs` | 前端构建分块与预算门禁单一事实源；React 保留在共享 `vendor`，`@antv/*` 隔离到 `g6-vendor`，`html2canvas / gif.js` 按需拆分，React Flow 栈继续走 Rollup 自动分块并纳入预算检查 |
 | `useG6Graph.ts` | `frontend/src/hooks/useG6Graph.ts` | G6 图谱 hook；等 ref-backed container 真正挂载后再建图，支持 options 更新、ResizeObserver resize、node click 订阅清理 |
 | `useNodeConversationTransport.ts` | `frontend/src/hooks/useNodeConversationTransport.ts` | `NodeConversationSheet` 的本地 transport hook；负责 `/start` / `/turn` 请求、origin branch/round/node/excerpt 透传、AbortController 生命周期和 SSE frame 解析 |
-| `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | 首页 `Organization ID` 的 sessionStorage 单一事实源；InputView 与 API client 共用，避免 header 逻辑散落 |
+| `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | `Organization ID` 的 sessionStorage helper；当前由 API client 读取并生成 `X-Org-Id`，InputView 不再展示专门输入框 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
 | `e2e-new-source-ingestion-live.mjs` | `frontend/scripts/e2e-new-source-ingestion-live.mjs` | source-ingestion 专项脚本；默认走 fixture，`SWARM_E2E_MODE=live` 时走真实 backend。live 模式会先显式打开首页总开关，校验 `/api/scenario` 请求里的 `web_search_families`，再检查结果页四个 source family 的状态；ready 时要求真实列表项，provider non-ready / unavailable / failed 状态按显式 UI 接受；`Polymarket` 的 `non-us` geo-gate 也走同一条 live 口径 |
 | `e2e-capability-matrix.mjs` | `frontend/scripts/e2e-capability-matrix.mjs` | graph/playability capability matrix；当前覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route，fixture payload 也包含 `agent_conversation / kg_explorer / replay_trace`。`ReplayView` 的 disabled 路径现在会落显式 unavailable surface，不再回首页；如果脚本还按旧 redirect 口径断言，先同步脚本再跑 |
@@ -275,7 +278,7 @@
 - Leaderboard segment filters 当前会把 `type/date/agent count` 筛选同步到 URL params；不带筛选时仍消费旧数组响应。
   - Leaderboard 的 loading、empty、retry 和 row/skeleton 动画都走 locale / reduced-motion 口径；快速切换筛选时会忽略迟到响应
   - 这些页面新增样式集中在共享 BEM class 和 editorial token 上，不使用新增 inline style
-- InputView 高级设置当前支持可选 `Organization ID`；值会写进 sessionStorage，并由 API client 自动映射成 `X-Org-Id`。清空输入时会同步移除该请求头。
+- InputView 当前不展示专门的 `Organization ID` 输入框；API client 仍会从 sessionStorage 读取已有组织 ID 并生成 `X-Org-Id`。
 - InputView 的搜索增强当前口径：
   - 搜索增强入口默认显示；`VITE_ENABLE_WEB_SEARCH` 只是旧开关，不再决定入口是否出现
   - `GET /api/capabilities` 只决定推荐的已配置搜索是否可直接使用，不决定整个 section 是否显示
@@ -582,14 +585,11 @@
   - 浏览器实测本机结果页显示 `对话 · 本机模式`，header 可直接进入因果图谱和图谱工作台；点击 `探索` 会滚到下一步区。
 - 当前 frontend 稳定验证口径：
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - full vitest：`189 files / 2107 tests passed`
-  - gameplay / prediction / receipt / debate copy 相关目标文件 eslint：通过
-  - 3 个 gameplay 浏览器 E2E 脚本：desktop/mobile 共 `6/6` runs、`74/74` steps 通过
-  - ResultView / ResultVerdictPanel / locale targeted vitest：较早基线 `98 passed`
-  - `npx eslint src/ --max-warnings=0`：历史全量基线通过；本轮只复验了上述目标文件
-  - `npm run build`：历史全量基线通过，performance budget 无 violations；本轮 gameplay hardening 未重跑 build
-  - i18n parity spot-check：历史记录 `en=2509 zh=2509 equal=true`；本轮 locale 测试随 full vitest 通过
-  - browser Result Quality 复核覆盖新结果页有 verdict 和分支答案、旧结果页无 verdict、语言切换、桌面与 `375x812` mobile，console 无 JS error
+  - `npm run lint`：通过
+  - `npm run build`：通过
+  - full vitest：`198 files / 2157 tests passed`
+  - i18n vitest：`2 files / 21 tests passed`
+  - campaign/gameplay 浏览器 E2E：Chromium mobile / gameplay / intervention / prediction、Firefox gameplay / intervention、WebKit gameplay / intervention 均通过；最终 Chromium gameplay mini 复验通过
   - Source Family Playwright 复核覆盖 Chromium / Firefox / WebKit 的 desktop `1440px` 与 mobile `375px` 六组合矩阵
   - native citation 浏览器复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵；WebKit Tab-to-links 按平台限制记录
   - legacy `e2e:web-search` 已用真实 provider 跑过 Tavily / Exa / xAI-local / SearXNG-local；`e2e:new-source-ingestion-live` 已跑 desktop + mobile live；`e2e:capability-matrix` 为 `30 passed / 0 failed`

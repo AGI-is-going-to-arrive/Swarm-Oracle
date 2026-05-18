@@ -13,6 +13,7 @@ import io
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
@@ -778,22 +779,94 @@ async def create_scenario(
             initial_scene_theme = "medieval_village"
 
     # 1) Create scenario record
+    scenario_parsed_context: dict[str, Any] = {
+        "mode": mode,
+        "hierarchical": use_hierarchical,
+        "simulation_rounds": sim_rounds,
+        **({
+            "web_search_intensity": web_search_intensity_config.intensity,
+            "web_search_max_results": web_search_intensity_config.max_results,
+            "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
+        } if web_search_intensity_config else {}),
+    }
+    # Campaign Phase 1: persist authoritative challenge/track context so that
+    # finalize_scenario_campaign can score against durable provenance rather
+    # than the legacy `completed_daily_challenge` boolean. The body of this
+    # branch also enforces the catalog cross-check (C-1) and server-derives
+    # ``challenge_local_date`` / ``week_key`` (C-2, H-4) so that streak +
+    # weekly aggregates run off server-controlled dates.
+    if req.campaign_context is not None:
+        from app.services.daily_challenges import (
+            get_current_weekly_track,
+            get_today_challenge_definition,
+            validate_campaign_context_against_catalog,
+        )
+
+        catalog_reason = validate_campaign_context_against_catalog(
+            challenge_id=req.campaign_context.challenge_id,
+            weekly_track_id=req.campaign_context.weekly_track_id,
+            is_daily_challenge=req.campaign_context.is_daily_challenge,
+            is_weekly_track=req.campaign_context.is_weekly_track,
+        )
+        if catalog_reason is not None:
+            raise api_error(422, "CAMPAIGN_CONTEXT_INVALID", catalog_reason)
+
+        context_payload = req.campaign_context.model_dump(exclude_none=True)
+        server_now = datetime.now(timezone.utc)
+        server_date = server_now.date()
+        server_date_key = server_date.isoformat()
+        iso_year, iso_week, _iso_weekday = server_date.isocalendar()
+        server_week_key = f"{iso_year:04d}-W{iso_week:02d}"
+        active_weekly_track = get_current_weekly_track(server_date_key)
+
+        if req.campaign_context.is_daily_challenge:
+            client_date_str = context_payload.get("challenge_local_date")
+            if client_date_str is not None:
+                try:
+                    client_date = datetime.fromisoformat(client_date_str).date()
+                except ValueError as exc:
+                    raise api_error(
+                        422,
+                        "CAMPAIGN_CONTEXT_INVALID",
+                        "challenge_local_date must be YYYY-MM-DD",
+                    ) from exc
+                if abs((server_date - client_date).days) > 1:
+                    raise api_error(
+                        422,
+                        "CAMPAIGN_CONTEXT_INVALID",
+                        "challenge_local_date drift exceeds ±1 day from server date",
+                    )
+            today_challenge = get_today_challenge_definition(server_date_key)
+            if req.campaign_context.challenge_id != today_challenge.get("id"):
+                raise api_error(
+                    422,
+                    "CAMPAIGN_CONTEXT_INVALID",
+                    "challenge_id must match the server daily rotation",
+                )
+            context_payload["challenge_id"] = today_challenge["id"]
+            context_payload["challenge_local_date"] = server_date_key
+            context_payload["week_key"] = server_week_key
+            context_payload["profile_id"] = today_challenge["profile_id"]
+            context_payload["difficulty_tier"] = today_challenge.get("difficulty_tier")
+
+        if req.campaign_context.is_weekly_track:
+            if req.campaign_context.weekly_track_id != active_weekly_track.get("id"):
+                raise api_error(
+                    422,
+                    "CAMPAIGN_CONTEXT_INVALID",
+                    "weekly_track_id must match the active server weekly track",
+                )
+            context_payload["week_key"] = server_week_key
+            context_payload["weekly_track_id"] = active_weekly_track["id"]
+
+        scenario_parsed_context["campaign_context"] = context_payload
     scenario = Scenario(
         question=question,
         status=ScenarioStatus.SIMULATING,
         visualization_enabled=viz_enabled,
         scene_theme=initial_scene_theme,
         user_id=effective_user_id or None,
-        parsed_context={
-            "mode": mode,
-            "hierarchical": use_hierarchical,
-            "simulation_rounds": sim_rounds,
-            **({
-                "web_search_intensity": web_search_intensity_config.intensity,
-                "web_search_max_results": web_search_intensity_config.max_results,
-                "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
-            } if web_search_intensity_config else {}),
-        },
+        parsed_context=scenario_parsed_context,
     )
     # Web Search Enhancement: fetch context synchronously before response.
     # P1-4: Base search and family search are now INDEPENDENT — a failure in
@@ -822,8 +895,6 @@ async def create_scenario(
         # --- Family search (independent) ---
         if settings.FEATURE_NEW_SOURCES and req.web_search_families:
             try:
-                from datetime import datetime, timezone
-
                 from app.services.web_context import (
                     _resolve_request_config,
                     fetch_family_context,

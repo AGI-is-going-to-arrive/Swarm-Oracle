@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Index, UniqueConstraint
+from sqlalchemy import Column, Index, Integer, String, UniqueConstraint, text
 from sqlmodel import Field, SQLModel
 
 from app.models.database import _now, _uuid
@@ -106,6 +106,27 @@ class ScenarioCampaignLog(SQLModel, table=True):
             "completed_daily_challenge",
             "created_at",
         ),
+        # Campaign Phase 1 — keep SQLModel metadata aligned with alembic 031
+        # so init_db's create_all path produces an identical schema. The
+        # partial unique daily-dedupe index is sqlite-specific (CREATE UNIQUE
+        # INDEX ... WHERE), expressed here via the ``sqlite_where`` dialect
+        # hook so the parity test against the alembic-managed DB matches.
+        Index(
+            "ix_campaign_log_daily_dedupe",
+            "director_profile_id",
+            "challenge_local_date",
+            "challenge_id",
+            unique=True,
+            sqlite_where=text(
+                "challenge_id IS NOT NULL AND challenge_local_date IS NOT NULL"
+            ),
+        ),
+        Index(
+            "ix_campaign_log_weekly_lookup",
+            "week_key",
+            "director_profile_id",
+            "weekly_track_id",
+        ),
         UniqueConstraint("scenario_id", name="uq_scenario_campaign_log_scenario_id"),
     )
 
@@ -124,3 +145,29 @@ class ScenarioCampaignLog(SQLModel, table=True):
     commitment_outcome: Optional[str] = None
     campaign_score_delta: int = 0
     created_at: datetime = Field(default_factory=_now)
+
+    # Campaign Phase 1: durable challenge/track provenance (nullable for back-compat)
+    challenge_id: Optional[str] = Field(
+        default=None, sa_column=Column(String(64), nullable=True)
+    )
+    challenge_local_date: Optional[str] = Field(
+        default=None, sa_column=Column(String(10), nullable=True)
+    )
+    week_key: Optional[str] = Field(
+        default=None, sa_column=Column(String(8), nullable=True)
+    )
+    weekly_track_id: Optional[str] = Field(
+        default=None, sa_column=Column(String(64), nullable=True)
+    )
+    difficulty_tier: Optional[str] = Field(
+        default=None, sa_column=Column(String(10), nullable=True)
+    )
+    weekly_bonus_delta: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, default=0, server_default="0")
+    )
+    streak_after: Optional[int] = Field(
+        default=None, sa_column=Column(Integer, nullable=True)
+    )
+    campaign_context_source: Optional[str] = Field(
+        default=None, sa_column=Column(String(20), nullable=True)
+    )

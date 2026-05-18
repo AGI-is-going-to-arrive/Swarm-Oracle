@@ -16,6 +16,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 ### 主模式
 
 - 首页创建 scenario，支持 5 步进度提示、quick starts、教育模板、agent/rounds、玩法档位、BYOK，以及 opt-in 的搜索增强推演；高级设置和 BYOK 现在分成两个可折叠区，首屏优先露出问题输入和快速开始。
+- Campaign 入口当前在首页内提供每日挑战和每周 track：前端从 rotation 读取今日挑战、difficulty、active weekly track 和刷新倒计时；创建 scenario 时会带上 campaign context，后端再校验 catalog、服务端 UTC 日期和 ISO week。
 - 首次进入首页时会显示 onboarding carousel；用户完成或跳过后状态保存在本地，后续不再重复弹出。
 - 首页启动前会用 AlertDialog 做 launch confirmation；底部安全提示跟随中英语言切换，不写入用户 key 或 provider 细节。
 - 搜索增强当前在首页按低配置路径呈现：
@@ -24,7 +25,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 首页搜索增强还支持搜索深度：`轻量` 抓取/注入 3 条，`标准` 抓取/注入 5 条，`深入` 抓取 10 条并向 prompt 注入 8 条；这个选择只影响本轮搜索预算和 prompt 片段数。
 - 模型原生联网不是第三个 app-layer provider；它只在 Source Family 域名传给受支持的非 proxy Responses 模型时由 runtime 注入 native tools，并在结果页展示 native citations。
 - Source Family 当前按有效 provider capability 开关选择项；server default 读服务端 `provider_capability`，custom override 有可识别 base URL 时按 URL 推断 Tavily / Exa / xAI / SearXNG，base URL 为空时使用下拉 provider 的 capability，只有非空未知 host 会显示 no-provider warning。provider 不支持 domain filter 时，四个 family checkbox 会保留可见但禁用，已选 family 会被清空，不会把旧选择带进下一次提交。
-- 首页高级设置当前还支持可选 `Organization ID`；值只在当前浏览器 session 内保存，并随请求头 `X-Org-Id` 透传，留空就不发送。
+- InputView 当前不展示专门的 `Organization ID` 输入框；API client 仍会从 sessionStorage 读取已有组织 ID 并生成 `X-Org-Id`。
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。preflight 解析阶段超时会返回 `504 IDENTITY_PREFLIGHT_TIMEOUT`，后端不会把它当成“无匹配”；当前首页启动流会提示错误，但继续按无 continuity override 启动。
 - 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑、收藏和选择自建 Agent，也可以在 `/agents/new` 通过 PDF document tab 生成 Agent；长 PDF 会走采样粗扫 + 全文证据精提，部分 persona 失败时保留已创建 Agent 并显示失败数量。首页 attach panel 会以卡片展示 persona、knowledge domains 和 decision bias，最多选择 5 个，并只把 identity id 传给主推演。自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。Agent Library 的 favorites 是普通筛选按钮，Workshop 的 manual/document tab 支持键盘方向键切换；capability/favorite 失败会显示本地化错误和 retry，不直接露出原始后端文本。
 - 当 `persona_export` capability 开启时，Agent Library 的卡片可导出 Agent 备份，顶部可从备份创建新的 custom Agent；Agent Workshop header 也会显示同一套备份工具，编辑已有 Agent 时才显示导出。备份导入不会覆盖已有身份，并会把 decision bias 归一化到安全的 5 维数值；粘贴 JSON 入口默认折叠在高级区域。导入/导出失败会显示本地化提示，意外错误只进入 debug log。
@@ -175,119 +176,23 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 ## 当前状态
 
 - 主闭环当前维持 `release-candidate` 级别。
-- 当前稳定基线仍保留：
-  - 本轮 gameplay-system hardening 最终复验：
-    - backend full pytest：`3141 passed, 6 skipped`
-    - backend `ruff check .`：通过
-    - frontend full vitest：`189 files / 2107 tests passed`
-    - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-    - frontend gameplay / prediction / receipt / debate copy 相关目标文件 eslint：通过
-    - 3 个 gameplay 浏览器 E2E 脚本：desktop/mobile 共 `6/6` runs、`74/74` steps 通过
-    - `git diff --check`：通过
-  - `graph / replay / backend correctness` 修复，以及 UI review findings 对应前端修复，当前都已并入基线
-  - P1 post-review hardening 的 fresh 验证当前已补：
-    - backend P1/迁移/契约窄集 pytest：`186 passed`
-    - backend ruff format/check：通过
-    - frontend targeted vitest：`237 tests passed`
-    - `npx tsc --noEmit -p tsconfig.app.json`：通过
-    - `node --check scripts/e2e-capability-matrix.mjs`：通过
-    - fixture-backed Playwright：ResultView replay 不暴露 live conversation；CausalReview server analysis 和 evidence tier 本地化通过
-    - capability matrix E2E：`30 passed / 0 skipped / 30 total`
-  - P1 post-review follow-up 当前也已补窄集复验：
-    - backend causal graph：`68 passed`
-    - backend graph/evidence 定向：`125 passed`
-    - frontend ResultView / CausalReviewView / locale 定向：`126 passed`
-    - 后端 ruff、前端目标文件 eslint、TypeScript noEmit 均通过
-  - backend `agent-conversation / quota / migration` 定向回归当前通过
-  - Document Ingestion 定向后端回归：`48 passed`
-  - backend full gate 最近一次记录为 `3141 passed, 6 skipped`；live LLM benchmark / observation 测试默认跳过，需要 `RUN_REAL_LLM_TESTS=1` 显式开启
-  - frontend `typecheck` 与 gameplay 相关目标文件 eslint 通过；full lint / build / perf budgets 仍沿用前一轮全量基线
-  - 本次 bridge/workbench 文案 + CausalReview guide key-node 标签窄集：`87 passed`
-  - 本次前端 TypeScript noEmit：通过
-  - 本轮 local quota + ResultView 图谱入口定向复验：backend quota `13 passed`，frontend targeted vitest `121 passed`，后端 ruff、前端 eslint 与 `tsconfig.app` noEmit 通过；浏览器实测本机结果页显示 `对话 · 本机模式`，图谱直达入口可见，`探索` 会滚到下一步区
-  - frontend 全量 vitest 最近一次记录为 `189 files / 2107 tests passed`
-  - frontend `npx tsc --noEmit -p tsconfig.app.json` 最近一次记录为通过
-  - frontend full eslint、build、i18n parity `2509/2509` 与 Result Quality 新旧结果页浏览器复核是前一轮全量基线；本地 SQLite 场景数据回填后，新 verdict 页显示 12 个可见分支 answer cards
-  - 本轮真实验证还包括：
-    - Classic 分支标题定向验证：
-      - `cd frontend && npm exec -- vitest run src/components/BranchTree.test.tsx`：`5 passed`
-      - `cd frontend && npm exec -- eslint src/components/BranchTree.tsx src/components/BranchNode.tsx src/components/BranchTree.test.tsx src/components/branchTitle.ts`：通过
-      - `cd frontend && npm exec -- tsc --noEmit -p tsconfig.app.json`：通过
-      - `cd backend && source .venv/bin/activate && pytest tests/test_audit_fixes.py::TestForkPromptTemplateConsistency -q`：`31 passed`
-      - `cd backend && source .venv/bin/activate && pytest tests/test_simulator.py::TestDetectFork -q`：`4 passed`
-      - `cd backend && source .venv/bin/activate && ruff check app/services/simulator.py tests/test_audit_fixes.py`：通过
-    - `cd backend && source .venv/bin/activate && ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
-    - `cd frontend && npm exec -- tsc --noEmit -p tsconfig.app.json`：通过
-    - frontend i18n 深层 key + placeholder parity：通过
-  - frontend 目标文件 `eslint`、`typecheck`、`build / perf budgets` 通过
-  - 本轮 Web Search / Source Family P0-P1/P4a hardening 已补：
-    - backend Web Search / Source Family 定向回归：`249 passed`
-    - backend provider capability parity 定向：`6 passed`
-    - frontend P4a Source Family 定向回归：`157 passed`
-    - backend `ruff check .`、frontend `tsc / lint / build` 通过
-    - Playwright 复核 Chromium / Firefox / WebKit 的桌面 `1440px` 与移动 `375px` 六组合矩阵通过
-  - Web Search P2/P3/P4b/P5 hardening 当时已补：
-    - backend full pytest 当时记录：`3008 passed, 2 skipped`
-    - backend `ruff check .`：通过
-    - frontend full vitest 当时记录：`184 files / 2041 tests passed`
-    - frontend `tsc / lint / build`：通过
-    - frontend i18n parity 当时记录：`2621/2621`
-    - native citation 浏览器复核覆盖 Chromium / Firefox / WebKit 的 desktop + mobile 六组合矩阵；WebKit Tab-to-links 按平台限制记录
-    - legacy release sweep 已用真实 provider 跑过：`e2e:web-search` 覆盖 Tavily / Exa / xAI-local / SearXNG-local，`e2e:new-source-ingestion-live` 覆盖 desktop + mobile live source ingestion，`e2e:capability-matrix` 为 `30 passed / 0 failed`
-  - fixture-backed local preview 浏览器复核：
-    - ResultView bridge DOM / disabled 样式通过
-    - FactionTimeline 文案 i18n 插值通过
-    - CausalReviewView guide disclosure 语义通过
-    - console clean
-  - 这轮 graph/playability 增量回归也已补：
-    - clean-room `e2e:ws:contract` `20 passed / 1 skipped / 0 failed`
-    - clean-room `e2e:capability-matrix` `30 passed / 0 skipped / 0 failed`
-    - `node --test scripts/e2e-ws-contract-suite.test.mjs` `18 passed`
-    - capability / replay / compare / kg / faction / i18n 定向 vitest `64 passed`
-  - 本轮 fresh local live 验证已补：
-    - `node-conversation-live`
-    - `kg-explorer-live`
-    - `replay-view-live`
-  - graph script contract：`node --test scripts/e2e-frontend-preflight.test.mjs` `25 passed`
-  - P1 前置图谱复核当前已覆盖指定本地 preview URL：
-    - `/kg-explorer/dbac37a3-3578-42b2-99c0-06185caad147`
-    - `/sim/dbac37a3-3578-42b2-99c0-06185caad147/causal-map`
-    - `/replay/32728bd6-282c-42f1-a7da-493892fce32a`
-    - `/result/dbac37a3-3578-42b2-99c0-06185caad147`
-    - 截图位于 `frontend/output/e2e/20260424-p1-preflight-fixes/`
-  - production preview 当前可挂到 `127.0.0.1:18930`
-  - 本轮 local `uv + vite preview` 复核也已补：
-    - 结果页 `进入会客厅 / 异线旁听席` 可直接打开
-    - roundtable live completed-state 不再卡在 `正在搭建世界线圆桌...`
-  - graph smoke / release-signoff 当前都会先跑前端 deep-link preflight；preview 没 ready、SPA fallback 失效，或 entry module、CSS entry、legacy fallback 资源不一致 / 不可达时会直接 fail-closed，不再把 404 混成图谱回归
-  - `phase3-batch-a full`、`phase3-batch-b full`、`phase3-batch-c full` 当前都已在 Chromium desktop/mobile + Firefox desktop + WebKit desktop 通过
-  - `e2e-new-source-ingestion-live` 当前在 `fixture full` 和 `live full` 下都已 fresh 通过
-    - live 口径已补 `web_search_families` 请求、结果页 web sources、四个 source family card 与 live state 展示；真实 provider 没有可用结果时允许 `empty / failed / search_skipped / unsupported_provider / fallback_unconstrained` 这类明确状态，不再把“四张卡必须非空”当成唯一成功条件
-  - `zh-CN batch-a full`、`zh-CN batch-b full` 通过
-  - focused browser spot-check 当前建议覆盖 CausalReview 节点对话、KG 工作台 `NodeQuickCard` 视口钳位，以及详情面板打开/关闭后的焦点恢复
-  - focused browser spot-check 当前也已确认 `/agents` 继续按 capability gate 落 disabled 文案，不是假阳性
-  - 本轮 custom agent browser spot-check 已覆盖 `/agents` 创建 IMPORTANT / CROWD Agent、tier badge、编辑回填、ResultView Agent Library bridge、tooltip hover、移动端 tier selector 单列与 Debate `custom_agent_ids` 请求体。
-  - 这轮 local preview 复核也已补：
-    - 首页 source family disabled tooltip 已跟随当前 UI 语言
-    - `ReplayView` capability disabled 不再回首页
-    - 结果页 `FactionTimeline` 空态已改成解释性提示
-  - Sprint 0-2 收尾复验当时已补：
-    - backend 本轮触碰文件定向 pytest：`36 passed`
-    - backend 本轮触碰文件 ruff：通过
-    - frontend full vitest 当时记录：`184 files / 2041 tests passed`
-    - frontend `tsc / lint / build / i18n parity`：通过
-    - browser matrix：`72 passed / 0 failed`，覆盖 12 项功能、Chromium / Firefox / WebKit、desktop 1440 与 mobile 375
-  - Sprint 5-6 收口验证当时已补：
-    - backend ruff：通过
-    - backend full pytest 当时记录：`3008 passed, 2 skipped`
-    - backend touched-file 定向回归：`314 passed`
-    - backend review-fix focused rerun：cancel / journal / snapshot / leaderboard segment `84 passed`；prediction API 回归 `48 passed`
-    - frontend full vitest 当时记录：`184 files / 2041 tests passed`
-    - frontend Sprint 5-6 focused rerun：`7 files / 104 tests passed`
-    - frontend `tsc / lint / build / i18n parity`：通过
-    - Debate live/result Chrome DevTools 复核覆盖 `1440px` 与 `375px`；score grid 单列、expand button `44px`、long role probe `overflow=0`
-    - Browser 复核覆盖 result fixture desktop/mobile Chromium `13/13`、capability matrix `30/30`，并手动打开 `/`、`/agents/new`、`/leaderboard`、`/admin/setup`、`/me/journal`；console warning/error 为 0，375px mobile 无横向溢出
-- 当前活跃执行点在 `.claude/team-plan/comprehensive-improvement-plan.md`：Sprint 0-6 已完成本地审查、修复和验证；Agent、Journal、模板、leaderboard segment、snapshot、admin setup、cancel 与相关安全/可用性收口已并入当前工作树。剩余架构级限制见 `overview/backlog.md`。
+- Campaign Gameplay Enhancement 已并入当前基线：
+  - daily challenge catalog：52 条
+  - weekly track registry：7 条
+  - badge registry：15 条
+  - scenario 创建会持久化 `campaign_context`，并由后端校验 daily/weekly catalog、服务端 UTC 日期和 ISO week；streak 与 weekly aggregate 不信任前端本地日期。
+  - campaign finalize 优先从持久化 `director_state_json / gameplay_state_json` 派生 `score_breakdown`、daily/streak、weekly bonus 和 badge unlock；旧 scenario 缺少 `campaign_context` 时仍保留 legacy fallback。
+- 最近完整本地验证：
+  - backend `ruff check .`：通过
+  - backend `python -m pytest tests/ -x -q --tb=short`：`3180 passed, 6 skipped`
+  - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - frontend `npm run lint`：通过
+  - frontend `npm run build`：通过
+  - frontend full vitest：`198 files / 2157 tests passed`
+  - frontend i18n vitest：`2 files / 21 tests passed`
+  - 浏览器 E2E：Chromium mobile / gameplay / intervention / prediction、Firefox gameplay / intervention、WebKit gameplay / intervention 均通过；最终 Chromium gameplay mini 复验通过
+  - `git diff --check`：通过
+- 剩余架构级限制见 `overview/backlog.md`。
 
 ## 文档入口
 

@@ -10,6 +10,7 @@ import logging
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -140,6 +141,32 @@ class VectorStore:
         """Check if ChromaDB is operational."""
         self._finalize_client_init()
         return self._client is not None
+
+    def close(self) -> None:
+        """Release the Chroma client so tests and shutdown do not leak workers."""
+        init_thread = getattr(self, "_client_init_thread", None)
+        if init_thread is not None and init_thread.is_alive():
+            init_thread.join(timeout=0.2)
+        self._client_init_thread = None
+        self._client_init_holder = None
+        self._collections.clear()
+
+        client = self._client
+        self._client = None
+        if client is None:
+            return
+
+        close = getattr(client, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+            return
+
+        system = getattr(client, "_system", None)
+        stop = getattr(system, "stop", None)
+        if callable(stop):
+            with suppress(Exception):
+                stop()
 
     @staticmethod
     def _collection_name(scenario_id: str) -> str:
@@ -482,7 +509,11 @@ def get_vector_store() -> VectorStore:
 def reset_vector_store() -> None:
     """Reset singleton (for testing)."""
     global _vector_store
+    store = _vector_store
     _vector_store = None
+    close = getattr(store, "close", None)
+    if callable(close):
+        close()
 
 
 def collection_name_for_scenario(scenario_id: str) -> str:

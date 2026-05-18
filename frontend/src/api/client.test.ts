@@ -399,6 +399,26 @@ describe('web search wire-format', () => {
     expect(body.web_search_base_url).toBe('https://api.firecrawl.dev/v2/search');
   });
 
+  it('should include campaignContext if provided', async () => {
+    const fetchMock = stubScenarioCreate();
+
+    await createScenario({
+      question: 'Campaign?',
+      campaignContext: {
+        challenge_id: 'daily-123',
+        profile_id: 'test-profile',
+        is_daily_challenge: true,
+      },
+    });
+
+    const body = getRequestBody(fetchMock);
+    expect(body.campaign_context).toEqual({
+      challenge_id: 'daily-123',
+      profile_id: 'test-profile',
+      is_daily_challenge: true,
+    });
+  });
+
   it('should strip web search override fields in preflight mode', async () => {
     const fetchMock = stubScenarioCreate();
 

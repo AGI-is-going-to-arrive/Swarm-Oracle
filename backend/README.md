@@ -36,7 +36,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | Admin | `app/api/admin.py` | Preflight diagnostics and `/admin/setup` LLM connection test endpoints |
 | Agents | `app/api/agents.py` | custom Agent library/workshop, favorites, identity inspector, document import, Agent backup export/create-from-backup (`persona_export`) |
 | Quota | `app/api/quota.py` | Conversation and replay quota summary |
-| Campaign | `app/api/campaign.py` | finalize, profile, mastery, badges, daily-status, weekly-summary, `director-state`, `gameplay-state`, scenario summary, read-only intervention effects |
+| Campaign | `app/api/campaign.py` | finalize, profile, mastery, badge definitions, user unlocks, daily rotation, weekly summary, `director-state`, `gameplay-state`, scenario summary, read-only intervention effects |
 | Conversation | `app/api/conversation.py` | Node conversation thread/start/get/turn/abort with SSE assistant streaming |
 | Debate | `app/api/debate.py` | Debate live/result/import-replay/predict + Debate WebSocket |
 | Ending Room | `app/api/ending_rooms.py` | Oracle Chambers / roundtable room、thread、user-turn、result 与 ending-room WebSocket |
@@ -81,6 +81,9 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | `GET` | `/api/scenario/{id}/intervention-effects` | Read persisted intervention effect receipts for one owned scenario |
 | `GET` | `/api/campaign/scenario/{id}/summary` | Scenario campaign summary |
 | `GET` | `/api/campaign/profile/{user_id}/weekly-summary` | Weekly campaign summary |
+| `GET` | `/api/campaign/challenges/rotation` | Daily challenge and active weekly track rotation |
+| `GET` | `/api/campaign/badge-definitions` | Static badge registry definitions |
+| `GET` | `/api/campaign/profile/{user_id}/unlocks` | Badge unlocks for the current user scope |
 | `POST` | `/api/debate` | Create debate |
 | `GET` | `/api/debate/{id}` | Debate live snapshot |
 | `GET` | `/api/debate/{id}/result` | Debate result payload |
@@ -99,8 +102,8 @@ source .venv/bin/activate
 python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py tests/test_llm_client.py tests/test_web_context.py tests/test_api.py -q
 ```
 
-- Latest local backend verification for gameplay-system hardening:
-  - `python -m pytest -q`: `3141 passed, 6 skipped`
+- Latest local backend verification for Campaign Gameplay Enhancement:
+  - `python -m pytest tests/ -x -q --tb=short`: `3180 passed, 6 skipped`
   - `ruff check .`: pass
 - Latest local backend verification for the Document Ingestion / backend gate:
   - `python -m pytest tests/test_document_ingestion.py -q`: `48 passed`
@@ -124,6 +127,10 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - Admin diagnostics still use the session gate. When `ADMIN_TOKEN` is set, `/api/admin/*` also requires a matching `X-Admin-Token`; in `ENV=production`, `/api/admin/test-llm` rejects local LLM base URLs.
 - The backend Docker image now runs as non-root `appuser`; the runtime healthcheck uses stdlib `http.client` instead of importing `httpx` every probe.
 - Scenario JSON authority fields now use mutable JSON columns, so in-place updates to `parsed_context / director_state_json / gameplay_state_json` can persist correctly.
+- `scenarios.py` now persists `campaign_context` for campaign launches, cross-checks daily challenge / weekly track ids against the server catalog, and derives `challenge_local_date / week_key` from server UTC time.
+- `campaign.py` now finalizes campaign progress from persisted director/gameplay authority when available. Legacy scenarios without campaign context still finalize through the older fallback path.
+- `daily_challenges.py` keeps the 52-entry daily catalog and 7 weekly tracks; `badge_registry.py` keeps the 15 static badge definitions and registry-driven unlock predicates.
+- `database.py` lightweight bootstrap now also repairs the Alembic 031 campaign ledger columns/indexes, including daily dedupe and weekly lookup indexes.
 - `shared/gameplay_contract.v1.json` now uses an mtime-aware cache and reloads after file updates without requiring a backend restart.
 - `shared/gameplay_contract.v1.json` missing at boot now raises a clear runtime error instead of failing later with a raw file-stat exception.
 - `gameplay_contract.py` now builds gameplay-card prompts on the backend and wraps target branch text, Agent names and custom directives as untrusted data before sending them to the model.

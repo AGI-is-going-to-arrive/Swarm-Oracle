@@ -571,6 +571,7 @@
       "director_score_commitment_miss": "世界线承诺落空",
       "director_score_commitment_pending": "世界线承诺待判定",
       "director_score_commitment_none": "没有承诺可判定",
+      "director_score_weekly_track_bonus": "本周赛道奖励",
       "director_debrief_score_total": "本局实际计入：+{{total}}",
       "director_debrief_next_title": "下一局该怎么打",
       "director_debrief_next_fallback": "先用分支工具复盘，再用一个明确世界线承诺开启同题材下一局。",
@@ -1519,6 +1520,103 @@
       "source_branch": "分支",
       "status_aborted": "已中止",
       "status_error": "出错"
+    },
+    "campaign": {
+      "streak_count": "连续 {{count}} 天",
+      "streak_zero": "开始你的连胜！",
+      "difficulty_easy": "简单",
+      "difficulty_normal": "普通",
+      "difficulty_hard": "困难",
+      "difficulty_expert": "专家",
+      "refresh_countdown": "{{time}} 后刷新",
+      "refresh_duration_hours_minutes": "{{hours}} 小时 {{minutes}} 分钟",
+      "refresh_duration_minutes": "{{minutes}} 分钟",
+      "refresh_available": "新挑战已就绪",
+      "daily_completed": "今日已完成",
+      "weekly_track_label": "本周赛道",
+      "weekly_track_active": "本周进行中",
+      "weekly_confirm_title": "加入本周赛道？",
+      "weekly_confirm_body": "完成此赛道的挑战以获得额外积分并冲击排行榜。",
+      "weekly_confirm_action": "加入赛道",
+      "weekly_cancel": "取消",
+      "weekly_bonus_rules": "奖励规则",
+      "leaderboard_title": "排行榜",
+      "leaderboard_empty": "暂无记录",
+      "leaderboard_loading": "加载中...",
+      "leaderboard_error": "排行榜加载失败",
+      "leaderboard_privacy_note": "为保护隐私，用户名已部分隐藏",
+      "leaderboard_your_rank": "你的排名：第 {{rank}} 名",
+      "leaderboard_name_col": "名称",
+      "leaderboard_score_col": "积分",
+      "badge_cabinet_title": "徽章收藏",
+      "badge_locked": "未解锁",
+      "badge_unlocked": "已解锁",
+      "level_progress": "等级 {{level}}",
+      "score_progress": "距下一等级还需 {{current}} / {{next}} 分",
+      "achievement_unlocked": "成就解锁！",
+      "achievement_dismiss": "关闭"
+    },
+    "badge": {
+      "first_daily": {
+        "name": "初次挑战",
+        "description": "完成你的第一个每日挑战"
+      },
+      "streak_3": {
+        "name": "三连胜",
+        "description": "保持3天连续挑战"
+      },
+      "streak_7": {
+        "name": "周挑战者",
+        "description": "保持7天连续挑战"
+      },
+      "streak_14": {
+        "name": "双周达人",
+        "description": "保持14天连续挑战"
+      },
+      "streak_30": {
+        "name": "月度大师",
+        "description": "保持30天连续挑战"
+      },
+      "weekly_finisher": {
+        "name": "赛道完成者",
+        "description": "完成一个周赛道"
+      },
+      "weekly_bonus": {
+        "name": "奖励猎手",
+        "description": "获得周赛道奖励"
+      },
+      "archive_a": {
+        "name": "A级档案师",
+        "description": "获得A级档案评分"
+      },
+      "archive_s": {
+        "name": "S级传奇",
+        "description": "获得S级档案评分"
+      },
+      "bet_first": {
+        "name": "首次下注",
+        "description": "进行你的第一次预测下注"
+      },
+      "bet_streak_3": {
+        "name": "预言之手",
+        "description": "连续赢得3次下注"
+      },
+      "profile_level_3": {
+        "name": "新星崛起",
+        "description": "任一档案达到3级"
+      },
+      "profile_level_5": {
+        "name": "资深导演",
+        "description": "任一档案达到5级"
+      },
+      "five_profiles_level_3": {
+        "name": "博学多才",
+        "description": "5个不同档案均达到3级"
+      },
+      "objective_finisher": {
+        "name": "任务完成",
+        "description": "完成一个场景的所有目标"
+      }
     },
     "agents": {
       "library_title": "Agent 库",

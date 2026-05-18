@@ -140,8 +140,11 @@
 | `GET` | `/api/campaign/profile/{user_id}` | profile |
 | `GET` | `/api/campaign/profile/{user_id}/mastery` | mastery |
 | `GET` | `/api/campaign/profile/{user_id}/badges` | badges |
+| `GET` | `/api/campaign/badge-definitions` | static badge definitions |
+| `GET` | `/api/campaign/profile/{user_id}/unlocks` | user badge unlocks |
 | `GET` | `/api/campaign/profile/{user_id}/daily-status` | daily status |
 | `GET` | `/api/campaign/profile/{user_id}/weekly-summary` | weekly summary |
+| `GET` | `/api/campaign/challenges/rotation` | daily challenge + weekly track rotation |
 | `GET/PUT` | `/api/campaign/scenario/{scenario_id}/director-state` | 主模式 director authority |
 | `GET/PUT` | `/api/campaign/scenario/{scenario_id}/gameplay-state` | 主模式 gameplay authority |
 | `GET` | `/api/campaign/scenario/{scenario_id}/summary` | scenario campaign summary |
@@ -155,6 +158,10 @@
   - 后端只要显式返回 `cards.usage_log`、`betting.bets`、`archive.key_moments`、`archive.branch_snapshots`，即使为空数组，也表示该分区 authoritative empty。
   - 前端不得再用本地缓存把该分区的旧数据补回去。
 - `summary` 与 `finalize` 会返回同一套 `score_breakdown`；每项包含 `id / label_key / points / applied`，由后端派生，用于解释 campaign score delta，不要求前端重新计算结算分。
+- `POST /api/scenario` 接收 `campaign_context`，但 daily/weekly context 会被后端 cross-check：daily challenge 必须匹配服务端当前 rotation，weekly track 必须匹配当前 active track；`challenge_local_date / week_key` 会改写为服务端 UTC 日期和 ISO week。
+- `finalize` 优先读取持久化 `director_state_json / gameplay_state_json` 作为 authority，派生 archive grade、押注、目标、commitment、daily/streak、weekly bonus 和 badge unlock。旧 scenario 缺这些 authority 时才使用 legacy request fallback。
+- daily challenge catalog 当前 52 条，weekly track registry 当前 7 条，badge registry 当前 15 条。`badge-definitions` 是静态 registry，不带用户进度；`profile/{user_id}/unlocks` 与 `badges` 返回当前 user scope 的已解锁徽章。
+- weekly bonus 按 `week_key + director_profile_id + weekly_track_id` 聚合，并有 per-track cap；并发 finalize 会走 runtime lock，避免同一周同一 track 重复加奖。
 
 ## Predictions
 

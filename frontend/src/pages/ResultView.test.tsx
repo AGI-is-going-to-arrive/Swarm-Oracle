@@ -459,6 +459,7 @@ vi.mock('../lib/directorIdentity', () => ({
 }));
 
 vi.mock('../lib/dailyChallenge', () => ({
+  challengeDateKey: () => '2026-03-17',
   findChallengeProgressByScenarioId: findChallengeProgressByScenarioIdMock,
   getTodayChallenge: () => ({ id: 'challenge-1' }),
   isChallengeScenario: () => false,

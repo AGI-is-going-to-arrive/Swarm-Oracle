@@ -297,7 +297,10 @@ frontend/
 | `CampaignScenarioSummary` | 场景 Campaign 摘要 (archive_grade/profile_resonance/commitment_outcome) |
 | `ScenarioDirectorState` | 导演状态 (objectives/commitment) |
 | `ScenarioGameplayState` | 游戏状态 (cards/betting/archive) |
-| `CampaignDailyChallengeStatus` / `CampaignWeeklySummary` | 每日/每周挑战 |
+| `CampaignContext` | scenario 创建时的 campaign intent (daily/weekly/challenge/track) |
+| `CampaignChallengeRotation` / `WeeklyTrack` | 首页 daily challenge 与 active weekly track rotation |
+| `CampaignDailyChallengeStatus` / `CampaignWeeklySummary` | 每日/每周挑战、weekly bonus、leaderboard preview |
+| `CampaignBadgeDefinition` / `CampaignLeaderboardEntry` | 静态徽章定义与 weekly leaderboard row |
 
 #### WebSocket 事件联合类型
 

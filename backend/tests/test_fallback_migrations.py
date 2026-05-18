@@ -191,6 +191,28 @@ def test_init_db_upgrades_empty_sqlite_to_current_head(tmp_path, monkeypatch):
     expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
 
     assert revision == expected_head
+    with database_module.get_engine().connect() as conn:
+        index_rows = conn.execute(
+            text(
+                """
+                SELECT name, sql
+                FROM sqlite_master
+                WHERE type = 'index'
+                  AND tbl_name = 'scenario_campaign_log'
+                  AND name IN ('ix_campaign_log_daily_dedupe', 'ix_campaign_log_weekly_lookup')
+                """
+            )
+        ).all()
+    index_sql = {name: sql for name, sql in index_rows}
+    assert set(index_sql) == {
+        "ix_campaign_log_daily_dedupe",
+        "ix_campaign_log_weekly_lookup",
+    }
+    assert "CREATE UNIQUE INDEX ix_campaign_log_daily_dedupe" in index_sql[
+        "ix_campaign_log_daily_dedupe"
+    ]
+    assert "challenge_id IS NOT NULL" in index_sql["ix_campaign_log_daily_dedupe"]
+    assert "challenge_local_date IS NOT NULL" in index_sql["ix_campaign_log_daily_dedupe"]
 
     database_module.dispose_engine()
 
@@ -433,6 +455,28 @@ def test_init_db_stamps_lightweight_bootstrap_schema_without_alembic_version(
     expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
 
     assert revision == expected_head
+    with database_module.get_engine().connect() as conn:
+        index_rows = conn.execute(
+            text(
+                """
+                SELECT name, sql
+                FROM sqlite_master
+                WHERE type = 'index'
+                  AND tbl_name = 'scenario_campaign_log'
+                  AND name IN ('ix_campaign_log_daily_dedupe', 'ix_campaign_log_weekly_lookup')
+                """
+            )
+        ).all()
+    index_sql = {name: sql for name, sql in index_rows}
+    assert set(index_sql) == {
+        "ix_campaign_log_daily_dedupe",
+        "ix_campaign_log_weekly_lookup",
+    }
+    assert "CREATE UNIQUE INDEX ix_campaign_log_daily_dedupe" in index_sql[
+        "ix_campaign_log_daily_dedupe"
+    ]
+    assert "challenge_id IS NOT NULL" in index_sql["ix_campaign_log_daily_dedupe"]
+    assert "challenge_local_date IS NOT NULL" in index_sql["ix_campaign_log_daily_dedupe"]
 
     database_module.dispose_engine()
 
@@ -1545,3 +1589,152 @@ def test_init_db_lightweight_fallback_removes_orphan_argument_graph_rows_for_del
 
     legacy_engine.dispose()
     database_module.dispose_engine()
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Migration 031 — campaign ledger columns + dedupe index round-trip
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def test_031_campaign_ledger_upgrade_downgrade_roundtrip(tmp_path, monkeypatch):
+    """Migration 031 must upgrade to head, then downgrade back to 030, cleanly.
+
+    Asserts column + index presence after each transition so a missing
+    drop_column on downgrade can never silently leave debris on production.
+    """
+    from app.config import settings
+    from app.models import database as database_module
+
+    alembic_runtime = database_module._load_alembic_runtime()
+    if alembic_runtime is None:
+        pytest.skip("Alembic runtime not available")
+    Config, command, _ScriptDirectory = alembic_runtime
+
+    db_path = tmp_path / "031-roundtrip.db"
+    db_url = f"sqlite:///{db_path}"
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    settings.DATABASE_URL = db_url
+    database_module.dispose_engine()
+
+    _backend_root, alembic_config = _build_alembic_config(database_module, Config, db_url)
+
+    # 1. Stage at 030: 031 columns / indexes must be absent.
+    command.upgrade(alembic_config, "030_gameplay_intervention_metadata")
+    engine = create_engine(db_url)
+    try:
+        inspector = inspect(engine)
+        col_names_at_030 = {col["name"] for col in inspector.get_columns("scenario_campaign_log")}
+        index_names_at_030 = {ix["name"] for ix in inspector.get_indexes("scenario_campaign_log")}
+        for new_col in (
+            "challenge_id",
+            "challenge_local_date",
+            "week_key",
+            "weekly_track_id",
+            "difficulty_tier",
+            "weekly_bonus_delta",
+            "streak_after",
+            "campaign_context_source",
+        ):
+            assert new_col not in col_names_at_030, new_col
+        assert "ix_campaign_log_daily_dedupe" not in index_names_at_030
+        assert "ix_campaign_log_weekly_lookup" not in index_names_at_030
+    finally:
+        engine.dispose()
+
+    # 2. Upgrade 030 -> 031: new columns + indexes appear.
+    command.upgrade(alembic_config, "031_campaign_gameplay_ledger")
+    engine = create_engine(db_url)
+    try:
+        inspector = inspect(engine)
+        col_names_at_031 = {col["name"] for col in inspector.get_columns("scenario_campaign_log")}
+        for required in (
+            "challenge_id",
+            "challenge_local_date",
+            "week_key",
+            "weekly_track_id",
+            "difficulty_tier",
+            "weekly_bonus_delta",
+            "streak_after",
+            "campaign_context_source",
+        ):
+            assert required in col_names_at_031, required
+
+        # The partial unique index is a sqlite-native CREATE INDEX statement,
+        # so inspect via sqlite_master to confirm both presence and the
+        # WHERE clause survived the migration.
+        with engine.connect() as conn:
+            dedupe = conn.execute(
+                text(
+                    "SELECT sql FROM sqlite_master WHERE name = "
+                    "'ix_campaign_log_daily_dedupe'"
+                )
+            ).scalar()
+            assert dedupe is not None
+            assert "WHERE" in dedupe.upper()
+            assert "challenge_id IS NOT NULL" in dedupe
+            assert "challenge_local_date IS NOT NULL" in dedupe
+            weekly = conn.execute(
+                text(
+                    "SELECT sql FROM sqlite_master WHERE name = "
+                    "'ix_campaign_log_weekly_lookup'"
+                )
+            ).scalar()
+            assert weekly is not None
+            assert "weekly_track_id" in weekly
+    finally:
+        engine.dispose()
+
+    # 3. Downgrade 031 -> 030: columns and indexes must be dropped cleanly.
+    command.downgrade(alembic_config, "030_gameplay_intervention_metadata")
+    engine = create_engine(db_url)
+    try:
+        inspector = inspect(engine)
+        col_names_after_down = {
+            col["name"] for col in inspector.get_columns("scenario_campaign_log")
+        }
+        for dropped in (
+            "challenge_id",
+            "challenge_local_date",
+            "week_key",
+            "weekly_track_id",
+            "difficulty_tier",
+            "weekly_bonus_delta",
+            "streak_after",
+            "campaign_context_source",
+        ):
+            assert dropped not in col_names_after_down, dropped
+        with engine.connect() as conn:
+            assert (
+                conn.execute(
+                    text(
+                        "SELECT name FROM sqlite_master WHERE name = "
+                        "'ix_campaign_log_daily_dedupe'"
+                    )
+                ).first()
+                is None
+            )
+            assert (
+                conn.execute(
+                    text(
+                        "SELECT name FROM sqlite_master WHERE name = "
+                        "'ix_campaign_log_weekly_lookup'"
+                    )
+                ).first()
+                is None
+            )
+    finally:
+        engine.dispose()
+
+    # 4. Re-upgrade to head to confirm 031 is idempotent after a roundtrip.
+    command.upgrade(alembic_config, "head")
+    engine = create_engine(db_url)
+    try:
+        inspector = inspect(engine)
+        post_round_col_names = {
+            col["name"] for col in inspector.get_columns("scenario_campaign_log")
+        }
+        assert "challenge_id" in post_round_col_names
+        assert "weekly_bonus_delta" in post_round_col_names
+    finally:
+        engine.dispose()
+        database_module.dispose_engine()

@@ -20,6 +20,9 @@ export interface ResolvedChallengeProgress extends ChallengeProgressEntry {
   source: 'local' | 'campaign' | 'merged';
   usedCardsKnown: boolean;
   betPlacedKnown: boolean;
+  current_streak?: number;
+  next_refresh_at?: string;
+  recent_daily_completion_days?: number;
 }
 
 export function challengeDateKey(date = new Date()) {
@@ -143,12 +146,31 @@ export function resolveChallengeProgress(
   campaignProgress: CampaignDailyChallengeStatus | null,
 ): ResolvedChallengeProgress | null {
   if (!campaignProgress?.completed) {
-    if (!localProgress) return null;
+    if (!localProgress) {
+      if (campaignProgress) {
+        return {
+          startedAt: new Date().toISOString(),
+          completed: false,
+          usedCards: [],
+          betPlaced: false,
+          source: 'campaign',
+          usedCardsKnown: false,
+          betPlacedKnown: false,
+          current_streak: campaignProgress.current_streak,
+          next_refresh_at: campaignProgress.next_refresh_at,
+          recent_daily_completion_days: campaignProgress.recent_daily_completion_days,
+        };
+      }
+      return null;
+    }
     return {
       ...localProgress,
       source: 'local',
       usedCardsKnown: true,
       betPlacedKnown: true,
+      current_streak: campaignProgress?.current_streak,
+      next_refresh_at: campaignProgress?.next_refresh_at,
+      recent_daily_completion_days: campaignProgress?.recent_daily_completion_days,
     };
   }
 
@@ -171,6 +193,9 @@ export function resolveChallengeProgress(
     source: localProgress ? 'merged' : 'campaign',
     usedCardsKnown: sameScenario,
     betPlacedKnown: sameScenario || campaignProgress.betting_hit != null,
+    current_streak: campaignProgress.current_streak,
+    next_refresh_at: campaignProgress.next_refresh_at,
+    recent_daily_completion_days: campaignProgress.recent_daily_completion_days,
   };
 }
 

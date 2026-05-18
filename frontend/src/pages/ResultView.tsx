@@ -14,6 +14,7 @@ import {
   getCampaignMastery,
   getCampaignProfile,
   getCampaignScenarioSummary,
+  getCampaignWeeklySummary,
   getReplayArtifact,
   getScenario,
   importReplayScenario,
@@ -42,6 +43,7 @@ import {
 } from '../lib/oracleReplay';
 import { isReplayEnvelopeLikelyTooLarge } from '../lib/replayCodec';
 import {
+  challengeDateKey,
   findChallengeProgressByScenarioId,
   markChallengeCompleted,
 } from '../lib/dailyChallenge';
@@ -89,10 +91,12 @@ import type {
   AgentInfo,
   CampaignFinalizeResult,
   CampaignScenarioSummary,
+  CampaignWeeklySummary,
   PredictionInfo,
   Scenario,
   StoryData,
 } from '../types';
+import { WeeklyLeaderboard } from '../components/campaign';
 import {
   buildCampaignSummaryFromExistingData,
   buildMomentHighlights,
@@ -209,6 +213,9 @@ export default function ResultView() {
   const [scoreError, setScoreError] = useState('');
   const [campaignSummary, setCampaignSummary] = useState<CampaignFinalizeResult | null>(null);
   const [campaignScenarioSummary, setCampaignScenarioSummary] = useState<CampaignScenarioSummary | null>(null);
+  const [weeklySummary, setWeeklySummary] = useState<CampaignWeeklySummary | null>(null);
+  const [weeklySummaryLoading, setWeeklySummaryLoading] = useState(false);
+  const [weeklySummaryError, setWeeklySummaryError] = useState(false);
   const [campaignError, setCampaignError] = useState('');
   const [campaignNotice, setCampaignNotice] = useState('');
   const [derivedScenarioMeta, setDerivedScenarioMeta] = useState<ScenarioMeta | null>(null);
@@ -677,6 +684,43 @@ export default function ResultView() {
     searchParams,
     t,
   ]);
+
+  useEffect(() => {
+    if (!campaignSummary) {
+      setWeeklySummary(null);
+      setWeeklySummaryError(false);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    const localDate = challengeDateKey(new Date());
+    const timezoneOffsetMinutes = new Date().getTimezoneOffset();
+    setWeeklySummaryLoading(true);
+    setWeeklySummaryError(false);
+    getCampaignWeeklySummary(
+      directorIdentity.userId,
+      localDate,
+      timezoneOffsetMinutes,
+      { signal: controller.signal },
+    )
+      .then((data) => {
+        if (cancelled) return;
+        setWeeklySummary(data);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setWeeklySummary(null);
+        setWeeklySummaryError(true);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setWeeklySummaryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [campaignSummary, directorIdentity.userId]);
 
   const handleExport = async () => {
     if (!id || exporting || isReplayMode) return;
@@ -1907,6 +1951,17 @@ export default function ResultView() {
             description: copy.description,
           }))}
         />
+      )}
+
+      {campaignSummary && (weeklySummaryLoading || weeklySummaryError || weeklySummary?.weekly_track_id) && (
+        <div style={{ marginTop: '1rem' }}>
+          <WeeklyLeaderboard
+            entries={weeklySummary?.leaderboard_entries ?? []}
+            currentUserRank={weeklySummary?.rank}
+            loading={weeklySummaryLoading}
+            error={weeklySummaryError}
+          />
+        </div>
       )}
 
       {campaignNotice && (

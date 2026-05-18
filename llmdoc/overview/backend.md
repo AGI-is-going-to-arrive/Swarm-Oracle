@@ -24,7 +24,7 @@
 | Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 Agent 备份导入导出；identity preflight 解析超时按 504 fail-closed |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary；bucket 会回显 `enforced / scope / window_seconds` |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板；正式玩法卡注入会在后端校验 contract、冷却、点数和 pending metadata，玩法卡业务校验失败返回结构化 `422` |
-| Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge、summary、score breakdown、只读 intervention effect receipts |
+| Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badge definitions、user unlocks、daily rotation、weekly track summary、leaderboard preview、score breakdown、只读 intervention effect receipts |
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
 | Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard 与 segment filters |
 | Journal | `backend/app/api/journal.py` | 个人预测日志、resolve 与 calibration 数据 |
@@ -63,6 +63,9 @@
 | Runtime Lock | `backend/app/services/runtime_lock.py` | SQLite shared lease + lease refresh，防重入 |
 | Debate Prompts | `backend/app/services/debate_prompts.py` | Debate motion/cast/turn prompt；LLM name、role、persona 生成与清洗 |
 | Gameplay Contract | `backend/app/services/gameplay_contract.py` | 读取共享玩法契约，生成后端权威的安全玩法卡指令与可读 prompt；目标世界线、Agent 名和自定义 directive 都按 untrusted data 包裹进 prompt |
+| Campaign Service | `backend/app/services/campaign.py` | campaign profile/mastery/finalize；从持久化 director/gameplay authority 派生得分、daily/streak、weekly bonus 与 badge unlock，旧 scenario 缺 authority 时走 legacy fallback |
+| Daily Challenge Registry | `backend/app/services/daily_challenges.py` | 52 条 daily challenge catalog、7 条 weekly track registry、rotation 与 catalog validation helper |
+| Badge Registry | `backend/app/services/badge_registry.py` | 15 条静态 badge definition 与 registry-driven unlock predicate |
 
 ### 数据模型
 
@@ -70,7 +73,7 @@
 |------|------|------|
 | Core Models | `backend/app/models/database.py` | `Scenario`、`Branch`、`Round`、`Message`、`ReplayArtifact`、`PendingIntervention`、`InterventionLog` 等 |
 | Agent Identity Models | `backend/app/models/agent_identity.py` | generated/custom identity、persona metadata、preferred tier、favorite 标记 |
-| Campaign Models | `backend/app/models/campaign.py` | director profile、mastery、badge、campaign log |
+| Campaign Models | `backend/app/models/campaign.py` | director profile、mastery、badge unlock、campaign log；campaign log 带 daily/weekly ledger 字段和 dedupe/weekly lookup index |
 | Debate Models | `backend/app/models/debate.py` | debate、turn、prediction、counterplay |
 | Ending Room Models | `backend/app/models/ending_room.py` | room、participant、thread、turn |
 | Prediction Models | `backend/app/models/predictions.py` | prediction、leaderboard |
@@ -91,7 +94,9 @@
   干预完成后的只读效果回执；effects endpoint 和 snapshot export/import 都读取这份持久化数据，不从前端重算。写回时会丢弃 scenario/branch 不匹配的 pending metadata。
 - `Scenario.parsed_context.result_quality`
   Result Quality 的持久载荷；当前存顶层 `verdict / confidence / question_answer` 和 `branch_question_answers`，受 `FEATURE_RESULT_VERDICT` 控制，不是新表或新 column。
-- campaign finalize 与 scenario summary 当前返回同一套 `score_breakdown`；每项包含 `id / label_key / points / applied`，由后端按 archive grade、profile resonance、daily challenge、押注、director goals 与 worldline commitment 派生，不是新的持久化字段。
+- `Scenario.parsed_context.campaign_context`
+  Campaign daily/weekly 的创建时上下文；`POST /api/scenario` 会校验 challenge/track 是否来自当前 catalog，并把 `challenge_local_date / week_key` 改成服务端 UTC 日期和 ISO week。daily streak 与 weekly bonus 不使用前端本地日期做 authority。
+- campaign finalize 与 scenario summary 当前返回同一套 `score_breakdown`；每项包含 `id / label_key / points / applied`。新 scenario 会优先从持久化 `director_state_json / gameplay_state_json` 派生 archive grade、profile resonance、daily challenge、押注、director goals、worldline commitment、weekly bonus 和 badge unlock；旧 scenario 缺这些 authority 时才回到 legacy request fallback。
 - fork detector 当前要求新分支标题写成“行动 + 目标/后果”。
   这些标题仍作为 `Branch.title` 持久化，并随 `branch_fork` 事件广播给前端。
 - `POST /api/scenario/{id}/cancel` 当前只接受 `parsing / simulating / narrating / cancelled`：
@@ -108,6 +113,7 @@
 - SQLite 数据库如果是“由 lightweight bootstrap / `SQLModel.metadata.create_all()` 建出来、但还没有 `alembic_version`”的旧库，`init_db()` 当前会先补齐轻量 additive columns（包括 `graph_edge` 的 evidence 字段），再 `stamp` 到当前 head 并执行 upgrade；不会再重放初始迁移把已有表撞成 `table already exists`。
 - 同一类无版本旧库如果缺少后来加入的 SQLModel metadata 表，`init_db()` 会先按 metadata 补齐缺表，再 stamp 到当前 head；例如 `prediction_journal_entries` 不会因为旧库被直接 stamp 而缺失。
 - SQLite 本地旧库如果还留着 legacy `uq_ending_room_scope` 唯一索引（`scenario_id + anchor_branch_id + room_type + participant_set_hash`），`init_db()` 当前也会在 lightweight fallback 和 Alembic upgrade 后统一修回 `scope_fingerprint`；generation 升级后再点结果页 `进入会客厅 / 异线旁听席` 不会再因为旧索引直接 `500`。
+- SQLite 本地旧库如果缺少 Alembic 031 的 campaign ledger 字段或索引，`init_db()` 的 lightweight fallback 也会补齐；daily dedupe partial unique index 和 weekly lookup index 不只依赖完整 Alembic 路径。
 - `counterfactual` 与 `resume` 当前共用独立的 replay branch runtime lock；慢 clone / seed 路径也会续租，不再只在短请求里可靠。
 - `resume` 当前会先完成 scenario/source branch/round 校验，再尝试 replay branch lock；这些前置校验失败不会占用 replay branch lock。
 - replay branch runtime lock 当前按 fail-closed 收口：
@@ -442,8 +448,8 @@
   - `ruff check app/services/causal_graph.py tests/test_causal_graph.py`：通过
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 - custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；最近记录里后端仓库级 ruff 已全绿。
-- gameplay-system hardening 最终后端复验：
-  - `python -m pytest -q`：`3141 passed, 6 skipped`
+- Campaign Gameplay Enhancement 最终后端复验：
+  - `python -m pytest tests/ -x -q --tb=short`：`3180 passed, 6 skipped`
   - `ruff check .`：通过
 - Classic 分支标题提示本轮已补定向验证：
   - `pytest tests/test_audit_fixes.py::TestForkPromptTemplateConsistency -q`：`31 passed`

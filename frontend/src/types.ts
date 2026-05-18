@@ -148,6 +148,17 @@ export interface LeaderboardEntry {
   win_streak: number;
 }
 
+export interface CampaignContext {
+  challenge_id?: string;
+  challenge_local_date?: string;
+  week_key?: string;
+  weekly_track_id?: string;
+  profile_id?: string;
+  difficulty_tier?: 'easy' | 'normal' | 'hard' | 'expert';
+  is_daily_challenge?: boolean;
+  is_weekly_track?: boolean;
+}
+
 export interface CampaignBadge {
   id: string;
   badge_id: string;
@@ -318,6 +329,35 @@ export interface CampaignDailyChallengeStatus {
   betting_hit?: boolean | null;
   profile_resonance?: 'signature' | 'aligned' | 'offbeat' | null;
   campaign_score_delta?: number | null;
+  current_streak?: number;
+  next_refresh_at?: string;
+  recent_daily_completion_days?: number;
+}
+
+export interface WeeklyTrack {
+  id: string;
+  title_zh: string;
+  title_en: string;
+  subtitle_zh: string;
+  subtitle_en: string;
+  profile_ids: string[];
+  recommended_params?: {
+    num_agents?: number;
+    rounds?: number;
+    mode?: 'blackboard' | 'raw';
+    hierarchical?: boolean;
+    visualization_enabled?: boolean;
+    difficulty_tier?: string;
+  };
+  bonus_rules?: string;
+  bonus_rules_zh?: string;
+  bonus_rules_en?: string;
+}
+
+export interface WeeklyLeaderboardEntry {
+  user_name: string;
+  score: number;
+  rank: number;
 }
 
 export interface CampaignWeeklySummary {
@@ -332,6 +372,10 @@ export interface CampaignWeeklySummary {
   top_profile_id?: string | null;
   best_archive_grade?: string | null;
   profile_runs: Record<string, number>;
+  weekly_track_id?: string;
+  weekly_bonus_delta?: number;
+  rank?: number;
+  leaderboard_entries?: WeeklyLeaderboardEntry[];
 }
 
 export interface CampaignChallengeDefinition {
@@ -345,6 +389,7 @@ export interface CampaignChallengeDefinition {
   num_agents: number;
   mode: 'blackboard' | 'raw';
   visualization_enabled: boolean;
+  difficulty_tier?: 'easy' | 'normal' | 'hard' | 'expert' | string;
 }
 
 export interface CampaignChallengeRotation {
@@ -352,6 +397,8 @@ export interface CampaignChallengeRotation {
   week_key: string;
   today_challenge: CampaignChallengeDefinition;
   weekly_challenges: CampaignChallengeDefinition[];
+  weekly_track?: WeeklyTrack | null;
+  iso_week_key?: string;
 }
 
 export interface BranchInfo {

@@ -9,7 +9,7 @@ import type {
   PredictionInfo, LeaderboardEntry,
   DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
   AppendEndingRoomUserTurnRequest, CreateEndingRoomRequest, CreateEndingRoomThreadRequest, EndingRoomResultPayload, EndingRoomSnapshot, EndingRoomThreadSnapshot,
-  CampaignBadge, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
+  CampaignContext, CampaignBadge, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
   ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
   WebSearchFamily,
   ReplayTraceResponse,
@@ -221,6 +221,7 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   webSearchIntensity?: 'light' | 'standard' | 'deep';
   customAgentIdentityIds?: string[];
   continuityOverrides?: ContinuityOverride[];
+  campaignContext?: CampaignContext;
 }
 
 export interface ContinuityOverride {
@@ -307,6 +308,7 @@ function buildScenarioRequestBody(
     disableUserQuota,
     customAgentIdentityIds,
     continuityOverrides,
+    campaignContext,
   } = options;
 
   const preflightMode = opts?.preflightMode === true;
@@ -346,6 +348,7 @@ function buildScenarioRequestBody(
         ...(override.agentRole && { agent_role: override.agentRole }),
       })),
     }),
+    ...(campaignContext && { campaign_context: campaignContext }),
   };
 }
 
