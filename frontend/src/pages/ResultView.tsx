@@ -157,7 +157,8 @@ export default function ResultView() {
   const isWorkbenchMode = resultViewMode === 'workbench';
   const [cfBranchId, setCfBranchId] = useState<string | null>(null);
   const [cfInitialRound, setCfInitialRound] = useState<number | undefined>(undefined);
-  const [notebookOpen, setNotebookOpen] = useState(true);
+  const [notebookOpen, setNotebookOpen] = useState(false);
+  const [debriefOpen, setDebriefOpen] = useState(false);
   const [webSourcesOpen, setWebSourcesOpen] = useState(false);
   const blurCollapsedPanelFocus = useCallback((event: FocusEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -1792,6 +1793,8 @@ export default function ResultView() {
     primaryAgentIdentityId,
     notebookOpen,
     setNotebookOpen,
+    debriefOpen,
+    setDebriefOpen,
     webSourcesOpen,
     setWebSourcesOpen,
     blurCollapsedPanelFocus,
@@ -1938,7 +1941,7 @@ export default function ResultView() {
           dominantBranchTitle={displayArchive?.dominantBranchTitle ?? analysisBranch?.title ?? null}
           keyMoments={formattedArchiveKeyMoments.slice(0, 2)}
           notebookHref="#result-director-notebook"
-          analysisHref={activeScenarioId && branches.length > 0 ? '#result-bridge' : null}
+          analysisHref={!capLoading && activeScenarioId && branches.length > 0 ? '#result-bridge' : null}
           conversationHref={
             !isReplayMode && activeScenarioId && (capabilities?.agent_conversation?.enabled ?? false)
               ? '#result-conversation'

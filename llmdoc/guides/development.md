@@ -181,6 +181,33 @@ node scripts/e2e-prediction-modal.mjs full --url http://127.0.0.1:18928 --headle
 node scripts/e2e-intervention-receipt.mjs full --url http://127.0.0.1:18928 --headless
 ```
 
+### ResultView 导演笔记 / 导演复盘折叠回归
+
+如果这轮改动碰到 `ResultView`、`DirectorDebriefPanel`、`DirectorNotebook`、`ResultContext`、结果页折叠样式或 `result.director_debrief_*` 文案，优先跑下面这组窄集：
+
+```bash
+cd frontend
+npx tsc --noEmit
+npx eslint src/components/result/DirectorDebriefPanel.tsx src/components/result/DirectorDebriefPanel.test.tsx src/pages/ResultView.tsx src/pages/ResultView.test.tsx src/pages/result/ResultContext.tsx src/pages/result/DirectorNotebook.tsx --max-warnings 0
+npx vitest run src/components/result/DirectorDebriefPanel.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts --reporter=dot
+npm run build
+```
+
+如果同步了 `en.json / zh.json`，再跑 key 和 placeholder parity：
+
+```bash
+cd frontend
+node -e 'const fs=require("fs");function flat(o,p=""){const r={};for(const k of Object.keys(o)){const np=p?`${p}.${k}`:k;if(o[k]&&typeof o[k]==="object"&&!Array.isArray(o[k])) Object.assign(r,flat(o[k],np)); else r[np]=o[k];}return r;}const en=flat(JSON.parse(fs.readFileSync("src/i18n/locales/en.json","utf8")));const zh=flat(JSON.parse(fs.readFileSync("src/i18n/locales/zh.json","utf8")));const enKeys=Object.keys(en).sort();const zhKeys=Object.keys(zh).sort();const missingEn=zhKeys.filter(k=>!(k in en));const missingZh=enKeys.filter(k=>!(k in zh));const vars=s=>[...String(s).matchAll(/{{\s*([^}\s]+)\s*}}/g)].map(m=>m[1]).sort().join(",");const placeholderMismatch=enKeys.filter(k=>k in zh && vars(en[k])!==vars(zh[k]));console.log("en:",enKeys.length,"zh:",zhKeys.length,enKeys.length===zhKeys.length&&missingEn.length===0&&missingZh.length===0?"PARITY OK":"MISMATCH");console.log("placeholder parity:",placeholderMismatch.length===0?"OK":placeholderMismatch.join(","));if(missingEn.length||missingZh.length||placeholderMismatch.length) process.exit(1);'
+```
+
+浏览器复核用有 campaign summary 的 completed result。至少确认：
+
+- 导演笔记和导演复盘默认收起。
+- 展开 / 收起时 `aria-expanded`、`aria-hidden`、`inert` 和 caret 同步。
+- 导演复盘的关键记录超过 3 条时，`details / summary` 能展开更多记录。
+- EN / 中文切换后折叠状态不丢，文案更新。
+- mobile 宽度下没有横向溢出，console 没有新增 error。
+
 ### Web Search 定向回归
 
 ```bash

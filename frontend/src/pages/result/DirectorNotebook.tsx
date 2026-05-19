@@ -2,6 +2,7 @@
    SwarmOracle — Director's Notebook (collapsible archive panel)
    ═══════════════════════════════════════════════════════════ */
 
+import { useId } from 'react';
 import {
   getGameplayBadgeSrc,
   getGameplayCardDefinition,
@@ -105,6 +106,7 @@ export default function DirectorNotebook(props: DirectorNotebookArchiveProps) {
     gameplayProfileLabel,
     gameplayProfileHooks,
   } = useResultContext();
+  const bodyId = useId();
 
   const mostUsedCardLabel = displayArchive?.mostUsedCard
     ? (isZh
@@ -209,6 +211,7 @@ export default function DirectorNotebook(props: DirectorNotebookArchiveProps) {
         type="button"
         className="result-director-notebook__trigger"
         aria-expanded={notebookOpen}
+        aria-controls={bodyId}
         aria-label={t(notebookOpen ? 'result_ux.director_notebook_collapse' : 'result_ux.director_notebook_expand')}
         aria-describedby="director-notebook-hint"
         onClick={() => setNotebookOpen((prev) => !prev)}
@@ -220,6 +223,7 @@ export default function DirectorNotebook(props: DirectorNotebookArchiveProps) {
         <span aria-hidden="true">{notebookOpen ? '▲' : '▼'}</span>
       </button>
       <div
+        id={bodyId}
         className={`result-director-notebook__body ${notebookOpen ? 'is-open' : ''}`}
         aria-hidden={!notebookOpen}
         inert={!notebookOpen || undefined}

@@ -139,6 +139,10 @@ const {
       'result.director_debrief_action_conversation_title': 'Ask about this result',
       'result.director_debrief_action_conversation_detail': 'Start from this branch context instead of a generic chat.',
       'result.director_debrief_action_conversation_unavailable': 'Live conversation is unavailable here; use the saved debrief and analysis links.',
+      'result.director_debrief_collapse': 'Collapse director debrief',
+      'result.director_debrief_expand': 'Expand director debrief',
+      'result.director_debrief_hint': 'Judgments, worldline trends, bet outcomes, and key records at a glance.',
+      'result.director_debrief_title': 'Director Debrief',
       'result.ending_room_picker_title': 'Pick visible participants for this worldline',
       'result.ending_room_picker_limit': 'Select up to {{count}}',
       'result.ending_room_picker_empty': 'No visible worldline roster is available here yet. The chamber will fall back to the default room selection.',
@@ -1121,6 +1125,7 @@ describe('ResultView campaign summary', () => {
   });
 
   it('finalizes campaign progress and renders the summary block', async () => {
+    const user = userEvent.setup();
     findChallengeProgressByScenarioIdMock.mockReturnValue(null);
     vi.mocked(apiClient.getCampaignScenarioSummary).mockImplementation(async () => null as never);
     finalizeCampaignMock.mockReset();
@@ -1186,7 +1191,18 @@ describe('ResultView campaign summary', () => {
       }));
     });
 
-    expect(await screen.findByText('result.director_debrief_title')).toBeInTheDocument();
+    expect(await screen.findByText('Director Debrief')).toBeInTheDocument();
+    const debriefTrigger = screen.getByRole('button', { name: 'Expand director debrief' });
+    const debriefBody = document.getElementById(debriefTrigger.getAttribute('aria-controls') ?? '');
+    expect(debriefTrigger).toHaveAttribute('aria-expanded', 'false');
+    expect(debriefBody).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.queryByRole('link', { name: /Recheck Archive Branch/ })).not.toBeInTheDocument();
+
+    await user.click(debriefTrigger);
+
+    expect(screen.getByRole('button', { name: 'Collapse director debrief' }))
+      .toHaveAttribute('aria-expanded', 'true');
+    expect(debriefBody).toHaveAttribute('aria-hidden', 'false');
     expect(screen.getByText('+5')).toBeInTheDocument();
     expect(screen.getByText('Lv.2')).toBeInTheDocument();
     expect(screen.getByText('5 points to next unlock')).toBeInTheDocument();
@@ -1203,6 +1219,11 @@ describe('ResultView campaign summary', () => {
     expect(screen.getByText('Live conversation is unavailable here; use the saved debrief and analysis links.')).toBeInTheDocument();
     expect(screen.getByText('result.director_score_completed_run')).toBeInTheDocument();
     expect(screen.getAllByText('What if the archive had to sync?').length).toBeGreaterThan(1);
+
+    await user.click(screen.getByRole('button', { name: 'Collapse director debrief' }));
+    expect(screen.getByRole('button', { name: 'Expand director debrief' }))
+      .toHaveAttribute('aria-expanded', 'false');
+    expect(debriefBody).toHaveAttribute('aria-hidden', 'true');
   });
 
   it('does not refetch or finalize again when only the language changes', async () => {
@@ -1293,6 +1314,7 @@ describe('ResultView campaign summary', () => {
   });
 
   it('reuses a cached finalize result when the scenario summary is already finalized', async () => {
+    const user = userEvent.setup();
     const getCampaignScenarioSummaryMock = vi.mocked(apiClient.getCampaignScenarioSummary);
     getCampaignScenarioSummaryMock.mockResolvedValue({
       scenario_id: 'scenario-1',
@@ -1355,7 +1377,8 @@ describe('ResultView campaign summary', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('result.director_debrief_title')).toBeInTheDocument();
+    expect(await screen.findByText('Director Debrief')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Expand director debrief' }));
     expect(screen.getByText('+5')).toBeInTheDocument();
     expect(finalizeCampaignMock).not.toHaveBeenCalled();
     expect(getCampaignScenarioSummaryMock).toHaveBeenCalledWith('scenario-1');
@@ -1717,7 +1740,7 @@ describe('ResultView campaign summary', () => {
     );
 
     expect(await screen.findByText('result.title')).toBeInTheDocument();
-    expect(screen.getByText('result.director_debrief_title')).toBeInTheDocument();
+    expect(screen.getByText('Director Debrief')).toBeInTheDocument();
     expect(finalizeCampaignMock).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'result.export' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'result.score_predictions' })).not.toBeInTheDocument();
@@ -1986,8 +2009,10 @@ describe('ResultView campaign summary', () => {
     expect(screen.getAllByText('resume.title')).toHaveLength(1);
     expect(screen.getByLabelText('resume.branch')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'resume.submit' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'result_ux.director_notebook_collapse' }))
-      .toHaveAttribute('aria-expanded', 'true');
+    const notebookTrigger = screen.getByRole('button', { name: 'result_ux.director_notebook_expand' });
+    expect(notebookTrigger).toHaveAttribute('aria-expanded', 'false');
+    expect(document.getElementById(notebookTrigger.getAttribute('aria-controls') ?? ''))
+      .toHaveAttribute('aria-hidden', 'true');
     expect(container.querySelector('.result-director-notebook__body .result-archive')).not.toBeNull();
     expect(screen.getByText('resume.title').closest('.result-director-notebook__body')).toBeNull();
   });

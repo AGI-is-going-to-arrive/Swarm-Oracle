@@ -3,7 +3,14 @@
    SwarmOracle — ResultView shared context
    ═══════════════════════════════════════════════════════════ */
 
-import { createContext, useContext, type ReactNode, type FocusEvent } from 'react';
+import {
+  createContext,
+  useContext,
+  type Dispatch,
+  type ReactNode,
+  type FocusEvent,
+  type SetStateAction,
+} from 'react';
 import type { TFunction } from 'i18next';
 import type { NavigateFunction } from 'react-router-dom';
 import type {
@@ -54,6 +61,8 @@ export interface ResultViewContextValue {
   // notebook + web sources collapsibles
   notebookOpen: boolean;
   setNotebookOpen: (next: boolean | ((prev: boolean) => boolean)) => void;
+  debriefOpen: boolean;
+  setDebriefOpen: Dispatch<SetStateAction<boolean>>;
   webSourcesOpen: boolean;
   setWebSourcesOpen: (next: boolean | ((prev: boolean) => boolean)) => void;
   blurCollapsedPanelFocus: (event: FocusEvent<HTMLDivElement>) => void;

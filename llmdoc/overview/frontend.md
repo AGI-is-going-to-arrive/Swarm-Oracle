@@ -32,7 +32,7 @@
 | IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、只读干预回执、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel（verdict 缺失时显示 unavailable fallback）、分支级 question answer（显示在概率条上方）、因果档案 / archive（档案结论优先 story verdict）、导演笔记/导演复盘、campaign summary、weekly leaderboard preview、achievement toast、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel（verdict 缺失时显示 unavailable fallback）、分支级 question answer（显示在概率条上方）、因果档案 / archive（档案结论优先 story verdict）、默认折叠的导演笔记/导演复盘、campaign summary、weekly leaderboard preview、achievement toast、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | WorkbenchView | `frontend/src/pages/WorkbenchView.tsx` | 独立图谱工作台；支持 `graph / split / kg` 三种 view，保留 URL 里的 analysis branch，并提供返回结果页链接 |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
@@ -138,7 +138,7 @@
   - `SnapshotImportDialog` 前端先挡非 ZIP 和大于 50 MB 的文件，再调用后端 import
   - `SnapshotExportWizard / SnapshotImportDialog / ShareModal / ResultView` 共享 `useFocusTrap`
 - `ResultView` 的因果档案当前把 what-if、结局判定、系统读数、玩家动作、下一步建议和证据账本放在同一块里；关键记录只露出前几条，剩余记录用 details 展开，避免把结果页撑成长列表。
-- `ResultView` 的导演复盘当前由 `DirectorDebriefPanel` 渲染：优先使用后端 `score_breakdown`，同时接收 what-if、主导世界线、世界线承诺、押注、最后一次干预、结构化关键记录、director goals 与 gameplay card 状态，展示得分原因、等级进度、本局读数、下一步入口和新增徽章。campaign 边界提示、新徽章文案、archive key moment 和 moment detail 都走 `result.*` locale key。
+- `ResultView` 的导演复盘当前由 `DirectorDebriefPanel` 渲染：默认收起，trigger 使用 `aria-expanded / aria-controls / aria-describedby`，body 收起时带 `aria-hidden` 和 `inert`。展开后优先使用后端 `score_breakdown`，同时接收 what-if、主导世界线、世界线承诺、押注、最后一次干预、结构化关键记录、director goals 与 gameplay card 状态，展示得分原因、等级进度、本局读数、下一步入口和新增徽章。关键记录先显示前 3 条，更多记录放到原生 `details / summary` 里；campaign 边界提示、新徽章文案、archive key moment 和 moment detail 都走 `result.*` locale key。
 - `ResultView` 的 faction timeline lead 当前已走 i18n key + `{{title}}` 插值，不再在组件里手写 `isZh` 三元文案。
 - `ResultView` 的 replay/import 错误、ending-room replay action、archive summary label 和 ending-room picker copy 当前也已走 locale key；剩下的 `isZh` 用在玩法/候选人/弹窗语言选择这类领域语义上。
 - `ResultView` 当前已做第一阶段拆分：入口仍是 `frontend/src/pages/ResultView.tsx`，主体区块拆到 `frontend/src/pages/result/ResultHeader.tsx`、`EndingCardsGrid.tsx`、`ResultVerdictPanel.tsx`、`ExploreDeeperBridge.tsx`、`WebSourcesSection.tsx`、`PredictionsSection.tsx`、`DirectorNotebook.tsx`、`AgentRoster.tsx`、`ResultModals.tsx` 和 `ResultContext.tsx`。`ResultContext` 仍偏宽，后续触碰结果页时优先评估 selector / useMemo 收窄。
@@ -214,7 +214,7 @@
 | `roundtableHelpers.ts` | `frontend/src/pages/roundtableHelpers.ts` | 圆桌纯函数：选型模式、锚点构建、fault-line 算法、anchor 描述 |
 | `endingChatHelpers.ts` | `frontend/src/components/endingChatHelpers.ts` | 会客厅纯函数：角色标签、模式标签、prompt 构建、anchor 描述 |
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、locale-backed badge copy、结构化关键记录 |
-| `DirectorDebriefPanel.tsx` | `frontend/src/components/result/DirectorDebriefPanel.tsx` | 结果页导演复盘面板；消费后端 `score_breakdown` 和结果页整理出的问题、世界线、承诺、押注、干预、关键记录、目标与玩法卡状态，展示得分原因、本局读数、下一步入口与新增徽章 |
+| `DirectorDebriefPanel.tsx` | `frontend/src/components/result/DirectorDebriefPanel.tsx` | 结果页导演复盘面板；外层折叠状态来自 `ResultContext`，消费后端 `score_breakdown` 和结果页整理出的问题、世界线、承诺、押注、干预、关键记录、目标与玩法卡状态，展示得分原因、本局读数、下一步入口与新增徽章 |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
 | `ClassicBranchTree.tsx` / `BranchTree.tsx` / `branchTitle.ts` | `frontend/src/components/` | Classic 分支树；短标题会用 `description / fork_reason` 的首句补成更好读的展示标题，原始 `Branch.title` 仍保留给干预等业务动作 |
 | `PostVerdictPanel.tsx` | `frontend/src/pages/PostVerdictPanel.tsx` | completed live roundtable 的 `Deep Dive` 面板；聚合 participant-scoped `1-on-1 Interview`、`Research Analyst` 与 `Cross-Examine` |
@@ -594,8 +594,9 @@
   - `npx tsc --noEmit`：通过
   - `npm run lint`：通过
   - `npm run build`：通过
-  - full vitest：`200 files / 2175 tests passed`
-  - i18n key parity spot-check：`zh: 2732`、`en: 2732`、parity OK
+  - full vitest：`201 files / 2194 tests passed`
+  - i18n key + placeholder parity：`zh: 2752`、`en: 2752`、parity OK
+  - ResultView 导演笔记 / 导演复盘 browser spot-check：默认收起、展开/收起 ARIA 与 caret 同步、关键记录 disclosure、EN/中文切换、移动端无横向溢出、console error 为 0
   - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0
   - CampaignProgressSheet browser spot-check：desktop 与 mobile forced-colors / reduced-motion 下可打开、可滚动，console/page error 为 0

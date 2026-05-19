@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useId, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   getGameplayCardDefinition,
@@ -9,6 +9,7 @@ import type {
   CampaignScenarioSummary,
   CampaignScoreBreakdownItem,
 } from '../../types';
+import { useResultContext } from '../../pages/result/ResultContext';
 
 type CampaignResonance = CampaignScenarioSummary['profile_resonance'];
 type CampaignCommitmentOutcome = NonNullable<CampaignScenarioSummary['commitment_outcome']>;
@@ -196,6 +197,11 @@ export function DirectorDebriefPanel({
 }: DirectorDebriefPanelProps) {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
+  const { debriefOpen, setDebriefOpen, blurCollapsedPanelFocus } = useResultContext();
+  const baseId = useId();
+  const titleTextId = `${baseId}-title`;
+  const bodyId = `${baseId}-body`;
+  const hintId = `${baseId}-hint`;
 
   const fallbackScoreFactors = useMemo<CampaignScoreBreakdownItem[]>(() => {
     const factors: CampaignScoreBreakdownItem[] = [];
@@ -316,16 +322,46 @@ export function DirectorDebriefPanel({
           label: firstKeyMoment,
         }]
       : [];
+  const visibleMoments = momentRows.slice(0, 3);
+  const hiddenMoments = momentRows.slice(3);
   const riskPercent = systemTracks ? clampProgress((clampTrack(systemTracks.riskValue) / 6) * 100) : 0;
   const resourcePercent = systemTracks ? clampProgress((clampTrack(systemTracks.resourceValue) / 6) * 100) : 0;
 
   return (
-    <section className="result-campaign" aria-labelledby="director-debrief-title">
+    <section className="result-campaign" aria-labelledby={titleTextId}>
+      <h2 className="result-campaign__heading">
+        <button
+          type="button"
+          className="result-campaign__trigger"
+          aria-expanded={debriefOpen}
+          aria-controls={bodyId}
+          aria-label={debriefOpen ? t('result.director_debrief_collapse') : t('result.director_debrief_expand')}
+          aria-describedby={hintId}
+          onClick={() => setDebriefOpen((prev) => !prev)}
+        >
+          <span className="result-campaign__trigger-text">
+            <span className="result-campaign__eyebrow">{t('result.director_debrief_eyebrow')}</span>
+            <span className="result-campaign__title-text" id={titleTextId}>
+              {t('result.director_debrief_title')}
+            </span>
+            <small className="result-campaign__hint" id={hintId}>
+              {t('result.director_debrief_hint')}
+            </small>
+          </span>
+          <span className="result-campaign__caret" aria-hidden="true">
+            {debriefOpen ? '▲' : '▼'}
+          </span>
+        </button>
+      </h2>
+      <div
+        id={bodyId}
+        className={`result-campaign__body ${debriefOpen ? 'is-open' : ''}`}
+        aria-hidden={!debriefOpen}
+        inert={!debriefOpen || undefined}
+        onFocusCapture={debriefOpen ? undefined : blurCollapsedPanelFocus}
+      >
+        <div className="result-campaign__inner">
       <div className="director-debrief__header">
-        <p className="director-debrief__eyebrow">{t('result.director_debrief_eyebrow')}</p>
-        <h2 id="director-debrief-title" className="result-campaign__title">
-          {t('result.director_debrief_title')}
-        </h2>
         <p className="director-debrief__lead">
           {t('result.director_debrief_lead', {
             profile: profileLabel ?? t('result.director_debrief_unknown_profile'),
@@ -392,7 +428,7 @@ export function DirectorDebriefPanel({
         <div className="director-debrief__moments">
           <span>{t('result.director_debrief_moments_title')}</span>
           <ul>
-            {momentRows.map((moment) => (
+            {visibleMoments.map((moment) => (
               <li key={moment.id}>
                 <small>
                   {moment.round
@@ -407,6 +443,29 @@ export function DirectorDebriefPanel({
               </li>
             ))}
           </ul>
+          {hiddenMoments.length > 0 && (
+            <details className="director-debrief__moments-more">
+              <summary>
+                {t('result.director_debrief_moments_more', { count: hiddenMoments.length })}
+              </summary>
+              <ul>
+                {hiddenMoments.map((moment) => (
+                  <li key={moment.id}>
+                    <small>
+                      {moment.round
+                        ? t('result.director_debrief_moment_with_round', {
+                            kind: t(`result.director_debrief_moment_${moment.kind}`),
+                            round: moment.round,
+                          })
+                        : t(`result.director_debrief_moment_${moment.kind}`)}
+                    </small>
+                    <strong>{moment.label}</strong>
+                    {moment.detail && <p>{moment.detail}</p>}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       )}
 
@@ -626,6 +685,8 @@ export function DirectorDebriefPanel({
         ) : (
           <p className="result-campaign__empty">{t('result.campaign_badges_none')}</p>
         )}
+      </div>
+        </div>
       </div>
     </section>
   );

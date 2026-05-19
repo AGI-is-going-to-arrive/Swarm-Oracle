@@ -11,7 +11,7 @@
   - `Debate Arena` live/result/replay
   - `Oracle Chambers / 世界线圆桌`
   - replay 分享与导入
-  - director campaign / 导演复盘、因果档案、玩法卡、结构化押注
+  - director campaign / 默认折叠的导演笔记与导演复盘、因果档案、玩法卡、结构化押注
 - 最近一次稳定全链签收工件位于 `frontend/output/e2e/2026-04-12T04-12-03-164Z-release-signoff/summary.json`。
 - 当前默认本地 `release-signoff` 脚本会覆盖：
   - backend checks
@@ -88,7 +88,7 @@
 | Gameplay Cards | 已落地，14 张卡与 18 个玩法 profile 走共享 gameplay contract；后端校验可用性、冷却与点数，重建正式干预 prompt，并把分支、Agent 名和自定义指令按 untrusted data 包裹 |
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响；题材回响放在高级选项里 |
 | Result Quality / Question Anchoring | 已落地，受 `FEATURE_RESULT_VERDICT` 和 `/api/capabilities.result_verdict` 控制；结果页在有 verdict 时先给出直接回答原问题的预测结论、置信度，verdict 缺失时显示中性的“暂无预测结论”并保留原问题；结局卡有 `question_answer` 时会把分支级一句话回答放在概率条上方 |
-| Director Campaign | 已落地，含 52 条 daily challenge catalog、streak、7 条 weekly track + leaderboard、15 个 registry badge、非线性 mastery level、首页成长 sheet、后端权威 `score_breakdown` 与结果页导演复盘 / 因果档案 |
+| Director Campaign | 已落地，含 52 条 daily challenge catalog、streak、7 条 weekly track + leaderboard、15 个 registry badge、非线性 mastery level、首页成长 sheet、后端权威 `score_breakdown` 与结果页导演复盘 / 因果档案；结果页导演笔记和导演复盘默认收起，展开后再查看完整复盘，导演复盘的关键记录超过 3 条时用原生 disclosure 展开 |
 | Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight`；设置 `ADMIN_TOKEN` 后 admin API 要求 `X-Admin-Token` |
 | Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；identity continuity preflight 超时会按 504 返回，后端不会把它伪装成“无匹配”；首页启动流当前会提示错误但继续按无 continuity override 启动；自建 Agent 不开放 `CORE` 层级 |
 | Agent Backups | 已落地，受 `FEATURE_PERSONA_EXPORT` gate；支持单个 / 批量导出 `schema_version=1` Agent 备份 JSON；从备份创建会为当前用户创建新的 custom Agent，不覆盖已有 Agent，并把 decision bias 归一化到安全的 5 维数值 |
@@ -189,10 +189,11 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-当前验证口径（最近更新：2026-05-19 Oracle Chambers / EndingChatModal review hardening）：
+当前验证口径（最近更新：2026-05-20 ResultView 导演复盘折叠复核）：
 
 - backend：`python -m pytest tests/ -x --timeout=120 -q` 为 `3238 passed, 6 skipped`；Oracle / narrator / simulator 窄集 `tests/test_narrator.py tests/test_simulator.py tests/test_ending_room_service.py` 为 `297 passed`。
-- frontend：`npx tsc --noEmit -p tsconfig.app.json`、`npx eslint src/ --max-warnings=0`、`npm run build`、`npx vitest run --reporter=verbose` 通过；full vitest 为 `200 files / 2175 tests passed`；i18n key parity spot-check 为 `zh: 2732`、`en: 2732`、parity OK。
+- frontend：`npx tsc --noEmit`、`npm run lint`、`npm run build`、`npx vitest run --reporter=dot` 通过；full vitest 为 `201 files / 2194 tests passed`；i18n key 与 placeholder parity 为 `zh: 2752`、`en: 2752`、OK。
+- ResultView 浏览器复核：本地完成结果页上，导演笔记和导演复盘默认收起；展开/收起时 `aria-expanded`、`aria-hidden`、`inert` 和 caret 同步；关键记录 disclosure、EN/中文切换、移动端无横向溢出和 console error 均已复核。
 - Oracle browser E2E：`e2e:roundtable` 与 `e2e:ending-room` 在本地 preview/backend 口径通过；Ending Room summary 里 desktop/mobile replay coverage error 为 `null`，readonly replay / reload restore / import 关键字段齐全。
 - `git diff --check` 通过。
 
