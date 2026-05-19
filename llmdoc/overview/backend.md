@@ -37,7 +37,7 @@
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、干预 pending metadata 消费与 effect receipt 写回；receipt 写回前会核对当前 scenario/branch，Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent prompt 会带当前世界线标题/分叉原因，Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记 |
+| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、干预 pending metadata 消费与 effect receipt 写回；receipt 写回前会核对当前 scenario/branch，Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent prompt 会带当前世界线标题/分叉原因，Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记；narration 落库前也会清理行首 `[R1 角色]` 这类 raw round marker，但保留普通 `[important note]` 方括号内容 |
 | Simulation Cancel | `backend/app/services/simulation_cancel.py` | scenario 取消 token、DB cancelled fallback 与后台任务取消信号 |
 | Preflight | `backend/app/services/preflight.py` | admin/CLI 预检：SQLite、ChromaDB、LLM、web search、CORS、volume |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
@@ -50,7 +50,7 @@
 | Roundtable Survey | `backend/app/services/roundtable_survey.py` | 世界线圆桌问卷 SSE；按 room 绑定 participant、补 identity memory、并发发问后逐条回传 |
 | Roundtable Analyst | `backend/app/services/roundtable_analyst.py` | 世界线圆桌 analyst SSE；有界 ReACT 工具循环，串 causal graph / identity memory / web evidence |
 | Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile；identity profile 写入有 pending gate、SQLite runtime lock、本地 Chroma lock 与 5 秒调用方等待上限 |
-| Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`） |
+| Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`）；Oracle 文案走 generation-first / rewrite / deterministic fallback，rich context 会带 scenario question、branch insight/story/key moments 和代表 stance，JSON 字符串输出会先解出 `content`，streaming-first 空流也会退回可显示文本 |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
 | Journal Service | `backend/app/services/journal_service.py` | personal prediction journal 写入、resolve、分页与 calibration 聚合 |
 | Document Ingestion | `backend/app/services/document_ingestion.py` | PDF 文本抽取、长文档实体抽取与 persona 生成 helper |
@@ -449,8 +449,9 @@
   - `ruff check app/services/causal_graph.py tests/test_causal_graph.py`：通过
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 - custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；最近记录里后端仓库级 ruff 已全绿。
-- Campaign Gameplay Enhancement 最终后端复验：
-  - `python -m pytest tests/ -x -q --tb=short`：`3180 passed, 6 skipped`
+- 最近后端完整复验：
+  - `python -m pytest tests/ -x --timeout=120 -q`：`3238 passed, 6 skipped`
+  - Oracle narrator / simulator / ending room 窄集：`297 passed`
   - `ruff check .`：通过
 - Campaign/profile label 本轮窄集复验：
   - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`：`154 passed`

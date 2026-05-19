@@ -131,6 +131,7 @@ export default function EndingChatModal({
   const selectedAgentIds = selectedAgentIdsProp ?? EMPTY_SELECTED_AGENT_IDS;
   const fallbackMessages = fallbackMessagesProp ?? EMPTY_FALLBACK_MESSAGES;
   const modalRef = useRef<HTMLDivElement>(null);
+  const transcriptScrollRef = useRef<HTMLDivElement>(null);
   const transcriptListRef = useRef<HTMLDivElement>(null);
   const transcriptHydratedRef = useRef(false);
   const transcriptAutoStickRef = useRef(false);
@@ -758,31 +759,31 @@ export default function EndingChatModal({
   }, [activeThread?.id, effectiveSnapshot?.id]);
 
   useLayoutEffect(() => {
-    const transcriptList = transcriptListRef.current;
-    if (!transcriptList) return;
+    const transcriptScroll = transcriptScrollRef.current;
+    if (!transcriptScroll) return;
     const visibleTurnCount = currentTurns.length + displayedDrafts.length;
     if (visibleTurnCount === 0) {
       transcriptHydratedRef.current = false;
       transcriptAutoStickRef.current = false;
-      syncTranscriptScrollSnapshot(captureTranscriptScrollSnapshot(transcriptList));
+      syncTranscriptScrollSnapshot(captureTranscriptScrollSnapshot(transcriptScroll));
       return;
     }
     if (!transcriptHydratedRef.current) {
       transcriptHydratedRef.current = true;
-      transcriptList.scrollTop = 0;
-      syncTranscriptScrollSnapshot(captureTranscriptScrollSnapshot(transcriptList));
+      transcriptScroll.scrollTop = 0;
+      syncTranscriptScrollSnapshot(captureTranscriptScrollSnapshot(transcriptScroll));
       return;
     }
     if (displayedDrafts.length > 0 || transcriptAutoStickRef.current) {
-      transcriptList.scrollTop = computeBottomAnchoredScrollTop(
-        transcriptList,
+      transcriptScroll.scrollTop = computeBottomAnchoredScrollTop(
+        transcriptScroll,
         transcriptScrollSnapshotRef.current,
       );
       if (displayedDrafts.length === 0) {
         transcriptAutoStickRef.current = false;
       }
     }
-    syncTranscriptScrollSnapshot(captureTranscriptScrollSnapshot(transcriptList));
+    syncTranscriptScrollSnapshot(captureTranscriptScrollSnapshot(transcriptScroll));
   }, [activeThread?.id, currentTurnSignature, currentTurns.length, displayedDraftSignature, displayedDrafts.length, effectiveSnapshot?.id]);
 
   useEffect(() => {
@@ -1040,10 +1041,10 @@ export default function EndingChatModal({
     if (isCrosslineGallery) return;
     const content = composerDraft.trim();
     if (!content) return;
-    const transcriptList = transcriptListRef.current;
-    transcriptScrollSnapshotRef.current = transcriptList
+    const transcriptScroll = transcriptScrollRef.current;
+    transcriptScrollSnapshotRef.current = transcriptScroll
       ? {
-          ...captureTranscriptScrollSnapshot(transcriptList),
+          ...captureTranscriptScrollSnapshot(transcriptScroll),
           bottomOffset: 0,
         }
       : transcriptScrollSnapshotRef.current;
@@ -1189,7 +1190,22 @@ export default function EndingChatModal({
                   </section>
                 ) : (
                   <>
-                    {/* D-7: Verdict panel moved before participants */}
+                    {/* D-7: Verdict panel moved before participants. The verdict
+                        body is collapsed by default so it stops competing with
+                        the auto_recap bubble and the verdict quick-prompt for
+                        attention. The archivist note (if present) is split into
+                        its own card. */}
+                    {effectiveResult && typeof effectiveResult.archivist_note === 'string' && effectiveResult.archivist_note.trim().length > 0 && (
+                      <section
+                        className="ending-chat-panel ending-chat-panel--archivist-note"
+                        aria-label={t('ending_room.archivist_note_label')}
+                      >
+                        <div className="ending-chat-panel__heading">
+                          <h3>{t('ending_room.archivist_note_label')}</h3>
+                        </div>
+                        <p>{effectiveResult.archivist_note}</p>
+                      </section>
+                    )}
                     {effectiveResult && (
                       <section className="ending-chat-panel ending-chat-panel--summary">
                         <div className="ending-chat-panel__heading">
@@ -1238,7 +1254,27 @@ export default function EndingChatModal({
                             )}
                           </div>
                         </div>
-                        <p>{effectiveResult.summary}</p>
+                        {(() => {
+                          const verdictText = (effectiveResult.summary ?? '').trim();
+                          if (!verdictText) {
+                            return null;
+                          }
+                          const previewSource = verdictText.replace(/\s+/g, ' ');
+                          // Truncate by Unicode code points (CJK + emoji safe).
+                          const codepoints = Array.from(previewSource);
+                          const preview = codepoints.length > 50
+                            ? `${codepoints.slice(0, 50).join('').trimEnd()}…`
+                            : previewSource;
+                          return (
+                            <details className="ending-chat-summary-details">
+                              <summary className="ending-chat-summary-details__summary">
+                                <span className="ending-chat-summary-details__label">{t('ending_room.summary_preview')}</span>
+                                <span className="ending-chat-summary-details__preview">{preview}</span>
+                              </summary>
+                              <p className="ending-chat-summary-details__body">{effectiveResult.summary}</p>
+                            </details>
+                          );
+                        })()}
                         {effectiveResult.next_move && effectiveResult.next_move !== effectiveResult.summary && (
                           <>
                             <h4>{t('ending_room.mode_one_move_only')}</h4>
@@ -1482,6 +1518,47 @@ export default function EndingChatModal({
               </div>
             )}
 
+            {!isCrosslineGallery && composerEnabled && galleryCards.length > 0 && (
+              <details className="ending-chat-evidence-drawer" data-testid="ending-chat-evidence-drawer">
+                <summary>
+                  <span className="ending-chat-evidence-drawer__summary">
+                    <strong>{evidenceDrawerTitle}</strong>
+                    <span>{evidenceDrawerHint}</span>
+                  </span>
+                </summary>
+                <div className="ending-chat-gallery-list">
+                  {galleryCards.map((galleryBranch) => (
+                    <article key={galleryBranch.id} className="ending-chat-gallery-card ending-chat-evidence-card">
+                      <header className="ending-chat-gallery-card__header">
+                        <div>
+                          <strong>{galleryBranch.title}</strong>
+                          <span>{evidenceSummaryBadge}</span>
+                        </div>
+                        <em>{`${(galleryBranch.probability * 100).toFixed(1)}%`}</em>
+                      </header>
+                      <p>{galleryBranch.insight || galleryBranch.story || '—'}</p>
+                      <button
+                        type="button"
+                        className="ending-chat-inline-button ending-chat-evidence-btn"
+                        onClick={() => handleEvidenceCardSubmit(galleryBranch)}
+                        disabled={sending}
+                        title={evidenceSubmitHint}
+                        aria-label={`${evidenceSubmitLabel}: ${galleryBranch.title}`}
+                      >
+                        {evidenceSubmitLabel}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </details>
+            )}
+
+              <div
+                ref={transcriptScrollRef}
+                className="ending-chat-transcript-scroll"
+                onScroll={handleTranscriptScroll}
+              >
+
             {!readOnly && scenarioId && (
               <div className="ending-chat-history-row">
                 <ConversationHistoryPicker
@@ -1523,45 +1600,9 @@ export default function EndingChatModal({
               </div>
             )}
 
-            {!isCrosslineGallery && composerEnabled && galleryCards.length > 0 && (
-              <details className="ending-chat-evidence-drawer" data-testid="ending-chat-evidence-drawer">
-                <summary>
-                  <span className="ending-chat-evidence-drawer__summary">
-                    <strong>{evidenceDrawerTitle}</strong>
-                    <span>{evidenceDrawerHint}</span>
-                  </span>
-                </summary>
-                <div className="ending-chat-gallery-list">
-                  {galleryCards.map((galleryBranch) => (
-                    <article key={galleryBranch.id} className="ending-chat-gallery-card ending-chat-evidence-card">
-                      <header className="ending-chat-gallery-card__header">
-                        <div>
-                          <strong>{galleryBranch.title}</strong>
-                          <span>{evidenceSummaryBadge}</span>
-                        </div>
-                        <em>{`${(galleryBranch.probability * 100).toFixed(1)}%`}</em>
-                      </header>
-                      <p>{galleryBranch.insight || galleryBranch.story || '—'}</p>
-                      <button
-                        type="button"
-                        className="ending-chat-inline-button ending-chat-evidence-btn"
-                        onClick={() => handleEvidenceCardSubmit(galleryBranch)}
-                        disabled={sending}
-                        title={evidenceSubmitHint}
-                        aria-label={`${evidenceSubmitLabel}: ${galleryBranch.title}`}
-                      >
-                        {evidenceSubmitLabel}
-                      </button>
-                    </article>
-                  ))}
-                </div>
-              </details>
-            )}
-
             <div
               ref={transcriptListRef}
               className="ending-chat-transcript-list"
-              onScroll={handleTranscriptScroll}
             >
               {isCrosslineGallery && (
                 <div className="ending-chat-gallery-list">
@@ -1694,6 +1735,7 @@ export default function EndingChatModal({
                 </article>
               ))}
             </div>
+              </div>
 
             {readOnly || isCrosslineGallery ? (
               <div className="ending-chat-composer ending-chat-composer--readonly">
@@ -1805,7 +1847,11 @@ export default function EndingChatModal({
                   type="button"
                   className="ending-chat-send"
                   onClick={() => void handleSend()}
-                  disabled={!composerEnabled || sending || composerDraft.trim().length === 0}
+                  disabled={
+                    !composerEnabled
+                    || sending
+                    || composerDraft.trim().length === 0
+                  }
                 >
                   {sending ? t('ending_room.sending') : t('ending_room.send')}
                 </button>

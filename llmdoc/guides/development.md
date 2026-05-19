@@ -756,6 +756,28 @@ python -m pytest \
   -q
 ```
 
+如果同一轮还改了 narrator round-marker、simulator narration storage、EndingChatModal 布局或 evidence drawer，优先补这组窄集：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_narrator.py tests/test_simulator.py tests/test_ending_room_service.py -q --tb=short
+
+cd ../frontend
+npx vitest run src/components/EndingChatModal.test.tsx src/components/endingChatHelpers.test.ts src/lib/legacyCssFallbacks.test.ts --reporter=verbose
+npx tsc --noEmit -p tsconfig.app.json
+npx eslint src/ --max-warnings=0
+npm run build
+```
+
+如果布局改动触碰 replay、证据卡抽屉、thread rail 或 mobile scroll，再补一轮真实 preview E2E：
+
+```bash
+cd frontend
+npm run e2e:ending-room -- --url http://127.0.0.1:18930 --output-dir output/e2e/oracle-ending-room-layout-check --headless true
+npm run e2e:roundtable -- --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-layout-check --headless true
+```
+
 如果同一轮还改了 roundtable / ending-room 前端文案、anchor helper 或 replay share payload，补这组前端窄集：
 
 ```bash

@@ -1223,6 +1223,86 @@ def test_oracle_generation_first_uses_llm_before_anchor_template(monkeypatch):
     assert len(prompts) == 1
 
 
+def test_oracle_generation_first_accepts_json_string_from_plain_llm(monkeypatch):
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Worldline Roundtable",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name="Stilicho",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={"agent_role": "Marshal"},
+    )
+
+    async def _plain_json_string(prompt, *args, **kwargs):
+        return '{"content":"Clean spoken line"}'
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "llm_call", _plain_json_string)
+
+    content = asyncio.run(
+        _maybe_rewrite_oracle_copy(
+            room=room,
+            participant=participant,
+            phase=EndingRoomPhase.OPENING,
+            anchor_copy="anchor fallback",
+            purpose="test_generation_json_string",
+        )
+    )
+
+    assert content == "Clean spoken line"
+
+
+def test_oracle_generation_first_streams_plain_text_when_requested(monkeypatch):
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Worldline Roundtable",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name="Stilicho",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={"agent_role": "Marshal"},
+    )
+
+    async def _plain_should_not_run(*args, **kwargs):
+        raise AssertionError("streaming_first should use the plain stream path")
+
+    async def _stream_plain_text(*args, **kwargs):
+        yield "Streamed "
+        yield "spoken line"
+
+    monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
+    monkeypatch.setattr(ending_room_service_module, "llm_call", _plain_should_not_run)
+    monkeypatch.setattr(ending_room_service_module, "llm_call_stream", _stream_plain_text)
+
+    content = asyncio.run(
+        _maybe_rewrite_oracle_copy(
+            room=room,
+            participant=participant,
+            phase=EndingRoomPhase.OPENING,
+            anchor_copy="anchor fallback",
+            purpose="test_generation_streaming_first",
+            streaming_first=True,
+        )
+    )
+
+    assert content == "Streamed spoken line"
+
+
 def test_oracle_empty_generation_then_rewrite_uses_anchor_reference(monkeypatch):
     room = EndingRoom(
         scenario_id="scenario-1",
@@ -1298,6 +1378,28 @@ def test_one_move_only_english_copy_does_not_embed_cjk_hinges_or_persona_lines()
     assert "命令链" not in transcript
     assert "先封住" not in transcript
     assert "the first decisive hinge" in transcript
+
+
+def test_one_move_only_english_copy_does_not_fallback_to_cjk_question():
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world(
+        question="如果帝国调度失误引发连锁震荡？",
+    )
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ONE_MOVE_ONLY,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=[agent_ids[0]],
+        language="en",
+    )
+
+    assert created is True
+    payload = asyncio.run(_run_room(snapshot["id"], AsyncMock(side_effect=_noop_broadcast)))
+    transcript = " ".join(turn["content"] for turn in payload["turns"])
+
+    assert "如果帝国调度失误" not in transcript
+    assert "the original what-if" in transcript
 
 
 def test_oracle_rewrite_prompt_explicitly_forbids_untranslated_chinese_fragments_in_english():

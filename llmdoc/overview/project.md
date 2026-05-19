@@ -90,6 +90,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - 不会展示 `发起圆桌` / `异线旁听席`
 - `WorldlineRoundtableView` 已支持 live roundtable、改选重开、只读 replay，以及 `manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented`。
 - live completed room 当前在裁决落地后开放 `Deep Dive` 工作台，包含 participant-scoped `1-on-1 Interview`、`Research Analyst` 与 `Cross-Examine`；readonly replay 不开放这组 live-only 工作台入口。`1-on-1 Interview` 会先显示代表的角色、世界线、立场、最近原话和人物简介，并把这份可读摘要作为 conversation origin context；网络失败只显示错误提示，不伪装成代表发言。
+- `survey / analyst` 当前是 completed live roundtable 的 Deep Dive SSE 工作台能力；`survey` 会并发询问代表并逐条返回 `survey_response`，但它不是 EndingChatModal 的 `interaction_mode`。
 - 代表改选当前支持桌面 `drag-to-seat / keyboard reseat`；移动端保留 `click-to-seat`。
 - single-ending 当前已补：
   - `继续追问`
@@ -112,6 +113,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `evidence_card` 追问被接受后，assistant follow-up turn 会继续保留用户引用的 `cited_branch_id`，并把原始引用信息放在 `cited_refs_json.source` 下。
 - `quote / verdict / key_moment / phase` 当前都走显式 `questionAnchorIds`，不再只靠 prompt 文案表达锚点。
 - `EndingChatModal / WorldlineRoundtableView` 当前会在线程 rail 与 transcript header 显式显示当前 thread 的 anchor badge。
+- `EndingChatModal` 当前把 thread rail 与 evidence drawer 放在 transcript 内部滚动区外；消息列表继续独立滚动，证据卡列表在抽屉内自己滚动，避免移动端把可点击控件卷到 header / composer 下方。
 - transcript `quote` 动作栏当前在触控设备上不再依赖 hover；粗指针设备会直接显示相关操作。
 - Oracle 自动化口径当前会输出：
   - `question_anchor_ids`
@@ -138,7 +140,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - roundtable 的 readonly replay 当前会跟随 `active_thread_id` 恢复对应 thread 语义；若落在 `hotseat` follow-up，页面不会再退回成 `archivist_route`。
 - mobile roundtable artifact replay readonly 当前也会跟随 active replay thread 恢复 `interaction_mode`，不再在自动化口径里卡成 `archivist_route`。
 - roundtable 的 scoped regression 当前已覆盖 Chromium 桌面/移动，以及桌面 Firefox / WebKit；`reseat / keyboard reseat / anchored thread / hotseat / witness_augmented / readonly replay` 口径与 Chromium 对齐。
-- `ending-room / roundtable` 的主文案当前已改成 factual anchor + `LLM first, template fallback`：participant snapshot 会带 `agent_role / agent_persona / bio_short / impact_score / branch_pressure`，但角色身份块和动态词汇身份提示都会按 `UNTRUSTED DATA` 注入；provider 慢、失败、空流式或仅 reasoning 输出时，会退到非流式改写或 deterministic fallback，不再默认先落模板再改写。roundtable opening / crossfire / witness / verdict 的静态锚点会把 scenario question 压成短问题前缀；roundtable verdict 与 follow-up fallback 现在要求是可直接显示的人话，不允许把 prompt 指令或模式标签原样露给用户。
+- `ending-room / roundtable` 的主文案当前已改成 factual anchor + `LLM first, template fallback`：participant snapshot 会带 `agent_role / agent_persona / bio_short / impact_score / branch_pressure`，但角色身份块和动态词汇身份提示都会按 `UNTRUSTED DATA` 注入；provider 慢、失败、空流式、仅 reasoning 输出或返回 JSON 字符串时，会退到可显示文本或 deterministic fallback，不再默认先落模板再改写。roundtable opening / crossfire / witness / verdict 的静态锚点会把 scenario question 压成短问题前缀；英文 fallback 会避开中文问题原文；roundtable verdict 与 follow-up fallback 现在要求是可直接显示的人话，不允许把 prompt 指令或模式标签原样露给用户。
 - Oracle participant 选择当前会给 `source_type=custom` 的 Agent 加 1.5x impact multiplier；这只影响会客厅/圆桌代表排序，不会把自建 Agent 提升成 `CORE`。
 - ending-room 后台生成当前也持有 runtime lock heartbeat；续租返回 `None`、续租抛异常，或 lease 过期时，会直接 fail-closed 把 room 落成 `error`，不会失锁后继续写 turn 或 result。
 - Oracle 页面当前按用户正在使用的 UI 语言渲染界面壳，不再强制跟随 `scenario.language` 覆盖全局语言开关。
@@ -168,6 +170,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 严格慢路径自动化当前仍在继续收口：
   - ending-room follow-up 的慢流式链路仍可能只落到 fallback 观测，不一定每次都能拿到完整 `turn_start / turn_delta / turn_commit`；空流式或仅 reasoning 输出当前会直接退回非流式改写，不会把 anchor copy 当成成功 stream
   - 但 `full / mobile` 当前已改成目标 `roomId + threadId + interaction_mode` 验真；single-ending anchored fallback 也会补校验 `questionAnchorIds` 与 assistant reply，不再接受旧线程空态或只有 user turn 的假阳性
+  - 2026-05-19 复验中，`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 均通过；Ending Room summary 里的 desktop/mobile replay coverage error 为 `null`
   - roundtable `full` 当前已补 result -> roundtable 入口重试；如果入口仍卡住，会直接落 `roundtable-entry-stall.json` 并失败
   - roundtable 首开与后续 `reseat / expert_witness / selection mode reopen` 当前都按同一条 `90s` ready budget 收口，不再只给 `45s`
 - 本轮 2026-04-23 fresh rerun 已再次通过：
@@ -187,13 +190,14 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - 首页成长 sheet 读取静态 badge definitions、当前用户 badges、mastery 和 weekly summary；旧本地数据里的 `daily_challenge / archive_record / bet_winner` 徽章 id 会映射到当前 registry id 展示。
 - 最近完整本地验证：
   - backend `ruff check .`：通过
-  - backend `python -m pytest tests/ -x -q --tb=short`：`3180 passed, 6 skipped`
-  - backend Campaign/profile label 窄集：`154 passed`，目标文件 `ruff check` 通过
+  - backend `python -m pytest tests/ -x --timeout=120 -q`：`3238 passed, 6 skipped`
+  - backend Oracle narrator / simulator / ending room 窄集：`297 passed`
   - frontend `npx tsc --noEmit`：通过
   - frontend `npm run lint`：通过
   - frontend `npm run build`：通过
-  - frontend full vitest：`199 files / 2169 tests passed`
-  - frontend i18n key parity spot-check：`zh: 2744`、`en: 2744`、parity OK
+  - frontend full vitest：`200 files / 2175 tests passed`
+  - frontend i18n key parity spot-check：`zh: 2732`、`en: 2732`、parity OK
+  - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过；ending-room replay coverage error 全为 null，mobile fit 为 true
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0
   - CampaignProgressSheet browser spot-check：desktop 与 mobile forced-colors / reduced-motion 下可打开、可滚动，console/page error 为 0
   - 浏览器 E2E：Chromium mobile / gameplay / intervention / prediction、Firefox gameplay / intervention、WebKit gameplay / intervention 均通过；最终 Chromium gameplay mini 复验通过

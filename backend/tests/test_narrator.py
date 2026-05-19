@@ -8,6 +8,7 @@ import app.services.narrator as narrator_module
 from app.services.narrator import (
     _build_fallback_narration,
     _build_narration_prompt,
+    _strip_round_markers,
     narrate_branch,
 )
 
@@ -336,8 +337,9 @@ class TestNarrateBranch:
         )
 
         assert "轮换序章" in result["story"]
-        assert "简化摘要" in result["insight"]
-        assert result["key_moments"] == ["[R1 A]: 第一条记录", "[R1 B]: 第二条记录"]
+        assert "简化摘要" not in result["insight"]
+        assert "第一条记录" in result["insight"]
+        assert result["key_moments"] == ["第一条记录", "第二条记录"]
 
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
@@ -372,7 +374,16 @@ class TestNarrateBranch:
         )
 
         assert "Opening Branch" in result["story"]
-        assert "compact summary" in result["insight"]
+        assert "compact summary" not in result["insight"]
+        assert "Opening Branch" in result["insight"]
+
+    def test_strip_round_markers_handles_full_width_colon(self):
+        assert _strip_round_markers("[R1 张三]：第一条") == "第一条"
+
+    def test_strip_round_markers_preserves_regular_bracketed_notes(self):
+        text = "保留 [important note]，不要删掉正文里的 [R2 valid bracket] 内容。"
+
+        assert _strip_round_markers(text) == text
 
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call", new_callable=AsyncMock)

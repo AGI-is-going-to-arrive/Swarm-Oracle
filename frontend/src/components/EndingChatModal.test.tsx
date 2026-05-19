@@ -99,7 +99,7 @@ vi.mock('react-i18next', () => ({
         return `Why did the worldline turn here: ${String(options?.moment ?? '')}`;
       }
       if (key === 'ending_room.verdict_prompt') {
-        return `Continue from this ending: why did "${String(options?.summary ?? '')}" hold?`;
+        return 'Follow up on the verdict: Why was this conclusion inevitable? What key decisions led to this outcome?';
       }
       if (key === 'ending_room.insight_prompt') {
         return `Push on this insight: ${String(options?.insight ?? '')}`;
@@ -912,7 +912,8 @@ describe('EndingChatModal', () => {
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Continue from verdict' }));
-    expect(storeState.setComposerDraft).toHaveBeenCalledWith('Continue from this ending: why did "The hinge held because the council blinked first." hold?');
+    expect(storeState.setComposerDraft).toHaveBeenCalledWith('Follow up on the verdict: Why was this conclusion inevitable? What key decisions led to this outcome?');
+    expect(storeState.setComposerDraft.mock.calls[0][0]).not.toContain('The hinge held because the council blinked first.');
 
     await user.click(screen.getByRole('button', { name: 'Start anchored thread' }));
     await waitFor(() => expect(storeState.createThread).toHaveBeenCalledWith('room-1', {

@@ -46,7 +46,7 @@ from app.services.memory import (
     retrieve_relevant_memories,
     store_memory,
 )
-from app.services.narrator import narrate_branch
+from app.services.narrator import _strip_round_markers, narrate_branch
 from app.services.runtime_lock import runtime_lock_is_active, simulation_lock_key
 from app.services.simulation_cancel import clear_cancel_token, get_cancel_token, is_cancelled
 
@@ -3714,16 +3714,27 @@ def _save_narration(engine, branch_id, narration: dict):
     with Session(engine) as session:
         branch = session.get(Branch, branch_id)
         if branch:
-            branch.story = narration.get("story", "")
-            branch.insight = narration.get("insight", "")
+            branch.story = _strip_round_markers(str(narration.get("story", "") or ""))
+            branch.insight = _strip_round_markers(str(narration.get("insight", "") or ""))
             key_moments = narration.get("key_moments", [])
             if isinstance(key_moments, list):
-                branch.key_moments = json.dumps(key_moments, ensure_ascii=False)
+                branch.key_moments = json.dumps(
+                    [
+                        cleaned
+                        for item in key_moments
+                        if (cleaned := _strip_round_markers(str(item)))
+                    ],
+                    ensure_ascii=False,
+                )
             elif isinstance(key_moments, str):
                 # LLM returned a string instead of list — wrap it
-                branch.key_moments = json.dumps([key_moments], ensure_ascii=False)
+                cleaned_key_moment = _strip_round_markers(key_moments)
+                branch.key_moments = json.dumps(
+                    [cleaned_key_moment] if cleaned_key_moment else [],
+                    ensure_ascii=False,
+                )
             question_answer = _one_line_answer(
-                str(narration.get("question_answer") or ""),
+                _strip_round_markers(str(narration.get("question_answer") or "")),
             )
             if question_answer and settings.FEATURE_RESULT_VERDICT:
                 scenario = session.get(Scenario, branch.scenario_id)

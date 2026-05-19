@@ -163,17 +163,20 @@ export function getInteractionModeNote(
 }
 
 export function buildEndingVerdictPrompt(summary: string, isZh: boolean, t?: TFunction): string {
+  // Verdict text intentionally not embedded into the prompt: the sidebar summary
+  // and the auto_recap bubble already surface the full verdict, so repeating it
+  // here turns the chip into noise. Ask a reference-style follow-up instead.
   const trimmed = summary.trim();
   if (!trimmed) {
     if (t) return t('ending_room.verdict_prompt_default');
     return isZh
-      ? '沿着当前结局继续追问：为什么这个结论会成立？'
-      : 'Continue from this ending: why did this verdict hold?';
+      ? '沿着档案结论继续追问：为什么这个结论会成立？具体是哪些关键决策导致了这个结局？'
+      : 'Follow up on the verdict: Why was this conclusion inevitable? What key decisions led to this outcome?';
   }
-  if (t) return t('ending_room.verdict_prompt', { summary: trimmed });
+  if (t) return t('ending_room.verdict_prompt');
   return isZh
-    ? `沿着当前结局继续追问：为什么"${trimmed}"会成立？`
-    : `Continue from this ending: why did "${trimmed}" hold?`;
+    ? '沿着档案结论继续追问：为什么这个结论会成立？具体是哪些关键决策导致了这个结局？'
+    : 'Follow up on the verdict: Why was this conclusion inevitable? What key decisions led to this outcome?';
 }
 
 export function buildEndingInsightPrompt(insight: string, isZh: boolean, t?: TFunction): string {

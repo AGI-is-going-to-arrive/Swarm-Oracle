@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | Result Quality targeted: 15 passed；broad run 有 live/timeout follow-up |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 185 文件 / 2047 tests；i18n 2509/2509 |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | full pytest: 3238 passed, 6 skipped；Oracle targeted: 297 passed |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 200 文件 / 2175 tests；i18n 2732/2732 |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -117,7 +117,7 @@ cd backend && alembic upgrade head
 ### 核心架构
 - `ending_room_service` 已拆分为子模块包 (`_utils`, `_participants`, `_threads`, `_content`)，修改时注意 re-export 兼容性
 - `worldlineRoundtableStore.ts` 是 `endingRoomStore` 的 re-export，不是 stub
-- 大文件：`EndingChatModal.tsx` (~1509 行)，`WorldlineRoundtableView.tsx` (~2223 行)
+- 大文件：`EndingChatModal.tsx` (~1866 行)，`WorldlineRoundtableView.tsx` (~2223 行)
 - LLM 客户端支持 BYOK，前端通过 `LlmProviderRequestOptions` 传递
 - ChromaDB 双层 memory：scenario-scoped + identity-scoped (`identity_{user_id}`，200 条 FIFO，串行化锁)
 - Agent continuity key：SHA-256(role+persona[:30])[:16]，跨场景身份匹配
@@ -162,11 +162,13 @@ cd backend && alembic upgrade head
 - 3-tier fallback：generation temp=0.82 → rewrite temp=0.78 → static anchor
 - 四种房间类型均接入 factual_guardrail + scenario_question + transcript_quotes
 - roundtable 静态锚点会把 `scenario_question` 压成短问题前缀；phase insight 会先去掉已存在的问题前缀，再按中文 96 字 / 英文 160 chars 预算压成一句，前端卡片默认折叠，避免长问题或长转述挤掉真正的转折点
-- 13 种 voice variant（role_hint + bio_hint 子串匹配），stream 温度 0.75 + reasoning_effort medium
+- 18 种 voice variant（role_hint + bio_hint 子串匹配），stream 温度 0.75 + reasoning_effort medium
+- generation-first 路径可处理 JSON 字符串输出；follow-up 空流式或仅 reasoning 输出会退回非流式改写，英文 fallback 不把中文问题原样塞回英文句子
 
 ### 圆桌
 - Hero 做减法 + PostVerdictPanel 三 tab（Agent 对话/分析师/问卷），仅 verdict 后可用
 - `roundtable_survey.py` SSE + Semaphore(3)；`roundtable_analyst.py` ReACT 3 工具 5 轮迭代
+- `roundtable_survey` 是圆桌 Deep Dive 工作台能力，不是 `EndingRoomInteractionMode`；EndingChatModal 当前不支持 `parallel_survey`
 
 ### Phase 3 (F1-F6)
 - 13 ORM 模型，Alembic 014-016 + 022 + 025；8 后端服务；`/api/agents/*` + `/api/graphs/*`
@@ -196,6 +198,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
+| 05-19 | Oracle Chambers / EndingChatModal review hardening：EndingChatModal 的 thread rail 与 evidence drawer 移到 transcript 内部滚动区外，保留消息列表独立滚动，修复移动端 replay/evidence drawer 点击拦截；移除没有后端枚举和持久化合同的 `parallel_survey` skeleton，保留已实现的 roundtable survey SSE 工作台能力；Oracle backend generation-first 路径补 JSON 字符串解析、streaming-first plain stream fallback、英文 CJK fallback 过滤，并在 narrator/simulator 边界清理用户可见 `[R...]` round marker。验证：backend full `3238 passed, 6 skipped`，Oracle targeted `297 passed`；frontend full `200 files / 2175 tests passed`，tsc/eslint/build/i18n `2732/2732` 通过；ending-room 与 roundtable E2E 通过 |
 | 05-19 | Roundtable phase insight 可读性收口：`_phase_insight()` 保留去重问题前缀，但把 commentary 预算从固定 64 放宽为中文 96 字 / 英文 160 chars；`WorldlineRoundtableView` 的 phase insight accordion 改为默认全部折叠，标题继续只显示短 preview，用户展开后再看更完整的一句主持人提炼。验证：`test_ending_room_service.py` 133 passed，`WorldlineRoundtableView.test.tsx` 46 passed，相关 ruff/eslint 和 frontend build 通过 |
 | 05-19 | Result Quality / Question Anchoring 二次收口：narrator Pass-1/Pass-2 都锚定原问题，fallback 叙事也带 question；verdict prompt 使用分支 `story_excerpt`，分支摘要预算扩大到 15000 字符；roundtable opening/crossfire/witness/verdict 静态锚点透传 `scenario_question`，`_phase_insight()` 去重问题前缀后再压缩。前端 ResultVerdictPanel 对 blank/null/undefined verdict 显示中性 fallback，不再提示“正在分析”；EndingCardsGrid 把 branch `question_answer` 放到概率条上方；DirectorNotebook 优先展示 story verdict，再展示 branch insight；Debate E2E 会展开默认折叠的阶段地图后再断言完整列表。验证：backend targeted `290 passed`；frontend Result/Debate targeted `25 passed`；frontend lint/build 通过；Debate mobile Chromium 390px 与 320px E2E 通过；i18n parity `2730/2730` |
 | 05-16 | Document Ingestion Upgrade：`/api/agents/from-document` 支持长 PDF 的采样粗扫 + 全文证据精提，PDF 文本上限调整为 1000000 字符，实体抽取/persona 批次/persona 单个超时拆成独立配置；persona 生成按 `0.7 -> 0.6 -> 0.5` 递减温度重试，部分失败会保留已创建 Agent 并返回 `agents_failed`。Agent Workshop document tab 延长上传超时到 8 分钟，补齐 partial success / 0-agent / timeout / no-text 本地化错误。默认 backend full gate 通过：`3070 passed, 6 skipped`；文档导入后端定向 `48 passed`，前端 DocumentUploader + locale 窄集 `19 passed`；live LLM benchmark / observation 测试改为 `RUN_REAL_LLM_TESTS=1` opt-in |

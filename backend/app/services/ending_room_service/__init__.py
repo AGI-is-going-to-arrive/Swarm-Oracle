@@ -1459,6 +1459,48 @@ def _build_room_plan(
         language=room.language,
         limit=120,
     )
+    agent_names = [
+        sanitize_untrusted_text(speaker.display_name, max_chars=40)
+        for speaker in agent_speakers[:3]
+        if sanitize_untrusted_text(speaker.display_name, max_chars=40)
+    ]
+    if room.language == "zh":
+        agent_names_text = "、".join(agent_names) if agent_names else "这些角色"
+        fallback_question = "这个假设"
+    else:
+        if len(agent_names) > 2:
+            agent_names_text = f"{', '.join(agent_names[:-1])}, and {agent_names[-1]}"
+        elif len(agent_names) == 2:
+            agent_names_text = f"{agent_names[0]} and {agent_names[1]}"
+        elif agent_names:
+            agent_names_text = agent_names[0]
+        else:
+            agent_names_text = "the selected agents"
+        fallback_question = "the original what-if"
+    raw_question_display = sanitize_untrusted_text(str(scenario_question or ""), max_chars=160)
+    visible_question_display = _oracle_visible_text(
+        scenario_question,
+        language=room.language,
+        limit=160,
+    )
+    if room.language == "en" and raw_question_display and _CJK_RE.search(raw_question_display):
+        raw_question_display = ""
+    question_display = visible_question_display or raw_question_display or fallback_question
+    branch_insight_display = _oracle_visible_clause(
+        context["anchor_branch"].get("insight"),
+        language=room.language,
+        limit=140,
+    )
+    branch_insight_sentence_zh = (
+        f"分支洞察已经指向：{branch_insight_display}。"
+        if branch_insight_display
+        else ""
+    )
+    branch_insight_sentence_en = (
+        f"The branch insight points to this: {branch_insight_display}. "
+        if branch_insight_display
+        else ""
+    )
     primary_context_hint = _anchor_room_turn_context_hint(
         primary_speaker,
         anchor_branch=context["anchor_branch"],
@@ -1472,11 +1514,21 @@ def _build_room_plan(
         safe_role_hint = _oracle_visible_text(role_hint, language=room.language, limit=40)
         safe_persona_hint = _oracle_visible_text(persona_hint, language=room.language, limit=88)
         move_text = (
-            f"关键转折：「{evidence_hook_display}」。如果只改一步，改这里。"
+            (
+                f"针对「{question_display}」，关键转折：「{evidence_hook_display}」。"
+                f"如果只改一步，档案官会把笔压在这里。{agent_names_text}的选择把这一步变成"
+                "整条因果链的杠杆点。"
+                f"{branch_insight_sentence_zh}"
+                "如果当时换一种行动，哪一段后果会最先被改写？"
+            )
             if room.language == "zh"
             else (
-                f"Key hinge: '{evidence_hook_display}'. "
-                f"If only one correction is allowed, target this."
+                f"For '{question_display}', the one move is '{evidence_hook_display}'. "
+                f"{agent_names_text} made this the leverage point because their choices "
+                "concentrated the branch's risk there. "
+                + branch_insight_sentence_en
+                + "Change that decision and the ending stops looking inevitable; "
+                "what alternative would have changed everything?"
             )
         )
         primary_quote_clause_zh = f"我在 R{primary_round} 当时说过「{primary_quote}」。" if primary_quote and primary_round > 0 else ""  # noqa: E501
@@ -1560,11 +1612,21 @@ def _build_room_plan(
         }
 
     verdict_text = (
-        f"档案官记录：《{anchor_branch_title}》的核心转折在「{evidence_hook_display}」。"
+        (
+            f"针对「{question_display}」，档案官把《{anchor_branch_title}》的判定落在"
+            f"「{evidence_hook_display}」。{agent_names_text}的选择让这条线不再只是"
+            "可能性，而是一步步收紧的后果。"
+            f"{branch_insight_sentence_zh}"
+            "如果要重新审问这条世界线，你会先质疑哪一个人当时的判断？"
+        )
         if room.language == "zh"
         else (
-            f"Archivist record: the core hinge of {anchor_branch_title} was "
-            f"'{evidence_hook_display}'."
+            f"For '{question_display}', the Archivist's verdict on {anchor_branch_title} "
+            f"lands on '{evidence_hook_display}'. {agent_names_text} turned this from "
+            "a loose possibility into a consequence that kept tightening. "
+            + branch_insight_sentence_en
+            + "If this worldline had to be questioned again, whose decision would you "
+            "challenge first?"
         )
     )
     primary_quote_display = _oracle_visible_text(

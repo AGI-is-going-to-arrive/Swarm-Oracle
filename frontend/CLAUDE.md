@@ -82,7 +82,7 @@ npm run test:watch # vitest (watch mode)
 
 | 文件 | 说明 |
 |------|------|
-| `EndingChatModal.tsx` | 神谕密室聊天弹窗 (~1509 行) |
+| `EndingChatModal.tsx` | 神谕密室聊天弹窗 (~1866 行)；thread rail 和 evidence drawer 位于 transcript 内部滚动区外，消息列表独立滚动；当前不支持 `parallel_survey`，并行问卷保留在圆桌 Deep Dive SSE 工作台 |
 | `BranchTree.tsx` / `ClassicBranchTree.tsx` | 分支树可视化 |
 | `InterventionModal.tsx` | 干预操作弹窗 |
 | `ShareModal.tsx` / `DebateShareModal.tsx` | 分享弹窗；主模式分享弹窗可触发 PNG share artifact 导出 |
@@ -200,7 +200,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- 最近 full vitest 基线：`185 files / 2047 tests passed`
+- 最近 full vitest 基线：`200 files / 2175 tests passed`
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -394,6 +394,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-19 | EndingChatModal layout / survey contract hardening | `EndingChatModal.tsx/css`：thread rail 与 evidence drawer 移到 transcript 内部滚动区外，证据卡列表在抽屉内滚动，mobile replay/evidence-card 点击不再被 header / composer 拦截；unsupported `parallel_survey` UI/type/helper/i18n skeleton 已移除，保留圆桌 Deep Dive 的真实 survey SSE 能力；summary/details、archivist note 和新 `color-mix()` 样式补 legacy fallback，composer overflow rule 收窄到 `.ending-chat-modal`，避免影响 `WorldlineRoundtableView`。验证：EndingChatModal / helper / CSS fallback 窄集 `34 passed`，frontend full `200 files / 2175 tests passed`，tsc/eslint/build/i18n `2732/2732` 通过，ending-room 与 roundtable E2E 通过 |
 | 2026-05-19 | Roundtable phase insight 默认折叠 | `WorldlineRoundtableView` 的 phase insight accordion 不再默认展开最后一条；header 继续显示短 preview，用户点击后才看到完整一条 commentary。测试同步改为先展开再断言内容，并新增默认折叠回归。验证：`WorldlineRoundtableView.test.tsx` 为 `46 passed`，相关 eslint 与 `npm run build` 通过 |
 | 2026-05-19 | Result Quality / Question Anchoring 二次收口 | `ResultVerdictPanel` 在 capability enabled 但 story verdict 为空、null 或 undefined 时显示中性的 unavailable fallback，并继续显示原问题；`EndingCardsGrid` 把 branch `question_answer` 放到概率条上方，空白值不渲染 focal block；`DirectorNotebook` 的档案结论优先显示 story verdict，再补 branch insight；`ResultVerdictPanel.css` 新增 pending/unavailable forced-colors 与 OKLCH fallback，新增样式的 `letter-spacing` 保持为 `0`；`DebateArenaView` 阶段地图继续默认折叠，但按钮暴露 `debate-stage-map-toggle`，`e2e-debate-suite` 会展开后再断言 `.debate-stage-summary-list`。验证：Result/Debate targeted vitest `25 passed`，`npm run lint` 和 `npm run build` 通过，Debate mobile Chromium 390px / 320px E2E 通过，i18n parity `2730/2730` |
 | 2026-05-15 | Agent 页面导航修复 | `AgentWorkshopView.tsx`：标题上方新增 `← 返回 Agent 库` 文字链接（`<Link to="/agents">`，样式 `.workshop-view__back`）。`AgentLibrary.tsx`：返回按钮从 `navigate(-1)` 改为 `<Link to="/">`，修复从 `/agents/new` 跳转到 `/agents` 后点返回会回到 `/agents/new` 的历史栈 bug；移除不再使用的 `useNavigate` import。i18n 新增 `agents.back_to_library`（zh: 返回 Agent 库 / en: Back to Agent Library）。验证：frontend full vitest `185 files / 2047 tests passed`，tsc/eslint/build 通过，i18n `2527/2527`，浏览器实测 `/agents/new` → `/agents` → `/` 导航链路正确 |

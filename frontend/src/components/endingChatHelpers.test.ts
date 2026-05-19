@@ -74,8 +74,10 @@ describe('endingChatHelpers', () => {
   });
 
   describe('buildEndingVerdictPrompt', () => {
-    it('includes summary when present', () => {
-      expect(buildEndingVerdictPrompt('War ended', false)).toContain('War ended');
+    it('returns the reference-style follow-up when summary is present (does not embed summary)', () => {
+      const result = buildEndingVerdictPrompt('War ended', false);
+      expect(result).toContain('Follow up on the verdict');
+      expect(result).not.toContain('War ended');
     });
     it('uses fallback for empty', () => {
       expect(buildEndingVerdictPrompt('', true)).toContain('结论');

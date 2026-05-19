@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from app.config import settings
 from app.services.lang_detect import get_language_directive
@@ -17,6 +18,17 @@ from app.services.llm_client import (
 
 logger = logging.getLogger(__name__)
 _NARRATION_TIMEOUT_SECONDS = 35.0
+_ROUND_MARKER_RE = re.compile(r"(?m)^\s*\[R\d+\s+[^\]\n]+\][:：]?\s*")
+_NARRATION_DEGRADATION_INSIGHTS = {
+    "叙事服务暂时不可用，已回退为基于原始记录的简化摘要。",
+    "Narration is temporarily unavailable, so the system fell back to a compact summary built from the raw records.",  # noqa: E501
+}
+
+
+def _strip_round_markers(text: str) -> str:
+    """Remove raw transcript round markers from user-facing narration text."""
+    return _ROUND_MARKER_RE.sub("", str(text or "")).strip()
+
 
 def _is_chinese(language: str) -> bool:
     return language == "Chinese"
@@ -150,7 +162,11 @@ def _build_fallback_narration(
     language: str,
     question: str = "",
 ) -> dict:
-    lines = [line.strip() for line in raw_rounds.splitlines() if line.strip()]
+    lines = [
+        cleaned
+        for line in raw_rounds.splitlines()
+        if (cleaned := _strip_round_markers(line))
+    ]
     key_moments = lines[:2]
     compact_question = " ".join(str(question or "").split())[:300]
     if language == "Chinese":
@@ -179,11 +195,7 @@ def _build_fallback_narration(
 
     return {
         "story": " ".join(story_lines),
-        "insight": (
-            "叙事服务暂时不可用，已回退为基于原始记录的简化摘要。"
-            if language == "Chinese"
-            else "Narration is temporarily unavailable, so the system fell back to a compact summary built from the raw records."  # noqa: E501
-        ),
+        "insight": "",
         "key_moments": key_moments,
     }
 
@@ -326,9 +338,16 @@ async def narrate_branch(
     else:
         key_moments = []
 
-    story = str(result.get("story", "") or "").strip()
-    insight = str(result.get("insight", "") or "").strip()
-    question_answer = str(result.get("question_answer", "") or "").strip()
+    story = _strip_round_markers(str(result.get("story", "") or ""))
+    insight = _strip_round_markers(str(result.get("insight", "") or ""))
+    if insight in _NARRATION_DEGRADATION_INSIGHTS:
+        insight = ""
+    question_answer = _strip_round_markers(str(result.get("question_answer", "") or ""))
+    key_moments = [
+        cleaned
+        for item in key_moments
+        if (cleaned := _strip_round_markers(str(item)))
+    ]
     if not insight:
         # reconcile_scenario_done_if_complete requires non-empty insight on every
         # COMPLETED branch — without this guard a single LLM response that omits

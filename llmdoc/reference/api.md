@@ -471,6 +471,7 @@
   - `epilogue`：后续三回合短叙事推演。
   - `evidence_card`：引入另一条世界线的摘要卡。
   - `epilogue` 与 `evidence_card` 在 `crossline_gallery` 下不可用。
+  - 当前没有 `parallel_survey` 这个 ending-room interaction mode；并行问卷走下面的 roundtable survey SSE 端点。
 - `GET /api/ending-room/thread/{thread_id}` 与 room/result snapshot 里的 turn 数据
   当前都会回显：
   - `question_anchor_ids_json`
@@ -480,7 +481,9 @@
   - `participant_ids` 必须去重后仍非空，当前最多 6 个。
   - `room_id` 用于限定目标 `worldline_roundtable` room；如果指定但不属于当前 scenario，返回 `404 ROUNDTABLE_ROOM_NOT_FOUND`。
   - 同一请求里不允许混用不同 roundtable room 的 participant；这类歧义返回 `409 ROUNDTABLE_ROOM_AMBIGUOUS`。
-  - SSE 正常事件为 `survey_response`；单个代表的 LLM 错误会收口在对应 `survey_response.error`，不把整个流升级成 fatal error。
+  - SSE 正常事件为 `survey_response`；响应按代表完成顺序到达，不保证和请求里的 `participant_ids` 顺序一致。
+  - 当前没有单独的 `survey_complete` 事件；客户端以 SSE EOF 作为完成信号。
+  - 单个代表的 LLM 错误会收口在对应 `survey_response.error`，不把整个流升级成 fatal error。
 - `POST /api/scenario/{scenario_id}/analyst`
   受 `FEATURE_ROUNDTABLE_ANALYST` gate；请求体包含 `question`，并可选 `room_id / llm_api_key / llm_base_url / llm_model`。
   - 同一 scenario 里只有一个 roundtable room 时，`room_id` 可以省略；存在多个 roundtable room 时必须显式传 `room_id`。

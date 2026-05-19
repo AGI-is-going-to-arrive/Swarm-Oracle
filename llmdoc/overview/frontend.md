@@ -380,6 +380,8 @@
   - transcript `quote` 动作栏在触控设备上默认可见，不再要求 hover
   - `后续三回合` 按钮：设置 `interaction_mode=epilogue` 并预填追问内容
   - 证据卡抽屉：在非 crossline gallery 模式下，可展开其他世界线摘要卡，点击 `提交证据卡` 以 `interaction_mode=evidence_card` 和对应 `cited_branch_id / cited_refs_json` 发送
+  - thread rail 与证据卡抽屉位于 transcript 内部滚动区外；transcript list 继续独立滚动，证据卡列表在抽屉内滚动，移动端不会再把这些控件卷到 header / composer 下方
+  - `parallel_survey` 不是 EndingChatModal interaction mode；并行问卷能力保留在 completed-state roundtable 的 Deep Dive survey SSE 工作台里
   - mobile sidebar sheet 已补 `SheetTitle / SheetDescription`；第一次 `Escape` 只关闭 sheet，不会误关外层 chamber
 - `NodeConversationSheet` 当前也复用 `SheetTitle / SheetDescription` 作为单一无障碍描述来源，不再手工覆写 `aria-labelledby / aria-describedby`，Radix 下不会再打缺 description 警告。桌面端现在按 non-modal 右侧 sidecar 挂载，移动端仍是 modal bottom sheet；有 origin 时会显示 `NodeContextBanner`，让用户看到当前追问来自哪个节点、哪一轮、正在问谁、这张卡代表什么，以及它的前因/后续/关系。节点对话的本地 transport 现在收口在 `useNodeConversationTransport.ts`：sheet unmount 会 abort 活跃请求，`/start` 和 `/turn` 会透传 origin branch / round / node / excerpt，SSE parser 也已兼容 multiline `data:` frame。bootstrap start 当前带 epoch guard；关闭或切换节点后的迟到 start response 不会再把旧 thread 写回当前 sheet。公共会话状态机在 `turn_completed / turn_error / abort` 之后会忽略迟到 delta，并用 committed turn 计数驱动结果页 deepen hint；committed assistant 文本会切到 `SafeMarkdown` 渲染，列表和加粗不会再显示成原始 Markdown。结果页追问会使用当前 result context 的标题、说明和空态问题，不再套用“选择图节点”的文案。
 - `DebateArenaView` 当前只允许在 live 当前 phase 的下注窗口打开/提交 quick counterplay；锁到历史 phase 时不再发起 counterplay。
@@ -592,8 +594,9 @@
   - `npx tsc --noEmit`：通过
   - `npm run lint`：通过
   - `npm run build`：通过
-  - full vitest：`199 files / 2169 tests passed`
-  - i18n key parity spot-check：`zh: 2744`、`en: 2744`、parity OK
+  - full vitest：`200 files / 2175 tests passed`
+  - i18n key parity spot-check：`zh: 2732`、`en: 2732`、parity OK
+  - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0
   - CampaignProgressSheet browser spot-check：desktop 与 mobile forced-colors / reduced-motion 下可打开、可滚动，console/page error 为 0
   - campaign/gameplay 浏览器 E2E：Chromium mobile / gameplay / intervention / prediction、Firefox gameplay / intervention、WebKit gameplay / intervention 均通过；最终 Chromium gameplay mini 复验通过

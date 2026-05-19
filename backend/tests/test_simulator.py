@@ -2170,6 +2170,33 @@ class TestSaveNarration:
             assert b.insight == "深刻的启示"
             assert b.status == BranchStatus.COMPLETED
 
+    def test_save_strips_round_markers_but_keeps_regular_bracketed_notes(self):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        bid = _create_branch(engine, sid, title="old_title")
+
+        _save_narration(engine, bid, {
+            "story": "[R1 张三]：第一条 [important note]",
+            "insight": "[R2 李四]: 第二条",
+            "question_answer": "[R3 王五]：答案 [important note]",
+            "key_moments": [
+                "[R4 赵六]：关键一步",
+                "保留 [important note]",
+            ],
+        })
+
+        with Session(engine) as session:
+            branch = session.get(Branch, bid)
+            scenario = session.get(Scenario, sid)
+            moments = json.loads(branch.key_moments)
+
+            assert branch.story == "第一条 [important note]"
+            assert branch.insight == "第二条"
+            assert moments == ["关键一步", "保留 [important note]"]
+            assert scenario.parsed_context["result_quality"]["branch_question_answers"][bid] == (
+                "答案 [important note]"
+            )
+
     def test_save_question_answer_in_result_quality(self):
         engine = get_engine()
         sid = _make_scenario(engine)
