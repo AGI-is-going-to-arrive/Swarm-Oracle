@@ -1,5 +1,9 @@
 """API-level tests for counterfactual replay endpoints."""
 
+import base64
+import hashlib
+import hmac
+import json
 import sqlite3
 import threading
 import time
@@ -43,19 +47,48 @@ def client():
 # ── Helpers ──────────────────────────────────────────────
 
 
-def _seed_scenario(engine, *, question="测试问题", status=ScenarioStatus.DONE):
-    s = Scenario(question=question, status=status)
+def _make_signed_token(secret: str, subject: str) -> str:
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"sub": subject}, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    signing_input = f"v1.{payload}".encode("utf-8")
+    signature = base64.urlsafe_b64encode(
+        hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    ).decode("ascii").rstrip("=")
+    return f"v1.{payload}.{signature}"
+
+
+def _seed_scenario(engine, *, question="测试问题", status=ScenarioStatus.DONE, user_id=None):
+    s = Scenario(question=question, status=status, user_id=user_id)
     with Session(engine) as session:
         session.add(s)
         session.commit()
         return s.id
 
 
-def _seed_branch(engine, scenario_id, *, title="主线", status=BranchStatus.ACTIVE,
-                 replay_kind=None):
+def _seed_branch(
+    engine,
+    scenario_id,
+    *,
+    title="主线",
+    status=BranchStatus.ACTIVE,
+    replay_kind=None,
+    parent_branch_id=None,
+    fork_round=0,
+    replay_source_branch_id=None,
+    replay_source_round=None,
+    replay_source_agent_id=None,
+):
     b = Branch(
-        scenario_id=scenario_id, title=title, status=status,
+        scenario_id=scenario_id,
+        title=title,
+        status=status,
+        parent_branch_id=parent_branch_id,
+        fork_round=fork_round,
         replay_kind=replay_kind,
+        replay_source_branch_id=replay_source_branch_id,
+        replay_source_round=replay_source_round,
+        replay_source_agent_id=replay_source_agent_id,
     )
     with Session(engine) as session:
         session.add(b)
@@ -102,10 +135,73 @@ def _setup_full_scenario(engine):
 
 
 class TestCreateCounterfactual:
-    def test_creates_branch(self, client):
-        """POST counterfactual should create a new counterfactual branch."""
+    def test_simulate_false_creates_branch_without_starting_simulation(self, client, monkeypatch):
+        """simulate=false preserves the legacy clone+seed-only behavior."""
         engine = get_engine()
         sid, bid, aid = _setup_full_scenario(engine)
+        run_mock = MagicMock()
+        schedule_mock = MagicMock()
+        simulation_lock_mock = MagicMock()
+        monkeypatch.setattr("app.api.graphs.run_sim_background", run_mock)
+        monkeypatch.setattr("app.api.graphs.schedule_background_task", schedule_mock)
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            simulation_lock_mock,
+        )
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+            "source_branch_id": bid,
+            "round_number": 2,
+            "agent_id": aid,
+            "replacement_content": "Alternative stance from this agent",
+            "simulate": False,
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert "branch_id" in data
+        assert data["message"] == "Counterfactual branch created"
+        run_mock.assert_not_called()
+        schedule_mock.assert_not_called()
+        simulation_lock_mock.assert_not_called()
+
+        # Verify branch in DB
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            new_branch = session.get(Branch, data["branch_id"])
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.DONE
+            assert new_branch is not None
+            assert new_branch.replay_kind == "counterfactual"
+            assert new_branch.replay_source_branch_id == bid
+            assert new_branch.replay_source_round == 2
+            assert new_branch.replay_source_agent_id == aid
+
+    def test_default_simulate_true_starts_simulation(self, client, monkeypatch):
+        """Default counterfactual creation should schedule branch-only simulation."""
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+        replay_lease = MagicMock(name="replay_lease")
+        simulation_lease = MagicMock(name="simulation_lease")
+        background_coro = MagicMock(name="background_coro")
+        run_mock = MagicMock(return_value=background_coro)
+        schedule_mock = MagicMock()
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args: replay_lease,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: simulation_lease,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr("app.api.graphs._stop_runtime_lock_heartbeat", lambda *_args: None)
+        monkeypatch.setattr("app.api.graphs.release_runtime_lock", lambda *_args: True)
+        monkeypatch.setattr("app.api.graphs.run_sim_background", run_mock)
+        monkeypatch.setattr("app.api.graphs.schedule_background_task", schedule_mock)
 
         resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
             "source_branch_id": bid,
@@ -113,19 +209,128 @@ class TestCreateCounterfactual:
             "agent_id": aid,
             "replacement_content": "Alternative stance from this agent",
         })
+
         assert resp.status_code == 201
         data = resp.json()
-        assert "branch_id" in data
-        assert data["message"] == "Counterfactual branch created"
+        assert data["message"] == "Counterfactual branch created, simulation started"
+        run_mock.assert_called_once_with(
+            sid,
+            branch_id=data["branch_id"],
+            pre_acquired_lock_lease=simulation_lease,
+        )
+        schedule_mock.assert_called_once_with(background_coro)
 
-        # Verify branch in DB
         with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
             new_branch = session.get(Branch, data["branch_id"])
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.SIMULATING
             assert new_branch is not None
             assert new_branch.replay_kind == "counterfactual"
-            assert new_branch.replay_source_branch_id == bid
-            assert new_branch.replay_source_round == 2
-            assert new_branch.replay_source_agent_id == aid
+
+    def test_simulate_true_schedule_failure_rolls_back_branch_and_status(self, monkeypatch):
+        """Scheduling failure should undo the clone and restore scenario status."""
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+        background_coro = MagicMock(name="background_coro")
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr("app.api.graphs._stop_runtime_lock_heartbeat", lambda *_args: None)
+        monkeypatch.setattr("app.api.graphs.release_runtime_lock", lambda *_args: True)
+        monkeypatch.setattr(
+            "app.api.graphs.run_sim_background",
+            MagicMock(return_value=background_coro),
+        )
+
+        def broken_schedule(_coro):
+            raise RuntimeError("schedule failed")
+
+        monkeypatch.setattr("app.api.graphs.schedule_background_task", broken_schedule)
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            resp = failing_client.post(f"/api/scenario/{sid}/counterfactual", json={
+                "source_branch_id": bid,
+                "round_number": 2,
+                "agent_id": aid,
+                "replacement_content": "Alternative stance from this agent",
+            })
+
+        assert resp.status_code == 500
+        background_coro.close.assert_called_once()
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "counterfactual",
+                )
+            ).all()
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.DONE
+        assert replay_branches == []
+
+    def test_simulate_true_simulation_lock_busy_rolls_back_branch(self, client, monkeypatch):
+        """If the simulation lock is busy, the cloned counterfactual branch is removed."""
+        engine = get_engine()
+        sid, bid, aid = _setup_full_scenario(engine)
+        run_mock = MagicMock()
+        schedule_mock = MagicMock()
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_replay_branch_lock",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: None,
+        )
+        monkeypatch.setattr(
+            "app.api.graphs._start_runtime_lock_heartbeat",
+            lambda *_args, **_kwargs: (MagicMock(), MagicMock()),
+        )
+        monkeypatch.setattr("app.api.graphs._stop_runtime_lock_heartbeat", lambda *_args: None)
+        monkeypatch.setattr("app.api.graphs.release_runtime_lock", lambda *_args: True)
+        monkeypatch.setattr("app.api.graphs.run_sim_background", run_mock)
+        monkeypatch.setattr("app.api.graphs.schedule_background_task", schedule_mock)
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual", json={
+            "source_branch_id": bid,
+            "round_number": 2,
+            "agent_id": aid,
+            "replacement_content": "Alternative stance from this agent",
+        })
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {
+            "code": "SIMULATION_ALREADY_RUNNING",
+            "message": "Scenario already has a running simulation",
+        }
+        run_mock.assert_not_called()
+        schedule_mock.assert_not_called()
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            replay_branches = session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "counterfactual",
+                )
+            ).all()
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.DONE
+        assert replay_branches == []
 
     def test_rejects_nonexistent_scenario(self, client):
         """POST counterfactual should return 404 for unknown scenario."""
@@ -161,6 +366,7 @@ class TestCreateCounterfactual:
             "round_number": 1,
             "agent_id": "any",
             "replacement_content": "test",
+            "simulate": False,
         })
         assert resp.status_code == 404
         assert resp.json()["detail"] == {
@@ -178,6 +384,7 @@ class TestCreateCounterfactual:
             "round_number": 99,
             "agent_id": aid,
             "replacement_content": "test",
+            "simulate": False,
         })
         assert resp.status_code == 400
         assert resp.json()["detail"] == {
@@ -201,6 +408,7 @@ class TestCreateCounterfactual:
             "round_number": 2,
             "agent_id": aid,
             "replacement_content": "Alternative stance from this agent",
+            "simulate": False,
         })
 
         assert resp.status_code == 409
@@ -219,6 +427,7 @@ class TestCreateCounterfactual:
             "round_number": 2,
             "agent_id": "missing-agent",
             "replacement_content": "test",
+            "simulate": False,
         })
 
         assert resp.status_code == 400
@@ -245,6 +454,7 @@ class TestCreateCounterfactual:
             "round_number": 0,
             "agent_id": aid,
             "replacement_content": "test",
+            "simulate": False,
         })
 
         assert resp.status_code == 422
@@ -263,6 +473,7 @@ class TestCreateCounterfactual:
             "round_number": 1,
             "agent_id": aid,
             "replacement_content": "too many",
+            "simulate": False,
         })
         assert resp.status_code == 429
         assert resp.json()["detail"] == {
@@ -310,6 +521,7 @@ class TestCreateCounterfactual:
                     "round_number": 1,
                     "agent_id": aid,
                     "replacement_content": "race test",
+                    "simulate": False,
                 },
             )
 
@@ -370,6 +582,7 @@ class TestCreateCounterfactual:
             "round_number": 1,
             "agent_id": aid,
             "replacement_content": "race test",
+            "simulate": False,
         })
 
         assert resp.status_code == 429
@@ -402,6 +615,7 @@ class TestCreateCounterfactual:
             "round_number": 1,
             "agent_id": aid,
             "replacement_content": "test",
+            "simulate": False,
         })
 
         assert resp.status_code == 400
@@ -434,6 +648,7 @@ class TestCreateCounterfactual:
                 "round_number": 1,
                 "agent_id": aid,
                 "replacement_content": "test",
+                "simulate": False,
             })
 
         assert resp.status_code == 500
@@ -472,6 +687,7 @@ class TestCreateCounterfactual:
             "round_number": 1,
             "agent_id": aid,
             "replacement_content": "test",
+            "simulate": False,
         })
 
         assert resp.status_code == 409
@@ -511,6 +727,7 @@ class TestCreateCounterfactual:
             "round_number": 1,
             "agent_id": aid,
             "replacement_content": "race test",
+            "simulate": False,
         })
 
         assert refresh_failed.wait(timeout=1.0)
@@ -585,6 +802,7 @@ class TestCreateCounterfactual:
                 "round_number": 1,
                 "agent_id": aid,
                 "replacement_content": "sqlite refresh failure",
+                "simulate": False,
             })
         finally:
             runtime_lock_module._close_threadlocal_sqlite_connections()
@@ -615,6 +833,7 @@ class TestCreateCounterfactual:
             "agent_id": aid,
             "source_message_content": "second message",
             "replacement_content": "replacement",
+            "simulate": False,
         })
 
         assert resp.status_code == 201
@@ -649,6 +868,7 @@ class TestCreateCounterfactual:
             "round_number": 1,
             "agent_id": aid,
             "replacement_content": "replacement",
+            "simulate": False,
         })
 
         assert resp.status_code == 400
@@ -675,6 +895,7 @@ class TestCreateCounterfactual:
             "agent_id": aid,
             "source_message_content": "   ",
             "replacement_content": "replacement",
+            "simulate": False,
         })
 
         assert resp.status_code == 400
@@ -685,6 +906,189 @@ class TestCreateCounterfactual:
                 f"of branch {bid}; select a specific source message"
             ),
         }
+
+
+class TestResimulateCounterfactual:
+    def test_resimulate_starts_existing_unsimulated_counterfactual(self, client, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid)
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            title="Old CF",
+            replay_kind="counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=2,
+            replay_source_branch_id=source_bid,
+            replay_source_round=2,
+        )
+        _seed_round(engine, cf_bid, 1)
+        _seed_round(engine, cf_bid, 2)
+        simulation_lease = MagicMock(name="simulation_lease")
+        background_coro = MagicMock(name="background_coro")
+        run_mock = MagicMock(return_value=background_coro)
+        schedule_mock = MagicMock()
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: simulation_lease,
+        )
+        monkeypatch.setattr("app.api.graphs.release_runtime_lock", lambda *_args: True)
+        monkeypatch.setattr("app.api.graphs.run_sim_background", run_mock)
+        monkeypatch.setattr("app.api.graphs.schedule_background_task", schedule_mock)
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual/{cf_bid}/resimulate")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"message": "Resimulation started"}
+        run_mock.assert_called_once_with(
+            sid,
+            branch_id=cf_bid,
+            pre_acquired_lock_lease=simulation_lease,
+        )
+        schedule_mock.assert_called_once_with(background_coro)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.SIMULATING
+
+    def test_resimulate_feature_gate(self, client, monkeypatch):
+        from app.api import graphs as graphs_module
+
+        monkeypatch.setattr(graphs_module.settings, "FEATURE_COUNTERFACTUAL_REPLAY", False)
+
+        resp = client.post("/api/scenario/sc1/counterfactual/br1/resimulate")
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == {
+            "code": "FEATURE_DISABLED",
+            "message": "Feature 'counterfactual_replay' is not enabled",
+        }
+
+    def test_resimulate_requires_owned_scenario(self, client, monkeypatch):
+        engine = get_engine()
+        secret = "resimulate-secret"
+        sid = _seed_scenario(engine, user_id="owner-a")
+        cf_bid = _seed_branch(engine, sid, replay_kind="counterfactual", fork_round=1)
+        run_mock = MagicMock()
+
+        monkeypatch.setattr("app.api.helpers.settings.SESSION_SECRET", secret)
+        monkeypatch.setattr("app.api.graphs.settings.SESSION_SECRET", secret)
+        monkeypatch.setattr("app.api.graphs.run_sim_background", run_mock)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/counterfactual/{cf_bid}/resimulate",
+            headers={"X-Session-Token": _make_signed_token(secret, "owner-b")},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
+        run_mock.assert_not_called()
+
+    @pytest.mark.parametrize("use_foreign_branch", [False, True])
+    def test_resimulate_rejects_missing_or_foreign_branch(self, client, use_foreign_branch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        branch_id = "missing-branch"
+        if use_foreign_branch:
+            other_sid = _seed_scenario(engine)
+            branch_id = _seed_branch(engine, other_sid, replay_kind="counterfactual")
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual/{branch_id}/resimulate")
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == {
+            "code": "COUNTERFACTUAL_BRANCH_NOT_FOUND",
+            "message": f"Counterfactual branch {branch_id} not found in scenario",
+        }
+
+    @pytest.mark.parametrize("replay_kind", [None, "resume"])
+    def test_resimulate_rejects_non_counterfactual_branches(self, client, replay_kind):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        branch_id = _seed_branch(engine, sid, replay_kind=replay_kind, fork_round=1)
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual/{branch_id}/resimulate")
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {
+            "code": "COUNTERFACTUAL_BRANCH_KIND_INVALID",
+            "message": "Branch is not a counterfactual branch",
+        }
+
+    def test_resimulate_rejects_already_simulated_branch(self, client, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid)
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            replay_kind="counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=2,
+            replay_source_branch_id=source_bid,
+            replay_source_round=2,
+        )
+        _seed_round(engine, cf_bid, 1)
+        _seed_round(engine, cf_bid, 2)
+        _seed_round(engine, cf_bid, 3)
+        acquire_lock = MagicMock()
+        monkeypatch.setattr("app.api.graphs._acquire_simulation_lock_for_resume", acquire_lock)
+
+        resp = client.post(f"/api/scenario/{sid}/counterfactual/{cf_bid}/resimulate")
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {
+            "code": "COUNTERFACTUAL_ALREADY_SIMULATED",
+            "message": "Counterfactual branch already simulated",
+        }
+        acquire_lock.assert_not_called()
+
+    def test_resimulate_schedule_failure_restores_scenario_and_keeps_branch(self, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid)
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            replay_kind="counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=1,
+            replay_source_branch_id=source_bid,
+            replay_source_round=1,
+        )
+        _seed_round(engine, cf_bid, 1)
+        background_coro = MagicMock(name="background_coro")
+
+        monkeypatch.setattr(
+            "app.api.graphs._acquire_simulation_lock_for_resume",
+            lambda *_args: MagicMock(),
+        )
+        monkeypatch.setattr("app.api.graphs.release_runtime_lock", lambda *_args: True)
+        monkeypatch.setattr(
+            "app.api.graphs.run_sim_background",
+            MagicMock(return_value=background_coro),
+        )
+
+        def broken_schedule(_coro):
+            raise RuntimeError("schedule failed")
+
+        monkeypatch.setattr("app.api.graphs.schedule_background_task", broken_schedule)
+
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            resp = failing_client.post(
+                f"/api/scenario/{sid}/counterfactual/{cf_bid}/resimulate"
+            )
+
+        assert resp.status_code == 500
+        background_coro.close.assert_called_once()
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            branch = session.get(Branch, cf_bid)
+            assert scenario is not None
+            assert branch is not None
+            assert scenario.status == ScenarioStatus.DONE
 
 
 # ── GET /compare ─────────────────────────────────────────

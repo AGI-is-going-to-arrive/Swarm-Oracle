@@ -230,8 +230,14 @@ export function CounterfactualPanel({
 
       {error && <p role="alert" style={{ color: '#e74c3c', fontSize: '0.85rem', marginBottom: '0.5rem' }}>{error}</p>}
       {result && (
-        <p role="status" aria-live="polite" style={{ color: '#2ecc71', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-          {t('counterfactual.created', 'Counterfactual branch created!')}
+        <p
+          role="status"
+          aria-live="polite"
+          style={{ color: 'var(--oracle-accent, #b88746)', fontSize: '0.9rem', marginTop: '0.5rem', marginBottom: '0.5rem' }}
+        >
+          ✓ {t('counterfactual.created', 'Counterfactual branch created.')}
+          {' '}
+          {t('counterfactual.simulating', 'Simulation is running — results will update automatically.')}
         </p>
       )}
 

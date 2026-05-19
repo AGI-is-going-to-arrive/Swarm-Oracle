@@ -39,7 +39,7 @@ docker compose up backend
 | `/api/scenario/{id}/intervene` | `api/interventions.py` | 蝴蝶效应干预（单次/回溯/批量） |
 | `/api/scenario/{id}/social` | `api/social.py` | 社交媒体文案生成 |
 | `/api/agents` | `api/agents.py` | Agent 身份查询、记忆查询、自建 Agent CRUD (Phase 3 F1/F3)，受 `FEATURE_CUSTOM_AGENTS`/`FEATURE_AGENT_IDENTITY` gate |
-| `/api/graphs` | `api/graphs.py` | 因果图谱、阵营时间线、反事实比较、检查点 (Phase 3 F2/F4/F5)，受对应 `FEATURE_*` gate |
+| `/api/graphs` | `api/graphs.py` | 因果图谱、阵营时间线、反事实比较、反事实分支补跑模拟 (`POST /counterfactual/{branch_id}/resimulate`)、检查点 (Phase 3 F2/F4/F5)，受对应 `FEATURE_*` gate；`compare_branches` 响应同时返回轮级 `branches[]` 与逐消息 `branch_a_messages` / `branch_b_messages`（agent_name + content + emotion） |
 | `/api/debate/{id}/argument-map` | `api/debate.py` | 辩论论证图谱 (Phase 3 F6)，受 `FEATURE_ARGUMENT_MAP` gate |
 | `/` | `app/main.py` | 健康检查 |
 | `/metrics` | Prometheus | Prometheus 指标 |
@@ -144,7 +144,7 @@ docker compose up backend
 | persona_workshop | `persona_workshop.py` | 用户自建 Agent CRUD + persona 防注入 (Phase 3 F3) |
 | agent_identity | `agent_identity.py` | 跨场景身份解析 + 成长事件 (Phase 3 F1) |
 | causal_graph | `causal_graph.py` | 因果 DAG 构建 + stance 推导 (Phase 3 F2) |
-| replay | `replay.py` | 反事实检查点/克隆/种子/比较 (Phase 3 F4) |
+| replay | `replay.py` | 反事实检查点/克隆/种子/比较 (Phase 3 F4)；`compare_branches()` 在轮级摘要外额外返回 `branch_a_messages` / `branch_b_messages` 逐消息列表，供前端做逐 agent 红绿 diff |
 | factions | `factions.py` | 阵营检测 + 聚类 + 背叛事件 (Phase 3 F5) |
 | debate_argument_map | `debate_argument_map.py` | 规则抽取 + 判决关联 (Phase 3 F6) |
 | roundtable_survey | `roundtable_survey.py` | 圆桌问卷 SSE 流式服务，Semaphore(3) 并发限制，注入 identity memory |
@@ -283,6 +283,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-19 | Counterfactual 逐消息对比 + resimulate 端点 | `replay.py`：`compare_branches()` 在轮级 `branches[]` 之外新增 `branch_a_messages` / `branch_b_messages`（每条含 `agent_name` / `content` / `emotion`），供前端做逐 agent 红绿 diff，原 CJK 逐字分歧度计算与 `intervention` / `is_identical` / `common_rounds` 字段保留。`graphs.py`：新增 `POST /scenario/{scenario_id}/counterfactual/{branch_id}/resimulate`，把旧的只 clone+seed 的反事实分支补跑成完整叙事（复用 `run_sim_background`），受 `FEATURE_COUNTERFACTUAL_REPLAY` gate。验证：counterfactual + replay + simulator + resume targeted `223 passed` |
 | 2026-05-19 | Oracle prompt / narration hardening | `ending_room_service`：generation-first 路径补 rich simulation context、JSON 字符串 `content` 解析、streaming-first plain stream fallback，并避免英文 deterministic fallback 直接露出中文问题；静态 verdict / one-move fallback 改成可直接显示的具体追问。`narrator.py` / `simulator.py`：清理用户可见行首 `[R1 角色]` round marker，支持全角冒号，同时保留普通方括号备注。验证：Oracle targeted `297 passed`，backend full `3238 passed, 6 skipped` |
 | 2026-05-19 | Roundtable phase insight 可读性收口 | `_phase_insight()` 保留去重 question prefix 的逻辑，但把 fixed 64 char 预算改为中文 96 字 / 英文 160 chars，避免英文 insight 被截得只剩半句；测试补语言感知预算回归。验证：`tests/test_ending_room_service.py` 为 `133 passed`，相关 `ruff check` 通过 |
 | 2026-05-19 | Result Quality / Oracle question anchoring 二次收口 | `simulator.py`：`_result_branch_summaries()` 给 verdict prompt 增加 `story_excerpt[:1200]`，branch summaries untrusted block 扩到 15000 字符；`narrator.py`：Pass-1 把原问题放在分支标题前，Pass-2 始终带 question block 并要求具体 `question_answer`，fallback narration 也接收 question；`ending_room_service`：roundtable opening / witness / crossfire / verdict 静态模板接入清洗后的 scenario question 前缀，`_phase_insight()` 会先剥掉重复问题前缀再压缩。验证：Result Quality backend targeted `290 passed`，相关 `ruff check` 通过 |

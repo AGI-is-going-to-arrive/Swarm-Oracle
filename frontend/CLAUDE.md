@@ -75,7 +75,7 @@ npm run test:watch # vitest (watch mode)
 | `AgentLibrary.tsx` | Agent 身份网格 + 删除 + 返回首页 (Phase 3 F1) |
 | `CausalReviewView.tsx` | @xyflow/react DAG + dagre 布局 (Phase 3 F2) |
 | `ReplayView.tsx` | replay trace 时间线，支持 cursor pagination、Load more、branch filter、capability unavailable surface |
-| `CompareDigestView.tsx` | 逐轮分支对比 + 发散度条 (Phase 3 F4) |
+| `CompareDigestView.tsx` | 反事实分支对比：逐 agent 消息卡片 + 字符级红绿 diff 高亮 + 折叠/展开按钮 + 独占轮（only-A / only-B）单列布局 + 干预横幅 + 全 identical 空态 + resimulate 按钮（Phase 3 F4） |
 | `WorkbenchView.tsx` | 图谱工作台 (Causal/Split/KG 三 tab，KG 依赖 causal_graph，compact 自动降级) |
 
 ### `src/components/` -- 共享组件
@@ -172,7 +172,7 @@ npm run test:watch # vitest (watch mode)
 | 密室 | `endingRoomCandidates.ts`, `endingRoomLabels.ts`, `endingRoomReplay.ts`, `oracleReplay.ts` |
 | 分享 | `shareEnvelope.ts`, `challengeShare.ts`, `copyText.ts`, `permalink.ts` |
 | 排版 | `textLayout/pretext.ts`, `textLayout/textOverflowPredictor.ts`, `textLayout/oracleTranscriptLayout.ts`, `textLayout/inputPredict.ts`, `textLayout/canvasTextPredict.ts` |
-| 其他 | `apiErrorMessage.ts`, `dailyChallenge.ts`, `directorIdentity.ts`, `directorObjectives.ts`, `gameplayContract.ts`, `gameplayProfileCatalog.ts`, `llmProviderPolicy.ts`, `predictionBetting.ts`, `replayCodec.ts`, `roundtableSelection.ts`, `runtimePreset.ts`, `wsDebug.ts` |
+| 其他 | `apiErrorMessage.ts`, `dailyChallenge.ts`, `directorIdentity.ts`, `directorObjectives.ts`, `gameplayContract.ts`, `gameplayProfileCatalog.ts`, `llmProviderPolicy.ts`, `predictionBetting.ts`, `replayCodec.ts`, `roundtableSelection.ts`, `runtimePreset.ts`, `textDiff.ts` (字符级 LCS diff，CJK / emoji 安全的码点切分，供 `CompareDigestView` 渲染红绿高亮), `wsDebug.ts` |
 | 图谱 | `g6Layouts.ts`, `graphTokens.ts` (共享图谱色彩 token + `EVIDENCE_TIER_COLORS` + `KG_NODE_TYPE_FILLS` KG 暖灰色板，与 `NODE_TYPE_COLORS_HEX` DAG 鲜明色分离), `graphTraversal.ts` (共享 BFS 路径追踪 `traceConnectedPath`，邻接表 O(V+E)；另导出 `PERF_ANIMATION_LIMIT=150` 共享常量), `kgGraphConfig.ts` (KG G6 配置工厂: `buildKgG6Options` + `toKgG6Data` + `computeNodeSize` + `getKGNodeStyle/getKGEdgeStyle`，KGGraphBoard 与 KGExplorerView 共用；`toKgG6Data` mobile + 节点 > 200 时截断；P6 `selected`/`streaming` 状态 + fade 入场动画；P7 新增 `readAgentName`/`buildKgNodeLabel` 函数 + per-node fill/stroke/lineWidth + `KG_AGENT_PALETTE` 15 色暖色调 Agent 色环), `dagEditorialTokens.ts` (DAG 节点 6 类色系 + confidence tiers（medium `#a16207` WCAG AA）+ card 样式常量，预留未接入 GraphNodeCard) |
 
 ### `src/i18n/` -- 国际化
@@ -200,7 +200,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- 最近 full vitest 基线：`200 files / 2175 tests passed`
+- 最近 full vitest 基线：`201 files / 2190 tests passed`
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -394,6 +394,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-19 | Counterfactual 逐消息对比 UI + textDiff | 新增 `src/lib/textDiff.ts`：字符级 LCS diff，按 `Array.from` 码点切分以保 CJK / emoji 不被劈开，供红绿高亮使用。`CompareDigestView.tsx/css`：消费后端新返回的 `branch_a_messages` / `branch_b_messages`，把对比改为逐 agent 消息卡片 + 红绿 diff 高亮 + 折叠/展开按钮 + 独占轮（only-A / only-B）单列布局；`CounterfactualPanel.tsx` 新增模拟进行中提示，并暴露 resimulate 入口指向 `POST /counterfactual/{branch_id}/resimulate`。验证：frontend full vitest `201 files / 2190 tests passed`，tsc/eslint/build 通过，i18n parity `2765/2765` |
 | 2026-05-19 | EndingChatModal layout / survey contract hardening | `EndingChatModal.tsx/css`：thread rail 与 evidence drawer 移到 transcript 内部滚动区外，证据卡列表在抽屉内滚动，mobile replay/evidence-card 点击不再被 header / composer 拦截；unsupported `parallel_survey` UI/type/helper/i18n skeleton 已移除，保留圆桌 Deep Dive 的真实 survey SSE 能力；summary/details、archivist note 和新 `color-mix()` 样式补 legacy fallback，composer overflow rule 收窄到 `.ending-chat-modal`，避免影响 `WorldlineRoundtableView`。验证：EndingChatModal / helper / CSS fallback 窄集 `34 passed`，frontend full `200 files / 2175 tests passed`，tsc/eslint/build/i18n `2732/2732` 通过，ending-room 与 roundtable E2E 通过 |
 | 2026-05-19 | Roundtable phase insight 默认折叠 | `WorldlineRoundtableView` 的 phase insight accordion 不再默认展开最后一条；header 继续显示短 preview，用户点击后才看到完整一条 commentary。测试同步改为先展开再断言内容，并新增默认折叠回归。验证：`WorldlineRoundtableView.test.tsx` 为 `46 passed`，相关 eslint 与 `npm run build` 通过 |
 | 2026-05-19 | Result Quality / Question Anchoring 二次收口 | `ResultVerdictPanel` 在 capability enabled 但 story verdict 为空、null 或 undefined 时显示中性的 unavailable fallback，并继续显示原问题；`EndingCardsGrid` 把 branch `question_answer` 放到概率条上方，空白值不渲染 focal block；`DirectorNotebook` 的档案结论优先显示 story verdict，再补 branch insight；`ResultVerdictPanel.css` 新增 pending/unavailable forced-colors 与 OKLCH fallback，新增样式的 `letter-spacing` 保持为 `0`；`DebateArenaView` 阶段地图继续默认折叠，但按钮暴露 `debate-stage-map-toggle`，`e2e-debate-suite` 会展开后再断言 `.debate-stage-summary-list`。验证：Result/Debate targeted vitest `25 passed`，`npm run lint` 和 `npm run build` 通过，Debate mobile Chromium 390px / 320px E2E 通过，i18n parity `2730/2730` |

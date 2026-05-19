@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import unicodedata
 from collections.abc import Callable
 
 from sqlalchemy import literal_column
@@ -15,10 +16,12 @@ from sqlmodel import Session, select
 
 from app.models.checkpoint import ScenarioCheckpoint
 from app.models.database import (
+    Agent,
     AgentMessage,
     Branch,
     BranchStatus,
     Round,
+    Scenario,
     get_engine,
 )
 
@@ -34,6 +37,46 @@ def _normalize_source_message_content(message_content: str | None) -> str | None
         return None
     normalized = message_content.strip()
     return normalized or None
+
+
+def _is_cjk_char(char: str) -> bool:
+    codepoint = ord(char)
+    return (
+        0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+        or 0x20000 <= codepoint <= 0x2A6DF
+        or 0x2A700 <= codepoint <= 0x2B73F
+        or 0x2B740 <= codepoint <= 0x2B81F
+        or 0x2B820 <= codepoint <= 0x2CEAF
+        or 0x2CEB0 <= codepoint <= 0x2EBEF
+        or 0x30000 <= codepoint <= 0x3134F
+    )
+
+
+def _tokenize(text: str) -> set[str]:
+    tokens: set[str] = set()
+    current_word: list[str] = []
+
+    def flush_word() -> None:
+        if current_word:
+            tokens.add("".join(current_word))
+            current_word.clear()
+
+    for char in unicodedata.normalize("NFKC", text).lower():
+        if _is_cjk_char(char):
+            flush_word()
+            tokens.add(char)
+            continue
+        if char.isalnum():
+            current_word.append(char)
+            continue
+        flush_word()
+        if unicodedata.category(char).startswith("S"):
+            tokens.add(char)
+
+    flush_word()
+    return tokens
 
 
 def _select_counterfactual_message(
@@ -87,6 +130,36 @@ def _require_branch_in_scenario(
     if branch is None:
         raise ValueError(f"{branch_param} not found in scenario")
     return branch
+
+
+def _contains_cjk(text: str) -> bool:
+    return any(_is_cjk_char(char) for char in text)
+
+
+def _default_replay_title(
+    session: Session,
+    scenario_id: str,
+    replay_kind: str,
+    round_number: int,
+) -> str:
+    scenario = session.get(Scenario, scenario_id)
+    question = scenario.question if scenario is not None else ""
+    if not isinstance(question, str):
+        question = ""
+    has_cjk = _contains_cjk(question)
+    if replay_kind == "counterfactual":
+        return (
+            f"反事实：从第{round_number}轮起"
+            if has_cjk
+            else f"Counterfactual from round {round_number}"
+        )
+    if replay_kind == "resume":
+        return (
+            f"续演：从第{round_number}轮起"
+            if has_cjk
+            else f"Resume from round {round_number}"
+        )
+    return f"{replay_kind.title()} from round {round_number}"
 
 
 def write_checkpoint(
@@ -183,10 +256,15 @@ def clone_until_round(
         replay_kind: "counterfactual" | "resume" | "retrospective"
         title: Branch display title. Defaults to "{Kind} from round {N}".
     """
-    display_title = title or f"{replay_kind.title()} from round {round_number}"
     with Session(get_engine()) as session:
         if ensure_lock is not None:
             ensure_lock()
+        display_title = title or _default_replay_title(
+            session,
+            scenario_id,
+            replay_kind,
+            round_number,
+        )
         # Create new branch with replay provenance
         new_branch = Branch(
             scenario_id=scenario_id,
@@ -320,22 +398,179 @@ def _jaccard_similarity(set_a: set, set_b: set) -> float:
     return len(set_a & set_b) / len(union)
 
 
+def _round_summary(session: Session, round_: Round) -> str:
+    messages = session.exec(
+        select(AgentMessage)
+        .where(AgentMessage.round_id == round_.id)
+        .order_by(_agent_message_rowid())
+    ).all()
+    return " ".join(message.content for message in messages)
+
+
+def _round_messages(session: Session, round_: Round) -> list[dict]:
+    """Return per-message data for a round, preserving insertion order."""
+    rows = session.exec(
+        select(AgentMessage, Agent)
+        .join(Agent, Agent.id == AgentMessage.agent_id)
+        .where(AgentMessage.round_id == round_.id)
+        .order_by(_agent_message_rowid())
+    ).all()
+    return [
+        {
+            "agent_id": msg.agent_id,
+            "agent_name": agent.name,
+            "content": msg.content,
+            "emotion": msg.emotion,
+        }
+        for msg, agent in rows
+    ]
+
+
+def _agent_messages_for_round(
+    session: Session,
+    *,
+    branch_id: str,
+    round_number: int,
+    agent_id: str,
+) -> list[AgentMessage]:
+    round_ = session.exec(
+        select(Round).where(
+            Round.branch_id == branch_id,
+            Round.round_number == round_number,
+        )
+    ).first()
+    if round_ is None:
+        return []
+    return session.exec(
+        select(AgentMessage)
+        .where(
+            AgentMessage.round_id == round_.id,
+            AgentMessage.agent_id == agent_id,
+        )
+        .order_by(_agent_message_rowid())
+    ).all()
+
+
+def _find_counterfactual_message_pair(
+    source_messages: list[AgentMessage],
+    counterfactual_messages: list[AgentMessage],
+) -> tuple[str, str] | None:
+    paired = list(zip(source_messages, counterfactual_messages, strict=False))
+    for source_message, counterfactual_message in paired:
+        if source_message.content != counterfactual_message.content:
+            return source_message.content, counterfactual_message.content
+    return None
+
+
+def _counterfactual_branch(branch_a: Branch, branch_b: Branch) -> Branch | None:
+    if branch_a.replay_kind == "counterfactual":
+        return branch_a
+    if branch_b.replay_kind == "counterfactual":
+        return branch_b
+    return None
+
+
+def _build_intervention(
+    session: Session,
+    *,
+    scenario_id: str,
+    branch_a: Branch,
+    branch_b: Branch,
+) -> dict | None:
+    counterfactual = _counterfactual_branch(branch_a, branch_b)
+    if counterfactual is None:
+        return None
+
+    agent_id = counterfactual.replay_source_agent_id
+    round_number = counterfactual.replay_source_round or counterfactual.fork_round
+    source_branch_id = (
+        counterfactual.replay_source_branch_id
+        or counterfactual.parent_branch_id
+    )
+    if not agent_id or not round_number or not source_branch_id:
+        return None
+
+    comparison_branch = branch_b if branch_a.id == counterfactual.id else branch_a
+    if comparison_branch.id != source_branch_id:
+        return None
+
+    source_branch = session.exec(
+        select(Branch).where(
+            Branch.id == source_branch_id,
+            Branch.scenario_id == scenario_id,
+        )
+    ).first()
+    if source_branch is None:
+        return None
+
+    source_messages = _agent_messages_for_round(
+        session,
+        branch_id=source_branch_id,
+        round_number=round_number,
+        agent_id=agent_id,
+    )
+    counterfactual_messages = _agent_messages_for_round(
+        session,
+        branch_id=counterfactual.id,
+        round_number=round_number,
+        agent_id=agent_id,
+    )
+    message_pair = _find_counterfactual_message_pair(
+        source_messages,
+        counterfactual_messages,
+    )
+    if message_pair is None:
+        return None
+
+    agent = session.get(Agent, agent_id)
+    original_content, replacement_content = message_pair
+    return {
+        "round": round_number,
+        "agent_id": agent_id,
+        "agent_name": agent.name if agent is not None else agent_id,
+        "original_content": original_content,
+        "replacement_content": replacement_content,
+    }
+
+
+def _count_common_rounds(
+    diffs: list[dict],
+    counterfactual: Branch | None,
+) -> int:
+    if counterfactual is not None:
+        fork_round = counterfactual.replay_source_round or counterfactual.fork_round
+        if not fork_round:
+            return 0
+        return sum(
+            1
+            for diff in diffs
+            if diff["round"] < fork_round and diff["is_identical"]
+        )
+
+    common_rounds = 0
+    for diff in diffs:
+        if not diff["is_identical"]:
+            break
+        common_rounds += 1
+    return common_rounds
+
+
 def compare_branches(
     scenario_id: str, branch_a: str, branch_b: str,
 ) -> dict:
     """Return a diff digest comparing two branches.
 
     Builds a per-round comparison with divergence scores based on
-    word-level Jaccard similarity of message contents.
+    CJK-aware token Jaccard similarity of message contents.
     """
     with Session(get_engine()) as session:
-        _require_branch_in_scenario(
+        branch_a_obj = _require_branch_in_scenario(
             session,
             scenario_id,
             branch_a,
             branch_param="branch_a",
         )
-        _require_branch_in_scenario(
+        branch_b_obj = _require_branch_in_scenario(
             session,
             scenario_id,
             branch_b,
@@ -363,41 +598,42 @@ def compare_branches(
 
         diffs = []
         for rn in all_round_numbers:
-            # Collect message contents for each branch at this round
-            a_messages = []
-            b_messages = []
-
-            if rn in a_by_round:
-                msgs = session.exec(
-                    select(AgentMessage).where(AgentMessage.round_id == a_by_round[rn].id)
-                ).all()
-                a_messages = [m.content for m in msgs]
-
-            if rn in b_by_round:
-                msgs = session.exec(
-                    select(AgentMessage).where(AgentMessage.round_id == b_by_round[rn].id)
-                ).all()
-                b_messages = [m.content for m in msgs]
-
-            a_summary = " ".join(a_messages)
-            b_summary = " ".join(b_messages)
+            a_summary = _round_summary(session, a_by_round[rn]) if rn in a_by_round else ""
+            b_summary = _round_summary(session, b_by_round[rn]) if rn in b_by_round else ""
+            a_messages = _round_messages(session, a_by_round[rn]) if rn in a_by_round else []
+            b_messages = _round_messages(session, b_by_round[rn]) if rn in b_by_round else []
+            is_identical = a_summary == b_summary
 
             # Compute divergence via word-set Jaccard
-            a_words = set(a_summary.lower().split()) if a_summary.strip() else set()
-            b_words = set(b_summary.lower().split()) if b_summary.strip() else set()
+            a_words = _tokenize(a_summary) if a_summary.strip() else set()
+            b_words = _tokenize(b_summary) if b_summary.strip() else set()
             divergence_score = round(1.0 - _jaccard_similarity(a_words, b_words), 4)
 
             diffs.append({
                 "round": rn,
                 "branch_a_summary": a_summary,
                 "branch_b_summary": b_summary,
+                "branch_a_messages": a_messages,
+                "branch_b_messages": b_messages,
                 "divergence_score": divergence_score,
+                "is_identical": is_identical,
             })
+
+        counterfactual = _counterfactual_branch(branch_a_obj, branch_b_obj)
+        common_rounds = _count_common_rounds(diffs, counterfactual)
+        intervention = _build_intervention(
+            session,
+            scenario_id=scenario_id,
+            branch_a=branch_a_obj,
+            branch_b=branch_b_obj,
+        )
 
     return {
         "scenario_id": scenario_id,
         "branch_a": branch_a,
         "branch_b": branch_b,
+        "common_rounds": common_rounds,
+        "intervention": intervention,
         "rounds": diffs,
     }
 

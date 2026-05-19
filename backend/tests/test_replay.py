@@ -17,6 +17,7 @@ from app.models.database import (
     get_engine,
 )
 from app.services.replay import (
+    _tokenize,
     clone_until_round,
     compare_branches,
     seed_counterfactual,
@@ -34,8 +35,30 @@ def _seed_scenario(engine, *, question="测试问题", status=ScenarioStatus.DON
         return s.id
 
 
-def _seed_branch(engine, scenario_id, *, title="主线", status=BranchStatus.ACTIVE):
-    b = Branch(scenario_id=scenario_id, title=title, status=status)
+def _seed_branch(
+    engine,
+    scenario_id,
+    *,
+    title="主线",
+    status=BranchStatus.ACTIVE,
+    parent_branch_id=None,
+    fork_round=0,
+    replay_kind=None,
+    replay_source_branch_id=None,
+    replay_source_round=None,
+    replay_source_agent_id=None,
+):
+    b = Branch(
+        scenario_id=scenario_id,
+        title=title,
+        status=status,
+        parent_branch_id=parent_branch_id,
+        fork_round=fork_round,
+        replay_kind=replay_kind,
+        replay_source_branch_id=replay_source_branch_id,
+        replay_source_round=replay_source_round,
+        replay_source_agent_id=replay_source_agent_id,
+    )
     with Session(engine) as session:
         session.add(b)
         session.commit()
@@ -212,6 +235,45 @@ class TestCloneUntilRound:
         with Session(engine) as session:
             assert session.get(Branch, new_bid) is not None
 
+    def test_default_counterfactual_title_uses_chinese_for_cjk_question(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine, question="如果刘备赢了会怎样？")
+        bid = _seed_branch(engine, sid)
+        _seed_round(engine, bid, 3)
+
+        new_bid = clone_until_round(sid, bid, 3)
+
+        with Session(engine) as session:
+            branch = session.get(Branch, new_bid)
+            assert branch is not None
+            assert branch.title == "反事实：从第3轮起"
+
+    def test_default_resume_title_uses_english_for_english_question(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine, question="What if Rome survived?")
+        bid = _seed_branch(engine, sid)
+        _seed_round(engine, bid, 4)
+
+        new_bid = clone_until_round(sid, bid, 4, replay_kind="resume")
+
+        with Session(engine) as session:
+            branch = session.get(Branch, new_bid)
+            assert branch is not None
+            assert branch.title == "Resume from round 4"
+
+    def test_default_resume_title_uses_chinese_for_cjk_question(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine, question="如果秦朝延续会怎样？")
+        bid = _seed_branch(engine, sid)
+        _seed_round(engine, bid, 4)
+
+        new_bid = clone_until_round(sid, bid, 4, replay_kind="resume")
+
+        with Session(engine) as session:
+            branch = session.get(Branch, new_bid)
+            assert branch is not None
+            assert branch.title == "续演：从第4轮起"
+
 
 # ── seed_counterfactual tests ────────────────────────────
 
@@ -265,6 +327,33 @@ class TestSeedCounterfactual:
 # ── compare_branches tests ───────────────────────────────
 
 
+class TestTokenize:
+    def test_tokenize_empty_and_punctuation_only_text(self):
+        assert _tokenize("") == set()
+        assert _tokenize(" \n\t,.;:!?()[]") == set()
+
+    def test_tokenize_chinese_text(self):
+        assert _tokenize("刘备赢了") == {"刘", "备", "赢", "了"}
+
+    def test_tokenize_mixed_chinese_english_digits(self):
+        assert _tokenize("刘备 uses AI 2026") == {
+            "刘",
+            "备",
+            "uses",
+            "ai",
+            "2026",
+        }
+
+    def test_tokenize_full_width_digits_and_letters(self):
+        assert _tokenize("ＡＩ１２３") == {"ai123"}
+
+    def test_tokenize_supplementary_cjk_and_emoji(self):
+        assert _tokenize("𠮷野家 🤖🚀") == {"𠮷", "野", "家", "🤖", "🚀"}
+
+    def test_tokenize_lone_surrogate_does_not_crash(self):
+        assert _tokenize("\ud83d") == set()
+
+
 class TestCompareBranches:
     def test_returns_per_round_diff(self):
         """compare_branches should return per-round comparison with divergence scores."""
@@ -273,18 +362,23 @@ class TestCompareBranches:
         bid_a = _seed_branch(engine, sid, title="Branch A")
         bid_b = _seed_branch(engine, sid, title="Branch B")
         aid = _seed_agent(engine, sid)
+        other_aid = _seed_agent(engine, sid, name="Agent B")
 
         # Branch A: rounds 1 and 2
         ra1 = _seed_round(engine, bid_a, 1)
         ra2 = _seed_round(engine, bid_a, 2)
-        _seed_message(engine, ra1, aid, content="alpha beta gamma")
-        _seed_message(engine, ra2, aid, content="delta epsilon zeta")
+        _seed_message(engine, ra1, aid, content="alpha beta gamma", emotion="calm")
+        _seed_message(engine, ra1, other_aid, content="shared note", emotion="focused")
+        _seed_message(engine, ra2, aid, content="delta epsilon zeta", emotion="tense")
+        _seed_message(engine, ra2, other_aid, content="branch a second", emotion="hopeful")
 
         # Branch B: rounds 1 and 2 (round 1 identical, round 2 different)
         rb1 = _seed_round(engine, bid_b, 1)
         rb2 = _seed_round(engine, bid_b, 2)
-        _seed_message(engine, rb1, aid, content="alpha beta gamma")
-        _seed_message(engine, rb2, aid, content="completely different words here")
+        _seed_message(engine, rb1, aid, content="alpha beta gamma", emotion="calm")
+        _seed_message(engine, rb1, other_aid, content="shared note", emotion="focused")
+        _seed_message(engine, rb2, aid, content="completely different words here", emotion="angry")
+        _seed_message(engine, rb2, other_aid, content="branch b second", emotion="curious")
 
         result = compare_branches(sid, bid_a, bid_b)
 
@@ -295,11 +389,76 @@ class TestCompareBranches:
 
         # Round 1 should have 0 divergence (identical)
         assert result["rounds"][0]["round"] == 1
+        assert result["rounds"][0]["branch_a_summary"] == "alpha beta gamma shared note"
+        assert result["rounds"][0]["branch_b_summary"] == "alpha beta gamma shared note"
+        assert result["rounds"][0]["branch_a_messages"] == [
+            {
+                "agent_id": aid,
+                "agent_name": "Agent A",
+                "content": "alpha beta gamma",
+                "emotion": "calm",
+            },
+            {
+                "agent_id": other_aid,
+                "agent_name": "Agent B",
+                "content": "shared note",
+                "emotion": "focused",
+            },
+        ]
+        assert result["rounds"][0]["branch_b_messages"] == [
+            {
+                "agent_id": aid,
+                "agent_name": "Agent A",
+                "content": "alpha beta gamma",
+                "emotion": "calm",
+            },
+            {
+                "agent_id": other_aid,
+                "agent_name": "Agent B",
+                "content": "shared note",
+                "emotion": "focused",
+            },
+        ]
         assert result["rounds"][0]["divergence_score"] == 0.0
+        assert result["rounds"][0]["is_identical"] is True
 
         # Round 2 should have high divergence (completely different)
         assert result["rounds"][1]["round"] == 2
+        assert result["rounds"][1]["branch_a_summary"] == "delta epsilon zeta branch a second"
+        assert result["rounds"][1]["branch_b_summary"] == (
+            "completely different words here branch b second"
+        )
+        assert result["rounds"][1]["branch_a_messages"] == [
+            {
+                "agent_id": aid,
+                "agent_name": "Agent A",
+                "content": "delta epsilon zeta",
+                "emotion": "tense",
+            },
+            {
+                "agent_id": other_aid,
+                "agent_name": "Agent B",
+                "content": "branch a second",
+                "emotion": "hopeful",
+            },
+        ]
+        assert result["rounds"][1]["branch_b_messages"] == [
+            {
+                "agent_id": aid,
+                "agent_name": "Agent A",
+                "content": "completely different words here",
+                "emotion": "angry",
+            },
+            {
+                "agent_id": other_aid,
+                "agent_name": "Agent B",
+                "content": "branch b second",
+                "emotion": "curious",
+            },
+        ]
         assert result["rounds"][1]["divergence_score"] > 0.5
+        assert result["rounds"][1]["is_identical"] is False
+        assert result["common_rounds"] == 1
 
     def test_handles_empty_branches(self):
         """compare_branches should handle branches with no rounds."""
@@ -312,6 +471,8 @@ class TestCompareBranches:
 
         assert result["scenario_id"] == sid
         assert result["rounds"] == []
+        assert result["common_rounds"] == 0
+        assert result["intervention"] is None
 
     def test_handles_asymmetric_rounds(self):
         """compare_branches should handle branches with different round counts."""
@@ -337,6 +498,191 @@ class TestCompareBranches:
         # Round 2 only in branch A — max divergence
         assert result["rounds"][1]["divergence_score"] == 1.0
         assert result["rounds"][1]["branch_b_summary"] == ""
+        assert result["rounds"][1]["branch_b_messages"] == []
+        assert result["rounds"][0]["is_identical"] is True
+        assert result["rounds"][1]["is_identical"] is False
+
+    def test_returns_intervention_for_counterfactual_branch(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid, title="Source")
+        aid = _seed_agent(engine, sid, name="刘备")
+        other_aid = _seed_agent(engine, sid, name="诸葛亮")
+
+        source_r1 = _seed_round(engine, source_bid, 1)
+        source_r2 = _seed_round(engine, source_bid, 2)
+        _seed_message(engine, source_r1, aid, content="第一轮相同")
+        _seed_message(engine, source_r2, aid, content="原本的刘备发言")
+        _seed_message(engine, source_r2, other_aid, content="旁白")
+
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            title="Counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=2,
+            replay_kind="counterfactual",
+            replay_source_branch_id=source_bid,
+            replay_source_round=2,
+            replay_source_agent_id=aid,
+        )
+        cf_r1 = _seed_round(engine, cf_bid, 1)
+        cf_r2 = _seed_round(engine, cf_bid, 2)
+        _seed_message(engine, cf_r1, aid, content="第一轮相同")
+        _seed_message(engine, cf_r2, aid, content="改写后的刘备发言")
+        _seed_message(engine, cf_r2, other_aid, content="旁白")
+
+        result = compare_branches(sid, source_bid, cf_bid)
+
+        assert result["common_rounds"] == 1
+        assert result["intervention"] == {
+            "round": 2,
+            "agent_id": aid,
+            "agent_name": "刘备",
+            "original_content": "原本的刘备发言",
+            "replacement_content": "改写后的刘备发言",
+        }
+
+    def test_intervention_falls_back_to_agent_id_when_agent_row_missing(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid, title="Source")
+        missing_aid = _seed_agent(engine, sid, name="Deleted Agent")
+
+        source_r1 = _seed_round(engine, source_bid, 1)
+        _seed_message(engine, source_r1, missing_aid, content="原始发言")
+
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            title="Counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=1,
+            replay_kind="counterfactual",
+            replay_source_branch_id=source_bid,
+            replay_source_round=1,
+            replay_source_agent_id=missing_aid,
+        )
+        cf_r1 = _seed_round(engine, cf_bid, 1)
+        _seed_message(engine, cf_r1, missing_aid, content="改写发言")
+
+        with engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            conn.exec_driver_sql("DELETE FROM agent WHERE id = ?", (missing_aid,))
+            conn.commit()
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+        result = compare_branches(sid, source_bid, cf_bid)
+
+        assert result["intervention"] == {
+            "round": 1,
+            "agent_id": missing_aid,
+            "agent_name": missing_aid,
+            "original_content": "原始发言",
+            "replacement_content": "改写发言",
+        }
+
+    def test_intervention_is_none_when_source_branch_row_is_missing(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid, title="Source")
+        compare_bid = _seed_branch(engine, sid, title="Compare")
+        aid = _seed_agent(engine, sid, name="刘备")
+
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            title="Counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=1,
+            replay_kind="counterfactual",
+            replay_source_branch_id=source_bid,
+            replay_source_round=1,
+            replay_source_agent_id=aid,
+        )
+        with Session(engine) as session:
+            source = session.get(Branch, source_bid)
+            assert source is not None
+            session.delete(source)
+            session.commit()
+
+        result = compare_branches(sid, compare_bid, cf_bid)
+
+        assert result["intervention"] is None
+
+    def test_intervention_is_none_when_compare_branch_is_not_source(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid, title="Source")
+        compare_bid = _seed_branch(engine, sid, title="Compare")
+        aid = _seed_agent(engine, sid, name="刘备")
+
+        source_r1 = _seed_round(engine, source_bid, 1)
+        compare_r1 = _seed_round(engine, compare_bid, 1)
+        _seed_message(engine, source_r1, aid, content="原始发言")
+        _seed_message(engine, compare_r1, aid, content="第三条世界线")
+
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            title="Counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=1,
+            replay_kind="counterfactual",
+            replay_source_branch_id=source_bid,
+            replay_source_round=1,
+            replay_source_agent_id=aid,
+        )
+        cf_r1 = _seed_round(engine, cf_bid, 1)
+        _seed_message(engine, cf_r1, aid, content="改写发言")
+
+        result = compare_branches(sid, compare_bid, cf_bid)
+
+        assert result["intervention"] is None
+
+    def test_intervention_is_none_for_noop_counterfactual(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid, title="Source")
+        aid = _seed_agent(engine, sid, name="刘备")
+
+        source_r1 = _seed_round(engine, source_bid, 1)
+        _seed_message(engine, source_r1, aid, content="同一段发言")
+
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            title="Counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=1,
+            replay_kind="counterfactual",
+            replay_source_branch_id=source_bid,
+            replay_source_round=1,
+            replay_source_agent_id=aid,
+        )
+        cf_r1 = _seed_round(engine, cf_bid, 1)
+        _seed_message(engine, cf_r1, aid, content="同一段发言")
+
+        result = compare_branches(sid, source_bid, cf_bid)
+
+        assert result["intervention"] is None
+
+    def test_intervention_is_none_for_malformed_counterfactual_metadata(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid, title="Source")
+        cf_bid = _seed_branch(
+            engine,
+            sid,
+            title="Counterfactual",
+            parent_branch_id=source_bid,
+            fork_round=1,
+            replay_kind="counterfactual",
+        )
+
+        result = compare_branches(sid, source_bid, cf_bid)
+
+        assert result["intervention"] is None
 
     @pytest.mark.parametrize(
         ("branch_a", "branch_b", "missing_param"),

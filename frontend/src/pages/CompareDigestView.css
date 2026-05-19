@@ -350,6 +350,12 @@
   background: var(--bg-surface);
 }
 
+.compare-digest-view__timeline-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
 .compare-digest-view__rounds {
   display: grid;
   gap: 12px;
@@ -415,8 +421,266 @@
   line-height: 1.6;
 }
 
+/* Per-message cards */
+.compare-round-card__messages {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.compare-message {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+}
+
+.compare-message--changed {
+  border-color: var(--oracle-accent, #b88746);
+  background: color-mix(in oklab, var(--bg-surface) 95%, var(--oracle-accent, #b88746) 5%);
+}
+
+.compare-message__header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.compare-message__agent {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.compare-message__emotion {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  background: color-mix(in oklab, var(--bg-elevated) 80%, transparent 20%);
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+}
+
+.compare-message__content {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.compare-message__content p {
+  margin: 0;
+}
+
+.compare-message__header {
+  cursor: default;
+}
+
+.compare-message__toggle {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.compare-message__content--collapsed {
+  max-height: 5.4em;
+  overflow: hidden;
+  position: relative;
+}
+
+.compare-message__content--collapsed::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2em;
+  background: linear-gradient(transparent, var(--bg-surface));
+  pointer-events: none;
+}
+
+.compare-message--changed .compare-message__content--collapsed::after {
+  background: linear-gradient(transparent, color-mix(in oklab, var(--bg-surface) 95%, var(--oracle-accent, #b88746) 5%));
+}
+
+.compare-message--empty {
+  border-style: dashed;
+  opacity: 0.6;
+}
+
+.compare-message__empty-notice {
+  font-style: italic;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+/* Solo branch layout (when one side has no data) */
+.compare-round-card__solo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.compare-round-card__solo-banner {
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--bg-elevated) 90%, var(--oracle-accent, #b88746) 10%);
+  border-left: 3px solid var(--oracle-accent, #b88746);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.compare-round-card__solo-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 800px;
+}
+
+/* Expand all / collapse all button */
+.compare-round-card__expand-all {
+  align-self: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+
+/* Diff highlighting */
+.compare-diff-del {
+  background: color-mix(in oklab, transparent 70%, #dc2626 30%);
+  text-decoration: line-through;
+  color: var(--text-primary);
+}
+
+.compare-diff-ins {
+  background: color-mix(in oklab, transparent 70%, #16a34a 30%);
+  text-decoration: none;
+  color: var(--text-primary);
+}
+
+/* Stale branch banner */
+.compare-digest-view__stale-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--bg-elevated) 90%, #f59e0b 10%);
+  border: 1px solid color-mix(in oklab, var(--border-default) 70%, #f59e0b 30%);
+}
+
+.compare-digest-view__stale-banner p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
 .compare-digest-view__error {
   color: var(--color-danger);
+}
+
+/* Intervention banner */
+.compare-digest-view__intervention {
+  background: color-mix(in oklab, var(--bg-elevated) 90%, var(--oracle-accent, #b88746) 10%);
+  border: 1px solid color-mix(in oklab, var(--border-default) 70%, var(--oracle-accent, #b88746) 30%);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.compare-digest-view__intervention-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.compare-digest-view__intervention-header strong {
+  font-size: 1.05rem;
+  color: var(--text-primary);
+}
+
+.compare-digest-view__intervention-round {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  background: color-mix(in oklab, var(--bg-surface) 80%, var(--oracle-accent, #b88746) 20%);
+  padding: 0.2rem 0.6rem;
+  border-radius: 6px;
+}
+
+.compare-digest-view__intervention-agent {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--oracle-accent, #b88746);
+}
+
+.compare-digest-view__intervention-diff {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.compare-digest-view__intervention-original,
+.compare-digest-view__intervention-replacement {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.compare-digest-view__intervention-original {
+  background: color-mix(in oklab, var(--bg-surface) 95%, #dc2626 5%);
+  border-left: 3px solid #dc2626;
+}
+
+.compare-digest-view__intervention-original span,
+.compare-digest-view__intervention-replacement span {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+}
+
+.compare-digest-view__intervention-replacement {
+  background: color-mix(in oklab, var(--bg-surface) 95%, #16a34a 5%);
+  border-left: 3px solid #16a34a;
+}
+
+/* Collapsed identical rounds */
+.compare-round-card--collapsed {
+  border-style: dashed;
+  background: color-mix(in oklab, var(--bg-surface) 92%, var(--bg-elevated));
+}
+
+.compare-round-card--collapsed .compare-round-card__header {
+  justify-content: center;
+}
+
+/* Intervention badge on round card */
+.compare-round-card__header .compare-round-card__intervention-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--oracle-accent, #b88746);
+  background: color-mix(in oklab, var(--bg-surface) 85%, var(--oracle-accent, #b88746) 15%);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  margin-left: 0.5rem;
+}
+
+/* Intervention round highlight */
+.compare-round-card.is-intervention {
+  border-color: var(--oracle-accent, #b88746);
+  box-shadow: 0 0 0 1px color-mix(in oklab, transparent 60%, var(--oracle-accent, #b88746) 40%);
 }
 
 @media (max-width: 900px) {
@@ -432,6 +696,10 @@
 
   .compare-theater-pane__header {
     align-items: flex-start;
+  }
+
+  .compare-digest-view__intervention-diff {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -498,5 +766,63 @@
 
   .compare-theater-pane__summary p {
     font-size: 0.95rem;
+  }
+
+  .compare-digest-view__intervention {
+    padding: 1rem;
+  }
+
+  .compare-digest-view__stale-banner {
+    flex-direction: column;
+    text-align: center;
+  }
+}
+
+@media (forced-colors: active) {
+  .compare-digest-view__intervention {
+    color: CanvasText;
+    background: Canvas;
+    border-color: ButtonText;
+  }
+  .compare-digest-view__intervention-round,
+  .compare-digest-view__intervention-original,
+  .compare-digest-view__intervention-replacement {
+    color: CanvasText;
+    background: Canvas;
+  }
+  .compare-digest-view__intervention-original {
+    border-left-color: ButtonText;
+  }
+  .compare-digest-view__intervention-replacement {
+    border-left-color: Highlight;
+  }
+  .compare-round-card--collapsed {
+    color: CanvasText;
+    background: Canvas;
+    border-color: CanvasText;
+  }
+  .compare-round-card__header .compare-round-card__intervention-badge {
+    color: Highlight;
+    background: Canvas;
+    border: 1px solid Highlight;
+  }
+  .compare-diff-del {
+    background: none;
+    color: LinkText;
+    text-decoration: line-through;
+  }
+  .compare-diff-ins {
+    background: none;
+    color: Highlight;
+    text-decoration: underline;
+  }
+  .compare-message--changed {
+    border-color: Highlight;
+  }
+  .compare-message__content--collapsed::after {
+    background: none;
+  }
+  .compare-round-card__solo-banner {
+    border-left-color: Highlight;
   }
 }

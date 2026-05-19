@@ -27,6 +27,7 @@ from app.models import (
 from app.models.database import get_engine
 from app.services.blackboard import Blackboard
 from app.services.llm_client import llm_request_scope
+from app.services.replay import write_checkpoint
 from app.services.simulator import (
     _agent_to_dict,
     _apply_normalized_active_branch_probabilities,
@@ -1021,6 +1022,159 @@ class TestRunSimulation:
                 )
             ).all()
             assert [item.user_input for item in sibling_pending] == ["Sibling event"]
+
+    @pytest.mark.asyncio
+    async def test_counterfactual_branch_does_not_restore_stale_parent_checkpoint(
+        self,
+        monkeypatch,
+    ):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "_language": "English",
+                "setting": {},
+                "simulation_rounds": 2,
+                "branch_sensitivity": 1.0,
+                "key_variable": scenario.question,
+                "mode": "blackboard",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+
+            source_branch = Branch(
+                scenario_id=scenario_id,
+                title="Source",
+                probability=1.0,
+                status=BranchStatus.COMPLETED,
+                story="Source path already completed.",
+                insight="Source path has complete outcome data.",
+            )
+            session.add(source_branch)
+            session.flush()
+
+            cf_branch = Branch(
+                scenario_id=scenario_id,
+                parent_branch_id=source_branch.id,
+                fork_round=1,
+                title="Counterfactual",
+                probability=0.5,
+                status=BranchStatus.ACTIVE,
+                replay_kind="counterfactual",
+                replay_source_branch_id=source_branch.id,
+                replay_source_round=1,
+            )
+            session.add(cf_branch)
+            session.flush()
+
+            agent = Agent(
+                scenario_id=scenario_id,
+                name="Archivist",
+                role="Recorder",
+                tier=AgentTier.CORE,
+            )
+            session.add(agent)
+            session.flush()
+            cf_branch.replay_source_agent_id = agent.id
+            session.add(cf_branch)
+
+            source_round = Round(branch_id=source_branch.id, round_number=1)
+            cf_round = Round(branch_id=cf_branch.id, round_number=1)
+            session.add(source_round)
+            session.add(cf_round)
+            session.flush()
+            session.add(
+                AgentMessage(
+                    round_id=source_round.id,
+                    agent_id=agent.id,
+                    content="Original parent-only message",
+                    emotion="calm",
+                )
+            )
+            session.add(
+                AgentMessage(
+                    round_id=cf_round.id,
+                    agent_id=agent.id,
+                    content="Replacement counterfactual message",
+                    emotion="focused",
+                )
+            )
+            session.commit()
+
+            source_branch_id = source_branch.id
+            cf_branch_id = cf_branch.id
+            agent_id = agent.id
+
+        stale_bb = Blackboard()
+        stale_bb.update_global_summary({
+            "situation": "ORIGINAL_CHECKPOINT_ONLY",
+            "active_debates": [],
+            "tension_points": [],
+            "consensus": "",
+        })
+        write_checkpoint(
+            scenario_id,
+            source_branch_id,
+            1,
+            [{"id": agent_id, "stance": "stale-parent", "emotion": "worried"}],
+            blackboard=stale_bb.export_snapshot(),
+        )
+
+        prompts: list[str] = []
+
+        async def _fake_llm_call(prompt, *_args, **_kwargs):
+            prompts.append(prompt)
+            return "The replacement worldline continues."
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {
+                "content": "The replacement worldline continues.",
+                "emotion": "focused",
+                "diverge": None,
+            }
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "Counterfactual result",
+                "story": "The replacement path finished.",
+                "insight": "The rewritten round shaped the follow-up.",
+            }
+
+        def _fail_checkpoint_restore(*_args, **_kwargs):
+            raise AssertionError("counterfactual branch must not restore parent checkpoint")
+
+        monkeypatch.setattr(
+            "app.services.replay.load_checkpoint_agent_states",
+            _fail_checkpoint_restore,
+        )
+        monkeypatch.setattr(
+            "app.services.replay.load_checkpoint_blackboard",
+            _fail_checkpoint_restore,
+        )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.llm_call_json", _fake_llm_call_json)
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+        monkeypatch.setattr("app.services.simulator.settings.MEMORY_COMPRESS_INTERVAL", 100)
+        monkeypatch.setattr("app.services.simulator.runtime_lock_is_active", lambda _key: True)
+
+        await run_simulation(scenario_id, branch_id=cf_branch_id)
+
+        assert prompts
+        assert any("Replacement counterfactual message" in prompt for prompt in prompts)
+        assert not any("ORIGINAL_CHECKPOINT_ONLY" in prompt for prompt in prompts)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.DONE
 
 
 class TestResolveHierarchicalAgentSets:

@@ -1953,7 +1953,7 @@ describe('ResultView campaign summary', () => {
       const body = JSON.parse(String((counterfactualCall?.[1] as RequestInit).body));
       expect(body.source_branch_id).toBe('branch-2');
     });
-    expect(await screen.findByText('counterfactual.created')).toBeInTheDocument();
+    expect(await screen.findByText(/counterfactual\.created/)).toBeInTheDocument();
     expect(
       screen
         .getAllByRole('link', { name: 'result.compare_link' })

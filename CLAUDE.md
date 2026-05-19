@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | full pytest: 3238 passed, 6 skipped；Oracle targeted: 297 passed |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 200 文件 / 2175 tests；i18n 2732/2732 |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | full pytest collected: 3272；counterfactual+replay+simulator+resume targeted: 223 passed |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 201 文件 / 2190 tests；i18n 2765/2765 |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -198,6 +198,8 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
+| 05-19 | 反事实对比逐消息升级：`compare_branches()` 在轮级数据基础上新增 `branch_a_messages` / `branch_b_messages`（agent_name + content + emotion）逐消息字段；新增 `POST /counterfactual/{branch_id}/resimulate` 端点，给旧的只 clone+seed 的反事实分支补跑模拟；前端新增 `src/lib/textDiff.ts` 字符级 LCS diff（CJK / emoji 安全的码点切分）；`CompareDigestView` 改为逐 agent 消息卡片 + 红绿 diff 高亮 + 折叠/展开按钮 + 独占轮（only-A / only-B）单列布局，`CounterfactualPanel` 新增模拟进行中提示。验证：backend counterfactual+replay+simulator+resume targeted `223 passed`；frontend full `201 files / 2190 tests`，tsc/eslint/build 通过；i18n `2765/2765` |
+| 05-19 | 反事实对比全面重构：`POST /counterfactual` 融合重新模拟（clone+seed+`run_sim_background`），反事实分支不再只停留在干预轮，会向后推演并生成完整叙事 story/insight/title；`compare_branches` 从 `str.split()` 改为 CJK-aware 逐字分词修复中文分歧度计算；compare 响应新增 `intervention`（原始/改写消息元数据）+ `is_identical`（标识完全相同轮次）+ `common_rounds`（分歧前相同轮数）；分支标题 i18n 感知（中文 `反事实：从第N轮起`）。前端 `CompareDigestView` 新增干预横幅（agent 名称+原始/改写对比+红绿左边框）、折叠相同轮次、干预轮高亮徽章、全 identical 空态处理、forced-colors/a11y 覆盖；`CounterfactualPanel` 新增模拟进行中提示。`simulate: bool = True` 默认触发模拟，`simulate=false` 保留旧行为（仅 clone+seed）。验证：backend full `3257 passed, 6 skipped`（+19 tests）；frontend full `200 files / 2176 tests`，tsc/eslint/build 通过；i18n `2758/2758`（+26 keys）；Codex 后端+前端双轮对抗式审查通过（0 Critical，6 Warning 全部修复） |
 | 05-19 | Oracle Chambers / EndingChatModal review hardening：EndingChatModal 的 thread rail 与 evidence drawer 移到 transcript 内部滚动区外，保留消息列表独立滚动，修复移动端 replay/evidence drawer 点击拦截；移除没有后端枚举和持久化合同的 `parallel_survey` skeleton，保留已实现的 roundtable survey SSE 工作台能力；Oracle backend generation-first 路径补 JSON 字符串解析、streaming-first plain stream fallback、英文 CJK fallback 过滤，并在 narrator/simulator 边界清理用户可见 `[R...]` round marker。验证：backend full `3238 passed, 6 skipped`，Oracle targeted `297 passed`；frontend full `200 files / 2175 tests passed`，tsc/eslint/build/i18n `2732/2732` 通过；ending-room 与 roundtable E2E 通过 |
 | 05-19 | Roundtable phase insight 可读性收口：`_phase_insight()` 保留去重问题前缀，但把 commentary 预算从固定 64 放宽为中文 96 字 / 英文 160 chars；`WorldlineRoundtableView` 的 phase insight accordion 改为默认全部折叠，标题继续只显示短 preview，用户展开后再看更完整的一句主持人提炼。验证：`test_ending_room_service.py` 133 passed，`WorldlineRoundtableView.test.tsx` 46 passed，相关 ruff/eslint 和 frontend build 通过 |
 | 05-19 | Result Quality / Question Anchoring 二次收口：narrator Pass-1/Pass-2 都锚定原问题，fallback 叙事也带 question；verdict prompt 使用分支 `story_excerpt`，分支摘要预算扩大到 15000 字符；roundtable opening/crossfire/witness/verdict 静态锚点透传 `scenario_question`，`_phase_insight()` 去重问题前缀后再压缩。前端 ResultVerdictPanel 对 blank/null/undefined verdict 显示中性 fallback，不再提示“正在分析”；EndingCardsGrid 把 branch `question_answer` 放到概率条上方；DirectorNotebook 优先展示 story verdict，再展示 branch insight；Debate E2E 会展开默认折叠的阶段地图后再断言完整列表。验证：backend targeted `290 passed`；frontend Result/Debate targeted `25 passed`；frontend lint/build 通过；Debate mobile Chromium 390px 与 320px E2E 通过；i18n parity `2730/2730` |

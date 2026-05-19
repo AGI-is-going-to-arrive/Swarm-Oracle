@@ -51,6 +51,13 @@ const {
       'compare.placeholder_detail': 'Round, divergence, and branch weight stay visible so the two-stage compare feels complete from the first frame.',
       'compare.after_activation_detail': 'After one activation, this pane keeps a mirrored stage snapshot for the branch.',
       'compare.play_round': 'Play this round',
+      'compare.intervention_title': 'What Changed',
+      'compare.intervention_original': 'Original',
+      'compare.intervention_replacement': 'Replacement',
+      'compare.intervention_agent_label': 'Agent: {{agent}}',
+      'compare.intervention_badge': 'Intervention Point',
+      'compare.identical_rounds': '{{count}} identical rounds before divergence',
+      'compare.no_different_rounds': 'No divergent rounds to replay.',
       'common.loading': 'Loading...',
       'common.back_to_result': 'Back to Result',
       'common.retry': 'Retry',
@@ -365,5 +372,43 @@ describe('CompareDigestView', () => {
       '.compare-theater-pane.is-active .phaser-game-container',
       'canvas',
     );
+  });
+
+  it('does not let an empty divergent-round filter fall back to default timeline rounds', async () => {
+    getScenarioMock.mockResolvedValue({
+      id: 'test-id',
+      question: 'What if both paths stayed the same?',
+      status: 'done',
+      total_rounds: 2,
+      agents: [],
+      branches: [
+        { id: 'a', title: 'Archive A', probability: 0.62, status: 'COMPLETED', story: '', insight: '', key_moments: [], parent_branch_id: null, fork_reason: '' },
+        { id: 'b', title: 'Archive B', probability: 0.38, status: 'COMPLETED', story: '', insight: '', key_moments: [], parent_branch_id: null, fork_reason: '' },
+      ],
+      messages: [],
+    });
+    getCounterfactualCompareMock.mockResolvedValue({
+      scenario_id: 'test-id',
+      branch_a: 'a',
+      branch_b: 'b',
+      common_rounds: 0,
+      intervention: null,
+      rounds: [
+        {
+          round: 1,
+          branch_a_summary: 'same',
+          branch_b_summary: 'same',
+          divergence_score: 0,
+          is_identical: true,
+        },
+      ],
+    });
+
+    renderView('/result/test-id/compare?branch_a=a&branch_b=b');
+
+    expect(await screen.findByText('What if both paths stayed the same?')).toBeInTheDocument();
+    expect(screen.queryByTestId('compare-timeline')).not.toBeInTheDocument();
+    expect(screen.getAllByText('No divergent rounds to replay.')).toHaveLength(2);
+    expect(screen.getByTestId('compare-phaser-loader')).toHaveTextContent('a:1');
   });
 });

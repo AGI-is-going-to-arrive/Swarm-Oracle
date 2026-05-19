@@ -79,6 +79,7 @@ def _runtime_lock_lease_alive(lease_holder: list[RuntimeLockLease | None]) -> bo
         return False
     return True
 
+
 def _feature_disabled(name: str):
     return api_error(404, "FEATURE_DISABLED", f"Feature '{name}' is not enabled")
 
@@ -194,6 +195,55 @@ def _rollback_resume_start(scenario_id: str, branch_id: str) -> None:
             session.commit()
 
 
+def _rollback_resimulation_start(scenario_id: str, previous_status: ScenarioStatus) -> None:
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        if scenario is not None:
+            scenario.status = previous_status
+            session.add(scenario)
+            session.commit()
+
+
+def _load_resimulatable_counterfactual(
+    session: Session,
+    *,
+    scenario_id: str,
+    branch_id: str,
+) -> Branch:
+    branch = session.exec(
+        select(Branch).where(
+            Branch.id == branch_id,
+            Branch.scenario_id == scenario_id,
+        )
+    ).first()
+    if branch is None:
+        raise api_error(
+            404,
+            "COUNTERFACTUAL_BRANCH_NOT_FOUND",
+            f"Counterfactual branch {branch_id} not found in scenario",
+        )
+    if branch.replay_kind != "counterfactual":
+        raise api_error(
+            409,
+            "COUNTERFACTUAL_BRANCH_KIND_INVALID",
+            "Branch is not a counterfactual branch",
+        )
+    simulated_round = session.exec(
+        select(Round.id)
+        .where(
+            Round.branch_id == branch.id,
+            Round.round_number > branch.fork_round,
+        )
+    ).first()
+    if simulated_round is not None:
+        raise api_error(
+            409,
+            "COUNTERFACTUAL_ALREADY_SIMULATED",
+            "Counterfactual branch already simulated",
+        )
+    return branch
+
+
 def _validate_counterfactual_target_message(
     session: Session,
     *,
@@ -277,6 +327,7 @@ class CounterfactualRequest(BaseModel):
     agent_id: str
     replacement_content: str
     source_message_content: str | None = None
+    simulate: bool = True
 
 
 @router.get("/scenario/{scenario_id}/causal-graph")
@@ -399,6 +450,7 @@ async def create_counterfactual(
     lease_holder: list[RuntimeLockLease | None] = [replay_branch_lease]
     heartbeat_stop: threading.Event | None = None
     heartbeat_thread: threading.Thread | None = None
+    simulation_lease: RuntimeLockLease | None = None
     new_branch_id: str | None = None
 
     def ensure_replay_branch_lock() -> None:
@@ -447,14 +499,122 @@ async def create_counterfactual(
         except Exception:
             _cleanup_replay_branch(new_branch_id)
             raise
+
+        if body.simulate:
+            simulation_lease = _acquire_simulation_lock_for_resume(scenario_id)
+            if simulation_lease is None:
+                _rollback_resume_start(scenario_id, new_branch_id)
+                raise api_error(
+                    409,
+                    "SIMULATION_ALREADY_RUNNING",
+                    "Scenario already has a running simulation",
+                )
+            with Session(get_engine()) as session:
+                scenario = session.get(Scenario, scenario_id)
+                if scenario is None:
+                    _rollback_resume_start(scenario_id, new_branch_id)
+                    raise api_error(
+                        404,
+                        "SCENARIO_NOT_FOUND",
+                        f"Scenario {scenario_id} not found",
+                    )
+                scenario.status = ScenarioStatus.SIMULATING
+                session.add(scenario)
+                session.commit()
+
+            background_coro = run_sim_background(
+                scenario_id,
+                branch_id=new_branch_id,
+                pre_acquired_lock_lease=simulation_lease,
+            )
+            try:
+                ensure_replay_branch_lock()
+                schedule_background_task(background_coro)
+            except Exception:
+                background_coro.close()
+                _rollback_resume_start(scenario_id, new_branch_id)
+                raise
+            simulation_lease = None
+            return JSONResponse(
+                status_code=201,
+                content={
+                    "branch_id": new_branch_id,
+                    "message": "Counterfactual branch created, simulation started",
+                },
+            )
     finally:
         if heartbeat_stop is not None and heartbeat_thread is not None:
             _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
         release_runtime_lock(replay_branch_lease)
+        release_runtime_lock(simulation_lease)
 
     return JSONResponse(
         status_code=201,
-        content={"branch_id": new_branch_id, "message": "Counterfactual branch created"},
+        content={
+            "branch_id": new_branch_id,
+            "message": "Counterfactual branch created",
+        },
+    )
+
+
+@router.post("/scenario/{scenario_id}/counterfactual/{branch_id}/resimulate")
+async def resimulate_counterfactual(
+    scenario_id: str,
+    branch_id: str,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Re-simulate an existing counterfactual branch that was created without simulation."""
+    if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
+        raise _feature_disabled("counterfactual_replay")
+
+    with Session(get_engine()) as session:
+        scenario = require_owned_scenario(session, scenario_id, principal)
+        previous_status = scenario.status
+        _load_resimulatable_counterfactual(
+            session,
+            scenario_id=scenario_id,
+            branch_id=branch_id,
+        )
+
+    simulation_lease = _acquire_simulation_lock_for_resume(scenario_id)
+    if simulation_lease is None:
+        raise api_error(
+            409,
+            "SIMULATION_ALREADY_RUNNING",
+            "Scenario already has a running simulation",
+        )
+
+    try:
+        with Session(get_engine()) as session:
+            scenario = require_owned_scenario(session, scenario_id, principal)
+            previous_status = scenario.status
+            _load_resimulatable_counterfactual(
+                session,
+                scenario_id=scenario_id,
+                branch_id=branch_id,
+            )
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.commit()
+
+        background_coro = run_sim_background(
+            scenario_id,
+            branch_id=branch_id,
+            pre_acquired_lock_lease=simulation_lease,
+        )
+        try:
+            schedule_background_task(background_coro)
+        except Exception:
+            background_coro.close()
+            _rollback_resimulation_start(scenario_id, previous_status)
+            raise
+        simulation_lease = None
+    finally:
+        release_runtime_lock(simulation_lease)
+
+    return JSONResponse(
+        status_code=200,
+        content={"message": "Resimulation started"},
     )
 
 
@@ -722,7 +882,6 @@ async def resume_from_round(
             body.round_number,
             ensure_lock=ensure_replay_branch_lock,
             replay_kind="resume",
-            title=f"Resume from round {body.round_number}",
         )
         background_coro = run_sim_background(
             scenario_id,

@@ -488,7 +488,12 @@ def _pick_theater_ending_payload(
     )
 
 
-def reconcile_scenario_done_if_complete(engine, scenario_id: str) -> bool:
+def reconcile_scenario_done_if_complete(
+    engine,
+    scenario_id: str,
+    *,
+    ignore_runtime_lock: bool = False,
+) -> bool:
     """Mark a stale simulating/narrating scenario as done when all branch data is final."""
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
@@ -496,7 +501,7 @@ def reconcile_scenario_done_if_complete(engine, scenario_id: str) -> bool:
             return False
         if scenario.status not in (ScenarioStatus.SIMULATING, ScenarioStatus.NARRATING):
             return False
-        if runtime_lock_is_active(simulation_lock_key(scenario_id)):
+        if not ignore_runtime_lock and runtime_lock_is_active(simulation_lock_key(scenario_id)):
             return False
 
         branches = session.exec(
@@ -1668,7 +1673,7 @@ async def _run_simulation_impl(
                 "probability": target_branch.probability,
             }]
 
-        # P1-9: Restore agent stance/emotion from checkpoint (resume only).
+        # Restore resume branch stance/emotion from the parent checkpoint.
         # Modifies in-memory dicts only — does NOT write to Agent DB rows.
         if _resume_replay_kind == "resume" and resume_parent_branch_id:
             from app.services.replay import load_checkpoint_agent_states
@@ -1694,7 +1699,9 @@ async def _run_simulation_impl(
                 bb_init.set_agent_faction(agent_name, group_name)
         if branch_id is not None and resume_parent_branch_id:
             _bb_restored = False
-            # P1-9: Prefer full checkpoint blackboard for resume branches
+            # Prefer full checkpoint blackboard for resume branches.
+            # Counterfactual branches rewrite the fork round, so the parent's
+            # checkpoint after that round is stale for the new worldline.
             if _resume_replay_kind == "resume":
                 from app.services.replay import load_checkpoint_blackboard
                 cp_bb = load_checkpoint_blackboard(
@@ -1709,8 +1716,8 @@ async def _run_simulation_impl(
                             bb_init.set_agent_group(an, gn)
                             bb_init.set_agent_faction(an, gn)
                     _bb_restored = True
-            # Fallback: compressed briefing (works for all branch resume types)
-            if not _bb_restored:
+            # Fallback: compressed briefing for non-counterfactual branch resumes.
+            if not _bb_restored and _resume_replay_kind != "counterfactual":
                 parent_summary = _load_latest_compressed_briefing(
                     engine,
                     resume_parent_branch_id,
@@ -2192,7 +2199,11 @@ async def _run_simulation_impl(
     else:
         await clear_pending_interventions_for_branch(scenario_id, branch_id)
 
-    scenario_finished = reconcile_scenario_done_if_complete(engine, scenario_id)
+    scenario_finished = reconcile_scenario_done_if_complete(
+        engine,
+        scenario_id,
+        ignore_runtime_lock=True,
+    )
     if scenario_finished and viz_mapper is not None:
         chosen_ending = _pick_theater_ending_payload(
             narrated_branch_payloads,
@@ -2497,7 +2508,7 @@ async def _gather_agent_messages(
                     )
 
             # Build context: Blackboard shared briefing + DB fallback
-            if shared_text and shared_text != "(尚无共享信息)":
+            if shared_text and shared_text not in {"(尚无共享信息)", "(no shared briefing yet)"}:
                 agent_briefing = shared_text
                 ctx = build_agent_context(
                     agent=agent,

@@ -14,19 +14,54 @@ import { TimelineBar } from '../components/TimelineBar';
 import { buildAutomationErrorState } from '../lib/apiErrorMessage';
 import { captureCompositeElementDataUrl, captureElementDataUrl } from '../hooks/useScreenCapture';
 import { stringifyAutomationPayload, type AutomationWindow } from '../game/automation';
+import { diffChars } from '../lib/textDiff';
 import './CompareDigestView.css';
+
+interface MessageEntry {
+  agent_id: string;
+  agent_name: string;
+  content: string;
+  emotion: string;
+}
 
 interface RoundDiff {
   round: number;
   branch_a_summary: string;
   branch_b_summary: string;
+  branch_a_messages: MessageEntry[];
+  branch_b_messages: MessageEntry[];
   divergence_score: number;
+  is_identical: boolean;
+}
+
+function DiffHighlight({ oldText, newText, side }: { oldText: string; newText: string; side: 'a' | 'b' }) {
+  const segments = useMemo(() => diffChars(oldText, newText), [oldText, newText]);
+  return (
+    <span>
+      {segments.map((seg, i) => {
+        if (seg.type === 'equal') return <span key={i}>{seg.text}</span>;
+        if (seg.type === 'delete' && side === 'a') return <del key={i} className="compare-diff-del">{seg.text}</del>;
+        if (seg.type === 'insert' && side === 'b') return <ins key={i} className="compare-diff-ins">{seg.text}</ins>;
+        return null;
+      })}
+    </span>
+  );
+}
+
+interface InterventionInfo {
+  round: number;
+  agent_id: string;
+  agent_name: string;
+  original_content: string | null;
+  replacement_content: string | null;
 }
 
 interface CompareData {
   scenario_id: string;
   branch_a: string;
   branch_b: string;
+  common_rounds: number;
+  intervention: InterventionInfo | null;
   rounds: RoundDiff[];
 }
 
@@ -72,15 +107,32 @@ export function CompareDigestView() {
     a: null,
     b: null,
   });
+  const [resimulating, setResimulating] = useState(false);
+  const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
   const rootRef = useRef<HTMLDivElement>(null);
   const loadRequestIdRef = useRef(0);
 
-  const availableRounds = useMemo(
-    () => data?.rounds.map((entry) => entry.round) ?? [],
+  const toggleMessage = useCallback((key: string) => {
+    setExpandedMessages((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const divergentRounds = useMemo(
+    () => data?.rounds.filter((entry) => !entry.is_identical) ?? [],
     [data],
   );
+  const availableRounds = useMemo(
+    () => divergentRounds.map((entry) => entry.round),
+    [divergentRounds],
+  );
+  const hasDivergentRounds = availableRounds.length > 0;
   const scenarioQuestion = storeScenario?.question ?? null;
   const hasScenario = Boolean(storeScenario);
+  const intervention = data?.intervention ?? null;
   const errorLabel = useMemo(() => {
     if (!error) return null;
     if (error.kind === 'missing_params') {
@@ -127,7 +179,12 @@ export function CompareDigestView() {
       if (requestId !== loadRequestIdRef.current) return;
       setScenario(scenarioPayload);
       setData(comparePayload);
-      setSelectedRound(comparePayload.rounds[0]?.round ?? 1);
+      setSelectedRound(
+        comparePayload.intervention?.round
+        ?? comparePayload.rounds.find((r) => !r.is_identical)?.round
+        ?? comparePayload.rounds[0]?.round
+        ?? 1,
+      );
     } catch (nextError) {
       if (requestId !== loadRequestIdRef.current) return;
       setError({
@@ -150,6 +207,25 @@ export function CompareDigestView() {
       resetSimulation();
     };
   }, [capabilityError, enabled, loadCompare, resetSimulation]);
+
+  const isStale = useMemo(() => {
+    if (!data || !branches.length) return false;
+    const cfBranch = branches.find((b) => b.id === branchB && b.replay_kind === 'counterfactual');
+    return Boolean(cfBranch && (!cfBranch.story || cfBranch.story.length === 0) && data.rounds.length <= 1);
+  }, [data, branches, branchB]);
+
+  const handleResimulate = useCallback(async () => {
+    if (!id || !branchB || resimulating) return;
+    setResimulating(true);
+    try {
+      await fetch(`/api/scenario/${id}/counterfactual/${branchB}/resimulate`, { method: 'POST' });
+      setTimeout(() => void loadCompare(), 2000);
+    } catch {
+      // silent
+    } finally {
+      setResimulating(false);
+    }
+  }, [id, branchB, resimulating, loadCompare]);
 
   useEffect(() => {
     if (availableRounds.length === 0) return;
@@ -179,16 +255,14 @@ export function CompareDigestView() {
     a: {
       id: branchA,
       title: branchById.get(branchA)?.title ?? t('compare.branch_a_label', 'Branch A (Original)'),
-      summary: activeDiff?.branch_a_summary ?? '',
       probability: branchById.get(branchA)?.probability ?? null,
     },
     b: {
       id: branchB,
       title: branchById.get(branchB)?.title ?? t('compare.branch_b_label', 'Branch B (Counterfactual)'),
-      summary: activeDiff?.branch_b_summary ?? '',
       probability: branchById.get(branchB)?.probability ?? null,
     },
-  }), [activeDiff?.branch_a_summary, activeDiff?.branch_b_summary, branchA, branchB, branchById, t]);
+  }), [branchA, branchB, branchById, t]);
 
   const roundMarkers = useMemo(
     () => availableRounds.map((round) => ({
@@ -321,6 +395,8 @@ export function CompareDigestView() {
             b: Boolean(snapshots.b),
           },
           divergence_score: activeDiff?.divergence_score ?? null,
+          intervention: data?.intervention ?? null,
+          common_rounds: data?.common_rounds ?? 0,
         },
       },
     );
@@ -403,6 +479,22 @@ export function CompareDigestView() {
         </div>
       </header>
 
+      {isStale && (
+        <div className="compare-digest-view__stale-banner" role="alert">
+          <p>{t('compare.stale_notice', 'This counterfactual branch has not been simulated yet. Results only show the intervention round.')}</p>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={handleResimulate}
+            disabled={resimulating}
+          >
+            {resimulating
+              ? t('compare.resimulating', 'Simulating...')
+              : t('compare.resimulate', 'Simulate Remaining Rounds')}
+          </button>
+        </div>
+      )}
+
       <div className="compare-digest-view__branch-switch" role="tablist" aria-label={t('compare.title', 'Counterfactual Compare')}>
         <button
           type="button"
@@ -439,6 +531,41 @@ export function CompareDigestView() {
           {t('compare.stage_intro')}
         </p>
       </section>
+
+      {intervention && (
+        <section
+          className="compare-digest-view__intervention"
+          role="note"
+          aria-labelledby="compare-intervention-title"
+        >
+          <div className="compare-digest-view__intervention-header">
+            <strong id="compare-intervention-title">{t('compare.intervention_title', 'What Changed')}</strong>
+            <span className="compare-digest-view__intervention-round">
+              {t('compare.round', { round: intervention.round })}
+            </span>
+          </div>
+          <div className="compare-digest-view__intervention-body">
+            <div className="compare-digest-view__intervention-agent">
+              <span>
+                {t('compare.intervention_agent_label', {
+                  agent: intervention.agent_name,
+                  defaultValue: 'Agent: {{agent}}',
+                })}
+              </span>
+            </div>
+            <div className="compare-digest-view__intervention-diff">
+              <div className="compare-digest-view__intervention-original">
+                <span>{t('compare.intervention_original', 'Original')}</span>
+                <p>{intervention.original_content || '—'}</p>
+              </div>
+              <div className="compare-digest-view__intervention-replacement">
+                <span>{t('compare.intervention_replacement', 'Replacement')}</span>
+                <p>{intervention.replacement_content || '—'}</p>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="compare-theater">
         {(['a', 'b'] as const).map((pane) => {
@@ -546,7 +673,6 @@ export function CompareDigestView() {
               </div>
 
               <div className="compare-theater-pane__summary">
-                <p>{panel.summary || t('compare.no_data', 'No comparison data available.')}</p>
                 {activeDiff && (
                   <span className="compare-theater-pane__divergence">
                     {t('compare.divergence_label', 'Divergence')}: {divergencePct}%
@@ -559,42 +685,207 @@ export function CompareDigestView() {
       </section>
 
       <section className="compare-digest-view__timeline">
-        <TimelineBar
-          interactive
-          compact
-          selectedRound={selectedRound}
-          roundMarkers={roundMarkers}
-          onRoundSelect={handleRoundSelect}
-        />
+        {hasDivergentRounds ? (
+          <TimelineBar
+            interactive
+            compact
+            selectedRound={selectedRound}
+            roundMarkers={roundMarkers}
+            onRoundSelect={handleRoundSelect}
+          />
+        ) : (
+          <p className="compare-digest-view__timeline-empty">
+            {t('compare.no_different_rounds', 'No divergent rounds to replay.')}
+          </p>
+        )}
       </section>
 
       <section className="compare-digest-view__rounds">
-        {data?.rounds.length ? data.rounds.map((round) => {
-          const divergencePct = Math.round(round.divergence_score * 100);
-          return (
-            <article key={round.round} className={`compare-round-card ${selectedRound === round.round ? 'is-selected' : ''}`}>
-              <div className="compare-round-card__header">
-                <div>
-                  <strong>{t('compare.round', { round: round.round })}</strong>
-                  <span>{t('compare.divergence_label', 'Divergence')}: {divergencePct}%</span>
+        {data?.rounds.length ? (
+          <>
+            {data.common_rounds > 0 && (
+              <div className="compare-round-card compare-round-card--collapsed">
+                <div className="compare-round-card__header">
+                  <div>
+                    <strong>
+                      {t('compare.identical_rounds', {
+                        count: data.common_rounds,
+                        defaultValue: '{{count}} identical rounds before divergence',
+                      })}
+                    </strong>
+                    <span>{t('compare.divergence_label', 'Divergence')}: 0%</span>
+                  </div>
                 </div>
-                <button type="button" className="btn btn-ghost" onClick={() => handleRoundSelect(round.round)}>
-                  {t('compare.play_round')}
-                </button>
               </div>
-              <div className="compare-round-card__grid">
-                <section>
-                  <span>{t('compare.branch_a_label', 'Branch A (Original)')}</span>
-                  <p>{round.branch_a_summary || '—'}</p>
-                </section>
-                <section>
-                  <span>{t('compare.branch_b_label', 'Branch B (Counterfactual)')}</span>
-                  <p>{round.branch_b_summary || '—'}</p>
-                </section>
-              </div>
-            </article>
-          );
-        }) : (
+            )}
+            {divergentRounds.length ? (
+              divergentRounds.map((round) => {
+                const divergencePct = Math.round(round.divergence_score * 100);
+                const isIntervention = intervention?.round === round.round;
+                const aHasData = (round.branch_a_messages?.length ?? 0) > 0;
+                const bHasData = (round.branch_b_messages?.length ?? 0) > 0;
+                const oneSideEmpty = (aHasData && !bHasData) || (!aHasData && bHasData);
+                const activeSide: 'a' | 'b' = aHasData ? 'a' : 'b';
+                const activeSideLabel = aHasData
+                  ? branchPanels.a.title
+                  : branchPanels.b.title;
+                const soloMessages = activeSide === 'a' ? round.branch_a_messages : round.branch_b_messages;
+                const soloRoundKey = `solo-${round.round}`;
+                const allSoloExpanded = oneSideEmpty && expandedMessages.has(soloRoundKey);
+                return (
+                  <article
+                    key={round.round}
+                    className={`compare-round-card ${selectedRound === round.round ? 'is-selected' : ''} ${isIntervention ? 'is-intervention' : ''}`}
+                  >
+                    <div className="compare-round-card__header">
+                      <div>
+                        <strong>{t('compare.round', { round: round.round })}</strong>
+                        <span>{t('compare.divergence_label', 'Divergence')}: {divergencePct}%</span>
+                        {isIntervention && (
+                          <span className="compare-round-card__intervention-badge">
+                            {t('compare.intervention_badge', 'Intervention Point')}
+                          </span>
+                        )}
+                      </div>
+                      <button type="button" className="btn btn-ghost" onClick={() => handleRoundSelect(round.round)}>
+                        {t('compare.play_round')}
+                      </button>
+                    </div>
+                    {oneSideEmpty ? (
+                      <div className="compare-round-card__solo">
+                        <div className="compare-round-card__solo-banner">
+                          <span>{t('compare.solo_branch_notice', {
+                            branch: activeSideLabel,
+                            defaultValue: 'Only {{branch}} has data for this round. The other branch ended before this point.',
+                          })}</span>
+                        </div>
+                        <div className="compare-round-card__solo-messages">
+                          {soloMessages?.map((msg, idx) => {
+                            const msgKey = `${round.round}-${activeSide}-${idx}`;
+                            const isExpanded = allSoloExpanded || expandedMessages.has(msgKey);
+                            const needsCollapse = msg.content.length > 120;
+                            return (
+                              <div key={idx} className="compare-message">
+                                <div
+                                  className="compare-message__header"
+                                  onClick={() => needsCollapse && toggleMessage(msgKey)}
+                                  style={needsCollapse ? { cursor: 'pointer' } : undefined}
+                                >
+                                  <strong className="compare-message__agent">{msg.agent_name}</strong>
+                                  <span className="compare-message__emotion">{msg.emotion}</span>
+                                  {needsCollapse && (
+                                    <span className="compare-message__toggle">{isExpanded ? '▾' : '▸'}</span>
+                                  )}
+                                </div>
+                                <div className={`compare-message__content ${!isExpanded && needsCollapse ? 'compare-message__content--collapsed' : ''}`}>
+                                  {isExpanded || !needsCollapse ? (
+                                    <p>{msg.content}</p>
+                                  ) : (
+                                    <p>{Array.from(msg.content).slice(0, 120).join('') + '…'}</p>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {(soloMessages?.length ?? 0) > 1 && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost compare-round-card__expand-all"
+                            onClick={() => toggleMessage(soloRoundKey)}
+                          >
+                            {allSoloExpanded
+                              ? t('compare.collapse_all', 'Collapse All')
+                              : t('compare.expand_all', 'Expand All')}
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="compare-round-card__grid">
+                        <section>
+                          <span>{t('compare.branch_a_label', 'Branch A (Original)')}</span>
+                          <div className="compare-round-card__messages">
+                            {round.branch_a_messages?.map((msg, idx) => {
+                              const matchingMsg = round.branch_b_messages?.[idx];
+                              const hasChange = Boolean(matchingMsg && msg.content !== matchingMsg.content);
+                              const msgKey = `${round.round}-a-${idx}`;
+                              const isExpanded = expandedMessages.has(msgKey);
+                              const needsCollapse = !hasChange && msg.content.length > 80;
+                              return (
+                                <div key={idx} className={`compare-message ${hasChange ? 'compare-message--changed' : ''}`}>
+                                  <div
+                                    className="compare-message__header"
+                                    onClick={() => needsCollapse && toggleMessage(msgKey)}
+                                    style={needsCollapse ? { cursor: 'pointer' } : undefined}
+                                  >
+                                    <strong className="compare-message__agent">{msg.agent_name}</strong>
+                                    <span className="compare-message__emotion">{msg.emotion}</span>
+                                    {needsCollapse && (
+                                      <span className="compare-message__toggle">{isExpanded ? '▾' : '▸'}</span>
+                                    )}
+                                  </div>
+                                  <div className={`compare-message__content ${!isExpanded && needsCollapse ? 'compare-message__content--collapsed' : ''}`}>
+                                    {hasChange && matchingMsg ? (
+                                      <DiffHighlight oldText={msg.content} newText={matchingMsg.content} side="a" />
+                                    ) : isExpanded || !needsCollapse ? (
+                                      <p>{msg.content}</p>
+                                    ) : (
+                                      <p>{Array.from(msg.content).slice(0, 80).join('') + '…'}</p>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </section>
+                        <section>
+                          <span>{t('compare.branch_b_label', 'Branch B (Counterfactual)')}</span>
+                          <div className="compare-round-card__messages">
+                            {round.branch_b_messages?.map((msg, idx) => {
+                              const matchingMsg = round.branch_a_messages?.[idx];
+                              const hasChange = Boolean(matchingMsg && msg.content !== matchingMsg.content);
+                              const msgKey = `${round.round}-b-${idx}`;
+                              const isExpanded = expandedMessages.has(msgKey);
+                              const needsCollapse = !hasChange && msg.content.length > 80;
+                              return (
+                                <div key={idx} className={`compare-message ${hasChange ? 'compare-message--changed' : ''}`}>
+                                  <div
+                                    className="compare-message__header"
+                                    onClick={() => needsCollapse && toggleMessage(msgKey)}
+                                    style={needsCollapse ? { cursor: 'pointer' } : undefined}
+                                  >
+                                    <strong className="compare-message__agent">{msg.agent_name}</strong>
+                                    <span className="compare-message__emotion">{msg.emotion}</span>
+                                    {needsCollapse && (
+                                      <span className="compare-message__toggle">{isExpanded ? '▾' : '▸'}</span>
+                                    )}
+                                  </div>
+                                  <div className={`compare-message__content ${!isExpanded && needsCollapse ? 'compare-message__content--collapsed' : ''}`}>
+                                    {hasChange && matchingMsg ? (
+                                      <DiffHighlight oldText={matchingMsg.content} newText={msg.content} side="b" />
+                                    ) : isExpanded || !needsCollapse ? (
+                                      <p>{msg.content}</p>
+                                    ) : (
+                                      <p>{Array.from(msg.content).slice(0, 80).join('') + '…'}</p>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      </div>
+                    )}
+                  </article>
+                );
+              })
+            ) : (
+              <p className="compare-digest-view__empty-copy">
+                {t('compare.no_different_rounds', 'No divergent rounds to replay.')}
+              </p>
+            )}
+          </>
+        ) : (
           <p className="compare-digest-view__empty-copy">{t('compare.no_data', 'No comparison data available.')}</p>
         )}
       </section>
