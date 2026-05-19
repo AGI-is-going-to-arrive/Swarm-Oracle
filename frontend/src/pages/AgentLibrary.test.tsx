@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -35,6 +35,8 @@ const mockApi = vi.hoisted(() => ({
   deleteAgent: vi.fn(),
   exportPersona: vi.fn(),
   getAgentFavorites: vi.fn(),
+  getIdentityGrowthEvents: vi.fn(),
+  getIdentityMemory: vi.fn(),
   getSessionBoundUserId: vi.fn(() => 'test_user'),
   importPersona: vi.fn(),
   isApiError: vi.fn(() => false),
@@ -46,6 +48,8 @@ vi.mock('../api/client', () => ({
   deleteAgent: mockApi.deleteAgent,
   exportPersona: mockApi.exportPersona,
   getAgentFavorites: mockApi.getAgentFavorites,
+  getIdentityGrowthEvents: mockApi.getIdentityGrowthEvents,
+  getIdentityMemory: mockApi.getIdentityMemory,
   getSessionBoundUserId: mockApi.getSessionBoundUserId,
   importPersona: mockApi.importPersona,
   isApiError: mockApi.isApiError,
@@ -101,6 +105,10 @@ describe('AgentLibrary', () => {
     mockApi.deleteAgent.mockClear();
     mockApi.getAgentFavorites.mockClear();
     mockApi.getAgentFavorites.mockReturnValue(new Promise(() => {}));
+    mockApi.getIdentityGrowthEvents.mockClear();
+    mockApi.getIdentityGrowthEvents.mockResolvedValue({ events: [] });
+    mockApi.getIdentityMemory.mockClear();
+    mockApi.getIdentityMemory.mockResolvedValue({ memories: [] });
     mockApi.getSessionBoundUserId.mockClear();
     mockApi.isApiError.mockClear();
     mockApi.isApiError.mockReturnValue(false);
@@ -114,6 +122,7 @@ describe('AgentLibrary', () => {
 
   afterEach(() => {
     cleanup();
+    window.history.replaceState(null, '', '/agents');
     vi.restoreAllMocks();
   });
   it('renders localized empty state copy', () => {
@@ -198,6 +207,34 @@ describe('AgentLibrary', () => {
     );
 
     expect(screen.getByRole('button', { name: 'Delete Ada' })).toBeInTheDocument();
+  });
+
+  it('opens an Agent profile from an agent_profile hash deep-link', () => {
+    mockAgentStore.identities = [{
+      id: 'custom-1',
+      user_id: 'test_user',
+      kind: 'custom',
+      display_name: 'Ada',
+      role: 'Forecaster',
+      persona: 'Careful and concise.',
+      decision_bias: null,
+      decision_bias_json: null,
+      preferred_tier: 'IMPORTANT',
+      continuity_key: 'ada',
+      created_at: '2026-05-11T00:00:00Z',
+      updated_at: '2026-05-11T00:00:00Z',
+    }];
+    window.history.replaceState(null, '', '/agents#agent_profile=custom-1&tab=memory');
+
+    render(
+      <MemoryRouter initialEntries={['/agents#agent_profile=custom-1&tab=memory']}>
+        <AgentLibrary />
+      </MemoryRouter>,
+    );
+
+    const dialog = screen.getByRole('dialog', { name: 'Agent Profile' });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { name: 'Ada' })).toBeInTheDocument();
   });
 
   it('makes the Agent backup export entry visible on existing Agent cards', () => {

@@ -2,6 +2,9 @@
    SwarmOracle — "Explore Deeper" bridge cards (workbench mode)
    ═══════════════════════════════════════════════════════════ */
 
+import { useCallback, useState } from 'react';
+import { ScenarioAgentPicker } from '../../components/result/ScenarioAgentPicker';
+import type { AgentInfo } from '../../types';
 import { useResultContext } from './ResultContext';
 
 export default function ExploreDeeperBridge() {
@@ -15,7 +18,23 @@ export default function ExploreDeeperBridge() {
     isReplayMode,
     replayUrl,
     setShowShare,
+    agents,
+    setAgentFollowupTarget,
   } = useResultContext();
+
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const handleAgentSelect = useCallback(
+    (agent: AgentInfo) => {
+      setPickerOpen(false);
+      setAgentFollowupTarget(agent);
+    },
+    [setAgentFollowupTarget],
+  );
+
+  const handleClosePicker = useCallback(() => {
+    setPickerOpen(false);
+  }, []);
 
   // Result-level next steps should stay visible in Reader mode. The dedicated
   // Workbench mode only reveals heavier analysis panels below this bridge.
@@ -27,15 +46,28 @@ export default function ExploreDeeperBridge() {
   const kgEnabled = capabilities?.kg_explorer?.enabled ?? false;
   const replayEnabled = capabilities?.replay_trace?.enabled ?? false;
   const compareEnabled = (capabilities?.counterfactual_replay?.enabled ?? false) && branches.length > 1;
-  const agentEnabled = !!(capabilities?.custom_agents?.enabled);
+  const agentConvEnabled = !!capabilities?.agent_conversation?.enabled;
+  const agentsAvailable = agents.length > 0;
+  const agentEntryEnabled = agentConvEnabled && agentsAvailable && !isReplayMode;
+  const agentDisabledKey = isReplayMode
+    ? 'result.bridge_replay_unavailable'
+    : !agentConvEnabled
+      ? 'result.bridge_not_enabled'
+      : 'result.agent_picker_empty';
+  const agentDisabledDefault = isReplayMode
+    ? 'Not available in replay mode.'
+    : !agentConvEnabled
+      ? 'Not enabled on this server.'
+      : 'No agents available for follow-up';
   const scenarioId = encodeURIComponent(activeScenarioId);
   const workbenchView = !causalEnabled && kgEnabled ? 'kg' : 'graph';
   const workbenchBranchQuery = analysisBranch
     ? `&branch=${encodeURIComponent(analysisBranch.id)}`
     : '';
 
-  const entries: Array<{
+  type LinkEntry = {
     key: string;
+    kind: 'link';
     icon: string;
     titleKey: string;
     titleDefault: string;
@@ -45,9 +77,26 @@ export default function ExploreDeeperBridge() {
     href: string;
     disabledKey: string;
     disabledDefault: string;
-  }> = [
+  };
+  type ActionEntry = {
+    key: string;
+    kind: 'action';
+    icon: string;
+    titleKey: string;
+    titleDefault: string;
+    descKey: string;
+    descDefault: string;
+    enabled: boolean;
+    onClick: () => void;
+    disabledKey: string;
+    disabledDefault: string;
+  };
+  type Entry = LinkEntry | ActionEntry;
+
+  const entries: Entry[] = [
     {
       key: 'causal',
+      kind: 'link',
       icon: '\u{1F578}️',
       titleKey: 'result.next_understand_why',
       titleDefault: 'Causal Graph',
@@ -57,11 +106,10 @@ export default function ExploreDeeperBridge() {
       href: `/sim/${scenarioId}/causal-map${analysisBranch ? `?branch_id=${encodeURIComponent(analysisBranch.id)}` : ''}`,
       disabledKey: 'result.bridge_not_enabled',
       disabledDefault: 'Not enabled on this server.',
-
-
     },
     {
       key: 'replay',
+      kind: 'link',
       icon: '\u{1F3AC}',
       titleKey: 'result.next_replay_trace',
       titleDefault: 'Replay Trace',
@@ -71,11 +119,10 @@ export default function ExploreDeeperBridge() {
       href: `/replay/${scenarioId}`,
       disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : 'result.bridge_not_enabled',
       disabledDefault: isReplayMode ? 'Not available in replay mode.' : 'Not enabled on this server.',
-
-
     },
     {
       key: 'compare',
+      kind: 'link',
       icon: '\u{1F500}',
       titleKey: 'result.next_replay_different',
       titleDefault: 'Compare Branches',
@@ -87,11 +134,10 @@ export default function ExploreDeeperBridge() {
         : '#',
       disabledKey: isReplayMode ? 'result.bridge_replay_unavailable' : (branches.length <= 1 ? 'result.bridge_single_branch' : 'result.bridge_not_enabled'),
       disabledDefault: isReplayMode ? 'Not available in replay mode.' : (branches.length <= 1 ? 'Only one branch — nothing to compare.' : 'Not enabled on this server.'),
-
-
     },
     {
       key: 'workbench',
+      kind: 'link',
       icon: '\u{1F6E0}️',
       titleKey: 'result.bridge_workbench_title',
       titleDefault: 'Open Graph Workbench',
@@ -104,15 +150,16 @@ export default function ExploreDeeperBridge() {
     },
     {
       key: 'agents',
+      kind: 'action',
       icon: '\u{1F9EC}',
       titleKey: 'result.next_ask_agent',
-      titleDefault: 'Agent Library',
+      titleDefault: 'Ask an Agent',
       descKey: 'result.next_ask_agent_desc',
-      descDefault: 'Browse agent identities and cross-scenario memory.',
-      enabled: agentEnabled && !isReplayMode,
-      href: '/agents',
-      disabledKey: 'result.bridge_agents_disabled',
-      disabledDefault: 'Agent identity is not enabled.',
+      descDefault: 'Chat with scenario agents to dig deeper',
+      enabled: agentEntryEnabled,
+      onClick: () => setPickerOpen(true),
+      disabledKey: agentDisabledKey,
+      disabledDefault: agentDisabledDefault,
     },
   ];
 
@@ -131,21 +178,57 @@ export default function ExploreDeeperBridge() {
         {entries.map((entry) => {
           const isDisabled = !entry.enabled;
           const statusId = `result-bridge-${entry.key}-status`;
-          return isDisabled ? (
-            <div
-              key={entry.key}
-              className="result-bridge__card result-bridge__card--disabled"
-              aria-disabled="true"
-              tabIndex={-1}
-              role="link"
-              aria-describedby={statusId}
-            >
-              <span className="result-bridge__card-icon" aria-hidden="true">{entry.icon}</span>
-              <span className="result-bridge__card-name">{t(entry.titleKey, entry.titleDefault)}</span>
-              <span className="result-bridge__card-desc">{t(entry.descKey, entry.descDefault)}</span>
-              <span id={statusId} className="result-bridge__card-status">{t(entry.disabledKey, entry.disabledDefault)}</span>
-            </div>
-          ) : (
+          if (isDisabled) {
+            const disabledCardContent = (
+              <>
+                <span className="result-bridge__card-icon" aria-hidden="true">{entry.icon}</span>
+                <span className="result-bridge__card-name">{t(entry.titleKey, entry.titleDefault)}</span>
+                <span className="result-bridge__card-desc">{t(entry.descKey, entry.descDefault)}</span>
+                <span id={statusId} className="result-bridge__card-status">{t(entry.disabledKey, entry.disabledDefault)}</span>
+              </>
+            );
+            if (entry.kind === 'action') {
+              return (
+                <button
+                  key={entry.key}
+                  type="button"
+                  className="result-bridge__card result-bridge__card--disabled"
+                  disabled
+                  aria-describedby={statusId}
+                >
+                  {disabledCardContent}
+                </button>
+              );
+            }
+            return (
+              <div
+                key={entry.key}
+                className="result-bridge__card result-bridge__card--disabled"
+                aria-disabled="true"
+                tabIndex={-1}
+                role="link"
+                aria-describedby={statusId}
+              >
+                {disabledCardContent}
+              </div>
+            );
+          }
+          if (entry.kind === 'action') {
+            return (
+              <button
+                key={entry.key}
+                type="button"
+                className="result-bridge__card"
+                onClick={entry.onClick}
+                data-testid={`result-bridge-${entry.key}`}
+              >
+                <span className="result-bridge__card-icon" aria-hidden="true">{entry.icon}</span>
+                <span className="result-bridge__card-name">{t(entry.titleKey, entry.titleDefault)}</span>
+                <span className="result-bridge__card-desc">{t(entry.descKey, entry.descDefault)}</span>
+              </button>
+            );
+          }
+          return (
             <a
               key={entry.key}
               className="result-bridge__card"
@@ -172,6 +255,13 @@ export default function ExploreDeeperBridge() {
           )}
         </button>
       </div>
+
+      <ScenarioAgentPicker
+        open={pickerOpen}
+        agents={agents}
+        onSelect={handleAgentSelect}
+        onClose={handleClosePicker}
+      />
     </section>
   );
 }

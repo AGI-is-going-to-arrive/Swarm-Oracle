@@ -83,11 +83,13 @@ def _seed_branch(engine, scenario_id, *, title="主线", probability=1.0,
 
 
 def _seed_agent(engine, scenario_id, *, name="TestAgent", role="tester",
-                persona="", tier=AgentTier.IMPORTANT, stance="", emotion="neutral"):
+                persona="", tier=AgentTier.IMPORTANT, stance="", emotion="neutral",
+                agent_identity_id=None):
     """Create an agent and return its ID."""
     a = Agent(
         scenario_id=scenario_id, name=name, role=role, persona=persona,
         tier=tier, stance=stance, emotion=emotion,
+        agent_identity_id=agent_identity_id,
     )
     with Session(engine) as session:
         session.add(a)
@@ -1076,6 +1078,30 @@ class TestReplayArtifactEndpoints:
         assert data["scene_theme"] == "ancient_empire"
         assert data["mode"] == "blackboard"
         assert data["total_rounds"] == 6
+
+    def test_get_scenario_agents_include_persona_and_identity_id(self, client):
+        """GET /api/scenario/{id} exposes scenario agent picker fields."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_agent(
+            engine,
+            sid,
+            name="Archivist",
+            role="memory keeper",
+            persona="Keeps careful notes",
+            agent_identity_id="identity-archivist",
+        )
+        _seed_agent(engine, sid, name="Unlinked", persona="No identity yet")
+
+        resp = client.get(f"/api/scenario/{sid}")
+        assert resp.status_code == 200
+        agents = resp.json()["agents"]
+        by_name = {agent["name"]: agent for agent in agents}
+
+        assert by_name["Archivist"]["persona"] == "Keeps careful notes"
+        assert by_name["Archivist"]["agent_identity_id"] == "identity-archivist"
+        assert by_name["Unlinked"]["persona"] == "No identity yet"
+        assert by_name["Unlinked"]["agent_identity_id"] is None
 
     def test_get_scenario_self_heals_stale_simulating_status(self, client, monkeypatch):
         engine = get_engine()
@@ -2211,15 +2237,25 @@ class TestAgentsEndpoint:
         assert resp.json() == []
 
     def test_get_agents_includes_all_fields(self, client):
-        """Each agent should include id, name, role, persona, tier, stance, emotion."""
+        """Each agent should include picker and display fields."""
         engine = get_engine()
         sid = _seed_scenario(engine)
-        _seed_agent(engine, sid, name="角色A")
+        _seed_agent(engine, sid, name="角色A", agent_identity_id="identity-role-a")
 
         resp = client.get(f"/api/scenario/{sid}/agents")
         agent = resp.json()[0]
-        required_fields = {"id", "name", "role", "persona", "tier", "stance", "emotion"}
+        required_fields = {
+            "id",
+            "name",
+            "role",
+            "persona",
+            "tier",
+            "stance",
+            "emotion",
+            "agent_identity_id",
+        }
         assert required_fields.issubset(set(agent.keys()))
+        assert agent["agent_identity_id"] == "identity-role-a"
 
     def test_get_agents_default_values(self, client):
         """Agent with minimal fields should have correct defaults."""
@@ -2232,6 +2268,7 @@ class TestAgentsEndpoint:
         assert agent["name"] == "最小"
         assert agent["tier"] == "IMPORTANT"
         assert agent["emotion"] == "neutral"
+        assert agent["agent_identity_id"] is None
 
 
 # ── Branches Endpoint (extended) ─────────────────────────

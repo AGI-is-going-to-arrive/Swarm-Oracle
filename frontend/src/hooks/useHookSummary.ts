@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCapabilityCheck } from './useCapabilityCheck';
-import { buildSessionHeaders } from '../api/client';
+import { buildSessionHeaders, getSessionBoundUserId } from '../api/client';
 import type { CapabilitiesResponse } from '../api/client';
 
 // Direct-fetch retained: this hook needs to swallow tier-specific HTTP errors
@@ -65,6 +65,7 @@ async function fetchHookItem(
   branchId?: string,
   debateId?: string,
   identityId?: string,
+  userId?: string,
 ): Promise<HookSummaryItem> {
   try {
     let data: HookSummaryItem['data'] = null;
@@ -91,7 +92,8 @@ async function fetchHookItem(
       data = { count: r.length, latestRound: latestRound || undefined };
     } else if (key === 'identity' && identityId) {
       const iid = encodeURIComponent(identityId);
-      const r = await fetchJson<GrowthEventsResponse>(`/agents/identities/${iid}/growth-events`);
+      const uid = encodeURIComponent(getSessionBoundUserId(userId));
+      const r = await fetchJson<GrowthEventsResponse>(`/agents/identities/${iid}/growth-events?user_id=${uid}`);
       data = { count: r.events?.length ?? 0 };
     } else if (key === 'argument_map' && debateId) {
       const did = encodeURIComponent(debateId);
@@ -131,12 +133,13 @@ async function runFetchAll(
   branchId?: string,
   debateId?: string,
   identityId?: string,
+  userId?: string,
 ): Promise<HookSummaryItem[]> {
   const enabled = resolveEnabled(capabilities, debateId, identityId);
 
   const fetchers = ALL_KEYS.map((key) =>
     enabled[key]
-      ? fetchHookItem(key, scenarioId, branchId, debateId, identityId)
+      ? fetchHookItem(key, scenarioId, branchId, debateId, identityId, userId)
       : Promise.resolve(makeDisabledItem(key)),
   );
 
@@ -153,6 +156,7 @@ export function useHookSummary(
   branchId?: string,
   debateId?: string,
   identityId?: string,
+  userId?: string,
 ): UseHookSummaryResult {
   const { capabilities, loading: capLoading } = useCapabilityCheck('causal_graph');
   const [state, setState] = useState<{ items: HookSummaryItem[] }>({
@@ -167,13 +171,13 @@ export function useHookSummary(
     const gen = ++genRef.current;
     let cancelled = false;
 
-    runFetchAll(capabilities, scenarioId, branchId, debateId, identityId).then((resolved) => {
+    runFetchAll(capabilities, scenarioId, branchId, debateId, identityId, userId).then((resolved) => {
       if (cancelled || gen !== genRef.current) return;
       setState({ items: resolved });
     });
 
     return () => { cancelled = true; };
-  }, [capabilities, capLoading, scenarioId, branchId, debateId, identityId, fetchTrigger]);
+  }, [capabilities, capLoading, scenarioId, branchId, debateId, identityId, userId, fetchTrigger]);
 
   const refetch = useCallback(() => {
     setFetchTrigger((n) => n + 1);

@@ -48,6 +48,7 @@ function jsonFail(status = 500) {
 beforeEach(() => {
   fetchMock.mockReset();
   capLoading = false;
+  localStorage.clear();
   Object.values(mockCapabilities).forEach((c) => { (c as { enabled: boolean }).enabled = true; });
   mockCapabilities.web_search.enabled = false;
   mockCapabilities.custom_agents.enabled = false;
@@ -112,12 +113,16 @@ describe('useHookSummary', () => {
       return jsonOk({});
     });
 
-    const { result } = renderHook(() => useHookSummary('scenario-1', undefined, undefined, 'id-1'));
+    const { result } = renderHook(() => useHookSummary('scenario-1', undefined, undefined, 'id-1', 'director-1'));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     const identity = result.current.items.find((i) => i.key === 'identity');
     expect(identity?.enabled).toBe(true);
     expect(identity?.data?.count).toBe(1);
+    const growthEventsCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes('/agents/identities/id-1/growth-events'),
+    );
+    expect(growthEventsCall?.[0]).toContain('user_id=director-1');
   });
 
   it('argument_map only fetched when debateId is provided', async () => {

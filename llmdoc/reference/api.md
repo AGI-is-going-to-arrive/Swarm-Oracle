@@ -96,6 +96,7 @@
   - `reuse_existing` 需要带 `identity_id`，后端会校验它属于当前 `user_id`
   - `create_new` 会让真正的 identity 解析跳过 L2 fuzzy reuse
 - `GET /api/scenario/{scenario_id}` 和 `GET /api/scenario/{scenario_id}/story` 的 `branches[]` 当前会回显 `fork_round / replay_kind / replay_source_branch_id`；普通分支的 replay 字段可为 `null`，replay/import/counterfactual/resume 分支用它保留来源分支语义，结果页也用 `fork_round` 定位可回溯的 fork point。
+- `GET /api/scenario/{scenario_id}` 的 `agents[]` 与 `GET /api/scenario/{scenario_id}/agents` 当前都会返回结果页 Agent picker 需要的展示字段；除 `id / name / role / tier / stance / emotion / group_id` 外，还包括 `persona` 和可空 `agent_identity_id`。
 - `GET /api/scenario/{scenario_id}/story` 在 `FEATURE_RESULT_VERDICT=true` 且 `parsed_context.result_quality` 有数据时，会额外回显顶层 `verdict / verdict_confidence`，以及 `branches[].question_answer`。关闭开关、旧 scenario、空字符串或 malformed `result_quality` 都会降级为空字段；未知 confidence 会归一化为 `medium`。
 - `GET /api/scenario/{scenario_id}/conversations` 受 `FEATURE_AGENT_CONVERSATION` gate，要求 signed principal 能看到该 scenario；`cursor` 是 offset cursor，`limit` 范围 `1..50`，返回项只带 thread 摘要，完整 turn 历史仍走 `GET /api/conversation/{thread_id}`。
 - `POST /api/scenario/{scenario_id}/cancel` 只接受 `parsing / simulating / narrating / cancelled`；`done / error` 会返回 `409 SIMULATION_NOT_RUNNING`。成功请求会把 scenario 持久化到 `cancelled`，并尽量取消本进程里的后台 task。运行中 worker 即使已经有本地 cancel token，也会继续读取 DB `cancelled` 状态，避免跨进程取消被漏掉。
@@ -114,6 +115,7 @@
 
 - 主模式与 replay 页面优先使用 artifact 短链。
 - `POST /api/replay-artifact` 当前要求 payload 能解析出 source scenario；后端会把 artifact 绑定到该 scenario owner。
+- 当前前端在创建主模式、ending-room 和 roundtable replay artifact、inline token 或 local readonly copy 前，会先把 scenario replay 里的 Agent 字段收成展示白名单，剥掉 `agent_identity_id` 和 persona。后端仍按收到的 payload 持久化，不替客户端补字段。
 - 常见业务错误包括：`REPLAY_ARTIFACT_PAYLOAD_INVALID`、`REPLAY_ARTIFACT_PAYLOAD_TOO_LARGE`、`REPLAY_ARTIFACT_NOT_FOUND`。
 
 ## Interventions
@@ -299,6 +301,8 @@
   - `origin_node_id`
   - `origin_node_type`
   这些字段会回显到 thread response，并写入后续 turn 的 `source_*` 字段。
+- `origin_node_type` 只允许字母、数字、下划线、短横线和冒号；`faction_event:betrayal` 这类 namespace 合法，换行或指令文本会被 422 拒绝。
+- `origin_node_type=agent` 且 `origin_node_id=agent:<agent_id>` 时，conversation prompt 会按同 scenario 的 Agent name / role / persona 绑定回答身份；找不到 Agent 时才回到普通 graph analyst 口径。
 - `POST /api/conversation/start` 和 `POST /api/conversation/{thread_id}/turn` 当前也接受可选 `origin_excerpt`：
   - strip 后为空会当作未传
   - 上限 1000 字符

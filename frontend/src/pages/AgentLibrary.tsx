@@ -159,6 +159,23 @@ export function AgentLibrary() {
   const customAgents = filtered.filter((a) => a.kind === 'custom');
   const generatedAgents = filtered.filter((a) => a.kind === 'generated');
 
+  const openProfileFromHash = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const identityId = params.get('agent_profile')?.trim();
+    if (!identityId) return;
+    const match = identities.find((identity) => identity.id === identityId);
+    if (match) {
+      setProfileAgent(match);
+    }
+  }, [identities]);
+
+  useEffect(() => {
+    openProfileFromHash();
+    window.addEventListener('hashchange', openProfileFromHash);
+    return () => window.removeEventListener('hashchange', openProfileFromHash);
+  }, [openProfileFromHash]);
+
   if (capLoading) {
     return <div className="agent-page agent-page--centered">{t('common.loading', 'Loading...')}</div>;
   }

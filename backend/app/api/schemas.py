@@ -13,6 +13,7 @@ from app.config import settings
 _CAMPAIGN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 _CAMPAIGN_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _CAMPAIGN_WEEK_PATTERN = re.compile(r"^\d{4}-W\d{2}$")
+_ORIGIN_NODE_TYPE_PATTERN = re.compile(r"^[A-Za-z0-9_:-]+$")
 
 # ── Request schemas ──────────────────────────────────────
 
@@ -563,6 +564,17 @@ class StartConversationRequest(BaseModel):
         if len(normalized) > 128:
             raise ValueError("origin_* fields must be at most 128 characters")
         return normalized or None
+
+    @field_validator("origin_node_type")
+    @classmethod
+    def _validate_origin_node_type(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if not _ORIGIN_NODE_TYPE_PATTERN.fullmatch(v):
+            raise ValueError(
+                "origin_node_type must use only letters, numbers, underscores, dashes, or colons"
+            )
+        return v
 
     @field_validator("origin_excerpt")
     @classmethod

@@ -1551,6 +1551,7 @@ async def get_agents(
                 "stance": a.stance,
                 "emotion": a.emotion,
                 "group_id": a.group_id,
+                "agent_identity_id": getattr(a, "agent_identity_id", None),
                 "group_name": group_lookup.get(a.group_id, {}).get("group_name") if a.group_id else None,  # noqa: E501
             }
             for a in agents

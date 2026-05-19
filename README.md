@@ -90,7 +90,7 @@
 | Result Quality / Question Anchoring | 已落地，受 `FEATURE_RESULT_VERDICT` 和 `/api/capabilities.result_verdict` 控制；结果页在有 verdict 时先给出直接回答原问题的预测结论、置信度，verdict 缺失时显示中性的“暂无预测结论”并保留原问题；结局卡有 `question_answer` 时会把分支级一句话回答放在概率条上方 |
 | Director Campaign | 已落地，含 52 条 daily challenge catalog、streak、7 条 weekly track + leaderboard、15 个 registry badge、非线性 mastery level、首页成长 sheet、后端权威 `score_breakdown` 与结果页导演复盘 / 因果档案；结果页导演笔记和导演复盘默认收起，展开后再查看完整复盘，导演复盘的关键记录超过 3 条时用原生 disclosure 展开 |
 | Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight`；设置 `ADMIN_TOKEN` 后 admin API 要求 `X-Admin-Token` |
-| Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；identity continuity preflight 超时会按 504 返回，后端不会把它伪装成“无匹配”；首页启动流当前会提示错误但继续按无 continuity override 启动；自建 Agent 不开放 `CORE` 层级 |
+| Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；Agent Library 支持 `#agent_profile=<id>&tab=memory` 档案深链；identity continuity preflight 超时会按 504 返回，后端不会把它伪装成“无匹配”；首页启动流当前会提示错误但继续按无 continuity override 启动；自建 Agent 不开放 `CORE` 层级 |
 | Agent Backups | 已落地，受 `FEATURE_PERSONA_EXPORT` gate；支持单个 / 批量导出 `schema_version=1` Agent 备份 JSON；从备份创建会为当前用户创建新的 custom Agent，不覆盖已有 Agent，并把 decision bias 归一化到安全的 5 维数值 |
 | Education Templates | 已落地，受 `FEATURE_EDUCATION_TEMPLATES` gate；首页可打开模板选择器，按学科与难度筛选后回填问题、Agent 数和轮数 |
 | Prediction Journal | 已落地，受 `FEATURE_PREDICTION_JOURNAL` gate；支持个人预测日志、resolve、校准曲线和 journal 页面；绑定 scenario 时按当前用户校验所有权，跨用户或无 owner 的旧 scenario 统一隐藏成 404，calibration 查询已走有界/索引路径 |
@@ -100,7 +100,7 @@
 | Counterfactual Replay & Compare | 已落地，支持 counterfactual / resume / compare；counterfactual 当前是“改一句旧发言再重演”，只允许选择来源分支里真实存在的回合和该回合发过言的 Agent；resume 当前会先选来源分支，再使用同分支 checkpoint picker，并把结构化 checkpoint summary 转成人话预览，没有 checkpoint 时才回到 round 输入；续跑结局卡会标出来源分支和独立概率说明，compare 当前采用单活跃 Theater + shared round selector |
 | Debate Arena | 已落地，含 live/result/replay、counterplay、judge rationale、readonly replay import；argument map 支持五种 verdict status、三层 DAG 和移动端列表；LLM cast 更新后 live 页会刷新名字、角色和 persona，长角色/人设可换行或展开，裁判卡显示本地化的 `待裁决 / 已裁决` 状态；live 阶段地图默认折叠，自动化会通过稳定按钮 hook 展开后再检查完整阶段列表；只有分享链接过长并回退到本地只读 `?local=` 时，结果页才会明确显示 `Save local read-only copy` |
 | Oracle Chambers / Worldline Roundtable | 已进入可玩签收基线，支持 participant picker、follow-up、replay/share/import、`manual_shortlist`、`expert_witness`、`trait_mix`、`fault_line_first`、`witness_augmented`；single-ending 当前已补 `继续追问 / 另开线程 / 复制纪要 / 追问洞察 / quote 级追问`，roundtable 当前已补 `Continue this table / Start anchored thread / Copy roundtable brief / phase insight / quote 级追问 / 点名这位代表`；桌面代表改选当前支持 `drag-to-seat / keyboard reseat`，移动端保留 `click-to-seat`；roundtable committed transcript 与 verdict 摘要都默认折叠，用户展开后再看完整内容；phase insight 标题保留短 preview，展开后显示按中文 96 字 / 英文 160 chars 预算压缩后的主持人提炼，并会先去掉重复的问题前缀；`quote / verdict / key_moment / phase` 当前都走显式锚点语义；readonly replay 已签收到 anchored thread restore；单结局结果页只暴露 `进入会客厅 / 只改一步`；EndingChatModal 当前支持 `后续三回合 (epilogue)` 与 `证据投牌 (evidence_card)`，证据卡追问会把用户引用的世界线保留到 assistant turn；圆桌 `survey / analyst` 是 completed live roundtable 的 Deep Dive SSE 工作台能力，不是 EndingChatModal 的 interaction mode；Oracle 主文案当前以 factual anchor + LLM generation/rewrite fallback 为主，角色身份和动态词汇提示按 `UNTRUSTED DATA` 处理，空流式、仅 reasoning 输出或 JSON 字符串输出都会收口到可直接显示的人话 fallback |
-| Replay & Import | 主模式与 Debate 均支持；主模式 Replay Trace 支持分页和分支过滤；scenario/story branch response 会回显 `replay_kind / replay_source_branch_id` 以保留 replay provenance；Debate replay 当前已补 `share -> readonly replay -> reload restore -> import` 完整 E2E 覆盖 |
+| Replay & Import | 主模式与 Debate 均支持；主模式 Replay Trace 支持分页和分支过滤；scenario/story branch response 会回显 `replay_kind / replay_source_branch_id` 以保留 replay provenance；新生成的主模式和 Oracle replay payload 会剥掉 Agent 的 `agent_identity_id` 和 persona，只保留回放展示需要的字段；Debate replay 当前已补 `share -> readonly replay -> reload restore -> import` 完整 E2E 覆盖 |
 | Snapshot Export / Import | 已接线，受 `FEATURE_SNAPSHOT_EXPORT` gate；后端导出 ZIP snapshot 并校验导入 archive/manifest/checksum，导出会剥离常见 secret key/base URL/token 变体和 JSON 字符串里的敏感字段，malformed 或标量 JSON 字符串按空值处理，并携带只读干预 receipt ledger；导入会拒绝非 UTF-8 JSON/JSONL、ZIP traversal、symlink、重复物理成员、超大 member、异常压缩比和无法映射的顶层 receipt branch 引用；旧 snapshot 仍可导入，pending intervention 不会被重新排队；前端首页导入、结果页导出 |
 | KG Realtime | 已接线，causal graph append 返回 `GraphDelta`，scenario WS 可推送 `kg:delta` / `kg:snapshot_invalidated`；payload 过大或 out-of-sync 时仍以 REST snapshot fallback 为准 |
 | i18n | UI 与自动生成内容按输入语言联动输出；QuickStart、ResultView campaign/archive 文案和 Phaser Title/Ending 文案都走 locale key；Oracle fresh live room 的英文文案已补去混句兜底，不再把中文 hinge 直接嵌进英文句子；Oracle 英文 signoff 当前已覆盖 Chromium full 与桌面 Firefox / WebKit scoped regression |
@@ -189,11 +189,11 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-当前验证口径（最近更新：2026-05-20 ResultView 导演复盘折叠复核）：
+当前验证口径（最近更新：2026-05-20 ResultView Agent 追问 / replay 脱敏复核）：
 
-- backend：`python -m pytest tests/ -x --timeout=120 -q` 为 `3238 passed, 6 skipped`；Oracle / narrator / simulator 窄集 `tests/test_narrator.py tests/test_simulator.py tests/test_ending_room_service.py` 为 `297 passed`。
-- frontend：`npx tsc --noEmit`、`npm run lint`、`npm run build`、`npx vitest run --reporter=dot` 通过；full vitest 为 `201 files / 2194 tests passed`；i18n key 与 placeholder parity 为 `zh: 2752`、`en: 2752`、OK。
-- ResultView 浏览器复核：本地完成结果页上，导演笔记和导演复盘默认收起；展开/收起时 `aria-expanded`、`aria-hidden`、`inert` 和 caret 同步；关键记录 disclosure、EN/中文切换、移动端无横向溢出和 console error 均已复核。
+- backend：`TOKENIZERS_PARALLELISM=false python -m pytest tests/ -q` 为 `3269 passed, 6 skipped`；`ruff check app/` 通过。
+- frontend：`npx tsc --noEmit`、`npx eslint src/ --max-warnings=0`、`npm run build`、`npx vitest run` 通过；full vitest 为 `202 files / 2199 tests passed`；i18n key 与 placeholder parity 为 `zh: 2759`、`en: 2759`、OK。
+- ResultView 浏览器复核：本地完成结果页上，浮动紫色 Agent 按钮已移除；`下一步` 的 `找 Agent 追问` 是场内按钮，会打开 Agent picker，再进入 `NodeConversationSheet`；带 identity 的 Agent 会显示 `查看档案` 深链；关闭 sheet 后会清掉当前追问目标；390px 移动视口无横向溢出，console error 为 0。
 - Oracle browser E2E：`e2e:roundtable` 与 `e2e:ending-room` 在本地 preview/backend 口径通过；Ending Room summary 里 desktop/mobile replay coverage error 为 `null`，readonly replay / reload restore / import 关键字段齐全。
 - `git diff --check` 通过。
 

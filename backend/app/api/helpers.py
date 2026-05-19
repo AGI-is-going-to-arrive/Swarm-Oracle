@@ -1357,9 +1357,17 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
             created_at=s.created_at.isoformat(),
             total_rounds=ctx.get("simulation_rounds"),
             agents=[
-                {"id": a.id, "name": a.name, "role": a.role,
-                 "tier": a.tier.value, "stance": a.stance, "emotion": a.emotion,
-                 "group_id": a.group_id}
+                {
+                    "id": a.id,
+                    "name": a.name,
+                    "role": a.role,
+                    "persona": a.persona,
+                    "tier": a.tier.value,
+                    "stance": a.stance,
+                    "emotion": a.emotion,
+                    "group_id": a.group_id,
+                    "agent_identity_id": getattr(a, "agent_identity_id", None),
+                }
                 for a in agents
             ],
             branches=[

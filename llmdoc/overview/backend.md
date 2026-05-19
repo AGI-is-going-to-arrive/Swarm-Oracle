@@ -46,7 +46,7 @@
 | Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、搜索深度预算、缓存、`ProviderSearchOutcome` 状态映射、native citation 序列化与上下文格式化 |
 | LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断、JSON stream-first fallback；Responses API native search tools 只在已识别 provider + 非 proxy 路径启用 |
 | Native Search Adapters | `backend/app/services/native_search_adapters.py` | provider-specific native search tools/citation parsing；当前有 xAI native pilot、OpenAI structural adapter/fixtures 和 null adapter；OpenAI live signoff 仍是 backlog |
-| Conversation Service | `backend/app/services/conversation_service.py` | conversation thread/turn 创建、bootstrap claim、SSE stream 终态与取消原因收口 |
+| Conversation Service | `backend/app/services/conversation_service.py` | conversation thread/turn 创建、bootstrap claim、Agent origin voice binding、SSE stream 终态与取消原因收口 |
 | Roundtable Survey | `backend/app/services/roundtable_survey.py` | 世界线圆桌问卷 SSE；按 room 绑定 participant、补 identity memory、并发发问后逐条回传 |
 | Roundtable Analyst | `backend/app/services/roundtable_analyst.py` | 世界线圆桌 analyst SSE；有界 ReACT 工具循环，串 causal graph / identity memory / web evidence |
 | Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile；identity profile 写入有 pending gate、SQLite runtime lock、本地 Chroma lock 与 5 秒调用方等待上限 |
@@ -222,6 +222,7 @@
   - 实体提取和 persona 批次使用独立超时；persona 生成按 `0.7 -> 0.6 -> 0.5` 递减温度重试。部分 persona 失败会保留已创建 Agent，并在响应里返回 `agents_failed`；全部失败才返回结构化错误
   - Agent 备份导出/导入使用 `schema_version=1`；bulk export 最多 20 个；import 会创建新的 custom identity，不覆盖旧数据
   - Agent 备份导入会把 decision bias 归一化到 `caution / optimism / conservatism / risk_tolerance / creativity` 5 个 key；boolean、`NaN/Inf` 或非数字值落到默认值，超出 `0..1` 的数字会被 clamp
+- Scenario agent 响应当前会给结果页 picker 返回展示所需字段：`GET /api/scenario/{id}` 的 `agents[]` 和 `GET /api/scenario/{id}/agents` 都带 `persona`，有绑定身份时还带 `agent_identity_id`，未绑定时为 `null`。
 - Prediction Journal 当前由 `prediction_journal_entry` 持久化：
   - 迁移 `027_prediction_journal` 创建 journal 表
   - 迁移 `029_prediction_journal_calibration_index` 给 `user_id / resolved_at / actual_outcome` 增加 calibration 查询索引
@@ -370,7 +371,9 @@
   - `origin_branch_id` 必须属于同一个 scenario；跨 scenario branch 会按不存在处理，不把其它 scenario transcript 暴露给当前 thread
 - Agent conversation prompt 当前会按 origin 语境选择回答身份：
   - 有 `agent_name` 时，继续按 in-story Agent 口径回答
+  - 如果前端传 `origin_node_type=agent` 且 `origin_node_id=agent:<agent_id>`，后端会先从 scenario parsed agents 找同 id 的 Agent，再回退查同 scenario 的 `Agent` 行，用 name / role / persona 绑定回答身份
   - 没有 `agent_name` 时，按 graph analyst 口径解释节点、分支、回合和相邻图谱上下文，不冒充具体参与者
+- `origin_node_type` 是 enum-like identifier，不接受自由文本；当前只允许字母、数字、下划线、短横线和冒号，既保留 `faction_event:betrayal` 这类命名空间，也挡掉换行 prompt injection 文本。
 - `WS /ws/agent-conversation/{thread_id}` 当前也已上线：复用统一首帧 auth / pending-auth 容量门控；feature 关闭或 thread 不存在时返回 `4404`；owner freeze 按 thread owner 收口；容量仍按 scenario 维度计算，不会因为 thread 数量放大
   - scenario 删除如果发生在流式中途，会先在删除事务内把活跃 turn 标成 `scenario_deleted`，真正唤醒 in-flight SSE 的 cancel signal 改为事务提交后再发；这样 rollback 不会提前把客户端打成终态。当前 delete endpoint 会在 `session.commit()` 后 drain `session.info["scenario_deleted_turn_ids"]` 并统一调用 `signal_scenario_deleted_turns()`；signal 失败只记 warning，不会把已经删成功的请求误报成 500。事务成功提交后，流末尾仍会补 `turn_error(code=SCENARIO_DELETED)`；如果场景刚好在首个 chunk 出来前被删，也会直接收成这条终态，不再误落到 `LLM_5XX`
   - `DELETE /api/conversation/{thread_id}/active` 当前除了唤醒活跃流式协程，也会把还没开始流式的预留 `pending` assistant turn 直接收成 `aborted`；不会再出现 abort 已返回，但同一条预留 turn 还被后续 `/turn` claim 走的假成功
@@ -450,9 +453,8 @@
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 - custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；最近记录里后端仓库级 ruff 已全绿。
 - 最近后端完整复验：
-  - `python -m pytest tests/ -x --timeout=120 -q`：`3238 passed, 6 skipped`
-  - Oracle narrator / simulator / ending room 窄集：`297 passed`
-  - `ruff check .`：通过
+  - `TOKENIZERS_PARALLELISM=false python -m pytest tests/ -q`：`3269 passed, 6 skipped`
+  - `ruff check app/`：通过
 - Campaign/profile label 本轮窄集复验：
   - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`：`154 passed`
   - `ruff check app/services/daily_challenges.py tests/test_gameplay_contract.py tests/test_interventions.py`：通过

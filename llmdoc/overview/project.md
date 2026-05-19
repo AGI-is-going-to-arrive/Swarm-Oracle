@@ -29,10 +29,12 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。preflight 解析阶段超时会返回 `504 IDENTITY_PREFLIGHT_TIMEOUT`，后端不会把它当成“无匹配”；当前首页启动流会提示错误，但继续按无 continuity override 启动。
 - 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑、收藏和选择自建 Agent，也可以在 `/agents/new` 通过 PDF document tab 生成 Agent；长 PDF 会走采样粗扫 + 全文证据精提，部分 persona 失败时保留已创建 Agent 并显示失败数量。首页 attach panel 会以卡片展示 persona、knowledge domains 和 decision bias，最多选择 5 个，并只把 identity id 传给主推演。自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。Agent Library 的 favorites 是普通筛选按钮，Workshop 的 manual/document tab 支持键盘方向键切换；capability/favorite 失败会显示本地化错误和 retry，不直接露出原始后端文本。
 - 当 `persona_export` capability 开启时，Agent Library 的卡片可导出 Agent 备份，顶部可从备份创建新的 custom Agent；Agent Workshop header 也会显示同一套备份工具，编辑已有 Agent 时才显示导出。备份导入不会覆盖已有身份，并会把 decision bias 归一化到安全的 5 维数值；粘贴 JSON 入口默认折叠在高级区域。导入/导出失败会显示本地化提示，意外错误只进入 debug log。
+- Agent Library 当前支持 `#agent_profile=<id>&tab=memory` 档案深链；ResultView 里的 Agent 档案入口会走这条 hash，而不是把用户直接丢到普通 `/agents` 列表态。
 - 当 `prediction_journal` capability 开启时，`/me/journal` 提供个人预测日志、resolve 状态和 calibration 可视化；绑定 scenario 时按当前用户校验所有权，跨用户或无 owner 的旧 scenario 统一隐藏成 404，刷新时会忽略迟到响应，不用旧请求覆盖新列表。
 - `SimulationView` 负责 live 推演、Classic 分支树、Theater、干预、玩法卡、结构化押注、干预回执与 capture。Theater live 启动在已有 Agent 且推演未完成时会跳过标题等待直接进入 `WorldScene`；场景 PNG 缺失时先显示程序背景，再在真实 texture 到达后替换。Classic 分支卡片仍以 `Branch.title` 为真实标题；标题太短时，前端只补一小段 `description / fork_reason` 线索，方便用户看懂路线差异。右侧 Agent 面板在筛选某个 Agent 时，会把该 Agent 的发言按世界线分组，并在组内按 round 排序。
 - live 推演当前支持显式取消：前端会弹确认框，后端把 `parsing / simulating / narrating` 的 scenario 落成 `cancelled` 并请求后台任务停止；已有本地 token 的 worker 也会继续回查 DB `cancelled`，`cancelled / done / error` 终态不会被后续 stage 覆盖。
 - `ResultView` 负责结局对比、Result Quality verdict、`counterfactual compare / resume / faction timeline`、档案、导演复盘 / campaign summary、分享、导出、结果追问与 replay/import；当 `result_verdict` capability 开启时，结果页会显示 ResultVerdictPanel：story 带 verdict 时先给出直接回答原问题的预测结论和置信度，verdict 缺失时显示中性的“暂无预测结论”并保留原问题。结局卡有 `question_answer` 时会把分支级一句话回答放在概率条上方；旧 scenario 或关闭开关时 header subtitle 仍走原来的多结局口径。因果档案当前改成问题、判定、系统读数、玩家动作、下一步和证据账本，不再把关键记录堆成一长串；“档案结论”会优先显示 story verdict，再补 branch insight。导演笔记和导演复盘默认收起；收起态会用 `aria-hidden` 和 `inert` 避免键盘进入隐藏内容。导演复盘会优先使用后端 `score_breakdown`，并把 campaign summary、what-if、世界线承诺、押注、干预和关键时刻展示成生涯分变化、等级进度、本局读数和下一步入口；关键记录先显示前 3 条，更多记录用原生 disclosure 展开；replay snapshot 带 `campaignSummary` 时只读展示，不重新 finalize。当后端写入 `web_search_context` 时，也会显示真实世界来源卡片；如果 payload 带 `native_citations`，结果页会单独展示 native citations，并跳过非字符串 text、非 http(s) URL 或 malformed replay 数据。`FEATURE_NEW_SOURCES=true` 且有 `family_context` 时，结果页当前还会渲染 `Polymarket / Finance / Academic / News` 四张 source family card；`failed / unsupported_provider / fallback_unconstrained / search_skipped` 都有专门文案，后端 `status_reason` 会进入卡片说明，desktop 和 mobile sheet 的 `aria-describedby` id 不复用。历史 replay 里已有数据但当前 family capability 未开启时，会显示 recorded badge，不把历史来源伪装成 live provider。`polymarket.configured_host=non-us` 时会显示地域限制占位。结果页当前的 `What's Next / 下一步` bridge 会展示 `causal / replay / compare / workbench / agents / share` 入口，disabled 卡片保留可见状态说明，但不再渲染无 `href` 的 `<a>`，文字对比也不再靠整卡 opacity 压低。分享弹窗当前还可导出 1200×630 PNG 卡片，卡片只包含问题、主导结局、可见来源 family 和前 3 个 Agent 名，不写入 BYOK key、base URL 或用户 token。结局详情当前只在展开时挂载，收起时不会再把完整 story / key moments 留在可访问性树里。续跑结局卡会显示 `续跑分支` badge、来源分支按钮和独立概率说明；点击来源按钮会展开并聚焦来源分支标题。结果页里的 `FactionTimeline` 当前会优先跟随正在展开查看的分支；未展开时会落到概率最高分支，并改成真实纵向时间线，`stance / confidence` 等指标直接可见，不再只藏在 tooltip badge 里。结果页的 compare / counterfactual / resume 入口也跟随同一条 analysis branch 语义，不再固定拿 `branches[0]`；counterfactual 入口会用 story 返回的 `fork_round` 和 `parent_branch_id` 定位来源分支，只允许改写来源分支里真实存在的一句旧发言；resume 面板在可用时会优先让用户先选分支，再选择同分支 checkpoint，并把可读 `compressed_summary` 摘成预览；没有 checkpoint 时才回到 round number 输入。结果追问也跟随同一条 analysis branch，把当前结局标题、洞察、分支原因、关键时刻和对比分支传给对话面板。replay 模式下会继续保留 replay-safe 的 `causal graph` 入口和 `FactionTimeline`，但 `counterfactual / resume / result conversation` 这类 live-only 面板仍保持隐藏。标题、空态、轮次与事件标签都会跟随 UI 语言；FactionTimeline lead 文案当前也已走 i18n key + `{{title}}` 插值。`CompareDigestView` 的非活跃 pane 当前会保留更完整的待机镜像，不再是纯黑占位。前端 gated route 当前也把 `feature disabled` 和 `capability probe 失败` 分开显示：`ReplayView` 不再 silent redirect，`KGExplorerView / CompareDigestView / FactionTimeline` 也不再直接把原始错误字符串或所有异常压成空态。
+- ResultView 的 `找 Agent 追问` 入口当前是场内 `ScenarioAgentPicker`，受 `agent_conversation` capability、当前 scenario agent 列表和非 replay 模式共同控制；选择 Agent 后打开 `NodeConversationSheet`，origin 使用 `nodeType=agent`、`nodeId=agent:<id>`、当前 analysis branch 和截断 persona，关闭 sheet 或切换 scenario/replay 状态会清掉当前追问目标。带 `agent_identity_id` 的 Agent 会显示 `查看档案` 链接，指向 Agent Library 的 hash profile。
 - Sprint 3 核心体验当前已完成接线：结果页有时钟倒拨入口、HOPs 分支概率动画、预测分享卡片和 snapshot export；首页有 snapshot import；snapshot export/import 会保留已完成干预的只读回执，但不会把 pending intervention 重新排队；圆桌 analyst 使用 ReACT 工具链面板；人格漂移只做 warning，不阻断 verdict。
 - Sprint 4 品质提升当前已完成本地审查与修复：backend KG realtime event contract、ResultView 第一阶段拆分、isZh 文案继续迁到 locale key、voice variant 18 种和 Phaser reduced-motion guard 已并入当前工作树。ResultView 后续如果继续改，应优先收窄 `ResultContext` 的宽 context。
 - ResultView 当前界面文案区分 `Reader / Explore` 两种模式；Reader 是默认阅读模式，并保留可用的 resume 面板、下一步入口和 header 图谱直达入口；Explore 会展开因果图、KG 和节点追问等较重面板，切换时滚到下一步区。用户选择仍保存在本地偏好里，内部键名沿用 `workbench`。
@@ -43,7 +45,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - `ArgumentMap` 在 node-only 图时仍保留 screen-reader list 和键盘可达性，状态筛选也不会误把整张 node-only 图筛成空态；强度摘要会跟随当前筛选结果。argument map 当前按 verdict -> claims -> evidence/rebuttals 的三层 DAG 排布，支持 5 种 verdict status，移动端可切到按类型分组的列表。`KGExplorerView` 当前使用真实 G6 主图和 minimap；搜索 / 类型过滤会更新可视图，不再只更新旁路列表。KG 节点点击会传业务 `kgType`、branch 与 round 给 `NodeConversationSheet`，不会把 G6 shape type 当节点语义。
 - `ExportPanel` 会区分 PNG / SVG 的忙态文案；SVG 导出改成 native SVG layer + node rebuild，长标题会按节点卡宽度裁剪显示，但 `<title>` 和文本内容仍保留完整节点标题，不再依赖 `foreignObject`。`LanguageSwitcher` 的 accessible name 当前也会带可见 `EN / 中文` 文本，语音控制和读屏口径不再分叉。后端 runtime repair 当前以最新 `causal-graph / argument-map` snapshot 为 authority，重复 snapshot 的旧残留会直接删除，不再把 stale 数据合回当前图。
 - CausalReview 节点点击当前会直接打开 `NodeConversationSheet`，并把 event / fork / outcome 的可读摘要作为 origin excerpt 交给后端 prompt context；面板会显示对话目标、卡片意义、前因、后续和相关关系，空态追问也会按事件、分支、结局、知识节点或裁决节点分别生成。大图超过 50 个节点时会用更紧的节点高度、间距和更低 `minZoom`，避免首屏过度撑开。KG 工作台桌面节点点击先显示 `NodeQuickCard` 快览卡；卡片会按视口钳位，用户再选择是否打开完整详情。
-- Agent conversation 历史当前可在节点对话等入口重新加载；列表按 scenario 做 cursor pagination，详情加载后由宿主组件恢复已提交 assistant 内容，迟到的 list/detail 响应不会覆盖新筛选或新节点。
+- Agent conversation 历史当前可在节点对话和结果页 Agent 追问等入口重新加载；列表按 scenario 做 cursor pagination，详情加载后由宿主组件恢复已提交 assistant 内容，迟到的 list/detail 响应不会覆盖新筛选、新节点或新 Agent。
 - 对话与 replay 相关入口当前会显示 `QuotaBadge`，通过后端 quota summary 读取 conversation / replay bucket；本机无 signed principal / org 时 conversation 显示本机模式，replay 仍显示 scenario branch 用量。
 - Leaderboard 当前支持按 scenario type、日期和 Agent 数做 segment filter；筛选状态会同步到 URL，不带筛选时仍按旧 leaderboard 数组渲染，带筛选时会按匹配的已评分 prediction 重新计算分段指标，快速切换筛选时会忽略迟到响应。
 
@@ -164,6 +166,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - `scenarioMeta` 仍存在，但只承担缓存、兼容与 replay 输入职责。
 - 自定义 BYOK 与搜索增强 override 的官方托管 base URL 当前要求 `https`；只有本地或 self-hosted 开发地址才允许 `http`。
 - replay 分享优先走后端 `ReplayArtifact`；当 artifact 不可用且 URL token 也过大时，Oracle replay 会回退为本地只读副本链接。
+- 新生成的主模式、ending-room 和 roundtable replay payload 会先清理 scenario replay 里的 Agent 字段：保留 `id / name / role / tier / stance / emotion / group / source_type / is_returning` 等展示字段，剥掉 `agent_identity_id` 和 persona；旧 replay token 仍按兼容路径解码。
 - Oracle / roundtable replay coverage 当前按 fail-closed 收口：
   - replayCoverageError 或 readonly replay / reload restore / import 关键字段缺失会直接失败
   - 不再以 best-effort `summary.json` 保底通过
@@ -189,15 +192,14 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - campaign finalize 优先从持久化 `director_state_json / gameplay_state_json` 派生 `score_breakdown`、daily/streak、weekly bonus 和 badge unlock；旧 scenario 缺少 `campaign_context` 时仍保留 legacy fallback。
   - 首页成长 sheet 读取静态 badge definitions、当前用户 badges、mastery 和 weekly summary；旧本地数据里的 `daily_challenge / archive_record / bet_winner` 徽章 id 会映射到当前 registry id 展示。
 - 最近完整本地验证：
-  - backend `ruff check .`：通过
-  - backend `python -m pytest tests/ -x --timeout=120 -q`：`3238 passed, 6 skipped`
-  - backend Oracle narrator / simulator / ending room 窄集：`297 passed`
+  - backend `ruff check app/`：通过
+  - backend `TOKENIZERS_PARALLELISM=false python -m pytest tests/ -q`：`3269 passed, 6 skipped`
   - frontend `npx tsc --noEmit`：通过
-  - frontend `npm run lint`：通过
+  - frontend `npx eslint src/ --max-warnings=0`：通过
   - frontend `npm run build`：通过
-  - frontend full vitest：`201 files / 2194 tests passed`
-  - frontend i18n key + placeholder parity：`zh: 2752`、`en: 2752`、parity OK
-  - ResultView 导演笔记 / 导演复盘 browser spot-check：默认收起、展开/收起 ARIA 与 caret 同步、关键记录 disclosure、EN/中文切换、移动端无横向溢出、console error 为 0
+  - frontend full vitest：`202 files / 2199 tests passed`
+  - frontend i18n key + placeholder parity：`zh: 2759`、`en: 2759`、parity OK
+  - ResultView Agent follow-up browser spot-check：`/result/42ef3edc-8a33-49ed-997a-835e12ea6f35` 上浮动紫色按钮已移除，`找 Agent 追问` 会打开 Agent picker，带 identity 的 Agent 有 `查看档案` 链接，选择 Agent 后打开 `NodeConversationSheet`；关闭 sheet 后目标清空，390px mobile 无横向溢出，console error 为 0
   - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过；ending-room replay coverage error 全为 null，mobile fit 为 true
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0
   - CampaignProgressSheet browser spot-check：desktop 与 mobile forced-colors / reduced-motion 下可打开、可滚动，console/page error 为 0

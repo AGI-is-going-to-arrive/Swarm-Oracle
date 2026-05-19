@@ -420,8 +420,24 @@ npm test -- --run src/pages/AgentLibrary.test.tsx src/pages/AgentWorkshopView.te
 - `/agents` 创建 `IMPORTANT / CROWD` 两档自建 Agent，列表 badge 与编辑回填一致。
 - `/` 主模式 Agent attach panel 选中自建 Agent 后，创建 scenario 请求带 `custom_agent_identity_ids`；loading/error/retry/empty 与超过 5 个可选项时的选择上限都要可见。
 - Debate 创建时，已选自建 Agent 的前 2 个 ID 进入 `custom_agent_ids`。
-- `/result/:id` 在 `custom_agents` capability 开启时显示 Agent Library bridge。
+- `/result/:id` 在 `agent_conversation` capability 开启、当前 scenario 有 Agent 且不是 replay 模式时显示 `找 Agent 追问`；点击后应打开场内 Agent picker，而不是跳 `/agents`。带 identity 的 Agent 才显示 `查看档案` 深链。
 - 移动端 tier selector 单列显示，badge 不溢出。
+
+### ResultView Agent follow-up / replay sanitization 窄集
+
+如果这轮改动碰到结果页 Agent 追问、Agent profile hash 深链、scenario replay 或 Oracle replay 分享，优先跑下面这组：
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m pytest tests/test_agent_conversation.py tests/test_api.py -q
+ruff check app/api/helpers.py app/api/scenarios.py app/api/schemas.py app/services/conversation_service.py tests/test_agent_conversation.py tests/test_api.py
+
+cd ../frontend
+npx vitest run src/components/result/ScenarioAgentPicker.test.tsx src/pages/ResultView.test.tsx src/pages/AgentLibrary.test.tsx src/hooks/useHookSummary.test.ts src/lib/scenarioReplay.test.ts src/lib/oracleReplay.test.ts src/pages/WorldlineRoundtableView.test.tsx --reporter=dot
+npx tsc --noEmit
+npx eslint src/components/result/ScenarioAgentPicker.tsx src/components/result/ScenarioAgentPicker.test.tsx src/pages/ResultView.tsx src/pages/result/ExploreDeeperBridge.tsx src/pages/result/ResultModals.tsx src/pages/AgentLibrary.tsx src/hooks/useHookSummary.ts src/lib/scenarioReplay.ts src/lib/oracleReplay.ts src/pages/WorldlineRoundtableView.tsx --max-warnings=0
+```
 
 ### Sprint 5-6 Agent / Journal / Templates / Leaderboard 回归
 

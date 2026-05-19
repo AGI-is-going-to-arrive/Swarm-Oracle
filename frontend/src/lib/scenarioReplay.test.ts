@@ -15,9 +15,10 @@ import {
   decodeScenarioReplayToken,
   encodeScenarioReplayToken,
   normalizeScenarioResultReplayPayload,
+  sanitizeScenarioResultReplayPayload,
   type ScenarioResultReplayPayload,
 } from './scenarioReplay';
-import { encodeReplayEnvelope, ReplayTokenTooLargeError } from './replayCodec';
+import { decodeReplayEnvelope, encodeReplayEnvelope, ReplayTokenTooLargeError } from './replayCodec';
 
 const scenario: Scenario = {
   id: 'scenario-1',
@@ -197,6 +198,47 @@ describe('scenarioReplay helpers', () => {
     expect(decoded?.predictions).toHaveLength(replayPayload.predictions.length);
     expect(decoded?.scenarioMeta.director.remainingPoints).toBe(2);
     expect(decoded?.scenarioMeta.archive.profileId).toBe('law');
+  });
+
+  it('removes identity-only agent fields from replay payloads before encoding', async () => {
+    const sensitiveAgent: AgentInfo = {
+      id: 'agent-secret',
+      name: 'Sensitive Agent',
+      role: 'Private strategist',
+      persona: 'Do not publish this persona baseline',
+      tier: 'IMPORTANT',
+      emotion: 'focused',
+      agent_identity_id: 'identity-secret',
+      stance: 'cautious',
+      group_id: 'group-1',
+      group_name: 'Advisors',
+      source_type: 'custom',
+      is_returning: true,
+    };
+    const sensitivePayload: ScenarioResultReplayPayload = {
+      ...replayPayload,
+      scenario: {
+        ...scenario,
+        agents: [sensitiveAgent],
+      },
+      agents: [sensitiveAgent],
+    };
+
+    const sanitized = sanitizeScenarioResultReplayPayload(sensitivePayload);
+    expect(sanitized.scenario.agents[0]).not.toHaveProperty('agent_identity_id');
+    expect(sanitized.scenario.agents[0]).not.toHaveProperty('persona');
+    expect(sanitized.agents[0]).not.toHaveProperty('agent_identity_id');
+    expect(sanitized.agents[0]).not.toHaveProperty('persona');
+
+    const token = await encodeScenarioReplayToken(sensitivePayload);
+    const raw = await decodeReplayEnvelope<ScenarioResultReplayPayload>(
+      token,
+      'scenario_result_v1',
+    );
+    expect(raw?.scenario.agents[0]).not.toHaveProperty('agent_identity_id');
+    expect(raw?.scenario.agents[0]).not.toHaveProperty('persona');
+    expect(raw?.agents[0]).not.toHaveProperty('agent_identity_id');
+    expect(raw?.agents[0]).not.toHaveProperty('persona');
   });
 
   it('drops authority-backed runtime state when replay snapshot already carries authority', () => {

@@ -3963,7 +3963,7 @@ describe('ResultView campaign summary', () => {
 });
 
 describe('ResultView explore deeper bridge', () => {
-  it('renders five bridge entries when branches exist and bridge capabilities are loaded', async () => {
+  it('renders bridge links and the agent follow-up action when branches exist and bridge capabilities are loaded', async () => {
     setMockCapabilities({
       causal_graph: { enabled: true },
       replay_trace: { enabled: true },
@@ -4015,7 +4015,8 @@ describe('ResultView explore deeper bridge', () => {
     const bridgeHeading = await screen.findByRole('heading', { name: 'result.next_steps_heading' });
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
-    expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(5);
+    expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(4);
+    expect(within(bridgeSection as HTMLElement).getByRole('button', { name: /result.next_ask_agent/ })).toBeInTheDocument();
   });
 
   it('passes only populated source families into share image artifacts', async () => {
@@ -4369,7 +4370,7 @@ describe('ResultView explore deeper bridge', () => {
     expect(compareEntry).toHaveTextContent('result.bridge_single_branch');
   });
 
-  it('marks every disabled bridge entry with aria-disabled=true', async () => {
+  it('marks disabled bridge links and action entries with their semantic disabled states', async () => {
     vi.mocked(apiClient.getStory).mockResolvedValueOnce({
       scenario_id: 'scenario-1',
       question: 'What if the archive had to sync?',
@@ -4416,11 +4417,12 @@ describe('ResultView explore deeper bridge', () => {
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
     const entries = within(bridgeSection as HTMLElement).getAllByRole('link');
-    expect(entries).toHaveLength(5);
+    expect(entries).toHaveLength(4);
     for (const entry of entries) {
       expect(entry).toHaveAttribute('aria-disabled', 'true');
       expect(entry.tagName).toBe('DIV');
     }
+    expect(within(bridgeSection as HTMLElement).getByRole('button', { name: /result.next_ask_agent/ })).toBeDisabled();
   });
 });
 

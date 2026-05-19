@@ -39,6 +39,7 @@ import {
   normalizeOracleReplayPayload,
   readOracleReplayPayload,
   saveOracleReplayLocalCopy,
+  sanitizeOracleReplayPayload,
   type OracleReplayPayload,
 } from '../lib/oracleReplay';
 import { isReplayEnvelopeLikelyTooLarge } from '../lib/replayCodec';
@@ -167,6 +168,7 @@ export default function ResultView() {
   const [storyData, setStoryData] = useState<StoryData | null>(null);
   const [scenario, setScenario] = useState<Scenario | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [agentFollowupTarget, setAgentFollowupTarget] = useState<AgentInfo | null>(null);
   const [predictions, setPredictions] = useState<PredictionInfo[]>([]);
   const [expandedBranch, setExpandedBranch] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -226,6 +228,9 @@ export default function ResultView() {
   const endingRoomLiveActiveThreadId = useEndingRoomStore((state) => state.activeThreadId);
   const isReplayMode = Boolean(replayPayload);
   const activeScenarioId = scenario?.id ?? id ?? replayPayload?.scenario.id ?? null;
+  useEffect(() => {
+    setAgentFollowupTarget(null);
+  }, [activeScenarioId, isReplayMode]);
   const hasUnscored = predictions.some((p) => p.score == null);
   const fallbackRuntimePreset = useMemo(() => loadScenarioRuntimePreset(), []);
   const scenarioRuntimePreset = useMemo(
@@ -1270,6 +1275,7 @@ export default function ResultView() {
       const {
         buildScenarioReplayUrl,
         compactScenarioMetaForReplay,
+        sanitizeScenarioResultReplayPayload,
       } = await loadScenarioReplayHelpers();
       const compactReplaySnapshot = {
         ...replaySnapshot,
@@ -1278,19 +1284,20 @@ export default function ResultView() {
           stripGameplayAuthority: hasScenarioGameplayAuthority(replaySnapshot.scenario.gameplay_state ?? null),
         }),
       };
+      const encodedReplaySnapshot = sanitizeScenarioResultReplayPayload(compactReplaySnapshot);
       const artifact = await Promise.resolve()
         .then(() => createReplayArtifact(
           'scenario_result_v1',
-          compactReplaySnapshot as unknown as Record<string, unknown>,
+          encodedReplaySnapshot as unknown as Record<string, unknown>,
         ))
         .catch(() => null);
-      if (!artifact && isReplayEnvelopeLikelyTooLarge('scenario_result_v1', compactReplaySnapshot)) {
+      if (!artifact && isReplayEnvelopeLikelyTooLarge('scenario_result_v1', encodedReplaySnapshot)) {
         return;
       }
       try {
         const url = artifact
           ? `${window.location.origin.replace(/\/$/, '')}/result/replay?share=${artifact.id}`
-          : await buildScenarioReplayUrl(window.location.origin, compactReplaySnapshot);
+          : await buildScenarioReplayUrl(window.location.origin, encodedReplaySnapshot);
         if (!cancelled) {
           setReplayUrl(url);
         }
@@ -1427,23 +1434,24 @@ export default function ResultView() {
     };
 
     try {
+      const sanitizedReplayPayload = sanitizeOracleReplayPayload(effectiveEndingRoomReplayPayload);
       const artifact = await createReplayArtifact(
-        effectiveEndingRoomReplayPayload.kind,
-        effectiveEndingRoomReplayPayload as unknown as Record<string, unknown>,
+        sanitizedReplayPayload.kind,
+        sanitizedReplayPayload as unknown as Record<string, unknown>,
       ).catch(() => null);
       let url: string;
       let usedLocalFallback = false;
       if (artifact) {
-        url = buildOracleReplayShareUrl(window.location.origin, effectiveEndingRoomReplayPayload, artifact.id);
+        url = buildOracleReplayShareUrl(window.location.origin, sanitizedReplayPayload, artifact.id);
       } else if (isReplayEnvelopeLikelyTooLarge(
-        effectiveEndingRoomReplayPayload.kind,
-        effectiveEndingRoomReplayPayload,
+        sanitizedReplayPayload.kind,
+        sanitizedReplayPayload,
       )) {
-        const localId = saveOracleReplayLocalCopy(effectiveEndingRoomReplayPayload);
-        url = buildOracleReplayLocalUrl(window.location.origin, effectiveEndingRoomReplayPayload, localId);
+        const localId = saveOracleReplayLocalCopy(sanitizedReplayPayload);
+        url = buildOracleReplayLocalUrl(window.location.origin, sanitizedReplayPayload, localId);
         usedLocalFallback = true;
       } else {
-        url = await buildOracleReplayUrl(window.location.origin, effectiveEndingRoomReplayPayload);
+        url = await buildOracleReplayUrl(window.location.origin, sanitizedReplayPayload);
       }
       await copyText(url);
       finalizeCopyState(usedLocalFallback);
@@ -1837,6 +1845,8 @@ export default function ResultView() {
     gameplayProfileLabel,
     gameplayProfileHooks,
     shareSourceFamilies,
+    agentFollowupTarget,
+    setAgentFollowupTarget,
   };
 
   return (
@@ -1872,6 +1882,7 @@ export default function ResultView() {
           scenarioId={activeScenarioId}
           branchId={branches[0]?.id}
           identityId={primaryAgentIdentityId ?? undefined}
+          userId={directorIdentity.userId}
         />
       )}
 

@@ -514,6 +514,7 @@ vi.mock('../lib/oracleReplay', () => ({
   loadOracleReplayLocalCopy: (id: string, expectedKind?: string) => loadOracleReplayLocalCopyMock(id, expectedKind),
   normalizeOracleReplayPayload: vi.fn(),
   readOracleReplayPayload: vi.fn(),
+  sanitizeOracleReplayPayload: (payload: unknown) => payload,
   saveOracleReplayLocalCopy: (payload: unknown) => saveOracleReplayLocalCopyMock(payload),
 }));
 

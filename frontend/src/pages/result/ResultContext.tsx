@@ -126,6 +126,10 @@ export interface ResultViewContextValue {
 
   // share envelope sources
   shareSourceFamilies: string[] | undefined;
+
+  // in-context agent follow-up (opens NodeConversationSheet from ExploreDeeperBridge)
+  agentFollowupTarget: AgentInfo | null;
+  setAgentFollowupTarget: (agent: AgentInfo | null) => void;
 }
 
 const ResultViewContext = createContext<ResultViewContextValue | null>(null);

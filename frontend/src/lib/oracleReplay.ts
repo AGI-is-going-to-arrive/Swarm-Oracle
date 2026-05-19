@@ -6,6 +6,7 @@ import {
 } from './replayCodec';
 import {
   normalizeScenarioResultReplayPayload,
+  sanitizeScenarioResultReplayPayload,
   type ScenarioResultReplayPayload,
 } from './scenarioReplay';
 import { createCompatUuid } from './compatUuid';
@@ -118,17 +119,27 @@ export function normalizeOracleReplayPayload(
   };
 }
 
+export function sanitizeOracleReplayPayload(payload: OracleReplayPayload): OracleReplayPayload {
+  return {
+    ...payload,
+    scenarioReplay: payload.scenarioReplay
+      ? sanitizeScenarioResultReplayPayload(payload.scenarioReplay)
+      : null,
+  };
+}
+
 export function saveOracleReplayLocalCopy(payload: OracleReplayPayload): string {
+  const sanitizedPayload = sanitizeOracleReplayPayload(payload);
   const id = createCompatUuid();
   const storage = getOracleReplayStorage();
   if (!storage) {
-    oracleReplayMemoryCache[id] = payload;
+    oracleReplayMemoryCache[id] = sanitizedPayload;
     return id;
   }
 
   const raw = storage.getItem(ORACLE_REPLAY_LOCAL_STORAGE_KEY);
   const parsed = raw ? JSON.parse(raw) as Record<string, OracleReplayPayload> : {};
-  parsed[id] = payload;
+  parsed[id] = sanitizedPayload;
   storage.setItem(ORACLE_REPLAY_LOCAL_STORAGE_KEY, JSON.stringify(parsed));
   return id;
 }
@@ -157,8 +168,9 @@ export async function buildOracleReplayUrl(
   origin: string,
   payload: OracleReplayPayload,
 ): Promise<string> {
-  const token = await encodeReplayEnvelope(payload.kind, payload);
-  return `${normalizeReplayOrigin(origin)}${buildOracleReplayPath(payload, ORACLE_REPLAY_QUERY_KEY, token)}`;
+  const sanitizedPayload = sanitizeOracleReplayPayload(payload);
+  const token = await encodeReplayEnvelope(sanitizedPayload.kind, sanitizedPayload);
+  return `${normalizeReplayOrigin(origin)}${buildOracleReplayPath(sanitizedPayload, ORACLE_REPLAY_QUERY_KEY, token)}`;
 }
 
 export function buildOracleReplayShareUrl(

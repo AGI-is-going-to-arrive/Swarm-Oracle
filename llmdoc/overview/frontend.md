@@ -27,12 +27,12 @@
 |------|------|------|
 | InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、daily challenge、weekly track、difficulty、streak/refresh countdown、成长卡与 CampaignProgressSheet、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、搜索深度选择、推荐已配置搜索 / 高级自定义 provider 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
 | SetupWizardView | `frontend/src/pages/SetupWizardView.tsx` | `/admin/setup` 3 步 provider 配置向导；选择 preset、填 API key/base URL、测试连接并写入 session-scoped provider policy |
-| AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、编辑/删除入口、返回首页按钮、卡片级 Agent 备份导出与从备份创建 Agent 入口 |
+| AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、`#agent_profile=<id>&tab=memory` 档案深链、编辑/删除入口、返回首页按钮、卡片级 Agent 备份导出与从备份创建 Agent 入口 |
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择、PDF document upload tab，以及 capability-gated Agent 备份工具 |
 | IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、只读干预回执、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel（verdict 缺失时显示 unavailable fallback）、分支级 question answer（显示在概率条上方）、因果档案 / archive（档案结论优先 story verdict）、默认折叠的导演笔记/导演复盘、campaign summary、weekly leaderboard preview、achievement toast、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel（verdict 缺失时显示 unavailable fallback）、分支级 question answer（显示在概率条上方）、因果档案 / archive（档案结论优先 story verdict）、默认折叠的导演笔记/导演复盘、campaign summary、weekly leaderboard preview、achievement toast、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、结果页 Agent 追问、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | WorkbenchView | `frontend/src/pages/WorkbenchView.tsx` | 独立图谱工作台；支持 `graph / split / kg` 三种 view，保留 URL 里的 analysis branch，并提供返回结果页链接 |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
@@ -85,6 +85,7 @@
 - 新生成的 replay token 当前统一走 `plain.*`，上限 `4096` 字符；payload 过大时继续回退 artifact / local readonly。旧的 `gz.*` token 仍可解码。
 - Simulation replay 的 branch / round selection 只在 simulation complete 后保留；live 或 incomplete 状态会清掉旧 selection，完成态下缺失或失效 selection 会回到默认 branch 和最新 round。
 - ResultView replay payload 可以携带 `campaignScenarioSummary / campaignSummary`；`campaignSummary` 可带后端 `score_breakdown`，replay 页会用快照渲染导演复盘，但不会重新 finalize campaign。
+- 新生成的主模式、ending-room 和 roundtable replay payload 会先清理 scenario replay Agent 字段：`agent_identity_id` 和 persona 不进入 inline token、artifact payload 或 local readonly copy；旧 token decode 后也会走同一组展示字段白名单。
 
 ## 实时链路
 
@@ -115,6 +116,8 @@
   - `causal / replay / compare / workbench / agents / share` 共用同一套 bridge 样式
   - header 也会在 capability 允许时直接显示 `查看因果图谱` 和 `/workbench/:id` 图谱工作台入口
   - workbench 卡片当前指向因果、知识图谱和节点追问同一视图，并保留当前 analysis branch query
+  - `agents` 卡片当前是按钮，不再跳 `/agents`；它会打开 `ScenarioAgentPicker`，再用 `NodeConversationSheet` 发起场内 Agent 追问
+  - Agent picker 只在 `agent_conversation` enabled、当前 scenario 有 agents 且非 replay 模式时可用；带 `agent_identity_id` 的 Agent 会显示 `查看档案` hash 深链
   - disabled 卡片保留 link 语义，但不再渲染无 `href` 的 `<a>`
   - disabled 状态会保留可见原因和 `aria-describedby`，文字对比不再靠整卡 opacity 压低
 - `ResultView` 当前在 `result_verdict` capability enabled 时显示 `ResultVerdictPanel`：
@@ -235,6 +238,8 @@
 | `PipelineStepper.tsx` | `frontend/src/components/PipelineStepper.tsx` | `/sim/:id` 与 `/result/:id` 的 fixed-bottom pipeline progressbar；error 状态下 `aria-valuenow` 会钳到有效范围 |
 | `AgentPanel.tsx` | `frontend/src/components/AgentPanel.tsx` | 主推演右侧 Agent 列表与实时发言；筛选某个 Agent 时，会按世界线分组展示该 Agent 的发言，并在每组内按 round 排序 |
 | `ResultConversationWidget.tsx` | `frontend/src/components/ResultConversationWidget.tsx` | 结果页轻量追问入口，复用 `NodeConversationSheet`；会把当前 analysis branch 的标题、insight、fork reason、关键时刻和对比分支传成 result origin；replay 结果页不渲染这条 live-only 入口 |
+| `HookSummaryPanel.tsx` / `useHookSummary.ts` | `frontend/src/components/result/` / `frontend/src/hooks/` | 结果页追问前的上下文摘要；identity growth-events 请求会带 session-bound `user_id`，避免 identity endpoint 因缺少 owner scope 返回 400 |
+| `ScenarioAgentPicker.tsx` | `frontend/src/components/result/ScenarioAgentPicker.tsx` | 结果页 `找 Agent 追问` dialog；用 `ul > li > button` 呈现场内 Agent，展示 tier、role、persona，带 identity 时提供 Agent profile hash 深链，选择后交给 `NodeConversationSheet` |
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
 | `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
 | `NodeDetailPanel.tsx` | `frontend/src/components/NodeDetailPanel.tsx` | 两个图面的共用节点详情侧栏；显示 type / round / payload / unit details；event / fork / outcome 会优先展示用户可读语义字段 |
@@ -450,7 +455,7 @@
 - `ResultView` 当前在 replay 模式下会：
   - 禁用 `Export Markdown`
   - 隐藏 `score_predictions`
-  - 隐藏 `ResultConversationWidget` 和结果追问 action card
+  - 隐藏 `ResultConversationWidget` 和 Agent follow-up picker
   - 保留本地导入、只读分享与 permalink 相关动作
   - 保留 replay-safe 的 `causal graph` 入口
   - 保留按当前展开分支切换的 `FactionTimeline`
@@ -492,7 +497,7 @@
   - 点击后会把 `CounterfactualPanel` 的来源分支同步到 parent branch，并把轮次同步到对应 `fork_round`
   - `CounterfactualPanel` 只允许选择该来源分支里已保存消息的回合，以及该回合实际发言过的 Agent；提交时会带原始发言文本，让后端做唯一消息匹配
 - `HOPsAnimation` 当前已挂到 `ResultView`，多分支结果页会在 endings grid 前展示分支概率采样动画和“100 次采样”说明；replay 模式下不播放。
-- `ResultView` 当前在 `custom_agents` capability 开启时会显示 Agent Library bridge；这条入口只受 `custom_agents` gate 影响，不再误绑到 `agent_identity` gate。
+- `ResultView` 当前在 `agent_conversation` capability 开启、当前 scenario 有 Agent 且不是 replay 模式时，会显示场内 Agent follow-up bridge；这条入口打开 `ScenarioAgentPicker`，不会直接跳到 `/agents`。Agent 卡上的档案链接只在有 `agent_identity_id` 时显示，并指向 Agent Library 的 hash profile。
 - `ResultView` 的阵营分析当前不再固定绑 `branches[0]`：
   - 用户展开了某个结局时，`FactionTimeline` 跟随当前展开分支
   - 没有展开分支时，默认跟随概率最高的分支
@@ -592,11 +597,11 @@
   - 浏览器实测本机结果页显示 `对话 · 本机模式`，header 可直接进入因果图谱和图谱工作台；点击 `探索` 会滚到下一步区。
 - 当前 frontend 稳定验证口径：
   - `npx tsc --noEmit`：通过
-  - `npm run lint`：通过
+  - `npx eslint src/ --max-warnings=0`：通过
   - `npm run build`：通过
-  - full vitest：`201 files / 2194 tests passed`
-  - i18n key + placeholder parity：`zh: 2752`、`en: 2752`、parity OK
-  - ResultView 导演笔记 / 导演复盘 browser spot-check：默认收起、展开/收起 ARIA 与 caret 同步、关键记录 disclosure、EN/中文切换、移动端无横向溢出、console error 为 0
+  - full vitest：`202 files / 2199 tests passed`
+  - i18n key + placeholder parity：`zh: 2759`、`en: 2759`、parity OK
+  - ResultView Agent follow-up browser spot-check：浮动紫色按钮已移除，`找 Agent 追问` 会打开 Agent picker，带 identity 的 Agent 有 `查看档案` 链接，选择 Agent 后打开 `NodeConversationSheet`；关闭 sheet 后目标清空，390px mobile 无横向溢出，console error 为 0
   - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0
   - CampaignProgressSheet browser spot-check：desktop 与 mobile forced-colors / reduced-motion 下可打开、可滚动，console/page error 为 0

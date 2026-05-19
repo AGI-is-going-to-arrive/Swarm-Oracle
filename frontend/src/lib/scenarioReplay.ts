@@ -24,13 +24,27 @@ const REPLAY_KIND = 'scenario_result_v1';
 export interface ScenarioResultReplayPayload {
   scenario: Scenario;
   storyData: StoryData;
-  agents: AgentInfo[];
+  agents: ScenarioReplayAgentInfo[];
   predictions: PredictionInfo[];
   scenarioMeta: ScenarioMeta;
   campaignScenarioSummary?: CampaignScenarioSummary | null;
   campaignSummary?: CampaignFinalizeResult | null;
   isDailyChallenge?: boolean;
 }
+
+export type ScenarioReplayAgentInfo = Pick<
+  AgentInfo,
+  | 'id'
+  | 'name'
+  | 'role'
+  | 'tier'
+  | 'stance'
+  | 'emotion'
+  | 'group_id'
+  | 'group_name'
+  | 'source_type'
+  | 'is_returning'
+>;
 
 export interface CompactScenarioMetaForReplayOptions {
   stripDirectorAuthority?: boolean;
@@ -51,6 +65,43 @@ function isNullableString(value: unknown): boolean {
 
 function isStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isReplayAgentSourceType(value: unknown): value is ScenarioReplayAgentInfo['source_type'] {
+  return value === 'generated' || value === 'custom' || value === 'replay' || value === null;
+}
+
+function sanitizeScenarioReplayAgent(agent: AgentInfo): ScenarioReplayAgentInfo {
+  const replayAgent: ScenarioReplayAgentInfo = {
+    id: agent.id,
+    name: agent.name,
+    role: agent.role,
+    tier: agent.tier,
+    emotion: agent.emotion,
+  };
+  if (typeof agent.stance === 'string') {
+    replayAgent.stance = agent.stance;
+  }
+  if (typeof agent.group_id === 'string') {
+    replayAgent.group_id = agent.group_id;
+  }
+  if (typeof agent.group_name === 'string') {
+    replayAgent.group_name = agent.group_name;
+  }
+  if (isReplayAgentSourceType(agent.source_type)) {
+    replayAgent.source_type = agent.source_type;
+  }
+  if (typeof agent.is_returning === 'boolean') {
+    replayAgent.is_returning = agent.is_returning;
+  }
+  return replayAgent;
+}
+
+function sanitizeScenarioReplayScenario(scenario: Scenario): Scenario {
+  return {
+    ...scenario,
+    agents: scenario.agents.map(sanitizeScenarioReplayAgent),
+  };
 }
 
 function isStoryBranchPayload(value: unknown): boolean {
@@ -210,6 +261,16 @@ export function compactScenarioMetaForReplay(
   };
 }
 
+export function sanitizeScenarioResultReplayPayload(
+  payload: ScenarioResultReplayPayload,
+): ScenarioResultReplayPayload {
+  return {
+    ...payload,
+    scenario: sanitizeScenarioReplayScenario(payload.scenario),
+    agents: payload.agents.map(sanitizeScenarioReplayAgent),
+  };
+}
+
 export function normalizeScenarioResultReplayPayload(
   payload: unknown,
 ): ScenarioResultReplayPayload | null {
@@ -261,9 +322,9 @@ export function normalizeScenarioResultReplayPayload(
   }
 
   return {
-    scenario: simulationPayload.scenario,
+    scenario: sanitizeScenarioReplayScenario(simulationPayload.scenario),
     storyData: payload.storyData,
-    agents: payload.agents,
+    agents: payload.agents.map(sanitizeScenarioReplayAgent),
     predictions: payload.predictions,
     scenarioMeta: hydrateScenarioMetaSnapshot(simulationPayload.scenarioMeta),
     campaignScenarioSummary: (payload.campaignScenarioSummary ?? null) as CampaignScenarioSummary | null,
@@ -273,7 +334,7 @@ export function normalizeScenarioResultReplayPayload(
 }
 
 export async function encodeScenarioReplayToken(payload: ScenarioResultReplayPayload): Promise<string> {
-  return encodeReplayEnvelope(REPLAY_KIND, payload);
+  return encodeReplayEnvelope(REPLAY_KIND, sanitizeScenarioResultReplayPayload(payload));
 }
 
 export async function decodeScenarioReplayToken(token: string): Promise<ScenarioResultReplayPayload | null> {

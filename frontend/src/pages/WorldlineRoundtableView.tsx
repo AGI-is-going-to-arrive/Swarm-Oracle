@@ -26,6 +26,7 @@ import {
   normalizeOracleReplayPayload,
   readOracleReplayPayload,
   saveOracleReplayLocalCopy,
+  sanitizeOracleReplayPayload,
   type OracleReplayPayload,
 } from '../lib/oracleReplay';
 import { isReplayEnvelopeLikelyTooLarge } from '../lib/replayCodec';
@@ -121,15 +122,16 @@ function getPreferredScrollBehavior(): ScrollBehavior {
 function buildRoundtableReplayArtifactPayload(
   payload: OracleReplayPayload,
 ): Record<string, unknown> {
+  const sanitizedPayload = sanitizeOracleReplayPayload(payload);
   return {
-    kind: payload.kind,
-    scenarioReplay: payload.scenarioReplay,
-    scenarioId: payload.scenarioId ?? null,
-    roomSnapshot: payload.roomSnapshot,
-    roomResult: payload.roomResult,
-    branchId: payload.branchId ?? null,
-    selectedAgentIds: payload.selectedAgentIds ?? [],
-    activeThreadId: payload.activeThreadId ?? null,
+    kind: sanitizedPayload.kind,
+    scenarioReplay: sanitizedPayload.scenarioReplay,
+    scenarioId: sanitizedPayload.scenarioId ?? null,
+    roomSnapshot: sanitizedPayload.roomSnapshot,
+    roomResult: sanitizedPayload.roomResult,
+    branchId: sanitizedPayload.branchId ?? null,
+    selectedAgentIds: sanitizedPayload.selectedAgentIds ?? [],
+    activeThreadId: sanitizedPayload.activeThreadId ?? null,
   };
 }
 
@@ -1203,20 +1205,21 @@ export default function WorldlineRoundtableView() {
 
     try {
       if (!effectiveReplayPayload) return;
+      const sanitizedReplayPayload = sanitizeOracleReplayPayload(effectiveReplayPayload);
       const artifact = await createReplayArtifact(
-        'worldline_roundtable_v1',
-        buildRoundtableReplayArtifactPayload(effectiveReplayPayload),
+        sanitizedReplayPayload.kind,
+        buildRoundtableReplayArtifactPayload(sanitizedReplayPayload),
       ).catch(() => null);
       let permalink: string;
       let usedLocalFallback = false;
       if (artifact) {
-        permalink = buildOracleReplayShareUrl(window.location.origin, effectiveReplayPayload, artifact.id);
-      } else if (isReplayEnvelopeLikelyTooLarge('worldline_roundtable_v1', effectiveReplayPayload)) {
-        const localId = saveOracleReplayLocalCopy(effectiveReplayPayload);
-        permalink = buildOracleReplayLocalUrl(window.location.origin, effectiveReplayPayload, localId);
+        permalink = buildOracleReplayShareUrl(window.location.origin, sanitizedReplayPayload, artifact.id);
+      } else if (isReplayEnvelopeLikelyTooLarge(sanitizedReplayPayload.kind, sanitizedReplayPayload)) {
+        const localId = saveOracleReplayLocalCopy(sanitizedReplayPayload);
+        permalink = buildOracleReplayLocalUrl(window.location.origin, sanitizedReplayPayload, localId);
         usedLocalFallback = true;
       } else {
-        permalink = await buildOracleReplayUrl(window.location.origin, effectiveReplayPayload);
+        permalink = await buildOracleReplayUrl(window.location.origin, sanitizedReplayPayload);
       }
       await copyText(permalink);
       finalizeCopyState(usedLocalFallback);

@@ -1419,15 +1419,44 @@ def _load_prompt_context(
 
     agent_name, agent_role, agent_persona = None, None, None
     if scenario:
-        parsed = scenario.parsed_context or {}
-        agents = parsed.get("agents") or []
+        parsed = scenario.parsed_context if isinstance(scenario.parsed_context, dict) else {}
+        agents = parsed.get("agents") if isinstance(parsed.get("agents"), list) else []
         node_agent = (node_payload.get("agent_name") or "") if node_payload else ""
         for ag in agents:
+            if not isinstance(ag, dict):
+                continue
             if ag.get("name") == node_agent:
                 agent_name = ag.get("name")
                 agent_role = ag.get("role")
                 agent_persona = ag.get("persona")
                 break
+        if (
+            not agent_name
+            and thread.origin_node_type == "agent"
+            and thread.origin_node_id
+        ):
+            prefix = "agent:"
+            if thread.origin_node_id.startswith(prefix):
+                target_id = thread.origin_node_id[len(prefix):]
+                for ag in agents:
+                    if not isinstance(ag, dict):
+                        continue
+                    if ag.get("id") == target_id:
+                        agent_name = ag.get("name")
+                        agent_role = ag.get("role")
+                        agent_persona = ag.get("persona")
+                        break
+                if not agent_name:
+                    db_agent = session.exec(
+                        select(Agent).where(
+                            Agent.id == target_id,
+                            Agent.scenario_id == thread.scenario_id,
+                        )
+                    ).first()
+                    if db_agent is not None:
+                        agent_name = db_agent.name
+                        agent_role = db_agent.role
+                        agent_persona = db_agent.persona
 
     return _PromptContext(
         scenario_question=scenario_question,

@@ -11,8 +11,8 @@ import type { StoryData, WebSearchContext, WebSearchFamily } from '../../types';
 import ShareModal from '../../components/ShareModal';
 import SnapshotExportWizard from '../../components/Export/SnapshotExportWizard';
 import EndingChatModal from '../../components/EndingChatModal';
-import { ResultActionCard } from '../../components/result/ResultActionCard';
 import { ResultConversationWidget } from '../../components/ResultConversationWidget';
+import { NodeConversationSheet } from '../../components/kg/NodeConversationSheet';
 import { PolymarketCard } from '../../components/result/PolymarketCard';
 import { SemanticScholarCard } from '../../components/result/SemanticScholarCard';
 import { NewsApiCard } from '../../components/result/NewsApiCard';
@@ -125,6 +125,9 @@ export default function ResultModals(props: ResultModalsProps) {
     resolvedProfileId,
     gameplayProfileLabel,
     gameplayProfileHooks,
+    agentFollowupTarget,
+    setAgentFollowupTarget,
+    analysisBranch,
   } = useResultContext();
 
   const polymarketContext = sourceFamilyContext.polymarket;
@@ -476,11 +479,6 @@ export default function ResultModals(props: ResultModalsProps) {
           </MobileSourceSheet>
         </>
       )}
-      {!isReplayMode && capabilities?.agent_conversation?.enabled && primaryAgentIdentityId && (
-        <ResultActionCard
-          agentIdentityId={primaryAgentIdentityId}
-        />
-      )}
       {!isReplayMode && activeScenarioId && (capabilities?.agent_conversation?.enabled ?? false) && (
         <div id="result-conversation">
           <ResultConversationWidget
@@ -489,6 +487,27 @@ export default function ResultModals(props: ResultModalsProps) {
             resultContext={resultConversationContext}
           />
         </div>
+      )}
+      {!isReplayMode
+        && activeScenarioId
+        && (capabilities?.agent_conversation?.enabled ?? false)
+        && agentFollowupTarget && (
+        <NodeConversationSheet
+          key={`${activeScenarioId}:${agentFollowupTarget.id}:${agentFollowupTarget.agent_identity_id ?? ''}`}
+          open={!!agentFollowupTarget}
+          onOpenChange={(open) => { if (!open) setAgentFollowupTarget(null); }}
+          scenarioId={activeScenarioId}
+          identityId={agentFollowupTarget.agent_identity_id ?? null}
+          origin={{
+            surface: 'result',
+            nodeId: `agent:${agentFollowupTarget.id}`,
+            nodeType: 'agent',
+            agentName: agentFollowupTarget.name,
+            nodeLabel: agentFollowupTarget.name,
+            excerpt: (agentFollowupTarget.persona ?? '').slice(0, 200),
+            branchId: analysisBranch?.id ?? null,
+          }}
+        />
       )}
     </>
   );

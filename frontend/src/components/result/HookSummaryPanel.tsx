@@ -6,6 +6,7 @@ interface HookSummaryPanelProps {
   branchId?: string;
   debateId?: string;
   identityId?: string;
+  userId?: string;
 }
 
 const HOOK_ICONS: Record<HookKey, string> = {
@@ -99,9 +100,9 @@ function HookCard({
   );
 }
 
-export function HookSummaryPanel({ scenarioId, branchId, debateId, identityId }: HookSummaryPanelProps) {
+export function HookSummaryPanel({ scenarioId, branchId, debateId, identityId, userId }: HookSummaryPanelProps) {
   const { t } = useTranslation();
-  const { items, loading, refetch } = useHookSummary(scenarioId, branchId, debateId, identityId);
+  const { items, loading, refetch } = useHookSummary(scenarioId, branchId, debateId, identityId, userId);
 
   if (!scenarioId) return null;
 
