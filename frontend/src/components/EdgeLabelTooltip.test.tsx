@@ -201,6 +201,37 @@ describe('EdgeLabelTooltip', () => {
     vi.useRealTimers();
   });
 
+  it('shows detail card on keyboard focus', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <EdgeLabelTooltip
+        labelX={100}
+        labelY={50}
+        label="causes"
+        detail="Keyboard detail"
+        edgeId="e1"
+        visible={true}
+      />,
+    );
+
+    const pill = screen.getByTestId('edge-label-pill');
+    expect(pill).toHaveAttribute('tabIndex', '0');
+
+    await user.tab();
+
+    expect(pill).toHaveFocus();
+    expect(screen.getByTestId('edge-tooltip-detail')).toBeInTheDocument();
+    expect(screen.getByText('Keyboard detail')).toBeInTheDocument();
+    expect(pill.getAttribute('aria-describedby')).toBe('edge-tooltip-e1-detail');
+
+    await user.tab();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('edge-tooltip-detail')).not.toBeInTheDocument();
+    });
+  });
+
   it('respects reduced motion (no animation on detail card)', async () => {
     mockReducedMotion = true;
     vi.useFakeTimers({ shouldAdvanceTime: true });

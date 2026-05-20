@@ -1948,6 +1948,8 @@
       "edge_caused": "导致",
       "edge_temporal": "先于",
       "edge_led_to": "导向",
+      "edge_triggered_fork": "触发分支",
+      "edge_stance_shift": "立场转变",
       "edge_relation": "{{source}} {{relation}} {{target}}",
       "error": {
         "network": "因果图谱加载失败，请检查网络后重试。",

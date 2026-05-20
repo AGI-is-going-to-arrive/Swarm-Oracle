@@ -3088,3 +3088,35 @@ body.has-argument-map .lang-switch--global {
   font-size: 0.8125rem;
   color: var(--text-muted, #555);
 }
+
+/* ── AnimatedEdge flow dot ───────────────────────────────────
+   `.edge-flow-dot` is the traveling SVG circle inside our
+   custom React Flow edge (see components/AnimatedEdge.tsx).
+   The component renders the dot whenever the edge is selected;
+   reduced-motion suppression is centralized here in CSS so we
+   don't subscribe to `matchMedia` per edge instance. */
+@media (prefers-reduced-motion: reduce) {
+  .edge-flow-dot {
+    display: none;
+  }
+}
+
+/* Edge label zoom-aware density management */
+[data-zoom-level="far"] .edge-label-anchor {
+  display: none;
+}
+[data-zoom-level="mid"] .edge-label-anchor:not([data-priority="high"]) {
+  display: none;
+}
+.edge-label-anchor {
+  display: inline-block;
+}
+.edge-label-pill {
+  display: inline-block;
+  transition: opacity 0.15s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .edge-label-pill {
+    transition: none;
+  }
+}

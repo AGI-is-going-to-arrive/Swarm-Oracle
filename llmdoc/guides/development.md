@@ -644,9 +644,19 @@ npm exec -- tsc --noEmit -p tsconfig.app.json
 npm exec -- eslint src/pages/CausalReviewView.tsx src/pages/KGExplorerView.tsx src/pages/ResultView.tsx src/components/ArgumentMap.tsx src/components/NodeDetailPanel.tsx src/components/ResultConversationWidget.tsx src/components/kg/EmptyStateQuickQuestions.tsx src/components/kg/NodeContextBanner.tsx src/components/kg/NodeConversationSheet.tsx src/components/kg/StreamingBubbleIsolated.tsx src/hooks/useAgentConversation.ts
 ```
 
+如果只复核独立工作台的因果图 zoom / edge label / branch query：
+
+```bash
+cd frontend
+npm exec -- vitest run src/components/workbench/CausalGraphBoard.test.tsx src/components/AnimatedEdge.test.tsx src/components/EdgeLabelTooltip.test.tsx src/i18n/locales.test.ts --reporter=dot
+npm exec -- eslint src/components/workbench/CausalGraphBoard.tsx src/components/workbench/CausalGraphBoard.test.tsx src/components/AnimatedEdge.tsx src/components/AnimatedEdge.test.tsx src/components/EdgeLabelTooltip.tsx src/components/EdgeLabelTooltip.test.tsx --max-warnings=0
+npm exec -- tsc --noEmit -p tsconfig.app.json
+```
+
 说明：
 
 - 如果要先收图谱节点对话 / 节点详情这条回归，优先跑上面的窄集；过了再决定要不要扩大到 full pytest / full vitest。
+- 工作台浏览器复核重点看：URL branch 是否进入 `/causal-graph?branch_id=...` 请求、far/mid/near 三档 label 密度、edge label 的 hover/focus detail、节点点击是否不被 label 层截获、ExportPanel 打开时是否保留导出完整性。
 - 这条窄集当前主要看：
   - causal graph 是否把 completed branch 投影成 `outcome` 结局节点，并用 `led_to` 接到同分支最近来源节点
   - fork label 是否使用用户可读的 `display_reason`，fork-only append 是否保留已有 provenance；旧孤立 fork 是否能回补只读 synthetic provenance

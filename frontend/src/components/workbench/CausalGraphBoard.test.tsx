@@ -3,13 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const hoisted = vi.hoisted(() => {
   const fitViewMock = vi.fn();
+  const useScenarioGraphMock = vi.fn();
   const mockScenarioGraphReturn = {
     data: null as unknown,
     loading: false,
     error: null as unknown,
     refetch: vi.fn(),
   };
-  return { fitViewMock, mockScenarioGraphReturn };
+  return { fitViewMock, useScenarioGraphMock, mockScenarioGraphReturn };
 });
 
 vi.mock('react-i18next', () => ({
@@ -20,6 +21,8 @@ vi.mock('react-i18next', () => ({
         'causal.edge_responds_to': 'responds to',
         'causal.edge_supports_stance': 'aligns with',
         'causal.edge_opposes_stance': 'opposes',
+        'causal.edge_triggered_fork': '触发分支',
+        'causal.edge_stance_shift': '立场转变',
       };
       return translations[key] ?? fallback ?? key;
     },
@@ -27,7 +30,10 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('../../hooks/useScenarioGraph', () => ({
-  useScenarioGraph: () => hoisted.mockScenarioGraphReturn,
+  useScenarioGraph: (scenarioId: string | null, branchId?: string | null) => {
+    hoisted.useScenarioGraphMock(scenarioId, branchId);
+    return hoisted.mockScenarioGraphReturn;
+  },
 }));
 
 vi.mock('@xyflow/react', async () => {
@@ -70,6 +76,7 @@ afterEach(() => {
   hoisted.mockScenarioGraphReturn.error = null;
   hoisted.mockScenarioGraphReturn.refetch.mockClear();
   hoisted.fitViewMock.mockClear();
+  hoisted.useScenarioGraphMock.mockClear();
 });
 
 describe('CausalGraphBoard', () => {
@@ -99,5 +106,45 @@ describe('CausalGraphBoard', () => {
       'Beta aligns with Gamma',
       'Gamma opposes Delta',
     ]);
+  });
+
+  it('uses known backend labels before falling back to generic caused labels', async () => {
+    hoisted.mockScenarioGraphReturn.data = {
+      id: 'g-workbench-backend-labels',
+      nodes: [
+        { id: 'n1', key: 'e1', type: 'event', label: 'Alpha', round: 1, payload: null },
+        { id: 'n2', key: 'e2', type: 'fork', label: 'Beta', round: 1, payload: null },
+        { id: 'n3', key: 'e3', type: 'stance_shift', label: 'Gamma', round: 2, payload: null },
+      ],
+      edges: [
+        { id: 'edge-1', source: 'n1', target: 'n2', type: 'caused', weight: 1, label: 'Triggered Fork' },
+        { id: 'edge-2', source: 'n2', target: 'n3', type: 'caused', weight: 1, label: 'Stance Shift' },
+      ],
+    };
+
+    render(<CausalGraphBoard scenarioId="s1" hideExport />);
+
+    expect(await screen.findByTestId('reactflow')).toBeInTheDocument();
+    const relationList = screen.getByRole('list', { name: 'Causal relations list' });
+    const items = within(relationList).getAllByRole('listitem');
+    expect(items.map((item) => item.textContent)).toEqual([
+      'Alpha 触发分支 Beta',
+      'Beta 立场转变 Gamma',
+    ]);
+  });
+
+  it('passes the selected workbench branch into graph fetching', async () => {
+    hoisted.mockScenarioGraphReturn.data = {
+      id: 'g-workbench-branch',
+      nodes: [
+        { id: 'n1', key: 'e1', type: 'event', label: 'Alpha', round: 1, payload: null },
+      ],
+      edges: [],
+    };
+
+    render(<CausalGraphBoard scenarioId="s1" branchId="branch-a" hideExport />);
+
+    expect(await screen.findByTestId('reactflow')).toBeInTheDocument();
+    expect(hoisted.useScenarioGraphMock).toHaveBeenCalledWith('s1', 'branch-a');
   });
 });

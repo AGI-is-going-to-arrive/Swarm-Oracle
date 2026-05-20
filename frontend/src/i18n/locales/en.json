@@ -1948,6 +1948,8 @@
       "edge_caused": "causes",
       "edge_temporal": "precedes",
       "edge_led_to": "leads to",
+      "edge_triggered_fork": "triggered fork",
+      "edge_stance_shift": "stance shift",
       "edge_relation": "{{source}} {{relation}} {{target}}",
       "error": {
         "network": "Unable to load the causal graph. Check your connection and try again.",

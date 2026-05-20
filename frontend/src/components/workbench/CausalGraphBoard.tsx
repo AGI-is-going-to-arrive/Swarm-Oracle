@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { ExportPanel } from '../ExportPanel';
 import { NodeDetailPanel, type NodeDetail } from '../NodeDetailPanel';
 import { NodeConversationSheet, type NodeConversationOrigin } from '../kg/NodeConversationSheet';
@@ -23,6 +24,7 @@ import {
   useEdgesState,
   type Node,
   type Edge,
+  type Viewport,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
@@ -109,38 +111,57 @@ const COLORS = {
 const NODE_W = 280;
 const NODE_H = 120;
 const LARGE_GRAPH_THRESHOLD = 50;
+const LARGE_GRAPH_FIT_MIN_ZOOM = 0.35;
 const LARGE_GRAPH_NODE_W = 280;
 const LARGE_GRAPH_NODE_H = 58;
 const PERF_TOOLTIP_LIMIT = 150;
 const PERF_TEXT_FALLBACK_LIMIT = 500;
 const NO_ARROW_TYPES = new Set(['temporal']);
 const GRAPH_COMPACT_MEDIA_QUERY = '(max-width: 768px)';
+type CausalTranslate = TFunction<'translation', undefined>;
 
 // ── Helpers ─────────────────────────────────────────────────
 
-function getCausalTypeLabel(type: string, t: (k: string, f: string) => string): string {
+function getCausalTypeLabel(type: string, t: CausalTranslate): string {
   const pair = GRAPH_TYPE_LABEL_I18N[type];
   return pair ? t(pair[0], pair[1]) : type;
 }
 
-function getEvidenceTierLabel(tier: 'low' | 'medium' | 'high', t: (k: string, f: string) => string): string {
+function getEvidenceTierLabel(tier: 'low' | 'medium' | 'high', t: CausalTranslate): string {
   return t(`causal.evidence_${tier}`, tier);
 }
 
-function getCausalEdgeRelationLabel(edge: GraphEdgeData, t: (k: string, f: string) => string): string {
-  let base: string;
-  if (edge.label?.trim()) base = edge.label.trim();
-  else if (edge.type === 'temporal') base = t('causal.edge_temporal', 'precedes');
-  else if (edge.type === 'responds_to') base = t('causal.edge_responds_to', 'responds to');
-  else if (edge.type === 'supports_stance') base = t('causal.edge_supports_stance', 'aligns with');
-  else if (edge.type === 'opposes_stance') base = t('causal.edge_opposes_stance', 'opposes');
-  else base = t('causal.edge_caused', 'causes');
+const BACKEND_LABEL_I18N: Record<string, [string, string]> = {
+  'triggered fork': ['causal.edge_triggered_fork', 'triggered fork'],
+  'stance shift': ['causal.edge_stance_shift', 'stance shift'],
+};
+
+function getCausalEdgeBaseRelationLabel(edge: GraphEdgeData, t: CausalTranslate): string {
+  if (edge.type === 'temporal') return t('causal.edge_temporal', 'precedes');
+  if (edge.type === 'responds_to') return t('causal.edge_responds_to', 'responds to');
+  if (edge.type === 'supports_stance') return t('causal.edge_supports_stance', 'aligns with');
+  if (edge.type === 'opposes_stance') return t('causal.edge_opposes_stance', 'opposes');
+  if (edge.type === 'led_to') return t('causal.edge_led_to', 'leads to');
+  const rawLabel = edge.label?.trim();
+  if (rawLabel) {
+    const mapping = BACKEND_LABEL_I18N[rawLabel.toLowerCase()];
+    if (mapping) return t(mapping[0], mapping[1]);
+    if (edge.type === 'caused' && /^(causes?|caused)$/i.test(rawLabel)) {
+      return t('causal.edge_caused', 'causes');
+    }
+    return rawLabel;
+  }
+  return t('causal.edge_caused', 'causes');
+}
+
+function getCausalEdgeRelationLabel(edge: GraphEdgeData, t: CausalTranslate): string {
+  const base = getCausalEdgeBaseRelationLabel(edge, t);
   const roundNum = edge.evidence?.source_round_number;
   if (roundNum != null) return `${base} (R${roundNum})`;
   return base;
 }
 
-function getCausalErrorMessage(error: CausalGraphErrorState, t: (k: string, f: string) => string): string {
+function getCausalErrorMessage(error: CausalGraphErrorState, t: CausalTranslate): string {
   switch (error.code) {
     case 'NETWORK_ERROR':
       return t('causal.error.network', 'Unable to load the causal graph. Check your connection and try again.');
@@ -162,7 +183,7 @@ function getCausalErrorMessage(error: CausalGraphErrorState, t: (k: string, f: s
 function layoutDagre(
   nodes: GraphNodeData[],
   edges: GraphEdgeData[],
-  t: (k: string, f: string) => string,
+  t: CausalTranslate,
   compactViewport: boolean,
   reducedMotion: boolean,
 ): { nodes: Node[]; edges: Edge[] } {
@@ -227,13 +248,31 @@ function layoutDagre(
     const tier = e.evidence?.confidence_tier;
     const tierColor = tier ? EVIDENCE_TIER_COLORS[tier] ?? undefined : undefined;
     const roundNum = e.evidence?.source_round_number;
-    const baseLabel = getCausalEdgeRelationLabel(e, t);
-    const labelParts: string[] = [];
-    if (baseLabel) labelParts.push(baseLabel);
-    if (roundNum != null && !baseLabel.includes(`R${roundNum}`)) labelParts.push(`R${roundNum}`);
-    if (tier) labelParts.push(`[${getEvidenceTierLabel(tier, t)}]`);
-    const edgeLabel = labelParts.length > 0 ? labelParts.join(' ') : undefined;
+    const baseLabel = getCausalEdgeBaseRelationLabel(e, t);
+    const edgeLabel = baseLabel || undefined;
+    const detailParts: string[] = [];
+    if (roundNum != null) {
+      detailParts.push(t('causal.edge_round_context', {
+        round: roundNum,
+        defaultValue: 'Round {{round}}',
+      }));
+    }
+    if (tier) {
+      detailParts.push(t('causal.edge_confidence_context', {
+        tier: getEvidenceTierLabel(tier, t),
+        defaultValue: 'confidence: {{tier}}',
+      }));
+    }
+    const edgeDetail = detailParts.length > 0 ? detailParts.join(' · ') : undefined;
+    const isHighPriority = e.type === 'caused' || e.type === 'led_to' || Boolean(edgeLabel && /trigger|fork|导致|导向|causes|caused|leads/i.test(edgeLabel));
     const offset = parallelOffsets.get(e.id) ?? 0;
+    const edgeData = (edgeLabel || edgeDetail || tierColor) ? {
+      ...(edgeLabel ? { label: edgeLabel } : {}),
+      ...(edgeDetail ? { detail: edgeDetail } : {}),
+      ...(tierColor ? { tierColor } : {}),
+      ...(isHighPriority ? { priority: 'high' } : {}),
+      ...(offset !== 0 ? { parallelOffset: offset } : {}),
+    } : undefined;
     return {
       id: e.id,
       source: e.source,
@@ -245,7 +284,7 @@ function layoutDagre(
       style: { stroke, strokeDasharray: style?.strokeDasharray },
       labelStyle: tierColor ? { fill: tierColor, fontSize: 10, fontWeight: 600 } : undefined,
       markerEnd: NO_ARROW_TYPES.has(e.type) ? undefined : { type: MarkerType.ArrowClosed, color: stroke },
-      data: { parallelOffset: offset, reducedMotion },
+      data: edgeData,
       ...(offset !== 0 ? { pathOptions: { offset } } : {}),
     };
   });
@@ -257,6 +296,7 @@ function layoutDagre(
 
 export default function CausalGraphBoard({
   scenarioId,
+  branchId,
   onNodeClick: externalOnNodeClick,
   className,
   hideExport = false,
@@ -270,7 +310,7 @@ export default function CausalGraphBoard({
     loading,
     error,
     refetch: fetchGraph,
-  } = useScenarioGraph(scenarioId || null);
+  } = useScenarioGraph(scenarioId || null, branchId ?? null);
 
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   const [sheetState, setSheetState] = useState<ConvSheetState>(CLOSED_SHEET);
@@ -278,10 +318,7 @@ export default function CausalGraphBoard({
 
   const exportRootId = `causal-board-${useId().replace(/:/g, '-')}`;
   const reactFlowRef = useRef<{ fitView?: (opts?: { padding?: number; duration?: number }) => void } | null>(null);
-  const pendingFitSignatureRef = useRef<string | null>(null);
-  const detailRestoreFocusRef = useRef<HTMLElement | null>(null);
-
-  const translate = useCallback((key: string, fallback: string) => t(key, fallback), [t]);
+  const [detailRestoreFocusTarget, setDetailRestoreFocusTarget] = useState<HTMLElement | null>(null);
 
   const searchState = useMemo(() => {
     if (!graphData) return { data: null, matchCount: 0, relatedCount: 0 };
@@ -321,29 +358,53 @@ export default function CausalGraphBoard({
 
   const layoutResult = useMemo(() => {
     if (!filteredData || filteredData.nodes.length === 0 || isNonInteractiveFallback) return { nodes: [], edges: [] };
-    return layoutDagre(filteredData.nodes, filteredData.edges, translate, isCompactViewport, reducedMotion);
-  }, [filteredData, isCompactViewport, isNonInteractiveFallback, translate, reducedMotion]);
-
-  const layoutSignature = useMemo(() => (
-    `${layoutResult.nodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${layoutResult.edges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
-  ), [layoutResult]);
+    return layoutDagre(filteredData.nodes, filteredData.edges, t, isCompactViewport, reducedMotion);
+  }, [filteredData, isCompactViewport, isNonInteractiveFallback, t, reducedMotion]);
 
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState(layoutResult.nodes);
   const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState(layoutResult.edges);
-  const flowSignature = useMemo(() => (
-    `${flowNodes.map(n => `${n.id}:${n.position.x}:${n.position.y}`).join('|')}::${flowEdges.map(e => `${e.id}:${e.source}:${e.target}`).join('|')}`
-  ), [flowNodes, flowEdges]);
+  const [currentZoom, setCurrentZoom] = useState(1);
+
+  const onViewportChange = useCallback(({ zoom }: Viewport) => {
+    const bucket = zoom < 0.3 ? 0 : zoom < 0.6 ? 1 : 2;
+    setCurrentZoom(prev => {
+      const prevBucket = prev < 0.3 ? 0 : prev < 0.6 ? 1 : 2;
+      return bucket !== prevBucket ? zoom : prev;
+    });
+  }, []);
+
+  const viewportFitOptions = useMemo(() => ({
+    padding: isCompactViewport ? 0.2 : 0.24,
+    duration: 0,
+    ...(flowNodes.length > LARGE_GRAPH_THRESHOLD ? { minZoom: LARGE_GRAPH_FIT_MIN_ZOOM } : {}),
+  }), [isCompactViewport, flowNodes.length]);
+
+  const isExportPanelVisible = !hideExport && nodeCount > 0 && !isNonInteractiveFallback;
+  // ExportPanel captures this ReactFlow canvas, so keep all nodes mounted while export controls are visible.
+  const shouldCullInvisibleElements = !isExportPanelVisible && flowNodes.length > 30;
 
   useEffect(() => {
-    pendingFitSignatureRef.current = layoutSignature;
     setFlowNodes(layoutResult.nodes);
     setFlowEdges(layoutResult.edges);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layoutSignature, setFlowNodes, setFlowEdges]);
+    if (layoutResult.nodes.length === 0 || layoutResult.nodes.length > PERF_TEXT_FALLBACK_LIMIT) return;
+    let innerRaf: number | null = null;
+    const outerRaf = requestAnimationFrame(() => {
+      innerRaf = requestAnimationFrame(() => {
+        reactFlowRef.current?.fitView?.(viewportFitOptions);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(outerRaf);
+      if (innerRaf !== null) cancelAnimationFrame(innerRaf);
+    };
+  }, [layoutResult, setFlowNodes, setFlowEdges, viewportFitOptions]);
 
   useEffect(() => {
     if (!selectedNode || !filteredData) return;
-    if (!filteredData.nodes.some(n => n.id === selectedNode.id)) setSelectedNode(null);
+    if (!filteredData.nodes.some(n => n.id === selectedNode.id)) {
+      const t = setTimeout(() => setSelectedNode(null), 0);
+      return () => clearTimeout(t);
+    }
   }, [selectedNode, filteredData]);
 
   const highlightedPath = useMemo(() => {
@@ -352,47 +413,56 @@ export default function CausalGraphBoard({
   }, [selectedNode, layoutResult.edges]);
 
   useEffect(() => {
-    setFlowNodes(prev => prev.map(n => ({
-      ...n,
-      data: {
-        ...n.data,
-        selected: selectedNode?.id === n.id,
-        connected: Boolean(highlightedPath && selectedNode?.id !== n.id && highlightedPath.has(n.id)),
-        expanded: selectedNode?.id === n.id,
-        dimmed: highlightedPath ? !highlightedPath.has(n.id) : false,
-      },
-    })));
+    setFlowNodes(prev => {
+      let changed = false;
+      const next = prev.map(n => {
+        const wantSelected = selectedNode?.id === n.id;
+        const wantConnected = Boolean(highlightedPath && selectedNode?.id !== n.id && highlightedPath.has(n.id));
+        const wantExpanded = wantSelected;
+        const wantDimmed = highlightedPath ? !highlightedPath.has(n.id) : false;
+        const data = n.data as Record<string, unknown>;
+        if (
+          data.selected === wantSelected
+          && data.connected === wantConnected
+          && data.expanded === wantExpanded
+          && data.dimmed === wantDimmed
+        ) {
+          return n;
+        }
+        changed = true;
+        return {
+          ...n,
+          data: {
+            ...data,
+            selected: wantSelected,
+            connected: wantConnected,
+            expanded: wantExpanded,
+            dimmed: wantDimmed,
+          },
+        };
+      });
+      return changed ? next : prev;
+    });
   }, [highlightedPath, selectedNode?.id, setFlowNodes]);
 
   useEffect(() => {
     setFlowEdges(prev => {
-      if (!highlightedPath) return prev.map(e => ({ ...e, selected: false, style: { ...e.style, opacity: 1 } }));
-      return prev.map(e => {
-        const onPath = highlightedPath.has(e.source) && highlightedPath.has(e.target);
-        return {
-          ...e,
-          selected: onPath,
-          style: { ...e.style, opacity: onPath ? 1 : 0.15 },
-        };
+      let changed = false;
+      const next = prev.map(e => {
+        // traceConnectedPath returns node IDs and the specific traversed edge IDs; edge IDs avoid highlighting parallel siblings.
+        const onPath = highlightedPath ? highlightedPath.has(e.id) : false;
+        const wantSelected = onPath;
+        const wantOpacity = highlightedPath ? (onPath ? 1 : 0.15) : 1;
+        const currentOpacity = (e.style as { opacity?: number } | undefined)?.opacity ?? 1;
+        if (e.selected === wantSelected && currentOpacity === wantOpacity) {
+          return e;
+        }
+        changed = true;
+        return { ...e, selected: wantSelected, style: { ...e.style, opacity: wantOpacity } };
       });
+      return changed ? next : prev;
     });
   }, [highlightedPath, setFlowEdges]);
-
-  const viewportFitOptions = useMemo(() => ({
-    padding: isCompactViewport ? 0.2 : 0.24,
-    duration: 0,
-  }), [isCompactViewport]);
-
-  useEffect(() => {
-    if (!pendingFitSignatureRef.current || pendingFitSignatureRef.current !== flowSignature) return;
-    if (flowNodes.length === 0 || flowNodes.length > PERF_TEXT_FALLBACK_LIMIT) {
-      pendingFitSignatureRef.current = null;
-      return;
-    }
-    if (!reactFlowRef.current) return;
-    pendingFitSignatureRef.current = null;
-    reactFlowRef.current.fitView?.(viewportFitOptions);
-  }, [flowNodes, flowEdges, flowSignature, viewportFitOptions]);
 
   const rawNodeMap = useMemo(() => {
     const m = new Map<string, GraphNodeData>();
@@ -414,7 +484,7 @@ export default function CausalGraphBoard({
   const openNodeDetail = useCallback((nodeId: string, triggerElement?: HTMLElement | null) => {
     const raw = rawNodeMap.get(nodeId);
     if (!raw) return;
-    detailRestoreFocusRef.current = triggerElement?.isConnected ? triggerElement : null;
+    setDetailRestoreFocusTarget(triggerElement?.isConnected ? triggerElement : null);
     setSelectedNode({ id: raw.id, label: raw.label || raw.key, type: raw.type, round: raw.round, payload: raw.payload });
     externalOnNodeClick?.(raw);
 
@@ -521,11 +591,17 @@ export default function CausalGraphBoard({
               </div>
             ))}
           </div>
-          <NodeDetailPanel panelId="causal-board-detail" key={selectedNode?.id ?? 'closed'} node={selectedNode} onClose={() => setSelectedNode(null)} restoreFocusTarget={detailRestoreFocusRef.current} />
+          <NodeDetailPanel panelId="causal-board-detail" key={selectedNode?.id ?? 'closed'} node={selectedNode} onClose={() => setSelectedNode(null)} restoreFocusTarget={detailRestoreFocusTarget} />
         </div>
       ) : (
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
-          <div className="causal-board-export" data-testid="causal-board-export-target" data-export-root={exportRootId} style={{ position: 'absolute', inset: 0 }}>
+          <div
+            className="causal-board-export"
+            data-testid="causal-board-export-target"
+            data-export-root={exportRootId}
+            data-zoom-level={currentZoom < 0.3 ? 'far' : currentZoom < 0.6 ? 'mid' : 'near'}
+            style={{ position: 'absolute', inset: 0 }}
+          >
             <ReactFlow
               nodes={flowNodes}
               edges={flowEdges}
@@ -535,14 +611,21 @@ export default function CausalGraphBoard({
               onEdgesChange={onEdgesChange}
               onNodeClick={handleNodeClick}
               onPaneClick={onPaneClick}
+              onViewportChange={onViewportChange}
+              minZoom={0.02}
+              maxZoom={4}
               onInit={instance => { reactFlowRef.current = instance; }}
               fitView
               fitViewOptions={viewportFitOptions}
+              onlyRenderVisibleElements={shouldCullInvisibleElements}
               deleteKeyCode={null}
               selectionKeyCode={null}
               panActivationKeyCode={null}
               zoomActivationKeyCode={null}
               panOnDrag={[0, 1]}
+              zoomOnScroll
+              zoomOnPinch
+              zoomOnDoubleClick={!isCompactViewport}
               nodesDraggable
               nodesFocusable={false}
               edgesFocusable={false}
@@ -556,7 +639,7 @@ export default function CausalGraphBoard({
               )}
             </ReactFlow>
           </div>
-          <NodeDetailPanel panelId="causal-board-detail" key={selectedNode?.id ?? 'closed'} node={selectedNode} onClose={() => setSelectedNode(null)} restoreFocusTarget={detailRestoreFocusRef.current} />
+          <NodeDetailPanel panelId="causal-board-detail" key={selectedNode?.id ?? 'closed'} node={selectedNode} onClose={() => setSelectedNode(null)} restoreFocusTarget={detailRestoreFocusTarget} />
         </div>
       )}
 
