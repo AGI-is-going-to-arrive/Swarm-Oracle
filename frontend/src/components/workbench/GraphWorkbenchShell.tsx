@@ -120,7 +120,6 @@ export default function GraphWorkbenchShell({
           <Suspense fallback={<PanelFallback />}>
             <CausalGraphBoard
               scenarioId={scenarioId}
-              branchId={branchId}
               hideExport={isSplit}
             />
           </Suspense>

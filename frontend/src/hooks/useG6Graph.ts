@@ -42,10 +42,10 @@ export interface UseG6GraphOptions {
    */
   containerRef: RefObject<HTMLDivElement | null>;
   /**
-   * Full G6 GraphOptions excluding `container` + `renderer` + `pixelRatio`
+   * Full G6 GraphOptions excluding container/renderer/DPR/autoResize
    * (those are enforced by this hook).
    */
-  options: Omit<GraphOptions, 'container' | 'renderer' | 'devicePixelRatio'>;
+  options: Omit<GraphOptions, 'container' | 'renderer' | 'devicePixelRatio' | 'autoResize'>;
   /**
    * Called once the Graph instance has been constructed and rendered.
    * Use this to register extra event listeners etc.
@@ -112,18 +112,11 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
 
     let graph: Graph | null = null;
     try {
-      const rect = container.getBoundingClientRect();
-      const measuredWidth = Math.floor(rect.width || container.clientWidth);
-      const measuredHeight = Math.floor(rect.height || container.clientHeight);
-      const dimensionFallback = {
-        ...(measuredWidth > 0 ? { width: measuredWidth } : {}),
-        ...(measuredHeight > 0 ? { height: measuredHeight } : {}),
-      };
       const graphOptions = {
         container,
         devicePixelRatio: pixelRatio,
-        ...dimensionFallback,
         ...options,
+        autoResize: true,
       } as unknown as GraphOptions;
       graph = new G6Graph(graphOptions);
       graphRef.current = graph;
@@ -140,6 +133,13 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
       onReady?.(graph);
     } catch {
       // Canvas/WebGL unavailable in jsdom — swallow; tests should mock G6.
+      if (graph) {
+        try {
+          graph.destroy();
+        } catch {
+          /* noop */
+        }
+      }
       graphRef.current = null;
       lastOptionsRef.current = null;
       mountedRef.current = false;
@@ -248,7 +248,7 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
     if (!graph || lastOptionsRef.current === options) return;
     lastOptionsRef.current = options;
     try {
-      graph.setOptions(options as unknown as GraphOptions);
+      graph.setOptions({ ...options, autoResize: true } as unknown as GraphOptions);
       const renderResult = graph.render();
       if (renderResult && typeof (renderResult as Promise<unknown>).then === 'function') {
         (renderResult as Promise<unknown>).catch(() => {
@@ -263,6 +263,8 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
   useEffect(() => {
     const container = containerRef.current;
     if (!container || typeof ResizeObserver === 'undefined') return;
+    let prevWidth = 0;
+    let prevHeight = 0;
     const observer = new ResizeObserver((entries) => {
       const graph = graphRef.current;
       if (!graph) return;
@@ -270,14 +272,12 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
       const width = Math.floor(entry.contentRect.width);
       const height = Math.floor(entry.contentRect.height);
       if (width <= 0 || height <= 0) return;
+      if (width === prevWidth && height === prevHeight) return;
+      prevWidth = width;
+      prevHeight = height;
       try {
         graph.setSize(width, height);
-        const renderResult = graph.render();
-        if (renderResult && typeof (renderResult as Promise<unknown>).then === 'function') {
-          (renderResult as Promise<unknown>).catch(() => {
-            /* noop */
-          });
-        }
+        graph.fitView();
       } catch {
         /* noop */
       }

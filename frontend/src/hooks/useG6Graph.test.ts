@@ -7,7 +7,7 @@
  *   - Strict-mode guard: second sync mount is a no-op
  *   - mount/unmount loop (100×) — shape-level heap delta assertion
  */
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useRef } from 'react';
 
@@ -20,6 +20,7 @@ const offSpy = vi.fn();
 const renderSpy = vi.fn(() => Promise.resolve());
 const setOptionsSpy = vi.fn();
 const setSizeSpy = vi.fn();
+const fitViewSpy = vi.fn();
 const constructOptions: unknown[] = [];
 
 vi.mock('@antv/g6', () => {
@@ -33,6 +34,7 @@ vi.mock('@antv/g6', () => {
     render = renderSpy;
     setOptions = setOptionsSpy;
     setSize = setSizeSpy;
+    fitView = fitViewSpy;
   }
   return { Graph: MockGraph };
 });
@@ -44,6 +46,7 @@ afterEach(() => {
   renderSpy.mockClear();
   setOptionsSpy.mockClear();
   setSizeSpy.mockClear();
+  fitViewSpy.mockClear();
   constructOptions.length = 0;
 });
 
@@ -101,6 +104,7 @@ describe('useG6Graph lifecycle', () => {
     expect(onSpy).toHaveBeenCalledWith('node:click', expect.any(Function));
     expect(constructOptions[0]).toMatchObject({
       devicePixelRatio: expect.any(Number),
+      autoResize: true,
     });
     expect(constructOptions[0]).not.toHaveProperty('renderer');
     expect(destroySpy).not.toHaveBeenCalled();
@@ -117,6 +121,7 @@ describe('useG6Graph lifecycle', () => {
     rerender({ label: 'updated' });
 
     expect(setOptionsSpy).toHaveBeenCalledWith(expect.objectContaining({
+      autoResize: true,
       data: { nodes: [{ id: 'updated' }], edges: [] },
     }));
     expect(renderSpy).toHaveBeenCalledTimes(2);
@@ -139,6 +144,27 @@ describe('useG6Graph lifecycle', () => {
     expect(destroySpy).toHaveBeenCalledTimes(1);
   });
 
+  it('destroys a partially initialized graph when initial render throws', () => {
+    renderSpy.mockImplementationOnce(() => {
+      throw new Error('render failed');
+    });
+
+    const { result, rerender, unmount } = renderHook(({ label }) => TestHost({ label }), {
+      initialProps: { label: 'initial' },
+    });
+
+    expect(destroySpy).toHaveBeenCalledTimes(1);
+    expect(result.current.graphRef.current).toBeNull();
+
+    rerender({ label: 'recovered' });
+
+    expect(renderSpy).toHaveBeenCalledTimes(2);
+    expect(result.current.graphRef.current).not.toBeNull();
+
+    unmount();
+    expect(destroySpy).toHaveBeenCalledTimes(2);
+  });
+
   it('mount/unmount 100 times does not leak Graph instances (shape-level)', () => {
     const renderStart = renderSpy.mock.calls.length;
     const destroyStart = destroySpy.mock.calls.length;
@@ -149,6 +175,54 @@ describe('useG6Graph lifecycle', () => {
     // Each cycle = exactly 1 render + 1 destroy.
     expect(renderSpy.mock.calls.length - renderStart).toBe(100);
     expect(destroySpy.mock.calls.length - destroyStart).toBe(100);
+  });
+
+  it('syncs container ResizeObserver size before fitting the view', () => {
+    const observeSpy = vi.fn();
+    const disconnectSpy = vi.fn();
+    let capturedCallback: ResizeObserverCallback | null = null;
+    const originalRO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = vi.fn().mockImplementation((cb: ResizeObserverCallback) => {
+      capturedCallback = cb;
+      return { observe: observeSpy, disconnect: disconnectSpy, unobserve: vi.fn() };
+    }) as unknown as typeof ResizeObserver;
+
+    try {
+      const { unmount } = renderHook(() => TestHost());
+      expect(observeSpy).toHaveBeenCalled();
+      expect(capturedCallback).not.toBeNull();
+
+      const fakeEntry = {
+        contentRect: {
+          width: 800,
+          height: 600,
+          top: 0,
+          left: 0,
+          right: 800,
+          bottom: 600,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        },
+      } as unknown as ResizeObserverEntry;
+
+      act(() => {
+        (capturedCallback as ResizeObserverCallback)([fakeEntry], {} as ResizeObserver);
+      });
+      expect(setSizeSpy).toHaveBeenCalledWith(800, 600);
+      expect(fitViewSpy).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        (capturedCallback as ResizeObserverCallback)([fakeEntry], {} as ResizeObserver);
+      });
+      expect(setSizeSpy).toHaveBeenCalledTimes(1);
+      expect(fitViewSpy).toHaveBeenCalledTimes(1);
+
+      unmount();
+      expect(disconnectSpy).toHaveBeenCalled();
+    } finally {
+      globalThis.ResizeObserver = originalRO;
+    }
   });
 });
 

@@ -669,8 +669,10 @@ describe('KGGraphBoard', () => {
         act(() => {
           (capturedCallback as ResizeObserverCallback)([fakeEntry], {} as ResizeObserver);
         });
-        // useG6Graph's ResizeObserver callback forwards width/height to setSize.
+        // useG6Graph's ResizeObserver callback syncs the canvas size and
+        // then calls fitView to recenter after resize.
         expect(hoisted.setSizeSpy).toHaveBeenCalledWith(800, 600);
+        expect(hoisted.fitViewSpy).toHaveBeenCalled();
 
         // Cleanup on unmount tears down all observers we attached
         unmount();

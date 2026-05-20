@@ -81,7 +81,6 @@ const CLOSED_SHEET: ConvSheetState = {
 
 export interface CausalGraphBoardProps {
   scenarioId: string;
-  branchId?: string;
   onNodeClick?: (node: unknown) => void;
   className?: string;
   hideExport?: boolean;
@@ -296,7 +295,6 @@ function layoutDagre(
 
 export default function CausalGraphBoard({
   scenarioId,
-  branchId,
   onNodeClick: externalOnNodeClick,
   className,
   hideExport = false,
@@ -310,7 +308,7 @@ export default function CausalGraphBoard({
     loading,
     error,
     refetch: fetchGraph,
-  } = useScenarioGraph(scenarioId || null, branchId ?? null);
+  } = useScenarioGraph(scenarioId || null);
 
   const [selectedNode, setSelectedNode] = useState<NodeDetail | null>(null);
   const [sheetState, setSheetState] = useState<ConvSheetState>(CLOSED_SHEET);

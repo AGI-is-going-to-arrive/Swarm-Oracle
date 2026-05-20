@@ -107,8 +107,8 @@ npm run test:watch # vitest (watch mode)
 | `ReturningBadge.tsx` | 跨场景回归标记 (已集成到 ResultView + capability gate, Phase 3 F1) |
 | `ExportPanel.tsx` | Graph 导出面板 (PNG html2canvas + native SVG rebuild；当前不依赖 foreignObject, P1-3) |
 | `NodeDetailPanel.tsx` | Graph 节点详情侧面板 (type/round/payload/unit, P1-4)；新增边级 evidence 渲染 (confidence_tier 徽章 + source_ref + source_round_number + detail，detail 按码点 `Array.from` 截断 200，支持 evidence 单条 / evidenceList 多条) |
-| `workbench/KGGraphBoard.tsx` | KG 工作台主体 (搜索 / 类型 chips 过滤 / 缩放控件 / 小地图 / SR fallback table / 移动 200 节点 aria-live 截断提示；P6 `lockHighlight`/`clearHighlight` 用 G6 `setElementState` batch API；P7 图例默认展开 + NodeConversationSheet 集成 + KG_NODE_TYPE_FILLS 暖灰色板) |
-| `workbench/CausalGraphBoard.tsx` | Causal DAG 工作台主体 (P7 新增 NodeConversationSheet 集成，点击节点可发起 Agent 对话) |
+| `workbench/KGGraphBoard.tsx` | KG 工作台主体 (搜索 / 类型 chips 过滤 / 缩放控件 / 小地图 / SR fallback table / 移动 200 节点 aria-live 截断提示；P6 `lockHighlight`/`clearHighlight` 用 G6 `setElementState` batch API；P7 图例默认展开 + NodeConversationSheet 集成 + KG_NODE_TYPE_FILLS 暖灰色板；workbench 内按 scenario 拉全量 causal graph) |
+| `workbench/CausalGraphBoard.tsx` | Causal DAG 工作台主体 (P7 新增 NodeConversationSheet 集成，点击节点可发起 Agent 对话；不接收 `branchId` prop，workbench 内按 scenario 拉全量 causal graph) |
 | `AnimatedEdge.tsx` | 自定义 React Flow 边 (SVG `<animateMotion>` 粒子 + `aria-hidden`，仅 selected + !reducedMotion 时动画；集成 `EdgeLabelTooltip` midpoint pill label，P6) |
 | `EdgeLabelTooltip.tsx` | 边标签 tooltip (EdgeLabelRenderer portal, hover 300ms delay + Escape dismiss + detail card 上 `role="tooltip"` + pill 上 `aria-describedby` + 卸载清理 timer + reduced-motion guard, P6) |
 | `GraphNodeCard.tsx` | 共享 ReactFlow 节点卡片 (icon + OKLCH card + Radix Tooltip；P6 新增可选字段 round/confidence/sourceCount/summary/accentColor，向后兼容) |
@@ -158,7 +158,7 @@ npm run test:watch # vitest (watch mode)
 | `useCapabilityCheck.ts` | Phase 3 capability gate hook；复用 `/api/capabilities` 结果，consumer 可区分 `loading / enabled / error`，disabled 页面不再把 probe 失败伪装成关功能 |
 | `useScenarioGraph.ts` | 共享图谱数据 fetch (requestId 防竞态, inflightRequests Map 去重, 按 scenarioId+branchId 缓存) |
 | `useHookSummary.ts` | 聚合 hook 状态 fetch (5 key: causal_graph/factions/checkpoints/identity/argument_map, branchId 参数用于 faction-timeline) |
-| `useG6Graph.ts` | G6 Graph 生命周期封装；除 onNodeClick / onBeforeDestroy 外新增 onNodeHover / onNodeLeave / onEdgeClick / onEdgeHover / onEdgeLeave 五个事件 handler，自动 on/off 注册与清理 |
+| `useG6Graph.ts` | G6 Graph 生命周期封装；强制启用 `autoResize`，容器 ResizeObserver 会先同步 `setSize(width,height)` 再 `fitView()`；除 onNodeClick / onBeforeDestroy 外新增 onNodeHover / onNodeLeave / onEdgeClick / onEdgeHover / onEdgeLeave 五个事件 handler，自动 on/off 注册与清理 |
 | `useReducedMotion.ts` | `prefers-reduced-motion: reduce` 媒体查询订阅；ArgumentMap、CausalReviewView 等共享同一份实现 |
 | `useMediaQueryState.ts` | 通用媒体查询状态 hook（从 CausalReviewView + ArgumentMap 提取），`useReducedMotion` 之外的 media query 场景统一使用 |
 
@@ -394,6 +394,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-21 | Graph Workbench 全量图谱 + G6 resize 回归修复 | `GraphWorkbenchShell` 不再把 URL `branch` 传给 `CausalGraphBoard`，`CausalGraphBoardProps` 删除 `branchId`，workbench 因果图固定按 scenario 拉全量 causal graph；`KGGraphBoard` 仍按 scenario 拉全量图，只保留 branch query 用于工作台上下文。`useG6Graph` 强制 `autoResize: true` 不被 options 覆盖，容器 ResizeObserver 先 `setSize(width,height)` 再 `fitView()`，并用尺寸去重避免重复 recenter；初始 render 同步失败时会销毁半初始化 G6 实例。`CausalReviewView` 的 triggered-fork i18n 测试改为等待 ReactFlow mock 边状态同步。验证：frontend full vitest `202 files / 2206 tests passed`，定向图谱窄集 `6 files / 184 tests passed`，`npm run build` 通过，i18n parity `2761/2761` |
 | 2026-05-19 | Counterfactual 逐消息对比 UI + textDiff | 新增 `src/lib/textDiff.ts`：字符级 LCS diff，按 `Array.from` 码点切分以保 CJK / emoji 不被劈开，供红绿高亮使用。`CompareDigestView.tsx/css`：消费后端新返回的 `branch_a_messages` / `branch_b_messages`，把对比改为逐 agent 消息卡片 + 红绿 diff 高亮 + 折叠/展开按钮 + 独占轮（only-A / only-B）单列布局；`CounterfactualPanel.tsx` 新增模拟进行中提示，并暴露 resimulate 入口指向 `POST /counterfactual/{branch_id}/resimulate`。验证：frontend full vitest `201 files / 2190 tests passed`，tsc/eslint/build 通过，i18n parity `2765/2765` |
 | 2026-05-19 | EndingChatModal layout / survey contract hardening | `EndingChatModal.tsx/css`：thread rail 与 evidence drawer 移到 transcript 内部滚动区外，证据卡列表在抽屉内滚动，mobile replay/evidence-card 点击不再被 header / composer 拦截；unsupported `parallel_survey` UI/type/helper/i18n skeleton 已移除，保留圆桌 Deep Dive 的真实 survey SSE 能力；summary/details、archivist note 和新 `color-mix()` 样式补 legacy fallback，composer overflow rule 收窄到 `.ending-chat-modal`，避免影响 `WorldlineRoundtableView`。验证：EndingChatModal / helper / CSS fallback 窄集 `34 passed`，frontend full `200 files / 2175 tests passed`，tsc/eslint/build/i18n `2732/2732` 通过，ending-room 与 roundtable E2E 通过 |
 | 2026-05-19 | Roundtable phase insight 默认折叠 | `WorldlineRoundtableView` 的 phase insight accordion 不再默认展开最后一条；header 继续显示短 preview，用户点击后才看到完整一条 commentary。测试同步改为先展开再断言内容，并新增默认折叠回归。验证：`WorldlineRoundtableView.test.tsx` 为 `46 passed`，相关 eslint 与 `npm run build` 通过 |

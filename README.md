@@ -89,7 +89,7 @@
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响；题材回响放在高级选项里 |
 | Result Quality / Question Anchoring | 已落地，受 `FEATURE_RESULT_VERDICT` 和 `/api/capabilities.result_verdict` 控制；结果页在有 verdict 时先给出直接回答原问题的预测结论、置信度，verdict 缺失时显示中性的“暂无预测结论”并保留原问题；结局卡有 `question_answer` 时会把分支级一句话回答放在概率条上方 |
 | Director Campaign | 已落地，含 52 条 daily challenge catalog、streak、7 条 weekly track + leaderboard、15 个 registry badge、非线性 mastery level、首页成长 sheet、后端权威 `score_breakdown` 与结果页导演复盘 / 因果档案；结果页导演笔记和导演复盘默认收起，展开后再查看完整复盘，导演复盘的关键记录超过 3 条时用原生 disclosure 展开 |
-| Graph Workbench / Causal Graph | 已落地，结果页 header 和下一步入口可进入 `/workbench/:id`；工作台会保留当前 analysis branch，因果图 tab 按 branch 拉取 causal graph。边标签会按 zoom 密度显示，hover 或键盘 focus 时展示轮次与可信度，PNG / SVG 导出继续走 ExportPanel |
+| Graph Workbench / Causal Graph | 已落地，结果页 header 和下一步入口可进入 `/workbench/:id`；工作台会保留当前 analysis branch query，但 workbench 的因果图和 KG 图都按 scenario 拉全量 causal graph，不再用 URL `branch` 过滤。边标签会按 zoom 密度显示，hover 或键盘 focus 时展示轮次与可信度，PNG / SVG 导出继续走 ExportPanel |
 | Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight`；设置 `ADMIN_TOKEN` 后 admin API 要求 `X-Admin-Token` |
 | Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；Agent Library 支持 `#agent_profile=<id>&tab=memory` 档案深链；identity continuity preflight 超时会按 504 返回，后端不会把它伪装成“无匹配”；首页启动流当前会提示错误但继续按无 continuity override 启动；自建 Agent 不开放 `CORE` 层级 |
 | Agent Backups | 已落地，受 `FEATURE_PERSONA_EXPORT` gate；支持单个 / 批量导出 `schema_version=1` Agent 备份 JSON；从备份创建会为当前用户创建新的 custom Agent，不覆盖已有 Agent，并把 decision bias 归一化到安全的 5 维数值 |

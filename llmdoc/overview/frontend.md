@@ -33,7 +33,7 @@
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
 | SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预、玩法卡、押注、只读干预回执、capture |
 | ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel（verdict 缺失时显示 unavailable fallback）、分支级 question answer（显示在概率条上方）、因果档案 / archive（档案结论优先 story verdict）、默认折叠的导演笔记/导演复盘、campaign summary、weekly leaderboard preview、achievement toast、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、结果页 Agent 追问、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
-| WorkbenchView | `frontend/src/pages/WorkbenchView.tsx` | 独立图谱工作台；支持 `graph / split / kg` 三种 view，保留 URL 里的 analysis branch，graph tab 会把 branch 传给 causal graph 请求，并提供返回结果页链接 |
+| WorkbenchView | `frontend/src/pages/WorkbenchView.tsx` | 独立图谱工作台；支持 `graph / split / kg` 三种 view，保留 URL 里的 analysis branch query，但 workbench 图面按 scenario 拉全量 causal graph，不再按 URL branch 过滤；页面提供返回结果页链接 |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live、Podium Cards、room state、phase 历史卡、counterplay、live argument map |
@@ -225,7 +225,7 @@
 | `AnalystStreamView.tsx` / `SurveyStreamView.tsx` / `postVerdictCaches.ts` | `frontend/src/pages/` | post-verdict analyst / survey 的独立流式 UI、缓存与 context reset；会区分 user abort、stream error、retry 和 source/tool chip |
 | `useRoundtableSseStream.ts` | `frontend/src/hooks/useRoundtableSseStream.ts` | roundtable analyst / survey 共享 SSE hook；负责 POST stream、frame 解析、timeout 与 abort |
 | `manualChunks.ts` / `performanceBudgetConfig.mjs` | `frontend/src/lib/manualChunks.ts` / `frontend/scripts/lib/performanceBudgetConfig.mjs` | 前端构建分块与预算门禁单一事实源；React 保留在共享 `vendor`，`@antv/*` 隔离到 `g6-vendor`，`html2canvas / gif.js` 按需拆分，React Flow 栈继续走 Rollup 自动分块并纳入预算检查 |
-| `useG6Graph.ts` | `frontend/src/hooks/useG6Graph.ts` | G6 图谱 hook；等 ref-backed container 真正挂载后再建图，支持 options 更新、ResizeObserver resize、node click 订阅清理 |
+| `useG6Graph.ts` | `frontend/src/hooks/useG6Graph.ts` | G6 图谱 hook；等 ref-backed container 真正挂载后再建图，强制启用 G6 autoResize，同时用 ResizeObserver 同步容器尺寸后再 fitView，支持 options 更新、node click 订阅清理 |
 | `useNodeConversationTransport.ts` | `frontend/src/hooks/useNodeConversationTransport.ts` | `NodeConversationSheet` 的本地 transport hook；负责 `/start` / `/turn` 请求、origin branch/round/node/excerpt 透传、AbortController 生命周期和 SSE frame 解析 |
 | `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | `Organization ID` 的 sessionStorage helper；当前由 API client 读取并生成 `X-Org-Id`，InputView 不再展示专门输入框 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
@@ -242,7 +242,7 @@
 | `ScenarioAgentPicker.tsx` | `frontend/src/components/result/ScenarioAgentPicker.tsx` | 结果页 `找 Agent 追问` dialog；用 `ul > li > button` 呈现场内 Agent，展示 tier、role、persona，带 identity 时提供 Agent profile hash 深链，选择后交给 `NodeConversationSheet` |
 | `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
 | `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
-| `CausalGraphBoard.tsx` | `frontend/src/components/workbench/CausalGraphBoard.tsx` | 工作台 graph tab 的因果图；按 `scenarioId + branchId` 读取 causal graph，大图 fitView 会保留更低最小 zoom，边标签按 zoom 密度和优先级显示，导出面板打开时不会启用 visible-elements culling |
+| `CausalGraphBoard.tsx` | `frontend/src/components/workbench/CausalGraphBoard.tsx` | 工作台 graph tab 的因果图；按 `scenarioId` 读取全量 causal graph，不接收 `branchId` prop，大图 fitView 会保留更低最小 zoom，边标签按 zoom 密度和优先级显示，导出面板打开时不会启用 visible-elements culling |
 | `AnimatedEdge.tsx` / `EdgeLabelTooltip.tsx` | `frontend/src/components/` | 工作台因果边和标签 pill；label 坐标使用 React Flow smooth-step label 坐标并叠加 parallel offset，motion 由 CSS `prefers-reduced-motion` 收口，tooltip 支持 hover 和键盘 focus |
 | `NodeDetailPanel.tsx` | `frontend/src/components/NodeDetailPanel.tsx` | 两个图面的共用节点详情侧栏；显示 type / round / payload / unit details；event / fork / outcome 会优先展示用户可读语义字段 |
 | `NodeContextBanner.tsx` | `frontend/src/components/kg/NodeContextBanner.tsx` | `NodeConversationSheet` 的来源摘要卡；显示 node type、round、对话目标、卡片意义、前因/后续/关系、label 和截断 excerpt |
@@ -362,7 +362,7 @@
   - `NodeConversationSheet` 选择历史后会恢复最后一条已提交 assistant 回复
 - `QuotaBadge` 当前从 `GET /api/quota/summary` 读取 conversation / replay bucket；本机 local conversation 会显示本机模式，scenario 或 bucket 切换时，迟到响应不会覆盖新 badge。
 - `ResultView` 当前默认进入 Reader mode；界面上的 Explore mode 会持久化到 `swarm-ui-preferences` 的 workbench 键，并显示 graph / KG / workbench-only panels。结果页 header 会同时显示 conversation/replay `QuotaBadge`，也会在能力允许时直接显示 `查看因果图谱` 与 `图谱工作台`。
-- `WorkbenchView` 当前三种 tab 的能力门槛分开判断：`graph` 只要求 causal graph，`kg` 只要求 KG capability，`split` 才要求两者都可用。结果页 header、next-step bridge 和 `/workbench/:id` 都会把当前 analysis branch 写进 query，进入工作台后 graph tab 会继续用这条 branch 拉 causal graph；正常工作台 header 会提供返回对应结果页的链接。
+- `WorkbenchView` 当前三种 tab 的能力门槛分开判断：`graph` 只要求 causal graph，`kg` 只要求 KG capability，`split` 才要求两者都可用。结果页 header、next-step bridge 和 `/workbench/:id` 都会把当前 analysis branch 写进 query；进入工作台后 graph / split / kg 图面仍按 scenario 拉全量 causal graph，不用这条 branch 过滤。正常工作台 header 会提供返回对应结果页的链接。
 - Oracle replay copy 现在优先走 artifact；如果 artifact 不可用且 URL token 也过大，会回退为本地只读副本链接，而不是直接失效。
 - ending-room artifact/local replay 当前统一落到 `/result/replay?...`；不再要求先拼出 `/result/:scenarioId?...` 才能读出来。artifact payload 里的 `scenario.total_rounds=null` 也会被前端 replay 正常接受，不会再把只读页打成空结果。
 - ending-room replay automation helper 当前识别 `roomReplay / roomShare / roomLocal`；roundtable 页面除 `roomShare / roomLocal` 外也兼容 `share / local` 别名。
@@ -523,7 +523,7 @@
   - `graphTokens`
 - `CausalReviewView` 当前优先使用后端 `available_branches` 保持分支 selector；如果后端没带这个字段，会回退到 `payload.branch_id + fork children` 重建选项，因此即使当前带 `branch_id` 过滤，兄弟分支和 fork child branch 也不会从下拉里消失
   分支 selector 当前会优先显示 scenario branch 的标题和概率；拿不到 branch 元数据时才回退完整 branch id。
-- `CausalGraphBoard` 是独立工作台的轻量因果图面：会把 URL `branch` 传给 `useScenarioGraph`，大图超过 50 个节点时用更低的 fitView minimum zoom，节点/边结构变化才触发布局同步和 fitView；选中、关联、展开、dimmed 和 edge opacity 这类状态变化按 shallow diff 更新，避免每次交互重建整张图。
+- `CausalGraphBoard` 是独立工作台的轻量因果图面：只把 `scenarioId` 传给 `useScenarioGraph`，始终展示 scenario 的全量 causal graph；URL `branch` 保留在 workbench query 里，但不再作为 graph tab 的 fetch filter。大图超过 50 个节点时用更低的 fitView minimum zoom，节点/边结构变化才触发布局同步和 fitView；选中、关联、展开、dimmed 和 edge opacity 这类状态变化按 shallow diff 更新，避免每次交互重建整张图。
 - `CausalGraphBoard` 的边标签按 `far / mid / near` zoom bucket 走 CSS 密度管理，不在同一 bucket 内反复 re-render；far 隐藏全部 label，mid 只显示高优先级 label，near 显示全部。visual label pill 只放关系短名，round / confidence 放 hover 或 keyboard focus detail，tier color 用左边框表达。screen-reader relation list 仍保留完整关系文本。
 - `CausalReviewView` 的错误页当前提供 `Retry`，成功重拉后不会残留旧错误态；错误文案会按 `network / branch_not_found / unauthorized / server / load_failed` 映射到本地化 copy，不再把原始 `HTTP 404` 或后端 message 直接露给用户。
 - `CausalReviewView` 当前在 branch 切换时会忽略迟到的旧响应，不让旧分支结果覆盖最新选择。

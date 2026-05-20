@@ -30,8 +30,8 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('../../hooks/useScenarioGraph', () => ({
-  useScenarioGraph: (scenarioId: string | null, branchId?: string | null) => {
-    hoisted.useScenarioGraphMock(scenarioId, branchId);
+  useScenarioGraph: (scenarioId: string | null) => {
+    hoisted.useScenarioGraphMock(scenarioId);
     return hoisted.mockScenarioGraphReturn;
   },
 }));
@@ -133,7 +133,7 @@ describe('CausalGraphBoard', () => {
     ]);
   });
 
-  it('passes the selected workbench branch into graph fetching', async () => {
+  it('always fetches the full causal graph without branch filtering', async () => {
     hoisted.mockScenarioGraphReturn.data = {
       id: 'g-workbench-branch',
       nodes: [
@@ -142,9 +142,9 @@ describe('CausalGraphBoard', () => {
       edges: [],
     };
 
-    render(<CausalGraphBoard scenarioId="s1" branchId="branch-a" hideExport />);
+    render(<CausalGraphBoard scenarioId="s1" hideExport />);
 
     expect(await screen.findByTestId('reactflow')).toBeInTheDocument();
-    expect(hoisted.useScenarioGraphMock).toHaveBeenCalledWith('s1', 'branch-a');
+    expect(hoisted.useScenarioGraphMock).toHaveBeenCalledWith('s1');
   });
 });

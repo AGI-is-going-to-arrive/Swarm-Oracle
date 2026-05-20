@@ -2130,7 +2130,7 @@ describe('CausalReviewView', () => {
     renderView();
 
     const flow = await screen.findByTestId('reactflow');
-    expect(flow).toHaveAttribute('data-edge-label', 'triggered fork');
+    await waitFor(() => expect(flow).toHaveAttribute('data-edge-label', 'triggered fork'));
 
     let relationList = screen.getByRole('list', { name: 'Causal relations list' });
     expect(within(relationList).getByRole('listitem')).toHaveTextContent(
@@ -2139,7 +2139,7 @@ describe('CausalReviewView', () => {
 
     await changeUiLanguage('zh');
 
-    expect(flow).toHaveAttribute('data-edge-label', '触发分支');
+    await waitFor(() => expect(flow).toHaveAttribute('data-edge-label', '触发分支'));
     relationList = screen.getByRole('list', { name: '因果关系列表' });
     expect(within(relationList).getByRole('listitem')).toHaveTextContent(
       'Alpha trigger 触发分支 Beta fork',
