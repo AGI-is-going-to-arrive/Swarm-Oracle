@@ -8,7 +8,7 @@
  *     the legacy kg:openNodeSheet CustomEvent bridge)
  */
 
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
@@ -17,6 +17,7 @@ interface KgGraphMockState {
   nodeClickHandlers: Array<(evt: unknown) => void>;
   destroyCount: number;
   setOptionsCalls: unknown[][];
+  setDataCalls: unknown[][];
   renderCount: number;
 }
 
@@ -27,10 +28,37 @@ function getKgGraphMockState(): KgGraphMockState {
       nodeClickHandlers: [],
       destroyCount: 0,
       setOptionsCalls: [],
+      setDataCalls: [],
       renderCount: 0,
     };
   }
   return scope.__kgGraphMockState;
+}
+
+function getLatestGraphData():
+  | {
+      nodes?: Array<{ id: string; style?: { labelText?: string } }>;
+      edges?: Array<{ style?: { labelText?: string } }>;
+    }
+  | undefined {
+  const graphState = getKgGraphMockState();
+  const dataUpdates = [
+    ...graphState.setOptionsCalls.map(([options]) =>
+      (options as {
+        data?: {
+          nodes?: Array<{ id: string; style?: { labelText?: string } }>;
+          edges?: Array<{ style?: { labelText?: string } }>;
+        };
+      })?.data,
+    ),
+    ...graphState.setDataCalls.map(([data]) =>
+      data as {
+        nodes?: Array<{ id: string; style?: { labelText?: string } }>;
+        edges?: Array<{ style?: { labelText?: string } }>;
+      },
+    ),
+  ].filter(Boolean);
+  return dataUpdates.at(-1);
 }
 
 vi.mock('@antv/g6', () => {
@@ -47,6 +75,10 @@ vi.mock('@antv/g6', () => {
     setOptions(...args: unknown[]) {
       graphState.setOptionsCalls.push(args);
     }
+    setData(...args: unknown[]) {
+      graphState.setDataCalls.push(args);
+    }
+    draw() {}
     setSize() {}
     destroy() {
       graphState.destroyCount += 1;
@@ -146,6 +178,7 @@ beforeEach(() => {
   graphState.nodeClickHandlers.length = 0;
   graphState.destroyCount = 0;
   graphState.setOptionsCalls.length = 0;
+  graphState.setDataCalls.length = 0;
   graphState.renderCount = 0;
   fetchMock.mockReset();
   (globalThis as unknown as { fetch: typeof fetchMock }).fetch = fetchMock;
@@ -251,9 +284,10 @@ describe('KGExplorerView happy path', () => {
     renderAt('scn-42');
     await waitFor(() => {
       expect(getKgGraphMockState().nodeClickHandlers.length).toBeGreaterThan(0);
-      const dataUpdates = getKgGraphMockState().setOptionsCalls
-        .map(([options]) => (options as { data?: { nodes?: Array<{ id: string }> } }).data)
-        .filter(Boolean);
+      const dataUpdates = [
+        ...getKgGraphMockState().setOptionsCalls.map(([options]) => (options as { data?: { nodes?: Array<{ id: string }> } })?.data),
+        ...getKgGraphMockState().setDataCalls.map(([data]) => data as { nodes?: Array<{ id: string }> })
+      ].filter(Boolean);
       expect(dataUpdates.at(-1)?.nodes?.map((node) => node.id)).toEqual(['n1', 'n2']);
     });
     // Sheet is not mounted prior to interaction.
@@ -295,9 +329,10 @@ describe('KGExplorerView happy path', () => {
 
     renderAt('scn-42');
     await waitFor(() => {
-      const dataUpdates = getKgGraphMockState().setOptionsCalls
-        .map(([options]) => (options as { data?: { nodes?: Array<{ id: string }> } }).data)
-        .filter(Boolean);
+      const dataUpdates = [
+        ...getKgGraphMockState().setOptionsCalls.map(([options]) => (options as { data?: { nodes?: Array<{ id: string }> } })?.data),
+        ...getKgGraphMockState().setDataCalls.map(([data]) => data as { nodes?: Array<{ id: string }> })
+      ].filter(Boolean);
       expect(dataUpdates.at(-1)?.nodes?.map((node) => node.id)).toEqual(['node-9']);
     });
     act(() => {
@@ -386,11 +421,138 @@ describe('KGExplorerView happy path', () => {
     await user.type(search, 'alpha');
 
     await waitFor(() => {
-      const dataUpdates = getKgGraphMockState().setOptionsCalls
-        .map(([options]) => (options as { data?: { nodes?: Array<{ id: string }> } }).data)
-        .filter(Boolean);
+      const dataUpdates = [
+        ...getKgGraphMockState().setOptionsCalls.map(([options]) => (options as { data?: { nodes?: Array<{ id: string }> } })?.data),
+        ...getKgGraphMockState().setDataCalls.map(([data]) => data as { nodes?: Array<{ id: string }> })
+      ].filter(Boolean);
       expect(dataUpdates.at(-1)?.nodes?.map((node) => node.id)).toEqual(['n1']);
     });
+  });
+
+  it('search matches node ids when labels do not contain the id', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-id-search',
+        nodes: [
+          { id: 'node-id-hit', key: 'opaque-key', type: 'event', label: 'Alpha only', round: 1 },
+          { id: 'other-node', key: 'key-hit', type: 'fork', label: 'Beta only', round: 2 },
+        ],
+        edges: [],
+      }),
+    } as Response);
+
+    renderAt();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await user.type(screen.getByTestId('kg-explorer-search'), 'node-id-hit');
+
+    await waitFor(() => {
+      const dataUpdates = [
+        ...getKgGraphMockState().setOptionsCalls.map(([options]) => (options as { data?: { nodes?: Array<{ id: string }> } })?.data),
+        ...getKgGraphMockState().setDataCalls.map(([data]) => data as { nodes?: Array<{ id: string }> })
+      ].filter(Boolean);
+      expect(dataUpdates.at(-1)?.nodes?.map((node) => node.id)).toEqual(['node-id-hit']);
+    });
+  });
+
+  it('does not revive an open sheet after search hides and then reveals the source node', async () => {
+    const user = userEvent.setup();
+    renderAt('scn-42');
+    await waitFor(() => expect(getKgGraphMockState().nodeClickHandlers.length).toBeGreaterThan(0));
+
+    act(() => {
+      getKgGraphMockState().nodeClickHandlers.at(-1)?.({ target: { id: 'n1', type: 'circle' } });
+    });
+    expect(await screen.findByTestId('node-conversation-sheet')).toBeInTheDocument();
+
+    const search = screen.getByTestId('kg-explorer-search') as HTMLInputElement;
+    await user.type(search, 'beta');
+    await waitFor(() => {
+      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
+    });
+
+    await user.clear(search);
+    await waitFor(() => {
+      expect(screen.queryByTestId('node-conversation-sheet')).toBeNull();
+    });
+  });
+
+  it('uses a visible active filter pill style in normal color mode', async () => {
+    const user = userEvent.setup();
+    renderAt();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    const firstFilter = within(screen.getByTestId('kg-explorer-filter-pills')).getAllByRole('button')[0];
+    await user.click(firstFilter);
+
+    expect(firstFilter).toHaveAttribute('aria-pressed', 'true');
+    expect(firstFilter.getAttribute('style')).toContain('background: rgb(210, 112, 80)');
+    expect(firstFilter.getAttribute('style')).toContain('color: rgb(24, 22, 17)');
+  });
+
+  it('shows mobile truncation status when the visible graph is capped', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 500 });
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q.includes('max-width: 767'),
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    }));
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-mobile',
+        nodes: Array.from({ length: 250 }, (_, i) => ({
+          id: `node-${i}`,
+          key: `key-${i}`,
+          type: 'event',
+          label: `Node ${i}`,
+          round: i,
+        })),
+        edges: [],
+      }),
+    } as Response);
+
+    renderAt();
+
+    expect(await screen.findByTestId('kg-explorer-truncate-notice')).toHaveTextContent(
+      'Showing first 200 of 250 nodes',
+    );
+    expect(screen.getByText('200 of 250 nodes shown')).toBeInTheDocument();
+  });
+
+  it('omits dense node and edge labels before passing KGExplorer data to G6', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'dense-graph',
+        nodes: Array.from({ length: 60 }, (_, i) => ({
+          id: `n${i}`,
+          type: i % 2 === 0 ? 'event' : 'fork',
+          label: `Node ${i}`,
+          round: 1,
+        })),
+        edges: Array.from({ length: 59 }, (_, i) => ({
+          id: `e${i}`,
+          source: `n${i}`,
+          target: `n${i + 1}`,
+          type: 'caused',
+        })),
+      }),
+    } as Response);
+
+    renderAt();
+
+    await waitFor(() => {
+      expect(getLatestGraphData()?.edges?.length).toBe(59);
+    });
+    expect(getLatestGraphData()?.nodes?.every((node) => node.style?.labelText === undefined)).toBe(true);
+    expect(getLatestGraphData()?.edges?.every((edge) => edge.style?.labelText === undefined)).toBe(true);
   });
 
   it('renders a friendly fetch error and retries the graph request', async () => {

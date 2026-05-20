@@ -14,13 +14,15 @@ import { useRef } from 'react';
 import { resolvePixelRatio, useG6Graph } from './useG6Graph';
 
 // Shared spy references (captured by mocks)
-const destroySpy = vi.fn();
+const destroySpy = vi.fn(() => { /* console.trace('destroy called'); */ });
 const onSpy = vi.fn();
 const offSpy = vi.fn();
 const renderSpy = vi.fn(() => Promise.resolve());
 const setOptionsSpy = vi.fn();
 const setSizeSpy = vi.fn();
 const fitViewSpy = vi.fn();
+const setDataSpy = vi.fn();
+const drawSpy = vi.fn();
 const constructOptions: unknown[] = [];
 
 vi.mock('@antv/g6', () => {
@@ -35,6 +37,8 @@ vi.mock('@antv/g6', () => {
     setOptions = setOptionsSpy;
     setSize = setSizeSpy;
     fitView = fitViewSpy;
+    setData = setDataSpy;
+    draw = drawSpy;
   }
   return { Graph: MockGraph };
 });
@@ -47,6 +51,8 @@ afterEach(() => {
   setOptionsSpy.mockClear();
   setSizeSpy.mockClear();
   fitViewSpy.mockClear();
+  setDataSpy.mockClear();
+  drawSpy.mockClear();
   constructOptions.length = 0;
 });
 
@@ -84,6 +90,48 @@ function TestHost({ label = 'initial' }: { label?: string } = {}) {
   return { ...result, containerRef };
 }
 
+function StableDataHost({ label = 'initial' }: { label?: string } = {}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  if (containerRef.current === null) {
+    containerRef.current = document.createElement('div');
+  }
+  const result = useG6Graph({
+    containerRef,
+    options: {
+      width: 100,
+      height: 100,
+      data: {
+        nodes: [{ id: 'stable', style: { labelText: label } }],
+        edges: [],
+      },
+    },
+  });
+  return { ...result, containerRef };
+}
+
+function OpaqueLayoutHost({ maxRound = 1 }: { maxRound?: number } = {}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  if (containerRef.current === null) {
+    containerRef.current = document.createElement('div');
+  }
+  const result = useG6Graph({
+    containerRef,
+    options: {
+      width: 100,
+      height: 100,
+      data: {
+        nodes: [{ id: 'stable', data: { round: maxRound } }],
+        edges: [],
+      },
+      layout: {
+        type: 'force',
+        x: (node: { data?: { round?: number } }) => (node.data?.round ?? 0) / maxRound,
+      },
+    },
+  });
+  return { ...result, containerRef };
+}
+
 function DeferredContainerHost({ attached }: { attached: boolean }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   if (attached && containerRef.current === null) {
@@ -112,18 +160,59 @@ describe('useG6Graph lifecycle', () => {
     expect(destroySpy).toHaveBeenCalledTimes(1);
   });
 
-  it('updates G6 options and re-renders when caller data changes', () => {
+  it('updates G6 options and re-renders when caller data membership changes', () => {
     const { rerender, unmount } = renderHook(({ label }) => TestHost({ label }), {
       initialProps: { label: 'initial' },
     });
     expect(setOptionsSpy).not.toHaveBeenCalled();
+    expect(setDataSpy).not.toHaveBeenCalled();
 
     rerender({ label: 'updated' });
 
-    expect(setOptionsSpy).toHaveBeenCalledWith(expect.objectContaining({
-      autoResize: true,
-      data: { nodes: [{ id: 'updated' }], edges: [] },
-    }));
+    expect(setDataSpy).not.toHaveBeenCalled();
+    expect(drawSpy).not.toHaveBeenCalled();
+    expect(setOptionsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { nodes: [{ id: 'updated' }], edges: [] },
+        autoResize: true,
+      }),
+    );
+    expect(renderSpy).toHaveBeenCalledTimes(2);
+    unmount();
+  });
+
+  it('uses setData and draw when only stable data values change', () => {
+    const { rerender, unmount } = renderHook(({ label }) => StableDataHost({ label }), {
+      initialProps: { label: 'initial' },
+    });
+
+    rerender({ label: 'updated' });
+
+    expect(setOptionsSpy).not.toHaveBeenCalled();
+    expect(setDataSpy).toHaveBeenCalledWith({
+      nodes: [{ id: 'stable', style: { labelText: 'updated' } }],
+      edges: [],
+    });
+    expect(drawSpy).toHaveBeenCalledTimes(1);
+    expect(renderSpy).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('forces setOptions and render when non-data options contain opaque functions', () => {
+    const { rerender, unmount } = renderHook(({ maxRound }) => OpaqueLayoutHost({ maxRound }), {
+      initialProps: { maxRound: 1 },
+    });
+
+    rerender({ maxRound: 2 });
+
+    expect(setDataSpy).not.toHaveBeenCalled();
+    expect(drawSpy).not.toHaveBeenCalled();
+    expect(setOptionsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        layout: expect.objectContaining({ type: 'force', x: expect.any(Function) }),
+        autoResize: true,
+      }),
+    );
     expect(renderSpy).toHaveBeenCalledTimes(2);
     unmount();
   });

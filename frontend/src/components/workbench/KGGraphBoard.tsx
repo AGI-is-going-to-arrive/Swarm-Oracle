@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, Info, Maximize2, Minus, Plus, RotateCcw, Search, X } from 'lucide-react';
+import { Eye, EyeOff, Info, Maximize2, Minus, Plus, RotateCcw, Search, X, MessageSquare, Zap, ArrowLeftRight, GitBranch, Clock, FileCheck, Gavel, Flag, ShieldAlert, Swords } from 'lucide-react';
 import { useG6Graph } from '../../hooks/useG6Graph';
 import useReducedMotion from '../../hooks/useReducedMotion';
 import { useScenarioGraph } from '../../hooks/useScenarioGraph';
-import { NODE_TYPE_COLORS_HEX, KG_NODE_TYPE_FILLS, TYPE_LABEL_I18N } from '../../lib/graphTokens';
+import { NODE_TYPE_COLORS_HEX, KG_NODE_TYPE_FILLS, KG_NODE_TYPE_FILLS_DARK, NODE_ICONS, TYPE_LABEL_I18N } from '../../lib/graphTokens';
 import {
   KG_DEGRADE_THRESHOLDS,
   KG_AGENT_PALETTE,
@@ -17,6 +17,10 @@ import {
 import { NodeDetailPanel, type NodeDetail } from '../NodeDetailPanel';
 import { NodeConversationSheet, type NodeConversationOrigin } from '../kg/NodeConversationSheet';
 import NodeQuickCard from './NodeQuickCard';
+
+const NODE_ICON_COMPONENTS: Record<string, React.ElementType> = {
+  MessageSquare, Zap, ArrowLeftRight, GitBranch, Clock, FileCheck, Gavel, Flag, ShieldAlert, Swords
+};
 
 export interface KGGraphBoardProps {
   scenarioId: string;
@@ -104,20 +108,30 @@ export default function KGGraphBoard({
   });
 
   const [searchTerm, setSearchTerm] = useState('');
+  const deferredSearchTerm = useDeferredValue(searchTerm);
   const [typeFilter, setTypeFilter] = useState<Set<string>>(new Set());
+  const [filterVersion, setFilterVersion] = useState(0);
   const [edgeLabelOverride, setEdgeLabelOverride] = useState<boolean | null>(null);
-  const [showLegend, setShowLegend] = useState(true);
+  const [showLegend, setShowLegend] = useState(false);
   const [sheetState, setSheetState] = useState<{
+    key: string;
     open: boolean;
     scenarioId: string;
     identityId: string | null;
     origin: NodeConversationOrigin;
-  }>({ open: false, scenarioId: '', identityId: null, origin: { nodeId: '', nodeType: '' } });
+  }>({ key: '', open: false, scenarioId: '', identityId: null, origin: { nodeId: '', nodeType: '' } });
   const [quickCardState, setQuickCardState] = useState<{
     key: string;
     node: { id: string; label: string; type: string; round: number | null };
     position: { x: number; y: number };
   } | null>(null);
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
+
+  const markGraphFilterChanged = useCallback(() => {
+    setFilterVersion((version) => version + 1);
+    setFocusedNodeId(null);
+    setSheetState((prev) => (prev.open ? { ...prev, open: false } : prev));
+  }, []);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -134,7 +148,7 @@ export default function KGGraphBoard({
     return () => ro.disconnect();
   }, []);
 
-  const resetKey = `${scenarioId}:${branchId ?? ''}`;
+  const resetKey = `${scenarioId}:${branchId ?? ''}:${filterVersion}`;
   const [selectionState, setSelectionState] = useState<{
     key: string;
     selectedNode: NodeDetail | null;
@@ -166,42 +180,67 @@ export default function KGGraphBoard({
   const g6GraphData = useMemo(() => {
     if (!graphData) return { nodes: [], edges: [], truncatedFromCount: null as number | null };
     return toKgG6Data(graphData, {
-      searchTerm,
+      searchTerm: deferredSearchTerm,
       typeFilter: Array.from(typeFilter),
       isMobile,
       theme,
       t: (key: string, fallback: string) => t(key, fallback ?? '') as string,
     });
-  }, [graphData, searchTerm, typeFilter, isMobile, theme, t]);
+  }, [graphData, deferredSearchTerm, typeFilter, isMobile, theme, t]);
 
   const graphNodeById = useMemo(
     () => new Map((graphData?.nodes ?? []).map((n) => [n.id, n])),
     [graphData],
   );
 
-  const adjacencyMap = useMemo(() => {
-    const map = new Map<string, Set<string>>();
-    for (const edge of g6GraphData.edges) {
-      if (!map.has(edge.source)) map.set(edge.source, new Set());
-      if (!map.has(edge.target)) map.set(edge.target, new Set());
-      map.get(edge.source)!.add(edge.target);
-      map.get(edge.target)!.add(edge.source);
-    }
-    return map;
-  }, [g6GraphData.edges]);
+  const { degreeMap } = useMemo(() => {
+    const aMap = new Map<string, Set<string>>();
+    const dMap = new Map<string, number>();
+    if (!graphData?.nodes?.length) return { adjacencyMap: aMap, degreeMap: dMap };
 
-  const degreeMap = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const node of g6GraphData.nodes) {
-      map.set(node.id, (adjacencyMap.get(node.id)?.size ?? 0) + 1);
+    for (const edge of graphData.edges) {
+      if (!aMap.has(edge.source)) aMap.set(edge.source, new Set());
+      if (!aMap.has(edge.target)) aMap.set(edge.target, new Set());
+      aMap.get(edge.source)!.add(edge.target);
+      aMap.get(edge.target)!.add(edge.source);
     }
-    return map;
-  }, [g6GraphData.nodes, adjacencyMap]);
+
+    for (const node of graphData.nodes) {
+      dMap.set(node.id, (aMap.get(node.id)?.size ?? 0) + 1);
+    }
+    return { adjacencyMap: aMap, degreeMap: dMap };
+  }, [graphData]);
 
   const defaultShowEdgeLabels = g6GraphData.edges.length <= 50;
   const showEdgeLabels = edgeLabelOverride ?? defaultShowEdgeLabels;
   const effectiveShowLabels = showEdgeLabels && g6GraphData.edges.length <= KG_DEGRADE_THRESHOLDS.edgeLabelLimit;
-  const effectiveQuickCardState = quickCardState?.key === resetKey ? quickCardState : null;
+
+  // G3-W3/W4: derive "effective" selection state from the visible node set
+  // computed during this render. When typeFilter / searchTerm removes the
+  // currently-selected node, the rendered selection is null even though the
+  // underlying state still holds a stale id. This avoids cascading renders
+  // from a useEffect setState (react-hooks/set-state-in-effect).
+  const visibleNodeIds = useMemo(
+    () => new Set(g6GraphData.nodes.map((n) => n.id)),
+    [g6GraphData.nodes],
+  );
+  const effectiveQuickCardState =
+    quickCardState?.key === resetKey && visibleNodeIds.has(quickCardState.node.id)
+      ? quickCardState
+      : null;
+  const effectiveSelectedNode =
+    selectedNode && visibleNodeIds.has(selectedNode.id) ? selectedNode : null;
+  const effectiveLockedNodeId =
+    lockedNodeId && visibleNodeIds.has(lockedNodeId) ? lockedNodeId : null;
+  const effectiveFocusedNodeId =
+    focusedNodeId && visibleNodeIds.has(focusedNodeId) ? focusedNodeId : null;
+  const effectiveFocusedNode = effectiveFocusedNodeId
+    ? graphNodeById.get(effectiveFocusedNodeId) ?? null
+    : null;
+  const effectiveSheetOpen =
+    sheetState.open &&
+    sheetState.key === resetKey &&
+    visibleNodeIds.has(sheetState.origin.nodeId);
 
   const hasFocusedGraphIntent =
     searchTerm.trim().length > 0 ||
@@ -271,6 +310,7 @@ export default function KGGraphBoard({
     const agentName = typeof rawPayload.agent_name === 'string' ? rawPayload.agent_name : undefined;
     const content = typeof rawPayload.content === 'string' ? rawPayload.content : '';
     setSheetState({
+      key: resetKey,
       open: true,
       scenarioId,
       identityId: null,
@@ -285,7 +325,7 @@ export default function KGGraphBoard({
         typeColor: NODE_TYPE_COLORS_HEX[nodeType] ?? NODE_TYPE_COLORS_HEX.event,
       },
     });
-  }, [scenarioId]);
+  }, [resetKey, scenarioId]);
 
   const handleNodeClick = useCallback(
     (evt: unknown) => {
@@ -420,12 +460,12 @@ export default function KGGraphBoard({
   }, [graphRef, shouldDisableAnimation]);
 
   useEffect(() => {
-    if (lockedNodeId) {
-      lockHighlight(lockedNodeId);
+    if (effectiveLockedNodeId) {
+      lockHighlight(effectiveLockedNodeId);
     } else {
       clearHighlight();
     }
-  }, [lockedNodeId, lockHighlight, clearHighlight]);
+  }, [effectiveLockedNodeId, lockHighlight, clearHighlight]);
 
   useEffect(() => {
     const graph = graphRef.current;
@@ -451,20 +491,88 @@ export default function KGGraphBoard({
   const handleZoomIn = useCallback(() => {
     const graph = graphRef.current;
     if (!graph) return;
-    try { graph.zoomTo(1.3, undefined, undefined); } catch { /* noop */ }
-  }, [graphRef]);
+    try { graph.zoomTo(1.3, !shouldDisableAnimation, undefined); } catch { /* noop */ }
+  }, [graphRef, shouldDisableAnimation]);
 
   const handleZoomOut = useCallback(() => {
     const graph = graphRef.current;
     if (!graph) return;
-    try { graph.zoomTo(0.7, undefined, undefined); } catch { /* noop */ }
-  }, [graphRef]);
+    try { graph.zoomTo(0.7, !shouldDisableAnimation, undefined); } catch { /* noop */ }
+  }, [graphRef, shouldDisableAnimation]);
 
   const handleFitView = useCallback(() => {
     const graph = graphRef.current;
     if (!graph) return;
     try { graph.fitView(); } catch { /* noop */ }
   }, [graphRef]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (!g6GraphData.nodes.length) return;
+    const isNext = e.key === 'ArrowRight' || e.key === 'ArrowDown';
+    const isPrev = e.key === 'ArrowLeft' || e.key === 'ArrowUp';
+    const isHome = e.key === 'Home';
+    const isEnd = e.key === 'End';
+    const isEnter = e.key === 'Enter' || e.key === ' ';
+    const isEscape = e.key === 'Escape';
+
+    if (isEscape) {
+      setFocusedNodeId(null);
+      setQuickCardState(null);
+      setSelectedNode(null);
+      return;
+    }
+
+    if (isNext || isPrev || isHome || isEnd) {
+      e.preventDefault();
+      const nodes = g6GraphData.nodes;
+      const idx = nodes.findIndex(n => n.id === focusedNodeId);
+      let nextIdx = 0;
+      if (isHome) {
+        nextIdx = 0;
+      } else if (isEnd) {
+        nextIdx = nodes.length - 1;
+      } else if (isPrev) {
+        nextIdx = idx <= 0 ? nodes.length - 1 : idx - 1;
+      } else {
+        nextIdx = idx === -1 || idx === nodes.length - 1 ? 0 : idx + 1;
+      }
+      const nextNode = nodes[nextIdx];
+      if (nextNode) {
+        setFocusedNodeId(nextNode.id);
+        const fullNode = graphNodeById.get(nextNode.id);
+        if (fullNode && !isMobile) {
+          const graph = graphRef.current;
+          if (graph) {
+            try {
+              const focusEl = (graph as unknown as { focusElement?: (id: string) => void }).focusElement;
+              if (typeof focusEl === 'function') focusEl.call(graph, nextNode.id);
+              else graph.fitView();
+            } catch { /* noop */ }
+          }
+          setQuickCardState({
+            key: resetKey,
+            node: { id: fullNode.id, label: fullNode.label, type: fullNode.type, round: fullNode.round },
+            position: { x: canvasSize.width / 2, y: canvasSize.height / 2 },
+          });
+        }
+      }
+    } else if (isEnter && focusedNodeId) {
+      e.preventDefault();
+      const fullNode = graphNodeById.get(focusedNodeId);
+      if (fullNode) {
+        const payload = fullNode.payload ?? null;
+        setQuickCardState(null);
+        setSelectedNode({
+          id: fullNode.id,
+          label: fullNode.label,
+          type: fullNode.type,
+          round: fullNode.round,
+          payload,
+        });
+        openConversationSheet(fullNode.id, fullNode.type, fullNode.label, fullNode.round, payload);
+      }
+    }
+  }, [focusedNodeId, g6GraphData.nodes, graphNodeById, isMobile, resetKey, canvasSize, graphRef, openConversationSheet, setSelectedNode]);
 
   const availableTypes = useMemo(
     () => Array.from(new Set(graphData?.nodes.map((n) => n.type) ?? [])).sort(),
@@ -594,16 +702,19 @@ export default function KGGraphBoard({
               pointerEvents: 'none',
             }}
           />
-          <input
-            type="search"
-            data-testid="kg-graph-board-search"
-            className="kg-search"
-            placeholder={t('kg_graph_board.search_placeholder', 'Search nodes...')}
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            aria-label={t('kg_graph_board.search_aria', 'Search graph nodes')}
-            style={{ paddingLeft: 26 }}
-          />
+              <input
+                type="search"
+                data-testid="kg-graph-board-search"
+                className="kg-search"
+                placeholder={t('kg_graph_board.search_placeholder', 'Search nodes...')}
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  markGraphFilterChanged();
+                }}
+                aria-label={t('kg_graph_board.search_aria', 'Search graph nodes')}
+                style={{ paddingLeft: 26 }}
+              />
         </label>
 
         {/* Edge labels toggle */}
@@ -678,21 +789,23 @@ export default function KGGraphBoard({
         >
           {availableTypes.map((type) => {
             const active = typeFilter.has(type);
-            const dotColor = KG_NODE_TYPE_FILLS[type] ?? '#888';
+            const fills = theme === 'dark' ? KG_NODE_TYPE_FILLS_DARK : KG_NODE_TYPE_FILLS;
+            const dotColor = fills[type] ?? '#888';
             return (
               <button
                 key={type}
                 type="button"
                 className="kg-chip"
                 data-testid={`kg-graph-board-chip-${type}`}
-                onClick={() =>
+                onClick={() => {
+                  markGraphFilterChanged();
                   setTypeFilter((prev) => {
                     const next = new Set(prev);
                     if (next.has(type)) next.delete(type);
                     else next.add(type);
                     return next;
-                  })
-                }
+                  });
+                }}
                 aria-pressed={active}
               >
                 <span
@@ -735,11 +848,14 @@ export default function KGGraphBoard({
             {t('kg_graph_board.legend_subtitle', 'Each circle is an event in the simulation. Colors show what happened.')}
           </p>
           <ul className="kg-legend-list">
-            {(['event', 'fork', 'stance_shift', 'intervention', 'round', 'verdict'] as const).map(
+            {(['event', 'fork', 'stance_shift', 'intervention', 'round', 'verdict', 'outcome'] as const).map(
               (nodeType) => {
-                const dotColor = KG_NODE_TYPE_FILLS[nodeType] ?? '#888';
+                const fills = theme === 'dark' ? KG_NODE_TYPE_FILLS_DARK : KG_NODE_TYPE_FILLS;
+                const dotColor = fills[nodeType] ?? '#888';
                 const i18nEntry = TYPE_LABEL_I18N[nodeType];
                 const label = i18nEntry ? t(i18nEntry[0], i18nEntry[1]) : nodeType;
+                const iconName = NODE_ICONS[nodeType];
+                const IconComponent = iconName ? NODE_ICON_COMPONENTS[iconName] : null;
                 return (
                   <li key={nodeType} className="kg-legend-item">
                     <span
@@ -747,7 +863,9 @@ export default function KGGraphBoard({
                       aria-hidden="true"
                       style={{ background: dotColor }}
                     />
-                    <span className="kg-legend-label">{label}</span>
+                    <span className="kg-legend-label">
+                      {label} {IconComponent && <IconComponent aria-hidden="true" style={{ width: 14, height: 14, opacity: 0.6, marginLeft: 4, verticalAlign: 'middle' }} />}
+                    </span>
                     <span className="kg-legend-desc">
                       {t(
                         `kg_graph_board.legend_desc_${nodeType}`,
@@ -787,8 +905,12 @@ export default function KGGraphBoard({
         data-testid="kg-graph-board-canvas"
         tabIndex={0}
         role="application"
+        onKeyDown={handleKeyDown}
         aria-label={t('kg_explorer.g6_aria', 'Causal graph canvas')}
-        aria-description={t('kg_graph_board.drag_hint', 'Drag any node to rearrange')}
+        aria-description={t(
+          'kg_graph_board.canvas_aria_description',
+          'Use arrow keys to move between nodes. Enter opens details. Escape clears selection. Drag any node to rearrange.',
+        )}
         className="kg-canvas-shell kg-canvas-cursor"
       />
 
@@ -813,9 +935,9 @@ export default function KGGraphBoard({
       )}
 
       {/* NodeDetailPanel */}
-      {selectedNode && (
+      {effectiveSelectedNode && (
         <NodeDetailPanel
-          node={selectedNode}
+          node={effectiveSelectedNode}
           onClose={() => {
             setSelectedNode(null);
             setLockedNodeId(null);
@@ -848,21 +970,83 @@ export default function KGGraphBoard({
           </tr>
         </thead>
         <tbody>
-          {(graphData?.nodes ?? []).map((n) => (
-            <tr key={n.id}>
-              <td>{n.id}</td>
-              <td>{n.type}</td>
-              <td>{n.label}</td>
-              <td>{n.round ?? '—'}</td>
-            </tr>
-          ))}
+          {g6GraphData.nodes.map((visibleNode) => {
+            const n = graphNodeById.get(visibleNode.id);
+            const nodeId = n?.id ?? visibleNode.id;
+            const isFocused = nodeId === effectiveFocusedNodeId;
+            return (
+              <tr key={nodeId} data-focused={isFocused ? 'true' : undefined}>
+                <td>{nodeId}</td>
+                <td>{n?.type ?? visibleNode.data.kgType}</td>
+                <td>{n?.label ?? visibleNode.style.labelText ?? nodeId}</td>
+                <td>{n?.round ?? visibleNode.data.kgRound ?? '—'}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
+      <div
+        data-testid="kg-graph-board-keyboard-status"
+        role="status"
+        aria-live="polite"
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          padding: 0,
+          margin: -1,
+          overflow: 'hidden',
+          clip: 'rect(0, 0, 0, 0)',
+          whiteSpace: 'nowrap',
+          borderWidth: 0,
+        }}
+      >
+        {effectiveFocusedNode
+          ? t('kg_graph_board.focused_node_status', '{{label}} focused', {
+              label: effectiveFocusedNode.label,
+            })
+          : ''}
+      </div>
 
-      {sheetState.open && (
+      <style>{`
+        /* Touch targets & responsive toolbar */
+        .kg-toolbar {
+          flex-wrap: wrap;
+        }
+        .kg-icon-btn {
+          min-width: 36px;
+          min-height: 36px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .kg-search {
+          min-width: 280px;
+          max-width: 100%;
+        }
+        @media (max-width: 640px) {
+          .kg-search {
+            min-width: unset;
+            width: 100%;
+          }
+        }
+        /* Forced-colors coverage */
+        @media (forced-colors: active) {
+          .kg-icon-btn { color: ButtonText; background-color: ButtonFace; border: 1px solid ButtonText; }
+          .kg-chip { color: ButtonText; background-color: ButtonFace; border: 1px solid ButtonText; }
+          .kg-chip[aria-pressed="true"] { color: HighlightText; background-color: Highlight; border-color: HighlightText; }
+          .kg-legend-panel, .kg-quickcard { background-color: Canvas; color: CanvasText; border: 1px solid CanvasText; }
+          .kg-chip-dot, .kg-legend-dot { background: CanvasText !important; border: 1px solid CanvasText !important; box-shadow: none !important; }
+          .kg-canvas-shell { outline: 2px solid CanvasText; }
+          .kg-minimap { outline: 1px solid CanvasText; }
+          .kg-search { border: 1px solid CanvasText; }
+        }
+      `}</style>
+
+      {effectiveSheetOpen && (
         <NodeConversationSheet
           key={`${sheetState.scenarioId}:${sheetState.origin.nodeId}`}
-          open={sheetState.open}
+          open={effectiveSheetOpen}
           onOpenChange={(next) => setSheetState(prev => ({ ...prev, open: next }))}
           onClose={() => setSheetState(prev => ({ ...prev, open: false }))}
           scenarioId={sheetState.scenarioId}

@@ -43,7 +43,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - graph viz 当前已收口：`CausalReviewView` 会忽略 stale branch 响应，branch 切换时会先清空旧图、导出面板和 server analysis；`graph_analysis` 可用且后端返回分析时，页面会显示 summary、density、component、god nodes、degree bucket 和 cross-branch stats，`serverAnalysis=null` 时不硬造分析。graph route fetch 里的 `scenarioId / debateId`，以及 `CausalReviewView` 返回结果页的 scenario link，也都会先做 `encodeURIComponent()`，带特殊字符的 id 不会再打坏请求或跳转。URL 里带不存在的 `branch_id` 时会直接报错，不再伪装成空图；分支 selector 会优先显示 scenario branch 的标题和概率，拿不到元数据时才回退 branch id；completed branch 当前会在因果图里显示为 `outcome` 结局节点，并由 `led_to` 边接到同分支最近的来源节点；只有源图本身就没有因果边时，`多节点但 0 edges` 才会切到本地化的 event snapshot fallback；如果只是 search / filter 把边筛空，交互图和导出入口仍会保留，不会把有边的图误判成 relationless fallback。
 - 图谱交互当前也会跟随 UI 语言更新节点可访问名称、React Flow controls / minimap 文案、relation list 和 edge evidence tier；CausalReview 节点可拖拽、可选择，guide 里的长 key-node 可见标签会压短但完整 `label (degree)` 仍保留在 `aria-label / title`，search、branch、语言或 compact viewport 变化时才重置布局。compact viewport 下会继续保留显式 controls 和移动端导航提示；图页外层统一走 `100dvh`，移动端 header 和 relationless fallback 都锚在当前壳层内并避开 safe-area。
 - 工作台因果图的 edge label 当前只在 pill 里显示关系短标签；round 和 confidence 放在 hover / focus detail 里，tier 用左边框表示。zoom 很远时隐藏全部 label，中等 zoom 只保留 `caused / led_to / triggered fork` 这类高优先级 label，近距离显示全部 label；`Triggered Fork / Stance Shift` 这类后端英文 label 会按当前 UI 语言映射展示。
-- `ArgumentMap` 在 node-only 图时仍保留 screen-reader list 和键盘可达性，状态筛选也不会误把整张 node-only 图筛成空态；强度摘要会跟随当前筛选结果。argument map 当前按 verdict -> claims -> evidence/rebuttals 的三层 DAG 排布，支持 5 种 verdict status，移动端可切到按类型分组的列表。`KGExplorerView` 当前使用真实 G6 主图和 minimap；搜索 / 类型过滤会更新可视图，不再只更新旁路列表。KG 节点点击会传业务 `kgType`、branch 与 round 给 `NodeConversationSheet`，不会把 G6 shape type 当节点语义。
+- `ArgumentMap` 在 node-only 图时仍保留 screen-reader list 和键盘可达性，状态筛选也不会误把整张 node-only 图筛成空态；强度摘要会跟随当前筛选结果。argument map 当前按 verdict -> claims -> evidence/rebuttals 的三层 DAG 排布，支持 5 种 verdict status，移动端可切到按类型分组的列表。`KGExplorerView` 当前使用真实 G6 主图和 minimap；搜索 / 类型过滤会通过共用的 KG G6 数据转换更新可视图，不再只更新旁路列表。KG 节点点击会传业务 `kgType`、branch 与 round 给 `NodeConversationSheet`，不会把 G6 shape type 当节点语义。
 - `ExportPanel` 会区分 PNG / SVG 的忙态文案；SVG 导出改成 native SVG layer + node rebuild，长标题会按节点卡宽度裁剪显示，但 `<title>` 和文本内容仍保留完整节点标题，不再依赖 `foreignObject`。`LanguageSwitcher` 的 accessible name 当前也会带可见 `EN / 中文` 文本，语音控制和读屏口径不再分叉。后端 runtime repair 当前以最新 `causal-graph / argument-map` snapshot 为 authority，重复 snapshot 的旧残留会直接删除，不再把 stale 数据合回当前图。
 - CausalReview 节点点击当前会直接打开 `NodeConversationSheet`，并把 event / fork / outcome 的可读摘要作为 origin excerpt 交给后端 prompt context；面板会显示对话目标、卡片意义、前因、后续和相关关系，空态追问也会按事件、分支、结局、知识节点或裁决节点分别生成。大图超过 50 个节点时会用更紧的节点高度、间距和更低 `minZoom`，避免首屏过度撑开。KG 工作台桌面节点点击先显示 `NodeQuickCard` 快览卡；卡片会按视口钳位，用户再选择是否打开完整详情。
 - Agent conversation 历史当前可在节点对话和结果页 Agent 追问等入口重新加载；列表按 scenario 做 cursor pagination，详情加载后由宿主组件恢复已提交 assistant 内容，迟到的 list/detail 响应不会覆盖新筛选、新节点或新 Agent。
@@ -198,9 +198,10 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - frontend `npx tsc --noEmit`：通过
   - frontend `npx eslint src/ --max-warnings=0`：通过
   - frontend `npm run build`：通过
-  - frontend full vitest：`202 files / 2206 tests passed`
-  - frontend i18n key + placeholder parity：`zh: 2761`、`en: 2761`、parity OK
-  - Graph Workbench 定向回归：`6 files / 184 tests passed`，覆盖 `CausalGraphBoard / KGGraphBoard / WorkbenchView / useG6Graph / useScenarioGraph / kgGraphConfig`；确认 workbench graph/KG 不按 URL branch 过滤，G6 ResizeObserver 会先同步 canvas 尺寸再 fitView
+  - frontend full vitest：`202 files / 2224 tests passed`
+  - frontend i18n key + placeholder parity：`zh: 2766`、`en: 2766`、parity OK
+  - KG visualization 定向回归：`5 files / 193 tests passed`，覆盖 `KGGraphBoard / KGExplorerView / useG6Graph / kgGraphConfig / locales`；确认 KG 色板、平行边/self-loop、G6 data-only draw 路径、搜索/类型筛选、sr-only fallback 和 i18n key parity
+  - KG Explorer fixture E2E：Chromium desktop + mobile、Firefox desktop、WebKit desktop 共 `4 runs / allPassed=true`，覆盖 `/causal-graph` fixture、G6 canvas 非空白、搜索保留 canvas、主题切换和 10 次 mount/unmount
   - ResultView Agent follow-up browser spot-check：`/result/42ef3edc-8a33-49ed-997a-835e12ea6f35` 上浮动紫色按钮已移除，`找 Agent 追问` 会打开 Agent picker，带 identity 的 Agent 有 `查看档案` 链接，选择 Agent 后打开 `NodeConversationSheet`；关闭 sheet 后目标清空，390px mobile 无横向溢出，console error 为 0
   - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过；ending-room replay coverage error 全为 null，mobile fit 为 true
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0

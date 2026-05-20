@@ -120,13 +120,23 @@ export const NODE_TYPE_COLORS_HEX: Record<string, string> = {
 };
 
 export const KG_NODE_TYPE_FILLS: Record<string, string> = {
-  event: '#9a8e85',
-  intervention: '#b09050',
-  stance_shift: '#7a8e7a',
-  fork: '#a87060',
-  round: '#6a8a8a',
-  outcome: '#5f9f91',
-  verdict: '#b0943a',
+  event: '#2563eb',
+  intervention: '#b45309',
+  stance_shift: '#7c3aed',
+  fork: '#dc2626',
+  round: '#16a34a',
+  outcome: '#0f766e',
+  verdict: '#b8860b',
+};
+
+export const KG_NODE_TYPE_FILLS_DARK: Record<string, string> = {
+  event: '#60a5fa',
+  intervention: '#f59e0b',
+  stance_shift: '#a78bfa',
+  fork: '#f87171',
+  round: '#4ade80',
+  outcome: '#2dd4bf',
+  verdict: '#fbbf24',
 };
 
 export const STATUS_COLORS_HEX: Record<string, string> = {
@@ -224,6 +234,8 @@ export interface KgG6Tokens extends G6DualHexTokens {
   edgeLabelBg: string;
   /** Foreground fill for edge label text on this theme. */
   edgeLabelFg: string;
+  /** Theme-aware fills for node types. */
+  nodeFills: Record<string, string>;
 }
 
 export const KG_G6_TOKENS_LIGHT: KgG6Tokens = {
@@ -233,12 +245,13 @@ export const KG_G6_TOKENS_LIGHT: KgG6Tokens = {
   edgeStroke: '#c5beb1',                    // muted cream-aligned edge
   edgeStrokeSubtle: 'rgba(197,190,177,0.55)',
   label: '#181611',                         // project --text-primary
-  selectedStroke: '#c61583',                // brand magenta
-  hoverStroke: '#db589e',                   // project --color-primary-dim
-  brandRing: '#c61583',
+  selectedStroke: '#D27050',                // terracotta
+  hoverStroke: '#2F6F4F',                   // forest green
+  brandRing: '#D27050',
   dragGhost: 'rgba(198,21,131,0.18)',
   edgeLabelBg: 'rgba(252,252,250,0.95)',    // cream-tinted chip bg
   edgeLabelFg: '#58554f',                   // project --text-secondary
+  nodeFills: KG_NODE_TYPE_FILLS,
 };
 
 export const KG_G6_TOKENS_DARK: KgG6Tokens = {
@@ -248,12 +261,13 @@ export const KG_G6_TOKENS_DARK: KgG6Tokens = {
   edgeStroke: '#5a544c',
   edgeStrokeSubtle: 'rgba(90,84,76,0.55)',
   label: '#f0eee9',                         // warm-tinted dark text
-  selectedStroke: '#db589e',
-  hoverStroke: '#c61583',
-  brandRing: '#db589e',
+  selectedStroke: '#D27050',
+  hoverStroke: '#4a9d6f',
+  brandRing: '#D27050',
   dragGhost: 'rgba(219,88,158,0.22)',
   edgeLabelBg: 'rgba(24,22,17,0.85)',
   edgeLabelFg: '#928f88',                   // project --text-muted
+  nodeFills: KG_NODE_TYPE_FILLS_DARK,
 };
 
 /** Resolve KG-specific editorial tokens (cream + magenta). */

@@ -98,9 +98,14 @@ describe('getKGNodeStyle', () => {
     expect(style.lineWidth).toBe(2.5);
   });
 
-  it('uses NODE_TYPE_COLORS_HEX for known types', () => {
+  it('uses KG_NODE_TYPE_FILLS for known types', () => {
     const style = getKGNodeStyle('event', 'light');
-    expect(style.fill).toBe('#9a8e85'); // KG_NODE_TYPE_FILLS.event
+    expect(style.fill).toBe('#2563eb'); // KG_NODE_TYPE_FILLS.event
+  });
+
+  it('uses KG_NODE_TYPE_FILLS_DARK for known types in dark theme', () => {
+    const style = getKGNodeStyle('event', 'dark');
+    expect(style.fill).toBe('#60a5fa'); // KG_NODE_TYPE_FILLS_DARK.event
   });
 });
 
@@ -146,6 +151,7 @@ describe('toKgG6Data', () => {
     expect(result.edges).toHaveLength(1);
     expect(result.nodes[0].type).toBe('circle');
     expect(result.nodes[0].data.kgType).toBe('event');
+    expect(result.nodes[0].data.iconText).toBe('MessageSquare');
   });
 
   it('filters by searchTerm (case-insensitive)', () => {
@@ -153,6 +159,20 @@ describe('toKgG6Data', () => {
     const result = toKgG6Data(graph, { searchTerm: 'node 2' });
     expect(result.nodes).toHaveLength(1);
     expect(result.nodes[0].id).toBe('n2');
+  });
+
+  it('matches searchTerm against node id and key as well as label', () => {
+    const graph: GraphPayload = {
+      id: 'g1',
+      nodes: [
+        { id: 'event-actual-id', key: 'opaque-key', type: 'event', label: 'Alpha', round: 1, payload: null },
+        { id: 'other', key: 'key-actual-hit', type: 'claim', label: 'Beta', round: 2, payload: null },
+      ],
+      edges: [],
+    };
+
+    expect(toKgG6Data(graph, { searchTerm: 'actual-id' }).nodes.map((n) => n.id)).toEqual(['event-actual-id']);
+    expect(toKgG6Data(graph, { searchTerm: 'actual-hit' }).nodes.map((n) => n.id)).toEqual(['other']);
   });
 
   it('trims searchTerm and ignores empty', () => {
@@ -237,6 +257,43 @@ describe('toKgG6Data', () => {
     // which still exceeds the 200 cap, so truncatedFromCount reflects post-filter size.
     expect(result.truncatedFromCount).toBe(250);
     expect(result.nodes).toHaveLength(KG_DEGRADE_THRESHOLDS.mobileNodes);
+  });
+
+  it('calculates parallel edge offsets correctly', () => {
+    const graph: GraphPayload = {
+      id: 'g1',
+      nodes: [
+        { id: 'n1', key: 'k1', type: 'event', label: 'A', round: 1, payload: null },
+        { id: 'n2', key: 'k2', type: 'event', label: 'B', round: 1, payload: null },
+      ],
+      edges: [
+        { id: 'e1', source: 'n1', target: 'n2', type: 'caused', weight: null, label: null },
+        { id: 'e2', source: 'n2', target: 'n1', type: 'rebuts', weight: null, label: null },
+      ],
+    };
+    const result = toKgG6Data(graph);
+    expect(result.edges).toHaveLength(2);
+    expect(result.edges[0].style?.curveOffset).toBeDefined();
+    expect(result.edges[0].style?.endArrow).toBe(false);
+    expect(result.edges[1].style?.curveOffset).toBeDefined();
+    expect(result.edges[1].style?.endArrow).toBe(false);
+  });
+
+  it('calculates self loops count for nodes', () => {
+    const graph: GraphPayload = {
+      id: 'g1',
+      nodes: [
+        { id: 'n1', key: 'k1', type: 'event', label: 'A', round: 1, payload: null },
+      ],
+      edges: [
+        { id: 'e1', source: 'n1', target: 'n1', type: 'caused', weight: null, label: null },
+        { id: 'e2', source: 'n1', target: 'n1', type: 'caused', weight: null, label: null },
+      ],
+    };
+    const result = toKgG6Data(graph);
+    expect(result.nodes).toHaveLength(1);
+    expect(result.edges).toHaveLength(2);
+    expect(result.nodes[0].data.selfLoopCount).toBe(2);
   });
 });
 
@@ -355,12 +412,12 @@ describe('getKGNodeHoverStyle', () => {
     const hoverDark = getKGNodeHoverStyle('event', 'dark');
     expect(hoverDark.lineWidth).toBe(3.5);
     expect(hoverDark.stroke).toBe(KG_G6_TOKENS_DARK.hoverStroke);
-    expect(hoverDark.stroke).toBe('#c61583');
+    expect(hoverDark.stroke).toBe('#4a9d6f');
 
     const hoverLight = getKGNodeHoverStyle('event', 'light');
     expect(hoverLight.lineWidth).toBe(3.5);
     expect(hoverLight.stroke).toBe(KG_G6_TOKENS_LIGHT.hoverStroke);
-    expect(hoverLight.stroke).toBe('#db589e');
+    expect(hoverLight.stroke).toBe('#2F6F4F');
   });
 });
 
@@ -468,15 +525,15 @@ describe('resolveKGG6Tokens', () => {
     const tokens = resolveKGG6Tokens('light');
     expect(tokens.background).toBe('#fcfcfa');         // project --bg-surface
     expect(tokens.nodeStroke).toBe('#c61583');         // project --color-primary
-    expect(tokens.brandRing).toBe('#c61583');
+    expect(tokens.brandRing).toBe('#D27050');
     expect(tokens.label).toBe('#181611');              // project --text-primary
   });
 
   it('resolves dark theme to dark editorial mirror', () => {
     const tokens = resolveKGG6Tokens('dark');
     expect(tokens.background).toBe('#181611');
-    expect(tokens.nodeStroke).toBe('#db589e');         // primary-dim
-    expect(tokens.label).toBe('#f0eee9');
+    expect(tokens.nodeStroke).toBe('#db589e');
+    expect(tokens.brandRing).toBe('#D27050');
   });
 
   it('exposes edgeStrokeSubtle and dragGhost translucent tokens', () => {

@@ -20,16 +20,17 @@
    Capability gate: useCapabilityCheck('kg_explorer') — disabled → 404.
    ═══════════════════════════════════════════════════════════ */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { GraphOptions } from '@antv/g6';
 
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useG6Graph } from '../hooks/useG6Graph';
-import { comboLayout, shouldDegradeForMobile, degradeNodesForMobile } from '../lib/g6Layouts';
-import { resolveG6Tokens, KG_NODE_TYPE_FILLS } from '../lib/graphTokens';
-import { buildKgG6Options, readAgentId, buildKgNodeLabel, hashStringToIndex, KG_AGENT_PALETTE } from '../lib/kgGraphConfig';
+import type { GraphPayload } from '../hooks/useScenarioGraph';
+import { comboLayout } from '../lib/g6Layouts';
+import { resolveKGG6Tokens, TYPE_LABEL_I18N } from '../lib/graphTokens';
+import { KG_DEGRADE_THRESHOLDS, buildKgG6Options, toKgG6Data } from '../lib/kgGraphConfig';
 import { buildSessionHeaders } from '../api/client';
 import { NodeConversationSheet, type NodeConversationOrigin } from '../components/kg/NodeConversationSheet';
 
@@ -37,6 +38,7 @@ import { NodeConversationSheet, type NodeConversationOrigin } from '../component
 
 interface KGNode {
   id: string;
+  key?: string;
   type: string;
   label: string;
   round: number | null;
@@ -169,6 +171,7 @@ export default function KGExplorerView() {
   const [dataLoading, setDataLoading] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobileActivePane>('graph');
   const [searchTerm, setSearchTerm] = useState('');
+  const deferredSearchTerm = useDeferredValue(searchTerm);
   const [typeFilter, setTypeFilter] = useState<Set<string>>(new Set());
   const [minimapContainer, setMinimapContainer] = useState<HTMLDivElement | null>(null);
   // FE-3-seq: append-only sheet state for NodeConversationSheet trigger.
@@ -226,48 +229,56 @@ export default function KGExplorerView() {
 
   // Build G6 node/edge data — memoized so hook doesn't rebuild.
   const g6GraphData = useMemo(() => {
-    if (!graphData) return { nodes: [], edges: [] };
-    const mobileDowngrade = tier === 'mobile' && shouldDegradeForMobile(graphData.nodes.length);
-    const { kept } = mobileDowngrade
-      ? degradeNodesForMobile(graphData.nodes)
-      : { kept: graphData.nodes };
-    const filtered = kept.filter((n) => {
-      if (typeFilter.size > 0 && !typeFilter.has(n.type)) return false;
-      if (searchTerm.trim()) {
-        const term = searchTerm.trim().toLowerCase();
-        if (!n.label.toLowerCase().includes(term)) return false;
-      }
-      return true;
+    if (!graphData) return { nodes: [], edges: [], truncatedFromCount: null };
+    return toKgG6Data(graphData as unknown as GraphPayload, {
+      searchTerm: deferredSearchTerm,
+      typeFilter: Array.from(typeFilter),
+      isMobile: tier === 'mobile',
+      theme,
+      t,
     });
-    const keptIds = new Set(filtered.map((n) => n.id));
-    return {
-      nodes: filtered.map((n) => {
-        const agentId = readAgentId(n.payload);
-        const typeFill = KG_NODE_TYPE_FILLS[n.type] ?? KG_NODE_TYPE_FILLS.event ?? '#9a8e85';
-        const agentHue = agentId ? hashStringToIndex(agentId, KG_AGENT_PALETTE.length) : 0;
-        const agentStroke = agentId ? KG_AGENT_PALETTE[agentHue] : typeFill;
-        return {
-          id: n.id,
-          type: 'circle' as const,
-          style: {
-            fill: typeFill,
-            stroke: agentStroke,
-            lineWidth: 2.5,
-            labelText: buildKgNodeLabel(n.label, n.round, n.payload),
-            labelPlacement: 'bottom' as const,
-          },
-          data: { kgType: n.type, kgRound: n.round, agentId },
-        };
-      }),
-      edges: graphData.edges
-        .filter((e) => keptIds.has(e.source) && keptIds.has(e.target))
-        .map((e) => ({ id: e.id, source: e.source, target: e.target })),
-    };
-  }, [graphData, tier, searchTerm, typeFilter]);
+  }, [graphData, tier, deferredSearchTerm, typeFilter, theme, t]);
   const graphNodeById = useMemo(
     () => new Map((graphData?.nodes ?? []).map((node) => [node.id, node])),
     [graphData],
   );
+
+  // G3-W3/W4: hide NodeConversationSheet when its source node has been
+  // filtered out of the visible graph (typeFilter / searchTerm narrowed the
+  // visible set). Derived during render to avoid set-state-in-effect
+  // cascading renders.
+  const visibleNodeIds = useMemo(
+    () => new Set(g6GraphData.nodes.map((n) => n.id)),
+    [g6GraphData.nodes],
+  );
+  const explorerG6Data = useMemo(() => {
+    const hasFocusedGraphIntent = deferredSearchTerm.trim().length > 0 || typeFilter.size > 0;
+    const showNodeLabels =
+      g6GraphData.nodes.length <= KG_DEGRADE_THRESHOLDS.nodeLabelLimit || hasFocusedGraphIntent;
+    const showEdgeLabels =
+      g6GraphData.edges.length <= Math.min(50, KG_DEGRADE_THRESHOLDS.edgeLabelLimit);
+    if (showNodeLabels && showEdgeLabels) return g6GraphData;
+    return {
+      ...g6GraphData,
+      nodes: g6GraphData.nodes.map((node) => ({
+        ...node,
+        style: {
+          ...node.style,
+          ...(showNodeLabels ? {} : { labelText: undefined }),
+        },
+      })),
+      edges: g6GraphData.edges.map((edge) => ({
+        ...edge,
+        style: {
+          ...edge.style,
+          ...(showEdgeLabels ? {} : { labelText: undefined }),
+        },
+      })),
+    };
+  }, [deferredSearchTerm, g6GraphData, typeFilter]);
+  const isSheetSourceVisible =
+    !sheetState.open || visibleNodeIds.has(sheetState.origin.nodeId);
+  const effectiveSheetOpen = sheetState.open && isSheetSourceVisible;
 
   // Node click → open NodeConversationSheet directly (FE-3-seq wire-up).
   const handleNodeClick = useCallback(
@@ -289,6 +300,7 @@ export default function KGExplorerView() {
       const payload = typeof graphNode?.payload === 'object' && graphNode.payload !== null && !Array.isArray(graphNode.payload)
         ? graphNode.payload as Record<string, unknown>
         : {};
+      const content = typeof payload.content === 'string' ? payload.content : '';
       const relatedContext = (graphData?.edges ?? [])
         .filter((edge) => edge.source === nodeId || edge.target === nodeId)
         .slice(0, 3)
@@ -317,7 +329,7 @@ export default function KGExplorerView() {
           surface: 'knowledge',
           nodeId,
           nodeType,
-          excerpt: graphNode?.label,
+          excerpt: content || graphNode?.label,
           nodeLabel: graphNode?.label,
           branchId: typeof payload.branch_id === 'string' ? payload.branch_id : null,
           roundNumber: graphNode?.round ?? null,
@@ -333,23 +345,29 @@ export default function KGExplorerView() {
     [graphData?.edges, graphNodeById, scenarioId, t],
   );
 
-  const tokens = useMemo(() => resolveG6Tokens(theme), [theme]);
-  const reducedMotion = useMemo(
-    () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
-    [],
+  const tokens = useMemo(() => resolveKGG6Tokens(theme), [theme]);
+  const [reducedMotion, setReducedMotion] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
   );
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReducedMotion(mq.matches);
+    mq.addEventListener?.('change', update);
+    return () => mq.removeEventListener?.('change', update);
+  }, []);
 
   const g6Options = useMemo(
     () =>
       buildKgG6Options({
-        data: g6GraphData,
+        data: explorerG6Data,
         theme,
         reducedMotion,
         minimapContainer,
         enableHover: true,
         layout: comboLayout(),
       }) as unknown as Omit<GraphOptions, 'container' | 'renderer' | 'devicePixelRatio'>,
-    [g6GraphData, theme, reducedMotion, minimapContainer],
+    [explorerG6Data, theme, reducedMotion, minimapContainer],
   );
 
   const { canvasWrapperRef } = useG6Graph({
@@ -452,7 +470,10 @@ export default function KGExplorerView() {
           data-testid="kg-explorer-search"
           placeholder={t('kg_explorer.search_placeholder', 'Search nodes…')}
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={(e) => {
+            setSearchTerm(e.target.value);
+            setSheetState(createClosedSheetState());
+          }}
           style={{ padding: '0.25rem 0.5rem', minWidth: 160 }}
           aria-label={t('kg_explorer.search_aria', 'Search graph nodes')}
         />
@@ -468,25 +489,27 @@ export default function KGExplorerView() {
               <button
                 key={type}
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  setSheetState(createClosedSheetState());
                   setTypeFilter((prev) => {
                     const next = new Set(prev);
                     if (next.has(type)) next.delete(type);
                     else next.add(type);
                     return next;
-                  })
-                }
+                  });
+                }}
                 aria-pressed={active}
                 style={{
                   padding: '0.125rem 0.5rem',
                   border: '1px solid currentColor',
                   borderRadius: 999,
-                  background: active ? 'currentColor' : 'transparent',
-                  color: active ? 'var(--bg, #fff)' : 'inherit',
+                  background: active ? tokens.selectedStroke : 'transparent',
+                  borderColor: active ? tokens.selectedStroke : 'currentColor',
+                  color: active ? '#181611' : 'inherit',
                   cursor: 'pointer',
                 }}
               >
-                {type}
+                {t(TYPE_LABEL_I18N[type]?.[0] ?? type, TYPE_LABEL_I18N[type]?.[1] ?? type)}
               </button>
             );
           })}
@@ -531,6 +554,20 @@ export default function KGExplorerView() {
               {t('common.loading', 'Loading…')}
             </p>
           )}
+          {g6GraphData.truncatedFromCount !== null && (
+            <p
+              data-testid="kg-explorer-truncate-notice"
+              role="status"
+              aria-live="polite"
+              style={{ fontSize: '0.75rem', padding: '0.25rem', margin: 0 }}
+            >
+              {t('kg_explorer.mobile_truncate_notice', {
+                defaultValue: 'Showing first {{cap}} of {{total}} nodes. Refine search or filters to narrow results.',
+                cap: g6GraphData.nodes.length,
+                total: g6GraphData.truncatedFromCount,
+              })}
+            </p>
+          )}
         </section>
 
         {/* xyflow "dual stack" side region — minimal stub (xyflow instance
@@ -569,10 +606,16 @@ export default function KGExplorerView() {
           />
           <p style={{ fontSize: '0.8rem' }}>
             {graphData
-              ? t('kg_explorer.node_count', {
-                  defaultValue: '{{count}} nodes',
-                  count: graphData.nodes.length,
-                })
+              ? (g6GraphData.truncatedFromCount !== null
+                  ? t('kg_explorer.node_count_visible', {
+                      defaultValue: '{{visible}} of {{total}} nodes shown',
+                      visible: g6GraphData.nodes.length,
+                      total: g6GraphData.truncatedFromCount,
+                    })
+                  : t('kg_explorer.node_count', {
+                      defaultValue: '{{count}} nodes',
+                      count: graphData.nodes.length,
+                    }))
               : '—'}
           </p>
         </aside>
@@ -642,10 +685,14 @@ export default function KGExplorerView() {
       {/* forced-colors + 400% zoom CSS — scoped via <style> for zero bundler churn */}
       <style>{`
         @media (forced-colors: active) {
-          [data-testid="kg-explorer-g6-canvas"] { outline: 2px solid CanvasText; }
+          [data-testid="kg-explorer-g6-canvas"] { outline: 2px solid CanvasText !important; }
           [data-testid="kg-explorer-dual-stack"] > * {
             outline: 1px solid CanvasText;
           }
+          [data-testid="kg-explorer-search"] { border: 1px solid CanvasText; }
+          [data-testid="kg-explorer-filter-pills"] button { color: ButtonText !important; background-color: ButtonFace !important; border: 1px solid ButtonText !important; }
+          [data-testid="kg-explorer-filter-pills"] button[aria-pressed="true"] { color: HighlightText !important; background-color: Highlight !important; border-color: HighlightText !important; }
+          [data-testid="kg-explorer-xyflow"] { outline: 1px solid CanvasText; background-color: Canvas !important; color: CanvasText !important; }
         }
         @media (max-width: 640px) {
           .kg-explorer__dual-stack { grid-template-columns: minmax(0, 1fr) !important; }
@@ -654,10 +701,11 @@ export default function KGExplorerView() {
         ${canvasWrapperRef ? '' : ''}
       `}</style>
 
-      {/* FE-3-seq: NodeConversationSheet (append-only, direct state wire). */}
-      {sheetState.open && (
+      {/* FE-3-seq: NodeConversationSheet (append-only, direct state wire).
+          G3-W3/W4: hide sheet when its source node is no longer visible (derived). */}
+      {effectiveSheetOpen && (
         <NodeConversationSheet
-          open={sheetState.open}
+          open={effectiveSheetOpen}
           onOpenChange={(next) =>
             setSheetState((prev) => (next ? prev : createClosedSheetState()))
           }

@@ -1,9 +1,17 @@
-import { cleanup, render, screen, within, act } from '@testing-library/react';
+import { cleanup, render, screen, within, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const hoisted = vi.hoisted(() => {
-  const mockT = vi.fn((key: string, fallback?: string) => fallback ?? key);
+  const mockT = vi.fn((key: string, fallback?: string, options?: Record<string, unknown>) => {
+    let value = fallback ?? key;
+    if (options) {
+      for (const [optionKey, optionValue] of Object.entries(options)) {
+        value = value.replaceAll(`{{${optionKey}}}`, String(optionValue));
+      }
+    }
+    return value;
+  });
   const mockUseReducedMotion = vi.fn(() => false);
   const refetchFn = vi.fn();
   const mockScenarioGraphReturn = {
@@ -17,6 +25,8 @@ const hoisted = vi.hoisted(() => {
   const offSpy = vi.fn();
   const renderSpy = vi.fn(() => Promise.resolve());
   const setOptionsSpy = vi.fn();
+  const setDataSpy = vi.fn();
+  const drawSpy = vi.fn(() => Promise.resolve());
   const setSizeSpy = vi.fn();
   const zoomToSpy = vi.fn();
   const fitViewSpy = vi.fn();
@@ -32,7 +42,7 @@ const hoisted = vi.hoisted(() => {
 
   return {
     mockT, mockUseReducedMotion, mockScenarioGraphReturn, refetchFn,
-    destroySpy, onSpy, offSpy, renderSpy, setOptionsSpy, setSizeSpy,
+    destroySpy, onSpy, offSpy, renderSpy, setOptionsSpy, setDataSpy, drawSpy, setSizeSpy,
     zoomToSpy, fitViewSpy, focusElementSpy, fitCenterSpy, focusElementEnabled,
     getDataSpy, getNeighborNodesDataSpy, getRelatedEdgesDataSpy, setElementStateSpy,
   };
@@ -40,7 +50,7 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (...args: unknown[]) => hoisted.mockT(...(args as [string, string?])),
+    t: (...args: unknown[]) => hoisted.mockT(...(args as [string, string?, Record<string, unknown>?])),
     i18n: { changeLanguage: () => {}, language: 'en' },
   }),
 }));
@@ -54,7 +64,8 @@ vi.mock('../../hooks/useScenarioGraph', () => ({
 }));
 
 vi.mock('../kg/NodeConversationSheet', () => ({
-  NodeConversationSheet: () => null,
+  NodeConversationSheet: ({ open, origin }: { open: boolean; origin: { nodeId: string } }) =>
+    open ? <div data-testid="node-conversation-sheet">{origin.nodeId}</div> : null,
 }));
 
 vi.mock('@antv/g6', () => {
@@ -64,6 +75,8 @@ vi.mock('@antv/g6', () => {
     off(...a: unknown[]) { return hoisted.offSpy(...a); }
     render() { return hoisted.renderSpy(); }
     setOptions(...a: unknown[]) { return hoisted.setOptionsSpy(...a); }
+    setData(...a: unknown[]) { return hoisted.setDataSpy(...a); }
+    draw() { return hoisted.drawSpy(); }
     setSize(...a: unknown[]) { return hoisted.setSizeSpy(...a); }
     zoomTo() { return hoisted.zoomToSpy(); }
     fitView() { return hoisted.fitViewSpy(); }
@@ -101,6 +114,8 @@ afterEach(() => {
   hoisted.offSpy.mockClear();
   hoisted.renderSpy.mockClear();
   hoisted.setOptionsSpy.mockClear();
+  hoisted.setDataSpy.mockClear();
+  hoisted.drawSpy.mockClear();
   hoisted.setSizeSpy.mockClear();
   hoisted.zoomToSpy.mockClear();
   hoisted.fitViewSpy.mockClear();
@@ -145,6 +160,20 @@ function setupGraphData(nodeCount = 5, edgeCount?: number) {
   return payload;
 }
 
+function getGraphDataUpdates(): Array<{ nodes?: Array<{ id: string }>; edges?: unknown[] }> {
+  const isGraphData = (
+    data: { nodes?: Array<{ id: string }>; edges?: unknown[] } | undefined,
+  ): data is { nodes?: Array<{ id: string }>; edges?: unknown[] } => Boolean(data);
+  return [
+    ...hoisted.setOptionsSpy.mock.calls.map(([options]) =>
+      (options as { data?: { nodes?: Array<{ id: string }>; edges?: unknown[] } })?.data,
+    ),
+    ...hoisted.setDataSpy.mock.calls.map(([data]) =>
+      data as { nodes?: Array<{ id: string }>; edges?: unknown[] },
+    ),
+  ].filter(isGraphData);
+}
+
 describe('KGGraphBoard', () => {
   it('renders loading state', () => {
     hoisted.mockScenarioGraphReturn.loading = true;
@@ -171,12 +200,18 @@ describe('KGGraphBoard', () => {
     expect(screen.getByRole('table')).toBeInTheDocument();
   });
 
-  it('sr-only table contains all nodes from graphData', () => {
+  it('sr-only table contains visible graph nodes', async () => {
     setupGraphData(4);
+    const user = userEvent.setup();
     render(<KGGraphBoard scenarioId="s1" />);
     const table = screen.getByRole('table');
+    expect(within(table).getAllByRole('row')).toHaveLength(5);
+
+    await user.type(screen.getByTestId('kg-graph-board-search'), 'Node 1');
+
     const rows = within(table).getAllByRole('row');
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(2);
+    expect(within(table).getByText('Node 1')).toBeInTheDocument();
   });
 
   it('renders type filter chips when data has nodes', () => {
@@ -218,6 +253,17 @@ describe('KGGraphBoard', () => {
     expect(searchInput).toHaveValue('hello');
   });
 
+  it('updates G6 data when search filters visible nodes', async () => {
+    setupGraphData(5);
+    const user = userEvent.setup();
+    render(<KGGraphBoard scenarioId="s1" />);
+    await user.type(screen.getByTestId('kg-graph-board-search'), 'Node 2');
+
+    await screen.findByDisplayValue('Node 2');
+    expect(getGraphDataUpdates().at(-1)?.nodes?.map((node) => node.id)).toEqual(['n2']);
+    expect(hoisted.setOptionsSpy).toHaveBeenCalled();
+  });
+
   it('toggles type filter chip aria-pressed on click', async () => {
     setupGraphData(6);
     const user = userEvent.setup();
@@ -227,6 +273,7 @@ describe('KGGraphBoard', () => {
     expect(firstChip).toHaveAttribute('aria-pressed', 'false');
     await user.click(firstChip);
     expect(firstChip).toHaveAttribute('aria-pressed', 'true');
+    expect(getGraphDataUpdates().at(-1)?.nodes).toHaveLength(2);
     await user.click(firstChip);
     expect(firstChip).toHaveAttribute('aria-pressed', 'false');
   });
@@ -428,6 +475,36 @@ describe('KGGraphBoard', () => {
         act(() => simulateNodeClick({ x: 100, y: 200 }));
         expect(screen.queryByTestId('node-quick-card')).not.toBeInTheDocument();
         expect(screen.getByTestId('node-detail-panel')).toBeInTheDocument();
+      } finally {
+        window.matchMedia = originalMatchMedia;
+      }
+    });
+
+    it('does not revive a node conversation sheet after search hides its source node', async () => {
+      const originalMatchMedia = window.matchMedia;
+      window.matchMedia = ((query: string) => ({
+        matches: query.includes('coarse') || query.includes('max-width: 767'),
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      })) as unknown as typeof window.matchMedia;
+      try {
+        setupGraphData(3);
+        const user = userEvent.setup();
+        render(<KGGraphBoard scenarioId="s1" />);
+        act(() => simulateNodeClick({ x: 100, y: 200 }, 'n0'));
+        expect(screen.getByTestId('node-conversation-sheet')).toHaveTextContent('n0');
+
+        const search = screen.getByTestId('kg-graph-board-search');
+        await user.type(search, 'Node 1');
+        expect(screen.queryByTestId('node-conversation-sheet')).not.toBeInTheDocument();
+
+        await user.clear(search);
+        expect(screen.queryByTestId('node-conversation-sheet')).not.toBeInTheDocument();
       } finally {
         window.matchMedia = originalMatchMedia;
       }
@@ -679,6 +756,88 @@ describe('KGGraphBoard', () => {
         expect(disconnectSpy).toHaveBeenCalled();
       } finally {
         global.ResizeObserver = originalRO;
+      }
+    });
+
+    it('legend is collapsed by default', () => {
+      setupGraphData(3);
+      render(<KGGraphBoard scenarioId="s1" />);
+      // Legend panel should NOT be present in the DOM before the toggle is clicked.
+      expect(screen.queryByTestId('kg-graph-board-legend')).not.toBeInTheDocument();
+      // Toggle button is still rendered, and reflects collapsed state via aria-pressed=false.
+      const toggle = screen.getByTestId('kg-graph-board-legend-toggle');
+      expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('renders legend with outcome and icons', () => {
+      setupGraphData(3);
+      render(<KGGraphBoard scenarioId="s1" />);
+
+      const toggle = screen.getByTestId('kg-graph-board-legend-toggle');
+      fireEvent.click(toggle);
+
+      const legend = screen.getByTestId('kg-graph-board-legend');
+      expect(legend).toBeInTheDocument();
+      // Should contain outcome
+      expect(screen.getByText('Outcome')).toBeInTheDocument();
+      // Should contain icons for event and outcome (MessageSquare and FileCheck)
+      const messageSquareIcon = legend.querySelector('.lucide-message-square');
+      expect(messageSquareIcon).toBeInTheDocument();
+      const fileCheckIcon = legend.querySelector('.lucide-file-check');
+      expect(fileCheckIcon).toBeInTheDocument();
+    });
+  });
+
+  describe('Keyboard Navigation', () => {
+    it('uses arrow keys for node focus and leaves Tab available for normal page navigation', () => {
+      setupGraphData(3);
+      render(<KGGraphBoard scenarioId="s1" />);
+      const canvas = screen.getByTestId('kg-graph-board-canvas');
+      const status = screen.getByTestId('kg-graph-board-keyboard-status');
+
+      expect(fireEvent.keyDown(canvas, { key: 'Tab' })).toBe(true);
+      expect(status).toHaveTextContent('');
+
+      fireEvent.keyDown(canvas, { key: 'ArrowRight' });
+      expect(status).toHaveTextContent('Node 0 focused');
+
+      fireEvent.keyDown(canvas, { key: 'ArrowRight' });
+      expect(status).toHaveTextContent('Node 1 focused');
+
+      fireEvent.keyDown(canvas, { key: 'ArrowLeft' });
+      expect(status).toHaveTextContent('Node 0 focused');
+
+      fireEvent.keyDown(canvas, { key: 'End' });
+      expect(status).toHaveTextContent('Node 2 focused');
+
+      fireEvent.keyDown(canvas, { key: 'Escape' });
+      expect(status).toHaveTextContent('');
+    });
+
+    it('opens detail when pressing Enter on a focused node', () => {
+      const originalMatchMedia = window.matchMedia;
+      window.matchMedia = ((query: string) => ({
+        matches: query.includes('coarse') || query.includes('max-width: 767'),
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      })) as unknown as typeof window.matchMedia;
+      try {
+        setupGraphData(3);
+        render(<KGGraphBoard scenarioId="s1" />);
+        const canvas = screen.getByTestId('kg-graph-board-canvas');
+
+        fireEvent.keyDown(canvas, { key: 'ArrowRight' });
+        expect(screen.getByTestId('kg-graph-board-keyboard-status')).toHaveTextContent('Node 0 focused');
+
+        fireEvent.keyDown(canvas, { key: 'Enter' });
+        expect(screen.getByTestId('node-detail-panel')).toBeInTheDocument();
+      } finally {
+        window.matchMedia = originalMatchMedia;
       }
     });
   });

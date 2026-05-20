@@ -3,6 +3,23 @@ import { describe, expect, it } from 'vitest';
 import en from './locales/en.json';
 import zh from './locales/zh.json';
 
+function flatEntries(obj: Record<string, unknown>, prefix = ''): Record<string, string> {
+  const entries: Record<string, string> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${k}` : k;
+    if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
+      Object.assign(entries, flatEntries(v as Record<string, unknown>, path));
+    } else {
+      entries[path] = String(v);
+    }
+  }
+  return entries;
+}
+
+function placeholders(value: string): string[] {
+  return [...value.matchAll(/\{\{\s*([^}\s]+)\s*\}\}/g)].map((match) => match[1]).sort();
+}
+
 describe('i18n locale resources', () => {
   it('provides shared common action labels used by live modals', () => {
     expect(en.translation.common.cancel).toBe('Cancel');
@@ -453,24 +470,21 @@ describe('i18n locale resources', () => {
   });
 
   it('keeps en.json and zh.json key sets in perfect parity', () => {
-    function flatKeys(obj: Record<string, unknown>, prefix = ''): string[] {
-      const keys: string[] = [];
-      for (const [k, v] of Object.entries(obj)) {
-        const path = prefix ? `${prefix}.${k}` : k;
-        if (typeof v === 'object' && v !== null) {
-          keys.push(...flatKeys(v as Record<string, unknown>, path));
-        } else {
-          keys.push(path);
-        }
-      }
-      return keys;
-    }
-    const enKeys = new Set(flatKeys(en));
-    const zhKeys = new Set(flatKeys(zh));
+    const enKeys = new Set(Object.keys(flatEntries(en)));
+    const zhKeys = new Set(Object.keys(flatEntries(zh)));
     const onlyEn = [...enKeys].filter(k => !zhKeys.has(k));
     const onlyZh = [...zhKeys].filter(k => !enKeys.has(k));
     expect(onlyEn).toEqual([]);
     expect(onlyZh).toEqual([]);
+  });
+
+  it('keeps en.json and zh.json placeholder variables in parity', () => {
+    const enEntries = flatEntries(en);
+    const zhEntries = flatEntries(zh);
+    const mismatches = Object.keys(enEntries)
+      .filter((key) => key in zhEntries)
+      .filter((key) => placeholders(enEntries[key]).join(',') !== placeholders(zhEntries[key]).join(','));
+    expect(mismatches).toEqual([]);
   });
 
   it('provides document uploader locale keys used by the workshop import flow', () => {
@@ -513,6 +527,16 @@ describe('i18n locale resources', () => {
     expect(zh.translation.kg_graph_board.sr_table_aria).toBe('图谱节点的无障碍表格');
     expect(en.translation.kg_graph_board.sr_caption).toBe('Graph nodes (screen-reader fallback)');
     expect(zh.translation.kg_graph_board.sr_caption).toBe('图谱节点（无障碍表格）');
+    expect(en.translation.kg_graph_board.legend_desc_outcome).toBe('The result of an action or event');
+    expect(zh.translation.kg_graph_board.legend_desc_outcome).toBe('事件或行动的结果');
+    expect(en.translation.kg_graph_board.canvas_aria_description).toContain('arrow keys');
+    expect(zh.translation.kg_graph_board.canvas_aria_description).toContain('方向键');
+    expect(en.translation.kg_graph_board.focused_node_status).toContain('{{label}}');
+    expect(zh.translation.kg_graph_board.focused_node_status).toContain('{{label}}');
+    expect(en.translation.kg_explorer.node_count_visible).toContain('{{visible}}');
+    expect(zh.translation.kg_explorer.node_count_visible).toContain('{{visible}}');
+    expect(en.translation.kg_explorer.mobile_truncate_notice).toContain('{{cap}}');
+    expect(zh.translation.kg_explorer.mobile_truncate_notice).toContain('{{cap}}');
   });
 
   it('provides NodeDetailPanel evidence locale keys for graph node detail panel', () => {

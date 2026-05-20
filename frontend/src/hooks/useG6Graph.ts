@@ -47,6 +47,12 @@ export interface UseG6GraphOptions {
    */
   options: Omit<GraphOptions, 'container' | 'renderer' | 'devicePixelRatio' | 'autoResize'>;
   /**
+   * Controls the cheap data update path. `auto` only uses setData+draw when
+   * non-data options are transparent and node/edge membership is unchanged.
+   * Membership changes need render() so G6 re-runs layout.
+   */
+  dataUpdateMode?: 'auto' | 'draw' | 'render';
+  /**
    * Called once the Graph instance has been constructed and rendered.
    * Use this to register extra event listeners etc.
    */
@@ -80,6 +86,7 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
   const {
     containerRef, options, onReady, onNodeClick, onBeforeDestroy,
     onNodeHover, onNodeLeave, onEdgeClick, onEdgeHover, onEdgeLeave,
+    dataUpdateMode = 'auto',
   } = config;
 
   // Strict Mode double-mount guard. First dev run aborts before mutation.
@@ -246,7 +253,80 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
   useEffect(() => {
     const graph = graphRef.current;
     if (!graph || lastOptionsRef.current === options) return;
+
+    const prevOpts = lastOptionsRef.current || {} as UseG6GraphOptions['options'];
+    const { data: prevData, ...prevRest } = prevOpts;
+    const { data: nextData, ...nextRest } = options;
+
+    const hasOpaqueValue = (value: unknown, seen = new WeakSet<object>()): boolean => {
+      if (typeof value === 'function') return true;
+      if (!value || typeof value !== 'object') return false;
+      if (typeof Element !== 'undefined' && value instanceof Element) return true;
+      if (value instanceof Map || value instanceof Set) return true;
+      if (seen.has(value)) return false;
+      seen.add(value);
+      if (Array.isArray(value)) return value.some((item) => hasOpaqueValue(item, seen));
+      return Object.values(value as Record<string, unknown>).some((item) => hasOpaqueValue(item, seen));
+    };
+
+    const getSignature = (opts: Record<string, unknown>) => {
+      try {
+        return JSON.stringify(opts, (_, value) => {
+          if (typeof value === 'function') return undefined;
+          if (typeof Element !== 'undefined' && value instanceof Element) return 'Element';
+          return value;
+        });
+      } catch {
+        return Math.random().toString(); // Force update if stringify fails
+      }
+    };
+
+    const getDataStructureSignature = (data: unknown) => {
+      const value = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+      const itemSignature = (item: unknown) => {
+        if (!item || typeof item !== 'object') return String(item ?? '');
+        const record = item as Record<string, unknown>;
+        return [
+          record.id,
+          record.source,
+          record.target,
+          record.type,
+          record.combo,
+        ].map((part) => String(part ?? '')).join(':');
+      };
+      const arraySignature = (items: unknown) =>
+        Array.isArray(items) ? items.map(itemSignature).join('|') : '';
+      return [
+        `nodes=${arraySignature(value.nodes)}`,
+        `edges=${arraySignature(value.edges)}`,
+        `combos=${arraySignature(value.combos)}`,
+      ].join(';');
+    };
+
+    const opaqueOptions = hasOpaqueValue(prevRest) || hasOpaqueValue(nextRest);
+    const isOptionsChanged = opaqueOptions || getSignature(prevRest) !== getSignature(nextRest);
+    const isDataStructureStable =
+      getDataStructureSignature(prevData) === getDataStructureSignature(nextData);
+    const canDrawDataOnly =
+      dataUpdateMode === 'draw' ||
+      (dataUpdateMode === 'auto' && !isOptionsChanged && isDataStructureStable);
     lastOptionsRef.current = options;
+
+    if (prevData !== nextData && canDrawDataOnly) {
+      try {
+        graph.setData(nextData as Parameters<Graph['setData']>[0]);
+        const drawResult = graph.draw();
+        if (drawResult && typeof (drawResult as Promise<unknown>).then === 'function') {
+          (drawResult as Promise<unknown>).catch(() => {
+            /* noop — same pattern as render() above */
+          });
+        }
+      } catch {
+        /* noop */
+      }
+      return;
+    }
+
     try {
       graph.setOptions({ ...options, autoResize: true } as unknown as GraphOptions);
       const renderResult = graph.render();
@@ -258,7 +338,7 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
     } catch {
       /* noop */
     }
-  }, [options]);
+  }, [dataUpdateMode, options]);
 
   useEffect(() => {
     const container = containerRef.current;

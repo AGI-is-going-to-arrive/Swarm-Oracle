@@ -1,6 +1,7 @@
 import type { GraphPayload } from '../hooks/useScenarioGraph';
-import { KG_NODE_TYPE_FILLS, resolveKGG6Tokens } from './graphTokens';
+import { KG_NODE_TYPE_FILLS, KG_NODE_TYPE_FILLS_DARK, NODE_ICONS, resolveKGG6Tokens } from './graphTokens';
 import type { LayoutOptionsShape } from './g6Layouts';
+import { buildParallelEdgeIndex } from './graphTraversal';
 
 // ── Constants ──────────────────────────────────────────────
 
@@ -137,7 +138,8 @@ export function getKGNodeStyle(
   theme: 'dark' | 'light',
 ): { fill: string; stroke: string; lineWidth: number; textColor: string } {
   const tokens = resolveKGG6Tokens(theme);
-  const fill = KG_NODE_TYPE_FILLS[nodeType] ?? DEFAULT_NODE_COLOR;
+  const fills = theme === 'dark' ? KG_NODE_TYPE_FILLS_DARK : KG_NODE_TYPE_FILLS;
+  const fill = fills[nodeType] ?? DEFAULT_NODE_COLOR;
   return {
     fill,
     stroke: NODE_HALO_STROKE[theme],
@@ -191,7 +193,11 @@ export function toKgG6Data(
 
   if (searchTerm && searchTerm.trim()) {
     const term = searchTerm.trim().toLowerCase();
-    nodes = nodes.filter((n) => n.label.toLowerCase().includes(term));
+    nodes = nodes.filter((n) =>
+      [n.id, n.key, n.label].some((value) =>
+        typeof value === 'string' && value.toLowerCase().includes(term),
+      ),
+    );
   }
 
   let truncatedFromCount: number | null = null;
@@ -202,12 +208,24 @@ export function toKgG6Data(
 
   const keptIds = new Set(nodes.map((n) => n.id));
 
+  const filteredEdges = graph.edges.filter((e) => keptIds.has(e.source) && keptIds.has(e.target));
+  const parallelOffsets = buildParallelEdgeIndex(filteredEdges);
+  const selfLoopCounts = new Map<string, number>();
+
+  filteredEdges.forEach((e) => {
+    if (e.source === e.target) {
+      selfLoopCounts.set(e.source, (selfLoopCounts.get(e.source) || 0) + 1);
+    }
+  });
+
   return {
     nodes: nodes.map((n) => {
       const agentId = readAgentId(n.payload);
-      const typeFill = KG_NODE_TYPE_FILLS[n.type] ?? KG_NODE_TYPE_FILLS.event ?? '#9a8e85';
+      const fills = theme === 'dark' ? KG_NODE_TYPE_FILLS_DARK : KG_NODE_TYPE_FILLS;
+      const typeFill = fills[n.type] ?? fills.event ?? '#2563eb';
       const agentHue = agentId ? hashStringToIndex(agentId, KG_AGENT_PALETTE.length) : 0;
       const agentStroke = agentId ? KG_AGENT_PALETTE[agentHue] : typeFill;
+      const iconText = NODE_ICONS[n.type] ?? 'Circle';
       return {
         id: n.id,
         type: 'circle' as const,
@@ -218,11 +236,10 @@ export function toKgG6Data(
           labelText: buildKgNodeLabel(n.label, n.round, n.payload),
           labelPlacement: 'bottom' as const,
         },
-        data: { kgType: n.type, kgRound: n.round, agentId },
+        data: { kgType: n.type, kgRound: n.round, agentId, iconText, selfLoopCount: selfLoopCounts.get(n.id) || 0 },
       };
     }),
-    edges: graph.edges
-      .filter((e) => keptIds.has(e.source) && keptIds.has(e.target))
+    edges: filteredEdges
       .map((e) => {
         const i18nEntry = EDGE_TYPE_LABEL_I18N[e.type];
         const labelText = i18nEntry
@@ -230,6 +247,10 @@ export function toKgG6Data(
           : e.type;
         const resolvedTheme = theme ?? 'dark';
         const tokens = resolveKGG6Tokens(resolvedTheme);
+
+        const offset = parallelOffsets.get(e.id);
+        const hasOffset = offset !== undefined && offset !== 0;
+
         return {
           id: e.id,
           source: e.source,
@@ -241,6 +262,7 @@ export function toKgG6Data(
             labelBackgroundRadius: 3,
             labelFontSize: 10,
             labelFill: tokens.edgeLabelFg,
+            ...(hasOffset ? { curveOffset: offset, endArrow: false } : {}),
           },
         };
       }),
@@ -252,7 +274,7 @@ export interface KgG6Node {
   id: string;
   type: 'circle';
   style: { fill: string; stroke: string; lineWidth: number; labelText?: string; labelPlacement: 'bottom' };
-  data: { kgType: string; kgRound: number | null; agentId: string | null };
+  data: { kgType: string; kgRound: number | null; agentId: string | null; iconText?: string; selfLoopCount?: number };
 }
 
 export interface KgG6Edge {
@@ -267,6 +289,8 @@ export interface KgG6Edge {
     labelFontSize?: number;
     labelFill?: string;
     opacity?: number;
+    curveOffset?: number;
+    endArrow?: boolean;
   };
 }
 
@@ -380,7 +404,7 @@ export function buildKgG6Options(opts: BuildKgG6OptionsParams): G6GraphOptions {
       state: {
         active: { style: { stroke: tokens.hoverStroke, lineWidth: 3.5, opacity: 1 } },
         inactive: { style: { opacity: KG_DIM_OPACITY } },
-        selected: { style: { halo: true, haloLineWidth: 18, haloStrokeOpacity: 0.34, lineWidth: 4 } },
+        selected: { style: { halo: true, haloLineWidth: 18, haloStrokeOpacity: 0.34, lineWidth: 4, stroke: tokens.selectedStroke, haloStroke: tokens.brandRing } },
       },
       animation: opts.reducedMotion ? false : { enter: 'fade' },
     },

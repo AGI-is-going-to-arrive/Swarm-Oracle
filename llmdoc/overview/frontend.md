@@ -225,7 +225,7 @@
 | `AnalystStreamView.tsx` / `SurveyStreamView.tsx` / `postVerdictCaches.ts` | `frontend/src/pages/` | post-verdict analyst / survey 的独立流式 UI、缓存与 context reset；会区分 user abort、stream error、retry 和 source/tool chip |
 | `useRoundtableSseStream.ts` | `frontend/src/hooks/useRoundtableSseStream.ts` | roundtable analyst / survey 共享 SSE hook；负责 POST stream、frame 解析、timeout 与 abort |
 | `manualChunks.ts` / `performanceBudgetConfig.mjs` | `frontend/src/lib/manualChunks.ts` / `frontend/scripts/lib/performanceBudgetConfig.mjs` | 前端构建分块与预算门禁单一事实源；React 保留在共享 `vendor`，`@antv/*` 隔离到 `g6-vendor`，`html2canvas / gif.js` 按需拆分，React Flow 栈继续走 Rollup 自动分块并纳入预算检查 |
-| `useG6Graph.ts` | `frontend/src/hooks/useG6Graph.ts` | G6 图谱 hook；等 ref-backed container 真正挂载后再建图，强制启用 G6 autoResize，同时用 ResizeObserver 同步容器尺寸后再 fitView，支持 options 更新、node click 订阅清理 |
+| `useG6Graph.ts` | `frontend/src/hooks/useG6Graph.ts` | G6 图谱 hook；等 ref-backed container 真正挂载后再建图，强制启用 G6 autoResize，同时用 ResizeObserver 同步容器尺寸后再 fitView；稳定数据值变化可走 `setData + draw`，结构或 options 变化仍走 `setOptions + render`，并保留事件订阅清理 |
 | `useNodeConversationTransport.ts` | `frontend/src/hooks/useNodeConversationTransport.ts` | `NodeConversationSheet` 的本地 transport hook；负责 `/start` / `/turn` 请求、origin branch/round/node/excerpt 透传、AbortController 生命周期和 SSE frame 解析 |
 | `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | `Organization ID` 的 sessionStorage helper；当前由 API client 读取并生成 `X-Org-Id`，InputView 不再展示专门输入框 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
@@ -240,7 +240,7 @@
 | `ResultConversationWidget.tsx` | `frontend/src/components/ResultConversationWidget.tsx` | 结果页轻量追问入口，复用 `NodeConversationSheet`；会把当前 analysis branch 的标题、insight、fork reason、关键时刻和对比分支传成 result origin；replay 结果页不渲染这条 live-only 入口 |
 | `HookSummaryPanel.tsx` / `useHookSummary.ts` | `frontend/src/components/result/` / `frontend/src/hooks/` | 结果页追问前的上下文摘要；identity growth-events 请求会带 session-bound `user_id`，避免 identity endpoint 因缺少 owner scope 返回 400 |
 | `ScenarioAgentPicker.tsx` | `frontend/src/components/result/ScenarioAgentPicker.tsx` | 结果页 `找 Agent 追问` dialog；用 `ul > li > button` 呈现场内 Agent，展示 tier、role、persona，带 identity 时提供 Agent profile hash 深链，选择后交给 `NodeConversationSheet` |
-| `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key |
+| `graphTokens.ts` | `frontend/src/lib/graphTokens.ts` | 图谱视觉 token 单一事实源：颜色、边样式、图标、graph i18n key；KG 另有浅/深色 WCAG AA 色板，选中态用陶土赭，hover 用森林绿，避免影响 DAG / ArgumentMap / Faction 图面 |
 | `GraphNodeCard.tsx` | `frontend/src/components/GraphNodeCard.tsx` | `CausalReviewView` / `ArgumentMap` 共用的 ReactFlow 节点卡；当前已改成可键盘聚焦的 button 口径 |
 | `CausalGraphBoard.tsx` | `frontend/src/components/workbench/CausalGraphBoard.tsx` | 工作台 graph tab 的因果图；按 `scenarioId` 读取全量 causal graph，不接收 `branchId` prop，大图 fitView 会保留更低最小 zoom，边标签按 zoom 密度和优先级显示，导出面板打开时不会启用 visible-elements culling |
 | `AnimatedEdge.tsx` / `EdgeLabelTooltip.tsx` | `frontend/src/components/` | 工作台因果边和标签 pill；label 坐标使用 React Flow smooth-step label 坐标并叠加 parallel offset，motion 由 CSS `prefers-reduced-motion` 收口，tooltip 支持 hover 和键盘 focus |
@@ -352,7 +352,7 @@
   - compare fetch / scenario fetch 失败走可重试的加载失败态
   - `branch_a / branch_b` 请求参数都会先做 `encodeURIComponent()`
 - `ReplayView` 当前在 `replay_trace` capability 关闭时会显示显式 unavailable surface，不再 silent redirect 到首页；如果 capability 探针自己失败，也会给出单独的 retry surface。trace 计数标签当前用静态本地化 copy（`Frame / Branches`、`帧 / 分支`），不会再把 `{{count}}` 模板串露到页面上。trace 数据通过 `after / limit / root_branch_id` 做 cursor pagination；空第一页但后端返回 `next_cursor` 时仍保留 `Load more`，rapid click 会被 loading guard 收口，branch filter 变化时会重置旧 cursor。
-- `KGExplorerView` 当前会把 capability 失败、feature disabled、graph fetch 失败分开显示；graph fetch 失败时会清掉旧图，再给出本地化错误和 retry。主图用真实 G6 canvas 渲染，minimap 是 G6 minimap plugin，不是占位卡片；search / type filter 会更新图数据本身。点击节点时，`NodeConversationSheet` 收到的是业务 `kgType`、节点 label、branch 与 round，不再使用 G6 shape type。
+- `KGExplorerView` 当前会把 capability 失败、feature disabled、graph fetch 失败分开显示；graph fetch 失败时会清掉旧图，再给出本地化错误和 retry。主图用真实 G6 canvas 渲染，minimap 是 G6 minimap plugin，不是占位卡片；search / type filter 会通过 deferred value 更新 G6 数据本身，搜索匹配节点 `id / key / label`，并复用 `toKgG6Data / resolveKGG6Tokens`。大图默认隐藏过密的节点/边标签，搜索或筛选时会恢复节点标签以便定位。点击节点时，`NodeConversationSheet` 收到的是业务 `kgType`、节点 label、branch 与 round，不再使用 G6 shape type。
 - KG / causal / argument / result 四种入口当前都会给 `NodeConversationSheet` 传 surface-specific origin。空态问题会按卡片类型和上下文生成：事件问前因后果，分支问分岔路线，结局问落点和对比分支，知识图谱问邻近概念，裁决图谱问主张/证据/裁决关系。
 - `ConversationHistoryPicker` 是 Agent Conversation 历史的共享入口：
   - 当前用于 `EndingChatModal`、`RoundtableAgentChat` 和 `NodeConversationSheet`
@@ -525,6 +525,7 @@
   分支 selector 当前会优先显示 scenario branch 的标题和概率；拿不到 branch 元数据时才回退完整 branch id。
 - `CausalGraphBoard` 是独立工作台的轻量因果图面：只把 `scenarioId` 传给 `useScenarioGraph`，始终展示 scenario 的全量 causal graph；URL `branch` 保留在 workbench query 里，但不再作为 graph tab 的 fetch filter。大图超过 50 个节点时用更低的 fitView minimum zoom，节点/边结构变化才触发布局同步和 fitView；选中、关联、展开、dimmed 和 edge opacity 这类状态变化按 shallow diff 更新，避免每次交互重建整张图。
 - `CausalGraphBoard` 的边标签按 `far / mid / near` zoom bucket 走 CSS 密度管理，不在同一 bucket 内反复 re-render；far 隐藏全部 label，mid 只显示高优先级 label，near 显示全部。visual label pill 只放关系短名，round / confidence 放 hover 或 keyboard focus detail，tier color 用左边框表达。screen-reader relation list 仍保留完整关系文本。
+- `KGGraphBoard` 继续按 scenario 展示全量 causal graph 的 KG 视图，KG 数据和样式与 `KGExplorerView` 共用 `toKgG6Data / buildKgG6Options`。图例默认折叠；toolbar 使用固定尺寸 icon buttons；搜索会匹配节点 `id / key / label`，搜索和类型筛选会更新图数据本身，如果当前选中节点被过滤掉，会清掉选中和锁定高亮；节点超过 label 限制时默认收起节点标签，搜索、筛选、hover 或锁定时再打开当前语境；screen-reader fallback table 跟随当前可见节点，移动端超过 200 节点仍走截断提示。
 - `CausalReviewView` 的错误页当前提供 `Retry`，成功重拉后不会残留旧错误态；错误文案会按 `network / branch_not_found / unauthorized / server / load_failed` 映射到本地化 copy，不再把原始 `HTTP 404` 或后端 message 直接露给用户。
 - `CausalReviewView` 当前在 branch 切换时会忽略迟到的旧响应，不让旧分支结果覆盖最新选择。
 - `CausalReviewView` / `ArgumentMap` 当前对 graph route fetch 里的 `scenarioId / debateId`，以及 `CausalReviewView` 返回结果页的 scenario link，都先做 `encodeURIComponent()`；带特殊字符的 id 不会再把请求或跳转拆坏。
@@ -603,8 +604,10 @@
   - `npx tsc --noEmit`：通过
   - `npx eslint src/ --max-warnings=0`：通过
   - `npm run build`：通过
-  - full vitest：`202 files / 2199 tests passed`
-  - i18n key + placeholder parity：`zh: 2759`、`en: 2759`、parity OK
+  - full vitest：`202 files / 2224 tests passed`
+  - i18n key + placeholder parity：`zh: 2766`、`en: 2766`、parity OK
+  - KG visualization 定向回归：`5 files / 193 tests passed`
+  - KG Explorer fixture E2E：Chromium desktop + mobile、Firefox desktop、WebKit desktop 共 `4 runs / allPassed=true`
   - ResultView Agent follow-up browser spot-check：浮动紫色按钮已移除，`找 Agent 追问` 会打开 Agent picker，带 identity 的 Agent 有 `查看档案` 链接，选择 Agent 后打开 `NodeConversationSheet`；关闭 sheet 后目标清空，390px mobile 无横向溢出，console error 为 0
   - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0
