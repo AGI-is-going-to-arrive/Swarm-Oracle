@@ -185,6 +185,8 @@ cd backend && alembic upgrade head
 - WorkbenchView 三 tab 始终全量图谱；`view=kg` 只要求 `FEATURE_KG_EXPLORER`
 - `getFactionRelations` 路径 `/scenario/{id}/faction-relations`（无 `/graphs/` 前缀）
 - faction-timeline 端点校验 `branch_id` 存在+归属，缺失返回 404
+- 因果图谱边标签 i18n：`getCausalEdgeBaseRelationLabel` 通过 `BACKEND_CAUSAL_EDGE_LABEL_I18N` 映射表翻译后端原始 label（如 `triggered fork` → `触发分支`），未知 label 仍 raw fallback
+- 结果页导航到因果图谱不再携带 `branch_id`，默认展示全部分支完整图谱，用户可通过页内下拉框筛选单分支
 
 ### 前端约定
 - InputView IME 三重防护 + 推演确认弹窗；模式选择器默认展示，BYOK 独立折叠
@@ -198,6 +200,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
+| 05-21 | 因果图谱 UX 修复：结果页导航不再携带 `branch_id`，默认展示全部分支完整图谱（`ExploreDeeperBridge` + `ResultHeader` 链接修复）；边标签 i18n 补齐，`triggered fork` 等后端原始 label 通过 `BACKEND_CAUSAL_EDGE_LABEL_I18N` 映射表走 i18n 翻译（中文 `触发分支`）。验证：CausalReviewView 80 tests passed，ResultView 79 tests passed，tsc/build 通过 |
 | 05-19 | 反事实对比逐消息升级：`compare_branches()` 在轮级数据基础上新增 `branch_a_messages` / `branch_b_messages`（agent_name + content + emotion）逐消息字段；新增 `POST /counterfactual/{branch_id}/resimulate` 端点，给旧的只 clone+seed 的反事实分支补跑模拟；前端新增 `src/lib/textDiff.ts` 字符级 LCS diff（CJK / emoji 安全的码点切分）；`CompareDigestView` 改为逐 agent 消息卡片 + 红绿 diff 高亮 + 折叠/展开按钮 + 独占轮（only-A / only-B）单列布局，`CounterfactualPanel` 新增模拟进行中提示。验证：backend counterfactual+replay+simulator+resume targeted `223 passed`；frontend full `201 files / 2190 tests`，tsc/eslint/build 通过；i18n `2765/2765` |
 | 05-19 | 反事实对比全面重构：`POST /counterfactual` 融合重新模拟（clone+seed+`run_sim_background`），反事实分支不再只停留在干预轮，会向后推演并生成完整叙事 story/insight/title；`compare_branches` 从 `str.split()` 改为 CJK-aware 逐字分词修复中文分歧度计算；compare 响应新增 `intervention`（原始/改写消息元数据）+ `is_identical`（标识完全相同轮次）+ `common_rounds`（分歧前相同轮数）；分支标题 i18n 感知（中文 `反事实：从第N轮起`）。前端 `CompareDigestView` 新增干预横幅（agent 名称+原始/改写对比+红绿左边框）、折叠相同轮次、干预轮高亮徽章、全 identical 空态处理、forced-colors/a11y 覆盖；`CounterfactualPanel` 新增模拟进行中提示。`simulate: bool = True` 默认触发模拟，`simulate=false` 保留旧行为（仅 clone+seed）。验证：backend full `3257 passed, 6 skipped`（+19 tests）；frontend full `200 files / 2176 tests`，tsc/eslint/build 通过；i18n `2758/2758`（+26 keys）；Codex 后端+前端双轮对抗式审查通过（0 Critical，6 Warning 全部修复） |
 | 05-19 | Oracle Chambers / EndingChatModal review hardening：EndingChatModal 的 thread rail 与 evidence drawer 移到 transcript 内部滚动区外，保留消息列表独立滚动，修复移动端 replay/evidence drawer 点击拦截；移除没有后端枚举和持久化合同的 `parallel_survey` skeleton，保留已实现的 roundtable survey SSE 工作台能力；Oracle backend generation-first 路径补 JSON 字符串解析、streaming-first plain stream fallback、英文 CJK fallback 过滤，并在 narrator/simulator 边界清理用户可见 `[R...]` round marker。验证：backend full `3238 passed, 6 skipped`，Oracle targeted `297 passed`；frontend full `200 files / 2175 tests passed`，tsc/eslint/build/i18n `2732/2732` 通过；ending-room 与 roundtable E2E 通过 |

@@ -419,11 +419,20 @@ function getCausalNodeActionLabel(
   return `${t('causal.open_details', 'Open details')}: ${typeLabel} - ${label}`;
 }
 
+const BACKEND_CAUSAL_EDGE_LABEL_I18N: Record<string, [string, string]> = {
+  'triggered fork': ['causal.edge_triggered_fork', 'triggered fork'],
+};
+
 function getCausalEdgeBaseRelationLabel(
   edge: GraphEdgeData,
   t: (key: string, fallback: string) => string,
 ): string {
-  if (edge.label && edge.label.trim()) return edge.label.trim();
+  const rawLabel = edge.label?.trim();
+  if (rawLabel) {
+    const labelMapping = BACKEND_CAUSAL_EDGE_LABEL_I18N[rawLabel.toLowerCase()];
+    if (labelMapping) return t(labelMapping[0], labelMapping[1]);
+    return rawLabel;
+  }
   let base: string;
   if (edge.type === 'temporal') base = t('causal.edge_temporal', 'precedes');
   else if (edge.type === 'led_to') base = t('causal.edge_led_to', 'leads to');

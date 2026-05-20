@@ -4180,7 +4180,7 @@ describe('ResultView explore deeper bridge', () => {
     const causalEntry = await screen.findByRole('link', { name: /result.next_understand_why/ });
     expect(causalEntry).toHaveAttribute(
       'href',
-      `/sim/${encodeURIComponent(scenarioId)}/causal-map?branch_id=${encodeURIComponent(branchId)}`,
+      `/sim/${encodeURIComponent(scenarioId)}/causal-map`,
     );
   });
 
@@ -4234,10 +4234,10 @@ describe('ResultView explore deeper bridge', () => {
 
     const causalLinks = await screen.findAllByRole('link', { name: 'result.causal_graph_link' });
     expect(causalLinks).toHaveLength(2);
-    expect(causalLinks.map((link) => link.getAttribute('href'))).toEqual(expect.arrayContaining([
+    expect(causalLinks.map((link) => link.getAttribute('href'))).toEqual([
       `/sim/${encodeURIComponent(scenarioId)}/causal-map`,
-      `/sim/${encodeURIComponent(scenarioId)}/causal-map?branch_id=branch-1`,
-    ]));
+      `/sim/${encodeURIComponent(scenarioId)}/causal-map`,
+    ]);
   });
 
   it('disables the replay bridge entry in replay mode', async () => {
@@ -4744,7 +4744,7 @@ describe('ResultView Reader/Workbench mode toggle (S1-4)', () => {
 
     expect(screen.getByRole('link', { name: 'result.causal_graph_link' })).toHaveAttribute(
       'href',
-      '/sim/scenario-1/causal-map?branch_id=branch-1',
+      '/sim/scenario-1/causal-map',
     );
     expect(screen.getByRole('link', { name: 'result.open_workbench_link' })).toHaveAttribute(
       'href',

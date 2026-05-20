@@ -103,7 +103,7 @@ export default function ExploreDeeperBridge() {
       descKey: 'result.next_understand_why_desc',
       descDefault: 'Trace how events led to each ending.',
       enabled: causalEnabled,
-      href: `/sim/${scenarioId}/causal-map${analysisBranch ? `?branch_id=${encodeURIComponent(analysisBranch.id)}` : ''}`,
+      href: `/sim/${scenarioId}/causal-map`,
       disabledKey: 'result.bridge_not_enabled',
       disabledDefault: 'Not enabled on this server.',
     },

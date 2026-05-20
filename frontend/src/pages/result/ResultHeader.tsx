@@ -49,11 +49,8 @@ export default function ResultHeader() {
   const causalEnabled = capabilities?.causal_graph?.enabled ?? false;
   const kgEnabled = capabilities?.kg_explorer?.enabled ?? false;
   const encodedScenarioId = activeScenarioId ? encodeURIComponent(activeScenarioId) : null;
-  const analysisBranchQuery = analysisBranch
-    ? `?branch_id=${encodeURIComponent(analysisBranch.id)}`
-    : '';
   const causalGraphHref = encodedScenarioId && causalEnabled
-    ? `/sim/${encodedScenarioId}/causal-map${analysisBranchQuery}`
+    ? `/sim/${encodedScenarioId}/causal-map`
     : null;
   const workbenchView = !causalEnabled && kgEnabled ? 'kg' : 'graph';
   const workbenchBranchQuery = analysisBranch

@@ -77,6 +77,7 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.edge_supports_stance': 'aligns with',
     'causal.edge_opposes_stance': 'opposes',
     'causal.edge_led_to': 'leads to',
+    'causal.edge_triggered_fork': 'triggered fork',
     'causal.edge_relation': '{{source}} {{relation}} {{target}}',
     'causal.node_card_summary_isolated': 'No nearby links yet',
     'causal.node_card_summary_event': 'Causes {{causeCount}} · effects {{effectCount}}',
@@ -143,6 +144,7 @@ const TEST_TRANSLATIONS: Record<TestLocale, Record<string, string>> = {
     'causal.edge_supports_stance': '立场一致',
     'causal.edge_opposes_stance': '立场对立',
     'causal.edge_led_to': '导向',
+    'causal.edge_triggered_fork': '触发分支',
     'causal.edge_relation': '{{source}} {{relation}} {{target}}',
     'causal.node_card_summary_isolated': '暂无相邻关系',
     'causal.node_card_summary_event': '前因 {{causeCount}} · 后续 {{effectCount}}',
@@ -2103,6 +2105,45 @@ describe('CausalReviewView', () => {
     const items = within(relationList).getAllByRole('listitem');
     expect(items).toHaveLength(1);
     expect(items[0]).toHaveTextContent('Alpha trigger causes Beta response');
+  });
+
+  it('translates backend triggered fork edge labels through i18n', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: 'g-triggered-fork-label',
+        nodes: [
+          { id: 'n1', key: 'e1', type: 'event', label: 'Alpha trigger', round: 1, payload: null },
+          { id: 'n2', key: 'e2', type: 'fork', label: 'Beta fork', round: 2, payload: null },
+        ],
+        edges: [{
+          id: 'edge-1',
+          source: 'n1',
+          target: 'n2',
+          type: 'caused',
+          weight: 1,
+          label: 'triggered fork',
+        }],
+      }),
+    } as Response);
+
+    renderView();
+
+    const flow = await screen.findByTestId('reactflow');
+    expect(flow).toHaveAttribute('data-edge-label', 'triggered fork');
+
+    let relationList = screen.getByRole('list', { name: 'Causal relations list' });
+    expect(within(relationList).getByRole('listitem')).toHaveTextContent(
+      'Alpha trigger triggered fork Beta fork',
+    );
+
+    await changeUiLanguage('zh');
+
+    expect(flow).toHaveAttribute('data-edge-label', '触发分支');
+    relationList = screen.getByRole('list', { name: '因果关系列表' });
+    expect(within(relationList).getByRole('listitem')).toHaveTextContent(
+      'Alpha trigger 触发分支 Beta fork',
+    );
   });
 
   it('localizes inter-agent causal edge relation labels', async () => {
