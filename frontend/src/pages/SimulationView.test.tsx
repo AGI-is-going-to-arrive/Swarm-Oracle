@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { ReactNode } from 'react';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -39,6 +39,7 @@ const {
   cancelScenarioMock,
   createReplayArtifactMock,
   getReplayArtifactMock,
+  gameplayCardsModalRenderMock,
 } = vi.hoisted(() => ({
   upsertScenarioDirectorStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
     scenario_id: scenarioId,
@@ -84,6 +85,7 @@ const {
     created_at: '2026-03-19T00:00:00Z',
   })),
   getReplayArtifactMock: vi.fn(async (): Promise<ReplayArtifactMock | null> => null),
+  gameplayCardsModalRenderMock: vi.fn(),
 }));
 
 const emptyDirectorState: ScenarioDirectorState = {
@@ -268,16 +270,23 @@ vi.mock('../components/PredictionModal', () => ({
 }));
 
 vi.mock('../components/GameplayCardsModal', () => ({
-  default: () => null,
+  default: (props: { readOnly?: boolean; disabledReason?: string | null }) => {
+    gameplayCardsModalRenderMock(props);
+    return <div data-testid="gameplay-cards-modal" />;
+  },
+}));
+
+vi.mock('../game/BubbleOverlay', () => ({
+  BubbleOverlay: () => <div data-testid="bubble-overlay" />,
 }));
 
 vi.mock('../game/PhaserGameLoader', () => ({
-  PhaserGameLoader: () => <div>phaser-game</div>,
+  PhaserGameLoader: ({ useDomBubbles }: { useDomBubbles?: boolean }) => (
+    <div data-testid="phaser-game-loader" data-use-dom-bubbles={String(useDomBubbles)}>
+      phaser-game
+    </div>
+  ),
   preloadPhaserGame: vi.fn(),
-}));
-
-vi.mock('../game/HudOverlay', () => ({
-  HudOverlay: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -352,6 +361,7 @@ describe('SimulationView replay automation output', () => {
     createReplayArtifactMock.mockClear();
     getReplayArtifactMock.mockReset();
     getReplayArtifactMock.mockResolvedValue(null);
+    gameplayCardsModalRenderMock.mockClear();
     mockStore.loadScenario.mockReset();
     mockStore.setScenario.mockClear();
     mockStore.scenario = { ...baseScenario };
@@ -496,6 +506,32 @@ describe('SimulationView replay automation output', () => {
     );
 
     expect(await screen.findByLabelText('sim.panel_expand')).toBeInTheDocument();
+  });
+
+  it('enables DOM bubble rendering by default in Theater mode', async () => {
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('phaser-game-loader')).toHaveAttribute('data-use-dom-bubbles', 'true');
+    expect(await screen.findByTestId('bubble-overlay')).toBeInTheDocument();
+  });
+
+  it('passes a DOM bubble opt-out flag to the Theater loader from URL', async () => {
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1?domBubbles=0']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('phaser-game-loader')).toHaveAttribute('data-use-dom-bubbles', 'false');
+    expect(screen.queryByTestId('bubble-overlay')).not.toBeInTheDocument();
   });
 
   it('hydrates a read-only replay token and marks replay_source as token', async () => {
@@ -1397,6 +1433,43 @@ describe('SimulationView replay automation output', () => {
         director_ready: false,
         preview_enabled: false,
       });
+    });
+  });
+
+  it('exposes gameplay cards in the theater toolbar as read-only preview after completion', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const toolbar = await screen.findByRole('toolbar', { name: 'sim.theater_toolbar_aria' });
+    const gameplayButton = within(toolbar).getByRole('button', { name: 'gameplay.open_btn' });
+    expect(gameplayButton).toHaveAttribute('title', 'gameplay.preview_completed_note');
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.controls?.can_open_gameplay_cards).toBe(false);
+      expect(payload?.page?.controls?.can_preview_gameplay_cards).toBe(true);
+    });
+
+    await user.click(gameplayButton);
+
+    await screen.findByTestId('gameplay-cards-modal');
+    expect(gameplayCardsModalRenderMock).toHaveBeenCalledWith(expect.objectContaining({
+      readOnly: true,
+      disabledReason: 'gameplay.preview_completed_note',
+    }));
+
+    await waitFor(() => {
+      const raw = (window as Window & { render_game_to_text?: () => string }).render_game_to_text?.();
+      const payload = raw ? JSON.parse(raw) : null;
+      expect(payload?.page?.controls?.active_modal).toBe('gameplay_cards');
     });
   });
 

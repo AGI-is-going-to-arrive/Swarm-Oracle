@@ -83,9 +83,9 @@
 | 能力 | 当前状态 |
 |------|----------|
 | Multi-Agent Simulation | 已落地，支持 branch、narration、visualization；选中某个 Agent 时，实时发言会按世界线分组，方便看同一角色在不同分支里的差异 |
-| Pixel Theater | 已落地，Phaser 驱动，按需加载；live 已有 Agent 时可直接进 WorldScene，场景 PNG 缺失时先显示程序背景再替换 |
+| Pixel Theater | 已落地，Phaser 驱动，按需加载；当前是 Light Theater 外壳、浮动 toolbar、Director drawer、React DOM bubbles 和 HiDPI canvas，capture 仍保留 `.theater-panel` / `.phaser-game-container` 选择器 |
 | Butterfly Effect | 已落地，支持即时 / 回溯 / 批量干预；完成后会把可解释的干预效果写成只读 receipt |
-| Gameplay Cards | 已落地，14 张卡与 18 个玩法 profile 走共享 gameplay contract；后端校验可用性、冷却与点数，重建正式干预 prompt，并把分支、Agent 名和自定义指令按 untrusted data 包裹 |
+| Gameplay Cards | 已落地，14 张卡与 18 个玩法 profile 走共享 gameplay contract；后端校验可用性、冷却与点数，重建正式干预 prompt，并把分支、Agent 名和自定义指令按 untrusted data 包裹；完成态 Theater 可从 toolbar 打开玩法卡只读回看 |
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响；题材回响放在高级选项里 |
 | Result Quality / Question Anchoring | 已落地，受 `FEATURE_RESULT_VERDICT` 和 `/api/capabilities.result_verdict` 控制；结果页在有 verdict 时先给出直接回答原问题的预测结论、置信度，verdict 缺失时显示中性的“暂无预测结论”并保留原问题；结局卡有 `question_answer` 时会把分支级一句话回答放在概率条上方 |
 | Director Campaign | 已落地，含 52 条 daily challenge catalog、streak、7 条 weekly track + leaderboard、15 个 registry badge、非线性 mastery level、首页成长 sheet、后端权威 `score_breakdown` 与结果页导演复盘 / 因果档案；结果页导演笔记和导演复盘默认收起，展开后再查看完整复盘，导演复盘的关键记录超过 3 条时用原生 disclosure 展开 |
@@ -190,10 +190,11 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-当前验证口径（最近更新：2026-05-21 Workbench KG resize 复核）：
+当前验证口径（最近更新：2026-05-21 Pixel Theater Overhaul 收口）：
 
 - backend：`TOKENIZERS_PARALLELISM=false python -m pytest tests/ -q` 为 `3269 passed, 6 skipped`；`ruff check app/` 通过。
-- frontend：`npx tsc --noEmit`、`npx eslint src/ --max-warnings=0`、`npm run build`、`npx vitest run` 通过；full vitest 为 `202 files / 2224 tests passed`；i18n key 与 placeholder parity 为 `zh: 2766`、`en: 2766`、OK。
+- frontend：`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build`、`npm test -- --run` 通过；full vitest 为 `202 files / 2243 tests passed`；i18n key parity 为 `zh: 2757`、`en: 2757`、OK。
+- Pixel Theater 浏览器复核：Chrome DevTools MCP 打开 `/sim/e1a41453-2cb2-43a1-a054-0d7cd04a6bf5`，`.theater-floating-toolbar` 里的玩法卡入口可见，完成态玩法卡 modal 以只读提示打开，console error 为 0；截图保存在本地忽略目录 `frontend/output/theater-gameplay-cards-toolbar-fix.png`。
 - KG visualization 定向回归：`5 files / 193 tests passed`，覆盖 `KGGraphBoard / KGExplorerView / useG6Graph / kgGraphConfig / locales`；KG Explorer fixture E2E 覆盖 Chromium desktop + mobile、Firefox desktop 和 WebKit desktop，`4 runs / allPassed=true`。
 - Workbench KG resize 定向回归：`useG6Graph.test.ts + WorkbenchView.test.tsx` 为 `56 passed`，`KGGraphBoard.test.tsx` 为 `42 passed`；本机浏览器复核 `graph -> split -> KG` 后，KG 容器与内部 G6 canvas 同宽，`widthDelta=0`，console error 为 0。
 - ResultView 浏览器复核：本地完成结果页上，浮动紫色 Agent 按钮已移除；`下一步` 的 `找 Agent 追问` 是场内按钮，会打开 Agent picker，再进入 `NodeConversationSheet`；带 identity 的 Agent 会显示 `查看档案` 深链；关闭 sheet 后会清掉当前追问目标；390px 移动视口无横向溢出，console error 为 0。

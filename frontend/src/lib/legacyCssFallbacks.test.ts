@@ -27,8 +27,10 @@ describe('legacy CSS color fallbacks', () => {
   it('keeps simulation header surfaces readable without OKLCH mixing', () => {
     const css = readCss('src/pages/SimulationView.css');
 
-    expect(css).toMatch(/\.sim-header\s*\{[\s\S]*?background:\s*linear-gradient\(180deg, #faf9f6, #faf8f5\);[\s\S]*?background:\s*linear-gradient\(180deg, color-mix\(in oklab, var\(--bg-base\) 92%, white\), var\(--bg-base\)\);/);
-    expect(css).toMatch(/@keyframes subtlePulse\s*\{[\s\S]*?box-shadow:\s*0 0 0 0 rgba\(198, 21, 131, 0\.3\);[\s\S]*?box-shadow:\s*0 0 0 0 oklch\(55% 0\.22 350 \/ 0\.3\);/);
+    expect(css).toMatch(/\.sim-header\s*\{[\s\S]*?background:\s*linear-gradient\(180deg, #faf9f6, #faf8f5\);/);
+    expect(css).toMatch(/@keyframes subtlePulse\s*\{[\s\S]*?box-shadow:\s*0 0 0 0 rgba\(198, 21, 131, 0\.3\);/);
+    expect(css).not.toContain('oklch(');
+    expect(css).not.toContain('color-mix(');
   });
 
   it('declares worldline oracle skin fallbacks before OKLCH overrides', () => {

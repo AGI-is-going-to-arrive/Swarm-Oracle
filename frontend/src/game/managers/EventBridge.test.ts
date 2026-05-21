@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { EventBridge, dispatchVizEvent } from './EventBridge';
+import { EventBridge, dispatchVizEvent, type SpritePositionUpdate, type VizEventType } from './EventBridge';
 
 // Reset after each test
 afterEach(() => {
@@ -103,6 +103,30 @@ describe('EventBridge — on/off subscription', () => {
 
     expect(bubbleHandler).toHaveBeenCalledTimes(1);
     expect(moveHandler).not.toHaveBeenCalled();
+  });
+
+  it('routes sprite position updates for React DOM overlays', () => {
+    const handler = vi.fn();
+    const eventType: VizEventType = 'viz:sprite_positions';
+    const payload: SpritePositionUpdate = {
+      agents: [
+        {
+          agent_id: 'agent-1',
+          name: 'Aurelius',
+          x: 120,
+          y: 220,
+          spriteH: 72,
+          visible: true,
+          emotion: 'calm',
+        },
+      ],
+      canvasRect: { width: 800, height: 450 },
+    };
+
+    EventBridge.on(eventType, handler);
+    dispatchVizEvent(eventType, payload);
+
+    expect(handler).toHaveBeenCalledWith(payload);
   });
 });
 

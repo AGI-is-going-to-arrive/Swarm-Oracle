@@ -15,7 +15,7 @@
 import Phaser from 'phaser';
 import i18next from 'i18next';
 import { predictBubbleTextSize } from '../../lib/textLayout/canvasTextPredict';
-import { EventBridge, dispatchVizEvent } from '../managers/EventBridge';
+import { EventBridge, dispatchVizEvent, type SpritePositionUpdate } from '../managers/EventBridge';
 import {
   CHARACTER_SPRITE_KEYS,
   getSceneTextureKey,
@@ -33,6 +33,7 @@ interface AgentSpriteData {
   originX: number;  // initial spawn X — wander anchor
   originY: number;  // initial spawn Y — wander anchor
   spriteH: number;  // sprite height (for faction bar Y-offset consistency)
+  emotion?: string;
   gameObject?: Phaser.GameObjects.Container;
   haloGraphics?: Phaser.GameObjects.Graphics;
   haloTween?: Phaser.Tweens.Tween;
@@ -80,10 +81,18 @@ const CHARACTER_SPRITE_KEY_SET = new Set<string>(CHARACTER_SPRITE_KEYS);
 // ── i18n helper for Phaser Canvas context ───────────────
 /** Resolve a bilingual label based on current i18next language. */
 function getLocalizedLabel(en: string, zh: string): string {
-  return i18next.language === 'en' ? en : zh;
+  const language = i18next.resolvedLanguage || i18next.language || 'en';
+  return language.toLowerCase().startsWith('zh') ? zh : en;
 }
 
 type BubbleMode = 'live' | 'replay';
+
+type DomBubbleMetadata = {
+  text: string;
+  emotion: string;
+  mode: BubbleMode;
+  expiresAt: number;
+};
 
 function normalizeBubbleText(text: string, maxChars = BUBBLE_MAX_TEXT_CHARS): string {
   const compactText = text.replace(/\s+/g, ' ').trim();
@@ -157,14 +166,11 @@ const BUBBLE_STYLES: Record<string, { bg: number; bgAlpha: number; borderColor: 
 };
 const DEFAULT_BUBBLE_STYLE = BUBBLE_STYLES.neutral;
 const BUBBLE_TEXT_FONT_STACK = '"Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
-const BUBBLE_TEXT_RESOLUTION = 4;
 const BUBBLE_BASE_OFFSET_Y = -74;
 const BUBBLE_MAX_STACK = 4;
 const BUBBLE_MAX_VISIBLE_CAP = 8;
 const BUBBLE_MAX_TEXT_CHARS = 72;
 const BUBBLE_COMPACT_MAX_TEXT_CHARS = 48;
-const BUBBLE_TEXT_WRAP_MIN_WIDTH = 220;
-const BUBBLE_TEXT_WRAP_MAX_WIDTH = 300;
 const BUBBLE_TYPEWRITER_LIVE_DELAY_MS = 14;
 const BUBBLE_TYPEWRITER_REPLAY_DELAY_MS = 20;
 const BUBBLE_LIVE_LINGER_MS = 1800;
@@ -173,14 +179,6 @@ const BUBBLE_LINGER_PER_CHAR_MS = 18;
 const BUBBLE_LINGER_MAX_MS = 4400;
 const BUBBLE_WORLD_PADDING_X = 28;
 const BUBBLE_WORLD_PADDING_Y = 18;
-const BUBBLE_LAYOUT_SLOTS = [
-  { x: 0, y: BUBBLE_BASE_OFFSET_Y },
-  { x: -96, y: BUBBLE_BASE_OFFSET_Y - 30 },
-  { x: 96, y: BUBBLE_BASE_OFFSET_Y - 30 },
-  { x: -156, y: BUBBLE_BASE_OFFSET_Y - 84 },
-  { x: 156, y: BUBBLE_BASE_OFFSET_Y - 84 },
-  { x: 0, y: BUBBLE_BASE_OFFSET_Y - 124 },
-] as const;
 
 // ── Day/Night Tints ─────────────────────────────────────
 const TIME_TINTS: Record<string, { color: number; alpha: number }> = {
@@ -238,6 +236,8 @@ export class WorldScene extends Phaser.Scene {
   private ambientMotePool: Phaser.GameObjects.Graphics[] = [];
   private pendingSceneTextureLoads: Set<string> = new Set();
   private pendingSpriteTextureLoads: Set<string> = new Set();
+  private pendingTextureLoadCleanups: Map<string, () => void> = new Map();
+  private domBubbleMetadata: Map<string, DomBubbleMetadata> = new Map();
 
   // Phase 3: MiniMap HUD
   private minimapContainer: Phaser.GameObjects.Container | null = null;
@@ -248,6 +248,9 @@ export class WorldScene extends Phaser.Scene {
 
   // Accessibility: skip decorative motion when user prefers reduced motion
   private reducedMotion = false;
+  private dpr = 1;
+  private lastPositionEmitTime = 0;
+  private readonly POSITION_EMIT_INTERVAL = 33;
 
   // V3: Ambient particle system
   private ambientMotes: Phaser.GameObjects.Graphics[] = [];
@@ -266,13 +269,36 @@ export class WorldScene extends Phaser.Scene {
     super({ key: 'WorldScene' });
   }
 
+  private px(value: number): number {
+    return Math.round(value * this.dpr);
+  }
+
+  private get useDomBubbles(): boolean {
+    return this.game.registry.get('useDomBubbles') === true;
+  }
+
+  private getBubbleLayoutSlots(): Array<{ x: number; y: number }> {
+    const bubbleBaseOffsetY = this.px(BUBBLE_BASE_OFFSET_Y);
+
+    return [
+      { x: 0, y: this.px(-74) },
+      { x: this.px(-96), y: bubbleBaseOffsetY + this.px(-30) },
+      { x: this.px(96), y: bubbleBaseOffsetY + this.px(-30) },
+      { x: this.px(-156), y: bubbleBaseOffsetY + this.px(-84) },
+      { x: this.px(156), y: bubbleBaseOffsetY + this.px(-84) },
+      { x: 0, y: bubbleBaseOffsetY + this.px(-124) },
+    ];
+  }
+
   public getAutomationState(): Record<string, unknown> {
-    const activeBubbles = [...this.bubbles.entries()].map(([agentId, bubble]) => ({
-      agent_id: agentId,
-      text: this.extractBubbleText(bubble),
-      emotion: (bubble.getData('emotion') as string | undefined) || 'neutral',
-      visible: bubble.visible,
-    }));
+    const activeBubbles = this.useDomBubbles
+      ? this.getDomAutomationBubbles()
+      : [...this.bubbles.entries()].map(([agentId, bubble]) => ({
+        agent_id: agentId,
+        text: this.extractBubbleText(bubble),
+        emotion: (bubble.getData('emotion') as string | undefined) || 'neutral',
+        visible: bubble.visible,
+      }));
 
     const agents = [...this.agentSprites.values()].map((agent) => ({
       agent_id: agent.agent_id,
@@ -297,7 +323,42 @@ export class WorldScene extends Phaser.Scene {
     };
   }
 
+  private getDomAutomationBubbles(): Array<{
+    agent_id: string;
+    text: string;
+    emotion: string;
+    visible: boolean;
+    mode: BubbleMode;
+  }> {
+    const now = this.time?.now ?? performance.now();
+    const activeBubbles: Array<{
+      agent_id: string;
+      text: string;
+      emotion: string;
+      visible: boolean;
+      mode: BubbleMode;
+    }> = [];
+
+    for (const [agentId, bubble] of this.domBubbleMetadata.entries()) {
+      if (bubble.expiresAt <= now) {
+        this.domBubbleMetadata.delete(agentId);
+        continue;
+      }
+      const agent = this.agentSprites.get(agentId);
+      activeBubbles.push({
+        agent_id: agentId,
+        text: bubble.text,
+        emotion: bubble.emotion,
+        visible: agent?.gameObject?.visible ?? false,
+        mode: bubble.mode,
+      });
+    }
+
+    return activeBubbles;
+  }
+
   create(): void {
+    this.dpr = this.game.registry.get('devicePixelRatio') || 1;
     this.reducedMotion = typeof window !== 'undefined'
       && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
     const { width, height } = this.scale;
@@ -323,8 +384,6 @@ export class WorldScene extends Phaser.Scene {
     // Phase 3: Draw MiniMap HUD (bottom-right floating overlay)
     this.drawMinimap(width, height);
 
-    // Phase 3 Batch 2: BetPanel & Leaderboard HUD — now rendered by React HudOverlay
-
     // Register EventBridge listeners
     this.registerEventListeners();
 
@@ -333,13 +392,13 @@ export class WorldScene extends Phaser.Scene {
       const dx = (pointer.x - width / 2) / width;   // -0.5 to 0.5
       const dy = (pointer.y - height / 2) / height;
       this.terrainLayers.forEach((layer, i) => {
-        const factor = (i + 1) * 2; // deeper layers move less
+        const factor = this.px((i + 1) * 2); // deeper layers move less
         layer.setX(dx * factor);
         layer.setY(dy * factor * 0.5);
       });
       // Also parallax clouds
       this.cloudGraphics.forEach((cloud, i) => {
-        const factor = (i + 1) * 3;
+        const factor = this.px((i + 1) * 3);
         cloud.setX(cloud.getData('baseX') ?? cloud.x);
         if (!cloud.getData('baseX')) cloud.setData('baseX', cloud.x);
         cloud.x = (cloud.getData('baseX') as number) + dx * factor;
@@ -370,20 +429,22 @@ export class WorldScene extends Phaser.Scene {
 
     // Light pixel grid overlay for retro feel
     const grid = this.add.graphics();
-    grid.lineStyle(1, 0x000000, 0.03);
-    for (let x = 0; x < w; x += 16) grid.lineBetween(x, 0, x, h);
-    for (let y = 0; y < h; y += 16) grid.lineBetween(0, y, w, y);
+    grid.lineStyle(this.px(1), 0x000000, 0.03);
+    for (let x = 0; x < w; x += this.px(16)) grid.lineBetween(x, 0, x, h);
+    for (let y = 0; y < h; y += this.px(16)) grid.lineBetween(0, y, w, y);
     grid.setDepth(1);
 
     // Scene label with rounded pill style
     const display = this.sceneTheme.replace(/_/g, ' ');
-    this.themeLabel = this.add.text(w / 2, 12, `${palette.icon} ${display}`, {
-      fontSize: '11px',
+    const labelX = this.useDomBubbles ? w - this.px(14) : w / 2;
+    const labelY = this.useDomBubbles ? this.px(112) : this.px(12);
+    this.themeLabel = this.add.text(labelX, labelY, `${palette.icon} ${display}`, {
+      fontSize: `${this.px(11)}px`,
       color: '#ffffff',
       fontFamily: 'monospace',
       backgroundColor: 'rgba(0,0,0,0.55)',
-      padding: { x: 10, y: 4 },
-    }).setOrigin(0.5, 0).setDepth(100).setAlpha(0.85);
+      padding: { x: this.px(10), y: this.px(4) },
+    }).setOrigin(this.useDomBubbles ? 1 : 0.5, 0).setDepth(100).setAlpha(0.85);
 
     // V3: Start ambient particle system
     this.startAmbientMotes(w, h, palette);
@@ -411,13 +472,13 @@ export class WorldScene extends Phaser.Scene {
     // Sky gradient (top to horizon)
     this.bgGraphics = this.add.graphics();
     this.bgGraphics.fillGradientStyle(palette.sky1, palette.sky1, palette.sky2, palette.sky2, 1);
-    this.bgGraphics.fillRect(0, 0, w, horizonY + 20);
+    this.bgGraphics.fillRect(0, 0, w, horizonY + this.px(20));
     this.bgGraphics.setDepth(0);
 
     // Horizon glow line
     const horizonGlow = this.add.graphics();
     horizonGlow.fillStyle(palette.accent, 0.15);
-    horizonGlow.fillEllipse(w / 2, horizonY, w * 1.5, 40);
+    horizonGlow.fillEllipse(w / 2, horizonY, w * 1.5, this.px(40));
     horizonGlow.setDepth(0);
     this.terrainLayers.push(horizonGlow);
 
@@ -429,8 +490,8 @@ export class WorldScene extends Phaser.Scene {
     const segments = 16;
     for (let i = 0; i <= segments; i++) {
       const x = (i / segments) * w;
-      const yOffset = Math.sin(i * 0.6 + 1.2) * 25 + Math.sin(i * 1.3) * 12;
-      farTerrain.lineTo(x, horizonY - 30 - yOffset);
+      const yOffset = Math.sin(i * 0.6 + 1.2) * this.px(25) + Math.sin(i * 1.3) * this.px(12);
+      farTerrain.lineTo(x, horizonY - this.px(30) - yOffset);
     }
     farTerrain.lineTo(w, horizonY);
     farTerrain.closePath();
@@ -442,13 +503,13 @@ export class WorldScene extends Phaser.Scene {
     const midTerrain = this.add.graphics();
     midTerrain.fillStyle(this.darkenColor(palette.ground, 0.25), 0.7);
     midTerrain.beginPath();
-    midTerrain.moveTo(0, horizonY + 10);
+    midTerrain.moveTo(0, horizonY + this.px(10));
     for (let i = 0; i <= segments; i++) {
       const x = (i / segments) * w;
-      const yOffset = Math.sin(i * 0.8 + 0.5) * 15 + Math.sin(i * 1.8 + 2) * 8;
-      midTerrain.lineTo(x, horizonY - 5 - yOffset);
+      const yOffset = Math.sin(i * 0.8 + 0.5) * this.px(15) + Math.sin(i * 1.8 + 2) * this.px(8);
+      midTerrain.lineTo(x, horizonY - this.px(5) - yOffset);
     }
-    midTerrain.lineTo(w, horizonY + 10);
+    midTerrain.lineTo(w, horizonY + this.px(10));
     midTerrain.closePath();
     midTerrain.fill();
     midTerrain.setDepth(0);
@@ -465,10 +526,10 @@ export class WorldScene extends Phaser.Scene {
     textureDots.setDepth(0);
     for (let i = 0; i < 60; i++) {
       const dx = Math.random() * w;
-      const dy = horizonY + 10 + Math.random() * (h - horizonY - 10);
+      const dy = horizonY + this.px(10) + Math.random() * (h - horizonY - this.px(10));
       const dotAlpha = 0.05 + Math.random() * 0.1;
       textureDots.fillStyle(0x000000, dotAlpha);
-      textureDots.fillCircle(dx, dy, 1 + Math.random() * 1.5);
+      textureDots.fillCircle(dx, dy, this.px(1) + Math.random() * this.px(1.5));
     }
     this.terrainLayers.push(textureDots);
 
@@ -484,9 +545,9 @@ export class WorldScene extends Phaser.Scene {
 
     for (let i = 0; i < 4; i++) {
       const cloud = this.add.graphics();
-      const cloudY = 30 + Math.random() * (maxY * 0.5);
+      const cloudY = this.px(30) + Math.random() * (maxY * 0.5);
       const cloudX = Math.random() * w;
-      const cloudW = 40 + Math.random() * 60;
+      const cloudW = this.px(40) + Math.random() * this.px(60);
       const alpha = 0.12 + Math.random() * 0.15;
 
       cloud.fillStyle(0xffffff, alpha);
@@ -502,7 +563,7 @@ export class WorldScene extends Phaser.Scene {
       if (!this.reducedMotion) {
         this.tweens.add({
           targets: cloud,
-          x: cloudX + 30 + Math.random() * 40,
+          x: cloudX + this.px(30) + Math.random() * this.px(40),
           duration: 15000 + Math.random() * 10000,
           yoyo: true,
           repeat: -1,
@@ -536,7 +597,7 @@ export class WorldScene extends Phaser.Scene {
 
   private spawnAmbientMote(w: number, h: number, accent: number): void {
     const mote = this.acquireAmbientMote();
-    const size = 0.5 + Math.random() * 1.5;
+    const size = this.px(0.5) + Math.random() * this.px(1.5);
     const alpha = 0.1 + Math.random() * 0.2;
     const color = Math.random() > 0.5 ? accent : 0xffffff;
 
@@ -558,8 +619,8 @@ export class WorldScene extends Phaser.Scene {
     // Float and fade
     this.tweens.add({
       targets: mote,
-      x: startX + (Math.random() - 0.5) * 60,
-      y: startY - 20 - Math.random() * 40,
+      x: startX + (Math.random() - 0.5) * this.px(60),
+      y: startY - this.px(20) - Math.random() * this.px(40),
       alpha: 0,
       duration: 6000 + Math.random() * 4000,
       ease: 'Sine.easeInOut',
@@ -688,6 +749,7 @@ export class WorldScene extends Phaser.Scene {
 
     const cleanup = () => {
       this.pendingSceneTextureLoads.delete(texKey);
+      this.pendingTextureLoadCleanups.delete(texKey);
       this.load.off(`filecomplete-image-${texKey}`, handleFileComplete);
       this.load.off(Phaser.Loader.Events.FILE_LOAD_ERROR, handleLoadError);
     };
@@ -702,6 +764,7 @@ export class WorldScene extends Phaser.Scene {
       cleanup();
     };
 
+    this.pendingTextureLoadCleanups.set(texKey, cleanup);
     this.load.once(`filecomplete-image-${texKey}`, handleFileComplete);
     this.load.on(Phaser.Loader.Events.FILE_LOAD_ERROR, handleLoadError);
     this.load.image(texKey, getThemeAssetPath(themeId));
@@ -807,12 +870,25 @@ export class WorldScene extends Phaser.Scene {
         const emotion = data.emotion as string | undefined;
         const haloColor = data.halo_color as string | undefined;
         const bubbleMode = data.bubble_mode === 'replay' ? 'replay' : 'live';
+        const agent = this.agentSprites.get(spriteId);
+        if (!spriteId || typeof text !== 'string') return;
+        if (agent && emotion) {
+          agent.emotion = emotion;
+        }
+        if (this.useDomBubbles) {
+          this.trackDomBubble(spriteId, text, emotion, bubbleMode);
+          return;
+        }
         this.showBubble(spriteId, text, emotion, haloColor, bubbleMode);
       })
     );
 
     this.unsubscribers.push(
       EventBridge.on('viz:clear_bubbles', () => {
+        if (this.useDomBubbles) {
+          this.domBubbleMetadata.clear();
+          return;
+        }
         this.clearActiveBubbles();
       })
     );
@@ -917,13 +993,13 @@ export class WorldScene extends Phaser.Scene {
             if (!agentData?.gameObject) return;
             // Update faction bar color (Y-offset matches spawnAgent: spriteH/2 + 2)
             if (agentData.factionBar) {
-              const barY = Math.round(agentData.spriteH * 0.5) + 2;
+              const barY = Math.round(agentData.spriteH * 0.5) + this.px(2);
               agentData.factionBar.clear();
               agentData.factionBar.fillStyle(color, 0.8);
-              agentData.factionBar.fillRoundedRect(-8, barY, 16, 3, 1);
+              agentData.factionBar.fillRoundedRect(this.px(-8), barY, this.px(16), this.px(3), this.px(1));
             }
-            const targetX = clusterCenterX + (mi - (faction.members.length - 1) / 2) * FACTION_CLUSTER_SPREAD;
-            const targetY = baseY + (Math.random() - 0.5) * FACTION_CLUSTER_JITTER;
+            const targetX = clusterCenterX + (mi - (faction.members.length - 1) / 2) * this.px(FACTION_CLUSTER_SPREAD);
+            const targetY = baseY + (Math.random() - 0.5) * this.px(FACTION_CLUSTER_JITTER);
             // Animate to cluster position (staggered, respecting global tween budget)
             if (!this.reducedMotion && this.tweens.getTweens().length < MAX_CONCURRENT_TWEENS) {
               this.tweens.add({
@@ -971,7 +1047,7 @@ export class WorldScene extends Phaser.Scene {
           flash.setVisible(true);
           const flashColor = evt.type === 'betrayal' ? 0xff0000 : 0x00ff00;
           flash.fillStyle(flashColor, 0.3);
-          flash.fillCircle(0, 0, FACTION_FLASH_RADIUS);
+          flash.fillCircle(0, 0, this.px(FACTION_FLASH_RADIUS));
           agentData.gameObject.add(flash);
           const poolRef = this.factionFlashPool; // stable ref for callback
           this.tweens.add({
@@ -993,7 +1069,6 @@ export class WorldScene extends Phaser.Scene {
       })
     );
 
-    // Phase 3 Batch 2: Bet & Leaderboard updates — handled by React HudOverlay
   }
 
   // ── Agent Spawning ────────────────────────────────────
@@ -1026,13 +1101,18 @@ export class WorldScene extends Phaser.Scene {
 
     // Dynamic sprite sizing — uniform scale preserves 2:3 aspect ratio of original 32×48
     const baseScale = Math.min(width, height);
-    const spriteW = Math.max(48, Math.round(baseScale * 0.07));
+    const spriteW = Math.max(this.px(48), Math.round(baseScale * 0.07));
     const spriteH = Math.round(spriteW * 1.5);
 
     // V3: Drop shadow (ellipse under sprite, scales with sprite)
     const shadow = this.add.graphics();
     shadow.fillStyle(0x000000, 0.2);
-    shadow.fillEllipse(0, Math.round(spriteH * 0.5) + 2, Math.round(spriteW * 0.875), Math.round(spriteH * 0.16));
+    shadow.fillEllipse(
+      0,
+      Math.round(spriteH * 0.5) + this.px(2),
+      Math.round(spriteW * 0.875),
+      Math.round(spriteH * 0.16),
+    );
     container.add(shadow);
 
     // Halo circle (behind sprite, initially invisible)
@@ -1056,31 +1136,37 @@ export class WorldScene extends Phaser.Scene {
     const palette = THEME_PALETTES[this.sceneTheme] || DEFAULT_PALETTE;
     const glowFx = this.add.graphics();
     glowFx.fillStyle(palette.accent, 0.06);
-    glowFx.fillCircle(0, 0, 20);
+    glowFx.fillCircle(0, 0, this.px(20));
     container.add(glowFx);
     container.sendToBack(glowFx);
 
     // Name label with rounded style
-    const label = this.add.text(0, -Math.round(spriteH * 0.5) - 8, agent.name, {
-      fontSize: '11px',
+    const label = this.add.text(0, -Math.round(spriteH * 0.5) - this.px(8), agent.name, {
+      fontSize: `${this.px(11)}px`,
       color: '#ffffff',
       fontFamily: 'monospace',
       backgroundColor: 'rgba(0,0,0,0.55)',
-      padding: { x: 4, y: 2 },
+      padding: { x: this.px(4), y: this.px(2) },
     }).setOrigin(0.5, 1);
     container.add(label);
 
     // Faction color bar (bottom of sprite)
     const factionBar = this.add.graphics();
     factionBar.fillStyle(FACTION_COLORS.unknown, 0.8);
-    factionBar.fillRoundedRect(-8, Math.round(spriteH * 0.5) + 2, 16, 3, 1);
+    factionBar.fillRoundedRect(
+      this.px(-8),
+      Math.round(spriteH * 0.5) + this.px(2),
+      this.px(16),
+      this.px(3),
+      this.px(1),
+    );
     container.add(factionBar);
 
     // Idle breathing animation (decorative — skip under reduced motion)
     if (!this.reducedMotion) {
       this.tweens.add({
         targets: sprite,
-        y: -2,
+        y: this.px(-2),
         duration: 1500 + Math.random() * 500,
         yoyo: true,
         repeat: -1,
@@ -1106,7 +1192,7 @@ export class WorldScene extends Phaser.Scene {
     } else {
       container.setScale(0.5);
       container.setAlpha(0);
-      container.y = y - 30;
+      container.y = y - this.px(30);
       this.tweens.add({
         targets: container,
         scaleX: 1,
@@ -1156,6 +1242,7 @@ export class WorldScene extends Phaser.Scene {
 
     const cleanup = () => {
       this.pendingSpriteTextureLoads.delete(spriteKey);
+      this.pendingTextureLoadCleanups.delete(spriteKey);
       this.load.off(`filecomplete-image-${spriteKey}`, handleFileComplete);
       this.load.off(Phaser.Loader.Events.FILE_LOAD_ERROR, handleLoadError);
     };
@@ -1170,6 +1257,7 @@ export class WorldScene extends Phaser.Scene {
       cleanup();
     };
 
+    this.pendingTextureLoadCleanups.set(spriteKey, cleanup);
     this.load.once(`filecomplete-image-${spriteKey}`, handleFileComplete);
     this.load.on(Phaser.Loader.Events.FILE_LOAD_ERROR, handleLoadError);
     this.load.image(request.spriteKey, request.assetPath);
@@ -1206,14 +1294,14 @@ export class WorldScene extends Phaser.Scene {
 
         // Pick a random offset within the wander radius, constrained to canvas
         const angle = Math.random() * Math.PI * 2;
-        const dist = Math.random() * WANDER_RADIUS;
+        const dist = Math.random() * this.px(WANDER_RADIUS);
         const targetX = Phaser.Math.Clamp(
           a.originX + Math.cos(angle) * dist,
-          40, width - 40,
+          this.px(40), width - this.px(40),
         );
         const targetY = Phaser.Math.Clamp(
           a.originY + Math.sin(angle) * dist * 0.5, // less vertical drift
-          height * 0.45, height - 30,
+          height * 0.45, height - this.px(30),
         );
 
         const duration = WANDER_DURATION_MIN + Math.random() * (WANDER_DURATION_MAX - WANDER_DURATION_MIN);
@@ -1255,7 +1343,7 @@ export class WorldScene extends Phaser.Scene {
     this.tweens.add({
       targets: bubble,
       alpha: 0,
-      y: bubble.y - 4,
+      y: bubble.y - this.px(4),
       duration: this.reducedMotion ? 0 : duration,
       onComplete: () => bubble.destroy(),
     });
@@ -1283,8 +1371,8 @@ export class WorldScene extends Phaser.Scene {
     const initialText = visibleText.slice(0, initialChars);
     const bubbleWrapWidth = Phaser.Math.Clamp(
       Math.round(this.scale.width * (isCompactViewport ? 0.82 : 0.32)),
-      isCompactViewport ? 220 : BUBBLE_TEXT_WRAP_MIN_WIDTH,
-      isCompactViewport ? 320 : BUBBLE_TEXT_WRAP_MAX_WIDTH,
+      this.px(220),
+      isCompactViewport ? this.px(320) : this.px(300),
     );
 
     // Remove existing bubble for this agent
@@ -1304,14 +1392,15 @@ export class WorldScene extends Phaser.Scene {
     const bubbleBgColor = isCompactViewport ? 0x151224 : style.bg;
     const bubbleBgAlpha = isCompactViewport ? 0.94 : style.bgAlpha;
     const bubbleBorderColor = isCompactViewport ? 0xf5d7ff : style.borderColor;
+    const bubbleFontSize = this.px(16);
 
     const bubbleTextStyle = {
-      fontSize: '16px',
+      fontSize: `${bubbleFontSize}px`,
       color: isCompactViewport ? '#fff7ff' : '#1f2335',
       fontFamily: BUBBLE_TEXT_FONT_STACK,
       fontStyle: '700',
       align: 'left' as const,
-      lineSpacing: 4,
+      lineSpacing: this.px(4),
       maxLines: 4,
       wordWrap: { width: bubbleWrapWidth, useAdvancedWrap: true },
       stroke: isCompactViewport ? '#0a0614' : '#f7f2ff',
@@ -1326,16 +1415,16 @@ export class WorldScene extends Phaser.Scene {
       },
     };
 
-    const bubbleTextResolution = isCompactViewport ? 4 : BUBBLE_TEXT_RESOLUTION;
+    const bubbleTextResolution = Math.max(2, Math.ceil(4 / this.dpr));
 
     // B4: Typewriter — keep a short prefix visible immediately so live updates do not feel delayed.
     const textObj = this.add.text(0, 0, initialText, bubbleTextStyle).setOrigin(0.5).setResolution(bubbleTextResolution);
 
     // P4: Try pretext canvas prediction first, fall back to Phaser getBounds
-    const pad = 12;
+    const pad = this.px(12);
     let bubbleWidth: number;
     let bubbleHeight: number;
-    const predicted = predictBubbleTextSize(visibleText, bubbleWrapWidth, { fontSizePx: 16 });
+    const predicted = predictBubbleTextSize(visibleText, bubbleWrapWidth, { fontSizePx: bubbleFontSize });
     if (predicted) {
       bubbleWidth = predicted.textWidth + pad * 2;
       bubbleHeight = predicted.textHeight + pad * 2;
@@ -1356,11 +1445,14 @@ export class WorldScene extends Phaser.Scene {
       attachToAgent = false;
       bubbleOffsetX = Math.round(this.scale.width / 2);
       bubbleOffsetY = Math.round(
-        this.scale.height - Math.max(160, bubbleHeight / 2 + 60),
+        this.scale.height - Math.max(this.px(160), bubbleHeight / 2 + this.px(60)),
       );
     } else {
+      const bubbleLayoutSlots = this.getBubbleLayoutSlots();
+      const bubbleWorldPaddingX = this.px(BUBBLE_WORLD_PADDING_X);
+      const bubbleWorldPaddingY = this.px(BUBBLE_WORLD_PADDING_Y);
       const overlapCount = new Map<number, number>();
-      const selectedSlot = BUBBLE_LAYOUT_SLOTS.find((slot, slotIndex) => {
+      const selectedSlot = bubbleLayoutSlots.find((slot, slotIndex) => {
         const candidateWorldX = agent.gameObject!.x + slot.x;
         const candidateWorldY = agent.gameObject!.y + slot.y;
         let overlaps = 0;
@@ -1376,9 +1468,13 @@ export class WorldScene extends Phaser.Scene {
           const otherWorldY = otherAgent.gameObject.y + otherBubble.y;
 
           const overlapsHorizontally =
-            Math.abs(candidateWorldX - otherWorldX) < ((bubbleWidth + otherWidth) / 2 + BUBBLE_WORLD_PADDING_X);
+            Math.abs(candidateWorldX - otherWorldX) < (
+              (bubbleWidth + otherWidth) / 2 + bubbleWorldPaddingX
+            );
           const overlapsVertically =
-            Math.abs(candidateWorldY - otherWorldY) < ((bubbleHeight + otherHeight) / 2 + BUBBLE_WORLD_PADDING_Y);
+            Math.abs(candidateWorldY - otherWorldY) < (
+              (bubbleHeight + otherHeight) / 2 + bubbleWorldPaddingY
+            );
 
           if (overlapsHorizontally && overlapsVertically) {
             overlaps += 1;
@@ -1387,27 +1483,27 @@ export class WorldScene extends Phaser.Scene {
 
         overlapCount.set(slotIndex, overlaps);
         return overlaps === 0;
-      }) ?? BUBBLE_LAYOUT_SLOTS[
-        [...overlapCount.entries()].sort((a, b) => a[1] - b[1])[0]?.[0] ?? Math.min(BUBBLE_MAX_STACK, BUBBLE_LAYOUT_SLOTS.length - 1)
+      }) ?? bubbleLayoutSlots[
+        [...overlapCount.entries()].sort((a, b) => a[1] - b[1])[0]?.[0] ?? Math.min(BUBBLE_MAX_STACK, bubbleLayoutSlots.length - 1)
       ];
 
       bubbleOffsetX = selectedSlot.x;
       bubbleOffsetY = selectedSlot.y;
-      const halfBubbleWidth = bubbleWidth / 2 + 12;
-      const halfBubbleHeight = bubbleHeight / 2 + 12;
+      const halfBubbleWidth = bubbleWidth / 2 + this.px(12);
+      const halfBubbleHeight = bubbleHeight / 2 + this.px(12);
 
       const projectedLeft = agent.gameObject.x + bubbleOffsetX - halfBubbleWidth;
       const projectedRight = agent.gameObject.x + bubbleOffsetX + halfBubbleWidth;
       const projectedTop = agent.gameObject.y + bubbleOffsetY - halfBubbleHeight;
 
-      if (projectedLeft < 12) {
-        bubbleOffsetX += 12 - projectedLeft;
-      } else if (projectedRight > this.scale.width - 12) {
-        bubbleOffsetX -= projectedRight - (this.scale.width - 12);
+      if (projectedLeft < this.px(12)) {
+        bubbleOffsetX += this.px(12) - projectedLeft;
+      } else if (projectedRight > this.scale.width - this.px(12)) {
+        bubbleOffsetX -= projectedRight - (this.scale.width - this.px(12));
       }
 
-      if (projectedTop < 12) {
-        bubbleOffsetY += 12 - projectedTop;
+      if (projectedTop < this.px(12)) {
+        bubbleOffsetY += this.px(12) - projectedTop;
       }
     }
 
@@ -1419,22 +1515,22 @@ export class WorldScene extends Phaser.Scene {
     bg.fillStyle(bubbleBgColor, bubbleBgAlpha);
     bg.fillRoundedRect(
       -(bubbleWidth / 2), -(bubbleHeight / 2),
-      bubbleWidth, bubbleHeight, 4,
+      bubbleWidth, bubbleHeight, this.px(4),
     );
     // Emotion-specific border
-    bg.lineStyle(emotion === 'anxious' || emotion === 'fearful' ? 1 : 1.5, bubbleBorderColor, 0.9);
+    bg.lineStyle(emotion === 'anxious' || emotion === 'fearful' ? this.px(1) : this.px(1.5), bubbleBorderColor, 0.9);
     bg.strokeRoundedRect(
       -(bubbleWidth / 2), -(bubbleHeight / 2),
-      bubbleWidth, bubbleHeight, 4,
+      bubbleWidth, bubbleHeight, this.px(4),
     );
 
     // Emotion indicator badge (! or ?)
     if (!isCompactViewport && style.indicator) {
       const badge = this.add.text(
-        bubbleWidth / 2 + 2, -(bubbleHeight / 2) - 2,
+        bubbleWidth / 2 + this.px(2), -(bubbleHeight / 2) - this.px(2),
         style.indicator,
         {
-          fontSize: '12px',
+          fontSize: `${this.px(12)}px`,
           color: `#${bubbleBorderColor.toString(16).padStart(6, '0')}`,
           fontFamily: 'monospace',
           fontStyle: 'bold',
@@ -1444,7 +1540,7 @@ export class WorldScene extends Phaser.Scene {
     } else if (!isCompactViewport && emotion && emotion !== 'neutral') {
       const emotionDot = this.add.graphics();
       emotionDot.fillStyle(bubbleBorderColor, 1);
-      emotionDot.fillCircle(bubbleWidth / 2 + 4, -(bubbleHeight / 2) + 4, 3);
+      emotionDot.fillCircle(bubbleWidth / 2 + this.px(4), -(bubbleHeight / 2) + this.px(4), this.px(3));
       bubbleContainer.add(emotionDot);
     }
 
@@ -1466,7 +1562,7 @@ export class WorldScene extends Phaser.Scene {
       targets: bubbleContainer,
       alpha: 1,
       x: bubbleOffsetX,
-      y: bubbleOffsetY - 5,
+      y: bubbleOffsetY - this.px(5),
       duration: this.reducedMotion ? 0 : 300,
       ease: 'Back.easeOut',
     });
@@ -1534,6 +1630,19 @@ export class WorldScene extends Phaser.Scene {
     this.bubbles.clear();
   }
 
+  private trackDomBubble(spriteId: string, text: string, emotion: string | undefined, mode: BubbleMode): void {
+    const normalizedText = normalizeBubbleText(text);
+    const timing = getBubbleTiming(mode, normalizedText.length);
+    const typedChars = Math.max(0, normalizedText.length - timing.initialChars);
+    const lifetimeMs = typedChars * timing.charDelayMs + timing.lingerMs;
+    this.domBubbleMetadata.set(spriteId, {
+      text: normalizedText,
+      emotion: emotion || 'neutral',
+      mode,
+      expiresAt: (this.time?.now ?? performance.now()) + lifetimeMs,
+    });
+  }
+
   // ── Agent Movement (Phase 4: viewport culling) ────────
 
   private moveAgent(spriteId: string, x: number, y: number, duration: number, faction?: string): void {
@@ -1549,7 +1658,7 @@ export class WorldScene extends Phaser.Scene {
     if (!this.reducedMotion) {
       const trail = this.add.graphics();
       trail.fillStyle(factionColor, 0.4);
-      trail.fillCircle(agent.gameObject.x, agent.gameObject.y, 4);
+      trail.fillCircle(agent.gameObject.x, agent.gameObject.y, this.px(4));
       this.tweens.add({
         targets: trail,
         alpha: 0,
@@ -1560,10 +1669,10 @@ export class WorldScene extends Phaser.Scene {
 
     // Update faction color bar on agent (Y-offset matches spawnAgent: spriteH/2 + 2)
     if (agent.factionBar && faction) {
-      const barY = Math.round(agent.spriteH * 0.5) + 2;
+      const barY = Math.round(agent.spriteH * 0.5) + this.px(2);
       agent.factionBar.clear();
       agent.factionBar.fillStyle(factionColor, 0.8);
-      agent.factionBar.fillRoundedRect(-8, barY, 16, 3, 1);
+      agent.factionBar.fillRoundedRect(this.px(-8), barY, this.px(16), this.px(3), this.px(1));
     }
 
     // Smooth movement with ease-out (instant snap under reduced motion)
@@ -1588,8 +1697,9 @@ export class WorldScene extends Phaser.Scene {
     if (!agent.gameObject) return;
     const ax = agent.gameObject.x;
     const ay = agent.gameObject.y;
-    const visible = ax > -VIEWPORT_MARGIN && ax < w + VIEWPORT_MARGIN
-                 && ay > -VIEWPORT_MARGIN && ay < h + VIEWPORT_MARGIN;
+    const viewportMargin = this.px(VIEWPORT_MARGIN);
+    const visible = ax > -viewportMargin && ax < w + viewportMargin
+                 && ay > -viewportMargin && ay < h + viewportMargin;
     agent.gameObject.setVisible(visible);
   }
 
@@ -1614,9 +1724,9 @@ export class WorldScene extends Phaser.Scene {
     if (haloGfx) {
       haloGfx.clear();
       haloGfx.fillStyle(color, 0.25);
-      haloGfx.fillCircle(0, 0, 22);
-      haloGfx.lineStyle(1.5, color, 0.5);
-      haloGfx.strokeCircle(0, 0, 22);
+      haloGfx.fillCircle(0, 0, this.px(22));
+      haloGfx.lineStyle(this.px(1.5), color, 0.5);
+      haloGfx.strokeCircle(0, 0, this.px(22));
       haloGfx.setAlpha(1);
 
       // Pulsing animation (decorative — skip under reduced motion)
@@ -1647,12 +1757,12 @@ export class WorldScene extends Phaser.Scene {
         const angle = (Math.PI * 2 * i) / burstCount;
         const dot = this.add.graphics();
         dot.fillStyle(color, 0.8);
-        dot.fillCircle(0, 0, 2);
+        dot.fillCircle(0, 0, this.px(2));
         dot.setPosition(agent.gameObject.x, agent.gameObject.y);
         this.tweens.add({
           targets: dot,
-          x: agent.gameObject.x + Math.cos(angle) * 30,
-          y: agent.gameObject.y + Math.sin(angle) * 30,
+          x: agent.gameObject.x + Math.cos(angle) * this.px(30),
+          y: agent.gameObject.y + Math.sin(angle) * this.px(30),
           alpha: 0,
           duration: 600,
           ease: 'Power2',
@@ -1677,13 +1787,13 @@ export class WorldScene extends Phaser.Scene {
     if (direction === 'horizontal') {
       // Vertical split line in center
       const line = this.add.graphics();
-      line.lineStyle(2, 0xffffff, 0);
+      line.lineStyle(this.px(2), 0xffffff, 0);
       line.lineBetween(width / 2, 0, width / 2, height);
       splitGroup.add(line);
 
       // Animated glow line
       const glowLine = this.add.graphics();
-      glowLine.lineStyle(4, 0x00ffff, 0.8);
+      glowLine.lineStyle(this.px(4), 0x00ffff, 0.8);
       glowLine.lineBetween(width / 2, height / 2, width / 2, height / 2);
       splitGroup.add(glowLine);
 
@@ -1700,12 +1810,12 @@ export class WorldScene extends Phaser.Scene {
     } else {
       // Quadrant split — two lines
       const vLine = this.add.graphics();
-      vLine.lineStyle(3, 0x00ffff, 0.7);
+      vLine.lineStyle(this.px(3), 0x00ffff, 0.7);
       vLine.lineBetween(width / 2, 0, width / 2, height);
       splitGroup.add(vLine);
 
       const hLine = this.add.graphics();
-      hLine.lineStyle(3, 0x00ffff, 0.7);
+      hLine.lineStyle(this.px(3), 0x00ffff, 0.7);
       hLine.lineBetween(0, height / 2, width, height / 2);
       splitGroup.add(hLine);
 
@@ -1714,18 +1824,18 @@ export class WorldScene extends Phaser.Scene {
 
     // Reason text overlay
     if (reason) {
-      const reasonText = this.add.text(width / 2, height / 2 - 40, `⚡ ${reason}`, {
-        fontSize: '12px',
+      const reasonText = this.add.text(width / 2, height / 2 - this.px(40), `⚡ ${reason}`, {
+        fontSize: `${this.px(12)}px`,
         color: '#ffffff',
         fontFamily: 'monospace',
         backgroundColor: 'rgba(0,0,0,0.7)',
-        padding: { x: 12, y: 6 },
+        padding: { x: this.px(12), y: this.px(6) },
       }).setOrigin(0.5).setDepth(91);
 
       this.tweens.add({
         targets: reasonText,
         alpha: 0,
-        y: reasonText.y - 20,
+        y: reasonText.y - this.px(20),
         duration: 3000,
         delay: 1500,
         onComplete: () => reasonText.destroy(),
@@ -1745,8 +1855,8 @@ export class WorldScene extends Phaser.Scene {
   private createRipple(cx: number, cy: number, color: number): void {
     for (let i = 0; i < 3; i++) {
       const ring = this.add.graphics();
-      ring.lineStyle(2, color, 0.6);
-      ring.strokeCircle(cx, cy, 5);
+      ring.lineStyle(this.px(2), color, 0.6);
+      ring.strokeCircle(cx, cy, this.px(5));
 
       this.tweens.add({
         targets: ring,
@@ -1775,8 +1885,8 @@ export class WorldScene extends Phaser.Scene {
 
     // Expanding ring effect
     const ring = this.add.graphics();
-    ring.lineStyle(3, color, 1);
-    ring.strokeCircle(cx, cy, 8);
+    ring.lineStyle(this.px(3), color, 1);
+    ring.strokeCircle(cx, cy, this.px(8));
     ring.setDepth(80);
 
     this.tweens.add({
@@ -1791,8 +1901,8 @@ export class WorldScene extends Phaser.Scene {
 
     // Secondary inner ring
     const ring2 = this.add.graphics();
-    ring2.lineStyle(2, color, 0.6);
-    ring2.strokeCircle(cx, cy, 5);
+    ring2.lineStyle(this.px(2), color, 0.6);
+    ring2.strokeCircle(cx, cy, this.px(5));
     ring2.setDepth(80);
 
     this.tweens.add({
@@ -1810,10 +1920,10 @@ export class WorldScene extends Phaser.Scene {
     const particleCount = animation === 'fire_spread' ? 20 : 12;
     for (let i = 0; i < particleCount; i++) {
       const angle = (Math.PI * 2 * i) / particleCount;
-      const dist = 60 + Math.random() * 80;
+      const dist = this.px(60) + Math.random() * this.px(80);
       const dot = this.add.graphics();
       dot.fillStyle(color, 0.9);
-      dot.fillCircle(0, 0, 2 + Math.random() * 2);
+      dot.fillCircle(0, 0, this.px(2) + Math.random() * this.px(2));
       dot.setPosition(cx, cy);
       dot.setDepth(80);
 
@@ -1830,20 +1940,20 @@ export class WorldScene extends Phaser.Scene {
 
     // Overlay label
     if (label) {
-      const labelText = this.add.text(cx, cy - 50, label, {
-        fontSize: '16px',
+      const labelText = this.add.text(cx, cy - this.px(50), label, {
+        fontSize: `${this.px(16)}px`,
         color: '#ffffff',
         fontFamily: 'monospace',
         fontStyle: 'bold',
         backgroundColor: 'rgba(0,0,0,0.6)',
-        padding: { x: 12, y: 6 },
+        padding: { x: this.px(12), y: this.px(6) },
         stroke: `#${color.toString(16).padStart(6, '0')}`,
-        strokeThickness: 1,
+        strokeThickness: this.px(1),
       }).setOrigin(0.5).setDepth(81);
 
       this.tweens.add({
         targets: labelText,
-        y: labelText.y - 15,
+        y: labelText.y - this.px(15),
         alpha: 0,
         duration: 2000,
         delay: 1000,
@@ -1867,10 +1977,10 @@ export class WorldScene extends Phaser.Scene {
   // ── MiniMap HUD (Phase 3) ─────────────────────────────
 
   private drawMinimap(w: number, h: number): void {
-    const mapW = 120;
-    const mapH = 64;
-    const padX = 12;
-    const padY = 12;
+    const mapW = this.px(120);
+    const mapH = this.px(64);
+    const padX = this.px(12);
+    const padY = this.px(12);
     const x = w - mapW - padX;
     const y = h - mapH - padY;
 
@@ -1896,13 +2006,13 @@ export class WorldScene extends Phaser.Scene {
 
     // Border
     const border = this.add.graphics();
-    border.lineStyle(1, 0x6c5ce7, 0.5);
-    border.strokeRoundedRect(0, 0, mapW, mapH, 4);
+    border.lineStyle(this.px(1), 0x6c5ce7, 0.5);
+    border.strokeRoundedRect(0, 0, mapW, mapH, this.px(4));
     this.minimapContainer.add(border);
 
     // Label
-    const label = this.add.text(mapW / 2, 6, i18next.t('game.minimap_title'), {
-      fontSize: '8px',
+    const label = this.add.text(mapW / 2, this.px(6), i18next.t('game.minimap_title'), {
+      fontSize: `${this.px(8)}px`,
       color: '#aaaacc',
       fontFamily: 'monospace',
     }).setOrigin(0.5, 0);
@@ -1916,8 +2026,8 @@ export class WorldScene extends Phaser.Scene {
   /** Update minimap background to reflect the current scene. */
   private updateMinimapScene(texKey: string, palette: typeof DEFAULT_PALETTE): void {
     if (!this.minimapContainer) return;
-    const mapW = 120;
-    const mapH = 64;
+    const mapW = this.px(120);
+    const mapH = this.px(64);
 
     // Remove old scene image / gradient
     if (this.minimapSceneImg) {
@@ -1948,12 +2058,12 @@ export class WorldScene extends Phaser.Scene {
   private updateMinimapDot(agentId: string, worldX: number, worldY: number, faction?: string): void {
     if (!this.minimapContainer) return;
     const { width, height } = this.scale;
-    const mapW = 120;
-    const mapH = 64;
+    const mapW = this.px(120);
+    const mapH = this.px(64);
 
     // Scale world coordinates to minimap
-    const dotX = (worldX / width) * (mapW - 8) + 4;
-    const dotY = (worldY / height) * (mapH - 18) + 14; // offset for label
+    const dotX = (worldX / width) * (mapW - this.px(8)) + this.px(4);
+    const dotY = (worldY / height) * (mapH - this.px(18)) + this.px(14); // offset for label
 
     const color = faction ? (FACTION_COLORS[faction] ?? FACTION_COLORS.unknown) : 0x6c5ce7;
 
@@ -1967,7 +2077,7 @@ export class WorldScene extends Phaser.Scene {
       this.minimapDots.set(agentId, dot);
     }
     dot.fillStyle(color, 0.9);
-    dot.fillCircle(dotX, dotY, 2);
+    dot.fillCircle(dotX, dotY, this.px(2));
   }
 
 
@@ -1992,7 +2102,7 @@ export class WorldScene extends Phaser.Scene {
   private releaseWeatherDot(dot: Phaser.GameObjects.Graphics): void {
     if (!dot.scene) return; // already destroyed externally
     dot.setVisible(false);
-    dot.setPosition(-100, -100);
+    dot.setPosition(this.px(-100), this.px(-100));
     if (this.weatherPool.length < this.effectiveWeatherPoolSize) {
       this.weatherPool.push(dot);
     } else {
@@ -2020,15 +2130,15 @@ export class WorldScene extends Phaser.Scene {
           const dot = this.acquireWeatherDot();
 
           const startX = Math.random() * width;
-          const startY = -5;
+          const startY = this.px(-5);
 
           switch (weatherType) {
             case 'rain': {
-              dot.lineStyle(1, 0x6ec6ff, 0.5 + intensity * 0.3);
-              dot.lineBetween(0, 0, -2, 8);
+              dot.lineStyle(this.px(1), 0x6ec6ff, 0.5 + intensity * 0.3);
+              dot.lineBetween(0, 0, this.px(-2), this.px(8));
               dot.setPosition(startX, startY);
               this.tweens.add({
-                targets: dot, y: height + 10, x: startX - 20,
+                targets: dot, y: height + this.px(10), x: startX - this.px(20),
                 duration: 400 + Math.random() * 200,
                 onComplete: () => this.releaseWeatherDot(dot),
               });
@@ -2036,12 +2146,12 @@ export class WorldScene extends Phaser.Scene {
             }
             case 'snow': {
               dot.fillStyle(0xffffff, 0.6 + Math.random() * 0.3);
-              dot.fillCircle(0, 0, 1.5 + Math.random() * 1.5);
+              dot.fillCircle(0, 0, this.px(1.5) + Math.random() * this.px(1.5));
               dot.setPosition(startX, startY);
               this.tweens.add({
                 targets: dot,
-                y: height + 10,
-                x: startX + (Math.random() - 0.5) * 60,
+                y: height + this.px(10),
+                x: startX + (Math.random() - 0.5) * this.px(60),
                 duration: 2000 + Math.random() * 1500,
                 onComplete: () => this.releaseWeatherDot(dot),
               });
@@ -2049,12 +2159,12 @@ export class WorldScene extends Phaser.Scene {
             }
             case 'sandstorm': {
               dot.fillStyle(0xd2b48c, 0.3 + intensity * 0.3);
-              dot.fillCircle(0, 0, 1 + Math.random() * 2);
-              dot.setPosition(-5, Math.random() * height);
+              dot.fillCircle(0, 0, this.px(1) + Math.random() * this.px(2));
+              dot.setPosition(this.px(-5), Math.random() * height);
               this.tweens.add({
                 targets: dot,
-                x: width + 10,
-                y: dot.y + (Math.random() - 0.5) * 40,
+                x: width + this.px(10),
+                y: dot.y + (Math.random() - 0.5) * this.px(40),
                 duration: 500 + Math.random() * 300,
                 onComplete: () => this.releaseWeatherDot(dot),
               });
@@ -2067,11 +2177,11 @@ export class WorldScene extends Phaser.Scene {
                 this.cameras.main.shake(200, 0.003);
               }
               // Plus rain
-              dot.lineStyle(1, 0x4a90d9, 0.4);
-              dot.lineBetween(0, 0, -2, 8);
+              dot.lineStyle(this.px(1), 0x4a90d9, 0.4);
+              dot.lineBetween(0, 0, this.px(-2), this.px(8));
               dot.setPosition(startX, startY);
               this.tweens.add({
-                targets: dot, y: height + 10, x: startX - 20,
+                targets: dot, y: height + this.px(10), x: startX - this.px(20),
                 duration: 350 + Math.random() * 200,
                 onComplete: () => this.releaseWeatherDot(dot),
               });
@@ -2153,7 +2263,7 @@ export class WorldScene extends Phaser.Scene {
 
   // ── FPS Sampling & Weather Degradation ─────────────────
 
-  update(): void {
+  update(time: number): void {
     // Sample actual FPS for weather particle density degradation
     const fps = this.game.loop.actualFps;
     this.fpsHistory.push(fps);
@@ -2166,6 +2276,30 @@ export class WorldScene extends Phaser.Scene {
         ? WEATHER_POOL_SIZE_DEGRADED
         : WEATHER_POOL_SIZE;
     }
+    if (this.useDomBubbles && time - this.lastPositionEmitTime > this.POSITION_EMIT_INTERVAL) {
+      this.lastPositionEmitTime = time;
+      this.emitSpritePositions();
+    }
+  }
+
+  private emitSpritePositions(): void {
+    const payload = {
+      agents: [...this.agentSprites.values()].map((agent) => ({
+        agent_id: agent.agent_id,
+        name: agent.name,
+        x: agent.gameObject?.x ?? agent.x,
+        y: agent.gameObject?.y ?? agent.y,
+        spriteH: agent.spriteH,
+        visible: agent.gameObject?.visible ?? false,
+        ...(agent.emotion ? { emotion: agent.emotion } : {}),
+      })),
+      canvasRect: {
+        width: this.scale.width,
+        height: this.scale.height,
+      },
+    } satisfies SpritePositionUpdate;
+
+    dispatchVizEvent('viz:sprite_positions', payload);
   }
 
   // ── Cleanup ───────────────────────────────────────────
@@ -2196,8 +2330,13 @@ export class WorldScene extends Phaser.Scene {
     this.agentSprites.clear();
 
     // 2b. Clear pending texture load tracking to prevent stale keys blocking future loads
+    for (const cleanup of Array.from(this.pendingTextureLoadCleanups.values())) {
+      cleanup();
+    }
+    this.pendingTextureLoadCleanups.clear();
     this.pendingSceneTextureLoads.clear();
     this.pendingSpriteTextureLoads.clear();
+    this.domBubbleMetadata.clear();
 
     // 3. Destroy bubble containers
     this.bubbles.forEach((bubble) => bubble.destroy());
@@ -2251,9 +2390,7 @@ export class WorldScene extends Phaser.Scene {
     }
     this.minimapBg = null;
 
-    // 7–8. Phase 3 Batch 2: bet panel & leaderboard — now in React HudOverlay
-
-    // 9. Unhook from Phaser lifecycle to prevent double-fire
+    // Unhook from Phaser lifecycle to prevent double-fire
     this.events.off(Phaser.Scenes.Events.SHUTDOWN, this.shutdown, this);
 
     console.log('[WorldScene] Shutdown: all resources cleaned up');

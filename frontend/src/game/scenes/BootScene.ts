@@ -112,6 +112,8 @@ export class BootScene extends Phaser.Scene {
   }
 
   create(): void {
+    const dpr = this.game.registry.get('devicePixelRatio') || 1;
+
     // Generate procedural fallback for any sprites that failed to load
     for (const key of this.failedSprites) {
       this.createFallbackSprite(key);
@@ -121,12 +123,15 @@ export class BootScene extends Phaser.Scene {
 
     // Always ensure bubble_bg texture exists (procedural)
     if (!this.textures.exists('bubble_bg')) {
+      const px = (value: number) => value * dpr;
+      const textureW = Math.round(120 * dpr);
+      const textureH = Math.round(40 * dpr);
       const g = this.add.graphics();
       g.fillStyle(0xffffff, 0.9);
-      g.fillRoundedRect(0, 0, 120, 40, 6);
-      g.lineStyle(1, 0x333333, 0.5);
-      g.strokeRoundedRect(0, 0, 120, 40, 6);
-      g.generateTexture('bubble_bg', 120, 40);
+      g.fillRoundedRect(0, 0, textureW, textureH, px(6));
+      g.lineStyle(px(1), 0x333333, 0.5);
+      g.strokeRoundedRect(0, 0, textureW, textureH, px(6));
+      g.generateTexture('bubble_bg', textureW, textureH);
       g.destroy();
     }
 
@@ -142,21 +147,25 @@ export class BootScene extends Phaser.Scene {
   private createFallbackSprite(name: string): void {
     if (this.textures.exists(name)) return;
     const colors = SPRITE_FALLBACK[name] ?? SPRITE_FALLBACK.sprite_default;
+    const dpr = this.game.registry.get('devicePixelRatio') || 1;
+    const px = (value: number) => value * dpr;
+    const textureW = Math.round(16 * dpr);
+    const textureH = Math.round(24 * dpr);
 
     const g = this.add.graphics();
     g.fillStyle(colors.body, 1);
-    g.fillRoundedRect(0, 4, 16, 20, 2);
+    g.fillRoundedRect(0, px(4), px(16), px(20), px(2));
     g.fillStyle(colors.body, 1);
-    g.fillRoundedRect(2, 0, 12, 12, 3);
+    g.fillRoundedRect(px(2), 0, px(12), px(12), px(3));
     g.fillStyle(0xffffff, 0.9);
-    g.fillCircle(5, 5, 2);
-    g.fillCircle(11, 5, 2);
+    g.fillCircle(px(5), px(5), px(2));
+    g.fillCircle(px(11), px(5), px(2));
     g.fillStyle(0x000000, 0.8);
-    g.fillCircle(6, 5, 1);
-    g.fillCircle(12, 5, 1);
+    g.fillCircle(px(6), px(5), px(1));
+    g.fillCircle(px(12), px(5), px(1));
     g.fillStyle(colors.accent, 1);
-    g.fillRect(0, 21, 16, 3);
-    g.generateTexture(name, 16, 24);
+    g.fillRect(0, px(21), px(16), px(3));
+    g.generateTexture(name, textureW, textureH);
     g.destroy();
   }
 }

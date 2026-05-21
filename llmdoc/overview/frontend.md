@@ -166,24 +166,26 @@
 ## Theater 与性能边界
 
 - Pixel Theater 运行时在 `frontend/src/game/`。
-- `PhaserGameLoader` 负责按需加载 Theater。
+- `PhaserGameLoader` 负责按需加载 Theater；`SimulationView` 仍保留 `.theater-panel` 与 `.phaser-game-container` 作为 screenshot / GIF capture 选择器。
 - live simulation 已经有 Agent 且尚未完成时，Phaser 会跳过 `TitleScene` 直接进入 `WorldScene`；completed replay 仍走 replay sync，避免停在标题页。
 - `TitleScene / EndingScene` 的副标题、初始化提示、无描述 fallback 和返回提示都走 `game.*` i18n key，不再用 `i18next.language` 手写中英分支。
 - screenshot / GIF capture runtime 已拆分，不进入默认首包。
+- `capture_game_screenshot('panel')` 继续走 `.theater-panel`，`capture_game_screenshot('canvas')` 继续走 `.phaser-game-container`；本轮没有修改 `useSimulationViewState.ts` 的截图选择器契约。
 - 主题、素材与 UI asset 路径的单一事实源位于 `themeRegistry.ts`；冷启动标题等待期间会预拉当前 scene theme PNG，`WorldScene` 初始 bootstrap 和后续 theme swap 也会按需补拉真实场景图。
-- Theater 当前布局采用 canvas-first 浮动 HUD 方案：
-  - Phaser canvas 以 `position: absolute; inset: 0` 填满整个舞台区域
-  - 控制面板（header / status / director / filters / timeline）浮动在 canvas 上方，使用 `backdrop-filter: blur(12px)` 半透明叠加
-  - 移动端（≤900px）降级为实色半透明背景（`rgba(18, 16, 38, 0.95)`），避免多层 blur 导致帧率下降
-  - Theater 背景色从固定 `#06061a` 改为 `--oracle-bg-dark`，支持主题皮肤过渡
+- Theater 当前布局是 canvas-first 的 Light Theater：
+  - 外壳使用暖白背景 `#faf8f5`、暗棕正文 `#181611`、暖灰边框和少量 `#c61583` accent；Phaser canvas 内的场景渲染仍保持游戏画面，不强行改成亮色 UI
+  - React 侧 HUD 已移除，Theater 控制拆到 `frontend/src/pages/sim/*`
+  - floating toolbar 承载 replay、capture mode、截图/GIF、玩法卡入口和 status chips
+  - Director goals / commitment 移到 Radix Sheet drawer，保留 focus trap、Escape 和 return focus
+  - completed Theater 仍显示玩法卡入口，但只作为只读回看；live 未完成且已有 active branch/agents 时才允许应用玩法卡
 - Theater 气泡当前行为：
-  - 最大同时可见气泡数 = `min(agentCount, 8)`，根据场景内 agent 数量动态计算
-  - compact 模式（canvas 宽 < 360px，即真手机端）下最多 2 个，气泡固定在画面底部中央（底部安全间距从 104px 增加到 160px，避免被浮动 HUD 遮挡）
-  - 非 compact 模式下气泡跟随各自 agent 头顶显示
-  - 气泡文字统一为 16px / 700，不再按 compact / replay 区分字号
-  - 气泡换行宽度从 180-240px 增加到 220-300px
-  - 文字渲染分辨率 = 4x
-  - compact 模式下文字增加了描边（`strokeThickness: 1.5`）和阴影（`blur: 2`）以提升暗色背景上的可读性
+  - React DOM bubble overlay 默认开启；URL 带 `?domBubbles=0` 或 `?useDomBubbles=false` 时退回 Phaser bubble 路径
+  - Phaser 通过 `viz:sprite_positions` 发出 sprite 坐标，`BubbleOverlay` 用 refs + `transform: translate3d()` 同步位置，不靠 React setState 逐帧更新
+  - bubble overlay 保留 `role="log"` / `aria-live="polite"` 的 sr-only 完整文本
+  - 最大同时可见气泡数 = `min(agentCount, 8)`，compact 宽度下会减少可见数量并避开底部浮动控件
+  - Agent bubble 色板来自 `agentPalette.ts` 的 WCAG AA 双色 token
+- Phaser canvas 当前按 `width * dpr` 与 `height * dpr` 初始化 backing store，DPR capped at 3；automation state 会回显 `device_pixel_ratio / dpr`。`BootScene` 的 fallback texture 与 `WorldScene` 的绘制单位会读取 registry DPR 做缩放。
+- Theater CSS 对 `backdrop-filter` 保留 solid fallback 与 `-webkit-backdrop-filter`；`color-mix()` / `oklch()` 使用 fallback 或 `@supports` 门控；`100dvh` 保留 `100vh` fallback；reduced-motion 和 forced-colors 口径由对应 CSS 与 `legacyCssFallbacks` 测试覆盖。
 - Theater Agent sprite 当前采用动态缩放：
   - 尺寸 = `max(40, Math.min(width, height) * 0.055)` 宽，保持 2:3 宽高比
   - 阴影、名牌、faction bar 位置跟随 sprite 尺寸自动计算（`spriteH` 存储在 `AgentSpriteData` 中，各处统一使用 `spriteH * 0.5 + 2` 作 Y 偏移）
@@ -197,12 +199,15 @@
 |------|------|------|
 | `themeRegistry.ts` | `frontend/src/lib/themeRegistry.ts` | Theater / Debate / Oracle 资产注册表；当前包含 18 个 gameplay profiles 与 44 个主题场景 |
 | `emotionColors.ts` | `frontend/src/game/constants/emotionColors.ts` | 情绪-光环颜色映射共享常量（PhaserGame 和 VizSynthesizer 共用） |
+| `agentPalette.ts` | `frontend/src/game/constants/agentPalette.ts` | Theater DOM bubbles 的 Agent 双色 token；用于保持浅色 Theater 中的文本对比 |
+| `BubbleOverlay.tsx` | `frontend/src/game/BubbleOverlay.tsx` | React DOM 气泡层；消费 `viz:sprite_positions`，用 transform3d 跟随 sprite，并提供 polite live log |
+| Theater Controls | `frontend/src/pages/sim/*` | 从 `SimulationView` 拆出的 Theater toolbar、capture controls、status chips 和 Director drawer |
 | `scenarioAuthority.ts` | `frontend/src/lib/scenarioAuthority.ts` | 主模式 authority 合流入口 |
 | `scenarioGameplayState.ts` | `frontend/src/lib/scenarioGameplayState.ts` | gameplay_state 映射与判等 |
 | `scenarioDirectorState.ts` | `frontend/src/lib/scenarioDirectorState.ts` | director_state 映射 |
 | `predictionBetting.ts` | `frontend/src/lib/predictionBetting.ts` | 结构化押注 helper |
 | `gameplayContract.ts` | `frontend/src/lib/gameplayContract.ts` | 共享玩法契约消费层；profile 展示名与首页轻量 summary 需要和 shared contract 保持一致 |
-| `GameplayCardsModal.tsx` | `frontend/src/components/GameplayCardsModal.tsx` | 玩法卡弹窗；推荐卡、分组折叠、后端 contract payload、focus trap、label/select 显式关联与 disclosure ARIA |
+| `GameplayCardsModal.tsx` | `frontend/src/components/GameplayCardsModal.tsx` | 玩法卡弹窗；推荐卡、分组折叠、后端 contract payload、focus trap、label/select 显式关联与 disclosure ARIA；完成态 Theater 可只读回看 |
 | Campaign Components | `frontend/src/components/campaign/*` | campaign UI 组件；覆盖 streak、difficulty、refresh countdown、weekly track chip/dialog/leaderboard、progress sheet、badge cabinet、level progress 和 achievement toast；progress sheet 会并行读取 badge definitions、user badges、mastery，并复用已取到的 weekly summary |
 | `dailyChallenge.ts` | `frontend/src/lib/dailyChallenge.ts` | challenge date key 与 ISO week helper；用于前端入口显示和请求 context，最终结算仍以后端派生日期为准 |
 | `PredictionModal.tsx` | `frontend/src/components/PredictionModal.tsx` | 结构化预测弹窗；串行提交、快速重复提交防护、branch 晚到兜底、高级题材回响 disclosure 与 focus trap |
@@ -601,11 +606,12 @@
   - `npm exec -- eslint src/pages/result/ResultHeader.tsx src/pages/result/ExploreDeeperBridge.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts`：通过
   - 浏览器实测本机结果页显示 `对话 · 本机模式`，header 可直接进入因果图谱和图谱工作台；点击 `探索` 会滚到下一步区。
 - 当前 frontend 稳定验证口径：
-  - `npx tsc --noEmit`：通过
-  - `npx eslint src/ --max-warnings=0`：通过
+  - `npx tsc --noEmit -p tsconfig.app.json`：通过
+  - `npm run lint`：通过
   - `npm run build`：通过
-  - full vitest：`202 files / 2224 tests passed`
-  - i18n key + placeholder parity：`zh: 2766`、`en: 2766`、parity OK
+  - full vitest：`202 files / 2243 tests passed`
+  - i18n key parity：`zh: 2757`、`en: 2757`、parity OK
+  - Pixel Theater browser spot-check：完成态 `/sim/e1a41453-2cb2-43a1-a054-0d7cd04a6bf5` 的 toolbar 玩法卡入口可见，modal 以只读状态打开，Chrome DevTools console error 为 0
   - KG visualization 定向回归：`5 files / 193 tests passed`
   - Workbench KG resize 定向回归：`useG6Graph.test.ts + WorkbenchView.test.tsx` 为 `56 passed`，`KGGraphBoard.test.tsx` 为 `42 passed`；本机浏览器复核 `graph -> split -> KG` 后，KG 容器与内部 G6 canvas 同宽，`widthDelta=0`，console error 为 0
   - KG Explorer fixture E2E：Chromium desktop + mobile、Firefox desktop、WebKit desktop 共 `4 runs / allPassed=true`

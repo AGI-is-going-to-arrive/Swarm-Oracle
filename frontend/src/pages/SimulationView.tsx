@@ -82,7 +82,7 @@ import {
   stringifyAutomationPayload,
   type AutomationWindow,
 } from '../game/automation';
-import { HudOverlay } from '../game/HudOverlay';
+import { BubbleOverlay } from '../game/BubbleOverlay';
 import { getTheaterThemeLabel } from '../lib/themeLabels';
 import {
   getScenarioRuntimePresetConfig,
@@ -102,6 +102,7 @@ import {
   formatTheaterLabel,
   shouldWarmTheaterLoaderOnIntent,
 } from './simulationHelpers';
+import { TheaterFloatingToolbar } from './sim/TheaterFloatingToolbar';
 import './SimulationView.css';
 
 function SimulationSlotFallback({ label }: { label: string }) {
@@ -115,6 +116,9 @@ export function SimulationView() {
   const [searchParams] = useSearchParams();
   const replayToken = searchParams.get('replay');
   const replayShareId = searchParams.get('share');
+  const [useDomBubbles] = useState(() => (
+    searchParams.get('domBubbles') !== '0' && searchParams.get('useDomBubbles') !== 'false'
+  ));
   const isZh = i18n.language.startsWith('zh');
   const scenario = useSimulationStore((s) => s.scenario);
   const agents = useSimulationStore((s) => s.agents);
@@ -191,6 +195,7 @@ export function SimulationView() {
   const [cancelError, setCancelError] = useState<string | null>(null);
   const lastCommitmentAction = useRef<'commit' | 'clear' | null>(null);
   const commitmentFeedbackTimer = useRef<number | null>(null);
+  const theaterGameWrapperRef = useRef<HTMLDivElement>(null);
   const recoveryLogEmitted = useRef(false);
   const warmupRecoveryAttempts = useRef(0);
   const defaultObjectivesSeedKey = useRef<string | null>(null);
@@ -414,10 +419,12 @@ export function SimulationView() {
   const canPreviewGameplayCards =
     !isReplayMode
     && viewMode === 'theater'
-    && !isSimulationComplete
     && branches.length > 0
     && !isWarmupPhase;
   const canUseGameplayCards = !isReplayMode && !isSimulationComplete && activeBranches.length > 0 && agents.length > 0;
+  const gameplayCardsPreviewReason = isSimulationComplete
+    ? t('gameplay.preview_completed_note')
+    : t('sim.warmup.cards_preview');
   const warmupNarrativePhase: 1 | 2 | 3 = agents.length === 0
     ? (branches.length > 0 ? 2 : 1)
     : 3;
@@ -697,6 +704,7 @@ export function SimulationView() {
           panel_collapsed: panelCollapsed,
           capture_status: captureStatus,
           capture_result_kind: lastCaptureKind,
+          use_dom_bubbles: useDomBubbles,
           active_modal:
             showPrediction ? 'prediction'
             : showGameplayCards ? 'gameplay_cards'
@@ -775,6 +783,7 @@ export function SimulationView() {
     selectedReplayRound,
     scenarioRuntimePreset,
     theaterSceneState,
+    useDomBubbles,
     scenario,
     replayUrl,
     isReplayMode,
@@ -1123,6 +1132,7 @@ export function SimulationView() {
           panel_collapsed: panelCollapsed,
           capture_status: captureStatus,
           capture_result_kind: lastCaptureKind,
+          use_dom_bubbles: useDomBubbles,
           active_modal:
             showPrediction ? 'prediction'
             : showGameplayCards ? 'gameplay_cards'
@@ -1192,6 +1202,7 @@ export function SimulationView() {
     systemTracks,
     canToggleViewMode,
     lastCaptureKind,
+    useDomBubbles,
     viewMode,
     visualizationEnabled,
   ]);
@@ -1404,191 +1415,54 @@ export function SimulationView() {
         {viewMode === 'theater' ? (
           <div className="sim-content__tree">
             <div className="theater-panel">
-              <div className="theater-panel__header">
-                <div className="theater-panel__capture">
-                  {canUseReplayControls && (
-                    <>
-                      <button
-                        className="btn btn-ghost btn--capture"
-                        onClick={() => restartTheaterPlayback('replay')}
-                        title={t('game.replay_btn')}
-                      >
-                        🔁 {t('game.replay_btn')}
-                      </button>
-                      <button
-                        className="btn btn-ghost btn--capture"
-                        onClick={() => restartTheaterPlayback('skip')}
-                        title={t('game.skip_btn')}
-                      >
-                        ⏭ {t('game.skip_btn')}
-                      </button>
-                      <button
-                        className="btn btn-ghost btn--capture"
-                        onClick={cycleReplaySpeed}
-                        title={t('game.speed_btn')}
-                      >
-                        ⚡ {replaySpeed}x
-                      </button>
-                    </>
-                  )}
-                  <div className="capture-mode-toggle" aria-label={t('game.capture_mode_label')}>
-                    <button
-                      type="button"
-                      className={`capture-mode-toggle__btn ${captureMode === 'panel' ? 'capture-mode-toggle__btn--active' : ''}`}
-                      onClick={() => setCaptureMode('panel')}
-                      title={t('game.capture_mode_panel_desc')}
-                    >
-                      {t('game.capture_mode_panel')}
-                    </button>
-                    <button
-                      type="button"
-                      className={`capture-mode-toggle__btn ${captureMode === 'canvas' ? 'capture-mode-toggle__btn--active' : ''}`}
-                      onClick={() => setCaptureMode('canvas')}
-                      title={t('game.capture_mode_canvas_desc')}
-                    >
-                      {t('game.capture_mode_canvas')}
-                    </button>
-                    <button
-                      type="button"
-                      className={`capture-mode-toggle__btn ${captureMode === 'modal' ? 'capture-mode-toggle__btn--active' : ''}`}
-                      onClick={() => setCaptureMode('modal')}
-                      title={hasActiveModal ? t('game.capture_mode_modal_desc') : t('game.capture_mode_modal_unavailable')}
-                      disabled={!hasActiveModal}
-                    >
-                      {t('game.capture_mode_modal')}
-                    </button>
-                  </div>
-                  <span className="capture-mode-feedback" aria-live="polite">
-                    {t('game.capture_mode_current')}
-                    {' '}
-                    {captureModeDescription}
-                  </span>
-                  <button
-                    className="btn btn-ghost btn--capture"
-                    onClick={handleScreenshotCapture}
-                    disabled={captureStatus !== 'idle' || !isModalCaptureAvailable}
-                    title={isModalCaptureAvailable ? t('game.screenshot_btn') : t('game.capture_mode_modal_unavailable')}
-                  >
-                    📸 {captureStatus === 'capturing' ? '...' : t('game.screenshot_btn')}
-                  </button>
-                  <button
-                    className="btn btn-ghost btn--capture"
-                    onClick={handleGifCapture}
-                    disabled={captureStatus !== 'idle' || captureMode === 'modal'}
-                    title={captureMode === 'modal' ? t('game.capture_mode_gif_canvas_only') : t('game.gif_btn')}
-                  >
-                    🎬 {captureStatus === 'recording' ? t('game.gif_recording') : t('game.gif_btn')}
-                  </button>
-                  {captureStatus === 'done' && (
-                    <span
-                      className={`capture-status ${lastCaptureKind === 'gif_fallback_png' ? 'capture-status--fallback' : 'capture-status--done'}`}
-                    >
-                      {lastCaptureKind === 'gif_fallback_png' ? '⚠️' : '✅'} {captureDoneLabel}
-                    </span>
-                  )}
-                </div>
-                <span className="theater-panel__power-led" />
-              </div>
-              <div className="theater-panel__status" aria-label={t('sim.theater_status_aria')}>
-                {theaterSceneLabel && (
-                  <span className="theater-chip theater-chip--primary">
-                    🎬 {theaterSceneLabel}
-                  </span>
-                )}
-                {theaterThemeLabel && (
-                  <span className="theater-chip">
-                    🗺 {theaterThemeLabel}
-                  </span>
-                )}
-                <span className="theater-chip">
-                  🔁 R{displayedReplayRound}/{scenario?.total_rounds ?? '--'}
-                </span>
-                <span className="theater-chip">
-                  👥 {theaterAgentCount}
-                </span>
-                <span className="theater-chip">
-                  💬 {theaterBubbleCount}
-                </span>
-                {theaterWeatherLabel && (
-                  <span className="theater-chip">
-                    🌦 {theaterWeatherLabel}
-                  </span>
-                )}
-                {theaterTimeLabel && (
-                  <span className="theater-chip">
-                    🕒 {theaterTimeLabel}
-                  </span>
-                )}
-                <span className="theater-chip">
-                  ✉ {messages.length}
-                </span>
-              </div>
-              {scenarioMeta && systemTracks && evaluatedObjectives.length > 0 && (
-                <div className="theater-panel__director">
-                  <div className="theater-panel__director-top">
-                    <strong>{t('sim.director.title')}</strong>
-                    <span className="theater-chip">
-                      {systemTracks.riskLabel} {systemTracks.riskValue}/6 · {systemTracks.resourceLabel} {systemTracks.resourceValue}/6
-                    </span>
-                    <span className="theater-chip">
-                      {t('sim.director.done', {
-                        completed: completedObjectiveCount,
-                        total: evaluatedObjectives.length,
-                      })}
-                    </span>
-                    {scenarioMeta.commitment.active && scenarioMeta.commitment.branchTitle && (
-                      <span className="theater-chip theater-chip--primary">
-                        🎯 {scenarioMeta.commitment.branchTitle}
-                      </span>
-                    )}
-                  </div>
-                  <div className="theater-panel__director-goals">
-                    {evaluatedObjectives.map((objective) => (
-                      <div
-                        key={objective.id}
-                        className={`director-goal director-goal--${objective.status}`}
-                      >
-                        <strong>{objective.title}</strong>
-                        <span className="director-goal__detail">{objective.detail}</span>
-                        <small>{objective.progress}</small>
-                      </div>
-                    ))}
-                  </div>
-                  {!isSimulationComplete && activeBranches.length > 0 && (
-                    <div className="theater-panel__commitment">
-                      <label className="theater-select">
-                        <span>{t('sim.director.commitment_label')}</span>
-                        <select
-                          value={commitmentDraftBranchId}
-                          onChange={(event) => setCommitmentDraftBranchId(event.target.value)}
-                        >
-                          {activeBranches.map((branch) => (
-                            <option key={branch.id} value={branch.id}>
-                              {branch.title}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <button className="btn btn-ghost btn--capture" onClick={handleCommitBranchAction}>
-                        {t('sim.director.commit')}
-                      </button>
-                      {scenarioMeta.commitment.active && (
-                        <button className="btn btn-ghost btn--capture" onClick={handleClearCommitmentAction}>
-                          {t('sim.director.clear')}
-                        </button>
-                      )}
-                      {commitmentFeedback && (
-                        <span
-                          className={`theater-commitment-feedback theater-commitment-feedback--${commitmentFeedback.tone}`}
-                          aria-live="polite"
-                        >
-                          {commitmentFeedback.message}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
+              <TheaterFloatingToolbar
+                captureControls={{
+                  canUseReplayControls,
+                  restartTheaterPlayback,
+                  cycleReplaySpeed,
+                  replaySpeed,
+                  captureMode,
+                  setCaptureMode,
+                  hasActiveModal,
+                  captureModeDescription,
+                  handleScreenshotCapture,
+                  captureStatus,
+                  isModalCaptureAvailable,
+                  handleGifCapture,
+                  lastCaptureKind,
+                  captureDoneLabel,
+                }}
+                statusChips={{
+                  theaterSceneLabel,
+                  theaterThemeLabel,
+                  displayedReplayRound,
+                  totalRounds: scenario?.total_rounds ?? null,
+                  theaterAgentCount,
+                  theaterBubbleCount,
+                  theaterWeatherLabel,
+                  theaterTimeLabel,
+                  messageCount: messages.length,
+                }}
+                director={{
+                  scenarioMeta,
+                  systemTracks,
+                  evaluatedObjectives,
+                  completedObjectiveCount,
+                  isSimulationComplete,
+                  activeBranches,
+                  commitmentDraftBranchId,
+                  setCommitmentDraftBranchId,
+                  handleCommitBranchAction,
+                  handleClearCommitmentAction,
+                  commitmentFeedback,
+                }}
+                gameplayCards={{
+                  canPreview: canPreviewGameplayCards,
+                  canUse: canUseGameplayCards,
+                  previewReason: gameplayCardsPreviewReason,
+                  onOpen: () => setShowGameplayCards(true),
+                }}
+              />
               {isWarmupPhase && !isReplayMode && viewMode === 'theater' && (
                 <>
                   <TheaterCurtain isVisible={isWarmupPhase} />
@@ -1614,19 +1488,18 @@ export function SimulationView() {
                   </div>
                 </div>
               )}
-              <div className="theater-panel__game-wrapper">
-                <HudOverlay
-                    canPredict={!isReplayMode && !isSimulationComplete}
-                    onOpenPrediction={!isReplayMode && !isSimulationComplete ? () => setShowPrediction(true) : undefined}
-                >
-                  <LazyPhaserGameLoader
-                    key={`${id ?? 'simulation'}-${theaterMountKey}-${playbackMode}`}
-                    replaySpeed={replaySpeed}
-                    playbackMode={playbackMode}
-                    playbackBranchId={selectedReplayBranchId}
-                    playbackRound={selectedReplayRound}
-                  />
-                </HudOverlay>
+              <div className="theater-panel__game-wrapper" ref={theaterGameWrapperRef}>
+                <LazyPhaserGameLoader
+                  key={`${id ?? 'simulation'}-${theaterMountKey}`}
+                  useDomBubbles={useDomBubbles}
+                  replaySpeed={replaySpeed}
+                  playbackMode={playbackMode}
+                  playbackBranchId={selectedReplayBranchId}
+                  playbackRound={selectedReplayRound}
+                />
+                {useDomBubbles && (
+                  <BubbleOverlay containerRef={theaterGameWrapperRef} />
+                )}
               </div>
               {canUseReplayControls && replayBranchOptions.length > 0 && (
                 <div className="theater-panel__filters">
@@ -1784,7 +1657,7 @@ export function SimulationView() {
             sceneTheme={scenario?.scene_theme}
             currentRound={Math.max(currentRound, 1)}
             readOnly={!canUseGameplayCards}
-            disabledReason={!canUseGameplayCards ? t('sim.warmup.cards_preview') : null}
+            disabledReason={!canUseGameplayCards ? gameplayCardsPreviewReason : null}
             onApplied={handleGameplayAppliedWithFeedback}
             onAutomationStateChange={setGameplayAutomation}
             onClose={handleGameplayCardsClose}

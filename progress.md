@@ -17700,3 +17700,52 @@ QA Inventory
 - 当前边界：
   - 本轮没有重跑 backend 全量 pytest、frontend 全量 vitest 或完整 release signoff。
   - 本轮没有新增 API、配置项、DB schema 或 i18n key。
+
+## 2026-05-21 Pixel Theater Overhaul final review / docs sync
+
+- 本轮目标：
+  - 按当前未提交的 Pixel Theater Overhaul 真实代码和真实验证结果同步文档。
+  - 修复完成态 Theater 看不到原玩法卡入口的问题。
+  - 提交并推送本轮前端收口改动。
+
+- 本轮前端收口：
+  - `frontend/src/game/HudOverlay.tsx` 与测试已删除，`EventBridge` 的 `viz:bet_update / viz:leaderboard_update` 死事件已清理。
+  - `SimulationView` 的 Theater 控制拆到 `frontend/src/pages/sim/*`：floating toolbar、capture controls、status chips、Director drawer。
+  - Theater 外壳切到 Light Theater，保留 `.theater-panel` 与 `.phaser-game-container` 作为 capture 选择器；本轮没有修改 `useSimulationViewState.ts`。
+  - `PhaserGame` 按 DPR 初始化 backing store，DPR capped at 3；`BootScene` / `WorldScene` 读取 registry DPR 做 fallback texture 和绘制单位缩放。
+  - `BubbleOverlay` 作为 React DOM bubbles 默认开启，通过 `viz:sprite_positions` 跟随 sprite；保留 query fallback 到 Phaser bubble 路径。
+  - 完成态 Theater 现在也会在 toolbar 显示玩法卡入口，打开后只读回看，不允许应用卡牌。
+  - `InputView.test.tsx` 补 mock 隔离，修复全量 vitest 里 campaign daily challenge status mock 的串扰。
+
+- 本轮文档同步：
+  - `README.md`
+  - `CLAUDE.md`
+  - `frontend/README.md`
+  - `frontend/CLAUDE.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/guides/development.md`
+  - `.claude/plan/pixel-theater-overhaul.md`
+  - `progress.md`
+
+- 本轮实际验证：
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run lint`
+    - 通过
+  - `cd frontend && npm run build`
+    - 通过，performance budgets `violations: []`
+  - `cd frontend && npm test -- --run`
+    - `202 files / 2243 tests passed`
+  - i18n parity
+    - `{ en: 2757, zh: 2757, missing_en: 0, missing_zh: 0 } PASS`
+  - `git diff --check`
+    - 通过
+  - Chrome DevTools MCP 浏览器复核
+    - `/sim/e1a41453-2cb2-43a1-a054-0d7cd04a6bf5` 中 toolbar 玩法卡入口可见，modal 以只读提示打开，console error 为 0
+    - 截图保存在本地忽略目录 `frontend/output/theater-gameplay-cards-toolbar-fix.png`
+
+- 当前边界：
+  - 本轮没有改 backend，也没有重跑 backend 全量 pytest。
+  - Playwright MCP 当时因本机 browser profile 已占用未使用；浏览器复核改用 Chrome DevTools MCP。
+  - frontend full vitest 输出里仍有既有的非失败 Radix / act warning；本轮没有把这些 warning 作为失败处理。

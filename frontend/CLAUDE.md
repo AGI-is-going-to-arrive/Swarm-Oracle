@@ -57,7 +57,7 @@ npm run test:watch # vitest (watch mode)
 | 文件 | 说明 |
 |------|------|
 | `InputView.tsx` | 首页输入，5 步进度、quick starts、搜索增强/source family、模式选择器、advanced accordion、BYOK 折叠区、Agent attach panel |
-| `SimulationView.tsx` | 模拟视图 + Phaser 集成 |
+| `SimulationView.tsx` | 模拟视图 + Phaser 集成；Theater 控制拆到 `src/pages/sim/*` |
 | `ResultView.tsx` | 结果展示 orchestrator (Summary-First 布局，含 ResultVerdictPanel / unavailable fallback、What's Next bridge、真实世界来源卡片、historical badge、share artifact、畸形数据防御)；主体区块拆到 `src/pages/result/*` |
 | `DebateArenaView.tsx` | 辩论竞技场；阶段地图默认折叠，自动化通过稳定 toggle hook 展开 |
 | `DebateResultView.tsx` | 辩论结果 |
@@ -87,7 +87,7 @@ npm run test:watch # vitest (watch mode)
 | `InterventionModal.tsx` | 干预操作弹窗 |
 | `ShareModal.tsx` / `DebateShareModal.tsx` | 分享弹窗；主模式分享弹窗可触发 PNG share artifact 导出 |
 | `DebateBetModal.tsx` | 辩论投注弹窗 |
-| `GameplayCardsModal.tsx` | 游戏卡牌弹窗 |
+| `GameplayCardsModal.tsx` | 游戏卡牌弹窗；完成态 Theater 可只读回看 |
 | `TimelineBar.tsx` | 时间线进度条 |
 | `AppErrorBoundary.tsx` | 全局错误边界 |
 | `LanguageSwitcher.tsx` | 语言切换器 |
@@ -118,13 +118,14 @@ npm run test:watch # vitest (watch mode)
 | 文件 | 说明 |
 |------|------|
 | `index.ts` | Phaser 游戏配置 |
-| `PhaserGameLoader.tsx` | React-Phaser 桥接组件 |
-| `HudOverlay.tsx` | HUD 浮层 |
-| `scenes/WorldScene.ts` | 主剧场场景 (代理气泡、精灵、阵营聚拢动画) |
+| `PhaserGameLoader.tsx` | React-Phaser 桥接组件；按需加载 Theater |
+| `BubbleOverlay.tsx` | React DOM 气泡层；消费 `viz:sprite_positions`，用 `transform3d` 跟随 sprite，并提供 polite live log |
+| `constants/agentPalette.ts` | Theater DOM bubbles 的 Agent 双色 token |
+| `scenes/WorldScene.ts` | 主剧场场景 (sprite、位置发射、Phaser bubble fallback、阵营聚拢动画) |
 | `scenes/BootScene.ts` | 启动场景 |
 | `scenes/TitleScene.ts` | 标题场景 |
 | `scenes/EndingScene.ts` | 结局场景 |
-| `managers/EventBridge.ts` | 事件桥 (React <-> Phaser, 含 viz:faction_cluster/event 类型) |
+| `managers/EventBridge.ts` | 事件桥 (React <-> Phaser, 含 `viz:sprite_positions` 与 `viz:faction_cluster/event` 类型) |
 | `managers/VizSynthesizer.ts` | 可视化合成器 |
 | `worldSceneBootstrap.ts` | WorldScene 初始化 |
 | `sceneAssetPlan.ts` | 场景资源规划 |
@@ -200,7 +201,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- 最近 full vitest 基线：`201 files / 2190 tests passed`
+- 最近 full vitest 基线：`202 files / 2243 tests passed`
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -394,6 +395,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-21 | Pixel Theater Overhaul 收口 | `HudOverlay.tsx` / test 已移除，Theater 控制拆到 `src/pages/sim/` 的 floating toolbar、capture controls、status chips 和 Director drawer；`SimulationView` 保留 capture selector，同时恢复完成态 Theater 的玩法卡只读入口。`PhaserGame` 按 DPR 初始化 backing store，`BootScene` / `WorldScene` 读取 DPR 缩放；`BubbleOverlay` 通过 `viz:sprite_positions` 做 DOM bubble 跟随，并保留 Phaser fallback。验证：frontend full vitest `202 files / 2243 tests passed`，`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build` 通过，i18n parity `2757/2757`，Chrome DevTools 完成态 Theater 玩法卡 spot-check console 0 error |
 | 2026-05-21 | KG Visualization Overhaul v2 审查修复 | `graphTokens.ts` 新增 KG 专用浅/深色 WCAG AA 色板和陶土赭选中 / 森林绿 hover token，非 KG 图面继续走 `resolveG6Tokens`；`kgGraphConfig.ts` 统一 KGExplorer 与 KGGraphBoard 的 `resolveKGG6Tokens`、NODE_ICONS、平行边偏移和 self-loop；`useG6Graph` 增加 `dataUpdateMode`，稳定数据值变化走 `setData + draw`，结构或 options 变化走 `setOptions + render`，draw/render promise 都按现有模式吞掉异步错误；`KGGraphBoard` 图例默认折叠，toolbar 收到 36px icon buttons，search/filter 会清掉不可见选中节点，sr-only table 跟随可见节点；`KGExplorerView` 复用 `toKgG6Data` 和 `resolveKGG6Tokens`，search/type filter 用 deferred value，filter pill 继续走 `TYPE_LABEL_I18N`；`e2e-kg-explorer-live.mjs` 默认改查 `/causal-graph` fixture，支持 `--scenario-id`、Chromium desktop/mobile + Firefox/WebKit desktop 矩阵和 canvas 非空白采样。验证：目标 vitest `5 files / 193 tests passed`，frontend full vitest `202 files / 2224 tests passed`，`npm exec -- tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build` 通过，i18n parity `2766/2766`，KG E2E fixture full `4 runs / allPassed=true`，`git diff --check` 通过 |
 | 2026-05-21 | Graph Workbench 全量图谱 + G6 resize 回归修复 | `GraphWorkbenchShell` 不再把 URL `branch` 传给 `CausalGraphBoard`，`CausalGraphBoardProps` 删除 `branchId`，workbench 因果图固定按 scenario 拉全量 causal graph；`KGGraphBoard` 仍按 scenario 拉全量图，只保留 branch query 用于工作台上下文。`useG6Graph` 强制 `autoResize: true` 不被 options 覆盖，容器 ResizeObserver 先 `setSize(width,height)` 再 `fitView()`，并用尺寸去重避免重复 recenter；初始 render 同步失败时会销毁半初始化 G6 实例。追加收口：`GraphWorkbenchShell` 会把 `workbench:<mode>` 作为 KG resize key 传给 `KGGraphBoard`，`useG6Graph` 在 key 变化时主动按容器 rect `setSize + fitView`，避免 split → KG 后 G6 canvas 继续停在半宽。`CausalReviewView` 的 triggered-fork i18n 测试改为等待 ReactFlow mock 边状态同步。验证：frontend full vitest `202 files / 2206 tests passed`，定向图谱窄集 `6 files / 184 tests passed`，`npm run build` 通过，i18n parity `2761/2761`；追加 Workbench KG resize 窄集 `useG6Graph.test.ts + WorkbenchView.test.tsx` 为 `56 passed`、`KGGraphBoard.test.tsx` 为 `42 passed`，`tsc`、目标文件 eslint、`git diff --check` 通过，本机浏览器 `graph -> split -> KG` 后 KG 容器与 G6 canvas 同宽且 console error 为 0 |
 | 2026-05-19 | Counterfactual 逐消息对比 UI + textDiff | 新增 `src/lib/textDiff.ts`：字符级 LCS diff，按 `Array.from` 码点切分以保 CJK / emoji 不被劈开，供红绿高亮使用。`CompareDigestView.tsx/css`：消费后端新返回的 `branch_a_messages` / `branch_b_messages`，把对比改为逐 agent 消息卡片 + 红绿 diff 高亮 + 折叠/展开按钮 + 独占轮（only-A / only-B）单列布局；`CounterfactualPanel.tsx` 新增模拟进行中提示，并暴露 resimulate 入口指向 `POST /counterfactual/{branch_id}/resimulate`。验证：frontend full vitest `201 files / 2190 tests passed`，tsc/eslint/build 通过，i18n parity `2765/2765` |

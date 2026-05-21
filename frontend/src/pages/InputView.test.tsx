@@ -364,6 +364,13 @@ describe('InputView campaign progress', () => {
     });
     // Enable compile-time flag for web search tests
     import.meta.env.VITE_ENABLE_WEB_SEARCH = 'true';
+    getCampaignProfileMock.mockReset();
+    getCampaignMasteryMock.mockReset();
+    getCampaignBadgesMock.mockReset();
+    getCampaignChallengeRotationMock.mockReset();
+    getCampaignDailyChallengeStatusMock.mockReset();
+    getCampaignWeeklySummaryMock.mockReset();
+    getChallengeProgressMock.mockReset();
     getCampaignProfileMock.mockResolvedValue(campaignProfile);
     getCampaignMasteryMock.mockResolvedValue(campaignMastery);
     getCampaignBadgesMock.mockResolvedValue(campaignBadges);
@@ -544,15 +551,17 @@ describe('InputView campaign progress', () => {
     );
 
     expect(await screen.findByText('Remote daily question en')).toBeInTheDocument();
-    expect(getCampaignDailyChallengeStatusMock).toHaveBeenCalledWith(
-      'director-1',
-      'law',
-      '2026-03-17',
-      expect.any(Number),
-      expect.objectContaining({
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    await waitFor(() => {
+      expect(getCampaignDailyChallengeStatusMock).toHaveBeenCalledWith(
+        'director-1',
+        'law',
+        '2026-03-17',
+        expect.any(Number),
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+        }),
+      );
+    });
   });
 
   it('treats today challenge as completed when backend campaign data is the source of truth', async () => {

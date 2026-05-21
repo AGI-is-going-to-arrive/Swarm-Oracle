@@ -258,6 +258,7 @@
       "switch_to_classic_aria": "Switch to Classic View",
       "theater_unavailable_hint": "Pixel Theater was not enabled for this scenario. Go back and start it with Pixel Theater enabled.",
       "theater_status_aria": "Theater live status",
+      "theater_toolbar_aria": "Theater controls",
       "runtime_preset_title": "Oracle Profile",
       "replay": {
         "importing": "Importing...",
@@ -267,6 +268,7 @@
       "director": {
         "title": "Director Goals",
         "done": "Done {{completed}}/{{total}}",
+        "no_goals": "No director goals yet — they appear once the gameplay profile loads.",
         "commitment_label": "Committed worldline",
         "commit": "Commit",
         "clear": "Clear",
@@ -895,13 +897,6 @@
       "title_subtitle": "Micro AI Civilization Simulator",
       "title_loading_world": "◈ Initializing World ◈",
       "minimap_title": "Map",
-      "bet_panel_title": "Live Odds",
-      "bet_action": "Open Bet",
-      "bet_locked": "Betting Locked",
-      "bet_window_open": "Betting Open",
-      "bet_window_locked": "Betting Closed",
-      "bet_odds": "Odds",
-      "leaderboard_hud": "Top Oracles",
       "screenshot_btn": "Screenshot",
       "gif_btn": "Record GIF",
       "capture_mode_label": "Capture Mode",
@@ -922,12 +917,7 @@
       "screenshot_saved": "Screenshot saved!",
       "gif_recording": "Recording...",
       "gif_saved": "GIF saved!",
-      "gif_fallback_saved": "GIF fallback saved as PNG frame!",
-      "rank_bronze": "Bronze",
-      "rank_silver": "Silver",
-      "rank_gold": "Gold",
-      "rank_diamond": "Diamond",
-      "rank_legend": "Legend"
+      "gif_fallback_saved": "GIF fallback saved as PNG frame!"
     },
     "gameplay": {
       "title": "Gameplay Cards",
@@ -959,6 +949,7 @@
       "directive_aria_label": "Gameplay card directive",
       "preview_only_note": "Preview only for now. Card injection unlocks once agents finish syncing.",
       "preview_only_cta": "Preparing Director Tools",
+      "preview_completed_note": "Simulation complete. Gameplay cards are available for review only.",
       "recommended_badge": "Recommended",
       "next_step_badge": "Next",
       "counter_badge": "Counter",

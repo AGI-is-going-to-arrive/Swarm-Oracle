@@ -38,6 +38,7 @@ interface PhaserGameProps {
   width?: number;
   height?: number;
   className?: string;
+  useDomBubbles?: boolean;
   replaySpeed?: number;
   playbackMode?: 'replay' | 'skip';
   playbackBranchId?: string | null;
@@ -53,12 +54,17 @@ const REPLAY_BUBBLE_INTERVAL_BASE_MS = 880;
 const REPLAY_BUBBLE_INTERVAL_MIN_MS = 260;
 const REPLAY_BUBBLE_SETTLE_MS = 2600;
 const LIVE_BUBBLE_STAGGER_MS = 180;
+const MAX_DEVICE_PIXEL_RATIO = 3;
+
+function getCappedDevicePixelRatio(): number {
+  return Math.min(Math.max(window.devicePixelRatio || 1, 1), MAX_DEVICE_PIXEL_RATIO);
+}
 
 function getReplayBubbleIntervalMs(replaySpeed: number): number {
   return Math.max(REPLAY_BUBBLE_INTERVAL_MIN_MS, Math.round(REPLAY_BUBBLE_INTERVAL_BASE_MS / replaySpeed));
 }
 
-function getActiveSceneAutomationState(game: Phaser.Game | null): AutomationSceneState | null {
+function getActiveSceneAutomationState(game: Phaser.Game | null, dpr: number): AutomationSceneState | null {
   if (!game) return null;
 
   const sceneKeys = ['EndingScene', 'WorldScene', 'TitleScene', 'BootScene'] as const;
@@ -67,9 +73,13 @@ function getActiveSceneAutomationState(game: Phaser.Game | null): AutomationScen
 
     const scene = game.scene.getScene(key) as AutomationScene;
     if (typeof scene.getAutomationState === 'function') {
-      return scene.getAutomationState();
+      return {
+        ...scene.getAutomationState(),
+        device_pixel_ratio: dpr,
+        dpr,
+      };
     }
-    return { scene: key };
+    return { scene: key, device_pixel_ratio: dpr, dpr };
   }
 
   return null;
@@ -87,6 +97,7 @@ export function PhaserGame({
   width = 800,
   height = 450,
   className,
+  useDomBubbles = false,
   replaySpeed = 1,
   playbackMode = 'replay',
   playbackBranchId,
@@ -103,7 +114,12 @@ export function PhaserGame({
   const replayDoneTimer = useRef<number | null>(null);
   const replayAutomationState = useRef<AutomationReplayState | null>(null);
   const replaySpeedRef = useRef(replaySpeed);
+  const useDomBubblesRef = useRef(useDomBubbles);
+  const playbackModeRef = useRef(playbackMode);
+  const playbackBranchIdRef = useRef<string | null | undefined>(playbackBranchId);
+  const playbackRoundRef = useRef<number | null | undefined>(playbackRound);
   const replayPlaybackSyncRef = useRef<(() => void) | null>(null);
+  const liveBubbleTimersRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     replaySpeedRef.current = replaySpeed;
@@ -111,16 +127,31 @@ export function PhaserGame({
   }, [replaySpeed]);
 
   useEffect(() => {
+    useDomBubblesRef.current = useDomBubbles;
+    gameRef.current?.registry.set('useDomBubbles', useDomBubbles);
+  }, [useDomBubbles]);
+
+  useEffect(() => {
+    playbackModeRef.current = playbackMode;
+    playbackBranchIdRef.current = playbackBranchId;
+    playbackRoundRef.current = playbackRound;
+    replayPlaybackSyncRef.current?.();
+  }, [playbackBranchId, playbackMode, playbackRound]);
+
+  useEffect(() => {
     if (!containerRef.current || gameRef.current) return;
 
     // Start EventBridge before Phaser game
     EventBridge.start();
+    const dpr = getCappedDevicePixelRatio();
+    const backingWidth = Math.round(width * dpr);
+    const backingHeight = Math.round(height * dpr);
 
     const config: Phaser.Types.Core.GameConfig = {
       type: Phaser.AUTO,
       parent: containerRef.current,
-      width,
-      height,
+      width: backingWidth,
+      height: backingHeight,
       preserveDrawingBuffer: true,
       pixelArt: true,
       roundPixels: true,
@@ -136,6 +167,8 @@ export function PhaserGame({
           game.registry.set('initialSceneTheme', resolveSceneTheme(state));
           game.registry.set('initialSpriteKeys', getInitialSpriteKeysForAgents(state.agents));
           game.registry.set('skipTitleScene', state.agents.length > 0 && !state.isSimulationComplete);
+          game.registry.set('devicePixelRatio', dpr);
+          game.registry.set('useDomBubbles', useDomBubblesRef.current);
         },
       },
       scene: [BootScene, TitleScene, WorldScene, EndingScene],
@@ -146,7 +179,7 @@ export function PhaserGame({
 
     const automationWindow = window as AutomationWindow;
     automationWindow.__swarmGetSceneAutomation = () =>
-      getActiveSceneAutomationState(gameRef.current);
+      getActiveSceneAutomationState(gameRef.current, dpr);
     automationWindow.__swarmGetReplayAutomation = () => replayAutomationState.current;
     automationWindow.advanceTime = async (ms: number) => {
       const game = gameRef.current;
@@ -210,6 +243,13 @@ export function PhaserGame({
       }
     };
 
+    const clearLiveBubbleTimers = () => {
+      for (const timer of liveBubbleTimersRef.current) {
+        window.clearTimeout(timer);
+      }
+      liveBubbleTimersRef.current.clear();
+    };
+
     const bootstrapWorldSceneFromStore = (
       state: ReturnType<typeof useSimulationStore.getState>,
       source: string,
@@ -227,7 +267,12 @@ export function PhaserGame({
       const theme = resolveSceneTheme(state);
       const initData = synthesizeSceneInit(state.agents, theme);
       const replayMessages = state.isSimulationComplete
-        ? filterReplayMessages(state.messages, state.branches, playbackBranchId, playbackRound)
+        ? filterReplayMessages(
+          state.messages,
+          state.branches,
+          playbackBranchIdRef.current,
+          playbackRoundRef.current,
+        )
         : state.messages;
 
       syncReplayAutomationState(replayMessages.length);
@@ -237,7 +282,7 @@ export function PhaserGame({
 
         if (replayMessages.length > 0) {
           dispatchVizEvent('viz:clear_bubbles', {});
-          if (playbackMode === 'skip') {
+          if (playbackModeRef.current === 'skip') {
             synthesizeLatestBubbles(replayMessages, state.agents);
           } else {
             bubbleCleanup.current = synthesizeBubbles(
@@ -262,12 +307,12 @@ export function PhaserGame({
       replayAutomationState.current = {
         available: next.available ?? replayAutomationState.current?.available ?? false,
         phase: next.phase ?? replayAutomationState.current?.phase ?? 'idle',
-        playback_mode: next.playback_mode ?? replayAutomationState.current?.playback_mode ?? playbackMode,
+        playback_mode: next.playback_mode ?? replayAutomationState.current?.playback_mode ?? playbackModeRef.current,
         replay_speed: next.replay_speed ?? replayAutomationState.current?.replay_speed ?? replaySpeedRef.current,
         selected_branch_id:
-          next.selected_branch_id ?? replayAutomationState.current?.selected_branch_id ?? playbackBranchId ?? null,
+          next.selected_branch_id ?? replayAutomationState.current?.selected_branch_id ?? playbackBranchIdRef.current ?? null,
         selected_round:
-          next.selected_round ?? replayAutomationState.current?.selected_round ?? playbackRound ?? null,
+          next.selected_round ?? replayAutomationState.current?.selected_round ?? playbackRoundRef.current ?? null,
         filtered_message_count: filteredMessages,
         batch_count:
           next.batch_count ??
@@ -285,14 +330,14 @@ export function PhaserGame({
         return;
       }
 
-      if (playbackMode === 'skip' || messageCount === 0) {
+      if (playbackModeRef.current === 'skip' || messageCount === 0) {
         updateReplayAutomationState({
           available: true,
           phase: 'settled',
-          playback_mode: playbackMode,
+          playback_mode: playbackModeRef.current,
           replay_speed: replaySpeedRef.current,
-          selected_branch_id: playbackBranchId ?? null,
-          selected_round: playbackRound ?? null,
+          selected_branch_id: playbackBranchIdRef.current ?? null,
+          selected_round: playbackRoundRef.current ?? null,
           batch_count: batchCount,
         }, messageCount);
         return;
@@ -301,10 +346,10 @@ export function PhaserGame({
       updateReplayAutomationState({
         available: true,
         phase: 'playing',
-        playback_mode: playbackMode,
+        playback_mode: playbackModeRef.current,
         replay_speed: replaySpeedRef.current,
-        selected_branch_id: playbackBranchId ?? null,
-        selected_round: playbackRound ?? null,
+        selected_branch_id: playbackBranchIdRef.current ?? null,
+        selected_round: playbackRoundRef.current ?? null,
         batch_count: batchCount,
       }, messageCount);
 
@@ -325,8 +370,8 @@ export function PhaserGame({
       const replayMessages = filterReplayMessages(
         state.messages,
         state.branches,
-        playbackBranchId,
-        playbackRound,
+        playbackBranchIdRef.current,
+        playbackRoundRef.current,
       );
 
       if (bubbleCleanup.current) {
@@ -338,7 +383,7 @@ export function PhaserGame({
       syncReplayAutomationState(replayMessages.length);
 
       if (replayMessages.length > 0) {
-        if (playbackMode === 'skip') {
+        if (playbackModeRef.current === 'skip') {
           synthesizeLatestBubbles(replayMessages, state.agents);
         } else {
           bubbleCleanup.current = synthesizeBubbles(
@@ -417,7 +462,8 @@ export function PhaserGame({
         // Stagger new bubbles slightly so they don't all appear at once
         newMessages.forEach((msg, idx) => {
           if (!agentIds.has(msg.agent_id)) return;
-          setTimeout(() => {
+          const timerId = window.setTimeout(() => {
+            liveBubbleTimersRef.current.delete(timerId);
             dispatchVizEvent('viz:bubble_show', {
               sprite_id: msg.agent_id,
               bubble_text: clipBubbleEventText(msg.message),
@@ -432,6 +478,7 @@ export function PhaserGame({
               });
             }
           }, idx * LIVE_BUBBLE_STAGGER_MS);
+          liveBubbleTimersRef.current.add(timerId);
         });
 
         console.log(`[PhaserGame] Dispatched ${newMessages.length} new bubble(s) (incremental, total=${state.messages.length})`);
@@ -444,6 +491,7 @@ export function PhaserGame({
       if (bubbleCleanup.current) bubbleCleanup.current();
       clearReplayDoneTimer();
       clearReplaySyncTimer();
+      clearLiveBubbleTimers();
       replayPlaybackSyncRef.current = null;
       EventBridge.stop();
       if (gameRef.current) {
@@ -456,7 +504,7 @@ export function PhaserGame({
       delete automationWindow.advanceTime;
       replayAutomationState.current = null;
     };
-  }, [height, playbackBranchId, playbackMode, playbackRound, width]);
+  }, [height, width]);
 
   return (
     <div

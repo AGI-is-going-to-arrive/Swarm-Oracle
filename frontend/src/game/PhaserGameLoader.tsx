@@ -27,6 +27,7 @@ interface PhaserGameLoaderProps {
   width?: number;
   height?: number;
   className?: string;
+  useDomBubbles?: boolean;
   replaySpeed?: number;
   playbackMode?: 'replay' | 'skip';
   playbackBranchId?: string | null;
@@ -37,6 +38,7 @@ export function PhaserGameLoader({
   width,
   height,
   className,
+  useDomBubbles,
   replaySpeed,
   playbackMode,
   playbackBranchId,
@@ -48,6 +50,7 @@ export function PhaserGameLoader({
         width={width}
         height={height}
         className={className}
+        useDomBubbles={useDomBubbles}
         replaySpeed={replaySpeed}
         playbackMode={playbackMode}
         playbackBranchId={playbackBranchId}

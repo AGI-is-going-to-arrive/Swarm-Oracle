@@ -30,6 +30,7 @@ frontend/.tmp-playwright/
 .tmp-playwright/
 .playwright-cli/
 /.playwright-mcp/
+/browser-*.json
 /e2e-screenshots/
 /pytest-of-yangjunjie/
 /node-compile-cache/

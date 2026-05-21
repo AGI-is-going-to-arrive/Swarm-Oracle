@@ -258,6 +258,7 @@
       "switch_to_classic_aria": "切换到经典视图",
       "theater_unavailable_hint": "该场景未启用像素剧场，请返回首页开启像素剧场后重新开始推演。",
       "theater_status_aria": "剧场实时状态",
+      "theater_toolbar_aria": "剧场控制工具栏",
       "runtime_preset_title": "本局神谕档位",
       "replay": {
         "importing": "导入中...",
@@ -267,6 +268,7 @@
       "director": {
         "title": "导演目标",
         "done": "完成 {{completed}}/{{total}}",
+        "no_goals": "导演目标尚未生成 —— 玩法档位加载后会显示。",
         "commitment_label": "承诺世界线",
         "commit": "锁定承诺",
         "clear": "取消承诺",
@@ -895,13 +897,6 @@
       "title_subtitle": "微型 AI 文明推演器",
       "title_loading_world": "◈ 世界初始化中 ◈",
       "minimap_title": "地图",
-      "bet_panel_title": "实时赔率",
-      "bet_action": "打开下注",
-      "bet_locked": "下注已锁定",
-      "bet_window_open": "下注开放",
-      "bet_window_locked": "下注关闭",
-      "bet_odds": "赔率",
-      "leaderboard_hud": "顶级预言家",
       "screenshot_btn": "截图",
       "gif_btn": "录制 GIF",
       "capture_mode_label": "截图模式",
@@ -922,12 +917,7 @@
       "screenshot_saved": "截图已保存！",
       "gif_recording": "录制中...",
       "gif_saved": "GIF 已保存！",
-      "gif_fallback_saved": "GIF 已回退为 PNG 帧！",
-      "rank_bronze": "青铜",
-      "rank_silver": "白银",
-      "rank_gold": "黄金",
-      "rank_diamond": "钻石",
-      "rank_legend": "传奇"
+      "gif_fallback_saved": "GIF 已回退为 PNG 帧！"
     },
     "gameplay": {
       "title": "玩法卡",
@@ -959,6 +949,7 @@
       "directive_aria_label": "玩法卡指令",
       "preview_only_note": "导演准备中，当前仅可预览玩法卡。",
       "preview_only_cta": "导演准备中",
+      "preview_completed_note": "推演已完成，玩法卡仅供回看。",
       "recommended_badge": "推荐",
       "next_step_badge": "下一步",
       "counter_badge": "反制",

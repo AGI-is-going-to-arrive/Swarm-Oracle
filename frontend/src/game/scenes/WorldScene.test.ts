@@ -136,6 +136,28 @@ describe('WorldScene — bubble readability tuning', () => {
   it('allows substantially longer bubble text before truncation', () => {
     expect(BUBBLE_MAX_TEXT_CHARS).toBe(72);
   });
+
+  it('emits throttled sprite positions for the React DOM bubble overlay', () => {
+    const source = readWorldSceneSource();
+
+    expect(source).toContain('private lastPositionEmitTime = 0;');
+    expect(source).toContain('private readonly POSITION_EMIT_INTERVAL = 33;');
+    expect(source).toContain('private emitSpritePositions(): void {');
+    expect(source).toContain("dispatchVizEvent('viz:sprite_positions'");
+    expect(source).toContain("this.game.registry.get('useDomBubbles')");
+    expect(source).toContain('time - this.lastPositionEmitTime > this.POSITION_EMIT_INTERVAL');
+  });
+
+  it('skips Phaser bubble drawing and clearing when DOM bubbles are enabled', () => {
+    const source = readWorldSceneSource();
+
+    expect(source).toContain('private get useDomBubbles(): boolean {');
+    expect(source).toContain('if (this.useDomBubbles) {');
+    expect(source).toContain('this.trackDomBubble(spriteId, text, emotion, bubbleMode);');
+    expect(source).toContain('this.domBubbleMetadata.clear();');
+    expect(source).toContain('this.showBubble(spriteId, text, emotion, haloColor, bubbleMode);');
+    expect(source).toContain('this.clearActiveBubbles();');
+  });
 });
 
 describe('WorldScene — TIME_TINTS (day/night)', () => {
@@ -151,7 +173,7 @@ describe('WorldScene — TIME_TINTS (day/night)', () => {
 describe('WorldScene — getLocalizedLabel (bilingual)', () => {
   // Re-implement the function for testing
   function getLocalizedLabel(en: string, zh: string, lang: string): string {
-    return lang === 'en' ? en : zh;
+    return lang.toLowerCase().startsWith('zh') ? zh : en;
   }
 
   it('returns English text when language is en', () => {
@@ -162,8 +184,8 @@ describe('WorldScene — getLocalizedLabel (bilingual)', () => {
     expect(getLocalizedLabel('Hello', '你好', 'zh')).toBe('你好');
   });
 
-  it('returns Chinese text for non-en language', () => {
-    expect(getLocalizedLabel('Hello', '你好', 'ja')).toBe('你好');
+  it('returns English text for non-zh language', () => {
+    expect(getLocalizedLabel('Hello', '你好', 'ja')).toBe('Hello');
   });
 });
 
@@ -187,6 +209,48 @@ describe('WorldScene — Phase 4: Performance constants', () => {
 
   it('VIEWPORT_MARGIN is 40px', () => {
     expect(VIEWPORT_MARGIN).toBe(40);
+  });
+});
+
+describe('WorldScene — HiDPI scaling contract', () => {
+  it('reads DPR from the Phaser registry and exposes a rounded pixel helper', () => {
+    const source = readWorldSceneSource();
+
+    expect(source).toContain('private dpr = 1;');
+    expect(source).toContain("this.dpr = this.game.registry.get('devicePixelRatio') || 1;");
+    expect(source).toContain('private px(value: number): number {');
+    expect(source).toContain('return Math.round(value * this.dpr);');
+  });
+
+  it('scales bubble layout coordinates and spacing through px()', () => {
+    const source = readWorldSceneSource();
+
+    for (const value of ['-74', '220', '300', '-96', '96', '-156', '156', '-30', '-84', '-124']) {
+      expect(source).toContain(`this.px(${value})`);
+    }
+    expect(source).toContain('this.px(BUBBLE_BASE_OFFSET_Y)');
+    expect(source).toContain('this.px(BUBBLE_WORLD_PADDING_X)');
+    expect(source).toContain('this.px(BUBBLE_WORLD_PADDING_Y)');
+  });
+
+  it('keeps sprite CSS proportions stable when the backing store is DPR-scaled', () => {
+    const source = readWorldSceneSource();
+    const cssWidth = 800;
+    const cssHeight = 450;
+    const dpr = 2;
+
+    const cssSpriteW = Math.max(48, Math.round(Math.min(cssWidth, cssHeight) * 0.07));
+    const dprSpriteW = Math.max(48 * dpr, Math.round(Math.min(cssWidth * dpr, cssHeight * dpr) * 0.07));
+
+    expect(dprSpriteW / dpr).toBe(cssSpriteW);
+    expect(source).toContain('Math.max(this.px(48), Math.round(baseScale * 0.07))');
+  });
+
+  it('keeps effective bubble text resolution near 4x on DPR displays', () => {
+    const source = readWorldSceneSource();
+
+    expect(source).toContain('Math.max(2, Math.ceil(4 / this.dpr))');
+    expect(Math.max(2, Math.ceil(4 / 2))).toBe(2);
   });
 });
 

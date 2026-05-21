@@ -181,6 +181,34 @@ node scripts/e2e-prediction-modal.mjs full --url http://127.0.0.1:18928 --headle
 node scripts/e2e-intervention-receipt.mjs full --url http://127.0.0.1:18928 --headless
 ```
 
+### Pixel Theater 定向回归
+
+如果这轮改动涉及 Theater 布局、Phaser canvas、DOM bubbles、capture、玩法卡入口或 Theater CSS，优先跑下面这组窄集：
+
+```bash
+cd frontend
+npm test -- --run src/game/PhaserGame.test.ts src/game/BubbleOverlay.test.tsx src/game/managers/EventBridge.test.ts src/game/scenes/WorldScene.test.ts src/lib/legacyCssFallbacks.test.ts src/pages/SimulationView.test.tsx src/components/GameplayCardsModal.test.tsx src/i18n/locales.test.ts
+npx tsc --noEmit -p tsconfig.app.json
+npm run lint
+npm run build
+```
+
+如果同步了 `src/i18n/locales/*.json`，再跑一次完整 key parity：
+
+```bash
+cd frontend
+node -e "const fs=require('fs');function flat(o,p=''){let r={};for(const [k,v] of Object.entries(o)){const n=p?p+'.'+k:k;if(v&&typeof v==='object'&&!Array.isArray(v))Object.assign(r,flat(v,n));else r[n]=v;}return r;}const en=flat(JSON.parse(fs.readFileSync('src/i18n/locales/en.json','utf8')));const zh=flat(JSON.parse(fs.readFileSync('src/i18n/locales/zh.json','utf8')));const missEn=Object.keys(zh).filter(k=>!(k in en));const missZh=Object.keys(en).filter(k=>!(k in zh));console.log({en:Object.keys(en).length,zh:Object.keys(zh).length,missing_en:missEn.length,missing_zh:missZh.length}); if(missEn.length||missZh.length){console.log('FAIL');process.exit(1);}console.log('PASS');"
+```
+
+浏览器复核至少确认：
+
+- `/sim/:id` 的 `.theater-panel`、`.theater-floating-toolbar` 和 `.phaser-game-container canvas` 存在。
+- `window.__swarmGetSceneAutomation()` 返回 scene、agents 和 dpr。
+- `window.capture_game_screenshot('canvas')` 与 `window.capture_game_screenshot('panel')` 返回非空 data URL。
+- `window.render_game_to_text()` 返回有效 JSON。
+- 完成态 Theater 的玩法卡入口可见，打开后是只读回看。
+- mobile 视口无横向溢出，语言切换后 toolbar / chips 文案跟随更新。
+
 ### ResultView 导演笔记 / 导演复盘折叠回归
 
 如果这轮改动碰到 `ResultView`、`DirectorDebriefPanel`、`DirectorNotebook`、`ResultContext`、结果页折叠样式或 `result.director_debrief_*` 文案，优先跑下面这组窄集：

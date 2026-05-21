@@ -365,9 +365,27 @@ export async function captureCompositeElementBlob(
 
   const rootRect = root.getBoundingClientRect();
   const overlayRect = overlay.getBoundingClientRect();
-  const [rootImage, overlayImage] = await Promise.all([
+  const topOverlay = root.querySelector('[data-capture-top-overlay="true"]');
+  let topOverlayBlob: Blob | null = null;
+  let topOverlayRect: DOMRect | null = null;
+  if (topOverlay instanceof HTMLElement) {
+    const captureToken = `capture-overlay-${Date.now()}-${Math.round(Math.random() * 1_000_000)}`;
+    topOverlay.setAttribute('data-capture-overlay-token', captureToken);
+    try {
+      topOverlayBlob = await captureElementBlob(
+        `[data-capture-overlay-token="${captureToken}"]`,
+        'element',
+      );
+      topOverlayRect = topOverlay.getBoundingClientRect();
+    } finally {
+      topOverlay.removeAttribute('data-capture-overlay-token');
+    }
+  }
+
+  const [rootImage, overlayImage, topOverlayImage] = await Promise.all([
     blobToImageElement(rootBlob),
     blobToImageElement(overlayBlob),
+    topOverlayBlob ? blobToImageElement(topOverlayBlob) : Promise.resolve(null),
   ]);
 
   const scaleX = rootImage.width / Math.max(rootRect.width, 1);
@@ -391,6 +409,21 @@ export async function captureCompositeElementBlob(
       return rootBlob;
     }
     context.drawImage(overlayImage, offsetX, offsetY, drawWidth, drawHeight);
+    if (topOverlayImage && topOverlayRect) {
+      const topOverlayOffsetX = Math.round((topOverlayRect.left - rootRect.left) * scaleX);
+      const topOverlayOffsetY = Math.round((topOverlayRect.top - rootRect.top) * scaleY);
+      const topOverlayWidth = Math.round(topOverlayRect.width * scaleX);
+      const topOverlayHeight = Math.round(topOverlayRect.height * scaleY);
+      if (topOverlayWidth > 0 && topOverlayHeight > 0) {
+        context.drawImage(
+          topOverlayImage,
+          topOverlayOffsetX,
+          topOverlayOffsetY,
+          topOverlayWidth,
+          topOverlayHeight,
+        );
+      }
+    }
   } catch {
     return rootBlob;
   }

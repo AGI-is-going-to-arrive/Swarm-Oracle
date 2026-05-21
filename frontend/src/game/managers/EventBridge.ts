@@ -20,15 +20,47 @@ export type VizEventType =
   | 'viz:ending_play'
   | 'viz:weather_change'
   | 'viz:clear_bubbles'
-  | 'viz:bet_update'
-  | 'viz:leaderboard_update'
+  | 'viz:sprite_positions'
   | 'viz:faction_cluster'
   | 'viz:faction_event';
 
-export type VizHandler = (data: Record<string, unknown>) => void;
+export interface SpritePositionUpdate {
+  agents: Array<{
+    agent_id: string;
+    name: string;
+    x: number;
+    y: number;
+    spriteH: number;
+    visible: boolean;
+    emotion?: string;
+  }>;
+  canvasRect: {
+    width: number;
+    height: number;
+  };
+}
+
+export interface BubbleShowPayload extends Record<string, unknown> {
+  sprite_id?: string;
+  bubble_text?: string;
+  bubble_mode?: 'live' | 'replay';
+  emotion?: string;
+  halo_color?: string;
+}
+
+export interface VizEventPayloadMap {
+  'viz:bubble_show': BubbleShowPayload;
+  'viz:clear_bubbles': Record<string, never>;
+  'viz:sprite_positions': SpritePositionUpdate;
+}
+
+export type VizEventPayload<T extends string> =
+  T extends keyof VizEventPayloadMap ? VizEventPayloadMap[T] : Record<string, unknown>;
+
+export type VizHandler<T extends string = string> = (data: VizEventPayload<T>) => void;
 
 class EventBridgeClass {
-  private handlers: Map<string, Set<VizHandler>> = new Map();
+  private handlers: Map<string, Set<(data: Record<string, unknown>) => void>> = new Map();
   private domListener: ((e: Event) => void) | null = null;
   private active = false;
 
@@ -78,12 +110,13 @@ class EventBridgeClass {
   /**
    * Register a handler for a specific viz event type.
    */
-  on(eventType: VizEventType | string, handler: VizHandler): () => void {
+  on<T extends VizEventType | string>(eventType: T, handler: VizHandler<T>): () => void {
     const set = this.handlers.get(eventType) ?? new Set();
-    set.add(handler);
+    const normalizedHandler = handler as (data: Record<string, unknown>) => void;
+    set.add(normalizedHandler);
     this.handlers.set(eventType, set);
     return () => {
-      set.delete(handler);
+      set.delete(normalizedHandler);
       if (set.size === 0) this.handlers.delete(eventType);
     };
   }
@@ -99,7 +132,7 @@ class EventBridgeClass {
    * Dispatch a viz event (used by the WS layer).
    * This fires a CustomEvent on `window` which the bridge picks up.
    */
-  static dispatch(type: string, data: Record<string, unknown>): void {
+  static dispatch<T extends VizEventType | string>(type: T, data: VizEventPayload<T>): void {
     window.dispatchEvent(
       new CustomEvent('viz-event', { detail: { type, data } })
     );
@@ -112,7 +145,7 @@ export const EventBridge = new EventBridgeClass();
 /**
  * Convenience: dispatch a viz:* event from the WS layer.
  */
-export function dispatchVizEvent(type: string, data: Record<string, unknown>): void {
+export function dispatchVizEvent<T extends VizEventType | string>(type: T, data: VizEventPayload<T>): void {
   EventBridgeClass.dispatch(type, data);
 }
 

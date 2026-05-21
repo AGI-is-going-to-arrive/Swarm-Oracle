@@ -239,8 +239,9 @@ export default function GameplayCardsModal({
   const submittingLabel = t('gameplay.submitting');
   const readOnlyLabel = t('gameplay.preview_only_cta');
   const previewStatusLabel = t('gameplay.preview_only_note');
+  const readOnlyReason = disabledReason ?? previewStatusLabel;
   const availabilityLabel = readOnly
-    ? previewStatusLabel
+    ? readOnlyReason
     : !cardAvailability.ok
       ? (
         cardAvailability.reason === 'points'
@@ -663,11 +664,6 @@ export default function GameplayCardsModal({
             <strong>{t('gameplay.card_status_title')}</strong>
             <span>{availabilityLabel}</span>
           </div>
-          {readOnly && (
-            <p className="gameplay-modal__preview-note">
-              {disabledReason ?? previewStatusLabel}
-            </p>
-          )}
         </header>
 
         <div className="modal-body gameplay-modal-v2__body">

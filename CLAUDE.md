@@ -51,7 +51,7 @@ graph TD
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
 | backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | full pytest collected: 3272；counterfactual+replay+simulator+resume targeted: 223 passed |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 201 文件 / 2190 tests；i18n 2765/2765 |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 202 文件 / 2243 tests；i18n 2757/2757 |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -200,6 +200,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
+| 05-21 | Pixel Theater Overhaul 收口：`HudOverlay` 删除，Theater 控制拆成 `src/pages/sim/*`，外壳切到 Light Theater；Phaser backing store 按 DPR 初始化并由 Boot/World 场景读取 DPR 缩放；React `BubbleOverlay` 通过 `viz:sprite_positions` 跟随 sprite，完成态 Theater 的玩法卡入口恢复为只读回看。验证：frontend full `202 files / 2243 tests`，`tsc/lint/build` 通过，i18n `2757/2757`，Chrome DevTools 完成态 Theater 玩法卡 spot-check console 0 error |
 | 05-21 | 因果图谱 UX 修复：结果页导航不再携带 `branch_id`，默认展示全部分支完整图谱（`ExploreDeeperBridge` + `ResultHeader` 链接修复）；边标签 i18n 补齐，`triggered fork` 等后端原始 label 通过 `BACKEND_CAUSAL_EDGE_LABEL_I18N` 映射表走 i18n 翻译（中文 `触发分支`）。验证：CausalReviewView 80 tests passed，ResultView 79 tests passed，tsc/build 通过 |
 | 05-19 | 反事实对比逐消息升级：`compare_branches()` 在轮级数据基础上新增 `branch_a_messages` / `branch_b_messages`（agent_name + content + emotion）逐消息字段；新增 `POST /counterfactual/{branch_id}/resimulate` 端点，给旧的只 clone+seed 的反事实分支补跑模拟；前端新增 `src/lib/textDiff.ts` 字符级 LCS diff（CJK / emoji 安全的码点切分）；`CompareDigestView` 改为逐 agent 消息卡片 + 红绿 diff 高亮 + 折叠/展开按钮 + 独占轮（only-A / only-B）单列布局，`CounterfactualPanel` 新增模拟进行中提示。验证：backend counterfactual+replay+simulator+resume targeted `223 passed`；frontend full `201 files / 2190 tests`，tsc/eslint/build 通过；i18n `2765/2765` |
 | 05-19 | 反事实对比全面重构：`POST /counterfactual` 融合重新模拟（clone+seed+`run_sim_background`），反事实分支不再只停留在干预轮，会向后推演并生成完整叙事 story/insight/title；`compare_branches` 从 `str.split()` 改为 CJK-aware 逐字分词修复中文分歧度计算；compare 响应新增 `intervention`（原始/改写消息元数据）+ `is_identical`（标识完全相同轮次）+ `common_rounds`（分歧前相同轮数）；分支标题 i18n 感知（中文 `反事实：从第N轮起`）。前端 `CompareDigestView` 新增干预横幅（agent 名称+原始/改写对比+红绿左边框）、折叠相同轮次、干预轮高亮徽章、全 identical 空态处理、forced-colors/a11y 覆盖；`CounterfactualPanel` 新增模拟进行中提示。`simulate: bool = True` 默认触发模拟，`simulate=false` 保留旧行为（仅 clone+seed）。验证：backend full `3257 passed, 6 skipped`（+19 tests）；frontend full `200 files / 2176 tests`，tsc/eslint/build 通过；i18n `2758/2758`（+26 keys）；Codex 后端+前端双轮对抗式审查通过（0 Critical，6 Warning 全部修复） |

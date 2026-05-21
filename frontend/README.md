@@ -25,7 +25,7 @@ React + TypeScript frontend for SwarmOracle.
 |-------|-----------|-------------|
 | `/` | `InputView` | Scenario input, progress indicator, quick starts, daily challenge, weekly track, difficulty, streak/refresh countdown, progress sheet, onboarding, launch confirmation, source families, search-depth selector, provider policy, advanced/BYOK accordions, preflight-aware submit loading, custom Agent attach panel, feature-gated snapshot import |
 | `/admin/setup` | `SetupWizardView` | Three-step provider setup, API/base URL entry, and connection test |
-| `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, read-only intervention receipts, capture |
+| `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Light Theater shell, replay, gameplay cards, structured bets, read-only intervention receipts, capture |
 | `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Result Quality verdict panel or neutral unavailable fallback when the capability is enabled, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, weekly leaderboard preview, achievement toast, share/export, prediction card, feature-gated snapshot export, replay import, rewrite-one-line counterfactuals, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
 | `/workbench/:id` | `WorkbenchView` | Dedicated graph workbench for causal / split / KG layouts; preserves the analysis branch query, resizes the KG canvas when moving between split and KG-only layouts, and links back to the scenario result page |
 | `/replay/:id` | `ReplayView` | Replay trace timeline with pagination, branch filter, and unavailable/probe-error states |
@@ -73,13 +73,17 @@ React + TypeScript frontend for SwarmOracle.
   thread-scoped node conversation WS now connects to `/ws/agent-conversation/{thread_id}`
   first-frame auth / `auth_ok` / `4001` / `4404` handling stays aligned with the shared backend contract
 - `PhaserGameLoader` / `useScreenCapture`
-  Theater-only loading and split capture runtime; TitleScene / EndingScene runtime copy now reads `game.*` locale keys instead of branching on `i18next.language`
+  Theater-only loading, HiDPI Phaser backing store, and split capture runtime; TitleScene / EndingScene runtime copy now reads `game.*` locale keys instead of branching on `i18next.language`
+- `BubbleOverlay.tsx`
+  React DOM bubble overlay for Theater speech; listens to `viz:sprite_positions`, syncs with refs and `transform3d`, exposes a polite screen-reader log, and can be disabled with `?domBubbles=0` / `?useDomBubbles=false`
+- `pages/sim/*`
+  Theater controls split out of `SimulationView`: floating toolbar, capture controls, status chips, and Director drawer
 - `AgentPanel.tsx`
   live agent roster and transcript panel; filtering one agent groups that agent's messages by worldline, sorts each group by round, and uses branch titles/descriptions for the group header
 - `predictionBetting.ts`
   structured bet helpers now fall back to the raw tone id when they receive an unknown ending tone label
 - `GameplayCardsModal.tsx`
-  profile-driven recommended cards stay first, branch / agent / source selects have explicit label/id pairs, and desktop-only directive autofocus avoids opening mobile keyboards
+  profile-driven recommended cards stay first, branch / agent / source selects have explicit label/id pairs, desktop-only directive autofocus avoids opening mobile keyboards, and completed Theater can open cards as read-only review
 - `components/campaign/*`
   campaign UI components for streak, difficulty, refresh countdown, weekly track chip/dialog/leaderboard, progress sheet, badge cabinet, level progress, and achievement toast
 - `dailyChallenge.ts`
@@ -216,10 +220,10 @@ npm run build:spike:phaser-custom
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
   - `npm run lint`: pass
   - `npm run build`: pass
-  - full vitest: `199 files / 2169 tests passed`
-  - i18n key parity spot-check: `zh: 2744`, `en: 2744`, parity OK
-  - CampaignProgressSheet browser spot-check: desktop and mobile forced-colors / reduced-motion open and scroll without console/page errors
-  - campaign/gameplay browser E2E: Chromium mobile / gameplay / intervention / prediction, Firefox gameplay / intervention, and WebKit gameplay / intervention passed
+  - full vitest: `202 files / 2243 tests passed`
+  - i18n key parity spot-check: `zh: 2757`, `en: 2757`, parity OK
+  - Pixel Theater browser spot-check: completed Theater shows the toolbar gameplay-card entry, opens the read-only gameplay cards modal, and reports 0 console errors in Chrome DevTools MCP
+  - CampaignProgressSheet browser spot-check and campaign/gameplay browser E2E remain older scoped evidence, not this Pixel Theater pass
 - Older Sprint 0-4 rows below are historical artifacts, not the current pass-count source.
 - Latest Sprint 0-2 browser matrix:
   - browser matrix: `72/72 PASS` at `output/e2e/sprint0-2-review-20260510-browser/summary.json`

@@ -18,7 +18,6 @@
   gap: 16px;
   padding: 14px 20px 12px;
   background: linear-gradient(180deg, #faf9f6, #faf8f5);
-  background: linear-gradient(180deg, color-mix(in oklab, var(--bg-base) 92%, white), var(--bg-base));
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
@@ -108,9 +107,7 @@
 
 @keyframes subtlePulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(198, 21, 131, 0.3); }
-  0%, 100% { box-shadow: 0 0 0 0 oklch(55% 0.22 350 / 0.3); }
   50% { box-shadow: 0 0 0 6px rgba(198, 21, 131, 0); }
-  50% { box-shadow: 0 0 0 6px oklch(55% 0.22 350 / 0); }
 }
 
 /* ── Error ────────────────────────────────────────────────── */
@@ -120,9 +117,7 @@
   gap: 16px;
   padding: 12px 20px;
   background: hsla(15, 62%, 48%, 0.08);
-  background: oklch(60% 0.18 25 / 0.08);
   border-bottom: 1px solid hsla(15, 62%, 48%, 0.15);
-  border-bottom: 1px solid oklch(60% 0.18 25 / 0.15);
 }
 .sim-error p {
   flex: 1;
@@ -138,8 +133,8 @@
   color: #ffffff;
 }
 .sim-cancel-btn:hover:not(:disabled) {
-  background: oklch(50% 0.18 25);
-  border-color: oklch(50% 0.18 25);
+  background: #b73534;
+  border-color: #b73534;
   color: #ffffff;
 }
 .sim-cancel-btn:disabled {
@@ -153,9 +148,7 @@
   gap: 16px;
   padding: 14px 20px;
   background: hsla(15, 62%, 48%, 0.08);
-  background: oklch(60% 0.18 25 / 0.08);
   border-bottom: 1px solid hsla(15, 62%, 48%, 0.15);
-  border-bottom: 1px solid oklch(60% 0.18 25 / 0.15);
 }
 .sim-cancelled__copy {
   display: flex;
@@ -172,7 +165,6 @@
 }
 .sim-cancel-dialog-backdrop {
   background: rgba(16, 12, 26, 0.38);
-  background: oklch(0.18 0.04 290 / 0.42);
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
   z-index: 40;
@@ -186,9 +178,7 @@
   padding: 24px;
   border-radius: 24px;
   border: 1px solid rgba(194, 24, 60, 0.14);
-  border: 1px solid oklch(0.55 0.18 15 / 0.14);
   background: rgba(255, 251, 247, 0.97);
-  background: oklch(0.985 0.012 60 / 0.97);
   box-shadow: 0 28px 80px rgba(18, 14, 32, 0.22);
   z-index: 50;
   animation: sim-cancel-scale-in 180ms ease-out;
@@ -231,16 +221,13 @@
 }
 .sim-cancel-dialog__action {
   background: rgba(194, 40, 50, 0.9);
-  background: oklch(0.55 0.2 20);
   color: #fff;
   border: 1px solid rgba(194, 40, 50, 0.9);
-  border-color: oklch(0.55 0.2 20);
   font-weight: 500;
 }
 .sim-cancel-dialog__action:hover:not(:disabled) {
   background: rgba(170, 30, 40, 0.95);
-  background: oklch(0.48 0.22 20);
-  border-color: oklch(0.48 0.22 20);
+  border-color: rgba(170, 30, 40, 0.95);
 }
 .sim-cancel-dialog__action:disabled {
   opacity: 0.5;
@@ -337,6 +324,10 @@
   transform: scale(0.94);
 }
 
+.sim-sidebar-toggle--collapsed {
+  color: rgba(255, 255, 255, 0.5);
+}
+
 /* ── Agent Panel ────────────────────────────────────────── */
 .sim-content__panel {
   width: 340px;
@@ -394,22 +385,105 @@
 
 /* ── Phase 3: Theater capture buttons ───────────────────── */
 
-/* Theater panel: canvas-first layout — game fills entire area, controls float on top */
+/* Theater panel: canvas-first layout. Light shell wraps the dark Phaser stage. */
 .theater-panel {
+  --lt-bg: #faf8f5;
+  --lt-bg-alt: #f2eee7;
+  --lt-surface: #FFFFFF;
+  --lt-surface-recessed: #f5f2ed;
+  --lt-border: #d1cdc7;
+  --lt-border-bright: #b8b3ac;
+  --lt-text: #181611;
+  --lt-text-dim: #58554f;
+  --lt-text-muted: #8a857e;
+  --lt-accent: #c61583;
+  --lt-accent-bright: #a01169;
+  --lt-accent-dim: rgba(198, 21, 131, 0.08);
+  --lt-cyan: #004E89;
+  --lt-green: #1A936F;
+  --lt-amber: #c46a1a;
+  --lt-red: #C5283D;
+  --lt-purple: #7B2D8E;
+  --lt-dot: rgba(209, 205, 199, 0.52);
+  --theater-toolbar-safe-area: 0px;
   position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
   flex: 1 1 auto;
+  color: var(--lt-text);
+  background: var(--lt-bg);
+  background-image:
+    radial-gradient(circle, var(--lt-dot) 0.8px, transparent 0.8px),
+    linear-gradient(180deg, var(--lt-surface) 0%, var(--lt-bg) 48%, var(--lt-bg-alt) 100%);
+  background-size: 16px 16px, auto;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -1px 0 rgba(24, 22, 17, 0.06);
+  transition: background 600ms ease;
 }
 
 .theater-panel__game-wrapper {
   position: absolute;
-  top: 0;
+  top: var(--theater-toolbar-safe-area);
   left: 0;
   right: 0;
   bottom: 0;
   z-index: 1;
+  box-shadow:
+    inset 0 0 0 1px rgba(184, 179, 172, 0.62),
+    inset 0 28px 72px rgba(24, 22, 17, 0.16),
+    0 20px 52px rgba(24, 22, 17, 0.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theater-panel {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .theater-panel {
+    background: Canvas;
+    color: CanvasText;
+    forced-color-adjust: auto;
+  }
+  .theater-panel__game-wrapper {
+    box-shadow: none;
+  }
+  .theater-panel__header,
+  .theater-panel__status,
+  .theater-panel__warmup,
+  .theater-panel__director,
+  .theater-panel__filters,
+  .theater-panel__timeline,
+  .simulation-view--theater .theater-panel .theater-floating-toolbar {
+    background: Canvas;
+    color: CanvasText;
+    border-color: CanvasText;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .capture-mode-feedback,
+  .capture-mode-toggle,
+  .theater-chip,
+  .theater-select,
+  .director-goal,
+  .btn--capture {
+    background: Canvas;
+    color: CanvasText;
+    border-color: CanvasText;
+    box-shadow: none;
+  }
+  .capture-mode-toggle__btn--active,
+  .theater-chip--primary,
+  .theater-panel__timeline .timeline-round--selected,
+  .simulation-view--theater .theater-floating-toolbar__director-badge {
+    background: Highlight;
+    color: HighlightText;
+    box-shadow: none;
+  }
 }
 
 .theater-panel__header {
@@ -418,13 +492,44 @@
   justify-content: space-between;
   position: relative;
   z-index: 10;
-  background: rgba(18, 16, 38, 0.65);
+  color: var(--lt-text);
+  background: rgba(255, 255, 255, 0.86);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
   margin: 12px 12px 0;
   border-radius: 16px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--lt-border);
+  box-shadow:
+    0 14px 32px rgba(24, 22, 17, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
   padding: 12px 16px;
+}
+
+.simulation-view--theater .theater-panel .theater-floating-toolbar {
+  color: var(--lt-text);
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid var(--lt-border);
+  box-shadow:
+    0 16px 36px rgba(24, 22, 17, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+@supports ((backdrop-filter: blur(14px)) or (-webkit-backdrop-filter: blur(14px))) {
+  .simulation-view--theater .theater-panel .theater-floating-toolbar {
+    background: rgba(255, 255, 255, 0.76);
+    -webkit-backdrop-filter: blur(14px) saturate(145%);
+    backdrop-filter: blur(14px) saturate(145%);
+  }
+}
+
+.simulation-view--theater .theater-floating-toolbar__row--status {
+  border-top-color: var(--lt-border);
+}
+
+.simulation-view--theater .theater-floating-toolbar__director-badge {
+  color: var(--lt-accent-bright);
+  background: var(--lt-accent-dim);
+  box-shadow: 0 0 0 1px rgba(198, 21, 131, 0.22) inset;
 }
 
 .theater-panel__capture {
@@ -441,9 +546,9 @@
   max-width: min(28rem, 100%);
   padding: 6px 11px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: rgba(250, 247, 255, 0.92);
+  background: var(--lt-surface-recessed);
+  border: 1px solid var(--lt-border);
+  color: var(--lt-text-dim);
   font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -456,26 +561,29 @@
   gap: 4px;
   padding: 3px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(18, 16, 38, 0.8);
+  border: 1px solid var(--lt-border);
+  background: var(--lt-surface-recessed);
 }
 
 .capture-mode-toggle__btn {
   border: none;
   background: transparent;
-  color: rgba(245, 243, 255, 0.72);
+  color: var(--lt-text-dim);
   font-size: 0.66rem;
   font-weight: 700;
   letter-spacing: 0.04em;
-  padding: 4px 8px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 4px 10px;
   border-radius: 999px;
   cursor: pointer;
   transition: background 160ms ease, color 160ms ease, opacity 160ms ease;
 }
 
 .capture-mode-toggle__btn--active {
-  background: linear-gradient(135deg, rgba(255, 77, 163, 0.18), rgba(108, 92, 231, 0.18));
-  color: rgba(255, 247, 252, 0.98);
+  background: var(--lt-accent-dim);
+  color: var(--lt-accent-bright);
+  box-shadow: 0 0 0 1px rgba(198, 21, 131, 0.18) inset;
 }
 
 .capture-mode-toggle__btn:disabled {
@@ -493,7 +601,6 @@
   border: 1px dashed var(--border-subtle);
   border-radius: 12px;
   background: rgba(252, 252, 250, 0.84);
-  background: color-mix(in oklab, var(--bg-surface) 84%, transparent);
 }
 
 .theater-panel__status {
@@ -507,9 +614,11 @@
   backdrop-filter: blur(12px);
   padding: 8px 10px;
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: linear-gradient(180deg, rgba(18, 16, 38, 0.76), rgba(11, 10, 24, 0.66));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--lt-border);
+  background: rgba(255, 255, 255, 0.80);
+  box-shadow:
+    0 10px 24px rgba(24, 22, 17, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.70);
 }
 
 .theater-panel__warmup {
@@ -522,22 +631,23 @@
   backdrop-filter: blur(12px);
   padding: 14px 16px;
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--lt-border);
   background:
-    linear-gradient(135deg, rgba(16, 14, 34, 0.94), rgba(29, 20, 57, 0.84)),
-    radial-gradient(circle at top right, rgba(255, 95, 167, 0.12), transparent 38%);
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.18);
+    linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(245, 242, 237, 0.86)),
+    radial-gradient(circle at top right, var(--lt-accent-dim), transparent 40%);
+  box-shadow: 0 14px 30px rgba(24, 22, 17, 0.12);
 }
 
 .theater-panel__warmup-copy {
   display: grid;
   gap: 4px;
-  color: rgba(245, 243, 255, 0.94);
+  color: var(--lt-text-dim);
   font-size: 0.78rem;
   line-height: 1.45;
 }
 
 .theater-panel__warmup-copy strong {
+  color: var(--lt-text);
   font-size: 0.84rem;
   letter-spacing: 0.02em;
 }
@@ -555,17 +665,17 @@
   min-width: 0;
   padding: 6px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
-  color: rgba(245, 243, 255, 0.72);
+  border: 1px solid var(--lt-border);
+  background: var(--lt-surface-recessed);
+  color: var(--lt-text-dim);
   font-size: 0.7rem;
   font-weight: 600;
 }
 
 .theater-warmup-pill--ready {
-  border-color: rgba(159, 209, 255, 0.26);
-  color: rgba(235, 247, 255, 0.94);
-  background: rgba(76, 175, 255, 0.12);
+  border-color: rgba(26, 147, 111, 0.26);
+  color: var(--lt-green);
+  background: rgba(26, 147, 111, 0.08);
 }
 
 .theater-panel__filters {
@@ -575,11 +685,14 @@
   margin: auto 12px 0;
   position: relative;
   z-index: 10;
-  background: rgba(12, 10, 29, 0.8);
+  background: rgba(255, 255, 255, 0.82);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
   padding: 12px;
   border-radius: 16px 16px 0 0;
+  border: 1px solid var(--lt-border);
+  border-bottom: none;
+  box-shadow: 0 -10px 26px rgba(24, 22, 17, 0.08);
 }
 
 .theater-panel__director {
@@ -592,11 +705,11 @@
   backdrop-filter: blur(12px);
   padding: 14px 16px;
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--lt-border);
   background:
-    linear-gradient(180deg, rgba(18, 16, 38, 0.92), rgba(12, 10, 29, 0.94)),
-    radial-gradient(circle at top left, rgba(255, 95, 167, 0.1), transparent 36%);
-  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.16);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.90), rgba(245, 242, 237, 0.92)),
+    radial-gradient(circle at top left, rgba(0, 78, 137, 0.08), transparent 36%);
+  box-shadow: 0 16px 30px rgba(24, 22, 17, 0.12);
 }
 
 .theater-panel__director-top {
@@ -604,13 +717,13 @@
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
-  color: rgba(245, 243, 255, 0.92);
+  color: var(--lt-text-dim);
   font-size: 0.76rem;
   line-height: 1.35;
 }
 
 .theater-panel__director-top strong {
-  color: rgba(255, 247, 252, 0.99);
+  color: var(--lt-text);
   font-size: 0.92rem;
   font-weight: 700;
   letter-spacing: 0.01em;
@@ -628,22 +741,22 @@
   min-height: 100%;
   padding: 10px 12px;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
-  color: rgba(245, 243, 255, 0.82);
+  border: 1px solid var(--lt-border);
+  background: linear-gradient(180deg, var(--lt-surface), var(--lt-surface-recessed));
+  color: var(--lt-text-dim);
   font-size: 0.75rem;
   line-height: 1.4;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
 }
 
 .director-goal strong {
-  color: rgba(255, 247, 252, 0.98);
+  color: var(--lt-text);
   font-size: 0.82rem;
 }
 
 .director-goal__detail,
 .director-goal small {
-  color: rgba(245, 243, 255, 0.74);
+  color: var(--lt-text-muted);
 }
 
 .director-goal__detail {
@@ -655,18 +768,23 @@
 }
 
 .director-goal--completed {
-  border-color: rgba(108, 207, 127, 0.28);
-  background: rgba(67, 160, 71, 0.13);
+  border-color: rgba(26, 147, 111, 0.28);
+  background: rgba(26, 147, 111, 0.08);
 }
 
 .director-goal--active {
-  border-color: rgba(255, 183, 77, 0.28);
-  background: rgba(255, 152, 0, 0.13);
+  border-color: rgba(196, 106, 26, 0.28);
+  background: rgba(196, 106, 26, 0.09);
 }
 
 .director-goal--failed {
-  border-color: rgba(244, 67, 54, 0.24);
-  background: rgba(244, 67, 54, 0.12);
+  border-color: rgba(197, 40, 61, 0.26);
+  background: rgba(197, 40, 61, 0.08);
+}
+
+.director-goal--pending {
+  border-color: rgba(88, 85, 79, 0.22);
+  background: rgba(245, 242, 237, 0.72);
 }
 
 .theater-panel__commitment {
@@ -690,15 +808,15 @@
 }
 
 .theater-commitment-feedback--info {
-  color: rgba(255, 244, 217, 0.96);
-  background: rgba(255, 193, 7, 0.12);
-  border-color: rgba(255, 193, 7, 0.18);
+  color: var(--lt-amber);
+  background: rgba(196, 106, 26, 0.08);
+  border-color: rgba(196, 106, 26, 0.20);
 }
 
 .theater-commitment-feedback--success {
-  color: rgba(233, 255, 245, 0.96);
-  background: rgba(76, 175, 80, 0.12);
-  border-color: rgba(76, 175, 80, 0.18);
+  color: var(--lt-green);
+  background: rgba(26, 147, 111, 0.08);
+  border-color: rgba(26, 147, 111, 0.20);
 }
 
 .theater-panel__timeline {
@@ -706,19 +824,21 @@
   margin: 0 12px 12px;
   position: relative;
   z-index: 10;
-  background: rgba(12, 10, 29, 0.8);
+  background: rgba(255, 255, 255, 0.82);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
   padding: 0 12px 12px;
   border-radius: 0 0 16px 16px;
+  border: 1px solid var(--lt-border);
+  border-top: none;
 }
 
 .theater-panel__timeline .timeline-bar {
   padding: 8px 12px 10px;
-  border: 1px solid rgba(108, 92, 231, 0.24);
+  border: 1px solid var(--lt-border);
   border-radius: 16px;
-  background: linear-gradient(180deg, rgba(20, 18, 43, 0.96), rgba(12, 10, 29, 0.96));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 24px rgba(0, 0, 0, 0.2);
+  background: linear-gradient(180deg, var(--lt-surface), var(--lt-surface-recessed));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82), 0 10px 24px rgba(24, 22, 17, 0.08);
 }
 
 .theater-panel__timeline .timeline-rounds {
@@ -726,18 +846,19 @@
 }
 
 .theater-panel__timeline .timeline-round {
-  background: rgba(255, 255, 255, 0.03);
-  border-color: rgba(255, 255, 255, 0.1);
+  background: var(--lt-surface);
+  border-color: var(--lt-border);
 }
 
 .theater-panel__timeline .timeline-round--selected {
-  border-color: rgba(255, 77, 163, 0.45);
-  background: linear-gradient(135deg, rgba(255, 77, 163, 0.18), rgba(108, 92, 231, 0.2));
-  color: #ffe7f3;
+  border-color: rgba(198, 21, 131, 0.38);
+  background: var(--lt-accent-dim);
+  color: var(--lt-accent-bright);
 }
 
 .theater-panel__timeline .timeline-round__tooltip {
-  background: rgba(8, 7, 22, 0.96);
+  background: var(--lt-text);
+  color: var(--lt-surface);
 }
 
 .theater-select {
@@ -748,12 +869,12 @@
   gap: 6px;
   padding: 9px 10px;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(18, 16, 38, 0.84);
-  color: rgba(245, 243, 255, 0.92);
+  border: 1px solid var(--lt-border);
+  background: var(--lt-surface);
+  color: var(--lt-text-dim);
   font-size: 0.72rem;
   font-weight: 600;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
 }
 
 .theater-select select {
@@ -775,9 +896,9 @@
   min-height: 30px;
   padding: 5px 9px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(18, 16, 38, 0.82);
-  color: rgba(248, 245, 255, 0.93);
+  border: 1px solid var(--lt-border);
+  background: var(--lt-surface);
+  color: var(--lt-text-dim);
   font-size: 0.71rem;
   font-weight: 600;
   letter-spacing: 0.01em;
@@ -785,22 +906,32 @@
 }
 
 .theater-chip--primary {
-  border-color: rgba(255, 77, 163, 0.28);
-  background: linear-gradient(135deg, rgba(255, 77, 163, 0.18), rgba(109, 40, 217, 0.18));
-  color: rgba(255, 247, 252, 0.98);
+  border-color: rgba(198, 21, 131, 0.28);
+  background: var(--lt-accent-dim);
+  color: var(--lt-accent-bright);
 }
 
 .btn--capture {
-  min-height: 36px;
+  min-height: 44px;
+  min-width: 44px;
   font-size: 0.74rem;
   padding: 6px 11px;
   border-radius: 999px;
   gap: 4px;
   opacity: 0.92;
-  transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease;
+  border: 1px solid var(--lt-border);
+  background: var(--lt-surface);
+  color: var(--lt-text-dim);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  transition: opacity 0.2s ease, background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 .btn--capture:hover {
   opacity: 1;
+}
+.btn--capture:hover:not(:disabled) {
+  background: var(--lt-accent-dim);
+  border-color: rgba(198, 21, 131, 0.30);
+  color: var(--lt-accent-bright);
 }
 .btn--capture:disabled {
   opacity: 0.4;
@@ -812,10 +943,10 @@
   animation: fadeInOut 2s ease forwards;
 }
 .capture-status--done {
-  color: #4caf50;
+  color: var(--lt-green);
 }
 .capture-status--fallback {
-  color: #c8841a;
+  color: var(--lt-amber);
 }
 
 @media (max-width: 900px) {
@@ -868,7 +999,7 @@
   .theater-panel__timeline {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
-    background: rgba(18, 16, 38, 0.95);
+    background: rgba(255, 255, 255, 0.96);
   }
 
   .theater-panel__status {
@@ -908,7 +1039,7 @@
   }
 
   .capture-mode-toggle__btn {
-    padding: 3px 5px;
+    padding: 3px 8px;
   }
 
   .theater-chip,
@@ -943,6 +1074,10 @@
 }
 
 @media (max-width: 520px) {
+  .theater-panel {
+    --theater-toolbar-safe-area: 224px;
+  }
+
   .theater-panel__director-goals {
     grid-template-columns: 1fr;
   }
@@ -1035,67 +1170,79 @@
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Theater Dark Mode Overrides (GBC-themed)
+   Theater Light Shell Overrides
    ═══════════════════════════════════════════════════════════ */
 
-/* Root modifier when Theater mode is active */
+/* Root modifier when Theater mode is active. */
 .simulation-view--theater {
-  background: var(--oracle-bg-dark, oklch(12% 0.01 60));
+  background: #faf8f5;
+  background-image:
+    radial-gradient(circle, rgba(209, 205, 199, 0.42) 0.8px, transparent 0.8px),
+    linear-gradient(180deg, #ffffff 0%, #faf8f5 48%, #f2eee7 100%);
+  background-size: 16px 16px, auto;
   transition: background-color 0.8s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .simulation-view--theater {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .simulation-view--theater {
+    background: Canvas;
+    forced-color-adjust: auto;
+  }
 }
 
 .simulation-view--theater .sim-content {
   min-height: 0;
 }
 
-/* ── Header → GBC dark ──────────────────────────────────── */
+/* ── Header → Light Theater ──────────────────────────────── */
 .simulation-view--theater .sim-header {
-  background: var(--gbc-dark, #0d0d2b);
-  border-bottom-color: rgba(108, 92, 231, 0.2);
+  background: linear-gradient(180deg, #ffffff, #faf8f5);
+  border-bottom-color: #d1cdc7;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.82) inset;
 }
 
 .simulation-view--theater .sim-header__question {
-  color: var(--gbc-text, #e8e4f0);
+  color: #181611;
 }
 
 .simulation-view--theater .sim-header__logo {
-  color: var(--gbc-text-dim, #6a6a9a);
+  color: #8a857e;
 }
 
 .simulation-view--theater .btn--back {
-  color: var(--gbc-text-dim, #6a6a9a);
+  color: #58554f;
 }
 .simulation-view--theater .btn--back:hover {
-  color: var(--gbc-text, #e8e4f0);
-  background: rgba(108, 92, 231, 0.12);
+  color: #a01169;
+  background: rgba(198, 21, 131, 0.08);
 }
 
-/* ── Error bar → GBC dark ────────────────────────────────── */
+/* ── Error bar → Light Theater ───────────────────────────── */
 .simulation-view--theater .sim-error {
-  background: rgba(244, 67, 54, 0.08);
-  border-bottom-color: rgba(244, 67, 54, 0.15);
+  background: rgba(197, 40, 61, 0.08);
+  border-bottom-color: rgba(197, 40, 61, 0.18);
 }
 .simulation-view--theater .sim-error p {
-  color: var(--gbc-danger, #F44336);
+  color: #C5283D;
 }
 
-/* ── Sidebar toggle → GBC accent ─────────────────────────── */
+/* ── Sidebar toggle → Light Theater accent ───────────────── */
 .simulation-view--theater .sim-sidebar-toggle {
-  background: rgba(108, 92, 231, 0.15);
-  border-color: rgba(108, 92, 231, 0.25);
-  color: var(--gbc-text-dim, #6a6a9a);
+  background: rgba(255, 255, 255, 0.78);
+  border-color: #d1cdc7;
+  color: #58554f;
 }
 .simulation-view--theater .sim-sidebar-toggle:hover {
-  background: rgba(108, 92, 231, 0.3);
-  border-color: rgba(108, 92, 231, 0.5);
-  color: var(--gbc-text, #e8e4f0);
-  box-shadow: 0 0 12px rgba(108, 92, 231, 0.2);
-}
-
-/* ── Agent panel → GBC dark ──────────────────────────────── */
-.simulation-view--theater .sim-content__panel {
-  border-left-color: rgba(108, 92, 231, 0.2);
-  background: var(--gbc-dark, #0d0d2b);
+  background: rgba(198, 21, 131, 0.08);
+  border-color: rgba(198, 21, 131, 0.28);
+  color: #a01169;
+  box-shadow: 0 8px 20px rgba(24, 22, 17, 0.12);
 }
 
 /* ── Theater layout ratio: prioritize the stage, keep the sidebar bounded ─────── */
@@ -1132,15 +1279,15 @@
   min-height: 0;
 }
 
-/* ── Scrollbar in dark theme ─────────────────────────────── */
+/* ── Scrollbar in Light Theater ──────────────────────────── */
 .simulation-view--theater ::-webkit-scrollbar-track {
-  background: var(--gbc-deep, #06061a);
+  background: #f2eee7;
 }
 .simulation-view--theater ::-webkit-scrollbar-thumb {
-  background: rgba(108, 92, 231, 0.3);
+  background: #b8b3ac;
 }
 .simulation-view--theater ::-webkit-scrollbar-thumb:hover {
-  background: rgba(108, 92, 231, 0.5);
+  background: #8a857e;
 }
 
 /* ── Theater responsive ──────────────────────────────────── */
@@ -1156,7 +1303,7 @@
   .simulation-view--theater .sim-content__panel {
     max-height: 32vh;
     border-left: none;
-    border-top: 1px solid rgba(108, 92, 231, 0.2);
+    border-top: 1px solid #d1cdc7;
   }
 
   .simulation-view--theater .sim-content__panel--collapsed {
@@ -1276,5 +1423,50 @@
   .theater-panel__timeline .timeline-bar {
     padding: 6px 10px 8px;
     border-radius: 14px;
+  }
+}
+
+@media (forced-colors: active) {
+  .simulation-view--theater,
+  .simulation-view--theater .sim-header,
+  .simulation-view--theater .sim-content__panel,
+  .theater-panel,
+  .theater-panel__header,
+  .theater-panel__status,
+  .theater-panel__warmup,
+  .theater-panel__director,
+  .theater-panel__filters,
+  .theater-panel__timeline,
+  .simulation-view--theater .theater-panel .theater-floating-toolbar {
+    background: Canvas;
+    color: CanvasText;
+    border-color: CanvasText;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    forced-color-adjust: auto;
+  }
+
+  .capture-mode-feedback,
+  .capture-mode-toggle,
+  .theater-chip,
+  .theater-select,
+  .director-goal,
+  .btn--capture,
+  .theater-panel__timeline .timeline-bar,
+  .theater-panel__timeline .timeline-round {
+    background: Canvas;
+    color: CanvasText;
+    border-color: CanvasText;
+    box-shadow: none;
+  }
+
+  .capture-mode-toggle__btn--active,
+  .theater-chip--primary,
+  .theater-panel__timeline .timeline-round--selected,
+  .simulation-view--theater .theater-floating-toolbar__director-badge {
+    background: Highlight;
+    color: HighlightText;
+    box-shadow: none;
   }
 }
