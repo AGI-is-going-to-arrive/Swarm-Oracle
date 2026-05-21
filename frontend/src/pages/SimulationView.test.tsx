@@ -163,7 +163,7 @@ const mockStore = {
   viewMode: 'theater' as 'classic' | 'theater',
   currentRound: 0,
   toggleViewMode: vi.fn(),
-  setScenario: vi.fn((scenario: Scenario) => {
+  setScenario: vi.fn((scenario: Scenario, options?: { forceClassicForDone?: boolean; replayMode?: boolean }) => {
     mockStore.scenario = scenario;
     mockStore.agents = scenario.agents as typeof mockStore.agents;
     mockStore.branches = scenario.branches as typeof mockStore.branches;
@@ -171,6 +171,9 @@ const mockStore = {
     mockStore.status = scenario.status as typeof mockStore.status;
     mockStore.isSimulationComplete = scenario.status === 'done';
     mockStore.visualizationEnabled = scenario.visualization_enabled ?? false;
+    mockStore.viewMode = scenario.status === 'done' && !options?.replayMode
+      ? (options?.forceClassicForDone ? 'classic' : mockStore.viewMode)
+      : (scenario.visualization_enabled ? 'theater' : 'classic');
     mockStore.currentRound = Math.max(0, ...((scenario.messages ?? []).map((message) => message.round ?? 0)));
     mockStore.errorCode = null;
   }),
@@ -593,6 +596,37 @@ describe('SimulationView replay automation output', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'sim.replay.import_local' }));
     expect(importReplayScenarioMock).toHaveBeenCalledTimes(1);
     expect(navigateMock).toHaveBeenCalledWith('/sim/imported-sim-1');
+  });
+
+  it('forces classic mode on completed live route entry even when store retained theater', async () => {
+    mockStore.viewMode = 'theater';
+    mockStore.status = 'done';
+    mockStore.isSimulationComplete = true;
+    mockStore.scenario = {
+      ...baseScenario,
+      id: 'scenario-1',
+      status: 'done',
+      visualization_enabled: true,
+    };
+
+    render(
+      <MemoryRouter initialEntries={[{
+        pathname: '/sim/scenario-1',
+        state: { forceClassicForDone: true },
+      }]}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(mockStore.setScenario).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'scenario-1', status: 'done' }),
+        { forceClassicForDone: true },
+      );
+    });
+    expect(mockStore.viewMode).toBe('classic');
   });
 
   it('ignores an invalid replay share artifact without crashing the page', async () => {

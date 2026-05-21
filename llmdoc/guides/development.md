@@ -209,6 +209,26 @@ node -e "const fs=require('fs');function flat(o,p=''){let r={};for(const [k,v] o
 - 完成态 Theater 的玩法卡入口可见，打开后是只读回看。
 - mobile 视口无横向溢出，语言切换后 toolbar / chips 文案跟随更新。
 
+### SimulationView completed / replay 回归
+
+如果这轮改动碰到 `simulationStore`、`SimulationView`、`ResultHeader`、replay hydrate 或 Theater branch / round filters，先跑下面这组：
+
+```bash
+cd frontend
+npm test -- --run src/stores/simulationStore.test.ts src/pages/SimulationView.test.tsx src/i18n/locales.test.ts
+npx tsc --noEmit
+npm run lint
+npm run build
+```
+
+如果同步了 `src/i18n/locales/*.json`，再跑完整 key 和 placeholder parity。浏览器复核至少确认：
+
+- completed visualization scenario 冷加载 `/sim/:id` 默认 Classic。
+- 结果页点“返回推演”后仍回 Classic，即使用户之前手动切过 Theater。
+- replay/share 进入 `/sim/replay` 时，visualization-enabled 的 completed scenario 保持 Theater。
+- 单分支 / 单轮显示静态文本；多分支 / 多轮仍显示下拉框。
+- 空分支 / 空消息、`cancelled`、`error` 状态不崩溃。
+
 ### ResultView 导演笔记 / 导演复盘折叠回归
 
 如果这轮改动碰到 `ResultView`、`DirectorDebriefPanel`、`DirectorNotebook`、`ResultContext`、结果页折叠样式或 `result.director_debrief_*` 文案，优先跑下面这组窄集：

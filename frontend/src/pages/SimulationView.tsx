@@ -3,7 +3,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { SimWarmupNarrative } from '../components/SimWarmupNarrative';
@@ -112,6 +112,7 @@ function SimulationSlotFallback({ label }: { label: string }) {
 export function SimulationView() {
   const { t, i18n } = useTranslation();
   const { id } = useParams<{ id: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const replayToken = searchParams.get('replay');
@@ -146,6 +147,10 @@ export function SimulationView() {
     [activeRuntimePreset],
   );
   const activeRuntimePresetLabel = t(`home.runtime_preset_${activeRuntimePreset}`);
+  const completedRouteEntryCheckedRef = useRef(false);
+  const forceClassicForDoneOnEntry = Boolean(
+    (location.state as { forceClassicForDone?: unknown } | null)?.forceClassicForDone,
+  );
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -313,7 +318,7 @@ export function SimulationView() {
   });
   useEffect(() => {
     if (!replayPayload) return;
-    setScenario(replayPayload.scenario);
+    setScenario(replayPayload.scenario, { replayMode: true });
     setBackendDirectorState(replayPayload.scenario.director_state ?? null);
     setBackendGameplayState(replayPayload.scenario.gameplay_state ?? null);
   }, [replayPayload, setBackendDirectorState, setBackendGameplayState, setScenario]);
@@ -456,6 +461,25 @@ export function SimulationView() {
   useEffect(() => {
     setReplayLinkUnavailable(false);
   }, [replayShareId, replayToken, scenario?.id]);
+
+  useEffect(() => {
+    completedRouteEntryCheckedRef.current = false;
+  }, [forceClassicForDoneOnEntry, id, isReplayMode]);
+
+  useEffect(() => {
+    if (!forceClassicForDoneOnEntry) return;
+    if (completedRouteEntryCheckedRef.current) return;
+    if (isReplayMode) {
+      completedRouteEntryCheckedRef.current = true;
+      return;
+    }
+    if (!id || !scenario || scenario.id !== id) return;
+
+    completedRouteEntryCheckedRef.current = true;
+    if (scenario.status === 'done' && viewMode !== 'classic') {
+      setScenario(scenario, { forceClassicForDone: true });
+    }
+  }, [forceClassicForDoneOnEntry, id, isReplayMode, scenario, setScenario, viewMode]);
 
   useEffect(() => {
     if (viewMode !== 'theater' || !visualizationEnabled) return;
@@ -1503,32 +1527,50 @@ export function SimulationView() {
               </div>
               {canUseReplayControls && replayBranchOptions.length > 0 && (
                 <div className="theater-panel__filters">
-                  <label className="theater-select">
-                    <span>{t('game.worldline_label')}</span>
-                    <select
-                      value={selectedReplayBranchId ?? ''}
-                      onChange={(event) => handleReplayBranchChange(event.target.value)}
-                    >
-                      {replayBranchOptions.map((branch) => (
-                        <option key={branch.id} value={branch.id}>
-                          {branch.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="theater-select">
-                    <span>{t('game.round_label')}</span>
-                    <select
-                      value={selectedReplayRound ?? ''}
-                      onChange={(event) => handleReplayRoundChange(Number(event.target.value))}
-                    >
-                      {replayRounds.map((round) => (
-                        <option key={round} value={round}>
-                          R{round}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  {replayBranchOptions.length > 1 ? (
+                    <label className="theater-select">
+                      <span>{t('game.worldline_label')}</span>
+                      <select
+                        value={selectedReplayBranchId ?? ''}
+                        onChange={(event) => handleReplayBranchChange(event.target.value)}
+                      >
+                        {replayBranchOptions.map((branch) => (
+                          <option key={branch.id} value={branch.id}>
+                            {branch.title}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <div className="theater-select theater-select--static">
+                      <span>{t('game.worldline_label')}</span>
+                      <span className="theater-select__static-value">
+                        {replayBranchOptions[0]?.title ?? ''}
+                      </span>
+                    </div>
+                  )}
+                  {replayRounds.length > 1 ? (
+                    <label className="theater-select">
+                      <span>{t('game.round_label')}</span>
+                      <select
+                        value={selectedReplayRound ?? ''}
+                        onChange={(event) => handleReplayRoundChange(Number(event.target.value))}
+                      >
+                        {replayRounds.map((round) => (
+                          <option key={round} value={round}>
+                            R{round}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : replayRounds.length === 1 ? (
+                    <div className="theater-select theater-select--static">
+                      <span>{t('game.round_label')}</span>
+                      <span className="theater-select__static-value">
+                        {t('game.round_value', { round: replayRounds[0] })}
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
               )}
               {canUseReplayControls && (

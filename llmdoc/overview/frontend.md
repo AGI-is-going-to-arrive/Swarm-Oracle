@@ -84,6 +84,7 @@
   - `replayCodec.ts`
 - 新生成的 replay token 当前统一走 `plain.*`，上限 `4096` 字符；payload 过大时继续回退 artifact / local readonly。旧的 `gz.*` token 仍可解码。
 - Simulation replay 的 branch / round selection 只在 simulation complete 后保留；live 或 incomplete 状态会清掉旧 selection，完成态下缺失或失效 selection 会回到默认 branch 和最新 round。
+- 主模式完成态的非 replay 冷加载默认回到 Classic；同一 scenario 的 live resync 不会强行打断用户当前 Theater。结果页点“返回推演”会显式要求 completed scenario 回 Classic；replay hydrate 会保留 visualization-enabled 场景的 Theater。
 - ResultView replay payload 可以携带 `campaignScenarioSummary / campaignSummary`；`campaignSummary` 可带后端 `score_breakdown`，replay 页会用快照渲染导演复盘，但不会重新 finalize campaign。
 - 新生成的主模式、ending-room 和 roundtable replay payload 会先清理 scenario replay Agent 字段：`agent_identity_id` 和 persona 不进入 inline token、artifact payload 或 local readonly copy；旧 token decode 后也会走同一组展示字段白名单。
 
@@ -191,6 +192,7 @@
   - Agent bubble 色板来自 `agentPalette.ts` 的 WCAG AA 双色 token
 - Phaser canvas 当前按 `width * dpr` 与 `height * dpr` 初始化 backing store，DPR capped at 3；automation state 会回显 `device_pixel_ratio / dpr`。`BootScene` 的 fallback texture 与 `WorldScene` 的绘制单位会读取 registry DPR 做缩放。
 - Theater CSS 对 `backdrop-filter` 保留 solid fallback 与 `-webkit-backdrop-filter`；`color-mix()` / `oklch()` 使用 fallback 或 `@supports` 门控；`100dvh` 保留 `100vh` fallback；reduced-motion 和 forced-colors 口径由对应 CSS 与 `legacyCssFallbacks` 测试覆盖。
+- completed Theater 的 replay filters 只有多分支或多轮时才显示下拉框；单分支 / 单轮会显示静态文本，避免把不可选择的控件暴露给用户和屏幕阅读器。轮次静态值走 `game.round_value` locale key。
 - Theater Agent sprite 当前采用动态缩放：
   - 尺寸 = `max(40, Math.min(width, height) * 0.055)` 宽，保持 2:3 宽高比
   - 阴影、名牌、faction bar 位置跟随 sprite 尺寸自动计算（`spriteH` 存储在 `AgentSpriteData` 中，各处统一使用 `spriteH * 0.5 + 2` 作 Y 偏移）

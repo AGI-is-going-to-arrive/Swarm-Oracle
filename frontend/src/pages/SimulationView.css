@@ -888,6 +888,20 @@
   padding-right: 8px;
 }
 
+.theater-select__static-value {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  padding-right: 8px;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .theater-chip {
   display: inline-flex;
   align-items: center;
@@ -1412,7 +1426,8 @@
     font-size: 0.68rem;
   }
 
-  .theater-select select {
+  .theater-select select,
+  .theater-select__static-value {
     min-height: 30px;
   }
 

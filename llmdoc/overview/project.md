@@ -195,13 +195,14 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 最近完整本地验证：
   - backend `python -m pytest -x --tb=short`：`3290 passed, 6 skipped`
   - backend `ruff check app/ tests/`：通过
-  - frontend `npm test`：`205 files / 2300 tests passed`
+  - frontend `npm test`：`205 files / 2305 tests passed`
   - frontend `npm run lint`：通过
   - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
   - frontend `npm run build`：通过，performance budgets 通过
-  - frontend i18n key parity：`zh: 2785`、`en: 2785`、placeholder parity OK
+  - frontend i18n key parity：`zh: 2786`、`en: 2786`、placeholder parity OK
   - Custom Agent attach 定向复核：backend `TestCustomAgentOwnership` 为 `10 passed`；Chrome 首页 smoke 确认 quick selector 可见、选中后 Start badge 显示、console error 为 0、桌面视口无横向溢出
   - 跨浏览器限制：本轮 `e2e:cross-browser` 在 Firefox DirectorState 等待上超时，不能把 Firefox/WebKit 全矩阵写成已通过
+  - 主模式 completed/replay 定向浏览器回归：Playwright fixture 在 Chromium、Firefox、WebKit 均通过，覆盖 completed 冷加载 Classic、结果页返回 Classic、replay Theater、单分支/单轮静态标签、多分支/多轮下拉、空分支/空消息、`cancelled` 和 `error` 状态
   - Pixel Theater 浏览器复核：Chrome DevTools MCP 打开完成态 `/sim/e1a41453-2cb2-43a1-a054-0d7cd04a6bf5`，toolbar 玩法卡入口可见，modal 以只读状态打开，console error 为 0；Playwright MCP 当时因本机 profile 已占用未使用
   - KG visualization 定向回归：`5 files / 193 tests passed`，覆盖 `KGGraphBoard / KGExplorerView / useG6Graph / kgGraphConfig / locales`；确认 KG 色板、平行边/self-loop、G6 data-only draw 路径、搜索/类型筛选、sr-only fallback 和 i18n key parity
   - Workbench KG resize 定向回归：`useG6Graph.test.ts + WorkbenchView.test.tsx` 为 `56 passed`，`KGGraphBoard.test.tsx` 为 `42 passed`；本机浏览器复核 `graph -> split -> KG` 后，KG 容器与内部 G6 canvas 同宽，`widthDelta=0`，console error 为 0

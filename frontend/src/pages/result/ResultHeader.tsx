@@ -76,7 +76,11 @@ export default function ResultHeader() {
     <header className="result-header">
       <button
         className="btn btn-ghost result-back"
-        onClick={() => navigate(!isReplayMode && id ? `/sim/${id}` : '/')}
+        onClick={() => (
+          !isReplayMode && id
+            ? navigate(`/sim/${id}`, { state: { forceClassicForDone: true } })
+            : navigate('/')
+        )}
       >
         {t('result.back')}
       </button>

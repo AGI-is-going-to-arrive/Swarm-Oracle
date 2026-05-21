@@ -23,7 +23,7 @@ vi.mock("../i18n/config", () => ({
 }));
 
 import { useSimulationStore } from "./simulationStore";
-import type { WSEvent } from "../types";
+import type { Scenario, WSEvent } from "../types";
 
 // Helper: reset store before each test
 beforeEach(() => {
@@ -888,7 +888,7 @@ describe("simulationStore — reset", () => {
 });
 
 describe("simulationStore — scenario hydration", () => {
-  it("restores theater mode when scenario visualization is enabled", () => {
+  it("defaults to classic mode for completed scenarios even with visualization enabled", () => {
     const store = useSimulationStore;
 
     store.getState().setScenario({
@@ -908,6 +908,106 @@ describe("simulationStore — scenario hydration", () => {
     });
 
     expect(store.getState().visualizationEnabled).toBe(true);
+    expect(store.getState().viewMode).toBe("classic");
+  });
+
+  it("restores theater mode for in-progress scenarios with visualization enabled", () => {
+    const store = useSimulationStore;
+
+    store.getState().setScenario({
+      id: "s1b",
+      question: "如果罗马帝国从未衰落？",
+      status: "simulating",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      visualization_enabled: true,
+      scene_theme: "ancient_empire",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+
+    expect(store.getState().visualizationEnabled).toBe(true);
+    expect(store.getState().viewMode).toBe("theater");
+  });
+
+  it("preserves theater mode when same scenario resyncs to done", () => {
+    const store = useSimulationStore;
+    const sharedScenario: Omit<Scenario, "status"> = {
+      id: "s1c",
+      question: "如果罗马帝国从未衰落？",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      visualization_enabled: true,
+      scene_theme: "ancient_empire",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    };
+
+    store.getState().setScenario({ ...sharedScenario, status: "simulating" });
+    expect(store.getState().viewMode).toBe("theater");
+
+    store.getState().setScenario({ ...sharedScenario, status: "done" });
+    expect(store.getState().viewMode).toBe("theater");
+  });
+
+  it("can force classic mode for completed same-scenario route entry", () => {
+    const store = useSimulationStore;
+    const sharedScenario: Omit<Scenario, "status"> = {
+      id: "s1e",
+      question: "如果罗马帝国从未衰落？",
+      created_at: new Date().toISOString(),
+      total_rounds: 3,
+      mode: "blackboard",
+      visualization_enabled: true,
+      scene_theme: "ancient_empire",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    };
+
+    store.getState().setScenario({ ...sharedScenario, status: "simulating" });
+    store.getState().setScenario({ ...sharedScenario, status: "done" });
+    expect(store.getState().viewMode).toBe("theater");
+
+    store.getState().setScenario(
+      { ...sharedScenario, status: "done" },
+      { forceClassicForDone: true },
+    );
+    expect(store.getState().viewMode).toBe("classic");
+  });
+
+  it("keeps theater for replay mode even when scenario is done", () => {
+    const store = useSimulationStore;
+
+    store.getState().setScenario(
+      {
+        id: "s1d",
+        question: "如果罗马帝国从未衰落？",
+        status: "done",
+        created_at: new Date().toISOString(),
+        total_rounds: 3,
+        mode: "blackboard",
+        visualization_enabled: true,
+        scene_theme: "ancient_empire",
+        agents: [],
+        branches: [],
+        groups: [],
+        hierarchical: false,
+        messages: [],
+      },
+      { replayMode: true },
+    );
+
     expect(store.getState().viewMode).toBe("theater");
   });
 

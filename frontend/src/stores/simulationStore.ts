@@ -82,7 +82,7 @@ export interface SimulationState {
 
   // Actions
   startSimulation: (options: CreateScenarioOptions) => Promise<string>;
-  setScenario: (s: Scenario) => void;
+  setScenario: (s: Scenario, options?: { forceClassicForDone?: boolean; replayMode?: boolean }) => void;
   loadScenario: (id: string) => Promise<void>;
   handleWSEvent: (event: WSEvent) => void;
   toggleViewMode: () => void;
@@ -189,9 +189,15 @@ function shouldIgnoreCancelledEvent(status: SimulationState['status'], eventType
   return status === 'cancelled' && eventType !== 'heartbeat' && eventType !== 'simulation_cancelled';
 }
 
-function applyScenarioSnapshot(state: SimulationState, scenario: Scenario): Partial<SimulationState> {
+function applyScenarioSnapshot(
+  state: SimulationState,
+  scenario: Scenario,
+  options?: { forceClassicForDone?: boolean; replayMode?: boolean },
+): Partial<SimulationState> {
   const incomingStatus = scenario.status as ActiveSimulationStatus;
   const sameScenario = state.scenario?.id === scenario.id;
+  const forceClassicForDone = options?.forceClassicForDone ?? false;
+  const replayMode = options?.replayMode ?? false;
   const mergedMessages = sameScenario
     ? mergeMessages(state.messages, (scenario.messages || []) as AgentMessage[], scenario.id)
     : ((scenario.messages || []) as AgentMessage[]);
@@ -218,7 +224,9 @@ function applyScenarioSnapshot(state: SimulationState, scenario: Scenario): Part
     groups: (scenario.groups || []) as GroupInfo[],
     hierarchical: scenario.hierarchical ?? false,
     visualizationEnabled: scenario.visualization_enabled ?? false,
-    viewMode: scenario.visualization_enabled ? 'theater' : 'classic',
+    viewMode: mergedStatus === 'done' && !replayMode
+      ? (sameScenario && !forceClassicForDone ? state.viewMode : 'classic')
+      : (scenario.visualization_enabled ? 'theater' : 'classic'),
     messages: mergedMessages,
     // Snapshot resync is authoritative for durable state, but does not carry
     // in-flight speaker progress. Clear stale thinking indicators and let the
@@ -268,8 +276,8 @@ export const useSimulationStore = create<SimulationState>((set) => ({
     }
   },
 
-  setScenario: (s: Scenario) => {
-    set((state) => applyScenarioSnapshot(state, s));
+  setScenario: (s: Scenario, options?: { forceClassicForDone?: boolean; replayMode?: boolean }) => {
+    set((state) => applyScenarioSnapshot(state, s, options));
   },
 
   loadScenario: async (id: string) => {

@@ -915,6 +915,7 @@
       "speed_btn": "Replay Speed",
       "worldline_label": "Worldline",
       "round_label": "Round",
+      "round_value": "R{{round}}",
       "screenshot_saved": "Screenshot saved!",
       "gif_recording": "Recording...",
       "gif_saved": "GIF saved!",
