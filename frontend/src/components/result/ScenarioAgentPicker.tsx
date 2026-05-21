@@ -10,12 +10,19 @@ import { useTranslation } from 'react-i18next';
 
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog';
 import type { AgentInfo } from '../../types';
+import { normalizeScenarioAgentSource } from '../../api/client';
 
 export interface ScenarioAgentPickerProps {
   open: boolean;
   agents: AgentInfo[];
   onSelect: (agent: AgentInfo) => void;
   onClose: () => void;
+  /**
+   * Optional handler for in-context profile preview. When provided, generated /
+   * replay agents render a button that opens AgentProfileSheet instead of
+   * deep-linking to /agents (which would only work for custom agents).
+   */
+  onViewProfile?: (agent: AgentInfo) => void;
 }
 
 function tierLabelKey(tier: AgentInfo['tier']): string {
@@ -39,6 +46,7 @@ export function ScenarioAgentPicker({
   agents,
   onSelect,
   onClose,
+  onViewProfile,
 }: ScenarioAgentPickerProps) {
   const { t } = useTranslation();
   const firstCardRef = useRef<HTMLButtonElement | null>(null);
@@ -97,12 +105,15 @@ export function ScenarioAgentPicker({
               const tierLabel = t(tierLabelKey(tier), { defaultValue: tier });
               const persona = (agent.persona ?? '').trim();
               const identityId = agent.agent_identity_id ?? null;
-              const profileHref = identityId
-                ? `/agents#agent_profile=${encodeURIComponent(identityId)}&tab=memory`
-                : '#';
+              const sourceType = normalizeScenarioAgentSource(agent.source_type);
               const viewProfileLabel = t('result.agent_picker_view_profile', {
                 defaultValue: 'View profile',
               });
+              const canDeepLink = sourceType === 'custom' && Boolean(identityId);
+              const canPreview = !canDeepLink && Boolean(identityId) && Boolean(onViewProfile);
+              const profileHref = identityId
+                ? `/agents#agent_profile=${encodeURIComponent(identityId)}&tab=memory`
+                : '#';
               return (
                 <li key={agent.id} className="scenario-agent-picker__item">
                   <button
@@ -131,17 +142,34 @@ export function ScenarioAgentPicker({
                       <span className="scenario-agent-picker__card-persona">{persona}</span>
                     )}
                   </button>
-                  {identityId && (
+                  {canDeepLink && (
                     <a
                       href={profileHref}
                       className="scenario-agent-picker__profile-link"
                       data-testid="scenario-agent-picker-view-profile"
-                      data-agent-identity-id={identityId}
+                      data-agent-identity-id={identityId ?? undefined}
+                      data-source-type={sourceType}
                       aria-label={`${viewProfileLabel}: ${agent.name}`}
                       onClick={(event) => event.stopPropagation()}
                     >
                       {viewProfileLabel}
                     </a>
+                  )}
+                  {canPreview && (
+                    <button
+                      type="button"
+                      className="scenario-agent-picker__profile-link"
+                      data-testid="scenario-agent-picker-view-profile"
+                      data-agent-identity-id={identityId ?? undefined}
+                      data-source-type={sourceType}
+                      aria-label={`${viewProfileLabel}: ${agent.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onViewProfile?.(agent);
+                      }}
+                    >
+                      {viewProfileLabel}
+                    </button>
                   )}
                 </li>
               );

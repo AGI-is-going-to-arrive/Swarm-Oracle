@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.api.schemas import CreateScenarioRequest, WebSearchOverride
+from app.config import settings
 from app.main import app
 
 
@@ -86,6 +87,63 @@ def test_create_scenario_valid_payload_regression(client):
     )
     assert resp.status_code != 422, resp.text
     assert resp.status_code in (200, 500), resp.text
+
+
+def test_create_scenario_custom_agent_ids_normalized_and_deduplicated():
+    req = CreateScenarioRequest(
+        question="What if custom agents join?",
+        num_agents=6,
+        custom_agent_identity_ids=[" agent-a ", "", "agent-a", "agent-b", "  "],
+    )
+
+    assert req.custom_agent_identity_ids == ["agent-a", "agent-b"]
+
+
+def test_create_scenario_custom_agent_ids_rejects_non_list_input():
+    with pytest.raises(ValidationError) as excinfo:
+        CreateScenarioRequest(
+            question="What if custom agents join?",
+            custom_agent_identity_ids="agent-a",  # type: ignore[arg-type]
+        )
+
+    errs = excinfo.value.errors()
+    assert any(e["type"] == "value_error" for e in errs), errs
+
+
+def test_create_scenario_custom_agent_ids_respects_requested_agent_count():
+    with pytest.raises(ValidationError) as excinfo:
+        CreateScenarioRequest(
+            question="What if custom agents join?",
+            num_agents=3,
+            custom_agent_identity_ids=["a", "b", "c", "d"],
+        )
+
+    assert "custom_agent_identity_ids" in str(excinfo.value)
+
+
+def test_create_scenario_custom_agent_ids_allows_server_max_when_agent_count_large():
+    req = CreateScenarioRequest(
+        question="What if custom agents join?",
+        num_agents=settings.MAX_CUSTOM_AGENTS,
+        custom_agent_identity_ids=[
+            f"agent-{idx}" for idx in range(settings.MAX_CUSTOM_AGENTS)
+        ],
+    )
+
+    assert len(req.custom_agent_identity_ids or []) == settings.MAX_CUSTOM_AGENTS
+
+
+def test_create_scenario_custom_agent_ids_rejects_over_server_max():
+    with pytest.raises(ValidationError) as excinfo:
+        CreateScenarioRequest(
+            question="What if custom agents join?",
+            num_agents=settings.MAX_CUSTOM_AGENTS,
+            custom_agent_identity_ids=[
+                f"agent-{idx}" for idx in range(settings.MAX_CUSTOM_AGENTS + 1)
+            ],
+        )
+
+    assert "custom_agent_identity_ids" in str(excinfo.value)
 
 
 # ── WebSearchOverride — v1 pre-plan schema freeze ─────────

@@ -63,23 +63,15 @@ def _create_agent(
 def _build_custom_agent_injection(
     session: Session, custom_agent_identity_ids: list[str], user_id: str | None,
 ) -> list[dict]:
-    """Run the REAL guard logic from helpers.py:392-406."""
-    from app.config import settings
-    custom_agents_to_inject: list[dict] = []
-    if custom_agent_identity_ids and settings.FEATURE_CUSTOM_AGENTS:
-        from app.models.agent_identity import AgentIdentity
-        for cid in custom_agent_identity_ids[:5]:
-            identity = session.get(AgentIdentity, cid)
-            if (identity and identity.kind == "custom"
-                    and user_id is not None and identity.user_id == user_id):
-                custom_agents_to_inject.append({
-                    "name": identity.display_name,
-                    "role": identity.role,
-                    "persona": identity.persona or "",
-                    "tier": "CROWD",
-                    "identity_id": identity.id,
-                })
-    return custom_agents_to_inject
+    """Run the real production helper with the historical default limit."""
+    from app.api.helpers import _build_custom_agents_to_inject
+
+    return _build_custom_agents_to_inject(
+        session,
+        custom_agent_identity_ids,
+        user_id,
+        num_agents=None,
+    )
 
 
 # ═══════════════════════════════════════════════════════════
@@ -132,6 +124,123 @@ class TestCustomAgentOwnership:
             iid = _create_identity(session, user_id="alice", kind="generated")
             result = _build_custom_agent_injection(session, [iid], "alice")
         assert len(result) == 0
+
+    @patch("app.config.settings.FEATURE_CUSTOM_AGENTS", True)
+    def test_dynamic_limit_can_inject_more_than_five(self):
+        from app.api.helpers import _build_custom_agents_to_inject
+
+        engine = get_engine()
+        with Session(engine) as session:
+            ids = [
+                _create_identity(session, user_id="alice", suffix=str(idx))
+                for idx in range(6)
+            ]
+            result = _build_custom_agents_to_inject(
+                session,
+                [ids[0], ids[0], *ids[1:]],
+                "alice",
+                num_agents=6,
+            )
+
+        assert [agent["identity_id"] for agent in result] == ids
+
+    @patch("app.config.settings.FEATURE_CUSTOM_AGENTS", True)
+    def test_invalid_ids_do_not_consume_custom_agent_limit(self):
+        from app.api.helpers import _build_custom_agents_to_inject
+
+        engine = get_engine()
+        with Session(engine) as session:
+            foreign_id = _create_identity(session, user_id="bob", suffix="foreign")
+            generated_id = _create_identity(
+                session,
+                user_id="alice",
+                kind="generated",
+                suffix="generated",
+            )
+            valid_id = _create_identity(session, user_id="alice", suffix="valid")
+            result = _build_custom_agents_to_inject(
+                session,
+                ["missing-id", foreign_id, generated_id, valid_id],
+                "alice",
+                num_agents=1,
+            )
+
+        assert [agent["identity_id"] for agent in result] == [valid_id]
+
+    @patch("app.config.settings.FEATURE_CUSTOM_AGENTS", True)
+    def test_custom_agent_lookup_exception_is_fail_soft(self):
+        from app.api.helpers import _build_custom_agents_to_inject
+
+        class BrokenSession:
+            def get(self, *_args, **_kwargs):
+                raise RuntimeError("expired session")
+
+        result = _build_custom_agents_to_inject(
+            BrokenSession(),  # type: ignore[arg-type]
+            ["agent-a"],
+            "alice",
+            num_agents=3,
+        )
+
+        assert result == []
+
+    @patch("app.config.settings.FEATURE_CUSTOM_AGENTS", True)
+    async def test_custom_agent_not_appended_beyond_requested_agent_count(self, monkeypatch):
+        from app.api import helpers
+        from app.config import settings
+
+        async def fake_parse_question(*args, **kwargs):
+            return {
+                "agents": [
+                    {"name": "Alpha", "role": "Analyst", "persona": "", "tier": "IMPORTANT"},
+                    {"name": "Beta", "role": "Strategist", "persona": "", "tier": "IMPORTANT"},
+                ],
+                "groups": [],
+            }
+
+        async def fake_run_sim_background(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(helpers, "parse_question", fake_parse_question)
+        monkeypatch.setattr(helpers, "run_sim_background", fake_run_sim_background)
+        monkeypatch.setattr(settings, "FEATURE_AGENT_IDENTITY", False)
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario_id = _create_scenario(session, user_id="alice")
+            custom_id = _create_identity(session, user_id="alice", suffix="custom")
+
+        await helpers.parse_and_run_background(
+            scenario_id,
+            question="What if custom agents join?",
+            num_agents=2,
+            mode="blackboard",
+            hierarchical=False,
+            rounds=1,
+            visualization_enabled=False,
+            reasoning_effort=None,
+            temperature=None,
+            branch_sensitivity=None,
+            fork_prompt_variant=None,
+            fork_detector_active_branch_limit=None,
+            user_id="alice",
+            llm_api_key=None,
+            llm_base_url=None,
+            llm_model=None,
+            llm_requests_per_minute=None,
+            llm_tokens_per_minute=None,
+            disable_user_quota=None,
+            custom_agent_identity_ids=[custom_id],
+        )
+
+        with Session(engine) as session:
+            agents = session.exec(
+                select(Agent).where(Agent.scenario_id == scenario_id)
+            ).all()
+
+        assert len(agents) == 2
+        assert {agent.name for agent in agents} == {"Alpha", "Beta"}
+        assert all(agent.agent_identity_id != custom_id for agent in agents)
 
     def test_none_user_id_vs_none_owner_impossible(self):
         """DB enforces NOT NULL on AgentIdentity.user_id."""

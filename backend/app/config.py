@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     BRANCH_PRUNE_THRESHOLD: float = 0.05
     FORK_SENSITIVITY: float = 0.7
     DEFAULT_NUM_AGENTS: int = 20
+    MAX_CUSTOM_AGENTS: int = 20
     DEFAULT_ROUNDS: int = 10
     HIERARCHICAL_AGENT_THRESHOLD: int = 50  # P3-A: auto-enable hierarchical mode above this
 
@@ -140,6 +141,14 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
     )
 
+    def custom_agent_limit_for(self, num_agents: int | None) -> int:
+        effective = (
+            num_agents
+            if num_agents is not None and num_agents >= 3
+            else self.DEFAULT_NUM_AGENTS
+        )
+        return min(effective, self.MAX_CUSTOM_AGENTS)
+
     @field_validator("DATABASE_URL", mode="after")
     @classmethod
     def normalize_database_url(cls, value: str) -> str:
@@ -233,6 +242,7 @@ class Settings(BaseSettings):
 
         positive_int_fields = {
             "MAX_AGENTS": self.MAX_AGENTS,
+            "MAX_CUSTOM_AGENTS": self.MAX_CUSTOM_AGENTS,
             "MAX_ROUNDS": self.MAX_ROUNDS,
             "MAX_BRANCHES": self.MAX_BRANCHES,
             "MEMORY_COMPRESS_INTERVAL": self.MEMORY_COMPRESS_INTERVAL,

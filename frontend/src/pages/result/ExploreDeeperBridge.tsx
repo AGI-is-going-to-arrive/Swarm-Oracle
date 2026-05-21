@@ -20,6 +20,7 @@ export default function ExploreDeeperBridge() {
     setShowShare,
     agents,
     setAgentFollowupTarget,
+    setProfileTarget,
   } = useResultContext();
 
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -35,6 +36,14 @@ export default function ExploreDeeperBridge() {
   const handleClosePicker = useCallback(() => {
     setPickerOpen(false);
   }, []);
+
+  const handleViewProfile = useCallback(
+    (agent: AgentInfo) => {
+      setPickerOpen(false);
+      setProfileTarget(agent);
+    },
+    [setProfileTarget],
+  );
 
   // Result-level next steps should stay visible in Reader mode. The dedicated
   // Workbench mode only reveals heavier analysis panels below this bridge.
@@ -261,6 +270,7 @@ export default function ExploreDeeperBridge() {
         agents={agents}
         onSelect={handleAgentSelect}
         onClose={handleClosePicker}
+        onViewProfile={handleViewProfile}
       />
     </section>
   );

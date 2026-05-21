@@ -130,6 +130,11 @@ export interface ResultViewContextValue {
   // in-context agent follow-up (opens NodeConversationSheet from ExploreDeeperBridge)
   agentFollowupTarget: AgentInfo | null;
   setAgentFollowupTarget: (agent: AgentInfo | null) => void;
+
+  // in-context agent profile preview (opens AgentProfileSheet from ScenarioAgentPicker)
+  profileTarget: AgentInfo | null;
+  setProfileTarget: (agent: AgentInfo | null) => void;
+  directorUserId: string;
 }
 
 const ResultViewContext = createContext<ResultViewContextValue | null>(null);

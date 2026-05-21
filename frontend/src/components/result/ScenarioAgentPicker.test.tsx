@@ -39,6 +39,7 @@ const agents: AgentInfo[] = [
     tier: 'IMPORTANT',
     emotion: 'calm',
     agent_identity_id: 'identity-1',
+    source_type: 'custom',
   },
   {
     id: 'agent-2',
@@ -94,5 +95,59 @@ describe('ScenarioAgentPicker', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Ada/ }));
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'agent-1' }));
+  });
+
+  it('renders a deep-link <a> for custom agents with identity', () => {
+    renderPicker();
+
+    const link = screen.getByRole('link', { name: 'View profile: Ada' });
+    expect(link.tagName).toBe('A');
+    expect(link).toHaveAttribute('href', '/agents#agent_profile=identity-1&tab=memory');
+    expect(link).toHaveAttribute('data-source-type', 'custom');
+  });
+
+  it('renders a <button> calling onViewProfile for generated agents with identity', () => {
+    const onViewProfile = vi.fn();
+    const generatedAgents: AgentInfo[] = [
+      {
+        id: 'gen-1',
+        name: 'Cy',
+        role: 'Analyst',
+        tier: 'CORE',
+        emotion: 'calm',
+        agent_identity_id: 'identity-gen-1',
+        source_type: 'generated',
+      },
+    ];
+
+    renderPicker({ agents: generatedAgents, onViewProfile });
+
+    const trigger = screen.getByRole('button', { name: 'View profile: Cy' });
+    expect(trigger.tagName).toBe('BUTTON');
+    expect(trigger).toHaveAttribute('data-source-type', 'generated');
+
+    fireEvent.click(trigger);
+    expect(onViewProfile).toHaveBeenCalledTimes(1);
+    expect(onViewProfile).toHaveBeenCalledWith(expect.objectContaining({ id: 'gen-1' }));
+  });
+
+  it('renders neither link nor button when agent has no identity_id', () => {
+    const onViewProfile = vi.fn();
+    const noIdentityAgents: AgentInfo[] = [
+      {
+        id: 'no-id-1',
+        name: 'Dee',
+        role: 'Observer',
+        tier: 'CROWD',
+        emotion: 'curious',
+        source_type: 'generated',
+      },
+    ];
+
+    renderPicker({ agents: noIdentityAgents, onViewProfile });
+
+    expect(screen.queryByRole('link', { name: /View profile/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'View profile: Dee' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('scenario-agent-picker-view-profile')).not.toBeInTheDocument();
   });
 });

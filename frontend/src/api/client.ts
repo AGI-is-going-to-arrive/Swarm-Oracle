@@ -520,7 +520,7 @@ export interface CapabilitiesResponse {
     /** P1-6: capability info for the currently configured server-side provider. */
     provider_capability?: WebSearchProviderCapability;
   };
-  custom_agents: CapabilityEntry;
+  custom_agents: CapabilityEntry & { max_custom_agents?: number };
   agent_identity: CapabilityEntry;
   causal_graph: CapabilityEntry;
   counterfactual_replay: CapabilityEntry;
@@ -1242,7 +1242,12 @@ export async function getInterventionTemplates(): Promise<InterventionTemplate[]
 
 // ── Phase 3 P1-1/P1-2: Agent Identity Memory & Growth ──
 
-import type { AgentMemoryEntry, AgentGrowthEvent } from '../types';
+import type {
+  AgentMemoryEntry,
+  AgentGrowthEvent,
+  AgentIdentityProfile,
+  ScenarioAgentProfileResponse,
+} from '../types';
 
 /** GET /api/agents/identities/:id/memory */
 export async function getIdentityMemory(
@@ -1264,6 +1269,54 @@ export async function getIdentityGrowthEvents(
   return safeGet(
     `/agents/identities/${encodeURIComponent(identityId)}/growth-events?user_id=${encodeURIComponent(uid)}`,
   );
+}
+
+export async function getAgentIdentityProfile(
+  identityId: string,
+  userId?: string,
+  options?: RequestOptions,
+): Promise<AgentIdentityProfile> {
+  return safeGet(
+    withUserIdQuery(`/agents/identities/${encodeURIComponent(identityId)}/profile`, userId),
+    options,
+  );
+}
+
+export function normalizeScenarioAgentSource(
+  source: string | null | undefined,
+): 'generated' | 'custom' | 'replay' | 'unknown' {
+  const normalized = String(source ?? '').trim().toLowerCase();
+  if (normalized === 'generated' || normalized === 'custom' || normalized === 'replay') return normalized;
+  return normalized ? 'unknown' : 'generated';
+}
+
+export async function getAgentProfileData(
+  agent: { agent_identity_id?: string | null; source_type?: string | null },
+  userId?: string,
+): Promise<ScenarioAgentProfileResponse> {
+  const source = normalizeScenarioAgentSource(agent.source_type);
+  if (!agent.agent_identity_id) {
+    return { source, identity_id: null, profile: null, memories: [], growth_events: [] };
+  }
+  const id = agent.agent_identity_id;
+  const [profile, mem, gr] = await Promise.all([
+    getAgentIdentityProfile(id, userId),
+    getIdentityMemory(id, userId).catch((err: unknown) => {
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) throw err;
+      return { identity_id: id, memories: [] as AgentMemoryEntry[] };
+    }),
+    getIdentityGrowthEvents(id, userId).catch((err: unknown) => {
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) throw err;
+      return { identity_id: id, events: [] as AgentGrowthEvent[] };
+    }),
+  ]);
+  return {
+    source,
+    identity_id: id,
+    profile,
+    memories: mem.memories ?? [],
+    growth_events: gr.events ?? [],
+  };
 }
 
 // ── Identity Memory Inspector ───────────────────────────

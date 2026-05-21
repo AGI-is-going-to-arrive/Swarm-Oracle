@@ -91,6 +91,59 @@ def _parse_json_object(raw: str | None) -> dict[str, object]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _build_custom_agents_to_inject(
+    session: Session,
+    ids: list[str] | None,
+    user_id: str | None,
+    num_agents: int | None,
+) -> list[dict]:
+    if not ids or not settings.FEATURE_CUSTOM_AGENTS or user_id is None:
+        return []
+
+    limit = settings.custom_agent_limit_for(num_agents)
+    if limit <= 0:
+        return []
+
+    try:
+        from app.models.agent_identity import AgentIdentity
+    except Exception:
+        logger.debug("custom agent model import failed (non-blocking)", exc_info=True)
+        return []
+
+    custom_agents_to_inject: list[dict] = []
+    seen_ids: set[str] = set()
+    for raw_id in ids:
+        cid = str(raw_id).strip()
+        if not cid or cid in seen_ids:
+            continue
+        seen_ids.add(cid)
+        if len(custom_agents_to_inject) >= limit:
+            break
+
+        try:
+            identity = session.get(AgentIdentity, cid)
+            if not (
+                identity
+                and identity.kind == "custom"
+                and identity.user_id == user_id
+            ):
+                continue
+            custom_agents_to_inject.append({
+                "name": identity.display_name,
+                "role": identity.role,
+                "persona": identity.persona or "",
+                "tier": identity.preferred_tier or "IMPORTANT",
+                "identity_id": identity.id,
+                "source_type": "custom",
+                "knowledge_domains": _parse_json_list(identity.knowledge_domain_json),
+                "decision_bias": _parse_json_object(identity.decision_bias_json),
+            })
+        except Exception:
+            logger.debug("custom agent injection failed for %s (non-blocking)", cid, exc_info=True)
+            continue
+    return custom_agents_to_inject
+
+
 def _normalize_agent_tier(raw_tier: object, *, is_custom: bool = False) -> AgentTier:
     tier_value = str(raw_tier or "IMPORTANT").strip().upper() or "IMPORTANT"
     if is_custom and tier_value == "CORE":
@@ -906,26 +959,12 @@ async def parse_and_run_background(
                         continuity_override_agent_map[agent_key] = payload
 
         # Phase 3 F3: Inject custom agents into CROWD slots (gated)
-        custom_agents_to_inject: list[dict] = []
-        if custom_agent_identity_ids and settings.FEATURE_CUSTOM_AGENTS:
-            try:
-                from app.models.agent_identity import AgentIdentity
-                for cid in custom_agent_identity_ids[:5]:
-                    identity = session.get(AgentIdentity, cid)
-                    if (identity and identity.kind == "custom"
-                            and user_id is not None and identity.user_id == user_id):
-                        custom_agents_to_inject.append({
-                            "name": identity.display_name,
-                            "role": identity.role,
-                            "persona": identity.persona or "",
-                            "tier": identity.preferred_tier or "IMPORTANT",
-                            "identity_id": identity.id,
-                            "source_type": "custom",
-                            "knowledge_domains": _parse_json_list(identity.knowledge_domain_json),
-                            "decision_bias": _parse_json_object(identity.decision_bias_json),
-                        })
-            except Exception:
-                logger.debug("custom agent injection failed (non-blocking)", exc_info=True)
+        custom_agents_to_inject = _build_custom_agents_to_inject(
+            session,
+            custom_agent_identity_ids,
+            user_id,
+            num_agents,
+        )
 
         parsed_agents = list(parsed.get("agents", []))
         # Replace CROWD slots with custom agents, tracking name changes
@@ -942,7 +981,7 @@ async def parse_and_run_background(
                     if old_name and old_name != new_name:
                         crowd_name_remap[old_name] = new_name
                     parsed_agents[crowd_indices[j]] = custom
-                else:
+                elif len(parsed_agents) < num_agents:
                     parsed_agents.append(custom)
 
         agent_name_to_id: dict[str, str] = {}
@@ -1367,6 +1406,7 @@ def load_scenario_response(engine, scenario_id: str) -> ScenarioResponse | None:
                     "emotion": a.emotion,
                     "group_id": a.group_id,
                     "agent_identity_id": getattr(a, "agent_identity_id", None),
+                    "source_type": getattr(a, "source_type", None),
                 }
                 for a in agents
             ],

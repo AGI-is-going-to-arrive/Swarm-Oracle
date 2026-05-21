@@ -1085,6 +1085,23 @@ export interface AgentGrowthEvent {
   created_at: string | null;
 }
 
+export interface AgentIdentityProfile extends Omit<AgentIdentityInfo, 'created_at' | 'updated_at'> {
+  decision_bias?: Record<string, unknown> | null;
+  knowledge_domains?: KnowledgeDomain[] | string[] | null;
+  preferred_tier?: 'IMPORTANT' | 'CROWD' | null;
+  is_favorite?: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ScenarioAgentProfileResponse {
+  source: 'generated' | 'custom' | 'replay' | 'unknown';
+  identity_id: string | null;
+  profile: AgentIdentityProfile | null;
+  memories: AgentMemoryEntry[];
+  growth_events: AgentGrowthEvent[];
+}
+
 // ── Replay Trace (P1-1) ─────────────────────────────────
 export interface ReplayTraceNode {
   branch_id: string;

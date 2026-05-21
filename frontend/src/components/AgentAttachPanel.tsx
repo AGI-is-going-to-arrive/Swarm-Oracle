@@ -10,17 +10,27 @@ import { useTranslation } from 'react-i18next';
 import { useAgentStore } from '../stores/agentStore';
 import './AgentAttachPanel.css';
 
-const MAX_AGENTS = 5;
+const DEFAULT_MAX_AGENTS = 1;
 
 interface Props {
   userId: string;
   visible: boolean;
+  maxSelected?: number;
 }
 
-export function AgentAttachPanel({ userId, visible }: Props) {
+export function AgentAttachPanel({ userId, visible, maxSelected }: Props) {
   const { t } = useTranslation();
-  const { identities, loading, error, selectedIds, fetchIdentities, toggleSelection } =
-    useAgentStore();
+  const {
+    identities,
+    loading,
+    error,
+    selectedIds,
+    fetchIdentities,
+    toggleSelection,
+    pruneSelectionToSize,
+  } = useAgentStore();
+  const effectiveMax =
+    typeof maxSelected === 'number' && maxSelected >= 0 ? maxSelected : DEFAULT_MAX_AGENTS;
 
   useEffect(() => {
     if (visible) {
@@ -28,15 +38,23 @@ export function AgentAttachPanel({ userId, visible }: Props) {
     }
   }, [visible, userId, fetchIdentities]);
 
+  useEffect(() => {
+    if (selectedIds.size > effectiveMax) {
+      pruneSelectionToSize(effectiveMax);
+    }
+  }, [effectiveMax, selectedIds.size, pruneSelectionToSize]);
+
   if (!visible) return null;
 
   const customAgents = identities.filter((a) => a.kind === 'custom');
-  const atLimit = selectedIds.size >= MAX_AGENTS;
+  const atLimit = selectedIds.size >= effectiveMax;
 
   if (loading) {
     return (
       <div className="agent-attach-panel">
-        <p className="agent-attach-loading">{t('agents.attach_title', 'Attach Custom Agents')}…</p>
+        <p className="agent-attach-loading" role="status" aria-live="polite">
+          {t('agents.attach_title', 'Attach Custom Agents')}…
+        </p>
       </div>
     );
   }
@@ -87,7 +105,11 @@ export function AgentAttachPanel({ userId, visible }: Props) {
               atLimit ? ' agent-attach-counter__count--full' : ''
             }`}
           >
-            {selectedIds.size}/{MAX_AGENTS}
+            {t('agents.attach_counter', {
+              selected: selectedIds.size,
+              maxAllowed: effectiveMax,
+              defaultValue: `${selectedIds.size}/${effectiveMax}`,
+            })}
           </span>
           {atLimit && (
             <span
@@ -95,7 +117,12 @@ export function AgentAttachPanel({ userId, visible }: Props) {
               role="status"
               aria-live="polite"
             >
-              {t('agents.max_reached', 'Max reached')}
+              {effectiveMax === 0
+                ? t('agents.zero_slot', 'Increase total agents to attach custom ones')
+                : t('agents.max_reached_dynamic', {
+                    maxAllowed: effectiveMax,
+                    defaultValue: 'Max reached',
+                  })}
             </span>
           )}
         </div>
@@ -104,7 +131,7 @@ export function AgentAttachPanel({ userId, visible }: Props) {
       <div className="agent-attach-cards">
         {customAgents.map((agent) => {
           const selected = selectedIds.has(agent.id);
-          const disabled = !selected && atLimit;
+          const disabled = !selected && (atLimit || effectiveMax === 0);
           const tierClass = (agent.preferred_tier || 'IMPORTANT').toLowerCase();
 
           return (
@@ -130,7 +157,7 @@ export function AgentAttachPanel({ userId, visible }: Props) {
                 <input
                   type="checkbox"
                   checked={selected}
-                  onChange={() => toggleSelection(agent.id)}
+                  onChange={() => toggleSelection(agent.id, effectiveMax)}
                   disabled={disabled}
                   className="agent-attach-card__check"
                   aria-label={`${agent.display_name}`}

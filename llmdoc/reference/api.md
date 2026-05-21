@@ -95,8 +95,13 @@
   - 前端通常先调用 `POST /api/agents/identities/preflight`
   - `reuse_existing` 需要带 `identity_id`，后端会校验它属于当前 `user_id`
   - `create_new` 会让真正的 identity 解析跳过 L2 fuzzy reuse
+- `POST /api/scenario` 当前也接受可选 `custom_agent_identity_ids`：
+  - 字段必须是 list；字符串不会被拆成字符数组
+  - 后端会 trim、跳过空字符串并按顺序去重
+  - 正常请求的数量上限是 `min(num_agents, MAX_CUSTOM_AGENTS)`；未传 `num_agents` 时按默认 Agent 数计算
+  - 注入层只会加载当前用户自己的 `kind=custom` identity；无效 ID、跨用户 ID、非 custom identity 或单个读取异常都会跳过
 - `GET /api/scenario/{scenario_id}` 和 `GET /api/scenario/{scenario_id}/story` 的 `branches[]` 当前会回显 `fork_round / replay_kind / replay_source_branch_id`；普通分支的 replay 字段可为 `null`，replay/import/counterfactual/resume 分支用它保留来源分支语义，结果页也用 `fork_round` 定位可回溯的 fork point。
-- `GET /api/scenario/{scenario_id}` 的 `agents[]` 与 `GET /api/scenario/{scenario_id}/agents` 当前都会返回结果页 Agent picker 需要的展示字段；除 `id / name / role / tier / stance / emotion / group_id` 外，还包括 `persona` 和可空 `agent_identity_id`。
+- `GET /api/scenario/{scenario_id}` 的 `agents[]` 与 `GET /api/scenario/{scenario_id}/agents` 当前都会返回结果页 Agent picker 需要的展示字段；除 `id / name / role / tier / stance / emotion / group_id` 外，还包括 `persona`、可空 `agent_identity_id` 和可空 `source_type`。前端用 `source_type` 区分 custom 深链、generated/replay 页内档案，以及未知来源的保守展示。
 - `GET /api/scenario/{scenario_id}/story` 在 `FEATURE_RESULT_VERDICT=true` 且 `parsed_context.result_quality` 有数据时，会额外回显顶层 `verdict / verdict_confidence`，以及 `branches[].question_answer`。关闭开关、旧 scenario、空字符串或 malformed `result_quality` 都会降级为空字段；未知 confidence 会归一化为 `medium`。
 - `GET /api/scenario/{scenario_id}/conversations` 受 `FEATURE_AGENT_CONVERSATION` gate，要求 signed principal 能看到该 scenario；`cursor` 是 offset cursor，`limit` 范围 `1..50`，返回项只带 thread 摘要，完整 turn 历史仍走 `GET /api/conversation/{thread_id}`。
 - `POST /api/scenario/{scenario_id}/cancel` 只接受 `parsing / simulating / narrating / cancelled`；`done / error` 会返回 `409 SIMULATION_NOT_RUNNING`。成功请求会把 scenario 持久化到 `cancelled`，并尽量取消本进程里的后台 task。运行中 worker 即使已经有本地 cancel token，也会继续读取 DB `cancelled` 状态，避免跨进程取消被漏掉。
@@ -228,7 +233,7 @@
 - `FEATURE_NEW_SOURCES=true` 时，`web_search.providers.{family}.capability` 会给每个 family entry 附上同一套 domain-filter 能力摘要和 `max_domains`。
 - `GET /api/capabilities` 当前顶层 key 固定为：
   `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst / snapshot_export / education_templates / persona_export / prediction_journal / result_verdict`。
-  除 `web_search` 外，其余 17 个都是功能开关 registry entry，至少带 `enabled / version`。`FEATURE_HALLUCINATION_GATE` 只影响后端 warning metadata，不是 capability key；`result_verdict` 是 story 字段与前端展示 gate，不是新 endpoint。
+  除 `web_search` 外，其余 17 个都是功能开关 registry entry，至少带 `enabled / version`；`custom_agents` 还会带 `max_custom_agents`，供首页 attach panel 动态收口。`FEATURE_HALLUCINATION_GATE` 只影响后端 warning metadata，不是 capability key；`result_verdict` 是 story 字段与前端展示 gate，不是新 endpoint。
 
 ## Admin Diagnostics
 
@@ -345,6 +350,7 @@
 | `GET` | `/api/agents/identities` | Agent 身份列表 | `FEATURE_CUSTOM_AGENTS` 或 `FEATURE_AGENT_IDENTITY` |
 | `GET` | `/api/agents/identities/favorites` | 当前用户收藏的 Agent 身份 | `FEATURE_CUSTOM_AGENTS` |
 | `POST` | `/api/agents/identities/preflight` | 创建 scenario 前预览 continuity 匹配 | `FEATURE_AGENT_IDENTITY` |
+| `GET` | `/api/agents/identities/{id}/profile` | 当前用户拥有的 Agent 档案基础信息 | `FEATURE_CUSTOM_AGENTS` 或 `FEATURE_AGENT_IDENTITY` |
 | `GET` | `/api/agents/identities/{id}/memory` | 跨场景记忆 | `FEATURE_AGENT_IDENTITY` |
 | `GET` | `/api/agents/identities/{id}/memories` | identity memory inspector 明细 | `FEATURE_AGENT_IDENTITY` |
 | `GET` | `/api/agents/identities/{id}/growth-events` | 成长事件时间线 | `FEATURE_AGENT_IDENTITY` |
@@ -374,6 +380,7 @@
 - `FEATURE_KG_EXPLORER` 只控制 KG Explorer / Timeline Galaxy 的前端 capability gate；当前页面数据仍读取 `GET /api/scenario/{id}/causal-graph`，因此也需要 `FEATURE_CAUSAL_GRAPH=true`。
 - `POST /api/agents/identities/preflight` 当前只返回需要 L3 确认的 `L2 fuzzy candidate`；`L1 exact` 和全新 identity 不会阻断前端启动。解析阶段最多等待 10 秒；超时返回 `504 IDENTITY_PREFLIGHT_TIMEOUT`，后端不会把它包装成“无匹配”。当前首页启动流会提示 preflight 错误，但继续按无 continuity override 创建 scenario。
 - favorite 只写当前用户拥有的 identity；跨用户或不存在的 identity 返回 404，不泄漏数据。
+- `GET /api/agents/identities/{id}/profile` 用于 Agent Library deep link 和结果页内联档案 sheet。它要求能解析出当前 user，identity 不存在或 owner 不匹配统一返回 404；两个 Agent feature flag 都关闭时也返回 404。`created_at / updated_at` 会在可格式化时返回 ISO 字符串，缺失或不可格式化时返回 `null`。
 - `GET /api/agents/identities/{id}/memories` 会按 owner 校验，并返回最多 100 条 inspector memory。向量库不可用时仍返回 200，但会带机器可读的 `error` 字段，方便前端区分空记忆和基础设施错误。
 - `GET /api/agents/identities/{id}/growth-events` 当前要求 `user_id`；缺失时返回 400，identity 不存在或 owner 不匹配时返回 404。
 - `POST /api/agents/from-document` 只接受 PDF：`application/pdf / application/x-pdf` 直接通过，空 content type 或 `application/octet-stream` 只在文件名以 `.pdf` 结尾时作为兼容路径接受。上传上限 25 MB，最多读取 200 页和 1000000 个字符，并带 30 秒 PDF 解析超时；空文件返回 `DOCUMENT_FILE_EMPTY`，超大文件返回 413 `DOCUMENT_FILE_TOO_LARGE`，非法 PDF 返回 `DOCUMENT_PDF_INVALID`，无可抽取文本返回 `DOCUMENT_TEXT_EMPTY`，解析超时返回 `DOCUMENT_PDF_TIMEOUT`。

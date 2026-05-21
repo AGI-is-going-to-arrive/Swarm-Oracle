@@ -559,6 +559,12 @@ export function InputView() {
     };
   }, [byokRequestsPerMinute, byokTokensPerMinute, numAgents, rounds]);
   const isSimulationBudgetBlocked = Boolean(byokBudgetRecommendation?.overBudget);
+  const maxCustomAgents = useMemo(() => {
+    const serverMax = caps?.custom_agents?.max_custom_agents;
+    const capLimit = typeof serverMax === 'number' && serverMax >= 0 ? serverMax : 1;
+    return Math.min(numAgents, capLimit);
+  }, [numAgents, caps?.custom_agents?.max_custom_agents]);
+
   const runtimePresetConfig = useMemo(
     () => getScenarioRuntimePresetConfig(runtimePreset),
     [runtimePreset],
@@ -781,6 +787,17 @@ export function InputView() {
     continuityOverrides?: ContinuityOverride[],
   ): CreateScenarioOptions => {
     const trimmed = launch.nextQuestion.trim();
+    const serverMaxCustomAgents = caps?.custom_agents?.max_custom_agents;
+    const effectiveMaxCustomAgents = Math.max(
+      0,
+      Math.min(
+        launch.nextAgents,
+        typeof serverMaxCustomAgents === 'number' && serverMaxCustomAgents >= 0
+          ? serverMaxCustomAgents
+          : 1,
+      ),
+    );
+    const clampedCustomAgentIds = Array.from(agentSelectedIds).slice(0, effectiveMaxCustomAgents);
 
     let campaignContext: CampaignContext | undefined = launch.campaignContext;
     if (!campaignContext && launch.challengeId) {
@@ -840,13 +857,14 @@ export function InputView() {
       webSearchIntensity: webSearchEnabled ? webSearchIntensity : undefined,
       continuityOverrides,
       ...buildScenarioRuntimePresetOptions(runtimePreset),
-      ...(agentSelectedIds.size > 0 && { customAgentIdentityIds: [...agentSelectedIds] }),
+      ...(clampedCustomAgentIds.length > 0 && { customAgentIdentityIds: clampedCustomAgentIds }),
       ...(campaignContext && { campaignContext }),
     };
   }, [
     agentSelectedIds,
     byokRequestsPerMinute,
     byokTokensPerMinute,
+    caps?.custom_agents?.max_custom_agents,
     directorIdentity.userId,
     disableUserQuota,
     llmApiKey,
@@ -2081,7 +2099,11 @@ export function InputView() {
 
                       {/* Phase 3 F3: Custom Agent Attach Panel */}
                       {caps?.custom_agents?.enabled && (
-                        <AgentAttachPanel userId={directorIdentity.userId} visible={true} />
+                        <AgentAttachPanel
+                          userId={directorIdentity.userId}
+                          visible={true}
+                          maxSelected={maxCustomAgents}
+                        />
                       )}
                   </div>
                 </div>

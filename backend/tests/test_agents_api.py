@@ -1,11 +1,27 @@
 """Tests for Agent Identity & Persona Workshop API endpoints."""
 
+import base64
+import hashlib
+import hmac
+import json
+
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlmodel import Session
 
 from app.config import settings
 from app.main import app
-from app.models.database import init_db
+from app.models.agent_identity import AgentIdentity
+from app.models.database import get_engine, init_db
+
+
+def _make_signed_session_token(secret: str, subject: str) -> str:
+    payload = json.dumps({"sub": subject}, separators=(",", ":")).encode("utf-8")
+    payload_segment = base64.urlsafe_b64encode(payload).decode("utf-8").rstrip("=")
+    signing_input = f"v1.{payload_segment}".encode("utf-8")
+    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    signature_segment = base64.urlsafe_b64encode(signature).decode("utf-8").rstrip("=")
+    return f"v1.{payload_segment}.{signature_segment}"
 
 
 @pytest.fixture(autouse=True)
@@ -148,6 +164,235 @@ class TestWorkshopCRUD:
         resp = await client.delete("/api/agents/workshop/nonexistent")
         assert resp.status_code == 404
         assert resp.json()["detail"]["code"] == "AGENT_IDENTITY_NOT_FOUND"
+
+
+class TestIdentityProfileEndpoint:
+    """Profile endpoint used by scenario agent profile drawers."""
+
+    def _create_identity(
+        self,
+        identity_id: str,
+        *,
+        user_id: str = "profile-user",
+        kind: str = "custom",
+        decision_bias_json: str | None = '{"caution": 0.8}',
+        knowledge_domain_json: str | None = '["law", "science"]',
+    ) -> None:
+        with Session(get_engine()) as session:
+            session.add(
+                AgentIdentity(
+                    id=identity_id,
+                    user_id=user_id,
+                    kind=kind,
+                    display_name="Profile Agent",
+                    role="analyst",
+                    persona="Reads weak signals",
+                    decision_bias_json=decision_bias_json,
+                    knowledge_domain_json=knowledge_domain_json,
+                    continuity_key=f"{identity_id}-key",
+                    preferred_tier="CROWD",
+                    is_favorite=True,
+                )
+            )
+            session.commit()
+
+    async def test_get_identity_profile_returns_generated_identity(
+        self,
+        client: AsyncClient,
+    ):
+        self._create_identity("profile-generated", kind="generated")
+
+        resp = await client.get(
+            "/api/agents/identities/profile-generated/profile",
+            params={"user_id": "profile-user"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == "profile-generated"
+        assert data["kind"] == "generated"
+        assert data["user_id"] == "profile-user"
+
+    async def test_get_identity_profile_returns_owned_identity(
+        self,
+        client: AsyncClient,
+    ):
+        self._create_identity("profile-owned")
+
+        resp = await client.get(
+            "/api/agents/identities/profile-owned/profile",
+            params={"user_id": "profile-user"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == "profile-owned"
+        assert data["user_id"] == "profile-user"
+        assert data["display_name"] == "Profile Agent"
+        assert data["decision_bias"] == {"caution": 0.8}
+        assert data["knowledge_domains"] == ["law", "science"]
+        assert data["preferred_tier"] == "CROWD"
+        assert data["is_favorite"] is True
+        assert data["created_at"] is not None
+        assert data["updated_at"] is not None
+
+    async def test_get_identity_profile_ignores_malformed_json(
+        self,
+        client: AsyncClient,
+    ):
+        self._create_identity(
+            "profile-malformed",
+            decision_bias_json='["not-an-object"]',
+            knowledge_domain_json='{"not": "a-list"}',
+        )
+
+        resp = await client.get(
+            "/api/agents/identities/profile-malformed/profile",
+            params={"user_id": "profile-user"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["decision_bias"] is None
+        assert data["knowledge_domains"] is None
+
+    async def test_get_identity_profile_conceals_other_users_identity(
+        self,
+        client: AsyncClient,
+    ):
+        self._create_identity("profile-foreign", user_id="profile-other")
+
+        resp = await client.get(
+            "/api/agents/identities/profile-foreign/profile",
+            params={"user_id": "profile-user"},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "AGENT_IDENTITY_NOT_FOUND"
+
+    async def test_get_identity_profile_disabled_when_both_agent_flags_off(
+        self,
+        client: AsyncClient,
+    ):
+        settings.FEATURE_CUSTOM_AGENTS = False
+        settings.FEATURE_AGENT_IDENTITY = False
+
+        resp = await client.get(
+            "/api/agents/identities/profile-any/profile",
+            params={"user_id": "profile-user"},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "FEATURE_DISABLED"
+
+    async def test_get_identity_profile_requires_user_id_without_signed_principal(
+        self,
+        client: AsyncClient,
+    ):
+        resp = await client.get("/api/agents/identities/profile-any/profile")
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "USER_ID_REQUIRED"
+
+    async def test_get_identity_profile_available_with_agent_identity_flag_only(
+        self,
+        client: AsyncClient,
+    ):
+        settings.FEATURE_CUSTOM_AGENTS = False
+        settings.FEATURE_AGENT_IDENTITY = True
+        self._create_identity("profile-agent-identity-only", kind="generated")
+
+        resp = await client.get(
+            "/api/agents/identities/profile-agent-identity-only/profile",
+            params={"user_id": "profile-user"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["id"] == "profile-agent-identity-only"
+
+    async def test_get_identity_profile_available_with_custom_agents_flag_only(
+        self,
+        client: AsyncClient,
+    ):
+        settings.FEATURE_CUSTOM_AGENTS = True
+        settings.FEATURE_AGENT_IDENTITY = False
+        self._create_identity("profile-custom-only", kind="custom")
+
+        resp = await client.get(
+            "/api/agents/identities/profile-custom-only/profile",
+            params={"user_id": "profile-user"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["id"] == "profile-custom-only"
+
+    async def test_get_identity_profile_rejects_raw_secret_when_auth_enabled(
+        self,
+        monkeypatch,
+    ):
+        secret = "s3cret"
+        monkeypatch.setattr(settings, "SESSION_SECRET", secret)
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"X-Session-Token": secret},
+        ) as authed_client:
+            resp = await authed_client.get(
+                "/api/agents/identities/profile-owned/profile",
+                params={"user_id": "profile-user"},
+            )
+
+        assert resp.status_code == 401
+        assert resp.json()["detail"]["code"] == "SESSION_PRINCIPAL_REQUIRED"
+
+    async def test_get_identity_profile_rejects_mismatched_signed_principal(
+        self,
+        monkeypatch,
+    ):
+        secret = "s3cret"
+        token = _make_signed_session_token(secret, "profile-user")
+        monkeypatch.setattr(settings, "SESSION_SECRET", secret)
+        self._create_identity("profile-owned")
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"X-Session-Token": token},
+        ) as authed_client:
+            resp = await authed_client.get(
+                "/api/agents/identities/profile-owned/profile",
+                params={"user_id": "profile-other"},
+            )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["code"] == "SESSION_PRINCIPAL_MISMATCH"
+
+    async def test_get_identity_profile_accepts_signed_principal_without_user_id(
+        self,
+        monkeypatch,
+    ):
+        secret = "s3cret"
+        token = _make_signed_session_token(secret, "profile-user")
+        monkeypatch.setattr(settings, "SESSION_SECRET", secret)
+        self._create_identity("profile-signed")
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"X-Session-Token": token},
+        ) as authed_client:
+            resp = await authed_client.get(
+                "/api/agents/identities/profile-signed/profile",
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["id"] == "profile-signed"
+
+    def test_isoformat_or_none_handles_nullable_datetime(self):
+        from app.api.agents import _isoformat_or_none
+
+        assert _isoformat_or_none(None) is None
 
 
 class TestMemoryEndpoint:

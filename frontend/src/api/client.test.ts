@@ -8,10 +8,13 @@ import {
   exportScenario,
   exportScenarioSnapshot,
   generateSocialCopy,
+  getAgentIdentityProfile,
+  getAgentProfileData,
   getInterventionEffects,
   getScenario,
   identityContinuityPreflight,
   importScenarioSnapshot,
+  normalizeScenarioAgentSource,
 } from './client';
 import type {
   CreateScenarioOptions,
@@ -497,5 +500,147 @@ describe('getInterventionEffects', () => {
     await getInterventionEffects('a/b?c');
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toContain('/api/scenario/a%2Fb%3Fc/intervention-effects');
+  });
+});
+
+describe('agent profile helpers', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('getAgentIdentityProfile hits the per-identity profile endpoint with user_id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-type' ? 'application/json' : null,
+      },
+      text: vi.fn().mockResolvedValue(JSON.stringify({ identity_id: 'agent-9' })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getAgentIdentityProfile('agent-9', 'user-1');
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('/api/agents/identities/agent-9/profile');
+    expect(url).toContain('user_id=user-1');
+  });
+
+  it('normalizeScenarioAgentSource normalizes well-known and exotic source values', () => {
+    expect(normalizeScenarioAgentSource('generated')).toBe('generated');
+    expect(normalizeScenarioAgentSource('custom')).toBe('custom');
+    expect(normalizeScenarioAgentSource('replay')).toBe('replay');
+    expect(normalizeScenarioAgentSource('REPLAY')).toBe('replay');
+    expect(normalizeScenarioAgentSource('  custom  ')).toBe('custom');
+    expect(normalizeScenarioAgentSource(null)).toBe('generated');
+    expect(normalizeScenarioAgentSource(undefined)).toBe('generated');
+    expect(normalizeScenarioAgentSource('')).toBe('generated');
+    expect(normalizeScenarioAgentSource('mystery')).toBe('unknown');
+  });
+
+  it('getAgentProfileData aggregates profile + memory + growth-events when identity present and returns shell when absent', async () => {
+    const responses = [
+      JSON.stringify({ identity_id: 'agent-7', display_name: 'Alpha' }),
+      JSON.stringify({ identity_id: 'agent-7', memories: [{ id: 'm1' }] }),
+      JSON.stringify({ identity_id: 'agent-7', events: [{ id: 'e1' }] }),
+    ];
+    let call = 0;
+    const fetchMock = vi.fn(() => Promise.resolve({
+      ok: true,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-type' ? 'application/json' : null,
+      },
+      text: vi.fn().mockResolvedValue(responses[call++]),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const aggregated = await getAgentProfileData(
+      { agent_identity_id: 'agent-7', source_type: 'custom' },
+      'user-1',
+    );
+
+    expect(aggregated.source).toBe('custom');
+    expect(aggregated.identity_id).toBe('agent-7');
+    expect(aggregated.profile).toEqual({ identity_id: 'agent-7', display_name: 'Alpha' });
+    expect(aggregated.memories).toEqual([{ id: 'm1' }]);
+    expect(aggregated.growth_events).toEqual([{ id: 'e1' }]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    const shell = await getAgentProfileData(
+      { agent_identity_id: null, source_type: 'generated' },
+      'user-1',
+    );
+    expect(shell.identity_id).toBeNull();
+    expect(shell.profile).toBeNull();
+    expect(shell.memories).toEqual([]);
+    expect(shell.growth_events).toEqual([]);
+  });
+
+  it('getAgentProfileData falls back to empty memory and growth history for non-auth timeline failures', async () => {
+    let call = 0;
+    const fetchMock = vi.fn(() => {
+      call += 1;
+      const callIndex = call;
+      const ok = callIndex === 1;
+      return Promise.resolve({
+        ok,
+        status: ok ? 200 : 500,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === 'content-type' ? 'application/json' : null,
+        },
+        text: vi.fn().mockResolvedValue(
+          ok
+            ? JSON.stringify({ identity_id: 'agent-8', display_name: 'Beta' })
+            : JSON.stringify({ detail: { code: 'SERVER_ERROR', message: 'boom' } }),
+        ),
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const aggregated = await getAgentProfileData(
+      { agent_identity_id: 'agent-8', source_type: 'generated' },
+      'user-1',
+    );
+
+    expect(aggregated.profile).toEqual({ identity_id: 'agent-8', display_name: 'Beta' });
+    expect(aggregated.memories).toEqual([]);
+    expect(aggregated.growth_events).toEqual([]);
+  });
+
+  it('getAgentProfileData does not swallow 401/403 timeline errors', async () => {
+    let call = 0;
+    const fetchMock = vi.fn(() => {
+      call += 1;
+      const callIndex = call;
+      const forbidden = callIndex === 2;
+      return Promise.resolve({
+        ok: !forbidden,
+        status: forbidden ? 403 : 200,
+        headers: {
+          get: (name: string) =>
+            name.toLowerCase() === 'content-type' ? 'application/json' : null,
+        },
+        text: vi.fn().mockResolvedValue(
+          forbidden
+            ? JSON.stringify({ detail: { code: 'SESSION_PRINCIPAL_MISMATCH', message: 'denied' } })
+            : JSON.stringify(
+                callIndex === 1
+                  ? { identity_id: 'agent-9', display_name: 'Gamma' }
+                  : { identity_id: 'agent-9', events: [] },
+              ),
+        ),
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      getAgentProfileData(
+        { agent_identity_id: 'agent-9', source_type: 'generated' },
+        'user-1',
+      ),
+    ).rejects.toMatchObject({ status: 403, code: 'SESSION_PRINCIPAL_MISMATCH' });
   });
 });

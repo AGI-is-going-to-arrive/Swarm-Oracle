@@ -87,6 +87,12 @@
 | `FORK_SENSITIVITY` | `0.7` | 默认 fork 灵敏度 |
 | `DEFAULT_NUM_AGENTS` | `20` | 默认 agent 数 |
 | `DEFAULT_ROUNDS` | `10` | 默认轮数 |
+| `MAX_CUSTOM_AGENTS` | `20` | 单局最多允许附加的自建 Agent 数；实际请求还会被 `num_agents` 进一步收口 |
+
+说明：
+
+- 主推演的自建 Agent 注入上限是动态值：正常请求按 `min(num_agents, MAX_CUSTOM_AGENTS)` 计算；请求没带 `num_agents` 时按 `DEFAULT_NUM_AGENTS` 计算。
+- 后端 schema 会先拒绝非 list 的 `custom_agent_identity_ids`，再 trim、跳过空字符串、去重并检查动态上限。注入层还会再次去重，只加载当前用户自己的 `kind=custom` identity。
 
 ## 并发与限流
 
@@ -263,7 +269,7 @@
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
-| `FEATURE_CUSTOM_AGENTS` | `false` | 启用自建 Agent workshop CRUD、主推演自建 Agent 注入，以及 Debate `custom_agent_ids` 绑定 |
+| `FEATURE_CUSTOM_AGENTS` | `false` | 启用自建 Agent workshop CRUD、主推演自建 Agent 注入、capabilities 里的 `max_custom_agents`，以及 Debate `custom_agent_ids` 绑定 |
 | `FEATURE_AGENT_IDENTITY` | `false` | 启用跨场景身份解析 + 记忆查询 |
 | `FEATURE_PREDICTION_JOURNAL` | `false` | 启用个人预测日志、resolve 与校准数据 API |
 | `FEATURE_RESULT_VERDICT` | `true` | 启用 Result Quality verdict generation、branch question-answer 持久化、`/api/capabilities.result_verdict` 与 story extra fields |

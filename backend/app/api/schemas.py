@@ -190,12 +190,42 @@ class CreateScenarioRequest(BaseModel):
     # Campaign Phase 1: authoritative challenge/track context for finalize accounting
     campaign_context: CampaignContext | None = None
 
-    @field_validator("custom_agent_identity_ids")
+    @field_validator("custom_agent_identity_ids", mode="before")
     @classmethod
-    def validate_custom_agent_identity_ids(cls, v: list[str] | None) -> list[str] | None:
-        if v is not None and len(v) > 5:
-            raise ValueError("custom_agent_identity_ids must contain at most 5 items")
-        return v
+    def validate_custom_agent_identity_ids(cls, v: object) -> list[str] | None:
+        if v is None:
+            return None
+        if not isinstance(v, list):
+            raise ValueError("custom_agent_identity_ids must be a list")
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in v:
+            if not isinstance(item, str):
+                raise ValueError("custom_agent_identity_ids must contain strings")
+            candidate = item.strip()
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            normalized.append(candidate)
+
+        if len(normalized) > settings.MAX_CUSTOM_AGENTS:
+            raise ValueError(
+                f"custom_agent_identity_ids must contain at most {settings.MAX_CUSTOM_AGENTS} items"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_custom_agent_identity_count(self) -> "CreateScenarioRequest":
+        if self.custom_agent_identity_ids is None:
+            return self
+        limit = settings.custom_agent_limit_for(self.num_agents)
+        if len(self.custom_agent_identity_ids) > limit:
+            raise ValueError(
+                f"custom_agent_identity_ids must contain at most {limit} items "
+                "for the requested agent count"
+            )
+        return self
 
     @field_validator("continuity_overrides")
     @classmethod

@@ -15,7 +15,8 @@ interface AgentStoreState {
   requestSeq: number;
 
   fetchIdentities: (userId: string) => Promise<void>;
-  toggleSelection: (id: string) => void;
+  toggleSelection: (id: string, maxSelected?: number) => void;
+  pruneSelectionToSize: (maxSize: number) => void;
   clearSelection: () => void;
   setIdentities: (identities: AgentIdentityInfo[]) => void;
 }
@@ -78,15 +79,27 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     }
   },
 
-  toggleSelection: (id: string) => {
+  toggleSelection: (id: string, maxSelected?: number) => {
     const current = get().selectedIds;
     const next = new Set(current);
     if (next.has(id)) {
       next.delete(id);
-    } else if (next.size < 5) {
-      next.add(id);
+    } else {
+      const cap =
+        typeof maxSelected === 'number' && maxSelected >= 0
+          ? maxSelected
+          : Number.POSITIVE_INFINITY;
+      if (next.size < cap) next.add(id);
     }
     set({ selectedIds: next });
+  },
+
+  pruneSelectionToSize: (maxSize: number) => {
+    const current = get().selectedIds;
+    const cap = Math.max(0, Math.trunc(maxSize));
+    if (current.size <= cap) return;
+    const kept = new Set(Array.from(current).slice(0, cap));
+    set({ selectedIds: kept });
   },
 
   clearSelection: () => set({ selectedIds: new Set() }),

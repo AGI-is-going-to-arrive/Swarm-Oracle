@@ -83,6 +83,7 @@ async def test_capabilities_returns_web_search():
 async def test_capabilities_registry_structure():
     """Capabilities must return all Phase 3 keys (7 original + BE-6 additions)."""
     from app.api.scenarios import api_capabilities
+    from app.config import settings
 
     result = await api_capabilities()
     expected_keys = {
@@ -104,6 +105,7 @@ async def test_capabilities_registry_structure():
         entry = result[key]
         assert "enabled" in entry
         assert "version" in entry
+    assert result["custom_agents"]["max_custom_agents"] == settings.MAX_CUSTOM_AGENTS
 
 
 # ─── Existing Model Integrity ────────────────────────────────

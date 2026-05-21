@@ -21,7 +21,7 @@
 | App 入口 | `backend/app/main.py` | 挂载所有 router、根信息、`/metrics` |
 | Admin | `backend/app/api/admin.py` | admin preflight 与 LLM 连接测试；受 session gate 保护，`ADMIN_TOKEN` 非空时还要求 `X-Admin-Token` |
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import；scenario/story branch response 会回显 `parent_branch_id / fork_round / fork_reason / replay_kind / replay_source_branch_id`，并在 Result Quality 开启时回显 `verdict / verdict_confidence / branches[].question_answer` |
-| Agents | `backend/app/api/agents.py` | identity 列表 / preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 Agent 备份导入导出；identity preflight 解析超时按 504 fail-closed |
+| Agents | `backend/app/api/agents.py` | identity 列表 / profile drawer、preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 Agent 备份导入导出；identity preflight 解析超时按 504 fail-closed |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary；bucket 会回显 `enforced / scope / window_seconds` |
 | Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板；正式玩法卡注入会在后端校验 contract、冷却、点数和 pending metadata，玩法卡业务校验失败返回结构化 `422` |
 | Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badges、badge definitions、user unlocks、daily rotation、weekly track summary、leaderboard preview、score breakdown、只读 intervention effect receipts |
@@ -203,6 +203,9 @@
   - custom agent create/update/delete 会同步写入或清理 profile
   - 旧的 shared-collection profile 文档会在后续写入时自动清理，不再参与 memory eviction / compaction
 - 自建 Agent 当前多一层 `preferred_tier`：
+  - `MAX_CUSTOM_AGENTS` 默认 20；主推演正常请求会把自建 Agent 上限收口到 `min(num_agents, MAX_CUSTOM_AGENTS)`，请求没带 `num_agents` 时按默认 Agent 数计算
+  - `custom_agent_identity_ids` 必须是 list；后端会 trim、跳过空字符串、去重，并在 schema 和注入层都做数量限制
+  - 注入层只接受当前用户自己的 `kind=custom` identity；不存在、跨用户、非 custom 或单个读取异常都会 fail-soft 跳过，不消耗有效注入名额
   - 迁移 `026_agent_identity_preferred_tier` 给 `agent_identity` 增加 `preferred_tier`，SQLite 走幂等 `ALTER TABLE ... ADD COLUMN ... DEFAULT 'IMPORTANT'`
   - 迁移 `028_agent_favorite` 给 `agent_identity` 增加 `is_favorite`，用于 Agent Library 收藏筛选
   - workshop create/update 只接受 `IMPORTANT / CROWD`
@@ -453,8 +456,8 @@
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 - custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；最近记录里后端仓库级 ruff 已全绿。
 - 最近后端完整复验：
-  - `TOKENIZERS_PARALLELISM=false python -m pytest tests/ -q`：`3269 passed, 6 skipped`
-  - `ruff check app/`：通过
+  - `python -m pytest -x --tb=short`：`3290 passed, 6 skipped`
+  - `ruff check app/ tests/`：通过
 - Campaign/profile label 本轮窄集复验：
   - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`：`154 passed`
   - `ruff check app/services/daily_challenges.py tests/test_gameplay_contract.py tests/test_interventions.py`：通过

@@ -9,7 +9,16 @@ import { AgentAttachPanel } from './AgentAttachPanel';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (_key: string, fallback?: string) => fallback ?? _key,
+    t: (key: string, fallbackOrOptions?: string | Record<string, unknown>) => {
+      if (typeof fallbackOrOptions === 'object' && fallbackOrOptions !== null) {
+        const opts = fallbackOrOptions as Record<string, unknown>;
+        if (key === 'agents.attach_counter') {
+          return `${opts.selected}/${opts.maxAllowed}`;
+        }
+        return typeof opts.defaultValue === 'string' ? opts.defaultValue : key;
+      }
+      return fallbackOrOptions ?? key;
+    },
     i18n: { language: 'en' },
   }),
 }));
@@ -42,6 +51,15 @@ const customAgent: AgentIdentityInfo = {
   created_at: '2026-04-01T00:00:00Z',
   updated_at: '2026-04-01T00:00:00Z',
 };
+
+function makeAgent(idx: number): AgentIdentityInfo {
+  return {
+    ...customAgent,
+    id: `agent-${idx}`,
+    display_name: `Agent ${idx}`,
+    continuity_key: `agent-${idx}`,
+  };
+}
 
 describe('AgentAttachPanel', () => {
   beforeEach(() => {
@@ -84,5 +102,82 @@ describe('AgentAttachPanel', () => {
       expect(listAgentIdentitiesMock).toHaveBeenCalledWith('user-1');
     });
     expect(await screen.findByText('Recovered Agent')).toBeInTheDocument();
+  });
+
+  it('shows counter using effective maxSelected=3 instead of the default 5', async () => {
+    listAgentIdentitiesMock.mockReset();
+    listAgentIdentitiesMock.mockResolvedValue([makeAgent(1), makeAgent(2), makeAgent(3), makeAgent(4)]);
+
+    render(
+      <MemoryRouter>
+        <AgentAttachPanel userId="user-1" visible={true} maxSelected={3} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('0/3')).toBeInTheDocument();
+  });
+
+  it('disables non-selected checkboxes once the selection reaches maxSelected', async () => {
+    listAgentIdentitiesMock.mockReset();
+    listAgentIdentitiesMock.mockResolvedValue([makeAgent(1), makeAgent(2), makeAgent(3)]);
+    useAgentStore.setState({ selectedIds: new Set(['agent-1', 'agent-2']) });
+
+    render(
+      <MemoryRouter>
+        <AgentAttachPanel userId="user-1" visible={true} maxSelected={2} />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Agent 1');
+    const agent3 = screen.getByRole('checkbox', { name: 'Agent 3' });
+    const agent1 = screen.getByRole('checkbox', { name: 'Agent 1' });
+    expect(agent3).toBeDisabled();
+    expect(agent1).not.toBeDisabled();
+  });
+
+  it('disables every checkbox when maxSelected=0', async () => {
+    listAgentIdentitiesMock.mockReset();
+    listAgentIdentitiesMock.mockResolvedValue([makeAgent(1), makeAgent(2)]);
+
+    render(
+      <MemoryRouter>
+        <AgentAttachPanel userId="user-1" visible={true} maxSelected={0} />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Agent 1');
+    expect(screen.getByRole('checkbox', { name: 'Agent 1' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Agent 2' })).toBeDisabled();
+    expect(screen.getByText('0/0')).toBeInTheDocument();
+  });
+
+  it('falls back to default cap of 1 when maxSelected is not provided', async () => {
+    listAgentIdentitiesMock.mockReset();
+    listAgentIdentitiesMock.mockResolvedValue([makeAgent(1)]);
+
+    render(
+      <MemoryRouter>
+        <AgentAttachPanel userId="user-1" visible={true} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('0/1')).toBeInTheDocument();
+  });
+
+  it('auto-prunes existing selections when maxSelected shrinks', async () => {
+    listAgentIdentitiesMock.mockReset();
+    listAgentIdentitiesMock.mockResolvedValue([makeAgent(1), makeAgent(2), makeAgent(3)]);
+    useAgentStore.setState({ selectedIds: new Set(['agent-1', 'agent-2', 'agent-3']) });
+
+    render(
+      <MemoryRouter>
+        <AgentAttachPanel userId="user-1" visible={true} maxSelected={2} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(Array.from(useAgentStore.getState().selectedIds)).toEqual(['agent-1', 'agent-2']);
+    });
+    expect(await screen.findByText('2/2')).toBeInTheDocument();
   });
 });

@@ -568,7 +568,8 @@ async def api_capabilities():
         "custom_agents": _capability_entry(
             enabled=settings.FEATURE_CUSTOM_AGENTS,
             version="1.0" if settings.FEATURE_CUSTOM_AGENTS else "0.0",
-        ),
+        )
+        | {"max_custom_agents": settings.MAX_CUSTOM_AGENTS},
         "agent_identity": _capability_entry(
             enabled=settings.FEATURE_AGENT_IDENTITY,
             version="1.0" if settings.FEATURE_AGENT_IDENTITY else "0.0",
@@ -1552,6 +1553,7 @@ async def get_agents(
                 "emotion": a.emotion,
                 "group_id": a.group_id,
                 "agent_identity_id": getattr(a, "agent_identity_id", None),
+                "source_type": getattr(a, "source_type", None),
                 "group_name": group_lookup.get(a.group_id, {}).get("group_name") if a.group_id else None,  # noqa: E501
             }
             for a in agents

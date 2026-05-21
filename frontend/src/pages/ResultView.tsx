@@ -126,6 +126,7 @@ import PredictionsSection from './result/PredictionsSection';
 import DirectorNotebook from './result/DirectorNotebook';
 import AgentRoster from './result/AgentRoster';
 import ResultModals from './result/ResultModals';
+import { AgentProfileSheet } from '../components/result/AgentProfileSheet';
 
 const loadScenarioReplayHelpers = () => import('../lib/scenarioReplay');
 const EMPTY_GAMEPLAY_PROFILE_HOOKS: string[] = [];
@@ -169,6 +170,7 @@ export default function ResultView() {
   const [scenario, setScenario] = useState<Scenario | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [agentFollowupTarget, setAgentFollowupTarget] = useState<AgentInfo | null>(null);
+  const [profileTarget, setProfileTarget] = useState<AgentInfo | null>(null);
   const [predictions, setPredictions] = useState<PredictionInfo[]>([]);
   const [expandedBranch, setExpandedBranch] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -230,7 +232,12 @@ export default function ResultView() {
   const activeScenarioId = scenario?.id ?? id ?? replayPayload?.scenario.id ?? null;
   useEffect(() => {
     setAgentFollowupTarget(null);
+    setProfileTarget(null);
   }, [activeScenarioId, isReplayMode]);
+  const handleStartConversationFromProfile = useCallback((agent: AgentInfo) => {
+    setProfileTarget(null);
+    setAgentFollowupTarget(agent);
+  }, []);
   const hasUnscored = predictions.some((p) => p.score == null);
   const fallbackRuntimePreset = useMemo(() => loadScenarioRuntimePreset(), []);
   const scenarioRuntimePreset = useMemo(
@@ -1847,6 +1854,9 @@ export default function ResultView() {
     shareSourceFamilies,
     agentFollowupTarget,
     setAgentFollowupTarget,
+    profileTarget,
+    setProfileTarget,
+    directorUserId: directorIdentity.userId,
   };
 
   return (
@@ -1989,6 +1999,13 @@ export default function ResultView() {
       <AgentRoster
         factionTimelineBranch={factionTimelineBranch}
         factionTimelineLead={factionTimelineLead}
+      />
+
+      <AgentProfileSheet
+        agent={profileTarget}
+        userId={directorIdentity.userId}
+        onClose={() => setProfileTarget(null)}
+        onStartConversation={handleStartConversationFromProfile}
       />
 
       <ResultModals

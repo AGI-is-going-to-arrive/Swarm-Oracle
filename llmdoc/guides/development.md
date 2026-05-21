@@ -435,20 +435,20 @@ bash frontend/scripts/download-fonts.sh
 ```bash
 cd backend
 source .venv/bin/activate
-ruff check app/api/agents.py app/api/debate.py app/api/helpers.py app/services/persona_workshop.py app/services/memory.py app/services/simulator.py app/services/debate.py app/services/debate_prompts.py tests/test_persona_workshop.py tests/test_memory.py tests/test_debate_prompts.py tests/test_simulator.py tests/test_migration_022.py
-python -m pytest tests/test_persona_workshop.py tests/test_memory.py tests/test_debate_prompts.py tests/test_simulator.py tests/test_migration_022.py -q
+ruff check app/api/agents.py app/api/debate.py app/api/helpers.py app/api/scenarios.py app/api/schemas.py app/config.py app/services/persona_workshop.py app/services/memory.py app/services/simulator.py app/services/debate.py app/services/debate_prompts.py tests/test_agents_api.py tests/test_api.py tests/test_contract_freeze.py tests/test_contract_freeze_v2.py tests/test_p0_wiring.py tests/test_persona_workshop.py tests/test_memory.py tests/test_debate_prompts.py tests/test_simulator.py tests/test_migration_022.py
+python -m pytest tests/test_agents_api.py tests/test_api.py tests/test_contract_freeze.py tests/test_contract_freeze_v2.py tests/test_p0_wiring.py tests/test_persona_workshop.py tests/test_memory.py tests/test_debate_prompts.py tests/test_simulator.py tests/test_migration_022.py -q
 
 cd ../frontend
 npx tsc --noEmit -p tsconfig.app.json
-npm test -- --run src/pages/AgentLibrary.test.tsx src/pages/AgentWorkshopView.test.tsx src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts
+npm test -- --run src/api/client.test.ts src/components/AgentAttachPanel.test.tsx src/components/result/AgentProfileSheet.test.tsx src/components/result/ScenarioAgentPicker.test.tsx src/pages/AgentLibrary.test.tsx src/pages/AgentWorkshopView.test.tsx src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx src/stores/agentStore.test.ts src/i18n/locales.test.ts
 ```
 
 浏览器复核优先覆盖：
 
 - `/agents` 创建 `IMPORTANT / CROWD` 两档自建 Agent，列表 badge 与编辑回填一致。
-- `/` 主模式 Agent attach panel 选中自建 Agent 后，创建 scenario 请求带 `custom_agent_identity_ids`；loading/error/retry/empty 与超过 5 个可选项时的选择上限都要可见。
+- `/` 主模式 Agent attach panel 选中自建 Agent 后，创建 scenario 请求带 `custom_agent_identity_ids`；loading/error/retry/empty 与 `min(num_agents, capabilities.custom_agents.max_custom_agents)` 的动态选择上限都要可见。
 - Debate 创建时，已选自建 Agent 的前 2 个 ID 进入 `custom_agent_ids`。
-- `/result/:id` 在 `agent_conversation` capability 开启、当前 scenario 有 Agent 且不是 replay 模式时显示 `找 Agent 追问`；点击后应打开场内 Agent picker，而不是跳 `/agents`。带 identity 的 Agent 才显示 `查看档案` 深链。
+- `/result/:id` 在 `agent_conversation` capability 开启、当前 scenario 有 Agent 且不是 replay 模式时显示 `找 Agent 追问`；点击后应打开场内 Agent picker，而不是跳 `/agents`。custom Agent 的 `查看档案` 走 Agent Library hash 深链，generated / replay Agent 的 `查看档案` 打开页内 sheet；没有 `agent_identity_id` 时不显示档案入口。
 - 移动端 tier selector 单列显示，badge 不溢出。
 
 ### ResultView Agent follow-up / replay sanitization 窄集

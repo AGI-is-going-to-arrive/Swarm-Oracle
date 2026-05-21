@@ -84,12 +84,13 @@ def _seed_branch(engine, scenario_id, *, title="主线", probability=1.0,
 
 def _seed_agent(engine, scenario_id, *, name="TestAgent", role="tester",
                 persona="", tier=AgentTier.IMPORTANT, stance="", emotion="neutral",
-                agent_identity_id=None):
+                agent_identity_id=None, source_type=None):
     """Create an agent and return its ID."""
     a = Agent(
         scenario_id=scenario_id, name=name, role=role, persona=persona,
         tier=tier, stance=stance, emotion=emotion,
         agent_identity_id=agent_identity_id,
+        source_type=source_type,
     )
     with Session(engine) as session:
         session.add(a)
@@ -1090,6 +1091,7 @@ class TestReplayArtifactEndpoints:
             role="memory keeper",
             persona="Keeps careful notes",
             agent_identity_id="identity-archivist",
+            source_type="custom",
         )
         _seed_agent(engine, sid, name="Unlinked", persona="No identity yet")
 
@@ -1100,8 +1102,10 @@ class TestReplayArtifactEndpoints:
 
         assert by_name["Archivist"]["persona"] == "Keeps careful notes"
         assert by_name["Archivist"]["agent_identity_id"] == "identity-archivist"
+        assert by_name["Archivist"]["source_type"] == "custom"
         assert by_name["Unlinked"]["persona"] == "No identity yet"
         assert by_name["Unlinked"]["agent_identity_id"] is None
+        assert by_name["Unlinked"]["source_type"] is None
 
     def test_get_scenario_self_heals_stale_simulating_status(self, client, monkeypatch):
         engine = get_engine()
@@ -2240,7 +2244,13 @@ class TestAgentsEndpoint:
         """Each agent should include picker and display fields."""
         engine = get_engine()
         sid = _seed_scenario(engine)
-        _seed_agent(engine, sid, name="角色A", agent_identity_id="identity-role-a")
+        _seed_agent(
+            engine,
+            sid,
+            name="角色A",
+            agent_identity_id="identity-role-a",
+            source_type="custom",
+        )
 
         resp = client.get(f"/api/scenario/{sid}/agents")
         agent = resp.json()[0]
@@ -2253,9 +2263,11 @@ class TestAgentsEndpoint:
             "stance",
             "emotion",
             "agent_identity_id",
+            "source_type",
         }
         assert required_fields.issubset(set(agent.keys()))
         assert agent["agent_identity_id"] == "identity-role-a"
+        assert agent["source_type"] == "custom"
 
     def test_get_agents_default_values(self, client):
         """Agent with minimal fields should have correct defaults."""
@@ -2269,6 +2281,7 @@ class TestAgentsEndpoint:
         assert agent["tier"] == "IMPORTANT"
         assert agent["emotion"] == "neutral"
         assert agent["agent_identity_id"] is None
+        assert agent["source_type"] is None
 
 
 # ── Branches Endpoint (extended) ─────────────────────────

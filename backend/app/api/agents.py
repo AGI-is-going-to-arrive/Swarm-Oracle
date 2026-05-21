@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 
@@ -287,6 +288,31 @@ def _is_pdf_upload(file: UploadFile) -> bool:
     return content_type in PDF_FALLBACK_CONTENT_TYPES and filename.endswith(".pdf")
 
 
+def _parse_profile_json_object(raw: str | None) -> dict | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _parse_profile_json_list(raw: str | None) -> list | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, list) else None
+
+
+def _isoformat_or_none(value: object) -> str | None:
+    formatter = getattr(value, "isoformat", None)
+    return formatter() if callable(formatter) else None
+
+
 @router.get("/identities")
 async def list_identities(
     user_id: str | None = None,
@@ -300,6 +326,42 @@ async def list_identities(
         raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
     agents = list_all_agents(effective_user_id)
     return agents
+
+
+@router.get("/identities/{identity_id}/profile")
+async def get_identity_profile(
+    identity_id: str,
+    user_id: str | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Return an owned agent identity profile for profile drawers."""
+    if not settings.FEATURE_AGENT_IDENTITY and not settings.FEATURE_CUSTOM_AGENTS:
+        raise api_error(404, "FEATURE_DISABLED", "Agent features are not enabled")
+    effective_user_id = resolve_authenticated_user_id(user_id, principal)
+    if not effective_user_id:
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
+
+    with Session(get_engine()) as session:
+        identity = session.get(AgentIdentity, identity_id)
+        if identity is None or identity.user_id != effective_user_id:
+            raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Identity not found")
+        return {
+            "id": identity.id,
+            "user_id": identity.user_id,
+            "kind": identity.kind,
+            "display_name": identity.display_name,
+            "role": identity.role,
+            "persona": identity.persona,
+            "decision_bias": _parse_profile_json_object(identity.decision_bias_json),
+            "decision_bias_json": identity.decision_bias_json,
+            "knowledge_domains": _parse_profile_json_list(identity.knowledge_domain_json),
+            "knowledge_domain_json": identity.knowledge_domain_json,
+            "continuity_key": identity.continuity_key,
+            "preferred_tier": identity.preferred_tier or "IMPORTANT",
+            "is_favorite": identity.is_favorite,
+            "created_at": _isoformat_or_none(identity.created_at),
+            "updated_at": _isoformat_or_none(identity.updated_at),
+        }
 
 
 @router.get("/identities/favorites")
