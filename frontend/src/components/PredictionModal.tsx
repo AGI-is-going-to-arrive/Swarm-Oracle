@@ -4,7 +4,7 @@
 
 import { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { useTranslation } from 'react-i18next';
-import { submitPrediction } from '../api/client';
+import { getSessionBoundUserId, submitPrediction } from '../api/client';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { createCompatUuid } from '../lib/compatUuid';
@@ -80,6 +80,7 @@ export default function PredictionModal({
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
   const directorIdentity = getDirectorIdentity();
+  const apiUserId = getSessionBoundUserId();
   const [text, setText] = useState('');
   const [betKind, setBetKind] = useState<StructuredBetKind>('branch_winner');
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -275,7 +276,7 @@ export default function PredictionModal({
           predictionText,
           confidence,
           trimmedName || undefined,
-          directorIdentity.userId,
+          apiUserId,
         );
         if (trimmedName) {
           updateDirectorName(trimmedName);

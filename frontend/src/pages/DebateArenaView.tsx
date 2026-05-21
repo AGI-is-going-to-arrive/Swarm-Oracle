@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { predictDebate } from '../api/client';
+import { getSessionBoundUserId, predictDebate } from '../api/client';
 import { buildAutomationErrorState, getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { DebateBetModal } from '../components/DebateBetModal';
 import { DebateMomentumBar } from '../components/DebateMomentumBar';
@@ -90,6 +90,7 @@ export function DebateArenaView() {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
   const directorIdentity = getDirectorIdentity();
+  const apiUserId = getSessionBoundUserId();
 
   const debate = useDebateStore((state) => state.debate);
   const status = useDebateStore((state) => state.status);
@@ -703,7 +704,7 @@ export function DebateArenaView() {
         kind: payload.kind,
         targetValue: payload.targetValue,
         confidence: payload.confidence,
-        userId: directorIdentity.userId,
+        userId: apiUserId,
         userName: directorIdentity.userName,
         ...(betPreset ? {
           isCounterplay: true,
@@ -756,7 +757,7 @@ export function DebateArenaView() {
         kind: counterplayPlan.kind,
         targetValue: counterplayPlan.targetValue,
         confidence: counterplayPlan.confidence,
-        userId: directorIdentity.userId,
+        userId: apiUserId,
         userName: directorIdentity.userName,
         isCounterplay: true,
         counterplayPhase: selectedPhase as DebatePhase,

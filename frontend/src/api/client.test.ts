@@ -12,6 +12,7 @@ import {
   getAgentProfileData,
   getInterventionEffects,
   getScenario,
+  getSessionBoundUserId,
   identityContinuityPreflight,
   importScenarioSnapshot,
   normalizeScenarioAgentSource,
@@ -23,6 +24,8 @@ import type {
 
 describe('api client request parsing', () => {
   afterEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
@@ -141,6 +144,38 @@ describe('api client request parsing', () => {
     const headers = buildSessionHeaders();
 
     expect(headers.has('X-Org-Id')).toBe(false);
+  });
+
+  it('returns default_user when no session token or stored user id exists', () => {
+    expect(getSessionBoundUserId()).toBe('default_user');
+  });
+
+  it('uses localStorage user id when there is no session principal', () => {
+    localStorage.setItem('swarmoracle_user_id', '  stored-user  ');
+
+    expect(getSessionBoundUserId()).toBe('stored-user');
+  });
+
+  it('falls back safely when localStorage is unavailable', () => {
+    const getItemSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage unavailable');
+    });
+
+    expect(getSessionBoundUserId()).toBe('default_user');
+    expect(getSessionBoundUserId('fallback-user')).toBe('fallback-user');
+
+    getItemSpy.mockRestore();
+  });
+
+  it('prefers the session principal subject over stored and fallback user ids', () => {
+    const payload = btoa(JSON.stringify({ sub: 'jwt-user' }))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+    localStorage.setItem('swarmoracle_session_token', `v1.${payload}.signature`);
+    localStorage.setItem('swarmoracle_user_id', 'stored-user');
+
+    expect(getSessionBoundUserId('fallback-user')).toBe('jwt-user');
   });
 
   it('retries transient GET failures for safe read endpoints', async () => {

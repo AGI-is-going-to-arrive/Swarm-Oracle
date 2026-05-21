@@ -12,6 +12,7 @@ interface AgentStoreState {
   error: string | null;
   selectedIds: Set<string>;
   loadedUserId: string | null;
+  loadingUserId: string | null;
   requestSeq: number;
 
   fetchIdentities: (userId: string) => Promise<void>;
@@ -40,11 +41,16 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   error: null,
   selectedIds: new Set(),
   loadedUserId: null,
+  loadingUserId: null,
   requestSeq: 0,
 
   fetchIdentities: async (userId: string) => {
     const effectiveUserId = getSessionBoundUserId(userId);
     const state = get();
+
+    if (state.loading && state.loadingUserId === effectiveUserId) {
+      return;
+    }
 
     // Skip if already loaded for same user (cache hit)
     if (state.loadedUserId === effectiveUserId && state.identities.length > 0 && !state.loading) {
@@ -57,7 +63,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     }
 
     const reqId = state.requestSeq + 1;
-    set({ loading: true, error: null, requestSeq: reqId });
+    set({ loading: true, loadingUserId: effectiveUserId, error: null, requestSeq: reqId });
 
     try {
       const data = await listAgentIdentities<AgentIdentityInfo[]>(effectiveUserId);
@@ -69,13 +75,14 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       set({
         identities: data,
         loading: false,
+        loadingUserId: null,
         loadedUserId: effectiveUserId,
         selectedIds: prunedSelected,
       });
     } catch (err) {
       // Ignore stale errors
       if (get().requestSeq !== reqId) return;
-      set({ error: (err as Error).message, loading: false });
+      set({ error: (err as Error).message, loading: false, loadingUserId: null });
     }
   },
 

@@ -15,6 +15,7 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../api/client', () => ({
   submitPrediction: vi.fn(),
+  getSessionBoundUserId: vi.fn(() => 'default_user'),
   getSessionPrincipalSubject: vi.fn(() => null),
 }));
 
@@ -236,6 +237,13 @@ describe('PredictionModal automation callback', () => {
     await user.click(screen.getByRole('button', { name: 'prediction.submit' }));
 
     expect(submitPrediction).toHaveBeenCalledTimes(1);
+    expect(submitPrediction).toHaveBeenCalledWith(
+      'scenario-1',
+      expect.any(String),
+      0.5,
+      'Local Director',
+      'default_user',
+    );
     expect(onPlacedBet).toHaveBeenCalledTimes(1);
     expect(onPlacedBet.mock.calls[0][0].betting.bets).toHaveLength(1);
     expect(onPlacedBet.mock.calls[0][0].betting.bets[0].targetLabel).toBeTruthy();

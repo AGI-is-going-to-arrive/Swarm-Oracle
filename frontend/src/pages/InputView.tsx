@@ -17,15 +17,16 @@ import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
 import {
   createDebate,
+  getSessionBoundUserId,
   identityContinuityPreflight,
   type ContinuityOverride,
   type CreateScenarioOptions,
   type IdentityContinuityMatch,
 } from '../api/client';
 import type { WebSearchFamily, CampaignContext } from '../types';
-import { getDirectorIdentity } from '../lib/directorIdentity';
 import { useAgentStore } from '../stores/agentStore';
 import { AgentAttachPanel } from '../components/AgentAttachPanel';
+import AgentSelectionStrip from '../components/AgentSelectionStrip';
 import { EducationTemplatePicker } from '../components/EducationTemplatePicker';
 import type { EducationTemplate } from '../api/client';
 import { OnboardingGuide } from '../components/Onboarding/OnboardingGuide';
@@ -335,8 +336,9 @@ export function InputView() {
   const [runtimePreset, setRuntimePreset] = useState<ScenarioRuntimePresetId>(() => loadScenarioRuntimePreset());
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const directorIdentity = getDirectorIdentity();
+  const apiUserId = getSessionBoundUserId();
   const { capabilities: caps } = useCapabilityCheck('custom_agents');
+  const customAgentsEnabled = caps?.custom_agents?.enabled === true;
   const { enabled: educationTemplatesEnabled } = useCapabilityCheck('education_templates');
   const [educationPickerOpen, setEducationPickerOpen] = useState(false);
   // S1-5: First-visit onboarding guide. Hidden once the user finishes or skips.
@@ -424,7 +426,7 @@ export function InputView() {
     dailyMastery,
     topMasteries,
   } = useInputCampaignState({
-    directorUserId: directorIdentity.userId,
+    directorUserId: apiUserId,
   });
   const { sharedChallenge, sharedChallengeBanner } = useSharedChallengePrefill(searchParams);
   const todayChallengeQuestion = todayChallenge
@@ -560,10 +562,14 @@ export function InputView() {
   }, [byokRequestsPerMinute, byokTokensPerMinute, numAgents, rounds]);
   const isSimulationBudgetBlocked = Boolean(byokBudgetRecommendation?.overBudget);
   const maxCustomAgents = useMemo(() => {
+    if (!customAgentsEnabled) return 0;
     const serverMax = caps?.custom_agents?.max_custom_agents;
     const capLimit = typeof serverMax === 'number' && serverMax >= 0 ? serverMax : 1;
     return Math.min(numAgents, capLimit);
-  }, [numAgents, caps?.custom_agents?.max_custom_agents]);
+  }, [customAgentsEnabled, numAgents, caps?.custom_agents?.max_custom_agents]);
+  const selectedCustomAgentCount = customAgentsEnabled
+    ? Math.min(agentSelectedIds.size, maxCustomAgents)
+    : 0;
 
   const runtimePresetConfig = useMemo(
     () => getScenarioRuntimePresetConfig(runtimePreset),
@@ -787,14 +793,14 @@ export function InputView() {
     continuityOverrides?: ContinuityOverride[],
   ): CreateScenarioOptions => {
     const trimmed = launch.nextQuestion.trim();
-    const serverMaxCustomAgents = caps?.custom_agents?.max_custom_agents;
+    const serverMaxCustomAgents = customAgentsEnabled ? caps?.custom_agents?.max_custom_agents : 0;
     const effectiveMaxCustomAgents = Math.max(
       0,
       Math.min(
         launch.nextAgents,
-        typeof serverMaxCustomAgents === 'number' && serverMaxCustomAgents >= 0
+        customAgentsEnabled && typeof serverMaxCustomAgents === 'number' && serverMaxCustomAgents >= 0
           ? serverMaxCustomAgents
-          : 1,
+          : 0,
       ),
     );
     const clampedCustomAgentIds = Array.from(agentSelectedIds).slice(0, effectiveMaxCustomAgents);
@@ -847,7 +853,7 @@ export function InputView() {
       llmTokensPerMinute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined,
       reasoningEffort: reasoningEffort || undefined,
       visualizationEnabled: launch.nextVisualization,
-      userId: directorIdentity.userId,
+      userId: apiUserId,
       disableUserQuota,
       webSearchEnabled,
       webSearchFamilies: selectedWebSearchFamilies,
@@ -865,7 +871,8 @@ export function InputView() {
     byokRequestsPerMinute,
     byokTokensPerMinute,
     caps?.custom_agents?.max_custom_agents,
-    directorIdentity.userId,
+    customAgentsEnabled,
+    apiUserId,
     disableUserQuota,
     llmApiKey,
     llmBaseUrl,
@@ -1110,7 +1117,9 @@ export function InputView() {
 
     setIsSubmitting(true);
     try {
-      const [propositionAgentId, oppositionAgentId] = [...agentSelectedIds].slice(0, 2);
+      const [propositionAgentId, oppositionAgentId] = customAgentsEnabled
+        ? [...agentSelectedIds].slice(0, 2)
+        : [];
       const debate = await createDebate(trimmed, undefined, {
         llmApiKey: llmApiKey || undefined,
         llmBaseUrl: llmBaseUrl || undefined,
@@ -1118,7 +1127,7 @@ export function InputView() {
         llmRequestsPerMinute: Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined,
         llmTokensPerMinute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined,
         reasoningEffort: reasoningEffort || undefined,
-        userId: directorIdentity.userId,
+        userId: apiUserId,
       }, propositionAgentId ? {
         proposition: propositionAgentId,
         opposition: oppositionAgentId,
@@ -1380,7 +1389,7 @@ export function InputView() {
           top_masteries: topMasteryEntries,
         },
         campaign: {
-          user_id: directorIdentity.userId,
+          user_id: apiUserId,
           total_runs: campaignProfile?.total_runs ?? 0,
           badge_count: campaignBadges.length,
           daily_profile_level: dailyMastery?.level ?? 0,
@@ -1441,7 +1450,7 @@ export function InputView() {
     dailyMastery?.level,
     dailyMastery?.score_to_next_level,
     topMasteryEntries,
-    directorIdentity.userId,
+    apiUserId,
     byokRequestsPerMinute,
     byokTokensPerMinute,
     isSimulationBudgetBlocked,
@@ -1519,7 +1528,7 @@ export function InputView() {
                   <button className="btn btn-ghost" onClick={() => navigate('/history')}>
                     {t('home.history')}
                   </button>
-                  {caps?.custom_agents?.enabled && (
+                  {customAgentsEnabled && (
                     <button className="btn btn-ghost" onClick={() => navigate('/agents')}>
                       {t('home.agents', 'Agents')}
                     </button>
@@ -1577,6 +1586,16 @@ export function InputView() {
                 >
                   {isSubmitting ? <span className="spinner spinner--sm" /> : null}
                   {t('home.submit')}
+                  {selectedCustomAgentCount > 0 && (
+                    <>
+                      <span className="iv-submit__badge" aria-hidden="true">
+                        {selectedCustomAgentCount}
+                      </span>
+                      <span className="sr-only">
+                        {t('agents.badge_count', { count: selectedCustomAgentCount })}
+                      </span>
+                    </>
+                  )}
                 </button>
                 <button
                   className="btn btn-ghost btn--submit"
@@ -1656,6 +1675,24 @@ export function InputView() {
               </p>
               <QuickStartCards onSelect={handleQuickStartSelect} />
             </div>
+
+            {customAgentsEnabled && (
+              <AgentSelectionStrip
+                userId={apiUserId}
+                visible={true}
+                maxSelected={maxCustomAgents}
+                onManageClick={() => {
+                  setAdvancedOpen(true);
+                  requestAnimationFrame(() => {
+                    const el = document.getElementById('iv-advanced-body');
+                    if (el) {
+                      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+                      el.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
+                    }
+                  });
+                }}
+              />
+            )}
 
             {/* Web Search Enhancement: always visible */}
               <div className="web-search-section">
@@ -2098,9 +2135,9 @@ export function InputView() {
                       </div>
 
                       {/* Phase 3 F3: Custom Agent Attach Panel */}
-                      {caps?.custom_agents?.enabled && (
+                      {customAgentsEnabled && (
                         <AgentAttachPanel
-                          userId={directorIdentity.userId}
+                          userId={apiUserId}
                           visible={true}
                           maxSelected={maxCustomAgents}
                         />
@@ -2571,7 +2608,7 @@ export function InputView() {
           <CampaignProgressSheet
             open={campaignSheetOpen}
             onOpenChange={setCampaignSheetOpen}
-            userId={directorIdentity.userId}
+            userId={apiUserId}
             weeklySummary={campaignWeeklySummary}
             weeklyTrackName={
               campaignChallengeRotation?.weekly_track

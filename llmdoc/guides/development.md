@@ -440,13 +440,15 @@ python -m pytest tests/test_agents_api.py tests/test_api.py tests/test_contract_
 
 cd ../frontend
 npx tsc --noEmit -p tsconfig.app.json
-npm test -- --run src/api/client.test.ts src/components/AgentAttachPanel.test.tsx src/components/result/AgentProfileSheet.test.tsx src/components/result/ScenarioAgentPicker.test.tsx src/pages/AgentLibrary.test.tsx src/pages/AgentWorkshopView.test.tsx src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx src/stores/agentStore.test.ts src/i18n/locales.test.ts
+npm test -- --run src/api/client.test.ts src/components/AgentSelectionStrip.test.tsx src/components/AgentAttachPanel.test.tsx src/components/PredictionModal.test.tsx src/components/ShareModal.test.tsx src/components/result/AgentProfileSheet.test.tsx src/components/result/ScenarioAgentPicker.test.tsx src/pages/AgentLibrary.test.tsx src/pages/AgentWorkshopView.test.tsx src/pages/InputView.test.tsx src/pages/DebateArenaView.test.tsx src/pages/ResultView.test.tsx src/stores/agentStore.test.ts src/i18n/locales.test.ts
 ```
 
 浏览器复核优先覆盖：
 
 - `/agents` 创建 `IMPORTANT / CROWD` 两档自建 Agent，列表 badge 与编辑回填一致。
-- `/` 主模式 Agent attach panel 选中自建 Agent 后，创建 scenario 请求带 `custom_agent_identity_ids`；loading/error/retry/empty 与 `min(num_agents, capabilities.custom_agents.max_custom_agents)` 的动态选择上限都要可见。
+- `/` 主模式 quick selector 和 Advanced Settings 内的 Agent attach panel 都能读到同一个 session-bound 用户的自建 Agent；选中 Agent 后 Start 按钮显示数量 badge，创建 scenario 请求带 `custom_agent_identity_ids`。
+- `custom_agents` capability disabled 时，首页不显示 selector / attach panel / Start badge，也不会把 store 里的旧 selected IDs 提交出去。
+- loading/error/retry/empty 与 `min(num_agents, capabilities.custom_agents.max_custom_agents)` 的动态选择上限都要可见。
 - Debate 创建时，已选自建 Agent 的前 2 个 ID 进入 `custom_agent_ids`。
 - `/result/:id` 在 `agent_conversation` capability 开启、当前 scenario 有 Agent 且不是 replay 模式时显示 `找 Agent 追问`；点击后应打开场内 Agent picker，而不是跳 `/agents`。custom Agent 的 `查看档案` 走 Agent Library hash 深链，generated / replay Agent 的 `查看档案` 打开页内 sheet；没有 `agent_identity_id` 时不显示档案入口。
 - 移动端 tier selector 单列显示，badge 不溢出。

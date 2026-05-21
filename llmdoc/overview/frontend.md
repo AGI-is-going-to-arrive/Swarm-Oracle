@@ -25,7 +25,7 @@
 
 | 页面 | 位置 | 责任 |
 |------|------|------|
-| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、daily challenge、weekly track、difficulty、streak/refresh countdown、成长卡与 CampaignProgressSheet、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、搜索深度选择、推荐已配置搜索 / 高级自定义 provider 切换、独立 BYOK 折叠区、advanced accordion、custom Agent attach、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
+| InputView | `frontend/src/pages/InputView.tsx` | scenario 创建、5 步进度提示、quick starts、daily challenge、weekly track、difficulty、streak/refresh countdown、成长卡与 CampaignProgressSheet、教育模板选择器、主模式档位、搜索增强 toggle、source family 选择、搜索深度选择、推荐已配置搜索 / 高级自定义 provider 切换、独立 BYOK 折叠区、advanced accordion、custom Agent quick selector + attach panel、identity continuity preflight / confirm dialog、preflight-aware submit loading、snapshot import、首次引导和底部安全提示；quick start 题目/副标题走 `quickstart.*` i18n key，代码只保留结构元数据 |
 | SetupWizardView | `frontend/src/pages/SetupWizardView.tsx` | `/admin/setup` 3 步 provider 配置向导；选择 preset、填 API key/base URL、测试连接并写入 session-scoped provider policy |
 | AgentLibrary | `frontend/src/pages/AgentLibrary.tsx` | 自建 Agent 列表、收藏筛选、tier badge、profile modal、`#agent_profile=<id>&tab=memory` 档案深链、编辑/删除入口、返回首页按钮、卡片级 Agent 备份导出与从备份创建 Agent 入口 |
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择、PDF document upload tab，以及 capability-gated Agent 备份工具 |
@@ -134,6 +134,7 @@
   - 导出失败会回到 modal 可见错误态，不只打 `console.error`
   - 预测卡片导出复用 `ShareablePredictionCard` 和 `screenCaptureHtmlVendor`，支持 PNG 下载；图片剪贴板按钮只有浏览器支持 `ClipboardItem + navigator.clipboard.write()` 时才显示
   - modal 当前有共享 `useFocusTrap`、Escape 关闭、关闭/unmount abort；社交文案请求不会因为 automation state 触发父组件重渲染就被误 abort
+  - 社交文案请求使用 session-bound `user_id`；导演本地身份只用于展示名，不作为 API owner
   - `shareEnvelope.ts` 当前只保留 `ShareFlavorContext` 类型；前端不再本地拼接“题材档案”前缀到社交文案或 Markdown 导出
 - snapshot import/export 当前受 `snapshot_export` capability 控制：
   - 首页只在 capability enabled 时显示 `Import snapshot`
@@ -156,14 +157,16 @@
   - 真正 launch 前使用 Radix AlertDialog 展示问题和本局设置，关闭后把焦点还给 textarea
 - InputView 底部安全提示当前走 locale key；中英切换时会一起更新。
 - InputView 的 placeholder typewriter、确认弹窗入场和首页动效都会遵守 `prefers-reduced-motion`；textarea 提交有 IME composition guard，中文拼音回车不会误触发 launch。
-- InputView 当前也会在 `custom_agents` capability 开启时显示 Agent attach panel：
+- InputView 当前也会在 `custom_agents` capability 开启时显示主区 `AgentSelectionStrip` 和高级设置里的 `AgentAttachPanel`：
+  - 两个入口都用 `getSessionBoundUserId()` 解析出的 API user id 读取 Agent；`directorIdentity` 只用于展示导演名
+  - 主区 strip 只显示轻量 pill、最多 3 个 Agent 和 `+N more`；完整 persona、knowledge domains 和 decision bias 仍在高级设置的 attach panel 中展示
   - 选中的自建 Agent 会通过 `customAgentIdentityIds -> custom_agent_identity_ids` 传给主推演
   - 可选数量按 `min(numAgents, capabilities.custom_agents.max_custom_agents)` 动态收口；capability 没有返回上限时前端按 1 个自建 Agent 保守兜底
-  - 提交 scenario 前会再次同步裁剪 selected IDs，避免用户刚调低 Agent 数量就立刻提交时带上 stale 超限选择
+  - 提交 scenario 前会再次同步裁剪 selected IDs，避免用户刚调低 Agent 数量就立刻提交时带上 stale 超限选择；capability 关闭时不会显示 Start badge，也不会提交旧 selected IDs
   - 创建 Debate 时，会把当前选中的前 2 个自建 Agent 透传成 `customAgentIds -> custom_agent_ids`
   - 这条链路只传 identity id，不引入 URL 或外部 fetch 配置
-  - attach panel 当前以卡片展示 Agent 名字、persona、knowledge domains 和 decision bias；React 按文本节点渲染这些用户字段，不走 `dangerouslySetInnerHTML`
-  - `agentStore` 会按 user id 缓存身份列表，忽略迟到响应，并在 user/list 变化时剪掉已经失效的 selected id
+  - strip 与 attach panel 都按文本节点渲染 Agent 名字、persona、knowledge domains 和 decision bias，不走 `dangerouslySetInnerHTML`
+  - `agentStore` 会按 user id 缓存身份列表，忽略迟到响应，同一 user 的 in-flight 请求会去重，并在 user/list 变化时剪掉已经失效的 selected id
 
 ## Theater 与性能边界
 
@@ -212,7 +215,7 @@
 | `GameplayCardsModal.tsx` | `frontend/src/components/GameplayCardsModal.tsx` | 玩法卡弹窗；推荐卡、分组折叠、后端 contract payload、focus trap、label/select 显式关联与 disclosure ARIA；完成态 Theater 可只读回看 |
 | Campaign Components | `frontend/src/components/campaign/*` | campaign UI 组件；覆盖 streak、difficulty、refresh countdown、weekly track chip/dialog/leaderboard、progress sheet、badge cabinet、level progress 和 achievement toast；progress sheet 会并行读取 badge definitions、user badges、mastery，并复用已取到的 weekly summary |
 | `dailyChallenge.ts` | `frontend/src/lib/dailyChallenge.ts` | challenge date key 与 ISO week helper；用于前端入口显示和请求 context，最终结算仍以后端派生日期为准 |
-| `PredictionModal.tsx` | `frontend/src/components/PredictionModal.tsx` | 结构化预测弹窗；串行提交、快速重复提交防护、branch 晚到兜底、高级题材回响 disclosure 与 focus trap |
+| `PredictionModal.tsx` | `frontend/src/components/PredictionModal.tsx` | 结构化预测弹窗；串行提交、快速重复提交防护、branch 晚到兜底、高级题材回响 disclosure 与 focus trap；预测提交使用 session-bound `user_id`，展示名仍来自本地导演身份 |
 | `InterventionReceiptCard.tsx` | `frontend/src/components/InterventionReceiptCard.tsx` | 只读干预效果回执；只展示当前 scenario 的 persisted effects，倒序展示，不展示内部 log id |
 | `roundtableSelection.ts` | `frontend/src/lib/roundtableSelection.ts` | `trait_mix / fault_line_first / witness_augmented` 选择辅助与测试入口 |
 | `endingRoomReplayAutomation.js` | `frontend/src/lib/endingRoomReplayAutomation.js` | ending-room replay URL 判定 helper；当前识别 `roomReplay / roomShare / roomLocal`，并复用 live modal / readonly UI 判定；replay action 文案兼容 `Save copy / 保存副本` 与 `Import run / 导入运行` |
@@ -257,7 +260,8 @@
 | `e2e-web-search-suite.mjs` | `frontend/scripts/e2e-web-search-suite.mjs` | 首页搜索增强专项 E2E：custom override、provider/key/base URL、搜索深度、scenario 请求体校验 |
 | `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择；桌面端 `@dnd-kit/core` 入席交互，移动端保留 click-to-seat） |
 | `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作 + phase 分隔线 + speaker 左侧色标） |
-| `AgentAttachPanel.tsx` | `frontend/src/components/AgentAttachPanel.tsx` | 首页自建 Agent 选择卡片；按 `maxSelected` 动态限制数量，支持 loading/error/retry/empty 状态，长 persona 和复杂 decision bias 只作为文本展示 |
+| `AgentSelectionStrip.tsx` | `frontend/src/components/AgentSelectionStrip.tsx` | 首页主区自建 Agent 轻量选择器；用 fieldset/legend + 原生 checkbox，最多展示 3 个 pill 和 `+N more`，支持 loading/error 状态、keyboard focus、forced-colors 和 reduced-motion |
+| `AgentAttachPanel.tsx` | `frontend/src/components/AgentAttachPanel.tsx` | 首页高级设置里的自建 Agent 选择卡片；按 `maxSelected` 动态限制数量，支持 loading/error/retry/empty 状态，长 persona 和复杂 decision bias 只作为文本展示 |
 | `AgentCard.tsx` | `frontend/src/components/AgentCard.tsx` | Agent Library 共享卡片；展示 tier、domains、favorite 状态与 profile/edit/export 等动作；长 persona 按 Unicode code point 截断 |
 | `AgentProfileModal.tsx` | `frontend/src/components/AgentProfileModal.tsx` | Agent profile 弹窗；展示成长、记忆、timeline 和 decision bias 分布，切换 Agent 或关闭后的迟到请求不会覆盖当前弹窗 |
 | `AgentProfileSheet.tsx` | `frontend/src/components/result/AgentProfileSheet.tsx` | 结果页内联 Agent 档案 sheet；用于 generated / replay Agent，带 request sequence guard、loading/error/empty 状态、reduced-motion/forced-colors/mobile CSS 和 generated Agent 的继续对话入口 |
@@ -609,15 +613,16 @@
   - `npm exec -- eslint src/pages/result/ResultHeader.tsx src/pages/result/ExploreDeeperBridge.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts`：通过
   - 浏览器实测本机结果页显示 `对话 · 本机模式`，header 可直接进入因果图谱和图谱工作台；点击 `探索` 会滚到下一步区。
 - 当前 frontend 稳定验证口径：
-  - `npm test -- --reporter=dot`：`204 files / 2280 tests passed`
+  - `npm test`：`205 files / 2300 tests passed`
   - `npm run lint`：通过
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
   - `npm run build`：通过，performance budgets 通过
-  - i18n key parity：`zh: 2796`、`en: 2796`、parity OK
+  - i18n key parity：`zh: 2785`、`en: 2785`、placeholder parity OK
   - Pixel Theater browser spot-check：完成态 `/sim/e1a41453-2cb2-43a1-a054-0d7cd04a6bf5` 的 toolbar 玩法卡入口可见，modal 以只读状态打开，Chrome DevTools console error 为 0
   - KG visualization 定向回归：`5 files / 193 tests passed`
   - Workbench KG resize 定向回归：`useG6Graph.test.ts + WorkbenchView.test.tsx` 为 `56 passed`，`KGGraphBoard.test.tsx` 为 `42 passed`；本机浏览器复核 `graph -> split -> KG` 后，KG 容器与内部 G6 canvas 同宽，`widthDelta=0`，console error 为 0
   - KG Explorer fixture E2E：Chromium desktop + mobile、Firefox desktop、WebKit desktop 共 `4 runs / allPassed=true`
+  - Custom Agent attach / session userId 本轮通过 frontend full vitest、backend `TestCustomAgentOwnership` 窄集和 Chrome 首页 smoke；Firefox/WebKit `e2e:cross-browser` 本轮在 Firefox DirectorState 等待上超时，不能作为跨浏览器全绿证据
   - ResultView Agent profile / follow-up 本轮通过 full vitest 覆盖；custom Agent 档案走 Agent Library hash，generated / replay Agent 档案走页内 sheet，generated Agent 可从 sheet 继续进入 `NodeConversationSheet`
   - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0

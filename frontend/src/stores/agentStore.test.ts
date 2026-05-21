@@ -10,6 +10,7 @@ describe('agentStore', () => {
       loading: false,
       error: null,
       loadedUserId: null,
+      loadingUserId: null,
       requestSeq: 0,
     });
   });

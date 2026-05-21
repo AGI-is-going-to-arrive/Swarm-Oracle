@@ -91,7 +91,7 @@
 | Director Campaign | 已落地，含 52 条 daily challenge catalog、streak、7 条 weekly track + leaderboard、15 个 registry badge、非线性 mastery level、首页成长 sheet、后端权威 `score_breakdown` 与结果页导演复盘 / 因果档案；结果页导演笔记和导演复盘默认收起，展开后再查看完整复盘，导演复盘的关键记录超过 3 条时用原生 disclosure 展开 |
 | Graph Workbench / Causal Graph | 已落地，结果页 header 和下一步入口可进入 `/workbench/:id`；工作台会保留当前 analysis branch query，但 workbench 的因果图和 KG 图都按 scenario 拉全量 causal graph，不再用 URL `branch` 过滤。因果图边标签会按 zoom 密度显示，hover 或键盘 focus 时展示轮次与可信度；KG 图会用真实 G6 canvas / minimap，搜索和类型筛选直接更新可视图，从 split 切回 KG 单图面时会按当前容器重新铺满画布；移动端超过 200 个节点会显示截断提示，图例默认折叠，键盘仍可遍历节点；PNG / SVG 导出继续走 ExportPanel |
 | Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight`；设置 `ADMIN_TOKEN` 后 admin API 要求 `X-Admin-Token` |
-| Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；主推演每局可附加的自建 Agent 上限为 `min(num_agents, MAX_CUSTOM_AGENTS)`，前端会按 capability 动态限制，后端 schema 和注入层也会去重并再次校验；Agent Library 支持 `#agent_profile=<id>&tab=memory` 档案深链，结果页里 custom Agent 继续走深链，generated / replay Agent 会在当前页打开内联档案 sheet；identity continuity preflight 超时会按 504 返回，后端不会把它伪装成“无匹配”；首页启动流当前会提示错误但继续按无 continuity override 启动；自建 Agent 不开放 `CORE` 层级 |
+| Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页主区 quick selector、高级设置里的 attach panel、主推演注入和 Debate 双方席位绑定；主推演每局可附加的自建 Agent 上限为 `min(num_agents, MAX_CUSTOM_AGENTS)`，前端会按 capability 动态限制，后端 schema 和注入层也会去重并再次校验；选中 Agent 后 Start 按钮显示数量 badge，capability 关闭时不会显示 badge 或提交旧选择；Agent Library 支持 `#agent_profile=<id>&tab=memory` 档案深链，结果页里 custom Agent 继续走深链，generated / replay Agent 会在当前页打开内联档案 sheet；identity continuity preflight 超时会按 504 返回，后端不会把它伪装成“无匹配”；首页启动流当前会提示错误但继续按无 continuity override 启动；自建 Agent 不开放 `CORE` 层级 |
 | Agent Backups | 已落地，受 `FEATURE_PERSONA_EXPORT` gate；支持单个 / 批量导出 `schema_version=1` Agent 备份 JSON；从备份创建会为当前用户创建新的 custom Agent，不覆盖已有 Agent，并把 decision bias 归一化到安全的 5 维数值 |
 | Education Templates | 已落地，受 `FEATURE_EDUCATION_TEMPLATES` gate；首页可打开模板选择器，按学科与难度筛选后回填问题、Agent 数和轮数 |
 | Prediction Journal | 已落地，受 `FEATURE_PREDICTION_JOURNAL` gate；支持个人预测日志、resolve、校准曲线和 journal 页面；绑定 scenario 时按当前用户校验所有权，跨用户或无 owner 的旧 scenario 统一隐藏成 404，calibration 查询已走有界/索引路径 |
@@ -190,10 +190,13 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-当前验证口径（最近更新：2026-05-22 Agent profile / custom Agent 校验收口）：
+当前验证口径（最近更新：2026-05-22 Agent attach / session userId 收口）：
 
 - backend：`python -m pytest -x --tb=short` 为 `3290 passed, 6 skipped`；`ruff check app/ tests/` 通过。
-- frontend：`npm test -- --reporter=dot` 为 `204 files / 2280 tests passed`；`npm run lint`、`npx tsc --noEmit -p tsconfig.app.json`、`npm run build` 通过；i18n key parity 为 `zh: 2796`、`en: 2796`、OK。
+- frontend：本轮 `npm test` 为 `205 files / 2300 tests passed`；`npm run lint`、`npx tsc --noEmit -p tsconfig.app.json`、`npm run build` 通过；i18n key parity 为 `zh: 2785`、`en: 2785`、placeholder parity OK。
+- Custom Agent attach 定向复核：`tests/test_p0_wiring.py::TestCustomAgentOwnership` 为 `10 passed`；首页 quick selector、AgentAttachPanel、scenario/debate/campaign/prediction/social 这类 API userId 入口统一走 `getSessionBoundUserId()`，`directorIdentity` 只保留展示名。
+- Chrome 浏览器 smoke：`http://localhost:18928/` 首页可加载，quick selector 可见，选中自建 Agent 后 Start 按钮显示 `1 agent(s) selected`，console error 为 0，桌面视口无横向溢出。
+- 跨浏览器限制：`npm run e2e:cross-browser -- --url http://localhost:18928 --headless` 当前在 Firefox DirectorState 等待上超时，截图显示页面已进 completed simulation/theater 状态；因此这轮不能把 Firefox/WebKit 全矩阵写成已签收。
 - Pixel Theater 浏览器复核：Chrome DevTools MCP 打开 `/sim/e1a41453-2cb2-43a1-a054-0d7cd04a6bf5`，`.theater-floating-toolbar` 里的玩法卡入口可见，完成态玩法卡 modal 以只读提示打开，console error 为 0；截图保存在本地忽略目录 `frontend/output/theater-gameplay-cards-toolbar-fix.png`。
 - KG visualization 定向回归：`5 files / 193 tests passed`，覆盖 `KGGraphBoard / KGExplorerView / useG6Graph / kgGraphConfig / locales`；KG Explorer fixture E2E 覆盖 Chromium desktop + mobile、Firefox desktop 和 WebKit desktop，`4 runs / allPassed=true`。
 - Workbench KG resize 定向回归：`useG6Graph.test.ts + WorkbenchView.test.tsx` 为 `56 passed`，`KGGraphBoard.test.tsx` 为 `42 passed`；本机浏览器复核 `graph -> split -> KG` 后，KG 容器与内部 G6 canvas 同宽，`widthDelta=0`，console error 为 0。

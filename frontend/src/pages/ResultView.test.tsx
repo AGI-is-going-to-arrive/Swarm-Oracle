@@ -1185,7 +1185,7 @@ describe('ResultView campaign summary', () => {
 
     await waitFor(() => {
       expect(finalizeCampaignMock).toHaveBeenCalledWith('scenario-1', expect.objectContaining({
-        user_id: 'director-1',
+        user_id: 'default_user',
         profile_id: 'law',
         archive_grade: 'A',
       }));
@@ -1442,7 +1442,7 @@ describe('ResultView campaign summary', () => {
         llmModel: 'gpt-test',
         llmRequestsPerMinute: 10,
         llmTokensPerMinute: 100000,
-        userId: 'director-1',
+        userId: 'default_user',
       });
     });
   });

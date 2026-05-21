@@ -1,0 +1,182 @@
+.agent-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 14px;
+  margin: 0;
+  border: 1px solid rgba(124, 92, 62, 0.18);
+  border: 1px solid color-mix(in srgb, var(--accent-primary, #7c5c3e) 18%, transparent);
+  border-radius: 12px;
+  background: rgba(124, 92, 62, 0.04);
+  background: color-mix(in srgb, var(--accent-primary, #7c5c3e) 4%, transparent);
+}
+
+.agent-strip--state {
+  justify-content: flex-start;
+}
+
+.agent-strip__status-text {
+  font-size: 0.875rem;
+  color: var(--text-muted, #8a7e74);
+}
+
+.agent-strip__status-text--error {
+  color: #b13a3a;
+}
+
+.agent-strip__pills {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.agent-strip__pill-item {
+  display: inline-flex;
+}
+
+.agent-strip__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(124, 92, 62, 0.24);
+  border: 1px solid color-mix(in srgb, var(--accent-primary, #7c5c3e) 24%, transparent);
+  background: rgba(255, 255, 255, 0.65);
+  color: var(--text-primary, #2d2520);
+  font-size: 0.875rem;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease,
+    transform 120ms ease;
+  max-width: 180px;
+  user-select: none;
+}
+
+.agent-strip__pill:hover {
+  background: rgba(244, 238, 231, 0.9);
+  background: color-mix(in srgb, var(--accent-primary, #7c5c3e) 12%, rgba(255, 255, 255, 0.85));
+  border-color: rgba(124, 92, 62, 0.4);
+  border-color: color-mix(in srgb, var(--accent-primary, #7c5c3e) 40%, transparent);
+}
+
+.agent-strip__pill:focus-within {
+  outline: 2px solid var(--accent-primary, #7c5c3e);
+  outline-offset: 2px;
+}
+
+.agent-strip__pill--selected {
+  background: rgba(231, 220, 208, 0.9);
+  background: color-mix(in srgb, var(--accent-primary, #7c5c3e) 18%, rgba(255, 255, 255, 0.9));
+  border-color: var(--accent-primary, #7c5c3e);
+  color: var(--accent-primary, #7c5c3e);
+  font-weight: 600;
+}
+
+.agent-strip__pill--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.agent-strip__pill-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+
+.agent-strip__more {
+  font-size: 0.8125rem;
+  color: var(--text-muted, #8a7e74);
+  padding: 4px 6px;
+}
+
+.agent-strip__manage {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--accent-primary, #7c5c3e);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: text-decoration-color 120ms ease, background-color 120ms ease;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+  margin-left: auto;
+}
+
+.agent-strip__manage:hover {
+  text-decoration-color: currentColor;
+  background: rgba(124, 92, 62, 0.08);
+  background: color-mix(in srgb, var(--accent-primary, #7c5c3e) 8%, transparent);
+}
+
+.agent-strip__manage:focus-visible {
+  outline: 2px solid var(--accent-primary, #7c5c3e);
+  outline-offset: 2px;
+}
+
+.iv-submit__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  margin-left: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  color: currentColor;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-strip__pill,
+  .agent-strip__manage {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .agent-strip {
+    border-color: CanvasText;
+    background: Canvas;
+  }
+  .agent-strip__pill {
+    border-color: CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+  .agent-strip__pill--selected {
+    border-color: Highlight;
+    background: Highlight;
+    color: HighlightText;
+  }
+  .agent-strip__pill--disabled {
+    color: GrayText;
+    border-color: GrayText;
+  }
+  .agent-strip__manage {
+    color: LinkText;
+  }
+  .iv-submit__badge {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+}

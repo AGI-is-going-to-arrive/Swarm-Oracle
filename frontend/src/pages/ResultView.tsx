@@ -17,6 +17,7 @@ import {
   getCampaignWeeklySummary,
   getReplayArtifact,
   getScenario,
+  getSessionBoundUserId,
   importReplayScenario,
   getStory,
   listPredictions,
@@ -151,6 +152,7 @@ export default function ResultView() {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
   const directorIdentity = getDirectorIdentity();
+  const apiUserId = getSessionBoundUserId();
 
   const { capabilities, loading: capLoading } = useCapabilityCheck('causal_graph');
   const resultVerdictEnabled = capabilities?.result_verdict?.enabled ?? false;
@@ -484,7 +486,7 @@ export default function ResultView() {
         const profile = inferGameplayProfile(scenario.question, scenario.scene_theme);
         const finalizedProfileId = persistedCampaignSummary?.profile_id ?? profile.id;
         const cachedCampaignSummary = persistedCampaignSummary?.finalized_at
-          ? readCachedCampaignFinalizeResult(id, directorIdentity.userId, finalizedProfileId)
+          ? readCachedCampaignFinalizeResult(id, apiUserId, finalizedProfileId)
           : null;
         const remoteDirectorState = scenario.director_state ?? null;
         const remoteGameplayState = scenario.gameplay_state ?? null;
@@ -583,9 +585,9 @@ export default function ResultView() {
         let campaign = cachedCampaignSummary;
         if (!campaign && persistedCampaignSummary?.finalized_at) {
           const existingCampaign = await Promise.all([
-            getCampaignProfile(directorIdentity.userId).catch(() => null),
-            getCampaignMastery(directorIdentity.userId).catch(() => []),
-            getCampaignBadges(directorIdentity.userId).catch(() => []),
+            getCampaignProfile(apiUserId).catch(() => null),
+            getCampaignMastery(apiUserId).catch(() => []),
+            getCampaignBadges(apiUserId).catch(() => []),
           ]).then(([profileSummary, masteryList, badgeList]) => (
             profileSummary
               ? buildCampaignSummaryFromExistingData(
@@ -603,7 +605,7 @@ export default function ResultView() {
         const shouldFinalizeCampaign = !persistedCampaignSummary?.finalized_at;
         if (!campaign && shouldFinalizeCampaign) {
           campaign = await finalizeCampaign(id, {
-            user_id: directorIdentity.userId,
+            user_id: apiUserId,
             user_name: directorIdentity.userName,
             profile_id: profile.id,
             archive_grade: archiveSummary.archiveGrade,
@@ -632,7 +634,7 @@ export default function ResultView() {
           if (campaign) {
             writeCachedCampaignFinalizeResult(
               id,
-              directorIdentity.userId,
+              apiUserId,
               campaign.mastery.profile_id,
               campaign,
             );
@@ -686,7 +688,7 @@ export default function ResultView() {
   }, [
     applyEndingRoomReplay,
     applyScenarioReplay,
-    directorIdentity.userId,
+    apiUserId,
     directorIdentity.userName,
     id,
     replayShareId,
@@ -711,7 +713,7 @@ export default function ResultView() {
     setWeeklySummaryLoading(true);
     setWeeklySummaryError(false);
     getCampaignWeeklySummary(
-      directorIdentity.userId,
+      apiUserId,
       localDate,
       timezoneOffsetMinutes,
       { signal: controller.signal },
@@ -733,7 +735,7 @@ export default function ResultView() {
       cancelled = true;
       controller.abort();
     };
-  }, [campaignSummary, directorIdentity.userId]);
+  }, [campaignSummary, apiUserId]);
 
   const handleExport = async () => {
     if (!id || exporting || isReplayMode) return;
@@ -784,7 +786,7 @@ export default function ResultView() {
         llmModel: providerPolicy.model || undefined,
         llmRequestsPerMinute: providerPolicy.requestsPerMinute ?? undefined,
         llmTokensPerMinute: providerPolicy.tokensPerMinute ?? undefined,
-        userId: directorIdentity.userId,
+        userId: apiUserId,
       });
       // Reload predictions to show scores
       const preds = await listPredictions(id);
@@ -1856,7 +1858,7 @@ export default function ResultView() {
     setAgentFollowupTarget,
     profileTarget,
     setProfileTarget,
-    directorUserId: directorIdentity.userId,
+    directorUserId: apiUserId,
   };
 
   return (
@@ -1892,7 +1894,7 @@ export default function ResultView() {
           scenarioId={activeScenarioId}
           branchId={branches[0]?.id}
           identityId={primaryAgentIdentityId ?? undefined}
-          userId={directorIdentity.userId}
+          userId={apiUserId}
         />
       )}
 
@@ -2003,7 +2005,7 @@ export default function ResultView() {
 
       <AgentProfileSheet
         agent={profileTarget}
-        userId={directorIdentity.userId}
+        userId={apiUserId}
         onClose={() => setProfileTarget(null)}
         onStartConversation={handleStartConversationFromProfile}
       />

@@ -27,6 +27,7 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('../api/client', () => ({
   generateSocialCopy: generateSocialCopyMock,
+  getSessionBoundUserId: vi.fn(() => 'default_user'),
 }));
 
 vi.mock('../hooks/screenCaptureHtmlVendor', () => ({
@@ -133,7 +134,7 @@ describe('ShareModal automation callback', () => {
         llmModel: 'gpt-test',
         llmRequestsPerMinute: 10,
         llmTokensPerMinute: 100000,
-        userId: 'director-1',
+        userId: 'default_user',
       },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );

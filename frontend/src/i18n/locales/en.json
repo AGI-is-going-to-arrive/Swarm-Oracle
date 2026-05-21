@@ -1669,6 +1669,12 @@
       }
     },
     "agents": {
+      "quick_select": "Quick agent selector",
+      "quick_select_loading": "Loading agents…",
+      "quick_select_error": "Could not load agents.",
+      "manage_all": "Manage all",
+      "more_count": "+{{count}} more",
+      "badge_count": "{{count}} agent(s) selected",
       "library_title": "Agent Library",
       "back_to_library": "Back to Agent Library",
       "workshop_title": "Create Custom Agent",

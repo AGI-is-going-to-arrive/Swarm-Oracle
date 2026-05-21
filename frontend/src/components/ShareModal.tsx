@@ -4,9 +4,8 @@
 
 import { useState, useCallback, useEffect, useId, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { generateSocialCopy } from '../api/client';
+import { generateSocialCopy, getSessionBoundUserId } from '../api/client';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
-import { getDirectorIdentity } from '../lib/directorIdentity';
 import { loadLlmProviderPolicy, validateByok } from '../lib/llmProviderPolicy';
 import { type ShareFlavorContext } from '../lib/shareEnvelope';
 import type { BranchInfo } from '../types';
@@ -100,7 +99,7 @@ export default function ShareModal({
 }: ShareModalProps) {
   const { t } = useTranslation();
   const titleId = useId();
-  const directorIdentity = getDirectorIdentity();
+  const apiUserId = getSessionBoundUserId();
   const [activePlatform, setActivePlatform] = useState<string | null>(null);
   const [copy, setCopy] = useState('');
   const [platformName, setPlatformName] = useState('');
@@ -233,7 +232,7 @@ export default function ShareModal({
         llmModel: providerPolicy.model || undefined,
         llmRequestsPerMinute: providerPolicy.requestsPerMinute ?? undefined,
         llmTokensPerMinute: providerPolicy.tokensPerMinute ?? undefined,
-        userId: directorIdentity.userId,
+        userId: apiUserId,
       }, {
         signal: controller.signal,
       });
@@ -259,7 +258,7 @@ export default function ShareModal({
         requestControllerRef.current = null;
       }
     }
-  }, [scenarioId, loading, t, directorIdentity.userId]);
+  }, [scenarioId, loading, t, apiUserId]);
 
   const handleCopy = useCallback(async () => {
     setCopyError('');

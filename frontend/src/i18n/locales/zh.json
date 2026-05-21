@@ -1669,6 +1669,12 @@
       }
     },
     "agents": {
+      "quick_select": "快速选择 Agent",
+      "quick_select_loading": "正在加载 Agent…",
+      "quick_select_error": "无法加载 Agent。",
+      "manage_all": "管理全部",
+      "more_count": "还有 {{count}} 个",
+      "badge_count": "已选 {{count}} 个 Agent",
       "library_title": "Agent 库",
       "back_to_library": "返回 Agent 库",
       "workshop_title": "创建自定义 Agent",

@@ -27,7 +27,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - Source Family 当前按有效 provider capability 开关选择项；server default 读服务端 `provider_capability`，custom override 有可识别 base URL 时按 URL 推断 Tavily / Exa / xAI / SearXNG，base URL 为空时使用下拉 provider 的 capability，只有非空未知 host 会显示 no-provider warning。provider 不支持 domain filter 时，四个 family checkbox 会保留可见但禁用，已选 family 会被清空，不会把旧选择带进下一次提交。
 - InputView 当前不展示专门的 `Organization ID` 输入框；API client 仍会从 sessionStorage 读取已有组织 ID 并生成 `X-Org-Id`。
 - 当 `agent_identity` capability 开启时，首页会在主模式启动前先跑 continuity preflight；只有命中 L2 fuzzy candidate 时才弹确认框，用户可选 `复用已有身份` 或 `创建新身份`。preflight 解析阶段超时会返回 `504 IDENTITY_PREFLIGHT_TIMEOUT`，后端不会把它当成“无匹配”；当前首页启动流会提示错误，但继续按无 continuity override 启动。
-- 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑、收藏和选择自建 Agent，也可以在 `/agents/new` 通过 PDF document tab 生成 Agent；长 PDF 会走采样粗扫 + 全文证据精提，部分 persona 失败时保留已创建 Agent 并显示失败数量。首页 attach panel 会以卡片展示 persona、knowledge domains 和 decision bias，主推演每局最多附加 `min(num_agents, MAX_CUSTOM_AGENTS)` 个自建 Agent，并只把 identity id 传给后端；前端按 capability 动态限制，后端 schema 和注入层也会去重、跳过空值并再次校验。自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。Agent Library 的 favorites 是普通筛选按钮，Workshop 的 manual/document tab 支持键盘方向键切换；capability/favorite 失败会显示本地化错误和 retry，不直接露出原始后端文本。
+- 当 `custom_agents` capability 开启时，用户可以从 `/agents` 创建、编辑、收藏和选择自建 Agent，也可以在 `/agents/new` 通过 PDF document tab 生成 Agent；长 PDF 会走采样粗扫 + 全文证据精提，部分 persona 失败时保留已创建 Agent 并显示失败数量。首页主区会显示轻量 quick selector，最多露出 3 个自建 Agent 和 `+N more`，完整 attach panel 仍在高级设置里以卡片展示 persona、knowledge domains 和 decision bias；选中后 Start 按钮显示数量 badge。主推演每局最多附加 `min(num_agents, MAX_CUSTOM_AGENTS)` 个自建 Agent，并只把 identity id 传给后端；前端按 capability 动态限制，capability 关闭时不会显示 selector/badge 或提交旧选择，后端 schema 和注入层也会去重、跳过空值并再次校验。首页、Debate、Campaign、Prediction 和 Share 这类用户维度 API 统一使用 `getSessionBoundUserId()`；`directorIdentity` 只保留导演展示名。自建 Agent 当前只允许 `IMPORTANT / CROWD` 两档，旧数据缺失或空值会回退到 `IMPORTANT`。自建 Agent 的 persona、knowledge domains 和 decision bias 会作为不可信文本/元数据进入主推演 prompt，`CORE` 不对自建 Agent 开放，后端 API、注入层和 simulator 都会把异常 `CORE` 降到 `IMPORTANT`。Agent Library 的 favorites 是普通筛选按钮，Workshop 的 manual/document tab 支持键盘方向键切换；capability/favorite 失败会显示本地化错误和 retry，不直接露出原始后端文本。
 - 当 `persona_export` capability 开启时，Agent Library 的卡片可导出 Agent 备份，顶部可从备份创建新的 custom Agent；Agent Workshop header 也会显示同一套备份工具，编辑已有 Agent 时才显示导出。备份导入不会覆盖已有身份，并会把 decision bias 归一化到安全的 5 维数值；粘贴 JSON 入口默认折叠在高级区域。导入/导出失败会显示本地化提示，意外错误只进入 debug log。
 - Agent Library 当前支持 `#agent_profile=<id>&tab=memory` 档案深链；ResultView 里的 custom Agent 档案入口继续走这条 hash，generated / replay Agent 则在当前结果页打开 `AgentProfileSheet`，不再把 scenario-scoped identity 丢到普通 `/agents` 列表态。
 - 当 `prediction_journal` capability 开启时，`/me/journal` 提供个人预测日志、resolve 状态和 calibration 可视化；绑定 scenario 时按当前用户校验所有权，跨用户或无 owner 的旧 scenario 统一隐藏成 404，刷新时会忽略迟到响应，不用旧请求覆盖新列表。
@@ -195,11 +195,13 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 最近完整本地验证：
   - backend `python -m pytest -x --tb=short`：`3290 passed, 6 skipped`
   - backend `ruff check app/ tests/`：通过
-  - frontend `npm test -- --reporter=dot`：`204 files / 2280 tests passed`
+  - frontend `npm test`：`205 files / 2300 tests passed`
   - frontend `npm run lint`：通过
   - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
   - frontend `npm run build`：通过，performance budgets 通过
-  - frontend i18n key parity：`zh: 2796`、`en: 2796`、parity OK
+  - frontend i18n key parity：`zh: 2785`、`en: 2785`、placeholder parity OK
+  - Custom Agent attach 定向复核：backend `TestCustomAgentOwnership` 为 `10 passed`；Chrome 首页 smoke 确认 quick selector 可见、选中后 Start badge 显示、console error 为 0、桌面视口无横向溢出
+  - 跨浏览器限制：本轮 `e2e:cross-browser` 在 Firefox DirectorState 等待上超时，不能把 Firefox/WebKit 全矩阵写成已通过
   - Pixel Theater 浏览器复核：Chrome DevTools MCP 打开完成态 `/sim/e1a41453-2cb2-43a1-a054-0d7cd04a6bf5`，toolbar 玩法卡入口可见，modal 以只读状态打开，console error 为 0；Playwright MCP 当时因本机 profile 已占用未使用
   - KG visualization 定向回归：`5 files / 193 tests passed`，覆盖 `KGGraphBoard / KGExplorerView / useG6Graph / kgGraphConfig / locales`；确认 KG 色板、平行边/self-loop、G6 data-only draw 路径、搜索/类型筛选、sr-only fallback 和 i18n key parity
   - Workbench KG resize 定向回归：`useG6Graph.test.ts + WorkbenchView.test.tsx` 为 `56 passed`，`KGGraphBoard.test.tsx` 为 `42 passed`；本机浏览器复核 `graph -> split -> KG` 后，KG 容器与内部 G6 canvas 同宽，`widthDelta=0`，console error 为 0

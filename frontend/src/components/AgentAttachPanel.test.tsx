@@ -69,6 +69,7 @@ describe('AgentAttachPanel', () => {
       error: null,
       selectedIds: new Set(),
       loadedUserId: null,
+      loadingUserId: null,
       requestSeq: 0,
     });
   });

@@ -23,7 +23,7 @@ React + TypeScript frontend for SwarmOracle.
 
 | Route | Component | Description |
 |-------|-----------|-------------|
-| `/` | `InputView` | Scenario input, progress indicator, quick starts, daily challenge, weekly track, difficulty, streak/refresh countdown, progress sheet, onboarding, launch confirmation, source families, search-depth selector, provider policy, advanced/BYOK accordions, preflight-aware submit loading, custom Agent attach panel, feature-gated snapshot import |
+| `/` | `InputView` | Scenario input, progress indicator, quick starts, daily challenge, weekly track, difficulty, streak/refresh countdown, progress sheet, onboarding, launch confirmation, source families, search-depth selector, provider policy, advanced/BYOK accordions, preflight-aware submit loading, custom Agent quick selector + attach panel, feature-gated snapshot import |
 | `/admin/setup` | `SetupWizardView` | Three-step provider setup, API/base URL entry, and connection test |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Light Theater shell, replay, gameplay cards, structured bets, read-only intervention receipts, capture |
 | `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Result Quality verdict panel or neutral unavailable fallback when the capability is enabled, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, weekly leaderboard preview, achievement toast, share/export, prediction card, feature-gated snapshot export, replay import, rewrite-one-line counterfactuals, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
@@ -89,7 +89,7 @@ React + TypeScript frontend for SwarmOracle.
 - `dailyChallenge.ts`
   challenge date key and ISO week helpers for the campaign launch UI; server finalize remains the authority for dates, streaks, weekly bonus, and unlocks
 - `PredictionModal.tsx`
-  structured prediction submit stays serial and now blocks same-frame double-clicks while keeping the retry path after gameplay-state persistence errors
+  structured prediction submit stays serial, uses the session-bound user id for the prediction API, and now blocks same-frame double-clicks while keeping the retry path after gameplay-state persistence errors
 - `InterventionReceiptCard.tsx`
   reads persisted effects for the current scenario only, renders newest-first, returns no DOM for empty effects, and does not expose internal log ids
 - `ResumePanel.tsx`
@@ -97,7 +97,9 @@ React + TypeScript frontend for SwarmOracle.
 - `CounterfactualPanel.tsx`
   ResultView-side counterfactual control for `POST /api/scenario/:id/counterfactual`; edits one persisted source message, restricts rounds and agents to the selected source branch, sends the original source message for backend matching, and shows status feedback when the source branch/round is selected
 - `AgentAttachPanel.tsx`
-  homepage custom Agent picker; renders persona, domains, and decision bias as React text, caps selection at 5, and keeps loading/error/retry states visible
+  advanced-settings custom Agent picker; renders persona, domains, and decision bias as React text, follows the caller's dynamic selection cap, and keeps loading/error/retry states visible
+- `AgentSelectionStrip.tsx`
+  homepage quick selector for custom Agents; shows up to 3 pills plus `+N more`, uses native checkboxes inside a fieldset, and keeps forced-colors / reduced-motion fallbacks in CSS
 - `AgentLibrary.tsx / AgentCard.tsx`
   Agent library surface with owned-identity favorites, pressed-button filtering, profile/edit/export actions, Unicode-safe long-persona truncation, a localized back action, and localized retry states for capability/favorite failures
 - `AgentWorkshopView.tsx / DocumentUploader.tsx`
@@ -164,7 +166,7 @@ React + TypeScript frontend for SwarmOracle.
 - `ShareArtifact.tsx`
   offscreen 1200x630 PNG export card; it only receives display-safe summary fields, not BYOK or session configuration
 - `ShareModal.tsx / ShareablePredictionCard.tsx`
-  share modal can download/copy a prediction card PNG when the browser supports it; social-copy requests are aborted on close/unmount, not on unrelated parent rerenders
+  share modal can download/copy a prediction card PNG when the browser supports it; social-copy requests use the session-bound user id and are aborted on close/unmount, not on unrelated parent rerenders
 - `shareEnvelope.ts`
   currently keeps only the `ShareFlavorContext` type; frontend no longer prepends a local theme archive envelope to social copy or Markdown export
 - `SnapshotExportWizard.tsx / SnapshotImportDialog.tsx`
@@ -220,8 +222,10 @@ npm run build:spike:phaser-custom
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
   - `npm run lint`: pass
   - `npm run build`: pass
-  - full vitest: `202 files / 2243 tests passed`
-  - i18n key parity spot-check: `zh: 2757`, `en: 2757`, parity OK
+  - full vitest: `205 files / 2300 tests passed`
+  - i18n key parity spot-check: `zh: 2785`, `en: 2785`, placeholder parity OK
+  - custom Agent attach smoke: Chrome homepage quick selector renders, selecting an Agent shows the Start badge, console error count is 0, and desktop overflow is absent
+  - cross-browser caveat: `e2e:cross-browser` currently times out while waiting for Firefox DirectorState, so this file should not claim a fresh Firefox/WebKit full pass for the Agent quick-selector work
   - Pixel Theater browser spot-check: completed Theater shows the toolbar gameplay-card entry, opens the read-only gameplay cards modal, and reports 0 console errors in Chrome DevTools MCP
   - CampaignProgressSheet browser spot-check and campaign/gameplay browser E2E remain older scoped evidence, not this Pixel Theater pass
 - Older Sprint 0-4 rows below are historical artifacts, not the current pass-count source.

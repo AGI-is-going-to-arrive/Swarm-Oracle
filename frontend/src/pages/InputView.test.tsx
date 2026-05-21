@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { __resetCapabilityCacheForTests } from '../hooks/useCapabilityCheck';
+import { useAgentStore } from '../stores/agentStore';
 import { InputView } from './InputView';
 
 const {
@@ -21,6 +22,8 @@ const {
   getCampaignWeeklySummaryMock,
   getChallengeProgressMock,
   changeLanguageMock,
+  listAgentIdentitiesMock,
+  getSessionBoundUserIdMock,
   setMockLanguage,
   getMockLanguage,
   stableTranslator,
@@ -152,6 +155,8 @@ const {
     changeLanguageMock: vi.fn((language: string) => {
       setMockLanguage(language);
     }),
+    listAgentIdentitiesMock: vi.fn(),
+    getSessionBoundUserIdMock: vi.fn(() => 'default_user'),
     setMockLanguage,
     getMockLanguage,
     stableTranslator,
@@ -202,6 +207,8 @@ vi.mock('../api/client', () => ({
   getCampaignChallengeRotation: getCampaignChallengeRotationMock,
   getCampaignDailyChallengeStatus: getCampaignDailyChallengeStatusMock,
   getCampaignWeeklySummary: getCampaignWeeklySummaryMock,
+  listAgentIdentities: listAgentIdentitiesMock,
+  getSessionBoundUserId: getSessionBoundUserIdMock,
 }));
 
 vi.mock('../lib/directorIdentity', () => ({
@@ -342,6 +349,15 @@ describe('InputView campaign progress', () => {
     // existing InputView interaction tests.
     window.localStorage.setItem('swarm_onboarding_completed', 'true');
     __resetCapabilityCacheForTests();
+    useAgentStore.setState({
+      identities: [],
+      loading: false,
+      loadingUserId: null,
+      error: null,
+      selectedIds: new Set(),
+      loadedUserId: null,
+      requestSeq: 0,
+    });
     setMockLanguage('en');
     changeLanguageMock.mockClear();
     createDebateMock.mockReset();
@@ -553,7 +569,7 @@ describe('InputView campaign progress', () => {
     expect(await screen.findByText('Remote daily question en')).toBeInTheDocument();
     await waitFor(() => {
       expect(getCampaignDailyChallengeStatusMock).toHaveBeenCalledWith(
-        'director-1',
+        'default_user',
         'law',
         '2026-03-17',
         expect.any(Number),
@@ -1669,6 +1685,15 @@ describe('InputView IME composition guard and confirm launch dialog', () => {
     // existing InputView interaction tests.
     window.localStorage.setItem('swarm_onboarding_completed', 'true');
     __resetCapabilityCacheForTests();
+    useAgentStore.setState({
+      identities: [],
+      loading: false,
+      loadingUserId: null,
+      error: null,
+      selectedIds: new Set(),
+      loadedUserId: null,
+      requestSeq: 0,
+    });
     setMockLanguage('en');
     changeLanguageMock.mockClear();
     createDebateMock.mockReset();
@@ -2726,5 +2751,131 @@ describe('inferProviderFromBaseUrl (P4-2 unit)', () => {
     const { inferProviderFromBaseUrl } = await import('../hooks/useWebSearchConfig');
     expect(inferProviderFromBaseUrl('not-a-url-tavily')).toBeNull();
     expect(inferProviderFromBaseUrl('exa.ai')).toBeNull();
+  });
+});
+
+describe('InputView apiUserId wiring (P1)', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    window.localStorage.setItem('swarm_onboarding_completed', 'true');
+    __resetCapabilityCacheForTests();
+    setMockLanguage('en');
+    changeLanguageMock.mockClear();
+    createDebateMock.mockReset();
+    startSimulationMock.mockClear();
+    identityPreflightMock.mockReset();
+    importScenarioSnapshotMock.mockReset();
+    testLlmConnectionMock.mockReset();
+    getCapabilitiesMock.mockReset();
+    listAgentIdentitiesMock.mockReset();
+    getSessionBoundUserIdMock.mockReset();
+    getSessionBoundUserIdMock.mockReturnValue('default_user');
+    listAgentIdentitiesMock.mockResolvedValue([]);
+    // custom_agents enabled so AgentSelectionStrip + AgentAttachPanel render
+    getCapabilitiesMock.mockResolvedValue({
+      custom_agents: { enabled: true },
+    });
+    identityPreflightMock.mockResolvedValue({
+      needs_confirmation: false,
+      matches: [],
+      summary: {
+        agent_count: 0,
+        exact_match_count: 0,
+        candidate_count: 0,
+        new_identity_count: 0,
+      },
+    });
+    getCampaignProfileMock.mockReset();
+    getCampaignMasteryMock.mockReset();
+    getCampaignBadgesMock.mockReset();
+    getCampaignChallengeRotationMock.mockReset();
+    getCampaignDailyChallengeStatusMock.mockReset();
+    getCampaignWeeklySummaryMock.mockReset();
+    getChallengeProgressMock.mockReset();
+    getCampaignProfileMock.mockResolvedValue(null);
+    getCampaignMasteryMock.mockResolvedValue([]);
+    getCampaignBadgesMock.mockResolvedValue([]);
+    getCampaignChallengeRotationMock.mockResolvedValue(null);
+    getCampaignDailyChallengeStatusMock.mockResolvedValue(null);
+    getCampaignWeeklySummaryMock.mockResolvedValue(null);
+    getChallengeProgressMock.mockReturnValue(null);
+  });
+
+  it('passes apiUserId (= getSessionBoundUserId() = default_user) to AgentSelectionStrip, not directorIdentity.userId', async () => {
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // AgentSelectionStrip fetches identities through agentStore -> listAgentIdentities
+    // using the apiUserId prop, not the random/director identity userId.
+    await waitFor(() => {
+      expect(listAgentIdentitiesMock).toHaveBeenCalled();
+    });
+    const calledWith = listAgentIdentitiesMock.mock.calls[0]?.[0];
+    expect(calledWith).toBe('default_user');
+    expect(calledWith).not.toBe('director-1');
+  });
+
+  it('renders AgentSelectionStrip when custom_agents capability is enabled', async () => {
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Strip presents the fieldset (legend text is from i18n key fallback)
+    await waitFor(() => {
+      // Strip mounts an effect that calls fetchIdentities -> listAgentIdentities
+      expect(listAgentIdentitiesMock).toHaveBeenCalled();
+    });
+  });
+
+  it('does not call listAgentIdentities with directorIdentity.userId (director-1)', async () => {
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(listAgentIdentitiesMock).toHaveBeenCalled();
+    });
+    for (const call of listAgentIdentitiesMock.mock.calls) {
+      expect(call[0]).not.toBe('director-1');
+    }
+  });
+
+  it('ignores stale selected agents when custom_agents capability is disabled', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      custom_agents: { enabled: false },
+    });
+    useAgentStore.setState({
+      selectedIds: new Set(['agent-1', 'agent-2']),
+    });
+
+    const { container } = render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    expect(container.querySelector('.iv-submit__badge')).toBeNull();
+
+    await user.type(screen.getAllByRole('textbox')[0], 'What if stale agents remain?');
+    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledTimes(1);
+    });
+    expect(startSimulationMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        customAgentIdentityIds: expect.any(Array),
+      }),
+    );
   });
 });
