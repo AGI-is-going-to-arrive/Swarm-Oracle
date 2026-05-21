@@ -89,7 +89,7 @@
 | Structured Betting | 已落地，支持世界线 / 结局倾向 / 题材回响；题材回响放在高级选项里 |
 | Result Quality / Question Anchoring | 已落地，受 `FEATURE_RESULT_VERDICT` 和 `/api/capabilities.result_verdict` 控制；结果页在有 verdict 时先给出直接回答原问题的预测结论、置信度，verdict 缺失时显示中性的“暂无预测结论”并保留原问题；结局卡有 `question_answer` 时会把分支级一句话回答放在概率条上方 |
 | Director Campaign | 已落地，含 52 条 daily challenge catalog、streak、7 条 weekly track + leaderboard、15 个 registry badge、非线性 mastery level、首页成长 sheet、后端权威 `score_breakdown` 与结果页导演复盘 / 因果档案；结果页导演笔记和导演复盘默认收起，展开后再查看完整复盘，导演复盘的关键记录超过 3 条时用原生 disclosure 展开 |
-| Graph Workbench / Causal Graph | 已落地，结果页 header 和下一步入口可进入 `/workbench/:id`；工作台会保留当前 analysis branch query，但 workbench 的因果图和 KG 图都按 scenario 拉全量 causal graph，不再用 URL `branch` 过滤。因果图边标签会按 zoom 密度显示，hover 或键盘 focus 时展示轮次与可信度；KG 图会用真实 G6 canvas / minimap，搜索和类型筛选直接更新可视图，移动端超过 200 个节点会显示截断提示，图例默认折叠，键盘仍可遍历节点；PNG / SVG 导出继续走 ExportPanel |
+| Graph Workbench / Causal Graph | 已落地，结果页 header 和下一步入口可进入 `/workbench/:id`；工作台会保留当前 analysis branch query，但 workbench 的因果图和 KG 图都按 scenario 拉全量 causal graph，不再用 URL `branch` 过滤。因果图边标签会按 zoom 密度显示，hover 或键盘 focus 时展示轮次与可信度；KG 图会用真实 G6 canvas / minimap，搜索和类型筛选直接更新可视图，从 split 切回 KG 单图面时会按当前容器重新铺满画布；移动端超过 200 个节点会显示截断提示，图例默认折叠，键盘仍可遍历节点；PNG / SVG 导出继续走 ExportPanel |
 | Admin Setup / Preflight | 已落地，`/admin/setup` 提供 3 步 provider 配置向导；后端提供 `/api/admin/preflight`、`/api/admin/test-llm` 和 `make preflight`；设置 `ADMIN_TOKEN` 后 admin API 要求 `X-Admin-Token` |
 | Custom Agent Library | 已落地，受 `FEATURE_CUSTOM_AGENTS` gate；支持创建/编辑/收藏自建 Agent、PDF 文档生成 Agent、knowledge domains、`IMPORTANT / CROWD` tier、首页卡片选择、主推演注入和 Debate 双方席位绑定；Agent Library 支持 `#agent_profile=<id>&tab=memory` 档案深链；identity continuity preflight 超时会按 504 返回，后端不会把它伪装成“无匹配”；首页启动流当前会提示错误但继续按无 continuity override 启动；自建 Agent 不开放 `CORE` 层级 |
 | Agent Backups | 已落地，受 `FEATURE_PERSONA_EXPORT` gate；支持单个 / 批量导出 `schema_version=1` Agent 备份 JSON；从备份创建会为当前用户创建新的 custom Agent，不覆盖已有 Agent，并把 decision bias 归一化到安全的 5 维数值 |
@@ -190,11 +190,12 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-当前验证口径（最近更新：2026-05-21 KG visualization overhaul 复核）：
+当前验证口径（最近更新：2026-05-21 Workbench KG resize 复核）：
 
 - backend：`TOKENIZERS_PARALLELISM=false python -m pytest tests/ -q` 为 `3269 passed, 6 skipped`；`ruff check app/` 通过。
 - frontend：`npx tsc --noEmit`、`npx eslint src/ --max-warnings=0`、`npm run build`、`npx vitest run` 通过；full vitest 为 `202 files / 2224 tests passed`；i18n key 与 placeholder parity 为 `zh: 2766`、`en: 2766`、OK。
 - KG visualization 定向回归：`5 files / 193 tests passed`，覆盖 `KGGraphBoard / KGExplorerView / useG6Graph / kgGraphConfig / locales`；KG Explorer fixture E2E 覆盖 Chromium desktop + mobile、Firefox desktop 和 WebKit desktop，`4 runs / allPassed=true`。
+- Workbench KG resize 定向回归：`useG6Graph.test.ts + WorkbenchView.test.tsx` 为 `56 passed`，`KGGraphBoard.test.tsx` 为 `42 passed`；本机浏览器复核 `graph -> split -> KG` 后，KG 容器与内部 G6 canvas 同宽，`widthDelta=0`，console error 为 0。
 - ResultView 浏览器复核：本地完成结果页上，浮动紫色 Agent 按钮已移除；`下一步` 的 `找 Agent 追问` 是场内按钮，会打开 Agent picker，再进入 `NodeConversationSheet`；带 identity 的 Agent 会显示 `查看档案` 深链；关闭 sheet 后会清掉当前追问目标；390px 移动视口无横向溢出，console error 为 0。
 - Oracle browser E2E：`e2e:roundtable` 与 `e2e:ending-room` 在本地 preview/backend 口径通过；Ending Room summary 里 desktop/mobile replay coverage error 为 `null`，readonly replay / reload restore / import 关键字段齐全。
 - `git diff --check` 通过。

@@ -27,7 +27,7 @@ React + TypeScript frontend for SwarmOracle.
 | `/admin/setup` | `SetupWizardView` | Three-step provider setup, API/base URL entry, and connection test |
 | `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Pixel Theater, replay, gameplay cards, structured bets, read-only intervention receipts, capture |
 | `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Result Quality verdict panel or neutral unavailable fallback when the capability is enabled, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, weekly leaderboard preview, achievement toast, share/export, prediction card, feature-gated snapshot export, replay import, rewrite-one-line counterfactuals, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
-| `/workbench/:id` | `WorkbenchView` | Dedicated graph workbench for causal / split / KG layouts; preserves the analysis branch query and links back to the scenario result page |
+| `/workbench/:id` | `WorkbenchView` | Dedicated graph workbench for causal / split / KG layouts; preserves the analysis branch query, resizes the KG canvas when moving between split and KG-only layouts, and links back to the scenario result page |
 | `/replay/:id` | `ReplayView` | Replay trace timeline with pagination, branch filter, and unavailable/probe-error states |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
 | `/debate/:id/result` / `/debate/replay/result` | `DebateResultView` | Debate result, supporting turns, replay digest, share/import |
@@ -125,7 +125,7 @@ React + TypeScript frontend for SwarmOracle.
 - `uiPreferencesStore.ts`
   localStorage-backed ResultView Reader/Workbench preference
 - `WorkbenchView.tsx`
-  dedicated graph workbench shell; causal, split, and KG tabs keep separate capability gates, preserve the selected branch from the URL, and expose a stable back link to `/result/:id`
+  dedicated graph workbench shell; causal, split, and KG tabs keep separate capability gates, preserve the selected branch from the URL, pass layout changes down to the KG G6 canvas, and expose a stable back link to `/result/:id`
 - `experiments/phaser-custom/*`
   local curated Phaser entry, isolated spike configs, and repeatable custom-build validation scripts; current default `vite / vitest` also consume this entry, while `phaser3spectorjs-stub.cjs` keeps the build path quiet
 - `scripts/lib/frontendPreflight.mjs`

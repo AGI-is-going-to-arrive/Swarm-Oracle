@@ -11,8 +11,12 @@ vi.mock('./CausalGraphBoard', () => ({
 }));
 
 vi.mock('./KGGraphBoard', () => ({
-  default: (props: { scenarioId: string }) => (
-    <div data-testid="kg-board" data-scenario-id={props.scenarioId} />
+  default: (props: { scenarioId: string; resizeKey?: string }) => (
+    <div
+      data-testid="kg-board"
+      data-scenario-id={props.scenarioId}
+      data-resize-key={props.resizeKey ?? ''}
+    />
   ),
 }));
 
@@ -283,6 +287,24 @@ describe('GraphWorkbenchShell', () => {
 
     expect(screen.getByTestId('causal-board')).toBeTruthy();
     expect(screen.queryByTestId('kg-board')).toBeNull();
+  });
+
+  it('updates the KG board resize key when switching from split to kg', () => {
+    const { rerender } = render(
+      <MemoryRouter>
+        <GraphWorkbenchShell scenarioId="s1" mode="split" isCompact={false} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId('kg-board')).toHaveAttribute('data-resize-key', 'workbench:split');
+
+    rerender(
+      <MemoryRouter>
+        <GraphWorkbenchShell scenarioId="s1" mode="kg" isCompact={false} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId('kg-board')).toHaveAttribute('data-resize-key', 'workbench:kg');
   });
 
   // ── W-2: tabpanel ARIA ─────────────────────────────────────

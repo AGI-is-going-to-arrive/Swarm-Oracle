@@ -43,6 +43,7 @@ export default function GraphWorkbenchShell({
   const showCausal = mode !== 'kg';
   const showKG = mode !== 'graph';
   const isSplit = mode === 'split';
+  const kgResizeKey = `workbench:${mode}`;
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
@@ -106,6 +107,7 @@ export default function GraphWorkbenchShell({
 
       {showCausal && (
         <section
+          key="workbench-panel-graph"
           role="tabpanel"
           id="workbench-panel-graph"
           aria-labelledby="workbench-tab-graph"
@@ -165,6 +167,7 @@ export default function GraphWorkbenchShell({
 
       {showKG && (
         <section
+          key="workbench-panel-kg"
           role="tabpanel"
           id="workbench-panel-kg"
           aria-labelledby="workbench-tab-kg"
@@ -180,6 +183,7 @@ export default function GraphWorkbenchShell({
             <KGGraphBoard
               scenarioId={scenarioId}
               branchId={branchId}
+              resizeKey={kgResizeKey}
             />
           </Suspense>
         </section>

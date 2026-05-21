@@ -657,11 +657,12 @@ npm exec -- tsc --noEmit -p tsconfig.app.json
 
 - 如果要先收图谱节点对话 / 节点详情这条回归，优先跑上面的窄集；过了再决定要不要扩大到 full pytest / full vitest。
 - 工作台浏览器复核重点看：URL branch 是否只保留在 query/context，workbench 的 graph / split / kg 图面是否都请求不带 `branch_id` 的 `/causal-graph` 全量图；独立 `CausalReviewView` 的分支下拉仍应请求 `/causal-graph?branch_id=...`。同时看 far/mid/near 三档 label 密度、edge label 的 hover/focus detail、节点点击是否不被 label 层截获、ExportPanel 打开时是否保留导出完整性，以及 split → kg / kg → split 时 KG canvas 是否按容器宽度重新铺满。
+- 如果只复核 Workbench KG resize 回归，最小窄集是 `useG6Graph.test.ts + WorkbenchView.test.tsx`、`KGGraphBoard.test.tsx`、目标文件 eslint、`tsc --noEmit -p tsconfig.app.json`，再用浏览器走一次 `graph -> split -> KG`，确认 KG 容器和内部 G6 canvas 同宽。
 - 如果只复核 KG visualization overhaul 这条窄集：
 
 ```bash
 cd frontend
-npm test -- --run src/hooks/useG6Graph.test.ts src/lib/kgGraphConfig.test.ts src/components/workbench/KGGraphBoard.test.tsx src/pages/KGExplorerView.test.tsx src/i18n/locales.test.ts --reporter=verbose
+npm test -- --run src/hooks/useG6Graph.test.ts src/components/workbench/WorkbenchView.test.tsx src/lib/kgGraphConfig.test.ts src/components/workbench/KGGraphBoard.test.tsx src/pages/KGExplorerView.test.tsx src/i18n/locales.test.ts --reporter=verbose
 npm exec -- tsc --noEmit -p tsconfig.app.json
 npm run lint
 node --check scripts/e2e-kg-explorer-live.mjs
@@ -675,7 +676,7 @@ node scripts/e2e-kg-explorer-live.mjs full --url http://127.0.0.1:18930 --headle
 ```
 
 - `e2e-kg-explorer-live.mjs` 默认用 fixture，拦截 `/api/scenario/:id/causal-graph`；`full` 默认覆盖 Chromium desktop + mobile、Firefox desktop 和 WebKit desktop。live 模式需要设置 `SWARM_E2E_MODE=live`，并传 `--scenario-id <id>` 或 `SWARM_SCENARIO_ID`。
-- 这组 KG 窄集当前主要看：KG 浅/深色 type fills、陶土赭 selected stroke、森林绿 hover stroke、平行边偏移、self-loop 保留、`useG6Graph` 的 data-only `setData + draw` 路径、搜索匹配 `id / key / label`、类型筛选后的选中清理、图例默认折叠、sr-only fallback table、forced-colors 覆盖，以及 KG canvas 非空白。
+- 这组 KG 窄集当前主要看：KG 浅/深色 type fills、陶土赭 selected stroke、森林绿 hover stroke、平行边偏移、self-loop 保留、`useG6Graph` 的 data-only `setData + draw` 路径、layout resize key 触发的 `setSize + fitView`、搜索匹配 `id / key / label`、类型筛选后的选中清理、图例默认折叠、sr-only fallback table、forced-colors 覆盖，以及 KG canvas 非空白。
 - 这条窄集当前主要看：
   - causal graph 是否把 completed branch 投影成 `outcome` 结局节点，并用 `led_to` 接到同分支最近来源节点
   - fork label 是否使用用户可读的 `display_reason`，fork-only append 是否保留已有 provenance；旧孤立 fork 是否能回补只读 synthetic provenance

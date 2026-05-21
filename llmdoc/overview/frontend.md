@@ -225,7 +225,7 @@
 | `AnalystStreamView.tsx` / `SurveyStreamView.tsx` / `postVerdictCaches.ts` | `frontend/src/pages/` | post-verdict analyst / survey 的独立流式 UI、缓存与 context reset；会区分 user abort、stream error、retry 和 source/tool chip |
 | `useRoundtableSseStream.ts` | `frontend/src/hooks/useRoundtableSseStream.ts` | roundtable analyst / survey 共享 SSE hook；负责 POST stream、frame 解析、timeout 与 abort |
 | `manualChunks.ts` / `performanceBudgetConfig.mjs` | `frontend/src/lib/manualChunks.ts` / `frontend/scripts/lib/performanceBudgetConfig.mjs` | 前端构建分块与预算门禁单一事实源；React 保留在共享 `vendor`，`@antv/*` 隔离到 `g6-vendor`，`html2canvas / gif.js` 按需拆分，React Flow 栈继续走 Rollup 自动分块并纳入预算检查 |
-| `useG6Graph.ts` | `frontend/src/hooks/useG6Graph.ts` | G6 图谱 hook；等 ref-backed container 真正挂载后再建图，强制启用 G6 autoResize，同时用 ResizeObserver 同步容器尺寸后再 fitView；稳定数据值变化可走 `setData + draw`，结构或 options 变化仍走 `setOptions + render`，并保留事件订阅清理 |
+| `useG6Graph.ts` | `frontend/src/hooks/useG6Graph.ts` | G6 图谱 hook；等 ref-backed container 真正挂载后再建图，强制启用 G6 autoResize，同时用 ResizeObserver 同步容器尺寸后再 fitView；调用方也可传 layout resize key，在父级 flex 面板切换但 ResizeObserver 不可靠时主动按容器尺寸 `setSize + fitView`；稳定数据值变化可走 `setData + draw`，结构或 options 变化仍走 `setOptions + render`，并保留事件订阅清理 |
 | `useNodeConversationTransport.ts` | `frontend/src/hooks/useNodeConversationTransport.ts` | `NodeConversationSheet` 的本地 transport hook；负责 `/start` / `/turn` 请求、origin branch/round/node/excerpt 透传、AbortController 生命周期和 SSE frame 解析 |
 | `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | `Organization ID` 的 sessionStorage helper；当前由 API client 读取并生成 `X-Org-Id`，InputView 不再展示专门输入框 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
@@ -525,7 +525,7 @@
   分支 selector 当前会优先显示 scenario branch 的标题和概率；拿不到 branch 元数据时才回退完整 branch id。
 - `CausalGraphBoard` 是独立工作台的轻量因果图面：只把 `scenarioId` 传给 `useScenarioGraph`，始终展示 scenario 的全量 causal graph；URL `branch` 保留在 workbench query 里，但不再作为 graph tab 的 fetch filter。大图超过 50 个节点时用更低的 fitView minimum zoom，节点/边结构变化才触发布局同步和 fitView；选中、关联、展开、dimmed 和 edge opacity 这类状态变化按 shallow diff 更新，避免每次交互重建整张图。
 - `CausalGraphBoard` 的边标签按 `far / mid / near` zoom bucket 走 CSS 密度管理，不在同一 bucket 内反复 re-render；far 隐藏全部 label，mid 只显示高优先级 label，near 显示全部。visual label pill 只放关系短名，round / confidence 放 hover 或 keyboard focus detail，tier color 用左边框表达。screen-reader relation list 仍保留完整关系文本。
-- `KGGraphBoard` 继续按 scenario 展示全量 causal graph 的 KG 视图，KG 数据和样式与 `KGExplorerView` 共用 `toKgG6Data / buildKgG6Options`。图例默认折叠；toolbar 使用固定尺寸 icon buttons；搜索会匹配节点 `id / key / label`，搜索和类型筛选会更新图数据本身，如果当前选中节点被过滤掉，会清掉选中和锁定高亮；节点超过 label 限制时默认收起节点标签，搜索、筛选、hover 或锁定时再打开当前语境；screen-reader fallback table 跟随当前可见节点，移动端超过 200 节点仍走截断提示。
+- `KGGraphBoard` 继续按 scenario 展示全量 causal graph 的 KG 视图，KG 数据和样式与 `KGExplorerView` 共用 `toKgG6Data / buildKgG6Options`。工作台 layout 从 split 切到 KG 单图面时，会把 layout resize key 传给 G6 hook，按当前容器重新 `setSize + fitView`，避免继续沿用 split 半宽 canvas。图例默认折叠；toolbar 使用固定尺寸 icon buttons；搜索会匹配节点 `id / key / label`，搜索和类型筛选会更新图数据本身，如果当前选中节点被过滤掉，会清掉选中和锁定高亮；节点超过 label 限制时默认收起节点标签，搜索、筛选、hover 或锁定时再打开当前语境；screen-reader fallback table 跟随当前可见节点，移动端超过 200 节点仍走截断提示。
 - `CausalReviewView` 的错误页当前提供 `Retry`，成功重拉后不会残留旧错误态；错误文案会按 `network / branch_not_found / unauthorized / server / load_failed` 映射到本地化 copy，不再把原始 `HTTP 404` 或后端 message 直接露给用户。
 - `CausalReviewView` 当前在 branch 切换时会忽略迟到的旧响应，不让旧分支结果覆盖最新选择。
 - `CausalReviewView` / `ArgumentMap` 当前对 graph route fetch 里的 `scenarioId / debateId`，以及 `CausalReviewView` 返回结果页的 scenario link，都先做 `encodeURIComponent()`；带特殊字符的 id 不会再把请求或跳转拆坏。
@@ -607,6 +607,7 @@
   - full vitest：`202 files / 2224 tests passed`
   - i18n key + placeholder parity：`zh: 2766`、`en: 2766`、parity OK
   - KG visualization 定向回归：`5 files / 193 tests passed`
+  - Workbench KG resize 定向回归：`useG6Graph.test.ts + WorkbenchView.test.tsx` 为 `56 passed`，`KGGraphBoard.test.tsx` 为 `42 passed`；本机浏览器复核 `graph -> split -> KG` 后，KG 容器与内部 G6 canvas 同宽，`widthDelta=0`，console error 为 0
   - KG Explorer fixture E2E：Chromium desktop + mobile、Firefox desktop、WebKit desktop 共 `4 runs / allPassed=true`
   - ResultView Agent follow-up browser spot-check：浮动紫色按钮已移除，`找 Agent 追问` 会打开 Agent picker，带 identity 的 Agent 有 `查看档案` 链接，选择 Agent 后打开 `NodeConversationSheet`；关闭 sheet 后目标清空，390px mobile 无横向溢出，console error 为 0
   - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过

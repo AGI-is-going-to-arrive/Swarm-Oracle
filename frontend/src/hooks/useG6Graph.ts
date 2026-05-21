@@ -53,6 +53,12 @@ export interface UseG6GraphOptions {
    */
   dataUpdateMode?: 'auto' | 'draw' | 'render';
   /**
+   * External layout signal. Change this when the graph container may have
+   * resized without a reliable ResizeObserver callback, for example when a
+   * parent flex panel switches between split and single-panel modes.
+   */
+  resizeKey?: unknown;
+  /**
    * Called once the Graph instance has been constructed and rendered.
    * Use this to register extra event listeners etc.
    */
@@ -87,6 +93,7 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
     containerRef, options, onReady, onNodeClick, onBeforeDestroy,
     onNodeHover, onNodeLeave, onEdgeClick, onEdgeHover, onEdgeLeave,
     dataUpdateMode = 'auto',
+    resizeKey,
   } = config;
 
   // Strict Mode double-mount guard. First dev run aborts before mutation.
@@ -365,6 +372,30 @@ export function useG6Graph(config: UseG6GraphOptions): UseG6GraphResult {
     observer.observe(container);
     return () => observer.disconnect();
   }, [containerRef]);
+
+  useEffect(() => {
+    if (resizeKey === undefined) return;
+    const container = containerRef.current;
+    const graph = graphRef.current;
+    if (!container || !graph) return;
+
+    const rect = container.getBoundingClientRect();
+    const width = Math.floor(rect.width || container.clientWidth);
+    const height = Math.floor(rect.height || container.clientHeight);
+    if (width <= 0 || height <= 0) return;
+
+    try {
+      graph.setSize(width, height);
+      const fitResult = graph.fitView();
+      if (fitResult && typeof (fitResult as Promise<unknown>).then === 'function') {
+        (fitResult as Promise<unknown>).catch(() => {
+          /* noop — same pattern as resize observer path above */
+        });
+      }
+    } catch {
+      /* noop */
+    }
+  }, [containerRef, resizeKey]);
 
   return { canvasWrapperRef, graphRef };
 }

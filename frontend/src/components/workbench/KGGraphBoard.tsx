@@ -28,6 +28,7 @@ export interface KGGraphBoardProps {
   onNodeClick?: (node: unknown) => void;
   className?: string;
   themeOverride?: 'light' | 'dark';
+  resizeKey?: unknown;
 }
 
 // ── Theme hook ──────────────────────────────────────────────
@@ -80,6 +81,7 @@ export default function KGGraphBoard({
   onNodeClick,
   className,
   themeOverride,
+  resizeKey,
 }: KGGraphBoardProps) {
   const { t } = useTranslation();
   const autoTheme = useAutoTheme();
@@ -416,6 +418,7 @@ export default function KGGraphBoard({
     onNodeClick: handleNodeClick,
     onNodeHover: handleNodeHover,
     onNodeLeave: handleNodeLeave,
+    resizeKey,
   });
 
   // ── G6 native state management (P6: replaces JS-level opacity dimming) ──

@@ -145,6 +145,46 @@ function DeferredContainerHost({ attached }: { attached: boolean }) {
   return { ...result, containerRef };
 }
 
+function ResizeKeyHost({
+  resizeKey,
+  width,
+  height,
+}: {
+  resizeKey: string;
+  width: number;
+  height: number;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  if (containerRef.current === null) {
+    containerRef.current = document.createElement('div');
+  }
+  Object.defineProperty(containerRef.current, 'clientWidth', {
+    configurable: true,
+    value: width,
+  });
+  Object.defineProperty(containerRef.current, 'clientHeight', {
+    configurable: true,
+    value: height,
+  });
+  containerRef.current.getBoundingClientRect = () => ({
+    width,
+    height,
+    top: 0,
+    left: 0,
+    right: width,
+    bottom: height,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  }) as DOMRect;
+  const result = useG6Graph({
+    containerRef,
+    options: { width: 100, height: 100, data: { nodes: [{ id: 'resized' }], edges: [] } },
+    resizeKey,
+  });
+  return { ...result, containerRef };
+}
+
 describe('useG6Graph lifecycle', () => {
   it('constructs Graph on mount and destroys on unmount', () => {
     const { unmount } = renderHook(() => TestHost());
@@ -309,6 +349,30 @@ describe('useG6Graph lifecycle', () => {
 
       unmount();
       expect(disconnectSpy).toHaveBeenCalled();
+    } finally {
+      globalThis.ResizeObserver = originalRO;
+    }
+  });
+
+  it('resyncs graph size when resizeKey changes even without a ResizeObserver event', () => {
+    const originalRO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = undefined as unknown as typeof ResizeObserver;
+
+    try {
+      const { rerender, unmount } = renderHook(
+        ({ resizeKey, width, height }) => ResizeKeyHost({ resizeKey, width, height }),
+        {
+          initialProps: { resizeKey: 'split', width: 800, height: 600 },
+        },
+      );
+      setSizeSpy.mockClear();
+      fitViewSpy.mockClear();
+
+      rerender({ resizeKey: 'kg', width: 1600, height: 600 });
+
+      expect(setSizeSpy).toHaveBeenCalledWith(1600, 600);
+      expect(fitViewSpy).toHaveBeenCalledTimes(1);
+      unmount();
     } finally {
       globalThis.ResizeObserver = originalRO;
     }
