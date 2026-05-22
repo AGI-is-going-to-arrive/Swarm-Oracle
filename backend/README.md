@@ -42,7 +42,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | Ending Room | `app/api/ending_rooms.py` | Oracle Chambers / roundtable room、thread、user-turn、result 与 ending-room WebSocket |
 | Journal | `app/api/journal.py` | Personal prediction journal create/list/resolve and calibration data |
 | Predictions | `app/api/predictions.py` | Scenario prediction and leaderboard |
-| Interventions | `app/api/interventions.py` | Standard / retrospective / batch intervention, including contract-checked gameplay card injection |
+| Interventions | `app/api/interventions.py` | Standard / retrospective / batch intervention, including contract-checked gameplay card injection; retrospective intervention is gated by `FEATURE_COUNTERFACTUAL_REPLAY` |
 | Social | `app/api/social.py` | Social media copy generation |
 | WebSocket | `app/api/ws.py` | Scenario real-time events + thread-scoped agent-conversation WebSocket |
 
@@ -103,9 +103,9 @@ source .venv/bin/activate
 python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py tests/test_llm_client.py tests/test_web_context.py tests/test_api.py -q
 ```
 
-- Latest local backend verification for Campaign Gameplay Enhancement:
-  - `python -m pytest tests/ -x -q --tb=short`: `3180 passed, 6 skipped`
-  - `ruff check .`: pass
+- Latest local backend verification for capability-gated replay/intervention hardening:
+  - `python -m pytest -x -q --tb=short`: `3286 passed, 11 skipped`
+  - `ruff check app/ tests/`: pass
 - Latest targeted Campaign/profile label verification:
   - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`: `154 passed`
   - `ruff check app/services/daily_challenges.py tests/test_gameplay_contract.py tests/test_interventions.py`: pass

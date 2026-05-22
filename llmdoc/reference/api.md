@@ -129,7 +129,7 @@
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `POST` | `/api/scenario/{scenario_id}/intervene` | 即时干预；也承载正式玩法卡注入 |
-| `POST` | `/api/scenario/{scenario_id}/intervene/retrospective` | 回溯干预 |
+| `POST` | `/api/scenario/{scenario_id}/intervene/retrospective` | 回溯干预；受 `FEATURE_COUNTERFACTUAL_REPLAY` gate 控制，关闭时返回 404 `FEATURE_DISABLED` |
 | `POST` | `/api/scenario/{scenario_id}/intervene/batch` | 批量干预 |
 | `GET` | `/api/scenario/{scenario_id}/intervention-effects` | 读取已持久化的只读干预效果回执 |
 | `GET` | `/api/intervention-templates` | 干预模板列表 |
@@ -372,6 +372,7 @@
 | `POST` | `/api/scenario/{id}/resume` | 从指定 round 续跑新分支 | `FEATURE_COUNTERFACTUAL_REPLAY` |
 | `GET` | `/api/scenario/{id}/compare` | 分支对比 | `FEATURE_COUNTERFACTUAL_REPLAY` |
 | `GET` | `/api/scenario/{id}/checkpoints` | 检查点列表 | `FEATURE_COUNTERFACTUAL_REPLAY` |
+| `POST` | `/api/scenario/{id}/intervene/retrospective` | 回溯干预 | `FEATURE_COUNTERFACTUAL_REPLAY` |
 | `GET` | `/api/scenario/{id}/replay-trace` | replay branch lineage | `FEATURE_REPLAY_TRACE` |
 | `GET` | `/api/scenario/{id}/faction-timeline` | 阵营时间线 | `FEATURE_FACTIONS` |
 

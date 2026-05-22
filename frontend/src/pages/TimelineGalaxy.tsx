@@ -37,14 +37,19 @@ interface GalaxyPayload {
 export default function TimelineGalaxy() {
   const { id: scenarioId = '' } = useParams<{ id: string }>();
   const { t } = useTranslation();
-  const { loading: capLoading, enabled: capEnabled } = useCapabilityCheck('kg_explorer');
+  const {
+    loading: capLoading,
+    enabled: capEnabled,
+    error: capError,
+    reload: reloadCapability,
+  } = useCapabilityCheck('kg_explorer');
 
   const [payload, setPayload] = useState<GalaxyPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!capEnabled || !scenarioId) return;
+    if (capError || !capEnabled || !scenarioId) return;
     let cancelled = false;
     const apiBase = (typeof window !== 'undefined'
       ? (window as unknown as { __API_BASE__?: string }).__API_BASE__
@@ -67,7 +72,7 @@ export default function TimelineGalaxy() {
     return () => {
       cancelled = true;
     };
-  }, [capEnabled, scenarioId]);
+  }, [capEnabled, capError, scenarioId]);
 
   const theme: 'light' | 'dark' =
     typeof document !== 'undefined' && document.documentElement.dataset?.theme === 'dark'
@@ -132,6 +137,17 @@ export default function TimelineGalaxy() {
     return (
       <div data-testid="timeline-galaxy-root" className="p-6 text-sm">
         {t('common.loading', 'Loading…')}
+      </div>
+    );
+  }
+  if (capError) {
+    return (
+      <div data-testid="timeline-galaxy-root" className="p-6 text-sm" role="alert" aria-live="polite">
+        <h1>{t('common.capability_error_title', 'Cannot verify feature')}</h1>
+        <p>{t('common.capability_error', 'Unable to verify feature availability. Please try again.')}</p>
+        <button type="button" onClick={() => void reloadCapability?.()}>
+          {t('common.retry', 'Retry')}
+        </button>
       </div>
     );
   }

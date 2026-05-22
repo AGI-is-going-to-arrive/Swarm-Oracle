@@ -32,6 +32,10 @@ describe('i18n locale resources', () => {
     expect(zh.translation.common.next).toBe('下一步');
     expect(en.translation.common.done).toBe('Done');
     expect(zh.translation.common.done).toBe('完成');
+    expect(en.translation.common.capability_error_title).toBe('Cannot verify feature');
+    expect(zh.translation.common.capability_error_title).toBe('无法验证功能状态');
+    expect(en.translation.common.capability_error).toBe('Unable to verify feature availability. Please try again.');
+    expect(zh.translation.common.capability_error).toBe('无法确认功能是否可用，请稍后重试。');
   });
 
   it('provides ArgumentMap mobile, tour, filter, and verdict legend labels', () => {

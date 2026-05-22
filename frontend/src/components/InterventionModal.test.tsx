@@ -9,11 +9,17 @@ const {
   interveneMock,
   interveneRetrospectiveMock,
   interveneBatchMock,
+  capabilityState,
 } = vi.hoisted(() => ({
   getInterventionTemplatesMock: vi.fn(),
   interveneMock: vi.fn(),
   interveneRetrospectiveMock: vi.fn(),
   interveneBatchMock: vi.fn(),
+  capabilityState: {
+    loading: false,
+    enabled: true,
+    error: null as Error | null,
+  },
 }));
 
 vi.mock('react-i18next', () => ({
@@ -28,6 +34,15 @@ vi.mock('../api/client', () => ({
   intervene: interveneMock,
   interveneRetrospective: interveneRetrospectiveMock,
   interveneBatch: interveneBatchMock,
+}));
+
+vi.mock('../hooks/useCapabilityCheck', () => ({
+  useCapabilityCheck: () => ({
+    loading: capabilityState.loading,
+    enabled: capabilityState.enabled,
+    capabilities: null,
+    error: capabilityState.error,
+  }),
 }));
 
 const baseProps = {
@@ -77,6 +92,9 @@ describe('InterventionModal advanced modes', () => {
       count: 2,
       interventions: [],
     });
+    capabilityState.loading = false;
+    capabilityState.enabled = true;
+    capabilityState.error = null;
   });
 
   it('submits a standard intervention through the existing client', async () => {
@@ -151,5 +169,30 @@ describe('InterventionModal advanced modes', () => {
     const retrospectiveButton = screen.getByText('intervention.mode_retrospective').closest('button');
     expect(retrospectiveButton).toBeDisabled();
     expect(screen.getByText('intervention.retrospective_disabled_hint')).toBeInTheDocument();
+  });
+
+  it('disables retrospective mode when counterfactual replay capability is off', async () => {
+    capabilityState.enabled = false;
+
+    render(<InterventionModal {...baseProps} />);
+
+    await waitFor(() => expect(getInterventionTemplatesMock).toHaveBeenCalled());
+    const retrospectiveButton = screen.getByText('intervention.mode_retrospective').closest('button');
+    expect(retrospectiveButton).toBeDisabled();
+    expect(screen.getByText('intervention.retrospective_feature_disabled')).toBeInTheDocument();
+    expect(interveneRetrospectiveMock).not.toHaveBeenCalled();
+  });
+
+  it('disables retrospective mode when the capability probe fails', async () => {
+    capabilityState.enabled = false;
+    capabilityState.error = new Error('capabilities failed');
+
+    render(<InterventionModal {...baseProps} />);
+
+    await waitFor(() => expect(getInterventionTemplatesMock).toHaveBeenCalled());
+    const retrospectiveButton = screen.getByText('intervention.mode_retrospective').closest('button');
+    expect(retrospectiveButton).toBeDisabled();
+    expect(screen.getByText('common.capability_error')).toBeInTheDocument();
+    expect(interveneRetrospectiveMock).not.toHaveBeenCalled();
   });
 });

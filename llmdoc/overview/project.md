@@ -193,13 +193,12 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - campaign finalize 优先从持久化 `director_state_json / gameplay_state_json` 派生 `score_breakdown`、daily/streak、weekly bonus 和 badge unlock；旧 scenario 缺少 `campaign_context` 时仍保留 legacy fallback。
   - 首页成长 sheet 读取静态 badge definitions、当前用户 badges、mastery 和 weekly summary；旧本地数据里的 `daily_challenge / archive_record / bet_winner` 徽章 id 会映射到当前 registry id 展示。
 - 最近完整本地验证：
-  - backend `python -m pytest -x --tb=short`：`3290 passed, 6 skipped`
+  - backend `python -m pytest -x -q --tb=short`：`3286 passed, 11 skipped`
   - backend `ruff check app/ tests/`：通过
-  - frontend `npm test`：`205 files / 2305 tests passed`
-  - frontend `npm run lint`：通过
+  - frontend `npx vitest run`：`206 files / 2318 tests passed`
+  - frontend `npx eslint src/ --max-warnings=0`：通过
   - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - frontend `npm run build`：通过，performance budgets 通过
-  - frontend i18n key parity：`zh: 2786`、`en: 2786`、placeholder parity OK
+  - frontend i18n key parity：`zh: 2791`、`en: 2791`
   - Custom Agent attach 定向复核：backend `TestCustomAgentOwnership` 为 `10 passed`；Chrome 首页 smoke 确认 quick selector 可见、选中后 Start badge 显示、console error 为 0、桌面视口无横向溢出
   - 跨浏览器限制：本轮 `e2e:cross-browser` 在 Firefox DirectorState 等待上超时，不能把 Firefox/WebKit 全矩阵写成已通过
   - 主模式 completed/replay 定向浏览器回归：Playwright fixture 在 Chromium、Firefox、WebKit 均通过，覆盖 completed 冷加载 Classic、结果页返回 Classic、replay Theater、单分支/单轮静态标签、多分支/多轮下拉、空分支/空消息、`cancelled` 和 `error` 状态

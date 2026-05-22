@@ -2224,7 +2224,7 @@ h3.roundtable-phase-divider {
   transition: background 0.18s, color 0.18s, border-color 0.18s, box-shadow 0.18s;
 }
 
-.roundtable-post-verdict__tab:hover:not(:disabled) {
+.roundtable-post-verdict__tab:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--bg-hover);
   border-color: var(--border-default);
 }
@@ -2236,7 +2236,8 @@ h3.roundtable-phase-divider {
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--oracle-accent) 16%, transparent);
 }
 
-.roundtable-post-verdict__tab:disabled {
+.roundtable-post-verdict__tab:disabled,
+.roundtable-post-verdict__tab[aria-disabled="true"] {
   opacity: 0.45;
   cursor: not-allowed;
 }

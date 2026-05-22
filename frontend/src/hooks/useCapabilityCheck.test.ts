@@ -8,7 +8,7 @@
  *   - Mid-path undefined -> enabled=false
  *   - Empty-string path treated as undefined (falls back to flat)
  */
-import { cleanup, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CapabilitiesResponse } from '../api/client';
@@ -110,6 +110,107 @@ describe('useCapabilityCheck — flat behavior (1-arg, backward compatible)', ()
     expect(mockGetCapabilities).toHaveBeenCalledTimes(1);
     first.unmount();
     second.unmount();
+  });
+
+  it('uses cached capabilities until the 5 minute TTL expires', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    mockGetCapabilities
+      .mockResolvedValueOnce(buildCapsWithProviders())
+      .mockResolvedValueOnce(buildCapsWithProviders({ factions: entry(false, '0.0') }));
+
+    const first = renderHook(() => useCapabilityCheck('factions'));
+    await waitFor(() => expect(first.result.current.loading).toBe(false));
+    expect(first.result.current.enabled).toBe(true);
+    first.unmount();
+
+    now += (5 * 60 * 1000) - 1;
+    const cached = renderHook(() => useCapabilityCheck('factions'));
+    await waitFor(() => expect(cached.result.current.loading).toBe(false));
+    expect(cached.result.current.enabled).toBe(true);
+    expect(mockGetCapabilities).toHaveBeenCalledTimes(1);
+    cached.unmount();
+
+    now += 2;
+    const refreshed = renderHook(() => useCapabilityCheck('factions'));
+    await waitFor(() => expect(refreshed.result.current.loading).toBe(false));
+    expect(refreshed.result.current.enabled).toBe(false);
+    expect(mockGetCapabilities).toHaveBeenCalledTimes(2);
+    refreshed.unmount();
+  });
+
+  it('backs off capability reloads after a failed probe', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    mockGetCapabilities
+      .mockRejectedValueOnce(new Error('capabilities failed'))
+      .mockResolvedValueOnce(buildCapsWithProviders());
+
+    const failed = renderHook(() => useCapabilityCheck('factions'));
+    await waitFor(() => expect(failed.result.current.loading).toBe(false));
+    expect(failed.result.current.error?.message).toBe('capabilities failed');
+    expect(mockGetCapabilities).toHaveBeenCalledTimes(1);
+    failed.unmount();
+
+    now += 1_000;
+    const throttled = renderHook(() => useCapabilityCheck('factions'));
+    await waitFor(() => expect(throttled.result.current.loading).toBe(false));
+    expect(throttled.result.current.error?.message).toContain('temporarily throttled');
+    expect(mockGetCapabilities).toHaveBeenCalledTimes(1);
+    throttled.unmount();
+
+    now += 1_001;
+    const retried = renderHook(() => useCapabilityCheck('factions'));
+    await waitFor(() => expect(retried.result.current.loading).toBe(false));
+    expect(retried.result.current.enabled).toBe(true);
+    expect(mockGetCapabilities).toHaveBeenCalledTimes(2);
+    retried.unmount();
+  });
+
+  it('backs off manual reloads after a failed probe', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    mockGetCapabilities
+      .mockRejectedValueOnce(new Error('capabilities failed'))
+      .mockResolvedValueOnce(buildCapsWithProviders());
+
+    const probe = renderHook(() => useCapabilityCheck('factions'));
+    await waitFor(() => expect(probe.result.current.loading).toBe(false));
+    expect(probe.result.current.error?.message).toBe('capabilities failed');
+
+    now += 1_000;
+    await act(async () => {
+      await probe.result.current.reload?.();
+    });
+
+    expect(probe.result.current.enabled).toBe(false);
+    expect(probe.result.current.error?.message).toContain('temporarily throttled');
+    expect(mockGetCapabilities).toHaveBeenCalledTimes(1);
+    probe.unmount();
+  });
+
+  it('reuses an in-flight capability probe when manual reload is requested', async () => {
+    const caps = buildCapsWithProviders();
+    let resolvePending!: (nextCaps: CapabilitiesResponse) => void;
+    const pending = new Promise<CapabilitiesResponse>((resolve) => {
+      resolvePending = resolve;
+    });
+    mockGetCapabilities.mockReturnValueOnce(pending);
+
+    const probe = renderHook(() => useCapabilityCheck('factions'));
+    expect(mockGetCapabilities).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      const reloadPromise = probe.result.current.reload?.();
+      await Promise.resolve();
+      expect(mockGetCapabilities).toHaveBeenCalledTimes(1);
+      resolvePending(caps);
+      await reloadPromise;
+    });
+
+    expect(probe.result.current.enabled).toBe(true);
+    expect(mockGetCapabilities).toHaveBeenCalledTimes(1);
+    probe.unmount();
   });
 });
 

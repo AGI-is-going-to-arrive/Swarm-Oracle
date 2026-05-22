@@ -35,6 +35,7 @@
 | ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel（verdict 缺失时显示 unavailable fallback）、分支级 question answer（显示在概率条上方）、因果档案 / archive（档案结论优先 story verdict）、默认折叠的导演笔记/导演复盘、campaign summary、weekly leaderboard preview、achievement toast、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、结果页 Agent 追问、generated/replay Agent 页内档案 sheet、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | WorkbenchView | `frontend/src/pages/WorkbenchView.tsx` | 独立图谱工作台；支持 `graph / split / kg` 三种 view，保留 URL 里的 analysis branch query，但 workbench 图面按 scenario 拉全量 causal graph，不再按 URL branch 过滤；页面提供返回结果页链接 |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
+| TimelineGalaxy | `frontend/src/pages/TimelineGalaxy.tsx` | `/timeline-galaxy/:id` 的 G6 时间线视图；复用 `kg_explorer` capability，capability probe 失败时先显示可重试错误，不会继续拉图谱数据 |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live、Podium Cards、room state、phase 历史卡、counterplay、live argument map |
 | DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import、裁判状态文案、按需加载 argument map |
@@ -232,7 +233,7 @@
 | `DirectorDebriefPanel.tsx` | `frontend/src/components/result/DirectorDebriefPanel.tsx` | 结果页导演复盘面板；外层折叠状态来自 `ResultContext`，消费后端 `score_breakdown` 和结果页整理出的问题、世界线、承诺、押注、干预、关键记录、目标与玩法卡状态，展示得分原因、本局读数、下一步入口与新增徽章 |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
 | `ClassicBranchTree.tsx` / `BranchTree.tsx` / `branchTitle.ts` | `frontend/src/components/` | Classic 分支树；短标题会用 `description / fork_reason` 的首句补成更好读的展示标题，原始 `Branch.title` 仍保留给干预等业务动作 |
-| `PostVerdictPanel.tsx` | `frontend/src/pages/PostVerdictPanel.tsx` | completed live roundtable 的 `Deep Dive` 面板；聚合 participant-scoped `1-on-1 Interview`、`Research Analyst` 与 `Cross-Examine` |
+| `PostVerdictPanel.tsx` | `frontend/src/pages/PostVerdictPanel.tsx` | completed live roundtable 的 `Deep Dive` 面板；聚合 participant-scoped `1-on-1 Interview`、`Research Analyst` 与 `Cross-Examine`，并对 `agent_conversation / roundtable_analyst / roundtable_survey` 做 inline capability gate |
 | `RoundtableAgentChat.tsx` | `frontend/src/pages/RoundtableAgentChat.tsx` | 圆桌 post-verdict 的 `1-on-1 Interview`；按 participant 维护独立 conversation thread |
 | `AnalystStreamView.tsx` / `SurveyStreamView.tsx` / `postVerdictCaches.ts` | `frontend/src/pages/` | post-verdict analyst / survey 的独立流式 UI、缓存与 context reset；会区分 user abort、stream error、retry 和 source/tool chip |
 | `useRoundtableSseStream.ts` | `frontend/src/hooks/useRoundtableSseStream.ts` | roundtable analyst / survey 共享 SSE hook；负责 POST stream、frame 解析、timeout 与 abort |
@@ -325,8 +326,10 @@
 - InputView 的主问题输入有稳定 accessible name，并带 IME composition guard；中文输入法组词期间按 Enter 不会误触发启动。
 - continuity 确认框是 modal dialog：打开后会聚焦第一个控件，Tab 留在弹层内，Escape 或取消会关闭并恢复焦点。
 - `useCapabilityCheck` 当前会复用同一份 `/api/capabilities` 结果：
-  - 多个组件同时 mount 时不会再各自重打一遍同样的请求
-  - consumer 现在能区分 `loading / enabled / error`
+  - 多个组件同时 mount 时会共享同一个 in-flight 请求
+  - 成功结果会缓存 5 分钟，避免 30+ consumer 频繁重打 capabilities
+  - capability 请求失败会从 2 秒开始退避，最多 60 秒；`reload()` 可强制重试
+  - consumer 现在能区分 `loading / enabled / error / reload`
   - capability 请求失败时不再直接伪装成 `enabled=false`
 - ResultView 当前除了折叠的 `真实世界来源` 入口，也会按 `web_search_context.family_context` 渲染四张 source family card：
   - 被选中的 family 才会变成 `ready`
@@ -454,6 +457,7 @@
   - `1-on-1 Interview`：按 participant 作用域开启代表私聊，复用 conversation `/start` + `/turn`；目标卡会显示角色、世界线、立场、最近原话和人物简介，传给后端的 `origin_excerpt` 也是同一份可读摘要，不再把 raw JSON 直接塞进 prompt context
   - `Research Analyst`：走 roundtable analyst SSE，展示 tool iteration 与最终回答
   - `Cross-Examine`：对选中的 participants 发同一问题，按 participant 返回 survey response
+- `Deep Dive` 的三个 tabpanel 会一直保留稳定 id，便于 `aria-controls` 指向真实目标；`agent_conversation / roundtable_analyst / roundtable_survey` capability 探针失败时显示可重试错误，功能关闭时显示本地化占位。analyst / survey 关闭时不会挂载对应 SSE 子面板。
 - `Deep Dive` 只在 live completed room 打开。roundtable replay 继续保持只读，只恢复 transcript / thread / share / import，不重新开放 chat、analyst 或 survey 这类 live 工具。
 - `1-on-1 Interview` 的请求失败、空响应或 stream error 当前显示为独立 `role=alert` 错误提示，不再追加成代表自己的气泡。
 - post-verdict 工具当前有独立于 room composer 的流状态与缓存：`PostVerdictPanel` 持有 tab / analyst / survey state，result context 变化时会 reset cache 并 abort in-flight stream；`AnalystStreamView` 与 `SurveyStreamView` 共享 `useRoundtableSseStream` 处理 SSE。用户 abort、首帧前 abort、完成后 abort 和服务端 error 会落到不同 UI 状态；analyst tool result 与 survey participant source 会以 chip 形式展示。
@@ -540,7 +544,7 @@
 - `CausalGraphBoard` 是独立工作台的轻量因果图面：只把 `scenarioId` 传给 `useScenarioGraph`，始终展示 scenario 的全量 causal graph；URL `branch` 保留在 workbench query 里，但不再作为 graph tab 的 fetch filter。大图超过 50 个节点时用更低的 fitView minimum zoom，节点/边结构变化才触发布局同步和 fitView；选中、关联、展开、dimmed 和 edge opacity 这类状态变化按 shallow diff 更新，避免每次交互重建整张图。
 - `CausalGraphBoard` 的边标签按 `far / mid / near` zoom bucket 走 CSS 密度管理，不在同一 bucket 内反复 re-render；far 隐藏全部 label，mid 只显示高优先级 label，near 显示全部。visual label pill 只放关系短名，round / confidence 放 hover 或 keyboard focus detail，tier color 用左边框表达。screen-reader relation list 仍保留完整关系文本。
 - `KGGraphBoard` 继续按 scenario 展示全量 causal graph 的 KG 视图，KG 数据和样式与 `KGExplorerView` 共用 `toKgG6Data / buildKgG6Options`。工作台 layout 从 split 切到 KG 单图面时，会把 layout resize key 传给 G6 hook，按当前容器重新 `setSize + fitView`，避免继续沿用 split 半宽 canvas。图例默认折叠；toolbar 使用固定尺寸 icon buttons；搜索会匹配节点 `id / key / label`，搜索和类型筛选会更新图数据本身，如果当前选中节点被过滤掉，会清掉选中和锁定高亮；节点超过 label 限制时默认收起节点标签，搜索、筛选、hover 或锁定时再打开当前语境；screen-reader fallback table 跟随当前可见节点，移动端超过 200 节点仍走截断提示。
-- `CausalReviewView` 的错误页当前提供 `Retry`，成功重拉后不会残留旧错误态；错误文案会按 `network / branch_not_found / unauthorized / server / load_failed` 映射到本地化 copy，不再把原始 `HTTP 404` 或后端 message 直接露给用户。
+- `CausalReviewView` 的错误页当前提供 `Retry`，成功重拉后不会残留旧错误态；capability probe 失败会先显示可重试错误，不会误落到 feature disabled；graph fetch 错误文案会按 `network / branch_not_found / unauthorized / server / load_failed` 映射到本地化 copy，不再把原始 `HTTP 404` 或后端 message 直接露给用户。
 - `CausalReviewView` 当前在 branch 切换时会忽略迟到的旧响应，不让旧分支结果覆盖最新选择。
 - `CausalReviewView` / `ArgumentMap` 当前对 graph route fetch 里的 `scenarioId / debateId`，以及 `CausalReviewView` 返回结果页的 scenario link，都先做 `encodeURIComponent()`；带特殊字符的 id 不会再把请求或跳转拆坏。
 - URL 里如果带了不存在的 `branch_id`，`CausalReviewView` 当前会直接显示后端错误，不再把未知分支伪装成空图。
@@ -615,11 +619,11 @@
   - `npm exec -- eslint src/pages/result/ResultHeader.tsx src/pages/result/ExploreDeeperBridge.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts`：通过
   - 浏览器实测本机结果页显示 `对话 · 本机模式`，header 可直接进入因果图谱和图谱工作台；点击 `探索` 会滚到下一步区。
 - 当前 frontend 稳定验证口径：
-  - `npm test`：`205 files / 2300 tests passed`
-  - `npm run lint`：通过
+  - `npx vitest run`：`206 files / 2318 tests passed`
+  - `npx eslint src/ --max-warnings=0`：通过
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - `npm run build`：通过，performance budgets 通过
-  - i18n key parity：`zh: 2785`、`en: 2785`、placeholder parity OK
+  - i18n key parity：`zh: 2791`、`en: 2791`
+  - CausalReviewView / TimelineGalaxy capability 浏览器复核：Chromium、Firefox、WebKit 均覆盖 capability probe error 与正常 capability payload；WebKit 的 TimelineGalaxy 正常态以页面文本和 canvas 数量复核通过
   - Pixel Theater browser spot-check：完成态 `/sim/e1a41453-2cb2-43a1-a054-0d7cd04a6bf5` 的 toolbar 玩法卡入口可见，modal 以只读状态打开，Chrome DevTools console error 为 0
   - KG visualization 定向回归：`5 files / 193 tests passed`
   - Workbench KG resize 定向回归：`useG6Graph.test.ts + WorkbenchView.test.tsx` 为 `56 passed`，`KGGraphBoard.test.tsx` 为 `42 passed`；本机浏览器复核 `graph -> split -> KG` 后，KG 容器与内部 G6 canvas 同宽，`widthDelta=0`，console error 为 0

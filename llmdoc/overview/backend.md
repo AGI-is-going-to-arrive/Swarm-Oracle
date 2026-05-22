@@ -23,7 +23,7 @@
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import；scenario/story branch response 会回显 `parent_branch_id / fork_round / fork_reason / replay_kind / replay_source_branch_id`，并在 Result Quality 开启时回显 `verdict / verdict_confidence / branches[].question_answer` |
 | Agents | `backend/app/api/agents.py` | identity 列表 / profile drawer、preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 Agent 备份导入导出；identity preflight 解析超时按 504 fail-closed |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary；bucket 会回显 `enforced / scope / window_seconds` |
-| Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板；正式玩法卡注入会在后端校验 contract、冷却、点数和 pending metadata，玩法卡业务校验失败返回结构化 `422` |
+| Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板；回溯干预受 `FEATURE_COUNTERFACTUAL_REPLAY` gate 控制；正式玩法卡注入会在后端校验 contract、冷却、点数和 pending metadata，玩法卡业务校验失败返回结构化 `422` |
 | Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badges、badge definitions、user unlocks、daily rotation、weekly track summary、leaderboard preview、score breakdown、只读 intervention effect receipts |
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
 | Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard 与 segment filters |
@@ -456,7 +456,7 @@
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 - custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；最近记录里后端仓库级 ruff 已全绿。
 - 最近后端完整复验：
-  - `python -m pytest -x --tb=short`：`3290 passed, 6 skipped`
+  - `python -m pytest -x -q --tb=short`：`3286 passed, 11 skipped`
   - `ruff check app/ tests/`：通过
 - Campaign/profile label 本轮窄集复验：
   - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`：`154 passed`

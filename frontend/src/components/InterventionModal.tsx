@@ -11,6 +11,7 @@ import {
   interveneRetrospective,
 } from '../api/client';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import type { InterventionTemplate } from '../api/client';
 import type { BranchInfo } from '../types';
 import './InterventionModal.css';
@@ -64,6 +65,11 @@ export default function InterventionModal({
   onClose,
 }: Props) {
   const { t } = useTranslation();
+  const {
+    enabled: counterfactualReplayEnabled,
+    loading: counterfactualReplayLoading,
+    error: counterfactualReplayError,
+  } = useCapabilityCheck('counterfactual_replay');
   const [mode, setMode] = useState<InterventionMode>('standard');
   const [text, setText] = useState('');
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
@@ -84,7 +90,30 @@ export default function InterventionModal({
     [activeBranches, branchId, branchTitle],
   );
   const currentBranchMaxRound = branchRoundLimits[branchId] ?? 0;
-  const retrospectiveDisabled = currentBranchMaxRound < 1;
+  const hasRetrospectiveHistory = currentBranchMaxRound >= 1;
+  const retrospectiveCapabilityUnavailable = !counterfactualReplayLoading && !counterfactualReplayEnabled;
+  const retrospectiveDisabled = !hasRetrospectiveHistory
+    || counterfactualReplayLoading
+    || retrospectiveCapabilityUnavailable
+    || Boolean(counterfactualReplayError);
+  const retrospectiveDisabledMessage = counterfactualReplayError
+    ? t('common.capability_error')
+    : retrospectiveCapabilityUnavailable
+      ? t('intervention.retrospective_feature_disabled')
+      : counterfactualReplayLoading
+        ? t('common.loading')
+        : t('intervention.retrospective_unavailable');
+  const retrospectiveModeHint = retrospectiveDisabled
+    ? (
+      counterfactualReplayError
+        ? t('common.capability_error')
+        : retrospectiveCapabilityUnavailable
+          ? t('intervention.retrospective_feature_disabled')
+          : counterfactualReplayLoading
+            ? t('common.loading')
+            : t('intervention.retrospective_disabled_hint')
+    )
+    : t('intervention.mode_retrospective_hint');
   const effectiveSelectedBatchBranchIds = useMemo(() => {
     const validIds = new Set(branchOptions.map((branch) => branch.id));
     const current = selectedBatchBranchIds ?? [branchId];
@@ -155,7 +184,7 @@ export default function InterventionModal({
     }
     if (status === 'submitting' || status === 'success') return;
     if (mode === 'retrospective' && retrospectiveDisabled) {
-      setErrorMsg(t('intervention.retrospective_unavailable'));
+      setErrorMsg(retrospectiveDisabledMessage);
       return;
     }
     if (mode === 'batch' && effectiveSelectedBatchBranchIds.length === 0) {
@@ -235,11 +264,7 @@ export default function InterventionModal({
               disabled={isDisabled || retrospectiveDisabled}
             >
               <span>{t('intervention.mode_retrospective')}</span>
-              <small>
-                {retrospectiveDisabled
-                  ? t('intervention.retrospective_disabled_hint')
-                  : t('intervention.mode_retrospective_hint')}
-              </small>
+              <small>{retrospectiveModeHint}</small>
             </button>
             <button
               type="button"
@@ -296,7 +321,7 @@ export default function InterventionModal({
               </select>
               <p className="intervention-help">
                 {retrospectiveDisabled
-                  ? t('intervention.retrospective_unavailable')
+                  ? retrospectiveDisabledMessage
                   : t('intervention.retrospective_round_hint', { round: currentBranchMaxRound })}
               </p>
             </div>

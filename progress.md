@@ -17749,3 +17749,60 @@ QA Inventory
   - 本轮没有改 backend，也没有重跑 backend 全量 pytest。
   - Playwright MCP 当时因本机 browser profile 已占用未使用；浏览器复核改用 Chrome DevTools MCP。
   - frontend full vitest 输出里仍有既有的非失败 Radix / act warning；本轮没有把这些 warning 作为失败处理。
+
+## 2026-05-22 Capability Gate / Retrospective Intervention docs sync
+
+- 本轮目标：
+  - 按当前未提交的 capability gate、回溯干预、PostVerdictPanel Deep Dive 和 i18n 真实改动同步文档。
+  - 文档只记录本轮实际跑过并通过的测试，不补写未跑过的 build 或全量 E2E 结论。
+  - 提交并推送本轮代码与文档收口。
+
+- 本轮实现口径：
+  - 回溯干预端点现在受 `FEATURE_COUNTERFACTUAL_REPLAY` 控制，关闭时返回 404 `FEATURE_DISABLED`；前端 `InterventionModal` 会先按 `counterfactual_replay` capability 禁用回溯模式。
+  - `useCapabilityCheck` 现在复用 5 分钟内的 capabilities 结果，共享 in-flight 请求；失败后从 2 秒开始退避，最多 60 秒，并继续把 `error / reload` 暴露给 consumer。
+  - `CausalReviewView` 和 `TimelineGalaxy` 会先显示 capability probe error + Retry，不再把探针失败当作 feature disabled。
+  - `PostVerdictPanel` 的 `agent_conversation / roundtable_analyst / roundtable_survey` 都有 inline gate；disabled analyst/survey 不挂载 SSE 子面板，tabpanel 目标仍保留给 `aria-controls`。
+  - `FEATURE_HALLUCINATION_GATE` 仍有 `config.py` 默认值；`debate.py` 当前直接读 settings 属性。
+
+- 本轮文档同步：
+  - `README.md`
+  - `CLAUDE.md`
+  - `backend/README.md`
+  - `backend/CLAUDE.md`
+  - `frontend/README.md`
+  - `frontend/CLAUDE.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/reference/api.md`
+  - `llmdoc/reference/config.md`
+  - `llmdoc/guides/development.md`
+  - `progress.md`
+
+- 本轮实际验证：
+  - `cd backend && .venv/bin/python -m pytest -x -q --tb=short`
+    - `3286 passed, 11 skipped`
+  - `cd backend && .venv/bin/python -m pytest tests/test_intervention.py tests/test_contract_freeze.py tests/test_hallucination_gate.py tests/test_p0_wiring.py -q --tb=short`
+    - `130 passed`
+  - `cd backend && FEATURE_COUNTERFACTUAL_REPLAY=false .venv/bin/python -m pytest -q tests/test_intervention.py::TestRetrospectiveIntervention::test_success tests/test_intervention.py::TestRetrospectiveIntervention::test_feature_disabled_returns_404 --tb=short`
+    - `2 passed`
+  - `cd backend && .venv/bin/ruff check app/ tests/`
+    - 通过
+  - `cd frontend && npx vitest run`
+    - `206 files / 2318 tests passed`
+  - `cd frontend && npx vitest run src/components/InterventionModal.test.tsx src/pages/PostVerdictPanel.test.tsx src/i18n/locales.test.ts --reporter=verbose`
+    - `31 passed`
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npx eslint src/ --max-warnings=0`
+    - 通过
+  - i18n parity
+    - `EN: 2791 ZH: 2791 PARITY OK`
+  - 浏览器 capability spot-check
+    - Chromium / Firefox / WebKit 均覆盖 CausalReviewView 与 TimelineGalaxy 的 capability error / 正常 capability payload；WebKit TimelineGalaxy 正常态用页面文本和 canvas 数量做了补充确认。
+  - `git diff --check`
+    - 通过
+
+- 当前边界：
+  - 本轮没有重跑 `npm run build` 或完整 release E2E；文档中不把它们写成本轮已签收。
+  - `.claude/team-plan/*` 保留为历史审查/计划原文，本轮没有改写。

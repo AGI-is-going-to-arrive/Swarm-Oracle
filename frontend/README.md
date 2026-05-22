@@ -148,12 +148,16 @@ React + TypeScript frontend for SwarmOracle.
   the WS-disconnect grace timer now uses an SSR-safe layout-effect fallback; current SPA behavior stays the same, and future SSR will not log the layout-effect warning
 - `ResultView.tsx`
   the result surface now includes a capability-gated `ResultVerdictPanel`; blank, null, or undefined verdicts render a neutral unavailable state that still shows the original question. Branch-level question answers in `EndingCardsGrid` lead the card above the probability bar, and `DirectorNotebook` prefers the story verdict before falling back to branch insight. The page also includes prediction subtitle switching, a ledger-style archive, director debrief, capability-gated `What's Next` bridge with locale-backed causal / replay / compare / workbench / agents / share copy, semantic disabled cards, historical source badges, and locale-backed faction-timeline lead copy. Campaign boundary notices, newly unlocked badge copy, archive key moments, verdict labels, confidence copy, and debrief moment details also read `result.*` locale keys
+- `InterventionModal.tsx`
+  standard / retrospective / batch intervention modal; retrospective mode follows the `counterfactual_replay` capability and stays disabled while capability loading, disabled, or probe-error states are active
+- `PostVerdictPanel.tsx`
+  completed live roundtable `Deep Dive` panel; `1-on-1 Interview`, `Research Analyst`, and `Cross-Examine` keep stable tabpanel targets, show inline capability error/disabled placeholders, and do not mount disabled SSE subpanels
 - `resultHelpers.ts`
   result-page pure helpers for bet badges, campaign cache, locale-backed badge copy, and structured moment highlights used by the archive / debrief handoff
 - `DirectorDebriefPanel.tsx`
   result-page director debrief panel that consumes backend score breakdown plus question, worldline, commitment, bet, intervention, moment, goal, and gameplay state to render score reasons, run readout, next-action cards, and newly unlocked badges
 - `CausalReviewView.tsx`
-  graph fetches now encode `scenarioId / branchId` before building request URLs; the guide / empty-state copy is now backed by the local `CAUSAL_COLORS` dark-surface palette, close/show controls expose a complete disclosure pattern, and long guide key-node labels stay visually compact while preserving the full label in `aria-label` / `title`
+  graph fetches now encode `scenarioId / branchId` before building request URLs; capability probe errors show a retryable error before feature-disabled state; the guide / empty-state copy is now backed by the local `CAUSAL_COLORS` dark-surface palette, close/show controls expose a complete disclosure pattern, and long guide key-node labels stay visually compact while preserving the full label in `aria-label` / `title`
 - `ArgumentMap.tsx`
   status labels stay localized for `accepted / standing / unaddressed / rebutted / rejected`; the graph uses a verdict -> claims -> evidence/rebuttals DAG, side-tinted nodes, filter count badges, keyboard shortcuts, and mobile graph/list mode
   fail-soft `load_failed` responses stay on the Retry state and keep graph/export hidden
@@ -181,7 +185,7 @@ React + TypeScript frontend for SwarmOracle.
 ```bash
 cd frontend
 npm install
-npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/pages/resultHelpers.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/components/result/DirectorDebriefPanel.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
+npm test -- --run src/lib/scenarioMeta.test.ts src/lib/archiveSummary.test.ts src/pages/resultHelpers.test.ts src/components/gameplayCards.test.ts src/components/gameplayContract.test.ts src/components/InterventionModal.test.tsx src/components/ShareModal.test.tsx src/pages/SimulationView.test.tsx src/pages/ResultView.test.tsx src/pages/CausalReviewView.test.tsx src/pages/TimelineGalaxy.test.tsx src/pages/PostVerdictPanel.test.tsx src/components/result/DirectorDebriefPanel.test.tsx src/components/GameplayCardsModal.test.tsx src/pages/DebateArenaView.test.tsx src/pages/DebateResultView.test.tsx src/components/DebateBetModal.test.tsx src/components/DebateShareModal.test.tsx src/hooks/useCapabilityCheck.test.ts src/hooks/useDebateWS.test.tsx src/i18n/locales.test.ts src/stores/simulationStore.test.ts
 npm test -- --run src/i18n/config.test.ts src/components/LanguageSwitcher.test.tsx src/lib/replayCodec.test.ts src/lib/debateReplay.test.ts src/components/AgentProfileModal.test.tsx src/lib/legacyCssFallbacks.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run lint
@@ -220,10 +224,10 @@ npm run build:spike:phaser-custom
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Current frontend verification:
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
-  - `npm run lint`: pass
-  - `npm run build`: pass
-  - full vitest: `205 files / 2300 tests passed`
-  - i18n key parity spot-check: `zh: 2785`, `en: 2785`, placeholder parity OK
+  - `npx eslint src/ --max-warnings=0`: pass
+  - full vitest: `206 files / 2318 tests passed`
+  - i18n key parity spot-check: `zh: 2791`, `en: 2791`
+  - capability browser spot-check: Chromium / Firefox / WebKit covered CausalReviewView and TimelineGalaxy capability error + normal capability payload
   - custom Agent attach smoke: Chrome homepage quick selector renders, selecting an Agent shows the Start badge, console error count is 0, and desktop overflow is absent
   - cross-browser caveat: `e2e:cross-browser` currently times out while waiting for Firefox DirectorState, so this file should not claim a fresh Firefox/WebKit full pass for the Agent quick-selector work
   - Pixel Theater browser spot-check: completed Theater shows the toolbar gameplay-card entry, opens the read-only gameplay cards modal, and reports 0 console errors in Chrome DevTools MCP

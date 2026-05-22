@@ -267,20 +267,20 @@ class TestServerSideGates:
     """Verify FEATURE_* flags block API endpoints, not just UI hints."""
 
     @pytest.fixture(autouse=True)
-    async def client(self):
+    async def client(self, monkeypatch):
         from httpx import ASGITransport, AsyncClient
 
         from app.config import settings
         from app.main import app
 
         # Ensure all feature flags are off (default)
-        settings.FEATURE_CUSTOM_AGENTS = False
-        settings.FEATURE_AGENT_IDENTITY = False
-        settings.FEATURE_CAUSAL_GRAPH = False
-        settings.FEATURE_COUNTERFACTUAL_REPLAY = False
-        settings.FEATURE_FACTIONS = False
-        settings.FEATURE_ARGUMENT_MAP = False
-        settings.FEATURE_GRAPH_ANALYSIS = False
+        monkeypatch.setattr(settings, "FEATURE_CUSTOM_AGENTS", False)
+        monkeypatch.setattr(settings, "FEATURE_AGENT_IDENTITY", False)
+        monkeypatch.setattr(settings, "FEATURE_CAUSAL_GRAPH", False)
+        monkeypatch.setattr(settings, "FEATURE_COUNTERFACTUAL_REPLAY", False)
+        monkeypatch.setattr(settings, "FEATURE_FACTIONS", False)
+        monkeypatch.setattr(settings, "FEATURE_ARGUMENT_MAP", False)
+        monkeypatch.setattr(settings, "FEATURE_GRAPH_ANALYSIS", False)
 
         async with AsyncClient(
             transport=ASGITransport(app=app),

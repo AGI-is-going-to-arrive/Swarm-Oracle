@@ -218,17 +218,39 @@ function resolveTranslation(locale: TestLocale, key: string, fallback?: string |
 
 const {
   getMockCapabilityEnabled,
+  getMockCapabilityError,
+  getMockCapabilityReload,
   resetMockCapabilities,
   setMockCapabilityEnabled,
+  setMockCapabilityError,
 } = vi.hoisted(() => {
   const capabilityOverrides = new Map<string, boolean>();
+  const capabilityErrors = new Map<string, Error | null>();
+  const capabilityReloads = new Map<string, ReturnType<typeof vi.fn>>();
+  const getCapabilityReload = (name: string) => {
+    let reload = capabilityReloads.get(name);
+    if (!reload) {
+      reload = vi.fn(async () => undefined);
+      capabilityReloads.set(name, reload);
+    }
+    return reload;
+  };
   return {
     getMockCapabilityEnabled: (name: string) => (
       capabilityOverrides.has(name) ? capabilityOverrides.get(name)! : name !== 'graph_analysis'
     ),
-    resetMockCapabilities: () => capabilityOverrides.clear(),
+    getMockCapabilityError: (name: string) => capabilityErrors.get(name) ?? null,
+    getMockCapabilityReload: getCapabilityReload,
+    resetMockCapabilities: () => {
+      capabilityOverrides.clear();
+      capabilityErrors.clear();
+      capabilityReloads.clear();
+    },
     setMockCapabilityEnabled: (name: string, enabled: boolean) => {
       capabilityOverrides.set(name, enabled);
+    },
+    setMockCapabilityError: (name: string, error: Error | null) => {
+      capabilityErrors.set(name, error);
     },
   };
 });
@@ -241,8 +263,10 @@ const graphAnalysisApiMock = vi.hoisted(() => ({
 vi.mock('../hooks/useCapabilityCheck', () => ({
   useCapabilityCheck: (name: string) => ({
     loading: false,
-    enabled: getMockCapabilityEnabled(name),
+    enabled: getMockCapabilityError(name) ? false : getMockCapabilityEnabled(name),
     capabilities: null,
+    error: getMockCapabilityError(name),
+    reload: getMockCapabilityReload(name),
   }),
 }));
 
@@ -1105,6 +1129,24 @@ describe('CausalReviewView', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Unable to load the causal graph right now. Please retry.');
+  });
+
+  it('shows a retryable capability probe error before the disabled state', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    setMockCapabilityError('causal_graph', new Error('capability probe failed'));
+
+    renderView();
+
+    expect(screen.getByRole('heading', { name: 'Cannot verify feature' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Unable to verify feature availability. Please try again.',
+    );
+    expect(screen.queryByText('Causal graph feature is not enabled.')).not.toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(getMockCapabilityReload('causal_graph')).toHaveBeenCalledTimes(1);
   });
 
   it('rerenders unauthorized error copy when the UI language changes without refetching', async () => {

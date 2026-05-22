@@ -40,10 +40,24 @@ export default function PostVerdictPanel({
   contextVersion,
 }: PostVerdictPanelProps) {
   const { t } = useTranslation();
-  const { enabled: conversationEnabled, loading: conversationLoading } =
-    useCapabilityCheck('agent_conversation');
-  const { enabled: analystEnabled } = useCapabilityCheck('roundtable_analyst');
-  const { enabled: surveyEnabled } = useCapabilityCheck('roundtable_survey');
+  const {
+    enabled: conversationEnabled,
+    loading: conversationLoading,
+    error: conversationError,
+    reload: reloadConversationCapability,
+  } = useCapabilityCheck('agent_conversation');
+  const {
+    enabled: analystEnabled,
+    loading: analystLoading,
+    error: analystError,
+    reload: reloadAnalystCapability,
+  } = useCapabilityCheck('roundtable_analyst');
+  const {
+    enabled: surveyEnabled,
+    loading: surveyLoading,
+    error: surveyError,
+    reload: reloadSurveyCapability,
+  } = useCapabilityCheck('roundtable_survey');
 
   const [mountedTabs, setMountedTabs] = useState<Set<PostVerdictTab>>(() => new Set(['agent_chat', activeTab]));
 
@@ -62,21 +76,34 @@ export default function PostVerdictPanel({
       id: 'agent_chat',
       label: t('roundtable.explore_agent_chat'),
       desc: t('roundtable.explore_agent_chat_desc'),
-      disabled: !conversationEnabled && !conversationLoading,
+      disabled: !conversationEnabled && !conversationLoading && !conversationError,
     },
     {
       id: 'analyst',
       label: t('roundtable.explore_analyst'),
       desc: t('roundtable.explore_analyst_desc'),
-      disabled: !analystEnabled,
+      disabled: !analystEnabled && !analystLoading && !analystError,
     },
     {
       id: 'survey',
       label: t('roundtable.explore_survey'),
       desc: t('roundtable.explore_survey_desc'),
-      disabled: !surveyEnabled,
+      disabled: !surveyEnabled && !surveyLoading && !surveyError,
     },
   ];
+  const effectiveActiveTab = tabs.some((tab) => tab.id === activeTab && !tab.disabled)
+    ? activeTab
+    : (tabs.find((tab) => !tab.disabled)?.id ?? 'agent_chat');
+
+  const capabilityErrorPlaceholder = (reload?: () => Promise<void>) => (
+    <div className="roundtable-post-verdict__placeholder" role="alert" aria-live="polite">
+      <strong>{t('common.capability_error_title', 'Cannot verify feature')}</strong>
+      <span>{t('common.capability_error', 'Unable to verify feature availability. Please try again.')}</span>
+      <button type="button" className="btn btn--sm" onClick={() => void reload?.()}>
+        {t('common.retry', 'Retry')}
+      </button>
+    </div>
+  );
 
   const streamSkeleton = (
     <div className="roundtable-post-verdict__placeholder">
@@ -87,32 +114,38 @@ export default function PostVerdictPanel({
   return (
     <section className="roundtable-post-verdict" aria-label={t('roundtable.explore_tab')}>
       <div className="roundtable-post-verdict__tabs" role="tablist">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            id={`pvp-tab-${tab.id}`}
-            aria-selected={activeTab === tab.id}
-            aria-controls={`pvp-panel-${tab.id}`}
-            className={`roundtable-post-verdict__tab ${activeTab === tab.id ? 'is-active' : ''}`}
-            onClick={() => handleTabChange(tab.id)}
-            disabled={tab.disabled}
-          >
-            <span className="roundtable-post-verdict__tab-label">{tab.label}</span>
-            <span className="roundtable-post-verdict__tab-desc">{tab.desc}</span>
-          </button>
-        ))}
+        {tabs.map((tab) => {
+          const isSelected = effectiveActiveTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              id={`pvp-tab-${tab.id}`}
+              aria-selected={isSelected}
+              aria-disabled={tab.disabled || undefined}
+              aria-controls={`pvp-panel-${tab.id}`}
+              className={`roundtable-post-verdict__tab ${isSelected ? 'is-active' : ''}`}
+              onClick={() => handleTabChange(tab.id)}
+              disabled={tab.disabled && !isSelected}
+            >
+              <span className="roundtable-post-verdict__tab-label">{tab.label}</span>
+              <span className="roundtable-post-verdict__tab-desc">{tab.desc}</span>
+            </button>
+          );
+        })}
       </div>
 
       <div
         id="pvp-panel-agent_chat"
         role="tabpanel"
         aria-labelledby="pvp-tab-agent_chat"
-        style={{ display: activeTab === 'agent_chat' ? undefined : 'none' }}
-        aria-hidden={activeTab !== 'agent_chat'}
+        style={{ display: effectiveActiveTab === 'agent_chat' ? undefined : 'none' }}
+        aria-hidden={effectiveActiveTab !== 'agent_chat'}
       >
-        {conversationEnabled ? (
+        {conversationError ? (
+          capabilityErrorPlaceholder(reloadConversationCapability)
+        ) : conversationEnabled ? (
           <RoundtableAgentChat scenarioId={scenarioId} participants={participants} isZh={isZh} />
         ) : (
           <div className="roundtable-post-verdict__placeholder">
@@ -121,14 +154,16 @@ export default function PostVerdictPanel({
         )}
       </div>
 
-      {mountedTabs.has('analyst') && (
-        <div
-          id="pvp-panel-analyst"
-          role="tabpanel"
-          aria-labelledby="pvp-tab-analyst"
-          style={{ display: activeTab === 'analyst' ? undefined : 'none' }}
-          aria-hidden={activeTab !== 'analyst'}
-        >
+      <div
+        id="pvp-panel-analyst"
+        role="tabpanel"
+        aria-labelledby="pvp-tab-analyst"
+        style={{ display: effectiveActiveTab === 'analyst' ? undefined : 'none' }}
+        aria-hidden={effectiveActiveTab !== 'analyst'}
+      >
+        {analystError ? (
+          capabilityErrorPlaceholder(reloadAnalystCapability)
+        ) : analystEnabled && mountedTabs.has('analyst') ? (
           <Suspense fallback={streamSkeleton}>
             <AnalystStreamView
               scenarioId={scenarioId}
@@ -138,17 +173,23 @@ export default function PostVerdictPanel({
               contextVersion={contextVersion}
             />
           </Suspense>
-        </div>
-      )}
+        ) : (
+          <div className="roundtable-post-verdict__placeholder">
+            {t('roundtable.explore_analyst_disabled')}
+          </div>
+        )}
+      </div>
 
-      {mountedTabs.has('survey') && (
-        <div
-          id="pvp-panel-survey"
-          role="tabpanel"
-          aria-labelledby="pvp-tab-survey"
-          style={{ display: activeTab === 'survey' ? undefined : 'none' }}
-          aria-hidden={activeTab !== 'survey'}
-        >
+      <div
+        id="pvp-panel-survey"
+        role="tabpanel"
+        aria-labelledby="pvp-tab-survey"
+        style={{ display: effectiveActiveTab === 'survey' ? undefined : 'none' }}
+        aria-hidden={effectiveActiveTab !== 'survey'}
+      >
+        {surveyError ? (
+          capabilityErrorPlaceholder(reloadSurveyCapability)
+        ) : surveyEnabled && mountedTabs.has('survey') ? (
           <Suspense fallback={streamSkeleton}>
             <SurveyStreamView
               scenarioId={scenarioId}
@@ -159,8 +200,12 @@ export default function PostVerdictPanel({
               contextVersion={contextVersion}
             />
           </Suspense>
-        </div>
-      )}
+        ) : (
+          <div className="roundtable-post-verdict__placeholder">
+            {t('roundtable.explore_survey_disabled')}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

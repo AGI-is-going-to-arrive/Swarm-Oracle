@@ -7,7 +7,7 @@
  *   - Node click dispatches kg:openNodeSheet CustomEvent
  */
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
@@ -72,6 +72,24 @@ describe('TimelineGalaxy', () => {
     expect(screen.getByTestId('timeline-galaxy-root')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('renders retryable capability probe error before feature-disabled state', () => {
+    const reload = vi.fn(async () => undefined);
+    mockUseCapabilityCheck.mockReturnValue({
+      loading: false,
+      enabled: false,
+      capabilities: null,
+      error: new Error('capability probe failed'),
+      reload,
+    });
+    renderAt();
+    expect(screen.getByTestId('timeline-galaxy-root')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Cannot verify feature');
+    expect(screen.queryByText('KG Explorer is not enabled on this server.')).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it('renders Canvas + calls fetch when capability on', async () => {

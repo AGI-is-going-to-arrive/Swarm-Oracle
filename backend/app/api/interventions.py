@@ -18,6 +18,7 @@ from app.api.helpers import (
     verify_session,
 )
 from app.api.schemas import BatchInterveneRequest, InterveneRequest, RetrospectiveInterveneRequest
+from app.config import settings
 from app.models import (
     AgentMessage,
     Branch,
@@ -492,6 +493,8 @@ async def intervene_retrospective(
     Creates a new branch forked from the specified round and re-runs
     simulation with the intervention injected at that point.
     """
+    if not settings.FEATURE_COUNTERFACTUAL_REPLAY:
+        raise api_error(404, "FEATURE_DISABLED", "Feature 'counterfactual_replay' is not enabled")
     if not req.text.strip():
         raise api_error(400, "INTERVENTION_TEXT_EMPTY", "Intervention text cannot be empty")
 

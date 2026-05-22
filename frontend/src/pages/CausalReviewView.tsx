@@ -846,7 +846,12 @@ export function CausalReviewView() {
   const { t, i18n } = useTranslation();
   const isCompactViewport = useCompactGraphViewport();
   const reducedMotion = useReducedMotion();
-  const { loading: capLoading, enabled } = useCapabilityCheck('causal_graph');
+  const {
+    loading: capLoading,
+    enabled,
+    error: capabilityError,
+    reload: reloadCapability,
+  } = useCapabilityCheck('causal_graph');
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const rawBranchId = searchParams.get('branch_id');
@@ -972,13 +977,13 @@ export function CausalReviewView() {
   }, [currentGraphKey, encodedScenarioId, branchId]);
 
   useEffect(() => {
-    if (!id || !enabled) return;
+    if (!id || capabilityError || !enabled) return;
     fetchGraph();
-  }, [id, fetchGraph, enabled]);
+  }, [id, fetchGraph, enabled, capabilityError]);
 
   useEffect(() => {
     setServerAnalysis(null);
-    if (!id || !graphAnalysisEnabled) return;
+    if (!id || capabilityError || !graphAnalysisEnabled) return;
     let cancelled = false;
     getGraphAnalysis(id, branchId).then((data) => {
       if (!cancelled) setServerAnalysis(data);
@@ -986,7 +991,7 @@ export function CausalReviewView() {
       if (!cancelled) setServerAnalysis(null);
     });
     return () => { cancelled = true; };
-  }, [id, branchId, graphAnalysisEnabled]);
+  }, [id, branchId, graphAnalysisEnabled, capabilityError]);
 
   useEffect(() => {
     if (previousGraphKeyRef.current === currentGraphKey) return;
@@ -1431,6 +1436,22 @@ export function CausalReviewView() {
   const guideDetailsOpen = guideMode === 'details';
 
   if (capLoading) return <div style={{ padding: '3rem', textAlign: 'center' }}>{t('common.loading', 'Loading...')}</div>;
+  if (capabilityError) return (
+    <div style={{ maxWidth: 800, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>
+      <h1>{t('common.capability_error_title', 'Cannot verify feature')}</h1>
+      <p role="alert" style={{ color: CAUSAL_COLORS.textError }}>
+        {t('common.capability_error', 'Unable to verify feature availability. Please try again.')}
+      </p>
+      <button
+        type="button"
+        onClick={() => void reloadCapability?.()}
+        style={{ padding: '4px 10px', borderRadius: 4, border: `1px solid ${CAUSAL_COLORS.borderDefault}`, background: 'transparent', color: CAUSAL_COLORS.textLink, cursor: 'pointer', marginRight: '0.75rem' }}
+      >
+        {t('common.retry', 'Retry')}
+      </button>
+      <Link to={id ? `/result/${encodedScenarioId}` : '/'} style={{ color: CAUSAL_COLORS.textLink }}>{t('common.back_to_result', 'Back to Result')}</Link>
+    </div>
+  );
   if (!enabled) return (
     <div style={{ maxWidth: 800, margin: '0 auto', padding: '3rem', textAlign: 'center' }}>
       <p style={{ color: CAUSAL_COLORS.textMuted }}>{t('causal.feature_disabled', 'Causal graph feature is not enabled.')}</p>

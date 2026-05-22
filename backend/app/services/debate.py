@@ -2474,7 +2474,7 @@ def _apply_hallucination_gate_metadata(
         ``breakdown_json["metadata"]`` untouched. The gate must NEVER
         block or corrupt the verdict.
     """
-    if not getattr(settings, "FEATURE_HALLUCINATION_GATE", False):
+    if not settings.FEATURE_HALLUCINATION_GATE:
         return breakdown_json
     try:
         threshold = float(
@@ -2623,7 +2623,7 @@ def _finalize_debate(
             logger.debug("argmap link_verdict failed (non-blocking)", exc_info=True)
 
     # DPD Hallucination Verification Gate — warning-only, never blocks.
-    if getattr(settings, "FEATURE_HALLUCINATION_GATE", False):
+    if settings.FEATURE_HALLUCINATION_GATE:
         try:
             verdict_text = str(
                 finalized_summary.get("judge_summary")

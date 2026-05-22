@@ -79,8 +79,33 @@ class TestRetrospectiveIntervention:
     @pytest.fixture(autouse=True)
     def _disable_background_simulation(self, monkeypatch):
         import app.api.helpers as helpers_module
+        import app.api.interventions as interventions_module
 
         monkeypatch.setattr(helpers_module, "schedule_background_task", lambda coro: coro.close())
+        monkeypatch.setattr(
+            interventions_module.settings,
+            "FEATURE_COUNTERFACTUAL_REPLAY",
+            True,
+        )
+
+    def test_feature_disabled_returns_404(self, client, monkeypatch):
+        """Retrospective replay follows the counterfactual replay feature gate."""
+        import app.api.interventions as interventions_module
+
+        monkeypatch.setattr(
+            interventions_module.settings,
+            "FEATURE_COUNTERFACTUAL_REPLAY",
+            False,
+        )
+
+        resp = client.post("/api/scenario/any/intervene/retrospective", json={
+            "branch_id": "branch-1",
+            "round_number": 1,
+            "text": "test",
+        })
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["code"] == "FEATURE_DISABLED"
 
     def test_success(self, client):
         """Should create a new branch forked at specified round."""

@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | full pytest collected: 3272；counterfactual+replay+simulator+resume targeted: 223 passed |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 202 文件 / 2243 tests；i18n 2757/2757 |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | full pytest：3286 passed / 11 skipped；ruff app/tests 通过 |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 206 文件 / 2318 tests；i18n 2791/2791 |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -166,7 +166,7 @@ cd backend && alembic upgrade head
 - generation-first 路径可处理 JSON 字符串输出；follow-up 空流式或仅 reasoning 输出会退回非流式改写，英文 fallback 不把中文问题原样塞回英文句子
 
 ### 圆桌
-- Hero 做减法 + PostVerdictPanel 三 tab（Agent 对话/分析师/问卷），仅 verdict 后可用
+- Hero 做减法 + PostVerdictPanel 三 tab（Agent 对话/分析师/问卷），仅 verdict 后可用；分析师/问卷/代表对话分别走 `roundtable_analyst / roundtable_survey / agent_conversation` capability，探针失败显示可重试错误，禁用时显示占位且不挂载对应 SSE 面板
 - `roundtable_survey.py` SSE + Semaphore(3)；`roundtable_analyst.py` ReACT 3 工具 5 轮迭代
 - `roundtable_survey` 是圆桌 Deep Dive 工作台能力，不是 `EndingRoomInteractionMode`；EndingChatModal 当前不支持 `parallel_survey`
 
@@ -175,7 +175,7 @@ cd backend && alembic upgrade head
 - `/api/capabilities` = web_search + 17 功能开关；Feature flags 以 `config.py` 为准，多数默认 `false`
 - 5 前端页面 + 9 组件 + `useScenarioGraph`/`useHookSummary` hook
 - `simulator.py` 4 非阻塞 hook（因果图谱/阵营/检查点/身份），均受 `FEATURE_*` 控制
-- 前端页面均通过 `useCapabilityCheck` hook 做 capability gate
+- 前端页面均通过 `useCapabilityCheck` hook 做 capability gate；hook 复用 5 分钟内的 `/api/capabilities` 结果，请求失败会按 2 秒起、最多 60 秒退避，consumer 可区分 `loading / enabled / error / reload`
 - P1-9 resume_from_round + P1-12 identity memory compaction（`FEATURE_IDENTITY_COMPACTION`）
 
 ### 图谱可视化
@@ -200,6 +200,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
+| 05-22 | Capability gate / 回溯干预收口：`/api/scenario/{id}/intervene/retrospective` 补 `FEATURE_COUNTERFACTUAL_REPLAY` 后端 gate，`InterventionModal` 在 capability 关闭或探针失败时禁用回溯模式；`useCapabilityCheck` 增加 5 分钟 TTL、共享 in-flight promise 和最多 60 秒退避；`CausalReviewView` 与 `TimelineGalaxy` 在 capability 探针失败时显示 Retry，不再把探针失败误当成 feature disabled；`PostVerdictPanel` 的 analyst/survey/agent conversation 子面板补 inline gate、ARIA tabpanel 占位和禁用态 CSS，禁用时不挂载对应 SSE。验证：backend full `3286 passed, 11 skipped`，backend related `130 passed`，frontend full `206 files / 2318 tests passed`，tsc/eslint/i18n parity `2791/2791` 通过，Chromium/Firefox/WebKit capability browser spot-check 通过 |
 | 05-21 | Pixel Theater Overhaul 收口：`HudOverlay` 删除，Theater 控制拆成 `src/pages/sim/*`，外壳切到 Light Theater；Phaser backing store 按 DPR 初始化并由 Boot/World 场景读取 DPR 缩放；React `BubbleOverlay` 通过 `viz:sprite_positions` 跟随 sprite，完成态 Theater 的玩法卡入口恢复为只读回看。验证：frontend full `202 files / 2243 tests`，`tsc/lint/build` 通过，i18n `2757/2757`，Chrome DevTools 完成态 Theater 玩法卡 spot-check console 0 error |
 | 05-21 | 因果图谱 UX 修复：结果页导航不再携带 `branch_id`，默认展示全部分支完整图谱（`ExploreDeeperBridge` + `ResultHeader` 链接修复）；边标签 i18n 补齐，`triggered fork` 等后端原始 label 通过 `BACKEND_CAUSAL_EDGE_LABEL_I18N` 映射表走 i18n 翻译（中文 `触发分支`）。验证：CausalReviewView 80 tests passed，ResultView 79 tests passed，tsc/build 通过 |
 | 05-19 | 反事实对比逐消息升级：`compare_branches()` 在轮级数据基础上新增 `branch_a_messages` / `branch_b_messages`（agent_name + content + emotion）逐消息字段；新增 `POST /counterfactual/{branch_id}/resimulate` 端点，给旧的只 clone+seed 的反事实分支补跑模拟；前端新增 `src/lib/textDiff.ts` 字符级 LCS diff（CJK / emoji 安全的码点切分）；`CompareDigestView` 改为逐 agent 消息卡片 + 红绿 diff 高亮 + 折叠/展开按钮 + 独占轮（only-A / only-B）单列布局，`CounterfactualPanel` 新增模拟进行中提示。验证：backend counterfactual+replay+simulator+resume targeted `223 passed`；frontend full `201 files / 2190 tests`，tsc/eslint/build 通过；i18n `2765/2765` |

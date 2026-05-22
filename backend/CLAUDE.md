@@ -90,7 +90,7 @@ docker compose up backend
 | `FEATURE_RESULT_VERDICT` | `true` | 启用 Result Quality verdict generation、branch question-answer 持久化和 `/api/capabilities.result_verdict` |
 | `FEATURE_CAUSAL_GRAPH` | `false` | 启用因果图谱 API + simulator hook |
 | `FEATURE_GRAPH_ANALYSIS` | `false` | 启用图谱摘要分析 API；对外 enabled 还要求 `FEATURE_CAUSAL_GRAPH=true` |
-| `FEATURE_COUNTERFACTUAL_REPLAY` | `true` | 启用反事实回溯 + 比较 + 检查点 API |
+| `FEATURE_COUNTERFACTUAL_REPLAY` | `true` | 启用反事实回溯 + 比较 + 检查点 API，并 gate 回溯干预端点 |
 | `FEATURE_FACTIONS` | `false` | 启用阵营检测 API + simulator hook |
 | `FEATURE_ARGUMENT_MAP` | `false` | 启用辩论论证图谱 API + debate hook |
 | `FEATURE_REPLAY_TRACE` | `false` | 启用 replay branch lineage API |
@@ -165,7 +165,7 @@ docker compose up backend
 
 ## 测试与质量
 
-- **99+ 个 test_*.py 文件**，位于 `tests/`；当前 backend full gate 为 `3070 passed, 6 skipped`，Document Ingestion 定向为 `48 passed`；live LLM benchmark / observation 测试默认跳过，需要 `RUN_REAL_LLM_TESTS=1` 显式开启
+- **99+ 个 test_*.py 文件**，位于 `tests/`；当前 backend full gate 为 `3286 passed, 11 skipped`，`ruff check app/ tests/` 通过；live LLM benchmark / observation 测试默认跳过，需要 `RUN_REAL_LLM_TESTS=1` 显式开启
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`
@@ -283,6 +283,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-22 | Capability gate / 回溯干预收口 | `interventions.py` 的回溯干预端点现在受 `FEATURE_COUNTERFACTUAL_REPLAY` gate 控制，关闭时返回 404 `FEATURE_DISABLED`；`test_intervention.py` 对 live router module 的 settings 做显式 patch，并补关闭态 404 回归；`test_contract_freeze.py` 改用 `monkeypatch.setattr` patch 当前 settings 对象；`debate.py` 对 `FEATURE_HALLUCINATION_GATE` 改为直接属性访问，依赖 `config.py` 默认值。验证：backend full `3286 passed, 11 skipped`，related regression `130 passed`，`ruff check app/ tests/` 通过 |
 | 2026-05-19 | Counterfactual 逐消息对比 + resimulate 端点 | `replay.py`：`compare_branches()` 在轮级 `branches[]` 之外新增 `branch_a_messages` / `branch_b_messages`（每条含 `agent_name` / `content` / `emotion`），供前端做逐 agent 红绿 diff，原 CJK 逐字分歧度计算与 `intervention` / `is_identical` / `common_rounds` 字段保留。`graphs.py`：新增 `POST /scenario/{scenario_id}/counterfactual/{branch_id}/resimulate`，把旧的只 clone+seed 的反事实分支补跑成完整叙事（复用 `run_sim_background`），受 `FEATURE_COUNTERFACTUAL_REPLAY` gate。验证：counterfactual + replay + simulator + resume targeted `223 passed` |
 | 2026-05-19 | Oracle prompt / narration hardening | `ending_room_service`：generation-first 路径补 rich simulation context、JSON 字符串 `content` 解析、streaming-first plain stream fallback，并避免英文 deterministic fallback 直接露出中文问题；静态 verdict / one-move fallback 改成可直接显示的具体追问。`narrator.py` / `simulator.py`：清理用户可见行首 `[R1 角色]` round marker，支持全角冒号，同时保留普通方括号备注。验证：Oracle targeted `297 passed`，backend full `3238 passed, 6 skipped` |
 | 2026-05-19 | Roundtable phase insight 可读性收口 | `_phase_insight()` 保留去重 question prefix 的逻辑，但把 fixed 64 char 预算改为中文 96 字 / 英文 160 chars，避免英文 insight 被截得只剩半句；测试补语言感知预算回归。验证：`tests/test_ending_room_service.py` 为 `133 passed`，相关 `ruff check` 通过 |

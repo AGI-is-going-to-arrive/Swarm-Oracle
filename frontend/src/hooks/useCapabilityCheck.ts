@@ -16,19 +16,43 @@ interface CapabilityCheckResult {
 
 let cachedCapabilities: CapabilitiesResponse | null = null;
 let capabilitiesPromise: Promise<CapabilitiesResponse> | null = null;
+let cachedCapabilitiesAt = 0;
+let consecutiveCapabilityFailures = 0;
+let nextCapabilityRetryAt = 0;
+
+const CAPABILITY_CACHE_TTL_MS = 5 * 60 * 1000;
+const INITIAL_CAPABILITY_RETRY_BACKOFF_MS = 2 * 1000;
+const MAX_CAPABILITY_RETRY_BACKOFF_MS = 60 * 1000;
 
 async function loadCapabilities(force = false): Promise<CapabilitiesResponse> {
-  if (!force && cachedCapabilities) {
-    return cachedCapabilities;
+  const now = Date.now();
+  const cached = cachedCapabilities;
+  if (!force && cached !== null && now - cachedCapabilitiesAt < CAPABILITY_CACHE_TTL_MS) {
+    return cached;
   }
-  if (!force && capabilitiesPromise) {
+  if (capabilitiesPromise) {
     return capabilitiesPromise;
+  }
+  if (nextCapabilityRetryAt > now) {
+    throw new Error('Capability check is temporarily throttled. Please retry shortly.');
   }
 
   capabilitiesPromise = getCapabilities()
     .then((caps) => {
       cachedCapabilities = caps;
+      cachedCapabilitiesAt = Date.now();
+      consecutiveCapabilityFailures = 0;
+      nextCapabilityRetryAt = 0;
       return caps;
+    })
+    .catch((error) => {
+      consecutiveCapabilityFailures += 1;
+      const backoffMs = Math.min(
+        INITIAL_CAPABILITY_RETRY_BACKOFF_MS * (2 ** (consecutiveCapabilityFailures - 1)),
+        MAX_CAPABILITY_RETRY_BACKOFF_MS,
+      );
+      nextCapabilityRetryAt = Date.now() + backoffMs;
+      throw error;
     })
     .finally(() => {
       capabilitiesPromise = null;
@@ -40,6 +64,9 @@ async function loadCapabilities(force = false): Promise<CapabilitiesResponse> {
 export function __resetCapabilityCacheForTests(): void {
   cachedCapabilities = null;
   capabilitiesPromise = null;
+  cachedCapabilitiesAt = 0;
+  consecutiveCapabilityFailures = 0;
+  nextCapabilityRetryAt = 0;
 }
 
 /**

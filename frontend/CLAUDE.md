@@ -156,7 +156,7 @@ npm run test:watch # vitest (watch mode)
 | `useWebSearchConfig.ts` | Web search 独立状态 hook（7 state + 8 setter + capabilities 轮询），从 `useInputViewState` 解耦；搜索增强 toggle 默认可见，不再受 `VITE_ENABLE_WEB_SEARCH` 编译期 flag 控制 |
 | `useSimulationViewState.ts` | 模拟页状态 |
 | `useTranscriptScroll.test.ts` | 对话滚动 (密室/圆桌共享) |
-| `useCapabilityCheck.ts` | Phase 3 capability gate hook；复用 `/api/capabilities` 结果，consumer 可区分 `loading / enabled / error`，disabled 页面不再把 probe 失败伪装成关功能 |
+| `useCapabilityCheck.ts` | Phase 3 capability gate hook；5 分钟内复用 `/api/capabilities` 结果，共享 in-flight 请求，失败后按 2 秒起、最多 60 秒退避；consumer 可区分 `loading / enabled / error / reload`，disabled 页面不再把 probe 失败伪装成关功能 |
 | `useScenarioGraph.ts` | 共享图谱数据 fetch (requestId 防竞态, inflightRequests Map 去重, 按 scenarioId+branchId 缓存) |
 | `useHookSummary.ts` | 聚合 hook 状态 fetch (5 key: causal_graph/factions/checkpoints/identity/argument_map, branchId 参数用于 faction-timeline) |
 | `useG6Graph.ts` | G6 Graph 生命周期封装；强制启用 `autoResize`，容器 ResizeObserver 会先同步 `setSize(width,height)` 再 `fitView()`；除 onNodeClick / onBeforeDestroy 外新增 onNodeHover / onNodeLeave / onEdgeClick / onEdgeHover / onEdgeLeave 五个事件 handler，自动 on/off 注册与清理；稳定数据值变化可走 `setData + draw`，结构或 options 变化仍走 `setOptions + render` |
@@ -201,7 +201,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- 最近 full vitest 基线：`202 files / 2243 tests passed`
+- 最近 full vitest 基线：`206 files / 2318 tests passed`
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -395,6 +395,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-22 | Capability gate / Deep Dive 收口 | `useCapabilityCheck` 加 5 分钟 TTL、共享 in-flight promise 和最多 60 秒退避；`CausalReviewView` / `TimelineGalaxy` 在 capability probe 失败时显示 Retry，不再误落 feature disabled；`PostVerdictPanel` 对 `agent_conversation / roundtable_analyst / roundtable_survey` 补 inline gate、稳定 tabpanel、禁用占位和 aria-disabled 样式，禁用 analyst/survey 时不挂载 SSE 子面板；`InterventionModal` 的回溯模式跟随 `counterfactual_replay` capability，关闭或探针失败时不提交回溯请求。验证：frontend full `206 files / 2318 tests passed`，targeted `31 passed`，`npx tsc --noEmit -p tsconfig.app.json`、`npx eslint src/ --max-warnings=0`、i18n parity `2791/2791` 通过；Chromium/Firefox/WebKit capability browser spot-check 通过 |
 | 2026-05-22 | SimulationView completed / replay 收口 | `simulationStore` 的 completed 非 replay 冷加载默认 Classic；same-scenario live resync 保留当前 view mode；replay hydrate 传 `replayMode`，visualization-enabled completed replay 继续进 Theater。`ResultHeader` 返回 `/sim/:id` 时传 `forceClassicForDone`，避免结果页返回继承旧 Theater。Theater filters 在单分支 / 单轮时显示静态文本，多分支 / 多轮仍保留下拉；新增 `game.round_value` 中英 locale。验证：targeted vitest `3 files / 89 tests passed`，frontend full vitest `205 files / 2305 tests passed`，`npx tsc --noEmit`、`npm run lint`、`npm run build`、i18n parity `2786/2786` 通过；Playwright fixture 覆盖 Chromium / Firefox / WebKit 的 completed Classic、结果页返回、replay Theater、静态标签和 empty/error/cancelled 边界 |
 | 2026-05-21 | Pixel Theater Overhaul 收口 | `HudOverlay.tsx` / test 已移除，Theater 控制拆到 `src/pages/sim/` 的 floating toolbar、capture controls、status chips 和 Director drawer；`SimulationView` 保留 capture selector，同时恢复完成态 Theater 的玩法卡只读入口。`PhaserGame` 按 DPR 初始化 backing store，`BootScene` / `WorldScene` 读取 DPR 缩放；`BubbleOverlay` 通过 `viz:sprite_positions` 做 DOM bubble 跟随，并保留 Phaser fallback。验证：frontend full vitest `202 files / 2243 tests passed`，`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build` 通过，i18n parity `2757/2757`，Chrome DevTools 完成态 Theater 玩法卡 spot-check console 0 error |
 | 2026-05-21 | KG Visualization Overhaul v2 审查修复 | `graphTokens.ts` 新增 KG 专用浅/深色 WCAG AA 色板和陶土赭选中 / 森林绿 hover token，非 KG 图面继续走 `resolveG6Tokens`；`kgGraphConfig.ts` 统一 KGExplorer 与 KGGraphBoard 的 `resolveKGG6Tokens`、NODE_ICONS、平行边偏移和 self-loop；`useG6Graph` 增加 `dataUpdateMode`，稳定数据值变化走 `setData + draw`，结构或 options 变化走 `setOptions + render`，draw/render promise 都按现有模式吞掉异步错误；`KGGraphBoard` 图例默认折叠，toolbar 收到 36px icon buttons，search/filter 会清掉不可见选中节点，sr-only table 跟随可见节点；`KGExplorerView` 复用 `toKgG6Data` 和 `resolveKGG6Tokens`，search/type filter 用 deferred value，filter pill 继续走 `TYPE_LABEL_I18N`；`e2e-kg-explorer-live.mjs` 默认改查 `/causal-graph` fixture，支持 `--scenario-id`、Chromium desktop/mobile + Firefox/WebKit desktop 矩阵和 canvas 非空白采样。验证：目标 vitest `5 files / 193 tests passed`，frontend full vitest `202 files / 2224 tests passed`，`npm exec -- tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build` 通过，i18n parity `2766/2766`，KG E2E fixture full `4 runs / allPassed=true`，`git diff --check` 通过 |

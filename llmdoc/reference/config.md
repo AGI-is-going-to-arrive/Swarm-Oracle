@@ -279,7 +279,7 @@
 | `FEATURE_PERSONA_EXPORT` | `false` | 启用 Agent 备份导出与从 JSON 备份创建 Agent API |
 | `FEATURE_CAUSAL_GRAPH` | `false` | 启用因果图谱 API + simulator 逐轮写入 |
 | `FEATURE_GRAPH_ANALYSIS` | `false` | 启用 `GET /api/scenario/{id}/graph-analysis`；实际对外 enabled 还要求 `FEATURE_CAUSAL_GRAPH=true` |
-| `FEATURE_COUNTERFACTUAL_REPLAY` | `true` | 启用反事实回溯 + 分支比较 + 检查点 |
+| `FEATURE_COUNTERFACTUAL_REPLAY` | `true` | 启用反事实回溯 + 分支比较 + 检查点，并 gate 回溯干预端点 |
 | `FEATURE_FACTIONS` | `false` | 启用阵营检测 + 时间线 API |
 | `FEATURE_ARGUMENT_MAP` | `false` | 启用辩论论证图谱抽取 + API |
 | `FEATURE_REPLAY_TRACE` | `false` | 启用 replay branch lineage API：`GET /api/scenario/{id}/replay-trace` |
@@ -296,9 +296,9 @@
 - 本地直启 backend 时，在 `backend/.env` 里设置这些变量并重启 backend 后生效。
 - 仓库根 `.env.docker` 当前已经把 `FEATURE_CAUSAL_GRAPH / FEATURE_FACTIONS / FEATURE_ARGUMENT_MAP` 打开，Docker 评审栈默认就是图谱开启态。
 - `ARGUMENT_MAP_LLM_ENRICHMENT` 只影响 argument map 的 enrich 路径，不改变 `FEATURE_ARGUMENT_MAP` 的开关语义；只有 argument map 功能启用时它才会生效。
-- `FEATURE_*=false` 时：受后端 gate 的 API 通常返回 404；simulator/debate 中的 hook 不执行；前端通过 `GET /api/capabilities` 检测到 `enabled=false` 后隐藏入口且不发请求。`POST /api/debate` 如果显式带了 `custom_agent_ids` 且 `FEATURE_CUSTOM_AGENTS=false`，当前返回 400，避免调用方误以为 custom Agent 已参与本场 debate。`FEATURE_KG_EXPLORER` 属于前端 capability gate，数据仍由 causal graph API 提供。`FEATURE_RESULT_VERDICT=false` 是字段级开关：不生成/回显 Result Quality verdict 和 branch question-answer，不让 story endpoint 变成 404。
+- `FEATURE_*=false` 时：受后端 gate 的 API 通常返回 404；simulator/debate 中的 hook 不执行；前端通过 `GET /api/capabilities` 检测到 `enabled=false` 后隐藏入口且不发请求。`POST /api/scenario/{id}/intervene/retrospective` 当前也受 `FEATURE_COUNTERFACTUAL_REPLAY` 控制，关闭时返回 404 `FEATURE_DISABLED`，前端 `InterventionModal` 会先禁用回溯模式。`POST /api/debate` 如果显式带了 `custom_agent_ids` 且 `FEATURE_CUSTOM_AGENTS=false`，当前返回 400，避免调用方误以为 custom Agent 已参与本场 debate。`FEATURE_KG_EXPLORER` 属于前端 capability gate，数据仍由 causal graph API 提供。`FEATURE_RESULT_VERDICT=false` 是字段级开关：不生成/回显 Result Quality verdict 和 branch question-answer，不让 story endpoint 变成 404。
 - `FEATURE_HALLUCINATION_GATE` 当前不是前端 capability key；它只控制后端 verdict 后处理是否附加 claims / evidence / warning metadata。`HALLUCINATION_GATE_THRESHOLD` 只改变 claim 的 verified 判定阈值。
-- `FEATURE_ROUNDTABLE_SURVEY / FEATURE_ROUNDTABLE_ANALYST` 会通过 `GET /api/capabilities` 暴露为 `roundtable_survey / roundtable_analyst`，供前端 capability gate 判断入口是否开放。
+- `FEATURE_ROUNDTABLE_SURVEY / FEATURE_ROUNDTABLE_ANALYST` 会通过 `GET /api/capabilities` 暴露为 `roundtable_survey / roundtable_analyst`，供前端 Deep Dive 判断入口是否开放；关闭或探针失败时只显示占位/重试，不挂载对应 SSE 面板。
 - `FEATURE_SNAPSHOT_EXPORT` 会通过 `GET /api/capabilities` 暴露为 `snapshot_export`，关闭时后端 snapshot API 返回 404，前端不显示 import/export 入口。
 - `FEATURE_EDUCATION_TEMPLATES / FEATURE_PERSONA_EXPORT / FEATURE_PREDICTION_JOURNAL` 会通过 `GET /api/capabilities` 暴露为 `education_templates / persona_export / prediction_journal`。
 - `FEATURE_RESULT_VERDICT` 会通过 `GET /api/capabilities` 暴露为 `result_verdict`，并控制结果页是否读取 story verdict 字段。
