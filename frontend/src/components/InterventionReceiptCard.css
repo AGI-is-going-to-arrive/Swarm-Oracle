@@ -78,6 +78,28 @@
   gap: 8px;
 }
 
+.receipt-pending {
+  opacity: 0.8;
+  border-style: dashed;
+}
+
+.spinner-inline {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: receiptSpinner 0.75s linear infinite;
+  margin-right: 8px;
+  vertical-align: text-bottom;
+}
+
+@keyframes receiptSpinner {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .intervention-receipt-card__entry-header {
   display: flex;
   align-items: baseline;
@@ -191,6 +213,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .intervention-receipt-card {
+    animation: none;
+  }
+  .spinner-inline {
     animation: none;
   }
 }

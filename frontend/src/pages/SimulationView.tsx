@@ -134,6 +134,7 @@ export function SimulationView() {
   const visualizationEnabled = useSimulationStore((s) => s.visualizationEnabled);
   const viewMode = useSimulationStore((s) => s.viewMode);
   const currentRound = useSimulationStore((s) => s.currentRound);
+  const interventionLifecycle = useSimulationStore((s) => s.interventionLifecycle);
   const toggleViewMode = useSimulationStore((s) => s.toggleViewMode);
   const setScenario = useSimulationStore((s) => s.setScenario);
   const fallbackRuntimePreset = useMemo(() => loadScenarioRuntimePreset(), []);
@@ -329,6 +330,19 @@ export function SimulationView() {
   const archiveKeyMoments = useMemo(
     () => (scenarioMeta ? getScenarioArchiveKeyMoments(scenarioMeta) : []),
     [scenarioMeta],
+  );
+  const liveInterventionCount = useMemo(
+    () => Array.from(interventionLifecycle.values()).filter((state) => (
+      state === 'queued' || state === 'injected'
+    )).length,
+    [interventionLifecycle],
+  );
+  const interventionReceiptRefreshKey = useMemo(
+    () => Array.from(interventionLifecycle.entries())
+      .map(([id, state]) => `${id}:${state}`)
+      .sort()
+      .join('|'),
+    [interventionLifecycle],
   );
   const signatureArcState = useMemo(
     () => (
@@ -1636,12 +1650,13 @@ export function SimulationView() {
       {/* Phase 4: Intervention Effect Receipts — only when simulation has produced receipts.
          Component returns null when there are no persisted effects, so legacy scenarios
          that never used interventions stay visually unchanged. */}
-      {id && isSimulationComplete && (
+      {id && (isSimulationComplete || liveInterventionCount > 0) && (
         <Suspense fallback={null}>
           <LazyInterventionReceiptCard
             scenarioId={id}
-            enabled
-            refreshKey={branches.length}
+            enabled={isSimulationComplete}
+            refreshKey={interventionReceiptRefreshKey}
+            interventionLifecycle={interventionLifecycle}
           />
         </Suspense>
       )}

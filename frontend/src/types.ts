@@ -1012,8 +1012,19 @@ export type WSEvent =
     | { type: 'branch_prune'; data: { branch_id: string; reason: string } }
     | { type: 'branch_update'; data: { branch_id: string; status: string } }
     | { type: 'narration'; data: { branch_id: string; title: string; story: string; insight: string } }
-    | { type: 'intervention_applied'; data: { branch_id: string; text: string; round: number; intervention_id: string } }
-    | { type: 'intervention_injected'; data: { branch_id: string; round: number; text: string } }
+    | {
+      type: 'intervention_applied';
+      data: {
+        branch_id: string;
+        text: string;
+        round: number;
+        intervention_id: string;
+        status?: string;
+        pending_count?: number;
+        queued_ahead?: number;
+      };
+    }
+    | { type: 'intervention_injected'; data: { branch_id: string; round: number; text: string; intervention_id?: string; status?: string; card_id?: string; mode?: string } }
     | { type: 'retrospective_start'; data: { branch_id: string; source_branch_id: string; from_round: number; text: string; intervention_id: string } }
     | { type: 'batch_intervention_applied'; data: { interventions: BatchInterventionEntry[] } }
     | {

@@ -473,6 +473,28 @@ class ResumeRequest(BaseModel):
 # ── Response schemas ─────────────────────────────────────
 
 
+class InterventionTemplateVariable(BaseModel):
+    key: str
+    label_en: str
+    label_zh: str
+    examples: list[str] = Field(default_factory=list)
+
+
+class InterventionTemplateResponse(BaseModel):
+    id: str
+    name: str
+    template: str
+    name_en: str
+    name_zh: str
+    description_en: str
+    description_zh: str
+    template_en: str
+    template_zh: str
+    variables: list[InterventionTemplateVariable] | None = None
+    intervention_kind: str | None = None
+    suggested_targets: str | None = None
+
+
 class ScenarioResponse(BaseModel):
     id: str
     question: str

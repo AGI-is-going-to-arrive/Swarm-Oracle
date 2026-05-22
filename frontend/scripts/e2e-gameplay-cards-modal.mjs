@@ -394,6 +394,7 @@ async function testCardApplyMarker(page) {
     pushStep(result, "apply-button-visible", await isVisible(applyButton));
     await applyButton.click({ trial: false }).catch(() => {});
     const marker = modal.locator(".gameplay-modal-v2__active-marker");
+    await marker.first().waitFor({ state: "visible", timeout: 2500 }).catch(() => {});
     const markerVisible = await marker.first().isVisible().catch(() => false);
     pushStep(result, "active-marker-rendered-after-apply", markerVisible, {
       markerCount: await marker.count(),

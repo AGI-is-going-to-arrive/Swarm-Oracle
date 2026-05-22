@@ -1228,11 +1228,26 @@ export async function getCampaignWeeklySummary(
 }
 
 /** Intervention template from backend */
+export interface InterventionTemplateVariable {
+  key: string;
+  label_en: string;
+  label_zh: string;
+  examples: string[];
+}
+
 export interface InterventionTemplate {
   id: string;
+  name_en?: string;
+  name_zh?: string;
   name: string;
+  description_en?: string;
+  description_zh?: string;
+  template_en?: string;
+  template_zh?: string;
   template: string;
-  variables: string[];
+  variables?: InterventionTemplateVariable[];
+  intervention_kind?: string;
+  suggested_targets?: string | null;
 }
 
 /** GET /api/intervention-templates — pre-built intervention templates (P5-D) */

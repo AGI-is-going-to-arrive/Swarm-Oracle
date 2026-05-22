@@ -1594,7 +1594,7 @@ class TestPredictionLeaderboardEndpoints:
 
 class TestInterveneEndpoint:
     def test_intervene_success(self, client):
-        """POST /api/scenario/{id}/intervene should apply intervention."""
+        """POST /api/scenario/{id}/intervene should apply during SIMULATING."""
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
         bid = _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
@@ -1631,6 +1631,7 @@ class TestInterveneEndpoint:
             )
             assert [item.user_input for item in queued] == ["突然下大雨"]
             assert queued[0].branch_id == bid
+            assert queued[0].display_text == "突然下大雨"
 
     def test_intervene_reports_pending_queue_depth(self, client):
         engine = get_engine()
@@ -1656,6 +1657,46 @@ class TestInterveneEndpoint:
         payload = resp.json()
         assert payload["pending_count"] == 2
         assert payload["queued_ahead"] == 1
+
+    def test_intervene_rolls_back_log_when_pending_insert_fails(self, monkeypatch):
+        """Immediate intervention log and DB queue row must share one transaction."""
+        import app.api.interventions as interventions_module
+        import app.services.simulator as simulator_module
+
+        def fail_pending_insert(*_args, **_kwargs):
+            raise IntegrityError("INSERT pending_intervention", {}, Exception("boom"))
+
+        monkeypatch.setattr(
+            interventions_module,
+            "_pending_intervention_db_path",
+            lambda: "/tmp/pending.db",
+        )
+        monkeypatch.setattr(
+            simulator_module,
+            "_pending_intervention_db_path",
+            lambda: "/tmp/pending.db",
+        )
+        monkeypatch.setattr(interventions_module, "PendingIntervention", fail_pending_insert)
+        monkeypatch.setattr(simulator_module, "PendingIntervention", fail_pending_insert)
+
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        bid = _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
+        local_client = TestClient(app, raise_server_exceptions=False)
+
+        resp = local_client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid,
+            "text": "事务必须一起回滚",
+        })
+
+        assert resp.status_code == 500
+        with Session(engine) as session:
+            assert session.exec(
+                select(InterventionLog).where(InterventionLog.scenario_id == sid)
+            ).all() == []
+            assert session.exec(
+                select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
+            ).all() == []
 
     def test_intervene_with_gameplay_card_persists_backend_gameplay_state(self, client):
         engine = get_engine()
@@ -1762,17 +1803,18 @@ class TestInterveneEndpoint:
         assert "at most 50 items" in resp.text
 
     def test_intervene_batch_enqueues_fifo_per_branch(self, client):
-        """Batch intervene should persist queue rows in request order for each branch."""
+        """Batch intervene should persist queue rows in request order across branches."""
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
-        bid = _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
+        bid1 = _seed_branch(engine, sid, title="分支一", status=BranchStatus.ACTIVE)
+        bid2 = _seed_branch(engine, sid, title="分支二", status=BranchStatus.ACTIVE)
 
         resp = client.post(
             f"/api/scenario/{sid}/intervene/batch",
             json={
                 "interventions": [
-                    {"branch_id": bid, "text": "第一条批量干预"},
-                    {"branch_id": bid, "text": "第二条批量干预"},
+                    {"branch_id": bid1, "text": "第一条批量干预"},
+                    {"branch_id": bid2, "text": "第二条批量干预"},
                 ]
             },
         )
@@ -1787,6 +1829,32 @@ class TestInterveneEndpoint:
                 ).all()
             )
         assert [item.user_input for item in queued] == ["第一条批量干预", "第二条批量干预"]
+
+    def test_intervene_batch_rejects_duplicate_branch_id(self, client):
+        """Each branch may receive at most one intervention per batch request."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
+        bid = _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/intervene/batch",
+            json={
+                "interventions": [
+                    {"branch_id": bid, "text": "第一条批量干预"},
+                    {"branch_id": bid, "text": "第二条批量干预"},
+                ]
+            },
+        )
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "BATCH_DUPLICATE_BRANCH"
+        with Session(engine) as session:
+            assert session.exec(
+                select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
+            ).all() == []
+            assert session.exec(
+                select(InterventionLog).where(InterventionLog.scenario_id == sid)
+            ).all() == []
 
     def test_intervene_batch_persists_gameplay_card_usage(self, client):
         engine = get_engine()
@@ -1870,22 +1938,24 @@ class TestInterveneEndpoint:
     def test_intervene_batch_keeps_gameplay_card_validation_atomic(self, client):
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
-        bid = _seed_branch(engine, sid, title="主线", status=BranchStatus.ACTIVE)
-        _seed_round(engine, bid, 1)
+        bid1 = _seed_branch(engine, sid, title="主线一", status=BranchStatus.ACTIVE)
+        bid2 = _seed_branch(engine, sid, title="主线二", status=BranchStatus.ACTIVE)
+        _seed_round(engine, bid1, 1)
+        _seed_round(engine, bid2, 1)
 
         resp = client.post(
             f"/api/scenario/{sid}/intervene/batch",
             json={
                 "interventions": [
                     {
-                        "branch_id": bid,
+                        "branch_id": bid1,
                         "text": "第一次接管",
                         "card_id": "human_takeover",
                         "profile_id": "governance",
                         "directive": "强推公开解释义务",
                     },
                     {
-                        "branch_id": bid,
+                        "branch_id": bid2,
                         "text": "第二次接管",
                         "card_id": "human_takeover",
                         "profile_id": "governance",
@@ -1915,7 +1985,7 @@ class TestInterveneEndpoint:
         assert logs == []
 
     def test_intervene_finished_scenario(self, client):
-        """Should reject intervention on DONE scenario."""
+        """Should reject intervention on DONE scenario with 409 conflict."""
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
         bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
@@ -1923,12 +1993,12 @@ class TestInterveneEndpoint:
         resp = client.post(f"/api/scenario/{sid}/intervene", json={
             "branch_id": bid, "text": "test",
         })
-        assert resp.status_code == 400
+        assert resp.status_code == 409
         assert resp.json()["detail"]["code"] == "INTERVENTION_SCENARIO_STATUS_INVALID"
         assert "Cannot intervene" in resp.json()["detail"]["message"]
 
     def test_intervene_error_scenario(self, client):
-        """Should reject intervention on ERROR scenario."""
+        """Should reject intervention on ERROR scenario with 409 conflict."""
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.ERROR)
         bid = _seed_branch(engine, sid)
@@ -1936,7 +2006,8 @@ class TestInterveneEndpoint:
         resp = client.post(f"/api/scenario/{sid}/intervene", json={
             "branch_id": bid, "text": "test",
         })
-        assert resp.status_code == 400
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "INTERVENTION_SCENARIO_STATUS_INVALID"
 
     def test_intervene_wrong_branch(self, client):
         """Should reject branch not belonging to the scenario."""
@@ -2031,8 +2102,8 @@ class TestInterveneEndpoint:
         assert resp.status_code == 200
         assert resp.json()["round"] == 0
 
-    def test_intervene_narrating_scenario(self, client):
-        """Intervention should be allowed during NARRATING status."""
+    def test_intervene_narrating_returns_409(self, client):
+        """NARRATING scenario rejects interventions with 409 conflict."""
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.NARRATING)
         bid = _seed_branch(engine, sid)
@@ -2040,8 +2111,21 @@ class TestInterveneEndpoint:
         resp = client.post(f"/api/scenario/{sid}/intervene", json={
             "branch_id": bid, "text": "干预",
         })
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "applied"
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "INTERVENTION_SCENARIO_STATUS_INVALID"
+        assert "Cannot intervene" in resp.json()["detail"]["message"]
+
+    def test_intervene_done_returns_409(self, client):
+        """DONE scenario rejects interventions with 409 conflict."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene", json={
+            "branch_id": bid, "text": "test",
+        })
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "INTERVENTION_SCENARIO_STATUS_INVALID"
 
     def test_intervene_unicode_emoji(self, client):
         """Should handle unicode and emoji in intervention text."""
@@ -3257,15 +3341,47 @@ class TestInterventionTemplates:
         assert len(templates) >= 5
 
     def test_template_structure(self, client):
-        """Each template should have id, name, template, variables."""
+        """Each template should expose bilingual fields and structured variables."""
         resp = client.get("/api/intervention-templates")
         templates = resp.json()
         for t in templates:
-            assert "id" in t
-            assert "name" in t
-            assert "template" in t
-            assert "variables" in t
+            assert set(t) >= {
+                "id",
+                "name",
+                "name_en",
+                "name_zh",
+                "description_en",
+                "description_zh",
+                "template",
+                "template_en",
+                "template_zh",
+                "variables",
+                "intervention_kind",
+                "suggested_targets",
+            }
+            assert t["name"] == t["name_zh"]
+            assert t["template"] == t["template_zh"]
+            assert t["name_en"]
+            assert t["name_zh"]
+            assert t["description_en"]
+            assert t["description_zh"]
+            assert t["template_en"]
+            assert t["template_zh"]
+            assert t["intervention_kind"]
+            assert t["suggested_targets"]
             assert isinstance(t["variables"], list)
+            assert t["variables"]
+            for variable in t["variables"]:
+                assert set(variable) >= {"key", "label_en", "label_zh", "examples"}
+                assert isinstance(variable["key"], str)
+                assert variable["key"]
+                assert isinstance(variable["label_en"], str)
+                assert variable["label_en"]
+                assert isinstance(variable["label_zh"], str)
+                assert variable["label_zh"]
+                assert isinstance(variable["examples"], list)
+                assert variable["examples"]
+                assert all(isinstance(example, str) for example in variable["examples"])
 
     def test_template_ids_unique(self, client):
         """Template IDs should be unique."""

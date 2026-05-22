@@ -2,7 +2,7 @@
    SwarmOracle — PredictionModal (P5-B)
    ═══════════════════════════════════════════════════════════ */
 
-import { useState, useRef, useEffect, useCallback, useId } from 'react';
+import { useState, useRef, useEffect, useCallback, useId, useLayoutEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getSessionBoundUserId, submitPrediction } from '../api/client';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -118,12 +118,30 @@ export default function PredictionModal({
     return true;
   })();
 
-  useEffect(() => {
-    if (shouldAutoFocusText) {
-      inputRef.current?.focus();
-      return;
-    }
-    closeButtonRef.current?.focus();
+  useLayoutEffect(() => {
+    const focusTarget = () => {
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLElement
+        && dialogRef.current?.contains(active)
+        && active !== document.body
+      ) {
+        return;
+      }
+      const target = shouldAutoFocusText
+        ? inputRef.current
+        : closeButtonRef.current;
+      (target ?? dialogRef.current)?.focus({ preventScroll: true });
+    };
+
+    focusTarget();
+    const frameId = window.requestAnimationFrame(focusTarget);
+    const timeoutId = window.setTimeout(focusTarget, 0);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(timeoutId);
+    };
   }, [shouldAutoFocusText]);
 
   // Cleanup auto-close timer on unmount
@@ -363,6 +381,7 @@ export default function PredictionModal({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={subtitleId}
+        tabIndex={-1}
       >
         <header className="modal-header">
           <h2 id={titleId}>{t('prediction.title')}</h2>

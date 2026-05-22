@@ -55,6 +55,10 @@ const {
       'compare.intervention_original': 'Original',
       'compare.intervention_replacement': 'Replacement',
       'compare.intervention_agent_label': 'Agent: {{agent}}',
+      'compare.intervention_retrospective_title': 'Retrospective Intervention',
+      'compare.intervention_retrospective_source': 'Source branch: {{branch}}',
+      'compare.intervention_retrospective_boundary': 'Replay boundary',
+      'compare.intervention_retrospective_prompt': 'Injected prompt',
       'compare.intervention_badge': 'Intervention Point',
       'compare.identical_rounds': '{{count}} identical rounds before divergence',
       'compare.no_different_rounds': 'No divergent rounds to replay.',
@@ -410,5 +414,56 @@ describe('CompareDigestView', () => {
     expect(screen.queryByTestId('compare-timeline')).not.toBeInTheDocument();
     expect(screen.getAllByText('No divergent rounds to replay.')).toHaveLength(2);
     expect(screen.getByTestId('compare-phaser-loader')).toHaveTextContent('a:1');
+  });
+
+  it('renders retrospective intervention metadata without counterfactual message fields', async () => {
+    getScenarioMock.mockResolvedValue({
+      id: 'test-id',
+      question: 'What if the branch was replayed from a past round?',
+      status: 'done',
+      total_rounds: 3,
+      agents: [],
+      branches: [
+        { id: 'source', title: 'Source Branch', probability: 0.62, status: 'COMPLETED', story: '', insight: '', key_moments: [], parent_branch_id: null, fork_reason: '' },
+        { id: 'retro', title: 'Retrospective Branch', probability: 0.38, status: 'COMPLETED', story: '', insight: '', key_moments: [], parent_branch_id: 'source', fork_reason: '' },
+      ],
+      messages: [],
+    });
+    getCounterfactualCompareMock.mockResolvedValue({
+      scenario_id: 'test-id',
+      branch_a: 'source',
+      branch_b: 'retro',
+      common_rounds: 1,
+      intervention: {
+        replay_kind: 'retrospective',
+        source_branch_id: 'source',
+        source_round: 2,
+        intervention_text: '第二轮加入外部冲击',
+      },
+      rounds: [
+        {
+          round: 2,
+          branch_a_summary: 'original second round',
+          branch_b_summary: 'retrospective second round',
+          branch_a_messages: [],
+          branch_b_messages: [],
+          divergence_score: 0.7,
+          is_identical: false,
+        },
+      ],
+    });
+
+    renderView('/result/test-id/compare?branch_a=source&branch_b=retro');
+
+    expect(await screen.findByText('Retrospective Intervention')).toBeInTheDocument();
+    expect(screen.getByText('Source branch: Source Branch')).toBeInTheDocument();
+    expect(screen.getByText('Replay boundary')).toBeInTheDocument();
+    expect(screen.getAllByText('Round 2').length).toBeGreaterThan(0);
+    expect(screen.getByText('Injected prompt')).toBeInTheDocument();
+    expect(screen.getByText('第二轮加入外部冲击')).toBeInTheDocument();
+    expect(screen.queryByText(/^Agent:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Original')).not.toBeInTheDocument();
+    expect(screen.queryByText('Replacement')).not.toBeInTheDocument();
+    expect(screen.getByText('Intervention Point')).toBeInTheDocument();
   });
 });

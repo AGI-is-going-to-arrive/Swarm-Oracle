@@ -9,6 +9,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  background: rgba(0, 0, 0, 0.3); /* fallback for browsers without oklch */
   background: oklch(0% 0 0 / 0.3);
   -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
@@ -274,6 +275,53 @@
   cursor: not-allowed;
 }
 
+.template-tag--active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: white;
+}
+
+.template-variables {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px;
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-md);
+}
+
+.template-variable-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.template-variable-label {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.template-variable-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.template-variable-input:focus {
+  border-color: var(--color-primary);
+}
+
 .template-hint {
   font-family: var(--font-body);
   font-size: 10px;
@@ -300,7 +348,18 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .modal-overlay,
+  .modal-content,
+  .modal-success,
   .intervention-mode--active {
-    animation: none;
+    animation: none !important;
   }
+}
+
+@media (forced-colors: active) {
+  .intervention-modal { border: 1px solid CanvasText; }
+  .intervention-mode--active { border-color: Highlight; }
+  .intervention-input { border: 1px solid CanvasText; }
+  .intervention-submit { border: 1px solid ButtonText; }
+  .intervention-submit:disabled { color: GrayText; border-color: GrayText; }
 }

@@ -64,7 +64,10 @@ export default function InterventionModal({
   currentRound,
   onClose,
 }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const isZh = i18n.language?.startsWith('zh');
+  const [selectedTemplate, setSelectedTemplate] = useState<InterventionTemplate | null>(null);
+  const [variableValues, setVariableValues] = useState<Record<string, string>>({});
   const {
     enabled: counterfactualReplayEnabled,
     loading: counterfactualReplayLoading,
@@ -162,9 +165,43 @@ export default function InterventionModal({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [handleClose]);
 
+  const handleVariableChange = (key: string, value: string) => {
+    const newValues = { ...variableValues, [key]: value };
+    setVariableValues(newValues);
+    if (selectedTemplate) {
+      const textTemplate = (isZh ? selectedTemplate.template_zh : selectedTemplate.template_en) || selectedTemplate.template;
+      let composed = textTemplate;
+      selectedTemplate.variables?.forEach((v) => {
+        const val = newValues[v.key] ? newValues[v.key] : `{${v.key}}`;
+        composed = composed.replace(new RegExp(`\\{${v.key}\\}`, 'g'), val);
+      });
+      setText(composed);
+    }
+  };
+
   const handleTemplateClick = (template: InterventionTemplate) => {
-    setText(template.template);
-    inputRef.current?.focus();
+    if (template.variables && template.variables.length > 0) {
+      setSelectedTemplate(template);
+      const initialValues: Record<string, string> = {};
+      template.variables.forEach((v) => {
+        initialValues[v.key] = '';
+      });
+      setVariableValues(initialValues);
+
+      const textTemplate = (isZh ? template.template_zh : template.template_en) || template.template;
+      let composed = textTemplate;
+      template.variables.forEach((v) => {
+        composed = composed.replace(new RegExp(`\\{${v.key}\\}`, 'g'), `{${v.key}}`);
+      });
+      setText(composed);
+      inputRef.current?.focus();
+    } else {
+      setSelectedTemplate(null);
+      setVariableValues({});
+      const textTemplate = (isZh ? template.template_zh : template.template_en) || template.template;
+      setText(textTemplate);
+      inputRef.current?.focus();
+    }
   };
 
   const toggleBatchBranch = (targetId: string) => {
@@ -247,9 +284,11 @@ export default function InterventionModal({
             <span className="field-value">{currentRound}</span>
           </div>
 
-          <div className="intervention-mode-grid" role="tablist" aria-label={t('intervention.mode_label')}>
+          <div className="intervention-mode-grid" role="group" aria-label={t('intervention.mode_label')}>
             <button
               type="button"
+              id="intervention-tab-standard"
+              aria-pressed={mode === 'standard'}
               className={`intervention-mode ${mode === 'standard' ? 'intervention-mode--active' : ''}`}
               onClick={() => setMode('standard')}
               disabled={isDisabled}
@@ -259,6 +298,8 @@ export default function InterventionModal({
             </button>
             <button
               type="button"
+              id="intervention-tab-retrospective"
+              aria-pressed={mode === 'retrospective'}
               className={`intervention-mode ${mode === 'retrospective' ? 'intervention-mode--active' : ''}`}
               onClick={() => setMode('retrospective')}
               disabled={isDisabled || retrospectiveDisabled}
@@ -268,6 +309,8 @@ export default function InterventionModal({
             </button>
             <button
               type="button"
+              id="intervention-tab-batch"
+              aria-pressed={mode === 'batch'}
               className={`intervention-mode ${mode === 'batch' ? 'intervention-mode--active' : ''}`}
               onClick={() => setMode('batch')}
               disabled={isDisabled}
@@ -277,23 +320,54 @@ export default function InterventionModal({
             </button>
           </div>
 
+          <div
+            id="intervention-tabpanel"
+            className="intervention-tabpanel"
+          >
           {!loadingTemplates && templates.length > 0 && (
             <div className="template-section">
               <label className="template-label">{t('intervention.templates_label')}</label>
               <div className="template-tags">
-                {templates.map((template) => (
-                  <button
-                    key={template.id}
-                    className="template-tag"
-                    onClick={() => handleTemplateClick(template)}
-                    disabled={isDisabled}
-                    title={template.template}
-                    type="button"
-                  >
-                    {template.name}
-                  </button>
-                ))}
+                {templates.map((template) => {
+                  const name = (isZh ? template.name_zh : template.name_en) || template.name;
+                  const textTemplate = (isZh ? template.template_zh : template.template_en) || template.template;
+                  const isActive = selectedTemplate?.id === template.id;
+                  return (
+                    <button
+                      key={template.id}
+                      className={`template-tag ${isActive ? 'template-tag--active' : ''}`}
+                      onClick={() => handleTemplateClick(template)}
+                      disabled={isDisabled}
+                      title={textTemplate}
+                      type="button"
+                    >
+                      {name}
+                    </button>
+                  );
+                })}
               </div>
+              {selectedTemplate && selectedTemplate.variables && selectedTemplate.variables.length > 0 && (
+                <div className="template-variables">
+                  {selectedTemplate.variables.map((v) => {
+                    const label = (isZh ? v.label_zh : v.label_en) || v.key;
+                    const placeholder = v.examples && v.examples.length > 0 ? v.examples[0] : '';
+                    return (
+                      <div key={v.key} className="template-variable-field">
+                        <label htmlFor={`intervention-var-${v.key}`} className="template-variable-label">{label}</label>
+                        <input
+                          id={`intervention-var-${v.key}`}
+                          className="template-variable-input"
+                          type="text"
+                          value={variableValues[v.key] || ''}
+                          onChange={(e) => handleVariableChange(v.key, e.target.value)}
+                          placeholder={placeholder}
+                          disabled={isDisabled}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <p className="template-hint">{t('intervention.templates_hint')}</p>
             </div>
           )}
@@ -354,19 +428,23 @@ export default function InterventionModal({
             ref={inputRef}
             className="intervention-input"
             placeholder={t('intervention.placeholder')}
+            aria-label={t('intervention.input_label')}
             value={text}
             onChange={(event) => setText(event.target.value)}
             disabled={isDisabled}
             rows={4}
           />
 
-          {errorMsg && <p className="modal-error">{errorMsg}</p>}
-          {status === 'success' && (
-            <>
-              <p className="modal-success">{t(`intervention.success_${mode}`)}</p>
-              {queueNotice && <p className="intervention-help">{queueNotice}</p>}
-            </>
-          )}
+          <div aria-live="polite">
+            {errorMsg && <p className="modal-error">{errorMsg}</p>}
+            {status === 'success' && (
+              <>
+                <p className="modal-success">{t(`intervention.success_${mode}`)}</p>
+                {queueNotice && <p className="intervention-help">{queueNotice}</p>}
+              </>
+            )}
+          </div>
+          </div>
         </div>
 
         <footer className="modal-footer">
@@ -379,12 +457,13 @@ export default function InterventionModal({
             {t('intervention.cancel')}
           </button>
           <button
-            className="btn btn-primary"
+            className="btn btn-primary intervention-submit"
             onClick={handleSubmit}
             disabled={isDisabled || !text.trim()}
             type="button"
+            aria-busy={status === 'submitting'}
           >
-            {status === 'submitting' ? '...' : t('intervention.submit')}
+            {status === 'submitting' ? t('intervention.submitting') : t('intervention.submit')}
           </button>
         </footer>
       </div>

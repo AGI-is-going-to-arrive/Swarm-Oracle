@@ -23,7 +23,7 @@
 | Scenarios | `backend/app/api/scenarios.py` | scenario 创建、查询、列表、删除、story、replay artifact、snapshot export/import；scenario/story branch response 会回显 `parent_branch_id / fork_round / fork_reason / replay_kind / replay_source_branch_id`，并在 Result Quality 开启时回显 `verdict / verdict_confidence / branches[].question_answer` |
 | Agents | `backend/app/api/agents.py` | identity 列表 / profile drawer、preflight、memory、growth-events、identity inspector、自建 Agent workshop、收藏、PDF 文档生成 Agent 与 Agent 备份导入导出；identity preflight 解析超时按 504 fail-closed |
 | Quota | `backend/app/api/quota.py` | conversation / replay quota summary；bucket 会回显 `enforced / scope / window_seconds` |
-| Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板；回溯干预受 `FEATURE_COUNTERFACTUAL_REPLAY` gate 控制；正式玩法卡注入会在后端校验 contract、冷却、点数和 pending metadata，玩法卡业务校验失败返回结构化 `422` |
+| Interventions | `backend/app/api/interventions.py` | 即时 / 回溯 / 批量干预、模板；普通和批量干预只在 active simulation 接收，其它终态返回 `409`；回溯干预受 `FEATURE_COUNTERFACTUAL_REPLAY` gate 控制；正式玩法卡注入会在后端校验 contract、冷却、点数和 pending metadata，玩法卡业务校验失败返回结构化 `422` |
 | Campaign | `backend/app/api/campaign.py` | director/gameplay authority、profile、mastery、badges、badge definitions、user unlocks、daily rotation、weekly track summary、leaderboard preview、score breakdown、只读 intervention effect receipts |
 | Conversation | `backend/app/api/conversation.py` | 图谱节点对话的 thread/start/get/turn/abort；`/turn` 通过 SSE 返回 assistant stream |
 | Predictions | `backend/app/api/predictions.py` | scenario prediction、评分、leaderboard 与 segment filters |
@@ -37,7 +37,7 @@
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、干预 pending metadata 消费与 effect receipt 写回；receipt 写回前会核对当前 scenario/branch，Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent prompt 会带当前世界线标题/分叉原因，Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记；narration 落库前也会清理行首 `[R1 角色]` 这类 raw round marker，但保留普通 `[important note]` 方括号内容 |
+| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、干预 pending metadata claim/lease 消费与 effect receipt 写回；receipt 写回前会核对当前 scenario/branch，Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent prompt 会带当前世界线标题/分叉原因，Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记；narration 落库前也会清理行首 `[R1 角色]` 这类 raw round marker，但保留普通 `[important note]` 方括号内容 |
 | Simulation Cancel | `backend/app/services/simulation_cancel.py` | scenario 取消 token、DB cancelled fallback 与后台任务取消信号 |
 | Preflight | `backend/app/services/preflight.py` | admin/CLI 预检：SQLite、ChromaDB、LLM、web search、CORS、volume |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
@@ -71,7 +71,7 @@
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| Core Models | `backend/app/models/database.py` | `Scenario`、`Branch`、`Round`、`Message`、`ReplayArtifact`、`PendingIntervention`、`InterventionLog` 等 |
+| Core Models | `backend/app/models/database.py` | `Scenario`、`Branch`、`Round`、`Message`、`ReplayArtifact`、带 lifecycle/claim 字段的 `PendingIntervention`、带 receipt/nullable impact 字段的 `InterventionLog` 等 |
 | Agent Identity Models | `backend/app/models/agent_identity.py` | generated/custom identity、persona metadata、preferred tier、favorite 标记 |
 | Campaign Models | `backend/app/models/campaign.py` | director profile、mastery、badge unlock、campaign log；campaign log 带 daily/weekly ledger 字段和 dedupe/weekly lookup index |
 | Debate Models | `backend/app/models/debate.py` | debate、turn、prediction、counterplay |
@@ -88,10 +88,10 @@
 - `Scenario.gameplay_state_json`
   玩法卡、押注、archive raw 的 authority。
 - 这两块都通过 `campaign` 路由读写，并带 `revision` 乐观并发控制。
-- `PendingIntervention.metadata_json`
-  只保存待处理干预的运行时元数据，例如玩法卡、profile、目标分支和原始用户输入；玩法卡 prompt 由后端 contract 重建，snapshot import 不会把 pending queue 重新排队。
-- `InterventionLog.effect_summary_json`
-  干预完成后的只读效果回执；effects endpoint 和 snapshot export/import 都读取这份持久化数据，不从前端重算。写回时会丢弃 scenario/branch 不匹配的 pending metadata。
+- `PendingIntervention`
+  待处理干预的 durable queue。`metadata_json` 只保存运行时元数据，例如玩法卡、profile、目标分支和原始用户输入；`status / claim_token / claimed_at / lease_expires_at / failure_reason / display_text` 记录 claim/lease 生命周期和用户可见文本。玩法卡 prompt 由后端 contract 重建，snapshot import 不会把 pending queue 重新排队。
+- `InterventionLog`
+  干预 ledger。`effect_summary_json` 是完成后的只读效果回执；`status` 记录 additive lifecycle，`impact_summary_json` 当前可空，不能作为已生成 impact summary 的证据。effects endpoint 和 snapshot export/import 都读取持久化 receipt，不从前端重算。写回时会丢弃 scenario/branch 不匹配的 pending metadata。
 - `Scenario.parsed_context.result_quality`
   Result Quality 的持久载荷；当前存顶层 `verdict / confidence / question_answer` 和 `branch_question_answers`，受 `FEATURE_RESULT_VERDICT` 控制，不是新表或新 column。verdict prompt 会读取分支标题、insight、概率和最多 1200 字的 `story_excerpt`；分支摘要整体仍按 untrusted text block 限制预算。
 - `Scenario.parsed_context.campaign_context`
@@ -115,6 +115,7 @@
 - SQLite 本地旧库如果还留着 legacy `uq_ending_room_scope` 唯一索引（`scenario_id + anchor_branch_id + room_type + participant_set_hash`），`init_db()` 当前也会在 lightweight fallback 和 Alembic upgrade 后统一修回 `scope_fingerprint`；generation 升级后再点结果页 `进入会客厅 / 异线旁听席` 不会再因为旧索引直接 `500`。
 - SQLite 本地旧库如果缺少 Alembic 031 的 campaign ledger 字段或索引，`init_db()` 的 lightweight fallback 也会补齐；daily dedupe partial unique index 和 weekly lookup index 不只依赖完整 Alembic 路径。
 - `counterfactual` 与 `resume` 当前共用独立的 replay branch runtime lock；慢 clone / seed 路径也会续租，不再只在短请求里可靠。
+- `retrospective` 当前复用 `clone_until_round()` 写 replay provenance：分支会标记 `replay_kind=retrospective`、`replay_source_branch_id` 和选中的 `replay_source_round`；实际克隆到选中轮前一轮，再从选中轮注入干预重新跑。
 - `resume` 当前会先完成 scenario/source branch/round 校验，再尝试 replay branch lock；这些前置校验失败不会占用 replay branch lock。
 - replay branch runtime lock 当前按 fail-closed 收口：
   - 续租返回 `None`、续租抛异常，或本地 lease 已过期时，`counterfactual / resume` 都不会继续 clone / seed / schedule
@@ -124,7 +125,7 @@
 - 前端分享链路优先使用后端 artifact，失败时才回退本地 token。
 - `delete_scenario()` 当前也会同步清理该 scenario 关联的 `ReplayArtifact`，不会继续保留可读的旧 share artifact。
 - `delete_scenario()` 当前不会删除个人 prediction journal 历史；它会把相关 journal entry 的 `scenario_id` 置空，避免 FK enforcement 下硬删除失败，也避免用户日志跟着 scenario 一起消失。
-- `compare_branches()` 当前会先验证 `branch_a / branch_b` 属于传入的 `scenario_id`，不再允许跨场景 branch 混入 compare 结果。
+- `compare_branches()` 当前会先验证 `branch_a / branch_b` 属于传入的 `scenario_id`，不再允许跨场景 branch 混入 compare 结果；当对比的是来源分支和 replay 分支时，会分别识别 `counterfactual` 与 `retrospective` 的干预上下文。
 - `POST /api/scenario/{id}/counterfactual` 当前会在 clone 前先校验目标 `round_number` 里确实存在该 `agent_id` 的消息：
   - scenario 状态必须是 `done`；否则返回 `409 COUNTERFACTUAL_SCENARIO_STATUS_INVALID`
   - source branch 不存在时返回 `404 COUNTERFACTUAL_BRANCH_NOT_FOUND`
@@ -275,6 +276,11 @@
   - `counterfactual / resume` 会先完成请求侧校验，再在进入 `clone / seed / schedule` 前启动同一把 scenario 级 replay lock heartbeat
   - 续租返回 `None`、续租抛异常，或本地 lease 已过期时，请求会直接 fail-closed，不会继续 clone / seed / schedule
   - 如果锁丢失前，并发请求已经吃满最后一个 replay branch slot，会回退成 `429 REPLAY_BRANCH_LIMIT_REACHED`
+- persisted intervention queue 当前也按 claim/lease 收口：
+  - worker 先把最早的 `pending` 行原子 claim 成 `claimed`，不会在模型处理前直接删除
+  - 过期 claim 会回到 `pending`
+  - 成功注入后删除已消费行；注入失败会标成 `failed` 并保留 `failure_reason`
+  - `intervention_injected` WS 只广播 `display_text / raw_user_input` 这类用户可见文本，不广播后端 prompt
 - 主模式后台 simulation 当前在拿着预占 `simulation lock` 续跑时，也会显式监听 lock 丢失；一旦 lease 被别人抢走或续租失败，任务会立刻取消并把 scenario 标成 `error`。
 - `runtime_lock` 当前也能正确解析 `sqlite:///file:/...?...uri=true` 这类 SQLite URI；多 worker 共用同一文件时，仍然走共享 SQLite lease，不会静默退回进程内锁。
 - `VectorStore` 读取默认按 branch 或 allowed-branch scope 收口，不再放宽到整个 scenario。
@@ -330,7 +336,7 @@
 - `AgentStateFrame` 当前按 `scenario_id + branch_id + round_number + agent_id` 唯一。
   同一个 `(branch / round / agent)` 组合就算出现在不同 scenario，也不会再互相撞库。
   `020` 迁移当前也兼容“runtime repair 先跑、Alembic 后补”的顺序，不会再因为旧约束名已经不存在而卡住升级；runtime repair 在重建唯一约束前也会先按最新一条脏数据去重，不会因为 legacy 重复行直接炸掉。
-  `020` 到 `030` 的 offline Alembic SQL 当前不依赖运行时 SQLite reflection / PRAGMA 查询；`030` 只新增 `pending_intervention.metadata_json` 与 `intervention_log.effect_summary_json`，并有 offline SQL 与 SQLite downgrade/upgrade roundtrip 覆盖。
+  `020` 到 `032` 的 offline Alembic SQL 当前不依赖运行时 SQLite reflection / PRAGMA 查询；`030` 新增 `pending_intervention.metadata_json` 与 `intervention_log.effect_summary_json`，`032_intervention_lifecycle` 新增 pending queue lifecycle / display text、`intervention_log.status / impact_summary_json` 和 `ix_pending_intervention_status`，并有 offline SQL 与 SQLite downgrade/upgrade roundtrip 覆盖。
 - `GraphSnapshot` 当前按 `owner_type + owner_id + graph_kind` 唯一。
   同一个 causal graph / argument map 在首次并发创建时，会回退到同一份 snapshot，而不是拆成多份；读取最新 snapshot 时，SQLite 按 `created_at DESC, rowid DESC`，非 SQLite 按 `created_at DESC, id DESC`。如果 SQLite legacy duplicate snapshot 还残留，runtime repair 会直接以最新 snapshot 为 authority，删除其他重复 snapshot 的 `graph_node / graph_edge` 和相关引用边；不会把旧残留合回当前图。
 - `resolve_identity()` 当前已支持复用外层 SQLModel session，避免 scenario parse 路径在同一事务里二次开 session 时撞到 SQLite `database is locked`。
@@ -456,7 +462,7 @@
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 - custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；最近记录里后端仓库级 ruff 已全绿。
 - 最近后端完整复验：
-  - `python -m pytest -x -q --tb=short`：`3286 passed, 11 skipped`
+  - `python -m pytest tests/`：`3329 passed, 6 skipped`
   - `ruff check app/ tests/`：通过
 - Campaign/profile label 本轮窄集复验：
   - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`：`154 passed`

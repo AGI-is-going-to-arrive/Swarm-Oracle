@@ -38,9 +38,10 @@ const {
   importReplayScenarioMock,
   cancelScenarioMock,
   createReplayArtifactMock,
-  getReplayArtifactMock,
-  gameplayCardsModalRenderMock,
-} = vi.hoisted(() => ({
+	  getReplayArtifactMock,
+	  gameplayCardsModalRenderMock,
+	  interventionReceiptCardRenderMock,
+	} = vi.hoisted(() => ({
   upsertScenarioDirectorStateMock: vi.fn(async (scenarioId: string, payload: unknown) => ({
     scenario_id: scenarioId,
     ...(payload as Record<string, unknown>),
@@ -84,9 +85,10 @@ const {
     kind: 'simulation_view_v1',
     created_at: '2026-03-19T00:00:00Z',
   })),
-  getReplayArtifactMock: vi.fn(async (): Promise<ReplayArtifactMock | null> => null),
-  gameplayCardsModalRenderMock: vi.fn(),
-}));
+	  getReplayArtifactMock: vi.fn(async (): Promise<ReplayArtifactMock | null> => null),
+	  gameplayCardsModalRenderMock: vi.fn(),
+	  interventionReceiptCardRenderMock: vi.fn(),
+	}));
 
 const emptyDirectorState: ScenarioDirectorState = {
   revision: 0,
@@ -161,8 +163,9 @@ const mockStore = {
   isSimulationComplete: true,
   visualizationEnabled: true,
   viewMode: 'theater' as 'classic' | 'theater',
-  currentRound: 0,
-  toggleViewMode: vi.fn(),
+	  currentRound: 0,
+	  interventionLifecycle: new Map<string, 'queued' | 'injected' | 'observed' | 'receipt_ready'>(),
+	  toggleViewMode: vi.fn(),
   setScenario: vi.fn((scenario: Scenario, options?: { forceClassicForDone?: boolean; replayMode?: boolean }) => {
     mockStore.scenario = scenario;
     mockStore.agents = scenario.agents as typeof mockStore.agents;
@@ -260,9 +263,21 @@ vi.mock('../components/TimelineBar', () => ({
   ),
 }));
 
-vi.mock('../components/InterventionModal', () => ({
-  default: () => null,
-}));
+	vi.mock('../components/InterventionModal', () => ({
+	  default: () => null,
+	}));
+
+	vi.mock('../components/InterventionReceiptCard', () => ({
+	  InterventionReceiptCard: (props: {
+	    scenarioId: string;
+	    enabled: boolean;
+	    refreshKey?: number | string;
+	    interventionLifecycle?: Map<string, string>;
+	  }) => {
+	    interventionReceiptCardRenderMock(props);
+	    return <div data-testid="intervention-receipt-card-mock" />;
+	  },
+	}));
 
 vi.mock('../components/BranchDetailModal', () => ({
   default: () => null,
@@ -364,7 +379,8 @@ describe('SimulationView replay automation output', () => {
     createReplayArtifactMock.mockClear();
     getReplayArtifactMock.mockReset();
     getReplayArtifactMock.mockResolvedValue(null);
-    gameplayCardsModalRenderMock.mockClear();
+	    gameplayCardsModalRenderMock.mockClear();
+	    interventionReceiptCardRenderMock.mockClear();
     mockStore.loadScenario.mockReset();
     mockStore.setScenario.mockClear();
     mockStore.scenario = { ...baseScenario };
@@ -374,7 +390,8 @@ describe('SimulationView replay automation output', () => {
     mockStore.isSimulationComplete = true;
     mockStore.visualizationEnabled = true;
     mockStore.viewMode = 'theater';
-    mockStore.currentRound = 0;
+	    mockStore.currentRound = 0;
+	    mockStore.interventionLifecycle = new Map();
     mockStore.toggleViewMode.mockClear();
     mockStore.agents = [
       { id: 'a1', name: '奥勒留斯', role: '皇帝', tier: 'CORE' as const, emotion: 'neutral' },
@@ -484,6 +501,28 @@ describe('SimulationView replay automation output', () => {
         },
       ]);
     });
+  });
+
+  it('renders live intervention lifecycle state before simulation completion', async () => {
+    mockStore.status = 'simulating';
+    mockStore.isSimulationComplete = false;
+    mockStore.interventionLifecycle = new Map([['int-1', 'queued']]);
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId('intervention-receipt-card-mock')).toBeInTheDocument();
+    expect(interventionReceiptCardRenderMock).toHaveBeenCalledWith(expect.objectContaining({
+      scenarioId: 'scenario-1',
+      enabled: false,
+      refreshKey: 'int-1:queued',
+      interventionLifecycle: mockStore.interventionLifecycle,
+    }));
   });
 
   it('re-collapses the agent panel when the page switches into theater mode', async () => {

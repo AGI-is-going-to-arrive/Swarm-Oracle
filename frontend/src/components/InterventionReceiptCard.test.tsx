@@ -204,6 +204,29 @@ describe('InterventionReceiptCard', () => {
     expect(card.textContent).not.toContain('secret-log-id-xyz');
   });
 
+  it('uses the singular receipt subtitle for one effect', async () => {
+    getInterventionEffectsMock.mockResolvedValueOnce({
+      effects: [
+        {
+          intervention_log_id: 'log-one',
+          card_id: null,
+          card_label: null,
+          round_number: 1,
+          affected_agents: [],
+          response_excerpts: [],
+          confidence: 0.2,
+          no_response_detected: false,
+          created_at: '2026-05-17T10:00:00Z',
+        },
+      ],
+    });
+
+    render(<InterventionReceiptCard scenarioId="scenario-1" enabled />);
+    const card = await screen.findByTestId('intervention-receipt-card');
+    expect(card.textContent).toContain('intervention_receipt.subtitle_one<count=1>');
+    expect(card.textContent).not.toContain('intervention_receipt.subtitle_other<count=1>');
+  });
+
   it('localizes card labels from card_id when UI language changes', async () => {
     languageState.current = 'en-US';
     getInterventionEffectsMock.mockResolvedValueOnce({
@@ -271,5 +294,50 @@ describe('InterventionReceiptCard', () => {
     render(<InterventionReceiptCard scenarioId="" enabled />);
     await flushReceiptStateReset();
     expect(getInterventionEffectsMock).not.toHaveBeenCalled();
+  });
+
+  it('shows pending interventions when interventionLifecycle has queued or injected state', async () => {
+    getInterventionEffectsMock.mockResolvedValueOnce({ effects: [] });
+    const lifecycle = new Map<string, 'queued' | 'injected' | 'receipt_ready' | 'observed'>();
+    lifecycle.set('int-1', 'queued');
+    lifecycle.set('int-2', 'injected');
+
+    render(
+      <InterventionReceiptCard
+        scenarioId="scenario-1"
+        enabled
+        interventionLifecycle={lifecycle}
+      />,
+    );
+
+    const card = await screen.findByTestId('intervention-receipt-card');
+    expect(card).toBeInTheDocument();
+
+    // There are two pending items rendering the loading text
+    expect(card.textContent).toContain('intervention_receipt.loading');
+    expect(card.textContent).toContain('intervention_receipt.subtitle_pending_other<count=2>');
+    expect(card.textContent).not.toContain('intervention_receipt.subtitle_zero');
+  });
+
+  it('hides pending interventions when they reach receipt_ready', async () => {
+    getInterventionEffectsMock.mockResolvedValueOnce({ effects: [] });
+    const lifecycle = new Map<string, 'queued' | 'injected' | 'receipt_ready' | 'observed'>();
+    lifecycle.set('int-1', 'receipt_ready');
+
+    const { container } = render(
+      <InterventionReceiptCard
+        scenarioId="scenario-1"
+        enabled
+        interventionLifecycle={lifecycle}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getInterventionEffectsMock).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('intervention-receipt-card-loading')).toBeNull();
+    });
+    expect(container).toBeEmptyDOMElement();
   });
 });

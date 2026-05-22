@@ -98,7 +98,15 @@ _LIGHTWEIGHT_ADDITIVE_COLUMNS = (
     ("graph_edge", "evidence_json", "TEXT"),
     ("agent_identity", "is_favorite", "INTEGER DEFAULT 0"),
     ("pending_intervention", "metadata_json", "TEXT"),
+    ("pending_intervention", "status", "TEXT DEFAULT 'pending'"),
+    ("pending_intervention", "claim_token", "TEXT"),
+    ("pending_intervention", "claimed_at", "DATETIME"),
+    ("pending_intervention", "lease_expires_at", "DATETIME"),
+    ("pending_intervention", "failure_reason", "TEXT"),
+    ("pending_intervention", "display_text", "TEXT DEFAULT ''"),
     ("intervention_log", "effect_summary_json", "TEXT"),
+    ("intervention_log", "status", "TEXT DEFAULT 'logged'"),
+    ("intervention_log", "impact_summary_json", "TEXT"),
     # Campaign Phase 1 — durable challenge / track provenance (alembic 031).
     # NB: the lightweight migrator only accepts a small whitelist of type
     # tokens (TEXT / INTEGER / ...), so the parameterised VARCHAR(n) widths
@@ -241,6 +249,8 @@ class InterventionLog(SQLModel, table=True):
     user_input: str = ""
     created_at: datetime = Field(default_factory=_now)
     effect_summary_json: Optional[str] = None
+    status: str = Field(default="logged")
+    impact_summary_json: Optional[str] = None
 
 
 class PendingIntervention(SQLModel, table=True):
@@ -254,6 +264,12 @@ class PendingIntervention(SQLModel, table=True):
             "branch_id",
             "id",
         ),
+        Index(
+            "ix_pending_intervention_status",
+            "scenario_id",
+            "branch_id",
+            "status",
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -261,6 +277,12 @@ class PendingIntervention(SQLModel, table=True):
     branch_id: str = Field(foreign_key="branch.id")
     user_input: str = ""
     metadata_json: Optional[str] = None
+    status: str = Field(default="pending")
+    claim_token: Optional[str] = None
+    claimed_at: Optional[datetime] = None
+    lease_expires_at: Optional[datetime] = None
+    failure_reason: Optional[str] = None
+    display_text: str = Field(default="")
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -453,6 +475,7 @@ def _has_bootstrap_sqlmodel_schema(connection) -> bool:
         if table_name in table_names:
             _migrate_add_column(connection, table_name, column_name, column_type)
     _migrate_campaign_ledger_indexes(connection)
+    _migrate_intervention_lifecycle_indexes(connection)
 
     for table_name, table in SQLModel.metadata.tables.items():
         if table_name not in table_names:
@@ -609,6 +632,7 @@ def _init_db_lightweight() -> None:
                 "ix_pending_intervention_queue",
                 ["scenario_id", "branch_id", "id"],
             )
+            _migrate_intervention_lifecycle_indexes(conn)
             _migrate_create_index(
                 conn,
                 "scenario_campaign_log",
@@ -715,6 +739,7 @@ def init_db():
                 for table_name, column_name, column_type in _LIGHTWEIGHT_ADDITIVE_COLUMNS:
                     if table_name in {"pending_intervention", "intervention_log"}:
                         _migrate_add_column(conn, table_name, column_name, column_type)
+                _migrate_intervention_lifecycle_indexes(conn)
         except Exception as exc:
             logger.warning("SQLite post-upgrade index repair failed (best-effort): %s", exc)
 
@@ -790,6 +815,18 @@ def _migrate_campaign_ledger_indexes(cursor) -> None:
         "ON scenario_campaign_log "
         "(director_profile_id, challenge_local_date, challenge_id) "
         "WHERE challenge_id IS NOT NULL AND challenge_local_date IS NOT NULL",
+    )
+
+
+def _migrate_intervention_lifecycle_indexes(cursor) -> None:
+    """Ensure intervention lifecycle indexes created by Alembic 032 exist on SQLite."""
+    if not _migrate_table_exists(cursor, "pending_intervention"):
+        return
+    _migrate_create_index(
+        cursor,
+        "pending_intervention",
+        "ix_pending_intervention_status",
+        ["scenario_id", "branch_id", "status"],
     )
 
 

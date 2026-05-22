@@ -27,7 +27,7 @@ from app.models.database import (
     ScenarioStatus,
     get_engine,
 )
-from app.services.replay import write_checkpoint
+from app.services.replay import compare_branches, write_checkpoint
 
 
 @pytest.fixture(autouse=True)
@@ -175,6 +175,15 @@ class TestCreateCounterfactual:
             assert new_branch.replay_source_branch_id == bid
             assert new_branch.replay_source_round == 2
             assert new_branch.replay_source_agent_id == aid
+
+        comparison = compare_branches(sid, bid, data["branch_id"])
+        assert comparison["intervention"] == {
+            "round": 2,
+            "agent_id": aid,
+            "agent_name": "Agent A",
+            "original_content": "Round 2 message",
+            "replacement_content": "Alternative stance from this agent",
+        }
 
     def test_default_simulate_true_starts_simulation(self, client, monkeypatch):
         """Default counterfactual creation should schedule branch-only simulation."""

@@ -20,6 +20,7 @@ from app.models.database import (
     AgentMessage,
     Branch,
     BranchStatus,
+    InterventionLog,
     Round,
     Scenario,
     get_engine,
@@ -246,6 +247,8 @@ def clone_until_round(
     ensure_lock: Callable[[], None] | None = None,
     replay_kind: str = "counterfactual",
     title: str | None = None,
+    session: Session | None = None,
+    replay_source_round: int | None = None,
 ) -> str:
     """Clone a branch up to round_number (inclusive), return new branch_id.
 
@@ -255,12 +258,17 @@ def clone_until_round(
     Args:
         replay_kind: "counterfactual" | "resume" | "retrospective"
         title: Branch display title. Defaults to "{Kind} from round {N}".
+        session: Existing transaction to use. When omitted, this helper owns
+            and commits its session for backward-compatible callers.
+        replay_source_round: Source round to expose in replay metadata. Defaults
+            to round_number, while callers may clone history through N-1 and
+            still expose N as the selected intervention round.
     """
-    with Session(get_engine()) as session:
+    def _clone(active_session: Session) -> tuple[str, int]:
         if ensure_lock is not None:
             ensure_lock()
         display_title = title or _default_replay_title(
-            session,
+            active_session,
             scenario_id,
             replay_kind,
             round_number,
@@ -272,18 +280,20 @@ def clone_until_round(
             fork_round=round_number,
             replay_kind=replay_kind,
             replay_source_branch_id=source_branch_id,
-            replay_source_round=round_number,
+            replay_source_round=(
+                replay_source_round if replay_source_round is not None else round_number
+            ),
             title=display_title,
             status=BranchStatus.ACTIVE,
             probability=0.5,
         )
-        session.add(new_branch)
-        session.flush()  # get the id
+        active_session.add(new_branch)
+        active_session.flush()  # get the id
 
         new_branch_id = new_branch.id
 
         # Copy rounds up to round_number (inclusive)
-        source_rounds = session.exec(
+        source_rounds = active_session.exec(
             select(Round)
             .where(Round.branch_id == source_branch_id, Round.round_number <= round_number)
             .order_by(Round.round_number)
@@ -297,11 +307,11 @@ def clone_until_round(
                 round_number=src_round.round_number,
                 compressed_summary=src_round.compressed_summary,
             )
-            session.add(new_round)
-            session.flush()
+            active_session.add(new_round)
+            active_session.flush()
 
             # Copy all messages for this round
-            messages = session.exec(
+            messages = active_session.exec(
                 select(AgentMessage)
                 .where(AgentMessage.round_id == src_round.id)
                 .order_by(_agent_message_rowid())
@@ -317,14 +327,26 @@ def clone_until_round(
                     diverge=msg.diverge,
                     tokens_used=msg.tokens_used,
                 )
-                session.add(new_msg)
+                active_session.add(new_msg)
 
         if ensure_lock is not None:
             ensure_lock()
-        session.commit()
+        return new_branch_id, len(source_rounds)
+
+    if session is not None:
+        new_branch_id, copied_round_count = _clone(session)
         logger.info(
             "Cloned branch %s -> %s up to round %d (%d rounds copied)",
-            source_branch_id, new_branch_id, round_number, len(source_rounds),
+            source_branch_id, new_branch_id, round_number, copied_round_count,
+        )
+        return new_branch_id
+
+    with Session(get_engine()) as owned_session:
+        new_branch_id, copied_round_count = _clone(owned_session)
+        owned_session.commit()
+        logger.info(
+            "Cloned branch %s -> %s up to round %d (%d rounds copied)",
+            source_branch_id, new_branch_id, round_number, copied_round_count,
         )
         return new_branch_id
 
@@ -470,6 +492,37 @@ def _counterfactual_branch(branch_a: Branch, branch_b: Branch) -> Branch | None:
     return None
 
 
+def _retrospective_branch(branch_a: Branch, branch_b: Branch) -> Branch | None:
+    if branch_a.replay_kind == "retrospective":
+        return branch_a
+    if branch_b.replay_kind == "retrospective":
+        return branch_b
+    return None
+
+
+def _replay_source_branch_id(branch: Branch) -> str | None:
+    return branch.replay_source_branch_id or branch.parent_branch_id
+
+
+def _comparison_branch_for_replay(
+    replay_branch: Branch,
+    branch_a: Branch,
+    branch_b: Branch,
+) -> Branch:
+    return branch_b if branch_a.id == replay_branch.id else branch_a
+
+
+def _compares_replay_with_source(
+    replay_branch: Branch,
+    branch_a: Branch,
+    branch_b: Branch,
+) -> bool:
+    return (
+        _comparison_branch_for_replay(replay_branch, branch_a, branch_b).id
+        == _replay_source_branch_id(replay_branch)
+    )
+
+
 def _build_intervention(
     session: Session,
     *,
@@ -483,14 +536,11 @@ def _build_intervention(
 
     agent_id = counterfactual.replay_source_agent_id
     round_number = counterfactual.replay_source_round or counterfactual.fork_round
-    source_branch_id = (
-        counterfactual.replay_source_branch_id
-        or counterfactual.parent_branch_id
-    )
+    source_branch_id = _replay_source_branch_id(counterfactual)
     if not agent_id or not round_number or not source_branch_id:
         return None
 
-    comparison_branch = branch_b if branch_a.id == counterfactual.id else branch_a
+    comparison_branch = _comparison_branch_for_replay(counterfactual, branch_a, branch_b)
     if comparison_branch.id != source_branch_id:
         return None
 
@@ -533,11 +583,54 @@ def _build_intervention(
     }
 
 
+def _build_retrospective_intervention(
+    session: Session,
+    *,
+    branch_a: Branch,
+    branch_b: Branch,
+) -> dict | None:
+    retrospective = _retrospective_branch(branch_a, branch_b)
+    if retrospective is None:
+        return None
+
+    source_branch_id = _replay_source_branch_id(retrospective)
+    source_round = retrospective.replay_source_round
+    if not source_branch_id or not source_round:
+        return None
+
+    comparison_branch = _comparison_branch_for_replay(retrospective, branch_a, branch_b)
+    if comparison_branch.id != source_branch_id:
+        return None
+
+    log = session.exec(
+        select(InterventionLog)
+        .where(
+            InterventionLog.scenario_id == retrospective.scenario_id,
+            InterventionLog.branch_id == retrospective.id,
+            InterventionLog.round_number == source_round,
+        )
+        .order_by(InterventionLog.created_at.desc())
+    ).first()
+    return {
+        "replay_kind": "retrospective",
+        "source_branch_id": source_branch_id,
+        "source_round": source_round,
+        "intervention_text": log.user_input if log is not None else None,
+    }
+
+
 def _count_common_rounds(
     diffs: list[dict],
     counterfactual: Branch | None,
+    retrospective: Branch | None,
+    branch_a: Branch,
+    branch_b: Branch,
 ) -> int:
-    if counterfactual is not None:
+    if counterfactual is not None and _compares_replay_with_source(
+        counterfactual,
+        branch_a,
+        branch_b,
+    ):
         fork_round = counterfactual.replay_source_round or counterfactual.fork_round
         if not fork_round:
             return 0
@@ -546,6 +639,16 @@ def _count_common_rounds(
             for diff in diffs
             if diff["round"] < fork_round and diff["is_identical"]
         )
+
+    if retrospective is not None and _compares_replay_with_source(
+        retrospective,
+        branch_a,
+        branch_b,
+    ):
+        source_round = retrospective.replay_source_round or retrospective.fork_round
+        if not source_round:
+            return 0
+        return max(0, int(source_round) - 1)
 
     common_rounds = 0
     for diff in diffs:
@@ -620,13 +723,26 @@ def compare_branches(
             })
 
         counterfactual = _counterfactual_branch(branch_a_obj, branch_b_obj)
-        common_rounds = _count_common_rounds(diffs, counterfactual)
+        retrospective = _retrospective_branch(branch_a_obj, branch_b_obj)
+        common_rounds = _count_common_rounds(
+            diffs,
+            counterfactual,
+            retrospective,
+            branch_a_obj,
+            branch_b_obj,
+        )
         intervention = _build_intervention(
             session,
             scenario_id=scenario_id,
             branch_a=branch_a_obj,
             branch_b=branch_b_obj,
         )
+        if intervention is None:
+            intervention = _build_retrospective_intervention(
+                session,
+                branch_a=branch_a_obj,
+                branch_b=branch_b_obj,
+            )
 
     return {
         "scenario_id": scenario_id,

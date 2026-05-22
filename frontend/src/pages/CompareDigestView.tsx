@@ -48,12 +48,35 @@ function DiffHighlight({ oldText, newText, side }: { oldText: string; newText: s
   );
 }
 
-interface InterventionInfo {
+interface CounterfactualInterventionInfo {
+  replay_kind?: 'counterfactual';
   round: number;
   agent_id: string;
   agent_name: string;
   original_content: string | null;
   replacement_content: string | null;
+}
+
+interface RetrospectiveInterventionInfo {
+  replay_kind: 'retrospective';
+  source_branch_id: string;
+  source_round: number;
+  intervention_text: string | null;
+}
+
+type InterventionInfo = CounterfactualInterventionInfo | RetrospectiveInterventionInfo;
+
+function isRetrospectiveIntervention(
+  intervention: InterventionInfo | null,
+): intervention is RetrospectiveInterventionInfo {
+  return intervention?.replay_kind === 'retrospective';
+}
+
+function getInterventionRound(intervention: InterventionInfo | null): number | null {
+  if (!intervention) return null;
+  return isRetrospectiveIntervention(intervention)
+    ? intervention.source_round
+    : intervention.round;
 }
 
 interface CompareData {
@@ -133,6 +156,7 @@ export function CompareDigestView() {
   const scenarioQuestion = storeScenario?.question ?? null;
   const hasScenario = Boolean(storeScenario);
   const intervention = data?.intervention ?? null;
+  const interventionRound = getInterventionRound(intervention);
   const errorLabel = useMemo(() => {
     if (!error) return null;
     if (error.kind === 'missing_params') {
@@ -180,7 +204,7 @@ export function CompareDigestView() {
       setScenario(scenarioPayload);
       setData(comparePayload);
       setSelectedRound(
-        comparePayload.intervention?.round
+        getInterventionRound(comparePayload.intervention)
         ?? comparePayload.rounds.find((r) => !r.is_identical)?.round
         ?? comparePayload.rounds[0]?.round
         ?? 1,
@@ -539,30 +563,59 @@ export function CompareDigestView() {
           aria-labelledby="compare-intervention-title"
         >
           <div className="compare-digest-view__intervention-header">
-            <strong id="compare-intervention-title">{t('compare.intervention_title', 'What Changed')}</strong>
+            <strong id="compare-intervention-title">
+              {isRetrospectiveIntervention(intervention)
+                ? t('compare.intervention_retrospective_title', 'Retrospective Intervention')
+                : t('compare.intervention_title', 'What Changed')}
+            </strong>
             <span className="compare-digest-view__intervention-round">
-              {t('compare.round', { round: intervention.round })}
+              {t('compare.round', { round: interventionRound ?? 0 })}
             </span>
           </div>
           <div className="compare-digest-view__intervention-body">
-            <div className="compare-digest-view__intervention-agent">
-              <span>
-                {t('compare.intervention_agent_label', {
-                  agent: intervention.agent_name,
-                  defaultValue: 'Agent: {{agent}}',
-                })}
-              </span>
-            </div>
-            <div className="compare-digest-view__intervention-diff">
-              <div className="compare-digest-view__intervention-original">
-                <span>{t('compare.intervention_original', 'Original')}</span>
-                <p>{intervention.original_content || '—'}</p>
-              </div>
-              <div className="compare-digest-view__intervention-replacement">
-                <span>{t('compare.intervention_replacement', 'Replacement')}</span>
-                <p>{intervention.replacement_content || '—'}</p>
-              </div>
-            </div>
+            {isRetrospectiveIntervention(intervention) ? (
+              <>
+                <div className="compare-digest-view__intervention-agent">
+                  <span>
+                    {t('compare.intervention_retrospective_source', {
+                      branch: branchById.get(intervention.source_branch_id)?.title ?? intervention.source_branch_id,
+                      defaultValue: 'Source branch: {{branch}}',
+                    })}
+                  </span>
+                </div>
+                <div className="compare-digest-view__intervention-diff">
+                  <div className="compare-digest-view__intervention-original">
+                    <span>{t('compare.intervention_retrospective_boundary', 'Replay boundary')}</span>
+                    <p>{t('compare.round', { round: intervention.source_round })}</p>
+                  </div>
+                  <div className="compare-digest-view__intervention-replacement">
+                    <span>{t('compare.intervention_retrospective_prompt', 'Injected prompt')}</span>
+                    <p>{intervention.intervention_text || '—'}</p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="compare-digest-view__intervention-agent">
+                  <span>
+                    {t('compare.intervention_agent_label', {
+                      agent: intervention.agent_name,
+                      defaultValue: 'Agent: {{agent}}',
+                    })}
+                  </span>
+                </div>
+                <div className="compare-digest-view__intervention-diff">
+                  <div className="compare-digest-view__intervention-original">
+                    <span>{t('compare.intervention_original', 'Original')}</span>
+                    <p>{intervention.original_content || '—'}</p>
+                  </div>
+                  <div className="compare-digest-view__intervention-replacement">
+                    <span>{t('compare.intervention_replacement', 'Replacement')}</span>
+                    <p>{intervention.replacement_content || '—'}</p>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </section>
       )}
@@ -721,7 +774,7 @@ export function CompareDigestView() {
             {divergentRounds.length ? (
               divergentRounds.map((round) => {
                 const divergencePct = Math.round(round.divergence_score * 100);
-                const isIntervention = intervention?.round === round.round;
+                const isIntervention = interventionRound === round.round;
                 const aHasData = (round.branch_a_messages?.length ?? 0) > 0;
                 const bHasData = (round.branch_b_messages?.length ?? 0) > 0;
                 const oneSideEmpty = (aHasData && !bHasData) || (!aHasData && bHasData);

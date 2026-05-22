@@ -26,6 +26,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
       options ? `${key}:${JSON.stringify(options)}` : key,
+    i18n: { language: 'en' },
   }),
 }));
 
@@ -155,6 +156,46 @@ describe('InterventionModal advanced modes', () => {
     });
   });
 
+  it('has correct a11y attributes for mode group and inputs', async () => {
+    render(<InterventionModal {...baseProps} />);
+
+    const modeGroup = screen.getByRole('group', { name: 'intervention.mode_label' });
+    expect(modeGroup).toBeInTheDocument();
+
+    const standardButton = screen.getByText('intervention.mode_standard').closest('button');
+    const retrospectiveButton = screen.getByText('intervention.mode_retrospective').closest('button');
+    const batchButton = screen.getByText('intervention.mode_batch').closest('button');
+    expect(standardButton).toHaveAttribute('aria-pressed', 'true');
+    expect(retrospectiveButton).toHaveAttribute('aria-pressed', 'false');
+    expect(batchButton).toHaveAttribute('aria-pressed', 'false');
+
+    const textarea = screen.getByRole('textbox', { name: 'intervention.input_label' });
+    expect(textarea).toBeInTheDocument();
+  });
+
+  it('shows submitting state with aria-busy and correct text', async () => {
+    const user = userEvent.setup();
+    let resolveIntervene: (val: unknown) => void = () => {};
+    interveneMock.mockReturnValue(new Promise(resolve => {
+       resolveIntervene = resolve;
+    }));
+
+    render(<InterventionModal {...baseProps} />);
+    const textarea = screen.getByRole('textbox', { name: 'intervention.input_label' });
+    await user.type(textarea, 'Test');
+    const submitBtn = screen.getByRole('button', { name: 'intervention.submit' });
+    await user.click(submitBtn);
+
+    expect(submitBtn).toHaveAttribute('aria-busy', 'true');
+    expect(submitBtn).toHaveTextContent('intervention.submitting');
+
+    resolveIntervene({ status: 'applied', intervention_id: 'int-1', branch_id: 'branch-1', round: 3 });
+
+    await waitFor(() => {
+       expect(screen.getByText('intervention.success_standard')).toBeInTheDocument();
+    });
+  });
+
   it('disables retrospective mode when the branch has no completed rounds yet', async () => {
     render(
       <InterventionModal
@@ -194,5 +235,50 @@ describe('InterventionModal advanced modes', () => {
     expect(retrospectiveButton).toBeDisabled();
     expect(screen.getByText('common.capability_error')).toBeInTheDocument();
     expect(interveneRetrospectiveMock).not.toHaveBeenCalled();
+  });
+
+  it('renders template variables and composes text', async () => {
+    const user = userEvent.setup();
+    getInterventionTemplatesMock.mockResolvedValue([
+      {
+        id: 'template-var',
+        name: 'Target Variable Template',
+        name_en: 'Target Variable Template',
+        template: 'Target: {target}. Action: {action}.',
+        variables: [
+          { key: 'target', label_en: 'Target Name', label_zh: '目标名称', examples: ['John'] },
+          { key: 'action', label_en: 'Action Type', label_zh: '操作类型', examples: ['Eliminate'] }
+        ],
+      }
+    ]);
+
+    render(<InterventionModal {...baseProps} />);
+
+    await waitFor(() => expect(getInterventionTemplatesMock).toHaveBeenCalled());
+
+    const templateButton = await screen.findByRole('button', { name: 'Target Variable Template' });
+    await user.click(templateButton);
+
+    const targetInput = screen.getByRole('textbox', { name: 'Target Name' });
+    const actionInput = screen.getByRole('textbox', { name: 'Action Type' });
+    expect(targetInput).toBeInTheDocument();
+    expect(targetInput).toHaveAttribute('placeholder', 'John');
+
+    const textarea = screen.getByRole('textbox', { name: 'intervention.input_label' });
+    expect(textarea).toHaveValue('Target: {target}. Action: {action}.');
+
+    await user.type(targetInput, 'Alpha');
+    await user.type(actionInput, 'Negotiate');
+
+    expect(textarea).toHaveValue('Target: Alpha. Action: Negotiate.');
+
+    await user.click(screen.getByRole('button', { name: 'intervention.submit' }));
+
+    await waitFor(() => {
+      expect(interveneMock).toHaveBeenCalledWith('scenario-1', {
+        branch_id: 'branch-1',
+        text: 'Target: Alpha. Action: Negotiate.',
+      });
+    });
   });
 });

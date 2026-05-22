@@ -17,6 +17,7 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
+from app.services.replay import compare_branches
 
 
 @pytest.fixture
@@ -132,8 +133,53 @@ class TestRetrospectiveIntervention:
             new_branch = session.get(Branch, data["new_branch_id"])
             assert new_branch is not None
             assert new_branch.parent_branch_id == bid
-            assert new_branch.fork_round == 2
+            assert new_branch.fork_round == 1
+            assert new_branch.replay_kind == "retrospective"
+            assert new_branch.replay_source_branch_id == bid
+            assert new_branch.replay_source_round == 2
+            assert new_branch.title == "Retrospective R2"
             assert "地震" in new_branch.fork_reason
+
+    @pytest.mark.parametrize(
+        "status",
+        [ScenarioStatus.ERROR, ScenarioStatus.CANCELLED],
+    )
+    def test_rejects_invalid_scenario_status(self, client, status):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=status)
+        bid = _seed_branch(engine, sid)
+        _seed_round(engine, bid, 1)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene/retrospective", json={
+            "branch_id": bid,
+            "round_number": 1,
+            "text": "状态非法时不应回溯",
+        })
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "INTERVENTION_SCENARIO_STATUS_INVALID"
+
+    @pytest.mark.parametrize(
+        ("status", "branch_status"),
+        [
+            (ScenarioStatus.SIMULATING, BranchStatus.ACTIVE),
+            (ScenarioStatus.DONE, BranchStatus.COMPLETED),
+        ],
+    )
+    def test_allows_valid_retrospective_scenario_status(self, client, status, branch_status):
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=status)
+        bid = _seed_branch(engine, sid, status=branch_status)
+        _seed_round(engine, bid, 1)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene/retrospective", json={
+            "branch_id": bid,
+            "round_number": 1,
+            "text": "允许的回溯状态",
+        })
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "created"
 
     def test_round_exceeds_max(self, client):
         """Should reject round_number > max existing round."""
@@ -210,8 +256,8 @@ class TestRetrospectiveIntervention:
             assert logs[0].user_input == "蝴蝶效应"
             assert logs[0].round_number == 1
 
-    def test_new_branch_probability_has_floor(self, client, monkeypatch):
-        """Retrospective reruns should not decay below the configured floor."""
+    def test_new_branch_uses_shared_replay_probability(self, client, monkeypatch):
+        """Retrospective reruns should use the shared replay helper branch defaults."""
         engine = get_engine()
         sid = _seed_scenario(engine)
         bid = _seed_branch(engine, sid, probability=0.1)
@@ -224,7 +270,7 @@ class TestRetrospectiveIntervention:
 
         with Session(engine) as session:
             new_branch = session.get(Branch, data["new_branch_id"])
-            assert new_branch.probability == 0.3
+            assert new_branch.probability == 0.5
 
     def test_no_rounds_branch(self, client):
         """Branch with no rounds: round_number=1 should exceed max_round=0."""
@@ -260,7 +306,7 @@ class TestRetrospectiveIntervention:
         assert resp.status_code == 400
         assert resp.json()["detail"]["code"] == "RETROSPECTIVE_FORK_DEPTH_EXCEEDED"
 
-    def test_retro_branch_clones_history_through_selected_round(self, client):
+    def test_retro_branch_regenerates_selected_round(self, client):
         engine = get_engine()
         sid = _seed_scenario(engine)
         bid = _seed_branch(engine, sid)
@@ -286,8 +332,7 @@ class TestRetrospectiveIntervention:
                     .order_by(Round.round_number)
                 ).all()
             )
-            assert [round_item.round_number for round_item in cloned_rounds[:2]] == [1, 2]
-            assert cloned_rounds[-1].round_number >= 2
+            assert [round_item.round_number for round_item in cloned_rounds] == [1]
 
             cloned_messages = list(
                 session.exec(
@@ -297,40 +342,113 @@ class TestRetrospectiveIntervention:
                 ).all()
             )
             assert "round-one context" in [message.content for message in cloned_messages]
-            assert "round-two context" in [message.content for message in cloned_messages]
+            assert "round-two context" not in [message.content for message in cloned_messages]
 
-    def test_clone_branch_history_batches_round_queries(self, monkeypatch):
-        from app.api import interventions as interventions_module
+    def test_compare_branches_surfaces_retrospective_metadata(self, client):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+        round_1 = _seed_round(engine, bid, 1)
+        round_2 = _seed_round(engine, bid, 2)
+        _seed_message(engine, sid, round_1, content="round-one context")
+        _seed_message(engine, sid, round_2, content="round-two source")
 
-        executed_limits: list[int] = []
+        resp = client.post(f"/api/scenario/{sid}/intervene/retrospective", json={
+            "branch_id": bid,
+            "round_number": 2,
+            "text": "第二轮改写变量",
+        })
+        assert resp.status_code == 200
+        new_branch_id = resp.json()["new_branch_id"]
 
-        class _FakeResult:
-            def __init__(self, rows):
-                self._rows = rows
+        result = compare_branches(sid, bid, new_branch_id)
 
-            def all(self):
-                return self._rows
+        assert result["common_rounds"] == 1
+        assert result["intervention"] == {
+            "replay_kind": "retrospective",
+            "source_branch_id": bid,
+            "source_round": 2,
+            "intervention_text": "第二轮改写变量",
+        }
 
-        class _FakeSession:
-            def exec(self, statement):
-                limit_clause = getattr(statement, "_limit_clause", None)
-                executed_limits.append(int(limit_clause.value) if limit_clause is not None else -1)
-                return _FakeResult([])
+    def test_failed_run_sim_background_leaves_no_retrospective_orphans(self, monkeypatch):
+        import app.api.helpers as helpers_module
 
-            def add(self, _value):
-                return None
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+        _seed_round(engine, bid, 1)
+        _seed_round(engine, bid, 2)
 
-            def flush(self):
-                return None
+        def fail_run_sim_background(*_args, **_kwargs):
+            raise RuntimeError("sim start failed")
 
-        interventions_module._clone_branch_history(
-            _FakeSession(),
-            source_branch_id="branch-1",
-            target_branch_id="branch-2",
-            through_round=250,
-        )
+        monkeypatch.setattr(helpers_module, "run_sim_background", fail_run_sim_background)
 
-        assert executed_limits == [100]
+        with TestClient(app, raise_server_exceptions=False) as failing_client:
+            resp = failing_client.post(f"/api/scenario/{sid}/intervene/retrospective", json={
+                "branch_id": bid,
+                "round_number": 2,
+                "text": "启动失败后不得留下孤儿",
+            })
+
+        assert resp.status_code == 500
+        with Session(engine) as session:
+            assert session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "retrospective",
+                )
+            ).all() == []
+            assert session.exec(
+                select(InterventionLog).where(InterventionLog.scenario_id == sid)
+            ).all() == []
+            assert session.exec(
+                select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
+            ).all() == []
+
+    def test_failed_retrospective_schedule_leaves_no_orphans(self, monkeypatch):
+        import app.api.helpers as helpers_module
+
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+        _seed_round(engine, bid, 1)
+        _seed_round(engine, bid, 2)
+
+        async def background_coro():
+            return None
+
+        coro = background_coro()
+        run_mock = pytest.MonkeyPatch.context()
+        with run_mock as patcher:
+            patcher.setattr(helpers_module, "run_sim_background", lambda *_args, **_kwargs: coro)
+
+            def fail_schedule(_coro):
+                raise RuntimeError("schedule failed")
+
+            patcher.setattr(helpers_module, "schedule_background_task", fail_schedule)
+            with TestClient(app, raise_server_exceptions=False) as failing_client:
+                resp = failing_client.post(f"/api/scenario/{sid}/intervene/retrospective", json={
+                    "branch_id": bid,
+                    "round_number": 2,
+                    "text": "调度失败后不得留下孤儿",
+                })
+
+        assert resp.status_code == 500
+        with Session(engine) as session:
+            assert session.exec(
+                select(Branch).where(
+                    Branch.scenario_id == sid,
+                    Branch.replay_kind == "retrospective",
+                )
+            ).all() == []
+            assert session.exec(
+                select(InterventionLog).where(InterventionLog.scenario_id == sid)
+            ).all() == []
+            assert session.exec(
+                select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
+            ).all() == []
 
 
 # ── Batch Intervention Tests ─────────────────────────────
@@ -410,7 +528,7 @@ class TestBatchIntervention:
         assert resp.status_code == 404
 
     def test_batch_done_scenario(self, client):
-        """Should reject batch on DONE scenario."""
+        """Should reject batch on DONE scenario with 409 conflict."""
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.DONE)
         bid = _seed_branch(engine, sid, status=BranchStatus.COMPLETED)
@@ -418,7 +536,52 @@ class TestBatchIntervention:
         resp = client.post(f"/api/scenario/{sid}/intervene/batch", json={
             "interventions": [{"branch_id": bid, "text": "test"}]
         })
-        assert resp.status_code == 400
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "INTERVENTION_SCENARIO_STATUS_INVALID"
+
+    def test_batch_narrating_scenario(self, client):
+        """Should reject batch on NARRATING scenario with 409 conflict."""
+        engine = get_engine()
+        sid = _seed_scenario(engine, status=ScenarioStatus.NARRATING)
+        bid = _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
+
+        resp = client.post(f"/api/scenario/{sid}/intervene/batch", json={
+            "interventions": [{"branch_id": bid, "text": "test"}]
+        })
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "INTERVENTION_SCENARIO_STATUS_INVALID"
+        assert "active simulation" in resp.json()["detail"]["message"]
+
+    def test_batch_duplicate_branch_returns_422(self, client, monkeypatch):
+        """Batch with same branch_id twice returns 422 with BATCH_DUPLICATE_BRANCH."""
+        monkeypatch.setattr(
+            "app.api.interventions._pending_intervention_db_path",
+            lambda: "/tmp/pending.db",
+        )
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        bid = _seed_branch(engine, sid)
+        _seed_round(engine, bid, 1)
+
+        resp = client.post(
+            f"/api/scenario/{sid}/intervene/batch",
+            json={
+                "interventions": [
+                    {"branch_id": bid, "text": "first"},
+                    {"branch_id": bid, "text": "second"},
+                ]
+            },
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "BATCH_DUPLICATE_BRANCH"
+        # No persistence on rejection
+        with Session(engine) as session:
+            assert session.exec(
+                select(InterventionLog).where(InterventionLog.scenario_id == sid)
+            ).all() == []
+            assert session.exec(
+                select(PendingIntervention).where(PendingIntervention.scenario_id == sid)
+            ).all() == []
 
     def test_batch_pruned_branch(self, client):
         """Should reject intervention on PRUNED branch."""
@@ -459,22 +622,24 @@ class TestBatchIntervention:
         """Batch intervene should honor the same gameplay card cooldown checks as single intervene."""  # noqa: E501
         engine = get_engine()
         sid = _seed_scenario(engine, status=ScenarioStatus.SIMULATING)
-        bid = _seed_branch(engine, sid, status=BranchStatus.ACTIVE)
-        _seed_round(engine, bid, 1)
+        bid1 = _seed_branch(engine, sid, title="分支一", status=BranchStatus.ACTIVE)
+        bid2 = _seed_branch(engine, sid, title="分支二", status=BranchStatus.ACTIVE)
+        _seed_round(engine, bid1, 1)
+        _seed_round(engine, bid2, 1)
 
         resp = client.post(
             f"/api/scenario/{sid}/intervene/batch",
             json={
                 "interventions": [
                     {
-                        "branch_id": bid,
+                        "branch_id": bid1,
                         "text": "第一次强推",
                         "card_id": "human_takeover",
                         "profile_id": "governance",
                         "directive": "立即执行接管",
                     },
                     {
-                        "branch_id": bid,
+                        "branch_id": bid2,
                         "text": "第二次强推",
                         "card_id": "human_takeover",
                         "profile_id": "governance",

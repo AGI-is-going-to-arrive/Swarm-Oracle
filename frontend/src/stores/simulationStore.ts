@@ -49,6 +49,8 @@ export interface ThinkingAgent {
   round: number;
 }
 
+export type InterventionLifecycleState = 'queued' | 'injected' | 'observed' | 'receipt_ready';
+
 type ActiveSimulationStatus = Exclude<SimulationState['status'], 'idle'>;
 
 export interface SimulationState {
@@ -78,6 +80,7 @@ export interface SimulationState {
 
   // Intervention
   interventionLog: Array<{ branch_id: string; text: string; round: number }>;
+  interventionLifecycle: Map<string, InterventionLifecycleState>;
   isSimulationComplete: boolean;
 
   // Actions
@@ -115,6 +118,7 @@ const initialState = {
   simStartTime: null as number | null,
   roundCompleteTimes: [] as number[],
   interventionLog: [] as InterventionLogEntry[],
+  interventionLifecycle: new Map<string, InterventionLifecycleState>(),
   isSimulationComplete: false,
 };
 
@@ -212,6 +216,16 @@ function applyScenarioSnapshot(
   rebuildSeenMessageKeys(mergedMessages, scenario.id);
 
   const nextScenarioStatus = mergedStatus as Scenario['status'];
+
+  const nextLifecycle = sameScenario
+    ? new Map(state.interventionLifecycle)
+    : new Map<string, InterventionLifecycleState>();
+  if (mergedStatus === 'done') {
+    for (const key of nextLifecycle.keys()) {
+      nextLifecycle.set(key, 'receipt_ready');
+    }
+  }
+
   return {
     scenario: {
       ...scenario,
@@ -235,6 +249,8 @@ function applyScenarioSnapshot(
     status: mergedStatus,
     currentRound: sameScenario ? Math.max(state.currentRound, highestRound) : highestRound,
     isSimulationComplete: mergedStatus === 'done',
+    interventionLog: sameScenario ? state.interventionLog : [],
+    interventionLifecycle: nextLifecycle,
     error: null,
     errorCode: null,
   };
@@ -244,7 +260,13 @@ export const useSimulationStore = create<SimulationState>((set) => ({
   ...initialState,
 
   startSimulation: async (options: CreateScenarioOptions) => {
-    set({ status: 'parsing', error: null });
+    set({
+      status: 'parsing',
+      error: null,
+      interventionLog: [],
+      interventionLifecycle: new Map<string, InterventionLifecycleState>(),
+      isSimulationComplete: false,
+    });
     try {
       const scenario = await createScenario(options);
       const resolvedVisualizationEnabled = scenario.visualization_enabled ?? options.visualizationEnabled ?? false;
@@ -259,6 +281,9 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         status: scenario.status as SimulationState['status'],
         error: null,
         errorCode: null,
+        interventionLog: [],
+        interventionLifecycle: new Map<string, InterventionLifecycleState>(),
+        isSimulationComplete: scenario.status === 'done',
       });
       rebuildSeenMessageKeys((scenario.messages || []) as AgentMessage[], scenario.id);
       return scenario.id;
@@ -504,24 +529,44 @@ export const useSimulationStore = create<SimulationState>((set) => ({
         break;
 
       case 'intervention_applied':
-        set((state) => ({
-          interventionLog: appendInterventionLog(state.interventionLog, [
-            {
-              branch_id: event.data.branch_id,
-              text: event.data.text,
-              round: event.data.round,
-            },
-          ]),
-        }));
+        set((state) => {
+          const nextLifecycle = new Map(state.interventionLifecycle);
+          if (event.data.intervention_id) {
+            nextLifecycle.set(event.data.intervention_id, 'queued');
+          }
+          return {
+            interventionLog: appendInterventionLog(state.interventionLog, [
+              {
+                branch_id: event.data.branch_id,
+                text: event.data.text,
+                round: event.data.round,
+              },
+            ]),
+            interventionLifecycle: nextLifecycle,
+          };
+        });
         break;
 
       case 'intervention_injected':
+        set((state) => {
+          const nextLifecycle = new Map(state.interventionLifecycle);
+          if (event.data.intervention_id) {
+            nextLifecycle.set(event.data.intervention_id, 'injected');
+          }
+          return {
+            interventionLifecycle: nextLifecycle,
+          };
+        });
         break;
 
       case 'retrospective_start':
         set((state) => {
           const sourceBranch = state.branches.find((branch) => branch.id === event.data.source_branch_id);
           const hasBranch = state.branches.some((branch) => branch.id === event.data.branch_id);
+          const nextLifecycle = new Map(state.interventionLifecycle);
+          if (event.data.intervention_id) {
+            nextLifecycle.set(event.data.intervention_id, 'queued');
+          }
           const nextBranches = hasBranch
             ? state.branches
             : [
@@ -531,7 +576,7 @@ export const useSimulationStore = create<SimulationState>((set) => ({
                   parent_branch_id: event.data.source_branch_id,
                   fork_round: event.data.from_round,
                   fork_reason: event.data.text,
-                  title: `Retrospective R${event.data.from_round}`,
+                  title: translate('intervention.retrospective_title', { round: event.data.from_round }),
                   description: '',
                   summary: '',
                   story: '',
@@ -551,21 +596,31 @@ export const useSimulationStore = create<SimulationState>((set) => ({
                 round: event.data.from_round,
               },
             ]),
+            interventionLifecycle: nextLifecycle,
           };
         });
         break;
 
       case 'batch_intervention_applied':
-        set((state) => ({
-          interventionLog: appendInterventionLog(
-            state.interventionLog,
-            event.data.interventions.map((intervention) => ({
-              branch_id: intervention.branch_id,
-              text: intervention.text,
-              round: intervention.round,
-            })),
-          ),
-        }));
+        set((state) => {
+          const nextLifecycle = new Map(state.interventionLifecycle);
+          event.data.interventions.forEach((intervention) => {
+            if (intervention.intervention_id) {
+              nextLifecycle.set(intervention.intervention_id, 'queued');
+            }
+          });
+          return {
+            interventionLog: appendInterventionLog(
+              state.interventionLog,
+              event.data.interventions.map((intervention) => ({
+                branch_id: intervention.branch_id,
+                text: intervention.text,
+                round: intervention.round,
+              })),
+            ),
+            interventionLifecycle: nextLifecycle,
+          };
+        });
         break;
 
       case 'kg:delta':
@@ -578,10 +633,15 @@ export const useSimulationStore = create<SimulationState>((set) => ({
           if (state.status === 'cancelled') {
             return { thinkingAgents: [] };
           }
+          const nextLifecycle = new Map(state.interventionLifecycle);
+          for (const key of nextLifecycle.keys()) {
+            nextLifecycle.set(key, 'receipt_ready');
+          }
           return {
             status: 'done',
             isSimulationComplete: true,
             thinkingAgents: [],
+            interventionLifecycle: nextLifecycle,
           };
         });
         break;

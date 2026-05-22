@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 
 import { getInterventionEffects } from '../api/client';
 import type { InterventionEffect } from '../api/client';
+import type { InterventionLifecycleState } from '../stores/simulationStore';
 import { getGameplayCardLabel, isGameplayCardId } from './gameplayCards';
 
 import './InterventionReceiptCard.css';
@@ -21,8 +22,10 @@ export interface InterventionReceiptCardProps {
   scenarioId: string;
   /** Hide the card while the simulation is mid-flight; only show after completion. */
   enabled: boolean;
-  /** Refresh nonce: bump to trigger a re-fetch (e.g. on new WS intervention_applied). */
-  refreshKey?: number;
+  /** Refresh token: bump/change to trigger a re-fetch. */
+  refreshKey?: number | string;
+  /** Live intervention state map to display pending interventions. */
+  interventionLifecycle?: Map<string, InterventionLifecycleState>;
 }
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error';
@@ -45,12 +48,25 @@ export function InterventionReceiptCard({
   scenarioId,
   enabled,
   refreshKey = 0,
+  interventionLifecycle,
 }: InterventionReceiptCardProps): ReactElement | null {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
   const [effects, setEffects] = useState<InterventionEffect[]>([]);
   const [state, setState] = useState<LoadState>('idle');
   const [stateScenarioId, setStateScenarioId] = useState<string | null>(null);
+
+  const pendingInterventions = useMemo(() => {
+    const pending: { id: string; state: string }[] = [];
+    if (interventionLifecycle) {
+      Array.from(interventionLifecycle.entries()).forEach(([id, state]) => {
+        if (state === 'queued' || state === 'injected') {
+          pending.push({ id, state });
+        }
+      });
+    }
+    return pending;
+  }, [interventionLifecycle]);
 
   useEffect(() => {
     if (!enabled || !scenarioId) {
@@ -103,11 +119,16 @@ export function InterventionReceiptCard({
     });
   }, [effects]);
 
-  if (!enabled || !scenarioId) {
+  const hasPending = pendingInterventions.length > 0;
+  const subtitle = hasPending
+    ? t('intervention_receipt.subtitle_pending', { count: pendingInterventions.length })
+    : t('intervention_receipt.subtitle', { count: sortedEffects.length });
+
+  if ((!enabled && !hasPending) || !scenarioId) {
     return null;
   }
-  const hasCurrentScenarioState = stateScenarioId === scenarioId;
-  if (state === 'loading' && hasCurrentScenarioState) {
+  const hasCurrentScenarioState = stateScenarioId === scenarioId || hasPending;
+  if (state === 'loading' && hasCurrentScenarioState && !hasPending) {
     return (
       <section
         className="intervention-receipt-card intervention-receipt-card--loading"
@@ -126,7 +147,7 @@ export function InterventionReceiptCard({
       </section>
     );
   }
-  if (state === 'error' && hasCurrentScenarioState) {
+  if (state === 'error' && hasCurrentScenarioState && !hasPending) {
     return (
       <section
         className="intervention-receipt-card intervention-receipt-card--error"
@@ -146,9 +167,9 @@ export function InterventionReceiptCard({
     );
   }
   if (
-    state !== 'ready' ||
+    (state !== 'ready' && !hasPending) ||
     !hasCurrentScenarioState ||
-    sortedEffects.length === 0
+    (sortedEffects.length === 0 && !hasPending)
   ) {
     return null;
   }
@@ -164,10 +185,18 @@ export function InterventionReceiptCard({
           {t('intervention_receipt.title')}
         </h3>
         <p className="intervention-receipt-card__subtitle">
-          {t('intervention_receipt.subtitle', { count: sortedEffects.length })}
+          {subtitle}
         </p>
       </header>
       <ol className="intervention-receipt-card__list">
+        {pendingInterventions.map((pi) => (
+          <li key={pi.id} className="intervention-receipt-card__entry receipt-pending">
+            <h4 className="intervention-receipt-card__entry-heading">
+              <span className="spinner-inline" aria-hidden="true" />
+              {t('intervention_receipt.loading')}
+            </h4>
+          </li>
+        ))}
         {sortedEffects.map((effect, index) => {
           const cardLabel = isGameplayCardId(effect.card_id)
             ? getGameplayCardLabel(effect.card_id, isZh)

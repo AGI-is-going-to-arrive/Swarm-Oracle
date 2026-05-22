@@ -554,8 +554,9 @@ class TestEngineManagedSqlitePaths:
         from app.services import simulator as simulator_module
 
         class _FakeResult:
-            def __init__(self, *, row=None):
+            def __init__(self, *, row=None, rowcount=0):
                 self._row = row
+                self.rowcount = rowcount
 
             def first(self):
                 return self._row
@@ -563,20 +564,99 @@ class TestEngineManagedSqlitePaths:
         class _FakeConnection:
             def __init__(self):
                 self.commands: list[tuple[str, object]] = []
-                self.rows = [(1, "第一条", None), (2, "第二条", None)]
+                self.rows = [
+                    {
+                        "id": 1,
+                        "scenario_id": "scenario-1",
+                        "branch_id": "branch-1",
+                        "user_input": "第一条",
+                        "metadata_json": None,
+                        "display_text": "",
+                        "status": "pending",
+                    },
+                    {
+                        "id": 2,
+                        "scenario_id": "scenario-1",
+                        "branch_id": "branch-1",
+                        "user_input": "第二条",
+                        "metadata_json": None,
+                        "display_text": "",
+                        "status": "pending",
+                    },
+                ]
                 self.commits = 0
                 self.rollbacks = 0
 
             def exec_driver_sql(self, statement: str, params=None):
                 normalized = " ".join(statement.split())
                 self.commands.append((normalized, params))
-                pending_select = "SELECT id, user_input, metadata_json FROM pending_intervention"
+                query_params = params or ()
+                if normalized == "BEGIN IMMEDIATE":
+                    return _FakeResult(rowcount=0)
+                if (
+                    normalized.startswith("UPDATE pending_intervention SET status = 'pending'")
+                    and "status = 'claimed'" in normalized
+                    and "lease_expires_at < ?" in normalized
+                ):
+                    return _FakeResult(rowcount=0)
+                pending_select = (
+                    "SELECT id, user_input, metadata_json, display_text "
+                    "FROM pending_intervention"
+                )
                 if normalized.startswith(pending_select):
-                    row = self.rows[0] if self.rows else None
-                    return _FakeResult(row=row)
+                    scenario_id, branch_id = query_params
+                    row = next(
+                        (
+                            row
+                            for row in self.rows
+                            if row["scenario_id"] == scenario_id
+                            and row["branch_id"] == branch_id
+                            and row["status"] == "pending"
+                        ),
+                        None,
+                    )
+                    if row is None:
+                        return _FakeResult(row=None, rowcount=0)
+                    return _FakeResult(
+                        row=(
+                            row["id"],
+                            row["user_input"],
+                            row["metadata_json"],
+                            row["display_text"],
+                        ),
+                        rowcount=1,
+                    )
+                if normalized.startswith("UPDATE pending_intervention SET status = 'claimed'"):
+                    target_id = query_params[3]
+                    for row in self.rows:
+                        if row["id"] == target_id and row["status"] == "pending":
+                            row["status"] = "claimed"
+                            return _FakeResult(rowcount=1)
+                    return _FakeResult(rowcount=0)
+                if normalized.startswith("UPDATE pending_intervention SET status = 'injected'"):
+                    target_id, scenario_id, branch_id = query_params
+                    for row in self.rows:
+                        if (
+                            row["id"] == target_id
+                            and row["scenario_id"] == scenario_id
+                            and row["branch_id"] == branch_id
+                        ):
+                            row["status"] = "injected"
+                            return _FakeResult(rowcount=1)
+                    return _FakeResult(rowcount=0)
                 if normalized.startswith("DELETE FROM pending_intervention WHERE id = ?"):
-                    target_id = params[0]
-                    self.rows = [row for row in self.rows if row[0] != target_id]
+                    target_id, scenario_id, branch_id = query_params
+                    before = len(self.rows)
+                    self.rows = [
+                        row
+                        for row in self.rows
+                        if not (
+                            row["id"] == target_id
+                            and row["scenario_id"] == scenario_id
+                            and row["branch_id"] == branch_id
+                        )
+                    ]
+                    return _FakeResult(rowcount=before - len(self.rows))
                 return _FakeResult()
 
             def commit(self):

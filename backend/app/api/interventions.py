@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import update
 from sqlmodel import Session, func, select
 
@@ -17,7 +18,12 @@ from app.api.helpers import (
     require_session_principal,
     verify_session,
 )
-from app.api.schemas import BatchInterveneRequest, InterveneRequest, RetrospectiveInterveneRequest
+from app.api.schemas import (
+    BatchInterveneRequest,
+    InterveneRequest,
+    InterventionTemplateResponse,
+    RetrospectiveInterveneRequest,
+)
 from app.config import settings
 from app.models import (
     AgentMessage,
@@ -36,16 +42,23 @@ from app.services.gameplay_contract import (
     load_gameplay_contract,
     resolve_server_card_directive,
 )
+from app.services.replay import clone_until_round
+from app.services.runtime_lock import (
+    RuntimeLockLease,
+    acquire_runtime_lock,
+    release_runtime_lock,
+    simulation_lock_key,
+)
 from app.services.simulator import (
     _pending_intervention_db_path,
     add_pending_intervention,
+    clear_pending_interventions_for_branch,
     get_pending_intervention_count,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_session)])
 MAX_RETROSPECTIVE_FORK_DEPTH = 5
-RETROSPECTIVE_BRANCH_PROBABILITY_FLOOR = 0.3
 
 
 def _build_gameplay_card_defs() -> dict[str, dict]:
@@ -273,95 +286,227 @@ def _encode_metadata(metadata: dict | None) -> str | None:
     return json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _clone_branch_history(
-    session: Session,
+def _intervention_status_invalid_message(status: ScenarioStatus) -> str:
+    messages = {
+        ScenarioStatus.NARRATING: (
+            "Cannot intervene: interventions are only accepted during active simulation; "
+            "scenario is narrating final results."
+        ),
+        ScenarioStatus.DONE: (
+            "Cannot intervene: interventions are only accepted during active simulation; "
+            "scenario is done."
+        ),
+        ScenarioStatus.ERROR: (
+            "Cannot intervene: interventions are only accepted during active simulation; "
+            "scenario is in error state."
+        ),
+        ScenarioStatus.CANCELLED: (
+            "Cannot intervene: interventions are only accepted during active simulation; "
+            "scenario is cancelled."
+        ),
+    }
+    status_value = getattr(status, "value", str(status))
+    return messages.get(
+        status,
+        "Cannot intervene: interventions are only accepted during active simulation; "
+        f"scenario status is '{status_value}'.",
+    )
+
+
+def _acquire_retrospective_simulation_lock(scenario_id: str) -> RuntimeLockLease | None:
+    return acquire_runtime_lock(
+        simulation_lock_key(scenario_id),
+        lease_seconds=settings.MAX_ROUNDS * 180 + 60,
+    )
+
+
+def _cleanup_retrospective_start(
     *,
-    source_branch_id: str,
-    target_branch_id: str,
-    through_round: int,
+    scenario_id: str,
+    branch_id: str,
+    intervention_log_id: str | None,
 ) -> None:
-    """Clone rounds/messages so retrospective replay can continue from the fork point."""
-    round_offset = 0
-    round_batch_size = 100
-
-    while True:
-        source_rounds = list(
-            session.exec(
-                select(Round)
-                .where(
-                    Round.branch_id == source_branch_id,
-                    Round.round_number <= through_round,
-                )
-                .order_by(Round.round_number)
-                .offset(round_offset)
-                .limit(round_batch_size)
-            ).all()
+    with Session(get_engine()) as session:
+        round_ids = list(
+            session.exec(select(Round.id).where(Round.branch_id == branch_id)).all()
         )
-        if not source_rounds:
-            break
-
-        for source_round in source_rounds:
-            cloned_round = Round(
-                branch_id=target_branch_id,
-                round_number=source_round.round_number,
-                compressed_summary=source_round.compressed_summary,
+        if round_ids:
+            session.exec(sa_delete(AgentMessage).where(AgentMessage.round_id.in_(round_ids)))
+        session.exec(
+            sa_delete(PendingIntervention).where(
+                PendingIntervention.scenario_id == scenario_id,
+                PendingIntervention.branch_id == branch_id,
             )
-            session.add(cloned_round)
-            session.flush()
-
-            message_offset = 0
-            message_batch_size = 500
-            while True:
-                source_messages = list(
-                    session.exec(
-                        select(AgentMessage)
-                        .where(AgentMessage.round_id == source_round.id)
-                        .order_by(AgentMessage.id)
-                        .offset(message_offset)
-                        .limit(message_batch_size)
-                    ).all()
+        )
+        if intervention_log_id is not None:
+            session.exec(
+                sa_delete(InterventionLog).where(
+                    InterventionLog.id == intervention_log_id,
+                    InterventionLog.scenario_id == scenario_id,
+                    InterventionLog.branch_id == branch_id,
                 )
-                if not source_messages:
-                    break
-
-                for source_message in source_messages:
-                    session.add(
-                        AgentMessage(
-                            round_id=cloned_round.id,
-                            agent_id=source_message.agent_id,
-                            content=source_message.content,
-                            emotion=source_message.emotion,
-                            diverge=source_message.diverge,
-                            tokens_used=source_message.tokens_used,
-                        )
-                    )
-                if len(source_messages) < message_batch_size:
-                    break
-                message_offset += message_batch_size
-
-        if len(source_rounds) < round_batch_size:
-            break
-        round_offset += round_batch_size
+            )
+        session.exec(sa_delete(Round).where(Round.branch_id == branch_id))
+        session.exec(sa_delete(Branch).where(Branch.id == branch_id))
+        session.commit()
 
 
 # ── Intervention Templates (P4-D) ────────────────────────
 
 INTERVENTION_TEMPLATES = [
-    {"id": "natural_disaster", "name": "自然灾害",
-     "template": "突发自然灾害：{type}席卷{location}，造成严重破坏。",
-     "variables": ["type", "location"]},
-    {"id": "tech_breakthrough", "name": "技术突破",
-     "template": "{agent}发明了{invention}，彻底改变了局势。",
-     "variables": ["agent", "invention"]},
-    {"id": "alliance_break", "name": "联盟瓦解",
-     "template": "{faction_a}与{faction_b}的联盟因{reason}而破裂。",
-     "variables": ["faction_a", "faction_b", "reason"]},
-    {"id": "leader_death", "name": "领袖变故",
-     "template": "{leader}突然{event}，权力出现真空。",
-     "variables": ["leader", "event"]},
-    {"id": "resource_crisis", "name": "资源危机",
-     "template": "{resource}供给突然中断，各方被迫调整策略。",
-     "variables": ["resource"]},
+    {
+        "id": "natural_disaster",
+        "name": "自然灾害",
+        "name_en": "Natural Disaster",
+        "name_zh": "自然灾害",
+        "description_en": "A natural disaster strikes the area",
+        "description_zh": "一场自然灾害袭击了该地区",
+        "template": "一场突如其来的{disaster_type}袭击了该地区，造成了大范围的{impact}",
+        "template_en": (
+            "A sudden {disaster_type} hits the area, causing widespread {impact}"
+        ),
+        "template_zh": "一场突如其来的{disaster_type}袭击了该地区，造成了大范围的{impact}",
+        "variables": [
+            {
+                "key": "disaster_type",
+                "label_en": "Disaster Type",
+                "label_zh": "灾害类型",
+                "examples": ["earthquake", "flood", "hurricane"],
+            },
+            {
+                "key": "impact",
+                "label_en": "Impact",
+                "label_zh": "影响",
+                "examples": ["destruction", "casualties", "economic loss"],
+            },
+        ],
+        "intervention_kind": "event",
+        "suggested_targets": "all_branches",
+    },
+    {
+        "id": "tech_breakthrough",
+        "name": "技术突破",
+        "name_en": "Technology Breakthrough",
+        "name_zh": "技术突破",
+        "description_en": "A major innovation changes the balance of power",
+        "description_zh": "一项重大技术创新改变了力量格局",
+        "template": "{agent}公布了{invention}，显著改变了{domain}。",
+        "template_en": "{agent} unveils {invention}, dramatically changing {domain}.",
+        "template_zh": "{agent}公布了{invention}，显著改变了{domain}。",
+        "variables": [
+            {
+                "key": "agent",
+                "label_en": "Agent",
+                "label_zh": "行动者",
+                "examples": ["the research team", "a startup", "the ministry"],
+            },
+            {
+                "key": "invention",
+                "label_en": "Invention",
+                "label_zh": "发明",
+                "examples": ["fusion reactor", "AI mediator", "quantum network"],
+            },
+            {
+                "key": "domain",
+                "label_en": "Domain",
+                "label_zh": "领域",
+                "examples": ["energy markets", "public trust", "military planning"],
+            },
+        ],
+        "intervention_kind": "innovation",
+        "suggested_targets": "selected_branches",
+    },
+    {
+        "id": "alliance_break",
+        "name": "联盟瓦解",
+        "name_en": "Alliance Fracture",
+        "name_zh": "联盟瓦解",
+        "description_en": "A coalition collapses after a triggering dispute",
+        "description_zh": "一场触发性争端导致联盟瓦解",
+        "template": "{faction_a}与{faction_b}的联盟因{reason}而破裂。",
+        "template_en": (
+            "The alliance between {faction_a} and {faction_b} fractures over {reason}."
+        ),
+        "template_zh": "{faction_a}与{faction_b}的联盟因{reason}而破裂。",
+        "variables": [
+            {
+                "key": "faction_a",
+                "label_en": "Faction A",
+                "label_zh": "阵营 A",
+                "examples": ["the coastal cities", "labor unions", "old allies"],
+            },
+            {
+                "key": "faction_b",
+                "label_en": "Faction B",
+                "label_zh": "阵营 B",
+                "examples": ["the central cabinet", "industry blocs", "new rivals"],
+            },
+            {
+                "key": "reason",
+                "label_en": "Reason",
+                "label_zh": "原因",
+                "examples": ["trade terms", "security leaks", "resource allocation"],
+            },
+        ],
+        "intervention_kind": "relationship_shift",
+        "suggested_targets": "selected_branches",
+    },
+    {
+        "id": "leader_death",
+        "name": "领袖变故",
+        "name_en": "Leader Crisis",
+        "name_zh": "领袖变故",
+        "description_en": "A leadership shock creates a power vacuum",
+        "description_zh": "一次领导层冲击制造出权力真空",
+        "template": "{leader}突然{event}，权力出现真空。",
+        "template_en": "{leader} suddenly {event}, creating a power vacuum.",
+        "template_zh": "{leader}突然{event}，权力出现真空。",
+        "variables": [
+            {
+                "key": "leader",
+                "label_en": "Leader",
+                "label_zh": "领袖",
+                "examples": ["the president", "the founder", "the general"],
+            },
+            {
+                "key": "event",
+                "label_en": "Event",
+                "label_zh": "事件",
+                "examples": ["resigns", "disappears", "is incapacitated"],
+            },
+        ],
+        "intervention_kind": "leadership_change",
+        "suggested_targets": "selected_branches",
+    },
+    {
+        "id": "resource_crisis",
+        "name": "资源危机",
+        "name_en": "Resource Crisis",
+        "name_zh": "资源危机",
+        "description_en": "A critical resource supply is disrupted",
+        "description_zh": "一种关键资源的供应发生中断",
+        "template": "{resource}供给突然中断，各方被迫调整{strategy}。",
+        "template_en": (
+            "{resource} supplies are suddenly disrupted, forcing every side to adjust {strategy}."
+        ),
+        "template_zh": "{resource}供给突然中断，各方被迫调整{strategy}。",
+        "variables": [
+            {
+                "key": "resource",
+                "label_en": "Resource",
+                "label_zh": "资源",
+                "examples": ["water", "semiconductors", "grain"],
+            },
+            {
+                "key": "strategy",
+                "label_en": "Strategy",
+                "label_zh": "策略",
+                "examples": ["rationing plans", "trade routes", "military priorities"],
+            },
+        ],
+        "intervention_kind": "resource_shock",
+        "suggested_targets": "all_branches",
+    },
 ]
 
 
@@ -385,14 +530,15 @@ async def intervene(
 
     # Validate scenario exists and is in a running state
     gameplay_state = None
+    use_persisted_queue = _pending_intervention_db_path() is not None
     with Session(engine) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
         scenario_language = _scenario_runtime_language(scenario)
-        if scenario.status not in (ScenarioStatus.SIMULATING, ScenarioStatus.NARRATING):
+        if scenario.status != ScenarioStatus.SIMULATING:
             raise api_error(
-                400,
+                409,
                 "INTERVENTION_SCENARIO_STATUS_INVALID",
-                f"Cannot intervene: scenario status is '{scenario.status.value}'",
+                _intervention_status_invalid_message(scenario.status),
             )
 
         # Validate the branch exists, belongs to this scenario, and is active
@@ -442,18 +588,32 @@ async def intervene(
             user_input=visible_text,
         )
         session.add(log)
-        session.commit()
-        session.refresh(log)
+        session.flush()
         log_id = log.id
 
-    # Attach intervention_log_id so the simulator can write back the effect receipt.
-    effect_metadata: dict = dict(pending_metadata or {})
-    effect_metadata["intervention_log_id"] = log_id
-    effect_metadata["raw_user_input"] = visible_text
+        # Attach intervention_log_id so the simulator can write back the effect receipt.
+        effect_metadata: dict = dict(pending_metadata or {})
+        effect_metadata["intervention_log_id"] = log_id
+        effect_metadata["raw_user_input"] = visible_text
+
+        # Persist DB queue row in the same transaction as the InterventionLog.
+        # The in-memory fallback has no shared DB transaction and runs after commit.
+        if use_persisted_queue:
+            session.add(
+                PendingIntervention(
+                    scenario_id=scenario_id,
+                    branch_id=req.branch_id,
+                    user_input=pending_text,
+                    metadata_json=_encode_metadata(effect_metadata),
+                    display_text=visible_text,
+                )
+            )
+        session.commit()
 
     # Queue intervention for the simulator (C-4 fix: thread-safe access)
     key = f"{scenario_id}:{req.branch_id}"
-    await add_pending_intervention(key, pending_text, metadata=effect_metadata)
+    if not use_persisted_queue:
+        await add_pending_intervention(key, pending_text, metadata=effect_metadata)
     pending_count = await get_pending_intervention_count(key)
     queued_ahead = max(0, pending_count - 1)
 
@@ -500,88 +660,146 @@ async def intervene_retrospective(
 
     engine = get_engine()
 
-    with Session(engine) as session:
-        scenario = require_owned_scenario(session, scenario_id, principal)
-
-        branch = session.exec(
-            select(Branch).where(
-                Branch.id == req.branch_id,
-                Branch.scenario_id == scenario.id,
-            )
-        ).first()
-        if branch is None:
-            raise api_error(400, "INTERVENTION_BRANCH_NOT_FOUND", "Branch not found in this scenario")  # noqa: E501
-
-        branch_depth = _get_branch_depth(session, req.branch_id)
-        if branch_depth >= MAX_RETROSPECTIVE_FORK_DEPTH:
-            raise api_error(
-                400,
-                "RETROSPECTIVE_FORK_DEPTH_EXCEEDED",
-                f"Retrospective fork depth limit is {MAX_RETROSPECTIVE_FORK_DEPTH}",
-            )
-
-        # Validate round_number exists in this branch
-        max_round = session.exec(
-            select(func.max(Round.round_number)).where(Round.branch_id == req.branch_id)
-        ).one_or_none()
-        max_round = max_round if max_round is not None else 0
-
-        if req.round_number > max_round:
-            raise api_error(
-                422,
-                "RETROSPECTIVE_ROUND_OUT_OF_RANGE",
-                f"round_number {req.round_number} exceeds max round {max_round} for this branch",
-            )
-
-        # Create a new branch forked at the specified round
-        new_branch = Branch(
-            scenario_id=scenario_id,
-            parent_branch_id=req.branch_id,
-            fork_round=req.round_number,
-            fork_reason=f"回溯干预: {req.text.strip()[:50]}",
-            title=f"回溯 R{req.round_number}: {req.text.strip()[:30]}",
-            probability=max(
-                branch.probability * 0.8,
-                RETROSPECTIVE_BRANCH_PROBABILITY_FLOOR,
-            ),
-        )
-        session.add(new_branch)
-        session.flush()
-        _clone_branch_history(
-            session,
-            source_branch_id=req.branch_id,
-            target_branch_id=new_branch.id,
-            through_round=req.round_number,
+    use_persisted_queue = _pending_intervention_db_path() is not None
+    new_branch_id: str | None = None
+    log_id: str | None = None
+    memory_queue_added = False
+    simulation_lease = _acquire_retrospective_simulation_lock(scenario_id)
+    if simulation_lease is None:
+        raise api_error(
+            409,
+            "SIMULATION_ALREADY_RUNNING",
+            "Scenario already has a running simulation",
         )
 
-        # Log the intervention
-        log = InterventionLog(
-            scenario_id=scenario_id,
-            branch_id=new_branch.id,
-            round_number=req.round_number,
-            user_input=req.text.strip(),
-        )
-        session.add(log)
-        session.commit()
-        session.refresh(new_branch)
-        session.refresh(log)
-        new_branch_id = new_branch.id
-        log_id = log.id
-
-    # Queue intervention on the new branch (C-4 fix: thread-safe access).
-    # Attach intervention_log_id so the simulator can persist the effect receipt.
     retro_metadata: dict = {
-        "intervention_log_id": log_id,
         "raw_user_input": req.text.strip(),
     }
-    key = f"{scenario_id}:{new_branch_id}"
-    await add_pending_intervention(key, req.text.strip(), metadata=retro_metadata)
+    try:
+        with Session(engine) as session:
+            scenario = require_owned_scenario(session, scenario_id, principal)
+            allowed_retrospective_statuses = {ScenarioStatus.SIMULATING, ScenarioStatus.DONE}
+            if scenario.status not in allowed_retrospective_statuses:
+                raise api_error(
+                    409,
+                    "INTERVENTION_SCENARIO_STATUS_INVALID",
+                    _intervention_status_invalid_message(scenario.status),
+                )
 
-    # H-4 fix: Trigger background simulation for the new retrospective branch
-    from app.api.helpers import run_sim_background, schedule_background_task
-    schedule_background_task(
-        run_sim_background(scenario_id, branch_id=new_branch_id)
-    )
+            branch = session.exec(
+                select(Branch).where(
+                    Branch.id == req.branch_id,
+                    Branch.scenario_id == scenario.id,
+                )
+            ).first()
+            if branch is None:
+                raise api_error(
+                    400,
+                    "INTERVENTION_BRANCH_NOT_FOUND",
+                    "Branch not found in this scenario",
+                )
+
+            branch_depth = _get_branch_depth(session, req.branch_id)
+            if branch_depth >= MAX_RETROSPECTIVE_FORK_DEPTH:
+                raise api_error(
+                    400,
+                    "RETROSPECTIVE_FORK_DEPTH_EXCEEDED",
+                    f"Retrospective fork depth limit is {MAX_RETROSPECTIVE_FORK_DEPTH}",
+                )
+
+            # Validate round_number exists in this branch
+            max_round = session.exec(
+                select(func.max(Round.round_number)).where(Round.branch_id == req.branch_id)
+            ).one_or_none()
+            max_round = max_round if max_round is not None else 0
+
+            if req.round_number > max_round:
+                raise api_error(
+                    422,
+                    "RETROSPECTIVE_ROUND_OUT_OF_RANGE",
+                    f"round_number {req.round_number} exceeds max round {max_round} for this branch",  # noqa: E501
+                )
+
+            clone_until = max(0, req.round_number - 1)
+            new_branch_id = clone_until_round(
+                scenario_id,
+                req.branch_id,
+                clone_until,
+                replay_kind="retrospective",
+                title=f"Retrospective R{req.round_number}",
+                session=session,
+                replay_source_round=req.round_number,
+            )
+            new_branch = session.get(Branch, new_branch_id)
+            if new_branch is None:  # pragma: no cover - defensive guard
+                raise RuntimeError("Retrospective branch clone did not return a branch")
+            new_branch.fork_reason = f"回溯干预: {req.text.strip()[:50]}"
+            session.add(new_branch)
+
+            # Log the intervention
+            log = InterventionLog(
+                scenario_id=scenario_id,
+                branch_id=new_branch_id,
+                round_number=req.round_number,
+                user_input=req.text.strip(),
+            )
+            session.add(log)
+            session.flush()
+            log_id = log.id
+
+            # Queue intervention on the new branch in the same transaction as
+            # the replay branch and log. In-memory fallback is queued after commit.
+            retro_metadata["intervention_log_id"] = log_id
+            if use_persisted_queue:
+                session.add(
+                    PendingIntervention(
+                        scenario_id=scenario_id,
+                        branch_id=new_branch_id,
+                        user_input=req.text.strip(),
+                        metadata_json=_encode_metadata(retro_metadata),
+                        display_text=req.text.strip(),
+                    )
+                )
+            session.commit()
+
+        key = f"{scenario_id}:{new_branch_id}"
+        if not use_persisted_queue:
+            await add_pending_intervention(
+                key,
+                req.text.strip(),
+                metadata=retro_metadata,
+                display_text=req.text.strip(),
+            )
+            memory_queue_added = True
+
+        # H-4 fix: Trigger background simulation for the new retrospective branch
+        from app.api.helpers import run_sim_background, schedule_background_task
+
+        background_coro = run_sim_background(
+            scenario_id,
+            branch_id=new_branch_id,
+            pre_acquired_lock_lease=simulation_lease,
+        )
+        try:
+            schedule_background_task(background_coro)
+        except Exception:
+            close = getattr(background_coro, "close", None)
+            if callable(close):
+                close()
+            raise
+        simulation_lease = None
+    except Exception:
+        if new_branch_id is not None:
+            _cleanup_retrospective_start(
+                scenario_id=scenario_id,
+                branch_id=new_branch_id,
+                intervention_log_id=log_id,
+            )
+            if memory_queue_added:
+                await clear_pending_interventions_for_branch(scenario_id, new_branch_id)
+        raise
+    finally:
+        release_runtime_lock(simulation_lease)
 
     # Broadcast via WebSocket
     from app.api.ws import ws_manager
@@ -615,6 +833,16 @@ async def intervene_batch(
     if not req.interventions:
         raise api_error(400, "INTERVENTIONS_EMPTY", "Interventions list cannot be empty")
 
+    # Reject duplicate branch_ids before any DB writes to keep the contract
+    # of "each branch can receive at most one intervention per batch request".
+    branch_ids = [item.branch_id for item in req.interventions]
+    if len(branch_ids) != len(set(branch_ids)):
+        raise api_error(
+            422,
+            "BATCH_DUPLICATE_BRANCH",
+            "Each branch can only receive one intervention per batch request",
+        )
+
     engine = get_engine()
 
     # Validate ALL branches first (atomic: all-or-nothing)
@@ -624,11 +852,11 @@ async def intervene_batch(
     with Session(engine) as session:
         scenario = require_owned_scenario(session, scenario_id, principal)
         scenario_language = _scenario_runtime_language(scenario)
-        if scenario.status not in (ScenarioStatus.SIMULATING, ScenarioStatus.NARRATING):
+        if scenario.status != ScenarioStatus.SIMULATING:
             raise api_error(
-                400,
+                409,
                 "INTERVENTION_SCENARIO_STATUS_INVALID",
-                f"Cannot intervene: scenario status is '{scenario.status.value}'",
+                _intervention_status_invalid_message(scenario.status),
             )
 
         branch_map: dict[str, Branch] = {}
@@ -709,6 +937,7 @@ async def intervene_batch(
                         branch_id=item.branch_id,
                         user_input=pending_text,
                         metadata_json=_encode_metadata(effect_metadata),
+                        display_text=visible_text,
                     )
                 )
             else:
@@ -740,7 +969,10 @@ async def intervene_batch(
     }
 
 
-@router.get("/intervention-templates")
-async def get_intervention_templates():
+@router.get(
+    "/intervention-templates",
+    response_model=list[InterventionTemplateResponse],
+)
+async def get_intervention_templates() -> list[dict]:
     """P4-D: Return pre-built intervention templates."""
     return INTERVENTION_TEMPLATES

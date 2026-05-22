@@ -11,6 +11,7 @@ from app.models.database import (
     AgentMessage,
     Branch,
     BranchStatus,
+    InterventionLog,
     Round,
     Scenario,
     ScenarioStatus,
@@ -542,6 +543,124 @@ class TestCompareBranches:
             "original_content": "原本的刘备发言",
             "replacement_content": "改写后的刘备发言",
         }
+
+    def test_returns_intervention_for_retrospective_branch(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid, title="Source")
+        aid = _seed_agent(engine, sid, name="刘备")
+
+        source_r1 = _seed_round(engine, source_bid, 1)
+        source_r2 = _seed_round(engine, source_bid, 2)
+        _seed_message(engine, source_r1, aid, content="第一轮共同历史")
+        _seed_message(engine, source_r2, aid, content="原第二轮")
+
+        retro_bid = _seed_branch(
+            engine,
+            sid,
+            title="Retrospective R2",
+            parent_branch_id=source_bid,
+            fork_round=1,
+            replay_kind="retrospective",
+            replay_source_branch_id=source_bid,
+            replay_source_round=2,
+        )
+        retro_r1 = _seed_round(engine, retro_bid, 1)
+        _seed_message(engine, retro_r1, aid, content="第一轮共同历史")
+
+        with Session(engine) as session:
+            session.add(
+                InterventionLog(
+                    scenario_id=sid,
+                    branch_id=retro_bid,
+                    round_number=2,
+                    user_input="第二轮加入外部冲击",
+                )
+            )
+            session.commit()
+
+        result = compare_branches(sid, source_bid, retro_bid)
+
+        assert result["common_rounds"] == 1
+        assert result["intervention"] == {
+            "replay_kind": "retrospective",
+            "source_branch_id": source_bid,
+            "source_round": 2,
+            "intervention_text": "第二轮加入外部冲击",
+        }
+
+    def test_retrospective_common_rounds_use_source_boundary_for_regenerated_round(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid, title="Source")
+        aid = _seed_agent(engine, sid, name="刘备")
+
+        for round_number in range(1, 6):
+            source_round_id = _seed_round(engine, source_bid, round_number)
+            _seed_message(
+                engine,
+                source_round_id,
+                aid,
+                content=f"shared round {round_number}",
+            )
+
+        retro_bid = _seed_branch(
+            engine,
+            sid,
+            title="Retrospective R3",
+            parent_branch_id=source_bid,
+            fork_round=2,
+            replay_kind="retrospective",
+            replay_source_branch_id=source_bid,
+            replay_source_round=3,
+        )
+        for round_number in range(1, 4):
+            retro_round_id = _seed_round(engine, retro_bid, round_number)
+            _seed_message(
+                engine,
+                retro_round_id,
+                aid,
+                content=f"shared round {round_number}",
+            )
+        retro_round_4 = _seed_round(engine, retro_bid, 4)
+        _seed_message(engine, retro_round_4, aid, content="regenerated branch diverges")
+
+        result = compare_branches(sid, source_bid, retro_bid)
+
+        assert result["rounds"][2]["round"] == 3
+        assert result["rounds"][2]["is_identical"] is True
+        assert result["common_rounds"] == 2
+
+    def test_retrospective_common_rounds_do_not_use_source_boundary_for_unrelated_branch(self):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        source_bid = _seed_branch(engine, sid, title="Source")
+        unrelated_bid = _seed_branch(engine, sid, title="Unrelated")
+        aid = _seed_agent(engine, sid, name="刘备")
+
+        source_r1 = _seed_round(engine, source_bid, 1)
+        _seed_message(engine, source_r1, aid, content="source history")
+        unrelated_r1 = _seed_round(engine, unrelated_bid, 1)
+        _seed_message(engine, unrelated_r1, aid, content="different unrelated history")
+
+        retro_bid = _seed_branch(
+            engine,
+            sid,
+            title="Retrospective R3",
+            parent_branch_id=source_bid,
+            fork_round=2,
+            replay_kind="retrospective",
+            replay_source_branch_id=source_bid,
+            replay_source_round=3,
+        )
+        retro_r1 = _seed_round(engine, retro_bid, 1)
+        _seed_message(engine, retro_r1, aid, content="source history")
+
+        result = compare_branches(sid, unrelated_bid, retro_bid)
+
+        assert result["intervention"] is None
+        assert result["rounds"][0]["is_identical"] is False
+        assert result["common_rounds"] == 0
 
     def test_intervention_falls_back_to_agent_id_when_agent_row_missing(self):
         engine = get_engine()

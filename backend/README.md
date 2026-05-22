@@ -42,7 +42,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | Ending Room | `app/api/ending_rooms.py` | Oracle Chambers / roundtable room、thread、user-turn、result 与 ending-room WebSocket |
 | Journal | `app/api/journal.py` | Personal prediction journal create/list/resolve and calibration data |
 | Predictions | `app/api/predictions.py` | Scenario prediction and leaderboard |
-| Interventions | `app/api/interventions.py` | Standard / retrospective / batch intervention, including contract-checked gameplay card injection; retrospective intervention is gated by `FEATURE_COUNTERFACTUAL_REPLAY` |
+| Interventions | `app/api/interventions.py` | Standard / retrospective / batch intervention, durable lifecycle queue, bilingual templates, and contract-checked gameplay card injection; retrospective intervention is gated by `FEATURE_COUNTERFACTUAL_REPLAY` |
 | Social | `app/api/social.py` | Social media copy generation |
 | WebSocket | `app/api/ws.py` | Scenario real-time events + thread-scoped agent-conversation WebSocket |
 
@@ -79,6 +79,10 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 18927
 | `GET/PUT` | `/api/campaign/scenario/{id}/director-state` | Per-scenario director authority with `revision`-based optimistic concurrency |
 | `GET/PUT` | `/api/campaign/scenario/{id}/gameplay-state` | Per-scenario gameplay authority with `revision`-based optimistic concurrency |
 | `GET` | `/api/scenario/{id}/intervention-effects` | Read persisted intervention effect receipts for one owned scenario |
+| `POST` | `/api/scenario/{id}/intervene` | Queue a standard intervention for an active simulation |
+| `POST` | `/api/scenario/{id}/intervene/retrospective` | Replay from a selected source round with retrospective provenance |
+| `POST` | `/api/scenario/{id}/intervene/batch` | Queue explicit per-branch interventions for an active simulation |
+| `GET` | `/api/intervention-templates` | Bilingual intervention templates with structured variables |
 | `GET` | `/api/campaign/scenario/{id}/summary` | Scenario campaign summary |
 | `GET` | `/api/campaign/profile/{user_id}/weekly-summary` | Weekly campaign summary |
 | `GET` | `/api/campaign/challenges/rotation` | Daily challenge and active weekly track rotation |
@@ -103,8 +107,8 @@ source .venv/bin/activate
 python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py tests/test_llm_client.py tests/test_web_context.py tests/test_api.py -q
 ```
 
-- Latest local backend verification for capability-gated replay/intervention hardening:
-  - `python -m pytest -x -q --tb=short`: `3286 passed, 11 skipped`
+- Latest local backend verification for intervention system upgrade hardening:
+  - `python -m pytest tests/`: `3329 passed, 6 skipped`
   - `ruff check app/ tests/`: pass
 - Latest targeted Campaign/profile label verification:
   - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`: `154 passed`
@@ -141,7 +145,12 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 - `gameplay_contract.py` now builds gameplay-card prompts on the backend and wraps target branch text, Agent names and custom directives as untrusted data before sending them to the model.
 - `memory.py` now uses canonical gameplay card labels for known card ids and wraps unknown `card_label` text as untrusted data before it enters Agent memory context.
 - `snapshot_export.py` now drops malformed or scalar JSON-string secret fields as empty values instead of exporting their raw text.
-- `simulator.py` now checks scenario/branch before writing persisted intervention effect receipts, so stale pending metadata from another branch is ignored.
+- `interventions.py` now accepts standard and batch interventions only while the scenario is `SIMULATING`; terminal or narrating scenarios return `409` instead of a false success.
+- `interventions.py` persists each intervention log and pending queue item in the same transaction for the durable SQLite path. Retrospective interventions clone from the selected source round, write `replay_kind="retrospective"` plus source branch/round provenance, and clean up the new branch/log if scheduling fails.
+- `simulator.py` now claims persisted pending interventions with status/claim/lease fields before model work, expires stale claims, deletes only after successful injection, and marks failed claims instead of losing them with delete-before-process.
+- `simulator.py` now broadcasts `intervention_injected` with visible text, lifecycle status, card id and mode only; backend prompt text is not sent over the scenario WebSocket.
+- `simulator.py` now checks scenario/branch before writing persisted intervention effect receipts, so stale pending metadata from another branch is ignored. Receipt rows carry lifecycle `status`, and `impact_summary_json` is nullable until a real impact generator exists.
+- `replay.py` now treats retrospective replay branches as first-class intervention context in compare digests, alongside counterfactual branches.
 - `scoring.py` now persists prediction scores and leaderboard materialization in one transaction, so a leaderboard failure does not leave scored predictions half-written.
 - Segment-filtered leaderboard responses recompute `total_predictions`, `avg_score`, `best_score`, and `win_streak` from matching scored predictions; the no-filter path still returns the materialized legacy array.
 - `predictions.py` now enforces one prediction per `scenario_id + user_id` at both layers: API pre-check plus SQLite unique index, and duplicate races still collapse to `409 PREDICTION_ALREADY_SUBMITTED`.

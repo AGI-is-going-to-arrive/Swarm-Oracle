@@ -532,7 +532,7 @@ describe("simulationStore — handleWSEvent", () => {
       id: "b2",
       parent_branch_id: "b1",
       fork_round: 2,
-      title: "Retrospective R2",
+      title: "intervention.retrospective_title",
       status: "ACTIVE",
     });
     expect(store.getState().interventionLog).toHaveLength(1);
@@ -569,6 +569,71 @@ describe("simulationStore — handleWSEvent", () => {
       { branch_id: "b1", text: "港口停摆", round: 2 },
       { branch_id: "b2", text: "边境关闭", round: 3 },
     ]);
+    expect(store.getState().interventionLifecycle.get("int-a")).toBe("queued");
+    expect(store.getState().interventionLifecycle.get("int-b")).toBe("queued");
+  });
+
+  it("transitions intervention lifecycle to receipt_ready when simulation completes", () => {
+    const store = useSimulationStore;
+
+    // Add queued and injected interventions
+    store.getState().handleWSEvent({
+      type: "intervention_applied",
+      data: { branch_id: "b1", text: "Int 1", round: 1, intervention_id: "int-1" },
+    } as WSEvent);
+    store.getState().handleWSEvent({
+      type: "intervention_injected",
+      data: { branch_id: "b1", text: "Int 2", round: 2, intervention_id: "int-2" },
+    } as WSEvent);
+
+    expect(store.getState().interventionLifecycle.get("int-1")).toBe("queued");
+    expect(store.getState().interventionLifecycle.get("int-2")).toBe("injected");
+
+    // Complete simulation
+    store.getState().handleWSEvent({ type: "simulation_done" } as WSEvent);
+
+    expect(store.getState().interventionLifecycle.get("int-1")).toBe("receipt_ready");
+    expect(store.getState().interventionLifecycle.get("int-2")).toBe("receipt_ready");
+  });
+
+  it("clears intervention lifecycle when switching scenarios", () => {
+    const store = useSimulationStore;
+
+    store.getState().setScenario({
+      id: "scenario-a",
+      question: "A",
+      status: "simulating",
+      created_at: new Date().toISOString(),
+      total_rounds: 2,
+      mode: "blackboard",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+    store.getState().handleWSEvent({
+      type: "intervention_applied",
+      data: { branch_id: "b1", text: "Int 1", round: 1, intervention_id: "int-1" },
+    } as WSEvent);
+    expect(store.getState().interventionLifecycle.get("int-1")).toBe("queued");
+
+    store.getState().setScenario({
+      id: "scenario-b",
+      question: "B",
+      status: "simulating",
+      created_at: new Date().toISOString(),
+      total_rounds: 2,
+      mode: "blackboard",
+      agents: [],
+      branches: [],
+      groups: [],
+      hierarchical: false,
+      messages: [],
+    });
+
+    expect(store.getState().interventionLifecycle.size).toBe(0);
+    expect(store.getState().interventionLog).toEqual([]);
   });
 
   it("accepts KG realtime graph events without logging unhandled warnings", () => {
@@ -812,6 +877,8 @@ describe("simulationStore — api error mapping", () => {
       visualizationEnabled: true,
       userId: "director-1",
     });
+    expect(useSimulationStore.getState().interventionLifecycle.size).toBe(0);
+    expect(useSimulationStore.getState().interventionLog).toEqual([]);
   });
 
   it("maps structured start errors to localized keys", async () => {

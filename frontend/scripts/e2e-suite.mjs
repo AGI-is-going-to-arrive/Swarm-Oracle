@@ -337,6 +337,47 @@ async function waitForCompletedReplayAutomationReady(page, timeout = 20000) {
   );
 }
 
+async function ensureCompletedSimulationTheaterMode(page, scenarioId, timeout = 30000) {
+  const baseline = await waitForAutomation(
+    page,
+    (payload) => payload.page?.kind === "simulation" && payload.simulation?.status === "done",
+    timeout,
+    `completed simulation shell for ${scenarioId}`,
+  );
+  if (baseline.simulation?.viewMode === "theater") {
+    return baseline;
+  }
+  if (!baseline.page?.controls?.can_toggle_view_mode) {
+    throw new Error(
+      `Completed simulation ${scenarioId} opened in ${baseline.simulation?.viewMode ?? "unknown"} mode `
+      + "and cannot toggle to Theater.",
+    );
+  }
+
+  const theaterToggle = page.locator(".view-mode-toggle").first();
+  await theaterToggle.waitFor({ state: "visible", timeout: 10000 });
+  await theaterToggle.click();
+  return waitForAutomation(
+    page,
+    (payload) => (
+      payload.page?.kind === "simulation"
+      && payload.simulation?.viewMode === "theater"
+      && payload.page?.replay_state?.available === true
+    ),
+    timeout,
+    `completed simulation Theater mode for ${scenarioId}`,
+  );
+}
+
+async function gotoCompletedSimulationTheater(page, baseUrl, scenarioId, options = {}) {
+  await gotoWithRetry(
+    page,
+    `${baseUrl}/sim/${scenarioId}`,
+    { waitUntil: "domcontentloaded", ...options },
+  );
+  return ensureCompletedSimulationTheaterMode(page, scenarioId);
+}
+
 async function advanceAutomationTime(page, ms) {
   await page.evaluate(async (deltaMs) => {
     if (typeof window.advanceTime === "function") {
@@ -371,7 +412,7 @@ async function saveScreenshot(page, filePath, options = {}) {
       path: filePath,
       type: "png",
       scale: "css",
-      timeout: 0,
+      timeout: 15000,
       ...options,
     });
   } catch (error) {
@@ -398,11 +439,22 @@ async function saveScreenshot(page, filePath, options = {}) {
 }
 
 async function saveLocatorScreenshot(locator, filePath) {
-  await locator.screenshot({
-    path: filePath,
-    type: "png",
-    timeout: 0,
-  });
+  try {
+    await locator.waitFor({ state: "visible", timeout: 5000 });
+    await locator.screenshot({
+      path: filePath,
+      type: "png",
+      timeout: 15000,
+    });
+  } catch (error) {
+    const page = typeof locator.page === "function" ? locator.page() : null;
+    if (!page) {
+      throw error;
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn(`[screenshot] falling back to full-page capture for ${path.basename(filePath)}: ${detail}`);
+    await saveScreenshot(page, filePath, { fullPage: true });
+  }
 }
 
 async function setRangeValue(page, selector, value) {
@@ -651,6 +703,57 @@ async function resolveMatrixScenario(baseUrl, sample) {
   };
 }
 
+function buildDirectorStateReadbackPayload(scenario, dominantBranch) {
+  return {
+    objectives: {
+      generated_for_question: scenario.question,
+      generated_for_profile: "governance",
+      goals: [
+        {
+          id: "e2e-director-goal-signature",
+          kind: "signature_arc_step",
+          target_card_id: "public_hearing",
+          reward_label: "director_point",
+          created_at: "2026-03-19T00:00:00Z",
+        },
+        {
+          id: "e2e-director-goal-commitment",
+          kind: "branch_commitment",
+          target_card_id: null,
+          reward_label: "archive_grade",
+          created_at: "2026-03-19T00:00:00Z",
+        },
+      ],
+      last_updated_at: "2026-03-19T00:00:00Z",
+    },
+    commitment: {
+      active: true,
+      branch_id: dominantBranch.id,
+      branch_title: dominantBranch.title,
+      committed_at_round: 2,
+      committed_at: "2026-03-19T00:02:00Z",
+      outcome: "pending",
+    },
+  };
+}
+
+async function seedDirectorStateForReadback(baseUrl, scenarioId) {
+  const scenario = await getScenarioViaApi(baseUrl, scenarioId);
+  const dominantBranch = [...(scenario.branches ?? [])]
+    .sort((a, b) => (b.probability ?? 0) - (a.probability ?? 0))[0] ?? null;
+  if (!dominantBranch?.id || !dominantBranch?.title) {
+    throw new Error(`Scenario ${scenarioId} does not expose a dominant branch for director-state smoke`);
+  }
+
+  await putScenarioDirectorStateViaApi(
+    baseUrl,
+    scenarioId,
+    buildDirectorStateReadbackPayload(scenario, dominantBranch),
+  );
+
+  return { scenario, dominantBranch };
+}
+
 async function createRuntimeMatrixScenario(baseUrl, sample) {
   const fallbackConfig = MATRIX_SCENARIO_FALLBACKS[sample.theme] ?? null;
   const fallbackQuestion = sample.question ?? fallbackConfig?.question ?? null;
@@ -732,7 +835,7 @@ async function runReplayFlow(page, {
   let lastError = null;
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+    await gotoCompletedSimulationTheater(page, baseUrl, scenarioId);
     const automationReady = await waitForCompletedReplayAutomationReady(page, 20000);
     const replayStart = Date.now();
     let payload = automationReady.payload;
@@ -864,46 +967,7 @@ async function runDirectorStateRoundtripCase(page, {
   outputDir,
 }) {
   ensureDir(outputDir);
-  const scenario = await getScenarioViaApi(baseUrl, scenarioId);
-  const dominantBranch = [...(scenario.branches ?? [])]
-    .sort((a, b) => (b.probability ?? 0) - (a.probability ?? 0))[0] ?? null;
-  if (!dominantBranch?.id || !dominantBranch?.title) {
-    throw new Error(`Scenario ${scenarioId} does not expose a dominant branch for director-state smoke`);
-  }
-
-  const directorState = {
-    objectives: {
-      generated_for_question: scenario.question,
-      generated_for_profile: "governance",
-      goals: [
-        {
-          id: "e2e-director-goal-signature",
-          kind: "signature_arc_step",
-          target_card_id: "public_hearing",
-          reward_label: "director_point",
-          created_at: "2026-03-19T00:00:00Z",
-        },
-        {
-          id: "e2e-director-goal-commitment",
-          kind: "branch_commitment",
-          target_card_id: null,
-          reward_label: "archive_grade",
-          created_at: "2026-03-19T00:00:00Z",
-        },
-      ],
-      last_updated_at: "2026-03-19T00:00:00Z",
-    },
-    commitment: {
-      active: true,
-      branch_id: dominantBranch.id,
-      branch_title: dominantBranch.title,
-      committed_at_round: 2,
-      committed_at: "2026-03-19T00:02:00Z",
-      outcome: "pending",
-    },
-  };
-
-  await putScenarioDirectorStateViaApi(baseUrl, scenarioId, directorState);
+  const { dominantBranch } = await seedDirectorStateForReadback(baseUrl, scenarioId);
 
   await clearOriginStorage(page, baseUrl);
   await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
@@ -1111,6 +1175,7 @@ async function runDirectorStateBrowserReadback(page, {
   browserName,
 }) {
   ensureDir(outputDir);
+  await seedDirectorStateForReadback(baseUrl, scenarioId);
 
   await clearOriginStorage(page, baseUrl);
   await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
@@ -1332,6 +1397,7 @@ async function waitForSafariAutomation(webdriverUrl, sessionId, predicate, timeo
 
 async function runSafariDirectorStateSuite(args) {
   const sample = await resolveMatrixScenario(args.baseUrl, getDirectorStateScenarioSample(args));
+  await seedDirectorStateForReadback(args.baseUrl, sample.scenarioId);
   const created = await createSafariSession(args.webdriverUrl);
   const sessionId = created.sessionId;
   if (!sessionId) {
@@ -1525,7 +1591,7 @@ async function runReplayCornerCase(page, {
   outputDir,
 }) {
   ensureDir(outputDir);
-  await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  await gotoCompletedSimulationTheater(page, baseUrl, scenarioId);
   await waitForAutomation(
     page,
     (payload) => payload.page?.replay_state?.available === true,
@@ -1590,7 +1656,7 @@ async function runReplaySpeedSwitchCase(page, {
   outputDir,
 }) {
   ensureDir(outputDir);
-  await gotoWithRetry(page, `${baseUrl}/sim/${scenarioId}`, { waitUntil: "domcontentloaded" });
+  await gotoCompletedSimulationTheater(page, baseUrl, scenarioId);
 
   const baseline = await waitForAutomation(
     page,
@@ -2850,7 +2916,7 @@ async function runMobileSuite(args) {
     writeJson(path.join(args.outputDir, "mobile-home-surface.json"), homepageSurface);
     await saveScreenshot(page, path.join(args.outputDir, "mobile-home.png"));
 
-    await gotoWithRetry(page, `${args.baseUrl}/sim/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
+    await gotoCompletedSimulationTheater(page, args.baseUrl, governanceSample.scenarioId);
     await waitForCompletedReplayAutomationReady(page, 20000);
     let theater = await waitForAutomation(
       page,
@@ -2882,7 +2948,7 @@ async function runMobileSuite(args) {
       if (mobileTheaterReady) break;
       if (attempt < 2) {
         console.warn(`[mobile] scene not ready (last=${lastSceneName ?? "null"}) — retrying with fresh page load`);
-        await gotoWithRetry(page, `${args.baseUrl}/sim/${governanceSample.scenarioId}`, { waitUntil: "domcontentloaded" });
+        await gotoCompletedSimulationTheater(page, args.baseUrl, governanceSample.scenarioId);
         await waitForCompletedReplayAutomationReady(page, 20000);
         theater = await waitForAutomation(
           page,

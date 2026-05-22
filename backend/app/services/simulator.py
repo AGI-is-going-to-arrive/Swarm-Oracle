@@ -7,8 +7,11 @@ import hashlib
 import json
 import logging
 import re
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
@@ -99,6 +102,8 @@ except ImportError:
 class PendingInterventionItem:
     text: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    id: int | None = None
+    display_text: str = ""
 
     def __str__(self) -> str:
         return self.text
@@ -107,7 +112,11 @@ class PendingInterventionItem:
         if isinstance(other, str):
             return self.text == other
         if isinstance(other, PendingInterventionItem):
-            return self.text == other.text and self.metadata == other.metadata
+            return (
+                self.text == other.text
+                and self.metadata == other.metadata
+                and self.display_text == other.display_text
+            )
         return False
 
 
@@ -529,14 +538,36 @@ def reconcile_scenario_done_if_complete(
 
 def _pending_intervention_db_path() -> str | None:
     db_url = settings.DATABASE_URL.strip()
-    prefix = "sqlite:///"
-    if not db_url.startswith(prefix):
+    if not db_url or db_url == ":memory:" or db_url.startswith("file::memory:"):
         return None
 
-    db_path = db_url[len(prefix):].split("?", 1)[0]
-    if not db_path or db_path == ":memory:" or db_path.startswith("file:"):
+    db_path: str | None = None
+    # Longest prefix first to avoid "sqlite:///" matching a prefix of
+    # "sqlite+aiosqlite:///" or "sqlite+pysqlite:///".
+    for prefix in ("sqlite+aiosqlite:///", "sqlite+pysqlite:///", "sqlite:///"):
+        if db_url.startswith(prefix):
+            db_path = db_url[len(prefix):]
+            break
+    if db_path is None:
+        if db_url.startswith("/") or db_url.startswith("file:"):
+            db_path = db_url
+        else:
+            return None
+
+    if db_path == ":memory:" or db_path.startswith("file::memory:"):
         return None
-    return db_path
+
+    if db_path.startswith("file:"):
+        parsed = urlparse(db_path)
+        parsed_path = unquote(parsed.path)
+        if not parsed_path or parsed_path == ":memory:":
+            return None
+        return parsed_path
+
+    parsed_path = unquote(db_path.split("?", 1)[0])
+    if not parsed_path or parsed_path == ":memory:":
+        return None
+    return parsed_path
 
 
 def _split_intervention_key(key: str) -> tuple[str, str]:
@@ -562,12 +593,146 @@ def _decode_intervention_metadata(raw: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _intervention_log_id(metadata: dict[str, Any] | None) -> str:
+    if not metadata:
+        return ""
+    raw_id = metadata.get("intervention_log_id")
+    return str(raw_id).strip() if raw_id is not None else ""
+
+
+def _round_number_from_effect_summary(raw: str | None, intervention_log_id: str) -> int | None:
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if str(payload.get("intervention_log_id") or "").strip() != intervention_log_id:
+        return None
+    try:
+        round_number = int(payload.get("round_number"))
+    except (TypeError, ValueError):
+        return None
+    return round_number if round_number >= 1 else None
+
+
+def _intervention_log_has_applied_round(
+    engine,
+    *,
+    scenario_id: str,
+    branch_id: str,
+    metadata: dict[str, Any] | None,
+) -> bool:
+    intervention_log_id = _intervention_log_id(metadata)
+    if not intervention_log_id:
+        return False
+
+    with Session(engine) as session:
+        log = session.get(InterventionLog, intervention_log_id)
+        if log is None or log.scenario_id != scenario_id or log.branch_id != branch_id:
+            return False
+
+        applied_round = _round_number_from_effect_summary(
+            log.effect_summary_json,
+            intervention_log_id,
+        )
+        if applied_round is None:
+            branch = session.get(Branch, branch_id)
+            if branch is not None and branch.replay_kind == "retrospective":
+                applied_round = log.round_number
+            else:
+                applied_round = log.round_number + 1
+        if applied_round < 1:
+            return False
+
+        return session.exec(
+            select(Round.id).where(
+                Round.branch_id == branch_id,
+                Round.round_number == applied_round,
+            )
+        ).first() is not None
+
+
 def _coerce_pending_intervention_item(
     value: str | PendingInterventionItem,
 ) -> PendingInterventionItem:
     if isinstance(value, PendingInterventionItem):
         return value
     return PendingInterventionItem(str(value), {})
+
+
+_CANONICAL_INTERVENTION_PROMPT_MARKERS = (
+    "UNTRUSTED DATA",
+    "Gameplay card:",
+    "Player directive:",
+    "玩法卡：",
+    "题材档案：",
+    "玩家指令：",
+    "下一轮：",
+)
+
+
+def _metadata_display_text(metadata: dict[str, Any] | None) -> str:
+    if not metadata:
+        return ""
+    for key in ("raw_user_input", "custom_directive"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _looks_like_canonical_intervention_prompt(text: str) -> bool:
+    return any(marker in text for marker in _CANONICAL_INTERVENTION_PROMPT_MARKERS)
+
+
+def _fallback_intervention_display_text(text: str) -> str:
+    if any(marker in text for marker in ("玩法卡：", "题材档案：", "玩家指令：", "下一轮：")):
+        return "干预已应用"
+    return "Intervention applied"
+
+
+def _intervention_display_text(item: PendingInterventionItem) -> str:
+    display_text = (item.display_text or "").strip()
+    if display_text:
+        return display_text
+    metadata_text = _metadata_display_text(item.metadata)
+    if metadata_text:
+        return metadata_text
+    text = (item.text or "").strip()
+    if not text:
+        return ""
+    if _looks_like_canonical_intervention_prompt(text):
+        return _fallback_intervention_display_text(text)
+    return text
+
+
+def _pending_intervention_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _expire_stale_claims_on_connection(
+    conn,
+    scenario_id: str,
+    branch_id: str,
+    now: datetime,
+) -> None:
+    conn.exec_driver_sql(
+        """
+        UPDATE pending_intervention
+        SET status = 'pending',
+            claim_token = NULL,
+            claimed_at = NULL,
+            lease_expires_at = NULL
+        WHERE scenario_id = ?
+          AND branch_id = ?
+          AND status = 'claimed'
+          AND lease_expires_at < ?
+        """,
+        (scenario_id, branch_id, now),
+    )
 
 
 # ── Effect Receipt (Phase 4) ───────────────────────────────
@@ -928,6 +1093,7 @@ async def get_pending_interventions(key: str) -> list[str]:
                     .where(
                         PendingIntervention.scenario_id == scenario_id,
                         PendingIntervention.branch_id == branch_id,
+                        PendingIntervention.status == "pending",
                     )
                     .order_by(PendingIntervention.id.asc())
                 ).all()
@@ -945,20 +1111,103 @@ async def get_pending_interventions(key: str) -> list[str]:
         return [_coerce_pending_intervention_item(item).text for item in queued]
 
 
-async def pop_next_pending_intervention(key: str) -> PendingInterventionItem | None:
-    """Atomically pop the next intervention while preserving per-branch order."""
+async def expire_stale_claims(key: str, max_age_seconds: int = 600, *, _conn=None) -> None:
+    """Release expired DB claims so a later worker can claim them again."""
     db_path = _pending_intervention_db_path()
     if db_path is not None:
         scenario_id, branch_id = _split_intervention_key(key)
+        if _conn is not None:
+            _expire_stale_claims_on_connection(
+                _conn,
+                scenario_id,
+                branch_id,
+                _pending_intervention_now(),
+            )
+            return
         engine = get_engine()
         with engine.connect() as conn:
             try:
                 conn.exec_driver_sql("BEGIN IMMEDIATE")
+                _expire_stale_claims_on_connection(
+                    conn,
+                    scenario_id,
+                    branch_id,
+                    _pending_intervention_now(),
+                )
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except SQLAlchemyError:
+                    pass
+                raise
+        return
+
+    # test-only in-memory fallback; no crash recovery needed
+    _ = max_age_seconds
+
+
+async def claim_next_pending_intervention(
+    key: str,
+    claim_token: str,
+    lease_seconds: int = 300,
+    *,
+    _conn=None,
+) -> PendingInterventionItem | None:
+    """Claim the oldest pending intervention without deleting it."""
+    db_path = _pending_intervention_db_path()
+    if db_path is not None:
+        scenario_id, branch_id = _split_intervention_key(key)
+        if _conn is not None:
+            now = _pending_intervention_now()
+            lease_expires_at = now + timedelta(seconds=lease_seconds)
+            await expire_stale_claims(key, _conn=_conn)
+            row = _conn.exec_driver_sql(
+                """
+                SELECT id, user_input, metadata_json, display_text
+                FROM pending_intervention
+                WHERE scenario_id = ?
+                  AND branch_id = ?
+                  AND status = 'pending'
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                (scenario_id, branch_id),
+            ).first()
+            if row is None:
+                return None
+            _conn.exec_driver_sql(
+                """
+                UPDATE pending_intervention
+                SET status = 'claimed',
+                    claim_token = ?,
+                    claimed_at = ?,
+                    lease_expires_at = ?
+                WHERE id = ?
+                """,
+                (claim_token, now, lease_expires_at, row[0]),
+            )
+            return PendingInterventionItem(
+                text=str(row[1]),
+                metadata=_decode_intervention_metadata(row[2]),
+                id=int(row[0]),
+                display_text=str(row[3] or ""),
+            )
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            try:
+                now = _pending_intervention_now()
+                lease_expires_at = now + timedelta(seconds=lease_seconds)
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
+                _expire_stale_claims_on_connection(conn, scenario_id, branch_id, now)
                 row = conn.exec_driver_sql(
                     """
-                    SELECT id, user_input, metadata_json
+                    SELECT id, user_input, metadata_json, display_text
                     FROM pending_intervention
-                    WHERE scenario_id = ? AND branch_id = ?
+                    WHERE scenario_id = ?
+                      AND branch_id = ?
+                      AND status = 'pending'
                     ORDER BY id ASC
                     LIMIT 1
                     """,
@@ -968,13 +1217,22 @@ async def pop_next_pending_intervention(key: str) -> PendingInterventionItem | N
                     conn.commit()
                     return None
                 conn.exec_driver_sql(
-                    "DELETE FROM pending_intervention WHERE id = ?",
-                    (row[0],),
+                    """
+                    UPDATE pending_intervention
+                    SET status = 'claimed',
+                        claim_token = ?,
+                        claimed_at = ?,
+                        lease_expires_at = ?
+                    WHERE id = ?
+                    """,
+                    (claim_token, now, lease_expires_at, row[0]),
                 )
                 conn.commit()
                 return PendingInterventionItem(
                     text=str(row[1]),
                     metadata=_decode_intervention_metadata(row[2]),
+                    id=int(row[0]),
+                    display_text=str(row[3] or ""),
                 )
             except Exception:
                 try:
@@ -987,18 +1245,181 @@ async def pop_next_pending_intervention(key: str) -> PendingInterventionItem | N
         queue = pending_interventions.get(key)
         if not queue:
             return None
+        # test-only in-memory fallback; no crash recovery needed
         next_item = _coerce_pending_intervention_item(queue.pop(0))
         if not queue:
             pending_interventions.pop(key, None)
         return next_item
 
 
+async def mark_intervention_injected(key: str, item_id: int | None, *, _conn=None) -> None:
+    """Mark a claimed intervention as injected and delete the consumed queue row."""
+    db_path = _pending_intervention_db_path()
+    if db_path is not None:
+        if item_id is None:
+            return
+        scenario_id, branch_id = _split_intervention_key(key)
+        if _conn is not None:
+            _conn.exec_driver_sql(
+                """
+                UPDATE pending_intervention
+                SET status = 'injected'
+                WHERE id = ?
+                  AND scenario_id = ?
+                  AND branch_id = ?
+                """,
+                (item_id, scenario_id, branch_id),
+            )
+            _conn.exec_driver_sql(
+                """
+                DELETE FROM pending_intervention
+                WHERE id = ?
+                  AND scenario_id = ?
+                  AND branch_id = ?
+                """,
+                (item_id, scenario_id, branch_id),
+            )
+            return
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            try:
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
+                conn.exec_driver_sql(
+                    """
+                    UPDATE pending_intervention
+                    SET status = 'injected'
+                    WHERE id = ?
+                      AND scenario_id = ?
+                      AND branch_id = ?
+                    """,
+                    (item_id, scenario_id, branch_id),
+                )
+                conn.exec_driver_sql(
+                    """
+                    DELETE FROM pending_intervention
+                    WHERE id = ?
+                      AND scenario_id = ?
+                      AND branch_id = ?
+                    """,
+                    (item_id, scenario_id, branch_id),
+                )
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except SQLAlchemyError:
+                    pass
+                raise
+        return
+
+    return
+
+
+async def mark_intervention_failed(
+    key: str,
+    item_id: int | None,
+    reason: str,
+    *,
+    _conn=None,
+) -> None:
+    """Keep a failed queue row for debugging."""
+    db_path = _pending_intervention_db_path()
+    if db_path is not None:
+        if item_id is None:
+            return
+        scenario_id, branch_id = _split_intervention_key(key)
+        if _conn is not None:
+            _conn.exec_driver_sql(
+                """
+                UPDATE pending_intervention
+                SET status = 'failed',
+                    failure_reason = ?
+                WHERE id = ?
+                  AND scenario_id = ?
+                  AND branch_id = ?
+                """,
+                (reason, item_id, scenario_id, branch_id),
+            )
+            return
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            try:
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
+                conn.exec_driver_sql(
+                    """
+                    UPDATE pending_intervention
+                    SET status = 'failed',
+                        failure_reason = ?
+                    WHERE id = ?
+                      AND scenario_id = ?
+                      AND branch_id = ?
+                    """,
+                    (reason, item_id, scenario_id, branch_id),
+                )
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except SQLAlchemyError:
+                    pass
+                raise
+        return
+
+    return
+
+
+async def pop_next_pending_intervention(key: str) -> PendingInterventionItem | None:
+    """Claim and consume the next intervention while preserving caller shape."""
+    db_path = _pending_intervention_db_path()
+    if db_path is not None:
+        item: PendingInterventionItem | None = None
+        engine = get_engine()
+        with engine.connect() as conn:
+            try:
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
+                item = await claim_next_pending_intervention(
+                    key,
+                    str(uuid.uuid4()),
+                    _conn=conn,
+                )
+                if item is None:
+                    conn.commit()
+                    return None
+                await mark_intervention_injected(key, item.id, _conn=conn)
+                conn.commit()
+                return item
+            except Exception as exc:
+                try:
+                    conn.rollback()
+                except SQLAlchemyError:
+                    pass
+                if item is not None:
+                    await mark_intervention_failed(key, item.id, str(exc))
+                raise
+
+    item: PendingInterventionItem | None = None
+    try:
+        item = await claim_next_pending_intervention(key, str(uuid.uuid4()))
+        if item is None:
+            return None
+        await mark_intervention_injected(key, item.id)
+        return item
+    except Exception as exc:
+        if item is not None:
+            await mark_intervention_failed(key, item.id, str(exc))
+        raise
+
+
 async def add_pending_intervention(
     key: str,
     text: str,
     metadata: dict[str, Any] | None = None,
+    display_text: str | None = None,
 ) -> None:
     """Append one intervention while preserving FIFO order across workers."""
+    visible_text = (display_text or "").strip() or _metadata_display_text(metadata)
     db_path = _pending_intervention_db_path()
     if db_path is not None:
         scenario_id, branch_id = _split_intervention_key(key)
@@ -1010,6 +1431,7 @@ async def add_pending_intervention(
                     branch_id=branch_id,
                     user_input=text,
                     metadata_json=_encode_intervention_metadata(metadata),
+                    display_text=visible_text,
                 )
             )
             session.commit()
@@ -1018,7 +1440,13 @@ async def add_pending_intervention(
     async with _intervention_lock:
         if key not in pending_interventions:
             pending_interventions[key] = []
-        pending_interventions[key].append(PendingInterventionItem(text, metadata or {}))
+        pending_interventions[key].append(
+            PendingInterventionItem(
+                text=text,
+                metadata=metadata or {},
+                display_text=visible_text,
+            )
+        )
 
 
 async def get_pending_intervention_count(key: str) -> int:
@@ -1033,6 +1461,7 @@ async def get_pending_intervention_count(key: str) -> int:
                     select(func.count(PendingIntervention.id)).where(
                         PendingIntervention.scenario_id == scenario_id,
                         PendingIntervention.branch_id == branch_id,
+                        PendingIntervention.status == "pending",
                     )
                 ).one()
                 or 0
@@ -1761,71 +2190,112 @@ async def _run_simulation_impl(
 
             # 0) Check for pending user interventions (Butterfly Effect)
             intervention_key = f"{scenario_id}:{current_branch_id}"
-            intervention_item = await pop_next_pending_intervention(intervention_key)
-            intervention_text = intervention_item.text if intervention_item is not None else None
-            intervention_metadata = (
-                intervention_item.metadata if intervention_item is not None else {}
+            intervention_item = await claim_next_pending_intervention(
+                intervention_key, claim_token=str(uuid.uuid4())
             )
-            if intervention_text is not None:
-                await push({
-                    "type": "intervention_injected",
-                    "data": {
-                        "branch_id": current_branch_id,
-                        "round": round_num,
-                        "text": intervention_text,
-                    },
-                })
+            intervention_text: str | None = None
+            intervention_metadata: dict[str, Any] = {}
+            try:
+                if intervention_item is not None:
+                    intervention_text = intervention_item.text
+                    intervention_metadata = intervention_item.metadata or {}
+                    if _intervention_log_has_applied_round(
+                        engine,
+                        scenario_id=scenario_id,
+                        branch_id=current_branch_id,
+                        metadata=intervention_metadata,
+                    ):
+                        await mark_intervention_injected(
+                            intervention_key,
+                            intervention_item.id,
+                        )
+                        intervention_item = None
+                        intervention_text = None
+                        intervention_metadata = {}
+                    elif intervention_text is not None:
+                        ws_display_text = _intervention_display_text(intervention_item)
+                        injected_payload = {
+                            "branch_id": current_branch_id,
+                            "round": round_num,
+                            "text": ws_display_text,
+                        }
+                        intervention_log_id = intervention_metadata.get("intervention_log_id")
+                        if intervention_log_id is not None:
+                            intervention_id = str(intervention_log_id).strip()
+                            if intervention_id:
+                                injected_payload["intervention_id"] = intervention_id
+                        await push({
+                            "type": "intervention_injected",
+                            "data": injected_payload,
+                        })
 
-                # V2-P2: Broadcast viz:event_anim for butterfly effect
-                if viz_mapper is not None:
-                    viz_interv = viz_mapper.map_intervention(
-                        intervention_text, params={"round": round_num, "branch_id": current_branch_id}  # noqa: E501
+                        # V2-P2: Broadcast viz:event_anim for butterfly effect
+                        if viz_mapper is not None:
+                            viz_interv = viz_mapper.map_intervention(
+                                ws_display_text, params={"round": round_num, "branch_id": current_branch_id}  # noqa: E501
+                            )
+                            await viz_push(viz_interv)
+
+                # 1) Gather agent messages — each pushed to frontend immediately
+                round_id = _create_round(engine, current_branch_id, round_num)
+                bb = blackboards.get(current_branch_id)
+                if bb is None:
+                    bb = Blackboard()  # ephemeral — discarded each round in RAW mode
+
+                if hierarchical and leader_agents:
+                    # P3-A: hierarchical mode — only Leaders call LLM
+                    _check_cancelled(scenario_id)
+                    messages = await _gather_hierarchical_messages(
+                        engine, scenario_id, current_branch_id, round_id, round_num,
+                        leader_agents, worker_agents, agent_to_group, group_leaders,
+                        setting_bg, key_variable,
+                        intervention_text=intervention_text,
+                        intervention_metadata=intervention_metadata,
+                        push=push,
+                        blackboard=bb,
+                        llm_overrides=llm_overrides,
+                        language=detected_language,
+                        viz_mapper=viz_mapper,
+                        agent_prev_emotions=agent_prev_emotions,
+                        web_context_block=web_context_block,
+                        scenario_user_id=scenario_user_id,
+                        native_search_domains=native_search_domains,
                     )
-                    await viz_push(viz_interv)
+                    _check_cancelled(scenario_id)
+                else:
+                    _check_cancelled(scenario_id)
+                    messages = await _gather_agent_messages(
+                        engine, scenario_id, current_branch_id, round_id, round_num, agents, setting_bg, key_variable,  # noqa: E501
+                        intervention_text=intervention_text,
+                        intervention_metadata=intervention_metadata,
+                        push=push,
+                        blackboard=bb,
+                        llm_overrides=llm_overrides,
+                        language=detected_language,
+                        viz_mapper=viz_mapper,
+                        agent_prev_emotions=agent_prev_emotions,
+                        web_context_block=web_context_block,
+                        scenario_user_id=scenario_user_id,
+                        native_search_domains=native_search_domains,
+                    )
+                    _check_cancelled(scenario_id)
 
-            # 1) Gather agent messages — each pushed to frontend immediately
-            round_id = _create_round(engine, current_branch_id, round_num)
-            bb = blackboards.get(current_branch_id)
-            if bb is None:
-                bb = Blackboard()  # ephemeral — discarded each round in RAW mode
-
-            if hierarchical and leader_agents:
-                # P3-A: hierarchical mode — only Leaders call LLM
-                _check_cancelled(scenario_id)
-                messages = await _gather_hierarchical_messages(
-                    engine, scenario_id, current_branch_id, round_id, round_num,
-                    leader_agents, worker_agents, agent_to_group, group_leaders,
-                    setting_bg, key_variable,
-                    intervention_text=intervention_text,
-                    intervention_metadata=intervention_metadata,
-                    push=push,
-                    blackboard=bb,
-                    llm_overrides=llm_overrides,
-                    language=detected_language,
-                    viz_mapper=viz_mapper,
-                    agent_prev_emotions=agent_prev_emotions,
-                    web_context_block=web_context_block,
-                    scenario_user_id=scenario_user_id,
-                    native_search_domains=native_search_domains,
-                )
-                _check_cancelled(scenario_id)
-            else:
-                _check_cancelled(scenario_id)
-                messages = await _gather_agent_messages(
-                    engine, scenario_id, current_branch_id, round_id, round_num, agents, setting_bg, key_variable,  # noqa: E501
-                    intervention_text=intervention_text,
-                    intervention_metadata=intervention_metadata,
-                    push=push,
-                    blackboard=bb,
-                    llm_overrides=llm_overrides,
-                    language=detected_language,
-                    viz_mapper=viz_mapper,
-                    agent_prev_emotions=agent_prev_emotions,
-                    web_context_block=web_context_block,
-                    scenario_user_id=scenario_user_id,
-                    native_search_domains=native_search_domains,
-                )
-                _check_cancelled(scenario_id)
+                if intervention_item is not None:
+                    await mark_intervention_injected(intervention_key, intervention_item.id)
+            except SimulationCancelled:
+                raise
+            except Exception as exc:
+                if intervention_item is not None:
+                    try:
+                        await mark_intervention_failed(
+                            intervention_key, intervention_item.id, str(exc)
+                        )
+                    except Exception:
+                        logger.debug(
+                            "marking claimed intervention as failed failed",
+                            exc_info=True,
+                        )
+                raise
 
             # 2) Round summary
             if detected_language.startswith("Chinese"):
@@ -1844,7 +2314,11 @@ async def _run_simulation_impl(
                     effect_log_id = (intervention_metadata or {}).get("intervention_log_id")
                     raw_user_input = (intervention_metadata or {}).get("raw_user_input")
                     if not raw_user_input:
-                        raw_user_input = intervention_text
+                        raw_user_input = (
+                            _intervention_display_text(intervention_item)
+                            if intervention_item is not None
+                            else intervention_text
+                        )
                     effect_summary = _build_intervention_effect_summary(
                         intervention_log_id=(
                             str(effect_log_id) if effect_log_id else None

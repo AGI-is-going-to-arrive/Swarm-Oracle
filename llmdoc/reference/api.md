@@ -137,8 +137,13 @@
 关键约束：
 
 - 正式玩法卡仍走 `intervene`，但 `card_id / profile_id / directive`、authority、冷却与 director points 在后端校验并落库；后端会从共享 gameplay contract 生成可读 prompt，不信任前端传来的 prompt 模板。玩法卡业务校验失败返回结构化 `422`，例如 `GAMEPLAY_CARD_INVALID`、`GAMEPLAY_CARD_PROFILE_REQUIRED`、`GAMEPLAY_CARD_MIN_ROUND`、`GAMEPLAY_CARD_POINTS_EXHAUSTED`、`GAMEPLAY_CARD_ON_COOLDOWN`。
-- `InterveneRequest.text` 和 `RetrospectiveInterveneRequest.text` 上限 2000 字符（strip 后计算）；普通空文本仍返回 `400 INTERVENTION_TEXT_EMPTY`。
-- 当多个 backend worker 共用同一个 SQLite 文件时，待处理干预会进入共享 pending queue。
+- `InterveneRequest.text` 和 `RetrospectiveInterveneRequest.text` 上限 2000 字符（strip 后计算）；空白文本当前由 schema validator 拦截为 FastAPI `422`。
+- 普通干预成功返回 `status / intervention_id / branch_id / round / pending_count / queued_ahead`，玩法卡路径还会返回更新后的 `gameplay_state`。批量干预返回 `count / interventions[]`，每项带 `intervention_id / branch_id / round / text`。回溯干预返回 `new_branch_id / source_branch_id / from_round / text / intervention_id`。
+- 普通和批量干预只接受 `SIMULATING` scenario；`NARRATING / DONE / ERROR / CANCELLED` 等状态返回 `409 INTERVENTION_SCENARIO_STATUS_INVALID`，不会返回假成功。回溯干预受 `FEATURE_COUNTERFACTUAL_REPLAY` gate 控制，关闭时返回 `404 FEATURE_DISABLED`；拿不到 simulation lock 时返回 `409 SIMULATION_ALREADY_RUNNING`；同一个 batch 里重复 branch 会返回 `422 BATCH_DUPLICATE_BRANCH`。
+- 回溯干预会 clone 到选中轮前一轮，再把干预排入新 replay branch；新分支带 `replay_kind=retrospective / replay_source_branch_id / replay_source_round`。如果后台调度失败，会清理新 branch、round/message、pending queue 和对应 log。
+- 当多个 backend worker 共用同一个 SQLite 文件时，待处理干预会进入共享 pending queue。持久化队列会先 claim/lease，不在模型处理前删除；过期 claim 会回到 `pending`，成功注入后删除，失败会保留为 `failed` 并写入 `failure_reason`。
+- scenario WS 的 `intervention_applied` 会带 `intervention_id / pending_count / queued_ahead`；`intervention_injected` 只带用户可见 `text` 和可选 `intervention_id`，不会广播玩法卡 prompt 或模型 prompt；`retrospective_start` 会带新分支和来源分支。
+- `GET /api/intervention-templates` 返回 `InterventionTemplateResponse[]`。模板包含 `name_en / name_zh / description_en / description_zh / template_en / template_zh`，`variables[]` 是 `{ key, label_en, label_zh, examples }` 对象数组。
 - `GET /api/scenario/{scenario_id}/intervention-effects` 走 scenario ownership 校验，只读取 `InterventionLog.effect_summary_json`，按最新 receipt 优先返回；旧行缺失或 malformed summary 会跳过，不会伪造 receipt，也不会修改 pending queue。
 
 ## Campaign Authority

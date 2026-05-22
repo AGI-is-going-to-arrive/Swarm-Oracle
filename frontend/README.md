@@ -91,7 +91,7 @@ React + TypeScript frontend for SwarmOracle.
 - `PredictionModal.tsx`
   structured prediction submit stays serial, uses the session-bound user id for the prediction API, and now blocks same-frame double-clicks while keeping the retry path after gameplay-state persistence errors
 - `InterventionReceiptCard.tsx`
-  reads persisted effects for the current scenario only, renders newest-first, returns no DOM for empty effects, and does not expose internal log ids
+  reads persisted effects for the current scenario only, renders newest-first after completion, shows the pending/injected lifecycle placeholder while the run is still active, returns no DOM for empty effects, and does not expose internal log ids
 - `ResumePanel.tsx`
   ResultView-side resume control for `POST /api/scenario/:id/resume`; waits for a source branch before loading checkpoints, prefers branch-scoped checkpoints when available, turns structured `compressed_summary` data into a readable preview, falls back to round input when no checkpoint is available or checkpoint loading fails, locks after success, and is covered by the dedicated resume smoke script
 - `CounterfactualPanel.tsx`
@@ -149,7 +149,7 @@ React + TypeScript frontend for SwarmOracle.
 - `ResultView.tsx`
   the result surface now includes a capability-gated `ResultVerdictPanel`; blank, null, or undefined verdicts render a neutral unavailable state that still shows the original question. Branch-level question answers in `EndingCardsGrid` lead the card above the probability bar, and `DirectorNotebook` prefers the story verdict before falling back to branch insight. The page also includes prediction subtitle switching, a ledger-style archive, director debrief, capability-gated `What's Next` bridge with locale-backed causal / replay / compare / workbench / agents / share copy, semantic disabled cards, historical source badges, and locale-backed faction-timeline lead copy. Campaign boundary notices, newly unlocked badge copy, archive key moments, verdict labels, confidence copy, and debrief moment details also read `result.*` locale keys
 - `InterventionModal.tsx`
-  standard / retrospective / batch intervention modal; retrospective mode follows the `counterfactual_replay` capability and stays disabled while capability loading, disabled, or probe-error states are active
+  standard / retrospective / batch intervention modal; retrospective mode follows the `counterfactual_replay` capability and stays disabled while capability loading, disabled, or probe-error states are active. The mode controls use pressed-button semantics, template labels/descriptions come from bilingual backend data, and structured template variables fall back safely when older responses omit them
 - `PostVerdictPanel.tsx`
   completed live roundtable `Deep Dive` panel; `1-on-1 Interview`, `Research Analyst`, and `Cross-Examine` keep stable tabpanel targets, show inline capability error/disabled placeholders, and do not mount disabled SSE subpanels
 - `resultHelpers.ts`
@@ -225,11 +225,12 @@ npm run build:spike:phaser-custom
 - Current frontend verification:
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
   - `npx eslint src/ --max-warnings=0`: pass
-  - full vitest: `206 files / 2318 tests passed`
-  - i18n key parity spot-check: `zh: 2791`, `en: 2791`
+  - full vitest: `206 files / 2328 tests passed`
+  - i18n key parity spot-check: `zh: 2800`, `en: 2800`
   - capability browser spot-check: Chromium / Firefox / WebKit covered CausalReviewView and TimelineGalaxy capability error + normal capability payload
   - custom Agent attach smoke: Chrome homepage quick selector renders, selecting an Agent shows the Start badge, console error count is 0, and desktop overflow is absent
-  - cross-browser caveat: `e2e:cross-browser` currently times out while waiting for Firefox DirectorState, so this file should not claim a fresh Firefox/WebKit full pass for the Agent quick-selector work
+  - intervention upgrade browser spot-check: Chromium mobile and desktop Firefox/WebKit scoped cross-browser checks passed for the fixture-first simulation path, director-state readiness, and result archive readback
+  - browser scope caveat: this is not BrowserStack/Sauce, native Safari/Edge, or real-device iOS/Android coverage
   - Pixel Theater browser spot-check: completed Theater shows the toolbar gameplay-card entry, opens the read-only gameplay cards modal, and reports 0 console errors in Chrome DevTools MCP
   - CampaignProgressSheet browser spot-check and campaign/gameplay browser E2E remain older scoped evidence, not this Pixel Theater pass
 - Older Sprint 0-4 rows below are historical artifacts, not the current pass-count source.
