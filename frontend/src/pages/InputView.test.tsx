@@ -287,8 +287,17 @@ async function openAdvancedSettings(user: ReturnType<typeof userEvent.setup>) {
 async function confirmLaunchDialog(user: ReturnType<typeof userEvent.setup>) {
   // Radix AlertDialog renders into document.body via Portal; query by role rather than container.
   const dialog = await screen.findByRole('dialog');
+  await waitForDialogDescription(dialog);
   const confirmBtn = within(dialog).getByRole('button', { name: 'home.submit' });
   await user.click(confirmBtn);
+}
+
+async function waitForDialogDescription(dialog: HTMLElement) {
+  const descriptionId = dialog.getAttribute('aria-describedby');
+  expect(descriptionId).toBeTruthy();
+  await waitFor(() => {
+    expect(document.getElementById(descriptionId as string)).toBeInTheDocument();
+  });
 }
 
 describe('InputView campaign progress', () => {
@@ -619,7 +628,7 @@ describe('InputView campaign progress', () => {
     });
     expect(screen.getByText('home.shared_challenge_prefilled')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await user.click(screen.getByRole('button', { name: /home\.submit/ }));
     await confirmLaunchDialog(user);
     await waitFor(() => {
       expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -643,7 +652,7 @@ describe('InputView campaign progress', () => {
     await user.type(screen.getAllByRole('textbox')[0], 'Fork profile smoke test');
     await openAdvancedSettings(user);
     await user.click(screen.getByRole('button', { name: 'home.runtime_preset_aggressive' }));
-    await user.click(screen.getByRole('button', { name: 'home.submit' }));
+    await user.click(screen.getByRole('button', { name: /home\.submit/ }));
     await confirmLaunchDialog(user);
 
     await waitFor(() => {
@@ -2755,11 +2764,37 @@ describe('inferProviderFromBaseUrl (P4-2 unit)', () => {
 });
 
 describe('InputView apiUserId wiring (P1)', () => {
+  const makeCustomAgentInfo = (id: string, name: string) => ({
+    id,
+    user_id: 'default_user',
+    kind: 'custom',
+    display_name: name,
+    role: 'Analyst',
+    persona: 'Custom persona',
+    decision_bias_json: null,
+    decision_bias: { caution: 0.5 },
+    knowledge_domain_json: null,
+    knowledge_domains: [],
+    preferred_tier: null,
+    continuity_key: id,
+    created_at: '2026-04-01T00:00:00Z',
+    updated_at: '2026-04-01T00:00:00Z',
+  });
+
   beforeEach(() => {
     window.sessionStorage.clear();
     window.localStorage.clear();
     window.localStorage.setItem('swarm_onboarding_completed', 'true');
     __resetCapabilityCacheForTests();
+    useAgentStore.setState({
+      identities: [],
+      loading: false,
+      loadingUserId: null,
+      error: null,
+      selectedIds: new Set(),
+      loadedUserId: null,
+      requestSeq: 0,
+    });
     setMockLanguage('en');
     changeLanguageMock.mockClear();
     createDebateMock.mockReset();
@@ -2877,5 +2912,97 @@ describe('InputView apiUserId wiring (P1)', () => {
         customAgentIdentityIds: expect.any(Array),
       }),
     );
+  });
+
+  it('does not prune selected agents while custom_agents capability is still loading', async () => {
+    getCapabilitiesMock.mockReturnValue(new Promise(() => {}));
+    useAgentStore.setState({
+      selectedIds: new Set(['agent-1', 'agent-2']),
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await act(async () => {});
+
+    expect(Array.from(useAgentStore.getState().selectedIds)).toEqual([
+      'agent-1',
+      'agent-2',
+    ]);
+  });
+
+  it('uses the same default custom-agent cap for UI and simulation payload', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      custom_agents: { enabled: true },
+    });
+    listAgentIdentitiesMock.mockResolvedValue([
+      makeCustomAgentInfo('agent-1', 'Agent One'),
+    ]);
+    useAgentStore.setState({
+      selectedIds: new Set(['agent-1']),
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Agent One');
+    await user.type(screen.getAllByRole('textbox')[0], 'What if one custom agent joins?');
+    await user.click(screen.getByRole('button', { name: /home\.submit/ }));
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customAgentIdentityIds: ['agent-1'],
+        }),
+      );
+    });
+  });
+
+  it('clamps debate custom-agent payload to the server capability limit', async () => {
+    const user = userEvent.setup();
+    createDebateMock.mockResolvedValue({
+      id: 'debate-agent-limit',
+      language: 'en',
+    });
+    getCapabilitiesMock.mockResolvedValue({
+      custom_agents: { enabled: true, max_custom_agents: 1 },
+    });
+    listAgentIdentitiesMock.mockResolvedValue([
+      makeCustomAgentInfo('agent-1', 'Agent One'),
+      makeCustomAgentInfo('agent-2', 'Agent Two'),
+    ]);
+    useAgentStore.setState({
+      selectedIds: new Set(['agent-1', 'agent-2']),
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<InputView />} />
+          <Route path="/debate/:id" element={<div>debate-route</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Agent One');
+    await user.type(screen.getAllByRole('textbox')[0], 'What if debate caps custom agents?');
+    await user.click(screen.getByRole('button', { name: 'debate.entry_cta' }));
+
+    await waitFor(() => {
+      expect(createDebateMock).toHaveBeenCalledWith(
+        'What if debate caps custom agents?',
+        undefined,
+        expect.objectContaining({ userId: 'default_user' }),
+        { proposition: 'agent-1', opposition: undefined },
+      );
+    });
   });
 });

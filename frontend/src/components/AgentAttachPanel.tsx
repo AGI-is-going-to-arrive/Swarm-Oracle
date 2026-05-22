@@ -8,9 +8,26 @@ import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAgentStore } from '../stores/agentStore';
+import { DECISION_BIAS_KEYS } from './Controls/decisionBias';
 import './AgentAttachPanel.css';
 
 const DEFAULT_MAX_AGENTS = 1;
+
+function sanitizePersona(persona: string | null | undefined): string | null {
+  if (!persona) return null;
+  const normalizedPersona = persona.normalize('NFKC');
+  const lines = normalizedPersona.split('\n').map((line) => {
+    const cleaned = line
+      .replace(/```+/g, '')
+      .replace(/untrusted\s*data/gi, '')
+      .trim();
+    if (!cleaned) return '';
+    const alphanumeric = cleaned.replace(/[^\p{L}\p{N}]+/gu, '');
+    return alphanumeric ? cleaned : '';
+  });
+  const cleaned = lines.filter(Boolean).join('\n').trim();
+  return cleaned || null;
+}
 
 interface Props {
   userId: string;
@@ -133,6 +150,17 @@ export function AgentAttachPanel({ userId, visible, maxSelected }: Props) {
           const selected = selectedIds.has(agent.id);
           const disabled = !selected && (atLimit || effectiveMax === 0);
           const tierClass = (agent.preferred_tier || 'IMPORTANT').toLowerCase();
+          const cleanedPersona = sanitizePersona(agent.persona);
+          const biasEntries: Array<{ key: string; level: 'high' | 'low' }> = [];
+          if (agent.decision_bias && typeof agent.decision_bias === 'object') {
+            for (const key of DECISION_BIAS_KEYS) {
+              const val = (agent.decision_bias as Record<string, unknown>)[key];
+              if (typeof val === 'number' && Number.isFinite(val)) {
+                if (val > 0.65) biasEntries.push({ key, level: 'high' });
+                else if (val < 0.35) biasEntries.push({ key, level: 'low' });
+              }
+            }
+          }
 
           return (
             <label
@@ -164,8 +192,8 @@ export function AgentAttachPanel({ userId, visible, maxSelected }: Props) {
                 />
               </div>
 
-              {agent.persona && (
-                <p className="agent-attach-card__persona">{agent.persona}</p>
+              {cleanedPersona && (
+                <p className="agent-attach-card__persona">{cleanedPersona}</p>
               )}
 
               {agent.knowledge_domains && agent.knowledge_domains.length > 0 && (
@@ -183,15 +211,18 @@ export function AgentAttachPanel({ userId, visible, maxSelected }: Props) {
                 </div>
               )}
 
-              {agent.decision_bias && typeof agent.decision_bias === 'object' && Object.keys(agent.decision_bias).length > 0 && (
-                <span className="agent-attach-card__bias">
-                  {Object.entries(agent.decision_bias)
-                    .map(
-                      ([k, v]) =>
-                        `${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`,
-                    )
-                    .join(', ')}
-                </span>
+              {biasEntries.length > 0 && (
+                <div className="agent-attach-card__bias" role="group" aria-label={t('agents.bias_label')}>
+                  {biasEntries.map(({ key, level }) => (
+                    <span
+                      key={key}
+                      className={`agent-attach-bias-chip agent-attach-bias-chip--${level}`}
+                      aria-label={`${t(`agents.bias_keys.${key}`)}: ${t(`agents.bias_levels.${level}`)}`}
+                    >
+                      {t(`agents.bias_keys.${key}`)}: {t(`agents.bias_levels.${level}`)}
+                    </span>
+                  ))}
+                </div>
               )}
             </label>
           );

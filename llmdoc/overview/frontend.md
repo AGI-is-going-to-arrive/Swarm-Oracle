@@ -160,15 +160,16 @@
   - 真正 launch 前使用 Radix AlertDialog 展示问题和本局设置，关闭后把焦点还给 textarea
 - InputView 底部安全提示当前走 locale key；中英切换时会一起更新。
 - InputView 的 placeholder typewriter、确认弹窗入场和首页动效都会遵守 `prefers-reduced-motion`；textarea 提交有 IME composition guard，中文拼音回车不会误触发 launch。
-- InputView 当前也会在 `custom_agents` capability 开启时显示主区 `AgentSelectionStrip` 和高级设置里的 `AgentAttachPanel`：
+- InputView 当前也会在 `custom_agents` capability 开启时显示主区 `AgentSelectionStrip` 和 Radix Sheet `AgentDrawer`：
   - 两个入口都用 `getSessionBoundUserId()` 解析出的 API user id 读取 Agent；`directorIdentity` 只用于展示导演名
-  - 主区 strip 只显示轻量 pill、最多 3 个 Agent 和 `+N more`；完整 persona、knowledge domains 和 decision bias 仍在高级设置的 attach panel 中展示
+  - 主区 strip 只显示轻量 pill、最多 3 个 Agent 和 `+N more`；空列表仍显示说明和 `Manage all`，方便用户进入 Agent Library / Workshop
+  - 完整 persona、knowledge domains 和 decision bias 现在只在抽屉内的 attach panel 展示；Advanced Settings 只保留 web search、BYOK、runtime preset 等推演设置
   - 选中的自建 Agent 会通过 `customAgentIdentityIds -> custom_agent_identity_ids` 传给主推演
   - 可选数量按 `min(numAgents, capabilities.custom_agents.max_custom_agents)` 动态收口；capability 没有返回上限时前端按 1 个自建 Agent 保守兜底
-  - 提交 scenario 前会再次同步裁剪 selected IDs，避免用户刚调低 Agent 数量就立刻提交时带上 stale 超限选择；capability 关闭时不会显示 Start badge，也不会提交旧 selected IDs
+  - capability 还在 loading 时不会先裁剪本地选择；提交 scenario 前会再次从 store 读取并同步裁剪 selected IDs，避免用户刚调低 Agent 数量就立刻提交时带上 stale 超限选择；capability 关闭时不会显示 Start badge，也不会提交旧 selected IDs
   - 创建 Debate 时，会把当前选中的前 2 个自建 Agent 透传成 `customAgentIds -> custom_agent_ids`
   - 这条链路只传 identity id，不引入 URL 或外部 fetch 配置
-  - strip 与 attach panel 都按文本节点渲染 Agent 名字、persona、knowledge domains 和 decision bias，不走 `dangerouslySetInnerHTML`
+  - strip 与 attach panel 都按文本节点渲染 Agent 名字、persona、knowledge domains 和 decision bias，不走 `dangerouslySetInnerHTML`；persona 会剥掉 fence 与 `UNTRUSTED DATA` 标记，decision bias 只显示固定 5 维里的高/低 chips，不展示 raw JSON
   - `agentStore` 会按 user id 缓存身份列表，忽略迟到响应，同一 user 的 in-flight 请求会去重，并在 user/list 变化时剪掉已经失效的 selected id
 
 ## Theater 与性能边界
@@ -264,8 +265,9 @@
 | `e2e-web-search-suite.mjs` | `frontend/scripts/e2e-web-search-suite.mjs` | 首页搜索增强专项 E2E：custom override、provider/key/base URL、搜索深度、scenario 请求体校验 |
 | `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择；桌面端 `@dnd-kit/core` 入席交互，移动端保留 click-to-seat） |
 | `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作 + phase 分隔线 + speaker 左侧色标） |
-| `AgentSelectionStrip.tsx` | `frontend/src/components/AgentSelectionStrip.tsx` | 首页主区自建 Agent 轻量选择器；用 fieldset/legend + 原生 checkbox，最多展示 3 个 pill 和 `+N more`，支持 loading/error 状态、keyboard focus、forced-colors 和 reduced-motion |
-| `AgentAttachPanel.tsx` | `frontend/src/components/AgentAttachPanel.tsx` | 首页高级设置里的自建 Agent 选择卡片；按 `maxSelected` 动态限制数量，支持 loading/error/retry/empty 状态，长 persona 和复杂 decision bias 只作为文本展示 |
+| `AgentSelectionStrip.tsx` | `frontend/src/components/AgentSelectionStrip.tsx` | 首页主区自建 Agent 轻量选择器；用 fieldset/legend + 原生 checkbox，最多展示 3 个 pill 和 `+N more`，空列表保留 `Manage all` 入口，支持 loading/error 状态、keyboard focus、forced-colors 和 reduced-motion |
+| `AgentDrawer.tsx` | `frontend/src/components/AgentDrawer.tsx` | 首页自建 Agent 管理抽屉；基于 Radix Sheet，受控 `open/onOpenChange`，把完整 `AgentAttachPanel` 放进 focus-trapped drawer，并隐藏默认 close 以避免重复关闭按钮 |
+| `AgentAttachPanel.tsx` | `frontend/src/components/AgentAttachPanel.tsx` | 首页自建 Agent 完整选择面板；按 `maxSelected` 动态限制数量，支持 loading/error/retry/empty 状态，persona 会清掉 fence / `UNTRUSTED DATA` 标记，decision bias 以固定维度 chips 展示 |
 | `AgentCard.tsx` | `frontend/src/components/AgentCard.tsx` | Agent Library 共享卡片；展示 tier、domains、favorite 状态与 profile/edit/export 等动作；长 persona 按 Unicode code point 截断 |
 | `AgentProfileModal.tsx` | `frontend/src/components/AgentProfileModal.tsx` | Agent profile 弹窗；展示成长、记忆、timeline 和 decision bias 分布，切换 Agent 或关闭后的迟到请求不会覆盖当前弹窗 |
 | `AgentProfileSheet.tsx` | `frontend/src/components/result/AgentProfileSheet.tsx` | 结果页内联 Agent 档案 sheet；用于 generated / replay Agent，带 request sequence guard、loading/error/empty 状态、reduced-motion/forced-colors/mobile CSS 和 generated Agent 的继续对话入口 |
@@ -646,7 +648,7 @@
   - `npm exec -- vitest run src/components/BranchTree.test.tsx`：`5 passed`
   - `npm exec -- eslint src/components/BranchTree.tsx src/components/BranchNode.tsx src/components/BranchTree.test.tsx src/components/branchTitle.ts`：通过
   - `npm exec -- tsc --noEmit -p tsconfig.app.json`：通过
-- custom agent upgrade browser spot-check 已覆盖桌面 `/agents` 创建 IMPORTANT / CROWD、tier badge、编辑回填、tooltip hover、ResultView bridge、移动端 tier selector 单列，以及 Debate 请求体里的 `custom_agent_ids`。
+- custom agent browser spot-check 当前覆盖桌面 `/agents` 创建 IMPORTANT / CROWD、tier badge、编辑回填、Agent drawer、ResultView bridge、移动端 tier selector 单列，以及 Debate 请求体里的 `custom_agent_ids`。
 - frontend 目标文件 `eslint`、`typecheck`、`build`（含 `perf:budgets:check`）当前通过。
 - fixture-backed local preview 浏览器复核当前已补：
   - ResultView bridge DOM / disabled 样式

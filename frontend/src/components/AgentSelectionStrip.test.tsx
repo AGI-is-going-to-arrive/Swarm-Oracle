@@ -21,6 +21,7 @@ vi.mock('react-i18next', () => ({
         'agents.quick_select_loading': 'Loading agents…',
         'agents.quick_select_error': 'Could not load agents.',
         'agents.manage_all': 'Manage all',
+        'agents.empty_cta': 'No custom agents yet.',
       };
       return labels[key] ?? fallbackOrOptions ?? key;
     },
@@ -99,14 +100,14 @@ describe('AgentSelectionStrip', () => {
     expect(listAgentIdentitiesMock).not.toHaveBeenCalled();
   });
 
-  it('returns null when there are no custom agents', async () => {
+  it('keeps the manage entry visible when there are no custom agents', async () => {
     listAgentIdentitiesMock.mockResolvedValue([makeAgent(1, 'generated')]);
     useAgentStore.setState({
       identities: [makeAgent(1, 'generated')],
       loadedUserId: 'user-1',
     });
 
-    const { container } = render(
+    render(
       <AgentSelectionStrip
         userId="user-1"
         visible={true}
@@ -115,9 +116,8 @@ describe('AgentSelectionStrip', () => {
       />,
     );
 
-    await waitFor(() => {
-      expect(container).toBeEmptyDOMElement();
-    });
+    expect(await screen.findByText('No custom agents yet.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manage all' })).toBeInTheDocument();
   });
 
   it('shows loading state with role="status"', () => {

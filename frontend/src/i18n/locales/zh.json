@@ -1773,6 +1773,21 @@
         "error_extraction_failed": "无法从该文档中提取实体，请换一份 PDF 重试。",
         "error_unauthorized": "你没有上传文档的权限，请登录后重试。",
         "error_generic": "上传失败，请重试。"
+      },
+      "drawer_title": "选择 Agent",
+      "drawer_close": "关闭",
+      "bias_label": "决策偏向",
+      "bias_balanced": "均衡",
+      "bias_keys": {
+        "caution": "谨慎度",
+        "optimism": "乐观度",
+        "conservatism": "保守度",
+        "risk_tolerance": "风险容忍",
+        "creativity": "创造力"
+      },
+      "bias_levels": {
+        "high": "高",
+        "low": "低"
       }
     },
     "agent_workshop": {

@@ -50,7 +50,7 @@
   display: block;
   padding: 12px;
   border: 1px solid rgba(64, 48, 40, 0.08);
-  border-radius: 12px;
+  border-radius: 8px;
   cursor: pointer;
   transition: border-color 0.15s;
 }
@@ -169,16 +169,31 @@
 }
 
 .agent-attach-card__bias {
-  display: -webkit-box;
-  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 4px;
+  margin-top: 8px;
+}
+
+.agent-attach-bias-chip {
+  display: inline-flex;
+  align-items: center;
   font-size: 0.75rem;
-  color: var(--text-muted, #8a7e74);
-  font-style: italic;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.agent-attach-bias-chip--high {
+  background: var(--accent-high-bg, #ebf8ff);
+  color: var(--accent-high-text, #2b6cb0);
+  border: 1px solid var(--accent-high-border, rgba(43, 108, 176, 0.12));
+}
+
+.agent-attach-bias-chip--low {
+  background: var(--accent-low-bg, #fff5f5);
+  color: var(--accent-low-text, #c53030);
+  border: 1px solid var(--accent-low-border, rgba(197, 48, 48, 0.12));
 }
 
 .agent-attach-panel__browse {
@@ -256,8 +271,18 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
+@media (forced-colors: active) {
   .agent-attach-card {
-    transition: none;
+    border: 1.5px solid CanvasText;
+  }
+  .agent-attach-card--selected {
+    border-color: Highlight;
+    outline: 2px solid Highlight;
+  }
+  .agent-attach-card--disabled {
+    border-color: GrayText;
+  }
+  .agent-attach-bias-chip {
+    border: 1px solid CanvasText;
   }
 }

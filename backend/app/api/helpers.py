@@ -51,6 +51,11 @@ from app.services.simulator import reconcile_scenario_done_if_complete, run_simu
 
 logger = logging.getLogger(__name__)
 _SESSION_AUTH_CACHE_KEY = "_session_auth_cache"
+_UNTRUSTED_AGENT_PROVENANCE_KEYS = frozenset({
+    "identity_id",
+    "agent_identity_id",
+    "source_type",
+})
 
 
 @dataclass(frozen=True)
@@ -142,6 +147,153 @@ def _build_custom_agents_to_inject(
             logger.debug("custom agent injection failed for %s (non-blocking)", cid, exc_info=True)
             continue
     return custom_agents_to_inject
+
+
+def _strip_untrusted_agent_provenance(agent_data: object) -> dict:
+    if not isinstance(agent_data, dict):
+        return {}
+    return {
+        key: value
+        for key, value in agent_data.items()
+        if key not in _UNTRUSTED_AGENT_PROVENANCE_KEYS
+    }
+
+
+def _inject_custom_agents(
+    parsed_agents: list[dict],
+    custom_agents_to_inject: list[dict],
+    num_agents: int,
+) -> list[dict]:
+    """Inject custom agents in-place and return replacement metadata."""
+    if not custom_agents_to_inject:
+        return []
+
+    try:
+        capacity = max(0, int(num_agents))
+    except (TypeError, ValueError):
+        capacity = 0
+
+    if len(parsed_agents) > capacity:
+        del parsed_agents[capacity:]
+    if capacity <= 0:
+        return []
+
+    def identity_id_for(agent_data: dict) -> str:
+        return str(
+            agent_data.get("identity_id")
+            or agent_data.get("agent_identity_id")
+            or ""
+        ).strip()
+
+    def is_custom_agent(agent_data: dict) -> bool:
+        return str(agent_data.get("source_type") or "").lower() == "custom"
+
+    def is_replaceable_slot(agent_data: dict) -> bool:
+        return not is_custom_agent(agent_data)
+
+    def occupied_names(excluded_index: int | None = None) -> set[str]:
+        names: set[str] = set()
+        for index, agent_data in enumerate(parsed_agents):
+            if excluded_index is not None and index == excluded_index:
+                continue
+            name = str(agent_data.get("name") or "").strip()
+            if name:
+                names.add(name)
+        return names
+
+    def unique_custom_name(custom_agent: dict, target_index: int | None) -> str:
+        base_name = str(custom_agent.get("name") or "CustomAgent").strip()
+        if not base_name:
+            base_name = "CustomAgent"
+        names_in_use = occupied_names(target_index)
+        if base_name not in names_in_use:
+            return base_name
+
+        identity_id = identity_id_for(custom_agent)
+        suffix = identity_id[:6] or "custom"
+        candidate = f"{base_name}_{suffix}"
+        counter = 2
+        while candidate in names_in_use:
+            candidate = f"{base_name}_{suffix}_{counter}"
+            counter += 1
+        return candidate
+
+    seen_identity_ids: set[str] = set()
+    for agent_data in parsed_agents:
+        if is_custom_agent(agent_data):
+            identity_id = identity_id_for(agent_data)
+            if identity_id:
+                seen_identity_ids.add(identity_id)
+
+    crowd_indices = [
+        index
+        for index, agent_data in enumerate(parsed_agents)
+        if (
+            is_replaceable_slot(agent_data)
+            and str(agent_data.get("tier") or "IMPORTANT").upper() == "CROWD"
+        )
+    ]
+    crowd_index_set = set(crowd_indices)
+    tail_indices = [
+        index
+        for index in range(len(parsed_agents) - 1, -1, -1)
+        if index not in crowd_index_set and is_replaceable_slot(parsed_agents[index])
+    ]
+
+    replacement_metadata: list[dict] = []
+    successful_injections = 0
+    crowd_cursor = 0
+    tail_cursor = 0
+
+    for custom_agent in custom_agents_to_inject:
+        identity_id = identity_id_for(custom_agent)
+        if not identity_id or identity_id in seen_identity_ids:
+            continue
+
+        if crowd_cursor < len(crowd_indices):
+            target_index = crowd_indices[crowd_cursor]
+            crowd_cursor += 1
+        elif tail_cursor < len(tail_indices):
+            target_index = tail_indices[tail_cursor]
+            tail_cursor += 1
+        elif len(parsed_agents) < capacity:
+            target_index = None
+        else:
+            break
+
+        injected_agent = dict(custom_agent)
+        injected_agent["identity_id"] = identity_id
+        injected_agent["source_type"] = "custom"
+        injected_agent["name"] = unique_custom_name(injected_agent, target_index)
+
+        if target_index is None:
+            parsed_agents.append(injected_agent)
+            replacement_metadata.append({
+                "original_index": None,
+                "original_name": "",
+                "injected_name": injected_agent["name"],
+                "injected_identity_id": identity_id,
+            })
+        else:
+            original_agent = parsed_agents[target_index]
+            original_name = str(original_agent.get("name") or "").strip()
+            parsed_agents[target_index] = injected_agent
+            replacement_metadata.append({
+                "original_index": target_index,
+                "original_name": original_name,
+                "injected_name": injected_agent["name"],
+                "injected_identity_id": identity_id,
+            })
+
+        seen_identity_ids.add(identity_id)
+        successful_injections += 1
+        if successful_injections >= capacity:
+            break
+
+    if len(parsed_agents) > capacity:
+        del parsed_agents[capacity:]
+
+    return replacement_metadata
 
 
 def _normalize_agent_tier(raw_tier: object, *, is_custom: bool = False) -> AgentTier:
@@ -890,6 +1042,10 @@ async def parse_and_run_background(
         parsed["llm_requests_per_minute"] = llm_requests_per_minute
     if llm_tokens_per_minute is not None:
         parsed["llm_tokens_per_minute"] = llm_tokens_per_minute
+    parsed["agents"] = [
+        _strip_untrusted_agent_provenance(agent_data)
+        for agent_data in parsed.get("agents", [])
+    ]
 
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
@@ -967,26 +1123,36 @@ async def parse_and_run_background(
         )
 
         parsed_agents = list(parsed.get("agents", []))
-        # Replace CROWD slots with custom agents, tracking name changes
-        crowd_name_remap: dict[str, str] = {}
-        if custom_agents_to_inject:
-            crowd_indices = [
-                i for i, a in enumerate(parsed_agents)
-                if a.get("tier", "IMPORTANT") == "CROWD"
-            ]
-            for j, custom in enumerate(custom_agents_to_inject):
-                if j < len(crowd_indices):
-                    old_name = parsed_agents[crowd_indices[j]].get("name", "")
-                    new_name = custom.get("name", "")
-                    if old_name and old_name != new_name:
-                        crowd_name_remap[old_name] = new_name
-                    parsed_agents[crowd_indices[j]] = custom
-                elif len(parsed_agents) < num_agents:
-                    parsed_agents.append(custom)
+        original_agent_name_counts: dict[str, int] = {}
+        for agent_data in parsed_agents:
+            original_name = str(agent_data.get("name") or "").strip()
+            if original_name:
+                original_agent_name_counts[original_name] = (
+                    original_agent_name_counts.get(original_name, 0) + 1
+                )
+        custom_agent_replacement_metadata = _inject_custom_agents(
+            parsed_agents,
+            custom_agents_to_inject,
+            num_agents,
+        )
+        custom_agent_name_remap = {
+            item["original_name"]: item["injected_name"]
+            for item in custom_agent_replacement_metadata
+            if item.get("original_name") and item.get("injected_name")
+            and original_agent_name_counts.get(str(item["original_name"]), 0) == 1
+        }
+        injected_custom_identity_ids = {
+            str(item["injected_identity_id"])
+            for item in custom_agent_replacement_metadata
+            if item.get("injected_identity_id")
+        }
 
         agent_name_to_id: dict[str, str] = {}
         for agent_data in parsed_agents:
-            is_custom_agent = agent_data.get("source_type") == "custom"
+            pre_assigned_id = str(agent_data.get("identity_id") or "").strip()
+            is_custom_agent = bool(
+                pre_assigned_id and pre_assigned_id in injected_custom_identity_ids
+            )
             tier = _normalize_agent_tier(
                 agent_data.get("tier", "IMPORTANT"),
                 is_custom=is_custom_agent,
@@ -1000,7 +1166,10 @@ async def parse_and_run_background(
                 stance=agent_data.get("stance", ""),
             )
             # Phase 3 F1: Resolve identity for each agent
-            if _resolve_id and user_id:
+            if is_custom_agent and pre_assigned_id:
+                agent.agent_identity_id = pre_assigned_id
+                agent.source_type = "custom"
+            elif _resolve_id and user_id:
                 try:
                     role = agent_data.get("role", "")
                     persona = agent_data.get("persona")
@@ -1021,11 +1190,7 @@ async def parse_and_run_background(
                                 role,
                             ) or "",
                         )
-                    pre_assigned_id = agent_data.get("identity_id")
-                    if pre_assigned_id:
-                        agent.agent_identity_id = pre_assigned_id
-                        agent.source_type = "custom"
-                    elif continuity_override and continuity_override["action"] == "reuse_existing":
+                    if continuity_override and continuity_override["action"] == "reuse_existing":
                         override_identity_id = continuity_override.get("identity_id")
                         from app.models.agent_identity import AgentIdentity
                         existing_identity = (
@@ -1078,13 +1243,14 @@ async def parse_and_run_background(
         if custom_agents_to_inject:
             parsed["agents"] = parsed_agents
             # Also remap names inside groups so simulator reads correct names
-            if crowd_name_remap and parsed.get("groups"):
+            if custom_agent_name_remap and parsed.get("groups"):
                 for g in parsed["groups"]:
                     leader = g.get("leader", "")
-                    if leader in crowd_name_remap:
-                        g["leader"] = crowd_name_remap[leader]
+                    if leader in custom_agent_name_remap:
+                        g["leader"] = custom_agent_name_remap[leader]
                     g["members"] = [
-                        crowd_name_remap.get(m, m) for m in g.get("members", [])
+                        custom_agent_name_remap.get(m, m)
+                        for m in g.get("members", [])
                     ]
             scenario.parsed_context = parsed
             session.add(scenario)
@@ -1092,7 +1258,7 @@ async def parse_and_run_background(
         if hierarchical and parsed.get("groups"):
             for group_data in parsed["groups"]:
                 leader_name = group_data.get("leader", "")
-                resolved_leader = crowd_name_remap.get(leader_name, leader_name)
+                resolved_leader = custom_agent_name_remap.get(leader_name, leader_name)
                 leader_id = agent_name_to_id.get(resolved_leader)
                 members = group_data.get("members", [])
 
@@ -1107,7 +1273,7 @@ async def parse_and_run_background(
 
                 matched_count = 0
                 for member_name in members:
-                    resolved_name = crowd_name_remap.get(member_name, member_name)
+                    resolved_name = custom_agent_name_remap.get(member_name, member_name)
                     member_agent_id = agent_name_to_id.get(resolved_name)
                     if not member_agent_id:
                         continue

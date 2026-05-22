@@ -207,6 +207,9 @@
   - `MAX_CUSTOM_AGENTS` 默认 20；主推演正常请求会把自建 Agent 上限收口到 `min(num_agents, MAX_CUSTOM_AGENTS)`，请求没带 `num_agents` 时按默认 Agent 数计算
   - `custom_agent_identity_ids` 必须是 list；后端会 trim、跳过空字符串、去重，并在 schema 和注入层都做数量限制
   - 注入层只接受当前用户自己的 `kind=custom` identity；不存在、跨用户、非 custom 或单个读取异常都会 fail-soft 跳过，不消耗有效注入名额
+  - 主推演注入顺序是先替换非 custom 的 `CROWD` 槽，再从尾部替换非 custom Agent，最后才在容量内追加；已有 `source_type=custom` 的 Agent 不会被当作可替换槽
+  - parser 返回的 `identity_id / agent_identity_id / source_type` 会先被剥掉；只有本次注入出来的自建 Agent 才能在持久化 `Agent` 上写入 `agent_identity_id` 和 `source_type=custom`
+  - 自建 Agent 名字撞名时会生成唯一名字；被替换的旧名字只有在原始解析结果里唯一时才会同步 remap 到 group leader / members
   - 迁移 `026_agent_identity_preferred_tier` 给 `agent_identity` 增加 `preferred_tier`，SQLite 走幂等 `ALTER TABLE ... ADD COLUMN ... DEFAULT 'IMPORTANT'`
   - 迁移 `028_agent_favorite` 给 `agent_identity` 增加 `is_favorite`，用于 Agent Library 收藏筛选
   - workshop create/update 只接受 `IMPORTANT / CROWD`

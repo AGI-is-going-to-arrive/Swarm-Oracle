@@ -8,8 +8,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlmodel import Session, select
 
+from app.models.agent_group import AgentGroup, AgentGroupMember
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
-from app.models.database import Agent, Branch, Scenario, ScenarioStatus, get_engine
+from app.models.database import (
+    Agent,
+    Branch,
+    Scenario,
+    ScenarioStatus,
+    get_engine,
+)
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -185,7 +192,7 @@ class TestCustomAgentOwnership:
         assert result == []
 
     @patch("app.config.settings.FEATURE_CUSTOM_AGENTS", True)
-    async def test_custom_agent_not_appended_beyond_requested_agent_count(self, monkeypatch):
+    async def test_custom_agent_replaces_tail_when_roster_at_requested_count(self, monkeypatch):
         from app.api import helpers
         from app.config import settings
 
@@ -239,8 +246,410 @@ class TestCustomAgentOwnership:
             ).all()
 
         assert len(agents) == 2
-        assert {agent.name for agent in agents} == {"Alpha", "Beta"}
-        assert all(agent.agent_identity_id != custom_id for agent in agents)
+        assert {agent.name for agent in agents} == {"Alpha", "Agent-custom"}
+        custom_agents = [agent for agent in agents if agent.agent_identity_id == custom_id]
+        assert len(custom_agents) == 1
+        assert custom_agents[0].source_type == "custom"
+
+    def test_inject_custom_agents_renames_colliding_tail_replacement(self):
+        from app.api.helpers import _inject_custom_agents
+
+        parsed_agents = [
+            {"name": "Alpha", "role": "Lead", "tier": "IMPORTANT"},
+            {"name": "Beta", "role": "Ops", "tier": "IMPORTANT"},
+        ]
+        custom_agents = [{
+            "name": "Alpha",
+            "role": "Custom",
+            "persona": "keeps metadata",
+            "tier": "IMPORTANT",
+            "identity_id": "customabcdef123",
+            "source_type": "custom",
+            "knowledge_domains": ["supply"],
+            "decision_bias": {"caution": 0.8},
+        }]
+
+        metadata = _inject_custom_agents(parsed_agents, custom_agents, 2)
+
+        assert [agent["name"] for agent in parsed_agents] == ["Alpha", "Alpha_custom"]
+        assert parsed_agents[1]["persona"] == "keeps metadata"
+        assert parsed_agents[1]["knowledge_domains"] == ["supply"]
+        assert parsed_agents[1]["decision_bias"] == {"caution": 0.8}
+        assert metadata == [{
+            "original_index": 1,
+            "original_name": "Beta",
+            "injected_name": "Alpha_custom",
+            "injected_identity_id": "customabcdef123",
+        }]
+
+    def test_inject_custom_agents_skips_existing_custom_identity(self):
+        from app.api.helpers import _inject_custom_agents
+
+        parsed_agents = [
+            {
+                "name": "Existing",
+                "tier": "IMPORTANT",
+                "source_type": "custom",
+                "identity_id": "custom-one",
+            },
+            {"name": "Worker", "tier": "IMPORTANT"},
+        ]
+        custom_agents = [
+            {"name": "Existing", "identity_id": "custom-one", "source_type": "custom"},
+            {"name": "New", "identity_id": "custom-two", "source_type": "custom"},
+            {"name": "Overflow", "identity_id": "custom-three", "source_type": "custom"},
+        ]
+
+        metadata = _inject_custom_agents(parsed_agents, custom_agents, 2)
+
+        assert len(parsed_agents) == 2
+        assert [agent["name"] for agent in parsed_agents] == ["Existing", "New"]
+        assert [item["injected_identity_id"] for item in metadata] == ["custom-two"]
+
+    @patch("app.config.settings.FEATURE_CUSTOM_AGENTS", True)
+    async def test_custom_agent_persists_source_type_when_identity_feature_disabled(
+        self,
+        monkeypatch,
+    ):
+        from app.api import helpers
+        from app.config import settings
+
+        async def fake_parse_question(*args, **kwargs):
+            return {
+                "agents": [
+                    {
+                        "name": "Generated Crowd",
+                        "role": "Observer",
+                        "persona": "",
+                        "tier": "CROWD",
+                    },
+                ],
+                "groups": [],
+            }
+
+        async def fake_run_sim_background(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(helpers, "parse_question", fake_parse_question)
+        monkeypatch.setattr(helpers, "run_sim_background", fake_run_sim_background)
+        monkeypatch.setattr(settings, "FEATURE_AGENT_IDENTITY", False)
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario_id = _create_scenario(session, user_id="alice")
+            custom_id = _create_identity(session, user_id="alice", suffix="stamped")
+
+        await helpers.parse_and_run_background(
+            scenario_id,
+            question="What if a custom agent joins?",
+            num_agents=1,
+            mode="blackboard",
+            hierarchical=False,
+            rounds=1,
+            visualization_enabled=False,
+            reasoning_effort=None,
+            temperature=None,
+            branch_sensitivity=None,
+            fork_prompt_variant=None,
+            fork_detector_active_branch_limit=None,
+            user_id="alice",
+            llm_api_key=None,
+            llm_base_url=None,
+            llm_model=None,
+            llm_requests_per_minute=None,
+            llm_tokens_per_minute=None,
+            disable_user_quota=None,
+            custom_agent_identity_ids=[custom_id],
+        )
+
+        with Session(engine) as session:
+            agents = session.exec(
+                select(Agent).where(Agent.scenario_id == scenario_id)
+            ).all()
+
+        assert len(agents) == 1
+        assert agents[0].agent_identity_id == custom_id
+        assert agents[0].source_type == "custom"
+
+    def test_inject_custom_agents_crowd_priority_then_tail(self):
+        from app.api.helpers import _inject_custom_agents
+
+        parsed_agents = [
+            {"name": "Anchor", "tier": "IMPORTANT"},
+            {"name": "Crowd Slot", "tier": "CROWD"},
+            {"name": "Tail Slot", "tier": "IMPORTANT"},
+        ]
+        custom_agents = [
+            {"name": "Custom One", "identity_id": "custom-one", "source_type": "custom"},
+            {"name": "Custom Two", "identity_id": "custom-two", "source_type": "custom"},
+        ]
+
+        metadata = _inject_custom_agents(parsed_agents, custom_agents, 3)
+
+        assert [agent["name"] for agent in parsed_agents] == [
+            "Anchor",
+            "Custom One",
+            "Custom Two",
+        ]
+        assert [item["original_index"] for item in metadata] == [1, 2]
+        assert [item["original_name"] for item in metadata] == ["Crowd Slot", "Tail Slot"]
+
+    def test_inject_custom_agents_replaces_tail_before_appending_with_spare_capacity(self):
+        from app.api.helpers import _inject_custom_agents
+
+        parsed_agents = [
+            {
+                "name": "Existing Custom",
+                "tier": "IMPORTANT",
+                "source_type": "custom",
+                "identity_id": "existing-custom",
+            },
+            {"name": "Tail Slot", "tier": "IMPORTANT"},
+        ]
+        custom_agents = [
+            {"name": "Custom One", "identity_id": "custom-one", "source_type": "custom"},
+            {"name": "Custom Two", "identity_id": "custom-two", "source_type": "custom"},
+        ]
+
+        metadata = _inject_custom_agents(parsed_agents, custom_agents, 3)
+
+        assert [agent["name"] for agent in parsed_agents] == [
+            "Existing Custom",
+            "Custom One",
+            "Custom Two",
+        ]
+        assert [item["original_index"] for item in metadata] == [1, None]
+        assert [item["injected_identity_id"] for item in metadata] == [
+            "custom-one",
+            "custom-two",
+        ]
+
+    def test_inject_custom_agents_dedupes_by_identity(self):
+        from app.api.helpers import _inject_custom_agents
+
+        parsed_agents = [
+            {"name": "Crowd Slot", "tier": "CROWD"},
+            {"name": "Worker", "tier": "IMPORTANT"},
+        ]
+        custom_agents = [
+            {"name": "Custom One", "identity_id": "same-id", "source_type": "custom"},
+            {"name": "Custom Again", "identity_id": "same-id", "source_type": "custom"},
+        ]
+
+        metadata = _inject_custom_agents(parsed_agents, custom_agents, 2)
+
+        assert [agent["name"] for agent in parsed_agents] == ["Custom One", "Worker"]
+        assert [item["injected_identity_id"] for item in metadata] == ["same-id"]
+
+    def test_inject_custom_agents_respects_capacity_zero(self):
+        from app.api.helpers import _inject_custom_agents
+
+        parsed_agents = [{"name": "Existing", "tier": "IMPORTANT"}]
+        custom_agents = [
+            {"name": "Custom", "identity_id": "custom-one", "source_type": "custom"},
+        ]
+
+        metadata = _inject_custom_agents(parsed_agents, custom_agents, 0)
+
+        assert metadata == []
+        assert parsed_agents == []
+
+    def test_inject_custom_agents_respects_negative_capacity(self):
+        from app.api.helpers import _inject_custom_agents
+
+        parsed_agents = [{"name": "Existing", "tier": "IMPORTANT"}]
+        custom_agents = [
+            {"name": "Custom", "identity_id": "custom-one", "source_type": "custom"},
+        ]
+
+        metadata = _inject_custom_agents(parsed_agents, custom_agents, -4)
+
+        assert metadata == []
+        assert parsed_agents == []
+
+    def test_inject_custom_agents_handles_large_capacity_after_tail_replacement(self):
+        from app.api.helpers import _inject_custom_agents
+
+        parsed_agents = [{"name": "Generated", "tier": "IMPORTANT"}]
+        custom_agents = [
+            {"name": "Custom One", "identity_id": "custom-one", "source_type": "custom"},
+            {"name": "Custom Two", "identity_id": "custom-two", "source_type": "custom"},
+        ]
+
+        metadata = _inject_custom_agents(parsed_agents, custom_agents, 99)
+
+        assert [agent["name"] for agent in parsed_agents] == ["Custom One", "Custom Two"]
+        assert [item["original_index"] for item in metadata] == [0, None]
+
+    @patch("app.config.settings.FEATURE_CUSTOM_AGENTS", True)
+    async def test_parser_supplied_custom_provenance_is_ignored(self, monkeypatch):
+        from app.api import helpers
+        from app.config import settings
+
+        async def fake_parse_question(*args, **kwargs):
+            return {
+                "agents": [
+                    {
+                        "name": "Injected By Parser",
+                        "role": "Attacker",
+                        "persona": "",
+                        "tier": "IMPORTANT",
+                        "identity_id": "foreign-custom-id",
+                        "agent_identity_id": "foreign-custom-id",
+                        "source_type": "custom",
+                        "__swarm_injected_custom_agent": True,
+                    },
+                ],
+                "groups": [],
+            }
+
+        async def fake_run_sim_background(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(helpers, "parse_question", fake_parse_question)
+        monkeypatch.setattr(helpers, "run_sim_background", fake_run_sim_background)
+        monkeypatch.setattr(settings, "FEATURE_AGENT_IDENTITY", False)
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario_id = _create_scenario(session, user_id="alice")
+
+        await helpers.parse_and_run_background(
+            scenario_id,
+            question="Can parser supplied custom provenance leak through?",
+            num_agents=1,
+            mode="blackboard",
+            hierarchical=False,
+            rounds=1,
+            visualization_enabled=False,
+            reasoning_effort=None,
+            temperature=None,
+            branch_sensitivity=None,
+            fork_prompt_variant=None,
+            fork_detector_active_branch_limit=None,
+            user_id="alice",
+            llm_api_key=None,
+            llm_base_url=None,
+            llm_model=None,
+            llm_requests_per_minute=None,
+            llm_tokens_per_minute=None,
+            disable_user_quota=None,
+            custom_agent_identity_ids=None,
+        )
+
+        with Session(engine) as session:
+            agent = session.exec(
+                select(Agent).where(Agent.scenario_id == scenario_id)
+            ).one()
+            scenario = session.get(Scenario, scenario_id)
+
+        assert agent.agent_identity_id is None
+        assert agent.source_type is None
+        persisted_agent = (scenario.parsed_context or {})["agents"][0]
+        assert "identity_id" not in persisted_agent
+        assert "agent_identity_id" not in persisted_agent
+        assert "source_type" not in persisted_agent
+
+    @patch("app.config.settings.FEATURE_CUSTOM_AGENTS", True)
+    async def test_hierarchical_tail_replacement_remaps_group_leader(self, monkeypatch):
+        from app.api import helpers
+        from app.config import settings
+
+        async def fake_parse_question(*args, **kwargs):
+            return {
+                "agents": [
+                    {
+                        "name": "Member",
+                        "role": "Analyst",
+                        "persona": "",
+                        "tier": "IMPORTANT",
+                    },
+                    {
+                        "name": "Original Leader",
+                        "role": "Leader",
+                        "persona": "",
+                        "tier": "IMPORTANT",
+                    },
+                ],
+                "groups": [
+                    {
+                        "name": "Policy Cell",
+                        "leader": "Original Leader",
+                        "members": ["Original Leader", "Member"],
+                    },
+                ],
+            }
+
+        async def fake_run_sim_background(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(helpers, "parse_question", fake_parse_question)
+        monkeypatch.setattr(helpers, "run_sim_background", fake_run_sim_background)
+        monkeypatch.setattr(settings, "FEATURE_AGENT_IDENTITY", False)
+
+        engine = get_engine()
+        with Session(engine) as session:
+            scenario_id = _create_scenario(session, user_id="alice")
+            custom_id = _create_identity(session, user_id="alice", suffix="leader")
+
+        await helpers.parse_and_run_background(
+            scenario_id,
+            question="What if a custom leader joins?",
+            num_agents=2,
+            mode="blackboard",
+            hierarchical=True,
+            rounds=1,
+            visualization_enabled=False,
+            reasoning_effort=None,
+            temperature=None,
+            branch_sensitivity=None,
+            fork_prompt_variant=None,
+            fork_detector_active_branch_limit=None,
+            user_id="alice",
+            llm_api_key=None,
+            llm_base_url=None,
+            llm_model=None,
+            llm_requests_per_minute=None,
+            llm_tokens_per_minute=None,
+            disable_user_quota=None,
+            custom_agent_identity_ids=[custom_id],
+        )
+
+        with Session(engine) as session:
+            group = session.exec(
+                select(AgentGroup).where(AgentGroup.scenario_id == scenario_id)
+            ).one()
+            leader = session.get(Agent, group.leader_agent_id)
+            members = session.exec(
+                select(AgentGroupMember).where(AgentGroupMember.group_id == group.id)
+            ).all()
+
+        assert leader is not None
+        assert leader.agent_identity_id == custom_id
+        assert leader.source_type == "custom"
+        assert leader.name == "Agent-leader"
+        assert group.member_count == 2
+        assert len(members) == 2
+        assert any(
+            member.agent_id == leader.id and member.is_leader
+            for member in members
+        )
+
+    @patch("app.config.settings.FEATURE_CUSTOM_AGENTS", False)
+    def test_custom_agents_feature_disabled_ignores_ids(self):
+        from app.api.helpers import _build_custom_agents_to_inject
+
+        engine = get_engine()
+        with Session(engine) as session:
+            custom_id = _create_identity(session, user_id="alice", suffix="disabled")
+            result = _build_custom_agents_to_inject(
+                session,
+                [custom_id],
+                "alice",
+                num_agents=1,
+            )
+
+        assert result == []
 
     def test_none_user_id_vs_none_owner_impossible(self):
         """DB enforces NOT NULL on AgentIdentity.user_id."""

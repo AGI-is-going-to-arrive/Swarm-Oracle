@@ -93,6 +93,7 @@
 
 - 主推演的自建 Agent 注入上限是动态值：正常请求按 `min(num_agents, MAX_CUSTOM_AGENTS)` 计算；请求没带 `num_agents` 时按 `DEFAULT_NUM_AGENTS` 计算。
 - 后端 schema 会先拒绝非 list 的 `custom_agent_identity_ids`，再 trim、跳过空字符串、去重并检查动态上限。注入层还会再次去重，只加载当前用户自己的 `kind=custom` identity。
+- 主推演注入优先级是 `CROWD` 槽、非 custom 尾部 Agent、容量内追加；parser 产物里的 `identity_id / agent_identity_id / source_type` 会先剥掉，不能伪造成 custom provenance。
 
 ## 并发与限流
 

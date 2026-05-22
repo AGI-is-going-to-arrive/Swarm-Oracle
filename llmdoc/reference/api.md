@@ -100,6 +100,8 @@
   - 后端会 trim、跳过空字符串并按顺序去重
   - 正常请求的数量上限是 `min(num_agents, MAX_CUSTOM_AGENTS)`；未传 `num_agents` 时按默认 Agent 数计算
   - 注入层只会加载当前用户自己的 `kind=custom` identity；无效 ID、跨用户 ID、非 custom identity 或单个读取异常都会跳过
+  - 注入优先替换非 custom 的 `CROWD` 槽，其次替换非 custom 尾部 Agent，容量还有空位时才追加
+  - parser 产物里的 `identity_id / agent_identity_id / source_type` 不被信任；持久化的 custom provenance 只来自本次校验通过的 identity 注入
   - 调用方的 `user_id` 必须和 Agent Library / Workshop 创建 identity 时使用的 user scope 一致；当前前端统一用 `getSessionBoundUserId()`，不使用本地 `directorIdentity.userId` 作为 API owner
 - `GET /api/scenario/{scenario_id}` 和 `GET /api/scenario/{scenario_id}/story` 的 `branches[]` 当前会回显 `fork_round / replay_kind / replay_source_branch_id`；普通分支的 replay 字段可为 `null`，replay/import/counterfactual/resume 分支用它保留来源分支语义，结果页也用 `fork_round` 定位可回溯的 fork point。
 - `GET /api/scenario/{scenario_id}` 的 `agents[]` 与 `GET /api/scenario/{scenario_id}/agents` 当前都会返回结果页 Agent picker 需要的展示字段；除 `id / name / role / tier / stance / emotion / group_id` 外，还包括 `persona`、可空 `agent_identity_id` 和可空 `source_type`。前端用 `source_type` 区分 custom 深链、generated/replay 页内档案，以及未知来源的保守展示。
@@ -239,7 +241,7 @@
 - `FEATURE_NEW_SOURCES=true` 时，`web_search.providers.{family}.capability` 会给每个 family entry 附上同一套 domain-filter 能力摘要和 `max_domains`。
 - `GET /api/capabilities` 当前顶层 key 固定为：
   `web_search / custom_agents / agent_identity / causal_graph / graph_analysis / counterfactual_replay / factions / argument_map / agent_conversation / kg_explorer / replay_trace / roundtable_survey / roundtable_analyst / snapshot_export / education_templates / persona_export / prediction_journal / result_verdict`。
-  除 `web_search` 外，其余 17 个都是功能开关 registry entry，至少带 `enabled / version`；`custom_agents` 还会带 `max_custom_agents`，供首页 quick selector 和 attach panel 动态收口。`FEATURE_HALLUCINATION_GATE` 只影响后端 warning metadata，不是 capability key；`result_verdict` 是 story 字段与前端展示 gate，不是新 endpoint。
+  除 `web_search` 外，其余 17 个都是功能开关 registry entry，至少带 `enabled / version`；`custom_agents` 还会带 `max_custom_agents`，供首页 quick selector 和 drawer attach panel 动态收口。`FEATURE_HALLUCINATION_GATE` 只影响后端 warning metadata，不是 capability key；`result_verdict` 是 story 字段与前端展示 gate，不是新 endpoint。
 
 ## Admin Diagnostics
 

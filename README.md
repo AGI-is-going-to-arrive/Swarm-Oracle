@@ -190,12 +190,12 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-当前验证口径（最近更新：2026-05-23 intervention system upgrade 收口）：
+当前验证口径（最近更新：2026-05-23 custom agent fix and UX 收口）：
 
-- backend：`python -m pytest tests/` 为 `3329 passed, 6 skipped`；`ruff check app/ tests/` 通过。
-- frontend：本轮 `npm test -- --run` 为 `206 files / 2328 tests passed`；`npm run lint`、`npx tsc --noEmit -p tsconfig.app.json` 通过；i18n key parity 为 `zh: 2800`、`en: 2800`。
-- Custom Agent attach 定向复核：`tests/test_p0_wiring.py::TestCustomAgentOwnership` 为 `10 passed`；首页 quick selector、AgentAttachPanel、scenario/debate/campaign/prediction/social 这类 API userId 入口统一走 `getSessionBoundUserId()`，`directorIdentity` 只保留展示名。
-- Chrome 浏览器 smoke：`http://localhost:18928/` 首页可加载，quick selector 可见，选中自建 Agent 后 Start 按钮显示 `1 agent(s) selected`，console error 为 0，桌面视口无横向溢出。
+- backend：`python -m pytest tests/ -q --tb=short -p no:cacheprovider` 为 `3346 passed, 6 skipped`；`ruff check app/ tests/` 通过。
+- frontend：本轮 `npm test -- --run` 为 `207 files / 2341 tests passed`；`npm run lint`、`npx tsc --noEmit -p tsconfig.app.json`、`npm run build` 通过；i18n key parity 为 `2811 / 2811`。
+- Custom Agent 定向复核：主推演注入按 `CROWD -> tail -> append`，parser 自带 `identity_id/source_type` 不会被信任；首页 quick selector 和 Agent drawer 统一走 `getSessionBoundUserId()`，Advanced Settings 不再挂载 Agent attach panel，scenario/debate payload 都会按 capability 和 Agent 数量二次裁剪。
+- Playwright browser smoke：本地 backend + frontend preview 下覆盖 desktop `1280x800`、mobile `375x812`、capability off、select/deselect、Start Simulation confirm payload 和 Advanced Settings；console error 为 0。
 - Intervention upgrade 浏览器复核：`e2e-suite.mjs mobile` 在 Chromium mobile 通过；`e2e-suite.mjs cross-browser --browsers firefox,webkit` 在 Firefox / WebKit desktop 通过 director-state 和 result archive readback scoped regression。这个结论不等于 Firefox/WebKit mobile、Native Safari/Edge 或 BrowserStack / Sauce 级全矩阵签收。
 - 主模式 completed/replay 定向浏览器回归：Playwright fixture 在 Chromium、Firefox、WebKit 均通过，覆盖 completed 冷加载 Classic、结果页返回 Classic、replay Theater、单分支/单轮静态标签、多分支/多轮下拉、空分支/空消息、`cancelled` 和 `error` 状态。
 - Pixel Theater 浏览器复核：Chrome DevTools MCP 打开 `/sim/e1a41453-2cb2-43a1-a054-0d7cd04a6bf5`，`.theater-floating-toolbar` 里的玩法卡入口可见，完成态玩法卡 modal 以只读提示打开，console error 为 0；截图保存在本地忽略目录 `frontend/output/theater-gameplay-cards-toolbar-fix.png`。

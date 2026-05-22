@@ -58,7 +58,15 @@ export default function AgentSelectionStrip({
   }
 
   if (customAgents.length === 0) {
-    return null;
+    return (
+      <fieldset className="agent-strip agent-strip--empty">
+        <legend className="sr-only">{t('agents.quick_select')}</legend>
+        <span className="agent-strip__status-text">{t('agents.empty_cta')}</span>
+        <button type="button" className="agent-strip__manage" onClick={onManageClick}>
+          {t('agents.manage_all')}
+        </button>
+      </fieldset>
+    );
   }
 
   const visibleAgents = customAgents.slice(0, MAX_VISIBLE_PILLS);

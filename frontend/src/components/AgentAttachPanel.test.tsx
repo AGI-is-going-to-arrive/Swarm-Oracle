@@ -17,7 +17,14 @@ vi.mock('react-i18next', () => ({
         }
         return typeof opts.defaultValue === 'string' ? opts.defaultValue : key;
       }
-      return fallbackOrOptions ?? key;
+      const labels: Record<string, string> = {
+        'agents.bias_label': 'Decision Bias',
+        'agents.bias_keys.caution': 'Caution',
+        'agents.bias_keys.optimism': 'Optimism',
+        'agents.bias_levels.high': 'High',
+        'agents.bias_levels.low': 'Low',
+      };
+      return labels[key] ?? fallbackOrOptions ?? key;
     },
     i18n: { language: 'en' },
   }),
@@ -180,5 +187,112 @@ describe('AgentAttachPanel', () => {
       expect(Array.from(useAgentStore.getState().selectedIds)).toEqual(['agent-1', 'agent-2']);
     });
     expect(await screen.findByText('2/2')).toBeInTheDocument();
+  });
+
+  it('renders cleaned persona and hides null/empty/whitespace persona', async () => {
+    listAgentIdentitiesMock.mockReset();
+    listAgentIdentitiesMock.mockResolvedValue([
+      { ...customAgent, id: 'agent-valid', display_name: 'Valid Agent', continuity_key: 'agent-valid', persona: 'Looks for tail risk.' },
+      { ...customAgent, id: 'agent-null', display_name: 'Null Agent', continuity_key: 'agent-null', persona: null as unknown as string },
+      { ...customAgent, id: 'agent-empty', display_name: 'Empty Agent', continuity_key: 'agent-empty', persona: '' },
+      { ...customAgent, id: 'agent-ws', display_name: 'Whitespace Agent', continuity_key: 'agent-ws', persona: '   \n  \t  ' },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <AgentAttachPanel userId="user-1" visible={true} maxSelected={5} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Looks for tail risk.')).toBeInTheDocument();
+
+    const nullCard = (await screen.findByText('Null Agent')).closest('.agent-attach-card');
+    const emptyCard = (await screen.findByText('Empty Agent')).closest('.agent-attach-card');
+    const wsCard = (await screen.findByText('Whitespace Agent')).closest('.agent-attach-card');
+
+    expect(nullCard?.querySelector('.agent-attach-card__persona')).toBeNull();
+    expect(emptyCard?.querySelector('.agent-attach-card__persona')).toBeNull();
+    expect(wsCard?.querySelector('.agent-attach-card__persona')).toBeNull();
+  });
+
+  it('strips UNTRUSTED DATA wrappers from persona', async () => {
+    listAgentIdentitiesMock.mockReset();
+    listAgentIdentitiesMock.mockResolvedValue([
+      {
+        ...customAgent,
+        id: 'agent-untrusted',
+        display_name: 'Wrapped Agent',
+        continuity_key: 'agent-untrusted',
+        persona: '```UNTRUSTED DATA\nActual text\n```',
+      },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <AgentAttachPanel userId="user-1" visible={true} maxSelected={5} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Actual text')).toBeInTheDocument();
+    expect(screen.queryByText(/UNTRUSTED/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/```/)).not.toBeInTheDocument();
+  });
+
+  it('strips mixed-case, unicode-space, full-width fence, and punctuation-only persona wrappers', async () => {
+    listAgentIdentitiesMock.mockReset();
+    listAgentIdentitiesMock.mockResolvedValue([
+      {
+        ...customAgent,
+        id: 'agent-untrusted-unicode',
+        display_name: 'Unicode Wrapped Agent',
+        continuity_key: 'agent-untrusted-unicode',
+        persona: '｀｀｀unTRusted\u00a0Data\nActual unicode text\n｀｀｀\n```',
+      },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <AgentAttachPanel userId="user-1" visible={true} maxSelected={5} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Actual unicode text')).toBeInTheDocument();
+    expect(screen.queryByText(/untrusted/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/```|｀｀｀/)).not.toBeInTheDocument();
+  });
+
+  it('renders bias chips for extreme values, skips mid-range and invalid', async () => {
+    listAgentIdentitiesMock.mockReset();
+    listAgentIdentitiesMock.mockResolvedValue([
+      {
+        ...customAgent,
+        id: 'agent-bias',
+        display_name: 'Bias Agent',
+        continuity_key: 'agent-bias',
+        decision_bias: {
+          caution: 0.8,
+          optimism: 0.2,
+          conservatism: 0.5,
+          risk_tolerance: { nested: 0.9 } as unknown as number,
+        },
+      },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <AgentAttachPanel userId="user-1" visible={true} maxSelected={5} />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Bias Agent');
+
+	    expect(screen.getByRole('group', { name: 'Decision Bias' })).toBeInTheDocument();
+	    expect(screen.getByText('Caution: High')).toBeInTheDocument();
+	    expect(screen.getByText('Optimism: Low')).toBeInTheDocument();
+	    expect(screen.queryAllByRole('status')).toHaveLength(0);
+    expect(screen.queryByText(/conservatism/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/nested/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/risk_tolerance/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\{/)).not.toBeInTheDocument();
   });
 });

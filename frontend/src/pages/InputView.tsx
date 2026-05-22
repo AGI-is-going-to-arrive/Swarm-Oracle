@@ -25,8 +25,8 @@ import {
 } from '../api/client';
 import type { WebSearchFamily, CampaignContext } from '../types';
 import { useAgentStore } from '../stores/agentStore';
-import { AgentAttachPanel } from '../components/AgentAttachPanel';
 import AgentSelectionStrip from '../components/AgentSelectionStrip';
+import { AgentDrawer } from '../components/AgentDrawer';
 import { EducationTemplatePicker } from '../components/EducationTemplatePicker';
 import type { EducationTemplate } from '../api/client';
 import { OnboardingGuide } from '../components/Onboarding/OnboardingGuide';
@@ -333,17 +333,22 @@ export function InputView() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [showWebSearchEndpoint, setShowWebSearchEndpoint] = useState(false);
   const [showSnapshotImport, setShowSnapshotImport] = useState(false);
+  const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
   const [runtimePreset, setRuntimePreset] = useState<ScenarioRuntimePresetId>(() => loadScenarioRuntimePreset());
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const apiUserId = getSessionBoundUserId();
-  const { capabilities: caps } = useCapabilityCheck('custom_agents');
+  const {
+    capabilities: caps,
+    loading: customAgentsCapabilityLoading,
+  } = useCapabilityCheck('custom_agents');
   const customAgentsEnabled = caps?.custom_agents?.enabled === true;
   const { enabled: educationTemplatesEnabled } = useCapabilityCheck('education_templates');
   const [educationPickerOpen, setEducationPickerOpen] = useState(false);
   // S1-5: First-visit onboarding guide. Hidden once the user finishes or skips.
   const onboarding = useOnboardingState();
   const agentSelectedIds = useAgentStore((s) => s.selectedIds);
+  const pruneSelectionToSize = useAgentStore((s) => s.pruneSelectionToSize);
   const startSimulation = useSimulationStore((s) => s.startSimulation);
   const submitError = useSimulationStore((s) => s.error);
   const submitErrorCode = useSimulationStore((s) => s.errorCode);
@@ -571,6 +576,18 @@ export function InputView() {
     ? Math.min(agentSelectedIds.size, maxCustomAgents)
     : 0;
 
+  useEffect(() => {
+    if (!customAgentsCapabilityLoading && maxCustomAgents >= 0) {
+      pruneSelectionToSize(maxCustomAgents);
+    }
+  }, [customAgentsCapabilityLoading, maxCustomAgents, pruneSelectionToSize]);
+
+  const getClampedCustomAgentIds = useCallback((maxAllowed: number): string[] => {
+    if (!customAgentsEnabled) return [];
+    const cap = Math.max(0, Math.trunc(maxAllowed));
+    return Array.from(useAgentStore.getState().selectedIds).slice(0, cap);
+  }, [customAgentsEnabled]);
+
   const runtimePresetConfig = useMemo(
     () => getScenarioRuntimePresetConfig(runtimePreset),
     [runtimePreset],
@@ -794,16 +811,17 @@ export function InputView() {
   ): CreateScenarioOptions => {
     const trimmed = launch.nextQuestion.trim();
     const serverMaxCustomAgents = customAgentsEnabled ? caps?.custom_agents?.max_custom_agents : 0;
+    const capLimit =
+      customAgentsEnabled && typeof serverMaxCustomAgents === 'number' && serverMaxCustomAgents >= 0
+        ? serverMaxCustomAgents
+        : customAgentsEnabled
+          ? 1
+          : 0;
     const effectiveMaxCustomAgents = Math.max(
       0,
-      Math.min(
-        launch.nextAgents,
-        customAgentsEnabled && typeof serverMaxCustomAgents === 'number' && serverMaxCustomAgents >= 0
-          ? serverMaxCustomAgents
-          : 0,
-      ),
+      Math.min(launch.nextAgents, capLimit),
     );
-    const clampedCustomAgentIds = Array.from(agentSelectedIds).slice(0, effectiveMaxCustomAgents);
+    const clampedCustomAgentIds = getClampedCustomAgentIds(effectiveMaxCustomAgents);
 
     let campaignContext: CampaignContext | undefined = launch.campaignContext;
     if (!campaignContext && launch.challengeId) {
@@ -867,7 +885,6 @@ export function InputView() {
       ...(campaignContext && { campaignContext }),
     };
   }, [
-    agentSelectedIds,
     byokRequestsPerMinute,
     byokTokensPerMinute,
     caps?.custom_agents?.max_custom_agents,
@@ -889,6 +906,7 @@ export function InputView() {
     todayChallenge,
     weeklyChallenges,
     campaignChallengeRotation,
+    getClampedCustomAgentIds,
   ]);
 
   const closeContinuityDialog = useCallback(() => {
@@ -1117,9 +1135,14 @@ export function InputView() {
 
     setIsSubmitting(true);
     try {
-      const [propositionAgentId, oppositionAgentId] = customAgentsEnabled
-        ? [...agentSelectedIds].slice(0, 2)
-        : [];
+      const serverMaxCustomAgents = caps?.custom_agents?.max_custom_agents;
+      const debateCustomAgentLimit = Math.min(
+        2,
+        customAgentsEnabled && typeof serverMaxCustomAgents === 'number' && serverMaxCustomAgents >= 0
+          ? serverMaxCustomAgents
+          : 2,
+      );
+      const [propositionAgentId, oppositionAgentId] = getClampedCustomAgentIds(debateCustomAgentLimit);
       const debate = await createDebate(trimmed, undefined, {
         llmApiKey: llmApiKey || undefined,
         llmBaseUrl: llmBaseUrl || undefined,
@@ -1681,16 +1704,7 @@ export function InputView() {
                 userId={apiUserId}
                 visible={true}
                 maxSelected={maxCustomAgents}
-                onManageClick={() => {
-                  setAdvancedOpen(true);
-                  requestAnimationFrame(() => {
-                    const el = document.getElementById('iv-advanced-body');
-                    if (el) {
-                      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-                      el.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
-                    }
-                  });
-                }}
+                onManageClick={() => setAgentDrawerOpen(true)}
               />
             )}
 
@@ -2133,15 +2147,6 @@ export function InputView() {
                         <span className="mode-desc">{runtimePresetDescription}</span>
                         <span className="mode-desc">{t('home.runtime_preset_scope_main_only')}</span>
                       </div>
-
-                      {/* Phase 3 F3: Custom Agent Attach Panel */}
-                      {customAgentsEnabled && (
-                        <AgentAttachPanel
-                          userId={apiUserId}
-                          visible={true}
-                          maxSelected={maxCustomAgents}
-                        />
-                      )}
                   </div>
                 </div>
               </div>
@@ -2631,7 +2636,6 @@ export function InputView() {
               role="dialog"
               aria-modal="true"
               aria-label={t('home.confirm_launch_title')}
-              aria-describedby="confirm-launch-settings"
               onClick={(event) => event.stopPropagation()}
             >
               <AlertDialogHeader className="confirm-launch__header">
@@ -2644,7 +2648,6 @@ export function InputView() {
                   {confirmDialogData?.question ?? ''}
                 </p>
                 <AlertDialogDescription
-                  id="confirm-launch-settings"
                   className="confirm-launch__settings"
                 >
                   {t('home.confirm_launch_settings', {
@@ -2770,6 +2773,14 @@ export function InputView() {
           navigate(`/result/${encodeURIComponent(scenarioId)}`);
         }}
       />
+      {customAgentsEnabled && (
+        <AgentDrawer
+          open={agentDrawerOpen}
+          onOpenChange={setAgentDrawerOpen}
+          userId={apiUserId}
+          maxSelected={maxCustomAgents}
+        />
+      )}
       {educationTemplatesEnabled && (
         <EducationTemplatePicker
           open={educationPickerOpen}

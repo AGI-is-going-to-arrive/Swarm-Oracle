@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -14,6 +15,7 @@ import app.api.debate as debate_api
 import app.services.debate as debate_service
 from app.main import app
 from app.models import Debate, DebatePhase, DebateStatus
+from app.models.agent_identity import AgentIdentity
 from app.models.database import get_engine
 from app.services.debate import create_debate_record, run_debate_background
 from app.services.debate_argument_map import extract_argument_units
@@ -32,6 +34,33 @@ def _make_signed_session_token(secret: str, subject: str) -> str:
     signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
     signature_segment = base64.urlsafe_b64encode(signature).decode("utf-8").rstrip("=")
     return f"v1.{payload_segment}.{signature_segment}"
+
+
+def _create_custom_identity(
+    user_id: str,
+    suffix: str = "custom",
+    *,
+    knowledge_domains: list[str] | None = None,
+    decision_bias: dict[str, float] | None = None,
+) -> str:
+    identity = AgentIdentity(
+        user_id=user_id,
+        kind="custom",
+        display_name=f"Debate Agent {suffix}",
+        role="Debate Specialist",
+        persona="Grounded debate participant",
+        knowledge_domain_json=(
+            json.dumps(knowledge_domains) if knowledge_domains is not None else None
+        ),
+        decision_bias_json=(
+            json.dumps(decision_bias) if decision_bias is not None else None
+        ),
+        continuity_key=f"debate_custom_{user_id}_{suffix}",
+    )
+    with Session(get_engine()) as session:
+        session.add(identity)
+        session.commit()
+        return identity.id
 
 
 @pytest.fixture
@@ -67,6 +96,129 @@ def test_create_debate_returns_immediately_and_schedules_background(
     assert len(data["phase_insights"]) == 5
     assert data["phase_insights"][0]["commentary"]
     assert scheduled["count"] == 1
+
+
+def test_debate_rejects_custom_ids_when_feature_disabled(
+    client: TestClient,
+    monkeypatch,
+):
+    monkeypatch.setattr(debate_api.settings, "FEATURE_CUSTOM_AGENTS", False)
+
+    resp = client.post(
+        "/api/debate",
+        json={
+            "question": "Should custom agents join this debate?",
+            "user_id": "alice",
+            "custom_agent_ids": ["custom-agent-1"],
+        },
+    )
+
+    assert resp.status_code == 400
+    assert "Custom agents feature is not enabled" in resp.text
+
+
+def test_debate_rejects_duplicate_custom_ids(client: TestClient):
+    resp = client.post(
+        "/api/debate",
+        json={
+            "question": "Should duplicate custom agents be rejected?",
+            "user_id": "alice",
+            "custom_agent_ids": ["same-agent", " same-agent "],
+        },
+    )
+
+    assert resp.status_code == 422
+    assert "custom_agent_ids must not contain duplicates" in resp.text
+
+
+def test_debate_rejects_cross_user_custom_id(client: TestClient, monkeypatch):
+    monkeypatch.setattr(debate_api.settings, "FEATURE_CUSTOM_AGENTS", True)
+    foreign_id = _create_custom_identity("bob", "foreign")
+
+    resp = client.post(
+        "/api/debate",
+        json={
+            "question": "Should a foreign custom agent join this debate?",
+            "user_id": "alice",
+            "custom_agent_ids": [foreign_id],
+        },
+    )
+
+    assert resp.status_code == 403
+    assert "Custom agent ownership mismatch" in resp.text
+
+
+def test_debate_custom_max_two_enforcement(client: TestClient):
+    resp = client.post(
+        "/api/debate",
+        json={
+            "question": "Should three custom agents join this debate?",
+            "user_id": "alice",
+            "custom_agent_ids": ["agent-1", "agent-2", "agent-3"],
+        },
+    )
+
+    assert resp.status_code == 422
+    assert "custom_agent_ids must have at most 2 entries" in resp.text
+
+
+def test_debate_custom_agent_happy_path_locks_metadata(
+    client: TestClient,
+    monkeypatch,
+):
+    monkeypatch.setattr(debate_api.settings, "FEATURE_CUSTOM_AGENTS", True)
+    scheduled = {"count": 0}
+
+    def _capture_schedule(coro):
+        scheduled["count"] += 1
+        coro.close()
+        return None
+
+    monkeypatch.setattr(debate_api, "schedule_background_task", _capture_schedule)
+    proposition_id = _create_custom_identity(
+        "alice",
+        "proposition",
+        knowledge_domains=["economics"],
+        decision_bias={"caution": 0.8},
+    )
+    opposition_id = _create_custom_identity(
+        "alice",
+        "opposition",
+        knowledge_domains=["law"],
+        decision_bias={"optimism": 0.2},
+    )
+
+    resp = client.post(
+        "/api/debate",
+        json={
+            "question": "Should custom agents join this debate?",
+            "user_id": "alice",
+            "custom_agent_ids": [proposition_id, opposition_id],
+        },
+    )
+
+    assert resp.status_code == 200
+    assert scheduled["count"] == 1
+    debate_id = resp.json()["id"]
+    with Session(get_engine()) as session:
+        debate = session.get(Debate, debate_id)
+
+    assert debate is not None
+    assert debate.proposition_name == "Debate Agent proposition"
+    assert debate.opposition_name == "Debate Agent opposition"
+    personas = (debate.breakdown_json or {})["metadata"]["personas"]
+    assert personas["proposition"] == {
+        "role": "Debate Specialist",
+        "persona": "Grounded debate participant",
+        "custom_locked": True,
+        "source_identity_id": proposition_id,
+        "knowledge_domains": ["economics"],
+        "decision_bias": {"caution": 0.8},
+    }
+    assert personas["opposition"]["custom_locked"] is True
+    assert personas["opposition"]["source_identity_id"] == opposition_id
+    assert personas["opposition"]["knowledge_domains"] == ["law"]
+    assert personas["opposition"]["decision_bias"] == {"optimism": 0.2}
 
 
 def test_get_argument_map_returns_snapshot_when_enabled(client: TestClient, monkeypatch):

@@ -1773,6 +1773,21 @@
         "error_extraction_failed": "Could not extract entities from this document. Try a different PDF.",
         "error_unauthorized": "You are not authorized to upload documents. Sign in and try again.",
         "error_generic": "Upload failed. Please try again."
+      },
+      "drawer_title": "Agent Selection",
+      "drawer_close": "Close",
+      "bias_label": "Decision Bias",
+      "bias_balanced": "Balanced",
+      "bias_keys": {
+        "caution": "Caution",
+        "optimism": "Optimism",
+        "conservatism": "Conservatism",
+        "risk_tolerance": "Risk Tolerance",
+        "creativity": "Creativity"
+      },
+      "bias_levels": {
+        "high": "High",
+        "low": "Low"
       }
     },
     "agent_workshop": {
