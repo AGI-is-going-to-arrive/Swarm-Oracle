@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import {
   type Active,
   type DragEndEvent,
@@ -7,7 +14,7 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
   closestCenter,
   useDraggable,
   useDroppable,
@@ -66,6 +73,19 @@ interface SlotPayload {
 }
 
 type SlotState = 'idle' | 'available' | 'over-valid' | 'over-invalid';
+type ReactDragFallbackStartEvent =
+  | ReactMouseEvent<HTMLButtonElement>
+  | ReactPointerEvent<HTMLButtonElement>;
+type NativeDragFallbackEvent = MouseEvent | PointerEvent;
+
+interface MouseFallbackDragState {
+  payload: DragCardPayload;
+  startX: number;
+  startY: number;
+  moved: boolean;
+}
+
+const MOUSE_FALLBACK_DRAG_DISTANCE = 5;
 
 function buildRepresentativeDragId(branchId: string, agentId: string) {
   return `drag-rep-${branchId}-${agentId}`;
@@ -146,6 +166,7 @@ function DraggablePickerCard({
   disabled,
   dragEnabled,
   onClick,
+  onMouseFallbackStart,
   selectedLabel,
 }: {
   id: string;
@@ -154,6 +175,10 @@ function DraggablePickerCard({
   disabled: boolean;
   dragEnabled: boolean;
   onClick: () => void;
+  onMouseFallbackStart: (
+    payload: DragCardPayload,
+    event: ReactDragFallbackStartEvent,
+  ) => void;
   selectedLabel: string;
 }) {
   const {
@@ -176,6 +201,11 @@ function DraggablePickerCard({
       disabled={disabled}
       onClick={onClick}
       style={transform ? { transform: CSS.Translate.toString(transform) } : undefined}
+      data-drag-role={payload.role}
+      data-branch-id={payload.branchId}
+      data-agent-id={payload.agentId}
+      onPointerDownCapture={(event) => onMouseFallbackStart(payload, event)}
+      onMouseDownCapture={(event) => onMouseFallbackStart(payload, event)}
       {...attributes}
       {...listeners}
     >
@@ -215,6 +245,8 @@ function DroppableSeat({
       className={`worldline-roundtable-seating-slot worldline-roundtable-seating-slot--${state}`}
       aria-label={payload.title}
       data-testid={testId}
+      data-roundtable-drop-role={payload.role}
+      data-branch-id={payload.branchId}
     >
       <div className="worldline-roundtable-seating-slot__eyebrow">{payload.title}</div>
       {occupant ? (
@@ -257,6 +289,7 @@ export default function RoundtablePickerPanel({
   const { t } = useTranslation();
   const [activeDrag, setActiveDrag] = useState<DragCardPayload | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
+  const mouseFallbackDragRef = useRef<MouseFallbackDragState | null>(null);
   const [dragEnabled, setDragEnabled] = useState(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
       return true;
@@ -280,12 +313,12 @@ export default function RoundtablePickerPanel({
     return () => mediaQuery.removeListener(handleChange);
   }, []);
 
-  const pointerSensor = useSensor(PointerSensor, {
+  const mouseSensor = useSensor(MouseSensor, {
     activationConstraint: { distance: 5 },
   });
   const keyboardSensor = useSensor(KeyboardSensor);
   const sensors = useSensors(
-    ...(dragEnabled ? [pointerSensor] : []),
+    ...(dragEnabled ? [mouseSensor] : []),
     keyboardSensor,
   );
 
@@ -394,6 +427,75 @@ export default function RoundtablePickerPanel({
     },
   }), [isZh, t]);
 
+  useEffect(() => {
+    if (!dragEnabled) {
+      mouseFallbackDragRef.current = null;
+      return undefined;
+    }
+
+    const handleFallbackMove = (event: NativeDragFallbackEvent) => {
+      const fallback = mouseFallbackDragRef.current;
+      if (!fallback) return;
+      const distance = Math.hypot(
+        event.clientX - fallback.startX,
+        event.clientY - fallback.startY,
+      );
+      if (distance >= MOUSE_FALLBACK_DRAG_DISTANCE) {
+        fallback.moved = true;
+      }
+    };
+
+    const handleFallbackEnd = (event: NativeDragFallbackEvent) => {
+      const fallback = mouseFallbackDragRef.current;
+      mouseFallbackDragRef.current = null;
+      if (!fallback?.moved) return;
+
+      const targetNode = document.elementFromPoint(event.clientX, event.clientY);
+      const slotNode = targetNode instanceof Element
+        ? targetNode.closest<HTMLElement>('[data-roundtable-drop-role]')
+        : null;
+      if (!slotNode) return;
+
+      const role = slotNode.dataset.roundtableDropRole;
+      if (role !== 'representative' && role !== 'witness') return;
+
+      const slotPayload: SlotPayload = {
+        role,
+        branchId: slotNode.dataset.branchId || undefined,
+        title: slotNode.getAttribute('aria-label') ?? '',
+      };
+      if (!isValidSlotForDrag(slotPayload, fallback.payload)) return;
+
+      if (fallback.payload.role === 'representative') {
+        onSelectRepresentative(fallback.payload.branchId, fallback.payload.agentId);
+      } else {
+        onSelectWitness({
+          branchId: fallback.payload.branchId,
+          agentId: fallback.payload.agentId,
+        });
+      }
+    };
+
+    window.addEventListener('pointermove', handleFallbackMove, true);
+    window.addEventListener('pointerup', handleFallbackEnd, true);
+    window.addEventListener('mousemove', handleFallbackMove, true);
+    window.addEventListener('mouseup', handleFallbackEnd, true);
+    document.addEventListener('pointermove', handleFallbackMove, true);
+    document.addEventListener('pointerup', handleFallbackEnd, true);
+    document.addEventListener('mousemove', handleFallbackMove, true);
+    document.addEventListener('mouseup', handleFallbackEnd, true);
+    return () => {
+      window.removeEventListener('pointermove', handleFallbackMove, true);
+      window.removeEventListener('pointerup', handleFallbackEnd, true);
+      window.removeEventListener('mousemove', handleFallbackMove, true);
+      window.removeEventListener('mouseup', handleFallbackEnd, true);
+      document.removeEventListener('pointermove', handleFallbackMove, true);
+      document.removeEventListener('pointerup', handleFallbackEnd, true);
+      document.removeEventListener('mousemove', handleFallbackMove, true);
+      document.removeEventListener('mouseup', handleFallbackEnd, true);
+    };
+  }, [dragEnabled, onSelectRepresentative, onSelectWitness]);
+
   const handleDragStart = ({ active }: DragStartEvent) => {
     setActiveDrag(getActiveDragPayload(active));
     setOverId(null);
@@ -412,6 +514,19 @@ export default function RoundtablePickerPanel({
     }
     setActiveDrag(null);
     setOverId(null);
+  };
+
+  const handleMouseFallbackStart = (
+    payload: DragCardPayload,
+    event: ReactDragFallbackStartEvent,
+  ) => {
+    if (!dragEnabled || event.button !== 0) return;
+    mouseFallbackDragRef.current = {
+      payload,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+    };
   };
 
   return (
@@ -539,7 +654,11 @@ export default function RoundtablePickerPanel({
               ? selectedBranchIdsForLaunch.length <= manualShortlistMin
               : selectedBranchIdsForLaunch.length >= manualShortlistMax);
           return (
-            <article key={branch.id} className={`worldline-roundtable-picker-branch ${branchSelected ? 'is-active' : 'is-muted'}`}>
+              <article
+                key={branch.id}
+                className={`worldline-roundtable-picker-branch ${branchSelected ? 'is-active' : 'is-muted'}`}
+                data-branch-id={branch.id}
+              >
               <header className="worldline-roundtable-picker-branch__header">
                 <div>
                   <strong>{branch.title}</strong>
@@ -585,6 +704,7 @@ export default function RoundtablePickerPanel({
                       disabled={!branchSelected || selected}
                       dragEnabled={dragEnabled}
                       onClick={() => onSelectRepresentative(branch.id, candidate.id)}
+                      onMouseFallbackStart={handleMouseFallbackStart}
                       selectedLabel={selectedLabel}
                     />
                   );
@@ -634,6 +754,7 @@ export default function RoundtablePickerPanel({
                   disabled={selected}
                   dragEnabled={dragEnabled}
                   onClick={() => onSelectWitness({ branchId: candidate.branchId, agentId: candidate.agentId })}
+                  onMouseFallbackStart={handleMouseFallbackStart}
                   selectedLabel={t('roundtable.witness_badge')}
                 />
               );

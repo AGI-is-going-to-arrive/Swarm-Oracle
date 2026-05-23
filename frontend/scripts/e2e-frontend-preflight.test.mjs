@@ -10,6 +10,12 @@ import {
   buildPhase3BatchAPreflightPaths,
   buildPhase3BatchBPreflightPaths,
 } from "./lib/frontendPreflight.mjs";
+import {
+  resolveRoundtableDragTargetTestId,
+} from "./e2e-worldline-roundtable-suite.mjs";
+import {
+  classifyWsAuthHardeningProbe,
+} from "./e2e-ws-contract-suite.mjs";
 
 function buildHtml(entryPath, {
   cssPath = "/assets/index-a.css",
@@ -396,5 +402,34 @@ test("release signoff includes the graph-focused vitest gate", () => {
       "src/pages/ResultView.test.tsx",
       "src/i18n/locales.test.ts",
     ],
+  );
+});
+
+test("roundtable desktop drag targets the source branch seat", () => {
+  assert.equal(
+    resolveRoundtableDragTargetTestId(" branch-b "),
+    "roundtable-seat-slot-branch-b",
+  );
+  assert.throws(
+    () => resolveRoundtableDragTargetTestId(""),
+    /missing source branch/i,
+  );
+});
+
+test("ws contract probe distinguishes first-frame auth hardening mode", () => {
+  assert.deepEqual(
+    classifyWsAuthHardeningProbe({ closed: true, code: 4001 }),
+    {
+      enabled: true,
+      detail: "invalid first auth frame closed with 4001",
+    },
+  );
+  assert.equal(
+    classifyWsAuthHardeningProbe({ closed: true, code: 1006 }).enabled,
+    false,
+  );
+  assert.equal(
+    classifyWsAuthHardeningProbe({ closed: false }).enabled,
+    false,
   );
 });

@@ -502,13 +502,9 @@ def _strip_question_prefix(text: str, *, scenario_question: str | None = None) -
     """Strip upstream `_roundtable_question_prefix`-style prefixes from commentary.
 
     The roundtable content builders prepend a fixed prefix carrying the user's
-    question (e.g. ``针对「{question}」这个问题，``). When ``_phase_insight``
-    then takes the first clause and compresses it to 64 chars, a long question
-    consumes the entire budget and pushes the actual hook/insight out. Stripping
-    the prefix here keeps the compaction budget available for the genuine
-    insight content; the question context is re-added downstream by
-    ``_phase_insight`` itself with its own dedup guard, so no information is
-    lost.
+    question (e.g. ``针对「{question}」这个问题，``).  Stripping the prefix
+    keeps the compaction budget available for the genuine insight content;
+    the full untruncated text is preserved in ``insight_body``.
     """
     candidate = str(text or "")
     question = sanitize_untrusted_text(str(scenario_question or ""), max_chars=180)
@@ -562,9 +558,8 @@ def _phase_insight(
         }
     stakes, focus = labels[phase]
     # Strip the upstream `_roundtable_question_prefix` so the compaction budget
-    # goes to the actual insight, not a redundant echo of the question (which is
-    # re-added below with a dedup guard for callers that did not prepend the
-    # prefix themselves).
+    # goes to the actual insight, not a redundant echo of the question. The full
+    # normalized text remains available in `insight_body`.
     stripped_commentary = _strip_question_prefix(
         str(commentary or ""),
         scenario_question=scenario_question,
@@ -572,52 +567,15 @@ def _phase_insight(
     normalized = re.sub(r"\s+", " ", stripped_commentary).strip()
     first_clause = re.split(r"[。！？.!?]\s*", normalized, maxsplit=1)[0].strip()
     commentary_limit = 96 if language == "zh" else 160
+    insight_body = normalized or focus
     compacted = _compact_clause(first_clause or normalized, limit=commentary_limit) or focus
-    if language == "zh":
-        phase_prefixes = {
-            EndingRoomPhase.OPENING: "这轮先钉住",
-            EndingRoomPhase.CROSSFIRE: "分歧集中在",
-            EndingRoomPhase.REBUTTAL: "可回退的一步是",
-            EndingRoomPhase.CLOSING: "导演建议落在",
-            EndingRoomPhase.VERDICT: "裁定落在",
-        }
-        commentary_text = f"{phase_prefixes[phase]}：{compacted}"
-    else:
-        phase_prefixes = {
-            EndingRoomPhase.OPENING: "This round pins down",
-            EndingRoomPhase.CROSSFIRE: "The split concentrates on",
-            EndingRoomPhase.REBUTTAL: "The one move back is",
-            EndingRoomPhase.CLOSING: "The director note lands on",
-            EndingRoomPhase.VERDICT: "The verdict lands on",
-        }
-        commentary_text = f"{phase_prefixes[phase]}: {compacted}"
-    question = sanitize_untrusted_text(str(scenario_question or ""), max_chars=180)
-    # Avoid double-injecting the question: upstream `_build_roundtable_*_content`
-    # already prepends `针对「{question}」这个问题，` / `For the question '{question}', `
-    # to the commentary, so re-adding a `_phase_insight` prefix would eat the 64-char
-    # compression budget with a redundant question echo. We detect by checking whether
-    # the raw question text (or a leading 60-char prefix for very long questions) is
-    # already present in the normalized commentary.
-    raw_commentary = str(commentary or "")
-    if question:
-        question_already_present = (
-            question in raw_commentary
-            or (len(question) > 60 and question[:60] in raw_commentary)
-        )
-    else:
-        question_already_present = False
-    if question and not question_already_present:
-        if language == "zh":
-            prefix = "针对" if phase == EndingRoomPhase.VERDICT else "围绕"
-            commentary_text = f"{prefix}「{question}」，{commentary_text}"
-        else:
-            prefix = "For" if phase == EndingRoomPhase.VERDICT else "Around"
-            commentary_text = f"{prefix} the question '{question}', {commentary_text}"
+    commentary_text = compacted
     return {
         "phase": phase.value,
         "stakes": stakes,
         "moderator_focus": focus,
         "commentary": commentary_text,
+        "insight_body": insight_body,
     }
 
 

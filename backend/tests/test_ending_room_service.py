@@ -11,6 +11,7 @@ from sqlalchemy import text as text_stmt
 from sqlmodel import Session, select
 
 import app.services.ending_room_service as ending_room_service_module
+import app.services.ending_room_service._content as content_module
 from app.models import (
     Agent,
     AgentMessage,
@@ -1605,7 +1606,7 @@ def test_phase_insight_compacts_hook_after_concrete_long_chinese_question_prefix
 
     assert "贝多芬用采样器" in insight["commentary"]
     assert question[:60] not in insight["commentary"]
-    assert insight["commentary"].startswith("这轮先钉住")
+    assert "这轮先钉住" not in insight["commentary"]
 
 
 def test_phase_insight_compacts_hook_after_long_english_question_prefix():
@@ -1628,7 +1629,7 @@ def test_phase_insight_compacts_hook_after_long_english_question_prefix():
 
     assert "Beethoven posts remix stems" in insight["commentary"]
     assert "For the question" not in insight["commentary"]
-    assert insight["commentary"].startswith("This round pins down")
+    assert "This round pins down" not in insight["commentary"]
 
 
 def test_phase_insight_empty_question_uses_legacy_no_prefix_path():
@@ -1641,7 +1642,7 @@ def test_phase_insight_empty_question_uses_legacy_no_prefix_path():
         scenario_question="",
     )
 
-    assert insight["commentary"] == "这轮先钉住：《秩序线》的关键转折在「粮道先稳住」"
+    assert insight["commentary"] == "《秩序线》的关键转折在「粮道先稳住」"
 
 
 def test_phase_insight_handles_unicode_question_prefix_delimiters():
@@ -1662,7 +1663,7 @@ def test_phase_insight_handles_unicode_question_prefix_delimiters():
     assert question[:20] not in insight["commentary"]
 
 
-def test_phase_insight_mentions_scenario_question_for_verdict():
+def test_phase_insight_does_not_inject_scenario_question_for_verdict():
     question = "如果诸葛亮多活十年，北伐会不会更早成功？"
 
     insight = _phase_insight(
@@ -1672,7 +1673,8 @@ def test_phase_insight_mentions_scenario_question_for_verdict():
         scenario_question=question,
     )
 
-    assert f"针对「{question}」" in insight["commentary"]
+    assert f"针对「{question}」" not in insight["commentary"]
+    assert question not in insight["commentary"]
     assert "裁定落在" in insight["commentary"]
 
 
@@ -1694,12 +1696,7 @@ def test_phase_insight_does_not_double_inject_question_already_in_commentary_zh(
         scenario_question=question,
     )
 
-    # The question text must appear at most once in the rendered commentary.
-    assert insight["commentary"].count(question) <= 1
-    # The OPENING phase prefix in `_phase_insight` is `围绕「{question}」，` —
-    # that one (the second injection) must not appear, since the commentary
-    # already carries the question via the upstream `_build_roundtable_*_content`
-    # prefix `针对「{question}」这个问题，`.
+    assert question not in insight["commentary"]
     assert f"围绕「{question}」" not in insight["commentary"]
 
 
@@ -1717,9 +1714,7 @@ def test_phase_insight_does_not_double_inject_question_already_in_commentary_en(
         scenario_question=question,
     )
 
-    assert insight["commentary"].count(question) <= 1
-    # OPENING phase uses `Around the question '...', ` as its prefix —
-    # that second injection must not appear.
+    assert question not in insight["commentary"]
     assert f"Around the question '{question}'" not in insight["commentary"]
 
 
@@ -1746,11 +1741,7 @@ def test_phase_insight_does_not_double_inject_long_question_already_in_commentar
         scenario_question=long_question,
     )
 
-    # The leading 60-char prefix of the question text must appear at most once,
-    # i.e. no duplicate echo of the long question.
-    assert insight["commentary"].count(long_question[:60]) <= 1
-    # CROSSFIRE phase would inject `围绕「{question}」，` if not deduped —
-    # that prefix must NOT appear.
+    assert long_question[:60] not in insight["commentary"]
     assert f"围绕「{long_question}" not in insight["commentary"]
 
 
@@ -1767,17 +1758,12 @@ def test_phase_insight_still_compacts_when_long_question_is_in_commentary():
         scenario_question=long_question,
     )
 
-    # The output should be bounded (commentary_text = phase prefix + 64-char compact)
-    # and must NOT prepend the long question a second time.
     assert f"围绕「{long_question}" not in insight["commentary"]
-    # Still emits a valid phase-prefixed commentary shape (`这轮先钉住：...`).
-    assert "这轮先钉住" in insight["commentary"]
+    assert "这轮先钉住" not in insight["commentary"]
+    assert insight["commentary"] == "秩序线的关键转折在粮道先稳住"
 
 
-def test_phase_insight_still_adds_question_prefix_when_commentary_lacks_question():
-    """Sanity check: when the commentary does NOT already contain the question
-    (e.g. follow-up replies, LLM-generated commentary that dropped the prefix),
-    `_phase_insight` should still inject the question prefix as before."""
+def test_phase_insight_does_not_add_question_prefix_when_commentary_lacks_question():
     question = "如果秦朝没有焚书坑儒，思想会不会更多元？"
     commentary = "《秩序线》的关键转折在「文献先保住」。"
 
@@ -1788,9 +1774,9 @@ def test_phase_insight_still_adds_question_prefix_when_commentary_lacks_question
         scenario_question=question,
     )
 
-    # Verdict path uses the `针对「...」，` prefix.
-    assert f"针对「{question}」" in insight["commentary"]
-    assert insight["commentary"].count(question) == 1
+    assert f"针对「{question}」" not in insight["commentary"]
+    assert question not in insight["commentary"]
+    assert insight["commentary"] == "《秩序线》的关键转折在「文献先保住」"
 
 
 def test_phase_insight_preserves_hook_when_long_chinese_question_prefix_present():
@@ -1825,9 +1811,7 @@ def test_phase_insight_preserves_hook_when_long_chinese_question_prefix_present(
     assert hook in insight["commentary"], (
         f"hook '{hook}' was eaten by question-prefix bloat; got: {insight['commentary']!r}"
     )
-    # OPENING phase prefix should still be applied.
-    assert "这轮先钉住" in insight["commentary"]
-    # Dedup guard still holds: question must not be re-injected via `围绕「...」，`.
+    assert "这轮先钉住" not in insight["commentary"]
     assert f"围绕「{long_question}" not in insight["commentary"]
 
 
@@ -1859,7 +1843,7 @@ def test_phase_insight_preserves_hook_when_long_english_question_prefix_present(
     assert hook in insight["commentary"], (
         f"hook '{hook}' was eaten by question-prefix bloat; got: {insight['commentary']!r}"
     )
-    assert "This round pins down" in insight["commentary"]
+    assert "This round pins down" not in insight["commentary"]
     assert f"Around the question '{long_question}'" not in insight["commentary"]
 
 
@@ -1908,11 +1892,19 @@ def test_phase_insight_compacts_normally_when_commentary_has_no_question_prefix(
 
     insight = _phase_insight("zh", EndingRoomPhase.OPENING, commentary)
 
-    # No scenario_question passed -> no `围绕「...」，` prefix injected.
     assert "围绕" not in insight["commentary"]
-    assert "这轮先钉住" in insight["commentary"]
-    # Hook from the first clause survives.
+    assert "这轮先钉住" not in insight["commentary"]
     assert "粮道先稳住" in insight["commentary"]
+
+
+def test_phase_insight_returns_full_normalized_insight_body():
+    commentary = "第一句洞察。\n第二句仍应保存在 insight_body。"
+
+    insight = _phase_insight("zh", EndingRoomPhase.OPENING, commentary)
+
+    assert "insight_body" in insight
+    assert insight["commentary"] == "第一句洞察"
+    assert insight["insight_body"] == "第一句洞察。 第二句仍应保存在 insight_body。"
 
 
 def test_phase_insight_does_not_crash_on_empty_commentary():
@@ -1925,12 +1917,14 @@ def test_phase_insight_does_not_crash_on_empty_commentary():
     )
 
     assert isinstance(insight["commentary"], str)
-    assert insight["commentary"]  # non-empty
+    assert insight["commentary"] == "先确认这条线怎么走到这里"
+    assert insight["insight_body"] == "先确认这条线怎么走到这里"
     assert insight["stakes"] == "世界线切口"
 
     insight_no_q = _phase_insight("en", EndingRoomPhase.VERDICT, "")
     assert isinstance(insight_no_q["commentary"], str)
-    assert insight_no_q["commentary"]
+    assert insight_no_q["commentary"] == "Collapse the room into archive language"
+    assert insight_no_q["insight_body"] == "Collapse the room into archive language"
     assert insight_no_q["stakes"] == "Archivist summary"
 
 
@@ -1951,6 +1945,569 @@ def test_strip_question_prefix_unit_cases():
     assert _strip_question_prefix("plain commentary text") == "plain commentary text"
     # Empty/falsy -> empty string, no crash
     assert _strip_question_prefix("") == ""
+
+
+def test_worldline_roundtable_rebuild_preserves_closing_phase_insight_when_llm_enabled():
+    room = EndingRoom(
+        id="room-rebuild-closing",
+        scenario_id="scenario-rebuild-closing",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Worldline Roundtable",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        id="participant-archivist",
+        room_id=room.id,
+        role_slot=EndingRoomRoleSlot.ARCHIVIST,
+        display_name="Archivist",
+    )
+    planned_turns = [
+        {
+            "phase": EndingRoomPhase.OPENING,
+            "participant_id": participant.id,
+            "content": "Opening insight should remain in the rebuilt result.",
+        },
+        {
+            "phase": EndingRoomPhase.CROSSFIRE,
+            "participant_id": participant.id,
+            "content": "Crossfire insight should remain in the rebuilt result.",
+        },
+        {
+            "phase": EndingRoomPhase.CLOSING,
+            "participant_id": participant.id,
+            "content": "Closing insight should survive the LLM rebuild path.",
+        },
+        {
+            "phase": EndingRoomPhase.VERDICT,
+            "participant_id": participant.id,
+            "content": "Verdict insight should remain in the rebuilt result.",
+        },
+    ]
+
+    rebuilt = ending_room_service_module._rebuild_room_result(
+        room,
+        [participant],
+        planned_turns,
+        {"summary": "old summary"},
+        scenario_question="What broke first?",
+    )
+
+    assert [insight["phase"] for insight in rebuilt["phase_insights"]] == [
+        "opening",
+        "crossfire",
+        "closing",
+        "verdict",
+    ]
+    assert any(
+        "Closing insight should survive" in insight["insight_body"]
+        for insight in rebuilt["phase_insights"]
+    )
+
+
+def test_roundtable_phase_insight_llm_gate_off_returns_original(monkeypatch):
+    insights = [
+        {
+            "phase": "opening",
+            "stakes": "Opening stakes",
+            "moderator_focus": "Opening focus",
+            "commentary": "Original opening commentary.",
+            "insight_body": "Original opening body.",
+        }
+    ]
+
+    async def _should_not_call(*args, **kwargs):
+        raise AssertionError("llm_call should not run when the feature flag is off")
+
+    monkeypatch.setattr(
+        content_module.settings,
+        "FEATURE_ROUNDTABLE_INSIGHT_LLM",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(content_module, "llm_call", _should_not_call, raising=False)
+
+    result = asyncio.run(
+        content_module._enhance_roundtable_phase_insights(
+            insights=insights,
+            planned_turns=[],
+            language="en",
+            scenario_question="What broke first?",
+        )
+    )
+
+    assert result is insights
+
+
+def test_roundtable_phase_insight_llm_rewrites_commentary_and_body(monkeypatch):
+    insights = [
+        {
+            "phase": "opening",
+            "stakes": "Opening stakes",
+            "moderator_focus": "Opening focus",
+            "commentary": "Original opening commentary.",
+            "insight_body": "Original opening body.",
+        }
+    ]
+    prompts: list[str] = []
+
+    async def _rewrite(input_text, **kwargs):
+        prompts.append(input_text)
+        assert "model" not in kwargs
+        assert "api_key" not in kwargs
+        assert "base_url" not in kwargs
+        assert "max_tokens" not in kwargs
+        return "For the question 'What broke first?', The pressure moved from roads to legitimacy."
+
+    monkeypatch.setattr(
+        content_module.settings,
+        "FEATURE_ROUNDTABLE_INSIGHT_LLM",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(content_module, "llm_call", _rewrite, raising=False)
+
+    result = asyncio.run(
+        content_module._enhance_roundtable_phase_insights(
+            insights=insights,
+            planned_turns=[
+                {
+                    "phase": EndingRoomPhase.OPENING,
+                    "content": "Representative turn excerpt.",
+                }
+            ],
+            language="en",
+            scenario_question="What broke first?",
+        )
+    )
+
+    assert result is not insights
+    assert result[0] is not insights[0]
+    assert insights[0]["commentary"] == "Original opening commentary."
+    assert result[0]["commentary"] == "The pressure moved from roads to legitimacy."
+    assert result[0]["insight_body"] == "The pressure moved from roads to legitimacy."
+    assert prompts and "UNTRUSTED DATA" in prompts[0]
+    assert "Representative turn excerpt." in prompts[0]
+
+
+def test_roundtable_phase_insight_llm_partial_failure_keeps_original(monkeypatch):
+    insights = [
+        {
+            "phase": "opening",
+            "stakes": "Opening stakes",
+            "moderator_focus": "Opening focus",
+            "commentary": "Original opening commentary.",
+            "insight_body": "Original opening body.",
+        },
+        {
+            "phase": "crossfire",
+            "stakes": "Crossfire stakes",
+            "moderator_focus": "Crossfire focus",
+            "commentary": "Original crossfire commentary.",
+            "insight_body": "Original crossfire body.",
+        },
+    ]
+
+    async def _rewrite(input_text, **kwargs):
+        if "Phase: opening" in input_text:
+            raise RuntimeError("provider unavailable")
+        return "Crossfire rewrite with enough content to display."
+
+    monkeypatch.setattr(
+        content_module.settings,
+        "FEATURE_ROUNDTABLE_INSIGHT_LLM",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(content_module, "llm_call", _rewrite, raising=False)
+
+    result = asyncio.run(
+        content_module._enhance_roundtable_phase_insights(
+            insights=insights,
+            planned_turns=[],
+            language="en",
+            scenario_question="What broke first?",
+        )
+    )
+
+    assert result[0]["commentary"] == "Original opening commentary."
+    assert result[0]["insight_body"] == "Original opening body."
+    assert result[1]["commentary"] == "Crossfire rewrite with enough content to display."
+    assert result[1]["insight_body"] == "Crossfire rewrite with enough content to display."
+
+
+def test_roundtable_phase_insight_llm_cancelled_error_propagates(monkeypatch):
+    insights = [
+        {
+            "phase": "opening",
+            "stakes": "Opening stakes",
+            "moderator_focus": "Opening focus",
+            "commentary": "Original opening commentary.",
+            "insight_body": "Original opening body.",
+        }
+    ]
+
+    async def _cancel(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        content_module.settings,
+        "FEATURE_ROUNDTABLE_INSIGHT_LLM",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(content_module, "llm_call", _cancel, raising=False)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            content_module._enhance_roundtable_phase_insights(
+                insights=insights,
+                planned_turns=[],
+                language="en",
+                scenario_question="What broke first?",
+            )
+        )
+
+
+def test_roundtable_phase_insight_llm_rejects_json_fence_and_reasoning_only(monkeypatch):
+    insights = [
+        {
+            "phase": "opening",
+            "stakes": "Opening stakes",
+            "moderator_focus": "Opening focus",
+            "commentary": "Original opening commentary.",
+            "insight_body": "Original opening body.",
+        },
+        {
+            "phase": "crossfire",
+            "stakes": "Crossfire stakes",
+            "moderator_focus": "Crossfire focus",
+            "commentary": "Original crossfire commentary.",
+            "insight_body": "Original crossfire body.",
+        },
+        {
+            "phase": "verdict",
+            "stakes": "Verdict stakes",
+            "moderator_focus": "Verdict focus",
+            "commentary": "Original verdict commentary.",
+            "insight_body": "Original verdict body.",
+        },
+        {
+            "phase": "closing",
+            "stakes": "Closing stakes",
+            "moderator_focus": "Closing focus",
+            "commentary": "Original closing commentary.",
+            "insight_body": "Original closing body.",
+        },
+        {
+            "phase": "rebuttal",
+            "stakes": "Rebuttal stakes",
+            "moderator_focus": "Rebuttal focus",
+            "commentary": "Original rebuttal commentary.",
+            "insight_body": "Original rebuttal body.",
+        },
+        {
+            "phase": "afterparty",
+            "stakes": "Unknown stakes",
+            "moderator_focus": "Unknown focus",
+            "commentary": "Original unknown commentary.",
+            "insight_body": "Original unknown body.",
+        },
+    ]
+
+    async def _rewrite(input_text, **kwargs):
+        if "Phase: opening" in input_text:
+            return '["json array should not be accepted"]'
+        if "Phase: crossfire" in input_text:
+            return (
+                "For the question 'What broke first?', "
+                "```markdown\nfenced output should not be accepted\n```"
+            )
+        if "Phase: verdict" in input_text:
+            return "<think>internal chain only"
+        if "Phase: closing" in input_text:
+            return (
+                "For the question 'What broke first?', "
+                "{\"content\": \"json should not be accepted\"}"
+            )
+        if "Phase: rebuttal" in input_text:
+            return ""
+        return "Too short"
+
+    monkeypatch.setattr(
+        content_module.settings,
+        "FEATURE_ROUNDTABLE_INSIGHT_LLM",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(content_module, "llm_call", _rewrite, raising=False)
+
+    result = asyncio.run(
+        content_module._enhance_roundtable_phase_insights(
+            insights=insights,
+            planned_turns=[],
+            language="en",
+            scenario_question="What broke first?",
+        )
+    )
+
+    assert [item["commentary"] for item in result] == [
+        "Original opening commentary.",
+        "Original crossfire commentary.",
+        "Original verdict commentary.",
+        "Original closing commentary.",
+        "Original rebuttal commentary.",
+        "Original unknown commentary.",
+    ]
+
+
+def test_roundtable_phase_insight_llm_skips_short_insight_body(monkeypatch):
+    insights = [
+        {
+            "phase": "opening",
+            "stakes": "Opening stakes",
+            "moderator_focus": "Opening focus",
+            "commentary": "Original opening commentary.",
+            "insight_body": "short",
+        },
+        {
+            "phase": "crossfire",
+            "stakes": "Crossfire stakes",
+            "moderator_focus": "Crossfire focus",
+            "commentary": "Original crossfire commentary.",
+            "insight_body": "Original crossfire body.",
+        },
+    ]
+    calls: list[str] = []
+
+    async def _rewrite(input_text, **kwargs):
+        calls.append(input_text)
+        return "Rewrite with enough content to display."
+
+    monkeypatch.setattr(
+        content_module.settings,
+        "FEATURE_ROUNDTABLE_INSIGHT_LLM",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(content_module, "llm_call", _rewrite, raising=False)
+
+    result = asyncio.run(
+        content_module._enhance_roundtable_phase_insights(
+            insights=insights,
+            planned_turns=[],
+            language="en",
+            scenario_question="What broke first?",
+        )
+    )
+
+    assert len(calls) == 1
+    assert "Phase: crossfire" in calls[0]
+    assert result[0]["commentary"] == "Original opening commentary."
+    assert result[0]["insight_body"] == "short"
+    assert result[1]["commentary"] == "Rewrite with enough content to display."
+    assert result[1]["insight_body"] == "Rewrite with enough content to display."
+
+
+def test_roundtable_phase_insight_llm_strips_question_prefix(monkeypatch):
+    insights = [
+        {
+            "phase": "verdict",
+            "stakes": "Verdict stakes",
+            "moderator_focus": "Verdict focus",
+            "commentary": "Original verdict commentary.",
+            "insight_body": "Original verdict body.",
+        }
+    ]
+
+    async def _rewrite(*args, **kwargs):
+        return "For the question 'What broke first?', The final split is now clear."
+
+    monkeypatch.setattr(
+        content_module.settings,
+        "FEATURE_ROUNDTABLE_INSIGHT_LLM",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(content_module, "llm_call", _rewrite, raising=False)
+
+    result = asyncio.run(
+        content_module._enhance_roundtable_phase_insights(
+            insights=insights,
+            planned_turns=[],
+            language="en",
+            scenario_question="What broke first?",
+        )
+    )
+
+    assert result[0]["commentary"] == "The final split is now clear."
+    assert "What broke first" not in result[0]["insight_body"]
+
+
+def test_roundtable_phase_insight_llm_caps_large_representative_sets(monkeypatch):
+    insights = [
+        {
+            "phase": "opening",
+            "stakes": f"Stakes {index}",
+            "moderator_focus": f"Focus {index}",
+            "commentary": f"Original commentary {index}.",
+            "insight_body": f"Original body {index}.",
+        }
+        for index in range(10)
+    ]
+    calls = 0
+
+    async def _rewrite(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return "Rewrite for capped insight set with enough length."
+
+    monkeypatch.setattr(
+        content_module.settings,
+        "FEATURE_ROUNDTABLE_INSIGHT_LLM",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(content_module, "llm_call", _rewrite, raising=False)
+
+    result = asyncio.run(
+        content_module._enhance_roundtable_phase_insights(
+            insights=insights,
+            planned_turns=[],
+            language="en",
+            scenario_question="What broke first?",
+        )
+    )
+
+    assert calls == 8
+    assert all(
+        item["commentary"] == "Rewrite for capped insight set with enough length."
+        for item in result[:8]
+    )
+    assert [item["commentary"] for item in result[8:]] == [
+        "Original commentary 8.",
+        "Original commentary 9.",
+    ]
+
+
+def test_roundtable_phase_insight_llm_uses_bounded_concurrency(monkeypatch):
+    insights = [
+        {
+            "phase": "opening",
+            "stakes": f"Stakes {index}",
+            "moderator_focus": f"Focus {index}",
+            "commentary": f"Original commentary {index}.",
+            "insight_body": f"Original body {index}.",
+        }
+        for index in range(8)
+    ]
+    active = 0
+    max_active = 0
+
+    async def _rewrite(*args, **kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return "Rewrite for concurrency test with enough length."
+
+    monkeypatch.setattr(
+        content_module.settings,
+        "FEATURE_ROUNDTABLE_INSIGHT_LLM",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(content_module, "llm_call", _rewrite, raising=False)
+
+    result = asyncio.run(
+        content_module._enhance_roundtable_phase_insights(
+            insights=insights,
+            planned_turns=[],
+            language="en",
+            scenario_question="What broke first?",
+        )
+    )
+
+    assert max_active <= content_module._INSIGHT_REWRITE_CONCURRENCY
+    assert all(
+        item["commentary"] == "Rewrite for concurrency test with enough length."
+        for item in result
+    )
+
+
+def test_non_roundtable_rooms_skip_roundtable_insight_llm(monkeypatch):
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.ONE_MOVE_ONLY,
+        anchor_branch_id=branch_id,
+        selected_branch_ids=[branch_id],
+        selected_agent_ids=[agent_ids[0]],
+        language="en",
+    )
+    assert created is True
+
+    async def _should_not_call(*args, **kwargs):
+        raise AssertionError("roundtable insight LLM must not run for non-roundtable rooms")
+
+    monkeypatch.setattr(
+        content_module.settings,
+        "FEATURE_ROUNDTABLE_INSIGHT_LLM",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(content_module, "llm_call", _should_not_call, raising=False)
+
+    payload = asyncio.run(_run_room(snapshot["id"], AsyncMock(side_effect=_noop_broadcast)))
+
+    assert payload["status"] == "done"
+
+
+def test_roundtable_phase_insight_llm_uses_room_language_prompt(monkeypatch):
+    insights = [
+        {
+            "phase": "opening",
+            "stakes": "Opening stakes",
+            "moderator_focus": "Opening focus",
+            "commentary": "Original opening commentary.",
+            "insight_body": "Original opening body.",
+        }
+    ]
+    prompts: list[str] = []
+
+    async def _rewrite(input_text, **kwargs):
+        prompts.append(input_text)
+        return "这是一条阶段洞察，长度足够，可以直接展示。"
+
+    monkeypatch.setattr(
+        content_module.settings,
+        "FEATURE_ROUNDTABLE_INSIGHT_LLM",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(content_module, "llm_call", _rewrite, raising=False)
+
+    asyncio.run(
+        content_module._enhance_roundtable_phase_insights(
+            insights=insights,
+            planned_turns=[],
+            language="zh",
+            scenario_question="如果秩序先断在哪里？",
+        )
+    )
+    asyncio.run(
+        content_module._enhance_roundtable_phase_insights(
+            insights=insights,
+            planned_turns=[],
+            language="en",
+            scenario_question="What broke first?",
+        )
+    )
+
+    assert "请用简体中文" in prompts[0]
+    assert "Write in English" in prompts[1]
 
 
 def test_thread_followup_prompts_keep_reply_on_active_anchor():
@@ -2404,8 +2961,18 @@ def test_worldline_roundtable_background_prefers_llm_for_each_turn_and_keeps_clo
         insight["commentary"]
         for insight in payload["result"]["phase_insights"]
     ]
-    assert any(f"围绕「{scenario_question}」" in comment for comment in phase_comments)
-    assert any(f"针对「{scenario_question}」" in comment for comment in phase_comments)
+    phase_insights = payload["result"]["phase_insights"]
+    assert [insight["phase"] for insight in phase_insights] == [
+        "opening",
+        "opening",
+        "closing",
+        "verdict",
+    ]
+    assert all("insight_body" in insight for insight in phase_insights)
+    assert all(f"围绕「{scenario_question}」" not in comment for comment in phase_comments)
+    assert all(f"针对「{scenario_question}」" not in comment for comment in phase_comments)
+    assert any("先松掉的是命令链" in comment for comment in phase_comments)
+    assert any("真正把差距拉开的" in comment for comment in phase_comments)
 
 
 def test_roundtable_snapshot_keeps_representatives_in_scope_order():

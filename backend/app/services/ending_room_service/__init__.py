@@ -70,6 +70,7 @@ from ._content import (  # noqa: F401 — re-exported
     _build_roundtable_opening_content,
     _build_roundtable_verdict_content,
     _build_roundtable_witness_content,
+    _enhance_roundtable_phase_insights,
     _maybe_rewrite_oracle_copy,
     _normalize_oracle_generated_content,
     _oracle_banned_process_phrases,
@@ -687,7 +688,12 @@ def _rebuild_room_result(
     scenario_question: str | None = None,
 ) -> dict[str, Any]:
     phase_filter = {
-        EndingRoomType.WORLDLINE_ROUNDTABLE: {EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE, EndingRoomPhase.VERDICT},  # noqa: E501
+        EndingRoomType.WORLDLINE_ROUNDTABLE: {
+            EndingRoomPhase.OPENING,
+            EndingRoomPhase.CROSSFIRE,
+            EndingRoomPhase.CLOSING,
+            EndingRoomPhase.VERDICT,
+        },
         EndingRoomType.ONE_MOVE_ONLY: {EndingRoomPhase.OPENING, EndingRoomPhase.VERDICT},
     }.get(room.room_type, {turn["phase"] for turn in planned_turns})
     verdict_text = planned_turns[-1]["content"] if planned_turns else ""
@@ -1950,6 +1956,9 @@ async def run_ending_room_background(
                 ((room.config_json or {}).get("selected_branch_ids") or []),
             )
             participants = _sort_room_participants(participants, selected_branch_ids)
+            room_type = room.room_type
+            room_language = room.language
+            room_scenario_id = room.scenario_id
             planned_turns, result = _build_room_plan(session, room, participants)
             planned_turns, result = await _enhance_room_plan_with_llm(
                 room,
@@ -1973,6 +1982,17 @@ async def run_ending_room_background(
                 for turn in existing_auto_turns
             ]
             session.commit()
+
+        if (
+            room_type == EndingRoomType.WORLDLINE_ROUNDTABLE
+            and result.get("phase_insights")
+        ):
+            result["phase_insights"] = await _enhance_roundtable_phase_insights(
+                insights=result["phase_insights"],
+                planned_turns=planned_turns,
+                language=room_language,
+                scenario_question=_load_scenario_question(room_scenario_id),
+            )
 
         for committed_turn in existing_auto_turn_refs:
             _bind_supporting_turn_id(

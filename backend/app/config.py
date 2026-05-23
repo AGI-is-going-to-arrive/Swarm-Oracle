@@ -100,6 +100,7 @@ class Settings(BaseSettings):
     FEATURE_AGENT_CONVERSATION: bool = Field(default=False)
     FEATURE_ROUNDTABLE_SURVEY: bool = Field(default=False)
     FEATURE_ROUNDTABLE_ANALYST: bool = Field(default=False)
+    FEATURE_ROUNDTABLE_INSIGHT_LLM: bool = False
     FEATURE_KG_EXPLORER: bool = Field(default=False)
     FEATURE_NEW_SOURCES: bool = Field(default=False)
     FEATURE_SNAPSHOT_EXPORT: bool = Field(default=False)

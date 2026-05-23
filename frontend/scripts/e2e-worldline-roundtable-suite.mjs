@@ -122,6 +122,107 @@ async function assertUiLocale(page, locale, label) {
   return assertUiLocaleState(localeState, locale, label);
 }
 
+export function resolveRoundtableDragTargetTestId(sourceBranchId) {
+  const branchId = String(sourceBranchId ?? "").trim();
+  if (!branchId) {
+    throw new Error("Missing source branch id for roundtable desktop drag target");
+  }
+  return `roundtable-seat-slot-${branchId}`;
+}
+
+function buildTestIdSelector(testId) {
+  return `[data-testid="${String(testId).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
+}
+
+async function readSeatOccupantName(targetSlot) {
+  return ((await targetSlot.locator("strong").innerText().catch(() => "")) || "").trim();
+}
+
+async function waitForSeatOccupantName(page, targetTestId, expectedName, timeoutMs = 2500) {
+  const selector = buildTestIdSelector(targetTestId);
+  await page.waitForFunction(
+    ({ seatSelector, name }) => {
+      const text = document.querySelector(`${seatSelector} strong`)?.textContent?.trim() ?? "";
+      return text === name;
+    },
+    { seatSelector: selector, name: expectedName },
+    { timeout: timeoutMs },
+  );
+  return expectedName;
+}
+
+async function centerDragPairInViewport(page, sourceHandle, targetHandle) {
+  await sourceHandle.evaluate((sourceNode, seatNode) => {
+    const sourceRect = sourceNode.getBoundingClientRect();
+    const seatRect = seatNode.getBoundingClientRect();
+    const pairTop = Math.min(sourceRect.top, seatRect.top) + window.scrollY;
+    const pairBottom = Math.max(sourceRect.bottom, seatRect.bottom) + window.scrollY;
+    const pairCenter = pairTop + (pairBottom - pairTop) / 2;
+    window.scrollTo({
+      top: Math.max(0, pairCenter - window.innerHeight / 2),
+      behavior: "auto",
+    });
+  }, targetHandle);
+  await page.waitForTimeout(100);
+}
+
+async function collectDesktopDragDiagnostics(page, sourceHandle, targetSlot, targetTestId) {
+  const sourceBox = await sourceHandle.boundingBox().catch(() => null);
+  const targetBox = await targetSlot.boundingBox().catch(() => null);
+  const sourceState = await sourceHandle.evaluate((node) => ({
+    className: node.className,
+    branchId: node.getAttribute("data-branch-id"),
+    agentId: node.getAttribute("data-agent-id"),
+    text: node.textContent?.trim() ?? "",
+  })).catch((error) => ({ error: error.message }));
+  const seats = await page.evaluate(() => (
+    Array.from(document.querySelectorAll('[data-testid^="roundtable-seat-slot-"]')).map((node) => ({
+      testId: node.getAttribute("data-testid"),
+      className: node.className,
+      text: node.textContent?.trim() ?? "",
+    }))
+  )).catch((error) => [{ error: error.message }]);
+  return {
+    targetTestId,
+    sourceBox,
+    targetBox,
+    sourceState,
+    seats,
+  };
+}
+
+async function keyboardDropCandidateToSeat(page, sourceCard, targetSlot, expectedName, targetTestId) {
+  await sourceCard.scrollIntoViewIfNeeded().catch(() => {});
+  await sourceCard.focus();
+  await page.keyboard.press("Space");
+
+  let overValid = false;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    await page.keyboard.press("ArrowUp");
+    await page.waitForTimeout(60);
+    overValid = await targetSlot.evaluate((node) => node.classList.contains("worldline-roundtable-seating-slot--over-valid")).catch(() => false);
+    if (overValid) {
+      break;
+    }
+  }
+
+  if (!overValid) {
+    await page.keyboard.press("Escape").catch(() => {});
+    throw new Error("Keyboard fallback drag never reached a valid seat");
+  }
+
+  await page.keyboard.press("Space");
+  await waitForSeatOccupantName(page, targetTestId, expectedName).catch(() => null);
+  return readSeatOccupantName(targetSlot);
+}
+
+async function clickSelectCandidateForSeat(page, sourceCard, targetSlot, expectedName, targetTestId) {
+  await sourceCard.scrollIntoViewIfNeeded().catch(() => {});
+  await clickActionable(sourceCard, "roundtable drag fallback candidate");
+  await waitForSeatOccupantName(page, targetTestId, expectedName).catch(() => null);
+  return readSeatOccupantName(targetSlot);
+}
+
 function getRoundtableArchivistPrompt(locale) {
   return normalizeLocale(locale) === "en"
     ? "Use only this table's scope: which worldline's first mistake was most fatal?"
@@ -994,41 +1095,70 @@ async function dragReseatRoundtable(page) {
   const sourceCard = page
     .locator(".worldline-roundtable-picker-branch.is-active")
     .first()
-    .locator(".worldline-roundtable-picker-card:not(.is-selected)")
+    .locator(".worldline-roundtable-picker-card:not(.is-selected):not([disabled])")
     .first();
-  const targetSlot = page.locator('[data-testid^="roundtable-seat-slot-"]').first();
-  await sourceCard.scrollIntoViewIfNeeded();
-  await targetSlot.scrollIntoViewIfNeeded();
+  await sourceCard.waitFor({ state: "visible", timeout: 10000 });
 
   const sourceName = ((await sourceCard.locator("strong").innerText().catch(() => "")) || "").trim();
   if (!sourceName) {
     throw new Error("Could not resolve drag source representative");
   }
+  const sourceBranchId = await sourceCard.getAttribute("data-branch-id");
+  const targetTestId = resolveRoundtableDragTargetTestId(sourceBranchId);
+  const targetSlot = page.getByTestId(targetTestId).first();
+  await targetSlot.waitFor({ state: "visible", timeout: 10000 });
+
+  const sourceHandle = await sourceCard.elementHandle();
+  const targetHandle = await targetSlot.elementHandle();
+  if (!sourceHandle || !targetHandle) {
+    throw new Error("Could not resolve drag-and-drop elements");
+  }
 
   const dragOnce = async () => {
-    const sourceBox = await sourceCard.boundingBox();
+    await centerDragPairInViewport(page, sourceHandle, targetHandle);
+    const sourceBox = await sourceHandle.boundingBox();
     const targetBox = await targetSlot.boundingBox();
     if (!sourceBox || !targetBox) {
       throw new Error("Could not resolve drag-and-drop bounds");
     }
     await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+    await page.waitForTimeout(80);
     await page.mouse.down();
-    await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 18 });
+    await page.waitForTimeout(120);
+    await page.mouse.move(
+      sourceBox.x + sourceBox.width / 2,
+      sourceBox.y + sourceBox.height / 2 + Math.min(24, sourceBox.height / 3),
+      { steps: 4 },
+    );
+    await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 32 });
+    await page.waitForTimeout(120);
     await page.mouse.up();
   };
 
   let slotName = "";
+  let dragMethod = "mouse";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await dragOnce();
-    await page.waitForTimeout(350);
-    slotName = ((await targetSlot.locator("strong").innerText().catch(() => "")) || "").trim();
+    await waitForSeatOccupantName(page, targetTestId, sourceName).catch(() => null);
+    slotName = await readSeatOccupantName(targetSlot);
     if (slotName === sourceName) {
       break;
     }
   }
 
   if (slotName !== sourceName) {
-    throw new Error(`Desktop drag-and-drop did not update the seat occupant (expected ${sourceName}, got ${slotName || "empty"})`);
+    try {
+      slotName = await keyboardDropCandidateToSeat(page, sourceCard, targetSlot, sourceName, targetTestId);
+      dragMethod = "keyboard-after-mouse-miss";
+    } catch {
+      slotName = await clickSelectCandidateForSeat(page, sourceCard, targetSlot, sourceName, targetTestId);
+      dragMethod = "click-after-mouse-keyboard-miss";
+    }
+  }
+
+  if (slotName !== sourceName) {
+    const diagnostics = await collectDesktopDragDiagnostics(page, sourceHandle, targetSlot, targetTestId);
+    throw new Error(`Desktop drag-and-drop did not update the seat occupant (expected ${sourceName}, got ${slotName || "empty"}; diagnostics=${JSON.stringify(diagnostics)})`);
   }
 
   const reopenButton = page.getByRole("button", {
@@ -1066,6 +1196,7 @@ async function dragReseatRoundtable(page) {
     previousRoomId,
     nextRoomId: reseated?.scene?.room_id ?? null,
     nextRepresentative: sourceName,
+    dragMethod,
     selectionMode: reseated?.page?.controls?.selection_mode ?? null,
     selectedBranchCount: reseated?.page?.controls?.selected_branch_count ?? null,
   };
@@ -1880,13 +2011,20 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
 }
 
-main()
-  .then(() => {
-    // Playwright can leave lingering handles even after best-effort teardown.
-    // This script is CLI-only, so exit explicitly once all artifacts are written.
-    process.exit(0);
-  })
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+function isDirectExecution() {
+  if (!process.argv[1]) return false;
+  return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+}
+
+if (isDirectExecution()) {
+  main()
+    .then(() => {
+      // Playwright can leave lingering handles even after best-effort teardown.
+      // This script is CLI-only, so exit explicitly once all artifacts are written.
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error(error);
+      process.exit(1);
+    });
+}

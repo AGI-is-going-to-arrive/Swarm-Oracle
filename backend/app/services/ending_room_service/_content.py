@@ -30,6 +30,7 @@ from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
     _strip_reasoning_blocks,
     format_untrusted_text_block,
+    llm_call,
     llm_request_scope,
 )
 
@@ -44,10 +45,13 @@ from ._utils import (
     _parse_key_moments,
     _roundtable_branch_hook,
     _stable_oracle_choice,
+    _strip_question_prefix,
     sanitize_untrusted_text,
 )
 
 logger = logging.getLogger(__name__)
+_MAX_INSIGHT_REWRITES = 8
+_INSIGHT_REWRITE_CONCURRENCY = 3
 
 
 def _roundtable_participant_variant(participant: EndingRoomParticipant | None) -> str:
@@ -66,6 +70,183 @@ def _roundtable_question_prefix(scenario_question: str | None, *, language: str)
     if language == "zh":
         return f"针对「{question}」这个问题，"
     return f"For the question '{question}', "
+
+
+def _phase_value_for_insight_turn(turn: dict[str, Any]) -> str:
+    phase = turn["phase"]
+    return phase.value if hasattr(phase, "value") else str(phase)
+
+
+def _roundtable_phase_turn_excerpt_block(
+    planned_turns: list[dict[str, Any]],
+    *,
+    phase: str,
+) -> str:
+    excerpts = [
+        str(turn.get("content") or "").strip()
+        for turn in planned_turns
+        if _phase_value_for_insight_turn(turn) == phase
+    ]
+    return "\n".join(f"- {excerpt}" for excerpt in excerpts[:4] if excerpt)
+
+
+def _roundtable_phase_insight_prompt(
+    *,
+    insight: dict[str, Any],
+    planned_turns: list[dict[str, Any]],
+    language: str,
+    scenario_question: str | None,
+) -> str:
+    phase = str(insight.get("phase") or "")
+    current_insight = json.dumps(
+        {
+            "phase": phase,
+            "stakes": insight.get("stakes"),
+            "moderator_focus": insight.get("moderator_focus"),
+            "commentary": insight.get("commentary"),
+            "insight_body": insight.get("insight_body"),
+        },
+        ensure_ascii=False,
+    )
+    turn_excerpts = _roundtable_phase_turn_excerpt_block(
+        planned_turns,
+        phase=phase,
+    )
+    if language == "zh":
+        instruction = (
+            "你是世界线圆桌的主持人。请用简体中文改写这一阶段洞察，"
+            "让它更像给读者看的主持人总结。\n"
+            "只输出一段可直接展示的洞察文本。不要 JSON、Markdown、项目符号、"
+            "代码块或推理过程。保留原阶段的事实边界，不新增世界线事件。"
+        )
+    else:
+        instruction = (
+            "You are the host of a Worldline Roundtable. Write in English and "
+            "rewrite this phase insight as a reader-facing moderator takeaway.\n"
+            "Output one display-ready paragraph only. Do not output JSON, "
+            "Markdown, bullets, code fences, or reasoning. Preserve the phase's "
+            "factual boundaries and do not invent new worldline events."
+        )
+    question_block = format_untrusted_text_block(
+        "Scenario question",
+        scenario_question or "",
+        max_chars=600,
+    )
+    insight_block = format_untrusted_text_block(
+        "Current insight",
+        current_insight,
+        max_chars=1200,
+    )
+    excerpts_block = format_untrusted_text_block(
+        "Phase turn excerpts",
+        turn_excerpts,
+        max_chars=1800,
+    )
+    return (
+        f"{instruction}\n"
+        f"Phase: {phase}\n"
+        f"{question_block}\n"
+        f"{insight_block}\n"
+        f"{excerpts_block}"
+    )
+
+
+def _normalize_roundtable_phase_insight_output(
+    output: Any,
+    *,
+    scenario_question: str | None,
+) -> str | None:
+    def _looks_like_invalid_display_text(value: str) -> bool:
+        leading_text = value.lstrip()
+        return (
+            leading_text.startswith(("{", "[", "```", "<think"))
+            or "```" in value
+            or re.match(r"^(?:[-*+]\s+|\d+[.)]\s+)", leading_text) is not None
+        )
+
+    cleaned = _strip_reasoning_blocks(str(output or "")).strip()
+    if not cleaned:
+        return None
+    if _looks_like_invalid_display_text(cleaned):
+        return None
+    cleaned = _strip_question_prefix(
+        cleaned,
+        scenario_question=scenario_question,
+    ).strip()
+    if _looks_like_invalid_display_text(cleaned):
+        return None
+    cleaned = sanitize_untrusted_text(cleaned, max_chars=900)
+    if len(cleaned) < 15:
+        return None
+    return cleaned
+
+
+async def _enhance_roundtable_phase_insights(
+    *,
+    insights: list[dict[str, Any]],
+    planned_turns: list[dict[str, Any]],
+    language: str,
+    scenario_question: str | None,
+) -> list[dict[str, Any]]:
+    """Optionally rewrite Worldline Roundtable phase insights via server LLM."""
+
+    if not settings.FEATURE_ROUNDTABLE_INSIGHT_LLM:
+        return insights
+
+    rewritten = [dict(insight) for insight in insights]
+    rewrite_count = min(len(rewritten), _MAX_INSIGHT_REWRITES)
+    if rewrite_count <= 0:
+        return rewritten
+
+    semaphore = asyncio.Semaphore(_INSIGHT_REWRITE_CONCURRENCY)
+
+    async def _rewrite_one(index: int) -> None:
+        insight = rewritten[index]
+        if len(str(insight.get("insight_body") or "").strip()) < 10:
+            return
+        prompt = _roundtable_phase_insight_prompt(
+            insight=insight,
+            planned_turns=planned_turns,
+            language=language,
+            scenario_question=scenario_question,
+        )
+        phase = str(insight.get("phase") or "unknown")
+        try:
+            async with semaphore:
+                with llm_request_scope(
+                    quota_key=None,
+                    purpose=f"roundtable_phase_insight_{phase}_{index}",
+                ):
+                    raw_output = await asyncio.wait_for(
+                        llm_call(
+                            prompt,
+                            reasoning_effort="low",
+                            temperature=0.45,
+                            timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS,
+                        ),
+                        timeout=_ORACLE_LLM_REWRITE_TIMEOUT_SECONDS + 1.0,
+                    )
+            normalized = _normalize_roundtable_phase_insight_output(
+                raw_output,
+                scenario_question=scenario_question,
+            )
+        except Exception as exc:
+            logger.info(
+                "Roundtable phase insight rewrite failed",
+                extra={
+                    "event": "roundtable_phase_insight_rewrite_failed",
+                    "phase": phase,
+                    "reason": type(exc).__name__,
+                },
+            )
+            return
+        if normalized is None:
+            return
+        insight["commentary"] = normalized
+        insight["insight_body"] = normalized
+
+    await asyncio.gather(*(_rewrite_one(index) for index in range(rewrite_count)))
+    return rewritten
 
 
 def _roundtable_variant_hook_fallback(

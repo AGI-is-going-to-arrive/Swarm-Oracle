@@ -94,7 +94,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - `WorldlineRoundtableView` 已支持 live roundtable、改选重开、只读 replay，以及 `manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented`。
 - live completed room 当前在裁决落地后开放 `Deep Dive` 工作台，包含 participant-scoped `1-on-1 Interview`、`Research Analyst` 与 `Cross-Examine`；readonly replay 不开放这组 live-only 工作台入口。`1-on-1 Interview` 会先显示代表的角色、世界线、立场、最近原话和人物简介，并把这份可读摘要作为 conversation origin context；网络失败只显示错误提示，不伪装成代表发言。
 - `survey / analyst` 当前是 completed live roundtable 的 Deep Dive SSE 工作台能力；`survey` 会并发询问代表并逐条返回 `survey_response`，但它不是 EndingChatModal 的 `interaction_mode`。
-- 代表改选当前支持桌面 `drag-to-seat / keyboard reseat`；移动端保留 `click-to-seat`。
+- 代表改选当前支持桌面 `drag-to-seat / keyboard reseat`，并保留同一候选卡的入席兜底；移动端保留 `click-to-seat`。
 - single-ending 当前已补：
   - `继续追问`
   - `另开线程`
@@ -107,7 +107,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - transcript `quote` 级追问 / 开线程
   - transcript `quote` 级 `点名这位代表 / Hotseat this rep`
 - roundtable committed transcript 当前已补长段折叠 / 展开，避免主区直接被长段挤满。
-- roundtable 的 phase insight 当前是 timeline 样式，默认折叠；header 只留短 preview，展开后显示带左边框的主持人 commentary。后端会先剥掉重复的问题前缀，再按中文 96 字 / 英文 160 chars 的预算压缩；旧 payload 里如果残留整段 transcript 复述，侧栏和预填 prompt 也会先取第一句，避免重复占屏。Phase 编号走 locale key，英文显示 `Phase 01`，中文显示 `阶段 01`。
+- roundtable 的 phase insight 当前是 timeline 样式，默认折叠；header 用 phase chip 标出 `opening / crossfire / closing / verdict` 等阶段，未知 phase 显示中性 fallback。后端会先剥掉重复的问题前缀，`commentary` 保持短标题，`insight_body` 保留完整洞察；展开态优先显示 `insight_body`，旧 payload 没有该字段时回退 `commentary`。phase 级追问 / 开线程按钮只在 live room 显示。
 - roundtable live room 主列当前让 transcript 独立滚动；Synthesis 区域自然展开，不再设内部滚动，也不会在 375px mobile 下被 flex 布局压缩裁切。
 - 已新增两种交互模式：
   - `后续三回合 (epilogue)`：在结局讨论后继续 3 回合短叙事推演，不重开主 simulation。
@@ -143,7 +143,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - ending-room replay helper 当前识别 `roomReplay / roomShare / roomLocal`；roundtable 页面继续使用 `roomShare / roomLocal`，并兼容 `share / local` alias。
 - roundtable 的 readonly replay 当前会跟随 `active_thread_id` 恢复对应 thread 语义；若落在 `hotseat` follow-up，页面不会再退回成 `archivist_route`。
 - mobile roundtable artifact replay readonly 当前也会跟随 active replay thread 恢复 `interaction_mode`，不再在自动化口径里卡成 `archivist_route`。
-- roundtable 的 scoped regression 当前已覆盖 Chromium 桌面/移动，以及桌面 Firefox / WebKit；`reseat / keyboard reseat / anchored thread / hotseat / witness_augmented / readonly replay` 口径与 Chromium 对齐。
+- roundtable 的 scoped regression 当前已覆盖 Chromium 桌面/移动，以及桌面 Firefox / WebKit；`reseat / keyboard reseat / anchored thread / hotseat / witness_augmented / readonly replay` 口径与 Chromium 对齐。Playwright WebKit 下如果 dnd-kit 拖拽模拟没有命中，脚本会记录 `dragMethod` 并走同一候选卡的入席兜底，不把这类输入模拟问题伪装成原生拖拽成功。
 - `ending-room / roundtable` 的主文案当前已改成 factual anchor + `LLM first, template fallback`：participant snapshot 会带 `agent_role / agent_persona / bio_short / impact_score / branch_pressure`，但角色身份块和动态词汇身份提示都会按 `UNTRUSTED DATA` 注入；provider 慢、失败、空流式、仅 reasoning 输出或返回 JSON 字符串时，会退到可显示文本或 deterministic fallback，不再默认先落模板再改写。roundtable opening / crossfire / witness / verdict 的静态锚点会把 scenario question 压成短问题前缀；英文 fallback 会避开中文问题原文；roundtable verdict 与 follow-up fallback 现在要求是可直接显示的人话，不允许把 prompt 指令或模式标签原样露给用户。
 - Oracle participant 选择当前会给 `source_type=custom` 的 Agent 加 1.5x impact multiplier；这只影响会客厅/圆桌代表排序，不会把自建 Agent 提升成 `CORE`。
 - ending-room 后台生成当前也持有 runtime lock heartbeat；续租返回 `None`、续租抛异常，或 lease 过期时，会直接 fail-closed 把 room 落成 `error`，不会失锁后继续写 turn 或 result。

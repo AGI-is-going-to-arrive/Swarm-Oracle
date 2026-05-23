@@ -392,6 +392,7 @@ vi.mock('react-i18next', () => ({
         'roundtable.theme_cues_label': 'Theme cues',
         'roundtable.phase_insights_label': 'Key takeaways',
         'roundtable.phase_insights_title': 'Key takeaways',
+        'roundtable.phase_unknown': 'Phase',
         'roundtable.verdict_title': 'Verdict',
         'roundtable.archivist_note_title': 'Host note',
         'roundtable.question_title': 'Question',
@@ -1489,7 +1490,7 @@ describe('WorldlineRoundtableView', () => {
     expect(within(phaseSection as HTMLElement).queryByText(/Opening hinge\./, { selector: '.worldline-roundtable-insight p' })).toBeNull();
   });
 
-  it('compacts persisted long phase insight transcript copies in the sidebar', async () => {
+  it('renders phase chip with correct class and exposes stakes/moderator_focus when expanded', async () => {
     const user = userEvent.setup();
     const baseState = createBaseStoreState();
     storeState.snapshot = baseState.snapshot;
@@ -1501,7 +1502,139 @@ describe('WorldlineRoundtableView', () => {
           phase: 'opening',
           stakes: 'Opening hinge.',
           moderator_focus: 'Focus the frame.',
-          commentary: 'Representative A pins the supply road as the hinge. The rest of this persisted transcript copy repeats the full table turn and should not be shown again in the sidebar body.',
+          commentary: 'Representative A pins the supply road as the hinge.',
+        },
+      ],
+    } as EndingRoomResult;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Branch A',
+          probability: 0.62,
+          insight: 'Branch A insight',
+          story: 'Story A',
+          key_moments: ['Moment A'],
+        },
+        {
+          id: 'branch-b',
+          title: 'Branch B',
+          probability: 0.38,
+          insight: 'Branch B insight',
+          story: 'Story B',
+          key_moments: ['Moment B'],
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    renderRoundtableView();
+
+    await screen.findByText('The table settled on one archival verdict.');
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    expect(phaseSection).toBeTruthy();
+    const chip = phaseSection!.querySelector('.phase-chip.phase-chip--opening');
+    expect(chip).toBeTruthy();
+    expect(chip?.textContent?.trim()).toBe('Recap');
+    await user.click(within(phaseSection as HTMLElement).getByRole('button', {
+      name: /Representative A pins the supply road as the hinge/,
+    }));
+    expect(within(phaseSection as HTMLElement).getByText(
+      'Representative A pins the supply road as the hinge.',
+      { selector: '.phase-insight-expanded__body' },
+    )).toBeInTheDocument();
+    const expandedStakes = phaseSection!.querySelector('.phase-insight-expanded__stakes');
+    expect(expandedStakes?.textContent).toContain('Opening hinge.');
+    const expandedFocus = phaseSection!.querySelector('.phase-insight-expanded__focus');
+    expect(expandedFocus?.textContent).toContain('Focus the frame.');
+  });
+
+  it('renders unknown phase insights with a neutral chip fallback', async () => {
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot;
+    storeState.result = {
+      summary: 'The table settled on one archival verdict.',
+      archivist_note: 'Keep the table scoped.',
+      phase_insights: [
+        {
+          phase: 'afterparty',
+          stakes: 'Unknown phase stakes.',
+          moderator_focus: 'Keep the fallback readable.',
+          commentary: 'Unknown phase commentary stays readable.',
+        },
+      ],
+    } as unknown as EndingRoomResult;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Branch A',
+          probability: 0.62,
+          insight: 'Branch A insight',
+          story: 'Story A',
+          key_moments: ['Moment A'],
+        },
+        {
+          id: 'branch-b',
+          title: 'Branch B',
+          probability: 0.38,
+          insight: 'Branch B insight',
+          story: 'Story B',
+          key_moments: ['Moment B'],
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    renderRoundtableView();
+
+    await screen.findByText('The table settled on one archival verdict.');
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    expect(phaseSection).toBeTruthy();
+    const unknownChip = phaseSection!.querySelector('.phase-chip.phase-chip--unknown');
+    expect(unknownChip).toBeTruthy();
+    expect(unknownChip?.textContent?.trim()).toBe('Phase');
+    expect(phaseSection!.querySelector('.phase-chip--afterparty')).toBeNull();
+  });
+
+  it('prefers insight_body over commentary for the expanded paragraph when present', async () => {
+    const user = userEvent.setup();
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot;
+    storeState.result = {
+      summary: 'The table settled on one archival verdict.',
+      archivist_note: 'Keep the table scoped.',
+      phase_insights: [
+        {
+          phase: 'verdict',
+          stakes: 'Verdict hinge.',
+          moderator_focus: 'Close the loop.',
+          commentary: 'Short collapsed text used for the trigger title.',
+          insight_body: 'Expanded analytical body that should replace the commentary inside the expanded paragraph.',
         },
       ],
     } as EndingRoomResult;
@@ -1545,13 +1678,147 @@ describe('WorldlineRoundtableView', () => {
     const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     await user.click(within(phaseSection as HTMLElement).getByRole('button', {
-      name: /Representative A pins the supply road as the hinge/,
+      name: /Short collapsed text used for the trigger title/,
     }));
-    expect(within(phaseSection as HTMLElement).getByText(
-      'Representative A pins the supply road as the hinge.',
-      { selector: '.worldline-roundtable-insight p' },
-    )).toBeInTheDocument();
-    expect(within(phaseSection as HTMLElement).queryByText(/persisted transcript copy repeats/)).toBeNull();
+    const body = phaseSection!.querySelector('.phase-insight-expanded__body');
+    expect(body?.textContent).toContain('Expanded analytical body that should replace the commentary');
+    expect(body?.textContent).not.toContain('Short collapsed text used for the trigger title.');
+  });
+
+  it('clips long insight_body in the expanded paragraph and keeps phase actions reachable', async () => {
+    const user = userEvent.setup();
+    const baseState = createBaseStoreState();
+    const longBody = `${'Expanded analytical body detail '.repeat(12)}tail-marker`;
+    storeState.snapshot = baseState.snapshot;
+    storeState.result = {
+      summary: 'The table settled on one archival verdict.',
+      archivist_note: 'Keep the table scoped.',
+      phase_insights: [
+        {
+          phase: 'crossfire',
+          stakes: 'Crossfire hinge.',
+          moderator_focus: 'Compare only the real split.',
+          commentary: 'Short collapsed crossfire text.',
+          insight_body: longBody,
+        },
+      ],
+    } as EndingRoomResult;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Branch A',
+          probability: 0.62,
+          insight: 'Branch A insight',
+          story: 'Story A',
+          key_moments: ['Moment A'],
+        },
+        {
+          id: 'branch-b',
+          title: 'Branch B',
+          probability: 0.38,
+          insight: 'Branch B insight',
+          story: 'Story B',
+          key_moments: ['Moment B'],
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    renderRoundtableView();
+
+    await screen.findByText('The table settled on one archival verdict.');
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    expect(phaseSection).toBeTruthy();
+    await user.click(within(phaseSection as HTMLElement).getByRole('button', {
+      name: /Short collapsed crossfire text/,
+    }));
+    const body = phaseSection!.querySelector('.phase-insight-expanded__body');
+    expect(body?.textContent).toContain('Expanded analytical body detail');
+    expect(body?.textContent).toContain('…');
+    expect(body?.textContent).not.toContain('tail-marker');
+    expect(body?.textContent?.length).toBeLessThanOrEqual(181);
+    expect(within(phaseSection as HTMLElement).getByRole('button', {
+      name: 'Dig into this phase',
+    })).toBeInTheDocument();
+    expect(within(phaseSection as HTMLElement).getByRole('button', {
+      name: 'New topic',
+    })).toBeInTheDocument();
+  });
+
+  it('falls back to commentary when insight_body is blank (backward compat)', async () => {
+    const user = userEvent.setup();
+    const baseState = createBaseStoreState();
+    storeState.snapshot = baseState.snapshot;
+    storeState.result = {
+      summary: 'The table settled on one archival verdict.',
+      archivist_note: 'Keep the table scoped.',
+      phase_insights: [
+        {
+          phase: 'closing',
+          stakes: 'Closing hinge.',
+          moderator_focus: 'Compress the takeaway.',
+          commentary: 'Closing commentary used as the body fallback.',
+          insight_body: '   ',
+        },
+      ],
+    } as EndingRoomResult;
+    storeState.threadsById = baseState.threadsById;
+    storeState.threadOrder = baseState.threadOrder;
+    storeState.activeThreadId = baseState.activeThreadId;
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        {
+          id: 'branch-a',
+          title: 'Branch A',
+          probability: 0.62,
+          insight: 'Branch A insight',
+          story: 'Story A',
+          key_moments: ['Moment A'],
+        },
+        {
+          id: 'branch-b',
+          title: 'Branch B',
+          probability: 0.38,
+          insight: 'Branch B insight',
+          story: 'Story B',
+          key_moments: ['Moment B'],
+        },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    renderRoundtableView();
+
+    await screen.findByText('The table settled on one archival verdict.');
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    expect(phaseSection).toBeTruthy();
+    await user.click(within(phaseSection as HTMLElement).getByRole('button', {
+      name: /Closing commentary used as the body fallback/,
+    }));
+    const body = phaseSection!.querySelector('.phase-insight-expanded__body');
+    expect(body?.textContent).toContain('Closing commentary used as the body fallback.');
   });
 
   it('keeps phase insight details collapsed until the reader opens a phase', async () => {
@@ -1821,9 +2088,21 @@ describe('WorldlineRoundtableView', () => {
     );
   });
 
-  it('keeps phase numbering localized instead of hard-coding CSS content', () => {
-    expect(roundtableViewSource).toContain("t('roundtable.phase_number_prefix')");
+  it('renders phase-type chips instead of generic phase numbering', () => {
+    expect(roundtableViewSource).toContain('const phaseClass = isEndingRoomPhase(insight.phase)');
+    expect(roundtableViewSource).toContain('phase-chip ${phaseClass}');
+    expect(roundtableViewSource).toContain('getEndingRoomPhaseLabel(insight.phase, t)');
     expect(roundtableCssContract).not.toContain("content: 'Phase '");
+    expect(roundtableCssContract).toMatch(/\.phase-chip\s*\{[\s\S]*flex-shrink:\s*0;/);
+    expect(roundtableCssContract).toMatch(/\.phase-chip--opening\s*\{/);
+    expect(roundtableCssContract).toMatch(/\.phase-chip--crossfire\s*\{/);
+    expect(roundtableCssContract).toMatch(/\.phase-chip--rebuttal\s*\{/);
+    expect(roundtableCssContract).toMatch(/\.phase-chip--closing\s*\{/);
+    expect(roundtableCssContract).toMatch(/\.phase-chip--verdict\s*\{/);
+    expect(roundtableCssContract).toMatch(/\.phase-chip--unknown\s*\{/);
+    expect(roundtableCssContract).toMatch(
+      /@media \(forced-colors: active\)[\s\S]*\.phase-chip\s*\{[\s\S]*forced-color-adjust:\s*none;/,
+    );
     expect(roundtableCssContract).toMatch(
       /\.roundtable-phase-timeline__content\s*\{[\s\S]*padding:\s*2px 0 10px;/,
     );

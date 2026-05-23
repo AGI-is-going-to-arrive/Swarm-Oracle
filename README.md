@@ -190,7 +190,7 @@ source .venv/bin/activate
 python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests/test_debate_api.py tests/test_debate_service.py tests/test_config.py tests/test_predictions.py tests/test_card_events.py tests/test_gameplay_contract_sync.py tests/test_metrics.py -q
 ```
 
-当前验证口径（最近更新：2026-05-23 Roundtable timeline / transcript 收口）：
+当前验证口径（最近更新：2026-05-24 Roundtable phase insight / WS contract 收口）：
 
 - backend：`python -m pytest tests/ -q --tb=short -p no:cacheprovider` 为 `3346 passed, 6 skipped`；`ruff check app/ tests/` 通过。
 - frontend：本轮 `npx vitest run` 为 `207 files / 2343 tests passed`；`npx eslint src/ --max-warnings=0`、`npx tsc --noEmit -p tsconfig.app.json` 通过；i18n key parity 为 `2812 / 2812`。
@@ -203,7 +203,9 @@ python -m pytest tests/test_campaign_api.py tests/test_campaign_service.py tests
 - Workbench KG resize 定向回归：`useG6Graph.test.ts + WorkbenchView.test.tsx` 为 `56 passed`，`KGGraphBoard.test.tsx` 为 `42 passed`；本机浏览器复核 `graph -> split -> KG` 后，KG 容器与内部 G6 canvas 同宽，`widthDelta=0`，console error 为 0。
 - ResultView Agent 追问当前入口仍是场内按钮；custom Agent 的 `查看档案` 走 Agent Library hash 深链，generated / replay Agent 的 `查看档案` 会在结果页内打开 `AgentProfileSheet`，可查看 persona、memory 和 growth events；generated Agent 还可从 sheet 继续发起对话，replay 只读。
 - Oracle browser E2E：`e2e:roundtable` 与 `e2e:ending-room` 在本地 preview/backend 口径通过；Ending Room summary 里 desktop/mobile replay coverage error 为 `null`，readonly replay / reload restore / import 关键字段齐全。
-- Roundtable timeline / transcript 浏览器复核：Playwright 在 `http://localhost:18928/roundtable/7dbd3896-c37b-490b-8c3a-3e1630932e77` 覆盖 Chromium / Firefox / WebKit 桌面和 Chromium `375px` mobile；Phase timeline、展开内容左边框、Transcript 独立滚动、Composer、Synthesis 展开和中英文 Phase 标签均通过。这里的 WebKit 是 Playwright WebKit，不等同于真实 Safari 全版本矩阵。
+- Roundtable phase insight / picker 增量复核：后端 `tests/test_ending_room_service.py` 覆盖 `insight_body`、CLOSING phase、可选 LLM rewrite、异常/取消/过短/JSON/fence 输出和 cap；前端 `WorldlineRoundtableView.test.tsx` 覆盖 phase chip、unknown fallback、展开态 `stakes / moderator_focus / insight_body`、旧 payload 回退和 replay action 隐藏。
+- Roundtable browser 增量复核：Playwright desktop roundtable 在 Chromium / Firefox / WebKit 通过；Chromium / Firefox 使用 `dragMethod: "mouse"`，Playwright WebKit 在 dnd-kit 输入模拟未命中时记录 `dragMethod: "click-after-mouse-keyboard-miss"` 并走同一候选卡入席兜底。这里的 WebKit 是 Playwright WebKit，不等同于真实 Safari 全版本矩阵。
+- WS contract 增量复核：默认本地 backend 未开启 `SESSION_SECRET` 时，`e2e:ws:contract` 为 `11 passed / 10 skipped / 0 failed`；`SESSION_SECRET=test-secret --require-auth-hardening` 时为 `20 passed / 1 skipped / 0 failed`。
 - `git diff --check` 通过。
 
 完整签收入口：

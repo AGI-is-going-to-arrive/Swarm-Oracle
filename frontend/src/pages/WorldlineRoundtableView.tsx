@@ -145,7 +145,7 @@ function buildPhaseInsightLabel(
   const { isZh, t } = options;
   const phaseLabel = isEndingRoomPhase(insight.phase)
     ? getEndingRoomPhaseLabel(insight.phase, t)
-    : insight.phase;
+    : t('roundtable.phase_unknown');
   const normalizedCommentary = String(insight.commentary ?? '').replace(/\s+/g, ' ').trim();
   if (!normalizedCommentary) {
     return phaseLabel;
@@ -169,33 +169,31 @@ function buildPhaseInsightTitle(
   if (!normalizedCommentary) {
     return String(insight.stakes ?? '').trim() || '';
   }
-  const firstSentence = normalizedCommentary.split(/[。！？!?]/)[0]?.trim() ?? '';
-  const firstClause = firstSentence.split(/[:：]/)[0]?.trim() ?? '';
-  const rawDetail = (firstClause || firstSentence).trim();
-  if (!rawDetail) return normalizedCommentary.slice(0, 40);
-  const maxLength = options.isZh ? 40 : 60;
-  return rawDetail.length > maxLength ? `${rawDetail.slice(0, maxLength).trimEnd()}…` : rawDetail;
-}
-
-function firstSentenceWithPunctuation(value: string): string {
-  return value.match(/^[^。！？.!?]+[。！？.!?]?/)?.[0]?.trim() || value;
+  const maxLength = options.isZh ? 52 : 80;
+  return normalizedCommentary.length > maxLength
+    ? `${normalizedCommentary.slice(0, maxLength).trimEnd()}…`
+    : normalizedCommentary;
 }
 
 function buildPhaseInsightCommentary(
-  insight: { commentary?: string; stakes?: string },
+  insight: { commentary?: string; stakes?: string; insight_body?: string },
   options: { isZh: boolean },
 ) {
+  const body = String(insight.insight_body ?? '').replace(/\s+/g, ' ').trim();
+  if (body) {
+    const maxLength = options.isZh ? 120 : 180;
+    return body.length > maxLength
+      ? `${body.slice(0, maxLength).trimEnd()}…`
+      : body;
+  }
   const normalizedCommentary = String(insight.commentary ?? '').replace(/\s+/g, ' ').trim();
   if (!normalizedCommentary) {
     return String(insight.stakes ?? '').trim();
   }
-  const maxLength = options.isZh ? 96 : 140;
-  if (normalizedCommentary.length <= maxLength) {
-    return normalizedCommentary;
-  }
-  const firstSentence = firstSentenceWithPunctuation(normalizedCommentary);
+  const firstSentence = normalizedCommentary.match(/^[^。！？.!?]+[。！？.!?]?/)?.[0]?.trim() || normalizedCommentary;
+  const maxLength = options.isZh ? 120 : 180;
   return firstSentence.length > maxLength
-    ? `${firstSentence.slice(0, maxLength - 1).trimEnd()}…`
+    ? `${firstSentence.slice(0, maxLength).trimEnd()}…`
     : firstSentence;
 }
 
@@ -1950,42 +1948,41 @@ export default function WorldlineRoundtableView() {
                     const phaseTitle = buildPhaseInsightTitle(insight, { isZh })
                       || buildPhaseInsightLabel(insight, { isZh, t });
                     const phaseCommentary = buildPhaseInsightCommentary(insight, { isZh });
-                    const comparableTitle = phaseTitle.replace(/…$/, '').trim();
-                    const comparableCommentary = phaseCommentary
-                      .replace(/[。！？.!?]+$/, '')
-                      .trim();
-                    const preview = (
-                      phaseCommentary
-                      && phaseCommentary !== phaseTitle
-                      && !comparableCommentary.startsWith(comparableTitle)
-                    )
-                      ? `${phaseCommentary.slice(0, 80)}${phaseCommentary.length > 80 ? '…' : ''}`
-                      : '';
+                    const phaseClass = isEndingRoomPhase(insight.phase)
+                      ? `phase-chip--${insight.phase}`
+                      : 'phase-chip--unknown';
+                    const chipLabel = isEndingRoomPhase(insight.phase)
+                      ? getEndingRoomPhaseLabel(insight.phase, t)
+                      : t('roundtable.phase_unknown');
                     return (
                       <AccordionItem key={`${insight.phase}-${index}`} value={`${insight.phase}-${index}`} className="roundtable-phase-timeline__item">
                         <AccordionTrigger className="editorial-chapter-trigger roundtable-phase-timeline__trigger">
                           <span className="roundtable-phase-timeline__dot" aria-hidden="true" />
-                          <span className="editorial-chapter-header">
-                            <span className="editorial-chapter-number" aria-hidden="true">
-                              {t('roundtable.phase_number_prefix')}
-                              {' '}
-                              {String(index + 1).padStart(2, '0')}
-                            </span>
-                            <span className="editorial-chapter-content">
-                              <span className="editorial-chapter-title">{phaseTitle}</span>
-                              {preview && (
-                                <span className="editorial-chapter-preview">
-                                  {preview}
-                                </span>
-                              )}
-                            </span>
+                          <span className={`phase-chip ${phaseClass}`}>
+                            {chipLabel}
+                          </span>
+                          <span className="phase-insight-body">
+                            <span className="phase-insight-title">{phaseTitle}</span>
+                            {insight.stakes && (
+                              <span className="phase-insight-stakes">{insight.stakes}</span>
+                            )}
                           </span>
                         </AccordionTrigger>
                         <AccordionContent className="roundtable-phase-timeline__content">
-                          <article className="worldline-roundtable-insight worldline-roundtable-insight__expanded-content">
-                            <p>{phaseCommentary}</p>
+                          <article className="worldline-roundtable-insight worldline-roundtable-insight__expanded-content phase-insight-expanded">
+                            <div className="phase-insight-expanded__meta">
+                              {insight.stakes && (
+                                <span className="phase-insight-expanded__stakes">{insight.stakes}</span>
+                              )}
+                              {insight.moderator_focus && (
+                                <span className="phase-insight-expanded__focus">
+                                  {t('roundtable.insight_focus_label')}: {insight.moderator_focus}
+                                </span>
+                              )}
+                            </div>
+                            <p className="phase-insight-expanded__body">{phaseCommentary}</p>
                             {!replayPayload && (
-                              <div className="worldline-roundtable-insight__actions">
+                              <div className="worldline-roundtable-insight__actions phase-insight-expanded__actions">
                                 <button
                                   type="button"
                                   className="ending-chat-inline-button"

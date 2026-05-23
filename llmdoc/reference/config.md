@@ -287,6 +287,7 @@
 | `FEATURE_AGENT_CONVERSATION` | `false` | 启用图谱节点对话 REST API 与 `/turn` SSE |
 | `FEATURE_ROUNDTABLE_SURVEY` | `false` | 启用圆桌问卷 SSE 端点：`POST /api/scenario/{id}/survey` |
 | `FEATURE_ROUNDTABLE_ANALYST` | `false` | 启用圆桌 ReACT 分析师 SSE 端点：`POST /api/scenario/{id}/analyst` |
+| `FEATURE_ROUNDTABLE_INSIGHT_LLM` | `false` | 启用世界线圆桌 phase insight 的可选 LLM 改写；失败或输出不合格时保留原洞察 |
 | `FEATURE_KG_EXPLORER` | `false` | 启用 KG Explorer / Timeline Galaxy 的 capability gate；图谱数据仍读取 causal graph API |
 | `FEATURE_SNAPSHOT_EXPORT` | `false` | 启用 scenario ZIP snapshot 导出/导入 API，并让前端显示首页导入和结果页导出入口 |
 | `ARGUMENT_MAP_LLM_ENRICHMENT` | `true` | Argument map 在 rule-based 抽取后，默认追加每个 debate turn 一次 fire-and-forget LLM enrichment；设为 `false` 可退回纯规则模式 |
@@ -300,6 +301,7 @@
 - `FEATURE_*=false` 时：受后端 gate 的 API 通常返回 404；simulator/debate 中的 hook 不执行；前端通过 `GET /api/capabilities` 检测到 `enabled=false` 后隐藏入口且不发请求。`POST /api/scenario/{id}/intervene/retrospective` 当前也受 `FEATURE_COUNTERFACTUAL_REPLAY` 控制，关闭时返回 404 `FEATURE_DISABLED`，前端 `InterventionModal` 会先禁用回溯模式。`POST /api/debate` 如果显式带了 `custom_agent_ids` 且 `FEATURE_CUSTOM_AGENTS=false`，当前返回 400，避免调用方误以为 custom Agent 已参与本场 debate。`FEATURE_KG_EXPLORER` 属于前端 capability gate，数据仍由 causal graph API 提供。`FEATURE_RESULT_VERDICT=false` 是字段级开关：不生成/回显 Result Quality verdict 和 branch question-answer，不让 story endpoint 变成 404。
 - `FEATURE_HALLUCINATION_GATE` 当前不是前端 capability key；它只控制后端 verdict 后处理是否附加 claims / evidence / warning metadata。`HALLUCINATION_GATE_THRESHOLD` 只改变 claim 的 verified 判定阈值。
 - `FEATURE_ROUNDTABLE_SURVEY / FEATURE_ROUNDTABLE_ANALYST` 会通过 `GET /api/capabilities` 暴露为 `roundtable_survey / roundtable_analyst`，供前端 Deep Dive 判断入口是否开放；关闭或探针失败时只显示占位/重试，不挂载对应 SSE 面板。
+- `FEATURE_ROUNDTABLE_INSIGHT_LLM` 不是 capability key；它只影响后台生成 `worldline_roundtable` result 时是否尝试重写 `phase_insights[].commentary / insight_body`。默认关闭时走 deterministic 洞察，不额外调用 LLM。
 - `FEATURE_SNAPSHOT_EXPORT` 会通过 `GET /api/capabilities` 暴露为 `snapshot_export`，关闭时后端 snapshot API 返回 404，前端不显示 import/export 入口。
 - `FEATURE_EDUCATION_TEMPLATES / FEATURE_PERSONA_EXPORT / FEATURE_PREDICTION_JOURNAL` 会通过 `GET /api/capabilities` 暴露为 `education_templates / persona_export / prediction_journal`。
 - `FEATURE_RESULT_VERDICT` 会通过 `GET /api/capabilities` 暴露为 `result_verdict`，并控制结果页是否读取 story verdict 字段。

@@ -246,7 +246,7 @@
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
 | `e2e-new-source-ingestion-live.mjs` | `frontend/scripts/e2e-new-source-ingestion-live.mjs` | source-ingestion 专项脚本；默认走 fixture，`SWARM_E2E_MODE=live` 时走真实 backend。live 模式会先显式打开首页总开关，校验 `/api/scenario` 请求里的 `web_search_families`，再检查结果页四个 source family 的状态；ready 时要求真实列表项，provider non-ready / unavailable / failed 状态按显式 UI 接受；`Polymarket` 的 `non-us` geo-gate 也走同一条 live 口径 |
 | `e2e-capability-matrix.mjs` | `frontend/scripts/e2e-capability-matrix.mjs` | graph/playability capability matrix；当前覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route，fixture payload 也包含 `agent_conversation / kg_explorer / replay_trace`。`ReplayView` 的 disabled 路径现在会落显式 unavailable surface，不再回首页；如果脚本还按旧 redirect 口径断言，先同步脚本再跑 |
-| `e2e-ws-contract-suite.mjs` | `frontend/scripts/e2e-ws-contract-suite.mjs` | WS 契约诊断脚本；当前覆盖 `scenario / debate / ending-room` 的首帧 auth、`4001 / 4404` 非重连、`1006` 可重连、auth timeout、oversize auth frame 和 pending-auth limit |
+| `e2e-ws-contract-suite.mjs` | `frontend/scripts/e2e-ws-contract-suite.mjs` | WS 契约诊断脚本；当前覆盖 `scenario / debate / ending-room` 的首帧 auth、`4001 / 4404` 非重连、`1006` 可重连、auth timeout、oversize auth frame 和 pending-auth limit。未开启 `SESSION_SECRET` 的本地后端会把 auth-hardening cases 记为 skipped；需要强制校验时传 `--require-auth-hardening` 或 `SWARM_EXPECT_WS_AUTH=1` |
 | `e2e-result-share-fixture.mjs` | `frontend/scripts/e2e-result-share-fixture.mjs` | ResultView + ShareModal fixture browser 回归；脚本 stub 后端 scenario/branch/story/social/capability JSON，检查真实分支渲染、分享弹窗、预测卡片、social endpoint、控制台/page/request 错误和横向溢出。`full` 默认跑 desktop + mobile Chromium |
 | `e2e-gameplay-cards-modal.mjs` / `e2e-prediction-modal.mjs` / `e2e-intervention-receipt.mjs` | `frontend/scripts/` | gameplay surface fixture E2E；默认用 `page.route()` stub 后端，`SWARM_E2E_MODE=live` 时才走 live backend |
 | `compatUuid.ts` | `frontend/src/lib/compatUuid.ts` | 兼容 UUID helper；优先 `crypto.randomUUID()`，再退 `getRandomValues`，最后才走时间戳兜底 |
@@ -263,7 +263,7 @@
 | `NodeContextBanner.tsx` | `frontend/src/components/kg/NodeContextBanner.tsx` | `NodeConversationSheet` 的来源摘要卡；显示 node type、round、对话目标、卡片意义、前因/后续/关系、label 和截断 excerpt |
 | `NodeQuickCard.tsx` | `frontend/src/components/workbench/NodeQuickCard.tsx` | KG 工作台桌面节点快览卡；按视口钳位位置，避免靠边节点把卡片挤出屏幕 |
 | `e2e-web-search-suite.mjs` | `frontend/scripts/e2e-web-search-suite.mjs` | 首页搜索增强专项 E2E：custom override、provider/key/base URL、搜索深度、scenario 请求体校验 |
-| `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择；桌面端 `@dnd-kit/core` 入席交互，移动端保留 click-to-seat） |
+| `RoundtablePickerPanel.tsx` | `frontend/src/pages/RoundtablePickerPanel.tsx` | 圆桌代表选型面板组件（6 种模式 + 证人选择；桌面端 `@dnd-kit/core` 入席交互、键盘入席和 mouse/pointer 命中兜底，移动端保留 click-to-seat） |
 | `RoundtableTranscriptList.tsx` | `frontend/src/pages/RoundtableTranscriptList.tsx` | 圆桌 transcript 列表组件（turns + drafts + 折叠/锚点操作 + phase 分隔线 + speaker 左侧色标） |
 | `AgentSelectionStrip.tsx` | `frontend/src/components/AgentSelectionStrip.tsx` | 首页主区自建 Agent 轻量选择器；用 fieldset/legend + 原生 checkbox，最多展示 3 个 pill 和 `+N more`，空列表保留 `Manage all` 入口，支持 loading/error 状态、keyboard focus、forced-colors 和 reduced-motion |
 | `AgentDrawer.tsx` | `frontend/src/components/AgentDrawer.tsx` | 首页自建 Agent 管理抽屉；基于 Radix Sheet，受控 `open/onOpenChange`，把完整 `AgentAttachPanel` 放进 focus-trapped drawer，并隐藏默认 close 以避免重复关闭按钮 |
@@ -420,8 +420,8 @@
 - `WorldlineRoundtableView` 当前已补：
   - `Continue this table / Start anchored thread / Copy roundtable brief`
   - `phase insight` 级追问 / 开线程（当前会覆盖返回的全部 `phase_insights`，不再只限前 3 条）
-  - phase insight 当前是无外框 timeline：左侧竖线和 dot 标出每个 phase，header 保留短 preview，展开后显示带左边框的主持人 commentary。phase prompt 预填仍使用这条 commentary；后端会去掉重复的问题前缀，如果标题已经包含同一句，preview 不再重复显示。
-  - phase 编号不再用 CSS `content` 写死英文，改走 `roundtable.phase_number_prefix`；英文显示 `Phase 01`，中文显示 `阶段 01`。
+  - phase insight 当前是无外框 timeline：左侧竖线和 dot 标出每个 phase，header 用 phase chip 显示本地化阶段名，未知 phase 使用中性 fallback，不直接拼未知字符串进 class。
+  - 展开态会显示 stakes、主持人焦点和正文；正文优先用后端 `insight_body`，旧 payload 没有该字段时回退 `commentary` 的第一句。phase prompt 预填仍使用可显示的 commentary；replay 模式不显示 live-only 追问按钮。
   - transcript `quote` 级 `Follow this quote / Start anchored thread`
   - transcript `quote` 级 `Hotseat this rep / 点名这位代表`
   - committed transcript 长段折叠 / 展开
@@ -783,7 +783,7 @@
 - `e2e-worldline-roundtable-suite.mjs` 当前已补：
   - 更稳的 quote-anchor thread 交互链
   - hotseat settle / anchored send 的慢路径等待
-  - desktop 当前覆盖 pointer drag 与 `KeyboardSensor` 键盘拖拽
+  - desktop 当前覆盖 mouse drag、`KeyboardSensor` 键盘拖拽和同一候选卡的 click fallback，并在 summary 里记录 `dragMethod`
   - mobile 当前保留真实 touch `tap-to-seat`
   - `--browser chromium|firefox|webkit` scoped 执行
   - 优先复用最近成功的稳定 fixture
@@ -792,7 +792,7 @@
 - `e2e-debate-suite.mjs` 当前会保持 Debate live 阶段地图默认折叠的产品契约；脚本在检查 `.debate-stage-summary-list` 前会点击 `debate-stage-map-toggle` 展开阶段地图。
   - artifact/local readonly replay 都会额外校验 reload restore；缺字段直接失败
   - result -> roundtable 入口当前也会重试；如果还停在结果页，会落 `roundtable-entry-stall.json` 并直接失败
-  - 首开、`reseat / drag-to-seat / keyboard reseat / expert witness / selection mode reopen` 当前统一按 `90s` ready budget 等待最终 `has_result=true`
+  - 首开、`reseat / drag-to-seat / keyboard reseat / click fallback / expert witness / selection mode reopen` 当前统一按 `90s` ready budget 等待最终 `has_result=true`
   - hotseat / anchored composer user-turn settle 当前按 `120s` 预算等待，和开桌 ready budget 分开
 - roundtable anchored follow-up 的 desktop rerun 当前已能稳定落：
   - hotseat `turn_start / turn_delta / turn_commit`

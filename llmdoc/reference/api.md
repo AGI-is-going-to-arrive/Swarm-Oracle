@@ -496,6 +496,13 @@
   当前都会回显：
   - `question_anchor_ids_json`
   - 便于 replay/read-only 恢复与自动化验证锚点语义。
+- `worldline_roundtable` result 的 `phase_insights[]` 当前包含：
+  - `phase`
+  - `stakes`
+  - `moderator_focus`
+  - `commentary`
+  - 可选 `insight_body`
+  `commentary` 用于折叠态标题和 phase 追问语境，`insight_body` 用于展开态正文；旧 payload 没有 `insight_body` 时客户端继续回退到 `commentary`。
 - `POST /api/scenario/{scenario_id}/survey`
   受 `FEATURE_ROUNDTABLE_SURVEY` gate；请求体包含 `question`、`participant_ids`，并可选 `room_id / llm_api_key / llm_base_url / llm_model`。
   - `participant_ids` 必须去重后仍非空，当前最多 6 个。

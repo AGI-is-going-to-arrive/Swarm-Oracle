@@ -94,6 +94,25 @@ export function shouldReconnectOnClose(code) {
   return classifyCloseCode(code) !== "permanent" && code !== 1000;
 }
 
+export function classifyWsAuthHardeningProbe(result) {
+  if (result?.closed && result.code === 4001) {
+    return {
+      enabled: true,
+      detail: "invalid first auth frame closed with 4001",
+    };
+  }
+  if (result?.closed) {
+    return {
+      enabled: false,
+      detail: `auth hardening probe closed with ${result.code ?? "unknown"} before first-frame auth contract`,
+    };
+  }
+  return {
+    enabled: false,
+    detail: "auth hardening probe did not receive an auth close",
+  };
+}
+
 export function buildOversizeAuthFrame(byteSize = AUTH_FRAME_MAX_BYTES + 1024) {
   const header = '{"type":"auth","token":"';
   const footer = '"}';
@@ -144,6 +163,7 @@ function parseArgs(argv) {
     outputDir: DEFAULT_OUTPUT_ROOT,
     headless: process.env.HEADLESS === "1",
     selftest: false,
+    requireAuthHardening: process.env.SWARM_EXPECT_WS_AUTH === "1",
     sessionToken: process.env.SWARM_SESSION_TOKEN || "test-secret",
     sessionSubject: process.env.SWARM_SESSION_SUBJECT || "ws-contract-owner",
   };
@@ -163,6 +183,8 @@ function parseArgs(argv) {
       args.headless = true;
     } else if (arg === "--selftest") {
       args.selftest = true;
+    } else if (arg === "--require-auth-hardening") {
+      args.requireAuthHardening = true;
     } else if (arg === "--session-token" && next) {
       args.sessionToken = next;
       i += 1;
@@ -444,6 +466,26 @@ async function waitForCloseWithRetry(url, options, retries = 2) {
   return lastResult;
 }
 
+async function detectWsAuthHardening(wsBase, endpoint) {
+  if (!await isPortReachable(wsBase)) {
+    return {
+      enabled: false,
+      detail: `backend unreachable at ${wsBase}`,
+    };
+  }
+  const probeId = `auth-mode-probe-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const result = await waitForClose(
+    `${wsBase}${endpoint.wsPath}${probeId}`,
+    {
+      timeoutMs: 2500,
+      onOpen: async (ws) => {
+        ws.send(JSON.stringify({ type: "auth", token: "ws-contract-invalid-token" }));
+      },
+    },
+  );
+  return classifyWsAuthHardeningProbe(result);
+}
+
 async function caseFirstFrameAuth({ browser, baseUrl, token, endpoint, cases, pageFixtures }) {
   const name = `case1-first-frame-auth[${endpoint.key}]`;
   const pageRoute = pageFixtures[endpoint.key]?.route ?? null;
@@ -555,10 +597,40 @@ async function caseReconnectOn1006({ endpoint, cases }) {
   }
 }
 
-async function caseAuthTimeout({ endpoint, wsBase, cases }) {
+function shouldSkipAuthHardeningCase({
+  cases,
+  name,
+  authHardening,
+  requireAuthHardening,
+}) {
+  if (authHardening?.enabled) {
+    return false;
+  }
+  if (requireAuthHardening) {
+    recordCase(
+      cases,
+      name,
+      "failed",
+      `first-frame auth hardening unavailable: ${authHardening?.detail ?? "unknown"}`,
+    );
+    return true;
+  }
+  recordCase(
+    cases,
+    name,
+    "skipped",
+    `first-frame auth hardening not enabled on this backend: ${authHardening?.detail ?? "unknown"}`,
+  );
+  return true;
+}
+
+async function caseAuthTimeout({ endpoint, wsBase, cases, authHardening, requireAuthHardening }) {
   const name = `case4-auth-timeout-10s[${endpoint.key}]`;
   if (!await isPortReachable(wsBase)) {
     recordCase(cases, name, "skipped", `backend unreachable at ${wsBase}`);
+    return;
+  }
+  if (shouldSkipAuthHardeningCase({ cases, name, authHardening, requireAuthHardening })) {
     return;
   }
 
@@ -591,10 +663,13 @@ async function caseAuthTimeout({ endpoint, wsBase, cases }) {
   );
 }
 
-async function caseOversizeAuthFrame({ endpoint, wsBase, cases }) {
+async function caseOversizeAuthFrame({ endpoint, wsBase, cases, authHardening, requireAuthHardening }) {
   const name = `case5-oversize-auth-frame[${endpoint.key}]`;
   if (!await isPortReachable(wsBase)) {
     recordCase(cases, name, "skipped", `backend unreachable at ${wsBase}`);
+    return;
+  }
+  if (shouldSkipAuthHardeningCase({ cases, name, authHardening, requireAuthHardening })) {
     return;
   }
 
@@ -646,10 +721,13 @@ async function waitForOpenOrClose(url, timeoutMs = 2000) {
   });
 }
 
-async function casePendingAuthLimit({ endpoint, wsBase, cases }) {
+async function casePendingAuthLimit({ endpoint, wsBase, cases, authHardening, requireAuthHardening }) {
   const name = `case6-pending-auth-limit[${endpoint.key}]`;
   if (!await isPortReachable(wsBase)) {
     recordCase(cases, name, "skipped", `backend unreachable at ${wsBase}`);
+    return;
+  }
+  if (shouldSkipAuthHardeningCase({ cases, name, authHardening, requireAuthHardening })) {
     return;
   }
 
@@ -734,12 +812,31 @@ async function main() {
   const wsBase = httpToWs(args.backendUrl);
 
   for (const endpoint of WS_ENDPOINTS) {
+    const authHardening = await detectWsAuthHardening(wsBase, endpoint);
     await casePermanentClose({ endpoint, cases, closeCode: 4001 });
     await casePermanentClose({ endpoint, cases, closeCode: 4404 });
     await caseReconnectOn1006({ endpoint, cases });
-    await caseAuthTimeout({ endpoint, wsBase, cases });
-    await caseOversizeAuthFrame({ endpoint, wsBase, cases });
-    await casePendingAuthLimit({ endpoint, wsBase, cases });
+    await caseAuthTimeout({
+      endpoint,
+      wsBase,
+      cases,
+      authHardening,
+      requireAuthHardening: args.requireAuthHardening,
+    });
+    await caseOversizeAuthFrame({
+      endpoint,
+      wsBase,
+      cases,
+      authHardening,
+      requireAuthHardening: args.requireAuthHardening,
+    });
+    await casePendingAuthLimit({
+      endpoint,
+      wsBase,
+      cases,
+      authHardening,
+      requireAuthHardening: args.requireAuthHardening,
+    });
   }
 
   const pageFixtures = await preparePageFixtures(args.backendUrl, effectiveSessionToken, args.sessionSubject).catch(() => ({

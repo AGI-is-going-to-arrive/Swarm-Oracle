@@ -1367,6 +1367,8 @@
       "expand_roster": "Show all",
       "collapse_roster": "Collapse",
       "phase_insights_label": "Key takeaways",
+      "insight_focus_label": "Moderator focus",
+      "phase_unknown": "Phase",
       "back_to_results": "Back to results",
       "back_to_table": "Back to table",
       "reseat_reopen": "Reseat & restart",

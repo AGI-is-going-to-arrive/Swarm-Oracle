@@ -643,7 +643,7 @@ python -m pytest tests/test_session_auth.py tests/test_llm_client.py tests/test_
 cd backend
 source .venv/bin/activate
 python -m pytest -q tests/test_evidence_card_flow.py
-python -m pytest -q tests/test_session_auth.py -k 'auth_timeout_closes_4001 or oversized_auth_frame_closes_1009 or pending_blocks_new_connections'
+python -m pytest -q tests/test_session_auth.py -k 'auth_timeout_closes_4001 or oversized_auth_frame_closes_1009 or pending_blocks_new_connections or authorize_principal_rejection_releases_pending_slot'
 
 cd ../frontend
 node --test scripts/e2e-ws-contract-suite.test.mjs
@@ -651,6 +651,8 @@ npx eslint scripts/e2e-capability-matrix.mjs scripts/e2e-ws-contract-suite.mjs s
 npx tsc --noEmit -p tsconfig.app.json
 npm test -- --run src/hooks/useAgentConversationWS.test.tsx src/hooks/useCapabilityCheck.test.ts src/pages/AgentLibrary.test.tsx src/pages/CompareDigestView.test.tsx src/pages/KGExplorerView.test.tsx src/pages/ReplayView.test.tsx
 HEADLESS=1 node scripts/e2e-ws-contract-suite.mjs --url http://127.0.0.1:19030 --backend-url http://127.0.0.1:19027 --headless --session-token test-secret --session-subject ws-contract-owner
+# 严格 auth hardening 复核前，backend 需要先以 SESSION_SECRET=test-secret 启动。
+HEADLESS=1 node scripts/e2e-ws-contract-suite.mjs --url http://127.0.0.1:19030 --backend-url http://127.0.0.1:19027 --headless --require-auth-hardening
 HEADLESS=1 npm run e2e:capability-matrix -- --url http://127.0.0.1:19030 --headless
 ```
 
@@ -659,15 +661,21 @@ HEADLESS=1 npm run e2e:capability-matrix -- --url http://127.0.0.1:19030 --headl
 - backend 这组回归当前主要看：
   - `evidence_card` 的 `cited_branch_id` 过滤和降级路径不回退
   - `scenario` WS 的 auth timeout / oversize auth frame / pending-auth limit 仍维持 `4001 / 1009 / 1013-or-1006` 口径
+  - owner-scope rejection after first-frame auth 会关闭 `4404`，并释放 pending-auth 容量
 - frontend 这组回归当前主要看：
   - `useAgentConversationWS` 实际连接 `/ws/agent-conversation/{thread_id}`，不再误连旧的 `/api/ws/agent-conversation/{thread_id}`
   - `e2e-ws-contract-suite.mjs` 当前先跑 raw probe，再跑 live page case1，避免 live fixture 活动把 `scenario` raw probe 污染成假失败
+  - `e2e-ws-contract-suite.mjs` 会先 probe 当前 backend 是否真的启用了首帧 auth hardening；未设置 `SESSION_SECRET` 的本地 backend 会把 auth timeout / oversize / pending-auth cases 记为 skipped，不再报假失败。需要把这些 skipped 变成 hard fail 时，用 `--require-auth-hardening` 或 `SWARM_EXPECT_WS_AUTH=1`
   - `case1` 当前使用绝对 URL 打开 `/sim` 和 `/debate`，不再因为 Playwright page 没有 `baseURL` 把相对路径静默 skip
   - `e2e-capability-matrix.mjs` 当前覆盖 6 个 gated route；`ReplayView` 的 disabled 路径现在会落显式 unavailable surface，不再回到 `/`。如果脚本还按旧 redirect 口径断言，先同步脚本再跑。
 - 这轮 clean-room 真实结果是：
   - `tests/test_evidence_card_flow.py`：`5 passed`
   - `tests/test_session_auth.py -k ...`：`3 passed`
   - `node --test scripts/e2e-ws-contract-suite.test.mjs`：`18 passed`
+- 本轮 roundtable insight / WS auth 增量复核：
+  - `tests/test_session_auth.py -k 'TestFirstFrameAuth or TestPendingAuthLimit'`：`26 passed`
+  - 默认本地 backend 的 `e2e:ws:contract`：`11 passed / 10 skipped / 0 failed`
+  - `SESSION_SECRET=test-secret --require-auth-hardening` 的 `e2e:ws:contract`：`20 passed / 1 skipped / 0 failed`
   - 前端定向 vitest：`32 passed`
   - `e2e:ws:contract`：`20 passed / 1 skipped / 0 failed`
   - `e2e:capability-matrix`：`30 passed / 0 skipped / 0 failed`
@@ -837,8 +845,11 @@ cd backend
 source .venv/bin/activate
 python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py tests/test_ending_room_ws.py tests/test_vector_store.py tests/test_api.py -q
 
+# 只复核 roundtable phase insight / optional LLM enhance 时，可先跑这组窄集：
+python -m pytest -q tests/test_ending_room_service.py -k 'phase_insight or roundtable_phase_insight_llm or rebuild_preserves_closing'
+
 cd ../frontend
-npm test -- --run src/api/client.test.ts src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
+npm test -- --run src/api/client.test.ts src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/RoundtablePickerPanel.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
 node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
 npx tsc --noEmit -p tsconfig.app.json
 npm run build
@@ -995,7 +1006,7 @@ npx tsc --noEmit -p tsconfig.app.json
 - `e2e-worldline-roundtable-suite.mjs desktop`
   - 当前适合单独复核 roundtable anchored follow-up 的真流式生命周期
   - Chromium / Firefox / WebKit 当前都可通过 `--browser` 单独执行
-  - desktop 链路当前覆盖 pointer drag、`KeyboardSensor` 键盘拖拽、expert witness、selection mode 切换、hotseat、anchored thread、artifact/local readonly replay
+  - desktop 链路当前覆盖 mouse drag、`KeyboardSensor` 键盘拖拽、同一候选卡 click fallback、expert witness、selection mode 切换、hotseat、anchored thread、artifact/local readonly replay；summary 会记录本轮实际使用的 `dragMethod`
   - replay 覆盖当前和 ending-room followup 保持同一口径：
     - hero/header action scoped locator；如果动作收进 `More actions / 更多操作` 菜单，也会从菜单里点
     - live room 复用前先 revalidate
@@ -1015,7 +1026,7 @@ npx tsc --noEmit -p tsconfig.app.json
   - 当前也覆盖 `quote-anchor thread -> artifact/local readonly -> reload restore -> import`
   - current summary 会落出 `transcript_layout`
   - result -> roundtable 入口当前会重试；如果还停在结果页，会落 `roundtable-entry-stall.json` 并直接失败
-  - 首开与后续 `reseat / drag-to-seat / keyboard reseat / expert witness / selection mode reopen` 当前统一按 `90s` ready budget 等待最终 `has_result=true`
+  - 首开与后续 `reseat / drag-to-seat / keyboard reseat / click fallback / expert witness / selection mode reopen` 当前统一按 `90s` ready budget 等待最终 `has_result=true`
   - composer user-turn settle 当前按 `120s` 预算等待，避免和开桌 ready budget 混在一起判读
   - 当前 fresh full rerun 已通过 desktop + mobile
   - `full --locale en` 本轮也已通过

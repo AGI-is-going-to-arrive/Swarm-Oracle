@@ -1504,6 +1504,30 @@ class TestPendingAuthLimit:
         assert ws not in manager._connections.get("s1", [])
 
     @pytest.mark.asyncio
+    async def test_authorize_principal_rejection_releases_pending_slot(self, monkeypatch):
+        """Owner-scope rejection after auth releases the reserved pending slot."""
+        monkeypatch.setattr("app.api.ws.settings.SESSION_SECRET", "secret")
+        monkeypatch.setattr("app.api.helpers.settings.SESSION_SECRET", "secret")
+        manager = WSManager()
+        token = _make_signed_session_token("secret", "owner-a")
+        ws = _make_ws_mock(side_effect=[json.dumps({"type": "auth", "token": token})])
+
+        async def reject_owner(_resource_id, _principal):
+            return False
+
+        await run_websocket_session(
+            manager,
+            "s1",
+            ws,
+            exists_check=_always_exists,
+            authorize_principal=reject_owner,
+        )
+
+        assert manager._pending_auth["s1"] == 0
+        assert ws not in manager._connections.get("s1", [])
+        ws.close.assert_awaited_once_with(code=4404, reason="scenario not found")
+
+    @pytest.mark.asyncio
     async def test_disconnect_during_auth_ok_releases_pending(self, monkeypatch):
         """Client disconnects while server sends auth_ok → pending released."""
         monkeypatch.setattr("app.api.ws.settings.SESSION_SECRET", "secret")

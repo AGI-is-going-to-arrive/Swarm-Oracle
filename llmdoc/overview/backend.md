@@ -184,7 +184,8 @@
 - `ending-room / roundtable` 的主文案生成当前走 `LLM first, template fallback`：先 structured LLM，再 plain-text retry，最后才回 deterministic fallback；模板不再是主路径。
 - roundtable verdict 和 follow-up 的 deterministic fallback 当前必须是 display-ready copy：不能包含 prompt 指令、模式标签或事实清单式占位，因为 LLM 关闭或耗尽时它会直接展示给用户。
 - roundtable opening / crossfire / witness / verdict 的 deterministic anchor 会用经过清洗和截断的 `scenario_question` 加问题前缀；没有 scenario question 时仍返回可直接展示的普通文案。
-- `_phase_insight()` 当前会先剥掉 roundtable question prefix，再按中文 96 字 / 英文 160 chars 的预算，把长 turn commentary 压成 phase-specific 的一句主持人提炼；后端 result 不再默认把整段 transcript 或重复问题复制进 phase insight。
+- `_phase_insight()` 当前会先剥掉 roundtable question prefix，再按中文 96 字 / 英文 160 chars 的预算，把长 turn commentary 压成一句短 `commentary`；完整清洗文本保存在 `insight_body`，后端 result 不再默认把整段 transcript 或重复问题复制进 phase insight。`worldline_roundtable` 的 result 会保留 `opening / crossfire / closing / verdict` 阶段洞察，`summary` 仍取 verdict，`archivist_note` 优先取 closing turn。
+- `FEATURE_ROUNDTABLE_INSIGHT_LLM` 默认关闭；开启后只会在 `worldline_roundtable` result rebuild 之后、最终持久化之前，有界地重写 phase insight。重写输入会用 `UNTRUSTED DATA` 包裹，单次并发有界；空文本、过短文本、JSON、Markdown fence 或仅 reasoning 输出都会被拒绝，失败时保留原 `commentary / insight_body`。
 - Oracle 主文案的 LLM 路径当前先走 generation-first prompt，这一步不会把 anchor copy 当中心参考；只有生成为空或失败时，才进入带 anchor reference 的 rewrite fallback，最后才退 deterministic fallback。
 - Oracle prompt 当前包含双层角色化词汇提示：
   - 领域调色板层：按 voice variant（imperial / field / finance / market / faith / industry / frontier / survival / scholar / civic / diplomat / advisor / science / tech-visionary / journalist / educator / artist / entrepreneur，共 18 种）提供领域专属术语、句式风格和情绪基调。ASCII 关键词按词边界匹配，CJK 仍按子串匹配，避免 `warlord/lord`、`consultant/consul`、`federation/ration` 这类旧误匹配；关键词匹配也会避开已知过宽词，例如 `medium confidence` 不应误入 artist，`large-scale` 不应误入 entrepreneur。
@@ -497,7 +498,7 @@
 - Oracle replay 的自动化状态当前也会显式跟随 active replay thread 的 `interaction_mode`，避免 mobile roundtable readonly 在自动化口径里误报成主桌模式。
 - 当 `SESSION_SECRET` 非空时，WS 采用首帧 auth 协议：服务端先 accept，再等待客户端发送 `{"type":"auth","token":"..."}`（10 秒超时，64KB 上限），验证通过后回复 `{"type":"auth_ok"}`，然后才注册连接并启动 heartbeat。未认证的 socket 不会进入 `_connections` 池，不会收到 broadcast 或 heartbeat。
 - scenario WS 的容量限制当前按“已注册连接 + pending-auth”一起算，pending slot 会在 `accept()` 前原子预留；并发握手不会再把 `MAX_WS_PER_SCENARIO` 冲穿。
-- 开启 auth 后，资源存在性与 owner 检查会延后到首帧 auth 之后：
+- 开启 auth 后，资源存在性与 owner 检查会延后到首帧 auth 之后；如果 owner 检查拒绝，也会释放 pending-auth slot：
   - `scenario WS` 当前也会校验 signed principal 与 scenario owner，不再只做 session gate
   - `debate / ending-room` WS 还会继续要求 signed principal；认证通过但资源不存在或不属于该 principal 时会走 `4404`
 - app 级非业务端点（当前如 `/`、`/metrics`）不走 router 级 `verify_session`；`/api/capabilities`、`/api/health`、`/api/health/test` 已纳入业务 REST 门禁。

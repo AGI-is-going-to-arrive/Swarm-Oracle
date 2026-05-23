@@ -1367,6 +1367,8 @@
       "expand_roster": "展开名单",
       "collapse_roster": "收起名单",
       "phase_insights_label": "各阶段要点",
+      "insight_focus_label": "主持人焦点",
+      "phase_unknown": "阶段",
       "back_to_results": "返回结果",
       "back_to_table": "回到圆桌",
       "reseat_reopen": "换人重开",

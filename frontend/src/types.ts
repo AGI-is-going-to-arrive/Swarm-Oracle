@@ -821,6 +821,7 @@ export interface EndingRoomPhaseInsight {
   stakes: string;
   moderator_focus: string;
   commentary: string;
+  insight_body?: string;
 }
 
 export interface EndingRoomSupportingTurn {
