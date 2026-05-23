@@ -1935,13 +1935,15 @@ export default function WorldlineRoundtableView() {
             </section>
 
             {effectiveResult?.phase_insights?.length ? (
-              <section className="worldline-roundtable-card">
+              <section className="roundtable-phase-section">
                 <div className="worldline-roundtable-card__heading">
                   <h3>{t('roundtable.phase_insights_title')}</h3>
+                  <span className="roundtable-phase-count">{effectiveResult.phase_insights.length}</span>
                 </div>
                 <Accordion
                   type="single"
                   collapsible
+                  className="roundtable-phase-timeline"
                   aria-label={t('roundtable.phase_insights_label')}
                 >
                   {effectiveResult.phase_insights.map((insight, index) => {
@@ -1960,10 +1962,13 @@ export default function WorldlineRoundtableView() {
                       ? `${phaseCommentary.slice(0, 80)}${phaseCommentary.length > 80 ? '…' : ''}`
                       : '';
                     return (
-                      <AccordionItem key={`${insight.phase}-${index}`} value={`${insight.phase}-${index}`} className="roundtable-phase-card border border-border-default rounded-2xl mb-2.5 last:mb-0 overflow-hidden">
-                        <AccordionTrigger className="editorial-chapter-trigger">
+                      <AccordionItem key={`${insight.phase}-${index}`} value={`${insight.phase}-${index}`} className="roundtable-phase-timeline__item">
+                        <AccordionTrigger className="editorial-chapter-trigger roundtable-phase-timeline__trigger">
+                          <span className="roundtable-phase-timeline__dot" aria-hidden="true" />
                           <span className="editorial-chapter-header">
                             <span className="editorial-chapter-number" aria-hidden="true">
+                              {t('roundtable.phase_number_prefix')}
+                              {' '}
                               {String(index + 1).padStart(2, '0')}
                             </span>
                             <span className="editorial-chapter-content">
@@ -1976,8 +1981,8 @@ export default function WorldlineRoundtableView() {
                             </span>
                           </span>
                         </AccordionTrigger>
-                        <AccordionContent>
-                          <article className="worldline-roundtable-insight">
+                        <AccordionContent className="roundtable-phase-timeline__content">
+                          <article className="worldline-roundtable-insight worldline-roundtable-insight__expanded-content">
                             <p>{phaseCommentary}</p>
                             {!replayPayload && (
                               <div className="worldline-roundtable-insight__actions">
@@ -2132,7 +2137,7 @@ export default function WorldlineRoundtableView() {
               </div>
             )}
 
-              <div style={{ position: 'relative' }}>
+              <div className="roundtable-transcript-wrapper">
                 <RoundtableTranscriptList
                   listRef={transcriptListRef}
                   onScroll={handleTranscriptScroll}

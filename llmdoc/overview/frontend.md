@@ -39,7 +39,7 @@
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live、Podium Cards、room state、phase 历史卡、counterplay、live argument map |
 | DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import、裁判状态文案、按需加载 argument map |
-| WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay、participant follow-up、analyst ReACT 面板、人格漂移 warning |
+| WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay、participant follow-up、phase insight timeline、独立滚动 transcript、analyst ReACT 面板、人格漂移 warning |
 | HistoryView | `frontend/src/pages/HistoryView.tsx` | scenario 历史列表 |
 | LeaderboardView | `frontend/src/pages/LeaderboardView.tsx` | prediction leaderboard 与 segment filters；筛选状态同步到 URL params，顶部返回按钮回到首页 |
 
@@ -420,7 +420,8 @@
 - `WorldlineRoundtableView` 当前已补：
   - `Continue this table / Start anchored thread / Copy roundtable brief`
   - `phase insight` 级追问 / 开线程（当前会覆盖返回的全部 `phase_insights`，不再只限前 3 条）
-  - phase insight 卡片默认折叠；header 保留短 preview，展开后显示后端按中文 96 字 / 英文 160 chars 预算压缩的一句 commentary。phase prompt 预填仍使用这条 commentary；后端会去掉重复的问题前缀，如果标题已经包含同一句，preview 不再重复显示。
+  - phase insight 当前是无外框 timeline：左侧竖线和 dot 标出每个 phase，header 保留短 preview，展开后显示带左边框的主持人 commentary。phase prompt 预填仍使用这条 commentary；后端会去掉重复的问题前缀，如果标题已经包含同一句，preview 不再重复显示。
+  - phase 编号不再用 CSS `content` 写死英文，改走 `roundtable.phase_number_prefix`；英文显示 `Phase 01`，中文显示 `阶段 01`。
   - transcript `quote` 级 `Follow this quote / Start anchored thread`
   - transcript `quote` 级 `Hotseat this rep / 点名这位代表`
   - committed transcript 长段折叠 / 展开
@@ -622,10 +623,10 @@
   - `npm exec -- eslint src/pages/result/ResultHeader.tsx src/pages/result/ExploreDeeperBridge.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts`：通过
   - 浏览器实测本机结果页显示 `对话 · 本机模式`，header 可直接进入因果图谱和图谱工作台；点击 `探索` 会滚到下一步区。
 - 当前 frontend 稳定验证口径：
-  - `npm test -- --run`：`206 files / 2328 tests passed`
+  - `npx vitest run`：`207 files / 2343 tests passed`
   - `npx eslint src/ --max-warnings=0`：通过
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - i18n key parity：`zh: 2800`、`en: 2800`
+  - i18n key parity：`zh: 2812`、`en: 2812`
   - CausalReviewView / TimelineGalaxy capability 浏览器复核：Chromium、Firefox、WebKit 均覆盖 capability probe error 与正常 capability payload；WebKit 的 TimelineGalaxy 正常态以页面文本和 canvas 数量复核通过
   - Pixel Theater browser spot-check：完成态 `/sim/e1a41453-2cb2-43a1-a054-0d7cd04a6bf5` 的 toolbar 玩法卡入口可见，modal 以只读状态打开，Chrome DevTools console error 为 0
   - KG visualization 定向回归：`5 files / 193 tests passed`
@@ -635,6 +636,7 @@
   - ResultView Agent profile / follow-up 本轮通过 full vitest 覆盖；custom Agent 档案走 Agent Library hash，generated / replay Agent 档案走页内 sheet，generated Agent 可从 sheet 继续进入 `NodeConversationSheet`
   - Intervention upgrade 浏览器复核：`e2e-suite.mjs mobile` 在 Chromium mobile 通过；`e2e-suite.mjs cross-browser --browsers firefox,webkit` 在 Firefox / WebKit desktop 通过 director-state 和 result archive readback scoped regression。Firefox/WebKit `.result-archive` 隐藏元素截图当前会落 full-page fallback；这不是 BrowserStack / Sauce 或真实移动设备签收
   - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过
+  - Roundtable timeline / transcript spot-check：Playwright 覆盖指定 roundtable URL 的 Chromium / Firefox / WebKit 桌面和 Chromium `375px` mobile；Phase timeline、展开内容左边框、Transcript 独立滚动、Composer、Synthesis 展开和中英文 Phase 标签均通过。这里的 WebKit 是 Playwright WebKit，不代表真实 Safari 全版本矩阵。
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0
   - CampaignProgressSheet browser spot-check：desktop 与 mobile forced-colors / reduced-motion 下可打开、可滚动，console/page error 为 0
   - campaign/gameplay 浏览器 E2E：Chromium mobile / gameplay / intervention / prediction、Firefox gameplay / intervention、WebKit gameplay / intervention 均通过；最终 Chromium gameplay mini 复验通过
@@ -854,6 +856,8 @@
   - 每条发言左侧色标（5-hue oklch 调色板，与 EndingChatModal 一致）
   - 档案官发言使用 `--oracle-accent` 跟随主题皮肤变化
   - 移动端分隔线 label 有 `text-overflow: ellipsis` 防溢出
+  - live room 主列使用独立 transcript 滚动容器，`roundtable-transcript-wrapper` 继续给新消息提示提供定位上下文
+  - Synthesis 区域不设内部滚动，移动端也不会被 flex 布局压缩裁切
 - 贴图修复：`/assets/ui/generated/` 下的 1408x768 AI 全景图引用大部分已替换为 CSS gradient / box-shadow，涉及 EndingChatModal.css、WorldlineRoundtable.css、ResultView.css 共 15 处；ResultView 因果档案区域已改回使用 `scenario.scene_theme` 对应的场景图（带半透明渐变遮罩）
   - speaker glow → `radial-gradient`
   - archivist emblem → `conic-gradient`

@@ -1332,7 +1332,7 @@ describe('WorldlineRoundtableView', () => {
 
     await screen.findByText('The roundtable converged on a single hinge.');
     await screen.findByRole('button', { name: 'Keep asking' });
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     await user.click(within(phaseSection as HTMLElement).getByRole('button', {
       name: /Explain the hinge in plain language\./,
@@ -1411,7 +1411,7 @@ describe('WorldlineRoundtableView', () => {
 
     await screen.findByText('The table settled four distinct beats.');
     await screen.findByRole('button', { name: 'Keep asking' });
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     await user.click(within(phaseSection as HTMLElement).getByRole('button', {
       name: /Closing\./,
@@ -1480,7 +1480,7 @@ describe('WorldlineRoundtableView', () => {
 
     await screen.findByText('The table settled on one archival verdict.');
     await screen.findByRole('button', { name: 'Keep asking' });
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     await user.click(within(phaseSection as HTMLElement).getByRole('button', {
       name: /Representative A argues/,
@@ -1542,7 +1542,7 @@ describe('WorldlineRoundtableView', () => {
     renderRoundtableView();
 
     await screen.findByText('The table settled on one archival verdict.');
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     await user.click(within(phaseSection as HTMLElement).getByRole('button', {
       name: /Representative A pins the supply road as the hinge/,
@@ -1607,7 +1607,7 @@ describe('WorldlineRoundtableView', () => {
     renderRoundtableView();
 
     await screen.findByText('The table settled on one archival verdict.');
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.worldline-roundtable-card');
+    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     const phaseTrigger = within(phaseSection as HTMLElement).getByRole('button', {
       name: /Representative A pins the supply road as the hinge/i,
@@ -1810,6 +1810,22 @@ describe('WorldlineRoundtableView', () => {
     expect(roundtableViewSource).toContain("import '../components/EndingChatModal.css';");
     expect(roundtableCssContract).toMatch(
       /\.worldline-roundtable-transcript-list\s+\.ending-chat-bubble\.ending-chat-bubble--spotlight\s*\{/,
+    );
+  });
+
+  it('resets native button chrome for phase timeline accordion triggers', () => {
+    expect(roundtableViewSource).not.toContain('py-0 hover:no-underline');
+    expect(roundtableCssContract).not.toMatch(/\.roundtable-phase-timeline__item\s+button\s*\{/);
+    expect(roundtableCssContract).toMatch(
+      /\.roundtable-phase-timeline__item\s+\.roundtable-phase-timeline__trigger\s*\{[\s\S]*appearance:\s*none;[\s\S]*border:\s*0;[\s\S]*background:\s*transparent;/,
+    );
+  });
+
+  it('keeps phase numbering localized instead of hard-coding CSS content', () => {
+    expect(roundtableViewSource).toContain("t('roundtable.phase_number_prefix')");
+    expect(roundtableCssContract).not.toContain("content: 'Phase '");
+    expect(roundtableCssContract).toMatch(
+      /\.roundtable-phase-timeline__content\s*\{[\s\S]*padding:\s*2px 0 10px;/,
     );
   });
 

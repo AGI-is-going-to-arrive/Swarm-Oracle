@@ -1344,6 +1344,7 @@
       "phase_rebuttal": "假如重来",
       "phase_closing": "总结建议",
       "phase_verdict": "最终结论",
+      "phase_number_prefix": "阶段",
       "role_archivist": "主持人",
       "role_representative": "代表",
       "gallery_title": "其他世界线",

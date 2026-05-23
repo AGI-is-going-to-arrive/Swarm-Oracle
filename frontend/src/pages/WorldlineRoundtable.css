@@ -353,9 +353,14 @@
   align-items: start;
 }
 
-.worldline-roundtable-sidebar,
-.worldline-roundtable-main {
+.worldline-roundtable-sidebar {
   display: grid;
+  gap: 16px;
+}
+
+.worldline-roundtable-main {
+  display: flex;
+  flex-direction: column;
   gap: 16px;
 }
 
@@ -749,34 +754,104 @@
   margin-top: 12px;
 }
 
-/* ── Phase insight accordion overrides ────────────────── */
-.roundtable-phase-card {
-  background: var(--bg-surface);
-  transition: border-color 180ms ease, box-shadow 180ms ease;
+/* ── Phase insight timeline ─────────────────────────── */
+.roundtable-phase-section {
+  padding: 0 4px;
 }
 
-.roundtable-phase-card[data-state="open"] {
-  border-color: color-mix(in oklab, var(--oracle-accent) 30%, var(--border-default));
-  box-shadow: 0 2px 10px oklch(0% 0 0 / 0.06);
+.roundtable-phase-section .worldline-roundtable-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.roundtable-phase-card button[data-radix-accordion-trigger] {
-  padding: 14px 14px 14px 16px;
+.roundtable-phase-count {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  background: rgba(163, 94, 22, 0.1);
+  background: color-mix(in oklab, var(--oracle-accent) 10%, transparent);
+  padding: 2px 8px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.roundtable-phase-timeline {
+  position: relative;
+  padding-left: 24px;
+}
+
+.roundtable-phase-timeline::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--border-default);
+  background: color-mix(in oklab, var(--oracle-accent) 15%, var(--border-default));
+  border-radius: 1px;
+}
+
+.roundtable-phase-timeline__item {
+  position: relative;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.roundtable-phase-timeline__item + .roundtable-phase-timeline__item {
+  margin-top: 2px;
+}
+
+.roundtable-phase-timeline__dot {
+  position: absolute;
+  left: -20px;
+  top: 16px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border-default);
+  background: color-mix(in oklab, var(--oracle-accent) 30%, var(--border-default));
+  border: 2px solid var(--bg-surface);
+  box-shadow: 0 0 0 1px rgba(163, 94, 22, 0.15);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--oracle-accent) 15%, var(--border-default));
+  transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  z-index: 1;
+}
+
+.roundtable-phase-timeline__item[data-state="open"] .roundtable-phase-timeline__dot {
+  background: var(--oracle-accent);
+  box-shadow: 0 0 0 1px var(--oracle-accent), 0 0 8px rgba(163, 94, 22, 0.25);
+  box-shadow: 0 0 0 1px var(--oracle-accent), 0 0 8px color-mix(in oklab, var(--oracle-accent) 25%, transparent);
+  transform: scale(1.2);
+}
+
+.roundtable-phase-timeline__item .roundtable-phase-timeline__trigger {
+  -webkit-appearance: none;
+  appearance: none;
+  padding: 10px 10px 10px 0;
+  border: 0;
+  background: transparent;
   font-size: 0.82rem;
   line-height: 1.5;
   color: var(--text-primary);
   font-weight: 500;
   text-align: left;
   text-decoration: none;
+  cursor: pointer;
+  width: 100%;
 }
 
-.roundtable-phase-card button[data-radix-accordion-trigger]:hover {
+.roundtable-phase-timeline__item .roundtable-phase-timeline__trigger:hover {
   text-decoration: none;
+  background: rgba(163, 94, 22, 0.04);
   background: color-mix(in oklab, var(--oracle-accent) 4%, transparent);
+  border-radius: 8px;
 }
 
-.roundtable-phase-card [data-radix-accordion-content] > div {
-  padding: 2px 14px 14px;
+.roundtable-phase-timeline__content {
+  padding: 2px 0 10px;
 }
 
 .worldline-roundtable-insight p {
@@ -791,27 +866,24 @@
 
 .editorial-chapter-header {
   display: flex;
+  flex-direction: column;
   align-items: flex-start;
-  gap: 12px;
+  gap: 4px;
   flex: 1;
   min-width: 0;
 }
 
 .editorial-chapter-number {
   font-family: var(--font-mono);
-  font-size: 0.9rem;
-  color: var(--text-tertiary);
-  opacity: 0.5;
-  min-width: 2ch;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--text-muted);
   flex-shrink: 0;
-  padding-top: 1px;
-  transition: color 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
+  transition: color 0.2s ease;
 }
 
 [data-state="open"] .editorial-chapter-number {
   color: var(--oracle-accent);
-  opacity: 1;
-  transform: scale(1.1);
 }
 
 .editorial-chapter-content {
@@ -823,14 +895,14 @@
 
 .editorial-chapter-title {
   font-family: var(--font-body);
-  font-weight: 600;
-  font-size: 1rem;
+  font-weight: 700;
+  font-size: 0.88rem;
   line-height: 1.4;
 }
 
 .editorial-chapter-preview {
   font-family: var(--font-heading);
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
   line-height: 1.5;
   margin-top: 2px;
@@ -839,6 +911,15 @@
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+
+.worldline-roundtable-insight__expanded-content {
+  padding: 10px 14px;
+  border: none;
+  border-left: 3px solid var(--oracle-accent);
+  background: rgba(163, 94, 22, 0.06);
+  background: color-mix(in oklab, var(--oracle-accent) 6%, transparent);
+  border-radius: 10px;
 }
 
 .worldline-roundtable-seat.is-selected {
@@ -916,6 +997,10 @@
   min-width: 0;
 }
 
+.roundtable-transcript-wrapper {
+  position: relative;
+}
+
 .worldline-roundtable-main .ending-chat-composer__input {
   max-height: 160px;
   overflow-y: auto;
@@ -924,6 +1009,7 @@
 /* ── Synthesis-First: verdict above transcript ─────────── */
 .worldline-roundtable-synthesis {
   position: relative;
+  flex-shrink: 0;
   max-width: min(720px, 100%);
   margin: 0 auto;
   padding: 40px 48px;
@@ -1109,8 +1195,27 @@
   max-width: min(800px, 100%);
   margin: 0 auto;
   padding: 0 20px;
-  min-height: 260px;
-  max-height: min(46vh, 520px);
+  min-height: 200px;
+  max-height: min(60vh, 720px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(163, 94, 22, 0.3) transparent;
+  scrollbar-color: color-mix(in oklab, var(--oracle-accent) 30%, transparent) transparent;
+  scrollbar-gutter: stable;
+}
+
+.worldline-roundtable-view .worldline-roundtable-transcript-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.worldline-roundtable-view .worldline-roundtable-transcript-list::-webkit-scrollbar-thumb {
+  background: rgba(163, 94, 22, 0.25);
+  background: color-mix(in oklab, var(--oracle-accent) 25%, transparent);
+  border-radius: 3px;
+}
+
+.worldline-roundtable-view .worldline-roundtable-transcript-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* ── Editorial streaming cursor ──────────────────────── */
@@ -1882,8 +1987,7 @@ h3.roundtable-phase-divider {
   }
 
   .worldline-roundtable-transcript-list {
-    min-height: 240px;
-    max-height: 44vh;
+    min-height: 200px;
   }
 
   .worldline-roundtable-view.is-live-room .worldline-roundtable-transcript-list {
@@ -2056,7 +2160,11 @@ h3.roundtable-phase-divider {
     transition: none;
   }
 
-  [data-state="open"] .editorial-chapter-number {
+  .roundtable-phase-timeline__dot {
+    transition: none;
+  }
+
+  [data-state="open"] .roundtable-phase-timeline__dot {
     transform: none;
   }
 }

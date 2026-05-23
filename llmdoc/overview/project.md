@@ -107,7 +107,8 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - transcript `quote` 级追问 / 开线程
   - transcript `quote` 级 `点名这位代表 / Hotseat this rep`
 - roundtable committed transcript 当前已补长段折叠 / 展开，避免主区直接被长段挤满。
-- roundtable 的 phase insight 当前默认折叠；header 只留短 preview，展开后显示后端压缩后的一句话。后端会先剥掉重复的问题前缀，再按中文 96 字 / 英文 160 chars 的预算压缩；旧 payload 里如果残留整段 transcript 复述，侧栏和预填 prompt 也会先取第一句，避免重复占屏。
+- roundtable 的 phase insight 当前是 timeline 样式，默认折叠；header 只留短 preview，展开后显示带左边框的主持人 commentary。后端会先剥掉重复的问题前缀，再按中文 96 字 / 英文 160 chars 的预算压缩；旧 payload 里如果残留整段 transcript 复述，侧栏和预填 prompt 也会先取第一句，避免重复占屏。Phase 编号走 locale key，英文显示 `Phase 01`，中文显示 `阶段 01`。
+- roundtable live room 主列当前让 transcript 独立滚动；Synthesis 区域自然展开，不再设内部滚动，也不会在 375px mobile 下被 flex 布局压缩裁切。
 - 已新增两种交互模式：
   - `后续三回合 (epilogue)`：在结局讨论后继续 3 回合短叙事推演，不重开主 simulation。
   - `证据投牌 (evidence_card)`：把另一条世界线的摘要卡引入当前房间，由档案官解释差异。
@@ -195,10 +196,10 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - 最近完整本地验证：
   - backend `python -m pytest tests/`：`3329 passed, 6 skipped`
   - backend `ruff check app/ tests/`：通过
-  - frontend `npm test -- --run`：`206 files / 2328 tests passed`
+  - frontend `npx vitest run`：`207 files / 2343 tests passed`
   - frontend `npx eslint src/ --max-warnings=0`：通过
   - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-- frontend i18n key parity：`zh: 2800`、`en: 2800`
+- frontend i18n key parity：`zh: 2812`、`en: 2812`
   - Custom Agent attach 定向复核：backend `TestCustomAgentOwnership` 为 `10 passed`；Chrome 首页 smoke 确认 quick selector 可见、选中后 Start badge 显示、console error 为 0、桌面视口无横向溢出
 - Intervention upgrade 浏览器复核：`e2e-suite.mjs mobile` 在 Chromium mobile 通过；`e2e-suite.mjs cross-browser --browsers firefox,webkit` 在 Firefox / WebKit desktop 通过 director-state 和 result archive readback scoped regression。这个结论不等于 Firefox/WebKit mobile、Native Safari/Edge 或 BrowserStack / Sauce 级全矩阵签收
   - 主模式 completed/replay 定向浏览器回归：Playwright fixture 在 Chromium、Firefox、WebKit 均通过，覆盖 completed 冷加载 Classic、结果页返回 Classic、replay Theater、单分支/单轮静态标签、多分支/多轮下拉、空分支/空消息、`cancelled` 和 `error` 状态
@@ -208,6 +209,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - KG Explorer fixture E2E：Chromium desktop + mobile、Firefox desktop、WebKit desktop 共 `4 runs / allPassed=true`，覆盖 `/causal-graph` fixture、G6 canvas 非空白、搜索保留 canvas、主题切换和 10 次 mount/unmount
   - ResultView Agent profile / follow-up 本轮通过 full vitest 覆盖；custom Agent 档案走 Agent Library hash，generated / replay Agent 档案走页内 sheet，generated Agent 可从 sheet 继续进入 `NodeConversationSheet`
   - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过；ending-room replay coverage error 全为 null，mobile fit 为 true
+  - Roundtable timeline / transcript spot-check：Playwright 覆盖指定 roundtable URL 的 Chromium / Firefox / WebKit 桌面和 Chromium `375px` mobile；Phase timeline、展开内容左边框、Transcript 独立滚动、Composer、Synthesis 展开和中英文 Phase 标签均通过。这里的 WebKit 是 Playwright WebKit，不代表真实 Safari 全版本矩阵
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0
   - CampaignProgressSheet browser spot-check：desktop 与 mobile forced-colors / reduced-motion 下可打开、可滚动，console/page error 为 0
   - 浏览器 E2E：Chromium mobile / gameplay / intervention / prediction、Firefox gameplay / intervention、WebKit gameplay / intervention 均通过；最终 Chromium gameplay mini 复验通过

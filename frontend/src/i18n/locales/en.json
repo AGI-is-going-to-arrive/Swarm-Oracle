@@ -1344,6 +1344,7 @@
       "phase_rebuttal": "What if",
       "phase_closing": "Wrap-up",
       "phase_verdict": "Verdict",
+      "phase_number_prefix": "Phase",
       "role_archivist": "Host",
       "role_representative": "Representative",
       "gallery_title": "Other worldlines",
