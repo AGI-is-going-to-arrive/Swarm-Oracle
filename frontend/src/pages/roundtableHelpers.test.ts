@@ -70,11 +70,18 @@ describe('roundtableHelpers', () => {
         ((key: string) => `t:${key}`) as never,
       )).toBe('t:roundtable.selection_reason_fallback');
     });
+    it('returns localized label for new fallback reasons', () => {
+      const t = ((key: string) => `t:${key}`) as never;
+      expect(getSelectionReasonLabel('witness_augmented', false, t)).toBe('t:roundtable.selection_reason_witness_augmented');
+      expect(getSelectionReasonLabel('expert_witness', false, t)).toBe('t:roundtable.selection_reason_expert_witness');
+      expect(getSelectionReasonLabel('trait_mix', false, t)).toBe('t:roundtable.selection_reason_trait_mix');
+      expect(getSelectionReasonLabel('fault_line_first', false, t)).toBe('t:roundtable.selection_reason_fault_line_first');
+    });
     it('returns empty string for empty reason', () => {
       expect(getSelectionReasonLabel('', true)).toBe('');
     });
-    it('returns fallback for unknown reason', () => {
-      expect(getSelectionReasonLabel('custom_reason', false)).toBe('custom_reason');
+    it('returns fallback for unknown reason replacing underscores', () => {
+      expect(getSelectionReasonLabel('custom_reason', false)).toBe('custom reason');
     });
   });
 
@@ -121,6 +128,7 @@ describe('roundtableHelpers', () => {
   describe('buildRoundtableVerdictPrompt', () => {
     it('builds prompt with summary in zh', () => {
       expect(buildRoundtableVerdictPrompt('和平收束', true)).toContain('和平收束');
+      expect(buildRoundtableVerdictPrompt('和平收束', true)).not.toContain('最终结论');
     });
     it('builds fallback prompt for empty summary', () => {
       expect(buildRoundtableVerdictPrompt('', false)).toContain('roundtable reach');
@@ -138,6 +146,7 @@ describe('roundtableHelpers', () => {
       const prompt = buildRoundtablePhasePrompt('Opening', 'Resource allocation', false);
       expect(prompt).toContain('Opening');
       expect(prompt).toContain('Resource allocation');
+      expect(buildRoundtablePhasePrompt('Opening', '', false)).not.toContain('disagreement');
     });
     it('compacts long phase context before using it as a prompt draft', () => {
       const prompt = buildRoundtablePhasePrompt(
@@ -190,6 +199,7 @@ describe('roundtableHelpers', () => {
       const prompt = buildRoundtableQuotePrompt('Alice', 'This is a test', false);
       expect(prompt).toContain('Alice');
       expect(prompt).toContain('This is a test');
+      expect(prompt).toContain('expand');
     });
     it('uses translator for quote prompt', () => {
       const t = ((key: string, options?: { speaker?: string; snippet?: string }) => (

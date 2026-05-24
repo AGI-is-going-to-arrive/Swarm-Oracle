@@ -31,15 +31,15 @@
 | AgentWorkshopView | `frontend/src/pages/AgentWorkshopView.tsx` | 自建 Agent 创建/编辑，包含 knowledge domains、`IMPORTANT / CROWD` tier 选择、PDF document upload tab，以及 capability-gated Agent 备份工具 |
 | IdentityInspectorView | `frontend/src/pages/IdentityInspectorView.tsx` | `/agents/identities/:id/memories` 只读 memory inspector |
 | PersonalJournalView | `frontend/src/pages/PersonalJournalView.tsx` | `/me/journal` 个人预测日志、resolve 状态与 calibration 可视化 |
-| SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预 lifecycle、玩法卡、押注、只读干预回执、capture |
-| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel（verdict 缺失时显示 unavailable fallback）、分支级 question answer（显示在概率条上方）、因果档案 / archive（档案结论优先 story verdict）、默认折叠的导演笔记/导演复盘、campaign summary、weekly leaderboard preview、achievement toast、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、结果页 Agent 追问、generated/replay Agent 页内档案 sheet、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
+| SimulationView | `frontend/src/pages/SimulationView.tsx` | live 推演、Classic 分支树、Theater、干预 lifecycle、玩法卡、押注、只读干预回执、capture；header 会把长问题和当前推演模式分成两行，模式说明可键盘聚焦，不依赖 native title |
+| ResultView | `frontend/src/pages/ResultView.tsx` | 结局对比、Result Quality verdict panel（verdict 缺失时显示 unavailable fallback 并保留原问题）、分支级 question answer（显示在概率条上方）、因果档案 / archive（档案结论优先 story verdict）、默认折叠的导演笔记/导演复盘、campaign summary、weekly leaderboard preview、achievement toast、分享、PNG share artifact、预测卡片、Markdown/snapshot 导出、replay/import、真实世界来源卡片、native citation 区块、historical source badge、counterfactual / resume / faction 入口、续跑分支来源链接和独立概率说明、结果页 Agent 追问、generated/replay Agent 页内档案 sheet、header 图谱直达入口，以及 capability-gated `What's Next` bridge；主体区块已拆到 `frontend/src/pages/result/*` |
 | WorkbenchView | `frontend/src/pages/WorkbenchView.tsx` | 独立图谱工作台；支持 `graph / split / kg` 三种 view，保留 URL 里的 analysis branch query，但 workbench 图面按 scenario 拉全量 causal graph，不再按 URL branch 过滤；页面提供返回结果页链接 |
 | ReplayView | `frontend/src/pages/ReplayView.tsx` | replay trace 分页、branch filter、timeline scrubber、capability disabled / probe error surface |
 | TimelineGalaxy | `frontend/src/pages/TimelineGalaxy.tsx` | `/timeline-galaxy/:id` 的 G6 时间线视图；复用 `kg_explorer` capability，capability probe 失败时先显示可重试错误，不会继续拉图谱数据 |
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live、Podium Cards、room state、phase 历史卡、counterplay、live argument map |
 | DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import、裁判状态文案、按需加载 argument map |
-| WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay、FormatSelector、planning skeleton、participant follow-up、phase insight timeline、独立滚动 transcript、analyst ReACT 面板、人格漂移 warning |
+| WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay、FormatSelector、planning skeleton、participant follow-up、可见问题锚定、phase insight timeline、独立滚动 transcript、analyst ReACT 面板、人格漂移 warning |
 | HistoryView | `frontend/src/pages/HistoryView.tsx` | scenario 历史列表 |
 | LeaderboardView | `frontend/src/pages/LeaderboardView.tsx` | prediction leaderboard 与 segment filters；筛选状态同步到 URL params，顶部返回按钮回到首页 |
 
@@ -126,7 +126,7 @@
 - `ResultView` 当前在 `result_verdict` capability enabled 时显示 `ResultVerdictPanel`：
   - panel 用 React 文本节点渲染 verdict，不走 raw HTML
   - `verdict_confidence` 只接受 `high / medium / low`，未知值显示成 `medium`
-  - story verdict 非空时显示 verdict 和 confidence；空 verdict、旧 scenario 或生成失败时显示中性的“暂无预测结论”，并尽量保留原问题
+  - story verdict 非空时显示 verdict、confidence 和原问题；空 verdict、旧 scenario 或生成失败时显示中性的“暂无预测结论”，并尽量保留原问题
   - `ResultHeader` 只有在 capability enabled 且 story verdict 非空时，才把 subtitle 切到预测结论口径
   - 结局卡的 `question_answer` 非空时会作为 focal answer 放在概率条上方；空白值不渲染 focal block
   - 因果档案的“档案结论”优先显示 story verdict，同时保留 branch insight 作为次级信号；没有 verdict 时仍回退到 insight / fork reason / key moment
@@ -234,7 +234,7 @@
 | `resultHelpers.ts` | `frontend/src/pages/resultHelpers.ts` | 结果页纯函数：押注 badge、campaign cache、locale-backed badge copy、结构化关键记录 |
 | `DirectorDebriefPanel.tsx` | `frontend/src/components/result/DirectorDebriefPanel.tsx` | 结果页导演复盘面板；外层折叠状态来自 `ResultContext`，消费后端 `score_breakdown` 和结果页整理出的问题、世界线、承诺、押注、干预、关键记录、目标与玩法卡状态，展示得分原因、本局读数、下一步入口与新增徽章 |
 | `simulationHelpers.ts` | `frontend/src/pages/simulationHelpers.ts` | 推演页纯函数：Theater 场景/天气/时间标签、预热检测 |
-| `ClassicBranchTree.tsx` / `BranchTree.tsx` / `branchTitle.ts` | `frontend/src/components/` | Classic 分支树；短标题会用 `description / fork_reason` 的首句补成更好读的展示标题，原始 `Branch.title` 仍保留给干预等业务动作 |
+| `ClassicBranchTree.tsx` / `BranchTree.tsx` / `BranchNode.tsx` / `branchTitle.ts` | `frontend/src/components/` | Classic 分支树；短标题会用 `description / fork_reason` 的首句补成更好读的展示标题，原始 `Branch.title` 仍保留给干预等业务动作。BranchNode 的状态文案走 locale，低可能性分支会显示内联说明，未知 status 保守落到低可能性展示 |
 | `PostVerdictPanel.tsx` | `frontend/src/pages/PostVerdictPanel.tsx` | completed live roundtable 的 `Deep Dive` 面板；聚合 participant-scoped `1-on-1 Interview`、`Research Analyst` 与 `Cross-Examine`，并对 `agent_conversation / roundtable_analyst / roundtable_survey` 做 inline capability gate |
 | `RoundtableAgentChat.tsx` | `frontend/src/pages/RoundtableAgentChat.tsx` | 圆桌 post-verdict 的 `1-on-1 Interview`；按 participant 维护独立 conversation thread |
 | `AnalystStreamView.tsx` / `SurveyStreamView.tsx` / `postVerdictCaches.ts` | `frontend/src/pages/` | post-verdict analyst / survey 的独立流式 UI、缓存与 context reset；会区分 user abort、stream error、retry 和 source/tool chip |
@@ -628,11 +628,11 @@
   - `npm exec -- eslint src/pages/result/ResultHeader.tsx src/pages/result/ExploreDeeperBridge.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts`：通过
   - 浏览器实测本机结果页显示 `对话 · 本机模式`，header 可直接进入因果图谱和图谱工作台；点击 `探索` 会滚到下一步区。
 - 当前 frontend 稳定验证口径：
-  - `npx vitest run`：`212 files / 2374 tests passed`
+  - `npm test`：`213 files / 2386 tests passed`
   - `npm run lint`：通过
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
   - `npm run build`：通过
-  - i18n key parity：`zh: 2841`、`en: 2841`
+  - i18n key parity：`zh: 2836`、`en: 2836`；placeholder parity 通过
   - CausalReviewView / TimelineGalaxy capability 浏览器复核：Chromium、Firefox、WebKit 均覆盖 capability probe error 与正常 capability payload；WebKit 的 TimelineGalaxy 正常态以页面文本和 canvas 数量复核通过
   - Pixel Theater browser spot-check：完成态 `/sim/e1a41453-2cb2-43a1-a054-0d7cd04a6bf5` 的 toolbar 玩法卡入口可见，modal 以只读状态打开，Chrome DevTools console error 为 0
   - KG visualization 定向回归：`5 files / 193 tests passed`
@@ -641,7 +641,7 @@
   - Custom Agent attach / session userId 本轮通过 frontend full vitest、backend `TestCustomAgentOwnership` 窄集和 Chrome 首页 smoke
   - ResultView Agent profile / follow-up 本轮通过 full vitest 覆盖；custom Agent 档案走 Agent Library hash，generated / replay Agent 档案走页内 sheet，generated Agent 可从 sheet 继续进入 `NodeConversationSheet`
   - Intervention upgrade 浏览器复核：`e2e-suite.mjs mobile` 在 Chromium mobile 通过；`e2e-suite.mjs cross-browser --browsers firefox,webkit` 在 Firefox / WebKit desktop 通过 director-state 和 result archive readback scoped regression。Firefox/WebKit `.result-archive` 隐藏元素截图当前会落 full-page fallback；这不是 BrowserStack / Sauce 或真实移动设备签收
-  - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过
+  - Oracle E2E：`e2e-ending-room-followup-suite full` 与 `e2e-worldline-roundtable-suite full` 通过；Roundtable 本轮覆盖 Chromium zh/en、Firefox zh，以及 Chromium mobile `320x740` / `375x812`
   - Roundtable timeline / transcript spot-check：Playwright 覆盖指定 roundtable URL 的 Chromium / Firefox / WebKit 桌面和 Chromium `375px` mobile；Phase timeline、展开内容左边框、Transcript 独立滚动、Composer、Synthesis 展开和中英文 Phase 标签均通过。这里的 WebKit 是 Playwright WebKit，不代表真实 Safari 全版本矩阵。
   - Phaser browser spot-check：`/sim/91d5292b-36ea-4190-909d-87eb7e27f1d9` 当前 scene 为 `WorldScene`，canvas 可见，console error 为 0
   - CampaignProgressSheet browser spot-check：desktop 与 mobile forced-colors / reduced-motion 下可打开、可滚动，console/page error 为 0
@@ -851,7 +851,7 @@
   - 故事文本限宽 62ch、行高 1.8，提升长文可读性
 - `EndingChatModal` 当前已补对话可读性优化：
   - speaker 左侧色标：按参与者 index 自动分配 oklch 颜色
-  - 档案官 verdict 消息用高亮卡样式突出
+  - 结局结论消息用高亮卡样式突出
   - transcript 气泡文本限宽 58ch、行高 1.75
   - transcript 列表间距从 12px 增加到 16px
   - transcript bubble 内的操作按钮（"沿这句追问 / 另开线程"）当前有上边框分隔线，颜色加深为 `oklch(45% 0.2 350)` + 700 加粗，确保在浅色气泡背景上可读
@@ -860,7 +860,7 @@
 - `WorldlineRoundtableView` 圆桌 transcript 当前已补：
   - 按 phase 分组的视觉分隔线（`<h3>` 语义标签 + 渐变横线 + phase label）
   - 每条发言左侧色标（5-hue oklch 调色板，与 EndingChatModal 一致）
-  - 档案官发言使用 `--oracle-accent` 跟随主题皮肤变化
+  - 主持人发言使用 `--oracle-accent` 跟随主题皮肤变化
   - 移动端分隔线 label 有 `text-overflow: ellipsis` 防溢出
   - live room 主列使用独立 transcript 滚动容器，`roundtable-transcript-wrapper` 继续给新消息提示提供定位上下文
   - Synthesis 区域不设内部滚动，移动端也不会被 flex 布局压缩裁切

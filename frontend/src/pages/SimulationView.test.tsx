@@ -440,6 +440,58 @@ describe('SimulationView replay automation output', () => {
     window.localStorage.clear();
   });
 
+  it('renders the question and runtime preset badge in separate header rows so long prompts wrap independently', async () => {
+    const longQuestion = '如果一个跨国合作的人工智能治理委员会突然在五年内瓦解，全球的科研合作、商业部署节奏、以及监管框架会被推向什么样的世界线，'
+      + '并且每条主要世界线会在哪些关键时间点暴露出最大的争议与转折？';
+    mockStore.scenario = {
+      ...baseScenario,
+      id: 'scenario-1',
+      status: 'done',
+      question: longQuestion,
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const questionEl = await screen.findByText(longQuestion);
+    expect(questionEl).toHaveClass('sim-header__question');
+    const questionRow = questionEl.closest('.sim-header__question-row');
+    expect(questionRow).not.toBeNull();
+
+    const presetBadge = screen.getByText((_, element) =>
+      Boolean(element?.classList.contains('badge')
+        && element.textContent?.includes('sim.runtime_preset_title')),
+    );
+    const metaRow = presetBadge.closest('.sim-header__meta-row');
+    expect(metaRow).not.toBeNull();
+    expect(metaRow).not.toBe(questionRow);
+  });
+
+  it('shows the runtime preset badge using the localized current-mode label rather than internal preset slug', async () => {
+    render(
+      <MemoryRouter initialEntries={['/sim/scenario-1']}>
+        <Routes>
+          <Route path="/sim/:id" element={<SimulationView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const presetBadge = await screen.findByText(/sim\.runtime_preset_title/);
+    expect(presetBadge).not.toHaveAttribute('title');
+    expect(presetBadge).toHaveAttribute('tabindex', '0');
+    expect(presetBadge).toHaveAttribute('aria-describedby', 'sim-runtime-preset-details');
+    expect(presetBadge).toHaveAttribute(
+      'aria-label',
+      expect.stringContaining('common.runtime_preset_scope_main'),
+    );
+    expect(presetBadge.closest('.sim-header__meta-row')).not.toBeNull();
+  });
+
   it('publishes replay_state inside render_game_to_text', async () => {
     render(
       <MemoryRouter initialEntries={['/sim/scenario-1']}>

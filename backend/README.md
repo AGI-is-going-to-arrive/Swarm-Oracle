@@ -107,9 +107,9 @@ source .venv/bin/activate
 python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py tests/test_llm_client.py tests/test_web_context.py tests/test_api.py -q
 ```
 
-- Latest local backend verification for Roundtable Overhaul:
-  - `python -m pytest tests/ --tb=short -q`: `3374 passed, 6 skipped`
-  - `python -m ruff check app`: pass
+- Latest local backend verification for UX detemplate / roundtable copy:
+  - `python -m pytest -q`: `3384 passed, 6 skipped`
+  - `python -m ruff check app/`: pass
 - Latest targeted Campaign/profile label verification:
   - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`: `154 passed`
   - `ruff check app/services/daily_challenges.py tests/test_gameplay_contract.py tests/test_interventions.py`: pass
@@ -121,14 +121,14 @@ python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py te
 
 ## Runtime Notes
 
-- `parser.py` uses low reasoning effort during scenario creation to shorten time-to-first-worldline.
+- `parser.py` uses low reasoning effort during scenario creation to shorten time-to-first-worldline. Its initial-title prompt asks for a short plain starting-point title, and the deterministic fallback is `问题起点 / Starting point`.
 - If parse-stage LLM JSON is unrecoverably broken, or the model returns a structurally incomplete payload, backend now falls back to a deterministic minimal parse result instead of failing the whole scenario bootstrap immediately; fallback rounds also honor the caller-provided default round count instead of hardcoding `10`.
 - `memory.py` now uses a two-stage rolling compaction path: long windows first summarize older dialogue into a bounded overflow briefing, then merge that briefing with the most recent raw window for the final summary. The older slice now also keeps high-signal lines first (`CORE/LEADER`, `emotion/diverge`, intervention / gameplay card / betting / fork / result markers) instead of relying on naive head-tail truncation.
 - `memory.py` and `narrator.py` now honor in-memory BYOK overrides from the simulation pipeline; credentials still stay in memory and are not persisted into scenario records.
 - `narrator.py` now wraps branch title / participant summary / raw rounds in the same untrusted-data guardrail style already used by other prompt builders.
-- `simulator.py` now writes Result Quality data into `Scenario.parsed_context.result_quality` when `FEATURE_RESULT_VERDICT=true`; verdict generation is fail-soft, so malformed JSON, provider timeout, or empty output does not block scenario completion. Verdict prompts include branch title, insight, probability and a bounded `story_excerpt`.
+- `simulator.py` now writes Result Quality data into `Scenario.parsed_context.result_quality` when `FEATURE_RESULT_VERDICT=true`; verdict generation is fail-soft, so malformed JSON, provider timeout, or empty output does not block scenario completion. Verdict prompts include branch title, insight, probability and a bounded `story_excerpt`. Fork branch-title prompts now ask for concrete, plain-language branch titles instead of abstract labels.
 - `narrator.py` returns a branch-level `question_answer`; simulator stores it under `result_quality.branch_question_answers`, not as a new database column. Narration prompts and extraction prompts carry the original question as untrusted text so branch answers stay anchored to the user's question.
-- `ending_room_service` passes `scenario_question` into roundtable static anchors and phase insights. Long or repeated question prefixes are stripped before phase insight compaction; the visible one-line insight then uses a language-aware budget (96 zh chars / 160 en chars) so it keeps the actual hinge instead of repeating the question.
+- `ending_room_service` passes `scenario_question` into roundtable static anchors and phase insights. Long or repeated question prefixes are stripped before phase insight compaction; the visible one-line insight then uses a language-aware budget (96 zh chars / 160 en chars) so it keeps the actual hinge instead of repeating the question. Roundtable wrap-up / follow-up fallback is display-ready copy, follows `room.language`, and does not surface prompt labels or decisive-verdict wording.
 - `social.py` now selects wrapper / prompt language by scenario language, so English scenarios no longer receive Chinese wrapper text.
 - `social.py` still exposes both `GET` and `POST`, but provider overrides now must be sent in the `POST` body; `GET` query overrides are rejected to avoid leaking them into URLs.
 - `llm_client.py` now shares pending/quota accounting across processes through SQLite when they point at the same `DATABASE_URL`, while keeping the in-process semaphore and circuit breaker.

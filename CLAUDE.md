@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | full pytest：3286 passed / 11 skipped；ruff app/tests 通过 |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | 206 文件 / 2318 tests；i18n 2791/2791 |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | full pytest：3384 passed / 6 skipped；ruff app 通过 |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | full vitest：213 文件 / 2386 tests；i18n 2836/2836 |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -169,6 +169,8 @@ cd backend && alembic upgrade head
 - Hero 做减法 + PostVerdictPanel 三 tab（Agent 对话/分析师/问卷），仅 verdict 后可用；分析师/问卷/代表对话分别走 `roundtable_analyst / roundtable_survey / agent_conversation` capability，探针失败显示可重试错误，禁用时显示占位且不挂载对应 SSE 面板
 - `roundtable_survey.py` SSE + Semaphore(3)；`roundtable_analyst.py` ReACT 3 工具 5 轮迭代
 - `roundtable_survey` 是圆桌 Deep Dive 工作台能力，不是 `EndingRoomInteractionMode`；EndingChatModal 当前不支持 `parallel_survey`
+- 主界面文案当前走 factual anchor 口径：Synthesis 显示讨论结果，主持人块显示 Host Summary / 主持人小结，不再把圆桌包装成裁判口吻；结果区、transcript 与 phase 侧栏都会在有原问题时显示问题锚定
+- `e2e-worldline-roundtable-suite.mjs` 支持 `--mobile-width / --mobile-height`，缺值、非整数或超出范围会直接失败
 
 ### Phase 3 (F1-F6)
 - 13 ORM 模型，Alembic 014-016 + 022 + 025；8 后端服务；`/api/agents/*` + `/api/graphs/*`
@@ -200,6 +202,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
+| 05-25 | UX 去模板化收口：首页 runtime preset 用户可见文案改为 `Simulation Mode / 推演模式`，三档显示为 `Conservative / Balanced / Exploratory` 与 `谨慎 / 均衡 / 探索`，内部 id 仍保留 `conservative / balanced / aggressive`；SimulationView 的模式 badge 改为可聚焦说明，不再依赖 native title；BranchNode 的低可能性状态补 inline help，未知 status 走保守 fallback；ResultVerdictPanel 在有/无 verdict 两条路径都保留原问题锚定；Roundtable 的 synthesis、transcript、phase 侧栏都会显示问题锚定，主文案改为讨论结果 / 主持人小结口径；E2E 脚本补移动端 viewport 参数校验。验证：backend full `3384 passed, 6 skipped`，ruff 通过；frontend full `213 files / 2386 tests passed`，tsc/lint/build 通过；i18n parity `2836/2836`，Chromium zh/en、Firefox zh、Chromium mobile 320/375 roundtable E2E 通过 |
 | 05-24 | Roundtable Overhaul 收口：`worldline_roundtable` 新增 `discussion_format / cast_mode` 合同，保留旧 `selection_recipe` fallback；后端 generation version 升到 5，format/cast 进入 `config_json` 与 room scope，非 roundtable 带新字段返回 422；前端新增 `FormatSelector / PlanningSkeletonView / PhaseInsightTimeline`，WS 处理瞬时 `ending_room_planning` 并在 durable state 到达后清 skeleton；E2E 脚本补 UI/request/snapshot/result 的 format/cast 断言。验证：backend full `3374 passed, 6 skipped`，frontend full `212 files / 2374 tests passed`，tsc/lint/build/i18n `2841/2841` 通过，Roundtable Chromium desktop/mobile、Chromium en、Firefox desktop、WebKit desktop deterministic E2E 通过 |
 | 05-22 | Capability gate / 回溯干预收口：`/api/scenario/{id}/intervene/retrospective` 补 `FEATURE_COUNTERFACTUAL_REPLAY` 后端 gate，`InterventionModal` 在 capability 关闭或探针失败时禁用回溯模式；`useCapabilityCheck` 增加 5 分钟 TTL、共享 in-flight promise 和最多 60 秒退避；`CausalReviewView` 与 `TimelineGalaxy` 在 capability 探针失败时显示 Retry，不再把探针失败误当成 feature disabled；`PostVerdictPanel` 的 analyst/survey/agent conversation 子面板补 inline gate、ARIA tabpanel 占位和禁用态 CSS，禁用时不挂载对应 SSE。验证：backend full `3286 passed, 11 skipped`，backend related `130 passed`，frontend full `206 files / 2318 tests passed`，tsc/eslint/i18n parity `2791/2791` 通过，Chromium/Firefox/WebKit capability browser spot-check 通过 |
 | 05-21 | Pixel Theater Overhaul 收口：`HudOverlay` 删除，Theater 控制拆成 `src/pages/sim/*`，外壳切到 Light Theater；Phaser backing store 按 DPR 初始化并由 Boot/World 场景读取 DPR 缩放；React `BubbleOverlay` 通过 `viz:sprite_positions` 跟随 sprite，完成态 Theater 的玩法卡入口恢复为只读回看。验证：frontend full `202 files / 2243 tests`，`tsc/lint/build` 通过，i18n `2757/2757`，Chrome DevTools 完成态 Theater 玩法卡 spot-check console 0 error |

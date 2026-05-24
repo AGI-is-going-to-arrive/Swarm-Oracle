@@ -5,6 +5,7 @@ in isolation, using real SQLite test databases.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 
@@ -116,6 +117,33 @@ def _make_agent(engine, scenario_id, name="TestAgent", tier=AgentTier.IMPORTANT)
 )
 def test_strip_diverge_marker_handles_user_facing_edges(raw: str, expected: str):
     assert _strip_diverge_marker(raw) == expected
+
+
+def test_branch_title_hints_are_plain_language_and_specific():
+    expected_zh = (
+        "清晰的分支标题（10-18字，用通俗语言描述这条线发生了什么，"
+        "如：先查源头再发声明、全平台同时下架；"
+        "不要用抽象术语或宏大标签）"
+    )
+    expected_en = (
+        "A clear branch title (5-10 words, describe what happens in plain language, "
+        "e.g. Verify the Source First, Pull It From Every Platform; "
+        "avoid vague institutional or optimization labels)"
+    )
+
+    assert simulator_module.ZH_BRANCH_TITLE_HINT == expected_zh
+    assert simulator_module.EN_BRANCH_TITLE_HINT == expected_en
+    assert "治理" not in simulator_module.ZH_BRANCH_TITLE_HINT
+    assert "governance strategy" not in simulator_module.EN_BRANCH_TITLE_HINT
+    assert "行动 + 目标/后果" not in simulator_module.ZH_BRANCH_TITLE_HINT
+    assert "Secure Supply Lines Before Northern Push" not in simulator_module.EN_BRANCH_TITLE_HINT
+
+
+def test_root_branch_default_title_is_plain_language():
+    source = inspect.getsource(simulator_module._run_simulation_impl)
+
+    assert 'ctx.get("initial_title", "问题起点")' in source
+    assert 'ctx.get("initial_title", "历史拐点")' not in source
 
 
 # ── _format_setting ──────────────────────────────────────────

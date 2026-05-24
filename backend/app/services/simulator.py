@@ -1586,12 +1586,14 @@ def _resolve_hierarchical_agent_sets(
 # Empty string means the section is omitted for that variant.
 
 ZH_BRANCH_TITLE_HINT = (
-    "清晰的分支标题（10-18字，写成“行动 + 目标/后果”，"
-    "如：巩固粮道再北伐、急攻关中抢战机）"
+    "清晰的分支标题（10-18字，用通俗语言描述这条线发生了什么，"
+    "如：先查源头再发声明、全平台同时下架；"
+    "不要用抽象术语或宏大标签）"
 )
 EN_BRANCH_TITLE_HINT = (
-    "A clear branch title (5-10 words, action + expected consequence, "
-    "e.g. Secure Supply Lines Before Northern Push)"
+    "A clear branch title (5-10 words, describe what happens in plain language, "
+    "e.g. Verify the Source First, Pull It From Every Platform; "
+    "avoid vague institutional or optimization labels)"
 )
 
 _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
@@ -1611,14 +1613,14 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
             "- 标题要像新闻标题一样清楚，不要用\"走向A\"这种抽象表达\n"
             "- 每个标题必须让人一眼看懂这条路线的行动和后果\n"
             "- 避免只写四字词、诗化短句或内部黑话，除非标题本身已经说明具体动作\n"
-            "- 好的例子: \"巩固粮道再北伐\"、\"急攻关中抢战机\"、\"议和换取整军时间\"\n"
-            "- 坏的例子: \"全面开战\"、\"保守应对\"、\"第一种可能性\"\n"
+            "- 好的例子: \"先查源头再发声明\"、\"全平台同时下架\"、\"公开证据再恢复服务\"\n"
+            "- 坏的例子: \"全面应对\"、\"保守处理\"、\"第一种可能性\"\n"
             "\n"
             "描述写法要求:\n"
             "- 每条分支的 description 必须各不相同，具体描述该路线独有的发展走势\n"
             "- 不要写笼统的\"核心分歧在于…\"这种对所有分支通用的话\n"
-            "- 好的例子: \"曹操集结二十万大军南下，目标直取荆州，刘备被迫退守\"\n"
-            "- 坏的例子: \"核心分歧在于是否对外扩张\""
+            "- 好的例子: \"平台先冻结传播入口，公布证据链后再逐步恢复受影响账号\"\n"
+            "- 坏的例子: \"核心分歧在于是否扩大处理范围\""
         ),
     },
     ("Chinese", "b"): {
@@ -1649,7 +1651,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
     ("Chinese", "d"): {
         "preamble": (
             "你是一位制度分叉分析师。请分析以下讨论。只引入一条额外规则：\n"
-            "如果同一事件会导向不同审批路径、不同责任归属、不同任务节奏或不同治理结构，并且这些差异会改变后续决策与历史叙事，就可以判定 should_fork=true。"  # noqa: E501
+            "如果同一事件会导向不同审批路径、不同责任归属、不同任务节奏或不同决策结构，并且这些差异会改变后续决策与历史叙事，就可以判定 should_fork=true。"  # noqa: E501
         ),
         "criteria": "其他要求与默认口径一致：不要把纯措辞差异、证据门槛差异或执行细节差异误判为 fork。",  # noqa: E501
         "reason_hint": "一句话说明这些分歧为何会或不会形成制度/责任/审批层面的分叉",
@@ -1672,7 +1674,7 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
     ("Chinese", "f"): {
         "preamble": (
             "你是一位世界线压缩分析师。请分析以下讨论，并遵循两条规则：\n"
-            "1. 只要讨论已经形成互斥未来，或者会走向不同审批路径、责任链、治理结构或任务节奏，就可以 fork。\n"  # noqa: E501
+            "1. 只要讨论已经形成互斥未来，或者会走向不同审批路径、责任链、决策结构或任务节奏，就可以 fork。\n"  # noqa: E501
             "2. 但请强制做\u201c主路径压缩\u201d：默认只返回 2 条最具代表性的未来。"
             "只有当第 3 条路径在制度、责任或任务结果上明显独立且不可并入前两条时，才允许返回第 3 条。"  # noqa: E501
         ),
@@ -1703,14 +1705,14 @@ _FORK_VARIANTS: dict[tuple[str, str], dict[str, str]] = {
             "- Titles should read like clear headlines, not abstract placeholders such as 'Path A'\n"  # noqa: E501
             "- Each title must make the route's action and consequence obvious at a glance\n"
             "- Avoid cryptic two-word labels unless the concrete action is already clear\n"
-            "- Good examples: \"Secure Supply Lines Before Northern Push\", \"Rush Guanzhong Before Wei Regroups\", \"Trade Truce For Time To Rebuild\"\n"  # noqa: E501
-            "- Bad examples: \"Total War\", \"Conservative Response Plan\", \"First Possibility\"\n"  # noqa: E501
+            "- Good examples: \"Verify Source First\", \"Pull It From Every Platform\", \"Publish Evidence Before Reopening\"\n"  # noqa: E501
+            "- Bad examples: \"Total Response\", \"Conservative Plan\", \"First Possibility\"\n"  # noqa: E501
             "\n"
             "Description requirements:\n"
             "- Each branch description must be concrete and different from the others\n"
             "- Do not repeat generic language like 'the core disagreement is whether to expand outward'\n"  # noqa: E501
-            "- Good example: \"Cao Cao mobilizes two hundred thousand troops toward Jingzhou, forcing Liu Bei into a defensive retreat\"\n"  # noqa: E501
-            "- Bad example: \"The core disagreement is whether to expand outward\""
+            "- Good example: \"The platform freezes reposting, publishes the evidence trail, then restores affected accounts in stages\"\n"  # noqa: E501
+            "- Bad example: \"The core disagreement is whether to expand the response\""
         ),
     },
     ("English", "b"): {
@@ -2063,7 +2065,7 @@ async def _run_simulation_impl(
     _resume_replay_kind: str | None = None
     active_branch_id: str
     if branch_id is None:
-        root_title = ctx.get("initial_title", "历史拐点")
+        root_title = ctx.get("initial_title", "问题起点")
         active_branch_id = _get_or_create_root_branch(engine, scenario_id, title=root_title)
         all_branches = [{"id": active_branch_id, "status": "ACTIVE", "probability": 1.0}]
 

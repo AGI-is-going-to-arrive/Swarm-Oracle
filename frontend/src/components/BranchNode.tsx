@@ -2,7 +2,7 @@
    SwarmOracle — BranchNode (Custom React Flow Node)
    ═══════════════════════════════════════════════════════════ */
 
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useId, useRef } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
 import { animateNodeAppear } from '../animations/branchAnimations';
@@ -28,6 +28,7 @@ interface BranchNodeData {
 
 function BranchNodeComponent({ data }: { data: BranchNodeData }) {
   const { t } = useTranslation();
+  const reactId = useId();
   const nodeRef = useRef<HTMLDivElement>(null);
   const animated = useRef(false);
 
@@ -43,6 +44,12 @@ function BranchNodeComponent({ data }: { data: BranchNodeData }) {
   const { title, probability, status, forkReason, agentNames, thinkingCount = 0 } = data;
   const pct = Math.round(probability * 100);
   const isTalking = thinkingCount > 0;
+  const statusKey =
+    status === 'ACTIVE' || status === 'COMPLETED' || status === 'PRUNED'
+      ? status.toLowerCase()
+      : 'pruned';
+  const statusHelpId = `branch-status-help-${data.branchId ?? reactId}`;
+  const showStatusHelp = statusKey === 'pruned';
 
   // Color gradient based on probability
   const probColor =
@@ -53,9 +60,9 @@ function BranchNodeComponent({ data }: { data: BranchNodeData }) {
         : 'var(--color-danger)';
 
   const statusClass =
-    status === 'ACTIVE'
+    statusKey === 'active'
       ? 'branch-node--active'
-      : status === 'COMPLETED'
+      : statusKey === 'completed'
         ? 'branch-node--completed'
         : 'branch-node--pruned';
 
@@ -71,10 +78,17 @@ function BranchNodeComponent({ data }: { data: BranchNodeData }) {
       <Handle type="target" position={Position.Top} className="branch-handle" />
 
       {/* Status indicator */}
-      <div className="branch-node__status">
-        <span className={`status-dot status-dot--${status.toLowerCase()}`} />
-        <span className="status-label">{t(`sim.tree.status_${status.toLowerCase()}`, status)}</span>
+      <div className="branch-node__status" aria-describedby={showStatusHelp ? statusHelpId : undefined}>
+        <span className={`status-dot status-dot--${statusKey}`} />
+        <span className="status-label">
+          {t(`sim.tree.status_${statusKey}`)}
+        </span>
       </div>
+      {showStatusHelp && (
+        <span id={statusHelpId} className="status-help" role="note">
+          {t('sim.tree.status_pruned_tooltip')}
+        </span>
+      )}
 
       {/* Title */}
       <h3 className="branch-node__title">{title || t('sim.tree.simulating')}</h3>

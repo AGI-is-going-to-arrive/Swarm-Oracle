@@ -141,8 +141,8 @@ export function getInteractionModeNote(
   if (mode === 'thread_followup') {
     if (t) return t('ending_room.mode_note_thread_followup');
     return isZh
-      ? '把一个具体问题留在单独线程里继续追，不让旁支干扰当前结论。'
-      : 'Keep one concrete question in its own follow-up thread so the verdict stays legible.';
+      ? '把一个具体问题留在单独线程里继续追，不让旁支打断当前讨论。'
+      : 'Keep one concrete question in its own follow-up thread so the discussion stays clear.';
   }
   if (mode === 'epilogue') {
     if (t) return t('ending_room.mode_note_epilogue');
@@ -170,13 +170,13 @@ export function buildEndingVerdictPrompt(summary: string, isZh: boolean, t?: TFu
   if (!trimmed) {
     if (t) return t('ending_room.verdict_prompt_default');
     return isZh
-      ? '沿着档案结论继续追问：为什么这个结论会成立？具体是哪些关键决策导致了这个结局？'
-      : 'Follow up on the verdict: Why was this conclusion inevitable? What key decisions led to this outcome?';
+      ? '沿着这次结局继续追问：为什么这个结论会成立？哪些关键决策最直接地推动了它？'
+      : 'Keep asking from this ending: what made this conclusion hold, and which decisions pushed it there?';
   }
   if (t) return t('ending_room.verdict_prompt');
   return isZh
-    ? '沿着档案结论继续追问：为什么这个结论会成立？具体是哪些关键决策导致了这个结局？'
-    : 'Follow up on the verdict: Why was this conclusion inevitable? What key decisions led to this outcome?';
+    ? '沿着这次结局继续追问：为什么这个结论会成立？哪些关键决策最直接地推动了它？'
+    : 'Keep asking from this ending: what made this conclusion hold, and which decisions pushed it there?';
 }
 
 export function buildEndingInsightPrompt(insight: string, isZh: boolean, t?: TFunction): string {
@@ -220,8 +220,8 @@ export function buildEndingQuotePrompt(speaker: string, content: string, isZh: b
   const snippet = trimQuoteSnippet(content);
   if (t) return t('ending_room.quote_prompt', { speaker, snippet });
   return isZh
-    ? `沿着这句继续追问：${speaker} 提到"${snippet}"。这句话真正指向了哪一步转折？`
-    : `Follow this quote: ${speaker} said "${snippet}". Which hinge was this line really pointing at?`;
+    ? `就这句话继续追问：${speaker} 提到"${snippet}"。能展开说说吗？`
+    : `Follow this quote: ${speaker} said "${snippet}". Can you expand on that?`;
 }
 
 export function getEndingAnchorKindLabel(kind: string, isZh: boolean, t?: TFunction): string {
@@ -241,7 +241,7 @@ export function getEndingAnchorKindLabel(kind: string, isZh: boolean, t?: TFunct
   }
   switch (kind) {
     case 'verdict':
-      return isZh ? '档案结论' : 'Verdict';
+      return isZh ? '结局结论' : 'Ending conclusion';
     case 'insight':
       return isZh ? '当前洞察' : 'Insight';
     case 'key_moment':

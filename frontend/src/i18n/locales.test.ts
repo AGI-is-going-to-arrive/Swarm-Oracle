@@ -75,8 +75,8 @@ describe('i18n locale resources', () => {
     expect(zh.translation.ending_room.sidebar_mobile_label).toBe('密室侧栏');
     expect(en.translation.ending_room.sidebar_mobile_description).toBe('Quick actions and participant details for this chamber.');
     expect(zh.translation.ending_room.sidebar_mobile_description).toBe('查看此密室的快捷操作与参与者详情。');
-    expect(en.translation.roundtable.phase_insights_label).toBe('Key takeaways');
-    expect(zh.translation.roundtable.phase_insights_label).toBe('各阶段要点');
+    expect(en.translation.roundtable.phase_insights_label).toBe('Discussion Flow');
+    expect(zh.translation.roundtable.phase_insights_label).toBe('讨论脉络');
     expect(en.translation.common.more_count).toBe('+{{count}} more');
     expect(zh.translation.common.more_count).toBe('+{{count}} 更多');
   });
@@ -108,16 +108,20 @@ describe('i18n locale resources', () => {
   });
 
   it('provides localized runtime preset labels for the homepage and gameplay pages', () => {
-    expect(en.translation.home.runtime_preset_label).toBe('Oracle Profile');
-    expect(zh.translation.home.runtime_preset_label).toBe('神谕档位');
-    expect(en.translation.home.runtime_preset_conservative).toBe('Watchful');
-    expect(en.translation.home.runtime_preset_balanced).toBe('Calibrated');
-    expect(en.translation.home.runtime_preset_aggressive).toBe('Riftbound');
-    expect(zh.translation.home.runtime_preset_conservative).toBe('守望');
-    expect(zh.translation.home.runtime_preset_balanced).toBe('校准');
-    expect(zh.translation.home.runtime_preset_aggressive).toBe('裂界');
-    expect(en.translation.sim.runtime_preset_title).toBe('Oracle Profile');
-    expect(zh.translation.sim.runtime_preset_title).toBe('本局神谕档位');
+    expect(en.translation.home.runtime_preset_label).toBe('Simulation Mode');
+    expect(zh.translation.home.runtime_preset_label).toBe('推演模式');
+    expect(en.translation.home.runtime_preset_conservative).toBe('Conservative');
+    expect(en.translation.home.runtime_preset_balanced).toBe('Balanced');
+    expect(en.translation.home.runtime_preset_aggressive).toBe('Exploratory');
+    expect(zh.translation.home.runtime_preset_conservative).toBe('谨慎');
+    expect(zh.translation.home.runtime_preset_balanced).toBe('均衡');
+    expect(zh.translation.home.runtime_preset_aggressive).toBe('探索');
+    expect(en.translation.sim.runtime_preset_title).toBe('Current Mode');
+    expect(zh.translation.sim.runtime_preset_title).toBe('当前推演模式');
+    expect(en.translation.sim.tree.win_rate).toBe('Likelihood');
+    expect(zh.translation.sim.tree.win_rate).toBe('可能性');
+    expect(en.translation.sim.tree.status_pruned).toBe('Low likelihood');
+    expect(zh.translation.sim.tree.status_pruned).toBe('可能性较低');
     expect(en.translation.debate.runtime_preset_not_applicable).toContain('Debate Arena');
     expect(zh.translation.debate.runtime_preset_not_applicable).toContain('Debate Arena');
   });

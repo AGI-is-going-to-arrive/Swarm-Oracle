@@ -11,6 +11,7 @@ import {
   buildPhase3BatchBPreflightPaths,
 } from "./lib/frontendPreflight.mjs";
 import {
+  __test__ as roundtableSuiteTest,
   resolveRoundtableDragTargetTestId,
 } from "./e2e-worldline-roundtable-suite.mjs";
 import {
@@ -128,6 +129,83 @@ test("assertFrontendRoutesReady accepts generic nomodule legacy scripts without 
 
   assert.equal(result.legacyPolyfillAssetPath, "/assets/polyfills-legacy.js");
   assert.equal(result.legacyEntryAssetPath, "/assets/index-legacy.js");
+});
+
+test("roundtable parseArgs accepts explicit mobile viewport dimensions", () => {
+  const args = roundtableSuiteTest.parseArgs([
+    "node",
+    "scripts/e2e-worldline-roundtable-suite.mjs",
+    "mobile",
+    "--mobile-width",
+    "320",
+    "--mobile-height",
+    "740",
+  ]);
+
+  assert.equal(args.mobileWidth, 320);
+  assert.equal(args.mobileHeight, 740);
+});
+
+test("roundtable parseArgs rejects invalid mobile viewport dimensions", () => {
+  assert.throws(
+    () => roundtableSuiteTest.parseArgs([
+      "node",
+      "scripts/e2e-worldline-roundtable-suite.mjs",
+      "mobile",
+      "--mobile-width",
+    ]),
+    /--mobile-width requires a value/,
+  );
+  assert.throws(
+    () => roundtableSuiteTest.parseArgs([
+      "node",
+      "scripts/e2e-worldline-roundtable-suite.mjs",
+      "mobile",
+      "--mobile-width",
+      "wide",
+    ]),
+    /--mobile-width must be an integer/,
+  );
+  assert.throws(
+    () => roundtableSuiteTest.parseArgs([
+      "node",
+      "scripts/e2e-worldline-roundtable-suite.mjs",
+      "mobile",
+      "--mobile-width",
+      "320.5",
+    ]),
+    /--mobile-width must be an integer/,
+  );
+  assert.throws(
+    () => roundtableSuiteTest.parseArgs([
+      "node",
+      "scripts/e2e-worldline-roundtable-suite.mjs",
+      "mobile",
+      "--mobile-width",
+      "-1",
+    ]),
+    /--mobile-width must be an integer/,
+  );
+  assert.throws(
+    () => roundtableSuiteTest.parseArgs([
+      "node",
+      "scripts/e2e-worldline-roundtable-suite.mjs",
+      "mobile",
+      "--mobile-width",
+      "239",
+    ]),
+    /--mobile-width must be an integer/,
+  );
+  assert.throws(
+    () => roundtableSuiteTest.parseArgs([
+      "node",
+      "scripts/e2e-worldline-roundtable-suite.mjs",
+      "mobile",
+      "--mobile-height",
+      "99999",
+    ]),
+    /--mobile-height must be an integer/,
+  );
 });
 
 test("assertFrontendRoutesReady fails fast when a deep-link route returns 404", async () => {

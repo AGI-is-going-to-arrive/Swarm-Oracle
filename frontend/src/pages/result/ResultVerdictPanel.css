@@ -56,6 +56,23 @@
   color: var(--color-primary, #c61583);
 }
 
+.result-verdict-panel__question-label {
+  display: block;
+  font-family: var(--font-body, system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', sans-serif);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: #8a7e74;
+  color: var(--text-muted, #8a7e74);
+  margin-bottom: 4px;
+}
+
+@supports (color: oklch(55% 0.02 80)) {
+  .result-verdict-panel__question-label {
+    color: oklch(55% 0.02 80);
+  }
+}
+
 .result-verdict-panel__question {
   font-family: var(--font-heading, 'Cormorant Garamond', 'Noto Serif SC', Georgia, serif);
   font-size: 1.0625rem;
@@ -262,6 +279,10 @@
     margin-bottom: 10px;
   }
 
+  .result-verdict-panel__question-label {
+    margin-bottom: 2px;
+  }
+
   .result-verdict-panel__question {
     font-size: 0.975rem;
     padding-left: 10px;
@@ -298,6 +319,10 @@
 
   .result-verdict-panel__label {
     color: Highlight;
+  }
+
+  .result-verdict-panel__question-label {
+    color: GrayText;
   }
 
   .result-verdict-panel__question {

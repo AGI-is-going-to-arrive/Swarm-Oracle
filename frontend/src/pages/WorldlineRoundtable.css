@@ -3124,3 +3124,48 @@ h3.roundtable-phase-divider {
     border-top-color: Highlight;
   }
 }
+
+/* Question anchors */
+.worldline-roundtable-question-anchor,
+.worldline-roundtable-transcript-header__question,
+.worldline-roundtable-phase-question {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 10px 0 0;
+  padding: 0 0 0 12px;
+  border-left: 2px solid var(--border-default);
+  border-left-color: color-mix(in oklab, var(--oracle-accent) 45%, var(--border-default));
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  position: relative;
+  z-index: 1;
+}
+
+.worldline-roundtable-question-anchor .label,
+.worldline-roundtable-transcript-header__question strong,
+.worldline-roundtable-phase-question strong {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .worldline-roundtable-question-anchor,
+  .worldline-roundtable-transcript-header__question,
+  .worldline-roundtable-phase-question {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .worldline-roundtable-question-anchor,
+  .worldline-roundtable-transcript-header__question,
+  .worldline-roundtable-phase-question {
+    border-left: 2px solid CanvasText;
+  }
+}

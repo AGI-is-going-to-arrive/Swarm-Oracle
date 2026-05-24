@@ -61,13 +61,13 @@
 | `fork_prompt_variant` | `a / b / c / d / e / f` | fork detector prompt 档位 |
 | `fork_detector_active_branch_limit` | `0 - MAX_BRANCHES` | 每轮允许继续跑 detector 的 active branch 数量 |
 
-前端当前把这组调参收成主模式 `Oracle Profile`：
+前端当前把这组调参收成主模式的 `Simulation Mode / 推演模式`。用户看到的是三档人话标签，提交给后端的仍是内部 preset id：
 
-| 档位 | 默认组合 | 用途 |
+| UI 标签 | 内部 id | 默认组合 | 用途 |
 |------|----------|------|
-| `Watchful / 守望` | `d + 0.7 + k=1` | 更保守 |
-| `Calibrated / 校准` | `b + 0.7 + k=1` | 默认推荐 |
-| `Riftbound / 裂界` | `b + 0.7 + k=0` | 更激进 |
+| `Conservative / 谨慎` | `conservative` | `d + 0.7 + k=1` | 更稳，减少试探性分叉 |
+| `Balanced / 均衡` | `balanced` | `b + 0.7 + k=1` | 默认推荐，保留分歧但控制分支规模 |
+| `Exploratory / 探索` | `aggressive` | `b + 0.7 + k=0` | 更积极探索世界线分歧，推演尾巴更长 |
 
 补充：
 

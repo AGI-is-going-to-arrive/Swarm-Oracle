@@ -1314,9 +1314,9 @@ def _archivist_roundtable_verdict_context_hint(
     if prior_content:
         lines.append("prior_discussion=\n" + "\n".join(prior_content[-6:]))
     lines.append(
-        "verdict_instruction=Deliver an evaluative verdict based on the actual discussion above. "
-        "Identify the core disagreement, assess which arguments have evidence, "
-        "and give a clear judgment. Do NOT use a generic placeholder."
+        "verdict_instruction=Summarize the roundtable's key findings, note shared views "
+        "and open questions, and respond directly to the original question. "
+        "Do NOT use a generic placeholder."
     )
     return "\n".join(lines)
 

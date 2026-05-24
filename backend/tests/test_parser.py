@@ -109,6 +109,35 @@ class TestParseQuestion:
             == "the cabinet fractures"
         )
 
+    @pytest.mark.parametrize(
+        ("question", "language", "expected"),
+        [
+            ("", "Chinese", "问题起点"),
+            ("   ", "English", "Starting point"),
+        ],
+    )
+    def test_fallback_initial_title_uses_plain_default_copy(self, question, language, expected):
+        """Empty fallback titles should avoid abstract turning-point labels."""
+        assert _fallback_initial_title(question, language) == expected
+
+    def test_parse_prompt_initial_title_guidance_is_plainspoken(self):
+        """Parser prompt should steer title generation away from abstract labels."""
+        expected_guidance = (
+            '推演起点的标题（用通俗口语概括核心假设，如：放弃核电后、房价翻倍那一年；'
+            "不要用抽象词或宏大标签，8字以内）"
+        )
+
+        assert expected_guidance in parser_module.PARSE_PROMPT
+        assert expected_guidance in parser_module.PARSE_PROMPT_HIERARCHICAL
+        assert "拐点" not in parser_module.PARSE_PROMPT
+        assert "变局" not in parser_module.PARSE_PROMPT
+        assert "历史拐点" not in parser_module.PARSE_PROMPT
+        assert "变局开端" not in parser_module.PARSE_PROMPT
+        assert "拐点" not in parser_module.PARSE_PROMPT_HIERARCHICAL
+        assert "变局" not in parser_module.PARSE_PROMPT_HIERARCHICAL
+        assert "历史拐点" not in parser_module.PARSE_PROMPT_HIERARCHICAL
+        assert "变局开端" not in parser_module.PARSE_PROMPT_HIERARCHICAL
+
     @pytest.mark.asyncio
     async def test_retries_underfilled_agent_plan_and_tops_up_small_shortfall(self, monkeypatch):
         """Requested agent count should be honored when the first parse under-fills."""

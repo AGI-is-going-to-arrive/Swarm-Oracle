@@ -99,13 +99,13 @@ vi.mock('react-i18next', () => ({
         return `Why did the worldline turn here: ${String(options?.moment ?? '')}`;
       }
       if (key === 'ending_room.verdict_prompt') {
-        return 'Follow up on the verdict: Why was this conclusion inevitable? What key decisions led to this outcome?';
+        return 'Keep asking from this ending: what made this conclusion hold, and which decisions pushed it there?';
       }
       if (key === 'ending_room.insight_prompt') {
         return `Push on this insight: ${String(options?.insight ?? '')}`;
       }
       if (key === 'ending_room.quote_prompt') {
-        return `Follow this quote: ${String(options?.speaker ?? '')} said "${String(options?.snippet ?? '')}". Which hinge was this line really pointing at?`;
+        return `Follow this quote: ${String(options?.speaker ?? '')} said "${String(options?.snippet ?? '')}". Can you expand on that?`;
       }
       if (key === 'ending_room.mode_note_hotseat_named') {
         return `Push only ${String(options?.name ?? '')}, so the hinge can be explained clearly.`;
@@ -189,13 +189,13 @@ vi.mock('react-i18next', () => ({
         'ending_room.mode_all_present_label': 'Current lineup responds',
         'ending_room.mode_note_hotseat': 'Question one role only when you want the exact hinge explained.',
         'ending_room.mode_note_all_present': 'Let the current lineup each answer once to expose roles and disagreements.',
-        'ending_room.mode_note_thread_followup': 'Keep one concrete question in its own follow-up thread so the verdict stays legible.',
+        'ending_room.mode_note_thread_followup': 'Keep one concrete question in its own follow-up thread so the discussion stays clear.',
         'ending_room.mode_note_epilogue': 'The worldline continues for 3 turns to preview what comes next.',
         'ending_room.mode_note_evidence_card': 'Introducing evidence from another worldline; the Archivist will explain the differences.',
         'ending_room.mode_note_default': 'Let the Archivist frame the question first, then route it to the most relevant voice.',
-        'ending_room.verdict_prompt_default': 'Continue from this ending: why did this verdict hold?',
+        'ending_room.verdict_prompt_default': 'Keep asking from this ending: what made this conclusion hold?',
         'ending_room.insight_prompt_default': 'Push on this insight: which move was the true hinge?',
-        'ending_room.anchor_kind_verdict': 'Verdict',
+        'ending_room.anchor_kind_verdict': 'Ending conclusion',
         'ending_room.anchor_kind_insight': 'Insight',
         'ending_room.anchor_kind_key_moment': 'Key moment',
         'ending_room.anchor_kind_quote': 'Quote',
@@ -912,7 +912,7 @@ describe('EndingChatModal', () => {
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Continue from verdict' }));
-    expect(storeState.setComposerDraft).toHaveBeenCalledWith('Follow up on the verdict: Why was this conclusion inevitable? What key decisions led to this outcome?');
+    expect(storeState.setComposerDraft).toHaveBeenCalledWith('Keep asking from this ending: what made this conclusion hold, and which decisions pushed it there?');
     expect(storeState.setComposerDraft.mock.calls[0][0]).not.toContain('The hinge held because the council blinked first.');
 
     await user.click(screen.getByRole('button', { name: 'Start anchored thread' }));
@@ -1157,7 +1157,7 @@ describe('EndingChatModal', () => {
     const threadBubbleScope = within(threadBubble as HTMLElement);
 
     await user.click(threadBubbleScope.getByRole('button', { name: 'Follow this quote' }));
-    expect(storeState.setComposerDraft).toHaveBeenCalledWith('Follow this quote: Archivist said "Thread-local answer.". Which hinge was this line really pointing at?');
+    expect(storeState.setComposerDraft).toHaveBeenCalledWith('Follow this quote: Archivist said "Thread-local answer.". Can you expand on that?');
 
     await user.click(threadBubbleScope.getByRole('button', { name: 'Start anchored thread' }));
     await waitFor(() => expect(storeState.createThread).toHaveBeenCalledWith('room-1', {

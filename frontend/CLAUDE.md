@@ -33,9 +33,9 @@ npm run test:watch # vitest (watch mode)
 | 路径 | 组件 | 功能 |
 |------|------|------|
 | `/` | `InputView` | 首页，创建场景/辩论入口 |
-| `/sim/:id` | `SimulationView` | 模拟实时观察 + Phaser 剧场 |
+| `/sim/:id` | `SimulationView` | 模拟实时观察 + Phaser 剧场；header 会把长问题和当前推演模式分开展示，不再把技术参数放在用户可见主标签里 |
 | `/sim/replay` | `SimulationView` | Replay 模式 |
-| `/result/:id` | `ResultView` | 模拟结果展示，含 capability-gated Result Quality verdict panel / unavailable fallback |
+| `/result/:id` | `ResultView` | 模拟结果展示，含 capability-gated Result Quality verdict panel / unavailable fallback；有/无 verdict 两条路径都会保留原问题 |
 | `/result/replay` | `ResultView` | Replay 结果 |
 | `/debate/:id` | `DebateArenaView` | 辩论实时观察 |
 | `/debate/:id/result` | `DebateResultView` | 辩论结果 |
@@ -57,11 +57,11 @@ npm run test:watch # vitest (watch mode)
 | 文件 | 说明 |
 |------|------|
 | `InputView.tsx` | 首页输入，5 步进度、quick starts、搜索增强/source family、模式选择器、advanced accordion、BYOK 折叠区、Agent attach panel |
-| `SimulationView.tsx` | 模拟视图 + Phaser 集成；Theater 控制拆到 `src/pages/sim/*` |
-| `ResultView.tsx` | 结果展示 orchestrator (Summary-First 布局，含 ResultVerdictPanel / unavailable fallback、What's Next bridge、真实世界来源卡片、historical badge、share artifact、畸形数据防御)；主体区块拆到 `src/pages/result/*` |
+| `SimulationView.tsx` | 模拟视图 + Phaser 集成；Theater 控制拆到 `src/pages/sim/*`；runtime preset badge 使用可聚焦说明，不依赖 native title |
+| `ResultView.tsx` | 结果展示 orchestrator (Summary-First 布局，含 ResultVerdictPanel / unavailable fallback、What's Next bridge、真实世界来源卡片、historical badge、share artifact、畸形数据防御)；主体区块拆到 `src/pages/result/*`；ResultVerdictPanel 在有/无 verdict 时都可显示原问题锚定 |
 | `DebateArenaView.tsx` | 辩论竞技场；阶段地图默认折叠，自动化通过稳定 toggle hook 展开 |
 | `DebateResultView.tsx` | 辩论结果 |
-| `WorldlineRoundtableView.tsx` | 世界线圆桌；FormatSelector / planning skeleton / phase insight timeline / transcript 独立滚动 |
+| `WorldlineRoundtableView.tsx` | 世界线圆桌；FormatSelector / planning skeleton / 可见问题锚定 / phase insight timeline / transcript 独立滚动 |
 | `pages/roundtable/*` | 圆桌 format selector、planning skeleton、phase insight timeline 和 format helper |
 | `HistoryView.tsx` | 历史记录 |
 | `LeaderboardView.tsx` | 排行榜 |
@@ -84,7 +84,7 @@ npm run test:watch # vitest (watch mode)
 | 文件 | 说明 |
 |------|------|
 | `EndingChatModal.tsx` | 神谕密室聊天弹窗 (~1866 行)；thread rail 和 evidence drawer 位于 transcript 内部滚动区外，消息列表独立滚动；当前不支持 `parallel_survey`，并行问卷保留在圆桌 Deep Dive SSE 工作台 |
-| `BranchTree.tsx` / `ClassicBranchTree.tsx` | 分支树可视化 |
+| `BranchTree.tsx` / `ClassicBranchTree.tsx` / `BranchNode.tsx` | 分支树可视化；BranchNode 状态文案走 locale，低可能性分支有内联说明，未知 status 保守 fallback |
 | `InterventionModal.tsx` | 干预操作弹窗 |
 | `ShareModal.tsx` / `DebateShareModal.tsx` | 分享弹窗；主模式分享弹窗可触发 PNG share artifact 导出 |
 | `DebateBetModal.tsx` | 辩论投注弹窗 |
@@ -202,7 +202,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- 最近 full vitest 基线：`212 files / 2374 tests passed`
+- 最近 full vitest 基线：`213 files / 2386 tests passed`
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -396,6 +396,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-25 | UX 去模板化收口 | 首页 runtime preset 用户可见文案改为 `Simulation Mode / 推演模式`，三档显示为 `Conservative / Balanced / Exploratory` 与 `谨慎 / 均衡 / 探索`；`SimulationView` header 把问题和当前模式分开，模式说明改为可聚焦控件；`BranchNode` 低可能性状态补 inline help，未知 status 走保守 fallback；`ResultVerdictPanel` 有/无 verdict 时都保留原问题；`WorldlineRoundtableView` 在 synthesis、transcript header、phase 侧栏显示问题锚定，并把主文案收成讨论结果 / 主持人小结口径；E2E 脚本补 `--mobile-width / --mobile-height` 校验。验证：frontend full `213 files / 2386 tests passed`，`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build` 通过；i18n parity `2836/2836` 与 placeholder parity 通过；Roundtable E2E 通过 Chromium zh/en、Firefox zh、Chromium mobile 320/375 |
 | 2026-05-24 | Roundtable Overhaul | `WorldlineRoundtableView.tsx` 接入 `FormatSelector`、`PlanningSkeletonView`、`PhaseInsightTimeline` 和 format helper；开桌 payload 发送 `discussionFormat / castMode`，旧 `selectionRecipe` 继续保留；`useEndingRoomWS` 处理瞬时 `ending_room_planning`，`endingRoomStore` 在 durable state 到达后清掉 planning skeleton；automation payload 和 E2E 脚本补 `discussion_format / cast_mode` 断言，并覆盖 `deep_dive / quick_review / clash_mode`。验证：frontend full `212 files / 2374 tests passed`，`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build`、i18n parity `2841/2841` 通过；Roundtable E2E 通过 Chromium desktop/mobile、Chromium en、Firefox desktop、WebKit desktop deterministic 链路 |
 | 2026-05-23 | Roundtable timeline / transcript 收口 | `WorldlineRoundtableView.tsx`：phase insight 从卡片外框改为 timeline，新增 count badge、timeline dot、trigger 专用 class 和 `roundtable.phase_number_prefix` i18n 前缀；`AccordionContent` 使用明确 class，避免依赖不匹配的 Radix selector；transcript 外层改为 `roundtable-transcript-wrapper`，保留新消息提示定位上下文。`WorldlineRoundtable.css`：timeline 无边框样式、展开内容左边框、button reset、`color-mix()` fallback、transcript 独立滚动和 `scrollbar-gutter` 渐进增强；Synthesis 不设内部滚动，并加 `flex-shrink: 0` 避免 375px mobile 裁切。`WorldlineRoundtableView.test.tsx`：同步 `.roundtable-phase-section` selector，新增 trigger reset 与 phase 编号 i18n/CSS contract 测试。i18n：新增 `roundtable.phase_number_prefix`，英文 `Phase`，中文 `阶段`。验证：frontend full `207 files / 2343 tests passed`，`npx tsc --noEmit -p tsconfig.app.json`、`npx eslint src/ --max-warnings=0`、i18n parity `2812/2812` 通过；Playwright 覆盖指定 roundtable URL 的 Chromium / Firefox / WebKit 桌面和 Chromium 375px mobile |
 | 2026-05-22 | Capability gate / Deep Dive 收口 | `useCapabilityCheck` 加 5 分钟 TTL、共享 in-flight promise 和最多 60 秒退避；`CausalReviewView` / `TimelineGalaxy` 在 capability probe 失败时显示 Retry，不再误落 feature disabled；`PostVerdictPanel` 对 `agent_conversation / roundtable_analyst / roundtable_survey` 补 inline gate、稳定 tabpanel、禁用占位和 aria-disabled 样式，禁用 analyst/survey 时不挂载 SSE 子面板；`InterventionModal` 的回溯模式跟随 `counterfactual_replay` capability，关闭或探针失败时不提交回溯请求。验证：frontend full `206 files / 2318 tests passed`，targeted `31 passed`，`npx tsc --noEmit -p tsconfig.app.json`、`npx eslint src/ --max-warnings=0`、i18n parity `2791/2791` 通过；Chromium/Firefox/WebKit capability browser spot-check 通过 |

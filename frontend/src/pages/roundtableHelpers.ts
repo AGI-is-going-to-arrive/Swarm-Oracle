@@ -89,10 +89,20 @@ export function getSelectionReasonLabel(reason: string, isZh: boolean, t?: TFunc
     case 'top_impact':
       if (t) return t('roundtable.selection_reason_top_impact');
       return isZh ? '高影响力' : 'High impact';
+    case 'witness_augmented':
+      if (t) return t('roundtable.selection_reason_witness_augmented');
+      return isZh ? '补充专家' : 'Extra expert';
+    case 'expert_witness':
+      if (t) return t('roundtable.selection_reason_expert_witness');
+      return isZh ? '专家席' : 'Expert seat';
+    case 'trait_mix':
+      if (t) return t('roundtable.selection_reason_trait_mix');
+      return isZh ? '观点互补' : 'Perspective mix';
+    case 'fault_line_first':
+      if (t) return t('roundtable.selection_reason_fault_line_first');
+      return isZh ? '分歧优先' : 'Conflict-first';
     default:
-      return reason
-        ? (isZh ? reason : reason)
-        : '';
+      return reason ? reason.replace(/_/g, ' ') : '';
   }
 }
 
@@ -148,8 +158,8 @@ export function buildRoundtableVerdictPrompt(summary: string, isZh: boolean, t?:
   }
   if (t) return t('roundtable.verdict_prompt', { summary: trimmed });
   return isZh
-    ? `为什么"${trimmed}"成了最终结论？`
-    : `Why did "${trimmed}" become the verdict?`;
+    ? `大家是怎么形成这个共识的？关于「${trimmed}」。`
+    : `How did the table reach this consensus? About "${trimmed}".`;
 }
 
 function compactPromptContext(value: string, maxLength = 56): string {
@@ -164,8 +174,8 @@ export function buildRoundtablePhasePrompt(label: string, stakes: string, isZh: 
   if (!trimmed) {
     if (t) return t('roundtable.phase_prompt_default', { label });
     return isZh
-      ? `"${label}"阶段真正的分歧是什么？`
-      : `What was the real disagreement in "${label}"?`;
+      ? `"${label}"阶段大家主要在讨论什么？`
+      : `What was the main point in "${label}"?`;
   }
   if (t) return t('roundtable.phase_prompt', { label, stakes: trimmed });
   return isZh
@@ -189,8 +199,8 @@ export function buildRoundtableQuotePrompt(speaker: string, content: string, isZ
   const snippet = trimQuoteSnippet(content);
   if (t) return t('roundtable.quote_prompt', { speaker, snippet });
   return isZh
-    ? `${speaker} 说"${snippet}"——这句话到底卡在哪个分歧上？`
-    : `${speaker} said "${snippet}" — which disagreement does this get at?`;
+    ? `${speaker} 说"${snippet}"——能展开说说吗？`
+    : `${speaker} said "${snippet}" — can you expand on that?`;
 }
 
 export function branchListChanged(current: string[], next: string[]) {
@@ -221,7 +231,7 @@ export function getRoundtableAnchorKindLabel(kind: string, isZh: boolean, t?: TF
   }
   switch (kind) {
     case 'verdict':
-      return isZh ? '最终结论' : 'Verdict';
+      return isZh ? '讨论结果' : 'Discussion result';
     case 'phase':
       return isZh ? '阶段要点' : 'Phase';
     case 'quote':

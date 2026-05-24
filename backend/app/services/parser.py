@@ -15,6 +15,11 @@ from app.services.llm_client import (
 
 logger = logging.getLogger(__name__)
 
+_INITIAL_TITLE_PROMPT_GUIDANCE = (
+    "推演起点的标题（用通俗口语概括核心假设，如：放弃核电后、房价翻倍那一年；"
+    "不要用抽象词或宏大标签，8字以内）"
+)
+
 PARSE_PROMPT = """你是 SwarmOracle 的场景解析器。\
 用户提出了一个"如果…"假设，请把它解析为一个生动的推演场景。
 
@@ -29,7 +34,7 @@ PARSE_PROMPT = """你是 SwarmOracle 的场景解析器。\
     "background": "2-3 句生动的背景描述，要有画面感"
   }},
   "key_variable": "被改变的核心历史变量（简明扼要）",
-  "initial_title": "推演起点的标题（如：历史拐点、变局开端，8字以内）",
+  "initial_title": "__INITIAL_TITLE_PROMPT_GUIDANCE__",
   "agents": [
     {{
       "name": "角色名（使用有辨识度的真实姓名）",
@@ -62,7 +67,7 @@ PARSE_PROMPT = """你是 SwarmOracle 的场景解析器。\
   5. 面对压力时的典型反应
   6. 一个让人记住这个人的细节
   坏的例子: "性格沉稳，做事认真"（太空泛）
-"""
+""".replace("__INITIAL_TITLE_PROMPT_GUIDANCE__", _INITIAL_TITLE_PROMPT_GUIDANCE)
 
 # P3-A: extended prompt for hierarchical mode (groups field)
 PARSE_PROMPT_HIERARCHICAL = """你是 SwarmOracle 的场景解析器。\
@@ -79,7 +84,7 @@ PARSE_PROMPT_HIERARCHICAL = """你是 SwarmOracle 的场景解析器。\
     "background": "2-3 句生动的背景描述，要有画面感"
   }},
   "key_variable": "被改变的核心历史变量（简明扼要）",
-  "initial_title": "推演起点的标题（如：历史拐点、变局开端，8字以内）",
+  "initial_title": "__INITIAL_TITLE_PROMPT_GUIDANCE__",
   "groups": [
     {{
       "name": "阵营/派系名称",
@@ -123,7 +128,7 @@ PARSE_PROMPT_HIERARCHICAL = """你是 SwarmOracle 的场景解析器。\
   4. 影响决策的关键经历
   5. 面对压力时的典型反应
   6. 一个让人记住这个人的细节
-"""
+""".replace("__INITIAL_TITLE_PROMPT_GUIDANCE__", _INITIAL_TITLE_PROMPT_GUIDANCE)
 
 PARSE_RETRY_PROMPT = """你上一次只返回了 {current_agents} 个角色，\
 但目标是 {target_agents} 个。请重新生成完整结果，并严格满足数量要求。
@@ -340,7 +345,7 @@ def _fallback_initial_title(question: str, language: str) -> str:
     stripped = (question or "").strip()
     if language == "Chinese":
         stripped = re.sub(r"^如果", "", stripped).strip()
-        fallback = "变局开端"
+        fallback = "问题起点"
         limit = 20
     else:
         lowered = stripped.lower()
@@ -348,7 +353,7 @@ def _fallback_initial_title(question: str, language: str) -> str:
             if lowered.startswith(prefix):
                 stripped = stripped[len(prefix):].strip()
                 break
-        fallback = "Turning Point"
+        fallback = "Starting point"
         limit = 24
 
     compact = re.sub(r"\s+", " ", stripped)

@@ -25,8 +25,8 @@ React + TypeScript frontend for SwarmOracle.
 |-------|-----------|-------------|
 | `/` | `InputView` | Scenario input, progress indicator, quick starts, daily challenge, weekly track, difficulty, streak/refresh countdown, progress sheet, onboarding, launch confirmation, source families, search-depth selector, provider policy, advanced/BYOK accordions, preflight-aware submit loading, custom Agent quick selector + attach panel, feature-gated snapshot import |
 | `/admin/setup` | `SetupWizardView` | Three-step provider setup, API/base URL entry, and connection test |
-| `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Light Theater shell, replay, gameplay cards, structured bets, read-only intervention receipts, capture |
-| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Result Quality verdict panel or neutral unavailable fallback when the capability is enabled, Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, weekly leaderboard preview, achievement toast, share/export, prediction card, feature-gated snapshot export, replay import, rewrite-one-line counterfactuals, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
+| `/sim/:id` / `/sim/replay` | `SimulationView` | Live simulation, Light Theater shell, replay, gameplay cards, structured bets, read-only intervention receipts, capture; the header keeps long questions separate from the current simulation mode so neither label has to carry technical parameters |
+| `/result/:id` / `/result/replay` | `ResultView` | Result comparison, Result Quality verdict panel or neutral unavailable fallback when the capability is enabled, with the original question kept visible in both paths; Reader/Workbench modes, ledger-style archive, director debrief / campaign summary, weekly leaderboard preview, achievement toast, share/export, prediction card, feature-gated snapshot export, replay import, rewrite-one-line counterfactuals, resume checkpoint picker, resumed-branch source badges/links, plus the capability-gated `What's Next` bridge |
 | `/workbench/:id` | `WorkbenchView` | Dedicated graph workbench for causal / split / KG layouts; preserves the analysis branch query, resizes the KG canvas when moving between split and KG-only layouts, and links back to the scenario result page |
 | `/replay/:id` | `ReplayView` | Replay trace timeline with pagination, branch filter, and unavailable/probe-error states |
 | `/debate/:id` | `DebateArenaView` | Debate live page with phase ribbon, momentum HUD, structured bet entry |
@@ -53,9 +53,12 @@ React + TypeScript frontend for SwarmOracle.
   launch payload now follows the latest `selectionMode` and current UI language instead of reusing stale callback state
   launch payload also sends `discussionFormat / castMode`; old `selectionRecipe` stays in the payload for replay and legacy recipe compatibility
   the picker now renders `FormatSelector`, and live room startup can show a transient planning skeleton until the first durable turn/result/error arrives
+  synthesis, transcript header, and the phase sidebar show the original question when it exists; empty questions leave no blank label behind
   phase insight cards now start collapsed; the header keeps a short preview, and the expanded body shows the backend's longer language-aware one-line commentary
 - `e2e-ending-room-followup-suite.mjs`
   current followup flow uses API setup for hotseat / all-present / epilogue, submits evidence-card through the real UI drawer, and treats replay/import coverage as fail-closed rather than best-effort
+- `e2e-worldline-roundtable-suite.mjs`
+  mobile mode accepts `--mobile-width / --mobile-height`; it rejects missing, non-integer, or out-of-range values before opening a browser and checks that the question anchor is visible without horizontal overflow
 - `useEndingRoomWS.ts`
   Oracle WS reconnect now reuses the latest connect callback instead of holding a stale self-reference
 - `scenarioMeta`
@@ -228,9 +231,9 @@ npm run build:spike:phaser-custom
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
   - `npm run lint`: pass
   - `npm run build`: pass
-  - full vitest: `212 files / 2374 tests passed`
-  - i18n key parity spot-check: `zh: 2841`, `en: 2841`
-  - roundtable format/cast browser E2E: Chromium desktop/mobile, Chromium en, Firefox desktop, and WebKit desktop passed on the deterministic backend path
+  - full vitest: `213 files / 2386 tests passed`
+  - i18n key parity spot-check: `zh: 2836`, `en: 2836`; placeholder parity passed
+  - roundtable browser E2E: Chromium zh/en, Firefox zh, and Chromium mobile `320x740` / `375x812` passed on the deterministic backend path
   - capability browser spot-check: Chromium / Firefox / WebKit covered CausalReviewView and TimelineGalaxy capability error + normal capability payload
   - custom Agent attach smoke: Chrome homepage quick selector renders, selecting an Agent shows the Start badge, console error count is 0, and desktop overflow is absent
   - intervention upgrade browser spot-check: Chromium mobile and desktop Firefox/WebKit scoped cross-browser checks passed for the fixture-first simulation path, director-state readiness, and result archive readback

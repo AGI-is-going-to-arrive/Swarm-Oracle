@@ -874,6 +874,8 @@ node scripts/e2e-worldline-roundtable-suite.mjs full --locale en --url http://12
 node scripts/e2e-worldline-roundtable-suite.mjs full --browser firefox --locale en --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en-firefox --headless
 node scripts/e2e-worldline-roundtable-suite.mjs full --browser webkit --locale en --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en-webkit --headless
 node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-mobile --headless
+node scripts/e2e-worldline-roundtable-suite.mjs mobile --browser chromium --locale zh --mobile-width 320 --mobile-height 740 --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --headless
+node scripts/e2e-worldline-roundtable-suite.mjs mobile --browser chromium --locale zh --mobile-width 375 --mobile-height 812 --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --headless
 ```
 
 如果这轮改的是 `discussion_format / cast_mode` 或 planning skeleton，需要至少覆盖三种 format。没有真实 provider 要求时，可以用 `ORACLE_CHAMBERS_USE_LLM=false` 的本地 backend 做确定性回归；这个结论只说明 UI、API、WS、replay contract 走通，不代表慢 provider / 空流式链路已签收：
@@ -885,6 +887,8 @@ node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser chromium --loc
 node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser firefox --locale zh --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --headless
 node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser webkit --locale zh --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --headless
 ```
+
+如果这轮改的是移动端圆桌问题锚定或窄屏布局，再显式传 `--mobile-width / --mobile-height`。脚本会在 mobile 模式下检查问题锚定可见且不造成横向溢出；width 只接受 `240..2560` 的整数，height 只接受 `320..4096` 的整数，缺值、非整数或超范围会在打开浏览器前失败。
 
 如果只想先复核这轮本地修复过的结果页开房、legacy 索引修复和 roundtable transcript/UI 口径，最小命令是：
 

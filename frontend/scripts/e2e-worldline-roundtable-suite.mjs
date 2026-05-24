@@ -283,6 +283,26 @@ function getRoundtableHotseatPrompt(locale) {
     : "只盯你这条线回答：如果把最关键的一步延后一轮，会先坏在哪里？";
 }
 
+function parseViewportDimension(rawValue, flagName, { min, max }) {
+  const raw = String(rawValue ?? "").trim();
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`${flagName} must be an integer between ${min} and ${max}; got ${rawValue ?? "empty"}`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${flagName} must be an integer between ${min} and ${max}; got ${raw}`);
+  }
+  return value;
+}
+
+function requireOptionValue(argv, index, flagName) {
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith("--")) {
+    throw new Error(`${flagName} requires a value`);
+  }
+  return value;
+}
+
 function parseArgs(argv) {
   const args = {
     mode: argv[2] || "",
@@ -292,25 +312,39 @@ function parseArgs(argv) {
     browser: "chromium",
     headless: process.env.HEADLESS === "1",
     locale: normalizeLocale(process.env.SWARM_E2E_LOCALE || "zh"),
+    mobileWidth: 390,
+    mobileHeight: 844,
   };
 
   for (let i = 3; i < argv.length; i += 1) {
     const arg = argv[i];
-    const next = argv[i + 1];
-    if (arg === "--url" && next) {
+    if (arg === "--url") {
+      const next = requireOptionValue(argv, i, arg);
       args.baseUrl = next;
       i += 1;
-    } else if (arg === "--backend-url" && next) {
+    } else if (arg === "--backend-url") {
+      const next = requireOptionValue(argv, i, arg);
       args.backendUrl = next;
       i += 1;
-    } else if (arg === "--output-dir" && next) {
+    } else if (arg === "--output-dir") {
+      const next = requireOptionValue(argv, i, arg);
       args.outputDir = path.isAbsolute(next) ? next : path.join(FRONTEND_ROOT, next);
       i += 1;
-    } else if (arg === "--browser" && next) {
+    } else if (arg === "--browser") {
+      const next = requireOptionValue(argv, i, arg);
       args.browser = next;
       i += 1;
-    } else if (arg === "--locale" && next) {
+    } else if (arg === "--locale") {
+      const next = requireOptionValue(argv, i, arg);
       args.locale = normalizeLocale(next);
+      i += 1;
+    } else if (arg === "--mobile-width") {
+      const next = requireOptionValue(argv, i, arg);
+      args.mobileWidth = parseViewportDimension(next, "--mobile-width", { min: 240, max: 2560 });
+      i += 1;
+    } else if (arg === "--mobile-height") {
+      const next = requireOptionValue(argv, i, arg);
+      args.mobileHeight = parseViewportDimension(next, "--mobile-height", { min: 320, max: 4096 });
       i += 1;
     } else if (arg === "--headless") {
       args.headless = true;
@@ -318,7 +352,7 @@ function parseArgs(argv) {
   }
 
   if (!["desktop", "mobile", "full"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-worldline-roundtable-suite.mjs <desktop|mobile|full> [--url URL] [--backend-url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--locale en|zh] [--headless]");
+    throw new Error("Usage: node scripts/e2e-worldline-roundtable-suite.mjs <desktop|mobile|full> [--url URL] [--backend-url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--locale en|zh] [--mobile-width WIDTH] [--mobile-height HEIGHT] [--headless]");
   }
   if (!VALID_BROWSERS.has(args.browser)) {
     throw new Error(`Unsupported browser: ${args.browser}`);
@@ -2050,9 +2084,9 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
   };
 }
 
-async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, browserName, locale) {
+async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, browserName, locale, width = 390, height = 844) {
   const contextOptions = {
-    viewport: { width: 390, height: 844 },
+    viewport: { width, height },
     hasTouch: true,
     locale: resolveContextLocale(locale),
   };
@@ -2144,6 +2178,23 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
     stream_lifecycle: hotseat.captures,
   });
   await createVerdictAnchoredThread(page, "mobile verdict anchored thread");
+
+  const anchorText = await page.locator('.worldline-roundtable-question-anchor').innerText().catch(() => "");
+  if (!anchorText || anchorText.trim() === "") {
+    throw new Error("Mobile spot check failed: question-anchor text is empty");
+  }
+  if (anchorText.includes("witness_augmented")) {
+    throw new Error("Mobile spot check failed: question-anchor text contains witness_augmented");
+  }
+  const anchorOverflows = await page.evaluate(() => {
+    const el = document.querySelector('.worldline-roundtable-question-anchor');
+    if (!el) return false;
+    return el.scrollWidth > el.clientWidth;
+  });
+  if (anchorOverflows) {
+    throw new Error("Mobile spot check failed: question-anchor overflows horizontally");
+  }
+
   const anchoredThreadLifecycle = await sendAnchoredFollowup(page, "mobile anchored follow-up commit", {
     outputDir,
     filePrefix: "mobile-roundtable-anchored-thread-stream",
@@ -2284,6 +2335,7 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
 
   await closePlaywrightContext(context, "roundtable-mobile-context", 15000);
   return {
+    viewport: { width, height },
     locale,
     uiLocale,
     roomLanguage,
@@ -2345,6 +2397,8 @@ async function main() {
         mobileScenarioId,
         args.browser,
         args.locale,
+        args.mobileWidth,
+        args.mobileHeight,
       );
     } finally {
       await closePlaywrightBrowser(mobileBrowser, "roundtable-mobile-browser", 20000);
@@ -2372,3 +2426,8 @@ if (isDirectExecution()) {
       process.exit(1);
     });
 }
+
+export const __test__ = {
+  parseArgs,
+  parseViewportDimension,
+};

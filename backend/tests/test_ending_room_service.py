@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock
 
@@ -1258,6 +1259,37 @@ def test_oracle_generation_prompt_wraps_character_identity_as_untrusted_data():
     assert "Potential prompt-injection markers detected" in prompt
 
 
+def test_oracle_generation_prompt_uses_room_language_not_context_language():
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Worldline Roundtable",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.REPRESENTATIVE,
+        display_name="Representative A",
+        source_branch_id="branch-a",
+        source_agent_id="agent-a",
+        persona_snapshot_json={"agent_role": "Investigator"},
+    )
+
+    prompt = _build_oracle_generation_prompt(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.VERDICT,
+        scenario_question="如果源头迟迟查不清，谁先负责？",
+        output_json=False,
+    )
+
+    assert "Write in English" in prompt
+    assert "Translate any Chinese fragments from context" in prompt
+    assert "Keep the same language as the context" not in prompt
+
+
 def test_oracle_prompts_wrap_vocabulary_identity_as_untrusted_data():
     room = EndingRoom(
         scenario_id="scenario-1",
@@ -1700,7 +1732,33 @@ def test_roundtable_verdict_fallback_is_display_ready_not_prompt_instructions():
     assert "语气要像" not in content
     assert "秩序线" in content
     assert "裂变线" in content
-    assert "我的裁决" in content
+    assert "我的裁决" not in content
+    assert "My verdict" not in content
+    assert "evaluative verdict" not in content
+    assert "clear judgment" not in content
+    assert "讨论的核心" in content
+
+
+def test_roundtable_verdict_fallback_en_does_not_mix_chinese_question():
+    content = _build_roundtable_verdict_content(
+        [
+            {
+                "title": "Order Line",
+                "insight": "Ports stabilized before the panic spread.",
+                "key_moments": ["Ports held first"],
+            },
+            {
+                "title": "Fracture Line",
+                "insight": "Local teams broke away before support arrived.",
+                "key_moments": ["Local teams broke away"],
+            },
+        ],
+        language="en",
+        scenario_question="如果供应链断裂，谁最先承压？",
+    )
+
+    assert not re.search(r"[\u4e00-\u9fff]", content)
+    assert "The discussion centered on" in content
 
 
 def test_roundtable_deterministic_anchors_include_scenario_question():
@@ -1829,7 +1887,7 @@ def test_phase_insight_compacts_turn_text_instead_of_repeating_transcript():
     assert insight["commentary"] != raw_commentary
     assert len(insight["commentary"]) < len(raw_commentary)
     assert "transcript 和侧栏" not in insight["commentary"]
-    assert insight["stakes"] == "世界线切口"
+    assert insight["stakes"] == "故事起点"
 
 
 def test_phase_insight_compacts_hook_after_concrete_long_chinese_question_prefix():
@@ -2163,15 +2221,33 @@ def test_phase_insight_does_not_crash_on_empty_commentary():
     )
 
     assert isinstance(insight["commentary"], str)
-    assert insight["commentary"] == "先确认这条线怎么走到这里"
-    assert insight["insight_body"] == "先确认这条线怎么走到这里"
-    assert insight["stakes"] == "世界线切口"
+    assert insight["commentary"] == "这条线是怎么走到这里的"
+    assert insight["insight_body"] == "这条线是怎么走到这里的"
+    assert insight["stakes"] == "故事起点"
 
     insight_no_q = _phase_insight("en", EndingRoomPhase.VERDICT, "")
     assert isinstance(insight_no_q["commentary"], str)
-    assert insight_no_q["commentary"] == "Collapse the room into archive language"
-    assert insight_no_q["insight_body"] == "Collapse the room into archive language"
-    assert insight_no_q["stakes"] == "Archivist summary"
+    assert insight_no_q["commentary"] == "What the group converged on"
+    assert insight_no_q["insight_body"] == "What the group converged on"
+    assert insight_no_q["stakes"] == "Discussion wrap-up"
+
+
+def test_phase_insight_label_is_user_friendly():
+    zh_values = []
+    en_values = []
+    for phase in EndingRoomPhase:
+        zh = _phase_insight("zh", phase, "")
+        en = _phase_insight("en", phase, "")
+        zh_values.extend([zh["stakes"], zh["commentary"], zh["insight_body"]])
+        en_values.extend([en["stakes"], en["commentary"], en["insight_body"]])
+
+    zh_text = " ".join(zh_values)
+    en_text = " ".join(en_values)
+    assert "档案" not in zh_text
+    assert "裁决" not in zh_text
+    assert "论证反驳" not in zh_text
+    assert "Archivist summary" not in en_text
+    assert "Points of divergence" not in en_text
 
 
 def test_strip_question_prefix_unit_cases():
@@ -3129,7 +3205,7 @@ def test_worldline_roundtable_background_keeps_summary_only_crossline_scope():
 
     assert result_payload["status"] == "done"
     summary = result_payload["result"]["summary"]
-    assert "裁决" in summary or "关键转折" in summary
+    assert "讨论" in summary or "关键转折" in summary
     assert "全文记忆池" not in result_payload["result"]["summary"]
     assert "秩序线全文：只允许会客厅读到这里。" not in turns_text
     assert "裂变线全文：不该泄露给另一条线。" not in turns_text
@@ -4653,6 +4729,35 @@ def test_rewrite_prompt_includes_vocabulary_for_finance_representative():
     assert "Persona vocabulary:" in prompt
     assert "exposure" in prompt or "counterparty" in prompt
     assert "Treasury Officer" in prompt
+
+
+def test_roundtable_archivist_voice_uses_wrapup_not_verdict_frame():
+    room = EndingRoom(
+        scenario_id="scenario-1",
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="Worldline Roundtable",
+        language="en",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-1",
+        role_slot=ending_room_service_module.EndingRoomRoleSlot.ARCHIVIST,
+        display_name="Host",
+        source_branch_id=None,
+        source_agent_id=None,
+        persona_snapshot_json={},
+    )
+
+    prompt = _build_oracle_generation_prompt(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.VERDICT,
+        output_json=False,
+    )
+
+    assert "balanced wrap-up, shared takeaway, or next handoff" in prompt
+    assert "handoff or verdict" not in prompt
 
 
 def test_rewrite_prompt_includes_identity_for_plain_variant_with_snapshot():

@@ -1253,37 +1253,38 @@ export function SimulationView() {
           {t('sim.status.back')}
         </button>
         <div className="sim-header__info">
-          <h2 className="sim-header__question">
-            {scenario?.question || t('sim.status.loading')}
-          </h2>
-          <span
-            className={`badge badge-${
-              status === 'error' || cancelledStatus ? 'pruned' : 'active'
-            }`}
-          >
-            {status === 'error'
-              ? t('sim.status.error')
-              : cancelledStatus
-                ? t('simulation.cancelled_title')
-                : status === 'done'
-                  ? t('sim.status.completed')
-                  : t('sim.status.running')}
-          </span>
-          <span
-            className="badge badge-active"
-            title={[
-              t('common.runtime_preset_scope_main'),
-              `${t('common.runtime_preset_prompt_variant')}: ${activeRuntimePresetConfig.forkPromptVariant.toUpperCase()}`,
-              `${t('common.runtime_preset_branch_sensitivity')}: ${activeRuntimePresetConfig.branchSensitivity}`,
-              `${t('common.runtime_preset_branch_budget')}: ${
-                activeRuntimePresetConfig.forkDetectorActiveBranchLimit === 0
-                  ? t('common.runtime_preset_budget_disabled')
-                  : activeRuntimePresetConfig.forkDetectorActiveBranchLimit
-              }`,
-            ].join(' · ')}
-          >
-            {t('sim.runtime_preset_title')}: {activeRuntimePresetLabel}
-          </span>
+          <div className="sim-header__question-row">
+            <h2 className="sim-header__question">
+              {scenario?.question || t('sim.status.loading')}
+            </h2>
+            <span
+              className={`badge badge-${
+                status === 'error' || cancelledStatus ? 'pruned' : 'active'
+              }`}
+            >
+              {status === 'error'
+                ? t('sim.status.error')
+                : cancelledStatus
+                  ? t('simulation.cancelled_title')
+                  : status === 'done'
+                    ? t('sim.status.completed')
+                    : t('sim.status.running')}
+            </span>
+          </div>
+          <div className="sim-header__meta-row">
+            <span
+              className="badge badge-active"
+              role="note"
+              tabIndex={0}
+              aria-describedby="sim-runtime-preset-details"
+              aria-label={`${t('sim.runtime_preset_title')}: ${activeRuntimePresetLabel}. ${t('common.runtime_preset_scope_main')}`}
+            >
+              {t('sim.runtime_preset_title')}: {activeRuntimePresetLabel}
+            </span>
+            <span id="sim-runtime-preset-details" className="sr-only">
+              {t('common.runtime_preset_scope_main')}
+            </span>
+          </div>
         </div>
         <div className="sim-header__actions">
           {canPreviewGameplayCards && (

@@ -37,9 +37,10 @@
 
 | 模块 | 位置 | 责任 |
 |------|------|------|
-| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、干预 pending metadata claim/lease 消费与 effect receipt 写回；receipt 写回前会核对当前 scenario/branch，Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent prompt 会带当前世界线标题/分叉原因，Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记；narration 落库前也会清理行首 `[R1 角色]` 这类 raw round marker，但保留普通 `[important note]` 方括号内容 |
+| Simulator | `backend/app/services/simulator.py` | scenario 主循环、fork、分支标题生成提示、narration 编排、Result Quality verdict 生成与 branch question-answer 持久化、干预 pending metadata claim/lease 消费与 effect receipt 写回；分支标题提示要求短、具体、接近日常语言的标题，避免抽象标签；receipt 写回前会核对当前 scenario/branch，Phase 3 hooks (causal/factions WS/checkpoint/identity lifecycle)；Agent prompt 会带当前世界线标题/分叉原因，Agent 可见消息会剥离内部 `[DIVERGE: ...]` / `[DIVERGE：...]` 标记；narration 落库前也会清理行首 `[R1 角色]` 这类 raw round marker，但保留普通 `[important note]` 方括号内容 |
 | Simulation Cancel | `backend/app/services/simulation_cancel.py` | scenario 取消 token、DB cancelled fallback 与后台任务取消信号 |
 | Preflight | `backend/app/services/preflight.py` | admin/CLI 预检：SQLite、ChromaDB、LLM、web search、CORS、volume |
+| Parser | `backend/app/services/parser.py` | scenario 创建阶段的 LLM 解析；`initial_title` prompt 要求短、具体、像问题起点的标题，fallback 使用 `问题起点 / Starting point` |
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
 | Personality Drift | `backend/app/services/personality_drift.py` | 从 identity metadata、消息和成长事件派生 Big Five drift warning |
 | Memory | `backend/app/services/memory.py` | L1 压缩、context 组装；Agent context 可接收当前世界线块，提醒同一角色在不同分支里不要复用同一组例子和结论；已知玩法卡用 contract label，未知 `card_label` 会按 untrusted data 包裹 |
@@ -50,7 +51,7 @@
 | Roundtable Survey | `backend/app/services/roundtable_survey.py` | 世界线圆桌问卷 SSE；按 room 绑定 participant、补 identity memory、并发发问后逐条回传 |
 | Roundtable Analyst | `backend/app/services/roundtable_analyst.py` | 世界线圆桌 analyst SSE；有界 ReACT 工具循环，串 causal graph / identity memory / web evidence |
 | Vector Store | `backend/app/services/vector_store.py` | Chroma L2 记忆 + identity memory/profile；identity profile 写入有 pending gate、SQLite runtime lock、本地 Chroma lock 与 5 秒调用方等待上限 |
-| Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`）；Oracle 文案走 generation-first / rewrite / deterministic fallback，rich context 会带 scenario question、branch insight/story/key moments 和代表 stance，JSON 字符串输出会先解出 `content`，streaming-first 空流也会退回可显示文本 |
+| Ending Room Service | `backend/app/services/ending_room_service/` | room/thread scope、follow-up、后台生成（已拆分为 `__init__.py` + `_utils.py` + `_content.py` + `_participants.py` + `_threads.py`）；Oracle 文案走 generation-first / rewrite / deterministic fallback，rich context 会带 scenario question、branch insight/story/key moments 和代表 stance，输出跟随 room language，英文房间会翻译上下文里的中文片段；JSON 字符串输出会先解出 `content`，streaming-first 空流也会退回可显示文本 |
 | Scoring | `backend/app/services/scoring.py` | prediction 评分与 leaderboard 物化 |
 | Journal Service | `backend/app/services/journal_service.py` | personal prediction journal 写入、resolve、分页与 calibration 聚合 |
 | Document Ingestion | `backend/app/services/document_ingestion.py` | PDF 文本抽取、长文档实体抽取与 persona 生成 helper |
@@ -177,24 +178,24 @@
   - 字段持久化在 `EndingRoom.config_json`，没有新增表或列
 - 旧 `selection_recipe` 仍保留。缺少新字段的旧 room、旧 replay 或旧 readonly artifact 会按 recipe 推导 format/cast；snapshot/result 会回显 `selection_recipe / discussion_format / cast_mode`。
 - `cast_mode=custom` 时，用户传入的 `selected_representatives` 是 authority，并要求每条 selected branch 都有代表；`cast_mode=smart_pick` 时，后端只会在当前 scenario 与当前 selected branches 的可见候选里补选。
-- roundtable turn plan 仍只使用现有 phase：`opening / crossfire / closing / verdict`。`quick_review` 最多让前两位代表开场后进入 verdict；`deep_dive` 可包含 witness crossfire、closing 与 verdict；`clash_mode` 会把 opening 设为 challenge 风格，但不新增 phase enum。
+- roundtable turn plan 仍只使用现有 phase：`opening / crossfire / closing / verdict`。这里的 `verdict` 是内部 phase enum；用户界面显示为讨论结果口径。`quick_review` 最多让前两位代表开场后进入收束阶段；`deep_dive` 可包含 witness crossfire、closing 与收束阶段；`clash_mode` 会把 opening 设为 challenge 风格，但不新增 phase enum。
 - `clash_mode + smart_pick` 的代表选择会优先找冲突/立场差异；CJK、空 stance 或短 stance 会回退到 impact、branch pressure、probability 等确定性评分。
 - 后台 runner 在 roundtable 首开时会广播瞬时 `ending_room_planning`，data 包含 `room_id / discussion_format / cast_mode / planned_turn_count / phase`，并继续走既有 WS `meta.sequence / event_id`。
 - `ending_room_turn.question_anchor_ids_json`
-  当前已用于显式记录 `quote / verdict / key_moment / phase` 等锚点来源。
+  当前已用于显式记录 `quote / discussion result / key_moment / phase` 等锚点来源；内部 anchor id 仍可能使用 `verdict`，但 UI 文案不再显示成裁判式结论。
 - `ending_room_thread.question_anchor_ids_json`
   当前也已成为真实字段，thread create 与后续 replay/read-only 恢复都能保留锚点语义。
 - `EndingRoomInteractionMode` 当前支持 7 种模式：
   `auto_recap / archivist_route / hotseat / all_present / thread_followup / epilogue / evidence_card`。
   - `epilogue`：后续三回合短叙事推演，不重启主 simulation。
   - `evidence_card`：把另一条世界线的摘要卡引入当前讨论，由档案官解释差异。
-- `thread_followup` 的 generation/rewrite prompt 当前会明确要求回答 active thread 与当前 anchor；不能重开 verdict、复述整间房、扩到新话题，或解释线程机制。
+- `thread_followup` 的 generation/rewrite prompt 当前会明确要求回答 active thread 与当前 anchor；不能重开整桌总结、复述整间房、扩到新话题，或解释线程机制。
 - `create_ending_room_thread()` 当前会在创建阶段校验 room type 与 `interaction_mode` 的组合是否合法；例如 `worldline_roundtable` 不会再先落库一个从一开始就不可用的 `all_present` thread。
 - Oracle 的 participant snapshot 当前会带 `agent_name / agent_role / agent_persona / agent_stance / agent_emotion / tier / impact_score / branch_pressure / latest_quote / opening_quote / source_type`，供 ending-room / roundtable 的 LLM 生成直接消费。
 - `ending-room / roundtable` 的主文案生成当前走 `LLM first, template fallback`：先 structured LLM，再 plain-text retry，最后才回 deterministic fallback；模板不再是主路径。
-- roundtable verdict 和 follow-up 的 deterministic fallback 当前必须是 display-ready copy：不能包含 prompt 指令、模式标签或事实清单式占位，因为 LLM 关闭或耗尽时它会直接展示给用户。
-- roundtable opening / crossfire / witness / verdict 的 deterministic anchor 会用经过清洗和截断的 `scenario_question` 加问题前缀；没有 scenario question 时仍返回可直接展示的普通文案。
-- `_phase_insight()` 当前会先剥掉 roundtable question prefix，再按中文 96 字 / 英文 160 chars 的预算，把长 turn commentary 压成一句短 `commentary`；完整清洗文本保存在 `insight_body`，后端 result 不再默认把整段 transcript 或重复问题复制进 phase insight。`worldline_roundtable` 的 result 会保留 `opening / crossfire / closing / verdict` 阶段洞察，`summary` 仍取 verdict，`archivist_note` 优先取 closing turn。
+- roundtable wrap-up 和 follow-up 的 deterministic fallback 当前必须是 display-ready copy：不能包含 prompt 指令、模式标签或事实清单式占位，因为 LLM 关闭或耗尽时它会直接展示给用户。
+- roundtable opening / crossfire / witness / discussion-result 的 deterministic anchor 会用经过清洗和截断的 `scenario_question` 加问题前缀；没有 scenario question 时仍返回可直接展示的普通文案。
+- `_phase_insight()` 当前会先剥掉 roundtable question prefix，再按中文 96 字 / 英文 160 chars 的预算，把长 turn commentary 压成一句短 `commentary`；完整清洗文本保存在 `insight_body`，后端 result 不再默认把整段 transcript 或重复问题复制进 phase insight。`worldline_roundtable` 的 result 会保留 `opening / crossfire / closing / verdict` 阶段洞察；这里的 `verdict` 仍是内部 phase 名，`summary` 取收束阶段文本，`archivist_note` 优先取 closing turn。
 - `FEATURE_ROUNDTABLE_INSIGHT_LLM` 默认关闭；开启后只会在 `worldline_roundtable` result rebuild 之后、最终持久化之前，有界地重写 phase insight。重写输入会用 `UNTRUSTED DATA` 包裹，单次并发有界；空文本、过短文本、JSON、Markdown fence 或仅 reasoning 输出都会被拒绝，失败时保留原 `commentary / insight_body`。
 - Oracle 主文案的 LLM 路径当前先走 generation-first prompt，这一步不会把 anchor copy 当中心参考；只有生成为空或失败时，才进入带 anchor reference 的 rewrite fallback，最后才退 deterministic fallback。
 - Oracle prompt 当前包含双层角色化词汇提示：
@@ -476,8 +477,8 @@
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 - custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；最近记录里后端仓库级 ruff 已全绿。
 - 最近后端完整复验：
-  - `python -m pytest tests/ --tb=short -q`：`3374 passed, 6 skipped`
-  - `python -m ruff check app`：通过
+  - `python -m pytest -q`：`3384 passed, 6 skipped`
+  - `python -m ruff check app/`：通过
 - Campaign/profile label 本轮窄集复验：
   - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`：`154 passed`
   - `ruff check app/services/daily_challenges.py tests/test_gameplay_contract.py tests/test_interventions.py`：通过

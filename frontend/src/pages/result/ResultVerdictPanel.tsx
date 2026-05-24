@@ -58,9 +58,14 @@ export default function ResultVerdictPanel({
         </header>
 
         {questionText && (
-          <p className="result-verdict-panel__question" data-testid="result-verdict-question">
-            {questionText}
-          </p>
+          <>
+            <span className="result-verdict-panel__question-label">
+              {t('result.question_answered_label', { defaultValue: 'Question answered' })}
+            </span>
+            <p className="result-verdict-panel__question" data-testid="result-verdict-question">
+              {questionText}
+            </p>
+          </>
         )}
 
         <p
@@ -112,9 +117,14 @@ export default function ResultVerdictPanel({
       </header>
 
       {questionText && (
-        <p className="result-verdict-panel__question" data-testid="result-verdict-question">
-          {questionText}
-        </p>
+        <>
+          <span className="result-verdict-panel__question-label">
+            {t('result.question_answered_label', { defaultValue: 'Question answered' })}
+          </span>
+          <p className="result-verdict-panel__question" data-testid="result-verdict-question">
+            {questionText}
+          </p>
+        </>
       )}
 
       <p className="result-verdict-panel__text" data-testid="result-verdict-text">

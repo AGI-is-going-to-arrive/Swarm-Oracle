@@ -69,6 +69,8 @@ def _roundtable_question_prefix(scenario_question: str | None, *, language: str)
         return ""
     if language == "zh":
         return f"针对「{question}」这个问题，"
+    if re.search(r"[\u3400-\u9fff]", question):
+        return ""
     return f"For the question '{question}', "
 
 
@@ -994,36 +996,27 @@ def _build_roundtable_verdict_content(
     if language == "zh":
         if rival_title and rival_hinge:
             return (
-                f"{question_prefix}我把这桌的分歧压到一句话："
-                f"《{lead_title}》的证据更扎实，因为「{lead_hinge}」先改变了局面；"
-                f"《{rival_title}》提醒我们「{rival_hinge}」这笔代价不能抹掉，"
-                "但它还没推翻前一个转折。"
-                f"我的裁决是：先承认《{lead_title}》解释力更强，"
-                f"再沿着《{rival_title}》留下的代价继续追问。"
+                f"{question_prefix}这次讨论的核心在于：《{lead_title}》得到更多支持，"
+                f"因为「{lead_hinge}」率先改变局面；不过《{rival_title}》提出的"
+                f"「{rival_hinge}」也值得继续追问。综合来看，目前更倾向于"
+                f"《{lead_title}》的走向，同时保留《{rival_title}》提醒的问题。"
             )
         return (
-            f"{question_prefix}这桌最后落在《{lead_title}》这条线：真正撑起判断的是「{lead_hinge}」。"
-            "我的裁决是：先看这个转折带来的实际后果，再决定后续追问要往哪边打。"
+            f"{question_prefix}大家的讨论最终聚焦在《{lead_title}》这条线上："
+            f"关键转折是「{lead_hinge}」。接下来可以沿着这个方向继续追问。"
         )
     if rival_title and rival_hinge:
         return (
-            f"{question_prefix}I would reduce this table to one disagreement: "
-            f"{lead_title} has the stronger evidence because "
-            f"'{lead_hinge}' changed the situation first; "
-            f"{rival_title} still matters because '{rival_hinge}' names a real cost, "
-            "but it does not overturn the first hinge. "
-            f"My verdict: treat {lead_title} as the stronger explanation, "
-            f"then keep pressing the cost left by {rival_title}."
+            f'{question_prefix}The discussion centered on "{lead_title}" gaining more support '
+            f'because "{lead_hinge}" shifted the situation first. That said, '
+            f'"{rival_title}" raised "{rival_hinge}", which is still worth exploring. '
+            f'On balance, the group leans toward "{lead_title}" while keeping the concerns '
+            f'from "{rival_title}" in view.'
         )
     return (
-        (
-            f"{question_prefix}this table lands on {lead_title}: "
-            if question_prefix
-            else f"This table lands on {lead_title}: "
-        )
-        + f"the judgment rests on '{lead_hinge}'. "
-        "My verdict is to follow that concrete hinge first, "
-        "then ask what cost still needs pressure."
+        f'{question_prefix}The discussion converged on "{lead_title}": '
+        f'the key turning point was "{lead_hinge}". '
+        "This is where the next round of questions can pick up."
     )
 
 
@@ -1313,7 +1306,7 @@ def _oracle_profile_scene_brief(room: EndingRoom) -> str:
     if room.language == "zh":
         scene_labels = {
             "law": "法政",
-            "governance": "治理",
+            "governance": "公共事务",
             "war": "战争",
             "empire": "帝国",
             "industry": "工业",
@@ -1672,7 +1665,7 @@ def _oracle_voice_brief(
         if is_archivist:
             return (
                 "Speak like a sharp moderator who can collapse six branches into one clear hinge. "
-                "Do not sound bureaucratic or defensive. One crisp frame, then the handoff or verdict."  # noqa: E501
+                "Do not sound bureaucratic or defensive. One crisp frame, then a balanced wrap-up, shared takeaway, or next handoff."  # noqa: E501
                 f"{profile_focus_clause}"
             )
         variant = _oracle_role_voice_variant(
@@ -2037,8 +2030,9 @@ def _build_oracle_generation_prompt(
         )
     elif room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE and phase == EndingRoomPhase.VERDICT:
         phase_note = (
-            "Deliver an evaluative verdict: identify the core disagreement, "
-            "assess which arguments have evidence, and give a clear judgment."
+            "Summarize the roundtable discussion: highlight the main perspectives, "
+            "note where participants agreed or differed, and offer a balanced takeaway "
+            "that directly addresses the original question."
         )
     elif room.room_type == EndingRoomType.ENDING_CHAMBER and phase == EndingRoomPhase.VERDICT:
         phase_note = (
@@ -2064,10 +2058,15 @@ def _build_oracle_generation_prompt(
         )
         else "- No rhetorical questions, no parallel sentence structures, no listicle patterns\n"
     )
-    output_hint = (
-        "Keep the same language as the context. Output strict JSON only: {\"content\":\"...\"}"
+    output_format_hint = (
+        'Output strict JSON only: {"content":"..."}'
         if output_json
-        else "Keep the same language as the context. Output plain text only with no JSON, bullets, or labels."  # noqa: E501
+        else "Output plain text only with no JSON, bullets, or labels."
+    )
+    output_hint = (
+        f"请用简体中文。{output_format_hint}"
+        if room.language == "zh"
+        else f"Write in English. Translate any Chinese fragments from context instead of leaving them inline. {output_format_hint}"  # noqa: E501
     )
     variant = _oracle_role_voice_variant(
         str(snapshot.get("agent_role") or ""),
@@ -2250,8 +2249,9 @@ def _build_oracle_rewrite_prompt(
         )
     elif room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE and phase == EndingRoomPhase.VERDICT:
         phase_note = (
-            "For roundtable verdict/follow-up, the Archivist should sound comparative and decisive; "  # noqa: E501
-            "representatives should sound like they are defending one branch, not explaining the room."  # noqa: E501
+            "Summarize the roundtable discussion: highlight the main perspectives, "
+            "note where participants agreed or differed, and offer a balanced takeaway "
+            "that directly addresses the original question."
         )
     elif room.room_type == EndingRoomType.ENDING_CHAMBER and phase == EndingRoomPhase.VERDICT:
         phase_note = (

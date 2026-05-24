@@ -1987,6 +1987,11 @@ export default function WorldlineRoundtableView() {
                   <h3>{t('roundtable.phase_insights_title')}</h3>
                   <span className="roundtable-phase-count">{effectiveResult.phase_insights.length}</span>
                 </div>
+                {storyData?.question && (
+                  <div className="worldline-roundtable-phase-question">
+                    <strong>{t('roundtable.question_anchor_compact')}</strong> {storyData.question}
+                  </div>
+                )}
                 <PhaseInsightTimeline
                   phases={effectiveResult.phase_insights}
                   defaultCollapsed
@@ -2031,7 +2036,12 @@ export default function WorldlineRoundtableView() {
             )}
             {effectiveResult?.summary && (
               <section className="worldline-roundtable-synthesis">
-                <span className="worldline-roundtable-synthesis__eyebrow">{t('roundtable.phase_verdict')}</span>
+                <span className="worldline-roundtable-synthesis__eyebrow">{t('roundtable.synthesis_eyebrow')}</span>
+                {storyData?.question && (
+                  <div className="worldline-roundtable-question-anchor">
+                    <span className="label">{t('roundtable.question_anchor_label')}</span> {storyData.question}
+                  </div>
+                )}
                 <div className="editorial-report-chapter">
                   <span className="editorial-report-number" aria-hidden="true">01</span>
                   <div>
@@ -2068,6 +2078,11 @@ export default function WorldlineRoundtableView() {
               <div>
                 <h3>{t('roundtable.transcript_title')}</h3>
                 <p>{transcriptSubtitle}</p>
+                {storyData?.question && (
+                  <div className="worldline-roundtable-transcript-header__question">
+                    <strong>{t('roundtable.question_anchor_compact')}</strong> {storyData.question}
+                  </div>
+                )}
               </div>
               <div className="ending-chat-transcript-header__meta">
                 <span className="ending-chat-note">

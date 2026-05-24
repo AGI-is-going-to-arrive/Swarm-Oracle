@@ -296,16 +296,16 @@ vi.mock('react-i18next', () => ({
         return `Focus on ${String(options?.name ?? '')} — let this worldline explain its position.`;
       }
       if (key === 'roundtable.verdict_prompt') {
-        return `Why did "${String(options?.summary ?? '')}" become the verdict?`;
+        return `How did the table reach this consensus? About "${String(options?.summary ?? '')}".`;
       }
       if (key === 'roundtable.phase_prompt_default') {
-        return `What was the real disagreement in "${String(options?.label ?? '')}"?`;
+        return `What was the main point in "${String(options?.label ?? '')}"?`;
       }
       if (key === 'roundtable.phase_prompt') {
         return `About "${String(options?.label ?? '')}": ${String(options?.stakes ?? '')}`;
       }
       if (key === 'roundtable.quote_prompt') {
-        return `${String(options?.speaker ?? '')} said "${String(options?.snippet ?? '')}" — which disagreement does this get at?`;
+        return `${String(options?.speaker ?? '')} said "${String(options?.snippet ?? '')}" — can you expand on that?`;
       }
       if (key === 'roundtable.picker_branch_impact_summary') {
         return `Impact ${String(options?.impact ?? 0)} · ${String(options?.turns ?? 0)} turns · ${String(options?.hinges ?? 0)} hinge hits · latest R${String(options?.round ?? 0)}`;
@@ -358,7 +358,7 @@ vi.mock('react-i18next', () => ({
         'roundtable.witness_badge': 'Expert',
         'roundtable.role_witness': 'Expert',
         'roundtable.loading': 'Setting up the roundtable...',
-        'roundtable.phase_verdict': 'Verdict',
+        'roundtable.phase_verdict': 'Wrap-up',
         'roundtable.phase_opening': 'Recap',
         'roundtable.phase_crossfire': 'Debate',
         'roundtable.phase_rebuttal': 'What if',
@@ -400,16 +400,19 @@ vi.mock('react-i18next', () => ({
         'roundtable.transcript_title': 'Discussion',
         'roundtable.threads_label': 'Topics',
         'roundtable.phase_nav_label': 'Phase navigation',
-        'roundtable.composer_placeholder': 'Push on the disagreements at this table…',
+        'roundtable.composer_placeholder': 'Keep asking the representatives...',
         'roundtable.sending': 'Sending…',
         'roundtable.send': 'Send',
         'roundtable.theme_cues_label': 'Theme cues',
-        'roundtable.phase_insights_label': 'Key takeaways',
-        'roundtable.phase_insights_title': 'Key takeaways',
+        'roundtable.phase_insights_label': 'Discussion Flow',
+        'roundtable.phase_insights_title': 'Discussion Flow',
         'roundtable.phase_unknown': 'Phase',
-        'roundtable.verdict_title': 'Verdict',
+        'roundtable.verdict_title': 'Wrap-up',
         'roundtable.archivist_note_title': 'Host note',
         'roundtable.question_title': 'Question',
+        'roundtable.synthesis_eyebrow': 'Discussion Result',
+        'roundtable.question_anchor_label': 'Question discussed',
+        'roundtable.question_anchor_compact': 'About',
         'roundtable.scope_title': 'Scope',
         'roundtable.representatives_title': 'Representatives',
         'roundtable.expand_roster': 'Show all',
@@ -425,7 +428,7 @@ vi.mock('react-i18next', () => ({
         'roundtable.explore_agent_chat_placeholder': 'Tap a participant above to start a private conversation.',
         'roundtable.explore_analyst_placeholder': 'e.g. "Why did Worldline 2 diverge after Round 3?"',
         'roundtable.explore_survey_placeholder': 'e.g. "What single decision would you change if you could?"',
-        'roundtable.explore_locked': 'The verdict must land before you can explore further.',
+        'roundtable.explore_locked': 'The discussion result must land before you can explore further.',
         'roundtable.error_missing_scenario': 'Roundtable replay is missing its base scenario snapshot.',
         'roundtable.error_invalid_replay': 'This roundtable replay link is invalid.',
         'roundtable.error_missing_id': 'Missing scenario id.',
@@ -455,7 +458,7 @@ vi.mock('react-i18next', () => ({
         'roundtable.mode_note_thread_followup': 'Split off one disagreement into its own thread so the main discussion stays clean.',
         'roundtable.mode_note_default': 'The host sorts out the disagreement first, then passes it to the right rep.',
         'roundtable.verdict_prompt_default': 'Why did the roundtable reach this conclusion?',
-        'roundtable.anchor_kind_verdict': 'Verdict',
+        'roundtable.anchor_kind_verdict': 'Discussion result',
         'roundtable.anchor_kind_phase': 'Phase',
         'roundtable.anchor_kind_quote': 'Quote',
         'roundtable.anchor_kind_default': 'Anchor',
@@ -751,6 +754,61 @@ describe('WorldlineRoundtableView', () => {
     const actionStrip = document.querySelector('.worldline-roundtable-hero__actions') as HTMLDivElement | null;
     expect(actionStrip).toBeTruthy();
     expect(actionStrip!.style.overflowX).toBe('');
+  });
+
+  it('renders question anchors when storyData.question exists', async () => {
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        { id: 'branch-a', title: 'A', probability: 0.5, insight: 'A', story: 'A', key_moments: [] },
+        { id: 'branch-b', title: 'B', probability: 0.5, insight: 'B', story: 'B', key_moments: [] },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    renderRoundtableView();
+
+    await screen.findByText('Worldline Roundtable');
+
+    expect(document.querySelector('.worldline-roundtable-question-anchor')).toBeTruthy();
+    expect(document.querySelector('.worldline-roundtable-transcript-header__question')).toBeTruthy();
+    expect(document.querySelector('.worldline-roundtable-phase-question')).toBeTruthy();
+    expect(screen.getByText('Discussion Result')).toBeInTheDocument();
+    expect(screen.getByText('Question discussed')).toBeInTheDocument();
+    expect(screen.getAllByText('About')).toHaveLength(2);
+  });
+
+  it('does not render question anchors when storyData.question is absent', async () => {
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      branches: [
+        { id: 'branch-a', title: 'A', probability: 0.5, insight: 'A', story: 'A', key_moments: [] },
+        { id: 'branch-b', title: 'B', probability: 0.5, insight: 'B', story: 'B', key_moments: [] },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    renderRoundtableView();
+
+    await screen.findByText('Worldline Roundtable');
+
+    expect(document.querySelector('.worldline-roundtable-question-anchor')).toBeFalsy();
+    expect(document.querySelector('.worldline-roundtable-transcript-header__question')).toBeFalsy();
+    expect(document.querySelector('.worldline-roundtable-phase-question')).toBeFalsy();
   });
 
   it('does not show the planning skeleton over an already loaded result', async () => {
@@ -1229,11 +1287,11 @@ describe('WorldlineRoundtableView', () => {
     expect(actionsScope.getByRole('button', { name: 'Copy summary' })).toBeVisible();
 
     await user.click(actionsScope.getByRole('button', { name: 'Keep asking' }));
-    expect(setComposerDraftMock).toHaveBeenCalledWith('Why did "The roundtable converged on a single hinge." become the verdict?');
+    expect(setComposerDraftMock).toHaveBeenCalledWith('How did the table reach this consensus? About "The roundtable converged on a single hinge.".');
 
     await user.click(actionsScope.getByRole('button', { name: 'Copy summary' }));
     await waitFor(() => expect(copyTextMock).toHaveBeenCalled());
-    expect(copyTextMock).toHaveBeenCalledWith(expect.stringContaining('## Verdict'));
+    expect(copyTextMock).toHaveBeenCalledWith(expect.stringContaining('## Wrap-up'));
   });
 
   it('keeps critical summary actions reachable in the live synthesis section on compact viewports', async () => {
@@ -1401,7 +1459,7 @@ describe('WorldlineRoundtableView', () => {
 
     await screen.findByText('The roundtable converged on a single hinge.');
     await screen.findByRole('button', { name: 'Keep asking' });
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    const phaseSection = screen.getByRole('heading', { name: 'Discussion Flow' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     await user.click(within(phaseSection as HTMLElement).getByRole('button', {
       name: /Explain the hinge in plain language\./,
@@ -1410,12 +1468,12 @@ describe('WorldlineRoundtableView', () => {
     await user.click(within(phaseSection as HTMLElement).getByRole('button', { name: 'New topic' }));
 
     await waitFor(() => expect(createThreadMock).toHaveBeenCalledWith('room-1', {
-      title: expect.stringContaining('Verdict'),
+      title: expect.stringContaining('Wrap-up'),
       questionAnchorIds: ['roundtable:phase:room-1:verdict-0'],
       interactionMode: 'thread_followup',
     }));
     await waitFor(() => expect(setComposerDraftMock).toHaveBeenCalledWith(
-      'About "Verdict·Explain the hinge in plain language.": Explain the hinge in plain language.',
+      'About "Wrap-up·Explain the hinge in plain language.": Explain the hinge in plain language.',
     ));
     expect(setInteractionModeMock).toHaveBeenCalledWith('thread_followup');
   });
@@ -1480,7 +1538,7 @@ describe('WorldlineRoundtableView', () => {
 
     await screen.findByText('The table settled four distinct beats.');
     await screen.findByRole('button', { name: 'Keep asking' });
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    const phaseSection = screen.getByRole('heading', { name: 'Discussion Flow' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     await user.click(within(phaseSection as HTMLElement).getByRole('button', {
       name: /Closing\./,
@@ -1549,7 +1607,7 @@ describe('WorldlineRoundtableView', () => {
 
     await screen.findByText('The table settled on one archival verdict.');
     await screen.findByRole('button', { name: 'Keep asking' });
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    const phaseSection = screen.getByRole('heading', { name: 'Discussion Flow' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     await user.click(within(phaseSection as HTMLElement).getByRole('button', {
       name: /Representative A argues/,
@@ -1611,7 +1669,7 @@ describe('WorldlineRoundtableView', () => {
     renderRoundtableView();
 
     await screen.findByText('The table settled on one archival verdict.');
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    const phaseSection = screen.getByRole('heading', { name: 'Discussion Flow' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     const chip = phaseSection!.querySelector('.phase-chip.phase-chip--opening');
     expect(chip).toBeTruthy();
@@ -1681,7 +1739,7 @@ describe('WorldlineRoundtableView', () => {
     renderRoundtableView();
 
     await screen.findByText('The table settled on one archival verdict.');
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    const phaseSection = screen.getByRole('heading', { name: 'Discussion Flow' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     const unknownChip = phaseSection!.querySelector('.phase-chip.phase-chip--unknown');
     expect(unknownChip).toBeTruthy();
@@ -1743,7 +1801,7 @@ describe('WorldlineRoundtableView', () => {
     renderRoundtableView();
 
     await screen.findByText('The table settled on one archival verdict.');
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    const phaseSection = screen.getByRole('heading', { name: 'Discussion Flow' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     await user.click(within(phaseSection as HTMLElement).getByRole('button', {
       name: /Short collapsed text used for the trigger title/,
@@ -1808,7 +1866,7 @@ describe('WorldlineRoundtableView', () => {
     renderRoundtableView();
 
     await screen.findByText('The table settled on one archival verdict.');
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    const phaseSection = screen.getByRole('heading', { name: 'Discussion Flow' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     await user.click(within(phaseSection as HTMLElement).getByRole('button', {
       name: /Short collapsed crossfire text/,
@@ -1880,7 +1938,7 @@ describe('WorldlineRoundtableView', () => {
     renderRoundtableView();
 
     await screen.findByText('The table settled on one archival verdict.');
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    const phaseSection = screen.getByRole('heading', { name: 'Discussion Flow' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     await user.click(within(phaseSection as HTMLElement).getByRole('button', {
       name: /Closing commentary used as the body fallback/,
@@ -1942,7 +2000,7 @@ describe('WorldlineRoundtableView', () => {
     renderRoundtableView();
 
     await screen.findByText('The table settled on one archival verdict.');
-    const phaseSection = screen.getByRole('heading', { name: 'Key takeaways' }).closest('.roundtable-phase-section');
+    const phaseSection = screen.getByRole('heading', { name: 'Discussion Flow' }).closest('.roundtable-phase-section');
     expect(phaseSection).toBeTruthy();
     const phaseTrigger = within(phaseSection as HTMLElement).getByRole('button', {
       name: /Representative A pins the supply road as the hinge/i,
@@ -2482,7 +2540,7 @@ describe('WorldlineRoundtableView', () => {
     const quoteBubbleScope = within(quoteBubble as HTMLElement);
 
     await user.click(quoteBubbleScope.getByRole('button', { name: 'Follow up on this' }));
-    expect(setComposerDraftMock).toHaveBeenCalledWith('Representative A said "Existing live roundtable." — which disagreement does this get at?');
+    expect(setComposerDraftMock).toHaveBeenCalledWith('Representative A said "Existing live roundtable." — can you expand on that?');
 
     await user.click(quoteBubbleScope.getByRole('button', { name: 'New topic' }));
     await waitFor(() => expect(createThreadMock).toHaveBeenCalledWith('room-1', {
@@ -2624,7 +2682,7 @@ describe('WorldlineRoundtableView', () => {
     await user.click(quoteBubbleScope.getByRole('button', { name: 'Question this rep' }));
 
     expect(setInteractionModeMock).toHaveBeenCalledWith('hotseat');
-    expect(setComposerDraftMock).toHaveBeenCalledWith('Representative A said "Existing live roundtable." — which disagreement does this get at?');
+    expect(setComposerDraftMock).toHaveBeenCalledWith('Representative A said "Existing live roundtable." — can you expand on that?');
   });
 
   it('launches expert_witness with an extra witness selection', async () => {
@@ -3318,8 +3376,8 @@ describe('WorldlineRoundtableView', () => {
     expect(setInteractionModeMock).toHaveBeenCalledWith('hotseat');
     expect(screen.getAllByText('Using the active roundtable thread only').length).toBeGreaterThan(0);
     const threadRail = screen.getByRole('tablist', { name: 'Topics' });
-    expect(within(threadRail).getByText('Verdict')).toBeInTheDocument();
-    expect(screen.getByText((_, node) => node?.textContent === 'VerdictVerdict')).toBeInTheDocument();
+    expect(within(threadRail).getByText('Discussion result')).toBeInTheDocument();
+    expect(screen.getByText((_, node) => node?.textContent === 'Discussion resultDiscussion result')).toBeInTheDocument();
 
     // Open the action menu to access Save copy / Import run
     await user.click(screen.getByRole('button', { name: 'More actions' }));

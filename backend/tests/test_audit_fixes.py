@@ -376,12 +376,26 @@ class TestForkPromptTemplateConsistency:
         assert "{language_directive}" in template
 
     @pytest.mark.parametrize("variant", ["a", "b", "c", "d", "e", "f"])
-    def test_template_guides_branch_titles_toward_action_and_outcome(self, variant):
+    def test_template_guides_branch_titles_toward_plain_language(self, variant):
         zh_template = _get_fork_prompt_template("Chinese", variant)
         en_template = _get_fork_prompt_template("English", variant)
 
-        assert "行动 + 目标/后果" in zh_template
-        assert "action + expected consequence" in en_template
+        assert "通俗语言" in zh_template
+        assert "发生了什么" in zh_template
+        assert "plain language" in en_template
+        assert "describe what happens" in en_template
+
+    def test_variant_a_examples_use_plain_modern_scenarios(self):
+        zh_template = _get_fork_prompt_template("Chinese", "a")
+        en_template = _get_fork_prompt_template("English", "a")
+
+        assert "先查源头再发声明" in zh_template
+        assert "巩固粮道再北伐" not in zh_template
+        assert "曹操集结二十万大军" not in zh_template
+
+        assert "Verify Source First" in en_template
+        assert "Secure Supply Lines Before Northern Push" not in en_template
+        assert "Cao Cao mobilizes" not in en_template
 
     def test_unknown_variant_falls_back_to_a(self):
         default_zh = _get_fork_prompt_template("Chinese", "a")

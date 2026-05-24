@@ -130,8 +130,8 @@ docker compose up backend
 
 | 服务 | 文件 | 职责 |
 |------|------|------|
-| ending_room_service | `ending_room_service/` (包) | 密室/圆桌编排核心，拆分为 _utils/_participants/_threads/_content；Oracle 文案采用 generation-first 3-tier fallback（纯生成→rewrite→静态模板），四种房间类型均注入 scenario_question + transcript_quotes + factual_guardrail；roundtable 静态锚点会用清洗后的 scenario question 作问题前缀，phase insight 会先去重问题前缀，再按中文 96 字 / 英文 160 chars 预算压缩 |
-| simulator | `simulator.py` | 多代理模拟引擎，含 Result Quality verdict generation / branch question-answer persistence，verdict prompt 使用分支 title / insight / probability / story_excerpt，以及 4 个 Phase 3 hook：causal/factions(+WS 事件发射)/checkpoint/identity lifecycle (均受 `FEATURE_*` gate；identity hook 通过 `asyncio.to_thread` 非阻塞执行) |
+| ending_room_service | `ending_room_service/` (包) | 密室/圆桌编排核心，拆分为 _utils/_participants/_threads/_content；Oracle 文案采用 generation-first 3-tier fallback（纯生成→rewrite→静态模板），四种房间类型均注入 scenario_question + transcript_quotes + factual_guardrail；roundtable 静态锚点会用清洗后的 scenario question 作问题前缀，phase insight 会先去重问题前缀，再按中文 96 字 / 英文 160 chars 预算压缩；roundtable wrap-up / follow-up fallback 跟随 room language，英文房间会翻译上下文里的中文片段，不展示 prompt 标签 |
+| simulator | `simulator.py` | 多代理模拟引擎，含 Result Quality verdict generation / branch question-answer persistence，verdict prompt 使用分支 title / insight / probability / story_excerpt；fork branch-title prompt 要求短、具体、接近日常语言的标题；以及 4 个 Phase 3 hook：causal/factions(+WS 事件发射)/checkpoint/identity lifecycle (均受 `FEATURE_*` gate；identity hook 通过 `asyncio.to_thread` 非阻塞执行) |
 | debate | `debate.py` | 辩论引擎，含 argument map 抽取+verdict linking hook (受 `FEATURE_ARGUMENT_MAP` gate) |
 | llm_client | `llm_client.py` | LLM 调用封装 (JSON/流式/探测)，BYOK URL allowlist + scheme 校验，不可信文本 guardrail，content=null 防御 |
 | campaign | `campaign.py` | Campaign 计算 |
@@ -150,7 +150,7 @@ docker compose up backend
 | roundtable_survey | `roundtable_survey.py` | 圆桌问卷 SSE 流式服务，Semaphore(3) 并发限制，注入 identity memory |
 | roundtable_analyst | `roundtable_analyst.py` | 圆桌 ReACT 分析师 SSE，3 工具 (query_causal_graph / search_identity_memories / search_web_context)，最多 5 轮 |
 | runtime_lock | `runtime_lock.py` | 运行时互斥锁 |
-| parser | `parser.py` | LLM 输出解析 |
+| parser | `parser.py` | LLM 输出解析；scenario 初始标题 prompt 要求短、具体的问题起点，fallback 为 `问题起点 / Starting point` |
 | lang_detect | `lang_detect.py` | 语言检测 |
 
 ## 可视化层 (`app/visualization/`)
@@ -165,7 +165,7 @@ docker compose up backend
 
 ## 测试与质量
 
-- **99+ 个 test_*.py 文件**，位于 `tests/`；当前 backend full gate 为 `3286 passed, 11 skipped`，`ruff check app/ tests/` 通过；live LLM benchmark / observation 测试默认跳过，需要 `RUN_REAL_LLM_TESTS=1` 显式开启
+- **99+ 个 test_*.py 文件**，位于 `tests/`；当前 backend full gate 为 `3384 passed, 6 skipped`，`ruff check app/` 通过；live LLM benchmark / observation 测试默认跳过，需要 `RUN_REAL_LLM_TESTS=1` 显式开启
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`
@@ -283,6 +283,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-25 | UX 去模板化收口 | `parser.py` 初始标题 fallback 改为 `问题起点 / Starting point`，prompt 要求短、具体、像问题起点的标题；`simulator.py` 分支标题 prompt 收成更具体的人话标题；`ending_room_service` 的 roundtable wrap-up / follow-up fallback 避开 prompt 标签和 decisive verdict 口吻，输出跟随 room language，英文房间会翻译上下文里的中文片段；phase insight 继续保留问题前缀去重和中英预算控制。验证：backend full `3384 passed, 6 skipped`，`python -m ruff check app/` 通过 |
 | 2026-05-22 | Capability gate / 回溯干预收口 | `interventions.py` 的回溯干预端点现在受 `FEATURE_COUNTERFACTUAL_REPLAY` gate 控制，关闭时返回 404 `FEATURE_DISABLED`；`test_intervention.py` 对 live router module 的 settings 做显式 patch，并补关闭态 404 回归；`test_contract_freeze.py` 改用 `monkeypatch.setattr` patch 当前 settings 对象；`debate.py` 对 `FEATURE_HALLUCINATION_GATE` 改为直接属性访问，依赖 `config.py` 默认值。验证：backend full `3286 passed, 11 skipped`，related regression `130 passed`，`ruff check app/ tests/` 通过 |
 | 2026-05-19 | Counterfactual 逐消息对比 + resimulate 端点 | `replay.py`：`compare_branches()` 在轮级 `branches[]` 之外新增 `branch_a_messages` / `branch_b_messages`（每条含 `agent_name` / `content` / `emotion`），供前端做逐 agent 红绿 diff，原 CJK 逐字分歧度计算与 `intervention` / `is_identical` / `common_rounds` 字段保留。`graphs.py`：新增 `POST /scenario/{scenario_id}/counterfactual/{branch_id}/resimulate`，把旧的只 clone+seed 的反事实分支补跑成完整叙事（复用 `run_sim_background`），受 `FEATURE_COUNTERFACTUAL_REPLAY` gate。验证：counterfactual + replay + simulator + resume targeted `223 passed` |
 | 2026-05-19 | Oracle prompt / narration hardening | `ending_room_service`：generation-first 路径补 rich simulation context、JSON 字符串 `content` 解析、streaming-first plain stream fallback，并避免英文 deterministic fallback 直接露出中文问题；静态 verdict / one-move fallback 改成可直接显示的具体追问。`narrator.py` / `simulator.py`：清理用户可见行首 `[R1 角色]` round marker，支持全角冒号，同时保留普通方括号备注。验证：Oracle targeted `297 passed`，backend full `3238 passed, 6 skipped` |

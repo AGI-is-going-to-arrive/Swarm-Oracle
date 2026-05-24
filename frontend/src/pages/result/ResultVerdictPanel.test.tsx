@@ -27,6 +27,9 @@ describe('ResultVerdictPanel', () => {
     expect(screen.getByTestId('result-verdict-question')).toHaveTextContent(
       'Will AI replace programmers?',
     );
+    const questionLabel = screen.getByText('Question answered');
+    expect(questionLabel).toBeInTheDocument();
+    expect(questionLabel).toHaveClass('result-verdict-panel__question-label');
     expect(screen.getByTestId('result-verdict-text')).toHaveTextContent(
       'AI changes the job more than it removes it.',
     );
@@ -49,6 +52,7 @@ describe('ResultVerdictPanel', () => {
     expect(screen.getByTestId('result-verdict-question')).toHaveTextContent(
       'Will AI replace programmers?',
     );
+    expect(screen.getByText('Question answered')).toBeInTheDocument();
     // unavailable fallback is rendered, the confidence badge is suppressed
     expect(screen.queryByTestId('result-verdict-confidence-badge')).not.toBeInTheDocument();
     expect(screen.queryByTestId('result-verdict-text')).not.toBeInTheDocument();
@@ -63,6 +67,7 @@ describe('ResultVerdictPanel', () => {
     const pendingPanel = screen.getByTestId('result-verdict-panel-pending');
     expect(pendingPanel).toBeInTheDocument();
     expect(screen.queryByTestId('result-verdict-question')).not.toBeInTheDocument();
+    expect(screen.queryByText('Question answered')).not.toBeInTheDocument();
     expect(screen.getByTestId('result-verdict-pending')).toBeInTheDocument();
   });
 

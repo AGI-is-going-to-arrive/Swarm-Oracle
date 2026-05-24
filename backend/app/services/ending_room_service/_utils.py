@@ -542,19 +542,19 @@ def _phase_insight(
 ) -> dict[str, Any]:
     if language == "zh":
         labels = {
-            EndingRoomPhase.OPENING: ("世界线切口", "先确认这条线怎么走到这里"),
-            EndingRoomPhase.CROSSFIRE: ("分歧点", "只比较能改写结果的差异"),
-            EndingRoomPhase.REBUTTAL: ("如果重来", "把建议压缩成一步"),
-            EndingRoomPhase.CLOSING: ("导演建议", "保留能落地的建议"),
-            EndingRoomPhase.VERDICT: ("档案总结", "把结论写回档案视角"),
+            EndingRoomPhase.OPENING: ("故事起点", "这条线是怎么走到这里的"),
+            EndingRoomPhase.CROSSFIRE: ("观点碰撞", "大家在这些地方看法不同"),
+            EndingRoomPhase.REBUTTAL: ("换个角度", "如果换一种做法会怎样"),
+            EndingRoomPhase.CLOSING: ("总结建议", "可以落地的下一步"),
+            EndingRoomPhase.VERDICT: ("讨论总结", "综合大家的观点"),
         }
     else:
         labels = {
-            EndingRoomPhase.OPENING: ("Causal entry point", "Lock the hinge first"),
-            EndingRoomPhase.CROSSFIRE: ("Points of divergence", "Compare only outcome-shaping differences"),  # noqa: E501
-            EndingRoomPhase.REBUTTAL: ("One move back", "Reduce the fix to one move"),
-            EndingRoomPhase.CLOSING: ("Director note", "Keep only executable advice"),
-            EndingRoomPhase.VERDICT: ("Archivist summary", "Collapse the room into archive language"),  # noqa: E501
+            EndingRoomPhase.OPENING: ("Story entry point", "How this line arrived here"),
+            EndingRoomPhase.CROSSFIRE: ("Perspective clash", "Where the table saw things differently"),  # noqa: E501
+            EndingRoomPhase.REBUTTAL: ("Another angle", "What might change with a different move"),  # noqa: E501
+            EndingRoomPhase.CLOSING: ("Practical next step", "What can still be acted on"),
+            EndingRoomPhase.VERDICT: ("Discussion wrap-up", "What the group converged on"),
         }
     stakes, focus = labels[phase]
     # Strip the upstream `_roundtable_question_prefix` so the compaction budget
