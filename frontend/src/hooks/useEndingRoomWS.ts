@@ -3,11 +3,46 @@ import { useCallback, useEffect, useRef } from 'react';
 import { getEndingRoom, getEndingRoomResult } from '../api/client';
 import { logWsDebug } from '../lib/wsDebug';
 import { useEndingRoomStore } from '../stores/endingRoomStore';
-import type { EndingRoomWSEvent } from '../types';
+import type { EndingRoomWSEvent, RoundtableCastMode, RoundtableDiscussionFormat } from '../types';
 
 const BASE_RECONNECT_DELAY = 1500;
 const MAX_RECONNECT_DELAY = 12000;
 const MAX_RECONNECTS = 5;
+const ROUNDTABLE_DISCUSSION_FORMATS = new Set<RoundtableDiscussionFormat>([
+  'deep_dive',
+  'quick_review',
+  'clash_mode',
+]);
+const ROUNDTABLE_CAST_MODES = new Set<RoundtableCastMode>([
+  'smart_pick',
+  'custom',
+]);
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function normalizePlanningDiscussionFormat(value: unknown): RoundtableDiscussionFormat {
+  return typeof value === 'string' && ROUNDTABLE_DISCUSSION_FORMATS.has(value as RoundtableDiscussionFormat)
+    ? value as RoundtableDiscussionFormat
+    : 'quick_review';
+}
+
+function normalizePlanningCastMode(value: unknown): RoundtableCastMode {
+  return typeof value === 'string' && ROUNDTABLE_CAST_MODES.has(value as RoundtableCastMode)
+    ? value as RoundtableCastMode
+    : 'smart_pick';
+}
+
+function normalizePlanningTurnCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
+}
+
+function normalizePlanningPhase(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : 'opening';
+}
 
 function resolveEndingRoomWsHost() {
   return window.location.host;
@@ -199,6 +234,21 @@ export function useEndingRoomWS(roomId: string | undefined, ready = true) {
             break;
           case 'status':
             store.setStatus(payload.data.status, payload.data.error);
+            break;
+          case 'ending_room_planning':
+            {
+              const data = asRecord(payload.data);
+              // Parse event.data defensively; planning frames are transient UI hints.
+              store.setPlanningState({
+                room_id: typeof data.room_id === 'string' && data.room_id.trim()
+                  ? data.room_id
+                  : roomId ?? '',
+                discussion_format: normalizePlanningDiscussionFormat(data.discussion_format),
+                cast_mode: normalizePlanningCastMode(data.cast_mode),
+                planned_turn_count: normalizePlanningTurnCount(data.planned_turn_count),
+                phase: normalizePlanningPhase(data.phase),
+              });
+            }
             break;
           case 'ending_room_phase_change':
             store.setPhase(payload.data.phase);

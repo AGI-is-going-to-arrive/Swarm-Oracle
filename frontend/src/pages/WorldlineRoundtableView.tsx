@@ -87,12 +87,17 @@ import type {
   AgentInfo,
   RoundtableRepresentativeSelection,
   RoundtableWitnessSelection,
+  RoundtableDiscussionFormat,
+  RoundtableCastMode,
+  EndingRoomPhaseInsight,
   EndingRoomThreadSnapshot,
   Scenario,
   StoryData,
 } from '../types';
 import RoundtablePickerPanel from './RoundtablePickerPanel';
 import RoundtableTranscriptList from './RoundtableTranscriptList';
+import { PlanningSkeletonView } from './roundtable/PlanningSkeletonView';
+import { PhaseInsightTimeline } from './roundtable/PhaseInsightTimeline';
 import PostVerdictPanel, { type PostVerdictTab } from './PostVerdictPanel';
 import PersonalityDriftWarning from '../components/PersonalityDriftWarning';
 import {
@@ -104,7 +109,11 @@ import {
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useFactionOverlay } from '../hooks/useFactionOverlay';
 import { AvatarRing } from '../components/ui/AvatarRing';
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../components/ui/accordion';
+import {
+  getFormatForRecipe,
+  getCastForRecipe,
+} from './roundtable/roundtableFormatHelpers';
+import { FormatSelector } from './roundtable/FormatSelector';
 import './WorldlineRoundtable.css';
 import '../components/EndingChatModal.css';
 
@@ -225,6 +234,12 @@ export default function WorldlineRoundtableView() {
   const [selectedRepresentativeId, setSelectedRepresentativeId] = useState<string | null>(null);
   const [replayActiveThreadId, setReplayActiveThreadId] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState<RoundtableSelectionMode>('representative');
+  const [discussionFormat, setDiscussionFormat] = useState<RoundtableDiscussionFormat>(
+    () => getFormatForRecipe('representative'),
+  );
+  const [castMode, setCastMode] = useState<RoundtableCastMode>(
+    () => getCastForRecipe('representative'),
+  );
   const [selectedRepresentatives, setSelectedRepresentatives] = useState<Record<string, string>>({});
   const [manualShortlistBranchIds, setManualShortlistBranchIds] = useState<string[]>([]);
   const [selectedWitness, setSelectedWitness] = useState<RoundtableWitnessSelection | null>(null);
@@ -313,6 +328,7 @@ export default function WorldlineRoundtableView() {
     scopeNotice,
     sending,
     status,
+    planningState,
     pendingDrafts,
     openRoom,
     loadRoom,
@@ -612,11 +628,21 @@ export default function WorldlineRoundtableView() {
       return;
     }
     setManualShortlistBranchIds(liveBranchIds);
-    setSelectionMode(
-      effectiveSnapshot?.selection_recipe
-      ?? (liveBranchIds.length < branchOrder.length ? 'manual_shortlist' : 'representative'),
-    );
-  }, [branchOrder, editingRepresentatives, effectiveSnapshot?.id, effectiveSnapshot?.selection_recipe, replayPayload, representatives]);
+    const nextMode = effectiveSnapshot.selection_recipe
+      ?? (liveBranchIds.length < branchOrder.length ? 'manual_shortlist' : 'representative');
+    setSelectionMode(nextMode);
+    setDiscussionFormat(effectiveSnapshot.discussion_format ?? getFormatForRecipe(nextMode));
+    setCastMode(effectiveSnapshot.cast_mode ?? getCastForRecipe(nextMode));
+  }, [
+    branchOrder,
+    editingRepresentatives,
+    effectiveSnapshot?.cast_mode,
+    effectiveSnapshot?.discussion_format,
+    effectiveSnapshot?.id,
+    effectiveSnapshot?.selection_recipe,
+    replayPayload,
+    representatives,
+  ]);
 
   useEffect(() => {
     if (replayPayload || !effectiveSnapshot || editingRepresentatives) {
@@ -626,11 +652,12 @@ export default function WorldlineRoundtableView() {
     if (!witness?.source_branch_id || !witness.source_agent_id) {
       return;
     }
-    if (effectiveSnapshot.selection_recipe === 'witness_augmented') {
-      setSelectionMode('witness_augmented');
-    } else {
-      setSelectionMode('expert_witness');
-    }
+    const nextMode = effectiveSnapshot.selection_recipe === 'witness_augmented'
+      ? 'witness_augmented'
+      : 'expert_witness';
+    setSelectionMode(nextMode);
+    setDiscussionFormat(effectiveSnapshot.discussion_format ?? getFormatForRecipe(nextMode));
+    setCastMode(effectiveSnapshot.cast_mode ?? getCastForRecipe(nextMode));
     setSelectedWitness({
       branchId: witness.source_branch_id,
       agentId: witness.source_agent_id,
@@ -656,17 +683,21 @@ export default function WorldlineRoundtableView() {
       setManualShortlistBranchIds(replayRepresentativeBranches);
     }
     if (replayPayload.roomSnapshot.selection_recipe) {
-      setSelectionMode(replayPayload.roomSnapshot.selection_recipe);
+      const nextMode = replayPayload.roomSnapshot.selection_recipe;
+      setSelectionMode(nextMode);
+      setDiscussionFormat(replayPayload.roomSnapshot.discussion_format ?? getFormatForRecipe(nextMode));
+      setCastMode(replayPayload.roomSnapshot.cast_mode ?? getCastForRecipe(nextMode));
       return;
     }
     const hasWitness = replayPayload.roomSnapshot.participants.some((participant) => participant.role_slot === 'critic');
-    setSelectionMode(
-      hasWitness
-        ? 'expert_witness'
+    const nextMode = hasWitness
+      ? 'expert_witness'
       : (replayRepresentativeBranches.length > 0 && replayRepresentativeBranches.length < branchOrder.length
           ? 'manual_shortlist'
-          : 'representative'),
-    );
+          : 'representative');
+    setSelectionMode(nextMode);
+    setDiscussionFormat(replayPayload.roomSnapshot.discussion_format ?? getFormatForRecipe(nextMode));
+    setCastMode(replayPayload.roomSnapshot.cast_mode ?? getCastForRecipe(nextMode));
   }, [branchOrder, replayPayload]);
 
   useEffect(() => {
@@ -1376,6 +1407,8 @@ export default function WorldlineRoundtableView() {
 
   const handleSelectionModeChange = useCallback((nextMode: RoundtableSelectionMode) => {
     setSelectionMode(nextMode);
+    setDiscussionFormat(getFormatForRecipe(nextMode));
+    setCastMode(getCastForRecipe(nextMode));
     if (nextMode === 'manual_shortlist') {
       setManualShortlistBranchIds((current) => {
         const normalized = normalizeManualShortlist(branchOrder, current);
@@ -1423,6 +1456,8 @@ export default function WorldlineRoundtableView() {
       reset();
       const roomId = await openRoom(scenario.id, {
         roomType: 'worldline_roundtable',
+        discussionFormat,
+        castMode,
         selectedBranchIds: selectedBranchIdsForLaunch,
         selectedRepresentatives: selectedBranchIdsForLaunch
           .map((branchId) => {
@@ -1450,7 +1485,7 @@ export default function WorldlineRoundtableView() {
     } finally {
       setLaunchingRoom(false);
     }
-  }, [launchingRoom, loadRoom, openRoom, reset, scenario?.id, selectedBranchIdsForLaunch, selectedRepresentatives, selectedWitness, selectionMode, uiLanguage, witnessCandidates]);
+  }, [castMode, discussionFormat, launchingRoom, loadRoom, openRoom, reset, scenario?.id, selectedBranchIdsForLaunch, selectedRepresentatives, selectedWitness, selectionMode, uiLanguage, witnessCandidates]);
 
   const handleEditRepresentatives = useCallback(() => {
     setEditingRepresentatives(true);
@@ -1584,6 +1619,8 @@ export default function WorldlineRoundtableView() {
           is_read_only: Boolean(replayPayload),
           showing_picker: showRepresentativePicker,
           selection_mode: selectionMode,
+          discussion_format: effectiveSnapshot?.discussion_format ?? discussionFormat,
+          cast_mode: effectiveSnapshot?.cast_mode ?? castMode,
           selected_branch_count: selectedBranchIdsForLaunch.length,
           has_witness: participants.some((participant) => participant.role_slot === 'critic'),
           active_thread_id: activeThread?.id ?? null,
@@ -1621,6 +1658,7 @@ export default function WorldlineRoundtableView() {
     };
   }, [
     activeThread?.id,
+    castMode,
     composerEnabled,
     currentTurns.length,
     currentSpeakerParticipantId,
@@ -1633,6 +1671,7 @@ export default function WorldlineRoundtableView() {
     automationInteractionMode,
     loading,
     displayedDrafts.length,
+    discussionFormat,
     automationPendingDrafts,
     automationStreamState,
     replayPayload,
@@ -1780,6 +1819,16 @@ export default function WorldlineRoundtableView() {
       {loading && <div className="worldline-roundtable-empty">{t('roundtable.loading')}</div>}
       {!loading && error && <div className="worldline-roundtable-empty worldline-roundtable-empty--error">{error}</div>}
       {!loading && !error && importError && <div className="worldline-roundtable-empty worldline-roundtable-empty--error">{importError}</div>}
+
+      {showRepresentativePicker && (
+        <FormatSelector
+          discussionFormat={discussionFormat}
+          castMode={castMode}
+          onFormatChange={setDiscussionFormat}
+          onCastModeChange={setCastMode}
+          disabled={launchingRoom}
+        />
+      )}
 
       {showRepresentativePicker && (
         <RoundtablePickerPanel
@@ -1938,75 +1987,39 @@ export default function WorldlineRoundtableView() {
                   <h3>{t('roundtable.phase_insights_title')}</h3>
                   <span className="roundtable-phase-count">{effectiveResult.phase_insights.length}</span>
                 </div>
-                <Accordion
-                  type="single"
-                  collapsible
-                  className="roundtable-phase-timeline"
-                  aria-label={t('roundtable.phase_insights_label')}
-                >
-                  {effectiveResult.phase_insights.map((insight, index) => {
-                    const phaseTitle = buildPhaseInsightTitle(insight, { isZh })
-                      || buildPhaseInsightLabel(insight, { isZh, t });
-                    const phaseCommentary = buildPhaseInsightCommentary(insight, { isZh });
-                    const phaseClass = isEndingRoomPhase(insight.phase)
-                      ? `phase-chip--${insight.phase}`
-                      : 'phase-chip--unknown';
-                    const chipLabel = isEndingRoomPhase(insight.phase)
-                      ? getEndingRoomPhaseLabel(insight.phase, t)
-                      : t('roundtable.phase_unknown');
-                    return (
-                      <AccordionItem key={`${insight.phase}-${index}`} value={`${insight.phase}-${index}`} className="roundtable-phase-timeline__item">
-                        <AccordionTrigger className="editorial-chapter-trigger roundtable-phase-timeline__trigger">
-                          <span className="roundtable-phase-timeline__dot" aria-hidden="true" />
-                          <span className={`phase-chip ${phaseClass}`}>
-                            {chipLabel}
-                          </span>
-                          <span className="phase-insight-body">
-                            <span className="phase-insight-title">{phaseTitle}</span>
-                            {insight.stakes && (
-                              <span className="phase-insight-stakes">{insight.stakes}</span>
-                            )}
-                          </span>
-                        </AccordionTrigger>
-                        <AccordionContent className="roundtable-phase-timeline__content">
-                          <article className="worldline-roundtable-insight worldline-roundtable-insight__expanded-content phase-insight-expanded">
-                            <div className="phase-insight-expanded__meta">
-                              {insight.stakes && (
-                                <span className="phase-insight-expanded__stakes">{insight.stakes}</span>
-                              )}
-                              {insight.moderator_focus && (
-                                <span className="phase-insight-expanded__focus">
-                                  {t('roundtable.insight_focus_label')}: {insight.moderator_focus}
-                                </span>
-                              )}
-                            </div>
-                            <p className="phase-insight-expanded__body">{phaseCommentary}</p>
-                            {!replayPayload && (
-                              <div className="worldline-roundtable-insight__actions phase-insight-expanded__actions">
-                                <button
-                                  type="button"
-                                  className="ending-chat-inline-button"
-                                  onClick={() => activateAnchor(phaseActionPrompts[index].action)}
-                                  disabled={!composerEnabled}
-                                >
-                                  {t('roundtable.action_follow_phase')}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="ending-chat-inline-button"
-                                  onClick={() => void handleStartAnchoredThread(phaseActionPrompts[index].action)}
-                                  disabled={!composerEnabled}
-                                >
-                                  {t('roundtable.action_new_thread')}
-                                </button>
-                              </div>
-                            )}
-                          </article>
-                        </AccordionContent>
-                      </AccordionItem>
-                    );
-                  })}
-                </Accordion>
+                <PhaseInsightTimeline
+                  phases={effectiveResult.phase_insights}
+                  defaultCollapsed
+                  computeTitle={(insight) =>
+                    buildPhaseInsightTitle(insight as EndingRoomPhaseInsight, { isZh })
+                    || buildPhaseInsightLabel(insight as EndingRoomPhaseInsight, { isZh, t })
+                  }
+                  computeCommentary={(insight) =>
+                    buildPhaseInsightCommentary(insight as EndingRoomPhaseInsight, { isZh })
+                  }
+                  renderActions={!replayPayload
+                    ? (_insight, index) => (
+                      <>
+                        <button
+                          type="button"
+                          className="ending-chat-inline-button"
+                          onClick={() => activateAnchor(phaseActionPrompts[index].action)}
+                          disabled={!composerEnabled}
+                        >
+                          {t('roundtable.action_follow_phase')}
+                        </button>
+                        <button
+                          type="button"
+                          className="ending-chat-inline-button"
+                          onClick={() => void handleStartAnchoredThread(phaseActionPrompts[index].action)}
+                          disabled={!composerEnabled}
+                        >
+                          {t('roundtable.action_new_thread')}
+                        </button>
+                      </>
+                    )
+                    : undefined}
+                />
               </section>
             ) : null}
             </details>
@@ -2135,8 +2148,11 @@ export default function WorldlineRoundtableView() {
             )}
 
               <div className="roundtable-transcript-wrapper">
-                <RoundtableTranscriptList
-                  listRef={transcriptListRef}
+                {!effectiveResult && planningState && currentTurns.length === 0 && displayedDrafts.length === 0 ? (
+                  <PlanningSkeletonView planningState={planningState} />
+                ) : (
+                  <RoundtableTranscriptList
+                    listRef={transcriptListRef}
                   onScroll={handleTranscriptScroll}
                   isZh={isZh}
                   currentTurns={currentTurns}
@@ -2158,6 +2174,7 @@ export default function WorldlineRoundtableView() {
                   onFollowQuote={handleFollowQuote}
                   onQuoteThread={handleQuoteThread}
                 />
+                )}
                 {newMessageCount > 0 && (
                   <button
                     type="button"

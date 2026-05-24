@@ -17,6 +17,7 @@ from app.models import (
 )
 
 from ._utils import (
+    _CJK_RE,
     EndingRoomServiceError,
     _branch_lookup,
     _impact_score,
@@ -234,6 +235,47 @@ def _sort_selected_representatives(
     )
 
 
+def _clash_stance_score(candidate: dict[str, Any], branch: Branch) -> float:
+    stance = str(candidate.get("agent_stance") or "").strip()
+    impact_score = float(candidate.get("impact_score") or 0.0)
+    if not stance or len(stance) < 12 or _CJK_RE.search(stance):
+        pressure = _branch_pressure_hint(branch) or ""
+        pressure_score = 0.15 if pressure else 0.0
+        probability_score = max(float(branch.probability or 0.0), 0.0) * 0.1
+        return impact_score + pressure_score + probability_score
+
+    lower_stance = stance.lower()
+    score = 2.0 + min(len(stance), 80) / 80
+    clash_cues = (
+        "oppose",
+        "opposes",
+        "challenge",
+        "disagree",
+        "risk",
+        "cost",
+        "fault",
+    )
+    if any(cue in lower_stance for cue in clash_cues):
+        score += 1.0
+    return score + impact_score
+
+
+def _order_clash_mode_candidates(
+    candidates: list[dict[str, Any]],
+    branch: Branch,
+) -> list[dict[str, Any]]:
+    return [
+        candidate
+        for _index, candidate in sorted(
+            enumerate(candidates),
+            key=lambda item: (
+                -_clash_stance_score(item[1], branch),
+                item[0],
+            ),
+        )
+    ]
+
+
 def _roundtable_representative_def(
     session: Session,
     *,
@@ -242,6 +284,8 @@ def _roundtable_representative_def(
     selected_branch_ids: list[str],
     selected_agent_id: str | None,
     selection_reason_override: str | None,
+    discussion_format: str | None,
+    cast_mode: str | None,
     language: str,
 ) -> dict[str, Any]:
     branch_agents = _visible_branch_agents(
@@ -269,7 +313,14 @@ def _roundtable_representative_def(
             "selection_reason": selection_reason_override or "user_selected",
         }
     else:
+        if discussion_format == "clash_mode" and cast_mode == "smart_pick":
+            branch_agents = _order_clash_mode_candidates(branch_agents, branch)
         speaker = branch_agents[0] if branch_agents else None
+        if speaker is not None and selection_reason_override:
+            speaker = {
+                **speaker,
+                "selection_reason": selection_reason_override,
+            }
     return {
         "role_slot": EndingRoomRoleSlot.REPRESENTATIVE.value,
         "display_name": f"{speaker['display_name']} · {branch.title}" if speaker else branch.title,
@@ -349,6 +400,8 @@ def _participant_defs(
     selected_representatives: list[dict[str, str]],
     selected_witness: dict[str, str] | None,
     selection_recipe: str | None,
+    discussion_format: str | None,
+    cast_mode: str | None,
     language: str,
 ) -> list[dict[str, Any]]:
     participants: list[dict[str, Any]] = []
@@ -374,6 +427,8 @@ def _participant_defs(
                     selected_branch_ids=selected_branch_ids,
                     selected_agent_id=selected_representative_by_branch.get(branch_id),
                     selection_reason_override=representative_selection_reason,
+                    discussion_format=discussion_format,
+                    cast_mode=cast_mode,
                     language=language,
                 )
             )

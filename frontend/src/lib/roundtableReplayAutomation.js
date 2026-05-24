@@ -11,8 +11,8 @@ export function isRoundtableReplayUrl(url, { kind = 'either' } = {}) {
     return false;
   }
   if (parsed.pathname !== '/roundtable/replay') return false;
-  const hasShare = parsed.searchParams.has('roomShare');
-  const hasLocal = parsed.searchParams.has('roomLocal');
+  const hasShare = parsed.searchParams.has('roomShare') || parsed.searchParams.has('share');
+  const hasLocal = parsed.searchParams.has('roomLocal') || parsed.searchParams.has('local');
   if (kind === 'share') return hasShare;
   if (kind === 'local') return hasLocal;
   return hasShare || hasLocal;
@@ -26,6 +26,8 @@ export function isLiveRoundtableAutomationPayload(
     expectedQuestionAnchorIds = null,
     expectedAnchorKind = null,
     expectedInteractionMode = null,
+    expectedDiscussionFormat = null,
+    expectedCastMode = null,
   } = {},
 ) {
   const controls = payload?.page?.controls;
@@ -36,6 +38,8 @@ export function isLiveRoundtableAutomationPayload(
   if (controls.showing_picker === true) return false;
   if (controls.can_send !== true) return false;
   if (expectedInteractionMode && controls.interaction_mode !== expectedInteractionMode) return false;
+  if (expectedDiscussionFormat && controls.discussion_format !== expectedDiscussionFormat) return false;
+  if (expectedCastMode && controls.cast_mode !== expectedCastMode) return false;
   if (expectedActiveThreadId && controls.active_thread_id !== expectedActiveThreadId) return false;
   if (expectedQuestionAnchorIds && !anchorIdsEqual(controls.question_anchor_ids, expectedQuestionAnchorIds)) return false;
   if (expectedAnchorKind && controls.anchor_kind !== expectedAnchorKind) return false;
@@ -51,6 +55,8 @@ export function isReadonlyRoundtableAutomationPayload(
     expectedQuestionAnchorIds = null,
     expectedAnchorKind = null,
     expectedInteractionMode = null,
+    expectedDiscussionFormat = null,
+    expectedCastMode = null,
   } = {},
 ) {
   const controls = payload?.page?.controls;
@@ -60,6 +66,8 @@ export function isReadonlyRoundtableAutomationPayload(
   if (controls.is_read_only !== true) return false;
   if (controls.can_send !== false) return false;
   if (expectedInteractionMode && controls.interaction_mode !== expectedInteractionMode) return false;
+  if (expectedDiscussionFormat && controls.discussion_format !== expectedDiscussionFormat) return false;
+  if (expectedCastMode && controls.cast_mode !== expectedCastMode) return false;
   if (expectedActiveThreadId && controls.active_thread_id !== expectedActiveThreadId) return false;
   if (expectedQuestionAnchorIds && !anchorIdsEqual(controls.question_anchor_ids, expectedQuestionAnchorIds)) return false;
   if (expectedAnchorKind && controls.anchor_kind !== expectedAnchorKind) return false;

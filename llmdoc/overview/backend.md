@@ -169,7 +169,17 @@
 - `ending_room` 是独立域。
 - room、thread、participant、turn 都在独立表中维护。
 - room/thread transcript 与 memory partition 隔离，不与主模式消息链混用。
-- `create_ending_room()` 当前会把 `generation_version` 并入 scope 去重；旧 generation 的 room 不会再被结果页或 roundtable 新入口复用。
+- `create_ending_room()` 当前会把 `generation_version` 并入 scope 去重；Roundtable Overhaul 后 generation version 是 `5`，`discussion_format / cast_mode` 也进入 scope/hash，旧 generation 的 room 不会再被结果页或 roundtable 新入口复用。
+- `worldline_roundtable` 的新开桌合同是 `discussion_format` + `cast_mode`：
+  - `discussion_format` 支持 `deep_dive / quick_review / clash_mode`
+  - `cast_mode` 支持 `smart_pick / custom`
+  - 这两个字段只适用于 `worldline_roundtable`；单结局 room 带这两个字段会返回 422
+  - 字段持久化在 `EndingRoom.config_json`，没有新增表或列
+- 旧 `selection_recipe` 仍保留。缺少新字段的旧 room、旧 replay 或旧 readonly artifact 会按 recipe 推导 format/cast；snapshot/result 会回显 `selection_recipe / discussion_format / cast_mode`。
+- `cast_mode=custom` 时，用户传入的 `selected_representatives` 是 authority，并要求每条 selected branch 都有代表；`cast_mode=smart_pick` 时，后端只会在当前 scenario 与当前 selected branches 的可见候选里补选。
+- roundtable turn plan 仍只使用现有 phase：`opening / crossfire / closing / verdict`。`quick_review` 最多让前两位代表开场后进入 verdict；`deep_dive` 可包含 witness crossfire、closing 与 verdict；`clash_mode` 会把 opening 设为 challenge 风格，但不新增 phase enum。
+- `clash_mode + smart_pick` 的代表选择会优先找冲突/立场差异；CJK、空 stance 或短 stance 会回退到 impact、branch pressure、probability 等确定性评分。
+- 后台 runner 在 roundtable 首开时会广播瞬时 `ending_room_planning`，data 包含 `room_id / discussion_format / cast_mode / planned_turn_count / phase`，并继续走既有 WS `meta.sequence / event_id`。
 - `ending_room_turn.question_anchor_ids_json`
   当前已用于显式记录 `quote / verdict / key_moment / phase` 等锚点来源。
 - `ending_room_thread.question_anchor_ids_json`
@@ -466,8 +476,8 @@
 - `ruff check app/services/ending_room_service/ app/services/simulator.py tests/test_simulator.py tests/test_ending_room_service.py tests/test_memory.py tests/test_corner_cases.py`：通过
 - custom agent upgrade 定向 ruff 已覆盖 `agents / debate / helper / memory / persona_workshop / simulator` 相关改动文件；最近记录里后端仓库级 ruff 已全绿。
 - 最近后端完整复验：
-  - `python -m pytest tests/`：`3329 passed, 6 skipped`
-  - `ruff check app/ tests/`：通过
+  - `python -m pytest tests/ --tb=short -q`：`3374 passed, 6 skipped`
+  - `python -m ruff check app`：通过
 - Campaign/profile label 本轮窄集复验：
   - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`：`154 passed`
   - `ruff check app/services/daily_challenges.py tests/test_gameplay_contract.py tests/test_interventions.py`：通过

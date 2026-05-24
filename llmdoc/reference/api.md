@@ -476,6 +476,13 @@
 
 - `ending_room` 是独立域，room/thread memory partition 隔离。
 - `crossline_gallery` 是只读摘要视图，不会开启可写 follow-up。
+- `POST /api/scenario/{scenario_id}/ending-room` 的 `worldline_roundtable` 请求体可带：
+  - `discussion_format`: `deep_dive / quick_review / clash_mode`
+  - `cast_mode`: `smart_pick / custom`
+  这两个字段只支持 `worldline_roundtable`；`ending_chamber / one_move_only / crossline_gallery` 带它们会返回 422。
+- `selection_recipe` 仍保留。旧 recipe 会映射到新合同：`representative -> deep_dive / smart_pick`，`manual_shortlist / expert_witness / witness_augmented -> deep_dive / custom`，`trait_mix / fault_line_first -> clash_mode / smart_pick`。新字段和旧 recipe 同时存在时，以新字段为准。
+- `cast_mode=custom` 要求每条 selected branch 都有一个 `selected_representatives` 项；缺失时返回 `ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID`。
+- room snapshot 与 result payload 当前会回显 `selection_recipe / discussion_format / cast_mode`；旧 room 或旧 readonly artifact 缺新字段时，客户端和服务端都会按 recipe fallback。
 - 请求体列表字段有大小上限（`selected_branch_ids / selected_agent_ids` ≤ 50，`addressed_agent_ids / question_anchor_ids` ≤ 20），超出会返回 Pydantic 422。
 - 用户追问 `content` 上限 5000 字符，线程 `title` 上限 500 字符。
 - `POST /api/ending-room/{room_id}/thread`
@@ -538,6 +545,10 @@
   - payload 为 `{ participants: DebateParticipant[] }`
   - 通常在 LLM persona upgrade 成功后、首个 `agent_speak` 前广播
   - 客户端应按 `side` 合并 participants，并允许该事件早于 REST snapshot 到达
+- ending-room / roundtable WS 当前还包括 `ending_room_planning`：
+  - payload 为 `{ room_id, discussion_format, cast_mode, planned_turn_count, phase }`
+  - 这是首开房间前的瞬时 UI hint，不是持久 result
+  - 事件继续带既有 `meta.sequence / event_id`，客户端仍按 sequence 去重和 gap resync
 - scenario cancel 成功后会广播 `simulation_cancelled`；前端把 `cancelled` 视为终态，晚到的旧 `status/state` 事件不能把页面带回 live 状态。
 - scenario WS 当前也可以广播 `kg:delta` 与 `kg:snapshot_invalidated`：
   - `kg:delta` 的 `data` 是合并后的 causal graph delta，包含 `scenario_id / version / added / updated / deleted / snapshot_invalidated`。

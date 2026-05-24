@@ -17806,3 +17806,62 @@ QA Inventory
 - 当前边界：
   - 本轮没有重跑 `npm run build` 或完整 release E2E；文档中不把它们写成本轮已签收。
   - `.claude/team-plan/*` 保留为历史审查/计划原文，本轮没有改写。
+
+## 2026-05-24 Roundtable Overhaul docs sync
+
+- 本轮目标：
+  - 按当前未提交的 Roundtable Overhaul 代码、审查修复和真实测试结果同步相关文档。
+  - 保持旧 `selection_recipe` 仍可用的口径，不把它写成已删除或废弃。
+  - 不把 deterministic browser E2E 写成真实 provider 慢流式、Native Safari 或 Edge 全矩阵签收。
+
+- 本轮实现口径：
+  - `worldline_roundtable` 新增显式 `discussion_format / cast_mode` 合同：`deep_dive / quick_review / clash_mode` 与 `smart_pick / custom`。
+  - 非 roundtable room 带新字段会 422；旧 recipe、旧 replay 和旧 readonly artifact 继续通过 fallback 映射。
+  - 后端 generation version 已升到 `5`，format/cast 持久化在 `config_json` 并进入 room scope。
+  - backend 会广播瞬时 `ending_room_planning`；前端 `planningState` 在 durable snapshot/result/turn/done/error 到达后清掉。
+  - `quick_review / clash_mode` 只改变 turn plan 和 opening style，不新增 `EndingRoomPhase`。
+  - 前端新增 `FormatSelector`、`PlanningSkeletonView`、`PhaseInsightTimeline` 和 format helper，E2E 脚本已补 format/cast request、snapshot/result 与三种 format 覆盖。
+
+- 本轮文档同步：
+  - `README.md`
+  - `CLAUDE.md`
+  - `backend/README.md`
+  - `frontend/README.md`
+  - `frontend/CLAUDE.md`
+  - `llmdoc/overview/project.md`
+  - `llmdoc/overview/backend.md`
+  - `llmdoc/overview/frontend.md`
+  - `llmdoc/reference/api.md`
+  - `llmdoc/guides/development.md`
+  - `.claude/plan/roundtable-overhaul.md`
+  - `implement/23_oracle_chambers_worldline_roundtable_execution_plan.md`
+  - `progress.md`
+
+- 本轮实际验证：
+  - `cd backend && source .venv/bin/activate && python -m pytest tests/ --tb=short -q`
+    - `3374 passed, 6 skipped`
+  - `cd backend && python -m ruff check app`
+    - 通过
+  - `cd frontend && npx tsc --noEmit -p tsconfig.app.json`
+    - 通过
+  - `cd frontend && npm run lint`
+    - 通过
+  - `cd frontend && npx vitest run`
+    - `212 files / 2374 tests passed`
+  - `cd frontend && npm run build`
+    - 通过
+  - i18n parity
+    - `{ en: 2841, zh: 2841, equal: true }`
+  - Roundtable browser E2E
+    - Chromium desktop zh：通过
+    - Chromium mobile zh：通过
+    - Chromium desktop en：通过
+    - Firefox desktop zh：通过
+    - WebKit desktop zh：通过
+  - `git diff --check`
+    - 通过
+
+- 当前边界：
+  - Roundtable browser E2E 使用 `ORACLE_CHAMBERS_USE_LLM=false` 的 deterministic backend 复核 format/cast 合同。
+  - 真实 provider 慢流式、空流式、仅 reasoning 输出链路没有在浏览器矩阵里单独签收。
+  - Native Safari、Edge、Firefox/WebKit mobile 与 BrowserStack/Sauce 级全矩阵没有在本轮签收。

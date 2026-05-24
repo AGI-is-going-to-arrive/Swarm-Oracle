@@ -392,6 +392,76 @@ def test_create_worldline_roundtable_and_fetch_result(client):
     assert result_payload["result"]["summary"]
 
 
+def test_create_ending_room_rejects_roundtable_contract_fields_for_single_branch_room(client):
+    fixture = _seed_ready_scenario()
+
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "ending_chamber",
+            "anchor_branch_id": fixture["branch_id"],
+            "selected_branch_ids": [fixture["branch_id"]],
+            "discussion_format": "quick_review",
+            "cast_mode": "smart_pick",
+            "language": "zh",
+        },
+    )
+
+    assert create_resp.status_code == 422
+
+
+def test_worldline_roundtable_api_accepts_new_contract_fields(client):
+    fixture = _seed_ready_scenario(question="如果帝国被分成两条世界线？")
+    second_branch_id = _append_completed_branch(
+        fixture["scenario_id"],
+        title="裂变支线",
+        story="第二条世界线走向地方割据。",
+        insight="第二条线的摘要。",
+    )
+
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_id"], second_branch_id],
+            "discussion_format": "quick_review",
+            "cast_mode": "smart_pick",
+            "language": "zh",
+        },
+    )
+
+    assert create_resp.status_code == 200
+    snapshot = create_resp.json()
+    assert snapshot["discussion_format"] == "quick_review"
+    assert snapshot["cast_mode"] == "smart_pick"
+
+
+def test_worldline_roundtable_api_maps_old_selection_recipe_to_new_contract_fields(client):
+    fixture = _seed_ready_scenario(question="如果帝国被分成两条世界线？")
+    second_branch_id = _append_completed_branch(
+        fixture["scenario_id"],
+        title="裂变支线",
+        story="第二条世界线走向地方割据。",
+        insight="第二条线的摘要。",
+    )
+
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_id"], second_branch_id],
+            "selection_recipe": "fault_line_first",
+            "language": "zh",
+        },
+    )
+
+    assert create_resp.status_code == 200
+    snapshot = create_resp.json()
+    assert snapshot["selection_recipe"] == "fault_line_first"
+    assert snapshot["discussion_format"] == "clash_mode"
+    assert snapshot["cast_mode"] == "smart_pick"
+
+
 def test_worldline_roundtable_api_accepts_branch_scoped_selected_representatives(client):
     fixture = _seed_roundtable_reselection_scenario()
 
@@ -420,6 +490,90 @@ def test_worldline_roundtable_api_accepts_branch_scoped_selected_representatives
         participant["source_agent_id"] == fixture["shared_agent_id"]
         for participant in representatives.values()
     )
+
+
+def test_worldline_roundtable_api_rejects_legacy_custom_recipe_without_full_roster(client):
+    fixture = _seed_roundtable_reselection_scenario()
+
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_a_id"], fixture["branch_b_id"]],
+            "selected_representatives": [
+                {"branch_id": fixture["branch_a_id"], "agent_id": fixture["shared_agent_id"]},
+            ],
+            "selection_recipe": "manual_shortlist",
+            "language": "zh",
+        },
+    )
+
+    assert create_resp.status_code == 422
+    assert create_resp.json()["detail"]["code"] == "ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID"
+
+
+def test_worldline_roundtable_api_maps_legacy_selection_recipe_to_new_contract(client):
+    fixture = _seed_roundtable_reselection_scenario()
+
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_a_id"], fixture["branch_b_id"]],
+            "selection_recipe": "trait_mix",
+            "language": "zh",
+        },
+    )
+
+    assert create_resp.status_code == 200
+    snapshot = create_resp.json()
+    assert snapshot["selection_recipe"] == "trait_mix"
+    assert snapshot["discussion_format"] == "clash_mode"
+    assert snapshot["cast_mode"] == "smart_pick"
+
+
+def test_worldline_roundtable_api_prefers_new_contract_fields_over_legacy_recipe(client):
+    fixture = _seed_roundtable_reselection_scenario()
+
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_a_id"], fixture["branch_b_id"]],
+            "selected_representatives": [
+                {"branch_id": fixture["branch_a_id"], "agent_id": fixture["shared_agent_id"]},
+                {"branch_id": fixture["branch_b_id"], "agent_id": fixture["shared_agent_id"]},
+            ],
+            "selection_recipe": "trait_mix",
+            "discussion_format": "quick_review",
+            "cast_mode": "custom",
+            "language": "zh",
+        },
+    )
+
+    assert create_resp.status_code == 200
+    snapshot = create_resp.json()
+    assert snapshot["selection_recipe"] == "trait_mix"
+    assert snapshot["discussion_format"] == "quick_review"
+    assert snapshot["cast_mode"] == "custom"
+
+
+def test_create_non_roundtable_rejects_roundtable_contract_fields(client):
+    fixture = _seed_ready_scenario()
+
+    resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "ending_chamber",
+            "anchor_branch_id": fixture["branch_id"],
+            "selected_branch_ids": [fixture["branch_id"]],
+            "discussion_format": "deep_dive",
+            "cast_mode": "smart_pick",
+            "language": "zh",
+        },
+    )
+
+    assert resp.status_code == 422
 
 
 def test_worldline_roundtable_api_accepts_selected_witness(client):

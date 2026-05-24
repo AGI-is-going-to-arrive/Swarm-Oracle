@@ -735,6 +735,17 @@ export interface DebatePredictionRequest {
 }
 
 // Phase A contract freeze: Oracle Chambers / Worldline Roundtable
+export type RoundtableDiscussionFormat = 'deep_dive' | 'quick_review' | 'clash_mode';
+export type RoundtableCastMode = 'smart_pick' | 'custom';
+
+export interface EndingRoomPlanningData {
+  room_id: string;
+  discussion_format: RoundtableDiscussionFormat;
+  cast_mode: RoundtableCastMode;
+  planned_turn_count: number;
+  phase: string;
+}
+
 export type EndingRoomType =
   | 'ending_chamber'
   | 'worldline_roundtable'
@@ -847,6 +858,8 @@ export interface EndingRoomSnapshot {
   scenario_id: string;
   anchor_branch_id: string | null;
   room_type: EndingRoomType;
+  discussion_format?: RoundtableDiscussionFormat;
+  cast_mode?: RoundtableCastMode;
   title: string;
   language: 'zh' | 'en';
   status: EndingRoomStatus;
@@ -886,6 +899,8 @@ export type RoundtableSelectionRecipe =
 
 export interface CreateEndingRoomRequest {
   roomType: EndingRoomType;
+  discussionFormat?: RoundtableDiscussionFormat;
+  castMode?: RoundtableCastMode;
   anchorBranchId?: string | null;
   selectedBranchIds: string[];
   selectedAgentIds?: string[];
@@ -955,6 +970,7 @@ export type EndingRoomWSEvent =
     | { type: 'auth_ok' }
     | { type: 'heartbeat'; data: { ts: string } }
     | { type: 'status'; data: { status: EndingRoomStatus; error?: string | StructuredWsError } }
+    | { type: 'ending_room_planning'; data: EndingRoomPlanningData }
     | { type: 'ending_room_turn_start'; data: { room_id: string; thread_id?: string | null; turn_id: string; participant_id: string; phase: EndingRoomPhase; sequence: number } }
     | { type: 'ending_room_turn_delta'; data: { room_id: string; thread_id?: string | null; turn_id: string; participant_id: string; delta: string; chunk_index: number } }
     | { type: 'ending_room_turn_commit'; data: EndingRoomTurn }

@@ -51,6 +51,8 @@ React + TypeScript frontend for SwarmOracle.
   replay/director/prediction/scenario-meta local ids no longer assume `crypto.randomUUID()` is available; fallback order is `randomUUID` -> `getRandomValues` -> timestamp/random
 - `WorldlineRoundtableView.tsx`
   launch payload now follows the latest `selectionMode` and current UI language instead of reusing stale callback state
+  launch payload also sends `discussionFormat / castMode`; old `selectionRecipe` stays in the payload for replay and legacy recipe compatibility
+  the picker now renders `FormatSelector`, and live room startup can show a transient planning skeleton until the first durable turn/result/error arrives
   phase insight cards now start collapsed; the header keeps a short preview, and the expanded body shows the backend's longer language-aware one-line commentary
 - `e2e-ending-room-followup-suite.mjs`
   current followup flow uses API setup for hotseat / all-present / epilogue, submits evidence-card through the real UI drawer, and treats replay/import coverage as fail-closed rather than best-effort
@@ -224,9 +226,11 @@ npm run build:spike:phaser-custom
 - Current verification contract is maintained in `llmdoc/guides/development.md`.
 - Current frontend verification:
   - `npx tsc --noEmit -p tsconfig.app.json`: pass
-  - `npx eslint src/ --max-warnings=0`: pass
-  - full vitest: `206 files / 2328 tests passed`
-  - i18n key parity spot-check: `zh: 2800`, `en: 2800`
+  - `npm run lint`: pass
+  - `npm run build`: pass
+  - full vitest: `212 files / 2374 tests passed`
+  - i18n key parity spot-check: `zh: 2841`, `en: 2841`
+  - roundtable format/cast browser E2E: Chromium desktop/mobile, Chromium en, Firefox desktop, and WebKit desktop passed on the deterministic backend path
   - capability browser spot-check: Chromium / Firefox / WebKit covered CausalReviewView and TimelineGalaxy capability error + normal capability payload
   - custom Agent attach smoke: Chrome homepage quick selector renders, selecting an Agent shows the Start badge, console error count is 0, and desktop overflow is absent
   - intervention upgrade browser spot-check: Chromium mobile and desktop Firefox/WebKit scoped cross-browser checks passed for the fixture-first simulation path, director-state readiness, and result archive readback

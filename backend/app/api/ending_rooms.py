@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, WebSocket
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -47,6 +48,10 @@ ENDING_ROOM_START_DELAY_SECONDS = 0.05
 logger = logging.getLogger(__name__)
 
 
+RoundtableDiscussionFormat = Literal["deep_dive", "quick_review", "clash_mode"]
+RoundtableCastMode = Literal["smart_pick", "custom"]
+
+
 class SelectedRepresentativeRequest(BaseModel):
     branch_id: str
     agent_id: str
@@ -68,6 +73,8 @@ class CreateEndingRoomRequest(BaseModel):
     selected_representatives: list[SelectedRepresentativeRequest] = Field(default_factory=list, max_length=50)  # noqa: E501
     selected_witness: SelectedRepresentativeRequest | None = None
     selection_recipe: str | None = None
+    discussion_format: RoundtableDiscussionFormat | None = None
+    cast_mode: RoundtableCastMode | None = None
     language: str | None = None
 
     @field_validator("anchor_branch_id", "language", "selection_recipe")
@@ -76,6 +83,14 @@ class CreateEndingRoomRequest(BaseModel):
         if value is None:
             return None
         cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("discussion_format", "cast_mode", mode="before")
+    @classmethod
+    def normalize_optional_contract_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = str(value).strip()
         return cleaned or None
 
     @field_validator("selected_branch_ids", "selected_agent_ids")
@@ -127,6 +142,11 @@ class CreateEndingRoomRequest(BaseModel):
         if (self.room_type != EndingRoomType.WORLDLINE_ROUNDTABLE
                 and self.selected_witness is not None):
             raise ValueError("selected_witness is only supported for worldline_roundtable")
+        if (
+            self.room_type != EndingRoomType.WORLDLINE_ROUNDTABLE
+            and (self.discussion_format is not None or self.cast_mode is not None)
+        ):
+            raise ValueError("discussion_format and cast_mode are only supported for worldline_roundtable")  # noqa: E501
         return self
 
 
@@ -314,6 +334,8 @@ async def create_ending_room_endpoint(
             ],
             selected_witness=req.selected_witness.model_dump(mode="python") if req.selected_witness is not None else None,  # noqa: E501
             selection_recipe=req.selection_recipe,
+            discussion_format=req.discussion_format,
+            cast_mode=req.cast_mode,
             language=req.language,
         )
     except EndingRoomServiceError as exc:

@@ -2,6 +2,8 @@ export interface RoundtableAutomationControls {
   active_thread_id?: string | null;
   anchor_kind?: string | null;
   can_send?: boolean | null;
+  cast_mode?: string | null;
+  discussion_format?: string | null;
   interaction_mode?: string | null;
   is_read_only?: boolean | null;
   question_anchor_ids?: string[] | null;
@@ -21,6 +23,8 @@ export interface RoundtableAutomationExpectation {
   expectedQuestionAnchorIds?: string[] | null;
   expectedAnchorKind?: string | null;
   expectedInteractionMode?: string | null;
+  expectedDiscussionFormat?: string | null;
+  expectedCastMode?: string | null;
   replayUrl?: string | null;
   replayKind?: 'share' | 'local' | 'either';
 }

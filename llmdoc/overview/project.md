@@ -92,6 +92,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - `只改一步`
   - 不会展示 `发起圆桌` / `异线旁听席`
 - `WorldlineRoundtableView` 已支持 live roundtable、改选重开、只读 replay，以及 `manual_shortlist / expert_witness / trait_mix / fault_line_first / witness_augmented`。
+- roundtable 开桌现在不只靠旧 `selection_recipe`。新合同是 `discussion_format` + `cast_mode`：默认 `deep_dive / smart_pick`；`quick_review` 减少讨论轮次；`clash_mode` 走挑战式开场；`custom` 保留用户逐世界线选定的代表。旧 recipe 仍保留并映射到新字段：`trait_mix / fault_line_first` 对应 `clash_mode / smart_pick`，`manual_shortlist / expert_witness / witness_augmented` 对应 `deep_dive / custom`。
 - live completed room 当前在裁决落地后开放 `Deep Dive` 工作台，包含 participant-scoped `1-on-1 Interview`、`Research Analyst` 与 `Cross-Examine`；readonly replay 不开放这组 live-only 工作台入口。`1-on-1 Interview` 会先显示代表的角色、世界线、立场、最近原话和人物简介，并把这份可读摘要作为 conversation origin context；网络失败只显示错误提示，不伪装成代表发言。
 - `survey / analyst` 当前是 completed live roundtable 的 Deep Dive SSE 工作台能力；`survey` 会并发询问代表并逐条返回 `survey_response`，但它不是 EndingChatModal 的 `interaction_mode`。
 - 代表改选当前支持桌面 `drag-to-seat / keyboard reseat`，并保留同一候选卡的入席兜底；移动端保留 `click-to-seat`。
@@ -144,6 +145,7 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
 - roundtable 的 readonly replay 当前会跟随 `active_thread_id` 恢复对应 thread 语义；若落在 `hotseat` follow-up，页面不会再退回成 `archivist_route`。
 - mobile roundtable artifact replay readonly 当前也会跟随 active replay thread 恢复 `interaction_mode`，不再在自动化口径里卡成 `archivist_route`。
 - roundtable 的 scoped regression 当前已覆盖 Chromium 桌面/移动，以及桌面 Firefox / WebKit；`reseat / keyboard reseat / anchored thread / hotseat / witness_augmented / readonly replay` 口径与 Chromium 对齐。Playwright WebKit 下如果 dnd-kit 拖拽模拟没有命中，脚本会记录 `dragMethod` 并走同一候选卡的入席兜底，不把这类输入模拟问题伪装成原生拖拽成功。
+- roundtable format/cast regression 当前已覆盖 Chromium desktop zh、Chromium mobile zh、Chromium desktop en、Firefox desktop zh、WebKit desktop zh。脚本会检查 UI controls、create-room request、snapshot/result 里的 `discussion_format / cast_mode`，并覆盖 `deep_dive / quick_review / clash_mode`。这轮使用 `ORACLE_CHAMBERS_USE_LLM=false` 的确定性后端链路，不代表真实 provider 慢流式、Native Safari 或 Edge 已签收。
 - `ending-room / roundtable` 的主文案当前已改成 factual anchor + `LLM first, template fallback`：participant snapshot 会带 `agent_role / agent_persona / bio_short / impact_score / branch_pressure`，但角色身份块和动态词汇身份提示都会按 `UNTRUSTED DATA` 注入；provider 慢、失败、空流式、仅 reasoning 输出或返回 JSON 字符串时，会退到可显示文本或 deterministic fallback，不再默认先落模板再改写。roundtable opening / crossfire / witness / verdict 的静态锚点会把 scenario question 压成短问题前缀；英文 fallback 会避开中文问题原文；roundtable verdict 与 follow-up fallback 现在要求是可直接显示的人话，不允许把 prompt 指令或模式标签原样露给用户。
 - Oracle participant 选择当前会给 `source_type=custom` 的 Agent 加 1.5x impact multiplier；这只影响会客厅/圆桌代表排序，不会把自建 Agent 提升成 `CORE`。
 - ending-room 后台生成当前也持有 runtime lock heartbeat；续租返回 `None`、续租抛异常，或 lease 过期时，会直接 fail-closed 把 room 落成 `error`，不会失锁后继续写 turn 或 result。
@@ -194,12 +196,13 @@ SwarmOracle 是一个 `AI What-If Prediction Playground`：
   - campaign finalize 优先从持久化 `director_state_json / gameplay_state_json` 派生 `score_breakdown`、daily/streak、weekly bonus 和 badge unlock；旧 scenario 缺少 `campaign_context` 时仍保留 legacy fallback。
   - 首页成长 sheet 读取静态 badge definitions、当前用户 badges、mastery 和 weekly summary；旧本地数据里的 `daily_challenge / archive_record / bet_winner` 徽章 id 会映射到当前 registry id 展示。
 - 最近完整本地验证：
-  - backend `python -m pytest tests/`：`3329 passed, 6 skipped`
-  - backend `ruff check app/ tests/`：通过
-  - frontend `npx vitest run`：`207 files / 2343 tests passed`
-  - frontend `npx eslint src/ --max-warnings=0`：通过
+  - backend `python -m pytest tests/ --tb=short -q`：`3374 passed, 6 skipped`
+  - backend `python -m ruff check app`：通过
+  - frontend `npx vitest run`：`212 files / 2374 tests passed`
+  - frontend `npm run lint`：通过
   - frontend `npx tsc --noEmit -p tsconfig.app.json`：通过
-- frontend i18n key parity：`zh: 2812`、`en: 2812`
+- frontend `npm run build`：通过
+- frontend i18n key parity：`zh: 2841`、`en: 2841`
   - Custom Agent attach 定向复核：backend `TestCustomAgentOwnership` 为 `10 passed`；Chrome 首页 smoke 确认 quick selector 可见、选中后 Start badge 显示、console error 为 0、桌面视口无横向溢出
 - Intervention upgrade 浏览器复核：`e2e-suite.mjs mobile` 在 Chromium mobile 通过；`e2e-suite.mjs cross-browser --browsers firefox,webkit` 在 Firefox / WebKit desktop 通过 director-state 和 result archive readback scoped regression。这个结论不等于 Firefox/WebKit mobile、Native Safari/Edge 或 BrowserStack / Sauce 级全矩阵签收
   - 主模式 completed/replay 定向浏览器回归：Playwright fixture 在 Chromium、Firefox、WebKit 均通过，覆盖 completed 冷加载 Classic、结果页返回 Classic、replay Theater、单分支/单轮静态标签、多分支/多轮下拉、空分支/空消息、`cancelled` 和 `error` 状态

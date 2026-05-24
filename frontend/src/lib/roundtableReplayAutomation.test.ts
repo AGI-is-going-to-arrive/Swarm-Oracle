@@ -10,6 +10,8 @@ describe('roundtableReplayAutomation', () => {
   it('recognizes share and local roundtable replay URLs', () => {
     expect(isRoundtableReplayUrl('http://127.0.0.1:18928/roundtable/replay?roomShare=abc')).toBe(true);
     expect(isRoundtableReplayUrl('http://127.0.0.1:18928/roundtable/replay?roomLocal=abc')).toBe(true);
+    expect(isRoundtableReplayUrl('http://127.0.0.1:18928/roundtable/replay?share=abc')).toBe(true);
+    expect(isRoundtableReplayUrl('http://127.0.0.1:18928/roundtable/replay?local=abc')).toBe(true);
     expect(isRoundtableReplayUrl('http://127.0.0.1:18928/roundtable/replay?roomShare=abc', { kind: 'share' })).toBe(true);
     expect(isRoundtableReplayUrl('http://127.0.0.1:18928/roundtable/replay?roomLocal=abc', { kind: 'local' })).toBe(true);
     expect(isRoundtableReplayUrl('http://127.0.0.1:18928/roundtable/replay?roomLocal=abc', { kind: 'share' })).toBe(false);
@@ -28,6 +30,8 @@ describe('roundtableReplayAutomation', () => {
           question_anchor_ids: ['quote:1'],
           anchor_kind: 'quote',
           interaction_mode: 'thread_followup',
+          discussion_format: 'quick_review',
+          cast_mode: 'smart_pick',
         },
       },
       scene: {
@@ -41,6 +45,8 @@ describe('roundtableReplayAutomation', () => {
       expectedQuestionAnchorIds: ['quote:1'],
       expectedAnchorKind: 'quote',
       expectedInteractionMode: 'thread_followup',
+      expectedDiscussionFormat: 'quick_review',
+      expectedCastMode: 'smart_pick',
     })).toBe(true);
 
     expect(isLiveRoundtableAutomationPayload(payload, {
@@ -70,6 +76,8 @@ describe('roundtableReplayAutomation', () => {
           question_anchor_ids: ['quote:1'],
           anchor_kind: 'quote',
           interaction_mode: 'thread_followup',
+          discussion_format: 'deep_dive',
+          cast_mode: 'custom',
         },
       },
     };
@@ -81,6 +89,8 @@ describe('roundtableReplayAutomation', () => {
       expectedQuestionAnchorIds: ['quote:1'],
       expectedAnchorKind: 'quote',
       expectedInteractionMode: 'thread_followup',
+      expectedDiscussionFormat: 'deep_dive',
+      expectedCastMode: 'custom',
     })).toBe(true);
 
     expect(isReadonlyRoundtableAutomationPayload(payload, {

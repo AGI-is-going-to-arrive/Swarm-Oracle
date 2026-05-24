@@ -13,6 +13,7 @@ import {
 } from '../lib/textLayout/textOverflowPredictor';
 import type {
   EndingRoomInteractionMode,
+  EndingRoomPlanningData,
   EndingRoomResult,
   EndingRoomSnapshot,
   EndingRoomThreadSnapshot,
@@ -29,6 +30,7 @@ interface MockStoreState {
   scopeNotice: null | { threadId: string; memoryPartitionId: string };
   sending: boolean;
   status: 'idle' | 'loading' | 'draft' | 'live' | 'done' | 'error';
+  planningState: EndingRoomPlanningData | null;
   pendingDrafts: Record<string, unknown>;
   openRoom: (...args: unknown[]) => Promise<string>;
   loadRoom: (...args: unknown[]) => Promise<void>;
@@ -207,6 +209,7 @@ const {
     scopeNotice: null,
     sending: false,
     status: 'done',
+    planningState: null,
     pendingDrafts: {},
     openRoom,
     loadRoom,
@@ -275,6 +278,7 @@ const {
 const endingChatCssContract = readFileSync('src/components/EndingChatModal.css', 'utf8');
 const roundtableCssContract = readFileSync('src/pages/WorldlineRoundtable.css', 'utf8');
 const roundtableViewSource = readFileSync('src/pages/WorldlineRoundtableView.tsx', 'utf8');
+const phaseInsightTimelineSource = readFileSync('src/pages/roundtable/PhaseInsightTimeline.tsx', 'utf8');
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -331,6 +335,16 @@ vi.mock('react-i18next', () => ({
         'roundtable.selection_mode_trait_mix': 'Clash mix',
         'roundtable.selection_mode_fault_line_first': 'Biggest split first',
         'roundtable.selection_mode_witness_augmented': 'Auto-fill',
+        'roundtable.format_selector_label': 'Discussion format',
+        'roundtable.format_label': 'Format',
+        'roundtable.format_deep_dive': 'Deep Dive',
+        'roundtable.format_quick_review': 'Quick Review',
+        'roundtable.format_clash_mode': 'Clash Mode',
+        'roundtable.cast_label': 'Cast mode',
+        'roundtable.cast_smart_pick': 'Smart Pick',
+        'roundtable.cast_custom': 'Custom Cast',
+        'roundtable.planning_preparing': 'Preparing the roundtable',
+        'roundtable.planning_turns': `${String(options?.count ?? 0)} turns planned`,
         'roundtable.shortlist_hint': 'Pick 2-4 worldlines to seat at the table; the rest sit this one out.',
         'roundtable.trait_mix_hint': 'Swap in representatives with sharper disagreements.',
         'roundtable.fault_line_hint': 'Auto-pick the two worldlines that diverge the most.',
@@ -739,6 +753,52 @@ describe('WorldlineRoundtableView', () => {
     expect(actionStrip!.style.overflowX).toBe('');
   });
 
+  it('does not show the planning skeleton over an already loaded result', async () => {
+    const baseState = createBaseStoreState();
+    storeState.snapshot = {
+      ...baseState.snapshot!,
+      turns: [],
+      result_ready: true,
+    };
+    storeState.result = baseState.result;
+    storeState.threadsById = {
+      'thread-room': {
+        ...baseState.threadsById['thread-room'],
+        turns: [],
+      },
+    };
+    storeState.threadOrder = ['thread-room'];
+    storeState.activeThreadId = 'thread-room';
+    storeState.planningState = {
+      room_id: 'room-1',
+      discussion_format: 'quick_review',
+      cast_mode: 'smart_pick',
+      planned_turn_count: 3,
+      phase: 'opening',
+    };
+    getScenarioMock.mockResolvedValue({
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    });
+    getStoryMock.mockResolvedValue({
+      question: 'What broke first?',
+      branches: [
+        { id: 'branch-a', title: 'Branch A', probability: 0.62, insight: 'A', story: 'Story A', key_moments: [] },
+        { id: 'branch-b', title: 'Branch B', probability: 0.38, insight: 'B', story: 'Story B', key_moments: [] },
+      ],
+    });
+    getAgentsMock.mockResolvedValue([]);
+
+    renderRoundtableView();
+
+    expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
+    expect(screen.queryByText('Preparing the roundtable')).not.toBeInTheDocument();
+  });
+
   it('creates a live roundtable room from a multi-ending result', async () => {
     storeState.snapshot = null;
     storeState.result = null;
@@ -831,7 +891,11 @@ describe('WorldlineRoundtableView', () => {
 
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
     expect(screen.getByText('Reseat each worldline representative')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Deep Dive' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Smart Pick' })).toBeChecked();
 
+    await user.click(screen.getByRole('radio', { name: 'Quick Review' }));
+    await user.click(screen.getByRole('radio', { name: 'Custom Cast' }));
     await user.click(screen.getByRole('button', { name: 'Open this lineup' }));
 
     await waitFor(() => {
@@ -839,6 +903,8 @@ describe('WorldlineRoundtableView', () => {
         roomType: 'worldline_roundtable',
         selectedBranchIds: ['branch-a', 'branch-b'],
         selectionRecipe: 'representative',
+        discussionFormat: 'quick_review',
+        castMode: 'custom',
         language: 'en',
         selectedRepresentatives: [
           { branchId: 'branch-a', agentId: 'agent-a' },
@@ -1023,6 +1089,8 @@ describe('WorldlineRoundtableView', () => {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
       selectionRecipe: 'manual_shortlist',
+      discussionFormat: 'deep_dive',
+      castMode: 'custom',
       language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-a' },
@@ -2089,9 +2157,9 @@ describe('WorldlineRoundtableView', () => {
   });
 
   it('renders phase-type chips instead of generic phase numbering', () => {
-    expect(roundtableViewSource).toContain('const phaseClass = isEndingRoomPhase(insight.phase)');
-    expect(roundtableViewSource).toContain('phase-chip ${phaseClass}');
-    expect(roundtableViewSource).toContain('getEndingRoomPhaseLabel(insight.phase, t)');
+    expect(phaseInsightTimelineSource).toContain('const phaseClass = isEndingRoomPhase(insight.phase)');
+    expect(phaseInsightTimelineSource).toContain('phase-chip ${phaseClass}');
+    expect(phaseInsightTimelineSource).toContain('getEndingRoomPhaseLabel(insight.phase, t)');
     expect(roundtableCssContract).not.toContain("content: 'Phase '");
     expect(roundtableCssContract).toMatch(/\.phase-chip\s*\{[\s\S]*flex-shrink:\s*0;/);
     expect(roundtableCssContract).toMatch(/\.phase-chip--opening\s*\{/);
@@ -2613,6 +2681,8 @@ describe('WorldlineRoundtableView', () => {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
       selectionRecipe: 'expert_witness',
+      discussionFormat: 'deep_dive',
+      castMode: 'custom',
       language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-a' },
@@ -2675,6 +2745,8 @@ describe('WorldlineRoundtableView', () => {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
       selectionRecipe: 'trait_mix',
+      discussionFormat: 'clash_mode',
+      castMode: 'smart_pick',
       language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-a2' },
@@ -2736,6 +2808,8 @@ describe('WorldlineRoundtableView', () => {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
       selectionRecipe: 'fault_line_first',
+      discussionFormat: 'clash_mode',
+      castMode: 'smart_pick',
       language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-a' },
@@ -2796,6 +2870,8 @@ describe('WorldlineRoundtableView', () => {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
       selectionRecipe: 'witness_augmented',
+      discussionFormat: 'deep_dive',
+      castMode: 'custom',
       language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-a' },
@@ -2862,6 +2938,8 @@ describe('WorldlineRoundtableView', () => {
     storeState.snapshot = {
       ...storeState.snapshot,
       id: 'room-live',
+      discussion_format: 'clash_mode',
+      cast_mode: 'smart_pick',
       participants: [
         {
           id: 'rep-a',
@@ -3056,6 +3134,8 @@ describe('WorldlineRoundtableView', () => {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
       selectionRecipe: 'representative',
+      discussionFormat: 'clash_mode',
+      castMode: 'smart_pick',
       language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-c' },
@@ -3528,6 +3608,8 @@ describe('WorldlineRoundtableView', () => {
       roomType: 'worldline_roundtable',
       selectedBranchIds: ['branch-a', 'branch-b'],
       selectionRecipe: 'representative',
+      discussionFormat: 'deep_dive',
+      castMode: 'smart_pick',
       language: 'en',
       selectedRepresentatives: [
         { branchId: 'branch-a', agentId: 'agent-a' },

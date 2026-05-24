@@ -17,6 +17,7 @@ import type {
   CreateEndingRoomThreadRequest,
   EndingRoomInteractionMode,
   EndingRoomPhase,
+  EndingRoomPlanningData,
   EndingRoomResult,
   EndingRoomResultPayload,
   EndingRoomSnapshot,
@@ -72,6 +73,8 @@ interface ScopeNoticePayload {
 interface EndingRoomState {
   snapshot: EndingRoomSnapshot | null;
   result: EndingRoomResult | null;
+  planningState: EndingRoomPlanningData | null;
+  setPlanningState: (data: EndingRoomPlanningData | null) => void;
   threadsById: Record<string, EndingRoomThreadSnapshot>;
   threadOrder: string[];
   activeThreadId: string | null;
@@ -109,6 +112,7 @@ interface EndingRoomState {
 const initialState = {
   snapshot: null as EndingRoomSnapshot | null,
   result: null as EndingRoomResult | null,
+  planningState: null as EndingRoomPlanningData | null,
   threadsById: {} as Record<string, EndingRoomThreadSnapshot>,
   threadOrder: [] as string[],
   activeThreadId: null as string | null,
@@ -247,6 +251,21 @@ function collectCommittedTurnIds(
     thread.turns.forEach((turn) => committedTurnIds.add(turn.id));
   });
   return committedTurnIds;
+}
+
+function snapshotClearsPlanningState(snapshot: EndingRoomSnapshot): boolean {
+  return snapshot.turns.length > 0
+    || snapshot.result_ready
+    || snapshot.status === 'done'
+    || snapshot.status === 'error';
+}
+
+function storeHasDurableRoomState(state: EndingRoomState): boolean {
+  return Boolean(state.result)
+    || state.status === 'done'
+    || state.status === 'error'
+    || Boolean(state.snapshot?.result_ready)
+    || (state.snapshot?.turns.length ?? 0) > 0;
 }
 
 function prunePendingDrafts(
@@ -404,6 +423,7 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
     const defaultThreadId = resolveDefaultThreadId(merged);
     return {
       snapshot: merged,
+      planningState: snapshotClearsPlanningState(merged) ? null : state.planningState,
       threadsById,
       threadOrder,
       activeThreadId: state.activeThreadId && threadsById[state.activeThreadId]
@@ -430,6 +450,7 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
     const committedTurnIds = collectCommittedTurnIds(merged, threadsById);
     return {
       snapshot: merged,
+      planningState: null,
       threadsById,
       threadOrder: sortThreads(merged.threads).map((thread) => thread.id),
       activeThreadId: state.activeThreadId && threadsById[state.activeThreadId]
@@ -486,6 +507,7 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
       status: resolveStateStatus(status),
       error: null as string | null,
       errorCode: null as string | null,
+      planningState: status === 'done' || status === 'error' ? null : state.planningState,
       pendingDrafts: status === 'done' || status === 'error' ? {} : state.pendingDrafts,
       snapshot: state.snapshot
         ? {
@@ -572,6 +594,7 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
     delete pendingDrafts[turn.id];
     const threadId = turn.thread_id ?? resolveDefaultThreadId(state.snapshot);
     return {
+      planningState: null,
       snapshot: {
         ...state.snapshot,
         turns: mergeTurns(state.snapshot.turns, [turn]),
@@ -592,11 +615,21 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
 
   setResult: (result) => set(() => ({
     result,
+    planningState: null,
     status: 'done',
     error: null,
     errorCode: null,
     pendingDrafts: {},
   })),
+
+  setPlanningState: (data) => set((state) => {
+    if (data && storeHasDurableRoomState(state)) {
+      return state;
+    }
+    return {
+      planningState: data,
+    };
+  }),
 
   setActiveThread: (threadId) => set(() => ({
     activeThreadId: threadId,

@@ -730,6 +730,8 @@ export async function createEndingRoom(
     method: 'POST',
     body: JSON.stringify({
       room_type: payload.roomType,
+      ...(payload.discussionFormat ? { discussion_format: payload.discussionFormat } : {}),
+      ...(payload.castMode ? { cast_mode: payload.castMode } : {}),
       ...(payload.anchorBranchId ? { anchor_branch_id: payload.anchorBranchId } : {}),
       selected_branch_ids: payload.selectedBranchIds,
       ...(payload.selectedAgentIds?.length ? { selected_agent_ids: payload.selectedAgentIds } : {}),

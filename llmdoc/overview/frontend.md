@@ -39,7 +39,7 @@
 | CompareDigestView | `frontend/src/pages/CompareDigestView.tsx` | 反事实对比页；单活跃 Theater、shared round selector、digest compare、pane screenshot capture |
 | DebateArenaView | `frontend/src/pages/DebateArenaView.tsx` | debate live、Podium Cards、room state、phase 历史卡、counterplay、live argument map |
 | DebateResultView | `frontend/src/pages/DebateResultView.tsx` | debate result、share、replay/import、裁判状态文案、按需加载 argument map |
-| WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay、participant follow-up、phase insight timeline、独立滚动 transcript、analyst ReACT 面板、人格漂移 warning |
+| WorldlineRoundtableView | `frontend/src/pages/WorldlineRoundtableView.tsx` | 世界线圆桌 live/replay、FormatSelector、planning skeleton、participant follow-up、phase insight timeline、独立滚动 transcript、analyst ReACT 面板、人格漂移 warning |
 | HistoryView | `frontend/src/pages/HistoryView.tsx` | scenario 历史列表 |
 | LeaderboardView | `frontend/src/pages/LeaderboardView.tsx` | prediction leaderboard 与 segment filters；筛选状态同步到 URL params，顶部返回按钮回到首页 |
 
@@ -396,7 +396,9 @@
 - `LanguageSwitcher` 当前按 `role="group"` + button `aria-label / title / lang` 暴露，不再只是视觉开关；accessible name 也会带上可见的 `EN / 中文` 文本，避免语音控制和视觉标签口径分叉。
 - `useFactionOverlay` 当前只会在 `factions` capability 开启时发请求；`FEATURE_FACTIONS=false` 时，ending-room / roundtable 不再反复打 `faction-timeline 404`。
 - `WorldlineRoundtableView` 当前开桌 payload 会跟随最新的 `selectionMode` 与当前 UI 语言，不再复用旧闭包值。
+- `WorldlineRoundtableView` 当前开桌 payload 还会带 `discussionFormat / castMode`，API client 映射成 `discussion_format / cast_mode`；旧 `selectionRecipe` 仍会一起发送，旧 payload / snapshot / replay artifact 缺新字段时继续按 recipe fallback。
 - `useEndingRoomWS` 当前重连会复用最新的 connect 回调，不再依赖旧的自引用调度。
+- `useEndingRoomWS` 当前会处理 `ending_room_planning`，并把缺字段或未知字段归一化成中性 fallback；`endingRoomStore.planningState` 只是瞬时 UI hint，durable snapshot、result、committed turn、done 或 error 到达后都会清空，避免重连后残留 skeleton。
 - ending-room room/thread user-turn 请求当前走 `90s` 前端 timeout；发送失败或超时后，store 会清掉目标 thread 的 `pending_drafts`，忽略迟到 draft delta，并 best-effort 重拉 room / result / thread，不把整个 room 直接打成 fatal error。
 - `ShareModal / GameplayCardsModal / InputView / DebateArenaView / DebateResultView / SimulationView / ResultView / EndingChatModal / WorldlineRoundtableView` 当前已清完 `react-hooks/exhaustive-deps` warning；本轮只补 hook 依赖与派生值稳定化，没有改业务口径。
 - 单结局结果页当前不展示 `worldline_roundtable / crossline_gallery` 入口，只保留 `ending_chamber / one_move_only`。
@@ -418,6 +420,9 @@
 - `DebateArenaView / DebateResultView` 的 Podium/score card 当前会展示 participant role/persona；长 persona 和 room note 可展开，长 role/persona 会自动换行。裁判分数位显示本地化状态，不再用数字占位。
 - Debate live 的 speaker initial 当前按 grapheme 截取，emoji、旗帜和 CJK 扩展字符不会被 `charAt(0)` 截坏。
 - `WorldlineRoundtableView` 当前已补：
+  - `FormatSelector`：3 个 `discussion_format` radio（Deep Dive / Quick Review / Clash Mode）和 2 个 `cast_mode` radio（Smart Pick / Custom Cast）
+  - `PlanningSkeletonView`：只在 live 开桌且还没有 durable result/turn/draft 时显示 planning 状态
+  - `PhaseInsightTimeline`：phase insight timeline 已从主页面拆出，保留原有折叠、展开和 live-only action 语义
   - `Continue this table / Start anchored thread / Copy roundtable brief`
   - `phase insight` 级追问 / 开线程（当前会覆盖返回的全部 `phase_insights`，不再只限前 3 条）
   - phase insight 当前是无外框 timeline：左侧竖线和 dot 标出每个 phase，header 用 phase chip 显示本地化阶段名，未知 phase 使用中性 fallback，不直接拼未知字符串进 class。
@@ -623,10 +628,11 @@
   - `npm exec -- eslint src/pages/result/ResultHeader.tsx src/pages/result/ExploreDeeperBridge.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts`：通过
   - 浏览器实测本机结果页显示 `对话 · 本机模式`，header 可直接进入因果图谱和图谱工作台；点击 `探索` 会滚到下一步区。
 - 当前 frontend 稳定验证口径：
-  - `npx vitest run`：`207 files / 2343 tests passed`
-  - `npx eslint src/ --max-warnings=0`：通过
+  - `npx vitest run`：`212 files / 2374 tests passed`
+  - `npm run lint`：通过
   - `npx tsc --noEmit -p tsconfig.app.json`：通过
-  - i18n key parity：`zh: 2812`、`en: 2812`
+  - `npm run build`：通过
+  - i18n key parity：`zh: 2841`、`en: 2841`
   - CausalReviewView / TimelineGalaxy capability 浏览器复核：Chromium、Firefox、WebKit 均覆盖 capability probe error 与正常 capability payload；WebKit 的 TimelineGalaxy 正常态以页面文本和 canvas 数量复核通过
   - Pixel Theater browser spot-check：完成态 `/sim/e1a41453-2cb2-43a1-a054-0d7cd04a6bf5` 的 toolbar 玩法卡入口可见，modal 以只读状态打开，Chrome DevTools console error 为 0
   - KG visualization 定向回归：`5 files / 193 tests passed`

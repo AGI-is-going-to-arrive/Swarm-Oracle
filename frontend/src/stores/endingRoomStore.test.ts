@@ -893,4 +893,42 @@ describe('endingRoomStore', () => {
     expect(getEndingRoomMock).toHaveBeenCalledWith('room-1');
     expect(useEndingRoomStore.getState().snapshot?.participants[0]?.display_name).toBe('You');
   });
+
+  it('does not keep or revive planning state after durable room output arrives', () => {
+    const planningState = {
+      room_id: 'room-1',
+      discussion_format: 'quick_review' as const,
+      cast_mode: 'smart_pick' as const,
+      planned_turn_count: 2,
+      phase: 'opening',
+    };
+    useEndingRoomStore.getState().setPlanningState(planningState);
+    expect(useEndingRoomStore.getState().planningState).toEqual(planningState);
+
+    useEndingRoomStore.getState().hydrateSnapshot({
+      id: 'room-1',
+      scenario_id: 'scenario-1',
+      anchor_branch_id: 'branch-1',
+      room_type: 'worldline_roundtable',
+      title: 'Worldline Roundtable',
+      language: 'en',
+      status: 'done',
+      current_phase: 'verdict',
+      created_at: '2026-03-29T00:00:00Z',
+      updated_at: '2026-03-29T00:00:04Z',
+      participants: [],
+      threads: [roomThread('thread-room', 'room')],
+      turns: [],
+      result_ready: true,
+    });
+    expect(useEndingRoomStore.getState().planningState).toBeNull();
+
+    useEndingRoomStore.getState().setPlanningState(planningState);
+    expect(useEndingRoomStore.getState().planningState).toBeNull();
+
+    useEndingRoomStore.getState().reset();
+    useEndingRoomStore.getState().setPlanningState(planningState);
+    useEndingRoomStore.getState().setStatus('error', new Error('failed'));
+    expect(useEndingRoomStore.getState().planningState).toBeNull();
+  });
 });

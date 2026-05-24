@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 import app.api.ending_rooms as ending_rooms_api
 from app.main import app
@@ -62,6 +62,34 @@ def _seed_ready_room_fixture() -> dict[str, str]:
             "scenario_id": scenario.id,
             "branch_id": branch.id,
         }
+
+
+def _append_completed_branch(scenario_id: str) -> str:
+    with Session(get_engine()) as session:
+        agent = session.exec(select(Agent).where(Agent.scenario_id == scenario_id)).first()
+        assert agent is not None
+        branch = Branch(
+            scenario_id=scenario_id,
+            title="联盟裂变",
+            status=BranchStatus.COMPLETED,
+            story="另一条世界线让港口联盟转向地方自治。",
+            insight="真正的裂口来自财政解释权外移。",
+        )
+        session.add(branch)
+        session.flush()
+        round_row = Round(branch_id=branch.id, round_number=1)
+        session.add(round_row)
+        session.flush()
+        session.add(
+            AgentMessage(
+                round_id=round_row.id,
+                agent_id=agent.id,
+                content="如果财政解释权外移，联盟会转向自治。",
+                emotion="tense",
+            )
+        )
+        session.commit()
+        return branch.id
 
 
 @pytest.fixture
@@ -159,6 +187,50 @@ async def test_ending_room_background_broadcasts_hybrid_stream_events():
             seen_commits.add(payload["data"]["id"])
         if payload["type"] == "ending_room_turn_delta":
             assert payload["data"]["turn_id"] not in seen_commits
+
+    ending_rooms_api.ending_room_ws_manager._connections.clear()
+
+
+@pytest.mark.asyncio
+async def test_roundtable_background_broadcasts_planning_event_with_ws_meta():
+    fixture = _seed_ready_room_fixture()
+    second_branch_id = _append_completed_branch(fixture["scenario_id"])
+    snapshot, _created = create_ending_room(
+        fixture["scenario_id"],
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[fixture["branch_id"], second_branch_id],
+        selection_recipe="trait_mix",
+        language="zh",
+    )
+
+    ws = AsyncMock()
+    ending_rooms_api.ending_room_ws_manager._connections[snapshot["id"]].append(ws)
+
+    await run_ending_room_background(
+        snapshot["id"],
+        ws_callback=ending_rooms_api.ending_room_ws_manager.broadcast,
+    )
+
+    payloads = [json.loads(call.args[0]) for call in ws.send_text.call_args_list]
+    event_types = [payload["type"] for payload in payloads]
+    planning_payloads = [
+        payload for payload in payloads if payload["type"] == "ending_room_planning"
+    ]
+
+    assert len(planning_payloads) == 1
+    planning = planning_payloads[0]
+    assert planning["meta"]["sequence"] > 0
+    assert planning["meta"]["event_id"] == f"{snapshot['id']}:{planning['meta']['sequence']}"
+    assert event_types.index("status") < event_types.index("ending_room_planning")
+    assert event_types.index("ending_room_planning") < event_types.index("ending_room_turn_start")
+    assert planning["data"] == {
+        "room_id": snapshot["id"],
+        "discussion_format": "clash_mode",
+        "cast_mode": "smart_pick",
+        "planned_turn_count": 4,
+        "phase": "opening",
+    }
 
     ending_rooms_api.ending_room_ws_manager._connections.clear()
 

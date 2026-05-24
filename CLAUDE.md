@@ -117,7 +117,7 @@ cd backend && alembic upgrade head
 ### 核心架构
 - `ending_room_service` 已拆分为子模块包 (`_utils`, `_participants`, `_threads`, `_content`)，修改时注意 re-export 兼容性
 - `worldlineRoundtableStore.ts` 是 `endingRoomStore` 的 re-export，不是 stub
-- 大文件：`EndingChatModal.tsx` (~1866 行)，`WorldlineRoundtableView.tsx` (~2223 行)
+- 大文件：`EndingChatModal.tsx` (~1866 行)，`WorldlineRoundtableView.tsx` (~2385 行)
 - LLM 客户端支持 BYOK，前端通过 `LlmProviderRequestOptions` 传递
 - ChromaDB 双层 memory：scenario-scoped + identity-scoped (`identity_{user_id}`，200 条 FIFO，串行化锁)
 - Agent continuity key：SHA-256(role+persona[:30])[:16]，跨场景身份匹配
@@ -200,6 +200,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
+| 05-24 | Roundtable Overhaul 收口：`worldline_roundtable` 新增 `discussion_format / cast_mode` 合同，保留旧 `selection_recipe` fallback；后端 generation version 升到 5，format/cast 进入 `config_json` 与 room scope，非 roundtable 带新字段返回 422；前端新增 `FormatSelector / PlanningSkeletonView / PhaseInsightTimeline`，WS 处理瞬时 `ending_room_planning` 并在 durable state 到达后清 skeleton；E2E 脚本补 UI/request/snapshot/result 的 format/cast 断言。验证：backend full `3374 passed, 6 skipped`，frontend full `212 files / 2374 tests passed`，tsc/lint/build/i18n `2841/2841` 通过，Roundtable Chromium desktop/mobile、Chromium en、Firefox desktop、WebKit desktop deterministic E2E 通过 |
 | 05-22 | Capability gate / 回溯干预收口：`/api/scenario/{id}/intervene/retrospective` 补 `FEATURE_COUNTERFACTUAL_REPLAY` 后端 gate，`InterventionModal` 在 capability 关闭或探针失败时禁用回溯模式；`useCapabilityCheck` 增加 5 分钟 TTL、共享 in-flight promise 和最多 60 秒退避；`CausalReviewView` 与 `TimelineGalaxy` 在 capability 探针失败时显示 Retry，不再把探针失败误当成 feature disabled；`PostVerdictPanel` 的 analyst/survey/agent conversation 子面板补 inline gate、ARIA tabpanel 占位和禁用态 CSS，禁用时不挂载对应 SSE。验证：backend full `3286 passed, 11 skipped`，backend related `130 passed`，frontend full `206 files / 2318 tests passed`，tsc/eslint/i18n parity `2791/2791` 通过，Chromium/Firefox/WebKit capability browser spot-check 通过 |
 | 05-21 | Pixel Theater Overhaul 收口：`HudOverlay` 删除，Theater 控制拆成 `src/pages/sim/*`，外壳切到 Light Theater；Phaser backing store 按 DPR 初始化并由 Boot/World 场景读取 DPR 缩放；React `BubbleOverlay` 通过 `viz:sprite_positions` 跟随 sprite，完成态 Theater 的玩法卡入口恢复为只读回看。验证：frontend full `202 files / 2243 tests`，`tsc/lint/build` 通过，i18n `2757/2757`，Chrome DevTools 完成态 Theater 玩法卡 spot-check console 0 error |
 | 05-21 | 因果图谱 UX 修复：结果页导航不再携带 `branch_id`，默认展示全部分支完整图谱（`ExploreDeeperBridge` + `ResultHeader` 链接修复）；边标签 i18n 补齐，`triggered fork` 等后端原始 label 通过 `BACKEND_CAUSAL_EDGE_LABEL_I18N` 映射表走 i18n 翻译（中文 `触发分支`）。验证：CausalReviewView 80 tests passed，ResultView 79 tests passed，tsc/build 通过 |

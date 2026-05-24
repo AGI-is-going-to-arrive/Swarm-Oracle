@@ -107,9 +107,9 @@ source .venv/bin/activate
 python -m pytest tests/test_session_auth.py tests/test_ending_room_service.py tests/test_llm_client.py tests/test_web_context.py tests/test_api.py -q
 ```
 
-- Latest local backend verification for intervention system upgrade hardening:
-  - `python -m pytest tests/`: `3329 passed, 6 skipped`
-  - `ruff check app/ tests/`: pass
+- Latest local backend verification for Roundtable Overhaul:
+  - `python -m pytest tests/ --tb=short -q`: `3374 passed, 6 skipped`
+  - `python -m ruff check app`: pass
 - Latest targeted Campaign/profile label verification:
   - `python -m pytest tests/test_gameplay_contract.py tests/test_gameplay_contract_sync.py tests/test_intervention.py tests/test_interventions.py tests/test_campaign_api.py tests/test_campaign_service.py -q --tb=short`: `154 passed`
   - `ruff check app/services/daily_challenges.py tests/test_gameplay_contract.py tests/test_interventions.py`: pass

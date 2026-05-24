@@ -568,7 +568,7 @@ def test_worldline_roundtable_selected_representatives_hash_is_branch_scoped():
     assert first_snapshot["id"] == second_snapshot["id"]
 
 
-def test_worldline_roundtable_reuse_updates_selection_recipe_metadata():
+def test_worldline_roundtable_contract_change_creates_new_generation_scope():
     scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
 
     snapshot, created = create_ending_room(
@@ -580,7 +580,7 @@ def test_worldline_roundtable_reuse_updates_selection_recipe_metadata():
             {"branch_id": branch_a_id, "agent_id": shared_agent_id},
             {"branch_id": branch_b_id, "agent_id": shared_agent_id},
         ],
-        selection_recipe="representative",
+        selection_recipe="manual_shortlist",
         language="zh",
     )
     reused_snapshot, reused_created = create_ending_room(
@@ -597,9 +597,98 @@ def test_worldline_roundtable_reuse_updates_selection_recipe_metadata():
     )
 
     assert created is True
-    assert reused_created is False
-    assert snapshot["id"] == reused_snapshot["id"]
+    assert reused_created is True
+    assert snapshot["id"] != reused_snapshot["id"]
     assert reused_snapshot["selection_recipe"] == "trait_mix"
+    assert reused_snapshot["discussion_format"] == "clash_mode"
+    assert reused_snapshot["cast_mode"] == "smart_pick"
+
+
+def test_worldline_roundtable_persists_new_contract_fields_and_preserves_recipe():
+    scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        selected_representatives=[
+            {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+            {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+        ],
+        selection_recipe="manual_shortlist",
+        discussion_format="quick_review",
+        cast_mode="custom",
+        language="zh",
+    )
+
+    assert created is True
+    assert snapshot["selection_recipe"] == "manual_shortlist"
+    assert snapshot["discussion_format"] == "quick_review"
+    assert snapshot["cast_mode"] == "custom"
+
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, snapshot["id"])
+        assert room is not None
+        assert (room.config_json or {}).get("selection_recipe") == "manual_shortlist"
+        assert (room.config_json or {}).get("discussion_format") == "quick_review"
+        assert (room.config_json or {}).get("cast_mode") == "custom"
+        assert (room.config_json or {}).get("generation_version") == 5
+
+
+def test_worldline_roundtable_legacy_custom_recipe_requires_full_representative_selection():
+    scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
+
+    with pytest.raises(EndingRoomServiceError) as exc_info:
+        create_ending_room(
+            scenario_id,
+            room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+            anchor_branch_id=None,
+            selected_branch_ids=[branch_a_id, branch_b_id],
+            selected_representatives=[
+                {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+            ],
+            selection_recipe="manual_shortlist",
+            language="zh",
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.code == "ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID"
+
+
+def test_load_roundtable_snapshot_derives_new_contract_fields_for_legacy_room():
+    scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_a_id, branch_b_id],
+        selected_representatives=[
+            {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+            {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+        ],
+        selection_recipe="manual_shortlist",
+        language="zh",
+    )
+    assert created is True
+
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, snapshot["id"])
+        assert room is not None
+        room.config_json = {
+            key: value
+            for key, value in (room.config_json or {}).items()
+            if key not in {"discussion_format", "cast_mode"}
+        }
+        session.add(room)
+        session.commit()
+
+    legacy_snapshot = load_ending_room_snapshot(snapshot["id"])
+
+    assert legacy_snapshot["selection_recipe"] == "manual_shortlist"
+    assert legacy_snapshot["discussion_format"] == "deep_dive"
+    assert legacy_snapshot["cast_mode"] == "custom"
 
 
 def test_worldline_roundtable_does_not_reuse_legacy_generation_room():
@@ -650,7 +739,8 @@ def test_worldline_roundtable_does_not_reuse_legacy_generation_room():
     with Session(get_engine()) as session:
         regenerated_room = session.get(EndingRoom, regenerated_snapshot["id"])
         assert regenerated_room is not None
-        assert (regenerated_room.config_json or {}).get("generation_version") == 4
+        assert (regenerated_room.config_json or {}).get("generation_version") == 5
+        assert regenerated_room.scope_fingerprint != f"legacy-scope-{legacy_snapshot['id']}"
 
 
 def test_worldline_roundtable_trait_mix_marks_selection_reason():
@@ -802,6 +892,162 @@ def test_worldline_roundtable_background_emits_expert_witness_testimony():
     assert len(witness_turns) == 1
     assert witness_turns[0]["phase"] == "crossfire"
     assert "证人" in witness_turns[0]["content"]
+
+
+def test_roundtable_build_room_plan_respects_discussion_format_without_new_phases():
+    scenario_id, branch_a_id, branch_b_id, shared_agent_id = _seed_roundtable_reselection_world()
+    with Session(get_engine()) as session:
+        witness_agent = session.exec(
+            select(Agent).where(
+                Agent.scenario_id == scenario_id,
+                Agent.name == "秩序督军",
+            )
+        ).first()
+        assert witness_agent is not None
+
+    allowed_phases = {
+        EndingRoomPhase.OPENING,
+        EndingRoomPhase.CROSSFIRE,
+        EndingRoomPhase.CLOSING,
+        EndingRoomPhase.VERDICT,
+    }
+    cases = [
+        ("deep_dive", "custom", [EndingRoomPhase.OPENING, EndingRoomPhase.OPENING, EndingRoomPhase.CROSSFIRE, EndingRoomPhase.CLOSING, EndingRoomPhase.VERDICT]),  # noqa: E501
+        ("quick_review", "custom", [EndingRoomPhase.OPENING, EndingRoomPhase.OPENING, EndingRoomPhase.VERDICT]),  # noqa: E501
+        ("clash_mode", "smart_pick", [EndingRoomPhase.OPENING, EndingRoomPhase.OPENING, EndingRoomPhase.CLOSING, EndingRoomPhase.VERDICT]),  # noqa: E501
+    ]
+
+    for discussion_format, cast_mode, expected_phases in cases:
+        selected_representatives = (
+            [
+                {"branch_id": branch_a_id, "agent_id": shared_agent_id},
+                {"branch_id": branch_b_id, "agent_id": shared_agent_id},
+            ]
+            if cast_mode == "custom"
+            else []
+        )
+        snapshot, created = create_ending_room(
+            scenario_id,
+            room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+            anchor_branch_id=None,
+            selected_branch_ids=[branch_a_id, branch_b_id],
+            selected_representatives=selected_representatives,
+            selected_witness={"branch_id": branch_a_id, "agent_id": witness_agent.id},
+            selection_recipe="witness_augmented",
+            discussion_format=discussion_format,
+            cast_mode=cast_mode,
+            language="zh",
+        )
+        assert created is True
+
+        with Session(get_engine()) as session:
+            room = session.get(EndingRoom, snapshot["id"])
+            assert room is not None
+            participants = session.exec(
+                select(EndingRoomParticipant)
+                .where(EndingRoomParticipant.room_id == room.id)
+                .order_by(EndingRoomParticipant.id)
+            ).all()
+            planned_turns, result = _build_room_plan(session, room, participants)
+
+        assert [turn["phase"] for turn in planned_turns] == expected_phases
+        assert {turn["phase"] for turn in planned_turns} <= allowed_phases
+        assert {
+            insight["phase"] for insight in result["phase_insights"]
+        } <= {phase.value for phase in allowed_phases}
+        if discussion_format == "clash_mode":
+            opening_turns = [
+                turn for turn in planned_turns if turn["phase"] == EndingRoomPhase.OPENING
+            ]
+            assert opening_turns
+            assert all(turn.get("interaction_style") == "challenge" for turn in opening_turns)
+        assert "interaction_style" not in result
+
+
+def test_worldline_roundtable_clash_mode_falls_back_from_cjk_stance_to_impact():
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    stance_agent_id = agent_ids[1]
+
+    with Session(get_engine()) as session:
+        first_agent = session.get(Agent, agent_ids[0])
+        stance_agent = session.get(Agent, stance_agent_id)
+        round_row = session.exec(select(Round).where(Round.branch_id == branch_id)).first()
+        assert first_agent is not None
+        assert stance_agent is not None
+        assert round_row is not None
+        first_agent.stance = ""
+        stance_agent.stance = "反对继续集权，主张先稳住边军与粮道"
+        session.add(first_agent)
+        session.add(stance_agent)
+        session.add(
+            AgentMessage(
+                round_id=round_row.id,
+                agent_id=stance_agent_id,
+                content="我再次强调边军与粮道才是当前压力点。",
+                emotion="focused",
+            )
+        )
+        session.commit()
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_id],
+        discussion_format="clash_mode",
+        cast_mode="smart_pick",
+        language="zh",
+    )
+
+    assert created is True
+    representative = next(
+        participant
+        for participant in snapshot["participants"]
+        if participant["role_slot"] == "representative"
+    )
+    assert representative["source_agent_id"] == stance_agent_id
+    assert (
+        representative["persona_snapshot_json"]["agent_stance"]
+        == "反对继续集权，主张先稳住边军与粮道"
+    )
+
+
+def test_worldline_roundtable_custom_cast_keeps_user_selected_representative_in_clash_mode():
+    scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world()
+    selected_agent_id = agent_ids[0]
+
+    with Session(get_engine()) as session:
+        selected_agent = session.get(Agent, selected_agent_id)
+        stance_agent = session.get(Agent, agent_ids[1])
+        assert selected_agent is not None
+        assert stance_agent is not None
+        selected_agent.stance = ""
+        stance_agent.stance = "反对继续集权，主张先稳住边军与粮道"
+        session.add(selected_agent)
+        session.add(stance_agent)
+        session.commit()
+
+    snapshot, created = create_ending_room(
+        scenario_id,
+        room_type=EndingRoomType.WORLDLINE_ROUNDTABLE,
+        anchor_branch_id=None,
+        selected_branch_ids=[branch_id],
+        selected_representatives=[
+            {"branch_id": branch_id, "agent_id": selected_agent_id},
+        ],
+        discussion_format="clash_mode",
+        cast_mode="custom",
+        language="zh",
+    )
+
+    assert created is True
+    representative = next(
+        participant
+        for participant in snapshot["participants"]
+        if participant["role_slot"] == "representative"
+    )
+    assert representative["source_agent_id"] == selected_agent_id
+    assert representative["persona_snapshot_json"]["selection_reason"] == "user_selected"
 
 
 def test_roundtable_opening_anchor_varies_by_role_hint():

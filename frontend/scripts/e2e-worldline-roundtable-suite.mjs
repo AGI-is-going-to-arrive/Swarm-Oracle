@@ -32,6 +32,10 @@ const MODE_EXPERT_WITNESS_PATTERN = /Invite expert|Expert witness|请专家|专�
 const MODE_TRAIT_MIX_PATTERN = /Clash mix|Trait mix|观点对冲|冲突人设混编/i;
 const MODE_FAULT_LINE_FIRST_PATTERN = /Biggest split first|Fault line first|分歧优先|先看最大分歧/i;
 const MODE_WITNESS_AUGMENTED_PATTERN = /Auto-fill|Witness augmented|自动补人|自动增补证人/i;
+const FORMAT_DEEP_DIVE_PATTERN = /Deep Dive|深度剖析/i;
+const FORMAT_QUICK_REVIEW_PATTERN = /Quick Review|快速过审/i;
+const FORMAT_CLASH_MODE_PATTERN = /Clash Mode|交锋模式/i;
+const CAST_SMART_PICK_PATTERN = /Smart Pick|智能选角/i;
 const HOTSEAT_MODE_PATTERN = /Question one rep|Representative hotseat|单独追问|点名代表|代表热座/i;
 const NEW_THREAD_BUTTON_PATTERN = /Start anchored thread|New topic|另开线程|新开话题/i;
 const CURRENT_ANCHOR_THREAD_BUTTON_PATTERN = /Start thread from current anchor|New topic from here|从当前锚点开始线程|从当前锚点发起线程|按当前锚点另开线程|就这个点新开话题/i;
@@ -192,16 +196,60 @@ async function collectDesktopDragDiagnostics(page, sourceHandle, targetSlot, tar
 }
 
 async function keyboardDropCandidateToSeat(page, sourceCard, targetSlot, expectedName, targetTestId) {
+  const sourceHandle = await sourceCard.elementHandle();
+  const targetHandle = await targetSlot.elementHandle();
+  if (sourceHandle && targetHandle) {
+    await centerDragPairInViewport(page, sourceHandle, targetHandle);
+  }
+  const sourceBox = await sourceCard.boundingBox().catch(() => null);
+  const targetBox = await targetSlot.boundingBox().catch(() => null);
+  const sourceCenter = sourceBox
+    ? { x: sourceBox.x + sourceBox.width / 2, y: sourceBox.y + sourceBox.height / 2 }
+    : null;
+  const targetCenter = targetBox
+    ? { x: targetBox.x + targetBox.width / 2, y: targetBox.y + targetBox.height / 2 }
+    : null;
+  const deltaX = targetCenter && sourceCenter ? targetCenter.x - sourceCenter.x : 0;
+  const deltaY = targetCenter && sourceCenter ? targetCenter.y - sourceCenter.y : -1;
+  const horizontalKey = deltaX < 0 ? "ArrowLeft" : "ArrowRight";
+  const verticalKey = deltaY < 0 ? "ArrowUp" : "ArrowDown";
+  const horizontalSteps = Math.min(120, Math.max(8, Math.ceil(Math.abs(deltaX) / 20) + 8));
+  const verticalSteps = Math.min(160, Math.max(12, Math.ceil(Math.abs(deltaY) / 20) + 12));
+
   await sourceCard.scrollIntoViewIfNeeded().catch(() => {});
   await sourceCard.focus();
   await page.keyboard.press("Space");
 
   let overValid = false;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    await page.keyboard.press("ArrowUp");
+  const pressAndCheck = async (key) => {
+    await page.keyboard.press(key);
     await page.waitForTimeout(60);
     overValid = await targetSlot.evaluate((node) => node.classList.contains("worldline-roundtable-seating-slot--over-valid")).catch(() => false);
+    return overValid;
+  };
+
+  for (let attempt = 0; attempt < horizontalSteps; attempt += 1) {
+    if (await pressAndCheck(horizontalKey)) {
+      break;
+    }
+  }
+  for (let attempt = 0; !overValid && attempt < verticalSteps; attempt += 1) {
+    if (await pressAndCheck(verticalKey)) {
+      break;
+    }
+  }
+  for (let attempt = 0; !overValid && attempt < 60; attempt += 1) {
+    const key = attempt % 2 === 0 ? horizontalKey : verticalKey;
+    if (await pressAndCheck(key)) {
+      break;
+    }
+  }
+  for (let attempt = 0; !overValid && attempt < 60; attempt += 1) {
+    const key = attempt % 2 === 0 ? verticalKey : horizontalKey;
     if (overValid) {
+      break;
+    }
+    if (await pressAndCheck(key)) {
       break;
     }
   }
@@ -300,6 +348,249 @@ async function assertRoomLanguage(backendUrl, roomId, locale, label) {
     throw new Error(`${label} expected room.language=${locale}, got ${snapshot?.language ?? "null"}`);
   }
   return snapshot.language;
+}
+
+async function selectRoundtableRadio(page, namePattern, label) {
+  const radio = page.getByRole("radio", { name: namePattern }).first();
+  await radio.waitFor({ state: "visible", timeout: 10000 });
+  await radio.check().catch(async () => {
+    await clickActionable(radio, label);
+  });
+}
+
+function assertRoundtableContractPayload(payload, { discussionFormat, castMode }, label) {
+  const controls = payload?.page?.controls;
+  if (controls?.discussion_format !== discussionFormat) {
+    throw new Error(`${label} expected discussion_format=${discussionFormat}, got ${controls?.discussion_format ?? "null"}`);
+  }
+  if (controls?.cast_mode !== castMode) {
+    throw new Error(`${label} expected cast_mode=${castMode}, got ${controls?.cast_mode ?? "null"}`);
+  }
+  return {
+    discussionFormat: controls.discussion_format,
+    castMode: controls.cast_mode,
+  };
+}
+
+async function assertBackendRoundtableContract(backendUrl, roomId, { discussionFormat, castMode }, label) {
+  const snapshot = await fetchJson(`${backendUrl}/api/ending-room/${roomId}`);
+  if (snapshot?.discussion_format !== discussionFormat) {
+    throw new Error(`${label} expected backend discussion_format=${discussionFormat}, got ${snapshot?.discussion_format ?? "null"}`);
+  }
+  if (snapshot?.cast_mode !== castMode) {
+    throw new Error(`${label} expected backend cast_mode=${castMode}, got ${snapshot?.cast_mode ?? "null"}`);
+  }
+  return {
+    discussionFormat: snapshot.discussion_format,
+    castMode: snapshot.cast_mode,
+  };
+}
+
+function buildFixtureRoundtablePayload({
+  scenarioId,
+  roomId,
+  body,
+  locale,
+}) {
+  const now = new Date().toISOString();
+  const selectedBranchIds = Array.isArray(body.selected_branch_ids) && body.selected_branch_ids.length > 0
+    ? body.selected_branch_ids
+    : ["fixture-branch-a", "fixture-branch-b"];
+  const representatives = selectedBranchIds.map((branchId, index) => {
+    const selected = Array.isArray(body.selected_representatives)
+      ? body.selected_representatives.find((item) => item?.branch_id === branchId)
+      : null;
+    return {
+      id: `${roomId}-rep-${index + 1}`,
+      room_id: roomId,
+      role_slot: "representative",
+      display_name: `Fixture Representative ${index + 1}`,
+      source_branch_id: branchId,
+      source_agent_id: selected?.agent_id ?? `fixture-agent-${index + 1}`,
+      persona_snapshot_json: {
+        agent_role: "Fixture",
+        selection_reason: "user_selected",
+      },
+    };
+  });
+  const archivist = {
+    id: `${roomId}-archivist`,
+    room_id: roomId,
+    role_slot: "archivist",
+    display_name: locale === "zh" ? "档案官" : "Archivist",
+  };
+  const thread = {
+    id: `${roomId}-thread`,
+    room_id: roomId,
+    title: locale === "zh" ? "主圆桌" : "Main table",
+    mode: "room",
+    interaction_mode: "auto_recap",
+    participant_set_hash: `${roomId}-hash`,
+    memory_partition_id: `${roomId}-partition`,
+    created_at: now,
+    updated_at: now,
+  };
+  const turn = {
+    id: `${roomId}-turn-1`,
+    room_id: roomId,
+    thread_id: thread.id,
+    sequence: 1,
+    phase: "opening",
+    participant_id: representatives[0]?.id ?? archivist.id,
+    content: locale === "zh" ? "fixture 圆桌已就绪。" : "Fixture roundtable is ready.",
+    emotion: "focused",
+    source: "auto_recap",
+    interaction_mode: "auto_recap",
+    cited_branch_id: selectedBranchIds[0] ?? null,
+    cited_refs_json: [],
+    created_at: now,
+  };
+  const snapshot = {
+    id: roomId,
+    scenario_id: scenarioId,
+    anchor_branch_id: null,
+    room_type: "worldline_roundtable",
+    discussion_format: body.discussion_format ?? "deep_dive",
+    cast_mode: body.cast_mode ?? "smart_pick",
+    selection_recipe: body.selection_recipe ?? "representative",
+    title: locale === "zh" ? "世界线圆桌" : "Worldline Roundtable",
+    language: locale,
+    status: "done",
+    current_phase: "verdict",
+    created_at: now,
+    updated_at: now,
+    participants: [...representatives, archivist],
+    threads: [thread],
+    turns: [turn],
+    result_ready: true,
+  };
+  return {
+    ...snapshot,
+    result: {
+      summary: locale === "zh" ? "Fixture 结论。" : "Fixture summary.",
+      archivist_note: locale === "zh" ? "Fixture 主持备注。" : "Fixture host note.",
+      phase_insights: [],
+      supporting_turns: [],
+    },
+  };
+}
+
+async function exerciseFormatSelectorFixture(context, baseUrl, scenarioId, outputDir, locale) {
+  const page = await context.newPage();
+  const cases = [];
+  let latestPayload = null;
+  let latestRequestBody = null;
+
+  await page.route("**/api/scenario/*/ending-room", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    const body = route.request().postDataJSON();
+    latestRequestBody = body;
+    const roomId = `fixture-roundtable-${cases.length + 1}`;
+    latestPayload = buildFixtureRoundtablePayload({
+      scenarioId,
+      roomId,
+      body,
+      locale,
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(latestPayload),
+    });
+  });
+
+  await page.route("**/api/ending-room/fixture-roundtable-**", async (route) => {
+    if (!latestPayload) {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(latestPayload),
+    });
+  });
+
+  const runCase = async ({
+    fileLabel,
+    formatButton,
+    expectedFormat,
+    castButton = CAST_SMART_PICK_PATTERN,
+    expectedCast = "smart_pick",
+  }) => {
+    latestPayload = null;
+    latestRequestBody = null;
+    const resultUrl = `${baseUrl}/result/${scenarioId}`;
+    await gotoWithRetry(page, resultUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+    await clickActionable(page.getByRole("button", {
+      name: normalizeLocale(locale) === "en" ? /Start Roundtable/i : /Start Roundtable|开始圆桌|发起圆桌/i,
+    }).first(), `${fileLabel} roundtable entry CTA`);
+    await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
+    await selectRoundtableRadio(page, formatButton, `${fileLabel} format`);
+    await selectRoundtableRadio(page, castButton, `${fileLabel} cast`);
+    await clickActionable(page.getByRole("button", {
+      name: normalizeLocale(locale) === "en"
+        ? /Open with selected representatives|Open this lineup/i
+        : /Open with selected representatives|Open this lineup|以当前代表开桌|按当前代表开桌|按这套代表开桌/i,
+    }).first(), `${fileLabel} roundtable launch`);
+    const state = await waitForAutomation(
+      page,
+      (payload) => payload.page?.kind === "worldline_roundtable"
+        && payload.page?.controls?.discussion_format === expectedFormat
+        && payload.page?.controls?.cast_mode === expectedCast
+        && payload.page?.controls?.has_result === true,
+      15000,
+      `${fileLabel} fixture roundtable contract`,
+    );
+    if (latestRequestBody?.discussion_format !== expectedFormat || latestRequestBody?.cast_mode !== expectedCast) {
+      throw new Error(`${fileLabel} fixture request did not send format/cast`);
+    }
+    if (latestPayload?.discussion_format !== expectedFormat || latestPayload?.cast_mode !== expectedCast) {
+      throw new Error(`${fileLabel} fixture response did not preserve format/cast`);
+    }
+    const requestBody = latestRequestBody
+      ? {
+          discussion_format: latestRequestBody.discussion_format,
+          cast_mode: latestRequestBody.cast_mode,
+          selection_recipe: latestRequestBody.selection_recipe,
+        }
+      : null;
+    await saveScreenshot(page, path.join(outputDir, `desktop-roundtable-format-${fileLabel}.png`));
+    const result = {
+      fileLabel,
+      state,
+      requestBody,
+      contract: assertRoundtableContractPayload(
+        state,
+        { discussionFormat: expectedFormat, castMode: expectedCast },
+        `${fileLabel} fixture roundtable contract`,
+      ),
+    };
+    writeJson(path.join(outputDir, `desktop-roundtable-format-${fileLabel}.json`), result);
+    cases.push(result);
+  };
+
+  await runCase({
+    fileLabel: "deep-dive",
+    formatButton: FORMAT_DEEP_DIVE_PATTERN,
+    expectedFormat: "deep_dive",
+  });
+  await runCase({
+    fileLabel: "quick-review",
+    formatButton: FORMAT_QUICK_REVIEW_PATTERN,
+    expectedFormat: "quick_review",
+  });
+  await runCase({
+    fileLabel: "clash-mode",
+    formatButton: FORMAT_CLASH_MODE_PATTERN,
+    expectedFormat: "clash_mode",
+  });
+
+  await page.close();
+  return cases;
 }
 
 function collectSummaryFiles(rootDir) {
@@ -481,6 +772,8 @@ async function waitForLiveRoundtableReady(page, {
   expectedQuestionAnchorIds = null,
   expectedAnchorKind = null,
   expectedInteractionMode = null,
+  expectedDiscussionFormat = null,
+  expectedCastMode = null,
   timeout = 10000,
   label = "roundtable live replay preflight",
 } = {}) {
@@ -492,6 +785,8 @@ async function waitForLiveRoundtableReady(page, {
       expectedQuestionAnchorIds,
       expectedAnchorKind,
       expectedInteractionMode,
+      expectedDiscussionFormat,
+      expectedCastMode,
     }),
     timeout,
     label,
@@ -504,6 +799,8 @@ async function waitForReadonlyRoundtableReplayVisible(page, {
   expectedQuestionAnchorIds = null,
   expectedAnchorKind = null,
   expectedInteractionMode = null,
+  expectedDiscussionFormat = null,
+  expectedCastMode = null,
   timeout = 20000,
   label = "roundtable replay readonly state",
 } = {}) {
@@ -516,6 +813,8 @@ async function waitForReadonlyRoundtableReplayVisible(page, {
       expectedQuestionAnchorIds,
       expectedAnchorKind,
       expectedInteractionMode,
+      expectedDiscussionFormat,
+      expectedCastMode,
     }),
     timeout,
     label,
@@ -553,7 +852,15 @@ async function waitForCapturedClipboardUrl(page, label, timeout = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     const url = await readCapturedClipboard(page);
-    if (typeof url === "string" && (url.includes("roomShare=") || url.includes("roomLocal="))) {
+    if (
+      typeof url === "string"
+      && (
+        url.includes("roomShare=")
+        || url.includes("roomLocal=")
+        || url.includes("share=")
+        || url.includes("local=")
+      )
+    ) {
       return url;
     }
     await page.waitForTimeout(250);
@@ -1280,7 +1587,6 @@ async function keyboardReseatRoundtable(page) {
   const sourceCard = page
     .locator(".worldline-roundtable-picker-branch.is-active .worldline-roundtable-picker-card:not(.is-selected):not([disabled])")
     .first();
-  const targetSlot = page.locator('[data-testid^="roundtable-seat-slot-"]').first();
 
   if (!(await sourceCard.isVisible().catch(() => false))) {
     throw new Error("Keyboard reseat could not find a non-selected candidate");
@@ -1291,29 +1597,22 @@ async function keyboardReseatRoundtable(page) {
     throw new Error("Keyboard reseat could not resolve candidate name");
   }
 
-  await sourceCard.scrollIntoViewIfNeeded().catch(() => {});
-  await sourceCard.focus();
-  await page.keyboard.press("Space");
+  const sourceBranchId = await sourceCard.getAttribute("data-branch-id");
+  const targetTestId = resolveRoundtableDragTargetTestId(sourceBranchId);
+  const targetSlot = page.getByTestId(targetTestId).first();
+  await targetSlot.waitFor({ state: "visible", timeout: 10000 });
 
-  let overValid = false;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    await page.keyboard.press("ArrowUp");
-    await page.waitForTimeout(60);
-    overValid = await targetSlot.evaluate((node) => node.classList.contains("worldline-roundtable-seating-slot--over-valid")).catch(() => false);
-    if (overValid) {
-      break;
-    }
+  let slotName = "";
+  try {
+    slotName = await keyboardDropCandidateToSeat(page, sourceCard, targetSlot, nextRepresentative, targetTestId);
+  } catch {
+    const sourceHandle = await sourceCard.elementHandle();
+    const diagnostics = sourceHandle
+      ? await collectDesktopDragDiagnostics(page, sourceHandle, targetSlot, targetTestId)
+      : { targetTestId, sourceHandle: null };
+    throw new Error(`Keyboard drag never reached a valid seat; diagnostics=${JSON.stringify(diagnostics)}`);
   }
 
-  if (!overValid) {
-    await page.keyboard.press("Escape").catch(() => {});
-    throw new Error("Keyboard drag never reached a valid seat");
-  }
-
-  await page.keyboard.press("Space");
-  await page.waitForTimeout(200);
-
-  const slotName = ((await targetSlot.locator("strong").innerText().catch(() => "")) || "").trim();
   if (slotName !== nextRepresentative) {
     throw new Error(`Keyboard drag-and-drop did not update the seat occupant (expected ${nextRepresentative}, got ${slotName || "empty"})`);
   }
@@ -1480,6 +1779,8 @@ async function reopenWithSelectionMode(page, {
     nextRoomId: state?.scene?.room_id ?? null,
     selectionMode: state?.page?.controls?.selection_mode ?? null,
     selectedBranchCount: state?.page?.controls?.selected_branch_count ?? null,
+    discussionFormat: state?.page?.controls?.discussion_format ?? null,
+    castMode: state?.page?.controls?.cast_mode ?? null,
     hasWitness: state?.page?.controls?.has_witness ?? false,
   };
 }
@@ -1489,8 +1790,32 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
   const ready = await openRoundtable(page, baseUrl, backendUrl, scenarioId, outputDir, locale);
   const uiLocale = await assertUiLocale(page, locale, "roundtable desktop ui");
   const roomLanguage = await assertRoomLanguage(backendUrl, ready?.scene?.room_id, locale, "roundtable desktop room");
+  const defaultContract = assertRoundtableContractPayload(
+    ready,
+    { discussionFormat: "deep_dive", castMode: "smart_pick" },
+    "roundtable desktop default contract",
+  );
+  const defaultBackendContract = await assertBackendRoundtableContract(
+    backendUrl,
+    ready?.scene?.room_id,
+    { discussionFormat: "deep_dive", castMode: "smart_pick" },
+    "roundtable desktop default contract",
+  );
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-ready.png"));
-  writeJson(path.join(outputDir, "desktop-roundtable-ready.json"), { ready, uiLocale, roomLanguage });
+  writeJson(path.join(outputDir, "desktop-roundtable-ready.json"), {
+    ready,
+    uiLocale,
+    roomLanguage,
+    defaultContract,
+    defaultBackendContract,
+  });
+  const formatSelectorCases = await exerciseFormatSelectorFixture(
+    context,
+    baseUrl,
+    scenarioId,
+    outputDir,
+    locale,
+  );
 
   const dragReseated = await dragReseatRoundtable(page);
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-drag-reseated.png"));
@@ -1704,6 +2029,7 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
     roomLanguage,
     scenarioId,
     ready,
+    formatSelectorCases,
     dragReseated,
     keyboardReseated,
     reseated,
@@ -1739,9 +2065,27 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
   const ready = await openRoundtable(page, baseUrl, backendUrl, scenarioId, outputDir, locale);
   const uiLocale = await assertUiLocale(page, locale, "roundtable mobile ui");
   const roomLanguage = await assertRoomLanguage(backendUrl, ready?.scene?.room_id, locale, "roundtable mobile room");
+  const defaultContract = assertRoundtableContractPayload(
+    ready,
+    { discussionFormat: "deep_dive", castMode: "smart_pick" },
+    "roundtable mobile default contract",
+  );
+  const defaultBackendContract = await assertBackendRoundtableContract(
+    backendUrl,
+    ready?.scene?.room_id,
+    { discussionFormat: "deep_dive", castMode: "smart_pick" },
+    "roundtable mobile default contract",
+  );
   const fit = await captureMobileFit(page);
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-ready.png"));
-  writeJson(path.join(outputDir, "mobile-roundtable-ready.json"), { ready, fit, uiLocale, roomLanguage });
+  writeJson(path.join(outputDir, "mobile-roundtable-ready.json"), {
+    ready,
+    fit,
+    uiLocale,
+    roomLanguage,
+    defaultContract,
+    defaultBackendContract,
+  });
 
   const clickReseated = await clickReseatRoundtable(page);
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-click-reseated.png"));

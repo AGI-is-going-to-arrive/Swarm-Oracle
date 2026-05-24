@@ -184,7 +184,104 @@ from ._utils import (  # noqa: F401 — re-exported
 logger = logging.getLogger(__name__)
 _ENDING_ROOM_LOCK_REFRESH_FRACTION = 0.33
 _ENDING_ROOM_LOCK_LOSS_POLL_SECONDS = 0.01
-_ENDING_ROOM_GENERATION_VERSION = 4
+_ENDING_ROOM_GENERATION_VERSION = 5
+_ROUNDTABLE_DISCUSSION_FORMATS = {"deep_dive", "quick_review", "clash_mode"}
+_ROUNDTABLE_CAST_MODES = {"smart_pick", "custom"}
+_ROUNDTABLE_RECIPE_CONTRACTS = {
+    "representative": ("deep_dive", "smart_pick"),
+    "manual_shortlist": ("deep_dive", "custom"),
+    "expert_witness": ("deep_dive", "custom"),
+    "trait_mix": ("clash_mode", "smart_pick"),
+    "fault_line_first": ("clash_mode", "smart_pick"),
+    "witness_augmented": ("deep_dive", "custom"),
+}
+
+
+def _normalize_contract_choice(
+    value: Any,
+    *,
+    field_name: str,
+    allowed_values: set[str],
+    strict: bool,
+) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    if cleaned in allowed_values:
+        return cleaned
+    if strict:
+        raise EndingRoomServiceError(
+            422,
+            "ENDING_ROOM_ROUNDTABLE_CONTRACT_INVALID",
+            f"{field_name} is not supported",
+        )
+    return None
+
+
+def _normalize_selection_recipe(value: Any, *, strict: bool) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    if cleaned in _ROUNDTABLE_RECIPE_CONTRACTS:
+        return cleaned
+    if strict:
+        raise EndingRoomServiceError(
+            422,
+            "ENDING_ROOM_SELECTION_RECIPE_INVALID",
+            "selection_recipe is not supported",
+        )
+    return None
+
+
+def _normalize_roundtable_contract(
+    *,
+    room_type: EndingRoomType,
+    selection_recipe: Any,
+    discussion_format: Any,
+    cast_mode: Any,
+    selected_representatives: list[dict[str, Any]] | None = None,
+    selected_witness: dict[str, Any] | None = None,
+    strict: bool = True,
+) -> tuple[str | None, str | None, str | None]:
+    normalized_recipe = _normalize_selection_recipe(selection_recipe, strict=strict)
+    normalized_format = _normalize_contract_choice(
+        discussion_format,
+        field_name="discussion_format",
+        allowed_values=_ROUNDTABLE_DISCUSSION_FORMATS,
+        strict=strict,
+    )
+    normalized_cast = _normalize_contract_choice(
+        cast_mode,
+        field_name="cast_mode",
+        allowed_values=_ROUNDTABLE_CAST_MODES,
+        strict=strict,
+    )
+    if room_type != EndingRoomType.WORLDLINE_ROUNDTABLE:
+        if (normalized_format is not None or normalized_cast is not None) and strict:
+            raise EndingRoomServiceError(
+                422,
+                "ENDING_ROOM_ROUNDTABLE_CONTRACT_INVALID",
+                "discussion_format and cast_mode are only supported for worldline roundtables",
+            )
+        return normalized_recipe, None, None
+
+    inferred_recipe = normalized_recipe
+    if inferred_recipe is None:
+        inferred_recipe = (
+            "manual_shortlist"
+            if selected_representatives or selected_witness is not None
+            else "representative"
+        )
+    fallback_format, fallback_cast = _ROUNDTABLE_RECIPE_CONTRACTS[inferred_recipe]
+    return (
+        normalized_recipe,
+        normalized_format or fallback_format,
+        normalized_cast or fallback_cast,
+    )
 
 
 # ── Functions that remain in __init__.py ─────────────────────────────
@@ -197,6 +294,8 @@ def _participant_set_hash(
     selected_agent_ids: list[str],
     selected_representatives: list[dict[str, str]],
     selected_witness: dict[str, str] | None,
+    discussion_format: str | None,
+    cast_mode: str | None,
     language: str,
     participant_defs: list[dict[str, Any]],
 ) -> str:
@@ -208,6 +307,8 @@ def _participant_set_hash(
             "selected_agent_ids": selected_agent_ids,
             "selected_representatives": selected_representatives,
             "selected_witness": selected_witness,
+            "discussion_format": discussion_format,
+            "cast_mode": cast_mode,
             "language": language,
             "participants": [
                 {
@@ -274,6 +375,8 @@ def create_ending_room(
     selected_representatives: list[dict[str, Any]] | None = None,
     selected_witness: dict[str, Any] | None = None,
     selection_recipe: str | None = None,
+    discussion_format: str | None = None,
+    cast_mode: str | None = None,
     language: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     try:
@@ -286,6 +389,19 @@ def create_ending_room(
     normalized_agent_ids = _normalize_branch_ids(selected_agent_ids or [])
     normalized_representatives = _normalize_selected_representatives(selected_representatives)
     normalized_witness = _normalize_selected_witness(selected_witness)
+    (
+        normalized_selection_recipe,
+        normalized_discussion_format,
+        normalized_cast_mode,
+    ) = _normalize_roundtable_contract(
+        room_type=normalized_room_type,
+        selection_recipe=selection_recipe,
+        discussion_format=discussion_format,
+        cast_mode=cast_mode,
+        selected_representatives=normalized_representatives,
+        selected_witness=normalized_witness,
+        strict=True,
+    )
     if not normalized_branch_ids:
         raise EndingRoomServiceError(422, "ENDING_ROOM_SELECTED_BRANCHES_EMPTY", "selected_branch_ids cannot be empty")  # noqa: E501
 
@@ -348,10 +464,37 @@ def create_ending_room(
         if any(branch.status != BranchStatus.COMPLETED for branch in branches):
             raise EndingRoomServiceError(422, "ENDING_ROOM_VALIDATION_FAILED", "Ending rooms require completed branches")  # noqa: E501
         normalized_branch_ids = _sort_scope_branch_ids(branches)
-        if normalized_representatives:
+        explicit_cast_mode = _normalize_contract_choice(
+            cast_mode,
+            field_name="cast_mode",
+            allowed_values=_ROUNDTABLE_CAST_MODES,
+            strict=False,
+        )
+        effective_representatives = normalized_representatives
+        effective_witness = normalized_witness
+        if normalized_room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
+            if normalized_cast_mode == "smart_pick" and explicit_cast_mode == "smart_pick":
+                effective_representatives = []
+                effective_witness = None
+            elif normalized_cast_mode == "custom":
+                selected_representative_branch_ids = {
+                    item["branch_id"] for item in normalized_representatives
+                }
+                missing_representative_branch_ids = [
+                    branch_id
+                    for branch_id in normalized_branch_ids
+                    if branch_id not in selected_representative_branch_ids
+                ]
+                if missing_representative_branch_ids:
+                    raise EndingRoomServiceError(
+                        422,
+                        "ENDING_ROOM_REPRESENTATIVE_SELECTION_INVALID",
+                        "cast_mode=custom requires one selected representative per selected branch",  # noqa: E501
+                    )
+        if effective_representatives:
             invalid_representative_branch_ids = [
                 item["branch_id"]
-                for item in normalized_representatives
+                for item in effective_representatives
                 if item["branch_id"] not in normalized_branch_ids
             ]
             if invalid_representative_branch_ids:
@@ -361,11 +504,12 @@ def create_ending_room(
                     "selected_representatives must target selected branches",
                 )
             normalized_representatives = _sort_selected_representatives(
-                normalized_representatives,
+                effective_representatives,
                 normalized_branch_ids,
             )
-        if (normalized_witness is not None
-                and normalized_witness["branch_id"] not in normalized_branch_ids):
+            effective_representatives = normalized_representatives
+        if (effective_witness is not None
+                and effective_witness["branch_id"] not in normalized_branch_ids):
             raise EndingRoomServiceError(
                 422,
                 "ENDING_ROOM_WITNESS_SELECTION_INVALID",
@@ -380,9 +524,11 @@ def create_ending_room(
             anchor_branch_id=normalized_anchor_branch_id,
             selected_branch_ids=normalized_branch_ids,
             selected_agent_ids=normalized_agent_ids,
-            selected_representatives=normalized_representatives,
-            selected_witness=normalized_witness,
-            selection_recipe=selection_recipe,
+            selected_representatives=effective_representatives,
+            selected_witness=effective_witness,
+            selection_recipe=normalized_selection_recipe,
+            discussion_format=normalized_discussion_format,
+            cast_mode=normalized_cast_mode,
             language=resolved_language,
         )
         participant_hash = _participant_set_hash(
@@ -390,8 +536,10 @@ def create_ending_room(
             anchor_branch_id=normalized_anchor_branch_id,
             selected_branch_ids=normalized_branch_ids,
             selected_agent_ids=normalized_agent_ids,
-            selected_representatives=normalized_representatives,
-            selected_witness=normalized_witness,
+            selected_representatives=effective_representatives,
+            selected_witness=effective_witness,
+            discussion_format=normalized_discussion_format,
+            cast_mode=normalized_cast_mode,
             language=resolved_language,
             participant_defs=participant_defs,
         )
@@ -410,7 +558,9 @@ def create_ending_room(
             if normalized_room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
                 existing_room.config_json = {
                     **(existing_room.config_json or {}),
-                    "selection_recipe": selection_recipe,
+                    "selection_recipe": normalized_selection_recipe,
+                    "discussion_format": normalized_discussion_format,
+                    "cast_mode": normalized_cast_mode,
                     "generation_version": _ENDING_ROOM_GENERATION_VERSION,
                 }
                 existing_room.updated_at = _now()
@@ -483,9 +633,11 @@ def create_ending_room(
                 **(room.config_json or {}),
                 "memory_partition_id": _room_memory_partition_id(room.id),
                 "selected_agent_ids": normalized_agent_ids,
-                "selected_representatives": normalized_representatives,
-                "selected_witness": normalized_witness,
-                "selection_recipe": selection_recipe,
+                "selected_representatives": effective_representatives,
+                "selected_witness": effective_witness,
+                "selection_recipe": normalized_selection_recipe,
+                "discussion_format": normalized_discussion_format,
+                "cast_mode": normalized_cast_mode,
                 "generation_version": _ENDING_ROOM_GENERATION_VERSION,
             }
             session.add(room)
@@ -544,6 +696,20 @@ def load_ending_room_snapshot(room_id: str) -> dict[str, Any]:
         selected_agent_ids = _normalize_branch_ids(
             ((room.config_json or {}).get("selected_agent_ids") or []),
         )
+        room_config = room.config_json or {}
+        (
+            _selection_recipe,
+            discussion_format,
+            cast_mode,
+        ) = _normalize_roundtable_contract(
+            room_type=room.room_type,
+            selection_recipe=room_config.get("selection_recipe"),
+            discussion_format=room_config.get("discussion_format"),
+            cast_mode=room_config.get("cast_mode"),
+            selected_representatives=room_config.get("selected_representatives") or [],
+            selected_witness=room_config.get("selected_witness"),
+            strict=False,
+        )
         participants = _sort_room_participants(
             participants, selected_branch_ids, selected_agent_ids
         )
@@ -562,8 +728,10 @@ def load_ending_room_snapshot(room_id: str) -> dict[str, Any]:
             "created_at": room.created_at.isoformat(),
             "updated_at": room.updated_at.isoformat(),
             "memory_partition_version": room.memory_partition_version,
-            "memory_partition_id": (room.config_json or {}).get("memory_partition_id"),
-            "selection_recipe": (room.config_json or {}).get("selection_recipe"),
+            "memory_partition_id": room_config.get("memory_partition_id"),
+            "selection_recipe": room_config.get("selection_recipe"),
+            "discussion_format": discussion_format,
+            "cast_mode": cast_mode,
             "participants": [_serialize_participant(item) for item in participants],
             "threads": [_serialize_thread(item) for item in threads],
             "turns": [_serialize_turn(item) for item in turns],
@@ -1272,6 +1440,21 @@ def _build_room_plan(
     archivist = next(participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST)  # noqa: E501
 
     if room.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
+        (
+            _selection_recipe,
+            discussion_format,
+            cast_mode,
+        ) = _normalize_roundtable_contract(
+            room_type=room.room_type,
+            selection_recipe=(room.config_json or {}).get("selection_recipe"),
+            discussion_format=(room.config_json or {}).get("discussion_format"),
+            cast_mode=(room.config_json or {}).get("cast_mode"),
+            selected_representatives=(room.config_json or {}).get("selected_representatives") or [],
+            selected_witness=(room.config_json or {}).get("selected_witness"),
+            strict=False,
+        )
+        discussion_format = discussion_format or "deep_dive"
+        cast_mode = cast_mode or "smart_pick"
         context = build_roundtable_scope_context(
             room.scenario_id, selected_branch_ids, language=room.language
         )
@@ -1280,12 +1463,29 @@ def _build_room_plan(
             for representative in context["representatives"]
         }
         witness = next((participant for participant in participants if participant.role_slot == EndingRoomRoleSlot.CRITIC), None)  # noqa: E501
-        planned_turns = [
-            {
+        representatives = [
+            participant
+            for participant in participants
+            if participant.role_slot == EndingRoomRoleSlot.REPRESENTATIVE
+        ]
+        opening_representatives = representatives
+        if discussion_format == "quick_review":
+            opening_representatives = representatives[:2]
+
+        planned_turns = []
+        for participant in opening_representatives:
+            branch_card = branch_cards_by_id.get(participant.source_branch_id or "", {})
+            context_hint = _roundtable_turn_context_hint(
+                participant,
+                branch_card=branch_card,
+                all_branches=context["branches"],
+                language=room.language,
+            )
+            turn_plan: dict[str, Any] = {
                 "participant_id": participant.id,
                 "phase": EndingRoomPhase.OPENING,
                 "content": _build_roundtable_opening_content(
-                    branch_cards_by_id.get(participant.source_branch_id or "", {}),
+                    branch_card,
                     participant=participant,
                     language=room.language,
                     scenario_question=scenario_question,
@@ -1293,51 +1493,65 @@ def _build_room_plan(
                 "emotion": "focused",
                 "cited_branch_id": participant.source_branch_id,
                 "cited_refs_json": {"mode": "own_fulltext"},
-                "context_hint": _roundtable_turn_context_hint(
-                    participant,
-                    branch_card=branch_cards_by_id.get(participant.source_branch_id or "", {}),
-                    all_branches=context["branches"],
-                    language=room.language,
-                ),
+                "context_hint": context_hint,
                 "factual_guardrail": _build_factual_guardrail(
-                    branch_cards_by_id.get(participant.source_branch_id or "", {}),
+                    branch_card,
                     participant=participant,
                     language=room.language,
                 ),
             }
-            for participant in participants
-            if participant.role_slot == EndingRoomRoleSlot.REPRESENTATIVE
-        ]
-        if witness is not None and witness.source_branch_id is not None:
-          planned_turns.append(
-              {
-                  "participant_id": witness.id,
-                  "phase": EndingRoomPhase.CROSSFIRE,
-                  "content": _build_roundtable_witness_content(
-                      branch_cards_by_id.get(witness.source_branch_id, {}),
-                      witness=witness,
-                      branch_rows=_load_branch_rows(session, witness.source_branch_id, language=room.language),  # noqa: E501
-                      language=room.language,
-                      scenario_question=scenario_question,
-                  ),
-                  "emotion": "measured",
-                  "cited_branch_id": witness.source_branch_id,
-                  "cited_refs_json": {"mode": "witness_fulltext"},
-                  "context_hint": _roundtable_turn_context_hint(
-                      witness,
-                      branch_card=branch_cards_by_id.get(witness.source_branch_id, {}),
-                      all_branches=context["branches"],
-                      language=room.language,
-                  ),
-                  "factual_guardrail": _build_factual_guardrail(
-                      branch_cards_by_id.get(witness.source_branch_id, {}),
-                      participant=witness,
-                      language=room.language,
-                  ),
-              }
-          )
-        planned_turns.extend(
-            [
+            if discussion_format == "clash_mode":
+                turn_plan["interaction_style"] = "challenge"
+                turn_plan["context_hint"] = "\n".join(
+                    item
+                    for item in [
+                        context_hint,
+                        "interaction_style=challenge",
+                        "challenge_instruction=Directly challenge the strongest rival worldline without inventing facts.",  # noqa: E501
+                    ]
+                    if item
+                )
+            planned_turns.append(turn_plan)
+
+        if (
+            discussion_format == "deep_dive"
+            and witness is not None
+            and witness.source_branch_id is not None
+        ):
+            branch_card = branch_cards_by_id.get(witness.source_branch_id, {})
+            planned_turns.append(
+                {
+                    "participant_id": witness.id,
+                    "phase": EndingRoomPhase.CROSSFIRE,
+                    "content": _build_roundtable_witness_content(
+                        branch_card,
+                        witness=witness,
+                        branch_rows=_load_branch_rows(
+                            session,
+                            witness.source_branch_id,
+                            language=room.language,
+                        ),
+                        language=room.language,
+                        scenario_question=scenario_question,
+                    ),
+                    "emotion": "measured",
+                    "cited_branch_id": witness.source_branch_id,
+                    "cited_refs_json": {"mode": "witness_fulltext"},
+                    "context_hint": _roundtable_turn_context_hint(
+                        witness,
+                        branch_card=branch_card,
+                        all_branches=context["branches"],
+                        language=room.language,
+                    ),
+                    "factual_guardrail": _build_factual_guardrail(
+                        branch_card,
+                        participant=witness,
+                        language=room.language,
+                    ),
+                }
+            )
+        if discussion_format in {"deep_dive", "clash_mode"}:
+            planned_turns.append(
                 {
                     "participant_id": archivist.id,
                     "phase": EndingRoomPhase.CLOSING,
@@ -1353,25 +1567,26 @@ def _build_room_plan(
                         branches=context["branches"],
                         language=room.language,
                     ),
-                },
-                {
-                    "participant_id": archivist.id,
-                    "phase": EndingRoomPhase.VERDICT,
-                    "content": _build_roundtable_verdict_content(
-                        context["branches"],
-                        language=room.language,
-                        scenario_question=scenario_question,
-                    ),
-                    "emotion": "neutral",
-                    "cited_branch_id": None,
-                    "cited_refs_json": {"mode": "summary_only"},
-                    "context_hint": _archivist_roundtable_verdict_context_hint(
-                        branches=context["branches"],
-                        planned_turns=planned_turns,
-                        language=room.language,
-                    ),
-                },
-            ]
+                }
+            )
+        planned_turns.append(
+            {
+                "participant_id": archivist.id,
+                "phase": EndingRoomPhase.VERDICT,
+                "content": _build_roundtable_verdict_content(
+                    context["branches"],
+                    language=room.language,
+                    scenario_question=scenario_question,
+                ),
+                "emotion": "neutral",
+                "cited_branch_id": None,
+                "cited_refs_json": {"mode": "summary_only"},
+                "context_hint": _archivist_roundtable_verdict_context_hint(
+                    branches=context["branches"],
+                    planned_turns=planned_turns,
+                    language=room.language,
+                ),
+            }
         )
         result = {
             "summary": planned_turns[-1]["content"],
@@ -1408,7 +1623,11 @@ def _build_room_plan(
                 }
                 for turn in planned_turns[: min(4, len(planned_turns))]
             ],
-            "scope": {"summary_branch_count": len(context["branches"])},
+            "scope": {
+                "summary_branch_count": len(context["branches"]),
+                "discussion_format": discussion_format,
+                "cast_mode": cast_mode,
+            },
         }
         return planned_turns, result
 
@@ -1960,6 +2179,38 @@ async def run_ending_room_background(
             room_language = room.language
             room_scenario_id = room.scenario_id
             planned_turns, result = _build_room_plan(session, room, participants)
+            if room_type == EndingRoomType.WORLDLINE_ROUNDTABLE:
+                (
+                    _selection_recipe,
+                    planning_discussion_format,
+                    planning_cast_mode,
+                ) = _normalize_roundtable_contract(
+                    room_type=room.room_type,
+                    selection_recipe=(room.config_json or {}).get("selection_recipe"),
+                    discussion_format=(room.config_json or {}).get("discussion_format"),
+                    cast_mode=(room.config_json or {}).get("cast_mode"),
+                    selected_representatives=(room.config_json or {}).get("selected_representatives") or [],  # noqa: E501
+                    selected_witness=(room.config_json or {}).get("selected_witness"),
+                    strict=False,
+                )
+                await _broadcast(
+                    room_id,
+                    ws_callback,
+                    {
+                        "type": "ending_room_planning",
+                        "data": {
+                            "room_id": room_id,
+                            "discussion_format": planning_discussion_format or "deep_dive",
+                            "cast_mode": planning_cast_mode or "smart_pick",
+                            "planned_turn_count": len(planned_turns),
+                            "phase": (
+                                planned_turns[0]["phase"].value
+                                if planned_turns
+                                else EndingRoomPhase.OPENING.value
+                            ),
+                        },
+                    },
+                )
             planned_turns, result = await _enhance_room_plan_with_llm(
                 room,
                 participants,

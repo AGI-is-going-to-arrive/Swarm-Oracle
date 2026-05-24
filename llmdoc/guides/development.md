@@ -848,10 +848,16 @@ python -m pytest tests/test_ending_room_service.py tests/test_ending_room_api.py
 # 只复核 roundtable phase insight / optional LLM enhance 时，可先跑这组窄集：
 python -m pytest -q tests/test_ending_room_service.py -k 'phase_insight or roundtable_phase_insight_llm or rebuild_preserves_closing'
 
+# 只复核 roundtable format/cast/planning 合同时，先跑这组窄集：
+python -m pytest tests/test_ending_room_api.py tests/test_ending_room_service.py tests/test_ending_room_ws.py --tb=short -q
+python -m ruff check app
+
 cd ../frontend
-npm test -- --run src/api/client.test.ts src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/RoundtablePickerPanel.test.tsx src/pages/roundtableHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
+npx vitest run src/api/client.test.ts src/lib/textLayout/pretext.test.ts src/lib/textLayout/textOverflowPredictor.test.ts src/lib/textLayout/oracleTranscriptLayout.test.ts src/lib/roundtableSelection.test.ts src/lib/e2eReplayGuards.test.ts src/lib/endingRoomReplayAutomation.test.ts src/lib/roundtableReplayAutomation.test.ts src/lib/endingRoomPickerAutomation.test.ts src/pages/ResultView.test.tsx src/components/EndingChatModal.test.tsx src/hooks/useEndingRoomWS.test.tsx src/stores/endingRoomStore.test.ts src/pages/WorldlineRoundtableView.test.tsx src/pages/RoundtablePickerPanel.test.tsx src/pages/roundtableHelpers.test.ts src/pages/roundtable/FormatSelector.test.tsx src/pages/roundtable/PlanningSkeletonView.test.tsx src/pages/roundtable/PhaseInsightTimeline.test.tsx src/pages/roundtable/roundtableFormatHelpers.test.ts src/components/endingChatHelpers.test.ts src/pages/resultHelpers.test.ts src/pages/simulationHelpers.test.ts src/hooks/useTranscriptScroll.test.ts
 node --test scripts/e2e-debate-suite.test.mjs scripts/e2e-ending-room-followup-suite.test.mjs
+node --check scripts/e2e-worldline-roundtable-suite.mjs
 npx tsc --noEmit -p tsconfig.app.json
+npm run lint
 npm run build
 
 node scripts/e2e-ending-room-suite.mjs full --url http://127.0.0.1:18930 --output-dir output/e2e/oracle-ending-room-full --headless
@@ -868,6 +874,16 @@ node scripts/e2e-worldline-roundtable-suite.mjs full --locale en --url http://12
 node scripts/e2e-worldline-roundtable-suite.mjs full --browser firefox --locale en --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en-firefox --headless
 node scripts/e2e-worldline-roundtable-suite.mjs full --browser webkit --locale en --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-en-webkit --headless
 node scripts/e2e-worldline-roundtable-suite.mjs mobile --url http://127.0.0.1:18930 --backend-url http://127.0.0.1:18927 --output-dir output/e2e/oracle-roundtable-mobile --headless
+```
+
+如果这轮改的是 `discussion_format / cast_mode` 或 planning skeleton，需要至少覆盖三种 format。没有真实 provider 要求时，可以用 `ORACLE_CHAMBERS_USE_LLM=false` 的本地 backend 做确定性回归；这个结论只说明 UI、API、WS、replay contract 走通，不代表慢 provider / 空流式链路已签收：
+
+```bash
+node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser chromium --locale zh --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --headless
+node scripts/e2e-worldline-roundtable-suite.mjs mobile --browser chromium --locale zh --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --headless
+node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser chromium --locale en --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --headless
+node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser firefox --locale zh --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --headless
+node scripts/e2e-worldline-roundtable-suite.mjs desktop --browser webkit --locale zh --url http://127.0.0.1:18928 --backend-url http://127.0.0.1:18927 --headless
 ```
 
 如果只想先复核这轮本地修复过的结果页开房、legacy 索引修复和 roundtable transcript/UI 口径，最小命令是：

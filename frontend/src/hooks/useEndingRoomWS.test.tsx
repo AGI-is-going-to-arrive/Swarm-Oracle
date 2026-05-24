@@ -16,6 +16,7 @@ const storeState = {
   handleTurnError: vi.fn(),
   commitTurn: vi.fn(),
   setResult: vi.fn(),
+  setPlanningState: vi.fn(),
   setScopeNotice: vi.fn(),
   setError: vi.fn(),
 };
@@ -609,6 +610,35 @@ describe('useEndingRoomWS', () => {
     expect(storeState.setScopeNotice).toHaveBeenCalledWith({
       threadId: 'thread-1',
       memoryPartitionId: 'partition',
+    });
+  });
+
+  it('normalizes malformed planning events before updating transient state', () => {
+    render(<Harness roomId="room-planning" />);
+
+    act(() => {
+      vi.runOnlyPendingTimers();
+      MockWebSocket.instances[0]?.onmessage?.({
+        data: JSON.stringify({
+          type: 'ending_room_planning',
+          data: {
+            room_id: 42,
+            discussion_format: 'unknown_format',
+            cast_mode: 'surprise_cast',
+            planned_turn_count: 'many',
+            phase: '',
+          },
+          meta: { stream_id: 'room-planning', sequence: 1, event_id: 'room-planning:1' },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    expect(storeState.setPlanningState).toHaveBeenCalledWith({
+      room_id: 'room-planning',
+      discussion_format: 'quick_review',
+      cast_mode: 'smart_pick',
+      planned_turn_count: 0,
+      phase: 'opening',
     });
   });
 });
