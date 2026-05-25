@@ -216,6 +216,8 @@ export default function ResultModals(props: ResultModalsProps) {
           reason={getSourceReason(polymarketContext)}
           testIdOverride={getSourceCardTestId(target, 'polymarket')}
           items={(polymarketContext?.items ?? []) as Parameters<typeof PolymarketCard>[0]['items']}
+          optimizedQuery={polymarketContext?.optimized_query}
+          searchPass={polymarketContext?.search_pass}
         />,
       )}
       {showFinance && wrapHistorical(
@@ -227,6 +229,8 @@ export default function ResultModals(props: ResultModalsProps) {
           reason={getSourceReason(financeContext)}
           testIdOverride={getSourceCardTestId(target, 'finance')}
           items={(financeContext?.items ?? []) as Parameters<typeof FinanceSourceCard>[0]['items']}
+          optimizedQuery={financeContext?.optimized_query}
+          searchPass={financeContext?.search_pass}
         />,
       )}
       {showAcademic && wrapHistorical(
@@ -238,6 +242,8 @@ export default function ResultModals(props: ResultModalsProps) {
           reason={getSourceReason(academicContext)}
           testIdOverride={getSourceCardTestId(target, 'academic')}
           items={(academicContext?.items ?? []) as Parameters<typeof SemanticScholarCard>[0]['items']}
+          optimizedQuery={academicContext?.optimized_query}
+          searchPass={academicContext?.search_pass}
         />,
       )}
       {showNewsDeep && wrapHistorical(
@@ -249,6 +255,8 @@ export default function ResultModals(props: ResultModalsProps) {
           reason={getSourceReason(newsDeepContext)}
           testIdOverride={getSourceCardTestId(target, 'news_deep')}
           items={(newsDeepContext?.items ?? []) as Parameters<typeof NewsApiCard>[0]['items']}
+          optimizedQuery={newsDeepContext?.optimized_query}
+          searchPass={newsDeepContext?.search_pass}
         />,
       )}
     </>

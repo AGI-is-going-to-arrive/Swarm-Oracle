@@ -244,7 +244,7 @@
 | `useNodeConversationTransport.ts` | `frontend/src/hooks/useNodeConversationTransport.ts` | `NodeConversationSheet` 的本地 transport hook；负责 `/start` / `/turn` 请求、origin branch/round/node/excerpt 透传、AbortController 生命周期和 SSE frame 解析 |
 | `orgContext.ts` / `useOrgContext.ts` | `frontend/src/lib/orgContext.ts` / `frontend/src/hooks/useOrgContext.ts` | `Organization ID` 的 sessionStorage helper；当前由 API client 读取并生成 `X-Org-Id`，InputView 不再展示专门输入框 |
 | `frontendPreflight.mjs` | `frontend/scripts/lib/frontendPreflight.mjs` | 前端 preview / deep-link 预检 helper；graph E2E 与 `release-signoff` 当前共用它来校验 SPA shell、一致的 module/CSS/legacy 入口，以及入口资产可达性 |
-| `e2e-new-source-ingestion-live.mjs` | `frontend/scripts/e2e-new-source-ingestion-live.mjs` | source-ingestion 专项脚本；默认走 fixture，`SWARM_E2E_MODE=live` 时走真实 backend。live 模式会先显式打开首页总开关，校验 `/api/scenario` 请求里的 `web_search_families`，再检查结果页四个 source family 的状态；ready 时要求真实列表项，provider non-ready / unavailable / failed 状态按显式 UI 接受；`Polymarket` 的 `non-us` geo-gate 也走同一条 live 口径 |
+| `e2e-new-source-ingestion-live.mjs` | `frontend/scripts/e2e-new-source-ingestion-live.mjs` | source-ingestion 专项脚本；默认走 fixture，`SWARM_E2E_MODE=live` 时走真实 backend。live 模式会先显式打开首页总开关，校验 `/api/scenario` 请求里的 `web_search_families`，再检查结果页四个 source family 的状态；ready 时要求真实列表项，empty fixture 会检查搜索词文案，`search_pass=2` fixture 会检查 broadened badge，provider non-ready / unavailable / failed 状态按显式 UI 接受；`Polymarket` 的 `non-us` geo-gate 也走同一条 live 口径 |
 | `e2e-capability-matrix.mjs` | `frontend/scripts/e2e-capability-matrix.mjs` | graph/playability capability matrix；当前覆盖 `AgentWorkshop / AgentLibrary / CausalReview / CompareDigest / KGExplorer / ReplayView` 六个 gated route，fixture payload 也包含 `agent_conversation / kg_explorer / replay_trace`。`ReplayView` 的 disabled 路径现在会落显式 unavailable surface，不再回首页；如果脚本还按旧 redirect 口径断言，先同步脚本再跑 |
 | `e2e-ws-contract-suite.mjs` | `frontend/scripts/e2e-ws-contract-suite.mjs` | WS 契约诊断脚本；当前覆盖 `scenario / debate / ending-room` 的首帧 auth、`4001 / 4404` 非重连、`1006` 可重连、auth timeout、oversize auth frame 和 pending-auth limit。未开启 `SESSION_SECRET` 的本地后端会把 auth-hardening cases 记为 skipped；需要强制校验时传 `--require-auth-hardening` 或 `SWARM_EXPECT_WS_AUTH=1` |
 | `e2e-result-share-fixture.mjs` | `frontend/scripts/e2e-result-share-fixture.mjs` | ResultView + ShareModal fixture browser 回归；脚本 stub 后端 scenario/branch/story/social/capability JSON，检查真实分支渲染、分享弹窗、预测卡片、social endpoint、控制台/page/request 错误和横向溢出。`full` 默认跑 desktop + mobile Chromium |
@@ -338,6 +338,8 @@
   - 被选中的 family 才会变成 `ready`
   - 未选中的 family 会保持 `empty`
   - `failed / unsupported_provider / fallback_unconstrained / search_skipped` 都有专门文案；后端 `status_reason` 优先作为卡片说明，缺失时才回到本地化默认文案
+  - empty state 带安全 `optimized_query` 时会显示本次搜索词；没有搜索词或搜索词被前端防御性判定为 raw URL、`site:`、localhost/private/internal host 等 unsafe token 时，会显示“使用原始问题检索”的本地化兜底文案
+  - `search_pass=2` 且 family 已 `ready` 时，卡片 header 会显示本地化的 broadened-search badge，并给屏幕阅读器补充第二轮扩展域名检索说明
   - desktop grid 和 mobile sheet 分别使用自己的 source card test id / `aria-describedby` id，不复用同一组 DOM id
   - replay / historical payload 里已经带来源数据时，即使当前 capability 关闭，也会用 recorded badge 标出这是历史来源
   - `polymarket.configured_host=non-us` 时会显示 geo-gated placeholder
@@ -683,7 +685,7 @@
   - 结果页 `FactionTimeline` 空态文案已改成解释性提示
 - preview-driven Chromium `phase3-batch-a full / phase3-batch-b full / phase3-batch-c full` 本轮全绿。
 - `e2e-new-source-ingestion-live` 当前在 `fixture full` 和 `live full` 两条口径下都已通过。
-  - live 口径当前已覆盖 `web_search_families` 请求体、结果页 web sources、四个 source family card 与 live state 展示；真实 provider 没有可用结果时允许明确的 non-ready state，不再要求每张 family card 都必须有列表项
+  - live 口径当前已覆盖 `web_search_families` 请求体、结果页 web sources、四个 source family card 与 live state 展示；fixture 口径还覆盖 empty 搜索词文案和 broadened badge；真实 provider 没有可用结果时允许明确的 non-ready state，不再要求每张 family card 都必须有列表项
 - focused browser spot-check 当前建议覆盖：
   - CausalReview 节点点击后打开 `NodeConversationSheet`，并带上当前节点摘录
   - KG 工作台桌面节点点击后先出现 `NodeQuickCard`，靠近视口边缘时不会溢出屏幕

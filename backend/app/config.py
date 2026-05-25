@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     WEB_SEARCH_CACHE_TTL_SECONDS: int = 300
     SEARXNG_URL: str = "http://localhost:8888"
     NEW_SOURCES_POLYMARKET_CONFIGURED_HOST: str = "us"
+    FEATURE_FAMILY_QUERY_OPTIMIZATION: bool = Field(default=False)
+    FAMILY_QUERY_OPTIMIZATION_TIMEOUT_SECONDS: float = Field(default=5.0)
+    FAMILY_QUERY_OPTIMIZATION_CACHE_TTL_SECONDS: int = Field(default=300)
+    FAMILY_QUERY_OPTIMIZATION_MAX_QUERY_CHARS: int = Field(default=180)
 
     # ── Native Search Budget ─────────────────────────────
     NATIVE_SEARCH_MAX_TOOL_CALLS: int = 5

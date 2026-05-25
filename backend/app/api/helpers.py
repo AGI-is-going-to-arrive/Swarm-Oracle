@@ -1424,6 +1424,26 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
                     meta_val = entry.get(meta_key)
                     if isinstance(meta_val, str) and meta_val.strip():
                         safe_entry[meta_key] = meta_val
+                optimized_query = entry.get("optimized_query")
+                if isinstance(optimized_query, str):
+                    try:
+                        from app.services.web_context import _sanitize_family_query_output
+
+                        safe_optimized_query = _sanitize_family_query_output(
+                            optimized_query,
+                            max_chars=settings.FAMILY_QUERY_OPTIMIZATION_MAX_QUERY_CHARS,
+                        )
+                    except Exception:
+                        safe_optimized_query = None
+                    if safe_optimized_query:
+                        safe_entry["optimized_query"] = safe_optimized_query
+                search_pass = entry.get("search_pass")
+                if (
+                    isinstance(search_pass, int)
+                    and not isinstance(search_pass, bool)
+                    and search_pass in {1, 2}
+                ):
+                    safe_entry["search_pass"] = search_pass
                 safe_family_context[family] = safe_entry
 
         # Return strict whitelist object — no extra keys leak through.

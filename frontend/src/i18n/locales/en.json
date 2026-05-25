@@ -2710,6 +2710,10 @@
       }
     },
     "source": {
+      "searched_with": "Searched: \"{{query}}\"",
+      "searched_with_raw_fallback": "Searched with the original question",
+      "broadened_search": "Broadened search",
+      "broadened_search_sr": "These results came from the second broadened-domain search pass",
       "section_title": "Live Sources",
       "mobile_sheet": {
         "title": "Live sources",

@@ -54,6 +54,7 @@ const ACCEPTED_LIVE_SOURCE_STATES = new Set([
 ]);
 const WEB_SNIPPET_TEXT = "Live source snippet for ResultView";
 const WEB_SNIPPET_URL = "https://news.example/live-source";
+const FIXTURE_ACADEMIC_OPTIMIZED_QUERY = "forecasting uncertainty academic literature";
 
 const CAPABILITIES_FIXTURE = {
   web_search: {
@@ -151,6 +152,8 @@ const SCENARIO_FIXTURE = {
       },
       finance: {
         state: "ready",
+        optimized_query: "macro indicators repricing",
+        search_pass: 2,
         items: [
           {
             id: "fin-1",
@@ -162,15 +165,10 @@ const SCENARIO_FIXTURE = {
         ],
       },
       academic: {
-        state: "ready",
-        items: [
-          {
-            id: "paper-1",
-            title: "Forecasting under uncertainty",
-            abstract: "Live academic card content.",
-            url: "https://academic.example/paper",
-          },
-        ],
+        state: "empty",
+        optimized_query: FIXTURE_ACADEMIC_OPTIMIZED_QUERY,
+        search_pass: 1,
+        items: [],
       },
       news_deep: {
         state: "ready",
@@ -562,10 +560,28 @@ async function assertSourceCardsHaveLiveData(container, result, mode, expectGeoG
     pushStep(result, `${family}-live-state-known`, ACCEPTED_LIVE_SOURCE_STATES.has(state));
     if (state === "ready") {
       pushStep(result, `${family}-live-item-visible`, await isVisible(card.locator("li").first()));
+      if (!LIVE_MODE && family === "finance") {
+        pushStep(
+          result,
+          "finance-broadened-search-badge-visible",
+          await isVisible(card.locator(".result-source-card__broadened-badge")),
+        );
+      }
     } else {
       pushStep(result, `${family}-live-nonready-state-surfaced`, typeof state === "string" && state.length > 0, {
         state,
       });
+      if (state === "empty") {
+        const queryLocator = card.locator(".result-source-card__search-query");
+        pushStep(result, `${family}-empty-search-query-visible`, await isVisible(queryLocator));
+        if (!LIVE_MODE && family === "academic") {
+          pushStep(
+            result,
+            "academic-empty-optimized-query-visible",
+            await queryLocator.getByText(FIXTURE_ACADEMIC_OPTIMIZED_QUERY).isVisible().catch(() => false),
+          );
+        }
+      }
     }
   }
 
@@ -588,8 +604,8 @@ async function assertSourceCardsHaveLiveData(container, result, mode, expectGeoG
     } else {
       pushStep(
         result,
-        "polymarket-live-state-ready",
-        (await polymarketCard.getAttribute("data-state")) === "ready",
+        "polymarket-live-state-known",
+        ACCEPTED_LIVE_SOURCE_STATES.has(await polymarketCard.getAttribute("data-state")),
       );
       pushStep(
         result,
@@ -608,16 +624,7 @@ async function assertSourceCardsHaveLiveData(container, result, mode, expectGeoG
     if (LIVE_MODE) {
       await assertLiveState(card, family);
     } else {
-      pushStep(
-        result,
-        `${family}-live-state-ready`,
-        (await card.getAttribute("data-state")) === "ready",
-      );
-      pushStep(
-        result,
-        `${family}-live-item-visible`,
-        await isVisible(card.locator("li").first()),
-      );
+      await assertLiveState(card, family);
     }
   }
 }
@@ -992,8 +999,12 @@ async function runSurface(mode, contextOptions, args) {
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
 const { defaultBrowserType: _unused, ...MOBILE_CTX_DEFAULTS } = devices["iPhone 13"];
 
-function buildContextOptions(mode) {
+function buildContextOptions(mode, browserName = "chromium") {
   if (mode !== "mobile") return { viewport: DESKTOP_VIEWPORT };
+  if (browserName === "firefox") {
+    const { isMobile: _isMobile, hasTouch: _hasTouch, ...firefoxSafeMobile } = MOBILE_CTX_DEFAULTS;
+    return firefoxSafeMobile;
+  }
   return { ...MOBILE_CTX_DEFAULTS, isMobile: true, hasTouch: true };
 }
 
@@ -1002,7 +1013,7 @@ function resolveSurfaceOutputDir({ outputDir, mode, browser }) {
 }
 
 function buildSurfaceRuns(args) {
-  const mk = (mode, browser) => ({ mode, browser, context: buildContextOptions(mode) });
+  const mk = (mode, browser) => ({ mode, browser, context: buildContextOptions(mode, browser) });
   if (args.mode === "desktop") return [mk("desktop", args.browser)];
   if (args.mode === "mobile") return [mk("mobile", args.browser)];
   return args.browserExplicitlySet

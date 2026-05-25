@@ -15,7 +15,7 @@ export type WebSearchFamilyState =
   | 'fallback_unconstrained'
   | 'search_skipped';
 
-export type WebSearchFamilyDomainFilterMode = 'api' | 'query' | 'none';
+export type WebSearchFamilyDomainFilterMode = 'api' | 'query' | 'prompt' | 'none';
 export type WebSearchFamilyDomainCoverage = 'full' | 'partial';
 
 interface WebSearchFamilyMetadata {
@@ -24,6 +24,8 @@ interface WebSearchFamilyMetadata {
   status_reason?: string;
   domain_filter_mode?: WebSearchFamilyDomainFilterMode;
   domain_coverage?: WebSearchFamilyDomainCoverage;
+  optimized_query?: string;
+  search_pass?: 1 | 2;
 }
 
 type WebSearchFamilyEntry<TItem> = WebSearchFamilyMetadata & {

@@ -655,6 +655,20 @@ class TestRequestConfig:
         )
         assert key_a != key_b
 
+    def test_cache_key_changes_between_api_keys_without_leaking_key_material(self):
+        key_a = _cache_key(
+            "query",
+            WebSearchRequestConfig(provider="tavily", api_key="tenant-a-secret-key"),
+        )
+        key_b = _cache_key(
+            "query",
+            WebSearchRequestConfig(provider="tavily", api_key="tenant-b-secret-key"),
+        )
+
+        assert key_a != key_b
+        assert "tenant-a-secret-key" not in key_a
+        assert "tenant-b-secret-key" not in key_b
+
     def test_cache_key_changes_when_intensity_changes(self):
         key_light = _cache_key("query", _resolve_request_config(intensity="light"))
         key_deep = _cache_key("query", _resolve_request_config(intensity="deep"))
@@ -2065,6 +2079,794 @@ class TestSearxngDomainContract:
 
 
 class TestFamilyContextStates:
+    def test_second_pass_extra_domains_static_contract(self):
+        assert wc._FAMILY_SECOND_PASS_EXTRA_DOMAINS == {
+            "polymarket": ["kalshi.com", "insightprediction.com"],
+            "finance": ["investing.com", "marketwatch.com", "tradingeconomics.com"],
+            "academic": [
+                "researchgate.net",
+                "sciencedirect.com",
+                "springer.com",
+                "wiley.com",
+            ],
+            "news_deep": ["reuters.com", "aljazeera.com", "dw.com"],
+        }
+
+    @pytest.mark.asyncio
+    async def test_family_query_builder_uses_one_llm_call_and_falls_back_per_family(
+        self,
+        monkeypatch,
+    ):
+        from app.services.web_context import _build_family_search_queries
+
+        calls: list[str] = []
+
+        async def fake_reformulation(prompt, **kwargs):
+            calls.append(prompt)
+            return {
+                "finance": "nuclear seawater contamination market impact",
+                "academic": "site:localhost poisoned query",
+            }
+
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            True,
+        )
+        monkeypatch.setattr(
+            "app.services.web_context.llm_call_json_for_family_query_reformulation",
+            fake_reformulation,
+        )
+
+        result = await _build_family_search_queries(
+            "如果全球海水都被核污染了，未来世界会怎样？",
+            ["finance", "academic"],
+            request_config=WebSearchRequestConfig(provider="tavily"),
+            timeout_seconds=1.0,
+        )
+
+        assert len(calls) == 1
+        assert "User question / UNTRUSTED DATA" in calls[0]
+        assert set(result) == {"finance", "academic"}
+        assert result["finance"] == "nuclear seawater contamination market impact"
+        assert result["academic"] != "site:localhost poisoned query"
+        assert "research" in result["academic"].lower()
+
+    @pytest.mark.asyncio
+    async def test_family_query_builder_accepts_safe_english_for_chinese_question(
+        self,
+        monkeypatch,
+    ):
+        from app.services.web_context import _build_family_search_queries
+
+        async def fake_reformulation(prompt, **kwargs):
+            assert "Selected families: [\"finance\", \"academic\"]" in prompt
+            return {
+                "finance": "radioactive seawater global markets insurance risk",
+                "academic": "radioactive seawater ecosystem health research",
+                "news_deep": "unselected family must be ignored",
+            }
+
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            True,
+        )
+        monkeypatch.setattr(
+            "app.services.web_context.llm_call_json_for_family_query_reformulation",
+            fake_reformulation,
+        )
+
+        result = await _build_family_search_queries(
+            "如果全球的海水都被核污染了，未来的世界会是什么样子的？",
+            ["finance", "academic"],
+            request_config=WebSearchRequestConfig(provider="tavily"),
+            timeout_seconds=1.0,
+        )
+
+        assert set(result) == {"finance", "academic"}
+        assert result["finance"] == "radioactive seawater global markets insurance risk"
+        assert result["academic"] == "radioactive seawater ecosystem health research"
+        assert all(ord(ch) < 128 for query in result.values() for ch in query)
+        assert all("site:" not in query.lower() for query in result.values())
+
+    @pytest.mark.asyncio
+    async def test_family_query_builder_skips_llm_for_clear_english(self, monkeypatch):
+        from app.services.web_context import _build_family_search_queries
+
+        async def should_not_call(*args, **kwargs):
+            raise AssertionError("clear English questions should use deterministic fallback")
+
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            True,
+        )
+        monkeypatch.setattr(
+            "app.services.web_context.llm_call_json_for_family_query_reformulation",
+            should_not_call,
+        )
+
+        result = await _build_family_search_queries(
+            "What if ocean water became radioactive?",
+            ["finance", "news_deep"],
+            request_config=WebSearchRequestConfig(provider="exa"),
+        )
+
+        assert set(result) == {"finance", "news_deep"}
+        assert "financial impact" in result["finance"].lower()
+        assert "news investigation" in result["news_deep"].lower()
+
+    @pytest.mark.asyncio
+    async def test_family_query_builder_non_zh_non_en_error_uses_deterministic_fallback(
+        self,
+        monkeypatch,
+    ):
+        from app.services.web_context import _build_family_search_queries
+
+        async def failing_reformulation(*args, **kwargs):
+            raise RuntimeError("llm unavailable")
+
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            True,
+        )
+        monkeypatch.setattr(
+            "app.services.web_context.llm_call_json_for_family_query_reformulation",
+            failing_reformulation,
+        )
+
+        result = await _build_family_search_queries(
+            "ماذا يحدث إذا تلوثت المحيطات نوويا عالميا",
+            ["finance", "news_deep"],
+            request_config=WebSearchRequestConfig(provider="tavily"),
+            timeout_seconds=1.0,
+        )
+
+        assert set(result) == {"finance", "news_deep"}
+        assert "markets economy financial impact" in result["finance"]
+        assert "news investigation analysis" in result["news_deep"]
+
+    @pytest.mark.asyncio
+    async def test_family_query_builder_ultra_short_query_uses_bounded_suffixes(
+        self,
+        monkeypatch,
+    ):
+        from app.services.web_context import _build_family_search_queries
+
+        async def should_not_call(*args, **kwargs):
+            raise AssertionError("ultra-short query should use deterministic suffixes")
+
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            True,
+        )
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FAMILY_QUERY_OPTIMIZATION_MAX_QUERY_CHARS",
+            64,
+        )
+        monkeypatch.setattr(
+            "app.services.web_context.llm_call_json_for_family_query_reformulation",
+            should_not_call,
+        )
+
+        result = await _build_family_search_queries(
+            "AI",
+            ["polymarket", "finance", "academic", "news_deep"],
+            request_config=WebSearchRequestConfig(provider="tavily"),
+        )
+
+        assert result["polymarket"] == "AI prediction market odds forecast"
+        assert result["finance"] == "AI markets economy financial impact"
+        assert result["academic"] == "AI research study paper evidence"
+        assert result["news_deep"] == "AI news investigation analysis"
+        assert all(len(query) <= 64 for query in result.values())
+
+    @pytest.mark.parametrize(
+        "unsafe_query",
+        [
+            "site:example.com radioactive ocean",
+            "https://example.com radioactive ocean",
+            "localhost radioactive ocean",
+            "10.0.0.5 radioactive ocean",
+            "192.168.1.50 radioactive ocean",
+            "169.254.169.254 radioactive ocean",
+        ],
+    )
+    def test_family_query_sanitizer_rejects_unsafe_tokens(self, unsafe_query):
+        assert wc._sanitize_family_query_output(unsafe_query) is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "unsafe_question",
+        [
+            "site:localhost secrets",
+            "https://169.254.169.254/latest/meta-data ocean",
+            "10.0.0.5 climate market",
+        ],
+    )
+    async def test_family_query_builder_does_not_fallback_to_unsafe_raw_question(
+        self,
+        monkeypatch,
+        unsafe_question,
+    ):
+        from app.services.web_context import _build_family_search_queries
+
+        async def should_not_call(*args, **kwargs):
+            raise AssertionError("unsafe deterministic fallback should not need LLM")
+
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            True,
+        )
+        monkeypatch.setattr(
+            "app.services.web_context.llm_call_json_for_family_query_reformulation",
+            should_not_call,
+        )
+
+        result = await _build_family_search_queries(
+            unsafe_question,
+            ["finance"],
+            request_config=WebSearchRequestConfig(provider="tavily"),
+        )
+
+        assert set(result) == {"finance"}
+        assert wc._sanitize_family_query_output(result["finance"]) == result["finance"]
+        assert "site:" not in result["finance"].lower()
+        assert "localhost" not in result["finance"].lower()
+        assert "169.254.169.254" not in result["finance"]
+        assert "10.0.0.5" not in result["finance"]
+
+    @pytest.mark.asyncio
+    async def test_family_query_builder_times_out_fail_soft_per_family(self, monkeypatch):
+        from app.services.web_context import _build_family_search_queries
+
+        async def slow_reformulation(*args, **kwargs):
+            await asyncio.sleep(0.05)
+            return {"finance": "late answer"}
+
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            True,
+        )
+        monkeypatch.setattr(
+            "app.services.web_context.llm_call_json_for_family_query_reformulation",
+            slow_reformulation,
+        )
+
+        result = await _build_family_search_queries(
+            "如果全球海水都被核污染了",
+            ["finance"],
+            request_config=WebSearchRequestConfig(provider="tavily"),
+            timeout_seconds=0.001,
+        )
+
+        assert "financial impact" in result["finance"].lower()
+        assert result["finance"] != "late answer"
+
+    @pytest.mark.asyncio
+    async def test_family_query_builder_caches_success_without_api_keys(self, monkeypatch):
+        from app.services.web_context import _build_family_search_queries
+
+        calls = 0
+
+        async def fake_reformulation(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return {"finance": "global nuclear seawater market risk"}
+
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            True,
+        )
+        monkeypatch.setattr(
+            "app.services.web_context.llm_call_json_for_family_query_reformulation",
+            fake_reformulation,
+        )
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FAMILY_QUERY_OPTIMIZATION_CACHE_TTL_SECONDS",
+            300,
+        )
+        first_config = WebSearchRequestConfig(provider="tavily", api_key="secret-a")
+        second_config = WebSearchRequestConfig(provider="tavily", api_key="secret-b")
+
+        first = await _build_family_search_queries(
+            "如果全球海水都被核污染了",
+            ["finance"],
+            request_config=first_config,
+        )
+        second = await _build_family_search_queries(
+            "如果全球海水都被核污染了",
+            ["finance"],
+            request_config=second_config,
+        )
+
+        assert calls == 1
+        assert first == second
+
+    @pytest.mark.asyncio
+    async def test_fetch_family_context_uses_optimized_query_metadata(self, monkeypatch):
+        from app.services.web_context import ProviderSearchOutcome, fetch_family_context
+
+        seen_queries: list[str] = []
+        optimized_query = "radioactive ocean financial impact"
+        snippet_text = "Markets reprice radioactive ocean risk."
+        snippet_url = "https://bloomberg.com/risk"
+
+        async def fake_builder(*args, **kwargs):
+            return {"finance": optimized_query}
+
+        async def fake_search(
+            provider,
+            query,
+            request_config=None,
+            *,
+            include_domains=None,
+            swallow_errors=True,
+        ):
+            seen_queries.append(query)
+            return ProviderSearchOutcome(
+                [WebSearchSnippet(
+                    text=snippet_text,
+                    source_url=snippet_url,
+                )],
+                "ready",
+                "api",
+                "full",
+            )
+
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            True,
+        )
+        monkeypatch.setattr("app.services.web_context._build_family_search_queries", fake_builder)
+        monkeypatch.setattr("app.services.web_context._search_with_provider", fake_search)
+
+        result = await fetch_family_context(
+            "如果全球海水都被核污染了",
+            ["finance"],
+            request_config=WebSearchRequestConfig(provider="tavily"),
+        )
+
+        assert seen_queries == [optimized_query]
+        assert result["finance"]["state"] == "ready"
+        assert result["finance"]["optimized_query"] == optimized_query
+        assert result["finance"]["search_pass"] == 1
+        assert result["finance"]["items"][0]["id"] == wc._stable_family_item_id(
+            "finance",
+            optimized_query,
+            1,
+            snippet_url,
+            snippet_text,
+        )
+        assert result["finance"]["items"][0]["id"] != wc._stable_family_item_id(
+            "finance",
+            "如果全球海水都被核污染了",
+            1,
+            snippet_url,
+            snippet_text,
+        )
+
+    @pytest.mark.asyncio
+    async def test_fetch_family_context_flag_off_preserves_single_pass_baseline(
+        self,
+        monkeypatch,
+    ):
+        from app.services.web_context import ProviderSearchOutcome, fetch_family_context
+
+        calls = 0
+
+        async def fake_search(
+            provider,
+            query,
+            request_config=None,
+            *,
+            include_domains=None,
+            swallow_errors=True,
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return ProviderSearchOutcome([], "empty", "api", "full")
+            return ProviderSearchOutcome(
+                [
+                    WebSearchSnippet(
+                        text="Second pass must stay disabled when flag is off.",
+                        source_url="https://marketwatch.com/story",
+                    )
+                ],
+                "ready",
+                "api",
+                "full",
+            )
+
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            False,
+        )
+        monkeypatch.setattr("app.services.web_context._search_with_provider", fake_search)
+
+        result = await fetch_family_context(
+            "radioactive ocean",
+            ["finance"],
+            request_config=WebSearchRequestConfig(provider="tavily", timeout_seconds=5.0),
+        )
+
+        assert calls == 1
+        assert result["finance"]["state"] == "empty"
+        assert result["finance"]["items"] == []
+        assert "search_pass" not in result["finance"]
+        assert "optimized_query" not in result["finance"]
+
+    @pytest.mark.asyncio
+    async def test_second_pass_broadens_only_empty_family_and_marks_pass_two(
+        self,
+        monkeypatch,
+    ):
+        from app.services.web_context import ProviderSearchOutcome, fetch_family_context
+
+        finance_domains: list[list[str]] = []
+        academic_domains: list[list[str]] = []
+        second_pass_timeouts: list[float] = []
+
+        async def fake_search(
+            provider,
+            query,
+            request_config=None,
+            *,
+            include_domains=None,
+            swallow_errors=True,
+        ):
+            domains = list(include_domains or [])
+            if "bloomberg.com" in domains:
+                finance_domains.append(domains)
+                if len(finance_domains) == 1:
+                    return ProviderSearchOutcome([], "empty", "api", "full")
+                second_pass_timeouts.append(request_config.timeout_seconds)
+                return ProviderSearchOutcome(
+                    [
+                        WebSearchSnippet(
+                            text="MarketWatch tracks radioactive ocean risk.",
+                            source_url="https://marketwatch.com/story/ocean-risk",
+                        )
+                    ],
+                    "ready",
+                    "api",
+                    "full",
+                )
+            if "arxiv.org" in domains:
+                academic_domains.append(domains)
+                return ProviderSearchOutcome(
+                    [
+                        WebSearchSnippet(
+                            text="Research paper on radioactive seawater.",
+                            source_url="https://arxiv.org/abs/1234.5678",
+                        )
+                    ],
+                    "ready",
+                    "api",
+                    "full",
+                )
+            raise AssertionError(f"unexpected domains: {domains}")
+
+        monkeypatch.setattr("app.services.web_context._search_with_provider", fake_search)
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            True,
+        )
+        request_config = WebSearchRequestConfig(
+            provider="tavily",
+            timeout_seconds=8.0,
+            max_results=5,
+        )
+
+        result = await fetch_family_context(
+            "radioactive ocean",
+            ["finance", "academic"],
+            request_config=request_config,
+        )
+
+        assert len(finance_domains) == 2
+        assert len(academic_domains) == 1
+        assert finance_domains[1][: len(wc.FAMILY_DOMAIN_FILTERS["finance"])] == (
+            wc.FAMILY_DOMAIN_FILTERS["finance"]
+        )
+        assert "marketwatch.com" in finance_domains[1]
+        assert second_pass_timeouts == [3.0]
+        assert result["finance"]["state"] == "ready"
+        assert result["finance"]["search_pass"] == 2
+        assert result["finance"]["items"][0]["url"].startswith("https://marketwatch.com/")
+        assert result["academic"]["state"] == "ready"
+        assert result["academic"]["search_pass"] == 1
+
+    @pytest.mark.asyncio
+    async def test_second_pass_respects_domain_cap_and_preserves_partial_coverage(
+        self,
+        monkeypatch,
+    ):
+        from app.services.web_context import ProviderSearchOutcome, fetch_family_context
+
+        polymarket_domains: list[list[str]] = []
+
+        async def fake_search(
+            provider,
+            query,
+            request_config=None,
+            *,
+            include_domains=None,
+            swallow_errors=True,
+        ):
+            domains = list(include_domains or [])
+            polymarket_domains.append(domains)
+            if len(polymarket_domains) == 1:
+                return ProviderSearchOutcome([], "empty", "api", "full")
+            return ProviderSearchOutcome(
+                [
+                    WebSearchSnippet(
+                        text="Kalshi market asks about ocean contamination.",
+                        source_url="https://kalshi.com/markets/ocean-contamination",
+                    )
+                ],
+                "ready",
+                "api",
+                "full",
+            )
+
+        monkeypatch.setattr(
+            "app.services.web_context.settings.NEW_SOURCES_POLYMARKET_CONFIGURED_HOST",
+            "us",
+        )
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            True,
+        )
+        monkeypatch.setattr("app.services.web_context._search_with_provider", fake_search)
+
+        result = await fetch_family_context(
+            "radioactive ocean",
+            ["polymarket"],
+            request_config=WebSearchRequestConfig(provider="xai", timeout_seconds=5.0),
+        )
+
+        assert polymarket_domains[1] == [
+            "polymarket.com",
+            "metaculus.com",
+            "predictit.org",
+            "manifold.markets",
+            "kalshi.com",
+        ]
+        assert "insightprediction.com" not in polymarket_domains[1]
+        assert result["polymarket"]["state"] == "ready"
+        assert result["polymarket"]["search_pass"] == 2
+        assert result["polymarket"]["domain_coverage"] == "partial"
+
+    @pytest.mark.asyncio
+    async def test_second_pass_rate_limit_keeps_first_empty_and_search_pass_one(
+        self,
+        monkeypatch,
+    ):
+        from app.services.web_context import ProviderSearchOutcome, fetch_family_context
+
+        calls = 0
+
+        async def fake_search(
+            provider,
+            query,
+            request_config=None,
+            *,
+            include_domains=None,
+            swallow_errors=True,
+        ):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return ProviderSearchOutcome([], "empty", "api", "full")
+            return ProviderSearchOutcome(
+                [],
+                "search_skipped",
+                "api",
+                "full",
+                status_reason="Rate limited by provider 'tavily'",
+            )
+
+        monkeypatch.setattr("app.services.web_context._search_with_provider", fake_search)
+        monkeypatch.setattr(
+            "app.services.web_context.settings.FEATURE_FAMILY_QUERY_OPTIMIZATION",
+            True,
+        )
+
+        result = await fetch_family_context(
+            "radioactive ocean",
+            ["finance"],
+            request_config=WebSearchRequestConfig(provider="tavily", timeout_seconds=5.0),
+        )
+
+        assert calls == 2
+        assert result["finance"]["state"] == "empty"
+        assert result["finance"]["items"] == []
+        assert result["finance"]["search_pass"] == 1
+        assert "Rate limited" in result["finance"]["status_reason"]
+
+    @pytest.mark.asyncio
+    async def test_llm_family_reformulation_retries_unsupported_optional_params(
+        self,
+        monkeypatch,
+    ):
+        from app.services.llm_client import (
+            llm_call_json_for_family_query_reformulation,
+        )
+
+        payloads: list[dict[str, object]] = []
+
+        class FakeClient:
+            async def post(self, url, *, json, headers, timeout):
+                payloads.append(dict(json))
+                request = httpx.Request("POST", url)
+                if len(payloads) == 1:
+                    response = httpx.Response(
+                        400,
+                        text="temperature is not supported",
+                        request=request,
+                    )
+                    raise httpx.HTTPStatusError(
+                        "bad request",
+                        request=request,
+                        response=response,
+                    )
+                if len(payloads) == 2:
+                    response = httpx.Response(
+                        400,
+                        text="reasoning_effort is not supported",
+                        request=request,
+                    )
+                    raise httpx.HTTPStatusError(
+                        "bad request",
+                        request=request,
+                        response=response,
+                    )
+                if len(payloads) == 3:
+                    response = httpx.Response(
+                        422,
+                        text="max_completion_tokens is not supported",
+                        request=request,
+                    )
+                    raise httpx.HTTPStatusError(
+                        "unprocessable",
+                        request=request,
+                        response=response,
+                    )
+                return httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {"message": {"content": '{"finance":"market risk"}'}}
+                        ],
+                    },
+                    request=request,
+                )
+
+        async def no_slot(**kwargs):
+            return None
+
+        async def noop(**kwargs):
+            return None
+
+        monkeypatch.setattr(
+            "app.services.llm_client._get_shared_async_client",
+            lambda: FakeClient(),
+        )
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot", no_slot)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot", noop)
+        monkeypatch.setattr("app.services.llm_client._reconcile_rate_limit_usage", noop)
+
+        result = await llm_call_json_for_family_query_reformulation(
+            "Return JSON",
+            reasoning_effort="low",
+            temperature=0.1,
+            model="gpt-5.4-mini",
+            api_key="sk-test",
+            base_url="https://api.openai.com/v1/chat/completions",
+            max_output_tokens=120,
+            timeout=1.0,
+        )
+
+        assert result == {"finance": "market risk"}
+        assert "temperature" in payloads[0]
+        assert "reasoning_effort" in payloads[1]
+        assert "temperature" not in payloads[1]
+        assert "max_completion_tokens" in payloads[2]
+        assert "reasoning_effort" not in payloads[2]
+        assert "max_completion_tokens" not in payloads[3]
+
+    @pytest.mark.asyncio
+    async def test_llm_family_reformulation_does_not_retry_rate_limits(self, monkeypatch):
+        from app.services.llm_client import (
+            LLMError,
+            llm_call_json_for_family_query_reformulation,
+        )
+
+        payloads: list[dict[str, object]] = []
+
+        class FakeClient:
+            async def post(self, url, *, json, headers, timeout):
+                payloads.append(dict(json))
+                request = httpx.Request("POST", url)
+                response = httpx.Response(429, text="rate limit", request=request)
+                raise httpx.HTTPStatusError(
+                    "rate limit",
+                    request=request,
+                    response=response,
+                )
+
+        async def no_slot(**kwargs):
+            return None
+
+        async def noop(**kwargs):
+            return None
+
+        monkeypatch.setattr(
+            "app.services.llm_client._get_shared_async_client",
+            lambda: FakeClient(),
+        )
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot", no_slot)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot", noop)
+        monkeypatch.setattr("app.services.llm_client._reconcile_rate_limit_usage", noop)
+
+        with pytest.raises(LLMError):
+            await llm_call_json_for_family_query_reformulation(
+                "Return JSON",
+                api_key="sk-test",
+                base_url="https://api.openai.com/v1/chat/completions",
+                timeout=1.0,
+            )
+
+        assert len(payloads) == 1
+
+    @pytest.mark.asyncio
+    async def test_llm_family_reformulation_does_not_retry_non_param_400(self, monkeypatch):
+        from app.services.llm_client import (
+            LLMError,
+            llm_call_json_for_family_query_reformulation,
+        )
+
+        payloads: list[dict[str, object]] = []
+
+        class FakeClient:
+            async def post(self, url, *, json, headers, timeout):
+                payloads.append(dict(json))
+                request = httpx.Request("POST", url)
+                response = httpx.Response(400, text="model not found", request=request)
+                raise httpx.HTTPStatusError(
+                    "bad request",
+                    request=request,
+                    response=response,
+                )
+
+        async def no_slot(**kwargs):
+            return None
+
+        async def noop(**kwargs):
+            return None
+
+        monkeypatch.setattr(
+            "app.services.llm_client._get_shared_async_client",
+            lambda: FakeClient(),
+        )
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot", no_slot)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot", noop)
+        monkeypatch.setattr("app.services.llm_client._reconcile_rate_limit_usage", noop)
+
+        with pytest.raises(LLMError):
+            await llm_call_json_for_family_query_reformulation(
+                "Return JSON",
+                reasoning_effort="low",
+                temperature=0.1,
+                model="gpt-5.4-mini",
+                api_key="sk-test",
+                base_url="https://api.openai.com/v1/chat/completions",
+                max_output_tokens=120,
+                timeout=1.0,
+            )
+
+        assert len(payloads) == 1
+
     @pytest.mark.asyncio
     async def test_family_items_follow_request_config_max_results(self, monkeypatch):
         from app.services.web_context import ProviderSearchOutcome, fetch_family_context

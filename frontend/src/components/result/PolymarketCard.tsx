@@ -13,6 +13,8 @@ export interface PolymarketCardProps {
   state?: SourceCategoryState;
   reason?: string;
   testIdOverride?: string;
+  optimizedQuery?: string;
+  searchPass?: 1 | 2;
   items?: Array<{
     id: string;
     question: string;
@@ -26,6 +28,8 @@ export function PolymarketCard({
   state = 'empty',
   reason,
   testIdOverride,
+  optimizedQuery,
+  searchPass,
   items = [],
 }: PolymarketCardProps) {
   const { t } = useTranslation();
@@ -51,6 +55,8 @@ export function PolymarketCard({
       state={resolvedState}
       reason={reason}
       testIdOverride={testIdOverride}
+      optimizedQuery={optimizedQuery}
+      searchPass={searchPass}
     >
       {resolvedState === 'ready' && items.length > 0 && (
         <ul className="space-y-2">

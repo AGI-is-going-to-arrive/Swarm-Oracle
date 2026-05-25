@@ -44,7 +44,7 @@
 | Agent Identity | `backend/app/services/agent_identity.py` | continuity key 预览 / 解析、跨场景 identity、growth event、memory 查询 |
 | Personality Drift | `backend/app/services/personality_drift.py` | 从 identity metadata、消息和成长事件派生 Big Five drift warning |
 | Memory | `backend/app/services/memory.py` | L1 压缩、context 组装；Agent context 可接收当前世界线块，提醒同一角色在不同分支里不要复用同一组例子和结论；已知玩法卡用 contract label，未知 `card_label` 会按 untrusted data 包裹 |
-| Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、搜索深度预算、缓存、`ProviderSearchOutcome` 状态映射、native citation 序列化与上下文格式化 |
+| Web Context | `backend/app/services/web_context.py` | 搜索增强 provider dispatch、请求级 override、搜索深度预算、缓存、source-family query optimization、`ProviderSearchOutcome` 状态映射、native citation 序列化与上下文格式化 |
 | LLM Client | `backend/app/services/llm_client.py` | LLM 调用、并发控制、限流、熔断、JSON stream-first fallback；Responses API native search tools 只在已识别 provider + 非 proxy 路径启用 |
 | Native Search Adapters | `backend/app/services/native_search_adapters.py` | provider-specific native search tools/citation parsing；当前有 xAI native pilot、OpenAI structural adapter/fixtures 和 null adapter；OpenAI live signoff 仍是 backlog |
 | Conversation Service | `backend/app/services/conversation_service.py` | conversation thread/turn 创建、bootstrap claim、Agent origin voice binding、SSE stream 终态与取消原因收口 |
@@ -373,7 +373,9 @@
     - 未选中的 family 会保持 `empty`
     - 当前 provider 不支持 domain filter 时，family 会标成 `unsupported_provider`
     - family 搜索异常时，family 会标成 `failed`
-    - family entry 可能带 `domain_filter_mode / domain_coverage / status_reason`，这些字段会经 API helper 白名单保留给前端展示
+    - `FEATURE_FAMILY_QUERY_OPTIMIZATION=true` 时，后端会为所选 family 生成或确定性派生安全搜索词；默认关闭时保持原始问题路径，不写 `optimized_query / search_pass`，也不做第二轮扩展搜索
+    - family entry 可能带 `domain_filter_mode / domain_coverage / status_reason / optimized_query / search_pass`，这些字段会经 API helper 白名单保留给前端展示
+    - `optimized_query` 在 provider 调用前和历史 payload 解析时都会清洗；`search_pass=2` 只在静态扩展域名第二轮真的产出展示结果时写出
     - `polymarket` 当前额外带 `configured_host / geo_gated`
     - `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` 时，`polymarket` 会显式保持 `empty + geo_gated`
 - Ending Room 的同步服务函数（`create_ending_room`、`create_ending_room_thread`、`load_ending_room_snapshot` 等）在 async 端点中通过 `asyncio.to_thread()` 调用，不阻塞事件循环。路由层对 `to_thread` 内部的非业务异常有通用 `except Exception` 兜底，不会让裸 DB 异常直接落成未分类 500。

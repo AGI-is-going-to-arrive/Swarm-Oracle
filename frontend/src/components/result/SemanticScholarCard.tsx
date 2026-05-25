@@ -21,6 +21,8 @@ export interface SemanticScholarCardProps {
   testIdOverride?: string;
   title?: string;
   subtitle?: string;
+  optimizedQuery?: string;
+  searchPass?: 1 | 2;
 }
 
 export function SemanticScholarCard({
@@ -30,6 +32,8 @@ export function SemanticScholarCard({
   testIdOverride,
   title,
   subtitle,
+  optimizedQuery,
+  searchPass,
 }: SemanticScholarCardProps) {
   const { t } = useTranslation();
   const resolvedTitle =
@@ -51,6 +55,8 @@ export function SemanticScholarCard({
       state={resolvedState}
       reason={reason}
       testIdOverride={testIdOverride}
+      optimizedQuery={optimizedQuery}
+      searchPass={searchPass}
     >
       {resolvedState === 'ready' && items.length > 0 && (
         <ul className="space-y-2">

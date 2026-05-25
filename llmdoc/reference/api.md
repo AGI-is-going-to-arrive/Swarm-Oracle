@@ -91,6 +91,8 @@
   - base search 和 family search 独立执行；base search 失败不会阻止已选择的 family search
   - 后端当前可写出 `ready / empty / failed / unsupported_provider / search_skipped`；历史/兼容 parser 还允许 `loading / rate_limited / network_error / fallback_unconstrained`
   - family entry 可能带 `domain_filter_mode / domain_coverage / status_reason`；`polymarket` 当前额外带 `configured_host / geo_gated`
+  - `FEATURE_FAMILY_QUERY_OPTIMIZATION=true` 时，family entry 还可能带 `optimized_query` 和 `search_pass`。`optimized_query` 只在清洗后与原始问题实质不同才写出；`search_pass=2` 只表示第二轮静态扩展域名检索产出了可展示结果。
+  - 历史 payload 解析不会信任原始 metadata：`optimized_query` 会再次拒绝 raw URL、`site:`、localhost/private/internal host、metadata IP 和 HTML/script-like token；`search_pass` 只保留整数 `1 / 2`。
 - `POST /api/scenario` 当前也接受可选 `continuity_overrides`：
   - 前端通常先调用 `POST /api/agents/identities/preflight`
   - `reuse_existing` 需要带 `identity_id`，后端会校验它属于当前 `user_id`

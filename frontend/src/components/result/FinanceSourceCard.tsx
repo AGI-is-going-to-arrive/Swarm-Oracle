@@ -11,6 +11,8 @@ interface FinanceSourceCardProps {
   reason?: string;
   testIdOverride?: string;
   items: FinanceSourceItem[];
+  optimizedQuery?: string;
+  searchPass?: 1 | 2;
 }
 
 export function FinanceSourceCard({
@@ -18,6 +20,8 @@ export function FinanceSourceCard({
   reason,
   testIdOverride = 'result-sources-finance',
   items,
+  optimizedQuery,
+  searchPass,
 }: FinanceSourceCardProps) {
   const { t } = useTranslation();
 
@@ -29,6 +33,8 @@ export function FinanceSourceCard({
       state={state}
       reason={reason}
       testIdOverride={testIdOverride}
+      optimizedQuery={optimizedQuery}
+      searchPass={searchPass}
     >
       {state === 'ready' && (
         <ul className="space-y-2">

@@ -3718,6 +3718,10 @@
 
 .result-source-card__header {
   margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
 }
 
 .result-source-card__title {
@@ -3727,11 +3731,48 @@
   color: var(--text-primary);
 }
 
+.result-source-card__broadened-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  background: color-mix(in oklab, var(--color-primary) 10%, var(--bg-surface));
+  color: var(--color-primary);
+  border: 1px solid color-mix(in oklab, var(--color-primary) 20%, var(--border-default));
+}
+
+@supports not (color: color-mix(in oklab, red, blue)) {
+  .result-source-card__broadened-badge {
+    background: rgba(198, 21, 131, 0.08);
+    border-color: rgba(198, 21, 131, 0.15);
+  }
+}
+
+@media (forced-colors: active) {
+  .result-source-card__broadened-badge {
+    border: 1px solid CanvasText;
+    color: CanvasText;
+    background: Canvas;
+  }
+}
+
 .result-source-card__subtitle {
   font-family: var(--font-body);
   font-size: var(--text-xs);
   color: var(--text-muted);
-  margin-top: 2px;
+}
+
+.result-source-card__search-query {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-style: italic;
+  margin-top: 4px;
+  unicode-bidi: plaintext;
+  overflow-wrap: anywhere;
 }
 
 .result-source-card__body {

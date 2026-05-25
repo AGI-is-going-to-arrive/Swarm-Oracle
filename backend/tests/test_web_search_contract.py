@@ -173,6 +173,18 @@ class TestCreateScenarioRequestWebSearch:
             )
 
 
+class TestFamilyQueryOptimizationConfig:
+    def test_family_query_optimization_defaults_off(self):
+        from app.config import Settings
+
+        settings = Settings(_env_file=None)
+
+        assert settings.FEATURE_FAMILY_QUERY_OPTIMIZATION is False
+        assert settings.FAMILY_QUERY_OPTIMIZATION_TIMEOUT_SECONDS == 5.0
+        assert settings.FAMILY_QUERY_OPTIMIZATION_CACHE_TTL_SECONDS == 300
+        assert settings.FAMILY_QUERY_OPTIMIZATION_MAX_QUERY_CHARS == 180
+
+
 # ── Model Tests ─────────────────────────────────────────
 
 
@@ -490,6 +502,30 @@ class TestScenarioResponseWebSearchContext:
         assert "ignored" not in family_context["polymarket"]["items"][0]
         assert family_context["finance"]["items"][0]["title"] == "Rates pause"
 
+    def test_parse_web_context_json_rejects_extra_family_keys(self):
+        raw = json.dumps({
+            "query": "AI trends 2026",
+            "snippets": [],
+            "provider": "tavily",
+            "timestamp": "2026-04-07T00:00:00Z",
+            "cached": False,
+            "family_context": {
+                "finance": {"state": "empty", "items": []},
+                "debug_family": {
+                    "state": "ready",
+                    "items": [{"id": "debug-1", "title": "must not leak"}],
+                    "optimized_query": "debug query",
+                    "raw_llm_output": {"secret": True},
+                },
+            },
+        })
+
+        result = _parse_web_context_json(raw)
+
+        assert result is not None
+        assert set(result["family_context"]) == {"finance"}
+        assert "debug_family" not in result["family_context"]
+
     def test_parse_web_context_json_keeps_empty_family_envelope(self):
         raw = json.dumps({
             "query": "AI trends 2026",
@@ -526,6 +562,71 @@ class TestScenarioResponseWebSearchContext:
         assert family_context["polymarket"]["geo_gated"] is True
         assert family_context["polymarket"]["items"] == []
         assert family_context["finance"]["items"] == []
+
+    def test_parse_web_context_json_whitelists_safe_family_query_metadata(self):
+        raw = json.dumps({
+            "query": "AI trends 2026",
+            "snippets": [],
+            "provider": "tavily",
+            "timestamp": "2026-04-07T00:00:00Z",
+            "cached": False,
+            "family_context": {
+                "finance": {
+                    "state": "empty",
+                    "items": [],
+                    "optimized_query": "  macro   rate outlook  ",
+                    "search_pass": 1,
+                    "original_query": "secret raw question",
+                    "raw_llm_output": {"debug": True},
+                    "prompt": "hidden prompt",
+                    "headers": {"Authorization": "Bearer secret"},
+                },
+                "academic": {
+                    "state": "ready",
+                    "items": [],
+                    "optimized_query": "x" * 500,
+                    "search_pass": 3,
+                },
+            },
+        })
+
+        result = _parse_web_context_json(raw)
+
+        assert result is not None
+        finance = result["family_context"]["finance"]
+        assert finance["optimized_query"] == "macro rate outlook"
+        assert finance["search_pass"] == 1
+        assert "original_query" not in finance
+        assert "raw_llm_output" not in finance
+        assert "prompt" not in finance
+        assert "headers" not in finance
+        academic = result["family_context"]["academic"]
+        assert len(academic["optimized_query"]) == 180
+        assert "search_pass" not in academic
+
+    def test_parse_web_context_json_rejects_unsafe_family_query_metadata(self):
+        raw = json.dumps({
+            "query": "AI trends 2026",
+            "snippets": [],
+            "provider": "tavily",
+            "timestamp": "2026-04-07T00:00:00Z",
+            "cached": False,
+            "family_context": {
+                "finance": {
+                    "state": "empty",
+                    "items": [],
+                    "optimized_query": "site:localhost secrets",
+                    "search_pass": 2,
+                },
+            },
+        })
+
+        result = _parse_web_context_json(raw)
+
+        assert result is not None
+        finance = result["family_context"]["finance"]
+        assert "optimized_query" not in finance
+        assert finance["search_pass"] == 2
 
     def test_parse_web_context_json_filters_native_citation_urls(self):
         raw = json.dumps({

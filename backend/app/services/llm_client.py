@@ -1869,6 +1869,239 @@ def _clean_json_text(raw: str) -> str:
     return cleaned
 
 
+def _chat_output_token_param(model: str, base_url: str | None) -> str:
+    provider = detect_provider(base_url)
+    normalized_model = (model or "").strip().lower()
+    if (
+        provider.name in {"openai", "xai", "openrouter", "local", "default"}
+        or normalized_model.startswith(("gpt-5", "o1", "o3", "o4", "grok"))
+    ):
+        return "max_completion_tokens"
+    return "max_tokens"
+
+
+def _is_non_retryable_optional_param_error(status_code: int, body: str) -> bool:
+    if status_code in {401, 402, 403, 429}:
+        return True
+    lowered = body.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "authentication",
+            "unauthorized",
+            "forbidden",
+            "api key",
+            "invalid key",
+            "quota",
+            "insufficient_quota",
+            "billing",
+            "rate limit",
+            "rate_limit",
+        )
+    )
+
+
+def _body_mentions_optional_llm_param(body: str, key: str) -> bool:
+    lowered = body.lower()
+    normalized = re.sub(r"[\s\"'`.-]+", "_", lowered)
+    aliases: dict[str, tuple[str, ...]] = {
+        "temperature": ("temperature",),
+        "reasoning_effort": ("reasoning_effort", "reasoning effort", "reasoning"),
+        "reasoning": ("reasoning", "reasoning.effort", "reasoning_effort"),
+        "max_output_tokens": ("max_output_tokens", "max output tokens"),
+        "max_completion_tokens": ("max_completion_tokens", "max completion tokens"),
+        "max_tokens": ("max_tokens", "max tokens"),
+    }
+    for alias in aliases.get(key, (key,)):
+        alias_lowered = alias.lower()
+        alias_normalized = re.sub(r"[\s\"'`.-]+", "_", alias_lowered)
+        if alias_lowered in lowered or alias_normalized in normalized:
+            return True
+    return False
+
+
+def _is_optional_llm_param_incompatibility(body: str, key: str) -> bool:
+    lowered = body.lower()
+    if not any(
+        marker in lowered
+        for marker in (
+            "not supported",
+            "unsupported",
+            "unrecognized",
+            "unknown parameter",
+            "invalid parameter",
+            "unexpected parameter",
+            "extraneous",
+            "not allowed",
+            "does not support",
+        )
+    ):
+        return False
+    return _body_mentions_optional_llm_param(body, key)
+
+
+def _drop_next_optional_llm_param(payload: dict[str, Any], body: str) -> bool:
+    for key in (
+        "temperature",
+        "reasoning_effort",
+        "reasoning",
+        "max_output_tokens",
+        "max_completion_tokens",
+        "max_tokens",
+    ):
+        if key in payload and _is_optional_llm_param_incompatibility(body, key):
+            payload.pop(key, None)
+            return True
+    return False
+
+
+def _extract_llm_response_text(data: dict[str, Any], *, is_chat: bool) -> str:
+    if is_chat:
+        text = data["choices"][0]["message"]["content"] or ""
+    else:
+        text = ""
+        outputs = data.get("output", [])
+        if not isinstance(outputs, list):
+            raise TypeError("Responses output must be a list")
+        msg = next(
+            (o for o in outputs if isinstance(o, dict) and o.get("type") == "message"),
+            None,
+        )
+        if msg is None:
+            msg = next(
+                (o for o in outputs if isinstance(o, dict) and "content" in o),
+                None,
+            )
+        if msg is not None:
+            parts = msg.get("content") or []
+            if not isinstance(parts, list):
+                raise TypeError("Responses message content must be a list")
+            if parts:
+                first = parts[0] or {}
+                if not isinstance(first, dict):
+                    raise TypeError("Responses message content part must be an object")
+                text = first.get("text") or first.get("output_text") or ""
+        if not text:
+            text = data.get("output_text") or ""
+        if not text and msg is None:
+            raise KeyError("No message block in output")
+    return _strip_reasoning_blocks(str(text))
+
+
+async def llm_call_json_for_family_query_reformulation(
+    input_text: str,
+    *,
+    reasoning_effort: str | None = None,
+    temperature: float | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    max_output_tokens: int | None = None,
+    timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Call a structured LLM path for source-family query reformulation only.
+
+    This narrow path avoids blocking scenario creation on provider-specific
+    optional parameter incompatibilities while preserving auth/quota/rate-limit
+    failures as non-retryable.
+    """
+    target_url = _resolve_llm_api_url(base_url)
+    if base_url and not api_key:
+        raise LLMError(
+            "BYOK mode requires an api_key when a custom base_url is provided"
+        )
+    target_key = api_key or settings.LLM_API_KEY
+    selected_model = model or settings.LLM_MODEL_NAME
+    is_chat = _is_chat_completions_api(target_url)
+    provider_key = _provider_key(target_url)
+    estimated_tokens = _estimate_tokens(input_text)
+    effort = _normalize_reasoning_effort(reasoning_effort or settings.LLM_REASONING_EFFORT)
+
+    payload: dict[str, Any] = {"model": selected_model}
+    if is_chat:
+        payload["messages"] = [{"role": "user", "content": input_text}]
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if effort:
+            payload["reasoning_effort"] = effort
+        if max_output_tokens is not None and max_output_tokens > 0:
+            payload[_chat_output_token_param(selected_model, base_url or target_url)] = int(
+                max_output_tokens
+            )
+    else:
+        payload["input"] = input_text
+        if effort:
+            payload["reasoning"] = {"effort": effort}
+        if max_output_tokens is not None and max_output_tokens > 0:
+            payload["max_output_tokens"] = int(max_output_tokens)
+
+    reservation_id = await _reserve_runtime_slot(
+        quota_key=_normalize_quota_key(_REQUEST_CONTEXT.get().quota_key),
+        purpose=_REQUEST_CONTEXT.get().purpose,
+        provider_key=provider_key,
+        lease_seconds=max(timeout * 2, _SQLITE_RUNTIME_GUARD_TTL_SECONDS),
+        estimated_tokens=estimated_tokens,
+    )
+    data: dict[str, Any] | None = None
+    try:
+        client = _get_shared_async_client()
+        attempt_payload = dict(payload)
+        while True:
+            try:
+                resp = await client.post(
+                    target_url,
+                    json=attempt_payload,
+                    headers={
+                        "Authorization": f"Bearer {target_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=timeout,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                body = _sanitize_error(exc.response.text[:500])
+                if (
+                    status_code not in {400, 422}
+                    or _is_non_retryable_optional_param_error(status_code, body)
+                    or not _drop_next_optional_llm_param(attempt_payload, body)
+                ):
+                    logger.warning(
+                        "Family query reformulation LLM HTTP error %s: %s",
+                        status_code,
+                        body,
+                    )
+                    raise LLMError(f"LLM returned {status_code}") from exc
+            except httpx.RequestError as exc:
+                raise LLMError(f"LLM connection failed: {_sanitize_error(str(exc))}") from exc
+
+        await _reconcile_rate_limit_usage(
+            provider_key=provider_key,
+            reservation_id=reservation_id,
+            estimated_tokens=estimated_tokens,
+            actual_tokens=_extract_total_usage_tokens(data),
+        )
+    finally:
+        await _release_runtime_slot(
+            quota_key=_normalize_quota_key(_REQUEST_CONTEXT.get().quota_key),
+            purpose=_REQUEST_CONTEXT.get().purpose,
+            reservation_id=reservation_id,
+        )
+
+    if data is None:
+        raise LLMError("Empty LLM response")
+    try:
+        text = _extract_llm_response_text(data, is_chat=is_chat)
+    except (KeyError, IndexError, TypeError, StopIteration) as exc:
+        raise LLMError("Unexpected response structure") from exc
+    if not text.strip():
+        raise LLMError("Empty non-stream content")
+    cleaned = _clean_json_text(text)
+    return _parse_json_response(cleaned)
+
+
 def _recover_keyed_json_like_response(cleaned: str) -> dict[str, Any] | None:
     """Recover simple key/value JSON-like payloads from malformed text.
 

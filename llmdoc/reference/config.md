@@ -263,8 +263,20 @@
   - `unsupported_provider`：当前 provider 不支持 domain filter
   - `NEW_SOURCES_POLYMARKET_CONFIGURED_HOST=non-us` 时，`polymarket` 会显式带上 geo-gated 口径
 - `search_skipped` 当前会在 provider 429 / rate limit 时写出；历史 payload 解析还保留 `loading / rate_limited / network_error / fallback_unconstrained` 白名单。前端会为这些扩展状态显示专门文案，后端 `status_reason` 会作为说明进入卡片。
+- `FEATURE_FAMILY_QUERY_OPTIMIZATION=true` 时，source family 会先生成或确定性派生每个 family 的安全搜索词，再调用 provider；默认关闭时仍沿用原始问题，且不会写出 `optimized_query / search_pass` 或触发第二轮扩展域名检索。
+- family query optimization 只信任本地静态 domain allowlist：LLM 输出会在 provider 查询前拒绝 `site:`、raw URL、localhost/private/internal host、metadata IP、HTML/script 和 prompt-leak token。持久化时 `_parse_web_context_json()` 还会再次清洗 `optimized_query`，只允许 `search_pass=1/2`。
+- 第一轮 domain-filtered family 搜索为空时，启用该功能后会只对 `empty` family 尝试一次静态扩展域名第二轮；原始域名先保留，provider cap 不够时标记 `domain_coverage=partial`。第二轮 rate limit 不会把第一轮空结果覆盖成 `search_skipped`。
 - 未引入 no-key HTML scraping provider。Google / Bing / Baidu 搜索页解析这类方案稳定性和合规风险高，当前只作为产品研究风险项记录，不在 app-layer provider 列表中暴露。
 - 详细设计见 `implement/web_search_augmentation_design.md`。
+
+### Source Family Query Optimization
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `FEATURE_FAMILY_QUERY_OPTIMIZATION` | `false` | 启用 source family per-family 搜索词优化、`optimized_query / search_pass` metadata 和空结果第二轮静态扩展域名检索 |
+| `FAMILY_QUERY_OPTIMIZATION_TIMEOUT_SECONDS` | `5.0` | LLM 搜索词改写的单次超时；超时后按 family fail-soft 回到确定性 fallback |
+| `FAMILY_QUERY_OPTIMIZATION_CACHE_TTL_SECONDS` | `300` | 改写缓存 TTL；缓存 key 包含规范化问题、所选 family、provider/model family、rewrite version 和 128-bit API-key tenant fingerprint，不保存 API key |
+| `FAMILY_QUERY_OPTIMIZATION_MAX_QUERY_CHARS` | `180` | provider 查询和前端展示的本地搜索词长度上限；helper 直接调用也按同一上限清洗 |
 
 ## Phase 3 功能开关
 

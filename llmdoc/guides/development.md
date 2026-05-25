@@ -272,9 +272,12 @@ python -m pytest tests/test_llm_client.py tests/test_native_search_adapters.py t
 cd ../frontend
 npm test -- --run src/pages/InputView.test.tsx src/api/client.test.ts
 npm exec -- vitest run src/components/result/SourceCategoryCard.test.tsx src/pages/InputView.test.tsx src/pages/ResultView.test.tsx --reporter=dot
+npm test -- --run src/components/result/SourceCategoryCard.test.tsx src/pages/ResultView.test.tsx src/i18n/locales.test.ts
 npx tsc --noEmit -p tsconfig.app.json
 npm run lint
 VITE_ENABLE_WEB_SEARCH=true npm run build
+node --check scripts/e2e-new-source-ingestion-live.mjs
+node --check scripts/e2e-web-search-suite.mjs
 npm run e2e:web-search -- --url http://127.0.0.1:18930 --output-dir output/e2e/review-web-search --provider tavily --intensity standard
 npm run e2e:native-search -- full --url http://127.0.0.1:18930 --headless
 npm run e2e:capability-matrix -- --url http://127.0.0.1:18930 --output-dir output/e2e/capability-matrix-check --headless
@@ -328,6 +331,7 @@ SWARM_E2E_MODE=live node scripts/e2e-new-source-ingestion-live.mjs full --url ht
 - live 模式现在会先显式打开首页总开关，再检查 `/api/scenario` 请求体里是否真的带上 `web_search_enabled=true`。
 - live 模式当前还会检查结果页四个 source family card：
   - `ready` 时要求可见列表项
+  - fixture payload 会检查 empty state 的安全搜索词文案，以及 `search_pass=2` 时的 broadened-search badge
   - 真实 provider 没有可用结果或返回明确错误时，允许 `empty / failed / search_skipped / unsupported_provider / fallback_unconstrained` 这类可解释状态
   - `non-us` 口径下要求 `Polymarket` 显示 geo-gated placeholder
 - 如果服务端默认搜索没 ready，live 脚本当前也支持：

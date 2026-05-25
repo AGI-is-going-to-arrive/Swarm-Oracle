@@ -2710,6 +2710,10 @@
       }
     },
     "source": {
+      "searched_with": "搜索词：\"{{query}}\"",
+      "searched_with_raw_fallback": "已使用原始问题检索",
+      "broadened_search": "已扩展搜索范围",
+      "broadened_search_sr": "这些结果来自第二轮扩展域名检索",
       "section_title": "真实世界来源",
       "mobile_sheet": {
         "title": "实时来源",

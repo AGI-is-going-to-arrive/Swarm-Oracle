@@ -44,6 +44,8 @@ export interface SourceCategoryCardProps {
   className?: string;
   /** Optional override of the data-testid base. */
   testIdOverride?: string;
+  optimizedQuery?: string;
+  searchPass?: 1 | 2;
 }
 
 const REASON_STATES: ReadonlySet<SourceCategoryState> = new Set<SourceCategoryState>([
@@ -52,6 +54,47 @@ const REASON_STATES: ReadonlySet<SourceCategoryState> = new Set<SourceCategorySt
   'search_skipped',
   'failed',
 ]);
+
+const RAW_URL_PATTERN = /\b(?:https?:\/\/|www\.)\S+/i;
+const SITE_OPERATOR_PATTERN = /(?:^|\s)site\s*:/i;
+const LOCAL_HOST_PATTERN = /\b(?:localhost|host\.docker\.internal|metadata\.google\.internal)\b/i;
+const IPV4_PATTERN = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+
+function isPrivateOrMetadataIp(value: string): boolean {
+  for (const match of value.matchAll(IPV4_PATTERN)) {
+    const parts = match[0].split('.').map((part) => Number(part));
+    if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+      continue;
+    }
+    const [a, b] = parts;
+    if (
+      a === 10
+      || a === 127
+      || (a === 169 && b === 254)
+      || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getDisplayableOptimizedQuery(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (
+    RAW_URL_PATTERN.test(trimmed)
+    || SITE_OPERATOR_PATTERN.test(trimmed)
+    || LOCAL_HOST_PATTERN.test(trimmed)
+    || isPrivateOrMetadataIp(trimmed)
+  ) {
+    return undefined;
+  }
+  return trimmed;
+}
 
 export function SourceCategoryCard({
   family,
@@ -62,11 +105,14 @@ export function SourceCategoryCard({
   children,
   className,
   testIdOverride,
+  optimizedQuery,
+  searchPass,
 }: SourceCategoryCardProps) {
   const { t } = useTranslation();
   const baseTestId = testIdOverride ?? `result-sources-${family}`;
   const reasonId = `${baseTestId}-reason`;
   const hasReason = REASON_STATES.has(state);
+  const displayOptimizedQuery = getDisplayableOptimizedQuery(optimizedQuery);
 
   let stateTestId: string | undefined;
   let stateBody: ReactNode = null;
@@ -90,9 +136,20 @@ export function SourceCategoryCard({
     case 'empty':
       stateTestId = 'result-sources-empty';
       stateBody = (
-        <p className="result-source-card__empty">
-          {t(`source.${family}.empty`, { defaultValue: 'No results.' })}
-        </p>
+        <div className="result-source-card__empty-container">
+          <p className="result-source-card__empty result-source-card__empty-text">
+            {t(`source.${family}.empty`, { defaultValue: 'No results.' })}
+          </p>
+          {displayOptimizedQuery ? (
+            <p className="result-source-card__search-query" dir="auto">
+              {t('source.searched_with', { query: displayOptimizedQuery })}
+            </p>
+          ) : (
+            <p className="result-source-card__search-query">
+              {t('source.searched_with_raw_fallback')}
+            </p>
+          )}
+        </div>
       );
       break;
     case 'rate_limited':
@@ -205,6 +262,14 @@ export function SourceCategoryCard({
         >
           {title}
         </h3>
+        {searchPass === 2 && state === 'ready' && (
+          <span className="result-source-card__broadened-badge">
+            <span aria-hidden="true">{t('source.broadened_search')}</span>
+            <span className="sr-only">
+              {t('source.broadened_search_sr')}
+            </span>
+          </span>
+        )}
         {subtitle && <p className="result-source-card__subtitle">{subtitle}</p>}
       </header>
       {hasReason && (

@@ -19,6 +19,8 @@ export interface NewsApiCardProps {
   reason?: string;
   testIdOverride?: string;
   items?: NewsApiItem[];
+  optimizedQuery?: string;
+  searchPass?: 1 | 2;
 }
 
 export function NewsApiCard({
@@ -26,6 +28,8 @@ export function NewsApiCard({
   reason,
   testIdOverride,
   items = [],
+  optimizedQuery,
+  searchPass,
 }: NewsApiCardProps) {
   const { t } = useTranslation();
   const title = t('source.news_deep.title', { defaultValue: 'News (Deep)' });
@@ -44,6 +48,8 @@ export function NewsApiCard({
       state={resolvedState}
       reason={reason}
       testIdOverride={testIdOverride}
+      optimizedQuery={optimizedQuery}
+      searchPass={searchPass}
     >
       {resolvedState === 'ready' && items.length > 0 && (
         <ul className="space-y-2">
