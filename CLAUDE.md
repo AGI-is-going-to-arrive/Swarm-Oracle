@@ -13,7 +13,7 @@ SwarmOracle 允许用户提出 "如果...会怎样" 的假设性问题，由 AI 
 |------|--------|------|
 | 前端 | Vite + React 19 + TypeScript + Phaser 3 + Zustand | 18928 |
 | 后端 | FastAPI + SQLModel + Alembic + ChromaDB | 18927 |
-| LLM  | MiniMax-M2.5 (可配置任意 OpenAI 兼容 API) | 可配置 |
+| LLM  | OpenAI-compatible API (按环境变量配置) | 可配置 |
 | 数据库 | SQLite + ChromaDB (向量检索) | 本地文件 |
 | 部署 | Docker Compose (backend + frontend) | 18927/18928 |
 
@@ -50,8 +50,8 @@ graph TD
 
 | 模块 | 路径 | 语言 | 职责 | 文件数 | 测试数 |
 |------|------|------|------|--------|--------|
-| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | full pytest：3384 passed / 6 skipped；ruff app 通过 |
-| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | full vitest：213 文件 / 2386 tests；i18n 2836/2836 |
+| backend | `backend/` | Python 3.11+ | FastAPI 后端，LLM 编排，模拟引擎，Web 搜索增强 | ~70 | full pytest：3415 passed / 6 skipped；ruff app 通过 |
+| frontend | `frontend/` | TypeScript | React SPA，Phaser 游戏引擎，实时 WS | ~140+ | full vitest：213 文件 / 2397 tests；i18n 2843/2843 |
 | video | `video/` | Markdown | 宣传视频脚本与分镜稿 | 10 | -- |
 
 ## 运行与开发
@@ -63,10 +63,10 @@ graph TD
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env  # 配置 LLM_API_KEY 等
+cp ../.env.example .env  # 配置 LLM_API_KEY 等
 
 # 前端
-cd frontend
+cd ../frontend
 npm install
 ```
 
@@ -100,7 +100,7 @@ cd backend && alembic upgrade head
 | 前端单元/组件 | vitest + @testing-library/react | `cd frontend && npm test` |
 | 前端 E2E | Playwright + 自定义脚本 | `cd frontend && npm run e2e:full` |
 | E2E 子集 | -- | `npm run e2e:ending-room:full` / `npm run e2e:roundtable:full` / `npm run e2e:debate:full` |
-| Lint (后端) | ruff | `cd backend && ruff check .` |
+| Lint (后端) | ruff | `cd backend && ruff check app/` |
 | Lint (前端) | eslint | `cd frontend && npm run lint` |
 | 构建校验 | tsc + vite | `cd frontend && npm run build` |
 
@@ -202,6 +202,7 @@ cd backend && alembic upgrade head
 
 | 日期 | 说明 |
 |------|------|
+| 05-26 | 发布前配置、文档与 i18n 收口：README 改成用户快速上手口径；`.env.example` / `.env.docker` 改用通用 LLM 占位值，后端会拒绝非本地 endpoint 继续使用占位 key；AppErrorBoundary 补 i18n fallback、未初始化兜底和语言切换刷新；Roundtable Agent Chat origin 摘要改走 locale key；`.claude/`、`implement/`、`llmdoc/` 与临时 E2E 输出从提交范围移出。验证：backend full `3415 passed, 6 skipped`，`ruff check app/` 通过；frontend full `213 files / 2397 tests passed`，tsc/lint/build 通过；i18n parity `2843/2843`；中文/英文主链路、AppErrorBoundary、语言切换和 Chromium/Firefox/WebKit smoke 通过 |
 | 05-25 | UX 去模板化收口：首页 runtime preset 用户可见文案改为 `Simulation Mode / 推演模式`，三档显示为 `Conservative / Balanced / Exploratory` 与 `谨慎 / 均衡 / 探索`，内部 id 仍保留 `conservative / balanced / aggressive`；SimulationView 的模式 badge 改为可聚焦说明，不再依赖 native title；BranchNode 的低可能性状态补 inline help，未知 status 走保守 fallback；ResultVerdictPanel 在有/无 verdict 两条路径都保留原问题锚定；Roundtable 的 synthesis、transcript、phase 侧栏都会显示问题锚定，主文案改为讨论结果 / 主持人小结口径；E2E 脚本补移动端 viewport 参数校验。验证：backend full `3384 passed, 6 skipped`，ruff 通过；frontend full `213 files / 2386 tests passed`，tsc/lint/build 通过；i18n parity `2836/2836`，Chromium zh/en、Firefox zh、Chromium mobile 320/375 roundtable E2E 通过 |
 | 05-24 | Roundtable Overhaul 收口：`worldline_roundtable` 新增 `discussion_format / cast_mode` 合同，保留旧 `selection_recipe` fallback；后端 generation version 升到 5，format/cast 进入 `config_json` 与 room scope，非 roundtable 带新字段返回 422；前端新增 `FormatSelector / PlanningSkeletonView / PhaseInsightTimeline`，WS 处理瞬时 `ending_room_planning` 并在 durable state 到达后清 skeleton；E2E 脚本补 UI/request/snapshot/result 的 format/cast 断言。验证：backend full `3374 passed, 6 skipped`，frontend full `212 files / 2374 tests passed`，tsc/lint/build/i18n `2841/2841` 通过，Roundtable Chromium desktop/mobile、Chromium en、Firefox desktop、WebKit desktop deterministic E2E 通过 |
 | 05-22 | Capability gate / 回溯干预收口：`/api/scenario/{id}/intervene/retrospective` 补 `FEATURE_COUNTERFACTUAL_REPLAY` 后端 gate，`InterventionModal` 在 capability 关闭或探针失败时禁用回溯模式；`useCapabilityCheck` 增加 5 分钟 TTL、共享 in-flight promise 和最多 60 秒退避；`CausalReviewView` 与 `TimelineGalaxy` 在 capability 探针失败时显示 Retry，不再把探针失败误当成 feature disabled；`PostVerdictPanel` 的 analyst/survey/agent conversation 子面板补 inline gate、ARIA tabpanel 占位和禁用态 CSS，禁用时不挂载对应 SSE。验证：backend full `3286 passed, 11 skipped`，backend related `130 passed`，frontend full `206 files / 2318 tests passed`，tsc/eslint/i18n parity `2791/2791` 通过，Chromium/Firefox/WebKit capability browser spot-check 通过 |

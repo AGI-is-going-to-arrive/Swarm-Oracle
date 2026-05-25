@@ -115,9 +115,10 @@ def test_settings_preserve_sqlite_uri_database_url(monkeypatch):
     assert s.DATABASE_URL == db_url
 
 
-def test_settings_reject_placeholder_key_for_non_local_llm(monkeypatch):
+@pytest.mark.parametrize("api_key", ["sk-12345678", "your-api-key-here"])
+def test_settings_reject_placeholder_key_for_non_local_llm(monkeypatch, api_key):
     monkeypatch.setenv("LLM_RESPONSES_URL", "https://api.example.com/v1/chat/completions")
-    monkeypatch.setenv("LLM_API_KEY", "sk-12345678")
+    monkeypatch.setenv("LLM_API_KEY", api_key)
 
     from app.config import Settings
 

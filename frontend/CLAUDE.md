@@ -202,7 +202,7 @@ npm run test:watch # vitest (watch mode)
 
 ## 测试与质量
 
-- 最近 full vitest 基线：`213 files / 2386 tests passed`
+- 最近 full vitest 基线：`213 files / 2397 tests passed`
 - 框架: vitest + @testing-library/react + jsdom
 - Lint: eslint + react-hooks + react-refresh
 - E2E: Playwright (自定义脚本封装)
@@ -396,6 +396,7 @@ frontend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-26 | 发布前 i18n / ErrorBoundary 收口 | `AppErrorBoundary` 改为 locale key + 内置中英文 fallback，覆盖 i18n 未初始化、raw key 和语言切换后刷新；`RoundtableAgentChat` 的 origin 摘要标签改走 `roundtable.agent_chat_origin_*`，并移除 `isZh` prop 链路。验证：frontend full `213 files / 2397 tests passed`，`npx tsc --noEmit`、`npm run lint`、`npm run build` 通过；i18n parity `2843/2843`；中文/英文主链路、AppErrorBoundary、语言切换和 Chromium/Firefox/WebKit smoke 通过 |
 | 2026-05-25 | UX 去模板化收口 | 首页 runtime preset 用户可见文案改为 `Simulation Mode / 推演模式`，三档显示为 `Conservative / Balanced / Exploratory` 与 `谨慎 / 均衡 / 探索`；`SimulationView` header 把问题和当前模式分开，模式说明改为可聚焦控件；`BranchNode` 低可能性状态补 inline help，未知 status 走保守 fallback；`ResultVerdictPanel` 有/无 verdict 时都保留原问题；`WorldlineRoundtableView` 在 synthesis、transcript header、phase 侧栏显示问题锚定，并把主文案收成讨论结果 / 主持人小结口径；E2E 脚本补 `--mobile-width / --mobile-height` 校验。验证：frontend full `213 files / 2386 tests passed`，`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build` 通过；i18n parity `2836/2836` 与 placeholder parity 通过；Roundtable E2E 通过 Chromium zh/en、Firefox zh、Chromium mobile 320/375 |
 | 2026-05-24 | Roundtable Overhaul | `WorldlineRoundtableView.tsx` 接入 `FormatSelector`、`PlanningSkeletonView`、`PhaseInsightTimeline` 和 format helper；开桌 payload 发送 `discussionFormat / castMode`，旧 `selectionRecipe` 继续保留；`useEndingRoomWS` 处理瞬时 `ending_room_planning`，`endingRoomStore` 在 durable state 到达后清掉 planning skeleton；automation payload 和 E2E 脚本补 `discussion_format / cast_mode` 断言，并覆盖 `deep_dive / quick_review / clash_mode`。验证：frontend full `212 files / 2374 tests passed`，`npx tsc --noEmit -p tsconfig.app.json`、`npm run lint`、`npm run build`、i18n parity `2841/2841` 通过；Roundtable E2E 通过 Chromium desktop/mobile、Chromium en、Firefox desktop、WebKit desktop deterministic 链路 |
 | 2026-05-23 | Roundtable timeline / transcript 收口 | `WorldlineRoundtableView.tsx`：phase insight 从卡片外框改为 timeline，新增 count badge、timeline dot、trigger 专用 class 和 `roundtable.phase_number_prefix` i18n 前缀；`AccordionContent` 使用明确 class，避免依赖不匹配的 Radix selector；transcript 外层改为 `roundtable-transcript-wrapper`，保留新消息提示定位上下文。`WorldlineRoundtable.css`：timeline 无边框样式、展开内容左边框、button reset、`color-mix()` fallback、transcript 独立滚动和 `scrollbar-gutter` 渐进增强；Synthesis 不设内部滚动，并加 `flex-shrink: 0` 避免 375px mobile 裁切。`WorldlineRoundtableView.test.tsx`：同步 `.roundtable-phase-section` selector，新增 trigger reset 与 phase 编号 i18n/CSS contract 测试。i18n：新增 `roundtable.phase_number_prefix`，英文 `Phase`，中文 `阶段`。验证：frontend full `207 files / 2343 tests passed`，`npx tsc --noEmit -p tsconfig.app.json`、`npx eslint src/ --max-warnings=0`、i18n parity `2812/2812` 通过；Playwright 覆盖指定 roundtable URL 的 Chromium / Firefox / WebKit 桌面和 Chromium 375px mobile |

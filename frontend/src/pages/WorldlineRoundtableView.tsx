@@ -2208,7 +2208,6 @@ export default function WorldlineRoundtableView() {
                 roomId={effectiveSnapshot?.id ?? null}
                 participants={participants}
                 effectiveResult={effectiveResult}
-                isZh={isZh}
                 activeTab={postVerdictTab}
                 onTabChange={setPostVerdictTab}
                 analystCache={analystCache}

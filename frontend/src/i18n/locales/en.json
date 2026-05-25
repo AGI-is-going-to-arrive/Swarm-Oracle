@@ -1549,6 +1549,11 @@
       "agent_chat_origin_quote": "Recent quote",
       "agent_chat_origin_bio": "Persona"
     },
+    "error_boundary": {
+      "title": "Something went wrong",
+      "body": "Refresh the page and try again.",
+      "action": "Reload page"
+    },
     "analyst": {
       "tool_causal_graph": "Causal Graph",
       "tool_identity": "Identity Memory",

@@ -15,7 +15,6 @@ interface PostVerdictPanelProps {
   roomId?: string | null;
   participants: EndingRoomParticipant[];
   effectiveResult: EndingRoomResult | null;
-  isZh: boolean;
   activeTab: PostVerdictTab;
   onTabChange: (tab: PostVerdictTab) => void;
   analystCache: AnalystCacheState;
@@ -30,7 +29,6 @@ export default function PostVerdictPanel({
   roomId,
   participants,
   effectiveResult,
-  isZh,
   activeTab,
   onTabChange,
   analystCache,
@@ -146,7 +144,7 @@ export default function PostVerdictPanel({
         {conversationError ? (
           capabilityErrorPlaceholder(reloadConversationCapability)
         ) : conversationEnabled ? (
-          <RoundtableAgentChat scenarioId={scenarioId} participants={participants} isZh={isZh} />
+          <RoundtableAgentChat scenarioId={scenarioId} participants={participants} />
         ) : (
           <div className="roundtable-post-verdict__placeholder">
             {t('roundtable.explore_agent_chat_placeholder')}

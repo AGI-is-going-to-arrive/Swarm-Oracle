@@ -79,3 +79,6 @@ graphify-out/
 /screenshots/
 /package.json
 /package-lock.json
+implement/
+llmdoc/
+frontend/.playwright-cli/

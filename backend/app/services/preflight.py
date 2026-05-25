@@ -11,13 +11,12 @@ from typing import Literal
 from sqlalchemy import text
 from sqlmodel import Session
 
-from app.config import settings
+from app.config import is_placeholder_llm_api_key, settings
 from app.models.database import get_engine
 from app.services.llm_client import LLMError, llm_call
 from app.services.vector_store import get_vector_store
 
 PreflightStatus = Literal["pass", "warn", "fail"]
-_PLACEHOLDER_LLM_API_KEYS = {"", "sk-12345678"}
 
 
 @dataclass(frozen=True)
@@ -50,8 +49,7 @@ def _check_chromadb() -> PreflightCheckResult:
 
 
 async def _check_llm() -> PreflightCheckResult:
-    api_key = settings.LLM_API_KEY.strip()
-    if api_key in _PLACEHOLDER_LLM_API_KEYS:
+    if is_placeholder_llm_api_key(settings.LLM_API_KEY):
         return PreflightCheckResult(
             "llm",
             "warn",

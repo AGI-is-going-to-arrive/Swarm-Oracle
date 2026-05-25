@@ -51,7 +51,6 @@ function renderPanel(activeTab: PostVerdictTab) {
       roomId="room-1"
       participants={[]}
       effectiveResult={{ summary: 'verdict ready' } as EndingRoomResult}
-      isZh={false}
       activeTab={activeTab}
       onTabChange={vi.fn()}
       analystCache={createInitialAnalystCache()}

@@ -71,8 +71,8 @@ docker compose up backend
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `LLM_RESPONSES_URL` | `http://127.0.0.1:8317/v1` | LLM API 地址 |
-| `LLM_API_KEY` | `sk-12345678` | LLM API Key |
-| `LLM_MODEL_NAME` | `gpt-5.4-mini` | 模型名称 |
+| `LLM_API_KEY` | 占位 key | 模板使用 `your-api-key-here`；旧 `sk-12345678` 也会按占位值处理 |
+| `LLM_MODEL_NAME` | `gpt-4o`（模板） | 模型名称 |
 | `DATABASE_URL` | `sqlite:///swarmoracle.db` | SQLite 路径 |
 | `LLM_CONCURRENCY` | `5` | LLM 并发请求数 |
 | `MAX_AGENTS` | `1500` | 最大代理数 |
@@ -165,7 +165,7 @@ docker compose up backend
 
 ## 测试与质量
 
-- **99+ 个 test_*.py 文件**，位于 `tests/`；当前 backend full gate 为 `3384 passed, 6 skipped`，`ruff check app/` 通过；live LLM benchmark / observation 测试默认跳过，需要 `RUN_REAL_LLM_TESTS=1` 显式开启
+- **99+ 个 test_*.py 文件**，位于 `tests/`；当前 backend full gate 为 `3415 passed, 6 skipped`，`ruff check app/` 通过；live LLM benchmark / observation 测试默认跳过，需要 `RUN_REAL_LLM_TESTS=1` 显式开启
 - 框架: pytest + pytest-asyncio (asyncio_mode=auto)
 - Lint: ruff (line-length=100, py311, select E/F/I/W)
 - 运行: `cd backend && pytest`
@@ -283,6 +283,7 @@ backend/
 
 | 日期 | 操作 | 说明 |
 |------|------|------|
+| 2026-05-26 | 发布前配置收口 | `config.py` 把 `your-api-key-here` 和旧 `sk-12345678` 都视为占位 key；非本地 LLM endpoint 配合占位 key 会启动失败，preflight 会把占位 key 作为未配置处理并跳过 LLM 连通性测试。验证：backend full `3415 passed, 6 skipped`，`ruff check app/` 通过 |
 | 2026-05-25 | UX 去模板化收口 | `parser.py` 初始标题 fallback 改为 `问题起点 / Starting point`，prompt 要求短、具体、像问题起点的标题；`simulator.py` 分支标题 prompt 收成更具体的人话标题；`ending_room_service` 的 roundtable wrap-up / follow-up fallback 避开 prompt 标签和 decisive verdict 口吻，输出跟随 room language，英文房间会翻译上下文里的中文片段；phase insight 继续保留问题前缀去重和中英预算控制。验证：backend full `3384 passed, 6 skipped`，`python -m ruff check app/` 通过 |
 | 2026-05-22 | Capability gate / 回溯干预收口 | `interventions.py` 的回溯干预端点现在受 `FEATURE_COUNTERFACTUAL_REPLAY` gate 控制，关闭时返回 404 `FEATURE_DISABLED`；`test_intervention.py` 对 live router module 的 settings 做显式 patch，并补关闭态 404 回归；`test_contract_freeze.py` 改用 `monkeypatch.setattr` patch 当前 settings 对象；`debate.py` 对 `FEATURE_HALLUCINATION_GATE` 改为直接属性访问，依赖 `config.py` 默认值。验证：backend full `3286 passed, 11 skipped`，related regression `130 passed`，`ruff check app/ tests/` 通过 |
 | 2026-05-19 | Counterfactual 逐消息对比 + resimulate 端点 | `replay.py`：`compare_branches()` 在轮级 `branches[]` 之外新增 `branch_a_messages` / `branch_b_messages`（每条含 `agent_name` / `content` / `emotion`），供前端做逐 agent 红绿 diff，原 CJK 逐字分歧度计算与 `intervention` / `is_identical` / `common_rounds` 字段保留。`graphs.py`：新增 `POST /scenario/{scenario_id}/counterfactual/{branch_id}/resimulate`，把旧的只 clone+seed 的反事实分支补跑成完整叙事（复用 `run_sim_background`），受 `FEATURE_COUNTERFACTUAL_REPLAY` gate。验证：counterfactual + replay + simulator + resume targeted `223 passed` |

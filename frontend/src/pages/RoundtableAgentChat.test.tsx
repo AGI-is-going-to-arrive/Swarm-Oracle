@@ -9,7 +9,19 @@ vi.mock('react-i18next', () => ({
     t: (
       key: string,
       options?: Record<string, string | number | undefined>,
-    ) => key.replace(/\{\{(\w+)\}\}/g, (_match: string, token: string) => String(options?.[token] ?? '')),
+    ) => {
+      const translations: Record<string, string> = {
+        'roundtable.agent_chat_origin_role': 'Role',
+        'roundtable.agent_chat_origin_worldline': 'Worldline',
+        'roundtable.agent_chat_origin_stance': 'Stance',
+        'roundtable.agent_chat_origin_quote': 'Recent quote',
+        'roundtable.agent_chat_origin_bio': 'Persona',
+      };
+      return (translations[key] ?? key).replace(
+        /\{\{(\w+)\}\}/g,
+        (_match: string, token: string) => String(options?.[token] ?? ''),
+      );
+    },
   }),
 }));
 
@@ -68,7 +80,6 @@ function renderChat() {
     <RoundtableAgentChat
       scenarioId="scenario-1"
       participants={participants}
-      isZh={false}
     />,
   );
 }

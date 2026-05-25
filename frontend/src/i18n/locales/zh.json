@@ -1549,6 +1549,11 @@
       "agent_chat_origin_quote": "最近原话",
       "agent_chat_origin_bio": "人物"
     },
+    "error_boundary": {
+      "title": "页面发生错误",
+      "body": "请刷新页面后重试。",
+      "action": "刷新页面"
+    },
     "analyst": {
       "tool_causal_graph": "因果图谱",
       "tool_identity": "身份记忆",

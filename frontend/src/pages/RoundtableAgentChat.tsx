@@ -90,23 +90,15 @@ function buildParticipantProfileRows(participant: EndingRoomParticipant): Partic
   return rows;
 }
 
-function buildOriginExcerpt(participant: EndingRoomParticipant, isZh: boolean): string {
+function buildOriginExcerpt(participant: EndingRoomParticipant, t: (key: string) => string): string {
   const rows = buildParticipantProfileRows(participant);
-  const labels: Record<string, string> = isZh
-    ? {
-      role: '角色',
-      worldline: '世界线',
-      stance: '立场',
-      quote: '最近原话',
-      bio: '人物',
-    }
-    : {
-      role: 'Role',
-      worldline: 'Worldline',
-      stance: 'Stance',
-      quote: 'Recent quote',
-      bio: 'Persona',
-    };
+  const labels: Record<string, string> = {
+    role: t('roundtable.agent_chat_origin_role'),
+    worldline: t('roundtable.agent_chat_origin_worldline'),
+    stance: t('roundtable.agent_chat_origin_stance'),
+    quote: t('roundtable.agent_chat_origin_quote'),
+    bio: t('roundtable.agent_chat_origin_bio'),
+  };
   return rows
     .map((row) => `${labels[row.key] ?? row.key}: ${row.value}`)
     .join('\n')
@@ -116,11 +108,9 @@ function buildOriginExcerpt(participant: EndingRoomParticipant, isZh: boolean): 
 export interface RoundtableAgentChatProps {
   scenarioId: string;
   participants: EndingRoomParticipant[];
-  isZh: boolean;
 }
 
 export default function RoundtableAgentChat({
-  isZh,
   scenarioId,
   participants,
 }: RoundtableAgentChatProps) {
@@ -179,7 +169,7 @@ export default function RoundtableAgentChat({
     const question = inputRef.current.trim();
     if (!question || !selectedId || !selectedParticipant || streaming) return;
     const participantId = selectedId;
-    const originExcerpt = buildOriginExcerpt(selectedParticipant, isZh);
+    const originExcerpt = buildOriginExcerpt(selectedParticipant, t);
     const originBranchId = selectedParticipant.source_branch_id?.trim() || null;
     const policy = loadLlmProviderPolicy();
     const controller = new AbortController();
@@ -327,7 +317,6 @@ export default function RoundtableAgentChat({
     }
   }, [
     appendAgentMessage,
-    isZh,
     scenarioId,
     selectedId,
     selectedParticipant,

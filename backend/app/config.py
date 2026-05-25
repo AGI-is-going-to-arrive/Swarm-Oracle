@@ -8,7 +8,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _LOCAL_LLM_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
-_PLACEHOLDER_LLM_API_KEYS = {"", "sk-12345678"}
+_PLACEHOLDER_LLM_API_KEYS = {"", "sk-12345678", "your-api-key-here"}
+
+
+def is_placeholder_llm_api_key(api_key: str) -> bool:
+    return api_key.strip() in _PLACEHOLDER_LLM_API_KEYS
 
 
 def _is_local_llm_url(url: str) -> bool:
@@ -221,7 +225,7 @@ class Settings(BaseSettings):
         self.LLM_MODEL_NAME = model_name
 
         api_key = self.LLM_API_KEY.strip()
-        if not _is_local_llm_url(self.LLM_RESPONSES_URL) and api_key in _PLACEHOLDER_LLM_API_KEYS:
+        if not _is_local_llm_url(self.LLM_RESPONSES_URL) and is_placeholder_llm_api_key(api_key):
             raise ValueError(
                 "LLM_API_KEY must be set to a non-placeholder value for non-local LLM endpoints"
             )
