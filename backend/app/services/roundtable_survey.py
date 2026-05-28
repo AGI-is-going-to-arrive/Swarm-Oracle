@@ -13,7 +13,13 @@ from sqlmodel import Session, select
 
 from app.config import settings
 from app.models.database import Agent, Scenario, get_engine
-from app.models.ending_room import EndingRoom, EndingRoomParticipant, EndingRoomType
+from app.models.ending_room import (
+    EndingRoom,
+    EndingRoomParticipant,
+    EndingRoomRoleSlot,
+    EndingRoomStatus,
+    EndingRoomType,
+)
 from app.services.agent_identity import get_identity_memories
 from app.services.llm_client import (
     LLMError,
@@ -91,6 +97,66 @@ def _normalize_text(value: Any) -> str:
     return str(value).strip()
 
 
+def _room_language(room: EndingRoom) -> str:
+    return "zh" if str(room.language or "").lower().startswith("zh") else "en"
+
+
+def _localized_role_slot(role_slot: EndingRoomRoleSlot, language: str) -> str:
+    labels = {
+        EndingRoomRoleSlot.ARCHIVIST: {"zh": "档案官", "en": "Archivist"},
+        EndingRoomRoleSlot.REPRESENTATIVE: {"zh": "代表", "en": "Representative"},
+        EndingRoomRoleSlot.CRITIC: {"zh": "质询者", "en": "Critic"},
+        EndingRoomRoleSlot.OBSERVER: {"zh": "观察者", "en": "Observer"},
+        EndingRoomRoleSlot.AGENT: {"zh": "参与者", "en": "Participant"},
+        EndingRoomRoleSlot.USER: {"zh": "用户", "en": "User"},
+    }
+    return labels.get(role_slot, {}).get(language, role_slot.value)
+
+
+def _localized_display_name(participant: EndingRoomParticipant, language: str) -> str:
+    cleaned = _normalize_text(participant.display_name)
+    if (
+        participant.role_slot == EndingRoomRoleSlot.ARCHIVIST
+        and cleaned.lower() == "archivist"
+    ):
+        return _localized_role_slot(participant.role_slot, language)
+    return cleaned or _localized_role_slot(participant.role_slot, language)
+
+
+def _roundtable_result_usable(result_json: Any) -> bool:
+    if not isinstance(result_json, dict) or not result_json:
+        return False
+    for key in ("summary", "archivist_note", "next_move"):
+        if _normalize_text(result_json.get(key)):
+            return True
+    for key in ("phase_insights", "supporting_turns"):
+        value = result_json.get(key)
+        if isinstance(value, list) and value:
+            return True
+    return False
+
+
+def _ensure_roundtable_ready(room: EndingRoom) -> None:
+    if room.status == EndingRoomStatus.ERROR:
+        raise RoundtableSurveyServiceError(
+            409,
+            "ROUNDTABLE_UNAVAILABLE",
+            "Roundtable room is not available for survey",
+        )
+    if room.status != EndingRoomStatus.DONE or room.result_json is None:
+        raise RoundtableSurveyServiceError(
+            409,
+            "ROUNDTABLE_RESULT_NOT_READY",
+            "Roundtable survey is only available after the discussion result is ready",
+        )
+    if not _roundtable_result_usable(room.result_json):
+        raise RoundtableSurveyServiceError(
+            409,
+            "ROUNDTABLE_RESULT_NOT_USABLE",
+            "Roundtable result is missing usable discussion output",
+        )
+
+
 def _find_parsed_agent(
     scenario: Scenario,
     participant: EndingRoomParticipant,
@@ -144,17 +210,17 @@ def _resolve_role(
     snapshot: dict[str, Any],
     parsed_agent: dict[str, Any],
     source_agent: Agent | None,
+    language: str,
 ) -> str:
     for candidate in (
         snapshot.get("agent_role"),
         parsed_agent.get("role"),
         source_agent.role if source_agent is not None else None,
-        participant.role_slot.value,
     ):
         cleaned = _normalize_text(candidate)
         if cleaned:
             return cleaned
-    return "participant"
+    return _localized_role_slot(participant.role_slot, language)
 
 
 def _resolve_identity_id(
@@ -244,6 +310,14 @@ def _load_participant_contexts(
                 f"Participant(s) not found in scenario: {', '.join(missing)}",
             )
 
+        room_by_id = {room.id: room for _participant, room in participant_rows}
+        if room_by_id:
+            room = next(iter(room_by_id.values()))
+            _ensure_roundtable_ready(room)
+            language = _room_language(room)
+        else:
+            language = "en"
+
         source_agent_ids = {
             participant.source_agent_id
             for participant in participant_by_id.values()
@@ -268,8 +342,14 @@ def _load_participant_contexts(
             contexts.append(
                 SurveyParticipantContext(
                     participant_id=participant.id,
-                    display_name=_normalize_text(participant.display_name) or "Representative",
-                    role=_resolve_role(participant, snapshot, parsed_agent, source_agent),
+                    display_name=_localized_display_name(participant, language),
+                    role=_resolve_role(
+                        participant,
+                        snapshot,
+                        parsed_agent,
+                        source_agent,
+                        language,
+                    ),
                     persona=_resolve_persona(snapshot, parsed_agent, source_agent),
                     agent_identity_id=identity_id,
                     source_agent_id=participant.source_agent_id,

@@ -246,6 +246,34 @@ def test_deterministic_debate_copy_avoids_banned_terms():
         assert term not in en_text
 
 
+def test_opening_proposition_copy_avoids_profile_template_formula():
+    zh_copy = build_turn_copy(
+        language="zh",
+        phase=DebatePhase.OPENING,
+        side=DebateSide.PROPOSITION,
+        motion="本院动议：这项改革是否值得推动？",
+        question="这项改革是否值得推动？",
+        profile_id="governance",
+        verdict_tone="balance",
+        winner="proposition",
+    )
+    en_copy = build_turn_copy(
+        language="en",
+        phase=DebatePhase.OPENING,
+        side=DebateSide.PROPOSITION,
+        motion="Motion: Should this reform proceed?",
+        question="Should this reform proceed?",
+        profile_id="governance",
+        verdict_tone="balance",
+        winner="proposition",
+    )
+
+    assert "不确定性压进" not in zh_copy
+    assert "governable leverage" not in en_copy
+    assert "这项改革是否值得推动" in zh_copy
+    assert "Should this reform proceed" in en_copy
+
+
 def test_sanitize_debate_name_blocks_fence_controls_and_injection_markers():
     raw = "\u200b```Ada\u2060 Vale```\x7f\x85"
     assert _sanitize_debate_name(raw) == "Ada Vale"

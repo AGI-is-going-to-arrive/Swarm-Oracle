@@ -90,6 +90,10 @@ def _seed_analyst_scenario(
                     scope_fingerprint=_unique("scope"),
                     title="Analyst Room",
                     status=EndingRoomStatus.DONE,
+                    result_json={
+                        "summary": "The analyst room has a completed synthesis.",
+                        "phase_insights": [],
+                    },
                 )
             )
             session.flush()
@@ -134,6 +138,10 @@ def _add_secondary_roundtable_room(scenario_id: str) -> str:
                 scope_fingerprint=_unique("scope"),
                 title="Analyst Room 2",
                 status=EndingRoomStatus.DONE,
+                result_json={
+                    "summary": "The secondary analyst room has a completed synthesis.",
+                    "phase_insights": [],
+                },
             )
         )
         session.flush()
@@ -225,6 +233,58 @@ def test_analyst_returns_404_for_missing_scenario(client):
     assert response.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
 
 
+def test_analyst_rejects_roundtable_before_result_ready(client, monkeypatch):
+    fixture = _seed_analyst_scenario()
+    monkeypatch.setattr(
+        "app.services.roundtable_analyst.llm_call_json",
+        lambda *_args, **_kwargs: pytest.fail("analyst LLM should not start before result gate"),
+    )
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, fixture["room_id"])
+        assert room is not None
+        room.status = EndingRoomStatus.LIVE
+        room.result_json = None
+        session.add(room)
+        session.commit()
+
+    response = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/analyst",
+        json={
+            "question": "Trace the decisive hinge.",
+            "room_id": fixture["room_id"],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ROUNDTABLE_RESULT_NOT_READY"
+
+
+def test_analyst_rejects_done_roundtable_without_usable_result(client, monkeypatch):
+    fixture = _seed_analyst_scenario()
+    monkeypatch.setattr(
+        "app.services.roundtable_analyst.llm_call_json",
+        lambda *_args, **_kwargs: pytest.fail("analyst LLM should not start before result gate"),
+    )
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, fixture["room_id"])
+        assert room is not None
+        room.status = EndingRoomStatus.DONE
+        room.result_json = {}
+        session.add(room)
+        session.commit()
+
+    response = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/analyst",
+        json={
+            "question": "Trace the decisive hinge.",
+            "room_id": fixture["room_id"],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ROUNDTABLE_RESULT_NOT_USABLE"
+
+
 def test_analyst_sse_stream_emits_final_response_event(client, monkeypatch):
     fixture = _seed_analyst_scenario()
 
@@ -257,6 +317,46 @@ def test_analyst_sse_stream_emits_final_response_event(client, monkeypatch):
             },
         )
     ]
+
+
+def test_analyst_localizes_archivist_name_for_chinese_roundtable(client, monkeypatch):
+    fixture = _seed_analyst_scenario()
+    captured: list[str] = []
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, fixture["room_id"])
+        participant = session.get(EndingRoomParticipant, fixture["participant_id"])
+        assert room is not None
+        assert participant is not None
+        room.language = "zh"
+        participant.role_slot = EndingRoomRoleSlot.ARCHIVIST
+        participant.display_name = "Archivist"
+        participant.source_agent_id = None
+        participant.persona_snapshot_json = {}
+        session.add(room)
+        session.add(participant)
+        session.commit()
+
+    async def _fake_llm_call_json(prompt: str, **_kwargs) -> dict:
+        captured.append(prompt)
+        return {"action": "final_response", "answer": "结论已经收束。"}
+
+    monkeypatch.setattr(
+        "app.services.roundtable_analyst.llm_call_json",
+        _fake_llm_call_json,
+    )
+
+    response = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/analyst",
+        json={
+            "question": "这条线的关键代价是什么？",
+            "room_id": fixture["room_id"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured
+    assert "档案官" in captured[0]
+    assert "Archivist" not in captured[0]
 
 
 def test_analyst_dispatches_causal_graph_tool(client, monkeypatch):
@@ -439,6 +539,7 @@ async def test_analyst_stops_at_max_iteration_limit(monkeypatch):
     assert events[-1]["event"] == "analyst_response"
     assert events[-1]["data"]["stopped_reason"] == "max_iterations"
     assert events[-1]["data"]["iterations"] == MAX_ANALYST_ITERATIONS
+    assert "maximum iteration limit" not in events[-1]["data"]["answer"]
 
 
 def test_analyst_unexpected_action_falls_back_to_terminal_response(client, monkeypatch):
@@ -471,6 +572,31 @@ def test_analyst_unexpected_action_falls_back_to_terminal_response(client, monke
             },
         )
     ]
+
+
+def test_analyst_empty_final_response_uses_plain_language(client, monkeypatch):
+    fixture = _seed_analyst_scenario()
+
+    async def _fake_llm_call_json(_prompt: str, **_kwargs) -> dict:
+        return {"action": "final_response", "answer": "  "}
+
+    monkeypatch.setattr(
+        "app.services.roundtable_analyst.llm_call_json",
+        _fake_llm_call_json,
+    )
+
+    with client.stream(
+        "POST",
+        f"/api/scenario/{fixture['scenario_id']}/analyst",
+        json={"question": "这条线的关键代价是什么？"},
+    ) as response:
+        raw = "".join(response.iter_text())
+
+    frames = _parse_sse_payload(raw)
+    assert response.status_code == 200
+    assert frames[0][1]["stopped_reason"] == "final_response"
+    assert "可用结论" in frames[0][1]["answer"]
+    assert "No final analysis was provided" not in frames[0][1]["answer"]
 
 
 def test_analyst_requires_room_id_when_multiple_roundtables_exist(client):

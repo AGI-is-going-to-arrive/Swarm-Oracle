@@ -492,8 +492,12 @@ class TestEvictionPriority:
 class TestReadFiltering:
     @patch("app.services.agent_identity.get_vector_store")
     @patch("app.services.agent_identity.get_engine")
-    def test_get_identity_memories_excludes_compacted(self, mock_engine, mock_gvs):
-        """Compacted docs must not appear in the timeline list."""
+    def test_get_identity_memories_includes_compacted_and_excludes_profiles(
+        self,
+        mock_engine,
+        mock_gvs,
+    ):
+        """Compacted docs are long-term summaries; profile docs stay hidden."""
         from unittest.mock import MagicMock as MM
 
         # Mock the DB lookup for identity → user_id
@@ -517,21 +521,21 @@ class TestReadFiltering:
                 _raw_doc("d1", "id1", "sc1", "2026-04-05T00:00:00Z", "raw memory 1"),
                 _raw_doc("d2", "id1", "sc2", "2026-04-06T00:00:00Z", "raw memory 2"),
                 _compacted_doc("c1", "id1", "sc0", "2026-04-10T00:00:00Z"),
+                _profile_doc("p1", "id1", "2026-04-11T00:00:00Z", "profile text"),
             ])
             store._client.get_collection.return_value = col
 
             from app.services.agent_identity import get_identity_memories
             memories = get_identity_memories("id1", limit=10)
 
-            # Only raw docs should be returned
-            assert len(memories) == 2
             summaries = [m["summary"] for m in memories]
-            assert "raw memory 1" in summaries
-            assert "raw memory 2" in summaries
-            assert "compacted summary" not in summaries
+            assert summaries == ["compacted summary", "raw memory 2", "raw memory 1"]
+            assert "profile text" not in summaries
+            assert memories[0]["memory_type"] == "long_term_summary"
+            assert memories[0]["is_compacted"] is True
 
-            # Sorted by created_at DESC (newest first)
-            assert memories[0]["created_at"] == "2026-04-06T00:00:00Z"
+            # Raw memories remain newest-first after long-term summaries.
+            assert memories[1]["created_at"] == "2026-04-06T00:00:00Z"
 
 
 # ── TestCompactionPrompt ─────────────────────────────────────

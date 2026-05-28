@@ -82,3 +82,18 @@ graphify-out/
 implement/
 llmdoc/
 frontend/.playwright-cli/
+
+# Release audit output (local-only)
+/.release-audit/
+
+# Dev/internal docs — kept locally, never published
+/CLAUDE.md
+backend/CLAUDE.md
+frontend/CLAUDE.md
+/.impeccable.md
+/code_review_report.md
+/progress.md
+/original/
+/p0-spot-check/
+frontend/.stitch/
+frontend/design-review-p0-bridge-guide.md

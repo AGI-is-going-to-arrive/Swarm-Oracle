@@ -83,6 +83,10 @@ def _seed_roundtable_scenario(*, participant_count: int = 2, identity_ids: bool 
                 title="Roundtable",
                 status=EndingRoomStatus.DONE,
                 config_json={"selected_branch_ids": []},
+                result_json={
+                    "summary": "The roundtable finished with a usable synthesis.",
+                    "phase_insights": [],
+                },
             )
         )
         session.flush()
@@ -153,6 +157,10 @@ def _add_roundtable_participant(
                     title="Second Roundtable",
                     status=EndingRoomStatus.DONE,
                     config_json={"selected_branch_ids": []},
+                    result_json={
+                        "summary": "The second roundtable finished with a usable synthesis.",
+                        "phase_insights": [],
+                    },
                 )
             )
             session.flush()
@@ -267,6 +275,60 @@ def test_survey_returns_404_for_missing_participant(client):
     assert response.json()["detail"]["code"] == "ROUNDTABLE_PARTICIPANT_NOT_FOUND"
 
 
+def test_survey_rejects_roundtable_before_result_ready(client, monkeypatch):
+    fixture = _seed_roundtable_scenario()
+    monkeypatch.setattr(
+        "app.services.roundtable_survey.llm_call",
+        lambda *_args, **_kwargs: pytest.fail("survey LLM should not start before result gate"),
+    )
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, fixture["room_id"])
+        assert room is not None
+        room.status = EndingRoomStatus.LIVE
+        room.result_json = None
+        session.add(room)
+        session.commit()
+
+    response = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/survey",
+        json={
+            "question": "Who held the coalition together?",
+            "participant_ids": fixture["participant_ids"][:1],
+            "room_id": fixture["room_id"],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ROUNDTABLE_RESULT_NOT_READY"
+
+
+def test_survey_rejects_done_roundtable_without_usable_result(client, monkeypatch):
+    fixture = _seed_roundtable_scenario()
+    monkeypatch.setattr(
+        "app.services.roundtable_survey.llm_call",
+        lambda *_args, **_kwargs: pytest.fail("survey LLM should not start before result gate"),
+    )
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, fixture["room_id"])
+        assert room is not None
+        room.status = EndingRoomStatus.DONE
+        room.result_json = {}
+        session.add(room)
+        session.commit()
+
+    response = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/survey",
+        json={
+            "question": "Who held the coalition together?",
+            "participant_ids": fixture["participant_ids"][:1],
+            "room_id": fixture["room_id"],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "ROUNDTABLE_RESULT_NOT_USABLE"
+
+
 def test_survey_sse_stream_emits_response_events(client, monkeypatch):
     fixture = _seed_roundtable_scenario(participant_count=2)
 
@@ -293,6 +355,46 @@ def test_survey_sse_stream_emits_response_events(client, monkeypatch):
     assert [event for event, _payload in frames] == ["survey_response", "survey_response"]
     payloads = [payload for _event, payload in frames]
     assert {item["answer"] for item in payloads} == {"Answer from rep 0", "Answer from rep 1"}
+
+
+def test_survey_localizes_archivist_name_for_chinese_roundtable(client, monkeypatch):
+    fixture = _seed_roundtable_scenario(participant_count=1)
+    with Session(get_engine()) as session:
+        room = session.get(EndingRoom, fixture["room_id"])
+        participant = session.get(EndingRoomParticipant, fixture["participant_ids"][0])
+        assert room is not None
+        assert participant is not None
+        room.language = "zh"
+        participant.role_slot = EndingRoomRoleSlot.ARCHIVIST
+        participant.display_name = "Archivist"
+        participant.source_agent_id = None
+        participant.persona_snapshot_json = {}
+        session.add(room)
+        session.add(participant)
+        session.commit()
+    captured: list[str] = []
+
+    async def _fake_llm_call(prompt: str, **_kwargs) -> str:
+        captured.append(prompt)
+        return "档案官回答"
+
+    monkeypatch.setattr("app.services.roundtable_survey.llm_call", _fake_llm_call)
+
+    response = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/survey",
+        json={
+            "question": "这条线的关键代价是什么？",
+            "participant_ids": fixture["participant_ids"],
+            "room_id": fixture["room_id"],
+        },
+    )
+
+    assert response.status_code == 200
+    frames = _parse_sse_payload(response.text)
+    assert frames[0][1]["display_name"] == "档案官"
+    assert frames[0][1]["role"] == "档案官"
+    assert "档案官" in captured[0]
+    assert "Archivist" not in captured[0]
 
 
 def test_survey_prompt_includes_persona_and_wrapped_question(client, monkeypatch):

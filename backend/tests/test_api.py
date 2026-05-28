@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from unittest.mock import patch
 
 import pytest
@@ -411,7 +412,7 @@ class TestIdentityPreflightEndpoint:
         assert data["summary"]["candidate_count"] == 1
         assert data["summary"]["new_identity_count"] == 1
 
-    def test_preflight_timeout_blocks_launch_instead_of_failing_open(self, client, monkeypatch):
+    def test_preflight_parse_timeout_returns_launch_safe_status(self, client, monkeypatch):
         from app.config import settings
 
         previous = settings.FEATURE_AGENT_IDENTITY
@@ -433,8 +434,120 @@ class TestIdentityPreflightEndpoint:
         finally:
             settings.FEATURE_AGENT_IDENTITY = previous
 
-        assert resp.status_code == 504
-        assert _detail_code(resp) == "IDENTITY_PREFLIGHT_TIMEOUT"
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["needs_confirmation"] is False
+        assert data["matches"] == []
+        assert data["summary"]["preflight_status"] == "parse_timeout"
+        assert data["summary"]["launch_can_continue"] is True
+
+    def test_preflight_match_timeout_returns_launch_safe_status(self, client, monkeypatch):
+        from app.config import settings
+
+        previous = settings.FEATURE_AGENT_IDENTITY
+        settings.FEATURE_AGENT_IDENTITY = True
+
+        async def _fast_parse_question(*args, **kwargs):
+            return {
+                "agents": [
+                    {
+                        "name": "Slow Candidate",
+                        "role": "Analyst",
+                        "persona": "Waits on a cold vector store",
+                    }
+                ],
+                "groups": [],
+                "simulation_rounds": 1,
+            }
+
+        def _slow_preview(*args, **kwargs):
+            time.sleep(0.05)
+            return {
+                "name": "Slow Candidate",
+                "role": "Analyst",
+                "persona": "Waits on a cold vector store",
+                "continuity_key": "slow",
+                "match_kind": "new",
+                "needs_confirmation": False,
+                "candidate_identity": None,
+            }
+
+        monkeypatch.setattr(agents_api, "IDENTITY_PREFLIGHT_TIMEOUT_SECONDS", 0.01)
+        monkeypatch.setattr(agents_api, "parse_question", _fast_parse_question)
+        monkeypatch.setattr(agents_api, "preview_identity_match", _slow_preview)
+
+        try:
+            resp = client.post("/api/agents/identities/preflight", json={
+                "question": "What if identity matching waits on vector search?",
+                "user_id": "director-match-timeout",
+                "num_agents": 3,
+            })
+        finally:
+            settings.FEATURE_AGENT_IDENTITY = previous
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["needs_confirmation"] is False
+        assert data["matches"] == []
+        assert data["summary"]["agent_count"] == 1
+        assert data["summary"]["preflight_status"] == "match_timeout"
+        assert data["summary"]["launch_can_continue"] is True
+
+    def test_preflight_parse_and_match_share_single_timeout_budget(self, client, monkeypatch):
+        from app.config import settings
+
+        previous = settings.FEATURE_AGENT_IDENTITY
+        settings.FEATURE_AGENT_IDENTITY = True
+
+        async def _slow_but_successful_parse_question(*args, **kwargs):
+            await asyncio.sleep(0.03)
+            return {
+                "agents": [
+                    {
+                        "name": "Budget Candidate",
+                        "role": "Analyst",
+                        "persona": "Consumes the shared preflight budget",
+                    }
+                ],
+                "groups": [],
+                "simulation_rounds": 1,
+            }
+
+        def _slow_preview(*args, **kwargs):
+            time.sleep(0.04)
+            return {
+                "name": "Budget Candidate",
+                "role": "Analyst",
+                "persona": "Consumes the shared preflight budget",
+                "continuity_key": "budget",
+                "match_kind": "new",
+                "needs_confirmation": False,
+                "candidate_identity": None,
+            }
+
+        monkeypatch.setattr(agents_api, "IDENTITY_PREFLIGHT_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr(agents_api, "parse_question", _slow_but_successful_parse_question)
+        monkeypatch.setattr(agents_api, "preview_identity_match", _slow_preview)
+
+        try:
+            started = time.monotonic()
+            resp = client.post("/api/agents/identities/preflight", json={
+                "question": "What if parse and match both consume time?",
+                "user_id": "director-budget-timeout",
+                "num_agents": 3,
+            })
+            elapsed = time.monotonic() - started
+        finally:
+            settings.FEATURE_AGENT_IDENTITY = previous
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["needs_confirmation"] is False
+        assert data["matches"] == []
+        assert data["summary"]["agent_count"] == 1
+        assert data["summary"]["preflight_status"] == "match_timeout"
+        assert data["summary"]["launch_can_continue"] is True
+        assert elapsed < 0.12
 
 
 # ── Scenario CRUD ────────────────────────────────────────

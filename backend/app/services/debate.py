@@ -1059,10 +1059,10 @@ def _build_judge_summary_fallback(
     margin = abs(plan.score["proposition"] - plan.score["opposition"])
     if debate.language == "zh":
         base = (
-            f"裁决摘要：{winner_label}以 {margin} 分优势拿下本场，判词语气偏“{tone_label}”。"
-            f"胜方最站得住脚的一点是：{best_argument}。"
-            f"败方最有效的反咬来自：{best_rebuttal}。"
-            "决定胜负的关键不只是立场，而是谁把话说得更实、更让人信服。"
+            f"{winner_label}最后拿下本场，分差 {margin} 分，判词偏“{tone_label}”。"
+            f"真正撑住胜负的是「{best_argument}」。"
+            f"另一边最尖的一次回击是「{best_rebuttal}」，但还不足以把局面拉回来。"
+            "胜负落在谁把话说到了具体影响上。"
         )
         if counterplay_context:
             hedge_target = _display_value(
@@ -1075,10 +1075,10 @@ def _build_judge_summary_fallback(
         return base[:900]
 
     base = (
-        f"Judge summary: {winner_label} wins by {margin} points with an overall {tone_label} tone. "
-        f"The strongest winning point was: {best_argument}. "
-        f"The sharpest pushback came from: {best_rebuttal}. "
-        "The edge came from making arguments that felt concrete and convincing."
+        f"{winner_label} takes this by {margin} points, with a {tone_label} ruling. "
+        f"The argument that held up best was \"{best_argument}\". "
+        f"The sharpest reply was \"{best_rebuttal}\", but it did not move the room enough. "
+        "The edge came from tying the claim to concrete consequences."
     )
     if counterplay_context:
         hedge_target = _display_value(
@@ -2297,14 +2297,18 @@ async def run_debate_background(
     finally:
         if lock_heartbeat_stop is not None and lock_heartbeat_thread is not None:
             _stop_runtime_lock_heartbeat(lock_heartbeat_stop, lock_heartbeat_thread)
-        release_runtime_lock(
-            lock_lease_holder[0] if lock_lease_holder[0] is not None else lock_lease
-        )
-        if current_task is not None:
-            from app.api.helpers import clear_running_task
+        try:
+            release_runtime_lock(
+                lock_lease_holder[0] if lock_lease_holder[0] is not None else lock_lease
+            )
+        except Exception:
+            logger.exception("Debate %s runtime lock release failed", debate_id)
+        finally:
+            if current_task is not None:
+                from app.api.helpers import clear_running_task
 
-            clear_running_task(debate_id, current_task)
-        _clear_running_debate(debate_id)
+                clear_running_task(debate_id, current_task)
+            _clear_running_debate(debate_id)
 
 
 def score_prediction(prediction: DebatePrediction, debate: Debate) -> tuple[float, str]:

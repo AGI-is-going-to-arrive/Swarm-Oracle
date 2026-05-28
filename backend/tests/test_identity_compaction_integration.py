@@ -101,8 +101,11 @@ def test_identity_compaction_smoke_real_chroma(monkeypatch):
     assert compacted_meta["compacted_count"] == str(len(first_group.ids))
 
     memories = get_identity_memories(identity_id, limit=50)
-    assert len(memories) == after_raw
-    assert all(
-        "Compacted summary from integration smoke test." not in m["summary"]
+    # Compacted summaries are now returned as long-term identity memory, before raw rows.
+    assert len(memories) == after_raw + after_compacted == 46
+    assert any(
+        m["summary"] == "Compacted summary from integration smoke test."
+        and m["memory_type"] == "long_term_summary"
+        and m["is_compacted"] is True
         for m in memories
     )

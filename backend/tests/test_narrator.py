@@ -235,6 +235,28 @@ class TestNarrateBranch:
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
     @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
+    async def test_pass2_extract_failure_preserves_pass1_story(self, mock_extract, mock_pass1):
+        """If structured extraction fails, keep the generated narrative instead of templating."""
+        raw_story = "港口先堵住，采购团队转向本地供应商，财务部门当天冻结扩张预算。"
+        mock_pass1.return_value = raw_story
+        mock_extract.side_effect = RuntimeError("json extraction failed")
+
+        result = await narrate_branch(
+            branch_title="供应链受压",
+            probability=0.64,
+            agents_summary="A(采购), B(财务)",
+            raw_rounds="[R1 A]: 港口先堵住\n[R1 B]: 冻结预算",
+            question="如果供应链断裂，谁最先承压？",
+        )
+
+        assert result["story"] == raw_story
+        assert result["insight"] == raw_story
+        assert "供应链受压" not in result["story"]
+        assert result["key_moments"] == []
+
+    @pytest.mark.asyncio
+    @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
+    @patch("app.services.narrator.llm_call_json_with_stream_fallback", new_callable=AsyncMock)
     async def test_empty_branch_title(self, mock_extract, mock_pass1):
         """Empty branch_title should use default."""
         mock_pass1.return_value = _FAKE_PASS1_TEXT
@@ -356,7 +378,7 @@ class TestNarrateBranch:
             question=question,
         )
 
-        assert f"关于「{question}」这个问题" in result["story"]
+        assert f"围绕「{question}」" in result["story"]
 
     @pytest.mark.asyncio
     @patch("app.services.narrator.llm_call", new_callable=AsyncMock)
@@ -553,7 +575,7 @@ class TestBuildFallbackNarrationQuestionAnchoring:
             question=question,
         )
 
-        assert f"关于「{question}」这个问题" in result["story"]
+        assert f"围绕「{question}」" in result["story"]
         assert "供应链线" in result["story"]
 
     def test_english_fallback_opener_includes_question(self):
@@ -566,7 +588,7 @@ class TestBuildFallbackNarrationQuestionAnchoring:
             question=question,
         )
 
-        assert f"For the question '{question}'" in result["story"]
+        assert f'On "{question}"' in result["story"]
         assert "Supply Chain Line" in result["story"]
 
     def test_chinese_fallback_without_question_uses_generic_opener(self):
@@ -579,7 +601,7 @@ class TestBuildFallbackNarrationQuestionAnchoring:
         )
 
         assert "关于「" not in result["story"]
-        assert "分支《供应链线》最终以" in result["story"]
+        assert "《供应链线》以" in result["story"]
 
     def test_english_fallback_without_question_uses_generic_opener(self):
         result = _build_fallback_narration(
@@ -591,7 +613,7 @@ class TestBuildFallbackNarrationQuestionAnchoring:
         )
 
         assert "For the question '" not in result["story"]
-        assert "Branch 'Supply Chain Line' settled into its current path" in result["story"]
+        assert '"Supply Chain Line" becomes the ending' in result["story"]
 
     def test_chinese_fallback_truncates_very_long_question_to_300_chars(self):
         very_long_question = "X" * 1500

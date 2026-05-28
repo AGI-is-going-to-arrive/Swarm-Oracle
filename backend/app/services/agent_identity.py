@@ -287,18 +287,20 @@ def get_identity_memories(identity_id: str, limit: int = 10) -> list[dict]:
             docs = results["documents"]
             metas = results.get("metadatas", [{}] * len(docs))
             for doc, meta in zip(docs, metas):
-                # Exclude compacted summaries and L2 profile embeddings.
-                if meta.get("compacted") == "true":
-                    continue
+                # Exclude L2 profile embeddings; they are matching aids, not memories.
                 if meta.get("doc_type") == "identity_profile":
                     continue
+                is_compacted = str(meta.get("compacted", "")).lower() == "true"
                 memories.append({
                     "summary": doc,
                     "scenario_id": meta.get("scenario_id", ""),
                     "created_at": meta.get("created_at", ""),
+                    "memory_type": "long_term_summary" if is_compacted else "raw",
+                    "is_compacted": is_compacted,
                 })
-        # Sort by created_at descending (newest first), then truncate
+        # Long-term summaries are higher-priority, with newest-first order per tier.
         memories.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+        memories.sort(key=lambda m: 0 if m.get("is_compacted") else 1)
         return memories[:limit]
     except Exception as exc:
         logger.warning("get_identity_memories failed (non-fatal): %s", exc)

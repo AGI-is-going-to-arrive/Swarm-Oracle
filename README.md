@@ -14,6 +14,8 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 - **因果图谱** — 可视化事件之间的因果关系
 - **支持自带 LLM** — 兼容任何 OpenAI 格式的 API
 
+> 每种玩法的具体用法见 **[使用指南 docs/USAGE.md](docs/USAGE.md)**。部分进阶功能由开关控制，详见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。
+
 ## 快速开始
 
 ### Docker 一键部署（推荐）
@@ -58,6 +60,8 @@ npm run dev
 
 打开 http://localhost:18928 即可使用。
 
+> 前置条件：本地开发时请**先确保后端已在 18927 运行**，前端会把 `/api` 与 `/ws` 请求转发给它，否则页面会一直等待或报错。
+
 ## 配置说明
 
 核心配置在 `.env.example`（本地开发）或 `.env.docker`（Docker 部署）中：
@@ -68,8 +72,9 @@ npm run dev
 | `LLM_API_KEY` | API 密钥 | `sk-...` |
 | `LLM_MODEL_NAME` | 模型名称 | `gpt-4o` |
 | `ENABLE_WEB_SEARCH` | 搜索增强（可选） | `false` |
+| `WEB_SEARCH_PROVIDER` | 搜索服务商（开启搜索时） | `tavily` / `exa` / `xai` / `searxng` |
 
-常用配置见 `.env.example` 文件内注释；完整运行时配置以后端配置实现为准。
+完整配置项、功能开关清单和搜索增强说明见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。核心玩法（含因果图谱、反事实对比）在模板里已默认开启；圆桌 Deep Dive 等进阶功能默认关闭，可按需打开。
 
 Docker Compose 会读取 `.env.docker`，并把数据库和 Chroma 数据放到
 `/data` volume。普通本地开发读取 `backend/.env`。

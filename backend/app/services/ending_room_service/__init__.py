@@ -85,6 +85,7 @@ from ._content import (  # noqa: F401 — re-exported
     _oracle_speaker_brief,
     _oracle_vocabulary_hints,
     _oracle_voice_brief,
+    _participant_display_name,
     _stream_oracle_copy,
     _strip_oracle_reasoning_prefix,
     _strip_oracle_scope_boilerplate,
@@ -1685,9 +1686,9 @@ def _build_room_plan(
         limit=120,
     )
     agent_names = [
-        sanitize_untrusted_text(speaker.display_name, max_chars=40)
+        name
         for speaker in agent_speakers[:3]
-        if sanitize_untrusted_text(speaker.display_name, max_chars=40)
+        if (name := _participant_display_name(speaker, room.language))
     ]
     if room.language == "zh":
         agent_names_text = "、".join(agent_names) if agent_names else "这些角色"
@@ -1735,25 +1736,30 @@ def _build_room_plan(
         foreign_branch_summaries=context.get("foreign_branch_summaries"),
         language=room.language,
     )
+    primary_display_name = _participant_display_name(primary_speaker, room.language)
+    secondary_display_name = (
+        _participant_display_name(secondary_speaker, room.language)
+        if secondary_speaker is not None
+        else ""
+    )
     if room.room_type == EndingRoomType.ONE_MOVE_ONLY:
         safe_role_hint = _oracle_visible_text(role_hint, language=room.language, limit=40)
         safe_persona_hint = _oracle_visible_text(persona_hint, language=room.language, limit=88)
         move_text = (
             (
-                f"针对「{question_display}」，关键转折：「{evidence_hook_display}」。"
-                f"如果只改一步，档案官会把笔压在这里。{agent_names_text}的选择把这一步变成"
-                "整条因果链的杠杆点。"
+                f"问题：「{question_display}」。只改一步：「{evidence_hook_display}」。"
+                f"{agent_names_text}的选择把这一步变成整条因果链的杠杆点。"
                 f"{branch_insight_sentence_zh}"
-                "如果当时换一种行动，哪一段后果会最先被改写？"
+                "改写这一步时，最先变化的后果是哪一段？"
             )
             if room.language == "zh"
             else (
-                f"For '{question_display}', the one move is '{evidence_hook_display}'. "
+                f"Question: {question_display}. One move to change: {evidence_hook_display}. "
                 f"{agent_names_text} made this the leverage point because their choices "
                 "concentrated the branch's risk there. "
                 + branch_insight_sentence_en
-                + "Change that decision and the ending stops looking inevitable; "
-                "what alternative would have changed everything?"
+                + "Change that decision and the ending stops looking inevitable. "
+                "Which consequence would shift first?"
             )
         )
         primary_quote_clause_zh = f"我在 R{primary_round} 当时说过「{primary_quote}」。" if primary_quote and primary_round > 0 else ""  # noqa: E501
@@ -1768,14 +1774,14 @@ def _build_room_plan(
                 "participant_id": primary_speaker.id,
                 "phase": EndingRoomPhase.OPENING,
                 "content": (
-                    f"{primary_speaker.display_name}。"
+                    f"{primary_display_name}。"
                     f"{primary_quote_clause_zh}"
                     f"世界线：《{anchor_branch_title}》。"
                     f"{role_hint + '。' if role_hint else ''}{persona_hint + '。' if persona_hint else ''}"  # noqa: E501
                     f"核心转折：「{evidence_hook_display}」。"
                     if room.language == "zh"
                     else (
-                        f"{primary_speaker.display_name}. "
+                        f"{primary_display_name}. "
                         f"{primary_quote_clause_en}"
                         f"Worldline: {anchor_branch_title}. "
                         f"{(safe_role_hint + '. ') if safe_role_hint else ''}{(safe_persona_hint + '. ') if safe_persona_hint else ''}"  # noqa: E501
@@ -1826,7 +1832,7 @@ def _build_room_plan(
                     "phase": turn["phase"].value,
                     "participant_id": turn["participant_id"],
                     "label": next(
-                        participant.display_name
+                        _participant_display_name(participant, room.language)
                         for participant in participants
                         if participant.id == turn["participant_id"]
                     ),
@@ -1838,20 +1844,20 @@ def _build_room_plan(
 
     verdict_text = (
         (
-            f"针对「{question_display}」，档案官把《{anchor_branch_title}》的判定落在"
-            f"「{evidence_hook_display}」。{agent_names_text}的选择让这条线不再只是"
-            "可能性，而是一步步收紧的后果。"
+            f"问题：「{question_display}」。世界线：《{anchor_branch_title}》。"
+            f"判定依据：「{evidence_hook_display}」。{agent_names_text}的选择让这条线"
+            "从可能性收束成后果。"
             f"{branch_insight_sentence_zh}"
-            "如果要重新审问这条世界线，你会先质疑哪一个人当时的判断？"
+            "如果重新审问这条世界线，先质疑谁当时的判断？"
         )
         if room.language == "zh"
         else (
-            f"For '{question_display}', the Archivist's verdict on {anchor_branch_title} "
-            f"lands on '{evidence_hook_display}'. {agent_names_text} turned this from "
-            "a loose possibility into a consequence that kept tightening. "
+            f"Question: {question_display}. Worldline: {anchor_branch_title}. "
+            f"Verdict hinge: {evidence_hook_display}. {agent_names_text} turned this from "
+            "a loose possibility into a tightening consequence. "
             + branch_insight_sentence_en
-            + "If this worldline had to be questioned again, whose decision would you "
-            "challenge first?"
+            + "If this worldline had to be questioned again, whose decision would come "
+            "under scrutiny first?"
         )
     )
     primary_quote_display = _oracle_visible_text(
@@ -1879,12 +1885,12 @@ def _build_room_plan(
             "participant_id": primary_speaker.id,
             "phase": EndingRoomPhase.OPENING,
             "content": (
-                f"{primary_speaker.display_name}。《{anchor_branch_title}》。"
+                f"{primary_display_name}。《{anchor_branch_title}》。"
                 f"{primary_debrief_quote_zh}"
                 f"核心转折：「{evidence_hook_display}」。"
                 if room.language == "zh"
                 else (
-                    f"{primary_speaker.display_name}. {anchor_branch_title}. "
+                    f"{primary_display_name}. {anchor_branch_title}. "
                     f"{primary_debrief_quote_en}"
                     f"Key hinge: '{evidence_hook_display}'."
                 )
@@ -1917,12 +1923,12 @@ def _build_room_plan(
                 "participant_id": secondary_speaker.id,
                 "phase": EndingRoomPhase.CROSSFIRE,
                 "content": (
-                    f"{secondary_speaker.display_name}。"
+                    f"{secondary_display_name}。"
                     f"{secondary_quote_clause_zh}"
                     f"核心转折:「{evidence_hook_display}」。"
                     if room.language == "zh"
                     else (
-                        f"{secondary_speaker.display_name}. "
+                        f"{secondary_display_name}. "
                         f"{secondary_quote_clause_en}"
                         f"Key hinge: '{evidence_hook_display}'."
                     )
@@ -2012,7 +2018,7 @@ def _build_room_plan(
                 "phase": turn["phase"].value,
                 "participant_id": turn["participant_id"],
                 "label": next(
-                    participant.display_name
+                    _participant_display_name(participant, room.language)
                     for participant in participants
                     if participant.id == turn["participant_id"]
                 ),
@@ -2421,5 +2427,9 @@ async def run_ending_room_background(
         raise
     finally:
         _stop_ending_room_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
-        release_runtime_lock(lock_lease)
-        _release_room(room_id)
+        try:
+            release_runtime_lock(lock_lease)
+        except Exception:
+            logger.exception("Ending room %s runtime lock release failed", room_id)
+        finally:
+            _release_room(room_id)

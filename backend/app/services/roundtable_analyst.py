@@ -13,7 +13,13 @@ from sqlmodel import Session, select
 
 from app.config import settings
 from app.models.database import Agent, Scenario, get_engine
-from app.models.ending_room import EndingRoom, EndingRoomParticipant, EndingRoomType
+from app.models.ending_room import (
+    EndingRoom,
+    EndingRoomParticipant,
+    EndingRoomRoleSlot,
+    EndingRoomStatus,
+    EndingRoomType,
+)
 from app.services.agent_identity import get_identity_memories
 from app.services.causal_graph import build_snapshot
 from app.services.llm_client import (
@@ -59,6 +65,76 @@ def _normalize_question(question: str) -> str:
     return cleaned
 
 
+def _normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _is_probably_zh(text: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in text)
+
+
+def _room_language(room: EndingRoom) -> str:
+    return "zh" if str(room.language or "").lower().startswith("zh") else "en"
+
+
+def _localized_role_slot(role_slot: EndingRoomRoleSlot, language: str) -> str:
+    labels = {
+        EndingRoomRoleSlot.ARCHIVIST: {"zh": "档案官", "en": "Archivist"},
+        EndingRoomRoleSlot.REPRESENTATIVE: {"zh": "代表", "en": "Representative"},
+        EndingRoomRoleSlot.CRITIC: {"zh": "质询者", "en": "Critic"},
+        EndingRoomRoleSlot.OBSERVER: {"zh": "观察者", "en": "Observer"},
+        EndingRoomRoleSlot.AGENT: {"zh": "参与者", "en": "Participant"},
+        EndingRoomRoleSlot.USER: {"zh": "用户", "en": "User"},
+    }
+    return labels.get(role_slot, {}).get(language, role_slot.value)
+
+
+def _localized_display_name(participant: EndingRoomParticipant, language: str) -> str:
+    cleaned = _normalize_text(participant.display_name)
+    if (
+        participant.role_slot == EndingRoomRoleSlot.ARCHIVIST
+        and cleaned.lower() == "archivist"
+    ):
+        return _localized_role_slot(participant.role_slot, language)
+    return cleaned or _localized_role_slot(participant.role_slot, language)
+
+
+def _roundtable_result_usable(result_json: Any) -> bool:
+    if not isinstance(result_json, dict) or not result_json:
+        return False
+    for key in ("summary", "archivist_note", "next_move"):
+        if _normalize_text(result_json.get(key)):
+            return True
+    for key in ("phase_insights", "supporting_turns"):
+        value = result_json.get(key)
+        if isinstance(value, list) and value:
+            return True
+    return False
+
+
+def _ensure_roundtable_ready(room: EndingRoom) -> None:
+    if room.status == EndingRoomStatus.ERROR:
+        raise RoundtableAnalystServiceError(
+            409,
+            "ROUNDTABLE_UNAVAILABLE",
+            "Roundtable room is not available for analyst work",
+        )
+    if room.status != EndingRoomStatus.DONE or room.result_json is None:
+        raise RoundtableAnalystServiceError(
+            409,
+            "ROUNDTABLE_RESULT_NOT_READY",
+            "Roundtable analyst is only available after the discussion result is ready",
+        )
+    if not _roundtable_result_usable(room.result_json):
+        raise RoundtableAnalystServiceError(
+            409,
+            "ROUNDTABLE_RESULT_NOT_USABLE",
+            "Roundtable result is missing usable discussion output",
+        )
+
+
 def _load_scenario_context(
     scenario_id: str,
     room_id: str | None = None,
@@ -72,14 +148,15 @@ def _load_scenario_context(
                 "Scenario not found",
             )
 
-        available_room_ids = list(
+        available_rooms = list(
             session.exec(
-                select(EndingRoom.id).where(
+                select(EndingRoom).where(
                     EndingRoom.scenario_id == scenario_id,
                     EndingRoom.room_type == EndingRoomType.WORLDLINE_ROUNDTABLE,
                 )
             ).all()
         )
+        available_room_ids = [room.id for room in available_rooms]
         if room_id:
             if room_id not in available_room_ids:
                 raise RoundtableAnalystServiceError(
@@ -97,6 +174,19 @@ def _load_scenario_context(
                     "Roundtable room_id is required when multiple roundtable rooms exist",
                 )
             resolved_room_id = distinct_room_ids[0] if distinct_room_ids else None
+
+        selected_room = next(
+            (room for room in available_rooms if room.id == resolved_room_id),
+            None,
+        )
+        if selected_room is None:
+            raise RoundtableAnalystServiceError(
+                404,
+                "ROUNDTABLE_ROOM_NOT_FOUND",
+                "Roundtable room not found in scenario",
+            )
+        _ensure_roundtable_ready(selected_room)
+        language = _room_language(selected_room)
 
         participant_rows = list(
             session.exec(
@@ -123,17 +213,18 @@ def _load_scenario_context(
     for participant, room in participant_rows[:_MAX_TOOL_ITEMS]:
         snapshot = participant.persona_snapshot_json or {}
         agent = agents_by_id.get(participant.source_agent_id or "")
-        role = str(
-            snapshot.get("agent_role")
-            or (agent.role if agent is not None else "")
-            or participant.role_slot.value
-        ).strip()
+        role = (
+            _normalize_text(snapshot.get("agent_role"))
+            or _normalize_text(agent.role if agent is not None else "")
+            or _localized_role_slot(participant.role_slot, language)
+        )
+        display_name = _localized_display_name(participant, language)
         identity_id = str(
             (agent.agent_identity_id if agent is not None else "") or ""
         ).strip()
         identity_suffix = f" identity_id={identity_id}" if identity_id else ""
         participant_lines.append(
-            f"- {participant.display_name} ({role}) room={room.room_type.value}{identity_suffix}"
+            f"- {display_name} ({role}) room={room.room_type.value}{identity_suffix}"
         )
 
     summary = (
@@ -442,9 +533,13 @@ async def build_roundtable_analyst_stream(
                 action = str(decision.get("action") or "").strip()
                 params = _normalize_params(decision.get("params"))
                 if action == "final_response":
-                    answer = str(decision.get("answer") or "").strip() or (
-                        "No final analysis was provided."
-                    )
+                    answer = str(decision.get("answer") or "").strip()
+                    if not answer:
+                        answer = (
+                            "我没有拿到可用结论；请换个更具体的问题再试。"
+                            if _is_probably_zh(normalized_question)
+                            else "I could not produce a usable conclusion; try a more specific question."  # noqa: E501
+                        )
                     yield {
                         "event": "analyst_response",
                         "data": {
@@ -509,8 +604,9 @@ async def build_roundtable_analyst_stream(
             "event": "analyst_response",
             "data": {
                 "answer": (
-                    "Analysis reached the maximum iteration limit before a final response "
-                    "was produced."
+                    "我已经用完本轮分析步数，还没有形成可靠结论。请缩小问题或指定一条世界线再问。"
+                    if _is_probably_zh(normalized_question)
+                    else "I used the analysis budget without reaching a reliable conclusion. Narrow the question or point me to a specific worldline."  # noqa: E501
                 ),
                 "iterations": MAX_ANALYST_ITERATIONS,
                 "stopped_reason": "max_iterations",

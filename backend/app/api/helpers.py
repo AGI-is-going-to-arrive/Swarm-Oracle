@@ -838,13 +838,17 @@ async def run_sim_background(
     finally:
         if heartbeat_stop is not None and heartbeat_thread is not None:
             _stop_runtime_lock_heartbeat(heartbeat_stop, heartbeat_thread)
-        release_runtime_lock(lock_lease_to_release)
-        clear_cancel_token(scenario_id)
-        clear_running_task(scenario_id, current_task)
-        _running_simulations.discard(scenario_id)
-        # H2 fix: belt-and-suspenders cleanup — parse-phase marker should already
-        # be cleared at handoff, but discard again in case of unusual re-entry.
-        _parse_phase_simulations.discard(scenario_id)
+        try:
+            release_runtime_lock(lock_lease_to_release)
+        except Exception:
+            logger.exception("Simulation %s runtime lock release failed", scenario_id)
+        finally:
+            clear_cancel_token(scenario_id)
+            clear_running_task(scenario_id, current_task)
+            _running_simulations.discard(scenario_id)
+            # H2 fix: belt-and-suspenders cleanup — parse-phase marker should already
+            # be cleared at handoff, but discard again in case of unusual re-entry.
+            _parse_phase_simulations.discard(scenario_id)
 
 
 def schedule_background_task(coro):

@@ -1153,8 +1153,15 @@ export async function getCampaignBadgeDefinitions(
 
 export async function getCampaignScenarioSummary(
   scenarioId: string,
-): Promise<CampaignScenarioSummary> {
-  return safeGet(`/campaign/scenario/${encodeURIComponent(scenarioId)}/summary`);
+): Promise<CampaignScenarioSummary | null> {
+  try {
+    return await safeGet(`/campaign/scenario/${encodeURIComponent(scenarioId)}/summary`);
+  } catch (err) {
+    if (isApiError(err) && err.status === 404) {
+      return null;
+    }
+    throw err;
+  }
 }
 
 export async function upsertScenarioDirectorState(

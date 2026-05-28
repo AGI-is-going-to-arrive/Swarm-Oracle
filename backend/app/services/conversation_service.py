@@ -296,7 +296,15 @@ def resolve_byok_overrides(
             "api_key is required when base_url is provided",
         )
 
-    base_url = validate_llm_base_url(base_url_raw) if base_url_raw else None
+    base_url = None
+    if base_url_raw:
+        base_url = validate_llm_base_url(base_url_raw)
+        if base_url is None:
+            raise api_error(
+                400,
+                "LLM_BASE_URL_NOT_ALLOWED",
+                "llm_base_url is not allowed",
+            )
     return LLMOverrides(
         api_key=api_key,
         base_url=base_url,

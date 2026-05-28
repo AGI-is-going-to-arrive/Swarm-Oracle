@@ -417,6 +417,48 @@ def _resolve_roundtable_hook(
     return _roundtable_variant_hook_fallback(variant=variant, language=language, seed=seed)
 
 
+def _participant_display_name(participant: EndingRoomParticipant, language: str) -> str:
+    cleaned = sanitize_untrusted_text(participant.display_name, max_chars=80)
+    role_hint = sanitize_untrusted_text(
+        str((participant.persona_snapshot_json or {}).get("agent_role") or ""),
+        max_chars=80,
+    )
+    cleaned_lower = cleaned.lower()
+    is_archivist_name = bool(re.match(r"^archivist(?:\b|[_-])", cleaned_lower))
+    if (
+        language == "zh"
+        and (
+            role_hint.lower() == "archivist"
+            or is_archivist_name
+            or (
+                participant.role_slot == EndingRoomRoleSlot.ARCHIVIST
+                and cleaned_lower == "archivist"
+            )
+        )
+    ):
+        return "档案官"
+    if cleaned:
+        return cleaned
+    if participant.role_slot == EndingRoomRoleSlot.ARCHIVIST and language == "zh":
+        return "档案官"
+    return participant.role_slot.value
+
+
+def _localized_archivist_text(
+    participant: EndingRoomParticipant,
+    language: str,
+    value: Any,
+) -> str:
+    cleaned = sanitize_untrusted_text(str(value or ""), max_chars=180)
+    if (
+        language == "zh"
+        and participant.role_slot == EndingRoomRoleSlot.ARCHIVIST
+        and cleaned.lower() == "archivist"
+    ):
+        return "档案官"
+    return cleaned
+
+
 _ASCII_TOKEN_PATTERN_CACHE: dict[str, "re.Pattern[str]"] = {}
 
 
@@ -996,27 +1038,26 @@ def _build_roundtable_verdict_content(
     if language == "zh":
         if rival_title and rival_hinge:
             return (
-                f"{question_prefix}这次讨论的核心在于：《{lead_title}》得到更多支持，"
-                f"因为「{lead_hinge}」率先改变局面；不过《{rival_title}》提出的"
-                f"「{rival_hinge}」也值得继续追问。综合来看，目前更倾向于"
-                f"《{lead_title}》的走向，同时保留《{rival_title}》提醒的问题。"
+                f"{question_prefix}这轮讨论更愿意把《{lead_title}》当作当前答案："
+                f"先改变局面的，是「{lead_hinge}」。不过《{rival_title}》留下的"
+                f"「{rival_hinge}」还在提醒我们，后面追问时不能把这条风险抹掉。"
             )
         return (
-            f"{question_prefix}大家的讨论最终聚焦在《{lead_title}》这条线上："
-            f"关键转折是「{lead_hinge}」。接下来可以沿着这个方向继续追问。"
+            f"{question_prefix}这轮讨论最后落在《{lead_title}》上："
+            f"真正把局面推到这里的，是「{lead_hinge}」。后续追问可以从这个转折继续拆。"
         )
+    lead_intro = "the table is leaning toward" if question_prefix else "The table is leaning toward"
     if rival_title and rival_hinge:
         return (
-            f'{question_prefix}The discussion centered on "{lead_title}" gaining more support '
-            f'because "{lead_hinge}" shifted the situation first. That said, '
-            f'"{rival_title}" raised "{rival_hinge}", which is still worth exploring. '
-            f'On balance, the group leans toward "{lead_title}" while keeping the concerns '
-            f'from "{rival_title}" in view.'
+            f'{question_prefix}{lead_intro} "{lead_title}" for now: '
+            f'"{lead_hinge}" is what first moved the situation. Still, '
+            f'"{rival_title}" keeps "{rival_hinge}" on the table, so the next '
+            "follow-up should keep that risk in view."
         )
     return (
-        f'{question_prefix}The discussion converged on "{lead_title}": '
-        f'the key turning point was "{lead_hinge}". '
-        "This is where the next round of questions can pick up."
+        f'{question_prefix}{lead_intro} "{lead_title}": '
+        f'"{lead_hinge}" is the turn that pushed this line into view. '
+        "The next question can pick up from there."
     )
 
 
@@ -1059,23 +1100,28 @@ def _build_roundtable_witness_content(
     ) or ("当前世界线" if language == "zh" else "this branch")
     question_prefix = _roundtable_question_prefix(scenario_question, language=language)
     if language == "zh":
-        parts: list[str] = [f"{question_prefix}{witness.display_name}（证人）"]
-        if quote and latest_round > 0:
-            parts.append(f"R{latest_round} 原话：「{quote}」")
-        if role_hint:
-            parts.append(role_hint)
+        identity = f"{witness.display_name}作为证人"
+        if role_hint and role_hint.lower() not in {"证人", "witness"}:
+            identity = f"{identity}，身份是{role_hint}"
         if bio_hint:
-            parts.append(bio_hint)
-        parts.append(f"《{branch_title}》核心转折：「{evidence_hook}」")
+            identity = f"{identity}，{bio_hint}"
+        parts: list[str] = [
+            f"{question_prefix}{identity}，把《{branch_title}》的关键转折指向「{evidence_hook}」"
+        ]
+        if quote and latest_round > 0:
+            parts.append(f"R{latest_round} 的原话是：「{quote}」")
         return "。".join(parts) + "。"
-    parts_en: list[str] = [f"{question_prefix}{witness.display_name} (witness)"]
-    if quote and latest_round > 0:
-        parts_en.append(f"R{latest_round} note: '{quote}'")
-    if role_hint:
-        parts_en.append(role_hint)
+    identity_en = f"{witness.display_name} speaks as a witness"
+    if role_hint and role_hint.lower() != "witness":
+        identity_en = f"{identity_en}, as {role_hint}"
     if bio_hint:
-        parts_en.append(bio_hint)
-    parts_en.append(f"Key hinge in {branch_title}: '{evidence_hook}'")
+        identity_en = f"{identity_en}, {bio_hint}"
+    parts_en: list[str] = [
+        f'{question_prefix}{identity_en}, and points to "{evidence_hook}" '
+        f'as the hinge in "{branch_title}"'
+    ]
+    if quote and latest_round > 0:
+        parts_en.append(f'In R{latest_round}, the line was: "{quote}"')
     return ". ".join(parts_en) + "."
 
 
@@ -1097,9 +1143,10 @@ def _build_followup_reply_content(
     must read like a direct reply instead of a mode-tagged fact list.
     """
     del response_count, thread
-    target_label = response_participant.display_name
+    target_label = _participant_display_name(response_participant, room.language)
     addressed_label = " / ".join(
-        participant.display_name for participant in addressed_participants
+        _participant_display_name(participant, room.language)
+        for participant in addressed_participants
     )
     is_archivist = response_participant.role_slot == EndingRoomRoleSlot.ARCHIVIST
     role_hint = str(participant_evidence.get("role_hint") or "").strip()
@@ -1240,14 +1287,16 @@ def _oracle_scope_notice(
     return "Stay inside the current worldline and the current chamber only."
 
 
-def _oracle_speaker_brief(participant: EndingRoomParticipant) -> str:
+def _oracle_speaker_brief(participant: EndingRoomParticipant, *, language: str) -> str:
     snapshot = participant.persona_snapshot_json or {}
     pieces = [
-        f"name={participant.display_name}",
+        f"name={_participant_display_name(participant, language)}",
         f"role_slot={participant.role_slot.value}",
     ]
     if snapshot.get("agent_role"):
-        pieces.append(f"role_hint={snapshot['agent_role']}")
+        pieces.append(
+            f"role_hint={_localized_archivist_text(participant, language, snapshot['agent_role'])}"
+        )
     if snapshot.get("bio_short"):
         pieces.append(f"bio_hint={snapshot['bio_short']}")
     if snapshot.get("selection_reason"):
@@ -1344,7 +1393,7 @@ def _oracle_persona_digest(
 ) -> str:
     snapshot = participant.persona_snapshot_json or {}
     lines = [
-        f"speaker_name={participant.display_name}",
+        f"speaker_name={_participant_display_name(participant, language)}",
         f"role_slot={participant.role_slot.value}",
     ]
     _append_oracle_context_text(
@@ -1357,7 +1406,7 @@ def _oracle_persona_digest(
     _append_oracle_context_text(
         lines,
         key="agent_role",
-        value=snapshot.get("agent_role"),
+        value=_localized_archivist_text(participant, language, snapshot.get("agent_role")),
         language=language,
         limit=80,
     )
@@ -1434,7 +1483,7 @@ def _oracle_context_digest(
         f"room_title={room.title}",
         f"language={room.language}",
         _oracle_profile_scene_brief(room),
-        f"speaker={_oracle_speaker_brief(participant)}",
+        f"speaker={_oracle_speaker_brief(participant, language=room.language)}",
         _oracle_persona_digest(participant, language=room.language),
         f"scope={_oracle_scope_notice(room)}",
     ]
@@ -1768,16 +1817,18 @@ def _oracle_voice_brief(
         )
     if room.room_type == EndingRoomType.ENDING_CHAMBER and phase == EndingRoomPhase.VERDICT:
         if is_archivist:
+            archivist_label = "档案官" if room.language == "zh" else "Archivist"
             return (
-                "Speak like an evaluative Archivist delivering a verdict, not a clerk filing "
-                "a note. Draw on specific events, name the agents involved, explain the "
-                "turning point that made the ending feel earned, and sound like a person "
-                "judging evidence aloud rather than filling a template."
+                f"Speak like an evaluative {archivist_label} delivering a verdict, "
+                "not a clerk filing a note. Draw on specific events, name the agents "
+                "involved, explain the turning point that made the ending feel earned, "
+                "and sound like a person judging evidence aloud rather than filling "
+                "a template."
                 f"{profile_focus_clause}"
             )
         return (
             "Speak like a participant hearing the final verdict land. "
-            "Name your own decision, the event it touched, and why the Archivist's judgment "
+            "Name your own decision, the event it touched, and why that judgment "
             "does or does not match what you lived through."
         )
     if room.room_type == EndingRoomType.ONE_MOVE_ONLY:
@@ -2007,8 +2058,9 @@ def _build_oracle_generation_prompt(
             "Do not explain thread mechanics or permissions."
         )
     elif interaction_mode == EndingRoomInteractionMode.ARCHIVIST_ROUTE:
+        archivist_label = "档案官" if room.language == "zh" else "The Archivist"
         structural_note = (
-            "The Archivist should frame the hinge and route cleanly; "
+            f"{archivist_label} should frame the hinge and route cleanly; "
             "other speakers should answer the hinge directly."
         )
     elif interaction_mode == EndingRoomInteractionMode.EVIDENCE_CARD:
@@ -2076,7 +2128,7 @@ def _build_oracle_generation_prompt(
         participant.role_slot, variant, room.language, snapshot
     )
 
-    character_block = _build_character_identity_block(participant)
+    character_block = _build_character_identity_block(participant, language=room.language)
 
     guardrail_section = ""
     if factual_guardrail:
@@ -2119,10 +2171,12 @@ def _build_oracle_generation_prompt(
 
 def _build_character_identity_block(
     participant: EndingRoomParticipant,
+    *,
+    language: str,
 ) -> str:
     snapshot = participant.persona_snapshot_json or {}
-    lines = [f"Character: {sanitize_untrusted_text(participant.display_name, max_chars=80)}"]
-    role = sanitize_untrusted_text(str(snapshot.get("agent_role") or ""), max_chars=80)
+    lines = [f"Character: {_participant_display_name(participant, language)}"]
+    role = _localized_archivist_text(participant, language, snapshot.get("agent_role"))[:80]
     if role:
         lines.append(f"Role: {role}")
     persona = sanitize_untrusted_text(
@@ -2224,8 +2278,9 @@ def _build_oracle_rewrite_prompt(
             "Do not explain thread mechanics or permissions."
         )
     elif interaction_mode == EndingRoomInteractionMode.ARCHIVIST_ROUTE:
+        archivist_label = "档案官" if room.language == "zh" else "the Archivist"
         structural_note = (
-            "For archivist-route follow-up, the Archivist should frame the hinge and route cleanly; "  # noqa: E501
+            f"For archivist-route follow-up, {archivist_label} should frame the hinge and route cleanly; "  # noqa: E501
             "other speakers should answer the hinge directly instead of restating the workflow."
         )
     elif interaction_mode == EndingRoomInteractionMode.EVIDENCE_CARD:

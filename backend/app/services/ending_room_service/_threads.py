@@ -665,6 +665,7 @@ def _commit_followup_assistant_turn(
     plan: _OracleFollowupPlan,
     *,
     content: str,
+    cited_refs_json: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     cleaned_content = _sanitize_oracle_visible_text(content).strip() or plan.anchor_copy
     with Session(get_engine()) as session:
@@ -696,7 +697,9 @@ def _commit_followup_assistant_turn(
             addressed_agent_ids_json=plan.addressed_refs,
             question_anchor_ids_json=plan.question_anchor_ids,
             cited_branch_id=plan.cited_branch_id,
-            cited_refs_json=plan.cited_refs_json,
+            cited_refs_json=(
+                cited_refs_json if cited_refs_json is not None else plan.cited_refs_json
+            ),
         )
         session.add(response_turn)
         room.updated_at = _now()
@@ -706,6 +709,17 @@ def _commit_followup_assistant_turn(
         session.commit()
         session.refresh(response_turn)
         return _serialize_turn(response_turn)
+
+
+def _degraded_followup_cited_refs(
+    plan: _OracleFollowupPlan,
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    refs = dict(plan.cited_refs_json or {})
+    refs["generation_status"] = "partial_stream_degraded"
+    refs["status_reason"] = reason
+    return refs
 
 
 async def _broadcast_followup_turn_error(
@@ -900,16 +914,20 @@ async def _append_followup_turns_with_retry(
             )
             turn_started = True
             generated_content = plan.anchor_copy
+            commit_cited_refs_json: dict[str, Any] | None = None
             streamed = False
             if settings.ORACLE_CHAMBERS_USE_LLM and stream_supported:
                 try:
                     chunk_index = 0
+                    partial_chunks: list[str] = []
 
                     async def _on_delta(delta: str) -> None:
                         nonlocal chunk_index
-                        if not delta:
+                        visible_delta = _sanitize_oracle_visible_text(delta)
+                        if not visible_delta:
                             return
                         chunk_index += 1
+                        partial_chunks.append(visible_delta)
                         await _broadcast(
                             plan.room_id,
                             ws_callback,
@@ -920,7 +938,7 @@ async def _append_followup_turns_with_retry(
                                     "thread_id": plan.thread_id,
                                     "turn_id": plan.turn_id,
                                     "participant_id": plan.participant.id,
-                                    "delta": delta,
+                                    "delta": visible_delta,
                                     "chunk_index": chunk_index,
                                 },
                             },
@@ -948,7 +966,8 @@ async def _append_followup_turns_with_retry(
                     streamed = True
                 except Exception as exc:
                     logger.warning("Oracle follow-up stream fallback for %s: %s", plan.turn_id, exc)
-                    if chunk_index > 0:
+                    partial_content = _sanitize_oracle_visible_text("".join(partial_chunks)).strip()
+                    if partial_content:
                         # Partial deltas already sent — emit error instead of duplicating
                         await _broadcast_followup_turn_error(
                             plan,
@@ -956,8 +975,11 @@ async def _append_followup_turns_with_retry(
                             message="stream_interrupted",
                             code="stream_interrupted",
                         )
-                        # Use anchor_copy as final content since stream was partial
-                        generated_content = plan.anchor_copy
+                        generated_content = partial_content
+                        commit_cited_refs_json = _degraded_followup_cited_refs(
+                            plan,
+                            reason="stream_interrupted",
+                        )
                         streamed = True  # skip fallback re-emission
             if not streamed:
                 generated_content = await _pkg._maybe_rewrite_oracle_copy(
@@ -1000,7 +1022,11 @@ async def _append_followup_turns_with_retry(
                     await asyncio.sleep(0)
                 if chunk_index > 0:
                     await asyncio.sleep(_ORACLE_FOLLOWUP_POST_DELTA_SETTLE_SECONDS)
-            committed_turn = _commit_followup_assistant_turn(plan, content=generated_content)
+            committed_turn = _commit_followup_assistant_turn(
+                plan,
+                content=generated_content,
+                cited_refs_json=commit_cited_refs_json,
+            )
             committed_turns.append(committed_turn)
             recent_lines.append(committed_turn["content"])
             await _broadcast(

@@ -285,6 +285,34 @@ class TestReconcileScenarioDoneIfComplete:
             assert scenario is not None
             assert scenario.status == ScenarioStatus.SIMULATING
 
+    def test_does_not_mark_done_when_every_branch_is_pruned(self, monkeypatch):
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.commit()
+
+        branch_a = _create_branch(engine, scenario_id, title="被剪枝分支 A")
+        branch_b = _create_branch(engine, scenario_id, title="被剪枝分支 B")
+        with Session(engine) as session:
+            for branch_id in (branch_a, branch_b):
+                branch = session.get(Branch, branch_id)
+                assert branch is not None
+                branch.status = BranchStatus.PRUNED
+                session.add(branch)
+            session.commit()
+
+        monkeypatch.setattr("app.services.simulator.runtime_lock_is_active", lambda _key: False)
+
+        assert reconcile_scenario_done_if_complete(engine, scenario_id) is False
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.status == ScenarioStatus.SIMULATING
+
 
 class TestNormalizedActiveBranchProbabilities:
     def test_zero_sum_falls_back_to_uniform_distribution(self):
@@ -1565,7 +1593,14 @@ class TestGatherAgentMessages:
             "app.services.simulator._get_recent_messages",
             _raise_on_recent_messages,
         )
-        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+
+        def _raise_on_retrieve_memories(*args, **kwargs):
+            raise AssertionError("usable blackboard briefing should skip L2 memory lookup")
+
+        monkeypatch.setattr(
+            "app.services.simulator.retrieve_relevant_memories",
+            _raise_on_retrieve_memories,
+        )
         monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
 
         results = await _gather_agent_messages(

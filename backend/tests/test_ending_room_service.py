@@ -1636,6 +1636,33 @@ def test_oracle_empty_generation_then_rewrite_uses_anchor_reference(monkeypatch)
     assert len(prompts) == 2
 
 
+def test_chinese_oracle_prompt_localizes_archivist_display_name():
+    room = EndingRoom(
+        scenario_id="scenario-zh-archivist",
+        room_type=EndingRoomType.ENDING_CHAMBER,
+        participant_set_hash="hash",
+        scope_fingerprint="scope",
+        title="中文会客厅",
+        language="zh",
+    )
+    participant = EndingRoomParticipant(
+        room_id="room-zh-archivist",
+        role_slot=EndingRoomRoleSlot.ARCHIVIST,
+        display_name="Archivist Seed",
+        persona_snapshot_json={"agent_role": "Archivist"},
+    )
+
+    prompt = _build_oracle_generation_prompt(
+        room=room,
+        participant=participant,
+        phase=EndingRoomPhase.VERDICT,
+        output_json=False,
+    )
+
+    assert "档案官" in prompt
+    assert "Archivist Seed" not in prompt
+
+
 def test_one_move_only_english_copy_does_not_embed_cjk_hinges_or_persona_lines():
     scenario_id, branch_id, agent_ids = _seed_multi_agent_branch_world(
         question="What if a coastal city banned cash in two weeks?",
@@ -1736,7 +1763,7 @@ def test_roundtable_verdict_fallback_is_display_ready_not_prompt_instructions():
     assert "My verdict" not in content
     assert "evaluative verdict" not in content
     assert "clear judgment" not in content
-    assert "讨论的核心" in content
+    assert "更愿意把《秩序线》当作当前答案" in content
 
 
 def test_roundtable_verdict_fallback_en_does_not_mix_chinese_question():
@@ -1758,7 +1785,7 @@ def test_roundtable_verdict_fallback_en_does_not_mix_chinese_question():
     )
 
     assert not re.search(r"[\u4e00-\u9fff]", content)
-    assert "The discussion centered on" in content
+    assert "table is leaning toward" in content
 
 
 def test_roundtable_deterministic_anchors_include_scenario_question():
@@ -3962,6 +3989,7 @@ def test_followup_partial_stream_emits_recoverable_turn_error(monkeypatch):
     async def _broken_stream(*args, **kwargs):
         if on_delta := kwargs.get("on_delta"):
             await on_delta("先给出一半")
+            await on_delta("，再补一点")
         raise RuntimeError("stream exploded")
 
     monkeypatch.setattr(ending_room_service_module.settings, "ORACLE_CHAMBERS_USE_LLM", True)
@@ -3979,13 +4007,34 @@ def test_followup_partial_stream_emits_recoverable_turn_error(monkeypatch):
         )
     )
 
-    assert any(turn["content"] for turn in followup["turns"][1:])
+    assistant_turns = followup["turns"][1:]
+    assert assistant_turns
+    assert all(turn["content"] == "先给出一半，再补一点" for turn in assistant_turns)
+    assert all(
+        turn["cited_refs_json"]["generation_status"] == "partial_stream_degraded"
+        for turn in assistant_turns
+    )
+    assert all(
+        turn["cited_refs_json"]["status_reason"] == "stream_interrupted"
+        for turn in assistant_turns
+    )
     recoverable_errors = [
         call.args[1]["data"]
         for call in ws_callback.await_args_list
         if call.args[1]["type"] == "ending_room_turn_error"
     ]
     assert recoverable_errors
+    delta_payloads = [
+        call.args[1]["data"]
+        for call in ws_callback.await_args_list
+        if call.args[1]["type"] == "ending_room_turn_delta"
+    ]
+    assert delta_payloads
+    assert [payload["delta"] for payload in delta_payloads] == [
+        item
+        for _turn in assistant_turns
+        for item in ("先给出一半", "，再补一点")
+    ]
     followup_turns = {
         turn["id"]: turn["participant_id"]
         for turn in followup["turns"][1:]
@@ -4091,9 +4140,11 @@ def test_one_move_only_result_uses_action_reason_cost_contract():
 
     assert len(payload["turns"]) == 2
     next_move = payload["result"]["next_move"]
-    # Phase 2B: minimal factual anchor format — "关键转折：「<hook>」。如果只改一步，改这里。"
-    assert "关键转折：" in next_move
-    assert "如果只改一步" in next_move
+    # De-templatized copy no longer requires a rigid label; protect action, reason, and consequence.
+    assert "只改一步" in next_move
+    assert "命令链" in next_move
+    assert "杠杆点" in next_move
+    assert "后果" in next_move
 
 
 def test_run_ending_room_background_is_idempotent_after_done():

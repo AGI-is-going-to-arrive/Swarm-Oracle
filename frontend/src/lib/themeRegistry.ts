@@ -421,7 +421,7 @@ export const THEME_REGISTRY = {
   },
   debate_arena_forum: {
     labelZh: '高冲突议场',
-    labelEn: 'Conflict Forum Arena',
+    labelEn: 'High-Conflict Forum',
     assetPath: '/assets/scenes/debate_arena_forum.png',
     profileId: 'generic',
     keywords: [

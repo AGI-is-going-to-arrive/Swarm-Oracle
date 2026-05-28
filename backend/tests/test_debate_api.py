@@ -1294,6 +1294,8 @@ def test_empty_turn_fallbacks_are_readable():
     )
 
     assert "was: ." not in summary
+    assert "Judge summary:" not in summary
+    assert "strongest winning point" not in summary
     assert best_argument in summary
     assert best_rebuttal in summary
 

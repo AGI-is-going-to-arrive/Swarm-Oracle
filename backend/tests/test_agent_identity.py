@@ -1,6 +1,6 @@
 """Tests for app.services.agent_identity — cross-scenario identity & memory."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from sqlmodel import Session, select
 
@@ -202,6 +202,68 @@ class TestRecordGrowthEvent:
 
 
 class TestGetIdentityMemories:
+    def _doc(
+        self,
+        doc_id: str,
+        text: str,
+        *,
+        identity_id: str = "id-memory",
+        scenario_id: str = "scenario-1",
+        created_at: str = "2026-04-01T00:00:00Z",
+        compacted: bool = False,
+        doc_type: str | None = None,
+    ) -> dict:
+        meta = {
+            "identity_id": identity_id,
+            "scenario_id": scenario_id,
+            "created_at": created_at,
+        }
+        if compacted:
+            meta["compacted"] = "true"
+        if doc_type is not None:
+            meta["doc_type"] = doc_type
+        return {"id": doc_id, "document": text, "metadata": meta}
+
+    def _collection(self, docs: list[dict]) -> MagicMock:
+        collection = MagicMock()
+        collection.count.return_value = len(docs)
+
+        def _get(where=None, **kwargs):
+            filtered = docs
+            if where:
+                for key, value in where.items():
+                    filtered = [
+                        doc for doc in filtered
+                        if doc["metadata"].get(key) == value
+                    ]
+            return {
+                "ids": [doc["id"] for doc in filtered],
+                "documents": [doc["document"] for doc in filtered],
+                "metadatas": [doc["metadata"] for doc in filtered],
+            }
+
+        collection.get.side_effect = _get
+        return collection
+
+    def _read_memories(self, docs: list[dict], *, limit: int = 10) -> list[dict]:
+        session = MagicMock()
+        identity = MagicMock()
+        identity.user_id = "user-memory"
+        session.get.return_value = identity
+        session.__enter__.return_value = session
+        session.__exit__.return_value = False
+
+        store = MagicMock()
+        store.available = True
+        store._client.get_collection.return_value = self._collection(docs)
+
+        with (
+            patch("app.services.agent_identity.Session", return_value=session),
+            patch("app.services.agent_identity.get_engine", return_value=MagicMock()),
+            patch("app.services.agent_identity.get_vector_store", return_value=store),
+        ):
+            return get_identity_memories("id-memory", limit=limit)
+
     def test_returns_empty_when_no_memories(self):
         """get_identity_memories should return [] when no memories exist."""
         identity_id = resolve_identity(
@@ -218,6 +280,73 @@ class TestGetIdentityMemories:
         """get_identity_memories should return [] for non-existent identity."""
         memories = get_identity_memories("nonexistent-id-xyz")
         assert memories == []
+
+    def test_returns_raw_memories_newest_first(self):
+        memories = self._read_memories([
+            self._doc("raw-old", "older raw memory", created_at="2026-04-01T00:00:00Z"),
+            self._doc("raw-new", "newer raw memory", created_at="2026-04-03T00:00:00Z"),
+        ])
+
+        assert [memory["summary"] for memory in memories] == [
+            "newer raw memory",
+            "older raw memory",
+        ]
+        assert all(memory["memory_type"] == "raw" for memory in memories)
+        assert all(memory["is_compacted"] is False for memory in memories)
+
+    def test_returns_compacted_memories_as_long_term_summaries(self):
+        memories = self._read_memories([
+            self._doc(
+                "compact-old",
+                "older compacted summary",
+                created_at="2026-03-01T00:00:00Z",
+                compacted=True,
+            ),
+            self._doc(
+                "profile",
+                "identity profile should not leak",
+                created_at="2026-04-01T00:00:00Z",
+                doc_type="identity_profile",
+            ),
+            self._doc(
+                "compact-new",
+                "newer compacted summary",
+                created_at="2026-03-02T00:00:00Z",
+                compacted=True,
+            ),
+        ])
+
+        assert [memory["summary"] for memory in memories] == [
+            "newer compacted summary",
+            "older compacted summary",
+        ]
+        assert all(memory["memory_type"] == "long_term_summary" for memory in memories)
+        assert all(memory["is_compacted"] is True for memory in memories)
+
+    def test_prioritizes_compacted_summaries_before_raw_memories(self):
+        memories = self._read_memories([
+            self._doc("raw-new", "new raw memory", created_at="2026-04-03T00:00:00Z"),
+            self._doc("raw-old", "old raw memory", created_at="2026-04-02T00:00:00Z"),
+            self._doc(
+                "compact-old",
+                "long-term compacted summary",
+                created_at="2026-03-01T00:00:00Z",
+                compacted=True,
+            ),
+            self._doc(
+                "profile",
+                "identity profile should stay hidden",
+                created_at="2026-04-04T00:00:00Z",
+                doc_type="identity_profile",
+            ),
+        ], limit=2)
+
+        assert [memory["summary"] for memory in memories] == [
+            "long-term compacted summary",
+            "new raw memory",
+        ]
+        assert memories[0]["memory_type"] == "long_term_summary"
+        assert memories[0]["is_compacted"] is True
 
 
 class TestL2CosineMatching:

@@ -524,6 +524,8 @@ def reconcile_scenario_done_if_complete(
         completed_branches = [
             branch for branch in branches if branch.status == BranchStatus.COMPLETED
         ]
+        if not completed_branches:
+            return False
         if any(
             not (branch.story or "").strip() or not (branch.insight or "").strip()
             for branch in completed_branches
@@ -2920,9 +2922,12 @@ async def _gather_agent_messages(
     else:
         shared_text = ""
 
+    empty_shared_briefings = {"(尚无共享信息)", "(no shared briefing yet)"}
+    has_usable_shared_briefing = bool(shared_text) and shared_text not in empty_shared_briefings
+
     # Only hit the DB when the blackboard cannot provide usable context.
     recent_msgs = None
-    if not shared_text or shared_text in {"(尚无共享信息)", "(no shared briefing yet)"}:
+    if not has_usable_shared_briefing:
         recent_msgs = _get_recent_messages(engine, branch_id, max_rounds=2)
     emotion_state = agent_prev_emotions if agent_prev_emotions is not None else {}
     worldline_context = _build_worldline_context(engine, branch_id, language)
@@ -2938,7 +2943,7 @@ async def _gather_agent_messages(
 
             # L2 vector memory: retrieve relevant memories for CORE/IMPORTANT
             l2_memories = ""
-            if agent_tier in ("CORE", "IMPORTANT"):
+            if agent_tier in ("CORE", "IMPORTANT") and not has_usable_shared_briefing:
                 query = f"{topic} {agent.get('name', '')} {agent.get('role', '')}"
                 l2_memories = retrieve_relevant_memories(
                     scenario_id,
@@ -2984,7 +2989,7 @@ async def _gather_agent_messages(
                     )
 
             # Build context: Blackboard shared briefing + DB fallback
-            if shared_text and shared_text not in {"(尚无共享信息)", "(no shared briefing yet)"}:
+            if has_usable_shared_briefing:
                 agent_briefing = shared_text
                 ctx = build_agent_context(
                     agent=agent,

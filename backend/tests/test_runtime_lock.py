@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlmodel import Session
 
+import app.services.debate as debate_module
+import app.services.ending_room_service as ending_room_service_module
 from app.api import helpers as helpers_module
 from app.api import ws as ws_module
 from app.models import database as database_module
@@ -20,11 +22,13 @@ from app.services import runtime_lock as runtime_lock_module
 from app.services.runtime_lock import (
     acquire_runtime_lock,
     debate_lock_key,
+    ending_room_lock_key,
     refresh_runtime_lock,
     release_runtime_lock,
     runtime_lock_is_active,
     simulation_lock_key,
 )
+from app.services.simulation_cancel import clear_cancel_token, get_cancel_token
 
 
 @pytest.fixture(autouse=True)
@@ -559,3 +563,156 @@ async def test_run_sim_background_fails_closed_when_heartbeat_refresh_raises(mon
 
     broadcast.assert_awaited()
     helpers_module._running_simulations.clear()
+
+
+@pytest.mark.asyncio
+async def test_run_sim_background_cleans_local_registries_when_runtime_lock_release_raises(
+    monkeypatch,
+    caplog,
+):
+    scenario_id = "scenario-release-cleanup"
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=simulation_lock_key(scenario_id),
+        owner_id="release-cleanup-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    release_error: RuntimeError | None = None
+
+    helpers_module._running_simulations.clear()
+    helpers_module._parse_phase_simulations.clear()
+    helpers_module.clear_running_task(scenario_id)
+    clear_cancel_token(scenario_id)
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock()),
+    )
+    monkeypatch.setattr(helpers_module, "run_simulation", AsyncMock())
+    monkeypatch.setattr(
+        helpers_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+
+    def _release_raises(_lease):
+        raise RuntimeError("release boom")
+
+    monkeypatch.setattr(helpers_module, "release_runtime_lock", _release_raises)
+    caplog.set_level("ERROR")
+
+    try:
+        try:
+            await helpers_module.run_sim_background(scenario_id)
+        except RuntimeError as exc:
+            release_error = exc
+
+        assert scenario_id not in helpers_module._running_simulations
+        assert get_cancel_token(scenario_id) is None
+        assert helpers_module.get_running_task(scenario_id) is None
+        assert release_error is None
+        assert "runtime lock release failed" in caplog.text
+    finally:
+        clear_cancel_token(scenario_id)
+        helpers_module.clear_running_task(scenario_id)
+        helpers_module._running_simulations.discard(scenario_id)
+        helpers_module._parse_phase_simulations.discard(scenario_id)
+
+
+@pytest.mark.asyncio
+async def test_run_debate_background_cleans_local_registries_when_runtime_lock_release_raises(
+    monkeypatch,
+    caplog,
+):
+    debate_id = "debate-release-cleanup"
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=debate_lock_key(debate_id),
+        owner_id="release-cleanup-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    release_error: RuntimeError | None = None
+
+    debate_module._clear_running_debate(debate_id)
+    helpers_module.clear_running_task(debate_id)
+    monkeypatch.setattr(
+        debate_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+    monkeypatch.setattr(
+        debate_module,
+        "_start_runtime_lock_heartbeat",
+        lambda *_args, **_kwargs: (None, None),
+    )
+
+    def _release_raises(_lease):
+        raise RuntimeError("release boom")
+
+    monkeypatch.setattr(debate_module, "release_runtime_lock", _release_raises)
+    caplog.set_level("ERROR")
+
+    async def _push(_debate_id: str, _event: dict) -> None:
+        return None
+
+    try:
+        try:
+            await debate_module.run_debate_background(debate_id, ws_callback=_push)
+        except RuntimeError as exc:
+            release_error = exc
+
+        assert debate_id not in debate_module._running_debates
+        assert helpers_module.get_running_task(debate_id) is None
+        assert release_error is None
+        assert "runtime lock release failed" in caplog.text
+    finally:
+        debate_module._clear_running_debate(debate_id)
+        helpers_module.clear_running_task(debate_id)
+
+
+@pytest.mark.asyncio
+async def test_run_ending_room_background_cleans_registry_when_runtime_lock_release_raises(
+    monkeypatch,
+    caplog,
+):
+    room_id = "room-release-cleanup"
+    fake_lease = runtime_lock_module.RuntimeLockLease(
+        lock_key=ending_room_lock_key(room_id),
+        owner_id="release-cleanup-owner",
+        db_path=None,
+        expires_at=time.time() + 30,
+    )
+    release_error: RuntimeError | None = None
+
+    ending_room_service_module._release_room(room_id)
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: fake_lease,
+    )
+    monkeypatch.setattr(
+        ending_room_service_module,
+        "_start_ending_room_runtime_lock_heartbeat",
+        lambda *_args, **_kwargs: (None, None),
+    )
+
+    def _release_raises(_lease):
+        raise RuntimeError("release boom")
+
+    monkeypatch.setattr(ending_room_service_module, "release_runtime_lock", _release_raises)
+    caplog.set_level("ERROR")
+
+    try:
+        try:
+            await ending_room_service_module.run_ending_room_background(
+                room_id,
+                ws_callback=AsyncMock(),
+            )
+        except RuntimeError as exc:
+            release_error = exc
+
+        assert room_id not in ending_room_service_module._RUNNING_ROOMS
+        assert release_error is None
+        assert "runtime lock release failed" in caplog.text
+    finally:
+        ending_room_service_module._release_room(room_id)

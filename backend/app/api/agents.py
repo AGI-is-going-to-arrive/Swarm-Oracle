@@ -65,7 +65,7 @@ ALLOWED_CUSTOM_AGENT_TIERS = {"CROWD", "IMPORTANT"}
 MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024
 DOCUMENT_UPLOAD_CHUNK_BYTES = 1024 * 1024
 PDF_PARSE_TIMEOUT_SECONDS = 30.0
-IDENTITY_PREFLIGHT_TIMEOUT_SECONDS = 10.0
+IDENTITY_PREFLIGHT_TIMEOUT_SECONDS = 8.0
 PDF_CONTENT_TYPES = {"application/pdf", "application/x-pdf"}
 PDF_FALLBACK_CONTENT_TYPES = {"", "application/octet-stream"}
 _ORIGINAL_EXTRACT_PDF_TEXT = extract_pdf_text
@@ -313,6 +313,62 @@ def _isoformat_or_none(value: object) -> str | None:
     return formatter() if callable(formatter) else None
 
 
+def _identity_preflight_skipped_response(
+    *,
+    status: str,
+    message: str,
+    agent_count: int = 0,
+) -> dict:
+    return {
+        "needs_confirmation": False,
+        "matches": [],
+        "summary": {
+            "agent_count": agent_count,
+            "exact_match_count": 0,
+            "candidate_count": 0,
+            "new_identity_count": 0,
+            "preflight_status": status,
+            "launch_can_continue": True,
+            "message": message,
+        },
+    }
+
+
+def _preview_identity_matches(
+    effective_user_id: str,
+    agents: list[dict],
+) -> tuple[list[dict], int, int, int]:
+    matches: list[dict] = []
+    exact_match_count = 0
+    new_identity_count = 0
+    skipped_count = 0
+    for agent in agents:
+        try:
+            preview = preview_identity_match(
+                effective_user_id,
+                agent.get("name", ""),
+                agent.get("role", ""),
+                agent.get("persona"),
+            )
+        except Exception as exc:
+            skipped_count += 1
+            new_identity_count += 1
+            logger.warning(
+                "Identity continuity match preview skipped for user=%s agent=%s: %s",
+                effective_user_id,
+                agent.get("name", ""),
+                exc,
+            )
+            continue
+        if preview["match_kind"] == "l1_exact":
+            exact_match_count += 1
+        elif preview["match_kind"] == "l2_candidate":
+            matches.append(preview)
+        else:
+            new_identity_count += 1
+    return matches, exact_match_count, new_identity_count, skipped_count
+
+
 @router.get("/identities")
 async def list_identities(
     user_id: str | None = None,
@@ -501,6 +557,8 @@ async def preflight_identity_continuity(
         if (req.disable_user_quota and local_provider)
         else f"user:{effective_user_id}"
     )
+    loop = asyncio.get_running_loop()
+    preflight_deadline = loop.time() + IDENTITY_PREFLIGHT_TIMEOUT_SECONDS
 
     try:
         with llm_request_scope(
@@ -522,45 +580,62 @@ async def preflight_identity_continuity(
                     temperature=req.temperature,
                     model=req.llm_model,
                 ),
-                timeout=IDENTITY_PREFLIGHT_TIMEOUT_SECONDS,
+                timeout=max(0.0, preflight_deadline - loop.time()),
             )
     except asyncio.TimeoutError:
         logger.warning(
-            "Identity continuity preflight timed out after %.1fs for user=%s",
+            "Identity continuity parse timed out after %.1fs for user=%s",
             IDENTITY_PREFLIGHT_TIMEOUT_SECONDS,
             effective_user_id,
         )
-        raise api_error(
-            504,
-            "IDENTITY_PREFLIGHT_TIMEOUT",
-            "Identity continuity preflight timed out. Please retry.",
-        ) from None
-
-    matches: list[dict] = []
-    exact_match_count = 0
-    new_identity_count = 0
-    for agent in parsed.get("agents", []):
-        preview = preview_identity_match(
-            effective_user_id,
-            agent.get("name", ""),
-            agent.get("role", ""),
-            agent.get("persona"),
+        return _identity_preflight_skipped_response(
+            status="parse_timeout",
+            message="Identity continuity parsing timed out; launch can continue without continuity reuse.",  # noqa: E501
         )
-        if preview["match_kind"] == "l1_exact":
-            exact_match_count += 1
-        elif preview["match_kind"] == "l2_candidate":
-            matches.append(preview)
-        else:
-            new_identity_count += 1
+
+    agents = [agent for agent in parsed.get("agents", []) if isinstance(agent, dict)]
+    match_timeout = max(0.0, preflight_deadline - loop.time())
+    if match_timeout <= 0:
+        logger.warning(
+            "Identity continuity match preview skipped because %.1fs overall preflight deadline was exhausted for user=%s agents=%s",  # noqa: E501
+            IDENTITY_PREFLIGHT_TIMEOUT_SECONDS,
+            effective_user_id,
+            len(agents),
+        )
+        return _identity_preflight_skipped_response(
+            status="match_timeout",
+            message="Identity continuity matching timed out; launch can continue without continuity reuse.",  # noqa: E501
+            agent_count=len(agents),
+        )
+    try:
+        matches, exact_match_count, new_identity_count, skipped_count = await asyncio.wait_for(
+            asyncio.to_thread(_preview_identity_matches, effective_user_id, agents),
+            timeout=match_timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Identity continuity match preview timed out after %.1fs for user=%s agents=%s",  # noqa: E501
+            IDENTITY_PREFLIGHT_TIMEOUT_SECONDS,
+            effective_user_id,
+            len(agents),
+        )
+        return _identity_preflight_skipped_response(
+            status="match_timeout",
+            message="Identity continuity matching timed out; launch can continue without continuity reuse.",  # noqa: E501
+            agent_count=len(agents),
+        )
 
     return {
         "needs_confirmation": bool(matches),
         "matches": matches,
         "summary": {
-            "agent_count": len(parsed.get("agents", [])),
+            "agent_count": len(agents),
             "exact_match_count": exact_match_count,
             "candidate_count": len(matches),
             "new_identity_count": new_identity_count,
+            "preflight_status": "ok" if skipped_count == 0 else "partial",
+            "skipped_match_count": skipped_count,
+            "launch_can_continue": True,
         },
     }
 

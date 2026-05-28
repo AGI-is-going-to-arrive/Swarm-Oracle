@@ -1464,6 +1464,73 @@ class TestBYOKBoundary:
         assert resp.status_code == 400
         assert resp.json()["detail"]["code"] == "BYOK_KEY_REQUIRED"
 
+    def test_start_rejects_base_url_when_validator_denies_it(self, client, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        blocked_url = "https://blocked.example/v1"
+        seen_urls: list[str | None] = []
+
+        def _deny_base_url(raw_url: str | None) -> None:
+            seen_urls.append(raw_url)
+            return None
+
+        monkeypatch.setattr(conversation_service, "validate_llm_base_url", _deny_base_url)
+
+        resp = client.post(
+            "/api/conversation/start",
+            json={
+                **_default_start_body(sid),
+                "llm_api_key": "sk-test-key",
+                "llm_base_url": blocked_url,
+            },
+        )
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
+        assert seen_urls == [blocked_url]
+
+    def test_turn_rejects_base_url_when_validator_denies_it(self, client, monkeypatch):
+        engine = get_engine()
+        sid = _seed_scenario(engine)
+        start = client.post(
+            "/api/conversation/start",
+            json=_default_start_body(sid),
+        ).json()
+        _complete_active_turn(engine, start["thread_id"])
+        blocked_url = "https://blocked.example/v1"
+        seen_urls: list[str | None] = []
+
+        def _deny_base_url(raw_url: str | None) -> None:
+            seen_urls.append(raw_url)
+            return None
+
+        async def _fake_stream_assistant_turn(**_kwargs):
+            async def _iterator():
+                yield {"event": "turn_started", "data": {}}
+                yield {"event": "turn_completed", "data": {}}
+
+            return _iterator()
+
+        monkeypatch.setattr(conversation_service, "validate_llm_base_url", _deny_base_url)
+        monkeypatch.setattr(
+            conversation_module,
+            "stream_assistant_turn",
+            _fake_stream_assistant_turn,
+        )
+
+        resp = client.post(
+            f"/api/conversation/{start['thread_id']}/turn",
+            json={
+                "user_content": "hello again",
+                "llm_api_key": "sk-test-key",
+                "llm_base_url": blocked_url,
+            },
+        )
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
+        assert seen_urls == [blocked_url]
+
 
 # ── T15 redact_byok ─────────────────────────────────────
 

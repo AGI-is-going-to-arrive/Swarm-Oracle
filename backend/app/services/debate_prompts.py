@@ -1029,7 +1029,7 @@ def _build_turn_copy_zh(
     profile_label = _PROFILE_LABELS_ZH.get(profile_id, "议场")
     style = _get_profile_style("zh", profile_id)
     if phase == DebatePhase.OPENING and side == DebateSide.PROPOSITION:
-        return f"我方支持这项动议。若围绕「{compact_question}」主动布局，就能{style['pro_case']}，让{profile_label} 体系把不确定性压进更可治理的秩序。"  # noqa: E501
+        return f"我方支持。围绕「{compact_question}」，现在先处理最痛的那一步，才有机会让{profile_label}少付后面的账。"  # noqa: E501
     if phase == DebatePhase.OPENING and side == DebateSide.OPPOSITION:
         return f"我方反对。动议把收益叙事说得过于轻松，却低估了{style['con_case']}。"
     if phase == DebatePhase.CROSSFIRE and side == DebateSide.PROPOSITION:
@@ -1321,7 +1321,7 @@ def _build_turn_copy_en(
 ) -> str:
     style = _get_profile_style("en", profile_id)
     if phase == DebatePhase.OPENING and side == DebateSide.PROPOSITION:
-        return f"We support the motion. Around '{compact_question}', we can pursue {style['pro_case']} and convert uncertainty into governable leverage."  # noqa: E501
+        return f"We support the motion. '{compact_question}' is already forcing a choice; acting now gives the room a better shot at limiting the damage."  # noqa: E501
     if phase == DebatePhase.OPENING and side == DebateSide.OPPOSITION:
         return f"We oppose the motion. The upside story is overstated, while {style['con_case']} are being understated."  # noqa: E501
     if phase == DebatePhase.CROSSFIRE and side == DebateSide.PROPOSITION:
