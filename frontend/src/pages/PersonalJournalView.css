@@ -492,6 +492,83 @@
   color: var(--text-muted);
 }
 
+/* ── Roster error state (distinct from the loading skeleton and empty state) ── */
+
+.journal-roster--error {
+  display: grid;
+  place-items: center;
+  gap: 12px;
+  padding: 24px 8px;
+  text-align: center;
+  color: var(--color-danger);
+}
+
+.journal-roster--error p {
+  margin: 0;
+}
+
+/* ── Roster loading skeleton (distinct from the empty state) ── */
+
+.journal-roster--loading {
+  display: block;
+}
+
+.journal-roster__skeleton-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.journal-roster__skeleton-item {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg, 8px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+}
+
+.journal-roster__skeleton-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+}
+
+.journal-roster__skeleton-lines {
+  display: grid;
+  gap: 6px;
+}
+
+.journal-roster__skeleton-line {
+  display: block;
+  height: 10px;
+  border-radius: 6px;
+}
+
+.journal-roster__skeleton-line--name {
+  width: 45%;
+}
+
+.journal-roster__skeleton-line--meta {
+  width: 75%;
+}
+
+.journal-roster__skeleton-avatar,
+.journal-roster__skeleton-line {
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--text-muted) 14%, transparent) 25%,
+    color-mix(in oklab, var(--text-muted) 26%, transparent) 50%,
+    color-mix(in oklab, var(--text-muted) 14%, transparent) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmerLoad 1.4s ease-in-out infinite;
+}
+
 .journal-roster__item {
   display: grid;
   grid-template-columns: 36px 1fr;
@@ -593,6 +670,43 @@
   font-size: 0.85rem;
 }
 
+/* ── Worldline error state (distinct from the loading skeleton and empty state) ── */
+
+.journal-worldline-mini__placeholder--error {
+  gap: 12px;
+  padding: 12px;
+  text-align: center;
+  color: var(--color-danger);
+}
+
+/* ── Worldline data-loading skeleton (distinct from empty state) ── */
+
+.journal-worldline-mini__skeleton {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.journal-worldline-mini__skeleton-node {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--color-primary) 16%, transparent) 25%,
+    color-mix(in oklab, var(--color-primary) 32%, transparent) 50%,
+    color-mix(in oklab, var(--color-primary) 16%, transparent) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmerLoad 1.4s ease-in-out infinite;
+}
+
+.journal-worldline-mini__skeleton-node--root {
+  width: 24px;
+  height: 24px;
+}
+
 .journal-worldline-mini__edge {
   stroke: color-mix(in oklab, var(--color-primary) 38%, var(--border-default));
   stroke-width: 1.4;
@@ -644,5 +758,11 @@
   .journal-calibration__point,
   .journal-worldline-mini__node circle {
     transition: none;
+  }
+
+  .journal-roster__skeleton-avatar,
+  .journal-roster__skeleton-line,
+  .journal-worldline-mini__skeleton-node {
+    animation: none;
   }
 }

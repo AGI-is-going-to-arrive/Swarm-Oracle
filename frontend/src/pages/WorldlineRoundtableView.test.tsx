@@ -57,6 +57,7 @@ const {
   buildOracleReplayUrlMock,
   copyTextMock,
   createReplayArtifactMock,
+  getActiveEndingRoomMock,
   getCapabilitiesMock,
   createThreadMock,
   getAgentsMock,
@@ -231,6 +232,7 @@ const {
       currentLanguage = language;
     }),
     createReplayArtifactMock: vi.fn(async () => ({ id: 'artifact-1' })),
+    getActiveEndingRoomMock: vi.fn(),
     getCapabilitiesMock: vi.fn(async () => ({
       factions: { enabled: false },
       agent_conversation: { enabled: false },
@@ -341,7 +343,7 @@ vi.mock('react-i18next', () => ({
         'roundtable.format_quick_review': 'Quick Review',
         'roundtable.format_clash_mode': 'Clash Mode',
         'roundtable.cast_label': 'Cast mode',
-        'roundtable.cast_smart_pick': 'Smart Pick',
+        'roundtable.cast_smart_pick': 'Auto Cast',
         'roundtable.cast_custom': 'Custom Cast',
         'roundtable.planning_preparing': 'Preparing the roundtable',
         'roundtable.planning_turns': `${String(options?.count ?? 0)} turns planned`,
@@ -428,7 +430,7 @@ vi.mock('react-i18next', () => ({
         'roundtable.explore_agent_chat_placeholder': 'Tap a participant above to start a private conversation.',
         'roundtable.explore_analyst_placeholder': 'e.g. "Why did Worldline 2 diverge after Round 3?"',
         'roundtable.explore_survey_placeholder': 'e.g. "What single decision would you change if you could?"',
-        'roundtable.explore_locked': 'The discussion result must land before you can explore further.',
+        'roundtable.explore_locked': 'The verdict must be in before you can explore further.',
         'roundtable.error_missing_scenario': 'Roundtable replay is missing its base scenario snapshot.',
         'roundtable.error_invalid_replay': 'This roundtable replay link is invalid.',
         'roundtable.error_missing_id': 'Missing scenario id.',
@@ -502,6 +504,7 @@ vi.mock('../api/client', async () => {
   return {
     ...actual,
     createReplayArtifact: createReplayArtifactMock,
+    getActiveEndingRoom: getActiveEndingRoomMock,
     getCapabilities: getCapabilitiesMock,
     getAgents: getAgentsMock,
     getReplayArtifact: getReplayArtifactMock,
@@ -564,6 +567,8 @@ beforeEach(() => {
     roundtable_analyst: { enabled: false },
     roundtable_survey: { enabled: false },
   }));
+  getActiveEndingRoomMock.mockReset();
+  getActiveEndingRoomMock.mockImplementation(async () => null);
   getAgentsMock.mockReset();
   getReplayArtifactMock.mockReset();
   getScenarioMock.mockReset();
@@ -950,7 +955,7 @@ describe('WorldlineRoundtableView', () => {
     expect(await screen.findByText('Worldline Roundtable')).toBeInTheDocument();
     expect(screen.getByText('Reseat each worldline representative')).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Deep Dive' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Smart Pick' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Auto Cast' })).toBeChecked();
 
     await user.click(screen.getByRole('radio', { name: 'Quick Review' }));
     await user.click(screen.getByRole('radio', { name: 'Custom Cast' }));
@@ -973,6 +978,108 @@ describe('WorldlineRoundtableView', () => {
     });
     await waitFor(() => {
       expect(loadRoomMock).toHaveBeenCalledWith('room-1');
+    });
+  });
+
+  describe('revisiting a completed roundtable', () => {
+    const completedScenario = {
+      id: 'scenario-1',
+      question: 'What broke first?',
+      scene_theme: 'court',
+      status: 'done',
+      language: 'en',
+      agents: [],
+    };
+    const completedStory = {
+      question: 'What broke first?',
+      branches: [
+        { id: 'branch-a', title: 'Branch A', probability: 0.62, insight: 'A', story: 'Story A', key_moments: [] },
+        { id: 'branch-b', title: 'Branch B', probability: 0.38, insight: 'B', story: 'Story B', key_moments: [] },
+      ],
+    };
+
+    function startWithoutHydratedRoom() {
+      storeState.snapshot = null;
+      storeState.result = null;
+      storeState.threadsById = {};
+      storeState.threadOrder = [];
+      storeState.activeThreadId = null;
+      storeState.status = 'idle';
+      getScenarioMock.mockResolvedValue(completedScenario);
+      getStoryMock.mockResolvedValue(completedStory);
+      getAgentsMock.mockResolvedValue([]);
+    }
+
+    it('rehydrates the persisted completed room so the verdict + Deep Dive render', async () => {
+      startWithoutHydratedRoom();
+      const baseState = createBaseStoreState();
+      const resolvedRoom = {
+        ...baseState.snapshot!,
+        turns: [],
+        status: 'done' as const,
+        result_ready: true,
+      };
+      getActiveEndingRoomMock.mockResolvedValue(resolvedRoom);
+      // loadRoom hydrates the shared store exactly like the live completion path.
+      loadRoomMock.mockImplementation(async () => {
+        storeState.snapshot = resolvedRoom;
+        storeState.result = baseState.result;
+        storeState.threadsById = {
+          'thread-room': { ...baseState.threadsById['thread-room'], turns: [] },
+        };
+        storeState.threadOrder = ['thread-room'];
+        storeState.activeThreadId = 'thread-room';
+        storeState.status = 'done';
+      });
+
+      renderRoundtableView();
+
+      // The completed verdict synthesis renders instead of the picker.
+      await screen.findByText('The roundtable converged on a single hinge.');
+      const synthesisSection = document.querySelector('.worldline-roundtable-synthesis');
+      expect(synthesisSection).toBeTruthy();
+      expect(
+        within(synthesisSection as HTMLElement).getByRole('heading', {
+          level: 2,
+          name: 'The roundtable converged on a single hinge.',
+        }),
+      ).toBeInTheDocument();
+      // PostVerdictPanel Deep Dive entry is present.
+      expect(document.querySelector('.roundtable-phase-nav__pill.is-explore')).toBeTruthy();
+      // The picker is NOT shown.
+      expect(screen.queryByText('Reseat each worldline representative')).not.toBeInTheDocument();
+
+      // Resolved read-only and hydrated via loadRoom — never created a room.
+      expect(getActiveEndingRoomMock).toHaveBeenCalledWith('scenario-1', 'worldline_roundtable');
+      expect(loadRoomMock).toHaveBeenCalledWith(resolvedRoom.id);
+      expect(openRoomMock).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the picker when no persisted room exists (resolve returns null)', async () => {
+      startWithoutHydratedRoom();
+      getActiveEndingRoomMock.mockResolvedValue(null);
+
+      renderRoundtableView();
+
+      expect(await screen.findByText('Reseat each worldline representative')).toBeInTheDocument();
+      expect(getActiveEndingRoomMock).toHaveBeenCalledWith('scenario-1', 'worldline_roundtable');
+      // No hydration and no error surface for the "no existing room" case.
+      expect(loadRoomMock).not.toHaveBeenCalled();
+      expect(openRoomMock).not.toHaveBeenCalled();
+      expect(document.querySelector('.worldline-roundtable-empty--error')).toBeNull();
+    });
+
+    it('falls back to the picker without crashing when resolve throws', async () => {
+      startWithoutHydratedRoom();
+      getActiveEndingRoomMock.mockRejectedValue(new Error('resolve failed'));
+
+      renderRoundtableView();
+
+      expect(await screen.findByText('Reseat each worldline representative')).toBeInTheDocument();
+      expect(loadRoomMock).not.toHaveBeenCalled();
+      expect(openRoomMock).not.toHaveBeenCalled();
+      // The resolve error is swallowed — it must not surface an error state.
+      expect(document.querySelector('.worldline-roundtable-empty--error')).toBeNull();
     });
   });
 

@@ -37,6 +37,7 @@ from app.services.ending_room_service import (
     load_ending_room_result_payload,
     load_ending_room_snapshot,
     load_ending_room_thread_snapshot,
+    load_existing_ending_room_snapshot_for_scenario,
     run_ending_room_background,
 )
 from app.services.llm_client import validate_llm_base_url
@@ -311,6 +312,23 @@ async def _broadcast_followup_turns(room_id: str, turns: list[dict]) -> None:
             room_id,
             {"type": "ending_room_turn_commit", "data": turn},
         )
+
+
+@router.get("/scenario/{scenario_id}/ending-room/active")
+async def get_active_ending_room_for_scenario_endpoint(
+    scenario_id: str,
+    room_type: EndingRoomType = EndingRoomType.WORLDLINE_ROUNDTABLE,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    await asyncio.to_thread(_ensure_owned_room_creation_sync, scenario_id, principal)
+    try:
+        return await asyncio.to_thread(
+            load_existing_ending_room_snapshot_for_scenario,
+            scenario_id,
+            room_type=room_type,
+        )
+    except EndingRoomServiceError as exc:
+        _raise_room_error(exc)
 
 
 @router.post("/scenario/{scenario_id}/ending-room")

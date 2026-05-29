@@ -11,19 +11,44 @@ import { useTranslation } from 'react-i18next';
 
 import {
   createJournalEntry,
+  getIdentityGrowthEvents,
   getJournalCalibration,
+  getScenario,
   isApiError,
+  listAgentIdentities,
   listJournalEntries,
   resolveJournalEntry,
+  getSessionBoundUserId,
   type CalibrationBin,
   type JournalEntry,
 } from '../api/client';
+import type { AgentIdentityInfo, AgentGrowthEvent, Scenario } from '../types';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
-import AgentRosterPanel from '../components/Journal/AgentRosterPanel';
+import AgentRosterPanel, {
+  type AgentRosterEntry,
+} from '../components/Journal/AgentRosterPanel';
 import CalibrationCurveChart from '../components/Journal/CalibrationCurveChart';
-import WorldlineMapMini from '../components/Journal/WorldlineMapMini';
+import WorldlineMapMini, {
+  type WorldlineBranchSeed,
+} from '../components/Journal/WorldlineMapMini';
 
 import './PersonalJournalView.css';
+
+/**
+ * Upper bound on how many identities we fan out growth-event fetches to. This
+ * only bounds the number of concurrent network requests — it is NOT a recency
+ * filter. `listAgentIdentities` returns identities with no ordering guarantee,
+ * so we must aggregate events across every fetched identity and sort by
+ * `created_at` afterwards; truncating identities before fetching would silently
+ * drop the newest events when a recent identity happens to sort late.
+ */
+const ROSTER_IDENTITY_FANOUT_CAP = 50;
+/** Cap how many growth events the roster timeline renders, newest first. */
+const ROSTER_EVENT_LIMIT = 24;
+/** Cap how many recent scenarios feed the worldline thumbnail. */
+const WORLDLINE_SCENARIO_LIMIT = 3;
+/** Cap total branch nodes in the worldline thumbnail to keep the SVG legible. */
+const WORLDLINE_BRANCH_LIMIT = 40;
 
 interface FormState {
   question: string;
@@ -67,9 +92,90 @@ function logUnexpectedJournalError(context: string, err: unknown) {
   }
 }
 
+/** Newest-first ordering for ISO timestamps; nulls sort last. */
+function compareIsoDesc(a: string | null, b: string | null): number {
+  const ta = a ? new Date(a).getTime() : NaN;
+  const tb = b ? new Date(b).getTime() : NaN;
+  const va = Number.isNaN(ta) ? -Infinity : ta;
+  const vb = Number.isNaN(tb) ? -Infinity : tb;
+  return vb - va;
+}
+
+/**
+ * Flatten growth events from every identity into roster timeline entries.
+ * Each event becomes one row tagged with its owning identity's display name.
+ * `contextLabel` is a translated, scenario-agnostic caption (growth events do
+ * not carry a human-readable scenario title in their payload).
+ */
+function mapGrowthEventsToRoster(
+  pairs: Array<{ identity: AgentIdentityInfo; events: AgentGrowthEvent[] }>,
+  contextLabel: string,
+): AgentRosterEntry[] {
+  const entries: AgentRosterEntry[] = [];
+  for (const { identity, events } of pairs) {
+    for (const event of events) {
+      entries.push({
+        id: `${identity.id}:${event.id}`,
+        agentName: identity.display_name || identity.role || identity.id,
+        scenario: contextLabel,
+        date: event.created_at ?? '',
+        insight: event.summary || undefined,
+      });
+    }
+  }
+  entries.sort((a, b) => compareIsoDesc(a.date || null, b.date || null));
+  return entries.slice(0, ROSTER_EVENT_LIMIT);
+}
+
+/** Flatten a scenario's branch tree into worldline seeds for the mini map. */
+function mapScenariosToBranchSeeds(scenarios: Scenario[]): WorldlineBranchSeed[] {
+  const seeds: WorldlineBranchSeed[] = [];
+  const seen = new Set<string>();
+  for (const scenario of scenarios) {
+    const branches = Array.isArray(scenario.branches) ? scenario.branches : [];
+    if (branches.length === 0) continue;
+    // Scope ids per scenario so branch ids can't collide across scenarios, and
+    // so each scenario's tree stays self-rooted in the thumbnail.
+    const ids = new Set(branches.map((b) => b.id));
+    for (const branch of branches) {
+      const scopedId = `${scenario.id}:${branch.id}`;
+      if (seen.has(scopedId)) continue;
+      seen.add(scopedId);
+      // Re-parent only when the parent lives in this same scenario; otherwise
+      // treat the branch as a root so orphaned children still render.
+      const parentInScope =
+        branch.parent_branch_id && ids.has(branch.parent_branch_id)
+          ? `${scenario.id}:${branch.parent_branch_id}`
+          : null;
+      seeds.push({
+        id: scopedId,
+        parentId: parentInScope,
+        label: branch.title || undefined,
+        depth: typeof branch.fork_round === 'number' ? branch.fork_round : undefined,
+      });
+    }
+  }
+  // Truncate to keep the SVG legible, then repair any child whose parent fell
+  // outside the surviving slice. Leaving a dangling parentId would orphan the
+  // node and break the tidy-tree layout, so demote such nodes to roots.
+  const truncated = seeds.slice(0, WORLDLINE_BRANCH_LIMIT);
+  const survivingIds = new Set(truncated.map((seed) => seed.id));
+  return truncated.map((seed) =>
+    seed.parentId != null && !survivingIds.has(seed.parentId)
+      ? { ...seed, parentId: null }
+      : seed,
+  );
+}
+
 export function PersonalJournalView() {
   const { t, i18n } = useTranslation();
   const locale = i18n.language || 'en';
+
+  // i18next recreates `t` on every render, so reading it directly inside the
+  // side-panel data effects would re-trigger them on every render. Keep the
+  // latest `t` in a ref and depend only on capability state in those effects.
+  const tRef = useRef(t);
+  tRef.current = t;
 
   // Journal capability is optional — if the backend exposes a flag we honour
   // it, otherwise we render unconditionally. Falling back to truthy when the
@@ -91,6 +197,21 @@ export function PersonalJournalView() {
   const [resolvingId, setResolvingId] = useState<number | null>(null);
   const fetchSeqRef = useRef(0);
   const activeFetchControllerRef = useRef<AbortController | null>(null);
+
+  // Side panels. `undefined` means "still loading / not yet fetched" so the
+  // panels show their own neutral state; an empty array is a real empty state.
+  // A separate `*Error` flag lets the panels distinguish a failed fetch from a
+  // genuine empty result so the user can tell them apart and retry.
+  const [rosterEntries, setRosterEntries] = useState<AgentRosterEntry[] | undefined>(undefined);
+  const [rosterError, setRosterError] = useState(false);
+  const [worldlineBranches, setWorldlineBranches] = useState<
+    WorldlineBranchSeed[] | undefined
+  >(undefined);
+  const [worldlineError, setWorldlineError] = useState(false);
+  // Sequence guards so a retry's response can't be clobbered by a slower,
+  // superseded fetch (mirrors the journal-list fetchSeqRef pattern).
+  const rosterSeqRef = useRef(0);
+  const worldlineSeqRef = useRef(0);
 
   const fetchAll = useCallback(
     async () => {
@@ -135,6 +256,170 @@ export function PersonalJournalView() {
       activeFetchControllerRef.current = null;
     };
   }, [capLoading, featureGated, fetchAll]);
+
+  // ── Agent Roster: aggregate the user's identities, fan out growth events ──
+  // Best-effort: a per-identity growth-event failure is swallowed, but a hard
+  // failure (identity list rejects) surfaces an explicit error state with retry
+  // rather than masquerading as a real empty roster.
+  const loadRoster = useCallback(async () => {
+    const requestSeq = rosterSeqRef.current + 1;
+    rosterSeqRef.current = requestSeq;
+    const isStale = () => requestSeq !== rosterSeqRef.current;
+    // Reuse the inspector's existing growth-event label as the per-row caption.
+    const contextLabel = tRef.current('identity_inspector.type_growth', 'Growth event');
+
+    setRosterError(false);
+    setRosterEntries(undefined);
+    try {
+      const userId = getSessionBoundUserId();
+      const identities = await listAgentIdentities<AgentIdentityInfo[]>(userId);
+      if (isStale()) return;
+      // `listAgentIdentities` has no ordering guarantee. If identities carry a
+      // `created_at`, sort newest-first BEFORE the fanout cap so a >50-identity
+      // user keeps their most recent identities (older ones drop off the tail)
+      // rather than losing whichever the server happened to return last. When
+      // no usable timestamp exists we cannot establish a stable recency key, so
+      // we keep the server order and rely solely on the cap.
+      const all = Array.isArray(identities) ? identities : [];
+      const hasTimestamps = all.some(
+        (identity) => identity?.created_at && !Number.isNaN(new Date(identity.created_at).getTime()),
+      );
+      const ordered = hasTimestamps
+        ? [...all].sort((a, b) => compareIsoDesc(a?.created_at ?? null, b?.created_at ?? null))
+        : all;
+      // Bound the network fanout only; per-event recency is still decided after
+      // aggregating every fetched identity's events (see mapGrowthEventsToRoster).
+      const list = ordered.slice(0, ROSTER_IDENTITY_FANOUT_CAP);
+      if (list.length === 0) {
+        setRosterEntries([]);
+        return;
+      }
+      // Fan out growth-event fetches; one failing identity must not nuke the
+      // whole roster, so swallow per-identity rejections into empty events.
+      // All events are aggregated then sorted newest-first before truncation.
+      const settled = await Promise.all(
+        list.map(async (identity) => {
+          try {
+            const res = await getIdentityGrowthEvents(identity.id, userId);
+            return {
+              identity,
+              events: Array.isArray(res?.events) ? res.events : [],
+            };
+          } catch (err) {
+            logUnexpectedJournalError(`Roster growth events (${identity.id})`, err);
+            return { identity, events: [] as AgentGrowthEvent[] };
+          }
+        }),
+      );
+      if (isStale()) return;
+      setRosterEntries(mapGrowthEventsToRoster(settled, contextLabel));
+    } catch (err) {
+      if (isStale()) return;
+      logUnexpectedJournalError('Roster identities', err);
+      // Surface an explicit error (with retry) instead of a fake empty state.
+      setRosterEntries(undefined);
+      setRosterError(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (capLoading || featureGated) return;
+    void loadRoster();
+    return () => {
+      // Invalidate any in-flight roster fetch so a late response can't write
+      // into a unmounted / superseded view.
+      rosterSeqRef.current += 1;
+    };
+  }, [capLoading, featureGated, loadRoster]);
+
+  // Distinct scenario ids drawn from the user's most recent journal entries,
+  // newest first. Drives which scenarios feed the worldline thumbnail.
+  const recentScenarioIds = useMemo(() => {
+    const ordered = [...entries].sort((a, b) => compareIsoDesc(a.created_at, b.created_at));
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const entry of ordered) {
+      const sid = entry.scenario_id?.trim();
+      if (!sid || seen.has(sid)) continue;
+      seen.add(sid);
+      ids.push(sid);
+      if (ids.length >= WORLDLINE_SCENARIO_LIMIT) break;
+    }
+    return ids;
+  }, [entries]);
+
+  // Stable key so the worldline effect only refetches when the actual set of
+  // recent scenario ids changes, not on every entries array identity change.
+  const recentScenarioKey = recentScenarioIds.join('|');
+
+  // ── Worldline Map: flatten recent scenarios' branch trees into seeds ──
+  // `recentScenarioIdsRef` lets the stable `loadWorldline` callback read the
+  // latest ids without being re-created (and re-triggering the effect) every
+  // time the derived ids array identity changes.
+  const recentScenarioIdsRef = useRef(recentScenarioIds);
+  recentScenarioIdsRef.current = recentScenarioIds;
+
+  const loadWorldline = useCallback(async () => {
+    const ids = recentScenarioIdsRef.current;
+    const requestSeq = worldlineSeqRef.current + 1;
+    worldlineSeqRef.current = requestSeq;
+    const isStale = () => requestSeq !== worldlineSeqRef.current;
+
+    setWorldlineError(false);
+    // No scenario-linked forecasts yet → real empty state for the map.
+    if (ids.length === 0) {
+      setWorldlineBranches([]);
+      return;
+    }
+    // A fetch is starting (e.g. journal entries just loaded and surfaced new
+    // scenario ids). Return to the loading state so the panel shows its
+    // skeleton rather than briefly keeping a prior empty/stale thumbnail.
+    setWorldlineBranches(undefined);
+
+    try {
+      let anyFailed = false;
+      const scenarios = await Promise.all(
+        ids.map(async (sid) => {
+          try {
+            return await getScenario(sid);
+          } catch (err) {
+            // Deleted / inaccessible scenarios simply contribute no branches.
+            anyFailed = true;
+            logUnexpectedJournalError(`Worldline scenario (${sid})`, err);
+            return null;
+          }
+        }),
+      );
+      if (isStale()) return;
+      const resolved = scenarios.filter((s): s is Scenario => s != null);
+      // If we had scenarios to fetch but none resolved, the fetch genuinely
+      // failed — surface an error + retry instead of an indistinguishable
+      // empty thumbnail. A partial failure still renders the survivors.
+      if (resolved.length === 0 && anyFailed) {
+        setWorldlineBranches(undefined);
+        setWorldlineError(true);
+        return;
+      }
+      setWorldlineBranches(mapScenariosToBranchSeeds(resolved));
+    } catch (err) {
+      if (isStale()) return;
+      logUnexpectedJournalError('Worldline', err);
+      setWorldlineBranches(undefined);
+      setWorldlineError(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (capLoading || featureGated) return;
+    void loadWorldline();
+    return () => {
+      // Invalidate any in-flight worldline fetch so a late response can't write
+      // into a superseded view.
+      worldlineSeqRef.current += 1;
+    };
+    // recentScenarioKey captures the meaningful change; the ids array itself is
+    // derived and read via ref inside loadWorldline (which has stable identity).
+  }, [capLoading, featureGated, recentScenarioKey, loadWorldline]);
 
   const stats = useMemo(() => {
     const resolved = entries.filter(
@@ -493,17 +778,12 @@ export function PersonalJournalView() {
                 {t('journal.roster.title', 'Agent Roster')}
               </h2>
             </header>
-            {/*
-              TODO(sprint-7): wire AgentRosterPanel to real data.
-              Needs: per-identity growth events from
-              `GET /api/agents/identities/{id}/growth-events`
-              (see backend/app/api/agents.py). The panel currently
-              renders an empty state because no `events` / `identities`
-              props are passed. Owner of `agent_identity` capability
-              should aggregate the user's favorite/attached identities,
-              fan out the growth-events fetch, and pass them in.
-            */}
-            <AgentRosterPanel />
+            <AgentRosterPanel
+              entries={rosterEntries}
+              loading={rosterEntries === undefined && !rosterError}
+              error={rosterError}
+              onRetry={() => void loadRoster()}
+            />
           </section>
 
           <section
@@ -515,18 +795,12 @@ export function PersonalJournalView() {
                 {t('journal.worldline.title', 'Worldline Map')}
               </h2>
             </header>
-            {/*
-              TODO(sprint-7): wire WorldlineMapMini to real data.
-              Needs: branch seeds for the user's recent scenarios.
-              Source = `Scenario.branches` (see backend/app/models)
-              flattened into `WorldlineBranchSeed[]`
-              ({ id, parentId, label?, depth? }). No journal-scoped
-              endpoint exists yet — either reuse `getScenario` per
-              recent scenario (N small fetches) or add a thin
-              `/api/journal/branches` aggregate. Until then this is
-              a placeholder thumbnail.
-            */}
-            <WorldlineMapMini />
+            <WorldlineMapMini
+              branches={worldlineBranches}
+              loading={worldlineBranches === undefined && !worldlineError}
+              error={worldlineError}
+              onRetry={() => void loadWorldline()}
+            />
             <p className="journal-card__caption">
               {t(
                 'journal.worldline.caption',

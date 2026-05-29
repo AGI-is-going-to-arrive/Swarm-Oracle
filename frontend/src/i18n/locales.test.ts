@@ -134,8 +134,8 @@ describe('i18n locale resources', () => {
 
     expect(en.translation.causal.title).toBe('Causal Graph');
     expect(zh.translation.causal.title).toBe('因果图谱');
-    expect(en.translation.compare.title).toBe('Counterfactual Compare');
-    expect(zh.translation.compare.title).toBe('反事实对比');
+    expect(en.translation.compare.title).toBe('Compare branches');
+    expect(zh.translation.compare.title).toBe('分支对比');
     expect(en.translation.compare.error_fetch).toBe('Unable to load comparison data right now. Please retry.');
     expect(zh.translation.compare.error_fetch).toBe('当前无法加载对比数据，请稍后重试。');
     expect(en.translation.compare.round).toBe('Round {{round}}');

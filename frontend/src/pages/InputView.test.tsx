@@ -2763,6 +2763,55 @@ describe('inferProviderFromBaseUrl (P4-2 unit)', () => {
   });
 });
 
+describe('friendlyProviderName (B1 unit)', () => {
+  // Mimics i18next's behavior of echoing the key back when it is missing.
+  const fakeT = (key: string): string => {
+    if (key === 'home.web_search_provider_native_label') return 'Model-native';
+    return key;
+  };
+
+  it('returns null for null/undefined/empty input', async () => {
+    const { friendlyProviderName } = await import('./inputProviderName');
+    expect(friendlyProviderName(null)).toBeNull();
+    expect(friendlyProviderName(undefined)).toBeNull();
+    expect(friendlyProviderName('')).toBeNull();
+  });
+
+  it('maps known provider ids to their branded display names', async () => {
+    const { friendlyProviderName } = await import('./inputProviderName');
+    expect(friendlyProviderName('tavily')).toBe('Tavily');
+    expect(friendlyProviderName('exa')).toBe('Exa');
+    expect(friendlyProviderName('firecrawl')).toBe('Firecrawl');
+    expect(friendlyProviderName('xai')).toBe('xAI');
+    expect(friendlyProviderName('searxng')).toBe('SearXNG');
+  });
+
+  it('localizes the backend-reported "native" provider via the translator', async () => {
+    const { friendlyProviderName } = await import('./inputProviderName');
+    expect(friendlyProviderName('native', fakeT)).toBe('Model-native');
+    // Never surface the raw internal id "native".
+    expect(friendlyProviderName('native', fakeT)).not.toBe('native');
+  });
+
+  it('falls back to a title-cased label for "native" when the i18n key is missing', async () => {
+    const { friendlyProviderName } = await import('./inputProviderName');
+    // Translator that misses the key (returns the key itself) must not leak the raw key.
+    const missingT = (key: string) => key;
+    const result = friendlyProviderName('native', missingT);
+    expect(result).toBe('Native');
+    expect(result).not.toBe('home.web_search_provider_native_label');
+    // And with no translator at all it still avoids the raw lowercase id.
+    expect(friendlyProviderName('native')).toBe('Native');
+  });
+
+  it('title-cases any unrecognized provider id instead of echoing the raw id', async () => {
+    const { friendlyProviderName } = await import('./inputProviderName');
+    expect(friendlyProviderName('somevendor')).toBe('Somevendor');
+    expect(friendlyProviderName('somevendor')).not.toBe('somevendor');
+    expect(friendlyProviderName('mystery_provider', fakeT)).toBe('Mystery_provider');
+  });
+});
+
 describe('InputView apiUserId wiring (P1)', () => {
   const makeCustomAgentInfo = (id: string, name: string) => ({
     id,

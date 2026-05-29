@@ -14,7 +14,7 @@ from sqlmodel import Session, select
 from app.models.agent_identity import AgentIdentity
 from app.models.database import get_engine
 from app.services.agent_identity import build_continuity_key as _make_continuity_key
-from app.services.llm_client import format_untrusted_text_block
+from app.services.llm_client import sanitize_untrusted_text
 from app.services.vector_store import delete_identity_profile, store_identity_profile
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,13 @@ def _unwrap_untrusted_text_block(text: str) -> str:
     _, remainder = text.split(marker, 1)
     inner, _, _ = remainder.partition("\n```")
     return inner
+
+
+def serialize_persona_for_display(persona: str | None) -> str | None:
+    """Return user-visible persona text without legacy prompt guard markup."""
+    if persona is None:
+        return None
+    return _unwrap_untrusted_text_block(persona)
 
 
 def _validate_knowledge_domains(domains: list[str] | None) -> list[str] | None:
@@ -149,14 +156,14 @@ def create_custom_agent(
     if decision_bias:
         validated_bias = validate_decision_bias(decision_bias)
 
-    # Sanitize persona via untrusted text guardrail
+    # Store sanitized raw persona text. Prompt builders add guard markup at injection time.
     sanitized_persona = None
+    raw_persona_for_key: str | None = None
     if persona:
-        sanitized_persona = format_untrusted_text_block(
-            "persona", persona, max_chars=2000,
-        )
+        raw_persona_for_key = _unwrap_untrusted_text_block(persona)
+        sanitized_persona = sanitize_untrusted_text(raw_persona_for_key, max_chars=2000)
 
-    continuity_key = _make_continuity_key(role, persona)
+    continuity_key = _make_continuity_key(role, raw_persona_for_key)
 
     identity = AgentIdentity(
         user_id=user_id,
@@ -210,7 +217,7 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
         # W-9: track the raw (pre-sanitization) persona so the continuity
         # key is hashed from the same surface area regardless of whether
         # ``persona`` is part of this update or has to be reused from the
-        # already-stored (and therefore already-wrapped) value.
+        # already-stored (possibly legacy-wrapped) value.
         raw_persona_for_key: str | None = _unwrap_untrusted_text_block(identity.persona) \
             if identity.persona else None
 
@@ -222,9 +229,7 @@ def update_custom_agent(identity_id: str, **kwargs) -> None:
             raw_persona = kwargs["persona"]
             if raw_persona:
                 raw_persona = _unwrap_untrusted_text_block(raw_persona)
-                identity.persona = format_untrusted_text_block(
-                    "persona", raw_persona, max_chars=2000,
-                )
+                identity.persona = sanitize_untrusted_text(raw_persona, max_chars=2000)
                 raw_persona_for_key = raw_persona
             else:
                 identity.persona = None
@@ -306,7 +311,7 @@ def list_custom_agents(user_id: str) -> list[dict]:
                 "kind": i.kind,
                 "display_name": i.display_name,
                 "role": i.role,
-                "persona": i.persona,
+                "persona": serialize_persona_for_display(i.persona),
                 "decision_bias": _parse_json_object(i.decision_bias_json),
                 "decision_bias_json": i.decision_bias_json,
                 "knowledge_domains": _parse_json_list(i.knowledge_domain_json),
@@ -334,7 +339,7 @@ def list_all_agents(user_id: str) -> list[dict]:
                 "kind": i.kind,
                 "display_name": i.display_name,
                 "role": i.role,
-                "persona": i.persona,
+                "persona": serialize_persona_for_display(i.persona),
                 "decision_bias": _parse_json_object(i.decision_bias_json),
                 "decision_bias_json": i.decision_bias_json,
                 "knowledge_domains": _parse_json_list(i.knowledge_domain_json),

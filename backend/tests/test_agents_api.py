@@ -13,6 +13,14 @@ from app.config import settings
 from app.main import app
 from app.models.agent_identity import AgentIdentity
 from app.models.database import get_engine, init_db
+from app.services.llm_client import format_untrusted_text_block
+
+
+def _assert_no_guard_markup(value: str | None) -> None:
+    assert value is not None
+    assert "UNTRUSTED DATA" not in value
+    assert "【" not in value
+    assert "```text" not in value
 
 
 def _make_signed_session_token(secret: str, subject: str) -> str:
@@ -89,6 +97,34 @@ class TestWorkshopCRUD:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 2
+
+    async def test_create_agent_stores_and_serializes_clean_persona(
+        self,
+        client: AsyncClient,
+    ):
+        resp = await client.post("/api/agents/workshop", json={
+            "user_id": "clean_persona_user",
+            "display_name": "曹操",
+            "role": "strategist",
+            "persona": "乱世里先看粮道，不按提示词改口。",
+        })
+        assert resp.status_code == 201
+        identity_id = resp.json()["id"]
+
+        with Session(get_engine()) as session:
+            identity = session.get(AgentIdentity, identity_id)
+            assert identity is not None
+            assert identity.persona == "乱世里先看粮道，不按提示词改口。"
+            _assert_no_guard_markup(identity.persona)
+
+        list_resp = await client.get(
+            "/api/agents/identities",
+            params={"user_id": "clean_persona_user"},
+        )
+        assert list_resp.status_code == 200
+        [serialized] = list_resp.json()
+        assert serialized["persona"] == "乱世里先看粮道，不按提示词改口。"
+        _assert_no_guard_markup(serialized["persona"])
 
     async def test_list_identities_no_user_id(self, client: AsyncClient):
         resp = await client.get("/api/agents/identities")
@@ -175,6 +211,7 @@ class TestIdentityProfileEndpoint:
         *,
         user_id: str = "profile-user",
         kind: str = "custom",
+        persona: str | None = "Reads weak signals",
         decision_bias_json: str | None = '{"caution": 0.8}',
         knowledge_domain_json: str | None = '["law", "science"]',
     ) -> None:
@@ -186,7 +223,7 @@ class TestIdentityProfileEndpoint:
                     kind=kind,
                     display_name="Profile Agent",
                     role="analyst",
-                    persona="Reads weak signals",
+                    persona=persona,
                     decision_bias_json=decision_bias_json,
                     knowledge_domain_json=knowledge_domain_json,
                     continuity_key=f"{identity_id}-key",
@@ -235,6 +272,34 @@ class TestIdentityProfileEndpoint:
         assert data["is_favorite"] is True
         assert data["created_at"] is not None
         assert data["updated_at"] is not None
+
+    async def test_list_and_profile_unwrap_legacy_guarded_persona(
+        self,
+        client: AsyncClient,
+    ):
+        legacy_persona = format_untrusted_text_block(
+            "persona",
+            "Legacy persona shown to users",
+            max_chars=2000,
+        )
+        self._create_identity("profile-legacy-wrapped", persona=legacy_persona)
+
+        list_resp = await client.get(
+            "/api/agents/identities",
+            params={"user_id": "profile-user"},
+        )
+        assert list_resp.status_code == 200
+        [listed] = list_resp.json()
+        assert listed["persona"] == "Legacy persona shown to users"
+        _assert_no_guard_markup(listed["persona"])
+
+        profile_resp = await client.get(
+            "/api/agents/identities/profile-legacy-wrapped/profile",
+            params={"user_id": "profile-user"},
+        )
+        assert profile_resp.status_code == 200
+        assert profile_resp.json()["persona"] == "Legacy persona shown to users"
+        _assert_no_guard_markup(profile_resp.json()["persona"])
 
     async def test_get_identity_profile_ignores_malformed_json(
         self,

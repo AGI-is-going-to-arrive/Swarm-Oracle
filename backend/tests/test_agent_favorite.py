@@ -8,6 +8,7 @@ from app.api import agents as agents_api
 from app.main import app
 from app.models.agent_identity import AgentIdentity
 from app.models.database import get_engine
+from app.services.llm_client import format_untrusted_text_block
 
 TEST_USER = "favorite-user"
 OTHER_USER = "favorite-other-user"
@@ -31,6 +32,7 @@ def _create_identity(
     *,
     user_id: str = TEST_USER,
     is_favorite: bool = False,
+    persona: str | None = None,
 ) -> None:
     with Session(get_engine()) as session:
         session.add(
@@ -40,6 +42,7 @@ def _create_identity(
                 kind="custom",
                 display_name=f"Agent {identity_id}",
                 role="analyst",
+                persona=persona,
                 continuity_key=f"{identity_id}-key",
                 is_favorite=is_favorite,
             )
@@ -96,6 +99,30 @@ async def test_list_favorites_returns_only_favorited_identities_for_user(
     ids = {item["id"] for item in resp.json()}
     assert ids == {"favorite-list-1", "favorite-list-3"}
     assert all(item["is_favorite"] is True for item in resp.json())
+
+
+async def test_list_favorites_unwraps_legacy_guarded_persona(client: AsyncClient):
+    _create_identity(
+        "favorite-legacy-persona",
+        is_favorite=True,
+        persona=format_untrusted_text_block(
+            "persona",
+            "Legacy favorite persona",
+            max_chars=2000,
+        ),
+    )
+
+    resp = await client.get(
+        "/api/agents/identities/favorites",
+        params={"user_id": TEST_USER},
+    )
+
+    assert resp.status_code == 200
+    [item] = resp.json()
+    assert item["persona"] == "Legacy favorite persona"
+    assert "UNTRUSTED DATA" not in item["persona"]
+    assert "【" not in item["persona"]
+    assert "```text" not in item["persona"]
 
 
 async def test_list_favorites_does_not_return_other_users_favorited_identities(

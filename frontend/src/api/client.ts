@@ -8,7 +8,7 @@ import type {
   RetrospectiveInterventionResponse, BatchInterventionPayload, BatchInterventionResponse,
   PredictionInfo, LeaderboardEntry,
   DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
-  AppendEndingRoomUserTurnRequest, CreateEndingRoomRequest, CreateEndingRoomThreadRequest, EndingRoomResultPayload, EndingRoomSnapshot, EndingRoomThreadSnapshot,
+  AppendEndingRoomUserTurnRequest, CreateEndingRoomRequest, CreateEndingRoomThreadRequest, EndingRoomResultPayload, EndingRoomSnapshot, EndingRoomThreadSnapshot, EndingRoomType,
   CampaignContext, CampaignBadge, CampaignBadgeDefinition, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
   ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
   WebSearchFamily,
@@ -755,6 +755,33 @@ export async function createEndingRoom(
       ...(payload.language ? { language: payload.language } : {}),
     }),
   });
+}
+
+/**
+ * GET /api/scenario/:id/ending-room/active — resolve an EXISTING ending room for a scenario.
+ *
+ * Read-only: the backend resolves a persisted room (no insert/commit, no LLM run). Used to
+ * rehydrate a completed worldline_roundtable when revisiting `/roundtable/:id` after the live
+ * session ended. Returns the same `EndingRoomSnapshot` shape as `getEndingRoom`, or `null` when
+ * no matching room exists (HTTP 404 `ENDING_ROOM_NOT_FOUND`) — including cross-user requests that
+ * fail the scenario-ownership guard (404 `SCENARIO_NOT_FOUND`). Non-404 errors still propagate.
+ */
+export async function getActiveEndingRoom(
+  scenarioId: string,
+  roomType: EndingRoomType = 'worldline_roundtable',
+  options?: RequestOptions,
+): Promise<EndingRoomSnapshot | null> {
+  try {
+    return await safeGet<EndingRoomSnapshot>(
+      `/scenario/${encodeURIComponent(scenarioId)}/ending-room/active?room_type=${encodeURIComponent(roomType)}`,
+      options,
+    );
+  } catch (err) {
+    if (isApiError(err) && err.status === 404) {
+      return null;
+    }
+    throw err;
+  }
 }
 
 /** GET /api/ending-room/:id — get ending room live snapshot */

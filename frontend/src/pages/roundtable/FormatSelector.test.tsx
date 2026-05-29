@@ -9,7 +9,7 @@ vi.mock('react-i18next', () => ({
         'roundtable.format_deep_dive': 'Deep Dive',
         'roundtable.format_quick_review': 'Quick Review',
         'roundtable.format_clash_mode': 'Clash Mode',
-        'roundtable.cast_smart_pick': 'Smart Pick',
+        'roundtable.cast_smart_pick': 'Auto Cast',
         'roundtable.cast_custom': 'Custom Cast',
         'roundtable.format_selector_label': 'Discussion format',
         'roundtable.format_label': 'Format',
@@ -37,7 +37,7 @@ describe('FormatSelector', () => {
 
   it('renders both cast mode options (smart_pick, custom)', () => {
     render(<FormatSelector {...baseProps} />);
-    expect(screen.getByText('Smart Pick')).toBeInTheDocument();
+    expect(screen.getByText('Auto Cast')).toBeInTheDocument();
     expect(screen.getByText('Custom Cast')).toBeInTheDocument();
   });
 

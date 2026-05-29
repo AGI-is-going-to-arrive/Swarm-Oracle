@@ -1,6 +1,9 @@
 """Tests for app.api.ending_rooms."""
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import time
 
@@ -30,10 +33,28 @@ def client():
     return TestClient(app)
 
 
-def _seed_ready_scenario(*, question: str = "如果帝国守住了边境，会发生什么？") -> dict[str, str]:
+def _make_signed_session_token(secret: str, subject: str) -> str:
+    payload = json.dumps({"sub": subject}, separators=(",", ":")).encode("utf-8")
+    payload_segment = base64.urlsafe_b64encode(payload).decode("utf-8").rstrip("=")
+    signing_input = f"v1.{payload_segment}".encode("utf-8")
+    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    signature_segment = base64.urlsafe_b64encode(signature).decode("utf-8").rstrip("=")
+    return f"v1.{payload_segment}.{signature_segment}"
+
+
+def _room_count() -> int:
+    with Session(get_engine()) as session:
+        return len(session.exec(select(EndingRoom)).all())
+
+
+def _seed_ready_scenario(
+    *,
+    question: str = "如果帝国守住了边境，会发生什么？",
+    user_id: str | None = None,
+) -> dict[str, str]:
     engine = get_engine()
     with Session(engine) as session:
-        scenario = Scenario(question=question, status=ScenarioStatus.DONE)
+        scenario = Scenario(question=question, status=ScenarioStatus.DONE, user_id=user_id)
         session.add(scenario)
         session.flush()
 
@@ -390,6 +411,88 @@ def test_create_worldline_roundtable_and_fetch_result(client):
     assert result_payload["status"] == "done"
     assert result_payload["room_type"] == "worldline_roundtable"
     assert result_payload["result"]["summary"]
+
+
+def test_get_active_worldline_roundtable_returns_existing_completed_snapshot(client):
+    fixture = _seed_ready_scenario(question="如果帝国被分成两条世界线？")
+    second_branch_id = _append_completed_branch(
+        fixture["scenario_id"],
+        title="裂变支线",
+        story="第二条世界线走向地方割据。",
+        insight="第二条线的摘要。",
+    )
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_id"], second_branch_id],
+            "language": "zh",
+        },
+    )
+    assert create_resp.status_code == 200
+    room_id = create_resp.json()["id"]
+    asyncio.run(run_ending_room_background(room_id))
+    before_count = _room_count()
+
+    resp = client.get(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room/active",
+        params={"room_type": "worldline_roundtable"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["id"] == room_id
+    assert payload["room_type"] == "worldline_roundtable"
+    assert payload["status"] == "done"
+    assert payload["result_ready"] is True
+    assert _room_count() == before_count
+
+
+def test_get_active_ending_room_defaults_to_roundtable_and_does_not_create(client):
+    fixture = _seed_ready_scenario(question="如果帝国还没有开圆桌？")
+    before_count = _room_count()
+
+    resp = client.get(f"/api/scenario/{fixture['scenario_id']}/ending-room/active")
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "ENDING_ROOM_NOT_FOUND"
+    assert _room_count() == before_count
+
+
+def test_get_active_ending_room_rejects_cross_owner_without_mutation(client, monkeypatch):
+    fixture = _seed_ready_scenario(
+        question="如果帝国被分成两条世界线？",
+        user_id="owner-a",
+    )
+    second_branch_id = _append_completed_branch(
+        fixture["scenario_id"],
+        title="裂变支线",
+        story="第二条世界线走向地方割据。",
+        insight="第二条线的摘要。",
+    )
+    create_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_id"], second_branch_id],
+            "language": "zh",
+        },
+    )
+    assert create_resp.status_code == 200
+    before_count = _room_count()
+    secret = "s3cret-ending-active"
+    monkeypatch.setattr("app.api.helpers.settings.SESSION_SECRET", secret)
+
+    resp = client.get(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room/active",
+        headers={
+            "X-Session-Token": _make_signed_session_token(secret, "owner-b"),
+        },
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "SCENARIO_NOT_FOUND"
+    assert _room_count() == before_count
 
 
 def test_create_ending_room_rejects_roundtable_contract_fields_for_single_branch_room(client):

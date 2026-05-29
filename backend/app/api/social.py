@@ -64,30 +64,64 @@ class SocialCopyRequest(BaseModel):
 
 # ── Social Platform Prompts (P6) ─────────────────────────
 
+SOCIAL_ANTI_SLOP_GUARDRAILS = {
+    "Chinese": (
+        "统一反套话约束：\n"
+        "- 不要使用「总的来说」「总而言之」「综上所述」「值得注意的是」"
+        "「让我们来看看」「不得不说」「在当今」「从某种角度来说」"
+        "「关键洞见在于」「深入探讨」「独到见解」「开放性思考」等套话。\n"
+        "- 不写空洞排比三段式，不用「不是X而是Y」这类模板对仗。\n"
+        "- 不要强制塞 emoji；只有确实贴合语气时才用，不要按段落凑数量。\n"
+        "- 不堆破折号，不用绝对化词硬抬情绪；营销词必须跟具体动作或数字，"
+        "否则删掉。\n"
+        "- 让具体人物、机构或群体执行动作，不要让「趋势」「世界线」"
+        "这类抽象词替人说话。\n"
+        "- 判断必须落在推演证据上：引用具体分支标题、人物原话或概率数字；"
+        "缺少证据时，删掉泛泛感叹和营销自夸词。\n"
+    ),
+    "English": (
+        "Anti-cliche guardrails:\n"
+        "- Avoid dead phrases such as \"In summary\", \"To sum up\", "
+        "\"It's worth noting\", \"Let us examine\", \"Let us unpack\", "
+        "\"It must be said\", \"In today's\", \"Fundamentally\", "
+        "\"The key insight\", \"All things considered\", "
+        "\"From a certain angle\", \"distinctive takeaway\", or \"open question\".\n"
+        "- Do not use empty three-part lists, slogan cadence, or \"not X but Y\" contrasts.\n"
+        "- Do not pad with emoji; use one only when it fits the platform voice.\n"
+        "- Avoid dash-stacked sentences and broad every/always/never claims. If a "
+        "buzzword appears, attach a concrete action or number; otherwise cut it.\n"
+        "- Make specific people, institutions, or groups perform actions; do not let "
+        "abstract trends speak for them.\n"
+        "- Ground claims in simulation evidence: concrete branch titles, participant quotes, "
+        "or probability numbers. Cut generic reactions and self-promotional marketing words.\n"
+    ),
+}
+
 SOCIAL_PLATFORM_PROMPTS: dict[str, dict[str, dict[str, str]]] = {
     "xiaohongshu": {
         "name": {"Chinese": "小红书", "English": "Xiaohongshu"},
         "instruction": {
             "Chinese": (
-                "你是一位小红书爆款文案写手。请根据以下推演结果，写一篇小红书帖子。\n"
+                "目标：写一篇小红书帖子。读者愿意收藏或转发，是因为信息具体、"
+                "像朋友认真讲清楚一件事；把口号式表达删掉。\n"
                 "要求：\n"
-                "- 标题：≤20字，吸睛、有悬念，使用emoji开头\n"
-                "- 正文：300-800字，口语化、有趣、有代入感\n"
-                "- 大量使用emoji表情（每段至少2-3个）\n"
+                "- 标题：≤20字，用一个具体反差或细节制造悬念\n"
+                "- 正文：300-800字，亲切、口语化，有真实观察感\n"
                 "- 分段清晰，善用换行\n"
                 "- 结尾加3-5个相关话题标签，格式：#话题#\n"
-                "- 语气亲切，像在跟朋友聊天\n"
-                "- 突出最有趣的结局对比\n"
+                "- 突出最有趣的结局对比，并说明它为什么会出现\n"
+                f"{SOCIAL_ANTI_SLOP_GUARDRAILS['Chinese']}"
             ),
             "English": (
-                "You are a Xiaohongshu copywriter. Based on the simulation results below, "
-                "write a Xiaohongshu-style post in English.\n"
+                "Goal: write a Xiaohongshu-style post in English. Readers should save or "
+                "share it when the details are concrete and useful; keep loud slogans out.\n"
                 "Requirements:\n"
-                "- Title: under 20 words, curiosity-driven, emoji opening allowed\n"
-                "- Body: 300-800 words, vivid and conversational\n"
-                "- Use clear paragraph breaks and a punchy, lifestyle-friendly tone\n"
+                "- Title: under 20 words, built around one concrete contrast or detail\n"
+                "- Body: 300-800 words, warm, conversational, and observant\n"
+                "- Use clear paragraph breaks\n"
                 "- End with 3-5 topic tags in the format #topic\n"
-                "- Highlight the most surprising branch contrast\n"
+                "- Highlight the most surprising branch contrast and explain why it happened\n"
+                f"{SOCIAL_ANTI_SLOP_GUARDRAILS['English']}"
             ),
         },
     },
@@ -95,24 +129,27 @@ SOCIAL_PLATFORM_PROMPTS: dict[str, dict[str, dict[str, str]]] = {
         "name": {"Chinese": "微博", "English": "Weibo"},
         "instruction": {
             "Chinese": (
-                "你是一位微博大V文案写手。请根据以下推演结果，写一条微博。\n"
+                "目标：写一条微博。读者愿意转发，是因为一句话抓住了推演里的"
+                "具体转折和代价。\n"
                 "要求：\n"
                 "- 正文控制在140字以内（含标点和空格）\n"
-                "- 开头用一句抓人的问句或感叹句\n"
+                "- 开头直接点出一个具体反差、选择或后果\n"
                 "- 信息密度高，言简意赅\n"
                 "- 结尾加2-3个话题标签，格式：#话题#\n"
-                "- 语气犀利有态度\n"
+                "- 语气简短、有态度，但判断必须有事实锚点\n"
                 "- 如果内容特别丰富，可以写长微博版本（≤2000字），但默认写短微博\n"
+                f"{SOCIAL_ANTI_SLOP_GUARDRAILS['Chinese']}"
             ),
             "English": (
-                "You are a Weibo-style microblog writer. Based on the simulation results "
-                "below, write a concise Weibo post in English.\n"
+                "Goal: write a concise Weibo post in English. Readers should repost it "
+                "because one sentence names a concrete turn and its cost.\n"
                 "Requirements:\n"
                 "- Keep the main post within 140 Chinese-style characters worth of brevity, roughly tweet-length in English\n"  # noqa: E501
-                "- Open with a hook question or exclamation\n"
+                "- Open with a concrete contrast, choice, or consequence\n"
                 "- Keep the information density high\n"
                 "- End with 2-3 topic tags in the format #topic\n"
-                "- Tone: sharp, opinionated, and concise\n"
+                "- Tone: sharp and concise, with a factual anchor for the judgment\n"
+                f"{SOCIAL_ANTI_SLOP_GUARDRAILS['English']}"
             ),
         },
     },
@@ -120,25 +157,31 @@ SOCIAL_PLATFORM_PROMPTS: dict[str, dict[str, dict[str, str]]] = {
         "name": {"Chinese": "知乎", "English": "Zhihu"},
         "instruction": {
             "Chinese": (
-                "你是一位知乎优质回答者。请根据以下推演结果，写一篇知乎回答/文章。\n"
+                "目标：写一篇知乎回答/文章。读者继续读，是因为论证能把推演里的"
+                "分支、选择和概率讲清楚。\n"
                 "要求：\n"
-                "- 标题：提问式，引发思考\n"
+                "- 标题：提问式，指向一个具体分歧\n"
                 "- 正文：800-2000字，理性分析、逻辑清晰\n"
                 "- 使用二级/三级标题分段\n"
                 "- 引用推演中的具体情节作为论据\n"
                 "- 语气专业但不枯燥\n"
-                "- 结尾给出独到见解或开放性思考\n"
+                "- 结尾回答原问题，并说明这个回答依赖哪些分支证据\n"
                 "- 可以适度加粗重点内容\n"
+                f"{SOCIAL_ANTI_SLOP_GUARDRAILS['Chinese']}"
             ),
             "English": (
-                "You are a Zhihu-style long-form answer writer. Based on the simulation "
-                "results below, write a thoughtful Zhihu answer in English.\n"
+                "Goal: write a Zhihu-style long-form answer in English. Readers should "
+                "keep reading because the argument explains the simulation's branches, "
+                "choices, and probabilities.\n"
                 "Requirements:\n"
-                "- Use a question-style title\n"
+                "- Use a question-style title that points to a concrete disagreement\n"
                 "- Body: 800-2000 words, analytical and well-structured\n"
                 "- Use section headings\n"
                 "- Cite concrete moments from the simulation as evidence\n"
-                "- End with a distinctive takeaway or open question\n"
+                "- End by answering the original question and naming the branch evidence "
+                "behind it\n"
+                "- You may moderately bold key points\n"
+                f"{SOCIAL_ANTI_SLOP_GUARDRAILS['English']}"
             ),
         },
     },
@@ -146,25 +189,30 @@ SOCIAL_PLATFORM_PROMPTS: dict[str, dict[str, dict[str, str]]] = {
         "name": {"Chinese": "Reddit", "English": "Reddit"},
         "instruction": {
             "Chinese": (
-                "你是一位 Reddit 资深用户。请根据以下推演结果，写一篇 Reddit 帖子。\n"
+                "目标：写一篇 Reddit 帖子。帖子要像有人把推演细节带到讨论区，"
+                "邀请别人围绕证据继续聊。\n"
                 "要求：\n"
                 "- 标题：有吸引力、简洁，少于 300 字符\n"
                 "- 正文：200-500 词，口语化但有分析感\n"
                 "- 使用 markdown 格式\n"
                 "- 结尾附 TL;DR\n"
                 "- 可附 subreddit 提示，如 [r/whatif] 或 [r/alternatehistory]\n"
+                f"{SOCIAL_ANTI_SLOP_GUARDRAILS['Chinese']}"
             ),
             "English": (
-                "You are a Reddit power user. Based on the simulation results below, write a Reddit post.\n"  # noqa: E501
+                "Goal: write a Reddit post. It should read like someone brought concrete "
+                "simulation details into a discussion thread and wants replies about the "
+                "evidence.\n"
                 "Requirements:\n"
-                "- Title: Engaging, concise, under 300 characters\n"
-                "- Body: 200-500 words, conversational and engaging\n"
+                "- Title: name a concrete branch title, probability number, or quoted decision; under 300 characters\n"  # noqa: E501
+                "- Body: 200-500 words in a discussion-forum/subreddit voice, like a user inviting evidence-based replies\n"  # noqa: E501
                 "- Write in English\n"
                 "- Use markdown formatting (headers, bold, lists)\n"
                 "- Include a TL;DR at the end\n"
-                "- Tone: thoughtful, analytical, slightly casual\n"
-                "- Reference specific simulation outcomes\n"
+                "- Cite branch titles, probability numbers, and character quotes from the simulation when available\n"  # noqa: E501
+                "- Ask one grounded discussion question about the evidence or trade-off\n"
                 "- Suggest subreddit tags like [r/whatif] or [r/alternatehistory]\n"
+                f"{SOCIAL_ANTI_SLOP_GUARDRAILS['English']}"
             ),
         },
     },
@@ -172,26 +220,31 @@ SOCIAL_PLATFORM_PROMPTS: dict[str, dict[str, dict[str, str]]] = {
         "name": {"Chinese": "X (Twitter)", "English": "X (Twitter)"},
         "instruction": {
             "Chinese": (
-                "你是一位擅长写爆款推文线程的作者。请根据以下推演结果，写一组 X 线程。\n"
+                "目标：写一组 X 线程。读者愿意转发，是因为每条都给出一个"
+                "具体判断或证据；不要靠口号推进。\n"
                 "要求：\n"
-                "- 主帖：≤280 字符，抓人\n"
+                "- 主帖：≤280 字符，先给出最具体的反差或结论\n"
                 "- 可选 2-4 条跟帖\n"
                 "- 带 1-2 个话题标签\n"
-                "- 以钩子问题或强判断开头\n"
-                "- 突出最令人意外的结果\n"
-                "- 格式：🧵 1/N, 2/N ...\n"
+                "- 跟帖逐条补分支标题、人物原话或概率数字\n"
+                "- 突出最令人意外的结果，并交代它来自哪条分支\n"
+                "- 格式：1/N, 2/N ...\n"
+                f"{SOCIAL_ANTI_SLOP_GUARDRAILS['Chinese']}"
             ),
             "English": (
-                "You are a viral tweet writer. Based on the simulation results below, write a tweet thread.\n"  # noqa: E501
+                "Goal: write an X thread. Readers should share it because each post gives "
+                "a concrete judgment or piece of evidence. Keep slogan-style phrasing out.\n"
                 "Requirements:\n"
-                "- Main tweet: ≤280 characters, punchy and attention-grabbing\n"
+                "- Main tweet: ≤280 characters, opening with the most concrete contrast or conclusion\n"  # noqa: E501
                 "- Write in English\n"
                 "- Optional: 2-4 follow-up tweets for a thread, each ≤280 chars\n"
                 "- Use 1-2 relevant hashtags\n"
-                "- Start with a hook question or bold statement\n"
-                "- Include the most surprising outcome\n"
-                "- Tone: witty, concise, thought-provoking\n"
-                "- Format thread as: 🧵 1/N, 2/N, etc.\n"
+                "- Use follow-ups to add branch titles, participant quotes, or probability "
+                "numbers\n"
+                "- Include the most surprising outcome and name the branch it came from\n"
+                "- Tone: concise and alert\n"
+                "- Format thread as: 1/N, 2/N, etc.\n"
+                f"{SOCIAL_ANTI_SLOP_GUARDRAILS['English']}"
             ),
         },
     },

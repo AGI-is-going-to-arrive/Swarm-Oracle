@@ -71,6 +71,7 @@ import {
 } from '../components/ui/alert-dialog';
 import { predictTextareaHeight } from '../lib/textLayout/inputPredict';
 import { validateByok } from '../lib/llmProviderPolicy';
+import { friendlyProviderName } from './inputProviderName';
 import { StreakIndicator, DifficultyBadge, RefreshCountdown, WeeklyTrackChip, WeeklyTrackDialog, CampaignProgressSheet } from '../components/campaign';
 import './InputView.css';
 
@@ -1751,7 +1752,7 @@ export function InputView() {
                         </span>
                         {webSearchServerProvider && (
                           <span className="web-search-provider-chip">
-                            {t('home.web_search_server_default', { provider: webSearchServerProvider })}
+                            {t('home.web_search_server_default', { provider: friendlyProviderName(webSearchServerProvider, t) })}
                           </span>
                         )}
                       </div>
@@ -1759,7 +1760,7 @@ export function InputView() {
                     {webSearchMode === 'server_default' && webSearchServerEnabled ? (
                       <div className="web-search-summary" role="note">
                         <strong>{t('home.web_search_mode_server')}</strong>
-                        <span>{t('home.web_search_server_summary', { provider: webSearchServerProvider ?? 'server' })}</span>
+                        <span>{t('home.web_search_server_summary', { provider: friendlyProviderName(webSearchServerProvider, t) ?? 'server' })}</span>
                         <button
                           type="button"
                           className="web-search-secondary-btn"
@@ -1782,7 +1783,7 @@ export function InputView() {
                             <span className="web-search-mode-btn__title">{t('home.web_search_mode_server')}</span>
                             <span className="web-search-mode-btn__hint">
                               {webSearchServerEnabled
-                                ? t('home.web_search_mode_server_hint', { provider: webSearchServerProvider ?? 'server' })
+                                ? t('home.web_search_mode_server_hint', { provider: friendlyProviderName(webSearchServerProvider, t) ?? 'server' })
                                 : t('home.web_search_mode_server_unavailable')}
                             </span>
                           </button>
@@ -1915,7 +1916,7 @@ export function InputView() {
                                 {inferredCustomProvider
                                   ? t('home.web_search_inferred_provider', {
                                       defaultValue: 'Detected provider: {{provider}}',
-                                      provider: inferredCustomProvider,
+                                      provider: friendlyProviderName(inferredCustomProvider, t),
                                     })
                                   : t('home.web_search_inferred_provider_unknown', {
                                       defaultValue:

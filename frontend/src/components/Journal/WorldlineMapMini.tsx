@@ -19,6 +19,23 @@ interface Props {
   branches?: WorldlineBranchSeed[];
   /** Optional click handler when a node is activated. */
   onSelect?: (branchId: string) => void;
+  /**
+   * When true, render an explicit data-loading skeleton instead of the empty
+   * state. The parent passes `branches === undefined` (still fetching) so a
+   * real "no worldlines" state and an in-flight fetch stay distinguishable.
+   * This is separate from the IntersectionObserver lazy-render placeholder,
+   * which only defers SVG construction until the element scrolls into view.
+   */
+  loading?: boolean;
+  /**
+   * When true, render an explicit error state with a retry affordance instead
+   * of falling back to the empty state. Keeps a genuine "no worldlines yet"
+   * state distinct from a failed scenario fetch so the user can recover via
+   * `onRetry`.
+   */
+  error?: boolean;
+  /** Invoked when the user activates the retry button in the error state. */
+  onRetry?: () => void;
 }
 
 interface LayoutNode extends WorldlineBranchSeed {
@@ -99,7 +116,13 @@ function layoutBranches(seeds: WorldlineBranchSeed[]): {
   return { nodes, edges, width: VBOX_W, height: VBOX_H };
 }
 
-export function WorldlineMapMini({ branches, onSelect }: Props) {
+export function WorldlineMapMini({
+  branches,
+  onSelect,
+  loading = false,
+  error = false,
+  onRetry,
+}: Props) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement | null>(null);
   // When IntersectionObserver isn't available (older browsers, SSR, jsdom),
@@ -143,9 +166,42 @@ export function WorldlineMapMini({ branches, onSelect }: Props) {
       ref={containerRef}
       className="journal-worldline-mini"
       role={containerRole}
+      aria-busy={loading || undefined}
       aria-label={t('journal.worldline.aria_label', 'Worldline branch thumbnail')}
     >
-      {layout.nodes.length === 0 ? (
+      {error ? (
+        <div
+          className="journal-worldline-mini__placeholder journal-worldline-mini__placeholder--error"
+          role="alert"
+          data-testid="journal-worldline-error"
+        >
+          <span>{t('journal.worldline.error', 'Could not load the worldline map. Please retry.')}</span>
+          {onRetry && (
+            <button
+              type="button"
+              className="journal-button journal-button--secondary"
+              onClick={onRetry}
+            >
+              {t('journal.worldline.retry', 'Reload map')}
+            </button>
+          )}
+        </div>
+      ) : loading ? (
+        <div
+          className="journal-worldline-mini__placeholder journal-worldline-mini__placeholder--loading"
+          role="status"
+          data-testid="journal-worldline-skeleton"
+        >
+          <span className="sr-only">
+            {t('journal.worldline.data_loading', 'Loading worldlines…')}
+          </span>
+          <span className="journal-worldline-mini__skeleton" aria-hidden="true">
+            <span className="journal-worldline-mini__skeleton-node journal-worldline-mini__skeleton-node--root" />
+            <span className="journal-worldline-mini__skeleton-node" />
+            <span className="journal-worldline-mini__skeleton-node" />
+          </span>
+        </div>
+      ) : layout.nodes.length === 0 ? (
         <div className="journal-worldline-mini__placeholder" role="status">
           <span>{t('journal.worldline.empty', 'No explored worldlines yet.')}</span>
         </div>

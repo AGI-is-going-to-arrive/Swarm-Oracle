@@ -173,7 +173,7 @@ export function CounterfactualBrand({ branches, scenarioId: _scenarioId, onExplo
           </span>
           <div className="cf-brand__heading">
             <span ref={eyebrowRef} className="cf-brand__eyebrow">
-              {t('counterfactual_brand.eyebrow', '时钟倒拨')}
+              {t('counterfactual_brand.eyebrow', '回到分叉点')}
             </span>
             <h3 id="cf-brand-title" ref={titleRef} className="cf-brand__title">
               {t('counterfactual_brand.title', '探索另一种可能')}

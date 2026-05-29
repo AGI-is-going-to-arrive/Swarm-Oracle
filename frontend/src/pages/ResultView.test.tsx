@@ -4033,7 +4033,11 @@ describe('ResultView explore deeper bridge', () => {
     const bridgeHeading = await screen.findByRole('heading', { name: 'result.next_steps_heading' });
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
-    expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(4);
+    // causal + replay + compare + workbench (enabled) plus kg-explorer + timeline-galaxy
+    // (rendered as gated role="link" cards because kg_explorer is not enabled here).
+    expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(6);
+    expect(within(bridgeSection as HTMLElement).getByText('result.bridge_kg_explorer_title')).toBeInTheDocument();
+    expect(within(bridgeSection as HTMLElement).getByText('result.bridge_timeline_galaxy_title')).toBeInTheDocument();
     expect(within(bridgeSection as HTMLElement).getByRole('button', { name: /result.next_ask_agent/ })).toBeInTheDocument();
   });
 
@@ -4435,7 +4439,8 @@ describe('ResultView explore deeper bridge', () => {
     const bridgeSection = bridgeHeading.closest('section');
     expect(bridgeSection).not.toBeNull();
     const entries = within(bridgeSection as HTMLElement).getAllByRole('link');
-    expect(entries).toHaveLength(4);
+    // causal + replay + compare + workbench + kg-explorer + timeline-galaxy, all gated off.
+    expect(entries).toHaveLength(6);
     for (const entry of entries) {
       expect(entry).toHaveAttribute('aria-disabled', 'true');
       expect(entry.tagName).toBe('DIV');
@@ -4625,6 +4630,242 @@ describe('ResultView workbench bridge gate', () => {
 
     const workbenchLink = await screen.findByRole('link', { name: /result.bridge_workbench_title/ });
     expect(workbenchLink).toHaveAttribute('href', `/workbench/${encodeURIComponent(scenarioId)}?view=graph&branch=branch-1`);
+  });
+});
+
+describe('ResultView KG explorer / timeline galaxy bridge gate', () => {
+  it('renders KG explorer and timeline galaxy links with scenario-scoped hrefs when kg_explorer is enabled', async () => {
+    const scenarioId = 'scenario A&B';
+    setMockCapabilities({
+      causal_graph: { enabled: false },
+      kg_explorer: { enabled: true },
+    });
+    vi.mocked(apiClient.getScenario).mockResolvedValueOnce({
+      id: scenarioId,
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      created_at: '2026-03-17T00:00:00Z',
+      scene_theme: 'law_court',
+      agents: [],
+      branches: [],
+      messages: [],
+      groups: [],
+      hierarchical: false,
+      director_state: null,
+      gameplay_state: null,
+    } as Scenario);
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: scenarioId,
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={[`/result/${encodeURIComponent(scenarioId)}`]}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const kgLink = await screen.findByRole('link', { name: /result.bridge_kg_explorer_title/ });
+    expect(kgLink).toHaveAttribute('href', `/kg-explorer/${encodeURIComponent(scenarioId)}`);
+
+    const galaxyLink = await screen.findByRole('link', { name: /result.bridge_timeline_galaxy_title/ });
+    expect(galaxyLink).toHaveAttribute('href', `/timeline-galaxy/${encodeURIComponent(scenarioId)}`);
+  });
+
+  it('gates KG explorer and timeline galaxy links when kg_explorer is disabled', async () => {
+    setMockCapabilities({
+      causal_graph: { enabled: false },
+      kg_explorer: { enabled: false },
+    });
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if the archive had to sync?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const bridgeHeading = await screen.findByRole('heading', { name: 'result.next_steps_heading' });
+    const bridgeSection = bridgeHeading.closest('section');
+    expect(bridgeSection).not.toBeNull();
+
+    const kgEntry = within(bridgeSection as HTMLElement)
+      .getByText('result.bridge_kg_explorer_title')
+      .closest('[role="link"]');
+    expect(kgEntry).toBeTruthy();
+    expect(kgEntry).toHaveAttribute('aria-disabled', 'true');
+    expect(within(kgEntry as HTMLElement).getByText('result.bridge_not_enabled')).toBeTruthy();
+
+    const galaxyEntry = within(bridgeSection as HTMLElement)
+      .getByText('result.bridge_timeline_galaxy_title')
+      .closest('[role="link"]');
+    expect(galaxyEntry).toBeTruthy();
+    expect(galaxyEntry).toHaveAttribute('aria-disabled', 'true');
+    expect(within(galaxyEntry as HTMLElement).getByText('result.bridge_not_enabled')).toBeTruthy();
+  });
+
+  it('gates KG explorer and timeline galaxy links in replay mode even when kg_explorer is enabled', async () => {
+    setMockCapabilities({
+      causal_graph: { enabled: false },
+      kg_explorer: { enabled: true },
+      web_search: { providers: {} },
+    });
+    findChallengeProgressByScenarioIdMock.mockReturnValue(null);
+    finalizeCampaignMock.mockReset();
+    getReplayArtifactMock.mockReset();
+    getReplayArtifactMock.mockResolvedValue(null);
+
+    const replayUrl = await buildScenarioReplayUrl('https://example.com', {
+      scenario: {
+        id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        created_at: '2026-03-17T00:00:00Z',
+        total_rounds: 5,
+        mode: 'blackboard',
+        visualization_enabled: false,
+        scene_theme: 'law_court',
+        agents: [],
+        branches: [],
+        groups: [],
+        hierarchical: false,
+        director_state: null,
+        gameplay_state: null,
+      },
+      storyData: {
+        scenario_id: 'scenario-1',
+        question: 'What if the archive had to sync?',
+        status: 'done',
+        branches: [{
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
+        }],
+      },
+      agents: [
+        { id: 'agent-1', name: 'Archivist', role: 'Recorder', tier: 'CORE', emotion: 'calm' },
+      ],
+      predictions: [],
+      scenarioMeta: {
+        director: { maxPoints: 3, remainingPoints: 2, spentPoints: 1 },
+        cooldowns: {},
+        cards: { usageLog: [] },
+        betting: { bets: [] },
+        commitment: {
+          active: false,
+          branchId: null,
+          branchTitle: null,
+          committedAtRound: null,
+          committedAt: null,
+          outcome: null,
+        },
+        objectives: {
+          generatedForQuestion: null,
+          generatedForProfile: null,
+          goals: [],
+        },
+        archive: {
+          branchSnapshots: [],
+          keyMoments: ['Moment 1'],
+          profileId: 'law',
+          dominantBranchTitle: 'Archive Branch',
+          dominantTone: 'order',
+          mostUsedCard: null,
+          bettingHit: null,
+          archiveGrade: 'A',
+          directorStyleTag: 'quiet_observer',
+          profileResonance: 'aligned',
+        },
+      },
+      campaignScenarioSummary: {
+        scenario_id: 'scenario-1',
+        profile_id: 'law',
+        archive_grade: 'A',
+        profile_resonance: 'aligned',
+        betting_hit: null,
+        most_used_card: null,
+        completed_daily_challenge: false,
+        campaign_score_delta: 5,
+        finalized_at: null,
+      },
+      campaignSummary: null,
+      isDailyChallenge: false,
+    });
+
+    const url = new URL(replayUrl);
+
+    render(
+      <MemoryRouter initialEntries={[`${url.pathname}${url.search}`]}>
+        <Routes>
+          <Route path="/result/replay" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const bridgeHeading = await screen.findByRole('heading', { name: 'result.next_steps_heading' });
+    const bridgeSection = bridgeHeading.closest('section');
+    expect(bridgeSection).not.toBeNull();
+
+    const kgEntry = within(bridgeSection as HTMLElement)
+      .getByText('result.bridge_kg_explorer_title')
+      .closest('[role="link"]');
+    expect(kgEntry).toBeTruthy();
+    expect(kgEntry).toHaveAttribute('aria-disabled', 'true');
+    expect(within(kgEntry as HTMLElement).getByText('result.bridge_replay_unavailable')).toBeTruthy();
+
+    const galaxyEntry = within(bridgeSection as HTMLElement)
+      .getByText('result.bridge_timeline_galaxy_title')
+      .closest('[role="link"]');
+    expect(galaxyEntry).toBeTruthy();
+    expect(galaxyEntry).toHaveAttribute('aria-disabled', 'true');
+    expect(within(galaxyEntry as HTMLElement).getByText('result.bridge_replay_unavailable')).toBeTruthy();
   });
 });
 

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import {
   createReplayArtifact,
+  getActiveEndingRoom,
   getAgents,
   getReplayArtifact,
   getScenario,
@@ -480,6 +481,26 @@ export default function WorldlineRoundtableView() {
           throw new Error(tRef.current('roundtable.error_too_few_branches'));
         }
 
+        // Revisit support: if this scenario already produced a completed roundtable in a
+        // prior session, rehydrate it so the verdict synthesis + PostVerdictPanel render
+        // exactly like the in-session completed view. This is purely additive — it never
+        // creates a room (the resolve endpoint is read-only) and never triggers an LLM run.
+        // Any "no existing room" outcome (404 → null) or unexpected error falls back to the
+        // casting/picker flow without surfacing an error.
+        try {
+          const existingRoom = await getActiveEndingRoom(id, 'worldline_roundtable');
+          if (cancelled) return;
+          if (existingRoom && (existingRoom.status === 'done' || existingRoom.result_ready)) {
+            // loadRoom hydrates the snapshot and, when result_ready, the result payload —
+            // the same hydration the live completion path performs.
+            await loadRoom(existingRoom.id);
+            if (cancelled) return;
+          }
+        } catch {
+          // Swallow: no persisted room (or a transient resolve failure) simply means we
+          // fall through to the picker, matching the prior behavior for this view.
+        }
+
         if (!cancelled) {
           setLoading(false);
         }
@@ -496,7 +517,7 @@ export default function WorldlineRoundtableView() {
       cancelled = true;
       reset();
     };
-  }, [id, replayLocalId, replayShareId, reset, searchParams]);
+  }, [id, loadRoom, replayLocalId, replayShareId, reset, searchParams]);
 
   const branchesById = useMemo(
     () => new Map((storyData?.branches ?? []).map((branch) => [branch.id, branch])),

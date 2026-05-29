@@ -284,11 +284,19 @@ def _roundtable_variant_hook_fallback(
             "diplomat": ["退让底线先被碰穿了", "各方筹码先失了衡", "斡旋空间先缩没了"],
             "advisor": ["可选项先变窄了", "窗口期先被拖过去了", "代价曲线先变陡了"],
             "science": ["样本和假设先对不上了", "控制变量先被打乱了", "模型误差先开始放大"],
-            "tech-visionary": ["平台假设先塌了一角", "指数曲线先拐错了方向", "未来栈先暴露了断点"],
+            "tech-visionary": [
+                "原型交付先卡在第一批用户手里",
+                "发布窗口先被真实延迟压住",
+                "试点数据先把扩张计划拦住",
+            ],
             "journalist": ["公开记录先露了缝", "关键消息源先改了口", "谁受益先变得太清楚"],
             "educator": ["问题定义先偏了", "关键概念先被误读了", "反例先把课堂秩序打破了"],
             "artist": ["表达和行动先失了焦", "构图先把裂缝显出来了", "共振先变成了噪声"],
-            "entrepreneur": ["牵引力先失真了", "跑道先被烧短了", "下一轮实验先失了方向"],
+            "entrepreneur": [
+                "首批客户先没留下来",
+                "试点成本先吃掉了现金余量",
+                "下一轮实验先交不出结果",
+            ],
             "plain": ["真正先滑开的那一下", "因果链先失了准头", "代价最早开始滚动的地方"],
         }
     else:
@@ -359,9 +367,9 @@ def _roundtable_variant_hook_fallback(
                 "the error term widened before anyone named the bias",
             ],
             "tech-visionary": [
-                "the platform thesis exposed a break in the future stack",
-                "the exponential curve bent the wrong way first",
-                "the moonshot failed at the next concrete step",
+                "prototype delivery stalled with the first users",
+                "the launch window was pinned down by real delays",
+                "pilot data stopped the expansion plan first",
             ],
             "journalist": [
                 "the public record exposed the first contradiction",
@@ -379,9 +387,9 @@ def _roundtable_variant_hook_fallback(
                 "the resonance turned into noise before the ending was named",
             ],
             "entrepreneur": [
-                "traction distorted before the next experiment could validate it",
-                "the runway shortened before the pivot made sense",
-                "viability failed before the iteration could recover",
+                "the first customers failed to stay",
+                "pilot costs ate through the cash buffer first",
+                "the next experiment failed to produce a result",
             ],
             "plain": [
                 "the line of cause and cost slipped out of alignment",
@@ -719,24 +727,24 @@ _VOCABULARY_HINTS: dict[str, dict[str, str]] = {
         "en": "Vocabulary: sample size, confidence interval, control variable, reproducibility, bias, model assumption. Data-driven expression. Tone: cautious curiosity.",  # noqa: E501
     },
     "tech-visionary": {
-        "zh": "用词偏好：颠覆、范式迁移、指数曲线、登月计划、平台化、未来栈。句式愿景先行但必须落到下一步。情绪基调：高能、笃定、略带硅谷式急迫。",  # noqa: E501
-        "en": "Vocabulary: disruption, paradigm shift, exponential curve, moonshot, platform, future stack. Vision-first phrasing grounded in the next step. Tone: high-energy Silicon Valley urgency.",  # noqa: E501
+        "zh": "用词偏好：平台。只有后面立刻接具体动作或数字时才使用这个标志词；否则优先说原型、试点、发布日期或用户反馈。先说下一步执行，再说明愿景。情绪基调：高能、笃定、略带硅谷式急迫。",  # noqa: E501
+        "en": "Vocabulary: platform. Use this marker only when it is immediately followed by a concrete action or number; otherwise prefer prototype, pilot, launch date, or user feedback. Name the next execution step before the vision. Tone: high-energy Silicon Valley urgency.",  # noqa: E501
     },
     "journalist": {
         "zh": "用词偏好：消息源证实、公开记录、独家、突发、采访、交叉核实。先给事实钩子，再指出谁受益、谁回避。情绪基调：紧凑、怀疑、追问到底。",  # noqa: E501
         "en": "Vocabulary: sources confirm, on the record, exclusive, breaking, interview, cross-check. Lead with the factual hook, then name who benefits and who dodges. Tone: tight investigative skepticism.",  # noqa: E501
     },
     "educator": {
-        "zh": "用词偏好：根本上、请考虑、关键洞见、让我们拆解、概念框架、反例。先定义问题，再一步步展开。情绪基调：清晰、耐心、带课堂掌控感。",  # noqa: E501
-        "en": "Vocabulary: fundamentally, consider, the key insight, let us unpack, conceptual frame, counterexample. Define the problem, then unfold it step by step. Tone: clear academic instruction.",  # noqa: E501
+        "zh": "用词偏好：反例、概念框架、把问题拆成两层、前提、边界、推导。先用一个具体例子或反例切入，避免开头先抛抽象框架。情绪基调：清晰、耐心、有课堂掌控感但不端架子。",  # noqa: E501
+        "en": "Vocabulary: counterexample, conceptual frame, split the problem into two layers, premise, boundary, reasoning. Lead with a concrete example or counterexample; avoid opening with an abstract framework. Tone: clear, patient classroom control without stiffness.",  # noqa: E501
     },
     "artist": {
         "zh": "用词偏好：愿景、媒介、表达、技艺、共振、构图。先说感受形状，再说它如何改变行动。情绪基调：敏锐、审美化、克制地诗性。",  # noqa: E501
         "en": "Vocabulary: vision, medium, expression, craft, resonance, composition. Start with the felt shape, then how it changes action. Tone: perceptive, aesthetic, restrainedly lyrical.",  # noqa: E501
     },
     "entrepreneur": {
-        "zh": "用词偏好：转向、跑道、牵引力、规模化、迭代、产品市场匹配。先判断可行性，再给下一轮实验。情绪基调：快速、务实、带创始人压力。",  # noqa: E501
-        "en": "Vocabulary: pivot, runway, traction, scale, iterate, product-market fit. Judge viability first, then name the next experiment. Tone: fast, pragmatic founder pressure.",  # noqa: E501
+        "zh": "用词偏好：留存数字、下一轮实验；如需角色标志词，只用“试点客户”，且后面必须立刻接具体动作或数字。先判断可行性，再给下一轮实验。情绪基调：快速、务实、带创始人压力。",  # noqa: E501
+        "en": "Vocabulary: retention number and next experiment; if a role marker is needed, use only 'pilot customer' and immediately follow it with a concrete action or number. Judge viability first, then name the next experiment. Tone: fast, pragmatic founder pressure.",  # noqa: E501
     },
 }
 
@@ -1790,7 +1798,7 @@ def _oracle_voice_brief(
             ),
             "tech-visionary": (
                 "Speak like a high-energy builder with a concrete next step. "
-                "Use future-facing language, but ground every claim in platform risk, timing, or execution."  # noqa: E501
+                "Use 'platform' only when it is tied to a concrete action or number; otherwise ground claims in prototype, timing, user feedback, or execution."  # noqa: E501
             ),
             "journalist": (
                 "Speak like an investigative reporter: tight, factual, and skeptical. "
@@ -1798,7 +1806,8 @@ def _oracle_voice_brief(
             ),
             "educator": (
                 "Speak like a teacher under time pressure: clear, structured, and patient without being soft. "  # noqa: E501
-                "Define the mistake, give the counterexample, then state the lesson."
+                "Open with the concrete example or counterexample; let it expose the mistake "
+                "before you explain the lesson."
             ),
             "artist": (
                 "Speak like an artist reading a visible fracture: sensory, precise, and restrained. "  # noqa: E501
@@ -1806,7 +1815,8 @@ def _oracle_voice_brief(
             ),
             "entrepreneur": (
                 "Speak like a founder judging viability: fast, practical, and experiment-minded. "
-                "Name traction, runway, pivot, or product-market fit before ambition."
+                "Name viability, a retention number, a pilot customer plus its next action "
+                "or count, or the next experiment before ambition."
             ),
         }
         if variant in modern_voice_briefs:
@@ -1886,13 +1896,13 @@ def _oracle_voice_brief(
 def _oracle_banned_process_phrases(language: str) -> str:
     if language == "zh":
         return (
-            "- Do not repeat phrases like “我只顺着…回答 / 我只沿着…继续 / 我会继续沿着…这根线说下去 / 我先替你筛掉噪声”\n"  # noqa: E501
-            "- Do not literally restate scope or room permissions unless the user explicitly asks about scope\n"  # noqa: E501
-            "- Do not use the room title as if it were the actual hinge when a more concrete hinge already exists\n"  # noqa: E501
-            "- Avoid stock openings like “先失手的，不是终局… / 你点到的就是这一下… / 这轮热座先听…” unless the anchor copy truly requires them\n"  # noqa: E501
-            "- Avoid filler/process phrases like “总的来说 / 综上所述 / 值得注意的是 / 让我们来看看 / 不得不说 / 需要强调的是 / 从某种角度来说”\n"  # noqa: E501
-            "- Avoid mechanical sequencing like “首先...其次...最后” or standalone “首先 / 其次 / 最后” when speaking live\n"  # noqa: E501
-            "- Avoid repeating the same sentence rhythm or first clause used by the immediately previous speaker\n"  # noqa: E501
+            "- 不要重复“我只顺着…回答 / 我只沿着…继续 / 我会继续沿着…这根线说下去 / 我先替你筛掉噪声”这类说法\n"  # noqa: E501
+            "- 除非用户明确询问范围，不要逐字复述房间范围或权限\n"
+            "- 当已有更具体的转折点时，不要把房间标题当成真实转折点\n"
+            "- 避免“先失手的，不是终局… / 你点到的就是这一下… / 这轮热座先听…”这类固定开场，除非锚点文案确实需要\n"  # noqa: E501
+            "- 避免“总的来说 / 综上所述 / 值得注意的是 / 让我们来看看 / 不得不说 / 需要强调的是 / 从某种角度来说”这类填充或过程话\n"  # noqa: E501
+            "- 现场发言时避免“首先...其次...最后”或独立“首先 / 其次 / 最后”这类机械排序\n"  # noqa: E501
+            "- 避免重复上一位发言者刚用过的句式节奏或开头分句\n"
         )
     return (
         "- Do not repeat phrases like 'I am staying with...', 'I will stay on...', 'I will route from...', or 'let me filter the noise'\n"  # noqa: E501

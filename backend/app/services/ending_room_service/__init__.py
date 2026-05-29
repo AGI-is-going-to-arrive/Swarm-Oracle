@@ -740,6 +740,52 @@ def load_ending_room_snapshot(room_id: str) -> dict[str, Any]:
         }
 
 
+def load_existing_ending_room_snapshot_for_scenario(
+    scenario_id: str,
+    *,
+    room_type: EndingRoomType | str = EndingRoomType.WORLDLINE_ROUNDTABLE,
+) -> dict[str, Any]:
+    try:
+        normalized_room_type = (
+            room_type if isinstance(room_type, EndingRoomType)
+            else EndingRoomType(str(room_type))
+        )
+    except ValueError as exc:
+        raise EndingRoomServiceError(
+            422,
+            "ENDING_ROOM_TYPE_INVALID",
+            "Unsupported room type",
+        ) from exc
+
+    with Session(get_engine()) as session:
+        candidates = session.exec(
+            select(EndingRoom)
+            .where(
+                EndingRoom.scenario_id == scenario_id,
+                EndingRoom.room_type == normalized_room_type,
+            )
+            .order_by(EndingRoom.updated_at.desc(), EndingRoom.created_at.desc())
+        ).all()
+
+        for candidate in candidates:
+            existing_room = _find_existing_room(
+                session,
+                scenario_id=scenario_id,
+                anchor_branch_id=candidate.anchor_branch_id,
+                room_type=normalized_room_type,
+                participant_set_hash=candidate.participant_set_hash,
+                language=candidate.language,
+            )
+            if existing_room is not None:
+                return load_ending_room_snapshot(existing_room.id)
+
+    raise EndingRoomServiceError(
+        404,
+        "ENDING_ROOM_NOT_FOUND",
+        "Ending room not found",
+    )
+
+
 def ending_room_exists(room_id: str) -> bool:
     with Session(get_engine()) as session:
         return session.get(EndingRoom, room_id) is not None

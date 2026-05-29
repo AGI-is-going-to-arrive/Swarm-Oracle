@@ -438,7 +438,7 @@ export function CompareDigestView() {
   if (capabilityError) {
     return (
       <div className="compare-digest-view compare-digest-view--empty">
-        <h1>{t('compare.title', 'Counterfactual Compare')}</h1>
+        <h1>{t('compare.title', 'Compare branches')}</h1>
         <p role="alert">{t('compare.error_fetch', 'Unable to load comparison data right now. Please retry.')}</p>
         <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
           <button type="button" className="btn btn-ghost" onClick={() => void reloadCapability?.()}>
@@ -466,7 +466,7 @@ export function CompareDigestView() {
   if (error) {
     return (
       <div className="compare-digest-view compare-digest-view--empty">
-        <h1>{t('compare.title', 'Counterfactual Compare')}</h1>
+        <h1>{t('compare.title', 'Compare branches')}</h1>
         <p role="alert" className="compare-digest-view__error">{errorLabel}</p>
         <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
           {error.kind === 'load_failed' ? (
@@ -487,7 +487,7 @@ export function CompareDigestView() {
           <Link to={resultHref} className="compare-digest-view__back">
             ← {t('common.back_to_result', 'Back to Result')}
           </Link>
-          <h1>{t('compare.title', 'Counterfactual Compare')}</h1>
+          <h1>{t('compare.title', 'Compare branches')}</h1>
           <p>{scenarioQuestion}</p>
         </div>
         <div className="compare-digest-view__controls">
@@ -519,7 +519,7 @@ export function CompareDigestView() {
         </div>
       )}
 
-      <div className="compare-digest-view__branch-switch" role="tablist" aria-label={t('compare.title', 'Counterfactual Compare')}>
+      <div className="compare-digest-view__branch-switch" role="tablist" aria-label={t('compare.title', 'Compare branches')}>
         <button
           type="button"
           className={`compare-digest-view__branch-tab ${activePane === 'a' ? 'is-active' : ''}`}

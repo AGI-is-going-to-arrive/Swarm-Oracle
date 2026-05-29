@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     CHROMA_PERSIST_DIR: str = str((BACKEND_ROOT / "chroma_data").resolve())
 
     # ── Web Search Enhancement ────────────────────────────
+    # Set true only with WEB_SEARCH_PROVIDER plus a configured provider/API key.
     ENABLE_WEB_SEARCH: bool = False
     WEB_SEARCH_PROVIDER: str = "tavily"  # tavily | exa | firecrawl | xai | searxng
     WEB_SEARCH_API_KEY: str = ""
@@ -85,6 +86,7 @@ class Settings(BaseSettings):
     WEB_SEARCH_CACHE_TTL_SECONDS: int = 300
     SEARXNG_URL: str = "http://localhost:8888"
     NEW_SOURCES_POLYMARKET_CONFIGURED_HOST: str = "us"
+    # Set true only after ENABLE_WEB_SEARCH and a configured search provider/API key.
     FEATURE_FAMILY_QUERY_OPTIMIZATION: bool = Field(default=False)
     FAMILY_QUERY_OPTIMIZATION_TIMEOUT_SECONDS: float = Field(default=5.0)
     FAMILY_QUERY_OPTIMIZATION_CACHE_TTL_SECONDS: int = Field(default=300)
@@ -95,30 +97,33 @@ class Settings(BaseSettings):
     NATIVE_SEARCH_MAX_CITATIONS: int = 50
 
     # ── Phase 3 Feature Flags ────────────────────────────
-    FEATURE_CUSTOM_AGENTS: bool = False
-    FEATURE_AGENT_IDENTITY: bool = False
-    FEATURE_CAUSAL_GRAPH: bool = False
-    FEATURE_GRAPH_ANALYSIS: bool = False
+    FEATURE_CUSTOM_AGENTS: bool = True
+    FEATURE_AGENT_IDENTITY: bool = True
+    FEATURE_CAUSAL_GRAPH: bool = True
+    FEATURE_GRAPH_ANALYSIS: bool = True
     FEATURE_COUNTERFACTUAL_REPLAY: bool = True
-    FEATURE_FACTIONS: bool = False
-    FEATURE_ARGUMENT_MAP: bool = False
+    FEATURE_FACTIONS: bool = True
+    FEATURE_ARGUMENT_MAP: bool = True
     ARGUMENT_MAP_LLM_ENRICHMENT: bool = True
     FEATURE_IDENTITY_COMPACTION: bool = False
-    FEATURE_REPLAY_TRACE: bool = Field(default=False)
-    FEATURE_AGENT_CONVERSATION: bool = Field(default=False)
-    FEATURE_ROUNDTABLE_SURVEY: bool = Field(default=False)
-    FEATURE_ROUNDTABLE_ANALYST: bool = Field(default=False)
+    FEATURE_REPLAY_TRACE: bool = Field(default=True)
+    FEATURE_AGENT_CONVERSATION: bool = Field(default=True)
+    FEATURE_ROUNDTABLE_SURVEY: bool = Field(default=True)
+    FEATURE_ROUNDTABLE_ANALYST: bool = Field(default=True)
     FEATURE_ROUNDTABLE_INSIGHT_LLM: bool = False
-    FEATURE_KG_EXPLORER: bool = Field(default=False)
+    FEATURE_KG_EXPLORER: bool = Field(default=True)
+    # Set true only when web search is configured. Enabling it surfaces 4
+    # domain-source checkboxes on the home page, and it depends on
+    # ENABLE_WEB_SEARCH + a configured provider.
     FEATURE_NEW_SOURCES: bool = Field(default=False)
-    FEATURE_SNAPSHOT_EXPORT: bool = Field(default=False)
-    FEATURE_PREDICTION_JOURNAL: bool = Field(default=False)
+    FEATURE_SNAPSHOT_EXPORT: bool = Field(default=True)
+    FEATURE_PREDICTION_JOURNAL: bool = Field(default=True)
     FEATURE_RESULT_VERDICT: bool = Field(default=True)
     # DPD Hallucination Verification Gate — warning-only post-verdict check.
     FEATURE_HALLUCINATION_GATE: bool = Field(default=False)
     HALLUCINATION_GATE_THRESHOLD: float = Field(default=0.75, ge=0.0, le=1.0)
-    FEATURE_EDUCATION_TEMPLATES: bool = Field(default=False)
-    FEATURE_PERSONA_EXPORT: bool = Field(default=False)
+    FEATURE_EDUCATION_TEMPLATES: bool = Field(default=True)
+    FEATURE_PERSONA_EXPORT: bool = Field(default=True)
 
     # ── Identity Memory Compaction ───────────────────────
     IDENTITY_COMPACT_THRESHOLD: int = 50   # trigger when raw doc count >= this

@@ -12,12 +12,14 @@ TEMPLATES: list[dict[str, Any]] = [
         "title_zh": "AI 是否应该替代教师？",
         "title_en": "Should AI replace teachers?",
         "description_zh": (
-            "经典辩论入门题：从教学效率、情感联结、教育公平三个维度展开正反论证，"
-            "适合首次体验辩论竞技场的学生。"
+            "校董会想用 AI 导师把课后辅导成本压低 30%，班主任拿出两名学生的"
+            "沉默记录：他们很快拿到答案，却没人发现已经跟不上。辩题卡在谁来"
+            "承担那一次误读。"
         ),
         "description_en": (
-            "Entry-level debate motion exploring AI's role in teaching: efficiency, "
-            "emotional bonding, and educational equity. Ideal for first-time debate users."
+            "The school board wants AI tutors to cut after-school support costs by 30%. "
+            "A homeroom teacher brings notes on two quiet students: they got quick answers, "
+            "but no adult noticed they were lost. The vote turns on who owns that missed signal."
         ),
         "difficulty": "beginner",
         "suggested_agents": 4,
@@ -34,13 +36,15 @@ TEMPLATES: list[dict[str, Any]] = [
         "title_zh": "如何识别社交媒体上的虚假信息？",
         "title_en": "How can we identify misinformation on social media?",
         "description_zh": (
-            "批判性思维训练：模拟一群信息消费者面对同一条争议性新闻时的反应，"
-            "学生通过观察 Agent 的论证链条学习溯源、交叉验证与认知偏差识别。"
+            "班级群里一段视频声称市长要取消免费午餐，转发按钮已经按到一半；"
+            "本地记者却指出时间戳错位，音频有剪接痕迹。小组得先决定：先发，"
+            "还是先追到第一条来源。"
         ),
         "description_en": (
-            "Critical-thinking exercise simulating diverse media consumers reacting to a "
-            "contested news item; students learn source tracing, cross-validation, and "
-            "cognitive-bias recognition."
+            "A class chat receives a viral clip claiming the mayor will cancel free lunches. "
+            "One student is ready to repost before it disappears; a local reporter points to "
+            "a bad timestamp and spliced audio. The group has to choose between sharing first "
+            "and tracing the first source."
         ),
         "difficulty": "intermediate",
         "suggested_agents": 6,
@@ -57,13 +61,15 @@ TEMPLATES: list[dict[str, Any]] = [
         "title_zh": "如果工业革命没有发生，世界会怎样？",
         "title_en": "What if the Industrial Revolution never happened?",
         "description_zh": (
-            "历史反事实推演：让多位代表不同阶层（工匠、地主、农民、商人）的 Agent "
-            "推演 200 年的另一种文明轨迹，培养历史想象力与因果链分析能力。"
+            "曼彻斯特行会压住蒸汽纺机许可，商人却拿着三船棉布订单逼议会开禁；"
+            "农户担心地租上涨，矿主等着铁路资金。Agent 从这场会议起步，追踪"
+            "谁能把能源、城市和殖民贸易拉到自己一边。"
         ),
         "description_en": (
-            "Counterfactual history simulation across two centuries with agents representing "
-            "artisans, landowners, peasants, and merchants — develops historical imagination "
-            "and causal-chain reasoning."
+            "A Manchester guild blocks licenses for steam-powered spinning while merchants "
+            "wave orders for three ships of cotton cloth. Farmers fear higher rents; mine "
+            "owners wait for railway money. Agents start at that council meeting and track "
+            "who pulls energy, cities, and colonial trade into their camp."
         ),
         "difficulty": "advanced",
         "suggested_agents": 8,
@@ -80,13 +86,14 @@ TEMPLATES: list[dict[str, Any]] = [
         "title_zh": "全球部署平流层气溶胶会发生什么？",
         "title_en": "What happens if we deploy stratospheric aerosols globally?",
         "description_zh": (
-            "科学探究：让气候学家、伦理学家、政策制定者与发展中国家代表在多轮中"
-            "讨论地球工程的连锁反应，理解科学决策的复杂性与跨学科性。"
+            "气候学家主张趁下一次高温峰值前试喷气溶胶，岛国代表先把损失补偿"
+            "和季风风险摆上桌。资金方只给 18 个月窗口，这场推演卡在谁有权"
+            "按下暂停键。"
         ),
         "description_en": (
-            "Science exploration with climatologists, ethicists, policymakers, and Global "
-            "South representatives debating geoengineering cascades — illustrating the "
-            "complexity and interdisciplinarity of science-policy decisions."
+            "A climatologist wants a test spray before the next heat peak; an island-state "
+            "delegate puts compensation and monsoon risk on the table first. Funders give "
+            "only an 18-month window, so the scenario hinges on who can pause the launch."
         ),
         "difficulty": "advanced",
         "suggested_agents": 6,
@@ -103,13 +110,15 @@ TEMPLATES: list[dict[str, Any]] = [
         "title_zh": "电车难题的现代变体：自动驾驶应如何取舍？",
         "title_en": "Modern trolley problem: how should autonomous vehicles choose?",
         "description_zh": (
-            "哲学伦理推演：让功利主义、义务论、美德伦理与契约论代表分别给出立场，"
-            "通过反复辩驳让学生理解伦理框架的张力与现实工程取舍。"
+            "雨夜测试日志里同时出现闯红灯的孩子和车内心脏病乘客，自动驾驶团队"
+            "第二天就要冻结决策规则。律师盯着责任，残障权益代表追问规则会把谁"
+            "算成可牺牲的人；会议没有现成正确答案。"
         ),
         "description_en": (
-            "Philosophical-ethics walkthrough where utilitarian, deontological, virtue, and "
-            "contractarian agents argue self-driving dilemmas — exposes ethical framework "
-            "tensions and engineering trade-offs."
+            "A rainy-night test log puts a child running a red light and a passenger with a "
+            "heart condition in the same decision. The autonomous-vehicle team has to freeze "
+            "the rule the next day. The lawyer watches liability; a disability-rights advocate "
+            "asks whose body the rule treats as expendable."
         ),
         "difficulty": "intermediate",
         "suggested_agents": 4,
@@ -126,14 +135,15 @@ TEMPLATES: list[dict[str, Any]] = [
         "title_zh": "全民基本收入会改变劳动力市场吗？",
         "title_en": "Would Universal Basic Income reshape the labor market?",
         "description_zh": (
-            "经济学情景模拟：让劳动经济学家、企业主、低收入工人、政府官员与税务专家"
-            "围绕 UBI 的供给侧、需求侧与财政约束展开多轮博弈，"
-            "学生观察均衡点如何形成。"
+            "一家机器人仓库运营商裁掉 1,200 人后，市长提出每月 1,000 美元 UBI "
+            "试点；杂货店老板担心房租被推高，单亲护理员想辞掉夜班，税务官说"
+            "销售税补不上缺口。小组先谈钱从哪来，再争雇主会不会趁机压工资。"
         ),
         "description_en": (
-            "Economics scenario where labor economists, business owners, low-income workers, "
-            "officials, and tax experts negotiate UBI's supply, demand, and fiscal constraints "
-            "across multiple rounds — students observe how equilibria emerge."
+            "After a robotic warehouse operator cuts 1,200 jobs, the mayor proposes a "
+            "$1,000-a-month UBI pilot. A grocer worries rent will rise, a single parent wants "
+            "to leave the night shift, and the tax officer says sales tax cannot fill the gap. "
+            "The group debates funding first, then whether employers will push wages down."
         ),
         "difficulty": "intermediate",
         "suggested_agents": 6,

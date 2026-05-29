@@ -8,13 +8,16 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 
 - **多分支推演** — 一个问题，多条故事线，看不同结局
 - **辩论竞技场** — AI 正反方激辩，帮你看清争议的两面
-- **神谕密室** — 与 AI 角色深度对话，追问细节
-- **世界线圆桌** — 多方代表圆桌讨论，综合不同立场
+- **神谕密室** — 与当前世界线里的 AI 角色深度对话，追问细节
+- **世界线圆桌** — 多方代表圆桌讨论，完成后可回到已保存结果并继续 Deep Dive
 - **反事实对比** — "如果那句话说得不同，世界线会怎么变？"
-- **因果图谱** — 可视化事件之间的因果关系
+- **因果图谱 + 知识图谱** — 从结果页进入图谱工作台、知识图谱浏览器和时间线星系
+- **自定义 Agent** — 在 Agent 工坊里创建、导入、导出你自己的角色
+- **预测日志与排行榜** — 记录预测、复盘校准，也能看全局排行榜
+- **Snapshot 导入 / 导出** — 把一次推演打包保存，之后再导入继续查看
 - **支持自带 LLM** — 兼容任何 OpenAI 格式的 API
 
-> 每种玩法的具体用法见 **[使用指南 docs/USAGE.md](docs/USAGE.md)**。部分进阶功能由开关控制，详见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。
+> 每种玩法的具体用法见 **[使用指南 docs/USAGE.md](docs/USAGE.md)**。默认功能基本开箱可用；搜索增强和来源复选框需要额外配置，详见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。
 
 ## 快速开始
 
@@ -28,6 +31,7 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
    # 如果使用 OpenAI 官方 API，改成:
    # LLM_RESPONSES_URL=https://api.openai.com/v1
    # LLM_API_KEY=你的真实 API Key
+   # LLM_MODEL_NAME=你的模型名
    ```
 
 2. 启动：
@@ -36,6 +40,8 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
    ```
 
 3. 打开浏览器访问 http://localhost:18928
+
+Docker 默认把前端映射到 `18928`，后端映射到 `18927`。
 
 ### 本地开发
 
@@ -84,7 +90,7 @@ npm run dev
 | `ENABLE_WEB_SEARCH` | 搜索增强（可选） | `false` |
 | `WEB_SEARCH_PROVIDER` | 搜索服务商（开启搜索时） | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
 
-完整配置项、功能开关清单和搜索增强说明见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。核心玩法（含因果图谱、反事实对比）在模板里已默认开启；圆桌 Deep Dive 等进阶功能默认关闭，可按需打开。
+完整配置项、功能开关清单和搜索增强说明见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。自定义 Agent、跨场景身份、因果图谱、图谱分析、阵营关系、论点地图、知识图谱浏览器、时间线星系、回放轨迹、圆桌 Deep Dive、snapshot、预测日志、教学模板和人物备份在模板里默认开启。`ENABLE_WEB_SEARCH`、`FEATURE_NEW_SOURCES`、`FEATURE_FAMILY_QUERY_OPTIMIZATION` 默认关闭，因为它们需要搜索 provider 和对应配置。
 
 Docker Compose 会读取 `.env.docker`，并把数据库和 Chroma 数据放到
 `/data` volume。普通本地开发读取 `backend/.env`。

@@ -26,7 +26,7 @@ const {
       : maybeOpts;
     const fallback = typeof fallbackOrOpts === 'string' ? fallbackOrOpts : undefined;
     const map: Record<string, string> = {
-      'compare.title': 'Counterfactual Compare',
+      'compare.title': 'Compare branches',
       'compare.missing_params': 'Missing branch parameters',
       'compare.divergence_label': 'Divergence',
       'compare.branch_a_label': 'Branch A (Original)',
@@ -37,19 +37,19 @@ const {
       'compare.round': 'Round {{round}}',
       'compare.latest_round': 'Latest round',
       'compare.context_aria': 'Comparison context',
-      'compare.dual_stage_pill': 'Dual-stage compare',
-      'compare.stage_intro': 'The active stage keeps playing live while the other pane holds same-round context for side-by-side reading.',
-      'compare.captured_mirror': 'Captured mirror',
-      'compare.standby_mirror': 'Standby mirror',
-      'compare.path_weight_suffix': 'path weight',
+      'compare.dual_stage_pill': 'Side-by-side',
+      'compare.stage_intro': 'One side keeps playing the current branch while the other holds the same round for side-by-side reading.',
+      'compare.captured_mirror': 'Comparison branch loaded',
+      'compare.standby_mirror': 'Comparison branch pending',
+      'compare.path_weight_suffix': 'branch probability',
       'compare.branch_overview': 'Branch overview',
-      'compare.live_stage': 'Live stage',
-      'compare.current_stage': 'Live stage',
-      'compare.activate_pane': 'Activate',
-      'compare.after_activation_label': 'Available after activation',
-      'compare.placeholder_primary': 'Keep this branch readable first, then capture a live frame after activation.',
-      'compare.placeholder_detail': 'Round, divergence, and branch weight stay visible so the two-stage compare feels complete from the first frame.',
-      'compare.after_activation_detail': 'After one activation, this pane keeps a mirrored stage snapshot for the branch.',
+      'compare.live_stage': 'Playing branch',
+      'compare.current_stage': 'Playing branch',
+      'compare.activate_pane': 'Switch to this branch',
+      'compare.after_activation_label': 'Available after switching',
+      'compare.placeholder_primary': 'Keep this branch readable first, then load its playback after switching.',
+      'compare.placeholder_detail': 'Round, divergence, and branch probability stay visible so the side-by-side compare feels complete from the start.',
+      'compare.after_activation_detail': "After one switch, this pane keeps the branch's playback snapshot.",
       'compare.play_round': 'Play this round',
       'compare.intervention_title': 'What Changed',
       'compare.intervention_original': 'Original',
@@ -311,7 +311,7 @@ describe('CompareDigestView', () => {
     expect(screen.getByTestId('compare-pane-b')).toHaveClass('is-inactive');
     expect(screen.getByTestId('compare-phaser-loader')).toHaveTextContent('a:1');
     const standbyPane = within(screen.getByTestId('compare-pane-b-standby'));
-    expect(standbyPane.getByText('Standby mirror')).toBeInTheDocument();
+    expect(standbyPane.getByText('Comparison branch pending')).toBeInTheDocument();
     expect(standbyPane.getByText('Round 1')).toBeInTheDocument();
     expect(standbyPane.getByText('Divergence: 33%')).toBeInTheDocument();
 
