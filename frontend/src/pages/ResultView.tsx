@@ -457,9 +457,7 @@ export default function ResultView() {
           Promise.resolve()
             .then(() => listPredictions(id))
             .catch(() => [] as PredictionInfo[]),
-          Promise.resolve()
-            .then(() => getCampaignScenarioSummary(id))
-            .catch(() => null),
+          getCampaignScenarioSummary(id),
         ]);
         if (cancelled) return;
 

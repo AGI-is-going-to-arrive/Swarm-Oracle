@@ -39,12 +39,22 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 
 ### 本地开发
 
-后端（Python 3.11+）：
+后端（Python 3.11+，macOS/Linux）：
 ```bash
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 cp ../.env.example .env   # 编辑 .env，填入你的 LLM 配置
+uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
+```
+
+Windows PowerShell 对应命令：
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+Copy-Item ..\.env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
@@ -72,7 +82,7 @@ npm run dev
 | `LLM_API_KEY` | API 密钥 | `sk-...` |
 | `LLM_MODEL_NAME` | 模型名称 | `gpt-4o` |
 | `ENABLE_WEB_SEARCH` | 搜索增强（可选） | `false` |
-| `WEB_SEARCH_PROVIDER` | 搜索服务商（开启搜索时） | `tavily` / `exa` / `xai` / `searxng` |
+| `WEB_SEARCH_PROVIDER` | 搜索服务商（开启搜索时） | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
 
 完整配置项、功能开关清单和搜索增强说明见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。核心玩法（含因果图谱、反事实对比）在模板里已默认开启；圆桌 Deep Dive 等进阶功能默认关闭，可按需打开。
 

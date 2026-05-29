@@ -1022,14 +1022,31 @@ async function runGameplayStateRoundtripCase(page, {
   outputDir,
 }) {
   ensureDir(outputDir);
+  const scenario = await getScenarioViaApi(baseUrl, scenarioId);
+  const branches = Array.isArray(scenario.branches) ? scenario.branches : [];
+  const primaryBranch = branches.find((branch) => typeof branch?.id === "string" && branch.id.trim());
+  if (!primaryBranch) {
+    throw new Error(`Gameplay state roundtrip needs at least one branch for scenario ${scenarioId}`);
+  }
+  const primaryBranchId = primaryBranch.id;
+  const primaryBranchTitle = String(primaryBranch.title || primaryBranch.summary || primaryBranch.id);
+  const archiveBranchSnapshots = branches
+    .filter((branch) => typeof branch?.id === "string" && branch.id.trim())
+    .slice(0, 2)
+    .map((branch) => ({
+      branch_id: branch.id,
+      title: String(branch.title || branch.summary || branch.id),
+      probability: typeof branch.probability === "number" ? branch.probability : 0,
+    }));
+  const expectedBranchSnapshotCount = archiveBranchSnapshots.length;
   const gameplayState = {
     cards: {
       usage_log: [
         {
           card_id: "public_hearing",
           profile_id: "governance",
-          branch_id: "gameplay-branch-1",
-          branch_title: "算法接管",
+          branch_id: primaryBranchId,
+          branch_title: primaryBranchTitle,
           round: 1,
           cost: 1,
           directive: "Force a public audit trail for the ruling stack.",
@@ -1038,8 +1055,8 @@ async function runGameplayStateRoundtripCase(page, {
         {
           card_id: "public_hearing",
           profile_id: "governance",
-          branch_id: "gameplay-branch-1",
-          branch_title: "算法接管",
+          branch_id: primaryBranchId,
+          branch_title: primaryBranchTitle,
           round: 2,
           cost: 1,
           directive: "Re-open the legality hearing before emergency powers expand.",
@@ -1048,8 +1065,8 @@ async function runGameplayStateRoundtripCase(page, {
         {
           card_id: "audit_reckoning",
           profile_id: "governance",
-          branch_id: "gameplay-branch-1",
-          branch_title: "算法接管",
+          branch_id: primaryBranchId,
+          branch_title: primaryBranchTitle,
           round: 3,
           cost: 1,
           directive: "Trigger a full audit against exception chains.",
@@ -1062,8 +1079,8 @@ async function runGameplayStateRoundtripCase(page, {
         {
           bet_id: "bet-1",
           kind: "branch_winner",
-          target_id: "gameplay-branch-1",
-          target_label: "算法接管",
+          target_id: primaryBranchId,
+          target_label: primaryBranchTitle,
           confidence: 0.78,
           user_name: "E2E Bet One",
           placed_at_round: 2,
@@ -1088,18 +1105,7 @@ async function runGameplayStateRoundtripCase(page, {
         "Round 1 public oversight opens.",
         "Round 3 audit reckoning lands.",
       ],
-      branch_snapshots: [
-        {
-          branch_id: "gameplay-branch-1",
-          title: "算法接管",
-          probability: 0.72,
-        },
-        {
-          branch_id: "gameplay-branch-2",
-          title: "法庭回摆",
-          probability: 0.28,
-        },
-      ],
+      branch_snapshots: archiveBranchSnapshots,
     },
   };
 
@@ -1134,7 +1140,7 @@ async function runGameplayStateRoundtripCase(page, {
       && payload.page?.archive_summary?.last_counterplay_card === "audit_reckoning"
       && (payload.page?.result_bet_list?.length ?? 0) === 2
       && (payload.page?.result_key_moments?.length ?? 0) >= 2
-      && (payload.page?.result_branch_snapshots?.length ?? 0) >= 2
+      && (payload.page?.result_branch_snapshots?.length ?? 0) >= expectedBranchSnapshotCount
     ),
     40000,
     "gameplay state result readback",
@@ -1508,6 +1514,14 @@ async function runPredictionVariant(page, {
     "prediction modal",
   );
   await page.waitForSelector("#pred-kind", { timeout: 10000 });
+
+  if (betKind === "profile_resonance") {
+    const profileOption = page.locator('#pred-kind option[value="profile_resonance"]');
+    if ((await profileOption.count()) === 0) {
+      await page.getByRole("button", { name: /Show advanced predictions|展开高级预测/i }).click();
+      await profileOption.waitFor({ state: "attached", timeout: 10000 });
+    }
+  }
 
   await page.locator("#pred-kind").selectOption(betKind);
   if (betKind === "branch_winner") {
@@ -2204,7 +2218,7 @@ async function runCaptureModesCase(page, {
     "prediction modal close",
   );
 
-  await page.getByRole("button", { name: /Gameplay Cards|玩法卡/i }).click();
+  await page.getByRole("button", { name: /Gameplay Cards|玩法卡/i }).first().click();
   const gameplayOpen = await waitForAutomation(
     page,
     (payload) => payload.page?.controls?.active_modal === "gameplay_cards",

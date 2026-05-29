@@ -703,6 +703,24 @@ describe('ResultView campaign summary', () => {
     expect(getMockLanguage()).toBe('en');
   });
 
+  it('does not treat campaign summary server failures as a missing summary', async () => {
+    vi.mocked(apiClient.getCampaignScenarioSummary).mockRejectedValueOnce(
+      new ApiError(500, 'CAMPAIGN_SUMMARY_FAILED', 'Failed to load campaign summary'),
+    );
+    finalizeCampaignMock.mockClear();
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Failed to load results')).toBeInTheDocument();
+    expect(finalizeCampaignMock).not.toHaveBeenCalled();
+  });
+
   it('renders ending-room CTAs, opens the picker, and confirms into the modal with the selected mode', async () => {
     const user = userEvent.setup();
 

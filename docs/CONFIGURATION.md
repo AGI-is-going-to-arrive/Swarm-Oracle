@@ -53,7 +53,7 @@ SwarmOracle 兼容任何 OpenAI 格式的 API（OpenAI、各类代理、Ollama �
 | `FEATURE_REPLAY_TRACE` | 回放轨迹 |
 | `FEATURE_ROUNDTABLE_INSIGHT_LLM` | 圆桌阶段要点用 LLM 重写 |
 
-> 说明：「多分支推演」「辩论竞技场」「神谕密室」「世界线圆桌」是核心玩法，**始终可用，无需开关**。`FEATURE_RESULT_VERDICT`（结果页一句话结论）在后端默认开启。
+> 说明：「多分支推演」「辩论竞技场」「神谕密室」「世界线圆桌」是核心玩法，**无需功能开关**；其中世界线圆桌只在多结局结果页显示，单结局结果页不显示圆桌入口。`FEATURE_RESULT_VERDICT`（结果页一句话结论）在后端默认开启。
 >
 > 改完开关后需要**重启后端**才会生效。大多数开关对应界面上的功能，前端通过 `/api/capabilities` 自动感知是否可用，关闭的功能会隐藏或提示不可用，不会报错。
 >
