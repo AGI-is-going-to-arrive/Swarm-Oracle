@@ -1,3 +1,5 @@
+[English](README.en.md) | 中文
+
 # 🔮 SwarmOracle
 
 > AI "What-If" Prediction Playground — 群体预言机
