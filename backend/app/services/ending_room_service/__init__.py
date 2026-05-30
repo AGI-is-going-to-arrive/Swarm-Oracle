@@ -767,6 +767,14 @@ def load_existing_ending_room_snapshot_for_scenario(
             .order_by(EndingRoom.updated_at.desc(), EndingRoom.created_at.desc())
         ).all()
 
+        candidates.sort(
+            key=lambda room: (
+                room.status == EndingRoomStatus.DONE and room.result_json is not None,
+                room.updated_at,
+                room.created_at,
+            ),
+            reverse=True,
+        )
         for candidate in candidates:
             existing_room = _find_existing_room(
                 session,

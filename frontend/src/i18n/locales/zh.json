@@ -1489,6 +1489,7 @@
       "error_missing_id": "缺少可用的场景 ID。",
       "error_not_done": "结果尚未完成，暂时不能发起世界线圆桌。",
       "error_too_few_branches": "只有一条结局时不展示世界线圆桌。",
+      "error_restore_failed": "无法恢复已保存的圆桌，请刷新后重试。",
       "speaker_you": "你",
       "speaker_unknown": "未知角色",
       "placeholder_hotseat": "当前代表正在组织回应…",

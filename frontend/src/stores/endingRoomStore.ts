@@ -70,6 +70,10 @@ interface ScopeNoticePayload {
   memoryPartitionId: string;
 }
 
+interface LoadRoomOptions {
+  throwOnError?: boolean;
+}
+
 interface EndingRoomState {
   snapshot: EndingRoomSnapshot | null;
   result: EndingRoomResult | null;
@@ -87,7 +91,7 @@ interface EndingRoomState {
   errorCode: string | null;
   pendingDrafts: Record<string, EndingRoomDraft>;
   openRoom: (scenarioId: string, payload: CreateEndingRoomRequest) => Promise<string>;
-  loadRoom: (roomId: string) => Promise<void>;
+  loadRoom: (roomId: string, options?: LoadRoomOptions) => Promise<boolean>;
   loadThread: (threadId: string) => Promise<void>;
   hydrateSnapshot: (snapshot: EndingRoomSnapshot) => void;
   hydrateResult: (payload: EndingRoomResultPayload) => void;
@@ -378,7 +382,7 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
     }
   },
 
-  loadRoom: async (roomId) => {
+  loadRoom: async (roomId, options = {}) => {
     set((state) => ({
       status: state.snapshot?.id === roomId ? state.status : 'loading',
       error: null,
@@ -396,8 +400,13 @@ export const useEndingRoomStore = create<EndingRoomState>((set, get) => ({
           // Result not yet available — room is still usable, will retry on next WS event
         }
       }
+      return true;
     } catch (error) {
       get().setError(error, translate('ending_room.load_failed'));
+      if (options.throwOnError) {
+        throw error;
+      }
+      return false;
     }
   },
 

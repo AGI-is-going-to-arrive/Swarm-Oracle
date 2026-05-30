@@ -289,6 +289,7 @@ export default function WorldlineRoundtableView() {
   );
   const [pendingQuestionAnchorIds, setPendingQuestionAnchorIds] = useState<string[]>([]);
   const [expandedTurnKeys, setExpandedTurnKeys] = useState<Record<string, boolean>>({});
+  const [restoredReadOnlyRoomId, setRestoredReadOnlyRoomId] = useState<string | null>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const transcriptAutoStickRef = useRef(false);
@@ -411,10 +412,17 @@ export default function WorldlineRoundtableView() {
     [effectiveThreadOrder, effectiveThreadsById],
   );
 
-  useWorldlineRoundtableWS(
-    snapshot?.id,
-    !replayPayload && Boolean(snapshot?.id) && status !== 'error',
+  const suppressRestoredRoomWs = Boolean(
+    snapshot?.id
+      && restoredReadOnlyRoomId === snapshot.id
+      && snapshot.status === 'done',
   );
+  const shouldConnectRoundtableWs = !replayPayload
+    && Boolean(snapshot?.id)
+    && status !== 'error'
+    && !suppressRestoredRoomWs
+    && !(snapshot?.status === 'done' && Boolean(result));
+  useWorldlineRoundtableWS(snapshot?.id, shouldConnectRoundtableWs);
 
   useEffect(() => {
     let cancelled = false;
@@ -458,6 +466,7 @@ export default function WorldlineRoundtableView() {
         if (!id) {
           throw new Error(tRef.current('roundtable.error_missing_id'));
         }
+        setRestoredReadOnlyRoomId(null);
 
         const [nextScenario, nextStory, nextAgents] = await Promise.all([
           getScenario(id),
@@ -485,20 +494,21 @@ export default function WorldlineRoundtableView() {
         // prior session, rehydrate it so the verdict synthesis + PostVerdictPanel render
         // exactly like the in-session completed view. This is purely additive — it never
         // creates a room (the resolve endpoint is read-only) and never triggers an LLM run.
-        // Any "no existing room" outcome (404 → null) or unexpected error falls back to the
-        // casting/picker flow without surfacing an error.
+        // A 404 still falls back to the casting/picker flow. If an existing
+        // completed room cannot be restored, surface a retryable error instead
+        // of silently offering to start a duplicate run.
         try {
           const existingRoom = await getActiveEndingRoom(id, 'worldline_roundtable');
           if (cancelled) return;
           if (existingRoom && (existingRoom.status === 'done' || existingRoom.result_ready)) {
+            setRestoredReadOnlyRoomId(existingRoom.id);
             // loadRoom hydrates the snapshot and, when result_ready, the result payload —
             // the same hydration the live completion path performs.
-            await loadRoom(existingRoom.id);
+            await loadRoom(existingRoom.id, { throwOnError: true });
             if (cancelled) return;
           }
         } catch {
-          // Swallow: no persisted room (or a transient resolve failure) simply means we
-          // fall through to the picker, matching the prior behavior for this view.
+          throw new Error(tRef.current('roundtable.error_restore_failed'));
         }
 
         if (!cancelled) {
@@ -1838,8 +1848,8 @@ export default function WorldlineRoundtableView() {
       </header>
 
       {loading && <div className="worldline-roundtable-empty">{t('roundtable.loading')}</div>}
-      {!loading && error && <div className="worldline-roundtable-empty worldline-roundtable-empty--error">{error}</div>}
-      {!loading && !error && importError && <div className="worldline-roundtable-empty worldline-roundtable-empty--error">{importError}</div>}
+      {!loading && error && <div className="worldline-roundtable-empty worldline-roundtable-empty--error" role="alert">{error}</div>}
+      {!loading && !error && importError && <div className="worldline-roundtable-empty worldline-roundtable-empty--error" role="alert">{importError}</div>}
 
       {showRepresentativePicker && (
         <FormatSelector

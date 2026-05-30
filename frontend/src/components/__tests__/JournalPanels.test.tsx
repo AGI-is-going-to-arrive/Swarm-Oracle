@@ -28,4 +28,13 @@ describe('Journal side panels', () => {
     expect(screen.queryByText('Origin')).not.toBeInTheDocument();
     expect(screen.queryByText('Optimistic')).not.toBeInTheDocument();
   });
+
+  it('keeps worldline retry controls out of image semantics', () => {
+    const onRetry = vi.fn();
+    const { container } = render(<WorldlineMapMini error onRetry={onRetry} />);
+
+    expect(container.querySelector('.journal-worldline-mini')).toHaveAttribute('role', 'figure');
+    expect(screen.getByRole('alert')).toHaveTextContent(/Could not load the worldline map/i);
+    expect(screen.getByRole('button', { name: /Reload map/i })).toBeInTheDocument();
+  });
 });

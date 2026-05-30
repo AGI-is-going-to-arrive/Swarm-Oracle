@@ -1,3 +1,5 @@
+[English](CONFIGURATION.en.md) | 中文
+
 # SwarmOracle 配置说明
 
 所有配置都通过环境变量提供。两个模板：

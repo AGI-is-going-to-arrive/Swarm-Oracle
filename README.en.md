@@ -19,7 +19,7 @@ SwarmOracle lets you ask hypothetical questions ("What if...?"). A group of AI a
 - **Snapshot import / export**: Package one simulation run, save it, and import it later for review.
 - **Bring your own LLM**: Compatible with any OpenAI-format API.
 
-> For concrete usage of each mode, see **[Usage Guide docs/USAGE.md](docs/USAGE.md)**. Most default features work out of the box. Search enhancement and source checkboxes require extra configuration. See **[Configuration docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
+> For concrete usage of each mode, see **[Usage Guide docs/USAGE.en.md](docs/USAGE.en.md)**. Most default features work out of the box. Search enhancement and source checkboxes require extra configuration. See **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**.
 
 ## Quick Start
 
@@ -92,7 +92,7 @@ Core configuration lives in `.env.example` for local development or `.env.docker
 | `ENABLE_WEB_SEARCH` | Search enhancement (optional) | `false` |
 | `WEB_SEARCH_PROVIDER` | Search provider (when search is enabled) | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
 
-For the full configuration list, feature flags, and search enhancement notes, see **[Configuration docs/CONFIGURATION.md](docs/CONFIGURATION.md)**. Custom Agents, cross-scenario identity, causal graph, graph analysis, faction relations, argument map, knowledge graph explorer, timeline galaxy, replay trace, Roundtable Deep Dive, snapshot, prediction journal, education templates, and persona backup are enabled by default in the template. `ENABLE_WEB_SEARCH`, `FEATURE_NEW_SOURCES`, and `FEATURE_FAMILY_QUERY_OPTIMIZATION` are disabled by default because they require a search provider and matching configuration.
+For the full configuration list, feature flags, and search enhancement notes, see **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**. Custom Agents, cross-scenario identity, causal graph, graph analysis, faction relations, argument map, knowledge graph explorer, timeline galaxy, replay trace, Roundtable Deep Dive, snapshot, prediction journal, education templates, and persona backup are enabled by default in the template. `ENABLE_WEB_SEARCH`, `FEATURE_NEW_SOURCES`, and `FEATURE_FAMILY_QUERY_OPTIMIZATION` are disabled by default because they require a search provider and matching configuration.
 
 Docker Compose reads `.env.docker` and stores the database and Chroma data in the
 `/data` volume. Standard local development reads `backend/.env`.

@@ -448,6 +448,60 @@ def test_get_active_worldline_roundtable_returns_existing_completed_snapshot(cli
     assert _room_count() == before_count
 
 
+def test_get_active_worldline_roundtable_prefers_completed_snapshot_over_newer_draft(client):
+    fixture = _seed_ready_scenario(question="如果帝国被分成三条世界线？")
+    second_branch_id = _append_completed_branch(
+        fixture["scenario_id"],
+        title="南方支线",
+        story="第二条世界线走向南方自治。",
+        insight="南方支线的摘要。",
+    )
+    completed_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_id"], second_branch_id],
+            "language": "zh",
+        },
+    )
+    assert completed_resp.status_code == 200
+    completed_room_id = completed_resp.json()["id"]
+    asyncio.run(run_ending_room_background(completed_room_id))
+
+    third_branch_id = _append_completed_branch(
+        fixture["scenario_id"],
+        title="北方支线",
+        story="第三条世界线走向北方联盟。",
+        insight="北方支线的摘要。",
+    )
+    draft_resp = client.post(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room",
+        json={
+            "room_type": "worldline_roundtable",
+            "selected_branch_ids": [fixture["branch_id"], third_branch_id],
+            "language": "zh",
+        },
+    )
+    assert draft_resp.status_code == 200
+    draft_payload = draft_resp.json()
+    assert draft_payload["id"] != completed_room_id
+    assert draft_payload["status"] == "draft"
+    assert draft_payload["result_ready"] is False
+    before_count = _room_count()
+
+    resp = client.get(
+        f"/api/scenario/{fixture['scenario_id']}/ending-room/active",
+        params={"room_type": "worldline_roundtable"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["id"] == completed_room_id
+    assert payload["status"] == "done"
+    assert payload["result_ready"] is True
+    assert _room_count() == before_count
+
+
 def test_get_active_ending_room_defaults_to_roundtable_and_does_not_create(client):
     fixture = _seed_ready_scenario(question="如果帝国还没有开圆桌？")
     before_count = _room_count()

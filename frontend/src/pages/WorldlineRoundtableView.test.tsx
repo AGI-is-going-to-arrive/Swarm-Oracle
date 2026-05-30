@@ -436,6 +436,7 @@ vi.mock('react-i18next', () => ({
         'roundtable.error_missing_id': 'Missing scenario id.',
         'roundtable.error_not_done': 'The result is not finished yet, so the roundtable is not available.',
         'roundtable.error_too_few_branches': 'The roundtable needs at least two endings.',
+        'roundtable.error_restore_failed': 'Could not restore the saved roundtable. Refresh and try again.',
         'roundtable.speaker_you': 'You',
         'roundtable.speaker_unknown': 'Unknown',
         'roundtable.placeholder_hotseat': 'The selected representative is lining up a reply…',
@@ -1051,7 +1052,9 @@ describe('WorldlineRoundtableView', () => {
 
       // Resolved read-only and hydrated via loadRoom — never created a room.
       expect(getActiveEndingRoomMock).toHaveBeenCalledWith('scenario-1', 'worldline_roundtable');
-      expect(loadRoomMock).toHaveBeenCalledWith(resolvedRoom.id);
+      expect(loadRoomMock).toHaveBeenCalledWith(resolvedRoom.id, { throwOnError: true });
+      await waitFor(() => expect(wsMock).toHaveBeenLastCalledWith(resolvedRoom.id, false));
+      expect(wsMock).not.toHaveBeenCalledWith(resolvedRoom.id, true);
       expect(openRoomMock).not.toHaveBeenCalled();
     });
 
@@ -1069,17 +1072,35 @@ describe('WorldlineRoundtableView', () => {
       expect(document.querySelector('.worldline-roundtable-empty--error')).toBeNull();
     });
 
-    it('falls back to the picker without crashing when resolve throws', async () => {
+    it('shows a retryable error instead of the picker when active-room resolve throws', async () => {
       startWithoutHydratedRoom();
       getActiveEndingRoomMock.mockRejectedValue(new Error('resolve failed'));
 
       renderRoundtableView();
 
-      expect(await screen.findByText('Reseat each worldline representative')).toBeInTheDocument();
+      expect(await screen.findByText('Could not restore the saved roundtable. Refresh and try again.')).toBeInTheDocument();
+      expect(screen.queryByText('Reseat each worldline representative')).not.toBeInTheDocument();
       expect(loadRoomMock).not.toHaveBeenCalled();
       expect(openRoomMock).not.toHaveBeenCalled();
-      // The resolve error is swallowed — it must not surface an error state.
-      expect(document.querySelector('.worldline-roundtable-empty--error')).toBeNull();
+      expect(document.querySelector('.worldline-roundtable-empty--error')).toBeTruthy();
+    });
+
+    it('shows a retryable error when the persisted room cannot hydrate', async () => {
+      startWithoutHydratedRoom();
+      const resolvedRoom = {
+        ...createBaseStoreState().snapshot!,
+        status: 'done' as const,
+        result_ready: true,
+      };
+      getActiveEndingRoomMock.mockResolvedValue(resolvedRoom);
+      loadRoomMock.mockRejectedValue(new Error('load failed'));
+
+      renderRoundtableView();
+
+      expect(await screen.findByText('Could not restore the saved roundtable. Refresh and try again.')).toBeInTheDocument();
+      expect(screen.queryByText('Reseat each worldline representative')).not.toBeInTheDocument();
+      expect(loadRoomMock).toHaveBeenCalledWith(resolvedRoom.id, { throwOnError: true });
+      expect(openRoomMock).not.toHaveBeenCalled();
     });
   });
 
