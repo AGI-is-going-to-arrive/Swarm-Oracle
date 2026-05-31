@@ -9,6 +9,8 @@
 
 下面只列**面向用户**的常用配置；更细的调优项见模板文件里的注释。
 
+最低浏览器要求：Chrome/Edge >= 111、Firefox >= 113、Safari/iOS >= 16.2（支持 oklch / color-mix 的现代浏览器）。
+
 ---
 
 ## 1. LLM 配置（必填）
@@ -97,9 +99,11 @@ SwarmOracle 兼容任何 OpenAI 格式的 API（OpenAI、各类代理、Ollama �
 
 ---
 
-## 5. 会话门禁（可选，进阶）
+## 5. 会话门禁与管理端点（可选，进阶）
 
 `SESSION_SECRET` 默认留空，表示本地开发不开鉴权。设置后，REST 接口需要 `X-Session-Token` 头、WebSocket 需要首帧鉴权。这是一个**临时的全局粗粒度门禁**，适合给 demo 加一道简单口令，不是完整的多用户权限系统。
+
+`ADMIN_TOKEN` 默认也留空，此时 `/api/admin/*` 诊断端点对本地开发开放。设置后，管理端点必须携带 `X-Admin-Token` 请求头。只要把 Docker 部署暴露给本机以外的访问者，就应同时设置 `SESSION_SECRET` 和 `ADMIN_TOKEN`。
 
 ---
 

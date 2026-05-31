@@ -32,7 +32,6 @@ import {
 } from './roundtableHelpers';
 
 interface Props {
-  isZh: boolean;
   selectionMode: RoundtableSelectionMode;
   onSelectionModeChange: (mode: RoundtableSelectionMode) => void;
   effectiveSnapshot: EndingRoomSnapshot | null;
@@ -265,7 +264,6 @@ function DroppableSeat({
 }
 
 export default function RoundtablePickerPanel({
-  isZh,
   selectionMode,
   onSelectionModeChange,
   effectiveSnapshot,
@@ -396,9 +394,7 @@ export default function RoundtablePickerPanel({
     onDragStart({ active }: { active: Active }) {
       const payload = getActiveDragPayload(active);
       if (!payload) return undefined;
-      return isZh
-        ? t('roundtable.picker_drag_announce_start', { name: payload.name })
-        : t('roundtable.picker_drag_announce_start_en', { name: payload.name });
+      return t('roundtable.picker_drag_announce_start', { name: payload.name });
     },
     onDragOver({ active, over }: { active: Active; over: Over | null }) {
       const payload = getActiveDragPayload(active);
@@ -425,7 +421,7 @@ export default function RoundtablePickerPanel({
     onDragCancel() {
       return t('roundtable.picker_drag_announce_cancel');
     },
-  }), [isZh, t]);
+  }), [t]);
 
   useEffect(() => {
     if (!dragEnabled) {

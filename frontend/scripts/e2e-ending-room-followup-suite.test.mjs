@@ -117,6 +117,7 @@ const FRONTEND_URL = "http://127.0.0.1:18928";
 test("parseArgs accepts an explicit locale override", () => {
   const normalizeLocale = loadFunction("normalizeLocale");
   const parseArgs = loadFunction("parseArgs", {
+    DEFAULT_BASE_URL: FRONTEND_URL,
     normalizeLocale,
     VALID_BROWSERS: new Set(["chromium", "firefox", "webkit"]),
     VALID_LOCALES: new Set(["zh", "en"]),
@@ -133,6 +134,24 @@ test("parseArgs accepts an explicit locale override", () => {
   ]);
 
   assert.equal(args.locale, "en");
+});
+
+test("parseArgs defaults to the standard frontend URL", () => {
+  const normalizeLocale = loadFunction("normalizeLocale");
+  const parseArgs = loadFunction("parseArgs", {
+    DEFAULT_BASE_URL: FRONTEND_URL,
+    normalizeLocale,
+    VALID_BROWSERS: new Set(["chromium", "firefox", "webkit"]),
+    VALID_LOCALES: new Set(["zh", "en"]),
+  });
+
+  const args = parseArgs([
+    "node",
+    "e2e-ending-room-followup-suite.mjs",
+    "desktop",
+  ]);
+
+  assert.equal(args.url, FRONTEND_URL);
 });
 
 test("findScenarioIds prefers the newest fully-completed single and multi scenarios", async () => {

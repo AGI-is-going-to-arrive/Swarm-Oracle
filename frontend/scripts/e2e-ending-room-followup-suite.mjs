@@ -32,6 +32,7 @@ const BROWSER_LAUNCH_OPTIONS = {
 const VALID_BROWSERS = new Set(["chromium", "firefox", "webkit"]);
 const VALID_LOCALES = new Set(["zh", "en"]);
 const LANGUAGE_STORAGE_KEY = "swarmoracle:language:v1";
+const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
 
 // Lifecycle captures are best-effort evidence only. Keep the budget short so
 // mobile follow-up validation can quickly fall back to API-visible checks.
@@ -81,7 +82,7 @@ function getContextLocale(context) {
 function parseArgs(argv) {
   const args = {
     mode: argv[2] || "",
-    url: null,
+    url: DEFAULT_BASE_URL,
     outputDir: "output/e2e/ending-room-followup",
     headless: true,
     browser: "chromium",

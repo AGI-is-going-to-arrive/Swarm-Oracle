@@ -56,6 +56,18 @@ _UNTRUSTED_AGENT_PROVENANCE_KEYS = frozenset({
     "agent_identity_id",
     "source_type",
 })
+_WEB_SEARCH_STATUS_REASON_CODES = frozenset({
+    "provider_no_domain_filter",
+    "provider_timeout",
+    "provider_rate_limited",
+    "provider_http_error",
+    "provider_body_error",
+    "unsupported_provider",
+    "fallback_unconstrained",
+    "search_skipped",
+    "family_search_error",
+    "provider_unexpected_error",
+})
 
 
 @dataclass(frozen=True)
@@ -1057,6 +1069,15 @@ async def parse_and_run_background(
             logger.warning("Scenario %s disappeared before parse completion", scenario_id)
             return
 
+        existing_context = (
+            scenario.parsed_context
+            if isinstance(scenario.parsed_context, dict)
+            else {}
+        )
+        existing_campaign_context = existing_context.get("campaign_context")
+        if isinstance(existing_campaign_context, dict):
+            parsed["campaign_context"] = existing_campaign_context
+
         scenario.parsed_context = parsed
         scenario.status = ScenarioStatus.SIMULATING
 
@@ -1428,6 +1449,12 @@ def _parse_web_context_json(raw: str | None) -> dict | None:
                     meta_val = entry.get(meta_key)
                     if isinstance(meta_val, str) and meta_val.strip():
                         safe_entry[meta_key] = meta_val
+                status_reason_code = entry.get("status_reason_code")
+                if (
+                    isinstance(status_reason_code, str)
+                    and status_reason_code in _WEB_SEARCH_STATUS_REASON_CODES
+                ):
+                    safe_entry["status_reason_code"] = status_reason_code
                 optimized_query = entry.get("optimized_query")
                 if isinstance(optimized_query, str):
                     try:

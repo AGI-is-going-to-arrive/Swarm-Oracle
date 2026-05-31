@@ -37,7 +37,6 @@ describe('RoundtablePickerPanel', () => {
     const onSelectRepresentative = vi.fn();
     render(
       <RoundtablePickerPanel
-        isZh={false}
         selectionMode="representative"
         onSelectionModeChange={vi.fn()}
         effectiveSnapshot={null}

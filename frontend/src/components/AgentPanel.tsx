@@ -18,6 +18,7 @@ function hashString(str: string): number {
 }
 
 function PixelAvatar({ name, size = 36 }: { name: string; size?: number }) {
+  const { t } = useTranslation();
   const hash = hashString(name);
   const hue = hash % 360;
   const sat = 50 + (hash % 30);
@@ -42,7 +43,7 @@ function PixelAvatar({ name, size = 36 }: { name: string; size?: number }) {
       height={size}
       viewBox={`0 0 ${size} ${size}`}
       className="pixel-avatar"
-      aria-label={`${name} avatar`}
+      aria-label={t('sim.avatar.avatar_alt', { name })}
     >
       <rect width={size} height={size} fill={bgColor} rx={size * 0.15} />
       {grid.map((row, y) =>
@@ -77,13 +78,14 @@ const EMOTION_COLORS: Record<string, string> = {
 };
 
 function EmotionDot({ emotion }: { emotion: string }) {
+  const { t } = useTranslation();
   const color = EMOTION_COLORS[emotion] || EMOTION_COLORS.neutral;
   return (
     <span
       className="emotion-dot"
       ref={(el) => { if (el) el.style.setProperty('--emotion-color', color); }}
       title={emotion}
-      aria-label={`Emotion: ${emotion}`}
+      aria-label={t('sim.panel.emotion_label', { emotion })}
     />
   );
 }
@@ -352,7 +354,7 @@ export function AgentPanel({ onBranchDetail }: AgentPanelProps) {
                 className="filter-clear"
                 onClick={() => setFilterAgentId(null)}
                 title={t('sim.panel.show_all')}
-                aria-label="Clear filter"
+                aria-label={t('sim.panel.clear_filter')}
               >
                 ✕
               </button>

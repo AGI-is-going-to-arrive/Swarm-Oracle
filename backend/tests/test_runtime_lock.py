@@ -17,7 +17,7 @@ import app.services.ending_room_service as ending_room_service_module
 from app.api import helpers as helpers_module
 from app.api import ws as ws_module
 from app.models import database as database_module
-from app.models.database import Scenario, ScenarioStatus, get_engine
+from app.models.database import Branch, Scenario, ScenarioStatus, get_engine
 from app.services import runtime_lock as runtime_lock_module
 from app.services.runtime_lock import (
     acquire_runtime_lock,
@@ -40,6 +40,92 @@ def reset_inprocess_runtime_locks():
     runtime_lock_module._INPROCESS_LOCKS.clear()
     runtime_lock_module._ENSURED_SQLITE_SCHEMA_PATHS.clear()
     runtime_lock_module._close_threadlocal_sqlite_connections()
+
+
+@pytest.mark.asyncio
+async def test_parse_and_run_background_preserves_existing_campaign_context(monkeypatch):
+    helpers_module._running_simulations.clear()
+    helpers_module._parse_phase_simulations.clear()
+    monkeypatch.setattr(
+        ws_module,
+        "ws_manager",
+        SimpleNamespace(broadcast=AsyncMock()),
+    )
+
+    campaign_context = {
+        "challenge_id": "daily-1",
+        "weekly_track_id": "weekly-1",
+        "week_key": "2026-W21",
+        "profile_id": "balanced",
+        "difficulty_tier": "normal",
+        "is_daily_challenge": True,
+        "is_weekly_track": True,
+    }
+    with Session(get_engine()) as session:
+        scenario = Scenario(
+            question="preserve campaign context",
+            status=ScenarioStatus.SIMULATING,
+            parsed_context={"campaign_context": campaign_context},
+        )
+        session.add(scenario)
+        session.commit()
+        session.refresh(scenario)
+        session.add(Branch(scenario_id=scenario.id, title="Initial Branch", probability=1.0))
+        session.commit()
+        scenario_id = scenario.id
+
+    async def fake_parse_question(*_args, **_kwargs):
+        return {
+            "agents": [
+                {
+                    "name": "Analyst",
+                    "role": "Analyst",
+                    "persona": "Tracks campaign context.",
+                    "tier": "CORE",
+                    "stance": "neutral",
+                },
+            ],
+            "initial_title": "Parsed Root",
+            "groups": [],
+        }
+
+    async def fake_run_simulation(**_kwargs):
+        return None
+
+    monkeypatch.setattr(helpers_module, "parse_question", fake_parse_question)
+    monkeypatch.setattr(helpers_module, "run_simulation", fake_run_simulation)
+
+    try:
+        await helpers_module.parse_and_run_background(
+            scenario_id,
+            question="preserve campaign context",
+            num_agents=3,
+            mode="blackboard",
+            hierarchical=False,
+            rounds=5,
+            visualization_enabled=False,
+            reasoning_effort=None,
+            temperature=None,
+            branch_sensitivity=None,
+            fork_prompt_variant=None,
+            fork_detector_active_branch_limit=None,
+            user_id=None,
+            llm_api_key=None,
+            llm_base_url=None,
+            llm_model=None,
+            llm_requests_per_minute=None,
+            llm_tokens_per_minute=None,
+            disable_user_quota=None,
+        )
+    finally:
+        helpers_module._running_simulations.clear()
+        helpers_module._parse_phase_simulations.clear()
+
+    with Session(get_engine()) as session:
+        refreshed = session.get(Scenario, scenario_id)
+        assert refreshed is not None
+        assert refreshed.parsed_context["campaign_context"] == campaign_context
+        assert refreshed.parsed_context["mode"] == "blackboard"
 
 
 def test_runtime_lock_acquire_release_round_trip(monkeypatch, tmp_path):

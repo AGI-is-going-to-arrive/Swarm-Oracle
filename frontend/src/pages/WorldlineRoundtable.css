@@ -922,10 +922,10 @@
 .phase-insight-expanded__stakes {
   font-size: 0.78rem;
   font-weight: 500;
-  color: color-mix(in oklch, var(--accent, #b8860b), transparent 20%);
+  color: color-mix(in oklab, var(--accent, #b8860b), transparent 20%);
 }
 
-@supports not (color: color-mix(in oklch, red, blue)) {
+@supports not (color: color-mix(in oklab, red, blue)) {
   .phase-insight-expanded__stakes {
     color: #b8860b;
   }

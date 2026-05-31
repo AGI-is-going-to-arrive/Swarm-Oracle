@@ -81,7 +81,7 @@ _PROFILE_STYLE_ZH: dict[str, dict[str, str]] = {
         "pressure": "裁量失衡与规则真空",
         "challenge": "哪一条条款、哪一级复核、哪一个举证门槛会先失守？",
         "plan": "日落条款、上诉窗口与更高举证标准",
-        "close_pro": "真正值得推进的不是野路子突破，而是能被程序反复检验的改革路径。",
+        "close_pro": "这条路值得推，前提是每一步都经得起程序复核。",
         "close_con": "当合法性与证据门槛还没站稳时，克制本身就是更稳的法政答案。",
         "judge_focus": "程序正义与证据纪律",
     },
@@ -101,8 +101,8 @@ _PROFILE_STYLE_ZH: dict[str, dict[str, str]] = {
         "pressure": "被延后的供应链冲击与价格反噬",
         "challenge": "当运力、关税和清算链条承压时，谁来吞下第一轮成本？",
         "plan": "分层清算、价格缓冲与关键节点备援",
-        "close_pro": "真正的贸易优势不是口头繁荣，而是能把成本换成更强的流动性与议价权。",
-        "close_con": "若成本外溢无法被锁住，再漂亮的增长曲线也只是把账单往后推。",
+        "close_pro": "贸易收益要落在流动性和议价权上，口头繁荣撑不起第一轮成本。",
+        "close_con": "成本外溢一旦锁不住，好看的增长曲线会把账单推到后面。",
         "judge_focus": "激励结构与成本归属",
     },
     "faith": {
@@ -111,7 +111,7 @@ _PROFILE_STYLE_ZH: dict[str, dict[str, str]] = {
         "pressure": "失控的正当性竞争与群体裂痕",
         "challenge": "当仪式承诺和现实代价冲突时，谁来维护共同体的信任底线？",
         "plan": "仪式边界、共同誓约与渐进式授权",
-        "close_pro": "信仰题面并不只关乎热情，而是能否把共同体的意义感稳稳落地。",
+        "close_pro": "信仰题面最后要看共同体能不能稳住意义感和信任底线。",
         "close_con": "一旦合法性透支，后续裂痕不会按剧本收束，只会成倍放大。",
         "judge_focus": "正当性与共同体稳定",
     },
@@ -121,8 +121,8 @@ _PROFILE_STYLE_ZH: dict[str, dict[str, str]] = {
         "pressure": "被拖延的生态临界点与连锁代价",
         "challenge": "一旦河流、森林或气候临界点跨过去，谁来承担那种不可逆后果？",
         "plan": "分区临界点、监测回路与代际成本记账",
-        "close_pro": "生态议题的关键不是乐观口号，而是争取尚可修复的时间窗口。",
-        "close_con": "若代价不可逆，再温和的承诺也掩盖不了这个方向的长期债务。",
+        "close_pro": "生态议题要抢的是还来得及修复的时间窗口。",
+        "close_con": "代价一旦不可逆，温和承诺也盖不住这条路留下的长期债务。",
         "judge_focus": "临界点判断与长期代价",
     },
     "war": {
@@ -131,7 +131,7 @@ _PROFILE_STYLE_ZH: dict[str, dict[str, str]] = {
         "pressure": "被动扩大的战线与动员代价",
         "challenge": "当补给、战线和盟友承压时，哪一环会先崩，不是靠气势就能扛过去的。",
         "plan": "补给冗余、升级边界与战线节奏控制",
-        "close_pro": "战争题面的上限来自主动塑形，而不是无休止地等待更坏局面降临。",
+        "close_pro": "战争题面的上限来自主动塑形，不能只等更坏局面自己降临。",
         "close_con": "若升级链无法被约束，任何看似果断的推进都可能变成更昂贵的失控。",
         "judge_focus": "升级控制与战略可持续性",
     },
@@ -154,7 +154,7 @@ _PROFILE_STYLE_EN: dict[str, dict[str, str]] = {
         "pressure": "discretion drift and rule vacuums",
         "challenge": "Which clause, review layer, or burden-of-proof threshold fails first?",
         "plan": "sunset clauses, appeal windows, and a higher evidentiary threshold",
-        "close_pro": "The real reform case is not improvisation but a pathway that survives repeated procedural review.",  # noqa: E501
+        "close_pro": "The reform case works only if the path survives repeated procedural review.",
         "close_con": "If legality and proof standards are still shaky, restraint remains the more defensible legal answer.",  # noqa: E501
         "judge_focus": "procedural legitimacy and evidence discipline",
     },
@@ -180,7 +180,7 @@ _PROFILE_STYLE_EN: dict[str, dict[str, str]] = {
             "When freight, tariffs, and settlement rails tighten, who absorbs the first cost wave?"
         ),
         "plan": "tiered settlement, price buffers, and backup nodes",
-        "close_pro": "Trade upside is not rhetoric. It is the ability to convert cost into liquidity and bargaining power.",  # noqa: E501
+        "close_pro": "Trade upside has to show up as liquidity and bargaining power after the first cost wave.",  # noqa: E501
         "close_con": (
             "If spillover cost is not contained, the growth curve is just a delayed invoice."
         ),
@@ -192,7 +192,7 @@ _PROFILE_STYLE_EN: dict[str, dict[str, str]] = {
         "pressure": "uncontained legitimacy competition and social fracture",
         "challenge": "When ritual promises clash with material costs, who protects the community's trust floor?",  # noqa: E501
         "plan": "ritual boundaries, shared covenant, and gradual authorization",
-        "close_pro": "Faith-driven motions are not only about passion. They are about whether meaning can be made durable.",  # noqa: E501
+        "close_pro": "Faith-driven motions have to turn passion into durable meaning people can trust.",  # noqa: E501
         "close_con": (
             "Once legitimacy is overdrawn, the later fracture will compound rather than settle."
         ),
@@ -204,10 +204,8 @@ _PROFILE_STYLE_EN: dict[str, dict[str, str]] = {
         "pressure": "delayed ecological thresholds and cascading cost",
         "challenge": "Once a river, forest, or climate threshold is crossed, who carries the irreversible cost?",  # noqa: E501
         "plan": "zoned thresholds, monitoring loops, and intergenerational cost accounting",
-        "close_pro": (
-            "Ecological upside comes from preserving a repair window, not from optimistic branding."
-        ),
-        "close_con": "If the damage is irreversible, even moderate promises cannot hide the debt of this path.",  # noqa: E501
+        "close_pro": "Ecological upside depends on preserving a repair window before optimistic branding runs out.",  # noqa: E501
+        "close_con": "Irreversible damage leaves a debt that moderate promises cannot cover.",
         "judge_focus": "threshold judgment and long-horizon cost",
     },
     "war": {

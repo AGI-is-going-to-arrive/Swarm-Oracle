@@ -19,9 +19,13 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 - **Snapshot 导入 / 导出** — 把一次推演打包保存，之后再导入继续查看
 - **支持自带 LLM** — 兼容任何 OpenAI 格式的 API
 
-> 每种玩法的具体用法见 **[使用指南 docs/USAGE.md](docs/USAGE.md)**。默认功能基本开箱可用；搜索增强和来源复选框需要额外配置，详见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。
+> 每种玩法的具体用法见 **[使用指南 docs/USAGE.md](docs/USAGE.md)**；逐项功能图鉴见 **[FEATURES.md](docs/FEATURES.md)**。默认功能基本开箱可用；搜索增强和来源复选框需要额外配置，详见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。
 
 ## 快速开始
+
+### 运行要求
+
+最低浏览器要求：Chrome/Edge >= 111、Firefox >= 113、Safari/iOS >= 16.2（支持 oklch / color-mix 的现代浏览器）。
 
 ### Docker 一键部署（推荐）
 
@@ -35,6 +39,7 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
    # LLM_API_KEY=你的真实 API Key
    # LLM_MODEL_NAME=你的模型名
    ```
+   如果不是只在本机访问，同时设置 `SESSION_SECRET` 和 `ADMIN_TOKEN`。前者保护普通 REST / WebSocket 访问，后者保护 `/api/admin/*` 诊断端点（请求头为 `X-Admin-Token`）。
 
 2. 启动：
    ```bash

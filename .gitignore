@@ -85,6 +85,7 @@ frontend/.playwright-cli/
 
 # Release audit output (local-only)
 /.release-audit/
+/.ccg/
 
 # Dev/internal docs — kept locally, never published
 /CLAUDE.md

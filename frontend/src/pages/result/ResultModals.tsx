@@ -164,6 +164,14 @@ export default function ResultModals(props: ResultModalsProps) {
   const getSourceCardTestId = (target: SourceCardTarget, family: WebSearchFamily) =>
     target === 'desktop' ? `result-sources-${family}` : `result-sources-mobile-${family}`;
   const getSourceReason = (entry: SourceFamilyEntry | null | undefined) => {
+    if (entry?.status_reason_code) {
+      const fallback = entry.status_reason ?? entry.disabled_reason;
+      return t(`source.reason.${entry.status_reason_code}`, {
+        defaultValue: typeof fallback === 'string' && fallback.trim()
+          ? fallback
+          : 'Source search failed for this category.',
+      });
+    }
     const raw = entry?.status_reason ?? entry?.disabled_reason;
     return typeof raw === 'string' && raw.trim() ? raw : undefined;
   };

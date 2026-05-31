@@ -2935,7 +2935,9 @@ class TestFamilyContextStates:
         assert result["finance"]["state"] == "unsupported_provider"
         assert "status_reason" in result["finance"]
         assert "native" in result["finance"]["status_reason"]
+        assert result["finance"]["status_reason_code"] == "provider_no_domain_filter"
         assert result["academic"]["state"] == "unsupported_provider"
+        assert result["academic"]["status_reason_code"] == "provider_no_domain_filter"
 
     @pytest.mark.asyncio
     async def test_failed_state_on_exception(self, monkeypatch):
@@ -3042,6 +3044,7 @@ class TestFamilyContextStates:
         assert result["finance"]["state"] == "search_skipped"
         assert result["finance"]["items"] == []
         assert "Rate limited" in result["finance"]["status_reason"]
+        assert result["finance"]["status_reason_code"] == "provider_rate_limited"
 
     @pytest.mark.asyncio
     async def test_ready_with_domain_coverage_full(self, monkeypatch):
@@ -3216,6 +3219,7 @@ class TestFamilyContextStates:
                     "items": [],
                     "domain_filter_mode": "api",
                     "domain_coverage": "full",
+                    "status_reason_code": "provider_timeout",
                 },
             },
         })
@@ -3224,6 +3228,31 @@ class TestFamilyContextStates:
         finance = parsed["family_context"]["finance"]
         assert finance["domain_filter_mode"] == "api"
         assert finance["domain_coverage"] == "full"
+        assert finance["status_reason_code"] == "provider_timeout"
+
+    def test_parse_web_context_json_filters_unknown_status_reason_code(self):
+        """helpers._parse_web_context_json only preserves stable reason codes."""
+        from app.api.helpers import _parse_web_context_json
+        raw = json.dumps({
+            "query": "test",
+            "snippets": [],
+            "provider": "tavily",
+            "timestamp": "",
+            "cached": False,
+            "family_context": {
+                "finance": {
+                    "state": "failed",
+                    "items": [],
+                    "status_reason": "Provider-specific fallback text",
+                    "status_reason_code": "not_a_stable_code",
+                },
+            },
+        })
+        parsed = _parse_web_context_json(raw)
+        assert parsed is not None
+        finance = parsed["family_context"]["finance"]
+        assert finance["status_reason"] == "Provider-specific fallback text"
+        assert "status_reason_code" not in finance
 
     def test_parse_web_context_json_invalid_state_falls_back(self):
         """Unknown state falls back to 'empty'."""
@@ -3273,6 +3302,7 @@ class TestProviderSearchOutcome:
         )
         assert o.state == "failed"
         assert "Timeout" in o.status_reason
+        assert o.status_reason_code == "provider_timeout"
 
 
 class TestSearchWithProviderOutcome:
@@ -3291,6 +3321,7 @@ class TestSearchWithProviderOutcome:
         assert outcome.state == "unsupported_provider"
         assert outcome.snippets == []
         assert "Unknown provider" in (outcome.status_reason or "")
+        assert outcome.status_reason_code == "unsupported_provider"
 
     @pytest.mark.asyncio
     async def test_unknown_provider_raises_when_not_swallowed(self):
@@ -3352,6 +3383,7 @@ class TestSearchWithProviderOutcome:
         assert outcome.state == "failed"
         assert outcome.snippets == []
         assert outcome.status_reason == "xai body error"
+        assert outcome.status_reason_code == "provider_body_error"
         assert "rate_limited" not in (outcome.status_reason or "")
 
     @pytest.mark.asyncio
@@ -3365,6 +3397,7 @@ class TestSearchWithProviderOutcome:
         outcome = await _search_with_provider("tavily", "test query")
         assert outcome.state == "failed"
         assert "Timeout" in (outcome.status_reason or "")
+        assert outcome.status_reason_code == "provider_timeout"
 
     @pytest.mark.asyncio
     async def test_429_returns_search_skipped(self, monkeypatch):
@@ -3378,6 +3411,7 @@ class TestSearchWithProviderOutcome:
         outcome = await _search_with_provider("tavily", "test query")
         assert outcome.state == "search_skipped"
         assert "Rate limited" in (outcome.status_reason or "")
+        assert outcome.status_reason_code == "provider_rate_limited"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status_code", [400, 401, 403, 404, 418, 422, 451])
@@ -3394,6 +3428,7 @@ class TestSearchWithProviderOutcome:
         outcome = await _search_with_provider("tavily", "test query")
         assert outcome.state == "unsupported_provider"
         assert f"HTTP {status_code}" in (outcome.status_reason or "")
+        assert outcome.status_reason_code == "provider_http_error"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status_code", [500, 502, 503])
@@ -3409,6 +3444,7 @@ class TestSearchWithProviderOutcome:
 
         outcome = await _search_with_provider("tavily", "test query")
         assert outcome.state == "failed"
+        assert outcome.status_reason_code == "provider_http_error"
 
     @pytest.mark.asyncio
     async def test_unexpected_error_returns_failed(self, monkeypatch):
@@ -3421,6 +3457,7 @@ class TestSearchWithProviderOutcome:
         outcome = await _search_with_provider("tavily", "test query")
         assert outcome.state == "failed"
         assert "Unexpected error" in (outcome.status_reason or "")
+        assert outcome.status_reason_code == "provider_unexpected_error"
 
     @pytest.mark.asyncio
     async def test_domain_coverage_full_when_within_limit(self, monkeypatch):

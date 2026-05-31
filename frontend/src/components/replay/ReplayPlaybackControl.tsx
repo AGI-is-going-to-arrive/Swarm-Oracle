@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import type { PlaybackSpeed } from '../../hooks/useReplayTimeline';
 
 export interface ReplayPlaybackControlProps {
@@ -71,16 +72,18 @@ export function ReplayPlaybackControl({
   onSpeedChange,
   disabled,
 }: ReplayPlaybackControlProps) {
+  const { t } = useTranslation();
+
   return (
     <div
       className="replay-controls"
-      aria-label="Replay playback controls"
+      aria-label={t('replay.playback_controls')}
     >
       <div className="replay-controls__transport">
         <button
           type="button"
           data-testid="replay-playback-control-prev"
-          aria-label="Previous frame"
+          aria-label={t('replay.control_prev')}
           className="replay-controls__btn"
           disabled={disabled || !canStepBack}
           onClick={onPrev}
@@ -92,7 +95,7 @@ export function ReplayPlaybackControl({
           <button
             type="button"
             data-testid="replay-playback-control-pause"
-            aria-label="Pause"
+            aria-label={t('replay.pause')}
             className="replay-controls__btn replay-controls__btn--play"
             disabled={disabled}
             onClick={onPause}
@@ -103,7 +106,7 @@ export function ReplayPlaybackControl({
           <button
             type="button"
             data-testid="replay-playback-control-play"
-            aria-label="Play"
+            aria-label={t('replay.play')}
             className="replay-controls__btn replay-controls__btn--play"
             disabled={disabled}
             onClick={onPlay}
@@ -115,7 +118,7 @@ export function ReplayPlaybackControl({
         <button
           type="button"
           data-testid="replay-playback-control-next"
-          aria-label="Next frame"
+          aria-label={t('replay.next')}
           className="replay-controls__btn"
           disabled={disabled || !canStepForward}
           onClick={onNext}
@@ -126,7 +129,7 @@ export function ReplayPlaybackControl({
         <button
           type="button"
           data-testid="replay-playback-control-skip"
-          aria-label="Skip to end"
+          aria-label={t('replay.skip_end')}
           className="replay-controls__btn"
           disabled={disabled || !canStepForward}
           onClick={onSkipToEnd}
@@ -135,13 +138,13 @@ export function ReplayPlaybackControl({
         </button>
       </div>
 
-      <div className="replay-controls__speed" role="group" aria-label="Playback speed">
+      <div className="replay-controls__speed" role="group" aria-label={t('replay.playback_speed')}>
         {SPEEDS.map((s) => (
           <button
             key={s}
             type="button"
             data-testid={`replay-playback-control-speed-${s}x`}
-            aria-label={`${s}x playback speed`}
+            aria-label={t('replay.speed_option', { speed: s })}
             aria-pressed={speed === s}
             className={`replay-controls__speed-btn ${speed === s ? 'replay-controls__speed-btn--active' : ''}`}
             disabled={disabled}

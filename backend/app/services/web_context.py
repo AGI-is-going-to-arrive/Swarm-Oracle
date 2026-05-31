@@ -118,16 +118,82 @@ PROVIDER_CAPABILITIES: dict[str, ProviderSearchCapability] = {
 }
 
 
+ProviderSearchState = Literal[
+    "ready", "empty", "failed", "search_skipped",
+    "unsupported_provider", "fallback_unconstrained",
+]
+ProviderSearchReasonCode = Literal[
+    "provider_no_domain_filter",
+    "provider_timeout",
+    "provider_rate_limited",
+    "provider_http_error",
+    "provider_body_error",
+    "unsupported_provider",
+    "fallback_unconstrained",
+    "search_skipped",
+    "family_search_error",
+    "provider_unexpected_error",
+]
+
+
+def _infer_status_reason_code(
+    state: ProviderSearchState,
+    status_reason: str | None,
+) -> ProviderSearchReasonCode | None:
+    if not status_reason:
+        return None
+    reason = status_reason.lower()
+    if "does not support domain filtering" in reason:
+        return "provider_no_domain_filter"
+    if "timeout" in reason:
+        return "provider_timeout"
+    if "rate limited" in reason or "rate_limited" in reason:
+        return "provider_rate_limited"
+    if "unknown provider" in reason:
+        return "unsupported_provider"
+    if "body error" in reason:
+        return "provider_body_error"
+    if reason.startswith("http "):
+        return "provider_http_error"
+    if "search error for family" in reason:
+        return "family_search_error"
+    if state == "fallback_unconstrained":
+        return "fallback_unconstrained"
+    if state == "search_skipped":
+        return "search_skipped"
+    if state == "unsupported_provider":
+        return "unsupported_provider"
+    if state == "failed":
+        return "provider_unexpected_error"
+    return "provider_unexpected_error"
+
+
 @dataclass(frozen=True)
 class ProviderSearchOutcome:
     snippets: list[WebSearchSnippet]
-    state: Literal[
-        "ready", "empty", "failed", "search_skipped",
-        "unsupported_provider", "fallback_unconstrained",
-    ]
+    state: ProviderSearchState
     domain_filter_mode: Literal["api", "query", "prompt", "none"]
     domain_coverage: Literal["full", "partial", "none"]
     status_reason: str | None = None
+    status_reason_code: ProviderSearchReasonCode | None = None
+
+    def __post_init__(self) -> None:
+        if self.status_reason and self.status_reason_code is None:
+            object.__setattr__(
+                self,
+                "status_reason_code",
+                _infer_status_reason_code(self.state, self.status_reason),
+            )
+
+
+def _apply_status_reason_metadata(
+    metadata: dict[str, object],
+    outcome: ProviderSearchOutcome,
+) -> None:
+    if outcome.status_reason and "status_reason" not in metadata:
+        metadata["status_reason"] = outcome.status_reason
+    if outcome.status_reason_code and "status_reason_code" not in metadata:
+        metadata["status_reason_code"] = outcome.status_reason_code
 
 
 class ProviderBodyError(RuntimeError):
@@ -604,6 +670,7 @@ async def fetch_family_context(
                 "status_reason": (
                     f"Provider '{provider}' does not support domain filtering"
                 ),
+                "status_reason_code": "provider_no_domain_filter",
             }
             if family_query_optimization_enabled:
                 metadata["search_pass"] = 1
@@ -656,21 +723,19 @@ async def fetch_family_context(
                             second_outcome.domain_coverage,
                             second_domain_coverage,
                         )
-                        if second_outcome.status_reason:
-                            metadata["status_reason"] = second_outcome.status_reason
+                        _apply_status_reason_metadata(metadata, second_outcome)
                         return family, second_snippets, metadata
-                    if second_outcome.status_reason:
-                        metadata["status_reason"] = second_outcome.status_reason
+                    _apply_status_reason_metadata(metadata, second_outcome)
             if outcome.state not in {"ready", "empty"}:
                 metadata["state"] = outcome.state
-            if outcome.status_reason and "status_reason" not in metadata:
-                metadata["status_reason"] = outcome.status_reason
+            _apply_status_reason_metadata(metadata, outcome)
             return family, snippets, metadata
         except Exception:
             logger.warning("Family search failed: family=%s", family, exc_info=True)
             metadata = {
                 "state": "failed",
                 "status_reason": f"Search error for family '{family}'",
+                "status_reason_code": "family_search_error",
             }
             if family_query_optimization_enabled:
                 metadata["search_pass"] = 1
@@ -701,6 +766,7 @@ async def fetch_family_context(
             "domain_filter_mode",
             "domain_coverage",
             "status_reason",
+            "status_reason_code",
             "optimized_query",
             "search_pass",
         ):
@@ -1792,6 +1858,7 @@ async def _search_with_provider(
         return ProviderSearchOutcome(
             [], "unsupported_provider", "none", "none",
             status_reason=f"Unknown provider: {provider}",
+            status_reason_code="unsupported_provider",
         )
     try:
         snippets = await search_fn(query, request_config, include_domains=include_domains)
@@ -1804,6 +1871,7 @@ async def _search_with_provider(
         return ProviderSearchOutcome(
             [], "failed", dfm, dc,
             status_reason=str(exc),
+            status_reason_code="provider_body_error",
         )
     except httpx.TimeoutException:
         logger.warning("Web search timeout (%s): query=%r", provider, query[:80])
@@ -1812,6 +1880,7 @@ async def _search_with_provider(
         return ProviderSearchOutcome(
             [], "failed", dfm, dc,
             status_reason=f"Timeout from provider '{provider}'",
+            status_reason_code="provider_timeout",
         )
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
@@ -1822,15 +1891,18 @@ async def _search_with_provider(
             return ProviderSearchOutcome(
                 [], "search_skipped", dfm, dc,
                 status_reason=f"Rate limited by provider '{provider}'",
+                status_reason_code="provider_rate_limited",
             )
         if 400 <= status_code < 500:
             return ProviderSearchOutcome(
                 [], "unsupported_provider", dfm, dc,
                 status_reason=f"HTTP {status_code} from provider '{provider}'",
+                status_reason_code="provider_http_error",
             )
         return ProviderSearchOutcome(
             [], "failed", dfm, dc,
             status_reason=f"HTTP {status_code} from provider '{provider}'",
+            status_reason_code="provider_http_error",
         )
     except Exception:
         logger.warning("Web search unexpected error (%s)", provider, exc_info=True)
@@ -1839,6 +1911,7 @@ async def _search_with_provider(
         return ProviderSearchOutcome(
             [], "failed", dfm, dc,
             status_reason=f"Unexpected error from provider '{provider}'",
+            status_reason_code="provider_unexpected_error",
         )
 
 

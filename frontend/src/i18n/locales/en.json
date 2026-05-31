@@ -36,8 +36,8 @@
       "mode_label": "Simulation Mode",
       "mode_blackboard_title": "Agents exchange info via shared blackboard, more compact context",
       "mode_raw_title": "Agents read database directly, full historical context",
-      "mode_blackboard": "Blackboard",
-      "mode_raw": "RAW",
+      "mode_blackboard": "Collaborative (recommended)",
+      "mode_raw": "Full context",
       "mode_blackboard_desc": "Agents share a central blackboard for compact, structured discussions — recommended for most scenarios",
       "mode_raw_desc": "Each agent reads the full database directly — richer context but slower and more token-intensive",
       "web_search_toggle": "Search-Augmented Simulation",
@@ -240,7 +240,9 @@
         "filter_agent": "Filter {{name}}'s messages",
         "no_agent_messages": "No messages from this agent",
         "worldline_group": "Worldline: {{title}}",
-        "worldline_round_range": "R{{start}}-R{{end}}"
+        "worldline_round_range": "R{{start}}-R{{end}}",
+        "clear_filter": "Clear filter",
+        "emotion_label": "Emotion: {{emotion}}"
       },
       "tree": {
         "win_rate": "Likelihood",
@@ -411,6 +413,7 @@
       "score_predictions": "🏆 Trigger Scoring",
       "scoring": "Scoring...",
       "leaderboard_link": "View Leaderboard →",
+      "journal_link": "Prediction Journal →",
       "share_btn": "📱 Generate Copy",
       "copy_permalink_btn": "🔗 Copy Permalink",
       "causal_graph_link": "View Causal Graph",
@@ -713,7 +716,22 @@
       "archive_moment_commitment": "R{{round}} committed to {{value}}",
       "moment_card_detail": "This intervention changed the branch trajectory.",
       "moment_bet_detail": "This records the prediction you chose to back.",
-      "moment_commitment_detail": "This worldline became the anchor for the debrief."
+      "moment_commitment_detail": "This worldline became the anchor for the debrief.",
+      "agent_profile_sheet": {
+        "error": "Failed to load agent profile",
+        "source_custom": "Custom",
+        "source_replay": "Replay",
+        "source_generated": "AI-generated",
+        "persona": "Persona",
+        "no_persistent_identity": "This agent is generated for this scenario only.",
+        "loading": "Loading profile...",
+        "retry": "Retry",
+        "memories_title": "Memories",
+        "events_title": "Growth Events",
+        "empty_history": "No memories or growth events recorded yet.",
+        "start_conversation": "Start conversation",
+        "close": "Close"
+      }
     },
     "share": {
       "title": "📱 Generate Social Copy",
@@ -1459,9 +1477,9 @@
       "analyst_error_action": "Unexpected reasoning step encountered.",
       "analyst_max_iterations": "The analyst reached its reasoning limit. Try a more focused question.",
       "analyst_error_stream": "Connection to the analyst was lost.",
-      "analyst_tool_causal": "Scanning causal graph",
-      "analyst_tool_memory": "Searching participant memory",
-      "analyst_tool_web": "Fetching web evidence",
+      "analyst_tool_causal": "Analyzing causes",
+      "analyst_tool_memory": "Checking agent memory",
+      "analyst_tool_web": "Searching the web",
       "survey_placeholder": "What do you think of this consensus?",
       "survey_ask": "Send to all",
       "survey_stop": "Cancel",
@@ -1493,7 +1511,7 @@
       "speaker_you": "You",
       "speaker_unknown": "Unknown",
       "placeholder_hotseat": "The selected representative is lining up a reply…",
-      "placeholder_archivist": "The Archivist is routing the question to the right representative…",
+      "placeholder_archivist": "The host is routing the question to the right representative…",
       "scope_followup_active": "Following this roundtable thread only",
       "scope_table_active": "Using this table and crossline summaries only",
       "scope_followup_default": "Using the active roundtable thread only",
@@ -1538,7 +1556,6 @@
       "picker_empty_witness": "Drop here to seat a witness",
       "picker_occupied_label": "Currently seated",
       "picker_drag_announce_start": "Picked up {{name}}, use arrow keys to find an empty seat.",
-      "picker_drag_announce_start_en": "Picked up {{name}}.",
       "picker_drag_announce_no_seat": "Not over a valid seat.",
       "picker_drag_announce_over": "Moved over {{title}} seat.",
       "picker_drag_announce_cancel": "Drop cancelled.",
@@ -1561,9 +1578,9 @@
       "action": "Reload page"
     },
     "analyst": {
-      "tool_causal_graph": "Causal Graph",
-      "tool_identity": "Identity Memory",
-      "tool_web": "Web Search",
+      "tool_causal_graph": "Analyzing causes",
+      "tool_identity": "Checking agent memory",
+      "tool_web": "Searching the web",
       "status_aborted": "Aborted",
       "status_error": "Error"
     },
@@ -2446,6 +2463,7 @@
       "checkpoint_load_error": "Could not load checkpoints for this branch. You can still enter a round manually."
     },
     "common": {
+      "unknown": "Unknown",
       "loading": "Loading…",
       "back": "Back",
       "go_back": "Go back",
@@ -2732,6 +2750,18 @@
       "broadened_search": "Broadened search",
       "broadened_search_sr": "These results came from the second broadened-domain search pass",
       "section_title": "Live Sources",
+      "reason": {
+        "provider_no_domain_filter": "This search provider cannot keep this source category scoped to its domain list.",
+        "provider_timeout": "The search provider timed out for this source category.",
+        "provider_rate_limited": "The search provider rate-limited this source category.",
+        "provider_http_error": "The search provider returned an HTTP error for this source category.",
+        "provider_body_error": "The search provider response could not be read for this source category.",
+        "unsupported_provider": "The current search provider does not support this source category.",
+        "fallback_unconstrained": "Search continued without domain filtering for this source category.",
+        "search_skipped": "Search was skipped for this source category.",
+        "family_search_error": "This source category search failed.",
+        "provider_unexpected_error": "The search provider failed unexpectedly for this source category."
+      },
       "mobile_sheet": {
         "title": "Live sources",
         "subtitle": "External data providers snapshot.",
@@ -2846,6 +2876,14 @@
     },
     "replay": {
       "title": "Replay Trace",
+      "control_prev": "Previous frame",
+      "play": "Play",
+      "pause": "Pause",
+      "next": "Next frame",
+      "skip_end": "Skip to end",
+      "playback_speed": "Playback speed",
+      "playback_controls": "Replay playback controls",
+      "speed_option": "{{speed}}x playback speed",
       "open_pixel_theater": "Open Pixel Theater",
       "feature_disabled_title": "Replay trace is unavailable",
       "feature_disabled_description": "This server has replay trace disabled for this environment.",

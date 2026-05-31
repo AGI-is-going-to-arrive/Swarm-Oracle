@@ -169,6 +169,7 @@ const {
       'result.campaign_badge_bet_label': 'Bet Winner',
       'result.campaign_badge_bet_desc': 'Hit at least one resolved prediction bet.',
       'result.campaign_badge_fallback_desc': 'A new badge has been unlocked.',
+      'source.reason.provider_no_domain_filter': 'This search provider cannot keep this source category scoped to its domain list.',
     };
     if (resultCopy[key]) {
       return options ? interpolate(resultCopy[key], options) : resultCopy[key];
@@ -3557,8 +3558,9 @@ describe('ResultView campaign summary', () => {
             finance: {
               state: 'unsupported_provider',
               status_reason: 'Provider native does not support domain filtering.',
+              status_reason_code: 'provider_no_domain_filter',
               domain_filter_mode: 'none',
-              domain_coverage: 'partial',
+              domain_coverage: 'none',
               items: [],
             },
           },
@@ -3577,8 +3579,9 @@ describe('ResultView campaign summary', () => {
       const finance = within(grid).getByTestId('result-sources-finance');
       expect(finance).toHaveAttribute('data-state', 'unsupported_provider');
       expect(within(grid).getByTestId('result-sources-finance-reason')).toHaveTextContent(
-        'Provider native does not support domain filtering.',
+        'This search provider cannot keep this source category scoped to its domain list.',
       );
+      expect(within(grid).queryByText('Provider native does not support domain filtering.')).toBeNull();
       expect(finance).toHaveAttribute('aria-describedby', 'result-sources-finance-reason');
     });
 
@@ -5150,6 +5153,28 @@ describe('ResultView P4-1 i18n key coverage', () => {
       expect(enFamily[state]).toBeTruthy();
       expect(zhFamily[state]).toBeTruthy();
       expect(enFamily[state]).not.toBe(zhFamily[state]);
+    }
+  });
+
+  it('en/zh has all provider status reason code copies', () => {
+    const reasonCodes = [
+      'provider_no_domain_filter',
+      'provider_timeout',
+      'provider_rate_limited',
+      'provider_http_error',
+      'provider_body_error',
+      'unsupported_provider',
+      'fallback_unconstrained',
+      'search_skipped',
+      'family_search_error',
+      'provider_unexpected_error',
+    ] as const;
+    const enReason = en.translation.source.reason;
+    const zhReason = zh.translation.source.reason;
+    for (const code of reasonCodes) {
+      expect(enReason[code]).toBeTruthy();
+      expect(zhReason[code]).toBeTruthy();
+      expect(enReason[code]).not.toBe(zhReason[code]);
     }
   });
 });

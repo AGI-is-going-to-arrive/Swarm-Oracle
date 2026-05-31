@@ -181,7 +181,7 @@ export function CounterfactualBrand({ branches, scenarioId: _scenarioId, onExplo
             <p className="cf-brand__desc">
               {t(
                 'counterfactual_brand.desc',
-                '回到关键分叉点,改写一句话,看世界线如何重新缝合。',
+                '回到关键分叉点，改写一句话，看世界线如何走向不同结果。',
               )}
             </p>
           </div>

@@ -16,12 +16,24 @@ export type WebSearchFamilyState =
   | 'search_skipped';
 
 export type WebSearchFamilyDomainFilterMode = 'api' | 'query' | 'prompt' | 'none';
-export type WebSearchFamilyDomainCoverage = 'full' | 'partial';
+export type WebSearchFamilyDomainCoverage = 'full' | 'partial' | 'none';
+export type WebSearchFamilyStatusReasonCode =
+  | 'provider_no_domain_filter'
+  | 'provider_timeout'
+  | 'provider_rate_limited'
+  | 'provider_http_error'
+  | 'provider_body_error'
+  | 'unsupported_provider'
+  | 'fallback_unconstrained'
+  | 'search_skipped'
+  | 'family_search_error'
+  | 'provider_unexpected_error';
 
 interface WebSearchFamilyMetadata {
   state?: WebSearchFamilyState;
   disabled_reason?: string;
   status_reason?: string;
+  status_reason_code?: WebSearchFamilyStatusReasonCode;
   domain_filter_mode?: WebSearchFamilyDomainFilterMode;
   domain_coverage?: WebSearchFamilyDomainCoverage;
   optimized_query?: string;

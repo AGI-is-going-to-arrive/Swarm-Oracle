@@ -1863,7 +1863,6 @@ export default function WorldlineRoundtableView() {
 
       {showRepresentativePicker && (
         <RoundtablePickerPanel
-          isZh={isZh}
           selectionMode={selectionMode}
           onSelectionModeChange={handleSelectionModeChange}
           effectiveSnapshot={effectiveSnapshot}

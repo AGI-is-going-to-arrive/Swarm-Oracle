@@ -1557,6 +1557,11 @@ export function InputView() {
                       {t('home.agents', 'Agents')}
                     </button>
                   )}
+                  {caps?.prediction_journal?.enabled && (
+                    <button className="btn btn-ghost" onClick={() => navigate('/me/journal')}>
+                      {t('journal.title')}
+                    </button>
+                  )}
                   {caps?.snapshot_export?.enabled && (
                     <button
                       type="button"

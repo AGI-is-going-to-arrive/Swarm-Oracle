@@ -9,6 +9,8 @@ All configuration is provided through environment variables. There are two templ
 
 This page lists user-facing configuration. More tuning options are documented as comments in the template files.
 
+Minimum browser: Chrome/Edge >= 111, Firefox >= 113, Safari/iOS >= 16.2 (modern browsers that support oklch / color-mix).
+
 ---
 
 ## 1. LLM Configuration (Required)
@@ -97,9 +99,11 @@ Docker Compose stores the database and Chroma data in the `/data` volume so they
 
 ---
 
-## 5. Session Gate (Optional, Advanced)
+## 5. Session Gate and Admin Endpoints (Optional, Advanced)
 
 `SESSION_SECRET` is empty by default, which means local development has no auth gate. When set, REST requests need an `X-Session-Token` header and WebSocket connections need first-frame authentication. This is a temporary coarse-grained demo gate, not a complete multi-user permission system.
+
+`ADMIN_TOKEN` is also empty by default, which leaves `/api/admin/*` diagnostics open for local development. When set, admin endpoints require the `X-Admin-Token` request header. If the Docker deployment is reachable beyond your own machine, set both `SESSION_SECRET` and `ADMIN_TOKEN`.
 
 ---
 

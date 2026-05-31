@@ -19,9 +19,13 @@ SwarmOracle lets you ask hypothetical questions ("What if...?"). A group of AI a
 - **Snapshot import / export**: Package one simulation run, save it, and import it later for review.
 - **Bring your own LLM**: Compatible with any OpenAI-format API.
 
-> For concrete usage of each mode, see **[Usage Guide docs/USAGE.en.md](docs/USAGE.en.md)**. Most default features work out of the box. Search enhancement and source checkboxes require extra configuration. See **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**.
+> For concrete usage of each mode, see **[Usage Guide docs/USAGE.en.md](docs/USAGE.en.md)**; for the per-feature catalog, see **[FEATURES.en.md](docs/FEATURES.en.md)**. Most default features work out of the box. Search enhancement and source checkboxes require extra configuration. See **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**.
 
 ## Quick Start
+
+### Requirements
+
+Minimum browser: Chrome/Edge >= 111, Firefox >= 113, Safari/iOS >= 16.2 (modern browsers that support oklch / color-mix).
 
 ### One-command Docker deployment (recommended)
 
@@ -35,6 +39,7 @@ SwarmOracle lets you ask hypothetical questions ("What if...?"). A group of AI a
    # LLM_API_KEY=your real API key
    # LLM_MODEL_NAME=your model name
    ```
+   If the deployment is reachable beyond your own machine, also set `SESSION_SECRET` and `ADMIN_TOKEN`. `SESSION_SECRET` protects normal REST / WebSocket access, and `ADMIN_TOKEN` protects `/api/admin/*` diagnostics through the `X-Admin-Token` header.
 
 2. Start:
    ```bash

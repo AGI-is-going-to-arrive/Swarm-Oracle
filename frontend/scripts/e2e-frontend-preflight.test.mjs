@@ -146,6 +146,49 @@ test("roundtable parseArgs accepts explicit mobile viewport dimensions", () => {
   assert.equal(args.mobileHeight, 740);
 });
 
+test("roundtable parseArgs accepts an explicit scenario id", () => {
+  const args = roundtableSuiteTest.parseArgs([
+    "node",
+    "scripts/e2e-worldline-roundtable-suite.mjs",
+    "full",
+    "--scenario-id",
+    "scenario-42",
+  ]);
+
+  assert.equal(args.scenarioId, "scenario-42");
+});
+
+test("roundtable contract validation accepts restored custom rooms", () => {
+  const contract = roundtableSuiteTest.assertSupportedRoundtableContractPayload({
+    page: {
+      controls: {
+        discussion_format: "deep_dive",
+        cast_mode: "custom",
+      },
+    },
+  }, "restored custom room");
+
+  assert.deepEqual(contract, {
+    discussionFormat: "deep_dive",
+    castMode: "custom",
+    isDefault: false,
+  });
+});
+
+test("roundtable contract validation rejects unsupported values", () => {
+  assert.throws(
+    () => roundtableSuiteTest.assertSupportedRoundtableContractPayload({
+      page: {
+        controls: {
+          discussion_format: "unknown",
+          cast_mode: "smart_pick",
+        },
+      },
+    }, "bad roundtable contract"),
+    /unsupported discussion_format=unknown/,
+  );
+});
+
 test("roundtable parseArgs rejects invalid mobile viewport dimensions", () => {
   assert.throws(
     () => roundtableSuiteTest.parseArgs([

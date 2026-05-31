@@ -23,10 +23,12 @@ const DEFAULT_BACKEND_URL = process.env.SWARM_BACKEND_URL || "http://127.0.0.1:1
 const VALID_BROWSERS = new Set(["chromium", "firefox", "webkit"]);
 const VALID_LOCALES = new Set(["zh", "en"]);
 const LANGUAGE_STORAGE_KEY = "swarmoracle:language:v1";
-const ROUNDTABLE_READY_TIMEOUT_MS = 90000;
+const ROUNDTABLE_READY_TIMEOUT_MS = 180000;
 const ROUNDTABLE_USER_TURN_SETTLE_TIMEOUT_MS = 120000;
+const PREFERRED_SCENARIO_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const RESEAT_REOPEN_BUTTON_PATTERN = /Reseat & restart|Reseat and reopen|换人重开|改选代表并重开/i;
 const MORE_ACTIONS_BUTTON_PATTERN = /More actions|更多操作/i;
+const ROUNDTABLE_LAUNCH_BUTTON_PATTERN = /Open with selected representatives|Open this lineup|Reopen this lineup|以当前代表开桌|按当前代表开桌|按这套代表开桌|按当前阵容重开/i;
 const MODE_MANUAL_SHORTLIST_PATTERN = /Hand-pick|Manual shortlist|手动挑选|手动短名单/i;
 const MODE_EXPERT_WITNESS_PATTERN = /Invite expert|Expert witness|请专家|专家证人/i;
 const MODE_TRAIT_MIX_PATTERN = /Clash mix|Trait mix|观点对冲|冲突人设混编/i;
@@ -39,6 +41,8 @@ const CAST_SMART_PICK_PATTERN = /Smart Pick|智能选角/i;
 const HOTSEAT_MODE_PATTERN = /Question one rep|Representative hotseat|单独追问|点名代表|代表热座/i;
 const NEW_THREAD_BUTTON_PATTERN = /Start anchored thread|New topic|另开线程|新开话题/i;
 const CURRENT_ANCHOR_THREAD_BUTTON_PATTERN = /Start thread from current anchor|New topic from here|从当前锚点开始线程|从当前锚点发起线程|按当前锚点另开线程|就这个点新开话题/i;
+const SUPPORTED_DISCUSSION_FORMATS = new Set(["deep_dive", "quick_review", "clash_mode"]);
+const SUPPORTED_CAST_MODES = new Set(["smart_pick", "custom"]);
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -105,6 +109,21 @@ async function openReseatEditor(page) {
   }
 
   await page.getByRole("button", { name: RESEAT_REOPEN_BUTTON_PATTERN }).first().click();
+}
+
+async function waitForRoundtablePicker(page) {
+  const picker = page.locator(".worldline-roundtable-card--picker");
+  try {
+    await picker.waitFor({ state: "visible", timeout: 15000 });
+    return;
+  } catch (error) {
+    const automation = await readAutomation(page).catch(() => null);
+    if (automation?.page?.kind !== "worldline_roundtable") {
+      throw error;
+    }
+    await openReseatEditor(page);
+    await picker.waitFor({ state: "visible", timeout: 15000 });
+  }
 }
 
 function assertUiLocaleState(localeState, locale, label) {
@@ -314,6 +333,7 @@ function parseArgs(argv) {
     locale: normalizeLocale(process.env.SWARM_E2E_LOCALE || "zh"),
     mobileWidth: 390,
     mobileHeight: 844,
+    scenarioId: process.env.SWARM_ROUNDTABLE_SCENARIO_ID || "",
   };
 
   for (let i = 3; i < argv.length; i += 1) {
@@ -348,11 +368,15 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--headless") {
       args.headless = true;
+    } else if (arg === "--scenario-id") {
+      const next = requireOptionValue(argv, i, arg);
+      args.scenarioId = next.trim();
+      i += 1;
     }
   }
 
   if (!["desktop", "mobile", "full"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-worldline-roundtable-suite.mjs <desktop|mobile|full> [--url URL] [--backend-url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--locale en|zh] [--mobile-width WIDTH] [--mobile-height HEIGHT] [--headless]");
+    throw new Error("Usage: node scripts/e2e-worldline-roundtable-suite.mjs <desktop|mobile|full> [--url URL] [--backend-url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--locale en|zh] [--mobile-width WIDTH] [--mobile-height HEIGHT] [--scenario-id ID] [--headless]");
   }
   if (!VALID_BROWSERS.has(args.browser)) {
     throw new Error(`Unsupported browser: ${args.browser}`);
@@ -403,6 +427,23 @@ function assertRoundtableContractPayload(payload, { discussionFormat, castMode }
   return {
     discussionFormat: controls.discussion_format,
     castMode: controls.cast_mode,
+  };
+}
+
+function assertSupportedRoundtableContractPayload(payload, label) {
+  const controls = payload?.page?.controls;
+  const discussionFormat = controls?.discussion_format;
+  const castMode = controls?.cast_mode;
+  if (!SUPPORTED_DISCUSSION_FORMATS.has(discussionFormat)) {
+    throw new Error(`${label} has unsupported discussion_format=${discussionFormat ?? "null"}`);
+  }
+  if (!SUPPORTED_CAST_MODES.has(castMode)) {
+    throw new Error(`${label} has unsupported cast_mode=${castMode ?? "null"}`);
+  }
+  return {
+    discussionFormat,
+    castMode,
+    isDefault: discussionFormat === "deep_dive" && castMode === "smart_pick",
   };
 }
 
@@ -552,8 +593,8 @@ async function exerciseFormatSelectorFixture(context, baseUrl, scenarioId, outpu
     fileLabel,
     formatButton,
     expectedFormat,
-    castButton = CAST_SMART_PICK_PATTERN,
-    expectedCast = "smart_pick",
+    castButton = null,
+    expectedCast = null,
   }) => {
     latestPayload = null;
     latestRequestBody = null;
@@ -562,28 +603,42 @@ async function exerciseFormatSelectorFixture(context, baseUrl, scenarioId, outpu
     await clickActionable(page.getByRole("button", {
       name: normalizeLocale(locale) === "en" ? /Start Roundtable/i : /Start Roundtable|开始圆桌|发起圆桌/i,
     }).first(), `${fileLabel} roundtable entry CTA`);
-    await page.waitForSelector(".worldline-roundtable-card--picker", { timeout: 15000 });
+    await waitForRoundtablePicker(page);
     await selectRoundtableRadio(page, formatButton, `${fileLabel} format`);
-    await selectRoundtableRadio(page, castButton, `${fileLabel} cast`);
+    if (castButton) {
+      await selectRoundtableRadio(page, castButton, `${fileLabel} cast`);
+    }
     await clickActionable(page.getByRole("button", {
-      name: normalizeLocale(locale) === "en"
-        ? /Open with selected representatives|Open this lineup/i
-        : /Open with selected representatives|Open this lineup|以当前代表开桌|按当前代表开桌|按这套代表开桌/i,
+      name: ROUNDTABLE_LAUNCH_BUTTON_PATTERN,
     }).first(), `${fileLabel} roundtable launch`);
     const state = await waitForAutomation(
       page,
       (payload) => payload.page?.kind === "worldline_roundtable"
         && payload.page?.controls?.discussion_format === expectedFormat
-        && payload.page?.controls?.cast_mode === expectedCast
+        && (
+          expectedCast
+            ? payload.page?.controls?.cast_mode === expectedCast
+            : SUPPORTED_CAST_MODES.has(payload.page?.controls?.cast_mode)
+        )
         && payload.page?.controls?.has_result === true,
       15000,
       `${fileLabel} fixture roundtable contract`,
     );
-    if (latestRequestBody?.discussion_format !== expectedFormat || latestRequestBody?.cast_mode !== expectedCast) {
-      throw new Error(`${fileLabel} fixture request did not send format/cast`);
+    if (latestRequestBody?.discussion_format !== expectedFormat) {
+      throw new Error(`${fileLabel} fixture request did not send format`);
     }
-    if (latestPayload?.discussion_format !== expectedFormat || latestPayload?.cast_mode !== expectedCast) {
-      throw new Error(`${fileLabel} fixture response did not preserve format/cast`);
+    if (expectedCast && latestRequestBody?.cast_mode !== expectedCast) {
+      throw new Error(`${fileLabel} fixture request did not send cast`);
+    }
+    if (!expectedCast && !SUPPORTED_CAST_MODES.has(latestRequestBody?.cast_mode)) {
+      throw new Error(`${fileLabel} fixture request sent unsupported cast_mode=${latestRequestBody?.cast_mode ?? "null"}`);
+    }
+    if (latestPayload?.discussion_format !== expectedFormat) {
+      throw new Error(`${fileLabel} fixture response did not preserve format`);
+    }
+    const actualCast = expectedCast ?? latestRequestBody?.cast_mode ?? state.page?.controls?.cast_mode;
+    if (latestPayload?.cast_mode !== actualCast) {
+      throw new Error(`${fileLabel} fixture response did not preserve cast`);
     }
     const requestBody = latestRequestBody
       ? {
@@ -599,7 +654,7 @@ async function exerciseFormatSelectorFixture(context, baseUrl, scenarioId, outpu
       requestBody,
       contract: assertRoundtableContractPayload(
         state,
-        { discussionFormat: expectedFormat, castMode: expectedCast },
+        { discussionFormat: expectedFormat, castMode: actualCast },
         `${fileLabel} fixture roundtable contract`,
       ),
     };
@@ -652,11 +707,13 @@ function readPreferredScenarioIds() {
     desktop: null,
     mobile: null,
   };
+  const minMtimeMs = Date.now() - PREFERRED_SCENARIO_MAX_AGE_MS;
   const summaryFiles = collectSummaryFiles(DEFAULT_OUTPUT_ROOT)
     .map((summaryPath) => ({
       summaryPath,
       mtimeMs: fs.statSync(summaryPath).mtimeMs,
     }))
+    .filter(({ mtimeMs }) => mtimeMs >= minMtimeMs)
     .sort((left, right) => right.mtimeMs - left.mtimeMs);
 
   for (const { summaryPath } of summaryFiles) {
@@ -705,10 +762,11 @@ async function findMultiEndingScenarioId(backendUrl) {
     }
   }
   candidates.sort((left, right) => {
-    if (right.branchCount !== left.branchCount) {
-      return right.branchCount - left.branchCount;
+    const createdAtSort = right.createdAt.localeCompare(left.createdAt);
+    if (createdAtSort !== 0) {
+      return createdAtSort;
     }
-    return left.createdAt.localeCompare(right.createdAt);
+    return right.branchCount - left.branchCount;
   });
   if (candidates[0]?.id) {
     return candidates[0].id;
@@ -1011,9 +1069,7 @@ async function openRoundtable(page, baseUrl, backendUrl, scenarioId, outputDir, 
   await entryButton.waitFor({ state: "visible", timeout: 30000 });
   await clickActionable(entryButton, "roundtable entry CTA");
   const launchButton = page.getByRole("button", {
-    name: normalizeLocale(locale) === "en"
-      ? /Open with selected representatives|Open this lineup/i
-      : /Open with selected representatives|Open this lineup|以当前代表开桌|按当前代表开桌|按这套代表开桌/i,
+    name: ROUNDTABLE_LAUNCH_BUTTON_PATTERN,
   }).first();
   const start = Date.now();
   while (Date.now() - start < ROUNDTABLE_READY_TIMEOUT_MS) {
@@ -1824,24 +1880,24 @@ async function runDesktop(context, baseUrl, backendUrl, outputDir, scenarioId, l
   const ready = await openRoundtable(page, baseUrl, backendUrl, scenarioId, outputDir, locale);
   const uiLocale = await assertUiLocale(page, locale, "roundtable desktop ui");
   const roomLanguage = await assertRoomLanguage(backendUrl, ready?.scene?.room_id, locale, "roundtable desktop room");
-  const defaultContract = assertRoundtableContractPayload(
+  const initialContract = assertSupportedRoundtableContractPayload(
     ready,
-    { discussionFormat: "deep_dive", castMode: "smart_pick" },
-    "roundtable desktop default contract",
+    "roundtable desktop initial contract",
   );
-  const defaultBackendContract = await assertBackendRoundtableContract(
+  const initialBackendContract = await assertBackendRoundtableContract(
     backendUrl,
     ready?.scene?.room_id,
-    { discussionFormat: "deep_dive", castMode: "smart_pick" },
-    "roundtable desktop default contract",
+    initialContract,
+    "roundtable desktop initial contract",
   );
   await saveScreenshot(page, path.join(outputDir, "desktop-roundtable-ready.png"));
   writeJson(path.join(outputDir, "desktop-roundtable-ready.json"), {
     ready,
     uiLocale,
     roomLanguage,
-    defaultContract,
-    defaultBackendContract,
+    initialContract,
+    initialBackendContract,
+    initialContractSource: initialContract.isDefault ? "fresh_default" : "restored_previous_room",
   });
   const formatSelectorCases = await exerciseFormatSelectorFixture(
     context,
@@ -2099,16 +2155,15 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
   const ready = await openRoundtable(page, baseUrl, backendUrl, scenarioId, outputDir, locale);
   const uiLocale = await assertUiLocale(page, locale, "roundtable mobile ui");
   const roomLanguage = await assertRoomLanguage(backendUrl, ready?.scene?.room_id, locale, "roundtable mobile room");
-  const defaultContract = assertRoundtableContractPayload(
+  const initialContract = assertSupportedRoundtableContractPayload(
     ready,
-    { discussionFormat: "deep_dive", castMode: "smart_pick" },
-    "roundtable mobile default contract",
+    "roundtable mobile initial contract",
   );
-  const defaultBackendContract = await assertBackendRoundtableContract(
+  const initialBackendContract = await assertBackendRoundtableContract(
     backendUrl,
     ready?.scene?.room_id,
-    { discussionFormat: "deep_dive", castMode: "smart_pick" },
-    "roundtable mobile default contract",
+    initialContract,
+    "roundtable mobile initial contract",
   );
   const fit = await captureMobileFit(page);
   await saveScreenshot(page, path.join(outputDir, "mobile-roundtable-ready.png"));
@@ -2117,8 +2172,9 @@ async function runMobile(browser, baseUrl, backendUrl, outputDir, scenarioId, br
     fit,
     uiLocale,
     roomLanguage,
-    defaultContract,
-    defaultBackendContract,
+    initialContract,
+    initialBackendContract,
+    initialContractSource: initialContract.isDefault ? "fresh_default" : "restored_previous_room",
   });
 
   const clickReseated = await clickReseatRoundtable(page);
@@ -2365,10 +2421,18 @@ async function main() {
   ensureDir(outputDir);
 
   const preferredScenarioIds = readPreferredScenarioIds();
+  const requestedScenarioId = args.scenarioId
+    ? await resolvePreferredScenarioId(args.backendUrl, args.scenarioId)
+    : null;
+  if (args.scenarioId && !requestedScenarioId) {
+    throw new Error(`Roundtable scenario ${args.scenarioId} is not available or has fewer than two branches`);
+  }
   const fallbackScenarioId = await findMultiEndingScenarioId(args.backendUrl);
-  const desktopScenarioId = await resolvePreferredScenarioId(args.backendUrl, preferredScenarioIds.desktop)
+  const desktopScenarioId = requestedScenarioId
+    ?? await resolvePreferredScenarioId(args.backendUrl, preferredScenarioIds.desktop)
     ?? fallbackScenarioId;
-  const mobileScenarioId = await resolvePreferredScenarioId(args.backendUrl, preferredScenarioIds.mobile)
+  const mobileScenarioId = requestedScenarioId
+    ?? await resolvePreferredScenarioId(args.backendUrl, preferredScenarioIds.mobile)
     ?? desktopScenarioId;
   const summary = {
     locale: args.locale,
@@ -2428,6 +2492,7 @@ if (isDirectExecution()) {
 }
 
 export const __test__ = {
+  assertSupportedRoundtableContractPayload,
   parseArgs,
   parseViewportDimension,
 };

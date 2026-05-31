@@ -6,6 +6,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ReplayPlaybackControl } from './ReplayPlaybackControl';
 
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, options?: { speed?: number }) => {
+      if (key === 'replay.speed_option') {
+        return `${options?.speed}x localized speed`;
+      }
+      return key;
+    },
+  }),
+}));
+
 afterEach(() => cleanup());
 
 function renderCtrl(overrides?: Partial<Parameters<typeof ReplayPlaybackControl>[0]>) {
@@ -71,6 +82,13 @@ describe('ReplayPlaybackControl', () => {
     renderCtrl({ speed: 2 });
     expect(screen.getByTestId('replay-playback-control-speed-2x')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByTestId('replay-playback-control-speed-1x')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('localizes speed button accessible labels', () => {
+    renderCtrl({ speed: 2 });
+    expect(screen.getByLabelText('2x localized speed')).toBe(
+      screen.getByTestId('replay-playback-control-speed-2x'),
+    );
   });
 
   it('fires onSpeedChange with the clicked speed', () => {

@@ -25,11 +25,11 @@ const proxyConfig = {
   },
 }
 const legacyTargets = [
-  'chrome >= 79',
-  'edge >= 79',
-  'firefox >= 78',
-  'safari >= 12',
-  'iOS >= 12',
+  'chrome >= 111',
+  'edge >= 111',
+  'firefox >= 113',
+  'safari >= 16.2',
+  'iOS >= 16.2',
 ]
 
 // https://vite.dev/config/

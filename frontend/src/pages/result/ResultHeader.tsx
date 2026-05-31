@@ -189,6 +189,14 @@ export default function ResultHeader() {
           >
             {t('result.leaderboard_link')}
           </button>
+          {capabilities?.prediction_journal?.enabled && (
+            <button
+              className="btn btn-ghost"
+              onClick={() => navigate('/me/journal')}
+            >
+              {t('result.journal_link')}
+            </button>
+          )}
           {causalGraphHref && (
             <a
               className="btn btn-ghost result-actions__graph-link"

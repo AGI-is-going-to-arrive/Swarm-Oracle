@@ -4,6 +4,8 @@ English | [中文](USAGE.md)
 
 This guide walks you through one complete simulation and explains how each mode works. Before first use, configure your LLM and start the backend and frontend by following the [README](../README.en.md). Local development uses backend port `18927` and frontend port `18928`; open `http://localhost:18928` in your browser.
 
+For the per-feature catalog, see [FEATURES.en.md](FEATURES.en.md).
+
 > Tip: in local development, the backend must be running on `18927` before you open the frontend, otherwise the page will keep waiting or show an error.
 
 ---
@@ -41,7 +43,7 @@ The result page also lets you export Markdown, generate sharing copy, copy a per
 
 ### 1. Multi-Branch Simulation
 
-Type a question on the home page and select **Start Simulation**. One question splits into multiple worldlines. Each worldline includes character dialogue, probability, and an ending. Advanced settings can change input cleanup mode, display mode, reasoning effort, and runtime style.
+Type a question on the home page and select **Start Simulation**. One question splits into multiple worldlines. Each worldline includes character dialogue, probability, and an ending. Advanced settings can change input cleanup mode, display mode, reasoning effort, and simulation mode (Conservative / Balanced / Exploratory).
 
 ### 2. Debate Arena
 
