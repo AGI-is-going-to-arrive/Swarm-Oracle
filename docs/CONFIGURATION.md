@@ -21,7 +21,7 @@ SwarmOracle 兼容任何 OpenAI 格式的 API（OpenAI、各类代理、Ollama �
 |--------|------|------|
 | `LLM_RESPONSES_URL` | LLM 服务地址 | `https://api.openai.com/v1` |
 | `LLM_API_KEY` | API 密钥 | `sk-...` |
-| `LLM_MODEL_NAME` | 模型名称（取决于你的服务） | `gpt-4o` / `deepseek-chat` / `qwen-plus` |
+| `LLM_MODEL_NAME` | 模型名称（取决于你的服务） | `gpt-5.5` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
 
 > 安全提示：模板里的 `your-api-key-here` 只是占位值。只要 `LLM_RESPONSES_URL` 不是本地地址，后端会拒绝用占位 key 继续运行——换成你的真实密钥即可。如果你用的是本地网关（如 Ollama），可以保持占位。
 

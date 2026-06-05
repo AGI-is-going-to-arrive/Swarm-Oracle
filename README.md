@@ -11,7 +11,7 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 在线介绍页：**https://agi-is-going-to-arrive.github.io/test1/**
 
 - 介绍页源码在 `site/`；推送 `main` 且变更 `site/**` 或 `.github/workflows/pages.yml` 时，会由该 Pages workflow 自动部署到 GitHub Pages。
-- 页面内嵌 1080p 双语介绍视频（`site/assets/video/`）。
+- 页面内嵌 1080p 双语介绍视频（`site/assets/video/`），并提供中英字幕。
 - 完整 4K 母带约 350MB/条，超过 GitHub 单文件 100MB 上限，未纳入仓库，保留在本地 `video-intro/`（已 gitignore）；如需入库可改用 Git LFS。
 
 ## 功能亮点

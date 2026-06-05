@@ -21,7 +21,7 @@ SwarmOracle works with any OpenAI-compatible API, including OpenAI, compatible g
 |----------|---------|---------|
 | `LLM_RESPONSES_URL` | LLM service URL | `https://api.openai.com/v1` |
 | `LLM_API_KEY` | API key | `sk-...` |
-| `LLM_MODEL_NAME` | Model name from your provider | `gpt-4o` / `deepseek-chat` / `qwen-plus` |
+| `LLM_MODEL_NAME` | Model name from your provider | `gpt-5.5` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
 
 > Security note: `your-api-key-here` is only a placeholder. If `LLM_RESPONSES_URL` is not a local address, the backend refuses to start with a placeholder key. Replace it with your real key. If you use a local gateway such as Ollama, the placeholder is allowed.
 

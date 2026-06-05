@@ -11,7 +11,7 @@ SwarmOracle lets you ask hypothetical questions ("What if...?"). A group of AI a
 Live intro page: **https://agi-is-going-to-arrive.github.io/test1/**
 
 - The intro page source lives in `site/` and is auto-deployed to GitHub Pages by `.github/workflows/pages.yml` on pushes to `main` that change `site/**` or the workflow file itself.
-- The page embeds a 1080p bilingual intro video (`site/assets/video/`).
+- The page embeds a 1080p bilingual intro video (`site/assets/video/`) with Chinese and English captions.
 - The full 4K masters are ~350MB each, which exceeds GitHub's 100MB per-file limit, so they are kept out of git and stay local in `video-intro/` (gitignored). Use Git LFS if you want to commit them.
 
 ## Features
