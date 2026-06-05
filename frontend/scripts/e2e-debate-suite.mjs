@@ -630,16 +630,10 @@ async function openBet(page, mode, locale) {
     return;
   }
 
-  const clicked = await page.evaluate(() => {
-    const buttons = Array.from(document.querySelectorAll(".debate-hero__bottom .debate-controls .btn"));
-    const button = buttons[1];
-    if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
-    button.click();
-    return true;
+  await clickVisibleEnabledButton(page, "Open\\s*Bet|下注", {
+    scopeSelector: ".debate-hero__bottom .debate-controls",
+    timeout: 5000,
   });
-  if (!clicked) {
-    throw new Error("Failed to click desktop debate bet button");
-  }
 }
 
 async function openResult(page, mode, locale) {
@@ -708,6 +702,16 @@ async function disableAutoReveal(page) {
   }
   await clickVisibleEnabledButton(page, "Auto\\s*reveal:\\s*On|自动揭示:\\s*开启", {
     timeout: 5000,
+  });
+}
+
+async function markArgumentMapTourSeen(page) {
+  await page.evaluate(() => {
+    try {
+      window.localStorage.setItem("swarm.argmap.tour_seen", "1");
+    } catch {
+      // Keep the e2e path usable in storage-restricted browser contexts.
+    }
   });
 }
 
@@ -810,6 +814,7 @@ async function runDebateFlow(page, {
 
   const { caseConfig } = surfaceConfig;
   await setLanguage(page, baseUrl, caseConfig.locale);
+  await markArgumentMapTourSeen(page);
 
   const created = await createDebateViaApi(baseUrl, {
     question: caseConfig.question,
@@ -837,8 +842,6 @@ async function runDebateFlow(page, {
     throw new Error(`debate live server phase insights missing: ${JSON.stringify(live?.page?.debate ?? null)}`);
   }
   await disableAutoReveal(page);
-  const liveHooks = await probeDebateAutomationHooks(page, ["panel"]);
-  assertDebateAutomationHooks("debate live hooks", liveHooks, { panel: "data_url" });
   const stageMapList = page.locator(".debate-stage-summary-list");
   if (await stageMapList.count() === 0) {
     await page.locator('[data-testid="debate-stage-map-toggle"]').click();
@@ -853,29 +856,29 @@ async function runDebateFlow(page, {
     throw new Error(`debate live surface missing new product depth blocks: ${JSON.stringify(liveSurfaceState)}`);
   }
   writeJson(path.join(outputDir, "live.json"), live);
-  writeJson(path.join(outputDir, "live-hooks.json"), liveHooks);
   if (mode === "mobile") {
     await openBet(page, mode, caseConfig.locale);
     await waitForModal(page, ".debate-modal", 5000);
-    await saveScreenshot(page, path.join(outputDir, "live.png"));
   } else {
-    await saveScreenshot(page, path.join(outputDir, "live.png"));
     await openBet(page, mode, caseConfig.locale);
     await waitForModal(page, ".debate-modal", 5000);
   }
-  const betHookCapture = await readHookCaptureState(page, ["panel", "modal"]);
   const betOpenPayload = await readAutomation(page);
   const betModalState = await captureDebateBetModal(page);
   writeJson(path.join(outputDir, "bet-open.json"), {
     automation: betOpenPayload,
-    hook_capture: betHookCapture,
+    hook_capture: null,
     modal_state: betModalState,
   });
-  await saveScreenshot(page, path.join(outputDir, "bet-open.png"));
 
   await clickDebateBetOption(page, 0, caseConfig.betKindIndex);
   await clickDebateBetOption(page, 1, caseConfig.betTargetIndex);
   await submitDebateBet(page);
+  const liveHooks = await probeDebateAutomationHooks(page, ["panel"]);
+  assertDebateAutomationHooks("debate live hooks", liveHooks, { panel: "data_url" });
+  writeJson(path.join(outputDir, "live-hooks.json"), liveHooks);
+  await saveScreenshot(page, path.join(outputDir, "live.png"));
+  await saveScreenshot(page, path.join(outputDir, "bet-open.png"));
   await page.waitForTimeout(300);
   const betSubmittedPayload = await readAutomation(page);
   writeJson(path.join(outputDir, "bet-submitted.json"), {

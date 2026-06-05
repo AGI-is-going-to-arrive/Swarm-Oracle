@@ -522,18 +522,17 @@ export function useSimulationDirectorState({
     if (!id || !storedScenarioMeta) return;
     const desiredState = scenarioMetaToDirectorState(storedScenarioMeta);
     if (!hasMeaningfulScenarioDirectorState(desiredState)) return;
-    if (hasScenarioDirectorAuthority(backendDirectorState)) return;
+    if (hasScenarioDirectorAuthority(backendDirectorState)) {
+      directorBackfillSignatureRef.current = null;
+      return;
+    }
     const backfillSignature = JSON.stringify({ id, desiredState });
     if (directorBackfillSignatureRef.current === backfillSignature) return;
     directorBackfillSignatureRef.current = backfillSignature;
     let persistStarted = false;
     const timeoutId = window.setTimeout(() => {
       persistStarted = true;
-      void persistDirectorMeta(storedScenarioMeta).finally(() => {
-        if (directorBackfillSignatureRef.current === backfillSignature) {
-          directorBackfillSignatureRef.current = null;
-        }
-      });
+      void persistDirectorMeta(storedScenarioMeta);
     }, 0);
     return () => {
       window.clearTimeout(timeoutId);
@@ -546,7 +545,10 @@ export function useSimulationDirectorState({
   useEffect(() => {
     if (isReplayMode) return;
     if (!id || !storedScenarioMeta) return;
-    if (hasScenarioGameplayAuthority(backendGameplayState)) return;
+    if (hasScenarioGameplayAuthority(backendGameplayState)) {
+      gameplayBackfillSignatureRef.current = null;
+      return;
+    }
     const mergedMeta = mergeScenarioMetaWithGameplayState(storedScenarioMeta, backendGameplayState);
     const mergedState = scenarioMetaToGameplayState(mergedMeta);
     if (!hasMeaningfulScenarioGameplayState(mergedState)) return;
@@ -557,11 +559,7 @@ export function useSimulationDirectorState({
     let persistStarted = false;
     const timeoutId = window.setTimeout(() => {
       persistStarted = true;
-      void persistGameplayState(mergedMeta).finally(() => {
-        if (gameplayBackfillSignatureRef.current === backfillSignature) {
-          gameplayBackfillSignatureRef.current = null;
-        }
-      });
+      void persistGameplayState(mergedMeta);
     }, 0);
     return () => {
       window.clearTimeout(timeoutId);

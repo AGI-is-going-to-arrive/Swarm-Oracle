@@ -224,10 +224,15 @@ jobs:
           LLM_RESPONSES_URL: ${{ secrets.LLM_RESPONSES_URL }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL_NAME: ${{ secrets.LLM_MODEL_NAME }}
+          MOCK_LLM_PORT: "18319"
+          MOCK_LLM_DELAY_MS: "100"
         run: |
           set -euo pipefail
 
           cleanup() {
+            if [ -n "${MOCK_LLM_PID:-}" ]; then
+              kill "${MOCK_LLM_PID}" || true
+            fi
             if [ -n "${BACKEND_PID:-}" ]; then
               kill "${BACKEND_PID}" || true
             fi
@@ -240,10 +245,12 @@ jobs:
           if [ "${{ needs.release-signoff-preflight.outputs.can_run }}" = "true" ]; then
             backend/.venv/bin/python -m uvicorn --app-dir backend app.main:app --host 127.0.0.1 --port 18927 > /tmp/swarm-backend.log 2>&1 &
           else
-            LLM_RESPONSES_URL=http://127.0.0.1:8317/v1 \
-            LLM_API_KEY=sk-12345678 \
+            node scripts/mock-llm-server.mjs > /tmp/swarm-mock-llm-smoke.log 2>&1 &
+            MOCK_LLM_PID=$!
+            LLM_RESPONSES_URL=http://127.0.0.1:${MOCK_LLM_PORT}/v1/chat/completions \
+            LLM_API_KEY=mock-ci \
             LLM_MODEL_NAME=gpt-5.4-mini \
-            DEBATE_USE_LLM=false \
+            DEBATE_USE_LLM=true \
               backend/.venv/bin/python -m uvicorn --app-dir backend app.main:app --host 127.0.0.1 --port 18927 > /tmp/swarm-backend.log 2>&1 &
           fi
           BACKEND_PID=$!
@@ -271,6 +278,8 @@ jobs:
 
           wait_for("http://127.0.0.1:18927/")
           wait_for("http://127.0.0.1:18928/")
+          if "${{ needs.release-signoff-preflight.outputs.can_run }}" != "true":
+              wait_for("http://127.0.0.1:18319/healthz")
           PY
 
           cd frontend
@@ -289,6 +298,7 @@ jobs:
             frontend/output/e2e/ci-debate-signoff
             /tmp/swarm-backend.log
             /tmp/swarm-frontend.log
+            /tmp/swarm-mock-llm-smoke.log
 
   release-signoff-fixture:
     runs-on: ubuntu-latest
