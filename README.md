@@ -6,6 +6,14 @@
 
 SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI 代理群体模拟多条故事线，展示不同可能性。
 
+## 在线介绍页 / Live demo
+
+在线介绍页：**https://agi-is-going-to-arrive.github.io/test1/**
+
+- 介绍页源码在 `site/`，推送 `main` 时由 `.github/workflows/pages.yml` 自动部署到 GitHub Pages。
+- 页面内嵌 1080p 双语介绍视频（`site/assets/video/`）。
+- 完整 4K 母带约 350MB/条，超过 GitHub 单文件 100MB 上限，未纳入仓库，保留在本地 `video-intro/`（已 gitignore）；如需入库可改用 Git LFS。
+
 ## 功能亮点
 
 - **多分支推演** — 一个问题，多条故事线，看不同结局
@@ -93,7 +101,7 @@ npm run dev
 |--------|------|------|
 | `LLM_RESPONSES_URL` | LLM 服务地址 | `https://api.openai.com/v1` |
 | `LLM_API_KEY` | API 密钥 | `sk-...` |
-| `LLM_MODEL_NAME` | 模型名称 | `gpt-4o` |
+| `LLM_MODEL_NAME` | 模型名称 | `gpt-5.5` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
 | `ENABLE_WEB_SEARCH` | 搜索增强（可选） | `false` |
 | `WEB_SEARCH_PROVIDER` | 搜索服务商（开启搜索时） | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
 

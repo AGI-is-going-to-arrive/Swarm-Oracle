@@ -19,6 +19,7 @@
   <a class="nav__brand" href="#top">SwarmOracle <small data-zh="群体预言机" data-en="Oracle">群体预言机</small></a>
   <div class="nav__spacer"></div>
   <nav class="nav__links" aria-label="Primary">
+    <a class="nav__link" href="#how" data-zh="如何运作" data-en="How">如何运作</a>
     <a class="nav__link" href="#values" data-zh="价值" data-en="Value">价值</a>
     <a class="nav__link" href="#video" data-zh="视频" data-en="Video">视频</a>
     <a class="nav__link" href="#features" data-zh="功能" data-en="Features">功能</a>
@@ -41,6 +42,7 @@
 
 <div class="drawer" id="drawer">
   <button class="drawer__close" id="drawerClose" aria-label="Close">×</button>
+  <a href="#how" data-zh="如何运作" data-en="How">如何运作</a>
   <a href="#values" data-zh="价值主张" data-en="Value">价值主张</a>
   <a href="#video" data-zh="介绍视频" data-en="Video">介绍视频</a>
   <a href="#features" data-zh="功能" data-en="Features">功能</a>
@@ -70,9 +72,57 @@
     <div class="hero__card reveal" style="--d:430ms">
       <div class="hero__cardglow" aria-hidden="true"></div>
       <figure class="hero__frame">
-        <img src="assets/swarmoracle-promo-v1.zh.theater.png" data-src-zh="assets/swarmoracle-promo-v1.zh.theater.png" data-src-en="assets/swarmoracle-promo-v1.en.theater.png" alt="SwarmOracle 像素剧场：AI 代理群体在剧场舞台上实时推演多条世界线" data-alt-zh="SwarmOracle 像素剧场：AI 代理群体在剧场舞台上实时推演多条世界线" data-alt-en="SwarmOracle pixel theater: a swarm of AI agents simulating worldlines live on stage" fetchpriority="high" decoding="async" width="1581" height="774">
-        <figcaption class="hero__frame-tag" data-zh="像素剧场 · 实时推演" data-en="Pixel theater · live run">像素剧场 · 实时推演</figcaption>
+        <img src="assets/swarmoracle-promo-v1.zh.simulation.png" data-src-zh="assets/swarmoracle-promo-v1.zh.simulation.png" data-src-en="assets/swarmoracle-promo-v1.en.simulation.png" alt="SwarmOracle 经典推演视图：分支树、Agent 面板和实时发言，AI 代理群体推演多条世界线" data-alt-zh="SwarmOracle 经典推演视图：分支树、Agent 面板和实时发言，AI 代理群体推演多条世界线" data-alt-en="SwarmOracle classic simulation view: branch tree, agent panel and live messages as a swarm of AI agents runs multiple worldlines" fetchpriority="high" decoding="async" width="1581" height="774">
+        <figcaption class="hero__frame-tag" data-zh="经典推演视图 · 实时推演" data-en="Classic view · live run">经典推演视图 · 实时推演</figcaption>
       </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ════ HOW IT WORKS ════ -->
+<section class="section" id="how" aria-labelledby="how-title">
+  <div class="shell shell--wide">
+    <div class="section__head reveal">
+      <div class="rule" aria-hidden="true"></div>
+      <p class="kicker" data-zh="如何运作" data-en="How it works">如何运作</p>
+      <h2 class="section__title" id="how-title" data-zh="三步：提问 → 推演 → 结果" data-en="Three steps: ask → simulate → result">三步：提问 → 推演 → 结果</h2>
+      <p class="how__intro" data-zh="一条主链路：写下一个「如果……会怎样？」，AI 代理群体替你推演多条世界线，最后得到回答原问题的结果与分享卡片。" data-en="One main flow: write a &ldquo;what if?&rdquo;, let a swarm of AI agents play out many worldlines, and get an answer to your question plus a shareable card.">一条主链路：写下一个「如果……会怎样？」，AI 代理群体替你推演多条世界线，最后得到回答原问题的结果与分享卡片。</p>
+    </div>
+    <ol class="how">
+      <li class="how__step reveal">
+        <figure class="how__shot">
+          <span class="how__num" aria-hidden="true">1</span>
+          <img loading="lazy" decoding="async" width="560" height="300" src="assets/screenshots/01-home.png" alt="SwarmOracle 首页提问框：输入「如果……会怎样？」问题，用滑块调推演轮数和 Agent 数量" data-alt-zh="SwarmOracle 首页提问框：输入「如果……会怎样？」问题，用滑块调推演轮数和 Agent 数量" data-alt-en="SwarmOracle home page question box: type a what-if question and set rounds and agent count with sliders">
+        </figure>
+        <div class="how__body">
+          <h3 data-zh="提出一个「如果……会怎样？」问题" data-en="Ask one &ldquo;what if?&rdquo; question">提出一个「如果……会怎样？」问题</h3>
+          <p data-zh="在首页输入框写下假设问题（如「如果诸葛亮多活10年？」），用滑块调推演轮数和 Agent 数量（默认各 5），点「开始推演」并确认。" data-en="Type your what-if question on the home page, set rounds and agent count with the sliders (default 5 each), click Start Simulation and confirm.">在首页输入框写下假设问题（如「如果诸葛亮多活10年？」），用滑块调推演轮数和 Agent 数量（默认各 5），点「开始推演」并确认。</p>
+        </div>
+      </li>
+      <li class="how__step reveal" style="--d:90ms">
+        <figure class="how__shot">
+          <span class="how__num" aria-hidden="true">2</span>
+          <img loading="lazy" decoding="async" width="560" height="300" src="assets/screenshots/21-simulation.png" alt="SwarmOracle 经典推演视图：分支树、Agent 面板和时间线随每轮实时更新，遇分歧点自动分叉" data-alt-zh="SwarmOracle 经典推演视图：分支树、Agent 面板和时间线随每轮实时更新，遇分歧点自动分叉" data-alt-en="SwarmOracle classic simulation view: branch tree, agent panel and timeline update each round, forking at divergence points">
+        </figure>
+        <div class="how__body">
+          <h3 data-zh="AI 代理群体实时推演多条世界线" data-en="Watch the AI agent swarm simulate live">AI 代理群体实时推演多条世界线</h3>
+          <p data-zh="进入推演页后默认经典视图：顶部显示问题和「推演中」，分支树、Agent 面板和时间线随每轮实时更新，遇到分歧点自动分叉出新世界线。" data-en="The classic view opens with your question and a Running badge; the branch tree, agent panel and timeline update each round, forking new worldlines at divergence points.">进入推演页后默认经典视图：顶部显示问题和「推演中」，分支树、Agent 面板和时间线随每轮实时更新，遇到分歧点自动分叉出新世界线。</p>
+        </div>
+      </li>
+      <li class="how__step reveal" style="--d:180ms">
+        <figure class="how__shot">
+          <span class="how__num" aria-hidden="true">3</span>
+          <img loading="lazy" decoding="async" width="560" height="300" src="assets/screenshots/02-result.png" alt="SwarmOracle 结果页：一句话回答原问题并给出置信度，每条世界线带标题、概率和故事摘要，可导出分享卡片" data-alt-zh="SwarmOracle 结果页：一句话回答原问题并给出置信度，每条世界线带标题、概率和故事摘要，可导出分享卡片" data-alt-en="SwarmOracle result page: one-line answer with a confidence, each worldline's title, probability and summary, plus an exportable share card">
+        </figure>
+        <div class="how__body">
+          <h3 data-zh="得到回答原问题的结果与分享卡片" data-en="Get an answer plus a shareable card">得到回答原问题的结果与分享卡片</h3>
+          <p data-zh="推演完成后点「查看结果」，结果页用一句话回答原问题并给出置信度，每条世界线带标题、概率和故事摘要，可复制链接或导出 1200×630 预测卡片。" data-en="When it finishes, open View Results: one-line answer to your question with a confidence, each worldline's title, probability and summary, plus a copyable link and a 1200×630 prediction card.">推演完成后点「查看结果」，结果页用一句话回答原问题并给出置信度，每条世界线带标题、概率和故事摘要，可复制链接或导出 1200×630 预测卡片。</p>
+        </div>
+      </li>
+    </ol>
+    <div class="how__notes reveal" style="--d:120ms">
+      <p class="how__note" data-zh="开箱即用：核心推演与多数功能（结果结论、因果图谱、知识图谱、反事实对比、辩论、圆桌）默认开启；只有「搜索增强」需自行配置搜索 provider。" data-en="Works out of the box: core simulation and most features (result verdict, causal graph, knowledge graph, counterfactual compare, debate, roundtable) are on by default; only Search-Augmented Simulation needs you to configure a search provider.">开箱即用：核心推演与多数功能（结果结论、因果图谱、知识图谱、反事实对比、辩论、圆桌）默认开启；只有「搜索增强」需自行配置搜索 provider。</p>
+      <p class="how__note" data-zh="前置条件：需要一个 OpenAI 兼容的 LLM 接口（在 .env 配置，或在首页高级设置里临时填入自己的 key）。" data-en="Prerequisite: you need one OpenAI-compatible LLM endpoint (configured in .env, or filled in temporarily under Advanced settings on the home page).">前置条件：需要一个 OpenAI 兼容的 LLM 接口（在 .env 配置，或在首页高级设置里临时填入自己的 key）。</p>
     </div>
   </div>
 </section>
@@ -232,7 +282,7 @@ npm run dev"><span data-zh="复制" data-en="Copy">复制</span></button></div>
         <p class="kicker" style="margin-bottom:1rem" data-zh="必填配置（占位，非真实密钥）" data-en="Required config (placeholders, not real keys)">必填配置（占位，非真实密钥）</p>
         <div class="qs__config-row"><code>LLM_RESPONSES_URL</code><span>https://api.openai.com/v1</span></div>
         <div class="qs__config-row"><code>LLM_API_KEY</code><span>sk-…</span></div>
-        <div class="qs__config-row"><code>LLM_MODEL_NAME</code><span>gpt-4o / deepseek-chat / qwen-plus</span></div>
+        <div class="qs__config-row"><code>LLM_MODEL_NAME</code><span data-zh="示例：gpt-5.5 / deepseek-v4-pro / gemini-3.5-flash / claude-opus-4-8" data-en="e.g. gpt-5.5 / deepseek-v4-pro / gemini-3.5-flash / claude-opus-4-8">示例：gpt-5.5 / deepseek-v4-pro / gemini-3.5-flash / claude-opus-4-8</span></div>
       </div>
     </div>
   </div>

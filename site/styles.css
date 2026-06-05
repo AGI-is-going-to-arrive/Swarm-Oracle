@@ -221,6 +221,20 @@ html[lang="zh"] .hero__frame-tag { text-transform: none; letter-spacing: 0.08em;
 .value__body h3 { font-family: var(--font-body); font-weight: 600; font-size: 1.2rem; color: var(--ivory-50); letter-spacing: 0.01em; margin-bottom: 0.5rem; }
 .value__body p { color: var(--bone-300); font-size: var(--t-sm); line-height: 1.6; max-width: 42ch; }
 
+/* ════════ HOW IT WORKS ════════ */
+.how__intro { margin-top: 1rem; color: var(--bone-300); font-size: var(--t-sm); line-height: 1.6; max-width: 60ch; }
+.how { list-style: none; display: grid; grid-template-columns: 1fr; gap: var(--space-4); }
+.how__step { display: flex; flex-direction: column; border: 1px solid var(--metal-line); border-radius: 4px; overflow: hidden; background: var(--obsidian-800); transition: transform var(--dur-mid) var(--ease-cine), box-shadow var(--dur-mid), border-color var(--dur-mid); }
+.how__step:hover { transform: translateY(-4px); box-shadow: var(--shadow-soft); border-color: var(--amethyst-500); }
+.how__shot { position: relative; border-bottom: 1px solid var(--metal-line); overflow: hidden; background: var(--obsidian-850); }
+.how__shot img { width: 100%; height: 200px; object-fit: cover; object-position: top; }
+.how__num { position: absolute; top: 0.7rem; left: 0.8rem; font-family: var(--font-display); font-size: 2.4rem; line-height: 1; color: transparent; -webkit-text-stroke: 1px var(--amethyst-500); text-shadow: 0 2px 14px oklch(8% 0.02 285 / 0.7); }
+.how__body { padding: 1.2rem 1.3rem 1.5rem; display: flex; flex-direction: column; gap: 0.5rem; flex: 1; }
+.how__body h3 { font-family: var(--font-body); font-weight: 600; font-size: 1.08rem; color: var(--ivory-50); }
+.how__body p { color: var(--bone-300); font-size: var(--t-sm); line-height: 1.55; }
+.how__notes { margin-top: var(--space-5); border-top: 1px solid var(--metal-line); padding-top: var(--space-5); display: grid; gap: 0.7rem; }
+.how__note { font-size: var(--t-sm); color: var(--bone-300); line-height: 1.55; max-width: 70ch; padding-left: 1rem; border-left: 1px solid var(--amethyst-500); }
+
 /* ════════ VIDEO ════════ */
 .theater { position: relative; border: 1px solid var(--metal-line); border-radius: 4px; overflow: hidden; background: var(--obsidian-900); box-shadow: var(--shadow-soft); aspect-ratio: 16 / 9; }
 .theater__video { display: block; width: 100%; height: 100%; aspect-ratio: 16 / 9; object-fit: cover; object-position: top; background: var(--obsidian-900); }
@@ -312,6 +326,7 @@ html[lang="zh"] .footer__legal { text-transform: none; letter-spacing: 0.06em; f
   .value:nth-child(even) { margin-top: 2.5rem; }
   .mode { grid-template-columns: 1fr 1fr; gap: var(--space-7); }
   .mode:nth-child(even) .mode__text { order: 2; }
+  .how { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 1023px) {
   .nav__links { display: none; }
@@ -348,12 +363,13 @@ html[lang="zh"] .footer__legal { text-transform: none; letter-spacing: 0.06em; f
   body::before, body::after, .cursor-glow, .hero__cardglow, .cta__glow { display: none; }
   /* Keep every framed surface legible with system borders */
   .nav.scrolled, .hero__frame, .theater, .fcard, .mode__fig, .code,
+  .how__step, .how__shot,
   .lang, .qs__tab, .qs__tabs, .btn, .nav__burger, .drawer__close {
     border: 1px solid CanvasText;
   }
   .hero__frame img, .theater__video { opacity: 1; }
   /* Stroked display numerals fall back to system text color */
-  .value__num, .mode__num { color: CanvasText; -webkit-text-stroke: 0; }
+  .value__num, .mode__num, .how__num { color: CanvasText; -webkit-text-stroke: 0; text-shadow: none; }
   /* Active language / tab selection must remain perceivable */
   .lang button.on, .qs__tab.on, .nav__link:hover { color: Highlight; }
   .btn--primary { background: ButtonFace; color: ButtonText; }

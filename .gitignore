@@ -101,3 +101,6 @@ frontend/CLAUDE.md
 /p0-spot-check/
 frontend/.stitch/
 frontend/design-review-p0-bridge-guide.md
+
+# Remotion intro-video project — 4K masters (~350MB each) exceed GitHub 100MB per-file limit; kept local only
+/video-intro/

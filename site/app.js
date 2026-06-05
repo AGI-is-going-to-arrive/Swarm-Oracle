@@ -34,7 +34,7 @@
   ];
 
   var MODES = [
-    { n: "01", img: ["02-result.png"], zt: "多分支推演", et: "Multi-branch simulation",
+    { n: "01", img: ["21-simulation.png", "02-result.png"], zt: "多分支推演", et: "Multi-branch simulation",
       zd: "一个「如果……会怎样？」问题，由 AI 代理群体模拟多条故事线，结果页用一句话回答原问题并给出置信度，每条世界线带标题、概率、故事摘要和直接回答。", ed: "One “what if?” question, simulated by a swarm of AI agents into multiple storylines; the result page answers the original question in one line with a confidence, and every worldline carries a title, probability, story summary and a direct answer." },
     { n: "02", img: ["20-debate-arena.png", "15-debate.png"], zt: "辩论竞技场", et: "Debate Arena",
       zd: "辩论竞技场创建正方、反方和评委，按固定阶段推进一局更短的对抗讨论；辩论结果页展示比分、角色和裁判结论，可加载论点地图。", ed: "The Debate Arena creates affirmative, opposing and judge roles and runs a shorter staged debate; the result page shows the score, roles and the judge’s verdict, and can load the argument map." },

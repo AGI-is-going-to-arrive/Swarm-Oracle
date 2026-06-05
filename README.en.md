@@ -6,6 +6,14 @@ English | [中文](README.md)
 
 SwarmOracle lets you ask hypothetical questions ("What if...?"). A group of AI agents simulates multiple storylines and shows different possible outcomes.
 
+## Live demo
+
+Live intro page: **https://agi-is-going-to-arrive.github.io/test1/**
+
+- The intro page source lives in `site/` and is auto-deployed to GitHub Pages by `.github/workflows/pages.yml` on pushes that change `site/**`.
+- The page embeds a 1080p bilingual intro video (`site/assets/video/`).
+- The full 4K masters are ~350MB each, which exceeds GitHub's 100MB per-file limit, so they are kept out of git and stay local in `video-intro/` (gitignored). Use Git LFS if you want to commit them.
+
 ## Features
 
 - **Multi-branch simulation**: One question, multiple storylines, different endings.
@@ -93,7 +101,7 @@ Core configuration lives in `.env.example` for local development or `.env.docker
 |--------|------|------|
 | `LLM_RESPONSES_URL` | LLM service URL | `https://api.openai.com/v1` |
 | `LLM_API_KEY` | API key | `sk-...` |
-| `LLM_MODEL_NAME` | Model name | `gpt-4o` |
+| `LLM_MODEL_NAME` | Model name | `gpt-5.5` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
 | `ENABLE_WEB_SEARCH` | Search enhancement (optional) | `false` |
 | `WEB_SEARCH_PROVIDER` | Search provider (when search is enabled) | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
 
