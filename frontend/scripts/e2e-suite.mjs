@@ -2142,7 +2142,7 @@ async function runCaptureModesCase(page, {
     question,
     // Keep this case in a live, capture-ready theater state long enough for
     // prediction/gameplay modal probes before the scenario auto-completes.
-    rounds: FIXTURE_MODE ? 4 : 2,
+    rounds: FIXTURE_MODE ? 12 : 4,
     numAgents: 3,
     visualizationEnabled: true,
   });
@@ -2198,7 +2198,15 @@ async function runCaptureModesCase(page, {
   writeDataUrlFile(path.join(outputDir, "panel.png"), beforeOpen.panel);
   writeDataUrlFile(path.join(outputDir, "canvas.png"), beforeOpen.canvas);
 
-  await page.getByRole("button", { name: /预测|predict/i }).click();
+  const predictionButton = page.getByRole("button", { name: /预测|predict/i });
+  await waitForAutomation(
+    page,
+    (payload) => payload.page?.controls?.can_open_prediction === true,
+    10000,
+    "prediction button still open for capture",
+  );
+  await predictionButton.waitFor({ state: "visible", timeout: 10000 });
+  await predictionButton.click();
   const predictionOpen = await waitForAutomation(
     page,
     (payload) => payload.page?.controls?.active_modal === "prediction",
