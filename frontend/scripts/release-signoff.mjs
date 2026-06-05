@@ -348,11 +348,15 @@ function runStep(summary, runArgs, stepId, command, commandArgs, options = {}) {
   }
 }
 
-function buildRound7GraphLiveStepSpecs(baseUrl) {
+function buildRound7GraphLiveStepSpecs(baseUrl, headless = false) {
   return [
     {
       id: "phase3a_graph_default",
-      commandArgs: ["scripts/e2e-phase3-batch-a.mjs", "full"],
+      commandArgs: [
+        "scripts/e2e-phase3-batch-a.mjs",
+        "full",
+        ...(headless ? ["--headless"] : []),
+      ],
       env: {
         SWARM_URL: baseUrl,
         SWARM_E2E_MODE: "live",
@@ -360,7 +364,11 @@ function buildRound7GraphLiveStepSpecs(baseUrl) {
     },
     {
       id: "phase3b_graph_default",
-      commandArgs: ["scripts/e2e-phase3-batch-b.mjs", "full"],
+      commandArgs: [
+        "scripts/e2e-phase3-batch-b.mjs",
+        "full",
+        ...(headless ? ["--headless"] : []),
+      ],
       env: {
         SWARM_URL: baseUrl,
         SWARM_E2E_MODE: "live",
@@ -368,7 +376,11 @@ function buildRound7GraphLiveStepSpecs(baseUrl) {
     },
     {
       id: "phase3c_result_graphs",
-      commandArgs: ["scripts/e2e-phase3-batch-c.mjs", "full"],
+      commandArgs: [
+        "scripts/e2e-phase3-batch-c.mjs",
+        "full",
+        ...(headless ? ["--headless"] : []),
+      ],
       env: {
         SWARM_URL: baseUrl,
         SWARM_E2E_MODE: "live",
@@ -376,7 +388,11 @@ function buildRound7GraphLiveStepSpecs(baseUrl) {
     },
     {
       id: "phase3a_graph_zh",
-      commandArgs: ["scripts/e2e-phase3-batch-a.mjs", "full"],
+      commandArgs: [
+        "scripts/e2e-phase3-batch-a.mjs",
+        "full",
+        ...(headless ? ["--headless"] : []),
+      ],
       env: {
         SWARM_URL: baseUrl,
         SWARM_E2E_MODE: "live",
@@ -385,7 +401,11 @@ function buildRound7GraphLiveStepSpecs(baseUrl) {
     },
     {
       id: "phase3b_graph_zh",
-      commandArgs: ["scripts/e2e-phase3-batch-b.mjs", "full"],
+      commandArgs: [
+        "scripts/e2e-phase3-batch-b.mjs",
+        "full",
+        ...(headless ? ["--headless"] : []),
+      ],
       env: {
         SWARM_URL: baseUrl,
         SWARM_E2E_MODE: "live",
@@ -402,7 +422,7 @@ function registerRound7GraphLiveSteps({
   nodeCommand,
   runStep: runStepImpl = runStep,
 }) {
-  for (const spec of buildRound7GraphLiveStepSpecs(baseUrl)) {
+  for (const spec of buildRound7GraphLiveStepSpecs(baseUrl, args.headless)) {
     runStepImpl(summary, args, spec.id, nodeCommand, spec.commandArgs, {
       env: spec.env,
     });

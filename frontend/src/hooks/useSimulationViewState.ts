@@ -361,6 +361,8 @@ export function useSimulationDirectorState({
   const directorStateRef = useRef<ScenarioDirectorState | null>(scenario?.director_state ?? null);
   const directorPersistChainRef = useRef<Promise<void>>(Promise.resolve());
   const gameplayPersistChainRef = useRef<Promise<void>>(Promise.resolve());
+  const directorBackfillSignatureRef = useRef<string | null>(null);
+  const gameplayBackfillSignatureRef = useRef<string | null>(null);
 
   const backendDirectorState = isReplayMode
     ? backendDirectorOverrideState
@@ -518,12 +520,27 @@ export function useSimulationDirectorState({
   useEffect(() => {
     if (isReplayMode) return;
     if (!id || !storedScenarioMeta) return;
-    if (!hasMeaningfulScenarioDirectorState(scenarioMetaToDirectorState(storedScenarioMeta))) return;
+    const desiredState = scenarioMetaToDirectorState(storedScenarioMeta);
+    if (!hasMeaningfulScenarioDirectorState(desiredState)) return;
     if (hasScenarioDirectorAuthority(backendDirectorState)) return;
+    const backfillSignature = JSON.stringify({ id, desiredState });
+    if (directorBackfillSignatureRef.current === backfillSignature) return;
+    directorBackfillSignatureRef.current = backfillSignature;
+    let persistStarted = false;
     const timeoutId = window.setTimeout(() => {
-      void persistDirectorMeta(storedScenarioMeta);
+      persistStarted = true;
+      void persistDirectorMeta(storedScenarioMeta).finally(() => {
+        if (directorBackfillSignatureRef.current === backfillSignature) {
+          directorBackfillSignatureRef.current = null;
+        }
+      });
     }, 0);
-    return () => window.clearTimeout(timeoutId);
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (!persistStarted && directorBackfillSignatureRef.current === backfillSignature) {
+        directorBackfillSignatureRef.current = null;
+      }
+    };
   }, [backendDirectorState, id, isReplayMode, persistDirectorMeta, storedScenarioMeta]);
 
   useEffect(() => {
@@ -534,10 +551,24 @@ export function useSimulationDirectorState({
     const mergedState = scenarioMetaToGameplayState(mergedMeta);
     if (!hasMeaningfulScenarioGameplayState(mergedState)) return;
     if (areScenarioGameplayStatesEquivalent(mergedState, backendGameplayState)) return;
+    const backfillSignature = JSON.stringify({ id, desiredState: mergedState });
+    if (gameplayBackfillSignatureRef.current === backfillSignature) return;
+    gameplayBackfillSignatureRef.current = backfillSignature;
+    let persistStarted = false;
     const timeoutId = window.setTimeout(() => {
-      void persistGameplayState(mergedMeta);
+      persistStarted = true;
+      void persistGameplayState(mergedMeta).finally(() => {
+        if (gameplayBackfillSignatureRef.current === backfillSignature) {
+          gameplayBackfillSignatureRef.current = null;
+        }
+      });
     }, 0);
-    return () => window.clearTimeout(timeoutId);
+    return () => {
+      window.clearTimeout(timeoutId);
+      if (!persistStarted && gameplayBackfillSignatureRef.current === backfillSignature) {
+        gameplayBackfillSignatureRef.current = null;
+      }
+    };
   }, [backendGameplayState, id, isReplayMode, persistGameplayState, storedScenarioMeta]);
 
   const commitmentDraftBranchId = useMemo(() => {

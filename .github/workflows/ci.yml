@@ -240,7 +240,11 @@ jobs:
           if [ "${{ needs.release-signoff-preflight.outputs.can_run }}" = "true" ]; then
             backend/.venv/bin/python -m uvicorn --app-dir backend app.main:app --host 127.0.0.1 --port 18927 > /tmp/swarm-backend.log 2>&1 &
           else
-            DEBATE_USE_LLM=false backend/.venv/bin/python -m uvicorn --app-dir backend app.main:app --host 127.0.0.1 --port 18927 > /tmp/swarm-backend.log 2>&1 &
+            LLM_RESPONSES_URL=http://127.0.0.1:8317/v1 \
+            LLM_API_KEY=sk-12345678 \
+            LLM_MODEL_NAME=gpt-5.4-mini \
+            DEBATE_USE_LLM=false \
+              backend/.venv/bin/python -m uvicorn --app-dir backend app.main:app --host 127.0.0.1 --port 18927 > /tmp/swarm-backend.log 2>&1 &
           fi
           BACKEND_PID=$!
 
