@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SwarmOracle 群体预言机 · Oracle Noir</title>
+<meta name="description" content="SwarmOracle — AI What-If Prediction Playground. Static showcase page.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23100f14'/%3E%3Ctext x='16' y='24' font-size='20' text-anchor='middle'%3E%F0%9F%94%AE%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="cursor-glow" aria-hidden="true"></div>
+
+<!-- ════ NAV ════ -->
+<header class="nav" id="nav">
+  <a class="nav__brand" href="#top">SwarmOracle <small data-zh="群体预言机" data-en="Oracle">群体预言机</small></a>
+  <div class="nav__spacer"></div>
+  <nav class="nav__links" aria-label="Primary">
+    <a class="nav__link" href="#values" data-zh="价值" data-en="Value">价值</a>
+    <a class="nav__link" href="#video" data-zh="视频" data-en="Video">视频</a>
+    <a class="nav__link" href="#features" data-zh="功能" data-en="Features">功能</a>
+    <a class="nav__link" href="#modes" data-zh="模式" data-en="Modes">模式</a>
+    <a class="nav__link" href="#tech" data-zh="技术" data-en="Tech">技术</a>
+    <a class="nav__link" href="#quickstart" data-zh="快速开始" data-en="Quick start">快速开始</a>
+  </nav>
+  <div class="nav__right">
+    <div class="lang" role="group" aria-label="Language">
+      <button data-lang="zh" class="on">中</button>
+      <button data-lang="en">EN</button>
+    </div>
+    <a class="nav__src" href="https://github.com/AGI-is-going-to-arrive/test1" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span data-zh="源码" data-en="Source">源码</span>
+    </a>
+    <button class="nav__burger" aria-label="Menu" id="burger"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.6"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+  </div>
+</header>
+
+<div class="drawer" id="drawer">
+  <button class="drawer__close" id="drawerClose" aria-label="Close">×</button>
+  <a href="#values" data-zh="价值主张" data-en="Value">价值主张</a>
+  <a href="#video" data-zh="介绍视频" data-en="Video">介绍视频</a>
+  <a href="#features" data-zh="功能" data-en="Features">功能</a>
+  <a href="#modes" data-zh="核心模式" data-en="Modes">核心模式</a>
+  <a href="#tech" data-zh="技术栈" data-en="Tech">技术栈</a>
+  <a href="#quickstart" data-zh="快速开始" data-en="Quick start">快速开始</a>
+</div>
+
+<main id="top">
+
+<!-- ════ HERO ════ -->
+<section class="hero shell shell--wide" aria-labelledby="hero-title">
+  <div class="hero__grid">
+    <div class="hero__text">
+      <p class="kicker hero__eyebrow reveal" data-zh="AI 假设推演游乐场" data-en="AI What-If Prediction Playground">AI 假设推演游乐场</p>
+      <h1 class="hero__title reveal" id="hero-title" style="--d:90ms" data-zh="群体预言机 — 一个问题，<em>多条世界线</em>" data-en="SwarmOracle — one question, <em>many worldlines</em>">群体预言机 — 一个问题，<em>多条世界线</em></h1>
+      <p class="hero__lead reveal" style="--d:180ms" data-zh="提出假设性问题（“如果……会怎样？”），由 AI 代理群体模拟多条故事线，展示不同可能性。" data-en="Ask hypothetical questions (&ldquo;What if...?&rdquo;). A group of AI agents simulates multiple storylines and shows different possible outcomes.">提出假设性问题（“如果……会怎样？”），由 AI 代理群体模拟多条故事线，展示不同可能性。</p>
+      <p class="hero__note reveal" style="--d:260ms" data-zh="静态介绍页，非可运行应用。SwarmOracle 是全栈 SPA，需要 FastAPI 后端（18927）+ OpenAI 兼容 LLM 才能运行，无法在静态 GitHub Pages 上运行。" data-en="Static showcase page, not the running app. SwarmOracle is a full-stack SPA that needs the FastAPI backend (18927) + an OpenAI-compatible LLM to run.">静态介绍页，非可运行应用。SwarmOracle 是全栈 SPA，需要 FastAPI 后端（18927）+ OpenAI 兼容 LLM 才能运行，无法在静态 GitHub Pages 上运行。</p>
+      <div class="hero__cta reveal" style="--d:340ms">
+        <a class="btn btn--primary" href="https://github.com/AGI-is-going-to-arrive/test1" target="_blank" rel="noopener">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          <span data-zh="在 GitHub 查看" data-en="View on GitHub">在 GitHub 查看</span>
+        </a>
+        <a class="btn btn--ghost" href="#quickstart" data-zh="本地快速开始" data-en="Quick start">本地快速开始</a>
+      </div>
+    </div>
+    <div class="hero__card reveal" style="--d:430ms">
+      <div class="hero__cardglow" aria-hidden="true"></div>
+      <figure class="hero__frame">
+        <img src="assets/swarmoracle-promo-v1.zh.theater.png" data-src-zh="assets/swarmoracle-promo-v1.zh.theater.png" data-src-en="assets/swarmoracle-promo-v1.en.theater.png" alt="SwarmOracle 像素剧场：AI 代理群体在剧场舞台上实时推演多条世界线" data-alt-zh="SwarmOracle 像素剧场：AI 代理群体在剧场舞台上实时推演多条世界线" data-alt-en="SwarmOracle pixel theater: a swarm of AI agents simulating worldlines live on stage" fetchpriority="high" decoding="async" width="1581" height="774">
+        <figcaption class="hero__frame-tag" data-zh="像素剧场 · 实时推演" data-en="Pixel theater · live run">像素剧场 · 实时推演</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ════ VALUE PROPS ════ -->
+<section class="section section--alt" id="values" aria-labelledby="values-title">
+  <div class="shell">
+    <div class="section__head reveal">
+      <div class="rule" aria-hidden="true"></div>
+      <p class="kicker" data-zh="价值主张" data-en="Value">价值主张</p>
+      <h2 class="section__title" id="values-title" data-zh="为什么是神谕，而不是又一个面板" data-en="Why an oracle, not another dashboard">为什么是神谕，而不是又一个面板</h2>
+    </div>
+    <div class="values">
+      <article class="value reveal">
+        <div class="value__num">01</div>
+        <div class="value__body">
+          <h3 data-zh="多分支推演" data-en="Multi-branch simulation">多分支推演</h3>
+          <p data-zh="一个问题，多条故事线，看不同结局。" data-en="One question, multiple storylines, different endings.">一个问题，多条故事线，看不同结局。</p>
+        </div>
+      </article>
+      <article class="value reveal" style="--d:80ms">
+        <div class="value__num">02</div>
+        <div class="value__body">
+          <h3 data-zh="辩论竞技场" data-en="Debate Arena">辩论竞技场</h3>
+          <p data-zh="AI 正反方激辩，帮你看清争议的两面。" data-en="AI affirmative and opposing sides debate so you can see both sides of an issue.">AI 正反方激辩，帮你看清争议的两面。</p>
+        </div>
+      </article>
+      <article class="value reveal" style="--d:160ms">
+        <div class="value__num">03</div>
+        <div class="value__body">
+          <h3 data-zh="反事实对比" data-en="Counterfactual comparison">反事实对比</h3>
+          <p data-zh="“如果那句话说得不同，世界线会怎么变？”" data-en="&ldquo;If that sentence had been said differently, how would the worldline change?&rdquo;">“如果那句话说得不同，世界线会怎么变？”</p>
+        </div>
+      </article>
+      <article class="value reveal" style="--d:240ms">
+        <div class="value__num">04</div>
+        <div class="value__body">
+          <h3 data-zh="因果图谱 + 知识图谱" data-en="Causal + knowledge graph">因果图谱 + 知识图谱</h3>
+          <p data-zh="从结果页进入图谱工作台、知识图谱浏览器和时间线星系。" data-en="Enter the graph workbench, knowledge graph explorer, and timeline galaxy from the result page.">从结果页进入图谱工作台、知识图谱浏览器和时间线星系。</p>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ════ VIDEO ════ -->
+<section class="section" id="video" aria-labelledby="video-title">
+  <div class="shell shell--wide">
+    <div class="section__head reveal">
+      <div class="rule" aria-hidden="true"></div>
+      <p class="kicker" data-zh="介绍视频" data-en="Intro video">介绍视频</p>
+      <h2 class="section__title" id="video-title" data-zh="放映开始" data-en="The screening begins">放映开始</h2>
+    </div>
+    <figure class="theater reveal" id="theater">
+      <video id="introVideo" class="theater__video" controls preload="metadata" playsinline poster="assets/swarmoracle-promo-v1.zh.hook.png" data-poster-zh="assets/swarmoracle-promo-v1.zh.hook.png" data-poster-en="assets/swarmoracle-promo-v1.en.hook.png" data-src-zh="assets/video/swarmoracle-intro-zh-1080p.mp4" data-src-en="assets/video/swarmoracle-intro-en-1080p.mp4" width="1600" height="900" aria-label="SwarmOracle 介绍视频" data-aria-zh="SwarmOracle 介绍视频" data-aria-en="SwarmOracle intro video">
+        <source src="assets/video/swarmoracle-intro-zh-1080p.mp4" type="video/mp4">
+      </video>
+      <figcaption class="theater__cap" data-zh="完整介绍视频 · 1080p" data-en="Full intro video · 1080p">完整介绍视频 · 1080p</figcaption>
+    </figure>
+    <div class="theater__bar reveal">
+      <span data-zh="自托管 1080p · 中文 / English" data-en="Self-hosted 1080p · 中文 / English">自托管 1080p · 中文 / English</span>
+      <span>SwarmOracle</span>
+    </div>
+  </div>
+</section>
+
+<!-- ════ FEATURE GRID ════ -->
+<section class="section section--alt" id="features" aria-labelledby="features-title">
+  <div class="shell shell--wide">
+    <div class="section__head reveal">
+      <div class="rule" aria-hidden="true"></div>
+      <p class="kicker" data-zh="功能图鉴" data-en="Feature archive">功能图鉴</p>
+      <h2 class="section__title" id="features-title" data-zh="十二件真实功能" data-en="Twelve real features">十二件真实功能</h2>
+    </div>
+    <div class="fgrid" id="fgrid"></div>
+  </div>
+</section>
+
+<!-- ════ MODES ════ -->
+<section class="section" id="modes" aria-labelledby="modes-title">
+  <div class="shell">
+    <div class="section__head reveal">
+      <div class="rule" aria-hidden="true"></div>
+      <p class="kicker" data-zh="六大核心模式" data-en="Six core modes">六大核心模式</p>
+      <h2 class="section__title" id="modes-title" data-zh="在黑暗里点亮可能性" data-en="Lighting a possibility in the dark">在黑暗里点亮可能性</h2>
+    </div>
+    <div id="modes-list"></div>
+  </div>
+</section>
+
+<!-- ════ TECH ════ -->
+<section class="section section--alt" id="tech" aria-labelledby="tech-title">
+  <div class="shell">
+    <div class="section__head reveal">
+      <div class="rule" aria-hidden="true"></div>
+      <p class="kicker" data-zh="技术栈" data-en="Tech stack">技术栈</p>
+      <h2 class="section__title" id="tech-title" data-zh="规格铭牌" data-en="The spec plate">规格铭牌</h2>
+    </div>
+    <div class="tech reveal">
+      <div class="tech__row"><span class="tech__layer" data-zh="前端" data-en="Frontend">前端</span><span class="tech__stack"><b>Vite + React 19 + TypeScript</b> + Phaser 3 + Zustand</span><span class="tech__port">18928</span></div>
+      <div class="tech__row"><span class="tech__layer" data-zh="后端" data-en="Backend">后端</span><span class="tech__stack"><b>FastAPI</b> + SQLModel + Alembic + ChromaDB</span><span class="tech__port">18927</span></div>
+      <div class="tech__row"><span class="tech__layer" data-zh="LLM" data-en="LLM">LLM</span><span class="tech__stack" data-zh="OpenAI-compatible API（按环境变量配置）" data-en="OpenAI-compatible API (configured via env vars)">OpenAI-compatible API（按环境变量配置）</span><span class="tech__port">—</span></div>
+      <div class="tech__row"><span class="tech__layer" data-zh="数据库" data-en="Database">数据库</span><span class="tech__stack" data-zh="SQLite + ChromaDB（向量检索）" data-en="SQLite + ChromaDB (vector retrieval)">SQLite + ChromaDB（向量检索）</span><span class="tech__port">—</span></div>
+      <div class="tech__row"><span class="tech__layer" data-zh="部署" data-en="Deployment">部署</span><span class="tech__stack">Docker Compose (backend + frontend)</span><span class="tech__port">—</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ════ QUICK START ════ -->
+<section class="section" id="quickstart" aria-labelledby="qs-title">
+  <div class="shell">
+    <div class="section__head reveal">
+      <div class="rule" aria-hidden="true"></div>
+      <p class="kicker" data-zh="快速开始" data-en="Quick start">快速开始</p>
+      <h2 class="section__title" id="qs-title" data-zh="本地运行步骤" data-en="Run it locally">本地运行步骤</h2>
+    </div>
+    <p class="qs__declare reveal" data-zh="以上是本地运行步骤；本介绍页是静态页，不连后端。命令逐字保留；sk-… 仅占位，请勿在页面填入真实密钥。" data-en="These are local run steps; this page is static and connects to no backend. Commands are verbatim; sk-… is a placeholder only.">以上是本地运行步骤；本介绍页是静态页，不连后端。命令逐字保留；sk-… 仅占位，请勿在页面填入真实密钥。</p>
+    <div class="reveal">
+      <div class="qs__tabs" role="tablist">
+        <button class="qs__tab on" data-tab="docker" role="tab">Docker</button>
+        <button class="qs__tab" data-tab="local" role="tab" data-zh="本地 Local" data-en="Local">本地 Local</button>
+      </div>
+      <div class="qs__panel on" data-panel="docker">
+        <div class="code">
+          <div class="code__head"><span class="code__title">docker-compose</span><button class="copy" data-copy="docker compose up --build -d"><span data-zh="复制" data-en="Copy">复制</span></button></div>
+          <pre><code><span class="cmd">docker compose</span> up --build -d</code></pre>
+        </div>
+        <p class="qs__note" data-zh="先编辑 .env.docker 填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，再运行命令。" data-en="First edit .env.docker with LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME, then run the command.">先编辑 .env.docker 填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，再运行命令。</p>
+      </div>
+      <div class="qs__panel" data-panel="local">
+        <div class="code">
+          <div class="code__head"><span class="code__title">backend + frontend</span><button class="copy" data-copy="cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -e &quot;.[dev]&quot;
+cp ../.env.example .env
+uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
+cd frontend
+npm install
+npm run dev"><span data-zh="复制" data-en="Copy">复制</span></button></div>
+          <pre><code><span class="cmd">cd</span> backend
+<span class="cmd">python</span> -m venv .venv && <span class="cmd">source</span> .venv/bin/activate
+<span class="cmd">pip</span> install -e ".[dev]"
+<span class="cmd">cp</span> ../.env.example .env
+<span class="cmd">uvicorn</span> app.main:app --host 127.0.0.1 --port 18927 --reload
+<span class="cmd">cd</span> frontend
+<span class="cmd">npm</span> install
+<span class="cmd">npm</span> run dev</code></pre>
+        </div>
+      </div>
+      <div class="qs__open">
+        <div class="code">
+          <div class="code__head"><span class="code__title" data-zh="打开地址" data-en="Open">打开地址</span><button class="copy" data-copy="http://localhost:18928"><span data-zh="复制" data-en="Copy">复制</span></button></div>
+          <pre><code>http://localhost:18928</code></pre>
+        </div>
+      </div>
+      <div class="qs__config">
+        <p class="kicker" style="margin-bottom:1rem" data-zh="必填配置（占位，非真实密钥）" data-en="Required config (placeholders, not real keys)">必填配置（占位，非真实密钥）</p>
+        <div class="qs__config-row"><code>LLM_RESPONSES_URL</code><span>https://api.openai.com/v1</span></div>
+        <div class="qs__config-row"><code>LLM_API_KEY</code><span>sk-…</span></div>
+        <div class="qs__config-row"><code>LLM_MODEL_NAME</code><span>gpt-4o / deepseek-chat / qwen-plus</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════ CTA ════ -->
+<section class="section cta" aria-labelledby="cta-title">
+  <div class="cta__glow" aria-hidden="true"></div>
+  <div class="shell">
+    <h2 class="cta__title reveal" id="cta-title" data-zh="提一个“如果……会怎样？”，让群体替你推演。" data-en="Ask one &ldquo;what if?&rdquo; and let the swarm play it out.">提一个“如果……会怎样？”，让群体替你推演。</h2>
+    <a class="btn btn--primary reveal" style="--d:80ms" href="https://github.com/AGI-is-going-to-arrive/test1" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span data-zh="在 GitHub 查看源码" data-en="View source on GitHub">在 GitHub 查看源码</span>
+    </a>
+  </div>
+</section>
+
+</main>
+
+<!-- ════ FOOTER ════ -->
+<footer class="footer">
+  <div class="shell footer__grid">
+    <div>
+      <div class="footer__brand">SwarmOracle <span style="font-family:var(--font-body);font-size:0.85rem;color:var(--bone-300)">群体预言机</span></div>
+      <p class="footer__note" data-zh="静态介绍页，非可运行应用。本页面是静态展示页，不是可运行的应用。" data-en="Static showcase page, not the running app.">静态介绍页，非可运行应用。本页面是静态展示页，不是可运行的应用。</p>
+    </div>
+    <p class="footer__legal">
+      <span data-zh="许可证" data-en="License">许可证</span> · <a href="https://github.com/AGI-is-going-to-arrive/test1" target="_blank" rel="noopener">AGPL-3.0 · Source</a><br>
+      Oracle Noir 神谕
+    </p>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
