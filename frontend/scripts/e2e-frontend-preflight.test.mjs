@@ -158,6 +158,64 @@ test("roundtable parseArgs accepts an explicit scenario id", () => {
   assert.equal(args.scenarioId, "scenario-42");
 });
 
+test("roundtable fixture scenario import uses fresh locale-scoped replay payloads", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push({ url, body });
+    return {
+      ok: true,
+      async json() {
+        return {
+          id: `imported-${body.scenario.language}-${calls.length}`,
+          branches: body.scenario.branches,
+          agents: body.scenario.agents,
+          messages: body.scenario.messages,
+        };
+      },
+    };
+  };
+
+  const zh = await roundtableSuiteTest.importRoundtableFixtureScenario(
+    "http://127.0.0.1:18927",
+    "zh",
+    { fetchImpl },
+  );
+  const en = await roundtableSuiteTest.importRoundtableFixtureScenario(
+    "http://127.0.0.1:18927",
+    "en",
+    { fetchImpl },
+  );
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "http://127.0.0.1:18927/api/scenario/import-replay");
+  assert.equal(calls[1].url, "http://127.0.0.1:18927/api/scenario/import-replay");
+  assert.equal(calls[0].body.scenario.language, "zh");
+  assert.equal(calls[1].body.scenario.language, "en");
+  assert.notEqual(calls[0].body.scenario.question, calls[1].body.scenario.question);
+  assert.equal(zh.id, "imported-zh-1");
+  assert.equal(en.id, "imported-en-2");
+});
+
+test("roundtable fixture mode respects an explicit scenario id", async () => {
+  const result = await roundtableSuiteTest.resolveRoundtableScenarioIds({
+    backendUrl: "http://127.0.0.1:18927",
+    locale: "en",
+    requestedScenarioId: "scenario-42",
+    preferredScenarioIds: { desktop: "old-desktop", mobile: "old-mobile" },
+    fixtureMode: true,
+    fetchImpl: async () => {
+      throw new Error("explicit scenario should not import a fixture");
+    },
+  });
+
+  assert.deepEqual(result, {
+    desktopScenarioId: "scenario-42",
+    mobileScenarioId: "scenario-42",
+    fixtureScenarioId: null,
+  });
+});
+
 test("roundtable contract validation accepts restored custom rooms", () => {
   const contract = roundtableSuiteTest.assertSupportedRoundtableContractPayload({
     page: {

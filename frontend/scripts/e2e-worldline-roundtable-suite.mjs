@@ -26,6 +26,10 @@ const LANGUAGE_STORAGE_KEY = "swarmoracle:language:v1";
 const ROUNDTABLE_READY_TIMEOUT_MS = 180000;
 const ROUNDTABLE_USER_TURN_SETTLE_TIMEOUT_MS = 120000;
 const PREFERRED_SCENARIO_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const ROUNDTABLE_FIXTURE_QUESTIONS = {
+  zh: "CI fixture：用于世界线圆桌签收的多结局应急治理场景。",
+  en: "CI fixture: competing emergency-governance endings for worldline roundtable coverage.",
+};
 const RESEAT_REOPEN_BUTTON_PATTERN = /Reseat & restart|Reseat and reopen|换人重开|改选代表并重开/i;
 const MORE_ACTIONS_BUTTON_PATTERN = /More actions|更多操作/i;
 const ROUNDTABLE_LAUNCH_BUTTON_PATTERN = /Open with selected representatives|Open this lineup|Reopen this lineup|以当前代表开桌|按当前代表开桌|按这套代表开桌|按当前阵容重开/i;
@@ -396,6 +400,18 @@ async function fetchJson(url) {
   return response.json();
 }
 
+async function postJson(url, body, fetchImpl = fetch) {
+  const response = await fetchImpl(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to post ${url}: ${response.status} ${await response.text()}`);
+  }
+  return response.json();
+}
+
 async function getScenario(backendUrl, scenarioId) {
   return fetchJson(`${backendUrl}/api/scenario/${scenarioId}`);
 }
@@ -459,6 +475,157 @@ async function assertBackendRoundtableContract(backendUrl, roomId, { discussionF
     discussionFormat: snapshot.discussion_format,
     castMode: snapshot.cast_mode,
   };
+}
+
+function buildRoundtableReplayFixture(locale) {
+  const normalizedLocale = normalizeLocale(locale);
+  const branchSeeds = [
+    {
+      id: "fixture-roundtable-branch-audit",
+      title: normalizedLocale === "zh" ? "审计轨迹稳住授权" : "Audit Trail Holds",
+      probability: 0.58,
+      story: normalizedLocale === "zh"
+        ? "应急规则能维持下去，因为每次越权都被限时、记录并公开复核。"
+        : "The emergency rule survives because every override is time-boxed, logged, and reviewed in public.",
+      insight: normalizedLocale === "zh"
+        ? "速度只有在复核路径可见后才会变得耐用。"
+        : "Speed becomes durable only after the review path is visible.",
+      key_moments: normalizedLocale === "zh"
+        ? ["越权日志公开", "复核小组收窄授权范围"]
+        : ["Override log published", "Review panel narrows the mandate"],
+    },
+    {
+      id: "fixture-roundtable-branch-backlash",
+      title: normalizedLocale === "zh" ? "不受约束的越权引发反弹" : "Unchecked Override Backlash",
+      probability: 0.42,
+      story: normalizedLocale === "zh"
+        ? "同样的应急权力一开始推进更快，但复核太晚导致合法性流失。"
+        : "The same emergency power moves faster at first, then loses legitimacy when review arrives too late.",
+      insight: normalizedLocale === "zh"
+        ? "真正的隐性成本不是延迟，而是不透明行动后丢掉的信任。"
+        : "The hidden cost is not delay; it is trust lost after opaque action.",
+      key_moments: normalizedLocale === "zh"
+        ? ["快速命令绕开复核", "公众挑战冻结落地"]
+        : ["Fast order bypasses review", "Public challenge freezes rollout"],
+    },
+  ];
+  const agents = [
+    {
+      id: "fixture-roundtable-agent-1",
+      name: normalizedLocale === "zh" ? "公民审计员" : "Civic Auditor",
+      role: normalizedLocale === "zh" ? "监督负责人" : "Oversight Lead",
+      persona: normalizedLocale === "zh"
+        ? "追踪问责缺口，要求每项应急行动留下可复核记录。"
+        : "Tracks accountability gaps and insists every emergency action leaves a review trail.",
+      tier: "CORE",
+      stance: "support",
+      emotion: "focused",
+    },
+    {
+      id: "fixture-roundtable-agent-2",
+      name: normalizedLocale === "zh" ? "行动协调官" : "Operations Marshal",
+      role: normalizedLocale === "zh" ? "响应协调员" : "Response Coordinator",
+      persona: normalizedLocale === "zh"
+        ? "重视压力下的速度，但接受具体的回滚规则。"
+        : "Optimizes speed under pressure, but accepts rollback rules when they are concrete.",
+      tier: "IMPORTANT",
+      stance: "neutral",
+      emotion: "measured",
+    },
+    {
+      id: "fixture-roundtable-agent-3",
+      name: normalizedLocale === "zh" ? "公民权利顾问" : "Civil Rights Counsel",
+      role: normalizedLocale === "zh" ? "权利倡议者" : "Rights Advocate",
+      persona: normalizedLocale === "zh"
+        ? "用权利影响、同意和公共合法性检验每个方案。"
+        : "Tests each proposal against rights impact, consent, and public legitimacy.",
+      tier: "CORE",
+      stance: "oppose",
+      emotion: "alert",
+    },
+  ];
+  const messages = branchSeeds.flatMap((branch) => [
+    {
+      branch: branch.id,
+      round: 1,
+      agent_id: "fixture-roundtable-agent-1",
+      agent: agents[0].name,
+      message: normalizedLocale === "zh"
+        ? `${branch.title} 这条线首先需要在授权扩张前写下审计轨迹。`
+        : `For ${branch.title}, the first requirement is a written audit trail before the override expands.`,
+      emotion: "focused",
+    },
+    {
+      branch: branch.id,
+      round: 1,
+      agent_id: "fixture-roundtable-agent-2",
+      agent: agents[1].name,
+      message: normalizedLocale === "zh"
+        ? "只有响应团队知道授权何时结束，这条路径才能快而不乱。"
+        : "This path can move quickly only if the response team knows exactly when the mandate expires.",
+      emotion: "measured",
+    },
+    {
+      branch: branch.id,
+      round: 2,
+      agent_id: "fixture-roundtable-agent-3",
+      agent: agents[2].name,
+      message: normalizedLocale === "zh"
+        ? "当受影响群体可以挑战决定且不阻断紧急工作时，这个结论才站得住。"
+        : "The conclusion holds when affected groups can challenge the decision without stopping urgent work.",
+      emotion: "alert",
+    },
+  ]);
+
+  return {
+    question: ROUNDTABLE_FIXTURE_QUESTIONS[normalizedLocale],
+    language: normalizedLocale,
+    status: "done",
+    scene_theme: "civic_chamber",
+    visualization_enabled: false,
+    parsed_context: {
+      mode: "blackboard",
+      hierarchical: false,
+      simulation_rounds: 2,
+    },
+    mode: "blackboard",
+    hierarchical: false,
+    agents,
+    branches: branchSeeds.map((branch) => ({
+      ...branch,
+      status: "COMPLETED",
+      parent_branch_id: null,
+      fork_round: 0,
+      fork_reason: "",
+    })),
+    messages,
+    groups: [],
+  };
+}
+
+function isUsableRoundtableScenario(detail) {
+  const branches = Array.isArray(detail?.branches) ? detail.branches : [];
+  const agents = Array.isArray(detail?.agents) ? detail.agents : [];
+  const messages = Array.isArray(detail?.messages) ? detail.messages : [];
+  return branches.length >= 2
+    && agents.length > 0
+    && messages.length > 0
+    && branches.every((branch) => branch?.status === "COMPLETED")
+    && branches.some((branch) => typeof branch?.story === "string" && branch.story.trim().length > 0);
+}
+
+async function importRoundtableFixtureScenario(backendUrl, locale, options = {}) {
+  const imported = await postJson(`${backendUrl}/api/scenario/import-replay`, {
+    scenario: buildRoundtableReplayFixture(locale),
+  }, options.fetchImpl);
+  if (!isUsableRoundtableScenario(imported)) {
+    const branchCount = Array.isArray(imported?.branches) ? imported.branches.length : 0;
+    throw new Error(
+      `Imported roundtable fixture scenario is not usable `
+      + `(scenario=${imported?.id ?? "unknown"}, branches=${branchCount})`,
+    );
+  }
+  return imported;
 }
 
 function buildFixtureRoundtablePayload({
@@ -772,6 +939,42 @@ async function findMultiEndingScenarioId(backendUrl) {
     return candidates[0].id;
   }
   throw new Error("No multi-ending DONE scenario is available for roundtable E2E");
+}
+
+async function resolveRoundtableScenarioIds({
+  backendUrl,
+  locale,
+  requestedScenarioId,
+  preferredScenarioIds,
+  fixtureMode = process.env.SWARM_E2E_FIXTURE_MODE === "1",
+  fetchImpl = fetch,
+}) {
+  if (requestedScenarioId) {
+    return {
+      desktopScenarioId: requestedScenarioId,
+      mobileScenarioId: requestedScenarioId,
+      fixtureScenarioId: null,
+    };
+  }
+  if (fixtureMode) {
+    const imported = await importRoundtableFixtureScenario(backendUrl, locale, { fetchImpl });
+    return {
+      desktopScenarioId: imported.id,
+      mobileScenarioId: imported.id,
+      fixtureScenarioId: imported.id,
+    };
+  }
+
+  const fallbackScenarioId = await findMultiEndingScenarioId(backendUrl);
+  const desktopScenarioId = await resolvePreferredScenarioId(backendUrl, preferredScenarioIds.desktop)
+    ?? fallbackScenarioId;
+  const mobileScenarioId = await resolvePreferredScenarioId(backendUrl, preferredScenarioIds.mobile)
+    ?? desktopScenarioId;
+  return {
+    desktopScenarioId,
+    mobileScenarioId,
+    fixtureScenarioId: null,
+  };
 }
 
 async function launchBrowser(headless, browserName = "chromium") {
@@ -2427,15 +2630,19 @@ async function main() {
   if (args.scenarioId && !requestedScenarioId) {
     throw new Error(`Roundtable scenario ${args.scenarioId} is not available or has fewer than two branches`);
   }
-  const fallbackScenarioId = await findMultiEndingScenarioId(args.backendUrl);
-  const desktopScenarioId = requestedScenarioId
-    ?? await resolvePreferredScenarioId(args.backendUrl, preferredScenarioIds.desktop)
-    ?? fallbackScenarioId;
-  const mobileScenarioId = requestedScenarioId
-    ?? await resolvePreferredScenarioId(args.backendUrl, preferredScenarioIds.mobile)
-    ?? desktopScenarioId;
+  const {
+    desktopScenarioId,
+    mobileScenarioId,
+    fixtureScenarioId,
+  } = await resolveRoundtableScenarioIds({
+    backendUrl: args.backendUrl,
+    locale: args.locale,
+    requestedScenarioId,
+    preferredScenarioIds,
+  });
   const summary = {
     locale: args.locale,
+    fixtureScenarioId,
   };
 
   if (args.mode === "desktop" || args.mode === "full") {
@@ -2493,6 +2700,9 @@ if (isDirectExecution()) {
 
 export const __test__ = {
   assertSupportedRoundtableContractPayload,
+  buildRoundtableReplayFixture,
+  importRoundtableFixtureScenario,
   parseArgs,
   parseViewportDimension,
+  resolveRoundtableScenarioIds,
 };
