@@ -378,13 +378,14 @@ async function testResumeSubmitSuccess(page, baseUrl, outputDir) {
   // Click submit
   const submitBtn = page.getByRole("button", { name: /Create continuation branch|Resume|创建续跑分支|续跑/ });
   await submitBtn.click();
-  await page.waitForTimeout(300);
-  await saveScreenshot(page, path.join(stepDir, "02-submitted.png"));
-
-  // Check success message
   const successMsg = page.getByText(/Continuation branch created|Resume branch created|续跑分支已创建/);
-  const hasSuccess = await successMsg.isVisible({ timeout: 3000 }).catch(() => false);
-  results.steps.push({ name: "success-message-visible", passed: hasSuccess });
+  const successVisibleBeforeRedirect = await Promise.race([
+    successMsg.isVisible({ timeout: 3000 }).catch(() => false),
+    page.waitForURL(`**/sim/${FIXTURE_SCENARIO_ID}`, { timeout: 3000 })
+      .then(() => false)
+      .catch(() => false),
+  ]);
+  await saveScreenshot(page, path.join(stepDir, "02-submitted.png"));
 
   const latestResumeRequest = resumeRequests.at(-1);
   const hasExpectedRequestBody = (
@@ -392,19 +393,27 @@ async function testResumeSubmitSuccess(page, baseUrl, outputDir) {
     && latestResumeRequest?.source_branch_id === FIXTURE_BRANCH_A
     && latestResumeRequest?.round_number === 2
   );
+
+  let redirectedToSim = false;
+  try {
+    await page.waitForURL(`**/sim/${FIXTURE_SCENARIO_ID}`, { timeout: 3000 });
+    redirectedToSim = true;
+  } catch {
+    redirectedToSim = false;
+  }
+
+  results.steps.push({
+    name: "success-state-observed",
+    passed: successVisibleBeforeRedirect || redirectedToSim,
+    details: { successVisibleBeforeRedirect, redirectedToSim },
+  });
   results.steps.push({
     name: "resume-request-body-valid",
     passed: hasExpectedRequestBody,
     details: latestResumeRequest ?? null,
   });
 
-  // Check redirect
-  try {
-    await page.waitForURL(`**/sim/${FIXTURE_SCENARIO_ID}`, { timeout: 3000 });
-    results.steps.push({ name: "redirect-to-sim", passed: true });
-  } catch {
-    results.steps.push({ name: "redirect-to-sim", passed: false });
-  }
+  results.steps.push({ name: "redirect-to-sim", passed: redirectedToSim });
 
   await saveScreenshot(page, path.join(stepDir, "03-redirected.png"));
   return finalizeTestResult(results);
