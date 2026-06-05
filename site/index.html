@@ -179,8 +179,7 @@
     <figure class="theater reveal" id="theater">
       <video id="introVideo" class="theater__video" controls preload="metadata" playsinline poster="assets/swarmoracle-promo-v1.zh.hook.png" data-poster-zh="assets/swarmoracle-promo-v1.zh.hook.png" data-poster-en="assets/swarmoracle-promo-v1.en.hook.png" data-src-zh="assets/video/swarmoracle-intro-zh-1080p.mp4" data-src-en="assets/video/swarmoracle-intro-en-1080p.mp4" width="1600" height="900" aria-label="SwarmOracle 介绍视频" data-aria-zh="SwarmOracle 介绍视频" data-aria-en="SwarmOracle intro video">
         <source src="assets/video/swarmoracle-intro-zh-1080p.mp4" type="video/mp4">
-        <track kind="captions" src="assets/video/swarmoracle-intro-zh.vtt" srclang="zh" label="中文" default>
-        <track kind="captions" src="assets/video/swarmoracle-intro-en.vtt" srclang="en" label="English">
+        <!-- 字幕已烧录进视频画面，故不挂 VTT <track>，避免与硬字幕重复叠加成双层字幕。VTT 文件保留在 assets/video/，留待将来改用无烧录字幕的干净视频时再启用。 -->
         <span data-zh="你的浏览器不支持嵌入视频。" data-en="Your browser does not support embedded video.">你的浏览器不支持嵌入视频。</span>
       </video>
       <figcaption class="theater__cap" data-zh="完整介绍视频 · 1080p" data-en="Full intro video · 1080p">完整介绍视频 · 1080p</figcaption>

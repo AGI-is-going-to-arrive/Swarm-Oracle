@@ -116,9 +116,7 @@
         source.setAttribute("src", vsrc);
         vid.load();
       }
-      Array.prototype.forEach.call(vid.querySelectorAll("track"), function (track) {
-        track.track.mode = track.getAttribute("srclang") === l ? "showing" : "disabled";
-      });
+      // 字幕已烧录进视频，移除了 <track> VTT 软字幕轨，无需再切换 textTrack mode。
     }
     document.querySelectorAll(".lang button").forEach(function (b) {
       b.classList.toggle("on", b.getAttribute("data-lang") === l);
