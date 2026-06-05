@@ -631,7 +631,7 @@ async function runResultFlow(page, args) {
     await download.cancel().catch(() => {});
   }
 
-  await page.getByRole("button", { name: /生成文案|share/i }).click();
+  await page.locator("#result-bridge").getByRole("button", { name: /分享结果|share results/i }).click();
   await waitForAutomation(
     page,
     (payload) => payload.page?.controls?.active_modal === "share",

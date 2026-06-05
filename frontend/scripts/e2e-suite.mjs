@@ -917,7 +917,7 @@ async function runResultFlow(page, {
       await page.waitForTimeout(300);
     }
 
-    await page.getByRole("button", { name: /生成文案|share/i }).click();
+    await page.locator("#result-bridge").getByRole("button", { name: /分享结果|share results/i }).click();
     const shareOpen = await waitForAutomation(
       page,
       (payload) => payload.page?.controls?.active_modal === "share",
@@ -2441,7 +2441,7 @@ async function runShareRetryCase(page, {
     40000,
     "result page",
   );
-  await page.getByRole("button", { name: /生成文案|share/i }).click();
+  await page.locator("#result-bridge").getByRole("button", { name: /分享结果|share results/i }).click();
   await waitForAutomation(
     page,
     (payload) => payload.page?.controls?.active_modal === "share",
