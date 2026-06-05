@@ -1608,12 +1608,19 @@ async function runReplayCornerCase(page, {
   await gotoCompletedSimulationTheater(page, baseUrl, scenarioId);
   await waitForAutomation(
     page,
-    (payload) => payload.page?.replay_state?.available === true,
+    (payload) => (
+      payload.page?.kind === "simulation"
+      && payload.simulation?.viewMode === "theater"
+      && payload.page?.replay_state?.available === true
+      && isCompletedReplayTheaterReady(payload)
+    ),
     30000,
     "replay state",
   );
 
-  await page.getByRole("button", { name: /跳到最新/ }).click();
+  const skipButton = page.getByRole("button", { name: /跳到最新|Skip to Latest/i });
+  await skipButton.waitFor({ state: "visible", timeout: 10000 });
+  await skipButton.click();
   const skipped = await waitForAutomation(
     page,
     (payload) => payload.page?.replay_state?.playback_mode === "skip",
