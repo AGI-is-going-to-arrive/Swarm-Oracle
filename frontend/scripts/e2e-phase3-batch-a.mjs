@@ -49,6 +49,7 @@ function parseArgs(argv) {
     browser: "chromium",
     browserExplicitlySet: false,
     headless: process.env.HEADLESS === "1",
+    outputDir: null,
   };
 
   for (let i = 3; i < argv.length; i += 1) {
@@ -63,11 +64,14 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--headless") {
       args.headless = true;
+    } else if (arg === "--output-dir" && next) {
+      args.outputDir = path.resolve(next);
+      i += 1;
     }
   }
 
   if (!["desktop", "mobile", "full"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-phase3-batch-a.mjs <desktop|mobile|full> [--url URL] [--browser chromium|firefox|webkit] [--headless]");
+    throw new Error("Usage: node scripts/e2e-phase3-batch-a.mjs <desktop|mobile|full> [--url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--headless]");
   }
   if (!["chromium", "firefox", "webkit"].includes(args.browser)) {
     throw new Error(`Unsupported browser: ${args.browser}`);
@@ -546,6 +550,9 @@ async function installFixtures(page) {
   await page.route("**/api/capabilities", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAPABILITIES_FIXTURE) }),
   );
+  await page.route("**/api/agents/identities/favorites?*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
+  );
   await page.route("**/api/agents/identities?*", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([IDENTITY_FIXTURE]) }),
   );
@@ -630,13 +637,18 @@ async function testAgentLibraryAndProfile(page, baseUrl, outputDir) {
   await saveScreenshot(page, path.join(stepDir, "01-library-loaded.png"));
 
   // Check agent card exists
-  const agentCard = page.locator('[role="button"]').filter({ hasText: "E2E Test Agent" }).first();
+  const agentCard = page.locator('[data-testid="agent-card"], article, .agent-card').filter({ hasText: "E2E Test Agent" }).first();
   const hasCard = await agentCard.isVisible().catch(() => false);
   results.steps.push({ name: "agent-card-visible", passed: hasCard });
   if (!hasCard) { results.passed = false; return results; }
 
   // Click card to open profile modal
-  await agentCard.click();
+  const detailsButton = agentCard.getByRole("button", { name: /View details|查看详情/i }).first();
+  if (await detailsButton.isVisible().catch(() => false)) {
+    await detailsButton.click();
+  } else {
+    await agentCard.click();
+  }
   await page.waitForTimeout(1000);
   await saveScreenshot(page, path.join(stepDir, "02-profile-modal-open.png"));
 
@@ -730,13 +742,12 @@ async function testCausalMap(page, baseUrl, outputDir, viewport) {
   }
 
   // Check node count label
-  const nodeCount = page.getByText(/3 (nodes|节点)/);
-  const hasNodeCount = await nodeCount.isVisible().catch(() => false);
+  const pageText = await page.locator("body").innerText().catch(() => "");
+  const hasNodeCount = /3\s*(nodes|节点)/i.test(pageText);
   results.steps.push({ name: "node-count-correct", passed: hasNodeCount });
 
   // Check edge count label
-  const edgeCount = page.getByText(/2 (edges|连线)/);
-  const hasEdgeCount = await edgeCount.isVisible().catch(() => false);
+  const hasEdgeCount = /2\s*(edges|连线)/i.test(pageText);
   results.steps.push({ name: "edge-count-correct", passed: hasEdgeCount });
 
   const exportPanel = page.getByTestId("export-panel");
@@ -788,27 +799,21 @@ async function testCausalMap(page, baseUrl, outputDir, viewport) {
   results.steps.push({ name: "graph-node-visible", passed: hasFirstNode });
   if (hasFirstNode) {
     await firstNode.click();
-    const detailPanel = page.getByTestId("node-detail-panel");
-    const hasDetailPanel = await detailPanel.isVisible({ timeout: 3000 }).catch(() => false);
-    results.steps.push({ name: "node-detail-panel-opens", passed: hasDetailPanel });
+    const detailSheet = page.getByTestId("node-conversation-sheet");
+    const hasDetailSheet = await detailSheet.isVisible({ timeout: 3000 }).catch(() => false);
+    results.steps.push({ name: "node-conversation-sheet-opens", passed: hasDetailSheet });
 
-    const hasPayloadDetails = hasDetailPanel
-      ? await detailPanel.getByText(/macro-desk/i).isVisible().catch(() => false)
+    const hasPayloadDetails = hasDetailSheet
+      ? await detailSheet.getByText(/macro-desk|Graph analyst|Trade shock announced/i).first().isVisible().catch(() => false)
       : false;
-    results.steps.push({ name: "node-detail-payload-visible", passed: hasPayloadDetails });
+    results.steps.push({ name: "node-conversation-context-visible", passed: hasPayloadDetails });
 
-    const closeBtn = detailPanel.getByLabel(/Close|关闭/i).first();
-    if (hasDetailPanel) {
-      await closeBtn.waitFor({ state: "visible", timeout: 3000 }).catch(() => {});
-    }
-    const hasCloseBtn = hasDetailPanel ? await closeBtn.isVisible().catch(() => false) : false;
-    results.steps.push({ name: "node-detail-close-visible", passed: hasCloseBtn });
-    if (hasCloseBtn) {
-      await closeBtn.click();
-      await detailPanel.waitFor({ state: "hidden", timeout: 3000 }).catch(() => {});
-      const panelClosed = await detailPanel.isHidden().catch(() => false);
+    if (hasDetailSheet) {
+      await page.keyboard.press("Escape");
+      await detailSheet.waitFor({ state: "hidden", timeout: 3000 }).catch(() => {});
+      const sheetClosed = await detailSheet.isHidden().catch(() => false);
       await saveScreenshot(page, path.join(stepDir, "03-causal-map-detail-closed.png"));
-      results.steps.push({ name: "node-detail-panel-closes", passed: panelClosed });
+      results.steps.push({ name: "node-conversation-sheet-closes", passed: sheetClosed });
     }
   }
 
@@ -867,12 +872,8 @@ async function testCausalMap(page, baseUrl, outputDir, viewport) {
 
 // ── Surface Runner ───────────────────────────────────────
 
-async function runSurface(mode, viewport, args) {
+async function runSurface(mode, viewport, args, outputDir) {
   const baseUrl = args.baseUrl;
-  const outputDir = path.join(
-    DEFAULT_OUTPUT_ROOT,
-    `${timestampLabel()}-phase3a-${mode}-${args.browser}`,
-  );
   ensureDir(outputDir);
 
   const browser = await launchBrowser(args.headless, args.browser);
@@ -998,6 +999,9 @@ export const __test__ = {
 async function main() {
   const args = parseArgs(process.argv);
   const surfaceResults = [];
+  const rootOutputDir = args.outputDir
+    ?? path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-phase3a-${args.mode}-${args.browser}`);
+  ensureDir(rootOutputDir);
 
   await assertFrontendRoutesReady({
     baseUrl: args.baseUrl,
@@ -1005,11 +1009,15 @@ async function main() {
     label: "phase3-batch-a preflight",
   });
 
-  for (const surface of buildSurfaceRuns(args)) {
+  const surfaceRuns = buildSurfaceRuns(args);
+  for (const surface of surfaceRuns) {
+    const surfaceOutputDir = surfaceRuns.length === 1
+      ? rootOutputDir
+      : path.join(rootOutputDir, `${surface.mode}-${surface.browser}`);
     const r = await runSurface(surface.mode, surface.context.viewport ?? DESKTOP_VIEWPORT, {
       ...args,
       browser: surface.browser,
-    });
+    }, surfaceOutputDir);
     surfaceResults.push(r);
   }
 
@@ -1025,6 +1033,10 @@ async function main() {
     })),
     allPassed: surfaceResults.length > 0 && surfaceResults.every((result) => result.summary.allPassed),
   };
+  writeJson(path.join(rootOutputDir, "result.json"), {
+    overall: overallSummary,
+    surfaces: surfaceResults,
+  });
   console.log(JSON.stringify({ overall: overallSummary }));
   if (!overallSummary.allPassed) process.exitCode = 1;
 }

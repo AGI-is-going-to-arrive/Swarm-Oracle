@@ -348,15 +348,25 @@ function runStep(summary, runArgs, stepId, command, commandArgs, options = {}) {
   }
 }
 
-function buildRound7GraphLiveStepSpecs(baseUrl, headless = false) {
+function buildRound7GraphLiveStepSpecs(baseUrl, headless = false, outputRoot = null) {
+  const outputDirFor = (id) => (outputRoot ? path.join(outputRoot, id) : null);
+  const withOutputDir = (id, commandArgs) => {
+    const outputDir = outputDirFor(id);
+    return outputDir ? [...commandArgs, "--output-dir", outputDir] : commandArgs;
+  };
+
   return [
     {
       id: "phase3a_graph_default",
-      commandArgs: [
+      commandArgs: withOutputDir("phase3a_graph_default", [
         "scripts/e2e-phase3-batch-a.mjs",
         "full",
         ...(headless ? ["--headless"] : []),
-      ],
+      ]),
+      artifactDir: outputDirFor("phase3a_graph_default"),
+      resultFile: outputDirFor("phase3a_graph_default")
+        ? path.join(outputDirFor("phase3a_graph_default"), "result.json")
+        : null,
       env: {
         SWARM_URL: baseUrl,
         SWARM_E2E_MODE: "live",
@@ -364,11 +374,15 @@ function buildRound7GraphLiveStepSpecs(baseUrl, headless = false) {
     },
     {
       id: "phase3b_graph_default",
-      commandArgs: [
+      commandArgs: withOutputDir("phase3b_graph_default", [
         "scripts/e2e-phase3-batch-b.mjs",
         "full",
         ...(headless ? ["--headless"] : []),
-      ],
+      ]),
+      artifactDir: outputDirFor("phase3b_graph_default"),
+      resultFile: outputDirFor("phase3b_graph_default")
+        ? path.join(outputDirFor("phase3b_graph_default"), "result.json")
+        : null,
       env: {
         SWARM_URL: baseUrl,
         SWARM_E2E_MODE: "live",
@@ -376,11 +390,15 @@ function buildRound7GraphLiveStepSpecs(baseUrl, headless = false) {
     },
     {
       id: "phase3c_result_graphs",
-      commandArgs: [
+      commandArgs: withOutputDir("phase3c_result_graphs", [
         "scripts/e2e-phase3-batch-c.mjs",
         "full",
         ...(headless ? ["--headless"] : []),
-      ],
+      ]),
+      artifactDir: outputDirFor("phase3c_result_graphs"),
+      resultFile: outputDirFor("phase3c_result_graphs")
+        ? path.join(outputDirFor("phase3c_result_graphs"), "result.json")
+        : null,
       env: {
         SWARM_URL: baseUrl,
         SWARM_E2E_MODE: "live",
@@ -388,11 +406,15 @@ function buildRound7GraphLiveStepSpecs(baseUrl, headless = false) {
     },
     {
       id: "phase3a_graph_zh",
-      commandArgs: [
+      commandArgs: withOutputDir("phase3a_graph_zh", [
         "scripts/e2e-phase3-batch-a.mjs",
         "full",
         ...(headless ? ["--headless"] : []),
-      ],
+      ]),
+      artifactDir: outputDirFor("phase3a_graph_zh"),
+      resultFile: outputDirFor("phase3a_graph_zh")
+        ? path.join(outputDirFor("phase3a_graph_zh"), "result.json")
+        : null,
       env: {
         SWARM_URL: baseUrl,
         SWARM_E2E_MODE: "live",
@@ -401,11 +423,15 @@ function buildRound7GraphLiveStepSpecs(baseUrl, headless = false) {
     },
     {
       id: "phase3b_graph_zh",
-      commandArgs: [
+      commandArgs: withOutputDir("phase3b_graph_zh", [
         "scripts/e2e-phase3-batch-b.mjs",
         "full",
         ...(headless ? ["--headless"] : []),
-      ],
+      ]),
+      artifactDir: outputDirFor("phase3b_graph_zh"),
+      resultFile: outputDirFor("phase3b_graph_zh")
+        ? path.join(outputDirFor("phase3b_graph_zh"), "result.json")
+        : null,
       env: {
         SWARM_URL: baseUrl,
         SWARM_E2E_MODE: "live",
@@ -422,9 +448,11 @@ function registerRound7GraphLiveSteps({
   nodeCommand,
   runStep: runStepImpl = runStep,
 }) {
-  for (const spec of buildRound7GraphLiveStepSpecs(baseUrl, args.headless)) {
+  for (const spec of buildRound7GraphLiveStepSpecs(baseUrl, args.headless, args.outputRoot)) {
     runStepImpl(summary, args, spec.id, nodeCommand, spec.commandArgs, {
       env: spec.env,
+      artifactDir: spec.artifactDir,
+      resultFile: spec.resultFile,
     });
   }
 }

@@ -75,40 +75,41 @@ function areScenarioDirectorStatesEquivalent(
   });
 }
 
-function areJsonValuesEquivalent(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function hasDirectorObjectivesContent(state: ScenarioDirectorState | null | undefined): boolean {
-  return Boolean(
-    state?.objectives.goals.length
-    || state?.objectives.generated_for_question
-    || state?.objectives.generated_for_profile
-    || state?.objectives.last_updated_at,
-  );
-}
-
-function hasDirectorCommitmentContent(state: ScenarioDirectorState | null | undefined): boolean {
-  return Boolean(state?.commitment.active || state?.commitment.outcome);
-}
-
-function mergeDirectorStateForConflict(
-  baseState: ScenarioDirectorState | null | undefined,
+function mergeDirectorStateForPersist(
+  currentState: ScenarioDirectorState | null | undefined,
   desiredState: ScenarioDirectorState,
-  latestState: ScenarioDirectorState,
+  changedSections: DirectorPersistChangedSections,
 ): ScenarioDirectorState {
-  const shouldUseDesiredObjectives = baseState
-    ? !areJsonValuesEquivalent(baseState.objectives, desiredState.objectives)
-    : !hasDirectorObjectivesContent(latestState) && hasDirectorObjectivesContent(desiredState);
-  const shouldUseDesiredCommitment = baseState
-    ? !areJsonValuesEquivalent(baseState.commitment, desiredState.commitment)
-    : hasDirectorCommitmentContent(desiredState) || !hasDirectorCommitmentContent(latestState);
+  if (!hasScenarioDirectorAuthority(currentState)) return desiredState;
+  const current = currentState as ScenarioDirectorState;
+  const shouldUseDesiredObjectives = changedSections.objectives;
+  const shouldUseDesiredCommitment = changedSections.commitment;
 
   return {
-    ...latestState,
-    objectives: shouldUseDesiredObjectives ? desiredState.objectives : latestState.objectives,
-    commitment: shouldUseDesiredCommitment ? desiredState.commitment : latestState.commitment,
-    revision: latestState.revision,
+    ...current,
+    objectives: shouldUseDesiredObjectives ? desiredState.objectives : current.objectives,
+    commitment: shouldUseDesiredCommitment ? desiredState.commitment : current.commitment,
+    revision: current.revision,
+  };
+}
+
+type DirectorPersistChangedSections = {
+  objectives: boolean;
+  commitment: boolean;
+};
+
+const ALL_DIRECTOR_SECTIONS_CHANGED: DirectorPersistChangedSections = {
+  objectives: true,
+  commitment: true,
+};
+
+function withDirectorRevision(
+  state: ScenarioDirectorState,
+  revision: number,
+): ScenarioDirectorState {
+  return {
+    ...state,
+    revision,
   };
 }
 
@@ -406,15 +407,22 @@ export function useSimulationDirectorState({
     return subscribeScenarioMeta(id, refreshLocalMeta);
   }, [id, isReplayMode, refreshLocalMeta]);
 
-  const persistDirectorMeta = useCallback(async (nextMeta: NonNullable<typeof scenarioMeta>) => {
+  const persistDirectorMeta = useCallback(async (
+    nextMeta: NonNullable<typeof scenarioMeta>,
+    changedSections: DirectorPersistChangedSections = ALL_DIRECTOR_SECTIONS_CHANGED,
+  ) => {
     if (!id || isReplayMode) return;
     const desiredState = scenarioMetaToDirectorState(nextMeta);
     const persistTask = async () => {
       const baseState = directorStateRef.current;
-      const nextState = {
-        ...desiredState,
-        revision: directorRevisionRef.current,
-      };
+      const nextState = withDirectorRevision(
+        mergeDirectorStateForPersist(baseState, desiredState, changedSections),
+        directorRevisionRef.current,
+      );
+      if (baseState && areScenarioDirectorStatesEquivalent(nextState, baseState)) {
+        setBackendDirectorOverrideState(baseState);
+        return;
+      }
       try {
         const persisted = await upsertScenarioDirectorState(id, nextState);
         directorRevisionRef.current = getStateRevision(persisted);
@@ -435,7 +443,11 @@ export function useSimulationDirectorState({
             setBackendDirectorOverrideState(latest);
             return;
           }
-          const retryState = mergeDirectorStateForConflict(baseState, desiredState, latest);
+          const retryState = mergeDirectorStateForPersist(latest, desiredState, changedSections);
+          if (areScenarioDirectorStatesEquivalent(retryState, latest)) {
+            setBackendDirectorOverrideState(latest);
+            return;
+          }
           try {
             const persisted = await upsertScenarioDirectorState(id, retryState);
             directorRevisionRef.current = getStateRevision(persisted);
@@ -532,7 +544,10 @@ export function useSimulationDirectorState({
     let persistStarted = false;
     const timeoutId = window.setTimeout(() => {
       persistStarted = true;
-      void persistDirectorMeta(storedScenarioMeta);
+      void persistDirectorMeta(storedScenarioMeta, {
+        objectives: false,
+        commitment: Boolean(desiredState.commitment.active || desiredState.commitment.outcome),
+      });
     }, 0);
     return () => {
       window.clearTimeout(timeoutId);
@@ -609,14 +624,14 @@ export function useSimulationDirectorState({
       currentRound: Math.max(1, currentRound),
     });
     refreshLocalMeta();
-    void persistDirectorMeta(nextMeta);
+    void persistDirectorMeta(nextMeta, { objectives: false, commitment: true });
   }, [activeBranches, commitmentDraftBranchId, currentRound, id, isReplayMode, persistDirectorMeta, refreshLocalMeta]);
 
   const handleClearCommitment = useCallback(() => {
     if (isReplayMode || !id) return;
     const nextMeta = clearBranchCommitment(id);
     refreshLocalMeta();
-    void persistDirectorMeta(nextMeta);
+    void persistDirectorMeta(nextMeta, { objectives: false, commitment: true });
   }, [id, isReplayMode, persistDirectorMeta, refreshLocalMeta]);
 
   return {

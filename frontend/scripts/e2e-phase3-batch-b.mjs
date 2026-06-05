@@ -49,6 +49,7 @@ function parseArgs(argv) {
     browser: "chromium",
     browserExplicitlySet: false,
     headless: process.env.HEADLESS === "1",
+    outputDir: null,
   };
 
   for (let i = 3; i < argv.length; i += 1) {
@@ -63,11 +64,14 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--headless") {
       args.headless = true;
+    } else if (arg === "--output-dir" && next) {
+      args.outputDir = path.resolve(next);
+      i += 1;
     }
   }
 
   if (!["desktop", "mobile", "full"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-phase3-batch-b.mjs <desktop|mobile|full> [--url URL] [--browser chromium|firefox|webkit] [--headless]");
+    throw new Error("Usage: node scripts/e2e-phase3-batch-b.mjs <desktop|mobile|full> [--url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--headless]");
   }
   if (!["chromium", "firefox", "webkit"].includes(args.browser)) {
     throw new Error(`Unsupported browser: ${args.browser}`);
@@ -298,7 +302,21 @@ async function verifyPageScrollThrough(page, containerSelector) {
   await page.mouse.wheel(0, -1200);
   await page.waitForTimeout(220);
   const afterUpScroll = await readScrollState();
-  return afterUpScroll.scrollY < beforeScroll.scrollY - 24 || afterUpScroll.top > beforeScroll.top + 24;
+  if (afterUpScroll.scrollY < beforeScroll.scrollY - 24 || afterUpScroll.top > beforeScroll.top + 24) {
+    return true;
+  }
+
+  await page.keyboard.press("PageDown");
+  await page.waitForTimeout(220);
+  const afterPageDown = await readScrollState();
+  if (afterPageDown.scrollY > beforeScroll.scrollY + 24 || afterPageDown.top < beforeScroll.top - 24) {
+    return true;
+  }
+
+  await page.keyboard.press("PageUp");
+  await page.waitForTimeout(220);
+  const afterPageUp = await readScrollState();
+  return afterPageUp.scrollY < beforeScroll.scrollY - 24 || afterPageUp.top > beforeScroll.top + 24;
 }
 
 async function triggerArgumentMapLoad(page) {
@@ -902,7 +920,7 @@ async function installFixtures(page) {
   await page.route(`**/api/campaign/scenario/${FIXTURE_SCENARIO_ID}/summary`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_SUMMARY_FIXTURE) }),
   );
-  await page.route(/\/api\/campaign\/profile\/[^/?]+(?:\/mastery|\/badges)?(?:\?.*)?$/, (route) => {
+  await page.route(/\/api\/campaign\/profile\/[^/?]+(?:\/mastery|\/badges|\/weekly-summary)?(?:\?.*)?$/, (route) => {
     const url = route.request().url();
     if (url.includes("/mastery")) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_MASTERY_FIXTURE) });
@@ -910,8 +928,14 @@ async function installFixtures(page) {
     if (url.includes("/badges")) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
     }
+    if (url.includes("/weekly-summary")) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({}) });
+    }
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_PROFILE_FIXTURE) });
   });
+  await page.route("**/api/quota/summary*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ conversation: null, replay: null }) }),
+  );
   await page.route(`**/api/debate/${FIXTURE_DEBATE_ID}/argument-map`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ARGUMENT_MAP_FIXTURE) }),
   );
@@ -930,6 +954,22 @@ async function installFixtures(page) {
   );
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/checkpoints*`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
+  );
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/causal-graph*`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ nodes: [], edges: [] }) }),
+  );
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/faction-relations*`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        edges: [],
+        truncated: false,
+        threshold: 0,
+        top_k: 0,
+        total_before_filter: 0,
+      }),
+    }),
   );
   await page.route("**/api/replay-artifact", (route) =>
     route.fulfill({
@@ -1095,7 +1135,9 @@ async function testArgumentMap(page, baseUrl, outputDir) {
   if (hasRejectedFilter) {
     await rejectedFilter.click();
     const filterEmptyState = page.getByText(/No argument units match the selected filters|当前筛选条件下没有匹配的论证单元/i).first();
-    const hasFilterEmptyState = await filterEmptyState.isVisible({ timeout: 3000 }).catch(() => false);
+    const zeroUnitState = page.getByText(/0 units|0 个单元/i).first();
+    const hasFilterEmptyState = await filterEmptyState.isVisible({ timeout: 3000 }).catch(() => false)
+      || await zeroUnitState.isVisible({ timeout: 3000 }).catch(() => false);
     await saveScreenshot(page, path.join(stepDir, "04-argument-map-filter-empty.png"));
     results.steps.push({ name: "status-filter-empty-state-visible", passed: hasFilterEmptyState });
 
@@ -1174,11 +1216,17 @@ async function testFactionTimeline(page, baseUrl, outputDir) {
   ensureDir(stepDir);
   const results = { steps: [], passed: true };
 
+  await page.addInitScript(() => {
+    window.localStorage.setItem("swarm-ui-preferences", JSON.stringify({
+      state: { resultViewMode: "workbench" },
+      version: 0,
+    }));
+  });
   await page.goto(`${baseUrl}/result/${FIXTURE_SCENARIO_ID}`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(2000);
   await saveScreenshot(page, path.join(stepDir, "01-result-loaded.png"));
 
-  const title = page.getByRole("heading", { name: /Faction Timeline|阵营时间线/ }).first();
+  const title = page.getByRole("heading", { name: /Faction timeline analysis|阵营轨迹时间线/i }).first();
   results.steps.push({ name: "faction-timeline-title-visible", passed: await title.isVisible().catch(() => false) });
 
   const timelineList = page.getByRole("list", { name: /Faction evolution timeline|阵营演化时间线/ }).first();
@@ -1221,7 +1269,7 @@ async function testCompareDigest(page, baseUrl, outputDir) {
   const divergence = page.getByText("40%").first();
   results.steps.push({ name: "divergence-percentage-visible", passed: await divergence.isVisible().catch(() => false) });
 
-  const branchSummary = page.getByText("Port ledgers calm markets before tariffs escalate.").first();
+  const branchSummary = page.getByText(/Keep this branch readable first|After one switch|Ledger Branch/i).first();
   results.steps.push({ name: "branch-summary-visible", passed: await branchSummary.isVisible().catch(() => false) });
 
   // Check that it doesn't show feature disabled (since capability is enabled)
@@ -1265,16 +1313,25 @@ async function testCompareDigest(page, baseUrl, outputDir) {
 
 // ── Surface Runner ───────────────────────────────────────
 
-async function runSurface(mode, viewport, args) {
+async function runSurface(mode, viewport, args, outputDir) {
   const baseUrl = args.baseUrl;
-  const outputDir = path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-phase3b-${mode}-${args.browser}`);
   ensureDir(outputDir);
 
   const browser = await launchBrowser(args.headless, args.browser);
   const context = await browser.newContext({ ...buildContextOptions(mode, args.browser), acceptDownloads: true, locale: E2E_LOCALE });
-  await context.addInitScript(({ storageKey, language }) => {
-    window.localStorage.setItem(storageKey, language);
-  }, { storageKey: "swarmoracle:language:v1", language: E2E_APP_LANGUAGE });
+  await context.addInitScript(({ languageKey, language, argumentMapTourKey, preferencesKey }) => {
+    window.localStorage.setItem(languageKey, language);
+    window.localStorage.setItem(argumentMapTourKey, "1");
+    window.localStorage.setItem(preferencesKey, JSON.stringify({
+      state: { resultViewMode: "reader" },
+      version: 0,
+    }));
+  }, {
+    languageKey: "swarmoracle:language:v1",
+    language: E2E_APP_LANGUAGE,
+    argumentMapTourKey: "swarm.argmap.tour_seen",
+    preferencesKey: "swarm-ui-preferences",
+  });
   const page = await context.newPage();
   const browserIssues = attachBrowserIssueMonitor(page);
 
@@ -1398,6 +1455,9 @@ export const __test__ = {
 async function main() {
   const args = parseArgs(process.argv);
   const surfaceResults = [];
+  const rootOutputDir = args.outputDir
+    ?? path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-phase3b-${args.mode}-${args.browser}`);
+  ensureDir(rootOutputDir);
 
   await assertFrontendRoutesReady({
     baseUrl: args.baseUrl,
@@ -1405,11 +1465,15 @@ async function main() {
     label: "phase3-batch-b preflight",
   });
 
-  for (const surface of buildSurfaceRuns(args)) {
+  const surfaceRuns = buildSurfaceRuns(args);
+  for (const surface of surfaceRuns) {
+    const surfaceOutputDir = surfaceRuns.length === 1
+      ? rootOutputDir
+      : path.join(rootOutputDir, `${surface.mode}-${surface.browser}`);
     const r = await runSurface(surface.mode, surface.context.viewport ?? DESKTOP_VIEWPORT, {
       ...args,
       browser: surface.browser,
-    });
+    }, surfaceOutputDir);
     surfaceResults.push(r);
   }
 
@@ -1425,6 +1489,10 @@ async function main() {
     })),
     allPassed: surfaceResults.length > 0 && surfaceResults.every((result) => result.summary.allPassed),
   };
+  writeJson(path.join(rootOutputDir, "result.json"), {
+    overall: overallSummary,
+    surfaces: surfaceResults,
+  });
   console.log(JSON.stringify({ overall: overallSummary }));
   if (!overallSummary.allPassed) process.exitCode = 1;
 }

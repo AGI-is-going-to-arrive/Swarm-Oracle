@@ -520,6 +520,12 @@ export function SimulationView() {
     if (!id || !scenario || !gameplayProfile || !scenarioMeta || !signatureArcState) return;
     if (scenario.director_state?.objectives?.goals?.length) return;
     if (scenarioMeta.objectives.goals.length > 0) return;
+    if (
+      !hasScenarioDirectorAuthority(backendDirectorState ?? scenario.director_state ?? null)
+      && (scenarioMeta.commitment.active || scenarioMeta.commitment.outcome)
+    ) {
+      return;
+    }
     const signatureCardId = signatureArcState.nextCardId ?? signatureArcState.sequence[0] ?? null;
     const seedKey = [
       id,
@@ -539,8 +545,8 @@ export function SimulationView() {
       }),
     });
     refreshLocalMeta();
-    void persistDirectorMeta(nextMeta);
-  }, [gameplayProfile, id, isReplayMode, persistDirectorMeta, refreshLocalMeta, scenario, scenarioMeta, signatureArcState]);
+    void persistDirectorMeta(nextMeta, { objectives: true, commitment: false });
+  }, [backendDirectorState, gameplayProfile, id, isReplayMode, persistDirectorMeta, refreshLocalMeta, scenario, scenarioMeta, signatureArcState]);
 
   // Load scenario data if navigated directly
   useEffect(() => {

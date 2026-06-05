@@ -71,6 +71,7 @@ function parseArgs(argv) {
     browser: "chromium",
     browserExplicitlySet: false,
     headless: process.env.HEADLESS === "1",
+    outputDir: null,
   };
 
   for (let i = 3; i < argv.length; i += 1) {
@@ -85,11 +86,14 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--headless") {
       args.headless = true;
+    } else if (arg === "--output-dir" && next) {
+      args.outputDir = path.resolve(next);
+      i += 1;
     }
   }
 
   if (!["desktop", "mobile", "full"].includes(args.mode)) {
-    throw new Error("Usage: node scripts/e2e-phase3-batch-c.mjs <desktop|mobile|full> [--url URL] [--browser chromium|firefox|webkit] [--headless]");
+    throw new Error("Usage: node scripts/e2e-phase3-batch-c.mjs <desktop|mobile|full> [--url URL] [--output-dir DIR] [--browser chromium|firefox|webkit] [--headless]");
   }
   if (!["chromium", "firefox", "webkit"].includes(args.browser)) {
     throw new Error(`Unsupported browser: ${args.browser}`);
@@ -269,14 +273,29 @@ async function installFixtures(page, overrides = {}) {
   await page.route(`**/api/campaign/scenario/${FIXTURE_SCENARIO_ID}/summary`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_SUMMARY_FIXTURE) }),
   );
-  await page.route(`**/api/campaign/profile/${FIXTURE_DIRECTOR_ID}`, (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_PROFILE_FIXTURE) }),
+  await page.route(/\/api\/campaign\/profile\/[^/?]+(?:\/mastery|\/badges|\/weekly-summary)?(?:\?.*)?$/, (route) => {
+    const url = route.request().url();
+    if (url.includes("/mastery") || url.includes("/badges")) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    }
+    if (url.includes("/weekly-summary")) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({}) });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CAMPAIGN_PROFILE_FIXTURE) });
+  });
+  await page.route("**/api/quota/summary*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ conversation: null, replay: null }) }),
   );
-  await page.route(`**/api/campaign/profile/${FIXTURE_DIRECTOR_ID}/mastery`, (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
-  );
-  await page.route(`**/api/campaign/profile/${FIXTURE_DIRECTOR_ID}/badges`, (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
+  await page.route("**/api/replay-artifact", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "artifact-e2e-phase3c",
+        kind: "scenario_result_v1",
+        created_at: "2026-04-10T00:00:00Z",
+      }),
+    }),
   );
 
   // Resume endpoint — default success, overridable for error tests
@@ -307,7 +326,7 @@ async function testResumePanelVisible(page, baseUrl, outputDir) {
   await page.waitForTimeout(2000);
   await saveScreenshot(page, path.join(stepDir, "01-result-loaded.png"));
 
-  const title = page.getByText(/Resume Simulation|续跑模拟/).first();
+  const title = page.getByText(/Continue from Checkpoint|Resume Simulation|从检查点续跑|续跑模拟/).first();
   const hasTitle = await title.isVisible({ timeout: 5000 }).catch(() => false);
   results.steps.push({ name: "resume-panel-title-visible", passed: hasTitle });
 
@@ -315,11 +334,11 @@ async function testResumePanelVisible(page, baseUrl, outputDir) {
   const hasSelect = await branchSelect.isVisible().catch(() => false);
   results.steps.push({ name: "branch-select-visible", passed: hasSelect });
 
-  const roundInput = page.locator("#resume-round");
-  const hasRound = await roundInput.isVisible().catch(() => false);
-  results.steps.push({ name: "round-input-visible", passed: hasRound });
+  const roundOrCheckpointInput = page.locator("#resume-round, #resume-checkpoint").first();
+  const hasRoundOrCheckpoint = await roundOrCheckpointInput.isVisible().catch(() => false);
+  results.steps.push({ name: "round-or-checkpoint-input-visible", passed: hasRoundOrCheckpoint });
 
-  const submitBtn = page.getByRole("button", { name: /Resume|续跑/ });
+  const submitBtn = page.getByRole("button", { name: /Create continuation branch|Resume|创建续跑分支|续跑/ });
   const hasBtn = await submitBtn.isVisible().catch(() => false);
   results.steps.push({ name: "submit-button-visible", passed: hasBtn });
 
@@ -353,16 +372,17 @@ async function testResumeSubmitSuccess(page, baseUrl, outputDir) {
 
   // Set round
   const roundInput = page.locator("#resume-round");
+  await roundInput.waitFor({ state: "visible", timeout: 5000 });
   await roundInput.fill("2");
 
   // Click submit
-  const submitBtn = page.getByRole("button", { name: /Resume|续跑/ });
+  const submitBtn = page.getByRole("button", { name: /Create continuation branch|Resume|创建续跑分支|续跑/ });
   await submitBtn.click();
   await page.waitForTimeout(300);
   await saveScreenshot(page, path.join(stepDir, "02-submitted.png"));
 
   // Check success message
-  const successMsg = page.getByText(/Resume branch created|续跑分支已创建/);
+  const successMsg = page.getByText(/Continuation branch created|Resume branch created|续跑分支已创建/);
   const hasSuccess = await successMsg.isVisible({ timeout: 3000 }).catch(() => false);
   results.steps.push({ name: "success-message-visible", passed: hasSuccess });
 
@@ -409,7 +429,7 @@ async function testResume429Error(page, baseUrl, outputDir) {
   const select = page.locator("#resume-branch");
   await select.selectOption(FIXTURE_BRANCH_A);
 
-  const submitBtn = page.getByRole("button", { name: /Resume|续跑/ });
+  const submitBtn = page.getByRole("button", { name: /Create continuation branch|Resume|创建续跑分支|续跑/ });
   await submitBtn.click();
   await page.waitForTimeout(500);
   await saveScreenshot(page, path.join(stepDir, "01-429-submitted.png"));
@@ -439,6 +459,12 @@ async function testResultGraphIntegrations(page, baseUrl, outputDir) {
     });
   });
 
+  await page.addInitScript(() => {
+    window.localStorage.setItem("swarm-ui-preferences", JSON.stringify({
+      state: { resultViewMode: "workbench" },
+      version: 0,
+    }));
+  });
   await page.goto(`${baseUrl}${RESULT_GRAPH_ROUTE_PATH}`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(2000);
   await saveScreenshot(page, path.join(stepDir, "01-result-loaded.png"));
@@ -480,13 +506,18 @@ async function testResultGraphIntegrations(page, baseUrl, outputDir) {
 
 // ── Surface Runner ───────────────────────────────────────
 
-async function runSurface(mode, viewport, args) {
+async function runSurface(mode, viewport, args, outputDir) {
   const baseUrl = args.baseUrl;
-  const outputDir = path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-phase3c-${mode}-${args.browser}`);
   ensureDir(outputDir);
 
   const browser = await launchBrowser(args.headless, args.browser);
   const context = await browser.newContext({ ...buildContextOptions(mode, args.browser), locale: "en-US" });
+  await context.addInitScript(() => {
+    window.localStorage.setItem("swarm-ui-preferences", JSON.stringify({
+      state: { resultViewMode: "reader" },
+      version: 0,
+    }));
+  });
   const page = await context.newPage();
 
   await installFixtures(page);
@@ -585,28 +616,38 @@ export const __test__ = {
 async function main() {
   const args = parseArgs(process.argv);
   const surfaceResults = [];
+  const rootOutputDir = args.outputDir
+    ?? path.join(DEFAULT_OUTPUT_ROOT, `${timestampLabel()}-phase3c-${args.mode}-${args.browser}`);
+  ensureDir(rootOutputDir);
 
-  for (const surface of buildSurfaceRuns(args)) {
+  const surfaceRuns = buildSurfaceRuns(args);
+  for (const surface of surfaceRuns) {
+    const surfaceOutputDir = surfaceRuns.length === 1
+      ? rootOutputDir
+      : path.join(rootOutputDir, `${surface.mode}-${surface.browser}`);
     const r = await runSurface(surface.mode, surface.context.viewport ?? DESKTOP_VIEWPORT, {
       ...args,
       browser: surface.browser,
-    });
+    }, surfaceOutputDir);
     surfaceResults.push(r);
     if (!r.summary.allPassed) process.exitCode = 1;
   }
 
-  console.log(JSON.stringify({
-    overall: {
-      mode: args.mode,
-      browser: args.browser,
-      surfaces: surfaceResults.map((result) => ({
-        mode: result.mode,
-        browser: result.browser,
-        allPassed: result.summary.allPassed,
-      })),
-      allPassed: surfaceResults.length > 0 && surfaceResults.every((result) => result.summary.allPassed),
-    },
-  }));
+  const overallSummary = {
+    mode: args.mode,
+    browser: args.browser,
+    surfaces: surfaceResults.map((result) => ({
+      mode: result.mode,
+      browser: result.browser,
+      allPassed: result.summary.allPassed,
+    })),
+    allPassed: surfaceResults.length > 0 && surfaceResults.every((result) => result.summary.allPassed),
+  };
+  writeJson(path.join(rootOutputDir, "result.json"), {
+    overall: overallSummary,
+    surfaces: surfaceResults,
+  });
+  console.log(JSON.stringify({ overall: overallSummary }));
 }
 
 if (IS_MAIN_MODULE) {

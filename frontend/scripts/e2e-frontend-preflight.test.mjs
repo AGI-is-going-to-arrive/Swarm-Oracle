@@ -499,13 +499,23 @@ test("release signoff includes batch-c result graph coverage", () => {
 });
 
 test("release signoff propagates headless mode to round 7 graph live suites", () => {
-  const specs = releaseSignoffTest.buildRound7GraphLiveStepSpecs("http://127.0.0.1:18928", true);
+  const specs = releaseSignoffTest.buildRound7GraphLiveStepSpecs(
+    "http://127.0.0.1:18928",
+    true,
+    "output/e2e/release-check",
+  );
 
   for (const spec of specs) {
     assert.ok(
       spec.commandArgs.includes("--headless"),
       `${spec.id} should run browser automation headless in CI`,
     );
+    assert.ok(
+      spec.commandArgs.includes("--output-dir"),
+      `${spec.id} should write artifacts under the release signoff output root`,
+    );
+    assert.equal(spec.artifactDir, `output/e2e/release-check/${spec.id}`);
+    assert.equal(spec.resultFile, `output/e2e/release-check/${spec.id}/result.json`);
   }
 });
 
