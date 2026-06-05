@@ -1748,11 +1748,25 @@ async function dragReseatRoundtable(page) {
 
   if (slotName !== sourceName) {
     try {
-      slotName = await keyboardDropCandidateToSeat(page, sourceCard, targetSlot, sourceName, targetTestId);
-      dragMethod = "keyboard-after-mouse-miss";
+      const keyboardSlotName = await keyboardDropCandidateToSeat(page, sourceCard, targetSlot, sourceName, targetTestId);
+      if (keyboardSlotName === sourceName) {
+        slotName = keyboardSlotName;
+        dragMethod = "keyboard-after-mouse-miss";
+      }
     } catch {
-      slotName = await clickSelectCandidateForSeat(page, sourceCard, targetSlot, sourceName, targetTestId);
-      dragMethod = "click-after-mouse-keyboard-miss";
+      // Keep trying the click fallback below.
+    }
+  }
+
+  if (slotName !== sourceName) {
+    try {
+      const clickSlotName = await clickSelectCandidateForSeat(page, sourceCard, targetSlot, sourceName, targetTestId);
+      if (clickSlotName === sourceName) {
+        slotName = clickSlotName;
+        dragMethod = "click-after-mouse-keyboard-miss";
+      }
+    } catch {
+      // Diagnostics below report the final board state.
     }
   }
 
