@@ -1,13 +1,7 @@
 name: Release Signoff
 
 on:
-  push:
-    branches:
-      - main
-      - master
   workflow_dispatch:
-  schedule:
-    - cron: "30 18 * * *"
 
 permissions:
   contents: read
