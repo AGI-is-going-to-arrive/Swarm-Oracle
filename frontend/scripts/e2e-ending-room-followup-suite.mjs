@@ -33,6 +33,10 @@ const VALID_BROWSERS = new Set(["chromium", "firefox", "webkit"]);
 const VALID_LOCALES = new Set(["zh", "en"]);
 const LANGUAGE_STORAGE_KEY = "swarmoracle:language:v1";
 const DEFAULT_BASE_URL = process.env.SWARM_URL || "http://127.0.0.1:18928";
+const MULTI_ENDING_FIXTURE_QUESTION =
+  "CI fixture: competing emergency-governance endings for ending-room follow-up coverage.";
+const SINGLE_ENDING_FIXTURE_QUESTION =
+  "CI fixture: one converged emergency-governance ending for ending-room follow-up coverage.";
 
 // Lifecycle captures are best-effort evidence only. Keep the budget short so
 // mobile follow-up validation can quickly fall back to API-visible checks.
@@ -412,6 +416,174 @@ async function findScenarioIds(frontendUrl) {
     );
   }
   return { multiId, singleId };
+}
+
+function buildEndingRoomReplayFixture(kind) {
+  const multi = kind === "multi";
+  const agents = [
+    {
+      id: "fixture-agent-1",
+      name: "Civic Auditor",
+      role: "Oversight Lead",
+      persona: "Tracks accountability gaps and insists every emergency action leaves a review trail.",
+      tier: "CORE",
+      stance: "support",
+      emotion: "focused",
+    },
+    {
+      id: "fixture-agent-2",
+      name: "Operations Marshal",
+      role: "Response Coordinator",
+      persona: "Optimizes speed under pressure, but accepts rollback rules when they are concrete.",
+      tier: "IMPORTANT",
+      stance: "neutral",
+      emotion: "measured",
+    },
+    {
+      id: "fixture-agent-3",
+      name: "Civil Rights Counsel",
+      role: "Rights Advocate",
+      persona: "Tests each proposal against rights impact, consent, and public legitimacy.",
+      tier: "CORE",
+      stance: "oppose",
+      emotion: "alert",
+    },
+  ];
+  const branchSeeds = multi
+    ? [
+        {
+          id: "fixture-branch-audit",
+          title: "Audit Trail Holds",
+          probability: 0.58,
+          story: "The emergency rule survives because every override is time-boxed, logged, and reviewed in public.",
+          insight: "Speed becomes durable only after the review path is visible.",
+          key_moments: ["Override log published", "Review panel narrows the mandate"],
+        },
+        {
+          id: "fixture-branch-backlash",
+          title: "Unchecked Override Backlash",
+          probability: 0.42,
+          story: "The same emergency power moves faster at first, then loses legitimacy when review arrives too late.",
+          insight: "The hidden cost is not delay; it is trust lost after opaque action.",
+          key_moments: ["Fast order bypasses review", "Public challenge freezes rollout"],
+        },
+      ]
+    : [
+        {
+          id: "fixture-branch-consensus",
+          title: "Converged Guardrail Path",
+          probability: 1,
+          story: "The group keeps one worldline by pairing emergency speed with a narrow mandate and immediate review.",
+          insight: "The deciding move is a reversible process everyone can inspect.",
+          key_moments: ["Mandate narrowed", "Review cadence agreed"],
+        },
+      ];
+  const messages = branchSeeds.flatMap((branch) => [
+    {
+      branch: branch.id,
+      round: 1,
+      agent_id: "fixture-agent-1",
+      agent: "Civic Auditor",
+      message: `For ${branch.title}, the first requirement is a written audit trail before the override expands.`,
+      emotion: "focused",
+    },
+    {
+      branch: branch.id,
+      round: 1,
+      agent_id: "fixture-agent-2",
+      agent: "Operations Marshal",
+      message: `This path can move quickly only if the response team knows exactly when the mandate expires.`,
+      emotion: "measured",
+    },
+    {
+      branch: branch.id,
+      round: 2,
+      agent_id: "fixture-agent-3",
+      agent: "Civil Rights Counsel",
+      message: `The conclusion holds when affected groups can challenge the decision without stopping urgent work.`,
+      emotion: "alert",
+    },
+  ]);
+
+  return {
+    question: multi ? MULTI_ENDING_FIXTURE_QUESTION : SINGLE_ENDING_FIXTURE_QUESTION,
+    status: "done",
+    scene_theme: "civic_chamber",
+    visualization_enabled: false,
+    parsed_context: {
+      mode: "blackboard",
+      hierarchical: false,
+      simulation_rounds: 2,
+    },
+    mode: "blackboard",
+    hierarchical: false,
+    agents,
+    branches: branchSeeds.map((branch) => ({
+      ...branch,
+      status: "COMPLETED",
+      parent_branch_id: null,
+      fork_round: 0,
+      fork_reason: "",
+    })),
+    messages,
+    groups: [],
+  };
+}
+
+function isUsableEndingRoomScenario(detail, kind) {
+  const branches = Array.isArray(detail?.branches) ? detail.branches : [];
+  const agents = Array.isArray(detail?.agents) ? detail.agents : [];
+  const messages = Array.isArray(detail?.messages) ? detail.messages : [];
+  const branchCount = branches.length;
+  const allBranchesCompleted = branchCount > 0
+    && branches.every((branch) => branch?.status === "COMPLETED");
+  const hasStructuredEndingRoomInputs = agents.length > 0
+    && messages.length > 0
+    && branches.some((branch) => typeof branch?.story === "string" && branch.story.trim().length > 0);
+  if (!allBranchesCompleted || !hasStructuredEndingRoomInputs) return false;
+  return kind === "multi" ? branchCount > 1 : branchCount === 1;
+}
+
+async function importEndingRoomFixtureScenario(frontendUrl, kind) {
+  const backendUrl = resolveBackendUrl(frontendUrl);
+  const imported = await postJson(`${backendUrl}/api/scenario/import-replay`, {
+    scenario: buildEndingRoomReplayFixture(kind),
+  });
+  if (!isUsableEndingRoomScenario(imported, kind)) {
+    const branchCount = Array.isArray(imported?.branches) ? imported.branches.length : 0;
+    throw new Error(
+      `Imported ${kind} ending-room fixture scenario is not usable `
+      + `(scenario=${imported?.id ?? "unknown"}, branches=${branchCount})`,
+    );
+  }
+  return imported;
+}
+
+async function ensureScenarioIds(frontendUrl) {
+  try {
+    return await findScenarioIds(frontendUrl);
+  } catch (initialError) {
+    const message = initialError instanceof Error ? initialError.message : String(initialError);
+    if (!message.includes("Could not find both multi-ending and single-ending done scenarios")) {
+      throw initialError;
+    }
+
+    const [multiDetail, singleDetail] = await Promise.all([
+      importEndingRoomFixtureScenario(frontendUrl, "multi"),
+      importEndingRoomFixtureScenario(frontendUrl, "single"),
+    ]);
+
+    try {
+      return await findScenarioIds(frontendUrl);
+    } catch (retryError) {
+      const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+      throw new Error(
+        `${retryMessage}; imported ending-room fixtures `
+        + `(multi=${multiDetail.id}, multiBranches=${multiDetail.branches?.length ?? "unknown"}, `
+        + `single=${singleDetail.id}, singleBranches=${singleDetail.branches?.length ?? "unknown"})`,
+      );
+    }
+  }
 }
 
 async function waitFor(page, predicate, label, timeout = 15000) {
@@ -2922,7 +3094,7 @@ async function main() {
   const browserEngine = resolveBrowserEngine(args.browser);
   const browser = await browserEngine.launch(buildBrowserLaunchOptions(args.browser, args.headless));
   try {
-    const scenarioIds = await findScenarioIds(args.url);
+    const scenarioIds = await ensureScenarioIds(args.url);
     const summary = {
       locale: args.locale,
     };

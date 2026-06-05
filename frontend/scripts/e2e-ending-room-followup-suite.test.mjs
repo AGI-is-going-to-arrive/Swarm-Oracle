@@ -236,6 +236,81 @@ test("findScenarioIds prefers the newest fully-completed single and multi scenar
   );
 });
 
+test("ensureScenarioIds imports deterministic fixtures when the scan lacks a usable pair", async () => {
+  const importedKinds = [];
+  let scanCount = 0;
+  const ensureScenarioIds = loadAsyncFunction("ensureScenarioIds", {
+    findScenarioIds: async () => {
+      scanCount += 1;
+      if (scanCount === 1) {
+        throw new Error("Could not find both multi-ending and single-ending done scenarios (scanned=9, multi=0, single=9)");
+      }
+      return { multiId: "created-multi", singleId: "created-single" };
+    },
+    importEndingRoomFixtureScenario: async (_frontendUrl, kind) => {
+      importedKinds.push(kind);
+      return { id: `scenario-${kind}`, branches: kind === "multi" ? [{}, {}] : [{}] };
+    },
+  });
+
+  await assert.deepEqual(
+    await ensureScenarioIds("http://127.0.0.1:18928"),
+    { multiId: "created-multi", singleId: "created-single" },
+  );
+  assert.equal(scanCount, 2);
+  assert.deepEqual(importedKinds, ["multi", "single"]);
+});
+
+test("buildEndingRoomReplayFixture includes completed branches, agents, and messages", () => {
+  const buildEndingRoomReplayFixture = loadFunction("buildEndingRoomReplayFixture", {
+    MULTI_ENDING_FIXTURE_QUESTION: "multi question",
+    SINGLE_ENDING_FIXTURE_QUESTION: "single question",
+  });
+
+  const multi = buildEndingRoomReplayFixture("multi");
+  const single = buildEndingRoomReplayFixture("single");
+
+  assert.equal(multi.status, "done");
+  assert.equal(multi.branches.length > 1, true);
+  assert.equal(single.branches.length, 1);
+  for (const fixture of [multi, single]) {
+    const agentIds = new Set(fixture.agents.map((agent) => agent.id));
+    const branchIds = new Set(fixture.branches.map((branch) => branch.id));
+    assert.equal(fixture.agents.length > 0, true);
+    assert.equal(fixture.messages.length > 0, true);
+    for (const branch of fixture.branches) {
+      assert.equal(branch.status, "COMPLETED");
+      assert.equal(typeof branch.story === "string" && branch.story.length > 0, true);
+    }
+    for (const message of fixture.messages) {
+      assert.equal(agentIds.has(message.agent_id), true);
+      assert.equal(branchIds.has(message.branch), true);
+    }
+  }
+});
+
+test("importEndingRoomFixtureScenario persists replay fixtures through the import endpoint", async () => {
+  let observedUrl = "";
+  let observedBody = null;
+  const importEndingRoomFixtureScenario = loadAsyncFunction("importEndingRoomFixtureScenario", {
+    resolveBackendUrl: () => "http://127.0.0.1:18927",
+    buildEndingRoomReplayFixture: (kind) => ({ question: `${kind} fixture` }),
+    isUsableEndingRoomScenario: () => true,
+    postJson: async (url, body) => {
+      observedUrl = url;
+      observedBody = body;
+      return { id: "imported-multi", branches: [{}, {}] };
+    },
+  });
+
+  await assert.deepEqual(
+    await importEndingRoomFixtureScenario("http://127.0.0.1:18928", "multi"),
+    { id: "imported-multi", branches: [{}, {}] },
+  );
+  assert.equal(observedUrl, "http://127.0.0.1:18927/api/scenario/import-replay");
+  assert.deepEqual(observedBody, { scenario: { question: "multi fixture" } });
+});
+
 test("buildFollowupExpectations counts the same-thread user turn in expected totals", async () => {
   const normalizeVisibleText = loadFunction("normalizeVisibleText");
   const buildFollowupVisibilityNeedles = loadFunction("buildFollowupVisibilityNeedles", {

@@ -111,6 +111,10 @@ describe('ShareModal automation callback', () => {
 
     await user.click(screen.getByRole('button', { name: /share\.platform_xiaohongshu/ }));
 
+    await waitFor(() => {
+      expect(onAutomationStateChange.mock.calls.at(-1)?.[0]?.status).toBe('success');
+    });
+
     const latestState = onAutomationStateChange.mock.calls.at(-1)?.[0];
     expect(latestState.kind).toBe('share_modal');
     expect(latestState.active_platform).toBe('xiaohongshu');
