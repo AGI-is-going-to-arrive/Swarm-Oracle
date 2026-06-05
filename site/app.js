@@ -74,7 +74,7 @@
     }).join("");
     sec.innerHTML =
       '<div class="mode__text"><div class="mode__num">' + m.n + '</div>' +
-      '<h3><span data-zh="' + m.zt + '" data-en="' + m.et + '">' + m.zt + '</span><small data-zh="' + m.et + '" data-en="' + m.zt + '">' + m.et + '</small></h3>' +
+      '<h3><span data-zh="' + m.zt + '" data-en="' + m.et + '">' + m.zt + '</span><small data-zh="模式 ' + m.n + '" data-en="Mode ' + m.n + '">模式 ' + m.n + '</small></h3>' +
       '<p data-zh="' + m.zd + '" data-en="' + m.ed + '">' + m.zd + '</p></div>' +
       '<div class="mode__figs ' + (two ? "two" : "") + '">' + figs + '</div>';
     modesList.appendChild(sec);
@@ -94,6 +94,10 @@
       var v = n.getAttribute("data-alt-" + l);
       if (v != null) n.setAttribute("alt", v);
     });
+    document.querySelectorAll("[data-aria-zh]").forEach(function (n) {
+      var v = n.getAttribute("data-aria-" + l);
+      if (v != null) n.setAttribute("aria-label", v);
+    });
     document.querySelectorAll("[data-src-zh]").forEach(function (n) {
       if (n.tagName === "VIDEO") return; // video handled below (needs poster + load())
       var v = n.getAttribute("data-src-" + l);
@@ -112,6 +116,9 @@
         source.setAttribute("src", vsrc);
         vid.load();
       }
+      Array.prototype.forEach.call(vid.querySelectorAll("track"), function (track) {
+        track.track.mode = track.getAttribute("srclang") === l ? "showing" : "disabled";
+      });
     }
     document.querySelectorAll(".lang button").forEach(function (b) {
       b.classList.toggle("on", b.getAttribute("data-lang") === l);
@@ -140,17 +147,35 @@
 
   /* ---- drawer ---- */
   var drawer = document.getElementById("drawer");
-  document.getElementById("burger").addEventListener("click", function () { drawer.classList.add("open"); });
-  document.getElementById("drawerClose").addEventListener("click", function () { drawer.classList.remove("open"); });
-  drawer.querySelectorAll("a").forEach(function (a) { a.addEventListener("click", function () { drawer.classList.remove("open"); }); });
+  var burger = document.getElementById("burger");
+  function setDrawer(open) {
+    drawer.classList.toggle("open", open);
+    drawer.setAttribute("aria-hidden", open ? "false" : "true");
+    drawer.inert = !open;
+    burger.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  burger.addEventListener("click", function () { setDrawer(true); });
+  document.getElementById("drawerClose").addEventListener("click", function () { setDrawer(false); burger.focus(); });
+  drawer.querySelectorAll("a").forEach(function (a) { a.addEventListener("click", function () { setDrawer(false); }); });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && drawer.classList.contains("open")) {
+      setDrawer(false);
+      burger.focus();
+    }
+  });
 
   /* ---- quickstart tabs ---- */
   document.querySelectorAll(".qs__tab").forEach(function (t) {
     t.addEventListener("click", function () {
       document.querySelectorAll(".qs__tab").forEach(function (x) { x.classList.remove("on"); });
+      document.querySelectorAll(".qs__tab").forEach(function (x) { x.setAttribute("aria-selected", x === t ? "true" : "false"); });
       t.classList.add("on");
       var key = t.getAttribute("data-tab");
-      document.querySelectorAll(".qs__panel").forEach(function (p) { p.classList.toggle("on", p.getAttribute("data-panel") === key); });
+      document.querySelectorAll(".qs__panel").forEach(function (p) {
+        var on = p.getAttribute("data-panel") === key;
+        p.classList.toggle("on", on);
+        p.hidden = !on;
+      });
     });
   });
 

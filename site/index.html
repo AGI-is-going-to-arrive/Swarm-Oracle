@@ -8,7 +8,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23100f14'/%3E%3Ctext x='16' y='24' font-size='20' text-anchor='middle'%3E%F0%9F%94%AE%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -29,19 +29,19 @@
   </nav>
   <div class="nav__right">
     <div class="lang" role="group" aria-label="Language">
-      <button data-lang="zh" class="on">中</button>
-      <button data-lang="en">EN</button>
+      <button type="button" data-lang="zh" class="on">中</button>
+      <button type="button" data-lang="en">EN</button>
     </div>
     <a class="nav__src" href="https://github.com/AGI-is-going-to-arrive/test1" target="_blank" rel="noopener">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       <span data-zh="源码" data-en="Source">源码</span>
     </a>
-    <button class="nav__burger" aria-label="Menu" id="burger"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.6"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <button type="button" class="nav__burger" aria-label="菜单" data-aria-zh="菜单" data-aria-en="Menu" aria-expanded="false" aria-controls="drawer" id="burger"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.6"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
   </div>
 </header>
 
-<div class="drawer" id="drawer">
-  <button class="drawer__close" id="drawerClose" aria-label="Close">×</button>
+<div class="drawer" id="drawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="菜单" data-aria-zh="菜单" data-aria-en="Menu" inert>
+  <button type="button" class="drawer__close" id="drawerClose" aria-label="关闭菜单" data-aria-zh="关闭菜单" data-aria-en="Close menu">×</button>
   <a href="#how" data-zh="如何运作" data-en="How">如何运作</a>
   <a href="#values" data-zh="价值主张" data-en="Value">价值主张</a>
   <a href="#video" data-zh="介绍视频" data-en="Video">介绍视频</a>
@@ -72,7 +72,7 @@
     <div class="hero__card reveal" style="--d:430ms">
       <div class="hero__cardglow" aria-hidden="true"></div>
       <figure class="hero__frame">
-        <img src="assets/swarmoracle-promo-v1.zh.simulation.png" data-src-zh="assets/swarmoracle-promo-v1.zh.simulation.png" data-src-en="assets/swarmoracle-promo-v1.en.simulation.png" alt="SwarmOracle 经典推演视图：分支树、Agent 面板和实时发言，AI 代理群体推演多条世界线" data-alt-zh="SwarmOracle 经典推演视图：分支树、Agent 面板和实时发言，AI 代理群体推演多条世界线" data-alt-en="SwarmOracle classic simulation view: branch tree, agent panel and live messages as a swarm of AI agents runs multiple worldlines" fetchpriority="high" decoding="async" width="1581" height="774">
+        <img src="assets/swarmoracle-promo-v1.zh.simulation.png" data-src-zh="assets/swarmoracle-promo-v1.zh.simulation.png" data-src-en="assets/swarmoracle-promo-v1.en.simulation.png" alt="SwarmOracle 经典推演视图：分支树、Agent 面板和实时发言，AI 代理群体推演多条世界线" data-alt-zh="SwarmOracle 经典推演视图：分支树、Agent 面板和实时发言，AI 代理群体推演多条世界线" data-alt-en="SwarmOracle classic simulation view: branch tree, agent panel and live messages as a swarm of AI agents runs multiple worldlines" fetchpriority="high" decoding="async" width="1669" height="946">
         <figcaption class="hero__frame-tag" data-zh="经典推演视图 · 实时推演" data-en="Classic view · live run">经典推演视图 · 实时推演</figcaption>
       </figure>
     </div>
@@ -179,6 +179,9 @@
     <figure class="theater reveal" id="theater">
       <video id="introVideo" class="theater__video" controls preload="metadata" playsinline poster="assets/swarmoracle-promo-v1.zh.hook.png" data-poster-zh="assets/swarmoracle-promo-v1.zh.hook.png" data-poster-en="assets/swarmoracle-promo-v1.en.hook.png" data-src-zh="assets/video/swarmoracle-intro-zh-1080p.mp4" data-src-en="assets/video/swarmoracle-intro-en-1080p.mp4" width="1600" height="900" aria-label="SwarmOracle 介绍视频" data-aria-zh="SwarmOracle 介绍视频" data-aria-en="SwarmOracle intro video">
         <source src="assets/video/swarmoracle-intro-zh-1080p.mp4" type="video/mp4">
+        <track kind="captions" src="assets/video/swarmoracle-intro-zh.vtt" srclang="zh" label="中文" default>
+        <track kind="captions" src="assets/video/swarmoracle-intro-en.vtt" srclang="en" label="English">
+        <span data-zh="你的浏览器不支持嵌入视频。" data-en="Your browser does not support embedded video.">你的浏览器不支持嵌入视频。</span>
       </video>
       <figcaption class="theater__cap" data-zh="完整介绍视频 · 1080p" data-en="Full intro video · 1080p">完整介绍视频 · 1080p</figcaption>
     </figure>
@@ -242,20 +245,20 @@
     <p class="qs__declare reveal" data-zh="以上是本地运行步骤；本介绍页是静态页，不连后端。命令逐字保留；sk-… 仅占位，请勿在页面填入真实密钥。" data-en="These are local run steps; this page is static and connects to no backend. Commands are verbatim; sk-… is a placeholder only.">以上是本地运行步骤；本介绍页是静态页，不连后端。命令逐字保留；sk-… 仅占位，请勿在页面填入真实密钥。</p>
     <div class="reveal">
       <div class="qs__tabs" role="tablist">
-        <button class="qs__tab on" data-tab="docker" role="tab">Docker</button>
-        <button class="qs__tab" data-tab="local" role="tab" data-zh="本地 Local" data-en="Local">本地 Local</button>
+        <button type="button" class="qs__tab on" id="tab-docker" data-tab="docker" role="tab" aria-selected="true" aria-controls="panel-docker">Docker</button>
+        <button type="button" class="qs__tab" id="tab-local" data-tab="local" role="tab" aria-selected="false" aria-controls="panel-local" data-zh="本地 Local" data-en="Local">本地 Local</button>
       </div>
-      <div class="qs__panel on" data-panel="docker">
+      <div class="qs__panel on" id="panel-docker" data-panel="docker" role="tabpanel" aria-labelledby="tab-docker">
         <div class="code">
-          <div class="code__head"><span class="code__title">docker-compose</span><button class="copy" data-copy="docker compose up --build -d"><span data-zh="复制" data-en="Copy">复制</span></button></div>
+          <div class="code__head"><span class="code__title">docker-compose</span><button type="button" class="copy" data-copy="docker compose up --build -d"><span data-zh="复制" data-en="Copy">复制</span></button></div>
           <pre><code><span class="cmd">docker compose</span> up --build -d</code></pre>
         </div>
         <p class="qs__note" data-zh="先编辑 .env.docker 填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，再运行命令。" data-en="First edit .env.docker with LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME, then run the command.">先编辑 .env.docker 填入 LLM_RESPONSES_URL / LLM_API_KEY / LLM_MODEL_NAME，再运行命令。</p>
       </div>
-      <div class="qs__panel" data-panel="local">
+      <div class="qs__panel" id="panel-local" data-panel="local" role="tabpanel" aria-labelledby="tab-local" hidden>
         <div class="code">
-          <div class="code__head"><span class="code__title">backend + frontend</span><button class="copy" data-copy="cd backend
-python -m venv .venv && source .venv/bin/activate
+          <div class="code__head"><span class="code__title">backend + frontend</span><button type="button" class="copy" data-copy="cd backend
+python -m venv .venv &amp;&amp; source .venv/bin/activate
 pip install -e &quot;.[dev]&quot;
 cp ../.env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
@@ -263,7 +266,7 @@ cd frontend
 npm install
 npm run dev"><span data-zh="复制" data-en="Copy">复制</span></button></div>
           <pre><code><span class="cmd">cd</span> backend
-<span class="cmd">python</span> -m venv .venv && <span class="cmd">source</span> .venv/bin/activate
+<span class="cmd">python</span> -m venv .venv &amp;&amp; <span class="cmd">source</span> .venv/bin/activate
 <span class="cmd">pip</span> install -e ".[dev]"
 <span class="cmd">cp</span> ../.env.example .env
 <span class="cmd">uvicorn</span> app.main:app --host 127.0.0.1 --port 18927 --reload
@@ -274,12 +277,12 @@ npm run dev"><span data-zh="复制" data-en="Copy">复制</span></button></div>
       </div>
       <div class="qs__open">
         <div class="code">
-          <div class="code__head"><span class="code__title" data-zh="打开地址" data-en="Open">打开地址</span><button class="copy" data-copy="http://localhost:18928"><span data-zh="复制" data-en="Copy">复制</span></button></div>
+          <div class="code__head"><span class="code__title" data-zh="打开地址" data-en="Open">打开地址</span><button type="button" class="copy" data-copy="http://localhost:18928"><span data-zh="复制" data-en="Copy">复制</span></button></div>
           <pre><code>http://localhost:18928</code></pre>
         </div>
       </div>
       <div class="qs__config">
-        <p class="kicker" style="margin-bottom:1rem" data-zh="必填配置（占位，非真实密钥）" data-en="Required config (placeholders, not real keys)">必填配置（占位，非真实密钥）</p>
+        <p class="kicker qs__config-title" data-zh="必填配置（占位，非真实密钥）" data-en="Required config (placeholders, not real keys)">必填配置（占位，非真实密钥）</p>
         <div class="qs__config-row"><code>LLM_RESPONSES_URL</code><span>https://api.openai.com/v1</span></div>
         <div class="qs__config-row"><code>LLM_API_KEY</code><span>sk-…</span></div>
         <div class="qs__config-row"><code>LLM_MODEL_NAME</code><span data-zh="示例：gpt-5.5 / deepseek-v4-pro / gemini-3.5-flash / claude-opus-4-8" data-en="e.g. gpt-5.5 / deepseek-v4-pro / gemini-3.5-flash / claude-opus-4-8">示例：gpt-5.5 / deepseek-v4-pro / gemini-3.5-flash / claude-opus-4-8</span></div>
@@ -306,7 +309,7 @@ npm run dev"><span data-zh="复制" data-en="Copy">复制</span></button></div>
 <footer class="footer">
   <div class="shell footer__grid">
     <div>
-      <div class="footer__brand">SwarmOracle <span style="font-family:var(--font-body);font-size:0.85rem;color:var(--bone-300)">群体预言机</span></div>
+      <div class="footer__brand">SwarmOracle <span class="footer__brand-sub">群体预言机</span></div>
       <p class="footer__note" data-zh="静态介绍页，非可运行应用。本页面是静态展示页，不是可运行的应用。" data-en="Static showcase page, not the running app.">静态介绍页，非可运行应用。本页面是静态展示页，不是可运行的应用。</p>
     </div>
     <p class="footer__legal">
