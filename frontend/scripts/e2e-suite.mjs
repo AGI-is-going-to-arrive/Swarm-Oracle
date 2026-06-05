@@ -1647,7 +1647,7 @@ async function runReplayCornerCase(page, {
   }
 
   if (!replayModeTriggered) {
-    await page.getByRole("button", { name: /重播|Replay/ }).click();
+    await page.getByRole("button", { name: /^(重播|Replay)$/ }).click();
   }
 
   const replayed = await waitForAutomation(
