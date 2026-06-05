@@ -211,7 +211,7 @@ test("findScenarioIds prefers the newest fully-completed single and multi scenar
   };
 
   const fetchJson = async (url) => {
-    if (url.endsWith("/api/scenarios?status=done&limit=80&offset=0")) {
+    if (url.endsWith("/api/scenarios?status=done&limit=200&offset=0")) {
       return {
         scenarios: Object.keys(detailsById).map((id) => ({ id })),
       };

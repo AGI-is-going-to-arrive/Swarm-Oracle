@@ -364,7 +364,7 @@ async function appendThreadUserTurnViaApi(frontendUrl, threadId, payload) {
 
 async function findScenarioIds(frontendUrl) {
   const backendUrl = resolveBackendUrl(frontendUrl);
-  const list = await fetchJson(`${backendUrl}/api/scenarios?status=done&limit=80&offset=0`);
+  const list = await fetchJson(`${backendUrl}/api/scenarios?status=done&limit=200&offset=0`);
   const multiCandidates = [];
   const singleCandidates = [];
   for (const scenario of list.scenarios ?? []) {
@@ -406,7 +406,10 @@ async function findScenarioIds(frontendUrl) {
   const multiId = multiCandidates[0]?.id ?? null;
   const singleId = singleCandidates[0]?.id ?? null;
   if (!multiId || !singleId) {
-    throw new Error("Could not find both multi-ending and single-ending done scenarios");
+    throw new Error(
+      `Could not find both multi-ending and single-ending done scenarios `
+      + `(scanned=${list.scenarios?.length ?? 0}, multi=${multiCandidates.length}, single=${singleCandidates.length})`,
+    );
   }
   return { multiId, singleId };
 }
