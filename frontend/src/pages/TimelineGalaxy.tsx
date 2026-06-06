@@ -13,12 +13,14 @@ import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useG6Graph } from '../hooks/useG6Graph';
 import { forceTimelineLayout } from '../lib/g6Layouts';
 import { resolveG6Tokens } from '../lib/graphTokens';
+import { buildKgNodeLabel } from '../lib/kgGraphConfig';
 import { buildSessionHeaders } from '../api/client';
 
 interface GalaxyNode {
   id: string;
   label: string;
   round: number | null;
+  payload?: unknown;
 }
 
 interface GalaxyEdge {
@@ -84,7 +86,7 @@ export default function TimelineGalaxy() {
     const nodes = (payload?.nodes ?? []).map((n) => ({
       id: n.id,
       type: 'circle',
-      style: { labelText: n.label, labelPlacement: 'bottom' as const },
+      style: { labelText: buildKgNodeLabel(n.label, n.round, n.payload), labelPlacement: 'bottom' as const },
       data: { round: n.round ?? 0 },
     }));
     const edges = (payload?.edges ?? []).map((e) => ({
