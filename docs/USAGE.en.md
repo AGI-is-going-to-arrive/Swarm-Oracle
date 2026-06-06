@@ -43,7 +43,7 @@ The result page also lets you export Markdown, generate sharing copy, copy a per
 
 ### 1. Multi-Branch Simulation
 
-Type a question on the home page and select **Start Simulation**. One question splits into multiple worldlines. Each worldline includes character dialogue, probability, and an ending. Advanced settings can change input cleanup mode, display mode, reasoning effort, and simulation mode (Conservative / Balanced / Exploratory).
+Type a question on the home page and select **Start Simulation**. One question splits into multiple worldlines. Each worldline includes character dialogue, probability, and an ending. Advanced settings can change input cleanup mode (Blackboard / Raw), display mode (Classic / Pixel Theater), reasoning effort, and simulation mode (Conservative / Balanced / Exploratory).
 
 ### 2. Debate Arena
 

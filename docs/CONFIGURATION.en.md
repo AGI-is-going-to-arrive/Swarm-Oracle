@@ -80,7 +80,7 @@ When enabled, the app searches the web before simulation and injects context int
 | Variable | Meaning | Example |
 |----------|---------|---------|
 | `ENABLE_WEB_SEARCH` | Main switch | `false` by default |
-| `WEB_SEARCH_PROVIDER` | Search provider | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
+| `WEB_SEARCH_PROVIDER` | Search provider | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` / `native` |
 | `WEB_SEARCH_API_KEY` | Search provider key; not needed for `searxng` | - |
 | `SEARXNG_URL` | Self-hosted SearXNG URL, only for `searxng` | `http://localhost:8888` |
 

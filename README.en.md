@@ -6,13 +6,11 @@ English | [中文](README.md)
 
 SwarmOracle lets you ask hypothetical questions ("What if...?"). A group of AI agents simulates multiple storylines and shows different possible outcomes.
 
+![SwarmOracle home](docs/screenshots-en/01-home.png)
+
 ## Live demo
 
-Live intro page: **https://agi-is-going-to-arrive.github.io/test1/**
-
-- The intro page source lives in `site/` and is auto-deployed to GitHub Pages by `.github/workflows/pages.yml` on pushes to `main` that change `site/**` or the workflow file itself.
-- The page embeds a 1080p bilingual intro video (`site/assets/video/`) with Chinese and English captions.
-- The full 4K masters are ~350MB each, which exceeds GitHub's 100MB per-file limit, so they are kept out of git and stay local in `video-intro/` (gitignored). Use Git LFS if you want to commit them.
+Open it for the full screenshots and a short intro video: **https://agi-is-going-to-arrive.github.io/Swarm-Oracle/**
 
 ## Features
 
@@ -28,6 +26,16 @@ Live intro page: **https://agi-is-going-to-arrive.github.io/test1/**
 - **Bring your own LLM**: Compatible with any OpenAI-format API.
 
 > For concrete usage of each mode, see **[Usage Guide docs/USAGE.en.md](docs/USAGE.en.md)**; for the per-feature catalog, see **[FEATURES.en.md](docs/FEATURES.en.md)**. Most default features work out of the box. Search enhancement and source checkboxes require extra configuration. See **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**.
+
+## What it looks like
+
+Ask a question, watch a group of AI agents simulate several storylines, get a verdict, then walk into the rooms to dig deeper.
+
+| Simulating: branches grow live | Result: it answers your question |
+|:---:|:---:|
+| ![Simulating](docs/screenshots-en/21-simulation.png) | ![Result page](docs/screenshots-en/02-result.png) |
+| **Debate Arena: two sides argue** | **Causal Graph: see how it got there** |
+| ![Debate Arena](docs/screenshots-en/20-debate-arena.png) | ![Causal Graph](docs/screenshots-en/06-causal-map.png) |
 
 ## Quick Start
 
@@ -103,7 +111,7 @@ Core configuration lives in `.env.example` for local development or `.env.docker
 | `LLM_API_KEY` | API key | `sk-...` |
 | `LLM_MODEL_NAME` | Model name | `gpt-5.5` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
 | `ENABLE_WEB_SEARCH` | Search enhancement (optional) | `false` |
-| `WEB_SEARCH_PROVIDER` | Search provider (when search is enabled) | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
+| `WEB_SEARCH_PROVIDER` | Search provider (when search is enabled) | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` / `native` |
 
 For the full configuration list, feature flags, and search enhancement notes, see **[Configuration docs/CONFIGURATION.en.md](docs/CONFIGURATION.en.md)**. Custom Agents, cross-scenario identity, causal graph, graph analysis, faction relations, argument map, knowledge graph explorer, timeline galaxy, replay trace, Roundtable Deep Dive, snapshot, prediction journal, education templates, and persona backup are enabled by default in the template. `ENABLE_WEB_SEARCH`, `FEATURE_NEW_SOURCES`, and `FEATURE_FAMILY_QUERY_OPTIMIZATION` are disabled by default because they require a search provider and matching configuration.
 

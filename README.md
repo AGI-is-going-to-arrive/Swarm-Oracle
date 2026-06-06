@@ -2,32 +2,40 @@
 
 # 🔮 SwarmOracle
 
-> AI "What-If" Prediction Playground — 群体预言机
+> AI "What-If" Prediction Playground - 群体预言机
 
 SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI 代理群体模拟多条故事线，展示不同可能性。
 
+![SwarmOracle 首页](docs/screenshots/01-home.png)
+
 ## 在线介绍页 / Live demo
 
-在线介绍页：**https://agi-is-going-to-arrive.github.io/test1/**
-
-- 介绍页源码在 `site/`；推送 `main` 且变更 `site/**` 或 `.github/workflows/pages.yml` 时，会由该 Pages workflow 自动部署到 GitHub Pages。
-- 页面内嵌 1080p 双语介绍视频（`site/assets/video/`），并提供中英字幕。
-- 完整 4K 母带约 350MB/条，超过 GitHub 单文件 100MB 上限，未纳入仓库，保留在本地 `video-intro/`（已 gitignore）；如需入库可改用 Git LFS。
+打开就能看完整截图和一段介绍视频：**https://agi-is-going-to-arrive.github.io/Swarm-Oracle/**
 
 ## 功能亮点
 
-- **多分支推演** — 一个问题，多条故事线，看不同结局
-- **辩论竞技场** — AI 正反方激辩，帮你看清争议的两面
-- **神谕密室** — 与当前世界线里的 AI 角色深度对话，追问细节
-- **世界线圆桌** — 多方代表圆桌讨论，完成后可回到已保存结果并继续 Deep Dive
-- **反事实对比** — "如果那句话说得不同，世界线会怎么变？"
-- **因果图谱 + 知识图谱** — 从结果页进入图谱工作台、知识图谱浏览器和时间线星系
-- **自定义 Agent** — 在 Agent 工坊里创建、导入、导出你自己的角色
-- **预测日志与排行榜** — 记录预测、复盘校准，也能看全局排行榜
-- **Snapshot 导入 / 导出** — 把一次推演打包保存，之后再导入继续查看
-- **支持自带 LLM** — 兼容任何 OpenAI 格式的 API
+- **多分支推演**：一个问题，多条故事线，看不同结局
+- **辩论竞技场**：AI 正反方激辩，帮你看清争议的两面
+- **神谕密室**：与当前世界线里的 AI 角色深度对话，追问细节
+- **世界线圆桌**：多方代表圆桌讨论，完成后可回到已保存结果并继续 Deep Dive
+- **反事实对比**："如果那句话说得不同，世界线会怎么变？"
+- **因果图谱 + 知识图谱**：从结果页进入图谱工作台、知识图谱浏览器和时间线星系
+- **自定义 Agent**：在 Agent 工坊里创建、导入、导出你自己的角色
+- **预测日志与排行榜**：记录预测、复盘校准，也能看全局排行榜
+- **Snapshot 导入 / 导出**：把一次推演打包保存，之后再导入继续查看
+- **支持自带 LLM**：兼容任何 OpenAI 格式的 API
 
 > 每种玩法的具体用法见 **[使用指南 docs/USAGE.md](docs/USAGE.md)**；逐项功能图鉴见 **[FEATURES.md](docs/FEATURES.md)**。默认功能基本开箱可用；搜索增强和来源复选框需要额外配置，详见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。
+
+## 玩起来什么样
+
+提一个问题，看一群 AI 推演出好几条故事线，拿到结论，再进各种房间接着追问。
+
+| 推演中：分支实时长出来 | 结果：直接回答你的问题 |
+|:---:|:---:|
+| ![推演中](docs/screenshots/21-simulation.png) | ![结果页](docs/screenshots/02-result.png) |
+| **辩论竞技场：正反方开杠** | **因果图谱：看清来龙去脉** |
+| ![辩论竞技场](docs/screenshots/20-debate-arena.png) | ![因果图谱](docs/screenshots/06-causal-map.png) |
 
 ## 快速开始
 
@@ -103,7 +111,7 @@ npm run dev
 | `LLM_API_KEY` | API 密钥 | `sk-...` |
 | `LLM_MODEL_NAME` | 模型名称 | `gpt-5.5` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
 | `ENABLE_WEB_SEARCH` | 搜索增强（可选） | `false` |
-| `WEB_SEARCH_PROVIDER` | 搜索服务商（开启搜索时） | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
+| `WEB_SEARCH_PROVIDER` | 搜索服务商（开启搜索时） | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` / `native` |
 
 完整配置项、功能开关清单和搜索增强说明见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。自定义 Agent、跨场景身份、因果图谱、图谱分析、阵营关系、论点地图、知识图谱浏览器、时间线星系、回放轨迹、圆桌 Deep Dive、snapshot、预测日志、教学模板和人物备份在模板里默认开启。`ENABLE_WEB_SEARCH`、`FEATURE_NEW_SOURCES`、`FEATURE_FAMILY_QUERY_OPTIMIZATION` 默认关闭，因为它们需要搜索 provider 和对应配置。
 
