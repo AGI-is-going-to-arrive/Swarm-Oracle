@@ -137,6 +137,10 @@ SwarmOracle/
 - **Frontend**: React 19 + TypeScript + Phaser 3
 - **Deployment**: Docker Compose
 
+## Acknowledgements
+
+Thanks to the [Linux.do](https://linux.do/) community for feedback and support.
+
 ## License
 
 AGPL-3.0
