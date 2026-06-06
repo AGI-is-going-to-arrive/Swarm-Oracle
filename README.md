@@ -12,6 +12,8 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 
 打开就能看完整截图和一段介绍视频：**https://agi-is-going-to-arrive.github.io/Swarm-Oracle/**
 
+也可以直接在 B 站看中文介绍视频：**https://www.bilibili.com/video/BV1Xh7168ECc**
+
 ## 功能亮点
 
 - **多分支推演**：一个问题，多条故事线，看不同结局

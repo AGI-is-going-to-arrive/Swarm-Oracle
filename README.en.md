@@ -12,6 +12,8 @@ SwarmOracle lets you ask hypothetical questions ("What if...?"). A group of AI a
 
 Open it for the full screenshots and a short intro video: **https://agi-is-going-to-arrive.github.io/Swarm-Oracle/**
 
+Chinese intro video on Bilibili: **https://www.bilibili.com/video/BV1Xh7168ECc**
+
 ## Features
 
 - **Multi-branch simulation**: One question, multiple storylines, different endings.
