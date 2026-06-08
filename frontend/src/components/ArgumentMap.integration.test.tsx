@@ -250,11 +250,17 @@ vi.mock('@xyflow/react', async () => {
 import { ArgumentMap, ArgumentStrengthMeter, type ArgumentUnit } from './ArgumentMap';
 
 afterEach(() => {
+  // Unmount first so React runs the body-class removal cleanup synchronously
+  // while the component's effect environment is still intact, then reset the
+  // shared global state these tests touch. `document.body` and the global
+  // `matchMedia` mock are shared across files in the same jsdom worker, so the
+  // reset must be defensive even if an individual test forgot its own teardown.
   cleanup();
   fitViewMock.mockReset();
   currentLocale = 'en';
   document.body.classList.remove('has-argument-map');
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const createDeferredResponse = () => {
@@ -264,6 +270,24 @@ const createDeferredResponse = () => {
   });
   return { promise, resolve };
 };
+
+// The mounted graph fires `fitView` across several async effect ticks
+// (initial layout effect + the ReactFlow mock's `onInit`). `findByTestId`
+// only waits for the graph div to appear, not for that fit-view burst to
+// drain, so reading `fitViewMock.mock.calls.length` immediately afterwards
+// races the trailing mount-phase calls. Wait until the count holds steady
+// across a tick, then return that settled baseline.
+async function settleFitViewBaseline(): Promise<number> {
+  let stable = fitViewMock.mock.calls.length;
+  await waitFor(() => {
+    const current = fitViewMock.mock.calls.length;
+    if (current !== stable) {
+      stable = current;
+      throw new Error('fitView calls still settling');
+    }
+  });
+  return stable;
+}
 
 // ── ArgumentMap main component ──────────────────────────────
 
@@ -286,7 +310,13 @@ describe('ArgumentMap', () => {
     const view = render(<ArgumentMap debateId="d1" visible={true} />);
 
     await screen.findByTestId('reactflow');
-    expect(document.body).toHaveClass('has-argument-map');
+    // The body class is applied by a passive effect keyed on
+    // `hasInteractiveGraph`. `findByTestId` resolves on the render commit, but
+    // that sibling effect can flush a tick later under scheduler pressure, so
+    // wait for it rather than reading the class synchronously.
+    await waitFor(() => {
+      expect(document.body).toHaveClass('has-argument-map');
+    });
 
     view.unmount();
     expect(document.body).not.toHaveClass('has-argument-map');
@@ -641,11 +671,13 @@ describe('ArgumentMap', () => {
     } as Response);
     render(<ArgumentMap debateId="d1" visible={true} />);
     await screen.findByTestId('reactflow');
-    const initialCalls = fitViewMock.mock.calls.length;
+    const initialCalls = await settleFitViewBaseline();
 
     await user.click(screen.getByRole('button', { name: 'Accepted' }));
 
-    expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
+    await waitFor(() => {
+      expect(fitViewMock.mock.calls.length).toBeGreaterThan(initialCalls);
+    });
   });
 
   it('does not refit the viewport when selecting or clearing a node highlight', async () => {
@@ -667,7 +699,7 @@ describe('ArgumentMap', () => {
     } as Response);
     render(<ArgumentMap debateId="d1" visible={true} />);
     await screen.findByTestId('reactflow');
-    const initialCalls = fitViewMock.mock.calls.length;
+    const initialCalls = await settleFitViewBaseline();
 
     await user.click(screen.getByTestId('rf-node-n1'));
     await waitFor(() => {
