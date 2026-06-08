@@ -2,7 +2,7 @@
 
 # SwarmOracle 功能图鉴
 
-这份图鉴覆盖发布前核对的 40 个用户可见功能。入口和默认开关以当前代码、使用指南和配置说明为准；搜索相关的三项功能默认关闭，需要先完成配置。
+这份图鉴覆盖发布前核对的 41 个用户可见功能。入口和默认开关以当前代码、使用指南和配置说明为准；搜索相关的三项功能和深读报告默认关闭，需要先完成配置或开启。
 
 ## 核心推演
 
@@ -215,3 +215,8 @@ Agent 身份库和工坊提供人物备份导入、导出。导入会创建新�
 **需配置，见 [CONFIGURATION](CONFIGURATION.md)。** 开启 `FEATURE_FAMILY_QUERY_OPTIMIZATION` 后，系统会先为每类来源生成更合适的搜索词。它没有单独按钮，只在来源复选框和搜索 provider 都可用时影响本轮搜索。
 入口：配置 `FEATURE_FAMILY_QUERY_OPTIMIZATION=true`，配合首页来源复选框使用
 该功能是后台检索行为，没有独立 UI 或单独截图。
+
+### F41 结果深读报告
+**需开启，见 [CONFIGURATION](CONFIGURATION.md)。** 开启 `FEATURE_RESULT_REPORT` 后，结果页会显示深读报告入口，按章节汇总关键结论、证据坐标和不确定性。报告也可以在 `/result/:id/report` 独立查看；生成或重试走 `report:generate`，失败时不会阻断原本的结果页。
+入口：`/result/:id` -> 深读报告；独立页 `/result/:id/report`
+截图包暂未单独收录深读报告；入口跟随结果页能力开关显示。

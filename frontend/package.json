@@ -22,6 +22,7 @@
     "e2e:predict:late-branches": "node scripts/e2e-automation.mjs predict-late-branches",
     "e2e:result": "node scripts/e2e-automation.mjs result",
     "e2e:result:fixture": "node scripts/e2e-result-share-fixture.mjs full",
+    "e2e:result-report": "node scripts/e2e-result-report-suite.mjs full",
     "e2e:health": "node scripts/e2e-automation.mjs health",
     "e2e:web-search": "node scripts/e2e-web-search-suite.mjs",
     "e2e:fork-experiment": "node scripts/fork-experiment.mjs",

@@ -176,6 +176,45 @@ describe('ReplayView — data path', () => {
     expect(screen.queryByTestId('replay-timeline-scrubber')).toBeNull();
   });
 
+  it('renders graph-only replay context when replay-trace is empty but causal graph has nodes', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) return jsonResponse({ nodes: [], next_cursor: null });
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          nodes: [
+            {
+              id: 'n1',
+              key: 'k1',
+              type: 'stance',
+              label: 'Agent A speaks',
+              round: 2,
+              payload: {
+                agent_id: 'a1',
+                agent_name: 'Agent A',
+                branch_id: 'b1',
+                content: 'Graph-only context',
+              },
+            },
+          ],
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/graph-only?branch=b1');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-timeline-scrubber')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('replay-empty')).toBeNull();
+    expect(screen.getByText('Graph-only context')).toBeInTheDocument();
+    const select = screen.getByTestId('replay-branch-filter-select') as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.value)).toContain('b1');
+  });
+
   it('renders empty state when fetch errors (network failure)', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
 
@@ -733,6 +772,141 @@ describe('ReplayView — branch filter dropdown', () => {
     expect(select2.value).toBe('');
     const optionValues = Array.from(select2.options).map((o) => o.value);
     expect(optionValues).toEqual(['', 'b3']);
+  });
+});
+
+describe('ReplayView — evidence deep-link (?message=Y)', () => {
+  beforeEach(() => {
+    mockedCap.mockReturnValue({ loading: false, enabled: true, capabilities: null });
+  });
+
+  function installGraph() {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        return jsonResponse({
+          nodes: Array.from({ length: 4 }, (_, i) => ({
+            branch_id: 'b1', parent_branch_id: null, replay_source_branch_id: null,
+            origin_round: i, replay_kind: 'counterfactual', status: 'active',
+            created_at: '2026-04-17T00:00:00Z',
+          })),
+          next_cursor: null,
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          nodes: Array.from({ length: 4 }, (_, i) => ({
+            id: `n${i}`, key: `k${i}`, type: 'stance', label: `event ${i}`, round: i,
+            payload: { agent_id: 'a1', agent_name: 'Agent A', branch_id: 'b1', message_id: `msg-${i}`, content: `content ${i}` },
+          })),
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+  }
+
+  it('jumps to and highlights the node whose payload.message_id matches', async () => {
+    installGraph();
+    renderAt('/replay/sc-msg-match?branch=b1&message=msg-2#t=turn_0');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-timeline-scrubber')).toBeInTheDocument();
+    });
+    // Frame jumps to the matching round (msg-2 → round 2 → frame index 2 → 1-based "3").
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-card-highlighted')).toBeInTheDocument();
+    });
+    expect(screen.getByText('content 2')).toBeInTheDocument();
+  });
+
+  it('falls back gracefully to branch+turn view when no node matches (no crash, no error surface)', async () => {
+    installGraph();
+    renderAt('/replay/sc-msg-nomatch?branch=b1&message=does-not-exist#t=turn_1');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-timeline-scrubber')).toBeInTheDocument();
+    });
+    // No highlighted card and no empty/error surface — the deep-link degrades to the
+    // hash-derived turn view without crashing or surfacing an error.
+    expect(screen.queryByTestId('replay-card-highlighted')).toBeNull();
+    expect(screen.queryByTestId('replay-empty')).toBeNull();
+    // The branch filter dropdown is still present (branch X remains a selectable option).
+    const select = screen.getByTestId('replay-branch-filter-select') as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toContain('b1');
+    // The hash-derived turn (turn_1 → frame index 1) is preserved, not reset to frame 0.
+    expect(screen.getByText('content 1')).toBeInTheDocument();
+    expect(screen.queryByText('content 0')).toBeNull();
+  });
+
+  it('maps ?round= to the matching frame when message_id is unavailable', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/replay-trace')) {
+        return jsonResponse({
+          nodes: [1, 3].map((round) => ({
+            branch_id: 'b1', parent_branch_id: null, replay_source_branch_id: null,
+            origin_round: round, replay_kind: 'counterfactual', status: 'active',
+            created_at: '2026-04-17T00:00:00Z',
+          })),
+          next_cursor: null,
+        });
+      }
+      if (url.includes('/causal-graph')) {
+        return jsonResponse({
+          id: 'g1',
+          nodes: [1, 3].map((round) => ({
+            id: `n${round}`, key: `k${round}`, type: 'stance', label: `event ${round}`, round,
+            payload: { agent_id: 'a1', agent_name: 'Agent A', branch_id: 'b1', content: `content ${round}` },
+          })),
+          edges: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    renderAt('/replay/sc-msg-round?branch=b1&message=missing&round=3');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-timeline-scrubber')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByText('content 3')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('content 1')).toBeNull();
+  });
+
+  it('does NOT highlight when ?message= only collides with a node id/key (not a real message_id)', async () => {
+    // Node "n2" has id="n2" / key="k2" but payload.message_id="msg-2". A `?message=n2`
+    // value collides with the node id only — it must NOT jump or highlight (message-id only).
+    installGraph();
+    renderAt('/replay/sc-msg-idcollision?branch=b1&message=n2#t=turn_1');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-timeline-scrubber')).toBeInTheDocument();
+    });
+    // No false highlight from the id/key collision, and no error surface.
+    expect(screen.queryByTestId('replay-card-highlighted')).toBeNull();
+    expect(screen.queryByTestId('replay-empty')).toBeNull();
+    // No jump to n2's frame (round 2); the hash-derived turn (frame 1) is preserved.
+    expect(screen.getByText('content 1')).toBeInTheDocument();
+    expect(screen.queryByText('content 2')).toBeNull();
+  });
+
+  it('also matches when ?message= equals key collision is rejected but real message_id wins', async () => {
+    // Sanity: a genuine message_id (msg-3) still jumps + highlights, proving the stricter
+    // matcher did not break the real path.
+    installGraph();
+    renderAt('/replay/sc-msg-real?branch=b1&message=msg-3#t=turn_0');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-timeline-scrubber')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('replay-card-highlighted')).toBeInTheDocument();
+    });
+    expect(screen.getByText('content 3')).toBeInTheDocument();
   });
 });
 

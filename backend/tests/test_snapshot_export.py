@@ -37,6 +37,7 @@ from app.services.snapshot_export import (
     export_snapshot_zip,
     import_snapshot_zip,
 )
+from tests.test_result_report_contract import _legal_full_report
 
 # ── helpers ──────────────────────────────────────────────
 
@@ -71,6 +72,57 @@ def _seed_scenario(
         session.add(scenario)
         session.commit()
         return scenario.id
+
+
+def _seed_scenario_with_full_report_snapshot(report: dict) -> str:
+    scenario = Scenario(
+        question="Should the council approve the AI transit plan?",
+        status=ScenarioStatus.DONE,
+        user_id="owner-1",
+        parsed_context={
+            "mode": "blackboard",
+            "simulation_rounds": 3,
+            "full_report": report,
+        },
+    )
+    with Session(get_engine()) as session:
+        session.add(scenario)
+        session.commit()
+        return scenario.id
+
+
+def _full_report_snapshot_fixture(status: str) -> dict:
+    report = _legal_full_report()
+    report["status"] = status
+    if status == "partial":
+        report["generation_mode"] = "rewrite"
+        report["tier"] = "rewrite"
+    if status == "failed":
+        report["generation_mode"] = "static"
+        report["tier"] = "static"
+        report["sections"] = []
+    report["interview_evidence"] = [
+        {
+            "note": f"kept interview note for {status}",
+            "api_key": f"sk-report-{status}-secret",
+        }
+    ]
+    report["premortem"] = [
+        {
+            "risk": f"kept premortem risk for {status}",
+            "Authorization": f"Bearer report-{status}-token",
+        }
+    ]
+    if report["sections"]:
+        report["sections"][0]["charts"][0]["data"]["base_url"] = (
+            f"https://user:pass@report-{status}.example/v1"
+        )
+    else:
+        report["dissenting"] = {
+            **report["dissenting"],
+            "base_url": f"https://user:pass@report-{status}.example/v1",
+        }
+    return report
 
 
 def _seed_branch_tree(scenario_id: str) -> tuple[str, str]:
@@ -360,6 +412,102 @@ def test_export_includes_causal_graph_nodes_and_edges():
     assert edge["confidence_tier"] == "high"
 
 
+def test_export_redacts_causal_graph_payload_json_strings():
+    scenario_id = _seed_scenario(api_key_in_context=False)
+    root_id, _ = _seed_branch_tree(scenario_id)
+    agent_id, _ = _seed_agents(scenario_id)
+
+    with Session(get_engine()) as session:
+        snapshot = GraphSnapshot(
+            owner_type="scenario",
+            owner_id=scenario_id,
+            graph_kind="causal_review",
+        )
+        session.add(snapshot)
+        session.flush()
+
+        node_a = GraphNode(
+            snapshot_id=snapshot.id,
+            node_key="secret-node-a",
+            node_type="event",
+            label="safe label",
+            round_number=1,
+            payload_json=json.dumps(
+                {
+                    "branch_id": root_id,
+                    "agent_id": agent_id,
+                    "content": "Bearer sk-node-secret-123456 https://user:pass@example.com/v1",
+                    "xai_api_key": "xai-node-secret-123456",
+                }
+            ),
+        )
+        node_b = GraphNode(
+            snapshot_id=snapshot.id,
+            node_key="secret-node-b",
+            node_type="event",
+            label="safe target",
+            round_number=2,
+            payload_json=json.dumps({"branch_id": root_id, "agent_id": agent_id}),
+        )
+        session.add_all([node_a, node_b])
+        session.flush()
+
+        session.add(
+            GraphEdge(
+                snapshot_id=snapshot.id,
+                source_node_id=node_a.id,
+                target_node_id=node_b.id,
+                edge_type="caused",
+                weight=0.8,
+                label="edge label api_key=edge-secret-123456",
+                payload_json=json.dumps(
+                    {
+                        "summary": "visible",
+                        "Authorization": "Bearer edge-secret",
+                    }
+                ),
+                confidence_tier="high",
+                source_ref="https://edge-user:edge-pass@example.com/v1",
+                source_round_number=1,
+                evidence_json=json.dumps(
+                    {
+                        "quote": "sk-ant-edge-secret-123456",
+                        "nested": {"api_key": "sk-edge-secret-123456"},
+                    }
+                ),
+            )
+        )
+        session.commit()
+
+    with Session(get_engine()) as session:
+        raw = export_snapshot_zip(scenario_id, session).getvalue()
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        graph = json.loads(zf.read("causal_graph.json"))
+
+    node_payload = json.loads(graph["nodes"][0]["payload_json"])
+    edge_payload = json.loads(graph["edges"][0]["payload_json"])
+    edge_evidence = json.loads(graph["edges"][0]["evidence_json"])
+
+    assert node_payload["branch_id"] == root_id
+    assert node_payload["agent_id"] == agent_id
+    assert "xai_api_key" not in node_payload
+    assert edge_payload == {"summary": "visible"}
+    assert edge_evidence["quote"] == "[redacted-key]"
+    assert edge_evidence["nested"] == {}
+    assert graph["edges"][0]["source_ref"] == "https://example.com/v1"
+    for needle in (
+        b"sk-node-secret",
+        b"user:pass",
+        b"xai-node-secret",
+        b"api_key=edge-secret",
+        b"edge-user:edge-pass",
+        b"sk-ant-edge-secret",
+        b"sk-edge-secret",
+    ):
+        assert needle not in raw
+
+
 def test_export_includes_intervention_receipts_and_redacts_summary_secrets():
     scenario_id = _seed_scenario(api_key_in_context=False)
     root_id, _ = _seed_branch_tree(scenario_id)
@@ -512,6 +660,67 @@ def test_include_private_keeps_user_id_but_still_redacts_secrets():
     parsed = scenario_payload.get("parsed_context") or {}
     assert "api_key" not in parsed
     assert b"sk-secret-context" not in raw
+
+
+@pytest.mark.parametrize("status", ["complete", "partial", "failed"])
+def test_full_report_snapshot_redacts_report_secrets_and_round_trips(status: str):
+    report = _full_report_snapshot_fixture(status)
+    scenario_id = _seed_scenario_with_full_report_snapshot(report)
+
+    with Session(get_engine()) as session:
+        buffer = export_snapshot_zip(scenario_id, session)
+    raw = buffer.getvalue()
+
+    assert f"sk-report-{status}-secret".encode() not in raw
+    assert f"report-{status}-token".encode() not in raw
+    assert f"report-{status}.example".encode() not in raw
+    assert b"api_key" not in raw
+    assert b"Bearer " not in raw
+    assert b"user:pass@" not in raw
+
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        exported_scenario = json.loads(zf.read("scenario.json"))
+
+    exported_report = exported_scenario["parsed_context"]["full_report"]
+    exported_report_text = json.dumps(exported_report, ensure_ascii=False)
+    assert "api_key" not in exported_report_text
+    assert "Authorization" not in exported_report_text
+    assert "base_url" not in exported_report_text
+    assert exported_report["status"] == status
+    assert exported_report["title_i18n"]["en"] == "AI transit plan report"
+    assert exported_report["summary_i18n"]["zh"] == "加入隐私保护后，方案更可能通过。"
+    assert exported_report["evidence"][0]["message_id"] == "msg-1"
+    assert exported_report["interview_evidence"][0] == {
+        "note": f"kept interview note for {status}",
+    }
+    assert exported_report["premortem"][0] == {
+        "risk": f"kept premortem risk for {status}",
+    }
+    if status == "failed":
+        assert exported_report["sections"] == []
+    else:
+        assert exported_report["sections"][0]["id"] == "timeline"
+        chart_data = exported_report["sections"][0]["charts"][0]["data"]
+        assert chart_data == {"branch_id": "branch-1", "probability": 0.68}
+
+    with Session(get_engine()) as session:
+        new_id = import_snapshot_zip(raw, "importer-2", session)
+
+    with Session(get_engine()) as session:
+        imported = session.get(Scenario, new_id)
+        assert imported is not None
+        imported_report = imported.parsed_context["full_report"]
+
+    imported_report_text = json.dumps(imported_report, ensure_ascii=False)
+    assert "api_key" not in imported_report_text
+    assert "Authorization" not in imported_report_text
+    assert "base_url" not in imported_report_text
+    assert imported_report["status"] == status
+    assert imported_report["title_i18n"] == exported_report["title_i18n"]
+    assert imported_report["summary_i18n"] == exported_report["summary_i18n"]
+    assert imported_report["evidence"][0]["message_id"] == "msg-1"
+    assert imported_report["interview_evidence"] == exported_report["interview_evidence"]
+    assert imported_report["premortem"] == exported_report["premortem"]
 
 
 def test_import_creates_new_scenario_with_remapped_ids():

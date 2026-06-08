@@ -4038,7 +4038,7 @@ describe('ResultView explore deeper bridge', () => {
     expect(bridgeSection).not.toBeNull();
     // causal + replay + compare + workbench (enabled) plus kg-explorer + timeline-galaxy
     // (rendered as gated role="link" cards because kg_explorer is not enabled here).
-    expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(6);
+    expect(within(bridgeSection as HTMLElement).getAllByRole('link')).toHaveLength(7);
     expect(within(bridgeSection as HTMLElement).getByText('result.bridge_kg_explorer_title')).toBeInTheDocument();
     expect(within(bridgeSection as HTMLElement).getByText('result.bridge_timeline_galaxy_title')).toBeInTheDocument();
     expect(within(bridgeSection as HTMLElement).getByRole('button', { name: /result.next_ask_agent/ })).toBeInTheDocument();
@@ -4443,7 +4443,7 @@ describe('ResultView explore deeper bridge', () => {
     expect(bridgeSection).not.toBeNull();
     const entries = within(bridgeSection as HTMLElement).getAllByRole('link');
     // causal + replay + compare + workbench + kg-explorer + timeline-galaxy, all gated off.
-    expect(entries).toHaveLength(6);
+    expect(entries).toHaveLength(7);
     for (const entry of entries) {
       expect(entry).toHaveAttribute('aria-disabled', 'true');
       expect(entry.tagName).toBe('DIV');

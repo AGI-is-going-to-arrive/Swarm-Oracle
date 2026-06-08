@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
+from app.log_sanitize import _scrub_sensitive_text
 from app.services.lang_detect import detect_language, get_language_directive
 from app.services.llm_client import (
     UNTRUSTED_INPUT_GUARDRAIL,
@@ -687,9 +688,10 @@ async def parse_question(
         result = _normalize_parse_result(result, language=language, hierarchical=hierarchical)
     except (LLMError, ValueError, TypeError) as exc:
         logger.warning(
-            "Parser JSON failed for '%s'; using deterministic fallback: %s",
+            "Parser JSON failed for '%s'; using deterministic fallback: %s: %s",
             question[:80],
-            exc,
+            type(exc).__name__,
+            _scrub_sensitive_text(str(exc)),
         )
         result = _build_parser_fallback_result(
             question,
@@ -731,7 +733,12 @@ async def parse_question(
                 hierarchical=hierarchical,
             )
         except (LLMError, ValueError, TypeError) as exc:
-            logger.warning("Parser retry failed for '%s'; keeping best-effort result: %s", question[:80], exc)  # noqa: E501
+            logger.warning(
+                "Parser retry failed for '%s'; keeping best-effort result: %s: %s",
+                question[:80],
+                type(exc).__name__,
+                _scrub_sensitive_text(str(exc)),
+            )
         else:
             if _should_replace_parse_result(result, retry_result):
                 result = retry_result

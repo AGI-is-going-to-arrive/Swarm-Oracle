@@ -219,6 +219,18 @@ class TestPickTheaterEndingPayload:
         assert payload is not None
         assert payload["id"] == "b2"
 
+    def test_tie_breaks_like_story_sort(self):
+        payload = _pick_theater_ending_payload(
+            [
+                {"id": "b-z", "fork_round": 3, "probability": 0.7, "title": "Later"},
+                {"id": "b-b", "fork_round": 2, "probability": 0.7, "title": "Second"},
+                {"id": "b-a", "fork_round": 2, "probability": 0.7, "title": "First"},
+            ],
+        )
+
+        assert payload is not None
+        assert payload["id"] == "b-a"
+
 
 class TestReconcileScenarioDoneIfComplete:
     def test_marks_stale_simulating_scenario_done_when_all_branches_are_final(self, monkeypatch):
@@ -579,6 +591,77 @@ class TestRunSimulation:
             scenario = session.get(Scenario, scenario_id)
             assert scenario is not None
             assert scenario.status == ScenarioStatus.DONE
+
+    @pytest.mark.asyncio
+    async def test_causal_graph_event_nodes_use_persisted_message_ids(self, monkeypatch):
+        from app.services.causal_graph import build_snapshot
+
+        engine = get_engine()
+        scenario_id = _make_scenario(engine)
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            scenario.parsed_context = {
+                "_language": "English",
+                "setting": {},
+                "simulation_rounds": 1,
+                "branch_sensitivity": 0.0,
+                "key_variable": scenario.question,
+                "mode": "raw",
+            }
+            scenario.status = ScenarioStatus.SIMULATING
+            session.add(scenario)
+            session.add(
+                Agent(
+                    scenario_id=scenario_id,
+                    name="Evidence Mapper",
+                    role="Analyst",
+                    tier=AgentTier.CORE,
+                )
+            )
+            session.commit()
+
+        async def _fake_llm_call_json(*_args, **_kwargs):
+            return {
+                "content": "The durable message should deep-link into evidence.",
+                "emotion": "calm",
+                "diverge": None,
+            }
+
+        async def _fake_narrate_branch(*_args, **_kwargs):
+            return {
+                "title": "Evidence path",
+                "story": "The scenario resolves with a traceable evidence path.",
+                "insight": "The graph should point at the persisted message.",
+                "key_moments": [],
+            }
+
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_CAUSAL_GRAPH", True)
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_VERDICT", False)
+        monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_REPORT", False)
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json_with_stream_fallback",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr(
+            "app.services.simulator.llm_call_json",
+            _fake_llm_call_json,
+        )
+        monkeypatch.setattr("app.services.simulator.llm_call", _fake_llm_call)
+        monkeypatch.setattr("app.services.simulator.narrate_branch", _fake_narrate_branch)
+        monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+        monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+
+        await run_simulation(scenario_id)
+
+        with Session(engine) as session:
+            persisted_message = session.exec(select(AgentMessage)).one()
+
+        result = build_snapshot(scenario_id)
+        event_node = next(node for node in result["nodes"] if node["type"] == "event")
+
+        assert event_node["payload"]["message_id"] == persisted_message.id
 
     @pytest.mark.asyncio
     async def test_records_fork_debug_trace_when_detector_declines_fork(self, monkeypatch):

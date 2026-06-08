@@ -1365,6 +1365,10 @@ class TestSanitizeUrlBoundary:
         url = "https://example.com/path?q=1"
         assert _sanitize_url(url) == url
 
+    def test_url_userinfo_is_stripped(self):
+        url = "https://user:pass@example.com/path?q=1#source"
+        assert _sanitize_url(url) == "https://example.com/path?q=1#source"
+
     def test_missing_hostname_rejected(self):
         assert _sanitize_url("https:///missing-host") == ""
 

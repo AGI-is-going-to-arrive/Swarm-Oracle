@@ -603,6 +603,46 @@ class TestAppendRoundNodes:
             "agent two same id",
         ]
 
+    def test_message_event_payload_serializes_origin_message_id(self):
+        """Replay deep-links need the originating message id in serialized graph payloads."""
+        append_round_nodes(
+            "sc3f-message-link",
+            "br1",
+            2,
+            [
+                MockMessage(
+                    emotion="calm",
+                    agent_id="a1",
+                    id="msg-deep-link",
+                    content="message with a replay target",
+                )
+            ],
+        )
+
+        result = build_snapshot("sc3f-message-link", branch_id="br1")
+
+        assert result["nodes"][0]["payload"]["message_id"] == "msg-deep-link"
+
+    def test_message_event_payload_omits_unknown_message_id(self):
+        """Unknown message ids must not be fabricated for replay deep-links."""
+        append_round_nodes(
+            "sc3f-message-link-unknown",
+            "br1",
+            2,
+            [
+                MockMessage(
+                    emotion="calm",
+                    agent_id="a1",
+                    id=None,
+                    content="message without a durable id",
+                )
+            ],
+        )
+
+        result = build_snapshot("sc3f-message-link-unknown", branch_id="br1")
+
+        assert "message_id" not in result["nodes"][0]["payload"]
+
     def test_concurrent_append_same_message_id_reuses_single_event_node(self):
         """Concurrent appends for the same agent/message should not create duplicate nodes."""
 
@@ -2371,6 +2411,7 @@ class TestForkEdgeFallback:
 
         assert event_node["label"].startswith("诸葛亮:")
         assert event_node["payload"]["synthetic_provenance"] is True
+        assert event_node["payload"]["message_id"] == "msg_legacy"
         assert len(caused) == 1
         assert caused[0]["label"] == "triggered fork"
 

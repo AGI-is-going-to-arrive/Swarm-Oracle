@@ -59,6 +59,8 @@ On narrow screens, the graph workbench collapses Split view into a single graph 
 
 These backend-internal or experimental flags remain off by default and are not ordinary user entries: `FEATURE_ROUNDTABLE_INSIGHT_LLM`, `FEATURE_HALLUCINATION_GATE`, and `FEATURE_IDENTITY_COMPACTION`.
 
+`FEATURE_RESULT_REPORT` is also off by default. When enabled, the result page shows the deep-read report entry, the backend stores the report in `Scenario.parsed_context.full_report`, and `POST /api/scenario/{id}/report:generate` can generate or retry it. Section count, per-section tool-call cap, timeouts, evidence excerpt length, and the full-report byte cap are controlled by the `REPORT_*` settings in `.env.example`.
+
 > Restart the backend after changing feature flags. The frontend reads `/api/capabilities` and hides disabled entries or shows unavailable states instead of failing.
 
 ### Search Features That Need Extra Setup

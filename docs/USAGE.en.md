@@ -27,6 +27,7 @@ After a simulation finishes, the result page shows:
 - **Prediction verdict**: a direct answer to your original question, with confidence and uncertainty notes when available.
 - **Worldline cards**: each ending has a title, probability, story, and answer to the original question.
 - **Next-step entries**: depending on the data and server settings, the page shows Oracle Chambers, Roundtable, branch comparison, graph workbench, Knowledge Graph Explorer, Timeline Galaxy, Agent follow-up, and sharing entries.
+- **Deep-read report (must be enabled)**: if the server enables `FEATURE_RESULT_REPORT`, the result page shows a report entry with key conclusions, evidence, and uncertainty notes. You can also open it at `/result/:id/report`.
 
 Common buttons under an ending card:
 
@@ -103,7 +104,7 @@ Use the **EN / 中文** switch in the lower-right corner. Interface text changes
 ## FAQ
 
 - **Start Simulation does nothing?** Make sure the question box is not empty and, in local development, that the backend is running on `18927`.
-- **Cannot see Causal Graph / Argument Map / Deep Dive / Knowledge Graph Explorer / Timeline Galaxy?** These entries are controlled by `/api/capabilities`; the templates enable them by default. If you edited `.env`, confirm the related `FEATURE_*` values are `true`, then restart the backend.
+- **Cannot see Causal Graph / Argument Map / Deep Dive / Knowledge Graph Explorer / Timeline Galaxy / Deep-read report?** These entries are controlled by `/api/capabilities`; most are enabled by default in the templates, while the deep-read report is off by default. If you edited `.env`, confirm the related `FEATURE_*` values are `true`, then restart the backend.
 - **The result page says "No prediction verdict yet"?** The app could not produce a reliable single verdict for that run. The original question and worldline answers still remain visible.
 - **The run stays on "generating narrative" for a long time?** With many branches, the app generates ending stories one by one. Waiting is normal.
 - **Can I rely on the AI prediction?** No. SwarmOracle is for entertainment and exploration only. Do not use it for financial, medical, legal, or other real-world decisions.

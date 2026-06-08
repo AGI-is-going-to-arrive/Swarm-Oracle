@@ -18,6 +18,7 @@ from sqlmodel import Session, select
 
 from app.api.schemas import ScenarioResponse
 from app.config import settings
+from app.log_sanitize import _scrub_sensitive_text
 from app.models import (
     Agent,
     AgentGroup,
@@ -632,6 +633,10 @@ async def _watch_runtime_lock_loss(
     raise RuntimeError("simulation runtime lock was lost during execution")
 
 
+def _format_background_exception(exc: BaseException) -> tuple[str, str]:
+    return type(exc).__name__, _scrub_sensitive_text(str(exc))
+
+
 def _finalize_background_task(task: asyncio.Task) -> None:
     """Drop completed tasks and surface background failures in logs."""
     _background_tasks.discard(task)
@@ -645,9 +650,11 @@ def _finalize_background_task(task: asyncio.Task) -> None:
         logger.exception("Failed to inspect background task completion")
         return
     if exc is not None:
+        exc_type, scrubbed = _format_background_exception(exc)
         logger.error(
-            "Background task failed",
-            exc_info=(type(exc), exc, exc.__traceback__),
+            "Background task failed: %s: %s",
+            exc_type,
+            scrubbed,
         )
 
 
@@ -831,7 +838,13 @@ async def run_sim_background(
                 scenario_id, type(exc).__name__,
             )
         else:
-            logger.error("Simulation failed for %s: %s", scenario_id, exc, exc_info=True)
+            exc_type, scrubbed = _format_background_exception(exc)
+            logger.error(
+                "Simulation failed for %s: %s: %s",
+                scenario_id,
+                exc_type,
+                scrubbed,
+            )
             try:
                 await ws_manager.broadcast(scenario_id, {
                     "type": "simulation_error",
@@ -1001,7 +1014,13 @@ async def parse_and_run_background(
         _parse_phase_simulations.discard(scenario_id)
         raise
     except Exception as exc:
-        logger.error("Parse failed for %s: %s", scenario_id, exc, exc_info=True)
+        exc_type, scrubbed = _format_background_exception(exc)
+        logger.error(
+            "Parse failed for %s: %s: %s",
+            scenario_id,
+            exc_type,
+            scrubbed,
+        )
         with Session(engine) as session:
             scenario = session.get(Scenario, scenario_id)
             if scenario:

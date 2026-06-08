@@ -18,6 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
 from app.config import settings
+from app.log_sanitize import _scrub_sensitive_text
 from app.models import (
     Agent,
     AgentMessage,
@@ -381,10 +382,11 @@ async def _summarize_identity_compaction_group(
         summary = str(result.get("compacted_summary") or "").strip()
         if summary:
             return summary
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "identity compaction non-stream failed, using text fallback",
-            exc_info=True,
+            "identity compaction non-stream failed, using text fallback: %s: %s",
+            type(exc).__name__,
+            _scrub_sensitive_text(str(exc)),
         )
 
     return fallback_summary
@@ -488,13 +490,18 @@ def _pick_theater_ending_payload(
             if item.get("id") == branch_id:
                 return item
 
-    return max(
-        narrated_branches,
-        key=lambda item: (
-            float(item.get("probability") or 0),
-            str(item.get("id") or ""),
-        ),
-    )
+    def _sort_key(item: dict[str, Any]) -> tuple[float, int, str]:
+        try:
+            probability = float(item.get("probability") or 0)
+        except (TypeError, ValueError):
+            probability = 0.0
+        try:
+            fork_round = int(item.get("fork_round") or 0)
+        except (TypeError, ValueError):
+            fork_round = 0
+        return (-probability, fork_round, str(item.get("id") or ""))
+
+    return min(narrated_branches, key=_sort_key)
 
 
 def reconcile_scenario_done_if_complete(
@@ -2653,6 +2660,7 @@ async def _run_simulation_impl(
             })
             narrated_branch_payloads.append({
                 "id": b["id"],
+                "fork_round": b.get("fork_round"),
                 "probability": b.get("probability", 0),
                 "title": narration.get("title", ""),
                 "story": narration.get("story", ""),
@@ -2669,6 +2677,41 @@ async def _run_simulation_impl(
         )
         if verdict is not None:
             _persist_result_quality_verdict(engine, scenario_id, verdict)
+
+    if branch_id is None and settings.FEATURE_RESULT_REPORT:
+        try:
+            chosen_report_branch = _pick_theater_ending_payload(narrated_branch_payloads)
+            report_branch_id = (
+                str(chosen_report_branch.get("id") or "")
+                if chosen_report_branch
+                else ""
+            )
+            if report_branch_id:
+                report_overrides = {
+                    key: (
+                        str(value)
+                        if key in {"api_key", "base_url", "model"} and value is not None
+                        else value
+                    )
+                    for key, value in (llm_overrides or {}).items()
+                    if key in {"api_key", "base_url", "model", "temperature"}
+                }
+                from app.api.helpers import schedule_background_task
+                from app.services.result_report.builder import build_report_safe
+
+                schedule_background_task(
+                    build_report_safe(
+                        scenario_id,
+                        report_branch_id,
+                        overrides=report_overrides,
+                    )
+                )
+        except Exception as exc:
+            logger.warning(
+                "Failed to schedule result report generation: %s: %s",
+                type(exc).__name__,
+                _scrub_sensitive_text(str(exc)),
+            )
 
     # ── Done ─────────────────────────────────────────
     # Cleanup pending interventions for this scenario (prevent memory leak)
@@ -2810,12 +2853,15 @@ async def _run_simulation_impl(
                                     grp.summaries,
                                     llm_overrides=llm_overrides,
                                 )
-                            except Exception:
+                            except Exception as exc:
                                 # LLM failure fallback: concatenate
                                 summary = " | ".join(grp.summaries)[:600]
                                 logger.warning(
-                                    "compaction LLM failed for %s/%s, using fallback",
-                                    uid, iid, exc_info=True,
+                                    "compaction LLM failed for %s/%s, using fallback: %s: %s",
+                                    uid,
+                                    iid,
+                                    type(exc).__name__,
+                                    _scrub_sensitive_text(str(exc)),
                                 )
                             await asyncio.to_thread(
                                 execute_compaction_group, uid, iid, grp, summary,
@@ -3134,7 +3180,12 @@ async def _gather_agent_messages(
             except SimulationCancelled:
                 raise
             except Exception as exc:
-                logger.warning("Agent %s failed: %s", agent["name"], exc)
+                logger.warning(
+                    "Agent %s failed: %s: %s",
+                    agent["name"],
+                    type(exc).__name__,
+                    _scrub_sensitive_text(str(exc)),
+                )
                 content = raw_text if raw_text else (
                     f"({agent['name']}沉默了)"
                 )
@@ -3150,7 +3201,7 @@ async def _gather_agent_messages(
                 "diverge": diverge,
             }
 
-            _save_messages(
+            saved_message_ids = _save_messages(
                 engine,
                 [
                     {
@@ -3161,7 +3212,9 @@ async def _gather_agent_messages(
                         "diverge": msg.get("diverge"),
                     }
                 ],
-            )
+            ) or []
+            if saved_message_ids:
+                msg["id"] = saved_message_ids[0]
             _check_cancelled(scenario_id)
 
             # Push final parsed message only after it is durable.
@@ -3464,7 +3517,7 @@ async def _gather_hierarchical_messages(
 
         all_messages.append(msg)
 
-    _save_messages(
+    saved_message_ids = _save_messages(
         engine,
         [
             {
@@ -3476,7 +3529,10 @@ async def _gather_hierarchical_messages(
             }
             for msg in worker_messages
         ],
-    )
+    ) or []
+    for msg, message_id in zip(worker_messages, saved_message_ids):
+        if message_id:
+            msg["id"] = message_id
     for msg in worker_messages:
         store_memory(
             scenario_id=scenario_id,
@@ -3563,7 +3619,11 @@ async def _detect_fork(
             )
             return _normalize_fork_detector_result(result)
     except Exception as exc:
-        logger.warning("Fork detection failed: %s", exc)
+        logger.warning(
+            "Fork detection failed: %s: %s",
+            type(exc).__name__,
+            _scrub_sensitive_text(str(exc)),
+        )
         return {"should_fork": False}
 
 
@@ -3730,8 +3790,12 @@ async def _generate_verdict(
             ),
             "question_answer": _one_line_answer(question_answer),
         }
-    except Exception:
-        logger.debug("result verdict generation failed (non-blocking)", exc_info=True)
+    except Exception as exc:
+        logger.debug(
+            "result verdict generation failed (non-blocking): %s: %s",
+            type(exc).__name__,
+            _scrub_sensitive_text(str(exc)),
+        )
         return None
 
 
@@ -4056,8 +4120,8 @@ def _apply_normalized_active_branch_probabilities(
         session.commit()
 
 
-def _save_message(engine, round_id, agent_id, content, emotion, diverge):
-    _save_messages(
+def _save_message(engine, round_id, agent_id, content, emotion, diverge) -> str | None:
+    saved_message_ids = _save_messages(
         engine,
         [{
             "round_id": round_id,
@@ -4067,11 +4131,12 @@ def _save_message(engine, round_id, agent_id, content, emotion, diverge):
             "diverge": diverge,
         }],
     )
+    return saved_message_ids[0] if saved_message_ids else None
 
 
-def _save_messages(engine, messages: list[dict[str, Any]]) -> None:
+def _save_messages(engine, messages: list[dict[str, Any]]) -> list[str]:
     if not messages:
-        return
+        return []
 
     rows = [
         AgentMessage(
@@ -4086,6 +4151,7 @@ def _save_messages(engine, messages: list[dict[str, Any]]) -> None:
     with Session(engine) as session:
         session.add_all(rows)
         session.commit()
+        return [row.id for row in rows]
 
 
 def _get_recent_messages(engine, branch_id, max_rounds=2) -> list[dict]:

@@ -1,0 +1,767 @@
+"""Sprint S2 tests for fail-soft result report generation."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import logging
+import time
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlmodel import Session
+
+from app.main import app
+from app.models import (
+    Agent,
+    AgentMessage,
+    Branch,
+    BranchStatus,
+    Round,
+    Scenario,
+    ScenarioStatus,
+)
+from app.models.database import get_engine
+from app.services.result_report.schema import (
+    FullReport,
+    ResultReportSSEEvent,
+    utf8_json_size_bytes,
+    validate_full_report_payload,
+)
+
+
+def _seed_report_scenario() -> str:
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = Scenario(
+            id="scenario-report",
+            question="Should the city approve the AI transit plan?",
+            status=ScenarioStatus.DONE,
+            parsed_context={
+                "result_quality": {
+                    "verdict": "The plan likely passes after privacy safeguards.",
+                    "confidence": "medium",
+                    "question_answer": "It likely passes with safeguards.",
+                },
+            },
+        )
+        session.add(scenario)
+        session.add_all(
+            [
+                Agent(
+                    id="agent-planner",
+                    scenario_id=scenario.id,
+                    name="Transit Planner",
+                    role="Planner",
+                ),
+                Agent(
+                    id="agent-privacy",
+                    scenario_id=scenario.id,
+                    name="Privacy Advocate",
+                    role="Civil society",
+                ),
+            ],
+        )
+        session.add_all(
+            [
+                Branch(
+                    id="branch-a",
+                    scenario_id=scenario.id,
+                    title="Approval with safeguards",
+                    probability=0.68,
+                    status=BranchStatus.COMPLETED,
+                    story=(
+                        "The proposal passes after council members accept "
+                        "privacy limits and budget caps."
+                    ),
+                    insight="Privacy safeguards unlock a narrow coalition.",
+                    key_moments=json.dumps(["privacy safeguards", "budget caps"]),
+                ),
+                Branch(
+                    id="branch-b",
+                    scenario_id=scenario.id,
+                    title="Delay for committee review",
+                    probability=0.32,
+                    status=BranchStatus.COMPLETED,
+                    story="The vote is delayed when labor and privacy groups align.",
+                    insight="The delay coalition almost wins.",
+                ),
+            ],
+        )
+        session.add_all(
+            [
+                Round(id="round-1", branch_id="branch-a", round_number=1),
+                Round(id="round-2", branch_id="branch-a", round_number=2),
+            ],
+        )
+        session.add_all(
+            [
+                AgentMessage(
+                    id="msg-privacy",
+                    round_id="round-1",
+                    agent_id="agent-privacy",
+                    content="Privacy safeguards make the approval defensible.",
+                    emotion="focused",
+                    diverge="privacy safeguards",
+                ),
+                AgentMessage(
+                    id="msg-planner",
+                    round_id="round-2",
+                    agent_id="agent-planner",
+                    content="Budget caps keep the transport gains politically viable.",
+                    emotion="confident",
+                ),
+            ],
+        )
+        session.commit()
+    return "scenario-report"
+
+
+def _outline_payload(section_ids: list[str] | None = None) -> dict[str, Any]:
+    ids = section_ids or ["timeline", "sources"]
+    return {
+        "title_i18n": {
+            "zh": "AI 公交方案深读",
+            "en": "AI transit plan report",
+        },
+        "summary_i18n": {
+            "zh": "隐私保护和预算上限让主导路线站稳。",
+            "en": "Privacy safeguards and budget caps make the dominant route viable.",
+        },
+        "sections": [
+            {
+                "id": section_id,
+                "title_i18n": {
+                    "zh": f"{section_id} 章节",
+                    "en": f"{section_id.title()} section",
+                },
+                "intent": f"Explain {section_id}.",
+            }
+            for section_id in ids
+        ],
+    }
+
+
+def _section_payload(section_id: str, *, body: str | None = None) -> dict[str, Any]:
+    text = body or f"{section_id} explains why safeguards changed the vote."
+    return {
+        "action": "final_section",
+        "body_md_i18n": {
+            "zh": f"{section_id}：隐私保护改变了投票。",
+            "en": text,
+        },
+        "evidence_refs": ["ev_001"],
+    }
+
+
+class QueuedLlm:
+    def __init__(self, responses: list[Any]) -> None:
+        self.responses = list(responses)
+        self.prompts: list[str] = []
+
+    async def __call__(self, prompt: str, **_kwargs: Any) -> dict[str, Any]:
+        self.prompts.append(prompt)
+        if not self.responses:
+            raise AssertionError("unexpected LLM call")
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        if callable(response):
+            value = response(prompt)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+        return response
+
+
+def _persisted_report(scenario_id: str) -> dict[str, Any]:
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        parsed_context = scenario.parsed_context or {}
+        report = parsed_context.get("full_report")
+        assert isinstance(report, dict)
+        return report
+
+
+def test_scrub_sensitive_text_redacts_url_userinfo():
+    from app.services.result_report import builder
+
+    cleaned = builder._scrub_sensitive_text(
+        "source https://user:pass@example.com/path?x=1"
+    )
+
+    assert "https://example.com/path?x=1" in cleaned
+    assert "https://user:pass@example.com" not in cleaned
+    assert "user:pass@" not in cleaned
+
+
+@pytest.mark.asyncio
+async def test_build_report_persists_complete_report_with_evidence_coords(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline", "sources"]),
+            _section_payload("timeline"),
+            _section_payload("sources"),
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    )
+
+    assert isinstance(report, FullReport)
+    assert report.status == "complete"
+    assert report.generation_mode == "generation"
+    assert report.tier == "generation"
+    assert report.target_branch_id == "branch-a"
+    assert len(report.sections) == 2
+    assert {item.id for item in report.sections} == {"timeline", "sources"}
+    assert report.evidence[0].round_id == "round-1"
+    assert report.evidence[0].message_id == "msg-privacy"
+    assert "narrative simulation probability" in report.verdict.disclaimer
+
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.status == "complete"
+    assert persisted.evidence[0].agent_name == "Privacy Advocate"
+
+
+@pytest.mark.asyncio
+async def test_plan_failure_uses_fallback_outline_and_section_failure_isolated(
+    monkeypatch,
+):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm([RuntimeError("plan down"), _section_payload("timeline")])
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    original_generate = builder.generate_section_react
+
+    async def fail_sources(*args: Any, **kwargs: Any):
+        section = args[1]
+        if section.section_id == "sources":
+            raise RuntimeError("source chapter failed")
+        return await original_generate(*args, **kwargs)
+
+    monkeypatch.setattr(builder, "generate_section_react", fail_sources)
+
+    report = await builder.build_report(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    )
+
+    assert report.status == "partial"
+    assert report.summary_i18n.en
+    assert [section.id for section in report.sections] == ["timeline"]
+    assert validate_full_report_payload(_persisted_report(scenario_id)).status == "partial"
+    assert len([prompt for prompt in fake_llm.prompts if "REPORT_OUTLINE" in prompt]) == 1
+
+
+@pytest.mark.asyncio
+async def test_section_rewrite_tier_sets_report_generation_mode(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline"]),
+            RuntimeError("generation failed"),
+            _section_payload("timeline"),
+            _section_payload("sources"),
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    )
+
+    assert report.status == "complete"
+    assert report.generation_mode == "rewrite"
+    assert report.tier == "rewrite"
+    assert report.sections[0].id == "timeline"
+
+
+@pytest.mark.asyncio
+async def test_all_sections_fail_keeps_outline_and_marks_report_failed(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    monkeypatch.setattr(builder, "llm_call_json", QueuedLlm([_outline_payload()]))
+
+    async def fail_every_section(*_args: Any, **_kwargs: Any):
+        raise RuntimeError("section failed")
+
+    monkeypatch.setattr(builder, "generate_section_react", fail_every_section)
+
+    report = await builder.build_report(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    )
+
+    assert report.status == "failed"
+    assert report.sections == []
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.status == "failed"
+    assert persisted.summary_i18n.en
+
+
+@pytest.mark.asyncio
+async def test_static_tier_used_when_generation_and_rewrite_fail(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline"]),
+            RuntimeError("generation failed"),
+            RuntimeError("rewrite failed"),
+        ],
+    )
+    monkeypatch.setattr(builder.settings, "REPORT_MIN_SECTIONS", 1)
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    )
+
+    assert report.status == "complete"
+    assert report.generation_mode == "static"
+    assert report.tier == "static"
+    assert report.sections[0].id == "timeline"
+    assert len(fake_llm.prompts) == 3
+    assert any("tier=generation" in prompt for prompt in fake_llm.prompts)
+    assert any("tier=rewrite" in prompt for prompt in fake_llm.prompts)
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.generation_mode == "static"
+
+
+@pytest.mark.asyncio
+async def test_oversize_report_truncates_fail_closed(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    long_body = "x" * 12_000
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline", "sources"]),
+            _section_payload("timeline", body=long_body),
+            _section_payload("sources", body=long_body),
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+    monkeypatch.setattr(builder.settings, "REPORT_FULL_REPORT_MAX_BYTES", 3600)
+
+    report = await builder.build_report(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    )
+    payload = report.model_dump(mode="json")
+
+    assert report.status == "partial"
+    assert utf8_json_size_bytes(payload) <= 3600
+    assert validate_full_report_payload(payload, max_bytes=3600).status == "partial"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_repeat_generation_serializes_without_corruption(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline"]),
+            _section_payload("timeline"),
+            _section_payload("sources"),
+            _outline_payload(["sources"]),
+            _section_payload("sources"),
+            _section_payload("timeline"),
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    first, second = await asyncio.gather(
+        builder.build_report(scenario_id, "branch-a", overrides=None),
+        builder.build_report(scenario_id, "branch-a", overrides=None),
+    )
+
+    assert first.status == "complete"
+    assert second.status == "complete"
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert len(persisted.sections) == 2
+    assert {section.id for section in persisted.sections} == {"timeline", "sources"}
+
+
+@pytest.mark.asyncio
+async def test_build_report_acquires_and_releases_durable_runtime_lock(monkeypatch):
+    from app.services.result_report import builder
+    from app.services.runtime_lock import RuntimeLockLease
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm([
+        _outline_payload(["timeline"]),
+        _section_payload("timeline"),
+    ])
+    lease = RuntimeLockLease(
+        lock_key=f"result-report:{scenario_id}",
+        owner_id="owner-a",
+        db_path=None,
+        expires_at=9999999999.0,
+    )
+    acquired: list[tuple[str, float]] = []
+    released: list[RuntimeLockLease | None] = []
+
+    def fake_acquire(lock_key: str, *, lease_seconds: float) -> RuntimeLockLease | None:
+        acquired.append((lock_key, lease_seconds))
+        return lease
+
+    def fake_release(next_lease: RuntimeLockLease | None) -> bool:
+        released.append(next_lease)
+        return True
+
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+    monkeypatch.setattr(builder, "acquire_runtime_lock", fake_acquire, raising=False)
+    monkeypatch.setattr(builder, "release_runtime_lock", fake_release, raising=False)
+
+    report = await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    assert report.status == "complete"
+    assert acquired
+    assert acquired[0][0] == f"result-report:{scenario_id}"
+    assert acquired[0][1] > 0
+    assert released == [lease]
+
+
+@pytest.mark.asyncio
+async def test_build_report_releases_durable_lock_after_early_failure(monkeypatch):
+    from app.services.result_report import builder
+    from app.services.runtime_lock import RuntimeLockLease
+
+    scenario_id = _seed_report_scenario()
+    lease = RuntimeLockLease(
+        lock_key=f"result-report:{scenario_id}",
+        owner_id="owner-a",
+        db_path=None,
+        expires_at=9999999999.0,
+    )
+    released: list[RuntimeLockLease | None] = []
+
+    async def failing_plan_outline(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("plan failed with sk-should-not-persist-123456")
+
+    monkeypatch.setattr(builder, "plan_outline", failing_plan_outline)
+    monkeypatch.setattr(
+        builder,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: lease,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        builder,
+        "release_runtime_lock",
+        lambda next_lease: released.append(next_lease) or True,
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="plan failed"):
+        await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    assert released == [lease]
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    assert persisted.status == "failed"
+    assert persisted.tier == "static"
+    assert persisted.sections == []
+    assert "should-not-persist" not in json.dumps(
+        persisted.model_dump(mode="json"),
+        ensure_ascii=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_report_rejects_cross_worker_duplicate_without_persisting(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+
+    async def unexpected_llm_call(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("LLM must not run when another worker owns the report lock")
+
+    monkeypatch.setattr(builder, "llm_call_json", unexpected_llm_call)
+    monkeypatch.setattr(
+        builder,
+        "acquire_runtime_lock",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+
+    with pytest.raises(builder.ResultReportBuilderError, match="already in progress"):
+        await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        assert "full_report" not in (scenario.parsed_context or {})
+
+
+def test_report_generate_sse_endpoint_emits_progress_and_scrubs_byok(monkeypatch):
+    import app.api.scenarios as scenarios_api
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline"]),
+            _section_payload("timeline"),
+        ],
+    )
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+    client = TestClient(app)
+
+    with client.stream(
+        "POST",
+        f"/api/scenario/{scenario_id}/report:generate",
+        json={
+            "llm_api_key": "sk-test-secret-12345678",
+            "llm_base_url": "http://127.0.0.1:8317/v1",
+            "llm_model": "test-model",
+        },
+    ) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        body = "".join(response.iter_text())
+
+    assert "event: report_started" in body
+    assert "event: report_section_complete" in body
+    assert "event: report_complete" in body
+    assert "sk-test-secret" not in body
+    assert "api_key" not in body
+    assert "Bearer " not in body
+    validate_full_report_payload(_persisted_report(scenario_id))
+
+
+@pytest.mark.asyncio
+async def test_report_failure_redacts_credentials_from_sse_and_background_logs(
+    monkeypatch,
+    caplog,
+):
+    import app.api.helpers as api_helpers
+    from app.services.result_report import builder
+
+    secret_error = (
+        "upstream failed Authorization: Bearer sk-LEAKEDabcdef123456 "
+        "api_key=SECRETabcdef123456 xai-LEAKEDabcdef123456 "
+        "sk-ant-LEAKEDabcdef123456 "
+        "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo123456"
+    )
+    report_called = 0
+
+    async def failing_build_report(*_args: Any, **_kwargs: Any) -> FullReport:
+        nonlocal report_called
+        report_called += 1
+        raise RuntimeError(secret_error)
+
+    monkeypatch.setattr(builder, "build_report", failing_build_report)
+    caplog.set_level(logging.ERROR)
+
+    frames = []
+    async for frame in builder.build_report_sse_stream(
+        "scenario-report",
+        "branch-a",
+        overrides={"api_key": "sk-request-key-123456"},
+    ):
+        frames.append(frame)
+    body = "".join(frames)
+
+    task = api_helpers.schedule_background_task(
+        builder.build_report("scenario-report", "branch-a", overrides=None)
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert task.done()
+    assert report_called == 2
+    assert "event: report_failed" in body
+    assert "REPORT_FAILED" in body
+    assert "Report generation failed" in body
+    combined_logs = "\n".join(record.getMessage() for record in caplog.records)
+    combined_output = body + "\n" + combined_logs
+    assert "LEAKED" not in combined_output
+    assert "SECRET" not in combined_output
+    assert "Bearer sk-" not in combined_output
+    assert "api_key=" not in combined_output
+    assert "xai-LEAKED" not in combined_output
+    assert "sk-ant-LEAKED" not in combined_output
+    assert "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo123456" not in combined_output
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_report_generate_sse_stream_cancels_builder_on_client_disconnect(
+    monkeypatch,
+):
+    from app.services.result_report import builder
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def slow_build_report(*_args: Any, **_kwargs: Any) -> FullReport:
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cancelled.set()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(builder, "build_report", slow_build_report)
+
+    stream = builder.build_report_sse_stream(
+        "scenario-report",
+        "branch-a",
+        overrides={"api_key": "sk-request-key-123456"},
+    )
+    assert "event: report_started" in await anext(stream)
+
+    pending_frame = asyncio.create_task(anext(stream))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    pending_frame.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await pending_frame
+
+    await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_report_failure_does_not_block_simulation_done(monkeypatch):
+    import app.services.simulator as simulator_module
+    from app.services.simulator import run_simulation
+
+    engine = get_engine()
+    scenario = Scenario(
+        question="Can the habitat survive one more week?",
+        parsed_context={
+            "_language": "English",
+            "setting": {},
+            "simulation_rounds": 1,
+            "mode": "raw",
+        },
+        status=ScenarioStatus.SIMULATING,
+    )
+    with Session(engine) as session:
+        session.add(scenario)
+        session.commit()
+        scenario_id = scenario.id
+        session.add(
+            Agent(
+                scenario_id=scenario_id,
+                name="Systems Lead",
+                role="Engineer",
+            )
+        )
+        session.commit()
+
+    events: list[dict[str, Any]] = []
+
+    async def fake_ws_callback(_scenario_id: str, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    async def fake_llm_json(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"content": "Life support stays stable.", "emotion": "focused"}
+
+    async def fake_narrate_branch(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "title": "Stabilize first",
+            "story": "The habitat survives by prioritizing life support.",
+            "insight": "Repair sequencing matters more than expansion.",
+            "key_moments": [],
+        }
+
+    report_called = asyncio.Event()
+    report_call_count = 0
+
+    async def failing_build_report(*_args: Any, **_kwargs: Any) -> FullReport:
+        nonlocal report_call_count
+        report_call_count += 1
+        report_called.set()
+        raise RuntimeError("report builder unavailable")
+
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_VERDICT", False)
+    monkeypatch.setattr(
+        "app.services.simulator.llm_call_json_with_stream_fallback",
+        fake_llm_json,
+    )
+    monkeypatch.setattr("app.services.simulator.llm_call_json", fake_llm_json)
+    monkeypatch.setattr("app.services.simulator.narrate_branch", fake_narrate_branch)
+    monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+    monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "app.services.result_report.builder.build_report",
+        failing_build_report,
+    )
+
+    await run_simulation(scenario_id, ws_callback=fake_ws_callback)
+    await asyncio.sleep(0)
+
+    await asyncio.wait_for(report_called.wait(), timeout=1)
+    assert report_call_count == 1
+    assert any(event.get("type") == "simulation_done" for event in events)
+    deadline = time.monotonic() + 1.0
+    report: dict[str, Any] | None = None
+    persisted_status: ScenarioStatus | None = None
+    while time.monotonic() < deadline:
+        with Session(engine) as session:
+            persisted = session.get(Scenario, scenario_id)
+            assert persisted is not None
+            persisted_status = persisted.status
+            candidate = (persisted.parsed_context or {}).get("full_report")
+            if isinstance(candidate, dict):
+                report = candidate
+                break
+        await asyncio.sleep(0.01)
+
+    assert persisted_status == ScenarioStatus.DONE
+    assert report is not None
+    validated = validate_full_report_payload(report)
+    assert validated.status == "failed"
+    assert validated.generation_mode == "static"
+    assert validated.tier == "static"
+    assert validated.sections == []
+
+
+def test_sse_event_shape_remains_frozen_for_progress_payloads() -> None:
+    event = ResultReportSSEEvent(
+        event="report_section_complete",
+        data={
+            "report_id": "scenario-report",
+            "section_id": "timeline",
+            "status": "complete",
+            "tool_trace": [
+                {
+                    "tool": "query_branch_messages",
+                    "query": "timeline",
+                    "item_count": 2,
+                    "elapsed_ms": 1,
+                },
+            ],
+        },
+    )
+
+    assert event.event == "report_section_complete"
+    assert event.data.tool_trace[0].tool == "query_branch_messages"

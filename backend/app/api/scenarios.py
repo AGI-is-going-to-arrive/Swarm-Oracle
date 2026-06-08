@@ -73,6 +73,8 @@ from app.services.llm_client import (
     measure_provider_parallelism,
     validate_llm_base_url,
 )
+from app.services.result_report import builder as result_report_builder
+from app.services.result_report import full_report_for_story
 from app.services.scoring import recompute_leaderboard_entry
 from app.services.simulation_cancel import get_or_create_cancel_token, request_cancel
 from app.services.vector_store import get_vector_store
@@ -140,6 +142,13 @@ class CreateReplayArtifactRequest(BaseModel):
         if len(normalized) > 64:
             raise ValueError("kind too long (max 64 chars)")
         return normalized
+
+
+class ResultReportGenerateRequest(BaseModel):
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    temperature: float | None = None
 
 
 class ScenarioConversationListResponse(BaseModel):
@@ -642,6 +651,10 @@ async def api_capabilities():
         "result_verdict": _capability_entry(
             enabled=settings.FEATURE_RESULT_VERDICT,
             version="1.0" if settings.FEATURE_RESULT_VERDICT else "0.0",
+        ),
+        "result_report": _capability_entry(
+            enabled=settings.FEATURE_RESULT_REPORT,
+            version="1.0" if settings.FEATURE_RESULT_REPORT else "0.0",
         ),
     }
     return capabilities
@@ -1470,15 +1483,24 @@ async def get_story(
                 )
             ).all()
 
-        raw_result_quality = (
-            scenario.parsed_context.get("result_quality")
+        parsed_context = (
+            scenario.parsed_context
             if isinstance(scenario.parsed_context, dict)
-            else None
+            else {}
         )
+        raw_result_quality = parsed_context.get("result_quality")
         result_quality = (
             raw_result_quality
             if settings.FEATURE_RESULT_VERDICT and isinstance(raw_result_quality, dict)
             else {}
+        )
+        full_report = (
+            full_report_for_story(
+                parsed_context.get("full_report"),
+                max_bytes=settings.REPORT_FULL_REPORT_MAX_BYTES,
+            )
+            if settings.FEATURE_RESULT_REPORT
+            else None
         )
         raw_branch_answers = result_quality.get("branch_question_answers")
         branch_question_answers = (
@@ -1494,6 +1516,7 @@ async def get_story(
             "verdict_confidence": _normalize_result_verdict_confidence(
                 result_quality.get("confidence"),
             ) if verdict_text else None,
+            "full_report": full_report,
             "branches": [
                 StoryBranch(
                     id=b.id,
@@ -1522,6 +1545,68 @@ async def get_story(
                 for b in branches
             ],
         }
+
+
+def _require_result_report_feature() -> None:
+    if not settings.FEATURE_RESULT_REPORT:
+        raise api_error(
+            404,
+            "FEATURE_DISABLED",
+            "Feature 'result_report' is not enabled",
+        )
+
+
+@router.post("/scenario/{scenario_id}/report:generate")
+async def generate_result_report(
+    scenario_id: str,
+    req: ResultReportGenerateRequest | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Generate or retry a result report over HTTP SSE."""
+    _require_result_report_feature()
+
+    engine = get_engine()
+    with Session(engine) as session:
+        require_owned_scenario(session, scenario_id, principal)
+
+    request_body = req or ResultReportGenerateRequest()
+    validated_base_url = validate_llm_base_url(request_body.llm_base_url)
+    if request_body.llm_base_url and validated_base_url is None:
+        raise api_error(
+            400,
+            "LLM_BASE_URL_NOT_ALLOWED",
+            "Provided llm_base_url is not in the allowed provider list",
+        )
+    if request_body.llm_base_url and not request_body.llm_api_key:
+        raise api_error(
+            400,
+            "BYOK_API_KEY_REQUIRED",
+            "An API key is required when using a custom LLM base URL",
+        )
+
+    dominant_branch_id = result_report_builder.resolve_dominant_branch_id(scenario_id)
+    if dominant_branch_id is None:
+        raise api_error(
+            409,
+            "REPORT_BRANCH_NOT_READY",
+            "No branch is ready for report generation",
+        )
+
+    overrides = {
+        "api_key": request_body.llm_api_key or None,
+        "base_url": validated_base_url,
+        "model": request_body.llm_model or None,
+        "temperature": request_body.temperature,
+    }
+
+    return StreamingResponse(
+        result_report_builder.build_report_sse_stream(
+            scenario_id,
+            dominant_branch_id,
+            overrides=overrides,
+        ),
+        media_type="text/event-stream",
+    )
 
 
 @router.get("/scenario/{scenario_id}/agents")

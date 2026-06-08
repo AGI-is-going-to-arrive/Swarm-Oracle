@@ -22,7 +22,7 @@ import unicodedata
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -358,7 +358,26 @@ def _sanitize_url(url: str | None, max_chars: int = 300) -> str:
         return ""
     if not (parsed.hostname or "").strip():
         return ""
-    return cleaned
+    if parsed.username or parsed.password or "@" in parsed.netloc:
+        host = parsed.hostname or ""
+        netloc = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        try:
+            port = parsed.port
+        except ValueError:
+            return ""
+        if port is not None:
+            netloc = f"{netloc}:{port}"
+        cleaned = urlunparse(
+            (
+                parsed.scheme,
+                netloc,
+                parsed.path,
+                parsed.params,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+    return cleaned[:max_chars]
 
 
 def _sanitize_domain_filters(

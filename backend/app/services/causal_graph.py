@@ -209,6 +209,8 @@ def _latest_source_node_for_outcome(
 
 def _serialize_graph_node(node: GraphNode) -> dict[str, Any]:
     payload = _safe_parse_payload(node.payload_json)
+    if payload and node.ref_model == "agent_message" and node.ref_id:
+        payload = {**payload, "message_id": node.ref_id}
     label = node.label
     if node.node_type == "fork":
         source_reason = str(payload.get("reason") or payload.get("display_reason") or label)
@@ -376,6 +378,7 @@ def _load_orphan_fork_provenance(
                             "emotion": message.emotion,
                             "branch_id": source_branch_id,
                             "content": message.content,
+                            "message_id": message.id,
                             "synthetic_provenance": True,
                         },
                     }

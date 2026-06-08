@@ -563,6 +563,127 @@ export interface StoryData {
   branches: StoryBranch[];
   verdict?: string | null;
   verdict_confidence?: 'high' | 'medium' | 'low' | null;
+  full_report?: FullReport | FullReportTruncatedMarker | null;
+}
+
+export type StoryResponse = StoryData;
+
+// ── Result Report Upgrade (Sprint S0 Contract Freeze) ──
+
+export interface ReportVerdict {
+  headline_answer: string;
+  likelihood: {
+    probability: number;
+    interval: [number, number];
+    wep: string;
+  };
+  analytic_confidence: {
+    level: 'high' | 'medium' | 'low';
+    basis: string;
+  };
+  disclaimer: string;
+}
+
+export interface ReportChart {
+  kind: 'faction_share' | 'probability_bar';
+  data: Record<string, unknown>;
+}
+
+export interface ReportSection {
+  id: string;
+  title: string;
+  title_i18n: { zh: string; en: string };
+  intent: string;
+  body_md_i18n: { zh: string; en: string };
+  evidence_refs: string[];
+  charts: ReportChart[];
+}
+
+export interface ReportEvidence {
+  id: string;
+  branch_id: string;
+  round_id: string;
+  round_number: number;
+  agent_id: string;
+  agent_name: string;
+  message_id: string;
+  quote: string;
+  kind: 'utterance' | 'causal_fact' | 'faction_event' | 'interview';
+}
+
+export interface IndicatorToWatch {
+  signal: string;
+  direction: 'up' | 'down';
+  note: string;
+  // S4 enrichment — optional so pre-S4 persisted reports (which lack these) still type-check.
+  threshold?: string;
+  observation?: string;
+  time_horizon?: string;
+  rationale?: string;
+  evidence_refs?: string[];
+}
+
+export interface DissentingView {
+  runner_up_branch_id: string;
+  why_verdict_could_be_wrong: string;
+  what_almost_won: string;
+}
+
+export interface FullReport {
+  version: string;
+  generated_at: string;
+  generation_mode: 'generation' | 'rewrite' | 'static';
+  target_branch_id: string;
+  target_branch_sort: string[];
+  language: 'zh' | 'en';
+  available_languages: ('zh' | 'en')[];
+  title: string;
+  title_i18n: { zh: string; en: string };
+  summary: string;
+  summary_i18n: { zh: string; en: string };
+  status: 'complete' | 'partial' | 'failed' | 'skipped';
+  tier: 'generation' | 'rewrite' | 'static';
+  verdict: ReportVerdict;
+  sections: ReportSection[];
+  evidence: ReportEvidence[];
+  indicators_to_watch: IndicatorToWatch[];
+  // Nullable: the Reducer returns `null` for single-branch / missing-result scenarios
+  // (backend schema: `DissentingView | None`). Consumers must null-check.
+  dissenting: DissentingView | null;
+  key_participants: Array<{
+    agent_name: string;
+    impact_score: number;
+    key_moment_hits: number;
+  }>;
+  follow_ups: string[];
+  limitations: string;
+  interview_evidence: Record<string, unknown>[];
+  premortem: Record<string, unknown>[];
+  language_status: { zh: 'available' | 'missing'; en: 'available' | 'missing' } | null;
+}
+
+export interface FullReportTruncatedMarker {
+  status: 'partial';
+  truncated: true;
+}
+
+export interface ToolTraceSummary {
+  tool: string;
+  query: string;
+  item_count: number;
+  elapsed_ms: number;
+}
+
+export interface ResultReportSSEEvent {
+  event: 'report_started' | 'report_section_delta' | 'report_section_complete' | 'report_failed' | 'report_complete' | string;
+  data: {
+    report_id?: string;
+    section_id?: string;
+    status: 'pending' | 'generating' | 'complete' | 'partial' | 'failed' | 'skipped' | string;
+    message?: string;
+    tool_trace: ToolTraceSummary[];
+    error_code?: string;
+  };
 }
 
 export interface StoryBranch {

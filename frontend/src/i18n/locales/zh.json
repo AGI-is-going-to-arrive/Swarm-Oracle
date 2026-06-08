@@ -377,6 +377,37 @@
       "step_deep_dive": "深入探索"
     },
     "result": {
+      "report": {
+        "title": "详细报告",
+        "summary_label": "核心裁决概要 (BLUF)",
+        "toc_heading": "报告目录",
+        "section_generating": "正在生成报告章节...",
+        "evidence_label": "证据引用",
+        "evidence_open_replay": "在回放时间线中查看",
+        "disclaimer": "本概率为叙事推演产物，非真实世界预测。",
+        "confidence_basis": "基于 {{evidence_count}} 项证据和 {{agent_consensus}}% 的智能体共识。",
+        "likelihood_label": "预估概率",
+        "analytic_confidence_label": "分析置信度",
+        "confidence_level": {
+          "high": "高",
+          "medium": "中",
+          "low": "低"
+        },
+        "export_label": "导出详细报告",
+        "failed_fallback": "报告内容生成失败。",
+        "pending": "正在生成详细报告...",
+        "language_fallback": "该章节暂无首选语言版本。",
+        "wep": {
+          "almost_no_chance": "几乎不可能",
+          "very_unlikely": "极不可能",
+          "unlikely": "不太可能",
+          "roughly_even": "大致均等",
+          "likely": "可能",
+          "very_likely": "很有可能",
+          "almost_certain": "几乎可以确定",
+          "missing": "暂无"
+        }
+      },
       "title": "推演结果",
       "subtitle": "多结局对比",
       "profile_view_inline": "在页内查看档案",
@@ -647,6 +678,8 @@
       "mode_reader": "阅读",
       "mode_workbench": "探索",
       "mode_toggle_label": "结果视图模式",
+      "bridge_full_report_title": "深读报告",
+      "bridge_full_report_desc": "阅读完整的场景深读报告",
       "bridge_workbench_title": "打开图谱工作台",
       "bridge_workbench_desc": "把因果、知识图谱和节点追问放到同一视图",
       "bridge_kg_explorer_title": "知识图谱浏览器",

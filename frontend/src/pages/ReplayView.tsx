@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { buildSessionHeaders, getReplayTrace, isApiError } from '../api/client';
@@ -158,6 +158,13 @@ const EMOTION_ICONS: Record<string, string> = {
 export function ReplayView() {
   const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const targetBranchId = searchParams.get('branch');
+  const targetMessageId = searchParams.get('message');
+  const targetRoundRaw = searchParams.get('round');
+  const targetRoundNumber = targetRoundRaw != null && /^\d+$/.test(targetRoundRaw)
+    ? Number.parseInt(targetRoundRaw, 10)
+    : null;
   const {
     loading: capLoading,
     enabled,
@@ -171,7 +178,10 @@ export function ReplayView() {
   const [error, setError] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
-  const [branchFilter, setBranchFilter] = useState<string>('');
+  const [branchFilter, setBranchFilter] = useState<string>(targetBranchId || '');
+  // The specific replay node a `?message=Y` deep-link resolved to (used to highlight it).
+  // Stays null when no frame/node carries that message_id — the graceful no-match fallback.
+  const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const fetchSeqRef = useRef(0);
   const loadMoreSeqRef = useRef(0);
@@ -186,7 +196,8 @@ export function ReplayView() {
     setError(null);
     setTrace(null);
     setGraph(null);
-    setBranchFilter('');
+    // Preserve a `?branch=` deep-link filter across (re)fetches; only options-validation clears it.
+    setBranchFilter(targetBranchId || '');
     setLoadMoreError(null);
     try {
       const [traceResult, graphRes] = await Promise.allSettled([
@@ -220,7 +231,7 @@ export function ReplayView() {
         setLoadingData(false);
       }
     }
-  }, [encodedId, id]);
+  }, [encodedId, id, targetBranchId]);
 
   const loadMore = useCallback(async () => {
     if (!id || !trace?.next_cursor || loadingMore) return;
@@ -280,6 +291,57 @@ export function ReplayView() {
     setSpeed,
   } = useReplayTimeline({ totalFrames });
 
+  // Evidence deep-link: `/replay/{id}?branch=X&message=Y&round=N`.
+  //  - branch X is already applied via `branchFilter` (seeded from `targetBranchId`);
+  //  - round N is mapped to the current frame index because frames can differ from rounds;
+  //  - here we refine to the exact message: if a frame/node carries `payload.message_id === Y`,
+  //    jump to that frame and flag it for highlight; otherwise fall back gracefully to the
+  //    branch+round view with no crash and no error surface.
+  // Matching is restricted to `payload.message_id` ONLY — node id/key are graph-internal
+  // identifiers and a `?message=Y` value could collide with one, falsely highlighting an
+  // unrelated node. When the backend omits `payload.message_id`, nothing matches and the
+  // deep-link degrades to the branch+turn view (still no crash).
+  useEffect(() => {
+    if (loadingData || totalFrames <= 0 || (!targetMessageId && targetRoundNumber == null)) return;
+
+    let foundFrame = -1;
+    let matchedKey: string | null = null;
+    if (targetMessageId) {
+      for (let i = 0; i < totalFrames; i++) {
+        const nodes = nodesByFrame.get(i) ?? [];
+        const matched = nodes.find((n) => readPayload(n).message_id === targetMessageId);
+        if (matched) {
+          foundFrame = i;
+          matchedKey = matched.id;
+          break;
+        }
+      }
+    }
+    if (foundFrame === -1 && targetRoundNumber != null) {
+      foundFrame = frameToRound.findIndex((round) => round === targetRoundNumber);
+    }
+
+    if (foundFrame !== -1) {
+      setFrame(foundFrame);
+      setHighlightMessageId(matchedKey);
+    } else {
+      // No-match fallback: keep the hash-derived turn frame and branch filter as-is, and
+      // surface nothing — the deep-link simply degrades to the branch+turn view.
+      setHighlightMessageId(null);
+    }
+
+    // Either way, consume one-shot params so scrubbing/refetch doesn't snap back to them.
+    // Preserve any existing hash for older links and the `branch` filter in the URL.
+    searchParams.delete('message');
+    searchParams.delete('round');
+    const query = searchParams.toString();
+    try {
+      window.history.replaceState(null, '', `${query ? `?${query}` : ''}${window.location.hash}`);
+    } catch {
+      /* jsdom / sandboxes may reject replaceState — non-fatal. */
+    }
+  }, [frameToRound, loadingData, targetMessageId, targetRoundNumber, totalFrames, nodesByFrame, setFrame, searchParams]);
+
   useEffect(() => {
     if (rootRef.current && typeof rootRef.current.focus === 'function') {
       try {
@@ -298,8 +360,13 @@ export function ReplayView() {
     for (const node of trace?.nodes ?? []) {
       if (node.branch_id) seen.add(node.branch_id);
     }
+    for (const node of graph?.nodes ?? []) {
+      const payload = readPayload(node);
+      const branchId = typeof payload.branch_id === 'string' ? payload.branch_id : null;
+      if (branchId) seen.add(branchId);
+    }
     return [...seen].sort();
-  }, [trace]);
+  }, [graph, trace]);
 
   // Reset filter when current selection becomes invalid (e.g., after refetch).
   useEffect(() => {
@@ -355,9 +422,10 @@ export function ReplayView() {
   }
 
   const hasTrace = (trace?.nodes?.length ?? 0) > 0;
+  const hasGraph = (graph?.nodes?.length ?? 0) > 0;
   const hasFrames = totalFrames > 0;
   const hasPendingPage = Boolean(trace?.next_cursor);
-  const showEmpty = !!error || !hasTrace || !hasFrames;
+  const showEmpty = !!error || (!hasTrace && !hasGraph) || !hasFrames;
   const currentRound = frameToRound[frameIndex];
 
   return (
@@ -463,7 +531,7 @@ export function ReplayView() {
               <span className="replay-meta__round">Round {currentRound}</span>
             )}
             <span className="replay-meta__branches">
-              {t('replay.trace.branches_label', 'Branches')}: {trace?.nodes.length ?? 0}
+              {t('replay.trace.branches_label', 'Branches')}: {branchOptions.length}
             </span>
           </div>
 
@@ -502,10 +570,16 @@ export function ReplayView() {
                 const isFork = node.type === 'fork';
                 const hue = agentId ? hashToHue(agentId) : 260;
                 const accentColor = `oklch(65% 0.18 ${hue})`;
+                const isHighlighted = highlightMessageId != null && node.id === highlightMessageId;
 
                 if (isFork && !agentName) {
                   return (
-                    <div key={node.id} className="replay-card replay-card--fork">
+                    <div
+                      key={node.id}
+                      className={`replay-card replay-card--fork${isHighlighted ? ' replay-card--highlighted' : ''}`}
+                      data-highlighted={isHighlighted ? 'true' : undefined}
+                      data-testid={isHighlighted ? 'replay-card-highlighted' : undefined}
+                    >
                       <div className="replay-card__fork-icon" aria-hidden="true">
                         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                           <path d="M8 2V6M8 6L4 10M8 6L12 10M4 10V14M12 10V14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -525,8 +599,10 @@ export function ReplayView() {
                 return (
                   <div
                     key={node.id}
-                    className="replay-card"
+                    className={`replay-card${isHighlighted ? ' replay-card--highlighted' : ''}`}
                     style={{ '--card-accent': accentColor } as React.CSSProperties}
+                    data-highlighted={isHighlighted ? 'true' : undefined}
+                    data-testid={isHighlighted ? 'replay-card-highlighted' : undefined}
                   >
                     <div className="replay-card__header">
                       <span className="replay-card__avatar" aria-hidden="true" style={{ background: accentColor }}>

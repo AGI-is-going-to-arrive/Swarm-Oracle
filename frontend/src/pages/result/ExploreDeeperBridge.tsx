@@ -104,6 +104,19 @@ export default function ExploreDeeperBridge() {
 
   const entries: Entry[] = [
     {
+      key: 'full-report',
+      kind: 'link',
+      icon: '\u{1F4D1}',
+      titleKey: 'result.bridge_full_report_title',
+      titleDefault: 'Full Report',
+      descKey: 'result.bridge_full_report_desc',
+      descDefault: 'Read the comprehensive scenario report',
+      enabled: capabilities?.result_report?.enabled ?? false,
+      href: `/result/${scenarioId}/report`,
+      disabledKey: 'result.bridge_not_enabled',
+      disabledDefault: 'Not enabled on this server.',
+    },
+    {
       key: 'causal',
       kind: 'link',
       icon: '\u{1F578}️',

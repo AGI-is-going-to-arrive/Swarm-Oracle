@@ -377,6 +377,37 @@
       "step_deep_dive": "Deep Dive"
     },
     "result": {
+      "report": {
+        "title": "Detailed Report",
+        "summary_label": "Executive Summary (BLUF)",
+        "toc_heading": "Table of Contents",
+        "section_generating": "Generating report section...",
+        "evidence_label": "Evidence Reference",
+        "evidence_open_replay": "View in Replay Timeline",
+        "disclaimer": "This probability is a narrative simulation result, not a real-world prediction.",
+        "confidence_basis": "Based on {{evidence_count}} evidence items and {{agent_consensus}}% agent consensus.",
+        "likelihood_label": "Estimated Likelihood",
+        "analytic_confidence_label": "Analytic Confidence",
+        "confidence_level": {
+          "high": "High",
+          "medium": "Medium",
+          "low": "Low"
+        },
+        "export_label": "Export Detailed Report",
+        "failed_fallback": "Failed to generate report content.",
+        "pending": "Generating detailed report...",
+        "language_fallback": "This section is not available in your preferred language.",
+        "wep": {
+          "almost_no_chance": "Almost No Chance",
+          "very_unlikely": "Very Unlikely",
+          "unlikely": "Unlikely",
+          "roughly_even": "Roughly Even",
+          "likely": "Likely",
+          "very_likely": "Very Likely",
+          "almost_certain": "Almost Certain",
+          "missing": "Not Available"
+        }
+      },
       "title": "Simulation Results",
       "subtitle": "Multi-Ending Comparison",
       "profile_view_inline": "View profile inline",
@@ -647,6 +678,8 @@
       "mode_reader": "Reader",
       "mode_workbench": "Explore",
       "mode_toggle_label": "Result view mode",
+      "bridge_full_report_title": "Full Report",
+      "bridge_full_report_desc": "Read the comprehensive scenario report",
       "bridge_workbench_title": "Open Graph Workbench",
       "bridge_workbench_desc": "Inspect causality, knowledge graph, and node questions together",
       "bridge_kg_explorer_title": "Knowledge Graph Explorer",

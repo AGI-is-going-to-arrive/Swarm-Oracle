@@ -609,6 +609,7 @@ async function main() {
   const endingRoomEnWebkitOutput = path.join(args.outputRoot, "ending-room-followup-en-webkit");
   const roundtableOutput = path.join(args.outputRoot, "roundtable-full");
   const roundtableEnOutput = path.join(args.outputRoot, "roundtable-en");
+  const resultReportOutput = path.join(args.outputRoot, "result-report");
   const safariOutput = path.join(args.outputRoot, "safari");
   const summary = {
     version: 1,
@@ -922,6 +923,25 @@ async function main() {
       {
         artifactDir: crossBrowserOutput,
         resultFile: path.join(crossBrowserOutput, "result.json"),
+      },
+    );
+    runStep(
+      summary,
+      args,
+      "result_report",
+      nodeCommand,
+      [
+        "scripts/e2e-result-report-suite.mjs",
+        "full",
+        "--url",
+        args.baseUrl,
+        "--output-dir",
+        resultReportOutput,
+        ...(args.headless ? ["--headless"] : []),
+      ],
+      {
+        artifactDir: resultReportOutput,
+        resultFile: path.join(resultReportOutput, "result.json"),
       },
     );
     runStep(

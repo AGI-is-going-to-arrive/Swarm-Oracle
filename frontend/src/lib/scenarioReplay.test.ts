@@ -241,6 +241,39 @@ describe('scenarioReplay helpers', () => {
     expect(raw?.agents[0]).not.toHaveProperty('persona');
   });
 
+  it('strips full_report from the sanitized story data and replay token', async () => {
+    const fullReport = {
+      version: '1',
+      status: 'complete',
+      title: 'Deep-Read Report',
+      sections: [{ id: 's1', title: 'Section', body_md_i18n: { zh: '正文', en: 'Body' } }],
+      evidence: [{ id: 'e1', quote: 'A long quote that bloats the replay token' }],
+      indicators_to_watch: [],
+    };
+    const reportPayload: ScenarioResultReplayPayload = {
+      ...replayPayload,
+      storyData: {
+        ...replayPayload.storyData,
+        // Cast: the test deliberately attaches a report-shaped object to assert it is dropped.
+        full_report: fullReport as unknown as StoryData['full_report'],
+      },
+    };
+
+    // Encode/sanitize path must drop it.
+    const sanitized = sanitizeScenarioResultReplayPayload(reportPayload);
+    expect(sanitized.storyData).not.toHaveProperty('full_report');
+    expect(sanitized.storyData.branches).toHaveLength(replayPayload.storyData.branches.length);
+
+    const token = await encodeScenarioReplayToken(reportPayload);
+    const raw = await decodeReplayEnvelope<ScenarioResultReplayPayload>(token, 'scenario_result_v1');
+    expect(raw?.storyData).not.toHaveProperty('full_report');
+
+    // Decode/normalize path must also drop it (defense-in-depth for already-embedded artifacts).
+    const reEmbedded = await encodeReplayEnvelope('scenario_result_v1', reportPayload);
+    const normalized = await decodeScenarioReplayToken(reEmbedded);
+    expect(normalized?.storyData).not.toHaveProperty('full_report');
+  });
+
   it('drops authority-backed runtime state when replay snapshot already carries authority', () => {
     expect(compactScenarioMetaForReplay(scenarioMeta, {
       stripDirectorAuthority: true,

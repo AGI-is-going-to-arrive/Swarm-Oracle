@@ -37,6 +37,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 
+from app.log_sanitize import _scrub_sensitive_text
 from app.models import (
     Agent,
     AgentMessage,
@@ -141,6 +142,8 @@ def _redact_dict(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_redact_dict(item) for item in value]
+    if isinstance(value, str):
+        return _scrub_sensitive_text(value)
     return value
 
 
@@ -255,11 +258,11 @@ def _serialize_graph_node(node: GraphNode) -> dict[str, Any]:
         "snapshot_id": node.snapshot_id,
         "node_key": node.node_key,
         "node_type": node.node_type,
-        "label": node.label,
+        "label": _scrub_sensitive_text(node.label) if isinstance(node.label, str) else node.label,
         "round_number": node.round_number,
         "ref_model": node.ref_model,
         "ref_id": node.ref_id,
-        "payload_json": node.payload_json,
+        "payload_json": _redact_json_string(node.payload_json),
     }
 
 
@@ -271,12 +274,16 @@ def _serialize_graph_edge(edge: GraphEdge) -> dict[str, Any]:
         "target_node_id": edge.target_node_id,
         "edge_type": edge.edge_type,
         "weight": edge.weight,
-        "label": edge.label,
-        "payload_json": edge.payload_json,
+        "label": _scrub_sensitive_text(edge.label) if isinstance(edge.label, str) else edge.label,
+        "payload_json": _redact_json_string(edge.payload_json),
         "confidence_tier": edge.confidence_tier,
-        "source_ref": edge.source_ref,
+        "source_ref": (
+            _scrub_sensitive_text(edge.source_ref)
+            if isinstance(edge.source_ref, str)
+            else edge.source_ref
+        ),
         "source_round_number": edge.source_round_number,
-        "evidence_json": edge.evidence_json,
+        "evidence_json": _redact_json_string(edge.evidence_json),
     }
 
 
@@ -1260,7 +1267,8 @@ def _remap_payload_json(
     try:
         decoded = json.loads(payload_json)
     except json.JSONDecodeError:
-        return payload_json
+        return None
+    decoded = _redact_dict(decoded)
 
     def _walk(value: Any) -> Any:
         if isinstance(value, dict):

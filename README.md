@@ -115,7 +115,7 @@ npm run dev
 | `ENABLE_WEB_SEARCH` | 搜索增强（可选） | `false` |
 | `WEB_SEARCH_PROVIDER` | 搜索服务商（开启搜索时） | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` / `native` |
 
-完整配置项、功能开关清单和搜索增强说明见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。自定义 Agent、跨场景身份、因果图谱、图谱分析、阵营关系、论点地图、知识图谱浏览器、时间线星系、回放轨迹、圆桌 Deep Dive、snapshot、预测日志、教学模板和人物备份在模板里默认开启。`ENABLE_WEB_SEARCH`、`FEATURE_NEW_SOURCES`、`FEATURE_FAMILY_QUERY_OPTIMIZATION` 默认关闭，因为它们需要搜索 provider 和对应配置。
+完整配置项、功能开关清单和搜索增强说明见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。自定义 Agent、跨场景身份、因果图谱、图谱分析、阵营关系、论点地图、知识图谱浏览器、时间线星系、回放轨迹、圆桌 Deep Dive、snapshot、预测日志、教学模板和人物备份在模板里默认开启。`ENABLE_WEB_SEARCH`、`FEATURE_NEW_SOURCES`、`FEATURE_FAMILY_QUERY_OPTIMIZATION` 默认关闭，因为它们需要搜索 provider 和对应配置；实验性的 `FEATURE_RESULT_REPORT` 也默认关闭。
 
 Docker Compose 会读取 `.env.docker`，并把数据库和 Chroma 数据放到
 `/data` volume。普通本地开发读取 `backend/.env`。

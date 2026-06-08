@@ -539,3 +539,117 @@ class TestBackgroundTaskScheduling:
         assert task not in helpers_api._background_tasks
         assert "Background task failed" in caplog.text
         assert "background boom" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_schedule_background_task_redacts_credentials_in_failure_log(self, caplog):
+        raw_key = "sk-ABCDEF1234567890"
+
+        async def fail() -> None:
+            raise RuntimeError(f"boom api_key={raw_key}")
+
+        caplog.set_level("ERROR", logger="app.api.helpers")
+
+        task = helpers_api.schedule_background_task(fail())
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert task.done()
+        assert task not in helpers_api._background_tasks
+        assert "Background task failed: RuntimeError: boom" in caplog.text
+        assert raw_key not in caplog.text
+        assert "api key [redacted]" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_run_sim_background_redacts_failure_log_without_traceback(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        raw_key = "sk-SIMULATIONLEAK123456"
+        scenario_id = "scenario-log-sim"
+        with Session(get_engine()) as session:
+            session.add(
+                Scenario(
+                    id=scenario_id,
+                    question="Can the colony recover?",
+                    status=ScenarioStatus.SIMULATING,
+                    parsed_context={},
+                )
+            )
+            session.commit()
+
+        async def fail_simulation(**_kwargs):
+            raise RuntimeError(
+                f"provider failed Authorization: Bearer {raw_key} "
+                "https://user:pass@example.com/v1"
+            )
+
+        monkeypatch.setattr(helpers_api, "run_simulation", fail_simulation)
+        caplog.set_level("ERROR", logger="app.api.helpers")
+
+        await helpers_api.run_sim_background(scenario_id)
+
+        combined_logs = "\n".join(record.getMessage() for record in caplog.records)
+        assert "Simulation failed for scenario-log-sim: RuntimeError:" in combined_logs
+        assert raw_key not in combined_logs
+        assert "Bearer sk-" not in combined_logs
+        assert "user:pass@" not in combined_logs
+        assert "https://example.com/v1" in combined_logs
+        assert all(record.exc_info is None for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_parse_and_run_background_redacts_failure_log_without_traceback(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        raw_key = "sk-PARSELEAK123456"
+        scenario_id = "scenario-log-parse"
+        with Session(get_engine()) as session:
+            session.add(
+                Scenario(
+                    id=scenario_id,
+                    question="Can the parse stage recover?",
+                    status=ScenarioStatus.SIMULATING,
+                    parsed_context={},
+                )
+            )
+            session.commit()
+
+        async def fail_parse(*_args, **_kwargs):
+            raise RuntimeError(
+                f"parse failed api_key={raw_key} https://user:pass@example.com/v1"
+            )
+
+        monkeypatch.setattr(helpers_api, "parse_question", fail_parse)
+        caplog.set_level("ERROR", logger="app.api.helpers")
+
+        await helpers_api.parse_and_run_background(
+            scenario_id,
+            question="Can the parse stage recover?",
+            num_agents=1,
+            mode="raw",
+            hierarchical=False,
+            rounds=1,
+            visualization_enabled=False,
+            reasoning_effort=None,
+            temperature=None,
+            branch_sensitivity=None,
+            fork_prompt_variant=None,
+            fork_detector_active_branch_limit=None,
+            user_id=None,
+            llm_api_key=raw_key,
+            llm_base_url="https://example.com/v1",
+            llm_model=None,
+            llm_requests_per_minute=None,
+            llm_tokens_per_minute=None,
+            disable_user_quota=None,
+        )
+
+        combined_logs = "\n".join(record.getMessage() for record in caplog.records)
+        assert "Parse failed for scenario-log-parse: RuntimeError:" in combined_logs
+        assert raw_key not in combined_logs
+        assert "api_key=" not in combined_logs
+        assert "user:pass@" not in combined_logs
+        assert "https://example.com/v1" in combined_logs
+        assert all(record.exc_info is None for record in caplog.records)

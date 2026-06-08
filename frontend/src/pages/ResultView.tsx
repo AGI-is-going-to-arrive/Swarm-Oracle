@@ -120,6 +120,7 @@ import { ProgressIndicator } from '../components/ProgressIndicator';
 import { ResultContextProvider, type ResultViewContextValue } from './result/ResultContext';
 import ResultHeader from './result/ResultHeader';
 import ResultVerdictPanel from './result/ResultVerdictPanel';
+import { ResultReportPanel } from './result/ResultReportPanel';
 import EndingCardsGrid from './result/EndingCardsGrid';
 import ExploreDeeperBridge from './result/ExploreDeeperBridge';
 import WebSourcesSection from './result/WebSourcesSection';
@@ -741,7 +742,39 @@ export default function ResultView() {
     setExportError('');
     try {
       const filename = `swarmoracle-${id.slice(0, 8)}.md`;
-      const markdown = await exportScenario(id);
+      let markdown = await exportScenario(id);
+
+      if (storyData?.full_report && 'verdict' in storyData.full_report) {
+        const report = storyData.full_report;
+        if (report.status === 'complete' || report.status === 'partial') {
+          const title = isZh ? report.title_i18n?.zh || report.title : report.title_i18n?.en || report.title;
+          const summary = isZh ? report.summary_i18n?.zh || report.summary : report.summary_i18n?.en || report.summary;
+          const sections = report.sections.map((section) => {
+            const sectionTitle = isZh ? section.title_i18n?.zh || section.title : section.title_i18n?.en || section.title;
+            const body = isZh ? section.body_md_i18n?.zh || '' : section.body_md_i18n?.en || '';
+            return `\n## ${sectionTitle}\n\n${body}`;
+          });
+          const evidence = report.evidence.map((ev) => (
+            `- [${ev.id}] ${ev.agent_name}, ${isZh ? '第' : 'round '} ${ev.round_number}: “${ev.quote}”`
+          ));
+          const indicators = report.indicators_to_watch.map((item) => (
+            `- ${item.signal}: ${item.note}${item.rationale ? ` (${item.rationale})` : ''}`
+          ));
+          const reportMd = [
+            `\n\n# ${title}`,
+            `\n**${isZh ? '摘要' : 'Summary'}**: ${summary}`,
+            `\n**${isZh ? '结论' : 'Verdict'}**: ${report.verdict.headline_answer}`,
+            `\n**${isZh ? '置信度' : 'Confidence'}**: ${report.verdict.analytic_confidence.level} — ${report.verdict.analytic_confidence.basis}`,
+            `\n**${isZh ? '免责声明' : 'Disclaimer'}**: ${report.verdict.disclaimer}`,
+            sections.join('\n'),
+            evidence.length ? `\n## ${isZh ? '证据' : 'Evidence'}\n\n${evidence.join('\n')}` : '',
+            indicators.length ? `\n## ${isZh ? '观察指标' : 'Indicators to Watch'}\n\n${indicators.join('\n')}` : '',
+            `\n## ${isZh ? '限制' : 'Limitations'}\n\n${report.limitations}`,
+          ].join('\n');
+          markdown += reportMd;
+        }
+      }
+
       const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -1659,6 +1692,7 @@ export default function ResultView() {
         loading,
         error: buildAutomationErrorState(errorCode, error),
         question: storyData?.question ?? null,
+        report_status: storyData?.full_report?.status ?? null,
         branch_titles: (storyData?.branches ?? []).map((branch) => branch.title),
         predictions_count: predictions.length,
         has_unscored: hasUnscored,
@@ -1873,6 +1907,8 @@ export default function ResultView() {
           question={storyData?.question ?? ''}
         />
       )}
+
+      <ResultReportPanel />
 
       {/* HOPs probability sampling animation */}
       {branches.length >= 2 && (

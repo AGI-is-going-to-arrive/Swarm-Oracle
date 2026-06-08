@@ -104,6 +104,16 @@ function sanitizeScenarioReplayScenario(scenario: Scenario): Scenario {
   };
 }
 
+// `full_report` is the deep-read Result Report IR. It is excluded from replay/share
+// surfaces by contract and is large enough to push tokens past ReplayTokenTooLargeError,
+// so it must never be embedded in a replay artifact or inline replay token.
+function sanitizeScenarioReplayStoryData(storyData: StoryData): StoryData {
+  if (!('full_report' in storyData)) return storyData;
+  const { full_report: _omitFullReport, ...rest } = storyData;
+  void _omitFullReport;
+  return rest;
+}
+
 function isStoryBranchPayload(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
@@ -267,6 +277,7 @@ export function sanitizeScenarioResultReplayPayload(
   return {
     ...payload,
     scenario: sanitizeScenarioReplayScenario(payload.scenario),
+    storyData: sanitizeScenarioReplayStoryData(payload.storyData),
     agents: payload.agents.map(sanitizeScenarioReplayAgent),
   };
 }
@@ -323,7 +334,7 @@ export function normalizeScenarioResultReplayPayload(
 
   return {
     scenario: sanitizeScenarioReplayScenario(simulationPayload.scenario),
-    storyData: payload.storyData,
+    storyData: sanitizeScenarioReplayStoryData(payload.storyData),
     agents: payload.agents.map(sanitizeScenarioReplayAgent),
     predictions: payload.predictions,
     scenarioMeta: hydrateScenarioMetaSnapshot(simulationPayload.scenarioMeta),

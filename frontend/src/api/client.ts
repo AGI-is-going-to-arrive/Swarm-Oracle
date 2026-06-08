@@ -537,6 +537,7 @@ export interface CapabilitiesResponse {
   persona_export?: CapabilityEntry;
   prediction_journal?: CapabilityEntry;
   result_verdict?: CapabilityEntry;
+  result_report?: CapabilityEntry;
 }
 
 /** Persona export/import payload — schema_version 1 contract. */
@@ -916,6 +917,28 @@ export async function getBranches(id: string): Promise<Branch[]> {
 /** GET /api/scenario/:id/story — get narrated stories for completed branches */
 export async function getStory(id: string): Promise<StoryData> {
   return safeGet(`/scenario/${encodeURIComponent(id)}/story`);
+}
+
+/** POST /api/scenario/:id/report:generate — generate a detailed report (HTTP SSE) */
+export async function generateReport(
+  id: string,
+  options?: LlmProviderRequestOptions,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const res = await fetchWithTimeout(
+    `/scenario/${encodeURIComponent(id)}/report:generate`,
+    {
+      method: 'POST',
+      headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(options ?? {}),
+      signal,
+    },
+    300_000, // 5 min timeout for SSE
+  );
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+  return res;
 }
 
 /** GET /api/scenario/:id/agents — get all agents for a scenario */
