@@ -50,6 +50,7 @@ Optional LLM tuning usually does not need changes: `LLM_REASONING_EFFORT` (`none
 | `FEATURE_SNAPSHOT_EXPORT` | On | The home page can import scenario snapshots; the result page can export a ZIP snapshot. |
 | `FEATURE_PREDICTION_JOURNAL` | On | `/me/journal` can record predictions, mark outcomes, and show calibration. |
 | `FEATURE_RESULT_VERDICT` | On | The result page tries to show a one-sentence verdict, confidence, and per-worldline answers. |
+| `FEATURE_RESULT_REPORT` | On | The result page shows the deep-read report entry, with a standalone view and retry path at `/result/:id/report`. |
 | `FEATURE_EDUCATION_TEMPLATES` | On | The home page shows education templates for classroom-style prompts. |
 | `FEATURE_PERSONA_EXPORT` | On | Agent Library can export persona backups and create Agents from backups. |
 
@@ -59,7 +60,7 @@ On narrow screens, the graph workbench collapses Split view into a single graph 
 
 These backend-internal or experimental flags remain off by default and are not ordinary user entries: `FEATURE_ROUNDTABLE_INSIGHT_LLM`, `FEATURE_HALLUCINATION_GATE`, and `FEATURE_IDENTITY_COMPACTION`.
 
-`FEATURE_RESULT_REPORT` is also off by default. When enabled, the result page shows the deep-read report entry, the backend stores the report in `Scenario.parsed_context.full_report`, and `POST /api/scenario/{id}/report:generate` can generate or retry it. Section count, per-section tool-call cap, timeouts, evidence excerpt length, and the full-report byte cap are controlled by the `REPORT_*` settings in `.env.example`.
+`FEATURE_RESULT_REPORT` is on by default. When enabled, the result page shows the deep-read report entry, the backend stores the report in `Scenario.parsed_context.full_report`, and `POST /api/scenario/{id}/report:generate` can generate or retry it. Section count, per-section tool-call cap, timeouts, evidence excerpt length, and the full-report byte cap are controlled by the `REPORT_*` settings in `.env.example`; set it to `false` and restart the backend if you need the plain verdict + story result page.
 
 > Restart the backend after changing feature flags. The frontend reads `/api/capabilities` and hides disabled entries or shows unavailable states instead of failing.
 

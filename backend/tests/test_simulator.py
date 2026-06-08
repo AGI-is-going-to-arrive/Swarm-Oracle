@@ -3293,6 +3293,7 @@ class TestIdentityCompactionTaskRegistration:
         )
         monkeypatch.setattr("app.services.simulator.settings.FEATURE_AGENT_IDENTITY", True)
         monkeypatch.setattr("app.services.simulator.settings.FEATURE_IDENTITY_COMPACTION", True)
+        monkeypatch.setattr("app.services.simulator.settings.FEATURE_RESULT_REPORT", False)
 
         await run_simulation(scenario_id)
 

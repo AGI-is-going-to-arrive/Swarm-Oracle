@@ -27,6 +27,20 @@ def test_settings_defaults():
     assert s.PORT > 0
 
 
+def test_result_report_feature_is_enabled_by_default(monkeypatch):
+    """Result Report is a default user-visible result feature."""
+    monkeypatch.delenv("FEATURE_RESULT_REPORT", raising=False)
+
+    from app.config import Settings
+
+    s = Settings(
+        _env_file=None,
+        LLM_RESPONSES_URL="http://127.0.0.1:8317/v1",
+        LLM_API_KEY="sk-12345678",
+    )
+    assert s.FEATURE_RESULT_REPORT is True
+
+
 def test_settings_from_env(monkeypatch):
     """Settings should load from environment variables."""
     monkeypatch.setenv("LLM_MODEL_NAME", "test-model-name")

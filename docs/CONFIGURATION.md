@@ -50,6 +50,7 @@ SwarmOracle 兼容任何 OpenAI 格式的 API（OpenAI、各类代理、Ollama �
 | `FEATURE_SNAPSHOT_EXPORT` | ✅ 开 | 首页可以导入 scenario snapshot，结果页可以导出 ZIP snapshot。 |
 | `FEATURE_PREDICTION_JOURNAL` | ✅ 开 | `/me/journal` 可以记录预测、标记结果，并查看校准曲线。 |
 | `FEATURE_RESULT_VERDICT` | ✅ 开 | 结果页会尽量给出一句话结论、置信度和每条世界线对原问题的回答。 |
+| `FEATURE_RESULT_REPORT` | ✅ 开 | 结果页会显示深读报告入口，也可以在 `/result/:id/report` 单独查看或重试生成。 |
 | `FEATURE_EDUCATION_TEMPLATES` | ✅ 开 | 首页会显示教学模板入口，适合快速填入课堂场景。 |
 | `FEATURE_PERSONA_EXPORT` | ✅ 开 | Agent 库可以导出人物备份，也可以从备份创建新 Agent。 |
 
@@ -59,7 +60,7 @@ SwarmOracle 兼容任何 OpenAI 格式的 API（OpenAI、各类代理、Ollama �
 
 还有几个后端内部/实验开关默认保持关闭，不作为普通用户入口介绍：`FEATURE_ROUNDTABLE_INSIGHT_LLM`、`FEATURE_HALLUCINATION_GATE`、`FEATURE_IDENTITY_COMPACTION`。
 
-`FEATURE_RESULT_REPORT` 也默认关闭。打开后，结果页会出现深读报告入口，后端会把报告写入 `Scenario.parsed_context.full_report`，并通过 `POST /api/scenario/{id}/report:generate` 生成或重试。报告章节数、每章工具调用上限、超时、证据摘录长度和完整报告字节上限由 `.env.example` 里的 `REPORT_*` 参数控制。
+`FEATURE_RESULT_REPORT` 默认开启。打开时，结果页会出现深读报告入口，后端会把报告写入 `Scenario.parsed_context.full_report`，并通过 `POST /api/scenario/{id}/report:generate` 生成或重试。报告章节数、每章工具调用上限、超时、证据摘录长度和完整报告字节上限由 `.env.example` 里的 `REPORT_*` 参数控制；如果需要回到纯 verdict + story 结果页，可以把它改为 `false` 后重启后端。
 
 > 改完开关后需要**重启后端**才会生效。大多数开关对应界面上的功能，前端通过 `/api/capabilities` 自动感知是否可用，关闭的功能会隐藏或提示不可用，不会报错。
 

@@ -119,7 +119,7 @@ class Settings(BaseSettings):
     FEATURE_SNAPSHOT_EXPORT: bool = Field(default=True)
     FEATURE_PREDICTION_JOURNAL: bool = Field(default=True)
     FEATURE_RESULT_VERDICT: bool = Field(default=True)
-    FEATURE_RESULT_REPORT: bool = Field(default=False)
+    FEATURE_RESULT_REPORT: bool = Field(default=True)
     REPORT_MAX_SECTIONS: int = Field(default=5, ge=1)
     REPORT_MIN_SECTIONS: int = Field(default=2, ge=1)
     REPORT_MAX_TOOL_CALLS_PER_SECTION: int = Field(default=5, ge=0)

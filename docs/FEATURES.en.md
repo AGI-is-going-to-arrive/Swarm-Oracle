@@ -2,7 +2,7 @@ English | [中文](FEATURES.md)
 
 # SwarmOracle Feature Catalog
 
-This catalog covers the 41 user-visible features checked for release prep. Entry points and default flags match the current code, usage guide, and configuration docs. The three search-related features and the deep-read report are off by default and need configuration or explicit enablement first.
+This catalog covers the 41 user-visible features checked for release prep. Entry points and default flags match the current code, usage guide, and configuration docs. The three search-related features are off by default and need configuration first.
 
 ## Core Simulation
 
@@ -217,6 +217,6 @@ Entry: configure `FEATURE_FAMILY_QUERY_OPTIMIZATION=true`, then use the home-pag
 This is backend search behavior and has no separate UI or standalone screenshot.
 
 ### F41 Result Deep-read Report
-**Must be enabled, see [CONFIGURATION](CONFIGURATION.en.md).** With `FEATURE_RESULT_REPORT` enabled, the result page shows a deep-read report entry with sectioned conclusions, evidence coordinates, and uncertainty notes. The report can also be opened at `/result/:id/report`; generation and retry use `report:generate`, and failures do not block the original result page.
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The result page shows a deep-read report entry with sectioned conclusions, evidence coordinates, and uncertainty notes. The report can also be opened at `/result/:id/report`; generation and retry use `report:generate`, and failures do not block the original result page.
 Entry: `/result/:id` -> deep-read report; standalone page `/result/:id/report`
 The screenshot package does not include a standalone deep-read report image yet; the entry follows the result-page capability flag.
