@@ -9,6 +9,7 @@ import io
 import json
 import stat
 import zipfile
+from typing import Any, Callable
 
 import pytest
 from fastapi import HTTPException
@@ -91,6 +92,43 @@ def _seed_scenario_with_full_report_snapshot(report: dict) -> str:
         return scenario.id
 
 
+def _seed_full_report_coordinate_rows(scenario_id: str) -> None:
+    with Session(get_engine()) as session:
+        branch = Branch(
+            id="branch-1",
+            scenario_id=scenario_id,
+            title="Approval with safeguards",
+            probability=0.68,
+            status=BranchStatus.COMPLETED,
+        )
+        agent = Agent(
+            id="agent-1",
+            scenario_id=scenario_id,
+            name="Transit Advocate",
+            role="Advocate",
+            tier=AgentTier.IMPORTANT,
+        )
+        session.add_all([branch, agent])
+        session.flush()
+        round_row = Round(
+            id="round-1",
+            branch_id=branch.id,
+            round_number=3,
+        )
+        session.add(round_row)
+        session.flush()
+        session.add(
+            AgentMessage(
+                id="msg-1",
+                round_id=round_row.id,
+                agent_id=agent.id,
+                content="Privacy concessions make the plan defensible.",
+                emotion="confident",
+            )
+        )
+        session.commit()
+
+
 def _full_report_snapshot_fixture(status: str) -> dict:
     report = _legal_full_report()
     report["status"] = status
@@ -122,7 +160,55 @@ def _full_report_snapshot_fixture(status: str) -> dict:
             **report["dissenting"],
             "base_url": f"https://user:pass@report-{status}.example/v1",
         }
+    report["evidence"].append({
+        **report["evidence"][0],
+        "id": "ev-stale",
+        "branch_id": "missing-branch",
+        "round_id": "missing-round",
+        "agent_id": "missing-agent",
+        "message_id": "missing-message",
+    })
+    report["indicators_to_watch"][0]["evidence_refs"].append("ev-stale")
+    if report["sections"]:
+        report["sections"][0]["evidence_refs"].append("ev-stale")
     return report
+
+
+def _rewrite_snapshot_scenario_json(
+    raw: bytes,
+    mutate: Callable[[dict[str, Any]], None],
+) -> bytes:
+    with zipfile.ZipFile(io.BytesIO(raw), "r") as zf:
+        files = {name: zf.read(name) for name in zf.namelist()}
+
+    scenario_payload = json.loads(files["scenario.json"])
+    mutate(scenario_payload)
+    files["scenario.json"] = json.dumps(
+        scenario_payload,
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
+
+    manifest = json.loads(files["manifest.json"])
+    manifest["files"]["scenario.json"] = {
+        "sha256": hashlib.sha256(files["scenario.json"]).hexdigest(),
+        "size": len(files["scenario.json"]),
+    }
+    files["manifest.json"] = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
+    files["checksums.sha256"] = "\n".join(
+        f"{meta['sha256']}  {name}"
+        for name, meta in manifest["files"].items()
+    ).encode("utf-8")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, blob in files.items():
+            zf.writestr(name, blob)
+    return buffer.getvalue()
 
 
 def _seed_branch_tree(scenario_id: str) -> tuple[str, str]:
@@ -666,6 +752,7 @@ def test_include_private_keeps_user_id_but_still_redacts_secrets():
 def test_full_report_snapshot_redacts_report_secrets_and_round_trips(status: str):
     report = _full_report_snapshot_fixture(status)
     scenario_id = _seed_scenario_with_full_report_snapshot(report)
+    _seed_full_report_coordinate_rows(scenario_id)
 
     with Session(get_engine()) as session:
         buffer = export_snapshot_zip(scenario_id, session)
@@ -690,6 +777,7 @@ def test_full_report_snapshot_redacts_report_secrets_and_round_trips(status: str
     assert exported_report["title_i18n"]["en"] == "AI transit plan report"
     assert exported_report["summary_i18n"]["zh"] == "加入隐私保护后，方案更可能通过。"
     assert exported_report["evidence"][0]["message_id"] == "msg-1"
+    assert {item["id"] for item in exported_report["evidence"]} == {"ev-1", "ev-stale"}
     assert exported_report["interview_evidence"][0] == {
         "note": f"kept interview note for {status}",
     }
@@ -718,9 +806,56 @@ def test_full_report_snapshot_redacts_report_secrets_and_round_trips(status: str
     assert imported_report["status"] == status
     assert imported_report["title_i18n"] == exported_report["title_i18n"]
     assert imported_report["summary_i18n"] == exported_report["summary_i18n"]
-    assert imported_report["evidence"][0]["message_id"] == "msg-1"
+    assert [item["id"] for item in imported_report["evidence"]] == ["ev-1"]
+    imported_evidence = imported_report["evidence"][0]
+    assert imported_evidence["branch_id"] != "branch-1"
+    assert imported_evidence["round_id"] != "round-1"
+    assert imported_evidence["agent_id"] != "agent-1"
+    assert imported_evidence["message_id"] != "msg-1"
+    with Session(get_engine()) as session:
+        branch = session.get(Branch, imported_evidence["branch_id"])
+        round_row = session.get(Round, imported_evidence["round_id"])
+        agent = session.get(Agent, imported_evidence["agent_id"])
+        message = session.get(AgentMessage, imported_evidence["message_id"])
+    assert branch is not None
+    assert branch.scenario_id == new_id
+    assert round_row is not None
+    assert round_row.branch_id == branch.id
+    assert agent is not None
+    assert agent.scenario_id == new_id
+    assert message is not None
+    assert message.round_id == round_row.id
+    assert message.agent_id == agent.id
+    imported_ref_text = json.dumps(imported_report, ensure_ascii=False)
+    assert "ev-stale" not in imported_ref_text
     assert imported_report["interview_evidence"] == exported_report["interview_evidence"]
     assert imported_report["premortem"] == exported_report["premortem"]
+
+
+def test_snapshot_import_skips_invalid_full_report_after_remap():
+    report = _full_report_snapshot_fixture("complete")
+    scenario_id = _seed_scenario_with_full_report_snapshot(report)
+    _seed_full_report_coordinate_rows(scenario_id)
+
+    with Session(get_engine()) as session:
+        buffer = export_snapshot_zip(scenario_id, session)
+
+    raw = _rewrite_snapshot_scenario_json(
+        buffer.getvalue(),
+        lambda scenario: scenario["parsed_context"]["full_report"].update(
+            {"available_languages": []}
+        ),
+    )
+
+    with Session(get_engine()) as session:
+        new_id = import_snapshot_zip(raw, "importer-2", session)
+
+    with Session(get_engine()) as session:
+        imported = session.get(Scenario, new_id)
+        assert imported is not None
+        parsed = imported.parsed_context or {}
+
+    assert "full_report" not in parsed
 
 
 def test_import_creates_new_scenario_with_remapped_ids():

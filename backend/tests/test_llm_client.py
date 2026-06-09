@@ -86,6 +86,44 @@ class TestValidateLlmBaseUrl:
         url = "https://api.openai.com/v1"
         assert validate_llm_base_url(url) == url
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://user:pass@api.openai.com/v1",
+            "https://user@api.openai.com/v1",
+            "http://user:pass@localhost:8000/v1",
+        ],
+    )
+    def test_rejects_allowed_base_url_with_userinfo(self, url):
+        assert validate_llm_base_url(url) is None
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.openai.com/v1?api_key=SECRET",
+            "https://api.openai.com/v1#fragment",
+            "https://api.openai.com/v1;param",
+        ],
+    )
+    def test_rejects_allowed_base_url_with_params_query_or_fragment(self, url):
+        assert validate_llm_base_url(url) is None
+
+    def test_accepts_allowed_base_url_with_port_path_and_idn(self, monkeypatch):
+        monkeypatch.setattr(
+            llm_client,
+            "_LLM_URL_ALLOWLIST",
+            llm_client._LLM_URL_ALLOWLIST | {"xn--bcher-kva.example"},
+        )
+
+        assert (
+            validate_llm_base_url("https://api.openai.com:443/v1/chat/completions")
+            == "https://api.openai.com:443/v1/chat/completions"
+        )
+        assert (
+            validate_llm_base_url("https://bücher.example:8443/v1")
+            == "https://xn--bcher-kva.example:8443/v1"
+        )
+
 
 class TestLLMCall:
     def _reset_runtime_guard(self):

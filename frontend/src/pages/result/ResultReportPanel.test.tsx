@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { FullReport, FullReportTruncatedMarker } from '../../types';
@@ -33,10 +33,12 @@ vi.mock('./ReportEvidenceDrawer', () => ({
 
 import { useResultContext } from './ResultContext';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
+import { generateReport } from '../../api/client';
 import { ResultReportPanel } from './ResultReportPanel';
 
 const mockedCtx = vi.mocked(useResultContext);
 const mockedCap = vi.mocked(useCapabilityCheck);
+const mockedGenerateReport = vi.mocked(generateReport);
 
 function makeReport(overrides: Partial<FullReport> = {}): FullReport {
   return {
@@ -98,8 +100,10 @@ function setCap(over: Partial<ReturnType<typeof useCapabilityCheck>>) {
 beforeEach(() => {
   mockedCtx.mockReset();
   mockedCap.mockReset();
+  mockedGenerateReport.mockReset();
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -117,6 +121,55 @@ describe('ResultReportPanel — inline capability loading', () => {
     const { container } = render(<ResultReportPanel variant="standalone" />);
     expect(container.querySelector('.report-panel-container')).not.toBeNull();
     expect(container.querySelector('.animate-pulse')).not.toBeNull();
+  });
+});
+
+describe('ResultReportPanel — manual retry stream handling', () => {
+  it('times out an open SSE body after the response headers arrive', async () => {
+    vi.useFakeTimers();
+    setCtx({ full_report: makeReport({ status: 'partial', sections: [] }) });
+    setCap({});
+    let finishRead: ((value: ReadableStreamReadResult<Uint8Array>) => void) | null = null;
+    const reader = {
+      read: vi
+        .fn()
+        .mockResolvedValueOnce({
+          done: false,
+          value: new Uint8Array([1]),
+        } as ReadableStreamReadResult<Uint8Array>)
+        .mockImplementationOnce(() => new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
+          finishRead = resolve;
+        })),
+      cancel: vi.fn(() => {
+        finishRead?.({ done: true, value: undefined } as ReadableStreamReadResult<Uint8Array>);
+        return Promise.resolve();
+      }),
+      releaseLock: vi.fn(),
+    };
+    mockedGenerateReport.mockResolvedValue({
+      body: {
+        getReader: () => reader,
+      },
+    } as unknown as Response);
+
+    render(<ResultReportPanel variant="inline" />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('button', { name: /Generating/i })).toBeDisabled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/Retry failed/i)).toBeInTheDocument();
+    expect(reader.cancel).toHaveBeenCalled();
+    expect(reader.releaseLock).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Retry Generation/i })).not.toBeDisabled();
   });
 });
 

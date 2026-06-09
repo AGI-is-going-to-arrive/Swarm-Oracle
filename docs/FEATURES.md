@@ -217,6 +217,6 @@ Agent 身份库和工坊提供人物备份导入、导出。导入会创建新�
 该功能是后台检索行为，没有独立 UI 或单独截图。
 
 ### F41 结果深读报告
-**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 结果页会显示深读报告入口，按章节汇总关键结论、证据坐标和不确定性。报告也可以在 `/result/:id/report` 独立查看；生成或重试走 `report:generate`，失败时不会阻断原本的结果页。
+**默认开启，见 [CONFIGURATION](CONFIGURATION.md)。** 结果页会显示深读报告入口，按章节汇总关键结论、证据坐标和不确定性。证据侧栏可以跳回 replay 里的对应发言；报告也可以在 `/result/:id/report` 独立查看。生成或重试走 `report:generate` HTTP SSE，失败、部分完成或超限截断都会显示可读状态，不会阻断原本的结果页。
 入口：`/result/:id` -> 深读报告；独立页 `/result/:id/report`
 截图包暂未单独收录深读报告；入口跟随结果页能力开关显示。

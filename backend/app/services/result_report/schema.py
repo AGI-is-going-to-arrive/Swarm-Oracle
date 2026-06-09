@@ -205,6 +205,14 @@ class FullReport(_StrictModel):
         if len(set(self.available_languages)) != len(self.available_languages):
             raise ValueError("available_languages cannot contain duplicates")
         evidence_ids = {item.id for item in self.evidence}
+        for section in self.sections:
+            unknown_refs = [
+                evidence_id
+                for evidence_id in section.evidence_refs
+                if evidence_id not in evidence_ids
+            ]
+            if unknown_refs:
+                raise ValueError("section evidence_refs must reference report evidence ids")
         for indicator in self.indicators_to_watch:
             unknown_refs = [
                 evidence_id

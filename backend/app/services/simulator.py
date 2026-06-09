@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from sqlalchemy import func
+from sqlalchemy import case, func, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, select
 
@@ -3680,6 +3680,51 @@ def _copy_parsed_context(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _json_path_part(part: str) -> str:
+    escaped = part.replace("\\", "\\\\").replace('"', '\\"')
+    return f'."{escaped}"'
+
+
+def _json_path(*parts: str) -> str:
+    return "$" + "".join(_json_path_part(part) for part in parts)
+
+
+def _json_object_or_empty_expr():
+    return case(
+        (
+            func.json_valid(Scenario.parsed_context) == 1,
+            case(
+                (func.json_type(Scenario.parsed_context) == "object", Scenario.parsed_context),
+                else_=func.json("{}"),
+            ),
+        ),
+        else_=func.json("{}"),
+    )
+
+
+def _json_result_quality_object_expr():
+    base = _json_object_or_empty_expr()
+    result_quality_path = _json_path("result_quality")
+    return case(
+        (func.json_type(base, result_quality_path) == "object", base),
+        else_=func.json_set(base, result_quality_path, func.json("{}")),
+    )
+
+
+def _json_set_parsed_context_expr(
+    *path_value_pairs: object,
+    base_expr: object | None = None,
+):
+    return func.json_set(
+        _json_object_or_empty_expr() if base_expr is None else base_expr,
+        *path_value_pairs,
+    )
+
+
+def _json_value(value: object):
+    return func.json(json.dumps(value, ensure_ascii=False))
+
+
 async def _generate_verdict(
     question: str,
     branches: list,
@@ -3809,24 +3854,29 @@ def _persist_result_quality_verdict(
         if not verdict_text:
             return
         with Session(engine) as session:
-            scenario = session.get(Scenario, scenario_id)
-            if scenario is None:
-                return
-            ctx = _copy_parsed_context(scenario.parsed_context)
-            result_quality = ctx.get("result_quality")
-            result_quality = dict(result_quality) if isinstance(result_quality, dict) else {}
-            result_quality.update({
-                "verdict": verdict_text,
-                "confidence": _normalize_result_verdict_confidence(
-                    verdict.get("confidence"),
-                ),
-                "question_answer": _one_line_answer(
-                    str(verdict.get("question_answer") or verdict_text),
-                ),
-            })
-            ctx["result_quality"] = result_quality
-            scenario.parsed_context = ctx
-            session.add(scenario)
+            session.exec(
+                update(Scenario)
+                .where(Scenario.id == scenario_id)
+                .values(
+                    parsed_context=_json_set_parsed_context_expr(
+                        _json_path("result_quality", "verdict"),
+                        _json_value(verdict_text),
+                        _json_path("result_quality", "confidence"),
+                        _json_value(
+                            _normalize_result_verdict_confidence(
+                                verdict.get("confidence"),
+                            )
+                        ),
+                        _json_path("result_quality", "question_answer"),
+                        _json_value(
+                            _one_line_answer(
+                                str(verdict.get("question_answer") or verdict_text),
+                            )
+                        ),
+                        base_expr=_json_result_quality_object_expr(),
+                    )
+                )
+            )
             session.commit()
     except Exception:
         logger.debug("result verdict persistence failed (non-blocking)", exc_info=True)
@@ -4295,22 +4345,21 @@ def _save_narration(engine, branch_id, narration: dict):
                 _strip_round_markers(str(narration.get("question_answer") or "")),
             )
             if question_answer and settings.FEATURE_RESULT_VERDICT:
-                scenario = session.get(Scenario, branch.scenario_id)
-                if scenario:
-                    ctx = _copy_parsed_context(scenario.parsed_context)
-                    result_quality = ctx.get("result_quality")
-                    result_quality = (
-                        dict(result_quality) if isinstance(result_quality, dict) else {}
+                session.exec(
+                    update(Scenario)
+                    .where(Scenario.id == branch.scenario_id)
+                    .values(
+                        parsed_context=_json_set_parsed_context_expr(
+                            _json_path(
+                                "result_quality",
+                                "branch_question_answers",
+                                branch.id,
+                            ),
+                            _json_value(question_answer),
+                            base_expr=_json_result_quality_object_expr(),
+                        )
                     )
-                    branch_answers = result_quality.get("branch_question_answers")
-                    branch_answers = (
-                        dict(branch_answers) if isinstance(branch_answers, dict) else {}
-                    )
-                    branch_answers[branch.id] = question_answer
-                    result_quality["branch_question_answers"] = branch_answers
-                    ctx["result_quality"] = result_quality
-                    scenario.parsed_context = ctx
-                    session.add(scenario)
+                )
             branch.status = BranchStatus.COMPLETED
             session.add(branch)
             session.commit()

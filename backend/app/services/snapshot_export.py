@@ -48,6 +48,7 @@ from app.models import (
 )
 from app.models.database import get_engine
 from app.models.graph import GraphEdge, GraphNode, GraphSnapshot
+from app.services.result_report.schema import validate_full_report_payload
 
 logger = logging.getLogger(__name__)
 
@@ -865,6 +866,84 @@ def _remap_intervention_effect_summary(
     return json.dumps(remapped, ensure_ascii=False, default=str)
 
 
+def _remap_full_report_coordinates(
+    value: Any,
+    *,
+    branch_id_map: dict[str, str],
+    agent_id_map: dict[str, str],
+    round_id_map: dict[str, str],
+    message_id_map: dict[str, str],
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    report = json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    target_branch_id = str(report.get("target_branch_id") or "")
+    if target_branch_id:
+        mapped_target = branch_id_map.get(target_branch_id)
+        if not mapped_target:
+            return None
+        report["target_branch_id"] = mapped_target
+
+    dissenting = report.get("dissenting")
+    if isinstance(dissenting, dict):
+        runner_up = str(dissenting.get("runner_up_branch_id") or "")
+        if runner_up:
+            mapped_runner_up = branch_id_map.get(runner_up)
+            if mapped_runner_up:
+                dissenting["runner_up_branch_id"] = mapped_runner_up
+            else:
+                report["dissenting"] = None
+
+    evidence: list[dict[str, Any]] = []
+    for raw in report.get("evidence") or []:
+        if not isinstance(raw, dict):
+            continue
+        branch_id = branch_id_map.get(str(raw.get("branch_id") or ""))
+        agent_id = agent_id_map.get(str(raw.get("agent_id") or ""))
+        round_id = round_id_map.get(str(raw.get("round_id") or ""))
+        message_id = message_id_map.get(str(raw.get("message_id") or ""))
+        if not all([branch_id, agent_id, round_id, message_id]):
+            continue
+        item = dict(raw)
+        item["branch_id"] = branch_id
+        item["agent_id"] = agent_id
+        item["round_id"] = round_id
+        item["message_id"] = message_id
+        evidence.append(item)
+    report["evidence"] = evidence
+
+    valid_evidence_ids = {str(item.get("id")) for item in evidence if item.get("id")}
+    for section in report.get("sections") or []:
+        if isinstance(section, dict):
+            refs = section.get("evidence_refs")
+            section["evidence_refs"] = [
+                str(ref)
+                for ref in (refs if isinstance(refs, list) else [])
+                if str(ref) in valid_evidence_ids
+            ]
+            for chart in section.get("charts") or []:
+                if not isinstance(chart, dict):
+                    continue
+                data = chart.get("data")
+                if isinstance(data, dict):
+                    branch_id = str(data.get("branch_id") or "")
+                    if branch_id in branch_id_map:
+                        data["branch_id"] = branch_id_map[branch_id]
+                    elif "branch_id" in data:
+                        data.pop("branch_id", None)
+
+    for indicator in report.get("indicators_to_watch") or []:
+        if isinstance(indicator, dict):
+            refs = indicator.get("evidence_refs")
+            indicator["evidence_refs"] = [
+                str(ref)
+                for ref in (refs if isinstance(refs, list) else [])
+                if str(ref) in valid_evidence_ids
+            ]
+
+    return report
+
+
 def import_snapshot_zip(
     zip_data: bytes | io.BytesIO,
     user_id: str | None,
@@ -930,12 +1009,19 @@ def import_snapshot_zip(
     else:
         web_context_value = web_context_raw
 
+    parsed_context = (
+        _redact_dict(scenario_payload.get("parsed_context"))
+        if isinstance(scenario_payload.get("parsed_context"), dict)
+        else None
+    )
+    deferred_full_report = None
+    if isinstance(parsed_context, dict):
+        deferred_full_report = parsed_context.pop("full_report", None)
+
     scenario = Scenario(
         question=str(scenario_payload.get("question", "")).strip()
         or "Imported snapshot",
-        parsed_context=_redact_dict(scenario_payload.get("parsed_context"))
-        if isinstance(scenario_payload.get("parsed_context"), dict)
-        else None,
+        parsed_context=parsed_context or None,
         director_state_json=_redact_dict(scenario_payload.get("director_state_json"))
         if isinstance(scenario_payload.get("director_state_json"), dict)
         else None,
@@ -1045,6 +1131,8 @@ def import_snapshot_zip(
             agent_id_map[original_id] = agent.id
 
     round_lookup: dict[tuple[str, int], str] = {}
+    round_id_map: dict[str, str] = {}
+    message_id_map: dict[str, str] = {}
     for raw in messages_rows:
         branch_orig = str(raw.get("branch_id") or "").strip()
         new_branch_id = branch_id_map.get(branch_orig)
@@ -1065,26 +1153,32 @@ def import_snapshot_zip(
             session.flush()
             round_lookup[round_key] = round_row.id
             round_id = round_row.id
+        original_round_id = str(raw.get("round_id") or "").strip()
+        if original_round_id:
+            round_id_map[original_round_id] = round_id
 
         agent_orig = str(raw.get("agent_id") or "").strip()
         new_agent_id = agent_id_map.get(agent_orig)
         if not new_agent_id:
             continue
-        session.add(
-            AgentMessage(
-                round_id=round_id,
-                agent_id=new_agent_id,
-                content=str(raw.get("content") or ""),
-                emotion=str(raw.get("emotion") or "neutral"),
-                diverge=raw.get("diverge"),
-                tokens_used=_coerce_int_field(
-                    raw.get("tokens_used"),
-                    "messages.tokens_used",
-                    default=0,
-                    min_value=0,
-                ),
-            )
+        message = AgentMessage(
+            round_id=round_id,
+            agent_id=new_agent_id,
+            content=str(raw.get("content") or ""),
+            emotion=str(raw.get("emotion") or "neutral"),
+            diverge=raw.get("diverge"),
+            tokens_used=_coerce_int_field(
+                raw.get("tokens_used"),
+                "messages.tokens_used",
+                default=0,
+                min_value=0,
+            ),
         )
+        session.add(message)
+        session.flush()
+        original_message_id = str(raw.get("id") or "").strip()
+        if original_message_id:
+            message_id_map[original_message_id] = message.id
 
     for raw in intervention_receipt_rows:
         branch_orig = str(raw.get("branch_id") or "").strip()
@@ -1129,6 +1223,25 @@ def import_snapshot_zip(
         branch_id_map=branch_id_map,
         agent_id_map=agent_id_map,
     )
+
+    if deferred_full_report is not None:
+        remapped_report = _remap_full_report_coordinates(
+            deferred_full_report,
+            branch_id_map=branch_id_map,
+            agent_id_map=agent_id_map,
+            round_id_map=round_id_map,
+            message_id_map=message_id_map,
+        )
+        if remapped_report is not None:
+            try:
+                validated_report = validate_full_report_payload(remapped_report)
+            except Exception as exc:
+                logger.warning("Dropped invalid imported full_report: %s", exc)
+            else:
+                parsed = dict(scenario.parsed_context or {})
+                parsed["full_report"] = validated_report.model_dump(mode="json")
+                scenario.parsed_context = parsed
+                session.add(scenario)
 
     session.commit()
     logger.info(

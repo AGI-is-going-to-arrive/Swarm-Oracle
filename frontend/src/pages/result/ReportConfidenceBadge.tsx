@@ -1,3 +1,4 @@
+import React from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ReportVerdict } from '../../types';
 
@@ -33,7 +34,7 @@ const KNOWN_WEP_KEYS = new Set([
 
 const KNOWN_CONFIDENCE_LEVELS = new Set<string>(['high', 'medium', 'low']);
 
-export function ReportConfidenceBadge({ verdict }: Props) {
+export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({ verdict }: Props) {
   const { t } = useTranslation();
   const { likelihood, analytic_confidence, disclaimer } = verdict;
 
@@ -102,4 +103,4 @@ export function ReportConfidenceBadge({ verdict }: Props) {
       )}
     </div>
   );
-}
+});

@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useResultContext } from './ResultContext';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
 import { generateReport } from '../../api/client';
@@ -6,7 +7,7 @@ import { ReportConfidenceBadge } from './ReportConfidenceBadge';
 import { ReportToc } from './ReportToc';
 import { ReportSection } from './ReportSection';
 import { ReportEvidenceDrawer } from './ReportEvidenceDrawer';
-import type { FullReport, FullReportTruncatedMarker, ReportEvidence } from '../../types';
+import type { FullReport, FullReportTruncatedMarker, ReportEvidence, StoryData } from '../../types';
 
 interface Props {
   /** `inline` is rendered inside ResultView (page already has an <h1>); `standalone`
@@ -14,6 +15,10 @@ interface Props {
   variant?: 'inline' | 'standalone';
   /** Optional refresh callback (standalone re-fetches story); falls back to a full reload. */
   onRefresh?: () => void;
+  storyData?: StoryData | null;
+  activeScenarioId?: string | null;
+  isZh?: boolean;
+  isReplayMode?: boolean;
 }
 
 function isTruncatedReportMarker(
@@ -28,11 +33,48 @@ function isFullReport(
   return Boolean(report && 'verdict' in report && report.verdict);
 }
 
-export const ResultReportPanel = React.memo(function ResultReportPanel({
+const ALLOWED_SECTION_IDS = ['timeline', 'factions', 'conflicts', 'premortem', 'indicators', 'sources'];
+const REPORT_GENERATE_TIMEOUT_MS = 60_000;
+
+async function drainReportStream(res: Response, signal: AbortSignal): Promise<void> {
+  const reader = res.body?.getReader();
+  if (!reader) return;
+
+  const cancelReader = () => {
+    void reader.cancel().catch(() => undefined);
+  };
+
+  if (signal.aborted) {
+    cancelReader();
+    throw new DOMException('Report generation aborted', 'AbortError');
+  }
+
+  signal.addEventListener('abort', cancelReader, { once: true });
+  try {
+    for (;;) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+    if (signal.aborted) {
+      throw new DOMException('Report generation aborted', 'AbortError');
+    }
+  } finally {
+    signal.removeEventListener('abort', cancelReader);
+    reader.releaseLock();
+  }
+}
+
+// Inner component memoized to narrow context subscription.
+// Re-renders ONLY when these specific props change.
+const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   variant = 'inline',
   onRefresh,
-}: Props) {
-  const { storyData, activeScenarioId, isZh } = useResultContext();
+  storyData,
+  activeScenarioId,
+  isZh,
+  isReplayMode,
+}: Props & { isZh: boolean; isReplayMode: boolean }) {
+  const { t } = useTranslation();
   const {
     capabilities,
     loading: capLoading,
@@ -72,27 +114,16 @@ export const ResultReportPanel = React.memo(function ResultReportPanel({
 
   const handleCloseEvidence = useCallback(() => setEvidenceDrawerOpen(false), []);
 
-  // Real retry: POST report:generate, drain the SSE stream until the backend closes it
-  // (report_complete / report_failed), then refresh so the persisted /story.full_report loads.
   const handleRetry = useCallback(async () => {
+    if (isReplayMode) return;
     if (!activeScenarioId || retrying) return;
     setRetrying(true);
     setRetryError(false);
-    // Bound the operation: abort a hung stream after 3 min so the CTA never sticks on "Generating…".
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 180_000);
+    const timeoutId = setTimeout(() => controller.abort(), REPORT_GENERATE_TIMEOUT_MS);
     try {
       const res = await generateReport(activeScenarioId, undefined, controller.signal);
-      const reader = res.body?.getReader();
-      if (reader) {
-        // Drain until the backend closes the stream (report_complete / report_failed); re-fetching
-        // /story then loads the persisted report. The abort signal caps a stream that never ends.
-        for (;;) {
-          const { done } = await reader.read();
-          if (done) break;
-        }
-        reader.releaseLock();
-      }
+      await drainReportStream(res, controller.signal);
       if (onRefresh) {
         onRefresh();
       } else if (typeof window !== 'undefined') {
@@ -104,12 +135,14 @@ export const ResultReportPanel = React.memo(function ResultReportPanel({
       clearTimeout(timeoutId);
       setRetrying(false);
     }
-  }, [activeScenarioId, retrying, onRefresh]);
+  }, [activeScenarioId, retrying, onRefresh, isReplayMode]);
 
-  // 1) Capability probe still loading.
-  //    - `inline` (inside ResultView): render nothing so the feature being OFF never
-  //      flashes a skeleton in the main result page.
-  //    - `standalone` (/result/:id/report): keep the bounded skeleton (never a permanent spinner).
+  const currentIds = useMemo(() => new Set(sections.map((s) => s.id)), [sections]);
+  const missingSections = useMemo(() => {
+    if (report?.status !== 'partial') return [];
+    return ALLOWED_SECTION_IDS.filter((id) => !currentIds.has(id));
+  }, [report?.status, currentIds]);
+
   if (capLoading) {
     if (variant === 'inline') {
       return null;
@@ -123,42 +156,32 @@ export const ResultReportPanel = React.memo(function ResultReportPanel({
     );
   }
 
-  // 2) Capability probe ERROR → explicit retriable surface (NOT silently treated as disabled).
   if (capError) {
     return (
       <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] flex flex-col items-center text-center forced-colors:border">
         <p className="text-sm text-[color:var(--text-secondary)] mb-4">
-          {isZh
-            ? '无法确认深读报告是否可用，请重试。'
-            : 'Could not confirm whether the deep-read report is available. Please retry.'}
+          {t('result.report.couldNotConfirmAvailability')}
         </p>
         <button
           type="button"
           onClick={() => void reload?.()}
           className="px-5 py-2 rounded border border-[color:var(--border-default)] text-[color:var(--color-primary)] hover:bg-[color:var(--bg-hover)] focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)] forced-colors:border transition-colors motion-reduce:transition-none"
         >
-          {isZh ? '重试' : 'Retry'}
+          {t('result.report.retry')}
         </button>
       </div>
     );
   }
 
-  // 3) Feature genuinely disabled → render nothing.
   if (!isEnabled) {
     return null;
   }
 
   const missing = !report || !report.verdict;
   const hasSections = sections.length > 0;
-  // A `partial` report that still produced renderable sections is shown in full (with a
-  // non-blocking retry banner). Only a genuinely unrenderable report routes to the failure
-  // card: `failed`, or `partial`/anything else that lacks sections or a verdict.
-  const partialButRenderable =
-    report?.status === 'partial' && hasSections && !missing;
-  const incomplete =
-    !partialButRenderable && (report?.status === 'failed' || report?.status === 'partial');
+  const partialButRenderable = report?.status === 'partial' && hasSections && !missing;
+  const incomplete = !partialButRenderable && (report?.status === 'failed' || report?.status === 'partial');
 
-  // 4) Backend can return a bounded marker when persisted report exceeds the story byte cap.
   if (isTruncatedReport) {
     return (
       <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] flex flex-col items-center justify-center text-center forced-colors:border">
@@ -173,33 +196,31 @@ export const ResultReportPanel = React.memo(function ResultReportPanel({
           </svg>
         </div>
         <h2 className="text-lg font-semibold text-[color:var(--text-primary)] mb-2">
-          {isZh ? '深读报告已被截断' : 'Deep-Read Report Truncated'}
+          {t('result.report.reportTruncated')}
         </h2>
         <p className="text-sm text-[color:var(--text-secondary)] mb-6 max-w-md">
-          {isZh
-            ? '这份报告超过当前响应大小限制，无法完整展示。请重试生成较短报告。'
-            : 'This report exceeded the current response-size limit and cannot be shown in full. Retry to generate a shorter report.'}
+          {t('result.report.reportTruncatedDesc')}
         </p>
         {retryError && (
           <p className="text-sm text-[color:var(--color-danger)] mb-3" role="alert">
-            {isZh ? '重试失败，请稍后再试。' : 'Retry failed. Please try again later.'}
+            {t('result.report.retryFailed')}
           </p>
         )}
-        <button
-          type="button"
-          onClick={() => void handleRetry()}
-          disabled={retrying}
-          aria-busy={retrying}
-          className="px-6 py-2 bg-[color:var(--color-primary)] text-white font-medium rounded hover:bg-[color:var(--color-primary-dim)] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[color:var(--color-ring)] disabled:opacity-60 forced-colors:border transition-colors motion-reduce:transition-none"
-        >
-          {retrying ? isZh ? '生成中…' : 'Generating…' : isZh ? '重试生成' : 'Retry Generation'}
-        </button>
+        {!isReplayMode && (
+          <button
+            type="button"
+            onClick={() => void handleRetry()}
+            disabled={retrying}
+            aria-busy={retrying}
+            className="px-6 py-2 bg-[color:var(--color-primary)] text-white font-medium rounded hover:bg-[color:var(--color-primary-dim)] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[color:var(--color-ring)] disabled:opacity-60 forced-colors:border transition-colors motion-reduce:transition-none"
+          >
+            {retrying ? t('result.report.generating') : t('result.report.retryGeneration')}
+          </button>
+        )}
       </div>
     );
   }
 
-  // 5) Report failed (or partial with nothing to show), or (standalone) not generated yet
-  //    → incomplete card + REAL retry.
   if (incomplete || (missing && variant === 'standalone')) {
     return (
       <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] flex flex-col items-center justify-center text-center forced-colors:border">
@@ -215,41 +236,38 @@ export const ResultReportPanel = React.memo(function ResultReportPanel({
         </div>
         <h2 className="text-lg font-semibold text-[color:var(--text-primary)] mb-2">
           {missing
-            ? isZh ? '尚未生成深读报告' : 'Deep-Read Report Not Generated'
-            : isZh ? '报告生成未完成' : 'Report Generation Incomplete'}
+            ? t('result.report.reportNotGenerated')
+            : t('result.report.reportIncomplete')}
         </h2>
         <p className="text-sm text-[color:var(--text-secondary)] mb-6 max-w-md">
           {missing
-            ? isZh
-              ? '点击下方按钮，为这条世界线生成深读报告。'
-              : 'Generate the deep-read report for this worldline below.'
-            : isZh
-              ? '深读报告生成可能超时或部分失败，请点击下方按钮重试。'
-              : 'The deep-read report may have timed out or partially failed. Please retry below.'}
+            ? t('result.report.generateReportDesc')
+            : t('result.report.reportIncompleteDesc')}
         </p>
         {retryError && (
           <p className="text-sm text-[color:var(--color-danger)] mb-3" role="alert">
-            {isZh ? '重试失败，请稍后再试。' : 'Retry failed. Please try again later.'}
+            {t('result.report.retryFailed')}
           </p>
         )}
-        <button
-          type="button"
-          onClick={() => void handleRetry()}
-          disabled={retrying}
-          aria-busy={retrying}
-          className="px-6 py-2 bg-[color:var(--color-primary)] text-white font-medium rounded hover:bg-[color:var(--color-primary-dim)] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[color:var(--color-ring)] disabled:opacity-60 forced-colors:border transition-colors motion-reduce:transition-none"
-        >
-          {retrying
-            ? isZh ? '生成中…' : 'Generating…'
-            : missing
-              ? isZh ? '生成报告' : 'Generate Report'
-              : isZh ? '重试生成' : 'Retry Generation'}
-        </button>
+        {!isReplayMode && (
+          <button
+            type="button"
+            onClick={() => void handleRetry()}
+            disabled={retrying}
+            aria-busy={retrying}
+            className="px-6 py-2 bg-[color:var(--color-primary)] text-white font-medium rounded hover:bg-[color:var(--color-primary-dim)] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[color:var(--color-ring)] disabled:opacity-60 forced-colors:border transition-colors motion-reduce:transition-none"
+          >
+            {retrying
+              ? t('result.report.generating')
+              : missing
+                ? t('result.report.generateReport')
+                : t('result.report.retryGeneration')}
+          </button>
+        )}
       </div>
     );
   }
 
-  // 6) Inline + no report yet → stay quiet until the report exists.
   if (missing) {
     return null;
   }
@@ -258,7 +276,6 @@ export const ResultReportPanel = React.memo(function ResultReportPanel({
 
   return (
     <div className="report-panel-container my-8 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] shadow-sm overflow-hidden forced-colors:border">
-      {/* Partial report: show what generated, with a non-blocking retry banner on top. */}
       {partialButRenderable && (
         <div
           className="report-partial-banner flex flex-wrap items-center justify-between gap-3 px-6 py-3 bg-[color:var(--bg-hover)] border-b border-[color:var(--border-subtle)] forced-colors:border"
@@ -274,37 +291,36 @@ export const ResultReportPanel = React.memo(function ResultReportPanel({
             </span>
             <div className="min-w-0">
               <p className="text-sm font-medium text-[color:var(--text-primary)]">
-                {isZh ? '深读报告部分生成' : 'Deep-read report partially generated'}
+                {t('result.report.reportPartiallyGenerated')}
               </p>
               <p className="text-xs text-[color:var(--text-secondary)]">
-                {isZh
-                  ? '部分章节生成失败，以下为已生成内容。可重试以补全报告。'
-                  : 'Some sections failed to generate. The content below is what was produced. Retry to complete the report.'}
+                {t('result.report.reportPartiallyGeneratedDesc')}
               </p>
               {retryError && (
                 <p className="text-xs text-[color:var(--color-danger)] mt-1" role="alert">
-                  {isZh ? '重试失败，请稍后再试。' : 'Retry failed. Please try again later.'}
+                  {t('result.report.retryFailed')}
                 </p>
               )}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => void handleRetry()}
-            disabled={retrying}
-            aria-busy={retrying}
-            className="shrink-0 px-4 py-1.5 text-sm rounded border border-[color:var(--border-default)] text-[color:var(--color-primary)] hover:bg-[color:var(--bg-elevated)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-ring)] disabled:opacity-60 forced-colors:border transition-colors motion-reduce:transition-none"
-          >
-            {retrying
-              ? isZh ? '生成中…' : 'Generating…'
-              : isZh ? '重试生成' : 'Retry Generation'}
-          </button>
+          {!isReplayMode && (
+            <button
+              type="button"
+              onClick={() => void handleRetry()}
+              disabled={retrying}
+              aria-busy={retrying}
+              className="shrink-0 px-4 py-1.5 text-sm rounded border border-[color:var(--border-default)] text-[color:var(--color-primary)] hover:bg-[color:var(--bg-elevated)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-ring)] disabled:opacity-60 forced-colors:border transition-colors motion-reduce:transition-none"
+            >
+              {retrying
+                ? t('result.report.generating')
+                : t('result.report.retryGeneration')}
+            </button>
+          )}
         </div>
       )}
       <div className="p-6 md:p-8">
         <header className="mb-8 border-b border-[color:var(--border-subtle)] pb-6">
-          {/* Always <h2>: ResultView (inline) and ResultReportView (standalone) both own the page <h1>. */}
-          <h2 className="text-2xl md:text-3xl font-bold text-[color:var(--text-primary)] mb-4 leading-snug">
+          <h2 className="text-2xl md:text-3xl font-bold text-[color:var(--text-primary)] mb-4 leading-snug break-words [overflow-wrap:anywhere]">
             {title}
           </h2>
           <ReportConfidenceBadge verdict={report.verdict} />
@@ -321,15 +337,32 @@ export const ResultReportPanel = React.memo(function ResultReportPanel({
               onOpenEvidence={handleOpenEvidence}
             />
           ))}
+          {retrying &&
+            missingSections.map((id) => (
+              <section
+                key={`skeleton-${id}`}
+                className="report-section mb-10 pb-6 border-b border-[color:var(--border-subtle)] last:border-b-0 animate-pulse motion-reduce:animate-none"
+              >
+                <div className="flex justify-between items-end mb-4">
+                  <div className="h-6 bg-[color:var(--bg-hover)] rounded w-1/3" />
+                  <div className="h-8 bg-[color:var(--bg-hover)] rounded w-24" />
+                </div>
+                <div className="space-y-3">
+                  <div className="h-4 bg-[color:var(--bg-hover)] rounded w-full" />
+                  <div className="h-4 bg-[color:var(--bg-hover)] rounded w-5/6" />
+                  <div className="h-4 bg-[color:var(--bg-hover)] rounded w-3/4" />
+                </div>
+              </section>
+            ))}
         </div>
 
         {(report.indicators_to_watch?.length ?? 0) > 0 && (
           <section
             className="report-indicators mt-2 pt-6 border-t border-[color:var(--border-subtle)]"
-            aria-label={isZh ? '后续观察指标' : 'Indicators to watch'}
+            aria-label={t('result.report.indicatorsToWatch')}
           >
             <h3 className="text-lg font-bold text-[color:var(--text-primary)] mb-4">
-              {isZh ? '后续观察指标' : 'Indicators to Watch'}
+              {t('result.report.indicatorsToWatch')}
             </h3>
             <ul className="space-y-4">
               {report.indicators_to_watch.map((ind, i) => (
@@ -342,27 +375,27 @@ export const ResultReportPanel = React.memo(function ResultReportPanel({
                       {ind.direction === 'up' ? '↑' : '↓'}
                     </span>
                     <span className="sr-only">
-                      {ind.direction === 'up' ? (isZh ? '上升' : 'rising') : isZh ? '下降' : 'falling'}
+                      {ind.direction === 'up' ? t('result.report.rising') : t('result.report.falling')}
                     </span>
                     <div className="flex-1">
                       <div className="flex items-baseline justify-between gap-2 flex-wrap">
-                        <span className="font-semibold text-[color:var(--text-primary)]">{ind.signal}</span>
+                        <span className="font-semibold text-[color:var(--text-primary)] break-words [overflow-wrap:anywhere]">{ind.signal}</span>
                         {ind.time_horizon && (
-                          <span className="text-xs text-[color:var(--text-muted)]">{ind.time_horizon}</span>
+                          <span className="text-xs text-[color:var(--text-muted)] break-words [overflow-wrap:anywhere]">{ind.time_horizon}</span>
                         )}
                       </div>
                       {ind.observation && (
-                        <p className="text-sm text-[color:var(--text-secondary)] mt-1">{ind.observation}</p>
+                        <p className="text-sm text-[color:var(--text-secondary)] mt-1 break-words [overflow-wrap:anywhere]">{ind.observation}</p>
                       )}
                       {ind.threshold && (
-                        <p className="text-sm text-[color:var(--text-secondary)] mt-1">
-                          <span className="text-[color:var(--text-muted)]">{isZh ? '阈值：' : 'Threshold: '}</span>
+                        <p className="text-sm text-[color:var(--text-secondary)] mt-1 break-words [overflow-wrap:anywhere]">
+                          <span className="text-[color:var(--text-muted)]">{t('result.report.threshold')}</span>
                           {ind.threshold}
                         </p>
                       )}
-                      {ind.note && <p className="text-sm text-[color:var(--text-secondary)] mt-1">{ind.note}</p>}
+                      {ind.note && <p className="text-sm text-[color:var(--text-secondary)] mt-1 break-words [overflow-wrap:anywhere]">{ind.note}</p>}
                       {ind.rationale && (
-                        <p className="text-xs italic text-[color:var(--text-muted)] mt-1">{ind.rationale}</p>
+                        <p className="text-xs italic text-[color:var(--text-muted)] mt-1 break-words [overflow-wrap:anywhere]">{ind.rationale}</p>
                       )}
                     </div>
                   </div>
@@ -380,5 +413,25 @@ export const ResultReportPanel = React.memo(function ResultReportPanel({
         evidence={currentEvidence}
       />
     </div>
+  );
+});
+
+// Main exported component subscribing to ResultContext, but passing props
+// to the memoized ResultReportPanelInner to narrow subscription.
+export const ResultReportPanel = React.memo(function ResultReportPanel(props: Props) {
+  const context = useResultContext();
+  const storyData = props.storyData !== undefined ? props.storyData : context.storyData;
+  const activeScenarioId = props.activeScenarioId !== undefined ? props.activeScenarioId : context.activeScenarioId;
+  const isZh = props.isZh !== undefined ? props.isZh : context.isZh;
+  const isReplayMode = props.isReplayMode !== undefined ? props.isReplayMode : context.isReplayMode;
+
+  return (
+    <ResultReportPanelInner
+      {...props}
+      storyData={storyData}
+      activeScenarioId={activeScenarioId}
+      isZh={isZh}
+      isReplayMode={isReplayMode}
+    />
   );
 });

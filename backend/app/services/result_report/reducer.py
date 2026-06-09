@@ -76,11 +76,15 @@ def reduce(
     )
     with Session(engine) as session:
         scenario = session.get(Scenario, scenario_id)
-        completed_branches = _load_branches(session, scenario_id, completed_only=True)
+        completed_branches = _sort_branches_for_report(
+            _load_branches(session, scenario_id, completed_only=True)
+        )
         fallback_branches = (
             completed_branches
             if completed_branches
-            else _load_branches(session, scenario_id, completed_only=False)
+            else _sort_branches_for_report(
+                _load_branches(session, scenario_id, completed_only=False)
+            )
         )
 
     if scenario is None:
@@ -394,6 +398,13 @@ def reduce_dissenting_view(branches: list[Branch]) -> DissentingView | None:
     )
 
 
+def _sort_branches_for_report(branches: list[Branch]) -> list[Branch]:
+    return sorted(
+        branches,
+        key=lambda item: (-_clamp_probability(item.probability), item.fork_round, item.id),
+    )
+
+
 def _load_branches(
     session: Session,
     scenario_id: str,
@@ -407,7 +418,7 @@ def _load_branches(
         session.exec(
             select(Branch)
             .where(*conditions)
-            .order_by(Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc())
+            .order_by(Branch.id.asc())
         ).all(),
     )
 

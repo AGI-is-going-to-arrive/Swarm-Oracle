@@ -11,7 +11,8 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlalchemy import text as sql_text
+from sqlmodel import Session, select
 
 from app.main import app
 from app.models import (
@@ -117,6 +118,14 @@ def _seed_report_scenario() -> str:
         )
         session.commit()
     return "scenario-report"
+
+
+def _set_raw_parsed_context(scenario_id: str, raw_value: str | None) -> None:
+    with get_engine().begin() as conn:
+        conn.execute(
+            sql_text("UPDATE scenario SET parsed_context = :raw WHERE id = :scenario_id"),
+            {"raw": raw_value, "scenario_id": scenario_id},
+        )
 
 
 def _outline_payload(section_ids: list[str] | None = None) -> dict[str, Any]:
@@ -313,9 +322,11 @@ async def test_all_sections_fail_keeps_outline_and_marks_report_failed(monkeypat
     )
 
     assert report.status == "failed"
-    assert report.sections == []
+    assert [section.id for section in report.sections] == ["timeline", "sources"]
+    assert all("could not be generated" in section.body_md_i18n.en for section in report.sections)
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert persisted.status == "failed"
+    assert [section.id for section in persisted.sections] == ["timeline", "sources"]
     assert persisted.summary_i18n.en
 
 
@@ -379,6 +390,46 @@ async def test_oversize_report_truncates_fail_closed(monkeypatch):
     assert validate_full_report_payload(payload, max_bytes=3600).status == "partial"
 
 
+def test_byte_cap_prunes_indicator_refs_when_evidence_is_truncated(monkeypatch):
+    from app.services.result_report import builder
+    from app.services.result_report.schema import FullReport
+    from tests.test_result_report_contract import _legal_full_report
+
+    payload = _legal_full_report()
+    payload["sections"] = []
+    payload["evidence"].append({
+        **payload["evidence"][0],
+        "id": "ev-2",
+        "message_id": "msg-2",
+        "quote": "Budget caps keep the coalition intact." * 40,
+    })
+    payload["indicators_to_watch"][0]["evidence_refs"] = ["ev-1", "ev-2"]
+    report = FullReport.model_validate(payload)
+
+    expected_payload = report.model_dump(mode="json")
+    expected_payload["status"] = "partial"
+    expected_payload["summary"] = builder._truncate_text(expected_payload["summary"], 180)
+    expected_payload["summary_i18n"] = builder._truncate_i18n(
+        expected_payload["summary_i18n"],
+        180,
+    )
+    expected_payload["limitations"] = (
+        "Report was truncated to fit the configured UTF-8 byte budget."
+    )
+    for item in expected_payload["evidence"]:
+        item["quote"] = builder._truncate_text(item["quote"], 160)
+    expected_payload["evidence"] = expected_payload["evidence"][:1]
+    expected_payload["indicators_to_watch"][0]["evidence_refs"] = ["ev-1"]
+    max_bytes = utf8_json_size_bytes(expected_payload) + 64
+    monkeypatch.setattr(builder.settings, "REPORT_FULL_REPORT_MAX_BYTES", max_bytes)
+
+    fitted = builder._fit_report_to_byte_cap(report)
+
+    assert utf8_json_size_bytes(fitted.model_dump(mode="json")) <= max_bytes
+    assert [item.id for item in fitted.evidence] == ["ev-1"]
+    assert fitted.indicators_to_watch[0].evidence_refs == ["ev-1"]
+
+
 @pytest.mark.asyncio
 async def test_concurrent_repeat_generation_serializes_without_corruption(monkeypatch):
     from app.services.result_report import builder
@@ -406,6 +457,92 @@ async def test_concurrent_repeat_generation_serializes_without_corruption(monkey
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert len(persisted.sections) == 2
     assert {section.id for section in persisted.sections} == {"timeline", "sources"}
+
+
+def test_persist_report_payload_preserves_interleaved_context_update(monkeypatch):
+    from app.services.result_report import builder
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    payload = _legal_full_report()
+    real_session_cls = builder.Session
+    interleaved = False
+
+    class InterleavingSession:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._session = real_session_cls(*args, **kwargs)
+
+        def __enter__(self):
+            self._session.__enter__()
+            return self
+
+        def __exit__(self, *args: Any):
+            return self._session.__exit__(*args)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._session, name)
+
+        def exec(self, *args: Any, **kwargs: Any) -> Any:
+            nonlocal interleaved
+            if not interleaved:
+                interleaved = True
+                with real_session_cls(get_engine()) as other:
+                    concurrent = other.get(Scenario, scenario_id)
+                    assert concurrent is not None
+                    parsed = dict(concurrent.parsed_context or {})
+                    parsed["result_quality"] = {"verdict": "late concurrent verdict"}
+                    concurrent.parsed_context = parsed
+                    other.add(concurrent)
+                    other.commit()
+            return self._session.exec(*args, **kwargs)
+
+    monkeypatch.setattr(builder, "Session", InterleavingSession)
+
+    builder._persist_report_payload(scenario_id, payload)
+
+    with real_session_cls(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        parsed = scenario.parsed_context or {}
+
+    assert parsed["full_report"]["version"] == "1.0"
+    assert parsed["result_quality"]["verdict"] == "late concurrent verdict"
+
+
+@pytest.mark.parametrize(
+    ("raw_context", "expected_existing_verdict"),
+    [
+        (None, None),
+        (json.dumps("legacy context"), None),
+        (json.dumps(["legacy", "list"]), None),
+        (json.dumps(7), None),
+        ("", None),
+        (
+            json.dumps({"result_quality": {"verdict": "keep existing verdict"}}),
+            "keep existing verdict",
+        ),
+    ],
+)
+def test_persist_report_payload_recovers_non_object_raw_json_context(
+    raw_context: str | None,
+    expected_existing_verdict: str | None,
+):
+    from app.services.result_report import builder
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    _set_raw_parsed_context(scenario_id, raw_context)
+
+    builder._persist_report_payload(scenario_id, _legal_full_report())
+
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        parsed = scenario.parsed_context or {}
+
+    assert parsed["full_report"]["version"] == "1.0"
+    if expected_existing_verdict is not None:
+        assert parsed["result_quality"]["verdict"] == expected_existing_verdict
 
 
 @pytest.mark.asyncio
@@ -554,6 +691,68 @@ def test_report_generate_sse_endpoint_emits_progress_and_scrubs_byok(monkeypatch
     assert "api_key" not in body
     assert "Bearer " not in body
     validate_full_report_payload(_persisted_report(scenario_id))
+
+
+def test_report_generate_sse_endpoint_requires_completed_scenario(monkeypatch):
+    import app.api.scenarios as scenarios_api
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    with Session(get_engine()) as session:
+        scenario = session.get(Scenario, scenario_id)
+        assert scenario is not None
+        scenario.status = ScenarioStatus.SIMULATING
+        session.add(scenario)
+        session.commit()
+
+    stream_called = False
+
+    async def fake_report_stream(*_args: Any, **_kwargs: Any):
+        nonlocal stream_called
+        stream_called = True
+        yield "event: report_started\n\n"
+
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(builder, "build_report_sse_stream", fake_report_stream)
+    client = TestClient(app)
+
+    response = client.post(f"/api/scenario/{scenario_id}/report:generate")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "REPORT_SCENARIO_NOT_COMPLETE"
+    assert stream_called is False
+
+
+def test_report_generate_sse_endpoint_requires_completed_branch(monkeypatch):
+    import app.api.scenarios as scenarios_api
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    with Session(get_engine()) as session:
+        branches = session.exec(
+            select(Branch).where(Branch.scenario_id == scenario_id)
+        ).all()
+        for branch in branches:
+            branch.status = BranchStatus.ACTIVE
+            session.add(branch)
+        session.commit()
+
+    stream_called = False
+
+    async def fake_report_stream(*_args: Any, **_kwargs: Any):
+        nonlocal stream_called
+        stream_called = True
+        yield "event: report_started\n\n"
+
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(builder, "build_report_sse_stream", fake_report_stream)
+    client = TestClient(app)
+
+    response = client.post(f"/api/scenario/{scenario_id}/report:generate")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "REPORT_BRANCH_NOT_READY"
+    assert stream_called is False
 
 
 @pytest.mark.asyncio

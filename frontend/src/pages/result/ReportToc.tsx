@@ -1,3 +1,4 @@
+import React from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ReportSection } from '../../types';
 
@@ -5,8 +6,8 @@ interface Props {
   sections: ReportSection[];
 }
 
-export function ReportToc({ sections }: Props) {
-  const { i18n } = useTranslation();
+export const ReportToc = React.memo(function ReportToc({ sections }: Props) {
+  const { t, i18n } = useTranslation();
   const isZh = i18n.language.startsWith('zh');
 
   if (sections.length === 0) return null;
@@ -14,10 +15,10 @@ export function ReportToc({ sections }: Props) {
   return (
     <nav
       className="report-toc mb-8 p-4 bg-[color:var(--bg-hover)] rounded-lg border border-[color:var(--border-subtle)] forced-colors:border"
-      aria-label={isZh ? '目录' : 'Table of contents'}
+      aria-label={t('result.report.toc')}
     >
       <h3 className="text-sm font-semibold uppercase tracking-wider text-[color:var(--text-secondary)] mb-3">
-        {isZh ? '目录' : 'Table of Contents'}
+        {t('result.report.tocTitle')}
       </h3>
       <ul className="space-y-2">
         {sections.map((section, index) => (
@@ -34,4 +35,4 @@ export function ReportToc({ sections }: Props) {
       </ul>
     </nav>
   );
-}
+});

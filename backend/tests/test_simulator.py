@@ -2598,6 +2598,67 @@ class TestSaveNarration:
             assert result_quality["verdict"] == "总体判断是供应链风险最高。"
             assert result_quality["confidence"] == "medium"
 
+    @pytest.mark.parametrize(
+        "raw_context",
+        [
+            None,
+            json.dumps("legacy context"),
+            json.dumps(["legacy", "list"]),
+            json.dumps(7),
+            "",
+        ],
+    )
+    def test_persist_verdict_recovers_non_object_raw_json_context(self, raw_context):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        with engine.begin() as conn:
+            conn.execute(
+                text_stmt(
+                    "UPDATE scenario SET parsed_context = :raw WHERE id = :scenario_id",
+                ),
+                {"raw": raw_context, "scenario_id": sid},
+            )
+
+        _persist_result_quality_verdict(engine, sid, {
+            "verdict": "总体判断是供应链风险最高。",
+            "confidence": "high",
+            "question_answer": "供应链风险最高。",
+        })
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            assert scenario.parsed_context["result_quality"]["verdict"] == (
+                "总体判断是供应链风险最高。"
+            )
+            assert scenario.parsed_context["result_quality"]["confidence"] == "high"
+
+    def test_save_question_answer_escapes_branch_id_json_path_parts(self):
+        engine = get_engine()
+        sid = _make_scenario(engine)
+        branch_id = 'branch.with.$\\"quote'
+        with Session(engine) as session:
+            session.add(
+                Branch(
+                    id=branch_id,
+                    scenario_id=sid,
+                    title="special branch",
+                    status=BranchStatus.ACTIVE,
+                )
+            )
+            session.commit()
+
+        _save_narration(engine, branch_id, {
+            "story": "一个精彩的故事",
+            "insight": "深刻的启示",
+            "question_answer": "这条线说明风险会先集中在供应链。",
+        })
+
+        with Session(engine) as session:
+            scenario = session.get(Scenario, sid)
+            answers = scenario.parsed_context["result_quality"]["branch_question_answers"]
+
+        assert answers[branch_id] == "这条线说明风险会先集中在供应链。"
+
     def test_save_empty(self):
         engine = get_engine()
         sid = _make_scenario(engine)

@@ -38,6 +38,8 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
     previouslyFocusedRef.current =
       (container.ownerDocument?.activeElement as HTMLElement | null) ?? null;
 
+    const doc = container.ownerDocument || document;
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return;
       const focusable = getFocusable(container);
@@ -47,22 +49,34 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
       }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      const active2 = container.ownerDocument?.activeElement as HTMLElement | null;
+      const activeElement = doc.activeElement as HTMLElement | null;
+
+      if (!activeElement || !container.contains(activeElement)) {
+        event.preventDefault();
+        if (event.shiftKey) {
+          last.focus();
+        } else {
+          first.focus();
+        }
+        return;
+      }
 
       if (event.shiftKey) {
-        if (active2 === first || !container.contains(active2)) {
+        if (activeElement === first) {
           event.preventDefault();
           last.focus();
         }
-      } else if (active2 === last || !container.contains(active2)) {
-        event.preventDefault();
-        first.focus();
+      } else {
+        if (activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     };
 
-    container.addEventListener('keydown', handleKeyDown);
+    doc.addEventListener('keydown', handleKeyDown);
     return () => {
-      container.removeEventListener('keydown', handleKeyDown);
+      doc.removeEventListener('keydown', handleKeyDown);
       const previous = previouslyFocusedRef.current;
       if (previous && typeof previous.focus === 'function') {
         previous.focus();

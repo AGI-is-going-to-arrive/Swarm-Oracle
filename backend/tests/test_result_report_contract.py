@@ -255,6 +255,16 @@ def test_full_report_schema_accepts_nullable_dissenting_without_changing_field_s
     }
 
 
+def test_full_report_schema_rejects_section_refs_to_missing_evidence():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    payload["sections"][0]["evidence_refs"] = ["ev-missing"]
+
+    with pytest.raises(ValueError, match="section evidence_refs"):
+        validate_full_report_payload(payload)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [

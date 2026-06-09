@@ -12,6 +12,8 @@ from typing import Any
 import pytest
 from sqlmodel import Session
 
+import app.services.result_report.reducer as reducer_module
+from app.config import settings
 from app.models import (
     Agent,
     AgentMessage,
@@ -25,8 +27,6 @@ from app.models import (
     ScenarioStatus,
 )
 from app.models.database import get_engine
-from app.config import settings
-import app.services.result_report.reducer as reducer_module
 from app.services.result_report.reducer import (
     TARGET_BRANCH_SORT,
     _derive_likelihood,
@@ -46,7 +46,6 @@ def _seed_scenario() -> str:
             status=ScenarioStatus.DONE,
         )
         session.add(scenario)
-        scenario_id = scenario.id
         session.add_all(
             [
                 Agent(
@@ -268,6 +267,49 @@ def test_reduce_uses_fork_round_asc_when_probability_ties():
     ]
     assert result.dissenting is not None
     assert result.dissenting.runner_up_branch_id == "branch-late"
+
+
+def test_reduce_selects_target_after_probability_clamp():
+    engine = get_engine()
+    with Session(engine) as session:
+        scenario = Scenario(
+            id="scenario-clamped-probability",
+            question="Which clamped branch wins?",
+            status=ScenarioStatus.DONE,
+        )
+        session.add(scenario)
+        scenario_id = scenario.id
+        session.add_all(
+            [
+                Branch(
+                    id="branch-raw-over-one",
+                    scenario_id=scenario.id,
+                    title="Late over-one raw branch",
+                    probability=1.2,
+                    fork_round=4,
+                    status=BranchStatus.COMPLETED,
+                ),
+                Branch(
+                    id="branch-clamped-tie-earlier",
+                    scenario_id=scenario.id,
+                    title="Earlier clamped tie branch",
+                    probability=1.0,
+                    fork_round=1,
+                    status=BranchStatus.COMPLETED,
+                ),
+            ],
+        )
+        session.commit()
+
+    result = reduce(engine, scenario_id)
+
+    assert result.target_branch_id == "branch-clamped-tie-earlier"
+    assert result.likelihood.probability == 1.0
+    assert [item["branch_id"] for item in result.branch_distribution] == [
+        "branch-clamped-tie-earlier",
+        "branch-raw-over-one",
+    ]
+    assert result.branch_distribution[0]["dominant"] is True
 
 
 def test_reduce_computes_consensus_polarization_charts_and_participants():

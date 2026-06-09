@@ -636,6 +636,54 @@ class TestByokValidation:
         assert resp.status_code == 400
         assert resp.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
 
+    def test_scenario_userinfo_base_url_rejected(self, client):
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "llm_base_url": "https://user:pass@api.openai.com/v1",
+            "llm_api_key": "sk-test",
+        })
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://api.openai.com/v1?api_key=SECRET",
+            "https://api.openai.com/v1#fragment",
+            "https://api.openai.com/v1;param",
+        ],
+    )
+    def test_scenario_base_url_params_query_fragment_rejected(self, client, url):
+        resp = client.post("/api/scenario", json={
+            "question": "test?",
+            "llm_base_url": url,
+            "llm_api_key": "sk-test",
+        })
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
+
+    def test_report_generate_base_url_query_rejected(self, client):
+        engine = get_engine()
+        scenario_id = _seed_scenario(engine, status=ScenarioStatus.DONE)
+        _seed_branch(
+            engine,
+            scenario_id,
+            title="Dominant branch",
+            probability=0.9,
+            status=BranchStatus.COMPLETED,
+        )
+
+        resp = client.post(
+            f"/api/scenario/{scenario_id}/report:generate",
+            json={
+                "llm_base_url": "https://api.openai.com/v1?api_key=SECRET",
+                "llm_api_key": "sk-test",
+            },
+        )
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "LLM_BASE_URL_NOT_ALLOWED"
+
     def test_scenario_docker_host_accepted(self, client):
         """host.docker.internal must remain in allowlist."""
         resp = client.post("/api/scenario", json={
@@ -723,6 +771,122 @@ class TestReplayArtifactEndpoints:
                 "message": "Replay artifact not found",
             },
         }
+
+    def test_replay_artifact_create_and_read_sanitize_sensitive_payload(self, client):
+        scenario_id = _seed_scenario(get_engine(), status=ScenarioStatus.DONE)
+        dirty_payload = {
+            "scenario": {
+                "id": scenario_id,
+                "question": "Replay question",
+                "user_id": "owner-a",
+                "parsed_context": {
+                    "mode": "blackboard",
+                    "simulation_rounds": 3,
+                    "full_report": {"secret": "report"},
+                    "result_quality": {"verdict": "forged"},
+                    "llm_base_url": "https://user:pass@api.openai.com/v1",
+                    "api_key": "sk-artifact-secret",
+                    "owner_user_id": "owner-a",
+                },
+                "agents": [
+                    {
+                        "id": "agent-1",
+                        "name": "Archivist",
+                        "role": "Recorder",
+                        "persona": "private persona",
+                        "agent_identity_id": "identity-1",
+                    },
+                ],
+            },
+            "storyData": {
+                "scenario_id": scenario_id,
+                "question": "Replay question",
+                "full_report": {"secret": "report"},
+                "result_quality": {"verdict": "forged"},
+            },
+            "agents": [
+                {
+                    "id": "agent-1",
+                    "name": "Archivist",
+                    "role": "Recorder",
+                    "persona": "private persona",
+                    "agent_identity_id": "identity-1",
+                },
+            ],
+            "notes": "call Bearer abcdefghijk and sk-testleak123456",
+            "metadata": {
+                "memo": "base_url=https://user:pass@example.test/v1 token=abc123secret",
+            },
+            "api_key": "sk-artifact-secret",
+        }
+
+        create_resp = client.post(
+            "/api/replay-artifact",
+            json={"kind": "scenario_result_v1", "payload": dirty_payload},
+        )
+        assert create_resp.status_code == 200, create_resp.text
+        artifact_id = create_resp.json()["id"]
+
+        read_resp = client.get(f"/api/replay-artifact/{artifact_id}")
+        assert read_resp.status_code == 200
+        payload = read_resp.json()["payload"]
+        payload_text = json.dumps(payload, ensure_ascii=False)
+        assert payload["scenario"]["question"] == "Replay question"
+        assert payload["scenario"]["parsed_context"] == {
+            "mode": "blackboard",
+            "simulation_rounds": 3,
+        }
+        assert "full_report" not in payload_text
+        assert "result_quality" not in payload_text
+        assert "llm_base_url" not in payload_text
+        assert "api_key" not in payload_text
+        assert "user_id" not in payload_text
+        assert "owner_user_id" not in payload_text
+        assert "agent_identity_id" not in payload_text
+        assert "private persona" not in payload_text
+        assert "Bearer abcdefghijk" not in payload_text
+        assert "sk-testleak123456" not in payload_text
+        assert "user:pass@" not in payload_text
+        assert "token=abc123secret" not in payload_text
+
+    def test_get_replay_artifact_sanitizes_legacy_dirty_payload(self, client):
+        scenario_id = _seed_scenario(get_engine(), status=ScenarioStatus.DONE)
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            artifact = ReplayArtifact(
+                kind="scenario_result_v1",
+                owner_user_id=scenario.user_id,
+                source_scenario_id=scenario.id,
+                payload_json={
+                    "scenario": {
+                        "id": scenario.id,
+                        "question": "Replay question",
+                        "parsed_context": {
+                            "mode": "blackboard",
+                            "full_report": {"secret": "report"},
+                            "result_quality": {"verdict": "forged"},
+                        },
+                    },
+                    "api_key": "sk-legacy-secret",
+                    "notes": "Bearer legacytoken123456 and api_key=sk-legacy-inline",
+                },
+            )
+            session.add(artifact)
+            session.commit()
+            artifact_id = artifact.id
+
+        read_resp = client.get(f"/api/replay-artifact/{artifact_id}")
+
+        assert read_resp.status_code == 200
+        payload = read_resp.json()["payload"]
+        assert payload["scenario"]["parsed_context"] == {"mode": "blackboard"}
+        payload_text = json.dumps(payload, ensure_ascii=False)
+        assert "full_report" not in payload_text
+        assert "result_quality" not in payload_text
+        assert "api_key" not in payload_text
+        assert "Bearer legacytoken123456" not in payload_text
+        assert "sk-legacy-inline" not in payload_text
 
     def test_create_scenario_num_agents_below_min(self, client):
         """num_agents=2 should be rejected (below minimum 3)."""
@@ -1121,6 +1285,79 @@ class TestReplayArtifactEndpoints:
         assert data["branches"][0]["title"] == "Imported Branch"
         assert len(data["messages"]) == 1
         assert data["messages"][0]["message"] == "Imported message"
+
+    def test_import_replay_scenario_sanitizes_backend_owned_context(self, client):
+        resp = client.post("/api/scenario/import-replay", json={
+            "scenario": {
+                "id": "snapshot-scenario-1",
+                "question": "Imported replay question",
+                "status": "done",
+                "branches": [],
+                "messages": [
+                    {
+                        "agent": "Archivist",
+                        "message": "Imported message",
+                        "round": 4,
+                    },
+                ],
+                "parsed_context": {
+                    "mode": "blackboard",
+                    "hierarchical": False,
+                    "_language": "English",
+                    "simulation_rounds": 2,
+                    "full_report": {"version": "forged"},
+                    "result_quality": {"verdict": "forged"},
+                    "llm_base_url": "https://user:pass@api.openai.com/v1",
+                    "api_key": "sk-replay-secret",
+                    "user_id": "owner-a",
+                    "owner_user_id": "owner-a",
+                    "organization_id": "org-a",
+                },
+                "director_state": {
+                    "safe": "kept",
+                    "api_key": "sk-director-secret123",
+                    "note": "Bearer directorBearerToken123",
+                },
+                "gameplay_state": {
+                    "safe": {"memo": "base_url=https://user:pass@example.test/v1"},
+                    "token": "gameplay-token",
+                },
+                "agents": [
+                    {
+                        "id": "agent-1",
+                        "name": "Archivist",
+                        "role": "Recorder token=role-secret",
+                        "persona": "private persona sk-persona-secret123",
+                    },
+                ],
+            },
+        })
+
+        assert resp.status_code == 200
+        scenario_id = resp.json()["id"]
+        with Session(get_engine()) as session:
+            imported = session.get(Scenario, scenario_id)
+            assert imported is not None
+            parsed = imported.parsed_context
+            agent = session.exec(
+                select(Agent).where(Agent.scenario_id == scenario_id)
+            ).one()
+
+        assert parsed == {
+            "mode": "blackboard",
+            "hierarchical": False,
+            "_language": "English",
+            "simulation_rounds": 2,
+        }
+        assert imported.director_state_json == {
+            "safe": "kept",
+            "note": "[redacted-bearer]",
+        }
+        assert imported.gameplay_state_json == {
+            "safe": {"memo": "base_url=[redacted]"},
+        }
+        assert agent.persona == ""
+        assert "role-secret" not in agent.role
 
     def test_import_replay_scenario_rejects_excessive_agent_count(self, client):
         resp = client.post("/api/scenario/import-replay", json={

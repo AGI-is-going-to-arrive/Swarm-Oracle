@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from sqlalchemy import case, func, update
 from sqlmodel import Session, select
 
 from app.config import settings
@@ -331,11 +332,14 @@ async def _build_report_unlocked(
         failed=failed_sections,
         total=len(outline.sections),
     )
+    final_sections = completed_sections
+    if final_status == "failed" and not completed_sections and outline.sections:
+        final_sections = _outline_failure_placeholder_sections(outline)
     report = _assemble_report(
         context,
         reducer_result,
         outline,
-        sections=completed_sections,
+        sections=final_sections,
         status=final_status,
         tier=_worst_tier(section_tiers),
     )
@@ -898,6 +902,24 @@ def _static_section_from_context(
     return SectionBuildResult(section=report_section, tier="static", tool_trace=[])
 
 
+def _outline_failure_placeholder_sections(outline: ReportOutline) -> list[ReportSection]:
+    return [
+        ReportSection(
+            id=section.section_id,
+            title=section.title_i18n.get("en") or section.section_id,
+            title_i18n=I18nText.model_validate(section.title_i18n),
+            intent=section.intent,
+            body_md_i18n=I18nText(
+                zh="本章未能生成内容；保留该报告大纲位置以显示原计划结构。",
+                en="This section could not be generated; its outline placeholder is retained.",
+            ),
+            evidence_refs=[],
+            charts=[],
+        )
+        for section in outline.sections
+    ]
+
+
 def _assemble_report(
     context: BuilderContext,
     reducer_result: ReducerResult,
@@ -1337,6 +1359,7 @@ def _fit_report_to_byte_cap(report: FullReport) -> FullReport:
 
     for body_limit in (420, 220, 120):
         if utf8_json_size_bytes(payload) <= max_bytes:
+            _sync_payload_evidence_refs(payload)
             return validate_full_report_payload(payload, max_bytes=max_bytes)
         for section in payload.get("sections") or []:
             if isinstance(section, dict):
@@ -1348,8 +1371,35 @@ def _fit_report_to_byte_cap(report: FullReport) -> FullReport:
     while payload.get("sections") and utf8_json_size_bytes(payload) > max_bytes:
         payload["sections"].pop()
     if utf8_json_size_bytes(payload) > max_bytes:
-            payload["evidence"] = payload.get("evidence", [])[:1]
+        payload["evidence"] = payload.get("evidence", [])[:1]
+    _sync_payload_evidence_refs(payload)
     return validate_full_report_payload(payload, max_bytes=max_bytes)
+
+
+def _sync_payload_evidence_refs(payload: dict[str, Any]) -> None:
+    evidence_ids = {
+        str(item.get("id"))
+        for item in (payload.get("evidence") or [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    for section in payload.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        refs = section.get("evidence_refs")
+        section["evidence_refs"] = [
+            str(ref)
+            for ref in (refs if isinstance(refs, list) else [])
+            if str(ref) in evidence_ids
+        ]
+    for indicator in payload.get("indicators_to_watch") or []:
+        if not isinstance(indicator, dict):
+            continue
+        refs = indicator.get("evidence_refs")
+        indicator["evidence_refs"] = [
+            str(ref)
+            for ref in (refs if isinstance(refs, list) else [])
+            if str(ref) in evidence_ids
+        ]
 
 
 def _load_existing_full_report(scenario_id: str) -> FullReport | None:
@@ -1392,14 +1442,11 @@ def _persist_failed_report_if_absent(
 
         branch = _load_failed_report_branch(session, scenario_id, dominant_branch_id)
         payload = _failed_report_payload(scenario, parsed_context, branch, dominant_branch_id)
-        parsed_context["full_report"] = payload
-        scenario.parsed_context = parsed_context
-        session.add(scenario)
-        session.commit()
-        return validate_full_report_payload(
-            payload,
-            max_bytes=max(settings.REPORT_FULL_REPORT_MAX_BYTES, 1),
-        )
+    _persist_report_payload(scenario_id, payload)
+    return validate_full_report_payload(
+        payload,
+        max_bytes=max(settings.REPORT_FULL_REPORT_MAX_BYTES, 1),
+    )
 
 
 def _load_failed_report_branch(
@@ -1502,23 +1549,38 @@ def _clamp_probability(value: float | int | None) -> float:
     return min(1.0, max(0.0, probability))
 
 
+def _json_object_or_empty_expr():
+    return case(
+        (
+            func.json_valid(Scenario.parsed_context) == 1,
+            case(
+                (func.json_type(Scenario.parsed_context) == "object", Scenario.parsed_context),
+                else_=func.json("{}"),
+            ),
+        ),
+        else_=func.json("{}"),
+    )
+
+
 def _persist_report_payload(scenario_id: str, payload: dict[str, Any]) -> None:
     validate_full_report_payload(
         payload,
         max_bytes=max(settings.REPORT_FULL_REPORT_MAX_BYTES, 1),
     )
     with Session(get_engine()) as session:
-        scenario = session.get(Scenario, scenario_id)
-        if scenario is None:
-            raise ResultReportBuilderError("Scenario not found while persisting report")
-        parsed_context = (
-            dict(scenario.parsed_context)
-            if isinstance(scenario.parsed_context, dict)
-            else {}
+        result = session.exec(
+            update(Scenario)
+            .where(Scenario.id == scenario_id)
+            .values(
+                parsed_context=func.json_set(
+                    _json_object_or_empty_expr(),
+                    "$.full_report",
+                    func.json(json.dumps(payload, ensure_ascii=False)),
+                )
+            )
         )
-        parsed_context["full_report"] = payload
-        scenario.parsed_context = parsed_context
-        session.add(scenario)
+        if getattr(result, "rowcount", 1) == 0:
+            raise ResultReportBuilderError("Scenario not found while persisting report")
         session.commit()
 
 

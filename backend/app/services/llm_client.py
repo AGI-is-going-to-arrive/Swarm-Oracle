@@ -56,6 +56,20 @@ def _is_local_base_url_hostname(hostname: str | None) -> bool:
     return (hostname or "").strip().lower() in _LOCAL_LLM_HOSTS
 
 
+def _normalize_url_hostname(hostname: str | None) -> str | None:
+    if not hostname:
+        return None
+    try:
+        return hostname.strip().encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        return None
+
+
+def _netloc_without_userinfo(hostname: str, port: int | None) -> str:
+    host = f"[{hostname}]" if ":" in hostname and not hostname.startswith("[") else hostname
+    return f"{host}:{port}" if port is not None else host
+
+
 def validate_llm_base_url(url: str | None) -> str | None:
     """Validate that a BYOK llm_base_url is in the allowlist.
 
@@ -65,15 +79,24 @@ def validate_llm_base_url(url: str | None) -> str | None:
     if not url:
         return None
     try:
-        parsed = urlparse(url)
-        _ = parsed.port
+        parsed = urlparse(url.strip())
+        port = parsed.port
         scheme = (parsed.scheme or "").lower()
         if scheme not in _ALLOWED_URL_SCHEMES:
             logger.warning(
                 "BYOK base_url rejected: scheme=%s not in %s", scheme, _ALLOWED_URL_SCHEMES
             )
             return None
-        hostname = (parsed.hostname or "").lower()
+        if parsed.username is not None or parsed.password is not None:
+            logger.warning("BYOK base_url rejected: URL userinfo is not allowed")
+            return None
+        if parsed.params or parsed.query or parsed.fragment:
+            logger.warning("BYOK base_url rejected: params, query, and fragment are not allowed")
+            return None
+        hostname = _normalize_url_hostname(parsed.hostname)
+        if not hostname:
+            logger.warning("BYOK base_url rejected: hostname is missing or invalid")
+            return None
         if hostname not in _LLM_URL_ALLOWLIST:
             logger.warning(
                 "BYOK base_url rejected by allowlist: hostname=%s", hostname
@@ -85,7 +108,12 @@ def validate_llm_base_url(url: str | None) -> str | None:
                 hostname,
             )
             return None
-        return url
+        return urlunparse(
+            parsed._replace(
+                scheme=scheme,
+                netloc=_netloc_without_userinfo(hostname, port),
+            )
+        )
     except Exception:
         return None
 
@@ -121,12 +149,16 @@ def _resolve_llm_api_url(url: str | None = None) -> str:
     parsed = urlparse(target_url)
     normalized_path = parsed.path.rstrip("/")
     if normalized_path.endswith("/chat/completions") or normalized_path.endswith("/responses"):
-        return urlunparse(parsed._replace(path=normalized_path))
+        return urlunparse(
+            parsed._replace(path=normalized_path, params="", query="", fragment="")
+        )
 
     resolved_path = (
         f"{normalized_path}/chat/completions" if normalized_path else "/chat/completions"
     )
-    return urlunparse(parsed._replace(path=resolved_path))
+    return urlunparse(
+        parsed._replace(path=resolved_path, params="", query="", fragment="")
+    )
 
 
 def _is_chat_completions_api(url: str | None = None) -> bool:

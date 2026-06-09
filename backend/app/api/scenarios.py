@@ -43,6 +43,7 @@ from app.api.schemas import (
     TestLlmRequest,
 )
 from app.config import settings
+from app.log_sanitize import _scrub_sensitive_text
 from app.models import (
     Agent,
     AgentConversationThread,
@@ -103,6 +104,39 @@ MAX_IMPORT_REPLAY_SCENARIO_BRANCHES = 256
 MAX_IMPORT_REPLAY_SCENARIO_MESSAGES = 5_000
 MAX_REPLAY_ARTIFACT_BYTES = 2_000_000
 _RESULT_VERDICT_CONFIDENCE_VALUES = {"high", "medium", "low"}
+_REPLAY_SAFE_PARSED_CONTEXT_KEYS = frozenset(
+    {
+        "_language",
+        "hierarchical",
+        "mode",
+        "simulation_rounds",
+    }
+)
+_REPLAY_SENSITIVE_NORMALIZED_KEYS = frozenset(
+    {
+        "agentidentityid",
+        "apikey",
+        "authorization",
+        "baseurl",
+        "bearer",
+        "fullreport",
+        "llmapikey",
+        "llmbaseurl",
+        "organizationid",
+        "orgid",
+        "owneruserid",
+        "password",
+        "passwd",
+        "persona",
+        "resultquality",
+        "secret",
+        "token",
+        "userid",
+        "websearchapikey",
+        "websearchbaseurl",
+        "xapikey",
+    }
+)
 
 
 def _normalize_result_verdict_confidence(value: object) -> str | None:
@@ -110,6 +144,72 @@ def _normalize_result_verdict_confidence(value: object) -> str | None:
         return "medium"
     confidence = str(value).strip().lower()
     return confidence if confidence in _RESULT_VERDICT_CONFIDENCE_VALUES else "medium"
+
+
+def _normalized_replay_key(key: Any) -> str:
+    return str(key).strip().lower().replace("_", "").replace("-", "")
+
+
+def _is_replay_sensitive_key(key: Any) -> bool:
+    normalized = _normalized_replay_key(key)
+    return normalized in _REPLAY_SENSITIVE_NORMALIZED_KEYS or normalized.endswith(
+        (
+            "apikey",
+            "baseurl",
+            "token",
+            "secret",
+            "password",
+            "passwd",
+            "authorization",
+        )
+    )
+
+
+_REPLAY_SECRET_ASSIGNMENT_RE = re.compile(
+    r"\b(?P<name>(?:(?:llm|web[_-]?search)[_-]?)?(?:api[_-]?key|base[_-]?url)"
+    r"|authorization|password|passwd|token|secret)\b\s*[:=]\s*[\"']?[^\"'\s,;)}\]]+",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_replay_text(value: Any) -> str:
+    text = str(value)
+    text = _REPLAY_SECRET_ASSIGNMENT_RE.sub(
+        lambda match: f"{match.group('name')}=[redacted]",
+        text,
+    )
+    return _scrub_sensitive_text(text)
+
+
+def _sanitize_replay_parsed_context(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    sanitized: dict[str, Any] = {}
+    for key, item in value.items():
+        if key not in _REPLAY_SAFE_PARSED_CONTEXT_KEYS:
+            continue
+        sanitized[key] = _sanitize_replay_payload(item)
+    return sanitized
+
+
+def _sanitize_replay_payload(value: Any, *, key: str | None = None) -> Any:
+    if key == "parsed_context":
+        return _sanitize_replay_parsed_context(value)
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for item_key, item_value in value.items():
+            if _is_replay_sensitive_key(item_key):
+                continue
+            sanitized[item_key] = _sanitize_replay_payload(
+                item_value,
+                key=str(item_key),
+            )
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_replay_payload(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_replay_text(value)
+    return value
 
 
 class ImportReplayScenarioRequest(BaseModel):
@@ -1017,14 +1117,16 @@ async def import_replay_scenario(
 ):
     """Persist a replay snapshot as a real local scenario run."""
     snapshot = req.scenario if isinstance(req.scenario, dict) else {}
-    question = str(snapshot.get("question", "")).strip()
+    question = _sanitize_replay_text(snapshot.get("question", "")).strip()
     if not question:
         raise api_error(422, "REPLAY_SCENARIO_QUESTION_MISSING", "Replay snapshot is missing question")  # noqa: E501
     if len(question) > 500:
         raise api_error(422, "REPLAY_SCENARIO_QUESTION_TOO_LONG", "Replay snapshot question too long")  # noqa: E501
 
     engine = get_engine()
-    parsed_context = snapshot.get("parsed_context") if isinstance(snapshot.get("parsed_context"), dict) else {}  # noqa: E501
+    parsed_context = _sanitize_replay_parsed_context(snapshot.get("parsed_context"))
+    director_state = snapshot.get("director_state")
+    gameplay_state = snapshot.get("gameplay_state")
     groups = snapshot.get("groups") if isinstance(snapshot.get("groups"), list) else []
     agents = snapshot.get("agents") if isinstance(snapshot.get("agents"), list) else []
     branches = snapshot.get("branches") if isinstance(snapshot.get("branches"), list) else []
@@ -1054,12 +1156,17 @@ async def import_replay_scenario(
         scenario = Scenario(
             question=question,
             parsed_context=parsed_context or None,
-            director_state_json=snapshot.get("director_state") if isinstance(snapshot.get("director_state"), dict) else None,  # noqa: E501
-            gameplay_state_json=snapshot.get("gameplay_state") if isinstance(snapshot.get("gameplay_state"), dict) else None,  # noqa: E501
+            director_state_json=_sanitize_replay_payload(director_state)
+            if isinstance(director_state, dict)
+            else None,
+            gameplay_state_json=_sanitize_replay_payload(gameplay_state)
+            if isinstance(gameplay_state, dict)
+            else None,
             status=_coerce_scenario_status(snapshot.get("status")),
             user_id=effective_user_id,
             visualization_enabled=bool(snapshot.get("visualization_enabled")),
-            scene_theme=str(snapshot.get("scene_theme", "")).strip() or None,
+            scene_theme=_sanitize_replay_text(snapshot.get("scene_theme", "")).strip()
+            or None,
         )
         session.add(scenario)
         session.flush()
@@ -1072,7 +1179,8 @@ async def import_replay_scenario(
             original_group_id = str(raw_group.get("id", "")).strip()
             group = AgentGroup(
                 scenario_id=scenario.id,
-                name=str(raw_group.get("name", "")).strip() or "Imported Group",
+                name=_sanitize_replay_text(raw_group.get("name", "")).strip()
+                or "Imported Group",
                 parent_group_id=None,
                 leader_agent_id=None,
                 member_count=_coerce_int(raw_group.get("member_count"), 0, minimum=0),
@@ -1092,12 +1200,14 @@ async def import_replay_scenario(
             group_id = str(raw_agent.get("group_id", "")).strip()
             agent = Agent(
                 scenario_id=scenario.id,
-                name=str(raw_agent.get("name", "")).strip() or "Imported Agent",
-                role=str(raw_agent.get("role", "")).strip(),
-                persona=str(raw_agent.get("persona", "")).strip(),
+                name=_sanitize_replay_text(raw_agent.get("name", "")).strip()
+                or "Imported Agent",
+                role=_sanitize_replay_text(raw_agent.get("role", "")).strip(),
+                persona="",
                 tier=_coerce_agent_tier(raw_agent.get("tier")),
-                stance=str(raw_agent.get("stance", "")).strip(),
-                emotion=str(raw_agent.get("emotion", "")).strip() or "neutral",
+                stance=_sanitize_replay_text(raw_agent.get("stance", "")).strip(),
+                emotion=_sanitize_replay_text(raw_agent.get("emotion", "")).strip()
+                or "neutral",
                 group_id=group_id_map.get(group_id) if group_id else None,
             )
             session.add(agent)
@@ -1121,12 +1231,13 @@ async def import_replay_scenario(
                 scenario_id=scenario.id,
                 parent_branch_id=None,
                 fork_round=_coerce_int(raw_branch.get("fork_round"), 0, minimum=0),
-                fork_reason=str(raw_branch.get("fork_reason", "")).strip(),
-                title=str(raw_branch.get("title", "")).strip() or "Imported Branch",
-                description=str(raw_branch.get("description", "")).strip(),
-                summary=str(raw_branch.get("summary", "")).strip(),
-                story=str(raw_branch.get("story", "")).strip(),
-                insight=str(raw_branch.get("insight", "")).strip(),
+                fork_reason=_sanitize_replay_text(raw_branch.get("fork_reason", "")).strip(),
+                title=_sanitize_replay_text(raw_branch.get("title", "")).strip()
+                or "Imported Branch",
+                description=_sanitize_replay_text(raw_branch.get("description", "")).strip(),
+                summary=_sanitize_replay_text(raw_branch.get("summary", "")).strip(),
+                story=_sanitize_replay_text(raw_branch.get("story", "")).strip(),
+                insight=_sanitize_replay_text(raw_branch.get("insight", "")).strip(),
                 probability=float(raw_branch.get("probability", 1.0) or 1.0),
                 status=_coerce_branch_status(raw_branch.get("status")),
             )
@@ -1192,8 +1303,9 @@ async def import_replay_scenario(
                 AgentMessage(
                     round_id=round_id,
                     agent_id=mapped_agent_id,
-                    content=str(raw_message.get("message", "")).strip(),
-                    emotion=str(raw_message.get("emotion", "")).strip() or "neutral",
+                    content=_sanitize_replay_text(raw_message.get("message", "")).strip(),
+                    emotion=_sanitize_replay_text(raw_message.get("emotion", "")).strip()
+                    or "neutral",
                 )
             )
 
@@ -1215,7 +1327,8 @@ async def create_replay_artifact(
         raise api_error(422, "REPLAY_ARTIFACT_KIND_REQUIRED", "Replay artifact kind is required")
 
     try:
-        encoded_payload = json.dumps(req.payload, ensure_ascii=False, separators=(",", ":"))
+        sanitized_payload = _sanitize_replay_payload(req.payload)
+        encoded_payload = json.dumps(sanitized_payload, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError) as exc:
         raise api_error(
             422,
@@ -1227,7 +1340,10 @@ async def create_replay_artifact(
     if payload_size > MAX_REPLAY_ARTIFACT_BYTES:
         raise api_error(413, "REPLAY_ARTIFACT_PAYLOAD_TOO_LARGE", "Replay artifact payload too large")  # noqa: E501
 
-    source_scenario_id = _resolve_replay_artifact_source_scenario_id(kind, req.payload)
+    source_scenario_id = _resolve_replay_artifact_source_scenario_id(
+        kind,
+        sanitized_payload,
+    )
     if not source_scenario_id:
         raise api_error(
             422,
@@ -1242,7 +1358,7 @@ async def create_replay_artifact(
             kind=kind,
             owner_user_id=scenario.user_id,
             source_scenario_id=scenario.id,
-            payload_json=req.payload,
+            payload_json=sanitized_payload,
         )
         session.add(artifact)
         session.commit()
@@ -1264,7 +1380,7 @@ async def get_replay_artifact(artifact_id: str):
         return {
             "id": artifact.id,
             "kind": artifact.kind,
-            "payload": artifact.payload_json,
+            "payload": _sanitize_replay_payload(artifact.payload_json),
             "created_at": artifact.created_at.isoformat(),
         }
 
@@ -1567,7 +1683,22 @@ async def generate_result_report(
 
     engine = get_engine()
     with Session(engine) as session:
-        require_owned_scenario(session, scenario_id, principal)
+        scenario = require_owned_scenario(session, scenario_id, principal)
+        if scenario.status != ScenarioStatus.DONE:
+            raise api_error(
+                409,
+                "REPORT_SCENARIO_NOT_COMPLETE",
+                "Scenario must be completed before report generation",
+            )
+        dominant_branch = session.exec(
+            select(Branch)
+            .where(
+                Branch.scenario_id == scenario_id,
+                Branch.status == BranchStatus.COMPLETED,
+            )
+            .order_by(Branch.probability.desc(), Branch.fork_round.asc(), Branch.id.asc())
+        ).first()
+        dominant_branch_id = dominant_branch.id if dominant_branch is not None else None
 
     request_body = req or ResultReportGenerateRequest()
     validated_base_url = validate_llm_base_url(request_body.llm_base_url)
@@ -1584,7 +1715,6 @@ async def generate_result_report(
             "An API key is required when using a custom LLM base URL",
         )
 
-    dominant_branch_id = result_report_builder.resolve_dominant_branch_id(scenario_id)
     if dominant_branch_id is None:
         raise api_error(
             409,

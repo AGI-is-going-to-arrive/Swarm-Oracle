@@ -217,6 +217,6 @@ Entry: configure `FEATURE_FAMILY_QUERY_OPTIMIZATION=true`, then use the home-pag
 This is backend search behavior and has no separate UI or standalone screenshot.
 
 ### F41 Result Deep-read Report
-**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The result page shows a deep-read report entry with sectioned conclusions, evidence coordinates, and uncertainty notes. The report can also be opened at `/result/:id/report`; generation and retry use `report:generate`, and failures do not block the original result page.
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The result page shows a deep-read report entry with sectioned conclusions, evidence coordinates, and uncertainty notes. The evidence drawer can jump back to the cited replay message; the report can also be opened at `/result/:id/report`. Generation and retry use `report:generate` over HTTP SSE, and failed, partial, or byte-truncated reports show readable states without blocking the original result page.
 Entry: `/result/:id` -> deep-read report; standalone page `/result/:id/report`
 The screenshot package does not include a standalone deep-read report image yet; the entry follows the result-page capability flag.

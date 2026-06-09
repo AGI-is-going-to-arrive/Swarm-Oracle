@@ -27,6 +27,8 @@ SwarmOracle works with any OpenAI-compatible API, including OpenAI, compatible g
 
 Optional LLM tuning usually does not need changes: `LLM_REASONING_EFFORT` (`none/low/medium/high`), `LLM_REQUESTS_PER_MINUTE`, `LLM_TOKENS_PER_MINUTE` (`0` means unlimited), and `LLM_CONCURRENCY`.
 
+Custom LLM base URLs are limited to allowed hosts: hosted providers require `https`, local development hosts may use `http`, and URLs with `user:pass@host`, query strings, fragments, or path parameters are rejected. If a business request sends `llm_base_url`, send the API key separately instead of putting it in the URL.
+
 ---
 
 ## 2. Feature Flags
@@ -60,7 +62,7 @@ On narrow screens, the graph workbench collapses Split view into a single graph 
 
 These backend-internal or experimental flags remain off by default and are not ordinary user entries: `FEATURE_ROUNDTABLE_INSIGHT_LLM`, `FEATURE_HALLUCINATION_GATE`, and `FEATURE_IDENTITY_COMPACTION`.
 
-`FEATURE_RESULT_REPORT` is on by default. When enabled, the result page shows the deep-read report entry, the backend stores the report in `Scenario.parsed_context.full_report`, and `POST /api/scenario/{id}/report:generate` can generate or retry it. Section count, per-section tool-call cap, timeouts, evidence excerpt length, and the full-report byte cap are controlled by the `REPORT_*` settings in `.env.example`; set it to `false` and restart the backend if you need the plain verdict + story result page.
+`FEATURE_RESULT_REPORT` is on by default. When enabled, the result page shows the deep-read report entry, the backend stores the report in `Scenario.parsed_context.full_report`, and `POST /api/scenario/{id}/report:generate` generates or retries it over HTTP SSE. Report evidence keeps round / branch / agent / message coordinates so the evidence drawer can jump back into replay; failed, partial, and byte-truncated reports have visible states and do not block the original result page. Section count, per-section tool-call cap, timeouts, evidence excerpt length, and the full-report byte cap are controlled by the `REPORT_*` settings in `.env.example`; set it to `false` and restart the backend if you need the plain verdict + story result page.
 
 > Restart the backend after changing feature flags. The frontend reads `/api/capabilities` and hides disabled entries or shows unavailable states instead of failing.
 

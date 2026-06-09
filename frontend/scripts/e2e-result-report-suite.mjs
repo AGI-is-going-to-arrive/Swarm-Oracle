@@ -404,6 +404,14 @@ async function installFixtures(page, state, report, options = {}) {
     contentType: "application/json",
     body: JSON.stringify(body),
   });
+  const recordDisabledScenarioRequest = (route) => {
+    const requestUrl = new URL(route.request().url());
+    state.disabledScenarioApiRequests.push({
+      method: route.request().method(),
+      path: requestUrl.pathname,
+    });
+    return route.fulfill(json({ detail: "Scenario API disabled by fixture" }, 500));
+  };
 
   await page.route((url) => url.pathname.startsWith("/api/"), (route) => {
     state.unhandledApiRequests.push({
@@ -417,9 +425,12 @@ async function installFixtures(page, state, report, options = {}) {
   await page.route("**/api/capabilities", (route) => (
     route.fulfill(json(capabilityBody, capabilityStatus))
   ));
-  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/story`, (route) => (
-    route.fulfill(json(storyWithReport(report)))
-  ));
+  await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/story`, (route) => {
+    if (options.forbidScenarioDataFetch) {
+      return recordDisabledScenarioRequest(route);
+    }
+    return route.fulfill(json(storyWithReport(report)));
+  });
   await page.route(`**/api/scenario/${FIXTURE_SCENARIO_ID}/replay-trace**`, (route) => (
     route.fulfill(json(REPLAY_TRACE_FIXTURE))
   ));
@@ -430,6 +441,9 @@ async function installFixtures(page, state, report, options = {}) {
     const url = route.request().url();
     if (/\/(story|agents|predictions|checkpoints|faction-timeline|export|social|report)(?:[/?]|$)/u.test(url)) {
       return route.fallback();
+    }
+    if (options.forbidScenarioDataFetch) {
+      return recordDisabledScenarioRequest(route);
     }
     return route.fulfill(json(SCENARIO_FIXTURE));
   });
@@ -538,6 +552,21 @@ async function runForcedColorsReducedMotionSmoke(page, steps) {
   await page.emulateMedia({ forcedColors: "none", reducedMotion: "no-preference" }).catch(() => {});
 }
 
+async function assertNoHorizontalOverflow(page, steps, label) {
+  const metrics = await page.evaluate(() => ({
+    documentScrollWidth: document.documentElement.scrollWidth,
+    documentClientWidth: document.documentElement.clientWidth,
+    bodyScrollWidth: document.body.scrollWidth,
+    windowInnerWidth: window.innerWidth,
+  }));
+  steps.push(createStep(
+    `no-horizontal-overflow-${label}`,
+    metrics.documentScrollWidth <= metrics.documentClientWidth + 1
+      && metrics.bodyScrollWidth <= metrics.windowInnerWidth + 1,
+    metrics,
+  ));
+}
+
 // ── One surface run ───────────────────────────────────────────
 
 async function runResultReportSurface({ mode, browserName, contextOptions, args }) {
@@ -550,6 +579,7 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
   const state = {
     apiRequests: [],
     unhandledApiRequests: [],
+    disabledScenarioApiRequests: [],
     consoleErrors: [],
     pageErrors: [],
     requestFailures: [],
@@ -587,6 +617,7 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
       await page.locator(".report-panel-container").first().waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
 
       await assertReportRenders(page, steps, isZh);
+      await assertNoHorizontalOverflow(page, steps, `${mode}-${locale}`);
       writeJson(path.join(outputDir, `report-${locale}.json`), { locale, url: page.url() });
       await saveScreenshot(page, path.join(outputDir, `report-${locale}.png`));
 
@@ -663,14 +694,32 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
       page = await context.newPage();
       const disabledCapabilities = capabilitiesFixture();
       disabledCapabilities.result_report = { ...disabledCapabilities.result_report, enabled: false };
-      await installFixtures(page, state, reportFixture("complete"), { capabilities: disabledCapabilities });
+      const disabledScenarioStart = state.disabledScenarioApiRequests.length;
+      await installFixtures(page, state, reportFixture("complete"), {
+        capabilities: disabledCapabilities,
+        forbidScenarioDataFetch: true,
+      });
       await page.goto(`${args.baseUrl}/result/${FIXTURE_SCENARIO_ID}/report`, { waitUntil: "domcontentloaded" });
-      await page.getByRole("heading", { name: /Deep-Read Report/i }).first().waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
       const disabledPanel = page.locator(".report-panel-container").first();
-      await disabledPanel.waitFor({ state: "hidden", timeout: 10000 }).catch(() => {});
+      await disabledPanel.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+
+      const sectionHeading = page.getByRole("heading", { name: /Key Drivers/ }).first();
+      const confidenceBadge = page.locator(".report-confidence-badge").first();
+      const featureNotEnabledHeader = page.getByRole("heading", { name: /Feature Not Enabled/i }).first();
+      const backToOverviewButton = page.getByRole("button", { name: /Back to Result Overview/i }).first();
+
+      const contentAbsent = !(await sectionHeading.isVisible().catch(() => false)) && !(await confidenceBadge.isVisible().catch(() => false));
+      const unavailableSurfaceVisible = await featureNotEnabledHeader.isVisible().catch(() => false) || await backToOverviewButton.isVisible().catch(() => false);
+
       steps.push(createStep(
-        "capability-disabled-hides-report-panel",
-        !(await disabledPanel.isVisible().catch(() => false)),
+        "capability-disabled-shows-unavailable-surface",
+        contentAbsent && unavailableSurfaceVisible,
+      ));
+      const disabledScenarioRequests = state.disabledScenarioApiRequests.slice(disabledScenarioStart);
+      steps.push(createStep(
+        "capability-disabled-does-not-fetch-scenario",
+        disabledScenarioRequests.length === 0,
+        disabledScenarioRequests,
       ));
       await page.close().catch(() => {});
       await context.close().catch(() => {});
