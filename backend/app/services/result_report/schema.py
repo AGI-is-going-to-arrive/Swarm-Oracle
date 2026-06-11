@@ -15,7 +15,9 @@ ReportTier = Literal["generation", "rewrite", "static"]
 ConfidenceLevel = Literal["high", "medium", "low"]
 EvidenceKind = Literal["utterance", "causal_fact", "faction_event", "interview"]
 IndicatorDirection = Literal["up", "down"]
-ChartKind = Literal["faction_share", "probability_bar"]
+ChartStatus = Literal["available", "partial", "missing"]
+KnownChartType = Literal["probability_bar", "faction_share"]
+KNOWN_CHART_TYPES: tuple[KnownChartType, ...] = ("probability_bar", "faction_share")
 LanguageAvailability = Literal["available", "missing"]
 ResultReportSSEName = Literal[
     "report_started",
@@ -121,9 +123,110 @@ class Verdict(_StrictModel):
     disclaimer: str | None = None
 
 
+class ProbabilityBarBranch(_StrictModel):
+    branch_id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    probability: float = Field(ge=0.0, le=1.0)
+    dominant: bool
+    status: str = Field(min_length=1)
+
+
+class ProbabilityBarData(_StrictModel):
+    status: ChartStatus
+    reason: str | None = None
+    sort: list[str] = Field(default_factory=list)
+    branches: list[ProbabilityBarBranch] = Field(default_factory=list)
+
+
+class FactionShareItem(_StrictModel):
+    faction_key: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    member_count: int = Field(ge=0)
+    share: float = Field(ge=0.0, le=1.0)
+    stance_center: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class FactionShareData(_StrictModel):
+    status: ChartStatus
+    reason: str | None = None
+    factions: list[FactionShareItem] = Field(default_factory=list)
+    relation_edge_count: int = Field(default=0, ge=0)
+    avg_opposition: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
 class Chart(_StrictModel):
-    kind: ChartKind
+    kind: str = Field(
+        min_length=1,
+        description="Legacy chart discriminator. Mirrors type for compatibility.",
+    )
+    type: str = Field(
+        min_length=1,
+        description=(
+            "Stable chart discriminator. Known values are probability_bar and "
+            "faction_share; unrecognized values are passed through for frontend fallback."
+        ),
+    )
     data: dict[str, Any]
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_discriminator(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        chart_kind = str(normalized.get("kind") or "").strip()
+        chart_type = str(normalized.get("type") or chart_kind).strip()
+        if not chart_kind and chart_type:
+            normalized["kind"] = chart_type
+        if chart_type:
+            normalized["type"] = chart_type
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_known_chart_data(self) -> "Chart":
+        if self.kind != self.type:
+            raise ValueError("chart kind and type must match")
+        model = _CHART_DATA_MODELS.get(self.type)
+        if model is None:
+            return self
+        normalized = _normalize_legacy_chart_data(self.type, self.data)
+        self.data = model.model_validate(normalized).model_dump(mode="json")
+        return self
+
+
+_CHART_DATA_MODELS: dict[str, type[BaseModel]] = {
+    "probability_bar": ProbabilityBarData,
+    "faction_share": FactionShareData,
+}
+
+
+def _normalize_legacy_chart_data(chart_type: str, data: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(data)
+    if chart_type == "probability_bar":
+        if "branches" not in normalized and "branch_id" in normalized:
+            branch_id = str(normalized.get("branch_id") or "").strip()
+            normalized = {
+                "status": normalized.get("status") or "available",
+                "sort": normalized.get("sort") or [],
+                "branches": [
+                    {
+                        "branch_id": branch_id,
+                        "label": str(normalized.get("label") or branch_id).strip(),
+                        "probability": normalized.get("probability", 0.0),
+                        "dominant": normalized.get("dominant", True),
+                        "status": str(normalized.get("status") or "unknown").strip(),
+                    }
+                ],
+            }
+        normalized.setdefault("sort", [])
+        normalized.setdefault("branches", [])
+        return normalized
+    if chart_type == "faction_share":
+        normalized.setdefault("factions", [])
+        normalized.setdefault("relation_edge_count", 0)
+        normalized.setdefault("avg_opposition", None)
+    return normalized
 
 
 class ReportSection(_StrictModel):

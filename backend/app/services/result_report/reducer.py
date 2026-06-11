@@ -153,6 +153,7 @@ def reduce_branch_distribution(branches: list[Branch]) -> list[dict[str, Any]]:
     return [
         {
             "branch_id": branch.id,
+            "label": branch.title.strip() or branch.id,
             "probability": _clamp_probability(branch.probability),
             "fork_round": branch.fork_round,
             "dominant": index == 0,
@@ -464,8 +465,8 @@ def _missing_result(reason: str) -> ReducerResult:
         key_participants=[],
         dissenting=None,
         charts=[
-            Chart(kind="probability_bar", data={"status": "missing", "reason": reason}),
-            Chart(kind="faction_share", data={"status": "missing", "reason": reason}),
+            Chart(kind="probability_bar", data=_empty_probability_bar_data(reason)),
+            Chart(kind="faction_share", data=_empty_faction_share_data(reason)),
         ],
         faction_consensus=StatResult(status="missing", value=None, reason=reason),
         polarization=StatResult(status="missing", value=None, reason=reason),
@@ -489,13 +490,14 @@ def _derive_likelihood(probability: float, branch_count: int) -> Likelihood:
 
 def _probability_bar_data(branch_distribution: list[dict[str, Any]]) -> dict[str, Any]:
     if not branch_distribution:
-        return {"status": "missing", "reason": "no_branches", "branches": []}
+        return _empty_probability_bar_data("no_branches")
     return {
         "status": "available",
         "sort": list(TARGET_BRANCH_SORT),
         "branches": [
             {
                 "branch_id": item["branch_id"],
+                "label": item["label"],
                 "probability": item["probability"],
                 "dominant": item["dominant"],
                 "status": item["status"],
@@ -510,16 +512,22 @@ def _faction_share_data(
     relation_stats: LatestRelationStats,
 ) -> dict[str, Any]:
     if not settings.FEATURE_FACTIONS:
-        return {"status": "missing", "reason": "feature_disabled", "factions": []}
+        return _empty_faction_share_data("feature_disabled")
     if not snapshots:
-        return {"status": "missing", "reason": "no_faction_snapshots", "factions": []}
+        return _empty_faction_share_data(
+            "no_faction_snapshots",
+            relation_stats=relation_stats,
+        )
 
     total_members = sum(
         max(0, len(_parse_json_list(snap.member_agent_ids_json)))
         for snap in snapshots
     )
     if total_members <= 0:
-        return {"status": "missing", "reason": "empty_faction_membership", "factions": []}
+        return _empty_faction_share_data(
+            "empty_faction_membership",
+            relation_stats=relation_stats,
+        )
 
     factions = [
         {
@@ -547,6 +555,33 @@ def _faction_share_data(
     if relation_stats.count <= 0:
         payload["reason"] = "relation_edges_missing"
     return payload
+
+
+def _empty_probability_bar_data(reason: str) -> dict[str, Any]:
+    return {
+        "status": "missing",
+        "reason": reason,
+        "sort": list(TARGET_BRANCH_SORT),
+        "branches": [],
+    }
+
+
+def _empty_faction_share_data(
+    reason: str,
+    *,
+    relation_stats: LatestRelationStats | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": "missing",
+        "reason": reason,
+        "factions": [],
+        "relation_edge_count": 0 if relation_stats is None else relation_stats.count,
+        "avg_opposition": (
+            round(_clamp_probability(relation_stats.avg_opposition), 4)
+            if relation_stats is not None and relation_stats.avg_opposition is not None
+            else None
+        ),
+    }
 
 
 def _latest_faction_snapshots(

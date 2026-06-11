@@ -21,9 +21,9 @@ Education templates fill the home page with a classroom-style question plus sugg
 Entry: `/` home -> `Use Template`
 ![Education template entry](screenshots-en/01-home.png)
 
-### F04 Simulation Mode
-Simulation Mode offers Conservative, Balanced, and Exploratory settings for main-simulation branching. Debate Arena uses its own phase rules and does not follow this setting.
-Entry: `/` home -> `Simulation Mode`
+### F04 Simulation Mode, Pixel Theater, and Director/Gameplay Cards
+Simulation Mode offers Conservative, Balanced, and Exploratory settings for main-simulation branching. Advanced settings can also switch the display between Classic and Pixel Theater; Pixel Theater presents the run as a pixel-stage view with character dialogue, branches, and the director toolbar. The director/gameplay cards come from the shared contract and currently include 14 cards: Civilization Debate, Spy Infiltration, Backchannel Pact, Human Takeover, Space-Time Rift, Mandate Surge, Evacuation Order, Public Hearing, Resource Triage, Forbidden Ritual, Audit Reckoning, Intel Blowback, Mandate Snapback, and Ceasefire Committee. Debate Arena uses its own phase rules and does not follow this setting.
+Entry: `/` home -> `Simulation Mode` / display mode; live `/sim/:id` -> Pixel Theater toolbar -> gameplay cards
 ![Simulation Mode](screenshots-en/01-home.png)
 
 ### F05 Simulation Rounds and Agent Count
@@ -217,6 +217,6 @@ Entry: configure `FEATURE_FAMILY_QUERY_OPTIMIZATION=true`, then use the home-pag
 This is backend search behavior and has no separate UI or standalone screenshot.
 
 ### F41 Result Full Report
-**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The result page shows a full report entry with sectioned conclusions, evidence sources, and uncertainty notes. The evidence drawer can jump back to the cited replay message; the report can also be opened at `/result/:id/report`. If generation fails, finishes partially, or the report runs too long, the page shows a readable notice without blocking the original result page.
+**Enabled by default, see [CONFIGURATION](CONFIGURATION.en.md).** The result page shows a full report entry with sectioned conclusions, evidence sources, and uncertainty notes. The evidence drawer can jump back to the cited replay message; the report can also be opened at `/result/:id/report`. If generation fails, finishes partially, or the report runs too long, the page shows a readable notice without blocking the original result page. Structured `interview_evidence` evidence remains planned; the ordinary `premortem` chapter is already produced by the report generation path.
 Entry: `/result/:id` -> full report; standalone page `/result/:id/report`
 ![Result full report](screenshots-en/23-full-report.png)

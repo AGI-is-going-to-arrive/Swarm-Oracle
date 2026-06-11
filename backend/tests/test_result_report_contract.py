@@ -82,7 +82,24 @@ def _legal_full_report() -> dict:
                 "charts": [
                     {
                         "kind": "probability_bar",
-                        "data": {"branch_id": "branch-1", "probability": 0.68},
+                        "type": "probability_bar",
+                        "data": {
+                            "status": "available",
+                            "sort": [
+                                "probability_desc",
+                                "fork_round_asc",
+                                "id_asc",
+                            ],
+                            "branches": [
+                                {
+                                    "branch_id": "branch-1",
+                                    "label": "Approval with safeguards",
+                                    "probability": 0.68,
+                                    "dominant": True,
+                                    "status": "COMPLETED",
+                                },
+                            ],
+                        },
                     },
                 ],
             },
@@ -173,6 +190,11 @@ def test_full_report_schema_accepts_legal_payload_and_freezes_fields():
         "evidence_refs",
         "charts",
     }
+    assert set(report.sections[0].charts[0].model_fields) == {
+        "kind",
+        "type",
+        "data",
+    }
     assert set(report.evidence[0].model_fields) == {
         "id",
         "branch_id",
@@ -205,6 +227,108 @@ def test_full_report_schema_accepts_generating_status():
     report = validate_full_report_payload(payload)
 
     assert report.status == "generating"
+
+
+def test_chart_schema_freezes_known_payload_shapes_and_unknown_passthrough():
+    from app.services.result_report.schema import (
+        KNOWN_CHART_TYPES,
+        Chart,
+        FactionShareData,
+        ProbabilityBarData,
+    )
+
+    assert KNOWN_CHART_TYPES == ("probability_bar", "faction_share")
+    assert set(ProbabilityBarData.model_fields) == {
+        "status",
+        "reason",
+        "sort",
+        "branches",
+    }
+    assert set(FactionShareData.model_fields) == {
+        "status",
+        "reason",
+        "factions",
+        "relation_edge_count",
+        "avg_opposition",
+    }
+
+    probability_chart = Chart.model_validate(
+        {
+            "kind": "probability_bar",
+            "data": {
+                "status": "available",
+                "sort": ["probability_desc", "fork_round_asc", "id_asc"],
+                "branches": [
+                    {
+                        "branch_id": "branch-1",
+                        "label": "Approval with safeguards",
+                        "probability": 0.68,
+                        "dominant": True,
+                        "status": "COMPLETED",
+                    },
+                ],
+            },
+        }
+    )
+    assert probability_chart.kind == "probability_bar"
+    assert probability_chart.type == "probability_bar"
+    assert isinstance(probability_chart.data["branches"], list)
+    assert set(probability_chart.data["branches"][0]) == {
+        "branch_id",
+        "label",
+        "probability",
+        "dominant",
+        "status",
+    }
+    assert isinstance(probability_chart.data["branches"][0]["label"], str)
+    assert isinstance(probability_chart.data["branches"][0]["probability"], float)
+    assert isinstance(probability_chart.data["branches"][0]["dominant"], bool)
+
+    faction_chart = Chart.model_validate(
+        {
+            "kind": "faction_share",
+            "type": "faction_share",
+            "data": {
+                "status": "partial",
+                "reason": "relation_edges_missing",
+                "factions": [
+                    {
+                        "faction_key": "pro",
+                        "label": "Pro approval",
+                        "member_count": 2,
+                        "share": 0.6667,
+                        "stance_center": 0.8,
+                        "confidence": 0.9,
+                    },
+                ],
+                "relation_edge_count": 0,
+                "avg_opposition": None,
+            },
+        }
+    )
+    assert faction_chart.type == "faction_share"
+    assert isinstance(faction_chart.data["factions"], list)
+    assert set(faction_chart.data["factions"][0]) == {
+        "faction_key",
+        "label",
+        "member_count",
+        "share",
+        "stance_center",
+        "confidence",
+    }
+    assert isinstance(faction_chart.data["factions"][0]["member_count"], int)
+    assert isinstance(faction_chart.data["relation_edge_count"], int)
+    assert faction_chart.data["avg_opposition"] is None
+
+    unknown_chart = Chart.model_validate(
+        {
+            "kind": "experimental_heatmap",
+            "data": {"cells": [], "source": "future-renderer"},
+        }
+    )
+    assert unknown_chart.kind == "experimental_heatmap"
+    assert unknown_chart.type == "experimental_heatmap"
+    assert unknown_chart.data == {"cells": [], "source": "future-renderer"}
 
 
 def test_full_report_schema_accepts_nullable_dissenting_without_changing_field_set():
@@ -373,7 +497,14 @@ def test_full_report_schema_rejects_post_default_byte_cap_overflow():
 
 
 def test_result_report_sse_event_schema_freezes_shape_and_blocks_secrets():
-    from app.services.result_report.schema import ResultReportSSEEvent
+    from app.services.result_report.schema import ResultReportSSEEvent, ToolTraceSummary
+
+    assert set(ToolTraceSummary.model_fields) == {
+        "tool",
+        "query",
+        "item_count",
+        "elapsed_ms",
+    }
 
     event = ResultReportSSEEvent.model_validate(
         {
@@ -395,6 +526,18 @@ def test_result_report_sse_event_schema_freezes_shape_and_blocks_secrets():
     )
     assert event.event == "report_section_complete"
     assert event.data.tool_trace[0].tool == "reducer"
+    assert isinstance(event.data.tool_trace[0].tool, str)
+    assert isinstance(event.data.tool_trace[0].query, str)
+    assert isinstance(event.data.tool_trace[0].item_count, int)
+    assert isinstance(event.data.tool_trace[0].elapsed_ms, int)
+
+    no_tool_calls = ResultReportSSEEvent.model_validate(
+        {
+            "event": "report_started",
+            "data": {"report_id": "report-1", "status": "generating"},
+        }
+    )
+    assert no_tool_calls.data.tool_trace == []
 
     with pytest.raises((ValidationError, ValueError)):
         ResultReportSSEEvent.model_validate(

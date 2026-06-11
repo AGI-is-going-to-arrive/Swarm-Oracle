@@ -327,10 +327,43 @@ def test_reduce_computes_consensus_polarization_charts_and_participants():
     charts = {chart.kind: chart.data for chart in result.charts}
     assert charts["probability_bar"]["branches"][0] == {
         "branch_id": "branch-a",
+        "label": "Approval with privacy compromise",
         "probability": 0.62,
         "dominant": True,
         "status": "COMPLETED",
     }
+    probability_chart = result.charts[0].model_dump(mode="json")
+    assert probability_chart["type"] == "probability_bar"
+    assert set(probability_chart["data"]) == {
+        "status",
+        "reason",
+        "sort",
+        "branches",
+    }
+    assert isinstance(probability_chart["data"]["branches"], list)
+    assert isinstance(probability_chart["data"]["branches"][0]["branch_id"], str)
+    assert isinstance(probability_chart["data"]["branches"][0]["label"], str)
+    assert isinstance(probability_chart["data"]["branches"][0]["probability"], float)
+    assert isinstance(probability_chart["data"]["branches"][0]["dominant"], bool)
+    assert isinstance(probability_chart["data"]["branches"][0]["status"], str)
+
+    faction_chart = result.charts[1].model_dump(mode="json")
+    assert faction_chart["type"] == "faction_share"
+    assert set(faction_chart["data"]) == {
+        "status",
+        "reason",
+        "factions",
+        "relation_edge_count",
+        "avg_opposition",
+    }
+    assert isinstance(faction_chart["data"]["factions"], list)
+    assert isinstance(faction_chart["data"]["factions"][0]["faction_key"], str)
+    assert isinstance(faction_chart["data"]["factions"][0]["label"], str)
+    assert isinstance(faction_chart["data"]["factions"][0]["member_count"], int)
+    assert isinstance(faction_chart["data"]["factions"][0]["share"], float)
+    assert isinstance(faction_chart["data"]["factions"][0]["stance_center"], float)
+    assert isinstance(faction_chart["data"]["factions"][0]["confidence"], float)
+    assert isinstance(faction_chart["data"]["relation_edge_count"], int)
     assert charts["faction_share"]["status"] == "available"
     assert charts["faction_share"]["factions"][0]["share"] == pytest.approx(0.6667)
 
@@ -428,12 +461,34 @@ def test_reduce_handles_empty_single_and_missing_snapshot_cases(monkeypatch):
     assert empty_result.target_branch_id is None
     assert empty_result.likelihood.wep == "missing"
     assert empty_result.evidence == []
+    empty_charts = {chart.type: chart.data for chart in empty_result.charts}
+    assert empty_charts["probability_bar"] == {
+        "status": "missing",
+        "reason": "no_branches",
+        "sort": TARGET_BRANCH_SORT,
+        "branches": [],
+    }
+    assert empty_charts["faction_share"] == {
+        "status": "missing",
+        "reason": "no_branches",
+        "factions": [],
+        "relation_edge_count": 0,
+        "avg_opposition": None,
+    }
 
     single_result = reduce(engine, "scenario-single")
     assert single_result.status == "available"
     assert single_result.target_branch_id == "single-branch"
     assert single_result.dissenting is None
     assert single_result.likelihood.interval == (0.95, 1.0)
+    single_charts = {chart.type: chart.data for chart in single_result.charts}
+    assert single_charts["faction_share"] == {
+        "status": "missing",
+        "reason": "no_faction_snapshots",
+        "factions": [],
+        "relation_edge_count": 0,
+        "avg_opposition": None,
+    }
 
     monkeypatch.setattr(settings, "FEATURE_FACTIONS", False)
     legacy_result = reduce(engine, "scenario-legacy")
@@ -441,7 +496,30 @@ def test_reduce_handles_empty_single_and_missing_snapshot_cases(monkeypatch):
     assert legacy_result.target_branch_id == "legacy-pruned"
     assert legacy_result.faction_consensus.status == "missing"
     assert legacy_result.faction_consensus.reason == "feature_disabled"
-    assert legacy_result.charts[1].data["status"] == "missing"
+    assert legacy_result.charts[1].data == {
+        "status": "missing",
+        "reason": "feature_disabled",
+        "factions": [],
+        "relation_edge_count": 0,
+        "avg_opposition": None,
+    }
+
+
+def test_unknown_chart_type_remains_shape_legal_for_frontend_detection():
+    from app.services.result_report.schema import Chart
+
+    chart = Chart.model_validate(
+        {
+            "kind": "future_chart",
+            "data": {"raw": [], "note": "kept for a future renderer"},
+        }
+    )
+
+    assert chart.model_dump(mode="json") == {
+        "kind": "future_chart",
+        "type": "future_chart",
+        "data": {"raw": [], "note": "kept for a future renderer"},
+    }
 
 
 def test_reducer_import_does_not_pull_simulator_or_llm_client():

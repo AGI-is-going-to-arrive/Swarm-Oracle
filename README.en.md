@@ -24,6 +24,7 @@ Chinese intro video on Bilibili: **https://www.bilibili.com/video/BV1Xh7168ECc**
 ## Features
 
 - **Multi-branch simulation**: One question, multiple storylines, different endings.
+- **Pixel Theater + director/gameplay cards**: Watch the run in the pixel-stage view and use 14 director/gameplay cards to change the current worldline rhythm.
 - **Debate Arena**: AI affirmative and opposing sides debate so you can see both sides of an issue.
 - **Oracle Chambers**: Talk in depth with AI characters from the current worldline and ask follow-up questions.
 - **Worldline Roundtable**: Representatives from multiple sides discuss around a table. After it finishes, you can return to the saved result and continue Deep Dive.
