@@ -24,6 +24,7 @@ SwarmOracle 兼容任何 OpenAI 格式的 API（OpenAI、各类代理、Ollama �
 | `LLM_MODEL_NAME` | 模型名称（取决于你的服务） | `gpt-5.5` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
 | `LLM_EXTRA_ALLOWED_HOSTS` | 请求级 BYOK 额外允许的 host，逗号分隔 | `llm.example.com,192.168.1.25` |
 | `LLM_ALLOW_PRIVATE_BYOK_HOSTS` | 是否允许请求级 BYOK 使用额外配置的私网 / LAN / loopback host | `false`（默认） |
+| `LLM_ALLOW_LOCAL_BYOK_HOSTS` | 是否允许请求级 BYOK 使用内置本地别名 | `true`（默认） |
 
 > 安全提示：模板里的 `your-api-key-here` 只是占位值。只要 `LLM_RESPONSES_URL` 不是本地地址，后端会拒绝用占位 key 继续运行，换成你的真实密钥即可。如果你用的是本地网关（如 Ollama），可以保持占位。
 
@@ -36,9 +37,12 @@ SwarmOracle 兼容任何 OpenAI 格式的 API（OpenAI、各类代理、Ollama �
 - 请求级自定义 LLM base URL 只接受允许列表里的 host。官方托管 host 必须使用 `https`；已有本地开发别名（`localhost`、`127.0.0.1`、`0.0.0.0`、`host.docker.internal`、`::1`）可用 `http`。
 - `LLM_EXTRA_ALLOWED_HOSTS` 会把逗号分隔的 host 归一化为 IDNA + 小写后并入请求级 allowlist。它只接受 host，不接受 URL、端口、userinfo、query 或 fragment。
 - `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false` 时，通过 `LLM_EXTRA_ALLOWED_HOSTS` 加入的私网 / LAN / loopback host 仍会被拒绝；设为 `true` 后才允许这类 host，并应只在单机或可信 LAN 中使用。
+- `LLM_ALLOW_LOCAL_BYOK_HOSTS=true` 是为了本地开发和 Docker quickstart 默认可用；多用户、暴露公网或 LAN 部署应设为 `false`，这样请求级 BYOK 会拒绝内置本地别名及等价 loopback / unspecified IP 形态。部署级 `LLM_RESPONSES_URL` 不受这个开关影响。
 - 带 `user:pass@host`、query、fragment 或 path params 的请求级 BYOK URL 一律拒绝。
 
-`GET /api/capabilities` 会返回零成本静态字段 `llm_configured: boolean`。当运行时仍是内置默认 `LLM_RESPONSES_URL=http://127.0.0.1:8317/v1`，且 `LLM_API_KEY` 仍为空或占位值（如 `sk-12345678` / `your-api-key-here`）时为 `false`；配置了真实 key，或显式改到其它本地 endpoint 时为 `true`。这个字段不会调用 `health_check()`，不会发起 LLM 或网络请求。
+`GET /api/capabilities` 会返回零成本静态字段 `llm_configured: boolean`。当运行时仍是占位 URL（`http://127.0.0.1:8317/v1`、`http://localhost:8317/v1` 或 `http://host.docker.internal:8317/v1`），且 `LLM_API_KEY` 仍为空或占位值（如 `sk-12345678` / `your-api-key-here`）时为 `false`；配置了真实 key，或显式改到其它 endpoint 时为 `true`。这个字段不会调用 `health_check()`，不会发起 LLM 或网络请求。
+
+已知限制：如果你真实使用的本地 OpenAI-compatible 代理刚好也是 `:8317/v1` 且不需要 API key，`llm_configured` 会把它当作未配置。首页提示可以关闭，诊断按钮仍可用于确认实际连通性。
 
 主推演 / 辩论 / 会客厅主路径上的已识别 LLM provider 失败会暴露稳定机器码和短安全消息，不回显 provider body、HTML、stack trace、Authorization header、URL 凭据或 API key：
 

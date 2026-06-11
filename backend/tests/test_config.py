@@ -15,6 +15,7 @@ def test_settings_defaults():
     assert s.LLM_TOKENS_PER_MINUTE >= 0
     assert s.LLM_EXTRA_ALLOWED_HOSTS == ""
     assert s.LLM_ALLOW_PRIVATE_BYOK_HOSTS is False
+    assert s.LLM_ALLOW_LOCAL_BYOK_HOSTS is True
     assert s.LOG_LEVEL == "INFO"
     assert s.LOG_FORMAT == "json"
     assert s.MAX_AGENTS > 0
@@ -192,6 +193,10 @@ def test_settings_normalize_extra_llm_allowed_hosts():
     ("base_url", "api_key", "expected"),
     [
         ("http://127.0.0.1:8317/v1", "sk-12345678", False),
+        ("http://127.0.0.1:8317/v1/", "sk-12345678", False),
+        ("http://localhost:8317/v1", "", False),
+        ("http://host.docker.internal:8317/v1", "", False),
+        ("https://api.openai.com/v1", "your-api-key-here", True),
         ("http://127.0.0.1:8317/v1", "your-api-key-here", False),
         ("http://127.0.0.1:8317/v1", "", False),
         ("http://127.0.0.1:8317/v1", "sk-real-configured-key", True),

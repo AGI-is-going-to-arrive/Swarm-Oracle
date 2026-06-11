@@ -24,6 +24,7 @@ SwarmOracle works with any OpenAI-compatible API, including OpenAI, compatible g
 | `LLM_MODEL_NAME` | Model name from your provider | `gpt-5.5` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
 | `LLM_EXTRA_ALLOWED_HOSTS` | Extra request-level BYOK hosts, comma-separated | `llm.example.com,192.168.1.25` |
 | `LLM_ALLOW_PRIVATE_BYOK_HOSTS` | Allows request-level BYOK to use extra private / LAN / loopback hosts | `false` by default |
+| `LLM_ALLOW_LOCAL_BYOK_HOSTS` | Allows request-level BYOK to use built-in local aliases | `true` by default |
 
 > Security note: `your-api-key-here` is only a placeholder. If `LLM_RESPONSES_URL` is not a local address, the backend refuses to start with a placeholder key. Replace it with your real key. If you use a local gateway such as Ollama, the placeholder is allowed.
 
@@ -36,9 +37,12 @@ Server defaults and request-level BYOK use different trust boundaries:
 - Request-level custom LLM base URLs are limited to allowed hosts. Hosted providers require `https`; existing local development aliases (`localhost`, `127.0.0.1`, `0.0.0.0`, `host.docker.internal`, `::1`) may use `http`.
 - `LLM_EXTRA_ALLOWED_HOSTS` normalizes comma-separated hosts with IDNA + lowercase and merges them into the request-level allowlist. It accepts host names only, not URLs, ports, userinfo, query strings, or fragments.
 - With `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false`, private / LAN / loopback hosts added through `LLM_EXTRA_ALLOWED_HOSTS` are still rejected. Set it to `true` only for single-user local or trusted LAN deployments.
+- `LLM_ALLOW_LOCAL_BYOK_HOSTS=true` keeps local development and Docker quickstarts working by default. Set it to `false` for multi-user, public, or LAN deployments so request-level BYOK rejects built-in local aliases and equivalent loopback / unspecified IP forms. Deployment-level `LLM_RESPONSES_URL` is not affected.
 - Request-level BYOK URLs with `user:pass@host`, query strings, fragments, or path parameters are always rejected.
 
-`GET /api/capabilities` returns a zero-cost static field, `llm_configured: boolean`. It is `false` when the runtime still uses the bundled default `LLM_RESPONSES_URL=http://127.0.0.1:8317/v1` and `LLM_API_KEY` is empty or still a placeholder such as `sk-12345678` / `your-api-key-here`. It is `true` when a real key is configured, or when the operator explicitly changes to another local endpoint. This field never calls `health_check()` and never performs an LLM or network request.
+`GET /api/capabilities` returns a zero-cost static field, `llm_configured: boolean`. It is `false` when the runtime still uses a placeholder URL (`http://127.0.0.1:8317/v1`, `http://localhost:8317/v1`, or `http://host.docker.internal:8317/v1`) and `LLM_API_KEY` is empty or still a placeholder such as `sk-12345678` / `your-api-key-here`. It is `true` when a real key is configured, or when the operator explicitly changes to another endpoint. This field never calls `health_check()` and never performs an LLM or network request.
+
+Known limitation: if your real local OpenAI-compatible gateway also uses `:8317/v1` and does not require an API key, `llm_configured` treats it as unconfigured. The home-page banner can be dismissed, and the diagnostics button can still confirm actual connectivity.
 
 Recognized LLM provider failures on the main simulation / debate / chamber paths expose a stable machine code plus a short safe message. They never echo provider bodies, HTML, stack traces, Authorization headers, credential-bearing URLs, or API keys:
 

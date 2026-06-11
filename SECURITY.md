@@ -35,6 +35,7 @@ This mode has more SSRF risk because a browser user can ask the backend to conne
 This is the highest-risk mode. Treat every request-level BYOK URL as attacker-controlled input.
 
 - Keep `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false`.
+- Set `LLM_ALLOW_LOCAL_BYOK_HOSTS=false`; otherwise request-level BYOK can still ask the backend to call local aliases such as `127.0.0.1`, `localhost`, `0.0.0.0`, `host.docker.internal`, or `::1`.
 - Avoid `LLM_EXTRA_ALLOWED_HOSTS` unless there is a concrete hosted provider or tenant gateway that needs it.
 - Require `SESSION_SECRET`; protect admin endpoints with `ADMIN_TOKEN`.
 - Keep request logs and error responses free of provider bodies, Authorization headers, API keys, and credential-bearing URLs.
@@ -44,6 +45,8 @@ This is the highest-risk mode. Treat every request-level BYOK URL as attacker-co
 `LLM_EXTRA_ALLOWED_HOSTS` is a comma-separated host list. Hosts are normalized with IDNA and lowercase before being merged into the request-level allowlist. It accepts hosts only, not URLs or credentials.
 
 `LLM_ALLOW_PRIVATE_BYOK_HOSTS` defaults to `false`. When it is off, private, LAN, and loopback hosts supplied through the extra allowlist are rejected. When it is on, those hosts are permitted for request-level BYOK and may use local HTTP endpoints.
+
+`LLM_ALLOW_LOCAL_BYOK_HOSTS` defaults to `true` for single-user local development and Docker quickstarts. Set it to `false` for multi-user, exposed, or LAN deployments to reject built-in local aliases and equivalent loopback / unspecified IP forms at the request-level BYOK boundary. Deployment-level `LLM_RESPONSES_URL` is not affected.
 
 Hosted providers and other non-local request-level BYOK hosts still require HTTPS. Existing rejection of URL userinfo, query strings, fragments, and path parameters is preserved.
 

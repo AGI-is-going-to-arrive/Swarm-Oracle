@@ -80,7 +80,7 @@ Minimum browser: Chrome/Edge >= 111, Firefox >= 113, Safari/iOS >= 16.2 (modern 
    Copy-Item .env.docker.example .env.docker
    ```
 
-2. Edit `.env.docker` and fill in your LLM API information. If `.env.docker` is absent, Compose still starts with the inline defaults in `docker-compose.yml`:
+2. Edit `.env.docker` and fill in your LLM API information. If `.env.docker` is absent, Compose still starts from the service defaults in `docker-compose.yml`; LLM settings fall back to the backend built-in defaults:
 
    macOS / Linux:
    ```bash
@@ -98,17 +98,17 @@ Minimum browser: Chrome/Edge >= 111, Firefox >= 113, Safari/iOS >= 16.2 (modern 
 
    macOS / Linux:
    ```bash
-   docker compose up --build -d
+   docker compose up -d
    ```
 
    Windows PowerShell:
    ```powershell
-   docker compose up --build -d
+   docker compose up -d
    ```
 
 4. Open http://localhost:18928 in your browser.
 
-Docker maps the frontend to `18928` and the backend to `18927` by default. After GHCR images are published, Compose uses the backend/frontend images from `image:` first and keeps `build:` as the local fallback.
+Docker maps the frontend to `18928` and the backend to `18927` by default. After GHCR images are published, Compose uses the backend/frontend images from `image:` first and keeps `build:` as the local fallback. To force a source build, run `docker compose up --build -d`.
 
 ### Local Development
 

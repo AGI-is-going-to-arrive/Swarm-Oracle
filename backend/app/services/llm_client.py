@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import ipaddress
 import json
 import logging
@@ -47,6 +48,7 @@ _LLM_URL_ALLOWLIST: frozenset[str] = frozenset({
     "api.cohere.com",
     "openrouter.ai",
     "api.perplexity.ai",
+    "api.x.ai",
 # Include local host aliases used by dev and Docker setups.
 }) | _LOCAL_LLM_HOSTS
 
@@ -65,7 +67,14 @@ _MODEL_MISSING_BODY_RE = re.compile(
 
 
 def _is_local_base_url_hostname(hostname: str | None) -> bool:
-    return (hostname or "").strip().lower() in _LOCAL_LLM_HOSTS
+    normalized = (hostname or "").strip().lower()
+    if normalized in _LOCAL_LLM_HOSTS:
+        return True
+    try:
+        ip = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return bool(ip.is_loopback or ip.is_unspecified)
 
 
 def _normalize_url_hostname(hostname: str | None) -> str | None:
@@ -138,6 +147,12 @@ def validate_llm_base_url(url: str | None) -> str | None:
             )
             return None
         is_local_alias = _is_local_base_url_hostname(hostname)
+        if is_local_alias and not settings.LLM_ALLOW_LOCAL_BYOK_HOSTS:
+            logger.warning(
+                "BYOK base_url rejected: local hostname=%s requires opt-in",
+                hostname,
+            )
+            return None
         is_private_extra_host = (
             _is_private_or_loopback_hostname(hostname) and not is_local_alias
         )
@@ -179,13 +194,30 @@ _LABELED_SECRET_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _BEARER_PATTERN = re.compile(r"(Bearer\s+)[^\s\"]+", re.IGNORECASE)
+_HTML_TAG_PATTERN = re.compile(r"<[^>]*>")
+_URL_USERINFO_PATTERN = re.compile(r"\b(https?://)[^\s/@:]+(?::[^\s/@]*)?@", re.IGNORECASE)
+_STACK_TRACE_PATTERN = re.compile(
+    r"Traceback \(most recent call last\):.*?"
+    r"(?:(?:\r?\n)[A-Za-z_][\w.]*(?:Error|Exception):[^\r\n]*)?",
+    re.IGNORECASE | re.DOTALL,
+)
+_TRACE_FILE_LINE_PATTERN = re.compile(r"^\s*File \"[^\"]+\", line \d+.*$", re.MULTILINE)
+_SANITIZED_ERROR_MAX_CHARS = 200
 
 
 def _sanitize_error(msg: str) -> str:
     """Strip API keys and bearer tokens from error messages."""
+    msg = html.unescape(str(msg))
+    msg = _HTML_TAG_PATTERN.sub(" ", msg)
+    msg = _STACK_TRACE_PATTERN.sub("[stack trace redacted]", msg)
+    msg = _TRACE_FILE_LINE_PATTERN.sub("[stack frame redacted]", msg)
+    msg = _URL_USERINFO_PATTERN.sub(r"\1****@", msg)
     msg = _PREFIXED_SECRET_PATTERN.sub(r"\1****", msg)
     msg = _LABELED_SECRET_PATTERN.sub(r"\1\2****\4", msg)
     msg = _BEARER_PATTERN.sub(r"\1****", msg)
+    msg = " ".join(msg.split())
+    if len(msg) > _SANITIZED_ERROR_MAX_CHARS:
+        msg = msg[: _SANITIZED_ERROR_MAX_CHARS - 3].rstrip() + "..."
     return msg
 
 

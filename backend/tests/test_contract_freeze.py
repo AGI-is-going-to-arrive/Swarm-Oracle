@@ -528,6 +528,7 @@ async def test_new_features_default_disabled():
 
 _TOP_LEVEL_FROZEN_KEYS = frozenset(
     {
+        "llm_configured",
         "web_search",
         "custom_agents",
         "agent_identity",
@@ -574,7 +575,7 @@ _PROVIDERS_FROZEN_SUB_KEYS = frozenset(
 
 @pytest.mark.asyncio
 async def test_capabilities_top_level_keys_exact_freeze():
-    """QA-1: top-level capability registry is exactly 19 keys — no more, no less."""
+    """QA-1: top-level capability registry is exactly 20 keys — no more, no less."""
     from app.api.scenarios import api_capabilities
 
     result = await api_capabilities()
@@ -592,6 +593,9 @@ async def test_capabilities_entry_subkeys_minimum_freeze():
 
     result = await api_capabilities()
     for key in _TOP_LEVEL_FROZEN_KEYS:
+        if key == "llm_configured":
+            assert isinstance(result[key], bool)
+            continue
         entry = result[key]
         assert {"enabled", "version"}.issubset(entry.keys()), (
             f"{key} missing enabled/version subkeys: {entry!r}"

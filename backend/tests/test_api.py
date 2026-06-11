@@ -229,6 +229,7 @@ class TestHealthEndpoint:
         ("base_url", "api_key", "expected"),
         [
             ("http://127.0.0.1:8317/v1", "sk-12345678", False),
+            ("http://host.docker.internal:8317/v1", "", False),
             ("http://127.0.0.1:8317/v1", "sk-real-configured-key", True),
         ],
     )

@@ -89,6 +89,10 @@ class TestValidateLlmBaseUrl:
         url = "https://api.openai.com/v1"
         assert validate_llm_base_url(url) == url
 
+    def test_accepts_xai_official_provider_host(self):
+        url = "https://api.x.ai/v1"
+        assert validate_llm_base_url(url) == url
+
     @pytest.mark.parametrize(
         "url",
         [
@@ -143,11 +147,28 @@ class TestValidateLlmBaseUrl:
 
     def test_keeps_local_alias_allowed_without_private_opt_in(self, monkeypatch):
         monkeypatch.setattr(llm_client.settings, "LLM_ALLOW_PRIVATE_BYOK_HOSTS", False)
+        monkeypatch.setattr(llm_client.settings, "LLM_ALLOW_LOCAL_BYOK_HOSTS", True)
 
         assert (
             validate_llm_base_url("http://host.docker.internal:8080/v1")
             == "http://host.docker.internal:8080/v1"
         )
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://localhost:8000/v1",
+            "http://127.0.0.1:8000/v1",
+            "http://0.0.0.0:8000/v1",
+            "http://host.docker.internal:8000/v1",
+            "http://[::1]:8000/v1",
+        ],
+    )
+    def test_rejects_local_alias_when_local_byok_hosts_are_disabled(self, monkeypatch, url):
+        monkeypatch.setattr(llm_client.settings, "LLM_ALLOW_PRIVATE_BYOK_HOSTS", False)
+        monkeypatch.setattr(llm_client.settings, "LLM_ALLOW_LOCAL_BYOK_HOSTS", False)
+
+        assert validate_llm_base_url(url) is None
 
     def test_private_extra_host_requires_opt_in(self, monkeypatch):
         monkeypatch.setattr(llm_client.settings, "LLM_EXTRA_ALLOWED_HOSTS", "192.168.1.25")
@@ -1352,6 +1373,23 @@ class TestLLMCallJSON:
         assert 'api_key="****"' in sanitized
         assert "token=****" in sanitized
         assert "Bearer ****" in sanitized
+
+    def test_sanitize_error_removes_html_stack_userinfo_and_truncates(self):
+        sanitized = llm_client._sanitize_error(
+            "<html><body>Traceback (most recent call last):\n"
+            '  File "/srv/app.py", line 1, in <module>\n'
+            "RuntimeError: failed for https://user:pass@example.com/v1 "
+            "API key=sk-secret123456 "
+            f"{'x' * 300}</body></html>"
+        )
+
+        assert "<html" not in sanitized
+        assert "<body" not in sanitized
+        assert "Traceback" not in sanitized
+        assert "most recent call last" not in sanitized
+        assert "user:pass@" not in sanitized
+        assert "sk-secret123456" not in sanitized
+        assert len(sanitized) <= 200
 
     def test_format_untrusted_text_block_marks_injection_attempts(self):
         block = format_untrusted_text_block(

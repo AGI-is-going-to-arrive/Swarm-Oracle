@@ -80,7 +80,7 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
    Copy-Item .env.docker.example .env.docker
    ```
 
-2. 编辑 `.env.docker`，填入你的 LLM API 信息。`.env.docker` 未提交时，Compose 仍会使用 `docker-compose.yml` 中的 inline defaults 启动：
+2. 编辑 `.env.docker`，填入你的 LLM API 信息。`.env.docker` 未提交时，Compose 仍能依靠 `docker-compose.yml` 的服务默认值启动；LLM 会回落到后端内置默认值：
 
    macOS / Linux:
    ```bash
@@ -98,17 +98,17 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 
    macOS / Linux:
    ```bash
-   docker compose up --build -d
+   docker compose up -d
    ```
 
    Windows PowerShell:
    ```powershell
-   docker compose up --build -d
+   docker compose up -d
    ```
 
 4. 打开浏览器访问 http://localhost:18928
 
-Docker 默认把前端映射到 `18928`，后端映射到 `18927`。GHCR 镜像发布后，Compose 会优先使用 `image:` 指向的 backend/frontend 镜像，并保留 `build:` 作为本地回退。
+Docker 默认把前端映射到 `18928`，后端映射到 `18927`。GHCR 镜像发布后，Compose 会优先使用 `image:` 指向的 backend/frontend 镜像，并保留 `build:` 作为本地回退。要强制从源码构建，运行 `docker compose up --build -d`。
 
 ### 本地开发
 

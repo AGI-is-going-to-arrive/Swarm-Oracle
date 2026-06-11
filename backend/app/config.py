@@ -11,6 +11,11 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _LOCAL_LLM_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
 _PLACEHOLDER_LLM_API_KEYS = {"", "sk-12345678", "your-api-key-here"}
 DEFAULT_LLM_RESPONSES_URL = "http://127.0.0.1:8317/v1"
+_PLACEHOLDER_LLM_BASE_URLS = {
+    DEFAULT_LLM_RESPONSES_URL,
+    "http://localhost:8317/v1",
+    "http://host.docker.internal:8317/v1",
+}
 WEB_SEARCH_PROVIDER_CHOICES = frozenset({"tavily", "exa", "firecrawl", "xai", "searxng"})
 WEB_SEARCH_PROVIDER_CHOICES_LABEL = "tavily | exa | firecrawl | xai | searxng"
 
@@ -54,6 +59,27 @@ def _is_local_llm_url(url: str) -> bool:
     return hostname in _LOCAL_LLM_HOSTS
 
 
+def _canonical_llm_base_url_parts(url: str) -> tuple[str, str, int | None, str] | None:
+    parsed = urlparse((url or "").strip())
+    scheme = (parsed.scheme or "").lower()
+    host = normalize_llm_allowed_host(parsed.hostname)
+    if not scheme or not host:
+        return None
+    return (scheme, host, parsed.port, parsed.path.rstrip("/"))
+
+
+def _is_placeholder_llm_base_url(url: str, default_base_url: str) -> bool:
+    effective = _canonical_llm_base_url_parts(url)
+    if effective is None:
+        return False
+    placeholder_urls = {*_PLACEHOLDER_LLM_BASE_URLS, default_base_url}
+    return any(
+        effective == placeholder
+        for placeholder_url in placeholder_urls
+        if (placeholder := _canonical_llm_base_url_parts(placeholder_url)) is not None
+    )
+
+
 def is_static_llm_configured(
     *,
     base_url: str,
@@ -61,10 +87,8 @@ def is_static_llm_configured(
     default_base_url: str = DEFAULT_LLM_RESPONSES_URL,
 ) -> bool:
     """Return a zero-cost static capability hint for configured LLM credentials."""
-    effective_base_url = (base_url or "").strip().rstrip("/")
-    bundled_base_url = (default_base_url or "").strip().rstrip("/")
     return not (
-        effective_base_url == bundled_base_url
+        _is_placeholder_llm_base_url(base_url, default_base_url)
         and is_placeholder_llm_api_key(api_key)
     )
 
@@ -82,6 +106,7 @@ class Settings(BaseSettings):
     LLM_TOKENS_PER_MINUTE: int = 0
     LLM_EXTRA_ALLOWED_HOSTS: str = ""
     LLM_ALLOW_PRIVATE_BYOK_HOSTS: bool = False
+    LLM_ALLOW_LOCAL_BYOK_HOSTS: bool = True
 
     # ── Simulation ───────────────────────────────────────
     MAX_AGENTS: int = 1500  # P3-A: raised from 100 for 1000+ scale
