@@ -442,6 +442,13 @@
         "viewEvidence": "查看证据",
         "chartUnavailable": "图表暂不可用。",
         "chartEmpty": "该图表暂无数据。",
+        "chartEmptyReason": {
+          "no_branches": "暂无已完成的分支可供绘制。",
+          "feature_disabled": "该图表的数据来源已关闭。",
+          "no_faction_snapshots": "本次推演未捕获阵营快照。",
+          "empty_faction_membership": "暂无阵营成员数据。",
+          "relation_edges_missing": "阵营关系数据不完整。"
+        },
         "probabilityChartTitle": "分支概率",
         "factionChartTitle": "阵营占比",
         "dominantBranch": "最可能的结果",

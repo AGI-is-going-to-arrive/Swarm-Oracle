@@ -636,7 +636,7 @@ export interface ReportChartBase {
 export type ReportChart =
   | (ReportChartBase & { type: 'probability_bar'; data: ProbabilityBarChartData })
   | (ReportChartBase & { type: 'faction_share'; data: FactionShareChartData })
-  | (ReportChartBase & { type: string; data: Record<string, unknown> });
+  | (ReportChartBase & { type: Exclude<string, 'probability_bar' | 'faction_share'>; data: Record<string, unknown> });
 
 
 export interface ReportSection {

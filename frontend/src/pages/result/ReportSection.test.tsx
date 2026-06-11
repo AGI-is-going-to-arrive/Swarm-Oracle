@@ -13,6 +13,11 @@ const I18N: Record<string, string> = {
   'result.report.factionOpposition': 'Avg. opposition: {{value}}',
   'result.report.factionOppositionNone': 'Avg. opposition: n/a',
   'result.report.chartUnavailable': '[L10N chartUnavailable]',
+  'result.report.chartEmptyReason.no_branches': 'No completed branches to chart yet.',
+  'result.report.chartEmptyReason.feature_disabled': "This chart's data source is turned off.",
+  'result.report.chartEmptyReason.no_faction_snapshots': 'No faction snapshots were captured for this run.',
+  'result.report.chartEmptyReason.empty_faction_membership': 'No faction membership data is available yet.',
+  'result.report.chartEmptyReason.relation_edges_missing': 'Faction relationship data is incomplete.',
 };
 
 vi.mock('react-i18next', () => ({
@@ -136,7 +141,7 @@ describe('ReportSection', () => {
       type: 'probability_bar',
       data: {
         status: 'missing',
-        reason: 'Missing data reason text',
+        reason: 'no_faction_snapshots',
         sort: [],
         branches: [],
       },
@@ -145,8 +150,30 @@ describe('ReportSection', () => {
     const section = { ...baseSection, charts: [emptyChart] };
     render(<ReportSection section={section} onOpenEvidence={mockOnOpenEvidence} index={0} />);
 
-    // Assert reason is rendered, and NO chartUnavailable is shown
-    expect(screen.getByText('Missing data reason text')).toBeInTheDocument();
+    // Assert reason is rendered as localized text, the raw code is NOT in the document, and NO chartUnavailable is shown
+    expect(screen.getByText('No faction snapshots were captured for this run.')).toBeInTheDocument();
+    expect(screen.queryByText('no_faction_snapshots')).not.toBeInTheDocument();
+    expect(screen.queryByText('[L10N chartUnavailable]')).not.toBeInTheDocument();
+  });
+
+  it('renders known-type chart with unknown/unrecognized reason using generic fallback', () => {
+    const emptyChart: ReportChart = {
+      kind: 'probability_bar',
+      type: 'probability_bar',
+      data: {
+        status: 'missing',
+        reason: 'some_unknown_reason_code',
+        sort: [],
+        branches: [],
+      },
+    };
+
+    const section = { ...baseSection, charts: [emptyChart] };
+    render(<ReportSection section={section} onOpenEvidence={mockOnOpenEvidence} index={0} />);
+
+    // Assert it falls back to generic chartEmpty and the raw reason code is NOT in the document
+    expect(screen.getByText('[L10N chartEmpty]')).toBeInTheDocument();
+    expect(screen.queryByText('some_unknown_reason_code')).not.toBeInTheDocument();
     expect(screen.queryByText('[L10N chartUnavailable]')).not.toBeInTheDocument();
   });
 
@@ -183,7 +210,46 @@ describe('ReportSection', () => {
     const section = { ...baseSection, charts: [unknownChart] };
     render(<ReportSection section={section} onOpenEvidence={mockOnOpenEvidence} index={0} />);
 
+    // Expect it to render chartUnavailable
     expect(screen.getByText('[L10N chartUnavailable]')).toBeInTheDocument();
     expect(screen.queryByText('[L10N chartEmpty]')).not.toBeInTheDocument();
+  });
+
+  it('renders chartUnavailable placeholder for known chart types with malformed data', () => {
+    // 1. probability_bar type missing branches array
+    const malformedProbChart: ReportChart = JSON.parse(
+      JSON.stringify({
+        kind: 'probability_bar',
+        type: 'probability_bar',
+        data: {
+          status: 'available',
+          reason: null,
+          sort: [],
+        },
+      })
+    );
+
+    const section1 = { ...baseSection, charts: [malformedProbChart] };
+    const { unmount } = render(<ReportSection section={section1} onOpenEvidence={mockOnOpenEvidence} index={0} />);
+    expect(screen.getByText('[L10N chartUnavailable]')).toBeInTheDocument();
+    unmount();
+
+    // 2. faction_share type missing factions array
+    const malformedFactionChart: ReportChart = JSON.parse(
+      JSON.stringify({
+        kind: 'faction_share',
+        type: 'faction_share',
+        data: {
+          status: 'available',
+          reason: null,
+          relation_edge_count: 5,
+          avg_opposition: 0.1,
+        },
+      })
+    );
+
+    const section2 = { ...baseSection, charts: [malformedFactionChart] };
+    render(<ReportSection section={section2} onOpenEvidence={mockOnOpenEvidence} index={0} />);
+    expect(screen.getByText('[L10N chartUnavailable]')).toBeInTheDocument();
   });
 });

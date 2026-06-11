@@ -128,7 +128,7 @@ export const ToolTraceChip = React.memo(function ToolTraceChip({ trace }: ToolTr
         type="button"
         id="report-tool-trace-trigger"
         aria-expanded={expanded}
-        aria-controls={regionId}
+        aria-controls={expanded ? regionId : undefined}
         aria-label={expanded ? t('result.report.toolTraceCollapse') : t('result.report.toolTraceExpand')}
         onClick={() => setExpanded(!expanded)}
         className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-[color:var(--bg-hover)] text-[color:var(--text-secondary)] border border-[color:var(--border-subtle)] hover:bg-[color:var(--bg-deep)] focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)] focus:ring-offset-2 transition-colors duration-200"
@@ -335,7 +335,11 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         controller.signal
       );
 
-      const isAlreadyRunning = await drainReportStreamAndDetectAlreadyRunning(res, controller.signal, setToolTrace);
+      const isAlreadyRunning = await drainReportStreamAndDetectAlreadyRunning(
+        res,
+        controller.signal,
+        (newTrace) => setToolTrace((prev) => [...prev, ...newTrace])
+      );
       if (isAlreadyRunning) {
         setLocalGenerating(true);
       } else {

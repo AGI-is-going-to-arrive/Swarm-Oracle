@@ -232,15 +232,21 @@ describe('ResultReportPanel — manual retry stream handling', () => {
     setCap({});
 
     const encoder = new TextEncoder();
-    const frameContent = 'data: {"tool_trace": [{"tool": "SearchTool", "query": "Find things", "item_count": 3, "elapsed_ms": 45}]}\n\n';
-    const sseBytes = encoder.encode(frameContent);
+    const frameContent1 = 'data: {"tool_trace": [{"tool": "web_search", "query": "Find things", "item_count": 3, "elapsed_ms": 45}]}\n\n';
+    const frameContent2 = 'data: {"tool_trace": [{"tool": "vector_lookup", "query": "lookup embedding", "item_count": 5, "elapsed_ms": 120}]}\n\n';
+    const sseBytes1 = encoder.encode(frameContent1);
+    const sseBytes2 = encoder.encode(frameContent2);
 
     const reader = {
       read: vi
         .fn()
         .mockResolvedValueOnce({
           done: false,
-          value: sseBytes,
+          value: sseBytes1,
+        } as ReadableStreamReadResult<Uint8Array>)
+        .mockResolvedValueOnce({
+          done: false,
+          value: sseBytes2,
         } as ReadableStreamReadResult<Uint8Array>)
         .mockResolvedValueOnce({
           done: true,
@@ -266,9 +272,11 @@ describe('ResultReportPanel — manual retry stream handling', () => {
     });
 
     // Check that tool trace chip trigger button is visible and collapsed (aria-expanded="false")
-    const trigger = screen.getByRole('button', { name: /Tool activity/i });
+    const trigger = screen.getByRole('button', { name: /Show tool activity/i });
     expect(trigger).toBeInTheDocument();
+    expect(trigger).toHaveTextContent(/Tool activity \(2\)/);
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).not.toHaveAttribute('aria-controls');
 
     // Click the trigger to expand
     await act(async () => {
@@ -277,10 +285,41 @@ describe('ResultReportPanel — manual retry stream handling', () => {
 
     // Expect trigger to update to aria-expanded="true" and show tool details
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByText('SearchTool')).toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-controls', 'report-tool-trace-details');
+    expect(document.getElementById('report-tool-trace-details')).toBeInTheDocument();
+    expect(screen.getByText('web_search')).toBeInTheDocument();
     expect(screen.getByText('Find things')).toBeInTheDocument();
+    expect(screen.getByText('vector_lookup')).toBeInTheDocument();
+    expect(screen.getByText('lookup embedding')).toBeInTheDocument();
     expect(screen.getByText(/3 items/i)).toBeInTheDocument();
     expect(screen.getByText(/45 ms/i)).toBeInTheDocument();
+    expect(screen.getByText(/5 items/i)).toBeInTheDocument();
+    expect(screen.getByText(/120 ms/i)).toBeInTheDocument();
+
+    // Now test that a new retry clears the accumulated trace before the new run.
+    const reader2 = {
+      read: vi.fn().mockResolvedValueOnce({
+        done: true,
+        value: undefined,
+      } as ReadableStreamReadResult<Uint8Array>),
+      cancel: vi.fn().mockResolvedValue(undefined),
+      releaseLock: vi.fn(),
+    };
+    mockedGenerateReport.mockResolvedValueOnce({
+      body: {
+        getReader: () => reader2,
+      },
+    } as unknown as Response);
+
+    // Click Retry Generation again
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The tool trace chip should now be absent because the trace was reset to []
+    expect(screen.queryByRole('button', { name: /Tool activity/i })).not.toBeInTheDocument();
   });
 });
 

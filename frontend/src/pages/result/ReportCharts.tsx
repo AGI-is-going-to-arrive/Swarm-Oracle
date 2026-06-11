@@ -7,6 +7,7 @@ import type {
   FactionShareChartData,
 } from '../../types';
 import './ReportCharts.css';
+import { resolveChartEmptyReason } from './reportChartEmpty';
 
 interface ProbabilityBarChartProps {
   data: ProbabilityBarChartData;
@@ -18,7 +19,7 @@ export const ProbabilityBarChart = React.memo(function ProbabilityBarChart({ dat
   if (data.status === 'missing' || !data.branches || data.branches.length === 0) {
     return (
       <div className="text-sm text-[color:var(--text-muted)] italic my-2">
-        {data.reason ? data.reason : t('result.report.chartEmpty')}
+        {resolveChartEmptyReason(data.reason, t)}
       </div>
     );
   }
@@ -51,7 +52,7 @@ export const ProbabilityBarChart = React.memo(function ProbabilityBarChart({ dat
                 <span className="font-medium break-words [overflow-wrap:anywhere] max-w-[80%] flex items-center">
                   {branch.label}
                   {isDominant && (
-                    <span 
+                    <span
                       className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold dominant-badge"
                       title={t('result.report.dominantBranch')}
                     >
@@ -62,15 +63,15 @@ export const ProbabilityBarChart = React.memo(function ProbabilityBarChart({ dat
                 </span>
                 <span className="font-semibold tabular-nums shrink-0">{pct}%</span>
               </div>
-              <div 
+              <div
                 className="w-full bg-[color:var(--bg-hover)] rounded-full h-2.5 overflow-hidden border border-[color:var(--border-subtle)] relative bar-track"
                 role="img"
                 aria-label={`${branch.label}: ${pct}%${isDominant ? ` (${t('result.report.dominantBranch')})` : ''}`}
               >
-                <div 
+                <div
                   className={`h-full rounded-full transition-all duration-500 ease-out bar-fill ${
-                    isDominant 
-                      ? 'bg-[color:var(--color-primary)]' 
+                    isDominant
+                      ? 'bg-[color:var(--color-primary)]'
                       : 'bg-[color:var(--text-muted)]'
                   }`}
                   style={{ width: `${pct}%` }}
@@ -94,7 +95,7 @@ export const FactionShareChart = React.memo(function FactionShareChart({ data }:
   if (data.status === 'missing' || !data.factions || data.factions.length === 0) {
     return (
       <div className="text-sm text-[color:var(--text-muted)] italic my-2">
-        {data.reason ? data.reason : t('result.report.chartEmpty')}
+        {resolveChartEmptyReason(data.reason, t)}
       </div>
     );
   }
@@ -117,12 +118,12 @@ export const FactionShareChart = React.memo(function FactionShareChart({ data }:
                   {t('result.report.factionMembers', { count: faction.member_count })} ({pct}%)
                 </span>
               </div>
-              <div 
+              <div
                 className="w-full bg-[color:var(--bg-hover)] rounded-full h-2.5 overflow-hidden border border-[color:var(--border-subtle)] relative bar-track"
                 role="img"
                 aria-label={`${faction.label}: ${pct}%, ${t('result.report.factionMembers', { count: faction.member_count })}`}
               >
-                <div 
+                <div
                   className="h-full rounded-full transition-all duration-500 ease-out bg-[color:var(--color-primary)] bar-fill"
                   style={{ width: `${pct}%` }}
                 />
@@ -131,7 +132,7 @@ export const FactionShareChart = React.memo(function FactionShareChart({ data }:
           );
         })}
       </div>
-      
+
       {/* Footnote */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[color:var(--text-muted)] mt-3 pt-3 border-t border-[color:var(--border-subtle)]">
         <span>
@@ -149,11 +150,29 @@ export const FactionShareChart = React.memo(function FactionShareChart({ data }:
 
 // Runtime Type Guards
 function isProbabilityBarChart(chart: ReportChart): chart is ReportChartBase & { type: 'probability_bar'; data: ProbabilityBarChartData } {
-  return chart.type === 'probability_bar';
+  if (chart.type !== 'probability_bar') {
+    return false;
+  }
+  const data = chart.data;
+  return (
+    data !== null &&
+    typeof data === 'object' &&
+    'branches' in data &&
+    Array.isArray(data.branches)
+  );
 }
 
 function isFactionShareChart(chart: ReportChart): chart is ReportChartBase & { type: 'faction_share'; data: FactionShareChartData } {
-  return chart.type === 'faction_share';
+  if (chart.type !== 'faction_share') {
+    return false;
+  }
+  const data = chart.data;
+  return (
+    data !== null &&
+    typeof data === 'object' &&
+    'factions' in data &&
+    Array.isArray(data.factions)
+  );
 }
 
 interface ReportChartRendererProps {

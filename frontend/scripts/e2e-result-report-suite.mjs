@@ -22,6 +22,7 @@
  *   SWARM_E2E_MODE=live node scripts/e2e-result-report-suite.mjs full --url http://127.0.0.1:18928
  */
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -288,6 +289,61 @@ const CAUSAL_GRAPH_FIXTURE = {
   edges: [],
 };
 
+// probability_bar chart: 3 branches, one dominant.
+const probabilityChart = {
+  kind: "probability_bar",
+  type: "probability_bar",
+  data: {
+    status: "available", reason: null,
+    sort: ["branch-green-transition", "branch-slow-roll", "branch-status-quo"],
+    branches: [
+      { branch_id: "branch-green-transition", label: "Green Transition", probability: 0.64, dominant: true, status: "completed" },
+      { branch_id: "branch-slow-roll", label: "Slow Roll", probability: 0.26, dominant: false, status: "completed" },
+      { branch_id: "branch-status-quo", label: "Status Quo Lock-in", probability: 0.10, dominant: false, status: "completed" },
+    ],
+  },
+};
+
+// faction_share chart: 3 factions + footnote (avg_opposition present).
+const factionChart = {
+  kind: "faction_share",
+  type: "faction_share",
+  data: {
+    status: "available", reason: null,
+    factions: [
+      { faction_key: "f-accel", label: "Accelerationists", member_count: 4, share: 0.5, stance_center: 0.8, confidence: 0.7 },
+      { faction_key: "f-caution", label: "Cautious Incrementalists", member_count: 2, share: 0.25, stance_center: 0.1, confidence: 0.6 },
+      { faction_key: "f-incumbent", label: "Incumbent Defenders", member_count: 2, share: 0.25, stance_center: -0.6, confidence: 0.65 },
+    ],
+    relation_edge_count: 7, avg_opposition: 0.42,
+  },
+};
+
+// faction_share with avg_opposition=null → factionOppositionNone.
+const factionChartNullOpp = {
+  kind: "faction_share", type: "faction_share",
+  data: {
+    status: "available", reason: null,
+    factions: [{ faction_key: "f-solo", label: "Sole Bloc", member_count: 3, share: 1.0, stance_center: 0.2, confidence: 0.5 }],
+    relation_edge_count: 0, avg_opposition: null,
+  },
+};
+
+// known type, empty data with reason → renders reason text.
+const emptyChartWithReason = {
+  kind: "faction_share", type: "faction_share",
+  data: { status: "missing", reason: "no_faction_snapshots", factions: [], relation_edge_count: 0, avg_opposition: null },
+};
+
+// known type, empty data WITHOUT reason → renders chartEmpty i18n.
+const emptyChartNoReason = {
+  kind: "probability_bar", type: "probability_bar",
+  data: { status: "missing", reason: null, sort: [], branches: [] },
+};
+
+// unknown chart type → chartUnavailable placeholder.
+const unknownChart = { kind: "sankey", type: "sankey", data: { whatever: true, nodes: [], links: [] } };
+
 function reportFixture(status = "complete") {
   return {
     version: "1.0",
@@ -321,7 +377,7 @@ function reportFixture(status = "complete") {
           en: "Storage economics and grid standards are the primary drivers.",
         },
         evidence_refs: ["ev-1"],
-        charts: [],
+        charts: [probabilityChart, factionChart, factionChartNullOpp, emptyChartWithReason, emptyChartNoReason, unknownChart],
       },
       {
         id: "risks",
@@ -398,6 +454,49 @@ function storyWithReport(report) {
   };
 }
 
+// Local SSE server for report:generate.
+function startToolTraceSseServer() {
+  const sectionComplete = {
+    event: "report_section_complete",
+    section_id: "timeline",
+    tool_trace: [
+      { tool: "web_search", query: "renewable adoption timeline", item_count: 8, elapsed_ms: 1234 },
+      { tool: "vector_lookup", query: "", item_count: 3, elapsed_ms: 56 },
+    ],
+  };
+  const openSockets = new Set();
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.write(`data: ${JSON.stringify({ event: "report_started", scenario_id: FIXTURE_SCENARIO_ID })}\n\n`);
+    res.write(`data: ${JSON.stringify(sectionComplete)}\n\n`);
+    // Intentionally hold open (safety close after 20s).
+    const holdTimer = setTimeout(() => { try { res.end(); } catch { /* noop */ } }, 20000);
+    res.on("close", () => clearTimeout(holdTimer));
+  });
+  server.on("connection", (sock) => {
+    openSockets.add(sock);
+    sock.on("close", () => openSockets.delete(sock));
+  });
+  const PORT = Number(process.env.SWARM_BACKEND_PORT || 18927);
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(PORT, "127.0.0.1", () => {
+      resolve({
+        port: PORT,
+        close: () => new Promise((done) => {
+          for (const s of openSockets) { try { s.destroy(); } catch { /* noop */ } }
+          server.close(() => done());
+        }),
+      });
+    });
+  });
+}
+
 async function installFixtures(page, state, report, options = {}) {
   const json = (body, status = 200) => ({
     status,
@@ -414,6 +513,13 @@ async function installFixtures(page, state, report, options = {}) {
   };
 
   await page.route((url) => url.pathname.startsWith("/api/"), (route) => {
+    const parsed = new URL(route.request().url());
+    if (parsed.pathname.endsWith("/report:generate")) {
+      if (options.passThroughReportGenerate) {
+        return route.continue();
+      }
+      return route.fulfill(json({ detail: "no report stream fixture" }, 404));
+    }
     state.unhandledApiRequests.push({
       method: route.request().method(),
       url: route.request().url(),
@@ -537,6 +643,201 @@ async function assertReportRenders(page, steps, isZh) {
     await page.getByRole("heading", { name: new RegExp(indicatorsHeading) }).first().isVisible().catch(() => false),
     await page.locator(".report-indicators").first().textContent().catch(() => null),
   ));
+
+  if (!LIVE_MODE) {
+    await assertChartsRender(page, steps, isZh);
+  }
+}
+
+async function assertChartsRender(page, steps, isZh) {
+  const locale = isZh ? "zh" : "en";
+
+  // 1. probability_bar
+  const probChart = page.locator(".probability-bar-chart").first();
+  await probChart.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+  const probVisible = await probChart.isVisible().catch(() => false);
+  steps.push(createStep(`${locale}-probability-chart-visible`, probVisible));
+
+  if (probVisible) {
+    const probText = await probChart.textContent().catch(() => "") || "";
+    const expectedTitle = isZh ? "分支概率" : "Branch likelihoods";
+    steps.push(createStep(`${locale}-probability-title`, probText.includes(expectedTitle), probText));
+    steps.push(createStep(`${locale}-probability-label-green`, probText.includes("Green Transition"), probText));
+    steps.push(createStep(`${locale}-probability-pct-64`, probText.includes("64%"), probText));
+    steps.push(createStep(`${locale}-probability-pct-26`, probText.includes("26%"), probText));
+
+    // dominant ★ + sr-only
+    const dominantBadge = probChart.locator(".dominant-badge").first();
+    const badgeVisible = await dominantBadge.isVisible().catch(() => false);
+    steps.push(createStep(`${locale}-probability-dominant-badge`, badgeVisible));
+
+    const expectedDominantSr = isZh ? "最可能的结果" : "Most likely outcome";
+    const badgeText = await dominantBadge.textContent().catch(() => "") || "";
+    steps.push(createStep(`${locale}-probability-dominant-sr`, badgeText.includes(expectedDominantSr), badgeText));
+
+    // bar role=img aria-label
+    const barImg = probChart.locator("[role='img']").first();
+    const barAria = await barImg.getAttribute("aria-label").catch(() => "") || "";
+    steps.push(createStep(`${locale}-probability-bar-aria`, /Green Transition/.test(barAria) && /64%/.test(barAria), barAria));
+  } else {
+    steps.push(createStep(`${locale}-probability-title`, false));
+    steps.push(createStep(`${locale}-probability-label-green`, false));
+    steps.push(createStep(`${locale}-probability-pct-64`, false));
+    steps.push(createStep(`${locale}-probability-pct-26`, false));
+    steps.push(createStep(`${locale}-probability-dominant-badge`, false));
+    steps.push(createStep(`${locale}-probability-dominant-sr`, false));
+    steps.push(createStep(`${locale}-probability-bar-aria`, false));
+  }
+
+  // 2. faction_share
+  const facChart = page.locator(".faction-share-chart").first();
+  await facChart.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+  const facVisible = await facChart.isVisible().catch(() => false);
+  steps.push(createStep(`${locale}-faction-chart-visible`, facVisible));
+
+  if (facVisible) {
+    const facText = await facChart.textContent().catch(() => "") || "";
+    const expectedTitle = isZh ? "阵营占比" : "Faction shares";
+    steps.push(createStep(`${locale}-faction-title`, facText.includes(expectedTitle), facText));
+    steps.push(createStep(`${locale}-faction-label`, facText.includes("Accelerationists"), facText));
+
+    const expectedMembers = isZh ? "4 名成员" : "4 members";
+    steps.push(createStep(`${locale}-faction-members`, facText.includes(expectedMembers), facText));
+
+    const expectedRelations = isZh ? "关系连接：7" : "Relationship links: 7";
+    steps.push(createStep(`${locale}-faction-relations`, facText.includes(expectedRelations), facText));
+
+    const expectedOpposition = isZh ? "平均对立度：0.42" : "Avg. opposition: 0.42";
+    steps.push(createStep(`${locale}-faction-opposition`, facText.includes(expectedOpposition), facText));
+  } else {
+    steps.push(createStep(`${locale}-faction-title`, false));
+    steps.push(createStep(`${locale}-faction-label`, false));
+    steps.push(createStep(`${locale}-faction-members`, false));
+    steps.push(createStep(`${locale}-faction-relations`, false));
+    steps.push(createStep(`${locale}-faction-opposition`, false));
+  }
+
+  // 3. factionOppositionNone copy
+  const pageText = await page.locator(".report-panel-container").first().textContent().catch(() => "") || "";
+  const expectedOppNone = isZh ? "平均对立度：暂无" : "Avg. opposition: n/a";
+  steps.push(createStep(`${locale}-faction-opposition-none`, pageText.includes(expectedOppNone), pageText));
+
+  // 4. empty-data with reason
+  const expectedReasonText = isZh ? "本次推演未捕获阵营快照。" : "No faction snapshots were captured for this run.";
+  const hasReasonText = pageText.includes(expectedReasonText);
+  const rawCodeAbsent = !pageText.includes("no_faction_snapshots");
+  steps.push(createStep(`${locale}-empty-reason-text`, hasReasonText && rawCodeAbsent, { hasReasonText, rawCodeAbsent }));
+
+  // 5. empty-data without reason
+  const expectedEmptyText = isZh ? "该图表暂无数据。" : "No data available for this chart yet.";
+  steps.push(createStep(`${locale}-empty-chartEmpty`, pageText.includes(expectedEmptyText), pageText));
+
+  // 6. unknown type -> chartUnavailable placeholder
+  const unavailable = page.locator(".chart-unavailable").first();
+  const unavailableVisible = await unavailable.isVisible().catch(() => false);
+  const expectedUnavailableText = isZh ? "图表暂不可用。" : "Chart not available yet.";
+  const unavailableText = await unavailable.textContent().catch(() => "") || "";
+  steps.push(createStep(
+    `${locale}-unknown-chartUnavailable`,
+    unavailableVisible && unavailableText.includes(expectedUnavailableText),
+    { unavailableVisible, unavailableText }
+  ));
+}
+
+async function runToolTraceE2ETest(page, steps, isZh, state, locale) {
+  const chipTriggerSel = "#report-tool-trace-trigger";
+
+  // Before retry: no tool-trace chip.
+  const beforeCount = await page.locator(chipTriggerSel).count().catch(() => 0);
+  steps.push(createStep(`tooltrace-absent-before-retry-${locale}`, beforeCount === 0, beforeCount));
+
+  // Click Retry
+  const expectedRetryName = isZh ? "重试生成" : "Retry Generation";
+  const retryBtn = page.getByRole("button", { name: new RegExp(expectedRetryName, "i") }).first();
+  const retryVisible = await retryBtn.isVisible().catch(() => false);
+  steps.push(createStep(`tooltrace-retry-button-visible-${locale}`, retryVisible));
+
+  if (retryVisible) {
+    await retryBtn.click().catch(() => {});
+
+    // Chip should appear once the SSE tool_trace frame is read
+    const chipTrigger = page.locator(chipTriggerSel).first();
+    await chipTrigger.waitFor({ state: "visible", timeout: 12000 }).catch(() => {});
+    const chipAppeared = await chipTrigger.isVisible().catch(() => false);
+    steps.push(createStep(`tooltrace-chip-appears-${locale}`, chipAppeared));
+
+    const chipText = await chipTrigger.textContent().catch(() => "") || "";
+    const expectedLabel = isZh ? "工具活动（2）" : "Tool activity (2)";
+    steps.push(createStep(`tooltrace-chip-label-${locale}`, chipText.includes(expectedLabel), chipText));
+
+    // Default collapsed
+    steps.push(createStep(`tooltrace-default-collapsed-${locale}`, (await chipTrigger.getAttribute("aria-expanded").catch(() => "")) === "false"));
+
+    // Collapsed state has no dangling aria-controls target (Approach B: aria-controls should be absent).
+    const ariaControlsVal = await chipTrigger.getAttribute("aria-controls").catch(() => null);
+    steps.push(createStep(`tooltrace-collapsed-no-aria-controls-${locale}`, !ariaControlsVal, ariaControlsVal));
+    steps.push(createStep(`tooltrace-region-hidden-collapsed-${locale}`, (await page.locator("#report-tool-trace-details").count().catch(() => 0)) === 0));
+
+    // Click → expand
+    const expectedExpandLabel = isZh ? "显示工具活动详情" : "Show tool activity details";
+    const ariaLabelBeforeClick = await chipTrigger.getAttribute("aria-label").catch(() => "");
+    steps.push(createStep(`tooltrace-aria-label-expand-${locale}`, ariaLabelBeforeClick === expectedExpandLabel, ariaLabelBeforeClick));
+
+    await chipTrigger.click().catch(() => {});
+    await page.locator("#report-tool-trace-details").first().waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+    steps.push(createStep(`tooltrace-expanded-after-click-${locale}`, (await chipTrigger.getAttribute("aria-expanded").catch(() => "")) === "true"));
+
+    // Expanded state should have aria-controls referencing the region which is in DOM
+    const ariaControlsAfterClick = await chipTrigger.getAttribute("aria-controls").catch(() => null);
+    steps.push(createStep(`tooltrace-expanded-has-aria-controls-${locale}`, ariaControlsAfterClick === "report-tool-trace-details", ariaControlsAfterClick));
+    steps.push(createStep(`tooltrace-region-visible-expanded-${locale}`, (await page.locator("#report-tool-trace-details").count().catch(() => 0)) === 1));
+
+    const expectedCollapseLabel = isZh ? "隐藏工具活动详情" : "Hide tool activity details";
+    const ariaLabelAfterClick = await chipTrigger.getAttribute("aria-label").catch(() => "");
+    steps.push(createStep(`tooltrace-aria-label-collapse-${locale}`, ariaLabelAfterClick === expectedCollapseLabel, ariaLabelAfterClick));
+
+    const regionText = await page.locator("#report-tool-trace-details").first().textContent().catch(() => "") || "";
+    steps.push(createStep(`tooltrace-tool-row-web_search-${locale}`, regionText.includes("web_search"), regionText));
+    steps.push(createStep(`tooltrace-tool-row-vector-${locale}`, regionText.includes("vector_lookup"), regionText));
+
+    const expectedElapsed = isZh ? "1234 毫秒" : "1234 ms";
+    steps.push(createStep(`tooltrace-elapsed-ms-${locale}`, regionText.includes(expectedElapsed), regionText));
+
+    const expectedItemCount = isZh ? "8 条结果" : "8 items";
+    steps.push(createStep(`tooltrace-item-count-${locale}`, regionText.includes(expectedItemCount), regionText));
+
+    const expectedEmptyQuery = isZh ? "（无查询）" : "(no query)";
+    steps.push(createStep(`tooltrace-empty-query-${locale}`, regionText.includes(expectedEmptyQuery), regionText));
+
+    // Keyboard: focus trigger, press Enter to collapse, Space to expand.
+    await chipTrigger.focus().catch(() => {});
+    await page.keyboard.press("Enter").catch(() => {});
+    await page.waitForTimeout(200);
+    steps.push(createStep(`tooltrace-keyboard-enter-collapse-${locale}`, (await chipTrigger.getAttribute("aria-expanded").catch(() => "")) === "false"));
+
+    await page.keyboard.press("Space").catch(() => {});
+    await page.waitForTimeout(200);
+    steps.push(createStep(`tooltrace-keyboard-space-expand-${locale}`, (await chipTrigger.getAttribute("aria-expanded").catch(() => "")) === "true"));
+  } else {
+    // push dummy steps
+    steps.push(createStep(`tooltrace-chip-appears-${locale}`, false));
+    steps.push(createStep(`tooltrace-chip-label-${locale}`, false));
+    steps.push(createStep(`tooltrace-default-collapsed-${locale}`, false));
+    steps.push(createStep(`tooltrace-collapsed-no-aria-controls-${locale}`, false));
+    steps.push(createStep(`tooltrace-region-hidden-collapsed-${locale}`, false));
+    steps.push(createStep(`tooltrace-aria-label-expand-${locale}`, false));
+    steps.push(createStep(`tooltrace-expanded-after-click-${locale}`, false));
+    steps.push(createStep(`tooltrace-expanded-has-aria-controls-${locale}`, false));
+    steps.push(createStep(`tooltrace-region-visible-expanded-${locale}`, false));
+    steps.push(createStep(`tooltrace-aria-label-collapse-${locale}`, false));
+    steps.push(createStep(`tooltrace-tool-row-web_search-${locale}`, false));
+    steps.push(createStep(`tooltrace-tool-row-vector-${locale}`, false));
+    steps.push(createStep(`tooltrace-elapsed-ms-${locale}`, false));
+    steps.push(createStep(`tooltrace-item-count-${locale}`, false));
+    steps.push(createStep(`tooltrace-empty-query-${locale}`, false));
+    steps.push(createStep(`tooltrace-keyboard-enter-collapse-${locale}`, false));
+    steps.push(createStep(`tooltrace-keyboard-space-expand-${locale}`, false));
+  }
 }
 
 async function runEvidenceDeepLink(page, steps) {
@@ -589,6 +890,12 @@ async function runForcedColorsReducedMotionSmoke(page, steps) {
     "forced-colors-reduced-motion-panel-visible",
     await panel.isVisible().catch(() => false),
   ));
+  const probVisible = await page.locator(".probability-bar-chart").first().isVisible().catch(() => false);
+  const factionVisible = await page.locator(".faction-share-chart").first().isVisible().catch(() => false);
+  steps.push(createStep(
+    "forced-colors-reduced-motion-charts-visible",
+    probVisible && factionVisible
+  ));
   await page.emulateMedia({ forcedColors: "none", reducedMotion: "no-preference" }).catch(() => {});
 }
 
@@ -628,8 +935,12 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
   let fatalError = null;
   let context = null;
   let page = null;
+  let sseServer = null;
 
   try {
+    if (!LIVE_MODE) {
+      sseServer = await startToolTraceSseServer();
+    }
     // ── Locale loop: complete report in en, then zh ──
     for (const locale of ["en", "zh"]) {
       const isZh = locale === "zh";
@@ -680,31 +991,39 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
     }
 
     // ── Partial report: sections + non-blocking retry banner ──
-    context = await browser.newContext({ ...contextOptions, locale: "en-US" });
+    for (const locale of ["en", "zh"]) {
+      const isZh = locale === "zh";
+      context = await browser.newContext({ ...contextOptions, locale: isZh ? "zh-CN" : "en-US" });
       page = await context.newPage();
-      if (!LIVE_MODE) await installFixtures(page, state, partialReportFixture());
+      page.on("console", (msg) => { if (msg.type() === "error") state.consoleErrors.push(msg.text()); });
+      page.on("pageerror", (err) => state.pageErrors.push(err.message));
+
+      if (!LIVE_MODE) await installFixtures(page, state, partialReportFixture(), { passThroughReportGenerate: true });
       await page.goto(`${args.baseUrl}/result/${FIXTURE_SCENARIO_ID}/report`, { waitUntil: "domcontentloaded" });
       await page.locator(".report-panel-container").first().waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
       if (!LIVE_MODE) {
-        const sectionHeading = page.getByRole("heading", { name: /Key Drivers/ }).first();
-        const retryButton = page.getByRole("button", { name: /Retry Generation/i }).first();
+        const sectionHeading = page.getByRole("heading", { name: isZh ? /关键驱动力/ : /Key Drivers/ }).first();
+        const retryButton = page.getByRole("button", { name: isZh ? /重试生成/i : /Retry Generation/i }).first();
         await sectionHeading.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
         await retryButton.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
         steps.push(createStep(
-          "partial-report-renders-sections",
+          `partial-report-renders-sections-${locale}`,
           await sectionHeading.isVisible().catch(() => false),
         ));
         steps.push(createStep(
-          "partial-report-shows-retry-banner",
+          `partial-report-shows-retry-banner-${locale}`,
           await page.locator(".report-partial-banner").first().isVisible().catch(() => false)
-          && await retryButton.isVisible().catch(() => false),
+            && await retryButton.isVisible().catch(() => false),
         ));
+
+        await runToolTraceE2ETest(page, steps, isZh, state, locale);
       }
-    await saveScreenshot(page, path.join(outputDir, "report-partial.png"));
-    await page.close().catch(() => {});
-    await context.close().catch(() => {});
-    page = null;
-    context = null;
+      await saveScreenshot(page, path.join(outputDir, `report-partial-${locale}.png`));
+      await page.close().catch(() => {});
+      await context.close().catch(() => {});
+      page = null;
+      context = null;
+    }
 
     // ── Failed report: retry/failure card, no sections ──
     context = await browser.newContext({ ...contextOptions, locale: "en-US" });
@@ -804,6 +1123,9 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
     if (page) await page.close().catch(() => {});
     if (context) await context.close().catch(() => {});
     await browser.close().catch(() => {});
+    if (sseServer) {
+      await sseServer.close().catch(() => {});
+    }
   }
 
   const result = {
