@@ -1,11 +1,14 @@
 services:
   backend:
+    image: ghcr.io/agi-is-going-to-arrive/swarmoracle-backend:edge
     build:
       context: .
       dockerfile: backend/Dockerfile
     container_name: swarmoracle-backend
     restart: unless-stopped
-    env_file: .env.docker
+    env_file:
+      - path: .env.docker
+        required: false
     environment:
       - DATABASE_URL=sqlite:////data/swarmoracle.db
       - CHROMA_PERSIST_DIR=/data/chroma_data
@@ -13,6 +16,7 @@ services:
       - PORT=18927
       - CORS_ORIGINS=["http://localhost","http://127.0.0.1","http://localhost:18928","http://127.0.0.1:18928"]
     extra_hosts:
+      # Docker Desktop resolves host.docker.internal; Linux needs host-gateway support or an explicit host IP.
       - "host.docker.internal:host-gateway"
     volumes:
       - backend-data:/data
@@ -26,6 +30,7 @@ services:
       start_period: 15s
 
   frontend:
+    image: ghcr.io/agi-is-going-to-arrive/swarmoracle-frontend:edge
     build:
       context: .
       dockerfile: frontend/Dockerfile

@@ -2,13 +2,20 @@
 
 # 🔮 SwarmOracle
 
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![CI](https://github.com/AGI-is-going-to-arrive/Swarm-Oracle/actions/workflows/ci.yml/badge.svg)](https://github.com/AGI-is-going-to-arrive/Swarm-Oracle/actions/workflows/ci.yml)
+[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-ready-2496ED?logo=docker)](docker-compose.yml)
+[![GHCR](https://img.shields.io/badge/GHCR-workflow-24292f?logo=github)](.github/workflows/ghcr.yml)
+
 > AI "What-If" Prediction Playground - 群体预言机
 
-SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI 代理群体模拟多条故事线，展示不同可能性。
+SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI 代理群体模拟多条故事线，展示不同可能性。旗舰示例场景是：**如果郑和比哥伦布先发现了美洲大陆**。
 
 ![SwarmOracle 首页](docs/screenshots/01-home.png)
 
-## 在线介绍页 / Live demo
+社交预览使用仓库内已存在的截图和在线介绍页素材；首屏 GIF 尚未提交，后续应由浏览器 lane 录制并在确认真实文件后再引用。
+
+## 在线介绍页 / Live Demo
 
 打开就能看完整截图和一段介绍视频：**https://agi-is-going-to-arrive.github.io/Swarm-Oracle/**
 
@@ -39,6 +46,20 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 | **辩论竞技场：正反方开杠** | **因果图谱：看清来龙去脉** |
 | ![辩论竞技场](docs/screenshots/20-debate-arena.png) | ![因果图谱](docs/screenshots/06-causal-map.png) |
 
+## 安装阶梯
+
+### Tier 1：公共 Gallery
+
+占位入口，F1 完成后激活。当前请使用在线介绍页查看截图和视频，或使用下面的 Tier 2 / Tier 3 本地方式。
+
+### Tier 2：零密钥 Demo
+
+导入 `samples/snapshots/` 下的 sanitized snapshot 即可查看离线演示，不需要 LLM API。示例场景包含 **如果郑和比哥伦布先发现了美洲大陆**，当前样本文件为 `samples/snapshots/*.swarm`；通过页面的 Snapshot 导入入口加载。
+
+### Tier 3：BYOK 完整运行
+
+配置你自己的 OpenAI-compatible LLM 服务后运行完整推演。Docker 和本地开发都使用同一组核心配置项。
+
 ## 快速开始
 
 ### 运行要求
@@ -47,39 +68,63 @@ SwarmOracle 让你提出假设性问题（"如果……会怎样？"），由 AI
 
 ### Docker 一键部署（推荐）
 
-1. 编辑 `.env.docker`，填入你的 LLM API 信息：
+1. 复制 Docker 配置模板：
+
+   macOS / Linux:
    ```bash
-   # 默认指向宿主机本地 OpenAI-compatible 网关:
-   # LLM_RESPONSES_URL=http://host.docker.internal:8317/v1
-   #
-   # 如果使用 OpenAI 官方 API，改成:
-   # LLM_RESPONSES_URL=https://api.openai.com/v1
-   # LLM_API_KEY=你的真实 API Key
-   # LLM_MODEL_NAME=你的模型名
+   cp .env.docker.example .env.docker
    ```
+
+   Windows PowerShell:
+   ```powershell
+   Copy-Item .env.docker.example .env.docker
+   ```
+
+2. 编辑 `.env.docker`，填入你的 LLM API 信息。`.env.docker` 未提交时，Compose 仍会使用 `docker-compose.yml` 中的 inline defaults 启动：
+
+   macOS / Linux:
+   ```bash
+   ${EDITOR:-vi} .env.docker
+   ```
+
+   Windows PowerShell:
+   ```powershell
+   notepad .env.docker
+   ```
+
    如果不是只在本机访问，同时设置 `SESSION_SECRET` 和 `ADMIN_TOKEN`。前者保护普通 REST / WebSocket 访问，后者保护 `/api/admin/*` 诊断端点（请求头为 `X-Admin-Token`）。
 
-2. 启动：
+3. 启动：
+
+   macOS / Linux:
    ```bash
    docker compose up --build -d
    ```
 
-3. 打开浏览器访问 http://localhost:18928
+   Windows PowerShell:
+   ```powershell
+   docker compose up --build -d
+   ```
 
-Docker 默认把前端映射到 `18928`，后端映射到 `18927`。
+4. 打开浏览器访问 http://localhost:18928
+
+Docker 默认把前端映射到 `18928`，后端映射到 `18927`。GHCR 镜像发布后，Compose 会优先使用 `image:` 指向的 backend/frontend 镜像，并保留 `build:` 作为本地回退。
 
 ### 本地开发
 
 后端（Python 3.11+，macOS/Linux）：
+
+macOS / Linux:
 ```bash
 cd backend
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
-cp ../.env.example .env   # 编辑 .env，填入你的 LLM 配置
+cp ../.env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-Windows PowerShell 对应命令：
+Windows PowerShell:
 ```powershell
 cd backend
 python -m venv .venv
@@ -89,11 +134,19 @@ Copy-Item ..\.env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
 ```
 
-`.env.example` 里的 `your-api-key-here` 只是占位值。只要 `LLM_RESPONSES_URL`
-不是本地地址，后端会拒绝继续使用占位 key。
+`.env.example` 里的 `your-api-key-here` 只是占位值。只要 `LLM_RESPONSES_URL` 不是本地地址，后端会拒绝继续使用占位 key。
 
 前端（Node.js 20+）：
+
+macOS / Linux:
 ```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Windows PowerShell:
+```powershell
 cd frontend
 npm install
 npm run dev
@@ -117,25 +170,32 @@ npm run dev
 
 完整配置项、功能开关清单和搜索增强说明见 **[配置说明 docs/CONFIGURATION.md](docs/CONFIGURATION.md)**。自定义 Agent、跨场景身份、因果图谱、图谱分析、阵营关系、论点地图、知识图谱浏览器、时间线星系、回放轨迹、圆桌 Deep Dive、snapshot、预测日志、教学模板、人物备份和完整报告在模板里默认开启。`ENABLE_WEB_SEARCH`、`FEATURE_NEW_SOURCES`、`FEATURE_FAMILY_QUERY_OPTIMIZATION` 默认关闭，因为它们需要搜索 provider 和对应配置。
 
-Docker Compose 会读取 `.env.docker`，并把数据库和 Chroma 数据放到
-`/data` volume。普通本地开发读取 `backend/.env`。
+Docker Compose 会读取 `.env.docker`（如果存在），并把数据库和 Chroma 数据放到 `/data` volume。普通本地开发读取 `backend/.env`。
+
+## 迁移策略
+
+数据库迁移 owner 保持为后端 `init_db()`。FastAPI lifespan 负责启动时 stamp/upgrade 到 head；镜像 entrypoint、Compose command 和发布脚本不新增 `alembic upgrade head`。除非后续单独批准迁移策略变更，否则 entrypoint Alembic 保持冻结。
 
 ## 项目结构
 
-```
+```text
 SwarmOracle/
 ├── backend/          # FastAPI 后端 (Python)
 ├── frontend/         # React + Phaser 前端 (TypeScript)
 ├── docker-compose.yml
 ├── .env.example      # 本地开发配置模板
-└── .env.docker       # Docker 部署配置模板
+└── .env.docker       # Docker 部署本地配置，默认不提交
 ```
+
+## 贡献与内容政策
+
+贡献流程、测试门禁和内容政策见 **[CONTRIBUTING.md](CONTRIBUTING.md)**。SwarmOracle 面向 AI 生成的假设性推演和 speculative fiction；请避免真实个人诽谤、骚扰、隐私泄露、仿冒身份、违法指导和把生成内容包装成事实新闻。
 
 ## 技术栈
 
 - **后端**: FastAPI + SQLite + ChromaDB
 - **前端**: React 19 + TypeScript + Phaser 3
-- **部署**: Docker Compose
+- **部署**: Docker Compose + GHCR 镜像（发布 workflow）
 
 ## 致谢
 
@@ -143,4 +203,4 @@ SwarmOracle/
 
 ## License
 
-AGPL-3.0
+SwarmOracle 使用 **[GNU Affero General Public License v3.0](LICENSE)**。

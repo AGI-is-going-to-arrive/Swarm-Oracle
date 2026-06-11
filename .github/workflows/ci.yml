@@ -28,6 +28,10 @@ jobs:
       - name: Install backend dependencies
         run: .venv/bin/pip install -e ".[dev]"
 
+      - name: Validate committed sample snapshots
+        working-directory: .
+        run: backend/.venv/bin/python scripts/validate_samples.py
+
       - name: Run targeted backend checks
         run: |
           .venv/bin/python -m pytest \
