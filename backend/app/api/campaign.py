@@ -19,7 +19,7 @@ from app.api.helpers import (
     resolve_authenticated_user_id,
     verify_session,
 )
-from app.models import InterventionLog
+from app.models import InterventionLog, Scenario
 from app.models.database import get_engine
 from app.services.campaign import (
     CampaignBetValidationError,
@@ -73,6 +73,11 @@ def _require_owned_campaign_scenario(
         return
     with Session(get_engine()) as session:
         require_owned_scenario(session, scenario_id, principal)
+
+
+def _campaign_scenario_exists(scenario_id: str) -> bool:
+    with Session(get_engine()) as session:
+        return session.get(Scenario, scenario_id) is not None
 
 
 class CampaignProfileResponse(BaseModel):
@@ -354,7 +359,12 @@ class CampaignFinalizeResponse(BaseModel):
     already_counted_daily_challenge: bool = False
 
 
+class CampaignlessScenarioSummaryResponse(BaseModel):
+    has_campaign: Literal[False] = False
+
+
 class CampaignScenarioSummaryResponse(BaseModel):
+    has_campaign: Literal[True] = True
     scenario_id: str
     profile_id: str
     archive_grade: str
@@ -713,16 +723,18 @@ async def get_user_unlocks(
 
 @router.get(
     "/scenario/{scenario_id}/summary",
-    response_model=CampaignScenarioSummaryResponse,
+    response_model=CampaignScenarioSummaryResponse | CampaignlessScenarioSummaryResponse,
 )
 async def get_scenario_summary(
     scenario_id: str,
     principal: SessionPrincipal | None = Depends(require_session_principal),
-) -> CampaignScenarioSummaryResponse:
+) -> CampaignScenarioSummaryResponse | CampaignlessScenarioSummaryResponse:
     _require_owned_campaign_scenario(scenario_id, principal)
     try:
         summary = get_scenario_campaign_summary(scenario_id)
     except CampaignNotFoundError as exc:
+        if _campaign_scenario_exists(scenario_id):
+            return CampaignlessScenarioSummaryResponse()
         raise api_error_from_exception(404, "CAMPAIGN_SCENARIO_SUMMARY_NOT_FOUND", exc) from exc
 
     return CampaignScenarioSummaryResponse(**summary)

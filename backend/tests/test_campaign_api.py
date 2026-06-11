@@ -119,6 +119,7 @@ def test_finalize_then_get_campaign_summaries(client: TestClient):
     scenario_summary = client.get(f"/api/campaign/scenario/{scenario_id}/summary")
     assert scenario_summary.status_code == 200
     scenario_summary_data = scenario_summary.json()
+    assert scenario_summary_data["has_campaign"] is True
     assert scenario_summary_data["scenario_id"] == scenario_id
     assert scenario_summary_data["profile_id"] == "governance"
     assert scenario_summary_data["archive_grade"] == "S"
@@ -331,6 +332,15 @@ def test_missing_scenario_campaign_summary_returns_404(client: TestClient):
     response = client.get("/api/campaign/scenario/missing-scenario/summary")
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "CAMPAIGN_SCENARIO_SUMMARY_NOT_FOUND"
+
+
+def test_campaignless_scenario_summary_returns_marker(client: TestClient):
+    scenario_id = _seed_completed_scenario("campaignless imported scenario")
+
+    response = client.get(f"/api/campaign/scenario/{scenario_id}/summary")
+
+    assert response.status_code == 200
+    assert response.json() == {"has_campaign": False}
 
 
 def test_weekly_summary_endpoint_returns_aggregated_progress(client: TestClient):
