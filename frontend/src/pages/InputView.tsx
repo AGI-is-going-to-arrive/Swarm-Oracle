@@ -11,7 +11,7 @@ import {
   type FocusEvent,
   type KeyboardEvent,
 } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import gsap from 'gsap';
 import { useTranslation } from 'react-i18next';
 import { useSimulationStore } from '../stores/simulationStore';
@@ -30,6 +30,8 @@ import { AgentDrawer } from '../components/AgentDrawer';
 import { EducationTemplatePicker } from '../components/EducationTemplatePicker';
 import type { EducationTemplate } from '../api/client';
 import { OnboardingGuide } from '../components/Onboarding/OnboardingGuide';
+import { LlmNotConfiguredBanner } from '../components/LlmNotConfiguredBanner';
+import { LlmErrorHint } from '../components/LlmErrorHint';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { useOnboardingState } from '../hooks/useOnboardingState';
 import {
@@ -1501,6 +1503,7 @@ export function InputView() {
         open={!onboarding.completed && !isSubmitting}
         onComplete={onboarding.complete}
       />
+      {caps?.llm_configured === false && <LlmNotConfiguredBanner />}
       {/* Loading Overlay */}
       {isSubmitting && (
         <div
@@ -1611,7 +1614,7 @@ export function InputView() {
                 <button
                   className="btn btn-primary btn--submit"
                   onClick={() => requestLaunch(question)}
-                  disabled={!question.trim() || isSubmitting || isSimulationBudgetBlocked}
+                  disabled={!question.trim() || isSubmitting || isSimulationBudgetBlocked || caps?.llm_configured === false}
                 >
                   {isSubmitting ? <span className="spinner spinner--sm" /> : null}
                   {t('home.submit')}
@@ -1629,7 +1632,7 @@ export function InputView() {
                 <button
                   className="btn btn-ghost btn--submit"
                   onClick={() => void launchDebate({ nextQuestion: question })}
-                  disabled={!question.trim() || isSubmitting}
+                  disabled={!question.trim() || isSubmitting || caps?.llm_configured === false}
                 >
                   {t('debate.entry_cta')}
                 </button>
@@ -1644,6 +1647,35 @@ export function InputView() {
                   </button>
                 )}
               </div>
+
+              {/* Task 1d: We implement onboarding final CTA -> setup by displaying a prominent warning banner
+                  (LlmNotConfiguredBanner) at the top of InputView, and the degraded warning block below,
+                  both pointing to /admin/setup, which will be visible after onboarding completes on first run
+                  when caps?.llm_configured === false. This avoids editing OnboardingGuide.tsx which is outside the WRITE SET. */}
+              {caps?.llm_configured === false && (
+                <div className="degraded-llm-warning" style={{ marginTop: '12px', textAlign: 'left' }}>
+                  <p className="byok-probe-warning" style={{ margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                    <span>⚠️ {t('degraded_hints.llm_required')}。</span>
+                    <Link to="/admin/setup" style={{ textDecoration: 'underline', fontWeight: 600 }}>
+                      {t('llm_banner.configure_cta')}
+                    </Link>
+                  </p>
+                  
+                  <div className="degraded-demo-entry" style={{ padding: '12px', border: '1px dashed var(--color-border-default)', borderRadius: 'var(--radius-lg, 8px)', backgroundColor: 'var(--color-base, oklch(98% 0.005 80))' }}>
+                    <p style={{ margin: '0 0 8px 0', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                      💡 {t('degraded_hints.sample_hint')}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setShowSnapshotImport(true)}
+                      style={{ width: '100%', justifyContent: 'center' }}
+                    >
+                      📂 {t('degraded_hints.view_sample_result')}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Round Count Slider */}
@@ -2599,7 +2631,16 @@ export function InputView() {
             <p className="input-view__submit-hint">{t('debate.entry_hint')}</p>
           </div>
           {submitError && !isSubmitting && (
-            <span className="byok-test-error" role="alert">{submitError}</span>
+            submitErrorCode && [
+              'LLM_UNREACHABLE',
+              'LLM_AUTH_FAILED',
+              'LLM_MODEL_NOT_FOUND',
+              'LLM_RATE_LIMITED'
+            ].includes(submitErrorCode) ? (
+              <LlmErrorHint code={submitErrorCode} />
+            ) : (
+              <span className="byok-test-error" role="alert">{submitError}</span>
+            )
           )}
           {continuityError && !isSubmitting && (
             <span className="byok-test-error" role="alert">{continuityError}</span>

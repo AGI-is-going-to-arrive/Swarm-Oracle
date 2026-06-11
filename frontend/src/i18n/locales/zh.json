@@ -1,5 +1,35 @@
 {
   "translation": {
+    "llm_banner": {
+      "not_configured": "LLM 服务尚未配置。推演功能将不可用。",
+      "configure_cta": "前往配置",
+      "dismiss_aria": "关闭提示"
+    },
+    "llm_error_hint": {
+      "title": "LLM 服务出错",
+      "diagnose_btn": "运行诊断",
+      "LLM_UNREACHABLE": {
+        "message": "网络连接失败",
+        "hint": "请检查你的网络连接，或者确认 API 服务的接口地址（Base URL）是否正确且可访问。"
+      },
+      "LLM_AUTH_FAILED": {
+        "message": "身份验证失败",
+        "hint": "请检查你的 API 密钥（API Key）是否正确且有效。"
+      },
+      "LLM_MODEL_NOT_FOUND": {
+        "message": "找不到指定的模型",
+        "hint": "请检查你配置的模型名称是否正确，或者该模型是否在你当前使用的 API 账号中可用。"
+      },
+      "LLM_RATE_LIMITED": {
+        "message": "请求过于频繁",
+        "hint": "你已触发 API 的限流限制，请稍等片刻再试，或者检查你的账号额度与速率限制。"
+      }
+    },
+    "degraded_hints": {
+      "llm_required": "需要先配置 LLM",
+      "view_sample_result": "看示例结果（如果郑和比哥伦布先发现了美洲大陆）",
+      "sample_hint": "内置的演示快照文件存放在 samples/snapshots/ 目录下，您可以通过导入快照功能来免密钥导入并查看只读推演结果。"
+    },
     "app_title": "SwarmOracle",
     "home": {
       "placeholder_1": "如果诸葛亮多活10年？",

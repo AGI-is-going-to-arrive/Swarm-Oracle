@@ -56,4 +56,53 @@ describe('SetupWizardView provider selection', () => {
     expect(firstRadio).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('button', { name: 'setup.next' })).not.toBeDisabled();
   });
+
+  it('preserves pre-existing model and RPM when wizard is finished', async () => {
+    const user = userEvent.setup();
+    const { saveLlmProviderPolicy, loadLlmProviderPolicy } = await import('../lib/llmProviderPolicy');
+    
+    saveLlmProviderPolicy({
+      apiKey: 'old-key',
+      baseUrl: 'old-url',
+      model: 'custom-model',
+      reasoningEffort: 'high',
+      disableUserQuota: true,
+      requestsPerMinute: 100,
+      tokensPerMinute: 50000,
+    });
+
+    renderWizard();
+
+    // Select the first radio (openai)
+    const radios = screen.getAllByRole('radio');
+    const firstRadio = radios[0];
+    firstRadio.focus();
+    await user.keyboard('[Space]');
+
+    // Click next
+    const nextBtn = screen.getByRole('button', { name: 'setup.next' });
+    await user.click(nextBtn);
+
+    // In step 2, update API key
+    const keyInput = screen.getByLabelText(/setup\.api_key_label/i);
+    await user.clear(keyInput);
+    await user.type(keyInput, 'new-secret-key');
+
+    // Click next
+    await user.click(screen.getByRole('button', { name: 'setup.next' }));
+
+    // Click finish
+    await user.click(screen.getByRole('button', { name: 'setup.finish' }));
+
+    // Read policy back and check
+    const finalPolicy = loadLlmProviderPolicy();
+    expect(finalPolicy.apiKey).toBe('new-secret-key');
+    expect(finalPolicy.baseUrl).toBe('https://api.openai.com/v1');
+    expect(finalPolicy.model).toBe('custom-model');
+    expect(finalPolicy.reasoningEffort).toBe('high');
+    expect(finalPolicy.disableUserQuota).toBe(true);
+    expect(finalPolicy.requestsPerMinute).toBe(100);
+    expect(finalPolicy.tokensPerMinute).toBe(50000);
+  });
 });
+

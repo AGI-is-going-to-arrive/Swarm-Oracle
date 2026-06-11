@@ -85,13 +85,9 @@ export default function SetupWizardView() {
 
   const handleFinish = () => {
     saveLlmProviderPolicy({
+      ...initialPolicy,
       apiKey: apiKey.trim(),
       baseUrl: baseUrl.trim(),
-      model: '',
-      reasoningEffort: '',
-      disableUserQuota: false,
-      requestsPerMinute: null,
-      tokensPerMinute: null,
     });
     navigate('/');
   };

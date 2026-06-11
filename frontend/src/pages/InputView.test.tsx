@@ -181,6 +181,13 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+const { mockSimulationStoreState } = vi.hoisted(() => ({
+  mockSimulationStoreState: {
+    error: '',
+    errorCode: null as string | null,
+  }
+}));
+
 vi.mock('../stores/simulationStore', () => ({
   useSimulationStore: (selector: (store: {
     startSimulation: (options: { question: string }) => Promise<string>;
@@ -189,8 +196,8 @@ vi.mock('../stores/simulationStore', () => ({
     reset: () => void;
   }) => unknown) => selector({
     startSimulation: startSimulationMock,
-    error: '',
-    errorCode: null,
+    error: mockSimulationStoreState.error,
+    errorCode: mockSimulationStoreState.errorCode,
     reset: () => {},
   }),
 }));
@@ -3055,3 +3062,66 @@ describe('InputView apiUserId wiring (P1)', () => {
     });
   });
 });
+
+describe('InputView LLM Not Configured and LLM Error Hints (P0)', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    window.localStorage.setItem('swarm_onboarding_completed', 'true');
+    __resetCapabilityCacheForTests();
+    getCapabilitiesMock.mockReset();
+    getSessionBoundUserIdMock.mockReset();
+    getSessionBoundUserIdMock.mockReturnValue('default_user');
+    mockSimulationStoreState.error = '';
+    mockSimulationStoreState.errorCode = null;
+  });
+
+  it('renders LlmNotConfiguredBanner and disables simulation/debate buttons when llm_configured is false', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: false,
+      custom_agents: { enabled: false },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Wait for capabilities to resolve
+    await screen.findByText('llm_banner.not_configured');
+
+    // Confirm buttons are disabled
+    const submitBtn = screen.getByRole('button', { name: 'home.submit' });
+    const debateBtn = screen.getByRole('button', { name: 'debate.entry_cta' });
+    expect(submitBtn).toBeDisabled();
+    expect(debateBtn).toBeDisabled();
+
+    // Confirm that the degraded helper / view sample result entry is present
+    expect(screen.getByText(/degraded_hints\.sample_hint/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /degraded_hints\.view_sample_result/i })).toBeInTheDocument();
+  });
+
+  it('renders LlmErrorHint when simulation submission fails with an LLM error code', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      custom_agents: { enabled: false },
+    });
+
+    mockSimulationStoreState.error = 'API key is invalid';
+    mockSimulationStoreState.errorCode = 'LLM_AUTH_FAILED';
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Confirm LlmErrorHint is rendered
+    await screen.findByText('llm_error_hint.title');
+    expect(screen.getByText('llm_error_hint.LLM_AUTH_FAILED.message')).toBeInTheDocument();
+    expect(screen.getByText('llm_error_hint.LLM_AUTH_FAILED.hint')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'llm_error_hint.diagnose_btn' })).toBeInTheDocument();
+  });
+});
+

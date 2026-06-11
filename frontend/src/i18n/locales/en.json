@@ -1,5 +1,35 @@
 {
   "translation": {
+    "llm_banner": {
+      "not_configured": "LLM provider is not configured yet. Simulation capabilities will be unavailable.",
+      "configure_cta": "Configure Now",
+      "dismiss_aria": "Dismiss banner"
+    },
+    "llm_error_hint": {
+      "title": "LLM Error",
+      "diagnose_btn": "Run diagnostics",
+      "LLM_UNREACHABLE": {
+        "message": "Network Connection Failed",
+        "hint": "Please check your internet connection or verify that the API Base URL is correct and accessible."
+      },
+      "LLM_AUTH_FAILED": {
+        "message": "Authentication Failed",
+        "hint": "Please check your API Key and ensure it is correct and valid."
+      },
+      "LLM_MODEL_NOT_FOUND": {
+        "message": "Model Not Found",
+        "hint": "Please check that the configured model name is correct, or verify that this model is available for your API account."
+      },
+      "LLM_RATE_LIMITED": {
+        "message": "Rate Limit Exceeded",
+        "hint": "You have triggered the API rate limit. Please wait a moment before trying again, or check your account quota and limits."
+      }
+    },
+    "degraded_hints": {
+      "llm_required": "Configure an LLM provider first",
+      "view_sample_result": "View sample result (If Zheng He discovered the Americas before Columbus)",
+      "sample_hint": "Bundled demo snapshot files live under the samples/snapshots/ directory. You can use the Import Snapshot flow to load and view read-only results without an API key."
+    },
     "app_title": "SwarmOracle",
     "home": {
       "placeholder_1": "What if Zhuge Liang lived 10 more years?",

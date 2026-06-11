@@ -1,0 +1,131 @@
+.llm-not-configured-banner {
+  width: 100%;
+  background-color: oklch(96% 0.02 85); /* Premium soft warm cream/amber */
+  border-bottom: 1px solid oklch(88% 0.05 85);
+  padding: 12px 16px;
+  box-sizing: border-box;
+  animation: slide-down 0.3s ease-out;
+}
+
+@keyframes slide-down {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.llm-banner-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.llm-banner-icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.llm-banner-text {
+  flex: 1;
+  min-width: 200px;
+}
+
+.llm-banner-message {
+  margin: 0;
+  font-size: 0.9rem;
+  color: oklch(25% 0.02 85); /* Deep readable warm brown */
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.llm-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.llm-banner-cta {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: var(--radius-md, 4px);
+  background-color: var(--color-primary, oklch(55% 0.22 350));
+  color: white;
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.llm-banner-cta:hover {
+  opacity: 0.9;
+}
+
+.llm-banner-cta:focus-visible {
+  outline: 2px solid var(--color-ring, oklch(55% 0.22 350));
+  outline-offset: 2px;
+}
+
+.llm-banner-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 1rem;
+  color: oklch(45% 0.02 85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm, 2px);
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.llm-banner-close:hover {
+  background-color: oklch(90% 0.03 85);
+  color: oklch(15% 0.01 80);
+}
+
+.llm-banner-close:focus-visible {
+  outline: 2px solid var(--color-ring, oklch(55% 0.22 350));
+  outline-offset: 2px;
+}
+
+/* Accessibility and Forced Colors */
+@media (prefers-reduced-motion: reduce) {
+  .llm-not-configured-banner {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .llm-not-configured-banner {
+    border: 2px solid ButtonText;
+    background-color: Canvas;
+  }
+  .llm-banner-cta {
+    border: 1px solid ButtonText;
+    background-color: ButtonFace;
+    color: ButtonText;
+  }
+  .llm-banner-close {
+    border: 1px solid ButtonText;
+  }
+}
+
+@media (max-width: 480px) {
+  .llm-banner-content {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .llm-banner-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
