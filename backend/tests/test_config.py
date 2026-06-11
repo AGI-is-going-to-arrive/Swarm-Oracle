@@ -5,14 +5,16 @@ import pytest
 
 def test_settings_defaults():
     """Settings should have sensible defaults."""
-    from app.config import Settings
+    from app.config import DEFAULT_LLM_RESPONSES_URL, Settings
 
     s = Settings()
-    assert s.LLM_RESPONSES_URL.startswith("http")
+    assert s.LLM_RESPONSES_URL == DEFAULT_LLM_RESPONSES_URL
     assert s.LLM_MODEL_NAME  # not empty
     assert s.LLM_REASONING_EFFORT in ("none", "low", "medium", "high")
     assert s.LLM_REQUESTS_PER_MINUTE >= 0
     assert s.LLM_TOKENS_PER_MINUTE >= 0
+    assert s.LLM_EXTRA_ALLOWED_HOSTS == ""
+    assert s.LLM_ALLOW_PRIVATE_BYOK_HOSTS is False
     assert s.LOG_LEVEL == "INFO"
     assert s.LOG_FORMAT == "json"
     assert s.MAX_AGENTS > 0
@@ -171,6 +173,35 @@ def test_settings_allow_placeholder_key_for_local_gateway(monkeypatch):
 
     s = Settings()
     assert s.LLM_API_KEY == "sk-12345678"
+
+
+def test_settings_normalize_extra_llm_allowed_hosts():
+    from app.config import Settings
+
+    s = Settings(
+        _env_file=None,
+        LLM_RESPONSES_URL="http://127.0.0.1:8317/v1",
+        LLM_API_KEY="sk-12345678",
+        LLM_EXTRA_ALLOWED_HOSTS=" API.Custom.EXAMPLE, bücher.example, api.custom.example ",
+    )
+
+    assert s.LLM_EXTRA_ALLOWED_HOSTS == "api.custom.example,xn--bcher-kva.example"
+
+
+@pytest.mark.parametrize(
+    ("base_url", "api_key", "expected"),
+    [
+        ("http://127.0.0.1:8317/v1", "sk-12345678", False),
+        ("http://127.0.0.1:8317/v1", "your-api-key-here", False),
+        ("http://127.0.0.1:8317/v1", "", False),
+        ("http://127.0.0.1:8317/v1", "sk-real-configured-key", True),
+        ("http://127.0.0.1:11434/v1", "sk-12345678", True),
+    ],
+)
+def test_static_llm_configured_truth_table(base_url, api_key, expected):
+    from app.config import is_static_llm_configured
+
+    assert is_static_llm_configured(base_url=base_url, api_key=api_key) is expected
 
 
 def test_settings_reject_blank_model_name(monkeypatch):

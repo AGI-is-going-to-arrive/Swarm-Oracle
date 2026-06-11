@@ -11,14 +11,17 @@ import pytest
 from app.services import llm_client
 from app.services.llm_client import (
     LLMBackpressureError,
+    LLMError,
     LLMRateLimitWindowError,
     _strip_reasoning_blocks,
+    classify_llm_error_code,
     format_untrusted_text_block,
     health_check,
     llm_call,
     llm_call_json,
     llm_call_json_stream,
     llm_call_json_with_stream_fallback,
+    safe_llm_error_payload,
     validate_llm_base_url,
 )
 
@@ -123,6 +126,140 @@ class TestValidateLlmBaseUrl:
             validate_llm_base_url("https://bücher.example:8443/v1")
             == "https://xn--bcher-kva.example:8443/v1"
         )
+
+    def test_accepts_extra_allowed_host_from_settings(self, monkeypatch):
+        monkeypatch.setattr(llm_client.settings, "LLM_EXTRA_ALLOWED_HOSTS", "api.custom.example")
+        monkeypatch.setattr(llm_client.settings, "LLM_ALLOW_PRIVATE_BYOK_HOSTS", False)
+
+        assert (
+            validate_llm_base_url("https://api.custom.example/v1")
+            == "https://api.custom.example/v1"
+        )
+
+    def test_rejects_unknown_host(self, monkeypatch):
+        monkeypatch.setattr(llm_client.settings, "LLM_EXTRA_ALLOWED_HOSTS", "")
+
+        assert validate_llm_base_url("https://unknown.example/v1") is None
+
+    def test_keeps_local_alias_allowed_without_private_opt_in(self, monkeypatch):
+        monkeypatch.setattr(llm_client.settings, "LLM_ALLOW_PRIVATE_BYOK_HOSTS", False)
+
+        assert (
+            validate_llm_base_url("http://host.docker.internal:8080/v1")
+            == "http://host.docker.internal:8080/v1"
+        )
+
+    def test_private_extra_host_requires_opt_in(self, monkeypatch):
+        monkeypatch.setattr(llm_client.settings, "LLM_EXTRA_ALLOWED_HOSTS", "192.168.1.25")
+        monkeypatch.setattr(llm_client.settings, "LLM_ALLOW_PRIVATE_BYOK_HOSTS", False)
+
+        assert validate_llm_base_url("http://192.168.1.25:8317/v1") is None
+        assert validate_llm_base_url("https://192.168.1.25/v1") is None
+
+    def test_private_extra_host_allowed_with_opt_in(self, monkeypatch):
+        monkeypatch.setattr(
+            llm_client.settings,
+            "LLM_EXTRA_ALLOWED_HOSTS",
+            "192.168.1.25,127.0.0.2",
+        )
+        monkeypatch.setattr(llm_client.settings, "LLM_ALLOW_PRIVATE_BYOK_HOSTS", True)
+
+        assert (
+            validate_llm_base_url("http://192.168.1.25:8317/v1")
+            == "http://192.168.1.25:8317/v1"
+        )
+        assert (
+            validate_llm_base_url("http://127.0.0.2:8317/v1")
+            == "http://127.0.0.2:8317/v1"
+        )
+
+
+class TestSafeLlmErrorTaxonomy:
+    @staticmethod
+    def _http_status_error(status_code: int, body: str = "") -> httpx.HTTPStatusError:
+        request = httpx.Request("POST", "https://api.example.test/v1/chat/completions")
+        response = httpx.Response(status_code, text=body, request=request)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            return exc
+        raise AssertionError("expected HTTPStatusError")
+
+    @pytest.mark.parametrize(
+        ("exc", "expected"),
+        [
+            (_http_status_error.__func__(401), "LLM_AUTH_FAILED"),
+            (_http_status_error.__func__(403), "LLM_AUTH_FAILED"),
+            (_http_status_error.__func__(404), "LLM_MODEL_NOT_FOUND"),
+            (
+                _http_status_error.__func__(400, '{"error":"model_not_found"}'),
+                "LLM_MODEL_NOT_FOUND",
+            ),
+            (_http_status_error.__func__(429), "LLM_RATE_LIMITED"),
+            (httpx.ConnectError("connection refused"), "LLM_UNREACHABLE"),
+        ],
+    )
+    def test_classifies_known_provider_failures(self, exc, expected):
+        assert classify_llm_error_code(exc) == expected
+
+    def test_does_not_overclassify_other_provider_errors(self):
+        assert classify_llm_error_code(self._http_status_error(500, "server error")) is None
+        assert classify_llm_error_code(LLMError("Unexpected response structure")) is None
+
+    @pytest.mark.asyncio
+    async def test_safe_error_payload_does_not_leak_provider_body_key_or_stack(
+        self,
+        monkeypatch,
+    ):
+        secret_key = "sk-secret-provider-key-123456"
+        provider_body = (
+            "<html>Traceback (most recent call last): "
+            f"Authorization: Bearer {secret_key}</html>"
+        )
+
+        class _FakeResponse:
+            status_code = 401
+            text = provider_body
+
+            def raise_for_status(self):
+                raise self._error
+
+        request = httpx.Request("POST", "https://api.example.test/v1/chat/completions")
+        response = httpx.Response(401, text=provider_body, request=request)
+        fake_response = _FakeResponse()
+        fake_response._error = httpx.HTTPStatusError(
+            "401 unauthorized",
+            request=request,
+            response=response,
+        )
+
+        class _FakeClient:
+            async def post(self, _url, *, json=None, headers=None, timeout=None):
+                return fake_response
+
+        monkeypatch.setattr(llm_client, "_get_shared_async_client", lambda: _FakeClient())
+        monkeypatch.setattr(llm_client.settings, "DATABASE_URL", "sqlite:///:memory:")
+        monkeypatch.setattr(llm_client.settings, "LLM_MAX_PENDING", 0)
+        monkeypatch.setattr(llm_client.settings, "LLM_USER_MAX_PENDING", 0)
+
+        with pytest.raises(LLMError) as excinfo:
+            await llm_call(
+                "Reply with OK.",
+                api_key=secret_key,
+                base_url="https://api.openai.com/v1",
+                model="missing-model",
+            )
+
+        payload = safe_llm_error_payload(excinfo.value)
+        rendered = json.dumps(payload, ensure_ascii=False) + " " + str(excinfo.value)
+        assert payload == {
+            "code": "LLM_AUTH_FAILED",
+            "message": "LLM authentication failed. Check the configured API key.",
+        }
+        assert secret_key not in rendered
+        assert "Authorization" not in rendered
+        assert "Traceback" not in rendered
+        assert "<html>" not in rendered
 
 
 class TestLLMCall:

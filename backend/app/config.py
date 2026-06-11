@@ -1,5 +1,6 @@
 """SwarmOracle configuration — loads from .env via pydantic-settings."""
 
+import ipaddress
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -9,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _LOCAL_LLM_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
 _PLACEHOLDER_LLM_API_KEYS = {"", "sk-12345678", "your-api-key-here"}
+DEFAULT_LLM_RESPONSES_URL = "http://127.0.0.1:8317/v1"
 WEB_SEARCH_PROVIDER_CHOICES = frozenset({"tavily", "exa", "firecrawl", "xai", "searxng"})
 WEB_SEARCH_PROVIDER_CHOICES_LABEL = "tavily | exa | firecrawl | xai | searxng"
 
@@ -17,9 +19,54 @@ def is_placeholder_llm_api_key(api_key: str) -> bool:
     return api_key.strip() in _PLACEHOLDER_LLM_API_KEYS
 
 
+def normalize_llm_allowed_host(host: str | None) -> str | None:
+    """Normalize a request-level LLM allowlist host via IDNA/lowercase."""
+    raw = (host or "").strip()
+    if not raw:
+        return None
+    if any(marker in raw for marker in ("://", "/", "?", "#", "@")):
+        return None
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    try:
+        return ipaddress.ip_address(raw).compressed.lower()
+    except ValueError:
+        pass
+    try:
+        return raw.encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        return None
+
+
+def normalize_llm_extra_allowed_hosts(value: str | None) -> str:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in (value or "").split(","):
+        host = normalize_llm_allowed_host(item)
+        if host and host not in seen:
+            normalized.append(host)
+            seen.add(host)
+    return ",".join(normalized)
+
+
 def _is_local_llm_url(url: str) -> bool:
     hostname = (urlparse(url).hostname or "").strip().lower()
     return hostname in _LOCAL_LLM_HOSTS
+
+
+def is_static_llm_configured(
+    *,
+    base_url: str,
+    api_key: str,
+    default_base_url: str = DEFAULT_LLM_RESPONSES_URL,
+) -> bool:
+    """Return a zero-cost static capability hint for configured LLM credentials."""
+    effective_base_url = (base_url or "").strip().rstrip("/")
+    bundled_base_url = (default_base_url or "").strip().rstrip("/")
+    return not (
+        effective_base_url == bundled_base_url
+        and is_placeholder_llm_api_key(api_key)
+    )
 
 
 class Settings(BaseSettings):
@@ -27,12 +74,14 @@ class Settings(BaseSettings):
     ENV: str = "development"  # development | production
 
     # ── LLM ──────────────────────────────────────────────
-    LLM_RESPONSES_URL: str = "http://127.0.0.1:8317/v1"
+    LLM_RESPONSES_URL: str = DEFAULT_LLM_RESPONSES_URL
     LLM_API_KEY: str = "sk-12345678"
     LLM_MODEL_NAME: str = "gpt-5.4-mini"
     LLM_REASONING_EFFORT: str = "none"  # none | low | medium | high
     LLM_REQUESTS_PER_MINUTE: int = 0
     LLM_TOKENS_PER_MINUTE: int = 0
+    LLM_EXTRA_ALLOWED_HOSTS: str = ""
+    LLM_ALLOW_PRIVATE_BYOK_HOSTS: bool = False
 
     # ── Simulation ───────────────────────────────────────
     MAX_AGENTS: int = 1500  # P3-A: raised from 100 for 1000+ scale
@@ -236,12 +285,19 @@ class Settings(BaseSettings):
             raise ValueError("NEW_SOURCES_POLYMARKET_CONFIGURED_HOST must be 'us' or 'non-us'")
         return normalized
 
+    @field_validator("LLM_EXTRA_ALLOWED_HOSTS", mode="after")
+    @classmethod
+    def validate_llm_extra_allowed_hosts(cls, value: str) -> str:
+        return normalize_llm_extra_allowed_hosts(value)
+
     @model_validator(mode="after")
     def validate_llm_runtime_settings(self) -> "Settings":
         model_name = self.LLM_MODEL_NAME.strip()
         if not model_name:
             raise ValueError("LLM_MODEL_NAME cannot be empty")
         self.LLM_MODEL_NAME = model_name
+
+        self.LLM_RESPONSES_URL = self.LLM_RESPONSES_URL.strip()
 
         api_key = self.LLM_API_KEY.strip()
         if not _is_local_llm_url(self.LLM_RESPONSES_URL) and is_placeholder_llm_api_key(api_key):

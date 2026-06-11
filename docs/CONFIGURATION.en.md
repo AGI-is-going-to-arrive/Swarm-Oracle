@@ -22,12 +22,32 @@ SwarmOracle works with any OpenAI-compatible API, including OpenAI, compatible g
 | `LLM_RESPONSES_URL` | LLM service URL | `https://api.openai.com/v1` |
 | `LLM_API_KEY` | API key | `sk-...` |
 | `LLM_MODEL_NAME` | Model name from your provider | `gpt-5.5` / `deepseek-v4-pro` / `gemini-3.5-flash` / `claude-opus-4-8` |
+| `LLM_EXTRA_ALLOWED_HOSTS` | Extra request-level BYOK hosts, comma-separated | `llm.example.com,192.168.1.25` |
+| `LLM_ALLOW_PRIVATE_BYOK_HOSTS` | Allows request-level BYOK to use extra private / LAN / loopback hosts | `false` by default |
 
 > Security note: `your-api-key-here` is only a placeholder. If `LLM_RESPONSES_URL` is not a local address, the backend refuses to start with a placeholder key. Replace it with your real key. If you use a local gateway such as Ollama, the placeholder is allowed.
 
 Optional LLM tuning usually does not need changes: `LLM_REASONING_EFFORT` (`none/low/medium/high`), `LLM_REQUESTS_PER_MINUTE`, `LLM_TOKENS_PER_MINUTE` (`0` means unlimited), and `LLM_CONCURRENCY`.
 
-Custom LLM base URLs are limited to allowed hosts: hosted providers require `https`, local development hosts may use `http`, and URLs with `user:pass@host`, query strings, fragments, or path parameters are rejected. If a business request sends `llm_base_url`, send the API key separately instead of putting it in the URL.
+Server defaults and request-level BYOK use different trust boundaries:
+
+- Deployment-level `LLM_RESPONSES_URL` is configured by the server operator and is resolved through `_resolve_llm_api_url()` into an OpenAI-compatible endpoint. It does not pass through the request-level BYOK allowlist.
+- Request-level `llm_base_url` comes from the user request, only affects that request, and must pass allowlist, scheme, and URL-shape validation. Business requests that send `llm_base_url` must send the API key separately instead of putting it in the URL.
+- Request-level custom LLM base URLs are limited to allowed hosts. Hosted providers require `https`; existing local development aliases (`localhost`, `127.0.0.1`, `0.0.0.0`, `host.docker.internal`, `::1`) may use `http`.
+- `LLM_EXTRA_ALLOWED_HOSTS` normalizes comma-separated hosts with IDNA + lowercase and merges them into the request-level allowlist. It accepts host names only, not URLs, ports, userinfo, query strings, or fragments.
+- With `LLM_ALLOW_PRIVATE_BYOK_HOSTS=false`, private / LAN / loopback hosts added through `LLM_EXTRA_ALLOWED_HOSTS` are still rejected. Set it to `true` only for single-user local or trusted LAN deployments.
+- Request-level BYOK URLs with `user:pass@host`, query strings, fragments, or path parameters are always rejected.
+
+`GET /api/capabilities` returns a zero-cost static field, `llm_configured: boolean`. It is `false` when the runtime still uses the bundled default `LLM_RESPONSES_URL=http://127.0.0.1:8317/v1` and `LLM_API_KEY` is empty or still a placeholder such as `sk-12345678` / `your-api-key-here`. It is `true` when a real key is configured, or when the operator explicitly changes to another local endpoint. This field never calls `health_check()` and never performs an LLM or network request.
+
+Recognized LLM provider failures on the main simulation / debate / chamber paths expose a stable machine code plus a short safe message. They never echo provider bodies, HTML, stack traces, Authorization headers, credential-bearing URLs, or API keys:
+
+- `LLM_UNREACHABLE`: network, DNS, connection refused, timeout, and similar connection failures.
+- `LLM_AUTH_FAILED`: HTTP `401` / `403`.
+- `LLM_MODEL_NOT_FOUND`: HTTP `404`, or a provider body that clearly signals a missing model.
+- `LLM_RATE_LIMITED`: HTTP `429`.
+
+Other failures keep the existing generic error path.
 
 ---
 

@@ -42,7 +42,7 @@ from app.api.schemas import (
     StoryBranch,
     TestLlmRequest,
 )
-from app.config import settings
+from app.config import is_static_llm_configured, settings
 from app.log_sanitize import _scrub_sensitive_text
 from app.models import (
     Agent,
@@ -72,6 +72,7 @@ from app.services.campaign import remove_scenario_campaign_artifacts
 from app.services.llm_client import (
     health_check,
     measure_provider_parallelism,
+    safe_llm_error_payload,
     validate_llm_base_url,
 )
 from app.services.result_report import builder as result_report_builder
@@ -112,6 +113,34 @@ _REPLAY_SAFE_PARSED_CONTEXT_KEYS = frozenset(
         "simulation_rounds",
     }
 )
+
+
+async def _run_scenario_background_with_llm_error_taxonomy(
+    scenario_id: str,
+    background_coro,
+) -> None:
+    try:
+        await background_coro
+    except Exception as exc:
+        payload = safe_llm_error_payload(exc)
+        if payload is not None:
+            try:
+                from app.api.ws import ws_manager
+
+                await ws_manager.broadcast(
+                    scenario_id,
+                    {
+                        "type": "simulation_error",
+                        "data": {"error": payload},
+                    },
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to broadcast classified LLM error for scenario %s",
+                    scenario_id,
+                    exc_info=True,
+                )
+        raise
 _REPLAY_SENSITIVE_NORMALIZED_KEYS = frozenset(
     {
         "agentidentityid",
@@ -680,6 +709,10 @@ async def api_capabilities():
         else {}
     )
     capabilities = {
+        "llm_configured": is_static_llm_configured(
+            base_url=settings.LLM_RESPONSES_URL,
+            api_key=settings.LLM_API_KEY,
+        ),
         "web_search": {
             **_capability_entry(
                 enabled=ws_hint.get("server_enabled", False),
@@ -1075,43 +1108,44 @@ async def create_scenario(
 
     # 2) Parse + simulate in the background. This keeps the request responsive
     # while preserving the original Stage 1 -> Stage 2 pipeline.
+    background_coro = parse_and_run_background(
+        scenario_id,
+        question=question,
+        num_agents=num_agents,
+        mode=mode,
+        hierarchical=use_hierarchical,
+        rounds=sim_rounds,
+        visualization_enabled=viz_enabled,
+        reasoning_effort=req.reasoning_effort,
+        temperature=req.temperature,
+        branch_sensitivity=req.branch_sensitivity,
+        fork_prompt_variant=req.fork_prompt_variant,
+        fork_detector_active_branch_limit=req.fork_detector_active_branch_limit,
+        user_id=effective_user_id,
+        llm_api_key=req.llm_api_key,
+        llm_base_url=req.llm_base_url,
+        llm_model=req.llm_model,
+        llm_requests_per_minute=req.llm_requests_per_minute,
+        llm_tokens_per_minute=req.llm_tokens_per_minute,
+        disable_user_quota=req.disable_user_quota,
+        custom_agent_identity_ids=req.custom_agent_identity_ids,
+        continuity_overrides=[
+            override.model_dump()
+            for override in (req.continuity_overrides or [])
+        ] or None,
+        web_search_families=req.web_search_families if req.web_search_enabled else None,
+        web_search_intensity=(
+            web_search_intensity_config.intensity if web_search_intensity_config else None
+        ),
+        web_search_max_results=(
+            web_search_intensity_config.max_results if web_search_intensity_config else None
+        ),
+        web_search_snippet_limit=(
+            web_search_intensity_config.snippet_limit if web_search_intensity_config else None
+        ),
+    )
     schedule_background_task(
-        parse_and_run_background(
-            scenario_id,
-            question=question,
-            num_agents=num_agents,
-            mode=mode,
-            hierarchical=use_hierarchical,
-            rounds=sim_rounds,
-            visualization_enabled=viz_enabled,
-            reasoning_effort=req.reasoning_effort,
-            temperature=req.temperature,
-            branch_sensitivity=req.branch_sensitivity,
-            fork_prompt_variant=req.fork_prompt_variant,
-            fork_detector_active_branch_limit=req.fork_detector_active_branch_limit,
-            user_id=effective_user_id,
-            llm_api_key=req.llm_api_key,
-            llm_base_url=req.llm_base_url,
-            llm_model=req.llm_model,
-            llm_requests_per_minute=req.llm_requests_per_minute,
-            llm_tokens_per_minute=req.llm_tokens_per_minute,
-            disable_user_quota=req.disable_user_quota,
-            custom_agent_identity_ids=req.custom_agent_identity_ids,
-            continuity_overrides=[
-                override.model_dump()
-                for override in (req.continuity_overrides or [])
-            ] or None,
-            web_search_families=req.web_search_families if req.web_search_enabled else None,
-            web_search_intensity=(
-                web_search_intensity_config.intensity if web_search_intensity_config else None
-            ),
-            web_search_max_results=(
-                web_search_intensity_config.max_results if web_search_intensity_config else None
-            ),
-            web_search_snippet_limit=(
-                web_search_intensity_config.snippet_limit if web_search_intensity_config else None
-            ),
-        )
+        _run_scenario_background_with_llm_error_taxonomy(scenario_id, background_coro)
     )
 
     # 3) Return the placeholder scenario immediately. Agents/branches will be

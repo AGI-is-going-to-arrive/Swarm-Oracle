@@ -40,7 +40,7 @@ from app.services.ending_room_service import (
     load_existing_ending_room_snapshot_for_scenario,
     run_ending_room_background,
 )
-from app.services.llm_client import validate_llm_base_url
+from app.services.llm_client import safe_llm_error_payload, validate_llm_base_url
 
 router = APIRouter(prefix="/api", tags=["ending-room"], dependencies=[Depends(verify_session)])
 ws_router = APIRouter(tags=["ending-room"])
@@ -369,10 +369,25 @@ async def create_ending_room_endpoint(
     if should_schedule:
         async def _runner() -> None:
             await asyncio.sleep(ENDING_ROOM_START_DELAY_SECONDS)
-            await run_ending_room_background(
-                snapshot["id"],
-                ws_callback=ending_room_ws_manager.broadcast,
-            )
+            try:
+                await run_ending_room_background(
+                    snapshot["id"],
+                    ws_callback=ending_room_ws_manager.broadcast,
+                )
+            except Exception as exc:
+                payload = safe_llm_error_payload(exc)
+                if payload is not None:
+                    await ending_room_ws_manager.broadcast(
+                        snapshot["id"],
+                        {
+                            "type": "status",
+                            "data": {
+                                "status": "error",
+                                "error": payload,
+                            },
+                        },
+                    )
+                raise
 
         schedule_background_task(_runner())
         logger.info(

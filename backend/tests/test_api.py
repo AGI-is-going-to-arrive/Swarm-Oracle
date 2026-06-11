@@ -14,6 +14,7 @@ import app.api.agents as agents_api
 import app.api.graphs as graphs_api
 import app.api.scenarios as scenarios_api
 import app.api.social as social_api
+import app.api.ws as ws_api
 from app.api.schemas import CreateScenarioRequest
 from app.main import app
 from app.models import (
@@ -46,6 +47,7 @@ from app.models import (
 from app.models.campaign import DirectorProfile, ProfileMastery
 from app.models.database import get_engine
 from app.services.causal_graph import append_round_nodes
+from app.services.llm_client import LLMError
 from app.services.scoring import recompute_leaderboard_entry
 
 
@@ -133,6 +135,14 @@ def _detail_code(resp) -> str | None:
     return detail.get("code") if isinstance(detail, dict) else None
 
 
+def _close_scheduled_coro(coro):
+    frame = getattr(coro, "cr_frame", None)
+    nested = frame.f_locals.get("background_coro") if frame is not None else None
+    coro.close()
+    if nested is not None and hasattr(nested, "close"):
+        nested.close()
+
+
 # ── Root / Health ────────────────────────────────────────
 
 
@@ -214,6 +224,72 @@ class TestHealthEndpoint:
         assert data["llm"]["status"] == "ok"
         assert data["probe"]["estimated_parallelism"] == 6
         assert data["probe"]["recommended"]["agents_max"] == 24
+
+    @pytest.mark.parametrize(
+        ("base_url", "api_key", "expected"),
+        [
+            ("http://127.0.0.1:8317/v1", "sk-12345678", False),
+            ("http://127.0.0.1:8317/v1", "sk-real-configured-key", True),
+        ],
+    )
+    def test_capabilities_include_static_llm_configured_without_health_check(
+        self,
+        client,
+        monkeypatch,
+        base_url,
+        api_key,
+        expected,
+    ):
+        async def _unexpected_health_check(**kwargs):
+            raise AssertionError("capabilities must not call health_check")
+
+        monkeypatch.setattr(scenarios_api, "health_check", _unexpected_health_check)
+        monkeypatch.setattr(scenarios_api.settings, "LLM_RESPONSES_URL", base_url)
+        monkeypatch.setattr(scenarios_api.settings, "LLM_API_KEY", api_key)
+
+        resp = client.get("/api/capabilities")
+
+        assert resp.status_code == 200
+        assert resp.json()["llm_configured"] is expected
+
+    @pytest.mark.asyncio
+    async def test_scenario_background_wrapper_broadcasts_safe_llm_error(
+        self,
+        monkeypatch,
+    ):
+        events: list[tuple[str, dict]] = []
+
+        async def _fake_broadcast(scenario_id, event):
+            events.append((scenario_id, event))
+
+        async def _boom():
+            raise LLMError(
+                "LLM provider rate limit was reached. Retry later.",
+                code="LLM_RATE_LIMITED",
+            )
+
+        monkeypatch.setattr(ws_api.ws_manager, "broadcast", _fake_broadcast)
+
+        with pytest.raises(LLMError):
+            await scenarios_api._run_scenario_background_with_llm_error_taxonomy(
+                "scenario-1",
+                _boom(),
+            )
+
+        assert events == [
+            (
+                "scenario-1",
+                {
+                    "type": "simulation_error",
+                    "data": {
+                        "error": {
+                            "code": "LLM_RATE_LIMITED",
+                            "message": "LLM provider rate limit was reached. Retry later.",
+                        }
+                    },
+                },
+            )
+        ]
 
 
 class TestGraphEndpoints:
@@ -969,7 +1045,7 @@ class TestReplayArtifactEndpoints:
 
         def _capture_schedule(coro):
             scheduled["count"] += 1
-            coro.close()
+            _close_scheduled_coro(coro)
             return None
 
         monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
@@ -1008,7 +1084,7 @@ class TestReplayArtifactEndpoints:
 
         def _capture_schedule(coro):
             scheduled["count"] += 1
-            coro.close()
+            _close_scheduled_coro(coro)
             return None
 
         monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
@@ -1036,7 +1112,7 @@ class TestReplayArtifactEndpoints:
 
         def _capture_schedule(coro):
             scheduled["count"] += 1
-            coro.close()
+            _close_scheduled_coro(coro)
             return None
 
         monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
@@ -1066,7 +1142,7 @@ class TestReplayArtifactEndpoints:
 
         def _capture_schedule(coro):
             scheduled["count"] += 1
-            coro.close()
+            _close_scheduled_coro(coro)
             return None
 
         monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
@@ -1094,7 +1170,7 @@ class TestReplayArtifactEndpoints:
 
         def _capture_schedule(coro):
             scheduled["count"] += 1
-            coro.close()
+            _close_scheduled_coro(coro)
             return None
 
         monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
@@ -1133,7 +1209,7 @@ class TestReplayArtifactEndpoints:
 
         def _capture_schedule(coro):
             scheduled["count"] += 1
-            coro.close()
+            _close_scheduled_coro(coro)
             return None
 
         monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
@@ -1163,7 +1239,7 @@ class TestReplayArtifactEndpoints:
 
         def _capture_schedule(coro):
             scheduled["count"] += 1
-            coro.close()
+            _close_scheduled_coro(coro)
             return None
 
         monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
@@ -1191,7 +1267,7 @@ class TestReplayArtifactEndpoints:
 
         def _capture_schedule(coro):
             scheduled["count"] += 1
-            coro.close()
+            _close_scheduled_coro(coro)
             return None
 
         monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)

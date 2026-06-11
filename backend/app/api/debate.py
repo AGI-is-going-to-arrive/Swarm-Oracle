@@ -42,7 +42,7 @@ from app.services.debate import (
 )
 from app.services.debate_argument_map import extract_argument_units
 from app.services.debate_prompts import KNOWN_DEBATE_PROFILES
-from app.services.llm_client import validate_llm_base_url
+from app.services.llm_client import safe_llm_error_payload, validate_llm_base_url
 
 router = APIRouter(tags=["debate"], dependencies=[Depends(verify_session)])
 ws_router = APIRouter(tags=["debate"])
@@ -782,12 +782,27 @@ async def create_debate(
 
     async def _delayed_run() -> None:
         await asyncio.sleep(DEBATE_START_DELAY_SECONDS)
-        await run_debate_background(
-            debate.id,
-            ws_callback=debate_ws_manager.broadcast,
-            llm_overrides=llm_overrides,
-            quota_key=effective_user_id,
-        )
+        try:
+            await run_debate_background(
+                debate.id,
+                ws_callback=debate_ws_manager.broadcast,
+                llm_overrides=llm_overrides,
+                quota_key=effective_user_id,
+            )
+        except Exception as exc:
+            payload = safe_llm_error_payload(exc)
+            if payload is not None:
+                await debate_ws_manager.broadcast(
+                    debate.id,
+                    {
+                        "type": "status",
+                        "data": {
+                            "status": DebateStatus.ERROR.value,
+                            "error": payload,
+                        },
+                    },
+                )
+            raise
 
     schedule_background_task(
         _delayed_run()

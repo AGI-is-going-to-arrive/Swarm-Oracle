@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -23,7 +24,7 @@ import httpx
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.config import settings
+from app.config import normalize_llm_allowed_host, settings
 from app.models.database import get_engine
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,17 @@ _LLM_URL_ALLOWLIST: frozenset[str] = frozenset({
 }) | _LOCAL_LLM_HOSTS
 
 _ALLOWED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https"})
+_LLM_SAFE_ERROR_MESSAGES: dict[str, str] = {
+    "LLM_UNREACHABLE": "LLM provider is unreachable. Check the provider URL and network.",
+    "LLM_AUTH_FAILED": "LLM authentication failed. Check the configured API key.",
+    "LLM_MODEL_NOT_FOUND": "LLM model was not found. Check the configured model name.",
+    "LLM_RATE_LIMITED": "LLM provider rate limit was reached. Retry later.",
+}
+_MODEL_MISSING_BODY_RE = re.compile(
+    r"\b(?:model[_ -]?not[_ -]?found|model\s+not\s+found|no\s+such\s+model)\b"
+    r"|(?:\bmodel\b.{0,80}\b(?:does\s+not\s+exist|not\s+found|not\s+available)\b)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _is_local_base_url_hostname(hostname: str | None) -> bool:
@@ -57,12 +69,35 @@ def _is_local_base_url_hostname(hostname: str | None) -> bool:
 
 
 def _normalize_url_hostname(hostname: str | None) -> str | None:
-    if not hostname:
-        return None
+    return normalize_llm_allowed_host(hostname)
+
+
+def _configured_extra_allowed_hosts() -> frozenset[str]:
+    return frozenset(
+        host
+        for host in settings.LLM_EXTRA_ALLOWED_HOSTS.split(",")
+        if host
+    )
+
+
+def _effective_llm_url_allowlist() -> frozenset[str]:
+    return _LLM_URL_ALLOWLIST | _configured_extra_allowed_hosts()
+
+
+def _is_private_or_loopback_hostname(hostname: str) -> bool:
+    if hostname in _LOCAL_LLM_HOSTS:
+        return True
     try:
-        return hostname.strip().encode("idna").decode("ascii").lower()
-    except UnicodeError:
-        return None
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        return hostname.endswith((".local", ".lan"))
+    return bool(
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
 
 
 def _netloc_without_userinfo(hostname: str, port: int | None) -> str:
@@ -97,12 +132,26 @@ def validate_llm_base_url(url: str | None) -> str | None:
         if not hostname:
             logger.warning("BYOK base_url rejected: hostname is missing or invalid")
             return None
-        if hostname not in _LLM_URL_ALLOWLIST:
+        if hostname not in _effective_llm_url_allowlist():
             logger.warning(
                 "BYOK base_url rejected by allowlist: hostname=%s", hostname
             )
             return None
-        if scheme != "https" and not _is_local_base_url_hostname(hostname):
+        is_local_alias = _is_local_base_url_hostname(hostname)
+        is_private_extra_host = (
+            _is_private_or_loopback_hostname(hostname) and not is_local_alias
+        )
+        if is_private_extra_host and not settings.LLM_ALLOW_PRIVATE_BYOK_HOSTS:
+            logger.warning(
+                "BYOK base_url rejected: private hostname=%s requires opt-in",
+                hostname,
+            )
+            return None
+        if (
+            scheme != "https"
+            and not is_local_alias
+            and not (settings.LLM_ALLOW_PRIVATE_BYOK_HOSTS and is_private_extra_host)
+        ):
             logger.warning(
                 "BYOK base_url rejected: non-local hostname=%s requires https",
                 hostname,
@@ -253,6 +302,30 @@ def detect_provider(base_url: str | None) -> LLMProviderProfile:
 class LLMError(Exception):
     """Raised when LLM call fails."""
 
+    def __init__(self, message: str | None = None, *, code: str | None = None):
+        safe_code = code if code in _LLM_SAFE_ERROR_MESSAGES else None
+        self.code = safe_code
+        super().__init__(
+            message
+            if message is not None
+            else (
+                _LLM_SAFE_ERROR_MESSAGES[safe_code]
+                if safe_code
+                else "LLM call failed"
+            )
+        )
+
+    @property
+    def safe_message(self) -> str:
+        if self.code:
+            return _LLM_SAFE_ERROR_MESSAGES[self.code]
+        return str(self)
+
+    def safe_payload(self) -> dict[str, str] | None:
+        if not self.code:
+            return None
+        return {"code": self.code, "message": self.safe_message}
+
 
 class LLMBackpressureError(LLMError):
     """Raised when the server-side LLM queue is saturated."""
@@ -268,6 +341,64 @@ class LLMRateLimitWindowError(LLMBackpressureError):
 
 class LLMCircuitOpenError(LLMError):
     """Raised when an upstream provider is temporarily circuit-broken."""
+
+
+def _http_status_to_llm_error_code(status_code: int) -> str | None:
+    if status_code in {401, 403}:
+        return "LLM_AUTH_FAILED"
+    if status_code == 404:
+        return "LLM_MODEL_NOT_FOUND"
+    if status_code == 429:
+        return "LLM_RATE_LIMITED"
+    return None
+
+
+def _body_has_model_missing_signal(body: str) -> bool:
+    return bool(_MODEL_MISSING_BODY_RE.search(body or ""))
+
+
+def classify_llm_error_code(exc: BaseException) -> str | None:
+    """Return one stable safe LLM error code for known provider failures."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, LLMError) and current.code:
+            return current.code
+        if isinstance(current, httpx.HTTPStatusError):
+            status_code = current.response.status_code
+            code = _http_status_to_llm_error_code(status_code)
+            if code:
+                return code
+            if _body_has_model_missing_signal(current.response.text[:4096]):
+                return "LLM_MODEL_NOT_FOUND"
+        if isinstance(current, httpx.RequestError):
+            return "LLM_UNREACHABLE"
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def safe_llm_error_payload(exc: BaseException) -> dict[str, str] | None:
+    code = classify_llm_error_code(exc)
+    if code is None:
+        return None
+    return {"code": code, "message": _LLM_SAFE_ERROR_MESSAGES[code]}
+
+
+def _llm_error_from_http_status(exc: httpx.HTTPStatusError) -> LLMError:
+    code = _http_status_to_llm_error_code(exc.response.status_code)
+    if code is None and _body_has_model_missing_signal(exc.response.text[:4096]):
+        code = "LLM_MODEL_NOT_FOUND"
+    if code:
+        return LLMError(_LLM_SAFE_ERROR_MESSAGES[code], code=code)
+    return LLMError(f"LLM returned {exc.response.status_code}")
+
+
+def _llm_error_from_request(exc: httpx.RequestError) -> LLMError:
+    return LLMError(
+        _LLM_SAFE_ERROR_MESSAGES["LLM_UNREACHABLE"],
+        code="LLM_UNREACHABLE",
+    )
 
 
 _PROMPT_INJECTION_MARKERS = (
@@ -1705,7 +1836,7 @@ async def llm_call(
                 # Non-retryable 4xx — raise immediately
                 logger.error("LLM HTTP error %s: %s", exc.response.status_code,
                              _sanitize_error(exc.response.text[:500]))
-                raise LLMError(f"LLM returned {exc.response.status_code}") from exc
+                raise _llm_error_from_http_status(exc) from exc
             except httpx.RequestError as exc:
                 last_exc = exc
                 if attempt < max_retries:
@@ -1718,7 +1849,7 @@ async def llm_call(
                     continue
                 await _record_provider_failure(provider_key)
                 logger.error("LLM connection error: %s", _sanitize_error(str(exc)))
-                raise LLMError(f"LLM connection failed: {_sanitize_error(str(exc))}") from exc
+                raise _llm_error_from_request(exc) from exc
         else:
             # All retries exhausted
             await _record_provider_failure(provider_key)
@@ -2105,9 +2236,9 @@ async def llm_call_json_for_family_query_reformulation(
                         status_code,
                         body,
                     )
-                    raise LLMError(f"LLM returned {status_code}") from exc
+                    raise _llm_error_from_http_status(exc) from exc
             except httpx.RequestError as exc:
-                raise LLMError(f"LLM connection failed: {_sanitize_error(str(exc))}") from exc
+                raise _llm_error_from_request(exc) from exc
 
         await _reconcile_rate_limit_usage(
             provider_key=provider_key,
@@ -2404,7 +2535,7 @@ async def llm_call_stream(
                     status_code,
                     _sanitize_error(exc.response.text[:500]),
                 )
-                raise LLMError(f"LLM returned {status_code}") from exc
+                raise _llm_error_from_http_status(exc) from exc
             except httpx.RequestError as exc:
                 last_exc = exc
                 if not emitted_content and attempt < max_retries:
@@ -2420,7 +2551,7 @@ async def llm_call_stream(
                     continue
                 await _record_provider_failure(provider_key)
                 logger.error("LLM stream connection error: %s", _sanitize_error(str(exc)))
-                raise LLMError(f"LLM connection failed: {_sanitize_error(str(exc))}") from exc
+                raise _llm_error_from_request(exc) from exc
         else:
             await _record_provider_failure(provider_key)
             logger.error("LLM stream failed after %d attempts", max_retries + 1)
