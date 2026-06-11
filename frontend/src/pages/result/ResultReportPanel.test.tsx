@@ -115,6 +115,8 @@ function setCap(over: Partial<ReturnType<typeof useCapabilityCheck>>) {
   } as unknown as ReturnType<typeof useCapabilityCheck>);
 }
 
+const originalReload = window.location.reload;
+
 beforeEach(() => {
   mockedCtx.mockReset();
   mockedCap.mockReset();
@@ -131,10 +133,18 @@ beforeEach(() => {
     tokensPerMinute: null,
   });
   mockedValidateByok.mockReturnValue({ valid: true });
+  Object.defineProperty(window, 'location', {
+    writable: true,
+    value: { ...window.location, reload: vi.fn() },
+  });
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+  Object.defineProperty(window, 'location', {
+    writable: true,
+    value: { ...window.location, reload: originalReload },
+  });
 });
 
 describe('ResultReportPanel — inline capability loading', () => {
@@ -215,6 +225,62 @@ describe('ResultReportPanel — manual retry stream handling', () => {
 
     expect(mockedGenerateReport).not.toHaveBeenCalled();
     expect(screen.getByText(/Your API key is invalid or rejected by the provider/i)).toBeInTheDocument();
+  });
+
+  it('accumulates tool_trace from SSE stream, renders collapsed chip, and expands on click', async () => {
+    setCtx({ full_report: makeReport({ status: 'partial' }) });
+    setCap({});
+
+    const encoder = new TextEncoder();
+    const frameContent = 'data: {"tool_trace": [{"tool": "SearchTool", "query": "Find things", "item_count": 3, "elapsed_ms": 45}]}\n\n';
+    const sseBytes = encoder.encode(frameContent);
+
+    const reader = {
+      read: vi
+        .fn()
+        .mockResolvedValueOnce({
+          done: false,
+          value: sseBytes,
+        } as ReadableStreamReadResult<Uint8Array>)
+        .mockResolvedValueOnce({
+          done: true,
+          value: undefined,
+        } as ReadableStreamReadResult<Uint8Array>),
+      cancel: vi.fn().mockResolvedValue(undefined),
+      releaseLock: vi.fn(),
+    };
+
+    mockedGenerateReport.mockResolvedValue({
+      body: {
+        getReader: () => reader,
+      },
+    } as unknown as Response);
+
+    render(<ResultReportPanel variant="inline" />);
+
+    // Click Retry Generation to trigger stream reading
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Check that tool trace chip trigger button is visible and collapsed (aria-expanded="false")
+    const trigger = screen.getByRole('button', { name: /Tool activity/i });
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+    // Click the trigger to expand
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
+
+    // Expect trigger to update to aria-expanded="true" and show tool details
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('SearchTool')).toBeInTheDocument();
+    expect(screen.getByText('Find things')).toBeInTheDocument();
+    expect(screen.getByText(/3 items/i)).toBeInTheDocument();
+    expect(screen.getByText(/45 ms/i)).toBeInTheDocument();
   });
 });
 

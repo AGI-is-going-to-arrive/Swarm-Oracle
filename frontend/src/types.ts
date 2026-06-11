@@ -594,10 +594,50 @@ export interface ReportVerdict {
   disclaimer: string | null;
 }
 
-export interface ReportChart {
-  kind: 'faction_share' | 'probability_bar';
-  data: Record<string, unknown>;
+export type KnownChartType = 'probability_bar' | 'faction_share';
+
+export interface ProbabilityBarBranch {
+  branch_id: string;
+  label: string;
+  probability: number;
+  dominant: boolean;
+  status: string;
 }
+
+export interface ProbabilityBarChartData {
+  status: 'available' | 'partial' | 'missing';
+  reason: string | null;
+  sort: string[];
+  branches: ProbabilityBarBranch[];
+}
+
+export interface FactionShareFaction {
+  faction_key: string;
+  label: string;
+  member_count: number;
+  share: number;
+  stance_center: number;
+  confidence: number;
+}
+
+export interface FactionShareChartData {
+  status: 'available' | 'partial' | 'missing';
+  reason: string | null;
+  factions: FactionShareFaction[];
+  relation_edge_count: number;
+  avg_opposition: number | null;
+}
+
+export interface ReportChartBase {
+  kind: string;
+  type: string;
+}
+
+export type ReportChart =
+  | (ReportChartBase & { type: 'probability_bar'; data: ProbabilityBarChartData })
+  | (ReportChartBase & { type: 'faction_share'; data: FactionShareChartData })
+  | (ReportChartBase & { type: string; data: Record<string, unknown> });
+
 
 export interface ReportSection {
   id: string;

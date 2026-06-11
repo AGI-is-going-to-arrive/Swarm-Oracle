@@ -10,7 +10,7 @@ import { ReportSection } from './ReportSection';
 import { ReportEvidenceDrawer } from './ReportEvidenceDrawer';
 import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
 import { getLocalizedApiErrorMessage } from '../../lib/apiErrorMessage';
-import type { FullReport, FullReportTruncatedMarker, ReportEvidence, StoryData } from '../../types';
+import type { FullReport, FullReportTruncatedMarker, ReportEvidence, StoryData, ToolTraceSummary } from '../../types';
 
 interface Props {
   /** `inline` is rendered inside ResultView (page already has an <h1>); `standalone`
@@ -39,7 +39,11 @@ function isFullReport(
 const ALLOWED_SECTION_IDS = ['timeline', 'factions', 'conflicts', 'premortem', 'indicators', 'sources'];
 const REPORT_GENERATE_TIMEOUT_MS = 35 * 60_000;
 
-async function drainReportStreamAndDetectAlreadyRunning(res: Response, signal: AbortSignal): Promise<boolean> {
+async function drainReportStreamAndDetectAlreadyRunning(
+  res: Response,
+  signal: AbortSignal,
+  onToolTraceUpdate?: (trace: ToolTraceSummary[]) => void
+): Promise<boolean> {
   const reader = res.body?.getReader();
   if (!reader) return false;
 
@@ -85,6 +89,9 @@ async function drainReportStreamAndDetectAlreadyRunning(res: Response, signal: A
             if (data && data.error_code === 'REPORT_ALREADY_RUNNING') {
               isAlreadyRunning = true;
             }
+            if (data && Array.isArray(data.tool_trace) && data.tool_trace.length > 0) {
+              onToolTraceUpdate?.(data.tool_trace);
+            }
           } catch {
             // ignore
           }
@@ -101,6 +108,75 @@ async function drainReportStreamAndDetectAlreadyRunning(res: Response, signal: A
 
   return isAlreadyRunning;
 }
+
+interface ToolTraceChipProps {
+  trace: ToolTraceSummary[];
+}
+
+export const ToolTraceChip = React.memo(function ToolTraceChip({ trace }: ToolTraceChipProps) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const regionId = 'report-tool-trace-details';
+
+  if (!trace || trace.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-col items-start gap-2 max-w-full tool-trace-container">
+      <button
+        type="button"
+        id="report-tool-trace-trigger"
+        aria-expanded={expanded}
+        aria-controls={regionId}
+        aria-label={expanded ? t('result.report.toolTraceCollapse') : t('result.report.toolTraceExpand')}
+        onClick={() => setExpanded(!expanded)}
+        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-[color:var(--bg-hover)] text-[color:var(--text-secondary)] border border-[color:var(--border-subtle)] hover:bg-[color:var(--bg-deep)] focus:outline-none focus:ring-2 focus:ring-[color:var(--color-ring)] focus:ring-offset-2 transition-colors duration-200"
+      >
+        <span>🛠️ {t('result.report.toolTraceLabel', { count: trace.length })}</span>
+        <svg
+          className={`w-3 h-3 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth="3"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {expanded && (
+        <div
+          id={regionId}
+          className="w-full max-w-md bg-[color:var(--bg-hover)] border border-[color:var(--border-subtle)] rounded-lg p-3 space-y-2 mt-1 shadow-sm text-xs focus:outline-none"
+          role="region"
+          aria-labelledby="report-tool-trace-trigger"
+        >
+          <ul className="divide-y divide-[color:var(--border-subtle)] space-y-2">
+            {trace.map((item, index) => (
+              <li key={index} className="pt-2 first:pt-0 flex flex-col gap-1 text-[color:var(--text-secondary)]">
+                <div className="flex justify-between items-start gap-2">
+                  <span className="font-semibold text-[color:var(--text-primary)] break-all">{item.tool}</span>
+                  <span className="text-[color:var(--text-muted)] shrink-0 tabular-nums">
+                    {t('result.report.toolTraceElapsed', { ms: item.elapsed_ms })}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-[10px] text-[color:var(--text-muted)] gap-4">
+                  <span className="truncate italic max-w-[70%]" title={item.query || undefined}>
+                    {item.query ? item.query : t('result.report.toolTraceEmptyQuery')}
+                  </span>
+                  <span className="shrink-0 font-medium bg-[color:var(--bg-deep)] px-1.5 py-0.5 rounded border border-[color:var(--border-subtle)]">
+                    {t('result.report.toolTraceItemCount', { count: item.item_count })}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+});
 
 // Inner component memoized to narrow context subscription.
 // Re-renders ONLY when these specific props change.
@@ -128,6 +204,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
   const [localStoryData, setLocalStoryData] = useState<StoryData | null>(null);
   const [localGenerating, setLocalGenerating] = useState(false);
+  const [toolTrace, setToolTrace] = useState<ToolTraceSummary[]>([]);
 
   const activeStoryData = localStoryData || storyData;
   const rawReport = activeStoryData?.full_report;
@@ -237,6 +314,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
     setRetrying(true);
     setRetryError(false);
+    setToolTrace([]);
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -257,7 +335,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         controller.signal
       );
 
-      const isAlreadyRunning = await drainReportStreamAndDetectAlreadyRunning(res, controller.signal);
+      const isAlreadyRunning = await drainReportStreamAndDetectAlreadyRunning(res, controller.signal, setToolTrace);
       if (isAlreadyRunning) {
         setLocalGenerating(true);
       } else {
@@ -508,7 +586,10 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
           <h2 className="text-2xl md:text-3xl font-bold text-[color:var(--text-primary)] mb-4 leading-snug break-words [overflow-wrap:anywhere]">
             {title}
           </h2>
-          <ReportConfidenceBadge verdict={report.verdict} />
+          <div className="flex flex-col gap-4">
+            <ReportConfidenceBadge verdict={report.verdict} />
+            <ToolTraceChip trace={toolTrace} />
+          </div>
         </header>
 
         <ReportToc sections={sections} />

@@ -1,0 +1,54 @@
+/* CSS styles for Report Charts */
+
+.probability-bar-chart,
+.faction-share-chart {
+  font-feature-settings: "tnum" on, "lnum" on;
+}
+
+/* OKLCH Accent with sRGB fallback */
+.dominant-badge {
+  background-color: var(--color-primary-glow, rgba(198, 21, 131, 0.15));
+  color: var(--color-primary, rgb(198, 21, 131));
+}
+
+@supports (color: oklch(0% 0 0)) {
+  .dominant-badge {
+    background-color: oklch(0.92 0.04 330 / 0.15);
+    color: oklch(0.5 0.25 330);
+  }
+}
+
+/* Animations and Reduced Motion */
+@keyframes barGrow {
+  from {
+    width: 0%;
+  }
+}
+
+.bar-fill {
+  animation: barGrow 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar-fill {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* High Contrast / Forced Colors Mode */
+@media (forced-colors: active) {
+  .bar-fill {
+    background-color: ButtonText !important;
+    border: 1px solid ButtonText;
+  }
+  .bar-track {
+    border: 2px solid CanvasText !important;
+    background-color: Canvas !important;
+  }
+  .dominant-badge {
+    border: 1px solid Highlight;
+    background-color: Highlight !important;
+    color: HighlightText !important;
+  }
+}

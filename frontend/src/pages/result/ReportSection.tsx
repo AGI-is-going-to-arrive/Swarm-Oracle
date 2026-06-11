@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SafeMarkdown } from '../../components/SafeMarkdown';
 import type { ReportSection as ReportSectionType } from '../../types';
+import { ReportChartRenderer } from './ReportCharts';
 
 interface Props {
   section: ReportSectionType;
@@ -54,8 +55,10 @@ export const ReportSection = React.memo(function ReportSection({ section, onOpen
         <SafeMarkdown>{content}</SafeMarkdown>
       </div>
       {section.charts && section.charts.length > 0 && (
-        <div className="mt-4 p-4 bg-[color:var(--bg-hover)] rounded border border-[color:var(--border-subtle)] text-sm text-[color:var(--text-muted)] italic">
-          {t('result.report.chartUnavailable')}
+        <div className="space-y-4 mt-4">
+          {section.charts.map((chart, idx) => (
+            <ReportChartRenderer key={idx} chart={chart} />
+          ))}
         </div>
       )}
     </section>
