@@ -1,0 +1,51 @@
+{
+  "generated_at": "2026-03-18",
+  "base_url": "http://127.0.0.1:18928",
+  "samples": [
+    {
+      "theme": "law_grand_tribunal",
+      "question": "What if every constitutional dispute had to be retried in a grand tribunal archive chamber before enforcement?",
+      "scenario_id": "0d305e42-2c4a-4580-b4be-cc0d2dfd920c",
+      "scene_theme": "law_court_variant",
+      "profile_label_zh": "法律红线",
+      "completed_branch_count": 1,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law_grand_tribunal-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law_grand_tribunal-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law_grand_tribunal-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law_grand_tribunal-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "faith_council",
+      "question": "What if a sacred council had to settle a clerical schism before every prophecy could become law?",
+      "scenario_id": "67bba632-e320-450a-a608-513b313a8a3f",
+      "scene_theme": "faith_temple_variant",
+      "profile_label_zh": "神权号角",
+      "completed_branch_count": 1,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith_council-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith_council-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith_council-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith_council-result-headed/share-generated.png"
+      }
+    },
+    {
+      "theme": "generic_review_chamber",
+      "question": "What if every emergency review had to pass through a rotating review chamber before execution?",
+      "scenario_id": "d5e2191d-1ca7-43d9-8d52-58317228837e",
+      "scene_theme": "switchboard_forum_variant",
+      "profile_label_zh": "通用博弈",
+      "completed_branch_count": 1,
+      "proof_targets": ["replay", "result", "share"],
+      "artifacts": {
+        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic_review_chamber-replay-proof/state-0.json",
+        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic_review_chamber-replay-headed.png",
+        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic_review_chamber-result-headed/result-initial.png",
+        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic_review_chamber-result-headed/share-generated.png"
+      }
+    }
+  ]
+}

@@ -63,6 +63,7 @@ frontend/output/*
 !frontend/output/e2e/
 frontend/output/e2e/*
 !frontend/output/e2e/sample_matrix.json
+!frontend/output/e2e/sample_matrix_variants.json
 
 # Local research notes / exports
 /LobeHub 多模型群聊协作 + Agent文件编辑 简单使用 - 搞七捻三 - LINUX DO.html
