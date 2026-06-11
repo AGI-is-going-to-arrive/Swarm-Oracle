@@ -237,6 +237,7 @@ export interface CampaignFinalizeResult {
 }
 
 export interface CampaignScenarioSummary {
+  has_campaign?: boolean;
   scenario_id: string;
   profile_id: string;
   archive_grade: string;

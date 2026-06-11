@@ -1405,7 +1405,7 @@ describe('ResultView campaign summary', () => {
     expect(getCampaignScenarioSummaryMock).toHaveBeenCalledWith('scenario-1');
   });
 
-  it('skips calling getCampaignScenarioSummary when the scenario has no campaign signals, but renders normal results', async () => {
+  it('calls getCampaignScenarioSummary for a campaign-less scenario and renders normal results without campaign UI', async () => {
     const getStoryMock = vi.mocked(apiClient.getStory);
     const getScenarioMock = vi.mocked(apiClient.getScenario);
     const getCampaignScenarioSummaryMock = vi.mocked(apiClient.getCampaignScenarioSummary);
@@ -1457,6 +1457,10 @@ describe('ResultView campaign summary', () => {
       });
 
       getCampaignScenarioSummaryMock.mockClear();
+      getCampaignScenarioSummaryMock.mockResolvedValue({ has_campaign: false } as unknown as Awaited<ReturnType<typeof apiClient.getCampaignScenarioSummary>>);
+
+      finalizeCampaignMock.mockReset();
+      finalizeCampaignMock.mockImplementation(async () => null);
 
       const { container } = render(
         <MemoryRouter initialEntries={['/result/scenario-nocampaign']}>
@@ -1470,8 +1474,8 @@ describe('ResultView campaign summary', () => {
       await screen.findByText('result.title');
       expect(container.querySelector('.result-question')).toHaveTextContent('What if there is no campaign signal?');
 
-      // Assert that getCampaignScenarioSummary is NOT called
-      expect(getCampaignScenarioSummaryMock).not.toHaveBeenCalled();
+      expect(getCampaignScenarioSummaryMock).toHaveBeenCalledWith('scenario-nocampaign');
+      expect(screen.queryByText('Director Debrief')).not.toBeInTheDocument();
     } finally {
       if (originalGetStory) {
         getStoryMock.mockImplementation(originalGetStory);
@@ -1479,6 +1483,8 @@ describe('ResultView campaign summary', () => {
       if (originalGetScenario) {
         getScenarioMock.mockImplementation(originalGetScenario);
       }
+      getCampaignScenarioSummaryMock.mockReset();
+      getCampaignScenarioSummaryMock.mockImplementation(async () => null);
     }
   });
 

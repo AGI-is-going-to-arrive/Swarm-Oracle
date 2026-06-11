@@ -466,11 +466,16 @@ export default function ResultView() {
         setAgents(agentList);
         setPredictions(preds);
 
-        const hasCampaignSignal = Boolean(scenario.director_state || scenario.gameplay_state);
-        const persistedCampaignSummary = hasCampaignSignal
-          ? await getCampaignScenarioSummary(id)
-          : null;
+        const rawCampaignSummary = await getCampaignScenarioSummary(id);
         if (cancelled) return;
+
+        // Backend now returns 200 + { has_campaign: false } for campaign-less scenarios
+        // (older backends omit the field and return either a full summary or null).
+        // Treat an explicit has_campaign === false as "no campaign", equivalent to null.
+        const persistedCampaignSummary =
+          rawCampaignSummary && rawCampaignSummary.has_campaign === false
+            ? null
+            : rawCampaignSummary;
 
         setCampaignScenarioSummary(persistedCampaignSummary);
 
