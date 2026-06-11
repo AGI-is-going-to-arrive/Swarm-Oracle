@@ -466,19 +466,6 @@ export default function ResultView() {
         setAgents(agentList);
         setPredictions(preds);
 
-        const rawCampaignSummary = await getCampaignScenarioSummary(id);
-        if (cancelled) return;
-
-        // Backend now returns 200 + { has_campaign: false } for campaign-less scenarios
-        // (older backends omit the field and return either a full summary or null).
-        // Treat an explicit has_campaign === false as "no campaign", equivalent to null.
-        const persistedCampaignSummary =
-          rawCampaignSummary && rawCampaignSummary.has_campaign === false
-            ? null
-            : rawCampaignSummary;
-
-        setCampaignScenarioSummary(persistedCampaignSummary);
-
         if (scenario.status !== 'done') {
           retryTimer = window.setTimeout(() => {
             retryTimer = null;
@@ -486,6 +473,14 @@ export default function ResultView() {
           }, 1500);
           return;
         }
+
+        const rawCampaignSummary = await getCampaignScenarioSummary(id);
+        if (cancelled) return;
+
+        const hasExplicitNoCampaign = !!rawCampaignSummary && (rawCampaignSummary as { has_campaign?: boolean }).has_campaign === false;
+        const persistedCampaignSummary = (hasExplicitNoCampaign ? null : rawCampaignSummary) as CampaignScenarioSummary | null;
+
+        setCampaignScenarioSummary(persistedCampaignSummary);
 
         // Story API might not include question — merge from scenario
         setStoryData({
@@ -613,7 +608,7 @@ export default function ResultView() {
             campaign = existingCampaign;
           }
         }
-        const shouldFinalizeCampaign = !persistedCampaignSummary?.finalized_at;
+        const shouldFinalizeCampaign = !hasExplicitNoCampaign && !persistedCampaignSummary?.finalized_at;
         if (!campaign && shouldFinalizeCampaign) {
           campaign = await finalizeCampaign(id, {
             user_id: apiUserId,

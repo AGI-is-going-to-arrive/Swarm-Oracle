@@ -237,7 +237,6 @@ export interface CampaignFinalizeResult {
 }
 
 export interface CampaignScenarioSummary {
-  has_campaign?: boolean;
   scenario_id: string;
   profile_id: string;
   archive_grade: string;
@@ -252,6 +251,15 @@ export interface CampaignScenarioSummary {
   score_breakdown?: CampaignScoreBreakdownItem[];
   finalized_at?: string | null;
 }
+
+/** Backend response for the per-scenario campaign summary endpoint.
+ *  - Explicit `{ has_campaign: false }` => the scenario has no campaign (suppress all campaign UI + finalize).
+ *  - A full summary (optionally tagged `has_campaign: true`) => render campaign UI.
+ *  - Older backends may omit the field and return either a full summary or null.
+ */
+export type CampaignScenarioSummaryResponse =
+  | { has_campaign: false }
+  | (CampaignScenarioSummary & { has_campaign?: true });
 
 export interface ScenarioDirectorObjective {
   id: string;

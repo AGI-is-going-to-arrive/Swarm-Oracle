@@ -9,7 +9,7 @@ import type {
   PredictionInfo, LeaderboardEntry,
   DebatePrediction, DebatePredictionRequest, DebateResultPayload, DebateSnapshot,
   AppendEndingRoomUserTurnRequest, CreateEndingRoomRequest, CreateEndingRoomThreadRequest, EndingRoomResultPayload, EndingRoomSnapshot, EndingRoomThreadSnapshot, EndingRoomType,
-  CampaignContext, CampaignBadge, CampaignBadgeDefinition, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummary, CampaignWeeklySummary,
+  CampaignContext, CampaignBadge, CampaignBadgeDefinition, CampaignChallengeRotation, CampaignDailyChallengeStatus, CampaignFinalizeResult, CampaignMastery, CampaignProfileSummary, CampaignScenarioSummaryResponse, CampaignWeeklySummary,
   ScenarioDirectorState, ScenarioDirectorStateResponse, ScenarioGameplayState, ScenarioGameplayStateResponse,
   WebSearchFamily,
   ReplayTraceResponse,
@@ -1212,7 +1212,7 @@ export async function getCampaignBadgeDefinitions(
 
 export async function getCampaignScenarioSummary(
   scenarioId: string,
-): Promise<CampaignScenarioSummary | null> {
+): Promise<CampaignScenarioSummaryResponse | null> {
   try {
     return await safeGet(`/campaign/scenario/${encodeURIComponent(scenarioId)}/summary`);
   } catch (err) {

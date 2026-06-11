@@ -1457,10 +1457,9 @@ describe('ResultView campaign summary', () => {
       });
 
       getCampaignScenarioSummaryMock.mockClear();
-      getCampaignScenarioSummaryMock.mockResolvedValue({ has_campaign: false } as unknown as Awaited<ReturnType<typeof apiClient.getCampaignScenarioSummary>>);
+      getCampaignScenarioSummaryMock.mockResolvedValue({ has_campaign: false });
 
-      finalizeCampaignMock.mockReset();
-      finalizeCampaignMock.mockImplementation(async () => null);
+      finalizeCampaignMock.mockClear();
 
       const { container } = render(
         <MemoryRouter initialEntries={['/result/scenario-nocampaign']}>
@@ -1476,6 +1475,7 @@ describe('ResultView campaign summary', () => {
 
       expect(getCampaignScenarioSummaryMock).toHaveBeenCalledWith('scenario-nocampaign');
       expect(screen.queryByText('Director Debrief')).not.toBeInTheDocument();
+      expect(finalizeCampaignMock).not.toHaveBeenCalled();
     } finally {
       if (originalGetStory) {
         getStoryMock.mockImplementation(originalGetStory);
@@ -1483,6 +1483,135 @@ describe('ResultView campaign summary', () => {
       if (originalGetScenario) {
         getScenarioMock.mockImplementation(originalGetScenario);
       }
+      getCampaignScenarioSummaryMock.mockReset();
+      getCampaignScenarioSummaryMock.mockImplementation(async () => null);
+    }
+  });
+
+  it('calls getCampaignScenarioSummary and handles has_campaign: true (renders campaign UI)', async () => {
+    const getCampaignScenarioSummaryMock = vi.mocked(apiClient.getCampaignScenarioSummary);
+    getCampaignScenarioSummaryMock.mockClear();
+    getCampaignScenarioSummaryMock.mockResolvedValue({
+      has_campaign: true,
+      scenario_id: 'scenario-1',
+      profile_id: 'law',
+      archive_grade: 'A',
+      profile_resonance: 'aligned',
+      betting_hit: null,
+      most_used_card: null,
+      completed_daily_challenge: false,
+      objective_completed_count: 0,
+      objective_total_count: 0,
+      commitment_outcome: null,
+      campaign_score_delta: 5,
+      finalized_at: '2026-03-17T00:00:00Z',
+    });
+
+    window.sessionStorage.setItem(
+      'swarmoracle:result-campaign-finalize:v1',
+      JSON.stringify({
+        'scenario-1::director-1::law': {
+          scenario_id: 'scenario-1',
+          already_finalized: true,
+          campaign_score_delta: 5,
+          profile: {
+            user_id: 'director-1',
+            user_name: 'Local Director',
+            total_runs: 1,
+            completed_challenges: 0,
+            total_bets: 0,
+            hit_bets: 0,
+            highest_archive_grade: 'A',
+            created_at: '2026-03-17T00:00:00Z',
+            updated_at: '2026-03-17T00:00:00Z',
+          },
+          mastery: {
+            profile_id: 'law',
+            runs: 1,
+            challenge_completions: 0,
+            signature_hits: 0,
+            aligned_hits: 1,
+            campaign_score: 5,
+            level: 2,
+            best_archive_grade: 'A',
+            favorite_card_id: null,
+            next_level_score: 10,
+            score_to_next_level: 5,
+          },
+          badges: [],
+          newly_unlocked_badges: [],
+        },
+      }),
+    );
+
+    try {
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByText('Director Debrief')).toBeInTheDocument();
+    } finally {
+      getCampaignScenarioSummaryMock.mockReset();
+      getCampaignScenarioSummaryMock.mockImplementation(async () => null);
+      window.sessionStorage.removeItem('swarmoracle:result-campaign-finalize:v1');
+    }
+  });
+
+  it('calls getCampaignScenarioSummary and handles legacy null returning value to allow normal finalize/render flow', async () => {
+    const getCampaignScenarioSummaryMock = vi.mocked(apiClient.getCampaignScenarioSummary);
+    getCampaignScenarioSummaryMock.mockClear();
+    getCampaignScenarioSummaryMock.mockResolvedValue(null);
+
+    finalizeCampaignMock.mockClear();
+    finalizeCampaignMock.mockResolvedValue({
+      scenario_id: 'scenario-1',
+      already_finalized: false,
+      campaign_score_delta: 5,
+      profile: {
+        id: 'profile-1',
+        user_id: 'director-1',
+        user_name: 'Local Director',
+        total_runs: 1,
+        completed_challenges: 0,
+        total_bets: 0,
+        hit_bets: 0,
+        highest_archive_grade: 'A',
+        created_at: '2026-03-17T00:00:00Z',
+        updated_at: '2026-03-17T00:00:00Z',
+      },
+      mastery: {
+        profile_id: 'law',
+        runs: 1,
+        challenge_completions: 0,
+        signature_hits: 0,
+        aligned_hits: 1,
+        campaign_score: 5,
+        level: 2,
+        best_archive_grade: 'A',
+        favorite_card_id: null,
+        next_level_score: 10,
+        score_to_next_level: 5,
+      },
+      badges: [],
+      newly_unlocked_badges: [],
+    });
+
+    try {
+      render(
+        <MemoryRouter initialEntries={['/result/scenario-1']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByText('Director Debrief')).toBeInTheDocument();
+      expect(finalizeCampaignMock).toHaveBeenCalledTimes(1);
+    } finally {
       getCampaignScenarioSummaryMock.mockReset();
       getCampaignScenarioSummaryMock.mockImplementation(async () => null);
     }
