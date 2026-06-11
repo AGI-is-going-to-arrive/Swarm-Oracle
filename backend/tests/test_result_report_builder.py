@@ -18,8 +18,10 @@ from app.main import app
 from app.models import (
     Agent,
     AgentMessage,
+    AgentRelationEdge,
     Branch,
     BranchStatus,
+    FactionSnapshot,
     Round,
     Scenario,
     ScenarioStatus,
@@ -118,6 +120,50 @@ def _seed_report_scenario() -> str:
         )
         session.commit()
     return "scenario-report"
+
+
+def _seed_report_faction_data(scenario_id: str) -> None:
+    engine = get_engine()
+    with Session(engine) as session:
+        session.add_all(
+            [
+                FactionSnapshot(
+                    id="snap-report-pro",
+                    scenario_id=scenario_id,
+                    branch_id="branch-a",
+                    round_number=2,
+                    faction_key="pro",
+                    label="Pro approval",
+                    stance_center=0.82,
+                    member_agent_ids_json=json.dumps(
+                        ["agent-planner", "agent-privacy"],
+                    ),
+                    confidence=0.9,
+                ),
+                FactionSnapshot(
+                    id="snap-report-review",
+                    scenario_id=scenario_id,
+                    branch_id="branch-a",
+                    round_number=2,
+                    faction_key="review",
+                    label="Review skeptics",
+                    stance_center=0.28,
+                    member_agent_ids_json=json.dumps(["agent-privacy"]),
+                    confidence=0.72,
+                ),
+                AgentRelationEdge(
+                    id="edge-report-planner-privacy",
+                    scenario_id=scenario_id,
+                    branch_id="branch-a",
+                    round_number=2,
+                    source_agent_id="agent-planner",
+                    target_agent_id="agent-privacy",
+                    trust_score=0.4,
+                    opposition_score=0.65,
+                ),
+            ]
+        )
+        session.commit()
 
 
 def _set_raw_parsed_context(scenario_id: str, raw_value: str | None) -> None:
@@ -243,6 +289,104 @@ async def test_build_report_persists_complete_report_with_evidence_coords(monkey
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert persisted.status == "complete"
     assert persisted.evidence[0].agent_name == "Privacy Advocate"
+
+
+@pytest.mark.asyncio
+async def test_build_report_attaches_reducer_charts_to_semantic_sections(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    _seed_report_faction_data(scenario_id)
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline", "factions"]),
+            _section_payload("timeline"),
+            _section_payload("factions"),
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    await builder.build_report(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    )
+
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    sections_by_id = {section.id: section for section in persisted.sections}
+    timeline_charts = {chart.type: chart for chart in sections_by_id["timeline"].charts}
+    faction_charts = {chart.type: chart for chart in sections_by_id["factions"].charts}
+
+    assert set(timeline_charts) == {"probability_bar"}
+    assert set(faction_charts) == {"faction_share"}
+    probability_data = timeline_charts["probability_bar"].data
+    assert set(probability_data) == {"status", "reason", "sort", "branches"}
+    assert probability_data["status"] == "available"
+    assert probability_data["reason"] is None
+    assert probability_data["branches"][0] == {
+        "branch_id": "branch-a",
+        "label": "Approval with safeguards",
+        "probability": 0.68,
+        "dominant": True,
+        "status": "COMPLETED",
+    }
+    faction_data = faction_charts["faction_share"].data
+    assert set(faction_data) == {
+        "status",
+        "reason",
+        "factions",
+        "relation_edge_count",
+        "avg_opposition",
+    }
+    assert faction_data["status"] == "available"
+    assert faction_data["reason"] is None
+    assert faction_data["relation_edge_count"] == 1
+    assert faction_data["avg_opposition"] == pytest.approx(0.65)
+    assert faction_data["factions"][0] == {
+        "faction_key": "pro",
+        "label": "Pro approval",
+        "member_count": 2,
+        "share": pytest.approx(0.6667),
+        "stance_center": 0.82,
+        "confidence": 0.9,
+    }
+
+
+@pytest.mark.asyncio
+async def test_build_report_attaches_empty_state_chart_when_data_is_missing(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline", "sources"]),
+            _section_payload("timeline"),
+            _section_payload("sources"),
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    await builder.build_report(
+        scenario_id,
+        "branch-a",
+        overrides=None,
+    )
+
+    persisted = validate_full_report_payload(_persisted_report(scenario_id))
+    charts = {
+        chart.type: chart.data
+        for section in persisted.sections
+        for chart in section.charts
+    }
+
+    assert "probability_bar" in charts
+    assert charts["faction_share"] == {
+        "status": "missing",
+        "reason": "no_faction_snapshots",
+        "factions": [],
+        "relation_edge_count": 0,
+        "avg_opposition": None,
+    }
 
 
 @pytest.mark.asyncio

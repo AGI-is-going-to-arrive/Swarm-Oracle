@@ -30,6 +30,7 @@ from app.services.result_report.reducer import TARGET_BRANCH_SORT, ReducerResult
 from app.services.result_report.reducer import reduce as reduce_report
 from app.services.result_report.schema import (
     AnalyticConfidence,
+    Chart,
     FullReport,
     I18nText,
     IndicatorToWatch,
@@ -65,6 +66,10 @@ _ALLOWED_SECTION_IDS = (
     "indicators",
     "sources",
 )
+_CHART_SECTION_PREFERENCES: dict[str, tuple[str, ...]] = {
+    "probability_bar": ("timeline", "indicators", "sources", "factions", "conflicts"),
+    "faction_share": ("factions", "conflicts", "timeline", "sources", "indicators"),
+}
 _TIER_ORDER: dict[SectionTier, int] = {"generation": 0, "rewrite": 1, "static": 2}
 _REPORT_LOCKS: dict[str, asyncio.Lock] = {}
 _SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
@@ -1027,6 +1032,7 @@ def _assemble_report(
     language = "zh" if context.language == "zh" else "en"
     title_i18n = I18nText.model_validate(outline.title_i18n)
     summary_i18n = I18nText.model_validate(outline.summary_i18n)
+    sections_with_charts = _attach_reducer_charts(sections, reducer_result)
     report = FullReport(
         version="1.0",
         generated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -1047,7 +1053,7 @@ def _assemble_report(
             analytic_confidence=reducer_result.analytic_confidence,
             disclaimer=None,
         ),
-        sections=sections,
+        sections=sections_with_charts,
         evidence=_safe_evidence_refs(reducer_result),
         indicators_to_watch=_safe_indicators_to_watch(context, reducer_result),
         dissenting=reducer_result.dissenting,
@@ -1062,6 +1068,56 @@ def _assemble_report(
         language_status=LanguageStatus(zh="available", en="available"),
     )
     return report
+
+
+def _attach_reducer_charts(
+    sections: list[ReportSection],
+    reducer_result: ReducerResult,
+) -> list[ReportSection]:
+    if not sections or not reducer_result.charts:
+        return sections
+
+    reducer_charts = [
+        chart
+        for chart in reducer_result.charts
+        if chart.type in _CHART_SECTION_PREFERENCES
+    ]
+    if not reducer_charts:
+        return sections
+
+    assignments = _assign_chart_sections(sections, reducer_charts)
+    reducer_chart_types = {chart.type for chart in reducer_charts}
+    updated_sections: list[ReportSection] = []
+    for section in sections:
+        next_charts = [
+            chart
+            for chart in section.charts
+            if chart.type not in reducer_chart_types
+        ]
+        next_charts.extend(
+            chart
+            for chart in reducer_charts
+            if assignments.get(chart.type) == section.id
+        )
+        updated_sections.append(section.model_copy(update={"charts": next_charts}))
+    return updated_sections
+
+
+def _assign_chart_sections(
+    sections: list[ReportSection],
+    reducer_charts: list[Chart],
+) -> dict[str, str]:
+    section_ids = [section.id for section in sections]
+    available = set(section_ids)
+    assignments: dict[str, str] = {}
+    for chart in reducer_charts:
+        preferences = _CHART_SECTION_PREFERENCES.get(chart.type, ())
+        target_section_id = next(
+            (section_id for section_id in preferences if section_id in available),
+            section_ids[0],
+        )
+        assignments[chart.type] = target_section_id
+    return assignments
 
 
 def _safe_indicators_to_watch(
