@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../api/client';
 import { ApiError } from '../api/client';
 import type { ScenarioMeta } from '../lib/scenarioMeta';
-import type { Scenario } from '../types';
+import type { Scenario, StoryResponse } from '../types';
 import { buildScenarioReplayUrl, compactScenarioMetaForReplay } from '../lib/scenarioReplay';
 import { clearPretextCache } from '../lib/textLayout/pretext';
 import {
@@ -110,6 +110,7 @@ const {
       return 'Importing...';
     }
     const resultCopy: Record<string, string> = {
+      'result.report.disclaimer': 'This probability is a narrative simulation result, not a real-world prediction.',
       'result.replay_invalid': 'This replay link is invalid or incomplete.',
       'result.load_result_failed': 'Failed to load results',
       'result.import_replay_failed': 'Failed to import replay',
@@ -4475,6 +4476,103 @@ describe('ResultView export flow', () => {
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
     expect(appendChildSpy).toHaveBeenCalled();
     expect(removeChildSpy).toHaveBeenCalled();
+  });
+
+  it('falls back to the localized boilerplate disclaimer when verdict disclaimer is null in markdown export', async () => {
+    const user = userEvent.setup();
+    const createObjectURLMock = vi.mocked(URL.createObjectURL);
+    createObjectURLMock.mockClear();
+
+    setMockCapabilities({
+      result_report: { enabled: true },
+      causal_graph: { enabled: true },
+      factions: { enabled: true },
+    });
+
+    vi.mocked(apiClient.getStory).mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'What if?',
+      status: 'done',
+      branches: [
+        {
+          id: 'branch-1',
+          title: 'Archive Branch',
+          probability: 1,
+          status: 'COMPLETED',
+          story: 'A complete branch story.',
+          insight: 'A durable insight.',
+          key_moments: ['Moment 1'],
+          parent_branch_id: null,
+          fork_reason: '',
+          replay_kind: null,
+          replay_source_branch_id: null,
+        },
+      ],
+      full_report: {
+        status: 'complete',
+        version: '1',
+        generated_at: '2026-03-17T00:00:00Z',
+        generation_mode: 'static',
+        target_branch_id: 'branch-1',
+        target_branch_sort: ['branch-1'],
+        language: 'en',
+        available_languages: ['en'],
+        title: 'Test Report Title',
+        title_i18n: { zh: '测试报告标题', en: 'Test Report Title' },
+        summary: 'Test summary',
+        summary_i18n: { zh: '测试摘要', en: 'Test summary' },
+        sections: [],
+        evidence: [],
+        indicators_to_watch: [],
+        limitations: 'Test limitations',
+        dissenting: null,
+        key_participants: [],
+        follow_ups: [],
+        interview_evidence: [],
+        premortem: [],
+        language_status: null,
+        verdict: {
+          headline_answer: 'Test headline answer',
+          likelihood: {
+            probability: 0.9,
+            interval: [0.8, 1.0],
+            wep: 'almost_certain',
+          },
+          analytic_confidence: {
+            level: 'high',
+            basis: 'Test basis',
+          },
+          disclaimer: null,
+        },
+      },
+    } as StoryResponse);
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const exportButton = await screen.findByRole('button', { name: 'result.export' });
+    await user.click(exportButton);
+
+    await waitFor(() => {
+      expect(createObjectURLMock).toHaveBeenCalledTimes(1);
+    });
+
+    const blob = createObjectURLMock.mock.calls[0][0] as Blob;
+    const blobText = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(blob);
+    });
+
+    expect(blobText).toContain('This probability is a narrative simulation result, not a real-world prediction.');
+    expect(blobText).not.toContain('Disclaimer: null');
+    expect(blobText).not.toContain('Disclaimer: undefined');
   });
 });
 

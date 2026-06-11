@@ -582,7 +582,7 @@ export interface ReportVerdict {
     basis: string;
     basis_i18n?: { zh?: string; en?: string };
   };
-  disclaimer: string;
+  disclaimer: string | null;
 }
 
 export interface ReportChart {

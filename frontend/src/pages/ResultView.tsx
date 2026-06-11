@@ -765,7 +765,7 @@ export default function ResultView() {
             `\n**${isZh ? '摘要' : 'Summary'}**: ${summary}`,
             `\n**${isZh ? '结论' : 'Verdict'}**: ${report.verdict.headline_answer}`,
             `\n**${isZh ? '置信度' : 'Confidence'}**: ${report.verdict.analytic_confidence.level} — ${report.verdict.analytic_confidence.basis}`,
-            `\n**${isZh ? '免责声明' : 'Disclaimer'}**: ${report.verdict.disclaimer}`,
+            `\n**${isZh ? '免责声明' : 'Disclaimer'}**: ${report.verdict.disclaimer?.trim() ? report.verdict.disclaimer : t('result.report.disclaimer', 'This probability is a narrative simulation result, not a real-world prediction.')}`,
             sections.join('\n'),
             evidence.length ? `\n## ${isZh ? '证据' : 'Evidence'}\n\n${evidence.join('\n')}` : '',
             indicators.length ? `\n## ${isZh ? '观察指标' : 'Indicators to Watch'}\n\n${indicators.join('\n')}` : '',
