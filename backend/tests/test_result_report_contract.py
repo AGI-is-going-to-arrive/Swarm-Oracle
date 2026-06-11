@@ -196,6 +196,17 @@ def test_full_report_schema_accepts_legal_payload_and_freezes_fields():
     }
 
 
+def test_full_report_schema_accepts_generating_status():
+    from app.services.result_report.schema import validate_full_report_payload
+
+    payload = _legal_full_report()
+    payload["status"] = "generating"
+
+    report = validate_full_report_payload(payload)
+
+    assert report.status == "generating"
+
+
 def test_full_report_schema_accepts_nullable_dissenting_without_changing_field_set():
     from app.services.result_report.schema import FullReport, validate_full_report_payload
 
@@ -355,7 +366,7 @@ def test_full_report_schema_rejects_post_default_byte_cap_overflow():
         FullReport.model_validate(payload).model_dump(mode="json"),
     )
     assert raw_size == 1222
-    assert response_size == 1352
+    assert response_size == 1370
 
     with pytest.raises(ValueError, match="byte budget"):
         validate_full_report_payload(payload, max_bytes=raw_size)
@@ -459,6 +470,30 @@ async def test_story_full_report_oversize_returns_partial_metadata(monkeypatch):
 
     assert result["full_report"] == {"status": "partial", "truncated": True}
     assert len(json.dumps(result["full_report"]).encode("utf-8")) < 80
+
+
+@pytest.mark.asyncio
+async def test_story_full_report_downgrades_stale_generating_without_runtime_lease(
+    monkeypatch,
+):
+    import app.api.scenarios as scenarios_api
+
+    payload = _legal_full_report()
+    payload["status"] = "generating"
+    sid = _seed_scenario_with_branch(full_report=payload)
+
+    monkeypatch.setattr(scenarios_api.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(
+        scenarios_api.result_report_builder,
+        "report_generation_is_active",
+        lambda _scenario_id: False,
+        raising=False,
+    )
+
+    result = await scenarios_api.get_story(sid, principal=None)
+
+    assert result["full_report"]["status"] == "partial"
+    assert result["full_report"]["version"] == "1.0"
 
 
 def test_report_generate_sse_endpoint_contract(monkeypatch):

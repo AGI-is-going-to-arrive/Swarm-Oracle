@@ -7,6 +7,7 @@ import {
   createScenario,
   exportScenario,
   exportScenarioSnapshot,
+  generateReport,
   generateSocialCopy,
   getAgentIdentityProfile,
   getAgentProfileData,
@@ -677,5 +678,70 @@ describe('agent profile helpers', () => {
         'user-1',
       ),
     ).rejects.toMatchObject({ status: 403, code: 'SESSION_PRINCIPAL_MISMATCH' });
+  });
+
+  describe('generateReport', () => {
+    it('uses the 35-minute budget timeout by default and passes it to fetchWithTimeout', async () => {
+      vi.useFakeTimers();
+      const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
+      
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: {
+          get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+        },
+        json: vi.fn().mockResolvedValue({}),
+        text: vi.fn().mockResolvedValue('{}'),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await generateReport('scenario-test');
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 35 * 60_000);
+      
+      setTimeoutSpy.mockRestore();
+    });
+
+    it('serializes ONLY allowed BYOK fields in the payload and excludes reasoning_effort, user_id, and disable_user_quota', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: {
+          get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+        },
+        json: vi.fn().mockResolvedValue({}),
+        text: vi.fn().mockResolvedValue('{}'),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await generateReport('scenario-test', {
+        llmApiKey: 'key',
+        llmBaseUrl: 'base',
+        llmModel: 'model',
+        temperature: 0.5,
+        llmRequestsPerMinute: 10,
+        llmTokensPerMinute: 100,
+        reasoningEffort: 'low',
+        userId: 'user-id',
+        disableUserQuota: true,
+      });
+
+      expect(fetchMock).toHaveBeenCalled();
+      const lastCall = fetchMock.mock.calls[0];
+      const requestInit = lastCall[1] as RequestInit;
+      const body = JSON.parse(requestInit.body as string);
+
+      expect(body).toEqual({
+        llm_api_key: 'key',
+        llm_base_url: 'base',
+        llm_model: 'model',
+        temperature: 0.5,
+        llm_requests_per_minute: 10,
+        llm_tokens_per_minute: 100,
+      });
+
+      expect(body.reasoning_effort).toBeUndefined();
+      expect(body.user_id).toBeUndefined();
+      expect(body.disable_user_quota).toBeUndefined();
+    });
   });
 });

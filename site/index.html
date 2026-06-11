@@ -154,7 +154,7 @@
     <div class="section__head reveal">
       <div class="rule" aria-hidden="true"></div>
       <p class="kicker" data-zh="价值主张" data-en="Value">价值主张</p>
-      <h2 class="section__title" id="values-title" data-zh="为什么是神谕，而不是又一个面板" data-en="Why an oracle, not another dashboard">为什么是神谕，而不是又一个面板</h2>
+      <h2 class="section__title" id="values-title" data-zh="从数据图表到互动叙事" data-en="From metrics to interactive narrative">从数据图表到互动叙事</h2>
     </div>
     <div class="values">
       <article class="value reveal">
@@ -278,23 +278,26 @@
       </div>
       <div class="qs__panel" id="panel-local" data-panel="local" role="tabpanel" aria-labelledby="tab-local" hidden>
         <div class="code">
-          <div class="code__head"><span class="code__title">backend + frontend</span><button type="button" class="copy" data-copy="cd backend
+          <div class="code__head"><span class="code__title">Backend</span><button type="button" class="copy" data-copy="cd backend
 python -m venv .venv &amp;&amp; source .venv/bin/activate
 pip install -e &quot;.[dev]&quot;
 cp ../.env.example .env
-uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload
-cd frontend
-npm install
-npm run dev"><span data-zh="复制" data-en="Copy">复制</span></button></div>
+uvicorn app.main:app --host 127.0.0.1 --port 18927 --reload"><span data-zh="复制" data-en="Copy">复制</span></button></div>
           <pre><code><span class="cmd">cd</span> backend
 <span class="cmd">python</span> -m venv .venv &amp;&amp; <span class="cmd">source</span> .venv/bin/activate
 <span class="cmd">pip</span> install -e ".[dev]"
 <span class="cmd">cp</span> ../.env.example .env
-<span class="cmd">uvicorn</span> app.main:app --host 127.0.0.1 --port 18927 --reload
-<span class="cmd">cd</span> frontend
+<span class="cmd">uvicorn</span> app.main:app --host 127.0.0.1 --port 18927 --reload</code></pre>
+        </div>
+        <div class="code" style="margin-top: 1rem;">
+          <div class="code__head"><span class="code__title">Frontend</span><button type="button" class="copy" data-copy="cd ../frontend
+npm install
+npm run dev"><span data-zh="复制" data-en="Copy">复制</span></button></div>
+          <pre><code><span class="cmd">cd</span> ../frontend
 <span class="cmd">npm</span> install
 <span class="cmd">npm</span> run dev</code></pre>
         </div>
+        <p class="qs__note" data-zh="提示：前端需要在项目根目录新开第二个终端运行（Windows PowerShell 用户请参考 README）。" data-en="Note: The frontend block runs in a second terminal from the repo root (Windows PowerShell users please refer to the README).">提示：前端需要在项目根目录新开第二个终端运行（Windows PowerShell 用户请参考 README）。</p>
       </div>
       <div class="qs__open">
         <div class="code">
@@ -331,7 +334,7 @@ npm run dev"><span data-zh="复制" data-en="Copy">复制</span></button></div>
   <div class="shell footer__grid">
     <div>
       <div class="footer__brand">SwarmOracle <span class="footer__brand-sub">群体预言机</span></div>
-      <p class="footer__note" data-zh="静态介绍页，非可运行应用。本页面是静态展示页，不是可运行的应用。" data-en="Static showcase page, not the running app.">静态介绍页，非可运行应用。本页面是静态展示页，不是可运行的应用。</p>
+      <p class="footer__note" data-zh="静态介绍页，非可运行应用。" data-en="Static showcase page, not the running app.">静态介绍页，非可运行应用。</p>
     </div>
     <p class="footer__legal">
       <span data-zh="许可证" data-en="License">许可证</span> · <a href="https://github.com/AGI-is-going-to-arrive/Swarm-Oracle" target="_blank" rel="noopener">AGPL-3.0 · Source</a><br>

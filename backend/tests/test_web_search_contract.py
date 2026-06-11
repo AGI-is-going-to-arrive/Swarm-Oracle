@@ -329,8 +329,10 @@ class TestHealthTestWebSearchServerHint:
         assert ws["method"] == "external"
         assert ws["provider"] == "searxng"
 
-    def test_server_enabled_native_not_yet_implemented(self, client, monkeypatch):
-        """Native provider is a no-op — server_enabled must be False, method=none."""
+    def test_server_enabled_stale_native_value_fails_closed(self, client, monkeypatch):
+        """`native` is removed from config; a stale runtime value (e.g. an old
+        deployment that bypassed validation) must stay fail-closed: search never
+        reports server_enabled."""
         self._patch_llm(monkeypatch)
         from app.config import settings
         monkeypatch.setattr(settings, "ENABLE_WEB_SEARCH", True)
@@ -340,7 +342,6 @@ class TestHealthTestWebSearchServerHint:
         ws = data["web_search"]
         assert ws["scope"] == "server"
         assert ws["server_enabled"] is False
-        assert ws["method"] == "none"
         assert ws["provider"] == "native"
 
     def test_server_enabled_exa_with_key(self, client, monkeypatch):
@@ -726,14 +727,16 @@ class TestScenarioResponseWebSearchContext:
 
 # Test: native provider must not preflight pass
 def test_native_provider_preflight_not_pass(monkeypatch):
-    """WEB_SEARCH_PROVIDER=native must not report preflight pass (ADR-8)."""
+    """`native` is removed; a stale runtime value must hard-fail preflight (ADR-8:
+    native must never preflight pass — now fail-closed instead of warn)."""
     monkeypatch.setattr("app.config.settings.ENABLE_WEB_SEARCH", True)
     monkeypatch.setattr("app.config.settings.WEB_SEARCH_PROVIDER", "native")
     from app.services.preflight import _check_web_search
     result = _check_web_search()
     assert result.status != "pass", "native provider must not pass preflight"
-    assert result.status == "warn"
-    assert "not yet implemented" in result.message.lower() or "native" in result.message.lower()
+    assert result.status == "fail"
+    assert "unsupported" in result.message.lower()
+    assert "native" in result.message.lower()
 
 
 @pytest.mark.parametrize("provider,needs_key", [

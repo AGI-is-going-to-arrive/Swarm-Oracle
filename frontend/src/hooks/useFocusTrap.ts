@@ -20,6 +20,8 @@ function getFocusable(container: HTMLElement): HTMLElement[] {
   });
 }
 
+const activeTrapsStack: HTMLElement[] = [];
+
 /**
  * Trap Tab/Shift+Tab inside the container while active. On deactivation,
  * restore focus to whichever element was focused at the time the trap turned on.
@@ -40,7 +42,10 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
 
     const doc = container.ownerDocument || document;
 
+    activeTrapsStack.push(container);
+
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (activeTrapsStack[activeTrapsStack.length - 1] !== container) return;
       if (event.key !== 'Tab') return;
       const focusable = getFocusable(container);
       if (focusable.length === 0) {
@@ -77,6 +82,10 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
     doc.addEventListener('keydown', handleKeyDown);
     return () => {
       doc.removeEventListener('keydown', handleKeyDown);
+      const idx = activeTrapsStack.indexOf(container);
+      if (idx !== -1) {
+        activeTrapsStack.splice(idx, 1);
+      }
       const previous = previouslyFocusedRef.current;
       if (previous && typeof previous.focus === 'function') {
         previous.focus();

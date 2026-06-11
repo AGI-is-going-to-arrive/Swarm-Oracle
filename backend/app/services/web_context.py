@@ -1976,9 +1976,9 @@ async def fetch_web_context(
 
     provider = request_config.provider
     if provider == "native":
-        # Deprecated: `native` is rejected by config validator; this branch only
-        # protects against legacy/monkeypatched runtime overrides (V2 scope).
-        logger.info("Native web search provider is V2 — skipping")
+        # `native` is rejected by Settings; this only protects against legacy or
+        # monkeypatched runtime overrides reaching the app-layer dispatcher.
+        logger.info("Deprecated native web search provider reached runtime; skipping")
         return None
 
     # In-flight de-duplication: if multiple coroutines miss cache concurrently,

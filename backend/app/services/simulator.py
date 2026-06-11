@@ -2689,8 +2689,10 @@ async def _run_simulation_impl(
             if report_branch_id:
                 report_overrides = {
                     key: (
-                        str(value)
-                        if key in {"api_key", "base_url", "model"} and value is not None
+                        value
+                        if key == "api_key"
+                        else str(value)
+                        if key in {"base_url", "model"} and value is not None
                         else value
                     )
                     for key, value in (llm_overrides or {}).items()

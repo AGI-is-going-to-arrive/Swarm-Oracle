@@ -11,10 +11,10 @@
       "completed_branch_count": 13,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/governance-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/governance-replay-headed.png",
+        "result": "frontend/output/e2e/governance-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/governance-result-headed/share-generated.png"
       }
     },
     {
@@ -26,10 +26,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/law-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/law-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/law-replay-headed.png",
+        "result": "frontend/output/e2e/law-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/law-result-headed/share-generated.png"
       }
     },
     {
@@ -41,10 +41,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/trade-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/trade-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/trade-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/trade-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/trade-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/trade-replay-headed.png",
+        "result": "frontend/output/e2e/trade-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/trade-result-headed/share-generated.png"
       }
     },
     {
@@ -56,10 +56,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/ecology-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/ecology-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/ecology-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/ecology-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/ecology-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/ecology-replay-headed.png",
+        "result": "frontend/output/e2e/ecology-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/ecology-result-headed/share-generated.png"
       }
     },
     {
@@ -71,10 +71,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/war-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/war-replay-headed.png",
+        "result": "frontend/output/e2e/war-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/war-result-headed/share-generated.png"
       }
     },
     {
@@ -86,10 +86,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/faith-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/faith-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/faith-replay-headed.png",
+        "result": "frontend/output/e2e/faith-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/faith-result-headed/share-generated.png"
       }
     },
     {
@@ -101,10 +101,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/industry-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/industry-replay-headed.png",
+        "result": "frontend/output/e2e/industry-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/industry-result-headed/share-generated.png"
       }
     },
     {
@@ -116,10 +116,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/frontier-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/frontier-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/frontier-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/frontier-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/frontier-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/frontier-replay-headed.png",
+        "result": "frontend/output/e2e/frontier-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/frontier-result-headed/share-generated.png"
       }
     },
     {
@@ -131,10 +131,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/mythic-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/mythic-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/mythic-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/mythic-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/mythic-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/mythic-replay-headed.png",
+        "result": "frontend/output/e2e/mythic-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/mythic-result-headed/share-generated.png"
       }
     },
     {
@@ -146,10 +146,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/survival-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/survival-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/survival-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/survival-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/survival-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/survival-replay-headed.png",
+        "result": "frontend/output/e2e/survival-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/survival-result-headed/share-generated.png"
       }
     },
     {
@@ -161,10 +161,10 @@
       "completed_branch_count": 7,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/generic-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/generic-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/generic-replay-headed.png",
+        "result": "frontend/output/e2e/generic-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/generic-result-headed/share-generated.png"
       }
     },
     {
@@ -176,10 +176,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-surveillance-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-surveillance-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-surveillance-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/governance-surveillance-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/governance-surveillance-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/governance-surveillance-replay-headed.png",
+        "result": "frontend/output/e2e/governance-surveillance-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/governance-surveillance-result-headed/share-generated.png"
       }
     },
     {
@@ -191,10 +191,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/empire-palace-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/empire-palace-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/empire-palace-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/empire-palace-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/empire-palace-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/empire-palace-replay-headed.png",
+        "result": "frontend/output/e2e/empire-palace-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/empire-palace-result-headed/share-generated.png"
       }
     },
     {
@@ -206,10 +206,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-grid-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-grid-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-grid-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/industry-grid-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/industry-grid-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/industry-grid-replay-headed.png",
+        "result": "frontend/output/e2e/industry-grid-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/industry-grid-result-headed/share-generated.png"
       }
     },
     {
@@ -221,10 +221,10 @@
       "completed_branch_count": 1,
       "proof_targets": ["replay", "result", "share"],
       "artifacts": {
-        "replay_state": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-logistics-replay-proof/state-0.json",
-        "replay": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-logistics-replay-headed.png",
-        "result": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-logistics-result-headed/result-initial.png",
-        "share": "/Users/yangjunjie/Desktop/upgrade-test/frontend/output/e2e/war-logistics-result-headed/share-generated.png"
+        "replay_state": "frontend/output/e2e/war-logistics-replay-proof/state-0.json",
+        "replay": "frontend/output/e2e/war-logistics-replay-headed.png",
+        "result": "frontend/output/e2e/war-logistics-result-headed/result-initial.png",
+        "share": "frontend/output/e2e/war-logistics-result-headed/share-generated.png"
       }
     }
   ]

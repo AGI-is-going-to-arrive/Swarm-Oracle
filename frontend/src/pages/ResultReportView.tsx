@@ -55,7 +55,7 @@ export default function ResultReportView() {
 
   if (capLoading) {
     return (
-      <div className="p-8 max-w-4xl mx-auto">
+      <div className="p-4 sm:p-8 max-w-4xl mx-auto">
         <ProgressIndicator currentStep={4} />
         <div className="mt-8 animate-pulse motion-reduce:animate-none space-y-4">
           <div className="h-8 bg-[color:var(--bg-hover)] rounded w-1/3" />
@@ -134,7 +134,7 @@ export default function ResultReportView() {
 
   if (loading) {
     return (
-      <div className="p-8 max-w-4xl mx-auto">
+      <div className="p-4 sm:p-8 max-w-4xl mx-auto">
         <ProgressIndicator currentStep={4} />
         <div className="mt-8 animate-pulse motion-reduce:animate-none space-y-4">
           <div className="h-8 bg-[color:var(--bg-hover)] rounded w-1/3" />

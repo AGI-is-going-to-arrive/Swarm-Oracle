@@ -9,6 +9,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _LOCAL_LLM_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
 _PLACEHOLDER_LLM_API_KEYS = {"", "sk-12345678", "your-api-key-here"}
+WEB_SEARCH_PROVIDER_CHOICES = frozenset({"tavily", "exa", "firecrawl", "xai", "searxng"})
+WEB_SEARCH_PROVIDER_CHOICES_LABEL = "tavily | exa | firecrawl | xai | searxng"
 
 
 def is_placeholder_llm_api_key(api_key: str) -> bool:
@@ -218,10 +220,11 @@ class Settings(BaseSettings):
     @classmethod
     def validate_web_search_provider(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {"tavily", "exa", "firecrawl", "xai", "searxng", "native"}:
+        if normalized not in WEB_SEARCH_PROVIDER_CHOICES:
             raise ValueError(
-                "WEB_SEARCH_PROVIDER must be one of "
-                "'tavily', 'exa', 'firecrawl', 'xai', 'searxng', 'native'"
+                f"WEB_SEARCH_PROVIDER must be one of {WEB_SEARCH_PROVIDER_CHOICES_LABEL}; "
+                "'native' is no longer supported; pick a listed provider or unset "
+                "WEB_SEARCH_PROVIDER"
             )
         return normalized
 

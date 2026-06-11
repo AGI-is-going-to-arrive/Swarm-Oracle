@@ -102,14 +102,14 @@ export const ReportEvidenceDrawer = React.memo(function ReportEvidenceDrawer({
         ref={drawerRef}
         role="dialog"
         aria-modal="true"
-        aria-label={t('result.report.evidenceDrawer')}
+        aria-labelledby="evidence-drawer-title"
         aria-describedby="evidence-drawer-description"
         className={`fixed right-0 top-0 bottom-0 w-full max-w-md bg-[color:var(--bg-elevated)] shadow-2xl z-50 flex flex-col transform transition-transform duration-300 ease-in-out motion-reduce:transition-none forced-colors:border ${
           active ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
         <div className="flex items-center justify-between p-4 border-b border-[color:var(--border-subtle)]">
-          <h2 className="text-lg font-semibold text-[color:var(--text-primary)]">
+          <h2 id="evidence-drawer-title" className="text-lg font-semibold text-[color:var(--text-primary)]">
             {t('result.report.citedEvidence')}
           </h2>
           <button

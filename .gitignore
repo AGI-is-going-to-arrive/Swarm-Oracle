@@ -4,12 +4,18 @@
 .trae/
 .agent/*.png
 .env
+.env.*
+!.env.example
+!.env.docker
 .env.docker.local
 
 # Python
 **/__pycache__/
 **/*.pyc
+.venv/
 backend/.venv/
+**/.pytest_cache/
+**/.ruff_cache/
 backend/.pytest_cache/
 backend/swarmoracle_backend.egg-info/
 backend/.env
@@ -23,6 +29,7 @@ chroma_data/
 frontend/node_modules/
 frontend/dist/
 frontend/dist-spikes/
+frontend/coverage/
 frontend/.tmp-playwright/
 
 # Generated runtime artifacts
@@ -86,6 +93,12 @@ frontend/.playwright-cli/
 # Release audit output (local-only)
 /.release-audit/
 /.ccg/
+
+# Dev/internal helper scripts — kept locally, never published.
+# Only these known local helpers are ignored; new repo-level scripts stay visible.
+/scripts/codex-heartbeat.mjs
+/scripts/generate-gemini-image.mjs
+/scripts/mock-llm-server.mjs
 
 # Dev/internal docs — kept locally, never published
 /CLAUDE.md

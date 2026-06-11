@@ -580,6 +580,7 @@ export interface ReportVerdict {
   analytic_confidence: {
     level: 'high' | 'medium' | 'low';
     basis: string;
+    basis_i18n?: { zh?: string; en?: string };
   };
   disclaimer: string;
 }
@@ -641,7 +642,7 @@ export interface FullReport {
   title_i18n: { zh: string; en: string };
   summary: string;
   summary_i18n: { zh: string; en: string };
-  status: 'complete' | 'partial' | 'failed' | 'skipped';
+  status: 'complete' | 'partial' | 'failed' | 'skipped' | 'generating';
   tier: 'generation' | 'rewrite' | 'static';
   verdict: ReportVerdict;
   sections: ReportSection[];

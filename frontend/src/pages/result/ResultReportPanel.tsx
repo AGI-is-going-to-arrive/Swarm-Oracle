@@ -1,12 +1,15 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { useResultContext } from './ResultContext';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
-import { generateReport } from '../../api/client';
+import { generateReport, getStory } from '../../api/client';
 import { ReportConfidenceBadge } from './ReportConfidenceBadge';
 import { ReportToc } from './ReportToc';
 import { ReportSection } from './ReportSection';
 import { ReportEvidenceDrawer } from './ReportEvidenceDrawer';
+import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
+import { getLocalizedApiErrorMessage } from '../../lib/apiErrorMessage';
 import type { FullReport, FullReportTruncatedMarker, ReportEvidence, StoryData } from '../../types';
 
 interface Props {
@@ -34,11 +37,11 @@ function isFullReport(
 }
 
 const ALLOWED_SECTION_IDS = ['timeline', 'factions', 'conflicts', 'premortem', 'indicators', 'sources'];
-const REPORT_GENERATE_TIMEOUT_MS = 60_000;
+const REPORT_GENERATE_TIMEOUT_MS = 35 * 60_000;
 
-async function drainReportStream(res: Response, signal: AbortSignal): Promise<void> {
+async function drainReportStreamAndDetectAlreadyRunning(res: Response, signal: AbortSignal): Promise<boolean> {
   const reader = res.body?.getReader();
-  if (!reader) return;
+  if (!reader) return false;
 
   const cancelReader = () => {
     void reader.cancel().catch(() => undefined);
@@ -49,11 +52,44 @@ async function drainReportStream(res: Response, signal: AbortSignal): Promise<vo
     throw new DOMException('Report generation aborted', 'AbortError');
   }
 
+  let isAlreadyRunning = false;
+  const decoder = new TextDecoder();
+  let buffer = '';
+
   signal.addEventListener('abort', cancelReader, { once: true });
   try {
     for (;;) {
-      const { done } = await reader.read();
-      if (done) break;
+      const { done, value } = await reader.read();
+      if (done) {
+        buffer += decoder.decode();
+        break;
+      }
+      
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop() ?? '';
+      for (const frame of frames) {
+        const dataLines: string[] = [];
+        for (const line of frame.split(/\r?\n/)) {
+          if (line.length === 0 || line.startsWith(':')) continue;
+          const separatorIndex = line.indexOf(':');
+          const field = separatorIndex >= 0 ? line.slice(0, separatorIndex) : line;
+          let val = separatorIndex >= 0 ? line.slice(separatorIndex + 1) : '';
+          if (val.startsWith(' ')) val = val.slice(1);
+          if (field === 'data') dataLines.push(val);
+        }
+        const dataText = dataLines.join('\n');
+        if (dataText) {
+          try {
+            const data = JSON.parse(dataText);
+            if (data && data.error_code === 'REPORT_ALREADY_RUNNING') {
+              isAlreadyRunning = true;
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
     }
     if (signal.aborted) {
       throw new DOMException('Report generation aborted', 'AbortError');
@@ -62,6 +98,8 @@ async function drainReportStream(res: Response, signal: AbortSignal): Promise<vo
     signal.removeEventListener('abort', cancelReader);
     reader.releaseLock();
   }
+
+  return isAlreadyRunning;
 }
 
 // Inner component memoized to narrow context subscription.
@@ -75,6 +113,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   isReplayMode,
 }: Props & { isZh: boolean; isReplayMode: boolean }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const {
     capabilities,
     loading: capLoading,
@@ -85,12 +124,74 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false);
   const [currentEvidence, setCurrentEvidence] = useState<ReportEvidence[]>([]);
   const [retrying, setRetrying] = useState(false);
-  const [retryError, setRetryError] = useState(false);
+  const [retryError, setRetryError] = useState<string | boolean>(false);
 
-  const rawReport = storyData?.full_report;
+  const [localStoryData, setLocalStoryData] = useState<StoryData | null>(null);
+  const [localGenerating, setLocalGenerating] = useState(false);
+
+  const activeStoryData = localStoryData || storyData;
+  const rawReport = activeStoryData?.full_report;
   const isTruncatedReport = isTruncatedReportMarker(rawReport);
   const report = isFullReport(rawReport) ? rawReport : null;
   const isEnabled = capabilities?.result_report?.enabled ?? false;
+
+  const isGenerating = report?.status === 'generating' || localGenerating;
+
+  // Reset local overrides when props change
+  useEffect(() => {
+    setLocalStoryData(null);
+    setLocalGenerating(false);
+  }, [storyData]);
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
+  // Poll effect when generating
+  useEffect(() => {
+    if (!isGenerating || !activeScenarioId || isReplayMode) return;
+
+    let timerId: number | undefined;
+    const startTime = Date.now();
+    const maxPollTime = 35 * 60 * 1000; // 35 minutes
+
+    const poll = async () => {
+      if (Date.now() - startTime >= maxPollTime) {
+        setLocalGenerating(false);
+        return;
+      }
+      try {
+        const updatedStory = await getStory(activeScenarioId);
+        const newReport = updatedStory?.full_report;
+        if (newReport && newReport.status !== 'generating') {
+          setLocalStoryData(updatedStory);
+          setLocalGenerating(false);
+          if (onRefresh) {
+            onRefresh();
+          }
+        } else {
+          timerId = window.setTimeout(poll, 15000);
+        }
+      } catch (err) {
+        console.error('Error polling report status', err);
+        timerId = window.setTimeout(poll, 15000);
+      }
+    };
+
+    timerId = window.setTimeout(poll, 15000);
+
+    return () => {
+      if (timerId) {
+        clearTimeout(timerId);
+      }
+    };
+  }, [isGenerating, activeScenarioId, isReplayMode, onRefresh]);
 
   const sections = useMemo(() => report?.sections || [], [report]);
   const evidenceDict = useMemo(() => {
@@ -117,25 +218,70 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   const handleRetry = useCallback(async () => {
     if (isReplayMode) return;
     if (!activeScenarioId || retrying) return;
+
+    const providerPolicy = loadLlmProviderPolicy();
+    const validation = validateByok({
+      apiKey: providerPolicy.apiKey,
+      baseUrl: providerPolicy.baseUrl,
+    });
+    if (!validation.valid) {
+      setRetryError(
+        getLocalizedApiErrorMessage(
+          { code: validation.errorCode },
+          t,
+          t('conversation.error.byok_invalid'),
+        ),
+      );
+      return;
+    }
+
     setRetrying(true);
     setRetryError(false);
+    
     const controller = new AbortController();
+    abortControllerRef.current = controller;
+    
     const timeoutId = setTimeout(() => controller.abort(), REPORT_GENERATE_TIMEOUT_MS);
+    
     try {
-      const res = await generateReport(activeScenarioId, undefined, controller.signal);
-      await drainReportStream(res, controller.signal);
-      if (onRefresh) {
-        onRefresh();
-      } else if (typeof window !== 'undefined') {
-        window.location.reload();
+      const providerPolicy = loadLlmProviderPolicy();
+      const res = await generateReport(
+        activeScenarioId,
+        {
+          llmApiKey: providerPolicy.apiKey || undefined,
+          llmBaseUrl: providerPolicy.baseUrl || undefined,
+          llmModel: providerPolicy.model || undefined,
+          llmRequestsPerMinute: providerPolicy.requestsPerMinute ?? undefined,
+          llmTokensPerMinute: providerPolicy.tokensPerMinute ?? undefined,
+        },
+        controller.signal
+      );
+      
+      const isAlreadyRunning = await drainReportStreamAndDetectAlreadyRunning(res, controller.signal);
+      if (isAlreadyRunning) {
+        setLocalGenerating(true);
+      } else {
+        if (onRefresh) {
+          onRefresh();
+        } else if (typeof window !== 'undefined') {
+          window.location.reload();
+        }
       }
-    } catch {
-      setRetryError(true);
+    } catch (err) {
+      const error = err as { code?: string; message?: string } | null;
+      if (error && (error.code === 'REPORT_ALREADY_RUNNING' || error.message?.includes('REPORT_ALREADY_RUNNING'))) {
+        setLocalGenerating(true);
+      } else {
+        setRetryError(true);
+      }
     } finally {
       clearTimeout(timeoutId);
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
       setRetrying(false);
     }
-  }, [activeScenarioId, retrying, onRefresh, isReplayMode]);
+  }, [activeScenarioId, retrying, onRefresh, isReplayMode, t]);
 
   const currentIds = useMemo(() => new Set(sections.map((s) => s.id)), [sections]);
   const missingSections = useMemo(() => {
@@ -182,6 +328,28 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   const partialButRenderable = report?.status === 'partial' && hasSections && !missing;
   const incomplete = !partialButRenderable && (report?.status === 'failed' || report?.status === 'partial');
 
+  if (isGenerating) {
+    return (
+      <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] flex flex-col items-center justify-center text-center forced-colors:border">
+        <div
+          className="w-12 h-12 rounded-full bg-[color:var(--bg-hover)] text-[color:var(--color-primary)] flex items-center justify-center mb-4 forced-colors:border"
+          aria-hidden="true"
+        >
+          <svg className="animate-spin h-6 w-6 text-[color:var(--color-primary)]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+        </div>
+        <h2 className="text-lg font-semibold text-[color:var(--text-primary)] mb-2">
+          {t('result.report.generatingTitle')}
+        </h2>
+        <p className="text-sm text-[color:var(--text-secondary)] max-w-md">
+          {t('result.report.generatingDesc')}
+        </p>
+      </div>
+    );
+  }
+
   if (isTruncatedReport) {
     return (
       <div className="report-panel-container my-8 p-6 bg-[color:var(--bg-elevated)] rounded-xl border border-[color:var(--border-subtle)] flex flex-col items-center justify-center text-center forced-colors:border">
@@ -203,7 +371,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         </p>
         {retryError && (
           <p className="text-sm text-[color:var(--color-danger)] mb-3" role="alert">
-            {t('result.report.retryFailed')}
+            {typeof retryError === 'string' ? retryError : t('result.report.retryFailed')}
           </p>
         )}
         {!isReplayMode && (
@@ -246,7 +414,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         </p>
         {retryError && (
           <p className="text-sm text-[color:var(--color-danger)] mb-3" role="alert">
-            {t('result.report.retryFailed')}
+            {typeof retryError === 'string' ? retryError : t('result.report.retryFailed')}
           </p>
         )}
         {!isReplayMode && (
@@ -269,6 +437,23 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
   }
 
   if (missing) {
+    if (variant === 'inline') {
+      return (
+        <div className="report-panel-container my-8 p-5 bg-[color:var(--bg-hover)] rounded-xl border border-dashed border-[color:var(--border-default)] flex justify-between items-center flex-wrap gap-3">
+          <div>
+            <p className="text-sm font-semibold text-[color:var(--text-primary)]">📊 {t('result.report.deepReadReport')}</p>
+            <p className="text-xs text-[color:var(--text-secondary)]">{t('result.report.generateReportDesc')}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate(`/result/${activeScenarioId}/report`)}
+            className="px-4 py-1.5 text-xs bg-[color:var(--color-primary)] hover:bg-[color:var(--color-primary-dim)] text-white rounded font-medium transition-colors"
+          >
+            {t('result.report.generateReport')}
+          </button>
+        </div>
+      );
+    }
     return null;
   }
 
@@ -298,7 +483,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
               </p>
               {retryError && (
                 <p className="text-xs text-[color:var(--color-danger)] mt-1" role="alert">
-                  {t('result.report.retryFailed')}
+                  {typeof retryError === 'string' ? retryError : t('result.report.retryFailed')}
                 </p>
               )}
             </div>
@@ -318,7 +503,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
           )}
         </div>
       )}
-      <div className="p-6 md:p-8">
+      <div className="p-4 sm:p-6 md:p-8">
         <header className="mb-8 border-b border-[color:var(--border-subtle)] pb-6">
           <h2 className="text-2xl md:text-3xl font-bold text-[color:var(--text-primary)] mb-4 leading-snug break-words [overflow-wrap:anywhere]">
             {title}

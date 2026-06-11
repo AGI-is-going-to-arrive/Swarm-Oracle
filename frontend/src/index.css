@@ -2887,11 +2887,14 @@ body.has-argument-map .lang-switch--global {
 
 /* ── Evidence deep-link highlight (?message=Y match) ── */
 .replay-card--highlighted {
+  border-color: #3b82f6;
   border-color: var(--color-primary, oklch(60% 0.18 260));
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
   box-shadow: 0 0 0 2px var(--color-primary-glow, oklch(60% 0.18 260 / 0.25));
 }
 .replay-card--highlighted::before {
   width: 4px;
+  background: #3b82f6;
   background: var(--color-primary, oklch(60% 0.18 260));
 }
 @media (forced-colors: active) {

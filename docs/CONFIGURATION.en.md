@@ -52,7 +52,7 @@ Custom LLM base URLs are limited to allowed hosts: hosted providers require `htt
 | `FEATURE_SNAPSHOT_EXPORT` | On | The home page can import scenario snapshots; the result page can export a ZIP snapshot. |
 | `FEATURE_PREDICTION_JOURNAL` | On | `/me/journal` can record predictions, mark outcomes, and show calibration. |
 | `FEATURE_RESULT_VERDICT` | On | The result page tries to show a one-sentence verdict, confidence, and per-worldline answers. |
-| `FEATURE_RESULT_REPORT` | On | The result page shows the deep-read report entry, with a standalone view and retry path at `/result/:id/report`. |
+| `FEATURE_RESULT_REPORT` | On | The result page shows the full report entry, with a standalone view and retry path at `/result/:id/report`. |
 | `FEATURE_EDUCATION_TEMPLATES` | On | The home page shows education templates for classroom-style prompts. |
 | `FEATURE_PERSONA_EXPORT` | On | Agent Library can export persona backups and create Agents from backups. |
 
@@ -62,7 +62,7 @@ On narrow screens, the graph workbench collapses Split view into a single graph 
 
 These backend-internal or experimental flags remain off by default and are not ordinary user entries: `FEATURE_ROUNDTABLE_INSIGHT_LLM`, `FEATURE_HALLUCINATION_GATE`, and `FEATURE_IDENTITY_COMPACTION`.
 
-`FEATURE_RESULT_REPORT` is on by default. When enabled, the result page shows the deep-read report entry, the backend stores the report in `Scenario.parsed_context.full_report`, and `POST /api/scenario/{id}/report:generate` generates or retries it over HTTP SSE. Report evidence keeps round / branch / agent / message coordinates so the evidence drawer can jump back into replay; failed, partial, and byte-truncated reports have visible states and do not block the original result page. Section count, per-section tool-call cap, timeouts, evidence excerpt length, and the full-report byte cap are controlled by the `REPORT_*` settings in `.env.example`; set it to `false` and restart the backend if you need the plain verdict + story result page.
+`FEATURE_RESULT_REPORT` is on by default. When enabled, the result page shows the full report entry, the backend stores the report in `Scenario.parsed_context.full_report`, and `POST /api/scenario/{id}/report:generate` generates or retries it over HTTP SSE. Report evidence keeps round / branch / agent / message coordinates so the evidence drawer can jump back into replay; failed, partial, and byte-truncated reports have visible states and do not block the original result page. Section count, per-section tool-call cap, timeouts, evidence excerpt length, and the full-report byte cap are controlled by the `REPORT_*` settings in `.env.example`; set it to `false` and restart the backend if you need the plain verdict + story result page.
 
 > Restart the backend after changing feature flags. The frontend reads `/api/capabilities` and hides disabled entries or shows unavailable states instead of failing.
 
@@ -73,7 +73,7 @@ The following features stay off by default because they require an external sear
 | Flag | Default | When to enable it |
 |------|---------|-------------------|
 | `ENABLE_WEB_SEARCH` | Off | Enable this when you want the app to search the web before simulation. A working search provider is required. |
-| `FEATURE_NEW_SOURCES` | Off | Enable this to show four source checkboxes in advanced settings: prediction market (`polymarket`), finance (`finance`), academic (`academic`), and deep news (`news_deep`). They only take effect when search is enabled and the provider supports domain filtering. |
+| `FEATURE_NEW_SOURCES` | Off | Enable this to show four source checkboxes in advanced settings: Prediction markets (`polymarket`), Finance (`finance`), Academic (`academic`), and Investigative (`news_deep`). They only take effect when search is enabled and the provider supports domain filtering. |
 | `FEATURE_FAMILY_QUERY_OPTIMIZATION` | Off | Enable this after using source checkboxes if you want the app to generate better search terms for each source family. |
 
 ---
@@ -85,7 +85,7 @@ When enabled, the app searches the web before simulation and injects context int
 | Variable | Meaning | Example |
 |----------|---------|---------|
 | `ENABLE_WEB_SEARCH` | Main switch | `false` by default |
-| `WEB_SEARCH_PROVIDER` | Search provider | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` / `native` |
+| `WEB_SEARCH_PROVIDER` | Search provider | `tavily` / `exa` / `firecrawl` / `xai` / `searxng` |
 | `WEB_SEARCH_API_KEY` | Search provider key; not needed for `searxng` | - |
 | `SEARXNG_URL` | Self-hosted SearXNG URL, only for `searxng` | `http://localhost:8888` |
 

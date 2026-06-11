@@ -100,6 +100,29 @@ def test_settings_cors_origins():
     assert len(s.CORS_ORIGINS) > 0
 
 
+@pytest.mark.parametrize("provider", ["tavily", "exa", "firecrawl", "xai", "searxng"])
+def test_settings_accept_supported_web_search_providers(provider):
+    from app.config import Settings
+
+    s = Settings(_env_file=None, WEB_SEARCH_PROVIDER=provider)
+
+    assert s.WEB_SEARCH_PROVIDER == provider
+
+
+def test_settings_reject_native_web_search_provider():
+    from app.config import Settings
+
+    with pytest.raises(ValueError) as excinfo:
+        Settings(_env_file=None, WEB_SEARCH_PROVIDER="native")
+
+    message = str(excinfo.value)
+    assert "tavily | exa | firecrawl | xai | searxng" in message
+    assert (
+        "'native' is no longer supported; pick a listed provider or unset "
+        "WEB_SEARCH_PROVIDER"
+    ) in message
+
+
 def test_settings_reject_wildcard_cors_origin():
     from app.config import Settings
 

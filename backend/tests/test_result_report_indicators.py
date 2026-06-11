@@ -300,7 +300,8 @@ async def test_indicator_scaffolding_localizes_to_zh_with_real_evidence(monkeypa
     assert "后续" in text
     assert "证据 ev_001" in text
     assert "隐私保护让批准更有说服力。" in text
-    assert "UNTRUSTED DATA" in text
+    assert "UNTRUSTED DATA" not in text
+    assert "```" not in text
     for forbidden in [
         "Round ",
         "signal from",

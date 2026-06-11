@@ -924,16 +924,24 @@ export async function generateReport(
   id: string,
   options?: LlmProviderRequestOptions,
   signal?: AbortSignal,
+  timeoutMs = 35 * 60_000,
 ): Promise<Response> {
   const res = await fetchWithTimeout(
     `/scenario/${encodeURIComponent(id)}/report:generate`,
     {
       method: 'POST',
       headers: buildSessionHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(options ?? {}),
+      body: JSON.stringify({
+        ...(options?.llmApiKey && { llm_api_key: options.llmApiKey }),
+        ...(options?.llmBaseUrl && { llm_base_url: options.llmBaseUrl }),
+        ...(options?.llmModel && { llm_model: options.llmModel }),
+        ...(options?.temperature != null && { temperature: options.temperature }),
+        ...(options?.llmRequestsPerMinute != null && { llm_requests_per_minute: options.llmRequestsPerMinute }),
+        ...(options?.llmTokensPerMinute != null && { llm_tokens_per_minute: options.llmTokensPerMinute }),
+      }),
       signal,
     },
-    300_000, // 5 min timeout for SSE
+    timeoutMs,
   );
   if (!res.ok) {
     throw await parseErrorResponse(res);

@@ -17,11 +17,29 @@ const I18N: Record<string, string> = {
   'result.report.wep.almost_certain': '[L10N wep almost_certain]',
   'result.report.wep.roughly_even': '[L10N wep roughly_even]',
   'result.report.wep.missing': '[L10N wep missing]',
+  'result.report.confidence_basis_recomposed': 'Recomposed: {{branchCount}} branches, {{evidenceCount}} evidence, {{agentConsensus}} consensus',
 };
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string) => I18N[key] ?? fallback ?? key,
+    t: (key: string, arg2?: unknown) => {
+      let val = I18N[key];
+      if (!val) {
+        if (typeof arg2 === 'string') return arg2;
+        if (arg2 && typeof arg2 === 'object' && 'defaultValue' in arg2) {
+          const opt = arg2 as { defaultValue?: string };
+          if (opt.defaultValue) return opt.defaultValue;
+        }
+        return key;
+      }
+      if (arg2 && typeof arg2 === 'object') {
+        const obj = arg2 as Record<string, unknown>;
+        Object.entries(obj).forEach(([k, v]) => {
+          val = val.replace(`{{${k}}}`, String(v));
+        });
+      }
+      return val;
+    },
     i18n: { language: 'en' },
   }),
 }));
@@ -105,5 +123,49 @@ describe('ReportConfidenceBadge', () => {
     render(<ReportConfidenceBadge verdict={makeVerdict({ analytic_confidence: { level: 'low', basis: 'b' } })} />);
     expect(screen.getByText('[L10N low]')).toBeInTheDocument();
     expect(screen.queryByText('low')).toBeNull();
+  });
+
+  it('prefers basis_i18n translation when present', () => {
+    render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({
+          analytic_confidence: {
+            level: 'medium',
+            basis: 'legacy basis fallback',
+            basis_i18n: { zh: '中文基础', en: 'English basis' },
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText('English basis')).toBeInTheDocument();
+    expect(screen.queryByText('legacy basis fallback')).toBeNull();
+  });
+
+  it('recomposes legacy debug-pattern basis string client-side', () => {
+    render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({
+          analytic_confidence: {
+            level: 'medium',
+            basis: 'branch_count=12; evidence_count=5; agent_consensus=1.0000 (available)',
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText(/Recomposed: 12 branches, 5 evidence, 1\.0000 consensus/)).toBeInTheDocument();
+  });
+
+  it('renders arbitrary custom basis verbatim', () => {
+    render(
+      <ReportConfidenceBadge
+        verdict={makeVerdict({
+          analytic_confidence: {
+            level: 'medium',
+            basis: 'Arbitrary custom explanation',
+          },
+        })}
+      />,
+    );
+    expect(screen.getByText('Arbitrary custom explanation')).toBeInTheDocument();
   });
 });

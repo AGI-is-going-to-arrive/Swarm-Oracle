@@ -279,10 +279,10 @@ describe('DebateResultView locale contracts', () => {
   it('keeps replay import and mixed-language fallback labels in both locale resources', () => {
     expect(en.translation.debate.import_local_run).toBe('Import as Local Run');
     expect(en.translation.debate.importing_local_run).toBe('Importing...');
-    expect(en.translation.debate.result_language_fallback_title).toBe('Language fallback');
+    expect(en.translation.debate.result_language_fallback_title).toBe('Showing original text');
     expect(zh.translation.debate.import_local_run).toBe('导入为本地运行');
     expect(zh.translation.debate.importing_local_run).toBe('导入中...');
-    expect(zh.translation.debate.result_language_fallback_title).toBe('语言兜底');
+    expect(zh.translation.debate.result_language_fallback_title).toBe('显示原文');
   });
 });
 

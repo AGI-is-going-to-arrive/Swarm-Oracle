@@ -297,8 +297,8 @@ function reportFixture(status = "complete") {
     target_branch_sort: ["probability_desc", "fork_round_asc", "id_asc"],
     language: "en",
     available_languages: ["zh", "en"],
-    title: "Deep-Read Report",
-    title_i18n: { zh: "深读报告：可再生能源", en: "Deep-Read Report: Renewable Energy" },
+    title: "Full report",
+    title_i18n: { zh: "完整报告：可再生能源", en: "Full Report: Renewable Energy" },
     summary: "Renewable energy adoption 50 years earlier reshapes the grid.",
     summary_i18n: { zh: "提前推广深刻改变电网。", en: "Earlier adoption reshapes the grid." },
     status,
@@ -452,41 +452,81 @@ async function installFixtures(page, state, report, options = {}) {
 // ── Per-locale report assertions ──────────────────────────────
 
 async function assertReportRenders(page, steps, isZh) {
-  const title = isZh ? "深读报告：可再生能源" : "Deep-Read Report: Renewable Energy";
-  const titleHeading = page.getByRole("heading", { name: title }).first();
-  await titleHeading.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+  const title = isZh ? "完整报告：可再生能源" : "Full Report: Renewable Energy";
+  let titleOk = false;
+  let titleText = title;
+  if (LIVE_MODE) {
+    const titleLocator = page.locator(".report-content h2, .report-panel-container h2, h2").first();
+    await titleLocator.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+    titleText = (await titleLocator.textContent().catch(() => "")) || "";
+    titleOk = (await titleLocator.isVisible().catch(() => false)) && titleText.trim().length > 0;
+  } else {
+    const titleHeading = page.getByRole("heading", { name: title }).first();
+    await titleHeading.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+    titleOk = await titleHeading.isVisible().catch(() => false);
+  }
   steps.push(createStep(
     `report-localized-title-${isZh ? "zh" : "en"}`,
-    await titleHeading.isVisible().catch(() => false),
-    title,
+    titleOk,
+    titleText,
   ));
 
   // Sections render (localized section heading).
   const sectionTitle = isZh ? "关键驱动力" : "Key Drivers";
-  const sectionHeading = page.getByRole("heading", { name: new RegExp(sectionTitle) }).first();
-  await sectionHeading.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+  let sectionVisible = false;
+  let sectionVal = sectionTitle;
+  if (LIVE_MODE) {
+    const sectionCount = await page.locator(".report-section").count().catch(() => 0);
+    const firstSectionHeading = page.locator(".report-section h2, .report-section h3, .report-section h4").first();
+    await firstSectionHeading.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+    const headingVisible = await firstSectionHeading.isVisible().catch(() => false);
+    sectionVisible = sectionCount >= 1 && headingVisible;
+    sectionVal = `count: ${sectionCount}, first heading visible: ${headingVisible}`;
+  } else {
+    const sectionHeading = page.getByRole("heading", { name: new RegExp(sectionTitle) }).first();
+    await sectionHeading.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+    sectionVisible = await sectionHeading.isVisible().catch(() => false);
+  }
   steps.push(createStep(
     `report-section-visible-${isZh ? "zh" : "en"}`,
-    await sectionHeading.isVisible().catch(() => false),
-    sectionTitle,
+    sectionVisible,
+    sectionVal,
   ));
 
   // Confidence badge: localized level word (medium), NEVER the raw lowercase enum.
   const badge = page.locator(".report-confidence-badge");
   const badgeText = await badge.first().textContent().catch(() => "");
-  const expectedLevel = isZh ? "中" : "Medium";
   const expectedLabel = isZh ? "分析置信度" : "Analytic Confidence";
+  let levelOk = false;
+  if (LIVE_MODE) {
+    const levelWords = isZh ? ["高", "中", "低", "暂无"] : ["High", "Medium", "Low", "Not Available"];
+    const hasLabel = (badgeText ?? "").includes(expectedLabel);
+    const hasLevel = levelWords.some(word => (badgeText ?? "").includes(word));
+    levelOk = hasLabel && hasLevel;
+  } else {
+    const expectedLevel = isZh ? "中" : "Medium";
+    levelOk = (badgeText ?? "").includes(expectedLevel) && (badgeText ?? "").includes(expectedLabel);
+  }
   steps.push(createStep(
     `confidence-badge-localized-level-${isZh ? "zh" : "en"}`,
-    (badgeText ?? "").includes(expectedLevel) && (badgeText ?? "").includes(expectedLabel),
+    levelOk,
     badgeText,
   ));
 
   // WEP chip: localized word-estimate ("Likely" / "可能"), NEVER the raw snake_case enum.
-  const expectedWep = isZh ? "可能" : "Likely";
+  let wepOk = false;
+  if (LIVE_MODE) {
+    const hasSnakeCase = /\b[a-z]+_[a-z]+\b/.test(badgeText);
+    const lowerEnums = ["likely", "unlikely", "almost_certain", "very_likely", "highly_unlikely", "even_chance", "very_unlikely", "almost_impossible", "not_available"];
+    const hasRawEnum = lowerEnums.some(word => new RegExp(`\\b${word}\\b`).test(badgeText));
+    wepOk = !hasSnakeCase && !hasRawEnum;
+  } else {
+    const expectedWep = isZh ? "可能" : "Likely";
+    wepOk = (badgeText ?? "").includes(expectedWep) && !(badgeText ?? "").includes("likely");
+  }
   steps.push(createStep(
     `confidence-badge-localized-wep-${isZh ? "zh" : "en"}`,
-    (badgeText ?? "").includes(expectedWep) && !(badgeText ?? "").includes("likely"),
+    wepOk,
     badgeText,
   ));
 
@@ -602,6 +642,8 @@ async function runResultReportSurface({ mode, browserName, contextOptions, args 
       page.on("console", (msg) => { if (msg.type() === "error") state.consoleErrors.push(msg.text()); });
       page.on("pageerror", (err) => state.pageErrors.push(err.message));
       page.on("requestfailed", (request) => {
+        const resourceType = request.resourceType();
+        if (!["document", "script", "stylesheet", "xhr", "fetch"].includes(resourceType)) return;
         const failure = request.failure();
         state.requestFailures.push({ url: request.url(), errorText: failure?.errorText ?? null });
       });

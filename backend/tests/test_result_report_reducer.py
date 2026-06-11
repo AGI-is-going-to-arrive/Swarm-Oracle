@@ -536,6 +536,47 @@ def test_confidence_mapping_is_deterministic():
     assert low.basis == "branch_count=1; evidence_count=0; agent_consensus=missing"
 
 
+def test_confidence_basis_i18n_with_available_consensus():
+    confidence = derive_confidence(
+        evidence_count=5,
+        branch_count=12,
+        agent_consensus_status="available",
+        agent_consensus=1.0,
+    )
+
+    assert confidence.basis_i18n is not None
+    assert confidence.basis_i18n.zh == "依据 12 条分支、5 条证据；Agent 共识 100%"
+    assert confidence.basis_i18n.en == (
+        "Based on 12 branches and 5 evidence items; agent consensus 100%"
+    )
+    # Legacy machine-style basis stays untouched for API compatibility.
+    assert confidence.basis == (
+        "branch_count=12; evidence_count=5; agent_consensus=1.0000 (available)"
+    )
+
+
+def test_confidence_basis_i18n_drops_unavailable_consensus_clause():
+    missing = derive_confidence(
+        evidence_count=2,
+        branch_count=3,
+        agent_consensus_status="missing",
+        agent_consensus=None,
+    )
+    partial_value = derive_confidence(
+        evidence_count=2,
+        branch_count=3,
+        agent_consensus_status="partial",
+        agent_consensus=0.6,
+    )
+
+    for confidence in (missing, partial_value):
+        assert confidence.basis_i18n is not None
+        assert confidence.basis_i18n.zh == "依据 3 条分支、2 条证据"
+        assert confidence.basis_i18n.en == "Based on 3 branches and 2 evidence items"
+        assert "共识" not in confidence.basis_i18n.zh
+        assert "consensus" not in confidence.basis_i18n.en
+
+
 def test_reduce_path_makes_zero_llm_calls(monkeypatch):
     scenario_id = _seed_scenario()
     from app.services import llm_client

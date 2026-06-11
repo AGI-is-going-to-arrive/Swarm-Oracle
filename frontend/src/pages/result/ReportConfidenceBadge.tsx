@@ -34,8 +34,19 @@ const KNOWN_WEP_KEYS = new Set([
 
 const KNOWN_CONFIDENCE_LEVELS = new Set<string>(['high', 'medium', 'low']);
 
+const CONFIDENCE_WEP_FALLBACK: Record<string, string> = {
+  almost_no_chance: 'Almost No Chance',
+  very_unlikely: 'Very Unlikely',
+  unlikely: 'Unlikely',
+  roughly_even: 'Roughly Even',
+  likely: 'Likely',
+  very_likely: 'Very Likely',
+  almost_certain: 'Almost Certain',
+  missing: 'Not Available',
+};
+
 export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({ verdict }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { likelihood, analytic_confidence, disclaimer } = verdict;
 
   // Localize the level word (never surface the raw enum). An unexpected/unknown level falls
@@ -50,7 +61,7 @@ export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({
   // for any value outside the known seven-tier set — never render the raw backend string.
   const normalizedWep = (likelihood.wep ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
   const wepLabel = KNOWN_WEP_KEYS.has(normalizedWep)
-    ? t(`result.report.wep.${normalizedWep}`, normalizedWep)
+    ? t(`result.report.wep.${normalizedWep}`, CONFIDENCE_WEP_FALLBACK[normalizedWep] ?? 'Not Available')
     : likelihood.wep
       ? t('result.report.wep.missing', 'Not Available')
       : '';
@@ -60,6 +71,37 @@ export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({
   const disclaimerText = disclaimer?.trim()
     ? disclaimer
     : t('result.report.disclaimer', 'This probability is a narrative simulation result, not a real-world prediction.');
+
+  const currentLang = i18n.language?.startsWith('zh') ? 'zh' : 'en';
+  let displayBasis = '';
+  const basisI18n = analytic_confidence.basis_i18n;
+  if (basisI18n) {
+    if (currentLang === 'zh') {
+      displayBasis = basisI18n.zh || basisI18n.en || '';
+    } else {
+      displayBasis = basisI18n.en || basisI18n.zh || '';
+    }
+  } else if (analytic_confidence.basis) {
+    const basisStr = analytic_confidence.basis;
+    if (/branch_count=\d+;\s*evidence_count=\d+;\s*agent_consensus=/.test(basisStr)) {
+      const match = basisStr.match(/branch_count=(\d+);\s*evidence_count=(\d+);\s*agent_consensus=([\d.]+)/);
+      if (match) {
+        const branchCount = match[1];
+        const evidenceCount = match[2];
+        const agentConsensus = match[3];
+        displayBasis = t('result.report.confidence_basis_recomposed', {
+          branchCount,
+          evidenceCount,
+          agentConsensus,
+          defaultValue: `Based on ${branchCount} branches, ${evidenceCount} pieces of evidence, and ${agentConsensus} consensus.`,
+        });
+      } else {
+        displayBasis = basisStr;
+      }
+    } else {
+      displayBasis = basisStr;
+    }
+  }
 
   return (
     <div className="report-confidence-badge mb-6 p-4 rounded-lg bg-[color:var(--bg-hover)] border border-[color:var(--border-subtle)] forced-colors:border">
@@ -89,9 +131,9 @@ export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({
           <span className="px-2 py-0.5 rounded text-xs bg-[color:var(--bg-elevated)] border border-[color:var(--border-default)] text-[color:var(--text-secondary)] uppercase tracking-wider">
             {levelLabel}
           </span>
-          {analytic_confidence.basis && (
-            <span className="text-sm text-[color:var(--text-secondary)] truncate flex-1" title={analytic_confidence.basis}>
-              {analytic_confidence.basis}
+          {displayBasis && (
+            <span className="text-sm text-[color:var(--text-secondary)] truncate flex-1" title={displayBasis}>
+              {displayBasis}
             </span>
           )}
         </div>

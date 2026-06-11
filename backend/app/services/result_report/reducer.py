@@ -25,6 +25,7 @@ from app.services.result_report.schema import (
     Chart,
     DissentingView,
     EvidenceRef,
+    I18nText,
     KeyParticipant,
     Likelihood,
 )
@@ -213,12 +214,29 @@ def derive_confidence(
         consensus_part = agent_consensus_status
     else:
         consensus_part = f"{agent_consensus:.4f} ({agent_consensus_status})"
+    # Human-readable bilingual basis for the UI; the legacy machine-style
+    # `basis` string stays unchanged for API compatibility.
+    if agent_consensus is not None and agent_consensus_status == "available":
+        consensus_pct = round(agent_consensus * 100)
+        basis_i18n = I18nText(
+            zh=f"依据 {branch_count} 条分支、{evidence_count} 条证据；Agent 共识 {consensus_pct}%",
+            en=(
+                f"Based on {branch_count} branches and {evidence_count} evidence items; "
+                f"agent consensus {consensus_pct}%"
+            ),
+        )
+    else:
+        basis_i18n = I18nText(
+            zh=f"依据 {branch_count} 条分支、{evidence_count} 条证据",
+            en=f"Based on {branch_count} branches and {evidence_count} evidence items",
+        )
     return AnalyticConfidence(
         level=level,
         basis=(
             f"branch_count={branch_count}; evidence_count={evidence_count}; "
             f"agent_consensus={consensus_part}"
         ),
+        basis_i18n=basis_i18n,
     )
 
 

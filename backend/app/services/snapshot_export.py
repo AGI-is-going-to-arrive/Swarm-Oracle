@@ -166,8 +166,33 @@ def _redact_json_string(raw: Any) -> Any:
     return json.dumps(_redact_dict(decoded), ensure_ascii=False, default=str)
 
 
+def _normalize_full_report_status_for_snapshot(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    status = str(value.get("status") or "").strip().lower()
+    if status != "generating":
+        return value
+    normalized = dict(value)
+    normalized["status"] = "partial"
+    return normalized
+
+
+def _normalize_parsed_context_for_snapshot(value: Any) -> Any:
+    if not isinstance(value, dict) or "full_report" not in value:
+        return value
+    normalized_report = _normalize_full_report_status_for_snapshot(
+        value.get("full_report")
+    )
+    if normalized_report is value.get("full_report"):
+        return value
+    normalized = dict(value)
+    normalized["full_report"] = normalized_report
+    return normalized
+
+
 def _serialize_scenario(scenario: Scenario, *, include_private: bool) -> dict[str, Any]:
     parsed_context = _redact_dict(scenario.parsed_context) if scenario.parsed_context else None
+    parsed_context = _normalize_parsed_context_for_snapshot(parsed_context)
     director_state = (
         _redact_dict(scenario.director_state_json) if scenario.director_state_json else None
     )
@@ -1016,7 +1041,9 @@ def import_snapshot_zip(
     )
     deferred_full_report = None
     if isinstance(parsed_context, dict):
-        deferred_full_report = parsed_context.pop("full_report", None)
+        deferred_full_report = _normalize_full_report_status_for_snapshot(
+            parsed_context.pop("full_report", None)
+        )
 
     scenario = Scenario(
         question=str(scenario_payload.get("question", "")).strip()
@@ -1233,6 +1260,7 @@ def import_snapshot_zip(
             message_id_map=message_id_map,
         )
         if remapped_report is not None:
+            remapped_report = _normalize_full_report_status_for_snapshot(remapped_report)
             try:
                 validated_report = validate_full_report_payload(remapped_report)
             except Exception as exc:

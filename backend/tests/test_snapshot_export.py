@@ -748,8 +748,19 @@ def test_include_private_keeps_user_id_but_still_redacts_secrets():
     assert b"sk-secret-context" not in raw
 
 
-@pytest.mark.parametrize("status", ["complete", "partial", "failed"])
-def test_full_report_snapshot_redacts_report_secrets_and_round_trips(status: str):
+@pytest.mark.parametrize(
+    ("status", "expected_status"),
+    [
+        ("complete", "complete"),
+        ("partial", "partial"),
+        ("failed", "failed"),
+        ("generating", "partial"),
+    ],
+)
+def test_full_report_snapshot_redacts_report_secrets_and_round_trips(
+    status: str,
+    expected_status: str,
+):
     report = _full_report_snapshot_fixture(status)
     scenario_id = _seed_scenario_with_full_report_snapshot(report)
     _seed_full_report_coordinate_rows(scenario_id)
@@ -773,7 +784,7 @@ def test_full_report_snapshot_redacts_report_secrets_and_round_trips(status: str
     assert "api_key" not in exported_report_text
     assert "Authorization" not in exported_report_text
     assert "base_url" not in exported_report_text
-    assert exported_report["status"] == status
+    assert exported_report["status"] == expected_status
     assert exported_report["title_i18n"]["en"] == "AI transit plan report"
     assert exported_report["summary_i18n"]["zh"] == "加入隐私保护后，方案更可能通过。"
     assert exported_report["evidence"][0]["message_id"] == "msg-1"
@@ -803,7 +814,7 @@ def test_full_report_snapshot_redacts_report_secrets_and_round_trips(status: str
     assert "api_key" not in imported_report_text
     assert "Authorization" not in imported_report_text
     assert "base_url" not in imported_report_text
-    assert imported_report["status"] == status
+    assert imported_report["status"] == expected_status
     assert imported_report["title_i18n"] == exported_report["title_i18n"]
     assert imported_report["summary_i18n"] == exported_report["summary_i18n"]
     assert [item["id"] for item in imported_report["evidence"]] == ["ev-1"]
@@ -830,6 +841,32 @@ def test_full_report_snapshot_redacts_report_secrets_and_round_trips(status: str
     assert "ev-stale" not in imported_ref_text
     assert imported_report["interview_evidence"] == exported_report["interview_evidence"]
     assert imported_report["premortem"] == exported_report["premortem"]
+
+
+def test_snapshot_import_heals_legacy_generating_full_report_status():
+    report = _full_report_snapshot_fixture("partial")
+    scenario_id = _seed_scenario_with_full_report_snapshot(report)
+    _seed_full_report_coordinate_rows(scenario_id)
+
+    with Session(get_engine()) as session:
+        buffer = export_snapshot_zip(scenario_id, session)
+
+    raw = _rewrite_snapshot_scenario_json(
+        buffer.getvalue(),
+        lambda scenario: scenario["parsed_context"]["full_report"].update(
+            {"status": "generating"}
+        ),
+    )
+
+    with Session(get_engine()) as session:
+        new_id = import_snapshot_zip(raw, "importer-2", session)
+
+    with Session(get_engine()) as session:
+        imported = session.get(Scenario, new_id)
+        assert imported is not None
+        imported_report = imported.parsed_context["full_report"]
+
+    assert imported_report["status"] == "partial"
 
 
 def test_snapshot_import_skips_invalid_full_report_after_remap():

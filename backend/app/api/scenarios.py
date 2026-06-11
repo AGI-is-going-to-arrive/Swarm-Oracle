@@ -248,7 +248,24 @@ class ResultReportGenerateRequest(BaseModel):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    llm_requests_per_minute: int | None = None
+    llm_tokens_per_minute: int | None = None
     temperature: float | None = None
+
+    @field_validator("llm_api_key", "llm_base_url", "llm_model")
+    @classmethod
+    def normalize_optional_byok(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        cleaned = v.strip()
+        return cleaned or None
+
+    @field_validator("llm_requests_per_minute", "llm_tokens_per_minute")
+    @classmethod
+    def validate_optional_positive_limit(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError("LLM rate limits must be positive integers")
+        return v
 
 
 class ScenarioConversationListResponse(BaseModel):
@@ -555,8 +572,6 @@ def _build_web_search_server_hint() -> dict:
     if not _cfg.ENABLE_WEB_SEARCH:
         return info
     provider = _cfg.WEB_SEARCH_PROVIDER
-    if provider == "native":
-        return {**info, "provider": "native"}
     if provider in _PROVIDER_MAP:
         has_key = provider in ("searxng",) or bool(_cfg.WEB_SEARCH_API_KEY)
         return {
@@ -1618,6 +1633,12 @@ async def get_story(
             if settings.FEATURE_RESULT_REPORT
             else None
         )
+        if (
+            isinstance(full_report, dict)
+            and full_report.get("status") == "generating"
+            and not result_report_builder.report_generation_is_active(scenario_id)
+        ):
+            full_report = {**full_report, "status": "partial"}
         raw_branch_answers = result_quality.get("branch_question_answers")
         branch_question_answers = (
             raw_branch_answers if isinstance(raw_branch_answers, dict) else {}
@@ -1726,6 +1747,8 @@ async def generate_result_report(
         "api_key": request_body.llm_api_key or None,
         "base_url": validated_base_url,
         "model": request_body.llm_model or None,
+        "requests_per_minute": request_body.llm_requests_per_minute,
+        "tokens_per_minute": request_body.llm_tokens_per_minute,
         "temperature": request_body.temperature,
     }
 

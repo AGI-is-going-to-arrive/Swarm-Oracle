@@ -13,6 +13,9 @@ vi.mock('../../hooks/useCapabilityCheck', () => ({
 vi.mock('../../api/client', () => ({
   generateReport: vi.fn(),
 }));
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => vi.fn(),
+}));
 // Keep child components light; assert the panel's own gating/render decisions only.
 vi.mock('./ReportConfidenceBadge', () => ({
   ReportConfidenceBadge: () => <div data-testid="report-confidence-badge" />,
@@ -30,15 +33,30 @@ vi.mock('./ReportSection', () => ({
 vi.mock('./ReportEvidenceDrawer', () => ({
   ReportEvidenceDrawer: () => null,
 }));
+vi.mock('../../lib/llmProviderPolicy', () => ({
+  loadLlmProviderPolicy: vi.fn(() => ({
+    apiKey: 'mock-key',
+    baseUrl: 'mock-url',
+    model: 'mock-model',
+    reasoningEffort: '',
+    disableUserQuota: false,
+    requestsPerMinute: null,
+    tokensPerMinute: null,
+  })),
+  validateByok: vi.fn(() => ({ valid: true })),
+}));
 
 import { useResultContext } from './ResultContext';
 import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
 import { generateReport } from '../../api/client';
+import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
 import { ResultReportPanel } from './ResultReportPanel';
 
 const mockedCtx = vi.mocked(useResultContext);
 const mockedCap = vi.mocked(useCapabilityCheck);
 const mockedGenerateReport = vi.mocked(generateReport);
+const mockedLoadLlmProviderPolicy = vi.mocked(loadLlmProviderPolicy);
+const mockedValidateByok = vi.mocked(validateByok);
 
 function makeReport(overrides: Partial<FullReport> = {}): FullReport {
   return {
@@ -49,8 +67,8 @@ function makeReport(overrides: Partial<FullReport> = {}): FullReport {
     target_branch_sort: ['b1'],
     language: 'en',
     available_languages: ['en'],
-    title: 'Deep-Read Report',
-    title_i18n: { zh: '深读报告', en: 'Deep-Read Report' },
+    title: 'Full report',
+    title_i18n: { zh: '完整报告', en: 'Full report' },
     summary: 'summary',
     summary_i18n: { zh: '摘要', en: 'summary' },
     status: 'complete',
@@ -101,6 +119,18 @@ beforeEach(() => {
   mockedCtx.mockReset();
   mockedCap.mockReset();
   mockedGenerateReport.mockReset();
+  mockedLoadLlmProviderPolicy.mockReset();
+  mockedValidateByok.mockReset();
+  mockedLoadLlmProviderPolicy.mockReturnValue({
+    apiKey: 'mock-key',
+    baseUrl: 'mock-url',
+    model: 'mock-model',
+    reasoningEffort: '',
+    disableUserQuota: false,
+    requestsPerMinute: null,
+    tokensPerMinute: null,
+  });
+  mockedValidateByok.mockReturnValue({ valid: true });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -161,7 +191,7 @@ describe('ResultReportPanel — manual retry stream handling', () => {
 
     expect(screen.getByRole('button', { name: /Generating/i })).toBeDisabled();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(35 * 60_000);
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -170,6 +200,21 @@ describe('ResultReportPanel — manual retry stream handling', () => {
     expect(reader.cancel).toHaveBeenCalled();
     expect(reader.releaseLock).toHaveBeenCalled();
     expect(screen.getByRole('button', { name: /Retry Generation/i })).not.toBeDisabled();
+  });
+
+  it('blocks the retry and sets retryError when validateByok fails', async () => {
+    mockedValidateByok.mockReturnValue({ valid: false, errorCode: 'BYOK_INVALID' });
+    setCtx({ full_report: makeReport({ status: 'partial', sections: [] }) });
+    setCap({});
+
+    render(<ResultReportPanel variant="inline" />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Retry Generation/i }));
+      await Promise.resolve();
+    });
+
+    expect(mockedGenerateReport).not.toHaveBeenCalled();
+    expect(screen.getByText(/Your API key is invalid or rejected by the provider/i)).toBeInTheDocument();
   });
 });
 
@@ -196,6 +241,8 @@ describe('ResultReportPanel — partial report rendering', () => {
     expect(screen.queryByTestId('report-section-s1')).toBeNull();
     expect(screen.getByText('Report Generation Incomplete')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Retry Generation/i })).toBeInTheDocument();
+    expect(screen.queryByText(/深读/)).toBeNull();
+    expect(screen.queryByText(/Deep-read/i)).toBeNull();
   });
 
   it('shows a truncated report state for metadata-only partial markers', () => {
@@ -203,8 +250,8 @@ describe('ResultReportPanel — partial report rendering', () => {
     setCap({});
     render(<ResultReportPanel variant="inline" />);
 
-    expect(screen.getByText('Deep-Read Report Truncated')).toBeInTheDocument();
-    expect(screen.queryByText('Deep-Read Report Not Generated')).toBeNull();
+    expect(screen.getByText('Full Report Truncated')).toBeInTheDocument();
+    expect(screen.queryByText('Full Report Not Generated')).toBeNull();
     expect(screen.getByRole('button', { name: /Retry Generation/i })).toBeInTheDocument();
   });
 
@@ -215,6 +262,8 @@ describe('ResultReportPanel — partial report rendering', () => {
 
     expect(screen.queryByTestId('report-section-s1')).toBeNull();
     expect(screen.getByText('Report Generation Incomplete')).toBeInTheDocument();
+    expect(screen.queryByText(/深读/)).toBeNull();
+    expect(screen.queryByText(/Deep-read/i)).toBeNull();
   });
 
   it('renders a complete report with no retry banner', () => {

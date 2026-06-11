@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 LanguageCode = Literal["zh", "en"]
 GenerationMode = Literal["generation", "rewrite", "static"]
-ReportStatus = Literal["complete", "partial", "failed", "skipped"]
+ReportStatus = Literal["generating", "complete", "partial", "failed", "skipped"]
 ReportTier = Literal["generation", "rewrite", "static"]
 ConfidenceLevel = Literal["high", "medium", "low"]
 EvidenceKind = Literal["utterance", "causal_fact", "faction_event", "interview"]
@@ -111,13 +111,14 @@ class Likelihood(_StrictModel):
 class AnalyticConfidence(_StrictModel):
     level: ConfidenceLevel
     basis: str = Field(min_length=1)
+    basis_i18n: I18nText | None = None
 
 
 class Verdict(_StrictModel):
     headline_answer: str = Field(min_length=1)
     likelihood: Likelihood
     analytic_confidence: AnalyticConfidence
-    disclaimer: str = Field(min_length=1)
+    disclaimer: str | None = None
 
 
 class Chart(_StrictModel):

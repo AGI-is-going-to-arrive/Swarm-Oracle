@@ -22,6 +22,7 @@ from app.models import Branch, BranchStatus, Scenario
 from app.models.database import get_engine
 from app.services.llm_client import (
     format_untrusted_text_block,
+    is_local_provider_url,
     llm_call_json,
     llm_request_scope,
 )
@@ -44,7 +45,11 @@ from app.services.result_report.schema import (
     utf8_json_size_bytes,
     validate_full_report_payload,
 )
-from app.services.runtime_lock import acquire_runtime_lock, release_runtime_lock
+from app.services.runtime_lock import (
+    acquire_runtime_lock,
+    release_runtime_lock,
+    runtime_lock_is_active,
+)
 from app.services.web_context import _sanitize_url
 
 logger = logging.getLogger(__name__)
@@ -62,9 +67,7 @@ _ALLOWED_SECTION_IDS = (
 )
 _TIER_ORDER: dict[SectionTier, int] = {"generation": 0, "rewrite": 1, "static": 2}
 _REPORT_LOCKS: dict[str, asyncio.Lock] = {}
-_NARRATIVE_DISCLAIMER = (
-    "This is a narrative simulation probability, not a real-world forecast."
-)
+_SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +75,8 @@ class ReportGenerationOverrides:
     api_key: str | None = None
     base_url: str | None = None
     model: str | None = None
+    requests_per_minute: int | None = None
+    tokens_per_minute: int | None = None
     temperature: float | None = None
 
 
@@ -122,6 +127,22 @@ def _report_runtime_lock_key(scenario_id: str) -> str:
     return f"result-report:{scenario_id}"
 
 
+def report_generation_is_active(scenario_id: str) -> bool:
+    """Return whether a visible ``generating`` report still has a live lease."""
+
+    return runtime_lock_is_active(_report_runtime_lock_key(scenario_id))
+
+
+def _drop_report_lock_if_idle(scenario_id: str, lock: asyncio.Lock) -> None:
+    if lock.locked():
+        return
+    waiters = getattr(lock, "_waiters", None)
+    if waiters:
+        return
+    if _REPORT_LOCKS.get(scenario_id) is lock:
+        _REPORT_LOCKS.pop(scenario_id, None)
+
+
 def _report_runtime_lock_lease_seconds() -> float:
     section_budget = (
         max(settings.REPORT_MAX_SECTIONS, settings.REPORT_MIN_SECTIONS)
@@ -130,6 +151,35 @@ def _report_runtime_lock_lease_seconds() -> float:
         * 2
     )
     return max(60.0, settings.REPORT_PLAN_TIMEOUT_SECONDS + section_budget + 60.0)
+
+
+def _report_llm_scope_kwargs(
+    context: BuilderContext,
+    overrides: ReportGenerationOverrides | None,
+) -> dict[str, object]:
+    scope_kwargs: dict[str, object] = {"purpose": "result_report"}
+    parsed_context = context.parsed_context if isinstance(context.parsed_context, dict) else {}
+    effective_base_url = (
+        (overrides.base_url if overrides else None)
+        or parsed_context.get("llm_base_url")
+    )
+    user_id = parsed_context.get("user_id")
+    disable_user_quota = bool(parsed_context.get("disable_user_quota"))
+    if disable_user_quota and is_local_provider_url(effective_base_url):
+        scope_kwargs["quota_key"] = None
+    elif user_id:
+        scope_kwargs["quota_key"] = f"user:{user_id}"
+    scope_kwargs["requests_per_minute"] = (
+        overrides.requests_per_minute
+        if overrides and overrides.requests_per_minute is not None
+        else parsed_context.get("llm_requests_per_minute")
+    )
+    scope_kwargs["tokens_per_minute"] = (
+        overrides.tokens_per_minute
+        if overrides and overrides.tokens_per_minute is not None
+        else parsed_context.get("llm_tokens_per_minute")
+    )
+    return scope_kwargs
 
 
 def resolve_dominant_branch_id(scenario_id: str) -> str | None:
@@ -163,41 +213,44 @@ async def build_report(
     """Build and incrementally persist one full report for a scenario."""
 
     lock = _REPORT_LOCKS.setdefault(scenario_id, asyncio.Lock())
-    async with lock:
-        normalized_overrides = _normalize_overrides(overrides)
-        lease_seconds = _report_runtime_lock_lease_seconds()
-        lease = await asyncio.to_thread(
-            acquire_runtime_lock,
-            _report_runtime_lock_key(scenario_id),
-            lease_seconds=lease_seconds,
-        )
-        if lease is None:
-            raise ResultReportAlreadyRunningError(
-                "Result report generation is already in progress",
+    try:
+        async with lock:
+            normalized_overrides = _normalize_overrides(overrides)
+            lease_seconds = _report_runtime_lock_lease_seconds()
+            lease = await asyncio.to_thread(
+                acquire_runtime_lock,
+                _report_runtime_lock_key(scenario_id),
+                lease_seconds=lease_seconds,
             )
+            if lease is None:
+                raise ResultReportAlreadyRunningError(
+                    "Result report generation is already in progress",
+                )
 
-        try:
-            return await _build_report_unlocked(
-                scenario_id,
-                dominant_branch_id,
-                overrides=normalized_overrides,
-                progress=progress,
-            )
-        except Exception:  # noqa: BLE001 - fail-soft marker before releasing lease
             try:
-                await asyncio.to_thread(
-                    _persist_failed_report_if_absent,
+                return await _build_report_unlocked(
                     scenario_id,
                     dominant_branch_id,
+                    overrides=normalized_overrides,
+                    progress=progress,
                 )
-            except Exception:  # noqa: BLE001 - preserve original builder error
-                logger.warning("Failed to persist result report failure marker")
-            raise
-        finally:
-            try:
-                await asyncio.to_thread(release_runtime_lock, lease)
-            except Exception:  # noqa: BLE001 - do not mask the report outcome
-                logger.warning("Failed to release result report runtime lock")
+            except Exception:  # noqa: BLE001 - fail-soft marker before releasing lease
+                try:
+                    await asyncio.to_thread(
+                        _persist_failed_report_if_absent,
+                        scenario_id,
+                        dominant_branch_id,
+                    )
+                except Exception:  # noqa: BLE001 - preserve original builder error
+                    logger.warning("Failed to persist result report failure marker")
+                raise
+            finally:
+                try:
+                    await asyncio.to_thread(release_runtime_lock, lease)
+                except Exception:  # noqa: BLE001 - do not mask the report outcome
+                    logger.warning("Failed to release result report runtime lock")
+    finally:
+        _drop_report_lock_if_idle(scenario_id, lock)
 
 
 async def _build_report_unlocked(
@@ -224,22 +277,30 @@ async def _build_report_unlocked(
         reducer_result,
         overrides=overrides,
     )
+    reusable_sections, reusable_tiers = _reusable_existing_sections(
+        scenario_id,
+        target_branch_id,
+        outline,
+    )
+    completed_sections: list[ReportSection] = list(reusable_sections)
+    section_tiers: list[SectionTier] = list(reusable_tiers)
+    failed_sections = 0
     report = _assemble_report(
         context,
         reducer_result,
         outline,
-        sections=[],
-        status="partial",
-        tier="generation",
+        sections=completed_sections,
+        status="generating",
+        tier=_worst_tier(section_tiers) if completed_sections else "generation",
     )
     report = _fit_report_to_byte_cap(report)
     _persist_report_payload(scenario_id, report.model_dump(mode="json"))
 
-    completed_sections: list[ReportSection] = []
-    section_tiers: list[SectionTier] = []
-    failed_sections = 0
+    reused_section_ids = {section.id for section in reusable_sections}
 
     for section_plan in outline.sections:
+        if section_plan.section_id in reused_section_ids:
+            continue
         await _emit_progress(
             progress,
             ResultReportSSEEvent(
@@ -410,17 +471,41 @@ async def build_report_sse_stream(
             progress=progress,
         )
     )
+    last_heartbeat = time.monotonic()
 
     try:
         while not task.done() or not queue.empty():
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=0.05)
             except TimeoutError:
+                now = time.monotonic()
+                if now - last_heartbeat >= _SSE_HEARTBEAT_INTERVAL_SECONDS:
+                    last_heartbeat = now
+                    yield ": keepalive\n\n"
                 continue
             yield encode_sse_event(event)
 
         try:
             report = await task
+        except ResultReportAlreadyRunningError:
+            yield encode_sse_event(
+                ResultReportSSEEvent(
+                    event="report_failed",
+                    data={
+                        "report_id": scenario_id,
+                        "status": "failed",
+                        "error_code": "REPORT_ALREADY_RUNNING",
+                        "message": "Result report generation is already running",
+                    },
+                ),
+            )
+            yield encode_sse_event(
+                ResultReportSSEEvent(
+                    event="report_complete",
+                    data={"report_id": scenario_id, "status": "failed"},
+                ),
+            )
+            return
         except Exception:  # noqa: BLE001 - SSE should fail-soft
             yield encode_sse_event(
                 ResultReportSSEEvent(
@@ -474,7 +559,7 @@ async def plan_outline(
 
     prompt = _build_outline_prompt(context, reducer_result)
     try:
-        with llm_request_scope(purpose="result_report"):
+        with llm_request_scope(**_report_llm_scope_kwargs(context, overrides)):
             payload = await asyncio.wait_for(
                 llm_call_json(
                     prompt,
@@ -546,7 +631,7 @@ async def _generate_section_tier(
             tier=tier,
             history=history,
         )
-        with llm_request_scope(purpose="result_report"):
+        with llm_request_scope(**_report_llm_scope_kwargs(context, overrides)):
             payload = await asyncio.wait_for(
                 llm_call_json(
                     prompt,
@@ -737,8 +822,8 @@ def _build_section_prompt(
 def _normalize_outline_payload(payload: dict[str, Any], context: BuilderContext) -> ReportOutline:
     title_i18n = _coerce_i18n(
         payload.get("title_i18n"),
-        zh=f"{context.branch_title} 深读报告",
-        en=f"{context.branch_title} report",
+        zh=f"{context.branch_title}：完整报告",
+        en=f"{context.branch_title}: Full report",
     )
     summary_i18n = _coerce_i18n(
         payload.get("summary_i18n"),
@@ -801,8 +886,8 @@ def _fallback_outline(
     section_ids = candidate_ids[:desired_count]
     return ReportOutline(
         title_i18n={
-            "zh": f"{context.branch_title} 深读报告",
-            "en": f"{context.branch_title} report",
+            "zh": f"{context.branch_title}：完整报告",
+            "en": f"{context.branch_title}: Full report",
         },
         summary_i18n={
             "zh": context.branch_insight or "报告基于已完成模拟与可追溯证据生成。",
@@ -960,7 +1045,7 @@ def _assemble_report(
             headline_answer=headline,
             likelihood=reducer_result.likelihood,
             analytic_confidence=reducer_result.analytic_confidence,
-            disclaimer=_NARRATIVE_DISCLAIMER,
+            disclaimer=None,
         ),
         sections=sections,
         evidence=_safe_evidence_refs(reducer_result),
@@ -1000,16 +1085,18 @@ def _build_indicators_to_watch(
 
     for evidence in reducer_result.evidence[:2]:
         if language == "zh":
+            quote = _truncate_indicator_text(evidence.quote, 140, language)
             signal = f"第 {evidence.round_number} 轮信号：{evidence.agent_name}"
             note = "如果这个信号持续出现，它会强化主导路线。"
             threshold = "同一议题被另一位参与者、后续轮次或后续来源再次提及。"
             observation = (
                 f"第 {evidence.round_number} 轮，{evidence.agent_name}：\n"
-                f"{format_untrusted_text_block('Agent 原话', evidence.quote, max_chars=140)}"
+                f"{quote}"
             )
             time_horizon = "下一次后续更新周期"
             rationale = f"由主导路线上的证据 {evidence.id} 支持。"
         else:
+            quote = _truncate_indicator_text(evidence.quote, 140, language)
             signal = f"Round {evidence.round_number} signal from {evidence.agent_name}"
             note = "If this signal persists, it reinforces the dominant branch."
             threshold = (
@@ -1018,7 +1105,7 @@ def _build_indicators_to_watch(
             )
             observation = (
                 f"Round {evidence.round_number}, {evidence.agent_name}:\n"
-                f"{format_untrusted_text_block('Agent quote', evidence.quote, max_chars=140)}"
+                f"{quote}"
             )
             time_horizon = "next follow-up cycle"
             rationale = f"Supported by evidence {evidence.id} on the dominant branch."
@@ -1422,6 +1509,41 @@ def _coerce_existing_full_report(payload: object) -> FullReport | None:
         return None
 
 
+def _reusable_existing_sections(
+    scenario_id: str,
+    target_branch_id: str,
+    outline: ReportOutline,
+) -> tuple[list[ReportSection], list[SectionTier]]:
+    existing = _load_existing_full_report(scenario_id)
+    if (
+        existing is None
+        or existing.target_branch_id != target_branch_id
+        or existing.status in {"failed", "skipped"}
+    ):
+        return [], []
+
+    planned_intents = {
+        section.section_id: section.intent
+        for section in outline.sections
+    }
+    existing_by_id: dict[str, ReportSection] = {}
+    for section in existing.sections:
+        if section.id in existing_by_id:
+            continue
+        if planned_intents.get(section.id) != section.intent:
+            continue
+        existing_by_id[section.id] = section
+
+    reusable = [
+        existing_by_id[section.section_id]
+        for section in outline.sections
+        if section.section_id in existing_by_id
+    ]
+    if not reusable:
+        return [], []
+    return reusable, [existing.tier for _section in reusable]
+
+
 def _persist_failed_report_if_absent(
     scenario_id: str,
     dominant_branch_id: str,
@@ -1486,8 +1608,8 @@ def _failed_report_payload(
     target_branch_id = branch.id if branch is not None else (dominant_branch_id or scenario.id)
     probability = _clamp_probability(branch.probability if branch is not None else 0.0)
     title_i18n = I18nText(
-        zh="深读报告暂未生成",
-        en="Deep-read report unavailable",
+        zh="完整报告暂未生成",
+        en="Full report unavailable",
     )
     summary_i18n = I18nText(
         zh="报告生成失败，模拟结果仍可正常查看。",
@@ -1522,7 +1644,7 @@ def _failed_report_payload(
                 level="low",
                 basis="The report builder failed before producing a renderable report.",
             ),
-            disclaimer=_NARRATIVE_DISCLAIMER,
+            disclaimer=None,
         ),
         sections=[],
         evidence=[],
@@ -1679,12 +1801,40 @@ def _normalize_overrides(
         )
     except (TypeError, ValueError):
         normalized_temperature = None
+    raw_api_key = overrides.get("api_key")
+    api_key = (
+        raw_api_key.strip()
+        if isinstance(raw_api_key, str)
+        else str(raw_api_key or "").strip()
+    )
+    raw_base_url = overrides.get("base_url")
+    base_url = (
+        raw_base_url.strip()
+        if isinstance(raw_base_url, str)
+        else str(raw_base_url or "").strip()
+    )
+    raw_model = overrides.get("model")
+    model = raw_model.strip() if isinstance(raw_model, str) else str(raw_model or "").strip()
     return ReportGenerationOverrides(
-        api_key=str(overrides.get("api_key") or "") or None,
-        base_url=str(overrides.get("base_url") or "") or None,
-        model=str(overrides.get("model") or "") or None,
+        api_key=api_key or None,
+        base_url=base_url or None,
+        model=model or None,
+        requests_per_minute=_normalize_positive_int(
+            overrides.get("requests_per_minute")
+        ),
+        tokens_per_minute=_normalize_positive_int(overrides.get("tokens_per_minute")),
         temperature=normalized_temperature,
     )
+
+
+def _normalize_positive_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
 
 
 def _coerce_i18n(value: Any, *, zh: str, en: str) -> dict[str, str]:

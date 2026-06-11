@@ -11,7 +11,7 @@ from typing import Literal
 from sqlalchemy import text
 from sqlmodel import Session
 
-from app.config import is_placeholder_llm_api_key, settings
+from app.config import WEB_SEARCH_PROVIDER_CHOICES, is_placeholder_llm_api_key, settings
 from app.models.database import get_engine
 from app.services.llm_client import LLMError, llm_call
 from app.services.vector_store import get_vector_store
@@ -86,12 +86,11 @@ def _check_web_search() -> PreflightCheckResult:
             )
         return PreflightCheckResult("web_search", "fail", "SearXNG URL is not configured")
 
-    if provider == "native":
+    if provider not in WEB_SEARCH_PROVIDER_CHOICES:
         return PreflightCheckResult(
             "web_search",
-            "warn",
-            "Web search provider 'native' is not yet implemented; "
-            "web search will be skipped at runtime",
+            "fail",
+            f"Unsupported web search provider: {provider}",
         )
 
     if settings.WEB_SEARCH_API_KEY.strip():

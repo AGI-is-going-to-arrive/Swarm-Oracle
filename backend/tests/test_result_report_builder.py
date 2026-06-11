@@ -236,11 +236,44 @@ async def test_build_report_persists_complete_report_with_evidence_coords(monkey
     assert {item.id for item in report.sections} == {"timeline", "sources"}
     assert report.evidence[0].round_id == "round-1"
     assert report.evidence[0].message_id == "msg-privacy"
-    assert "narrative simulation probability" in report.verdict.disclaimer
+    # Boilerplate disclaimer is no longer persisted; the frontend renders its
+    # own localized fallback when the field is absent.
+    assert report.verdict.disclaimer is None
 
     persisted = validate_full_report_payload(_persisted_report(scenario_id))
     assert persisted.status == "complete"
     assert persisted.evidence[0].agent_name == "Privacy Advocate"
+
+
+@pytest.mark.asyncio
+async def test_build_report_initial_persist_marks_report_generating(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline"]),
+            _section_payload("timeline"),
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+    original_generate = builder.generate_section_react
+    observed_initial_status: list[str] = []
+
+    async def assert_generating_before_first_section(*args: Any, **kwargs: Any):
+        observed_initial_status.append(_persisted_report(scenario_id)["status"])
+        return await original_generate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        builder,
+        "generate_section_react",
+        assert_generating_before_first_section,
+    )
+
+    report = await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    assert report.status == "complete"
+    assert observed_initial_status[0] == "generating"
 
 
 @pytest.mark.asyncio
@@ -586,6 +619,24 @@ async def test_build_report_acquires_and_releases_durable_runtime_lock(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_build_report_drops_local_report_lock_after_completion(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    builder._REPORT_LOCKS.pop(scenario_id, None)
+    fake_llm = QueuedLlm([
+        _outline_payload(["timeline"]),
+        _section_payload("timeline"),
+    ])
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    assert report.status == "complete"
+    assert scenario_id not in builder._REPORT_LOCKS
+
+
+@pytest.mark.asyncio
 async def test_build_report_releases_durable_lock_after_early_failure(monkeypatch):
     from app.services.result_report import builder
     from app.services.runtime_lock import RuntimeLockLease
@@ -654,6 +705,44 @@ async def test_build_report_rejects_cross_worker_duplicate_without_persisting(mo
         scenario = session.get(Scenario, scenario_id)
         assert scenario is not None
         assert "full_report" not in (scenario.parsed_context or {})
+
+
+@pytest.mark.asyncio
+async def test_build_report_retry_reuses_matching_persisted_sections(monkeypatch):
+    from app.services.result_report import builder
+    from tests.test_result_report_contract import _legal_full_report
+
+    scenario_id = _seed_report_scenario()
+    existing = _legal_full_report()
+    existing["status"] = "partial"
+    existing["target_branch_id"] = "branch-a"
+    existing["sections"][0]["intent"] = "Explain timeline."
+    existing["sections"][0]["evidence_refs"] = ["ev_001"]
+    existing["evidence"][0]["id"] = "ev_001"
+    existing["indicators_to_watch"][0]["evidence_refs"] = ["ev_001"]
+    builder._persist_report_payload(scenario_id, existing)
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline", "sources"]),
+            _section_payload("sources"),
+        ],
+    )
+    generated_sections: list[str] = []
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+    original_generate = builder.generate_section_react
+
+    async def capture_generated_section(*args: Any, **kwargs: Any):
+        section_plan = args[1]
+        generated_sections.append(section_plan.section_id)
+        return await original_generate(*args, **kwargs)
+
+    monkeypatch.setattr(builder, "generate_section_react", capture_generated_section)
+
+    report = await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    assert report.status == "complete"
+    assert [section.id for section in report.sections] == ["timeline", "sources"]
+    assert generated_sections == ["sources"]
 
 
 def test_report_generate_sse_endpoint_emits_progress_and_scrubs_byok(monkeypatch):
@@ -812,6 +901,57 @@ async def test_report_failure_redacts_credentials_from_sse_and_background_logs(
 
 
 @pytest.mark.asyncio
+async def test_report_sse_stream_uses_already_running_error_code(monkeypatch):
+    from app.services.result_report import builder
+
+    async def already_running(*_args: Any, **_kwargs: Any) -> FullReport:
+        raise builder.ResultReportAlreadyRunningError("already in progress")
+
+    monkeypatch.setattr(builder, "build_report", already_running)
+
+    frames = []
+    async for frame in builder.build_report_sse_stream(
+        "scenario-report",
+        "branch-a",
+        overrides=None,
+    ):
+        frames.append(frame)
+
+    body = "".join(frames)
+    assert "event: report_failed" in body
+    assert "REPORT_ALREADY_RUNNING" in body
+    assert "REPORT_FAILED" not in body
+
+
+@pytest.mark.asyncio
+async def test_report_sse_stream_emits_keepalive_comment_while_waiting(monkeypatch):
+    from app.services.result_report import builder
+
+    started = asyncio.Event()
+
+    async def slow_build_report(*_args: Any, **_kwargs: Any) -> FullReport:
+        started.set()
+        await asyncio.sleep(60)
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(builder, "build_report", slow_build_report)
+    monkeypatch.setattr(builder, "_SSE_HEARTBEAT_INTERVAL_SECONDS", 0.01, raising=False)
+
+    stream = builder.build_report_sse_stream(
+        "scenario-report",
+        "branch-a",
+        overrides=None,
+    )
+    assert "event: report_started" in await anext(stream)
+
+    try:
+        heartbeat = await asyncio.wait_for(anext(stream), timeout=0.2)
+        assert heartbeat.startswith(":")
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
 async def test_report_generate_sse_stream_cancels_builder_on_client_disconnect(
     monkeypatch,
 ):
@@ -883,6 +1023,9 @@ async def test_report_failure_does_not_block_simulation_done(monkeypatch):
     async def fake_llm_json(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"content": "Life support stays stable.", "emotion": "focused"}
 
+    async def fake_llm_text(*_args: Any, **_kwargs: Any) -> str:
+        return "Life support stays stable."
+
     async def fake_narrate_branch(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {
             "title": "Stabilize first",
@@ -906,6 +1049,7 @@ async def test_report_failure_does_not_block_simulation_done(monkeypatch):
         "app.services.simulator.llm_call_json_with_stream_fallback",
         fake_llm_json,
     )
+    monkeypatch.setattr("app.services.simulator.llm_call", fake_llm_text)
     monkeypatch.setattr("app.services.simulator.llm_call_json", fake_llm_json)
     monkeypatch.setattr("app.services.simulator.narrate_branch", fake_narrate_branch)
     monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
@@ -942,6 +1086,91 @@ async def test_report_failure_does_not_block_simulation_done(monkeypatch):
     assert validated.generation_mode == "static"
     assert validated.tier == "static"
     assert validated.sections == []
+
+
+@pytest.mark.asyncio
+async def test_simulator_preserves_opaque_api_key_for_report_generation(monkeypatch):
+    import app.services.simulator as simulator_module
+    from app.api.helpers import _OpaqueStr
+    from app.services.simulator import run_simulation
+
+    engine = get_engine()
+    scenario = Scenario(
+        question="Can the habitat survive one more week?",
+        parsed_context={
+            "_language": "English",
+            "setting": {},
+            "simulation_rounds": 1,
+            "mode": "raw",
+        },
+        status=ScenarioStatus.SIMULATING,
+    )
+    with Session(engine) as session:
+        session.add(scenario)
+        session.commit()
+        scenario_id = scenario.id
+        session.add(
+            Agent(
+                scenario_id=scenario_id,
+                name="Systems Lead",
+                role="Engineer",
+            )
+        )
+        session.commit()
+
+    async def fake_ws_callback(_scenario_id: str, _event: dict[str, Any]) -> None:
+        return None
+
+    async def fake_llm_json(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"content": "Life support stays stable.", "emotion": "focused"}
+
+    async def fake_narrate_branch(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "title": "Stabilize first",
+            "story": "The habitat survives by prioritizing life support.",
+            "insight": "Repair sequencing matters more than expansion.",
+            "key_moments": [],
+        }
+
+    captured_overrides: dict[str, Any] = {}
+
+    async def fake_build_report_safe(*_args: Any, **kwargs: Any) -> None:
+        captured_overrides.update(kwargs["overrides"])
+        return None
+
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_REPORT", True)
+    monkeypatch.setattr(simulator_module.settings, "FEATURE_RESULT_VERDICT", False)
+    monkeypatch.setattr(
+        "app.services.simulator.llm_call_json_with_stream_fallback",
+        fake_llm_json,
+    )
+    monkeypatch.setattr("app.services.simulator.llm_call_json", fake_llm_json)
+    monkeypatch.setattr("app.services.simulator.narrate_branch", fake_narrate_branch)
+    monkeypatch.setattr("app.services.simulator.retrieve_relevant_memories", lambda *a, **k: "")
+    monkeypatch.setattr("app.services.simulator.store_memory", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "app.services.result_report.builder.build_report_safe",
+        fake_build_report_safe,
+    )
+
+    secret = _OpaqueStr("sk-report-secret")
+    await run_simulation(
+        scenario_id,
+        ws_callback=fake_ws_callback,
+        llm_overrides={
+            "api_key": secret,
+            "base_url": "https://example.com/v1/chat/completions",
+            "model": "model-a",
+            "temperature": 0.2,
+        },
+    )
+    await asyncio.sleep(0)
+
+    assert captured_overrides["api_key"] is secret
+    assert repr(captured_overrides) == (
+        "{'api_key': ***, 'base_url': 'https://example.com/v1/chat/completions', "
+        "'model': 'model-a', 'temperature': 0.2}"
+    )
 
 
 def test_sse_event_shape_remains_frozen_for_progress_payloads() -> None:
