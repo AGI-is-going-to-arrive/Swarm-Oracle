@@ -800,7 +800,19 @@ def test_full_report_snapshot_redacts_report_secrets_and_round_trips(
     else:
         assert exported_report["sections"][0]["id"] == "timeline"
         chart_data = exported_report["sections"][0]["charts"][0]["data"]
-        assert chart_data == {"branch_id": "branch-1", "probability": 0.68}
+        assert chart_data == {
+            "status": "available",
+            "sort": ["probability_desc", "fork_round_asc", "id_asc"],
+            "branches": [
+                {
+                    "branch_id": "branch-1",
+                    "label": "Approval with safeguards",
+                    "probability": 0.68,
+                    "dominant": True,
+                    "status": "COMPLETED",
+                },
+            ],
+        }
 
     with Session(get_engine()) as session:
         new_id = import_snapshot_zip(raw, "importer-2", session)
@@ -837,6 +849,17 @@ def test_full_report_snapshot_redacts_report_secrets_and_round_trips(
     assert message is not None
     assert message.round_id == round_row.id
     assert message.agent_id == agent.id
+    if status != "failed":
+        imported_chart_data = imported_report["sections"][0]["charts"][0]["data"]
+        assert imported_chart_data["branches"] == [
+            {
+                "branch_id": imported_evidence["branch_id"],
+                "label": "Approval with safeguards",
+                "probability": 0.68,
+                "dominant": True,
+                "status": "COMPLETED",
+            },
+        ]
     imported_ref_text = json.dumps(imported_report, ensure_ascii=False)
     assert "ev-stale" not in imported_ref_text
     assert imported_report["interview_evidence"] == exported_report["interview_evidence"]

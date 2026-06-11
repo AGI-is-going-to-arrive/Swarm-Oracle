@@ -956,6 +956,21 @@ def _remap_full_report_coordinates(
                         data["branch_id"] = branch_id_map[branch_id]
                     elif "branch_id" in data:
                         data.pop("branch_id", None)
+                    branches = data.get("branches")
+                    if isinstance(branches, list):
+                        remapped_branches: list[dict[str, Any]] = []
+                        for branch_item in branches:
+                            if not isinstance(branch_item, dict):
+                                continue
+                            item_branch_id = branch_id_map.get(
+                                str(branch_item.get("branch_id") or "")
+                            )
+                            if not item_branch_id:
+                                continue
+                            remapped_item = dict(branch_item)
+                            remapped_item["branch_id"] = item_branch_id
+                            remapped_branches.append(remapped_item)
+                        data["branches"] = remapped_branches
 
     for indicator in report.get("indicators_to_watch") or []:
         if isinstance(indicator, dict):
