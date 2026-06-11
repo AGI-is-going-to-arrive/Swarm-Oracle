@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as apiClient from '../api/client';
 import { ApiError } from '../api/client';
 import type { ScenarioMeta } from '../lib/scenarioMeta';
-import type { Scenario, StoryResponse } from '../types';
+import type { Scenario } from '../types';
 import { buildScenarioReplayUrl, compactScenarioMetaForReplay } from '../lib/scenarioReplay';
 import { clearPretextCache } from '../lib/textLayout/pretext';
 import {
@@ -222,6 +222,7 @@ const {
     counterfactual_replay: { enabled: false },
     factions: { enabled: false },
     result_verdict: { enabled: true },
+    result_report: { enabled: false },
     web_search: { providers: {} },
   };
   let currentCapabilityLoading = false;
@@ -4531,6 +4532,7 @@ describe('ResultView export flow', () => {
         interview_evidence: [],
         premortem: [],
         language_status: null,
+        tier: 'static',
         verdict: {
           headline_answer: 'Test headline answer',
           likelihood: {
@@ -4545,7 +4547,7 @@ describe('ResultView export flow', () => {
           disclaimer: null,
         },
       },
-    } as StoryResponse);
+    });
 
     render(
       <MemoryRouter initialEntries={['/result/scenario-1']}>
