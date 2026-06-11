@@ -1405,6 +1405,83 @@ describe('ResultView campaign summary', () => {
     expect(getCampaignScenarioSummaryMock).toHaveBeenCalledWith('scenario-1');
   });
 
+  it('skips calling getCampaignScenarioSummary when the scenario has no campaign signals, but renders normal results', async () => {
+    const getStoryMock = vi.mocked(apiClient.getStory);
+    const getScenarioMock = vi.mocked(apiClient.getScenario);
+    const getCampaignScenarioSummaryMock = vi.mocked(apiClient.getCampaignScenarioSummary);
+
+    const originalGetStory = getStoryMock.getMockImplementation();
+    const originalGetScenario = getScenarioMock.getMockImplementation();
+
+    try {
+      getStoryMock.mockImplementation(async (storyId) => {
+        if (storyId === 'scenario-nocampaign') {
+          return {
+            scenario_id: 'scenario-nocampaign',
+            question: 'What if there is no campaign signal?',
+            status: 'done',
+            branches: [{
+              id: 'branch-1',
+              title: 'Archive Branch',
+              probability: 1,
+              status: 'COMPLETED',
+              story: 'A complete branch story.',
+              insight: 'A durable insight.',
+              key_moments: ['Moment 1'],
+              parent_branch_id: null,
+              fork_reason: '',
+            }],
+          } as unknown as Awaited<ReturnType<typeof apiClient.getStory>>;
+        }
+        return originalGetStory ? originalGetStory(storyId) : (null as unknown as Awaited<ReturnType<typeof apiClient.getStory>>);
+      });
+
+      getScenarioMock.mockImplementation(async (scenarioId) => {
+        if (scenarioId === 'scenario-nocampaign') {
+          return {
+            id: 'scenario-nocampaign',
+            question: 'What if there is no campaign signal?',
+            status: 'done',
+            created_at: '2026-03-17T00:00:00Z',
+            scene_theme: 'law_court',
+            agents: [],
+            branches: [],
+            messages: [],
+            groups: [],
+            hierarchical: false,
+            director_state: null,
+            gameplay_state: null,
+          } as unknown as Awaited<ReturnType<typeof apiClient.getScenario>>;
+        }
+        return originalGetScenario ? originalGetScenario(scenarioId) : (null as unknown as Awaited<ReturnType<typeof apiClient.getScenario>>);
+      });
+
+      getCampaignScenarioSummaryMock.mockClear();
+
+      const { container } = render(
+        <MemoryRouter initialEntries={['/result/scenario-nocampaign']}>
+          <Routes>
+            <Route path="/result/:id" element={<ResultView />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      // Assert that the page renders normally
+      await screen.findByText('result.title');
+      expect(container.querySelector('.result-question')).toHaveTextContent('What if there is no campaign signal?');
+
+      // Assert that getCampaignScenarioSummary is NOT called
+      expect(getCampaignScenarioSummaryMock).not.toHaveBeenCalled();
+    } finally {
+      if (originalGetStory) {
+        getStoryMock.mockImplementation(originalGetStory);
+      }
+      if (originalGetScenario) {
+        getScenarioMock.mockImplementation(originalGetScenario);
+      }
+    }
+  });
+
   it('scores predictions with BYOK overrides loaded from sessionStorage', async () => {
     const user = userEvent.setup();
     const scorePredictionsMock = vi.mocked(apiClient.scorePredictions);

@@ -452,20 +452,26 @@ export default function ResultView() {
 
       try {
         // Fetch story and scenario in parallel, handle prediction API failure gracefully
-        const [story, agentList, scenario, preds, persistedCampaignSummary] = await Promise.all([
+        const [story, agentList, scenario, preds] = await Promise.all([
           getStory(id),
           getAgents(id),
           getScenario(id),
           Promise.resolve()
             .then(() => listPredictions(id))
             .catch(() => [] as PredictionInfo[]),
-          getCampaignScenarioSummary(id),
         ]);
         if (cancelled) return;
 
         setScenario(scenario);
         setAgents(agentList);
         setPredictions(preds);
+
+        const hasCampaignSignal = Boolean(scenario.director_state || scenario.gameplay_state);
+        const persistedCampaignSummary = hasCampaignSignal
+          ? await getCampaignScenarioSummary(id)
+          : null;
+        if (cancelled) return;
+
         setCampaignScenarioSummary(persistedCampaignSummary);
 
         if (scenario.status !== 'done') {

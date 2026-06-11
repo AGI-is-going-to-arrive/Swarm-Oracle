@@ -60,7 +60,7 @@ describe('SetupWizardView provider selection', () => {
   it('preserves pre-existing model and RPM when wizard is finished', async () => {
     const user = userEvent.setup();
     const { saveLlmProviderPolicy, loadLlmProviderPolicy } = await import('../lib/llmProviderPolicy');
-    
+
     saveLlmProviderPolicy({
       apiKey: 'old-key',
       baseUrl: 'old-url',
@@ -105,4 +105,3 @@ describe('SetupWizardView provider selection', () => {
     expect(finalPolicy.tokensPerMinute).toBe(50000);
   });
 });
-

@@ -3124,4 +3124,3 @@ describe('InputView LLM Not Configured and LLM Error Hints (P0)', () => {
     expect(screen.getByRole('button', { name: 'llm_error_hint.diagnose_btn' })).toBeInTheDocument();
   });
 });
-

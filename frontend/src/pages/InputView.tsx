@@ -1655,12 +1655,12 @@ export function InputView() {
               {caps?.llm_configured === false && (
                 <div className="degraded-llm-warning" style={{ marginTop: '12px', textAlign: 'left' }}>
                   <p className="byok-probe-warning" style={{ margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                    <span>⚠️ {t('degraded_hints.llm_required')}。</span>
+                    <span>⚠️ {t('degraded_hints.llm_required')}</span>
                     <Link to="/admin/setup" style={{ textDecoration: 'underline', fontWeight: 600 }}>
                       {t('llm_banner.configure_cta')}
                     </Link>
                   </p>
-                  
+
                   <div className="degraded-demo-entry" style={{ padding: '12px', border: '1px dashed var(--color-border-default)', borderRadius: 'var(--radius-lg, 8px)', backgroundColor: 'var(--color-base, oklch(98% 0.005 80))' }}>
                     <p style={{ margin: '0 0 8px 0', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
                       💡 {t('degraded_hints.sample_hint')}

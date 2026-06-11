@@ -26,7 +26,7 @@
       }
     },
     "degraded_hints": {
-      "llm_required": "需要先配置 LLM",
+      "llm_required": "需要先配置 LLM。",
       "view_sample_result": "看示例结果（如果郑和比哥伦布先发现了美洲大陆）",
       "sample_hint": "内置的演示快照文件存放在 samples/snapshots/ 目录下，您可以通过导入快照功能来免密钥导入并查看只读推演结果。"
     },
@@ -3241,7 +3241,7 @@
       "import_pick_file": "选择文件…",
       "import_filename_label": "文件",
       "import_filesize_label": "大小",
-      "import_invalid_format": "请选择有效的 SwarmOracle ZIP 快照文件。",
+      "import_invalid_format": "请选择有效的 SwarmOracle 快照文件（.zip 或 .swarm）。",
       "import_file_too_large": "快照文件太大，无法通过浏览器导入。",
       "import_confirm": "确认导入",
       "import_in_progress": "正在导入快照…",

@@ -26,7 +26,7 @@
       }
     },
     "degraded_hints": {
-      "llm_required": "Configure an LLM provider first",
+      "llm_required": "Configure an LLM provider first.",
       "view_sample_result": "View sample result (If Zheng He discovered the Americas before Columbus)",
       "sample_hint": "Bundled demo snapshot files live under the samples/snapshots/ directory. You can use the Import Snapshot flow to load and view read-only results without an API key."
     },
@@ -3241,7 +3241,7 @@
       "import_pick_file": "Choose file…",
       "import_filename_label": "File",
       "import_filesize_label": "Size",
-      "import_invalid_format": "Please choose a valid SwarmOracle ZIP snapshot.",
+      "import_invalid_format": "Please choose a valid SwarmOracle snapshot (.zip or .swarm).",
       "import_file_too_large": "Snapshot file is too large to import via the browser.",
       "import_confirm": "Confirm import",
       "import_in_progress": "Importing snapshot…",

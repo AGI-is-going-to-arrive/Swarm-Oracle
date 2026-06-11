@@ -26,11 +26,12 @@ interface SnapshotImportDialogProps {
 type ImportStep = 'select' | 'ready' | 'importing' | 'done' | 'error';
 
 const ZIP_MIME_TYPES = new Set(['application/zip', 'application/x-zip-compressed']);
+const SNAPSHOT_EXTENSIONS = ['.zip', '.swarm'];
 const MAX_DISPLAY_FILE_BYTES = 50 * 1024 * 1024; // Match backend upload cap.
 
 function isZipFile(file: File): boolean {
   if (ZIP_MIME_TYPES.has(file.type)) return true;
-  return file.name.toLowerCase().endsWith('.zip');
+  return SNAPSHOT_EXTENSIONS.some(ext => file.name.toLowerCase().endsWith(ext));
 }
 
 function formatBytes(bytes: number): string {
@@ -93,7 +94,7 @@ export default function SnapshotImportDialog({
         setErrorMessage(
           t(
             'snapshot.import_invalid_format',
-            'Please choose a valid SwarmOracle ZIP snapshot.',
+            'Please choose a valid SwarmOracle snapshot (.zip or .swarm).',
           ),
         );
         setStep('error');
@@ -247,7 +248,7 @@ export default function SnapshotImportDialog({
                   id={inputId}
                   ref={fileInputRef}
                   type="file"
-                  accept=".zip,application/zip"
+                  accept=".zip,.swarm,application/zip"
                   className="snapshot-import-dropzone__input"
                   onChange={handleFileInputChange}
                   tabIndex={-1}
