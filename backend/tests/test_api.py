@@ -618,6 +618,15 @@ class TestByokValidation:
         assert resp.status_code == 400
         assert resp.json()["detail"]["code"] == "BYOK_API_KEY_REQUIRED"
 
+    def test_report_generate_accepts_zero_rate_limits_as_disabled(self):
+        req = scenarios_api.ResultReportGenerateRequest(
+            llm_requests_per_minute=0,
+            llm_tokens_per_minute=0,
+        )
+
+        assert req.llm_requests_per_minute == 0
+        assert req.llm_tokens_per_minute == 0
+
     def test_scenario_javascript_scheme_rejected(self, client):
         resp = client.post("/api/scenario", json={
             "question": "test?",

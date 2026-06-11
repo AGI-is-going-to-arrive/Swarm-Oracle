@@ -450,7 +450,7 @@
         "backToOverview": "返回结果概览",
         "couldNotLoadReport": "无法加载完整报告",
         "loadReportErrorDesc": "请求结果或报告数据失败。请重试，或返回结果概览。",
-        "deepReadReport": "完整报告",
+        "fullReport": "完整报告",
         "featureNotEnabled": "功能未启用",
         "featureNotEnabledDesc": "本服务器未启用完整报告功能。",
         "evidenceDrawerDescription": "已引用证据的详细列表"

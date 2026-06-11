@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ReportVerdict } from '../../types';
+import { getReportDisclaimerText } from './reportDisclaimer';
 
 interface Props {
   verdict: ReportVerdict;
@@ -66,11 +67,8 @@ export const ReportConfidenceBadge = React.memo(function ReportConfidenceBadge({
       ? t('result.report.wep.missing', 'Not Available')
       : '';
 
-  // Prefer the backend-authored disclaimer (it can be scenario-specific), otherwise fall
-  // back to the localized boilerplate so the panel is never shown without a disclaimer.
-  const disclaimerText = disclaimer?.trim()
-    ? disclaimer
-    : t('result.report.disclaimer', 'This probability is a narrative simulation result, not a real-world prediction.');
+  // Prefer scenario-specific disclaimers, but localize legacy persisted boilerplate.
+  const disclaimerText = getReportDisclaimerText(disclaimer, t);
 
   const currentLang = i18n.language?.startsWith('zh') ? 'zh' : 'en';
   let displayBasis = '';

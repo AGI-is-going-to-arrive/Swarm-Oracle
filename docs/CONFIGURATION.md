@@ -62,7 +62,7 @@ SwarmOracle 兼容任何 OpenAI 格式的 API（OpenAI、各类代理、Ollama �
 
 还有几个后端内部/实验开关默认保持关闭，不作为普通用户入口介绍：`FEATURE_ROUNDTABLE_INSIGHT_LLM`、`FEATURE_HALLUCINATION_GATE`、`FEATURE_IDENTITY_COMPACTION`。
 
-`FEATURE_RESULT_REPORT` 默认开启。打开时，结果页会出现完整报告入口，后端会把报告写入 `Scenario.parsed_context.full_report`，并通过 `POST /api/scenario/{id}/report:generate` 的 HTTP SSE 生成或重试。报告证据会保存 round / branch / agent / message 坐标，前端可从证据侧栏跳回 replay；失败、partial 和超限截断都有可显示状态，不会阻断原本的结果页。报告章节数、每章工具调用上限、超时、证据摘录长度和完整报告字节上限由 `.env.example` 里的 `REPORT_*` 参数控制；如果需要回到纯 verdict + story 结果页，可以把它改为 `false` 后重启后端。
+`FEATURE_RESULT_REPORT` 默认开启。打开时，结果页会出现完整报告入口，后端会把报告写入 `Scenario.parsed_context.full_report`，并通过 `POST /api/scenario/{id}/report:generate` 的 HTTP SSE 生成或重试。报告证据会保存 round / branch / agent / message 坐标，前端可从证据侧栏跳回 replay；失败、partial 和超限截断都有可显示状态，不会阻断原本的结果页。重试会沿用当前标签页的 BYOK provider policy；`llm_requests_per_minute / llm_tokens_per_minute` 传 `0` 表示本次不加单独 RPM/TPM 限制。报告章节数、每章工具调用上限、超时、证据摘录长度和完整报告字节上限由 `.env.example` 里的 `REPORT_*` 参数控制；如果需要回到纯 verdict + story 结果页，可以把它改为 `false` 后重启后端。
 
 > 改完开关后需要**重启后端**才会生效。大多数开关对应界面上的功能，前端通过 `/api/capabilities` 自动感知是否可用，关闭的功能会隐藏或提示不可用，不会报错。
 

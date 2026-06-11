@@ -210,7 +210,7 @@ export default function ResultReportView() {
           </div>
           {/* Standalone page owns the <h1>; the panel renders its title as <h2>. */}
           <h1 className="text-3xl font-bold text-[color:var(--text-primary)] mb-4">
-            {t('result.report.deepReadReport')}
+            {t('result.report.fullReport')}
           </h1>
           <ResultReportPanel variant="standalone" onRefresh={refetch} />
         </div>

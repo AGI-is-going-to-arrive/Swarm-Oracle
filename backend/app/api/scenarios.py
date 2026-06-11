@@ -262,9 +262,9 @@ class ResultReportGenerateRequest(BaseModel):
 
     @field_validator("llm_requests_per_minute", "llm_tokens_per_minute")
     @classmethod
-    def validate_optional_positive_limit(cls, v: int | None) -> int | None:
-        if v is not None and v <= 0:
-            raise ValueError("LLM rate limits must be positive integers")
+    def validate_optional_non_negative_limit(cls, v: int | None) -> int | None:
+        if v is not None and v < 0:
+            raise ValueError("LLM rate limits must be >= 0")
         return v
 
 

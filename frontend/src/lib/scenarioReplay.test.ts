@@ -245,7 +245,7 @@ describe('scenarioReplay helpers', () => {
     const fullReport = {
       version: '1',
       status: 'complete',
-      title: 'Deep-Read Report',
+      title: 'Full Report',
       sections: [{ id: 's1', title: 'Section', body_md_i18n: { zh: '正文', en: 'Body' } }],
       evidence: [{ id: 'e1', quote: 'A long quote that bloats the replay token' }],
       indicators_to_watch: [],

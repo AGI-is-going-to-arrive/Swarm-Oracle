@@ -684,7 +684,7 @@ describe('agent profile helpers', () => {
     it('uses the 35-minute budget timeout by default and passes it to fetchWithTimeout', async () => {
       vi.useFakeTimers();
       const setTimeoutSpy = vi.spyOn(global, 'setTimeout');
-      
+
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         headers: {
@@ -698,7 +698,7 @@ describe('agent profile helpers', () => {
       await generateReport('scenario-test');
 
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 35 * 60_000);
-      
+
       setTimeoutSpy.mockRestore();
     });
 

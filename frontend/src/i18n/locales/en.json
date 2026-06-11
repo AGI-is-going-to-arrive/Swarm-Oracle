@@ -450,7 +450,7 @@
         "backToOverview": "Back to Result Overview",
         "couldNotLoadReport": "Could Not Load Full Report",
         "loadReportErrorDesc": "The result or report data could not be loaded. Retry, or return to the overview.",
-        "deepReadReport": "Full report",
+        "fullReport": "Full report",
         "featureNotEnabled": "Feature Disabled",
         "featureNotEnabledDesc": "Full reports are turned off on this server.",
         "evidenceDrawerDescription": "Detailed list of cited evidence"

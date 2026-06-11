@@ -104,7 +104,7 @@ function sanitizeScenarioReplayScenario(scenario: Scenario): Scenario {
   };
 }
 
-// `full_report` is the deep-read Result Report IR. It is excluded from replay/share
+// `full_report` is the full Result Report IR. It is excluded from replay/share
 // surfaces by contract and is large enough to push tokens past ReplayTokenTooLargeError,
 // so it must never be embedded in a replay artifact or inline replay token.
 function sanitizeScenarioReplayStoryData(storyData: StoryData): StoryData {

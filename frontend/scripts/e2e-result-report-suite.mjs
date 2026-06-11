@@ -1,5 +1,5 @@
 /**
- * Fixture-backed Result Report (full_report deep-read) browser regression.
+ * Fixture-backed Result Report (full_report) browser regression.
  *
  * Verifies the S5 Result Report surface on the standalone `/result/:id/report`
  * route (ResultReportView → ResultReportPanel, variant="standalone"), which only

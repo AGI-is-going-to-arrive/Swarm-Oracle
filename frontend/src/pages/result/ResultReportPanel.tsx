@@ -64,7 +64,7 @@ async function drainReportStreamAndDetectAlreadyRunning(res: Response, signal: A
         buffer += decoder.decode();
         break;
       }
-      
+
       buffer += decoder.decode(value, { stream: true });
       const frames = buffer.split(/\r?\n\r?\n/);
       buffer = frames.pop() ?? '';
@@ -237,12 +237,12 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
 
     setRetrying(true);
     setRetryError(false);
-    
+
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    
+
     const timeoutId = setTimeout(() => controller.abort(), REPORT_GENERATE_TIMEOUT_MS);
-    
+
     try {
       const providerPolicy = loadLlmProviderPolicy();
       const res = await generateReport(
@@ -256,7 +256,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
         },
         controller.signal
       );
-      
+
       const isAlreadyRunning = await drainReportStreamAndDetectAlreadyRunning(res, controller.signal);
       if (isAlreadyRunning) {
         setLocalGenerating(true);
@@ -441,7 +441,7 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
       return (
         <div className="report-panel-container my-8 p-5 bg-[color:var(--bg-hover)] rounded-xl border border-dashed border-[color:var(--border-default)] flex justify-between items-center flex-wrap gap-3">
           <div>
-            <p className="text-sm font-semibold text-[color:var(--text-primary)]">📊 {t('result.report.deepReadReport')}</p>
+            <p className="text-sm font-semibold text-[color:var(--text-primary)]">📊 {t('result.report.fullReport')}</p>
             <p className="text-xs text-[color:var(--text-secondary)]">{t('result.report.generateReportDesc')}</p>
           </div>
           <button

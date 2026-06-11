@@ -132,7 +132,7 @@ def _outline_payload(section_ids: list[str] | None = None) -> dict[str, Any]:
     ids = section_ids or ["timeline", "sources"]
     return {
         "title_i18n": {
-            "zh": "AI 公交方案深读",
+            "zh": "AI 公交方案完整报告",
             "en": "AI transit plan report",
         },
         "summary_i18n": {
