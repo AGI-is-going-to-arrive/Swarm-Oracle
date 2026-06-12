@@ -522,7 +522,17 @@ class TestScoringService(unittest.TestCase):
                     )
                 )
 
-            self.assertEqual(result, {"score": 88, "reason": "命中主线"})
+            self.assertEqual(
+                result,
+                {
+                    "score": 88,
+                    "reason": "命中主线",
+                    "you_vs_oracle": {
+                        "status": "not_scorable",
+                        "reason": "actual_outcome_unavailable",
+                    },
+                },
+            )
             _, kwargs = mock_llm.call_args
             self.assertEqual(kwargs["api_key"], "sk-test")
             self.assertEqual(kwargs["base_url"], "https://example.com/v1/chat/completions")
@@ -573,7 +583,17 @@ class TestScoringService(unittest.TestCase):
                 mock_llm.return_value = {"score": 88, "reason": "命中主线"}
                 result = asyncio.run(score_prediction(pred_id))
 
-            self.assertEqual(result, {"score": 88, "reason": "命中主线"})
+            self.assertEqual(
+                result,
+                {
+                    "score": 88,
+                    "reason": "命中主线",
+                    "you_vs_oracle": {
+                        "status": "not_scorable",
+                        "reason": "actual_outcome_unavailable",
+                    },
+                },
+            )
 
             with Session(engine) as session:
                 entries = session.exec(
@@ -625,7 +645,17 @@ class TestScoringService(unittest.TestCase):
                 mock_llm.return_value = {"score": 90, "reason": "Aligned"}
                 result = asyncio.run(score_prediction(pred_id))
 
-            self.assertEqual(result, {"score": 90, "reason": "Aligned"})
+            self.assertEqual(
+                result,
+                {
+                    "score": 90,
+                    "reason": "Aligned",
+                    "you_vs_oracle": {
+                        "status": "not_scorable",
+                        "reason": "actual_outcome_unavailable",
+                    },
+                },
+            )
             prompt = mock_llm.call_args.args[0]
             self.assertIn("You are a precise prediction evaluator", prompt)
             self.assertIn("Original Question", prompt)
@@ -889,8 +919,28 @@ class TestScoringService(unittest.TestCase):
                             score_prediction(pred_id),
                         )
 
-                self.assertEqual(first, {"score": 88, "reason": "命中主线"})
-                self.assertEqual(second, {"score": 88, "reason": "命中主线"})
+                self.assertEqual(
+                    first,
+                    {
+                        "score": 88,
+                        "reason": "命中主线",
+                        "you_vs_oracle": {
+                            "status": "not_scorable",
+                            "reason": "actual_outcome_unavailable",
+                        },
+                    },
+                )
+                self.assertEqual(
+                    second,
+                    {
+                        "score": 88,
+                        "reason": "命中主线",
+                        "you_vs_oracle": {
+                            "status": "not_scorable",
+                            "reason": "actual_outcome_unavailable",
+                        },
+                    },
+                )
                 self.assertEqual(leaderboard_updates, 1)
 
                 with Session(engine) as session:
@@ -1006,8 +1056,28 @@ class TestScoringService(unittest.TestCase):
                         score_prediction(second_id),
                     )
 
-                self.assertEqual(first, {"score": 88, "reason": "命中主线"})
-                self.assertEqual(second, {"score": 88, "reason": "命中主线"})
+                self.assertEqual(
+                    first,
+                    {
+                        "score": 88,
+                        "reason": "命中主线",
+                        "you_vs_oracle": {
+                            "status": "not_scorable",
+                            "reason": "actual_outcome_unavailable",
+                        },
+                    },
+                )
+                self.assertEqual(
+                    second,
+                    {
+                        "score": 88,
+                        "reason": "命中主线",
+                        "you_vs_oracle": {
+                            "status": "not_scorable",
+                            "reason": "actual_outcome_unavailable",
+                        },
+                    },
+                )
 
                 with Session(engine) as session:
                     entry = session.exec(
