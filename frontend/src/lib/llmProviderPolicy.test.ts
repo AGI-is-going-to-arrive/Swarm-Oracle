@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { loadLlmProviderPolicy, saveLlmProviderPolicy, validateByok } from './llmProviderPolicy';
+import { loadLlmProviderPolicy, saveLlmProviderPolicy, validateByok, resolveProviderPolicy } from './llmProviderPolicy';
+import type { ModelProfile } from '../types';
 
 describe('llmProviderPolicy', () => {
   beforeEach(() => {
@@ -166,5 +167,70 @@ describe('llmProviderPolicy', () => {
   it('validateByok accepts empty or paired apiKey/baseUrl input', () => {
     expect(validateByok({ apiKey: '', baseUrl: '' })).toEqual({ valid: true });
     expect(validateByok({ apiKey: 'sk-test', baseUrl: 'https://example.com/v1' })).toEqual({ valid: true });
+  });
+
+  describe('resolveProviderPolicy', () => {
+    const dummyProfile: ModelProfile = {
+      id: 'profile-1',
+      user_id: 'user-1',
+      name: 'Test Profile',
+      description: 'A test profile',
+      provider: 'openai',
+      base_url: 'https://api.openai.com/v1',
+      model: 'gpt-4o-mini',
+      has_api_key: true,
+      rpm: 60,
+      tpm: 100000,
+      concurrency: 2,
+      supports_structured_outputs: true,
+      supports_native_search: false,
+      storage_notice: 'Local storage notice',
+      created_at: '2026-06-12T15:50:32Z',
+      updated_at: '2026-06-12T15:50:32Z',
+    };
+
+    it('returns overrides directly when no profile is selected', () => {
+      const overrides = {
+        llmModel: 'gpt-3.5-turbo',
+        llmBaseUrl: 'https://custom-url.com',
+        llmRequestsPerMinute: 10,
+      };
+      const resolved = resolveProviderPolicy(null, overrides);
+      expect(resolved).toEqual(overrides);
+    });
+
+    it('falls back to profile defaults when overrides are empty', () => {
+      const resolved = resolveProviderPolicy(dummyProfile, {});
+      expect(resolved).toEqual({
+        llmModel: 'gpt-4o-mini',
+        llmBaseUrl: 'https://api.openai.com/v1',
+        llmRequestsPerMinute: 60,
+        llmTokensPerMinute: 100000,
+      });
+    });
+
+    it('prioritizes overrides over profile defaults', () => {
+      const overrides = {
+        llmModel: 'gpt-4',
+        llmBaseUrl: 'https://override-url.com',
+        llmRequestsPerMinute: 120,
+        llmTokensPerMinute: 200000,
+      };
+      const resolved = resolveProviderPolicy(dummyProfile, overrides);
+      expect(resolved).toEqual(overrides);
+    });
+
+    it('selects profile default only for fields that are missing in overrides', () => {
+      const overrides = {
+        llmModel: 'gpt-4',
+      };
+      const resolved = resolveProviderPolicy(dummyProfile, overrides);
+      expect(resolved).toEqual({
+        llmModel: 'gpt-4',
+        llmBaseUrl: 'https://api.openai.com/v1',
+        llmRequestsPerMinute: 60,
+        llmTokensPerMinute: 100000,
+      });
+    });
   });
 });

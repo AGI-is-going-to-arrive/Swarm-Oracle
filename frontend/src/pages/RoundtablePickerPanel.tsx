@@ -24,12 +24,14 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { useTranslation } from 'react-i18next';
 import type { EndingRoomCandidate } from '../lib/endingRoomCandidates';
-import type { EndingRoomSnapshot, RoundtableWitnessSelection, StoryData } from '../types';
+import type { EndingRoomSnapshot, RoundtableWitnessSelection, StoryData, ModelProfile } from '../types';
 import {
   type RoundtableSelectionMode,
   type WitnessCandidate,
   MANUAL_SHORTLIST_MIN,
 } from './roundtableHelpers';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { listModelProfiles } from '../api/client';
 
 interface Props {
   selectionMode: RoundtableSelectionMode;
@@ -51,6 +53,8 @@ interface Props {
   launchingRoom: boolean;
   onLaunchRoundtable: () => void;
   onCancelEditing: () => void;
+  roomModelProfileId: string;
+  onRoomModelProfileIdChange: (id: string) => void;
 }
 
 type DragRole = 'representative' | 'witness';
@@ -283,8 +287,20 @@ export default function RoundtablePickerPanel({
   launchingRoom,
   onLaunchRoundtable,
   onCancelEditing,
+  roomModelProfileId,
+  onRoomModelProfileIdChange,
 }: Props) {
   const { t } = useTranslation();
+  const { enabled: modelProfilesEnabled } = useCapabilityCheck('model_profiles');
+  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+
+  useEffect(() => {
+    if (modelProfilesEnabled) {
+      listModelProfiles()
+        .then((res) => setProfiles(res.profiles || []))
+        .catch(() => {});
+    }
+  }, [modelProfilesEnabled]);
   const [activeDrag, setActiveDrag] = useState<DragCardPayload | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const mouseFallbackDragRef = useRef<MouseFallbackDragState | null>(null);
@@ -568,6 +584,26 @@ export default function RoundtablePickerPanel({
               </span>
             )}
           </div>
+          {modelProfilesEnabled && (
+            <div className="roundtable-profile-selector" style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+              <label htmlFor="roundtable-profile-select" style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-color)' }}>
+                {t('model_profiles.placeholder_select')}
+              </label>
+              <select
+                id="roundtable-profile-select"
+                className="form-control"
+                value={roomModelProfileId}
+                onChange={(e) => onRoomModelProfileIdChange(e.target.value)}
+                disabled={launchingRoom}
+                style={{ width: '100%', maxWidth: '300px', padding: '0.4rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)', fontSize: '0.85rem' }}
+              >
+                <option value="">{t('model_profiles.byok_custom_option')}</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.provider} - {p.model})</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
         <div className="worldline-roundtable-picker__actions">
           {effectiveSnapshot && (

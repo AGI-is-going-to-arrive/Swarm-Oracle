@@ -25,6 +25,7 @@ const {
   listAgentIdentitiesMock,
   getSessionBoundUserIdMock,
   createMultiRunMock,
+  listModelProfilesMock,
   setMockLanguage,
   getMockLanguage,
   stableTranslator,
@@ -158,6 +159,7 @@ const {
       setMockLanguage(language);
     }),
     listAgentIdentitiesMock: vi.fn(),
+    listModelProfilesMock: vi.fn(),
     getSessionBoundUserIdMock: vi.fn(() => 'default_user'),
     setMockLanguage,
     getMockLanguage,
@@ -219,6 +221,7 @@ vi.mock('../api/client', () => ({
   getCampaignWeeklySummary: getCampaignWeeklySummaryMock,
   listAgentIdentities: listAgentIdentitiesMock,
   getSessionBoundUserId: getSessionBoundUserIdMock,
+  listModelProfiles: listModelProfilesMock,
 }));
 
 vi.mock('../lib/directorIdentity', () => ({
@@ -385,6 +388,8 @@ describe('InputView campaign progress', () => {
     importScenarioSnapshotMock.mockReset();
     testLlmConnectionMock.mockReset();
     getCapabilitiesMock.mockReset();
+    listModelProfilesMock.mockReset();
+    listModelProfilesMock.mockResolvedValue({ profiles: [], count: 0 });
     // Default: server web search disabled (tests that need it override)
     getCapabilitiesMock.mockResolvedValue({});
     identityPreflightMock.mockResolvedValue({
@@ -3075,6 +3080,13 @@ describe('InputView LLM Not Configured and LLM Error Hints (P0)', () => {
     getCapabilitiesMock.mockReset();
     getSessionBoundUserIdMock.mockReset();
     getSessionBoundUserIdMock.mockReturnValue('default_user');
+    getCampaignProfileMock.mockResolvedValue(null);
+    getCampaignMasteryMock.mockResolvedValue([]);
+    getCampaignBadgesMock.mockResolvedValue([]);
+    getCampaignChallengeRotationMock.mockResolvedValue(null);
+    getCampaignDailyChallengeStatusMock.mockResolvedValue(null);
+    getCampaignWeeklySummaryMock.mockResolvedValue(null);
+    listModelProfilesMock.mockResolvedValue({ profiles: [], count: 0 });
     mockSimulationStoreState.error = '';
     mockSimulationStoreState.errorCode = null;
   });
@@ -3229,5 +3241,197 @@ describe('InputView LLM Not Configured and LLM Error Hints (P0)', () => {
 
     await screen.findByText('multi_run.input_label');
     expect(screen.queryByText('common.capability_error')).toBeNull();
+  });
+});
+
+describe('InputView Model Profile Integration', () => {
+  const mockProfiles = [
+    {
+      id: 'profile-1',
+      user_id: 'default_user',
+      name: 'Test OpenAI Profile',
+      description: 'OpenAI testing',
+      provider: 'openai',
+      base_url: 'https://api.openai.com/v1',
+      model: 'gpt-4o',
+      has_api_key: true,
+      rpm: 100,
+      tpm: 50000,
+      concurrency: 5,
+      supports_structured_outputs: true,
+      supports_native_search: false,
+      storage_notice: 'API keys are stored in local plaintext SQLite',
+      created_at: '2026-06-12T00:00:00Z',
+      updated_at: '2026-06-12T00:00:00Z',
+    },
+  ];
+
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    window.localStorage.setItem('swarm_onboarding_completed', 'true');
+    __resetCapabilityCacheForTests();
+    getCapabilitiesMock.mockReset();
+    getSessionBoundUserIdMock.mockReset();
+    getSessionBoundUserIdMock.mockReturnValue('default_user');
+    getCampaignProfileMock.mockResolvedValue(null);
+    getCampaignMasteryMock.mockResolvedValue([]);
+    getCampaignBadgesMock.mockResolvedValue([]);
+    getCampaignChallengeRotationMock.mockResolvedValue(null);
+    getCampaignDailyChallengeStatusMock.mockResolvedValue(null);
+    getCampaignWeeklySummaryMock.mockResolvedValue(null);
+    listModelProfilesMock.mockReset();
+    listModelProfilesMock.mockResolvedValue({ profiles: mockProfiles, count: 1 });
+    startSimulationMock.mockClear();
+    startSimulationMock.mockResolvedValue('scenario-1');
+  });
+
+  it('renders profile selector, shows overrides, and flows model_profile_id into submit', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      model_profiles: { enabled: true },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('textbox', { name: 'home.question_input_label' });
+
+    // Open BYOK section
+    const byokHeader = screen.getByRole('button', { name: /home\.byok_toggle/i });
+    fireEvent.click(byokHeader);
+
+    // Profile selector should be rendered
+    const selector = await screen.findByRole('combobox', { name: /model_profiles\.title/i });
+    expect(selector).toBeInTheDocument();
+
+    // Select the profile
+    fireEvent.change(selector, { target: { value: 'profile-1' } });
+
+    // Fields should be populated with profile values
+    const modelInput = screen.getByLabelText(/home\.byok_model_label/i) as HTMLInputElement;
+    const urlInput = screen.getByLabelText(/home\.byok_base_url_label/i) as HTMLInputElement;
+    expect(modelInput.value).toBe('gpt-4o');
+    expect(urlInput.value).toBe('https://api.openai.com/v1');
+
+    // No override badge should be visible initially
+    expect(screen.queryByText('(model_profiles.overridden)')).toBeNull();
+
+    // Override the model field
+    fireEvent.change(modelInput, { target: { value: 'gpt-4o-modified' } });
+
+    // Override badge should now be visible
+    expect(screen.getByText('(model_profiles.overridden)')).toBeInTheDocument();
+
+    // Enter question and submit
+    const textarea = screen.getByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.change(textarea, { target: { value: 'What if Mars has water?' } });
+
+    const submitBtn = screen.getByRole('button', { name: 'home.submit' });
+    fireEvent.click(submitBtn);
+
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        question: 'What if Mars has water?',
+        modelProfileId: 'profile-1',
+        llmModel: 'gpt-4o-modified',
+        // base_url was not overridden, so it should be undefined (using profile default on server)
+        llmBaseUrl: undefined,
+      }));
+    });
+  });
+
+  it('preserves existing BYOK path unchanged when no profile is selected', async () => {
+    const user = userEvent.setup();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      model_profiles: { enabled: true },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('textbox', { name: 'home.question_input_label' });
+
+    // Open BYOK section
+    const byokHeader = screen.getByRole('button', { name: /home\.byok_toggle/i });
+    fireEvent.click(byokHeader);
+
+    // Change fields directly without selecting a profile
+    const modelInput = screen.getByLabelText(/home\.byok_model_label/i) as HTMLInputElement;
+    fireEvent.change(modelInput, { target: { value: 'custom-model' } });
+
+    // Enter question and submit
+    const textarea = screen.getByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.change(textarea, { target: { value: 'What if Mars has water?' } });
+
+    const submitBtn = screen.getByRole('button', { name: 'home.submit' });
+    fireEvent.click(submitBtn);
+
+    await confirmLaunchDialog(user);
+
+    await waitFor(() => {
+      expect(startSimulationMock).toHaveBeenCalledWith(expect.objectContaining({
+        question: 'What if Mars has water?',
+        modelProfileId: undefined,
+        llmModel: 'custom-model',
+      }));
+    });
+  });
+
+  it('renders capability error Retry notice on probe failure, and disabled placeholder when disabled', async () => {
+    // 1. Probe failure
+    getCapabilitiesMock.mockRejectedValue(new Error('Probe failed'));
+    __resetCapabilityCacheForTests();
+
+    const { unmount } = render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Open BYOK section so the capability error is rendered
+    const byokHeader = await screen.findByRole('button', { name: /home\.byok_toggle/i });
+    fireEvent.click(byokHeader);
+
+    const errorTitle = await screen.findByText('common.capability_error_title');
+    expect(errorTitle).toBeInTheDocument();
+    const errorContainer = errorTitle.closest('.model-profiles-cap-error') as HTMLElement;
+    expect(within(errorContainer).getByText('common.capability_error')).toBeInTheDocument();
+    const retryBtn = within(errorContainer).getByRole('button', { name: 'common.retry' });
+    expect(retryBtn).toBeInTheDocument();
+
+    unmount();
+
+    // 2. Disabled capability
+    __resetCapabilityCacheForTests();
+    getCapabilitiesMock.mockReset();
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      model_profiles: { enabled: false },
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Open BYOK section
+    const byokHeader2 = await screen.findByRole('button', { name: /home\.byok_toggle/i });
+    fireEvent.click(byokHeader2);
+
+    // Should render disabled placeholder
+    const hint = await screen.findByText('model_profiles.disabled_hint');
+    expect(hint).toBeInTheDocument();
   });
 });

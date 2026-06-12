@@ -20,6 +20,7 @@ import type {
   MultiRunResponse, RunGroupDistributionResponse,
   ScorePredictionResultItem,
   SocialFeedResponse,
+  ModelProfile, ModelProfileInput, ModelProfilePatchInput,
 } from '../types';
 import { getOrgId } from '../lib/orgContext';
 
@@ -211,6 +212,9 @@ export interface LlmProviderRequestOptions {
   forkDetectorActiveBranchLimit?: number;
   userId?: string;
   disableUserQuota?: boolean;
+  propositionModelProfileId?: string;
+  oppositionModelProfileId?: string;
+  judgeModelProfileId?: string;
 }
 
 export interface CreateScenarioOptions extends LlmProviderRequestOptions {
@@ -230,6 +234,7 @@ export interface CreateScenarioOptions extends LlmProviderRequestOptions {
   continuityOverrides?: ContinuityOverride[];
   campaignContext?: CampaignContext;
   worldContext?: WorldContext;
+  modelProfileId?: string;
 }
 
 export interface ContinuityOverride {
@@ -318,6 +323,7 @@ function buildScenarioRequestBody(
     continuityOverrides,
     campaignContext,
     worldContext,
+    modelProfileId,
   } = options;
 
   const preflightMode = opts?.preflightMode === true;
@@ -359,6 +365,7 @@ function buildScenarioRequestBody(
     }),
     ...(campaignContext && { campaign_context: campaignContext }),
     ...(worldContext && { world_context: worldContext }),
+    ...(modelProfileId && { model_profile_id: modelProfileId }),
   };
 }
 
@@ -555,6 +562,7 @@ export interface CapabilitiesResponse {
   multi_run?: CapabilityEntry & { default_count: number; max_count: number };
   you_vs_oracle?: CapabilityEntry;
   social_headlines?: CapabilityEntry;
+  model_profiles?: CapabilityEntry;
 }
 
 /** Persona export/import payload — schema_version 1 contract. */
@@ -751,6 +759,9 @@ export async function createDebate(
       ...(options?.llmTokensPerMinute != null && { llm_tokens_per_minute: options.llmTokensPerMinute }),
       ...(options?.reasoningEffort && { reasoning_effort: options.reasoningEffort }),
       ...(options?.userId && { user_id: options.userId }),
+      ...(options?.propositionModelProfileId && { proposition_model_profile_id: options.propositionModelProfileId }),
+      ...(options?.oppositionModelProfileId && { opposition_model_profile_id: options.oppositionModelProfileId }),
+      ...(options?.judgeModelProfileId && { judge_model_profile_id: options.judgeModelProfileId }),
       ...(customAgentIds && {
         custom_agent_ids: [customAgentIds.proposition, customAgentIds.opposition].filter(Boolean),
       }),
@@ -800,6 +811,7 @@ export async function createEndingRoom(
         : {}),
       ...(payload.selectionRecipe ? { selection_recipe: payload.selectionRecipe } : {}),
       ...(payload.language ? { language: payload.language } : {}),
+      ...(payload.roomModelProfileId ? { room_model_profile_id: payload.roomModelProfileId } : {}),
     }),
   });
 }
@@ -876,6 +888,7 @@ export async function appendEndingRoomUserTurn(
       ...(payload.interactionMode ? { interaction_mode: payload.interactionMode } : {}),
       ...(payload.citedBranchId ? { cited_branch_id: payload.citedBranchId } : {}),
       ...(payload.citedRefsJson ? { cited_refs_json: payload.citedRefsJson } : {}),
+      ...(payload.followupModelProfileId ? { followup_model_profile_id: payload.followupModelProfileId } : {}),
     }),
   }, ENDING_ROOM_USER_TURN_TIMEOUT);
 }
@@ -894,6 +907,7 @@ export async function appendEndingRoomThreadUserTurn(
       ...(payload.interactionMode ? { interaction_mode: payload.interactionMode } : {}),
       ...(payload.citedBranchId ? { cited_branch_id: payload.citedBranchId } : {}),
       ...(payload.citedRefsJson ? { cited_refs_json: payload.citedRefsJson } : {}),
+      ...(payload.followupModelProfileId ? { followup_model_profile_id: payload.followupModelProfileId } : {}),
     }),
   }, ENDING_ROOM_USER_TURN_TIMEOUT);
 }
@@ -2202,4 +2216,63 @@ export async function refreshLocalPacks(): Promise<RefreshPacksResponse> {
 /** GET /api/packs/diagnostics — Get current pack diagnostics */
 export async function getLocalPackDiagnostics(): Promise<DiagnosticsResponse> {
   return safeGet('/packs/diagnostics');
+}
+
+/** GET /api/model-profiles — List model profiles */
+export async function listModelProfiles(
+  params?: { user_id?: string },
+  options?: RequestOptions,
+): Promise<{ profiles: ModelProfile[]; count: number }> {
+  const path = withUserIdQuery('/model-profiles', params?.user_id);
+  return safeGet<{ profiles: ModelProfile[]; count: number }>(path, options);
+}
+
+/** POST /api/model-profiles — Create model profile */
+export async function createModelProfile(
+  input: ModelProfileInput,
+  options?: RequestOptions,
+): Promise<ModelProfile> {
+  return request<ModelProfile>('/model-profiles', {
+    method: 'POST',
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+
+/** GET /api/model-profiles/{profile_id} — Get model profile */
+export async function getModelProfile(
+  id: string,
+  params?: { user_id?: string },
+  options?: RequestOptions,
+): Promise<ModelProfile> {
+  const path = withUserIdQuery(`/model-profiles/${encodeURIComponent(id)}`, params?.user_id);
+  return safeGet<ModelProfile>(path, options);
+}
+
+/** PATCH /api/model-profiles/{profile_id} — Patch model profile */
+export async function patchModelProfile(
+  id: string,
+  input: ModelProfilePatchInput,
+  params?: { user_id?: string },
+  options?: RequestOptions,
+): Promise<ModelProfile> {
+  const path = withUserIdQuery(`/model-profiles/${encodeURIComponent(id)}`, params?.user_id);
+  return request<ModelProfile>(path, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+    signal: options?.signal,
+  });
+}
+
+/** DELETE /api/model-profiles/{profile_id} — Delete model profile */
+export async function deleteModelProfile(
+  id: string,
+  params?: { user_id?: string },
+  options?: RequestOptions,
+): Promise<void> {
+  const path = withUserIdQuery(`/model-profiles/${encodeURIComponent(id)}`, params?.user_id);
+  await request<void>(path, {
+    method: 'DELETE',
+    signal: options?.signal,
+  });
 }

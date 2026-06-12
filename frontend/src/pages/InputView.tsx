@@ -23,8 +23,9 @@ import {
   type CreateScenarioOptions,
   type IdentityContinuityMatch,
   createMultiRun,
+  listModelProfiles,
 } from '../api/client';
-import type { WebSearchFamily, CampaignContext, SuggestedSettings } from '../types';
+import type { WebSearchFamily, CampaignContext, SuggestedSettings, ModelProfile } from '../types';
 import { useAgentStore } from '../stores/agentStore';
 import AgentSelectionStrip from '../components/AgentSelectionStrip';
 import { AgentDrawer } from '../components/AgentDrawer';
@@ -360,6 +361,44 @@ export function InputView() {
   const multiRunMaxCount = multiRunCaps?.multi_run?.max_count ?? 10;
   const { enabled: educationTemplatesEnabled } = useCapabilityCheck('education_templates');
   const [educationPickerOpen, setEducationPickerOpen] = useState(false);
+
+  const {
+    enabled: modelProfilesEnabled,
+    error: modelProfilesError,
+    reload: reloadModelProfilesCap,
+  } = useCapabilityCheck('model_profiles');
+
+  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
+  const [propositionProfileId, setPropositionProfileId] = useState<string>('');
+  const [oppositionProfileId, setOppositionProfileId] = useState<string>('');
+  const [judgeProfileId, setJudgeProfileId] = useState<string>('');
+
+  useEffect(() => {
+    if (modelProfilesEnabled) {
+      listModelProfiles()
+        .then((res) => setProfiles(res.profiles || []))
+        .catch(() => {});
+    }
+  }, [modelProfilesEnabled]);
+
+  const handleProfileChange = (profileId: string) => {
+    setSelectedProfileId(profileId);
+    const profile = profiles.find((p) => p.id === profileId);
+    if (profile) {
+      setLlmModel(profile.model);
+      setLlmBaseUrl(profile.base_url || '');
+      setLlmRequestsPerMinute(profile.rpm !== null && profile.rpm !== undefined ? String(profile.rpm) : '');
+      setLlmTokensPerMinute(profile.tpm !== null && profile.tpm !== undefined ? String(profile.tpm) : '');
+      setLlmApiKey('');
+    } else {
+      setLlmModel('');
+      setLlmBaseUrl('');
+      setLlmRequestsPerMinute('');
+      setLlmTokensPerMinute('');
+      setLlmApiKey('');
+    }
+  };
   // S1-5: First-visit onboarding guide. Hidden once the user finishes or skips.
   const onboarding = useOnboardingState();
   const agentSelectedIds = useAgentStore((s) => s.selectedIds);
@@ -880,16 +919,41 @@ export function InputView() {
       }
     }
 
+    const profile = profiles.find((p) => p.id === selectedProfileId);
+    let resolvedApiKey: string | undefined = llmApiKey || undefined;
+    let resolvedBaseUrl: string | undefined = llmBaseUrl || undefined;
+    let resolvedModel: string | undefined = llmModel || undefined;
+    let resolvedRpm: number | undefined = Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined;
+    let resolvedTpm: number | undefined = Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined;
+
+    if (profile) {
+      if (llmApiKey.trim() === '') {
+        resolvedApiKey = undefined;
+      }
+      if (llmBaseUrl === (profile.base_url || '')) {
+        resolvedBaseUrl = undefined;
+      }
+      if (llmModel === profile.model) {
+        resolvedModel = undefined;
+      }
+      if (resolvedRpm === (profile.rpm ?? undefined)) {
+        resolvedRpm = undefined;
+      }
+      if (resolvedTpm === (profile.tpm ?? undefined)) {
+        resolvedTpm = undefined;
+      }
+    }
+
     return {
       question: trimmed,
       rounds: launch.nextRounds,
       numAgents: launch.nextAgents,
       mode: launch.nextMode,
-      llmApiKey: llmApiKey || undefined,
-      llmBaseUrl: llmBaseUrl || undefined,
-      llmModel: llmModel || undefined,
-      llmRequestsPerMinute: Number.isFinite(byokRequestsPerMinute) ? byokRequestsPerMinute : undefined,
-      llmTokensPerMinute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined,
+      llmApiKey: resolvedApiKey,
+      llmBaseUrl: resolvedBaseUrl,
+      llmModel: resolvedModel,
+      llmRequestsPerMinute: resolvedRpm,
+      llmTokensPerMinute: resolvedTpm,
       reasoningEffort: reasoningEffort || undefined,
       visualizationEnabled: launch.nextVisualization,
       userId: apiUserId,
@@ -905,6 +969,7 @@ export function InputView() {
       ...(clampedCustomAgentIds.length > 0 && { customAgentIdentityIds: clampedCustomAgentIds }),
       ...(campaignContext && { campaignContext }),
       ...(worldContext && { worldContext }),
+      modelProfileId: selectedProfileId || undefined,
     };
   }, [
     byokRequestsPerMinute,
@@ -930,6 +995,8 @@ export function InputView() {
     campaignChallengeRotation,
     getClampedCustomAgentIds,
     worldContext,
+    profiles,
+    selectedProfileId,
   ]);
 
   const closeContinuityDialog = useCallback(() => {
@@ -1118,7 +1185,10 @@ export function InputView() {
     if (launchInFlightRef.current) return;
     if (isSimulationBudgetBlocked) return;
     setWebSearchUrlError('');
-    const byokValidation = validateByok({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
+    const isProfileSelected = Boolean(selectedProfileId);
+    const byokValidation = isProfileSelected
+      ? { valid: true }
+      : validateByok({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
     if (!byokValidation.valid) {
       setTestStatus('fail');
       setTestError(t('conversation.error.byok_invalid'));
@@ -1173,7 +1243,10 @@ export function InputView() {
   }) => {
     const trimmed = nextQuestion.trim();
     if (!trimmed || isSubmitting) return;
-    const byokValidation = validateByok({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
+    const isProfileSelected = Boolean(propositionProfileId || oppositionProfileId || judgeProfileId);
+    const byokValidation = isProfileSelected
+      ? { valid: true }
+      : validateByok({ apiKey: llmApiKey, baseUrl: llmBaseUrl });
     if (!byokValidation.valid) {
       setTestStatus('fail');
       setTestError(t('conversation.error.byok_invalid'));
@@ -1198,6 +1271,9 @@ export function InputView() {
         llmTokensPerMinute: Number.isFinite(byokTokensPerMinute) ? byokTokensPerMinute : undefined,
         reasoningEffort: reasoningEffort || undefined,
         userId: apiUserId,
+        propositionModelProfileId: propositionProfileId || undefined,
+        oppositionModelProfileId: oppositionProfileId || undefined,
+        judgeModelProfileId: judgeProfileId || undefined,
       }, propositionAgentId ? {
         proposition: propositionAgentId,
         opposition: oppositionAgentId,
@@ -1557,6 +1633,13 @@ export function InputView() {
     webSearchStatus,
     webSearchUsesCustomOverride,
   ]);
+
+  const activeProfile = profiles.find((p) => p.id === selectedProfileId);
+  const isModelOverridden = !!activeProfile && llmModel !== activeProfile.model;
+  const isBaseUrlOverridden = !!activeProfile && llmBaseUrl !== (activeProfile.base_url || '');
+  const isRpmOverridden = !!activeProfile && llmRequestsPerMinute !== (activeProfile.rpm != null ? String(activeProfile.rpm) : '');
+  const isTpmOverridden = !!activeProfile && llmTokensPerMinute !== (activeProfile.tpm != null ? String(activeProfile.tpm) : '');
+  const isApiKeyOverridden = !!activeProfile && llmApiKey !== '';
 
   return (
     <div className="input-view">
@@ -2613,8 +2696,104 @@ export function InputView() {
                 {/* P4-E: BYOK — Bring Your Own Key */}
                 <div className="byok-section">
                     <div className="byok-fields">
+                      {isConfigOpen && (modelProfilesError ? (
+                        <div className="model-profiles-cap-error" role="alert" style={{ marginBottom: '1rem', padding: '0.75rem', border: '1px solid #f5c6cb', backgroundColor: '#fdf3f4', borderRadius: '6px', color: '#721c24', display: 'flex', flexDirection: 'column', gap: '0.5rem', gridColumn: '1 / -1' }}>
+                          <strong>{t('common.capability_error_title')}</strong>
+                          <span>{t('common.capability_error')}</span>
+                          {reloadModelProfilesCap && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              style={{ backgroundColor: '#ffffff', border: '1px solid #c61583', color: '#c61583', padding: '0.25rem 0.5rem', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', alignSelf: 'flex-start' }}
+                              onClick={() => void reloadModelProfilesCap()}
+                              aria-label={t('common.retry')}
+                            >
+                              {t('common.retry')}
+                            </button>
+                          )}
+                        </div>
+                      ) : !modelProfilesEnabled ? (
+                        <div className="model-profiles-disabled" style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#f8f9fa', borderRadius: '6px', color: '#6c757d', gridColumn: '1 / -1' }}>
+                          <span>{t('model_profiles.disabled_hint')}</span>
+                        </div>
+                      ) : (
+                        <div className="model-profile-selectors-section" style={{ gridColumn: '1 / -1', marginBottom: '1.5rem', borderBottom: '1px solid rgba(64, 48, 40, 0.08)', paddingBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                          <div className="byok-field">
+                            <label className="byok-label" htmlFor="scenario-profile-select">{t('model_profiles.title')}</label>
+                            <span className="byok-field-help">{t('model_profiles.placeholder_select')}</span>
+                            <select
+                              id="scenario-profile-select"
+                              className="form-control"
+                              value={selectedProfileId}
+                              onChange={(e) => handleProfileChange(e.target.value)}
+                              disabled={isSubmitting}
+                              style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)' }}
+                            >
+                              <option value="">{t('model_profiles.byok_custom_option')}</option>
+                              {profiles.map((p) => (
+                                <option key={p.id} value={p.id}>{p.name} ({p.provider} - {p.model})</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                            <div className="byok-field">
+                              <label className="byok-label" htmlFor="debate-prop-profile">Proposition Profile</label>
+                              <select
+                                id="debate-prop-profile"
+                                className="form-control"
+                                value={propositionProfileId}
+                                onChange={(e) => setPropositionProfileId(e.target.value)}
+                                disabled={isSubmitting}
+                                style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)' }}
+                              >
+                                <option value="">{t('model_profiles.byok_custom_option')}</option>
+                               {profiles.map((p) => (
+                                  <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="byok-field">
+                              <label className="byok-label" htmlFor="debate-opp-profile">Opposition Profile</label>
+                              <select
+                                id="debate-opp-profile"
+                                className="form-control"
+                                value={oppositionProfileId}
+                                onChange={(e) => setOppositionProfileId(e.target.value)}
+                                disabled={isSubmitting}
+                                style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)' }}
+                              >
+                                <option value="">{t('model_profiles.byok_custom_option')}</option>
+                                {profiles.map((p) => (
+                                  <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                          <div className="byok-field">
+                            <label className="byok-label" htmlFor="debate-judge-profile">Judge Profile (Optional)</label>
+                            <select
+                              id="debate-judge-profile"
+                              className="form-control"
+                              value={judgeProfileId}
+                              onChange={(e) => setJudgeProfileId(e.target.value)}
+                              disabled={isSubmitting}
+                              style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)' }}
+                            >
+                              <option value="">None / Default</option>
+                              {profiles.map((p) => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      ))}
+
                       <div className="byok-field">
-                        <label className="byok-label" htmlFor="byok-key">{t('home.byok_api_key_label')}</label>
+                        <label className="byok-label" htmlFor="byok-key">
+                          {t('home.byok_api_key_label')}
+                          {isApiKeyOverridden && <span className="override-badge" style={{ marginLeft: '8px', fontSize: '0.75rem', color: '#f59e0b', fontWeight: 500 }}>({t('model_profiles.overridden')})</span>}
+                        </label>
                         <span className="byok-field-help">{t('home.byok_api_key_help')}</span>
                         <input
                           id="byok-key"
@@ -2628,7 +2807,10 @@ export function InputView() {
                         />
                       </div>
                       <div className="byok-field">
-                        <label className="byok-label" htmlFor="byok-url">{t('home.byok_base_url_label')}</label>
+                        <label className="byok-label" htmlFor="byok-url">
+                          {t('home.byok_base_url_label')}
+                          {isBaseUrlOverridden && <span className="override-badge" style={{ marginLeft: '8px', fontSize: '0.75rem', color: '#f59e0b', fontWeight: 500 }}>({t('model_profiles.overridden')})</span>}
+                        </label>
                         <span className="byok-field-help">{t('home.byok_base_url_help')}</span>
                         <input
                           id="byok-url"
@@ -2641,7 +2823,10 @@ export function InputView() {
                         />
                       </div>
                       <div className="byok-field">
-                        <label className="byok-label" htmlFor="byok-model">{t('home.byok_model_label')}</label>
+                        <label className="byok-label" htmlFor="byok-model">
+                          {t('home.byok_model_label')}
+                          {isModelOverridden && <span className="override-badge" style={{ marginLeft: '8px', fontSize: '0.75rem', color: '#f59e0b', fontWeight: 500 }}>({t('model_profiles.overridden')})</span>}
+                        </label>
                         <span className="byok-field-help">{t('home.byok_model_help')}</span>
                         <input
                           id="byok-model"
@@ -2654,7 +2839,10 @@ export function InputView() {
                         />
                       </div>
                       <div className="byok-field">
-                        <label className="byok-label" htmlFor="byok-rpm">{t('home.byok_rpm_label')}</label>
+                        <label className="byok-label" htmlFor="byok-rpm">
+                          {t('home.byok_rpm_label')}
+                          {isRpmOverridden && <span className="override-badge" style={{ marginLeft: '8px', fontSize: '0.75rem', color: '#f59e0b', fontWeight: 500 }}>({t('model_profiles.overridden')})</span>}
+                        </label>
                         <span className="byok-field-help">{t('home.byok_rpm_help')}</span>
                         <input
                           id="byok-rpm"
@@ -2670,7 +2858,10 @@ export function InputView() {
                         />
                       </div>
                       <div className="byok-field">
-                        <label className="byok-label" htmlFor="byok-tpm">{t('home.byok_tpm_label')}</label>
+                        <label className="byok-label" htmlFor="byok-tpm">
+                          {t('home.byok_tpm_label')}
+                          {isTpmOverridden && <span className="override-badge" style={{ marginLeft: '8px', fontSize: '0.75rem', color: '#f59e0b', fontWeight: 500 }}>({t('model_profiles.overridden')})</span>}
+                        </label>
                         <span className="byok-field-help">{t('home.byok_tpm_help')}</span>
                         <input
                           id="byok-tpm"

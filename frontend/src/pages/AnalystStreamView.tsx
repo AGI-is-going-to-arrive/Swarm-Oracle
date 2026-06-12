@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { AnalystSSEEvent } from '../types';
+import type { AnalystSSEEvent, ModelProfile } from '../types';
 import { useRoundtableSseStream } from '../hooks/useRoundtableSseStream';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
 import ReACTReasoningPanel from '../components/ReACTReasoningPanel';
@@ -10,6 +10,8 @@ import {
   type AnalystCacheState,
   type AnalystStoppedReason,
 } from './postVerdictCaches';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { listModelProfiles } from '../api/client';
 
 interface AnalystStreamViewProps {
   scenarioId: string;
@@ -43,6 +45,18 @@ export default function AnalystStreamView({
   const { t } = useTranslation();
   const [question, setQuestion] = useState('');
   const userAbortedRef = useRef(false);
+
+  const { enabled: modelProfilesEnabled } = useCapabilityCheck('model_profiles');
+  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
+
+  useEffect(() => {
+    if (modelProfilesEnabled) {
+      listModelProfiles()
+        .then((res) => setProfiles(res.profiles || []))
+        .catch(() => {});
+    }
+  }, [modelProfilesEnabled]);
 
   const onEvent = useCallback((event: AnalystSSEEvent) => {
     setCache((current) => {
@@ -146,11 +160,12 @@ export default function AnalystStreamView({
     void start({
       question: normalizedQuestion,
       ...(roomId ? { room_id: roomId } : {}),
+      ...(selectedProfileId ? { analyst_model_profile_id: selectedProfileId } : {}),
       ...(policy.apiKey ? { llm_api_key: policy.apiKey } : {}),
       ...(policy.baseUrl ? { llm_base_url: policy.baseUrl } : {}),
       ...(policy.model ? { llm_model: policy.model } : {}),
     });
-  }, [question, roomId, setCache, start]);
+  }, [question, roomId, setCache, start, selectedProfileId]);
 
   const handleRetry = useCallback(() => {
     handleSubmit();
@@ -158,6 +173,26 @@ export default function AnalystStreamView({
 
   return (
     <div className="analyst-stream" data-testid="analyst-stream-view">
+      {modelProfilesEnabled && (
+        <div className="analyst-profile-selector" style={{ marginBottom: '0.75rem' }}>
+          <label htmlFor="analyst-profile-select" style={{ fontSize: '0.85rem', fontWeight: 500, display: 'block', marginBottom: '0.25rem' }}>
+            {t('model_profiles.placeholder_select')}
+          </label>
+          <select
+            id="analyst-profile-select"
+            className="form-control"
+            value={selectedProfileId}
+            onChange={(e) => setSelectedProfileId(e.target.value)}
+            disabled={cache.streaming}
+            style={{ width: '100%', padding: '0.4rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)', fontSize: '0.85rem' }}
+          >
+            <option value="">{t('model_profiles.byok_custom_option')}</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>{p.name} ({p.provider} - {p.model})</option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="analyst-stream__input">
         <textarea
           className="analyst-stream__textarea"

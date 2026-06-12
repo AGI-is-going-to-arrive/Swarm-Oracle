@@ -93,6 +93,8 @@ describe('RoundtablePickerPanel', () => {
         launchingRoom={false}
         onLaunchRoundtable={vi.fn()}
         onCancelEditing={vi.fn()}
+        roomModelProfileId=""
+        onRoomModelProfileIdChange={vi.fn()}
       />,
     );
 

@@ -192,6 +192,7 @@ export default function ResultView() {
   const [activeEndingRoomBranchId, setActiveEndingRoomBranchId] = useState<string | null>(null);
   const [activeEndingRoomMode, setActiveEndingRoomMode] = useState<'ending_chamber' | 'one_move_only' | 'crossline_gallery'>('ending_chamber');
   const [activeEndingRoomSelectedAgentIds, setActiveEndingRoomSelectedAgentIds] = useState<string[]>([]);
+  const [activeEndingRoomModelProfileId, setActiveEndingRoomModelProfileId] = useState<string>('');
   const [pendingEndingRoomPicker, setPendingEndingRoomPicker] = useState<{
     branchId: string;
     roomType: 'ending_chamber' | 'one_move_only';
@@ -929,10 +930,12 @@ export default function ResultView() {
     branchId: string,
     roomType: 'ending_chamber' | 'one_move_only' | 'crossline_gallery',
     selectedAgentIds: string[] = [],
+    roomModelProfileId: string = '',
   ) => {
     setActiveEndingRoomBranchId(branchId);
     setActiveEndingRoomMode(roomType);
     setActiveEndingRoomSelectedAgentIds(selectedAgentIds);
+    setActiveEndingRoomModelProfileId(roomModelProfileId);
     setPendingEndingRoomPicker(null);
     setEndingRoomAutomation(null);
   }, [setEndingRoomAutomation]);
@@ -990,6 +993,7 @@ export default function ResultView() {
     setActiveEndingRoomBranchId(null);
     setActiveEndingRoomSelectedAgentIds([]);
     setEndingRoomAutomation(null);
+    setActiveEndingRoomModelProfileId('');
   }, [setEndingRoomAutomation]);
 
   const handleEndingRoomModeChange = useCallback((nextMode: 'ending_chamber' | 'one_move_only') => {
@@ -2118,6 +2122,7 @@ export default function ResultView() {
         setMobileSourceSheetOpen={setMobileSourceSheetOpen}
         resolveSourceCategoryState={resolveSourceCategoryState}
         resultConversationContext={resultConversationContext}
+        activeEndingRoomModelProfileId={activeEndingRoomModelProfileId}
       />
     </div>
     </ResultContextProvider>

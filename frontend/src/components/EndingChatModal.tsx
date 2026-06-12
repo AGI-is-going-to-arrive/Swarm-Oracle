@@ -47,12 +47,13 @@ import type {
   EndingRoomThreadSnapshot,
   EndingRoomType,
   StoryData,
+  ModelProfile,
 } from '../types';
 
 import { FactionBadge } from './FactionBadge';
 import { SafeMarkdown } from './SafeMarkdown';
 import { ConversationHistoryPicker } from './ConversationHistoryPicker';
-import type { ConversationDetail } from '../api/client';
+import { type ConversationDetail, listModelProfiles } from '../api/client';
 import { useFactionOverlay } from '../hooks/useFactionOverlay';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from './ui/sheet';
 import './EndingChatModal.css';
@@ -96,6 +97,7 @@ interface EndingChatModalProps {
   onClose: () => void;
   onModeChange: (mode: 'ending_chamber' | 'one_move_only') => void;
   onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
+  roomModelProfileId?: string;
 }
 
 interface EndingChatRenderDraft {
@@ -125,6 +127,7 @@ export default function EndingChatModal({
   onClose,
   onModeChange,
   onAutomationStateChange,
+  roomModelProfileId,
 }: EndingChatModalProps) {
   const { t } = useTranslation();
   const selectedBranchIds = selectedBranchIdsProp ?? EMPTY_SELECTED_BRANCH_IDS;
@@ -133,6 +136,18 @@ export default function EndingChatModal({
   const modalRef = useRef<HTMLDivElement>(null);
   const transcriptScrollRef = useRef<HTMLDivElement>(null);
   const transcriptListRef = useRef<HTMLDivElement>(null);
+
+  const { enabled: modelProfilesEnabled } = useCapabilityCheck('model_profiles');
+  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+  const [selectedFollowupProfileId, setSelectedFollowupProfileId] = useState<string>('');
+
+  useEffect(() => {
+    if (modelProfilesEnabled) {
+      listModelProfiles()
+        .then((res) => setProfiles(res.profiles || []))
+        .catch(() => {});
+    }
+  }, [modelProfilesEnabled]);
   const transcriptHydratedRef = useRef(false);
   const transcriptAutoStickRef = useRef(false);
   // Stable ref for automation callback — breaks the render loop caused by
@@ -299,6 +314,7 @@ export default function EndingChatModal({
       selectedBranchIds: selectedBranchIds.length > 0 ? selectedBranchIds : [branch.id],
       ...(selectedAgentIds.length > 0 ? { selectedAgentIds } : {}),
       language,
+      roomModelProfileId: roomModelProfileId || undefined,
     }).then(async (roomId) => {
       if (cancelled) return;
       await new Promise<void>((resolve) => {
@@ -320,7 +336,7 @@ export default function EndingChatModal({
         window.clearTimeout(bootstrapDelayTimer);
       }
     };
-  }, [branch, language, loadRoom, open, openRoom, readOnly, reset, roomType, scenarioId, selectedAgentIds, selectedBranchIds]);
+  }, [branch, language, loadRoom, open, openRoom, readOnly, reset, roomType, scenarioId, selectedAgentIds, selectedBranchIds, roomModelProfileId]);
 
   const finalResultSyncRef = useRef<string | null>(null);
 
@@ -968,6 +984,7 @@ export default function EndingChatModal({
         source_summary: galleryBranch.story || '',
         source_insight: galleryBranch.insight || '',
       },
+      followupModelProfileId: selectedFollowupProfileId || undefined,
     });
   };
   const transcriptTitle = isCrosslineGallery ? t('roundtable.gallery_title') : t('ending_room.transcript_title');
@@ -1083,6 +1100,7 @@ export default function EndingChatModal({
       addressedAgentIds,
       questionAnchorIds: pendingQuestionAnchorIds,
       interactionMode,
+      followupModelProfileId: selectedFollowupProfileId || undefined,
     });
     setPendingQuestionAnchorIds([]);
   };
@@ -1634,9 +1652,8 @@ export default function EndingChatModal({
                             type="button"
                             className="ending-chat-inline-button ending-chat-evidence-btn"
                             onClick={() => {
-                              const evidenceSummary = galleryBranch.insight || galleryBranch.story || galleryBranch.title;
                               void appendUserTurn({
-                                content: `[${t('ending_room.evidence_card_label')}] ${galleryBranch.title}: ${evidenceSummary}`,
+                                content: `${t('ending_room.evidence_card_label')} "${galleryBranch.title}"`,
                                 interactionMode: 'evidence_card',
                                 citedBranchId: galleryBranch.id,
                                 citedRefsJson: {
@@ -1646,6 +1663,7 @@ export default function EndingChatModal({
                                   source_summary: galleryBranch.story || '',
                                   source_insight: galleryBranch.insight || '',
                                 },
+                                followupModelProfileId: selectedFollowupProfileId || undefined,
                               });
                             }}
                             title={t('ending_room.evidence_card_hint')}
@@ -1834,6 +1852,26 @@ export default function EndingChatModal({
                 </div>
               )}
 
+              {modelProfilesEnabled && (
+                <div className="ending-chat-profile-selector" style={{ padding: '0 1rem 0.5rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                  <label htmlFor="ending-chat-profile-select" style={{ fontSize: '0.8rem', fontWeight: 500, color: 'var(--text-color)' }}>
+                    {t('model_profiles.placeholder_select')}
+                  </label>
+                  <select
+                    id="ending-chat-profile-select"
+                    className="form-control"
+                    value={selectedFollowupProfileId}
+                    onChange={(e) => setSelectedFollowupProfileId(e.target.value)}
+                    disabled={!composerEnabled || sending}
+                    style={{ width: '100%', padding: '0.35rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)', fontSize: '0.8rem' }}
+                  >
+                    <option value="">{t('model_profiles.byok_custom_option')}</option>
+                    {profiles.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name} ({p.provider} - {p.model})</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="ending-chat-composer__row">
                 <textarea
                   className="ending-chat-composer__input"

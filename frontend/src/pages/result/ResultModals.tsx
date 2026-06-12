@@ -2,12 +2,14 @@
    SwarmOracle — Result modals + source family cards + conversation widget
    ═══════════════════════════════════════════════════════════ */
 
-import { type Dispatch, type ReactNode, type RefObject, type SetStateAction } from 'react';
+import { type Dispatch, type ReactNode, type RefObject, type SetStateAction, useState, useEffect } from 'react';
 import type { OracleReplayPayload } from '../../lib/oracleReplay';
 import type { ShareFlavorContext } from '../../lib/shareEnvelope';
 import type { EndingRoomCandidate } from '../../lib/endingRoomCandidates';
 import type { WebSearchProviderEntry } from '../../api/client';
-import type { StoryData, WebSearchContext, WebSearchFamily } from '../../types';
+import type { StoryData, WebSearchContext, WebSearchFamily, ModelProfile } from '../../types';
+import { useCapabilityCheck } from '../../hooks/useCapabilityCheck';
+import { listModelProfiles } from '../../api/client';
 import ShareModal from '../../components/ShareModal';
 import SnapshotExportWizard from '../../components/Export/SnapshotExportWizard';
 import EndingChatModal from '../../components/EndingChatModal';
@@ -50,6 +52,7 @@ interface ResultModalsProps {
     branchId: string,
     roomType: 'ending_chamber' | 'one_move_only' | 'crossline_gallery',
     selectedAgentIds?: string[],
+    roomModelProfileId?: string,
   ) => void;
   activeEndingRoomBranch: StoryData['branches'][number] | null;
   activeEndingRoomMode: 'ending_chamber' | 'one_move_only' | 'crossline_gallery';
@@ -76,6 +79,7 @@ interface ResultModalsProps {
     keyMoments?: string[] | null | undefined;
     comparisonTitles: string[];
   } | null;
+  activeEndingRoomModelProfileId?: string;
 }
 
 export default function ResultModals(props: ResultModalsProps) {
@@ -104,6 +108,7 @@ export default function ResultModals(props: ResultModalsProps) {
     setMobileSourceSheetOpen,
     resolveSourceCategoryState,
     resultConversationContext,
+    activeEndingRoomModelProfileId,
   } = props;
 
   const {
@@ -129,7 +134,21 @@ export default function ResultModals(props: ResultModalsProps) {
     setAgentFollowupTarget,
     analysisBranch,
   } = useResultContext();
+  const { enabled: modelProfilesEnabled } = useCapabilityCheck('model_profiles');
+  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+  const [endingRoomProfileId, setEndingRoomProfileId] = useState<string>('');
 
+  useEffect(() => {
+    if (modelProfilesEnabled && pendingEndingRoomPicker) {
+      listModelProfiles()
+        .then((res) => setProfiles(res.profiles || []))
+        .catch(() => {});
+    }
+  }, [modelProfilesEnabled, pendingEndingRoomPicker]);
+
+  if (!pendingEndingRoomPicker && endingRoomProfileId !== '') {
+    setEndingRoomProfileId('');
+  }
   const polymarketContext = sourceFamilyContext.polymarket;
   const financeContext = sourceFamilyContext.finance;
   const academicContext = sourceFamilyContext.academic;
@@ -401,6 +420,26 @@ export default function ResultModals(props: ResultModalsProps) {
               )}
             </div>
 
+            {modelProfilesEnabled && (
+              <div className="ending-room-picker__profile-selector" style={{ marginBottom: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <label htmlFor="ending-room-profile-select" style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-color)' }}>
+                  {t('model_profiles.placeholder_select')}
+                </label>
+                <select
+                  id="ending-room-profile-select"
+                  className="form-control"
+                  value={endingRoomProfileId}
+                  onChange={(e) => setEndingRoomProfileId(e.target.value)}
+                  style={{ width: '100%', padding: '0.4rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)', fontSize: '0.85rem' }}
+                >
+                  <option value="">{t('model_profiles.byok_custom_option')}</option>
+                  {profiles.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name} ({p.provider} - {p.model})</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <footer className="ending-room-picker__footer">
               <button
                 type="button"
@@ -416,6 +455,7 @@ export default function ResultModals(props: ResultModalsProps) {
                   pendingEndingRoomPicker.branchId,
                   pendingEndingRoomPicker.roomType,
                   pendingEndingRoomPicker.selectedAgentIds,
+                  endingRoomProfileId || undefined,
                 )}
                 disabled={
                   pendingEndingRoomCandidates.length > 0
@@ -442,6 +482,7 @@ export default function ResultModals(props: ResultModalsProps) {
           galleryBranches={branches}
           language={isZh ? 'zh' : 'en'}
           readOnly={isReplayMode || Boolean(activeEndingRoomReplayPayload)}
+          roomModelProfileId={activeEndingRoomModelProfileId}
           fallbackMessages={
             activeEndingRoomBranch
               ? (scenario?.messages ?? []).filter((message) => message.branch === activeEndingRoomBranch.id)

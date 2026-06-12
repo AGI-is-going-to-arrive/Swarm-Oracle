@@ -246,6 +246,7 @@ export default function WorldlineRoundtableView() {
   const [selectedWitness, setSelectedWitness] = useState<RoundtableWitnessSelection | null>(null);
   const [editingRepresentatives, setEditingRepresentatives] = useState(false);
   const [launchingRoom, setLaunchingRoom] = useState(false);
+  const [roomModelProfileId, setRoomModelProfileId] = useState('');
   const [showMobileRoster, setShowMobileRoster] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => (
     typeof window === 'undefined' ? 1024 : window.innerWidth
@@ -1508,6 +1509,7 @@ export default function WorldlineRoundtableView() {
           : null,
         selectionRecipe: selectionMode,
         language: uiLanguage,
+        roomModelProfileId: roomModelProfileId || undefined,
       });
       await loadRoom(roomId);
       setEditingRepresentatives(false);
@@ -1516,7 +1518,7 @@ export default function WorldlineRoundtableView() {
     } finally {
       setLaunchingRoom(false);
     }
-  }, [castMode, discussionFormat, launchingRoom, loadRoom, openRoom, reset, scenario?.id, selectedBranchIdsForLaunch, selectedRepresentatives, selectedWitness, selectionMode, uiLanguage, witnessCandidates]);
+  }, [castMode, discussionFormat, launchingRoom, loadRoom, openRoom, reset, scenario?.id, selectedBranchIdsForLaunch, selectedRepresentatives, selectedWitness, selectionMode, uiLanguage, witnessCandidates, roomModelProfileId]);
 
   const handleEditRepresentatives = useCallback(() => {
     setEditingRepresentatives(true);
@@ -1882,6 +1884,8 @@ export default function WorldlineRoundtableView() {
           launchingRoom={launchingRoom}
           onLaunchRoundtable={() => void handleLaunchRoundtable()}
           onCancelEditing={() => setEditingRepresentatives(false)}
+          roomModelProfileId={roomModelProfileId}
+          onRoomModelProfileIdChange={setRoomModelProfileId}
         />
       )}
 

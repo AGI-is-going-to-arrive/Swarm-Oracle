@@ -232,3 +232,30 @@ export function saveLlmProviderPolicy(policy: Partial<LlmProviderPolicy>): void 
     console.warn('[llmProviderPolicy] Failed to persist provider policy', error);
   }
 }
+
+import type { ModelProfile } from '../types';
+import type { LlmProviderRequestOptions } from '../api/client';
+
+export function resolveProviderPolicy(
+  profile?: ModelProfile | null,
+  overrides?: Partial<LlmProviderRequestOptions> | null,
+): LlmProviderRequestOptions {
+  const resolved: LlmProviderRequestOptions = { ...overrides };
+
+  if (profile) {
+    if (resolved.llmModel === undefined || resolved.llmModel === '') {
+      resolved.llmModel = profile.model;
+    }
+    if (resolved.llmBaseUrl === undefined || resolved.llmBaseUrl === '') {
+      resolved.llmBaseUrl = profile.base_url || '';
+    }
+    if (resolved.llmRequestsPerMinute === undefined || resolved.llmRequestsPerMinute === null) {
+      resolved.llmRequestsPerMinute = profile.rpm ?? undefined;
+    }
+    if (resolved.llmTokensPerMinute === undefined || resolved.llmTokensPerMinute === null) {
+      resolved.llmTokensPerMinute = profile.tpm ?? undefined;
+    }
+  }
+
+  return resolved;
+}

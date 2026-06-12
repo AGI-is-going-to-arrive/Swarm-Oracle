@@ -9,13 +9,15 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { EndingRoomParticipant, SurveySSEEvent } from '../types';
+import type { EndingRoomParticipant, SurveySSEEvent, ModelProfile } from '../types';
 import { useRoundtableSseStream } from '../hooks/useRoundtableSseStream';
 import { loadLlmProviderPolicy } from '../lib/llmProviderPolicy';
 import {
   createInitialSurveyCache,
   type SurveyCacheState,
 } from './postVerdictCaches';
+import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
+import { listModelProfiles } from '../api/client';
 
 interface SurveyStreamViewProps {
   scenarioId: string;
@@ -52,6 +54,18 @@ export default function SurveyStreamView({
     () => new Set(participants.slice(0, MAX_SURVEY_PARTICIPANTS).map((p) => p.id)),
   );
   const userAbortedRef = useRef(false);
+
+  const { enabled: modelProfilesEnabled } = useCapabilityCheck('model_profiles');
+  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
+
+  useEffect(() => {
+    if (modelProfilesEnabled) {
+      listModelProfiles()
+        .then((res) => setProfiles(res.profiles || []))
+        .catch(() => {});
+    }
+  }, [modelProfilesEnabled]);
 
   const toggleParticipant = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -170,11 +184,12 @@ export default function SurveyStreamView({
       question: normalizedQuestion,
       participant_ids: orderedParticipantIds,
       ...(roomId ? { room_id: roomId } : {}),
+      ...(selectedProfileId ? { survey_model_profile_id: selectedProfileId } : {}),
       ...(policy.apiKey ? { llm_api_key: policy.apiKey } : {}),
       ...(policy.baseUrl ? { llm_base_url: policy.baseUrl } : {}),
       ...(policy.model ? { llm_model: policy.model } : {}),
     });
-  }, [orderedParticipantIds, question, roomId, setCache, start]);
+  }, [orderedParticipantIds, question, roomId, setCache, start, selectedProfileId]);
 
   const displayOrder = cache.participantOrder.length > 0 ? cache.participantOrder : orderedParticipantIds;
 
@@ -200,6 +215,26 @@ export default function SurveyStreamView({
         ))}
       </div>
 
+      {modelProfilesEnabled && (
+        <div className="survey-profile-selector" style={{ marginBottom: '0.75rem' }}>
+          <label htmlFor="survey-profile-select" style={{ fontSize: '0.85rem', fontWeight: 500, display: 'block', marginBottom: '0.25rem' }}>
+            {t('model_profiles.placeholder_select')}
+          </label>
+          <select
+            id="survey-profile-select"
+            className="form-control"
+            value={selectedProfileId}
+            onChange={(e) => setSelectedProfileId(e.target.value)}
+            disabled={cache.streaming}
+            style={{ width: '100%', padding: '0.4rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color, #e6dfd5)', fontSize: '0.85rem' }}
+          >
+            <option value="">{t('model_profiles.byok_custom_option')}</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>{p.name} ({p.provider} - {p.model})</option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="survey-stream__input">
         <textarea
           className="survey-stream__textarea"

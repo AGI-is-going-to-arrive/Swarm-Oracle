@@ -1111,6 +1111,7 @@ export interface CreateEndingRoomRequest {
   selectedWitness?: RoundtableWitnessSelection | null;
   selectionRecipe?: RoundtableSelectionRecipe;
   language?: 'zh' | 'en';
+  roomModelProfileId?: string;
 }
 
 export interface CreateEndingRoomThreadRequest {
@@ -1127,6 +1128,7 @@ export interface AppendEndingRoomUserTurnRequest {
   interactionMode?: EndingRoomInteractionMode | null;
   citedBranchId?: string | null;
   citedRefsJson?: Record<string, unknown> | null;
+  followupModelProfileId?: string;
 }
 
 export interface StructuredWsError {
@@ -1632,4 +1634,52 @@ export interface SocialFeedResponse {
   generation_mode: 'llm' | 'deterministic';
   events: SocialFeedEvent[];
   headline_cards: SocialHeadlineCard[];
+}
+
+export interface ModelProfile {
+  id: string;
+  user_id: string;
+  name: string;
+  description?: string;
+  provider: string;
+  base_url?: string;
+  model: string;
+  has_api_key: boolean;
+  rpm?: number | null;
+  tpm?: number | null;
+  concurrency?: number | null;
+  supports_structured_outputs: boolean;
+  supports_native_search: boolean;
+  storage_notice: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ModelProfileInput {
+  user_id?: string;
+  name: string;
+  description?: string;
+  provider: string;
+  base_url?: string;
+  model: string;
+  api_key?: string;
+  rpm?: number | null;
+  tpm?: number | null;
+  concurrency?: number | null;
+  supports_structured_outputs?: boolean;
+  supports_native_search?: boolean;
+}
+
+export interface ModelProfilePatchInput {
+  name?: string;
+  description?: string;
+  provider?: string;
+  base_url?: string;
+  model?: string;
+  api_key?: string;
+  rpm?: number | null;
+  tpm?: number | null;
+  concurrency?: number | null;
+  supports_structured_outputs?: boolean;
+  supports_native_search?: boolean;
 }
