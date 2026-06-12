@@ -911,6 +911,7 @@ async def parse_and_run_background(
     web_search_intensity: str | None = None,
     web_search_max_results: int | None = None,
     web_search_snippet_limit: int | None = None,
+    world_context: dict | None = None,
 ):
     """Parse a scenario in the background, then hand off to the simulator.
 
@@ -986,6 +987,7 @@ async def parse_and_run_background(
                 base_url=llm_base_url,
                 temperature=temperature,
                 model=llm_model,
+                world_context=world_context,
             )
     except asyncio.CancelledError:
         # H2 fix: parse-stage cancellation funnels into the cancelled terminal state.
@@ -1096,6 +1098,13 @@ async def parse_and_run_background(
         existing_campaign_context = existing_context.get("campaign_context")
         if isinstance(existing_campaign_context, dict):
             parsed["campaign_context"] = existing_campaign_context
+        existing_world_context = (
+            world_context
+            if isinstance(world_context, dict)
+            else existing_context.get("world_context")
+        )
+        if isinstance(existing_world_context, dict):
+            parsed["world_context"] = existing_world_context
 
         scenario.parsed_context = parsed
         scenario.status = ScenarioStatus.SIMULATING

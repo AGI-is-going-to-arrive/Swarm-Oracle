@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -16,6 +16,11 @@ _CAMPAIGN_WEEK_PATTERN = re.compile(r"^\d{4}-W\d{2}$")
 _ORIGIN_NODE_TYPE_PATTERN = re.compile(r"^[A-Za-z0-9_:-]+$")
 
 # ── Request schemas ──────────────────────────────────────
+
+WorldContextTraitText = Annotated[str, Field(max_length=80)]
+WorldContextConstraintText = Annotated[str, Field(max_length=240)]
+WorldContextEvidenceText = Annotated[str, Field(max_length=600)]
+WorldContextWarningText = Annotated[str, Field(max_length=240)]
 
 
 class ContinuityOverrideRequest(BaseModel):
@@ -154,6 +159,99 @@ class CampaignContext(BaseModel):
         return self
 
 
+class WorldContextEntity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(max_length=100)
+    role: str = Field(default="", max_length=200)
+    traits: list[WorldContextTraitText] = Field(default_factory=list, max_length=10)
+    perspective: str = Field(default="", max_length=500)
+
+    @field_validator("name", "role", "perspective")
+    @classmethod
+    def normalize_entity_text(cls, v: str) -> str:
+        return re.sub(r"\s+", " ", str(v or "")).strip()
+
+    @field_validator("traits")
+    @classmethod
+    def normalize_traits(cls, v: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in v:
+            trait = re.sub(r"\s+", " ", str(item or "")).strip()[:80]
+            if not trait:
+                continue
+            key = trait.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(trait)
+        return normalized[:10]
+
+
+class WorldContextSourceMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(max_length=255)
+    content_type: str = Field(max_length=100)
+    suffix: str = Field(max_length=16)
+    byte_count: int = Field(ge=0)
+    char_count: int = Field(ge=0)
+    extraction_method: Literal["pdf", "text", "markdown"]
+
+
+class WorldContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(max_length=120)
+    summary: str = Field(max_length=1200)
+    key_entities: list[WorldContextEntity] = Field(default_factory=list, max_length=12)
+    constraints: list[WorldContextConstraintText] = Field(default_factory=list, max_length=10)
+    evidence_snippets: list[WorldContextEvidenceText] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    source_metadata: WorldContextSourceMetadata
+    warnings: list[WorldContextWarningText] = Field(default_factory=list, max_length=10)
+
+    @field_validator("title", "summary")
+    @classmethod
+    def normalize_text_field(cls, v: str) -> str:
+        return re.sub(r"\s+", " ", str(v or "")).strip()
+
+    @field_validator("constraints", "warnings")
+    @classmethod
+    def normalize_short_lists(cls, v: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in v:
+            text = re.sub(r"\s+", " ", str(item or "")).strip()[:240]
+            if not text:
+                continue
+            key = text.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(text)
+        return normalized
+
+    @field_validator("evidence_snippets")
+    @classmethod
+    def normalize_evidence_snippets(cls, v: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in v:
+            text = re.sub(r"\s+", " ", str(item or "")).strip()[:600]
+            if not text:
+                continue
+            key = text.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(text)
+        return normalized
+
+
 class CreateScenarioRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -187,6 +285,7 @@ class CreateScenarioRequest(BaseModel):
     # Phase 3 F3: Custom agent identities to include in simulation
     custom_agent_identity_ids: list[str] | None = None
     continuity_overrides: list["ContinuityOverrideRequest"] | None = None
+    world_context: WorldContext | None = None
     # Campaign Phase 1: authoritative challenge/track context for finalize accounting
     campaign_context: CampaignContext | None = None
 

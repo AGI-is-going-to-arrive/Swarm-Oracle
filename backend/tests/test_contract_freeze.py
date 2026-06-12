@@ -234,6 +234,7 @@ class TestNamingFreeze:
             "agent_conversation",
             "kg_explorer",
             "replay_trace",
+            "document_seed",
             "public_artifacts",
         }
     )
@@ -254,7 +255,7 @@ class TestNamingFreeze:
         assert len(self.FROZEN_NEW_WS_EVENTS) == 4
 
     def test_capabilities_keys_frozen(self):
-        assert len(self.FROZEN_CAPABILITIES_KEYS) == 12
+        assert len(self.FROZEN_CAPABILITIES_KEYS) == 13
 
     def test_no_profile_id_reuse(self):
         """Explicit guard: agent_identity_id, NOT profile_id."""
@@ -552,6 +553,7 @@ _TOP_LEVEL_FROZEN_KEYS = frozenset(
         "prediction_journal",
         "result_verdict",
         "result_report",
+        "document_seed",
     }
 )
 
@@ -765,6 +767,7 @@ async def test_capabilities_additive_only_no_regression_on_frozen_keys():
         "FEATURE_RESULT_VERDICT",
         "FEATURE_RESULT_REPORT",
         "FEATURE_PUBLIC_ARTIFACTS",
+        "FEATURE_DOCUMENT_SEED",
     )
     snapshots = {name: getattr(settings, name) for name in toggles}
     try:

@@ -634,6 +634,216 @@ async def test_llm_prompts_wrap_pdf_text_in_untrusted_block():
     assert format_untrusted_text_block("document chunk", pdf_text) in prompts[0]
 
 
+async def test_document_seed_feature_disabled_returns_404(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(agents_api.settings, "FEATURE_DOCUMENT_SEED", False, raising=False)
+
+    resp = await client.post(
+        "/api/agents/document-seed",
+        files={"file": ("seed.txt", b"Alice runs logistics.", "text/plain")},
+    )
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "FEATURE_DISABLED"
+
+
+@pytest.mark.parametrize(
+    ("filename", "content_type", "blob", "expected_method"),
+    [
+        ("seed.pdf", "application/pdf", b"%PDF-stub", "pdf"),
+        ("seed.txt", "text/plain", b"Alice runs logistics.\nBob enforces treaty terms.", "text"),
+        (
+            "seed.md",
+            "text/markdown",
+            b"# Seed World\n\nAlice runs logistics.\n\n- Bob enforces treaty terms.",
+            "markdown",
+        ),
+    ],
+)
+async def test_document_seed_endpoint_accepts_pdf_txt_md_truth_table(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    filename: str,
+    content_type: str,
+    blob: bytes,
+    expected_method: str,
+):
+    monkeypatch.setattr(agents_api.settings, "FEATURE_DOCUMENT_SEED", True, raising=False)
+    monkeypatch.setattr(
+        agents_api,
+        "extract_pdf_text",
+        lambda _blob, **_kwargs: "Alice runs logistics.\nBob enforces treaty terms.",
+    )
+
+    async def fake_extract_entities(chunks, _llm_call_fn):
+        assert chunks
+        return [
+            {
+                "name": "Alice",
+                "role": "Logistics lead",
+                "traits": ["careful"],
+                "perspective": "Keeps supplies moving.",
+            },
+            {
+                "name": "Bob",
+                "role": "Treaty monitor",
+                "traits": ["strict"],
+                "perspective": "Protects negotiated constraints.",
+            },
+        ]
+
+    async def fake_generate_persona(entity, _llm_call_fn):
+        return {
+            "name": entity["name"],
+            "role": entity["role"],
+            "persona": f"{entity['name']} speaks from the seed document.",
+            "decision_bias": {
+                "caution": 0.5,
+                "optimism": 0.5,
+                "conservatism": 0.5,
+                "risk_tolerance": 0.5,
+                "creativity": 0.5,
+            },
+        }
+
+    monkeypatch.setattr(agents_api, "extract_entities", fake_extract_entities)
+    monkeypatch.setattr(agents_api, "generate_persona_from_entity", fake_generate_persona)
+
+    resp = await client.post(
+        "/api/agents/document-seed",
+        files={"file": (filename, blob, content_type)},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["entities_extracted"] == 2
+    assert data["agents_failed"] == 0
+    assert len(data["agents_preview"]) == 2
+    assert data["source"]["extraction_method"] == expected_method
+    assert data["world_context"]["source_metadata"]["extraction_method"] == expected_method
+    assert data["world_context"]["key_entities"][0]["name"] == "Alice"
+    assert data["world_context"]["evidence_snippets"]
+
+
+@pytest.mark.parametrize(
+    ("filename", "content_type", "blob", "status_code", "code"),
+    [
+        ("seed.txt", "text/html", b"Alice", 415, "UNSUPPORTED_DOCUMENT_TYPE"),
+        ("seed.html", "text/plain", b"Alice", 415, "UNSUPPORTED_DOCUMENT_TYPE"),
+        ("seed.txt", "text/plain", b"   \n\t", 422, "DOCUMENT_TEXT_EMPTY"),
+        ("seed.txt", "text/plain", b"\xff\xfe\xff", 422, "DOCUMENT_TEXT_INVALID"),
+    ],
+)
+async def test_document_seed_rejects_invalid_txt_md_uploads(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    filename: str,
+    content_type: str,
+    blob: bytes,
+    status_code: int,
+    code: str,
+):
+    monkeypatch.setattr(agents_api.settings, "FEATURE_DOCUMENT_SEED", True, raising=False)
+
+    resp = await client.post(
+        "/api/agents/document-seed",
+        files={"file": (filename, blob, content_type)},
+    )
+
+    assert resp.status_code == status_code
+    assert resp.json()["detail"]["code"] == code
+
+
+async def test_document_seed_rejects_oversize_bytes(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(agents_api.settings, "FEATURE_DOCUMENT_SEED", True, raising=False)
+    monkeypatch.setattr(agents_api, "MAX_DOCUMENT_UPLOAD_BYTES", 5)
+
+    resp = await client.post(
+        "/api/agents/document-seed",
+        files={"file": ("seed.txt", b"123456", "text/plain")},
+    )
+
+    assert resp.status_code == 413
+    assert resp.json()["detail"]["code"] == "DOCUMENT_FILE_TOO_LARGE"
+
+
+async def test_document_seed_rejects_oversize_decoded_text(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(agents_api.settings, "FEATURE_DOCUMENT_SEED", True, raising=False)
+    monkeypatch.setattr(agents_api, "DOCUMENT_SEED_MAX_TEXT_CHARS", 5, raising=False)
+
+    resp = await client.post(
+        "/api/agents/document-seed",
+        files={"file": ("seed.txt", b"123456", "text/plain")},
+    )
+
+    assert resp.status_code == 413
+    assert resp.json()["detail"]["code"] == "DOCUMENT_TEXT_TOO_LARGE"
+
+
+async def test_document_seed_world_context_is_truncated_to_budget(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(agents_api.settings, "FEATURE_DOCUMENT_SEED", True, raising=False)
+
+    async def fake_extract_entities(_chunks, _llm_call_fn):
+        return [
+            {
+                "name": f"Entity {index}",
+                "role": "R" * 500,
+                "traits": [f"trait-{index}"],
+                "perspective": "P" * 1000,
+            }
+            for index in range(20)
+        ]
+
+    async def fake_generate_persona(entity, _llm_call_fn):
+        return {
+            "name": entity["name"],
+            "role": entity["role"],
+            "persona": "Persona preview",
+            "decision_bias": {
+                "caution": 0.5,
+                "optimism": 0.5,
+                "conservatism": 0.5,
+                "risk_tolerance": 0.5,
+                "creativity": 0.5,
+            },
+        }
+
+    monkeypatch.setattr(agents_api, "extract_entities", fake_extract_entities)
+    monkeypatch.setattr(agents_api, "generate_persona_from_entity", fake_generate_persona)
+
+    resp = await client.post(
+        "/api/agents/document-seed",
+        files={
+            "file": (
+                "seed.md",
+                ("# " + "T" * 200 + "\n\n" + "A" * 3000).encode(),
+                "text/markdown",
+            )
+        },
+    )
+
+    assert resp.status_code == 200
+    world_context = resp.json()["world_context"]
+    assert len(world_context["title"]) <= 120
+    assert len(world_context["summary"]) <= 1200
+    assert len(world_context["key_entities"]) <= 12
+    assert all(len(entity["role"]) <= 200 for entity in world_context["key_entities"])
+    assert all(len(entity["perspective"]) <= 500 for entity in world_context["key_entities"])
+    assert len(world_context["evidence_snippets"]) <= 8
+    assert world_context["warnings"]
+
+
 async def test_document_settings_can_be_loaded_from_env(monkeypatch: pytest.MonkeyPatch):
     from app.config import Settings
 

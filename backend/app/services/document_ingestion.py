@@ -30,6 +30,15 @@ DECISION_BIAS_KEYS = (
     "risk_tolerance",
     "creativity",
 )
+WORLD_CONTEXT_TITLE_MAX_CHARS = 120
+WORLD_CONTEXT_SUMMARY_MAX_CHARS = 1200
+WORLD_CONTEXT_ENTITY_MAX_COUNT = 12
+WORLD_CONTEXT_CONSTRAINT_MAX_COUNT = 10
+WORLD_CONTEXT_EVIDENCE_MAX_COUNT = 8
+WORLD_CONTEXT_WARNING_MAX_COUNT = 10
+WORLD_CONTEXT_CONSTRAINT_MAX_CHARS = 240
+WORLD_CONTEXT_EVIDENCE_MAX_CHARS = 600
+WORLD_CONTEXT_WARNING_MAX_CHARS = 240
 
 
 def extract_pdf_text(
@@ -197,6 +206,150 @@ def _clean_string(value: Any, *, max_chars: int) -> str:
         return ""
     cleaned = re.sub(r"\s+", " ", value).strip()
     return cleaned[:max_chars]
+
+
+def _clean_text_for_world_context(value: Any, *, max_chars: int) -> str:
+    return _clean_string(value, max_chars=max_chars)
+
+
+def _dedupe_bounded_strings(
+    values: list[str],
+    *,
+    max_count: int,
+    max_chars: int,
+) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = _clean_text_for_world_context(value, max_chars=max_chars)
+        if not item:
+            continue
+        key = item.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+        if len(result) >= max_count:
+            break
+    return result
+
+
+def _derive_document_title(text: str, filename: str) -> str:
+    for line in str(text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            stripped = stripped.lstrip("#").strip()
+        return _clean_text_for_world_context(
+            stripped,
+            max_chars=WORLD_CONTEXT_TITLE_MAX_CHARS,
+        )
+    fallback = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if "." in fallback:
+        fallback = fallback.rsplit(".", 1)[0]
+    return _clean_text_for_world_context(
+        fallback or "Document Seed",
+        max_chars=WORLD_CONTEXT_TITLE_MAX_CHARS,
+    )
+
+
+def _derive_constraints(text: str) -> list[str]:
+    constraint_markers = (
+        "must",
+        "cannot",
+        "can't",
+        "only",
+        "constraint",
+        "limit",
+        "限制",
+        "必须",
+        "不能",
+        "不得",
+        "只允许",
+    )
+    candidates: list[str] = []
+    for line in str(text or "").splitlines():
+        stripped = line.strip(" -\t")
+        if not stripped:
+            continue
+        lowered = stripped.casefold()
+        if any(marker in lowered for marker in constraint_markers):
+            candidates.append(stripped)
+    return _dedupe_bounded_strings(
+        candidates,
+        max_count=WORLD_CONTEXT_CONSTRAINT_MAX_COUNT,
+        max_chars=WORLD_CONTEXT_CONSTRAINT_MAX_CHARS,
+    )
+
+
+def build_world_context_from_document(
+    *,
+    text: str,
+    entities: list[dict],
+    source_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a bounded document seed world-context payload.
+
+    The Pydantic API schema is the final contract authority. This helper keeps
+    generated payloads inside those limits before the route validates them.
+    """
+    cleaned_text = str(text or "").strip()
+    filename = str(source_metadata.get("filename") or "document")
+    chunks = chunk_document(
+        cleaned_text,
+        target_chars=WORLD_CONTEXT_EVIDENCE_MAX_CHARS,
+        overlap=80,
+    )
+    key_entities: list[dict[str, Any]] = []
+    for entity in entities[:WORLD_CONTEXT_ENTITY_MAX_COUNT]:
+        if not isinstance(entity, dict):
+            continue
+        name = _clean_text_for_world_context(entity.get("name"), max_chars=100)
+        if not name:
+            continue
+        key_entities.append({
+            "name": name,
+            "role": _clean_text_for_world_context(entity.get("role"), max_chars=200),
+            "traits": _normalise_traits(entity.get("traits")),
+            "perspective": _clean_text_for_world_context(
+                entity.get("perspective"),
+                max_chars=500,
+            ),
+        })
+
+    warnings: list[str] = []
+    if len(entities) > WORLD_CONTEXT_ENTITY_MAX_COUNT:
+        warnings.append(
+            f"Only the first {WORLD_CONTEXT_ENTITY_MAX_COUNT} extracted entities were included."
+        )
+    if len(chunks) > WORLD_CONTEXT_EVIDENCE_MAX_COUNT:
+        warnings.append(
+            f"Evidence snippets were capped at {WORLD_CONTEXT_EVIDENCE_MAX_COUNT}."
+        )
+    if not key_entities:
+        warnings.append("No document entities were extracted.")
+
+    return {
+        "title": _derive_document_title(cleaned_text, filename),
+        "summary": _clean_text_for_world_context(
+            cleaned_text,
+            max_chars=WORLD_CONTEXT_SUMMARY_MAX_CHARS,
+        ),
+        "key_entities": key_entities,
+        "constraints": _derive_constraints(cleaned_text),
+        "evidence_snippets": _dedupe_bounded_strings(
+            chunks,
+            max_count=WORLD_CONTEXT_EVIDENCE_MAX_COUNT,
+            max_chars=WORLD_CONTEXT_EVIDENCE_MAX_CHARS,
+        ),
+        "source_metadata": source_metadata,
+        "warnings": _dedupe_bounded_strings(
+            warnings,
+            max_count=WORLD_CONTEXT_WARNING_MAX_COUNT,
+            max_chars=WORLD_CONTEXT_WARNING_MAX_CHARS,
+        ),
+    }
 
 
 def _normalise_traits(value: Any) -> list[str]:

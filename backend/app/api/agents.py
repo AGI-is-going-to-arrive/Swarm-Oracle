@@ -6,6 +6,8 @@ import asyncio
 import json
 import logging
 import re
+from pathlib import Path
+from typing import Any
 
 import anyio.to_process
 from fastapi import APIRouter, Depends, File, UploadFile
@@ -19,12 +21,13 @@ from app.api.helpers import (
     resolve_authenticated_user_id,
     verify_session,
 )
-from app.api.schemas import CreateScenarioRequest
+from app.api.schemas import CreateScenarioRequest, WorldContext
 from app.config import settings
 from app.models.agent_identity import AgentGrowthEvent, AgentIdentity
 from app.models.database import get_engine
 from app.services.agent_identity import preview_identity_match
 from app.services.document_ingestion import (
+    build_world_context_from_document,
     chunk_document,
     extract_entities,
     extract_pdf_text,
@@ -65,10 +68,16 @@ router = APIRouter(
 ALLOWED_CUSTOM_AGENT_TIERS = {"CROWD", "IMPORTANT"}
 MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024
 DOCUMENT_UPLOAD_CHUNK_BYTES = 1024 * 1024
+DOCUMENT_SEED_MAX_TEXT_CHARS = 100_000
 PDF_PARSE_TIMEOUT_SECONDS = 30.0
 IDENTITY_PREFLIGHT_TIMEOUT_SECONDS = 8.0
 PDF_CONTENT_TYPES = {"application/pdf", "application/x-pdf"}
 PDF_FALLBACK_CONTENT_TYPES = {"", "application/octet-stream"}
+TXT_SUFFIXES = {".txt"}
+MARKDOWN_SUFFIXES = {".md", ".markdown"}
+TEXT_CONTENT_TYPES = {"text/plain"}
+MARKDOWN_CONTENT_TYPES = {"text/markdown", "text/x-markdown", "application/markdown", "text/plain"}
+DOCUMENT_SEED_FALLBACK_CONTENT_TYPES = {"", "application/octet-stream"}
 _ORIGINAL_EXTRACT_PDF_TEXT = extract_pdf_text
 
 
@@ -287,6 +296,78 @@ def _is_pdf_upload(file: UploadFile) -> bool:
         return True
     filename = (file.filename or "").lower()
     return content_type in PDF_FALLBACK_CONTENT_TYPES and filename.endswith(".pdf")
+
+
+def _normalized_upload_content_type(file: UploadFile) -> str:
+    return (file.content_type or "").split(";", 1)[0].strip().lower()
+
+
+def _document_seed_suffix(file: UploadFile) -> str:
+    return Path(file.filename or "").suffix.lower()
+
+
+def _document_seed_extraction_method(file: UploadFile) -> str:
+    suffix = _document_seed_suffix(file)
+    content_type = _normalized_upload_content_type(file)
+    if _is_pdf_upload(file):
+        return "pdf"
+    if suffix in TXT_SUFFIXES and (
+        content_type in TEXT_CONTENT_TYPES
+        or content_type in DOCUMENT_SEED_FALLBACK_CONTENT_TYPES
+    ):
+        return "text"
+    if suffix in MARKDOWN_SUFFIXES and (
+        content_type in MARKDOWN_CONTENT_TYPES
+        or content_type in DOCUMENT_SEED_FALLBACK_CONTENT_TYPES
+    ):
+        return "markdown"
+    raise api_error(
+        415,
+        "UNSUPPORTED_DOCUMENT_TYPE",
+        "Only PDF, txt, and Markdown uploads are supported",
+    )
+
+
+def _decode_document_seed_text(blob: bytes) -> str:
+    try:
+        return blob.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise api_error(
+            422,
+            "DOCUMENT_TEXT_INVALID",
+            "Uploaded text document must be valid UTF-8",
+        ) from exc
+
+
+async def _extract_document_seed_text(file: UploadFile, blob: bytes) -> tuple[str, str]:
+    method = _document_seed_extraction_method(file)
+    if method == "pdf":
+        try:
+            text = await _extract_pdf_text_with_timeout(blob)
+        except asyncio.TimeoutError:
+            raise api_error(
+                422,
+                "DOCUMENT_PDF_TIMEOUT",
+                "PDF parsing timed out — file may be malformed or too complex",
+            )
+        except ValueError as exc:
+            raise api_error(422, "DOCUMENT_PDF_INVALID", str(exc)) from exc
+    else:
+        text = _decode_document_seed_text(blob)
+
+    if len(text) > DOCUMENT_SEED_MAX_TEXT_CHARS:
+        raise api_error(
+            413,
+            "DOCUMENT_TEXT_TOO_LARGE",
+            f"Document text too large (max {DOCUMENT_SEED_MAX_TEXT_CHARS} chars)",
+        )
+    if not text.strip():
+        raise api_error(
+            422,
+            "DOCUMENT_TEXT_EMPTY",
+            "Uploaded document contains no usable text",
+        )
+    return text, method
 
 
 def _parse_profile_json_object(raw: str | None) -> dict | None:
@@ -580,6 +661,11 @@ async def preflight_identity_continuity(
                     base_url=req.llm_base_url,
                     temperature=req.temperature,
                     model=req.llm_model,
+                    world_context=(
+                        req.world_context.model_dump()
+                        if req.world_context is not None
+                        else None
+                    ),
                 ),
                 timeout=max(0.0, preflight_deadline - loop.time()),
             )
@@ -936,6 +1022,101 @@ async def inspect_identity_memories(
         # but the field is machine-readable and stable.
         response["error"] = error_code
     return response
+
+
+@router.post("/document-seed")
+async def parse_document_seed_world(
+    file: UploadFile = File(...),
+    user_id: str | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    """Parse an uploaded PDF/txt/md into a bounded scenario world_context."""
+    if not settings.FEATURE_DOCUMENT_SEED:
+        raise api_error(404, "FEATURE_DISABLED", "Document seed feature is not enabled")
+
+    effective_user_id = resolve_authenticated_user_id(user_id, principal)
+    blob = await _read_document_upload(file)
+    document_text, extraction_method = await _extract_document_seed_text(file, blob)
+    chunks = chunk_document(document_text)
+
+    quota_key = f"user:{effective_user_id}" if effective_user_id else None
+    with llm_request_scope(quota_key=quota_key, purpose="document_seed"):
+        try:
+            entities = await asyncio.wait_for(
+                extract_entities(chunks, llm_call),
+                timeout=settings.DOCUMENT_ENTITY_TIMEOUT,
+            )
+        except asyncio.TimeoutError as exc:
+            raise api_error(
+                504,
+                "DOCUMENT_LLM_TIMEOUT",
+                "Document entity extraction timed out",
+            ) from exc
+
+        sem = asyncio.Semaphore(get_runtime_parallelism_limit())
+
+        async def _generate_with_limit(entity: dict[str, Any]) -> dict[str, Any]:
+            async with sem:
+                return await asyncio.wait_for(
+                    generate_persona_from_entity(entity, llm_call),
+                    timeout=settings.DOCUMENT_PERSONA_SINGLE_TIMEOUT,
+                )
+
+        persona_tasks = [
+            asyncio.create_task(_generate_with_limit(entity))
+            for entity in entities[:20]
+        ]
+        pending: set[asyncio.Task]
+        if persona_tasks:
+            _, pending = await asyncio.wait(
+                persona_tasks,
+                timeout=settings.DOCUMENT_PERSONA_TIMEOUT,
+            )
+        else:
+            pending = set()
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        agents_preview: list[dict[str, Any]] = []
+        agents_failed = len(pending)
+        for task in persona_tasks:
+            if task in pending:
+                continue
+            try:
+                agents_preview.append(task.result())
+            except Exception as exc:
+                agents_failed += 1
+                logger.warning("Skipped document seed persona preview: %s", exc)
+
+    source_metadata = {
+        "filename": file.filename or "document",
+        "content_type": _normalized_upload_content_type(file),
+        "suffix": _document_seed_suffix(file),
+        "byte_count": len(blob),
+        "char_count": len(document_text),
+        "extraction_method": extraction_method,
+    }
+    raw_world_context = build_world_context_from_document(
+        text=document_text,
+        entities=entities,
+        source_metadata=source_metadata,
+    )
+    if agents_failed:
+        warnings = list(raw_world_context.get("warnings") or [])
+        warnings.append(f"{agents_failed} persona preview(s) failed.")
+        raw_world_context["warnings"] = warnings
+    world_context = WorldContext.model_validate(raw_world_context).model_dump()
+
+    return {
+        "world_context": world_context,
+        "agents_preview": agents_preview,
+        "entities_extracted": len(entities),
+        "agents_failed": agents_failed,
+        "source": world_context["source_metadata"],
+        "warnings": world_context["warnings"],
+    }
 
 
 @router.post("/from-document", status_code=201)

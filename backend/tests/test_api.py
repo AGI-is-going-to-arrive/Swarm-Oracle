@@ -3,10 +3,12 @@
 import asyncio
 import json
 import time
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -123,6 +125,32 @@ def _seed_message(engine, round_id, agent_id, *, content="发言", emotion="neut
         session.add(message)
         session.commit()
         return message.id
+
+
+def _sample_world_context() -> dict:
+    return {
+        "title": "Seed World",
+        "summary": "A document-derived logistics crisis frames the world.",
+        "key_entities": [
+            {
+                "name": "Alice",
+                "role": "Logistics lead",
+                "traits": ["careful"],
+                "perspective": "Keeps supplies moving.",
+            }
+        ],
+        "constraints": ["Fuel is rationed."],
+        "evidence_snippets": ["Alice warns that the convoy has only two days of fuel."],
+        "source_metadata": {
+            "filename": "seed.md",
+            "content_type": "text/markdown",
+            "suffix": ".md",
+            "byte_count": 512,
+            "char_count": 200,
+            "extraction_method": "markdown",
+        },
+        "warnings": [],
+    }
 
 
 def _detail_message(resp) -> str:
@@ -511,6 +539,60 @@ class TestIdentityPreflightEndpoint:
         assert data["matches"][0]["continuity_key"] == "ck-sun"
         assert data["summary"]["candidate_count"] == 1
         assert data["summary"]["new_identity_count"] == 1
+
+    def test_preflight_passes_same_world_context_to_parser(self, client, monkeypatch):
+        from app.config import settings
+
+        previous = settings.FEATURE_AGENT_IDENTITY
+        settings.FEATURE_AGENT_IDENTITY = True
+        world_context = _sample_world_context()
+        captured: dict[str, object] = {}
+
+        async def _fake_parse_question(*args, **kwargs):
+            captured["args"] = args
+            captured.update(kwargs)
+            return {
+                "setting": {},
+                "key_variable": "test",
+                "initial_title": "Test",
+                "agents": [
+                    {
+                        "name": "Seed Analyst",
+                        "role": "Analyst",
+                        "persona": "Reads the document seed.",
+                    },
+                ],
+                "groups": [],
+                "simulation_rounds": 5,
+                "branch_sensitivity": 0.7,
+            }
+
+        def _fake_preview(user_id, name, role, persona):
+            return {
+                "name": name,
+                "role": role,
+                "persona": persona,
+                "continuity_key": "ck-new",
+                "match_kind": "new",
+                "needs_confirmation": False,
+                "candidate_identity": None,
+            }
+
+        monkeypatch.setattr(agents_api, "parse_question", _fake_parse_question)
+        monkeypatch.setattr(agents_api, "preview_identity_match", _fake_preview)
+
+        try:
+            resp = client.post("/api/agents/identities/preflight", json={
+                "question": "What if the convoy fails?",
+                "user_id": "director-1",
+                "num_agents": 3,
+                "world_context": world_context,
+            })
+        finally:
+            settings.FEATURE_AGENT_IDENTITY = previous
+
+        assert resp.status_code == 200
+        assert captured["world_context"] == world_context
 
     def test_preflight_parse_timeout_returns_launch_safe_status(self, client, monkeypatch):
         from app.config import settings
@@ -1017,6 +1099,22 @@ class TestReplayArtifactEndpoints:
         resp = client.post("/api/scenario", json={"question": "ok?", "num_agents": -1})
         assert resp.status_code == 422
 
+    def test_create_scenario_world_context_schema_enforces_field_budgets(self):
+        valid = _sample_world_context()
+        CreateScenarioRequest(question="ok?", world_context=valid)
+
+        invalid = {
+            **valid,
+            "title": "T" * 121,
+            "key_entities": valid["key_entities"] * 13,
+        }
+        with pytest.raises(ValidationError) as exc:
+            CreateScenarioRequest(question="ok?", world_context=invalid)
+
+        errors = exc.value.errors()
+        assert any(error["loc"] == ("world_context", "title") for error in errors)
+        assert any(error["loc"] == ("world_context", "key_entities") for error in errors)
+
     def test_create_scenario_num_agents_default(self, client):
         """Omitting num_agents should use default (accepted)."""
         resp = client.post("/api/scenario", json={"question": "test?"})
@@ -1122,6 +1220,128 @@ class TestReplayArtifactEndpoints:
         assert resp.status_code == 200
         assert scheduled["count"] == 1
         assert captured["disable_user_quota"] is True
+
+    def test_create_scenario_persists_and_forwards_world_context(
+        self,
+        client,
+        monkeypatch,
+    ):
+        scheduled = {"count": 0}
+        captured: dict[str, object] = {}
+        world_context = _sample_world_context()
+
+        async def _noop():
+            return None
+
+        def _fake_background(*args, **kwargs):
+            captured.update(kwargs)
+            return _noop()
+
+        def _capture_schedule(coro):
+            scheduled["count"] += 1
+            _close_scheduled_coro(coro)
+            return None
+
+        monkeypatch.setattr(scenarios_api, "parse_and_run_background", _fake_background)
+        monkeypatch.setattr(scenarios_api, "schedule_background_task", _capture_schedule)
+
+        resp = client.post("/api/scenario", json={
+            "question": "What if the convoy fails?",
+            "world_context": world_context,
+        })
+
+        assert resp.status_code == 200
+        assert scheduled["count"] == 1
+        assert captured["world_context"] == world_context
+        scenario_id = resp.json()["id"]
+        with Session(get_engine()) as session:
+            scenario = session.get(Scenario, scenario_id)
+            assert scenario is not None
+            assert scenario.parsed_context["world_context"] == world_context
+
+    @pytest.mark.asyncio
+    async def test_parse_and_run_background_preserves_world_context_after_parse_overwrite(
+        self,
+        monkeypatch,
+    ):
+        from app.api import helpers as helpers_module
+        from app.api import ws as ws_module
+
+        helpers_module._running_simulations.clear()
+        helpers_module._parse_phase_simulations.clear()
+        monkeypatch.setattr(
+            ws_module,
+            "ws_manager",
+            SimpleNamespace(broadcast=AsyncMock()),
+        )
+
+        world_context = _sample_world_context()
+        with Session(get_engine()) as session:
+            scenario = Scenario(
+                question="preserve document seed",
+                status=ScenarioStatus.SIMULATING,
+                parsed_context={"world_context": world_context},
+            )
+            session.add(scenario)
+            session.commit()
+            session.refresh(scenario)
+            session.add(Branch(scenario_id=scenario.id, title="Initial Branch", probability=1.0))
+            session.commit()
+            scenario_id = scenario.id
+
+        async def fake_parse_question(*_args, **_kwargs):
+            return {
+                "agents": [
+                    {
+                        "name": "Analyst",
+                        "role": "Analyst",
+                        "persona": "Tracks seeded worlds.",
+                        "tier": "CORE",
+                        "stance": "neutral",
+                    },
+                ],
+                "initial_title": "Parsed Root",
+                "groups": [],
+            }
+
+        async def fake_run_simulation(**_kwargs):
+            return None
+
+        monkeypatch.setattr(helpers_module, "parse_question", fake_parse_question)
+        monkeypatch.setattr(helpers_module, "run_simulation", fake_run_simulation)
+
+        try:
+            await helpers_module.parse_and_run_background(
+                scenario_id,
+                question="preserve document seed",
+                num_agents=3,
+                mode="blackboard",
+                hierarchical=False,
+                rounds=5,
+                visualization_enabled=False,
+                reasoning_effort=None,
+                temperature=None,
+                branch_sensitivity=None,
+                fork_prompt_variant=None,
+                fork_detector_active_branch_limit=None,
+                user_id=None,
+                llm_api_key=None,
+                llm_base_url=None,
+                llm_model=None,
+                llm_requests_per_minute=None,
+                llm_tokens_per_minute=None,
+                disable_user_quota=None,
+                world_context=world_context,
+            )
+        finally:
+            helpers_module._running_simulations.clear()
+            helpers_module._parse_phase_simulations.clear()
+
+        with Session(get_engine()) as session:
+            refreshed = session.get(Scenario, scenario_id)
+            assert refreshed is not None
+            assert refreshed.parsed_context["world_context"] == world_context
+            assert refreshed.parsed_context["mode"] == "blackboard"
 
     def test_create_scenario_forwards_llm_rate_limits(self, client, monkeypatch):
         scheduled = {"count": 0}

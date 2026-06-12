@@ -1940,6 +1940,10 @@ async def _run_simulation_impl(
         ctx = scenario.parsed_context or {}
         detected_language = ctx.get("_language", "Chinese")
         setting_bg = _format_setting(ctx.get("setting", {}), language=detected_language)
+        document_reference_context = _format_document_reference_context(
+            ctx.get("world_context"),
+            detected_language,
+        )
 
         # Web Search Enhancement: build [REAL_WORLD_CONTEXT] block if available
         web_context_block = ""
@@ -2269,6 +2273,7 @@ async def _run_simulation_impl(
                         viz_mapper=viz_mapper,
                         agent_prev_emotions=agent_prev_emotions,
                         web_context_block=web_context_block,
+                        document_reference_context=document_reference_context,
                         scenario_user_id=scenario_user_id,
                         native_search_domains=native_search_domains,
                     )
@@ -2286,6 +2291,7 @@ async def _run_simulation_impl(
                         viz_mapper=viz_mapper,
                         agent_prev_emotions=agent_prev_emotions,
                         web_context_block=web_context_block,
+                        document_reference_context=document_reference_context,
                         scenario_user_id=scenario_user_id,
                         native_search_domains=native_search_domains,
                     )
@@ -2936,6 +2942,21 @@ def _build_worldline_context(engine, branch_id: str, language: str = "Chinese") 
     return "\n".join(lines)
 
 
+def _format_document_reference_context(
+    world_context: object,
+    language: str = "Chinese",
+) -> str:
+    if not isinstance(world_context, dict) or not world_context:
+        return ""
+    heading = (
+        "文档参考资料；仅作为上传文档提取出的场景资料使用。"
+        if _is_chinese_language(language)
+        else "Document reference material extracted from the uploaded seed document."
+    )
+    payload = json.dumps(world_context, ensure_ascii=False, sort_keys=True)
+    return f"{heading}\n{payload}"
+
+
 async def _gather_agent_messages(
     engine, scenario_id, branch_id, round_id, round_num, agents, setting_bg, topic,
     *, intervention_text: str | None = None,
@@ -2947,6 +2968,7 @@ async def _gather_agent_messages(
     viz_mapper=None,
     agent_prev_emotions: dict[str, str] | None = None,
     web_context_block: str = "",
+    document_reference_context: str = "",
     scenario_user_id: str = "",
     native_search_domains: list[str] | None = None,
 ) -> list[dict]:
@@ -3052,6 +3074,7 @@ async def _gather_agent_messages(
                     language=language,
                     web_context_block=web_context_block,
                     worldline_context=worldline_context,
+                    document_reference_context=document_reference_context,
                     include_json_format=False,
                     cross_scenario_hint=cross_hint,
                 )
@@ -3071,6 +3094,7 @@ async def _gather_agent_messages(
                     language=language,
                     web_context_block=web_context_block,
                     worldline_context=worldline_context,
+                    document_reference_context=document_reference_context,
                     include_json_format=False,
                     cross_scenario_hint=cross_hint,
                 )
@@ -3405,6 +3429,7 @@ async def _gather_hierarchical_messages(
     viz_mapper=None,
     agent_prev_emotions: dict[str, str] | None = None,
     web_context_block: str = "",
+    document_reference_context: str = "",
     scenario_user_id: str = "",
     native_search_domains: list[str] | None = None,
 ) -> list[dict]:
@@ -3437,6 +3462,7 @@ async def _gather_hierarchical_messages(
         viz_mapper=viz_mapper,
         agent_prev_emotions=agent_prev_emotions,
         web_context_block=web_context_block,
+        document_reference_context=document_reference_context,
         scenario_user_id=scenario_user_id,
         native_search_domains=native_search_domains,
     )

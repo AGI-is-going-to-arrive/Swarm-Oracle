@@ -829,6 +829,10 @@ async def api_capabilities():
             enabled=settings.FEATURE_RESULT_REPORT,
             version="1.0" if settings.FEATURE_RESULT_REPORT else "0.0",
         ),
+        "document_seed": _capability_entry(
+            enabled=settings.FEATURE_DOCUMENT_SEED,
+            version="1.0" if settings.FEATURE_DOCUMENT_SEED else "0.0",
+        ),
     }
     return capabilities
 
@@ -976,6 +980,8 @@ async def create_scenario(
             "web_search_snippet_limit": web_search_intensity_config.snippet_limit,
         } if web_search_intensity_config else {}),
     }
+    if req.world_context is not None:
+        scenario_parsed_context["world_context"] = req.world_context.model_dump()
     # Campaign Phase 1: persist authoritative challenge/track context so that
     # finalize_scenario_campaign can score against durable provenance rather
     # than the legacy `completed_daily_challenge` boolean. The body of this
@@ -1167,6 +1173,9 @@ async def create_scenario(
         ),
         web_search_snippet_limit=(
             web_search_intensity_config.snippet_limit if web_search_intensity_config else None
+        ),
+        world_context=(
+            req.world_context.model_dump() if req.world_context is not None else None
         ),
     )
     schedule_background_task(
