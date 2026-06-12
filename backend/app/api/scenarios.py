@@ -70,6 +70,7 @@ from app.models import (
 from app.models.database import get_engine
 from app.services.campaign import remove_scenario_campaign_artifacts
 from app.services.llm_client import (
+    detect_provider,
     health_check,
     measure_provider_parallelism,
     safe_llm_error_payload,
@@ -639,6 +640,19 @@ async def api_capabilities():
     from app.services.web_context import PROVIDER_CAPABILITIES
 
     ws_hint = _build_web_search_server_hint()
+    llm_configured = is_static_llm_configured(
+        base_url=settings.LLM_RESPONSES_URL,
+        api_key=settings.LLM_API_KEY,
+    )
+    llm_provider_profile = detect_provider(_cfg.LLM_RESPONSES_URL)
+    llm_provider_capability: dict[str, object] = {
+        "supports_structured_outputs": llm_provider_profile.supports_structured_outputs,
+        "structured_output_api": llm_provider_profile.structured_output_api,
+        "supports_native_search": llm_provider_profile.supports_native_search,
+        "native_search_api": llm_provider_profile.native_search_api,
+        "requires_specific_endpoint": llm_provider_profile.requires_specific_endpoint,
+        "is_proxy": llm_provider_profile.is_proxy,
+    }
 
     # P1-6: provider-level capability info for the currently configured provider.
     current_provider = (_cfg.WEB_SEARCH_PROVIDER or "").strip().lower()
@@ -709,10 +723,17 @@ async def api_capabilities():
         else {}
     )
     capabilities = {
-        "llm_configured": is_static_llm_configured(
-            base_url=settings.LLM_RESPONSES_URL,
-            api_key=settings.LLM_API_KEY,
-        ),
+        "llm_configured": llm_configured,
+        "llm_provider": {
+            **_capability_entry(
+                enabled=True,
+                version="1.0",
+                server_only=True,
+            ),
+            "provider": llm_provider_profile.name,
+            "model": settings.LLM_MODEL_NAME,
+            "provider_capability": llm_provider_capability,
+        },
         "web_search": {
             **_capability_entry(
                 enabled=ws_hint.get("server_enabled", False),

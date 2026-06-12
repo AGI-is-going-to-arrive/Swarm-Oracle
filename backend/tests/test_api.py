@@ -253,6 +253,29 @@ class TestHealthEndpoint:
         assert resp.status_code == 200
         assert resp.json()["llm_configured"] is expected
 
+    def test_capabilities_include_llm_provider_metadata(self, client, monkeypatch):
+        monkeypatch.setattr(
+            scenarios_api.settings,
+            "LLM_RESPONSES_URL",
+            "https://api.openai.com/v1/responses",
+        )
+        monkeypatch.setattr(scenarios_api.settings, "LLM_MODEL_NAME", "gpt-5.4-mini")
+
+        resp = client.get("/api/capabilities")
+
+        assert resp.status_code == 200
+        provider = resp.json()["llm_provider"]
+        assert provider["provider"] == "openai"
+        assert provider["model"] == "gpt-5.4-mini"
+        assert provider["provider_capability"] == {
+            "supports_structured_outputs": True,
+            "structured_output_api": "response_format_json_schema",
+            "supports_native_search": True,
+            "native_search_api": "responses",
+            "requires_specific_endpoint": "/v1/responses",
+            "is_proxy": False,
+        }
+
     @pytest.mark.asyncio
     async def test_scenario_background_wrapper_broadcasts_safe_llm_error(
         self,

@@ -1794,6 +1794,168 @@ def test_build_llm_payload_no_native_search_keys(target_url):
         )
 
 
+class TestLlmCallStructuredOutputs:
+    """F10-lite: structured-output injection with fail-soft fallback."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_runtime(self, monkeypatch):
+        monkeypatch.setattr("app.services.llm_client._reserve_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._release_runtime_slot",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_success",
+                            _noop_async_none)
+        monkeypatch.setattr("app.services.llm_client._record_provider_failure",
+                            _noop_async_none)
+
+    @pytest.mark.asyncio
+    async def test_openai_class_injects_response_format_json_schema(self, monkeypatch):
+        captured_payload: dict = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"answer":"ok"}'}}]},
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+        result = await llm_call_json(
+            "Return JSON.",
+            base_url="https://api.openai.com/v1/chat/completions",
+            api_key="openai-key",
+        )
+
+        assert result == {"answer": "ok"}
+        assert captured_payload["response_format"] == {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "swarmoracle_json_response",
+                "schema": {"type": "object", "additionalProperties": True},
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_ollama_class_injects_format_schema(self, monkeypatch):
+        captured_payload: dict = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"answer":"ok"}'}}]},
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+        result = await llm_call_json(
+            "Return JSON.",
+            base_url="http://localhost:11434/v1/chat/completions",
+            api_key="ollama-local",
+        )
+
+        assert result == {"answer": "ok"}
+        assert captured_payload["format"] == {"type": "object", "additionalProperties": True}
+        assert "response_format" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_unsupported_provider_does_not_inject_structured_params(self, monkeypatch):
+        captured_payload: dict = {}
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"answer":"ok"}'}}]},
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+        result = await llm_call_json(
+            "Return JSON.",
+            base_url="https://api.deepseek.com/v1/chat/completions",
+            api_key="deepseek-key",
+        )
+
+        assert result == {"answer": "ok"}
+        assert "response_format" not in captured_payload
+        assert "format" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_structured_rejection_falls_back_to_parser_path(self, monkeypatch, caplog):
+        payloads: list[dict] = []
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            payloads.append(dict(json or {}))
+            request = httpx.Request("POST", url)
+            if len(payloads) == 1:
+                return httpx.Response(
+                    400,
+                    json={"error": {"message": "Unknown parameter: response_format"}},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"answer":"fallback"}'}}]},
+                request=request,
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        caplog.set_level("WARNING")
+
+        result = await llm_call_json(
+            "Return JSON.",
+            base_url="https://api.openai.com/v1/chat/completions",
+            api_key="openai-key",
+        )
+
+        assert result == {"answer": "fallback"}
+        assert len(payloads) == 2
+        assert "response_format" in payloads[0]
+        assert "response_format" not in payloads[1]
+        assert "Structured output rejected by provider" in caplog.text
+        assert "Unknown parameter" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_structured_body_error_falls_back_without_raw_body(self, monkeypatch, caplog):
+        payloads: list[dict] = []
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            payloads.append(dict(json or {}))
+            request = httpx.Request("POST", url)
+            if len(payloads) == 1:
+                return httpx.Response(
+                    200,
+                    json={"error": {"message": "response_format is forbidden upstream"}},
+                    request=request,
+                )
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"answer":"fallback"}'}}]},
+                request=request,
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        caplog.set_level("WARNING")
+
+        result = await llm_call_json(
+            "Return JSON.",
+            base_url="https://api.openai.com/v1/chat/completions",
+            api_key="openai-key",
+        )
+
+        assert result == {"answer": "fallback"}
+        assert len(payloads) == 2
+        assert "response_format" in payloads[0]
+        assert "response_format" not in payloads[1]
+        assert "Structured output rejected by provider" in caplog.text
+        assert "forbidden upstream" not in caplog.text
+
+
 # ── P2-1: detect_provider tests ──────────────────────────
 
 
@@ -1843,16 +2005,16 @@ class TestDetectProvider:
         assert p.is_proxy is True
         assert p.supports_native_search is False
 
-    @pytest.mark.parametrize("url", [
-        "http://localhost:8317/v1",
-        "http://127.0.0.1:8000/v1",
-        "http://0.0.0.0:11434/v1",
-        "http://host.docker.internal:8080/v1",
+    @pytest.mark.parametrize("url,expected_name", [
+        ("http://localhost:8317/v1", "local"),
+        ("http://127.0.0.1:8000/v1", "local"),
+        ("http://0.0.0.0:11434/v1", "ollama"),
+        ("http://host.docker.internal:8080/v1", "local"),
+        ("http://localhost:1234/v1", "lmstudio"),
     ])
-    def test_local_hosts(self, url):
+    def test_local_hosts(self, url, expected_name):
         p = self.detect(url)
-        assert p.name == "local"
-        assert p.is_proxy is True
+        assert p.name == expected_name
 
     def test_unknown_host_is_proxy(self):
         p = self.detect("https://my-custom-llm.example.com/v1")

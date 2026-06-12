@@ -5,6 +5,7 @@ without making real HTTP calls. Each fixture represents a frozen snapshot
 of the provider API response structure.
 """
 
+from app.services.llm_client import detect_provider
 from app.services.native_search_adapters import (
     OpenAIResponsesAdapter,
     XAIResponsesAdapter,
@@ -253,3 +254,34 @@ class TestAdapterRegistryContract:
             assert hasattr(adapter, "count_tool_calls")
             assert hasattr(adapter, "max_domains")
             assert hasattr(adapter, "max_tool_calls")
+
+
+class TestLlmProviderStructuredOutputContract:
+    """F10-lite provider capability registry contract."""
+
+    def test_openai_and_known_proxies_use_response_format_json_schema(self):
+        for url in (
+            "https://api.openai.com/v1/chat/completions",
+            "https://openrouter.ai/api/v1/chat/completions",
+            "https://api.siliconflow.cn/v1/chat/completions",
+            "http://localhost:1234/v1/chat/completions",
+        ):
+            profile = detect_provider(url)
+            assert profile.supports_structured_outputs is True, url
+            assert profile.structured_output_api == "response_format_json_schema", url
+
+    def test_ollama_uses_format_schema(self):
+        profile = detect_provider("http://localhost:11434/v1/chat/completions")
+        assert profile.name == "ollama"
+        assert profile.supports_structured_outputs is True
+        assert profile.structured_output_api == "ollama_format"
+
+    def test_non_http_and_unsupported_providers_do_not_enable_structured_outputs(self):
+        for url in (
+            "ftp://api.openai.com/v1/chat/completions",
+            "https://api.deepseek.com/v1/chat/completions",
+            "http://127.0.0.1:8317/v1/chat/completions",
+        ):
+            profile = detect_provider(url)
+            assert profile.supports_structured_outputs is False, url
+            assert profile.structured_output_api == "none", url

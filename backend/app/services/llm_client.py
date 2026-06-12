@@ -255,6 +255,10 @@ class LLMProviderProfile:
     native_search_api: Literal["responses", "messages", "chat_extension", "none"] = "none"
     requires_specific_endpoint: str | None = None
     is_proxy: bool = False
+    supports_structured_outputs: bool = False
+    structured_output_api: Literal[
+        "response_format_json_schema", "ollama_format", "none"
+    ] = "none"
 
 
 _KNOWN_LLM_PROVIDERS: dict[str, LLMProviderProfile] = {
@@ -262,11 +266,15 @@ _KNOWN_LLM_PROVIDERS: dict[str, LLMProviderProfile] = {
         name="xai", supports_native_search=True,
         native_search_api="responses",
         requires_specific_endpoint="/v1/responses",
+        supports_structured_outputs=True,
+        structured_output_api="response_format_json_schema",
     ),
     "api.openai.com": LLMProviderProfile(
         name="openai", supports_native_search=True,
         native_search_api="responses",
         requires_specific_endpoint="/v1/responses",
+        supports_structured_outputs=True,
+        structured_output_api="response_format_json_schema",
     ),
     "api.anthropic.com": LLMProviderProfile(
         name="anthropic", supports_native_search=True,
@@ -300,15 +308,29 @@ _KNOWN_LLM_PROVIDERS: dict[str, LLMProviderProfile] = {
     ),
     "openrouter.ai": LLMProviderProfile(
         name="openrouter", is_proxy=True,
+        supports_structured_outputs=True,
+        structured_output_api="response_format_json_schema",
     ),
     "api.siliconflow.cn": LLMProviderProfile(
         name="siliconflow", is_proxy=True,
+        supports_structured_outputs=True,
+        structured_output_api="response_format_json_schema",
     ),
 }
 
 _DEFAULT_PROVIDER_PROFILE = LLMProviderProfile(name="default", supports_native_search=False)
 _UNKNOWN_PROXY_PROFILE = LLMProviderProfile(name="unknown", is_proxy=True)
 _LOCAL_PROXY_PROFILE = LLMProviderProfile(name="local", is_proxy=True)
+_LM_STUDIO_PROFILE = LLMProviderProfile(
+    name="lmstudio",
+    supports_structured_outputs=True,
+    structured_output_api="response_format_json_schema",
+)
+_OLLAMA_PROFILE = LLMProviderProfile(
+    name="ollama",
+    supports_structured_outputs=True,
+    structured_output_api="ollama_format",
+)
 
 
 def detect_provider(base_url: str | None) -> LLMProviderProfile:
@@ -327,6 +349,10 @@ def detect_provider(base_url: str | None) -> LLMProviderProfile:
     if not hostname:
         return _DEFAULT_PROVIDER_PROFILE
     if hostname in _LOCAL_LLM_HOSTS:
+        if parsed.port == 11434:
+            return _OLLAMA_PROFILE
+        if parsed.port == 1234:
+            return _LM_STUDIO_PROFILE
         return _LOCAL_PROXY_PROFILE
     return _KNOWN_LLM_PROVIDERS.get(hostname, _UNKNOWN_PROXY_PROFILE)
 
@@ -808,6 +834,106 @@ def _build_llm_payload(
             payload["reasoning"] = {"effort": effort}
 
     return payload, is_chat
+
+
+def _default_structured_output_schema() -> dict[str, Any]:
+    return {"type": "object", "additionalProperties": True}
+
+
+def _build_structured_output_params(
+    *,
+    provider_profile: LLMProviderProfile,
+    schema: dict[str, Any],
+    name: str,
+) -> tuple[dict[str, Any], frozenset[str]]:
+    if not provider_profile.supports_structured_outputs:
+        return {}, frozenset()
+    if provider_profile.structured_output_api == "response_format_json_schema":
+        return (
+            {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": name,
+                        "schema": dict(schema),
+                    },
+                },
+            },
+            frozenset({"response_format"}),
+        )
+    if provider_profile.structured_output_api == "ollama_format":
+        return {"format": dict(schema)}, frozenset({"format"})
+    return {}, frozenset()
+
+
+def _body_mentions_structured_output_param(body: str) -> bool:
+    lowered = body.lower()
+    normalized = re.sub(r"[\s\"'`.-]+", "_", lowered)
+    return any(
+        marker in lowered or re.sub(r"[\s\"'`.-]+", "_", marker) in normalized
+        for marker in (
+            "response_format",
+            "json_schema",
+            "structured output",
+            "structured outputs",
+            "format",
+            "schema",
+        )
+    )
+
+
+def _is_structured_output_rejection(status_code: int, body: str) -> bool:
+    if status_code < 400 or status_code >= 500:
+        return False
+    if _is_non_retryable_optional_param_error(status_code, body):
+        return False
+    lowered = body.lower()
+    if not any(
+        marker in lowered
+        for marker in (
+            "not supported",
+            "unsupported",
+            "unrecognized",
+            "unknown parameter",
+            "invalid parameter",
+            "unexpected parameter",
+            "extraneous",
+            "not allowed",
+            "does not support",
+        )
+    ):
+        return False
+    return _body_mentions_structured_output_param(body)
+
+
+def _detect_structured_output_body_error(response_body: object) -> str | None:
+    if not isinstance(response_body, dict):
+        return None
+    error_field = response_body.get("error")
+    if isinstance(error_field, dict):
+        return "structured output body error"
+    if isinstance(error_field, str) and error_field:
+        return "structured output body error"
+    outputs = response_body.get("output", [])
+    if not isinstance(outputs, list):
+        return None
+    for item in outputs:
+        if (
+            isinstance(item, dict)
+            and item.get("status") == "failed"
+            and item.get("error") is not None
+        ):
+            return "structured output body error"
+    return None
+
+
+def _drop_structured_output_params(
+    payload: dict[str, Any],
+    param_keys: set[str],
+) -> None:
+    for key in tuple(param_keys):
+        payload.pop(key, None)
+    param_keys.clear()
 
 
 def _estimate_probe_recommendations(parallelism: int) -> dict[str, int]:
@@ -1747,6 +1873,8 @@ async def llm_call(
     api_key: str | None = None,
     base_url: str | None = None,
     native_search_domains: list[str] | None = None,
+    structured_output_schema: dict[str, Any] | None = None,
+    structured_output_name: str = "swarmoracle_json_response",
 ) -> str:
     """Call LLM via Chat Completions or Responses API (auto-detected from URL).
 
@@ -1761,6 +1889,9 @@ async def llm_call(
         native_search_domains: When set, inject native search tools for
             supported providers (Responses API only). Domains are passed to
             the adapter's build_search_tools().
+        structured_output_schema: Optional JSON Schema to request provider
+            native structured output. Unsupported/rejected providers fall back
+            to the ordinary prompt+parser path.
 
     Returns:
         The text content from the LLM response.
@@ -1807,8 +1938,17 @@ async def llm_call(
 
     # ── Native search tools injection (Responses API only) ──
     _native_adapter = None
+    provider_profile = detect_provider(base_url or target_url)
+    structured_output_params: dict[str, Any] = {}
+    structured_output_keys: frozenset[str] = frozenset()
+    if structured_output_schema is not None:
+        structured_output_params, structured_output_keys = _build_structured_output_params(
+            provider_profile=provider_profile,
+            schema=structured_output_schema,
+            name=structured_output_name,
+        )
+        payload.update(structured_output_params)
     if native_search_domains is not None and not is_chat:
-        provider_profile = detect_provider(base_url or target_url)
         if (provider_profile.supports_native_search
                 and not provider_profile.is_proxy):
             from app.services.native_search_adapters import get_adapter
@@ -1837,12 +1977,14 @@ async def llm_call(
         max_retries = 3
         retry_delay = 1.0
         last_exc: Exception | None = None
+        attempt_payload = dict(payload)
+        active_structured_output_keys = set(structured_output_keys)
 
         for attempt in range(max_retries + 1):
             try:
                 resp = await client.post(
                     target_url,
-                    json=payload,
+                    json=attempt_payload,
                     headers={
                         "Authorization": f"Bearer {target_key}",
                         "Content-Type": "application/json",
@@ -1850,9 +1992,37 @@ async def llm_call(
                     timeout=timeout,
                 )
                 resp.raise_for_status()
+                candidate_data = resp.json()
+                if active_structured_output_keys:
+                    body_error = _detect_structured_output_body_error(candidate_data)
+                    if body_error:
+                        logger.warning(
+                            "Structured output rejected by provider; retrying without "
+                            "structured output (%s)",
+                            body_error,
+                        )
+                        _drop_structured_output_params(
+                            attempt_payload,
+                            active_structured_output_keys,
+                        )
+                        continue
+                data = candidate_data
                 break  # Success — exit retry loop
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
+                if active_structured_output_keys and _is_structured_output_rejection(
+                    status_code,
+                    exc.response.text,
+                ):
+                    logger.warning(
+                        "Structured output rejected by provider; retrying without "
+                        "structured output (structured output unsupported)"
+                    )
+                    _drop_structured_output_params(
+                        attempt_payload,
+                        active_structured_output_keys,
+                    )
+                    continue
                 # Retry on 429 (rate limit) and 5xx (server errors)
                 if status_code == 429 or status_code >= 500:
                     last_exc = exc
@@ -1888,7 +2058,8 @@ async def llm_call(
             logger.error("LLM call failed after %d attempts", max_retries + 1)
             raise LLMError(f"LLM call failed after {max_retries + 1} attempts") from last_exc
 
-        data = resp.json()
+        if data is None:
+            raise LLMError("Empty LLM response")
         if _native_adapter is not None:
             body_error = _native_adapter.detect_body_error(data)
             if body_error:
@@ -2426,6 +2597,8 @@ async def llm_call_json(
     api_key: str | None = None,
     base_url: str | None = None,
     fallback_mode: str | None = None,
+    use_structured_outputs: bool = True,
+    structured_output_schema: dict[str, Any] | None = None,
 ) -> dict:
     """Call LLM and parse the response as JSON.
 
@@ -2436,7 +2609,13 @@ async def llm_call_json(
         reasoning_effort=reasoning_effort,
         temperature=temperature,
         model=model,
-        api_key=api_key, base_url=base_url,
+        api_key=api_key,
+        base_url=base_url,
+        structured_output_schema=(
+            (structured_output_schema or _default_structured_output_schema())
+            if use_structured_outputs
+            else None
+        ),
     )
 
     cleaned = _clean_json_text(raw)

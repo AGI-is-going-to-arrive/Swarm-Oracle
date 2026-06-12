@@ -516,7 +516,7 @@ async def test_new_features_default_disabled():
 # These tests extend the contract freeze with the precise BE-6 surface
 # required by §QA-1 step 4:
 #
-# 1. The top-level capability registry contains **exactly** the 11 frozen
+# 1. The top-level capability registry contains **exactly** the frozen
 #    keys — no new keys may be introduced silently, and no key may vanish.
 # 2. ``web_search.providers`` nested schema: exactly 4 families, each with
 #    exactly 5 sub-keys (``enabled``, ``configured_host``, ``rate_limit_rps``,
@@ -529,6 +529,7 @@ async def test_new_features_default_disabled():
 _TOP_LEVEL_FROZEN_KEYS = frozenset(
     {
         "llm_configured",
+        "llm_provider",
         "web_search",
         "custom_agents",
         "agent_identity",
@@ -575,7 +576,7 @@ _PROVIDERS_FROZEN_SUB_KEYS = frozenset(
 
 @pytest.mark.asyncio
 async def test_capabilities_top_level_keys_exact_freeze():
-    """QA-1: top-level capability registry is exactly 20 keys — no more, no less."""
+    """QA-1: top-level capability registry is exactly 21 keys — no more, no less."""
     from app.api.scenarios import api_capabilities
 
     result = await api_capabilities()
@@ -602,6 +603,34 @@ async def test_capabilities_entry_subkeys_minimum_freeze():
         )
         assert isinstance(entry["enabled"], bool)
         assert isinstance(entry["version"], str)
+
+
+@pytest.mark.asyncio
+async def test_capabilities_llm_provider_metadata_shape_freeze():
+    """F10-lite: freeze the provider capability metadata base shape for F9."""
+    from app.api.scenarios import api_capabilities
+
+    result = await api_capabilities()
+    entry = result["llm_provider"]
+    assert {
+        "enabled",
+        "version",
+        "server_only",
+        "degraded_mode",
+        "provider",
+        "model",
+        "provider_capability",
+    }.issubset(entry.keys())
+    assert isinstance(entry["provider"], str)
+    assert isinstance(entry["model"], str)
+    assert set(entry["provider_capability"].keys()) == {
+        "supports_structured_outputs",
+        "structured_output_api",
+        "supports_native_search",
+        "native_search_api",
+        "requires_specific_endpoint",
+        "is_proxy",
+    }
 
 
 @pytest.mark.asyncio
