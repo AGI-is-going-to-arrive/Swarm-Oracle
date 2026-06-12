@@ -617,7 +617,13 @@
         "fullReport": "Full report",
         "featureNotEnabled": "Feature Disabled",
         "featureNotEnabledDesc": "Full reports are turned off on this server.",
-        "evidenceDrawerDescription": "Detailed list of cited evidence"
+        "evidenceDrawerDescription": "Detailed list of cited evidence",
+        "interviewsTitle": "Agent Interviews",
+        "interviewCoordinate": "Branch {{branch_index}} · Round {{round}}",
+        "interviewStatus_skipped": "Interview generation skipped: {{message}}",
+        "interviewStatus_complete": "Interview generation complete: {{message}}",
+        "interviewStatus_partial": "Interview partially complete (completed {{completed}} out of {{requested}}, {{truncated}} truncated): {{message}}",
+        "interviewStatus_failed": "Interview generation failed: {{message}} (error code: {{error_code}})"
       },
       "title": "Simulation Results",
       "subtitle": "Multi-Ending Comparison",
@@ -2259,7 +2265,30 @@
       "type_growth": "Growth event",
       "type_compacted": "Compacted summary",
       "type_observation": "Observation",
-      "type_reflection": "Reflection"
+      "type_reflection": "Reflection",
+      "pin_btn_pin": "Pin",
+      "pin_btn_unpin": "Unpin",
+      "pin_btn_pin_aria": "Pin memory",
+      "pin_btn_unpin_aria": "Unpin memory",
+      "pin_cap_reached": "Pin limit of 20 reached",
+      "remembered_label": "Remembered",
+      "remembered_aria": "Remembered memory",
+      "search_placeholder": "Search memories...",
+      "search_aria": "Search memories",
+      "pin_limit_error": "At most 20 memories can be pinned per identity.",
+      "pin_error": "Failed to toggle pin state.",
+      "error_memory_fetch_failed": "Memory fetch failed.",
+      "error_memory_query_failed": "Memory query failed.",
+      "error_vector_store_unavailable": "Vector store unavailable.",
+      "error_FEATURE_DISABLED": "Feature is disabled on server.",
+      "error_USER_ID_REQUIRED": "User ID is required.",
+      "error_AGENT_IDENTITY_NOT_FOUND": "Agent identity not found.",
+      "error_IDENTITY_MEMORY_NOT_FOUND": "Memory entry not found.",
+      "error_IDENTITY_MEMORY_PIN_LIMIT_REACHED": "At most 20 memories can be pinned per identity.",
+      "error_memory_pin_unavailable": "Memory pinning is currently unavailable.",
+      "error_memory_pin_fetch_failed": "Failed to retrieve pin status.",
+      "error_memory_pin_count_failed": "Failed to count pinned memories.",
+      "error_memory_pin_update_failed": "Failed to update pin state."
     },
     "causal": {
       "title": "Causal Graph",
@@ -2585,7 +2614,8 @@
       "metrics_scenarios": "Participated in {{count}} scenarios",
       "metrics_shifts": "Shifted stance {{count}} times",
       "metrics_growth": "{{count}} growth events recorded",
-      "metrics_empty": "No growth data yet"
+      "metrics_empty": "No growth data yet",
+      "view_memory_inspector": "View memory inspector"
     },
     "agent_profile_sheet": {
       "title": "Agent Profile",

@@ -258,3 +258,14 @@
   background: #2a2a4e;
   border-radius: 4px;
 }
+
+.agent-profile-modal__inspector-link {
+  color: #8ab4f8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 500;
+}
+
+.agent-profile-modal__inspector-link:hover {
+  color: #a6c8ff;
+}

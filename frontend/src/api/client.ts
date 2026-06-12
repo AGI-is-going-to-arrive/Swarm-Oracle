@@ -1452,6 +1452,7 @@ export interface IdentityMemoryMetadata {
   scenario_id?: string | null;
   round?: number | string | null;
   type?: string | null;
+  created_at?: string | null;
   [key: string]: unknown;
 }
 
@@ -1461,21 +1462,81 @@ export interface IdentityMemoryEntry {
   timestamp: string | null;
   confidence: number | string | null;
   is_compacted: boolean;
+  memory_id?: string;
+  source_scenario_id?: string | null;
+  pinned?: boolean;
+  remembered?: boolean;
 }
 
 export interface IdentityMemoriesResponse {
   memories: IdentityMemoryEntry[];
   total: number;
+  error?: string;
+  diagnostics?: { code: string; message: string } | null;
 }
 
 /** GET /api/agents/identities/:id/memories — inspector endpoint with full entry shape */
 export async function getIdentityMemories(
   identityId: string,
+  queryOrOptions?: string | RequestOptions,
   options?: RequestOptions,
 ): Promise<IdentityMemoriesResponse> {
+  let query: string | undefined;
+  let requestOpts: RequestOptions | undefined;
+  if (typeof queryOrOptions === 'string') {
+    query = queryOrOptions;
+    requestOpts = options;
+  } else {
+    requestOpts = queryOrOptions;
+  }
+
+  let path = `/agents/identities/${encodeURIComponent(identityId)}/memories`;
+  if (query) {
+    path += `?query=${encodeURIComponent(query)}`;
+  }
   return safeGet(
-    withUserIdQuery(`/agents/identities/${encodeURIComponent(identityId)}/memories`),
-    options,
+    withUserIdQuery(path),
+    requestOpts,
+  );
+}
+
+export async function pinIdentityMemory(
+  identityId: string,
+  memoryId: string,
+  options?: RequestOptions,
+): Promise<{
+  identity_id: string;
+  memory_id: string;
+  pinned: boolean;
+  pin_count: number;
+  cap: number;
+}> {
+  return request(
+    withUserIdQuery(`/agents/identities/${encodeURIComponent(identityId)}/memories/${encodeURIComponent(memoryId)}/pin`),
+    {
+      method: 'POST',
+      signal: options?.signal,
+    },
+  );
+}
+
+export async function unpinIdentityMemory(
+  identityId: string,
+  memoryId: string,
+  options?: RequestOptions,
+): Promise<{
+  identity_id: string;
+  memory_id: string;
+  pinned: boolean;
+  pin_count: number;
+  cap: number;
+}> {
+  return request(
+    withUserIdQuery(`/agents/identities/${encodeURIComponent(identityId)}/memories/${encodeURIComponent(memoryId)}/pin`),
+    {
+      method: 'DELETE',
+      signal: options?.signal,
+    },
   );
 }
 

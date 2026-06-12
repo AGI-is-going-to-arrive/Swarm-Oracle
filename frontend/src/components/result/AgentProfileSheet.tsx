@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog';
 import type {
@@ -253,6 +254,17 @@ export function AgentProfileSheet({
         </div>
 
         <div className="agent-profile-sheet__footer">
+          {identityId ? (
+            <Link
+              to={`/agents/identities/${identityId}/memories`}
+              className="agent-profile-sheet__btn-inspector"
+              data-testid="agent-profile-sheet-inspector"
+            >
+              {t('agent_profile.view_memory_inspector', {
+                defaultValue: 'View memory inspector',
+              })}
+            </Link>
+          ) : null}
           {onStartConversation && sourceType !== 'replay' ? (
             <button
               type="button"

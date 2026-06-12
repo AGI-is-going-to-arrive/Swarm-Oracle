@@ -617,7 +617,13 @@
         "fullReport": "完整报告",
         "featureNotEnabled": "功能未启用",
         "featureNotEnabledDesc": "本服务器未启用完整报告功能。",
-        "evidenceDrawerDescription": "已引用证据的详细列表"
+        "evidenceDrawerDescription": "已引用证据的详细列表",
+        "interviewsTitle": "智能体访谈",
+        "interviewCoordinate": "分支 {{branch_index}} · 第 {{round}} 轮",
+        "interviewStatus_skipped": "智能体访谈生成已跳过：{{message}}",
+        "interviewStatus_complete": "智能体访谈生成完毕：{{message}}",
+        "interviewStatus_partial": "智能体访谈部分生成（完成 {{completed}}/{{requested}}，截断 {{truncated}}）：{{message}}",
+        "interviewStatus_failed": "智能体访谈生成失败：{{message}}（错误码：{{error_code}}）"
       },
       "title": "推演结果",
       "subtitle": "多结局对比",
@@ -2259,7 +2265,30 @@
       "type_growth": "成长事件",
       "type_compacted": "压缩摘要",
       "type_observation": "观察",
-      "type_reflection": "反思"
+      "type_reflection": "反思",
+      "pin_btn_pin": "固定",
+      "pin_btn_unpin": "取消固定",
+      "pin_btn_pin_aria": "固定记忆",
+      "pin_btn_unpin_aria": "取消固定记忆",
+      "pin_cap_reached": "已达到 20 条固定上限",
+      "remembered_label": "已回忆",
+      "remembered_aria": "回忆起的记忆",
+      "search_placeholder": "搜索记忆...",
+      "search_aria": "搜索记忆",
+      "pin_limit_error": "每个身份最多只能固定 20 条记忆。",
+      "pin_error": "更改固定状态失败。",
+      "error_memory_fetch_failed": "获取记忆失败。",
+      "error_memory_query_failed": "查询记忆失败。",
+      "error_vector_store_unavailable": "向量存储不可用。",
+      "error_FEATURE_DISABLED": "服务器已禁用该功能。",
+      "error_USER_ID_REQUIRED": "需要用户 ID。",
+      "error_AGENT_IDENTITY_NOT_FOUND": "未找到 Agent 身份。",
+      "error_IDENTITY_MEMORY_NOT_FOUND": "未找到记忆条目。",
+      "error_IDENTITY_MEMORY_PIN_LIMIT_REACHED": "每个身份最多只能固定 20 条记忆。",
+      "error_memory_pin_unavailable": "记忆固定目前不可用。",
+      "error_memory_pin_fetch_failed": "检索固定状态失败。",
+      "error_memory_pin_count_failed": "统计固定记忆失败。",
+      "error_memory_pin_update_failed": "更新固定状态失败。"
     },
     "causal": {
       "title": "因果图谱",
@@ -2585,7 +2614,8 @@
       "metrics_scenarios": "参与了 {{count}} 个场景",
       "metrics_shifts": "立场偏移 {{count}} 次",
       "metrics_growth": "记录了 {{count}} 个成长事件",
-      "metrics_empty": "暂无成长数据"
+      "metrics_empty": "暂无成长数据",
+      "view_memory_inspector": "查看记忆"
     },
     "agent_profile_sheet": {
       "title": "Agent 档案",

@@ -10,7 +10,7 @@ import { ReportSection } from './ReportSection';
 import { ReportEvidenceDrawer } from './ReportEvidenceDrawer';
 import { loadLlmProviderPolicy, validateByok } from '../../lib/llmProviderPolicy';
 import { getLocalizedApiErrorMessage } from '../../lib/apiErrorMessage';
-import type { FullReport, FullReportTruncatedMarker, ReportEvidence, StoryData, ToolTraceSummary } from '../../types';
+import type { FullReport, FullReportTruncatedMarker, ReportEvidence, StoryData, ToolTraceSummary, InterviewEvidenceEntry } from '../../types';
 
 interface Props {
   /** `inline` is rendered inside ResultView (page already has an <h1>); `standalone`
@@ -278,6 +278,12 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
     }
     return map;
   }, [report]);
+
+  const interviewStatus = report?.interview_status;
+  const interviewEvidence = useMemo(() => report?.interview_evidence || [], [report]);
+  const hasInterviews = useMemo(() => {
+    return (interviewEvidence.length > 0) || Boolean(interviewStatus && interviewStatus.status !== 'complete');
+  }, [interviewEvidence, interviewStatus]);
 
   const handleOpenEvidence = useCallback(
     (refs: string[]) => {
@@ -625,6 +631,82 @@ const ResultReportPanelInner = React.memo(function ResultReportPanelInner({
               </section>
             ))}
         </div>
+
+        {hasInterviews && (
+          <section
+            className="report-interviews mt-6 pt-6 border-t border-[color:var(--border-subtle)]"
+            aria-label={t('result.report.interviewsTitle')}
+          >
+            <h3 className="text-lg font-bold text-[color:var(--text-primary)] mb-4">
+              {t('result.report.interviewsTitle')}
+            </h3>
+
+            {/* Interview Status Message */}
+            {interviewStatus && interviewStatus.status !== 'complete' && (
+              <div className="p-4 mb-4 rounded-lg bg-[color:var(--bg-hover)] border border-[color:var(--border-subtle)] text-sm text-[color:var(--text-secondary)]">
+                {interviewStatus.status === 'skipped' && (
+                  <p>{t('result.report.interviewStatus_skipped', { message: interviewStatus.message || '' })}</p>
+                )}
+                {interviewStatus.status === 'failed' && (
+                  <p>
+                    {t('result.report.interviewStatus_failed', {
+                      message: interviewStatus.message || '',
+                      error_code: interviewStatus.error_code || 'UNKNOWN',
+                    })}
+                  </p>
+                )}
+                {interviewStatus.status === 'partial' && (
+                  <p>
+                    {t('result.report.interviewStatus_partial', {
+                      message: interviewStatus.message || '',
+                      completed: interviewStatus.completed_agents ?? 0,
+                      requested: interviewStatus.requested_agents ?? 0,
+                      truncated: interviewStatus.truncated_agents ?? 0,
+                    })}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Interview Cards */}
+            {interviewEvidence.length > 0 && (
+              <div className="grid grid-cols-1 gap-4">
+                {interviewEvidence.map((rawEntry, i) => {
+                  if (!rawEntry) return null;
+                  const entry = rawEntry as Partial<InterviewEvidenceEntry>;
+                  const agentName = entry.agent_name || t('result.report.evidenceKind.default', 'Agent');
+                  const branchIndex = entry.branch_index ?? 0;
+                  const round = entry.round ?? 0;
+                  const excerpt = entry.excerpt || '';
+
+                  return (
+                    <div
+                      key={i}
+                      className="p-4 rounded-lg bg-[color:var(--bg-hover)] border border-[color:var(--border-subtle)] flex flex-col space-y-2"
+                    >
+                      <div className="flex justify-between items-center flex-wrap gap-2">
+                        <span className="font-semibold text-sm text-[color:var(--text-primary)]">
+                          {agentName}
+                        </span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-[color:var(--bg-deep)] border border-[color:var(--border-subtle)] text-[color:var(--text-muted)] font-medium">
+                          {t('result.report.interviewCoordinate', {
+                            branch_index: branchIndex,
+                            round: round,
+                          })}
+                        </span>
+                      </div>
+                      {excerpt && (
+                        <blockquote className="text-sm text-[color:var(--text-secondary)] italic border-l-2 border-[color:var(--color-primary)] pl-3 my-1 break-words [overflow-wrap:anywhere]">
+                          {excerpt}
+                        </blockquote>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
 
         {(report.indicators_to_watch?.length ?? 0) > 0 && (
           <section

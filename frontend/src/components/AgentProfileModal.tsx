@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import type { AgentIdentityInfo, AgentMemoryEntry, AgentGrowthEvent, KnowledgeDomain } from '../types';
 import { getIdentityMemory, getIdentityGrowthEvents } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
@@ -269,6 +270,15 @@ export function AgentProfileModal({ identity, open, onClose }: Props) {
             >
               {kindLabel}
             </span>
+            {identity.id && (
+              <Link
+                to={`/agents/identities/${identity.id}/memories`}
+                className="agent-profile-modal__inspector-link"
+                data-testid="agent-profile-modal-inspector"
+              >
+                {t('agent_profile.view_memory_inspector', 'View memory inspector')}
+              </Link>
+            )}
           </div>
         </div>
         <button

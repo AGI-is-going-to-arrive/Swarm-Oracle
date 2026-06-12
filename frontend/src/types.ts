@@ -680,6 +680,22 @@ export interface DissentingView {
   what_almost_won: string;
 }
 
+export interface InterviewEvidenceEntry {
+  branch_index: number;
+  round: number;
+  agent_name: string;
+  excerpt: string;
+}
+
+export interface InterviewStatus {
+  status: 'skipped' | 'complete' | 'partial' | 'failed';
+  requested_agents: number;
+  completed_agents: number;
+  truncated_agents: number;
+  error_code: string | null;
+  message: string;
+}
+
 export interface FullReport {
   version: string;
   generated_at: string;
@@ -708,7 +724,8 @@ export interface FullReport {
   }>;
   follow_ups: string[];
   limitations: string;
-  interview_evidence: Record<string, unknown>[];
+  interview_evidence: (InterviewEvidenceEntry | Record<string, unknown>)[];
+  interview_status?: InterviewStatus | null;
   premortem: Record<string, unknown>[];
   language_status: { zh: 'available' | 'missing'; en: 'available' | 'missing' } | null;
 }

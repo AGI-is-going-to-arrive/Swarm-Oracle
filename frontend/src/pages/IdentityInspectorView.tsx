@@ -13,6 +13,8 @@ import {
   getSessionBoundUserId,
   isApiError,
   listAgentIdentities,
+  pinIdentityMemory,
+  unpinIdentityMemory,
   type IdentityMemoryEntry,
 } from '../api/client';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
@@ -84,9 +86,12 @@ interface MemoryRowProps {
   index: number;
   expanded: boolean;
   onToggle: (index: number) => void;
+  onTogglePin: (memoryId: string, currentlyPinned: boolean) => void;
+  pinCount: number;
+  pinCap: number;
 }
 
-function MemoryRow({ entry, index, expanded, onToggle }: MemoryRowProps) {
+function MemoryRow({ entry, index, expanded, onToggle, onTogglePin, pinCount, pinCap }: MemoryRowProps) {
   const { t, i18n } = useTranslation();
   const document = typeof entry.document === 'string' ? entry.document : '';
   const { preview, truncated } = truncatePreview(document, DOCUMENT_PREVIEW_CHARS);
@@ -101,12 +106,14 @@ function MemoryRow({ entry, index, expanded, onToggle }: MemoryRowProps) {
   const bodyId = `identity-memory-row-${index}-body`;
   const interactive = truncated;
   const showFullDocument = expanded && truncated;
+  const pinDisabled = !entry.pinned && pinCount >= pinCap;
 
   return (
     <li
       className={[
         'identity-inspector__entry',
         entry.is_compacted ? 'identity-inspector__entry--compacted' : '',
+        entry.pinned ? 'identity-inspector__entry--pinned' : '',
       ].filter(Boolean).join(' ')}
       role="listitem"
     >
@@ -121,17 +128,40 @@ function MemoryRow({ entry, index, expanded, onToggle }: MemoryRowProps) {
               ? t(`identity_inspector.type_${memoryType}`, memoryType)
               : t('identity_inspector.entry_title', 'Memory entry')}
           </h2>
-          {timestampLabel && (
-            <time
-              className="identity-inspector__timestamp"
-              dateTime={entry.timestamp ?? undefined}
+          <div className="identity-inspector__entry-header-right">
+            {timestampLabel && (
+              <time
+                className="identity-inspector__timestamp"
+                dateTime={entry.timestamp ?? undefined}
+              >
+                {timestampLabel}
+              </time>
+            )}
+            <button
+              type="button"
+              className={`identity-inspector__pin-btn ${entry.pinned ? 'identity-inspector__pin-btn--pinned' : ''}`}
+              onClick={() => onTogglePin(entry.memory_id || '', !!entry.pinned)}
+              disabled={pinDisabled}
+              title={pinDisabled ? t('identity_inspector.pin_cap_reached') : undefined}
+              aria-label={entry.pinned ? t('identity_inspector.pin_btn_unpin_aria') : t('identity_inspector.pin_btn_pin_aria')}
             >
-              {timestampLabel}
-            </time>
-          )}
+              {entry.pinned ? '📌' : '📍'}
+              <span className="identity-inspector__pin-btn-text">
+                {entry.pinned ? t('identity_inspector.pin_btn_unpin') : t('identity_inspector.pin_btn_pin')}
+              </span>
+            </button>
+          </div>
         </header>
 
         <div className="identity-inspector__chips" role="group" aria-label={t('identity_inspector.metadata_label', 'Memory metadata')}>
+          {entry.remembered && (
+            <span
+              className="identity-inspector__chip identity-inspector__chip--remembered"
+              aria-label={t('identity_inspector.remembered_aria')}
+            >
+              {t('identity_inspector.remembered_label')}
+            </span>
+          )}
           {scenarioId && (
             <span className="identity-inspector__chip" title={scenarioId}>
               <span className="identity-inspector__chip-key">
@@ -238,6 +268,23 @@ export function IdentityInspectorView() {
   const memoryRequestSeqRef = useRef(0);
   const activeMemoryRequestRef = useRef<AbortController | null>(null);
 
+  // F7 States
+  const [searchVal, setSearchVal] = useState<string>('');
+  const [debouncedQuery, setDebouncedQuery] = useState<string>('');
+  const [pinCount, setPinCount] = useState<number>(0);
+  const [pinCap, setPinCap] = useState<number>(20);
+  const [pinError, setPinError] = useState<string | null>(null);
+
+  // Debounce search query
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedQuery(searchVal);
+    }, 300);
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [searchVal]);
+
   const loadMemories = useCallback(async () => {
     if (!identityId) return;
     const requestSeq = memoryRequestSeqRef.current + 1;
@@ -251,20 +298,31 @@ export function IdentityInspectorView() {
 
     setLoading(true);
     setErrorMessage(null);
+    setPinError(null);
     setExpandedIndices(new Set());
     try {
-      const res = await getIdentityMemories(identityId, { signal: controller.signal });
+      const res = debouncedQuery
+        ? await getIdentityMemories(identityId, debouncedQuery, { signal: controller.signal })
+        : await getIdentityMemories(identityId, { signal: controller.signal });
       if (isStaleRequest()) return;
       const memories = Array.isArray(res?.memories) ? res.memories : [];
       setEntries(memories);
       setTotal(typeof res?.total === 'number' ? res.total : memories.length);
+      const initialPinCount = memories.filter((m) => m.pinned).length;
+      setPinCount(initialPinCount);
+
+      if (res?.diagnostics?.message) {
+        setErrorMessage(res.diagnostics.message);
+      } else if (res?.error) {
+        setErrorMessage(t(`identity_inspector.error_${res.error}`, res.error) as string);
+      }
     } catch (err) {
       if (isStaleRequest()) return;
-      const fallback = t('identity_inspector.error_load', 'Failed to load identity memories.');
+      const fallback = t('identity_inspector.error_load', 'Failed to load identity memories.') as string;
       let message = fallback;
       if (isApiError(err)) {
         message = err.status === 404
-          ? t('identity_inspector.error_not_found', 'Identity not found.')
+          ? t('identity_inspector.error_not_found', 'Identity not found.') as string
           : fallback;
         if (err.status !== 404) {
           console.debug('[IdentityInspectorView] Failed to load memories', err);
@@ -281,7 +339,68 @@ export function IdentityInspectorView() {
         setLoading(false);
       }
     }
-  }, [identityId, t]);
+  }, [identityId, debouncedQuery, t]);
+
+  const handleTogglePin = useCallback(async (memoryId: string, currentlyPinned: boolean) => {
+    if (!identityId) return;
+    setPinError(null);
+    try {
+      if (currentlyPinned) {
+        const res = await unpinIdentityMemory(identityId, memoryId);
+        const pinRes = res as {
+          pin_count: number;
+          cap: number;
+          diagnostics?: { message: string } | null;
+          error?: string;
+        };
+        if (pinRes.diagnostics?.message) {
+          setPinError(pinRes.diagnostics.message);
+        } else if (pinRes.error) {
+          setPinError(t(`identity_inspector.error_${pinRes.error}`, pinRes.error) as string);
+        } else {
+          setEntries((prev) =>
+            prev
+              ? prev.map((entry) =>
+                  entry.memory_id === memoryId ? { ...entry, pinned: false } : entry
+                )
+              : null
+          );
+          setPinCount(pinRes.pin_count);
+          setPinCap(pinRes.cap);
+        }
+      } else {
+        const res = await pinIdentityMemory(identityId, memoryId);
+        const pinRes = res as {
+          pin_count: number;
+          cap: number;
+          diagnostics?: { message: string } | null;
+          error?: string;
+        };
+        if (pinRes.diagnostics?.message) {
+          setPinError(pinRes.diagnostics.message);
+        } else if (pinRes.error) {
+          setPinError(t(`identity_inspector.error_${pinRes.error}`, pinRes.error) as string);
+        } else {
+          setEntries((prev) =>
+            prev
+              ? prev.map((entry) =>
+                  entry.memory_id === memoryId ? { ...entry, pinned: true } : entry
+                )
+              : null
+          );
+          setPinCount(pinRes.pin_count);
+          setPinCap(pinRes.cap);
+        }
+      }
+    } catch (err) {
+      if (isApiError(err) && err.code === 'IDENTITY_MEMORY_PIN_LIMIT_REACHED') {
+        setPinError(t('identity_inspector.pin_limit_error', 'At most 20 memories can be pinned per identity.') as string);
+        setPinCount(pinCap);
+      } else {
+        setPinError(t('identity_inspector.pin_error', 'Failed to toggle pin state.') as string);
+      }
+    }
+  }, [identityId, t, pinCap]);
 
   // Resolve identity display name (best-effort, non-blocking for the timeline).
   useEffect(() => {
@@ -463,6 +582,25 @@ export function IdentityInspectorView() {
       </header>
 
       <main className="identity-inspector__body">
+        <div className="identity-inspector__toolbar">
+          <div className="identity-inspector__search-wrapper">
+            <input
+              type="search"
+              className="identity-inspector__search-input"
+              placeholder={t('identity_inspector.search_placeholder', 'Search memories...')}
+              value={searchVal}
+              onChange={(e) => setSearchVal(e.target.value)}
+              aria-label={t('identity_inspector.search_aria', 'Search memories')}
+            />
+          </div>
+        </div>
+
+        {pinError && (
+          <div className="identity-inspector__pin-error" role="alert">
+            {pinError}
+          </div>
+        )}
+
         {loading && (
           <ul
             className="identity-inspector__timeline"
@@ -519,6 +657,9 @@ export function IdentityInspectorView() {
                 index={index}
                 expanded={expandedIndices.has(index)}
                 onToggle={handleToggleEntry}
+                onTogglePin={handleTogglePin}
+                pinCount={pinCount}
+                pinCap={pinCap}
               />
             ))}
           </ul>

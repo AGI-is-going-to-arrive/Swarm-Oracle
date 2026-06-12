@@ -380,3 +380,106 @@ describe('ResultReportPanel — partial report rendering', () => {
     expect(screen.queryByText(/partially generated/i)).toBeNull();
   });
 });
+
+describe('ResultReportPanel — interview evidence rendering', () => {
+  it('renders interview cards with coordinate badges and excerpts when evidence is present', () => {
+    const report = makeReport({
+      status: 'complete',
+      interview_evidence: [
+        {
+          branch_index: 2,
+          round: 4,
+          agent_name: 'Privacy Advocate',
+          excerpt: 'Privacy safeguards are essential.',
+        },
+      ],
+    });
+    setCtx({ full_report: report });
+    setCap({});
+    render(<ResultReportPanel variant="inline" />);
+
+    expect(screen.getByText('Agent Interviews')).toBeInTheDocument();
+    expect(screen.getByText('Privacy Advocate')).toBeInTheDocument();
+    expect(screen.getByText('Branch 2 · Round 4')).toBeInTheDocument();
+    expect(screen.getByText('Privacy safeguards are essential.')).toBeInTheDocument();
+  });
+
+  it('renders nothing for interviews block when interview_evidence is empty', () => {
+    const report = makeReport({
+      status: 'complete',
+      interview_evidence: [],
+    });
+    setCtx({ full_report: report });
+    setCap({});
+    render(<ResultReportPanel variant="inline" />);
+    expect(screen.queryByText('Agent Interviews')).toBeNull();
+  });
+
+  it('renders nothing for interviews block when interview_evidence is missing entirely', () => {
+    const report = makeReport({});
+    delete (report as Partial<FullReport>).interview_evidence;
+    setCtx({ full_report: report });
+    setCap({});
+    render(<ResultReportPanel variant="inline" />);
+    expect(screen.queryByText('Agent Interviews')).toBeNull();
+  });
+
+  it('renders failed interview status message', () => {
+    const report = makeReport({
+      status: 'complete',
+      interview_status: {
+        status: 'failed',
+        requested_agents: 3,
+        completed_agents: 0,
+        truncated_agents: 0,
+        error_code: 'INTERVIEW_LLM_FAILED',
+        message: 'LLM failed to respond.',
+      },
+      interview_evidence: [],
+    });
+    setCtx({ full_report: report });
+    setCap({});
+    render(<ResultReportPanel variant="inline" />);
+
+    expect(screen.getByText('Agent Interviews')).toBeInTheDocument();
+    expect(screen.getByText(/Interview generation failed: LLM failed to respond. \(error code: INTERVIEW_LLM_FAILED\)/i)).toBeInTheDocument();
+  });
+
+  it('renders skipped interview status message', () => {
+    const report = makeReport({
+      status: 'complete',
+      interview_status: {
+        status: 'skipped',
+        requested_agents: 2,
+        completed_agents: 0,
+        truncated_agents: 0,
+        error_code: null,
+        message: 'No agents matching criteria.',
+      },
+      interview_evidence: [],
+    });
+    setCtx({ full_report: report });
+    setCap({});
+    render(<ResultReportPanel variant="inline" />);
+    expect(screen.getByText(/Interview generation skipped: No agents matching criteria./i)).toBeInTheDocument();
+  });
+
+  it('renders partial interview status message', () => {
+    const report = makeReport({
+      status: 'complete',
+      interview_status: {
+        status: 'partial',
+        requested_agents: 4,
+        completed_agents: 2,
+        truncated_agents: 1,
+        error_code: null,
+        message: 'Completed with truncation.',
+      },
+      interview_evidence: [],
+    });
+    setCtx({ full_report: report });
+    setCap({});
+    render(<ResultReportPanel variant="inline" />);
+    expect(screen.getByText(/Interview partially complete \(completed 2 out of 4, 1 truncated\): Completed with truncation./i)).toBeInTheDocument();
+  });
+});

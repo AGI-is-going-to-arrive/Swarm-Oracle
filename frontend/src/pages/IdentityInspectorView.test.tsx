@@ -12,16 +12,22 @@ import IdentityInspectorView from './IdentityInspectorView';
 const {
   getIdentityMemoriesMock,
   listAgentIdentitiesMock,
+  pinIdentityMemoryMock,
+  unpinIdentityMemoryMock,
   setLanguage,
   getLanguage,
   translate,
 } = vi.hoisted(() => {
   const getIdentityMemoriesMock = vi.fn();
   const listAgentIdentitiesMock = vi.fn();
+  const pinIdentityMemoryMock = vi.fn();
+  const unpinIdentityMemoryMock = vi.fn();
   let language = 'en';
   return {
     getIdentityMemoriesMock,
     listAgentIdentitiesMock,
+    pinIdentityMemoryMock,
+    unpinIdentityMemoryMock,
     setLanguage(next: string) {
       language = next;
     },
@@ -77,6 +83,8 @@ vi.mock('../api/client', async () => {
     getIdentityMemories: getIdentityMemoriesMock,
     getSessionBoundUserId: () => 'test-user',
     listAgentIdentities: listAgentIdentitiesMock,
+    pinIdentityMemory: pinIdentityMemoryMock,
+    unpinIdentityMemory: unpinIdentityMemoryMock,
   };
 });
 
@@ -143,6 +151,8 @@ beforeEach(() => {
   getIdentityMemoriesMock.mockReset();
   listAgentIdentitiesMock.mockReset();
   listAgentIdentitiesMock.mockResolvedValue([]);
+  pinIdentityMemoryMock.mockReset();
+  unpinIdentityMemoryMock.mockReset();
 });
 
 afterEach(() => {
@@ -223,5 +233,182 @@ describe('IdentityInspectorView', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load identity memories.');
     expect(screen.queryByText(/raw memory failure/i)).not.toBeInTheDocument();
     debugSpy.mockRestore();
+  });
+
+  it('renders remembered chip when entry.remembered is true', async () => {
+    getIdentityMemoriesMock.mockResolvedValue({
+      memories: [
+        {
+          document: 'Mem remembered',
+          timestamp: '2026-05-11T03:04:05.000Z',
+          confidence: 0.9,
+          is_compacted: false,
+          memory_id: 'mem-1',
+          remembered: true,
+        },
+      ],
+      total: 1,
+    });
+
+    renderInspector();
+    expect(await screen.findByText('Mem remembered')).toBeInTheDocument();
+    expect(screen.getByText('identity_inspector.remembered_label')).toBeInTheDocument();
+  });
+
+  it('toggles pin status and calls pin/unpin APIs', async () => {
+    getIdentityMemoriesMock.mockResolvedValue({
+      memories: [
+        {
+          document: 'Mem to pin',
+          timestamp: '2026-05-11T03:04:05.000Z',
+          confidence: 0.9,
+          is_compacted: false,
+          memory_id: 'mem-1',
+          pinned: false,
+        },
+      ],
+      total: 1,
+    });
+
+    pinIdentityMemoryMock.mockResolvedValue({
+      identity_id: 'current',
+      memory_id: 'mem-1',
+      pinned: true,
+      pin_count: 1,
+      cap: 20,
+    });
+
+    unpinIdentityMemoryMock.mockResolvedValue({
+      identity_id: 'current',
+      memory_id: 'mem-1',
+      pinned: false,
+      pin_count: 0,
+      cap: 20,
+    });
+
+    const user = userEvent.setup();
+    renderInspector();
+
+    expect(await screen.findByText('Mem to pin')).toBeInTheDocument();
+
+    const pinBtn = screen.getByRole('button', { name: 'identity_inspector.pin_btn_pin_aria' });
+    expect(pinBtn).toBeInTheDocument();
+
+    // Click to pin
+    await user.click(pinBtn);
+    expect(pinIdentityMemoryMock).toHaveBeenCalledWith('current', 'mem-1');
+
+    // Click to unpin (the label becomes Unpin memory)
+    const unpinBtn = await screen.findByRole('button', { name: 'identity_inspector.pin_btn_unpin_aria' });
+    await user.click(unpinBtn);
+    expect(unpinIdentityMemoryMock).toHaveBeenCalledWith('current', 'mem-1');
+  });
+
+  it('disables pin buttons when cap is reached and shows explanatory message', async () => {
+    getIdentityMemoriesMock.mockResolvedValue({
+      memories: [
+        {
+          document: 'Mem 1 pinned',
+          timestamp: '2026-05-11T03:04:05.000Z',
+          confidence: 0.9,
+          is_compacted: false,
+          memory_id: 'mem-1',
+          pinned: true,
+        },
+        {
+          document: 'Mem 2 unpinned',
+          timestamp: '2026-05-11T03:04:06.000Z',
+          confidence: 0.8,
+          is_compacted: false,
+          memory_id: 'mem-2',
+          pinned: false,
+        },
+      ],
+      total: 2,
+    });
+
+    // Simulate 409 limit error
+    const ApiError = (await vi.importActual<typeof import('../api/client')>('../api/client')).ApiError;
+    pinIdentityMemoryMock.mockRejectedValueOnce(
+      new ApiError(409, 'IDENTITY_MEMORY_PIN_LIMIT_REACHED', 'Limit reached')
+    );
+
+    const user = userEvent.setup();
+    renderInspector();
+
+    expect(await screen.findByText('Mem 1 pinned')).toBeInTheDocument();
+
+    // The second item is unpinned. Let's try to pin it.
+    const pinBtn2 = screen.getByRole('button', { name: 'identity_inspector.pin_btn_pin_aria' });
+    await user.click(pinBtn2);
+
+    // It should fail and show the cap message
+    expect(await screen.findByText('At most 20 memories can be pinned per identity.')).toBeInTheDocument();
+
+    // Pinned button should be disabled for the unpinned one
+    expect(pinBtn2).toBeDisabled();
+  });
+
+  it('disables unpinned buttons when loaded pinned count reaches cap', async () => {
+    const memories = [];
+    for (let i = 0; i < 20; i++) {
+      memories.push({
+        document: `Pinned ${i}`,
+        timestamp: `2026-05-11T03:04:05.${String(i).padStart(3, '0')}Z`,
+        confidence: 0.9,
+        is_compacted: false,
+        memory_id: `mem-${i}`,
+        pinned: true,
+      });
+    }
+    memories.push({
+      document: 'Unpinned last',
+      timestamp: '2026-05-12T03:04:05.000Z',
+      confidence: 0.9,
+      is_compacted: false,
+      memory_id: 'mem-unpinned',
+      pinned: false,
+    });
+
+    getIdentityMemoriesMock.mockResolvedValue({
+      memories,
+      total: 21,
+    });
+
+    renderInspector();
+    expect(await screen.findByText('Unpinned last')).toBeInTheDocument();
+
+    const pinBtns = screen.getAllByRole('button', { name: 'identity_inspector.pin_btn_pin_aria' });
+    expect(pinBtns).toHaveLength(1);
+    expect(pinBtns[0]).toBeDisabled();
+    expect(pinBtns[0]).toHaveAttribute('title', 'identity_inspector.pin_cap_reached');
+  });
+
+  it('handles degraded diagnostics response and shows message verbatim', async () => {
+    getIdentityMemoriesMock.mockResolvedValue({
+      memories: [],
+      total: 0,
+      error: 'memory_fetch_failed',
+      diagnostics: {
+        code: 'CHROMA_UNAVAILABLE',
+        message: 'Diagnostics: Chroma is down',
+      },
+    });
+
+    renderInspector();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Diagnostics: Chroma is down');
+  });
+
+  it('handles degraded error code and routes through localized safe copy', async () => {
+    getIdentityMemoriesMock.mockResolvedValue({
+      memories: [],
+      total: 0,
+      error: 'memory_fetch_failed',
+    });
+
+    renderInspector();
+
+    expect(await screen.findByRole('alert')).toContainHTML('memory_fetch_failed');
   });
 });

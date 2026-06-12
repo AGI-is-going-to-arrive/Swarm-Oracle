@@ -4,6 +4,11 @@
 import { cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('react-router-dom', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  Link: ({ children, to, ...props }: any) => <a href={to} {...props}>{children}</a>,
+}));
+
 // Stable function reference — avoids infinite re-render loop when `t` is
 // used as a dependency in useCallback (AgentProfileModal.fetchData depends on [t]).
 const stableT = (key: string, fallback?: string) => fallback ?? key;
@@ -291,5 +296,18 @@ describe('AgentProfileModal', () => {
 
     expect(await screen.findByText('economics')).toBeInTheDocument();
     expect(screen.queryByText('[object Object]')).not.toBeInTheDocument();
+  });
+
+  it('renders View memory inspector link when identity id is present', async () => {
+    render(
+      <AgentProfileModal identity={baseIdentity} open={true} onClose={vi.fn()} />
+    );
+
+    await waitFor(() => {
+      const link = screen.getByTestId('agent-profile-modal-inspector');
+      expect(link).toBeInTheDocument();
+      expect(link).toHaveAttribute('href', '/agents/identities/id-001/memories');
+      expect(link.textContent).toBe('View memory inspector');
+    });
   });
 });

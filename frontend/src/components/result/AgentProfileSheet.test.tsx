@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { I18nextProvider } from 'react-i18next';
+
+vi.mock('react-router-dom', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  Link: ({ children, to, ...props }: any) => <a href={to} {...props}>{children}</a>,
+}));
 import i18next from 'i18next';
 import type { AgentInfo, ScenarioAgentProfileResponse } from '../../types';
 
@@ -295,5 +300,15 @@ describe('AgentProfileSheet', () => {
 
     expect(await screen.findByText('Newer memory')).toBeInTheDocument();
     expect(screen.queryByText('Stale memory')).not.toBeInTheDocument();
+  });
+
+  it('renders View memory inspector link when agent_identity_id is present', async () => {
+    mockedGetAgentProfileData.mockResolvedValueOnce(makeResponse());
+    renderSheet(makeAgent({ agent_identity_id: 'identity-123' }));
+
+    expect(await screen.findByTestId('agent-profile-sheet-inspector')).toBeInTheDocument();
+    const link = screen.getByTestId('agent-profile-sheet-inspector');
+    expect(link).toHaveAttribute('href', '/agents/identities/identity-123/memories');
+    expect(link.textContent).toBe('View memory inspector');
   });
 });

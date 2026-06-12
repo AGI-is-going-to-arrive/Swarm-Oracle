@@ -11,12 +11,15 @@ import {
   generateSocialCopy,
   getAgentIdentityProfile,
   getAgentProfileData,
+  getIdentityMemories,
   getInterventionEffects,
   getScenario,
   getSessionBoundUserId,
   identityContinuityPreflight,
   importScenarioSnapshot,
   normalizeScenarioAgentSource,
+  pinIdentityMemory,
+  unpinIdentityMemory,
 } from './client';
 import type {
   CreateScenarioOptions,
@@ -743,5 +746,102 @@ describe('agent profile helpers', () => {
       expect(body.user_id).toBeUndefined();
       expect(body.disable_user_quota).toBeUndefined();
     });
+  });
+});
+
+describe('identity memory client APIs', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('getIdentityMemories hits the endpoint with user_id and optional query', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-type' ? 'application/json' : null,
+      },
+      text: vi.fn().mockResolvedValue(JSON.stringify({ memories: [], total: 0 })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getIdentityMemories('identity-123');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    let url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('/api/agents/identities/identity-123/memories');
+    expect(url).toContain('user_id=');
+
+    await getIdentityMemories('identity-123', 'search-term');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    url = fetchMock.mock.calls[1][0] as string;
+    expect(url).toContain('/api/agents/identities/identity-123/memories?query=search-term');
+    expect(url).toContain('&user_id=');
+  });
+
+  it('pinIdentityMemory and unpinIdentityMemory perform happy path POST and DELETE requests', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-type' ? 'application/json' : null,
+      },
+      text: vi.fn().mockResolvedValue(
+        JSON.stringify({
+          identity_id: 'identity-123',
+          memory_id: 'memory-456',
+          pinned: true,
+          pin_count: 5,
+          cap: 20,
+        })
+      ),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pinResult = await pinIdentityMemory('identity-123', 'memory-456');
+    expect(pinResult).toEqual({
+      identity_id: 'identity-123',
+      memory_id: 'memory-456',
+      pinned: true,
+      pin_count: 5,
+      cap: 20,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/agents/identities/identity-123/memories/memory-456/pin');
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('POST');
+
+    const unpinResult = await unpinIdentityMemory('identity-123', 'memory-456');
+    expect(unpinResult).toEqual({
+      identity_id: 'identity-123',
+      memory_id: 'memory-456',
+      pinned: true,
+      pin_count: 5,
+      cap: 20,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][0]).toContain('/api/agents/identities/identity-123/memories/memory-456/pin');
+    expect(fetchMock.mock.calls[1][1]?.method).toBe('DELETE');
+  });
+
+  it('surfaces IDENTITY_MEMORY_PIN_LIMIT_REACHED from 409 error response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      headers: {
+        get: (name: string) => (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+      },
+      text: vi.fn().mockResolvedValue(
+        JSON.stringify({
+          detail: {
+            code: 'IDENTITY_MEMORY_PIN_LIMIT_REACHED',
+            message: 'At most 20 memories can be pinned per identity.',
+          },
+        })
+      ),
+    }));
+
+    await expect(
+      pinIdentityMemory('identity-123', 'memory-456')
+    ).rejects.toThrow('API 409 IDENTITY_MEMORY_PIN_LIMIT_REACHED: At most 20 memories can be pinned per identity.');
   });
 });

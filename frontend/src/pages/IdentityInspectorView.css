@@ -460,6 +460,99 @@
   outline: none;
 }
 
+/* ── Toolbar & Search ───────────────────────────────── */
+.identity-inspector__toolbar {
+  margin-bottom: 1.25rem;
+}
+
+.identity-inspector__search-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  max-width: 320px;
+}
+
+.identity-inspector__search-input {
+  width: 100%;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-default, #d1cdc7);
+  background: var(--bg-elevated, #ffffff);
+  color: var(--text-primary, #181611);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.identity-inspector__search-input:focus {
+  outline: none;
+  border-color: var(--border-focus, #2e6bbd);
+  box-shadow: 0 0 0 2px rgba(46, 107, 189, 0.15);
+}
+
+.identity-inspector__pin-error {
+  padding: 0.65rem 0.85rem;
+  margin-bottom: 1rem;
+  font-size: 0.82rem;
+  color: #b32a2a;
+  background: rgba(214, 64, 64, 0.08);
+  border: 1px solid rgba(214, 64, 64, 0.2);
+  border-radius: 8px;
+}
+
+/* ── Pin Button ─────────────────────────────────────── */
+.identity-inspector__pin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle, #e1ddd7);
+  background: var(--bg-surface, #fcfcfa);
+  color: var(--text-secondary, #58554f);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  user-select: none;
+}
+
+.identity-inspector__pin-btn:hover:not(:disabled),
+.identity-inspector__pin-btn:focus-visible:not(:disabled) {
+  background: var(--bg-hover, #f2eee7);
+  border-color: var(--border-default, #d1cdc7);
+  color: var(--text-primary, #181611);
+  outline: none;
+}
+
+.identity-inspector__pin-btn--pinned {
+  background: rgba(241, 196, 15, 0.1);
+  border-color: rgba(241, 196, 15, 0.35);
+  color: #b7950b;
+}
+
+.identity-inspector__pin-btn--pinned:hover:not(:disabled) {
+  background: rgba(241, 196, 15, 0.15);
+  border-color: rgba(241, 196, 15, 0.5);
+  color: #9a7d0a;
+}
+
+.identity-inspector__pin-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.identity-inspector__pin-btn-text {
+  font-size: 0.72rem;
+}
+
+/* ── Remembered Chip ─────────────────────────────────── */
+.identity-inspector__chip--remembered {
+  background: rgba(243, 156, 18, 0.12);
+  color: #d35400;
+  border-color: rgba(243, 156, 18, 0.25);
+  font-weight: 600;
+}
+
 /* ── Skeleton ───────────────────────────────────────── */
 .identity-inspector__entry--skeleton {
   pointer-events: none;
