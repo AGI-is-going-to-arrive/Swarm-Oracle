@@ -70,6 +70,18 @@ def _raw_doc(doc_id: str, identity_id: str, scenario_id: str, created_at: str, t
     }
 
 
+def _pinned_raw_doc(
+    doc_id: str,
+    identity_id: str,
+    scenario_id: str,
+    created_at: str,
+    text: str = "pinned mem",
+):
+    doc = _raw_doc(doc_id, identity_id, scenario_id, created_at, text)
+    doc["metadata"]["pinned"] = "true"
+    return doc
+
+
 def _compacted_doc(
     doc_id: str, identity_id: str, scenario_id: str, created_at: str,
     source_ids_hash: str = "abc123", text: str = "compacted summary",
@@ -176,6 +188,25 @@ class TestCompactionTrigger:
         from app.services.vector_store import check_identity_compaction_needed
         assert check_identity_compaction_needed("u1", "id1") is False
 
+    @patch("app.services.vector_store.settings")
+    @patch("app.services.vector_store.get_vector_store")
+    def test_pinned_raw_docs_not_counted(self, mock_gvs, mock_settings):
+        mock_settings.IDENTITY_COMPACT_THRESHOLD = 50
+        store = MagicMock()
+        store.available = True
+        mock_gvs.return_value = store
+
+        docs = [_raw_doc(f"d{i}", "id1", "sc1", f"2026-04-{i:02d}") for i in range(49)]
+        docs += [
+            _pinned_raw_doc(f"p{i}", "id1", "sc1", f"2026-03-{i:02d}")
+            for i in range(10)
+        ]
+        col = _make_collection(docs)
+        store._client.get_collection.return_value = col
+
+        from app.services.vector_store import check_identity_compaction_needed
+        assert check_identity_compaction_needed("u1", "id1") is False
+
 
 # ── TestCompactionGroups ─────────────────────────────────────
 
@@ -248,6 +279,35 @@ class TestCompactionGroups:
 
         docs = [_raw_doc(f"d{i}", "id1", "sc1", f"2026-04-{i:02d}T00:00:00Z") for i in range(5)]
         docs += [_profile_doc(f"p{i}", "id1", f"2026-03-{i:02d}T00:00:00Z") for i in range(2)]
+        col = _make_collection(docs)
+        store._client.get_or_create_collection.return_value = col
+
+        from app.services.vector_store import prepare_compaction_groups
+        groups = prepare_compaction_groups("u1", "id1")
+
+        all_ids = [gid for g in groups for gid in g.ids]
+        assert all(not gid.startswith("p") for gid in all_ids)
+
+    @patch("app.services.vector_store.release_runtime_lock")
+    @patch("app.services.vector_store.acquire_runtime_lock", return_value="lease")
+    @patch("app.services.vector_store.settings")
+    @patch("app.services.vector_store.get_vector_store")
+    def test_pinned_docs_excluded(self, mock_gvs, mock_settings, _acq, _rel):
+        mock_settings.IDENTITY_COMPACT_THRESHOLD = 5
+        mock_settings.IDENTITY_COMPACT_BATCH_SIZE = 5
+        mock_settings.IDENTITY_COMPACT_GROUP_SIZE = 5
+        store = MagicMock()
+        store.available = True
+        mock_gvs.return_value = store
+
+        docs = [
+            _raw_doc(f"d{i}", "id1", "sc1", f"2026-04-{i:02d}T00:00:00Z")
+            for i in range(6)
+        ]
+        docs += [
+            _pinned_raw_doc(f"p{i}", "id1", "sc1", f"2026-03-{i:02d}T00:00:00Z")
+            for i in range(2)
+        ]
         col = _make_collection(docs)
         store._client.get_or_create_collection.return_value = col
 
@@ -446,6 +506,38 @@ class TestCompactionExecution:
         assert "scenario_id" in meta
         assert "created_at" in meta
 
+    @patch("app.services.vector_store.release_runtime_lock")
+    @patch("app.services.vector_store.acquire_runtime_lock", return_value="lease")
+    @patch("app.services.vector_store.get_vector_store")
+    def test_group_skipped_when_source_became_pinned(self, mock_gvs, _acq, _rel):
+        store = MagicMock()
+        store.available = True
+        mock_gvs.return_value = store
+
+        docs = [
+            _pinned_raw_doc("d1", "id1", "sc1", "2026-04-01"),
+            _raw_doc("d2", "id1", "sc1", "2026-04-02"),
+        ]
+        col = _make_collection(docs)
+        store._client.get_or_create_collection.return_value = col
+
+        from app.services.vector_store import (
+            CompactionGroup,
+            _compute_source_ids_hash,
+            execute_compaction_group,
+        )
+        grp = CompactionGroup(
+            ids=["d1", "d2"],
+            summaries=["m1", "m2"],
+            scenario_ids=["sc1", "sc1"],
+            created_ats=["2026-04-01", "2026-04-02"],
+            source_ids_hash=_compute_source_ids_hash(["d1", "d2"]),
+        )
+        execute_compaction_group("u1", "id1", grp, "summary")
+
+        col.add.assert_not_called()
+        col.delete.assert_not_called()
+
 
 # ── TestEvictionPriority ─────────────────────────────────────
 
@@ -484,6 +576,30 @@ class TestEvictionPriority:
         # Oldest compacted first
         assert paired[0][0] == "c2"
         assert paired[1][0] == "c1"
+
+    def test_store_identity_memory_eviction_never_deletes_pinned(self):
+        docs = [
+            _raw_doc(f"d{i}", "id1", "sc1", f"2026-04-{i:02d}")
+            for i in range(200)
+        ]
+        docs.append(_pinned_raw_doc("pinned-1", "id1", "sc1", "2026-01-01"))
+        col = _make_collection(docs)
+        store = MagicMock()
+        store._client.get_or_create_collection.return_value = col
+
+        from app.services.vector_store import _store_identity_memory_inner
+        _store_identity_memory_inner(
+            store,
+            "u1",
+            "id1",
+            "sc-new",
+            "new memory",
+            None,
+        )
+
+        deleted = col.delete.call_args.kwargs["ids"]
+        assert "pinned-1" not in deleted
+        assert deleted == ["d0"]
 
 
 # ── TestReadFiltering ────────────────────────────────────────

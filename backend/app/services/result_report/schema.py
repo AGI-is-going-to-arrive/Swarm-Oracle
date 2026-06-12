@@ -34,6 +34,7 @@ ResultReportSSEStatus = Literal[
     "failed",
     "skipped",
 ]
+InterviewStatusValue = Literal["skipped", "complete", "partial", "failed"]
 
 _TARGET_BRANCH_SORT = ["probability_desc", "fork_round_asc", "id_asc"]
 _SENSITIVE_KEYS = frozenset(
@@ -274,6 +275,15 @@ class KeyParticipant(_StrictModel):
     key_moment_hits: int = Field(ge=0)
 
 
+class InterviewStatus(_StrictModel):
+    status: InterviewStatusValue
+    requested_agents: int = Field(ge=0)
+    completed_agents: int = Field(ge=0)
+    truncated_agents: int = Field(default=0, ge=0)
+    error_code: str | None = None
+    message: str | None = None
+
+
 class FullReport(_StrictModel):
     version: str = Field(min_length=1)
     generated_at: str = Field(min_length=1)
@@ -297,6 +307,7 @@ class FullReport(_StrictModel):
     follow_ups: list[str] = Field(default_factory=list)
     limitations: str = Field(min_length=1)
     interview_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    interview_status: InterviewStatus | None = None
     premortem: list[dict[str, Any]] = Field(default_factory=list)
     language_status: LanguageStatus | None = None
 

@@ -18,7 +18,7 @@ from sqlmodel import Session, select
 
 from app.config import settings
 from app.log_sanitize import _scrub_sensitive_text
-from app.models import Branch, BranchStatus, Scenario
+from app.models import Agent, AgentMessage, Branch, BranchStatus, Round, Scenario
 from app.models.database import get_engine
 from app.services.llm_client import (
     format_untrusted_text_block,
@@ -34,6 +34,7 @@ from app.services.result_report.schema import (
     FullReport,
     I18nText,
     IndicatorToWatch,
+    InterviewStatus,
     LanguageStatus,
     Likelihood,
     ReportSection,
@@ -73,6 +74,8 @@ _CHART_SECTION_PREFERENCES: dict[str, tuple[str, ...]] = {
 _TIER_ORDER: dict[SectionTier, int] = {"generation": 0, "rewrite": 1, "static": 2}
 _REPORT_LOCKS: dict[str, asyncio.Lock] = {}
 _SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
+_INTERVIEW_AGENT_BUDGET = 3
+_INTERVIEW_CANDIDATE_LIMIT = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +121,15 @@ class BuilderContext:
     branch_story: str
     branch_insight: str
     web_context_blocks: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class InterviewCandidate:
+    branch_index: int
+    round_number: int
+    agent_name: str
+    persona: str
+    excerpt: str
 
 
 class ResultReportBuilderError(RuntimeError):
@@ -398,16 +410,43 @@ async def _build_report_unlocked(
         failed=failed_sections,
         total=len(outline.sections),
     )
+    final_tier = _worst_tier(section_tiers)
     final_sections = completed_sections
     if final_status == "failed" and not completed_sections and outline.sections:
         final_sections = _outline_failure_placeholder_sections(outline)
+    if final_status == "failed":
+        interview_evidence: list[dict[str, Any]] = []
+        interview_status = InterviewStatus(
+            status="skipped",
+            requested_agents=0,
+            completed_agents=0,
+            truncated_agents=0,
+            message="Report sections failed before interviews could run.",
+        )
+    elif final_tier == "static":
+        interview_evidence = []
+        interview_status = InterviewStatus(
+            status="skipped",
+            requested_agents=0,
+            completed_agents=0,
+            truncated_agents=0,
+            message="Static fallback report did not run interview generation.",
+        )
+    else:
+        interview_evidence, interview_status = await _build_interview_evidence(
+            context,
+            reducer_result,
+            overrides=overrides,
+        )
     report = _assemble_report(
         context,
         reducer_result,
         outline,
         sections=final_sections,
         status=final_status,
-        tier=_worst_tier(section_tiers),
+        tier=final_tier,
+        interview_evidence=interview_evidence,
+        interview_status=interview_status,
     )
     report = _fit_report_to_byte_cap(report)
     _persist_report_payload(scenario_id, report.model_dump(mode="json"))
@@ -1018,6 +1057,8 @@ def _assemble_report(
     sections: list[ReportSection],
     status: ReportStatus,
     tier: ReportTier,
+    interview_evidence: list[dict[str, Any]] | None = None,
+    interview_status: InterviewStatus | None = None,
 ) -> FullReport:
     result_quality = (
         context.parsed_context.get("result_quality")
@@ -1063,11 +1104,220 @@ def _assemble_report(
             "Report content is generated from a bounded simulation transcript, "
             "deterministic reducer stats, and available evidence coordinates."
         ),
-        interview_evidence=[],
+        interview_evidence=interview_evidence or [],
+        interview_status=interview_status,
         premortem=[],
         language_status=LanguageStatus(zh="available", en="available"),
     )
     return report
+
+
+async def _build_interview_evidence(
+    context: BuilderContext,
+    reducer_result: ReducerResult,
+    *,
+    overrides: ReportGenerationOverrides | None,
+) -> tuple[list[dict[str, Any]], InterviewStatus]:
+    candidates = await asyncio.to_thread(
+        _load_interview_candidates,
+        context,
+        reducer_result,
+    )
+    requested_agents = len(candidates)
+    truncated_agents = max(0, requested_agents - _INTERVIEW_AGENT_BUDGET)
+    if not candidates:
+        return [], InterviewStatus(
+            status="skipped",
+            requested_agents=0,
+            completed_agents=0,
+            truncated_agents=0,
+            message="No interview candidates were available.",
+        )
+
+    prompt = _build_interview_prompt(context, candidates)
+    try:
+        with llm_request_scope(**_report_llm_scope_kwargs(context, overrides)):
+            payload = await asyncio.wait_for(
+                llm_call_json(
+                    prompt,
+                    api_key=overrides.api_key if overrides else None,
+                    base_url=overrides.base_url if overrides else None,
+                    model=overrides.model if overrides else None,
+                    temperature=(
+                        overrides.temperature
+                        if overrides and overrides.temperature is not None
+                        else 0.25
+                    ),
+                    reasoning_effort="low",
+                ),
+                timeout=settings.REPORT_SECTION_TIMEOUT_SECONDS,
+            )
+        evidence = _normalize_interview_payload(payload, candidates)
+    except Exception:  # noqa: BLE001 - interviews are non-critical report garnish
+        logger.info("Result report interview generation failed; continuing without interviews")
+        return [], InterviewStatus(
+            status="failed",
+            requested_agents=requested_agents,
+            completed_agents=0,
+            truncated_agents=truncated_agents,
+            error_code="INTERVIEW_LLM_FAILED",
+            message="Interview generation failed; report sections remain available.",
+        )
+
+    completed_agents = len(evidence)
+    expected_agents = min(requested_agents, _INTERVIEW_AGENT_BUDGET)
+    status: Literal["complete", "partial"] = (
+        "complete" if completed_agents >= expected_agents else "partial"
+    )
+    return evidence, InterviewStatus(
+        status=status,
+        requested_agents=requested_agents,
+        completed_agents=completed_agents,
+        truncated_agents=truncated_agents,
+        message=(
+            "Interview evidence generated from bounded transcript excerpts."
+            if completed_agents
+            else "No interview evidence was returned by the model."
+        ),
+    )
+
+
+def _load_interview_candidates(
+    context: BuilderContext,
+    reducer_result: ReducerResult,
+) -> list[InterviewCandidate]:
+    branch_index_by_id = {
+        str(item.get("branch_id")): index
+        for index, item in enumerate(reducer_result.branch_distribution)
+        if isinstance(item, dict) and item.get("branch_id")
+    }
+    branch_index = branch_index_by_id.get(context.branch_id, 0)
+    candidates: list[InterviewCandidate] = []
+    seen_agents: set[str] = set()
+
+    with Session(get_engine()) as session:
+        rows = session.exec(
+            select(AgentMessage, Round, Agent)
+            .join(Round, AgentMessage.round_id == Round.id)
+            .join(Agent, AgentMessage.agent_id == Agent.id)
+            .where(
+                Round.branch_id == context.branch_id,
+                Agent.scenario_id == context.scenario_id,
+            )
+            .order_by(Round.round_number.asc(), Agent.name.asc(), AgentMessage.id.asc())
+        ).all()
+
+    for message, round_, agent in rows:
+        if agent.id in seen_agents:
+            continue
+        excerpt = _truncate_text(
+            message.content,
+            settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
+        )
+        if not excerpt or excerpt == "Unavailable.":
+            continue
+        seen_agents.add(agent.id)
+        candidates.append(
+            InterviewCandidate(
+                branch_index=branch_index,
+                round_number=round_.round_number,
+                agent_name=_truncate_text(agent.name, 120),
+                persona=_truncate_text(agent.persona or agent.role or agent.name, 900),
+                excerpt=excerpt,
+            )
+        )
+        if len(candidates) >= _INTERVIEW_CANDIDATE_LIMIT:
+            break
+    return candidates
+
+
+def _build_interview_prompt(
+    context: BuilderContext,
+    candidates: list[InterviewCandidate],
+) -> str:
+    candidate_blocks = []
+    for index, candidate in enumerate(candidates, start=1):
+        coordinate = json.dumps(
+            {
+                "branch_index": candidate.branch_index,
+                "round": candidate.round_number,
+                "agent_name": candidate.agent_name,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        candidate_blocks.append(
+            "\n".join(
+                [
+                    f"Candidate {index}: {coordinate}",
+                    format_untrusted_text_block(
+                        "Interview agent persona",
+                        candidate.persona,
+                        max_chars=900,
+                    ),
+                    format_untrusted_text_block(
+                        "Interview transcript excerpt",
+                        candidate.excerpt,
+                        max_chars=settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
+                    ),
+                ]
+            )
+        )
+
+    return "\n\n".join(
+        [
+            "REPORT_INTERVIEWS",
+            "Return strict JSON only.",
+            "Action: interview_agents.",
+            (
+                "Select at most 3 agents. Use only the supplied transcript excerpts; "
+                "do not invent chat, questions, answers, coordinates, or agent names."
+            ),
+            "Required JSON shape: "
+            '{"action":"interview_agents","interview_evidence":['
+            '{"agent_name":"...","excerpt":"..."}]}',
+            format_untrusted_text_block("User question", context.question, max_chars=1200),
+            "\n\n".join(candidate_blocks),
+        ]
+    )
+
+
+def _normalize_interview_payload(
+    payload: object,
+    candidates: list[InterviewCandidate],
+) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        raise ResultReportBuilderError("Interview payload must be an object")
+    if str(payload.get("action") or "").strip() != "interview_agents":
+        raise ResultReportBuilderError("Interview payload action is invalid")
+    raw_entries = payload.get("interview_evidence")
+    if not isinstance(raw_entries, list):
+        raise ResultReportBuilderError("Interview evidence must be a list")
+
+    candidates_by_name = {candidate.agent_name: candidate for candidate in candidates}
+    evidence: list[dict[str, Any]] = []
+    for raw_entry in raw_entries:
+        if len(evidence) >= _INTERVIEW_AGENT_BUDGET:
+            break
+        if not isinstance(raw_entry, dict):
+            continue
+        agent_name = _truncate_text(str(raw_entry.get("agent_name") or ""), 120)
+        candidate = candidates_by_name.get(agent_name)
+        if candidate is None:
+            continue
+        excerpt = _truncate_text(
+            str(raw_entry.get("excerpt") or candidate.excerpt),
+            settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
+        )
+        evidence.append(
+            {
+                "branch_index": candidate.branch_index,
+                "round": candidate.round_number,
+                "agent_name": candidate.agent_name,
+                "excerpt": excerpt,
+            }
+        )
+    return evidence
 
 
 def _attach_reducer_charts(
@@ -1713,6 +1963,14 @@ def _failed_report_payload(
             "Existing simulation results remain available."
         ),
         interview_evidence=[],
+        interview_status=InterviewStatus(
+            status="failed",
+            requested_agents=0,
+            completed_agents=0,
+            truncated_agents=0,
+            error_code="REPORT_FAILED",
+            message="Report generation failed before interviews could run.",
+        ),
         premortem=[],
         language_status=LanguageStatus(zh="available", en="available"),
     )

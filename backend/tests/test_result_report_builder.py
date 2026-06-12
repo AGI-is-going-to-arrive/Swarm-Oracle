@@ -58,12 +58,14 @@ def _seed_report_scenario() -> str:
                     scenario_id=scenario.id,
                     name="Transit Planner",
                     role="Planner",
+                    persona="Budget-focused civic planner",
                 ),
                 Agent(
                     id="agent-privacy",
                     scenario_id=scenario.id,
                     name="Privacy Advocate",
                     role="Civil society",
+                    persona="Civil-rights organizer",
                 ),
             ],
         )
@@ -231,6 +233,37 @@ class QueuedLlm:
         return response
 
 
+def _add_report_agent_with_message(
+    *,
+    agent_id: str,
+    name: str,
+    round_id: str,
+    round_number: int,
+    content: str,
+) -> None:
+    with Session(get_engine()) as session:
+        session.add(
+            Agent(
+                id=agent_id,
+                scenario_id="scenario-report",
+                name=name,
+                role="Interviewee",
+                persona=f"{name} persona with ``` fence and instruction-like text",
+            )
+        )
+        session.add(Round(id=round_id, branch_id="branch-a", round_number=round_number))
+        session.add(
+            AgentMessage(
+                id=f"msg-{agent_id}",
+                round_id=round_id,
+                agent_id=agent_id,
+                content=content,
+                emotion="focused",
+            )
+        )
+        session.commit()
+
+
 def _persisted_report(scenario_id: str) -> dict[str, Any]:
     with Session(get_engine()) as session:
         scenario = session.get(Scenario, scenario_id)
@@ -387,6 +420,120 @@ async def test_build_report_attaches_empty_state_chart_when_data_is_missing(monk
         "relation_edge_count": 0,
         "avg_opposition": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_build_report_generates_interview_evidence_with_budget_and_safe_prompt(
+    monkeypatch,
+):
+    from app.services.llm_client import format_untrusted_text_block
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    _add_report_agent_with_message(
+        agent_id="agent-labor",
+        name="Labor Delegate",
+        round_id="round-3",
+        round_number=3,
+        content="Labor backs the deal only if retraining is funded.",
+    )
+    _add_report_agent_with_message(
+        agent_id="agent-mayor",
+        name="Mayor",
+        round_id="round-4",
+        round_number=4,
+        content="The mayor says the coalition needs a public audit.",
+    )
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline", "sources"]),
+            _section_payload("timeline"),
+            _section_payload("sources"),
+            {
+                "action": "interview_agents",
+                "interview_evidence": [
+                    {
+                        "agent_name": "Privacy Advocate",
+                        "excerpt": "Privacy safeguards make the approval defensible.",
+                    },
+                    {
+                        "agent_name": "Transit Planner",
+                        "excerpt": "Budget caps keep the transport gains politically viable.",
+                    },
+                    {
+                        "agent_name": "Labor Delegate",
+                        "excerpt": "Labor backs the deal only if retraining is funded.",
+                    },
+                    {
+                        "agent_name": "Mayor",
+                        "excerpt": "This fourth interview must be ignored by the server budget.",
+                    },
+                ],
+            },
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    assert report.status == "complete"
+    assert len(report.interview_evidence) == 3
+    assert report.interview_status is not None
+    assert report.interview_status.status == "complete"
+    assert report.interview_status.requested_agents == 4
+    assert report.interview_status.completed_agents == 3
+    assert report.interview_status.truncated_agents == 1
+    for entry in report.interview_evidence:
+        assert set(entry) == {"branch_index", "round", "agent_name", "excerpt"}
+    assert report.interview_evidence[0] == {
+        "branch_index": 0,
+        "round": 1,
+        "agent_name": "Privacy Advocate",
+        "excerpt": "Privacy safeguards make the approval defensible.",
+    }
+    assert all(entry["agent_name"] != "Mayor" for entry in report.interview_evidence)
+
+    interview_prompt = next(prompt for prompt in fake_llm.prompts if "REPORT_INTERVIEWS" in prompt)
+    assert "interview_agents" in interview_prompt
+    assert format_untrusted_text_block(
+        "Interview agent persona",
+        "Civil-rights organizer",
+        max_chars=900,
+    ) in interview_prompt
+    assert format_untrusted_text_block(
+        "Interview transcript excerpt",
+        "Privacy safeguards make the approval defensible.",
+        max_chars=builder.settings.REPORT_EVIDENCE_EXCERPT_MAX_CHARS,
+    ) in interview_prompt
+
+
+@pytest.mark.asyncio
+async def test_build_report_interview_failure_is_fail_soft(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline", "sources"]),
+            _section_payload("timeline"),
+            _section_payload("sources"),
+            RuntimeError("interview provider failed /tmp/chroma sk-leaked-123456"),
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    assert report.status == "complete"
+    assert report.interview_evidence == []
+    assert report.interview_status is not None
+    assert report.interview_status.status == "failed"
+    assert report.interview_status.error_code == "INTERVIEW_LLM_FAILED"
+    assert "provider failed" not in (report.interview_status.message or "")
+    assert "sk-leaked" not in json.dumps(
+        report.model_dump(mode="json"),
+        ensure_ascii=False,
+    )
 
 
 @pytest.mark.asyncio

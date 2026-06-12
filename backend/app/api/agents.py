@@ -863,6 +863,25 @@ _RE_TOKEN_PARAM = re.compile(
 # only (whitespace-bounded) so we don't shred prose.
 _RE_BASE64_BLOB = re.compile(r"(?<![A-Za-z0-9+/=_\-])[A-Za-z0-9+/=_\-]{50,}(?![A-Za-z0-9+/=_\-])")
 _INSPECTOR_CONFIDENCE_VALUES = {"high", "medium", "low", "unknown"}
+_MEMORY_DIAGNOSTIC_MESSAGES = {
+    "vector_store_unavailable": "Memory store is temporarily unavailable.",
+    "memory_fetch_failed": "Memory entries could not be loaded.",
+    "memory_query_failed": "Memory retrieval markers could not be refreshed.",
+    "memory_pin_unavailable": "Memory pin state could not be updated.",
+    "memory_pin_fetch_failed": "Memory pin state could not be loaded.",
+    "memory_pin_count_failed": "Memory pin count could not be loaded.",
+    "memory_pin_update_failed": "Memory pin state could not be persisted.",
+}
+
+
+def _memory_diagnostic(error_code: str) -> dict[str, str]:
+    return {
+        "code": error_code,
+        "message": _MEMORY_DIAGNOSTIC_MESSAGES.get(
+            error_code,
+            "Memory operation failed.",
+        ),
+    }
 
 
 def _redact_document_text(text: str) -> str:
@@ -888,7 +907,13 @@ def _redact_document_text(text: str) -> str:
     return redacted
 
 
-def _normalise_inspector_entry(doc: object, raw_meta: object) -> dict | None:
+def _normalise_inspector_entry(
+    doc: object,
+    raw_meta: object,
+    *,
+    memory_id: str | None = None,
+    remembered: bool = False,
+) -> dict | None:
     """Project a single ChromaDB hit into the inspector response shape."""
     if doc is None:
         return None
@@ -912,6 +937,7 @@ def _normalise_inspector_entry(doc: object, raw_meta: object) -> dict | None:
         )
 
     return {
+        "memory_id": str(memory_id or ""),
         "document": _redact_document_text(document),
         "metadata": _redact_metadata(meta),
         "source_scenario_id": (
@@ -922,7 +948,16 @@ def _normalise_inspector_entry(doc: object, raw_meta: object) -> dict | None:
         ),
         "confidence": confidence,
         "is_compacted": is_compacted,
+        "pinned": _is_pinned_inspector_metadata(meta),
+        "remembered": remembered,
     }
+
+
+def _is_pinned_inspector_metadata(meta: dict) -> bool:
+    raw_value = meta.get("pinned")
+    if isinstance(raw_value, bool):
+        return raw_value
+    return str(raw_value or "").strip().lower() == "true"
 
 
 def _load_identity_memory_entries(
@@ -930,6 +965,7 @@ def _load_identity_memory_entries(
     user_id: str,
     *,
     limit: int = _INSPECTOR_MEMORY_LIMIT,
+    query_text: str | None = None,
 ) -> tuple[list[dict], str | None]:
     """Fetch + redact identity memory entries from ChromaDB.
 
@@ -945,7 +981,7 @@ def _load_identity_memory_entries(
     try:
         vs = get_vector_store()
     except Exception as exc:
-        logger.warning("Vector store init failed (inspector): %s", exc)
+        logger.warning("Vector store init failed (inspector): %s", type(exc).__name__)
         return [], "vector_store_unavailable"
     if not vs.available:
         return [], "vector_store_unavailable"
@@ -976,31 +1012,59 @@ def _load_identity_memory_entries(
             "Identity memory fetch failed (inspector) for identity=%s user=%s: %s",
             identity_id,
             user_id,
-            exc,
+            type(exc).__name__,
         )
         return [], "memory_fetch_failed"
 
     if not results:
         return [], None
 
+    retrieval_hit_ids: set[str] = set()
+    query_error_code: str | None = None
+    if query_text and query_text.strip():
+        try:
+            query_results = collection.query(
+                query_texts=[query_text.strip()],
+                n_results=min(limit, collection.count()),
+                where={"identity_id": identity_id},
+            )
+            for hit_group in query_results.get("ids") or []:
+                if isinstance(hit_group, list):
+                    retrieval_hit_ids.update(str(item) for item in hit_group if item)
+        except Exception as exc:
+            logger.warning(
+                "Identity memory query failed (inspector) for identity=%s user=%s: %s",
+                identity_id,
+                user_id,
+                type(exc).__name__,
+            )
+            query_error_code = "memory_query_failed"
+
+    ids = results.get("ids") or []
     docs = results.get("documents") or []
     metas = results.get("metadatas") or [{} for _ in docs]
 
     entries: list[dict] = []
-    for doc, raw_meta in zip(docs, metas):
-        entry = _normalise_inspector_entry(doc, raw_meta)
+    for memory_id, doc, raw_meta in zip(ids, docs, metas):
+        entry = _normalise_inspector_entry(
+            doc,
+            raw_meta,
+            memory_id=str(memory_id),
+            remembered=str(memory_id) in retrieval_hit_ids,
+        )
         if entry is not None:
             entries.append(entry)
 
     # Most recent first — None timestamps sort last.
     entries.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
-    return entries[:limit], None
+    return entries[:limit], query_error_code
 
 
 @router.get("/identities/{identity_id}/memories")
 async def inspect_identity_memories(
     identity_id: str,
     user_id: str | None = None,
+    query: str | None = None,
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ):
     """Identity memory inspector — read-only, redacted view (S5-4).
@@ -1023,7 +1087,11 @@ async def inspect_identity_memories(
         if identity is None or identity.user_id != effective_user_id:
             raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Identity not found")
 
-    entries, error_code = _load_identity_memory_entries(identity_id, effective_user_id)
+    entries, error_code = _load_identity_memory_entries(
+        identity_id,
+        effective_user_id,
+        query_text=query,
+    )
     response: dict[str, object] = {"memories": entries, "total": len(entries)}
     if error_code is not None:
         # Surface the error explicitly so the caller can distinguish
@@ -1032,7 +1100,101 @@ async def inspect_identity_memories(
         # (read-only inspector should never block on infra hiccups),
         # but the field is machine-readable and stable.
         response["error"] = error_code
+        response["diagnostics"] = _memory_diagnostic(error_code)
     return response
+
+
+def _require_owned_identity(identity_id: str, effective_user_id: str) -> None:
+    with Session(get_engine()) as session:
+        identity = session.get(AgentIdentity, identity_id)
+        if identity is None or identity.user_id != effective_user_id:
+            raise api_error(404, "AGENT_IDENTITY_NOT_FOUND", "Identity not found")
+
+
+def _update_identity_memory_pin(
+    identity_id: str,
+    memory_id: str,
+    effective_user_id: str,
+    *,
+    pinned: bool,
+) -> dict[str, object]:
+    from app.services.vector_store import (
+        IDENTITY_MEMORY_PIN_CAP,
+        IdentityMemoryNotFoundError,
+        IdentityMemoryPinLimitError,
+        IdentityMemoryVectorError,
+        set_identity_memory_pin,
+    )
+
+    try:
+        return set_identity_memory_pin(
+            effective_user_id,
+            identity_id,
+            memory_id,
+            pinned=pinned,
+        )
+    except IdentityMemoryPinLimitError as exc:
+        raise api_error(
+            409,
+            "IDENTITY_MEMORY_PIN_LIMIT_REACHED",
+            f"At most {IDENTITY_MEMORY_PIN_CAP} memories can be pinned per identity.",
+        ) from exc
+    except IdentityMemoryNotFoundError as exc:
+        raise api_error(404, "IDENTITY_MEMORY_NOT_FOUND", "Memory not found") from exc
+    except IdentityMemoryVectorError as exc:
+        error_code = str(exc) or "memory_pin_unavailable"
+        return {
+            "identity_id": identity_id,
+            "memory_id": memory_id,
+            "pinned": False,
+            "pin_count": 0,
+            "cap": IDENTITY_MEMORY_PIN_CAP,
+            "diagnostics": _memory_diagnostic(error_code),
+        }
+
+
+@router.post("/identities/{identity_id}/memories/{memory_id}/pin")
+async def pin_identity_memory(
+    identity_id: str,
+    memory_id: str,
+    user_id: str | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    if not settings.FEATURE_AGENT_IDENTITY:
+        raise api_error(404, "FEATURE_DISABLED", "Agent identity feature is not enabled")
+
+    effective_user_id = resolve_authenticated_user_id(user_id, principal)
+    if not effective_user_id:
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
+    _require_owned_identity(identity_id, effective_user_id)
+    return _update_identity_memory_pin(
+        identity_id,
+        memory_id,
+        effective_user_id,
+        pinned=True,
+    )
+
+
+@router.delete("/identities/{identity_id}/memories/{memory_id}/pin")
+async def unpin_identity_memory(
+    identity_id: str,
+    memory_id: str,
+    user_id: str | None = None,
+    principal: SessionPrincipal | None = Depends(require_session_principal),
+):
+    if not settings.FEATURE_AGENT_IDENTITY:
+        raise api_error(404, "FEATURE_DISABLED", "Agent identity feature is not enabled")
+
+    effective_user_id = resolve_authenticated_user_id(user_id, principal)
+    if not effective_user_id:
+        raise api_error(400, "USER_ID_REQUIRED", "user_id query parameter is required")
+    _require_owned_identity(identity_id, effective_user_id)
+    return _update_identity_memory_pin(
+        identity_id,
+        memory_id,
+        effective_user_id,
+        pinned=False,
+    )
 
 
 @router.post("/document-seed")

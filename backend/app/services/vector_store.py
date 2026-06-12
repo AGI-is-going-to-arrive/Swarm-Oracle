@@ -29,6 +29,19 @@ _CHROMA_WRITE_LOCK_LEASE_SECONDS = 10.0
 _CHROMA_INIT_TIMEOUT_SECONDS = 5.0
 _CHROMA_COLLECTION_NAME_MAX = 63  # Chroma DB hard limit
 _CHROMA_IDENTITY_PROFILE_WRITE_PENDING = threading.Semaphore(1)
+IDENTITY_MEMORY_PIN_CAP = 20
+
+
+class IdentityMemoryPinLimitError(ValueError):
+    """Raised when pinning would exceed the visible-memory pin cap."""
+
+
+class IdentityMemoryNotFoundError(LookupError):
+    """Raised when the requested identity memory doc is missing or foreign."""
+
+
+class IdentityMemoryVectorError(RuntimeError):
+    """Raised for sanitized, non-fatal Chroma pin/update failures."""
 
 
 def _ensure_chromadb():
@@ -539,6 +552,126 @@ def _identity_profile_collection_name(user_id: str) -> str:
     return name[:_CHROMA_COLLECTION_NAME_MAX] if len(name) > _CHROMA_COLLECTION_NAME_MAX else name
 
 
+def is_identity_memory_pinned(metadata: Any) -> bool:
+    """Return whether a Chroma identity-memory metadata object is pinned."""
+    if not isinstance(metadata, dict):
+        return False
+    raw_value = metadata.get("pinned")
+    if isinstance(raw_value, bool):
+        return raw_value
+    return str(raw_value or "").strip().lower() == "true"
+
+
+def set_identity_memory_pin(
+    user_id: str,
+    identity_id: str,
+    memory_id: str,
+    *,
+    pinned: bool,
+    pin_cap: int = IDENTITY_MEMORY_PIN_CAP,
+) -> dict[str, Any]:
+    """Persist a visible-memory pin flag in Chroma document metadata."""
+    store = get_vector_store()
+    if not store.available:
+        raise IdentityMemoryVectorError("vector_store_unavailable")
+
+    lock_key = f"{_CHROMA_WRITE_LOCK_KEY_PREFIX}:identity:{user_id}"
+    try:
+        lease = acquire_runtime_lock(lock_key, lease_seconds=_CHROMA_WRITE_LOCK_LEASE_SECONDS)
+    except Exception as exc:
+        logger.warning("Identity memory pin lock acquisition failed: %s", type(exc).__name__)
+        raise IdentityMemoryVectorError("memory_pin_unavailable") from exc
+    if lease is None:
+        raise IdentityMemoryVectorError("memory_pin_unavailable")
+
+    try:
+        with _CHROMA_WRITE_LOCK:
+            return _set_identity_memory_pin_inner(
+                store,
+                user_id,
+                identity_id,
+                memory_id,
+                pinned=pinned,
+                pin_cap=pin_cap,
+            )
+    finally:
+        try:
+            release_runtime_lock(lease)
+        except Exception as exc:
+            logger.warning("Identity memory pin lock release failed: %s", type(exc).__name__)
+
+
+def _set_identity_memory_pin_inner(
+    store: "VectorStore",
+    user_id: str,
+    identity_id: str,
+    memory_id: str,
+    *,
+    pinned: bool,
+    pin_cap: int,
+) -> dict[str, Any]:
+    try:
+        collection = store._client.get_collection(name=_identity_collection_name(user_id))
+    except Exception as exc:
+        raise IdentityMemoryNotFoundError("identity_memory_not_found") from exc
+
+    try:
+        target = collection.get(ids=[memory_id])
+    except Exception as exc:
+        logger.warning("Identity memory pin target fetch failed: %s", type(exc).__name__)
+        raise IdentityMemoryVectorError("memory_pin_fetch_failed") from exc
+    if not target or not target.get("ids"):
+        raise IdentityMemoryNotFoundError("identity_memory_not_found")
+
+    metadatas = target.get("metadatas") or []
+    target_meta = metadatas[0] if metadatas and isinstance(metadatas[0], dict) else {}
+    if (
+        target_meta.get("identity_id") != identity_id
+        or target_meta.get("doc_type") == "identity_profile"
+    ):
+        raise IdentityMemoryNotFoundError("identity_memory_not_found")
+
+    try:
+        results = collection.get(where={"identity_id": identity_id})
+    except Exception as exc:
+        logger.warning("Identity memory pin count failed: %s", type(exc).__name__)
+        raise IdentityMemoryVectorError("memory_pin_count_failed") from exc
+
+    current_pin_count = 0
+    metadatas = results.get("metadatas") if isinstance(results, dict) else []
+    for meta in metadatas or []:
+        if not isinstance(meta, dict) or meta.get("doc_type") == "identity_profile":
+            continue
+        if is_identity_memory_pinned(meta):
+            current_pin_count += 1
+
+    currently_pinned = is_identity_memory_pinned(target_meta)
+    if pinned and not currently_pinned and current_pin_count >= pin_cap:
+        raise IdentityMemoryPinLimitError("identity_memory_pin_limit_reached")
+
+    updated_meta = dict(target_meta)
+    updated_meta["pinned"] = "true" if pinned else "false"
+    try:
+        collection.update(ids=[memory_id], metadatas=[updated_meta])
+    except Exception as exc:
+        logger.warning("Identity memory pin update failed: %s", type(exc).__name__)
+        raise IdentityMemoryVectorError("memory_pin_update_failed") from exc
+
+    next_pin_count = current_pin_count
+    if pinned and not currently_pinned:
+        next_pin_count += 1
+    elif not pinned and currently_pinned:
+        next_pin_count -= 1
+
+    return {
+        "identity_id": identity_id,
+        "memory_id": memory_id,
+        "pinned": pinned,
+        "pin_count": max(0, next_pin_count),
+        "cap": pin_cap,
+    }
+
+
 def _list_identity_profile_doc_ids(collection: Any, identity_id: str) -> list[str]:
     """Return all profile doc ids for an identity inside a collection."""
     try:
@@ -657,8 +790,8 @@ def _store_identity_memory_inner(
         logger.warning("Identity memory store failed (non-fatal): %s", exc)
         return
 
-    # FIFO eviction: keep at most _IDENTITY_MEMORY_MAX per identity.
-    # Raw docs are evicted before compacted docs (compacted preserve long-term knowledge).
+    # FIFO eviction: keep at most _IDENTITY_MEMORY_MAX unpinned memories per identity.
+    # Pinned docs never count toward this cap and are never evicted here.
     try:
         results = collection.get(
             where={"identity_id": identity_id},
@@ -669,7 +802,10 @@ def _store_identity_memory_inner(
             memory_entries = [
                 (doc_id, meta)
                 for doc_id, meta in zip(ids, metas)
-                if meta.get("doc_type") != "identity_profile"
+                if (
+                    meta.get("doc_type") != "identity_profile"
+                    and not is_identity_memory_pinned(meta)
+                )
             ]
             # Sort key: (is_compacted, created_at) — raw first (0), compacted last (1)
             memory_entries.sort(key=lambda p: (
@@ -681,7 +817,7 @@ def _store_identity_memory_inner(
                 to_delete = [p[0] for p in memory_entries[:excess]]
                 collection.delete(ids=to_delete)
                 logger.debug(
-                    "Evicted %d identity memories for identity=%s (raw-first priority)",
+                    "Evicted %d unpinned identity memories for identity=%s",
                     excess, identity_id,
                 )
     except Exception as exc:
@@ -1119,7 +1255,11 @@ def check_identity_compaction_needed(user_id: str, identity_id: str) -> bool:
             return False
         raw_count = sum(
             1 for m in (results.get("metadatas") or [])
-            if m.get("compacted") != "true" and m.get("doc_type") != "identity_profile"
+            if (
+                m.get("compacted") != "true"
+                and m.get("doc_type") != "identity_profile"
+                and not is_identity_memory_pinned(m)
+            )
         )
         return raw_count >= settings.IDENTITY_COMPACT_THRESHOLD
     except Exception:
@@ -1173,13 +1313,18 @@ def _prepare_compaction_groups_inner(
     if not results or not results.get("ids"):
         return []
 
-    # Filter to raw (non-compacted) docs only
+    # Filter to raw, unpinned docs only. Pinned entries are user-visible
+    # preserved memories and must never be compacted away.
     raw_entries = []
     docs = results.get("documents", [])
     metas = results.get("metadatas", [])
     ids = results["ids"]
     for doc_id, doc, meta in zip(ids, docs, metas):
-        if meta.get("compacted") != "true" and meta.get("doc_type") != "identity_profile":
+        if (
+            meta.get("compacted") != "true"
+            and meta.get("doc_type") != "identity_profile"
+            and not is_identity_memory_pinned(meta)
+        ):
             raw_entries.append((doc_id, doc, meta))
 
     if len(raw_entries) < settings.IDENTITY_COMPACT_THRESHOLD:
@@ -1274,18 +1419,29 @@ def _execute_compaction_group_inner(
         already_compacted = False
 
     if already_compacted:
-        # Previous add succeeded, just retry delete
+        # Previous add succeeded, just retry delete for originals that are
+        # still unpinned. A source may have been pinned after the first run.
         try:
-            collection.delete(ids=group.ids)
+            verify = collection.get(ids=group.ids)
+            erasable_ids = [
+                vid
+                for vid, vmeta in zip(
+                    verify.get("ids") or [],
+                    verify.get("metadatas") or [],
+                )
+                if not is_identity_memory_pinned(vmeta)
+            ]
+            if erasable_ids:
+                collection.delete(ids=erasable_ids)
             logger.info(
                 "Idempotent compaction: deleted %d originals for hash=%s",
-                len(group.ids), group.source_ids_hash[:16],
+                len(erasable_ids), group.source_ids_hash[:16],
             )
         except Exception as exc:
-            logger.warning("Idempotent delete retry failed: %s", exc)
+            logger.warning("Idempotent delete retry failed: %s", type(exc).__name__)
         return
 
-    # Staleness check: verify all original_ids still exist and are still raw
+    # Staleness check: verify all original_ids still exist, are raw, and are unpinned.
     try:
         verify = collection.get(ids=group.ids)
         if not verify or not verify.get("ids"):
@@ -1293,7 +1449,10 @@ def _execute_compaction_group_inner(
             return
         alive_raw = set()
         for vid, vmeta in zip(verify["ids"], verify.get("metadatas", [])):
-            if vmeta.get("compacted") != "true":
+            if (
+                vmeta.get("compacted") != "true"
+                and not is_identity_memory_pinned(vmeta)
+            ):
                 alive_raw.add(vid)
         if alive_raw != set(group.ids):
             logger.info(

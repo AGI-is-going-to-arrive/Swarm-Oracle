@@ -144,6 +144,14 @@ def _legal_full_report() -> dict:
         "follow_ups": ["Which safeguard matters most?"],
         "limitations": "The result depends on simulated stakeholder behavior.",
         "interview_evidence": [],
+        "interview_status": {
+            "status": "skipped",
+            "requested_agents": 0,
+            "completed_agents": 0,
+            "truncated_agents": 0,
+            "error_code": None,
+            "message": "No interview candidates were available.",
+        },
         "premortem": [],
         "language_status": {"zh": "available", "en": "available"},
     }
@@ -178,6 +186,7 @@ def test_full_report_schema_accepts_legal_payload_and_freezes_fields():
         "follow_ups",
         "limitations",
         "interview_evidence",
+        "interview_status",
         "premortem",
         "language_status",
     }
@@ -364,6 +373,7 @@ def test_full_report_schema_accepts_nullable_dissenting_without_changing_field_s
         "follow_ups",
         "limitations",
         "interview_evidence",
+        "interview_status",
         "premortem",
         "language_status",
     }
@@ -489,8 +499,8 @@ def test_full_report_schema_rejects_post_default_byte_cap_overflow():
     response_size = utf8_json_size_bytes(
         FullReport.model_validate(payload).model_dump(mode="json"),
     )
-    assert raw_size == 1222
-    assert response_size == 1370
+    assert raw_size == 1395
+    assert response_size == 1543
 
     with pytest.raises(ValueError, match="byte budget"):
         validate_full_report_payload(payload, max_bytes=raw_size)

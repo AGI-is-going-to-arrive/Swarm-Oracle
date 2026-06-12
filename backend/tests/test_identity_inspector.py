@@ -88,7 +88,7 @@ def _store_raw_memory(
     document: str,
     metadata: dict,
     doc_id: str | None = None,
-) -> None:
+) -> str:
     """Insert a raw memory document, bypassing redaction in store helper.
 
     Used to simulate memories with potentially sensitive metadata that
@@ -108,11 +108,13 @@ def _store_raw_memory(
         metadata={"hnsw:space": "cosine"},
     )
     payload = {"identity_id": identity_id, **metadata}
+    memory_id = doc_id or str(uuid.uuid4())
     collection.add(
         documents=[document],
         metadatas=[payload],
-        ids=[doc_id or str(uuid.uuid4())],
+        ids=[memory_id],
     )
+    return memory_id
 
 
 # ── 200 path ────────────────────────────────────────────
@@ -139,10 +141,13 @@ async def test_endpoint_returns_200_with_memories_when_owned(client: AsyncClient
     assert "memories" in body and "total" in body
     assert body["total"] == 1
     entry = body["memories"][0]
+    assert entry["memory_id"]
     assert entry["document"] == "kept faith with the council"
     assert entry["source_scenario_id"] == "scenario-alpha"
     assert entry["timestamp"] == "2026-05-10T10:00:00Z"
     assert entry["is_compacted"] is False
+    assert entry["pinned"] is False
+    assert entry["remembered"] is False
     assert entry["metadata"]["scenario_id"] == "scenario-alpha"
 
 
@@ -493,3 +498,132 @@ async def test_endpoint_isolates_memories_to_target_identity(client: AsyncClient
     assert resp.status_code == 200
     docs = [entry["document"] for entry in resp.json()["memories"]]
     assert docs == ["from identity A"]
+
+
+# ── Retrieval-hit chips + pinning ───────────────────────
+
+
+def test_loader_marks_retrieval_hits_from_query_results(monkeypatch: pytest.MonkeyPatch):
+    class FakeCollection:
+        def count(self) -> int:
+            return 2
+
+        def get(self, **_kwargs):
+            return {
+                "ids": ["mem-1", "mem-2"],
+                "documents": ["budget cap memory", "privacy audit memory"],
+                "metadatas": [
+                    {
+                        "identity_id": "inspector-query",
+                        "scenario_id": "scenario-a",
+                        "created_at": "2026-05-10T10:00:00Z",
+                    },
+                    {
+                        "identity_id": "inspector-query",
+                        "scenario_id": "scenario-b",
+                        "created_at": "2026-05-10T11:00:00Z",
+                    },
+                ],
+            }
+
+        def query(self, **_kwargs):
+            return {"ids": [["mem-2"]]}
+
+    class FakeClient:
+        def get_collection(self, *, name: str):
+            assert name == "identity_inspector_user"
+            return FakeCollection()
+
+    class FakeStore:
+        available = True
+        _client = FakeClient()
+
+    monkeypatch.setattr("app.services.vector_store.get_vector_store", lambda: FakeStore())
+
+    entries, error_code = agents_api._load_identity_memory_entries(
+        "inspector-query",
+        OWNER_USER,
+        query_text="audit",
+    )
+
+    assert error_code is None
+    by_id = {entry["memory_id"]: entry for entry in entries}
+    assert by_id["mem-1"]["remembered"] is False
+    assert by_id["mem-2"]["remembered"] is True
+
+
+async def test_pin_and_unpin_memory_persists_in_chroma_metadata(client: AsyncClient):
+    _create_identity("inspector-pin")
+    memory_id = _store_raw_memory(
+        "inspector-pin",
+        document="memory to pin",
+        metadata={
+            "scenario_id": "scenario-pin",
+            "created_at": "2026-05-10T10:00:00Z",
+        },
+        doc_id="pin-target",
+    )
+
+    pin_resp = await client.post(
+        f"/api/agents/identities/inspector-pin/memories/{memory_id}/pin",
+        params={"user_id": OWNER_USER},
+    )
+
+    assert pin_resp.status_code == 200
+    assert pin_resp.json() == {
+        "identity_id": "inspector-pin",
+        "memory_id": memory_id,
+        "pinned": True,
+        "pin_count": 1,
+        "cap": 20,
+    }
+
+    list_resp = await client.get(
+        "/api/agents/identities/inspector-pin/memories",
+        params={"user_id": OWNER_USER},
+    )
+    assert list_resp.status_code == 200
+    assert list_resp.json()["memories"][0]["pinned"] is True
+
+    unpin_resp = await client.delete(
+        f"/api/agents/identities/inspector-pin/memories/{memory_id}/pin",
+        params={"user_id": OWNER_USER},
+    )
+
+    assert unpin_resp.status_code == 200
+    assert unpin_resp.json()["pinned"] is False
+    assert unpin_resp.json()["pin_count"] == 0
+
+
+async def test_pin_endpoint_enforces_twenty_memory_cap(client: AsyncClient):
+    _create_identity("inspector-pin-cap")
+    for idx in range(20):
+        _store_raw_memory(
+            "inspector-pin-cap",
+            document=f"pinned memory {idx}",
+            metadata={
+                "scenario_id": "scenario-pin-cap",
+                "created_at": f"2026-05-10T00:{idx:02d}:00Z",
+                "pinned": "true",
+            },
+            doc_id=f"pin-existing-{idx}",
+        )
+    memory_id = _store_raw_memory(
+        "inspector-pin-cap",
+        document="twenty first memory",
+        metadata={
+            "scenario_id": "scenario-pin-cap",
+            "created_at": "2026-05-10T01:00:00Z",
+        },
+        doc_id="pin-over-cap",
+    )
+
+    resp = await client.post(
+        f"/api/agents/identities/inspector-pin-cap/memories/{memory_id}/pin",
+        params={"user_id": OWNER_USER},
+    )
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["detail"]["code"] == "IDENTITY_MEMORY_PIN_LIMIT_REACHED"
+    assert "20" in body["detail"]["message"]
