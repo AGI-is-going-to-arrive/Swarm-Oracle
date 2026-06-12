@@ -4,15 +4,18 @@
 
 import { useState, useCallback, useEffect, useId, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { generateSocialCopy, getSessionBoundUserId, buildPublicArtifact } from '../api/client';
+import { generateSocialCopy, getSessionBoundUserId, buildPublicArtifact, getSocialFeed } from '../api/client';
 import { getLocalizedApiErrorMessage } from '../lib/apiErrorMessage';
 import { loadLlmProviderPolicy, validateByok } from '../lib/llmProviderPolicy';
 import { type ShareFlavorContext } from '../lib/shareEnvelope';
-import type { BranchInfo } from '../types';
+import type { BranchInfo, SocialHeadlineCard } from '../types';
 import ShareArtifact, { type ShareArtifactHandle } from './ShareArtifact';
 import ShareablePredictionCard, {
   type ShareablePredictionCardHandle,
 } from './result/ShareablePredictionCard';
+import ShareableHeadlineCard, {
+  type ShareableHeadlineCardHandle,
+} from '../pages/result/ShareableHeadlineCard';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useCapabilityCheck } from '../hooks/useCapabilityCheck';
 import { buildSingleFileGalleryHtml } from '../gallery/exportSingleFileHtml';
@@ -45,6 +48,7 @@ interface ShareModalProps {
   mode?: string;
   onClose: () => void;
   onAutomationStateChange?: (state: Record<string, unknown> | null) => void;
+  headlineCard?: SocialHeadlineCard;
 }
 
 function pickDominantBranchForCard(branches: BranchInfo[]): BranchInfo | null {
@@ -98,6 +102,7 @@ export default function ShareModal({
   mode,
   onClose,
   onAutomationStateChange,
+  headlineCard,
 }: ShareModalProps) {
   const { t } = useTranslation();
   const titleId = useId();
@@ -127,6 +132,29 @@ export default function ShareModal({
   const clipboardSupportsImages = clipboardCanWriteImages();
 
   const { enabled: publicArtifactsEnabled, loading: capLoading } = useCapabilityCheck('public_artifacts');
+  const { enabled: headlinesEnabled } = useCapabilityCheck('social_headlines');
+
+  const [headlineFromFeed, setHeadlineFromFeed] = useState<SocialHeadlineCard | null>(null);
+  const [exportingHeadlineCard, setExportingHeadlineCard] = useState(false);
+  const [headlineCardError, setHeadlineCardError] = useState('');
+  const [headlineCardCopied, setHeadlineCardCopied] = useState(false);
+  const headlineCardRef = useRef<ShareableHeadlineCardHandle | null>(null);
+  const headlineCardCopiedTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (headlinesEnabled && scenarioId) {
+      getSocialFeed(scenarioId)
+        .then((res) => {
+          if (res.headline_cards && res.headline_cards.length > 0) {
+            setHeadlineFromFeed(res.headline_cards[0]);
+          }
+        })
+        .catch((err) => {
+          console.error('[ShareModal] Failed to pre-fetch social feed for headlines', err);
+        });
+    }
+  }, [headlinesEnabled, scenarioId]);
+
   const [exportingPublicArtifact, setExportingPublicArtifact] = useState(false);
   const [publicArtifactError, setPublicArtifactError] = useState('');
 
@@ -179,6 +207,10 @@ export default function ShareModal({
     if (predictionCardCopiedTimerRef.current !== null) {
       window.clearTimeout(predictionCardCopiedTimerRef.current);
       predictionCardCopiedTimerRef.current = null;
+    }
+    if (headlineCardCopiedTimerRef.current !== null) {
+      window.clearTimeout(headlineCardCopiedTimerRef.current);
+      headlineCardCopiedTimerRef.current = null;
     }
   }, []);
 
@@ -241,6 +273,14 @@ export default function ShareModal({
   const predictionMode = mode || 'scenario';
   const predictionDate = formatPredictionCardDate(new Date());
   const predictionAgentCount = (agentNames ?? []).filter((n) => typeof n === 'string' && n.trim().length > 0).length || undefined;
+
+  const sc = shareContext as Record<string, unknown> | undefined;
+  const shareHeadline = headlineCard?.headline || (sc?.headline as string | undefined) || headlineFromFeed?.headline || '';
+  const shareHeadlineSummary = headlineCard?.summary || (sc?.headlineSummary as string | undefined) || headlineFromFeed?.summary || '';
+  const shareHeadlineBranch = headlineCard?.branch_title || (sc?.headlineBranch as string | undefined) || headlineFromFeed?.branch_title || '';
+  const shareHeadlineRound = headlineCard?.round_number ?? (sc?.headlineRound as number | null | undefined) ?? headlineFromFeed?.round_number ?? null;
+  const shareHeadlineEventType = headlineCard?.event_type || (sc?.headlineEventType as string | undefined) || headlineFromFeed?.event_type || '';
+  const shareHeadlineFaction = headlineCard?.faction_label || (sc?.headlineFaction as string | undefined) || headlineFromFeed?.faction_label || '';
 
   const handleGenerate = useCallback(async (platform: string) => {
     if (loading) return;
@@ -419,6 +459,73 @@ export default function ShareModal({
     }
   }, [exportingPredictionCard, t]);
 
+  const handleDownloadHeadlineCard = useCallback(async () => {
+    if (exportingHeadlineCard) return;
+    if (!headlineCardRef.current) return;
+    setHeadlineCardError('');
+    setHeadlineCardCopied(false);
+    setExportingHeadlineCard(true);
+    try {
+      const result = await headlineCardRef.current.exportPng();
+      if (!mountedRef.current) return;
+      if (!result.success || !result.blob) {
+        setHeadlineCardError(
+          t('social_feed.export_failed', 'Headline card export failed. Please try again.'),
+        );
+        return;
+      }
+      downloadBlobAsFile(result.blob, `swarmoracle_headline_${Date.now()}.png`);
+    } catch (err) {
+      console.error('[ShareModal] headline card download failed', err);
+      setHeadlineCardError(
+        t('social_feed.export_failed', 'Headline card export failed. Please try again.'),
+      );
+    } finally {
+      setExportingHeadlineCard(false);
+    }
+  }, [exportingHeadlineCard, t]);
+
+  const handleCopyHeadlineCard = useCallback(async () => {
+    if (exportingHeadlineCard) return;
+    if (!headlineCardRef.current) return;
+    setHeadlineCardError('');
+    setHeadlineCardCopied(false);
+    setExportingHeadlineCard(true);
+    try {
+      const result = await headlineCardRef.current.exportPng();
+      if (!result.success || !result.blob) {
+        setHeadlineCardError(
+          t('social_feed.copy_failed', 'Could not copy headline card. Try downloading instead.'),
+        );
+        return;
+      }
+      const ClipboardItemCtor = (window as unknown as {
+        ClipboardItem: new (items: Record<string, Blob>) => ClipboardItem;
+      }).ClipboardItem;
+      const item = new ClipboardItemCtor({ 'image/png': result.blob });
+      await navigator.clipboard.write([item]);
+      if (!mountedRef.current) return;
+      setHeadlineCardCopied(true);
+      if (headlineCardCopiedTimerRef.current !== null) {
+        window.clearTimeout(headlineCardCopiedTimerRef.current);
+      }
+      headlineCardCopiedTimerRef.current = window.setTimeout(() => {
+        if (mountedRef.current) {
+          setHeadlineCardCopied(false);
+        }
+        headlineCardCopiedTimerRef.current = null;
+      }, 2000);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      console.error('[ShareModal] headline card copy failed', err);
+      setHeadlineCardError(
+        t('social_feed.copy_failed', 'Could not copy headline card. Try downloading instead.'),
+      );
+    } finally {
+      setExportingHeadlineCard(false);
+    }
+  }, [exportingHeadlineCard, t]);
+
   const activePlatformLabel = PLATFORMS.find(p => p.key === activePlatform);
 
   useEffect(() => {
@@ -444,12 +551,16 @@ export default function ShareModal({
       exporting_public_artifact: exportingPublicArtifact,
       public_artifact_error: publicArtifactError || null,
       public_artifacts_enabled: publicArtifactsEnabled,
+      exporting_headline_card: exportingHeadlineCard,
+      headline_card_error: headlineCardError || null,
+      headline_card_copied: headlineCardCopied,
+      headline_card_enabled: headlinesEnabled,
     });
 
     return () => {
       onAutomationStateChange?.(null);
     };
-  }, [activePlatform, copied, copy, copyError, error, loading, onAutomationStateChange, platformName, shareContext, status, exportingImage, exportImageError, exportingPredictionCard, predictionCardError, predictionCardCopied, clipboardSupportsImages, exportingPublicArtifact, publicArtifactError, publicArtifactsEnabled]);
+  }, [activePlatform, copied, copy, copyError, error, loading, onAutomationStateChange, platformName, shareContext, status, exportingImage, exportImageError, exportingPredictionCard, predictionCardError, predictionCardCopied, clipboardSupportsImages, exportingPublicArtifact, publicArtifactError, publicArtifactsEnabled, exportingHeadlineCard, headlineCardError, headlineCardCopied, headlinesEnabled]);
 
   return (
     <div className="share-overlay" onClick={handleClose}>
@@ -535,6 +646,42 @@ export default function ShareModal({
               </span>
             </button>
           )}
+          {headlinesEnabled && !!shareHeadline && (
+            <>
+              <button
+                type="button"
+                className="share-platform-btn share-platform-btn--headline"
+                onClick={handleDownloadHeadlineCard}
+                disabled={exportingHeadlineCard || loading}
+                data-testid="share-headline-card-download-btn"
+                aria-busy={exportingHeadlineCard}
+              >
+                <span className="share-platform-icon" aria-hidden="true">📰</span>
+                <span className="share-platform-label">
+                  {exportingHeadlineCard
+                    ? t('social_feed.share_download', 'Generating card…')
+                    : t('social_feed.share_download', 'Download Headline Card')}
+                </span>
+              </button>
+              {clipboardSupportsImages && (
+                <button
+                  type="button"
+                  className="share-platform-btn share-platform-btn--headline-copy"
+                  onClick={handleCopyHeadlineCard}
+                  disabled={exportingHeadlineCard || loading}
+                  data-testid="share-headline-card-copy-btn"
+                  aria-busy={exportingHeadlineCard}
+                >
+                  <span className="share-platform-icon" aria-hidden="true">📋</span>
+                  <span className="share-platform-label">
+                    {headlineCardCopied
+                      ? t('social_feed.share_copied', 'Copied!')
+                      : t('social_feed.share_copy', 'Copy Headline Card')}
+                  </span>
+                </button>
+              )}
+            </>
+          )}
         </div>
         {exportImageError && (
           <p
@@ -554,6 +701,17 @@ export default function ShareModal({
             style={{ padding: '0 24px 8px' }}
           >
             ⚠️ {predictionCardError}
+          </p>
+        )}
+        {headlineCardError && (
+          <p
+            className="share-modal__error-text"
+            role="alert"
+            aria-live="assertive"
+            style={{ padding: '0 24px 8px' }}
+            data-testid="share-headline-card-error"
+          >
+            ⚠️ {headlineCardError}
           </p>
         )}
 
@@ -704,6 +862,18 @@ export default function ShareModal({
           date={predictionDate}
           agentCount={predictionAgentCount}
         />
+        {headlinesEnabled && !!shareHeadline && (
+          <ShareableHeadlineCard
+            ref={headlineCardRef}
+            headline={shareHeadline}
+            summary={shareHeadlineSummary}
+            branchTitle={shareHeadlineBranch}
+            roundNumber={shareHeadlineRound}
+            eventType={shareHeadlineEventType}
+            factionLabel={shareHeadlineFaction}
+            date={predictionDate}
+          />
+        )}
       </div>
     </div>
   );

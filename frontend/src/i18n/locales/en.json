@@ -3325,6 +3325,25 @@
       "mode_debate": "Debate Arena",
       "mode_scenario": "Scenario"
     },
+    "social_feed": {
+      "section_title": "Social Feed",
+      "headlines_title": "Headline Cards",
+      "empty": "No social feed events or headlines generated for this scenario.",
+      "disabled_explanation": "Social Feed is disabled. Check capability settings.",
+      "error": "Failed to load social feed.",
+      "retry": "Retry",
+      "mode_deterministic": "Deterministic",
+      "event_round": "Round {{round}}",
+      "confidence_label": "Confidence",
+      "share_headline": "Social Feed Headline",
+      "share_download": "Download Headline Card",
+      "share_copy": "Copy Headline Card",
+      "share_copied": "Copied!",
+      "export_failed": "Headline card export failed. Please try again.",
+      "copy_failed": "Could not copy headline card. Try downloading instead.",
+      "aria_feed_list": "Social Feed Events",
+      "aria_headline_card": "Headline Card: {{headline}}"
+    },
     "hops": {
       "title": "Probability sampling",
       "subtitle": "Watch how outcomes shift across branches",

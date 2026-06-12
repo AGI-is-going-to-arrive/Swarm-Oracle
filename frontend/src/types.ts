@@ -1576,3 +1576,32 @@ export interface ScorePredictionResultItem {
   brier_score?: number;
   you_vs_oracle?: YouVsOracleComparison;
 }
+
+export interface SocialFeedEvent {
+  event_id: string;
+  round_number: number;
+  event_type: string;
+  branch_title: string;
+  faction_label: string;
+  confidence: number | null;
+  summary: string;
+}
+
+export interface SocialHeadlineCard {
+  card_id: string;
+  headline: string;
+  summary: string;
+  branch_title: string;
+  round_number: number | null;
+  event_type: string;
+  faction_label: string;
+  source_event_id: string;
+}
+
+export interface SocialFeedResponse {
+  scenario_id: string;
+  question: string;
+  generation_mode: 'llm' | 'deterministic';
+  events: SocialFeedEvent[];
+  headline_cards: SocialHeadlineCard[];
+}

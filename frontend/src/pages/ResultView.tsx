@@ -121,6 +121,7 @@ import { DirectorDebriefPanel } from '../components/result/DirectorDebriefPanel'
 import { ProgressIndicator } from '../components/ProgressIndicator';
 import { ResultContextProvider, type ResultViewContextValue } from './result/ResultContext';
 import ResultHeader from './result/ResultHeader';
+import SocialFeedPanel from './result/SocialFeedPanel';
 import { MultiRunDistributionPanel } from '../components/result/MultiRunDistributionPanel';
 import ResultVerdictPanel from './result/ResultVerdictPanel';
 import { ResultReportPanel } from './result/ResultReportPanel';
@@ -1951,6 +1952,10 @@ export default function ResultView() {
         scoreResults={scoreResults}
         hasVerdict={!!storyData?.verdict}
       />
+
+      {scenario?.id && (
+        <SocialFeedPanel scenarioId={scenario.id} />
+      )}
 
       <ResultReportPanel />
 

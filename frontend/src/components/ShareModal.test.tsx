@@ -50,6 +50,24 @@ vi.mock('../api/client', () => ({
   generateSocialCopy: generateSocialCopyMock,
   getSessionBoundUserId: vi.fn(() => 'default_user'),
   buildPublicArtifact: buildPublicArtifactMock,
+  getSocialFeed: vi.fn(async () => ({
+    scenario_id: 'scenario-1',
+    question: 'Mocked Question?',
+    generation_mode: 'llm',
+    events: [],
+    headline_cards: [
+      {
+        card_id: 'card_1',
+        headline: 'Test Headline',
+        summary: 'Test Headline Summary',
+        branch_title: 'Test Branch',
+        round_number: 1,
+        event_type: 'Test Event',
+        faction_label: 'Test Faction',
+        source_event_id: 'event_1',
+      },
+    ],
+  })),
 }));
 
 vi.mock('../hooks/useCapabilityCheck', () => ({
@@ -526,6 +544,94 @@ describe('ShareModal automation callback', () => {
       await user.click(downloadHtmlBtn);
 
       expect(buildPublicArtifactMock).toHaveBeenCalledWith('scenario-enabled-html');
+      expect(URL.createObjectURL).toHaveBeenCalled();
+      expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
+    });
+  });
+
+  describe('Headline Share Entry', () => {
+    it('shows headline-share buttons when social_headlines enabled and headline exists', async () => {
+      useCapabilityCheckMock.mockReturnValue({
+        loading: false,
+        enabled: true,
+        capabilities: null,
+      });
+
+      const { container } = render(
+        <ShareModal
+          scenarioId="scenario-headline"
+          onClose={() => {}}
+          headlineCard={{
+            card_id: 'card_1',
+            headline: 'PORTS BLOCKED!',
+            summary: 'Trade stops.',
+            branch_title: 'Blockade Active',
+            round_number: 1,
+            event_type: 'Economic Shock',
+            faction_label: 'Logistics Guild',
+            source_event_id: 'event_1',
+          }}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('share-headline-card-download-btn')).toBeInTheDocument();
+      });
+
+      // Ensure no secret-looking strings appear in the rendered DOM content
+      const content = container.textContent || '';
+      expect(content).not.toContain('api_key');
+      expect(content).not.toContain('base_url');
+      expect(content).not.toContain('Bearer');
+      expect(content).not.toContain('token');
+      expect(content).not.toContain('sk-test');
+    });
+
+    it('exports and downloads headline card as PNG using html2canvas and toBlob', async () => {
+      useCapabilityCheckMock.mockReturnValue({
+        loading: false,
+        enabled: true,
+        capabilities: null,
+      });
+
+      const toBlob = vi.fn((callback: BlobCallback) => {
+        callback(new Blob(['png'], { type: 'image/png' }));
+      });
+      html2canvasMock.mockResolvedValueOnce({ toBlob });
+
+      render(
+        <ShareModal
+          scenarioId="scenario-headline"
+          onClose={() => {}}
+          headlineCard={{
+            card_id: 'card_1',
+            headline: 'PORTS BLOCKED!',
+            summary: 'Trade stops.',
+            branch_title: 'Blockade Active',
+            round_number: 1,
+            event_type: 'Economic Shock',
+            faction_label: 'Logistics Guild',
+            source_event_id: 'event_1',
+          }}
+        />
+      );
+
+      const downloadBtn = await screen.findByTestId('share-headline-card-download-btn');
+      const user = userEvent.setup();
+      await user.click(downloadBtn);
+
+      await waitFor(() => {
+        expect(html2canvasMock).toHaveBeenCalledWith(
+          expect.any(HTMLElement),
+          expect.objectContaining({
+            backgroundColor: '#0a0a14',
+            width: 1200,
+            height: 630,
+          }),
+        );
+      });
+
+      expect(toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png', 0.95);
       expect(URL.createObjectURL).toHaveBeenCalled();
       expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
     });

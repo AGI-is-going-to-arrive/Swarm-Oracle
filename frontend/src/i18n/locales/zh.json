@@ -3325,6 +3325,25 @@
       "mode_debate": "辩论竞技场",
       "mode_scenario": "推演"
     },
+    "social_feed": {
+      "section_title": "社交动态",
+      "headlines_title": "头条新闻卡片",
+      "empty": "此推演未生成社交动态或头条新闻。",
+      "disabled_explanation": "社交动态功能已禁用。请检查功能配置。",
+      "error": "加载社交动态失败。",
+      "retry": "重试",
+      "mode_deterministic": "确定性",
+      "event_round": "第 {{round}} 轮",
+      "confidence_label": "置信度",
+      "share_headline": "社交头条新闻",
+      "share_download": "下载头条卡片",
+      "share_copy": "复制头条卡片",
+      "share_copied": "已复制！",
+      "export_failed": "头条卡片导出失败，请重试。",
+      "copy_failed": "无法复制头条卡片，请尝试下载。",
+      "aria_feed_list": "社交动态事件列表",
+      "aria_headline_card": "头条卡片：{{headline}}"
+    },
     "hops": {
       "title": "概率采样",
       "subtitle": "观察各分支结局的可能性分布",

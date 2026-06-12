@@ -1,0 +1,180 @@
+/* ═══════════════════════════════════════════════════════════
+   F11 — ShareableHeadlineCard
+   Fixed 1200×630 layout for html2canvas rasterization.
+   IMPORTANT: html2canvas cannot reliably resolve CSS custom
+   properties or oklch(); every value below is a hex/rgba
+   literal so the rasterized PNG matches what you see on screen.
+   ═══════════════════════════════════════════════════════════ */
+
+.headline-card-host {
+  position: fixed;
+  top: 0;
+  left: -99999px;
+  pointer-events: none;
+}
+
+.headline-card-host .headline-card {
+  width: 1200px;
+  height: 630px;
+  display: flex;
+  flex-direction: row;
+  box-sizing: border-box;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif;
+  background-color: #0a0a14;
+  color: #f5f5fa;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ─── Left brand panel (40%) ──────────────────────────── */
+.headline-card-host .headline-card__brand {
+  flex: 0 0 480px;
+  height: 100%;
+  padding: 56px 48px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  position: relative;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(168, 85, 247, 0.45) 0%, transparent 55%),
+    radial-gradient(circle at 80% 90%, rgba(56, 189, 248, 0.40) 0%, transparent 55%),
+    linear-gradient(160deg, #14142b 0%, #1a1a3a 50%, #0a0a14 100%);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.headline-card-host .headline-card__brand-mark {
+  width: 88px;
+  height: 88px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, #f4c97a 0%, #d97757 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Cormorant Garamond', 'Times New Roman', Georgia, serif;
+  font-size: 56px;
+  font-weight: 700;
+  color: #0a0a14;
+  margin-bottom: 32px;
+  box-shadow: 0 8px 24px rgba(217, 119, 87, 0.32);
+}
+
+.headline-card-host .headline-card__brand-title {
+  font-family: 'Cormorant Garamond', 'Times New Roman', Georgia, serif;
+  font-size: 56px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #ffffff;
+  line-height: 1.0;
+  margin-bottom: 16px;
+}
+
+.headline-card-host .headline-card__brand-subtitle {
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(244, 201, 122, 0.92);
+  line-height: 1.3;
+}
+
+.headline-card-host .headline-card__brand-decoration {
+  position: absolute;
+  bottom: 56px;
+  left: 48px;
+  width: 64px;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #f4c97a 0%, #d97757 100%);
+}
+
+/* ─── Right content panel (60%) ───────────────────────── */
+.headline-card-host .headline-card__content {
+  flex: 1 1 auto;
+  height: 100%;
+  padding: 64px 64px 56px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background:
+    linear-gradient(180deg, #14142b 0%, #0f0f24 100%);
+  position: relative;
+}
+
+.headline-card-host .headline-card__meta-badge {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(244, 201, 122, 0.88);
+  margin-bottom: 14px;
+}
+
+.headline-card-host .headline-card__title {
+  font-family: 'Cormorant Garamond', 'Times New Roman', Georgia, serif;
+  font-size: 38px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: #ffffff;
+  margin: 0 0 24px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.headline-card-host .headline-card__summary {
+  font-size: 19px;
+  line-height: 1.6;
+  color: rgba(229, 229, 240, 0.94);
+  margin: 0 0 auto;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ─── Footer ──────────────────────────────────────────── */
+.headline-card-host .headline-card__footer {
+  margin-top: auto;
+  padding-top: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.headline-card-host .headline-card__footer-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(244, 201, 122, 0.85);
+}
+
+.headline-card-host .headline-card__footer-branch {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.headline-card-host .headline-card__footer-type {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.headline-card-host .headline-card__footer-divider {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.headline-card-host .headline-card__watermark {
+  font-size: 14px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.4);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}

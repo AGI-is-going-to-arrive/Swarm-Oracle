@@ -19,6 +19,7 @@ import type {
   ListPacksResponse, LocalPack, RefreshPacksResponse, DiagnosticsResponse,
   MultiRunResponse, RunGroupDistributionResponse,
   ScorePredictionResultItem,
+  SocialFeedResponse,
 } from '../types';
 import { getOrgId } from '../lib/orgContext';
 
@@ -553,6 +554,7 @@ export interface CapabilitiesResponse {
   local_packs?: CapabilityEntry;
   multi_run?: CapabilityEntry & { default_count: number; max_count: number };
   you_vs_oracle?: CapabilityEntry;
+  social_headlines?: CapabilityEntry;
 }
 
 /** Persona export/import payload — schema_version 1 contract. */
@@ -1535,6 +1537,11 @@ export async function getFactionTimeline(
   return safeGet(
     `/scenario/${encodeURIComponent(scenarioId)}/faction-timeline?branch_id=${encodeURIComponent(branchId)}`,
   );
+}
+
+/** GET /api/scenario/:id/social-feed — F11 Social Feed + Headline Cards data */
+export async function getSocialFeed(scenarioId: string): Promise<SocialFeedResponse> {
+  return safeGet(`/scenario/${encodeURIComponent(scenarioId)}/social-feed`);
 }
 
 /** POST /api/scenario/:id/resume — P1-9 resume simulation from a round */
