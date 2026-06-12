@@ -30,6 +30,48 @@ async def _noop_async_none(*_args, **_kwargs):
     return None
 
 
+class _FakeStreamResponse:
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        lines: list[str] | None = None,
+        body: object | None = None,
+        url: str = "https://api.openai.com/v1/chat/completions",
+    ):
+        self.status_code = status_code
+        self._lines = list(lines or [])
+        self.request = httpx.Request("POST", url)
+        self.text = json.dumps(body or {}, ensure_ascii=False)
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"HTTP {self.status_code}",
+                request=self.request,
+                response=httpx.Response(
+                    self.status_code,
+                    text=self.text,
+                    request=self.request,
+                ),
+            )
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _FakeStreamContext:
+    def __init__(self, response: _FakeStreamResponse):
+        self.response = response
+
+    async def __aenter__(self):
+        return self.response
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 @pytest.fixture(autouse=True)
 async def reset_shared_async_client():
     await llm_client.close_shared_async_client()
@@ -1912,6 +1954,75 @@ class TestLlmCallStructuredOutputs:
         assert "text" not in captured_payload
 
     @pytest.mark.asyncio
+    async def test_chat_stream_injects_response_format_json_schema(self, monkeypatch):
+        captured_payload: dict = {}
+        stream_lines = [
+            "data: "
+            + json.dumps(
+                {
+                    "choices": [
+                        {"delta": {"content": '{"answer":"ok"}'}}
+                    ]
+                }
+            ),
+            "data: [DONE]",
+        ]
+
+        def mock_stream(self, method, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return _FakeStreamContext(
+                _FakeStreamResponse(200, lines=stream_lines, url=url)
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "stream", mock_stream)
+
+        result = await llm_call_json_stream(
+            "Return JSON.",
+            base_url="https://api.openai.com/v1/chat/completions",
+            api_key="openai-key",
+        )
+
+        assert result == {"answer": "ok"}
+        assert captured_payload["response_format"] == {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "swarmoracle_json_response",
+                "schema": {"type": "object", "additionalProperties": True},
+            },
+        }
+        assert "text" not in captured_payload
+
+    @pytest.mark.asyncio
+    async def test_responses_stream_injects_text_format_json_schema(self, monkeypatch):
+        captured_payload: dict = {}
+        stream_lines = [
+            "data: " + json.dumps({"delta": '{"answer":"ok"}'}),
+            "data: [DONE]",
+        ]
+
+        def mock_stream(self, method, url, *, json=None, **kwargs):
+            captured_payload.update(json or {})
+            return _FakeStreamContext(
+                _FakeStreamResponse(200, lines=stream_lines, url=url)
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "stream", mock_stream)
+
+        result = await llm_call_json_stream(
+            "Return JSON.",
+            base_url="https://api.openai.com/v1/responses",
+            api_key="openai-key",
+        )
+
+        assert result == {"answer": "ok"}
+        assert captured_payload["text"]["format"] == {
+            "type": "json_schema",
+            "name": "swarmoracle_json_response",
+            "schema": {"type": "object", "additionalProperties": True},
+        }
+        assert "response_format" not in captured_payload
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "base_url",
         [
@@ -2145,6 +2256,104 @@ class TestLlmCallStructuredOutputs:
 
         assert len(payloads) == 1
         assert "response_format" in payloads[0]
+        assert "Structured output rejected by provider" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_stream_structured_rejection_falls_back_without_stream_replay(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        stream_payloads: list[dict] = []
+        post_payloads: list[dict] = []
+
+        async def _fake_probe(**kwargs):
+            return {"supported": True, "reason": None}
+
+        def mock_stream(self, method, url, *, json=None, **kwargs):
+            stream_payloads.append(dict(json or {}))
+            return _FakeStreamContext(
+                _FakeStreamResponse(
+                    400,
+                    body={"error": {"message": "Unknown parameter: response_format"}},
+                    url=url,
+                )
+            )
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            post_payloads.append(dict(json or {}))
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"answer":"fallback"}'}}]},
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(llm_client, "probe_streaming_support", _fake_probe)
+        monkeypatch.setattr(httpx.AsyncClient, "stream", mock_stream)
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        caplog.set_level("WARNING")
+
+        result = await llm_call_json_with_stream_fallback(
+            "Return JSON.",
+            base_url="https://api.openai.com/v1/chat/completions",
+            api_key="openai-key",
+            probe_timeout=1.0,
+        )
+
+        assert result == {"answer": "fallback"}
+        assert len(stream_payloads) == 1
+        assert "response_format" in stream_payloads[0]
+        assert len(post_payloads) == 1
+        assert "response_format" in post_payloads[0]
+        assert "Structured output rejected by provider" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_stream_non_structured_error_does_not_strip_or_replay(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        stream_payloads: list[dict] = []
+        post_payloads: list[dict] = []
+
+        async def _fake_probe(**kwargs):
+            return {"supported": True, "reason": None}
+
+        def mock_stream(self, method, url, *, json=None, **kwargs):
+            stream_payloads.append(dict(json or {}))
+            return _FakeStreamContext(
+                _FakeStreamResponse(
+                    400,
+                    body={"error": {"message": "quota exceeded for this account"}},
+                    url=url,
+                )
+            )
+
+        async def mock_post(self, url, *, json=None, **kwargs):
+            post_payloads.append(dict(json or {}))
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"answer":"fallback"}'}}]},
+                request=httpx.Request("POST", url),
+            )
+
+        monkeypatch.setattr(llm_client, "probe_streaming_support", _fake_probe)
+        monkeypatch.setattr(httpx.AsyncClient, "stream", mock_stream)
+        monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+        caplog.set_level("WARNING")
+
+        result = await llm_call_json_with_stream_fallback(
+            "Return JSON.",
+            base_url="https://api.openai.com/v1/chat/completions",
+            api_key="openai-key",
+            probe_timeout=1.0,
+        )
+
+        assert result == {"answer": "fallback"}
+        assert len(stream_payloads) == 1
+        assert "response_format" in stream_payloads[0]
+        assert len(post_payloads) == 1
+        assert "response_format" in post_payloads[0]
         assert "Structured output rejected by provider" not in caplog.text
 
 

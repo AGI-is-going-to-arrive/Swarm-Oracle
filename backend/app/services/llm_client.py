@@ -2665,6 +2665,8 @@ async def llm_call_stream(
     timeout: float = 120.0,
     api_key: str | None = None,
     base_url: str | None = None,
+    structured_output_schema: dict[str, Any] | None = None,
+    structured_output_name: str = "swarmoracle_json_response",
 ):
     """Stream LLM response token by token (async generator).
 
@@ -2704,6 +2706,17 @@ async def llm_call_stream(
             payload["reasoning"] = {"effort": effort}
         payload["stream"] = True
 
+    provider_profile = detect_provider(base_url or target_url)
+    structured_output_keys: frozenset[str] = frozenset()
+    if structured_output_schema is not None:
+        structured_output_params, structured_output_keys = _build_structured_output_params(
+            provider_profile=provider_profile,
+            schema=structured_output_schema,
+            name=structured_output_name,
+            is_chat=is_chat,
+        )
+        payload.update(structured_output_params)
+
     logger.debug("LLM stream request → %s (effort=%s, %d chars, byok=%s)",
                  payload["model"], effort, len(input_text), bool(api_key or base_url))
 
@@ -2719,6 +2732,8 @@ async def llm_call_stream(
         max_retries = 3
         retry_delay = 1.0
         last_exc: Exception | None = None
+        attempt_payload = dict(payload)
+        active_structured_output_keys = set(structured_output_keys)
 
         for attempt in range(max_retries + 1):
             emitted_content = False
@@ -2726,7 +2741,7 @@ async def llm_call_stream(
                 async with client.stream(
                     "POST",
                     target_url,
-                    json=payload,
+                    json=attempt_payload,
                     headers={
                         "Authorization": f"Bearer {target_key}",
                         "Content-Type": "application/json",
@@ -2742,6 +2757,18 @@ async def llm_call_stream(
                             break
                         try:
                             chunk = json.loads(data_str)
+                            if active_structured_output_keys:
+                                body_error = _detect_structured_output_body_error(chunk)
+                                if body_error:
+                                    logger.warning(
+                                        "Structured output rejected by provider during stream; "
+                                        "falling back to non-stream JSON"
+                                    )
+                                    _drop_structured_output_params(
+                                        attempt_payload,
+                                        active_structured_output_keys,
+                                    )
+                                    raise LLMError("Structured output rejected by provider")
                             if is_chat:
                                 delta = chunk.get("choices", [{}])[0].get("delta", {})
                                 content = delta.get("content")
@@ -2758,6 +2785,19 @@ async def llm_call_stream(
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 status_code = exc.response.status_code
+                if active_structured_output_keys and _is_structured_output_rejection(
+                    status_code,
+                    exc.response.text,
+                ):
+                    logger.warning(
+                        "Structured output rejected by provider during stream; "
+                        "falling back to non-stream JSON"
+                    )
+                    _drop_structured_output_params(
+                        attempt_payload,
+                        active_structured_output_keys,
+                    )
+                    raise _llm_error_from_http_status(exc) from exc
                 if (
                     not emitted_content
                     and (status_code == 429 or status_code >= 500)
@@ -2819,6 +2859,8 @@ async def llm_call_json_stream(
     api_key: str | None = None,
     base_url: str | None = None,
     fallback_mode: str | None = None,
+    use_structured_outputs: bool = True,
+    structured_output_schema: dict[str, Any] | None = None,
 ) -> dict:
     """Stream LLM response with real-time delta callback, then parse as JSON.
 
@@ -2832,6 +2874,11 @@ async def llm_call_json_stream(
         temperature=temperature,
         model=model,
         api_key=api_key, base_url=base_url,
+        structured_output_schema=(
+            (structured_output_schema or _default_structured_output_schema())
+            if use_structured_outputs
+            else None
+        ),
     ):
         full_text += delta
         if on_delta:
@@ -2851,6 +2898,8 @@ async def llm_call_json_with_stream_fallback(
     base_url: str | None = None,
     fallback_mode: str | None = None,
     probe_timeout: float = 8.0,
+    use_structured_outputs: bool = True,
+    structured_output_schema: dict[str, Any] | None = None,
 ) -> dict:
     """Prefer streaming JSON when supported, otherwise fall back to non-stream.
 
@@ -2873,6 +2922,8 @@ async def llm_call_json_with_stream_fallback(
                 api_key=api_key,
                 base_url=base_url,
                 fallback_mode=fallback_mode,
+                use_structured_outputs=use_structured_outputs,
+                structured_output_schema=structured_output_schema,
             )
         except Exception:
             logger.warning(
@@ -2888,6 +2939,8 @@ async def llm_call_json_with_stream_fallback(
         api_key=api_key,
         base_url=base_url,
         fallback_mode=fallback_mode,
+        use_structured_outputs=use_structured_outputs,
+        structured_output_schema=structured_output_schema,
     )
 
 
