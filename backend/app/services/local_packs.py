@@ -158,18 +158,24 @@ class LocalPackLoader:
 
         for path in sorted(self.packs_dir.glob("*.json")):
             diagnostic_id = path.name
-            if path.is_symlink():
+            try:
+                is_symlink = path.is_symlink()
+                is_file = path.is_file()
+            except OSError:
+                diagnostics.append(_file_read_diagnostic(path.name))
+                continue
+            if is_symlink:
                 diagnostics.append(
                     _diagnostic(diagnostic_id, "SYMLINK_PACK_FILE", "Pack file is a symlink")
                 )
                 continue
-            if not path.is_file():
+            if not is_file:
                 continue
 
             try:
                 byte_size = path.stat().st_size
-            except OSError as exc:
-                diagnostics.append(_diagnostic(diagnostic_id, "FILE_READ_ERROR", str(exc)))
+            except OSError:
+                diagnostics.append(_file_read_diagnostic(path.name))
                 continue
             if byte_size > MAX_PACK_FILE_BYTES:
                 diagnostics.append(
@@ -182,8 +188,17 @@ class LocalPackLoader:
                 continue
 
             try:
-                raw = json.loads(path.read_text(encoding="utf-8"))
-            except (JSONDecodeError, UnicodeDecodeError) as exc:
+                raw_text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError as exc:
+                diagnostics.append(_diagnostic(diagnostic_id, "MALFORMED_JSON", str(exc)))
+                continue
+            except OSError:
+                diagnostics.append(_file_read_diagnostic(path.name))
+                continue
+
+            try:
+                raw = json.loads(raw_text)
+            except JSONDecodeError as exc:
                 diagnostics.append(_diagnostic(diagnostic_id, "MALFORMED_JSON", str(exc)))
                 continue
 
@@ -261,6 +276,14 @@ def check_bilingual_parity(pack: LocalPack) -> list[PackDiagnostic]:
 
 def _diagnostic(id_or_filename: str, code: str, message: str) -> PackDiagnostic:
     return PackDiagnostic(id_or_filename=id_or_filename, code=code, message=message)
+
+
+def _file_read_diagnostic(filename: str) -> PackDiagnostic:
+    return _diagnostic(
+        filename,
+        "FILE_READ_ERROR",
+        f"Pack file could not be read: {filename}",
+    )
 
 
 def _is_valid_pack_id(value: str) -> bool:

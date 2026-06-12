@@ -788,6 +788,27 @@ async def test_document_seed_rejects_oversize_decoded_text(
     assert resp.json()["detail"]["code"] == "DOCUMENT_TEXT_TOO_LARGE"
 
 
+async def test_document_seed_rejects_overlong_filename_before_extraction(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(agents_api.settings, "FEATURE_DOCUMENT_SEED", True, raising=False)
+
+    async def fail_if_extraction_runs(_file, _blob):
+        raise AssertionError("document extraction should not run for overlong filename")
+
+    monkeypatch.setattr(agents_api, "_extract_document_seed_text", fail_if_extraction_runs)
+    overlong_filename = f"{'a' * 256}.txt"
+
+    resp = await client.post(
+        "/api/agents/document-seed",
+        files={"file": (overlong_filename, b"Alice runs logistics.", "text/plain")},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "DOCUMENT_FILENAME_TOO_LONG"
+
+
 async def test_document_seed_world_context_is_truncated_to_budget(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,

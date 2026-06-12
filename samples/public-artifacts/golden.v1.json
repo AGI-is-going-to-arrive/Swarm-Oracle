@@ -1,0 +1,65 @@
+{
+  "schema_version": "public_artifact.v1",
+  "question": "如果海港城市先建立公共电报网络，会怎样改变贸易？ What if a port city built a public telegraph network first?",
+  "language": "zh",
+  "display_agent_names": [
+    "码头组织者 / Dock Organizer",
+    "Harbor Economist"
+  ],
+  "branch_verdicts": [
+    {
+      "branch_index": 1,
+      "title": "Cooperative signal rules",
+      "verdict": "合作治理让码头工人和商会共享收益。",
+      "confidence": "medium"
+    },
+    {
+      "branch_index": 2,
+      "title": "Guild monopoly",
+      "verdict": "A guild monopoly captures most of the upside.",
+      "confidence": "medium"
+    }
+  ],
+  "probability_bars": [
+    {
+      "branch_index": 1,
+      "label": "Cooperative signal rules",
+      "probability": 0.64
+    },
+    {
+      "branch_index": 2,
+      "label": "Guild monopoly",
+      "probability": 0.36
+    }
+  ],
+  "transcript_excerpts": [
+    {
+      "branch_index": 1,
+      "round": 1,
+      "agent_name": "码头组织者 / Dock Organizer",
+      "excerpt": "工人可以更早看到班表, and merchants can audit delays."
+    },
+    {
+      "branch_index": 2,
+      "round": 2,
+      "agent_name": "Harbor Economist",
+      "excerpt": "The first mover can price access unless public rules arrive."
+    }
+  ],
+  "source_summary": {
+    "domains": [
+      {
+        "domain": "archives.example.com",
+        "source_count": 1
+      },
+      {
+        "domain": "history.example.org",
+        "source_count": 1
+      },
+      {
+        "domain": "journals.example.net",
+        "source_count": 1
+      }
+    ]
+  }
+}

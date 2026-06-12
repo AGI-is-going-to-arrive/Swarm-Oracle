@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -33,6 +34,7 @@ from app.services.public_artifacts import (
     MAX_TITLE_CHARS,
     MAX_TRANSCRIPT_EXCERPTS,
     PUBLIC_ARTIFACT_SCHEMA_VERSION,
+    PublicArtifactV1,
     build_public_artifact_for_scenario,
     build_public_artifact_from_mapping,
     scan_public_artifact_for_secrets,
@@ -218,6 +220,95 @@ def _serialized(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
+def _mapping_with_allowed_text(text: str, *, field: str) -> dict[str, Any]:
+    mapping = _dirty_mapping()
+    mapping["question"] = "Will the solar compact hold?"
+    mapping["messages"][0]["message"] = "Publicly safe transcript excerpt."
+    if field == "question":
+        mapping["question"] = text
+    elif field == "excerpt":
+        mapping["messages"][0]["message"] = text
+    else:  # pragma: no cover - test helper misuse guard
+        raise AssertionError(f"unknown allowed text field: {field}")
+    return mapping
+
+
+def _golden_public_artifact_mapping() -> dict[str, Any]:
+    return {
+        "question": (
+            "如果海港城市先建立公共电报网络，会怎样改变贸易？ "
+            "What if a port city built a public telegraph network first?"
+        ),
+        "language": "zh",
+        "parsed_context": {
+            "_language": "zh",
+            "result_quality": {
+                "verdict": "公共网络提高透明度, but governance decides who benefits.",
+                "confidence": "medium",
+                "branch_question_answers": {
+                    "branch-cooperative": "合作治理让码头工人和商会共享收益。",
+                    "branch-monopoly": "A guild monopoly captures most of the upside.",
+                },
+            },
+        },
+        "agents": [
+            {"name": "码头组织者 / Dock Organizer"},
+            {"name": "Harbor Economist"},
+        ],
+        "branches": [
+            {
+                "id": "branch-cooperative",
+                "title": "Cooperative signal rules",
+                "probability": 0.64,
+                "insight": "Shared standards keep the network open.",
+                "fork_round": 1,
+            },
+            {
+                "id": "branch-monopoly",
+                "title": "Guild monopoly",
+                "probability": 0.36,
+                "insight": "Access fees concentrate bargaining power.",
+                "fork_round": 2,
+            },
+        ],
+        "messages": [
+            {
+                "branch": "branch-cooperative",
+                "round": 1,
+                "agent": "码头组织者 / Dock Organizer",
+                "message": "工人可以更早看到班表, and merchants can audit delays.",
+            },
+            {
+                "branch": "branch-monopoly",
+                "round": 2,
+                "agent": "Harbor Economist",
+                "message": "The first mover can price access unless public rules arrive.",
+            },
+        ],
+        "web_search_context": {
+            "snippets": [
+                {"source_url": "https://history.example.org/telegraph-port"},
+                {"source_url": "https://archives.example.com/harbor-signals"},
+            ],
+            "family_context": {
+                "academic": {
+                    "items": [
+                        {"url": "https://journals.example.net/network-governance"}
+                    ],
+                },
+            },
+        },
+    }
+
+
+def _key_shape(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _key_shape(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_key_shape(value[0])] if value else []
+    return type(value).__name__
+
+
 def test_sanitizer_whitelist_excludes_each_forbidden_field() -> None:
     artifact = build_public_artifact_from_mapping(_dirty_mapping())
     payload = _serialized(artifact)
@@ -348,6 +439,101 @@ def test_secret_scan_rejects_secret_shaped_allowed_text() -> None:
 
     with pytest.raises(ValueError, match="sensitive"):
         scan_public_artifact_for_secrets(artifact)
+
+
+@pytest.mark.parametrize(
+    ("credential_class", "token", "field"),
+    [
+        (
+            "github-ghp-lowercase",
+            "ghp_abcdefghijklmnopqrstuvwxyz1234567890abcd",
+            "question",
+        ),
+        (
+            "github-gho",
+            "gho_abcdefghijklmnopqrstuvwxyz1234567890abcd",
+            "excerpt",
+        ),
+        (
+            "github-ghu",
+            "ghu_abcdefghijklmnopqrstuvwxyz1234567890abcd",
+            "question",
+        ),
+        (
+            "github-ghs",
+            "ghs_abcdefghijklmnopqrstuvwxyz1234567890abcd",
+            "excerpt",
+        ),
+        (
+            "github-pat",
+            "github_pat_11abcdefghijklmnopqrstuvwxyzABCDE12345",
+            "question",
+        ),
+        ("aws-access-key-id", "AKIA1234567890ABCDEF", "excerpt"),
+        ("slack-bot-token", "xoxb-" + "123456789012-abcdefghijklmnop", "question"),
+        ("slack-user-token", "xoxp-" + "123456789012-abcdefghijklmnop", "excerpt"),
+        ("gitlab-pat", "glpat-abcdefghijklmnopqrst", "question"),
+        ("google-api-key", "AIza" + ("A" * 35), "excerpt"),
+    ],
+)
+def test_unlabelled_credentials_are_redacted_from_allowed_text_fields(
+    credential_class: str,
+    token: str,
+    field: str,
+) -> None:
+    artifact = build_public_artifact_from_mapping(
+        _mapping_with_allowed_text(f"safe context {token} continues", field=field)
+    )
+    payload = _serialized(artifact)
+
+    assert credential_class
+    assert token not in payload
+    assert "[redacted-key]" in payload
+    scan_public_artifact_for_secrets(artifact)
+
+
+@pytest.mark.parametrize(
+    ("credential_class", "safe_text", "field"),
+    [
+        ("github", "ghprevious and github_patience are ordinary prose.", "question"),
+        ("aws", "akiapola and AKIA-short labels should stay readable.", "excerpt"),
+        ("slack", "xoxb-team and xoxp-user are short labels, not tokens.", "question"),
+        ("gitlab", "glpat-lab is a mnemonic in this sentence.", "excerpt"),
+        ("google", "Aizawa wrote that AIza is only a prefix here.", "question"),
+    ],
+)
+def test_unlabelled_credential_redaction_avoids_boundary_false_positives(
+    credential_class: str,
+    safe_text: str,
+    field: str,
+) -> None:
+    artifact = build_public_artifact_from_mapping(
+        _mapping_with_allowed_text(safe_text, field=field)
+    )
+    payload = _serialized(artifact)
+
+    assert credential_class
+    assert safe_text in payload
+    assert "[redacted-key]" not in payload
+
+
+def test_public_artifact_golden_fixture_matches_current_builder_shape() -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[2]
+        / "samples"
+        / "public-artifacts"
+        / "golden.v1.json"
+    )
+    golden = json.loads(fixture_path.read_text(encoding="utf-8"))
+    generated = build_public_artifact_from_mapping(_golden_public_artifact_mapping())
+
+    assert golden["schema_version"] == PUBLIC_ARTIFACT_SCHEMA_VERSION
+    PublicArtifactV1.model_validate(golden)
+    assert _key_shape(golden) == _key_shape(generated)
+    assert golden["transcript_excerpts"]
+    for excerpt in golden["transcript_excerpts"]:
+        assert set(excerpt) == {"branch_index", "round", "agent_name", "excerpt"}
+        assert isinstance(excerpt["round"], int)
 
 
 def test_endpoint_returns_public_artifact_for_signed_owner(

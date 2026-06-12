@@ -74,6 +74,14 @@ _SENSITIVE_VALUE_RE = re.compile(
     r"\bhttps?://[^/?#\s@]+@[^/?#\s]+",
     re.IGNORECASE,
 )
+_UNLABELLED_CREDENTIAL_VALUE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:gh[pous]_[A-Za-z0-9_]{20,}|"
+    r"github_pat_[A-Za-z0-9_]{20,})(?![A-Za-z0-9_])|"
+    r"\bAKIA[0-9A-Z]{16}\b|"
+    r"(?<![A-Za-z0-9-])xox[bp]-[A-Za-z0-9-]{10,}(?![A-Za-z0-9-])|"
+    r"(?<![A-Za-z0-9_-])glpat-[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])|"
+    r"(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}(?![A-Za-z0-9_-])"
+)
 
 
 class _StrictModel(BaseModel):
@@ -135,7 +143,8 @@ def _is_sensitive_key(key: Any) -> bool:
 
 
 def _clean_text(value: Any, *, max_chars: int) -> str:
-    text = _scrub_sensitive_text(str(value or ""))
+    text = _UNLABELLED_CREDENTIAL_VALUE_RE.sub("[redacted-key]", str(value or ""))
+    text = _scrub_sensitive_text(text)
     text = _CONTROL_CHARS_RE.sub("", text)
     text = _WHITESPACE_RE.sub(" ", text).strip()
     if max_chars >= 0:
@@ -472,5 +481,8 @@ def scan_public_artifact_for_secrets(value: Any, path: str = "$") -> None:
         for index, item in enumerate(value):
             scan_public_artifact_for_secrets(item, f"{path}[{index}]")
         return
-    if isinstance(value, str) and _SENSITIVE_VALUE_RE.search(value):
+    if isinstance(value, str) and (
+        _SENSITIVE_VALUE_RE.search(value)
+        or _UNLABELLED_CREDENTIAL_VALUE_RE.search(value)
+    ):
         raise ValueError(f"sensitive value is not allowed at {path}")

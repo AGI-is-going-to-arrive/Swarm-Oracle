@@ -217,6 +217,69 @@ def test_malformed_json_and_oversized_files_are_diagnostics(tmp_path: Path):
     assert {"MALFORMED_JSON", "FILE_TOO_LARGE"}.issubset(_codes(registry))
 
 
+def test_read_text_oserror_returns_safe_diagnostic_without_path_leak(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    unreadable = tmp_path / "unreadable.json"
+    _write_pack(unreadable, _valid_pack("unreadable-pack"))
+    original_read_text = Path.read_text
+
+    def fake_read_text(self: Path, *args, **kwargs):
+        if self == unreadable:
+            raise OSError(f"Permission denied: '{unreadable}'")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    registry = LocalPackLoader(tmp_path).refresh()
+
+    assert registry.packs == []
+    assert len(registry.diagnostics) == 1
+    diagnostic = registry.diagnostics[0]
+    assert diagnostic.id_or_filename == "unreadable.json"
+    assert diagnostic.code == "FILE_READ_ERROR"
+    assert "unreadable.json" in diagnostic.message
+    assert str(unreadable) not in diagnostic.message
+    assert str(tmp_path) not in diagnostic.message
+    assert "Permission denied" not in diagnostic.message
+
+
+def test_stat_oserror_returns_safe_diagnostic_without_path_leak(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    unreadable = tmp_path / "stat-failed.json"
+    _write_pack(unreadable, _valid_pack("stat-failed-pack"))
+    original_is_file = Path.is_file
+    original_stat = Path.stat
+
+    def fake_is_file(self: Path) -> bool:
+        if self == unreadable:
+            return True
+        return original_is_file(self)
+
+    def fake_stat(self: Path, *args, **kwargs):
+        if self == unreadable:
+            raise OSError(f"No such file or directory: '{unreadable}'")
+        return original_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+    monkeypatch.setattr(Path, "stat", fake_stat)
+
+    registry = LocalPackLoader(tmp_path).refresh()
+
+    assert registry.packs == []
+    assert len(registry.diagnostics) == 1
+    diagnostic = registry.diagnostics[0]
+    assert diagnostic.id_or_filename == "stat-failed.json"
+    assert diagnostic.code == "FILE_READ_ERROR"
+    assert "stat-failed.json" in diagnostic.message
+    assert str(unreadable) not in diagnostic.message
+    assert str(tmp_path) not in diagnostic.message
+    assert "No such file or directory" not in diagnostic.message
+
+
 def test_bad_pack_isolation_keeps_valid_packs_loading(tmp_path: Path):
     _write_pack(tmp_path / "valid.json", _valid_pack("good-pack"))
     bad = _valid_pack("bad-pack")
@@ -301,6 +364,40 @@ def test_endpoint_feature_gate_list_refresh_diagnostics_and_detail(
     assert refreshed.status_code == 200
     assert refreshed.json()["count"] == 1
     assert refreshed.json()["diagnostic_count"] == 1
+
+
+def test_refresh_endpoint_returns_safe_diagnostic_for_read_text_oserror(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import app.api.packs as packs_api
+
+    unreadable = tmp_path / "endpoint-unreadable.json"
+    _write_pack(unreadable, _valid_pack("endpoint-unreadable-pack"))
+    original_read_text = Path.read_text
+
+    def fake_read_text(self: Path, *args, **kwargs):
+        if self == unreadable:
+            raise OSError(f"Input/output error: '{unreadable}'")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+    monkeypatch.setattr(packs_api.settings, "PACKS_DIR", tmp_path)
+    monkeypatch.setattr(packs_api.settings, "FEATURE_LOCAL_PACKS", True, raising=False)
+
+    client = TestClient(app)
+    refreshed = client.post("/api/packs/refresh")
+
+    assert refreshed.status_code == 200
+    diagnostics = refreshed.json()["diagnostics"]
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic["id_or_filename"] == "endpoint-unreadable.json"
+    assert diagnostic["code"] == "FILE_READ_ERROR"
+    assert "endpoint-unreadable.json" in diagnostic["message"]
+    assert str(unreadable) not in diagnostic["message"]
+    assert str(tmp_path) not in diagnostic["message"]
+    assert "Input/output error" not in diagnostic["message"]
 
 
 def test_shipped_packs_parse_have_parity_and_avoid_red_line_themes():

@@ -67,6 +67,7 @@ router = APIRouter(
 
 ALLOWED_CUSTOM_AGENT_TIERS = {"CROWD", "IMPORTANT"}
 MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024
+MAX_DOCUMENT_FILENAME_CHARS = 255
 DOCUMENT_UPLOAD_CHUNK_BYTES = 1024 * 1024
 DOCUMENT_SEED_MAX_TEXT_CHARS = 100_000
 PDF_PARSE_TIMEOUT_SECONDS = 30.0
@@ -288,6 +289,16 @@ async def _read_document_upload(file: UploadFile) -> bytes:
             "Uploaded document file is empty",
         )
     return blob
+
+
+def _validate_document_seed_filename(file: UploadFile) -> None:
+    filename = file.filename or ""
+    if len(filename) > MAX_DOCUMENT_FILENAME_CHARS:
+        raise api_error(
+            422,
+            "DOCUMENT_FILENAME_TOO_LONG",
+            f"Document filename too long (max {MAX_DOCUMENT_FILENAME_CHARS} characters)",
+        )
 
 
 def _is_pdf_upload(file: UploadFile) -> bool:
@@ -1036,6 +1047,7 @@ async def parse_document_seed_world(
 
     effective_user_id = resolve_authenticated_user_id(user_id, principal)
     blob = await _read_document_upload(file)
+    _validate_document_seed_filename(file)
     document_text, extraction_method = await _extract_document_seed_text(file, blob)
     chunks = chunk_document(document_text)
 
