@@ -120,6 +120,7 @@ import { DirectorDebriefPanel } from '../components/result/DirectorDebriefPanel'
 import { ProgressIndicator } from '../components/ProgressIndicator';
 import { ResultContextProvider, type ResultViewContextValue } from './result/ResultContext';
 import ResultHeader from './result/ResultHeader';
+import { MultiRunDistributionPanel } from '../components/result/MultiRunDistributionPanel';
 import ResultVerdictPanel from './result/ResultVerdictPanel';
 import { ResultReportPanel } from './result/ResultReportPanel';
 import EndingCardsGrid from './result/EndingCardsGrid';
@@ -467,6 +468,16 @@ export default function ResultView() {
         setPredictions(preds);
 
         if (scenario.status !== 'done') {
+          if (scenario.run_group_id && capabilities?.multi_run?.enabled) {
+            setStoryData({
+              scenario_id: id,
+              question: scenario.question,
+              status: scenario.status,
+              branches: scenario.branches || [],
+            });
+            setLoading(false);
+            return;
+          }
           retryTimer = window.setTimeout(() => {
             retryTimer = null;
             void load();
@@ -704,6 +715,7 @@ export default function ResultView() {
     roomReplayToken,
     searchParams,
     t,
+    capabilities,
   ]);
 
   useEffect(() => {
@@ -1906,6 +1918,10 @@ export default function ResultView() {
     <div className="result-view">
       <ProgressIndicator currentStep={4} />
       <ResultHeader />
+
+      {scenario?.run_group_id && (
+        <MultiRunDistributionPanel runGroupId={scenario.run_group_id} />
+      )}
 
       {resultVerdictEnabled && (
         <ResultVerdictPanel

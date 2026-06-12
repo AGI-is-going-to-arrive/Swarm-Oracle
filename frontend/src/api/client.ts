@@ -17,6 +17,7 @@ import type {
   WorldContext,
   DocumentSeedResponse,
   ListPacksResponse, LocalPack, RefreshPacksResponse, DiagnosticsResponse,
+  MultiRunResponse, RunGroupDistributionResponse,
 } from '../types';
 import { getOrgId } from '../lib/orgContext';
 
@@ -549,6 +550,7 @@ export interface CapabilitiesResponse {
   public_artifacts?: CapabilityEntry;
   document_seed?: CapabilityEntry;
   local_packs?: CapabilityEntry;
+  multi_run?: CapabilityEntry & { default_count: number; max_count: number };
 }
 
 /** Persona export/import payload — schema_version 1 contract. */
@@ -687,6 +689,35 @@ export async function createScenario(
     body: JSON.stringify(buildScenarioRequestBody(options)),
   });
 }
+
+export interface MultiRunRequest extends CreateScenarioOptions {
+  runCount?: number;
+  verdictOnlyRuns?: boolean;
+}
+
+/** POST /api/scenario/multi-run — create a new multi-run scenario group */
+export async function createMultiRun(
+  options: MultiRunRequest,
+): Promise<MultiRunResponse> {
+  const { runCount, verdictOnlyRuns, ...scenarioOptions } = options;
+  const baseBody = buildScenarioRequestBody(scenarioOptions);
+  return request('/scenario/multi-run', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...baseBody,
+      ...(runCount != null && { run_count: runCount }),
+      ...(verdictOnlyRuns != null && { verdict_only_runs: verdictOnlyRuns }),
+    }),
+  });
+}
+
+/** GET /api/scenario/run-groups/:runGroupId — get multi-run distribution */
+export async function getRunGroupDistribution(
+  runGroupId: string,
+): Promise<RunGroupDistributionResponse> {
+  return safeGet(`/scenario/run-groups/${encodeURIComponent(runGroupId)}`);
+}
+
 
 export async function identityContinuityPreflight(
   options: CreateScenarioOptions,

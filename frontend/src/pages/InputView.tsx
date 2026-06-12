@@ -22,6 +22,7 @@ import {
   type ContinuityOverride,
   type CreateScenarioOptions,
   type IdentityContinuityMatch,
+  createMultiRun,
 } from '../api/client';
 import type { WebSearchFamily, CampaignContext, SuggestedSettings } from '../types';
 import { useAgentStore } from '../stores/agentStore';
@@ -341,6 +342,8 @@ export function InputView() {
   const [showSnapshotImport, setShowSnapshotImport] = useState(false);
   const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
   const [runtimePreset, setRuntimePreset] = useState<ScenarioRuntimePresetId>(() => loadScenarioRuntimePreset());
+  const [multiRunEnabled, setMultiRunEnabled] = useState(false);
+  const [multiRunCount, setMultiRunCount] = useState(5);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const apiUserId = getSessionBoundUserId();
@@ -349,6 +352,7 @@ export function InputView() {
     loading: customAgentsCapabilityLoading,
   } = useCapabilityCheck('custom_agents');
   const customAgentsEnabled = caps?.custom_agents?.enabled === true;
+  const multiRunMaxCount = caps?.multi_run?.max_count ?? 10;
   const { enabled: educationTemplatesEnabled } = useCapabilityCheck('education_templates');
   const [educationPickerOpen, setEducationPickerOpen] = useState(false);
   // S1-5: First-visit onboarding guide. Hidden once the user finishes or skips.
@@ -977,14 +981,29 @@ export function InputView() {
     // can apply bottom padding during the brief launching window.
     document.body.classList.add('has-pipeline-launching');
     try {
-      const id = await startSimulation(buildSimulationOptions(launch, continuityOverrides));
-      if (launch.challengeId) {
-        markChallengeStarted(launch.challengeId, id);
+      const options = buildSimulationOptions(launch, continuityOverrides);
+      if (caps?.multi_run?.enabled && multiRunEnabled) {
+        const multiRunResponse = await createMultiRun({
+          ...options,
+          runCount: multiRunCount,
+          verdictOnlyRuns: true,
+        });
+        const firstScenarioId = multiRunResponse.runs[0]?.scenario_id;
+        if (firstScenarioId) {
+          navigate(`/result/${firstScenarioId}`);
+        } else {
+          throw new Error('No scenarios returned from multi-run');
+        }
+      } else {
+        const id = await startSimulation(options);
+        if (launch.challengeId) {
+          markChallengeStarted(launch.challengeId, id);
+        }
+        navigate(`/sim/${id}`);
       }
       setPendingLaunch(null);
       setContinuityMatches([]);
       setContinuityChoices({});
-      navigate(`/sim/${id}`);
     } catch {
       setWebSearchStatus('idle');
       setIsSubmitting(false);
@@ -1001,6 +1020,9 @@ export function InputView() {
     setWebSearchStatus,
     startSimulation,
     webSearchEnabled,
+    caps?.multi_run?.enabled,
+    multiRunEnabled,
+    multiRunCount,
   ]);
 
   const maybeRunContinuityPreflight = useCallback(async (
@@ -1056,6 +1078,12 @@ export function InputView() {
     isSubmitting,
     pendingLaunch,
   ]);
+
+  useEffect(() => {
+    if (caps?.multi_run?.default_count) {
+      setMultiRunCount(caps.multi_run.default_count);
+    }
+  }, [caps?.multi_run?.default_count]);
 
   useEffect(() => {
     if (!isContinuityDialogOpen) return undefined;
@@ -1647,7 +1675,7 @@ export function InputView() {
                   disabled={!question.trim() || isSubmitting || isSimulationBudgetBlocked || caps?.llm_configured === false}
                 >
                   {isSubmitting ? <span className="spinner spinner--sm" /> : null}
-                  {t('home.submit')}
+                  {caps?.multi_run?.enabled && multiRunEnabled ? t('multi_run.launch_btn') : t('home.submit')}
                   {selectedCustomAgentCount > 0 && (
                     <>
                       <span className="iv-submit__badge" aria-hidden="true">
@@ -2164,6 +2192,63 @@ export function InputView() {
                         )}
                       </div>
 
+                      {/* F2: Multi-Run Mode Toggle */}
+                      {caps?.multi_run && (
+                        <div className="mode-selector-wrap" data-testid="multi-run-mode-wrap">
+                          <div className="mode-selector">
+                            <span className="mode-label">{t('multi_run.input_label')}</span>
+                            {caps.multi_run.enabled ? (
+                              <div className="mode-options">
+                                <button
+                                  type="button"
+                                  className={`mode-btn ${!multiRunEnabled ? 'mode-btn--active' : ''}`}
+                                  aria-pressed={!multiRunEnabled}
+                                  onClick={() => setMultiRunEnabled(false)}
+                                  disabled={isSubmitting}
+                                >
+                                  ⚡ {t('home.viz_classic')}
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`mode-btn ${multiRunEnabled ? 'mode-btn--active' : ''}`}
+                                  aria-pressed={multiRunEnabled}
+                                  onClick={() => setMultiRunEnabled(true)}
+                                  disabled={isSubmitting}
+                                >
+                                  🌀 {t('multi_run.input_section_title')}
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="multi-run-disabled-hint" style={{ color: '#7a756b', fontSize: '0.85rem', fontStyle: 'italic' }}>
+                                {t('multi_run.capability_disabled')}
+                              </div>
+                            )}
+                          </div>
+                          {caps.multi_run.enabled && multiRunEnabled && (
+                            <div className="multi-run-count-selector" style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <input
+                                type="number"
+                                min={1}
+                                max={multiRunMaxCount}
+                                value={multiRunCount}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value, 10);
+                                  if (Number.isInteger(val)) {
+                                    setMultiRunCount(Math.max(1, Math.min(multiRunMaxCount, val)));
+                                  }
+                                }}
+                                disabled={isSubmitting}
+                                className="form-control"
+                                style={{ width: '80px', padding: '0.25rem 0.5rem', border: '1px solid #e6dfd5', borderRadius: '4px' }}
+                              />
+                              <span style={{ fontSize: '0.85rem', color: '#524e47' }}>
+                                {t('multi_run.reminder_runs', { count: multiRunCount })} (max: {multiRunMaxCount})
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* Reasoning Effort Selector */}
                       <div className="mode-selector-wrap">
                         <div className="mode-selector">
@@ -2670,7 +2755,13 @@ export function InputView() {
           </div>
 
           <div className="input-view__submit-hints">
-            <p className="input-view__submit-hint">{simulationEtaHint}</p>
+            {caps?.multi_run?.enabled && multiRunEnabled ? (
+              <p className="input-view__submit-hint" data-testid="multi-run-estimate-hint">
+                {t('multi_run.reminder_runs', { count: multiRunCount })}
+              </p>
+            ) : (
+              <p className="input-view__submit-hint">{simulationEtaHint}</p>
+            )}
             <p className="input-view__submit-hint">{t('debate.entry_hint')}</p>
           </div>
           {submitError && !isSubmitting && (
@@ -2725,12 +2816,12 @@ export function InputView() {
               onOverlayClick={cancelLaunch}
               role="dialog"
               aria-modal="true"
-              aria-label={t('home.confirm_launch_title')}
+              aria-label={caps?.multi_run?.enabled && multiRunEnabled ? t('multi_run.launch_btn') : t('home.confirm_launch_title')}
               onClick={(event) => event.stopPropagation()}
             >
               <AlertDialogHeader className="confirm-launch__header">
                 <AlertDialogTitle asChild>
-                  <h3>{t('home.confirm_launch_title')}</h3>
+                  <h3>{caps?.multi_run?.enabled && multiRunEnabled ? t('multi_run.launch_btn') : t('home.confirm_launch_title')}</h3>
                 </AlertDialogTitle>
               </AlertDialogHeader>
               <div className="confirm-launch__body">
@@ -2740,11 +2831,23 @@ export function InputView() {
                 <AlertDialogDescription
                   className="confirm-launch__settings"
                 >
-                  {t('home.confirm_launch_settings', {
-                    rounds,
-                    agents: numAgents,
-                    mode: t(mode === 'blackboard' ? 'home.mode_blackboard' : 'home.mode_raw'),
-                  })}
+                  {caps?.multi_run?.enabled && multiRunEnabled ? (
+                    <>
+                      {t('multi_run.reminder_runs', { count: multiRunCount })}
+                      {' · '}
+                      {t('home.confirm_launch_settings', {
+                        rounds,
+                        agents: numAgents,
+                        mode: t(mode === 'blackboard' ? 'home.mode_blackboard' : 'home.mode_raw'),
+                      })}
+                    </>
+                  ) : (
+                    t('home.confirm_launch_settings', {
+                      rounds,
+                      agents: numAgents,
+                      mode: t(mode === 'blackboard' ? 'home.mode_blackboard' : 'home.mode_raw'),
+                    })
+                  )}
                 </AlertDialogDescription>
               </div>
               <AlertDialogFooter className="confirm-launch__footer">
@@ -2759,7 +2862,7 @@ export function InputView() {
                   onClick={confirmLaunch}
                   autoFocus
                 >
-                  {t('home.submit')}
+                  {caps?.multi_run?.enabled && multiRunEnabled ? t('multi_run.launch_btn') : t('home.submit')}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>

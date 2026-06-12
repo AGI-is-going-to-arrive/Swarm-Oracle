@@ -1,5 +1,30 @@
 {
   "translation": {
+    "multi_run": {
+      "input_section_title": "Multi-Run Settings",
+      "input_label": "Worldline Runs",
+      "reminder_title": "Run Estimates",
+      "reminder_runs": "{{count}} worldline runs",
+      "reminder_duration": "Estimated duration: {{duration}}",
+      "reminder_calls": "Estimated LLM calls: {{calls}}",
+      "reminder_search": "Search inherited: {{search}}",
+      "launch_btn": "Start Multi-Run",
+      "capability_disabled": "Multi-run simulation is disabled.",
+      "panel_title": "Multi-Run Distribution",
+      "progress_label": "Running: {{current}} / {{total}} completed",
+      "histogram_verdicts": "Verdict Counts ({{count}} worldline counts)",
+      "histogram_outcomes": "Outcome Counts ({{count}} worldline counts)",
+      "worldlines_list_title": "Worldlines Verdict Ledger",
+      "run_index": "Run #{{index}}",
+      "status_label": "Status",
+      "verdict_label": "Verdict",
+      "outcome_label": "Outcome",
+      "status_unknown": "unknown",
+      "verdict_unknown": "unknown",
+      "outcome_unknown": "unknown",
+      "no_runs_title": "No multi-run data available.",
+      "aria_histogram_bar": "{{label}}: {{count}} runs"
+    },
     "document_seed": {
       "panel_title": "Document Seed Context",
       "capability_disabled": "Document seeding is disabled. Check capability settings.",

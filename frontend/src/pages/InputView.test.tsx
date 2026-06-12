@@ -24,6 +24,7 @@ const {
   changeLanguageMock,
   listAgentIdentitiesMock,
   getSessionBoundUserIdMock,
+  createMultiRunMock,
   setMockLanguage,
   getMockLanguage,
   stableTranslator,
@@ -140,6 +141,7 @@ const {
   };
   return {
     createDebateMock: vi.fn(),
+    createMultiRunMock: vi.fn(),
     getCapabilitiesMock: vi.fn(),
     identityPreflightMock: vi.fn(),
     importScenarioSnapshotMock: vi.fn(),
@@ -204,6 +206,7 @@ vi.mock('../stores/simulationStore', () => ({
 
 vi.mock('../api/client', () => ({
   createDebate: createDebateMock,
+  createMultiRun: createMultiRunMock,
   getCapabilities: getCapabilitiesMock,
   identityContinuityPreflight: identityPreflightMock,
   importScenarioSnapshot: importScenarioSnapshotMock,
@@ -3122,5 +3125,76 @@ describe('InputView LLM Not Configured and LLM Error Hints (P0)', () => {
     expect(screen.getByText('llm_error_hint.LLM_AUTH_FAILED.message')).toBeInTheDocument();
     expect(screen.getByText('llm_error_hint.LLM_AUTH_FAILED.hint')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'llm_error_hint.diagnose_btn' })).toBeInTheDocument();
+  });
+
+  it('handles multi-run settings, N boundaries, and launch creation', async () => {
+    getCapabilitiesMock.mockResolvedValue({
+      llm_configured: true,
+      custom_agents: { enabled: false },
+      multi_run: { enabled: true, default_count: 5, max_count: 10 },
+    });
+
+    createMultiRunMock.mockResolvedValue({
+      run_group_id: 'rg-789',
+      requested_run_count: 5,
+      accepted_run_count: 5,
+      verdict_only_runs: true,
+      reminder: {
+        estimated_llm_call_count: '5 runs',
+        estimated_duration: 'about 5 minutes',
+        native_search: 'false',
+      },
+      runs: [{ scenario_id: 'scenario-multi-1', run_index: 1, verdict_only: false, status: 'parsing' }],
+    });
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Wait for multi-run selector to render
+    await screen.findByText('multi_run.input_label');
+
+    // Open Advanced Settings
+    const advancedToggle = screen.getByRole('button', { name: /home\.advanced_settings/i });
+    fireEvent.click(advancedToggle);
+
+    // Click to enable Multi-Run
+    const multiRunToggle = screen.getByRole('button', { name: /multi_run\.input_section_title/ });
+    fireEvent.click(multiRunToggle);
+
+    // Confirm that the N selector input is visible and defaults to 5
+    const numInput = screen.getByRole('spinbutton') as HTMLInputElement;
+    expect(numInput).toBeInTheDocument();
+    expect(numInput.value).toBe('5');
+
+    // Change N value to check bounds
+    fireEvent.change(numInput, { target: { value: '12' } }); // exceed max_count=10
+    expect(numInput.value).toBe('10'); // clamped to max_count
+
+    fireEvent.change(numInput, { target: { value: '0' } }); // below min_count=1
+    expect(numInput.value).toBe('1'); // clamped to 1
+
+    fireEvent.change(numInput, { target: { value: '6' } });
+    expect(numInput.value).toBe('6');
+
+    // Enter question and submit
+    const textarea = screen.getByRole('textbox', { name: 'home.question_input_label' });
+    fireEvent.change(textarea, { target: { value: 'What if we colonized Mars?' } });
+
+    const submitBtn = screen.getByRole('button', { name: 'multi_run.launch_btn' });
+    expect(submitBtn).toBeInTheDocument();
+    fireEvent.click(submitBtn);
+
+    // Dialog confirm launch should open
+    await screen.findByText('multi_run.reminder_runs');
+    const dialogSubmitBtn = screen.getByRole('button', { name: 'multi_run.launch_btn' });
+    expect(dialogSubmitBtn).toBeInTheDocument();
+    fireEvent.click(dialogSubmitBtn);
+
+    await waitFor(() => {
+      expect(createMultiRunMock).toHaveBeenCalled();
+    });
   });
 });

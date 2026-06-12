@@ -106,6 +106,7 @@ export interface Scenario {
   director_state?: ScenarioDirectorState | null;
   gameplay_state?: ScenarioGameplayState | null;
   fork_debug?: ScenarioForkDebug | null;
+  run_group_id?: string | null;
 }
 
 export interface AgentInfo {
@@ -1524,4 +1525,38 @@ export interface RefreshPacksResponse {
 export interface DiagnosticsResponse {
   diagnostics: PackDiagnostic[];
   count: number;
+}
+
+export interface MultiRunResponse {
+  run_group_id: string;
+  requested_run_count: number;
+  accepted_run_count: number;
+  verdict_only_runs: boolean;
+  reminder: {
+    estimated_llm_call_count: string;
+    estimated_duration: string;
+    native_search: string;
+  };
+  runs: Array<{
+    scenario_id: string;
+    run_index: number;
+    verdict_only: boolean;
+    status: string;
+  }>;
+}
+
+export interface RunGroupDistributionResponse {
+  run_group_id: string;
+  run_count: number;
+  histogram: {
+    verdict_counts: Record<string, number>;
+    outcome_counts: Record<string, number>;
+  };
+  runs: Array<{
+    scenario_id: string;
+    run_index: number;
+    status: string;
+    verdict: string;
+    outcome: string;
+  }>;
 }
