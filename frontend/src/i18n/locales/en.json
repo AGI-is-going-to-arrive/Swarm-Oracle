@@ -34,7 +34,13 @@
       "verdict_unknown": "unknown",
       "outcome_unknown": "unknown",
       "no_runs_title": "No multi-run data available.",
-      "aria_histogram_bar": "{{label}}: {{count}} runs"
+      "aria_histogram_bar": "{{label}}: {{count}} runs",
+      "completed_runs_denominator": "based on {{completed}} / {{total}} completed runs",
+      "status_pending_badge": "Pending",
+      "status_failed_badge": "Failed",
+      "status_completed_badge": "Completed",
+      "feeds_distribution": "Feeds into the distribution",
+      "feeds_distribution_short": "Included"
     },
     "document_seed": {
       "panel_title": "Document Seed Context",

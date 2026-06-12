@@ -56,7 +56,7 @@ const wellFormedFixture: SocialFeedResponse = {
       event_type: 'Conflict',
       branch_title: 'Port Blockade Active',
       faction_label: 'Military Faction',
-      confidence: 85,
+      confidence: 0.9,
       summary: 'Military forces have established a blockade around the main harbor.',
     },
   ],
@@ -90,7 +90,7 @@ const maliciousFixture: SocialFeedResponse = {
       event_type: 'Conflict',
       branch_title: 'Port Blockade Active',
       faction_label: 'Military Faction',
-      confidence: 85,
+      confidence: 0.9,
       summary: 'Benign summary text',
       api_key: 'secret-api-key',
       base_url: 'secret-base-url',
@@ -178,7 +178,7 @@ describe('SocialFeedPanel', () => {
     expect(screen.getByText('PORTS BLOCKED!')).toBeInTheDocument();
     expect(screen.getByText('Trade comes to a grinding halt.')).toBeInTheDocument();
     expect(screen.getByText('Military forces have established a blockade around the main harbor.')).toBeInTheDocument();
-    expect(screen.getByText('Confidence: 85%')).toBeInTheDocument();
+    expect(screen.getByText('Confidence: 90%')).toBeInTheDocument();
   });
 
   it('renders deterministic badge when generation_mode is deterministic', async () => {

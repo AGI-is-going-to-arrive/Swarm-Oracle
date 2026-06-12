@@ -2131,10 +2131,50 @@ interface YouVsOracleCardProps {
 
 function YouVsOracleCard({ scoreResults, hasVerdict }: YouVsOracleCardProps) {
   const { t } = useTranslation();
-  const { enabled, loading: capLoading } = useCapabilityCheck('you_vs_oracle');
+  const { enabled, loading: capLoading, error, reload } = useCapabilityCheck('you_vs_oracle');
   const titleId = useId();
 
   if (capLoading) return null;
+
+  if (error) {
+    return (
+      <div
+        className="you-vs-oracle-error-placeholder"
+        role="alert"
+        style={{
+          padding: '1rem',
+          border: '1px solid #f5c6cb',
+          backgroundColor: '#fdf3f4',
+          borderRadius: '8px',
+          margin: '1rem 0',
+          textAlign: 'center'
+        }}
+      >
+        <h4 style={{ margin: '0 0 0.5rem 0', color: '#721c24' }}>{t('common.capability_error_title')}</h4>
+        <p style={{ margin: '0 0 1rem 0', color: '#721c24', fontSize: '0.9rem' }}>{t('common.capability_error')}</p>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          style={{
+            backgroundColor: '#ffffff',
+            border: '1px solid #c61583',
+            color: '#c61583',
+            padding: '0.5rem 1rem',
+            borderRadius: '4px',
+            cursor: 'pointer'
+          }}
+          onClick={() => {
+            if (reload) {
+              void reload();
+            }
+          }}
+          aria-label={t('common.retry')}
+        >
+          {t('common.retry')}
+        </button>
+      </div>
+    );
+  }
 
   if (!enabled) {
     return (

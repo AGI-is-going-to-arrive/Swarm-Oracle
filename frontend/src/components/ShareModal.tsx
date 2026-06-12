@@ -132,7 +132,7 @@ export default function ShareModal({
   const clipboardSupportsImages = clipboardCanWriteImages();
 
   const { enabled: publicArtifactsEnabled, loading: capLoading } = useCapabilityCheck('public_artifacts');
-  const { enabled: headlinesEnabled } = useCapabilityCheck('social_headlines');
+  const { enabled: headlinesEnabled, error: headlinesError, reload: reloadHeadlines } = useCapabilityCheck('social_headlines');
 
   const [headlineFromFeed, setHeadlineFromFeed] = useState<SocialHeadlineCard | null>(null);
   const [exportingHeadlineCard, setExportingHeadlineCard] = useState(false);
@@ -646,41 +646,60 @@ export default function ShareModal({
               </span>
             </button>
           )}
-          {headlinesEnabled && !!shareHeadline && (
-            <>
+          {headlinesError ? (
+            <div className="share-headlines-error-notice" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', padding: '0.75rem', border: '1px solid #f5c6cb', backgroundColor: '#fdf3f4', borderRadius: '6px', fontSize: '0.85rem', color: '#721c24', width: '100%', gridColumn: '1 / -1' }}>
+              <span style={{ fontWeight: '500' }}>{t('common.capability_error')}</span>
               <button
                 type="button"
-                className="share-platform-btn share-platform-btn--headline"
-                onClick={handleDownloadHeadlineCard}
-                disabled={exportingHeadlineCard || loading}
-                data-testid="share-headline-card-download-btn"
-                aria-busy={exportingHeadlineCard}
+                className="btn btn-ghost btn-sm"
+                style={{ alignSelf: 'flex-start', backgroundColor: '#ffffff', border: '1px solid #c61583', color: '#c61583', padding: '0.25rem 0.5rem', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
+                onClick={() => {
+                  if (reloadHeadlines) {
+                    void reloadHeadlines();
+                  }
+                }}
+                aria-label={t('common.retry')}
               >
-                <span className="share-platform-icon" aria-hidden="true">📰</span>
-                <span className="share-platform-label">
-                  {exportingHeadlineCard
-                    ? t('social_feed.share_download', 'Generating card…')
-                    : t('social_feed.share_download', 'Download Headline Card')}
-                </span>
+                {t('common.retry')}
               </button>
-              {clipboardSupportsImages && (
+            </div>
+          ) : (
+            headlinesEnabled && !!shareHeadline && (
+              <>
                 <button
                   type="button"
-                  className="share-platform-btn share-platform-btn--headline-copy"
-                  onClick={handleCopyHeadlineCard}
+                  className="share-platform-btn share-platform-btn--headline"
+                  onClick={handleDownloadHeadlineCard}
                   disabled={exportingHeadlineCard || loading}
-                  data-testid="share-headline-card-copy-btn"
+                  data-testid="share-headline-card-download-btn"
                   aria-busy={exportingHeadlineCard}
                 >
-                  <span className="share-platform-icon" aria-hidden="true">📋</span>
+                  <span className="share-platform-icon" aria-hidden="true">📰</span>
                   <span className="share-platform-label">
-                    {headlineCardCopied
-                      ? t('social_feed.share_copied', 'Copied!')
-                      : t('social_feed.share_copy', 'Copy Headline Card')}
+                    {exportingHeadlineCard
+                      ? t('social_feed.share_download', 'Generating card…')
+                      : t('social_feed.share_download', 'Download Headline Card')}
                   </span>
                 </button>
-              )}
-            </>
+                {clipboardSupportsImages && (
+                  <button
+                    type="button"
+                    className="share-platform-btn share-platform-btn--headline-copy"
+                    onClick={handleCopyHeadlineCard}
+                    disabled={exportingHeadlineCard || loading}
+                    data-testid="share-headline-card-copy-btn"
+                    aria-busy={exportingHeadlineCard}
+                  >
+                    <span className="share-platform-icon" aria-hidden="true">📋</span>
+                    <span className="share-platform-label">
+                      {headlineCardCopied
+                        ? t('social_feed.share_copied', 'Copied!')
+                        : t('social_feed.share_copy', 'Copy Headline Card')}
+                    </span>
+                  </button>
+                )}
+              </>
+            )
           )}
         </div>
         {exportImageError && (

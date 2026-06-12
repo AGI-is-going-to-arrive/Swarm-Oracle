@@ -207,7 +207,7 @@ export default function SocialFeedPanel({ scenarioId }: SocialFeedPanelProps) {
                       <span className="social-feed-event__faction">{event.faction_label}</span>
                       {event.confidence !== null && (
                         <span className="social-feed-event__confidence">
-                          {t('social_feed.confidence_label')}: {event.confidence}%
+                          {t('social_feed.confidence_label')}: {Math.round(event.confidence * 100)}%
                         </span>
                       )}
                     </div>

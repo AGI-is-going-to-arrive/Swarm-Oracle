@@ -32,11 +32,20 @@ const { generateSocialCopyMock, html2canvasMock, buildPublicArtifactMock, useCap
       source_summary: { domains: [] }
     };
   }),
-  useCapabilityCheckMock: vi.fn(() => ({
-    loading: false,
-    enabled: true,
-    capabilities: null,
-  })),
+  useCapabilityCheckMock: vi.fn(() => {
+    const res: {
+      loading: boolean;
+      enabled: boolean;
+      capabilities: null;
+      error?: Error | null;
+      reload?: () => Promise<void>;
+    } = {
+      loading: false,
+      enabled: true,
+      capabilities: null,
+    };
+    return res;
+  }),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -634,6 +643,54 @@ describe('ShareModal automation callback', () => {
       expect(toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png', 0.95);
       expect(URL.createObjectURL).toHaveBeenCalled();
       expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
+    });
+
+    it('renders retry button and handles reload on capability error', async () => {
+      const reloadMock = vi.fn();
+      useCapabilityCheckMock.mockImplementation((feature?: string) => {
+        if (feature === 'social_headlines') {
+          return {
+            loading: false,
+            enabled: false,
+            capabilities: null,
+            error: new Error('Headline capability failed'),
+            reload: reloadMock,
+          };
+        }
+        return {
+          loading: false,
+          enabled: true,
+          capabilities: null,
+          error: null,
+        };
+      });
+
+      render(
+        <ShareModal
+          scenarioId="scenario-headline"
+          onClose={() => {}}
+          headlineCard={{
+            card_id: 'card_1',
+            headline: 'PORTS BLOCKED!',
+            summary: 'Trade stops.',
+            branch_title: 'Blockade Active',
+            round_number: 1,
+            event_type: 'Economic Shock',
+            faction_label: 'Logistics Guild',
+            source_event_id: 'event_1',
+          }}
+        />
+      );
+
+      expect(screen.getByText('common.capability_error')).toBeInTheDocument();
+
+      const retryBtn = screen.getByRole('button', { name: 'common.retry' });
+      expect(retryBtn).toBeInTheDocument();
+
+      const user = userEvent.setup();
+      await user.click(retryBtn);
+
+      expect(reloadMock).toHaveBeenCalledTimes(1);
     });
   });
 });

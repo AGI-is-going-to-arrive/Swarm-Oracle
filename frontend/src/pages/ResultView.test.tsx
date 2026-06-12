@@ -212,6 +212,9 @@ const {
   getMockCapabilityLoading,
   setMockCapabilities,
   setMockCapabilityLoading,
+  getMockCapabilityError,
+  setMockCapabilityError,
+  reloadCapabilityMock,
 } = vi.hoisted(() => {
   let currentCapabilities = {
     agent_conversation: { enabled: false },
@@ -227,9 +230,12 @@ const {
     you_vs_oracle: { enabled: false },
   };
   let currentCapabilityLoading = false;
+  let currentCapabilityError: Error | null = null;
+  const reloadCapabilityMock = vi.fn();
   return {
     getMockCapabilities: () => currentCapabilities,
     getMockCapabilityLoading: () => currentCapabilityLoading,
+    getMockCapabilityError: () => currentCapabilityError,
     setMockCapabilities: (nextCapabilities: Partial<typeof currentCapabilities>) => {
       currentCapabilities = {
         ...currentCapabilities,
@@ -239,6 +245,10 @@ const {
     setMockCapabilityLoading: (loading: boolean) => {
       currentCapabilityLoading = loading;
     },
+    setMockCapabilityError: (err: Error | null) => {
+      currentCapabilityError = err;
+    },
+    reloadCapabilityMock,
   };
 });
 
@@ -281,6 +291,8 @@ vi.mock('../hooks/useCapabilityCheck', () => ({
       loading: getMockCapabilityLoading(),
       enabled,
       capabilities,
+      error: getMockCapabilityError(),
+      reload: reloadCapabilityMock,
     };
   },
 }));
@@ -5648,5 +5660,40 @@ describe('ResultView You-vs-Oracle comparison card', () => {
 
     expect(await screen.findByText('you_vs_oracle.empty_state')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'you_vs_oracle.card_title' })).toBeNull();
+  });
+
+  it('renders retry button and triggers reload on capability error', async () => {
+    setMockCapabilityError(new Error('you_vs_oracle capability failed'));
+
+    const getStoryMock = vi.mocked(apiClient.getStory);
+    getStoryMock.mockResolvedValueOnce({
+      scenario_id: 'scenario-1',
+      question: 'Will AI take over?',
+      status: 'done',
+      verdict: 'AI took over',
+      verdict_confidence: 'high',
+      branches: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/result/scenario-1']}>
+        <Routes>
+          <Route path="/result/:id" element={<ResultView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('common.capability_error_title')).toBeInTheDocument();
+    expect(screen.getByText('common.capability_error')).toBeInTheDocument();
+
+    const retryBtn = screen.getByRole('button', { name: 'common.retry' });
+    expect(retryBtn).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(retryBtn);
+
+    expect(reloadCapabilityMock).toHaveBeenCalledTimes(1);
+
+    setMockCapabilityError(null);
   });
 });

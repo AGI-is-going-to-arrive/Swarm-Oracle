@@ -11,7 +11,7 @@ interface MultiRunDistributionPanelProps {
 
 export function MultiRunDistributionPanel({ runGroupId }: MultiRunDistributionPanelProps) {
   const { t } = useTranslation();
-  const { enabled, loading: capLoading } = useCapabilityCheck('multi_run');
+  const { enabled, loading: capLoading, error: capError, reload } = useCapabilityCheck('multi_run');
   const [data, setData] = useState<RunGroupDistributionResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isFinished, setIsFinished] = useState(false);
@@ -73,6 +73,27 @@ export function MultiRunDistributionPanel({ runGroupId }: MultiRunDistributionPa
 
   if (capLoading) return null;
 
+  if (capError) {
+    return (
+      <div className="multi-run-panel multi-run-panel--error" role="alert">
+        <h3 className="multi-run-panel__title">{t('common.capability_error_title')}</h3>
+        <p className="multi-run-panel__error-text">{t('common.capability_error')}</p>
+        <button
+          type="button"
+          className="btn btn-ghost multi-run-panel__retry-btn"
+          onClick={() => {
+            if (reload) {
+              void reload();
+            }
+          }}
+          aria-label={t('common.retry')}
+        >
+          {t('common.retry')}
+        </button>
+      </div>
+    );
+  }
+
   if (!enabled) {
     return (
       <div className="multi-run-disabled-placeholder">
@@ -122,12 +143,33 @@ export function MultiRunDistributionPanel({ runGroupId }: MultiRunDistributionPa
         {t('multi_run.progress_label', { current: finishedRuns, total: totalRuns })}
       </div>
 
+      {/* Status summary line */}
+      <div className="multi-run-status-summary">
+        <span className="multi-run-status-summary__badge multi-run-status-summary__badge--pending">
+          {t('multi_run.status_pending_badge')}: {data.pending_count}
+        </span>
+        <span className="multi-run-status-summary__separator"> · </span>
+        <span className="multi-run-status-summary__badge multi-run-status-summary__badge--failed">
+          {t('multi_run.status_failed_badge')}: {data.failed_count}
+        </span>
+        <span className="multi-run-status-summary__separator"> · </span>
+        <span className="multi-run-status-summary__badge multi-run-status-summary__badge--completed">
+          {t('multi_run.status_completed_badge')}: {data.terminal_count}
+        </span>
+      </div>
+
       {/* Only display histograms when all runs are completed */}
       {isAllCompleted ? (
         <div className="multi-run-histograms">
           {/* Verdict Distribution */}
           <div className="multi-run-histogram">
-            <h4>{t('multi_run.histogram_verdicts', { count: totalRuns })}</h4>
+            <h4>
+              {t('multi_run.histogram_verdicts', { count: data.terminal_count })}
+              <span className="multi-run-histogram-denominator"> ({data.terminal_count} / {data.run_count})</span>
+            </h4>
+            <div className="multi-run-histogram-denominator-text">
+              {t('multi_run.completed_runs_denominator', { completed: data.terminal_count, total: data.run_count })}
+            </div>
             {Object.entries(data.histogram.verdict_counts).map(([verdict, count]) => {
               const percentage = (count / maxVerdictVal) * 100;
               const displayVerdict = verdict === 'unknown' ? t('multi_run.verdict_unknown') : verdict;
@@ -152,7 +194,13 @@ export function MultiRunDistributionPanel({ runGroupId }: MultiRunDistributionPa
 
           {/* Outcome Distribution */}
           <div className="multi-run-histogram">
-            <h4>{t('multi_run.histogram_outcomes', { count: totalRuns })}</h4>
+            <h4>
+              {t('multi_run.histogram_outcomes', { count: data.terminal_count })}
+              <span className="multi-run-histogram-denominator"> ({data.terminal_count} / {data.run_count})</span>
+            </h4>
+            <div className="multi-run-histogram-denominator-text">
+              {t('multi_run.completed_runs_denominator', { completed: data.terminal_count, total: data.run_count })}
+            </div>
             {Object.entries(data.histogram.outcome_counts).map(([outcome, count]) => {
               const percentage = (count / maxOutcomeVal) * 100;
               const displayOutcome = outcome === 'unknown' ? t('multi_run.outcome_unknown') : outcome;
@@ -192,13 +240,23 @@ export function MultiRunDistributionPanel({ runGroupId }: MultiRunDistributionPa
             </thead>
             <tbody>
               {data.runs && data.runs.map((run) => {
-                const displayVerdict = run.verdict === 'unknown' ? t('multi_run.verdict_unknown') : run.verdict;
-                const displayOutcome = run.outcome === 'unknown' ? t('multi_run.outcome_unknown') : run.outcome;
+                const displayVerdict = run.verdict === null ? '—' : (run.verdict === 'unknown' ? t('multi_run.verdict_unknown') : run.verdict);
+                const displayOutcome = run.outcome === null ? '—' : (run.outcome === 'unknown' ? t('multi_run.outcome_unknown') : run.outcome);
                 const statusLower = run.status.toLowerCase();
                 const displayStatus = t(`sim.status.${statusLower}`) || run.status;
                 return (
-                  <tr key={run.scenario_id}>
-                    <td>{t('multi_run.run_index', { index: run.run_index })}</td>
+                  <tr
+                    key={run.scenario_id}
+                    className={run.is_terminal_distribution_row ? 'multi-run-row--terminal' : 'multi-run-row--non-terminal'}
+                  >
+                    <td>
+                      {t('multi_run.run_index', { index: run.run_index })}
+                      {run.is_terminal_distribution_row && (
+                        <span className="multi-run-row-indicator" title={t('multi_run.feeds_distribution')}>
+                          {t('multi_run.feeds_distribution_short')}
+                        </span>
+                      )}
+                    </td>
                     <td>
                       <span className={`multi-run-status-badge multi-run-status-badge--${statusLower}`}>
                         {displayStatus}

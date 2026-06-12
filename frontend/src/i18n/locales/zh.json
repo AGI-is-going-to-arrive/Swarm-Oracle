@@ -34,7 +34,13 @@
       "verdict_unknown": "未知",
       "outcome_unknown": "未知",
       "no_runs_title": "无可用的多世界线数据。",
-      "aria_histogram_bar": "{{label}}: {{count}} 次运行"
+      "aria_histogram_bar": "{{label}}: {{count}} 次运行",
+      "completed_runs_denominator": "基于 {{completed}} / {{total}} 次已完成的运行",
+      "status_pending_badge": "等待中",
+      "status_failed_badge": "失败",
+      "status_completed_badge": "已完成",
+      "feeds_distribution": "计入分布",
+      "feeds_distribution_short": "计入"
     },
     "document_seed": {
       "panel_title": "文档种子上下文",

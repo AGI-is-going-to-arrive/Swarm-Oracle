@@ -3197,4 +3197,37 @@ describe('InputView LLM Not Configured and LLM Error Hints (P0)', () => {
       expect(createMultiRunMock).toHaveBeenCalled();
     });
   });
+
+  it('renders retry notice on multi-run capability probe failure', async () => {
+    getCapabilitiesMock.mockReset();
+    getCapabilitiesMock.mockRejectedValue(new Error('Probe failed'));
+    __resetCapabilityCacheForTests();
+
+    render(
+      <MemoryRouter>
+        <InputView />
+      </MemoryRouter>,
+    );
+
+    // Open Advanced Settings
+    const advancedToggle = screen.getByRole('button', { name: /home\.advanced_settings/i });
+    fireEvent.click(advancedToggle);
+
+    const notice = await screen.findByText('common.capability_error');
+    expect(notice).toBeInTheDocument();
+
+    const retryBtn = screen.getByRole('button', { name: 'common.retry' });
+    expect(retryBtn).toBeInTheDocument();
+
+    getCapabilitiesMock.mockReset();
+    getCapabilitiesMock.mockResolvedValue({
+      multi_run: { enabled: true, default_count: 5, max_count: 10 },
+    });
+
+    __resetCapabilityCacheForTests();
+    fireEvent.click(retryBtn);
+
+    await screen.findByText('multi_run.input_label');
+    expect(screen.queryByText('common.capability_error')).toBeNull();
+  });
 });

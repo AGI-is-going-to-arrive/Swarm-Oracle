@@ -1548,6 +1548,10 @@ export interface MultiRunResponse {
 export interface RunGroupDistributionResponse {
   run_group_id: string;
   run_count: number;
+  terminal_count: number;
+  pending_count: number;
+  failed_count: number;
+  status_counts: Record<string, number>;
   histogram: {
     verdict_counts: Record<string, number>;
     outcome_counts: Record<string, number>;
@@ -1556,8 +1560,9 @@ export interface RunGroupDistributionResponse {
     scenario_id: string;
     run_index: number;
     status: string;
-    verdict: string;
-    outcome: string;
+    verdict: string | null;
+    outcome: string | null;
+    is_terminal_distribution_row: boolean;
   }>;
 }
 

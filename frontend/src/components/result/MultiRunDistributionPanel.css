@@ -170,3 +170,98 @@
 .multi-run-status-badge--done { background-color: #d4edda; color: #155724; }
 .multi-run-status-badge--error { background-color: #f8d7da; color: #721c24; }
 .multi-run-status-badge--cancelled { background-color: #e2e3e5; color: #383d41; }
+
+/* Style for non-terminal run table rows to visually de-emphasize them */
+.multi-run-row--non-terminal {
+  opacity: 0.75;
+}
+
+/* Style for terminal run table rows to mark them */
+.multi-run-row--terminal {
+  background-color: rgba(240, 237, 232, 0.4);
+}
+
+.multi-run-row-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: #155724;
+  background-color: #d4edda;
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  font-weight: 500;
+  margin-left: 0.5rem;
+}
+
+/* Status summary styles */
+.multi-run-status-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1rem;
+  background-color: #ffffff;
+  border: 1px solid #e6dfd5;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  color: #524e47;
+  align-items: center;
+}
+
+.multi-run-status-summary__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-weight: 600;
+}
+
+.multi-run-status-summary__badge--pending {
+  color: #004085;
+}
+
+.multi-run-status-summary__badge--failed {
+  color: #721c24;
+}
+
+.multi-run-status-summary__badge--completed {
+  color: #155724;
+}
+
+.multi-run-panel--error {
+  border-color: #f5c6cb;
+  background-color: #fdf3f4;
+}
+
+.multi-run-panel__error-text {
+  color: #721c24;
+  margin-bottom: 1rem;
+}
+
+.multi-run-panel__retry-btn {
+  background-color: #ffffff;
+  border: 1px solid #c61583;
+  color: #c61583;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.multi-run-panel__retry-btn:hover {
+  background-color: #fdf3f4;
+}
+
+.multi-run-histogram-denominator {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #524e47;
+}
+
+.multi-run-histogram-denominator-text {
+  font-size: 0.85rem;
+  color: #7a756b;
+  margin-top: -0.5rem;
+  margin-bottom: 1rem;
+  font-style: italic;
+}
