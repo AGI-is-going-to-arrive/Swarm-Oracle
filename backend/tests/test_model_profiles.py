@@ -245,6 +245,90 @@ def test_model_profile_capabilities_and_diagnostics_do_not_leak_keys():
     _assert_secret_absent(health.json())
 
 
+def test_resolve_model_profile_policy_override_matrix():
+    from fastapi import HTTPException
+
+    from app.models.model_profile import ModelProfile
+    from app.services.model_profiles import resolve_model_profile_policy
+
+    profile_base_url = "https://api.openai.com/v1"
+    override_base_url = "https://api.x.ai/v1"
+    override_key = "sk-f9-override-key-123456"
+
+    with Session(get_engine()) as session:
+        profile = ModelProfile(
+            user_id="resolver-owner",
+            name="Resolver matrix profile",
+            provider="openai",
+            base_url=profile_base_url,
+            model="profile-model",
+            api_key=SECRET_KEY,
+        )
+        session.add(profile)
+        session.commit()
+        session.refresh(profile)
+
+        base_policy = resolve_model_profile_policy(
+            session,
+            user_id="resolver-owner",
+            model_profile_id=profile.id,
+        )
+        assert base_policy is not None
+        assert base_policy.base_url == profile_base_url
+        assert base_policy.api_key == SECRET_KEY
+
+        same_url_policy = resolve_model_profile_policy(
+            session,
+            user_id="resolver-owner",
+            model_profile_id=profile.id,
+            explicit_base_url=profile_base_url,
+        )
+        assert same_url_policy is not None
+        assert same_url_policy.base_url == profile_base_url
+        assert same_url_policy.api_key == SECRET_KEY
+
+        with pytest.raises(HTTPException) as exc_info:
+            resolve_model_profile_policy(
+                session,
+                user_id="resolver-owner",
+                model_profile_id=profile.id,
+                explicit_base_url=override_base_url,
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["code"] == "BYOK_API_KEY_REQUIRED"
+        assert SECRET_KEY not in json.dumps(exc_info.value.detail, ensure_ascii=False)
+
+        changed_url_policy = resolve_model_profile_policy(
+            session,
+            user_id="resolver-owner",
+            model_profile_id=profile.id,
+            explicit_base_url=override_base_url,
+            explicit_api_key=override_key,
+        )
+        assert changed_url_policy is not None
+        assert changed_url_policy.base_url == override_base_url
+        assert changed_url_policy.api_key == override_key
+
+        empty_url_policy = resolve_model_profile_policy(
+            session,
+            user_id="resolver-owner",
+            model_profile_id=profile.id,
+            explicit_base_url="",
+        )
+        assert empty_url_policy is not None
+        assert empty_url_policy.base_url == profile_base_url
+        assert empty_url_policy.api_key == SECRET_KEY
+
+        empty_model_policy = resolve_model_profile_policy(
+            session,
+            user_id="resolver-owner",
+            model_profile_id=profile.id,
+            explicit_model="",
+        )
+        assert empty_model_policy is not None
+        assert empty_model_policy.model == "profile-model"
+
+
 @pytest.mark.asyncio
 async def test_scenario_model_profile_policy_precedence_and_no_leak_surfaces(
     monkeypatch,

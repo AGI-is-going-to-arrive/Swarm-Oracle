@@ -261,13 +261,25 @@ def resolve_model_profile_policy(
         )
 
     profile = _profile_or_404(session, model_profile_id, user_id)
-    base_url = (
+    explicit_base_url_normalized = (
         _normalize_base_url(explicit_base_url)
         if explicit_base_url is not None
-        else profile.base_url
+        else None
     )
+    base_url_changed = (
+        explicit_base_url_normalized is not None
+        and explicit_base_url_normalized != profile.base_url
+    )
+    if base_url_changed and explicit_api_key is None:
+        raise api_error(
+            400,
+            "BYOK_API_KEY_REQUIRED",
+            "base_url requires api_key for BYOK model profiles",
+        )
+
+    base_url = explicit_base_url_normalized or profile.base_url
     api_key = explicit_api_key if explicit_api_key is not None else profile.api_key
-    model = explicit_model if explicit_model is not None else profile.model
+    model = explicit_model if explicit_model and explicit_model.strip() else profile.model
     requests_per_minute = (
         explicit_requests_per_minute
         if explicit_requests_per_minute is not None

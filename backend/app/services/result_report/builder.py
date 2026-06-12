@@ -76,6 +76,7 @@ _REPORT_LOCKS: dict[str, asyncio.Lock] = {}
 _SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 _INTERVIEW_AGENT_BUDGET = 3
 _INTERVIEW_CANDIDATE_LIMIT = 8
+_INTERVIEW_EVIDENCE_PER_AGENT_CAP = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -1164,7 +1165,13 @@ async def _build_interview_evidence(
             message="Interview generation failed; report sections remain available.",
         )
 
-    completed_agents = len(evidence)
+    completed_agents = len(
+        {
+            str(item.get("agent_name") or "")
+            for item in evidence
+            if item.get("agent_name")
+        }
+    )
     expected_agents = min(requested_agents, _INTERVIEW_AGENT_BUDGET)
     status: Literal["complete", "partial"] = (
         "complete" if completed_agents >= expected_agents else "partial"
@@ -1270,8 +1277,9 @@ def _build_interview_prompt(
             "Return strict JSON only.",
             "Action: interview_agents.",
             (
-                "Select at most 3 agents. Use only the supplied transcript excerpts; "
-                "do not invent chat, questions, answers, coordinates, or agent names."
+                "Select at most 3 agents and at most 5 evidence rows per agent. "
+                "Use only the supplied transcript excerpts; do not invent chat, "
+                "questions, answers, coordinates, or agent names."
             ),
             "Required JSON shape: "
             '{"action":"interview_agents","interview_evidence":['
@@ -1295,15 +1303,21 @@ def _normalize_interview_payload(
         raise ResultReportBuilderError("Interview evidence must be a list")
 
     candidates_by_name = {candidate.agent_name: candidate for candidate in candidates}
+    selected_agents: set[str] = set()
+    rows_by_agent: dict[str, int] = {}
     evidence: list[dict[str, Any]] = []
     for raw_entry in raw_entries:
-        if len(evidence) >= _INTERVIEW_AGENT_BUDGET:
-            break
         if not isinstance(raw_entry, dict):
             continue
         agent_name = _truncate_text(str(raw_entry.get("agent_name") or ""), 120)
         candidate = candidates_by_name.get(agent_name)
         if candidate is None:
+            continue
+        if candidate.agent_name not in selected_agents:
+            if len(selected_agents) >= _INTERVIEW_AGENT_BUDGET:
+                continue
+            selected_agents.add(candidate.agent_name)
+        if rows_by_agent.get(candidate.agent_name, 0) >= _INTERVIEW_EVIDENCE_PER_AGENT_CAP:
             continue
         excerpt = _truncate_text(
             str(raw_entry.get("excerpt") or candidate.excerpt),
@@ -1317,6 +1331,12 @@ def _normalize_interview_payload(
                 "excerpt": excerpt,
             }
         )
+        rows_by_agent[candidate.agent_name] = rows_by_agent.get(candidate.agent_name, 0) + 1
+        if len(selected_agents) >= _INTERVIEW_AGENT_BUDGET and all(
+            rows_by_agent.get(agent_name, 0) >= _INTERVIEW_EVIDENCE_PER_AGENT_CAP
+            for agent_name in selected_agents
+        ):
+            break
     return evidence
 
 

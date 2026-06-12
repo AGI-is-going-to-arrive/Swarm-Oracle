@@ -508,6 +508,51 @@ async def test_build_report_generates_interview_evidence_with_budget_and_safe_pr
 
 
 @pytest.mark.asyncio
+async def test_build_report_caps_interview_evidence_rows_per_agent(monkeypatch):
+    from app.services.result_report import builder
+
+    scenario_id = _seed_report_scenario()
+    transcript_lines = [
+        f"Privacy evidence line {index}" for index in range(1, 8)
+    ]
+    with Session(get_engine()) as session:
+        message = session.get(AgentMessage, "msg-privacy")
+        assert message is not None
+        message.content = "\n".join(transcript_lines)
+        session.add(message)
+        session.commit()
+
+    fake_llm = QueuedLlm(
+        [
+            _outline_payload(["timeline", "sources"]),
+            _section_payload("timeline"),
+            _section_payload("sources"),
+            {
+                "action": "interview_agents",
+                "interview_evidence": [
+                    {
+                        "agent_name": "Privacy Advocate",
+                        "excerpt": line,
+                    }
+                    for line in transcript_lines
+                ],
+            },
+        ],
+    )
+    monkeypatch.setattr(builder, "llm_call_json", fake_llm)
+
+    report = await builder.build_report(scenario_id, "branch-a", overrides=None)
+
+    privacy_rows = [
+        entry
+        for entry in report.interview_evidence
+        if entry["agent_name"] == "Privacy Advocate"
+    ]
+    assert len(privacy_rows) == builder._INTERVIEW_EVIDENCE_PER_AGENT_CAP == 5
+    assert [entry["excerpt"] for entry in privacy_rows] == transcript_lines[:5]
+
+
+@pytest.mark.asyncio
 async def test_build_report_interview_failure_is_fail_soft(monkeypatch):
     from app.services.result_report import builder
 
