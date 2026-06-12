@@ -1125,6 +1125,10 @@ async def get_run_group_distribution(
     engine = get_engine()
     verdict_counts: dict[str, int] = {}
     outcome_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    terminal_count = 0
+    pending_count = 0
+    failed_count = 0
     runs: list[dict[str, Any]] = []
     with Session(engine) as session:
         scenarios = list(
@@ -1144,27 +1148,58 @@ async def get_run_group_distribution(
             raise api_error(404, "RUN_GROUP_NOT_FOUND", "Run group not found")
 
         for index, scenario in enumerate(scenarios, start=1):
+            status_value = scenario.status.value
+            status_counts[status_value] = status_counts.get(status_value, 0) + 1
+            if scenario.status in {
+                ScenarioStatus.PARSING,
+                ScenarioStatus.SIMULATING,
+                ScenarioStatus.NARRATING,
+            }:
+                pending_count += 1
+            elif scenario.status in {ScenarioStatus.ERROR, ScenarioStatus.CANCELLED}:
+                failed_count += 1
+
             context = scenario.parsed_context if isinstance(scenario.parsed_context, dict) else {}
             result_quality = context.get("result_quality") if isinstance(context, dict) else None
             verdict = (
                 str(result_quality.get("verdict") or "").strip()
                 if isinstance(result_quality, dict)
                 else ""
-            ) or "unknown"
-            verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+            )
 
-            branch = session.exec(
-                select(Branch)
-                .where(
-                    Branch.scenario_id == scenario.id,
-                    Branch.status == BranchStatus.COMPLETED,
-                )
-                .order_by(Branch.probability.desc(), Branch.id)
-                .limit(1)
-            ).first()
-            outcome = str(branch.title if branch is not None else "").strip() or "unknown"
-            outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
+            branch = None
+            if scenario.status == ScenarioStatus.DONE:
+                branch = session.exec(
+                    select(Branch)
+                    .where(
+                        Branch.scenario_id == scenario.id,
+                        Branch.status == BranchStatus.COMPLETED,
+                    )
+                    .order_by(Branch.probability.desc(), Branch.id)
+                    .limit(1)
+                ).first()
+            outcome = str(branch.title if branch is not None else "").strip()
+            is_terminal_distribution_row = (
+                scenario.status == ScenarioStatus.DONE
+                and bool(verdict)
+                and branch is not None
+            )
+            if is_terminal_distribution_row:
+                terminal_count += 1
+                verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+                outcome_key = outcome or "unknown"
+                outcome_counts[outcome_key] = outcome_counts.get(outcome_key, 0) + 1
 
+            run_verdict = (
+                verdict
+                if scenario.status == ScenarioStatus.DONE and verdict
+                else None
+            )
+            run_outcome = (
+                (outcome or "unknown")
+                if scenario.status == ScenarioStatus.DONE and branch is not None
+                else None
+            )
             multi_run = (
                 scenario.director_state_json.get("multi_run")
                 if isinstance(scenario.director_state_json, dict)
@@ -1178,15 +1213,20 @@ async def get_run_group_distribution(
                         if isinstance(multi_run, dict) and multi_run.get("run_index") is not None
                         else index
                     ),
-                    "status": scenario.status.value,
-                    "verdict": verdict,
-                    "outcome": outcome,
+                    "status": status_value,
+                    "verdict": run_verdict,
+                    "outcome": run_outcome,
+                    "is_terminal_distribution_row": is_terminal_distribution_row,
                 }
             )
 
     return {
         "run_group_id": run_group_id,
         "run_count": len(runs),
+        "terminal_count": terminal_count,
+        "pending_count": pending_count,
+        "failed_count": failed_count,
+        "status_counts": status_counts,
         "histogram": {
             "verdict_counts": verdict_counts,
             "outcome_counts": outcome_counts,

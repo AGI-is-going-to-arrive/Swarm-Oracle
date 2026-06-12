@@ -235,6 +235,13 @@ async def list_predictions(
     principal: SessionPrincipal | None = Depends(require_session_principal),
 ) -> list[PredictionResponse]:
     """List all predictions for a scenario."""
+    if not settings.FEATURE_YOU_VS_ORACLE:
+        raise api_error(
+            404,
+            "FEATURE_DISABLED",
+            "Feature 'you_vs_oracle' is not enabled",
+        )
+
     engine = get_engine()
     with Session(engine) as session:
         _require_owned_prediction_scenario(session, scenario_id, principal)

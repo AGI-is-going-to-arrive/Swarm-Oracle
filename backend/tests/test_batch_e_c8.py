@@ -165,13 +165,42 @@ def test_multi_run_group_aggregation_counts_verdicts_and_outcomes(client, monkey
                 )
             )
             session.commit()
+    pending_id = _seed_scenario(
+        status=ScenarioStatus.SIMULATING,
+        parsed_context={"result_quality": {"verdict": "Still running"}},
+    )
+    failed_id = _seed_scenario(
+        status=ScenarioStatus.ERROR,
+        parsed_context={"result_quality": {"verdict": "Failed run should not count"}},
+    )
+    with Session(get_engine()) as session:
+        for scenario_id in (pending_id, failed_id):
+            scenario = session.get(Scenario, scenario_id)
+            scenario.run_group_id = group_id
+            session.add(scenario)
+            session.add(
+                Branch(
+                    scenario_id=scenario_id,
+                    title="Non-terminal branch",
+                    probability=0.2,
+                    status=BranchStatus.COMPLETED,
+                    insight="not a terminal distribution row",
+                )
+            )
+        session.commit()
 
     resp = client.get(f"/api/scenario/run-groups/{group_id}")
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["run_group_id"] == group_id
-    assert data["run_count"] == 3
+    assert data["run_count"] == 5
+    assert data["terminal_count"] == 3
+    assert data["pending_count"] == 1
+    assert data["failed_count"] == 1
+    assert data["status_counts"]["done"] == 3
+    assert data["status_counts"]["simulating"] == 1
+    assert data["status_counts"]["error"] == 1
     assert data["histogram"]["verdict_counts"] == {
         "Likely succeeds": 2,
         "Likely stalls": 1,
@@ -180,6 +209,8 @@ def test_multi_run_group_aggregation_counts_verdicts_and_outcomes(client, monkey
         "Harbor pact": 2,
         "Court blockade": 1,
     }
+    assert "unknown" not in data["histogram"]["verdict_counts"]
+    assert "unknown" not in data["histogram"]["outcome_counts"]
     assert "probability" not in data["histogram"]
 
 
@@ -222,6 +253,47 @@ async def test_verdict_only_run_skips_narrative_and_persists_fail_soft_verdict(m
             scenario.parsed_context["result_quality"]["verdict"]
             == "The route probably survives."
         )
+
+
+@pytest.mark.asyncio
+async def test_verdict_only_run_fresh_empty_branch_reaches_done(monkeypatch):
+    from app.services import simulator as simulator_module
+
+    engine = get_engine()
+    scenario_id = _seed_scenario(
+        status=ScenarioStatus.SIMULATING,
+        parsed_context={"multi_run": {"verdict_only": True}},
+    )
+    branch_id = _seed_branch(
+        scenario_id,
+        title="Trade coalition holds",
+        story="",
+        insight="",
+    )
+
+    async def fail_narration(*_args, **_kwargs):
+        raise AssertionError("verdict-only runs must skip narrative pass")
+
+    async def fake_verdict(*_args, **_kwargs):
+        return {
+            "verdict": "The route probably survives.",
+            "confidence": "medium",
+            "question_answer": "It survives with constraints.",
+            "actual_outcome": True,
+        }
+
+    monkeypatch.setattr(simulator_module, "_narrate_branch_data", fail_narration)
+    monkeypatch.setattr(simulator_module, "_generate_verdict", fake_verdict)
+    monkeypatch.setattr(simulator_module, "_maybe_build_result_report", AsyncMock(), raising=False)
+
+    await simulator_module.run_simulation(scenario_id, ws_callback=None)
+
+    with Session(engine) as session:
+        scenario = session.get(Scenario, scenario_id)
+        branch = session.get(Branch, branch_id)
+        assert scenario.status == ScenarioStatus.DONE
+        assert branch.story.strip()
+        assert branch.insight.strip()
 
 
 def test_you_vs_oracle_prediction_lock_rejects_second_write(client, monkeypatch):
@@ -283,6 +355,7 @@ def test_score_predictions_returns_brier_against_ai_verdict(client, monkeypatch)
                 "verdict": "Yes, the route succeeds.",
                 "question_answer": "Yes.",
                 "confidence": "high",
+                "actual_outcome": True,
             }
         },
     )
@@ -308,9 +381,76 @@ def test_score_predictions_returns_brier_against_ai_verdict(client, monkeypatch)
 
     assert resp.status_code == 200
     result = resp.json()["results"][0]
+    assert result["you_vs_oracle"]["status"] == "scorable"
     assert result["you_vs_oracle"]["ai_actual_outcome"] is True
     assert result["you_vs_oracle"]["predicted_probability"] == 0.75
     assert result["you_vs_oracle"]["brier_score"] == pytest.approx(0.0625)
+
+
+def test_score_predictions_reports_not_scorable_without_actual_outcome(client, monkeypatch):
+    monkeypatch.setattr(settings, "FEATURE_YOU_VS_ORACLE", True, raising=False)
+    scenario_id = _seed_scenario(
+        status=ScenarioStatus.DONE,
+        parsed_context={
+            "result_quality": {
+                "verdict": "Evidence is thin; no clear answer.",
+                "question_answer": "Unknown: no clear answer.",
+                "confidence": "low",
+            }
+        },
+    )
+    _seed_branch(scenario_id)
+    with Session(get_engine()) as session:
+        session.add(
+            Prediction(
+                scenario_id=scenario_id,
+                user_id="oracle-user",
+                user_name="Oracle User",
+                prediction_text="The route fails",
+                confidence=0.25,
+            )
+        )
+        session.commit()
+
+    async def fake_score_prediction(prediction_id: str, *, llm_overrides=None):
+        return {"score": 20, "reason": "uncertain"}
+
+    monkeypatch.setattr("app.services.scoring.score_prediction", fake_score_prediction)
+
+    resp = client.post(f"/api/scenario/{scenario_id}/score-predictions")
+
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]["you_vs_oracle"]
+    assert result == {
+        "status": "not_scorable",
+        "reason": "actual_outcome_unavailable",
+    }
+
+
+@pytest.mark.parametrize(
+    ("result_quality", "expected"),
+    [
+        (
+            {
+                "verdict": "Evidence is thin; no clear answer.",
+                "question_answer": "Unknown: no clear answer.",
+            },
+            None,
+        ),
+        (
+            {
+                "verdict": "Likely succeeds.",
+                "question_answer": "The route fails to collapse and survives.",
+                "actual_outcome": True,
+            },
+            True,
+        ),
+    ],
+)
+def test_you_vs_oracle_actual_outcome_uses_structured_field_only(result_quality, expected):
+    from app.services.scoring import _extract_ai_actual_outcome
+
+    assert _extract_ai_actual_outcome({"result_quality": result_quality}) is expected
 
 
 def test_you_vs_oracle_capability_disabled_closes_predict_endpoint(client, monkeypatch):
@@ -321,6 +461,27 @@ def test_you_vs_oracle_capability_disabled_closes_predict_endpoint(client, monke
         f"/api/scenario/{scenario_id}/predict",
         json={"prediction_text": "yes", "confidence": 0.5, "user_id": "u1"},
     )
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "FEATURE_DISABLED"
+
+
+def test_you_vs_oracle_capability_disabled_closes_prediction_listing(client, monkeypatch):
+    monkeypatch.setattr(settings, "FEATURE_YOU_VS_ORACLE", False, raising=False)
+    scenario_id = _seed_scenario(status=ScenarioStatus.SIMULATING)
+    with Session(get_engine()) as session:
+        session.add(
+            Prediction(
+                scenario_id=scenario_id,
+                user_id="oracle-user",
+                user_name="Oracle User",
+                prediction_text="The route succeeds",
+                confidence=0.75,
+            )
+        )
+        session.commit()
+
+    resp = client.get(f"/api/scenario/{scenario_id}/predictions")
 
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "FEATURE_DISABLED"

@@ -27,28 +27,6 @@ from app.services.llm_client import (
 
 logger = logging.getLogger(__name__)
 ANONYMOUS_USER_ID = "anonymous"
-_POSITIVE_VERDICT_MARKERS = (
-    "yes",
-    "true",
-    "succeed",
-    "succeeds",
-    "survive",
-    "survives",
-    "likely succeeds",
-    "probably survives",
-)
-_NEGATIVE_VERDICT_MARKERS = (
-    "no",
-    "false",
-    "fail",
-    "fails",
-    "stall",
-    "stalls",
-    "collapse",
-    "collapses",
-    "likely stalls",
-    "probably fails",
-)
 
 SCORING_PROMPTS = {
     "Chinese": """你是一个精确的预测评估器。请比较用户的预测与实际推演结果，给出准确率评分。
@@ -142,17 +120,8 @@ def _extract_ai_actual_outcome(parsed_context: object) -> bool | None:
     result_quality = parsed_context.get("result_quality")
     if not isinstance(result_quality, dict):
         return None
-    verdict_text = " ".join(
-        str(result_quality.get(key) or "")
-        for key in ("question_answer", "verdict")
-    ).strip().lower()
-    if not verdict_text:
-        return None
-    if any(marker in verdict_text for marker in _NEGATIVE_VERDICT_MARKERS):
-        return False
-    if any(marker in verdict_text for marker in _POSITIVE_VERDICT_MARKERS):
-        return True
-    return None
+    actual_outcome = result_quality.get("actual_outcome")
+    return actual_outcome if isinstance(actual_outcome, bool) else None
 
 
 def _you_vs_oracle_result_for_prediction(
@@ -161,8 +130,12 @@ def _you_vs_oracle_result_for_prediction(
 ) -> dict[str, object] | None:
     actual_outcome = _extract_ai_actual_outcome(parsed_context)
     if actual_outcome is None:
-        return None
+        return {
+            "status": "not_scorable",
+            "reason": "actual_outcome_unavailable",
+        }
     return {
+        "status": "scorable",
         "predicted_probability": prediction.confidence,
         "ai_actual_outcome": actual_outcome,
         "brier_score": calculate_brier_score(prediction.confidence, actual_outcome),
@@ -479,7 +452,10 @@ async def score_prediction(prediction_id: str, *, llm_overrides: dict | None = N
                     return None
                 if pred.user_id != ANONYMOUS_USER_ID:
                     _update_leaderboard(session, pred.user_id, pred.user_name, score)
-                if you_vs_oracle is not None:
+                if (
+                    you_vs_oracle is not None
+                    and you_vs_oracle.get("status") == "scorable"
+                ):
                     _resolve_prediction_journal_entries(
                         session,
                         pred,

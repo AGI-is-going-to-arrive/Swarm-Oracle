@@ -3684,6 +3684,10 @@ def _normalize_result_verdict_confidence(value: object) -> str:
     return confidence if confidence in {"high", "medium", "low"} else "medium"
 
 
+def _normalize_result_actual_outcome(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
 def _one_line_answer(text: str, *, max_chars: int = 220) -> str:
     compact = re.sub(r"\s+", " ", text or "").strip()
     if len(compact) <= max_chars:
@@ -3795,8 +3799,27 @@ def _build_verdict_only_branch_payloads(
             branch = by_id.get(branch_id)
             if branch is None:
                 continue
+            fallback = (
+                (branch.summary or "").strip()
+                or (branch.insight or "").strip()
+                or (branch.fork_reason or "").strip()
+                or (branch.title or "").strip()
+                or "Verdict-only branch completed."
+            )
+            story = (branch.story or "").strip() or fallback
+            insight = (
+                (branch.insight or "").strip()
+                or (branch.fork_reason or "").strip()
+                or (branch.title or "").strip()
+                or story
+            )
             if branch.status == BranchStatus.ACTIVE:
                 branch.status = BranchStatus.COMPLETED
+            if not (branch.story or "").strip():
+                branch.story = story
+            if not (branch.insight or "").strip():
+                branch.insight = insight
+            if branch.status == BranchStatus.COMPLETED:
                 session.add(branch)
             payloads.append(
                 {
@@ -3804,8 +3827,8 @@ def _build_verdict_only_branch_payloads(
                     "fork_round": branch_data.get("fork_round"),
                     "probability": branch.probability,
                     "title": branch.title,
-                    "story": branch.story or "",
-                    "insight": branch.insight or branch.fork_reason or branch.title,
+                    "story": story,
+                    "insight": insight,
                 }
             )
         session.commit()
@@ -3864,9 +3887,13 @@ async def _generate_verdict(
                 "- verdict 用一段话回答用户问题，2-4 句，先给判断，再说明理由。\n"
                 "- question_answer 用一句话给出最短答案。\n"
                 "- confidence 只能是 high / medium / low。\n"
+                "- actual_outcome 必须是 true / false / null：如果你能直接判定"
+                "用户问题的答案为是/成立则 true，为否/不成立则 false，证据不足"
+                "或没有清晰答案则 null。\n"
                 "- 不要发明分支摘要或真实世界上下文之外的确定事实；证据不足时明确保留不确定性。\n"
                 "- 只输出严格 JSON："
-                "{\"verdict\":\"...\",\"confidence\":\"medium\",\"question_answer\":\"...\"}\n"
+                "{\"verdict\":\"...\",\"confidence\":\"medium\","
+                "\"question_answer\":\"...\",\"actual_outcome\":null}\n"
                 f"{get_language_directive(language)}"
             )
         else:
@@ -3882,10 +3909,15 @@ async def _generate_verdict(
                 "answer first, then the reason.\n"
                 "- `question_answer` must be the shortest one-sentence answer.\n"
                 "- `confidence` must be exactly high, medium, or low.\n"
+                "- `actual_outcome` must be true, false, or null: true when "
+                "your direct answer to the original question is yes/holds, "
+                "false when it is no/does not hold, and null when the evidence "
+                "is too uncertain or there is no clear answer.\n"
                 "- Do not invent facts outside the branch summaries or "
                 "real-world context; state uncertainty when evidence is thin.\n"
                 "- Output strict JSON only: "
-                "{\"verdict\":\"...\",\"confidence\":\"medium\",\"question_answer\":\"...\"}\n"
+                "{\"verdict\":\"...\",\"confidence\":\"medium\","
+                "\"question_answer\":\"...\",\"actual_outcome\":null}\n"
                 f"{get_language_directive(language)}"
             )
 
@@ -3921,6 +3953,9 @@ async def _generate_verdict(
                 parsed.get("confidence"),
             ),
             "question_answer": _one_line_answer(question_answer),
+            "actual_outcome": _normalize_result_actual_outcome(
+                parsed.get("actual_outcome"),
+            ),
         }
     except Exception as exc:
         logger.debug(
@@ -3958,6 +3993,12 @@ def _persist_result_quality_verdict(
                         _json_value(
                             _one_line_answer(
                                 str(verdict.get("question_answer") or verdict_text),
+                            )
+                        ),
+                        _json_path("result_quality", "actual_outcome"),
+                        _json_value(
+                            _normalize_result_actual_outcome(
+                                verdict.get("actual_outcome"),
                             )
                         ),
                         base_expr=_json_result_quality_object_expr(),
